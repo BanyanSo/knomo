@@ -3,7 +3,7 @@ import { hashText } from "./hash";
 
 export function buildDailyRef(
 	path: string,
-	heading: string,
+	heading: string | null,
 	block: string | ParsedMemoBlock,
 	lineNumberHint: number | null = null,
 ): DailyRef {
@@ -11,6 +11,7 @@ export function buildDailyRef(
 	return {
 		path,
 		heading,
+		sectionType: heading === null ? "root" : "heading",
 		lastKnownBlock,
 		lastKnownHash: hashText(lastKnownBlock),
 		lineNumberHint: typeof block === "string" ? lineNumberHint : block.startLine + 1,

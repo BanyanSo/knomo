@@ -1,12 +1,13 @@
 import { TFile, TFolder, Vault } from "obsidian";
 import type { App } from "obsidian";
 
-import type { MarkdownSyncSource, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
+import type { DailyRefSectionType, MarkdownSyncSource, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
 import { formatLocalIsoString, formatMonthPeriod } from "../utils/date";
 import { matchesDailyNotePath, parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { hashText } from "../utils/hash";
 import { buildDailyRef } from "../utils/memoRefs";
+import { isMarkdownHeadingLine, splitMarkdownLines } from "../utils/markdown";
 import { getIndexFilePath } from "../utils/path";
 import { buildMemoReferences } from "../utils/references";
 import { DailyNoteService } from "./DailyNoteService";
@@ -45,9 +46,57 @@ export interface ScanDailyMemosOptions {
 	syncMonthly?: boolean;
 }
 
+export type LegacyDailyMemosImportScope = "30d" | "90d" | "all";
+
+export interface LegacyDailyMemosSample {
+	path: string;
+	lineNumber: number;
+	time: string;
+	content: string;
+}
+
+export interface LegacyDailyMemosGroupPreview {
+	key: string;
+	heading: string | null;
+	sectionType: DailyRefSectionType;
+	label: string;
+	count: number;
+	selectedByDefault: boolean;
+	samples: LegacyDailyMemosSample[];
+}
+
+export interface LegacyDailyMemosPreview {
+	scannedFiles: number;
+	candidateCount: number;
+	groups: LegacyDailyMemosGroupPreview[];
+}
+
+export interface LegacyDailyMemosImportOptions {
+	scope: LegacyDailyMemosImportScope;
+	selectedGroupKeys: string[];
+	appendBlockIds: boolean;
+}
+
+export interface LegacyDailyMemosImportResult extends ScanDailyMemosResult {
+	imported: number;
+	importedHeadings: string[];
+}
+
 interface HeadingMemoBlock {
-	heading: string;
+	heading: string | null;
+	sectionType: DailyRefSectionType;
 	block: ParsedMemoBlock;
+	allowCreate: boolean;
+}
+
+interface LegacyMemoCandidate {
+	file: TFile;
+	path: string;
+	groupKey: string;
+	heading: string | null;
+	sectionType: DailyRefSectionType;
+	block: ParsedMemoBlock;
+	createdAt: Date;
 }
 
 export class MemoScanService {
@@ -60,6 +109,93 @@ export class MemoScanService {
 		private readonly selfWriteTracker: SelfWriteTracker,
 		private readonly markdownBlockService = new MarkdownBlockService(),
 	) {}
+
+	async previewLegacyDailyMemos(scope: LegacyDailyMemosImportScope): Promise<LegacyDailyMemosPreview> {
+		const settings = this.getSettings();
+		const config = await this.dailyNoteService.getDailyNotesConfig();
+		const files = this.filterDailyFiles(this.getDailyFiles(config), config, getLegacyImportSince(scope));
+		const groups = new Map<string, LegacyDailyMemosGroupPreview>();
+		let candidateCount = 0;
+
+		for (const file of files) {
+			const content = await this.app.vault.cachedRead(file);
+			const candidates = this.parseLegacyMemoCandidates(config, file, content);
+			candidateCount += candidates.length;
+			for (const candidate of candidates) {
+				const group = groups.get(candidate.groupKey) ?? createLegacyPreviewGroup(settings, candidate);
+				group.count += 1;
+				if (group.samples.length < 5) {
+					group.samples.push({
+						path: candidate.path,
+						lineNumber: candidate.block.startLine + 1,
+						time: candidate.block.time,
+						content: candidate.block.content,
+					});
+				}
+				groups.set(candidate.groupKey, group);
+			}
+		}
+
+		return {
+			scannedFiles: files.length,
+			candidateCount,
+			groups: [...groups.values()].sort(compareLegacyPreviewGroups),
+		};
+	}
+
+	async importLegacyDailyMemos(
+		createMemoId: (date: Date) => string,
+		opId: string,
+		options: LegacyDailyMemosImportOptions,
+	): Promise<LegacyDailyMemosImportResult> {
+		const settings = this.getSettings();
+		const config = await this.dailyNoteService.getDailyNotesConfig();
+		const selectedGroupKeys = new Set(options.selectedGroupKeys);
+		const files = this.filterDailyFiles(this.getDailyFiles(config), config, getLegacyImportSince(options.scope));
+		const existingMemos = await this.memoIndexStore.loadAll(settings.monthlyMemoFolder);
+		const importedHeadings = new Set<string>();
+		const result: LegacyDailyMemosImportResult = {
+			scannedFiles: files.length,
+			created: 0,
+			updated: 0,
+			deleted: 0,
+			skipped: 0,
+			failed: 0,
+			errors: [],
+			imported: 0,
+			importedHeadings: [],
+		};
+
+		for (const file of files) {
+			const content = await this.app.vault.cachedRead(file);
+			const candidates = this.parseLegacyMemoCandidates(config, file, content)
+				.filter((candidate) => selectedGroupKeys.has(candidate.groupKey));
+			for (const candidate of candidates) {
+				try {
+					if (isDuplicateLegacyCandidate(existingMemos, candidate, this.markdownBlockService)) {
+						result.skipped += 1;
+						continue;
+					}
+					const block = options.appendBlockIds
+						? await this.ensureLegacyBlockId(candidate, opId)
+						: candidate.block;
+					const savedMemo = await this.importLegacyCandidate(settings, candidate, block, createMemoId, opId, result);
+					existingMemos.push(savedMemo);
+					if (candidate.heading !== null) {
+						importedHeadings.add(candidate.heading);
+					}
+					result.created += 1;
+					result.imported += 1;
+				} catch (error) {
+					result.failed += 1;
+					result.errors.push(error instanceof Error ? error.message : `导入失败：${candidate.path}:${candidate.block.startLine + 1}`);
+				}
+			}
+		}
+
+		result.importedHeadings = [...importedHeadings];
+		return result;
+	}
 
 	async estimateDailyMemos(options: ScanDailyMemosOptions = {}): Promise<EstimateDailyMemosResult> {
 		const settings = this.getSettings();
@@ -183,7 +319,7 @@ export class MemoScanService {
 	): Promise<void> {
 		const usedBlockStarts = new Set<number>();
 		const activeFileMemos = existingMemos.filter((memo) => memo.status === "active" && memo.dailyRef.path === file.path);
-		const blocks = this.parseMemoBlocksForHeadings(content, getDailyHeadings(settings, activeFileMemos));
+		const blocks = this.parseMemoBlocksForHeadings(content, getDailyHeadings(settings, activeFileMemos), hasRootDailyMemo(activeFileMemos));
 
 		for (const memo of activeFileMemos) {
 			const match = this.findIndexedMemoBlock(content, blocks, memo, usedBlockStarts);
@@ -201,6 +337,9 @@ export class MemoScanService {
 
 		for (const block of blocks) {
 			if (usedBlockStarts.has(block.block.startLine)) {
+				continue;
+			}
+			if (!block.allowCreate) {
 				continue;
 			}
 			await this.createScannedBlock(settings, config, existingMemos, file, block, createMemoId, opId, result, source, syncMonthly);
@@ -444,16 +583,185 @@ export class MemoScanService {
 		return { block: headingBlock, issueType: null };
 	}
 
-	private parseMemoBlocksForHeadings(content: string, headings: string[]): HeadingMemoBlock[] {
+	private parseMemoBlocksForHeadings(content: string, headings: string[], includeRootBlocks = false): HeadingMemoBlock[] {
 		const blocksByStart = new Map<number, HeadingMemoBlock>();
 		for (const heading of headings) {
 			for (const block of this.markdownBlockService.parseMemoBlocksUnderHeading(content, heading)) {
 				if (!blocksByStart.has(block.startLine)) {
-					blocksByStart.set(block.startLine, { heading, block });
+					blocksByStart.set(block.startLine, { heading, sectionType: "heading", block, allowCreate: true });
+				}
+			}
+		}
+		if (includeRootBlocks) {
+			for (const block of this.parseRootMemoBlocks(content)) {
+				if (!blocksByStart.has(block.startLine)) {
+					blocksByStart.set(block.startLine, { heading: null, sectionType: "root", block, allowCreate: false });
 				}
 			}
 		}
 		return [...blocksByStart.values()].sort((left, right) => left.block.startLine - right.block.startLine);
+	}
+
+	private parseLegacyMemoCandidates(
+		config: DailyNotesConfig,
+		file: TFile,
+		content: string,
+	): LegacyMemoCandidate[] {
+		const lines = splitMarkdownLines(content);
+		const candidates: LegacyMemoCandidate[] = [];
+		const frontmatterEnd = getFrontmatterEndLine(lines);
+		let currentHeading: string | null = null;
+		let codeFence: string | null = null;
+
+		for (let index = 0; index < lines.length; index += 1) {
+			if (frontmatterEnd !== -1 && index <= frontmatterEnd) {
+				continue;
+			}
+			const fence = getCodeFenceMarker(lines[index]);
+			if (fence !== null) {
+				codeFence = codeFence === null ? fence : codeFence === fence ? null : codeFence;
+				continue;
+			}
+			if (codeFence !== null) {
+				continue;
+			}
+			if (isMarkdownHeadingLine(lines[index])) {
+				currentHeading = lines[index].trim();
+				continue;
+			}
+
+			const block = this.markdownBlockService.parseMemoBlock(lines, index);
+			if (block === null) {
+				continue;
+			}
+			const createdAt = parseCreatedAt(file.path, config, block.time);
+			if (createdAt !== null) {
+				const sectionType: DailyRefSectionType = currentHeading === null ? "root" : "heading";
+				candidates.push({
+					file,
+					path: file.path,
+					groupKey: getLegacyGroupKey(sectionType, currentHeading),
+					heading: currentHeading,
+					sectionType,
+					block,
+					createdAt,
+				});
+			}
+			index = block.endLine;
+		}
+
+		return candidates;
+	}
+
+	private parseRootMemoBlocks(content: string): ParsedMemoBlock[] {
+		return parseLegacyMemoBlocks(content, this.markdownBlockService)
+			.filter((candidate) => candidate.sectionType === "root")
+			.map((candidate) => candidate.block);
+	}
+
+	private async ensureLegacyBlockId(candidate: LegacyMemoCandidate, opId: string): Promise<ParsedMemoBlock> {
+		if (candidate.block.blockId !== null) {
+			return candidate.block;
+		}
+
+		let lineNumber = candidate.block.startLine + 1;
+		let changed = false;
+		const content = await this.app.vault.process(candidate.file, (currentContent) => {
+			const location = this.markdownBlockService.findMemoBlock(currentContent, {
+				lineNumberHint: candidate.block.startLine + 1,
+				lastKnownBlock: candidate.block.rawBlock,
+				lastKnownHash: hashText(candidate.block.rawBlock),
+				contentHash: candidate.block.contentHash,
+				allowLineHintTimeMatch: true,
+			}, "daily_block_missing");
+			if (location.parsedBlock === null) {
+				throw new Error(`无法定位旧日记中的 memo：${candidate.path}:${candidate.block.startLine + 1}`);
+			}
+			lineNumber = location.parsedBlock.startLine + 1;
+			if (location.parsedBlock.blockId !== null) {
+				return currentContent;
+			}
+
+			const blockId = createUniqueBlockId(currentContent);
+			const nextBlock = this.markdownBlockService.appendBlockIdToMemoBlock(location.parsedBlock.rawBlock, blockId);
+			const lines = splitMarkdownLines(currentContent);
+			lines.splice(
+				location.parsedBlock.startLine,
+				location.parsedBlock.endLine - location.parsedBlock.startLine + 1,
+				...splitMarkdownLines(nextBlock),
+			);
+			changed = true;
+			return lines.join("\n");
+		});
+		if (changed) {
+			this.selfWriteTracker.mark(candidate.path, {
+				opId,
+				path: candidate.path,
+				reason: "scan",
+				writtenAt: Date.now(),
+				expiresAt: Date.now() + 10000,
+				expectedHash: hashText(content),
+			});
+		}
+
+		const parsedBlock = this.markdownBlockService.parseMemoBlock(splitMarkdownLines(content), lineNumber - 1);
+		if (parsedBlock === null) {
+			throw new Error(`无法确认已导入 memo 的 blockId：${candidate.path}:${lineNumber}`);
+		}
+		return parsedBlock;
+	}
+
+	private async importLegacyCandidate(
+		settings: KnomoSettings,
+		candidate: LegacyMemoCandidate,
+		block: ParsedMemoBlock,
+		createMemoId: (date: Date) => string,
+		opId: string,
+		result: ScanDailyMemosResult,
+	): Promise<MemoRecord> {
+		const now = new Date().toISOString();
+		const createdAtText = formatLocalIsoString(candidate.createdAt);
+		const memo: MemoRecord = {
+			id: createMemoId(candidate.createdAt),
+			createdAt: createdAtText,
+			updatedAt: createdAtText,
+			contentSnapshot: block.content,
+			contentHash: block.contentHash,
+			status: "active",
+			syncStatus: "synced",
+			source: "daily_scan",
+			version: 1,
+			tags: block.tags,
+			links: block.links,
+			images: block.images,
+			references: [],
+			sourceMemoId: null,
+			issue: null,
+			lastMarkdownSyncAt: now,
+			lastMarkdownSyncSource: "legacy_import",
+			dailyRef: buildDailyRef(candidate.path, candidate.heading, block),
+			monthlyRef: {
+				path: "",
+				dateHeading: "",
+				lastKnownBlock: "",
+				lastKnownHash: "",
+				lineNumberHint: null,
+				lastSyncedAt: null,
+			},
+		};
+		const monthlySync = await this.syncMonthlyBlock(settings, memo, block.rawBlock, opId, result, candidate.path);
+		const savedMemo = await this.memoIndexStore.addMemo(
+			settings.monthlyMemoFolder,
+			{
+				...memo,
+				syncStatus: monthlySync.syncStatus,
+				issue: monthlySync.issue,
+				monthlyRef: monthlySync.monthlyRef,
+			},
+			() => createMemoId(candidate.createdAt),
+		);
+		this.markIndexSelfWrite(settings, candidate.createdAt, opId);
+		return savedMemo;
 	}
 
 	private async syncMonthlyBlock(
@@ -567,13 +875,181 @@ function addDays(date: Date, days: number): Date {
 	return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
 
+function getLegacyImportSince(scope: LegacyDailyMemosImportScope): Date | undefined {
+	if (scope === "all") {
+		return undefined;
+	}
+	const days = scope === "30d" ? 30 : 90;
+	const now = new Date();
+	return new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
+}
+
 function getDailyHeadings(settings: KnomoSettings, memos: MemoRecord[]): string[] {
 	const headings = [
 		settings.dailyHeading,
 		...settings.legacyDailyHeadings,
-		...memos.map((memo) => memo.dailyRef.heading),
+		...memos.map((memo) => memo.dailyRef.heading ?? ""),
 	]
 		.map((heading) => heading.trim())
 		.filter((heading) => heading.length > 0);
 	return [...new Set(headings)];
+}
+
+function hasRootDailyMemo(memos: MemoRecord[]): boolean {
+	return memos.some((memo) => memo.dailyRef.sectionType === "root" || memo.dailyRef.heading === null);
+}
+
+function createLegacyPreviewGroup(settings: KnomoSettings, candidate: LegacyMemoCandidate): LegacyDailyMemosGroupPreview {
+	return {
+		key: candidate.groupKey,
+		heading: candidate.heading,
+		sectionType: candidate.sectionType,
+		label: candidate.heading ?? "无标题区域",
+		count: 0,
+		selectedByDefault: shouldSelectLegacyGroup(settings, candidate),
+		samples: [],
+	};
+}
+
+function shouldSelectLegacyGroup(settings: KnomoSettings, candidate: LegacyMemoCandidate): boolean {
+	if (candidate.sectionType === "root" || candidate.heading === null) {
+		return false;
+	}
+	return candidate.heading.trim() === settings.dailyHeading.trim() || candidate.heading.trim() === "## Memos";
+}
+
+function compareLegacyPreviewGroups(left: LegacyDailyMemosGroupPreview, right: LegacyDailyMemosGroupPreview): number {
+	if (left.sectionType !== right.sectionType) {
+		return left.sectionType === "heading" ? -1 : 1;
+	}
+	return right.count - left.count || left.label.localeCompare(right.label);
+}
+
+function getLegacyGroupKey(sectionType: DailyRefSectionType, heading: string | null): string {
+	return sectionType === "root" ? "root" : `heading:${heading ?? ""}`;
+}
+
+interface ParsedLegacySectionBlock {
+	heading: string | null;
+	sectionType: DailyRefSectionType;
+	block: ParsedMemoBlock;
+}
+
+function parseLegacyMemoBlocks(content: string, markdownBlockService: MarkdownBlockService): ParsedLegacySectionBlock[] {
+	const lines = splitMarkdownLines(content);
+	const blocks: ParsedLegacySectionBlock[] = [];
+	const frontmatterEnd = getFrontmatterEndLine(lines);
+	let currentHeading: string | null = null;
+	let codeFence: string | null = null;
+
+	for (let index = 0; index < lines.length; index += 1) {
+		if (frontmatterEnd !== -1 && index <= frontmatterEnd) {
+			continue;
+		}
+		const fence = getCodeFenceMarker(lines[index]);
+		if (fence !== null) {
+			codeFence = codeFence === null ? fence : codeFence === fence ? null : codeFence;
+			continue;
+		}
+		if (codeFence !== null) {
+			continue;
+		}
+		if (isMarkdownHeadingLine(lines[index])) {
+			currentHeading = lines[index].trim();
+			continue;
+		}
+		const block = markdownBlockService.parseMemoBlock(lines, index);
+		if (block === null) {
+			continue;
+		}
+		blocks.push({
+			heading: currentHeading,
+			sectionType: currentHeading === null ? "root" : "heading",
+			block,
+		});
+		index = block.endLine;
+	}
+
+	return blocks;
+}
+
+function getFrontmatterEndLine(lines: string[]): number {
+	if (lines[0]?.trim() !== "---") {
+		return -1;
+	}
+	for (let index = 1; index < lines.length; index += 1) {
+		if (lines[index].trim() === "---") {
+			return index;
+		}
+	}
+	return lines.length - 1;
+}
+
+function getCodeFenceMarker(line: string): string | null {
+	const match = line.trim().match(/^(`{3,}|~{3,})/);
+	if (match === null) {
+		return null;
+	}
+	return match[1].charAt(0);
+}
+
+function isDuplicateLegacyCandidate(
+	existingMemos: MemoRecord[],
+	candidate: LegacyMemoCandidate,
+	markdownBlockService: MarkdownBlockService,
+): boolean {
+	const candidateBlockId = candidate.block.blockId;
+	const candidateRawHash = hashText(candidate.block.rawBlock);
+	for (const memo of existingMemos) {
+		if (memo.dailyRef.path !== candidate.path) {
+			continue;
+		}
+		const existingBlock = markdownBlockService.parseMemoBlock(splitMarkdownLines(memo.dailyRef.lastKnownBlock), 0);
+		if (candidateBlockId !== null && existingBlock?.blockId === candidateBlockId) {
+			return true;
+		}
+		if ((memo.dailyRef.lastKnownHash || hashText(memo.dailyRef.lastKnownBlock)) === candidateRawHash) {
+			return true;
+		}
+		if (memo.dailyRef.lineNumberHint === candidate.block.startLine + 1 && memo.contentHash === candidate.block.contentHash) {
+			return true;
+		}
+		if (memo.createdAt === formatLocalIsoString(candidate.createdAt) && memo.contentHash === candidate.block.contentHash) {
+			return true;
+		}
+	}
+	return false;
+}
+
+const BLOCK_ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+function createUniqueBlockId(content: string): string {
+	const existingIds = extractBlockIds(content);
+	for (let attempt = 0; attempt < 1000; attempt += 1) {
+		const blockId = createBlockId();
+		if (!existingIds.has(blockId)) {
+			return blockId;
+		}
+	}
+	throw new Error("无法生成唯一 blockId。");
+}
+
+function createBlockId(): string {
+	let blockId = "";
+	for (let index = 0; index < 6; index += 1) {
+		const charIndex = Math.min(Math.floor(Math.random() * BLOCK_ID_CHARS.length), BLOCK_ID_CHARS.length - 1);
+		blockId += BLOCK_ID_CHARS[charIndex];
+	}
+	return blockId;
+}
+
+function extractBlockIds(content: string): Set<string> {
+	const ids = new Set<string>();
+	const regex = /(?:^|[^A-Za-z0-9_-])\^([A-Za-z0-9_-]+)/g;
+	let match = regex.exec(content);
+	while (match !== null) {
+		ids.add(match[1]);
+		match = regex.exec(content);
+	}
+	return ids;
 }

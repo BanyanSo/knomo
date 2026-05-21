@@ -7,7 +7,8 @@ export type MemoSyncStatus =
 	| "monthly_failed"
 	| "monthly_delete_failed";
 export type MemoSource = "plugin_input" | "daily_scan" | "quote_create";
-export type MarkdownSyncSource = "file_watch" | "manual_scan" | "startup_scan";
+export type MarkdownSyncSource = "file_watch" | "legacy_import" | "manual_scan" | "startup_scan";
+export type DailyRefSectionType = "heading" | "root";
 export type MemoImageSyntax = "obsidian_embed" | "markdown_image";
 export type MemoLinkSyntax = "wiki_link" | "markdown_link" | "url";
 
@@ -30,7 +31,8 @@ export interface MemoReference {
 
 export interface DailyRef {
 	path: string;
-	heading: string;
+	heading: string | null;
+	sectionType?: DailyRefSectionType;
 	lastKnownBlock: string;
 	lastKnownHash: string;
 	lineNumberHint: number | null;

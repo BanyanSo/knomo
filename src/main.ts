@@ -14,12 +14,14 @@ import { ReferenceService } from "./services/ReferenceService";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SettingsService } from "./services/SettingsService";
 import { SyncOrchestrator } from "./services/SyncOrchestrator";
+import type { ScanDailyMemosResult } from "./services/MemoScanService";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { KnomoView } from "./ui/KnomoView";
 
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
 	syncOrchestrator!: SyncOrchestrator;
+	manualRefreshPromise: Promise<ScanDailyMemosResult> | null = null;
 
 	async onload(): Promise<void> {
 		this.settingsService = new SettingsService(this);
@@ -59,6 +61,7 @@ export default class KnomoPlugin extends Plugin {
 				referenceService,
 				randomReunionService,
 				() => this.refreshOpenViews(),
+				() => this.runManualRefresh(),
 			),
 		);
 
@@ -153,5 +156,22 @@ export default class KnomoPlugin extends Plugin {
 		} catch {
 			// 启动扫描只做轻量修复，不打断用户。
 		}
+	}
+
+	private runManualRefresh(): Promise<ScanDailyMemosResult> {
+		if (this.manualRefreshPromise !== null) {
+			return this.manualRefreshPromise;
+		}
+		this.manualRefreshPromise = this.syncOrchestrator.scanRecentDailyMemos(30, "manual_refresh")
+			.then(async (result) => {
+				if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
+					await this.refreshOpenViews();
+				}
+				return result;
+			})
+			.finally(() => {
+				this.manualRefreshPromise = null;
+			});
+		return this.manualRefreshPromise;
 	}
 }

@@ -7,7 +7,7 @@ export type MemoSyncStatus =
 	| "monthly_failed"
 	| "monthly_delete_failed";
 export type MemoSource = "plugin_input" | "daily_scan" | "quote_create";
-export type MarkdownSyncSource = "file_watch" | "manual_scan" | "startup_scan";
+export type MarkdownSyncSource = "file_watch" | "manual_scan" | "manual_refresh" | "startup_scan";
 export type MemoImageSyntax = "obsidian_embed" | "markdown_image";
 export type MemoLinkSyntax = "wiki_link" | "markdown_link" | "url";
 

@@ -11,7 +11,6 @@ import { normalizeVaultPath } from "../utils/path";
 import { KnomoView } from "./KnomoView";
 
 export class KnomoSettingTab extends PluginSettingTab {
-	private scanResultEl: HTMLElement | null = null;
 	private issueListEl: HTMLElement | null = null;
 	private rebuildResultEl: HTMLElement | null = null;
 	private monthlyExcludeStatusEl: HTMLElement | null = null;
@@ -134,17 +133,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("扫描")
-			.setDesc("扫描日记中的 Memos，并同步到月度 Memos 文件。")
-			.addButton((button) => {
-				button.setButtonText("扫描日记");
-				button.onClick(() => {
-					void this.runManualScan(button);
-				});
-			});
-		this.scanResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderScanResult("尚未扫描日记中的 Memos。");
-
+			.setName("高级 / 数据维护")
+			.setHeading();
 		let rebuildScope: RebuildIndexScope = "30d";
 		let rebuildMode: RebuildIndexMode = "index-only";
 		new Setting(containerEl)
@@ -356,42 +346,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 			new Notice(`无法自动更新 Obsidian 排除规则，请手动添加：${nextRule}`);
 		}
-	}
-
-	private async runManualScan(button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void }): Promise<void> {
-		button.setDisabled(true);
-		button.setButtonText("扫描中...");
-		this.renderScanResult("正在扫描日记中的 Memos...");
-		try {
-			const result = await this.syncOrchestrator.scanDailyMemos((progress) => {
-				this.renderScanResult(
-					`正在扫描日记中的 Memos：${progress.completedFiles}/${progress.scannedFiles} 个文件\n` +
-						`新增 ${progress.created} 条，更新 ${progress.updated} 条，删除 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
-						(progress.currentFile === null ? "" : `\n当前文件：${progress.currentFile}`),
-				);
-			});
-			const message = `扫描完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条，跳过 ${result.skipped} 条，失败 ${result.failed} 条。`;
-			const errors = result.errors.map(formatSettingsText);
-			this.renderScanResult(errors.length > 0 ? `${message}\n${errors.join("\n")}` : message);
-			await this.renderIssueList();
-			await this.refreshOpenKnomoViews();
-			new Notice("Knomo 扫描完成");
-		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "扫描失败。");
-			this.renderScanResult(message);
-			new Notice(message);
-		} finally {
-			button.setDisabled(false);
-			button.setButtonText("扫描日记");
-		}
-	}
-
-	private renderScanResult(message: string): void {
-		if (this.scanResultEl === null) {
-			return;
-		}
-		this.scanResultEl.empty();
-		this.scanResultEl.createDiv({ cls: "knomo-setting-help", text: message });
 	}
 
 	private async runRebuildIndex(

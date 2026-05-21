@@ -6,6 +6,7 @@ import type { RandomReunionService } from "../services/RandomReunionService";
 import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
 import type { SyncOrchestrator } from "../services/SyncOrchestrator";
+import type { ScanDailyMemosResult } from "../services/MemoScanService";
 import type { MemoRecord } from "../types/memo";
 import type { MobileCompactMode } from "../types/settings";
 import { getHashInsertionText, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../utils/composerInput";
@@ -171,6 +172,7 @@ export class KnomoView extends ItemView {
 		private readonly referenceService: ReferenceService,
 		private readonly randomReunionService: RandomReunionService,
 		private readonly onMemosChanged: () => Promise<void>,
+		private readonly onManualRefresh: () => Promise<ScanDailyMemosResult>,
 	) {
 		super(leaf);
 	}
@@ -1221,12 +1223,8 @@ export class KnomoView extends ItemView {
 			}
 		}
 		if (action === "refresh") {
-			if (this.activeNav === "trash") {
-				await this.loadTrashMemos();
-			} else {
-				await this.reloadMemos(this.allMemosLoaded);
-				void this.refreshTrashCount(false);
-			}
+			await this.handleManualRefresh();
+			return;
 		}
 		if (action === "focus-stats") this.sidebarEl?.querySelector<HTMLElement>(".knomo-sidebar-stats")?.focus();
 		if (action === "open-composer") this.openComposer();
@@ -1387,6 +1385,36 @@ export class KnomoView extends ItemView {
 			this.isSaving = false;
 			this.updateSendButtonState();
 			this.syncRootState();
+		}
+	}
+
+	private async handleManualRefresh(): Promise<void> {
+		this.updateStatus("正在刷新…", false);
+		if (this.activeNav === "trash") {
+			await this.loadTrashMemos();
+		} else {
+			await this.reloadMemos(this.allMemosLoaded);
+			void this.refreshTrashCount(false);
+		}
+		this.updateStatus("正在同步最近日记中的 Memos…", false);
+		try {
+			const result = await this.onManualRefresh();
+			const failed = result.failed;
+			if (failed > 0) {
+				const message = `刷新失败：${failed} 个文件未同步`;
+				this.updateStatus(message, true);
+				new Notice(message);
+				return;
+			}
+			if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
+				this.updateStatus(`刷新完成：新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条`, false);
+				return;
+			}
+			this.updateStatus("已是最新", false);
+		} catch (error) {
+			const message = formatSettingsText(error instanceof Error ? error.message : "刷新失败。");
+			this.updateStatus(message, true);
+			new Notice(message);
 		}
 	}
 

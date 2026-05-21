@@ -1,7 +1,7 @@
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
-import type { DailyRef, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
+import type { DailyRef, MarkdownSyncSource, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
 import { formatLocalIsoString, formatMemoIdPrefix, formatMonthPeriod, formatTimePart } from "../utils/date";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
@@ -351,13 +351,13 @@ export class SyncOrchestrator {
 		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress);
 	}
 
-	async scanRecentDailyMemos(days: number): Promise<ScanDailyMemosResult> {
+	async scanRecentDailyMemos(days: number, source: MarkdownSyncSource = "startup_scan"): Promise<ScanDailyMemosResult> {
 		const now = new Date();
 		const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
 		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), undefined, {
 			since,
-			source: "startup_scan",
-			deleteSource: "startup_scan",
+			source,
+			deleteSource: source,
 		});
 	}
 

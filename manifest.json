@@ -1,0 +1,10 @@
+{
+	"id": "knomo",
+	"name": "Knomo",
+	"version": "0.1.0",
+	"minAppVersion": "1.5.0",
+	"description": "Capture local-first memos into daily notes and monthly archives.",
+	"author": "",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

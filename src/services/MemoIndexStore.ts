@@ -1,0 +1,225 @@
+import { normalizePath, TFile, TFolder, Vault } from "obsidian";
+import type { App } from "obsidian";
+
+import type { MemoIndex } from "../types";
+import type { MemoRecord } from "../types/memo";
+import { formatMonthPeriod } from "../utils/date";
+import { isRecord } from "../utils/object";
+import { getIndexFilePath, getIndexFolderPath, getSystemFolderPath } from "../utils/path";
+import { ensureFolder, ensureTextFile, getParentFolderPath } from "../utils/vault";
+
+// 职责：按月分片读写 memo-index，并在 process 回调内完成 JSON merge。
+export class MemoIndexStore {
+	constructor(private readonly app: App) {}
+
+	async loadPeriod(monthlyMemoFolder: string, period: string): Promise<MemoIndex> {
+		const file = await this.getOrCreateIndexFile(monthlyMemoFolder, period);
+		const data = await this.app.vault.cachedRead(file);
+		return parseIndex(data, period);
+	}
+
+	async loadAll(monthlyMemoFolder: string): Promise<MemoRecord[]> {
+		const periods = this.listExistingPeriods(monthlyMemoFolder);
+		return this.loadPeriods(monthlyMemoFolder, periods);
+	}
+
+	async loadPeriods(monthlyMemoFolder: string, periods: string[]): Promise<MemoRecord[]> {
+		const uniquePeriods = [...new Set(periods)];
+		const memos: MemoRecord[] = [];
+		for (const period of uniquePeriods) {
+			const index = await this.loadPeriod(monthlyMemoFolder, period);
+			memos.push(...Object.values(index.memos));
+		}
+		return memos.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+	}
+
+	async findMemoById(monthlyMemoFolder: string, memoId: string): Promise<MemoRecord | null> {
+		const memos = await this.loadAll(monthlyMemoFolder);
+		return memos.find((memo) => memo.id === memoId) ?? null;
+	}
+
+	async mergePeriod(
+		monthlyMemoFolder: string,
+		period: string,
+		mergeIndex: (index: MemoIndex) => MemoIndex,
+	): Promise<MemoIndex> {
+		const file = await this.getOrCreateIndexFile(monthlyMemoFolder, period);
+		const nextData = await this.app.vault.process(file, (data) => {
+			const index = parseIndex(data, period);
+			const nextIndex = mergeIndex(index);
+			return `${JSON.stringify(nextIndex, null, "\t")}\n`;
+		});
+		return parseIndex(nextData, period);
+	}
+
+	async addMemo(
+		monthlyMemoFolder: string,
+		memo: MemoRecord,
+		createNextMemoId: () => string,
+		maxAttempts = 100,
+	): Promise<MemoRecord> {
+		const period = formatMonthPeriod(new Date(memo.createdAt));
+		let savedMemo: MemoRecord | null = null;
+		await this.mergePeriod(monthlyMemoFolder, period, (index) => {
+			for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+				const candidateMemo = attempt === 0 ? memo : { ...memo, id: createNextMemoId() };
+				if (index.memos[candidateMemo.id] !== undefined) {
+					continue;
+				}
+				savedMemo = candidateMemo;
+				return {
+					...index,
+					updatedAt: new Date().toISOString(),
+					memos: {
+						...index.memos,
+						[candidateMemo.id]: candidateMemo,
+					},
+				};
+			}
+			throw new Error("Unable to allocate a unique memoId.");
+		});
+		if (savedMemo === null) {
+			throw new Error("Memo index write did not return a saved memo.");
+		}
+		return savedMemo;
+	}
+
+	async upsertMemo(monthlyMemoFolder: string, memo: MemoRecord): Promise<MemoRecord> {
+		const period = formatMonthPeriod(new Date(memo.createdAt));
+		await this.mergePeriod(monthlyMemoFolder, period, (index) => ({
+			...index,
+			updatedAt: new Date().toISOString(),
+			memos: {
+				...index.memos,
+				[memo.id]: memo,
+			},
+		}));
+		return memo;
+	}
+
+	async updateMemo(
+		monthlyMemoFolder: string,
+		memo: MemoRecord,
+		update: (memo: MemoRecord) => MemoRecord,
+	): Promise<MemoRecord> {
+		const period = formatMonthPeriod(new Date(memo.createdAt));
+		let updatedMemo: MemoRecord | null = null;
+		await this.mergePeriod(monthlyMemoFolder, period, (index) => {
+			const currentMemo = index.memos[memo.id];
+			if (currentMemo === undefined) {
+				throw new Error(`Memo not found: ${memo.id}`);
+			}
+			const nextMemo = update(currentMemo);
+			updatedMemo = nextMemo;
+			return {
+				...index,
+				updatedAt: new Date().toISOString(),
+				memos: {
+					...index.memos,
+					[nextMemo.id]: nextMemo,
+				},
+			};
+		});
+		if (updatedMemo === null) {
+			throw new Error("Memo index update did not return a memo.");
+		}
+		return updatedMemo;
+	}
+
+	async purgeDeletedMemo(monthlyMemoFolder: string, memoId: string): Promise<void> {
+		const memo = await this.findMemoById(monthlyMemoFolder, memoId);
+		if (memo === null) {
+			throw new Error(`Memo not found: ${memoId}`);
+		}
+		if (memo.status !== "deleted") {
+			throw new Error("只能永久删除回收站中的 Memo。");
+		}
+
+		const period = formatMonthPeriod(new Date(memo.createdAt));
+		await this.mergePeriod(monthlyMemoFolder, period, (index) => {
+			const currentMemo = index.memos[memoId];
+			if (currentMemo === undefined) {
+				throw new Error(`Memo not found: ${memoId}`);
+			}
+			if (currentMemo.status !== "deleted") {
+				throw new Error("只能永久删除回收站中的 Memo。");
+			}
+			const nextMemos = { ...index.memos };
+			delete nextMemos[memoId];
+			return {
+				...index,
+				updatedAt: new Date().toISOString(),
+				memos: nextMemos,
+			};
+		});
+	}
+
+	async backupIndexes(monthlyMemoFolder: string, reason: string): Promise<string | null> {
+		const indexFolder = this.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
+		if (!(indexFolder instanceof TFolder)) {
+			return null;
+		}
+		const backupRoot = normalizePath(`${indexFolder.parent?.path ?? getSystemFolderPath(monthlyMemoFolder)}/backups/${reason}-${Date.now()}/indexes`);
+		await ensureFolder(this.app, backupRoot);
+		const files: TFile[] = [];
+		Vault.recurseChildren(indexFolder, (child) => {
+			if (child instanceof TFile) {
+				files.push(child);
+			}
+		});
+		for (const file of files) {
+			const relativePath = file.path.slice(indexFolder.path.length + 1);
+			const backupPath = normalizePath(`${backupRoot}/${relativePath}`);
+			const parentPath = getParentFolderPath(backupPath);
+			if (parentPath !== null) {
+				await ensureFolder(this.app, parentPath);
+			}
+			await this.app.vault.create(backupPath, await this.app.vault.cachedRead(file));
+		}
+		return backupRoot;
+	}
+
+	private async getOrCreateIndexFile(monthlyMemoFolder: string, period: string): Promise<TFile> {
+		return ensureTextFile(this.app, getIndexFilePath(monthlyMemoFolder, period));
+	}
+
+	private listExistingPeriods(monthlyMemoFolder: string): string[] {
+		const indexFolder = this.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
+		if (!(indexFolder instanceof TFolder)) {
+			return [formatMonthPeriod(new Date())];
+		}
+
+		const periods = indexFolder.children
+			.filter((child): child is TFile => child instanceof TFile)
+			.map((file) => file.name.match(/^memo-index-(\d{4}-\d{2})\.json$/)?.[1] ?? null)
+			.filter((period): period is string => period !== null);
+		return periods.length > 0 ? periods : [formatMonthPeriod(new Date())];
+	}
+}
+
+function parseIndex(data: string, period: string): MemoIndex {
+	if (data.trim().length === 0) {
+		return createEmptyIndex(period);
+	}
+	const parsed = JSON.parse(data) as unknown;
+	if (!isMemoIndex(parsed)) {
+		throw new Error(`Invalid memo-index schema for ${period}.`);
+	}
+	return parsed;
+}
+
+function createEmptyIndex(period: string): MemoIndex {
+	return {
+		schemaVersion: 2,
+		period,
+		updatedAt: new Date().toISOString(),
+		memos: {},
+	};
+}
+
+function isMemoIndex(value: unknown): value is MemoIndex {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return value.schemaVersion === 2 && typeof value.period === "string" && isRecord(value.memos);
+}

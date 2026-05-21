@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"module": "CommonJS",
+		"rootDir": ".",
+		"outDir": "/private/tmp/knomo-tests",
+		"inlineSourceMap": false,
+		"sourceMap": true
+	},
+	"include": [
+		"src/**/*.ts",
+		"tests/**/*.ts"
+	]
+}

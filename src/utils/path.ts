@@ -1,0 +1,21 @@
+import { normalizePath } from "obsidian";
+
+import { DEFAULT_MONTHLY_MEMO_FOLDER } from "../constants";
+
+export function normalizeVaultPath(path: string): string {
+	const trimmedPath = path.trim();
+	const normalizedPath = normalizePath(trimmedPath || DEFAULT_MONTHLY_MEMO_FOLDER);
+	return normalizedPath.replace(/^\/+/, "");
+}
+
+export function getSystemFolderPath(monthlyMemoFolder: string): string {
+	return normalizePath(`${normalizeVaultPath(monthlyMemoFolder)}/_knomo-system`);
+}
+
+export function getIndexFolderPath(monthlyMemoFolder: string): string {
+	return normalizePath(`${getSystemFolderPath(monthlyMemoFolder)}/indexes`);
+}
+
+export function getIndexFilePath(monthlyMemoFolder: string, period: string): string {
+	return normalizePath(`${getIndexFolderPath(monthlyMemoFolder)}/memo-index-${period}.json`);
+}

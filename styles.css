@@ -1,0 +1,2026 @@
+/* ==========================================================================
+   Knomo Plugin Styles — unified v2
+   Uses Obsidian theme variables; adapts to light/dark themes automatically.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Custom Properties
+   -------------------------------------------------------------------------- */
+body {
+	--knomo-app-background-primary: var(--background-primary);
+	--knomo-app-background-secondary: var(--background-secondary);
+}
+
+.knomo-plugin {
+	--knomo-sidebar-width: 248px;
+	--knomo-content-max-width: 720px;
+	--knomo-touch-target: 44px;
+	--knomo-radius: 10px;
+
+	/* Surfaces — derived from Obsidian theme */
+	--knomo-page-background: var(--knomo-app-background-secondary);
+	--knomo-surface: var(--knomo-app-background-primary);
+	--knomo-card-surface: var(--knomo-surface);
+	--knomo-composer-surface: var(--knomo-surface);
+	--knomo-menu-surface: color-mix(in srgb, var(--background-primary) 98%, var(--text-normal) 2%);
+	--knomo-subtle-surface: color-mix(in srgb, var(--background-primary) 94%, var(--text-normal) 6%);
+	--knomo-soft-border: var(--background-modifier-border);
+	--knomo-row-hover: var(--background-modifier-hover);
+
+	/* Accent — follows user's Obsidian theme accent */
+	--knomo-accent: var(--interactive-accent);
+	--knomo-accent-hover: var(--interactive-accent-hover, var(--interactive-accent));
+	--knomo-accent-soft: color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+	--knomo-accent-text: var(--text-accent);
+
+	/* Shadows */
+	--knomo-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+	--knomo-menu-shadow: var(--shadow-s);
+
+	/* Motion */
+	--knomo-transition-fast: 140ms ease;
+	--knomo-transition-menu: 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+	--knomo-transition-panel: 240ms cubic-bezier(0.32, 0.72, 0, 1);
+
+	/* Typography */
+	position: relative;
+	color: var(--text-normal);
+	background-color: var(--knomo-page-background);
+	font-size: 14px;
+	line-height: 1.6;
+}
+
+.workspace-leaf-content[data-type="knomo-view"] {
+	--knomo-page-background: var(--knomo-app-background-secondary) !important;
+	--knomo-surface: var(--knomo-app-background-primary) !important;
+	--knomo-card-surface: var(--knomo-surface) !important;
+	--knomo-composer-surface: var(--knomo-surface) !important;
+}
+
+body .workspace-leaf-content[data-type="knomo-view"],
+body .workspace-leaf-content[data-type="knomo-view"] .view-content,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.knomo-view,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-shell,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-main,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-content-column,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-card-flow,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
+	background-color: var(--knomo-page-background) !important;
+	background-image: none !important;
+}
+
+.workspace-leaf-content[data-type="knomo-view"] .view-header {
+	display: none;
+}
+
+.workspace-leaf-content[data-type="knomo-view"] .view-content,
+.knomo-view-host {
+	padding: 0 !important;
+	overflow: hidden;
+	min-height: 0;
+}
+
+.theme-light .knomo-plugin {
+	--knomo-card-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.theme-dark .knomo-plugin {
+	--knomo-card-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.knomo-plugin.is-layout-desktop-medium,
+.knomo-plugin.is-layout-desktop-narrow {
+	--knomo-menu-surface: color-mix(in srgb, var(--background-primary) 96%, var(--text-normal) 4%);
+	--knomo-subtle-surface: color-mix(in srgb, var(--background-primary) 92%, var(--text-normal) 8%);
+}
+
+/* --------------------------------------------------------------------------
+   2. Reset / Base
+   -------------------------------------------------------------------------- */
+.knomo-plugin *,
+.knomo-plugin *::before,
+.knomo-plugin *::after {
+	box-sizing: border-box;
+}
+
+.knomo-plugin button {
+	font: inherit;
+}
+
+.knomo-plugin.knomo-view {
+	width: 100%;
+	height: 100%;
+	min-height: 0;
+	overflow: hidden;
+	background-color: var(--knomo-page-background);
+}
+
+/* --------------------------------------------------------------------------
+   3. Visibility Helpers — layout-class driven
+   -------------------------------------------------------------------------- */
+
+/* ---- Elements hidden by default, shown by layout class ---- */
+.knomo-plugin .knomo-fab,
+.knomo-plugin .knomo-compose-handle,
+.knomo-plugin .knomo-compose-head,
+.knomo-plugin .knomo-compact-header,
+.knomo-plugin .knomo-mobile-only {
+	display: none;
+}
+
+.knomo-plugin .knomo-desktop-only {
+	display: inline-flex;
+}
+
+/* ---- Layout: desktop-wide (default) ---- */
+/* topbar visible, compact-header hidden, composer inline, no FAB */
+
+/* ---- Layout: desktop-medium ---- */
+.knomo-plugin.is-layout-desktop-medium .knomo-compact-header {
+	display: flex;
+}
+.knomo-plugin.is-layout-desktop-medium .knomo-topbar {
+	display: none;
+}
+
+/* ---- Layout: desktop-narrow ---- */
+.knomo-plugin.is-layout-desktop-narrow .knomo-compact-header {
+	display: flex;
+}
+.knomo-plugin.is-layout-desktop-narrow .knomo-topbar {
+	display: none;
+}
+
+/* ---- Layout: mobile ---- */
+.knomo-plugin.is-layout-mobile .knomo-compact-header {
+	display: flex;
+}
+.knomo-plugin.is-layout-mobile .knomo-topbar {
+	display: none;
+}
+
+/* FAB — only on mobile */
+.knomo-plugin.is-layout-mobile .knomo-fab {
+	display: flex;
+	opacity: 1;
+	transform: translateY(0) scale(1);
+	visibility: visible;
+	pointer-events: auto;
+}
+.knomo-plugin.is-layout-mobile.is-composer-open .knomo-fab {
+	opacity: 0;
+	transform: translateY(8px) scale(0.96);
+	visibility: hidden;
+	pointer-events: none;
+}
+
+/* Composer backdrop — only on mobile when composer open */
+.knomo-plugin.is-layout-mobile.is-composer-open .knomo-composer-backdrop {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+/* Compact search panel — shown via JS toggle */
+.knomo-plugin.is-compact-search-open .knomo-compact-search-panel {
+	max-height: 64px;
+	padding: 0 0 12px;
+	opacity: 1;
+	transform: translateY(0);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin.is-layout-desktop-medium .knomo-compact-search-btn,
+.knomo-plugin.is-layout-desktop-narrow .knomo-compact-search-btn {
+	display: none;
+}
+
+/* Mobile scope popover */
+.knomo-plugin.is-layout-mobile.is-scope-open .knomo-mobile-scope-popover {
+	opacity: 1;
+	transform: translateY(0) scale(1);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover {
+	top: 32px;
+	left: 24px;
+	width: auto;
+	min-width: 160px;
+}
+
+/* ---- Layout: desktop-medium / desktop-narrow sidebar drawer ---- */
+.knomo-plugin.is-layout-desktop-medium .knomo-sidebar,
+.knomo-plugin.is-layout-desktop-narrow .knomo-sidebar {
+	position: absolute;
+	top: 0;
+	left: 0;
+	bottom: 0;
+	z-index: 60;
+	flex-basis: var(--knomo-sidebar-width);
+	width: var(--knomo-sidebar-width);
+	min-width: var(--knomo-sidebar-width);
+	max-width: calc(100vw - 48px);
+	padding: 0 14px 0 0;
+	border-radius: 0 var(--knomo-radius) var(--knomo-radius) 0;
+	background-color: var(--knomo-page-background);
+	box-shadow: var(--shadow-l);
+	opacity: 0;
+	transform: translateX(-100%);
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		transform var(--knomo-transition-panel),
+		opacity 180ms ease,
+		visibility 180ms ease;
+}
+
+.knomo-plugin.is-layout-desktop-medium.is-drawer-open .knomo-sidebar,
+.knomo-plugin.is-layout-desktop-medium.is-sidebar-collapsed.is-drawer-open .knomo-sidebar,
+.knomo-plugin.is-layout-desktop-narrow.is-drawer-open .knomo-sidebar,
+.knomo-plugin.is-layout-desktop-narrow.is-sidebar-collapsed.is-drawer-open .knomo-sidebar {
+	opacity: 1;
+	transform: translateX(0);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin.is-layout-desktop-medium .knomo-sidebar-resizer,
+.knomo-plugin.is-layout-desktop-narrow .knomo-sidebar-resizer {
+	display: none !important;
+}
+
+.knomo-plugin.is-layout-desktop-medium .knomo-drawer-backdrop,
+.knomo-plugin.is-layout-desktop-narrow .knomo-drawer-backdrop {
+	position: absolute;
+	inset: 0;
+	z-index: 50;
+	background: var(--background-modifier-cover);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity 220ms ease,
+		visibility 220ms ease;
+}
+
+.knomo-plugin.is-layout-desktop-medium.is-drawer-open .knomo-drawer-backdrop,
+.knomo-plugin.is-layout-desktop-narrow.is-drawer-open .knomo-drawer-backdrop {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+/* --------------------------------------------------------------------------
+   4. Shell Layout
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-shell {
+	display: flex;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	background-color: var(--knomo-page-background);
+}
+
+.knomo-plugin .knomo-shell,
+.knomo-plugin .knomo-main,
+.knomo-plugin .knomo-content-column,
+.knomo-plugin .knomo-card-flow {
+	background-color: var(--knomo-page-background);
+	border: 0;
+	box-shadow: none;
+}
+
+/* Shell — mobile: full height, no extra padding */
+	.knomo-plugin.is-layout-mobile .knomo-shell {
+		height: 100%;
+		padding: 0;
+	}
+/* --------------------------------------------------------------------------
+   5. Sidebar
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-sidebar {
+	position: relative;
+	flex: 0 0 var(--knomo-sidebar-width);
+	width: var(--knomo-sidebar-width);
+	min-width: var(--knomo-sidebar-width);
+	padding: 0 14px 0 0;
+	border: 0;
+	background-color: var(--knomo-page-background);
+	overflow: hidden auto;
+	scrollbar-width: none;
+}
+
+.knomo-plugin.is-layout-desktop-wide .knomo-sidebar {
+	padding: 8px 14px 16px 12px;
+}
+
+.knomo-plugin .knomo-sidebar::-webkit-scrollbar {
+	display: none;
+}
+
+.knomo-plugin.is-sidebar-collapsed .knomo-sidebar {
+	flex-basis: 0;
+	width: 0;
+	min-width: 0;
+	padding-right: 0;
+	overflow: hidden;
+}
+
+.knomo-plugin.is-layout-desktop-wide.is-sidebar-collapsed .knomo-sidebar {
+	padding: 0;
+}
+
+.knomo-plugin.is-layout-desktop-medium.is-sidebar-collapsed .knomo-sidebar,
+.knomo-plugin.is-layout-desktop-narrow.is-sidebar-collapsed .knomo-sidebar {
+	flex-basis: var(--knomo-sidebar-width);
+	width: var(--knomo-sidebar-width);
+	min-width: var(--knomo-sidebar-width);
+	padding: 0 14px 0 0;
+}
+
+/* Sidebar header / brand */
+.knomo-plugin .knomo-sidebar-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-height: 36px;
+	margin: 0 0 2px;
+	transform: translateY(2px);
+}
+
+.knomo-plugin .knomo-brand {
+	min-width: 0;
+	margin: 0;
+}
+
+.knomo-plugin .knomo-brand-title {
+	font-size: 15px;
+	font-weight: var(--font-semibold);
+	line-height: 1.3;
+}
+
+.knomo-plugin .knomo-brand-subtitle {
+	margin: 0 0 7px;
+	color: var(--text-faint);
+	font-size: 12px;
+	font-weight: var(--font-normal);
+	line-height: 17px;
+}
+
+/* Sidebar action buttons */
+.knomo-plugin .knomo-sidebar-actions {
+	display: flex;
+	gap: 4px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 160ms ease;
+}
+
+.knomo-plugin .knomo-sidebar-header:hover .knomo-sidebar-actions,
+.knomo-plugin .knomo-sidebar-header:focus-within .knomo-sidebar-actions {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-sidebar-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	min-width: 28px;
+	height: 28px;
+	min-height: 28px;
+	padding: 0;
+	border: 0;
+	border-radius: 5px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-sidebar-action:hover,
+.knomo-plugin .knomo-sidebar-action:focus-visible {
+	color: var(--text-accent);
+	background: var(--knomo-row-hover);
+}
+
+/* ---- Sidebar Stats ---- */
+.knomo-plugin .knomo-sidebar-stats {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 6px;
+	margin-bottom: 18px;
+}
+
+.knomo-plugin .knomo-stat {
+	min-width: 0;
+	padding: var(--size-4-2);
+	border: 0;
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+}
+
+.knomo-plugin .knomo-stat-value {
+	font-size: var(--font-ui-medium);
+	font-weight: var(--font-semibold);
+	line-height: var(--line-height-tight);
+}
+
+.knomo-plugin .knomo-stat-label {
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+/* ---- Sidebar Navigation ---- */
+.knomo-plugin .knomo-nav,
+.knomo-plugin .knomo-tag-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.knomo-plugin .knomo-nav {
+	margin: 28px 0 42px;
+}
+
+.knomo-plugin .knomo-nav-button,
+.knomo-plugin .knomo-tag-nav {
+	display: flex;
+	align-items: center;
+	min-height: 38px;
+	padding: 0 16px;
+	border: 0;
+	border-radius: var(--knomo-radius);
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: 14px;
+	font-weight: var(--font-normal);
+	line-height: 1.5;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-nav-button {
+	justify-content: flex-start;
+	gap: 8px;
+	width: 100%;
+	text-align: left;
+}
+
+.knomo-plugin .knomo-nav-button .knomo-button-icon {
+	width: 32px;
+	justify-content: center;
+	color: inherit;
+}
+
+.knomo-plugin .knomo-nav-button:not(.is-active):hover,
+.knomo-plugin .knomo-nav-button:not(.is-active):focus-visible,
+.knomo-plugin .knomo-tag-nav:hover,
+.knomo-plugin .knomo-tag-nav:focus-visible {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-nav-button.is-active {
+	color: var(--text-accent);
+	background: var(--background-modifier-hover);
+	font-weight: var(--font-semibold);
+}
+
+.knomo-plugin .knomo-button-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ---- Sidebar Tags ---- */
+.knomo-plugin .knomo-tag-section {
+	margin-top: 0;
+}
+
+.knomo-plugin .knomo-tag-section + .knomo-tag-section {
+	margin-top: 24px;
+}
+
+.knomo-plugin .knomo-trash-section {
+	margin-top: 28px;
+	padding-top: 12px;
+	border-top: var(--border-width) solid var(--knomo-soft-border);
+}
+
+.knomo-plugin .knomo-trash-nav-button {
+	color: var(--text-faint);
+}
+
+.knomo-plugin .knomo-trash-count {
+	margin-left: auto;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.knomo-plugin .knomo-trash-count[hidden] {
+	display: none;
+}
+
+.knomo-plugin .knomo-section-label {
+	margin: 0 0 12px;
+	padding: 0 16px;
+	color: var(--text-faint);
+	font-size: 12px;
+	font-weight: var(--font-normal);
+}
+
+.knomo-plugin .knomo-tag-nav {
+	justify-content: flex-start;
+	gap: 0;
+	width: auto;
+	flex: 0 1 auto;
+	min-width: 0;
+	min-height: 32px;
+	padding: 0;
+	text-align: left;
+}
+
+.knomo-plugin .knomo-tag-node {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 0;
+}
+
+.knomo-plugin .knomo-tag-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	padding: 0 16px;
+}
+
+.knomo-plugin .knomo-tag-toggle {
+	display: inline-flex;
+	flex: 0 0 18px;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	min-width: 18px;
+	height: 24px;
+	min-height: 24px;
+	padding: 0;
+	border: 0;
+	color: var(--text-faint);
+	background: transparent;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-tag-toggle:hover,
+.knomo-plugin .knomo-tag-toggle:focus-visible {
+	color: var(--text-normal);
+	background: transparent;
+}
+
+.knomo-plugin .knomo-tag-toggle svg {
+	width: 14px;
+	height: 14px;
+	transition: transform 120ms ease;
+}
+
+.knomo-plugin .knomo-tag-node.is-collapsed > .knomo-tag-row .knomo-tag-toggle svg {
+	transform: rotate(-90deg);
+}
+
+.knomo-plugin .knomo-tag-children {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-left: 31px;
+	padding-left: 16px;
+	border-left: 1px solid var(--background-modifier-border);
+}
+
+.knomo-plugin .knomo-tag-node.is-collapsed > .knomo-tag-children {
+	display: none;
+}
+
+.knomo-plugin .knomo-tag-nav .knomo-tag-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: inherit;
+}
+
+.knomo-plugin .knomo-tag-nav.is-active {
+	color: var(--text-normal);
+	background: transparent;
+	font-weight: var(--font-semibold);
+}
+
+.knomo-plugin .knomo-tag-nav.is-active .knomo-tag-count {
+	color: var(--knomo-accent);
+}
+
+.knomo-plugin .knomo-tag-count {
+	margin-left: auto;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+/* ---- Sidebar Resizer ---- */
+.knomo-plugin .knomo-sidebar-resizer {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: 9px;
+	cursor: col-resize;
+}
+
+.knomo-plugin .knomo-sidebar-resizer::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: 1px;
+	background: var(--knomo-soft-border);
+	opacity: 0;
+	transition: opacity 160ms ease;
+}
+
+.knomo-plugin .knomo-sidebar:hover .knomo-sidebar-resizer::after,
+.knomo-plugin .knomo-sidebar:focus-within .knomo-sidebar-resizer::after,
+.knomo-plugin.is-resizing-sidebar .knomo-sidebar-resizer::after {
+	opacity: 1;
+}
+
+.knomo-plugin.is-resizing-sidebar,
+.knomo-plugin.is-resizing-sidebar * {
+	cursor: col-resize !important;
+	user-select: none;
+}
+
+/* ---- Sidebar — mobile: floating drawer ---- */
+.knomo-plugin.is-layout-mobile .knomo-sidebar {
+	position: fixed;
+	top: 20px;
+	left: 16px;
+	bottom: 20px;
+	z-index: 60;
+	flex-basis: min(var(--knomo-sidebar-width), calc(100vw - 48px));
+	width: min(var(--knomo-sidebar-width), calc(100vw - 48px));
+	min-width: min(var(--knomo-sidebar-width), calc(100vw - 48px));
+	max-width: calc(100vw - 48px);
+	padding: 16px 14px 0 0;
+	border: 0;
+	border-radius: var(--knomo-radius);
+	background-color: var(--knomo-page-background);
+	box-shadow: var(--shadow-l);
+	opacity: 0;
+	transform: translateX(calc(-100% - 16px));
+	visibility: hidden;
+	pointer-events: none;
+	overflow: hidden auto;
+	transition:
+		transform var(--knomo-transition-panel),
+		opacity 180ms ease,
+		visibility 180ms ease;
+}
+
+.knomo-plugin.is-layout-mobile.is-drawer-open .knomo-sidebar,
+.knomo-plugin.is-layout-mobile.is-sidebar-collapsed.is-drawer-open .knomo-sidebar {
+	opacity: 1;
+	transform: translateX(0);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-sidebar-resizer {
+	display: none !important;
+}
+
+/* Drawer backdrop — mobile */
+.knomo-plugin.is-layout-mobile .knomo-drawer-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	background: var(--background-modifier-cover);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity 220ms ease,
+		visibility 220ms ease;
+}
+
+.knomo-plugin.is-layout-mobile.is-drawer-open .knomo-drawer-backdrop {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+/* --------------------------------------------------------------------------
+   6. Main Content
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-main {
+	position: relative;
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+	height: 100%;
+	padding: 0;
+	background-color: var(--knomo-page-background);
+	overflow: hidden;
+}
+
+.knomo-plugin .knomo-content-column {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	width: 100%;
+	max-width: var(--knomo-content-max-width);
+	min-width: 0;
+	min-height: 0;
+	margin: 0 auto;
+	padding: 0 16px 0;
+	overflow: visible;
+}
+
+.knomo-plugin.is-layout-desktop-wide .knomo-content-column {
+	padding: 0 16px 0;
+}
+
+/* Content column — desktop-medium / desktop-narrow: full-width, tighter padding */
+.knomo-plugin.is-layout-desktop-medium .knomo-content-column,
+.knomo-plugin.is-layout-desktop-narrow .knomo-content-column {
+	max-width: none;
+	padding: 0 12px 0;
+}
+
+
+/* Content column — mobile: full-width, minimal padding */
+.knomo-plugin.is-layout-mobile .knomo-content-column {
+	max-width: none;
+	min-width: 240px;
+	padding: 0 12px 0;
+}
+
+/* --------------------------------------------------------------------------
+   7. Topbar
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-topbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	height: 40px;
+	min-height: 40px;
+	margin: 0 0 20px;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	transform: translateY(2px);
+}
+
+.knomo-plugin .knomo-sidebar-toggle {
+	display: none;
+	width: 28px;
+	min-width: 28px;
+	height: 28px;
+	min-height: 28px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.knomo-plugin.is-sidebar-collapsed .knomo-sidebar-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.knomo-plugin .knomo-sidebar-toggle:hover,
+.knomo-plugin .knomo-sidebar-toggle:focus-visible {
+	color: var(--text-accent);
+	background: var(--knomo-row-hover);
+}
+
+/* Scope trigger */
+.knomo-plugin .knomo-scope-wrap {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+}
+
+.knomo-plugin .knomo-scope-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 28px;
+	padding: 0 4px 0 0;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: 14px;
+	font-weight: var(--font-semibold);
+	line-height: 1;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-scope-trigger:hover,
+.knomo-plugin .knomo-scope-trigger:focus-visible {
+	color: var(--text-normal);
+	background: transparent;
+}
+
+.knomo-plugin .knomo-title-chevron {
+	display: inline-flex;
+	width: 14px;
+	height: 14px;
+	color: var(--text-faint);
+}
+
+/* ---- Search ---- */
+.knomo-plugin .knomo-search-wrap {
+	position: relative;
+	display: flex;
+	flex: 0 1 200px;
+	align-items: center;
+	gap: 10px;
+	width: 200px;
+	min-width: 80px;
+	max-width: 200px;
+	min-height: 40px;
+	height: 40px;
+	padding: 0 20px;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: 20px;
+	background: var(--knomo-surface);
+	color: var(--text-faint);
+	transition:
+		background 160ms ease,
+		border-color 160ms ease,
+		box-shadow 160ms ease;
+}
+
+.knomo-plugin .knomo-search-wrap:focus-within {
+	background: var(--knomo-surface);
+	border-color: var(--knomo-soft-border);
+	box-shadow: none;
+}
+
+.knomo-plugin .knomo-search-icon {
+	display: inline-flex;
+	color: var(--text-muted);
+	transform: rotate(-15deg);
+}
+
+.knomo-plugin .knomo-search-input {
+	width: 100%;
+	min-width: 0;
+	height: 100%;
+	min-height: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--text-normal);
+	font: inherit;
+	font-size: 14px;
+	appearance: none;
+}
+
+.knomo-plugin .knomo-search-input:focus,
+.knomo-plugin .knomo-search-input:focus-visible {
+	box-shadow: none;
+	outline: 0;
+}
+
+.knomo-plugin .knomo-search-input::placeholder {
+	color: var(--text-faint);
+}
+
+/* ---- Desktop Search Menu ---- */
+.knomo-plugin .knomo-desktop-search-menu {
+	position: absolute;
+	top: 44px;
+	right: 0;
+	z-index: 30;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	width: 100%;
+	min-width: 180px;
+	padding: 6px;
+	border: var(--border-width) solid var(--knomo-soft-border);
+	border-radius: var(--knomo-radius);
+	background: var(--knomo-menu-surface);
+	box-shadow: var(--knomo-menu-shadow);
+	opacity: 0;
+	transform: translateY(-4px) scale(0.98);
+	transform-origin: top right;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity var(--knomo-transition-menu),
+		transform var(--knomo-transition-menu),
+		visibility var(--knomo-transition-menu);
+}
+
+.knomo-plugin.is-desktop-search-open .knomo-desktop-search-menu {
+	opacity: 1;
+	transform: translateY(0) scale(1);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-search-menu-option {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	width: 100%;
+	min-height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-search-menu-option .knomo-button-icon {
+	display: none;
+}
+
+.knomo-plugin .knomo-search-menu-option:hover,
+.knomo-plugin .knomo-search-menu-option:focus-visible,
+.knomo-plugin .knomo-search-menu-option.is-active {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+/* ---- Scope Popover ---- */
+.knomo-plugin .knomo-scope-popover {
+	position: absolute;
+	z-index: 30;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	padding: 6px;
+	border: var(--border-width) solid var(--knomo-soft-border);
+	border-radius: var(--knomo-radius);
+	background: var(--knomo-menu-surface);
+	box-shadow: var(--knomo-menu-shadow);
+	opacity: 0;
+	transform: translateY(-4px) scale(0.98);
+	transform-origin: top left;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity var(--knomo-transition-menu),
+		transform var(--knomo-transition-menu),
+		visibility var(--knomo-transition-menu);
+}
+
+.knomo-plugin .knomo-desktop-scope-popover {
+	top: 32px;
+	left: 0;
+	width: 112px;
+}
+
+.knomo-plugin.is-scope-open .knomo-desktop-scope-popover {
+	opacity: 1;
+	transform: translateY(0) scale(1);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-scope-option {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	width: 100%;
+	min-height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-scope-option .knomo-button-icon {
+	display: none;
+}
+
+.knomo-plugin .knomo-scope-option:hover,
+.knomo-plugin .knomo-scope-option:focus-visible,
+.knomo-plugin .knomo-scope-option.is-active {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+/* --------------------------------------------------------------------------
+   7b. Compact Header (desktop-medium / desktop-narrow / mobile)
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-compact-header {
+	align-items: center;
+	gap: 8px;
+	height: 48px;
+	min-height: 48px;
+	padding: 0 4px 6px;
+	transform: translateY(2px);
+}
+
+.knomo-plugin .knomo-compact-menu-btn,
+.knomo-plugin .knomo-compact-search-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	min-width: 36px;
+	height: 36px;
+	min-height: 36px;
+	padding: 0;
+	border: 0;
+	border-radius: 8px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-compact-menu-btn:hover,
+.knomo-plugin .knomo-compact-menu-btn:focus-visible,
+.knomo-plugin .knomo-compact-search-btn:hover,
+.knomo-plugin .knomo-compact-search-btn:focus-visible {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-compact-title {
+	flex: 1;
+	min-width: 0;
+	color: var(--text-muted);
+	font-size: 14px;
+	font-weight: var(--font-semibold);
+	line-height: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ---- Compact Search Panel ---- */
+.knomo-plugin .knomo-compact-search-panel {
+	display: flex;
+	flex-direction: column;
+	max-height: 0;
+	padding: 0;
+	opacity: 0;
+	transform: translateY(-4px);
+	visibility: hidden;
+	pointer-events: none;
+	overflow: hidden;
+	transition:
+		opacity var(--knomo-transition-menu),
+		transform var(--knomo-transition-menu),
+		max-height var(--knomo-transition-menu),
+		padding var(--knomo-transition-menu),
+		visibility var(--knomo-transition-menu);
+}
+
+.knomo-plugin .knomo-compact-search-wrap {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 40px;
+	min-height: 40px;
+	padding: 0 20px;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: 20px;
+	background: var(--knomo-surface);
+	transition:
+		background 160ms ease,
+		box-shadow 160ms ease;
+}
+
+.knomo-plugin .knomo-compact-inline-search {
+	display: none;
+}
+
+.knomo-plugin.is-layout-desktop-medium .knomo-compact-inline-search,
+.knomo-plugin.is-layout-desktop-narrow .knomo-compact-inline-search {
+	display: flex;
+	flex: 0 1 200px;
+	width: auto;
+	min-width: 80px;
+	max-width: 200px;
+}
+
+.knomo-plugin .knomo-compact-search-wrap:focus-within {
+	background: var(--knomo-surface);
+	border-color: var(--knomo-soft-border);
+	box-shadow: none;
+}
+
+/* ---- FAB ---- */
+.knomo-plugin .knomo-fab {
+	position: fixed;
+	right: max(24px, env(safe-area-inset-right));
+	bottom: max(24px, env(safe-area-inset-bottom));
+	z-index: 40;
+	opacity: 0;
+	transform: translateY(8px) scale(0.96);
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity var(--knomo-transition-panel),
+		transform var(--knomo-transition-panel),
+		visibility var(--knomo-transition-panel);
+}
+
+.knomo-plugin .knomo-fab-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 48px;
+	min-width: 48px;
+	height: 48px;
+	min-height: 48px;
+	padding: 0;
+	border: 0;
+	border-radius: 14px;
+	color: var(--text-on-accent);
+	background: var(--knomo-accent);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-fab-button:hover,
+.knomo-plugin .knomo-fab-button:focus-visible {
+	background: var(--knomo-accent-hover);
+}
+
+/* ---- Composer Backdrop ---- */
+.knomo-plugin .knomo-composer-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	background: var(--background-modifier-cover);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity 220ms ease,
+		visibility 220ms ease;
+}
+/* ---- Composer — bottom sheet on mobile layout ---- */
+.knomo-plugin.is-layout-mobile .knomo-composer {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	z-index: 70;
+	width: 100%;
+	max-height: 85vh;
+	margin: 0;
+	padding: 0 16px calc(16px + env(safe-area-inset-bottom));
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: 16px 16px 0 0;
+	background: var(--knomo-composer-surface);
+	box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
+	overflow-y: auto;
+	transform: translateY(100%);
+	transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.knomo-plugin.is-layout-mobile.is-composer-open .knomo-composer {
+	transform: translateY(0);
+}
+
+/* Drag handle at top of bottom sheet */
+.knomo-plugin.is-layout-mobile .knomo-compose-handle {
+	display: flex !important;
+	justify-content: center;
+	padding: 10px 0 4px;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-compose-handle::before {
+	content: "";
+	width: 36px;
+	height: 4px;
+	border-radius: 2px;
+	background: var(--knomo-soft-border);
+}
+
+.knomo-plugin .knomo-compose-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--knomo-touch-target);
+	height: var(--knomo-touch-target);
+	padding: 0;
+	border: 0;
+	border-radius: 8px;
+	color: var(--text-muted);
+	background: transparent;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-compose-close:hover,
+.knomo-plugin .knomo-compose-close:focus-visible {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+/* --------------------------------------------------------------------------
+   8. Composer
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-composer {
+	flex: 0 0 auto;
+	min-height: 96px;
+	margin: 0 0 8px;
+	padding: 12px 16px;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: 8px;
+	background: var(--knomo-composer-surface);
+	box-shadow: var(--knomo-card-shadow);
+	transition:
+		background var(--knomo-transition-fast),
+		border-color var(--knomo-transition-fast),
+		box-shadow var(--knomo-transition-fast);
+}
+
+.knomo-plugin .knomo-composer:hover {
+	border-color: var(--knomo-soft-border);
+	box-shadow: var(--knomo-card-shadow);
+}
+
+.knomo-plugin .knomo-composer:focus-within {
+	border-color: var(--interactive-accent);
+	box-shadow: var(--knomo-card-shadow);
+}
+
+.knomo-plugin .knomo-composer-input-area {
+	display: flex;
+	flex-direction: column;
+	min-height: 64px;
+}
+
+.knomo-plugin .knomo-composer-input {
+	display: block;
+	flex: 1;
+	width: 100%;
+	min-height: 44px;
+	max-height: 480px;
+	padding: 0;
+	resize: none;
+	border: 0;
+	background: transparent;
+	color: var(--text-normal);
+	font-size: 15px;
+	line-height: 1.6;
+	overflow-y: hidden;
+	scrollbar-width: none;
+	box-shadow: none;
+	appearance: none;
+}
+
+.knomo-plugin .knomo-composer-input::-webkit-scrollbar {
+	display: none;
+	width: 0;
+	height: 0;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-composer-input {
+	flex: 0 0 auto;
+	height: 48px;
+	min-height: 48px;
+	transition: height var(--knomo-transition-fast);
+}
+
+.knomo-plugin .knomo-composer-input:focus,
+.knomo-plugin .knomo-composer-input:focus-visible {
+	outline: 0;
+	box-shadow: none;
+}
+
+.knomo-plugin .knomo-composer-input:disabled {
+	color: var(--text-muted);
+	background: transparent;
+}
+
+/* Mobile: limit textarea to 42vh */
+.knomo-plugin.is-layout-mobile .knomo-composer-input {
+	max-height: 42vh;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-composer:focus-within .knomo-composer-input {
+	max-height: 42vh;
+}
+
+/* ---- Composer — desktop-narrow: compact height ---- */
+.knomo-plugin.is-layout-desktop-narrow .knomo-composer {
+	min-height: 92px;
+	padding: 12px 14px;
+	margin-bottom: 12px;
+}
+
+.knomo-plugin .knomo-composer-input::placeholder {
+	color: var(--text-faint);
+}
+
+/* Reference preview in composer */
+.knomo-plugin .knomo-reference-preview {
+	display: none;
+	align-items: center;
+	gap: 8px;
+	margin: 12px 0 0;
+	padding: 8px 10px;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: var(--knomo-radius);
+	background: var(--knomo-subtle-surface);
+}
+
+.knomo-plugin .knomo-reference-preview-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	color: var(--text-muted);
+	font-size: 13px;
+	line-height: 1.5;
+	overflow: hidden;
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+}
+
+.knomo-plugin .knomo-reference-label {
+	color: var(--text-faint);
+	font-weight: var(--font-medium);
+}
+
+.knomo-plugin .knomo-reference-clear {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	min-width: 26px;
+	height: 26px;
+	min-height: 26px;
+	padding: 0;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: 50%;
+	color: var(--text-faint);
+	background: transparent;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-reference-clear:hover,
+.knomo-plugin .knomo-reference-clear:focus-visible {
+	color: var(--text-muted);
+	background: var(--knomo-row-hover);
+}
+
+/* Compose head: hidden by default, shown only for the mobile close control */
+.knomo-plugin .knomo-compose-head {
+	display: none;
+	align-items: center;
+	justify-content: flex-end;
+	padding: 0 0 6px;
+}
+
+/* Mobile always shows compose head */
+.knomo-plugin.is-layout-mobile .knomo-compose-head {
+	display: flex !important;
+}
+
+/* Hide mobile-only elements on desktop compose head */
+.knomo-plugin:not(.is-layout-mobile) .knomo-compose-head .knomo-compose-close {
+	display: none;
+}
+
+/* Composer toolbar */
+.knomo-plugin .knomo-composer-bar {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 10px;
+	margin-top: 10px;
+}
+
+.knomo-plugin .knomo-tool-group {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: var(--text-faint);
+}
+
+.knomo-plugin .knomo-tool-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	min-width: 22px;
+	height: 22px;
+	min-height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	color: var(--text-faint);
+	background: transparent;
+	box-shadow: none;
+	font-size: 15px;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-tool-button:hover,
+.knomo-plugin .knomo-tool-button:focus-visible {
+	color: var(--text-muted);
+	background: transparent;
+}
+
+.knomo-plugin .knomo-composer-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.knomo-plugin .knomo-cancel-edit-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-cancel-edit-button[hidden] {
+	display: none;
+}
+
+.knomo-plugin .knomo-cancel-edit-button:hover,
+.knomo-plugin .knomo-cancel-edit-button:focus-visible {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+/* Status line */
+.knomo-plugin .knomo-status {
+	min-height: 0;
+	margin-top: 4px;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.knomo-plugin .knomo-status:empty {
+	display: none;
+}
+
+.knomo-plugin .knomo-status.is-error {
+	color: var(--text-error);
+}
+
+/* Send button */
+.knomo-plugin .knomo-send-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 38px;
+	min-width: 38px;
+	height: 38px;
+	min-height: 38px;
+	padding: 0;
+	border: 0;
+	border-radius: 10px;
+	background: var(--knomo-accent);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+	color: var(--text-on-accent);
+	cursor: pointer;
+	transition:
+		background 160ms ease,
+		box-shadow 160ms ease;
+}
+
+.knomo-plugin .knomo-send-button:hover:not(:disabled),
+.knomo-plugin .knomo-send-button:focus-visible:not(:disabled) {
+	background: var(--knomo-accent-hover);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.knomo-plugin .knomo-send-button:disabled {
+	background: var(--background-modifier-border);
+	box-shadow: none;
+	color: var(--text-faint);
+	cursor: not-allowed;
+}
+
+/* --------------------------------------------------------------------------
+   9. Card Flow
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-card-flow {
+	flex: 1 1 auto;
+	width: 100%;
+	min-height: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background-color: var(--knomo-page-background);
+	box-shadow: none;
+	overflow-y: auto;
+	overflow-x: hidden;
+	overscroll-behavior: contain;
+	scrollbar-width: none;
+}
+
+.knomo-plugin .knomo-card-flow .knomo-card:last-child {
+	margin-bottom: 0;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-card-flow {
+	padding-bottom: calc(48px + 8px + env(safe-area-inset-bottom));
+}
+
+.knomo-plugin.is-layout-mobile.is-composer-open .knomo-card-flow {
+	padding-bottom: env(safe-area-inset-bottom);
+	overflow: hidden;
+}
+
+.knomo-plugin .knomo-card-flow::-webkit-scrollbar {
+	width: 0;
+	height: 0;
+}
+
+.knomo-plugin .knomo-list-summary {
+	margin: 0 0 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.knomo-plugin .knomo-list-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin: 0 0 10px;
+}
+
+.knomo-plugin .knomo-list-toolbar .knomo-list-summary {
+	margin: 0;
+}
+
+.knomo-plugin .knomo-inline-button {
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: var(--knomo-surface);
+	box-shadow: none;
+	font-size: var(--font-ui-small);
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-inline-button:hover,
+.knomo-plugin .knomo-inline-button:focus-visible {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-inline-button.is-danger {
+	color: var(--text-error);
+}
+
+.knomo-plugin .knomo-inline-button:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.knomo-plugin .knomo-load-more {
+	display: block;
+	width: 100%;
+	min-height: 38px;
+	margin: 8px 0 0;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 8px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: var(--font-ui-small);
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-load-more:hover,
+.knomo-plugin .knomo-load-more:focus-visible {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-card[data-random-reunion-card="true"] {
+	cursor: pointer;
+}
+
+/* ---- Memo Card ---- */
+.knomo-plugin .knomo-card {
+	position: relative;
+	margin: 0 0 8px;
+	padding: 16px 20px;
+	border: 0;
+	border-radius: 8px;
+	background: var(--knomo-card-surface);
+	box-shadow: var(--knomo-card-shadow);
+	transition: box-shadow var(--knomo-transition-fast);
+}
+
+.knomo-plugin .knomo-card:hover,
+.knomo-plugin .knomo-card:focus-within {
+	background: var(--knomo-card-surface);
+	box-shadow: var(--knomo-card-shadow);
+}
+
+.knomo-plugin .knomo-trash-card {
+	opacity: 0.82;
+}
+
+.knomo-plugin .knomo-trash-card.is-busy {
+	pointer-events: none;
+}
+
+/* Card head */
+.knomo-plugin .knomo-card-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 6px;
+	color: var(--text-faint);
+	font-size: 12px;
+	line-height: 1.3;
+}
+
+.knomo-plugin .knomo-card-time {
+	color: var(--text-faint);
+	font-size: 12px;
+}
+
+.knomo-plugin .knomo-trash-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+/* Card menu button */
+.knomo-plugin .knomo-card-menu {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	min-width: 24px;
+	height: 22px;
+	min-height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	color: var(--text-faint);
+	background: transparent;
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-card-menu:hover,
+.knomo-plugin .knomo-card-menu:focus-visible {
+	color: var(--text-muted);
+	background: var(--knomo-row-hover);
+}
+
+/* Card action dropdown */
+.knomo-plugin .knomo-card-actions {
+	position: absolute;
+	top: 38px;
+	right: 16px;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	width: 118px;
+	min-width: 118px;
+	padding: 6px;
+	border: var(--border-width) solid var(--knomo-soft-border);
+	border-radius: var(--knomo-radius);
+	background: var(--knomo-menu-surface);
+	box-shadow: var(--knomo-menu-shadow);
+	opacity: 0;
+	transform: translateY(-4px) scale(0.98);
+	transform-origin: top right;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity var(--knomo-transition-menu),
+		transform var(--knomo-transition-menu),
+		visibility var(--knomo-transition-menu);
+}
+
+.knomo-plugin .knomo-card.is-menu-open .knomo-card-actions {
+	opacity: 1;
+	transform: translateY(0) scale(1);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-card-action {
+	display: flex;
+	align-items: center;
+	width: 100%;
+	min-height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-card-action:hover,
+.knomo-plugin .knomo-card-action:focus-visible {
+	color: var(--text-normal);
+	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-card-action.is-danger {
+	color: var(--text-error);
+}
+
+.knomo-plugin .knomo-card-action.is-danger:hover,
+.knomo-plugin .knomo-card-action.is-danger:focus-visible {
+	color: var(--text-error);
+	background: var(--background-modifier-error-hover, var(--knomo-row-hover));
+}
+
+/* Card content */
+.knomo-plugin .knomo-card-content {
+	margin: 0;
+	overflow-wrap: anywhere;
+	color: var(--text-normal);
+	font-size: 15px;
+	line-height: 1.7;
+	white-space: normal;
+}
+
+.knomo-plugin .knomo-card-content p {
+	margin-top: 0;
+	margin-bottom: 0.65em;
+	line-height: 1.7;
+}
+
+.knomo-plugin .knomo-card-content > :first-child {
+	margin-top: 0;
+}
+
+.knomo-plugin .knomo-card-content > :last-child,
+.knomo-plugin .knomo-card-content p:last-child {
+	margin-bottom: 0;
+}
+
+.knomo-plugin .knomo-card-content .tag {
+	padding: 2px 8px;
+	border-radius: 10px;
+	color: var(--text-muted);
+	background: var(--background-modifier-hover);
+	font-size: 13px;
+	font-weight: var(--font-normal);
+}
+
+.knomo-plugin .knomo-card-content .tag:hover {
+	color: var(--text-accent);
+	background: var(--knomo-row-hover);
+}
+
+/* Card meta */
+.knomo-plugin .knomo-card-meta {
+	margin-top: 6px;
+	color: var(--text-faint);
+	font-size: 11px;
+}
+
+.knomo-plugin .knomo-trash-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+}
+
+.knomo-plugin .knomo-card-warning {
+	margin-top: 6px;
+	color: var(--text-error);
+	font-size: 11px;
+}
+
+.knomo-plugin .knomo-source-reference p {
+	margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   10. Empty State
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-empty-state {
+	margin: 60px 0;
+	padding: 0 20px;
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-faint);
+	text-align: center;
+}
+
+.knomo-plugin .knomo-empty-title {
+	margin-bottom: var(--size-2-2);
+	font-weight: var(--font-semibold);
+}
+
+.knomo-plugin .knomo-empty-description {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+/* --------------------------------------------------------------------------
+   11. Settings Tab
+   -------------------------------------------------------------------------- */
+.knomo-setting-help {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	white-space: pre-wrap;
+}
+
+.knomo-setting-help.is-error {
+	color: var(--text-error);
+}
+
+.knomo-scan-result,
+.knomo-issue-list {
+	margin: var(--size-4-2) 0 var(--size-4-4);
+}
+
+.knomo-issue-item {
+	padding: var(--size-4-2) 0;
+	border-bottom: var(--border-width) solid var(--background-modifier-border);
+}
+
+.knomo-issue-item:last-child {
+	border-bottom: 0;
+}
+
+.knomo-setting-code {
+	margin-bottom: var(--size-2-2);
+	font-family: var(--font-monospace);
+	color: var(--text-normal);
+	overflow-wrap: anywhere;
+}
+
+.knomo-plugin .knomo-muted-text {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+/* --------------------------------------------------------------------------
+   12. Utilities
+   -------------------------------------------------------------------------- */
+.knomo-plugin .knomo-clipboard-helper {
+	position: fixed;
+	top: 0;
+	left: -9999px;
+	opacity: 0;
+}
+
+.knomo-plugin .knomo-hidden-file-input,
+.workspace-leaf-content[data-type="knomo-view"] > .knomo-hidden-file-input {
+	position: fixed;
+	inset: auto auto 0 0;
+	width: 0;
+	height: 0;
+	max-width: 0;
+	max-height: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	opacity: 0;
+	overflow: hidden;
+	pointer-events: none;
+	clip-path: inset(50%);
+}
+
+/* Focus visible ring */
+.knomo-plugin button:focus-visible,
+.knomo-plugin input:focus-visible,
+.knomo-plugin textarea:focus-visible,
+.knomo-plugin [tabindex]:focus-visible {
+	outline: var(--size-2-1) solid var(--interactive-accent);
+	outline-offset: var(--size-2-1);
+}
+
+/* --------------------------------------------------------------------------
+   13. Mobile / Tablet (≤ 768px)
+   -------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+	/* Visibility helpers — mobile layout only */
+	.knomo-plugin.is-layout-mobile .knomo-desktop-only,
+	.knomo-plugin.is-layout-mobile .knomo-desktop-scope-popover {
+		display: none !important;
+	}
+
+	.knomo-plugin.is-layout-mobile .knomo-mobile-only {
+		display: flex;
+	}
+
+	/* Sidebar actions always visible in mobile drawer */
+	.knomo-plugin.is-layout-mobile .knomo-sidebar-actions {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
+	/* Mobile compact mode */
+	.knomo-plugin.is-mobile-compact .knomo-card {
+		padding: var(--size-4-2) var(--size-4-3);
+	}
+
+	.knomo-plugin.is-mobile-compact .knomo-card-content {
+		font-size: var(--font-ui-small);
+	}
+}
+
+/* --------------------------------------------------------------------------
+   14. Small Phone (≤ 420px)
+   -------------------------------------------------------------------------- */
+@media (max-width: 420px) {
+	.knomo-plugin.is-layout-mobile .knomo-content-column {
+		min-width: 232px;
+		padding: 0 12px 0;
+	}
+
+	.knomo-plugin .knomo-topbar {
+		height: auto;
+		min-height: 36px;
+		flex-wrap: wrap;
+		gap: 8px;
+		row-gap: 10px;
+		margin-bottom: 18px;
+	}
+
+	.knomo-plugin .knomo-scope-wrap {
+		min-width: 0;
+	}
+
+	.knomo-plugin .knomo-search-wrap {
+		order: 3;
+		flex: 0 0 100%;
+		width: 100%;
+	}
+
+	.knomo-plugin .knomo-desktop-search-menu {
+		top: 44px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.knomo-plugin *,
+	.knomo-plugin *::before,
+	.knomo-plugin *::after {
+		transition-duration: 0.01ms !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		scroll-behavior: auto !important;
+	}
+}

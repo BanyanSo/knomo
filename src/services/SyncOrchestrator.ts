@@ -15,7 +15,15 @@ import type { DailyNotesStatus } from "./DailyNoteService";
 import { MarkdownBlockService } from "./MarkdownBlockService";
 import { MemoIndexStore } from "./MemoIndexStore";
 import { MemoScanService } from "./MemoScanService";
-import type { EstimateDailyMemosResult, ScanDailyMemosProgress, ScanDailyMemosResult } from "./MemoScanService";
+import type {
+	EstimateDailyMemosResult,
+	LegacyDailyMemosImportOptions,
+	LegacyDailyMemosImportResult,
+	LegacyDailyMemosImportScope,
+	LegacyDailyMemosPreview,
+	ScanDailyMemosProgress,
+	ScanDailyMemosResult,
+} from "./MemoScanService";
 import {
 	formatMonthlyDateHeading,
 	getMonthlyArchivePath,
@@ -351,6 +359,15 @@ export class SyncOrchestrator {
 		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress);
 	}
 
+	async previewLegacyDailyMemos(scope: LegacyDailyMemosImportScope): Promise<LegacyDailyMemosPreview> {
+		return this.memoScanService.previewLegacyDailyMemos(scope);
+	}
+
+	async importLegacyDailyMemos(options: LegacyDailyMemosImportOptions): Promise<LegacyDailyMemosImportResult> {
+		const now = new Date();
+		return this.memoScanService.importLegacyDailyMemos((date) => createMemoId(date), createOperationId(now), options);
+	}
+
 	async scanRecentDailyMemos(days: number, source: MarkdownSyncSource = "startup_scan"): Promise<ScanDailyMemosResult> {
 		const now = new Date();
 		const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
@@ -635,6 +652,7 @@ export class SyncOrchestrator {
 				dailyRef: {
 					path: dailyFile.path,
 					heading: memo.dailyRef.heading,
+					sectionType: memo.dailyRef.sectionType ?? (memo.dailyRef.heading === null ? "root" : "heading"),
 					lastKnownBlock: location.parsedBlock.rawBlock,
 					lastKnownHash: hashText(location.parsedBlock.rawBlock),
 					lineNumberHint: location.parsedBlock.startLine + 1,

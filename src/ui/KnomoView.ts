@@ -57,7 +57,6 @@ interface FilteredMemosCache {
 	scopeFilter: ScopeFilter;
 	searchQuery: string;
 	todayKey: string;
-	pinnedMemoIdsKey: string;
 	result: MemoRecord[];
 }
 
@@ -125,6 +124,8 @@ export class KnomoView extends ItemView {
 	private compactInlineSearchInputEl: HTMLInputElement | null = null;
 	private compactSearchInputEl: HTMLInputElement | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
+	private mobileKeyboardViewport: VisualViewport | null = null;
+	private mobileKeyboardInsetHandler: (() => void) | null = null;
 	private memos: MemoRecord[] = [];
 	private cardFlowError: string | null = null;
 	private allMemosLoaded = false;
@@ -145,9 +146,9 @@ export class KnomoView extends ItemView {
 	private quoteReferenceText: string | null = null;
 	private quoteMarkdownText: string | null = null;
 	private activeMenuMemoId: string | null = null;
-	private pinnedMemoIds: string[] = [];
 	private draftContent = "";
 	private isSaving = false;
+	private keyboardHeight = 0;
 	private sidebarDrag: SidebarDragState | null = null;
 	private currentLayout: LayoutMode = "desktop-wide";
 	private layoutObserver: ResizeObserver | null = null;
@@ -163,6 +164,7 @@ export class KnomoView extends ItemView {
 	private trashBusyMemoActions = new Map<string, "restore" | "purge">();
 	private visibleMemoCount = CARD_BATCH_SIZE;
 	private searchDebounceTimeoutId: number | null = null;
+	private mobileComposerFocusTimeoutId: number | null = null;
 	private renderGeneration = 0;
 
 	constructor(
@@ -200,6 +202,8 @@ export class KnomoView extends ItemView {
 		this.tagSuggest?.close();
 		this.tagSuggest = null;
 		this.clearSearchDebounce();
+		this.clearMobileComposerFocus();
+		this.stopMobileKeyboardTracking();
 		this.stopDateChangeWatcher();
 		this.stopLayoutObserver();
 		this.contentEl.removeClass("knomo-view-host");
@@ -381,16 +385,20 @@ export class KnomoView extends ItemView {
 			}
 		});
 
-		const searchMenu = searchWrap.createDiv({ cls: "knomo-desktop-search-menu", attr: { role: "menu" } });
-		for (const option of DATE_SCOPE_OPTIONS) {
-			this.renderScopeButton(searchMenu, option, "knomo-search-menu-option");
-		}
+		this.renderSearchPopover(searchWrap);
 	}
 
 	private renderScopePopover(main: HTMLElement): void {
 		const mobilePopover = main.createDiv({ cls: "knomo-scope-popover knomo-mobile-scope-popover", attr: { role: "menu" } });
 		for (const option of ALL_SCOPE_OPTIONS) {
 			this.renderScopeButton(mobilePopover, option, "knomo-scope-option");
+		}
+	}
+
+	private renderSearchPopover(container: HTMLElement): void {
+		const searchMenu = container.createDiv({ cls: "knomo-search-menu", attr: { role: "menu" } });
+		for (const option of DATE_SCOPE_OPTIONS) {
+			this.renderScopeButton(searchMenu, option, "knomo-search-menu-option");
 		}
 	}
 
@@ -539,12 +547,23 @@ export class KnomoView extends ItemView {
 		const header = main.createDiv({ cls: "knomo-compact-header" });
 		this.createIconButton(header, "menu", "菜单", "knomo-compact-menu-btn", "open-drawer");
 
-		const titleSpan = header.createSpan({ cls: "knomo-compact-title" });
+		const titleButton = header.createEl("button", {
+			cls: "knomo-compact-title",
+			attr: {
+				type: "button",
+				"aria-haspopup": "menu",
+				"aria-expanded": "false",
+				"data-action": "toggle-scope-menu",
+			},
+		});
+		const titleSpan = titleButton.createSpan();
 		this.scopeTitleEls.push(titleSpan);
+		setIcon(titleButton.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
 
 		const inlineSearchWrap = header.createDiv({ cls: "knomo-compact-search-wrap knomo-compact-inline-search" });
 		setIcon(inlineSearchWrap.createSpan({ cls: "knomo-search-icon" }), "search");
 		this.compactInlineSearchInputEl = this.createCompactSearchInput(inlineSearchWrap);
+		this.renderSearchPopover(inlineSearchWrap);
 
 		this.createIconButton(header, "search", "搜索", "knomo-compact-search-btn", "toggle-compact-search");
 	}
@@ -554,6 +573,7 @@ export class KnomoView extends ItemView {
 		const searchWrap = panel.createDiv({ cls: "knomo-compact-search-wrap" });
 		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), "search");
 		this.compactSearchInputEl = this.createCompactSearchInput(searchWrap);
+		this.renderSearchPopover(searchWrap);
 	}
 
 	private createCompactSearchInput(searchWrap: HTMLElement): HTMLInputElement {
@@ -565,12 +585,15 @@ export class KnomoView extends ItemView {
 				"aria-label": "搜索",
 			},
 		});
+		this.registerDomEvent(searchInput, "focus", () => this.openDesktopSearch());
+		this.registerDomEvent(searchInput, "click", () => this.openDesktopSearch());
 		this.registerDomEvent(searchInput, "input", () => {
 			this.queueSearchQuery(searchInput.value);
 		});
 		this.registerDomEvent(searchInput, "keydown", (event) => {
 			if (event.key === "Escape") {
 				this.compactSearchOpen = false;
+				this.desktopSearchOpen = false;
 				searchInput.value = "";
 				this.setSearchQuery("");
 				this.syncRootState();
@@ -687,6 +710,11 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-compact-search-open", this.compactSearchOpen);
 		root.toggleClass("is-mobile-compact", shouldUseMobileCompact(this.settingsService.getSettings().mobileCompactMode));
 		root.style.setProperty("--knomo-sidebar-width", `${this.sidebarWidth}px`);
+		if (this.currentLayout === "mobile" && this.composerOpen) {
+			this.startMobileKeyboardTracking();
+		} else {
+			this.stopMobileKeyboardTracking();
+		}
 		if (this.sidebarResizerEl !== null) {
 			this.sidebarResizerEl.setAttr("aria-valuenow", String(this.sidebarWidth));
 		}
@@ -717,6 +745,53 @@ export class KnomoView extends ItemView {
 			this.layoutObserver.disconnect();
 			this.layoutObserver = null;
 		}
+	}
+
+	private startMobileKeyboardTracking(): void {
+		if (this.rootEl === null) {
+			return;
+		}
+		if (this.mobileKeyboardInsetHandler !== null) {
+			this.updateKeyboardInset();
+			return;
+		}
+		const viewport = this.containerEl.win.visualViewport;
+		if (viewport === undefined || viewport === null) {
+			this.keyboardHeight = 0;
+			this.rootEl.style.setProperty("--knomo-keyboard-height", "0px");
+			return;
+		}
+		this.mobileKeyboardViewport = viewport;
+		this.mobileKeyboardInsetHandler = () => this.updateKeyboardInset();
+		viewport.addEventListener("resize", this.mobileKeyboardInsetHandler);
+		viewport.addEventListener("scroll", this.mobileKeyboardInsetHandler);
+		this.updateKeyboardInset();
+	}
+
+	private stopMobileKeyboardTracking(): void {
+		if (this.mobileKeyboardViewport !== null && this.mobileKeyboardInsetHandler !== null) {
+			this.mobileKeyboardViewport.removeEventListener("resize", this.mobileKeyboardInsetHandler);
+			this.mobileKeyboardViewport.removeEventListener("scroll", this.mobileKeyboardInsetHandler);
+		}
+		this.mobileKeyboardViewport = null;
+		this.mobileKeyboardInsetHandler = null;
+		this.keyboardHeight = 0;
+		this.rootEl?.style.setProperty("--knomo-keyboard-height", "0px");
+	}
+
+	private updateKeyboardInset(): void {
+		if (this.rootEl === null) {
+			return;
+		}
+		const viewport = this.mobileKeyboardViewport ?? this.containerEl.win.visualViewport;
+		if (viewport === undefined || viewport === null) {
+			this.keyboardHeight = 0;
+			this.rootEl.style.setProperty("--knomo-keyboard-height", "0px");
+			return;
+		}
+		const win = this.containerEl.win;
+		this.keyboardHeight = Math.max(0, win.innerHeight - viewport.height - viewport.offsetTop);
+		this.rootEl.style.setProperty("--knomo-keyboard-height", `${this.keyboardHeight}px`);
 	}
 
 	private updateCurrentLayout(): void {
@@ -971,12 +1046,11 @@ export class KnomoView extends ItemView {
 		menu.setAttr("data-tooltip-position", "top");
 		setIcon(menu, "more-horizontal");
 
-		const actions = card.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
+		const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
 		this.renderCardAction(actions, memo.id, "edit", "编辑");
 		this.renderCardAction(actions, memo.id, "reference", "引用");
 		this.renderCardAction(actions, memo.id, "copy-text", "复制文本");
 		this.renderCardAction(actions, memo.id, "copy-link", "复制链接");
-		this.renderCardAction(actions, memo.id, "pin", "临时置顶");
 		this.renderCardAction(actions, memo.id, "delete", "删除");
 
 		const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
@@ -1177,7 +1251,7 @@ export class KnomoView extends ItemView {
 			this.scopeMenuOpen = false;
 			this.syncRootState();
 		}
-		if (target.closest(".knomo-search-wrap") === null) {
+		if (target.closest(".knomo-search-wrap, .knomo-compact-search-wrap, .knomo-search-menu") === null) {
 			this.desktopSearchOpen = false;
 			this.syncRootState();
 		}
@@ -1231,9 +1305,7 @@ export class KnomoView extends ItemView {
 		if (action === "close-composer") this.closeComposerWithConfirm();
 		if (action === "toggle-compact-search") {
 			this.compactSearchOpen = !this.compactSearchOpen;
-			if (this.compactSearchOpen) {
-				this.desktopSearchOpen = false;
-			}
+			this.desktopSearchOpen = false;
 		}
 		if (action === "insert-tag") this.insertText("#");
 		if (action === "insert-image") this.openNativeImagePicker();
@@ -1271,8 +1343,7 @@ export class KnomoView extends ItemView {
 		}
 		if (this.composerOpen) {
 			event.preventDefault();
-			this.composerOpen = false;
-			this.syncRootState();
+			this.closeComposerKeepingDraft();
 			return;
 		}
 		if (this.editingMemo !== null || this.quoteSourceMemoId !== null) {
@@ -1294,6 +1365,8 @@ export class KnomoView extends ItemView {
 			this.desktopSearchOpen = false;
 			this.mobileDrawerOpen = false;
 			this.composerOpen = false;
+			this.clearMobileComposerFocus();
+			this.stopMobileKeyboardTracking();
 			this.renderUiState();
 		}
 	}
@@ -1306,8 +1379,6 @@ export class KnomoView extends ItemView {
 			} else if (action === "reference") {
 				const referenceText = await this.referenceService.createReferenceText(memo, "link");
 				this.startReferenceMemo(memo, withMemoIdAlias(referenceText, memo.id));
-			} else if (action === "pin") {
-				this.pinMemo(memo);
 			} else if (action === "copy-text") {
 				await this.copyText(memo.contentSnapshot);
 				new Notice("已复制文本");
@@ -1322,7 +1393,6 @@ export class KnomoView extends ItemView {
 					return;
 				}
 				await this.syncOrchestrator.deleteMemo(memo);
-				this.pinnedMemoIds = this.pinnedMemoIds.filter((memoId) => memoId !== memo.id);
 				new Notice("已删除");
 				await this.onMemosChanged();
 				return;
@@ -1347,6 +1417,7 @@ export class KnomoView extends ItemView {
 			this.updateSendButtonState();
 			return;
 		}
+		const shouldKeepMobileCreateOpen = this.currentLayout === "mobile" && this.editingMemo === null && this.quoteSourceMemoId === null;
 		const createInput = this.editingMemo === null ? this.prepareCreateMemoInput(input) : null;
 		const content = createInput?.content ?? input;
 
@@ -1370,13 +1441,16 @@ export class KnomoView extends ItemView {
 			this.quoteSourceMemoId = null;
 			this.quoteReferenceText = null;
 			this.quoteMarkdownText = null;
-			this.composerOpen = false;
+			this.composerOpen = shouldKeepMobileCreateOpen;
 			if (this.inputEl !== null) {
 				this.inputEl.value = "";
 				this.resizeInput();
 			}
 			this.updateStatus("", false);
 			await this.onMemosChanged();
+			if (shouldKeepMobileCreateOpen) {
+				this.focusComposerInputSoon();
+			}
 		} catch (error) {
 			const message = formatSettingsText(error instanceof Error ? error.message : "保存失败");
 			this.updateStatus(message, true);
@@ -1506,10 +1580,14 @@ export class KnomoView extends ItemView {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.syncRootState();
-		this.inputEl?.focus();
+		this.focusComposerInputSoon();
 	}
 
 	private closeComposerWithConfirm(): void {
+		if (this.currentLayout === "mobile") {
+			this.closeComposerKeepingDraft();
+			return;
+		}
 		if (this.inputEl !== null && this.inputEl.value.trim().length > 0) {
 			const confirmed = this.containerEl.win.confirm("收起输入层并保留当前内容？");
 			if (!confirmed) {
@@ -1519,6 +1597,40 @@ export class KnomoView extends ItemView {
 		}
 		this.composerOpen = false;
 		this.syncRootState();
+	}
+
+	private closeComposerKeepingDraft(): void {
+		if (this.inputEl !== null) {
+			this.draftContent = this.inputEl.value;
+		}
+		this.composerOpen = false;
+		this.clearMobileComposerFocus();
+		this.stopMobileKeyboardTracking();
+		this.syncRootState();
+	}
+
+	private focusComposerInputSoon(): void {
+		this.clearMobileComposerFocus();
+		if (this.currentLayout !== "mobile") {
+			this.inputEl?.focus();
+			this.resizeInput();
+			return;
+		}
+		const win = this.containerEl.win;
+		this.mobileComposerFocusTimeoutId = win.setTimeout(() => {
+			this.mobileComposerFocusTimeoutId = null;
+			this.inputEl?.focus();
+			this.resizeInput();
+			this.updateKeyboardInset();
+		}, 0);
+	}
+
+	private clearMobileComposerFocus(): void {
+		if (this.mobileComposerFocusTimeoutId === null) {
+			return;
+		}
+		this.containerEl.win.clearTimeout(this.mobileComposerFocusTimeoutId);
+		this.mobileComposerFocusTimeoutId = null;
 	}
 
 	private cancelEditingOrCloseComposer(): void {
@@ -1585,10 +1697,6 @@ export class KnomoView extends ItemView {
 		this.updateStatus("", false);
 	}
 
-	private pinMemo(memo: MemoRecord): void {
-		this.pinnedMemoIds = [memo.id, ...this.pinnedMemoIds.filter((memoId) => memoId !== memo.id)];
-	}
-
 	private handleComposerBeforeInput(event: InputEvent): void {
 		if (event.defaultPrevented || event.inputType !== "insertText" || event.data !== "#") {
 			return;
@@ -1624,8 +1732,7 @@ export class KnomoView extends ItemView {
 		if (this.inputEl === null) {
 			return;
 		}
-		const focused = this.containerEl.doc.activeElement === this.inputEl;
-		const minHeight = this.currentLayout === "mobile" ? (focused ? 120 : 44) : 48;
+		const minHeight = this.currentLayout === "mobile" ? 44 : 48;
 		const maxHeight = this.currentLayout === "mobile" ? this.getMobileMaxInputHeight() : 480;
 		this.inputEl.style.height = this.currentLayout === "mobile" ? `${minHeight}px` : "auto";
 		const nextHeight = Math.min(maxHeight, Math.max(minHeight, this.inputEl.scrollHeight));
@@ -1635,7 +1742,7 @@ export class KnomoView extends ItemView {
 
 	private getMobileMaxInputHeight(): number {
 		const vh = this.containerEl.win.innerHeight * 0.42;
-		return Math.round(Math.min(vh, 360));
+		return Math.round(Math.min(vh, 320));
 	}
 
 	private updateStatus(message: string, isError: boolean): void {
@@ -1690,7 +1797,6 @@ export class KnomoView extends ItemView {
 		const normalizedQuery = this.searchQuery.trim().toLowerCase();
 		const today = new Date();
 		const todayKey = formatDatePart(today);
-		const pinnedMemoIdsKey = this.pinnedMemoIds.join("\u0000");
 		const cache = this.filteredMemosCache;
 		if (
 			cache !== null &&
@@ -1699,8 +1805,7 @@ export class KnomoView extends ItemView {
 			cache.activeNav === this.activeNav &&
 			cache.scopeFilter === this.scopeFilter &&
 			cache.searchQuery === normalizedQuery &&
-			cache.todayKey === todayKey &&
-			cache.pinnedMemoIdsKey === pinnedMemoIdsKey
+			cache.todayKey === todayKey
 		) {
 			return cache.result;
 		}
@@ -1716,7 +1821,6 @@ export class KnomoView extends ItemView {
 				}
 				return matchesScope(memo, this.scopeFilter);
 			});
-		const result = this.activeNav === "review" ? filteredMemos : this.orderPinnedMemos(filteredMemos);
 		this.filteredMemosCache = {
 			memos: this.memos,
 			activeTag: this.activeTag,
@@ -1724,10 +1828,9 @@ export class KnomoView extends ItemView {
 			scopeFilter: this.scopeFilter,
 			searchQuery: normalizedQuery,
 			todayKey,
-			pinnedMemoIdsKey,
-			result,
+			result: filteredMemos,
 		};
-		return result;
+		return filteredMemos;
 	}
 
 	private getOutsideTodayMemos(today: Date): MemoRecord[] {
@@ -1766,18 +1869,6 @@ export class KnomoView extends ItemView {
 		return parseLocalDateText(memo.monthlyRef.dateHeading) ?? parseLocalDateText(memo.monthlyRef.path);
 	}
 
-	private orderPinnedMemos(memos: MemoRecord[]): MemoRecord[] {
-		if (this.pinnedMemoIds.length === 0) {
-			return memos;
-		}
-		const memoById = new Map(memos.map((memo) => [memo.id, memo]));
-		const pinned = this.pinnedMemoIds
-			.map((memoId) => memoById.get(memoId) ?? null)
-			.filter((memo): memo is MemoRecord => memo !== null);
-		const pinnedIds = new Set(pinned.map((memo) => memo.id));
-		return [...pinned, ...memos.filter((memo) => !pinnedIds.has(memo.id))];
-	}
-
 	private closeCardMenu(): void {
 		if (this.activeMenuMemoId === null) {
 			return;
@@ -1793,8 +1884,25 @@ export class KnomoView extends ItemView {
 		for (const card of this.cardFlowEl.findAll(".knomo-card")) {
 			const isOpen = this.activeMenuMemoId !== null && card.getAttr("data-memo-id") === this.activeMenuMemoId;
 			card.toggleClass("is-menu-open", isOpen);
+			card.toggleClass("is-menu-above", false);
 			card.find(".knomo-card-menu")?.setAttr("aria-expanded", isOpen ? "true" : "false");
+			if (isOpen) {
+				this.positionOpenCardMenu(card);
+			}
 		}
+	}
+
+	private positionOpenCardMenu(card: HTMLElement): void {
+		if (this.cardFlowEl === null) {
+			return;
+		}
+		const actions = card.find(".knomo-card-actions");
+		if (!actions?.instanceOf(HTMLElement)) {
+			return;
+		}
+		const flowRect = this.cardFlowEl.getBoundingClientRect();
+		const actionsRect = actions.getBoundingClientRect();
+		card.toggleClass("is-menu-above", actionsRect.bottom > flowRect.bottom - 8);
 	}
 
 	private toggleSidebar(): void {

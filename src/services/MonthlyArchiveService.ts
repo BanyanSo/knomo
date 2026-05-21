@@ -1,4 +1,4 @@
-import { normalizePath, TFile } from "obsidian";
+import { normalizePath, TFile, TFolder, Vault } from "obsidian";
 import type { App } from "obsidian";
 
 import { DEFAULT_MONTHLY_DATE_HEADING_FORMAT, DEFAULT_MONTHLY_MEMO_FILE_FORMAT } from "../constants";
@@ -7,8 +7,8 @@ import type { KnomoSettings, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart, formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
 import { findLineNumber, normalizeMarkdownLineEndings } from "../utils/markdown";
-import { normalizeVaultPath } from "../utils/path";
-import { ensureTextFile } from "../utils/vault";
+import { getSystemFolderPath, normalizeVaultPath } from "../utils/path";
+import { ensureFolder, ensureTextFile, getParentFolderPath } from "../utils/vault";
 import { MarkdownBlockService } from "./MarkdownBlockService";
 
 // 职责：维护月度归档文件中的月份标题、日期标题和完整 memo block。
@@ -40,6 +40,58 @@ export class MonthlyArchiveService {
 		private readonly app: App,
 		private readonly markdownBlockService = new MarkdownBlockService(),
 	) {}
+
+	async backupMonthlyArchives(settings: KnomoSettings, backupPath: string | null): Promise<void> {
+		if (backupPath === null) {
+			return;
+		}
+		const monthlyBackupPath = normalizePath(`${backupPath}/monthly`);
+		await ensureFolder(this.app, monthlyBackupPath);
+		const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
+		for (const file of this.listMonthlyArchiveFiles(settings)) {
+			const relativePath = file.path.slice(monthlyFolderPath.length + 1);
+			const backupFilePath = normalizePath(`${monthlyBackupPath}/${relativePath}`);
+			const parentPath = getParentFolderPath(backupFilePath);
+			if (parentPath !== null) {
+				await ensureFolder(this.app, parentPath);
+			}
+			await this.app.vault.create(backupFilePath, await this.app.vault.cachedRead(file));
+		}
+	}
+
+	async restoreMonthlyArchives(settings: KnomoSettings, backupPath: string | null): Promise<void> {
+		if (backupPath === null) {
+			return;
+		}
+		const monthlyBackupPath = normalizePath(`${backupPath}/monthly`);
+		const backupFolder = this.app.vault.getAbstractFileByPath(monthlyBackupPath);
+		const backupFiles: TFile[] = [];
+		if (backupFolder instanceof TFolder) {
+			Vault.recurseChildren(backupFolder, (child) => {
+				if (child instanceof TFile) {
+					backupFiles.push(child);
+				}
+			});
+		}
+		const backupRelativePaths = new Set(backupFiles.map((file) => file.path.slice(monthlyBackupPath.length + 1)));
+		await this.removeMonthlyArchiveFilesExcept(settings, backupRelativePaths);
+		const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
+		for (const file of backupFiles) {
+			const relativePath = file.path.slice(monthlyBackupPath.length + 1);
+			const targetPath = normalizePath(`${monthlyFolderPath}/${relativePath}`);
+			const parentPath = getParentFolderPath(targetPath);
+			if (parentPath !== null) {
+				await ensureFolder(this.app, parentPath);
+			}
+			const content = await this.app.vault.cachedRead(file);
+			const existing = this.app.vault.getAbstractFileByPath(targetPath);
+			if (existing instanceof TFile) {
+				await this.app.vault.process(existing, () => content);
+			} else {
+				await this.app.vault.create(targetPath, content);
+			}
+		}
+	}
 
 	async insertMemoBlock(settings: KnomoSettings, createdAt: Date, block: string): Promise<MonthlyArchiveWriteResult> {
 		const period = formatMonthPeriod(createdAt);
@@ -152,6 +204,37 @@ export class MonthlyArchiveService {
 			},
 		};
 	}
+
+	private listMonthlyArchiveFiles(settings: KnomoSettings): TFile[] {
+		const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
+		const monthlyFolder = this.app.vault.getAbstractFileByPath(monthlyFolderPath);
+		if (!(monthlyFolder instanceof TFolder)) {
+			return [];
+		}
+		const systemFolderPath = getSystemFolderPath(settings.monthlyMemoFolder);
+		const archivePathPattern = buildMonthlyArchivePathPattern(settings);
+		const files: TFile[] = [];
+		Vault.recurseChildren(monthlyFolder, (child) => {
+			if (
+				child instanceof TFile &&
+				!child.path.startsWith(`${systemFolderPath}/`) &&
+				archivePathPattern.test(child.path)
+			) {
+				files.push(child);
+			}
+		});
+		return files;
+	}
+
+	private async removeMonthlyArchiveFilesExcept(settings: KnomoSettings, keepRelativePaths: Set<string>): Promise<void> {
+		const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
+		for (const file of this.listMonthlyArchiveFiles(settings)) {
+			const relativePath = file.path.slice(monthlyFolderPath.length + 1);
+			if (!keepRelativePaths.has(relativePath)) {
+				await this.app.vault.delete(file);
+			}
+		}
+	}
 }
 
 export function getMonthlyArchivePath(settings: KnomoSettings, period: string): string {
@@ -224,4 +307,18 @@ function buildMonthlyRef(
 		lineNumberHint: lineNumberHint ?? findLineNumber(content, block, true),
 		lastSyncedAt: new Date().toISOString(),
 	};
+}
+
+function buildMonthlyArchivePathPattern(settings: KnomoSettings): RegExp {
+	const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
+	const format = settings.monthlyMemoFileFormat.trim() || DEFAULT_MONTHLY_MEMO_FILE_FORMAT;
+	const escapedFormat = format
+		.split("YYYY-MM")
+		.map(escapeRegExp)
+		.join("\\d{4}-\\d{2}");
+	return new RegExp(`^${escapeRegExp(monthlyFolderPath)}/${escapedFormat}$`);
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

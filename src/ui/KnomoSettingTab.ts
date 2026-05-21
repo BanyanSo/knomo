@@ -5,14 +5,20 @@ import { DEFAULT_MONTHLY_MEMO_FOLDER, KNOMO_VIEW_TYPE } from "../constants";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
 import type { RebuildIndexMode, RebuildIndexScope, SyncOrchestrator } from "../services/SyncOrchestrator";
+import type { LegacyDailyMemosGroupPreview, LegacyDailyMemosImportScope, LegacyDailyMemosPreview } from "../services/MemoScanService";
 import type { MemoRecord } from "../types/memo";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { normalizeVaultPath } from "../utils/path";
 import { KnomoView } from "./KnomoView";
 
 export class KnomoSettingTab extends PluginSettingTab {
-	private scanResultEl: HTMLElement | null = null;
 	private issueListEl: HTMLElement | null = null;
+	private legacyImportResultEl: HTMLElement | null = null;
+	private legacyImportGroupsEl: HTMLElement | null = null;
+	private legacyImportPreview: LegacyDailyMemosPreview | null = null;
+	private legacyImportScope: LegacyDailyMemosImportScope = "90d";
+	private legacyImportAppendBlockIds = false;
+	private legacyImportRunning = false;
 	private rebuildResultEl: HTMLElement | null = null;
 	private monthlyExcludeStatusEl: HTMLElement | null = null;
 	private rebuildRunning = false;
@@ -134,22 +140,46 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("扫描")
-			.setDesc("扫描日记中的 Memos，并同步到月度 Memos 文件。")
+			.setName("高级 / 数据维护")
+			.setHeading();
+		new Setting(containerEl)
+			.setName("导入旧日记 Memos")
+			.setDesc("从历史 Daily Notes 中识别符合 Memos 格式的内容。适合第一次安装 Knomo 后导入旧日记。导入前会先预览，不会直接修改你的日记。")
+			.addDropdown((dropdown) => {
+				dropdown.addOption("30d", "最近 30 天");
+				dropdown.addOption("90d", "最近 90 天");
+				dropdown.addOption("all", "全部日记");
+				dropdown.setValue(this.legacyImportScope);
+				dropdown.onChange((value) => {
+					this.legacyImportScope = value as LegacyDailyMemosImportScope;
+					this.legacyImportPreview = null;
+					this.renderLegacyImportPreview();
+				});
+			})
 			.addButton((button) => {
-				button.setButtonText("扫描日记");
+				button.setButtonText("开始预览");
 				button.onClick(() => {
-					void this.runManualScan(button);
+					void this.runLegacyImportPreview(button);
 				});
 			});
-		this.scanResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderScanResult("尚未扫描日记中的 Memos。");
+		new Setting(containerEl)
+			.setName("为导入的 Memos 添加 Obsidian block ID，提升后续同步稳定性")
+			.setDesc("默认关闭。开启后只会给缺少块 ID 的导入项追加 Obsidian block ID；这会轻微修改旧日记文件，不会写入 Memos ID。")
+			.addToggle((toggle) => {
+				toggle.setValue(this.legacyImportAppendBlockIds);
+				toggle.onChange((value) => {
+					this.legacyImportAppendBlockIds = value;
+				});
+			});
+		this.legacyImportResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
+		this.legacyImportGroupsEl = containerEl.createDiv({ cls: "knomo-legacy-import-groups" });
+		this.renderLegacyImportPreview();
 
 		let rebuildScope: RebuildIndexScope = "30d";
 		let rebuildMode: RebuildIndexMode = "index-only";
 		new Setting(containerEl)
 			.setName("重建索引")
-			.setDesc("从 Daily Notes 重建 Knomo Index；可选择是否同时重新生成月度 Memos。")
+			.setDesc("高级修复功能：从 Daily Notes 重建 Knomo Index；可选择是否同时重新生成月度 Memos。重建前会估算并备份现有索引。")
 			.addDropdown((dropdown) => {
 				dropdown.addOption("30d", "最近 30 天");
 				dropdown.addOption("90d", "最近 90 天");
@@ -358,40 +388,153 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async runManualScan(button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void }): Promise<void> {
+	private async runLegacyImportPreview(button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void }): Promise<void> {
+		if (this.legacyImportRunning) {
+			return;
+		}
+		this.legacyImportRunning = true;
 		button.setDisabled(true);
-		button.setButtonText("扫描中...");
-		this.renderScanResult("正在扫描日记中的 Memos...");
+		button.setButtonText("预览中...");
+		this.renderLegacyImportStatus("正在预览旧日记 Memos...");
 		try {
-			const result = await this.syncOrchestrator.scanDailyMemos((progress) => {
-				this.renderScanResult(
-					`正在扫描日记中的 Memos：${progress.completedFiles}/${progress.scannedFiles} 个文件\n` +
-						`新增 ${progress.created} 条，更新 ${progress.updated} 条，删除 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
-						(progress.currentFile === null ? "" : `\n当前文件：${progress.currentFile}`),
-				);
-			});
-			const message = `扫描完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条，跳过 ${result.skipped} 条，失败 ${result.failed} 条。`;
-			const errors = result.errors.map(formatSettingsText);
-			this.renderScanResult(errors.length > 0 ? `${message}\n${errors.join("\n")}` : message);
-			await this.renderIssueList();
-			await this.refreshOpenKnomoViews();
-			new Notice("Knomo 扫描完成");
+			this.legacyImportPreview = await this.syncOrchestrator.previewLegacyDailyMemos(this.legacyImportScope);
+			this.renderLegacyImportPreview();
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "扫描失败。");
-			this.renderScanResult(message);
+			const message = formatSettingsText(error instanceof Error ? error.message : "旧日记 Memos 预览失败。");
+			this.renderLegacyImportStatus(message, true);
 			new Notice(message);
 		} finally {
+			this.legacyImportRunning = false;
 			button.setDisabled(false);
-			button.setButtonText("扫描日记");
+			button.setButtonText("开始预览");
 		}
 	}
 
-	private renderScanResult(message: string): void {
-		if (this.scanResultEl === null) {
+	private renderLegacyImportPreview(): void {
+		if (this.legacyImportGroupsEl === null) {
 			return;
 		}
-		this.scanResultEl.empty();
-		this.scanResultEl.createDiv({ cls: "knomo-setting-help", text: message });
+		this.legacyImportGroupsEl.empty();
+		const preview = this.legacyImportPreview;
+		if (preview === null) {
+			this.renderLegacyImportStatus("尚未预览旧日记 Memos。");
+			return;
+		}
+		const summary = [
+			`识别到 ${preview.candidateCount} 条候选 Memos`,
+			...preview.groups.map((group) => `${group.label}：${group.count} 条`),
+		].join("\n");
+		this.renderLegacyImportStatus(summary);
+		if (preview.groups.length === 0) {
+			return;
+		}
+		for (const group of preview.groups) {
+			this.renderLegacyImportGroup(group);
+		}
+		const button = this.legacyImportGroupsEl.createEl("button", {
+			cls: "mod-cta",
+			text: "导入所选分组",
+			attr: { type: "button" },
+		});
+		button.addEventListener("click", () => {
+			void this.runLegacyImport(button);
+		});
+	}
+
+	private renderLegacyImportGroup(group: LegacyDailyMemosGroupPreview): void {
+		if (this.legacyImportGroupsEl === null) {
+			return;
+		}
+		const item = this.legacyImportGroupsEl.createDiv({ cls: "knomo-legacy-import-group" });
+		const label = item.createEl("label", { cls: "knomo-legacy-import-label" });
+		const checkbox = label.createEl("input", {
+			attr: {
+				type: "checkbox",
+				"data-legacy-import-group": group.key,
+			},
+		});
+		checkbox.checked = group.selectedByDefault;
+		label.createSpan({ text: `${group.label}：${group.count} 条` });
+		const samples = item.createDiv({ cls: "knomo-legacy-import-samples" });
+		for (const sample of group.samples) {
+			samples.createDiv({
+				cls: "knomo-setting-code",
+				text: `${sample.path}:${sample.lineNumber} ${sample.time} ${formatLegacyImportSample(sample.content)}`,
+			});
+		}
+	}
+
+	private async runLegacyImport(button: HTMLButtonElement): Promise<void> {
+		const preview = this.legacyImportPreview;
+		if (preview === null || this.legacyImportGroupsEl === null || this.legacyImportRunning) {
+			return;
+		}
+		const selectedGroupKeys = this.getSelectedLegacyImportGroupKeys();
+		if (selectedGroupKeys.length === 0) {
+			new Notice("请选择要导入的分组。");
+			return;
+		}
+		this.legacyImportRunning = true;
+		button.disabled = true;
+		button.setText("导入中...");
+		this.renderLegacyImportStatus("正在导入旧日记 Memos...");
+		try {
+			const result = await this.syncOrchestrator.importLegacyDailyMemos({
+				scope: this.legacyImportScope,
+				selectedGroupKeys,
+				appendBlockIds: this.legacyImportAppendBlockIds,
+			});
+			await this.addLegacyDailyHeadings(result.importedHeadings);
+			await this.renderIssueList();
+			await this.refreshOpenKnomoViews();
+			const message = `导入完成：新增 ${result.imported} 条，跳过 ${result.skipped} 条，失败 ${result.failed} 条。`;
+			const errors = result.errors.map(formatSettingsText);
+			this.renderLegacyImportStatus(errors.length > 0 ? `${message}\n${errors.join("\n")}` : message, result.failed > 0);
+			if (result.failed > 0) {
+				new Notice(`导入失败：${result.failed} 条 Memos 未导入`);
+			}
+		} catch (error) {
+			const message = formatSettingsText(error instanceof Error ? error.message : "旧日记 Memos 导入失败。");
+			this.renderLegacyImportStatus(message, true);
+			new Notice(message);
+		} finally {
+			this.legacyImportRunning = false;
+			button.disabled = false;
+			button.setText("导入所选分组");
+		}
+	}
+
+	private getSelectedLegacyImportGroupKeys(): string[] {
+		const groupsEl = this.legacyImportGroupsEl;
+		if (groupsEl === null) {
+			return [];
+		}
+		return groupsEl.findAll("input[data-legacy-import-group]")
+			.filter((input): input is HTMLInputElement => input.instanceOf(HTMLInputElement) && input.checked)
+			.map((input) => input.getAttr("data-legacy-import-group"))
+			.filter((key): key is string => key !== null);
+	}
+
+	private async addLegacyDailyHeadings(headings: string[]): Promise<void> {
+		if (headings.length === 0) {
+			return;
+		}
+		const settings = this.settingsService.getSettings();
+		const nextHeadings = [...settings.legacyDailyHeadings];
+		for (const heading of headings) {
+			if (!nextHeadings.includes(heading)) {
+				nextHeadings.push(heading);
+			}
+		}
+		await this.settingsService.updateSettings({ legacyDailyHeadings: nextHeadings });
+	}
+
+	private renderLegacyImportStatus(message: string, isError = false): void {
+		if (this.legacyImportResultEl === null) {
+			return;
+		}
+		this.legacyImportResultEl.empty();
+		this.legacyImportResultEl.createDiv({ cls: isError ? "knomo-setting-help is-error" : "knomo-setting-help", text: message });
 	}
 
 	private async runRebuildIndex(
@@ -407,23 +550,24 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setButtonText("预估中...");
 		try {
 			const estimate = await this.syncOrchestrator.estimateRebuildIndex(scope);
+			const monthlyModeText = mode === "index-and-monthly" ? "会重建 Monthly Memos" : "不会重建 Monthly Memos";
 			const confirmed = this.containerEl.win.confirm(
-				`确认重建索引？\n\n扫描文件数：${estimate.scannedFiles}\n预计新增：${estimate.estimatedNew}\n预计更新：${estimate.estimatedUpdated}\n预计缺失：${estimate.estimatedMissing}`,
+				`确认重建索引？\n\n扫描文件数：${estimate.scannedFiles}\n预计新增：${estimate.estimatedNew}\n预计更新：${estimate.estimatedUpdated}\n预计缺失：${estimate.estimatedMissing}\n${monthlyModeText}`,
 			);
 			if (!confirmed) {
 				this.renderRebuildResult("已取消重建。");
 				return;
 			}
 			button.setButtonText("重建中...");
-			this.renderRebuildResult("正在重建索引...");
+			this.renderRebuildResult(`正在重建索引...\n${monthlyModeText}`);
 			const result = await this.syncOrchestrator.rebuildIndex(scope, mode, (progress) => {
 				this.renderRebuildResult(
 					`正在重建索引：${progress.completedFiles}/${progress.scannedFiles} 个文件\n` +
-						`新增 ${progress.created} 条，更新 ${progress.updated} 条，删除 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
+						`新增 ${progress.created} 条，更新 ${progress.updated} 条，缺失 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
 						(progress.currentFile === null ? "" : `\n当前文件：${progress.currentFile}`),
 				);
 			});
-			const message = `重建完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条，跳过 ${result.skipped} 条，失败 ${result.failed} 条。`;
+			const message = `重建完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，缺失 ${result.deleted} 条，跳过 ${result.skipped} 条。`;
 			const backup = result.backupPath === null ? "未发现现有索引可备份。" : `备份位置：${result.backupPath}`;
 			this.renderRebuildResult(`${message}\n${backup}`);
 			await this.renderIssueList();
@@ -571,4 +715,12 @@ function getSyncStatusLabel(status: MemoRecord["syncStatus"]): string {
 		return "月度 Memos 同步失败";
 	}
 	return "月度 Memos 删除失败";
+}
+
+function formatLegacyImportSample(content: string): string {
+	const normalizedContent = content.replace(/\s+/g, " ").trim();
+	if (normalizedContent.length <= 80) {
+		return normalizedContent;
+	}
+	return `${normalizedContent.slice(0, 77)}...`;
 }

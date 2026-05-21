@@ -1,7 +1,7 @@
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
-import type { DailyRef, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
+import type { DailyRef, MarkdownSyncSource, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
 import { formatLocalIsoString, formatMemoIdPrefix, formatMonthPeriod, formatTimePart } from "../utils/date";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
@@ -15,7 +15,15 @@ import type { DailyNotesStatus } from "./DailyNoteService";
 import { MarkdownBlockService } from "./MarkdownBlockService";
 import { MemoIndexStore } from "./MemoIndexStore";
 import { MemoScanService } from "./MemoScanService";
-import type { EstimateDailyMemosResult, ScanDailyMemosProgress, ScanDailyMemosResult } from "./MemoScanService";
+import type {
+	EstimateDailyMemosResult,
+	LegacyDailyMemosImportOptions,
+	LegacyDailyMemosImportResult,
+	LegacyDailyMemosImportScope,
+	LegacyDailyMemosPreview,
+	ScanDailyMemosProgress,
+	ScanDailyMemosResult,
+} from "./MemoScanService";
 import {
 	formatMonthlyDateHeading,
 	getMonthlyArchivePath,
@@ -351,13 +359,22 @@ export class SyncOrchestrator {
 		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress);
 	}
 
-	async scanRecentDailyMemos(days: number): Promise<ScanDailyMemosResult> {
+	async previewLegacyDailyMemos(scope: LegacyDailyMemosImportScope): Promise<LegacyDailyMemosPreview> {
+		return this.memoScanService.previewLegacyDailyMemos(scope);
+	}
+
+	async importLegacyDailyMemos(options: LegacyDailyMemosImportOptions): Promise<LegacyDailyMemosImportResult> {
+		const now = new Date();
+		return this.memoScanService.importLegacyDailyMemos((date) => createMemoId(date), createOperationId(now), options);
+	}
+
+	async scanRecentDailyMemos(days: number, source: MarkdownSyncSource = "startup_scan"): Promise<ScanDailyMemosResult> {
 		const now = new Date();
 		const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
 		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), undefined, {
 			since,
-			source: "startup_scan",
-			deleteSource: "startup_scan",
+			source,
+			deleteSource: source,
 		});
 	}
 
@@ -376,17 +393,31 @@ export class SyncOrchestrator {
 	): Promise<RebuildIndexResult> {
 		const settings = this.getSettings();
 		const backupPath = await this.memoIndexStore.backupIndexes(settings.monthlyMemoFolder, "rebuild-index");
+		if (mode === "index-and-monthly") {
+			await this.monthlyArchiveService.backupMonthlyArchives(settings, backupPath);
+		}
 		const now = new Date();
-		const result = await this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress, {
-			since: getRebuildSince(scope),
-			source: "manual_scan",
-			deleteSource: "manual_scan",
-			syncMonthly: mode === "index-and-monthly",
-		});
-		return {
-			...result,
-			backupPath,
-		};
+		try {
+			const result = await this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress, {
+				since: getRebuildSince(scope),
+				source: "manual_scan",
+				deleteSource: "manual_scan",
+				syncMonthly: mode === "index-and-monthly",
+			});
+			if (result.failed > 0) {
+				throw buildRebuildIndexFailedError(result.failed, backupPath);
+			}
+			return {
+				...result,
+				backupPath,
+			};
+		} catch (error) {
+			if (mode === "index-and-monthly") {
+				await this.monthlyArchiveService.restoreMonthlyArchives(settings, backupPath);
+			}
+			await this.memoIndexStore.restoreIndexes(settings.monthlyMemoFolder, backupPath);
+			throw appendBackupPathToError(error, backupPath);
+		}
 	}
 
 	getDailyNotesStatus(): DailyNotesStatus {
@@ -635,6 +666,7 @@ export class SyncOrchestrator {
 				dailyRef: {
 					path: dailyFile.path,
 					heading: memo.dailyRef.heading,
+					sectionType: memo.dailyRef.sectionType ?? (memo.dailyRef.heading === null ? "root" : "heading"),
 					lastKnownBlock: location.parsedBlock.rawBlock,
 					lastKnownHash: hashText(location.parsedBlock.rawBlock),
 					lineNumberHint: location.parsedBlock.startLine + 1,
@@ -994,6 +1026,19 @@ function buildIndexWriteFailedError(action: string, error: unknown, dailyPath: s
 		`${action} memo 时 memo-index 写入失败。日记可能已经写入：${dailyPath}；月度归档：${monthlyText}。` +
 				`请先修复 memo-index 或运行手动扫描恢复索引，避免重复发送。原始错误：${reason}`,
 	);
+}
+
+function buildRebuildIndexFailedError(failedFiles: number, backupPath: string | null): Error {
+	return appendBackupPathToError(new Error(`重建索引失败：${failedFiles} 个文件未完成同步，已停止刷新视图。`), backupPath);
+}
+
+function appendBackupPathToError(error: unknown, backupPath: string | null): Error {
+	const message = error instanceof Error ? error.message : "重建索引失败。";
+	const backupText = backupPath === null ? "未发现可恢复的旧索引备份。" : `备份位置：${backupPath}`;
+	if (message.includes("备份位置：") || message.includes("未发现可恢复的旧索引备份。")) {
+		return new Error(message);
+	}
+	return new Error(`${message}\n${backupText}`);
 }
 
 function compareDeletedMemos(left: MemoRecord, right: MemoRecord): number {

@@ -1467,7 +1467,7 @@ test("rebuild index estimates recent files and backs up before all-diary rebuild
 			},
 			backupIndexes: async () => {
 				backupCalled = true;
-				return "Memos/_knomo-system/backups/rebuild-index/indexes";
+				return "Memos/_knomo-system/backups/rebuild-index";
 			},
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
@@ -1483,7 +1483,418 @@ test("rebuild index estimates recent files and backs up before all-diary rebuild
 	assert.equal(created, 2);
 	assert.equal(backupCalled, true);
 	assert.equal(monthlyCalled, false);
-	assert.equal(result.backupPath, "Memos/_knomo-system/backups/rebuild-index/indexes");
+	assert.equal(result.backupPath, "Memos/_knomo-system/backups/rebuild-index");
+});
+
+test("rebuild index restores backup when monthly rebuild fails", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const today = new Date();
+	const todayPath = `${formatTestDate(today)}.md`;
+	const todayFile = Object.assign(new TFile(), {
+		path: todayPath,
+		basename: todayPath.replace(/\.md$/, ""),
+		extension: "md",
+	});
+	const backupPath = "Memos/_knomo-system/backups/rebuild-index-20260521-120000";
+	let monthlyCalled = false;
+	let monthlyBackupCalled = false;
+	let monthlyRestoreCalled = false;
+	let restoreCalled = false;
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [todayFile],
+				cachedRead: async () => `# ${formatTestDate(today)}\n\n## Knomo\n- 08:00 今日内容`,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			backupMonthlyArchives: async (_settings: KnomoSettings, monthlyBackupPath: string | null) => {
+				monthlyBackupCalled = true;
+				assert.equal(monthlyBackupPath, backupPath);
+			},
+			restoreMonthlyArchives: async (_settings: KnomoSettings, monthlyBackupPath: string | null) => {
+				monthlyRestoreCalled = true;
+				assert.equal(monthlyBackupPath, backupPath);
+			},
+			upsertMemoBlock: async () => {
+				monthlyCalled = true;
+				throw new Error("月度写入失败");
+			},
+		} as never,
+		{
+			loadAll: async () => [],
+			addMemo: async (_folder: string, memo: MemoRecord) => memo,
+			backupIndexes: async () => backupPath,
+			restoreIndexes: async (_folder: string, restoredBackupPath: string | null) => {
+				restoreCalled = true;
+				assert.equal(restoredBackupPath, backupPath);
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	await assert.rejects(
+		() => orchestrator.rebuildIndex("30d", "index-and-monthly"),
+		/重建索引失败：1 个文件未完成同步，已停止刷新视图。/,
+	);
+	assert.equal(monthlyCalled, true);
+	assert.equal(monthlyBackupCalled, true);
+	assert.equal(monthlyRestoreCalled, true);
+	assert.equal(restoreCalled, true);
+});
+
+test("restoreIndexes removes index files that were created by a failed rebuild", async () => {
+	const { MemoIndexStore } = await loadMemoIndexStore();
+	const { TFile, TFolder, Vault } = await import("obsidian");
+	const backupPath = "Memos/_knomo-system/backups/rebuild-index-20260521-120000";
+	const indexBackupPath = `${backupPath}/indexes`;
+	const monthlyFolder = Object.assign(new TFolder(), { path: "Memos", children: [] as unknown[] });
+	const systemFolder = Object.assign(new TFolder(), { path: "Memos/_knomo-system", children: [] as unknown[] });
+	const indexFolder = Object.assign(new TFolder(), { path: "Memos/_knomo-system/indexes", children: [] as unknown[] });
+	const backupFolder = Object.assign(new TFolder(), { path: indexBackupPath, children: [] as unknown[] });
+	const existingIndexFile = Object.assign(new TFile(), { path: "Memos/_knomo-system/indexes/memo-index-2026-05.json" });
+	const failedIndexFile = Object.assign(new TFile(), { path: "Memos/_knomo-system/indexes/memo-index-2026-06.json" });
+	const backupIndexFile = Object.assign(new TFile(), { path: `${indexBackupPath}/memo-index-2026-05.json` });
+	indexFolder.children = [existingIndexFile, failedIndexFile];
+	backupFolder.children = [backupIndexFile];
+	const filesByPath = new Map<string, unknown>([
+		[monthlyFolder.path, monthlyFolder],
+		[systemFolder.path, systemFolder],
+		[indexFolder.path, indexFolder],
+		[backupFolder.path, backupFolder],
+		[existingIndexFile.path, existingIndexFile],
+		[failedIndexFile.path, failedIndexFile],
+		[backupIndexFile.path, backupIndexFile],
+	]);
+	const contents = new Map<string, string>([
+		[existingIndexFile.path, "failed content"],
+		[backupIndexFile.path, "backup content"],
+	]);
+	const deletedPaths: string[] = [];
+	const originalRecurseChildren = Vault.recurseChildren;
+	Vault.recurseChildren = ((folder: { children: unknown[] }, callback: (child: unknown) => void) => {
+		for (const child of folder.children) {
+			callback(child);
+		}
+	}) as typeof Vault.recurseChildren;
+
+	try {
+		const store = new MemoIndexStore({
+			vault: {
+				getAbstractFileByPath: (path: string) => filesByPath.get(path) ?? null,
+				cachedRead: async (file: { path: string }) => contents.get(file.path) ?? "",
+				process: async (file: { path: string }, callback: (content: string) => string) => {
+					const nextContent = callback(contents.get(file.path) ?? "");
+					contents.set(file.path, nextContent);
+					return nextContent;
+				},
+				create: async (path: string, content: string) => {
+					const file = Object.assign(new TFile(), { path });
+					filesByPath.set(path, file);
+					contents.set(path, content);
+					return file;
+				},
+				createFolder: async (path: string) => {
+					const folder = Object.assign(new TFolder(), { path, children: [] });
+					filesByPath.set(path, folder);
+					return folder;
+				},
+				delete: async (file: { path: string }) => {
+					deletedPaths.push(file.path);
+					filesByPath.delete(file.path);
+				},
+			},
+		} as never);
+
+		await store.restoreIndexes("Memos", backupPath);
+	} finally {
+		Vault.recurseChildren = originalRecurseChildren;
+	}
+
+	assert.deepEqual(deletedPaths, [failedIndexFile.path]);
+	assert.equal(contents.get(existingIndexFile.path), "backup content");
+});
+
+test("restoreMonthlyArchives restores old archives and removes failed rebuild archives", async () => {
+	const { MonthlyArchiveService } = await loadMonthlyArchiveService();
+	const { TFile, TFolder, Vault } = await import("obsidian");
+	const backupPath = "Memos/_knomo-system/backups/rebuild-index-20260521-120000";
+	const monthlyBackupPath = `${backupPath}/monthly`;
+	const monthlyFolder = Object.assign(new TFolder(), { path: "Memos", children: [] as unknown[] });
+	const backupFolder = Object.assign(new TFolder(), { path: monthlyBackupPath, children: [] as unknown[] });
+	const existingMonthlyFile = Object.assign(new TFile(), { path: "Memos/Memos-2026-05.md" });
+	const failedMonthlyFile = Object.assign(new TFile(), { path: "Memos/Memos-2026-06.md" });
+	const backupMonthlyFile = Object.assign(new TFile(), { path: `${monthlyBackupPath}/Memos-2026-05.md` });
+	monthlyFolder.children = [existingMonthlyFile, failedMonthlyFile];
+	backupFolder.children = [backupMonthlyFile];
+	const filesByPath = new Map<string, unknown>([
+		[monthlyFolder.path, monthlyFolder],
+		[backupFolder.path, backupFolder],
+		[existingMonthlyFile.path, existingMonthlyFile],
+		[failedMonthlyFile.path, failedMonthlyFile],
+		[backupMonthlyFile.path, backupMonthlyFile],
+	]);
+	const contents = new Map<string, string>([
+		[existingMonthlyFile.path, "failed content"],
+		[backupMonthlyFile.path, "backup content"],
+	]);
+	const deletedPaths: string[] = [];
+	const originalRecurseChildren = Vault.recurseChildren;
+	Vault.recurseChildren = ((folder: { children: unknown[] }, callback: (child: unknown) => void) => {
+		for (const child of folder.children) {
+			callback(child);
+		}
+	}) as typeof Vault.recurseChildren;
+
+	try {
+		const service = new MonthlyArchiveService({
+			vault: {
+				getAbstractFileByPath: (path: string) => filesByPath.get(path) ?? null,
+				cachedRead: async (file: { path: string }) => contents.get(file.path) ?? "",
+				process: async (file: { path: string }, callback: (content: string) => string) => {
+					const nextContent = callback(contents.get(file.path) ?? "");
+					contents.set(file.path, nextContent);
+					return nextContent;
+				},
+				create: async (path: string, content: string) => {
+					const file = Object.assign(new TFile(), { path });
+					filesByPath.set(path, file);
+					contents.set(path, content);
+					return file;
+				},
+				createFolder: async (path: string) => {
+					const folder = Object.assign(new TFolder(), { path, children: [] });
+					filesByPath.set(path, folder);
+					return folder;
+				},
+				delete: async (file: { path: string }) => {
+					deletedPaths.push(file.path);
+					filesByPath.delete(file.path);
+				},
+			},
+		} as never);
+
+		await service.restoreMonthlyArchives(createTestSettings(), backupPath);
+	} finally {
+		Vault.recurseChildren = originalRecurseChildren;
+	}
+
+	assert.deepEqual(deletedPaths, [failedMonthlyFile.path]);
+	assert.equal(contents.get(existingMonthlyFile.path), "backup content");
+});
+
+test("legacy daily memo preview groups headings and root while ignoring frontmatter, tasks, and code fences", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), {
+		path: "2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const content = [
+		"---",
+		"- 06:00 frontmatter",
+		"---",
+		"- 07:00 root #tag [[Link]] ![[Assets/a.png]]",
+		"  root continuation",
+		"- [ ] 08:00 task",
+		"- normal list",
+		"```",
+		"- 08:30 code",
+		"```",
+		"## Memos",
+		"- 09:00 heading memo",
+		"## 随手记",
+		"- 10:00:12 other memo ^abc123",
+	].join("\n");
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [file],
+				cachedRead: async () => content,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+		} as never,
+		{} as never,
+		{ loadAll: async () => [] } as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const preview = await orchestrator.previewLegacyDailyMemos("all");
+	const root = preview.groups.find((group) => group.key === "root");
+	const memos = preview.groups.find((group) => group.key === "heading:## Memos");
+	const other = preview.groups.find((group) => group.key === "heading:## 随手记");
+
+	assert.equal(preview.scannedFiles, 1);
+	assert.equal(preview.candidateCount, 3);
+	assert.equal(root?.count, 1);
+	assert.equal(root?.selectedByDefault, false);
+	assert.equal(root?.samples[0]?.content, "root #tag [[Link]] ![[Assets/a.png]]\nroot continuation");
+	assert.equal(memos?.count, 1);
+	assert.equal(memos?.selectedByDefault, true);
+	assert.equal(other?.count, 1);
+	assert.equal(other?.selectedByDefault, false);
+});
+
+test("legacy daily memo import skips duplicates and preserves root daily refs", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), {
+		path: "2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const content = [
+		"- 07:00 root memo",
+		"## Memos",
+		"- 09:00 duplicate memo",
+		"## 随手记",
+		"- 10:00 other memo",
+	].join("\n");
+	const duplicate = createReferenceMemo("- 09:00 duplicate memo");
+	duplicate.dailyRef.path = file.path;
+	duplicate.dailyRef.heading = "## Memos";
+	duplicate.dailyRef.lastKnownHash = hashText(duplicate.dailyRef.lastKnownBlock);
+	duplicate.contentSnapshot = "duplicate memo";
+	duplicate.contentHash = hashMemoContent("duplicate memo");
+	const importedMemos: MemoRecord[] = [];
+	const monthlyBlocks: string[] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [file],
+				cachedRead: async () => content,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+		} as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, _memo: MemoRecord, block: string) => {
+				monthlyBlocks.push(block);
+				return {
+					file: { path: "Memos/Memos-2026-05.md" },
+					content: block,
+					ref: {
+						path: "Memos/Memos-2026-05.md",
+						dateHeading: "## 2026-05-18",
+						lastKnownBlock: block,
+						lastKnownHash: hashText(block),
+						lineNumberHint: 1,
+						lastSyncedAt: "2026-05-18T10:00:00.000+08:00",
+					},
+				};
+			},
+		} as never,
+		{
+			loadAll: async () => [duplicate],
+			addMemo: async (_folder: string, memo: MemoRecord) => {
+				importedMemos.push(memo);
+				return memo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.importLegacyDailyMemos({
+		scope: "all",
+		selectedGroupKeys: ["root", "heading:## Memos", "heading:## 随手记"],
+		appendBlockIds: false,
+	});
+
+	const rootMemo = importedMemos.find((memo) => memo.dailyRef.sectionType === "root");
+	const headingMemo = importedMemos.find((memo) => memo.dailyRef.heading === "## 随手记");
+	assert.equal(result.imported, 2);
+	assert.equal(result.skipped, 1);
+	assert.equal(rootMemo?.dailyRef.heading, null);
+	assert.equal(rootMemo?.dailyRef.sectionType, "root");
+	assert.equal(headingMemo?.dailyRef.sectionType, "heading");
+	assert.deepEqual(result.importedHeadings, ["## 随手记"]);
+	assert.deepEqual(monthlyBlocks, ["- 07:00 root memo", "- 10:00 other memo"]);
+});
+
+test("legacy daily memo import can append Obsidian block IDs without writing memo IDs", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), {
+		path: "2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	let content = "## Memos\n- 09:00 imported memo";
+	const importedMemos: MemoRecord[] = [];
+	const monthlyBlocks: string[] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [file],
+				cachedRead: async () => content,
+				process: async (_file: unknown, callback: (currentContent: string) => string) => {
+					content = callback(content);
+					return content;
+				},
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+		} as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, _memo: MemoRecord, block: string) => {
+				monthlyBlocks.push(block);
+				return {
+					file: { path: "Memos/Memos-2026-05.md" },
+					content: block,
+					ref: {
+						path: "Memos/Memos-2026-05.md",
+						dateHeading: "## 2026-05-18",
+						lastKnownBlock: block,
+						lastKnownHash: hashText(block),
+						lineNumberHint: 1,
+						lastSyncedAt: "2026-05-18T09:00:00.000+08:00",
+					},
+				};
+			},
+		} as never,
+		{
+			loadAll: async () => [],
+			addMemo: async (_folder: string, memo: MemoRecord) => {
+				importedMemos.push(memo);
+				return memo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.importLegacyDailyMemos({
+		scope: "all",
+		selectedGroupKeys: ["heading:## Memos"],
+		appendBlockIds: true,
+	});
+
+	const importedMemo = importedMemos[0];
+	assert.equal(result.imported, 1);
+	assert.match(content, /^## Memos\n- 09:00 imported memo \^[a-z0-9]{6}$/);
+	assert.equal(content.includes(importedMemo.id), false);
+	assert.equal(importedMemo.dailyRef.lastKnownBlock, monthlyBlocks[0]);
+	assert.match(importedMemo.dailyRef.lastKnownBlock, /\^[a-z0-9]{6}$/);
 });
 
 async function loadDailyNotesProvider(): Promise<typeof import("../src/services/DailyNotesProvider")> {
@@ -1499,6 +1910,16 @@ async function loadDailyNoteService(): Promise<typeof import("../src/services/Da
 async function loadSyncOrchestrator(): Promise<typeof import("../src/services/SyncOrchestrator")> {
 	await ensureObsidianStub();
 	return import("../src/services/SyncOrchestrator");
+}
+
+async function loadMemoIndexStore(): Promise<typeof import("../src/services/MemoIndexStore")> {
+	await ensureObsidianStub();
+	return import("../src/services/MemoIndexStore");
+}
+
+async function loadMonthlyArchiveService(): Promise<typeof import("../src/services/MonthlyArchiveService")> {
+	await ensureObsidianStub();
+	return import("../src/services/MonthlyArchiveService");
 }
 
 async function loadReferenceService(): Promise<typeof import("../src/services/ReferenceService")> {

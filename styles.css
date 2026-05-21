@@ -1890,8 +1890,26 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
 }
 
 .knomo-scan-result,
-.knomo-issue-list {
+.knomo-issue-list,
+.knomo-legacy-import-groups {
 	margin: var(--size-4-2) 0 var(--size-4-4);
+}
+
+.knomo-legacy-import-group {
+	padding: var(--size-4-2) 0;
+	border-bottom: var(--border-width) solid var(--background-modifier-border);
+}
+
+.knomo-legacy-import-label {
+	display: flex;
+	gap: var(--size-2-2);
+	align-items: center;
+	margin-bottom: var(--size-2-2);
+	color: var(--text-normal);
+}
+
+.knomo-legacy-import-samples {
+	padding-left: var(--size-4-6);
 }
 
 .knomo-issue-item {

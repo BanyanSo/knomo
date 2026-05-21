@@ -179,7 +179,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		let rebuildMode: RebuildIndexMode = "index-only";
 		new Setting(containerEl)
 			.setName("重建索引")
-			.setDesc("从 Daily Notes 重建 Knomo Index；可选择是否同时重新生成月度 Memos。")
+			.setDesc("高级修复功能：从 Daily Notes 重建 Knomo Index；可选择是否同时重新生成月度 Memos。重建前会估算并备份现有索引。")
 			.addDropdown((dropdown) => {
 				dropdown.addOption("30d", "最近 30 天");
 				dropdown.addOption("90d", "最近 90 天");
@@ -550,23 +550,24 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setButtonText("预估中...");
 		try {
 			const estimate = await this.syncOrchestrator.estimateRebuildIndex(scope);
+			const monthlyModeText = mode === "index-and-monthly" ? "会重建 Monthly Memos" : "不会重建 Monthly Memos";
 			const confirmed = this.containerEl.win.confirm(
-				`确认重建索引？\n\n扫描文件数：${estimate.scannedFiles}\n预计新增：${estimate.estimatedNew}\n预计更新：${estimate.estimatedUpdated}\n预计缺失：${estimate.estimatedMissing}`,
+				`确认重建索引？\n\n扫描文件数：${estimate.scannedFiles}\n预计新增：${estimate.estimatedNew}\n预计更新：${estimate.estimatedUpdated}\n预计缺失：${estimate.estimatedMissing}\n${monthlyModeText}`,
 			);
 			if (!confirmed) {
 				this.renderRebuildResult("已取消重建。");
 				return;
 			}
 			button.setButtonText("重建中...");
-			this.renderRebuildResult("正在重建索引...");
+			this.renderRebuildResult(`正在重建索引...\n${monthlyModeText}`);
 			const result = await this.syncOrchestrator.rebuildIndex(scope, mode, (progress) => {
 				this.renderRebuildResult(
 					`正在重建索引：${progress.completedFiles}/${progress.scannedFiles} 个文件\n` +
-						`新增 ${progress.created} 条，更新 ${progress.updated} 条，删除 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
+						`新增 ${progress.created} 条，更新 ${progress.updated} 条，缺失 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
 						(progress.currentFile === null ? "" : `\n当前文件：${progress.currentFile}`),
 				);
 			});
-			const message = `重建完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条，跳过 ${result.skipped} 条，失败 ${result.failed} 条。`;
+			const message = `重建完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，缺失 ${result.deleted} 条，跳过 ${result.skipped} 条。`;
 			const backup = result.backupPath === null ? "未发现现有索引可备份。" : `备份位置：${result.backupPath}`;
 			this.renderRebuildResult(`${message}\n${backup}`);
 			await this.renderIssueList();

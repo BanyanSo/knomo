@@ -65,6 +65,7 @@ const SIDEBAR_MAX_WIDTH = 300;
 const RANDOM_REUNION_DEFAULT_COUNT = 5;
 const CARD_BATCH_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 220;
+const MOBILE_COMPOSER_TOP_GUARD = 52;
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "all", label: "全部笔记", icon: "layout-list" },
@@ -101,6 +102,8 @@ const DATE_SCOPE_OPTIONS: ScopeOption[] = [
 ];
 
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
+type ComposerMode = "create" | "edit" | "quote";
+type MobileComposerPhase = "closed" | "opening" | "focusing" | "open" | "closing";
 
 const ALL_SCOPE_OPTIONS = uniqueScopeOptions([...MAIN_SCOPE_OPTIONS, ...DATE_SCOPE_OPTIONS]);
 
@@ -120,12 +123,14 @@ export class KnomoView extends ItemView {
 	private cancelEditButtonEl: HTMLButtonElement | null = null;
 	private statusEl: HTMLElement | null = null;
 	private referencePreviewEl: HTMLElement | null = null;
+	private composerEl: HTMLElement | null = null;
+	private composerBarEl: HTMLElement | null = null;
 	private desktopSearchInputEl: HTMLInputElement | null = null;
 	private compactInlineSearchInputEl: HTMLInputElement | null = null;
 	private compactSearchInputEl: HTMLInputElement | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
-	private mobileKeyboardViewport: VisualViewport | null = null;
-	private mobileKeyboardInsetHandler: (() => void) | null = null;
+	private mobileVisualViewport: VisualViewport | null = null;
+	private mobileVisualViewportHandler: (() => void) | null = null;
 	private memos: MemoRecord[] = [];
 	private cardFlowError: string | null = null;
 	private allMemosLoaded = false;
@@ -140,6 +145,7 @@ export class KnomoView extends ItemView {
 	private desktopSearchOpen = false;
 	private scopeMenuOpen = false;
 	private composerOpen = false;
+	private mobileComposerInputFocused = false;
 	private compactSearchOpen = false;
 	private editingMemo: MemoRecord | null = null;
 	private quoteSourceMemoId: string | null = null;
@@ -148,7 +154,6 @@ export class KnomoView extends ItemView {
 	private activeMenuMemoId: string | null = null;
 	private draftContent = "";
 	private isSaving = false;
-	private keyboardHeight = 0;
 	private sidebarDrag: SidebarDragState | null = null;
 	private currentLayout: LayoutMode = "desktop-wide";
 	private layoutObserver: ResizeObserver | null = null;
@@ -164,7 +169,26 @@ export class KnomoView extends ItemView {
 	private trashBusyMemoActions = new Map<string, "restore" | "purge">();
 	private visibleMemoCount = CARD_BATCH_SIZE;
 	private searchDebounceTimeoutId: number | null = null;
-	private mobileComposerFocusTimeoutId: number | null = null;
+	private mobileComposerFocusFrameId: number | null = null;
+	private mobileComposerFocusTimerId: number | null = null;
+	private mobileComposerResizeFrameId: number | null = null;
+	private mobileViewportFrameId: number | null = null;
+	private mobileKeyboardFocusStartedAt: number | null = null;
+	private mobileWindowResizeHandler: (() => void) | null = null;
+	private mobileOrientationChangeHandler: (() => void) | null = null;
+	private mobileComposerPhase: MobileComposerPhase = "closed";
+	private mobileKeyboardHeight = 0;
+	private mobileComposerViewportBaselineHeight: number | null = null;
+	private mobileComposerInputMaxHeight: number | null = null;
+	private mobileKeyboardMeasureTimers: number[] = [];
+	private mobileComposerCloseTimer: number | null = null;
+	private lastMobileSendPointerAt = 0;
+	private mobileComposerLayerEl: HTMLElement | null = null;
+	private mobileComposerBackdropEl: HTMLElement | null = null;
+	private mobileComposerContentEl: HTMLElement | null = null;
+	private mobileComposerHomeEl: HTMLElement | null = null;
+	private mobileComposerNextSibling: ChildNode | null = null;
+	private mobileComposerOpenScrollTop: number | null = null;
 	private renderGeneration = 0;
 
 	constructor(
@@ -203,7 +227,11 @@ export class KnomoView extends ItemView {
 		this.tagSuggest = null;
 		this.clearSearchDebounce();
 		this.clearMobileComposerFocus();
-		this.stopMobileKeyboardTracking();
+		this.clearMobileComposerResizeFrame();
+		this.clearMobileComposerCloseTimer();
+		this.clearMobileKeyboardMeasureTimers();
+		this.stopMobileViewportTracking();
+		this.removeMobileComposerLayer();
 		this.stopDateChangeWatcher();
 		this.stopLayoutObserver();
 		this.contentEl.removeClass("knomo-view-host");
@@ -242,12 +270,6 @@ export class KnomoView extends ItemView {
 			attr: { "data-action": "close-drawer" },
 		});
 		drawerBackdrop.setAttr("aria-hidden", "true");
-
-		const composerBackdrop = root.createDiv({
-			cls: "knomo-composer-backdrop",
-			attr: { "data-action": "close-composer" },
-		});
-		composerBackdrop.setAttr("aria-hidden", "true");
 
 		const shell = root.createDiv({ cls: "knomo-shell" });
 		this.sidebarEl = shell.createDiv({ cls: "knomo-sidebar" });
@@ -405,10 +427,17 @@ export class KnomoView extends ItemView {
 	private renderComposer(main: HTMLElement): void {
 		const dailyStatus = this.syncOrchestrator.getDailyNotesStatus();
 		const composer = main.createDiv({ cls: "knomo-composer" });
-		composer.createDiv({ cls: "knomo-compose-handle knomo-mobile-only", attr: { "aria-hidden": "true" } });
-		const mobileComposerHead = composer.createDiv({ cls: "knomo-compose-head" });
-		this.createIconButton(mobileComposerHead, "chevron-down", "收起输入", "knomo-compose-close", "close-composer");
-
+		this.composerEl = composer;
+		this.registerDomEvent(composer, "click", (event) => {
+			if (this.isMobileComposerLayered()) {
+				void this.handleRootClick(event);
+			}
+		});
+		this.registerDomEvent(composer, "keydown", (event) => {
+			if (this.isMobileComposerLayered()) {
+				void this.handleRootKeydown(event);
+			}
+		});
 		const inputArea = composer.createDiv({ cls: "knomo-composer-input-area" });
 		this.inputEl = inputArea.createEl("textarea", {
 			cls: "knomo-composer-input",
@@ -426,10 +455,10 @@ export class KnomoView extends ItemView {
 			this.syncInputState();
 		});
 		this.registerDomEvent(this.inputEl, "focus", () => {
-			this.resizeInput();
+			this.handleComposerInputFocus();
 		});
 		this.registerDomEvent(this.inputEl, "blur", () => {
-			this.resizeInput();
+			this.handleComposerInputBlur();
 		});
 		this.tagSuggest = new KnomoTagSuggest(this.app, this.inputEl, () => this.syncInputState());
 		this.registerDomEvent(this.inputEl, "keydown", (event) => {
@@ -443,8 +472,11 @@ export class KnomoView extends ItemView {
 
 		this.referencePreviewEl = inputArea.createDiv({ cls: "knomo-reference-preview" });
 		const composerBar = inputArea.createDiv({ cls: "knomo-composer-bar" });
+		this.composerBarEl = composerBar;
 		const tools = composerBar.createDiv({ cls: "knomo-tool-group" });
-		this.createTextToolButton(tools, "#", "插入标签", "insert-tag");
+		this.registerDomEvent(tools, "pointerdown", (event) => this.handleComposerToolPointerDown(event));
+		this.registerDomEvent(tools, "mousedown", (event) => this.handleComposerToolPointerDown(event));
+		this.createIconButton(tools, "hash", "插入标签", "knomo-tool-button", "insert-tag");
 		this.createIconButton(tools, "image", "插入图片", "knomo-tool-button", "insert-image");
 		this.createIconButton(tools, "list", "插入列表", "knomo-tool-button", "insert-list");
 		this.createIconButton(tools, "list-ordered", "插入编号列表", "knomo-tool-button", "insert-numbered-list");
@@ -472,7 +504,13 @@ export class KnomoView extends ItemView {
 				"data-tooltip-position": "top",
 			},
 		});
-		setIcon(this.sendButtonEl, "arrow-up");
+		setIcon(this.sendButtonEl, "send");
+		this.registerDomEvent(this.sendButtonEl, "pointerdown", (event) => {
+			this.handleSendPointerDown(event);
+		});
+		this.registerDomEvent(this.sendButtonEl, "mousedown", (event) => {
+			this.handleSendPointerDown(event);
+		});
 		this.updateSendButtonState();
 	}
 
@@ -521,25 +559,6 @@ export class KnomoView extends ItemView {
 			},
 		});
 		setIcon(button, icon);
-		return button;
-	}
-
-	private createTextToolButton(
-		container: HTMLElement,
-		text: string,
-		ariaLabel: string,
-		action: string,
-	): HTMLButtonElement {
-		const button = container.createEl("button", {
-			cls: "knomo-tool-button",
-			text,
-			attr: {
-				type: "button",
-				"aria-label": ariaLabel,
-				"data-action": action,
-				"data-tooltip-position": "top",
-			},
-		});
 		return button;
 	}
 
@@ -691,6 +710,10 @@ export class KnomoView extends ItemView {
 				this.referencePreviewEl.style.display = "none";
 			}
 		}
+		if (this.currentLayout === "mobile") {
+			this.updateMobileComposerMeasurements();
+			this.resizeInput();
+		}
 	}
 
 	private syncRootState(): void {
@@ -710,11 +733,15 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-compact-search-open", this.compactSearchOpen);
 		root.toggleClass("is-mobile-compact", shouldUseMobileCompact(this.settingsService.getSettings().mobileCompactMode));
 		root.style.setProperty("--knomo-sidebar-width", `${this.sidebarWidth}px`);
-		if (this.currentLayout === "mobile" && this.composerOpen) {
-			this.startMobileKeyboardTracking();
-		} else {
-			this.stopMobileKeyboardTracking();
+		const shouldTrackMobileViewport = this.currentLayout === "mobile"
+			&& this.composerOpen
+			&& (this.mobileComposerPhase === "focusing" || this.mobileComposerPhase === "open");
+		if (shouldTrackMobileViewport) {
+			this.startMobileViewportTracking();
+		} else if (this.mobileComposerPhase !== "closing") {
+			this.stopMobileViewportTracking();
 		}
+		this.syncMobileComposerLayer();
 		if (this.sidebarResizerEl !== null) {
 			this.sidebarResizerEl.setAttr("aria-valuenow", String(this.sidebarWidth));
 		}
@@ -732,11 +759,13 @@ export class KnomoView extends ItemView {
 		this.layoutObserver = new ResizeObserver(() => {
 			this.updateCurrentLayout();
 			this.syncRootState();
+			this.updateMobileComposerMeasurements();
 			this.resizeInput();
 		});
 		this.layoutObserver.observe(this.containerEl);
 		this.updateCurrentLayout();
 		this.syncRootState();
+		this.updateMobileComposerMeasurements();
 		this.resizeInput();
 	}
 
@@ -747,51 +776,294 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private startMobileKeyboardTracking(): void {
+	private startMobileViewportTracking(): void {
 		if (this.rootEl === null) {
-			return;
-		}
-		if (this.mobileKeyboardInsetHandler !== null) {
-			this.updateKeyboardInset();
-			return;
-		}
-		const viewport = this.containerEl.win.visualViewport;
-		if (viewport === undefined || viewport === null) {
-			this.keyboardHeight = 0;
-			this.rootEl.style.setProperty("--knomo-keyboard-height", "0px");
-			return;
-		}
-		this.mobileKeyboardViewport = viewport;
-		this.mobileKeyboardInsetHandler = () => this.updateKeyboardInset();
-		viewport.addEventListener("resize", this.mobileKeyboardInsetHandler);
-		viewport.addEventListener("scroll", this.mobileKeyboardInsetHandler);
-		this.updateKeyboardInset();
-	}
-
-	private stopMobileKeyboardTracking(): void {
-		if (this.mobileKeyboardViewport !== null && this.mobileKeyboardInsetHandler !== null) {
-			this.mobileKeyboardViewport.removeEventListener("resize", this.mobileKeyboardInsetHandler);
-			this.mobileKeyboardViewport.removeEventListener("scroll", this.mobileKeyboardInsetHandler);
-		}
-		this.mobileKeyboardViewport = null;
-		this.mobileKeyboardInsetHandler = null;
-		this.keyboardHeight = 0;
-		this.rootEl?.style.setProperty("--knomo-keyboard-height", "0px");
-	}
-
-	private updateKeyboardInset(): void {
-		if (this.rootEl === null) {
-			return;
-		}
-		const viewport = this.mobileKeyboardViewport ?? this.containerEl.win.visualViewport;
-		if (viewport === undefined || viewport === null) {
-			this.keyboardHeight = 0;
-			this.rootEl.style.setProperty("--knomo-keyboard-height", "0px");
 			return;
 		}
 		const win = this.containerEl.win;
-		this.keyboardHeight = Math.max(0, win.innerHeight - viewport.height - viewport.offsetTop);
-		this.rootEl.style.setProperty("--knomo-keyboard-height", `${this.keyboardHeight}px`);
+		if (this.mobileWindowResizeHandler === null) {
+			this.mobileWindowResizeHandler = () => this.queueMobileViewportUpdate();
+			win.addEventListener("resize", this.mobileWindowResizeHandler);
+		}
+		if (this.mobileOrientationChangeHandler === null) {
+			this.mobileOrientationChangeHandler = () => this.queueMobileViewportUpdate();
+			win.addEventListener("orientationchange", this.mobileOrientationChangeHandler);
+		}
+		const viewport = win.visualViewport;
+		if (viewport === undefined || viewport === null) {
+			this.updateMobileKeyboardMetrics();
+			return;
+		}
+		if (this.mobileVisualViewportHandler === null) {
+			this.mobileVisualViewport = viewport;
+			this.mobileVisualViewportHandler = () => this.queueMobileViewportUpdate();
+			viewport.addEventListener("resize", this.mobileVisualViewportHandler);
+			viewport.addEventListener("scroll", this.mobileVisualViewportHandler);
+		}
+		this.updateMobileKeyboardMetrics();
+	}
+
+	private stopMobileViewportTracking(clearMetrics = true): void {
+		const win = this.containerEl.win;
+		if (this.mobileVisualViewport !== null && this.mobileVisualViewportHandler !== null) {
+			this.mobileVisualViewport.removeEventListener("resize", this.mobileVisualViewportHandler);
+			this.mobileVisualViewport.removeEventListener("scroll", this.mobileVisualViewportHandler);
+		}
+		if (this.mobileWindowResizeHandler !== null) {
+			win.removeEventListener("resize", this.mobileWindowResizeHandler);
+		}
+		if (this.mobileOrientationChangeHandler !== null) {
+			win.removeEventListener("orientationchange", this.mobileOrientationChangeHandler);
+		}
+		this.mobileVisualViewport = null;
+		this.mobileVisualViewportHandler = null;
+		this.mobileWindowResizeHandler = null;
+		this.mobileOrientationChangeHandler = null;
+		this.clearMobileViewportFrame();
+		this.clearMobileKeyboardMeasureTimers();
+		this.mobileKeyboardFocusStartedAt = null;
+		if (clearMetrics) {
+			this.clearMobileKeyboardMetrics();
+		}
+	}
+
+	private syncMobileComposerLayer(): void {
+		const shouldShow = this.currentLayout === "mobile" && this.composerOpen;
+		if (shouldShow) {
+			if (this.mobileComposerPhase === "closing") {
+				return;
+			}
+			this.ensureMobileComposerLayer();
+			return;
+		}
+		if (this.mobileComposerPhase !== "closing") {
+			this.detachMobileComposerLayer();
+		}
+	}
+
+	private ensureMobileComposerLayer(): void {
+		if (this.composerEl === null) {
+			return;
+		}
+		if (this.mobileComposerLayerEl === null) {
+			this.mobileComposerLayerEl = this.containerEl.doc.body.createDiv({
+				cls: "knomo-plugin knomo-mobile-composer-layer is-layout-mobile",
+			});
+			this.mobileComposerBackdropEl = this.mobileComposerLayerEl.createDiv({
+				cls: "knomo-mobile-composer-backdrop",
+			});
+			const stage = this.mobileComposerLayerEl.createDiv({
+				cls: "knomo-mobile-composer-stage",
+			});
+			this.mobileComposerContentEl = stage.createDiv({
+				cls: "knomo-mobile-composer-content",
+			});
+			this.mobileComposerBackdropEl.setAttr("aria-hidden", "true");
+			this.registerDomEvent(this.mobileComposerBackdropEl, "click", (event) => {
+				if (event.target === this.mobileComposerBackdropEl) {
+					this.closeComposerKeepingDraft();
+				}
+			});
+		} else if (this.mobileComposerLayerEl.parentElement === null) {
+			this.containerEl.doc.body.appendChild(this.mobileComposerLayerEl);
+		}
+		if (this.composerEl.parentElement === this.mobileComposerContentEl) {
+			return;
+		}
+		this.mobileComposerHomeEl = this.composerEl.parentElement;
+		this.mobileComposerNextSibling = this.composerEl.nextSibling;
+		this.mobileComposerContentEl?.appendChild(this.composerEl);
+	}
+
+	private restoreMobileComposerLayer(): void {
+		if (this.composerEl !== null && this.mobileComposerHomeEl !== null && this.composerEl.parentElement === this.mobileComposerContentEl) {
+			if (this.mobileComposerNextSibling !== null && this.mobileComposerNextSibling.parentNode === this.mobileComposerHomeEl) {
+				this.mobileComposerHomeEl.insertBefore(this.composerEl, this.mobileComposerNextSibling);
+			} else {
+				this.mobileComposerHomeEl.appendChild(this.composerEl);
+			}
+		}
+		this.mobileComposerHomeEl = null;
+		this.mobileComposerNextSibling = null;
+	}
+
+	private clearMobileComposerLayerState(): void {
+		this.mobileComposerLayerEl?.toggleClass("is-open", false);
+		this.mobileComposerLayerEl?.toggleClass("is-closing", false);
+		this.mobileComposerLayerEl?.toggleClass("is-keyboard-open", false);
+	}
+
+	private detachMobileComposerLayer(): void {
+		this.restoreMobileComposerLayer();
+		this.clearMobileComposerResizeFrame();
+		this.clearMobileKeyboardMeasureTimers();
+		this.mobileComposerViewportBaselineHeight = null;
+		this.mobileComposerInputMaxHeight = null;
+		this.clearMobileComposerLayerState();
+		this.mobileComposerLayerEl?.detach();
+	}
+
+	private removeMobileComposerLayer(): void {
+		this.restoreMobileComposerLayer();
+		this.clearMobileComposerResizeFrame();
+		this.clearMobileKeyboardMeasureTimers();
+		this.mobileComposerViewportBaselineHeight = null;
+		this.mobileComposerInputMaxHeight = null;
+		this.clearMobileComposerLayerState();
+		this.mobileComposerLayerEl?.detach();
+		this.mobileComposerLayerEl = null;
+		this.mobileComposerBackdropEl = null;
+		this.mobileComposerContentEl = null;
+	}
+
+	private isMobileComposerLayered(): boolean {
+		return this.composerEl !== null && this.composerEl.parentElement === this.mobileComposerContentEl;
+	}
+
+	private queueMobileViewportUpdate(): void {
+		if (this.mobileViewportFrameId !== null) {
+			return;
+		}
+		this.mobileViewportFrameId = this.containerEl.win.requestAnimationFrame(() => {
+			this.mobileViewportFrameId = null;
+			this.updateMobileKeyboardMetrics();
+		});
+	}
+
+	private clearMobileViewportFrame(): void {
+		if (this.mobileViewportFrameId === null) {
+			return;
+		}
+		this.containerEl.win.cancelAnimationFrame(this.mobileViewportFrameId);
+		this.mobileViewportFrameId = null;
+	}
+
+	private scheduleMobileKeyboardMeasurements(): void {
+		this.clearMobileKeyboardMeasureTimers();
+		const delays = [80, 160, 320, 600];
+		for (const delay of delays) {
+			const timer = this.containerEl.win.setTimeout(() => {
+				this.updateMobileKeyboardMetrics();
+			}, delay);
+			this.mobileKeyboardMeasureTimers.push(timer);
+		}
+	}
+
+	private clearMobileKeyboardMeasureTimers(): void {
+		for (const timer of this.mobileKeyboardMeasureTimers) {
+			this.containerEl.win.clearTimeout(timer);
+		}
+		this.mobileKeyboardMeasureTimers = [];
+	}
+
+	private scheduleMobileComposerResize(): void {
+		if (this.mobileComposerResizeFrameId !== null) {
+			return;
+		}
+		this.mobileComposerResizeFrameId = this.containerEl.win.requestAnimationFrame(() => {
+			this.mobileComposerResizeFrameId = null;
+			this.updateMobileComposerMeasurements();
+			this.resizeInput();
+		});
+	}
+
+	private clearMobileComposerResizeFrame(): void {
+		if (this.mobileComposerResizeFrameId === null) {
+			return;
+		}
+		this.containerEl.win.cancelAnimationFrame(this.mobileComposerResizeFrameId);
+		this.mobileComposerResizeFrameId = null;
+	}
+
+	private updateMobileKeyboardMetrics(): void {
+		const win = this.containerEl.win;
+		const viewport = this.mobileVisualViewport ?? win.visualViewport;
+		const visibleTop = viewport === undefined || viewport === null ? 0 : Math.max(0, viewport.offsetTop);
+		const visibleHeight = viewport === undefined || viewport === null ? win.innerHeight : Math.max(0, viewport.height);
+		const visibleBottom = visibleTop + visibleHeight;
+		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
+		let keyboardHeight = Math.max(0, baselineHeight - visibleBottom);
+		if (keyboardHeight < 80) {
+			keyboardHeight = 0;
+		}
+		const activeElement = this.containerEl.doc.activeElement;
+		const shouldUseFallback = this.currentLayout === "mobile"
+			&& this.composerOpen
+			&& (this.mobileComposerInputFocused || activeElement === this.inputEl)
+			&& keyboardHeight === 0
+			&& this.mobileKeyboardFocusStartedAt !== null
+			&& Date.now() - this.mobileKeyboardFocusStartedAt > 220;
+		if (shouldUseFallback) {
+			keyboardHeight = this.getMobileKeyboardFallbackHeight(baselineHeight);
+		}
+		this.mobileKeyboardHeight = keyboardHeight;
+		this.setMobileKeyboardMetrics(visibleTop, visibleHeight, keyboardHeight);
+		this.updateMobileComposerMeasurements();
+		if (this.mobileComposerPhase === "focusing"
+			&& this.mobileKeyboardFocusStartedAt !== null
+			&& Date.now() - this.mobileKeyboardFocusStartedAt > 240) {
+			this.mobileComposerPhase = "open";
+		}
+		if (this.currentLayout === "mobile" && this.composerOpen && this.mobileComposerPhase !== "opening" && this.mobileComposerPhase !== "closing") {
+			this.resizeInput();
+		}
+	}
+
+	private getMobileKeyboardFallbackHeight(baselineHeight: number): number {
+		const height = baselineHeight > 0 ? baselineHeight : this.containerEl.win.innerHeight;
+		return Math.round(Math.min(Math.max(height * 0.42, 300), 430));
+	}
+
+	private setMobileKeyboardMetrics(visibleTop: number, visibleHeight: number, keyboardHeight: number): void {
+		const visibleTopValue = `${Math.round(visibleTop)}px`;
+		const visibleHeightValue = `${Math.round(visibleHeight)}px`;
+		const keyboardHeightValue = `${Math.round(keyboardHeight)}px`;
+		for (const element of [this.rootEl, this.mobileComposerLayerEl]) {
+			element?.style.setProperty("--knomo-visible-top", visibleTopValue);
+			element?.style.setProperty("--knomo-visible-height", visibleHeightValue);
+			element?.style.setProperty("--knomo-keyboard-height", keyboardHeightValue);
+			element?.style.setProperty("--knomo-vv-top", visibleTopValue);
+			element?.style.setProperty("--knomo-vv-height", visibleHeightValue);
+		}
+		this.mobileComposerLayerEl?.toggleClass("is-keyboard-open", keyboardHeight > 0);
+	}
+
+	private clearMobileKeyboardMetrics(): void {
+		const win = this.containerEl.win;
+		this.mobileKeyboardHeight = 0;
+		this.mobileComposerViewportBaselineHeight = null;
+		this.setMobileKeyboardMetrics(0, win.innerHeight, 0);
+		this.updateMobileComposerMeasurements();
+	}
+
+	private updateMobileComposerMeasurements(): number {
+		const win = this.containerEl.win;
+		const viewport = this.mobileVisualViewport ?? win.visualViewport;
+		const containerTop = Math.max(0, this.containerEl.getBoundingClientRect().top);
+		const viewportTop = viewport === undefined || viewport === null ? 0 : Math.max(0, viewport.offsetTop);
+		const topLimit = Math.max(viewportTop + MOBILE_COMPOSER_TOP_GUARD, containerTop + 8);
+		const keyboardHeight = this.mobileKeyboardHeight || 0;
+		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
+		const keyboardTop = keyboardHeight > 0
+			? baselineHeight - keyboardHeight
+			: viewport === undefined || viewport === null
+				? win.innerHeight
+				: viewport.offsetTop + viewport.height;
+		const contentMaxHeight = Math.round(Math.max(160, keyboardTop - topLimit));
+		const toolbarHeight = this.composerBarEl?.offsetHeight ?? 52;
+		const referenceHeight = this.referencePreviewEl !== null && this.referencePreviewEl.style.display !== "none"
+			? this.referencePreviewEl.offsetHeight
+			: 0;
+		const verticalPadding = 32;
+		const inputMaxHeight = Math.max(120, contentMaxHeight - toolbarHeight - referenceHeight - verticalPadding);
+		const contentMaxHeightValue = `${contentMaxHeight}px`;
+		this.mobileComposerInputMaxHeight = Math.round(inputMaxHeight);
+		const inputMaxHeightValue = `${this.mobileComposerInputMaxHeight}px`;
+		for (const element of [this.rootEl, this.mobileComposerLayerEl]) {
+			element?.style.setProperty("--knomo-composer-content-max-height", contentMaxHeightValue);
+			element?.style.setProperty("--knomo-composer-input-max-height", inputMaxHeightValue);
+		}
+		return Math.round(inputMaxHeight);
 	}
 
 	private updateCurrentLayout(): void {
@@ -1280,8 +1552,10 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (action === "open-drawer") {
+			if (this.composerOpen) {
+				this.closeComposerKeepingDraft();
+			}
 			this.mobileDrawerOpen = true;
-			this.composerOpen = false;
 		}
 		if (action === "close-drawer") this.mobileDrawerOpen = false;
 		if (action === "toggle-scope-menu") {
@@ -1301,22 +1575,49 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (action === "focus-stats") this.sidebarEl?.querySelector<HTMLElement>(".knomo-sidebar-stats")?.focus();
-		if (action === "open-composer") this.openComposer();
-		if (action === "close-composer") this.closeComposerWithConfirm();
+		if (action === "open-composer") {
+			this.openComposer();
+			return;
+		}
+		if (action === "close-composer") {
+			this.closeComposerWithConfirm();
+			return;
+		}
 		if (action === "toggle-compact-search") {
 			this.compactSearchOpen = !this.compactSearchOpen;
 			this.desktopSearchOpen = false;
 		}
-		if (action === "insert-tag") this.insertText("#");
-		if (action === "insert-image") this.openNativeImagePicker();
-		if (action === "insert-list") this.insertText("- ");
-		if (action === "insert-numbered-list") this.insertText("1. ");
+		if (action === "insert-tag") {
+			this.insertText("#");
+			return;
+		}
+		if (action === "insert-image") {
+			this.openNativeImagePicker();
+			return;
+		}
+		if (action === "insert-list") {
+			this.insertText("- ");
+			return;
+		}
+		if (action === "insert-numbered-list") {
+			this.insertText("1. ");
+			return;
+		}
 		if (action === "clear-reference") {
 			this.clearReference();
 			return;
 		}
-		if (action === "cancel-edit") this.cancelEditing();
-		if (action === "save-input") await this.saveInput();
+		if (action === "cancel-edit") {
+			this.cancelEditing();
+			return;
+		}
+		if (action === "save-input") {
+			if (this.currentLayout === "mobile" && Date.now() - this.lastMobileSendPointerAt < 700) {
+				return;
+			}
+			await this.saveInput();
+			return;
+		}
 		this.renderUiState();
 	}
 
@@ -1366,7 +1667,8 @@ export class KnomoView extends ItemView {
 			this.mobileDrawerOpen = false;
 			this.composerOpen = false;
 			this.clearMobileComposerFocus();
-			this.stopMobileKeyboardTracking();
+			this.mobileComposerInputFocused = false;
+			this.stopMobileViewportTracking();
 			this.renderUiState();
 		}
 	}
@@ -1376,9 +1678,13 @@ export class KnomoView extends ItemView {
 		try {
 			if (action === "edit") {
 				this.startEditing(memo);
+				this.syncCardMenuState();
+				return;
 			} else if (action === "reference") {
 				const referenceText = await this.referenceService.createReferenceText(memo, "link");
 				this.startReferenceMemo(memo, withMemoIdAlias(referenceText, memo.id));
+				this.syncCardMenuState();
+				return;
 			} else if (action === "copy-text") {
 				await this.copyText(memo.contentSnapshot);
 				new Notice("已复制文本");
@@ -1417,7 +1723,8 @@ export class KnomoView extends ItemView {
 			this.updateSendButtonState();
 			return;
 		}
-		const shouldKeepMobileCreateOpen = this.currentLayout === "mobile" && this.editingMemo === null && this.quoteSourceMemoId === null;
+		const isMobileSave = this.currentLayout === "mobile";
+		const mobileScrollTop = isMobileSave ? this.mobileComposerOpenScrollTop ?? this.getCardFlowScrollTop() : null;
 		const createInput = this.editingMemo === null ? this.prepareCreateMemoInput(input) : null;
 		const content = createInput?.content ?? input;
 
@@ -1437,19 +1744,23 @@ export class KnomoView extends ItemView {
 				});
 			}
 			this.draftContent = "";
-			this.editingMemo = null;
-			this.quoteSourceMemoId = null;
-			this.quoteReferenceText = null;
-			this.quoteMarkdownText = null;
-			this.composerOpen = shouldKeepMobileCreateOpen;
+			this.clearComposerContext();
 			if (this.inputEl !== null) {
 				this.inputEl.value = "";
-				this.resizeInput();
+			}
+			if (isMobileSave) {
+				this.closeMobileComposerKeepingDraft();
+			} else {
+				this.composerOpen = false;
+				if (this.inputEl !== null) {
+					this.resizeInput();
+				}
 			}
 			this.updateStatus("", false);
 			await this.onMemosChanged();
-			if (shouldKeepMobileCreateOpen) {
-				this.focusComposerInputSoon();
+			if (isMobileSave) {
+				this.restoreCardFlowScrollTop(mobileScrollTop);
+				this.mobileComposerOpenScrollTop = null;
 			}
 		} catch (error) {
 			const message = formatSettingsText(error instanceof Error ? error.message : "保存失败");
@@ -1575,12 +1886,78 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private getCardFlowScrollTop(): number | null {
+		return this.cardFlowEl?.scrollTop ?? null;
+	}
+
+	private restoreCardFlowScrollTop(scrollTop: number | null): void {
+		if (scrollTop === null || this.cardFlowEl === null) {
+			return;
+		}
+		const flow = this.cardFlowEl;
+		flow.scrollTop = scrollTop;
+		this.containerEl.win.requestAnimationFrame(() => {
+			flow.scrollTop = scrollTop;
+		});
+	}
+
 	private openComposer(): void {
+		if (this.currentLayout === "mobile") {
+			this.openMobileComposer();
+			return;
+		}
+		this.clearMobileComposerCloseTimer();
+		this.mobileComposerPhase = "closed";
 		this.composerOpen = true;
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.syncRootState();
 		this.focusComposerInputSoon();
+	}
+
+	private openMobileComposer(): void {
+		if (this.currentLayout === "mobile" && !this.composerOpen) {
+			this.mobileComposerOpenScrollTop = this.getCardFlowScrollTop();
+		}
+		this.clearMobileComposerCloseTimer();
+		this.clearMobileComposerFocus();
+		this.composerOpen = true;
+		this.mobileComposerPhase = "opening";
+		this.mobileComposerInputFocused = false;
+		this.mobileKeyboardFocusStartedAt = null;
+		this.mobileDrawerOpen = false;
+		this.scopeMenuOpen = false;
+		this.ensureMobileComposerLayer();
+		this.mobileComposerLayerEl?.toggleClass("is-open", false);
+		this.mobileComposerLayerEl?.toggleClass("is-closing", false);
+		this.clearMobileKeyboardMetrics();
+		this.mobileComposerViewportBaselineHeight = this.containerEl.win.innerHeight;
+		this.updateMobileComposerMeasurements();
+		this.syncRootState();
+		this.mobileComposerFocusFrameId = this.containerEl.win.requestAnimationFrame(() => {
+			this.mobileComposerFocusFrameId = null;
+			if (this.mobileComposerPhase !== "opening") {
+				return;
+			}
+			this.mobileComposerLayerEl?.toggleClass("is-open", true);
+			this.mobileComposerFocusTimerId = this.containerEl.win.setTimeout(() => {
+				this.mobileComposerFocusTimerId = null;
+				if (this.mobileComposerPhase !== "opening") {
+					return;
+				}
+				this.mobileComposerPhase = "focusing";
+				this.focusComposerInputNow(false, false);
+				this.scheduleMobileKeyboardMeasurements();
+				this.startMobileViewportTracking();
+				this.mobileComposerFocusTimerId = this.containerEl.win.setTimeout(() => {
+					this.mobileComposerFocusTimerId = null;
+					if (this.mobileComposerPhase === "focusing") {
+						this.updateMobileKeyboardMetrics();
+						this.mobileComposerPhase = "open";
+					}
+				}, 260);
+			}, 100);
+		});
 	}
 
 	private closeComposerWithConfirm(): void {
@@ -1600,40 +1977,143 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeComposerKeepingDraft(): void {
+		if (this.currentLayout === "mobile") {
+			this.closeMobileComposerKeepingDraft();
+			return;
+		}
 		if (this.inputEl !== null) {
-			this.draftContent = this.inputEl.value;
+			this.draftContent = this.getDraftForClose(this.inputEl.value);
+			this.inputEl.value = this.draftContent;
 		}
 		this.composerOpen = false;
 		this.clearMobileComposerFocus();
-		this.stopMobileKeyboardTracking();
+		this.mobileComposerInputFocused = false;
+		this.mobileKeyboardFocusStartedAt = null;
+		this.stopMobileViewportTracking();
 		this.syncRootState();
+		this.syncComposerMode();
+		this.updateSendButtonState();
+		this.updateCancelEditButtonState();
+	}
+
+	private closeMobileComposerKeepingDraft(): void {
+		if (this.inputEl !== null) {
+			this.draftContent = this.getDraftForClose(this.inputEl.value);
+			this.inputEl.value = this.draftContent;
+		}
+		this.clearComposerContext();
+		this.mobileComposerOpenScrollTop = null;
+		this.clearMobileComposerFocus();
+		this.clearMobileKeyboardMeasureTimers();
+		this.clearMobileComposerCloseTimer();
+		this.mobileComposerPhase = "closing";
+		this.mobileComposerLayerEl?.toggleClass("is-open", false);
+		this.mobileComposerLayerEl?.toggleClass("is-closing", true);
+		this.inputEl?.blur();
+		this.mobileComposerInputFocused = false;
+		this.mobileKeyboardFocusStartedAt = null;
+		this.mobileComposerCloseTimer = this.containerEl.win.setTimeout(() => {
+			this.mobileComposerCloseTimer = null;
+			this.restoreMobileComposerLayer();
+			this.clearMobileComposerLayerState();
+			this.mobileComposerLayerEl?.detach();
+			this.stopMobileViewportTracking(false);
+			this.clearMobileKeyboardMetrics();
+			this.composerOpen = false;
+			this.mobileComposerPhase = "closed";
+			this.syncRootState();
+			this.syncComposerMode();
+			this.updateSendButtonState();
+			this.updateCancelEditButtonState();
+		}, 240);
 	}
 
 	private focusComposerInputSoon(): void {
 		this.clearMobileComposerFocus();
 		if (this.currentLayout !== "mobile") {
-			this.inputEl?.focus();
-			this.resizeInput();
+			this.focusComposerInputNow();
 			return;
 		}
 		const win = this.containerEl.win;
-		this.mobileComposerFocusTimeoutId = win.setTimeout(() => {
-			this.mobileComposerFocusTimeoutId = null;
-			this.inputEl?.focus();
+		this.mobileComposerFocusFrameId = win.requestAnimationFrame(() => {
+			this.mobileComposerFocusFrameId = null;
+			if (this.inputEl !== null && this.containerEl.doc.activeElement !== this.inputEl) {
+				this.focusComposerInputNow();
+			} else {
+				this.queueMobileViewportUpdate();
+			}
+		});
+	}
+
+	private focusComposerInputNow(shouldResize = true, shouldQueueViewport = true): void {
+		if (this.inputEl === null) {
+			return;
+		}
+		try {
+			this.inputEl.focus({ preventScroll: true });
+		} catch {
+			this.inputEl.focus();
+		}
+		if (shouldResize) {
 			this.resizeInput();
-			this.updateKeyboardInset();
-		}, 0);
+		}
+		if (shouldQueueViewport && this.currentLayout === "mobile") {
+			this.queueMobileViewportUpdate();
+		}
+	}
+
+	private handleComposerInputFocus(): void {
+		if (this.currentLayout === "mobile") {
+			this.mobileComposerInputFocused = true;
+			this.mobileKeyboardFocusStartedAt = Date.now();
+			this.scheduleMobileKeyboardMeasurements();
+			if (this.mobileComposerPhase === "open") {
+				this.queueMobileViewportUpdate();
+			}
+			if (this.mobileComposerPhase === "opening" || this.mobileComposerPhase === "focusing") {
+				return;
+			}
+		}
+		this.resizeInput();
+	}
+
+	private handleComposerInputBlur(): void {
+		if (this.currentLayout === "mobile") {
+			this.mobileComposerInputFocused = false;
+			this.mobileKeyboardFocusStartedAt = null;
+			this.clearMobileKeyboardMeasureTimers();
+			if (this.mobileComposerPhase === "closing") {
+				return;
+			}
+			this.clearMobileKeyboardMetrics();
+		}
+		this.resizeInput();
 	}
 
 	private clearMobileComposerFocus(): void {
-		if (this.mobileComposerFocusTimeoutId === null) {
+		if (this.mobileComposerFocusFrameId !== null) {
+			this.containerEl.win.cancelAnimationFrame(this.mobileComposerFocusFrameId);
+			this.mobileComposerFocusFrameId = null;
+		}
+		if (this.mobileComposerFocusTimerId !== null) {
+			this.containerEl.win.clearTimeout(this.mobileComposerFocusTimerId);
+			this.mobileComposerFocusTimerId = null;
+		}
+	}
+
+	private clearMobileComposerCloseTimer(): void {
+		if (this.mobileComposerCloseTimer === null) {
 			return;
 		}
-		this.containerEl.win.clearTimeout(this.mobileComposerFocusTimeoutId);
-		this.mobileComposerFocusTimeoutId = null;
+		this.containerEl.win.clearTimeout(this.mobileComposerCloseTimer);
+		this.mobileComposerCloseTimer = null;
 	}
 
 	private cancelEditingOrCloseComposer(): void {
+		if (this.currentLayout === "mobile") {
+			this.closeComposerKeepingDraft();
+			return;
+		}
 		if (this.editingMemo !== null || this.quoteSourceMemoId !== null) {
 			this.clearComposerMode();
 			return;
@@ -1655,20 +2135,46 @@ export class KnomoView extends ItemView {
 		this.updateStatus("", false);
 		this.syncComposerMode();
 		this.updateSendButtonState();
-		this.inputEl?.focus();
+		this.focusComposerInputNow();
 	}
 
 	private clearComposerMode(): void {
-		this.editingMemo = null;
-		this.quoteSourceMemoId = null;
-		this.quoteReferenceText = null;
-		this.quoteMarkdownText = null;
+		this.clearComposerContext();
 		this.draftContent = "";
 		if (this.inputEl !== null) {
 			this.inputEl.value = "";
 		}
 		this.updateStatus("", false);
 		this.renderUiState();
+	}
+
+	private clearComposerContext(): void {
+		this.editingMemo = null;
+		this.quoteSourceMemoId = null;
+		this.quoteReferenceText = null;
+		this.quoteMarkdownText = null;
+	}
+
+	private getComposerMode(): ComposerMode {
+		if (this.editingMemo !== null) {
+			return "edit";
+		}
+		if (this.quoteSourceMemoId !== null) {
+			return "quote";
+		}
+		return "create";
+	}
+
+	private getDraftForClose(draft: string): string {
+		if (this.getComposerMode() !== "quote" || this.quoteMarkdownText === null) {
+			return draft;
+		}
+		const normalizedDraft = draft.replace(/\s+$/g, "");
+		const normalizedQuote = this.quoteMarkdownText.trim();
+		if (normalizedDraft === normalizedQuote) {
+			return "";
+		}
+		return draft;
 	}
 
 	private startEditing(memo: MemoRecord): void {
@@ -1683,6 +2189,9 @@ export class KnomoView extends ItemView {
 		this.openComposer();
 		this.resizeInput();
 		this.updateStatus("", false);
+		this.syncComposerMode();
+		this.updateSendButtonState();
+		this.updateCancelEditButtonState();
 	}
 
 	private startReferenceMemo(memo: MemoRecord, referenceText: string): void {
@@ -1695,6 +2204,9 @@ export class KnomoView extends ItemView {
 		this.inputEl?.setSelectionRange(cursor, cursor);
 		this.resizeInput();
 		this.updateStatus("", false);
+		this.syncComposerMode();
+		this.updateSendButtonState();
+		this.updateCancelEditButtonState();
 	}
 
 	private handleComposerBeforeInput(event: InputEvent): void {
@@ -1703,6 +2215,32 @@ export class KnomoView extends ItemView {
 		}
 		event.preventDefault();
 		this.insertText("#");
+	}
+
+	private handleComposerToolPointerDown(event: PointerEvent | MouseEvent): void {
+		if (this.currentLayout !== "mobile") {
+			return;
+		}
+		const target = event.target as Node | null;
+		if (target?.instanceOf(Element) && target.closest(".knomo-tool-button") !== null) {
+			event.preventDefault();
+		}
+	}
+
+	private handleSendPointerDown(event: PointerEvent | MouseEvent): void {
+		if (this.currentLayout !== "mobile") {
+			return;
+		}
+		if (this.isSaving) {
+			return;
+		}
+		if (this.sendButtonEl === null || this.sendButtonEl.disabled) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		this.lastMobileSendPointerAt = Date.now();
+		void this.saveInput();
 	}
 
 	private insertText(text: string): void {
@@ -1714,9 +2252,12 @@ export class KnomoView extends ItemView {
 		const insertText = text === "#" ? getHashInsertionText(this.inputEl.value, start) : text;
 		this.inputEl.value = `${this.inputEl.value.slice(0, start)}${insertText}${this.inputEl.value.slice(end)}`;
 		const nextCursor = start + insertText.length;
+		try {
+			this.inputEl.focus({ preventScroll: true });
+		} catch {
+			this.inputEl.focus();
+		}
 		this.inputEl.setSelectionRange(nextCursor, nextCursor);
-		this.inputEl.focus();
-		this.syncInputState();
 		const inputEvent = this.containerEl.doc.createEvent("Event");
 		inputEvent.initEvent("input", true, false);
 		this.inputEl.dispatchEvent(inputEvent);
@@ -1725,6 +2266,10 @@ export class KnomoView extends ItemView {
 	private syncInputState(): void {
 		this.draftContent = this.inputEl?.value ?? "";
 		this.updateSendButtonState();
+		if (this.currentLayout === "mobile") {
+			this.scheduleMobileComposerResize();
+			return;
+		}
 		this.resizeInput();
 	}
 
@@ -1732,17 +2277,28 @@ export class KnomoView extends ItemView {
 		if (this.inputEl === null) {
 			return;
 		}
-		const minHeight = this.currentLayout === "mobile" ? 44 : 48;
+		const minHeight = this.currentLayout === "mobile" ? 150 : 48;
 		const maxHeight = this.currentLayout === "mobile" ? this.getMobileMaxInputHeight() : 480;
-		this.inputEl.style.height = this.currentLayout === "mobile" ? `${minHeight}px` : "auto";
+		if (this.currentLayout !== "mobile") {
+			this.inputEl.style.height = "auto";
+			const nextHeight = Math.min(maxHeight, Math.max(minHeight, this.inputEl.scrollHeight));
+			this.inputEl.style.height = `${nextHeight}px`;
+			this.inputEl.style.overflowY = this.inputEl.scrollHeight > maxHeight ? "auto" : "hidden";
+			return;
+		}
+		const currentHeight = this.inputEl.getBoundingClientRect().height || minHeight;
 		const nextHeight = Math.min(maxHeight, Math.max(minHeight, this.inputEl.scrollHeight));
-		this.inputEl.style.height = `${nextHeight}px`;
+		if (Math.abs(currentHeight - nextHeight) > 1) {
+			this.inputEl.style.height = `${nextHeight}px`;
+		}
 		this.inputEl.style.overflowY = this.inputEl.scrollHeight > maxHeight ? "auto" : "hidden";
 	}
 
 	private getMobileMaxInputHeight(): number {
-		const vh = this.containerEl.win.innerHeight * 0.42;
-		return Math.round(Math.min(vh, 320));
+		if (this.currentLayout === "mobile" && this.mobileComposerInputMaxHeight !== null) {
+			return this.mobileComposerInputMaxHeight;
+		}
+		return this.updateMobileComposerMeasurements();
 	}
 
 	private updateStatus(message: string, isError: boolean): void {
@@ -1759,7 +2315,7 @@ export class KnomoView extends ItemView {
 		}
 		this.sendButtonEl.disabled =
 			this.isSaving || this.inputEl.disabled || this.inputEl.value.trim().length === 0;
-		const label = this.isSaving ? "保存中" : this.editingMemo !== null ? "保存" : "发送";
+		const label = this.isSaving ? "保存中" : "发送";
 		this.sendButtonEl.setAttr("aria-label", label);
 	}
 
@@ -1908,8 +2464,8 @@ export class KnomoView extends ItemView {
 	private toggleSidebar(): void {
 		if (this.isDrawerLayout()) {
 			this.mobileDrawerOpen = !this.mobileDrawerOpen;
-			if (this.mobileDrawerOpen) {
-				this.composerOpen = false;
+			if (this.mobileDrawerOpen && this.composerOpen) {
+				this.closeComposerKeepingDraft();
 			}
 			this.sidebarCollapsed = false;
 			this.syncRootState();
@@ -2258,6 +2814,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private openNativeImagePicker(): void {
+		if (this.currentLayout === "mobile") {
+			this.focusComposerInputNow();
+		}
 		const input = this.containerEl.createEl("input", {
 			cls: "knomo-hidden-file-input",
 			attr: {

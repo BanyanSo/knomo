@@ -1,6 +1,6 @@
 {
 	"name": "knomo",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Capture local-first memos into daily notes and monthly archives.",
 	"main": "main.js",
 	"scripts": {
@@ -14,7 +14,7 @@
 		"notes",
 		"local-first"
 	],
-	"author": "",
+	"author": "BanyanSo",
 	"license": "MIT",
 	"private": true,
 	"devDependencies": {

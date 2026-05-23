@@ -108,6 +108,18 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
 	font: inherit;
 }
 
+.knomo-plugin .knomo-visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
 .knomo-plugin.knomo-view {
 	width: 100%;
 	height: 100%;
@@ -1490,10 +1502,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
 	cursor: pointer;
 }
 
-.knomo-plugin .knomo-tool-button:hover,
-.knomo-plugin .knomo-tool-button:focus-visible {
-	color: var(--text-muted);
-	background: transparent;
+@media (hover: hover) and (pointer: fine) {
+	.knomo-plugin .knomo-tool-button:hover,
+	.knomo-plugin .knomo-tool-button:focus-visible {
+		color: var(--text-muted);
+		background: transparent;
+	}
 }
 
 .knomo-plugin.is-layout-mobile .knomo-tool-button {
@@ -1507,9 +1521,23 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
 }
 
 .knomo-plugin.is-layout-mobile .knomo-tool-button:hover,
-.knomo-plugin.is-layout-mobile .knomo-tool-button:focus-visible {
+.knomo-plugin.is-layout-mobile .knomo-tool-button:focus,
+.knomo-plugin.is-layout-mobile .knomo-tool-button:focus-visible,
+.knomo-mobile-composer-layer .knomo-tool-button:hover,
+.knomo-mobile-composer-layer .knomo-tool-button:focus,
+.knomo-mobile-composer-layer .knomo-tool-button:focus-visible {
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	outline: none;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-tool-button:active,
+.knomo-mobile-composer-layer .knomo-tool-button:active {
 	color: var(--text-normal);
 	background: var(--knomo-row-hover);
+	box-shadow: none;
+	outline: none;
 }
 
 .knomo-plugin .knomo-composer-actions {
@@ -2247,6 +2275,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
 
 .knomo-mobile-composer-layer .knomo-composer-bar {
 	flex: 0 0 auto;
+}
+
+.knomo-tag-suggest-popover {
+	position: fixed !important;
+	z-index: 10020 !important;
+	max-height: 240px;
+	overflow-y: auto;
 }
 
 /* --------------------------------------------------------------------------

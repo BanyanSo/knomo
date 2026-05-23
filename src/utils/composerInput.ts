@@ -9,6 +9,10 @@ export interface TextReplacement {
 	cursor: number;
 }
 
+export interface NativeListInputOptions {
+	allowTextChangeWithNewline?: boolean;
+}
+
 export type ListFormatType = "bullet" | "ordered";
 
 export function getHashInsertionText(value: string, cursor: number): string {
@@ -131,6 +135,82 @@ export function getListEnterPatch(value: string, start: number, end: number): Te
 		value: `${value.slice(0, start)}${insert}${value.slice(end)}`,
 		cursor,
 	};
+}
+
+export function getListEnterPatchAfterNativeNewline(value: string, start: number, end: number): TextReplacement | null {
+	if (start !== end || start <= 0 || value.charAt(start - 1) !== "\n") {
+		return null;
+	}
+	const newlineIndex = start - 1;
+	const lineStart = value.lastIndexOf("\n", Math.max(0, newlineIndex - 1)) + 1;
+	const line = value.slice(lineStart, newlineIndex);
+	const bullet = parseBulletListLine(line);
+	const ordered = parseOrderedListLine(line);
+	if (bullet === null && ordered === null) {
+		return null;
+	}
+	if (bullet !== null) {
+		const { indent, content } = bullet;
+		if (content.trim().length === 0) {
+			const cursor = lineStart + indent.length;
+			return {
+				value: `${value.slice(0, lineStart)}${indent}${value.slice(start)}`,
+				cursor,
+			};
+		}
+		const insert = `${indent}- `;
+		const cursor = start + insert.length;
+		return {
+			value: `${value.slice(0, start)}${insert}${value.slice(start)}`,
+			cursor,
+		};
+	}
+	if (ordered === null) {
+		return null;
+	}
+	const { indent, number, content } = ordered;
+	if (content.trim().length === 0) {
+		const cursor = lineStart + indent.length;
+		return {
+			value: `${value.slice(0, lineStart)}${indent}${value.slice(start)}`,
+			cursor,
+		};
+	}
+	const insert = `${indent}${number + 1}. `;
+	const cursor = start + insert.length;
+	return {
+		value: `${value.slice(0, start)}${insert}${value.slice(start)}`,
+		cursor,
+	};
+}
+
+export function getListEnterPatchForNativeInput(
+	previousValue: string,
+	value: string,
+	start: number,
+	end: number,
+	options: NativeListInputOptions = {},
+): TextReplacement | null {
+	if (start !== end || start <= 0 || value.charAt(start - 1) !== "\n") {
+		return null;
+	}
+	const withoutInsertedNewline = `${value.slice(0, start - 1)}${value.slice(start)}`;
+	if (withoutInsertedNewline !== previousValue) {
+		if (!options.allowTextChangeWithNewline || countLineBreaks(value) !== countLineBreaks(previousValue) + 1) {
+			return null;
+		}
+	}
+	return getListEnterPatchAfterNativeNewline(value, start, end);
+}
+
+function countLineBreaks(value: string): number {
+	let count = 0;
+	for (let index = 0; index < value.length; index += 1) {
+		if (value.charAt(index) === "\n") {
+			count += 1;
+		}
+	}
+	return count;
 }
 
 function parseBulletListLine(line: string): { indent: string; content: string } | null {

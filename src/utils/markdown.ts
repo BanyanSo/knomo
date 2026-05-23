@@ -2,7 +2,7 @@ import type { MemoImageRef, MemoLinkRef } from "../types/memo";
 
 const MARKDOWN_HEADING_REGEX = /^(#{1,6})\s+\S.*$/;
 const TRAILING_BLOCK_ID_REGEX = /\s+\^[A-Za-z0-9_-]+\s*$/;
-const MEMO_START_LINE_REGEX = /^- \d{2}:\d{2}(?::\d{2})? .*$/;
+const MEMO_START_LINE_REGEX = /^- \d{2}:\d{2}(?::\d{2})?(?: .*)?$/;
 const OBSIDIAN_IMAGE_REGEX = /!\[\[([^\]]+)\]\]/g;
 const OBSIDIAN_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
 const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;

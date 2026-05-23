@@ -9,7 +9,7 @@ import type { SyncOrchestrator } from "../services/SyncOrchestrator";
 import type { ScanDailyMemosResult } from "../services/MemoScanService";
 import type { MemoRecord } from "../types/memo";
 import type { MobileCompactMode } from "../types/settings";
-import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../utils/composerInput";
+import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
@@ -69,7 +69,6 @@ const INITIAL_VISIBLE_RENDER_COUNT = 16;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
 const SEARCH_DEBOUNCE_MS = 220;
 const MOBILE_COMPOSER_TOP_GUARD = 52;
-const MOBILE_LIST_ENTER_DEDUP_MS = 120;
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "all", label: "全部笔记", icon: "layout-list" },
@@ -122,6 +121,11 @@ interface MarkdownRenderTask {
 interface PendingMobileListEnterCorrection {
 	patch: TextReplacement;
 	nativeValue: string;
+}
+
+interface HandledMobileToolPointer {
+	button: HTMLElement;
+	action: string;
 }
 
 const ALL_SCOPE_OPTIONS = uniqueScopeOptions([...MAIN_SCOPE_OPTIONS, ...DATE_SCOPE_OPTIONS]);
@@ -217,8 +221,13 @@ export class KnomoView extends ItemView {
 	private mobileKeyboardMeasureTimers: number[] = [];
 	private mobileComposerCloseTimer: number | null = null;
 	private lastMobileSendPointerAt = 0;
-	private lastMobileListEnterHandledAt = 0;
 	private pendingMobileListEnterCorrection: PendingMobileListEnterCorrection | null = null;
+	private listEnterKeydownPatch: TextReplacement | null = null;
+	private listEnterKeydownPatchTimerId: number | null = null;
+	private skipListEnterInputFallback = false;
+	private skipListEnterInputFallbackTimerId: number | null = null;
+	private handledMobileToolPointer: HandledMobileToolPointer | null = null;
+	private handledMobileToolPointerTimerId: number | null = null;
 	private mobileComposerLayerEl: HTMLElement | null = null;
 	private mobileComposerBackdropEl: HTMLElement | null = null;
 	private mobileComposerContentEl: HTMLElement | null = null;
@@ -272,6 +281,9 @@ export class KnomoView extends ItemView {
 		this.clearMobileComposerResizeFrame();
 		this.clearMobileComposerCloseTimer();
 		this.clearMobileKeyboardMeasureTimers();
+		this.clearListEnterKeydownPatch();
+		this.clearSkipListEnterInputFallback();
+		this.clearHandledMobileToolPointer();
 		this.pendingMobileListEnterCorrection = null;
 		this.stopMobileViewportTracking();
 		this.removeMobileComposerLayer();
@@ -507,8 +519,8 @@ export class KnomoView extends ItemView {
 		this.registerDomEvent(this.inputEl, "beforeinput", (event: InputEvent) => {
 			this.handleComposerBeforeInput(event);
 		});
-		this.registerDomEvent(this.inputEl, "input", () => {
-			this.handleComposerInput();
+		this.registerDomEvent(this.inputEl, "input", (event) => {
+			this.handleComposerInput(event);
 		});
 		this.registerDomEvent(this.inputEl, "focus", () => {
 			this.handleComposerInputFocus();
@@ -518,7 +530,17 @@ export class KnomoView extends ItemView {
 		});
 		this.tagSuggest = new KnomoTagSuggest(this.app, this.inputEl, () => this.syncInputState());
 		this.registerDomEvent(this.inputEl, "keydown", (event) => {
-			this.handleComposerSaveShortcut(event);
+			if (this.handleComposerSaveShortcut(event)) {
+				return;
+			}
+			if (this.currentLayout === "mobile") {
+				return;
+			}
+			if (event.key === "Enter" && event.shiftKey && !event.isComposing) {
+				this.markSkipListEnterInputFallback();
+				return;
+			}
+			this.handleListEnterKeydown(event);
 		}, { capture: true });
 		this.registerDomEvent(this.inputEl, "keydown", (event) => {
 			this.handleComposerKeydown(event);
@@ -1661,6 +1683,9 @@ export class KnomoView extends ItemView {
 		if (actionEl?.instanceOf(HTMLElement)) {
 			const action = actionEl.getAttr("data-action");
 			const memoId = actionEl.getAttr("data-memo-id");
+			if (this.shouldIgnoreHandledMobileToolClick(actionEl, action)) {
+				return;
+			}
 			const mobileToolButton = this.currentLayout === "mobile" ? target.closest(".knomo-tool-button") : null;
 			await this.handleAction(action, memoId);
 			if (mobileToolButton?.instanceOf(HTMLElement)) {
@@ -1748,23 +1773,7 @@ export class KnomoView extends ItemView {
 			this.compactSearchOpen = !this.compactSearchOpen;
 			this.desktopSearchOpen = false;
 		}
-		if (action === "insert-tag") {
-			this.insertText("#");
-			if (this.currentLayout === "mobile") {
-				this.openTagSuggestAfterHashInsert();
-			}
-			return;
-		}
-		if (action === "insert-image") {
-			this.openNativeImagePicker();
-			return;
-		}
-		if (action === "insert-list") {
-			this.applyListFormat("bullet");
-			return;
-		}
-		if (action === "insert-numbered-list") {
-			this.applyListFormat("ordered");
+		if (this.runComposerToolAction(action)) {
 			return;
 		}
 		if (action === "clear-reference") {
@@ -2381,10 +2390,11 @@ export class KnomoView extends ItemView {
 		if (event.defaultPrevented) {
 			return;
 		}
-		const shouldHandleMobileListEnter =
-			this.currentLayout === "mobile" &&
-			(event.inputType === "insertParagraph" || event.inputType === "insertLineBreak" || (event.inputType === "insertText" && event.data === "\n"));
-		if (shouldHandleMobileListEnter && this.handleMobileListEnterBeforeInput(event)) {
+		const shouldHandleListEnter =
+			!this.skipListEnterInputFallback &&
+			!event.isComposing &&
+			isListEnterInputEvent(event);
+		if (shouldHandleListEnter && this.handleListEnterBeforeInput(event)) {
 			return;
 		}
 		if (event.inputType !== "insertText" || event.data !== "#") {
@@ -2409,8 +2419,13 @@ export class KnomoView extends ItemView {
 		if (this.handleComposerSaveShortcut(event)) {
 			return;
 		}
-		if (this.handleListEnterKeydown(event)) {
-			return;
+		if (this.currentLayout !== "mobile") {
+			if (event.key === "Enter" && event.shiftKey && !event.isComposing) {
+				this.markSkipListEnterInputFallback();
+			}
+			if (this.handleListEnterKeydown(event)) {
+				return;
+			}
 		}
 		if (event.key === "Escape") {
 			event.preventDefault();
@@ -2452,8 +2467,81 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const target = event.target as Node | null;
-		if (target?.instanceOf(Element) && target.closest(".knomo-tool-button") !== null) {
-			event.preventDefault();
+		if (!target?.instanceOf(Element)) {
+			return;
+		}
+		const toolButton = target.closest(".knomo-tool-button");
+		if (!toolButton?.instanceOf(HTMLElement)) {
+			return;
+		}
+		const action = toolButton.getAttr("data-action");
+		if (action === null) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		if (this.isHandledMobileToolPointer(toolButton, action)) {
+			return;
+		}
+		if (this.runComposerToolAction(action)) {
+			this.markHandledMobileToolPointer(toolButton, action);
+		}
+	}
+
+	private runComposerToolAction(action: string | null): boolean {
+		if (action === "insert-tag") {
+			this.insertText("#");
+			if (this.currentLayout === "mobile") {
+				this.openTagSuggestAfterHashInsert();
+			}
+			return true;
+		}
+		if (action === "insert-image") {
+			this.openNativeImagePicker();
+			return true;
+		}
+		if (action === "insert-list") {
+			this.applyListFormat("bullet");
+			return true;
+		}
+		if (action === "insert-numbered-list") {
+			this.applyListFormat("ordered");
+			return true;
+		}
+		return false;
+	}
+
+	private markHandledMobileToolPointer(button: HTMLElement, action: string): void {
+		this.clearHandledMobileToolPointer();
+		this.handledMobileToolPointer = { button, action };
+		this.handledMobileToolPointerTimerId = this.containerEl.win.setTimeout(() => {
+			this.handledMobileToolPointer = null;
+			this.handledMobileToolPointerTimerId = null;
+		}, 350);
+	}
+
+	private shouldIgnoreHandledMobileToolClick(actionEl: HTMLElement, action: string | null): boolean {
+		const handled = this.handledMobileToolPointer;
+		if (this.currentLayout !== "mobile" || handled === null || action === null) {
+			return false;
+		}
+		const shouldIgnore = this.isHandledMobileToolPointer(actionEl, action);
+		if (shouldIgnore) {
+			this.clearHandledMobileToolPointer();
+		}
+		return shouldIgnore;
+	}
+
+	private isHandledMobileToolPointer(button: HTMLElement, action: string): boolean {
+		const handled = this.handledMobileToolPointer;
+		return handled !== null && handled.button === button && handled.action === action;
+	}
+
+	private clearHandledMobileToolPointer(): void {
+		this.handledMobileToolPointer = null;
+		if (this.handledMobileToolPointerTimerId !== null) {
+			this.containerEl.win.clearTimeout(this.handledMobileToolPointerTimerId);
+			this.handledMobileToolPointerTimerId = null;
 		}
 	}
 
@@ -2511,30 +2599,27 @@ export class KnomoView extends ItemView {
 		input.dispatchEvent(inputEvent);
 	}
 
-	private handleComposerInput(): void {
+	private handleComposerInput(event: Event): void {
 		const pending = this.pendingMobileListEnterCorrection;
 		if (pending !== null) {
 			this.pendingMobileListEnterCorrection = null;
 			if (this.inputEl?.value === pending.nativeValue) {
-				this.lastMobileListEnterHandledAt = Date.now();
 				this.applyTextareaPatch(pending.patch);
 				return;
 			}
 		}
+		if (this.handleListEnterInputFallback(event)) {
+			return;
+		}
 		this.syncInputState();
 	}
 
-	private handleMobileListEnterBeforeInput(event: InputEvent): boolean {
+	private handleListEnterBeforeInput(event: InputEvent): boolean {
+		if (this.handleListEnterKeydownDuplicateBeforeInput(event)) {
+			return true;
+		}
 		const patch = this.getCurrentListEnterPatch();
 		if (patch === null) {
-			return false;
-		}
-		if (Date.now() - this.lastMobileListEnterHandledAt < MOBILE_LIST_ENTER_DEDUP_MS) {
-			if (event.cancelable) {
-				event.preventDefault();
-				event.stopPropagation();
-				return true;
-			}
 			return false;
 		}
 		if (!event.cancelable) {
@@ -2545,12 +2630,52 @@ export class KnomoView extends ItemView {
 		event.stopPropagation();
 		this.pendingMobileListEnterCorrection = null;
 		this.applyTextareaPatch(patch);
-		this.lastMobileListEnterHandledAt = Date.now();
+		return true;
+	}
+
+	private handleListEnterInputFallback(event: Event): boolean {
+		if (this.skipListEnterInputFallback || this.inputEl === null) {
+			return false;
+		}
+		const inputEvent = this.asInputEvent(event);
+		if (
+			inputEvent !== null &&
+			(inputEvent.inputType === "insertFromPaste" || inputEvent.inputType === "insertFromDrop")
+		) {
+			return false;
+		}
+		const input = this.inputEl;
+		const patch = getListEnterPatchForNativeInput(this.draftContent, input.value, input.selectionStart, input.selectionEnd, {
+			allowTextChangeWithNewline: this.currentLayout === "mobile",
+		});
+		if (patch === null) {
+			return false;
+		}
+		this.applyTextareaPatch(patch);
+		return true;
+	}
+
+	private handleListEnterKeydownDuplicateBeforeInput(event: InputEvent): boolean {
+		const patch = this.listEnterKeydownPatch;
+		if (patch === null || this.inputEl === null) {
+			return false;
+		}
+		const input = this.inputEl;
+		if (input.value !== patch.value || input.selectionStart !== patch.cursor || input.selectionEnd !== patch.cursor) {
+			return false;
+		}
+		this.clearListEnterKeydownPatch();
+		if (!event.cancelable) {
+			this.pendingMobileListEnterCorrection = this.getPendingMobileListEnterCorrection(patch);
+			return true;
+		}
+		event.preventDefault();
+		event.stopPropagation();
 		return true;
 	}
 
 	private handleListEnterKeydown(event: KeyboardEvent): boolean {
-		if (event.key !== "Enter" || event.shiftKey || event.isComposing || this.currentLayout === "mobile") {
+		if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
 			return false;
 		}
 		const patch = this.getCurrentListEnterPatch();
@@ -2560,7 +2685,50 @@ export class KnomoView extends ItemView {
 		event.preventDefault();
 		event.stopPropagation();
 		this.applyTextareaPatch(patch);
+		this.markListEnterKeydownPatch(patch);
 		return true;
+	}
+
+	private markListEnterKeydownPatch(patch: TextReplacement): void {
+		this.clearListEnterKeydownPatch();
+		this.listEnterKeydownPatch = patch;
+		this.listEnterKeydownPatchTimerId = this.containerEl.win.setTimeout(() => {
+			this.listEnterKeydownPatch = null;
+			this.listEnterKeydownPatchTimerId = null;
+		}, 0);
+	}
+
+	private clearListEnterKeydownPatch(): void {
+		this.listEnterKeydownPatch = null;
+		if (this.listEnterKeydownPatchTimerId !== null) {
+			this.containerEl.win.clearTimeout(this.listEnterKeydownPatchTimerId);
+			this.listEnterKeydownPatchTimerId = null;
+		}
+	}
+
+	private markSkipListEnterInputFallback(): void {
+		this.clearSkipListEnterInputFallback();
+		this.skipListEnterInputFallback = true;
+		this.skipListEnterInputFallbackTimerId = this.containerEl.win.setTimeout(() => {
+			this.skipListEnterInputFallback = false;
+			this.skipListEnterInputFallbackTimerId = null;
+		}, 0);
+	}
+
+	private clearSkipListEnterInputFallback(): void {
+		this.skipListEnterInputFallback = false;
+		if (this.skipListEnterInputFallbackTimerId !== null) {
+			this.containerEl.win.clearTimeout(this.skipListEnterInputFallbackTimerId);
+			this.skipListEnterInputFallbackTimerId = null;
+		}
+	}
+
+	private asInputEvent(event: Event): InputEvent | null {
+		const win = this.inputEl?.ownerDocument.defaultView ?? null;
+		if (win === null || typeof win.InputEvent === "undefined") {
+			return null;
+		}
+		return event instanceof win.InputEvent ? event : null;
 	}
 
 	private getCurrentListEnterPatch(): TextReplacement | null {
@@ -3612,6 +3780,10 @@ function getEmptyStateTitle(activeNav: SidebarNav): string {
 
 function shouldOpenRandomReunionCard(target: Element): boolean {
 	return target.closest("a, button, input, textarea, select, [data-tag], .knomo-card-actions, .knomo-card-menu") === null;
+}
+
+function isListEnterInputEvent(event: InputEvent): boolean {
+	return event.inputType === "insertParagraph" || event.inputType === "insertLineBreak" || (event.inputType === "insertText" && event.data === "\n");
 }
 
 function getMarkdownRenderPriority(renderIndex: number): MarkdownRenderPriority {

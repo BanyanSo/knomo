@@ -24,6 +24,33 @@ test("builds a three-line memo block and preserves hard line breaks", () => {
 	);
 });
 
+test("builds list-leading memo content as a nested Markdown block", () => {
+	assert.equal(
+		service.buildMemoBlock("- 第一项\n- 第二项", "12:00:00"),
+		"- 12:00:00\n  - 第一项\n  - 第二项",
+	);
+	assert.equal(
+		service.buildMemoBlock("1. 第一项\n2. 第二项", "12:00:00"),
+		"- 12:00:00\n  1. 第一项\n  2. 第二项",
+	);
+});
+
+test("parses list-leading memo content from a detached timestamp line", () => {
+	const parsed = service.parseMemoBlock([
+		"- 12:00:00",
+		"  - 第一项",
+		"  - 第二项 ^abc123",
+	], 0);
+
+	assert.ok(parsed);
+	assert.equal(parsed.blockId, "abc123");
+	assert.equal(parsed.content, "- 第一项\n- 第二项");
+});
+
+test("does not parse an empty detached timestamp line as a memo", () => {
+	assert.equal(service.parseMemoBlock(["- 12:00:00"], 0), null);
+});
+
 test("parses a three-line memo block with tags and links", () => {
 	const parsed = service.parseMemoBlock(
 		[
@@ -307,6 +334,13 @@ test("appends blockId to the last effective line of a multiline memo block", () 
 	assert.equal(
 		service.appendBlockIdToMemoBlock("- 12:00:00 第一行\n  第二行\n  ", "abc123"),
 		"- 12:00:00 第一行\n  第二行 ^abc123\n  ",
+	);
+});
+
+test("appends blockId to list-leading memo content", () => {
+	assert.equal(
+		service.buildMemoBlockWithBlockId("- 第一项\n- 第二项", "12:00:00", "abc123"),
+		"- 12:00:00\n  - 第一项\n  - 第二项 ^abc123",
 	);
 });
 

@@ -55,6 +55,9 @@ export interface InsertMemoBlockOptions {
 export class MarkdownBlockService {
 	buildMemoBlock(content: string, time: string): string {
 		const lines = splitMarkdownLines(content);
+		if (shouldDetachFirstContentLine(lines[0] ?? "")) {
+			return [`- ${time}`, ...lines.map((line) => indentMemoContinuationLine(line))].join("\n");
+		}
 		const firstLine = lines[0] ?? "";
 		const blockLines = [`- ${time} ${firstLine}`];
 		for (const line of lines.slice(1)) {
@@ -118,15 +121,18 @@ export class MarkdownBlockService {
 			return null;
 		}
 
-		const startMatch = firstLine.match(/^- (\d{2}:\d{2}(?::\d{2})?) (.*)$/);
+		const startMatch = firstLine.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/);
 		if (!startMatch) {
 			return null;
 		}
 
 		const contentLines: string[] = [];
-		const firstContent = extractTrailingBlockId(startMatch[2]);
+		const firstContentText = startMatch[2] ?? "";
+		const firstContent = extractTrailingBlockId(firstContentText);
 		let blockId = firstContent.blockId;
-		contentLines.push(firstContent.text);
+		if (startMatch[2] !== undefined || blockId !== null) {
+			contentLines.push(firstContent.text);
+		}
 
 		let endLine = startLine;
 		for (let lineIndex = startLine + 1; lineIndex < lines.length; lineIndex += 1) {
@@ -136,6 +142,9 @@ export class MarkdownBlockService {
 			}
 			contentLines.push(line.replace(/^ {2,}/, ""));
 			endLine = lineIndex;
+		}
+		if (contentLines.length === 0) {
+			return null;
 		}
 
 		const lastEffectiveLineIndex = findLastEffectiveLineIndex(contentLines);
@@ -335,8 +344,12 @@ export class MarkdownBlockService {
 	}
 }
 
+function shouldDetachFirstContentLine(line: string): boolean {
+	return /^(\s*)(?:[-*+]\s+|\d+[.)]\s+)/.test(line);
+}
+
 function extractMemoTime(block: string): string | null {
-	return block.match(/^- (\d{2}:\d{2}(?::\d{2})?) /)?.[1] ?? null;
+	return block.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: |\n|$)/)?.[1] ?? null;
 }
 
 type PickMatch =

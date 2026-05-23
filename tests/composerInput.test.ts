@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../src/utils/composerInput";
+import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchAfterNativeNewline, getListEnterPatchForNativeInput, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../src/utils/composerInput";
 import { parseMemoTags } from "../src/utils/markdown";
 
 test("inserts a spaced hash after existing content", () => {
@@ -79,6 +79,10 @@ test("continues and exits Markdown bullet lists", () => {
 		value: "- abc\n",
 		cursor: 6,
 	});
+	assert.deepEqual(getListEnterPatch("- ", 2, 2), {
+		value: "",
+		cursor: 0,
+	});
 	assert.deepEqual(getListEnterPatch("-", 1, 1), {
 		value: "",
 		cursor: 0,
@@ -108,6 +112,62 @@ test("continues and exits Markdown ordered lists", () => {
 	});
 	assert.equal(getListEnterPatch("plain", 5, 5), null);
 	assert.equal(getListEnterPatch("- hello", 0, 7), null);
+});
+
+test("corrects native newline insertion in Markdown bullet lists", () => {
+	assert.deepEqual(getListEnterPatchAfterNativeNewline("- abc\n", 6, 6), {
+		value: "- abc\n- ",
+		cursor: 8,
+	});
+	assert.deepEqual(getListEnterPatchAfterNativeNewline("- abc\n- \n", 9, 9), {
+		value: "- abc\n",
+		cursor: 6,
+	});
+	assert.deepEqual(getListEnterPatchAfterNativeNewline("- \n", 3, 3), {
+		value: "",
+		cursor: 0,
+	});
+	assert.equal(getListEnterPatchAfterNativeNewline("plain\n", 6, 6), null);
+});
+
+test("corrects native newline insertion in Markdown ordered lists", () => {
+	assert.deepEqual(getListEnterPatchAfterNativeNewline("1. abc\n", 7, 7), {
+		value: "1. abc\n2. ",
+		cursor: 10,
+	});
+	assert.deepEqual(getListEnterPatchAfterNativeNewline("1. abc\n2. \n", 11, 11), {
+		value: "1. abc\n",
+		cursor: 7,
+	});
+	assert.equal(getListEnterPatchAfterNativeNewline("1. abc\n", 0, 7), null);
+});
+
+test("corrects list Enter when keyboard inputType is not reliable", () => {
+	assert.deepEqual(getListEnterPatchForNativeInput("- abc", "- abc\n", 6, 6), {
+		value: "- abc\n- ",
+		cursor: 8,
+	});
+	assert.deepEqual(getListEnterPatchForNativeInput("- ", "- \n", 3, 3), {
+		value: "",
+		cursor: 0,
+	});
+	assert.equal(getListEnterPatchForNativeInput("- abc", "- abc\nextra", 6, 6), null);
+});
+
+test("corrects mobile list Enter when candidate confirmation and newline share one input", () => {
+	assert.equal(getListEnterPatchForNativeInput("- ni", "- 你好\n", 5, 5), null);
+	assert.deepEqual(getListEnterPatchForNativeInput("- ni", "- 你好\n", 5, 5, {
+		allowTextChangeWithNewline: true,
+	}), {
+		value: "- 你好\n- ",
+		cursor: 7,
+	});
+	assert.deepEqual(getListEnterPatchForNativeInput("- item\n-", "- item\n- \n", 10, 10, {
+		allowTextChangeWithNewline: true,
+	}), {
+		value: "- item\n",
+		cursor: 7,
+	});
 });
 
 test("parses tags at content and line starts", () => {

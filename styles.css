@@ -13,7 +13,12 @@ body {
 
 .knomo-plugin {
 	--knomo-sidebar-width: 248px;
+	--knomo-sidebar-content-gap: 10px;
 	--knomo-content-max-width: 720px;
+	--knomo-mobile-drawer-padding-left: max(16px, env(safe-area-inset-left));
+	--knomo-mobile-drawer-reserved-right: calc(75px + env(safe-area-inset-right));
+	--knomo-mobile-drawer-width: min(360px, calc(100vw - var(--knomo-mobile-drawer-reserved-right)));
+	--knomo-mobile-drawer-top: max(44px, var(--header-height, calc(44px + env(safe-area-inset-top))));
 	--knomo-touch-target: 44px;
 	--knomo-radius: 10px;
 
@@ -162,6 +167,15 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	display: inline-flex;
 }
 
+.knomo-plugin.is-layout-mobile .knomo-desktop-only,
+.knomo-plugin.is-layout-mobile .knomo-desktop-scope-popover {
+	display: none !important;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-mobile-only {
+	display: flex;
+}
+
 /* ---- Layout: desktop-wide (default) ---- */
 /* topbar visible, compact-header hidden, composer inline, no FAB */
 
@@ -229,7 +243,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	width: var(--knomo-sidebar-width);
 	min-width: var(--knomo-sidebar-width);
 	max-width: calc(100vw - 48px);
-	padding: 0 14px 0 0;
+	padding: 8px 14px 16px 20px;
 	border-radius: 0 var(--knomo-radius) var(--knomo-radius) 0;
 	background-color: var(--knomo-page-background);
 	box-shadow: var(--shadow-l);
@@ -291,6 +305,15 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	background-color: var(--knomo-page-background);
 }
 
+.knomo-plugin.is-layout-desktop-wide .knomo-shell {
+	justify-content: center;
+	gap: var(--knomo-sidebar-content-gap);
+}
+
+.knomo-plugin.is-layout-desktop-wide.is-sidebar-collapsed .knomo-shell {
+	gap: 0;
+}
+
 .knomo-plugin .knomo-shell,
 .knomo-plugin .knomo-main,
 .knomo-plugin .knomo-content-column,
@@ -345,7 +368,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	flex-basis: var(--knomo-sidebar-width);
 	width: var(--knomo-sidebar-width);
 	min-width: var(--knomo-sidebar-width);
-	padding: 0 14px 0 0;
+	padding: 8px 14px 16px 20px;
 }
 
 /* Sidebar header / brand */
@@ -389,6 +412,11 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 
 .knomo-plugin .knomo-sidebar-header:hover .knomo-sidebar-actions,
 .knomo-plugin .knomo-sidebar-header:focus-within .knomo-sidebar-actions {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-sidebar-actions {
 	opacity: 1;
 	pointer-events: auto;
 }
@@ -677,21 +705,21 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 /* ---- Sidebar — mobile: floating drawer ---- */
 .knomo-plugin.is-layout-mobile .knomo-sidebar {
 	position: fixed;
-	top: 20px;
-	left: 16px;
-	bottom: 20px;
+	top: var(--knomo-mobile-drawer-top);
+	left: 0;
+	bottom: 0;
 	z-index: 60;
-	flex-basis: min(var(--knomo-sidebar-width), calc(100vw - 48px));
-	width: min(var(--knomo-sidebar-width), calc(100vw - 48px));
-	min-width: min(var(--knomo-sidebar-width), calc(100vw - 48px));
-	max-width: calc(100vw - 48px);
-	padding: 16px 14px 0 0;
+	flex-basis: var(--knomo-mobile-drawer-width);
+	width: var(--knomo-mobile-drawer-width);
+	min-width: var(--knomo-mobile-drawer-width);
+	max-width: var(--knomo-mobile-drawer-width);
+	padding: 16px 14px max(16px, env(safe-area-inset-bottom)) var(--knomo-mobile-drawer-padding-left);
 	border: 0;
-	border-radius: var(--knomo-radius);
+	border-radius: 0 var(--knomo-radius) 0 0;
 	background-color: var(--knomo-page-background);
 	box-shadow: var(--shadow-l);
 	opacity: 0;
-	transform: translateX(calc(-100% - 16px));
+	transform: translateX(-100%);
 	visibility: hidden;
 	pointer-events: none;
 	overflow: hidden auto;
@@ -748,6 +776,16 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	overflow: hidden;
 }
 
+.knomo-plugin.is-layout-desktop-wide .knomo-main {
+	flex: 0 1 var(--knomo-content-max-width);
+	width: var(--knomo-content-max-width);
+	max-width: calc(100% - var(--knomo-sidebar-width) - var(--knomo-sidebar-content-gap));
+}
+
+.knomo-plugin.is-layout-desktop-wide.is-sidebar-collapsed .knomo-main {
+	max-width: var(--knomo-content-max-width);
+}
+
 .knomo-plugin .knomo-content-column {
 	display: flex;
 	flex: 1;
@@ -762,7 +800,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 }
 
 .knomo-plugin.is-layout-desktop-wide .knomo-content-column {
-	padding: 0 16px 0;
+	padding: 0 16px 0 0;
 }
 
 /* Content column — desktop-medium / desktop-narrow: full-width, tighter padding */
@@ -2124,22 +2162,6 @@ body .knomo-mobile-create-fab.is-hidden {
    13. Mobile / Tablet (≤ 768px)
    -------------------------------------------------------------------------- */
 @media (max-width: 768px) {
-	/* Visibility helpers — mobile layout only */
-	.knomo-plugin.is-layout-mobile .knomo-desktop-only,
-	.knomo-plugin.is-layout-mobile .knomo-desktop-scope-popover {
-		display: none !important;
-	}
-
-	.knomo-plugin.is-layout-mobile .knomo-mobile-only {
-		display: flex;
-	}
-
-	/* Sidebar actions always visible in mobile drawer */
-	.knomo-plugin.is-layout-mobile .knomo-sidebar-actions {
-		opacity: 1;
-		pointer-events: auto;
-	}
-
 	/* Mobile compact mode */
 	.knomo-plugin.is-mobile-compact .knomo-card {
 		padding: var(--size-4-2) var(--size-4-3);

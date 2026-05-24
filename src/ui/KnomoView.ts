@@ -162,7 +162,7 @@ export class KnomoView extends ItemView {
 	private memos: MemoRecord[] = [];
 	private cardFlowError: string | null = null;
 	private allMemosLoaded = false;
-	private allMemosLoadingPromise: Promise<void> | null = null;
+	private allMemosLoadingPromise: Promise<boolean> | null = null;
 	private scopeFilter: ScopeFilter = "all";
 	private searchQuery = "";
 	private activeTag: string | null = null;
@@ -314,11 +314,23 @@ export class KnomoView extends ItemView {
 			await this.loadTrashMemos();
 			return;
 		}
+		await this.waitForAllMemosLoading();
 		await this.reloadMemos(this.allMemosLoaded);
 		void this.refreshTrashCount(false);
 		if (this.activeNav === "random") {
 			await this.refreshRandomReunionMemos();
 		}
+	}
+
+	async preloadAllMemosAfterImport(): Promise<boolean> {
+		this.updateStatus("正在载入全部 Memos...", false);
+		const loaded = await this.ensureAllMemosLoaded(true);
+		if (!loaded) {
+			this.updateStatus("导入完成，但全部 Memos 载入失败，可稍后刷新。", true);
+			return false;
+		}
+		this.updateStatus("已载入全部 Memos。", false);
+		return true;
 	}
 
 	private async render(): Promise<void> {
@@ -751,7 +763,8 @@ export class KnomoView extends ItemView {
 		return searchInput;
 	}
 
-	private async reloadMemos(loadAll: boolean): Promise<void> {
+	private async reloadMemos(loadAll: boolean): Promise<boolean> {
+		let loaded = false;
 		try {
 			this.memos = loadAll
 				? await this.syncOrchestrator.listMemos()
@@ -764,6 +777,7 @@ export class KnomoView extends ItemView {
 			if (this.activeNav === "random" && !this.randomReunionLoading) {
 				this.randomReunionMemos = null;
 			}
+			loaded = true;
 		} catch (error) {
 			this.memos = [];
 			this.invalidateMemoSearchCache();
@@ -774,6 +788,7 @@ export class KnomoView extends ItemView {
 		if (this.activeNav === "random" && !this.randomReunionLoading && this.randomReunionMemos === null) {
 			void this.refreshRandomReunionMemos();
 		}
+		return loaded;
 	}
 
 	private renderUiState(): void {
@@ -2025,6 +2040,7 @@ export class KnomoView extends ItemView {
 		if (this.activeNav === "trash") {
 			await this.loadTrashMemos();
 		} else {
+			await this.waitForAllMemosLoading();
 			await this.reloadMemos(this.allMemosLoaded);
 			void this.refreshTrashCount(false);
 		}
@@ -3130,18 +3146,23 @@ export class KnomoView extends ItemView {
 		});
 	}
 
-	private async ensureAllMemosLoaded(): Promise<void> {
-		if (this.allMemosLoaded) {
-			return;
+	private async ensureAllMemosLoaded(forceReload = false): Promise<boolean> {
+		if (this.allMemosLoaded && !forceReload) {
+			return true;
 		}
 		if (this.allMemosLoadingPromise !== null) {
-			await this.allMemosLoadingPromise;
-			return;
+			return this.allMemosLoadingPromise;
 		}
 		this.allMemosLoadingPromise = this.reloadMemos(true).finally(() => {
 			this.allMemosLoadingPromise = null;
 		});
-		await this.allMemosLoadingPromise;
+		return this.allMemosLoadingPromise;
+	}
+
+	private async waitForAllMemosLoading(): Promise<void> {
+		if (this.allMemosLoadingPromise !== null) {
+			await this.allMemosLoadingPromise;
+		}
 	}
 
 	private resetVisibleMemos(): void {

@@ -391,6 +391,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.legacyImportRunning = true;
 		button.setDisabled(true);
 		button.setButtonText("预览中...");
+		this.legacyImportPreview = null;
+		this.legacyImportGroupsEl?.empty();
 		this.renderLegacyImportStatus("正在预览旧日记 Memos...");
 		try {
 			this.legacyImportPreview = await this.syncOrchestrator.previewLegacyDailyMemos(this.legacyImportScope);
@@ -470,6 +472,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			new Notice("请选择要导入的分组。");
 			return;
 		}
+		let importCompleted = false;
 		this.legacyImportRunning = true;
 		button.disabled = true;
 		button.setText("导入中...");
@@ -481,10 +484,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 			await this.addLegacyDailyHeadings(result.importedHeadings);
 			await this.renderIssueList();
-			await this.refreshOpenKnomoViews();
-			const message = `导入完成：新增 ${result.imported} 条，跳过 ${result.skipped} 条，失败 ${result.failed} 条。`;
+			const message = `导入完成：新增 ${result.imported} 条，失败 ${result.failed} 条，导入的数据已有 ${result.skipped} 条在 Knomo。`;
 			const errors = result.errors.map(formatSettingsText);
+			this.legacyImportPreview = null;
+			this.legacyImportGroupsEl.empty();
 			this.renderLegacyImportStatus(errors.length > 0 ? `${message}\n${errors.join("\n")}` : message, result.failed > 0);
+			importCompleted = true;
+			void this.preloadAllMemosInOpenKnomoViewsAfterImport();
 			if (result.failed > 0) {
 				new Notice(`导入失败：${result.failed} 条 Memos 未导入`);
 			}
@@ -494,8 +500,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 			new Notice(message);
 		} finally {
 			this.legacyImportRunning = false;
-			button.disabled = false;
-			button.setText("导入所选分组");
+			if (!importCompleted) {
+				button.disabled = false;
+				button.setText("导入所选分组");
+			}
 		}
 	}
 
@@ -594,6 +602,29 @@ export class KnomoSettingTab extends PluginSettingTab {
 			}
 		});
 		await Promise.all(refreshes);
+	}
+
+	private async preloadAllMemosInOpenKnomoViewsAfterImport(): Promise<void> {
+		let failed = false;
+		try {
+			const preloads = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
+				if (!(leaf.view instanceof KnomoView)) {
+					return true;
+				}
+				try {
+					return await leaf.view.preloadAllMemosAfterImport();
+				} catch {
+					return false;
+				}
+			});
+			const results = await Promise.all(preloads);
+			failed = results.some((loaded) => !loaded);
+		} catch {
+			failed = true;
+		}
+		if (failed) {
+			new Notice("导入完成，但全部 Memos 载入失败，可稍后刷新。");
+		}
 	}
 
 	private async renderIssueList(): Promise<void> {

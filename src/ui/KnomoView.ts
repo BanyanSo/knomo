@@ -153,6 +153,8 @@ export class KnomoView extends ItemView {
 	private desktopSearchInputEl: HTMLInputElement | null = null;
 	private compactInlineSearchInputEl: HTMLInputElement | null = null;
 	private compactSearchInputEl: HTMLInputElement | null = null;
+	private mobileMenuHeaderActionEl: HTMLElement | null = null;
+	private mobileSearchHeaderActionEl: HTMLElement | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
 	private mobileVisualViewport: VisualViewport | null = null;
 	private mobileVisualViewportHandler: (() => void) | null = null;
@@ -287,6 +289,7 @@ export class KnomoView extends ItemView {
 		this.pendingMobileListEnterCorrection = null;
 		this.stopMobileViewportTracking();
 		this.removeMobileComposerLayer();
+		this.removeMobileHeaderActions();
 		this.stopDateChangeWatcher();
 		this.stopLayoutObserver();
 		this.disconnectLoadMoreObserver();
@@ -854,6 +857,7 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-mobile-compact", shouldUseMobileCompact(this.settingsService.getSettings().mobileCompactMode));
 		root.style.setProperty("--knomo-sidebar-width", `${this.sidebarWidth}px`);
 		this.syncTooltipState(root);
+		this.syncMobileHeaderActions();
 		const shouldTrackMobileViewport = this.currentLayout === "mobile"
 			&& this.composerOpen
 			&& (this.mobileComposerPhase === "focusing" || this.mobileComposerPhase === "open");
@@ -869,6 +873,70 @@ export class KnomoView extends ItemView {
 		this.rootEl?.findAll("[aria-expanded]").forEach((element) => {
 			if (element.getAttr("data-action") === "toggle-scope-menu") {
 				element.setAttr("aria-expanded", this.scopeMenuOpen ? "true" : "false");
+			}
+		});
+	}
+
+	private syncMobileHeaderActions(): void {
+		if (this.currentLayout === "mobile") {
+			this.ensureMobileHeaderActions();
+			return;
+		}
+		this.removeMobileHeaderActions();
+	}
+
+	private ensureMobileHeaderActions(): void {
+		if (this.mobileMenuHeaderActionEl === null || !this.mobileMenuHeaderActionEl.isConnected) {
+			this.mobileMenuHeaderActionEl?.remove();
+			this.mobileMenuHeaderActionEl = this.addAction("menu", "打开 Knomo 菜单", () => this.openMobileHeaderDrawer());
+			this.mobileMenuHeaderActionEl.addClass("knomo-mobile-header-action");
+			this.mobileMenuHeaderActionEl.setAttr("aria-label", "打开 Knomo 菜单");
+		}
+		if (this.mobileSearchHeaderActionEl === null || !this.mobileSearchHeaderActionEl.isConnected) {
+			this.mobileSearchHeaderActionEl?.remove();
+			this.mobileSearchHeaderActionEl = this.addAction("search", "搜索 Knomo", () => this.openMobileHeaderSearch());
+			this.mobileSearchHeaderActionEl.addClass("knomo-mobile-header-action");
+			this.mobileSearchHeaderActionEl.setAttr("aria-label", "搜索 Knomo");
+		}
+	}
+
+	private removeMobileHeaderActions(): void {
+		this.mobileMenuHeaderActionEl?.remove();
+		this.mobileMenuHeaderActionEl = null;
+		this.mobileSearchHeaderActionEl?.remove();
+		this.mobileSearchHeaderActionEl = null;
+	}
+
+	private openMobileHeaderDrawer(): void {
+		if (this.composerOpen) {
+			this.closeComposerKeepingDraft();
+		}
+		this.mobileDrawerOpen = true;
+		this.syncRootState();
+	}
+
+	private openMobileHeaderSearch(): void {
+		this.mobileDrawerOpen = false;
+		this.scopeMenuOpen = false;
+		this.compactSearchOpen = true;
+		this.desktopSearchOpen = true;
+		this.syncRootState();
+		this.focusCompactSearchInputSoon();
+	}
+
+	private focusCompactSearchInputSoon(): void {
+		this.containerEl.win.requestAnimationFrame(() => {
+			const input = this.compactSearchInputEl;
+			if (input === null || !input.isConnected) {
+				return;
+			}
+			try {
+				input.focus({ preventScroll: true });
+			} catch {
+				input.focus();
+			}
+			if (isDateScope(this.scopeFilter) && this.searchQuery.length === 0) {
+				input.select();
 			}
 		});
 	}

@@ -1,6 +1,8 @@
 import { Platform, setIcon } from "obsidian";
 import type { EventRef, ItemView } from "obsidian";
 
+import { KNOMO_SIDEBAR_MENU_ICON } from "../icons";
+
 interface MobileNavbarCompactControllerOptions {
 	isActive: () => boolean;
 	isComposerOpen: () => boolean;
@@ -306,7 +308,7 @@ export class MobileNavbarCompactController {
 					"aria-label": "打开或收起 Knomo 侧栏",
 				},
 			});
-			setIcon(this.sidebarButtonEl, "panel-left");
+			setIcon(this.sidebarButtonEl, KNOMO_SIDEBAR_MENU_ICON);
 			this.sidebarButtonEl.addEventListener("click", this.handleSidebarButtonClick);
 		}
 		for (const duplicate of this.doc.body.findAll(`.${SIDEBAR_ACTION_CLASS}`)) {

@@ -15,6 +15,7 @@ import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SettingsService } from "./services/SettingsService";
 import { SyncOrchestrator } from "./services/SyncOrchestrator";
 import type { ScanDailyMemosResult } from "./services/MemoScanService";
+import { KNOMO_LOGO_ICON, registerKnomoIcons } from "./icons";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
@@ -25,6 +26,7 @@ export default class KnomoPlugin extends Plugin {
 	manualRefreshPromise: Promise<ScanDailyMemosResult> | null = null;
 
 	async onload(): Promise<void> {
+		registerKnomoIcons();
 		this.settingsService = new SettingsService(this);
 		await this.loadSettingsSafely();
 		const markdownBlockService = new MarkdownBlockService();
@@ -71,7 +73,7 @@ export default class KnomoPlugin extends Plugin {
 			defaultMod: false,
 		});
 
-		this.addRibbonIcon("sticky-note", "Open Knomo", () => {
+		this.addRibbonIcon(KNOMO_LOGO_ICON, "Open Knomo", () => {
 			void this.activateView();
 		});
 

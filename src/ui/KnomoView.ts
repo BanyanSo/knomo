@@ -2,6 +2,7 @@ import { AbstractInputSuggest, getAllTags, ItemView, Keymap, MarkdownRenderer, N
 import type { App, HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
+import { KNOMO_LOGO_ICON, KNOMO_SEARCH_ICON, KNOMO_SIDEBAR_MENU_ICON } from "../icons";
 import type { RandomReunionService } from "../services/RandomReunionService";
 import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
@@ -266,7 +267,7 @@ export class KnomoView extends ItemView {
 	}
 
 	getIcon(): string {
-		return "sticky-note";
+		return KNOMO_LOGO_ICON;
 	}
 
 	async onOpen(): Promise<void> {
@@ -380,7 +381,7 @@ export class KnomoView extends ItemView {
 		const header = sidebar.createDiv({ cls: "knomo-sidebar-header" });
 		const brand = header.createDiv({ cls: "knomo-brand" });
 		brand.createDiv({ cls: "knomo-brand-title", text: "Knomo" });
-		brand.createDiv({ cls: "knomo-brand-subtitle", text: "记下 Memos，便是光阴" });
+		brand.createDiv({ cls: "knomo-brand-subtitle", text: "当下念想，潺潺光阴" });
 		const actions = header.createDiv({ cls: "knomo-sidebar-actions" });
 		this.createIconButton(actions, "bar-chart-3", "统计", "knomo-sidebar-action", "focus-stats");
 		this.createIconButton(actions, "refresh-cw", "刷新", "knomo-sidebar-action", "refresh");
@@ -441,7 +442,7 @@ export class KnomoView extends ItemView {
 
 	private renderDesktopTopbar(main: HTMLElement): void {
 		const topbar = main.createDiv({ cls: "knomo-topbar" });
-		this.createIconButton(topbar, "panel-left-open", "显示侧栏", "knomo-sidebar-toggle", "toggle-sidebar");
+		this.createIconButton(topbar, KNOMO_SIDEBAR_MENU_ICON, "显示侧栏", "knomo-sidebar-toggle", "toggle-sidebar");
 
 		const scopeWrap = topbar.createDiv({ cls: "knomo-scope-wrap" });
 		const scopeButton = scopeWrap.createEl("button", {
@@ -462,7 +463,7 @@ export class KnomoView extends ItemView {
 		}
 
 		const searchWrap = topbar.createDiv({ cls: "knomo-search-wrap" });
-		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), "search");
+		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
 		const desktopSearchLabelId = this.createHiddenText(searchWrap, "desktop-search-label", "搜索");
 		this.desktopSearchInputEl = searchWrap.createEl("input", {
 			cls: "knomo-search-input",
@@ -692,7 +693,7 @@ export class KnomoView extends ItemView {
 
 	private renderCompactHeader(main: HTMLElement): void {
 		const header = main.createDiv({ cls: "knomo-compact-header" });
-		this.createIconButton(header, "menu", "菜单", "knomo-compact-menu-btn", "open-drawer");
+		this.createIconButton(header, KNOMO_SIDEBAR_MENU_ICON, "菜单", "knomo-compact-menu-btn", "open-drawer");
 
 		const titleButton = header.createEl("button", {
 			cls: "knomo-compact-title",
@@ -708,17 +709,17 @@ export class KnomoView extends ItemView {
 		setIcon(titleButton.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
 
 		const inlineSearchWrap = header.createDiv({ cls: "knomo-compact-search-wrap knomo-compact-inline-search" });
-		setIcon(inlineSearchWrap.createSpan({ cls: "knomo-search-icon" }), "search");
+		setIcon(inlineSearchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
 		this.compactInlineSearchInputEl = this.createCompactSearchInput(inlineSearchWrap, "compact-inline-search-label");
 		this.renderSearchPopover(inlineSearchWrap);
 
-		this.createIconButton(header, "search", "搜索", "knomo-compact-search-btn", "toggle-compact-search");
+		this.createIconButton(header, KNOMO_SEARCH_ICON, "搜索", "knomo-compact-search-btn", "toggle-compact-search");
 	}
 
 	private renderCompactSearchPanel(main: HTMLElement): void {
 		const panel = main.createDiv({ cls: "knomo-compact-search-panel" });
 		const searchWrap = panel.createDiv({ cls: "knomo-compact-search-wrap" });
-		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), "search");
+		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
 		this.compactSearchInputEl = this.createCompactSearchInput(searchWrap, "compact-search-label");
 		this.renderSearchPopover(searchWrap);
 	}
@@ -884,7 +885,7 @@ export class KnomoView extends ItemView {
 	private ensureMobileHeaderActions(): void {
 		if (this.mobileSearchHeaderActionEl === null || !this.mobileSearchHeaderActionEl.isConnected) {
 			this.mobileSearchHeaderActionEl?.remove();
-			this.mobileSearchHeaderActionEl = this.addAction("search", "搜索 Knomo", () => this.openMobileHeaderSearch());
+			this.mobileSearchHeaderActionEl = this.addAction(KNOMO_SEARCH_ICON, "搜索 Knomo", () => this.openMobileHeaderSearch());
 			this.mobileSearchHeaderActionEl.addClass("knomo-mobile-header-action");
 			this.mobileSearchHeaderActionEl.setAttr("aria-label", "搜索 Knomo");
 		}
@@ -1254,7 +1255,7 @@ export class KnomoView extends ItemView {
 		const stats = getMemoStats(this.memos);
 		for (const statsEl of this.statsEls) {
 			statsEl.empty();
-			this.renderStat(statsEl, String(stats.memoCount), "内容");
+			this.renderStat(statsEl, String(stats.memoCount), "笔记");
 			this.renderStat(statsEl, String(stats.tagCount), "标签");
 			this.renderStat(statsEl, stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount), stats.imageCount > 0 ? "图片" : "字数");
 		}

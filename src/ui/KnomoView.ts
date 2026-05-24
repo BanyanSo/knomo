@@ -555,10 +555,10 @@ export class KnomoView extends ItemView {
 		const tools = composerBar.createDiv({ cls: "knomo-tool-group" });
 		this.registerDomEvent(tools, "pointerdown", (event) => this.handleComposerToolPointerDown(event));
 		this.registerDomEvent(tools, "mousedown", (event) => this.handleComposerToolPointerDown(event));
-		this.createIconButton(tools, "hash", "插入标签", "knomo-tool-button", "insert-tag");
-		this.createIconButton(tools, "image", "插入图片", "knomo-tool-button", "insert-image");
-		this.createIconButton(tools, "list", "插入列表", "knomo-tool-button", "insert-list");
-		this.createIconButton(tools, "list-ordered", "插入编号列表", "knomo-tool-button", "insert-numbered-list");
+		this.createIconButton(tools, "hash", "插入标签", "knomo-tool-button", "insert-tag", false);
+		this.createIconButton(tools, "image", "插入图片", "knomo-tool-button", "insert-image", false);
+		this.createIconButton(tools, "list", "插入列表", "knomo-tool-button", "insert-list", false);
+		this.createIconButton(tools, "list-ordered", "插入编号列表", "knomo-tool-button", "insert-numbered-list", false);
 		const actions = composerBar.createDiv({ cls: "knomo-composer-actions" });
 		this.cancelEditButtonEl = actions.createEl("button", {
 			cls: "knomo-cancel-edit-button",
@@ -578,7 +578,6 @@ export class KnomoView extends ItemView {
 				type: "button",
 				"aria-label": "发送",
 				"data-action": "save-input",
-				"data-tooltip-position": "top",
 			},
 		});
 		setIcon(this.sendButtonEl, "send");
@@ -625,6 +624,7 @@ export class KnomoView extends ItemView {
 		ariaLabel: string,
 		cls: string,
 		action: string,
+		showTooltip = true,
 	): HTMLButtonElement {
 		const button = container.createEl("button", {
 			cls,
@@ -632,11 +632,37 @@ export class KnomoView extends ItemView {
 				type: "button",
 				"aria-label": ariaLabel,
 				"data-action": action,
-				"data-tooltip-position": "top",
 			},
 		});
+		if (showTooltip) {
+			this.setTooltipIfDesktopOnly(button);
+		}
 		setIcon(button, icon);
 		return button;
+	}
+
+	private setTooltipIfDesktopOnly(element: HTMLElement): void {
+		if (this.currentLayout === "mobile") {
+			element.removeAttribute("data-tooltip-position");
+			return;
+		}
+		element.setAttr("data-tooltip-position", "top");
+	}
+
+	private syncTooltipState(root: HTMLElement): void {
+		if (this.currentLayout === "mobile") {
+			for (const container of [root, this.mobileComposerLayerEl]) {
+				for (const element of container?.findAll("[data-tooltip-position]") ?? []) {
+					element.removeAttribute("data-tooltip-position");
+				}
+			}
+			return;
+		}
+		for (const element of root.findAll(
+			".knomo-sidebar-action, .knomo-sidebar-toggle, .knomo-compact-menu-btn, .knomo-compact-search-btn, .knomo-reference-clear",
+		)) {
+			this.setTooltipIfDesktopOnly(element);
+		}
 	}
 
 	private getA11yId(name: string): string {
@@ -794,9 +820,9 @@ export class KnomoView extends ItemView {
 						type: "button",
 						"aria-label": "清除引用",
 						"data-action": "clear-reference",
-						"data-tooltip-position": "top",
 					},
 				});
+				this.setTooltipIfDesktopOnly(clearButton);
 				setIcon(clearButton, "x");
 				this.referencePreviewEl.style.display = "flex";
 			} else {
@@ -827,6 +853,7 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-compact-search-open", this.compactSearchOpen);
 		root.toggleClass("is-mobile-compact", shouldUseMobileCompact(this.settingsService.getSettings().mobileCompactMode));
 		root.style.setProperty("--knomo-sidebar-width", `${this.sidebarWidth}px`);
+		this.syncTooltipState(root);
 		const shouldTrackMobileViewport = this.currentLayout === "mobile"
 			&& this.composerOpen
 			&& (this.mobileComposerPhase === "focusing" || this.mobileComposerPhase === "open");
@@ -1241,7 +1268,6 @@ export class KnomoView extends ItemView {
 					"aria-label": collapsed ? "展开标签组" : "收起标签组",
 					"aria-expanded": collapsed ? "false" : "true",
 					"data-tag-toggle": tag.name,
-					"data-tooltip-position": "top",
 				},
 			});
 			setIcon(toggle, "chevron-down");
@@ -1494,7 +1520,6 @@ export class KnomoView extends ItemView {
 				"data-memo-id": memo.id,
 			},
 		});
-		menu.setAttr("data-tooltip-position", "top");
 		setIcon(menu, "more-horizontal");
 
 		const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });

@@ -108,6 +108,15 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
 	font: inherit;
 }
 
+.knomo-plugin.is-layout-mobile,
+.knomo-mobile-composer-layer,
+.knomo-plugin .knomo-tag-toggle,
+.knomo-plugin .knomo-tool-button,
+.knomo-plugin .knomo-send-button,
+.knomo-plugin .knomo-card-menu {
+	--no-tooltip: true;
+}
+
 .knomo-plugin .knomo-visually-hidden {
 	position: absolute;
 	width: 1px;

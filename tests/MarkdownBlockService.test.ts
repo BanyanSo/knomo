@@ -1848,7 +1848,6 @@ test("legacy daily memo import skips duplicates and preserves root daily refs", 
 	const result = await orchestrator.importLegacyDailyMemos({
 		scope: "all",
 		selectedGroupKeys: ["root", "heading:## Memos", "heading:## 随手记"],
-		appendBlockIds: false,
 	});
 
 	const rootMemo = importedMemos.find((memo) => memo.dailyRef.sectionType === "root");
@@ -1862,7 +1861,7 @@ test("legacy daily memo import skips duplicates and preserves root daily refs", 
 	assert.deepEqual(monthlyBlocks, ["- 07:00 root memo", "- 10:00 other memo"]);
 });
 
-test("legacy daily memo import can append Obsidian block IDs without writing memo IDs", async () => {
+test("legacy daily memo import preserves existing Obsidian block IDs without mutating daily markdown", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
 	const file = Object.assign(new TFile(), {
@@ -1870,7 +1869,7 @@ test("legacy daily memo import can append Obsidian block IDs without writing mem
 		basename: "2026-05-18",
 		extension: "md",
 	});
-	let content = "## Memos\n- 09:00 imported memo";
+	const content = "## Memos\n- 09:00 imported memo\n- 10:00 existing memo ^abc123";
 	const importedMemos: MemoRecord[] = [];
 	const monthlyBlocks: string[] = [];
 	const orchestrator = new SyncOrchestrator(
@@ -1878,9 +1877,8 @@ test("legacy daily memo import can append Obsidian block IDs without writing mem
 			vault: {
 				getMarkdownFiles: () => [file],
 				cachedRead: async () => content,
-				process: async (_file: unknown, callback: (currentContent: string) => string) => {
-					content = callback(content);
-					return content;
+				process: async () => {
+					throw new Error("旧导入不应修改日记文件。");
 				},
 			},
 		} as never,
@@ -1901,7 +1899,7 @@ test("legacy daily memo import can append Obsidian block IDs without writing mem
 						lastKnownBlock: block,
 						lastKnownHash: hashText(block),
 						lineNumberHint: 1,
-						lastSyncedAt: "2026-05-18T09:00:00.000+08:00",
+						lastSyncedAt: "2026-05-18T10:00:00.000+08:00",
 					},
 				};
 			},
@@ -1920,15 +1918,15 @@ test("legacy daily memo import can append Obsidian block IDs without writing mem
 	const result = await orchestrator.importLegacyDailyMemos({
 		scope: "all",
 		selectedGroupKeys: ["heading:## Memos"],
-		appendBlockIds: true,
 	});
 
-	const importedMemo = importedMemos[0];
-	assert.equal(result.imported, 1);
-	assert.match(content, /^## Memos\n- 09:00 imported memo \^[a-z0-9]{6}$/);
-	assert.equal(content.includes(importedMemo.id), false);
-	assert.equal(importedMemo.dailyRef.lastKnownBlock, monthlyBlocks[0]);
-	assert.match(importedMemo.dailyRef.lastKnownBlock, /\^[a-z0-9]{6}$/);
+	const missingBlockIdMemo = importedMemos.find((memo) => memo.contentSnapshot === "imported memo");
+	const existingBlockIdMemo = importedMemos.find((memo) => memo.contentSnapshot === "existing memo");
+	assert.equal(result.imported, 2);
+	assert.equal(content, "## Memos\n- 09:00 imported memo\n- 10:00 existing memo ^abc123");
+	assert.deepEqual(monthlyBlocks, ["- 09:00 imported memo", "- 10:00 existing memo ^abc123"]);
+	assert.equal(missingBlockIdMemo?.dailyRef.lastKnownBlock, "- 09:00 imported memo");
+	assert.equal(existingBlockIdMemo?.dailyRef.lastKnownBlock, "- 10:00 existing memo ^abc123");
 });
 
 async function loadDailyNotesProvider(): Promise<typeof import("../src/services/DailyNotesProvider")> {

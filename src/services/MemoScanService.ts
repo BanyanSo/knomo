@@ -74,7 +74,6 @@ export interface LegacyDailyMemosPreview {
 export interface LegacyDailyMemosImportOptions {
 	scope: LegacyDailyMemosImportScope;
 	selectedGroupKeys: string[];
-	appendBlockIds: boolean;
 }
 
 export interface LegacyDailyMemosImportResult extends ScanDailyMemosResult {
@@ -176,10 +175,7 @@ export class MemoScanService {
 						result.skipped += 1;
 						continue;
 					}
-					const block = options.appendBlockIds
-						? await this.ensureLegacyBlockId(candidate, opId)
-						: candidate.block;
-					const savedMemo = await this.importLegacyCandidate(settings, candidate, block, createMemoId, opId, result);
+					const savedMemo = await this.importLegacyCandidate(settings, candidate, candidate.block, createMemoId, opId, result);
 					existingMemos.push(savedMemo);
 					if (candidate.heading !== null) {
 						importedHeadings.add(candidate.heading);
@@ -659,58 +655,6 @@ export class MemoScanService {
 			.map((candidate) => candidate.block);
 	}
 
-	private async ensureLegacyBlockId(candidate: LegacyMemoCandidate, opId: string): Promise<ParsedMemoBlock> {
-		if (candidate.block.blockId !== null) {
-			return candidate.block;
-		}
-
-		let lineNumber = candidate.block.startLine + 1;
-		let changed = false;
-		const content = await this.app.vault.process(candidate.file, (currentContent) => {
-			const location = this.markdownBlockService.findMemoBlock(currentContent, {
-				lineNumberHint: candidate.block.startLine + 1,
-				lastKnownBlock: candidate.block.rawBlock,
-				lastKnownHash: hashText(candidate.block.rawBlock),
-				contentHash: candidate.block.contentHash,
-				allowLineHintTimeMatch: true,
-			}, "daily_block_missing");
-			if (location.parsedBlock === null) {
-				throw new Error(`无法定位旧日记中的 memo：${candidate.path}:${candidate.block.startLine + 1}`);
-			}
-			lineNumber = location.parsedBlock.startLine + 1;
-			if (location.parsedBlock.blockId !== null) {
-				return currentContent;
-			}
-
-			const blockId = createUniqueBlockId(currentContent);
-			const nextBlock = this.markdownBlockService.appendBlockIdToMemoBlock(location.parsedBlock.rawBlock, blockId);
-			const lines = splitMarkdownLines(currentContent);
-			lines.splice(
-				location.parsedBlock.startLine,
-				location.parsedBlock.endLine - location.parsedBlock.startLine + 1,
-				...splitMarkdownLines(nextBlock),
-			);
-			changed = true;
-			return lines.join("\n");
-		});
-		if (changed) {
-			this.selfWriteTracker.mark(candidate.path, {
-				opId,
-				path: candidate.path,
-				reason: "scan",
-				writtenAt: Date.now(),
-				expiresAt: Date.now() + 10000,
-				expectedHash: hashText(content),
-			});
-		}
-
-		const parsedBlock = this.markdownBlockService.parseMemoBlock(splitMarkdownLines(content), lineNumber - 1);
-		if (parsedBlock === null) {
-			throw new Error(`无法确认已导入 memo 的 blockId：${candidate.path}:${lineNumber}`);
-		}
-		return parsedBlock;
-	}
-
 	private async importLegacyCandidate(
 		settings: KnomoSettings,
 		candidate: LegacyMemoCandidate,
@@ -1019,37 +963,4 @@ function isDuplicateLegacyCandidate(
 		}
 	}
 	return false;
-}
-
-const BLOCK_ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
-
-function createUniqueBlockId(content: string): string {
-	const existingIds = extractBlockIds(content);
-	for (let attempt = 0; attempt < 1000; attempt += 1) {
-		const blockId = createBlockId();
-		if (!existingIds.has(blockId)) {
-			return blockId;
-		}
-	}
-	throw new Error("无法生成唯一 blockId。");
-}
-
-function createBlockId(): string {
-	let blockId = "";
-	for (let index = 0; index < 6; index += 1) {
-		const charIndex = Math.min(Math.floor(Math.random() * BLOCK_ID_CHARS.length), BLOCK_ID_CHARS.length - 1);
-		blockId += BLOCK_ID_CHARS[charIndex];
-	}
-	return blockId;
-}
-
-function extractBlockIds(content: string): Set<string> {
-	const ids = new Set<string>();
-	const regex = /(?:^|[^A-Za-z0-9_-])\^([A-Za-z0-9_-]+)/g;
-	let match = regex.exec(content);
-	while (match !== null) {
-		ids.add(match[1]);
-		match = regex.exec(content);
-	}
-	return ids;
 }

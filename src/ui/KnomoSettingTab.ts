@@ -1,7 +1,13 @@
 import { Notice, PluginSettingTab, Setting } from "obsidian";
 import type { App, ButtonComponent, Plugin, ToggleComponent } from "obsidian";
 
-import { DEFAULT_MONTHLY_MEMO_FOLDER, KNOMO_VIEW_TYPE } from "../constants";
+import {
+	DEFAULT_DAILY_HEADING,
+	DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
+	DEFAULT_MONTHLY_MEMO_FILE_FORMAT,
+	DEFAULT_MONTHLY_MEMO_FOLDER,
+	KNOMO_VIEW_TYPE,
+} from "../constants";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
 import type { RebuildIndexMode, RebuildIndexScope, SyncOrchestrator } from "../services/SyncOrchestrator";
@@ -17,7 +23,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private legacyImportGroupsEl: HTMLElement | null = null;
 	private legacyImportPreview: LegacyDailyMemosPreview | null = null;
 	private legacyImportScope: LegacyDailyMemosImportScope = "90d";
-	private legacyImportAppendBlockIds = false;
 	private legacyImportRunning = false;
 	private rebuildResultEl: HTMLElement | null = null;
 	private monthlyExcludeStatusEl: HTMLElement | null = null;
@@ -43,9 +48,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("写入标题")
-			.setDesc("Memos 会写入当天日记中的这个标题下，例如 ## Knomo。")
+			.setDesc(`Memos 会写入当天日记中的这个标题下，例如 ${DEFAULT_DAILY_HEADING}。`)
 			.addText((text) => {
-				text.setPlaceholder("## Knomo");
+				text.setPlaceholder(DEFAULT_DAILY_HEADING);
 				text.setValue(settings.dailyHeading);
 				text.onChange((value) => {
 					void this.saveDailyHeading(value);
@@ -107,9 +112,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.monthlyExcludeStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
 		new Setting(containerEl)
 			.setName("月度 Memos 文件名格式")
-			.setDesc("设置自动生成的月度 Memos 文件名格式，例如 Memos-YYYY-MM.md。")
+			.setDesc(`设置自动生成的月度 Memos 文件名格式，例如 ${DEFAULT_MONTHLY_MEMO_FILE_FORMAT}。`)
 			.addText((text) => {
-				text.setPlaceholder("Memos-YYYY-MM.md");
+				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
 				text.setValue(settings.monthlyMemoFileFormat);
 				text.onChange((value) => {
 					void this.settingsService.updateSettings({ monthlyMemoFileFormat: value.trim() });
@@ -117,9 +122,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 		new Setting(containerEl)
 			.setName("日期标题格式")
-			.setDesc("设置月度 Memos 文件中每天分组标题的格式，例如 ## YYYY-MM-DD。")
+			.setDesc(`设置月度 Memos 文件中每天分组标题的格式，例如 ${DEFAULT_MONTHLY_DATE_HEADING_FORMAT}。`)
 			.addText((text) => {
-				text.setPlaceholder("## YYYY-MM-DD");
+				text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
 				text.setValue(settings.monthlyDateHeadingFormat);
 				text.onChange((value) => {
 					void this.saveMonthlyDateHeadingFormat(value);
@@ -160,15 +165,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 				button.setButtonText("开始预览");
 				button.onClick(() => {
 					void this.runLegacyImportPreview(button);
-				});
-			});
-		new Setting(containerEl)
-			.setName("为导入的 Memos 添加 Obsidian block ID，提升后续同步稳定性")
-			.setDesc("默认关闭。开启后只会给缺少块 ID 的导入项追加 Obsidian block ID；这会轻微修改旧日记文件，不会写入 Memos ID。")
-			.addToggle((toggle) => {
-				toggle.setValue(this.legacyImportAppendBlockIds);
-				toggle.onChange((value) => {
-					this.legacyImportAppendBlockIds = value;
 				});
 			});
 		this.legacyImportResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
@@ -482,7 +478,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 			const result = await this.syncOrchestrator.importLegacyDailyMemos({
 				scope: this.legacyImportScope,
 				selectedGroupKeys,
-				appendBlockIds: this.legacyImportAppendBlockIds,
 			});
 			await this.addLegacyDailyHeadings(result.importedHeadings);
 			await this.renderIssueList();

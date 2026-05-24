@@ -11,12 +11,14 @@ test("migrates monthly files, system folder, monthlyRef paths, exclude rule, and
 		"Memos/Memos-2026-05.md": "# 2026-05\n\n## 2026-05-18\n- 08:00:00 内容",
 		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/Memos-2026-05.md"), null, "\t"),
 	});
-	vault.config.userIgnoreFilters = ["Memos/"];
+	vault.config.userIgnoreFilters = ["Memos/", "Memos/_knomo-system/"];
 	const plugin = createPlugin(vault, {
 		...createSettings(),
 		excludeMonthlyMemosFromObsidian: true,
 		managedObsidianExcludeRule: "Memos/",
 		managedObsidianExcludeRuleOwned: true,
+		managedSystemFolderExcludeRule: "Memos/_knomo-system/",
+		managedSystemFolderExcludeRuleOwned: true,
 	});
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
@@ -30,9 +32,10 @@ test("migrates monthly files, system folder, monthlyRef paths, exclude rule, and
 	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md").startsWith("<!--\nKnomo 月度归档文件"), true);
 	const index = JSON.parse(vault.readText("Archive/Memos/_knomo-system/indexes/memo-index-2026-05.json")) as ReturnType<typeof createIndex>;
 	assert.equal(index.memos.memo1.monthlyRef.path, "Archive/Memos/Memos-2026-05.md");
-	assert.deepEqual(vault.config.userIgnoreFilters, ["Archive/Memos/"]);
+	assert.deepEqual(vault.config.userIgnoreFilters, ["Archive/Memos/", "Archive/Memos/_knomo-system/"]);
 	assert.equal(vault.listPaths().some((path) => path.includes("_knomo-system/backups/monthly-folder-")), true);
 	assert.equal(plugin.savedSettings?.monthlyMemoFolder, "Archive/Memos");
+	assert.equal(plugin.savedSettings?.managedSystemFolderExcludeRule, "Archive/Memos/_knomo-system/");
 });
 
 test("stops monthly folder migration on target path conflicts without moving old data", async () => {
@@ -50,6 +53,61 @@ test("stops monthly folder migration on target path conflicts without moving old
 	assert.equal(vault.exists("Memos/Memos-2026-05.md"), true);
 	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md"), "conflict");
 	assert.equal(plugin.savedSettings, null);
+});
+
+test("initializes system folder exclude rule without duplicates", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const vault = await createMemoryVault({});
+	const plugin = createPlugin(vault, createSettings());
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeSystemFolders();
+	await service.initializeSystemFolders();
+
+	assert.equal(vault.exists("Memos/_knomo-system/indexes"), true);
+	assert.deepEqual(vault.config.userIgnoreFilters, ["Memos/_knomo-system/"]);
+	assert.equal(plugin.savedSettings?.managedSystemFolderExcludeRule, "Memos/_knomo-system/");
+	assert.equal(plugin.savedSettings?.managedSystemFolderExcludeRuleOwned, true);
+});
+
+test("rejects monthly memo file formats with path separators", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const vault = await createMemoryVault({});
+	const plugin = createPlugin(vault, {
+		...createSettings(),
+		monthlyMemoFileFormat: "YYYY/Memos-YYYY-MM.md",
+	});
+	const service = new SettingsService(plugin as never);
+
+	const settings = await service.loadSettings();
+
+	assert.equal(settings.monthlyMemoFileFormat, "Memos-YYYY-MM.md");
+	assert.equal(service.validateMonthlyMemoFileFormat("Memos-YYYY-MM.md"), true);
+	assert.equal(service.validateMonthlyMemoFileFormat("YYYY/Memos-YYYY-MM.md"), false);
+	assert.equal(service.validateMonthlyMemoFileFormat("YYYY\\Memos-YYYY-MM.md"), false);
+});
+
+test("restores monthly files and indexes when migration save fails", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const originalMonthlyContent = "# 2026-05\n\n## 2026-05-18\n- 08:00:00 内容";
+	const vault = await createMemoryVault({
+		"Memos/Memos-2026-05.md": originalMonthlyContent,
+		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/Memos-2026-05.md"), null, "\t"),
+	});
+	const plugin = createPlugin(vault, createSettings(), { failSaveData: true });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await assert.rejects(() => service.migrateMonthlyMemoFolder("Archive/Memos"), /保存设置失败/);
+
+	assert.equal(vault.exists("Memos/Memos-2026-05.md"), true);
+	assert.equal(vault.exists("Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
+	assert.equal(vault.exists("Archive/Memos/Memos-2026-05.md"), false);
+	assert.equal(vault.readText("Memos/Memos-2026-05.md"), originalMonthlyContent);
+	const restoredIndex = JSON.parse(vault.readText("Memos/_knomo-system/indexes/memo-index-2026-05.json")) as ReturnType<typeof createIndex>;
+	assert.equal(restoredIndex.memos.memo1.monthlyRef.path, "Memos/Memos-2026-05.md");
+	assert.deepEqual(vault.config.userIgnoreFilters, []);
 });
 
 async function loadSettingsService(): Promise<typeof import("../src/services/SettingsService")> {
@@ -155,12 +213,19 @@ async function createMemoryVault(initialFiles: Record<string, string>) {
 	};
 }
 
-function createPlugin(vault: Awaited<ReturnType<typeof createMemoryVault>>, settings: KnomoSettings) {
+function createPlugin(
+	vault: Awaited<ReturnType<typeof createMemoryVault>>,
+	settings: KnomoSettings,
+	options: { failSaveData?: boolean } = {},
+) {
 	const plugin = {
 		app: { vault },
 		savedSettings: null as KnomoSettings | null,
 		loadData: async () => ({ settings }),
 		saveData: async (data: { settings: KnomoSettings }) => {
+			if (options.failSaveData === true) {
+				throw new Error("保存设置失败");
+			}
 			plugin.savedSettings = data.settings;
 		},
 	};
@@ -184,6 +249,7 @@ function createSettings(): KnomoSettings {
 		desktopSidebarCollapsed: false,
 		excludeMonthlyMemosFromObsidian: false,
 		managedObsidianExcludeRuleOwned: false,
+		managedSystemFolderExcludeRuleOwned: false,
 		pinnedTags: [],
 	};
 }

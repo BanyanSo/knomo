@@ -18,7 +18,7 @@ body {
 	--knomo-mobile-drawer-padding-left: max(16px, env(safe-area-inset-left));
 	--knomo-mobile-drawer-reserved-right: calc(75px + env(safe-area-inset-right));
 	--knomo-mobile-drawer-width: min(360px, calc(100vw - var(--knomo-mobile-drawer-reserved-right)));
-	--knomo-mobile-drawer-top: max(44px, var(--header-height, calc(44px + env(safe-area-inset-top))));
+	--knomo-mobile-drawer-top: max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px));
 	--knomo-touch-target: 44px;
 	--knomo-radius: 10px;
 
@@ -744,7 +744,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 /* Drawer backdrop — mobile */
 .knomo-plugin.is-layout-mobile .knomo-drawer-backdrop {
 	position: fixed;
-	inset: 0;
+	inset: var(--knomo-mobile-drawer-top) 0 0;
 	z-index: 50;
 	background: var(--background-modifier-cover);
 	opacity: 0;

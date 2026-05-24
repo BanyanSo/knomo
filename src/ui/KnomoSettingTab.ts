@@ -117,7 +117,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
 				text.setValue(settings.monthlyMemoFileFormat);
 				text.onChange((value) => {
-					void this.settingsService.updateSettings({ monthlyMemoFileFormat: value.trim() });
+					void this.saveMonthlyMemoFileFormat(value);
 				});
 			});
 		new Setting(containerEl)
@@ -225,6 +225,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return;
 		}
 		await this.settingsService.updateSettings({ monthlyDateHeadingFormat: nextFormat });
+	}
+
+	private async saveMonthlyMemoFileFormat(value: string): Promise<void> {
+		const nextFormat = value.trim();
+		if (!this.settingsService.validateMonthlyMemoFileFormat(nextFormat)) {
+			new Notice("月度 Memos 文件名格式不能包含路径分隔符。");
+			return;
+		}
+		await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
 	}
 
 	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<void> {
@@ -490,7 +499,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			this.legacyImportGroupsEl.empty();
 			this.renderLegacyImportStatus(errors.length > 0 ? `${message}\n${errors.join("\n")}` : message, result.failed > 0);
 			importCompleted = true;
-			void this.preloadAllMemosInOpenKnomoViewsAfterImport();
+			void this.reloadAllMemosInOpenKnomoViewsAfterImport();
 			if (result.failed > 0) {
 				new Notice(`导入失败：${result.failed} 条 Memos 未导入`);
 			}
@@ -604,7 +613,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		await Promise.all(refreshes);
 	}
 
-	private async preloadAllMemosInOpenKnomoViewsAfterImport(): Promise<void> {
+	private async reloadAllMemosInOpenKnomoViewsAfterImport(): Promise<void> {
 		let failed = false;
 		try {
 			const preloads = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
@@ -612,7 +621,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 					return true;
 				}
 				try {
-					return await leaf.view.preloadAllMemosAfterImport();
+					return await leaf.view.reloadAllMemosAfterImport();
 				} catch {
 					return false;
 				}

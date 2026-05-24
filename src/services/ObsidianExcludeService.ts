@@ -1,5 +1,7 @@
 import type { App } from "obsidian";
 
+import { getSystemFolderPath } from "../utils/path";
+
 interface VaultConfigAccess {
 	getConfig?: (key: string) => unknown;
 	setConfig?: (key: string, value: unknown) => Promise<void> | void;
@@ -60,7 +62,15 @@ export class ObsidianExcludeService {
 }
 
 export function buildMonthlyFolderExcludeRule(monthlyMemoFolder: string): string | null {
-	const folder = monthlyMemoFolder
+	return buildFolderExcludeRule(monthlyMemoFolder);
+}
+
+export function buildSystemFolderExcludeRule(monthlyMemoFolder: string): string {
+	return `${getSystemFolderPath(monthlyMemoFolder)}/`;
+}
+
+function buildFolderExcludeRule(folderPath: string): string | null {
+	const folder = folderPath
 		.trim()
 		.replace(/\\/g, "/")
 		.replace(/\/+/g, "/")

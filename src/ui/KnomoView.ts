@@ -71,6 +71,11 @@ const INITIAL_VISIBLE_RENDER_COUNT = 16;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
 const SEARCH_DEBOUNCE_MS = 220;
 const MOBILE_COMPOSER_TOP_GUARD = 52;
+const MOBILE_VIEW_HEADER_SELECTORS = [
+	".workspace-leaf.mod-active .view-header",
+	".mod-active .view-header",
+	".view-header",
+];
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "all", label: "全部笔记", icon: "layout-list" },
@@ -166,7 +171,7 @@ export class KnomoView extends ItemView {
 	private scopeFilter: ScopeFilter = "all";
 	private searchQuery = "";
 	private activeTag: string | null = null;
-	private collapsedTagGroups = new Set<string>();
+	private expandedTagGroups = new Set<string>();
 	private activeNav: SidebarNav = "all";
 	private sidebarCollapsed = false;
 	private sidebarWidth = 248;
@@ -322,7 +327,7 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	async preloadAllMemosAfterImport(): Promise<boolean> {
+	async reloadAllMemosAfterImport(): Promise<boolean> {
 		this.updateStatus("正在载入全部 Memos...", false);
 		const loaded = await this.ensureAllMemosLoaded(true);
 		if (!loaded) {
@@ -385,7 +390,7 @@ export class KnomoView extends ItemView {
 		});
 
 		this.syncRootState();
-		await this.reloadMemos(false);
+		await this.ensureAllMemosLoaded(true);
 		void this.refreshTrashCount(false);
 	}
 
@@ -869,6 +874,7 @@ export class KnomoView extends ItemView {
 		root.style.setProperty("--knomo-sidebar-width", `${this.sidebarWidth}px`);
 		this.syncTooltipState(root);
 		this.syncMobileHeaderActions();
+		this.syncMobileDrawerTop(root);
 		const shouldTrackMobileViewport = this.currentLayout === "mobile"
 			&& this.composerOpen
 			&& (this.mobileComposerPhase === "focusing" || this.mobileComposerPhase === "open");
@@ -887,6 +893,49 @@ export class KnomoView extends ItemView {
 			}
 		});
 		this.mobileNavbarCompactController?.sync();
+	}
+
+	private syncMobileDrawerTop(root: HTMLElement): void {
+		if (this.currentLayout !== "mobile") {
+			root.style.removeProperty("--knomo-mobile-drawer-top");
+			return;
+		}
+		const headerBottom = this.measureMobileHeaderBottom();
+		if (headerBottom === null) {
+			root.style.removeProperty("--knomo-mobile-drawer-top");
+			return;
+		}
+		root.style.setProperty("--knomo-mobile-drawer-top", `${headerBottom}px`);
+	}
+
+	private measureMobileHeaderBottom(): number | null {
+		const headerEl = this.findMobileViewHeader();
+		const rect = headerEl?.getBoundingClientRect();
+		if (
+			rect === undefined ||
+			rect.width <= 0 ||
+			rect.height <= 0 ||
+			rect.bottom <= 0 ||
+			rect.bottom > this.containerEl.win.innerHeight / 2
+		) {
+			return null;
+		}
+		return Math.ceil(rect.bottom);
+	}
+
+	private findMobileViewHeader(): HTMLElement | null {
+		const leafEl = this.containerEl.closest(".workspace-leaf");
+		const leafHeaderEl = leafEl?.querySelector(".view-header");
+		if (leafHeaderEl?.instanceOf(HTMLElement)) {
+			return leafHeaderEl;
+		}
+		for (const selector of MOBILE_VIEW_HEADER_SELECTORS) {
+			const headerEl = this.containerEl.doc.body.querySelector(selector);
+			if (headerEl?.instanceOf(HTMLElement)) {
+				return headerEl;
+			}
+		}
+		return null;
 	}
 
 	private syncMobileHeaderActions(): void {
@@ -1312,7 +1361,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderTagTreeNode(container: HTMLElement, tag: TagTreeNode): void {
-		const collapsed = this.collapsedTagGroups.has(tag.name);
+		const collapsed = tag.children.length > 0 && !this.expandedTagGroups.has(tag.name);
 		const node = container.createDiv({ cls: collapsed ? "knomo-tag-node is-collapsed" : "knomo-tag-node" });
 		const row = node.createDiv({ cls: "knomo-tag-row" });
 		const button = row.createEl("button", {
@@ -1700,10 +1749,10 @@ export class KnomoView extends ItemView {
 			if (tag === null) {
 				return;
 			}
-			if (this.collapsedTagGroups.has(tag)) {
-				this.collapsedTagGroups.delete(tag);
+			if (this.expandedTagGroups.has(tag)) {
+				this.expandedTagGroups.delete(tag);
 			} else {
-				this.collapsedTagGroups.add(tag);
+				this.expandedTagGroups.add(tag);
 			}
 			this.renderTags();
 			return;
@@ -2038,11 +2087,12 @@ export class KnomoView extends ItemView {
 	private async handleManualRefresh(): Promise<void> {
 		this.updateStatus("正在刷新…", false);
 		if (this.activeNav === "trash") {
+			this.updateStatus("正在刷新回收站…", false);
 			await this.loadTrashMemos();
-		} else {
-			await this.waitForAllMemosLoading();
-			await this.reloadMemos(this.allMemosLoaded);
-			void this.refreshTrashCount(false);
+			if (this.trashError === null) {
+				this.updateStatus("回收站已刷新", false);
+			}
+			return;
 		}
 		this.updateStatus("正在同步最近日记中的 Memos…", false);
 		try {

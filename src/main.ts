@@ -171,9 +171,7 @@ export default class KnomoPlugin extends Plugin {
 		}
 		this.manualRefreshPromise = this.syncOrchestrator.scanRecentDailyMemos(30, "manual_refresh")
 			.then(async (result) => {
-				if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
-					await this.refreshOpenViews();
-				}
+				await this.refreshOpenViews();
 				return result;
 			})
 			.finally(() => {

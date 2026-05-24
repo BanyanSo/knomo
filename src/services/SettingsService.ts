@@ -20,7 +20,7 @@ import type {
 	MonthlyDateOrder,
 } from "../types/settings";
 import { ensureReadOnlyComment } from "./MonthlyArchiveService";
-import { buildMonthlyFolderExcludeRule, ObsidianExcludeService } from "./ObsidianExcludeService";
+import { buildMonthlyFolderExcludeRule, buildSystemFolderExcludeRule, ObsidianExcludeService } from "./ObsidianExcludeService";
 import { isValidMarkdownHeading } from "../utils/markdown";
 import { isRecord } from "../utils/object";
 import { getIndexFolderPath, getSystemFolderPath, normalizeVaultPath } from "../utils/path";
@@ -44,6 +44,8 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	excludeMonthlyMemosFromObsidian: false,
 	managedObsidianExcludeRule: undefined,
 	managedObsidianExcludeRuleOwned: false,
+	managedSystemFolderExcludeRule: undefined,
+	managedSystemFolderExcludeRuleOwned: false,
 	pinnedTags: [],
 };
 
@@ -79,6 +81,10 @@ function optionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+export function isValidMonthlyMemoFileFormat(value: string): boolean {
+	return !/[\\/]/.test(value);
+}
+
 function stringArrayOrDefault(value: unknown, fallback: string[]): string[] {
 	if (!Array.isArray(value)) {
 		return [...fallback];
@@ -100,6 +106,10 @@ function normalizeSettings(value: Record<string, unknown>): KnomoSettings {
 	const monthlyDateOrder = isMonthlyDateOrder(merged.monthlyDateOrder)
 		? merged.monthlyDateOrder
 		: DEFAULT_KNOMO_SETTINGS.monthlyDateOrder;
+	const monthlyMemoFileFormat = stringOrDefault(
+		merged.monthlyMemoFileFormat,
+		DEFAULT_KNOMO_SETTINGS.monthlyMemoFileFormat,
+	);
 
 	return {
 		settingsVersion: SETTINGS_VERSION,
@@ -109,10 +119,9 @@ function normalizeSettings(value: Record<string, unknown>): KnomoSettings {
 		monthlyMemoFolder: normalizeVaultPath(
 			stringOrDefault(merged.monthlyMemoFolder, DEFAULT_KNOMO_SETTINGS.monthlyMemoFolder),
 		),
-		monthlyMemoFileFormat: stringOrDefault(
-			merged.monthlyMemoFileFormat,
-			DEFAULT_KNOMO_SETTINGS.monthlyMemoFileFormat,
-		),
+		monthlyMemoFileFormat: isValidMonthlyMemoFileFormat(monthlyMemoFileFormat)
+			? monthlyMemoFileFormat
+			: DEFAULT_KNOMO_SETTINGS.monthlyMemoFileFormat,
 		monthlyDateHeadingFormat: stringOrDefault(
 			merged.monthlyDateHeadingFormat,
 			DEFAULT_KNOMO_SETTINGS.monthlyDateHeadingFormat,
@@ -140,6 +149,11 @@ function normalizeSettings(value: Record<string, unknown>): KnomoSettings {
 		managedObsidianExcludeRuleOwned: booleanOrDefault(
 			merged.managedObsidianExcludeRuleOwned,
 			DEFAULT_KNOMO_SETTINGS.managedObsidianExcludeRuleOwned ?? false,
+		),
+		managedSystemFolderExcludeRule: optionalString(merged.managedSystemFolderExcludeRule),
+		managedSystemFolderExcludeRuleOwned: booleanOrDefault(
+			merged.managedSystemFolderExcludeRuleOwned,
+			DEFAULT_KNOMO_SETTINGS.managedSystemFolderExcludeRuleOwned ?? false,
 		),
 		pinnedTags: stringArrayOrDefault(merged.pinnedTags, DEFAULT_KNOMO_SETTINGS.pinnedTags),
 	};
@@ -193,8 +207,19 @@ export class SettingsService {
 		return isValidMarkdownHeading(value);
 	}
 
+	validateMonthlyMemoFileFormat(value: string): boolean {
+		return isValidMonthlyMemoFileFormat(value);
+	}
+
 	async initializeSystemFolders(): Promise<void> {
 		await ensureFolder(this.plugin.app, getIndexFolderPath(this.settings.monthlyMemoFolder));
+		const systemExcludeState = await this.updateSystemFolderExcludeRule(this.settings.monthlyMemoFolder);
+		if (this.hasSystemExcludeStateChanged(systemExcludeState)) {
+			await this.saveSettings({
+				...this.settings,
+				...systemExcludeState,
+			});
+		}
 	}
 
 	async migrateMonthlyMemoFolder(nextMonthlyMemoFolder: string): Promise<SystemFolderMigrationResult> {
@@ -214,8 +239,10 @@ export class SettingsService {
 		}
 
 		const movedPaths: Array<{ from: string; to: string }> = [];
+		let backupPath: string | null = null;
+		const originalExcludeRules = new ObsidianExcludeService(this.plugin.app).getExcludeRules();
 		try {
-			await this.backupMonthlyMigrationPlan(plan);
+			backupPath = await this.backupMonthlyMigrationPlan(plan);
 			await ensureFolder(this.plugin.app, plan.newMonthlyMemoFolder);
 			for (const move of plan.monthlyFileMoves) {
 				const file = this.plugin.app.vault.getAbstractFileByPath(move.from);
@@ -246,10 +273,12 @@ export class SettingsService {
 
 			await this.rewriteMonthlyRefs(plan);
 			const excludeState = await this.updateExcludeRuleForMigration(plan);
+			const systemExcludeState = await this.updateSystemFolderExcludeRule(plan.newMonthlyMemoFolder);
 			await this.saveSettings({
 				...this.settings,
 				monthlyMemoFolder: plan.newMonthlyMemoFolder,
 				...excludeState,
+				...systemExcludeState,
 			});
 			return {
 				status: "migrated",
@@ -260,6 +289,10 @@ export class SettingsService {
 			};
 		} catch (error) {
 			await this.rollbackMonthlyMigration(movedPaths);
+			if (backupPath !== null) {
+				await this.restoreMonthlyMigrationBackup(plan, backupPath);
+			}
+			await this.restoreExcludeRules(originalExcludeRules);
 			throw error;
 		}
 	}
@@ -315,7 +348,7 @@ export class SettingsService {
 		return conflicts;
 	}
 
-	private async backupMonthlyMigrationPlan(plan: MonthlyFolderMigrationPlan): Promise<void> {
+	private async backupMonthlyMigrationPlan(plan: MonthlyFolderMigrationPlan): Promise<string> {
 		const backupRoot = normalizePath(`${plan.oldSystemPath}/backups/monthly-folder-${Date.now()}`);
 		const indexBackupRoot = normalizePath(`${backupRoot}/indexes`);
 		const monthlyBackupRoot = normalizePath(`${backupRoot}/monthly`);
@@ -335,6 +368,7 @@ export class SettingsService {
 				await this.copyFileToBackup(file, normalizePath(`${monthlyBackupRoot}/${file.name}`));
 			}
 		}
+		return backupRoot;
 	}
 
 	private async copyFileToBackup(file: TFile, backupPath: string): Promise<void> {
@@ -400,6 +434,85 @@ export class SettingsService {
 			managedObsidianExcludeRule: nextRule,
 			managedObsidianExcludeRuleOwned: this.settings.managedObsidianExcludeRuleOwned === true || result.addedByKnomo,
 		};
+	}
+
+	private async updateSystemFolderExcludeRule(monthlyMemoFolder: string): Promise<Partial<KnomoSettings>> {
+		const nextRule = buildSystemFolderExcludeRule(monthlyMemoFolder);
+		const previousRule = this.settings.managedSystemFolderExcludeRule;
+		const previousOwned = this.settings.managedSystemFolderExcludeRuleOwned === true;
+		try {
+			const excludeService = new ObsidianExcludeService(this.plugin.app);
+			const result = await excludeService.ensureRule(nextRule);
+			if (previousOwned && previousRule !== undefined && previousRule !== nextRule) {
+				await excludeService.removeRule(previousRule);
+			}
+			return {
+				managedSystemFolderExcludeRule: nextRule,
+				managedSystemFolderExcludeRuleOwned: previousRule === nextRule
+					? previousOwned || result.addedByKnomo
+					: result.addedByKnomo,
+			};
+		} catch {
+			return {};
+		}
+	}
+
+	private hasSystemExcludeStateChanged(state: Partial<KnomoSettings>): boolean {
+		return state.managedSystemFolderExcludeRule !== undefined && (
+			state.managedSystemFolderExcludeRule !== this.settings.managedSystemFolderExcludeRule ||
+			state.managedSystemFolderExcludeRuleOwned !== this.settings.managedSystemFolderExcludeRuleOwned
+		);
+	}
+
+	private async restoreMonthlyMigrationBackup(plan: MonthlyFolderMigrationPlan, backupRoot: string): Promise<void> {
+		await this.restoreIndexBackup(plan.oldMonthlyMemoFolder, backupRoot);
+		await this.restoreMonthlyFilesBackup(plan.oldMonthlyMemoFolder, backupRoot);
+	}
+
+	private async restoreIndexBackup(monthlyMemoFolder: string, backupRoot: string): Promise<void> {
+		const indexBackupFolder = this.plugin.app.vault.getAbstractFileByPath(normalizePath(`${backupRoot}/indexes`));
+		if (!(indexBackupFolder instanceof TFolder)) {
+			return;
+		}
+		const indexFolderPath = getIndexFolderPath(monthlyMemoFolder);
+		await ensureFolder(this.plugin.app, indexFolderPath);
+		for (const file of listMarkdownAndJsonFiles(indexBackupFolder)) {
+			const relativePath = file.path.slice(indexBackupFolder.path.length + 1);
+			await this.restoreFileFromBackup(file, normalizePath(`${indexFolderPath}/${relativePath}`));
+		}
+	}
+
+	private async restoreMonthlyFilesBackup(monthlyMemoFolder: string, backupRoot: string): Promise<void> {
+		const monthlyBackupFolder = this.plugin.app.vault.getAbstractFileByPath(normalizePath(`${backupRoot}/monthly`));
+		if (!(monthlyBackupFolder instanceof TFolder)) {
+			return;
+		}
+		for (const file of listMarkdownAndJsonFiles(monthlyBackupFolder)) {
+			const relativePath = file.path.slice(monthlyBackupFolder.path.length + 1);
+			await this.restoreFileFromBackup(file, normalizePath(`${monthlyMemoFolder}/${relativePath}`));
+		}
+	}
+
+	private async restoreFileFromBackup(backupFile: TFile, targetPath: string): Promise<void> {
+		const parentPath = getParentFolderPath(targetPath);
+		if (parentPath !== null) {
+			await ensureFolder(this.plugin.app, parentPath);
+		}
+		const content = await this.plugin.app.vault.cachedRead(backupFile);
+		const existing = this.plugin.app.vault.getAbstractFileByPath(targetPath);
+		if (existing instanceof TFile) {
+			await this.plugin.app.vault.process(existing, () => content);
+		} else {
+			await this.plugin.app.vault.create(targetPath, content);
+		}
+	}
+
+	private async restoreExcludeRules(rules: string[]): Promise<void> {
+		try {
+			await new ObsidianExcludeService(this.plugin.app).setExcludeRules(rules);
+		} catch {
+			// 排除规则只影响 Obsidian 展示范围，迁移失败时优先保证文件和索引已回滚。
+		}
 	}
 
 	private async rollbackMonthlyMigration(movedPaths: Array<{ from: string; to: string }>): Promise<void> {

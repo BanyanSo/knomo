@@ -16,6 +16,7 @@ import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage } from "../utils/markdown";
 import { buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
 import { formatSettingsText } from "./KnomoSettingTab";
+import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
 import { buildTagTree } from "../utils/tagTree";
 import type { TagSummary, TagTreeNode } from "../utils/tagTree";
 
@@ -153,7 +154,6 @@ export class KnomoView extends ItemView {
 	private desktopSearchInputEl: HTMLInputElement | null = null;
 	private compactInlineSearchInputEl: HTMLInputElement | null = null;
 	private compactSearchInputEl: HTMLInputElement | null = null;
-	private mobileMenuHeaderActionEl: HTMLElement | null = null;
 	private mobileSearchHeaderActionEl: HTMLElement | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
 	private mobileVisualViewport: VisualViewport | null = null;
@@ -236,6 +236,7 @@ export class KnomoView extends ItemView {
 	private mobileComposerHomeEl: HTMLElement | null = null;
 	private mobileComposerNextSibling: ChildNode | null = null;
 	private mobileComposerOpenScrollTop: number | null = null;
+	private mobileNavbarCompactController: MobileNavbarCompactController | null = null;
 	private renderGeneration = 0;
 
 	constructor(
@@ -271,11 +272,20 @@ export class KnomoView extends ItemView {
 	async onOpen(): Promise<void> {
 		this.contentEl.addClass("knomo-view-host");
 		await this.render();
+		this.mobileNavbarCompactController = new MobileNavbarCompactController(this, {
+			isActive: () => this.app.workspace.getActiveViewOfType(KnomoView) === this,
+			isComposerOpen: () => this.composerOpen,
+			toggleSidebar: () => this.toggleSidebar(),
+			openComposer: () => this.openComposer(),
+		});
+		this.mobileNavbarCompactController.start();
 		this.startLayoutObserver();
 		this.startDateChangeWatcher();
 	}
 
 	async onClose(): Promise<void> {
+		this.mobileNavbarCompactController?.stop();
+		this.mobileNavbarCompactController = null;
 		this.tagSuggest?.close();
 		this.tagSuggest = null;
 		this.clearSearchDebounce();
@@ -353,8 +363,6 @@ export class KnomoView extends ItemView {
 		this.registerDomEvent(this.cardFlowEl, "click", (event) => {
 			void this.handleMarkdownInternalLinkClick(event);
 		});
-
-		this.renderFab(root);
 
 		this.registerDomEvent(root, "click", (event) => {
 			void this.handleRootClick(event);
@@ -742,19 +750,6 @@ export class KnomoView extends ItemView {
 		return searchInput;
 	}
 
-	private renderFab(root: HTMLElement): void {
-		const fab = root.createDiv({ cls: "knomo-fab" });
-		const button = fab.createEl("button", {
-			cls: "knomo-fab-button",
-			attr: {
-				type: "button",
-				"data-action": "open-composer",
-			},
-		});
-		setIcon(button, "plus");
-		button.createSpan({ cls: "knomo-visually-hidden", text: "新建" });
-	}
-
 	private async reloadMemos(loadAll: boolean): Promise<void> {
 		try {
 			this.memos = loadAll
@@ -875,6 +870,7 @@ export class KnomoView extends ItemView {
 				element.setAttr("aria-expanded", this.scopeMenuOpen ? "true" : "false");
 			}
 		});
+		this.mobileNavbarCompactController?.sync();
 	}
 
 	private syncMobileHeaderActions(): void {
@@ -886,12 +882,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private ensureMobileHeaderActions(): void {
-		if (this.mobileMenuHeaderActionEl === null || !this.mobileMenuHeaderActionEl.isConnected) {
-			this.mobileMenuHeaderActionEl?.remove();
-			this.mobileMenuHeaderActionEl = this.addAction("menu", "打开 Knomo 菜单", () => this.openMobileHeaderDrawer());
-			this.mobileMenuHeaderActionEl.addClass("knomo-mobile-header-action");
-			this.mobileMenuHeaderActionEl.setAttr("aria-label", "打开 Knomo 菜单");
-		}
 		if (this.mobileSearchHeaderActionEl === null || !this.mobileSearchHeaderActionEl.isConnected) {
 			this.mobileSearchHeaderActionEl?.remove();
 			this.mobileSearchHeaderActionEl = this.addAction("search", "搜索 Knomo", () => this.openMobileHeaderSearch());
@@ -901,18 +891,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private removeMobileHeaderActions(): void {
-		this.mobileMenuHeaderActionEl?.remove();
-		this.mobileMenuHeaderActionEl = null;
 		this.mobileSearchHeaderActionEl?.remove();
 		this.mobileSearchHeaderActionEl = null;
-	}
-
-	private openMobileHeaderDrawer(): void {
-		if (this.composerOpen) {
-			this.closeComposerKeepingDraft();
-		}
-		this.mobileDrawerOpen = true;
-		this.syncRootState();
 	}
 
 	private openMobileHeaderSearch(): void {

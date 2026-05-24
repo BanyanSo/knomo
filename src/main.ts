@@ -16,6 +16,7 @@ import { SettingsService } from "./services/SettingsService";
 import { SyncOrchestrator } from "./services/SyncOrchestrator";
 import type { ScanDailyMemosResult } from "./services/MemoScanService";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
+import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
 
 export default class KnomoPlugin extends Plugin {
@@ -87,6 +88,10 @@ export default class KnomoPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			void this.initializeAfterLayoutSafely();
 		});
+	}
+
+	onunload(): void {
+		MobileNavbarCompactController.cleanupDocument(this.app.workspace.containerEl.doc);
 	}
 
 	async activateView(): Promise<void> {

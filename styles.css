@@ -1742,7 +1742,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 
 .knomo-plugin .knomo-card-time {
 	color: var(--text-faint);
-	font-size: 12px;
+	font-size: 13px;
 }
 
 .knomo-plugin .knomo-trash-actions {
@@ -1828,7 +1828,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: 13px;
+	font-size: 15px;
 	text-align: left;
 	cursor: pointer;
 }
@@ -1892,7 +1892,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-card-meta {
 	margin-top: 6px;
 	color: var(--text-faint);
-	font-size: 11px;
+	font-size: 12px;
 }
 
 .knomo-plugin .knomo-trash-meta {
@@ -1904,7 +1904,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-card-warning {
 	margin-top: 6px;
 	color: var(--text-error);
-	font-size: 11px;
+	font-size: 12px;
 }
 
 .knomo-plugin .knomo-source-reference p {
@@ -2146,7 +2146,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	}
 
 	.knomo-plugin.is-mobile-compact .knomo-card-content {
-		font-size: var(--font-ui-small);
+		font-size: 15px;
 	}
 }
 

@@ -328,13 +328,10 @@ export class KnomoView extends ItemView {
 	}
 
 	async reloadAllMemosAfterImport(): Promise<boolean> {
-		this.updateStatus("正在载入全部 Memos...", false);
 		const loaded = await this.ensureAllMemosLoaded(true);
 		if (!loaded) {
-			this.updateStatus("导入完成，但全部 Memos 载入失败，可稍后刷新。", true);
 			return false;
 		}
-		this.updateStatus("已载入全部 Memos。", false);
 		return true;
 	}
 
@@ -2017,7 +2014,6 @@ export class KnomoView extends ItemView {
 			this.renderUiState();
 		} catch (error) {
 			const message = formatSettingsText(error instanceof Error ? error.message : "操作失败");
-			this.updateStatus(message, true);
 			new Notice(message);
 			this.renderUiState();
 		}
@@ -2085,33 +2081,28 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleManualRefresh(): Promise<void> {
-		this.updateStatus("正在刷新…", false);
 		if (this.activeNav === "trash") {
-			this.updateStatus("正在刷新回收站…", false);
 			await this.loadTrashMemos();
 			if (this.trashError === null) {
-				this.updateStatus("回收站已刷新", false);
+				new Notice("回收站已刷新");
 			}
 			return;
 		}
-		this.updateStatus("正在同步最近日记中的 Memos…", false);
 		try {
 			const result = await this.onManualRefresh();
 			const failed = result.failed;
 			if (failed > 0) {
 				const message = `刷新失败：${failed} 个文件未同步`;
-				this.updateStatus(message, true);
 				new Notice(message);
 				return;
 			}
 			if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
-				this.updateStatus(`刷新完成：新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条`, false);
+				new Notice(`刷新完成：新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条`);
 				return;
 			}
-			this.updateStatus("已是最新", false);
+			new Notice("已是最新");
 		} catch (error) {
 			const message = formatSettingsText(error instanceof Error ? error.message : "刷新失败。");
-			this.updateStatus(message, true);
 			new Notice(message);
 		}
 	}
@@ -3291,7 +3282,7 @@ export class KnomoView extends ItemView {
 		} catch (error) {
 			this.trashMemos = [];
 			this.trashError = formatSettingsText(error instanceof Error ? error.message : "回收站加载失败");
-			this.updateStatus(this.trashError, true);
+			new Notice(this.trashError);
 		} finally {
 			this.trashLoading = false;
 			if (this.activeNav === "trash") {
@@ -3333,7 +3324,6 @@ export class KnomoView extends ItemView {
 			this.renderUiState();
 		} catch (error) {
 			const message = formatSettingsText(formatTrashActionErrorMessage(action, error));
-			this.updateStatus(message, true);
 			new Notice(message);
 			this.renderUiState();
 		} finally {
@@ -3359,7 +3349,7 @@ export class KnomoView extends ItemView {
 			);
 		} catch (error) {
 			this.randomReunionMemos = [];
-			this.updateStatus(formatSettingsText(error instanceof Error ? error.message : "随机重逢加载失败"), true);
+			new Notice(formatSettingsText(error instanceof Error ? error.message : "随机重逢加载失败"));
 		} finally {
 			this.randomReunionLoading = false;
 			if (this.activeNav === "random") {
@@ -3383,7 +3373,7 @@ export class KnomoView extends ItemView {
 			await this.app.workspace.openLinkText(memo.dailyRef.path, "", false, openState);
 			await this.randomReunionService.markRandomReunionReviewed(memo.id);
 		} catch (error) {
-			this.updateStatus(formatSettingsText(error instanceof Error ? error.message : "随机重逢打开失败"), true);
+			new Notice(formatSettingsText(error instanceof Error ? error.message : "随机重逢打开失败"));
 		}
 	}
 

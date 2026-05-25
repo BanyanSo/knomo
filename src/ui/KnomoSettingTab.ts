@@ -628,6 +628,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 			const results = await Promise.all(preloads);
 			failed = results.some((loaded) => !loaded);
+			if (results.length > 0 && !failed) {
+				new Notice("已载入全部 Memos。");
+			}
 		} catch {
 			failed = true;
 		}

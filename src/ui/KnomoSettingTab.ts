@@ -174,8 +174,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		let rebuildScope: RebuildIndexScope = "30d";
 		let rebuildMode: RebuildIndexMode = "index-only";
 		new Setting(containerEl)
-			.setName("重建索引")
-			.setDesc("高级修复功能：从 Daily Notes 重建 Knomo Index；可选择是否同时重新生成月度 Memos。重建前会估算并备份现有索引。")
+			.setName("修复 Knomo 数据")
+			.setDesc("从 Daily Notes 重新扫描 Memos，重建 Knomo 列表；也可以同步更新月度 Memos。开始前会自动备份。")
 			.addDropdown((dropdown) => {
 				dropdown.addOption("30d", "最近 30 天");
 				dropdown.addOption("90d", "最近 90 天");
@@ -186,21 +186,21 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			})
 			.addDropdown((dropdown) => {
-				dropdown.addOption("index-only", "仅重建 Index");
-				dropdown.addOption("index-and-monthly", "重建 Index 并重新生成 Monthly Memos");
+				dropdown.addOption("index-only", "只重建 Knomo 列表");
+				dropdown.addOption("index-and-monthly", "重建列表并同步月度 Memos");
 				dropdown.setValue(rebuildMode);
 				dropdown.onChange((value) => {
 					rebuildMode = value as RebuildIndexMode;
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText("开始重建");
+				button.setButtonText("开始修复");
 				button.onClick(() => {
 					void this.runRebuildIndex(rebuildScope, rebuildMode, button);
 				});
 			});
 		this.rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderRebuildResult("重建前会自动备份现有系统数据目录中的索引。");
+		this.renderRebuildResult("修复前会自动备份现有 Knomo 列表数据。");
 		this.issueListEl = containerEl.createDiv({ cls: "knomo-issue-list" });
 		void this.renderIssueList();
 	}
@@ -559,40 +559,40 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.rebuildRunning = true;
 		button.setDisabled(true);
-		button.setButtonText("预估中...");
+		button.setButtonText("检查中...");
 		try {
 			const estimate = await this.syncOrchestrator.estimateRebuildIndex(scope);
-			const monthlyModeText = mode === "index-and-monthly" ? "会重建 Monthly Memos" : "不会重建 Monthly Memos";
+			const monthlyModeText = mode === "index-and-monthly" ? "月度 Memos：同步更新" : "月度 Memos：仅处理缺失项";
 			const confirmed = this.containerEl.win.confirm(
-				`确认重建索引？\n\n扫描文件数：${estimate.scannedFiles}\n预计新增：${estimate.estimatedNew}\n预计更新：${estimate.estimatedUpdated}\n预计缺失：${estimate.estimatedMissing}\n${monthlyModeText}`,
+				`确认修复 Knomo 数据？\n\n扫描文件数：${estimate.scannedFiles}\n预计新增：${estimate.estimatedNew}\n预计更新：${estimate.estimatedUpdated}\n预计缺失：${estimate.estimatedMissing}\n${monthlyModeText}`,
 			);
 			if (!confirmed) {
-				this.renderRebuildResult("已取消重建。");
+				this.renderRebuildResult("已取消修复。");
 				return;
 			}
-			button.setButtonText("重建中...");
-			this.renderRebuildResult(`正在重建索引...\n${monthlyModeText}`);
+			button.setButtonText("修复中...");
+			this.renderRebuildResult(`正在修复 Knomo 数据...\n${monthlyModeText}`);
 			const result = await this.syncOrchestrator.rebuildIndex(scope, mode, (progress) => {
 				this.renderRebuildResult(
-					`正在重建索引：${progress.completedFiles}/${progress.scannedFiles} 个文件\n` +
+					`正在修复 Knomo 数据：${progress.completedFiles}/${progress.scannedFiles} 个文件\n` +
 						`新增 ${progress.created} 条，更新 ${progress.updated} 条，缺失 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
 						(progress.currentFile === null ? "" : `\n当前文件：${progress.currentFile}`),
 				);
 			});
-			const message = `重建完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，缺失 ${result.deleted} 条，跳过 ${result.skipped} 条。`;
-			const backup = result.backupPath === null ? "未发现现有索引可备份。" : `备份位置：${result.backupPath}`;
+			const message = `修复完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，缺失 ${result.deleted} 条，跳过 ${result.skipped} 条。`;
+			const backup = result.backupPath === null ? "未发现现有 Knomo 列表数据可备份。" : `备份位置：${result.backupPath}`;
 			this.renderRebuildResult(`${message}\n${backup}`);
 			await this.renderIssueList();
 			await this.refreshOpenKnomoViews();
-			new Notice("Knomo 索引重建完成");
+			new Notice("Knomo 数据修复完成");
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "重建索引失败。");
+			const message = formatSettingsText(error instanceof Error ? error.message : "修复 Knomo 数据失败。");
 			this.renderRebuildResult(message);
 			new Notice(message);
 		} finally {
 			this.rebuildRunning = false;
 			button.setDisabled(false);
-			button.setButtonText("开始重建");
+			button.setButtonText("开始修复");
 		}
 	}
 

@@ -2,7 +2,7 @@ import { AbstractInputSuggest, getAllTags, ItemView, Keymap, MarkdownRenderer, N
 import type { App, HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
-import { KNOMO_LOGO_ICON, KNOMO_RANDOM_REUNION_ICON, KNOMO_SEARCH_ICON, KNOMO_SIDEBAR_MENU_ICON } from "../icons";
+import { KNOMO_ALL_NOTES_ICON, KNOMO_LOGO_ICON, KNOMO_RANDOM_REUNION_ICON, KNOMO_SEARCH_ICON, KNOMO_SIDEBAR_MENU_ICON } from "../icons";
 import type { RandomReunionService } from "../services/RandomReunionService";
 import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
@@ -78,7 +78,7 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 ];
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
-	{ nav: "all", label: "全部笔记", icon: "layout-list" },
+	{ nav: "all", label: "全部笔记", icon: KNOMO_ALL_NOTES_ICON },
 	{ nav: "review", label: "今日之外", icon: "calendar-check" },
 	{ nav: "random", label: "随机重逢", icon: KNOMO_RANDOM_REUNION_ICON },
 ];
@@ -86,7 +86,7 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: "回收站", icon: "trash-2" };
 
 const MAIN_SCOPE_OPTIONS: ScopeOption[] = [
-	{ filter: "all", label: "全部笔记", icon: "layout-list" },
+	{ filter: "all", label: "全部笔记", icon: KNOMO_ALL_NOTES_ICON },
 	{ filter: "week", label: "本周", icon: "calendar-days" },
 	{ filter: "month", label: "本月", icon: "calendar-range" },
 	{ filter: "no-tag", label: "无标签", icon: "tag" },

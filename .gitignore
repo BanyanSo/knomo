@@ -1,6 +1,13 @@
 
 .DS_Store
 **/.DS_Store
+
+node_modules/
+.npm-cache/
+.pnpm-store/
+.corepack/
+.obsidian/
+
 AGENTS.md
 CLAUDE.md
 knomo-assets/

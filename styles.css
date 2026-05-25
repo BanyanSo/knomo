@@ -21,6 +21,9 @@ body {
 	--knomo-mobile-drawer-top: max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px));
 	--knomo-touch-target: 44px;
 	--knomo-radius: 10px;
+	--knomo-dropdown-width: 168px;
+	--knomo-title-popover-left: max(16px, env(safe-area-inset-left));
+	--knomo-title-popover-top: max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px));
 
 	/* Surfaces — derived from Obsidian theme */
 	--knomo-page-background: var(--knomo-app-background-secondary);
@@ -49,7 +52,7 @@ body {
 
 	/* Typography */
 	position: relative;
-	color: var(--text-normal);
+	color: var(--text-muted);
 	background-color: var(--knomo-page-background);
 	font-size: 14px;
 	line-height: 1.6;
@@ -87,6 +90,32 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .view-action:not(.knomo-mobile-header-action) {
 	display: none;
+}
+
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-muted);
+	font-weight: var(--font-normal);
+	cursor: pointer;
+}
+
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title .knomo-title-chevron {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 14px;
+	height: 14px;
+	color: var(--text-faint);
+}
+
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title .knomo-title-chevron svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	stroke-width: 2;
 }
 
 .workspace-leaf-content[data-type="knomo-view"] .view-content,
@@ -225,10 +254,11 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 }
 
 .knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover {
-	top: 32px;
-	left: 24px;
-	width: auto;
-	min-width: 160px;
+	position: fixed;
+	top: var(--knomo-title-popover-top);
+	left: 50%;
+	width: var(--knomo-dropdown-width);
+	min-width: var(--knomo-dropdown-width);
 }
 
 /* ---- Layout: desktop-medium / desktop-narrow sidebar drawer ---- */
@@ -238,7 +268,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	top: 0;
 	left: 0;
 	bottom: 0;
-	z-index: 60;
+	z-index: 120;
 	flex-basis: var(--knomo-sidebar-width);
 	width: var(--knomo-sidebar-width);
 	min-width: var(--knomo-sidebar-width);
@@ -276,7 +306,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin.is-layout-desktop-narrow .knomo-drawer-backdrop {
 	position: absolute;
 	inset: 0;
-	z-index: 50;
+	z-index: 110;
 	background: var(--background-modifier-cover);
 	opacity: 0;
 	visibility: hidden;
@@ -389,7 +419,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 
 .knomo-plugin .knomo-brand-title {
 	font-size: 15px;
-	font-weight: var(--font-semibold);
+	font-weight: var(--font-normal);
 	line-height: 1.3;
 }
 
@@ -868,7 +898,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	padding: 0;
 	border: 0;
 	border-radius: 6px;
-	color: var(--text-muted);
+	color: var(--text-normal);
 	background: transparent;
 	box-shadow: none;
 	cursor: pointer;
@@ -893,9 +923,19 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	min-width: 0;
 }
 
+.knomo-plugin .knomo-title-host {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 6px;
+	min-width: 0;
+	max-width: 100%;
+}
+
 .knomo-plugin .knomo-scope-trigger {
 	display: inline-flex;
 	align-items: center;
+	justify-content: flex-start;
 	gap: 6px;
 	min-height: 28px;
 	padding: 0 4px 0 0;
@@ -905,22 +945,64 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	background: transparent;
 	box-shadow: none;
 	font-size: 14px;
-	font-weight: var(--font-semibold);
+	font-weight: var(--font-normal);
 	line-height: 1;
 	cursor: pointer;
 }
 
+.knomo-plugin .knomo-title-root {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-start;
+	min-height: 28px;
+	padding: 0 4px 0 0;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: transparent;
+	box-shadow: none;
+	font-size: 14px;
+	font-weight: var(--font-normal);
+	line-height: 1;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-title-root:hover,
+.knomo-plugin .knomo-title-root:focus-visible,
 .knomo-plugin .knomo-scope-trigger:hover,
 .knomo-plugin .knomo-scope-trigger:focus-visible {
-	color: var(--text-normal);
+	color: var(--text-muted);
 	background: transparent;
+}
+
+.knomo-plugin .knomo-title-label,
+.knomo-plugin .knomo-title-root {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.knomo-plugin .knomo-title-separator {
+	color: var(--text-faint);
+	font-weight: var(--font-normal);
 }
 
 .knomo-plugin .knomo-title-chevron {
 	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
 	width: 14px;
 	height: 14px;
 	color: var(--text-faint);
+}
+
+.knomo-plugin .knomo-title-chevron svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	stroke-width: 2;
 }
 
 /* ---- Search ---- */
@@ -991,12 +1073,12 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	display: flex;
 	flex-direction: column;
 	gap: 0;
-	width: 100%;
-	min-width: 180px;
+	width: var(--knomo-dropdown-width);
+	min-width: var(--knomo-dropdown-width);
 	padding: 6px;
 	border: var(--border-width) solid var(--knomo-soft-border);
 	border-radius: var(--knomo-radius);
-	background: var(--knomo-menu-surface);
+	background: var(--knomo-page-background);
 	box-shadow: var(--knomo-menu-shadow);
 	opacity: 0;
 	transform: translateY(-4px) scale(0.98);
@@ -1019,7 +1101,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-search-menu-option {
 	display: flex;
 	align-items: center;
-	gap: var(--size-4-2);
+	gap: var(--size-2-2);
 	width: 100%;
 	min-height: 32px;
 	padding: 0 10px;
@@ -1031,6 +1113,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	font-size: 13px;
 	text-align: left;
 	cursor: pointer;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-search-menu-option {
+	font-size: 14px;
 }
 
 .knomo-plugin .knomo-search-menu-option .knomo-button-icon {
@@ -1054,7 +1140,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	padding: 6px;
 	border: var(--border-width) solid var(--knomo-soft-border);
 	border-radius: var(--knomo-radius);
-	background: var(--knomo-menu-surface);
+	background: var(--knomo-page-background);
 	box-shadow: var(--knomo-menu-shadow);
 	opacity: 0;
 	transform: translateY(-4px) scale(0.98);
@@ -1070,7 +1156,8 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-desktop-scope-popover {
 	top: 32px;
 	left: 0;
-	width: 112px;
+	width: var(--knomo-dropdown-width);
+	min-width: var(--knomo-dropdown-width);
 }
 
 .knomo-plugin.is-scope-open .knomo-desktop-scope-popover {
@@ -1090,10 +1177,25 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 
 .knomo-plugin.is-layout-desktop-medium .knomo-mobile-scope-popover,
 .knomo-plugin.is-layout-desktop-narrow .knomo-mobile-scope-popover {
-	top: 44px;
-	left: 52px;
-	width: auto;
-	min-width: 160px;
+	position: absolute;
+	top: var(--knomo-title-popover-top);
+	left: var(--knomo-title-popover-left);
+	width: var(--knomo-dropdown-width);
+	min-width: var(--knomo-dropdown-width);
+}
+
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover {
+	position: fixed;
+	top: var(--knomo-title-popover-top);
+	left: 50%;
+	width: var(--knomo-dropdown-width);
+	min-width: var(--knomo-dropdown-width);
+	transform: translate(-50%, -4px) scale(0.98);
+	transform-origin: top center;
+}
+
+.knomo-plugin.is-layout-mobile.is-scope-open .knomo-mobile-scope-popover {
+	transform: translate(-50%, 0) scale(1);
 }
 
 .knomo-plugin .knomo-scope-option {
@@ -1113,6 +1215,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	cursor: pointer;
 }
 
+.knomo-plugin:not(.is-layout-mobile) .knomo-scope-option {
+	font-size: 14px;
+}
+
 .knomo-plugin .knomo-scope-option .knomo-button-icon {
 	display: none;
 }
@@ -1129,10 +1235,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
    -------------------------------------------------------------------------- */
 .knomo-plugin .knomo-compact-header {
 	align-items: center;
-	gap: 8px;
+	gap: 0;
 	height: 48px;
 	min-height: 48px;
-	padding: 0 4px 6px;
+	padding: 0 4px 6px 0;
 	transform: translateY(2px);
 }
 
@@ -1165,6 +1271,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-compact-title {
 	display: inline-flex;
 	align-items: center;
+	justify-content: flex-start;
 	flex: 1;
 	gap: 4px;
 	min-width: 0;
@@ -1177,18 +1284,22 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	box-shadow: none;
 	color: var(--text-muted);
 	font-size: 14px;
-	font-weight: var(--font-semibold);
+	font-weight: var(--font-normal);
 	line-height: 1;
-	cursor: pointer;
 }
 
 .knomo-plugin .knomo-compact-title:hover,
 .knomo-plugin .knomo-compact-title:focus-visible {
 	color: var(--text-normal);
-	background: var(--knomo-row-hover);
+	background: transparent;
 }
 
-.knomo-plugin .knomo-compact-title span:first-child {
+.knomo-plugin .knomo-compact-title .knomo-title-host,
+.knomo-plugin .knomo-compact-title .knomo-scope-trigger {
+	min-width: 0;
+}
+
+.knomo-plugin .knomo-compact-title .knomo-title-label {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1251,6 +1362,154 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	background: var(--knomo-surface);
 	border-color: var(--knomo-soft-border);
 	box-shadow: none;
+}
+
+.knomo-plugin .knomo-mobile-search-page {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483647;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+	background: var(--knomo-page-background);
+	opacity: 0;
+	transform: translateX(100%);
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		transform var(--knomo-transition-panel),
+		opacity 180ms ease,
+		visibility 180ms ease;
+}
+
+.knomo-plugin.is-mobile-search-open .knomo-mobile-search-page,
+.knomo-plugin .knomo-mobile-search-page.is-open {
+	opacity: 1;
+	transform: translateX(0);
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-mobile-search-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: 0 0 auto;
+	margin-bottom: 12px;
+}
+
+.knomo-plugin .knomo-mobile-search-wrap {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: 1;
+	min-width: 0;
+	height: 48px;
+	min-height: 48px;
+	padding: 0 16px;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: 24px;
+	background: var(--knomo-surface);
+	color: var(--text-faint);
+	box-shadow: var(--knomo-card-shadow);
+}
+
+.knomo-plugin .knomo-mobile-search-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 48px;
+	min-width: 48px;
+	height: 48px;
+	min-height: 48px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	color: var(--text-normal);
+	background: var(--knomo-surface);
+	box-shadow: var(--knomo-card-shadow);
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-mobile-search-close svg {
+	width: 28px;
+	height: 28px;
+}
+
+.knomo-plugin .knomo-mobile-search-quick {
+	flex: 0 0 auto;
+	margin-bottom: 6px;
+}
+
+.knomo-plugin .knomo-mobile-search-section-title {
+	margin: 0 0 6px;
+	color: var(--text-faint);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+}
+
+.knomo-plugin .knomo-mobile-search-chip-list {
+	display: flex;
+	flex-wrap: nowrap;
+	gap: 8px;
+	overflow-x: auto;
+	padding-bottom: 2px;
+	scrollbar-width: none;
+}
+
+.knomo-plugin .knomo-mobile-search-chip-list::-webkit-scrollbar {
+	width: 0;
+	height: 0;
+}
+
+.knomo-plugin .knomo-mobile-search-chip {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 0 auto;
+	gap: 6px;
+	height: 40px;
+	min-height: 40px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 10px;
+	color: var(--text-normal);
+	background: var(--knomo-subtle-surface);
+	box-shadow: none;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-mobile-search-chip.is-active,
+.knomo-plugin .knomo-mobile-search-chip:hover,
+.knomo-plugin .knomo-mobile-search-chip:focus-visible {
+	color: var(--text-accent);
+	background: var(--knomo-accent-soft);
+}
+
+.knomo-plugin .knomo-mobile-search-chip .knomo-button-icon {
+	display: none;
+}
+
+.knomo-plugin .knomo-mobile-search-results {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0 0 max(8px, env(safe-area-inset-bottom));
+	scrollbar-width: none;
+}
+
+.knomo-plugin .knomo-mobile-search-results::-webkit-scrollbar {
+	width: 0;
+	height: 0;
+}
+
+.knomo-plugin .knomo-mobile-search-empty {
+	padding: 24px 0;
+	color: var(--text-muted);
+	font-size: 14px;
+	text-align: center;
 }
 
 .knomo-plugin.is-layout-mobile .knomo-composer {
@@ -1388,6 +1647,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	min-height: 92px;
 	padding: 12px 14px;
 	margin-bottom: 12px;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-composer {
+	padding-bottom: 8px;
 }
 
 .knomo-plugin .knomo-composer-input::placeholder {
@@ -1565,10 +1828,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	margin-left: 0;
 }
 
-.knomo-plugin.is-layout-mobile .knomo-cancel-edit-button {
-	display: none;
-}
-
 .knomo-plugin .knomo-cancel-edit-button {
 	display: inline-flex;
 	align-items: center;
@@ -1647,6 +1906,14 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	box-shadow: none;
 	color: var(--text-faint);
 	cursor: not-allowed;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-send-button {
+	width: 50px;
+	min-width: 50px;
+	height: 32px;
+	min-height: 32px;
+	border-radius: 8px;
 }
 
 /* --------------------------------------------------------------------------
@@ -1845,7 +2112,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	padding: 6px;
 	border: var(--border-width) solid var(--knomo-soft-border);
 	border-radius: var(--knomo-radius);
-	background: var(--knomo-menu-surface);
+	background: var(--knomo-page-background);
 	box-shadow: var(--knomo-menu-shadow);
 	opacity: 0;
 	transform: translateY(-4px) scale(0.98);
@@ -1883,7 +2150,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: 15px;
+	font-size: 14px;
 	text-align: left;
 	cursor: pointer;
 }
@@ -2086,6 +2353,11 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
    12b. Mobile Navbar Compact Mode
    -------------------------------------------------------------------------- */
 body.knomo-mobile-navbar-compact-active .knomo-mobile-navbar-hidden {
+	display: none !important;
+}
+
+body.knomo-mobile-search-active .mobile-navbar,
+body.knomo-mobile-search-active .knomo-mobile-create-fab {
 	display: none !important;
 }
 

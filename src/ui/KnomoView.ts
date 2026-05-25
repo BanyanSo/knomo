@@ -41,10 +41,33 @@ interface ScopeOption {
 	icon: string;
 }
 
+type SearchDateFilter = "week" | "month" | "last-7" | "last-30" | "last-week" | "last-month";
+type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random";
+
+interface SearchDateOption {
+	filter: SearchDateFilter;
+	label: string;
+	mobileLabel?: string;
+	icon: string;
+}
+
+interface TitleModeOption {
+	mode: TitleMode;
+	label: string;
+	icon: string;
+	nav?: SidebarNav;
+	scope?: ScopeFilter;
+}
+
 interface SidebarNavItem {
 	nav: SidebarNav;
 	label: string;
 	icon: string;
+}
+
+interface TitleHost {
+	el: HTMLElement;
+	mobile: boolean;
 }
 
 interface SidebarDragState {
@@ -59,6 +82,7 @@ interface FilteredMemosCache {
 	activeNav: SidebarNav;
 	scopeFilter: ScopeFilter;
 	searchQuery: string;
+	searchDateFilter: SearchDateFilter | null;
 	todayKey: string;
 	result: MemoRecord[];
 }
@@ -67,6 +91,7 @@ const SIDEBAR_MIN_WIDTH = 210;
 const SIDEBAR_MAX_WIDTH = 300;
 const RANDOM_REUNION_DEFAULT_COUNT = 5;
 const CARD_BATCH_SIZE = 50;
+const MOBILE_SEARCH_BATCH_SIZE = 30;
 const INITIAL_VISIBLE_RENDER_COUNT = 16;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
 const SEARCH_DEBOUNCE_MS = 220;
@@ -85,30 +110,31 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 
 const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: "回收站", icon: "trash-2" };
 
-const MAIN_SCOPE_OPTIONS: ScopeOption[] = [
+const TITLE_SCOPE_OPTIONS: ScopeOption[] = [
 	{ filter: "all", label: "全部笔记", icon: KNOMO_ALL_NOTES_ICON },
-	{ filter: "week", label: "本周", icon: "calendar-days" },
-	{ filter: "month", label: "本月", icon: "calendar-range" },
 	{ filter: "no-tag", label: "无标签", icon: "tag" },
 	{ filter: "with-link", label: "有链接", icon: "link" },
 	{ filter: "with-image", label: "有图片", icon: "image" },
-];
-
-const LIST_SCOPE_OPTIONS: ScopeOption[] = [
-	{ filter: "week", label: "本周", icon: "calendar-days" },
-	{ filter: "month", label: "本月", icon: "calendar-range" },
-	{ filter: "with-image", label: "有图片", icon: "image" },
-	{ filter: "no-tag", label: "无标签", icon: "tag" },
-	{ filter: "with-link", label: "有链接", icon: "link" },
-];
-
-const DATE_SCOPE_OPTIONS: ScopeOption[] = [
 	{ filter: "anniversary", label: "那年今日", icon: "history" },
+];
+
+const TITLE_MODE_OPTIONS: TitleModeOption[] = [
+	{ mode: "all", label: "全部笔记", icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
+	{ mode: "no-tag", label: "无标签", icon: "tag", scope: "no-tag" },
+	{ mode: "with-link", label: "有链接", icon: "link", scope: "with-link" },
+	{ mode: "with-image", label: "有图片", icon: "image", scope: "with-image" },
+	{ mode: "anniversary", label: "那年今日", icon: "history", scope: "anniversary" },
+	{ mode: "review", label: "今日之外", icon: "calendar-check", nav: "review" },
+	{ mode: "random", label: "随机重逢", icon: KNOMO_RANDOM_REUNION_ICON, nav: "random" },
+];
+
+const SEARCH_DATE_OPTIONS: SearchDateOption[] = [
 	{ filter: "week", label: "本周", icon: "calendar-days" },
 	{ filter: "month", label: "本月", icon: "calendar-range" },
+	{ filter: "last-7", label: "最近 7 天", mobileLabel: "近7天", icon: "calendar-clock" },
+	{ filter: "last-30", label: "最近 30 天", mobileLabel: "近30天", icon: "calendar-clock" },
+	{ filter: "last-week", label: "上周", icon: "calendar-minus" },
 	{ filter: "last-month", label: "上月", icon: "calendar-minus" },
-	{ filter: "last-7", label: "最近7天", icon: "calendar-clock" },
-	{ filter: "last-30", label: "最近30天", icon: "calendar-clock" },
 ];
 
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
@@ -135,7 +161,7 @@ interface HandledMobileToolPointer {
 	action: string;
 }
 
-const ALL_SCOPE_OPTIONS = uniqueScopeOptions([...MAIN_SCOPE_OPTIONS, ...DATE_SCOPE_OPTIONS]);
+const ALL_SCOPE_OPTIONS = TITLE_SCOPE_OPTIONS;
 let nextA11yId = 0;
 
 export class KnomoView extends ItemView {
@@ -143,7 +169,7 @@ export class KnomoView extends ItemView {
 	hoverPopover: HoverPopover | null = null;
 	private rootEl: HTMLElement | null = null;
 	private sidebarEl: HTMLElement | null = null;
-	private scopeTitleEls: HTMLElement[] = [];
+	private titleHosts: TitleHost[] = [];
 	private statsEls: HTMLElement[] = [];
 	private allTagsEl: HTMLElement | null = null;
 	private cardFlowEl: HTMLElement | null = null;
@@ -160,6 +186,12 @@ export class KnomoView extends ItemView {
 	private compactInlineSearchInputEl: HTMLInputElement | null = null;
 	private compactSearchInputEl: HTMLInputElement | null = null;
 	private mobileSearchHeaderActionEl: HTMLElement | null = null;
+	private mobileHeaderTitleEl: HTMLElement | null = null;
+	private mobileHeaderTitleRegisteredEl: HTMLElement | null = null;
+	private mobileHeaderTitleOriginalText: string | null = null;
+	private mobileSearchPageEl: HTMLElement | null = null;
+	private mobileSearchInputEl: HTMLInputElement | null = null;
+	private mobileSearchResultsEl: HTMLElement | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
 	private mobileVisualViewport: VisualViewport | null = null;
 	private mobileVisualViewportHandler: (() => void) | null = null;
@@ -169,6 +201,10 @@ export class KnomoView extends ItemView {
 	private allMemosLoadingPromise: Promise<boolean> | null = null;
 	private scopeFilter: ScopeFilter = "all";
 	private searchQuery = "";
+	private searchDateFilter: SearchDateFilter | null = null;
+	private mobileSearchQuery = "";
+	private mobileSearchDateFilter: SearchDateFilter | null = null;
+	private mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
 	private activeTag: string | null = null;
 	private expandedTagGroups = new Set<string>();
 	private activeNav: SidebarNav = "all";
@@ -180,6 +216,7 @@ export class KnomoView extends ItemView {
 	private composerOpen = false;
 	private mobileComposerInputFocused = false;
 	private compactSearchOpen = false;
+	private mobileSearchPageOpen = false;
 	private editingMemo: MemoRecord | null = null;
 	private quoteSourceMemoId: string | null = null;
 	private quoteReferenceText: string | null = null;
@@ -214,6 +251,7 @@ export class KnomoView extends ItemView {
 	private memoSearchTextCache = new Map<string, string>();
 	private memoSearchCacheSource: MemoRecord[] | null = null;
 	private searchDebounceTimeoutId: number | null = null;
+	private mobileSearchDebounceTimeoutId: number | null = null;
 	private mobileComposerFocusFrameId: number | null = null;
 	private mobileComposerFocusTimerId: number | null = null;
 	private mobileComposerResizeFrameId: number | null = null;
@@ -294,6 +332,7 @@ export class KnomoView extends ItemView {
 		this.tagSuggest?.close();
 		this.tagSuggest = null;
 		this.clearSearchDebounce();
+		this.clearMobileSearchDebounce();
 		this.clearMobileComposerFocus();
 		this.clearMobileComposerResizeFrame();
 		this.clearMobileComposerCloseTimer();
@@ -304,6 +343,9 @@ export class KnomoView extends ItemView {
 		this.pendingMobileListEnterCorrection = null;
 		this.stopMobileViewportTracking();
 		this.removeMobileComposerLayer();
+		this.removeMobileSearchPage();
+		this.containerEl.doc.body.removeClass("knomo-mobile-search-active");
+		this.removeMobileHeaderTitle();
 		this.removeMobileHeaderActions();
 		this.stopDateChangeWatcher();
 		this.stopLayoutObserver();
@@ -337,7 +379,7 @@ export class KnomoView extends ItemView {
 	private async render(): Promise<void> {
 		const container = this.contentEl;
 		container.empty();
-		this.scopeTitleEls = [];
+		this.titleHosts = [];
 		this.statsEls = [];
 		this.trashCountEls = [];
 		this.tagSuggest?.close();
@@ -385,6 +427,7 @@ export class KnomoView extends ItemView {
 			void this.handleRootKeydown(event);
 		});
 
+		this.renderScopeState();
 		this.syncRootState();
 		await this.ensureAllMemosLoaded(true);
 		void this.refreshTrashCount(false);
@@ -454,21 +497,11 @@ export class KnomoView extends ItemView {
 		this.createIconButton(topbar, KNOMO_SIDEBAR_MENU_ICON, "显示侧栏", "knomo-sidebar-toggle", "toggle-sidebar");
 
 		const scopeWrap = topbar.createDiv({ cls: "knomo-scope-wrap" });
-		const scopeButton = scopeWrap.createEl("button", {
-			cls: "knomo-scope-trigger",
-			attr: {
-				type: "button",
-				"aria-haspopup": "menu",
-				"aria-expanded": "false",
-				"data-action": "toggle-scope-menu",
-			},
-		});
-		const label = scopeButton.createSpan({ text: "全部笔记" });
-		this.scopeTitleEls.push(label);
-		setIcon(scopeButton.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
+		const titleHost = scopeWrap.createDiv({ cls: "knomo-title-host" });
+		this.titleHosts.push({ el: titleHost, mobile: false });
 		const popover = scopeWrap.createDiv({ cls: "knomo-scope-popover knomo-desktop-scope-popover", attr: { role: "menu" } });
-		for (const option of LIST_SCOPE_OPTIONS) {
-			this.renderScopeButton(popover, option, "knomo-scope-option");
+		for (const option of TITLE_MODE_OPTIONS) {
+			this.renderTitleModeButton(popover, option, "knomo-scope-option");
 		}
 
 		const searchWrap = topbar.createDiv({ cls: "knomo-search-wrap" });
@@ -500,15 +533,15 @@ export class KnomoView extends ItemView {
 
 	private renderScopePopover(main: HTMLElement): void {
 		const mobilePopover = main.createDiv({ cls: "knomo-scope-popover knomo-mobile-scope-popover", attr: { role: "menu" } });
-		for (const option of ALL_SCOPE_OPTIONS) {
-			this.renderScopeButton(mobilePopover, option, "knomo-scope-option");
+		for (const option of TITLE_MODE_OPTIONS) {
+			this.renderTitleModeButton(mobilePopover, option, "knomo-scope-option");
 		}
 	}
 
 	private renderSearchPopover(container: HTMLElement): void {
 		const searchMenu = container.createDiv({ cls: "knomo-search-menu", attr: { role: "menu" } });
-		for (const option of DATE_SCOPE_OPTIONS) {
-			this.renderScopeButton(searchMenu, option, "knomo-search-menu-option");
+		for (const option of SEARCH_DATE_OPTIONS) {
+			this.renderSearchDateButton(searchMenu, option, "knomo-search-menu-option");
 		}
 	}
 
@@ -611,17 +644,31 @@ export class KnomoView extends ItemView {
 		this.updateSendButtonState();
 	}
 
-	private renderScopeButton(container: HTMLElement, option: ScopeOption, cls: string): HTMLButtonElement {
+	private renderTitleModeButton(container: HTMLElement, option: TitleModeOption, cls: string): HTMLButtonElement {
 		const button = container.createEl("button", {
 			cls,
 			attr: {
 				type: "button",
 				"aria-pressed": "false",
-				"data-scope": option.filter,
+				"data-title-mode": option.mode,
 			},
 		});
 		setIcon(button.createSpan({ cls: "knomo-button-icon" }), option.icon);
 		button.createSpan({ cls: "knomo-button-label", text: option.label });
+		return button;
+	}
+
+	private renderSearchDateButton(container: HTMLElement, option: SearchDateOption, cls: string, label = option.label): HTMLButtonElement {
+		const button = container.createEl("button", {
+			cls,
+			attr: {
+				type: "button",
+				"aria-pressed": "false",
+				"data-search-date": option.filter,
+			},
+		});
+		setIcon(button.createSpan({ cls: "knomo-button-icon" }), option.icon);
+		button.createSpan({ cls: "knomo-button-label", text: label });
 		return button;
 	}
 
@@ -704,18 +751,10 @@ export class KnomoView extends ItemView {
 		const header = main.createDiv({ cls: "knomo-compact-header" });
 		this.createIconButton(header, KNOMO_SIDEBAR_MENU_ICON, "菜单", "knomo-compact-menu-btn", "open-drawer");
 
-		const titleButton = header.createEl("button", {
+		const titleHost = header.createDiv({
 			cls: "knomo-compact-title",
-			attr: {
-				type: "button",
-				"aria-haspopup": "menu",
-				"aria-expanded": "false",
-				"data-action": "toggle-scope-menu",
-			},
 		});
-		const titleSpan = titleButton.createSpan();
-		this.scopeTitleEls.push(titleSpan);
-		setIcon(titleButton.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
+		this.titleHosts.push({ el: titleHost, mobile: false });
 
 		const inlineSearchWrap = header.createDiv({ cls: "knomo-compact-search-wrap knomo-compact-inline-search" });
 		setIcon(inlineSearchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
@@ -797,6 +836,7 @@ export class KnomoView extends ItemView {
 		this.renderTrashCount();
 		this.renderScopeState();
 		this.renderCardFlow();
+		this.renderMobileSearchResults();
 		this.syncSearchInputs();
 		this.updateSendButtonState();
 		this.updateCancelEditButtonState();
@@ -862,11 +902,15 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-scope-open", this.scopeMenuOpen);
 		root.toggleClass("is-composer-open", this.composerOpen);
 		root.toggleClass("is-compact-search-open", this.compactSearchOpen);
+		root.toggleClass("is-mobile-search-open", this.mobileSearchPageOpen);
 		root.toggleClass("is-mobile-compact", shouldUseMobileCompact(this.settingsService.getSettings().mobileCompactMode));
 		root.style.setProperty("--knomo-sidebar-width", `${this.sidebarWidth}px`);
-		this.syncTooltipState(root);
-		this.syncMobileHeaderActions();
-		this.syncMobileDrawerTop(root);
+			this.syncTooltipState(root);
+			this.syncMobileHeaderActions();
+			this.syncMobileHeaderTitle();
+			this.syncTitlePopoverPosition();
+			this.syncMobileSearchPage();
+			this.syncMobileDrawerTop(root);
 		const shouldTrackMobileViewport = this.currentLayout === "mobile"
 			&& this.composerOpen
 			&& (this.mobileComposerPhase === "focusing" || this.mobileComposerPhase === "open");
@@ -938,6 +982,93 @@ export class KnomoView extends ItemView {
 		this.removeMobileHeaderActions();
 	}
 
+	private syncMobileHeaderTitle(): void {
+		if (this.currentLayout !== "mobile") {
+			this.removeMobileHeaderTitle();
+			return;
+		}
+		const headerEl = this.findMobileViewHeader();
+		const titleEl = headerEl?.querySelector(".view-header-title");
+		if (!titleEl?.instanceOf(HTMLElement)) {
+			return;
+		}
+		if (this.mobileHeaderTitleEl !== titleEl) {
+			this.removeMobileHeaderTitle();
+			this.mobileHeaderTitleEl = titleEl;
+			this.mobileHeaderTitleOriginalText = titleEl.textContent;
+		}
+		if (this.mobileHeaderTitleRegisteredEl !== titleEl) {
+			this.mobileHeaderTitleRegisteredEl = titleEl;
+			this.registerDomEvent(titleEl, "click", (event) => {
+				event.preventDefault();
+				this.scopeMenuOpen = !this.scopeMenuOpen;
+				this.desktopSearchOpen = false;
+				this.syncRootState();
+			});
+			this.registerDomEvent(titleEl, "keydown", (event) => {
+				if (event.key !== "Enter" && event.key !== " ") {
+					return;
+				}
+				event.preventDefault();
+				this.scopeMenuOpen = !this.scopeMenuOpen;
+				this.desktopSearchOpen = false;
+				this.syncRootState();
+			});
+		}
+		titleEl.empty();
+		titleEl.addClass("knomo-mobile-title");
+		titleEl.setAttr("role", "button");
+		titleEl.setAttr("aria-haspopup", "menu");
+		titleEl.setAttr("aria-expanded", this.scopeMenuOpen ? "true" : "false");
+		titleEl.setAttr("tabindex", "0");
+		titleEl.createSpan({ text: this.getMobileTitleLabel() });
+		setIcon(titleEl.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
+	}
+
+	private syncTitlePopoverPosition(): void {
+		const root = this.rootEl;
+		if (root === null) {
+			return;
+		}
+		const anchor = this.getTitlePopoverAnchor();
+		if (anchor === null) {
+			root.style.removeProperty("--knomo-title-popover-left");
+			root.style.removeProperty("--knomo-title-popover-top");
+			return;
+		}
+		const rect = anchor.getBoundingClientRect();
+		if (this.currentLayout === "mobile") {
+			root.style.setProperty("--knomo-title-popover-top", `${Math.round(rect.bottom + 6)}px`);
+			root.style.removeProperty("--knomo-title-popover-left");
+			return;
+		}
+		const container = anchor.closest(".knomo-main");
+		const containerRect = container?.getBoundingClientRect() ?? root.getBoundingClientRect();
+		const dropdownWidth = 168;
+		const left = clamp(
+			Math.round(rect.left - containerRect.left),
+			12,
+			Math.max(12, Math.round(containerRect.width - dropdownWidth - 12)),
+		);
+		root.style.setProperty("--knomo-title-popover-left", `${left}px`);
+		root.style.setProperty("--knomo-title-popover-top", `${Math.round(rect.bottom - containerRect.top + 6)}px`);
+	}
+
+	private getTitlePopoverAnchor(): HTMLElement | null {
+		if (this.currentLayout === "mobile") {
+			return this.mobileHeaderTitleEl;
+		}
+		if (this.currentLayout === "desktop-medium" || this.currentLayout === "desktop-narrow") {
+			for (const titleHost of this.titleHosts) {
+				if (titleHost.el.isConnected && titleHost.el.closest(".knomo-compact-header") !== null) {
+					const labelEl = titleHost.el.find(".knomo-title-label");
+					return labelEl?.instanceOf(HTMLElement) ? labelEl : titleHost.el;
+				}
+			}
+		}
+		return null;
+	}
+
 	private ensureMobileHeaderActions(): void {
 		if (this.mobileSearchHeaderActionEl === null || !this.mobileSearchHeaderActionEl.isConnected) {
 			this.mobileSearchHeaderActionEl?.remove();
@@ -952,18 +1083,133 @@ export class KnomoView extends ItemView {
 		this.mobileSearchHeaderActionEl = null;
 	}
 
-	private openMobileHeaderSearch(): void {
-		this.mobileDrawerOpen = false;
-		this.scopeMenuOpen = false;
-		this.compactSearchOpen = true;
-		this.desktopSearchOpen = true;
-		this.syncRootState();
-		this.focusCompactSearchInputSoon();
+	private removeMobileHeaderTitle(): void {
+		if (this.mobileHeaderTitleEl !== null) {
+			this.mobileHeaderTitleEl.empty();
+			if (this.mobileHeaderTitleOriginalText !== null) {
+				this.mobileHeaderTitleEl.setText(this.mobileHeaderTitleOriginalText);
+			}
+			this.mobileHeaderTitleEl.removeClass("knomo-mobile-title");
+			this.mobileHeaderTitleEl.removeAttribute("role");
+			this.mobileHeaderTitleEl.removeAttribute("aria-haspopup");
+			this.mobileHeaderTitleEl.removeAttribute("aria-expanded");
+			this.mobileHeaderTitleEl.removeAttribute("tabindex");
+		}
+		this.mobileHeaderTitleEl = null;
+		this.mobileHeaderTitleOriginalText = null;
 	}
 
-	private focusCompactSearchInputSoon(): void {
+	private openMobileHeaderSearch(): void {
+		this.openMobileSearchPage();
+	}
+
+	private openMobileSearchPage(): void {
+		this.mobileDrawerOpen = false;
+		this.scopeMenuOpen = false;
+		this.compactSearchOpen = false;
+		this.desktopSearchOpen = false;
+		this.activeMenuMemoId = null;
+		this.mobileSearchPageOpen = true;
+		this.ensureMobileSearchPage();
+		if (this.mobileSearchInputEl !== null && this.mobileSearchInputEl.value !== this.mobileSearchQuery) {
+			this.mobileSearchInputEl.value = this.mobileSearchQuery;
+		}
+		this.renderMobileSearchResults();
+		this.syncRootState();
+		this.focusMobileSearchInputSoon();
+	}
+
+	private ensureMobileSearchPage(): void {
+		if (this.rootEl === null) {
+			return;
+		}
+		if (this.mobileSearchPageEl !== null && this.mobileSearchPageEl.isConnected) {
+			return;
+		}
+		const page = this.rootEl.createDiv({ cls: "knomo-mobile-search-page" });
+		this.mobileSearchPageEl = page;
+		const header = page.createDiv({ cls: "knomo-mobile-search-header" });
+		const searchWrap = header.createDiv({ cls: "knomo-mobile-search-wrap" });
+		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
+		const searchLabelId = this.createHiddenText(searchWrap, "mobile-search-label", "搜索");
+		this.mobileSearchInputEl = searchWrap.createEl("input", {
+			cls: "knomo-search-input",
+			attr: {
+				type: "search",
+				placeholder: "搜索",
+				"aria-labelledby": searchLabelId,
+			},
+		});
+		this.registerDomEvent(this.mobileSearchInputEl, "input", () => {
+			this.queueMobileSearchQuery(this.mobileSearchInputEl?.value ?? "");
+		});
+		this.registerDomEvent(this.mobileSearchInputEl, "keydown", (event) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
+				this.closeMobileSearchPage();
+			}
+		});
+		const closeButton = header.createEl("button", {
+			cls: "knomo-mobile-search-close",
+			attr: {
+				type: "button",
+				"aria-label": "关闭搜索",
+				"data-action": "close-mobile-search",
+			},
+		});
+		setIcon(closeButton, "x");
+
+		const quickSection = page.createDiv({ cls: "knomo-mobile-search-quick" });
+		quickSection.createDiv({ cls: "knomo-mobile-search-section-title", text: "快捷搜索" });
+		const quickList = quickSection.createDiv({ cls: "knomo-mobile-search-chip-list" });
+		for (const option of SEARCH_DATE_OPTIONS) {
+			this.renderSearchDateButton(quickList, option, "knomo-mobile-search-chip", option.mobileLabel ?? option.label);
+		}
+		this.mobileSearchResultsEl = page.createDiv({ cls: "knomo-mobile-search-results" });
+		this.registerDomEvent(this.mobileSearchResultsEl, "click", (event) => {
+			void this.handleMarkdownInternalLinkClick(event);
+		});
+	}
+
+	private syncMobileSearchPage(): void {
+		const shouldOpen = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
+		this.containerEl.doc.body.toggleClass("knomo-mobile-search-active", shouldOpen);
+		if (this.currentLayout !== "mobile") {
+			this.mobileSearchPageOpen = false;
+			this.rootEl?.toggleClass("is-mobile-search-open", false);
+			this.mobileSearchPageEl?.toggleClass("is-open", false);
+			return;
+		}
+		if (!this.mobileSearchPageOpen) {
+			this.mobileSearchPageEl?.toggleClass("is-open", false);
+			return;
+		}
+		this.ensureMobileSearchPage();
+		this.mobileSearchPageEl?.toggleClass("is-open", true);
+	}
+
+	private closeMobileSearchPage(): void {
+		const scrollTop = this.getCardFlowScrollTop();
+		this.mobileSearchPageOpen = false;
+		this.activeMenuMemoId = null;
+		this.resetMobileSearchState();
+		this.syncRootState();
+		this.renderCardFlow();
+		this.restoreCardFlowScrollTop(scrollTop);
+	}
+
+	private removeMobileSearchPage(): void {
+		this.clearMobileSearchDebounce();
+		this.mobileSearchPageEl?.detach();
+		this.mobileSearchPageEl = null;
+		this.mobileSearchInputEl = null;
+		this.mobileSearchResultsEl = null;
+	}
+
+	private focusMobileSearchInputSoon(): void {
 		this.containerEl.win.requestAnimationFrame(() => {
-			const input = this.compactSearchInputEl;
+			const input = this.mobileSearchInputEl;
 			if (input === null || !input.isConnected) {
 				return;
 			}
@@ -972,9 +1218,97 @@ export class KnomoView extends ItemView {
 			} catch {
 				input.focus();
 			}
-			if (isDateScope(this.scopeFilter) && this.searchQuery.length === 0) {
-				input.select();
-			}
+		});
+	}
+
+	private queueMobileSearchQuery(query: string): void {
+		this.clearMobileSearchDebounce();
+		this.mobileSearchDebounceTimeoutId = this.containerEl.win.setTimeout(() => {
+			this.mobileSearchDebounceTimeoutId = null;
+			this.mobileSearchQuery = query;
+			this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
+			this.renderMobileSearchResults();
+		}, SEARCH_DEBOUNCE_MS);
+	}
+
+	private clearMobileSearchDebounce(): void {
+		if (this.mobileSearchDebounceTimeoutId === null) {
+			return;
+		}
+		this.containerEl.win.clearTimeout(this.mobileSearchDebounceTimeoutId);
+		this.mobileSearchDebounceTimeoutId = null;
+	}
+
+	private setMobileSearchDateFilter(filter: SearchDateFilter): void {
+		this.flushMobileSearchQuery();
+		this.mobileSearchDateFilter = this.mobileSearchDateFilter === filter ? null : filter;
+		this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
+		this.renderMobileSearchResults();
+	}
+
+	private resetMobileSearchState(): void {
+		this.clearMobileSearchDebounce();
+		this.mobileSearchQuery = "";
+		this.mobileSearchDateFilter = null;
+		this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
+		if (this.mobileSearchInputEl !== null) {
+			this.mobileSearchInputEl.value = "";
+		}
+		this.mobileSearchResultsEl?.empty();
+		this.syncMobileSearchDateButtons();
+	}
+
+	private flushMobileSearchQuery(): void {
+		this.clearMobileSearchDebounce();
+		this.mobileSearchQuery = this.mobileSearchInputEl?.value ?? this.mobileSearchQuery;
+	}
+
+	private loadMoreMobileSearchResults(): void {
+		this.mobileSearchVisibleCount += MOBILE_SEARCH_BATCH_SIZE;
+		this.renderMobileSearchResults();
+	}
+
+	private renderMobileSearchResults(): void {
+		const resultsEl = this.mobileSearchResultsEl;
+		if (resultsEl === null || !this.mobileSearchPageOpen) {
+			return;
+		}
+		const generation = this.renderGeneration + 1;
+		this.renderGeneration = generation;
+		this.clearMarkdownRenderQueue();
+		resultsEl.empty();
+		this.syncMobileSearchDateButtons();
+		const normalizedQuery = this.mobileSearchQuery.trim().toLowerCase();
+		if (normalizedQuery.length === 0 && this.mobileSearchDateFilter === null) {
+			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: "输入关键词或选择快捷搜索" });
+			return;
+		}
+		const memos = this.memos.filter((memo) => this.memoMatchesSearch(memo, normalizedQuery, this.mobileSearchDateFilter));
+		if (memos.length === 0) {
+			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: "没有找到相关 Memos" });
+			return;
+		}
+		const visibleMemos = memos.slice(0, this.mobileSearchVisibleCount);
+		for (const [index, memo] of visibleMemos.entries()) {
+			this.renderMemoCardInContainer(resultsEl, memo, generation, index, true, false);
+		}
+		if (visibleMemos.length < memos.length) {
+			resultsEl.createEl("button", {
+				cls: "knomo-load-more knomo-mobile-search-more",
+				text: `加载更多（剩余 ${memos.length - visibleMemos.length} 条）`,
+				attr: {
+					type: "button",
+					"data-action": "load-more-mobile-search",
+				},
+			});
+		}
+	}
+
+	private syncMobileSearchDateButtons(): void {
+		this.mobileSearchPageEl?.findAll("[data-search-date]").forEach((element) => {
+			const active = element.getAttr("data-search-date") === this.mobileSearchDateFilter;
+			element.toggleClass("is-active", active);
+			element.setAttr("aria-pressed", active ? "true" : "false");
 		});
 	}
 
@@ -1387,23 +1721,72 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderScopeState(): void {
-		const label = this.getCurrentTitle();
-		for (const titleEl of this.scopeTitleEls) {
-			titleEl.setText(label);
+		for (const titleHost of this.titleHosts) {
+			this.renderTitleHost(titleHost);
 		}
+		this.syncMobileHeaderTitle();
 		this.rootEl?.findAll("[data-nav]").forEach((element) => {
 			const active = element.getAttr("data-nav") === this.activeNav;
 			element.toggleClass("is-active", active);
 			element.setAttr("aria-pressed", active ? "true" : "false");
 		});
-		this.rootEl?.findAll("[data-scope]").forEach((element) => {
-			const active = this.activeTag === null && this.activeNav === "all" && element.getAttr("data-scope") === this.scopeFilter;
+		this.rootEl?.findAll("[data-title-mode]").forEach((element) => {
+			const active = element.getAttr("data-title-mode") === this.getCurrentTitleMode();
+			element.toggleClass("is-active", active);
+			element.setAttr("aria-pressed", active ? "true" : "false");
+		});
+		this.rootEl?.findAll("[data-search-date]").forEach((element) => {
+			const active = element.getAttr("data-search-date") === this.searchDateFilter;
 			element.toggleClass("is-active", active);
 			element.setAttr("aria-pressed", active ? "true" : "false");
 		});
 	}
 
-	private getCurrentTitle(): string {
+	private renderTitleHost(host: TitleHost): void {
+		host.el.empty();
+		const label = host.mobile ? this.getMobileTitleLabel() : this.getDesktopTitleLabel();
+		const isDefault = this.isDefaultListState();
+		if (!host.mobile && !isDefault) {
+			host.el.createEl("button", {
+				cls: "knomo-title-root",
+				text: "全部笔记",
+				attr: {
+					type: "button",
+					"data-action": "reset-list-state",
+					"aria-label": "返回全部笔记",
+				},
+			});
+			host.el.createSpan({ cls: "knomo-title-separator", text: "/" });
+		}
+		const trigger = host.el.createEl("button", {
+			cls: "knomo-scope-trigger",
+			attr: {
+				type: "button",
+				"aria-haspopup": "menu",
+				"aria-expanded": this.scopeMenuOpen ? "true" : "false",
+				"data-action": "toggle-scope-menu",
+			},
+		});
+		trigger.createSpan({ cls: "knomo-title-label", text: label });
+		setIcon(trigger.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
+	}
+
+	private getDesktopTitleLabel(): string {
+		const query = this.searchQuery.trim();
+		if (query.length > 0) {
+			return "搜索";
+		}
+		if (this.searchDateFilter !== null) {
+			return getSearchDateLabel(this.searchDateFilter);
+		}
+		return this.getListTitleLabel();
+	}
+
+	private getMobileTitleLabel(): string {
+		return this.getListTitleLabel();
+	}
+
+	private getListTitleLabel(): string {
 		if (this.activeTag !== null) {
 			return `#${this.activeTag}`;
 		}
@@ -1411,6 +1794,24 @@ export class KnomoView extends ItemView {
 			return getSidebarNavLabel(this.activeNav);
 		}
 		return getScopeLabel(this.scopeFilter);
+	}
+
+	private getCurrentTitleMode(): string {
+		if (this.activeNav === "review" || this.activeNav === "random") {
+			return this.activeNav;
+		}
+		if (this.activeTag !== null || this.activeNav !== "all") {
+			return "";
+		}
+		return this.scopeFilter;
+	}
+
+	private isDefaultListState(): boolean {
+		return this.activeNav === "all"
+			&& this.activeTag === null
+			&& this.scopeFilter === "all"
+			&& this.searchQuery.trim().length === 0
+			&& this.searchDateFilter === null;
 	}
 
 	private renderCardFlow(): void {
@@ -1593,17 +1994,28 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
+		this.renderMemoCardInContainer(this.cardFlowEl, memo, generation, renderIndex, true, this.activeNav === "random");
+	}
+
+	private renderMemoCardInContainer(
+		container: HTMLElement,
+		memo: MemoRecord,
+		generation: number,
+		renderIndex: number,
+		includeActions: boolean,
+		randomCard: boolean,
+	): void {
 		const markdownPriority = getMarkdownRenderPriority(renderIndex);
 		const cardAttrs: Record<string, string> = { "data-memo-id": memo.id };
 		let randomCardDescriptionId: string | null = null;
-		if (this.activeNav === "random") {
+		if (randomCard) {
 			randomCardDescriptionId = this.getA11yId(`random-card-${renderIndex}-description`);
 			cardAttrs.tabindex = "0";
 			cardAttrs["aria-describedby"] = randomCardDescriptionId;
 			cardAttrs["data-random-reunion-card"] = "true";
 		}
-		const card = this.cardFlowEl.createEl("article", {
-			cls: this.activeMenuMemoId === memo.id ? "knomo-card is-menu-open" : "knomo-card",
+		const card = container.createEl("article", {
+			cls: includeActions && this.activeMenuMemoId === memo.id ? "knomo-card is-menu-open" : "knomo-card",
 			attr: cardAttrs,
 		});
 		if (randomCardDescriptionId !== null) {
@@ -1615,24 +2027,26 @@ export class KnomoView extends ItemView {
 		}
 		const head = card.createDiv({ cls: "knomo-card-head" });
 		head.createDiv({ cls: "knomo-card-time", text: formatMemoDisplayTime(memo.createdAt) });
-		const menu = head.createEl("button", {
-			cls: "knomo-card-menu",
-			attr: {
-				type: "button",
-				"aria-label": "更多操作",
-				"aria-expanded": this.activeMenuMemoId === memo.id ? "true" : "false",
-				"data-action": "toggle-card-menu",
-				"data-memo-id": memo.id,
-			},
-		});
-		setIcon(menu, "more-horizontal");
+		if (includeActions) {
+			const menu = head.createEl("button", {
+				cls: "knomo-card-menu",
+				attr: {
+					type: "button",
+					"aria-label": "更多操作",
+					"aria-expanded": this.activeMenuMemoId === memo.id ? "true" : "false",
+					"data-action": "toggle-card-menu",
+					"data-memo-id": memo.id,
+				},
+			});
+			setIcon(menu, "more-horizontal");
 
-		const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
-		this.renderCardAction(actions, memo.id, "edit", "编辑");
-		this.renderCardAction(actions, memo.id, "reference", "引用");
-		this.renderCardAction(actions, memo.id, "copy-text", "复制文本");
-		this.renderCardAction(actions, memo.id, "copy-link", "复制链接");
-		this.renderCardAction(actions, memo.id, "delete", "删除");
+			const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
+			this.renderCardAction(actions, memo.id, "edit", "编辑");
+			this.renderCardAction(actions, memo.id, "reference", "引用");
+			this.renderCardAction(actions, memo.id, "copy-text", "复制文本");
+			this.renderCardAction(actions, memo.id, "copy-link", "复制链接");
+			this.renderCardAction(actions, memo.id, "delete", "删除");
+		}
 
 		const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
 		this.queueMemoMarkdown(memo, content, generation, markdownPriority);
@@ -1758,6 +2172,7 @@ export class KnomoView extends ItemView {
 				return;
 			}
 			this.clearSearchDebounce();
+			this.clearDesktopSearchState();
 			this.activeTag = this.activeTag === tag ? null : tag;
 			this.scopeFilter = "all";
 			this.activeNav = "all";
@@ -1778,12 +2193,25 @@ export class KnomoView extends ItemView {
 			return;
 		}
 
-		const scopeEl = target.closest("[data-scope]");
-		if (scopeEl?.instanceOf(HTMLElement)) {
-			const scope = scopeEl.getAttr("data-scope");
-			if (isScopeFilter(scope)) {
-				this.setScope(scope);
+		const titleModeEl = target.closest("[data-title-mode]");
+		if (titleModeEl?.instanceOf(HTMLElement)) {
+			const mode = titleModeEl.getAttr("data-title-mode");
+			if (isTitleMode(mode)) {
+				this.setTitleMode(mode);
 			}
+			return;
+		}
+
+		const searchDateEl = target.closest("[data-search-date]");
+		if (searchDateEl?.instanceOf(HTMLElement)) {
+			const filter = searchDateEl.getAttr("data-search-date");
+				if (isSearchDateFilter(filter)) {
+					if (this.currentLayout === "mobile" && this.mobileSearchPageOpen) {
+						this.setMobileSearchDateFilter(filter);
+					} else {
+						this.setSearchDateFilter(filter, searchDateEl);
+					}
+				}
 			return;
 		}
 
@@ -1867,6 +2295,18 @@ export class KnomoView extends ItemView {
 			this.renderNextCardBatch(this.renderGeneration);
 			return;
 		}
+		if (action === "load-more-mobile-search") {
+			this.loadMoreMobileSearchResults();
+			return;
+		}
+		if (action === "reset-list-state") {
+			this.resetToAllNotes();
+			return;
+		}
+		if (action === "close-mobile-search") {
+			this.closeMobileSearchPage();
+			return;
+		}
 		if (action === "open-drawer") {
 			if (this.composerOpen) {
 				this.closeComposerKeepingDraft();
@@ -1945,6 +2385,11 @@ export class KnomoView extends ItemView {
 		if (event.key !== "Escape") {
 			return;
 		}
+		if (this.mobileSearchPageOpen) {
+			event.preventDefault();
+			this.closeMobileSearchPage();
+			return;
+		}
 		if (this.composerOpen) {
 			event.preventDefault();
 			this.closeComposerKeepingDraft();
@@ -1967,6 +2412,7 @@ export class KnomoView extends ItemView {
 			this.activeMenuMemoId = null;
 			this.scopeMenuOpen = false;
 			this.desktopSearchOpen = false;
+			this.compactSearchOpen = false;
 			this.mobileDrawerOpen = false;
 			this.composerOpen = false;
 			this.clearMobileComposerFocus();
@@ -1978,13 +2424,20 @@ export class KnomoView extends ItemView {
 
 	private async handleMemoAction(action: string, memo: MemoRecord): Promise<void> {
 		this.activeMenuMemoId = null;
+		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		try {
 			if (action === "edit") {
+				if (shouldCloseMobileSearch) {
+					this.closeMobileSearchPage();
+				}
 				this.startEditing(memo);
 				this.syncCardMenuState();
 				return;
 			} else if (action === "reference") {
 				const referenceText = await this.referenceService.createReferenceText(memo, "link");
+				if (shouldCloseMobileSearch) {
+					this.closeMobileSearchPage();
+				}
 				this.startReferenceMemo(memo, withMemoIdAlias(referenceText, memo.id));
 				this.syncCardMenuState();
 				return;
@@ -2104,35 +2557,64 @@ export class KnomoView extends ItemView {
 
 	private setScope(scope: ScopeFilter): void {
 		this.clearSearchDebounce();
+		this.clearDesktopSearchState();
 		this.scopeFilter = scope;
 		this.activeTag = null;
 		this.activeNav = "all";
 		this.resetVisibleMemos();
-		if (isDateScope(scope)) {
-			this.searchQuery = "";
-		}
 		this.mobileDrawerOpen = false;
 		this.desktopSearchOpen = false;
 		this.scopeMenuOpen = false;
 		this.renderUiState();
-		if (needsAllMemos(scope, this.searchQuery)) {
+		if (needsAllMemos(scope, this.searchQuery, this.searchDateFilter)) {
 			void this.ensureAllMemosLoaded();
 		}
 	}
 
 	private setSearchQuery(query: string): void {
 		this.clearSearchDebounce();
-		if (isDateScope(this.scopeFilter) && query !== getScopeLabel(this.scopeFilter)) {
+		this.searchQuery = query;
+		if (query.trim().length > 0 || this.searchDateFilter !== null) {
+			this.activeTag = null;
+			this.activeNav = "all";
 			this.scopeFilter = "all";
 		}
-		this.searchQuery = query;
+		this.activeMenuMemoId = null;
 		this.activeNav = "all";
 		this.resetVisibleMemos();
 		this.renderCardFlow();
 		this.renderScopeState();
 		this.syncSearchInputs();
-		if (needsAllMemos(this.scopeFilter, query)) {
+		if (needsAllMemos(this.scopeFilter, query, this.searchDateFilter)) {
 			void this.ensureAllMemosLoaded();
+		}
+	}
+
+	private setSearchDateFilter(filter: SearchDateFilter, sourceEl: HTMLElement | null = null): void {
+		this.flushDesktopSearchQuery(sourceEl);
+		this.searchDateFilter = this.searchDateFilter === filter ? null : filter;
+		this.activeTag = null;
+		this.activeNav = "all";
+		this.scopeFilter = "all";
+		this.activeMenuMemoId = null;
+		this.desktopSearchOpen = false;
+		this.compactSearchOpen = false;
+		this.resetVisibleMemos();
+		this.renderCardFlow();
+		this.renderScopeState();
+		this.syncSearchInputs();
+		if (needsAllMemos(this.scopeFilter, this.searchQuery, this.searchDateFilter)) {
+			void this.ensureAllMemosLoaded();
+		}
+	}
+
+	private flushDesktopSearchQuery(sourceEl: HTMLElement | null): void {
+		this.clearSearchDebounce();
+		const input = sourceEl
+			?.closest(".knomo-search-wrap, .knomo-compact-search-wrap")
+			?.querySelector(".knomo-search-input");
+		if (input?.instanceOf(HTMLInputElement)) {
+			this.searchQuery = input.value;
 		}
 	}
 
@@ -2152,8 +2634,14 @@ export class KnomoView extends ItemView {
 		this.searchDebounceTimeoutId = null;
 	}
 
+	private clearDesktopSearchState(): void {
+		this.searchQuery = "";
+		this.searchDateFilter = null;
+	}
+
 	private setSidebarNav(nav: SidebarNav): void {
 		this.clearSearchDebounce();
+		this.clearDesktopSearchState();
 		this.activeNav = nav;
 		this.activeTag = null;
 		this.scopeFilter = "all";
@@ -2161,9 +2649,6 @@ export class KnomoView extends ItemView {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = null;
-		if (nav === "review" || nav === "random" || nav === "trash") {
-			this.searchQuery = "";
-		}
 		if (nav !== "random") {
 			this.randomReunionMemos = null;
 		}
@@ -2179,13 +2664,37 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private setTitleMode(mode: TitleMode): void {
+		const option = TITLE_MODE_OPTIONS.find((item) => item.mode === mode);
+		if (option === undefined) {
+			return;
+		}
+		if (option.nav !== undefined) {
+			this.setSidebarNav(option.nav);
+			return;
+		}
+		this.setScope(option.scope ?? "all");
+	}
+
+	private resetToAllNotes(): void {
+		this.clearSearchDebounce();
+		this.clearDesktopSearchState();
+		this.activeTag = null;
+		this.activeNav = "all";
+		this.scopeFilter = "all";
+		this.mobileDrawerOpen = false;
+		this.scopeMenuOpen = false;
+		this.desktopSearchOpen = false;
+		this.compactSearchOpen = false;
+		this.activeMenuMemoId = null;
+		this.resetVisibleMemos();
+		this.renderUiState();
+	}
+
 	private openDesktopSearch(): void {
 		this.desktopSearchOpen = true;
 		this.scopeMenuOpen = false;
 		this.syncRootState();
-		if (isDateScope(this.scopeFilter) && this.searchQuery.length === 0) {
-			this.desktopSearchInputEl?.select();
-		}
 	}
 
 	private getCardFlowScrollTop(): number | null {
@@ -2969,11 +3478,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncSearchInputs(): void {
-		const displayedValue = this.searchQuery.length > 0
-			? this.searchQuery
-			: isDateScope(this.scopeFilter)
-				? getScopeLabel(this.scopeFilter)
-				: "";
+		const displayedValue = this.searchQuery;
 		if (this.desktopSearchInputEl !== null && this.desktopSearchInputEl.value !== displayedValue) {
 			this.desktopSearchInputEl.value = displayedValue;
 		}
@@ -2993,6 +3498,7 @@ export class KnomoView extends ItemView {
 			return this.randomReunionMemos ?? [];
 		}
 		const normalizedQuery = this.searchQuery.trim().toLowerCase();
+		const searchDateFilter = this.searchDateFilter;
 		const today = new Date();
 		const todayKey = formatDatePart(today);
 		const cache = this.filteredMemosCache;
@@ -3003,14 +3509,19 @@ export class KnomoView extends ItemView {
 			cache.activeNav === this.activeNav &&
 			cache.scopeFilter === this.scopeFilter &&
 			cache.searchQuery === normalizedQuery &&
+			cache.searchDateFilter === searchDateFilter &&
 			cache.todayKey === todayKey
 		) {
 			return cache.result;
 		}
 
-		const filteredMemos = this.activeNav === "review"
-			? this.getOutsideTodayMemos(today)
-			: this.memos.filter((memo) => {
+		let filteredMemos: MemoRecord[];
+		if (this.isDesktopSearchActive()) {
+			filteredMemos = this.memos.filter((memo) => this.memoMatchesSearch(memo, normalizedQuery, searchDateFilter));
+		} else if (this.activeNav === "review") {
+			filteredMemos = this.getOutsideTodayMemos(today);
+		} else {
+			filteredMemos = this.memos.filter((memo) => {
 				if (this.activeTag !== null && !memo.tags.some((tag) => tag === this.activeTag || tag.startsWith(`${this.activeTag}/`))) {
 					return false;
 				}
@@ -3019,16 +3530,40 @@ export class KnomoView extends ItemView {
 				}
 				return matchesScope(memo, this.scopeFilter);
 			});
+		}
 		this.filteredMemosCache = {
 			memos: this.memos,
 			activeTag: this.activeTag,
 			activeNav: this.activeNav,
 			scopeFilter: this.scopeFilter,
 			searchQuery: normalizedQuery,
+			searchDateFilter,
 			todayKey,
 			result: filteredMemos,
 		};
 		return filteredMemos;
+	}
+
+	private isDesktopSearchActive(): boolean {
+		return this.searchQuery.trim().length > 0 || this.searchDateFilter !== null;
+	}
+
+	private memoMatchesSearch(memo: MemoRecord, normalizedQuery: string, dateFilter: SearchDateFilter | null): boolean {
+		if (normalizedQuery.length > 0 && !this.getMemoSearchText(memo).includes(normalizedQuery)) {
+			return false;
+		}
+		if (dateFilter !== null && !this.memoMatchesSearchDate(memo, dateFilter)) {
+			return false;
+		}
+		return true;
+	}
+
+	private memoMatchesSearchDate(memo: MemoRecord, filter: SearchDateFilter): boolean {
+		const date = this.parseMemoLocalDate(memo);
+		if (date === null) {
+			return false;
+		}
+		return matchesSearchDateFilter(date, filter);
 	}
 
 	private getOutsideTodayMemos(today: Date): MemoRecord[] {
@@ -3076,29 +3611,33 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncCardMenuState(): void {
-		if (this.cardFlowEl === null) {
-			return;
-		}
-		for (const card of this.cardFlowEl.findAll(".knomo-card")) {
-			const isOpen = this.activeMenuMemoId !== null && card.getAttr("data-memo-id") === this.activeMenuMemoId;
-			card.toggleClass("is-menu-open", isOpen);
-			card.toggleClass("is-menu-above", false);
-			card.find(".knomo-card-menu")?.setAttr("aria-expanded", isOpen ? "true" : "false");
-			if (isOpen) {
-				this.positionOpenCardMenu(card);
+		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl]) {
+			if (container === null) {
+				continue;
+			}
+			for (const card of container.findAll(".knomo-card")) {
+				const isOpen = this.activeMenuMemoId !== null && card.getAttr("data-memo-id") === this.activeMenuMemoId;
+				card.toggleClass("is-menu-open", isOpen);
+				card.toggleClass("is-menu-above", false);
+				card.find(".knomo-card-menu")?.setAttr("aria-expanded", isOpen ? "true" : "false");
+				if (isOpen) {
+					this.positionOpenCardMenu(card);
+				}
 			}
 		}
 	}
 
 	private positionOpenCardMenu(card: HTMLElement): void {
-		if (this.cardFlowEl === null) {
-			return;
-		}
 		const actions = card.find(".knomo-card-actions");
 		if (!actions?.instanceOf(HTMLElement)) {
 			return;
 		}
-		const flowRect = this.cardFlowEl.getBoundingClientRect();
+		const mobileSearchResults = card.closest(".knomo-mobile-search-results");
+		const flowEl = mobileSearchResults?.instanceOf(HTMLElement) ? mobileSearchResults : this.cardFlowEl;
+		if (flowEl === null) {
+			return;
+		}
+		const flowRect = flowEl.getBoundingClientRect();
 		const actionsRect = actions.getBoundingClientRect();
 		card.toggleClass("is-menu-above", actionsRect.bottom > flowRect.bottom - 8);
 	}
@@ -3992,29 +4531,20 @@ function matchesScope(memo: MemoRecord, filter: ScopeFilter): boolean {
 	return true;
 }
 
-function uniqueScopeOptions(options: ScopeOption[]): ScopeOption[] {
-	const seen = new Set<ScopeFilter>();
-	const uniqueOptions: ScopeOption[] = [];
-	for (const option of options) {
-		if (seen.has(option.filter)) {
-			continue;
-		}
-		seen.add(option.filter);
-		uniqueOptions.push(option);
-	}
-	return uniqueOptions;
-}
-
 function getScopeLabel(filter: ScopeFilter): string {
 	return ALL_SCOPE_OPTIONS.find((option) => option.filter === filter)?.label ?? "全部笔记";
 }
 
-function isScopeFilter(value: string | null): value is ScopeFilter {
-	return value !== null && ALL_SCOPE_OPTIONS.some((option) => option.filter === value);
+function isTitleMode(value: string | null): value is TitleMode {
+	return value !== null && TITLE_MODE_OPTIONS.some((option) => option.mode === value);
 }
 
-function isDateScope(value: ScopeFilter): boolean {
-	return DATE_SCOPE_OPTIONS.some((option) => option.filter === value);
+function isSearchDateFilter(value: string | null): value is SearchDateFilter {
+	return value !== null && SEARCH_DATE_OPTIONS.some((option) => option.filter === value);
+}
+
+function getSearchDateLabel(filter: SearchDateFilter): string {
+	return SEARCH_DATE_OPTIONS.find((option) => option.filter === filter)?.label ?? "搜索";
 }
 
 function isSidebarNav(value: string | null): value is SidebarNav {
@@ -4033,8 +4563,32 @@ function isTrashAction(value: string | null): value is "restore" | "purge" {
 	return value === "restore" || value === "purge";
 }
 
-function needsAllMemos(scope: ScopeFilter, query: string): boolean {
-	return query.trim().length > 0 || scope === "anniversary";
+function matchesSearchDateFilter(date: Date, filter: SearchDateFilter): boolean {
+	const today = startOfDay(new Date());
+	if (filter === "week") {
+		const mondayOffset = (today.getDay() + 6) % 7;
+		const start = addDays(today, -mondayOffset);
+		return date >= start && date < addDays(start, 7);
+	}
+	if (filter === "last-week") {
+		const mondayOffset = (today.getDay() + 6) % 7;
+		const thisWeekStart = addDays(today, -mondayOffset);
+		const lastWeekStart = addDays(thisWeekStart, -7);
+		return date >= lastWeekStart && date < thisWeekStart;
+	}
+	if (filter === "month") {
+		return date >= new Date(today.getFullYear(), today.getMonth(), 1) && date < new Date(today.getFullYear(), today.getMonth() + 1, 1);
+	}
+	if (filter === "last-month") {
+		return date >= new Date(today.getFullYear(), today.getMonth() - 1, 1) && date < new Date(today.getFullYear(), today.getMonth(), 1);
+	}
+	if (filter === "last-7") return date >= addDays(today, -6) && date < addDays(today, 1);
+	if (filter === "last-30") return date >= addDays(today, -29) && date < addDays(today, 1);
+	return true;
+}
+
+function needsAllMemos(scope: ScopeFilter, query: string, searchDateFilter: SearchDateFilter | null): boolean {
+	return query.trim().length > 0 || searchDateFilter !== null || scope === "anniversary";
 }
 
 function toMarkdownQuote(content: string): string {

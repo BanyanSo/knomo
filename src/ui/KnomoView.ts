@@ -145,7 +145,6 @@ export class KnomoView extends ItemView {
 	private sidebarEl: HTMLElement | null = null;
 	private scopeTitleEls: HTMLElement[] = [];
 	private statsEls: HTMLElement[] = [];
-	private pinnedTagsEl: HTMLElement | null = null;
 	private allTagsEl: HTMLElement | null = null;
 	private cardFlowEl: HTMLElement | null = null;
 	private trashCountEls: HTMLElement[] = [];
@@ -413,10 +412,6 @@ export class KnomoView extends ItemView {
 		for (const item of SIDEBAR_NAV_ITEMS) {
 			this.renderSidebarNavButton(nav, item);
 		}
-
-		const pinnedSection = sidebar.createDiv({ cls: "knomo-tag-section" });
-		pinnedSection.createDiv({ cls: "knomo-section-label", text: "置顶标签" });
-		this.pinnedTagsEl = pinnedSection.createDiv({ cls: "knomo-tag-list" });
 
 		const allTagSection = sidebar.createDiv({ cls: "knomo-tag-section" });
 		allTagSection.createDiv({ cls: "knomo-section-label", text: "全部标签" });
@@ -1329,10 +1324,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderTags(): void {
-		const settings = this.settingsService.getSettings();
 		const allTags = collectTags(this.memos);
-		const pinnedTags = allTags.filter((tag) => settings.pinnedTags.includes(tag.name));
-		this.renderTagList(this.pinnedTagsEl, buildTagTree(pinnedTags), "暂无置顶标签");
 		this.renderTagList(this.allTagsEl, buildTagTree(allTags), "暂无标签");
 	}
 
@@ -1380,9 +1372,12 @@ export class KnomoView extends ItemView {
 					"data-tag-toggle": tag.name,
 				},
 			});
-			setIcon(toggle, "chevron-down");
+			toggle.createSpan({ cls: "knomo-tag-count", text: String(tag.count) });
+			const toggleIcon = toggle.createSpan({ cls: "knomo-tag-toggle-icon" });
+			setIcon(toggleIcon, "chevron-down");
+		} else {
+			row.createSpan({ cls: "knomo-tag-count", text: String(tag.count) });
 		}
-		row.createSpan({ cls: "knomo-tag-count", text: String(tag.count) });
 		if (tag.children.length > 0) {
 			const children = node.createDiv({ cls: "knomo-tag-children" });
 			for (const child of tag.children) {

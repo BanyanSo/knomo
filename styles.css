@@ -454,7 +454,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 6px;
-	margin-bottom: 18px;
+	margin-bottom: 10px;
 }
 
 .knomo-plugin .knomo-stat {
@@ -466,7 +466,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 }
 
 .knomo-plugin .knomo-stat-value {
-	font-size: var(--font-ui-medium);
+	font-size: var(--font-ui-large);
 	font-weight: var(--font-semibold);
 	line-height: var(--line-height-tight);
 }
@@ -482,11 +482,11 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-tag-list {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 0;
 }
 
 .knomo-plugin .knomo-nav {
-	margin: 28px 0 42px;
+	margin: 0 0 12px;
 }
 
 .knomo-plugin .knomo-nav-button,
@@ -570,7 +570,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 }
 
 .knomo-plugin .knomo-section-label {
-	margin: 0 0 12px;
+	margin: 0 0 8px;
 	padding: 0 16px;
 	color: var(--text-faint);
 	font-size: 12px;
@@ -580,38 +580,40 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-tag-nav {
 	justify-content: flex-start;
 	gap: 0;
-	width: auto;
-	flex: 0 1 auto;
+	width: 100%;
+	flex: 1 1 auto;
 	min-width: 0;
 	min-height: 32px;
-	padding: 0;
+	padding: 0 0 0 16px;
 	text-align: left;
 }
 
 .knomo-plugin .knomo-tag-node {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 0;
 	min-width: 0;
 }
 
 .knomo-plugin .knomo-tag-row {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 52px 20px;
 	align-items: center;
-	gap: 6px;
+	column-gap: 0;
 	min-width: 0;
-	padding: 0 16px;
+	padding: 0;
 }
 
 .knomo-plugin .knomo-tag-toggle {
-	display: inline-flex;
-	flex: 0 0 18px;
+	display: grid;
+	grid-column: 2 / 4;
+	grid-template-columns: 52px 20px;
 	align-items: center;
-	justify-content: center;
-	width: 18px;
-	min-width: 18px;
-	height: 24px;
-	min-height: 24px;
+	column-gap: 0;
+	width: 100%;
+	min-width: 72px;
+	height: 32px;
+	min-height: 32px;
 	padding: 0;
 	border: 0;
 	color: var(--text-faint);
@@ -632,6 +634,13 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	transition: transform 120ms ease;
 }
 
+.knomo-plugin .knomo-tag-toggle-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	justify-self: end;
+}
+
 .knomo-plugin .knomo-tag-node.is-collapsed > .knomo-tag-row .knomo-tag-toggle svg {
 	transform: rotate(-90deg);
 }
@@ -639,7 +648,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-tag-children {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 0;
 	margin-left: 31px;
 	padding-left: 16px;
 	border-left: 1px solid var(--background-modifier-border);
@@ -663,14 +672,17 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 	font-weight: var(--font-semibold);
 }
 
-.knomo-plugin .knomo-tag-nav.is-active .knomo-tag-count {
-	color: var(--knomo-accent);
-}
-
 .knomo-plugin .knomo-tag-count {
 	margin-left: auto;
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
+	justify-self: end;
+}
+
+.knomo-plugin .knomo-tag-row > .knomo-tag-count {
+	grid-column: 2;
+	justify-self: end;
+	margin-left: 0;
 }
 
 /* ---- Sidebar Resizer ---- */

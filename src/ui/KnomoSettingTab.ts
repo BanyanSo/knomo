@@ -57,11 +57,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("插入位置")
-			.setDesc("选择新的 Memos 插入到标题下方的位置。")
+			.setName("新 Memos 排列方式")
+			.setDesc("选择新 Memos 在当天标题区域中的排列方式。")
 			.addDropdown((dropdown) => {
-				dropdown.addOption("top", "顶部");
-				dropdown.addOption("bottom", "底部");
+				dropdown.addOption("bottom", "最新在后（追加到分组末尾）");
+				dropdown.addOption("top", "最新在前（插入到标题下方）");
 				dropdown.setValue(settings.dailyInsertPosition);
 				dropdown.onChange((value) => {
 					void this.settingsService.updateSettings({

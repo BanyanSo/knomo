@@ -405,8 +405,8 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin .knomo-sidebar-actions {
 	display: flex;
 	gap: 4px;
-	opacity: 0;
-	pointer-events: none;
+	opacity: 1;
+	pointer-events: auto;
 	transition: opacity 160ms ease;
 }
 
@@ -419,6 +419,11 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 .knomo-plugin.is-layout-mobile .knomo-sidebar-actions {
 	opacity: 1;
 	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-sidebar-action[data-action="focus-stats"] {
+	visibility: hidden;
+	pointer-events: none;
 }
 
 .knomo-plugin .knomo-sidebar-action {

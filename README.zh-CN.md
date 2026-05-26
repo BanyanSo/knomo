@@ -40,11 +40,8 @@ Knomo 不试图取代 Obsidian 的文件、文件夹、标签、双链和日记�
 
 ![](./screenshots/screenshot-mobile-collage.png)
 
-![](./screenshots/screenshot-mobile-main.png)
+![](./screenshots/screenshot-mobile-collage2.png)
 
-![](./screenshots/screenshot-mobile-composer.png)
-
-![](./screenshots/screenshot-mobile-search.png)
 
 
 ---

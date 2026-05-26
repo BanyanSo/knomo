@@ -40,11 +40,8 @@ It represents the connection between knowledge, ideas, and everyday flashes of t
 
 ![](./screenshots/screenshot-mobile-collage.png)
 
-![](./screenshots/screenshot-mobile-main.png)
+![](./screenshots/screenshot-mobile-collage2.png)
 
-![](./screenshots/screenshot-mobile-composer.png)
-
-![](./screenshots/screenshot-mobile-search.png)
 
 
 ---

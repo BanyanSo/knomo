@@ -13,6 +13,7 @@ import {
 	parseMemoLinks,
 	parseMemoTags,
 	splitMarkdownLines,
+	stripMemoContinuationIndent,
 } from "../utils/markdown";
 import type { DailyInsertPosition } from "../types/settings";
 
@@ -140,7 +141,7 @@ export class MarkdownBlockService {
 			if (!isMemoContinuationLine(line)) {
 				break;
 			}
-			contentLines.push(line.replace(/^ {2,}/, ""));
+			contentLines.push(stripMemoContinuationIndent(line));
 			endLine = lineIndex;
 		}
 		if (contentLines.length === 0) {

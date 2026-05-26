@@ -3,6 +3,7 @@ import type { MemoImageRef, MemoLinkRef } from "../types/memo";
 const MARKDOWN_HEADING_REGEX = /^(#{1,6})\s+\S.*$/;
 const TRAILING_BLOCK_ID_REGEX = /\s+\^[A-Za-z0-9_-]+\s*$/;
 const MEMO_START_LINE_REGEX = /^- \d{2}:\d{2}(?::\d{2})?(?: .*)?$/;
+const MEMO_CONTINUATION_INDENT_REGEX = /^(?:\t| {2,})/;
 const OBSIDIAN_IMAGE_REGEX = /!\[\[([^\]]+)\]\]/g;
 const OBSIDIAN_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
 const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
@@ -38,7 +39,7 @@ export function isMarkdownHeadingLine(value: string): boolean {
 }
 
 export function indentMemoContinuationLine(value: string): string {
-	return `  ${value}`;
+	return `\t${value}`;
 }
 
 export function normalizeMarkdownLineEndings(value: string): string {
@@ -69,7 +70,11 @@ export function findLineNumber(content: string, block: string, preferLast = fals
 }
 
 export function isMemoContinuationLine(value: string): boolean {
-	return /^ {2,}/.test(value);
+	return MEMO_CONTINUATION_INDENT_REGEX.test(value);
+}
+
+export function stripMemoContinuationIndent(value: string): string {
+	return value.replace(MEMO_CONTINUATION_INDENT_REGEX, "");
 }
 
 export function parseMemoTags(content: string): string[] {

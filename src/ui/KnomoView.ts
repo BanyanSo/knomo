@@ -2283,6 +2283,12 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (action === "toggle-card-menu") {
+			if (this.currentLayout !== "mobile") {
+				this.scopeMenuOpen = false;
+				this.desktopSearchOpen = false;
+				this.compactSearchOpen = false;
+				this.syncRootState();
+			}
 			this.activeMenuMemoId = this.activeMenuMemoId === memoId ? null : memoId;
 			this.syncCardMenuState();
 			return;
@@ -2317,6 +2323,10 @@ export class KnomoView extends ItemView {
 		if (action === "toggle-scope-menu") {
 			this.scopeMenuOpen = !this.scopeMenuOpen;
 			this.desktopSearchOpen = false;
+			if (this.currentLayout !== "mobile") {
+				this.compactSearchOpen = false;
+				this.activeMenuMemoId = null;
+			}
 		}
 		if (action === "toggle-sidebar") this.toggleSidebar();
 		if (action === "collapse-sidebar") {
@@ -2342,6 +2352,9 @@ export class KnomoView extends ItemView {
 		if (action === "toggle-compact-search") {
 			this.compactSearchOpen = !this.compactSearchOpen;
 			this.desktopSearchOpen = false;
+			if (this.currentLayout !== "mobile") {
+				this.activeMenuMemoId = null;
+			}
 		}
 		if (this.runComposerToolAction(action)) {
 			return;
@@ -2599,6 +2612,9 @@ export class KnomoView extends ItemView {
 		this.activeMenuMemoId = null;
 		this.desktopSearchOpen = false;
 		this.compactSearchOpen = false;
+		if (this.currentLayout !== "mobile") {
+			this.syncRootState();
+		}
 		this.resetVisibleMemos();
 		this.renderCardFlow();
 		this.renderScopeState();
@@ -2694,6 +2710,10 @@ export class KnomoView extends ItemView {
 	private openDesktopSearch(): void {
 		this.desktopSearchOpen = true;
 		this.scopeMenuOpen = false;
+		if (this.currentLayout !== "mobile") {
+			this.activeMenuMemoId = null;
+			this.syncCardMenuState();
+		}
 		this.syncRootState();
 	}
 

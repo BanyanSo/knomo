@@ -11,3 +11,5 @@ node_modules/
 AGENTS.md
 CLAUDE.md
 knomo-assets/
+
+.claude/

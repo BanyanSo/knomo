@@ -239,7 +239,7 @@ test("inserts memo under an existing heading at the top", () => {
 			position: "top",
 			createHeadingIfMissing: false,
 		}),
-		"# 2026-05-14\n\n## Knomo\n- 12:00:00 新 memo\n- 11:00:00 旧 memo\n\n## Next",
+		"# 2026-05-14\n\n## Knomo\n\n- 12:00:00 新 memo\n- 11:00:00 旧 memo\n\n## Next",
 	);
 });
 
@@ -254,9 +254,54 @@ test("inserts memo under an existing heading at the bottom", () => {
 			position: "bottom",
 			createHeadingIfMissing: false,
 		}),
-			"# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n- 12:00:00 新 memo\n## Next",
-		);
-	});
+		"# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n- 12:00:00 新 memo\n\n## Next",
+	);
+});
+
+test("inserts memo at the bottom before preserving multiple trailing heading blank lines", () => {
+	const content = "# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n\n\n## Next";
+	const block = service.buildMemoBlock("新 memo", "12:00:00");
+
+	assert.equal(
+		service.insertMemoBlock(content, {
+			heading: "## Knomo",
+			block,
+			position: "bottom",
+			createHeadingIfMissing: false,
+		}),
+		"# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n- 12:00:00 新 memo\n\n\n## Next",
+	);
+});
+
+test("inserts memo into an empty heading before preserving existing blank lines", () => {
+	const content = "# 2026-05-14\n\n## Knomo\n\n\n## Next";
+	const block = service.buildMemoBlock("新 memo", "12:00:00");
+
+	assert.equal(
+		service.insertMemoBlock(content, {
+			heading: "## Knomo",
+			block,
+			position: "bottom",
+			createHeadingIfMissing: false,
+		}),
+		"# 2026-05-14\n\n## Knomo\n- 12:00:00 新 memo\n\n\n## Next",
+	);
+});
+
+test("inserts memo between adjacent headings", () => {
+	const content = "# 2026-05-14\n\n## Knomo\n## Next";
+	const block = service.buildMemoBlock("新 memo", "12:00:00");
+
+	assert.equal(
+		service.insertMemoBlock(content, {
+			heading: "## Knomo",
+			block,
+			position: "bottom",
+			createHeadingIfMissing: false,
+		}),
+		"# 2026-05-14\n\n## Knomo\n- 12:00:00 新 memo\n## Next",
+	);
+});
 
 test("creates heading when missing and allowed", () => {
 	const block = service.buildMemoBlock("新 memo", "12:00:00");
@@ -315,6 +360,151 @@ test("daily note writes create the heading when missing", async () => {
 	await dailyNoteService.insertMemoBlock(settings, service.buildMemoBlock("新 memo", "12:00:00"));
 
 	assert.equal(dailyContent, "# Today\n\n## Knomo\n- 12:00:00 新 memo");
+});
+
+test("daily note creation uses Daily Notes interface template when missing", async () => {
+	const { DailyNoteService } = await loadDailyNoteService();
+	const { TFile } = await import("obsidian");
+	const files = new Map<string, InstanceType<typeof TFile>>();
+	const contents = new Map<string, string>();
+	const app = {
+		vault: {
+			getAbstractFileByPath: (path: string) => files.get(path) ?? null,
+		},
+	};
+	let interfaceCalls = 0;
+	const restoreWindow = setTestWindow({
+		__knomoCreateDailyNote: async (date: { format: (format: string) => string }) => {
+			interfaceCalls += 1;
+			const filename = date.format("YYYY-MM-DD");
+			const path = `Daily/${filename}.md`;
+			const file = files.get(path) ?? Object.assign(new TFile(), {
+				path,
+				basename: filename,
+				extension: "md",
+			});
+			files.set(path, file);
+			contents.set(path, `# ${filename}\n${filename}`);
+			return file;
+		},
+	});
+	try {
+		const dailyNoteService = new DailyNoteService(
+			app as never,
+			service,
+			{
+				getConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+				loadConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+			},
+		);
+
+		const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
+
+		assert.equal(file.path, "Daily/2026-05-14.md");
+		assert.equal(interfaceCalls, 1);
+		assert.equal(contents.get("Daily/2026-05-14.md"), "# 2026-05-14\n2026-05-14");
+	} finally {
+		restoreWindow();
+	}
+});
+
+test("daily note creation returns existing file without applying template", async () => {
+	const { DailyNoteService } = await loadDailyNoteService();
+	const { TFile } = await import("obsidian");
+	const existingFile = Object.assign(new TFile(), {
+		path: "Daily/2026-05-14.md",
+		basename: "2026-05-14",
+		extension: "md",
+	});
+	let createCalls = 0;
+	const dailyNoteService = new DailyNoteService(
+		{
+			vault: {
+				getAbstractFileByPath: (path: string) => path === existingFile.path ? existingFile : null,
+				create: async () => {
+					createCalls += 1;
+					throw new Error("should not create");
+				},
+			},
+		} as never,
+		service,
+		{
+			getConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+			loadConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		},
+	);
+
+	const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
+
+	assert.equal(file, existingFile);
+	assert.equal(createCalls, 0);
+});
+
+test("daily note creation falls back when Daily Notes interface fails", async () => {
+	const { DailyNoteService } = await loadDailyNoteService();
+	const { TFile } = await import("obsidian");
+	const files = new Map<string, InstanceType<typeof TFile>>();
+	const restoreWindow = setTestWindow(undefined);
+	const originalConsoleError = console.error;
+	let loggedFallback = false;
+	console.error = (...args: unknown[]) => {
+		loggedFallback = String(args[0]).includes("Daily Notes interface failed");
+	};
+	try {
+		const dailyNoteService = new DailyNoteService(
+			{
+				vault: {
+					getAbstractFileByPath: (path: string) => files.get(path) ?? null,
+					createFolder: async () => undefined,
+					create: async (path: string) => {
+						const file = Object.assign(new TFile(), {
+							path,
+							basename: path.split("/").pop()?.replace(/\.md$/, "") ?? path,
+							extension: "md",
+						});
+						files.set(path, file);
+						return file;
+					},
+				},
+			} as never,
+			service,
+			{
+				getConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+				loadConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+			},
+		);
+
+		const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
+
+		assert.equal(file.path, "Daily/2026-05-14.md");
+		assert.equal(loggedFallback, true);
+	} finally {
+		console.error = originalConsoleError;
+		restoreWindow();
+	}
+});
+
+test("daily note creation still errors when Daily Notes core plugin is disabled", async () => {
+	const { DailyNoteService } = await loadDailyNoteService();
+	const dailyNoteService = new DailyNoteService(
+		{
+			vault: {
+				create: async () => {
+					throw new Error("should not create");
+				},
+			},
+		} as never,
+		service,
+		{
+			getConfig: () => null,
+			loadConfig: async () => null,
+		},
+	);
+
+	await assert.rejects(
+		() => dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00")),
+		/请先在 Obsidian 设置的核心插件中开启“日记”/,
+	);
 });
 
 test("updates a complete memo block without touching the next memo", () => {
@@ -1736,6 +1926,62 @@ test("restoreMonthlyArchives restores old archives and removes failed rebuild ar
 	assert.equal(contents.get(existingMonthlyFile.path), "backup content");
 });
 
+test("monthly archive insertion preserves trailing blank lines in a date heading section", async () => {
+	const { MonthlyArchiveService, MONTHLY_ARCHIVE_READONLY_COMMENT } = await loadMonthlyArchiveService();
+	const { TFile } = await import("obsidian");
+	const monthlyFile = Object.assign(new TFile(), {
+		path: "Memos/Memos-2026-05.md",
+		basename: "Memos-2026-05",
+		extension: "md",
+	});
+	const content = [
+		MONTHLY_ARCHIVE_READONLY_COMMENT,
+		"",
+		"# 2026-05",
+		"",
+		"## 2026-05-14",
+		"",
+		"- 11:00:00 旧 memo",
+		"",
+		"",
+		"## 2026-05-15",
+	].join("\n");
+	const contents = new Map<string, string>([[monthlyFile.path, content]]);
+	const archiveService = new MonthlyArchiveService({
+		vault: {
+			getAbstractFileByPath: (path: string) => path === monthlyFile.path ? monthlyFile : null,
+			process: async (file: { path: string }, callback: (content: string) => string) => {
+				const nextContent = callback(contents.get(file.path) ?? "");
+				contents.set(file.path, nextContent);
+				return nextContent;
+			},
+		},
+	} as never);
+
+	const result = await archiveService.insertMemoBlock(
+		createTestSettings(),
+		new Date("2026-05-14T12:00:00"),
+		service.buildMemoBlock("新 memo", "12:00:00"),
+	);
+
+	assert.equal(
+		result.content,
+		[
+			MONTHLY_ARCHIVE_READONLY_COMMENT,
+			"",
+			"# 2026-05",
+			"",
+			"## 2026-05-14",
+			"",
+			"- 11:00:00 旧 memo",
+			"- 12:00:00 新 memo",
+			"",
+			"",
+			"## 2026-05-15",
+		].join("\n"),
+	);
+});
+
 test("legacy daily memo preview groups headings and root while ignoring frontmatter, tasks, and code fences", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
@@ -2059,6 +2305,24 @@ function createDailyNotesApp(options: {
 	};
 }
 
+function setTestWindow(value: unknown): () => void {
+	const globalRecord = globalThis as unknown as Record<string, unknown>;
+	const hadWindow = Object.prototype.hasOwnProperty.call(globalRecord, "window");
+	const previousWindow = globalRecord["window"];
+	if (value === undefined) {
+		delete globalRecord["window"];
+	} else {
+		globalRecord["window"] = value;
+	}
+	return () => {
+		if (!hadWindow) {
+			delete globalRecord["window"];
+			return;
+		}
+		globalRecord["window"] = previousWindow;
+	};
+}
+
 async function ensureObsidianStub(): Promise<void> {
 	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
 	await mkdir(dirname(stubPath), { recursive: true });
@@ -2071,6 +2335,17 @@ async function ensureObsidianStub(): Promise<void> {
 			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
 			"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
 			"module.exports = { TFile, TFolder, Vault, normalizePath, moment };",
+		].join("\n"),
+	);
+	const dailyNotesInterfaceStubPath = resolve(__dirname, "../node_modules/obsidian-daily-notes-interface/index.js");
+	await mkdir(dirname(dailyNotesInterfaceStubPath), { recursive: true });
+	await writeFile(
+		dailyNotesInterfaceStubPath,
+		[
+			"async function createDailyNote(date) {",
+			"  return window.__knomoCreateDailyNote(date);",
+			"}",
+			"module.exports = { createDailyNote };",
 		].join("\n"),
 	);
 }

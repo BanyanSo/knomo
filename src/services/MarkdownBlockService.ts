@@ -314,8 +314,7 @@ export class MarkdownBlockService {
 				? findTopInsertIndex(lines, headingIndex, sectionEnd)
 				: findBottomInsertIndex(lines, headingIndex, sectionEnd);
 		const nextLines = [...lines];
-		const normalizedInsertIndex = removeAdjacentBlankLines(nextLines, insertIndex, headingIndex);
-		nextLines.splice(normalizedInsertIndex, 0, ...blockLines);
+		nextLines.splice(insertIndex, 0, ...blockLines);
 		return nextLines.join("\n");
 	}
 
@@ -428,16 +427,4 @@ function findBottomInsertIndex(lines: string[], headingIndex: number, sectionEnd
 		insertIndex -= 1;
 	}
 	return insertIndex;
-}
-
-function removeAdjacentBlankLines(lines: string[], insertIndex: number, headingIndex: number): number {
-	let nextInsertIndex = insertIndex;
-	while (nextInsertIndex > headingIndex + 1 && lines[nextInsertIndex - 1]?.trim() === "") {
-		lines.splice(nextInsertIndex - 1, 1);
-		nextInsertIndex -= 1;
-	}
-	while (lines[nextInsertIndex]?.trim() === "") {
-		lines.splice(nextInsertIndex, 1);
-	}
-	return nextInsertIndex;
 }

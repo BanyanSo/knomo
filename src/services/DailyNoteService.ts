@@ -1,5 +1,6 @@
-import { moment as obsidianMoment, normalizePath } from "obsidian";
-import type { App, TFile } from "obsidian";
+import { createDailyNote } from "obsidian-daily-notes-interface";
+import { moment as obsidianMoment, normalizePath, TFile } from "obsidian";
+import type { App } from "obsidian";
 
 import type { DailyRef } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
@@ -65,7 +66,24 @@ export class DailyNoteService {
 		if (!status.enabled) {
 			throw new Error(status.message);
 		}
-		return ensureTextFile(this.app, this.getDailyNotePathForDate(date, status));
+		const path = this.getDailyNotePathForDate(date, status);
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		if (existing instanceof TFile) {
+			return existing;
+		}
+
+		try {
+			const momentFactory = obsidianMoment as unknown as MomentFactory;
+			const createdFile = await createDailyNote(momentFactory(date) as Parameters<typeof createDailyNote>[0]);
+			if (createdFile instanceof TFile) {
+				return createdFile;
+			}
+			console.warn("Knomo: Daily Notes interface did not return a file; falling back to Knomo daily note creation.");
+		} catch (error) {
+			console.error("Knomo: Daily Notes interface failed to create a daily note; falling back to Knomo daily note creation.", error);
+		}
+
+		return ensureTextFile(this.app, path);
 	}
 
 	getDailyNotePathForDate(date: Date, status = this.getStatus()): string {

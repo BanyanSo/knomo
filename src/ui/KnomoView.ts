@@ -3134,6 +3134,9 @@ export class KnomoView extends ItemView {
 		if (action === null) {
 			return;
 		}
+		if (action === "insert-image") {
+			return;
+		}
 		event.preventDefault();
 		event.stopPropagation();
 		if (this.isHandledMobileToolPointer(toolButton, action)) {
@@ -4147,9 +4150,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private openNativeImagePicker(): void {
-		if (this.currentLayout === "mobile") {
-			this.focusComposerInputNow();
-		}
 		const input = this.containerEl.createEl("input", {
 			cls: "knomo-hidden-file-input",
 			attr: {

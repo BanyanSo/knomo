@@ -230,12 +230,12 @@ export class SettingsService {
 				status: "unchanged",
 				oldSystemPath: plan.oldSystemPath,
 				newSystemPath: plan.newSystemPath,
-				message: "系统目录路径未变化。",
+				message: "System folder path did not change.",
 				plan,
 			};
 		}
 		if (plan.conflicts.length > 0) {
-			throw new Error(`目标路径存在冲突，已停止迁移：${plan.conflicts.join("；")}`);
+			throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
 		}
 
 		const movedPaths: Array<{ from: string; to: string }> = [];
@@ -266,7 +266,7 @@ export class SettingsService {
 				await this.plugin.app.vault.rename(oldSystemFolder, plan.newSystemPath);
 				movedPaths.push({ from: plan.oldSystemPath, to: plan.newSystemPath });
 			} else if (oldSystemFolder !== null) {
-				throw new Error(`旧系统路径不是文件夹：${plan.oldSystemPath}`);
+				throw new Error(`Old system path is not a folder: ${plan.oldSystemPath}`);
 			} else {
 				await ensureFolder(this.plugin.app, getIndexFolderPath(plan.newMonthlyMemoFolder));
 			}
@@ -284,7 +284,7 @@ export class SettingsService {
 				status: "migrated",
 				oldSystemPath: plan.oldSystemPath,
 				newSystemPath: plan.newSystemPath,
-				message: "月度 Memos 文件夹已完整迁移。",
+				message: "Monthly memos folder migrated successfully.",
 				plan,
 			};
 		} catch (error) {

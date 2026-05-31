@@ -14,7 +14,7 @@ import { MarkdownBlockService } from "./MarkdownBlockService";
 // 职责：维护月度归档文件中的月份标题、日期标题和完整 memo block。
 export const MONTHLY_ARCHIVE_READONLY_COMMENT = [
 	"<!--",
-	"Knomo 月度归档文件：此文件由 Knomo 根据 Daily Note 自动生成。请不要直接编辑本文件中的 Memos；如需修改，请在 Knomo 或对应日记中操作。",
+	"Knomo monthly archive file: this file is generated automatically from Daily Notes. Do not edit memos here directly; edit them in Knomo or the corresponding daily note.",
 	"-->",
 ].join("\n");
 
@@ -131,7 +131,7 @@ export class MonthlyArchiveService {
 			if (options.allowMissingInsert === true) {
 				return this.insertMemoBlock(settings, new Date(memo.createdAt), block);
 			}
-			throw new MonthlyArchiveMissingError("月度归档文件不存在。");
+			throw new MonthlyArchiveMissingError("Monthly archive file does not exist.");
 		}
 		const file = existing as TFile;
 		const dateHeading = memo.monthlyRef.dateHeading || formatMonthlyDateHeading(settings.monthlyDateHeadingFormat, new Date(memo.createdAt));
@@ -145,7 +145,7 @@ export class MonthlyArchiveService {
 			}, "monthly_block_missing");
 			if (location.parsedBlock === null) {
 				if (options.allowMissingInsert !== true) {
-					throw new MonthlyArchiveMissingError("月度归档 block 不存在。");
+					throw new MonthlyArchiveMissingError("Monthly archive block does not exist.");
 				}
 				const withMonthHeading = ensureMonthHeading(currentContent, formatMonthPeriod(new Date(memo.createdAt)));
 				const withComment = ensureReadOnlyComment(withMonthHeading);
@@ -176,7 +176,7 @@ export class MonthlyArchiveService {
 	async deleteMemoBlock(memo: MemoRecord): Promise<MonthlyArchiveWriteResult> {
 		const existing = this.app.vault.getAbstractFileByPath(memo.monthlyRef.path);
 		if (!(existing instanceof TFile)) {
-			throw new MonthlyArchiveMissingError("月度归档文件不存在。");
+			throw new MonthlyArchiveMissingError("Monthly archive file does not exist.");
 		}
 		const file = existing as TFile;
 		let deletedBlock = "";
@@ -188,7 +188,7 @@ export class MonthlyArchiveService {
 				contentHash: memo.contentHash,
 			}, "monthly_block_missing");
 			if (location.parsedBlock === null) {
-				throw new MonthlyArchiveMissingError("月度归档 block 不存在。");
+				throw new MonthlyArchiveMissingError("Monthly archive block does not exist.");
 			}
 			deletedBlock = location.parsedBlock.rawBlock;
 			return this.markdownBlockService.deleteMemoBlock(currentContent, location.parsedBlock.startLine);

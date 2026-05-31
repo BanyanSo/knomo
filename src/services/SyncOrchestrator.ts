@@ -93,7 +93,7 @@ export class SyncOrchestrator {
 	async createMemo(input: string, options: CreateMemoOptions = {}): Promise<CreateMemoResult> {
 		const content = normalizeMemoInput(input);
 		if (content.trim().length === 0) {
-			throw new Error("Memo 内容不能为空。");
+			throw new Error("Memo content cannot be empty.");
 		}
 
 		const settings = this.getSettings();
@@ -119,7 +119,7 @@ export class SyncOrchestrator {
 			issue = {
 				type: "monthly_sync_failed",
 				detectedAt: new Date().toISOString(),
-				message: error instanceof Error ? error.message : "月度归档同步失败。",
+				message: error instanceof Error ? error.message : "Monthly archive sync failed.",
 			};
 			monthlyRef = {
 				path: "",
@@ -161,7 +161,7 @@ export class SyncOrchestrator {
 				() => createMemoId(createdAt),
 			);
 		} catch (error) {
-			throw buildIndexWriteFailedError("创建", error, dailyResult.file.path, monthlyRef.path);
+			throw buildIndexWriteFailedError("creating", error, dailyResult.file.path, monthlyRef.path);
 		}
 		this.markIndexSelfWrite(opId, settings, createdAt);
 
@@ -171,11 +171,11 @@ export class SyncOrchestrator {
 	async updateMemo(memo: MemoRecord, input: string): Promise<MemoRecord> {
 		const content = normalizeMemoInput(input);
 		if (content.trim().length === 0) {
-			throw new Error("Memo 内容不能为空。");
+			throw new Error("Memo content cannot be empty.");
 		}
 
 		const settings = this.getSettings();
-		const dailyFile = this.getTextFile(memo.dailyRef.path, "日记文件不存在。");
+		const dailyFile = this.getTextFile(memo.dailyRef.path, "Daily note file does not exist.");
 		const opId = createOperationId(new Date());
 		let nextDailyBlock = "";
 		let dailyIssueType: MemoRecord["issue"] = null;
@@ -194,7 +194,7 @@ export class SyncOrchestrator {
 					dailyIssueType = {
 						type: location.issueType ?? "daily_block_missing",
 						detectedAt: new Date().toISOString(),
-						message: "无法定位日记中的 memo block。",
+						message: "Unable to find the memo block in the daily note.",
 					};
 					throw new Error(dailyIssueType.message);
 				}
@@ -262,7 +262,7 @@ export class SyncOrchestrator {
 				monthlyRef,
 			});
 		} catch (error) {
-			throw buildIndexWriteFailedError("编辑", error, dailyFile.path, monthlyRef.path);
+			throw buildIndexWriteFailedError("editing", error, dailyFile.path, monthlyRef.path);
 		}
 		this.markIndexSelfWrite(opId, settings, new Date(memo.createdAt));
 		return updatedMemo;
@@ -272,7 +272,7 @@ export class SyncOrchestrator {
 		const settings = this.getSettings();
 		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memo.id);
 		if (currentMemo === null) {
-			throw new Error("Memo 不存在或已被清理。");
+			throw new Error("Memo does not exist or has already been cleaned up.");
 		}
 		if (currentMemo.status === "deleted") {
 			return currentMemo;
@@ -281,7 +281,7 @@ export class SyncOrchestrator {
 			return currentMemo;
 		}
 
-		const dailyFile = this.getTextFile(currentMemo.dailyRef.path, "日记文件不存在。");
+		const dailyFile = this.getTextFile(currentMemo.dailyRef.path, "Daily note file does not exist.");
 		const opId = createOperationId(new Date());
 		let deletedDailyBlock = "";
 		let dailyIssueType: MemoRecord["issue"] = null;
@@ -298,7 +298,7 @@ export class SyncOrchestrator {
 					dailyIssueType = {
 						type: "delete_failed",
 						detectedAt: new Date().toISOString(),
-						message: "无法定位要删除的日记 memo block。",
+						message: "Unable to find the daily memo block to delete.",
 					};
 					throw new Error(dailyIssueType.message);
 				}
@@ -329,7 +329,7 @@ export class SyncOrchestrator {
 				issue = {
 					type: "delete_failed",
 					detectedAt: new Date().toISOString(),
-					message: error instanceof Error ? error.message : "月度归档删除失败。",
+					message: error instanceof Error ? error.message : "Monthly archive delete failed.",
 				};
 			}
 		}
@@ -348,7 +348,7 @@ export class SyncOrchestrator {
 			});
 		} catch (error) {
 			console.error("Knomo delete memo index write failed.", error);
-			throw buildIndexWriteFailedError("删除", error, dailyFile.path, currentMemo.monthlyRef.path);
+			throw buildIndexWriteFailedError("deleting", error, dailyFile.path, currentMemo.monthlyRef.path);
 		}
 		this.markIndexSelfWrite(opId, settings, new Date(currentMemo.createdAt));
 		return deletedMemo;
@@ -489,7 +489,7 @@ export class SyncOrchestrator {
 		const settings = this.getSettings();
 		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memoId);
 		if (currentMemo === null) {
-			throw new Error("Memo 不存在或已被清理。");
+			throw new Error("Memo does not exist or has already been cleaned up.");
 		}
 		if (currentMemo.status !== "deleted") {
 			return currentMemo;
@@ -519,7 +519,7 @@ export class SyncOrchestrator {
 				this.markSelfWrite(opId, monthlyResult.filePath, "archive", monthlyResult.content);
 			}
 		} catch (error) {
-			throw error instanceof Error ? error : new Error("恢复失败，请稍后重试。");
+			throw error instanceof Error ? error : new Error("Restore failed. Please try again later.");
 		}
 
 		const now = new Date().toISOString();
@@ -546,7 +546,7 @@ export class SyncOrchestrator {
 				deletedMonthlyBlock: undefined,
 			}));
 		} catch (error) {
-			throw buildIndexWriteFailedError("恢复", error, dailyResult.filePath, monthlyResult.ref.path);
+			throw buildIndexWriteFailedError("restoring", error, dailyResult.filePath, monthlyResult.ref.path);
 		}
 		this.markIndexSelfWrite(opId, settings, new Date(restoredMemo.createdAt));
 		return restoredMemo;
@@ -556,10 +556,10 @@ export class SyncOrchestrator {
 		const settings = this.getSettings();
 		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memoId);
 		if (currentMemo === null) {
-			throw new Error("Memo 不存在或已被清理。");
+			throw new Error("Memo does not exist or has already been cleaned up.");
 		}
 		if (currentMemo.status !== "deleted") {
-			throw new Error("只能永久删除回收站中的 Memo。");
+			throw new Error("Only memos in trash can be permanently deleted.");
 		}
 		const opId = createOperationId(new Date());
 		await this.memoIndexStore.purgeDeletedMemo(settings.monthlyMemoFolder, memoId);
@@ -600,7 +600,7 @@ export class SyncOrchestrator {
 					issue: {
 						type: "delete_failed",
 						detectedAt: new Date().toISOString(),
-						message: error instanceof Error ? error.message : "月度归档删除重试失败。",
+						message: error instanceof Error ? error.message : "Monthly archive delete retry failed.",
 					},
 				});
 				this.markIndexSelfWrite(opId, settings, new Date(memo.createdAt));
@@ -619,7 +619,7 @@ export class SyncOrchestrator {
 
 	async retryMonthlySync(memo: MemoRecord): Promise<MemoRecord> {
 		const settings = this.getSettings();
-		const dailyFile = this.getTextFile(memo.dailyRef.path, "日记文件不存在。");
+		const dailyFile = this.getTextFile(memo.dailyRef.path, "Daily note file does not exist.");
 		const content = await this.app.vault.cachedRead(dailyFile);
 		const location = this.markdownBlockService.findMemoBlock(content, {
 			lineNumberHint: memo.dailyRef.lineNumberHint,
@@ -635,7 +635,7 @@ export class SyncOrchestrator {
 				issue: {
 					type: location.issueType ?? "daily_block_missing",
 					detectedAt: new Date().toISOString(),
-					message: "重试月度同步前无法定位日记 memo block。",
+					message: "Unable to find the daily memo block before retrying monthly sync.",
 				},
 			});
 			this.markIndexSelfWrite(opId, settings, new Date(memo.createdAt));
@@ -689,7 +689,7 @@ export class SyncOrchestrator {
 
 	async ensureReferenceBlockId(memo: MemoRecord): Promise<string> {
 		const settings = this.getSettings();
-		const dailyFile = this.getTextFile(memo.dailyRef.path, "日记文件不存在。");
+		const dailyFile = this.getTextFile(memo.dailyRef.path, "Daily note file does not exist.");
 		const initialContent = await this.app.vault.cachedRead(dailyFile);
 		const initialLocation = this.markdownBlockService.findMemoBlock(initialContent, {
 			lineNumberHint: memo.dailyRef.lineNumberHint,
@@ -704,10 +704,10 @@ export class SyncOrchestrator {
 				issue: {
 					type: initialLocation.issueType ?? "daily_block_missing",
 					detectedAt: new Date().toISOString(),
-					message: "无法定位日记中的 memo block。",
+					message: "Unable to find the memo block in the daily note.",
 				},
 			});
-			throw new Error("无法定位日记中的 memo block。");
+			throw new Error("Unable to find the memo block in the daily note.");
 		}
 		if (initialLocation.parsedBlock.blockId !== null) {
 			return initialLocation.parsedBlock.blockId;
@@ -727,7 +727,7 @@ export class SyncOrchestrator {
 				allowLineHintTimeMatch: true,
 			}, "daily_block_missing");
 			if (location.parsedBlock === null) {
-				throw new Error("无法定位日记中的 memo block。");
+				throw new Error("Unable to find the memo block in the daily note.");
 			}
 			if (location.parsedBlock.blockId !== null) {
 				blockId = location.parsedBlock.blockId;
@@ -773,7 +773,7 @@ export class SyncOrchestrator {
 				monthlyRef,
 			});
 		} catch (error) {
-			throw buildIndexWriteFailedError("生成引用", error, dailyFile.path, monthlyRef.path);
+			throw buildIndexWriteFailedError("generating reference", error, dailyFile.path, monthlyRef.path);
 		}
 		this.markIndexSelfWrite(opId, settings, new Date(memo.createdAt));
 		return blockId;
@@ -819,7 +819,7 @@ export class SyncOrchestrator {
 			restoredLineNumber = findLineNumber(content, restoredBlock, settings.dailyInsertPosition === "bottom");
 			const parsedBlock = this.parseRestoredBlockFromContent(content, restoredBlock, restoredLineNumber);
 			if (parsedBlock === null) {
-				throw new Error("恢复失败：无法确认日记 block。");
+				throw new Error("Restore failed: unable to verify the daily block.");
 			}
 			restoredParsedBlock = parsedBlock;
 		}
@@ -943,7 +943,7 @@ export class SyncOrchestrator {
 			}
 		}
 		if (memo.contentSnapshot.trim().length === 0) {
-			throw new Error("缺少删除快照。");
+			throw new Error("Missing delete snapshot.");
 		}
 		return this.markdownBlockService.buildMemoBlock(memo.contentSnapshot, formatTimePart(new Date(memo.createdAt), this.getSettings().memoTimeFormat));
 	}
@@ -1015,27 +1015,27 @@ function buildMonthlyIssue(error: unknown): MemoRecord["issue"] {
 	return {
 		type: error instanceof MonthlyArchiveMissingError ? "monthly_block_missing" : "monthly_sync_failed",
 		detectedAt: new Date().toISOString(),
-		message: error instanceof Error ? error.message : "月度归档同步失败。",
+		message: error instanceof Error ? error.message : "Monthly archive sync failed.",
 	};
 }
 
 function buildIndexWriteFailedError(action: string, error: unknown, dailyPath: string, monthlyPath: string): Error {
-	const reason = error instanceof Error ? error.message : "未知错误";
-	const monthlyText = monthlyPath.trim().length > 0 ? monthlyPath : "月度归档未完成";
+	const reason = error instanceof Error ? error.message : "Unknown error";
+	const monthlyText = monthlyPath.trim().length > 0 ? monthlyPath : "Monthly archive incomplete";
 	return new Error(
-		`${action} memo 时 memo-index 写入失败。日记可能已经写入：${dailyPath}；月度归档：${monthlyText}。` +
-				`请先修复 memo-index 或运行手动扫描恢复索引，避免重复发送。原始错误：${reason}`,
+		`Failed to write memo-index while ${action} memo. The daily note may already be written: ${dailyPath}; monthly archive: ${monthlyText}. ` +
+				`Repair memo-index or run manual scan before sending again. Original error: ${reason}`,
 	);
 }
 
 function buildRebuildIndexFailedError(failedFiles: number, backupPath: string | null): Error {
-	return appendBackupPathToError(new Error(`重建索引失败：${failedFiles} 个文件未完成同步，已停止刷新视图。`), backupPath);
+	return appendBackupPathToError(new Error(`Rebuild index failed: ${failedFiles} files did not sync; stopped refreshing the view.`), backupPath);
 }
 
 function appendBackupPathToError(error: unknown, backupPath: string | null): Error {
-	const message = error instanceof Error ? error.message : "重建索引失败。";
-	const backupText = backupPath === null ? "未发现可恢复的旧索引备份。" : `备份位置：${backupPath}`;
-	if (message.includes("备份位置：") || message.includes("未发现可恢复的旧索引备份。")) {
+	const message = error instanceof Error ? error.message : "Rebuild index failed.";
+	const backupText = backupPath === null ? "No restorable previous index backup was found." : `Backup path: ${backupPath}`;
+	if (message.includes("Backup path:") || message.includes("No restorable previous index backup was found.")) {
 		return new Error(message);
 	}
 	return new Error(`${message}\n${backupText}`);
@@ -1089,7 +1089,7 @@ function createUniqueReferenceBlockId(content: string): string {
 			return blockId;
 		}
 	}
-	throw new Error("无法生成唯一 blockId。");
+	throw new Error("Unable to generate a unique blockId.");
 }
 
 function createReferenceBlockId(): string {

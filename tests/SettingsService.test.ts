@@ -29,7 +29,7 @@ test("migrates monthly files, system folder, monthlyRef paths, exclude rule, and
 	assert.equal(vault.exists("Archive/Memos/Memos-2026-05.md"), true);
 	assert.equal(vault.exists("Archive/Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
 	assert.equal(vault.exists("Memos/Memos-2026-05.md"), false);
-	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md").startsWith("<!--\nKnomo 月度归档文件"), true);
+	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md").startsWith("<!--\nKnomo monthly archive file"), true);
 	const index = JSON.parse(vault.readText("Archive/Memos/_knomo-system/indexes/memo-index-2026-05.json")) as ReturnType<typeof createIndex>;
 	assert.equal(index.memos.memo1.monthlyRef.path, "Archive/Memos/Memos-2026-05.md");
 	assert.deepEqual(vault.config.userIgnoreFilters, ["Archive/Memos/", "Archive/Memos/_knomo-system/"]);
@@ -49,7 +49,7 @@ test("stops monthly folder migration on target path conflicts without moving old
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
-	await assert.rejects(() => service.migrateMonthlyMemoFolder("Archive/Memos"), /目标路径存在冲突/);
+	await assert.rejects(() => service.migrateMonthlyMemoFolder("Archive/Memos"), /Target path has conflicts/);
 	assert.equal(vault.exists("Memos/Memos-2026-05.md"), true);
 	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md"), "conflict");
 	assert.equal(plugin.savedSettings, null);
@@ -288,12 +288,18 @@ async function ensureObsidianStub(): Promise<void> {
 	await mkdir(dirname(stubPath), { recursive: true });
 	await writeFile(
 		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder { constructor() { this.children = []; } }",
-			"const Vault = { recurseChildren(folder, callback) { for (const child of folder.children || []) { callback(child); if (child instanceof TFolder) Vault.recurseChildren(child, callback); } } };",
-			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-			"module.exports = { TFile, TFolder, Vault, normalizePath };",
-		].join("\n"),
+			[
+				"class TFile {}",
+				"class TFolder { constructor() { this.children = []; } }",
+				"const Vault = { recurseChildren(folder, callback) { for (const child of folder.children || []) { callback(child); if (child instanceof TFolder) Vault.recurseChildren(child, callback); } } };",
+				"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
+				"let languageValue = 'en';",
+				"function getLanguage() { return languageValue; }",
+				"getLanguage.set = (value) => { languageValue = value; };",
+				"let localeValue = 'en';",
+				"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
+				"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
+				"module.exports = { TFile, TFolder, Vault, normalizePath, moment, getLanguage };",
+			].join("\n"),
 	);
 }

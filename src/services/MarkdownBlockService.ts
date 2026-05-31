@@ -98,7 +98,7 @@ export class MarkdownBlockService {
 			return normalizedContent.length === 0 ? change.block : `${normalizedContent}\n${change.block}`;
 		}
 		if (change.startLine === undefined) {
-			throw new Error("更新或删除 memo block 需要 startLine。");
+			throw new Error("Updating or deleting a memo block requires startLine.");
 		}
 		if (change.type === "edit") {
 			const lines = splitMarkdownLines(currentContent);

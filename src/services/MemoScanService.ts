@@ -184,7 +184,7 @@ export class MemoScanService {
 					result.imported += 1;
 				} catch (error) {
 					result.failed += 1;
-					result.errors.push(error instanceof Error ? error.message : `导入失败：${candidate.path}:${candidate.block.startLine + 1}`);
+					result.errors.push(error instanceof Error ? error.message : `Import failed: ${candidate.path}:${candidate.block.startLine + 1}`);
 				}
 			}
 		}
@@ -266,7 +266,7 @@ export class MemoScanService {
 				await this.syncDailyFileContent(settings, config, existingMemos, file, content, createMemoId, opId, result, source, deleteSource, syncMonthly);
 			} catch (error) {
 				result.failed += 1;
-				result.errors.push(error instanceof Error ? error.message : `扫描失败：${file.path}`);
+				result.errors.push(error instanceof Error ? error.message : `Scan failed: ${file.path}`);
 			} finally {
 				completedFiles += 1;
 				await onProgress?.({ ...result, completedFiles, currentFile: file.path });
@@ -480,7 +480,7 @@ export class MemoScanService {
 			issue: {
 				type: "daily_block_ambiguous",
 				detectedAt: now,
-				message: "当前日记标题下存在多条可能匹配的 memo block，无法自动同步。",
+				message: "Multiple memo blocks may match under the current daily note heading, so Knomo cannot sync automatically.",
 			},
 			lastMarkdownSyncAt: now,
 			lastMarkdownSyncSource: source,
@@ -517,7 +517,7 @@ export class MemoScanService {
 				});
 			} catch (error) {
 				if (!(error instanceof MonthlyArchiveMissingError)) {
-					const message = error instanceof Error ? error.message : "月度归档删除失败。";
+					const message = error instanceof Error ? error.message : "Monthly archive delete failed.";
 					syncStatus = "monthly_delete_failed";
 					issue = {
 						type: "delete_failed",
@@ -734,7 +734,7 @@ export class MemoScanService {
 				issue: null,
 			};
 		} catch (error) {
-			const message = error instanceof Error ? error.message : "月度归档同步失败。";
+			const message = error instanceof Error ? error.message : "Monthly archive sync failed.";
 			result.failed += 1;
 			result.errors.push(`${sourcePath}: ${message}`);
 			return {
@@ -848,7 +848,7 @@ function createLegacyPreviewGroup(settings: KnomoSettings, candidate: LegacyMemo
 		key: candidate.groupKey,
 		heading: candidate.heading,
 		sectionType: candidate.sectionType,
-		label: candidate.heading ?? "无标题区域",
+		label: candidate.heading ?? "Untitled section",
 		count: 0,
 		selectedByDefault: shouldSelectLegacyGroup(settings, candidate),
 		samples: [],

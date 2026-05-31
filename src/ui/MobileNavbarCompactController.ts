@@ -2,6 +2,7 @@ import { Platform, setIcon } from "obsidian";
 import type { EventRef, ItemView } from "obsidian";
 
 import { KNOMO_SIDEBAR_MENU_ICON } from "../icons";
+import { t } from "../i18n";
 
 interface MobileNavbarCompactControllerOptions {
 	isActive: () => boolean;
@@ -304,8 +305,8 @@ export class MobileNavbarCompactController {
 				cls: `mobile-navbar-action clickable-icon ${SIDEBAR_ACTION_CLASS}`,
 				attr: {
 					type: "button",
-					title: "打开或收起 Knomo 侧栏",
-					"aria-label": "打开或收起 Knomo 侧栏",
+					title: t("mobile.openOrCloseSidebar"),
+					"aria-label": t("mobile.openOrCloseSidebar"),
 				},
 			});
 			setIcon(this.sidebarButtonEl, KNOMO_SIDEBAR_MENU_ICON);
@@ -353,8 +354,8 @@ export class MobileNavbarCompactController {
 				cls: CREATE_BUTTON_CLASS,
 				attr: {
 					type: "button",
-					title: "新建 memo",
-					"aria-label": "新建 memo",
+					title: t("mobile.newMemo"),
+					"aria-label": t("mobile.newMemo"),
 				},
 			});
 			setIcon(this.createButtonEl, "plus");

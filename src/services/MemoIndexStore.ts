@@ -132,7 +132,7 @@ export class MemoIndexStore {
 			throw new Error(`Memo not found: ${memoId}`);
 		}
 		if (memo.status !== "deleted") {
-			throw new Error("只能永久删除回收站中的 Memo。");
+			throw new Error("Only memos in trash can be permanently deleted.");
 		}
 
 		const period = formatMonthPeriod(new Date(memo.createdAt));
@@ -142,7 +142,7 @@ export class MemoIndexStore {
 				throw new Error(`Memo not found: ${memoId}`);
 			}
 			if (currentMemo.status !== "deleted") {
-				throw new Error("只能永久删除回收站中的 Memo。");
+				throw new Error("Only memos in trash can be permanently deleted.");
 			}
 			const nextMemos = { ...index.memos };
 			delete nextMemos[memoId];
@@ -188,7 +188,7 @@ export class MemoIndexStore {
 		const backupFolderPath = normalizePath(`${backupPath}/indexes`);
 		const backupFolder = this.app.vault.getAbstractFileByPath(backupFolderPath);
 		if (!(backupFolder instanceof TFolder)) {
-			throw new Error(`索引备份不存在：${backupFolderPath}`);
+			throw new Error(`Index backup does not exist: ${backupFolderPath}`);
 		}
 		const files: TFile[] = [];
 		Vault.recurseChildren(backupFolder, (child) => {

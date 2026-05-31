@@ -88,7 +88,7 @@ export class DailyNoteService {
 
 	getDailyNotePathForDate(date: Date, status = this.getStatus()): string {
 		if (!status.enabled || status.format === null) {
-			throw new Error("日记核心插件不可用，无法定位日记。");
+			throw new Error("Daily Notes core plugin is unavailable; Knomo cannot resolve the daily note.");
 		}
 		const momentFactory = obsidianMoment as unknown as MomentFactory;
 		const fileName = ensureMarkdownExtension(momentFactory(date).format(status.format));
@@ -148,7 +148,7 @@ function createStatus(config: DailyNotesConfig | null): DailyNotesStatus {
 			enabled: false,
 			folder: null,
 			format: null,
-			message: "请先在 Obsidian 设置的核心插件中开启“日记”。开启后 Knomo 会自动读取日记设置，不需要在 Knomo 中配置日记路径。",
+			message: "Enable the Daily Notes core plugin in Obsidian settings. Knomo will read the Daily Notes settings automatically; you do not need to configure the daily note path in Knomo.",
 		};
 	}
 
@@ -156,7 +156,7 @@ function createStatus(config: DailyNotesConfig | null): DailyNotesStatus {
 		enabled: true,
 		folder: config.folder,
 		format: config.format,
-		message: "日记核心插件已启用。",
+		message: "Daily Notes core plugin is enabled.",
 	};
 }
 

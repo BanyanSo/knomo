@@ -2,6 +2,7 @@ import { Notice, TFile } from "obsidian";
 import type { App, Component } from "obsidian";
 
 import { hashText } from "../utils/hash";
+import { t } from "../i18n";
 import { formatSettingsText } from "../ui/KnomoSettingTab";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 import type { SyncOrchestrator } from "./SyncOrchestrator";
@@ -61,8 +62,8 @@ export class FileWatchService {
 	}
 
 	private handleSyncError(file: TFile, error: unknown): void {
-		const message = formatSettingsText(error instanceof Error ? error.message : "未知错误");
-		new Notice(`Knomo 同步失败：${file.path}：${message}`);
+		const message = formatSettingsText(error instanceof Error ? error.message : t("service.unknownError"));
+		new Notice(t("service.watchSyncFailed", { path: file.path, message }));
 	}
 
 	private clearTimers(): void {

@@ -16,6 +16,7 @@ import { SettingsService } from "./services/SettingsService";
 import { SyncOrchestrator } from "./services/SyncOrchestrator";
 import type { ScanDailyMemosResult } from "./services/MemoScanService";
 import { KNOMO_LOGO_ICON, registerKnomoIcons } from "./icons";
+import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
@@ -73,13 +74,13 @@ export default class KnomoPlugin extends Plugin {
 			defaultMod: false,
 		});
 
-		this.addRibbonIcon(KNOMO_LOGO_ICON, "Open Knomo", () => {
+		this.addRibbonIcon(KNOMO_LOGO_ICON, t("app.openKnomo"), () => {
 			void this.activateView();
 		});
 
 		this.addCommand({
 			id: "open-view",
-			name: "Open Knomo",
+			name: t("app.openKnomo"),
 			callback: () => {
 				void this.activateView();
 			},

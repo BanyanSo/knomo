@@ -3,6 +3,7 @@ import type { App, HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
 import { KNOMO_ALL_NOTES_ICON, KNOMO_LOGO_ICON, KNOMO_RANDOM_REUNION_ICON, KNOMO_SEARCH_ICON, KNOMO_SIDEBAR_MENU_ICON } from "../icons";
+import { t } from "../i18n";
 import type { RandomReunionService } from "../services/RandomReunionService";
 import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
@@ -103,38 +104,38 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 ];
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
-	{ nav: "all", label: "全部笔记", icon: KNOMO_ALL_NOTES_ICON },
-	{ nav: "review", label: "今日之外", icon: "calendar-check" },
-	{ nav: "random", label: "随机重逢", icon: KNOMO_RANDOM_REUNION_ICON },
+	{ nav: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
+	{ nav: "review", label: t("nav.review"), icon: "calendar-check" },
+	{ nav: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON },
 ];
 
-const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: "回收站", icon: "trash-2" };
+const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: t("nav.trash"), icon: "trash-2" };
 
 const TITLE_SCOPE_OPTIONS: ScopeOption[] = [
-	{ filter: "all", label: "全部笔记", icon: KNOMO_ALL_NOTES_ICON },
-	{ filter: "no-tag", label: "无标签", icon: "tag" },
-	{ filter: "with-link", label: "有链接", icon: "link" },
-	{ filter: "with-image", label: "有图片", icon: "image" },
-	{ filter: "anniversary", label: "那年今日", icon: "history" },
+	{ filter: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
+	{ filter: "no-tag", label: t("filter.noTag"), icon: "tag" },
+	{ filter: "with-link", label: t("filter.withLink"), icon: "link" },
+	{ filter: "with-image", label: t("filter.withImage"), icon: "image" },
+	{ filter: "anniversary", label: t("filter.anniversary"), icon: "history" },
 ];
 
 const TITLE_MODE_OPTIONS: TitleModeOption[] = [
-	{ mode: "all", label: "全部笔记", icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
-	{ mode: "no-tag", label: "无标签", icon: "tag", scope: "no-tag" },
-	{ mode: "with-link", label: "有链接", icon: "link", scope: "with-link" },
-	{ mode: "with-image", label: "有图片", icon: "image", scope: "with-image" },
-	{ mode: "anniversary", label: "那年今日", icon: "history", scope: "anniversary" },
-	{ mode: "review", label: "今日之外", icon: "calendar-check", nav: "review" },
-	{ mode: "random", label: "随机重逢", icon: KNOMO_RANDOM_REUNION_ICON, nav: "random" },
+	{ mode: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
+	{ mode: "no-tag", label: t("filter.noTag"), icon: "tag", scope: "no-tag" },
+	{ mode: "with-link", label: t("filter.withLink"), icon: "link", scope: "with-link" },
+	{ mode: "with-image", label: t("filter.withImage"), icon: "image", scope: "with-image" },
+	{ mode: "anniversary", label: t("filter.anniversary"), icon: "history", scope: "anniversary" },
+	{ mode: "review", label: t("nav.review"), icon: "calendar-check", nav: "review" },
+	{ mode: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON, nav: "random" },
 ];
 
 const SEARCH_DATE_OPTIONS: SearchDateOption[] = [
-	{ filter: "week", label: "本周", icon: "calendar-days" },
-	{ filter: "month", label: "本月", icon: "calendar-range" },
-	{ filter: "last-7", label: "最近 7 天", mobileLabel: "近7天", icon: "calendar-clock" },
-	{ filter: "last-30", label: "最近 30 天", mobileLabel: "近30天", icon: "calendar-clock" },
-	{ filter: "last-week", label: "上周", icon: "calendar-minus" },
-	{ filter: "last-month", label: "上月", icon: "calendar-minus" },
+	{ filter: "week", label: t("date.week"), icon: "calendar-days" },
+	{ filter: "month", label: t("date.month"), icon: "calendar-range" },
+	{ filter: "last-7", label: t("date.last7"), mobileLabel: t("date.last7Mobile"), icon: "calendar-clock" },
+	{ filter: "last-30", label: t("date.last30"), mobileLabel: t("date.last30Mobile"), icon: "calendar-clock" },
+	{ filter: "last-week", label: t("date.lastWeek"), icon: "calendar-minus" },
+	{ filter: "last-month", label: t("date.lastMonth"), icon: "calendar-minus" },
 ];
 
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
@@ -437,17 +438,17 @@ export class KnomoView extends ItemView {
 		const header = sidebar.createDiv({ cls: "knomo-sidebar-header" });
 		const brand = header.createDiv({ cls: "knomo-brand" });
 		brand.createDiv({ cls: "knomo-brand-title", text: "Knomo" });
-		brand.createDiv({ cls: "knomo-brand-subtitle", text: "当下念想，潺潺光阴" });
+		brand.createDiv({ cls: "knomo-brand-subtitle", text: t("sidebar.subtitle") });
 		const actions = header.createDiv({ cls: "knomo-sidebar-actions" });
-		this.createIconButton(actions, "bar-chart-3", "统计", "knomo-sidebar-action", "focus-stats");
-		this.createIconButton(actions, "refresh-cw", "刷新", "knomo-sidebar-action", "refresh");
-		this.createIconButton(actions, "panel-left-close", "隐藏侧栏", "knomo-sidebar-action knomo-desktop-only", "collapse-sidebar");
+		this.createIconButton(actions, "bar-chart-3", t("sidebar.stats"), "knomo-sidebar-action", "focus-stats");
+		this.createIconButton(actions, "refresh-cw", t("sidebar.refresh"), "knomo-sidebar-action", "refresh");
+		this.createIconButton(actions, "panel-left-close", t("sidebar.hide"), "knomo-sidebar-action knomo-desktop-only", "collapse-sidebar");
 
-		const statsLabelId = this.createHiddenText(sidebar, "stats-label", "统计");
+		const statsLabelId = this.createHiddenText(sidebar, "stats-label", t("sidebar.stats"));
 		const stats = sidebar.createDiv({ cls: "knomo-sidebar-stats", attr: { "aria-labelledby": statsLabelId, tabindex: "-1" } });
 		this.statsEls.push(stats);
 
-		const navLabelId = this.createHiddenText(sidebar, "nav-label", "范围");
+		const navLabelId = this.createHiddenText(sidebar, "nav-label", t("sidebar.scope"));
 		const nav = sidebar.createEl("nav", {
 			cls: "knomo-nav",
 			attr: { "aria-labelledby": navLabelId },
@@ -457,7 +458,7 @@ export class KnomoView extends ItemView {
 		}
 
 		const allTagSection = sidebar.createDiv({ cls: "knomo-tag-section" });
-		allTagSection.createDiv({ cls: "knomo-section-label", text: "全部标签" });
+		allTagSection.createDiv({ cls: "knomo-section-label", text: t("sidebar.allTags") });
 		this.allTagsEl = allTagSection.createDiv({ cls: "knomo-tag-list" });
 
 		const trashSection = sidebar.createDiv({ cls: "knomo-trash-section" });
@@ -465,7 +466,7 @@ export class KnomoView extends ItemView {
 		trashButton.addClass("knomo-trash-nav-button");
 		this.trashCountEls.push(trashButton.createSpan({ cls: "knomo-trash-count" }));
 
-		const resizerLabelId = this.createHiddenText(sidebar, "resizer-label", "调整侧栏宽度");
+		const resizerLabelId = this.createHiddenText(sidebar, "resizer-label", t("sidebar.resize"));
 		this.sidebarResizerEl = sidebar.createDiv({
 			cls: "knomo-sidebar-resizer knomo-desktop-only",
 			attr: {
@@ -494,7 +495,7 @@ export class KnomoView extends ItemView {
 
 	private renderDesktopTopbar(main: HTMLElement): void {
 		const topbar = main.createDiv({ cls: "knomo-topbar" });
-		this.createIconButton(topbar, KNOMO_SIDEBAR_MENU_ICON, "显示侧栏", "knomo-sidebar-toggle", "toggle-sidebar");
+		this.createIconButton(topbar, KNOMO_SIDEBAR_MENU_ICON, t("sidebar.show"), "knomo-sidebar-toggle", "toggle-sidebar");
 
 		const scopeWrap = topbar.createDiv({ cls: "knomo-scope-wrap" });
 		const titleHost = scopeWrap.createDiv({ cls: "knomo-title-host" });
@@ -506,12 +507,12 @@ export class KnomoView extends ItemView {
 
 		const searchWrap = topbar.createDiv({ cls: "knomo-search-wrap" });
 		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
-		const desktopSearchLabelId = this.createHiddenText(searchWrap, "desktop-search-label", "搜索");
+		const desktopSearchLabelId = this.createHiddenText(searchWrap, "desktop-search-label", t("search.label"));
 		this.desktopSearchInputEl = searchWrap.createEl("input", {
 			cls: "knomo-search-input",
 			attr: {
 				type: "search",
-				placeholder: "搜索",
+				placeholder: t("search.label"),
 				"aria-labelledby": desktopSearchLabelId,
 			},
 		});
@@ -560,11 +561,11 @@ export class KnomoView extends ItemView {
 			}
 		});
 		const inputArea = composer.createDiv({ cls: "knomo-composer-input-area" });
-		const composerInputLabelId = this.createHiddenText(inputArea, "composer-input-label", "输入 Memos 内容");
+		const composerInputLabelId = this.createHiddenText(inputArea, "composer-input-label", t("composer.inputLabel"));
 		this.inputEl = inputArea.createEl("textarea", {
 			cls: "knomo-composer-input",
 			attr: {
-				placeholder: "现在的想法是…",
+				placeholder: t("composer.placeholder"),
 				"aria-labelledby": composerInputLabelId,
 			},
 		});
@@ -609,14 +610,14 @@ export class KnomoView extends ItemView {
 		const tools = composerBar.createDiv({ cls: "knomo-tool-group" });
 		this.registerDomEvent(tools, "pointerdown", (event) => this.handleComposerToolPointerDown(event));
 		this.registerDomEvent(tools, "mousedown", (event) => this.handleComposerToolPointerDown(event));
-		this.createIconButton(tools, "hash", "插入标签", "knomo-tool-button", "insert-tag", false);
-		this.createIconButton(tools, "image", "插入图片", "knomo-tool-button", "insert-image", false);
-		this.createIconButton(tools, "list", "插入列表", "knomo-tool-button", "insert-list", false);
-		this.createIconButton(tools, "list-ordered", "插入编号列表", "knomo-tool-button", "insert-numbered-list", false);
+		this.createIconButton(tools, "hash", t("composer.insertTag"), "knomo-tool-button", "insert-tag", false);
+		this.createIconButton(tools, "image", t("composer.insertImage"), "knomo-tool-button", "insert-image", false);
+		this.createIconButton(tools, "list", t("composer.insertList"), "knomo-tool-button", "insert-list", false);
+		this.createIconButton(tools, "list-ordered", t("composer.insertNumberedList"), "knomo-tool-button", "insert-numbered-list", false);
 		const actions = composerBar.createDiv({ cls: "knomo-composer-actions" });
 		this.cancelEditButtonEl = actions.createEl("button", {
 			cls: "knomo-cancel-edit-button",
-			text: "取消编辑",
+			text: t("composer.cancelEdit"),
 			attr: {
 				type: "button",
 				"data-action": "cancel-edit",
@@ -630,7 +631,7 @@ export class KnomoView extends ItemView {
 			cls: "knomo-send-button",
 			attr: {
 				type: "button",
-				"aria-label": "发送",
+				"aria-label": t("composer.send"),
 				"data-action": "save-input",
 			},
 		});
@@ -749,7 +750,7 @@ export class KnomoView extends ItemView {
 
 	private renderCompactHeader(main: HTMLElement): void {
 		const header = main.createDiv({ cls: "knomo-compact-header" });
-		this.createIconButton(header, KNOMO_SIDEBAR_MENU_ICON, "菜单", "knomo-compact-menu-btn", "open-drawer");
+		this.createIconButton(header, KNOMO_SIDEBAR_MENU_ICON, t("mobile.menu"), "knomo-compact-menu-btn", "open-drawer");
 
 		const titleHost = header.createDiv({
 			cls: "knomo-compact-title",
@@ -761,7 +762,7 @@ export class KnomoView extends ItemView {
 		this.compactInlineSearchInputEl = this.createCompactSearchInput(inlineSearchWrap, "compact-inline-search-label");
 		this.renderSearchPopover(inlineSearchWrap);
 
-		this.createIconButton(header, KNOMO_SEARCH_ICON, "搜索", "knomo-compact-search-btn", "toggle-compact-search");
+		this.createIconButton(header, KNOMO_SEARCH_ICON, t("search.label"), "knomo-compact-search-btn", "toggle-compact-search");
 	}
 
 	private renderCompactSearchPanel(main: HTMLElement): void {
@@ -773,12 +774,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private createCompactSearchInput(searchWrap: HTMLElement, labelName: string): HTMLInputElement {
-		const searchLabelId = this.createHiddenText(searchWrap, labelName, "搜索");
+		const searchLabelId = this.createHiddenText(searchWrap, labelName, t("search.label"));
 		const searchInput = searchWrap.createEl("input", {
 			cls: "knomo-search-input",
 			attr: {
 				type: "search",
-				placeholder: "搜索",
+				placeholder: t("search.label"),
 				"aria-labelledby": searchLabelId,
 			},
 		});
@@ -817,7 +818,7 @@ export class KnomoView extends ItemView {
 		} catch (error) {
 			this.memos = [];
 			this.invalidateMemoSearchCache();
-			this.cardFlowError = formatSettingsText(error instanceof Error ? error.message : "卡片流刷新失败");
+			this.cardFlowError = formatSettingsText(error instanceof Error ? error.message : t("empty.cardFlowFailed"));
 			this.updateStatus(this.cardFlowError, true);
 		}
 		this.renderUiState();
@@ -860,7 +861,7 @@ export class KnomoView extends ItemView {
 				const previewText = this.referencePreviewEl.createDiv({
 					cls: "knomo-reference-preview-text",
 				});
-				previewText.createSpan({ cls: "knomo-reference-label", text: "引用：" });
+				previewText.createSpan({ cls: "knomo-reference-label", text: t("reference.label") });
 				previewText.createSpan({
 					cls: "knomo-reference-content",
 					text: this.quoteMarkdownText.replace(/^> ?/gm, ""),
@@ -869,7 +870,7 @@ export class KnomoView extends ItemView {
 					cls: "knomo-reference-clear",
 					attr: {
 						type: "button",
-						"aria-label": "清除引用",
+						"aria-label": t("reference.clear"),
 						"data-action": "clear-reference",
 					},
 				});
@@ -1072,9 +1073,9 @@ export class KnomoView extends ItemView {
 	private ensureMobileHeaderActions(): void {
 		if (this.mobileSearchHeaderActionEl === null || !this.mobileSearchHeaderActionEl.isConnected) {
 			this.mobileSearchHeaderActionEl?.remove();
-			this.mobileSearchHeaderActionEl = this.addAction(KNOMO_SEARCH_ICON, "搜索 Knomo", () => this.openMobileHeaderSearch());
+			this.mobileSearchHeaderActionEl = this.addAction(KNOMO_SEARCH_ICON, t("search.knomo"), () => this.openMobileHeaderSearch());
 			this.mobileSearchHeaderActionEl.addClass("knomo-mobile-header-action");
-			this.mobileSearchHeaderActionEl.setAttr("aria-label", "搜索 Knomo");
+			this.mobileSearchHeaderActionEl.setAttr("aria-label", t("search.knomo"));
 		}
 	}
 
@@ -1131,12 +1132,12 @@ export class KnomoView extends ItemView {
 		const header = page.createDiv({ cls: "knomo-mobile-search-header" });
 		const searchWrap = header.createDiv({ cls: "knomo-mobile-search-wrap" });
 		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
-		const searchLabelId = this.createHiddenText(searchWrap, "mobile-search-label", "搜索");
+		const searchLabelId = this.createHiddenText(searchWrap, "mobile-search-label", t("search.label"));
 		this.mobileSearchInputEl = searchWrap.createEl("input", {
 			cls: "knomo-search-input",
 			attr: {
 				type: "search",
-				placeholder: "搜索",
+				placeholder: t("search.label"),
 				"aria-labelledby": searchLabelId,
 			},
 		});
@@ -1154,14 +1155,14 @@ export class KnomoView extends ItemView {
 			cls: "knomo-mobile-search-close",
 			attr: {
 				type: "button",
-				"aria-label": "关闭搜索",
+				"aria-label": t("search.close"),
 				"data-action": "close-mobile-search",
 			},
 		});
 		setIcon(closeButton, "x");
 
 		const quickSection = page.createDiv({ cls: "knomo-mobile-search-quick" });
-		quickSection.createDiv({ cls: "knomo-mobile-search-section-title", text: "快捷搜索" });
+		quickSection.createDiv({ cls: "knomo-mobile-search-section-title", text: t("search.quick") });
 		const quickList = quickSection.createDiv({ cls: "knomo-mobile-search-chip-list" });
 		for (const option of SEARCH_DATE_OPTIONS) {
 			this.renderSearchDateButton(quickList, option, "knomo-mobile-search-chip", option.mobileLabel ?? option.label);
@@ -1280,12 +1281,12 @@ export class KnomoView extends ItemView {
 		this.syncMobileSearchDateButtons();
 		const normalizedQuery = this.mobileSearchQuery.trim().toLowerCase();
 		if (normalizedQuery.length === 0 && this.mobileSearchDateFilter === null) {
-			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: "输入关键词或选择快捷搜索" });
+			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.emptyPrompt") });
 			return;
 		}
 		const memos = this.memos.filter((memo) => this.memoMatchesSearch(memo, normalizedQuery, this.mobileSearchDateFilter));
 		if (memos.length === 0) {
-			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: "没有找到相关 Memos" });
+			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.noResults") });
 			return;
 		}
 		const visibleMemos = memos.slice(0, this.mobileSearchVisibleCount);
@@ -1295,7 +1296,7 @@ export class KnomoView extends ItemView {
 		if (visibleMemos.length < memos.length) {
 			resultsEl.createEl("button", {
 				cls: "knomo-load-more knomo-mobile-search-more",
-				text: `加载更多（剩余 ${memos.length - visibleMemos.length} 条）`,
+				text: t("list.loadMore", { count: memos.length - visibleMemos.length }),
 				attr: {
 					type: "button",
 					"data-action": "load-more-mobile-search",
@@ -1645,9 +1646,9 @@ export class KnomoView extends ItemView {
 		const stats = getMemoStats(this.memos);
 		for (const statsEl of this.statsEls) {
 			statsEl.empty();
-			this.renderStat(statsEl, String(stats.memoCount), "笔记");
-			this.renderStat(statsEl, String(stats.tagCount), "标签");
-			this.renderStat(statsEl, stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount), stats.imageCount > 0 ? "图片" : "字数");
+			this.renderStat(statsEl, String(stats.memoCount), t("stats.notes"));
+			this.renderStat(statsEl, String(stats.tagCount), t("stats.tags"));
+			this.renderStat(statsEl, stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount), stats.imageCount > 0 ? t("stats.images") : t("stats.words"));
 		}
 	}
 
@@ -1659,7 +1660,7 @@ export class KnomoView extends ItemView {
 
 	private renderTags(): void {
 		const allTags = collectTags(this.memos);
-		this.renderTagList(this.allTagsEl, buildTagTree(allTags), "暂无标签");
+		this.renderTagList(this.allTagsEl, buildTagTree(allTags), t("tags.empty"));
 	}
 
 	private renderTrashCount(): void {
@@ -1701,7 +1702,7 @@ export class KnomoView extends ItemView {
 				cls: "knomo-tag-toggle",
 				attr: {
 					type: "button",
-					"aria-label": collapsed ? "展开标签组" : "收起标签组",
+					"aria-label": collapsed ? t("tags.expandGroup") : t("tags.collapseGroup"),
 					"aria-expanded": collapsed ? "false" : "true",
 					"data-tag-toggle": tag.name,
 				},
@@ -1749,11 +1750,11 @@ export class KnomoView extends ItemView {
 		if (!host.mobile && !isDefault) {
 			host.el.createEl("button", {
 				cls: "knomo-title-root",
-				text: "全部笔记",
+				text: t("nav.allNotes"),
 				attr: {
 					type: "button",
 					"data-action": "reset-list-state",
-					"aria-label": "返回全部笔记",
+					"aria-label": t("title.backAllNotes"),
 				},
 			});
 			host.el.createSpan({ cls: "knomo-title-separator", text: "/" });
@@ -1774,7 +1775,7 @@ export class KnomoView extends ItemView {
 	private getDesktopTitleLabel(): string {
 		const query = this.searchQuery.trim();
 		if (query.length > 0) {
-			return "搜索";
+			return t("search.label");
 		}
 		if (this.searchDateFilter !== null) {
 			return getSearchDateLabel(this.searchDateFilter);
@@ -1826,7 +1827,7 @@ export class KnomoView extends ItemView {
 		this.cardFlowEl.empty();
 		this.loadMoreSentinelEl = null;
 		if (this.cardFlowError !== null) {
-			this.renderEmptyState("卡片流刷新失败", this.cardFlowError);
+			this.renderEmptyState(t("empty.cardFlowFailed"), this.cardFlowError);
 			return;
 		}
 		if (this.activeNav === "trash") {
@@ -1834,7 +1835,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (this.activeNav === "random" && this.randomReunionLoading) {
-			this.renderEmptyState("正在寻找可以随机重逢的 Memos");
+			this.renderEmptyState(t("empty.randomLoading"));
 			return;
 		}
 		const memos = this.getFilteredMemos();
@@ -1853,15 +1854,15 @@ export class KnomoView extends ItemView {
 
 	private renderTrashCardFlow(generation: number): void {
 		if (this.trashLoading || this.trashMemos === null) {
-			this.renderEmptyState("正在加载回收站");
+			this.renderEmptyState(t("empty.trashLoading"));
 			return;
 		}
 		if (this.trashError !== null) {
-			this.renderEmptyState("回收站加载失败", this.trashError);
+			this.renderEmptyState(t("empty.trashFailed"), this.trashError);
 			return;
 		}
 		if (this.trashMemos.length === 0) {
-			this.renderEmptyState("回收站为空", "删除的 Memos 会暂时保留在这里");
+			this.renderEmptyState(t("empty.trashEmptyTitle"), t("empty.trashEmptyDesc"));
 			return;
 		}
 		this.startCardFeed(this.trashMemos, "trash", generation);
@@ -1870,7 +1871,7 @@ export class KnomoView extends ItemView {
 	private renderOutsideTodaySummary(count: number): void {
 		this.cardFlowEl?.createDiv({
 			cls: "knomo-list-summary",
-			text: `那些今天写下了 ${count} 条 Memos`,
+			text: t("list.reviewSummary", { count }),
 		});
 	}
 
@@ -1881,11 +1882,11 @@ export class KnomoView extends ItemView {
 		}
 		toolbar.createDiv({
 			cls: "knomo-list-summary",
-			text: `随机重逢了 ${count} 条 Memos`,
+			text: t("list.randomSummary", { count }),
 		});
 		toolbar.createEl("button", {
 			cls: "knomo-inline-button",
-			text: "换一批",
+			text: t("list.randomRefresh"),
 			attr: {
 				type: "button",
 				"data-action": "refresh-random-reunion",
@@ -1945,7 +1946,7 @@ export class KnomoView extends ItemView {
 	private renderLoadMoreSentinel(remainingCount: number, generation: number): void {
 		const sentinel = this.cardFlowEl?.createEl("button", {
 			cls: "knomo-load-more",
-			text: `加载更多（剩余 ${remainingCount} 条）`,
+			text: t("list.loadMore", { count: remainingCount }),
 			attr: {
 				type: "button",
 				"data-action": "load-more",
@@ -2021,7 +2022,7 @@ export class KnomoView extends ItemView {
 		if (randomCardDescriptionId !== null) {
 			card.createSpan({
 				cls: "knomo-visually-hidden",
-				text: "按 Enter 打开来源位置",
+				text: t("card.openSourceHint"),
 				attr: { id: randomCardDescriptionId },
 			});
 		}
@@ -2032,7 +2033,7 @@ export class KnomoView extends ItemView {
 				cls: "knomo-card-menu",
 				attr: {
 					type: "button",
-					"aria-label": "更多操作",
+					"aria-label": t("card.moreActions"),
 					"aria-expanded": this.activeMenuMemoId === memo.id ? "true" : "false",
 					"data-action": "toggle-card-menu",
 					"data-memo-id": memo.id,
@@ -2041,11 +2042,11 @@ export class KnomoView extends ItemView {
 			setIcon(menu, "more-horizontal");
 
 			const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
-			this.renderCardAction(actions, memo.id, "edit", "编辑");
-			this.renderCardAction(actions, memo.id, "reference", "引用");
-			this.renderCardAction(actions, memo.id, "copy-text", "复制文本");
-			this.renderCardAction(actions, memo.id, "copy-link", "复制链接");
-			this.renderCardAction(actions, memo.id, "delete", "删除");
+			this.renderCardAction(actions, memo.id, "edit", t("card.edit"));
+			this.renderCardAction(actions, memo.id, "reference", t("card.reference"));
+			this.renderCardAction(actions, memo.id, "copy-text", t("card.copyText"));
+			this.renderCardAction(actions, memo.id, "copy-link", t("card.copyLink"));
+			this.renderCardAction(actions, memo.id, "delete", t("card.delete"));
 		}
 
 		const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
@@ -2064,21 +2065,21 @@ export class KnomoView extends ItemView {
 			attr: { "data-memo-id": memo.id },
 		});
 		const head = card.createDiv({ cls: "knomo-card-head" });
-		head.createDiv({ cls: "knomo-card-time", text: `原创建：${formatMemoDisplayTime(memo.createdAt)}` });
+		head.createDiv({ cls: "knomo-card-time", text: t("trash.createdAt", { time: formatMemoDisplayTime(memo.createdAt) }) });
 		const actions = head.createDiv({ cls: "knomo-trash-actions" });
-		this.renderTrashAction(actions, memo.id, "restore", busyAction === "restore" ? "恢复中" : "恢复", busyAction !== null);
-		this.renderTrashAction(actions, memo.id, "purge", busyAction === "purge" ? "删除中" : "永久删除", busyAction !== null);
+		this.renderTrashAction(actions, memo.id, "restore", busyAction === "restore" ? t("trash.restoring") : t("trash.restore"), busyAction !== null);
+		this.renderTrashAction(actions, memo.id, "purge", busyAction === "purge" ? t("trash.purging") : t("trash.purge"), busyAction !== null);
 
 		const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
 		this.queueMemoMarkdown(memo, content, generation, markdownPriority);
 
 		const meta = card.createDiv({ cls: "knomo-card-meta knomo-trash-meta" });
-		meta.createDiv({ text: `删除时间：${formatOptionalMemoTime(memo.deletedAt)}` });
+		meta.createDiv({ text: t("trash.deletedAt", { time: formatOptionalMemoTime(memo.deletedAt) }) });
 		if (memo.deleteSource !== undefined && memo.deleteSource.trim().length > 0) {
-			meta.createDiv({ text: `删除来源：${formatDeleteSource(memo.deleteSource)}` });
+			meta.createDiv({ text: t("trash.deleteSource", { source: formatDeleteSource(memo.deleteSource) }) });
 		}
 		if (memo.issue !== null) {
-			card.createDiv({ cls: "knomo-card-warning", text: memo.issue.message });
+			card.createDiv({ cls: "knomo-card-warning", text: formatSettingsText(memo.issue.message) });
 		}
 	}
 
@@ -2105,16 +2106,16 @@ export class KnomoView extends ItemView {
 			const sourceReferenceText = getSourceReferenceText(memo);
 			const meta = card.createDiv({ cls: "knomo-card-meta knomo-source-reference markdown-rendered" });
 			if (sourceReferenceText === null) {
-				meta.setText(`引用自：${memo.sourceMemoId}`);
+				meta.setText(`${t("reference.fromPrefix")}${memo.sourceMemoId}`);
 			} else {
-				this.queueSourceReferenceMarkdown(meta, `引用自：${sourceReferenceText}`, memo.dailyRef.path, generation);
+				this.queueSourceReferenceMarkdown(meta, `${t("reference.fromPrefix")}${sourceReferenceText}`, memo.dailyRef.path, generation);
 			}
 		}
 		if (memo.syncStatus !== "synced") {
-			card.createDiv({ cls: "knomo-card-warning", text: memo.issue?.message ?? memo.syncStatus });
+			card.createDiv({ cls: "knomo-card-warning", text: formatSettingsText(memo.issue?.message ?? memo.syncStatus) });
 		}
 		if (memo.issue !== null && memo.syncStatus === "synced") {
-			card.createDiv({ cls: "knomo-card-warning", text: memo.issue.message });
+			card.createDiv({ cls: "knomo-card-warning", text: formatSettingsText(memo.issue.message) });
 		}
 	}
 
@@ -2131,7 +2132,7 @@ export class KnomoView extends ItemView {
 		});
 	}
 
-	private renderEmptyState(title = "暂无内容", description = ""): void {
+	private renderEmptyState(title = t("empty.generic"), description = ""): void {
 		if (this.cardFlowEl === null) {
 			return;
 		}
@@ -2456,25 +2457,25 @@ export class KnomoView extends ItemView {
 				return;
 			} else if (action === "copy-text") {
 				await this.copyText(memo.contentSnapshot);
-				new Notice("已复制文本");
+				new Notice(t("notice.copiedText"));
 			} else if (action === "copy-link") {
 				const referenceText = await this.referenceService.createReferenceText(memo, "link");
 				await this.copyText(referenceText);
-				new Notice("已复制链接");
+				new Notice(t("notice.copiedLink"));
 			} else if (action === "delete") {
-				const confirmed = this.containerEl.win.confirm("确定删除这条内容？");
+				const confirmed = this.containerEl.win.confirm(t("confirm.deleteMemo"));
 				if (!confirmed) {
 					this.renderUiState();
 					return;
 				}
 				await this.syncOrchestrator.deleteMemo(memo);
-				new Notice("已删除");
+				new Notice(t("notice.deleted"));
 				await this.onMemosChanged();
 				return;
 			}
 			this.renderUiState();
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "操作失败");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("error.operationFailed"));
 			new Notice(message);
 			this.renderUiState();
 		}
@@ -2487,7 +2488,7 @@ export class KnomoView extends ItemView {
 
 		const input = this.inputEl.value;
 		if (input.trim().length === 0) {
-			this.updateStatus("内容不能为空。", true);
+			this.updateStatus(t("composer.emptyContent"), true);
 			this.updateSendButtonState();
 			return;
 		}
@@ -2531,7 +2532,7 @@ export class KnomoView extends ItemView {
 				this.mobileComposerOpenScrollTop = null;
 			}
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "保存失败");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("error.saveFailed"));
 			this.updateStatus(message, true);
 			new Notice(message);
 		} finally {
@@ -2545,7 +2546,7 @@ export class KnomoView extends ItemView {
 		if (this.activeNav === "trash") {
 			await this.loadTrashMemos();
 			if (this.trashError === null) {
-				new Notice("回收站已刷新");
+				new Notice(t("notice.trashRefreshed"));
 			}
 			return;
 		}
@@ -2553,17 +2554,17 @@ export class KnomoView extends ItemView {
 			const result = await this.onManualRefresh();
 			const failed = result.failed;
 			if (failed > 0) {
-				const message = `刷新失败：${failed} 个文件未同步`;
+				const message = t("notice.refreshFailedCount", { count: failed });
 				new Notice(message);
 				return;
 			}
 			if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
-				new Notice(`刷新完成：新增 ${result.created} 条，更新 ${result.updated} 条，删除 ${result.deleted} 条`);
+				new Notice(t("notice.refreshComplete", { created: result.created, updated: result.updated, deleted: result.deleted }));
 				return;
 			}
-			new Notice("已是最新");
+			new Notice(t("notice.upToDate"));
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "刷新失败。");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("error.refreshFailed"));
 			new Notice(message);
 		}
 	}
@@ -2797,7 +2798,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (this.inputEl !== null && this.inputEl.value.trim().length > 0) {
-			const confirmed = this.containerEl.win.confirm("收起输入层并保留当前内容？");
+			const confirmed = this.containerEl.win.confirm(t("composer.closeConfirm"));
 			if (!confirmed) {
 				return;
 			}
@@ -3486,7 +3487,7 @@ export class KnomoView extends ItemView {
 		}
 		this.sendButtonEl.disabled =
 			this.isSaving || this.inputEl.disabled || this.inputEl.value.trim().length === 0;
-		const label = this.isSaving ? "保存中" : "发送";
+		const label = this.isSaving ? t("composer.saving") : t("composer.send");
 		this.sendButtonEl.setAttr("aria-label", label);
 	}
 
@@ -3808,7 +3809,7 @@ export class KnomoView extends ItemView {
 			}
 			this.trashError = null;
 		} catch (error) {
-			this.trashError = formatSettingsText(error instanceof Error ? error.message : "回收站数量刷新失败");
+			this.trashError = formatSettingsText(error instanceof Error ? error.message : t("error.trashCountFailed"));
 		}
 		if (render) {
 			this.renderUiState();
@@ -3835,7 +3836,7 @@ export class KnomoView extends ItemView {
 			this.deletedMemoIds = new Set(deletedMemos.map((memo) => memo.id));
 		} catch (error) {
 			this.trashMemos = [];
-			this.trashError = formatSettingsText(error instanceof Error ? error.message : "回收站加载失败");
+			this.trashError = formatSettingsText(error instanceof Error ? error.message : t("error.trashLoadFailed"));
 			new Notice(this.trashError);
 		} finally {
 			this.trashLoading = false;
@@ -3852,7 +3853,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (action === "purge") {
-			const confirmed = this.containerEl.win.confirm("永久删除后无法恢复，确定要删除这条 Memo 吗？");
+			const confirmed = this.containerEl.win.confirm(t("confirm.purgeMemo"));
 			if (!confirmed) {
 				return;
 			}
@@ -3865,7 +3866,7 @@ export class KnomoView extends ItemView {
 				await this.syncOrchestrator.restoreMemo(memo.id);
 				this.trashMemos = (this.trashMemos ?? []).filter((item) => item.id !== memo.id);
 				this.trashCount = Math.max(0, this.trashCount - 1);
-				new Notice("已恢复");
+				new Notice(t("notice.restored"));
 				await this.onMemosChanged();
 				return;
 			}
@@ -3873,7 +3874,7 @@ export class KnomoView extends ItemView {
 			await this.syncOrchestrator.purgeDeletedMemo(memo.id);
 			this.trashMemos = (this.trashMemos ?? []).filter((item) => item.id !== memo.id);
 			this.trashCount = Math.max(0, this.trashCount - 1);
-			new Notice("已永久删除");
+			new Notice(t("notice.purged"));
 			void this.refreshTrashCount(false);
 			this.renderUiState();
 		} catch (error) {
@@ -3903,7 +3904,7 @@ export class KnomoView extends ItemView {
 			);
 		} catch (error) {
 			this.randomReunionMemos = [];
-			new Notice(formatSettingsText(error instanceof Error ? error.message : "随机重逢加载失败"));
+			new Notice(formatSettingsText(error instanceof Error ? error.message : t("error.randomLoadFailed")));
 		} finally {
 			this.randomReunionLoading = false;
 			if (this.activeNav === "random") {
@@ -3927,7 +3928,7 @@ export class KnomoView extends ItemView {
 			await this.app.workspace.openLinkText(memo.dailyRef.path, "", false, openState);
 			await this.randomReunionService.markRandomReunionReviewed(memo.id);
 		} catch (error) {
-			new Notice(formatSettingsText(error instanceof Error ? error.message : "随机重逢打开失败"));
+			new Notice(formatSettingsText(error instanceof Error ? error.message : t("error.randomOpenFailed")));
 		}
 	}
 
@@ -4199,7 +4200,7 @@ export class KnomoView extends ItemView {
 			}
 			this.insertText(links.join("\n"));
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "图片插入失败");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("error.imageInsertFailed"));
 			this.updateStatus(message, true);
 			new Notice(message);
 		}
@@ -4214,7 +4215,7 @@ export class KnomoView extends ItemView {
 		if (activeFile !== null && activeFile.extension === "md") {
 			return activeFile.path;
 		}
-		const message = "请先启用 Obsidian 日记核心插件，或打开一个 Markdown 文件后再插入图片";
+		const message = t("composer.enableDailyOrOpenMarkdown");
 		this.updateStatus(message, true);
 		new Notice(message);
 		return null;
@@ -4459,12 +4460,12 @@ function getSourceReferenceText(memo: MemoRecord): string | null {
 
 function getEmptyStateTitle(activeNav: SidebarNav): string {
 	if (activeNav === "review") {
-		return "今日之外没有留下 Memos";
+		return t("empty.review");
 	}
 	if (activeNav === "random") {
-		return "还没有足够的 memo 可以随机重逢";
+		return t("empty.random");
 	}
-	return "暂无内容";
+	return t("empty.generic");
 }
 
 function shouldOpenRandomReunionCard(target: Element): boolean {
@@ -4552,7 +4553,7 @@ function matchesScope(memo: MemoRecord, filter: ScopeFilter): boolean {
 }
 
 function getScopeLabel(filter: ScopeFilter): string {
-	return ALL_SCOPE_OPTIONS.find((option) => option.filter === filter)?.label ?? "全部笔记";
+	return ALL_SCOPE_OPTIONS.find((option) => option.filter === filter)?.label ?? t("nav.allNotes");
 }
 
 function isTitleMode(value: string | null): value is TitleMode {
@@ -4564,7 +4565,7 @@ function isSearchDateFilter(value: string | null): value is SearchDateFilter {
 }
 
 function getSearchDateLabel(filter: SearchDateFilter): string {
-	return SEARCH_DATE_OPTIONS.find((option) => option.filter === filter)?.label ?? "搜索";
+	return SEARCH_DATE_OPTIONS.find((option) => option.filter === filter)?.label ?? t("search.label");
 }
 
 function isSidebarNav(value: string | null): value is SidebarNav {
@@ -4572,7 +4573,7 @@ function isSidebarNav(value: string | null): value is SidebarNav {
 }
 
 function getSidebarNavLabel(value: SidebarNav): string {
-	return getAllSidebarNavItems().find((item) => item.nav === value)?.label ?? "全部笔记";
+	return getAllSidebarNavItems().find((item) => item.nav === value)?.label ?? t("nav.allNotes");
 }
 
 function getAllSidebarNavItems(): SidebarNavItem[] {
@@ -4637,7 +4638,7 @@ function formatMemoDisplayTime(value: string): string {
 }
 
 function formatOptionalMemoTime(value: string | undefined): string {
-	return value === undefined || value.trim().length === 0 ? "未知" : formatMemoDisplayTime(value);
+	return value === undefined || value.trim().length === 0 ? t("trash.unknownTime") : formatMemoDisplayTime(value);
 }
 
 function formatDeleteSource(value: string): string {
@@ -4645,27 +4646,27 @@ function formatDeleteSource(value: string): string {
 		return "Knomo";
 	}
 	if (value === "file_watch") {
-		return "文件同步";
+		return t("deleteSource.fileWatch");
 	}
 	if (value === "manual_scan") {
-		return "手动扫描";
+		return t("deleteSource.manualScan");
 	}
 	if (value === "startup_scan") {
-		return "启动扫描";
+		return t("deleteSource.startupScan");
 	}
 	return value;
 }
 
 function formatTrashActionErrorMessage(action: "restore" | "purge", error: unknown): string {
-	const actionLabel = action === "restore" ? "恢复失败" : "永久删除失败";
-	const fallbackMessage = action === "restore" ? "恢复失败，请稍后重试" : "永久删除失败，请稍后重试";
+	const actionLabel = action === "restore" ? t("error.restoreFailed") : t("error.purgeFailed");
+	const fallbackMessage = action === "restore" ? t("error.restoreFailedRetry") : t("error.purgeFailedRetry");
 	if (!(error instanceof Error) || error.message.length === 0) {
 		return fallbackMessage;
 	}
 	if (error.message.startsWith(actionLabel)) {
 		return error.message;
 	}
-	return `${actionLabel}：${error.message}`;
+	return t("error.actionFailedWithReason", { action: actionLabel, message: error.message });
 }
 
 function clamp(value: number, min: number, max: number): number {

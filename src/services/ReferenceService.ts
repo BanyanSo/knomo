@@ -13,7 +13,7 @@ export class ReferenceService {
 		private readonly app: App,
 		private readonly markdownBlockService = new MarkdownBlockService(),
 		private readonly ensureReferenceBlockId: EnsureReferenceBlockId = async () => {
-			throw new Error("引用生成服务未初始化。");
+			throw new Error("Reference service is not initialized.");
 		},
 	) {}
 
@@ -25,7 +25,7 @@ export class ReferenceService {
 		const activeSourcePath = sourcePath ?? "";
 		const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
 		if (!(file instanceof TFile)) {
-			throw new Error("引用目标日记文件不存在。");
+			throw new Error("Reference target daily note file does not exist.");
 		}
 		const blockId = await this.getExistingBlockId(file, memo) ?? await this.ensureReferenceBlockId(memo);
 		const link = this.app.fileManager.generateMarkdownLink(file, activeSourcePath, `#^${blockId}`);

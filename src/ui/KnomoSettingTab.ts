@@ -8,6 +8,10 @@ import {
 	DEFAULT_MONTHLY_MEMO_FOLDER,
 	KNOMO_VIEW_TYPE,
 } from "../constants";
+import { t } from "../i18n";
+import { en } from "../i18n/en";
+import { legacyZhCNText } from "../i18n/zh-CN";
+import type { TranslationKey } from "../i18n";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
 import type { RebuildIndexMode, RebuildIndexScope, SyncOrchestrator } from "../services/SyncOrchestrator";
@@ -44,11 +48,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 		const settings = this.settingsService.getSettings();
 
-		containerEl.createEl("h2", { text: "Memos" });
+		containerEl.createEl("h2", { text: t("settings.title") });
 
 		new Setting(containerEl)
-			.setName("写入标题")
-			.setDesc(`Memos 会写入当天日记中的这个标题下，例如 ${DEFAULT_DAILY_HEADING}。`)
+			.setName(t("settings.dailyHeading.name"))
+			.setDesc(t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING }))
 			.addText((text) => {
 				text.setPlaceholder(DEFAULT_DAILY_HEADING);
 				text.setValue(settings.dailyHeading);
@@ -57,11 +61,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("新 Memos 排列方式")
-			.setDesc("选择新 Memos 在当天标题区域中的排列方式。")
+			.setName(t("settings.insertPosition.name"))
+			.setDesc(t("settings.insertPosition.desc"))
 			.addDropdown((dropdown) => {
-				dropdown.addOption("bottom", "最新在后（追加到分组末尾）");
-				dropdown.addOption("top", "最新在前（插入到标题下方）");
+				dropdown.addOption("bottom", t("settings.insertPosition.bottom"));
+				dropdown.addOption("top", t("settings.insertPosition.top"));
 				dropdown.setValue(settings.dailyInsertPosition);
 				dropdown.onChange((value) => {
 					void this.settingsService.updateSettings({
@@ -70,8 +74,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("Memo 时间格式")
-			.setDesc("设置新写入 Memo 的时间显示格式；扫描会同时兼容 HH:mm 和 HH:mm:ss。")
+			.setName(t("settings.timeFormat.name"))
+			.setDesc(t("settings.timeFormat.desc"))
 			.addDropdown((dropdown) => {
 				dropdown.addOption("HH:mm:ss", "HH:mm:ss");
 				dropdown.addOption("HH:mm", "HH:mm");
@@ -85,8 +89,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 		let monthlyFolderDraft = settings.monthlyMemoFolder;
 		new Setting(containerEl)
-			.setName("月度 Memos 文件夹")
-			.setDesc("用于保存月度 Memos 文件的文件夹。")
+			.setName(t("settings.monthlyFolder.name"))
+			.setDesc(t("settings.monthlyFolder.desc"))
 			.addText((text) => {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
 				text.setValue(settings.monthlyMemoFolder);
@@ -95,14 +99,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText("保存路径");
+				button.setButtonText(t("settings.monthlyFolder.save"));
 				button.onClick(() => {
 					void this.saveMonthlyFolder(monthlyFolderDraft, button);
 				});
 			});
 		new Setting(containerEl)
-			.setName("排除月度 Memos 文件夹")
-			.setDesc("开启后，Knomo 会将月度 Memos 文件夹加入 Obsidian 的排除文件规则，减少月度 Memos 文件对搜索、图谱和统计结果的影响，文件依然在 Obsidian 可读。")
+			.setName(t("settings.excludeMonthly.name"))
+			.setDesc(t("settings.excludeMonthly.desc"))
 			.addToggle((toggle) => {
 				toggle.setValue(settings.excludeMonthlyMemosFromObsidian);
 				toggle.onChange((value) => {
@@ -111,8 +115,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 		this.monthlyExcludeStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
 		new Setting(containerEl)
-			.setName("月度 Memos 文件名格式")
-			.setDesc(`设置自动生成的月度 Memos 文件名格式，例如 ${DEFAULT_MONTHLY_MEMO_FILE_FORMAT}。`)
+			.setName(t("settings.monthlyFileFormat.name"))
+			.setDesc(t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }))
 			.addText((text) => {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
 				text.setValue(settings.monthlyMemoFileFormat);
@@ -121,8 +125,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("日期标题格式")
-			.setDesc(`设置月度 Memos 文件中每天分组标题的格式，例如 ${DEFAULT_MONTHLY_DATE_HEADING_FORMAT}。`)
+			.setName(t("settings.dateHeadingFormat.name"))
+			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }))
 			.addText((text) => {
 				text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
 				text.setValue(settings.monthlyDateHeadingFormat);
@@ -131,11 +135,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("日期排序方式")
-			.setDesc("设置月度 Memos 文件中日期分组的排列顺序。")
+			.setName(t("settings.dateOrder.name"))
+			.setDesc(t("settings.dateOrder.desc"))
 			.addDropdown((dropdown) => {
-				dropdown.addOption("asc", "升序");
-				dropdown.addOption("desc", "降序");
+				dropdown.addOption("asc", t("settings.dateOrder.asc"));
+				dropdown.addOption("desc", t("settings.dateOrder.descOption"));
 				dropdown.setValue(settings.monthlyDateOrder);
 				dropdown.onChange((value) => {
 					void this.settingsService.updateSettings({
@@ -145,15 +149,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("高级 / 数据维护")
+			.setName(t("settings.maintenance.heading"))
 			.setHeading();
 		new Setting(containerEl)
-			.setName("导入旧日记 Memos")
-			.setDesc("从历史 Daily Notes 中识别符合 Memos 格式的内容。适合第一次安装 Knomo 后导入旧日记。导入前会先预览，不会直接修改你的日记。")
+			.setName(t("settings.legacyImport.name"))
+			.setDesc(t("settings.legacyImport.desc"))
 			.addDropdown((dropdown) => {
-				dropdown.addOption("30d", "最近 30 天");
-				dropdown.addOption("90d", "最近 90 天");
-				dropdown.addOption("all", "全部日记");
+				dropdown.addOption("30d", t("settings.scope30d"));
+				dropdown.addOption("90d", t("settings.scope90d"));
+				dropdown.addOption("all", t("settings.scopeAll"));
 				dropdown.setValue(this.legacyImportScope);
 				dropdown.onChange((value) => {
 					this.legacyImportScope = value as LegacyDailyMemosImportScope;
@@ -162,7 +166,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText("开始预览");
+				button.setButtonText(t("settings.preview.start"));
 				button.onClick(() => {
 					void this.runLegacyImportPreview(button);
 				});
@@ -174,33 +178,33 @@ export class KnomoSettingTab extends PluginSettingTab {
 		let rebuildScope: RebuildIndexScope = "30d";
 		let rebuildMode: RebuildIndexMode = "index-only";
 		new Setting(containerEl)
-			.setName("修复 Knomo 数据")
-			.setDesc("从 Daily Notes 重新扫描 Memos，重建 Knomo 列表；也可以同步更新月度 Memos。开始前会自动备份。")
+			.setName(t("settings.rebuild.name"))
+			.setDesc(t("settings.rebuild.desc"))
 			.addDropdown((dropdown) => {
-				dropdown.addOption("30d", "最近 30 天");
-				dropdown.addOption("90d", "最近 90 天");
-				dropdown.addOption("all", "全部日记");
+				dropdown.addOption("30d", t("settings.scope30d"));
+				dropdown.addOption("90d", t("settings.scope90d"));
+				dropdown.addOption("all", t("settings.scopeAll"));
 				dropdown.setValue(rebuildScope);
 				dropdown.onChange((value) => {
 					rebuildScope = value as RebuildIndexScope;
 				});
 			})
 			.addDropdown((dropdown) => {
-				dropdown.addOption("index-only", "只重建 Knomo 列表");
-				dropdown.addOption("index-and-monthly", "重建列表并同步月度 Memos");
+				dropdown.addOption("index-only", t("settings.rebuild.indexOnly"));
+				dropdown.addOption("index-and-monthly", t("settings.rebuild.indexAndMonthly"));
 				dropdown.setValue(rebuildMode);
 				dropdown.onChange((value) => {
 					rebuildMode = value as RebuildIndexMode;
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText("开始修复");
+				button.setButtonText(t("settings.rebuild.start"));
 				button.onClick(() => {
 					void this.runRebuildIndex(rebuildScope, rebuildMode, button);
 				});
 			});
 		this.rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderRebuildResult("修复前会自动备份现有 Knomo 列表数据。");
+		this.renderRebuildResult(t("settings.rebuild.before"));
 		this.issueListEl = containerEl.createDiv({ cls: "knomo-issue-list" });
 		void this.renderIssueList();
 	}
@@ -208,20 +212,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private async saveDailyHeading(value: string): Promise<void> {
 		const nextHeading = value.trim();
 		if (!this.settingsService.validateDailyHeading(nextHeading)) {
-			new Notice("写入标题必须是 1-6 级标题。");
+			new Notice(t("settings.dailyHeading.invalid"));
 			return;
 		}
 		if (nextHeading === this.settingsService.getSettings().dailyHeading) {
 			return;
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
-		new Notice("修改日记标题只影响之后新写入的 Memos。已有日记中的 Memos 会继续按原标题解析，不会被自动迁移");
+		new Notice(t("settings.dailyHeading.changed"));
 	}
 
 	private async saveMonthlyDateHeadingFormat(value: string): Promise<void> {
 		const nextFormat = value.trim();
 		if (!this.settingsService.validateMarkdownHeading(nextFormat)) {
-			new Notice("日期标题格式必须是 1-6 级标题。");
+			new Notice(t("settings.dateHeadingFormat.invalid"));
 			return;
 		}
 		await this.settingsService.updateSettings({ monthlyDateHeadingFormat: nextFormat });
@@ -230,7 +234,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private async saveMonthlyMemoFileFormat(value: string): Promise<void> {
 		const nextFormat = value.trim();
 		if (!this.settingsService.validateMonthlyMemoFileFormat(nextFormat)) {
-			new Notice("月度 Memos 文件名格式不能包含路径分隔符。");
+			new Notice(t("settings.monthlyFileFormat.invalid"));
 			return;
 		}
 		await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
@@ -240,31 +244,34 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const monthlyMemoFolder = normalizeVaultPath(value);
 		const currentSettings = this.settingsService.getSettings();
 		button.setDisabled(true);
-		button.setButtonText("保存中...");
+		button.setButtonText(t("settings.monthlyFolder.saving"));
 		try {
 			if (monthlyMemoFolder !== currentSettings.monthlyMemoFolder) {
 				const plan = await this.settingsService.planMonthlyMemoFolderMigration(monthlyMemoFolder);
 				if (plan.conflicts.length > 0) {
-					throw new Error(`目标路径存在冲突，已停止迁移：${plan.conflicts.join("；")}`);
+					throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
 				}
 				const confirmed = this.containerEl.win.confirm(
-					`确认迁移月度 Memos 文件夹？\n\n当前文件夹：${currentSettings.monthlyMemoFolder}\n新文件夹：${monthlyMemoFolder}\n\n` +
-						`将移动 ${plan.monthlyFileMoves.length} 个月度文件；` +
-						`${plan.moveSystemFolder ? "将迁移系统数据目录；" : "将创建新的系统数据目录；"}` +
-						`将重写 ${plan.rewrittenMonthlyRefs} 条月度引用。`,
+					t("settings.monthlyFolder.confirm", {
+						current: currentSettings.monthlyMemoFolder,
+						next: monthlyMemoFolder,
+						count: plan.monthlyFileMoves.length,
+						systemAction: plan.moveSystemFolder ? t("settings.monthlyFolder.moveSystem") : t("settings.monthlyFolder.createSystem"),
+						rewritten: plan.rewrittenMonthlyRefs,
+					}),
 				);
 				if (!confirmed) {
 					return;
 				}
 			}
 			await this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder);
-			new Notice("月度 Memos 文件夹已保存");
+			new Notice(t("settings.monthlyFolder.saved"));
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "月度 Memos 文件夹保存失败。");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.monthlyFolder.saveFailed"));
 			new Notice(message);
 		} finally {
 			button.setDisabled(false);
-			button.setButtonText("保存路径");
+			button.setButtonText(t("settings.monthlyFolder.save"));
 		}
 	}
 
@@ -297,7 +304,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				managedObsidianExcludeRule: undefined,
 				managedObsidianExcludeRuleOwned: false,
 			});
-			this.setExcludeStatus("月度 Memos 文件夹路径为空，暂未写入 Obsidian 排除规则", true);
+			this.setExcludeStatus(t("settings.excludeMonthly.empty"), true);
 			return;
 		}
 		try {
@@ -308,15 +315,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 				managedObsidianExcludeRuleOwned: result.addedByKnomo,
 			});
 			this.setExcludeStatus(result.addedByKnomo
-				? "已将月度 Memos 文件夹加入 Obsidian 排除规则"
-				: "月度 Memos 文件夹已在 Obsidian 排除规则中");
+				? t("settings.excludeMonthly.added")
+				: t("settings.excludeMonthly.existing"));
 		} catch {
 			await this.settingsService.updateSettings({
 				excludeMonthlyMemosFromObsidian: false,
 				managedObsidianExcludeRule: undefined,
 				managedObsidianExcludeRuleOwned: false,
 			});
-			new Notice(`无法自动更新 Obsidian 排除规则，请手动添加：${rule}`);
+			new Notice(t("settings.excludeMonthly.addManual", { rule }));
 		}
 	}
 
@@ -329,7 +336,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				await this.obsidianExcludeService.removeRule(rule);
 				removedRule = true;
 			} catch {
-				new Notice(`无法自动更新 Obsidian 排除规则，请手动移除：${rule}`);
+				new Notice(t("settings.excludeMonthly.removeManual", { rule }));
 			}
 		}
 		await this.settingsService.updateSettings({
@@ -338,8 +345,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 			managedObsidianExcludeRuleOwned: false,
 		});
 		this.setExcludeStatus(removedRule
-			? "已取消排除月度 Memos 文件夹"
-			: "已关闭 Knomo 自动管理，原有 Obsidian 排除规则保持不变");
+			? t("settings.excludeMonthly.removed")
+			: t("settings.excludeMonthly.keepExisting"));
 	}
 
 	private async syncMonthlyMemosExcludeRuleAfterFolderChange(
@@ -355,7 +362,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				managedObsidianExcludeRule: undefined,
 				managedObsidianExcludeRuleOwned: false,
 			});
-			this.setExcludeStatus("月度 Memos 文件夹路径为空，暂未写入 Obsidian 排除规则", true);
+			this.setExcludeStatus(t("settings.excludeMonthly.empty"), true);
 			return;
 		}
 		try {
@@ -389,7 +396,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				managedObsidianExcludeRule: nextRule,
 				managedObsidianExcludeRuleOwned: false,
 			});
-			new Notice(`无法自动更新 Obsidian 排除规则，请手动添加：${nextRule}`);
+			new Notice(t("settings.excludeMonthly.addManual", { rule: nextRule }));
 		}
 	}
 
@@ -399,21 +406,21 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.legacyImportRunning = true;
 		button.setDisabled(true);
-		button.setButtonText("预览中...");
+		button.setButtonText(t("settings.preview.running"));
 		this.legacyImportPreview = null;
 		this.legacyImportGroupsEl?.empty();
-		this.renderLegacyImportStatus("正在预览旧日记 Memos...");
+		this.renderLegacyImportStatus(t("settings.legacyImport.previewing"));
 		try {
 			this.legacyImportPreview = await this.syncOrchestrator.previewLegacyDailyMemos(this.legacyImportScope);
 			this.renderLegacyImportPreview();
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "旧日记 Memos 预览失败。");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.legacyImport.previewFailed"));
 			this.renderLegacyImportStatus(message, true);
 			new Notice(message);
 		} finally {
 			this.legacyImportRunning = false;
 			button.setDisabled(false);
-			button.setButtonText("开始预览");
+			button.setButtonText(t("settings.preview.start"));
 		}
 	}
 
@@ -424,12 +431,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.legacyImportGroupsEl.empty();
 		const preview = this.legacyImportPreview;
 		if (preview === null) {
-			this.renderLegacyImportStatus("尚未预览旧日记 Memos。");
+			this.renderLegacyImportStatus(t("settings.legacyImport.notPreviewed"));
 			return;
 		}
 		const summary = [
-			`识别到 ${preview.candidateCount} 条候选 Memos`,
-			...preview.groups.map((group) => `${group.label}：${group.count} 条`),
+			t("settings.legacyImport.summary", { count: preview.candidateCount }),
+			...preview.groups.map((group) => t("settings.legacyImport.groupCount", {
+				label: formatSettingsText(group.label),
+				count: group.count,
+			})),
 		].join("\n");
 		this.renderLegacyImportStatus(summary);
 		if (preview.groups.length === 0) {
@@ -440,7 +450,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		const button = this.legacyImportGroupsEl.createEl("button", {
 			cls: "mod-cta",
-			text: "导入所选分组",
+			text: t("settings.legacyImport.importSelected"),
 			attr: { type: "button" },
 		});
 		button.addEventListener("click", () => {
@@ -461,7 +471,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			},
 		});
 		checkbox.checked = group.selectedByDefault;
-		label.createSpan({ text: `${group.label}：${group.count} 条` });
+		label.createSpan({ text: t("settings.legacyImport.groupCount", { label: formatSettingsText(group.label), count: group.count }) });
 		const samples = item.createDiv({ cls: "knomo-legacy-import-samples" });
 		for (const sample of group.samples) {
 			samples.createDiv({
@@ -478,14 +488,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		const selectedGroupKeys = this.getSelectedLegacyImportGroupKeys();
 		if (selectedGroupKeys.length === 0) {
-			new Notice("请选择要导入的分组。");
+			new Notice(t("settings.legacyImport.chooseGroup"));
 			return;
 		}
 		let importCompleted = false;
 		this.legacyImportRunning = true;
 		button.disabled = true;
-		button.setText("导入中...");
-		this.renderLegacyImportStatus("正在导入旧日记 Memos...");
+		button.setText(t("settings.legacyImport.importing"));
+		this.renderLegacyImportStatus(t("settings.legacyImport.importingStatus"));
 		try {
 			const result = await this.syncOrchestrator.importLegacyDailyMemos({
 				scope: this.legacyImportScope,
@@ -493,7 +503,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 			await this.addLegacyDailyHeadings(result.importedHeadings);
 			await this.renderIssueList();
-			const message = `导入完成：新增 ${result.imported} 条，失败 ${result.failed} 条，导入的数据已有 ${result.skipped} 条在 Knomo。`;
+			const message = t("settings.legacyImport.complete", {
+				imported: result.imported,
+				failed: result.failed,
+				skipped: result.skipped,
+			});
 			const errors = result.errors.map(formatSettingsText);
 			this.legacyImportPreview = null;
 			this.legacyImportGroupsEl.empty();
@@ -501,17 +515,17 @@ export class KnomoSettingTab extends PluginSettingTab {
 			importCompleted = true;
 			void this.reloadAllMemosInOpenKnomoViewsAfterImport();
 			if (result.failed > 0) {
-				new Notice(`导入失败：${result.failed} 条 Memos 未导入`);
+				new Notice(t("settings.legacyImport.failedCount", { count: result.failed }));
 			}
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "旧日记 Memos 导入失败。");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.legacyImport.failed"));
 			this.renderLegacyImportStatus(message, true);
 			new Notice(message);
 		} finally {
 			this.legacyImportRunning = false;
 			if (!importCompleted) {
 				button.disabled = false;
-				button.setText("导入所选分组");
+				button.setText(t("settings.legacyImport.importSelected"));
 			}
 		}
 	}
@@ -559,40 +573,59 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.rebuildRunning = true;
 		button.setDisabled(true);
-		button.setButtonText("检查中...");
+		button.setButtonText(t("settings.rebuild.checking"));
 		try {
 			const estimate = await this.syncOrchestrator.estimateRebuildIndex(scope);
-			const monthlyModeText = mode === "index-and-monthly" ? "月度 Memos：同步更新" : "月度 Memos：仅处理缺失项";
+			const monthlyModeText = mode === "index-and-monthly" ? t("settings.rebuild.monthlySync") : t("settings.rebuild.monthlyMissingOnly");
 			const confirmed = this.containerEl.win.confirm(
-				`确认修复 Knomo 数据？\n\n扫描文件数：${estimate.scannedFiles}\n预计新增：${estimate.estimatedNew}\n预计更新：${estimate.estimatedUpdated}\n预计缺失：${estimate.estimatedMissing}\n${monthlyModeText}`,
+				t("settings.rebuild.confirm", {
+					scanned: estimate.scannedFiles,
+					created: estimate.estimatedNew,
+					updated: estimate.estimatedUpdated,
+					missing: estimate.estimatedMissing,
+					monthlyMode: monthlyModeText,
+				}),
 			);
 			if (!confirmed) {
-				this.renderRebuildResult("已取消修复。");
+				this.renderRebuildResult(t("settings.rebuild.cancelled"));
 				return;
 			}
-			button.setButtonText("修复中...");
-			this.renderRebuildResult(`正在修复 Knomo 数据...\n${monthlyModeText}`);
+			button.setButtonText(t("settings.rebuild.running"));
+			this.renderRebuildResult(t("settings.rebuild.status", { monthlyMode: monthlyModeText }));
 			const result = await this.syncOrchestrator.rebuildIndex(scope, mode, (progress) => {
 				this.renderRebuildResult(
-					`正在修复 Knomo 数据：${progress.completedFiles}/${progress.scannedFiles} 个文件\n` +
-						`新增 ${progress.created} 条，更新 ${progress.updated} 条，缺失 ${progress.deleted} 条，跳过 ${progress.skipped} 条，失败 ${progress.failed} 条。` +
-						(progress.currentFile === null ? "" : `\n当前文件：${progress.currentFile}`),
+					t("settings.rebuild.progress", {
+						completed: progress.completedFiles,
+						scanned: progress.scannedFiles,
+						created: progress.created,
+						updated: progress.updated,
+						deleted: progress.deleted,
+						skipped: progress.skipped,
+						failed: progress.failed,
+						currentFile: progress.currentFile === null ? "" : t("settings.rebuild.currentFile", { file: progress.currentFile }),
+					}),
 				);
 			});
-			const message = `修复完成：共 ${result.scannedFiles} 个文件，新增 ${result.created} 条，更新 ${result.updated} 条，缺失 ${result.deleted} 条，跳过 ${result.skipped} 条。`;
-			const backup = result.backupPath === null ? "未发现现有 Knomo 列表数据可备份。" : `备份位置：${result.backupPath}`;
+			const message = t("settings.rebuild.complete", {
+				scanned: result.scannedFiles,
+				created: result.created,
+				updated: result.updated,
+				deleted: result.deleted,
+				skipped: result.skipped,
+			});
+			const backup = result.backupPath === null ? t("settings.rebuild.noBackup") : t("settings.rebuild.backup", { path: result.backupPath });
 			this.renderRebuildResult(`${message}\n${backup}`);
 			await this.renderIssueList();
 			await this.refreshOpenKnomoViews();
-			new Notice("Knomo 数据修复完成");
+			new Notice(t("settings.rebuild.completedNotice"));
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : "修复 Knomo 数据失败。");
+			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.rebuild.failed"));
 			this.renderRebuildResult(message);
 			new Notice(message);
 		} finally {
 			this.rebuildRunning = false;
 			button.setDisabled(false);
-			button.setButtonText("开始修复");
+			button.setButtonText(t("settings.rebuild.start"));
 		}
 	}
 
@@ -629,13 +662,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 			const results = await Promise.all(preloads);
 			failed = results.some((loaded) => !loaded);
 			if (results.length > 0 && !failed) {
-				new Notice("已载入全部 Memos。");
+				new Notice(t("settings.legacyImport.loadedAll"));
 			}
 		} catch {
 			failed = true;
 		}
 		if (failed) {
-			new Notice("导入完成，但全部 Memos 载入失败，可稍后刷新。");
+			new Notice(t("settings.legacyImport.loadAllFailed"));
 		}
 	}
 
@@ -647,7 +680,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		try {
 			const memos = await this.syncOrchestrator.listIssueMemos();
 			if (memos.length === 0) {
-				this.issueListEl.createDiv({ cls: "knomo-setting-help", text: "当前没有同步问题。" });
+				this.issueListEl.createDiv({ cls: "knomo-setting-help", text: t("settings.issues.none") });
 				return;
 			}
 			for (const memo of memos) {
@@ -656,7 +689,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		} catch (error) {
 			this.issueListEl.createDiv({
 				cls: "knomo-setting-help is-error",
-				text: formatSettingsText(error instanceof Error ? error.message : "同步问题列表加载失败。"),
+				text: formatSettingsText(error instanceof Error ? error.message : t("settings.issues.loadFailed")),
 			});
 		}
 	}
@@ -672,12 +705,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		});
 		item.createDiv({
 			cls: memo.issue === null ? "knomo-setting-help" : "knomo-setting-help is-error",
-			text: formatSettingsText(memo.issue?.message ?? "同步状态需要处理。"),
+			text: formatSettingsText(memo.issue?.message ?? t("settings.issues.needsHandling")),
 		});
 		if (memo.syncStatus === "monthly_delete_failed") {
 			const button = item.createEl("button", {
 				cls: "mod-cta",
-				text: "重试月度删除",
+				text: t("settings.issues.retryMonthlyDelete"),
 				attr: { type: "button" },
 			});
 			button.addEventListener("click", () => {
@@ -686,7 +719,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		} else if (memo.syncStatus === "monthly_failed" || memo.issue?.type === "monthly_block_missing" || memo.issue?.type === "monthly_sync_failed") {
 			const button = item.createEl("button", {
 				cls: "mod-cta",
-				text: "重试月度同步",
+				text: t("settings.issues.retryMonthlySync"),
 				attr: { type: "button" },
 			});
 			button.addEventListener("click", () => {
@@ -697,62 +730,177 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private async retryMonthlyDelete(memo: MemoRecord, button: HTMLButtonElement): Promise<void> {
 		button.disabled = true;
-		button.setText("重试中...");
+		button.setText(t("settings.issues.retrying"));
 		try {
 			await this.syncOrchestrator.retryMonthlyDelete(memo);
 			await this.renderIssueList();
 			await this.refreshOpenKnomoViews();
-			new Notice("月度删除重试完成");
+			new Notice(t("settings.issues.monthlyDeleteComplete"));
 		} catch (error) {
-			new Notice(formatSettingsText(error instanceof Error ? error.message : "月度删除重试失败。"));
+			new Notice(formatSettingsText(error instanceof Error ? error.message : t("settings.issues.monthlyDeleteFailed")));
 		} finally {
 			button.disabled = false;
-			button.setText("重试月度删除");
+			button.setText(t("settings.issues.retryMonthlyDelete"));
 		}
 	}
 
 	private async retryMonthlySync(memo: MemoRecord, button: HTMLButtonElement): Promise<void> {
 		button.disabled = true;
-		button.setText("重试中...");
+		button.setText(t("settings.issues.retrying"));
 		try {
 			await this.syncOrchestrator.retryMonthlySync(memo);
 			await this.renderIssueList();
 			await this.refreshOpenKnomoViews();
-			new Notice("月度同步重试完成");
+			new Notice(t("settings.issues.monthlySyncComplete"));
 		} catch (error) {
-			new Notice(formatSettingsText(error instanceof Error ? error.message : "月度同步重试失败。"));
+			new Notice(formatSettingsText(error instanceof Error ? error.message : t("settings.issues.monthlySyncFailed")));
 		} finally {
 			button.disabled = false;
-			button.setText("重试月度同步");
+			button.setText(t("settings.issues.retryMonthlySync"));
 		}
 	}
 }
 
 export function formatSettingsText(text: string): string {
-	return text
-		.replace(/\bmemo-index\b/gi, "Memos 索引")
-		.replace(/\bmemo block\b/gi, "Memos 内容块")
-		.replace(/\bmemo index\b/gi, "Memos 索引")
-		.replace(/\bmemoId\b/g, "Memos ID")
-		.replace(/\bmemo\b|\bMemo\b|\bMEMO\b/g, "Memos")
-		.replace(/\bdaily block\b/gi, "日记内容块")
-		.replace(/\bmonthly block\b/gi, "月度归档内容块")
-		.replace(/\bblockId\b/g, "块 ID")
-		.replace(/\bblock\b/gi, "块")
-		.replace(/_knomo-system/g, "系统数据目录");
+	const sourceText = formatStructuredServiceText(text)
+		?? text.split("\n").map((line) => formatStructuredServiceText(line) ?? line).join("\n");
+	return replaceKnownServiceText(sourceText)
+		.replace(/\bmemo-index\b/gi, t("term.memoIndex"))
+		.replace(/\bmemo block\b/gi, t("term.memoBlock"))
+		.replace(/\bmemo index\b/gi, t("term.memoIndex"))
+		.replace(/\bmemoId\b/g, t("term.memoId"))
+		.replace(/\bmemo\b|\bMemo\b|\bMEMO\b/g, t("term.memo"))
+		.replace(/\bdaily block\b/gi, t("term.dailyBlock"))
+		.replace(/\bmonthly block\b/gi, t("term.monthlyBlock"))
+		.replace(/\bblockId\b/g, t("term.blockId"))
+		.replace(/\bblock\b/gi, t("term.block"))
+		.replace(/_knomo-system/g, t("term.systemFolder"));
 }
 
 function getSyncStatusLabel(status: MemoRecord["syncStatus"]): string {
 	if (status === "synced") {
-		return "已同步";
+		return t("sync.synced");
 	}
 	if (status === "pending_monthly") {
-		return "等待月度 Memos 同步";
+		return t("sync.pendingMonthly");
 	}
 	if (status === "monthly_failed") {
-		return "月度 Memos 同步失败";
+		return t("sync.monthlyFailed");
 	}
-	return "月度 Memos 删除失败";
+	return t("sync.monthlyDeleteFailed");
+}
+
+const KNOWN_SERVICE_TEXT_KEYS: TranslationKey[] = [
+	"service.unknownError",
+	"service.referenceNotInitialized",
+	"service.referenceTargetMissing",
+	"service.dailyNotesUnavailable",
+	"service.dailyNotesDisabled",
+	"service.dailyNotesEnabled",
+	"service.systemPathUnchanged",
+	"service.monthlyFolderMigrated",
+	"service.monthlyArchiveFileMissing",
+	"service.monthlyArchiveBlockMissing",
+	"service.updateDeleteNeedsStartLine",
+	"service.trashOnlyPurge",
+	"service.autoExcludeUnsupported",
+	"service.dailyBlockAmbiguous",
+	"service.monthlyDeleteFailed",
+	"service.monthlySyncFailed",
+	"service.untitledSection",
+	"service.memoContentEmpty",
+	"service.dailyFileMissing",
+	"service.dailyBlockMissing",
+	"service.deleteDailyBlockMissing",
+	"service.memoNotFoundOrCleaned",
+	"service.restoreFailedRetry",
+	"service.monthlyDeleteRetryFailed",
+	"service.retryMonthlySyncDailyMissing",
+	"service.restoreVerifyDailyFailed",
+	"service.missingDeleteSnapshot",
+	"service.monthlyIncomplete",
+	"service.rebuildIndexFailedGeneric",
+	"service.backupNotFound",
+	"service.uniqueBlockIdFailed",
+];
+
+function replaceKnownServiceText(text: string): string {
+	let nextText = text;
+	for (const key of KNOWN_SERVICE_TEXT_KEYS) {
+		nextText = replaceLiteral(nextText, en[key], t(key));
+		const legacyText = legacyZhCNText[key];
+		if (legacyText !== undefined) {
+			nextText = replaceLiteral(nextText, legacyText, t(key));
+		}
+	}
+	nextText = replaceLegacyBackupPathPrefix(nextText);
+	return nextText;
+}
+
+function formatStructuredServiceText(text: string): string | null {
+	const targetConflictMatch = text.match(/^Target path has conflicts; migration stopped: (.+)$/s);
+	if (targetConflictMatch !== null) {
+		return t("service.targetPathConflicts", { paths: targetConflictMatch[1] });
+	}
+	const oldSystemPathMatch = text.match(/^Old system path is not a folder: (.+)$/s);
+	if (oldSystemPathMatch !== null) {
+		return t("service.oldSystemPathNotFolder", { path: oldSystemPathMatch[1] });
+	}
+	const indexBackupMatch = text.match(/^Index backup does not exist: (.+)$/s);
+	if (indexBackupMatch !== null) {
+		return t("service.indexBackupMissing", { path: indexBackupMatch[1] });
+	}
+	const importFailedMatch = text.match(/^Import failed: (.+)$/s);
+	if (importFailedMatch !== null) {
+		return t("service.importFailed", { path: importFailedMatch[1] });
+	}
+	const scanFailedMatch = text.match(/^Scan failed: (.+)$/s);
+	if (scanFailedMatch !== null) {
+		return t("service.scanFailed", { path: scanFailedMatch[1] });
+	}
+	const backupPathMatch = text.match(/^Backup path: (.+)$/s);
+	if (backupPathMatch !== null) {
+		return t("service.backupPath", { path: backupPathMatch[1] });
+	}
+	const rebuildIndexMatch = text.match(/^Rebuild index failed: (\d+) files did not sync; stopped refreshing the view\.$/s);
+	if (rebuildIndexMatch !== null) {
+		return t("service.rebuildIndexFailed", { count: rebuildIndexMatch[1] });
+	}
+	const indexWriteMatch = text.match(
+		/^Failed to write memo-index while (.+?) memo\. The daily note may already be written: (.*); monthly archive: (.*)\. Repair memo-index or run manual scan before sending again\. Original error: (.*)$/s,
+	);
+	if (indexWriteMatch !== null) {
+		return t("service.indexWriteFailed", {
+			action: getIndexWriteActionLabel(indexWriteMatch[1]),
+			dailyPath: indexWriteMatch[2],
+			monthlyPath: formatSettingsText(indexWriteMatch[3]),
+			reason: formatSettingsText(indexWriteMatch[4]),
+		});
+	}
+	return null;
+}
+
+function getIndexWriteActionLabel(action: string): string {
+	if (action === "creating") return t("service.actionCreate");
+	if (action === "editing") return t("service.actionEdit");
+	if (action === "deleting") return t("service.actionDelete");
+	if (action === "restoring") return t("service.actionRestore");
+	if (action === "generating reference") return t("service.actionReference");
+	return action;
+}
+
+function replaceLiteral(text: string, search: string, replacement: string): string {
+	return search.length === 0 ? text : text.split(search).join(replacement);
+}
+
+function replaceLegacyBackupPathPrefix(text: string): string {
+	const index = text.indexOf(legacyZhCNText.backupPathPrefix);
+	if (index === -1) {
+		return text;
+	}
+	const before = text.slice(0, index);
+	const path = text.slice(index + legacyZhCNText.backupPathPrefix.length);
+	return `${before}${t("service.backupPath", { path })}`;
 }
 
 function formatLegacyImportSample(content: string): string {

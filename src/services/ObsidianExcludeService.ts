@@ -22,7 +22,7 @@ export class ObsidianExcludeService {
 		const uniqueRules = [...new Set(rules)];
 		const vault = this.getVaultConfigAccess();
 		if (typeof vault.setConfig !== "function") {
-			throw new Error("当前 Obsidian 环境不支持自动写入排除规则。");
+			throw new Error("This Obsidian environment does not support automatic exclude rule updates.");
 		}
 		await vault.setConfig(EXCLUDE_RULES_CONFIG_KEY, uniqueRules);
 	}

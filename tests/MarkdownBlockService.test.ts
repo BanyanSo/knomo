@@ -503,7 +503,7 @@ test("daily note creation still errors when Daily Notes core plugin is disabled"
 
 	await assert.rejects(
 		() => dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00")),
-		/请先在 Obsidian 设置的核心插件中开启“日记”/,
+		/Enable the Daily Notes core plugin in Obsidian settings/,
 	);
 });
 
@@ -1778,7 +1778,7 @@ test("rebuild index restores backup when monthly rebuild fails", async () => {
 
 	await assert.rejects(
 		() => orchestrator.rebuildIndex("30d", "index-and-monthly"),
-		/重建索引失败：1 个文件未完成同步，已停止刷新视图。/,
+		/Rebuild index failed: 1 files did not sync; stopped refreshing the view\./,
 	);
 	assert.equal(monthlyCalled, true);
 	assert.equal(monthlyBackupCalled, true);
@@ -2328,14 +2328,19 @@ async function ensureObsidianStub(): Promise<void> {
 	await mkdir(dirname(stubPath), { recursive: true });
 	await writeFile(
 		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder { constructor() { this.children = []; } }",
-			"const Vault = { recurseChildren() {} };",
-			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-			"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
-			"module.exports = { TFile, TFolder, Vault, normalizePath, moment };",
-		].join("\n"),
+			[
+				"class TFile {}",
+				"class TFolder { constructor() { this.children = []; } }",
+				"const Vault = { recurseChildren() {} };",
+				"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
+				"let languageValue = 'en';",
+				"function getLanguage() { return languageValue; }",
+				"getLanguage.set = (value) => { languageValue = value; };",
+				"let localeValue = 'en';",
+				"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
+				"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
+				"module.exports = { TFile, TFolder, Vault, normalizePath, moment, getLanguage };",
+			].join("\n"),
 	);
 	const dailyNotesInterfaceStubPath = resolve(__dirname, "../node_modules/obsidian-daily-notes-interface/index.js");
 	await mkdir(dirname(dailyNotesInterfaceStubPath), { recursive: true });

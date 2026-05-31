@@ -1,5 +1,5 @@
-import { AbstractInputSuggest, getAllTags, ItemView, Keymap, MarkdownRenderer, Notice, Platform, Scope, setIcon } from "obsidian";
-import type { App, HoverPopover, WorkspaceLeaf } from "obsidian";
+import { AbstractInputSuggest, getAllTags, ItemView, Keymap, MarkdownRenderer, Notice, Platform, prepareFuzzySearch, renderResults, Scope, setIcon } from "obsidian";
+import type { App, HoverPopover, SearchResult, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
 import { KNOMO_ALL_NOTES_ICON, KNOMO_LOGO_ICON, KNOMO_RANDOM_REUNION_ICON, KNOMO_SEARCH_ICON, KNOMO_SIDEBAR_MENU_ICON } from "../icons";
@@ -21,6 +21,8 @@ import { formatSettingsText } from "./KnomoSettingTab";
 import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
 import { buildTagTree } from "../utils/tagTree";
 import type { TagSummary, TagTreeNode } from "../utils/tagTree";
+import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
+import type { TagDisplaySource } from "../utils/tags";
 
 type ScopeFilter =
 	| "all"
@@ -79,7 +81,7 @@ interface SidebarDragState {
 
 interface FilteredMemosCache {
 	memos: MemoRecord[];
-	activeTag: string | null;
+	activeTagKey: string | null;
 	activeNav: SidebarNav;
 	scopeFilter: ScopeFilter;
 	searchQuery: string;
@@ -207,6 +209,7 @@ export class KnomoView extends ItemView {
 	private mobileSearchDateFilter: SearchDateFilter | null = null;
 	private mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
 	private activeTag: string | null = null;
+	private activeTagKey: string | null = null;
 	private expandedTagGroups = new Set<string>();
 	private activeNav: SidebarNav = "all";
 	private sidebarCollapsed = false;
@@ -1659,7 +1662,13 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderTags(): void {
-		const allTags = collectTags(this.memos);
+		const allTags = collectTags(this.memos, collectVaultTagDisplayMap(this.app));
+		if (this.activeTagKey !== null) {
+			const activeTag = allTags.find((tag) => tag.key === this.activeTagKey);
+			if (activeTag !== undefined) {
+				this.activeTag = activeTag.name;
+			}
+		}
 		this.renderTagList(this.allTagsEl, buildTagTree(allTags), t("tags.empty"));
 	}
 
@@ -1685,15 +1694,16 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderTagTreeNode(container: HTMLElement, tag: TagTreeNode): void {
-		const collapsed = tag.children.length > 0 && !this.expandedTagGroups.has(tag.name);
+		const collapsed = tag.children.length > 0 && !this.expandedTagGroups.has(tag.key);
 		const node = container.createDiv({ cls: collapsed ? "knomo-tag-node is-collapsed" : "knomo-tag-node" });
 		const row = node.createDiv({ cls: "knomo-tag-row" });
 		const button = row.createEl("button", {
-			cls: this.activeTag === tag.name ? "knomo-tag-nav is-active" : "knomo-tag-nav",
+			cls: this.activeTagKey === tag.key ? "knomo-tag-nav is-active" : "knomo-tag-nav",
 			attr: {
 				type: "button",
 				"data-tag": tag.name,
-				"aria-pressed": this.activeTag === tag.name ? "true" : "false",
+				"data-tag-key": tag.key,
+				"aria-pressed": this.activeTagKey === tag.key ? "true" : "false",
 			},
 		});
 		button.createSpan({ cls: "knomo-tag-name", text: tag.label });
@@ -1704,7 +1714,7 @@ export class KnomoView extends ItemView {
 					type: "button",
 					"aria-label": collapsed ? t("tags.expandGroup") : t("tags.collapseGroup"),
 					"aria-expanded": collapsed ? "false" : "true",
-					"data-tag-toggle": tag.name,
+					"data-tag-toggle": tag.key,
 				},
 			});
 			toggle.createSpan({ cls: "knomo-tag-count", text: String(tag.count) });
@@ -1801,7 +1811,7 @@ export class KnomoView extends ItemView {
 		if (this.activeNav === "review" || this.activeNav === "random") {
 			return this.activeNav;
 		}
-		if (this.activeTag !== null || this.activeNav !== "all") {
+		if (this.activeTagKey !== null || this.activeNav !== "all") {
 			return "";
 		}
 		return this.scopeFilter;
@@ -1809,7 +1819,7 @@ export class KnomoView extends ItemView {
 
 	private isDefaultListState(): boolean {
 		return this.activeNav === "all"
-			&& this.activeTag === null
+			&& this.activeTagKey === null
 			&& this.scopeFilter === "all"
 			&& this.searchQuery.trim().length === 0
 			&& this.searchDateFilter === null;
@@ -2172,9 +2182,18 @@ export class KnomoView extends ItemView {
 			if (tag === null) {
 				return;
 			}
+			const tagKey = tagEl.getAttr("data-tag-key") ?? normalizeTagKey(tag);
+			if (tagKey.length === 0) {
+				return;
+			}
 			this.clearSearchDebounce();
 			this.clearDesktopSearchState();
-			this.activeTag = this.activeTag === tag ? null : tag;
+			if (this.activeTagKey === tagKey) {
+				this.clearActiveTag();
+			} else {
+				this.activeTag = tag;
+				this.activeTagKey = tagKey;
+			}
 			this.scopeFilter = "all";
 			this.activeNav = "all";
 			this.resetVisibleMemos();
@@ -2573,7 +2592,7 @@ export class KnomoView extends ItemView {
 		this.clearSearchDebounce();
 		this.clearDesktopSearchState();
 		this.scopeFilter = scope;
-		this.activeTag = null;
+		this.clearActiveTag();
 		this.activeNav = "all";
 		this.resetVisibleMemos();
 		this.mobileDrawerOpen = false;
@@ -2589,7 +2608,7 @@ export class KnomoView extends ItemView {
 		this.clearSearchDebounce();
 		this.searchQuery = query;
 		if (query.trim().length > 0 || this.searchDateFilter !== null) {
-			this.activeTag = null;
+			this.clearActiveTag();
 			this.activeNav = "all";
 			this.scopeFilter = "all";
 		}
@@ -2607,7 +2626,7 @@ export class KnomoView extends ItemView {
 	private setSearchDateFilter(filter: SearchDateFilter, sourceEl: HTMLElement | null = null): void {
 		this.flushDesktopSearchQuery(sourceEl);
 		this.searchDateFilter = this.searchDateFilter === filter ? null : filter;
-		this.activeTag = null;
+		this.clearActiveTag();
 		this.activeNav = "all";
 		this.scopeFilter = "all";
 		this.activeMenuMemoId = null;
@@ -2656,11 +2675,16 @@ export class KnomoView extends ItemView {
 		this.searchDateFilter = null;
 	}
 
+	private clearActiveTag(): void {
+		this.activeTag = null;
+		this.activeTagKey = null;
+	}
+
 	private setSidebarNav(nav: SidebarNav): void {
 		this.clearSearchDebounce();
 		this.clearDesktopSearchState();
 		this.activeNav = nav;
-		this.activeTag = null;
+		this.clearActiveTag();
 		this.scopeFilter = "all";
 		this.resetVisibleMemos();
 		this.mobileDrawerOpen = false;
@@ -2696,7 +2720,7 @@ export class KnomoView extends ItemView {
 	private resetToAllNotes(): void {
 		this.clearSearchDebounce();
 		this.clearDesktopSearchState();
-		this.activeTag = null;
+		this.clearActiveTag();
 		this.activeNav = "all";
 		this.scopeFilter = "all";
 		this.mobileDrawerOpen = false;
@@ -3523,13 +3547,14 @@ export class KnomoView extends ItemView {
 		}
 		const normalizedQuery = this.searchQuery.trim().toLowerCase();
 		const searchDateFilter = this.searchDateFilter;
+		const activeTagKey = this.activeTagKey;
 		const today = new Date();
 		const todayKey = formatDatePart(today);
 		const cache = this.filteredMemosCache;
 		if (
 			cache !== null &&
 			cache.memos === this.memos &&
-			cache.activeTag === this.activeTag &&
+			cache.activeTagKey === activeTagKey &&
 			cache.activeNav === this.activeNav &&
 			cache.scopeFilter === this.scopeFilter &&
 			cache.searchQuery === normalizedQuery &&
@@ -3546,7 +3571,7 @@ export class KnomoView extends ItemView {
 			filteredMemos = this.getOutsideTodayMemos(today);
 		} else {
 			filteredMemos = this.memos.filter((memo) => {
-				if (this.activeTag !== null && !memo.tags.some((tag) => tag === this.activeTag || tag.startsWith(`${this.activeTag}/`))) {
+				if (activeTagKey !== null && !memo.tags.some((tag) => tagMatchesActiveTagKey(tag, activeTagKey))) {
 					return false;
 				}
 				if (normalizedQuery.length > 0 && !this.getMemoSearchText(memo).includes(normalizedQuery)) {
@@ -3557,7 +3582,7 @@ export class KnomoView extends ItemView {
 		}
 		this.filteredMemosCache = {
 			memos: this.memos,
-			activeTag: this.activeTag,
+			activeTagKey,
 			activeNav: this.activeNav,
 			scopeFilter: this.scopeFilter,
 			searchQuery: normalizedQuery,
@@ -4061,8 +4086,10 @@ export class KnomoView extends ItemView {
 			this.prepareInternalLinks(container, memo.dailyRef.path);
 			for (const tagEl of container.findAll(".tag")) {
 				const tag = tagEl.getText().replace(/^#/, "");
-				if (tag.length > 0) {
+				const tagKey = normalizeTagKey(tag);
+				if (tagKey.length > 0) {
 					tagEl.setAttr("data-tag", tag);
+					tagEl.setAttr("data-tag-key", tagKey);
 				}
 			}
 		} catch {
@@ -4235,18 +4262,31 @@ export class KnomoView extends ItemView {
 	}
 }
 
-class KnomoTagSuggest extends AbstractInputSuggest<string> {
+interface TagSuggestion {
+	tag: string;
+	result: SearchResult | null;
+}
+
+class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
+	private tagsSnapshot: string[] | null = null;
+
 	constructor(
 		app: App,
 		private readonly inputEl: HTMLTextAreaElement,
 		private readonly onInputChanged: () => void,
 	) {
 		super(app, inputEl as unknown as HTMLInputElement);
+		this.limit = 0;
 	}
 
 	open(): void {
 		super.open();
 		this.queuePopoverReposition();
+	}
+
+	close(): void {
+		super.close();
+		this.tagsSnapshot = null;
 	}
 
 	openForCurrentTrigger(): void {
@@ -4260,34 +4300,60 @@ class KnomoTagSuggest extends AbstractInputSuggest<string> {
 		}
 	}
 
-	protected getSuggestions(): string[] {
+	protected getSuggestions(): TagSuggestion[] {
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			return [];
 		}
-		const normalizedQuery = range.query.toLowerCase();
-		const suggestions = this.getVaultTags().filter((tag) => normalizedQuery.length === 0 || tag.toLowerCase().startsWith(normalizedQuery));
+		const tags = this.getTagsSnapshot();
+		const suggestions = range.query.length === 0
+			? tags.map((tag) => ({ tag, result: null }))
+			: this.getFuzzySuggestions(tags, range.query);
 		if (suggestions.length > 0) {
 			this.queuePopoverReposition();
 		}
 		return suggestions;
 	}
 
-	renderSuggestion(value: string, el: HTMLElement): void {
-		el.setText(value);
+	renderSuggestion(value: TagSuggestion, el: HTMLElement): void {
+		if (value.result === null) {
+			el.setText(value.tag);
+			return;
+		}
+		el.empty();
+		renderResults(el, value.tag, value.result);
 	}
 
-	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
+	selectSuggestion(value: TagSuggestion, _evt: MouseEvent | KeyboardEvent): void {
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			this.close();
 			return;
 		}
-		const next = replaceTagQueryWithSuggestion(this.inputEl.value, range, value);
+		const next = replaceTagQueryWithSuggestion(this.inputEl.value, range, value.tag);
 		this.inputEl.value = next.value;
 		this.inputEl.setSelectionRange(next.cursor, next.cursor);
 		this.onInputChanged();
 		this.close();
+	}
+
+	private getTagsSnapshot(): string[] {
+		if (this.tagsSnapshot === null) {
+			this.tagsSnapshot = this.getVaultTags();
+		}
+		return this.tagsSnapshot;
+	}
+
+	private getFuzzySuggestions(tags: string[], query: string): TagSuggestion[] {
+		const search = prepareFuzzySearch(query);
+		const suggestions: TagSuggestion[] = [];
+		for (const tag of tags) {
+			const result = search(tag);
+			if (result !== null) {
+				suggestions.push({ tag, result });
+			}
+		}
+		return suggestions;
 	}
 
 	private getVaultTags(): string[] {
@@ -4425,24 +4491,82 @@ class KnomoTagSuggest extends AbstractInputSuggest<string> {
 function getMemoStats(memos: MemoRecord[]): { memoCount: number; tagCount: number; imageCount: number; wordCount: number } {
 	return {
 		memoCount: memos.length,
-		tagCount: new Set(memos.flatMap((memo) => memo.tags)).size,
+		tagCount: new Set(memos.flatMap((memo) => {
+			return memo.tags.map(normalizeTagKey).filter((tagKey) => tagKey.length > 0);
+		})).size,
 		imageCount: memos.reduce((count, memo) => count + getMemoImages(memo).length, 0),
 		wordCount: memos.reduce((count, memo) => count + memo.contentSnapshot.replace(/\s/g, "").length, 0),
 	};
 }
 
-function collectTags(memos: MemoRecord[]): TagSummary[] {
+function collectTags(memos: MemoRecord[], displayTags: Map<string, string>): TagSummary[] {
 	const counts = new Map<string, number>();
+	const fallbackNames = new Map<string, string>();
 	for (const memo of memos) {
 		for (const tag of memo.tags) {
-			counts.set(tag, (counts.get(tag) ?? 0) + 1);
+			const key = normalizeTagKey(tag);
+			if (key.length === 0) {
+				continue;
+			}
+			counts.set(key, (counts.get(key) ?? 0) + 1);
+			if (!fallbackNames.has(key)) {
+				fallbackNames.set(key, normalizeTagDisplay(tag));
+			}
 		}
 	}
 	return [...counts.entries()]
-		.map(([name, count]) => ({ name, count }))
+		.map(([key, count]) => ({
+			key,
+			name: getTagDisplayName(key, fallbackNames.get(key) ?? key, displayTags),
+			count,
+		}))
 		.sort((left, right) => {
 			return right.count - left.count || left.name.localeCompare(right.name, "zh");
 		});
+}
+
+function collectVaultTagDisplayMap(app: App): Map<string, string> {
+	const sources: TagDisplaySource[] = [];
+	let order = 0;
+	for (const file of app.vault.getMarkdownFiles()) {
+		const cache = app.metadataCache.getFileCache(file);
+		if (cache === null) {
+			continue;
+		}
+		for (const tag of getAllTags(cache) ?? []) {
+			sources.push({
+				tag,
+				modifiedTime: file.stat.mtime,
+				order,
+			});
+			order += 1;
+		}
+	}
+	return buildTagDisplayMap(sources);
+}
+
+function getTagDisplayName(key: string, fallbackName: string, displayTags: Map<string, string>): string {
+	const displayName = displayTags.get(key);
+	if (displayName !== undefined) {
+		return displayName;
+	}
+	const keyParts = key.split("/").filter((part) => part.length > 0);
+	const fallbackParts = fallbackName.split("/").filter((part) => part.length > 0);
+	const displayParts = keyParts.map((keyPart, index) => {
+		const prefixKey = keyParts.slice(0, index + 1).join("/");
+		const prefixDisplay = displayTags.get(prefixKey);
+		if (prefixDisplay !== undefined) {
+			const prefixParts = prefixDisplay.split("/").filter((part) => part.length > 0);
+			return prefixParts[prefixParts.length - 1] ?? keyPart;
+		}
+		return fallbackParts[index] ?? keyPart;
+	});
+	return displayParts.join("/");
+}
+
+function tagMatchesActiveTagKey(tag: string, activeTagKey: string): boolean {
+	const tagKey = normalizeTagKey(tag);
+	return tagKey === activeTagKey || tagKey.startsWith(`${activeTagKey}/`);
 }
 
 function getMemoImages(memo: MemoRecord): MemoRecord["images"] {

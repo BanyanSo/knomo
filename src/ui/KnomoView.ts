@@ -46,6 +46,18 @@ interface ScopeOption {
 
 type SearchDateFilter = "week" | "month" | "last-7" | "last-30" | "last-week" | "last-month";
 type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random";
+type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "anniversary";
+
+type RegularFilterCondition =
+	| { type: "tag"; text: string }
+	| { type: "search"; text: string; query: string }
+	| { type: "date"; text: string; filter: SearchDateFilter }
+	| { type: "scope"; text: string; filter: SummaryScopeFilter };
+
+interface RegularFilterCopy {
+	summary: string;
+	emptyTitle: string;
+}
 
 interface SearchDateOption {
 	filter: SearchDateFilter;
@@ -1282,15 +1294,20 @@ export class KnomoView extends ItemView {
 		this.clearMarkdownRenderQueue();
 		resultsEl.empty();
 		this.syncMobileSearchDateButtons();
-		const normalizedQuery = this.mobileSearchQuery.trim().toLowerCase();
+		const query = this.mobileSearchQuery.trim();
+		const normalizedQuery = query.toLowerCase();
 		if (normalizedQuery.length === 0 && this.mobileSearchDateFilter === null) {
 			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.emptyPrompt") });
 			return;
 		}
 		const memos = this.memos.filter((memo) => this.memoMatchesSearch(memo, normalizedQuery, this.mobileSearchDateFilter));
 		if (memos.length === 0) {
-			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.noResults") });
+			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: formatMobileSearchEmptyTitle(query, this.mobileSearchDateFilter) });
 			return;
+		}
+		const summary = formatMobileSearchSummary(query, this.mobileSearchDateFilter, memos.length);
+		if (summary !== null) {
+			resultsEl.createDiv({ cls: "knomo-list-summary", text: summary });
 		}
 		const visibleMemos = memos.slice(0, this.mobileSearchVisibleCount);
 		for (const [index, memo] of visibleMemos.entries()) {
@@ -1825,6 +1842,52 @@ export class KnomoView extends ItemView {
 			&& this.searchDateFilter === null;
 	}
 
+	private getRegularFilterCopy(count: number): RegularFilterCopy | null {
+		if (this.activeNav !== "all") {
+			return null;
+		}
+		const conditions = this.getRegularFilterConditions();
+		if (conditions.length === 0) {
+			return null;
+		}
+		const summary = formatRegularFilterSummary(conditions, count);
+		return {
+			summary,
+			emptyTitle: formatRegularFilterEmptyTitle(conditions, summary),
+		};
+	}
+
+	private getRegularFilterConditions(): RegularFilterCondition[] {
+		const conditions: RegularFilterCondition[] = [];
+		const tag = this.activeTag?.trim() || this.activeTagKey || "";
+		if (this.activeTagKey !== null && tag.length > 0) {
+			conditions.push({ type: "tag", text: formatTagFilterText(tag) });
+		}
+		const query = this.searchQuery.trim();
+		if (query.length > 0) {
+			conditions.push({
+				type: "search",
+				text: t("filterSummary.searchCondition", { query }),
+				query,
+			});
+		}
+		if (this.searchDateFilter !== null) {
+			conditions.push({
+				type: "date",
+				text: getSearchDateLabel(this.searchDateFilter),
+				filter: this.searchDateFilter,
+			});
+		}
+		if (isSummaryScopeFilter(this.scopeFilter)) {
+			conditions.push({
+				type: "scope",
+				text: getScopeLabel(this.scopeFilter),
+				filter: this.scopeFilter,
+			});
+		}
+		return conditions;
+	}
+
 	private renderCardFlow(): void {
 		if (this.cardFlowEl === null) {
 			return;
@@ -1849,8 +1912,13 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const memos = this.getFilteredMemos();
+		const regularFilterCopy = this.getRegularFilterCopy(memos.length);
 		if (memos.length === 0) {
-			this.renderEmptyState(getEmptyStateTitle(this.activeNav));
+			if (regularFilterCopy !== null) {
+				this.renderEmptyState(regularFilterCopy.emptyTitle);
+			} else {
+				this.renderEmptyState(getEmptyStateTitle(this.activeNav));
+			}
 			return;
 		}
 		if (this.activeNav === "review") {
@@ -1858,6 +1926,9 @@ export class KnomoView extends ItemView {
 		}
 		if (this.activeNav === "random") {
 			this.renderRandomReunionToolbar(memos.length);
+		}
+		if (regularFilterCopy !== null) {
+			this.renderListSummary(regularFilterCopy.summary);
 		}
 		this.startCardFeed(memos, "memo", generation);
 	}
@@ -1879,9 +1950,13 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderOutsideTodaySummary(count: number): void {
+		this.renderListSummary(t("list.reviewSummary", { count }));
+	}
+
+	private renderListSummary(text: string): void {
 		this.cardFlowEl?.createDiv({
 			cls: "knomo-list-summary",
-			text: t("list.reviewSummary", { count }),
+			text,
 		});
 	}
 
@@ -4680,6 +4755,104 @@ function getEmptyStateTitle(activeNav: SidebarNav): string {
 		return t("empty.random");
 	}
 	return t("empty.generic");
+}
+
+function formatRegularFilterSummary(conditions: RegularFilterCondition[], count: number): string {
+	if (conditions.length === 1) {
+		const condition = conditions[0];
+		if (condition.type === "tag") {
+			return t("filterSummary.tag", { tag: condition.text, count });
+		}
+		if (condition.type === "search") {
+			return t("filterSummary.search", { query: condition.query, count });
+		}
+		return t("filterSummary.label", { label: condition.text, count });
+	}
+	const conditionText = conditions.map((condition) => condition.text).join(t("filterSummary.separator"));
+	const key = conditions.some((condition) => condition.type === "search")
+		? "filterSummary.comboSearch"
+		: "filterSummary.combo";
+	return t(key, { conditions: conditionText, count });
+}
+
+function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition[], summary: string): string {
+	if (conditions.length > 1) {
+		return summary;
+	}
+	const condition = conditions[0];
+	if (condition.type === "tag") {
+		return t("filterEmpty.tag", { tag: condition.text });
+	}
+	if (condition.type === "search") {
+		return t("filterEmpty.search", { query: condition.query });
+	}
+	if (condition.type === "date") {
+		return getSearchDateEmptyTitle(condition.filter);
+	}
+	return getScopeEmptyTitle(condition.filter);
+}
+
+function formatMobileSearchSummary(query: string, dateFilter: SearchDateFilter | null, count: number): string | null {
+	const hasQuery = query.length > 0;
+	if (!hasQuery && dateFilter === null) {
+		return null;
+	}
+	if (hasQuery && dateFilter !== null) {
+		const conditions = [
+			t("mobileSearchSummary.searchCondition", { query }),
+			getSearchDateLabel(dateFilter),
+		].join(t("mobileSearchSummary.separator"));
+		return t("mobileSearchSummary.combo", { conditions, count });
+	}
+	if (hasQuery) {
+		return t("mobileSearchSummary.search", { query, count });
+	}
+	if (dateFilter !== null) {
+		return t("mobileSearchSummary.date", { label: getSearchDateLabel(dateFilter), count });
+	}
+	return null;
+}
+
+function formatMobileSearchEmptyTitle(query: string, dateFilter: SearchDateFilter | null): string {
+	const hasQuery = query.length > 0;
+	if (hasQuery && dateFilter !== null) {
+		const conditions = [
+			t("mobileSearchSummary.searchCondition", { query }),
+			getSearchDateLabel(dateFilter),
+		].join(t("mobileSearchSummary.separator"));
+		return t("mobileSearchSummary.combo", { conditions, count: 0 });
+	}
+	if (hasQuery) {
+		return t("mobileSearchSummary.emptySearch", { query });
+	}
+	if (dateFilter !== null) {
+		return getSearchDateEmptyTitle(dateFilter);
+	}
+	return t("search.noResults");
+}
+
+function getSearchDateEmptyTitle(filter: SearchDateFilter): string {
+	if (filter === "week") return t("filterEmpty.date.week");
+	if (filter === "month") return t("filterEmpty.date.month");
+	if (filter === "last-7") return t("filterEmpty.date.last7");
+	if (filter === "last-30") return t("filterEmpty.date.last30");
+	if (filter === "last-week") return t("filterEmpty.date.lastWeek");
+	return t("filterEmpty.date.lastMonth");
+}
+
+function getScopeEmptyTitle(filter: SummaryScopeFilter): string {
+	if (filter === "no-tag") return t("filterEmpty.scope.noTag");
+	if (filter === "with-link") return t("filterEmpty.scope.withLink");
+	if (filter === "with-image") return t("filterEmpty.scope.withImage");
+	return t("filterEmpty.scope.anniversary");
+}
+
+function formatTagFilterText(tag: string): string {
+	return `#${tag.replace(/^#/, "")}`;
+}
+
+function isSummaryScopeFilter(filter: ScopeFilter): filter is SummaryScopeFilter {
+	return filter === "no-tag" || filter === "with-link" || filter === "with-image" || filter === "anniversary";
 }
 
 function shouldOpenRandomReunionCard(target: Element): boolean {

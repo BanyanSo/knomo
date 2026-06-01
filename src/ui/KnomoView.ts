@@ -2932,7 +2932,6 @@ export class KnomoView extends ItemView {
 			this.draftContent = this.getDraftForClose(this.inputEl.value);
 			this.inputEl.value = this.draftContent;
 		}
-		this.clearComposerContext();
 		this.mobileComposerOpenScrollTop = null;
 		this.clearMobileComposerFocus();
 		this.clearMobileKeyboardMeasureTimers();

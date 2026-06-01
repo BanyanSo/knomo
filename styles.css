@@ -2638,10 +2638,16 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-tag-suggest-popover {
-	position: fixed !important;
-	z-index: 10020 !important;
+	box-sizing: border-box;
+	position: fixed;
+	z-index: 10020;
+	max-width: calc(100vw - 24px);
 	max-height: 240px;
 	overflow-y: auto;
+}
+
+.knomo-tag-suggest-positioning {
+	visibility: hidden;
 }
 
 /* --------------------------------------------------------------------------

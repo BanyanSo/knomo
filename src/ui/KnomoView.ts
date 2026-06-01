@@ -4281,10 +4281,12 @@ class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 
 	open(): void {
 		super.open();
+		this.hidePopoverUntilPositioned();
 		this.queuePopoverReposition();
 	}
 
 	close(): void {
+		this.showPositionedPopover();
 		super.close();
 		this.tagsSnapshot = null;
 	}
@@ -4337,6 +4339,19 @@ class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		this.close();
 	}
 
+	private hidePopoverUntilPositioned(): void {
+		const container = this.getSuggestionContainer();
+		if (container === null) {
+			return;
+		}
+		container.addClass("knomo-tag-suggest-popover");
+		container.addClass("knomo-tag-suggest-positioning");
+	}
+
+	private showPositionedPopover(container = this.getSuggestionContainer()): void {
+		container?.removeClass("knomo-tag-suggest-positioning");
+	}
+
 	private getTagsSnapshot(): string[] {
 		if (this.tagsSnapshot === null) {
 			this.tagsSnapshot = this.getVaultTags();
@@ -4387,7 +4402,7 @@ class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		if (range === null) {
 			return;
 		}
-		const anchor = this.getTextareaCharacterRect(range.from);
+		const anchor = this.getTextareaCharacterRect(range.to);
 		const container = this.getSuggestionContainer();
 		if (anchor === null || container === null) {
 			return;
@@ -4411,20 +4426,95 @@ class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			const measuredHeight = Math.min(maxHeight, Math.max(minHeight, container.offsetHeight || maxHeight));
 			const top = Math.max(viewportTop + topGuard, anchor.top - measuredHeight - gap);
 			const inputRect = this.inputEl.getBoundingClientRect();
-			const left = Math.max(12, inputRect.left + 12);
-			const width = Math.max(180, inputRect.width - 24);
+			const viewportLeft = viewport ? Math.max(0, viewport.offsetLeft) : 0;
+			const viewportRight = viewport
+				? viewport.offsetLeft + viewport.width
+				: win?.innerWidth ?? this.inputEl.ownerDocument.documentElement.clientWidth;
+			const viewportMargin = 12;
+			const availableWidth = Math.max(0, viewportRight - viewportLeft - viewportMargin * 2);
+			const contentWidth = this.measureSuggestionContentWidth(container);
+			const targetWidth = contentWidth > 0 ? contentWidth + 44 : inputRect.width - 24;
+			const width = Math.max(0, Math.min(targetWidth, availableWidth));
+			const minLeft = viewportLeft + viewportMargin;
+			const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
+			const left = clamp(anchor.left, minLeft, maxLeft);
 			container.style.left = `${Math.round(left)}px`;
 			container.style.top = `${Math.round(top)}px`;
 			container.style.width = `${Math.round(width)}px`;
 			container.style.right = "";
 			container.style.bottom = "";
+			this.showPositionedPopover(container);
 			return;
 		}
+		container.addClass("knomo-tag-suggest-popover");
+		const win = this.inputEl.ownerDocument.defaultView;
+		const viewport = win?.visualViewport ?? null;
+		const viewportLeft = viewport ? Math.max(0, viewport.offsetLeft) : 0;
+		const viewportRight = viewport
+			? viewport.offsetLeft + viewport.width
+			: win?.innerWidth ?? this.inputEl.ownerDocument.documentElement.clientWidth;
+		const viewportMargin = 12;
+		const availableWidth = Math.max(0, viewportRight - viewportLeft - viewportMargin * 2);
+		const inputRect = this.inputEl.getBoundingClientRect();
+		const contentWidth = this.measureSuggestionContentWidth(container, true, 12);
+		const targetWidth = contentWidth > 0 ? contentWidth : inputRect.width;
+		const width = Math.max(0, Math.min(targetWidth, 320, availableWidth));
+		const minLeft = viewportLeft + viewportMargin;
+		const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
+		const left = clamp(anchor.left, minLeft, maxLeft);
 		container.style.position = "fixed";
-		container.style.left = `${Math.round(anchor.left)}px`;
+		container.style.left = `${Math.round(left)}px`;
 		container.style.top = `${Math.round(anchor.bottom)}px`;
+		container.style.width = `${Math.round(width)}px`;
 		container.style.right = "";
 		container.style.bottom = "";
+		this.showPositionedPopover(container);
+	}
+
+	private measureSuggestionContentWidth(container: HTMLElement, includeScrollbarWidth = false, extraWidth = 2): number {
+		const doc = this.inputEl.ownerDocument;
+		const items = Array.from(container.querySelectorAll<HTMLElement>(".suggestion-item"));
+		if (items.length === 0) {
+			return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
+		}
+		const host = container.cloneNode(false);
+		if (!host.instanceOf(HTMLElement)) {
+			return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
+		}
+		host.style.position = "fixed";
+		host.style.visibility = "hidden";
+		host.style.pointerEvents = "none";
+		host.style.width = "max-content";
+		host.style.maxWidth = "none";
+		host.style.minWidth = "0";
+		host.style.left = "-10000px";
+		host.style.top = "0";
+		doc.body.appendChild(host);
+		let width = 0;
+		for (const item of items) {
+			const clone = item.cloneNode(true);
+			if (!clone.instanceOf(HTMLElement)) {
+				continue;
+			}
+			clone.style.width = "max-content";
+			clone.style.maxWidth = "none";
+			clone.style.minWidth = "0";
+			host.appendChild(clone);
+			width = Math.max(width, clone.getBoundingClientRect().width);
+		}
+		host.detach();
+		const win = doc.defaultView;
+		if (win === null) {
+			return Math.ceil(width);
+		}
+		const computed = win.getComputedStyle(container);
+		const horizontalInset =
+			parseCssPixels(computed.paddingLeft) +
+			parseCssPixels(computed.paddingRight) +
+			parseCssPixels(computed.borderLeftWidth) +
+			parseCssPixels(computed.borderRightWidth);
+		const scrollbarWidth = includeScrollbarWidth ? measureScrollbarWidth(doc) : 0;
+		return Math.ceil(width + horizontalInset + scrollbarWidth + extraWidth);
 	}
 
 	private getTextareaCharacterRect(index: number): DOMRect | null {
@@ -4795,4 +4885,27 @@ function formatTrashActionErrorMessage(action: "restore" | "purge", error: unkno
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
+}
+
+function parseCssPixels(value: string): number {
+	const parsed = Number.parseFloat(value);
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function measureScrollbarWidth(doc: Document): number {
+	const outer = doc.body.createDiv();
+	const inner = outer.createDiv();
+	outer.style.position = "fixed";
+	outer.style.visibility = "hidden";
+	outer.style.pointerEvents = "none";
+	outer.style.overflow = "scroll";
+	outer.style.width = "100px";
+	outer.style.height = "100px";
+	outer.style.left = "-10000px";
+	outer.style.top = "0";
+	inner.style.width = "100%";
+	inner.style.height = "120px";
+	const scrollbarWidth = outer.offsetWidth - outer.clientWidth;
+	outer.detach();
+	return Math.max(0, scrollbarWidth);
 }

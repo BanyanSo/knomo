@@ -1,0 +1,34 @@
+import {
+	DEFAULT_DAILY_HEADING,
+	DEFAULT_DESKTOP_SIDEBAR_WIDTH,
+	DEFAULT_MEMO_TIME_FORMAT,
+	DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
+	DEFAULT_MONTHLY_DATE_ORDER,
+	DEFAULT_MONTHLY_MEMO_FILE_FORMAT,
+	DEFAULT_MONTHLY_MEMO_FOLDER,
+	DEFAULT_SYNC_DEBOUNCE_MS,
+	SETTINGS_VERSION,
+} from "../constants";
+import type { KnomoSettings } from "../types/settings";
+
+export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
+	settingsVersion: SETTINGS_VERSION,
+	dailyHeading: DEFAULT_DAILY_HEADING,
+	dailyInsertPosition: "bottom",
+	memoTimeFormat: DEFAULT_MEMO_TIME_FORMAT,
+	monthlyMemoFolder: DEFAULT_MONTHLY_MEMO_FOLDER,
+	monthlyMemoFileFormat: DEFAULT_MONTHLY_MEMO_FILE_FORMAT,
+	monthlyDateHeadingFormat: DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
+	monthlyDateOrder: DEFAULT_MONTHLY_DATE_ORDER,
+	legacyDailyHeadings: [],
+	mobileCompactMode: "auto",
+	syncDebounceMs: DEFAULT_SYNC_DEBOUNCE_MS,
+	desktopSidebarWidth: DEFAULT_DESKTOP_SIDEBAR_WIDTH,
+	desktopSidebarCollapsed: false,
+	excludeMonthlyMemosFromObsidian: false,
+	managedObsidianExcludeRule: undefined,
+	managedObsidianExcludeRuleOwned: false,
+	managedSystemFolderExcludeRule: undefined,
+	managedSystemFolderExcludeRuleOwned: false,
+	pinnedTags: [],
+};

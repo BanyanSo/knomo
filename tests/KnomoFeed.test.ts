@@ -6,6 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 test("renders feed summary, toolbar, load more buttons, and empty states", async () => {
 	await ensureObsidianStub();
 	const {
+		renderKnomoCardFlowHeaders,
 		renderKnomoEmptyState,
 		renderKnomoListSummary,
 		renderKnomoLoadMoreButton,
@@ -21,6 +22,21 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 	assert.equal(toolbar.hasClass("knomo-list-toolbar"), true);
 	assert.equal(toolbar.find(".knomo-list-summary")?.getText(), "5 memos found for a random revisit");
 	assert.equal(toolbar.find("[data-action='refresh-random-reunion']")?.getText(), "Shuffle");
+
+	const headerRoot = new TestElement("div");
+	const headers = renderKnomoCardFlowHeaders(headerRoot.asHtml(), [
+		{ type: "summary", text: "3 memos were written on this day" },
+		{ type: "random-toolbar", count: 2 },
+	]);
+	assert.equal(headers.length, 2);
+	assert.equal(headers[0].hasClass("knomo-list-summary"), true);
+	assert.equal(headers[0].getText(), "3 memos were written on this day");
+	assert.equal(headers[1].hasClass("knomo-list-toolbar"), true);
+	const headerSummaryTexts = headerRoot.findAll(".knomo-list-summary").map((item) => item.getText());
+	assert.deepEqual(headerSummaryTexts, [
+		"3 memos were written on this day",
+		"2 memos found for a random revisit",
+	]);
 
 	const sentinel = renderKnomoLoadMoreButton(root.asHtml(), {
 		remainingCount: 12,

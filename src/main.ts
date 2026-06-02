@@ -1,7 +1,8 @@
-import { Platform, Plugin } from "obsidian";
+import { Notice, Platform, Plugin } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
+import { AttachmentService } from "./services/AttachmentService";
 import { DailyNoteService } from "./services/DailyNoteService";
 import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { FileWatchService } from "./services/FileWatchService";
@@ -20,6 +21,7 @@ import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
+import { formatSettingsText } from "./utils/serviceText";
 
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
@@ -37,6 +39,7 @@ export default class KnomoPlugin extends Plugin {
 		await this.refreshDailyStatusSafely(dailyNoteService);
 		const monthlyArchiveService = new MonthlyArchiveService(this.app, markdownBlockService);
 		const memoIndexStore = new MemoIndexStore(this.app);
+		const attachmentService = new AttachmentService(this.app);
 		this.syncOrchestrator = new SyncOrchestrator(
 			this.app,
 			() => this.settingsService.getSettings(),
@@ -53,7 +56,13 @@ export default class KnomoPlugin extends Plugin {
 		);
 		const randomReunionService = new RandomReunionService(this);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
-		const fileWatchService = new FileWatchService(this.app, selfWriteTracker, this.syncOrchestrator, () => this.refreshOpenViews());
+		const fileWatchService = new FileWatchService(
+			this.app,
+			selfWriteTracker,
+			this.syncOrchestrator,
+			() => this.refreshOpenViews(),
+			(path, error) => this.notifyWatchSyncError(path, error),
+		);
 		fileWatchService.start(this);
 
 		this.registerView(
@@ -64,6 +73,7 @@ export default class KnomoPlugin extends Plugin {
 				this.syncOrchestrator,
 				referenceService,
 				randomReunionService,
+				attachmentService,
 				() => this.refreshOpenViews(),
 				() => this.runManualRefresh(),
 			),
@@ -124,6 +134,11 @@ export default class KnomoPlugin extends Plugin {
 			}
 		});
 		await Promise.all(refreshes);
+	}
+
+	private notifyWatchSyncError(path: string, error: unknown): void {
+		const message = formatSettingsText(error instanceof Error ? error.message : t("service.unknownError"));
+		new Notice(t("service.watchSyncFailed", { path, message }));
 	}
 
 	private async loadSettingsSafely(): Promise<void> {

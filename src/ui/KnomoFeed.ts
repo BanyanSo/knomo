@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 
 type LoadMoreAction = "load-more" | "load-more-mobile-search";
 
@@ -28,6 +29,15 @@ export function renderKnomoRandomReunionToolbar(container: HTMLElement, count: n
 		},
 	});
 	return toolbar;
+}
+
+export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[]): HTMLElement[] {
+	return headers.map((header) => {
+		if (header.type === "random-toolbar") {
+			return renderKnomoRandomReunionToolbar(container, header.count);
+		}
+		return renderKnomoListSummary(container, header.text);
+	});
 }
 
 export function renderKnomoLoadMoreButton(container: HTMLElement, options: RenderLoadMoreButtonOptions): HTMLButtonElement {

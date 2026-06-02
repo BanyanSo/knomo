@@ -1,11 +1,11 @@
-import { Notice, TFile } from "obsidian";
+import { TFile } from "obsidian";
 import type { App, Component } from "obsidian";
 
 import { hashText } from "../utils/hash";
-import { t } from "../i18n";
-import { formatSettingsText } from "../ui/KnomoSettingTab";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 import type { SyncOrchestrator } from "./SyncOrchestrator";
+
+export type FileWatchSyncErrorHandler = (path: string, error: unknown) => void;
 
 // 职责：监听相关文件变化，并结合 SelfWriteTracker 判断是否为自身写入。
 export class FileWatchService {
@@ -16,6 +16,7 @@ export class FileWatchService {
 		private readonly selfWriteTracker: SelfWriteTracker,
 		private readonly syncOrchestrator: SyncOrchestrator,
 		private readonly onSynced?: () => Promise<void> | void,
+		private readonly onSyncError?: FileWatchSyncErrorHandler,
 	) {}
 
 	start(owner: Component): void {
@@ -62,8 +63,7 @@ export class FileWatchService {
 	}
 
 	private handleSyncError(file: TFile, error: unknown): void {
-		const message = formatSettingsText(error instanceof Error ? error.message : t("service.unknownError"));
-		new Notice(t("service.watchSyncFailed", { path: file.path, message }));
+		this.onSyncError?.(file.path, error);
 	}
 
 	private clearTimers(): void {

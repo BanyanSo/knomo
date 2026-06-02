@@ -4,6 +4,7 @@ import type { HoverPopover, WorkspaceLeaf } from "obsidian";
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
 import { KNOMO_LOGO_ICON, KNOMO_SEARCH_ICON } from "../icons";
 import { t } from "../i18n";
+import type { AttachmentService } from "../services/AttachmentService";
 import type { RandomReunionService } from "../services/RandomReunionService";
 import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
@@ -15,6 +16,7 @@ import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getList
 import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
 import { buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
+import { formatSettingsText } from "../utils/serviceText";
 import {
 	getComposerToolButtonRoute,
 	getRandomReunionCardRoute,
@@ -32,10 +34,10 @@ import { KnomoCardFlowBatcher, runCardFlowBatch } from "./KnomoCardFlow";
 import type { CardFlowBatch, CardFlowRenderMode } from "./KnomoCardFlow";
 import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
 import {
+	renderKnomoCardFlowHeaders,
 	renderKnomoEmptyState,
 	renderKnomoListSummary,
 	renderKnomoLoadMoreButton,
-	renderKnomoRandomReunionToolbar,
 } from "./KnomoFeed";
 import { getCardFlowPresentation } from "./KnomoCardFlowPresenter";
 import type { CardFlowPresentation, CardFlowRegularFilterCopy } from "./KnomoCardFlowPresenter";
@@ -47,7 +49,6 @@ import {
 	renderKnomoScopePopover,
 } from "./KnomoHeaderSearch";
 import { renderKnomoMobileSearchPage } from "./KnomoMobileSearchPage";
-import { formatSettingsText } from "./KnomoSettingTab";
 import {
 	clampSidebarWidth,
 	createSidebarDragState,
@@ -277,6 +278,7 @@ export class KnomoView extends ItemView {
 		private readonly syncOrchestrator: SyncOrchestrator,
 		private readonly referenceService: ReferenceService,
 		private readonly randomReunionService: RandomReunionService,
+		private readonly attachmentService: AttachmentService,
 		private readonly onMemosChanged: () => Promise<void>,
 		private readonly onManualRefresh: () => Promise<ScanDailyMemosResult>,
 	) {
@@ -1636,31 +1638,16 @@ export class KnomoView extends ItemView {
 
 	private renderCardFlowPresentation(presentation: CardFlowPresentation, generation: number): void {
 		if (presentation.type === "empty") {
-			this.renderEmptyState(presentation.title, presentation.description);
-			return;
-		}
-		for (const header of presentation.headers) {
-			if (header.type === "random-toolbar") {
-				this.renderRandomReunionToolbar(header.count);
-			} else {
-				this.renderListSummary(header.text);
+			if (this.cardFlowEl !== null) {
+				renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
 			}
+			return;
 		}
+		if (this.cardFlowEl === null) {
+			return;
+		}
+		renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers);
 		this.startCardFeed(presentation.memos, presentation.mode, generation);
-	}
-
-	private renderListSummary(text: string): void {
-		if (this.cardFlowEl === null) {
-			return;
-		}
-		renderKnomoListSummary(this.cardFlowEl, text);
-	}
-
-	private renderRandomReunionToolbar(count: number): void {
-		if (this.cardFlowEl === null) {
-			return;
-		}
-		renderKnomoRandomReunionToolbar(this.cardFlowEl, count);
 	}
 
 	private startCardFeed(memos: MemoRecord[], mode: CardFlowRenderMode, generation: number): void {
@@ -1759,13 +1746,6 @@ export class KnomoView extends ItemView {
 				this.queueMemoMarkdown(memoRecord, content, renderGeneration, priority);
 			},
 		});
-	}
-
-	private renderEmptyState(title = t("empty.generic"), description = ""): void {
-		if (this.cardFlowEl === null) {
-			return;
-		}
-		renderKnomoEmptyState(this.cardFlowEl, title, description);
 	}
 
 	private async handleRootClick(event: MouseEvent): Promise<void> {
@@ -3745,13 +3725,7 @@ export class KnomoView extends ItemView {
 			if (sourcePath === null) {
 				return;
 			}
-			const links: string[] = [];
-			for (const file of Array.from(files)) {
-				const path = await this.app.fileManager.getAvailablePathForAttachment(file.name, sourcePath);
-				const attachment = await this.app.vault.createBinary(path, await file.arrayBuffer());
-				const link = this.app.fileManager.generateMarkdownLink(attachment, sourcePath);
-				links.push(`!${link}`);
-			}
+			const links = await this.attachmentService.createImageEmbedLinks(sourcePath, Array.from(files));
 			this.insertText(links.join("\n"));
 		} catch (error) {
 			const message = formatSettingsText(error instanceof Error ? error.message : t("error.imageInsertFailed"));

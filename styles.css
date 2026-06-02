@@ -59,10 +59,10 @@ body {
 }
 
 .workspace-leaf-content[data-type="knomo-view"] {
-	--knomo-page-background: var(--knomo-app-background-secondary) !important;
-	--knomo-surface: var(--knomo-app-background-primary) !important;
-	--knomo-card-surface: var(--knomo-surface) !important;
-	--knomo-composer-surface: var(--knomo-surface) !important;
+	--knomo-page-background: var(--knomo-app-background-secondary);
+	--knomo-surface: var(--knomo-app-background-primary);
+	--knomo-card-surface: var(--knomo-surface);
+	--knomo-composer-surface: var(--knomo-surface);
 }
 
 body .workspace-leaf-content[data-type="knomo-view"],
@@ -186,9 +186,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
    -------------------------------------------------------------------------- */
 
 /* ---- Elements hidden by default, shown by layout class ---- */
-.knomo-plugin .knomo-compose-head,
-.knomo-plugin .knomo-compact-header,
-.knomo-plugin .knomo-mobile-only {
+.knomo-plugin .knomo-compact-header {
 	display: none;
 }
 
@@ -198,11 +196,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 
 .knomo-plugin.is-layout-mobile .knomo-desktop-only,
 .knomo-plugin.is-layout-mobile .knomo-desktop-scope-popover {
-	display: none !important;
-}
-
-.knomo-plugin.is-layout-mobile .knomo-mobile-only {
-	display: flex;
+	display: none;
 }
 
 /* ---- Layout: desktop-wide (default) ---- */
@@ -245,22 +239,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	display: none;
 }
 
-/* Mobile scope popover */
-.knomo-plugin.is-layout-mobile.is-scope-open .knomo-mobile-scope-popover {
-	opacity: 1;
-	transform: translateY(0) scale(1);
-	visibility: visible;
-	pointer-events: auto;
-}
-
-.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover {
-	position: fixed;
-	top: var(--knomo-title-popover-top);
-	left: 50%;
-	width: var(--knomo-dropdown-width);
-	min-width: var(--knomo-dropdown-width);
-}
-
 /* ---- Layout: desktop-medium / desktop-narrow sidebar drawer ---- */
 .knomo-plugin.is-layout-desktop-medium .knomo-sidebar,
 .knomo-plugin.is-layout-desktop-narrow .knomo-sidebar {
@@ -299,7 +277,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 
 .knomo-plugin.is-layout-desktop-medium .knomo-sidebar-resizer,
 .knomo-plugin.is-layout-desktop-narrow .knomo-sidebar-resizer {
-	display: none !important;
+	display: none;
 }
 
 .knomo-plugin.is-layout-desktop-medium .knomo-drawer-backdrop,
@@ -785,7 +763,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 }
 
 .knomo-plugin.is-layout-mobile .knomo-sidebar-resizer {
-	display: none !important;
+	display: none;
 }
 
 /* Drawer backdrop — mobile */
@@ -1195,7 +1173,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 }
 
 .knomo-plugin.is-layout-mobile.is-scope-open .knomo-mobile-scope-popover {
+	opacity: 1;
 	transform: translate(-50%, 0) scale(1);
+	visibility: visible;
+	pointer-events: auto;
 }
 
 .knomo-plugin .knomo-scope-option {
@@ -1520,30 +1501,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	display: none;
 }
 
-.knomo-plugin.is-layout-mobile .knomo-compose-head {
-	display: none !important;
-}
-
-.knomo-plugin .knomo-compose-close {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: var(--knomo-touch-target);
-	height: var(--knomo-touch-target);
-	padding: 0;
-	border: 0;
-	border-radius: 8px;
-	color: var(--text-muted);
-	background: transparent;
-	cursor: pointer;
-}
-
-.knomo-plugin .knomo-compose-close:hover,
-.knomo-plugin .knomo-compose-close:focus-visible {
-	color: var(--text-normal);
-	background: var(--knomo-row-hover);
-}
-
 /* --------------------------------------------------------------------------
    8. Composer
    -------------------------------------------------------------------------- */
@@ -1712,23 +1669,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-plugin .knomo-reference-clear:focus-visible {
 	color: var(--text-muted);
 	background: var(--knomo-row-hover);
-}
-
-/* 顶部关闭区默认隐藏 */
-.knomo-plugin .knomo-compose-head {
-	display: none;
-	align-items: center;
-	justify-content: flex-end;
-	padding: 0 0 6px;
-}
-
-.knomo-plugin.is-layout-mobile .knomo-compose-head {
-	display: none !important;
-}
-
-/* Hide mobile-only elements on desktop compose head */
-.knomo-plugin:not(.is-layout-mobile) .knomo-compose-head .knomo-compose-close {
-	display: none;
 }
 
 /* Composer toolbar */
@@ -2492,7 +2432,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	z-index: 10000;
 	isolation: isolate;
 	pointer-events: none;
-	background: transparent !important;
+	background: transparent;
 }
 
 .knomo-mobile-composer-layer .knomo-mobile-composer-backdrop {
@@ -2563,7 +2503,7 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-mobile-composer-layer.knomo-plugin.is-layout-mobile .knomo-composer {
-	position: relative !important;
+	position: relative;
 	left: auto;
 	right: auto;
 	bottom: auto;

@@ -1,8 +1,8 @@
-import { AbstractInputSuggest, getAllTags, ItemView, Keymap, MarkdownRenderer, Notice, Platform, prepareFuzzySearch, renderResults, Scope, setIcon } from "obsidian";
-import type { App, HoverPopover, SearchResult, WorkspaceLeaf } from "obsidian";
+import { ItemView, Keymap, MarkdownRenderer, Notice, Platform, Scope, setIcon } from "obsidian";
+import type { HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
-import { KNOMO_ALL_NOTES_ICON, KNOMO_LOGO_ICON, KNOMO_RANDOM_REUNION_ICON, KNOMO_SEARCH_ICON, KNOMO_SIDEBAR_MENU_ICON } from "../icons";
+import { KNOMO_LOGO_ICON, KNOMO_SEARCH_ICON } from "../icons";
 import { t } from "../i18n";
 import type { RandomReunionService } from "../services/RandomReunionService";
 import type { ReferenceService } from "../services/ReferenceService";
@@ -11,84 +11,107 @@ import type { SyncOrchestrator } from "../services/SyncOrchestrator";
 import type { ScanDailyMemosResult } from "../services/MemoScanService";
 import type { MemoRecord } from "../types/memo";
 import type { MobileCompactMode } from "../types/settings";
-import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../utils/composerInput";
+import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
-import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
-import { isSupportedMemoImage } from "../utils/markdown";
 import { buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
+import {
+	getComposerToolButtonRoute,
+	getRandomReunionCardRoute,
+	getRootClickRoute,
+} from "./KnomoActionRouter";
+import {
+	getKnomoActionDispatch,
+	getMemoActionDispatch,
+	getTrashActionDispatch,
+	shouldRenderAfterActionDispatch,
+} from "./KnomoActionDispatch";
+import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
+import { renderKnomoMemoCard, renderKnomoTrashMemoCard } from "./KnomoCard";
+import { KnomoCardFlowBatcher, runCardFlowBatch } from "./KnomoCardFlow";
+import type { CardFlowBatch, CardFlowRenderMode } from "./KnomoCardFlow";
+import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
+import {
+	renderKnomoEmptyState,
+	renderKnomoListSummary,
+	renderKnomoLoadMoreButton,
+	renderKnomoRandomReunionToolbar,
+} from "./KnomoFeed";
+import { getCardFlowPresentation } from "./KnomoCardFlowPresenter";
+import type { CardFlowPresentation, CardFlowRegularFilterCopy } from "./KnomoCardFlowPresenter";
+import { KnomoCardFlowSentinel } from "./KnomoCardFlowSentinel";
+import {
+	renderKnomoCompactHeader,
+	renderKnomoCompactSearchPanel,
+	renderKnomoDesktopTopbar,
+	renderKnomoScopePopover,
+} from "./KnomoHeaderSearch";
+import { renderKnomoMobileSearchPage } from "./KnomoMobileSearchPage";
 import { formatSettingsText } from "./KnomoSettingTab";
+import {
+	clampSidebarWidth,
+	createSidebarDragState,
+	getSidebarDragWidth,
+	renderKnomoSidebar,
+	renderSidebarStat,
+	renderSidebarTags,
+	SIDEBAR_MAX_WIDTH,
+	SIDEBAR_MIN_WIDTH,
+	syncSidebarNavButtons,
+} from "./KnomoSidebar";
+import type { SidebarDragState } from "./KnomoSidebar";
+import { KnomoTagSuggest } from "./KnomoTagSuggest";
+import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
+import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
+import { MemoSearchCache } from "./MemoSearchCache";
 import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
-import { buildTagTree } from "../utils/tagTree";
-import type { TagSummary, TagTreeNode } from "../utils/tagTree";
-import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
-import type { TagDisplaySource } from "../utils/tags";
-
-type ScopeFilter =
-	| "all"
-	| "week"
-	| "month"
-	| "last-month"
-	| "last-7"
-	| "last-30"
-	| "anniversary"
-	| "no-tag"
-	| "with-link"
-	| "with-image";
-
-type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "trash";
-
-interface ScopeOption {
-	filter: ScopeFilter;
-	label: string;
-	icon: string;
-}
-
-type SearchDateFilter = "week" | "month" | "last-7" | "last-30" | "last-week" | "last-month";
-type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random";
-type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "anniversary";
-
-type RegularFilterCondition =
-	| { type: "tag"; text: string }
-	| { type: "search"; text: string; query: string }
-	| { type: "date"; text: string; filter: SearchDateFilter }
-	| { type: "scope"; text: string; filter: SummaryScopeFilter };
-
-interface RegularFilterCopy {
-	summary: string;
-	emptyTitle: string;
-}
-
-interface SearchDateOption {
-	filter: SearchDateFilter;
-	label: string;
-	mobileLabel?: string;
-	icon: string;
-}
-
-interface TitleModeOption {
-	mode: TitleMode;
-	label: string;
-	icon: string;
-	nav?: SidebarNav;
-	scope?: ScopeFilter;
-}
-
-interface SidebarNavItem {
-	nav: SidebarNav;
-	label: string;
-	icon: string;
-}
+import {
+	attachMobileComposerLayer,
+	clearMobileComposerLayerState as clearMobileComposerLayerDomState,
+	createMobileComposerLayer,
+	isComposerInMobileLayer,
+	moveComposerToMobileLayer,
+	restoreComposerFromMobileLayer,
+} from "./MobileComposerLayer";
+import {
+	calculateMobileComposerMeasurements,
+	calculateMobileKeyboardMetrics,
+	getMobileKeyboardFallbackHeight,
+} from "./mobileComposerMetrics";
+import { normalizeTagKey } from "../utils/tags";
+import {
+	collectTags,
+	collectVaultTagDisplayMap,
+	formatMobileSearchEmptyTitle,
+	formatMobileSearchSummary,
+	formatRegularFilterEmptyTitle,
+	formatRegularFilterSummary,
+	formatTagFilterText,
+	getMemoImages,
+	getMemoStats,
+	getScopeLabel,
+	getSearchDateLabel,
+	isSummaryScopeFilter,
+	matchesScope,
+	matchesSearchDateFilter,
+	needsAllMemos,
+	parseMemoLocalDate,
+	tagMatchesActiveTagKey,
+} from "./viewFilters";
+import type { RegularFilterCondition, ScopeFilter, SearchDateFilter } from "./viewFilters";
+import {
+	getSidebarNavLabel,
+	isSearchDateFilter,
+	isSidebarNav,
+	isTitleMode,
+	TITLE_MODE_OPTIONS,
+	TITLE_SCOPE_OPTIONS,
+} from "./viewNavigation";
+import type { SidebarNav, TitleMode } from "./viewNavigation";
 
 interface TitleHost {
 	el: HTMLElement;
 	mobile: boolean;
-}
-
-interface SidebarDragState {
-	pointerId: number;
-	startX: number;
-	startWidth: number;
 }
 
 interface FilteredMemosCache {
@@ -102,8 +125,6 @@ interface FilteredMemosCache {
 	result: MemoRecord[];
 }
 
-const SIDEBAR_MIN_WIDTH = 210;
-const SIDEBAR_MAX_WIDTH = 300;
 const RANDOM_REUNION_DEFAULT_COUNT = 5;
 const CARD_BATCH_SIZE = 50;
 const MOBILE_SEARCH_BATCH_SIZE = 30;
@@ -117,54 +138,12 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 	".view-header",
 ];
 
-const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
-	{ nav: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
-	{ nav: "review", label: t("nav.review"), icon: "calendar-check" },
-	{ nav: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON },
-];
-
-const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: t("nav.trash"), icon: "trash-2" };
-
-const TITLE_SCOPE_OPTIONS: ScopeOption[] = [
-	{ filter: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
-	{ filter: "no-tag", label: t("filter.noTag"), icon: "tag" },
-	{ filter: "with-link", label: t("filter.withLink"), icon: "link" },
-	{ filter: "with-image", label: t("filter.withImage"), icon: "image" },
-	{ filter: "anniversary", label: t("filter.anniversary"), icon: "history" },
-];
-
-const TITLE_MODE_OPTIONS: TitleModeOption[] = [
-	{ mode: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
-	{ mode: "no-tag", label: t("filter.noTag"), icon: "tag", scope: "no-tag" },
-	{ mode: "with-link", label: t("filter.withLink"), icon: "link", scope: "with-link" },
-	{ mode: "with-image", label: t("filter.withImage"), icon: "image", scope: "with-image" },
-	{ mode: "anniversary", label: t("filter.anniversary"), icon: "history", scope: "anniversary" },
-	{ mode: "review", label: t("nav.review"), icon: "calendar-check", nav: "review" },
-	{ mode: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON, nav: "random" },
-];
-
-const SEARCH_DATE_OPTIONS: SearchDateOption[] = [
-	{ filter: "week", label: t("date.week"), icon: "calendar-days" },
-	{ filter: "month", label: t("date.month"), icon: "calendar-range" },
-	{ filter: "last-7", label: t("date.last7"), mobileLabel: t("date.last7Mobile"), icon: "calendar-clock" },
-	{ filter: "last-30", label: t("date.last30"), mobileLabel: t("date.last30Mobile"), icon: "calendar-clock" },
-	{ filter: "last-week", label: t("date.lastWeek"), icon: "calendar-minus" },
-	{ filter: "last-month", label: t("date.lastMonth"), icon: "calendar-minus" },
-];
-
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
 type ComposerMode = "create" | "edit" | "quote";
 type MobileComposerPhase = "closed" | "opening" | "focusing" | "open" | "closing";
-type CardFlowRenderMode = "memo" | "trash";
-type MarkdownRenderPriority = "high" | "normal";
 type WindowWithIntersectionObserver = Window & {
 	IntersectionObserver?: typeof IntersectionObserver;
 };
-
-interface MarkdownRenderTask {
-	generation: number;
-	run: () => Promise<void>;
-}
 
 interface PendingMobileListEnterCorrection {
 	patch: TextReplacement;
@@ -176,7 +155,6 @@ interface HandledMobileToolPointer {
 	action: string;
 }
 
-const ALL_SCOPE_OPTIONS = TITLE_SCOPE_OPTIONS;
 let nextA11yId = 0;
 
 export class KnomoView extends ItemView {
@@ -253,19 +231,10 @@ export class KnomoView extends ItemView {
 	private trashError: string | null = null;
 	private trashCount = 0;
 	private deletedMemoIds = new Set<string>();
-	private trashBusyMemoActions = new Map<string, "restore" | "purge">();
-	private currentFeedItems: MemoRecord[] = [];
-	private currentRenderOffset = 0;
-	private feedRenderMode: CardFlowRenderMode = "memo";
-	private isLoadingMore = false;
-	private hasMoreFeedItems = false;
-	private loadMoreObserver: IntersectionObserver | null = null;
-	private loadMoreSentinelEl: HTMLElement | null = null;
-	private highPriorityMarkdownQueue: MarkdownRenderTask[] = [];
-	private normalPriorityMarkdownQueue: MarkdownRenderTask[] = [];
-	private activeMarkdownRenderCount = 0;
-	private memoSearchTextCache = new Map<string, string>();
-	private memoSearchCacheSource: MemoRecord[] | null = null;
+	private trashBusyMemoActions = new Map<string, TrashAction>();
+	private cardFlowBatcher = new KnomoCardFlowBatcher();
+	private cardFlowSentinel = new KnomoCardFlowSentinel();
+	private memoSearchCache = new MemoSearchCache();
 	private searchDebounceTimeoutId: number | null = null;
 	private mobileSearchDebounceTimeoutId: number | null = null;
 	private mobileComposerFocusFrameId: number | null = null;
@@ -297,6 +266,10 @@ export class KnomoView extends ItemView {
 	private mobileComposerOpenScrollTop: number | null = null;
 	private mobileNavbarCompactController: MobileNavbarCompactController | null = null;
 	private renderGeneration = 0;
+	private markdownRenderQueue = new MarkdownRenderQueue({
+		concurrency: MARKDOWN_RENDER_CONCURRENCY,
+		getGeneration: () => this.renderGeneration,
+	});
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -365,7 +338,7 @@ export class KnomoView extends ItemView {
 		this.removeMobileHeaderActions();
 		this.stopDateChangeWatcher();
 		this.stopLayoutObserver();
-		this.disconnectLoadMoreObserver();
+		this.cardFlowSentinel.remove();
 		this.renderGeneration += 1;
 		this.clearMarkdownRenderQueue();
 		this.contentEl.removeClass("knomo-view-host");
@@ -402,7 +375,7 @@ export class KnomoView extends ItemView {
 		this.tagSuggest = null;
 
 		const settings = this.settingsService.getSettings();
-		this.sidebarWidth = clamp(settings.desktopSidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+		this.sidebarWidth = clampSidebarWidth(settings.desktopSidebarWidth);
 		this.sidebarCollapsed = settings.desktopSidebarCollapsed;
 
 		const root = container.createDiv({ cls: "knomo-plugin knomo-view" });
@@ -450,49 +423,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderSidebar(sidebar: HTMLElement): void {
-		const header = sidebar.createDiv({ cls: "knomo-sidebar-header" });
-		const brand = header.createDiv({ cls: "knomo-brand" });
-		brand.createDiv({ cls: "knomo-brand-title", text: "Knomo" });
-		brand.createDiv({ cls: "knomo-brand-subtitle", text: t("sidebar.subtitle") });
-		const actions = header.createDiv({ cls: "knomo-sidebar-actions" });
-		this.createIconButton(actions, "bar-chart-3", t("sidebar.stats"), "knomo-sidebar-action", "focus-stats");
-		this.createIconButton(actions, "refresh-cw", t("sidebar.refresh"), "knomo-sidebar-action", "refresh");
-		this.createIconButton(actions, "panel-left-close", t("sidebar.hide"), "knomo-sidebar-action knomo-desktop-only", "collapse-sidebar");
-
-		const statsLabelId = this.createHiddenText(sidebar, "stats-label", t("sidebar.stats"));
-		const stats = sidebar.createDiv({ cls: "knomo-sidebar-stats", attr: { "aria-labelledby": statsLabelId, tabindex: "-1" } });
-		this.statsEls.push(stats);
-
-		const navLabelId = this.createHiddenText(sidebar, "nav-label", t("sidebar.scope"));
-		const nav = sidebar.createEl("nav", {
-			cls: "knomo-nav",
-			attr: { "aria-labelledby": navLabelId },
-		});
-		for (const item of SIDEBAR_NAV_ITEMS) {
-			this.renderSidebarNavButton(nav, item);
-		}
-
-		const allTagSection = sidebar.createDiv({ cls: "knomo-tag-section" });
-		allTagSection.createDiv({ cls: "knomo-section-label", text: t("sidebar.allTags") });
-		this.allTagsEl = allTagSection.createDiv({ cls: "knomo-tag-list" });
-
-		const trashSection = sidebar.createDiv({ cls: "knomo-trash-section" });
-		const trashButton = this.renderSidebarNavButton(trashSection, TRASH_NAV_ITEM);
-		trashButton.addClass("knomo-trash-nav-button");
-		this.trashCountEls.push(trashButton.createSpan({ cls: "knomo-trash-count" }));
-
-		const resizerLabelId = this.createHiddenText(sidebar, "resizer-label", t("sidebar.resize"));
-		this.sidebarResizerEl = sidebar.createDiv({
-			cls: "knomo-sidebar-resizer knomo-desktop-only",
-			attr: {
-				role: "separator",
-				"aria-orientation": "vertical",
-				"aria-labelledby": resizerLabelId,
-				"aria-valuemin": String(SIDEBAR_MIN_WIDTH),
-				"aria-valuemax": String(SIDEBAR_MAX_WIDTH),
-				tabindex: "0",
+		const elements = renderKnomoSidebar(sidebar, {
+			sidebarMinWidth: SIDEBAR_MIN_WIDTH,
+			sidebarMaxWidth: SIDEBAR_MAX_WIDTH,
+			createHiddenText: (container, id, text) => this.createHiddenText(container, id, text),
+			createIconButton: (container, icon, ariaLabel, cls, action, showTooltip) => {
+				return this.createIconButton(container, icon, ariaLabel, cls, action, showTooltip);
 			},
 		});
+		this.statsEls.push(elements.statsEl);
+		this.allTagsEl = elements.allTagsEl;
+		this.trashCountEls.push(elements.trashCountEl);
+		this.sidebarResizerEl = elements.resizerEl;
 		this.registerDomEvent(this.sidebarResizerEl, "pointerdown", (event) => this.startSidebarResize(event));
 		this.registerDomEvent(this.sidebarResizerEl, "pointermove", (event) => this.resizeSidebar(event));
 		this.registerDomEvent(this.sidebarResizerEl, "pointerup", (event) => this.stopSidebarResize(event));
@@ -509,83 +451,48 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderDesktopTopbar(main: HTMLElement): void {
-		const topbar = main.createDiv({ cls: "knomo-topbar" });
-		this.createIconButton(topbar, KNOMO_SIDEBAR_MENU_ICON, t("sidebar.show"), "knomo-sidebar-toggle", "toggle-sidebar");
-
-		const scopeWrap = topbar.createDiv({ cls: "knomo-scope-wrap" });
-		const titleHost = scopeWrap.createDiv({ cls: "knomo-title-host" });
-		this.titleHosts.push({ el: titleHost, mobile: false });
-		const popover = scopeWrap.createDiv({ cls: "knomo-scope-popover knomo-desktop-scope-popover", attr: { role: "menu" } });
-		for (const option of TITLE_MODE_OPTIONS) {
-			this.renderTitleModeButton(popover, option, "knomo-scope-option");
-		}
-
-		const searchWrap = topbar.createDiv({ cls: "knomo-search-wrap" });
-		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
-		const desktopSearchLabelId = this.createHiddenText(searchWrap, "desktop-search-label", t("search.label"));
-		this.desktopSearchInputEl = searchWrap.createEl("input", {
-			cls: "knomo-search-input",
-			attr: {
-				type: "search",
-				placeholder: t("search.label"),
-				"aria-labelledby": desktopSearchLabelId,
+		const elements = renderKnomoDesktopTopbar(main, {
+			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
+			createIconButton: (container, icon, ariaLabel, cls, action, showTooltip) => {
+				return this.createIconButton(container, icon, ariaLabel, cls, action, showTooltip);
 			},
 		});
-		this.registerDomEvent(this.desktopSearchInputEl, "focus", () => this.openDesktopSearch());
-		this.registerDomEvent(this.desktopSearchInputEl, "click", () => this.openDesktopSearch());
-		this.registerDomEvent(this.desktopSearchInputEl, "input", () => {
-			this.queueSearchQuery(this.desktopSearchInputEl?.value ?? "");
-		});
-		this.registerDomEvent(this.desktopSearchInputEl, "keydown", (event) => {
-			if (event.key === "Escape") {
-				this.desktopSearchOpen = false;
-				this.syncRootState();
-				this.desktopSearchInputEl?.blur();
-			}
-		});
-
-		this.renderSearchPopover(searchWrap);
+		this.titleHosts.push({ el: elements.titleHostEl, mobile: false });
+		this.desktopSearchInputEl = elements.searchInputEl;
+		this.registerDesktopSearchInput(elements.searchInputEl);
 	}
 
 	private renderScopePopover(main: HTMLElement): void {
-		const mobilePopover = main.createDiv({ cls: "knomo-scope-popover knomo-mobile-scope-popover", attr: { role: "menu" } });
-		for (const option of TITLE_MODE_OPTIONS) {
-			this.renderTitleModeButton(mobilePopover, option, "knomo-scope-option");
-		}
-	}
-
-	private renderSearchPopover(container: HTMLElement): void {
-		const searchMenu = container.createDiv({ cls: "knomo-search-menu", attr: { role: "menu" } });
-		for (const option of SEARCH_DATE_OPTIONS) {
-			this.renderSearchDateButton(searchMenu, option, "knomo-search-menu-option");
-		}
+		renderKnomoScopePopover(main, "knomo-scope-popover knomo-mobile-scope-popover");
 	}
 
 	private renderComposer(main: HTMLElement): void {
 		const dailyStatus = this.syncOrchestrator.getDailyNotesStatus();
-		const composer = main.createDiv({ cls: "knomo-composer" });
-		this.composerEl = composer;
-		this.registerDomEvent(composer, "click", (event) => {
+		const composer = renderKnomoComposer(main, {
+			dailyEnabled: dailyStatus.enabled,
+			draftContent: this.draftContent,
+			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
+			createIconButton: (container, icon, ariaLabel, cls, action, showTooltip) => {
+				return this.createIconButton(container, icon, ariaLabel, cls, action, showTooltip);
+			},
+		});
+		this.composerEl = composer.composerEl;
+		this.inputEl = composer.inputEl;
+		this.referencePreviewEl = composer.referencePreviewEl;
+		this.composerBarEl = composer.composerBarEl;
+		this.cancelEditButtonEl = composer.cancelEditButtonEl;
+		this.statusEl = composer.statusEl;
+		this.sendButtonEl = composer.sendButtonEl;
+		this.registerDomEvent(composer.composerEl, "click", (event) => {
 			if (this.isMobileComposerLayered()) {
 				void this.handleRootClick(event);
 			}
 		});
-		this.registerDomEvent(composer, "keydown", (event) => {
+		this.registerDomEvent(composer.composerEl, "keydown", (event) => {
 			if (this.isMobileComposerLayered()) {
 				void this.handleRootKeydown(event);
 			}
 		});
-		const inputArea = composer.createDiv({ cls: "knomo-composer-input-area" });
-		const composerInputLabelId = this.createHiddenText(inputArea, "composer-input-label", t("composer.inputLabel"));
-		this.inputEl = inputArea.createEl("textarea", {
-			cls: "knomo-composer-input",
-			attr: {
-				placeholder: t("composer.placeholder"),
-				"aria-labelledby": composerInputLabelId,
-			},
-		});
-		this.inputEl.disabled = !dailyStatus.enabled;
-		this.inputEl.value = this.draftContent;
 		this.registerDomEvent(this.inputEl, "beforeinput", (event: InputEvent) => {
 			this.handleComposerBeforeInput(event);
 		});
@@ -618,39 +525,8 @@ export class KnomoView extends ItemView {
 		this.registerDomEvent(this.inputEl, "keyup", (event) => {
 			this.handleComposerKeyup(event);
 		});
-
-		this.referencePreviewEl = inputArea.createDiv({ cls: "knomo-reference-preview" });
-		const composerBar = inputArea.createDiv({ cls: "knomo-composer-bar" });
-		this.composerBarEl = composerBar;
-		const tools = composerBar.createDiv({ cls: "knomo-tool-group" });
-		this.registerDomEvent(tools, "pointerdown", (event) => this.handleComposerToolPointerDown(event));
-		this.registerDomEvent(tools, "mousedown", (event) => this.handleComposerToolPointerDown(event));
-		this.createIconButton(tools, "hash", t("composer.insertTag"), "knomo-tool-button", "insert-tag", false);
-		this.createIconButton(tools, "image", t("composer.insertImage"), "knomo-tool-button", "insert-image", false);
-		this.createIconButton(tools, "list", t("composer.insertList"), "knomo-tool-button", "insert-list", false);
-		this.createIconButton(tools, "list-ordered", t("composer.insertNumberedList"), "knomo-tool-button", "insert-numbered-list", false);
-		const actions = composerBar.createDiv({ cls: "knomo-composer-actions" });
-		this.cancelEditButtonEl = actions.createEl("button", {
-			cls: "knomo-cancel-edit-button",
-			text: t("composer.cancelEdit"),
-			attr: {
-				type: "button",
-				"data-action": "cancel-edit",
-				hidden: "",
-			},
-		});
-		this.statusEl = composer.createDiv({
-			cls: dailyStatus.enabled ? "knomo-status" : "knomo-status is-error",
-		});
-		this.sendButtonEl = actions.createEl("button", {
-			cls: "knomo-send-button",
-			attr: {
-				type: "button",
-				"aria-label": t("composer.send"),
-				"data-action": "save-input",
-			},
-		});
-		setIcon(this.sendButtonEl, "send");
+		this.registerDomEvent(composer.toolsEl, "pointerdown", (event) => this.handleComposerToolPointerDown(event));
+		this.registerDomEvent(composer.toolsEl, "mousedown", (event) => this.handleComposerToolPointerDown(event));
 		this.registerDomEvent(this.sendButtonEl, "pointerdown", (event) => {
 			this.handleSendPointerDown(event);
 		});
@@ -658,48 +534,6 @@ export class KnomoView extends ItemView {
 			this.handleSendPointerDown(event);
 		});
 		this.updateSendButtonState();
-	}
-
-	private renderTitleModeButton(container: HTMLElement, option: TitleModeOption, cls: string): HTMLButtonElement {
-		const button = container.createEl("button", {
-			cls,
-			attr: {
-				type: "button",
-				"aria-pressed": "false",
-				"data-title-mode": option.mode,
-			},
-		});
-		setIcon(button.createSpan({ cls: "knomo-button-icon" }), option.icon);
-		button.createSpan({ cls: "knomo-button-label", text: option.label });
-		return button;
-	}
-
-	private renderSearchDateButton(container: HTMLElement, option: SearchDateOption, cls: string, label = option.label): HTMLButtonElement {
-		const button = container.createEl("button", {
-			cls,
-			attr: {
-				type: "button",
-				"aria-pressed": "false",
-				"data-search-date": option.filter,
-			},
-		});
-		setIcon(button.createSpan({ cls: "knomo-button-icon" }), option.icon);
-		button.createSpan({ cls: "knomo-button-label", text: label });
-		return button;
-	}
-
-	private renderSidebarNavButton(container: HTMLElement, item: SidebarNavItem): HTMLButtonElement {
-		const button = container.createEl("button", {
-			cls: "knomo-nav-button",
-			attr: {
-				type: "button",
-				"aria-pressed": "false",
-				"data-nav": item.nav,
-			},
-		});
-		setIcon(button.createSpan({ cls: "knomo-button-icon" }), item.icon);
-		button.createSpan({ cls: "knomo-button-label", text: item.label });
-		return button;
 	}
 
 	private createIconButton(
@@ -764,40 +598,44 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderCompactHeader(main: HTMLElement): void {
-		const header = main.createDiv({ cls: "knomo-compact-header" });
-		this.createIconButton(header, KNOMO_SIDEBAR_MENU_ICON, t("mobile.menu"), "knomo-compact-menu-btn", "open-drawer");
-
-		const titleHost = header.createDiv({
-			cls: "knomo-compact-title",
+		const elements = renderKnomoCompactHeader(main, {
+			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
+			createIconButton: (container, icon, ariaLabel, cls, action, showTooltip) => {
+				return this.createIconButton(container, icon, ariaLabel, cls, action, showTooltip);
+			},
 		});
-		this.titleHosts.push({ el: titleHost, mobile: false });
-
-		const inlineSearchWrap = header.createDiv({ cls: "knomo-compact-search-wrap knomo-compact-inline-search" });
-		setIcon(inlineSearchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
-		this.compactInlineSearchInputEl = this.createCompactSearchInput(inlineSearchWrap, "compact-inline-search-label");
-		this.renderSearchPopover(inlineSearchWrap);
-
-		this.createIconButton(header, KNOMO_SEARCH_ICON, t("search.label"), "knomo-compact-search-btn", "toggle-compact-search");
+		this.titleHosts.push({ el: elements.titleHostEl, mobile: false });
+		this.compactInlineSearchInputEl = elements.inlineSearchInputEl;
+		this.registerCompactSearchInput(elements.inlineSearchInputEl);
 	}
 
 	private renderCompactSearchPanel(main: HTMLElement): void {
-		const panel = main.createDiv({ cls: "knomo-compact-search-panel" });
-		const searchWrap = panel.createDiv({ cls: "knomo-compact-search-wrap" });
-		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
-		this.compactSearchInputEl = this.createCompactSearchInput(searchWrap, "compact-search-label");
-		this.renderSearchPopover(searchWrap);
-	}
-
-	private createCompactSearchInput(searchWrap: HTMLElement, labelName: string): HTMLInputElement {
-		const searchLabelId = this.createHiddenText(searchWrap, labelName, t("search.label"));
-		const searchInput = searchWrap.createEl("input", {
-			cls: "knomo-search-input",
-			attr: {
-				type: "search",
-				placeholder: t("search.label"),
-				"aria-labelledby": searchLabelId,
+		const elements = renderKnomoCompactSearchPanel(main, {
+			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
+			createIconButton: (container, icon, ariaLabel, cls, action, showTooltip) => {
+				return this.createIconButton(container, icon, ariaLabel, cls, action, showTooltip);
 			},
 		});
+		this.compactSearchInputEl = elements.searchInputEl;
+		this.registerCompactSearchInput(elements.searchInputEl);
+	}
+
+	private registerDesktopSearchInput(searchInput: HTMLInputElement): void {
+		this.registerDomEvent(searchInput, "focus", () => this.openDesktopSearch());
+		this.registerDomEvent(searchInput, "click", () => this.openDesktopSearch());
+		this.registerDomEvent(searchInput, "input", () => {
+			this.queueSearchQuery(searchInput.value);
+		});
+		this.registerDomEvent(searchInput, "keydown", (event) => {
+			if (event.key === "Escape") {
+				this.desktopSearchOpen = false;
+				this.syncRootState();
+				searchInput.blur();
+			}
+		});
+	}
+
+	private registerCompactSearchInput(searchInput: HTMLInputElement): void {
 		this.registerDomEvent(searchInput, "focus", () => this.openDesktopSearch());
 		this.registerDomEvent(searchInput, "click", () => this.openDesktopSearch());
 		this.registerDomEvent(searchInput, "input", () => {
@@ -812,7 +650,6 @@ export class KnomoView extends ItemView {
 				this.syncRootState();
 			}
 		});
-		return searchInput;
 	}
 
 	private async reloadMemos(loadAll: boolean): Promise<boolean> {
@@ -871,31 +708,13 @@ export class KnomoView extends ItemView {
 
 	private syncComposerMode(): void {
 		if (this.referencePreviewEl !== null) {
-			if (this.quoteSourceMemoId !== null && this.quoteMarkdownText !== null) {
-				this.referencePreviewEl.empty();
-				const previewText = this.referencePreviewEl.createDiv({
-					cls: "knomo-reference-preview-text",
-				});
-				previewText.createSpan({ cls: "knomo-reference-label", text: t("reference.label") });
-				previewText.createSpan({
-					cls: "knomo-reference-content",
-					text: this.quoteMarkdownText.replace(/^> ?/gm, ""),
-				});
-				const clearButton = this.referencePreviewEl.createEl("button", {
-					cls: "knomo-reference-clear",
-					attr: {
-						type: "button",
-						"aria-label": t("reference.clear"),
-						"data-action": "clear-reference",
-					},
-				});
-				this.setTooltipIfDesktopOnly(clearButton);
-				setIcon(clearButton, "x");
-				this.referencePreviewEl.style.display = "flex";
-			} else {
-				this.referencePreviewEl.empty();
-				this.referencePreviewEl.style.display = "none";
-			}
+			renderComposerReferencePreview(
+				this.referencePreviewEl,
+				this.quoteSourceMemoId !== null ? this.quoteMarkdownText : null,
+				{
+					setTooltipIfDesktopOnly: (element) => this.setTooltipIfDesktopOnly(element),
+				},
+			);
 		}
 		if (this.currentLayout === "mobile") {
 			this.updateMobileComposerMeasurements();
@@ -1142,20 +961,12 @@ export class KnomoView extends ItemView {
 		if (this.mobileSearchPageEl !== null && this.mobileSearchPageEl.isConnected) {
 			return;
 		}
-		const page = this.rootEl.createDiv({ cls: "knomo-mobile-search-page" });
-		this.mobileSearchPageEl = page;
-		const header = page.createDiv({ cls: "knomo-mobile-search-header" });
-		const searchWrap = header.createDiv({ cls: "knomo-mobile-search-wrap" });
-		setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
-		const searchLabelId = this.createHiddenText(searchWrap, "mobile-search-label", t("search.label"));
-		this.mobileSearchInputEl = searchWrap.createEl("input", {
-			cls: "knomo-search-input",
-			attr: {
-				type: "search",
-				placeholder: t("search.label"),
-				"aria-labelledby": searchLabelId,
-			},
+		const page = renderKnomoMobileSearchPage(this.rootEl, {
+			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
 		});
+		this.mobileSearchPageEl = page.pageEl;
+		this.mobileSearchInputEl = page.inputEl;
+		this.mobileSearchResultsEl = page.resultsEl;
 		this.registerDomEvent(this.mobileSearchInputEl, "input", () => {
 			this.queueMobileSearchQuery(this.mobileSearchInputEl?.value ?? "");
 		});
@@ -1166,23 +977,6 @@ export class KnomoView extends ItemView {
 				this.closeMobileSearchPage();
 			}
 		});
-		const closeButton = header.createEl("button", {
-			cls: "knomo-mobile-search-close",
-			attr: {
-				type: "button",
-				"aria-label": t("search.close"),
-				"data-action": "close-mobile-search",
-			},
-		});
-		setIcon(closeButton, "x");
-
-		const quickSection = page.createDiv({ cls: "knomo-mobile-search-quick" });
-		quickSection.createDiv({ cls: "knomo-mobile-search-section-title", text: t("search.quick") });
-		const quickList = quickSection.createDiv({ cls: "knomo-mobile-search-chip-list" });
-		for (const option of SEARCH_DATE_OPTIONS) {
-			this.renderSearchDateButton(quickList, option, "knomo-mobile-search-chip", option.mobileLabel ?? option.label);
-		}
-		this.mobileSearchResultsEl = page.createDiv({ cls: "knomo-mobile-search-results" });
 		this.registerDomEvent(this.mobileSearchResultsEl, "click", (event) => {
 			void this.handleMarkdownInternalLinkClick(event);
 		});
@@ -1307,20 +1101,17 @@ export class KnomoView extends ItemView {
 		}
 		const summary = formatMobileSearchSummary(query, this.mobileSearchDateFilter, memos.length);
 		if (summary !== null) {
-			resultsEl.createDiv({ cls: "knomo-list-summary", text: summary });
+			renderKnomoListSummary(resultsEl, summary);
 		}
 		const visibleMemos = memos.slice(0, this.mobileSearchVisibleCount);
 		for (const [index, memo] of visibleMemos.entries()) {
 			this.renderMemoCardInContainer(resultsEl, memo, generation, index, true, false);
 		}
 		if (visibleMemos.length < memos.length) {
-			resultsEl.createEl("button", {
-				cls: "knomo-load-more knomo-mobile-search-more",
-				text: t("list.loadMore", { count: memos.length - visibleMemos.length }),
-				attr: {
-					type: "button",
-					"data-action": "load-more-mobile-search",
-				},
+			renderKnomoLoadMoreButton(resultsEl, {
+				remainingCount: memos.length - visibleMemos.length,
+				action: "load-more-mobile-search",
+				extraClass: "knomo-mobile-search-more",
 			});
 		}
 	}
@@ -1427,51 +1218,42 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (this.mobileComposerLayerEl === null) {
-			this.mobileComposerLayerEl = this.containerEl.doc.body.createDiv({
-				cls: "knomo-plugin knomo-mobile-composer-layer is-layout-mobile",
-			});
-			this.mobileComposerBackdropEl = this.mobileComposerLayerEl.createDiv({
-				cls: "knomo-mobile-composer-backdrop",
-			});
-			const stage = this.mobileComposerLayerEl.createDiv({
-				cls: "knomo-mobile-composer-stage",
-			});
-			this.mobileComposerContentEl = stage.createDiv({
-				cls: "knomo-mobile-composer-content",
-			});
-			this.mobileComposerBackdropEl.setAttr("aria-hidden", "true");
+			const layer = createMobileComposerLayer(this.containerEl.doc);
+			this.mobileComposerLayerEl = layer.layerEl;
+			this.mobileComposerBackdropEl = layer.backdropEl;
+			this.mobileComposerContentEl = layer.contentEl;
 			this.registerDomEvent(this.mobileComposerBackdropEl, "click", (event) => {
 				if (event.target === this.mobileComposerBackdropEl) {
 					this.closeComposerKeepingDraft();
 				}
 			});
-		} else if (this.mobileComposerLayerEl.parentElement === null) {
-			this.containerEl.doc.body.appendChild(this.mobileComposerLayerEl);
+		} else {
+			attachMobileComposerLayer(this.containerEl.doc, this.mobileComposerLayerEl);
 		}
-		if (this.composerEl.parentElement === this.mobileComposerContentEl) {
+		if (this.mobileComposerContentEl === null) {
 			return;
 		}
-		this.mobileComposerHomeEl = this.composerEl.parentElement;
-		this.mobileComposerNextSibling = this.composerEl.nextSibling;
-		this.mobileComposerContentEl?.appendChild(this.composerEl);
+		const placement = moveComposerToMobileLayer(this.composerEl, this.mobileComposerContentEl);
+		if (placement === null) {
+			return;
+		}
+		this.mobileComposerHomeEl = placement.homeEl;
+		this.mobileComposerNextSibling = placement.nextSibling;
 	}
 
 	private restoreMobileComposerLayer(): void {
-		if (this.composerEl !== null && this.mobileComposerHomeEl !== null && this.composerEl.parentElement === this.mobileComposerContentEl) {
-			if (this.mobileComposerNextSibling !== null && this.mobileComposerNextSibling.parentNode === this.mobileComposerHomeEl) {
-				this.mobileComposerHomeEl.insertBefore(this.composerEl, this.mobileComposerNextSibling);
-			} else {
-				this.mobileComposerHomeEl.appendChild(this.composerEl);
-			}
-		}
+		restoreComposerFromMobileLayer(
+			this.composerEl,
+			this.mobileComposerContentEl,
+			this.mobileComposerHomeEl,
+			this.mobileComposerNextSibling,
+		);
 		this.mobileComposerHomeEl = null;
 		this.mobileComposerNextSibling = null;
 	}
 
 	private clearMobileComposerLayerState(): void {
-		this.mobileComposerLayerEl?.toggleClass("is-open", false);
-		this.mobileComposerLayerEl?.toggleClass("is-closing", false);
-		this.mobileComposerLayerEl?.toggleClass("is-keyboard-open", false);
+		clearMobileComposerLayerDomState(this.mobileComposerLayerEl);
 	}
 
 	private detachMobileComposerLayer(): void {
@@ -1498,7 +1280,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private isMobileComposerLayered(): boolean {
-		return this.composerEl !== null && this.composerEl.parentElement === this.mobileComposerContentEl;
+		return isComposerInMobileLayer(this.composerEl, this.mobileComposerContentEl);
 	}
 
 	private queueMobileViewportUpdate(): void {
@@ -1559,14 +1341,14 @@ export class KnomoView extends ItemView {
 	private updateMobileKeyboardMetrics(): void {
 		const win = this.containerEl.win;
 		const viewport = this.mobileVisualViewport ?? win.visualViewport;
-		const visibleTop = viewport === undefined || viewport === null ? 0 : Math.max(0, viewport.offsetTop);
-		const visibleHeight = viewport === undefined || viewport === null ? win.innerHeight : Math.max(0, viewport.height);
-		const visibleBottom = visibleTop + visibleHeight;
 		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
-		let keyboardHeight = Math.max(0, baselineHeight - visibleBottom);
-		if (keyboardHeight < 80) {
-			keyboardHeight = 0;
-		}
+		const metrics = calculateMobileKeyboardMetrics({
+			baselineHeight,
+			windowHeight: win.innerHeight,
+			viewportOffsetTop: viewport === undefined || viewport === null ? null : viewport.offsetTop,
+			viewportHeight: viewport === undefined || viewport === null ? null : viewport.height,
+		});
+		let { keyboardHeight } = metrics;
 		const activeElement = this.containerEl.doc.activeElement;
 		const shouldUseFallback = this.currentLayout === "mobile"
 			&& this.composerOpen
@@ -1575,10 +1357,10 @@ export class KnomoView extends ItemView {
 			&& this.mobileKeyboardFocusStartedAt !== null
 			&& Date.now() - this.mobileKeyboardFocusStartedAt > 220;
 		if (shouldUseFallback) {
-			keyboardHeight = this.getMobileKeyboardFallbackHeight(baselineHeight);
+			keyboardHeight = getMobileKeyboardFallbackHeight(baselineHeight, win.innerHeight);
 		}
 		this.mobileKeyboardHeight = keyboardHeight;
-		this.setMobileKeyboardMetrics(visibleTop, visibleHeight, keyboardHeight);
+		this.setMobileKeyboardMetrics(metrics.visibleTop, metrics.visibleHeight, keyboardHeight);
 		this.updateMobileComposerMeasurements();
 		if (this.mobileComposerPhase === "focusing"
 			&& this.mobileKeyboardFocusStartedAt !== null
@@ -1588,11 +1370,6 @@ export class KnomoView extends ItemView {
 		if (this.currentLayout === "mobile" && this.composerOpen && this.mobileComposerPhase !== "opening" && this.mobileComposerPhase !== "closing") {
 			this.resizeInput();
 		}
-	}
-
-	private getMobileKeyboardFallbackHeight(baselineHeight: number): number {
-		const height = baselineHeight > 0 ? baselineHeight : this.containerEl.win.innerHeight;
-		return Math.round(Math.min(Math.max(height * 0.42, 300), 430));
 	}
 
 	private setMobileKeyboardMetrics(visibleTop: number, visibleHeight: number, keyboardHeight: number): void {
@@ -1621,30 +1398,30 @@ export class KnomoView extends ItemView {
 		const win = this.containerEl.win;
 		const viewport = this.mobileVisualViewport ?? win.visualViewport;
 		const containerTop = Math.max(0, this.containerEl.getBoundingClientRect().top);
-		const viewportTop = viewport === undefined || viewport === null ? 0 : Math.max(0, viewport.offsetTop);
-		const topLimit = Math.max(viewportTop + MOBILE_COMPOSER_TOP_GUARD, containerTop + 8);
-		const keyboardHeight = this.mobileKeyboardHeight || 0;
 		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
-		const keyboardTop = keyboardHeight > 0
-			? baselineHeight - keyboardHeight
-			: viewport === undefined || viewport === null
-				? win.innerHeight
-				: viewport.offsetTop + viewport.height;
-		const contentMaxHeight = Math.round(Math.max(160, keyboardTop - topLimit));
 		const toolbarHeight = this.composerBarEl?.offsetHeight ?? 52;
 		const referenceHeight = this.referencePreviewEl !== null && this.referencePreviewEl.style.display !== "none"
 			? this.referencePreviewEl.offsetHeight
 			: 0;
-		const verticalPadding = 32;
-		const inputMaxHeight = Math.max(120, contentMaxHeight - toolbarHeight - referenceHeight - verticalPadding);
-		const contentMaxHeightValue = `${contentMaxHeight}px`;
-		this.mobileComposerInputMaxHeight = Math.round(inputMaxHeight);
+		const measurements = calculateMobileComposerMeasurements({
+			baselineHeight,
+			windowHeight: win.innerHeight,
+			viewportOffsetTop: viewport === undefined || viewport === null ? null : viewport.offsetTop,
+			viewportHeight: viewport === undefined || viewport === null ? null : viewport.height,
+			containerTop,
+			keyboardHeight: this.mobileKeyboardHeight || 0,
+			toolbarHeight,
+			referenceHeight,
+			topGuard: MOBILE_COMPOSER_TOP_GUARD,
+		});
+		const contentMaxHeightValue = `${measurements.contentMaxHeight}px`;
+		this.mobileComposerInputMaxHeight = measurements.inputMaxHeight;
 		const inputMaxHeightValue = `${this.mobileComposerInputMaxHeight}px`;
 		for (const element of [this.rootEl, this.mobileComposerLayerEl]) {
 			element?.style.setProperty("--knomo-composer-content-max-height", contentMaxHeightValue);
 			element?.style.setProperty("--knomo-composer-input-max-height", inputMaxHeightValue);
 		}
-		return Math.round(inputMaxHeight);
+		return measurements.inputMaxHeight;
 	}
 
 	private updateCurrentLayout(): void {
@@ -1666,16 +1443,10 @@ export class KnomoView extends ItemView {
 		const stats = getMemoStats(this.memos);
 		for (const statsEl of this.statsEls) {
 			statsEl.empty();
-			this.renderStat(statsEl, String(stats.memoCount), t("stats.notes"));
-			this.renderStat(statsEl, String(stats.tagCount), t("stats.tags"));
-			this.renderStat(statsEl, stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount), stats.imageCount > 0 ? t("stats.images") : t("stats.words"));
+			renderSidebarStat(statsEl, String(stats.memoCount), t("stats.notes"));
+			renderSidebarStat(statsEl, String(stats.tagCount), t("stats.tags"));
+			renderSidebarStat(statsEl, stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount), stats.imageCount > 0 ? t("stats.images") : t("stats.words"));
 		}
-	}
-
-	private renderStat(container: HTMLElement, value: string, label: string): void {
-		const item = container.createDiv({ cls: "knomo-stat" });
-		item.createDiv({ cls: "knomo-stat-value", text: value });
-		item.createDiv({ cls: "knomo-stat-label", text: label });
 	}
 
 	private renderTags(): void {
@@ -1686,7 +1457,11 @@ export class KnomoView extends ItemView {
 				this.activeTag = activeTag.name;
 			}
 		}
-		this.renderTagList(this.allTagsEl, buildTagTree(allTags), t("tags.empty"));
+		renderSidebarTags(this.allTagsEl, allTags, {
+			activeTagKey: this.activeTagKey,
+			expandedTagGroups: this.expandedTagGroups,
+			emptyText: t("tags.empty"),
+		});
 	}
 
 	private renderTrashCount(): void {
@@ -1696,68 +1471,12 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private renderTagList(container: HTMLElement | null, tags: TagTreeNode[], emptyText: string): void {
-		if (container === null) {
-			return;
-		}
-		container.empty();
-		if (tags.length === 0) {
-			container.createDiv({ cls: "knomo-muted-text", text: emptyText });
-			return;
-		}
-		for (const tag of tags) {
-			this.renderTagTreeNode(container, tag);
-		}
-	}
-
-	private renderTagTreeNode(container: HTMLElement, tag: TagTreeNode): void {
-		const collapsed = tag.children.length > 0 && !this.expandedTagGroups.has(tag.key);
-		const node = container.createDiv({ cls: collapsed ? "knomo-tag-node is-collapsed" : "knomo-tag-node" });
-		const row = node.createDiv({ cls: "knomo-tag-row" });
-		const button = row.createEl("button", {
-			cls: this.activeTagKey === tag.key ? "knomo-tag-nav is-active" : "knomo-tag-nav",
-			attr: {
-				type: "button",
-				"data-tag": tag.name,
-				"data-tag-key": tag.key,
-				"aria-pressed": this.activeTagKey === tag.key ? "true" : "false",
-			},
-		});
-		button.createSpan({ cls: "knomo-tag-name", text: tag.label });
-		if (tag.children.length > 0) {
-			const toggle = row.createEl("button", {
-				cls: "knomo-tag-toggle",
-				attr: {
-					type: "button",
-					"aria-label": collapsed ? t("tags.expandGroup") : t("tags.collapseGroup"),
-					"aria-expanded": collapsed ? "false" : "true",
-					"data-tag-toggle": tag.key,
-				},
-			});
-			toggle.createSpan({ cls: "knomo-tag-count", text: String(tag.count) });
-			const toggleIcon = toggle.createSpan({ cls: "knomo-tag-toggle-icon" });
-			setIcon(toggleIcon, "chevron-down");
-		} else {
-			row.createSpan({ cls: "knomo-tag-count", text: String(tag.count) });
-		}
-		if (tag.children.length > 0) {
-			const children = node.createDiv({ cls: "knomo-tag-children" });
-			for (const child of tag.children) {
-				this.renderTagTreeNode(children, child);
-			}
-		}
-	}
-
 	private renderScopeState(): void {
 		for (const titleHost of this.titleHosts) {
 			this.renderTitleHost(titleHost);
 		}
 		this.syncMobileHeaderTitle();
-		this.rootEl?.findAll("[data-nav]").forEach((element) => {
-			const active = element.getAttr("data-nav") === this.activeNav;
-			element.toggleClass("is-active", active);
-			element.setAttr("aria-pressed", active ? "true" : "false");
-		});
+		syncSidebarNavButtons(this.rootEl, this.activeNav);
 		this.rootEl?.findAll("[data-title-mode]").forEach((element) => {
 			const active = element.getAttr("data-title-mode") === this.getCurrentTitleMode();
 			element.toggleClass("is-active", active);
@@ -1842,7 +1561,7 @@ export class KnomoView extends ItemView {
 			&& this.searchDateFilter === null;
 	}
 
-	private getRegularFilterCopy(count: number): RegularFilterCopy | null {
+	private getRegularFilterCopy(count: number): CardFlowRegularFilterCopy | null {
 		if (this.activeNav !== "all") {
 			return null;
 		}
@@ -1896,184 +1615,96 @@ export class KnomoView extends ItemView {
 		const generation = this.renderGeneration + 1;
 		this.renderGeneration = generation;
 		this.clearMarkdownRenderQueue();
-		this.disconnectLoadMoreObserver();
+		this.cardFlowSentinel.remove();
 		this.cardFlowEl.empty();
-		this.loadMoreSentinelEl = null;
-		if (this.cardFlowError !== null) {
-			this.renderEmptyState(t("empty.cardFlowFailed"), this.cardFlowError);
+		const shouldLoadListMemos = this.cardFlowError === null
+			&& this.activeNav !== "trash"
+			&& !(this.activeNav === "random" && this.randomReunionLoading);
+		const memos = shouldLoadListMemos ? this.getFilteredMemos() : [];
+		const presentation = getCardFlowPresentation({
+			cardFlowError: this.cardFlowError,
+			activeNav: this.activeNav,
+			randomReunionLoading: this.randomReunionLoading,
+			memos,
+			regularFilterCopy: shouldLoadListMemos ? this.getRegularFilterCopy(memos.length) : null,
+			trashLoading: this.trashLoading,
+			trashError: this.trashError,
+			trashMemos: this.trashMemos,
+		});
+		this.renderCardFlowPresentation(presentation, generation);
+	}
+
+	private renderCardFlowPresentation(presentation: CardFlowPresentation, generation: number): void {
+		if (presentation.type === "empty") {
+			this.renderEmptyState(presentation.title, presentation.description);
 			return;
 		}
-		if (this.activeNav === "trash") {
-			this.renderTrashCardFlow(generation);
-			return;
-		}
-		if (this.activeNav === "random" && this.randomReunionLoading) {
-			this.renderEmptyState(t("empty.randomLoading"));
-			return;
-		}
-		const memos = this.getFilteredMemos();
-		const regularFilterCopy = this.getRegularFilterCopy(memos.length);
-		if (memos.length === 0) {
-			if (regularFilterCopy !== null) {
-				this.renderEmptyState(regularFilterCopy.emptyTitle);
+		for (const header of presentation.headers) {
+			if (header.type === "random-toolbar") {
+				this.renderRandomReunionToolbar(header.count);
 			} else {
-				this.renderEmptyState(getEmptyStateTitle(this.activeNav));
+				this.renderListSummary(header.text);
 			}
-			return;
 		}
-		if (this.activeNav === "review") {
-			this.renderOutsideTodaySummary(memos.length);
-		}
-		if (this.activeNav === "random") {
-			this.renderRandomReunionToolbar(memos.length);
-		}
-		if (regularFilterCopy !== null) {
-			this.renderListSummary(regularFilterCopy.summary);
-		}
-		this.startCardFeed(memos, "memo", generation);
-	}
-
-	private renderTrashCardFlow(generation: number): void {
-		if (this.trashLoading || this.trashMemos === null) {
-			this.renderEmptyState(t("empty.trashLoading"));
-			return;
-		}
-		if (this.trashError !== null) {
-			this.renderEmptyState(t("empty.trashFailed"), this.trashError);
-			return;
-		}
-		if (this.trashMemos.length === 0) {
-			this.renderEmptyState(t("empty.trashEmptyTitle"), t("empty.trashEmptyDesc"));
-			return;
-		}
-		this.startCardFeed(this.trashMemos, "trash", generation);
-	}
-
-	private renderOutsideTodaySummary(count: number): void {
-		this.renderListSummary(t("list.reviewSummary", { count }));
+		this.startCardFeed(presentation.memos, presentation.mode, generation);
 	}
 
 	private renderListSummary(text: string): void {
-		this.cardFlowEl?.createDiv({
-			cls: "knomo-list-summary",
-			text,
-		});
+		if (this.cardFlowEl === null) {
+			return;
+		}
+		renderKnomoListSummary(this.cardFlowEl, text);
 	}
 
 	private renderRandomReunionToolbar(count: number): void {
-		const toolbar = this.cardFlowEl?.createDiv({ cls: "knomo-list-toolbar" });
-		if (toolbar === undefined) {
+		if (this.cardFlowEl === null) {
 			return;
 		}
-		toolbar.createDiv({
-			cls: "knomo-list-summary",
-			text: t("list.randomSummary", { count }),
-		});
-		toolbar.createEl("button", {
-			cls: "knomo-inline-button",
-			text: t("list.randomRefresh"),
-			attr: {
-				type: "button",
-				"data-action": "refresh-random-reunion",
-			},
-		});
-
+		renderKnomoRandomReunionToolbar(this.cardFlowEl, count);
 	}
 
 	private startCardFeed(memos: MemoRecord[], mode: CardFlowRenderMode, generation: number): void {
-		const initialBatchSize = Math.max(this.currentRenderOffset, CARD_BATCH_SIZE);
-		this.currentFeedItems = memos;
-		this.currentRenderOffset = 0;
-		this.feedRenderMode = mode;
-		this.hasMoreFeedItems = memos.length > 0;
-		this.renderNextCardBatch(generation, initialBatchSize);
+		const batch = this.cardFlowBatcher.start(memos, mode, CARD_BATCH_SIZE);
+		this.renderCardBatch(batch, generation);
 	}
 
 	private renderNextCardBatch(generation: number, batchSize = CARD_BATCH_SIZE): void {
-		if (this.cardFlowEl === null || this.isLoadingMore || generation !== this.renderGeneration) {
+		if (this.cardFlowEl === null || generation !== this.renderGeneration) {
 			return;
 		}
-		const batchStart = this.currentRenderOffset;
-		if (batchStart >= this.currentFeedItems.length) {
-			this.hasMoreFeedItems = false;
-			this.removeLoadMoreSentinel();
-			return;
-		}
-
-		this.isLoadingMore = true;
-		this.removeLoadMoreSentinel();
-		const batchEnd = Math.min(batchStart + batchSize, this.currentFeedItems.length);
-		const batchMemos = this.currentFeedItems.slice(batchStart, batchEnd);
-		for (const [index, memo] of batchMemos.entries()) {
-			if (generation !== this.renderGeneration) {
-				this.isLoadingMore = false;
-				return;
-			}
-			const renderIndex = batchStart + index;
-			if (this.feedRenderMode === "trash") {
-				this.renderTrashMemoCard(memo, generation, renderIndex);
-			} else {
-				this.renderMemoCard(memo, generation, renderIndex);
-			}
-		}
-		if (generation !== this.renderGeneration) {
-			this.isLoadingMore = false;
-			return;
-		}
-		this.currentRenderOffset = batchEnd;
-		this.hasMoreFeedItems = this.currentRenderOffset < this.currentFeedItems.length;
-		this.isLoadingMore = false;
-		if (this.hasMoreFeedItems) {
-			this.renderLoadMoreSentinel(this.currentFeedItems.length - this.currentRenderOffset, generation);
-		}
+		const batch = this.cardFlowBatcher.beginNextBatch(batchSize);
+		this.renderCardBatch(batch, generation);
 	}
 
-	private renderLoadMoreSentinel(remainingCount: number, generation: number): void {
-		const sentinel = this.cardFlowEl?.createEl("button", {
-			cls: "knomo-load-more",
-			text: t("list.loadMore", { count: remainingCount }),
-			attr: {
-				type: "button",
-				"data-action": "load-more",
-				"data-load-more-sentinel": "true",
+	private renderCardBatch(batch: CardFlowBatch | null, generation: number): void {
+		const result = runCardFlowBatch({
+			batch,
+			generation,
+			hasRenderTarget: this.cardFlowEl !== null,
+			isCurrentGeneration: (value) => value === this.renderGeneration,
+			removeSentinel: () => this.cardFlowSentinel.remove(),
+			renderItem: (item) => {
+				if (item.mode === "trash") {
+					this.renderTrashMemoCard(item.memo, generation, item.renderIndex);
+				} else {
+					this.renderMemoCard(item.memo, generation, item.renderIndex);
+				}
 			},
+			completeBatch: (completedBatch) => this.cardFlowBatcher.completeBatch(completedBatch),
+			cancelBatch: () => this.cardFlowBatcher.cancelBatch(),
 		});
-		if (sentinel === undefined) {
-			return;
-		}
-		this.loadMoreSentinelEl = sentinel;
-		this.observeLoadMoreSentinel(sentinel, generation);
-	}
-
-	private observeLoadMoreSentinel(sentinel: HTMLElement, generation: number): void {
 		const cardFlow = this.cardFlowEl;
-		const Observer = (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver;
-		if (cardFlow === null || Observer === undefined) {
+		if (result.type !== "completed" || !result.completion.hasMoreItems || cardFlow === null) {
 			return;
 		}
-		const observer = new Observer((entries: IntersectionObserverEntry[]) => {
-			if (generation !== this.renderGeneration || !entries.some((entry) => entry.isIntersecting)) {
-				return;
-			}
-			this.renderNextCardBatch(generation);
-		}, {
+		this.cardFlowSentinel.render({
 			root: cardFlow,
-			rootMargin: "240px 0px",
-			threshold: 0,
+			remainingCount: result.completion.remainingCount,
+			generation,
+			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
+			isCurrentGeneration: (value) => value === this.renderGeneration,
+			onIntersect: (value) => this.renderNextCardBatch(value),
 		});
-		this.loadMoreObserver = observer;
-		observer.observe(sentinel);
-	}
-
-	private removeLoadMoreSentinel(): void {
-		this.disconnectLoadMoreObserver();
-		this.loadMoreSentinelEl?.detach();
-		this.loadMoreSentinelEl = null;
-	}
-
-	private disconnectLoadMoreObserver(): void {
-		this.loadMoreObserver?.disconnect();
-		this.loadMoreObserver = null;
 	}
 
 	private renderMemoCard(memo: MemoRecord, generation: number, renderIndex: number): void {
@@ -2091,128 +1722,41 @@ export class KnomoView extends ItemView {
 		includeActions: boolean,
 		randomCard: boolean,
 	): void {
-		const markdownPriority = getMarkdownRenderPriority(renderIndex);
-		const cardAttrs: Record<string, string> = { "data-memo-id": memo.id };
-		let randomCardDescriptionId: string | null = null;
-		if (randomCard) {
-			randomCardDescriptionId = this.getA11yId(`random-card-${renderIndex}-description`);
-			cardAttrs.tabindex = "0";
-			cardAttrs["aria-describedby"] = randomCardDescriptionId;
-			cardAttrs["data-random-reunion-card"] = "true";
-		}
-		const card = container.createEl("article", {
-			cls: includeActions && this.activeMenuMemoId === memo.id ? "knomo-card is-menu-open" : "knomo-card",
-			attr: cardAttrs,
+		renderKnomoMemoCard(container, memo, {
+			generation,
+			renderIndex,
+			includeActions,
+			randomCard,
+			activeMenuMemoId: this.activeMenuMemoId,
+			deletedMemoIds: this.deletedMemoIds,
+			getA11yId: (id) => this.getA11yId(id),
+			formatDisplayTime: formatMemoDisplayTime,
+			formatSettingsText,
+			getMarkdownPriority: getMarkdownRenderPriority,
+			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority) => {
+				this.queueMemoMarkdown(memoRecord, content, renderGeneration, priority);
+			},
+			queueSourceReferenceMarkdown: (content, text, sourcePath, renderGeneration) => {
+				this.queueSourceReferenceMarkdown(content, text, sourcePath, renderGeneration);
+			},
 		});
-		if (randomCardDescriptionId !== null) {
-			card.createSpan({
-				cls: "knomo-visually-hidden",
-				text: t("card.openSourceHint"),
-				attr: { id: randomCardDescriptionId },
-			});
-		}
-		const head = card.createDiv({ cls: "knomo-card-head" });
-		head.createDiv({ cls: "knomo-card-time", text: formatMemoDisplayTime(memo.createdAt) });
-		if (includeActions) {
-			const menu = head.createEl("button", {
-				cls: "knomo-card-menu",
-				attr: {
-					type: "button",
-					"aria-label": t("card.moreActions"),
-					"aria-expanded": this.activeMenuMemoId === memo.id ? "true" : "false",
-					"data-action": "toggle-card-menu",
-					"data-memo-id": memo.id,
-				},
-			});
-			setIcon(menu, "more-horizontal");
-
-			const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
-			this.renderCardAction(actions, memo.id, "edit", t("card.edit"));
-			this.renderCardAction(actions, memo.id, "reference", t("card.reference"));
-			this.renderCardAction(actions, memo.id, "copy-text", t("card.copyText"));
-			this.renderCardAction(actions, memo.id, "copy-link", t("card.copyLink"));
-			this.renderCardAction(actions, memo.id, "delete", t("card.delete"));
-		}
-
-		const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
-		this.queueMemoMarkdown(memo, content, generation, markdownPriority);
-		this.renderCardMeta(card, memo, generation);
 	}
 
 	private renderTrashMemoCard(memo: MemoRecord, generation: number, renderIndex: number): void {
 		if (this.cardFlowEl === null) {
 			return;
 		}
-		const markdownPriority = getMarkdownRenderPriority(renderIndex);
-		const busyAction = this.trashBusyMemoActions.get(memo.id) ?? null;
-		const card = this.cardFlowEl.createEl("article", {
-			cls: busyAction !== null ? "knomo-card knomo-trash-card is-busy" : "knomo-card knomo-trash-card",
-			attr: { "data-memo-id": memo.id },
-		});
-		const head = card.createDiv({ cls: "knomo-card-head" });
-		head.createDiv({ cls: "knomo-card-time", text: t("trash.createdAt", { time: formatMemoDisplayTime(memo.createdAt) }) });
-		const actions = head.createDiv({ cls: "knomo-trash-actions" });
-		this.renderTrashAction(actions, memo.id, "restore", busyAction === "restore" ? t("trash.restoring") : t("trash.restore"), busyAction !== null);
-		this.renderTrashAction(actions, memo.id, "purge", busyAction === "purge" ? t("trash.purging") : t("trash.purge"), busyAction !== null);
-
-		const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
-		this.queueMemoMarkdown(memo, content, generation, markdownPriority);
-
-		const meta = card.createDiv({ cls: "knomo-card-meta knomo-trash-meta" });
-		meta.createDiv({ text: t("trash.deletedAt", { time: formatOptionalMemoTime(memo.deletedAt) }) });
-		if (memo.deleteSource !== undefined && memo.deleteSource.trim().length > 0) {
-			meta.createDiv({ text: t("trash.deleteSource", { source: formatDeleteSource(memo.deleteSource) }) });
-		}
-		if (memo.issue !== null) {
-			card.createDiv({ cls: "knomo-card-warning", text: formatSettingsText(memo.issue.message) });
-		}
-	}
-
-	private renderTrashAction(
-		container: HTMLElement,
-		memoId: string,
-		action: "restore" | "purge",
-		label: string,
-		disabled: boolean,
-	): void {
-		container.createEl("button", {
-			cls: action === "purge" ? "knomo-inline-button is-danger" : "knomo-inline-button",
-				text: label,
-				attr: {
-					type: "button",
-					"data-trash-action": action,
-					"data-memo-id": memoId,
-				},
-		}).disabled = disabled;
-	}
-
-	private renderCardMeta(card: HTMLElement, memo: MemoRecord, generation: number): void {
-		if (memo.sourceMemoId !== null && !this.deletedMemoIds.has(memo.sourceMemoId)) {
-			const sourceReferenceText = getSourceReferenceText(memo);
-			const meta = card.createDiv({ cls: "knomo-card-meta knomo-source-reference markdown-rendered" });
-			if (sourceReferenceText === null) {
-				meta.setText(`${t("reference.fromPrefix")}${memo.sourceMemoId}`);
-			} else {
-				this.queueSourceReferenceMarkdown(meta, `${t("reference.fromPrefix")}${sourceReferenceText}`, memo.dailyRef.path, generation);
-			}
-		}
-		if (memo.syncStatus !== "synced") {
-			card.createDiv({ cls: "knomo-card-warning", text: formatSettingsText(memo.issue?.message ?? memo.syncStatus) });
-		}
-		if (memo.issue !== null && memo.syncStatus === "synced") {
-			card.createDiv({ cls: "knomo-card-warning", text: formatSettingsText(memo.issue.message) });
-		}
-	}
-
-	private renderCardAction(container: HTMLElement, memoId: string, action: string, label: string): void {
-		container.createEl("button", {
-			cls: action === "delete" ? "knomo-card-action is-danger" : "knomo-card-action",
-			text: label,
-			attr: {
-				type: "button",
-				role: "menuitem",
-				"data-memo-action": action,
-				"data-memo-id": memoId,
+		renderKnomoTrashMemoCard(this.cardFlowEl, memo, {
+			generation,
+			renderIndex,
+			busyAction: this.trashBusyMemoActions.get(memo.id) ?? null,
+			formatDisplayTime: formatMemoDisplayTime,
+			formatOptionalTime: formatOptionalMemoTime,
+			formatDeleteSource,
+			formatSettingsText,
+			getMarkdownPriority: getMarkdownRenderPriority,
+			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority) => {
+				this.queueMemoMarkdown(memoRecord, content, renderGeneration, priority);
 			},
 		});
 	}
@@ -2221,11 +1765,7 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
-		const emptyState = this.cardFlowEl.createDiv({ cls: "knomo-empty-state" });
-		emptyState.createDiv({ cls: "knomo-empty-title", text: title });
-		if (description.length > 0) {
-			emptyState.createDiv({ cls: "knomo-empty-description", text: description });
-		}
+		renderKnomoEmptyState(this.cardFlowEl, title, description);
 	}
 
 	private async handleRootClick(event: MouseEvent): Promise<void> {
@@ -2234,10 +1774,10 @@ export class KnomoView extends ItemView {
 			return;
 		}
 
-		const tagToggleEl = target.closest("[data-tag-toggle]");
-		if (tagToggleEl?.instanceOf(HTMLElement)) {
+		const route = getRootClickRoute(target, this.currentLayout === "mobile");
+		if (route.type === "tag-toggle") {
 			event.preventDefault();
-			const tag = tagToggleEl.getAttr("data-tag-toggle");
+			const tag = route.tag;
 			if (tag === null) {
 				return;
 			}
@@ -2250,14 +1790,13 @@ export class KnomoView extends ItemView {
 			return;
 		}
 
-		const tagEl = target.closest("[data-tag]");
-		if (tagEl?.instanceOf(HTMLElement)) {
+		if (route.type === "tag") {
 			event.preventDefault();
-			const tag = tagEl.getAttr("data-tag");
+			const tag = route.tag;
 			if (tag === null) {
 				return;
 			}
-			const tagKey = tagEl.getAttr("data-tag-key") ?? normalizeTagKey(tag);
+			const tagKey = route.tagKey ?? normalizeTagKey(tag);
 			if (tagKey.length === 0) {
 				return;
 			}
@@ -2279,197 +1818,183 @@ export class KnomoView extends ItemView {
 			return;
 		}
 
-		const navEl = target.closest("[data-nav]");
-		if (navEl?.instanceOf(HTMLElement)) {
-			const nav = navEl.getAttr("data-nav");
-			if (isSidebarNav(nav)) {
-				this.setSidebarNav(nav);
+		if (route.type === "nav") {
+			if (isSidebarNav(route.nav)) {
+				this.setSidebarNav(route.nav);
 			}
 			return;
 		}
 
-		const titleModeEl = target.closest("[data-title-mode]");
-		if (titleModeEl?.instanceOf(HTMLElement)) {
-			const mode = titleModeEl.getAttr("data-title-mode");
-			if (isTitleMode(mode)) {
-				this.setTitleMode(mode);
+		if (route.type === "title-mode") {
+			if (isTitleMode(route.mode)) {
+				this.setTitleMode(route.mode);
 			}
 			return;
 		}
 
-		const searchDateEl = target.closest("[data-search-date]");
-		if (searchDateEl?.instanceOf(HTMLElement)) {
-			const filter = searchDateEl.getAttr("data-search-date");
-				if (isSearchDateFilter(filter)) {
-					if (this.currentLayout === "mobile" && this.mobileSearchPageOpen) {
-						this.setMobileSearchDateFilter(filter);
-					} else {
-						this.setSearchDateFilter(filter, searchDateEl);
-					}
+		if (route.type === "search-date") {
+			if (isSearchDateFilter(route.filter)) {
+				if (this.currentLayout === "mobile" && this.mobileSearchPageOpen) {
+					this.setMobileSearchDateFilter(route.filter);
+				} else {
+					this.setSearchDateFilter(route.filter, route.element);
 				}
-			return;
-		}
-
-		const trashActionEl = target.closest("[data-trash-action]");
-		if (trashActionEl?.instanceOf(HTMLElement)) {
-			const memoId = trashActionEl.getAttr("data-memo-id");
-			const action = trashActionEl.getAttr("data-trash-action");
-			const memo = this.trashMemos?.find((item) => item.id === memoId) ?? null;
-			if (memo !== null && isTrashAction(action)) {
-				await this.handleTrashAction(action, memo);
 			}
 			return;
 		}
 
-		const memoActionEl = target.closest("[data-memo-action]");
-		if (memoActionEl?.instanceOf(HTMLElement)) {
-			const memoId = memoActionEl.getAttr("data-memo-id");
-			const action = memoActionEl.getAttr("data-memo-action");
-			const memo = this.memos.find((item) => item.id === memoId);
-			if (memo !== undefined && action !== null) {
-				await this.handleMemoAction(action, memo);
+		if (route.type === "trash-action") {
+			const memo = this.trashMemos?.find((item) => item.id === route.memoId) ?? null;
+			const dispatch = getTrashActionDispatch(route.action);
+			if (memo !== null && dispatch.type === "trash-action") {
+				await this.handleTrashAction(dispatch.action, memo);
 			}
 			return;
 		}
 
-		const actionEl = target.closest("[data-action]");
-		if (actionEl?.instanceOf(HTMLElement)) {
-			const action = actionEl.getAttr("data-action");
-			const memoId = actionEl.getAttr("data-memo-id");
-			if (this.shouldIgnoreHandledMobileToolClick(actionEl, action)) {
+		if (route.type === "memo-action") {
+			const memo = this.memos.find((item) => item.id === route.memoId);
+			const dispatch = getMemoActionDispatch(route.action);
+			if (memo !== undefined && dispatch.type === "memo-action") {
+				await this.handleMemoAction(dispatch.action, memo);
+			}
+			return;
+		}
+
+		if (route.type === "action") {
+			if (this.shouldIgnoreHandledMobileToolClick(route.element, route.action)) {
 				return;
 			}
-			const mobileToolButton = this.currentLayout === "mobile" ? target.closest(".knomo-tool-button") : null;
-			await this.handleAction(action, memoId);
-			if (mobileToolButton?.instanceOf(HTMLElement)) {
-				mobileToolButton.blur();
+			await this.handleAction(route.action, route.memoId);
+			if (route.mobileToolButtonEl !== null) {
+				route.mobileToolButtonEl.blur();
 			}
 			return;
 		}
 
-		const randomReunionCardEl = target.closest("[data-random-reunion-card]");
-		if (randomReunionCardEl?.instanceOf(HTMLElement) && shouldOpenRandomReunionCard(target)) {
-			const memoId = randomReunionCardEl.getAttr("data-memo-id");
-			if (memoId !== null) {
-				await this.openRandomReunionMemo(memoId);
+		if (route.type === "random-reunion-card") {
+			if (route.memoId !== null) {
+				await this.openRandomReunionMemo(route.memoId);
 			}
 			return;
 		}
 
-		if (target.closest(".knomo-card-actions") === null && target.closest(".knomo-card-menu") === null) {
+		if (route.closeCardMenu) {
 			this.closeCardMenu();
 		}
-		if (target.closest(".knomo-scope-popover") === null && target.closest("[data-action='toggle-scope-menu']") === null) {
+		if (route.closeScopeMenu) {
 			this.scopeMenuOpen = false;
 			this.syncRootState();
 		}
-		if (target.closest(".knomo-search-wrap, .knomo-compact-search-wrap, .knomo-search-menu") === null) {
+		if (route.closeDesktopSearch) {
 			this.desktopSearchOpen = false;
 			this.syncRootState();
 		}
-		if (target.closest(".knomo-compact-search-panel") === null && target.closest("[data-action='toggle-compact-search']") === null) {
+		if (route.closeCompactSearch) {
 			this.compactSearchOpen = false;
 			this.syncRootState();
 		}
 	}
 
 	private async handleAction(action: string | null, memoId: string | null): Promise<void> {
-		if (action === null) {
-			return;
-		}
-		if (action === "toggle-card-menu") {
-			if (this.currentLayout !== "mobile") {
-				this.scopeMenuOpen = false;
-				this.desktopSearchOpen = false;
-				this.compactSearchOpen = false;
-				this.syncRootState();
-			}
-			this.activeMenuMemoId = this.activeMenuMemoId === memoId ? null : memoId;
-			this.syncCardMenuState();
-			return;
-		}
-		if (action === "refresh-random-reunion") {
-			await this.refreshRandomReunionMemos();
-			return;
-		}
-		if (action === "load-more") {
-			this.renderNextCardBatch(this.renderGeneration);
-			return;
-		}
-		if (action === "load-more-mobile-search") {
-			this.loadMoreMobileSearchResults();
-			return;
-		}
-		if (action === "reset-list-state") {
-			this.resetToAllNotes();
-			return;
-		}
-		if (action === "close-mobile-search") {
-			this.closeMobileSearchPage();
-			return;
-		}
-		if (action === "open-drawer") {
-			if (this.composerOpen) {
-				this.closeComposerKeepingDraft();
-			}
-			this.mobileDrawerOpen = true;
-		}
-		if (action === "close-drawer") this.mobileDrawerOpen = false;
-		if (action === "toggle-scope-menu") {
-			this.scopeMenuOpen = !this.scopeMenuOpen;
-			this.desktopSearchOpen = false;
-			if (this.currentLayout !== "mobile") {
-				this.compactSearchOpen = false;
-				this.activeMenuMemoId = null;
-			}
-		}
-		if (action === "toggle-sidebar") this.toggleSidebar();
-		if (action === "collapse-sidebar") {
-			if (this.isDrawerLayout()) {
-				this.mobileDrawerOpen = false;
-			} else {
-				this.setSidebarCollapsed(true);
-			}
-		}
-		if (action === "refresh") {
-			await this.handleManualRefresh();
-			return;
-		}
-		if (action === "focus-stats") this.sidebarEl?.querySelector<HTMLElement>(".knomo-sidebar-stats")?.focus();
-		if (action === "open-composer") {
-			this.openComposer();
-			return;
-		}
-		if (action === "close-composer") {
-			this.closeComposerWithConfirm();
-			return;
-		}
-		if (action === "toggle-compact-search") {
-			this.compactSearchOpen = !this.compactSearchOpen;
-			this.desktopSearchOpen = false;
-			if (this.currentLayout !== "mobile") {
-				this.activeMenuMemoId = null;
-			}
-		}
-		if (this.runComposerToolAction(action)) {
-			return;
-		}
-		if (action === "clear-reference") {
-			this.clearReference();
-			return;
-		}
-		if (action === "cancel-edit") {
-			this.cancelEditing();
-			return;
-		}
-		if (action === "save-input") {
-			if (this.currentLayout === "mobile" && Date.now() - this.lastMobileSendPointerAt < 700) {
+		const dispatch = getKnomoActionDispatch(action);
+		switch (dispatch.type) {
+			case "none":
 				return;
-			}
-			await this.saveInput();
-			return;
+			case "toggle-card-menu":
+				if (this.currentLayout !== "mobile") {
+					this.scopeMenuOpen = false;
+					this.desktopSearchOpen = false;
+					this.compactSearchOpen = false;
+					this.syncRootState();
+				}
+				this.activeMenuMemoId = this.activeMenuMemoId === memoId ? null : memoId;
+				this.syncCardMenuState();
+				return;
+			case "refresh-random-reunion":
+				await this.refreshRandomReunionMemos();
+				return;
+			case "load-more":
+				this.renderNextCardBatch(this.renderGeneration);
+				return;
+			case "load-more-mobile-search":
+				this.loadMoreMobileSearchResults();
+				return;
+			case "reset-list-state":
+				this.resetToAllNotes();
+				return;
+			case "close-mobile-search":
+				this.closeMobileSearchPage();
+				return;
+			case "open-drawer":
+				if (this.composerOpen) {
+					this.closeComposerKeepingDraft();
+				}
+				this.mobileDrawerOpen = true;
+				break;
+			case "close-drawer":
+				this.mobileDrawerOpen = false;
+				break;
+			case "toggle-scope-menu":
+				this.scopeMenuOpen = !this.scopeMenuOpen;
+				this.desktopSearchOpen = false;
+				if (this.currentLayout !== "mobile") {
+					this.compactSearchOpen = false;
+					this.activeMenuMemoId = null;
+				}
+				break;
+			case "toggle-sidebar":
+				this.toggleSidebar();
+				break;
+			case "collapse-sidebar":
+				if (this.isDrawerLayout()) {
+					this.mobileDrawerOpen = false;
+				} else {
+					this.setSidebarCollapsed(true);
+				}
+				break;
+			case "refresh":
+				await this.handleManualRefresh();
+				return;
+			case "focus-stats":
+				this.sidebarEl?.querySelector<HTMLElement>(".knomo-sidebar-stats")?.focus();
+				break;
+			case "open-composer":
+				this.openComposer();
+				return;
+			case "close-composer":
+				this.closeComposerWithConfirm();
+				return;
+			case "toggle-compact-search":
+				this.compactSearchOpen = !this.compactSearchOpen;
+				this.desktopSearchOpen = false;
+				if (this.currentLayout !== "mobile") {
+					this.activeMenuMemoId = null;
+				}
+				break;
+			case "composer-tool":
+				if (this.runComposerToolAction(dispatch.action)) {
+					return;
+				}
+				break;
+			case "clear-reference":
+				this.clearReference();
+				return;
+			case "cancel-edit":
+				this.cancelEditing();
+				return;
+			case "save-input":
+				if (this.currentLayout === "mobile" && Date.now() - this.lastMobileSendPointerAt < 700) {
+					return;
+				}
+				await this.saveInput();
+				return;
+			case "unknown":
+				break;
 		}
-		this.renderUiState();
+		if (shouldRenderAfterActionDispatch(dispatch)) {
+			this.renderUiState();
+		}
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
@@ -2480,8 +2005,8 @@ export class KnomoView extends ItemView {
 		}
 		const target = event.target as Node | null;
 		if ((event.key === "Enter" || event.key === " ") && target?.instanceOf(Element)) {
-			const randomReunionCardEl = target.closest("[data-random-reunion-card]");
-			if (randomReunionCardEl?.instanceOf(HTMLElement) && shouldOpenRandomReunionCard(target)) {
+			const randomReunionCardEl = getRandomReunionCardRoute(target);
+			if (randomReunionCardEl !== null) {
 				const memoId = randomReunionCardEl.getAttr("data-memo-id");
 				if (memoId !== null) {
 					event.preventDefault();
@@ -2530,7 +2055,7 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private async handleMemoAction(action: string, memo: MemoRecord): Promise<void> {
+	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
 		this.activeMenuMemoId = null;
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		try {
@@ -3224,11 +2749,11 @@ export class KnomoView extends ItemView {
 		if (!target?.instanceOf(Element)) {
 			return;
 		}
-		const toolButton = target.closest(".knomo-tool-button");
-		if (!toolButton?.instanceOf(HTMLElement)) {
+		const toolButtonRoute = getComposerToolButtonRoute(target);
+		if (toolButtonRoute === null) {
 			return;
 		}
-		const action = toolButton.getAttr("data-action");
+		const { action, element: toolButton } = toolButtonRoute;
 		if (action === null) {
 			return;
 		}
@@ -3708,21 +3233,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private parseMemoLocalDate(memo: MemoRecord): Date | null {
-		const createdAtDate = parseLocalDateText(memo.createdAt);
-		if (createdAtDate !== null) {
-			return createdAtDate;
-		}
-		const dailyStatus = this.syncOrchestrator.getDailyNotesStatus();
-		if (dailyStatus.enabled && dailyStatus.format !== null) {
-			const dailyDate = parseDailyNoteDateFromPath(memo.dailyRef.path, {
-				folder: dailyStatus.folder,
-				format: dailyStatus.format,
-			});
-			if (dailyDate !== null) {
-				return applyMemoBlockTime(dailyDate, memo.dailyRef.lastKnownBlock);
-			}
-		}
-		return parseLocalDateText(memo.monthlyRef.dateHeading) ?? parseLocalDateText(memo.monthlyRef.path);
+		return parseMemoLocalDate(memo, this.syncOrchestrator.getDailyNotesStatus());
 	}
 
 	private closeCardMenu(): void {
@@ -3792,11 +3303,7 @@ export class KnomoView extends ItemView {
 		if (this.sidebarCollapsed || this.sidebarResizerEl === null) {
 			return;
 		}
-		this.sidebarDrag = {
-			pointerId: event.pointerId,
-			startX: event.clientX,
-			startWidth: this.sidebarWidth,
-		};
+		this.sidebarDrag = createSidebarDragState(event, this.sidebarWidth);
 		this.sidebarResizerEl.setPointerCapture(event.pointerId);
 		this.rootEl?.toggleClass("is-resizing-sidebar", true);
 		event.preventDefault();
@@ -3806,7 +3313,7 @@ export class KnomoView extends ItemView {
 		if (this.sidebarDrag === null || this.sidebarDrag.pointerId !== event.pointerId) {
 			return;
 		}
-		this.setSidebarWidth(this.sidebarDrag.startWidth + event.clientX - this.sidebarDrag.startX, false);
+		this.setSidebarWidth(getSidebarDragWidth(this.sidebarDrag, event.clientX), false);
 	}
 
 	private stopSidebarResize(event: PointerEvent): void {
@@ -3822,7 +3329,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private setSidebarWidth(width: number, persist: boolean): void {
-		this.sidebarWidth = clamp(Math.round(width), SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+		this.sidebarWidth = clampSidebarWidth(width);
 		this.syncRootState();
 		if (persist) {
 			void this.persistSidebarPreferences();
@@ -3864,36 +3371,23 @@ export class KnomoView extends ItemView {
 	}
 
 	private resetVisibleMemos(): void {
-		this.currentFeedItems = [];
-		this.currentRenderOffset = 0;
-		this.isLoadingMore = false;
-		this.hasMoreFeedItems = false;
+		this.cardFlowBatcher.reset();
 	}
 
 	private invalidateMemoSearchCache(): void {
-		this.memoSearchTextCache.clear();
-		this.memoSearchCacheSource = this.memos;
+		this.memoSearchCache.invalidate(this.memos);
 	}
 
 	private getMemoSearchText(memo: MemoRecord): string {
-		if (this.memoSearchCacheSource !== this.memos) {
-			this.invalidateMemoSearchCache();
-		}
-		const cachedText = this.memoSearchTextCache.get(memo.id);
-		if (cachedText !== undefined) {
-			return cachedText;
-		}
-		const searchText = buildMemoSearchText(memo);
-		this.memoSearchTextCache.set(memo.id, searchText);
-		return searchText;
+		return this.memoSearchCache.get(memo, this.memos);
 	}
 
 	private handleCardFlowScroll(): void {
 		const cardFlow = this.cardFlowEl;
 		if (
 			cardFlow === null ||
-			this.loadMoreObserver !== null ||
-			!this.hasMoreFeedItems ||
+			this.cardFlowSentinel.isObserving ||
+			!this.cardFlowBatcher.hasMoreItems ||
 			cardFlow.scrollTop + cardFlow.clientHeight < cardFlow.scrollHeight - 160
 		) {
 			return;
@@ -3950,7 +3444,7 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private async handleTrashAction(action: "restore" | "purge", memo: MemoRecord): Promise<void> {
+	private async handleTrashAction(action: TrashAction, memo: MemoRecord): Promise<void> {
 		if (this.trashBusyMemoActions.has(memo.id)) {
 			return;
 		}
@@ -4087,56 +3581,15 @@ export class KnomoView extends ItemView {
 	}
 
 	private queueMemoMarkdown(memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority): void {
-		this.enqueueMarkdownRender(priority, generation, () => this.renderMemoMarkdown(memo, container, generation));
+		this.markdownRenderQueue.enqueue(priority, generation, () => this.renderMemoMarkdown(memo, container, generation));
 	}
 
 	private queueSourceReferenceMarkdown(container: HTMLElement, text: string, sourcePath: string, generation: number): void {
-		this.enqueueMarkdownRender("normal", generation, () => this.renderSourceReferenceMarkdown(container, text, sourcePath, generation));
-	}
-
-	private enqueueMarkdownRender(priority: MarkdownRenderPriority, generation: number, run: () => Promise<void>): void {
-		if (generation !== this.renderGeneration) {
-			return;
-		}
-		const task: MarkdownRenderTask = { generation, run };
-		if (priority === "high") {
-			this.highPriorityMarkdownQueue.push(task);
-		} else {
-			this.normalPriorityMarkdownQueue.push(task);
-		}
-		this.pumpMarkdownRenderQueue();
-	}
-
-	private pumpMarkdownRenderQueue(): void {
-		while (this.activeMarkdownRenderCount < MARKDOWN_RENDER_CONCURRENCY) {
-			const task = this.highPriorityMarkdownQueue.shift() ?? this.normalPriorityMarkdownQueue.shift();
-			if (task === undefined) {
-				return;
-			}
-			if (task.generation !== this.renderGeneration) {
-				continue;
-			}
-			this.activeMarkdownRenderCount += 1;
-			void this.runMarkdownRenderTask(task);
-		}
-	}
-
-	private async runMarkdownRenderTask(task: MarkdownRenderTask): Promise<void> {
-		try {
-			if (task.generation === this.renderGeneration) {
-				await task.run();
-			}
-		} catch {
-			// 单张卡片渲染失败会在任务内部降级，队列本身只负责继续调度。
-		} finally {
-			this.activeMarkdownRenderCount = Math.max(0, this.activeMarkdownRenderCount - 1);
-			this.pumpMarkdownRenderQueue();
-		}
+		this.markdownRenderQueue.enqueue("normal", generation, () => this.renderSourceReferenceMarkdown(container, text, sourcePath, generation));
 	}
 
 	private clearMarkdownRenderQueue(): void {
-		this.highPriorityMarkdownQueue = [];
-		this.normalPriorityMarkdownQueue = [];
+		this.markdownRenderQueue.clear();
 	}
 
 	private async renderMemoMarkdown(memo: MemoRecord, container: HTMLElement, generation: number): Promise<void> {
@@ -4336,666 +3789,12 @@ export class KnomoView extends ItemView {
 	}
 }
 
-interface TagSuggestion {
-	tag: string;
-	result: SearchResult | null;
-}
-
-class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
-	private tagsSnapshot: string[] | null = null;
-
-	constructor(
-		app: App,
-		private readonly inputEl: HTMLTextAreaElement,
-		private readonly onInputChanged: () => void,
-	) {
-		super(app, inputEl as unknown as HTMLInputElement);
-		this.limit = 0;
-	}
-
-	open(): void {
-		super.open();
-		this.hidePopoverUntilPositioned();
-		this.queuePopoverReposition();
-	}
-
-	close(): void {
-		this.showPositionedPopover();
-		super.close();
-		this.tagsSnapshot = null;
-	}
-
-	openForCurrentTrigger(): void {
-		this.open();
-		this.queuePopoverReposition();
-		const container = this.getSuggestionContainer();
-		if (container !== null) {
-			container.addClass("knomo-tag-suggest-popover");
-			container.style.position = "fixed";
-			container.style.zIndex = "10020";
-		}
-	}
-
-	protected getSuggestions(): TagSuggestion[] {
-		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
-		if (range === null) {
-			return [];
-		}
-		const tags = this.getTagsSnapshot();
-		const suggestions = range.query.length === 0
-			? tags.map((tag) => ({ tag, result: null }))
-			: this.getFuzzySuggestions(tags, range.query);
-		if (suggestions.length > 0) {
-			this.queuePopoverReposition();
-		}
-		return suggestions;
-	}
-
-	renderSuggestion(value: TagSuggestion, el: HTMLElement): void {
-		if (value.result === null) {
-			el.setText(value.tag);
-			return;
-		}
-		el.empty();
-		renderResults(el, value.tag, value.result);
-	}
-
-	selectSuggestion(value: TagSuggestion, _evt: MouseEvent | KeyboardEvent): void {
-		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
-		if (range === null) {
-			this.close();
-			return;
-		}
-		const next = replaceTagQueryWithSuggestion(this.inputEl.value, range, value.tag);
-		this.inputEl.value = next.value;
-		this.inputEl.setSelectionRange(next.cursor, next.cursor);
-		this.onInputChanged();
-		this.close();
-	}
-
-	private hidePopoverUntilPositioned(): void {
-		const container = this.getSuggestionContainer();
-		if (container === null) {
-			return;
-		}
-		container.addClass("knomo-tag-suggest-popover");
-		container.addClass("knomo-tag-suggest-positioning");
-	}
-
-	private showPositionedPopover(container = this.getSuggestionContainer()): void {
-		container?.removeClass("knomo-tag-suggest-positioning");
-	}
-
-	private getTagsSnapshot(): string[] {
-		if (this.tagsSnapshot === null) {
-			this.tagsSnapshot = this.getVaultTags();
-		}
-		return this.tagsSnapshot;
-	}
-
-	private getFuzzySuggestions(tags: string[], query: string): TagSuggestion[] {
-		const search = prepareFuzzySearch(query);
-		const suggestions: TagSuggestion[] = [];
-		for (const tag of tags) {
-			const result = search(tag);
-			if (result !== null) {
-				suggestions.push({ tag, result });
-			}
-		}
-		return suggestions;
-	}
-
-	private getVaultTags(): string[] {
-		const tags = new Set<string>();
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const cache = this.app.metadataCache.getFileCache(file);
-			if (cache === null) {
-				continue;
-			}
-			for (const tag of getAllTags(cache) ?? []) {
-				const normalizedTag = tag.replace(/^#/, "");
-				if (normalizedTag.length > 0) {
-					tags.add(normalizedTag);
-				}
-			}
-		}
-		return Array.from(tags).sort((first, second) => first.localeCompare(second));
-	}
-
-	private queuePopoverReposition(): void {
-		const win = this.inputEl.ownerDocument.defaultView;
-		if (win === null) {
-			this.repositionPopover();
-			return;
-		}
-		win.requestAnimationFrame(() => this.repositionPopover());
-	}
-
-	private repositionPopover(): void {
-		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
-		if (range === null) {
-			return;
-		}
-		const anchor = this.getTextareaCharacterRect(range.to);
-		const container = this.getSuggestionContainer();
-		if (anchor === null || container === null) {
-			return;
-		}
-		const layer = this.inputEl.closest(".knomo-mobile-composer-layer");
-		if (layer !== null) {
-			const win = this.inputEl.ownerDocument.defaultView;
-			const viewport = win?.visualViewport ?? null;
-			const viewportTop = viewport ? Math.max(0, viewport.offsetTop) : 0;
-			const topGuard = 52;
-			const gap = 8;
-			const minHeight = 120;
-			const maxHeightLimit = 240;
-			const availableAbove = Math.max(minHeight, anchor.top - viewportTop - topGuard - gap);
-			const maxHeight = Math.min(maxHeightLimit, availableAbove);
-			container.addClass("knomo-tag-suggest-popover");
-			container.style.position = "fixed";
-			container.style.zIndex = "10020";
-			container.style.maxHeight = `${Math.round(maxHeight)}px`;
-			container.style.overflowY = "auto";
-			const measuredHeight = Math.min(maxHeight, Math.max(minHeight, container.offsetHeight || maxHeight));
-			const top = Math.max(viewportTop + topGuard, anchor.top - measuredHeight - gap);
-			const inputRect = this.inputEl.getBoundingClientRect();
-			const viewportLeft = viewport ? Math.max(0, viewport.offsetLeft) : 0;
-			const viewportRight = viewport
-				? viewport.offsetLeft + viewport.width
-				: win?.innerWidth ?? this.inputEl.ownerDocument.documentElement.clientWidth;
-			const viewportMargin = 12;
-			const availableWidth = Math.max(0, viewportRight - viewportLeft - viewportMargin * 2);
-			const contentWidth = this.measureSuggestionContentWidth(container);
-			const targetWidth = contentWidth > 0 ? contentWidth + 44 : inputRect.width - 24;
-			const width = Math.max(0, Math.min(targetWidth, availableWidth));
-			const minLeft = viewportLeft + viewportMargin;
-			const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
-			const left = clamp(anchor.left, minLeft, maxLeft);
-			container.style.left = `${Math.round(left)}px`;
-			container.style.top = `${Math.round(top)}px`;
-			container.style.width = `${Math.round(width)}px`;
-			container.style.right = "";
-			container.style.bottom = "";
-			this.showPositionedPopover(container);
-			return;
-		}
-		container.addClass("knomo-tag-suggest-popover");
-		const win = this.inputEl.ownerDocument.defaultView;
-		const viewport = win?.visualViewport ?? null;
-		const viewportLeft = viewport ? Math.max(0, viewport.offsetLeft) : 0;
-		const viewportRight = viewport
-			? viewport.offsetLeft + viewport.width
-			: win?.innerWidth ?? this.inputEl.ownerDocument.documentElement.clientWidth;
-		const viewportMargin = 12;
-		const availableWidth = Math.max(0, viewportRight - viewportLeft - viewportMargin * 2);
-		const inputRect = this.inputEl.getBoundingClientRect();
-		const contentWidth = this.measureSuggestionContentWidth(container, true, 12);
-		const targetWidth = contentWidth > 0 ? contentWidth : inputRect.width;
-		const width = Math.max(0, Math.min(targetWidth, 320, availableWidth));
-		const minLeft = viewportLeft + viewportMargin;
-		const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
-		const left = clamp(anchor.left, minLeft, maxLeft);
-		container.style.position = "fixed";
-		container.style.left = `${Math.round(left)}px`;
-		container.style.top = `${Math.round(anchor.bottom)}px`;
-		container.style.width = `${Math.round(width)}px`;
-		container.style.right = "";
-		container.style.bottom = "";
-		this.showPositionedPopover(container);
-	}
-
-	private measureSuggestionContentWidth(container: HTMLElement, includeScrollbarWidth = false, extraWidth = 2): number {
-		const doc = this.inputEl.ownerDocument;
-		const items = Array.from(container.querySelectorAll<HTMLElement>(".suggestion-item"));
-		if (items.length === 0) {
-			return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
-		}
-		const host = container.cloneNode(false);
-		if (!host.instanceOf(HTMLElement)) {
-			return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
-		}
-		host.style.position = "fixed";
-		host.style.visibility = "hidden";
-		host.style.pointerEvents = "none";
-		host.style.width = "max-content";
-		host.style.maxWidth = "none";
-		host.style.minWidth = "0";
-		host.style.left = "-10000px";
-		host.style.top = "0";
-		doc.body.appendChild(host);
-		let width = 0;
-		for (const item of items) {
-			const clone = item.cloneNode(true);
-			if (!clone.instanceOf(HTMLElement)) {
-				continue;
-			}
-			clone.style.width = "max-content";
-			clone.style.maxWidth = "none";
-			clone.style.minWidth = "0";
-			host.appendChild(clone);
-			width = Math.max(width, clone.getBoundingClientRect().width);
-		}
-		host.detach();
-		const win = doc.defaultView;
-		if (win === null) {
-			return Math.ceil(width);
-		}
-		const computed = win.getComputedStyle(container);
-		const horizontalInset =
-			parseCssPixels(computed.paddingLeft) +
-			parseCssPixels(computed.paddingRight) +
-			parseCssPixels(computed.borderLeftWidth) +
-			parseCssPixels(computed.borderRightWidth);
-		const scrollbarWidth = includeScrollbarWidth ? measureScrollbarWidth(doc) : 0;
-		return Math.ceil(width + horizontalInset + scrollbarWidth + extraWidth);
-	}
-
-	private getTextareaCharacterRect(index: number): DOMRect | null {
-		const doc = this.inputEl.ownerDocument;
-		const win = doc.defaultView;
-		if (win === null) {
-			return null;
-		}
-		const inputRect = this.inputEl.getBoundingClientRect();
-		const computed = win.getComputedStyle(this.inputEl);
-		const mirror = doc.body.createDiv();
-		const mirrorStyle = mirror.style;
-		mirrorStyle.position = "fixed";
-		mirrorStyle.visibility = "hidden";
-		mirrorStyle.pointerEvents = "none";
-		mirrorStyle.whiteSpace = "pre-wrap";
-		mirrorStyle.overflowWrap = "break-word";
-		mirrorStyle.wordBreak = computed.wordBreak;
-		mirrorStyle.boxSizing = computed.boxSizing;
-		mirrorStyle.width = `${inputRect.width}px`;
-		mirrorStyle.minHeight = computed.minHeight;
-		mirrorStyle.padding = computed.padding;
-		mirrorStyle.border = computed.border;
-		mirrorStyle.font = computed.font;
-		mirrorStyle.lineHeight = computed.lineHeight;
-		mirrorStyle.letterSpacing = computed.letterSpacing;
-		mirrorStyle.textTransform = computed.textTransform;
-		mirrorStyle.left = `${inputRect.left - this.inputEl.scrollLeft}px`;
-		mirrorStyle.top = `${inputRect.top - this.inputEl.scrollTop}px`;
-		mirror.setText(this.inputEl.value.slice(0, index));
-		const marker = mirror.createSpan({ text: this.inputEl.value.charAt(index) || "\u200b" });
-		const rect = marker.getBoundingClientRect();
-		mirror.detach();
-		return rect;
-	}
-
-	private getSuggestionContainer(): HTMLElement | null {
-		const internal = this as unknown as { suggestEl?: unknown; popover?: unknown };
-		const directContainer = this.asHTMLElement(internal.suggestEl) ?? this.getContainerElement(internal.suggestEl) ?? this.getContainerElement(internal.popover);
-		if (directContainer !== null) {
-			return directContainer;
-		}
-		const containers = Array.from(this.inputEl.ownerDocument.querySelectorAll<HTMLElement>(".suggestion-container"));
-		return containers.length > 0 ? containers[containers.length - 1] : null;
-	}
-
-	private getContainerElement(value: unknown): HTMLElement | null {
-		if (value === null || typeof value !== "object") {
-			return null;
-		}
-		const candidate = value as { containerEl?: unknown; el?: unknown };
-		return this.asHTMLElement(candidate.containerEl) ?? this.asHTMLElement(candidate.el);
-	}
-
-	private asHTMLElement(value: unknown): HTMLElement | null {
-		const win = this.inputEl.ownerDocument.defaultView;
-		if (win === null) {
-			return null;
-		}
-		return value instanceof win.HTMLElement ? value : null;
-	}
-}
-
-function getMemoStats(memos: MemoRecord[]): { memoCount: number; tagCount: number; imageCount: number; wordCount: number } {
-	return {
-		memoCount: memos.length,
-		tagCount: new Set(memos.flatMap((memo) => {
-			return memo.tags.map(normalizeTagKey).filter((tagKey) => tagKey.length > 0);
-		})).size,
-		imageCount: memos.reduce((count, memo) => count + getMemoImages(memo).length, 0),
-		wordCount: memos.reduce((count, memo) => count + memo.contentSnapshot.replace(/\s/g, "").length, 0),
-	};
-}
-
-function collectTags(memos: MemoRecord[], displayTags: Map<string, string>): TagSummary[] {
-	const counts = new Map<string, number>();
-	const fallbackNames = new Map<string, string>();
-	for (const memo of memos) {
-		for (const tag of memo.tags) {
-			const key = normalizeTagKey(tag);
-			if (key.length === 0) {
-				continue;
-			}
-			counts.set(key, (counts.get(key) ?? 0) + 1);
-			if (!fallbackNames.has(key)) {
-				fallbackNames.set(key, normalizeTagDisplay(tag));
-			}
-		}
-	}
-	return [...counts.entries()]
-		.map(([key, count]) => ({
-			key,
-			name: getTagDisplayName(key, fallbackNames.get(key) ?? key, displayTags),
-			count,
-		}))
-		.sort((left, right) => {
-			return right.count - left.count || left.name.localeCompare(right.name, "zh");
-		});
-}
-
-function collectVaultTagDisplayMap(app: App): Map<string, string> {
-	const sources: TagDisplaySource[] = [];
-	let order = 0;
-	for (const file of app.vault.getMarkdownFiles()) {
-		const cache = app.metadataCache.getFileCache(file);
-		if (cache === null) {
-			continue;
-		}
-		for (const tag of getAllTags(cache) ?? []) {
-			sources.push({
-				tag,
-				modifiedTime: file.stat.mtime,
-				order,
-			});
-			order += 1;
-		}
-	}
-	return buildTagDisplayMap(sources);
-}
-
-function getTagDisplayName(key: string, fallbackName: string, displayTags: Map<string, string>): string {
-	const displayName = displayTags.get(key);
-	if (displayName !== undefined) {
-		return displayName;
-	}
-	const keyParts = key.split("/").filter((part) => part.length > 0);
-	const fallbackParts = fallbackName.split("/").filter((part) => part.length > 0);
-	const displayParts = keyParts.map((keyPart, index) => {
-		const prefixKey = keyParts.slice(0, index + 1).join("/");
-		const prefixDisplay = displayTags.get(prefixKey);
-		if (prefixDisplay !== undefined) {
-			const prefixParts = prefixDisplay.split("/").filter((part) => part.length > 0);
-			return prefixParts[prefixParts.length - 1] ?? keyPart;
-		}
-		return fallbackParts[index] ?? keyPart;
-	});
-	return displayParts.join("/");
-}
-
-function tagMatchesActiveTagKey(tag: string, activeTagKey: string): boolean {
-	const tagKey = normalizeTagKey(tag);
-	return tagKey === activeTagKey || tagKey.startsWith(`${activeTagKey}/`);
-}
-
-function getMemoImages(memo: MemoRecord): MemoRecord["images"] {
-	return memo.images.filter(isSupportedMemoImage);
-}
-
-function getSourceReferenceText(memo: MemoRecord): string | null {
-	const sourceMemoId = memo.sourceMemoId ?? memo.references[0]?.memoId ?? null;
-	const referenceText = memo.references[0]?.referenceText ?? null;
-	if (sourceMemoId === null || referenceText === null) {
-		return null;
-	}
-	return withMemoIdAlias(referenceText, sourceMemoId);
-}
-
-function getEmptyStateTitle(activeNav: SidebarNav): string {
-	if (activeNav === "review") {
-		return t("empty.review");
-	}
-	if (activeNav === "random") {
-		return t("empty.random");
-	}
-	return t("empty.generic");
-}
-
-function formatRegularFilterSummary(conditions: RegularFilterCondition[], count: number): string {
-	if (conditions.length === 1) {
-		const condition = conditions[0];
-		if (condition.type === "tag") {
-			return t("filterSummary.tag", { tag: condition.text, count });
-		}
-		if (condition.type === "search") {
-			return t("filterSummary.search", { query: condition.query, count });
-		}
-		return t("filterSummary.label", { label: condition.text, count });
-	}
-	const conditionText = conditions.map((condition) => condition.text).join(t("filterSummary.separator"));
-	const key = conditions.some((condition) => condition.type === "search")
-		? "filterSummary.comboSearch"
-		: "filterSummary.combo";
-	return t(key, { conditions: conditionText, count });
-}
-
-function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition[], summary: string): string {
-	if (conditions.length > 1) {
-		return summary;
-	}
-	const condition = conditions[0];
-	if (condition.type === "tag") {
-		return t("filterEmpty.tag", { tag: condition.text });
-	}
-	if (condition.type === "search") {
-		return t("filterEmpty.search", { query: condition.query });
-	}
-	if (condition.type === "date") {
-		return getSearchDateEmptyTitle(condition.filter);
-	}
-	return getScopeEmptyTitle(condition.filter);
-}
-
-function formatMobileSearchSummary(query: string, dateFilter: SearchDateFilter | null, count: number): string | null {
-	const hasQuery = query.length > 0;
-	if (!hasQuery && dateFilter === null) {
-		return null;
-	}
-	if (hasQuery && dateFilter !== null) {
-		const conditions = [
-			t("mobileSearchSummary.searchCondition", { query }),
-			getSearchDateLabel(dateFilter),
-		].join(t("mobileSearchSummary.separator"));
-		return t("mobileSearchSummary.combo", { conditions, count });
-	}
-	if (hasQuery) {
-		return t("mobileSearchSummary.search", { query, count });
-	}
-	if (dateFilter !== null) {
-		return t("mobileSearchSummary.date", { label: getSearchDateLabel(dateFilter), count });
-	}
-	return null;
-}
-
-function formatMobileSearchEmptyTitle(query: string, dateFilter: SearchDateFilter | null): string {
-	const hasQuery = query.length > 0;
-	if (hasQuery && dateFilter !== null) {
-		const conditions = [
-			t("mobileSearchSummary.searchCondition", { query }),
-			getSearchDateLabel(dateFilter),
-		].join(t("mobileSearchSummary.separator"));
-		return t("mobileSearchSummary.combo", { conditions, count: 0 });
-	}
-	if (hasQuery) {
-		return t("mobileSearchSummary.emptySearch", { query });
-	}
-	if (dateFilter !== null) {
-		return getSearchDateEmptyTitle(dateFilter);
-	}
-	return t("search.noResults");
-}
-
-function getSearchDateEmptyTitle(filter: SearchDateFilter): string {
-	if (filter === "week") return t("filterEmpty.date.week");
-	if (filter === "month") return t("filterEmpty.date.month");
-	if (filter === "last-7") return t("filterEmpty.date.last7");
-	if (filter === "last-30") return t("filterEmpty.date.last30");
-	if (filter === "last-week") return t("filterEmpty.date.lastWeek");
-	return t("filterEmpty.date.lastMonth");
-}
-
-function getScopeEmptyTitle(filter: SummaryScopeFilter): string {
-	if (filter === "no-tag") return t("filterEmpty.scope.noTag");
-	if (filter === "with-link") return t("filterEmpty.scope.withLink");
-	if (filter === "with-image") return t("filterEmpty.scope.withImage");
-	return t("filterEmpty.scope.anniversary");
-}
-
-function formatTagFilterText(tag: string): string {
-	return `#${tag.replace(/^#/, "")}`;
-}
-
-function isSummaryScopeFilter(filter: ScopeFilter): filter is SummaryScopeFilter {
-	return filter === "no-tag" || filter === "with-link" || filter === "with-image" || filter === "anniversary";
-}
-
-function shouldOpenRandomReunionCard(target: Element): boolean {
-	return target.closest("a, button, input, textarea, select, [data-tag], .knomo-card-actions, .knomo-card-menu") === null;
-}
-
 function isListEnterInputEvent(event: InputEvent): boolean {
 	return event.inputType === "insertParagraph" || event.inputType === "insertLineBreak" || (event.inputType === "insertText" && event.data === "\n");
 }
 
 function getMarkdownRenderPriority(renderIndex: number): MarkdownRenderPriority {
 	return renderIndex < INITIAL_VISIBLE_RENDER_COUNT ? "high" : "normal";
-}
-
-function buildMemoSearchText(memo: MemoRecord): string {
-	return [
-		memo.contentSnapshot,
-		formatMemoDisplayTime(memo.createdAt),
-		memo.createdAt,
-		memo.tags.join(" "),
-		memo.links.map((link) => link.target).join(" "),
-		getMemoImages(memo).map((image) => image.path).join(" "),
-	].join(" ").toLowerCase();
-}
-
-function parseLocalDateText(value: string): Date | null {
-	const match = value.match(/(?:^|[^\d])(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
-	if (match === null) {
-		return null;
-	}
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	const hours = match[4] === undefined ? 0 : Number(match[4]);
-	const minutes = match[5] === undefined ? 0 : Number(match[5]);
-	const seconds = match[6] === undefined ? 0 : Number(match[6]);
-	const date = new Date(year, month - 1, day, hours, minutes, seconds, 0);
-	if (
-		date.getFullYear() !== year ||
-		date.getMonth() !== month - 1 ||
-		date.getDate() !== day ||
-		date.getHours() !== hours ||
-		date.getMinutes() !== minutes ||
-		date.getSeconds() !== seconds
-	) {
-		return null;
-	}
-	return date;
-}
-
-function applyMemoBlockTime(date: Date, block: string): Date {
-	const timeMatch = block.match(/(?:^|\n)- (\d{2}):(\d{2})(?::(\d{2}))?\b/);
-	if (timeMatch === null) {
-		return date;
-	}
-	const nextDate = new Date(date);
-	nextDate.setHours(Number(timeMatch[1]), Number(timeMatch[2]), timeMatch[3] === undefined ? 0 : Number(timeMatch[3]), 0);
-	return nextDate;
-}
-
-function matchesScope(memo: MemoRecord, filter: ScopeFilter): boolean {
-	const date = new Date(memo.createdAt);
-	const today = startOfDay(new Date());
-	if (filter === "all") return true;
-	if (filter === "no-tag") return memo.tags.length === 0;
-	if (filter === "with-link") return memo.links.length > 0;
-	if (filter === "with-image") return getMemoImages(memo).length > 0;
-	if (filter === "anniversary") {
-		return date.getMonth() === today.getMonth() && date.getDate() === today.getDate() && date.getFullYear() !== today.getFullYear();
-	}
-	if (filter === "week") {
-		const mondayOffset = (today.getDay() + 6) % 7;
-		const start = addDays(today, -mondayOffset);
-		return date >= start && date < addDays(start, 7);
-	}
-	if (filter === "month") {
-		return date >= new Date(today.getFullYear(), today.getMonth(), 1) && date < new Date(today.getFullYear(), today.getMonth() + 1, 1);
-	}
-	if (filter === "last-month") {
-		return date >= new Date(today.getFullYear(), today.getMonth() - 1, 1) && date < new Date(today.getFullYear(), today.getMonth(), 1);
-	}
-	if (filter === "last-7") return date >= addDays(today, -6) && date < addDays(today, 1);
-	if (filter === "last-30") return date >= addDays(today, -29) && date < addDays(today, 1);
-	return true;
-}
-
-function getScopeLabel(filter: ScopeFilter): string {
-	return ALL_SCOPE_OPTIONS.find((option) => option.filter === filter)?.label ?? t("nav.allNotes");
-}
-
-function isTitleMode(value: string | null): value is TitleMode {
-	return value !== null && TITLE_MODE_OPTIONS.some((option) => option.mode === value);
-}
-
-function isSearchDateFilter(value: string | null): value is SearchDateFilter {
-	return value !== null && SEARCH_DATE_OPTIONS.some((option) => option.filter === value);
-}
-
-function getSearchDateLabel(filter: SearchDateFilter): string {
-	return SEARCH_DATE_OPTIONS.find((option) => option.filter === filter)?.label ?? t("search.label");
-}
-
-function isSidebarNav(value: string | null): value is SidebarNav {
-	return value !== null && getAllSidebarNavItems().some((item) => item.nav === value);
-}
-
-function getSidebarNavLabel(value: SidebarNav): string {
-	return getAllSidebarNavItems().find((item) => item.nav === value)?.label ?? t("nav.allNotes");
-}
-
-function getAllSidebarNavItems(): SidebarNavItem[] {
-	return [...SIDEBAR_NAV_ITEMS, TRASH_NAV_ITEM];
-}
-
-function isTrashAction(value: string | null): value is "restore" | "purge" {
-	return value === "restore" || value === "purge";
-}
-
-function matchesSearchDateFilter(date: Date, filter: SearchDateFilter): boolean {
-	const today = startOfDay(new Date());
-	if (filter === "week") {
-		const mondayOffset = (today.getDay() + 6) % 7;
-		const start = addDays(today, -mondayOffset);
-		return date >= start && date < addDays(start, 7);
-	}
-	if (filter === "last-week") {
-		const mondayOffset = (today.getDay() + 6) % 7;
-		const thisWeekStart = addDays(today, -mondayOffset);
-		const lastWeekStart = addDays(thisWeekStart, -7);
-		return date >= lastWeekStart && date < thisWeekStart;
-	}
-	if (filter === "month") {
-		return date >= new Date(today.getFullYear(), today.getMonth(), 1) && date < new Date(today.getFullYear(), today.getMonth() + 1, 1);
-	}
-	if (filter === "last-month") {
-		return date >= new Date(today.getFullYear(), today.getMonth() - 1, 1) && date < new Date(today.getFullYear(), today.getMonth(), 1);
-	}
-	if (filter === "last-7") return date >= addDays(today, -6) && date < addDays(today, 1);
-	if (filter === "last-30") return date >= addDays(today, -29) && date < addDays(today, 1);
-	return true;
-}
-
-function needsAllMemos(scope: ScopeFilter, query: string, searchDateFilter: SearchDateFilter | null): boolean {
-	return query.trim().length > 0 || searchDateFilter !== null || scope === "anniversary";
 }
 
 function toMarkdownQuote(content: string): string {
@@ -5007,16 +3806,6 @@ function toMarkdownQuote(content: string): string {
 
 function shouldUseMobileCompact(mode: MobileCompactMode): boolean {
 	return mode === "auto" || mode === "on";
-}
-
-function startOfDay(date: Date): Date {
-	return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addDays(date: Date, days: number): Date {
-	const nextDate = new Date(date);
-	nextDate.setDate(nextDate.getDate() + days);
-	return nextDate;
 }
 
 function formatMemoDisplayTime(value: string): string {
@@ -5043,7 +3832,7 @@ function formatDeleteSource(value: string): string {
 	return value;
 }
 
-function formatTrashActionErrorMessage(action: "restore" | "purge", error: unknown): string {
+function formatTrashActionErrorMessage(action: TrashAction, error: unknown): string {
 	const actionLabel = action === "restore" ? t("error.restoreFailed") : t("error.purgeFailed");
 	const fallbackMessage = action === "restore" ? t("error.restoreFailedRetry") : t("error.purgeFailedRetry");
 	if (!(error instanceof Error) || error.message.length === 0) {
@@ -5057,27 +3846,4 @@ function formatTrashActionErrorMessage(action: "restore" | "purge", error: unkno
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
-}
-
-function parseCssPixels(value: string): number {
-	const parsed = Number.parseFloat(value);
-	return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function measureScrollbarWidth(doc: Document): number {
-	const outer = doc.body.createDiv();
-	const inner = outer.createDiv();
-	outer.style.position = "fixed";
-	outer.style.visibility = "hidden";
-	outer.style.pointerEvents = "none";
-	outer.style.overflow = "scroll";
-	outer.style.width = "100px";
-	outer.style.height = "100px";
-	outer.style.left = "-10000px";
-	outer.style.top = "0";
-	inner.style.width = "100%";
-	inner.style.height = "120px";
-	const scrollbarWidth = outer.offsetWidth - outer.clientWidth;
-	outer.detach();
-	return Math.max(0, scrollbarWidth);
 }

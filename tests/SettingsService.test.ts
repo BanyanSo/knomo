@@ -296,10 +296,12 @@ async function ensureObsidianStub(): Promise<void> {
 				"let languageValue = 'en';",
 				"function getLanguage() { return languageValue; }",
 				"getLanguage.set = (value) => { languageValue = value; };",
+				"function setIcon(el, icon) { if (el && typeof el.setAttr === 'function') el.setAttr('data-icon', icon); return el; }",
+				"function addIcon() {}",
 				"let localeValue = 'en';",
 				"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
 				"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
-				"module.exports = { TFile, TFolder, Vault, normalizePath, moment, getLanguage };",
+				"module.exports = { TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon };",
 			].join("\n"),
 	);
 }

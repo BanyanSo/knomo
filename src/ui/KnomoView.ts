@@ -65,20 +65,8 @@ import { KnomoTagSuggest } from "./KnomoTagSuggest";
 import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { MemoSearchCache } from "./MemoSearchCache";
+import { MobileComposerController } from "./MobileComposerController";
 import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
-import {
-	attachMobileComposerLayer,
-	clearMobileComposerLayerState as clearMobileComposerLayerDomState,
-	createMobileComposerLayer,
-	isComposerInMobileLayer,
-	moveComposerToMobileLayer,
-	restoreComposerFromMobileLayer,
-} from "./MobileComposerLayer";
-import {
-	calculateMobileComposerMeasurements,
-	calculateMobileKeyboardMetrics,
-	getMobileKeyboardFallbackHeight,
-} from "./mobileComposerMetrics";
 import { normalizeTagKey } from "../utils/tags";
 import {
 	collectTags,
@@ -132,7 +120,6 @@ const MOBILE_SEARCH_BATCH_SIZE = 30;
 const INITIAL_VISIBLE_RENDER_COUNT = 16;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
 const SEARCH_DEBOUNCE_MS = 220;
-const MOBILE_COMPOSER_TOP_GUARD = 52;
 const MOBILE_VIEW_HEADER_SELECTORS = [
 	".workspace-leaf.mod-active .view-header",
 	".mod-active .view-header",
@@ -141,7 +128,6 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
 type ComposerMode = "create" | "edit" | "quote";
-type MobileComposerPhase = "closed" | "opening" | "focusing" | "open" | "closing";
 type WindowWithIntersectionObserver = Window & {
 	IntersectionObserver?: typeof IntersectionObserver;
 };
@@ -154,6 +140,11 @@ interface PendingMobileListEnterCorrection {
 interface HandledMobileToolPointer {
 	button: HTMLElement;
 	action: string;
+}
+
+interface RenderUiStateOptions {
+	renderCardFlow?: boolean;
+	renderMobileSearchResults?: boolean;
 }
 
 let nextA11yId = 0;
@@ -187,8 +178,6 @@ export class KnomoView extends ItemView {
 	private mobileSearchInputEl: HTMLInputElement | null = null;
 	private mobileSearchResultsEl: HTMLElement | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
-	private mobileVisualViewport: VisualViewport | null = null;
-	private mobileVisualViewportHandler: (() => void) | null = null;
 	private memos: MemoRecord[] = [];
 	private cardFlowError: string | null = null;
 	private allMemosLoaded = false;
@@ -209,7 +198,6 @@ export class KnomoView extends ItemView {
 	private desktopSearchOpen = false;
 	private scopeMenuOpen = false;
 	private composerOpen = false;
-	private mobileComposerInputFocused = false;
 	private compactSearchOpen = false;
 	private mobileSearchPageOpen = false;
 	private editingMemo: MemoRecord | null = null;
@@ -238,19 +226,6 @@ export class KnomoView extends ItemView {
 	private memoSearchCache = new MemoSearchCache();
 	private searchDebounceTimeoutId: number | null = null;
 	private mobileSearchDebounceTimeoutId: number | null = null;
-	private mobileComposerFocusFrameId: number | null = null;
-	private mobileComposerFocusTimerId: number | null = null;
-	private mobileComposerResizeFrameId: number | null = null;
-	private mobileViewportFrameId: number | null = null;
-	private mobileKeyboardFocusStartedAt: number | null = null;
-	private mobileWindowResizeHandler: (() => void) | null = null;
-	private mobileOrientationChangeHandler: (() => void) | null = null;
-	private mobileComposerPhase: MobileComposerPhase = "closed";
-	private mobileKeyboardHeight = 0;
-	private mobileComposerViewportBaselineHeight: number | null = null;
-	private mobileComposerInputMaxHeight: number | null = null;
-	private mobileKeyboardMeasureTimers: number[] = [];
-	private mobileComposerCloseTimer: number | null = null;
 	private lastMobileSendPointerAt = 0;
 	private pendingMobileListEnterCorrection: PendingMobileListEnterCorrection | null = null;
 	private listEnterKeydownPatch: TextReplacement | null = null;
@@ -259,12 +234,7 @@ export class KnomoView extends ItemView {
 	private skipListEnterInputFallbackTimerId: number | null = null;
 	private handledMobileToolPointer: HandledMobileToolPointer | null = null;
 	private handledMobileToolPointerTimerId: number | null = null;
-	private mobileComposerLayerEl: HTMLElement | null = null;
-	private mobileComposerBackdropEl: HTMLElement | null = null;
-	private mobileComposerContentEl: HTMLElement | null = null;
-	private mobileComposerHomeEl: HTMLElement | null = null;
-	private mobileComposerNextSibling: ChildNode | null = null;
-	private mobileComposerOpenScrollTop: number | null = null;
+	private readonly mobileComposerController: MobileComposerController;
 	private mobileNavbarCompactController: MobileNavbarCompactController | null = null;
 	private renderGeneration = 0;
 	private markdownRenderQueue = new MarkdownRenderQueue({
@@ -283,6 +253,34 @@ export class KnomoView extends ItemView {
 		private readonly onManualRefresh: () => Promise<ScanDailyMemosResult>,
 	) {
 		super(leaf);
+		this.mobileComposerController = new MobileComposerController({
+			getWindow: () => this.containerEl.win,
+			getDocument: () => this.containerEl.doc,
+			getContainerEl: () => this.containerEl,
+			getRootEl: () => this.rootEl,
+			getComposerEl: () => this.composerEl,
+			getInputEl: () => this.inputEl,
+			getComposerBarEl: () => this.composerBarEl,
+			getReferencePreviewEl: () => this.referencePreviewEl,
+			getLayout: () => this.currentLayout,
+			isComposerOpen: () => this.composerOpen,
+			setComposerOpen: (open) => {
+				this.composerOpen = open;
+			},
+			getCardFlowScrollTop: () => this.getCardFlowScrollTop(),
+			registerBackdropClick: (element, handler) => {
+				this.registerDomEvent(element, "click", handler);
+			},
+			closeComposerKeepingDraft: () => this.closeComposerKeepingDraft(),
+			focusInputNow: (shouldResize, shouldQueueViewport) => {
+				this.focusComposerInputNow(shouldResize, shouldQueueViewport);
+			},
+			resizeInput: () => this.resizeInput(),
+			syncRootState: () => this.syncRootState(),
+			syncComposerMode: () => this.syncComposerMode(),
+			updateSendButtonState: () => this.updateSendButtonState(),
+			updateCancelEditButtonState: () => this.updateCancelEditButtonState(),
+		});
 		this.scope = new Scope(this.app.scope);
 		this.scope.register(["Mod"], "Enter", (event) => {
 			if (this.handleComposerSaveShortcut(event)) {
@@ -324,16 +322,11 @@ export class KnomoView extends ItemView {
 		this.tagSuggest = null;
 		this.clearSearchDebounce();
 		this.clearMobileSearchDebounce();
-		this.clearMobileComposerFocus();
-		this.clearMobileComposerResizeFrame();
-		this.clearMobileComposerCloseTimer();
-		this.clearMobileKeyboardMeasureTimers();
+		this.mobileComposerController.dispose();
 		this.clearListEnterKeydownPatch();
 		this.clearSkipListEnterInputFallback();
 		this.clearHandledMobileToolPointer();
 		this.pendingMobileListEnterCorrection = null;
-		this.stopMobileViewportTracking();
-		this.removeMobileComposerLayer();
 		this.removeMobileSearchPage();
 		this.containerEl.doc.body.removeClass("knomo-mobile-search-active");
 		this.removeMobileHeaderTitle();
@@ -571,7 +564,7 @@ export class KnomoView extends ItemView {
 
 	private syncTooltipState(root: HTMLElement): void {
 		if (this.currentLayout === "mobile") {
-			for (const container of [root, this.mobileComposerLayerEl]) {
+			for (const container of [root, this.mobileComposerController.getLayerEl()]) {
 				for (const element of container?.findAll("[data-tooltip-position]") ?? []) {
 					element.removeAttribute("data-tooltip-position");
 				}
@@ -682,7 +675,7 @@ export class KnomoView extends ItemView {
 		return loaded;
 	}
 
-	private renderUiState(): void {
+	private renderUiState(options: RenderUiStateOptions = {}): void {
 		this.syncRootState();
 		this.syncComposerDailyStatus();
 		this.syncComposerMode();
@@ -690,8 +683,12 @@ export class KnomoView extends ItemView {
 		this.renderTags();
 		this.renderTrashCount();
 		this.renderScopeState();
-		this.renderCardFlow();
-		this.renderMobileSearchResults();
+		if (options.renderCardFlow !== false) {
+			this.renderCardFlow();
+		}
+		if (options.renderMobileSearchResults !== false) {
+			this.renderMobileSearchResults();
+		}
 		this.syncSearchInputs();
 		this.updateSendButtonState();
 		this.updateCancelEditButtonState();
@@ -748,15 +745,8 @@ export class KnomoView extends ItemView {
 			this.syncTitlePopoverPosition();
 			this.syncMobileSearchPage();
 			this.syncMobileDrawerTop(root);
-		const shouldTrackMobileViewport = this.currentLayout === "mobile"
-			&& this.composerOpen
-			&& (this.mobileComposerPhase === "focusing" || this.mobileComposerPhase === "open");
-		if (shouldTrackMobileViewport) {
-			this.startMobileViewportTracking();
-		} else if (this.mobileComposerPhase !== "closing") {
-			this.stopMobileViewportTracking();
-		}
-		this.syncMobileComposerLayer();
+		this.mobileComposerController.syncViewportTracking();
+		this.mobileComposerController.syncLayer();
 		if (this.sidebarResizerEl !== null) {
 			this.sidebarResizerEl.setAttr("aria-valuenow", String(this.sidebarWidth));
 		}
@@ -1150,280 +1140,16 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private startMobileViewportTracking(): void {
-		if (this.rootEl === null) {
-			return;
-		}
-		const win = this.containerEl.win;
-		if (this.mobileWindowResizeHandler === null) {
-			this.mobileWindowResizeHandler = () => this.queueMobileViewportUpdate();
-			win.addEventListener("resize", this.mobileWindowResizeHandler);
-		}
-		if (this.mobileOrientationChangeHandler === null) {
-			this.mobileOrientationChangeHandler = () => this.queueMobileViewportUpdate();
-			win.addEventListener("orientationchange", this.mobileOrientationChangeHandler);
-		}
-		const viewport = win.visualViewport;
-		if (viewport === undefined || viewport === null) {
-			this.updateMobileKeyboardMetrics();
-			return;
-		}
-		if (this.mobileVisualViewportHandler === null) {
-			this.mobileVisualViewport = viewport;
-			this.mobileVisualViewportHandler = () => this.queueMobileViewportUpdate();
-			viewport.addEventListener("resize", this.mobileVisualViewportHandler);
-			viewport.addEventListener("scroll", this.mobileVisualViewportHandler);
-		}
-		this.updateMobileKeyboardMetrics();
-	}
-
-	private stopMobileViewportTracking(clearMetrics = true): void {
-		const win = this.containerEl.win;
-		if (this.mobileVisualViewport !== null && this.mobileVisualViewportHandler !== null) {
-			this.mobileVisualViewport.removeEventListener("resize", this.mobileVisualViewportHandler);
-			this.mobileVisualViewport.removeEventListener("scroll", this.mobileVisualViewportHandler);
-		}
-		if (this.mobileWindowResizeHandler !== null) {
-			win.removeEventListener("resize", this.mobileWindowResizeHandler);
-		}
-		if (this.mobileOrientationChangeHandler !== null) {
-			win.removeEventListener("orientationchange", this.mobileOrientationChangeHandler);
-		}
-		this.mobileVisualViewport = null;
-		this.mobileVisualViewportHandler = null;
-		this.mobileWindowResizeHandler = null;
-		this.mobileOrientationChangeHandler = null;
-		this.clearMobileViewportFrame();
-		this.clearMobileKeyboardMeasureTimers();
-		this.mobileKeyboardFocusStartedAt = null;
-		if (clearMetrics) {
-			this.clearMobileKeyboardMetrics();
-		}
-	}
-
-	private syncMobileComposerLayer(): void {
-		const shouldShow = this.currentLayout === "mobile" && this.composerOpen;
-		if (shouldShow) {
-			if (this.mobileComposerPhase === "closing") {
-				return;
-			}
-			this.ensureMobileComposerLayer();
-			return;
-		}
-		if (this.mobileComposerPhase !== "closing") {
-			this.detachMobileComposerLayer();
-		}
-	}
-
-	private ensureMobileComposerLayer(): void {
-		if (this.composerEl === null) {
-			return;
-		}
-		if (this.mobileComposerLayerEl === null) {
-			const layer = createMobileComposerLayer(this.containerEl.doc);
-			this.mobileComposerLayerEl = layer.layerEl;
-			this.mobileComposerBackdropEl = layer.backdropEl;
-			this.mobileComposerContentEl = layer.contentEl;
-			this.registerDomEvent(this.mobileComposerBackdropEl, "click", (event) => {
-				if (event.target === this.mobileComposerBackdropEl) {
-					this.closeComposerKeepingDraft();
-				}
-			});
-		} else {
-			attachMobileComposerLayer(this.containerEl.doc, this.mobileComposerLayerEl);
-		}
-		if (this.mobileComposerContentEl === null) {
-			return;
-		}
-		const placement = moveComposerToMobileLayer(this.composerEl, this.mobileComposerContentEl);
-		if (placement === null) {
-			return;
-		}
-		this.mobileComposerHomeEl = placement.homeEl;
-		this.mobileComposerNextSibling = placement.nextSibling;
-	}
-
-	private restoreMobileComposerLayer(): void {
-		restoreComposerFromMobileLayer(
-			this.composerEl,
-			this.mobileComposerContentEl,
-			this.mobileComposerHomeEl,
-			this.mobileComposerNextSibling,
-		);
-		this.mobileComposerHomeEl = null;
-		this.mobileComposerNextSibling = null;
-	}
-
-	private clearMobileComposerLayerState(): void {
-		clearMobileComposerLayerDomState(this.mobileComposerLayerEl);
-	}
-
-	private detachMobileComposerLayer(): void {
-		this.restoreMobileComposerLayer();
-		this.clearMobileComposerResizeFrame();
-		this.clearMobileKeyboardMeasureTimers();
-		this.mobileComposerViewportBaselineHeight = null;
-		this.mobileComposerInputMaxHeight = null;
-		this.clearMobileComposerLayerState();
-		this.mobileComposerLayerEl?.detach();
-	}
-
-	private removeMobileComposerLayer(): void {
-		this.restoreMobileComposerLayer();
-		this.clearMobileComposerResizeFrame();
-		this.clearMobileKeyboardMeasureTimers();
-		this.mobileComposerViewportBaselineHeight = null;
-		this.mobileComposerInputMaxHeight = null;
-		this.clearMobileComposerLayerState();
-		this.mobileComposerLayerEl?.detach();
-		this.mobileComposerLayerEl = null;
-		this.mobileComposerBackdropEl = null;
-		this.mobileComposerContentEl = null;
-	}
-
 	private isMobileComposerLayered(): boolean {
-		return isComposerInMobileLayer(this.composerEl, this.mobileComposerContentEl);
-	}
-
-	private queueMobileViewportUpdate(): void {
-		if (this.mobileViewportFrameId !== null) {
-			return;
-		}
-		this.mobileViewportFrameId = this.containerEl.win.requestAnimationFrame(() => {
-			this.mobileViewportFrameId = null;
-			this.updateMobileKeyboardMetrics();
-		});
-	}
-
-	private clearMobileViewportFrame(): void {
-		if (this.mobileViewportFrameId === null) {
-			return;
-		}
-		this.containerEl.win.cancelAnimationFrame(this.mobileViewportFrameId);
-		this.mobileViewportFrameId = null;
-	}
-
-	private scheduleMobileKeyboardMeasurements(): void {
-		this.clearMobileKeyboardMeasureTimers();
-		const delays = [80, 160, 320, 600];
-		for (const delay of delays) {
-			const timer = this.containerEl.win.setTimeout(() => {
-				this.updateMobileKeyboardMetrics();
-			}, delay);
-			this.mobileKeyboardMeasureTimers.push(timer);
-		}
-	}
-
-	private clearMobileKeyboardMeasureTimers(): void {
-		for (const timer of this.mobileKeyboardMeasureTimers) {
-			this.containerEl.win.clearTimeout(timer);
-		}
-		this.mobileKeyboardMeasureTimers = [];
+		return this.mobileComposerController.isLayered();
 	}
 
 	private scheduleMobileComposerResize(): void {
-		if (this.mobileComposerResizeFrameId !== null) {
-			return;
-		}
-		this.mobileComposerResizeFrameId = this.containerEl.win.requestAnimationFrame(() => {
-			this.mobileComposerResizeFrameId = null;
-			this.updateMobileComposerMeasurements();
-			this.resizeInput();
-		});
-	}
-
-	private clearMobileComposerResizeFrame(): void {
-		if (this.mobileComposerResizeFrameId === null) {
-			return;
-		}
-		this.containerEl.win.cancelAnimationFrame(this.mobileComposerResizeFrameId);
-		this.mobileComposerResizeFrameId = null;
-	}
-
-	private updateMobileKeyboardMetrics(): void {
-		const win = this.containerEl.win;
-		const viewport = this.mobileVisualViewport ?? win.visualViewport;
-		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
-		const metrics = calculateMobileKeyboardMetrics({
-			baselineHeight,
-			windowHeight: win.innerHeight,
-			viewportOffsetTop: viewport === undefined || viewport === null ? null : viewport.offsetTop,
-			viewportHeight: viewport === undefined || viewport === null ? null : viewport.height,
-		});
-		let { keyboardHeight } = metrics;
-		const activeElement = this.containerEl.doc.activeElement;
-		const shouldUseFallback = this.currentLayout === "mobile"
-			&& this.composerOpen
-			&& (this.mobileComposerInputFocused || activeElement === this.inputEl)
-			&& keyboardHeight === 0
-			&& this.mobileKeyboardFocusStartedAt !== null
-			&& Date.now() - this.mobileKeyboardFocusStartedAt > 220;
-		if (shouldUseFallback) {
-			keyboardHeight = getMobileKeyboardFallbackHeight(baselineHeight, win.innerHeight);
-		}
-		this.mobileKeyboardHeight = keyboardHeight;
-		this.setMobileKeyboardMetrics(metrics.visibleTop, metrics.visibleHeight, keyboardHeight);
-		this.updateMobileComposerMeasurements();
-		if (this.mobileComposerPhase === "focusing"
-			&& this.mobileKeyboardFocusStartedAt !== null
-			&& Date.now() - this.mobileKeyboardFocusStartedAt > 240) {
-			this.mobileComposerPhase = "open";
-		}
-		if (this.currentLayout === "mobile" && this.composerOpen && this.mobileComposerPhase !== "opening" && this.mobileComposerPhase !== "closing") {
-			this.resizeInput();
-		}
-	}
-
-	private setMobileKeyboardMetrics(visibleTop: number, visibleHeight: number, keyboardHeight: number): void {
-		const visibleTopValue = `${Math.round(visibleTop)}px`;
-		const visibleHeightValue = `${Math.round(visibleHeight)}px`;
-		const keyboardHeightValue = `${Math.round(keyboardHeight)}px`;
-		for (const element of [this.rootEl, this.mobileComposerLayerEl]) {
-			element?.style.setProperty("--knomo-visible-top", visibleTopValue);
-			element?.style.setProperty("--knomo-visible-height", visibleHeightValue);
-			element?.style.setProperty("--knomo-keyboard-height", keyboardHeightValue);
-			element?.style.setProperty("--knomo-vv-top", visibleTopValue);
-			element?.style.setProperty("--knomo-vv-height", visibleHeightValue);
-		}
-		this.mobileComposerLayerEl?.toggleClass("is-keyboard-open", keyboardHeight > 0);
-	}
-
-	private clearMobileKeyboardMetrics(): void {
-		const win = this.containerEl.win;
-		this.mobileKeyboardHeight = 0;
-		this.mobileComposerViewportBaselineHeight = null;
-		this.setMobileKeyboardMetrics(0, win.innerHeight, 0);
-		this.updateMobileComposerMeasurements();
+		this.mobileComposerController.scheduleResize();
 	}
 
 	private updateMobileComposerMeasurements(): number {
-		const win = this.containerEl.win;
-		const viewport = this.mobileVisualViewport ?? win.visualViewport;
-		const containerTop = Math.max(0, this.containerEl.getBoundingClientRect().top);
-		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
-		const toolbarHeight = this.composerBarEl?.offsetHeight ?? 52;
-		const referenceHeight = this.referencePreviewEl !== null && this.referencePreviewEl.style.display !== "none"
-			? this.referencePreviewEl.offsetHeight
-			: 0;
-		const measurements = calculateMobileComposerMeasurements({
-			baselineHeight,
-			windowHeight: win.innerHeight,
-			viewportOffsetTop: viewport === undefined || viewport === null ? null : viewport.offsetTop,
-			viewportHeight: viewport === undefined || viewport === null ? null : viewport.height,
-			containerTop,
-			keyboardHeight: this.mobileKeyboardHeight || 0,
-			toolbarHeight,
-			referenceHeight,
-			topGuard: MOBILE_COMPOSER_TOP_GUARD,
-		});
-		const contentMaxHeightValue = `${measurements.contentMaxHeight}px`;
-		this.mobileComposerInputMaxHeight = measurements.inputMaxHeight;
-		const inputMaxHeightValue = `${this.mobileComposerInputMaxHeight}px`;
-		for (const element of [this.rootEl, this.mobileComposerLayerEl]) {
-			element?.style.setProperty("--knomo-composer-content-max-height", contentMaxHeightValue);
-			element?.style.setProperty("--knomo-composer-input-max-height", inputMaxHeightValue);
-		}
-		return measurements.inputMaxHeight;
+		return this.mobileComposerController.updateMeasurements();
 	}
 
 	private updateCurrentLayout(): void {
@@ -1973,7 +1699,14 @@ export class KnomoView extends ItemView {
 				break;
 		}
 		if (shouldRenderAfterActionDispatch(dispatch)) {
-			this.renderUiState();
+			const shouldRenderCardFlow = dispatch.type === "unknown";
+			this.renderUiState({
+				renderCardFlow: shouldRenderCardFlow,
+				renderMobileSearchResults: shouldRenderCardFlow,
+			});
+			if (!shouldRenderCardFlow) {
+				this.syncCardMenuState();
+			}
 		}
 	}
 
@@ -2028,9 +1761,7 @@ export class KnomoView extends ItemView {
 			this.compactSearchOpen = false;
 			this.mobileDrawerOpen = false;
 			this.composerOpen = false;
-			this.clearMobileComposerFocus();
-			this.mobileComposerInputFocused = false;
-			this.stopMobileViewportTracking();
+			this.mobileComposerController.resetInactiveState();
 			this.renderUiState();
 		}
 	}
@@ -2057,10 +1788,14 @@ export class KnomoView extends ItemView {
 			} else if (action === "copy-text") {
 				await this.copyText(memo.contentSnapshot);
 				new Notice(t("notice.copiedText"));
+				this.syncCardMenuState();
+				return;
 			} else if (action === "copy-link") {
 				const referenceText = await this.referenceService.createReferenceText(memo, "link");
 				await this.copyText(referenceText);
 				new Notice(t("notice.copiedLink"));
+				this.syncCardMenuState();
+				return;
 			} else if (action === "delete") {
 				const confirmed = this.containerEl.win.confirm(t("confirm.deleteMemo"));
 				if (!confirmed) {
@@ -2092,7 +1827,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const isMobileSave = this.currentLayout === "mobile";
-		const mobileScrollTop = isMobileSave ? this.mobileComposerOpenScrollTop ?? this.getCardFlowScrollTop() : null;
+		const mobileScrollTop = isMobileSave ? this.mobileComposerController.getOpenScrollTop() ?? this.getCardFlowScrollTop() : null;
 		const createInput = this.editingMemo === null ? this.prepareCreateMemoInput(input) : null;
 		const content = createInput?.content ?? input;
 
@@ -2128,7 +1863,7 @@ export class KnomoView extends ItemView {
 			await this.onMemosChanged();
 			if (isMobileSave) {
 				this.restoreCardFlowScrollTop(mobileScrollTop);
-				this.mobileComposerOpenScrollTop = null;
+				this.mobileComposerController.clearOpenScrollTop();
 			}
 		} catch (error) {
 			const message = formatSettingsText(error instanceof Error ? error.message : t("error.saveFailed"));
@@ -2170,6 +1905,21 @@ export class KnomoView extends ItemView {
 
 	private setScope(scope: ScopeFilter): void {
 		this.clearSearchDebounce();
+		if (
+			this.activeNav === "all" &&
+			this.activeTagKey === null &&
+			this.scopeFilter === scope &&
+			this.searchQuery.trim().length === 0 &&
+			this.searchDateFilter === null
+		) {
+			this.mobileDrawerOpen = false;
+			this.desktopSearchOpen = false;
+			this.scopeMenuOpen = false;
+			this.syncRootState();
+			this.renderScopeState();
+			this.syncSearchInputs();
+			return;
+		}
 		this.clearDesktopSearchState();
 		this.scopeFilter = scope;
 		this.clearActiveTag();
@@ -2178,10 +1928,7 @@ export class KnomoView extends ItemView {
 		this.mobileDrawerOpen = false;
 		this.desktopSearchOpen = false;
 		this.scopeMenuOpen = false;
-		this.renderUiState();
-		if (needsAllMemos(scope, this.searchQuery, this.searchDateFilter)) {
-			void this.ensureAllMemosLoaded();
-		}
+		this.renderFilteredListState(true);
 	}
 
 	private setSearchQuery(query: string): void {
@@ -2195,12 +1942,7 @@ export class KnomoView extends ItemView {
 		this.activeMenuMemoId = null;
 		this.activeNav = "all";
 		this.resetVisibleMemos();
-		this.renderCardFlow();
-		this.renderScopeState();
-		this.syncSearchInputs();
-		if (needsAllMemos(this.scopeFilter, query, this.searchDateFilter)) {
-			void this.ensureAllMemosLoaded();
-		}
+		this.renderFilteredListState(false);
 	}
 
 	private setSearchDateFilter(filter: SearchDateFilter, sourceEl: HTMLElement | null = null): void {
@@ -2216,12 +1958,7 @@ export class KnomoView extends ItemView {
 			this.syncRootState();
 		}
 		this.resetVisibleMemos();
-		this.renderCardFlow();
-		this.renderScopeState();
-		this.syncSearchInputs();
-		if (needsAllMemos(this.scopeFilter, this.searchQuery, this.searchDateFilter)) {
-			void this.ensureAllMemosLoaded();
-		}
+		this.renderFilteredListState(false);
 	}
 
 	private flushDesktopSearchQuery(sourceEl: HTMLElement | null): void {
@@ -2262,6 +1999,15 @@ export class KnomoView extends ItemView {
 
 	private setSidebarNav(nav: SidebarNav): void {
 		this.clearSearchDebounce();
+		if (nav === "all" && this.isDefaultListState()) {
+			this.mobileDrawerOpen = false;
+			this.scopeMenuOpen = false;
+			this.activeMenuMemoId = null;
+			this.syncRootState();
+			this.renderScopeState();
+			this.syncCardMenuState();
+			return;
+		}
 		this.clearDesktopSearchState();
 		this.activeNav = nav;
 		this.clearActiveTag();
@@ -2299,6 +2045,7 @@ export class KnomoView extends ItemView {
 
 	private resetToAllNotes(): void {
 		this.clearSearchDebounce();
+		const isAlreadyDefault = this.isDefaultListState();
 		this.clearDesktopSearchState();
 		this.clearActiveTag();
 		this.activeNav = "all";
@@ -2308,8 +2055,44 @@ export class KnomoView extends ItemView {
 		this.desktopSearchOpen = false;
 		this.compactSearchOpen = false;
 		this.activeMenuMemoId = null;
+		if (isAlreadyDefault) {
+			this.syncRootState();
+			this.renderScopeState();
+			this.syncSearchInputs();
+			this.syncCardMenuState();
+			return;
+		}
 		this.resetVisibleMemos();
 		this.renderUiState();
+	}
+
+	private renderFilteredListState(fullUi: boolean): void {
+		const shouldDeferCardFlow = this.shouldDeferCardFlowForAllMemos();
+		if (shouldDeferCardFlow) {
+			this.cardFlowSentinel.remove();
+			this.syncCardMenuState();
+		}
+		if (fullUi) {
+			this.renderUiState({
+				renderCardFlow: !shouldDeferCardFlow,
+				renderMobileSearchResults: !shouldDeferCardFlow,
+			});
+		} else if (shouldDeferCardFlow) {
+			this.syncRootState();
+			this.renderScopeState();
+			this.syncSearchInputs();
+		} else {
+			this.renderCardFlow();
+			this.renderScopeState();
+			this.syncSearchInputs();
+		}
+		if (shouldDeferCardFlow) {
+			void this.ensureAllMemosLoaded();
+		}
+	}
+
+	private shouldDeferCardFlowForAllMemos(): boolean {
+		return !this.allMemosLoaded && needsAllMemos(this.scopeFilter, this.searchQuery, this.searchDateFilter);
 	}
 
 	private openDesktopSearch(): void {
@@ -2342,8 +2125,7 @@ export class KnomoView extends ItemView {
 			this.openMobileComposer();
 			return;
 		}
-		this.clearMobileComposerCloseTimer();
-		this.mobileComposerPhase = "closed";
+		this.mobileComposerController.prepareDesktopOpen();
 		this.composerOpen = true;
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
@@ -2352,48 +2134,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private openMobileComposer(): void {
-		if (this.currentLayout === "mobile" && !this.composerOpen) {
-			this.mobileComposerOpenScrollTop = this.getCardFlowScrollTop();
-		}
-		this.clearMobileComposerCloseTimer();
-		this.clearMobileComposerFocus();
-		this.composerOpen = true;
-		this.mobileComposerPhase = "opening";
-		this.mobileComposerInputFocused = false;
-		this.mobileKeyboardFocusStartedAt = null;
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
-		this.ensureMobileComposerLayer();
-		this.mobileComposerLayerEl?.toggleClass("is-open", false);
-		this.mobileComposerLayerEl?.toggleClass("is-closing", false);
-		this.clearMobileKeyboardMetrics();
-		this.mobileComposerViewportBaselineHeight = this.containerEl.win.innerHeight;
-		this.updateMobileComposerMeasurements();
-		this.syncRootState();
-		this.mobileComposerFocusFrameId = this.containerEl.win.requestAnimationFrame(() => {
-			this.mobileComposerFocusFrameId = null;
-			if (this.mobileComposerPhase !== "opening") {
-				return;
-			}
-			this.mobileComposerLayerEl?.toggleClass("is-open", true);
-			this.mobileComposerFocusTimerId = this.containerEl.win.setTimeout(() => {
-				this.mobileComposerFocusTimerId = null;
-				if (this.mobileComposerPhase !== "opening") {
-					return;
-				}
-				this.mobileComposerPhase = "focusing";
-				this.focusComposerInputNow(false, false);
-				this.scheduleMobileKeyboardMeasurements();
-				this.startMobileViewportTracking();
-				this.mobileComposerFocusTimerId = this.containerEl.win.setTimeout(() => {
-					this.mobileComposerFocusTimerId = null;
-					if (this.mobileComposerPhase === "focusing") {
-						this.updateMobileKeyboardMetrics();
-						this.mobileComposerPhase = "open";
-					}
-				}, 260);
-			}, 100);
-		});
+		this.mobileComposerController.open();
 	}
 
 	private closeComposerWithConfirm(): void {
@@ -2422,10 +2165,7 @@ export class KnomoView extends ItemView {
 			this.inputEl.value = this.draftContent;
 		}
 		this.composerOpen = false;
-		this.clearMobileComposerFocus();
-		this.mobileComposerInputFocused = false;
-		this.mobileKeyboardFocusStartedAt = null;
-		this.stopMobileViewportTracking();
+		this.mobileComposerController.resetInactiveState();
 		this.syncRootState();
 		this.syncComposerMode();
 		this.updateSendButtonState();
@@ -2437,47 +2177,11 @@ export class KnomoView extends ItemView {
 			this.draftContent = this.getDraftForClose(this.inputEl.value);
 			this.inputEl.value = this.draftContent;
 		}
-		this.mobileComposerOpenScrollTop = null;
-		this.clearMobileComposerFocus();
-		this.clearMobileKeyboardMeasureTimers();
-		this.clearMobileComposerCloseTimer();
-		this.mobileComposerPhase = "closing";
-		this.mobileComposerLayerEl?.toggleClass("is-open", false);
-		this.mobileComposerLayerEl?.toggleClass("is-closing", true);
-		this.inputEl?.blur();
-		this.mobileComposerInputFocused = false;
-		this.mobileKeyboardFocusStartedAt = null;
-		this.mobileComposerCloseTimer = this.containerEl.win.setTimeout(() => {
-			this.mobileComposerCloseTimer = null;
-			this.restoreMobileComposerLayer();
-			this.clearMobileComposerLayerState();
-			this.mobileComposerLayerEl?.detach();
-			this.stopMobileViewportTracking(false);
-			this.clearMobileKeyboardMetrics();
-			this.composerOpen = false;
-			this.mobileComposerPhase = "closed";
-			this.syncRootState();
-			this.syncComposerMode();
-			this.updateSendButtonState();
-			this.updateCancelEditButtonState();
-		}, 240);
+		this.mobileComposerController.closeKeepingDraft();
 	}
 
 	private focusComposerInputSoon(): void {
-		this.clearMobileComposerFocus();
-		if (this.currentLayout !== "mobile") {
-			this.focusComposerInputNow();
-			return;
-		}
-		const win = this.containerEl.win;
-		this.mobileComposerFocusFrameId = win.requestAnimationFrame(() => {
-			this.mobileComposerFocusFrameId = null;
-			if (this.inputEl !== null && this.containerEl.doc.activeElement !== this.inputEl) {
-				this.focusComposerInputNow();
-			} else {
-				this.queueMobileViewportUpdate();
-			}
-		});
+		this.mobileComposerController.focusInputSoon();
 	}
 
 	private focusComposerInputNow(shouldResize = true, shouldQueueViewport = true): void {
@@ -2493,56 +2197,23 @@ export class KnomoView extends ItemView {
 			this.resizeInput();
 		}
 		if (shouldQueueViewport && this.currentLayout === "mobile") {
-			this.queueMobileViewportUpdate();
+			this.mobileComposerController.queueViewportUpdate();
 		}
 	}
 
 	private handleComposerInputFocus(): void {
-		if (this.currentLayout === "mobile") {
-			this.mobileComposerInputFocused = true;
-			this.mobileKeyboardFocusStartedAt = Date.now();
-			this.scheduleMobileKeyboardMeasurements();
-			if (this.mobileComposerPhase === "open") {
-				this.queueMobileViewportUpdate();
-			}
-			if (this.mobileComposerPhase === "opening" || this.mobileComposerPhase === "focusing") {
-				return;
-			}
+		if (!this.mobileComposerController.handleInputFocus()) {
+			return;
 		}
 		this.resizeInput();
 	}
 
 	private handleComposerInputBlur(): void {
 		this.composerSaveShortcutDown = false;
-		if (this.currentLayout === "mobile") {
-			this.mobileComposerInputFocused = false;
-			this.mobileKeyboardFocusStartedAt = null;
-			this.clearMobileKeyboardMeasureTimers();
-			if (this.mobileComposerPhase === "closing") {
-				return;
-			}
-			this.clearMobileKeyboardMetrics();
-		}
-		this.resizeInput();
-	}
-
-	private clearMobileComposerFocus(): void {
-		if (this.mobileComposerFocusFrameId !== null) {
-			this.containerEl.win.cancelAnimationFrame(this.mobileComposerFocusFrameId);
-			this.mobileComposerFocusFrameId = null;
-		}
-		if (this.mobileComposerFocusTimerId !== null) {
-			this.containerEl.win.clearTimeout(this.mobileComposerFocusTimerId);
-			this.mobileComposerFocusTimerId = null;
-		}
-	}
-
-	private clearMobileComposerCloseTimer(): void {
-		if (this.mobileComposerCloseTimer === null) {
+		if (!this.mobileComposerController.handleInputBlur()) {
 			return;
 		}
-		this.containerEl.win.clearTimeout(this.mobileComposerCloseTimer);
-		this.mobileComposerCloseTimer = null;
+		this.resizeInput();
 	}
 
 	private cancelEditingOrCloseComposer(): void {
@@ -3073,10 +2744,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private getMobileMaxInputHeight(): number {
-		if (this.currentLayout === "mobile" && this.mobileComposerInputMaxHeight !== null) {
-			return this.mobileComposerInputMaxHeight;
-		}
-		return this.updateMobileComposerMeasurements();
+		return this.mobileComposerController.getMaxInputHeight();
 	}
 
 	private updateStatus(message: string, isError: boolean): void {

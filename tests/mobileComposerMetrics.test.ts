@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
 	calculateMobileComposerMeasurements,
 	calculateMobileKeyboardMetrics,
+	calculateMobileKeyboardToolbarGapCorrection,
 	getMobileKeyboardFallbackHeight,
 } from "../src/ui/mobileComposerMetrics";
 
@@ -37,6 +38,13 @@ test("clamps mobile keyboard fallback height", () => {
 	assert.equal(getMobileKeyboardFallbackHeight(500, 500), 300);
 	assert.equal(getMobileKeyboardFallbackHeight(900, 900), 378);
 	assert.equal(getMobileKeyboardFallbackHeight(1200, 1200), 430);
+});
+
+test("calculates mobile keyboard toolbar gap correction", () => {
+	assert.equal(calculateMobileKeyboardToolbarGapCorrection(0), 0);
+	assert.equal(calculateMobileKeyboardToolbarGapCorrection(300), 20);
+	assert.equal(calculateMobileKeyboardToolbarGapCorrection(360), 25);
+	assert.equal(calculateMobileKeyboardToolbarGapCorrection(600), 40);
 });
 
 test("calculates mobile composer content and input heights", () => {

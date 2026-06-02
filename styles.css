@@ -2459,7 +2459,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	right: 0;
 	bottom: max(
 		0px,
-		calc(var(--knomo-keyboard-height, 0px) - var(--knomo-keyboard-toolbar-gap-correction))
+		calc(var(--knomo-keyboard-height, 0px) - var(--knomo-keyboard-toolbar-gap-correction, 20px))
 	);
 	z-index: 3;
 	max-height: var(--knomo-composer-content-max-height, calc(100dvh - 52px));

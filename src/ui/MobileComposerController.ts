@@ -9,6 +9,7 @@ import {
 import {
 	calculateMobileComposerMeasurements,
 	calculateMobileKeyboardMetrics,
+	calculateMobileKeyboardToolbarGapCorrection,
 	getMobileKeyboardFallbackHeight,
 } from "./mobileComposerMetrics";
 
@@ -517,10 +518,12 @@ export class MobileComposerController {
 		const visibleTopValue = `${Math.round(visibleTop)}px`;
 		const visibleHeightValue = `${Math.round(visibleHeight)}px`;
 		const keyboardHeightValue = `${Math.round(keyboardHeight)}px`;
+		const toolbarGapCorrectionValue = `${calculateMobileKeyboardToolbarGapCorrection(keyboardHeight)}px`;
 		for (const element of [this.options.getRootEl(), this.mobileComposerLayerEl]) {
 			element?.style.setProperty("--knomo-visible-top", visibleTopValue);
 			element?.style.setProperty("--knomo-visible-height", visibleHeightValue);
 			element?.style.setProperty("--knomo-keyboard-height", keyboardHeightValue);
+			element?.style.setProperty("--knomo-keyboard-toolbar-gap-correction", toolbarGapCorrectionValue);
 			element?.style.setProperty("--knomo-vv-top", visibleTopValue);
 			element?.style.setProperty("--knomo-vv-height", visibleHeightValue);
 		}

@@ -24,6 +24,8 @@ test("opens the mobile composer in a body layer and records the flow scroll top"
 	assert.equal(harness.focusCalls, 1);
 	assert.equal(harness.win.visualViewport.listenerCount("resize"), 1);
 	assert.equal(harness.win.visualViewport.listenerCount("scroll"), 1);
+	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "300px");
+	assert.equal(layer?.style.values.get("--knomo-keyboard-toolbar-gap-correction"), "20px");
 });
 
 test("delegates backdrop clicks back to the view close-draft path", () => {

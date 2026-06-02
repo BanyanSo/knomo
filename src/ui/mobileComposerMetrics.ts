@@ -28,6 +28,11 @@ export interface MobileComposerMeasurements {
 	inputMaxHeight: number;
 }
 
+const MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_BASE = 20;
+const MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_MAX = 40;
+const MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_GROWTH_START = 320;
+const MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_GROWTH_RATE = 0.12;
+
 export function calculateMobileKeyboardMetrics(input: MobileKeyboardMetricsInput): MobileKeyboardMetrics {
 	const visibleTop = input.viewportOffsetTop === null ? 0 : Math.max(0, input.viewportOffsetTop);
 	const visibleHeight = input.viewportHeight === null ? input.windowHeight : Math.max(0, input.viewportHeight);
@@ -46,6 +51,18 @@ export function calculateMobileKeyboardMetrics(input: MobileKeyboardMetricsInput
 export function getMobileKeyboardFallbackHeight(baselineHeight: number, windowHeight: number): number {
 	const height = baselineHeight > 0 ? baselineHeight : windowHeight;
 	return Math.round(Math.min(Math.max(height * 0.42, 300), 430));
+}
+
+export function calculateMobileKeyboardToolbarGapCorrection(keyboardHeight: number): number {
+	if (keyboardHeight <= 0) {
+		return 0;
+	}
+	const extraCorrection = Math.max(0, keyboardHeight - MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_GROWTH_START)
+		* MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_GROWTH_RATE;
+	return Math.round(Math.min(
+		MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_MAX,
+		MOBILE_KEYBOARD_TOOLBAR_GAP_CORRECTION_BASE + extraCorrection,
+	));
 }
 
 export function calculateMobileComposerMeasurements(input: MobileComposerMeasurementsInput): MobileComposerMeasurements {

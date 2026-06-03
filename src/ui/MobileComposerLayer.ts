@@ -67,6 +67,7 @@ export function clearMobileComposerLayerState(layerEl: HTMLElement | null): void
 	layerEl?.toggleClass("is-open", false);
 	layerEl?.toggleClass("is-closing", false);
 	layerEl?.toggleClass("is-keyboard-open", false);
+	layerEl?.toggleClass("is-keyboard-tracking", false);
 }
 
 export function isComposerInMobileLayer(composerEl: HTMLElement | null, contentEl: HTMLElement | null): boolean {

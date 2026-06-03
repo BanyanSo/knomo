@@ -25,7 +25,77 @@ test("opens the mobile composer in a body layer and records the flow scroll top"
 	assert.equal(harness.win.visualViewport.listenerCount("resize"), 1);
 	assert.equal(harness.win.visualViewport.listenerCount("scroll"), 1);
 	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "300px");
-	assert.equal(layer?.style.values.get("--knomo-keyboard-toolbar-gap-correction"), "20px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "300px");
+});
+
+test("positions the mobile composer from the toolbar anchor inset", () => {
+	const harness = createHarness();
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
+	harness.win.flushAnimationFrames();
+	harness.win.flushNextTimer();
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "280px");
+
+	harness.win.flushAnimationFrames();
+
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "280px");
+});
+
+test("tracks the keyboard top while the visual viewport is animating", () => {
+	const harness = createHarness();
+	harness.win.visualViewport.height = 650;
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
+	harness.win.flushAnimationFrames();
+	harness.win.flushNextTimer();
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.hasClass("is-keyboard-tracking"), true);
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "130px");
+
+	harness.win.visualViewport.height = 500;
+	harness.win.flushAnimationFrames();
+
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "280px");
+});
+
+test("positions fallback keyboard placement from the toolbar anchor inset", () => {
+	const originalDateNow = Date.now;
+	let now = 1000;
+	Date.now = () => now;
+	try {
+		const harness = createHarness();
+		harness.win.visualViewport.height = 800;
+
+		harness.controller.open();
+		const content = harness.getContent();
+		assert.notEqual(content, null);
+		content!.bottom = 500;
+		harness.composerBar.bottom = 480;
+		harness.win.flushAnimationFrames();
+		harness.win.flushNextTimer();
+		now = 1300;
+		harness.win.flushNextTimer();
+
+		const layer = harness.getLayer();
+		assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "316px");
+
+		harness.win.flushAnimationFrames();
+
+		assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "316px");
+	} finally {
+		Date.now = originalDateNow;
+	}
 });
 
 test("delegates backdrop clicks back to the view close-draft path", () => {
@@ -133,11 +203,17 @@ function createHarness() {
 		container,
 		home,
 		composer,
+		composerBar,
 		input,
 		backdropHandlers,
 		controller,
 		getComposerOpen: () => composerOpen,
 		getLayer: () => doc.body.children.find((child) => child.hasClass("knomo-mobile-composer-layer")) ?? null,
+		getContent: () => {
+			const layer = doc.body.children.find((child) => child.hasClass("knomo-mobile-composer-layer")) ?? null;
+			const stage = layer?.children.find((child) => child.hasClass("knomo-mobile-composer-stage")) ?? null;
+			return stage?.children.find((child) => child.hasClass("knomo-mobile-composer-content")) ?? null;
+		},
 		get syncRootCalls() {
 			return syncRootCalls;
 		},
@@ -183,6 +259,7 @@ class FakeElement {
 	detached = false;
 	offsetHeight = 0;
 	top = 0;
+	bottom = 0;
 	private text = "";
 
 	constructor(private readonly tagName: string) {}
@@ -281,8 +358,8 @@ class FakeElement {
 		return this.classes.has(cls);
 	}
 
-	getBoundingClientRect(): Pick<DOMRect, "top"> {
-		return { top: this.top };
+	getBoundingClientRect(): Pick<DOMRect, "top" | "bottom"> {
+		return { top: this.top, bottom: this.bottom };
 	}
 }
 

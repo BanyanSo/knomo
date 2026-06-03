@@ -2426,7 +2426,7 @@ body .knomo-mobile-create-fab.is-hidden {
 
 /* 移动端 composer body layer：最终层级覆盖 */
 .knomo-mobile-composer-layer {
-	--knomo-keyboard-toolbar-gap-correction: 20px;
+	--knomo-mobile-composer-bottom-offset: 0px;
 	position: fixed;
 	inset: 0;
 	z-index: 10000;
@@ -2457,10 +2457,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	position: absolute;
 	left: 0;
 	right: 0;
-	bottom: max(
-		0px,
-		calc(var(--knomo-keyboard-height, 0px) - var(--knomo-keyboard-toolbar-gap-correction, 20px))
-	);
+	bottom: var(--knomo-mobile-composer-bottom-offset, 0px);
 	z-index: 3;
 	max-height: var(--knomo-composer-content-max-height, calc(100dvh - 52px));
 	overflow: visible;
@@ -2480,10 +2477,20 @@ body .knomo-mobile-create-fab.is-hidden {
 	left: 0;
 	right: 0;
 	top: 100%;
-	height: var(--knomo-keyboard-height, 0px);
+	height: max(var(--knomo-keyboard-height, 0px), var(--knomo-mobile-composer-bottom-offset, 0px));
 	background: var(--knomo-composer-surface);
 	pointer-events: none;
 	transition: height 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.knomo-mobile-composer-layer.is-keyboard-tracking .knomo-mobile-composer-content {
+	transition:
+		transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+		max-height 120ms linear;
+}
+
+.knomo-mobile-composer-layer.is-keyboard-tracking .knomo-mobile-composer-content::after {
+	transition: none;
 }
 
 .knomo-mobile-composer-layer.is-open .knomo-mobile-composer-backdrop {

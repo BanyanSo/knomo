@@ -14,22 +14,25 @@ test("opens the mobile composer in a body layer and records the flow scroll top"
 	assert.equal(harness.controller.getOpenScrollTop(), 42);
 	assert.equal(harness.controller.isLayered(), true);
 	assert.equal(layer?.hasClass("is-open"), false);
+	assert.equal(layer?.hasClass("is-keyboard-tracking"), true);
 	assert.equal(harness.syncRootCalls, 1);
-
-	harness.win.flushAnimationFrames();
-	assert.equal(layer?.hasClass("is-open"), true);
-
-	harness.win.flushNextTimer();
-	assert.equal(harness.controller.getPhase(), "focusing");
-	assert.equal(harness.focusCalls, 1);
 	assert.equal(harness.win.visualViewport.listenerCount("resize"), 1);
 	assert.equal(harness.win.visualViewport.listenerCount("scroll"), 1);
-	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "300px");
-	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "300px");
+
+	harness.win.flushAnimationFrames();
+	assert.equal(layer?.hasClass("is-open"), false);
+	assert.equal(harness.controller.getPhase(), "focusing");
+	assert.equal(harness.focusCalls, 1);
+	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "0px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "0px");
+
+	harness.win.flushNextTimer();
+	assert.equal(layer?.hasClass("is-open"), true);
 });
 
 test("positions the mobile composer from the toolbar anchor inset", () => {
 	const harness = createHarness();
+	harness.win.visualViewport.height = 500;
 
 	harness.controller.open();
 	const content = harness.getContent();
@@ -37,17 +40,59 @@ test("positions the mobile composer from the toolbar anchor inset", () => {
 	content!.bottom = 500;
 	harness.composerBar.bottom = 480;
 	harness.win.flushAnimationFrames();
-	harness.win.flushNextTimer();
 
 	const layer = harness.getLayer();
-	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "280px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
 
 	harness.win.flushAnimationFrames();
 
-	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "280px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
 });
 
-test("tracks the keyboard top while the visual viewport is animating", () => {
+test("positions the mobile composer from the toolbar button row visual bottom", () => {
+	const harness = createHarness();
+	harness.win.visualViewport.height = 500;
+	const toolButton = harness.composerBar.createDiv({ cls: "knomo-tool-button" });
+	const sendButton = harness.composerBar.createDiv({ cls: "knomo-send-button" });
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 500;
+	toolButton.bottom = 476;
+	sendButton.bottom = 480;
+	harness.win.flushAnimationFrames();
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-toolbar-anchor-inset"), "20px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-toolbar-anchor-bottom"), "480px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-toolbar-wrapper-bottom"), "500px");
+	assert.equal(layer?.attrs.get("data-knomo-composer-toolbar-anchor-source"), "button-row");
+});
+
+test("positions the mobile composer from the real layer bottom when the fixed layer resizes", () => {
+	const harness = createHarness();
+	harness.win.visualViewport.height = 500;
+
+	harness.controller.open();
+	const layer = harness.getLayer();
+	const content = harness.getContent();
+	assert.notEqual(layer, null);
+	assert.notEqual(content, null);
+	layer!.bottom = 500;
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
+	harness.win.flushAnimationFrames();
+
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "-16px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-fill-height"), "0px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-layer-bottom"), "500px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-applied-bottom-offset"), "-16px");
+});
+
+test("tracks the composer dock top while the visual viewport is animating", () => {
 	const harness = createHarness();
 	harness.win.visualViewport.height = 650;
 
@@ -61,41 +106,126 @@ test("tracks the keyboard top while the visual viewport is animating", () => {
 
 	const layer = harness.getLayer();
 	assert.equal(layer?.hasClass("is-keyboard-tracking"), true);
-	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "130px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "134px");
 
 	harness.win.visualViewport.height = 500;
 	harness.win.flushAnimationFrames();
 
-	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "280px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
 });
 
-test("positions fallback keyboard placement from the toolbar anchor inset", () => {
-	const originalDateNow = Date.now;
-	let now = 1000;
-	Date.now = () => now;
-	try {
-		const harness = createHarness();
-		harness.win.visualViewport.height = 800;
+test("keeps the opening baseline when the keyboard triggers a window resize", () => {
+	const harness = createHarness();
 
-		harness.controller.open();
-		const content = harness.getContent();
-		assert.notEqual(content, null);
-		content!.bottom = 500;
-		harness.composerBar.bottom = 480;
-		harness.win.flushAnimationFrames();
-		harness.win.flushNextTimer();
-		now = 1300;
-		harness.win.flushNextTimer();
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
+	harness.win.flushAnimationFrames();
 
-		const layer = harness.getLayer();
-		assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "316px");
+	harness.win.innerHeight = 500;
+	harness.win.visualViewport.height = 500;
+	harness.win.dispatchEvent("resize");
+	harness.win.flushAnimationFrames();
 
-		harness.win.flushAnimationFrames();
+	const layer = harness.getLayer();
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
+});
 
-		assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "316px");
-	} finally {
-		Date.now = originalDateNow;
-	}
+test("uses the layout viewport when the visual viewport stays stale during keyboard resize", () => {
+	const harness = createHarness();
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
+	harness.win.flushAnimationFrames();
+
+	harness.win.innerHeight = 500;
+	harness.win.visualViewport.height = 800;
+	harness.win.dispatchEvent("resize");
+	harness.win.flushAnimationFrames();
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "300px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
+	assert.equal(layer?.attrs.get("data-knomo-composer-dock-source"), "layout-viewport");
+});
+
+test("uses the virtual keyboard rect as the composer dock source", () => {
+	const harness = createHarness();
+	harness.win.virtualKeyboard.boundingRect = { y: 520, height: 280 };
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
+	harness.win.flushAnimationFrames();
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "280px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "264px");
+});
+
+test("uses Capacitor keyboard events as the first composer dock source", () => {
+	const harness = createHarness();
+	harness.win.visualViewport.height = 500;
+	harness.win.virtualKeyboard.boundingRect = { y: 520, height: 280 };
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
+	harness.win.flushAnimationFrames();
+	harness.win.dispatchKeyboardEvent("keyboardWillShow", 260);
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "260px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "244px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-capacitor-keyboard-height"), "260px");
+	assert.equal(layer?.attrs.get("data-knomo-composer-dock-source"), "capacitor-keyboard");
+});
+
+test("clears the Capacitor keyboard dock source when the keyboard hides", () => {
+	const harness = createHarness();
+	harness.win.visualViewport.height = 500;
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 800;
+	harness.composerBar.bottom = 780;
+	harness.win.flushAnimationFrames();
+	harness.win.dispatchKeyboardEvent("keyboardWillShow", 260);
+	harness.win.dispatchEvent("keyboardWillHide");
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "0px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "0px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-capacitor-keyboard-height"), "0px");
+	assert.equal(layer?.attrs.get("data-knomo-composer-dock-source"), "fallback");
+});
+
+test("keeps the composer docked when a focused input receives no keyboard signal", () => {
+	const harness = createHarness();
+
+	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 800;
+	harness.composerBar.bottom = 780;
+	harness.win.flushAnimationFrames();
+	harness.win.flushNextTimer();
+
+	const layer = harness.getLayer();
+	assert.equal(layer?.hasClass("is-open"), true);
+	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "0px");
+	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "0px");
+	assert.equal(layer?.attrs.get("data-knomo-composer-dock-source"), "fallback");
 });
 
 test("delegates backdrop clicks back to the view close-draft path", () => {
@@ -110,20 +240,34 @@ test("delegates backdrop clicks back to the view close-draft path", () => {
 	assert.equal(harness.controller.getPhase(), "opening");
 });
 
-test("closes the mobile composer after the closing timer and restores the original DOM", () => {
+test("closes the mobile composer after the dock settles and restores the original DOM", () => {
 	const harness = createHarness();
+	harness.win.visualViewport.height = 500;
 	harness.controller.open();
+	const content = harness.getContent();
+	assert.notEqual(content, null);
+	content!.bottom = 500;
+	harness.composerBar.bottom = 480;
 	harness.win.flushAnimationFrames();
 
 	harness.controller.closeKeepingDraft();
 
 	const layer = harness.getLayer();
 	assert.equal(harness.controller.getPhase(), "closing");
-	assert.equal(layer?.hasClass("is-open"), false);
+	assert.equal(layer?.hasClass("is-open"), true);
 	assert.equal(layer?.hasClass("is-closing"), true);
+	assert.equal(layer?.hasClass("is-keyboard-tracking"), true);
 	assert.equal(harness.input.blurCount, 1);
 
-	harness.win.flushAllTimers();
+	harness.win.visualViewport.height = 800;
+	harness.win.flushAnimationFrames();
+	harness.win.flushAnimationFrames();
+	harness.win.flushAnimationFrames();
+	harness.win.flushAnimationFrames();
+
+	assert.equal(layer?.hasClass("is-open"), false);
+
+	harness.win.flushNextTimer();
 
 	assert.equal(harness.getComposerOpen(), false);
 	assert.equal(harness.controller.getPhase(), "closed");
@@ -345,6 +489,21 @@ class FakeElement {
 		this.attrs.delete(key);
 	}
 
+	querySelectorAll(selector: string): FakeElement[] {
+		const selectors = selector.split(",").map((part) => part.trim());
+		const matches: FakeElement[] = [];
+		const visit = (element: FakeElement) => {
+			for (const child of element.children) {
+				if (selectors.some((part) => child.matches(part))) {
+					matches.push(child);
+				}
+				visit(child);
+			}
+		};
+		visit(this);
+		return matches;
+	}
+
 	toggleClass(cls: string, active?: boolean): void {
 		const shouldAdd = active ?? !this.classes.has(cls);
 		if (shouldAdd) {
@@ -360,6 +519,13 @@ class FakeElement {
 
 	getBoundingClientRect(): Pick<DOMRect, "top" | "bottom"> {
 		return { top: this.top, bottom: this.bottom };
+	}
+
+	private matches(selector: string): boolean {
+		if (selector.startsWith(".")) {
+			return this.classes.has(selector.slice(1));
+		}
+		return this.tagName === selector;
 	}
 }
 
@@ -397,7 +563,26 @@ class FakeDocument {
 
 class FakeVisualViewport {
 	offsetTop = 0;
-	height = 500;
+	height = 800;
+	private readonly listeners = new Map<string, Set<() => void>>();
+
+	addEventListener(type: string, handler: () => void): void {
+		const handlers = this.listeners.get(type) ?? new Set<() => void>();
+		handlers.add(handler);
+		this.listeners.set(type, handlers);
+	}
+
+	removeEventListener(type: string, handler: () => void): void {
+		this.listeners.get(type)?.delete(handler);
+	}
+
+	listenerCount(type: string): number {
+		return this.listeners.get(type)?.size ?? 0;
+	}
+}
+
+class FakeVirtualKeyboard {
+	boundingRect: { y: number; height: number } = { y: 0, height: 0 };
 	private readonly listeners = new Map<string, Set<() => void>>();
 
 	addEventListener(type: string, handler: () => void): void {
@@ -418,11 +603,15 @@ class FakeVisualViewport {
 class FakeWindow {
 	innerHeight = 800;
 	readonly visualViewport = new FakeVisualViewport();
+	readonly virtualKeyboard = new FakeVirtualKeyboard();
+	readonly navigator = {
+		virtualKeyboard: this.virtualKeyboard,
+	};
 	private nextFrameId = 1;
 	private nextTimerId = 1;
 	private readonly frames = new Map<number, FrameRequestCallback>();
 	private readonly timers = new Map<number, { delay: number; order: number; handler: () => void }>();
-	private readonly listeners = new Map<string, Set<() => void>>();
+	private readonly listeners = new Map<string, Set<(event: Event) => void>>();
 
 	asWindow(): Window {
 		return this as unknown as Window;
@@ -474,13 +663,26 @@ class FakeWindow {
 		}
 	}
 
-	addEventListener(type: string, handler: () => void): void {
-		const handlers = this.listeners.get(type) ?? new Set<() => void>();
+	addEventListener(type: string, handler: (event: Event) => void): void {
+		const handlers = this.listeners.get(type) ?? new Set<(event: Event) => void>();
 		handlers.add(handler);
 		this.listeners.set(type, handlers);
 	}
 
-	removeEventListener(type: string, handler: () => void): void {
+	removeEventListener(type: string, handler: (event: Event) => void): void {
 		this.listeners.get(type)?.delete(handler);
+	}
+
+	dispatchEvent(type: string, event = {} as Event): void {
+		for (const handler of this.listeners.get(type) ?? []) {
+			handler(event);
+		}
+	}
+
+	dispatchKeyboardEvent(type: string, keyboardHeight: number): void {
+		this.dispatchEvent(type, {
+			keyboardHeight,
+			detail: { keyboardHeight },
+		} as unknown as Event);
 	}
 }

@@ -234,6 +234,8 @@ export class KnomoView extends ItemView {
 	private skipListEnterInputFallbackTimerId: number | null = null;
 	private handledMobileToolPointer: HandledMobileToolPointer | null = null;
 	private handledMobileToolPointerTimerId: number | null = null;
+	private mobileImagePickerActive = false;
+	private mobileImagePickerFocusTimerId: number | null = null;
 	private readonly mobileComposerController: MobileComposerController;
 	private mobileNavbarCompactController: MobileNavbarCompactController | null = null;
 	private renderGeneration = 0;
@@ -326,6 +328,7 @@ export class KnomoView extends ItemView {
 		this.clearListEnterKeydownPatch();
 		this.clearSkipListEnterInputFallback();
 		this.clearHandledMobileToolPointer();
+		this.clearMobileImagePickerFocusGuard();
 		this.pendingMobileListEnterCorrection = null;
 		this.removeMobileSearchPage();
 		this.containerEl.doc.body.removeClass("knomo-mobile-search-active");
@@ -488,6 +491,8 @@ export class KnomoView extends ItemView {
 				void this.handleRootKeydown(event);
 			}
 		});
+		this.registerDomEvent(composer.composerEl, "pointerdown", (event) => this.handleMobileComposerActionPointerDown(event));
+		this.registerDomEvent(composer.composerEl, "mousedown", (event) => this.handleMobileComposerActionPointerDown(event));
 		this.registerDomEvent(this.inputEl, "beforeinput", (event: InputEvent) => {
 			this.handleComposerBeforeInput(event);
 		});
@@ -2210,6 +2215,9 @@ export class KnomoView extends ItemView {
 
 	private handleComposerInputBlur(): void {
 		this.composerSaveShortcutDown = false;
+		if (this.currentLayout === "mobile" && this.mobileImagePickerActive) {
+			return;
+		}
 		if (!this.mobileComposerController.handleInputBlur()) {
 			return;
 		}
@@ -2408,17 +2416,46 @@ export class KnomoView extends ItemView {
 		if (action === null) {
 			return;
 		}
+		event.preventDefault();
+		event.stopPropagation();
 		if (action === "insert-image") {
 			return;
 		}
-		event.preventDefault();
-		event.stopPropagation();
 		if (this.isHandledMobileToolPointer(toolButton, action)) {
 			return;
 		}
 		if (this.runComposerToolAction(action)) {
 			this.markHandledMobileToolPointer(toolButton, action);
 		}
+	}
+
+	private handleMobileComposerActionPointerDown(event: PointerEvent | MouseEvent): void {
+		if (this.currentLayout !== "mobile") {
+			return;
+		}
+		const target = event.target as Node | null;
+		if (!target?.instanceOf(Element)) {
+			return;
+		}
+		const actionEl = target.closest("[data-action]");
+		if (!actionEl?.instanceOf(HTMLElement)) {
+			return;
+		}
+		const action = actionEl.getAttr("data-action");
+		if (action !== "clear-reference" && action !== "cancel-edit") {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		if (this.isHandledMobileToolPointer(actionEl, action)) {
+			return;
+		}
+		if (action === "clear-reference") {
+			this.clearReference();
+		} else {
+			this.cancelEditing();
+		}
+		this.markHandledMobileToolPointer(actionEl, action);
 	}
 
 	private runComposerToolAction(action: string | null): boolean {
@@ -2476,6 +2513,50 @@ export class KnomoView extends ItemView {
 			this.containerEl.win.clearTimeout(this.handledMobileToolPointerTimerId);
 			this.handledMobileToolPointerTimerId = null;
 		}
+	}
+
+	private beginMobileImagePickerFocusGuard(): boolean {
+		this.clearMobileImagePickerFocusGuard();
+		if (this.currentLayout !== "mobile" || this.inputEl === null || !this.inputEl.isConnected) {
+			return false;
+		}
+		if (this.containerEl.doc.activeElement !== this.inputEl) {
+			return false;
+		}
+		this.mobileImagePickerActive = true;
+		return true;
+	}
+
+	private finishMobileImagePickerFocusGuard(shouldRestoreFocus: boolean): void {
+		this.mobileImagePickerActive = false;
+		this.clearMobileImagePickerFocusTimer();
+		if (!shouldRestoreFocus) {
+			return;
+		}
+		this.mobileImagePickerFocusTimerId = this.containerEl.win.setTimeout(() => {
+			this.mobileImagePickerFocusTimerId = null;
+			if (this.currentLayout !== "mobile" || !this.composerOpen) {
+				return;
+			}
+			const input = this.inputEl;
+			if (input === null || !input.isConnected || input.disabled) {
+				return;
+			}
+			this.focusComposerInputNow(true, true);
+		}, 50);
+	}
+
+	private clearMobileImagePickerFocusGuard(): void {
+		this.mobileImagePickerActive = false;
+		this.clearMobileImagePickerFocusTimer();
+	}
+
+	private clearMobileImagePickerFocusTimer(): void {
+		if (this.mobileImagePickerFocusTimerId === null) {
+			return;
+		}
+		this.containerEl.win.clearTimeout(this.mobileImagePickerFocusTimerId);
+		this.mobileImagePickerFocusTimerId = null;
 	}
 
 	private handleSendPointerDown(event: PointerEvent | MouseEvent): void {
@@ -2735,11 +2816,9 @@ export class KnomoView extends ItemView {
 			this.inputEl.style.overflowY = this.inputEl.scrollHeight > maxHeight ? "auto" : "hidden";
 			return;
 		}
-		const currentHeight = this.inputEl.getBoundingClientRect().height || minHeight;
+		this.inputEl.style.height = "auto";
 		const nextHeight = Math.min(maxHeight, Math.max(minHeight, this.inputEl.scrollHeight));
-		if (Math.abs(currentHeight - nextHeight) > 1) {
-			this.inputEl.style.height = `${nextHeight}px`;
-		}
+		this.inputEl.style.height = `${nextHeight}px`;
 		this.inputEl.style.overflowY = this.inputEl.scrollHeight > maxHeight ? "auto" : "hidden";
 	}
 
@@ -3352,6 +3431,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private openNativeImagePicker(): void {
+		const shouldRestoreMobileFocus = this.beginMobileImagePickerFocusGuard();
 		const input = this.containerEl.createEl("input", {
 			cls: "knomo-hidden-file-input",
 			attr: {
@@ -3370,14 +3450,23 @@ export class KnomoView extends ItemView {
 			cleanedUp = true;
 			input.detach();
 		};
+		const finishWithoutFiles = () => {
+			handledChange = true;
+			cleanup();
+			this.finishMobileImagePickerFocusGuard(shouldRestoreMobileFocus);
+		};
 		this.registerDomEvent(input, "change", () => {
 			handledChange = true;
+			this.finishMobileImagePickerFocusGuard(shouldRestoreMobileFocus);
 			void this.insertImageFiles(input.files).finally(cleanup);
+		});
+		this.registerDomEvent(input, "cancel", () => {
+			finishWithoutFiles();
 		});
 		this.registerDomEvent(win, "focus", () => {
 			win.setTimeout(() => {
 				if (!handledChange) {
-					cleanup();
+					finishWithoutFiles();
 				}
 			}, 1000);
 		}, { once: true });

@@ -10,6 +10,7 @@ interface TagSuggestion {
 
 export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 	private tagsSnapshot: string[] | null = null;
+	private popoverRepositionFrameId: number | null = null;
 
 	constructor(
 		app: App,
@@ -27,6 +28,7 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 	}
 
 	close(): void {
+		this.clearPopoverReposition();
 		this.showPositionedPopover();
 		super.close();
 		this.tagsSnapshot = null;
@@ -61,10 +63,12 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 	renderSuggestion(value: TagSuggestion, el: HTMLElement): void {
 		if (value.result === null) {
 			el.setText(value.tag);
+			this.queuePopoverReposition();
 			return;
 		}
 		el.empty();
 		renderResults(el, value.tag, value.result);
+		this.queuePopoverReposition();
 	}
 
 	selectSuggestion(value: TagSuggestion, _evt: MouseEvent | KeyboardEvent): void {
@@ -135,7 +139,13 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			this.repositionPopover();
 			return;
 		}
-		win.requestAnimationFrame(() => this.repositionPopover());
+		if (this.popoverRepositionFrameId !== null) {
+			return;
+		}
+		this.popoverRepositionFrameId = win.requestAnimationFrame(() => {
+			this.popoverRepositionFrameId = null;
+			this.repositionPopover();
+		});
 	}
 
 	private repositionPopover(): void {
@@ -155,16 +165,16 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			const viewportTop = viewport ? Math.max(0, viewport.offsetTop) : 0;
 			const topGuard = 52;
 			const gap = 8;
-			const minHeight = 120;
 			const maxHeightLimit = 240;
-			const availableAbove = Math.max(minHeight, anchor.top - viewportTop - topGuard - gap);
+			const availableAbove = Math.max(0, anchor.top - viewportTop - topGuard - gap);
 			const maxHeight = Math.min(maxHeightLimit, availableAbove);
+			const contentHeight = this.measureSuggestionContentHeight(container);
+			const measuredHeight = Math.min(maxHeight, contentHeight > 0 ? contentHeight : maxHeight);
 			container.addClass("knomo-tag-suggest-popover");
 			container.style.position = "fixed";
 			container.style.zIndex = "10020";
 			container.style.maxHeight = `${Math.round(maxHeight)}px`;
 			container.style.overflowY = "auto";
-			const measuredHeight = Math.min(maxHeight, Math.max(minHeight, container.offsetHeight || maxHeight));
 			const top = Math.max(viewportTop + topGuard, anchor.top - measuredHeight - gap);
 			const inputRect = this.inputEl.getBoundingClientRect();
 			const viewportLeft = viewport ? Math.max(0, viewport.offsetLeft) : 0;
@@ -210,6 +220,35 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		container.style.right = "";
 		container.style.bottom = "";
 		this.showPositionedPopover(container);
+	}
+
+	private clearPopoverReposition(): void {
+		const win = this.inputEl.ownerDocument.defaultView;
+		if (win === null || this.popoverRepositionFrameId === null) {
+			this.popoverRepositionFrameId = null;
+			return;
+		}
+		win.cancelAnimationFrame(this.popoverRepositionFrameId);
+		this.popoverRepositionFrameId = null;
+	}
+
+	private measureSuggestionContentHeight(container: HTMLElement): number {
+		const win = this.inputEl.ownerDocument.defaultView;
+		if (win === null) {
+			return Math.ceil(container.scrollHeight || container.getBoundingClientRect().height);
+		}
+		const computed = win.getComputedStyle(container);
+		const verticalInset =
+			parseCssPixels(computed.paddingTop) +
+			parseCssPixels(computed.paddingBottom) +
+			parseCssPixels(computed.borderTopWidth) +
+			parseCssPixels(computed.borderBottomWidth);
+		const items = Array.from(container.querySelectorAll<HTMLElement>(".suggestion-item"));
+		if (items.length === 0) {
+			return Math.ceil(container.scrollHeight || container.getBoundingClientRect().height);
+		}
+		const itemHeight = items.reduce((height, item) => height + item.getBoundingClientRect().height, 0);
+		return Math.ceil(Math.max(container.scrollHeight, itemHeight + verticalInset));
 	}
 
 	private measureSuggestionContentWidth(container: HTMLElement, includeScrollbarWidth = false, extraWidth = 2): number {

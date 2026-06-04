@@ -2407,16 +2407,66 @@ body .knomo-mobile-create-fab.is-hidden {
 
 .knomo-plugin.is-layout-mobile .knomo-send-button,
 .knomo-mobile-composer-layer .knomo-send-button {
+	position: relative;
 	width: 58px;
 	min-width: 58px;
-	height: 38px;
-	min-height: 38px;
-	border-radius: 19px;
+	height: 44px;
+	min-height: 44px;
+	border-radius: 22px;
 	flex: 0 0 58px;
+	background: transparent;
+	box-shadow: none;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-send-button::before,
+.knomo-mobile-composer-layer .knomo-send-button::before {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 58px;
+	height: 35px;
+	border-radius: 18px;
+	background: var(--knomo-accent);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+	transform: translate(-50%, -50%);
+	transition:
+		background 160ms ease,
+		box-shadow 160ms ease;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-send-button:hover:not(:disabled),
+.knomo-plugin.is-layout-mobile .knomo-send-button:focus-visible:not(:disabled),
+.knomo-mobile-composer-layer .knomo-send-button:hover:not(:disabled),
+.knomo-mobile-composer-layer .knomo-send-button:focus-visible:not(:disabled) {
+	background: transparent;
+	box-shadow: none;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-send-button:hover:not(:disabled)::before,
+.knomo-plugin.is-layout-mobile .knomo-send-button:focus-visible:not(:disabled)::before,
+.knomo-mobile-composer-layer .knomo-send-button:hover:not(:disabled)::before,
+.knomo-mobile-composer-layer .knomo-send-button:focus-visible:not(:disabled)::before {
+	background: var(--knomo-accent-hover);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.knomo-plugin.is-layout-mobile .knomo-send-button:disabled,
+.knomo-mobile-composer-layer .knomo-send-button:disabled {
+	background: transparent;
+	box-shadow: none;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-send-button:disabled::before,
+.knomo-mobile-composer-layer .knomo-send-button:disabled::before {
+	background: var(--background-modifier-border);
+	box-shadow: none;
 }
 
 .knomo-plugin.is-layout-mobile .knomo-send-button svg,
 .knomo-mobile-composer-layer .knomo-send-button svg {
+	position: relative;
+	z-index: 1;
 	width: 24px;
 	min-width: 24px;
 	height: 24px;
@@ -2427,6 +2477,7 @@ body .knomo-mobile-create-fab.is-hidden {
 /* 移动端 composer body layer：最终层级覆盖 */
 .knomo-mobile-composer-layer {
 	--knomo-mobile-composer-bottom-offset: 0px;
+	--knomo-mobile-composer-fill-height: 0px;
 	position: fixed;
 	inset: 0;
 	z-index: 10000;
@@ -2477,7 +2528,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	left: 0;
 	right: 0;
 	top: 100%;
-	height: max(var(--knomo-keyboard-height, 0px), var(--knomo-mobile-composer-bottom-offset, 0px));
+	height: var(--knomo-mobile-composer-fill-height, 0px);
 	background: var(--knomo-composer-surface);
 	pointer-events: none;
 	transition: height 160ms cubic-bezier(0.32, 0.72, 0, 1);
@@ -2505,7 +2556,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	opacity: 0;
 }
 
-.knomo-mobile-composer-layer.is-closing .knomo-mobile-composer-content {
+.knomo-mobile-composer-layer.is-closing:not(.is-keyboard-tracking) .knomo-mobile-composer-content {
 	transform: translateY(100%);
 }
 

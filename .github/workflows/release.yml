@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use X.Y.Z without a v prefix: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp main.js manifest.json styles.css dist/
+
+          cd dist
+          zip -q "knomo-${GITHUB_REF_NAME}.zip" main.js manifest.json styles.css
+          sha256sum main.js manifest.json styles.css "knomo-${GITHUB_REF_NAME}.zip" > SHA256SUMS.txt
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          assets=(
+            "dist/main.js"
+            "dist/manifest.json"
+            "dist/styles.css"
+            "dist/knomo-${GITHUB_REF_NAME}.zip"
+            "dist/SHA256SUMS.txt"
+          )
+
+          for asset in "${assets[@]}"; do
+            if [[ ! -f "$asset" ]]; then
+              echo "Missing release asset: $asset"
+              exit 1
+            fi
+          done
+
+      - name: Generate artifact attestations
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/main.js
+            dist/manifest.json
+            dist/styles.css
+            dist/knomo-${{ github.ref_name }}.zip
+            dist/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          notes_file="release-notes/${GITHUB_REF_NAME}.md"
+          assets=(
+            "dist/main.js"
+            "dist/manifest.json"
+            "dist/styles.css"
+            "dist/knomo-${GITHUB_REF_NAME}.zip"
+            "dist/SHA256SUMS.txt"
+          )
+
+          if [[ -f "$notes_file" ]]; then
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file "$notes_file" \
+              --verify-tag
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi

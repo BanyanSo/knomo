@@ -2120,7 +2120,25 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-normal);
 	font-size: 15px;
 	line-height: 1.7;
+	text-align: start;
 	white-space: normal;
+}
+
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content {
+	text-align: justify;
+	text-align-last: start;
+}
+
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h1,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h2,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h3,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h4,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h5,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h6,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content pre,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content code,
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content table {
+	text-align: start;
 }
 
 .knomo-plugin .knomo-card-content p {

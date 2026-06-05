@@ -40,6 +40,18 @@ export interface TrashCardActionMeta {
 
 const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "copy-text", "copy-link", "delete"];
 const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
+const CJK_CONTENT_MIN_HAN_COUNT = 8;
+const CJK_CONTENT_MIN_HAN_RATIO = 0.25;
+const HAN_CHARACTER_PATTERN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
+
+export function isCjkMemoContent(content: string): boolean {
+	const visibleText = getVisibleMemoText(content);
+	if (visibleText.length === 0) {
+		return false;
+	}
+	const hanCount = (visibleText.match(HAN_CHARACTER_PATTERN) ?? []).length;
+	return hanCount >= CJK_CONTENT_MIN_HAN_COUNT && hanCount / visibleText.length >= CJK_CONTENT_MIN_HAN_RATIO;
+}
 
 export function getMemoCardShell(options: MemoCardShellOptions): MemoCardShell {
 	const attrs: Record<string, string> = { "data-memo-id": options.memoId };
@@ -126,4 +138,21 @@ function getSourceReferenceText(memo: MemoRecord): string | null {
 		return null;
 	}
 	return withMemoIdAlias(referenceText, sourceMemoId);
+}
+
+function getVisibleMemoText(content: string): string {
+	return content
+		.replace(/```[\s\S]*?```/g, " ")
+		.replace(/`[^`\n]*`/g, " ")
+		.replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
+		.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+		.replace(/!?\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_match: string, target: string, alias: string | undefined) => {
+			return alias ?? target;
+		})
+		.replace(/^#{1,6}\s+/gm, "")
+		.replace(/^>\s?/gm, "")
+		.replace(/^\s*[-*+]\s+/gm, "")
+		.replace(/^\s*\d+[.)]\s+/gm, "")
+		.replace(/[*_~#>\[\]()`]/g, "")
+		.replace(/\s+/g, "");
 }

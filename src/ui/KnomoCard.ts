@@ -11,6 +11,7 @@ import {
 	getTrashCardActions,
 	getTrashMemoCardClass,
 	getTrashMemoWarningText,
+	isCjkMemoContent,
 } from "./KnomoCardMetadata";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 
@@ -52,7 +53,7 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 		getA11yId: options.getA11yId,
 	});
 	const card = container.createEl("article", {
-		cls: shell.className,
+		cls: isCjkMemoContent(memo.contentSnapshot) ? `${shell.className} is-cjk-content` : shell.className,
 		attr: shell.attrs,
 	});
 	if (shell.randomCardDescriptionId !== null) {

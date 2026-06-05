@@ -9,7 +9,7 @@ import type { KnomoSettings } from "../src/types/settings";
 import { matchesDailyNotePath, parseDailyNoteDateFromPath } from "../src/utils/dailyNotes";
 import { hashMemoContent, hashText } from "../src/utils/hash";
 import { isSupportedMemoImage } from "../src/utils/markdown";
-import { buildMemoReferences, buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } from "../src/utils/references";
+import { buildMemoReferences, buildQuoteCreatedMemoContent, formatMemoIdAlias, stripTrailingWikiLink, withMemoIdAlias } from "../src/utils/references";
 
 const service = new MarkdownBlockService();
 
@@ -837,10 +837,12 @@ test("strips inline wiki link from content for card display", () => {
 	);
 });
 
-test("adds memoId alias to Obsidian block links", () => {
+test("formats numeric memoId alias for Obsidian block links", () => {
+	assert.equal(formatMemoIdAlias("2026060514301207"), "20260605-143012-07");
+	assert.equal(formatMemoIdAlias("memo-1"), "memo-1");
 	assert.equal(
-		withMemoIdAlias("[[Daily/2026-05-17#^abc123]]", "memo-1"),
-		"[[Daily/2026-05-17#^abc123|memo-1]]",
+		withMemoIdAlias("[[Daily/2026-05-17#^abc123]]", "2026060514301207"),
+		"[[Daily/2026-05-17#^abc123|20260605-143012-07]]",
 	);
 	assert.equal(
 		withMemoIdAlias("![[Daily/2026-05-17#^abc123]]", "memo-1"),

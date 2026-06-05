@@ -1822,7 +1822,7 @@ export class KnomoView extends ItemView {
 				return;
 			} else if (action === "copy-link") {
 				const referenceText = await this.referenceService.createReferenceText(memo, "link");
-				await this.copyText(referenceText);
+				await this.copyText(withMemoIdAlias(referenceText, memo.id));
 				new Notice(t("notice.copiedLink"));
 				this.syncCardMenuState();
 				return;

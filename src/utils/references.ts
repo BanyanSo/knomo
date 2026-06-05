@@ -40,7 +40,14 @@ export function withMemoIdAlias(referenceText: string, memoId: string): string {
 		return referenceText;
 	}
 	const target = normalizedText.slice(2, -2).split("|")[0];
-	return `[[${target}|${memoId}]]`;
+	return `[[${target}|${formatMemoIdAlias(memoId)}]]`;
+}
+
+export function formatMemoIdAlias(memoId: string): string {
+	if (!/^\d{16}$/.test(memoId)) {
+		return memoId;
+	}
+	return `${memoId.slice(0, 8)}-${memoId.slice(8, 14)}-${memoId.slice(14)}`;
 }
 
 function extractFirstBlockReference(content: string): string | null {

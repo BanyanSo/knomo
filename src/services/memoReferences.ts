@@ -3,7 +3,6 @@ import type { App } from "obsidian";
 
 import type { MemoRecord } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
-import { hashText } from "../utils/hash";
 import { splitMarkdownLines } from "../utils/markdown";
 import { buildDailyRef } from "../utils/memoRefs";
 import type { MarkdownBlockService } from "./MarkdownBlockService";

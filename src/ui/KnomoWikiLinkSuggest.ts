@@ -225,16 +225,42 @@ export class KnomoWikiLinkSuggest {
 			if (suggestion.showPath) {
 				item.createDiv({ cls: "knomo-link-suggest-path", text: suggestion.path });
 			}
+			let touchStartY: number | null = null;
+			let touchMoved = false;
 			const preventBlur = (event: Event) => {
+				if (isTouchPointerEvent(event)) {
+					return;
+				}
 				event.preventDefault();
 			};
 			const choose = (event: Event) => {
+				if (isTouchPointerEvent(event)) {
+					return;
+				}
+				if (touchMoved) {
+					touchMoved = false;
+					return;
+				}
 				event.preventDefault();
 				this.selectSuggestion(index);
 			};
+			const startTouch = (event: TouchEvent) => {
+				touchStartY = event.touches[0]?.clientY ?? null;
+				touchMoved = false;
+			};
+			const trackTouchMove = (event: TouchEvent) => {
+				if (touchStartY === null) {
+					return;
+				}
+				const currentY = event.touches[0]?.clientY ?? touchStartY;
+				if (Math.abs(currentY - touchStartY) > 6) {
+					touchMoved = true;
+				}
+			};
 			item.addEventListener("pointerdown", preventBlur);
 			item.addEventListener("mousedown", preventBlur);
-			item.addEventListener("touchstart", preventBlur);
+			item.addEventListener("touchstart", startTouch);
+			item.addEventListener("touchmove", trackTouchMove);
 			item.addEventListener("pointerup", choose);
 			item.addEventListener("touchend", choose);
 			item.addEventListener("click", choose);
@@ -286,9 +312,8 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	private dispatchInputEvent(): void {
-		const inputEvent = this.inputEl.ownerDocument.createEvent("Event");
-		inputEvent.initEvent("input", true, false);
-		this.inputEl.dispatchEvent(inputEvent);
+		const EventConstructor = (this.inputEl.win as Window & { Event: typeof Event }).Event;
+		this.inputEl.dispatchEvent(new EventConstructor("input", { bubbles: true, cancelable: false }));
 	}
 
 	private getFilesSnapshot(): TFile[] {
@@ -311,13 +336,12 @@ export class KnomoWikiLinkSuggest {
 			return;
 		}
 		const popover = this.inputEl.ownerDocument.body.createDiv({
-			cls: "knomo-link-suggest-popover",
+			cls: "knomo-link-suggest-popover knomo-link-suggest-positioning",
 			attr: {
 				role: "listbox",
 			},
 		});
-		popover.style.position = "fixed";
-		popover.style.zIndex = WIKI_LINK_POPOVER_Z_INDEX;
+		popover.setCssProps({ "--knomo-suggest-z-index": WIKI_LINK_POPOVER_Z_INDEX });
 		this.popoverEl = popover;
 	}
 
@@ -371,23 +395,31 @@ export class KnomoWikiLinkSuggest {
 		const maxLeft = Math.max(minLeft, viewportRight - VIEWPORT_MARGIN - width);
 		const left = clamp(anchor.left, minLeft, maxLeft);
 		const mobileLayer = this.inputEl.closest(".knomo-mobile-composer-layer");
-		popover.style.left = `${Math.round(left)}px`;
-		popover.style.width = `${Math.round(width)}px`;
-		popover.style.right = "";
-		popover.style.bottom = "";
+		const popoverCssProps = {
+			"--knomo-suggest-left": `${Math.round(left)}px`,
+			"--knomo-suggest-width": `${Math.round(width)}px`,
+		};
 		if (mobileLayer !== null) {
 			const availableAbove = Math.max(0, anchor.top - viewportTop - MOBILE_TOP_GUARD - POPOVER_GAP);
 			const maxHeight = Math.min(240, availableAbove);
-			popover.style.maxHeight = `${Math.round(maxHeight)}px`;
 			const contentHeight = measureSuggestionContentHeight(this.inputEl, popover, ".knomo-link-suggest-item");
 			const measuredHeight = Math.min(maxHeight, contentHeight > 0 ? contentHeight : maxHeight);
 			const top = Math.max(viewportTop + MOBILE_TOP_GUARD, anchor.top - measuredHeight - POPOVER_GAP);
-			popover.style.top = `${Math.round(top)}px`;
+			popover.setCssProps({
+				...popoverCssProps,
+				"--knomo-suggest-top": `${Math.round(top)}px`,
+				"--knomo-suggest-max-height": `${Math.round(maxHeight)}px`,
+			});
+			popover.removeClass("knomo-link-suggest-positioning");
 			return;
 		}
 		const maxHeight = Math.max(72, Math.min(240, viewportBottom - anchor.bottom - VIEWPORT_MARGIN));
-		popover.style.maxHeight = `${Math.round(maxHeight)}px`;
-		popover.style.top = `${Math.round(anchor.bottom)}px`;
+		popover.setCssProps({
+			...popoverCssProps,
+			"--knomo-suggest-top": `${Math.round(anchor.bottom)}px`,
+			"--knomo-suggest-max-height": `${Math.round(maxHeight)}px`,
+		});
+		popover.removeClass("knomo-link-suggest-positioning");
 	}
 
 	private clearReposition(): void {
@@ -398,4 +430,8 @@ export class KnomoWikiLinkSuggest {
 		this.repositionFrameId = null;
 	}
 
+}
+
+function isTouchPointerEvent(event: Event): boolean {
+	return "pointerType" in event && (event as PointerEvent).pointerType === "touch";
 }

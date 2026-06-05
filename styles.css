@@ -19,6 +19,7 @@ body {
 	--knomo-mobile-drawer-reserved-right: calc(75px + env(safe-area-inset-right));
 	--knomo-mobile-drawer-width: min(360px, calc(100vw - var(--knomo-mobile-drawer-reserved-right)));
 	--knomo-mobile-drawer-top: max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px));
+	--knomo-mobile-drawer-bottom-clearance: calc(var(--mobile-navbar-action-size, 44px) + 20px);
 	--knomo-touch-target: 44px;
 	--knomo-radius: 10px;
 	--knomo-dropdown-width: 168px;
@@ -516,14 +517,17 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 
 .knomo-plugin .knomo-nav-button {
 	justify-content: flex-start;
-	gap: 8px;
+	gap: 0;
 	width: 100%;
 	text-align: left;
 }
 
 .knomo-plugin .knomo-nav-button .knomo-button-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-start;
 	width: 32px;
-	justify-content: center;
+	min-width: 32px;
 	color: inherit;
 }
 
@@ -736,7 +740,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	width: var(--knomo-mobile-drawer-width);
 	min-width: var(--knomo-mobile-drawer-width);
 	max-width: var(--knomo-mobile-drawer-width);
-	padding: 16px 14px max(16px, env(safe-area-inset-bottom)) var(--knomo-mobile-drawer-padding-left);
+	padding: 16px 14px max(
+		16px,
+		calc(var(--knomo-mobile-drawer-bottom-clearance) + env(safe-area-inset-bottom))
+	) var(--knomo-mobile-drawer-padding-left);
 	border: 0;
 	border-radius: 0 var(--knomo-radius) 0 0;
 	background-color: var(--knomo-page-background);
@@ -1550,6 +1557,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: block;
 	flex: 1;
 	width: 100%;
+	height: var(--knomo-composer-input-height, auto);
 	min-height: 44px;
 	max-height: 480px;
 	padding: 0;
@@ -1559,7 +1567,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-normal);
 	font-size: 16px;
 	line-height: 1.55;
-	overflow-y: hidden;
+	overflow-y: var(--knomo-composer-input-overflow-y, hidden);
 	scrollbar-width: none;
 	box-shadow: none;
 	appearance: none;
@@ -1573,7 +1581,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin:not(.is-layout-mobile) .knomo-composer-input {
 	flex: 0 0 auto;
-	height: 48px;
+	height: var(--knomo-composer-input-height, 48px);
 	min-height: 48px;
 	transition: height var(--knomo-transition-fast);
 }
@@ -1597,7 +1605,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	border-radius: 0;
 	font-size: 16px;
 	line-height: 1.55;
-	overflow-y: auto;
+	overflow-y: var(--knomo-composer-input-overflow-y, auto);
 	overscroll-behavior: contain;
 }
 
@@ -1626,6 +1634,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	border: 1px solid var(--knomo-soft-border);
 	border-radius: var(--knomo-radius);
 	background: var(--knomo-subtle-surface);
+}
+
+.knomo-plugin .knomo-reference-preview.is-visible {
+	display: flex;
 }
 
 .knomo-plugin .knomo-reference-preview-text {
@@ -2276,11 +2288,57 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 /* --------------------------------------------------------------------------
    12. Utilities
    -------------------------------------------------------------------------- */
-.knomo-plugin .knomo-clipboard-helper {
+.knomo-textarea-mirror {
 	position: fixed;
+	visibility: hidden;
+	pointer-events: none;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	word-break: var(--knomo-textarea-mirror-word-break, normal);
+	box-sizing: var(--knomo-textarea-mirror-box-sizing, border-box);
+	width: var(--knomo-textarea-mirror-width, auto);
+	min-height: var(--knomo-textarea-mirror-min-height, 0);
+	padding: var(--knomo-textarea-mirror-padding, 0);
+	border: var(--knomo-textarea-mirror-border, 0);
+	font: var(--knomo-textarea-mirror-font, inherit);
+	line-height: var(--knomo-textarea-mirror-line-height, normal);
+	letter-spacing: var(--knomo-textarea-mirror-letter-spacing, normal);
+	text-transform: var(--knomo-textarea-mirror-text-transform, none);
+	left: var(--knomo-textarea-mirror-left, -10000px);
+	top: var(--knomo-textarea-mirror-top, 0);
+}
+
+.knomo-suggest-measure-host {
+	position: fixed;
+	visibility: hidden;
+	pointer-events: none;
+	width: max-content;
+	max-width: none;
+	min-width: 0;
+	left: -10000px;
 	top: 0;
-	left: -9999px;
-	opacity: 0;
+}
+
+.knomo-suggest-measure-item {
+	width: max-content;
+	max-width: none;
+	min-width: 0;
+}
+
+.knomo-scrollbar-measure-outer {
+	position: fixed;
+	visibility: hidden;
+	pointer-events: none;
+	overflow: scroll;
+	width: 100px;
+	height: 100px;
+	left: -10000px;
+	top: 0;
+}
+
+.knomo-scrollbar-measure-inner {
+	width: 100%;
+	height: 120px;
 }
 
 .knomo-plugin .knomo-hidden-file-input,
@@ -2657,9 +2715,12 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-tag-suggest-popover {
 	box-sizing: border-box;
 	position: fixed;
-	z-index: 10020;
-	max-width: calc(100vw - 24px);
-	max-height: 240px;
+	z-index: var(--knomo-suggest-z-index, 10020);
+	transform: translate(var(--knomo-suggest-translate-x, 0), var(--knomo-suggest-translate-y, 0));
+	width: var(--knomo-suggest-width, auto);
+	min-width: var(--knomo-suggest-width, 0);
+	max-width: var(--knomo-suggest-width, calc(100vw - 24px));
+	max-height: var(--knomo-suggest-max-height, 240px);
 	overflow-y: auto;
 }
 
@@ -2670,15 +2731,38 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-link-suggest-popover {
 	box-sizing: border-box;
 	position: fixed;
-	z-index: 10020;
-	max-width: calc(100vw - 24px);
-	max-height: 240px;
+	z-index: var(--knomo-suggest-z-index, 10020);
+	left: var(--knomo-suggest-left, auto);
+	top: var(--knomo-suggest-top, auto);
+	right: auto;
+	bottom: auto;
+	width: var(--knomo-suggest-width, auto);
+	min-width: var(--knomo-suggest-width, 0);
+	max-width: var(--knomo-suggest-width, calc(100vw - 24px));
+	max-height: var(--knomo-suggest-max-height, 240px);
 	overflow-y: auto;
+	overscroll-behavior: contain;
+	touch-action: pan-y;
+	-webkit-overflow-scrolling: touch;
 	padding: 4px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
 	background: var(--background-primary);
 	box-shadow: var(--shadow-s);
+}
+
+.knomo-link-suggest-positioning {
+	visibility: hidden;
+}
+
+.knomo-suggest-measure-host.knomo-tag-suggest-popover,
+.knomo-suggest-measure-host.knomo-link-suggest-popover {
+	width: max-content;
+	min-width: 0;
+	max-width: none;
+	max-height: none;
+	overflow-y: visible;
+	transform: none;
 }
 
 .knomo-link-suggest-item {

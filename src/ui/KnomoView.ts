@@ -77,7 +77,6 @@ import {
 	formatRegularFilterEmptyTitle,
 	formatRegularFilterSummary,
 	formatTagFilterText,
-	getMemoImages,
 	getMemoStats,
 	getScopeLabel,
 	getSearchDateLabel,
@@ -95,7 +94,6 @@ import {
 	isSidebarNav,
 	isTitleMode,
 	TITLE_MODE_OPTIONS,
-	TITLE_SCOPE_OPTIONS,
 } from "./viewNavigation";
 import type { SidebarNav, TitleMode } from "./viewNavigation";
 
@@ -2559,7 +2557,7 @@ export class KnomoView extends ItemView {
 	private finishMobileImagePickerFocusGuard(shouldRestoreFocus: boolean): void {
 		this.mobileImagePickerActive = false;
 		this.clearMobileImagePickerFocusTimer();
-		if (!shouldRestoreFocus) {
+		if (!shouldRestoreFocus || this.currentLayout === "mobile") {
 			return;
 		}
 		this.mobileImagePickerFocusTimerId = this.containerEl.win.setTimeout(() => {
@@ -2604,7 +2602,7 @@ export class KnomoView extends ItemView {
 		void this.saveInput();
 	}
 
-	private insertText(text: string): void {
+	private insertText(text: string, shouldFocus = true): void {
 		if (this.inputEl === null) {
 			return;
 		}
@@ -2613,15 +2611,15 @@ export class KnomoView extends ItemView {
 		const insertText = text === "#" ? getHashInsertionText(this.inputEl.value, start) : text;
 		this.inputEl.value = `${this.inputEl.value.slice(0, start)}${insertText}${this.inputEl.value.slice(end)}`;
 		const nextCursor = start + insertText.length;
-		try {
-			this.inputEl.focus({ preventScroll: true });
-		} catch {
-			this.inputEl.focus();
+		if (shouldFocus) {
+			try {
+				this.inputEl.focus({ preventScroll: true });
+			} catch {
+				this.inputEl.focus();
+			}
 		}
 		this.inputEl.setSelectionRange(nextCursor, nextCursor);
-		const inputEvent = this.containerEl.doc.createEvent("Event");
-		inputEvent.initEvent("input", true, false);
-		this.inputEl.dispatchEvent(inputEvent);
+		dispatchTextareaInputEvent(this.inputEl);
 	}
 
 	private applyListFormat(type: "bullet" | "ordered"): void {
@@ -2637,9 +2635,7 @@ export class KnomoView extends ItemView {
 			input.focus();
 		}
 		input.setSelectionRange(replacement.cursor, replacement.cursor);
-		const inputEvent = this.containerEl.doc.createEvent("Event");
-		inputEvent.initEvent("input", true, false);
-		input.dispatchEvent(inputEvent);
+		dispatchTextareaInputEvent(input);
 	}
 
 	private handleComposerInput(event: Event): void {
@@ -2805,9 +2801,7 @@ export class KnomoView extends ItemView {
 		const input = this.inputEl;
 		input.value = patch.value;
 		input.setSelectionRange(patch.cursor, patch.cursor);
-		const inputEvent = this.containerEl.doc.createEvent("Event");
-		inputEvent.initEvent("input", true, false);
-		input.dispatchEvent(inputEvent);
+		dispatchTextareaInputEvent(input);
 	}
 
 	private openTagSuggestAfterHashInsert(): void {
@@ -2842,17 +2836,12 @@ export class KnomoView extends ItemView {
 		}
 		const minHeight = this.currentLayout === "mobile" ? 150 : 48;
 		const maxHeight = this.currentLayout === "mobile" ? this.getMobileMaxInputHeight() : 480;
-		if (this.currentLayout !== "mobile") {
-			this.inputEl.style.height = "auto";
-			const nextHeight = Math.min(maxHeight, Math.max(minHeight, this.inputEl.scrollHeight));
-			this.inputEl.style.height = `${nextHeight}px`;
-			this.inputEl.style.overflowY = this.inputEl.scrollHeight > maxHeight ? "auto" : "hidden";
-			return;
-		}
-		this.inputEl.style.height = "auto";
+		this.inputEl.setCssProps({ "--knomo-composer-input-height": "auto" });
 		const nextHeight = Math.min(maxHeight, Math.max(minHeight, this.inputEl.scrollHeight));
-		this.inputEl.style.height = `${nextHeight}px`;
-		this.inputEl.style.overflowY = this.inputEl.scrollHeight > maxHeight ? "auto" : "hidden";
+		this.inputEl.setCssProps({
+			"--knomo-composer-input-height": `${nextHeight}px`,
+			"--knomo-composer-input-overflow-y": this.inputEl.scrollHeight > maxHeight ? "auto" : "hidden",
+		});
 	}
 
 	private getMobileMaxInputHeight(): number {
@@ -3490,7 +3479,7 @@ export class KnomoView extends ItemView {
 		};
 		this.registerDomEvent(input, "change", () => {
 			handledChange = true;
-			this.finishMobileImagePickerFocusGuard(shouldRestoreMobileFocus);
+			this.finishMobileImagePickerFocusGuard(false);
 			void this.insertImageFiles(input.files).finally(cleanup);
 		});
 		this.registerDomEvent(input, "cancel", () => {
@@ -3516,7 +3505,7 @@ export class KnomoView extends ItemView {
 				return;
 			}
 			const links = await this.attachmentService.createImageEmbedLinks(sourcePath, Array.from(files));
-			this.insertText(links.join("\n"));
+			this.insertText(links.join("\n"), this.currentLayout !== "mobile");
 		} catch (error) {
 			const message = formatSettingsText(error instanceof Error ? error.message : t("error.imageInsertFailed"));
 			this.updateStatus(message, true);
@@ -3552,17 +3541,13 @@ export class KnomoView extends ItemView {
 	}
 
 	private async copyText(text: string): Promise<void> {
-		const clipboard = this.containerEl.win.navigator.clipboard;
-		if (clipboard !== undefined) {
-			await clipboard.writeText(text);
-			return;
-		}
-		const helper = this.containerEl.createEl("textarea", { cls: "knomo-clipboard-helper" });
-		helper.value = text;
-		helper.select();
-		this.containerEl.doc.execCommand("copy");
-		helper.detach();
+		await this.containerEl.win.navigator.clipboard.writeText(text);
 	}
+}
+
+function dispatchTextareaInputEvent(input: HTMLTextAreaElement): void {
+	const EventConstructor = (input.win as Window & { Event: typeof Event }).Event;
+	input.dispatchEvent(new EventConstructor("input", { bubbles: true, cancelable: false }));
 }
 
 function isListEnterInputEvent(event: InputEvent): boolean {

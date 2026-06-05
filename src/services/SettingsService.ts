@@ -24,7 +24,7 @@ export class SettingsService {
 	}
 
 	async loadSettings(): Promise<KnomoSettings> {
-		const savedData = (await this.plugin.loadData()) as unknown;
+		const savedData: unknown = await this.plugin.loadData();
 		this.settings = this.migrateSettings(extractSettingsData(savedData));
 		return this.getSettings();
 	}
@@ -35,7 +35,7 @@ export class SettingsService {
 
 	async saveSettings(settings: KnomoSettings): Promise<KnomoSettings> {
 		this.settings = this.migrateSettings(settings);
-		const savedData = await this.plugin.loadData();
+		const savedData: unknown = await this.plugin.loadData();
 		await this.plugin.saveData(buildPluginDataWithSettings(savedData, this.settings));
 		return this.getSettings();
 	}

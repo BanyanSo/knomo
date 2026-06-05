@@ -231,7 +231,7 @@ export class MemoIndexStore {
 		for (const file of files) {
 			const relativePath = file.path.slice(indexFolder.path.length + 1);
 			if (!keepRelativePaths.has(relativePath)) {
-				await this.app.vault.delete(file);
+				await this.app.fileManager.trashFile(file);
 			}
 		}
 	}

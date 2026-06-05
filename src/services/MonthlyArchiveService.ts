@@ -133,7 +133,7 @@ export class MonthlyArchiveService {
 			}
 			throw new MonthlyArchiveMissingError("Monthly archive file does not exist.");
 		}
-		const file = existing as TFile;
+		const file = existing;
 		const dateHeading = memo.monthlyRef.dateHeading || formatMonthlyDateHeading(settings.monthlyDateHeadingFormat, new Date(memo.createdAt));
 		let lineNumberHint: number | null = null;
 		const content = await this.app.vault.process(file, (currentContent) => {
@@ -178,7 +178,7 @@ export class MonthlyArchiveService {
 		if (!(existing instanceof TFile)) {
 			throw new MonthlyArchiveMissingError("Monthly archive file does not exist.");
 		}
-		const file = existing as TFile;
+		const file = existing;
 		let deletedBlock = "";
 		const content = await this.app.vault.process(file, (currentContent) => {
 			const location = this.markdownBlockService.findMemoBlock(currentContent, {
@@ -231,7 +231,7 @@ export class MonthlyArchiveService {
 		for (const file of this.listMonthlyArchiveFiles(settings)) {
 			const relativePath = file.path.slice(monthlyFolderPath.length + 1);
 			if (!keepRelativePaths.has(relativePath)) {
-				await this.app.vault.delete(file);
+				await this.app.fileManager.trashFile(file);
 			}
 		}
 	}

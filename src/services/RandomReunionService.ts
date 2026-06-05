@@ -20,17 +20,18 @@ export class RandomReunionService {
 	}
 
 	async markRandomReunionReviewed(memoId: string): Promise<void> {
-		const savedData = await this.plugin.loadData();
+		const savedData: unknown = await this.plugin.loadData();
 		const reviewStates = extractRandomReunionReviewStates(savedData);
 		await this.saveReviewStates(markMemoReviewed(reviewStates, memoId));
 	}
 
 	async loadReviewStates(): Promise<MemoReviewStateMap> {
-		return extractRandomReunionReviewStates(await this.plugin.loadData());
+		const savedData: unknown = await this.plugin.loadData();
+		return extractRandomReunionReviewStates(savedData);
 	}
 
 	private async saveReviewStates(reviewStates: MemoReviewStateMap): Promise<void> {
-		const savedData = await this.plugin.loadData();
+		const savedData: unknown = await this.plugin.loadData();
 		await this.plugin.saveData(buildPluginDataWithRandomReunionReviewStates(savedData, reviewStates));
 	}
 }

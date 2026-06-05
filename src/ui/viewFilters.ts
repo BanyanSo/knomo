@@ -3,7 +3,6 @@ import type { App } from "obsidian";
 
 import { t } from "../i18n";
 import type { MemoRecord } from "../types/memo";
-import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage } from "../utils/markdown";
 import { withMemoIdAlias } from "../utils/references";

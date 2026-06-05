@@ -121,6 +121,24 @@ test("touch candidate selection prevents blur and keeps focus", () => {
 	assert.equal(harness.doc.activeElement, harness.input.asHtml());
 });
 
+test("touch scrolling WikiLink candidates does not select an item", () => {
+	const file = makeFile("Projects/Alpha.md");
+	const harness = createHarness([file], { mobileLayer: true });
+	harness.input.value = "[[]]";
+	harness.input.setSelectionRange(2, 2);
+	harness.suggest.openForCurrentRange();
+	harness.win.flushAnimationFrames();
+	const popover = harness.suggest.getPopoverForTest();
+	assert.notEqual(popover, null);
+	const item = (popover as unknown as FakeElement).children[0];
+	item.dispatchTestEvent("touchstart", createTouchEvent(100));
+	item.dispatchTestEvent("touchmove", createTouchEvent(124));
+	const touchEnd = createDomEvent();
+	item.dispatchTestEvent("touchend", touchEnd);
+	assert.equal(touchEnd.prevented, false);
+	assert.equal(harness.input.value, "[[]]");
+});
+
 test("positions WikiLink popover at the current textarea cursor", () => {
 	const harness = createHarness([makeFile("Projects/Alpha.md")]);
 	harness.win.innerWidth = 800;
@@ -132,8 +150,8 @@ test("positions WikiLink popover at the current textarea cursor", () => {
 	const popover = harness.suggest.getPopoverForTest();
 	assert.notEqual(popover, null);
 	const style = (popover as unknown as FakeElement).style.values;
-	assert.equal(style.get("left"), "52px");
-	assert.equal(style.get("top"), "318px");
+	assert.equal(style.get("--knomo-suggest-left"), "52px");
+	assert.equal(style.get("--knomo-suggest-top"), "318px");
 });
 
 interface HarnessOptions {
@@ -240,6 +258,12 @@ function createDomEvent(): Event & { prevented: boolean } {
 	} as Event & { prevented: boolean };
 }
 
+function createTouchEvent(clientY: number): TouchEvent {
+	return {
+		touches: [{ clientY }],
+	} as unknown as TouchEvent;
+}
+
 class FakeStyle {
 	readonly values = new Map<string, string>();
 
@@ -304,6 +328,10 @@ class FakeElement {
 		return this as unknown as HTMLElement;
 	}
 
+	get win(): FakeWindow {
+		return this.ownerDocument.defaultView;
+	}
+
 	createDiv(options: FakeElementOptions = {}): FakeElement {
 		return this.createEl("div", options);
 	}
@@ -333,6 +361,24 @@ class FakeElement {
 
 	setText(text: string): void {
 		this.text = text;
+	}
+
+	setCssProps(props: Record<string, string>): void {
+		for (const [key, value] of Object.entries(props)) {
+			this.style.values.set(key, value);
+		}
+	}
+
+	addClass(...classes: string[]): void {
+		for (const cls of classes) {
+			this.classes.add(cls);
+		}
+	}
+
+	removeClass(...classes: string[]): void {
+		for (const cls of classes) {
+			this.classes.delete(cls);
+		}
 	}
 
 	appendChild(child: FakeElement): FakeElement {
@@ -507,6 +553,12 @@ class FakeWindow {
 	innerWidth = 390;
 	innerHeight = 800;
 	readonly HTMLElement = FakeElement;
+	readonly Event = class {
+		constructor(
+			readonly type: string,
+			readonly init?: EventInit,
+		) {}
+	} as unknown as typeof Event;
 	readonly visualViewport = {
 		offsetTop: 0,
 		offsetLeft: 0,

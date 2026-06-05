@@ -95,7 +95,7 @@ export function renderComposerReferencePreview(
 ): void {
 	if (quoteMarkdownText === null) {
 		container.empty();
-		container.style.display = "none";
+		container.removeClass("is-visible");
 		return;
 	}
 	container.empty();
@@ -117,5 +117,5 @@ export function renderComposerReferencePreview(
 	});
 	options.setTooltipIfDesktopOnly(clearButton);
 	setIcon(clearButton, "x");
-	container.style.display = "flex";
+	container.addClass("is-visible");
 }

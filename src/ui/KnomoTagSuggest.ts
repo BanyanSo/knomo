@@ -46,8 +46,6 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		const container = this.getSuggestionContainer();
 		if (container !== null) {
 			container.addClass("knomo-tag-suggest-popover");
-			container.style.position = "fixed";
-			container.style.zIndex = "10020";
 		}
 	}
 
@@ -177,10 +175,6 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			const contentHeight = measureSuggestionContentHeight(this.inputEl, container, ".suggestion-item");
 			const measuredHeight = Math.min(maxHeight, contentHeight > 0 ? contentHeight : maxHeight);
 			container.addClass("knomo-tag-suggest-popover");
-			container.style.position = "fixed";
-			container.style.zIndex = "10020";
-			container.style.maxHeight = `${Math.round(maxHeight)}px`;
-			container.style.overflowY = "auto";
 			const top = Math.max(viewportTop + topGuard, anchor.top - measuredHeight - gap);
 			const inputRect = this.inputEl.getBoundingClientRect();
 			const viewportLeft = viewport ? Math.max(0, viewport.offsetLeft) : 0;
@@ -195,11 +189,7 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			const minLeft = viewportLeft + viewportMargin;
 			const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
 			const left = clamp(anchor.left, minLeft, maxLeft);
-			container.style.left = `${Math.round(left)}px`;
-			container.style.top = `${Math.round(top)}px`;
-			container.style.width = `${Math.round(width)}px`;
-			container.style.right = "";
-			container.style.bottom = "";
+			this.setPopoverOffsetPosition(container, left, top, width, maxHeight);
 			this.showPositionedPopover(container);
 			return;
 		}
@@ -222,13 +212,22 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		const minLeft = viewportLeft + viewportMargin;
 		const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
 		const left = clamp(anchor.left, minLeft, maxLeft);
-		container.style.position = "fixed";
-		container.style.left = `${Math.round(left)}px`;
-		container.style.top = `${Math.round(anchor.bottom)}px`;
-		container.style.width = `${Math.round(width)}px`;
-		container.style.right = "";
-		container.style.bottom = "";
+		this.setPopoverOffsetPosition(container, left, anchor.bottom, width, 240);
 		this.showPositionedPopover(container);
+	}
+
+	private setPopoverOffsetPosition(container: HTMLElement, left: number, top: number, width: number, maxHeight: number): void {
+		container.setCssProps({
+			"--knomo-suggest-translate-x": "0px",
+			"--knomo-suggest-translate-y": "0px",
+		});
+		const currentRect = container.getBoundingClientRect();
+		container.setCssProps({
+			"--knomo-suggest-translate-x": `${Math.round(left - currentRect.left)}px`,
+			"--knomo-suggest-translate-y": `${Math.round(top - currentRect.top)}px`,
+			"--knomo-suggest-width": `${Math.round(width)}px`,
+			"--knomo-suggest-max-height": `${Math.round(maxHeight)}px`,
+		});
 	}
 
 	private clearPopoverReposition(): void {
@@ -261,9 +260,10 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 
 	private asHTMLElement(value: unknown): HTMLElement | null {
 		const win = this.inputEl.ownerDocument.defaultView;
-		if (win === null) {
+		if (win === null || value === null || typeof value !== "object") {
 			return null;
 		}
-		return value instanceof win.HTMLElement ? value : null;
+		const candidate = value as { instanceOf?: (constructor: typeof HTMLElement) => boolean };
+		return typeof candidate.instanceOf === "function" && candidate.instanceOf(win.HTMLElement) ? value as HTMLElement : null;
 	}
 }

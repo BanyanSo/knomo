@@ -11,25 +11,21 @@ export function getTextareaCharacterRect(inputEl: HTMLTextAreaElement, index: nu
 	}
 	const inputRect = inputEl.getBoundingClientRect();
 	const computed = win.getComputedStyle(inputEl);
-	const mirror = doc.body.createDiv();
-	const mirrorStyle = mirror.style;
-	mirrorStyle.position = "fixed";
-	mirrorStyle.visibility = "hidden";
-	mirrorStyle.pointerEvents = "none";
-	mirrorStyle.whiteSpace = "pre-wrap";
-	mirrorStyle.overflowWrap = "break-word";
-	mirrorStyle.wordBreak = computed.wordBreak;
-	mirrorStyle.boxSizing = computed.boxSizing;
-	mirrorStyle.width = `${inputRect.width}px`;
-	mirrorStyle.minHeight = computed.minHeight;
-	mirrorStyle.padding = computed.padding;
-	mirrorStyle.border = computed.border;
-	mirrorStyle.font = computed.font;
-	mirrorStyle.lineHeight = computed.lineHeight;
-	mirrorStyle.letterSpacing = computed.letterSpacing;
-	mirrorStyle.textTransform = computed.textTransform;
-	mirrorStyle.left = `${inputRect.left - inputEl.scrollLeft}px`;
-	mirrorStyle.top = `${inputRect.top - inputEl.scrollTop}px`;
+	const mirror = doc.body.createDiv({ cls: "knomo-textarea-mirror" });
+	mirror.setCssProps({
+		"--knomo-textarea-mirror-word-break": computed.wordBreak,
+		"--knomo-textarea-mirror-box-sizing": computed.boxSizing,
+		"--knomo-textarea-mirror-width": `${inputRect.width}px`,
+		"--knomo-textarea-mirror-min-height": computed.minHeight,
+		"--knomo-textarea-mirror-padding": computed.padding,
+		"--knomo-textarea-mirror-border": computed.border,
+		"--knomo-textarea-mirror-font": computed.font,
+		"--knomo-textarea-mirror-line-height": computed.lineHeight,
+		"--knomo-textarea-mirror-letter-spacing": computed.letterSpacing,
+		"--knomo-textarea-mirror-text-transform": computed.textTransform,
+		"--knomo-textarea-mirror-left": `${inputRect.left - inputEl.scrollLeft}px`,
+		"--knomo-textarea-mirror-top": `${inputRect.top - inputEl.scrollTop}px`,
+	});
 	mirror.setText(inputEl.value.slice(0, index));
 	const marker = mirror.createSpan({ text: inputEl.value.charAt(index) || "\u200b" });
 	const rect = marker.getBoundingClientRect();
@@ -71,14 +67,7 @@ export function measureSuggestionContentWidth(
 	if (host === null) {
 		return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
 	}
-	host.style.position = "fixed";
-	host.style.visibility = "hidden";
-	host.style.pointerEvents = "none";
-	host.style.width = "max-content";
-	host.style.maxWidth = "none";
-	host.style.minWidth = "0";
-	host.style.left = "-10000px";
-	host.style.top = "0";
+	host.addClass("knomo-suggest-measure-host");
 	doc.body.appendChild(host);
 	let width = 0;
 	for (const item of items) {
@@ -86,9 +75,7 @@ export function measureSuggestionContentWidth(
 		if (clone === null) {
 			continue;
 		}
-		clone.style.width = "max-content";
-		clone.style.maxWidth = "none";
-		clone.style.minWidth = "0";
+		clone.addClass("knomo-suggest-measure-item");
 		host.appendChild(clone);
 		width = Math.max(width, clone.getBoundingClientRect().width);
 	}
@@ -112,19 +99,9 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 function asHTMLElement(value: Node, doc: Document): HTMLElement | null {
-	const win = doc.defaultView as (Window & { HTMLElement?: typeof HTMLElement }) | null;
-	if (win !== null && typeof win.HTMLElement === "function" && value instanceof win.HTMLElement) {
+	const win = doc.defaultView;
+	if (win !== null && value.instanceOf(win.HTMLElement)) {
 		return value;
-	}
-	const globalHTMLElement = globalThis.HTMLElement;
-	if (typeof globalHTMLElement === "function") {
-		if (value instanceof globalHTMLElement) {
-			return value;
-		}
-		const maybeObsidianNode = value as Node & { instanceOf?: (constructor: typeof HTMLElement) => boolean };
-		if (typeof maybeObsidianNode.instanceOf === "function" && maybeObsidianNode.instanceOf(globalHTMLElement)) {
-			return value as HTMLElement;
-		}
 	}
 	return null;
 }
@@ -135,18 +112,8 @@ function parseCssPixels(value: string): number {
 }
 
 function measureScrollbarWidth(doc: Document): number {
-	const outer = doc.body.createDiv();
-	const inner = outer.createDiv();
-	outer.style.position = "fixed";
-	outer.style.visibility = "hidden";
-	outer.style.pointerEvents = "none";
-	outer.style.overflow = "scroll";
-	outer.style.width = "100px";
-	outer.style.height = "100px";
-	outer.style.left = "-10000px";
-	outer.style.top = "0";
-	inner.style.width = "100%";
-	inner.style.height = "120px";
+	const outer = doc.body.createDiv({ cls: "knomo-scrollbar-measure-outer" });
+	outer.createDiv({ cls: "knomo-scrollbar-measure-inner" });
 	const scrollbarWidth = outer.offsetWidth - outer.clientWidth;
 	outer.detach();
 	return Math.max(0, scrollbarWidth);

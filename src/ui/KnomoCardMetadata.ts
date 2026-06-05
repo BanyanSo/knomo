@@ -153,6 +153,6 @@ function getVisibleMemoText(content: string): string {
 		.replace(/^>\s?/gm, "")
 		.replace(/^\s*[-*+]\s+/gm, "")
 		.replace(/^\s*\d+[.)]\s+/gm, "")
-		.replace(/[*_~#>\[\]()`]/g, "")
+		.replace(/[*_~#>[\]()`]/g, "")
 		.replace(/\s+/g, "");
 }

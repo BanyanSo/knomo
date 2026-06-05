@@ -46,7 +46,7 @@ test("renders composer input, tools, actions, and reference preview", async () =
 	renderComposerReferencePreview(elements.referencePreviewEl, "> source memo", {
 		setTooltipIfDesktopOnly: (element) => element.setAttr("data-tooltip-position", "top"),
 	});
-	assert.equal(elements.referencePreviewEl.style.display, "flex");
+	assert.equal(elements.referencePreviewEl.hasClass("is-visible"), true);
 	assert.equal(elements.referencePreviewEl.find(".knomo-reference-content")?.getText(), "source memo");
 	assert.equal(elements.referencePreviewEl.find(".knomo-reference-clear")?.getAttr("data-icon"), "x");
 	assert.equal(elements.referencePreviewEl.find(".knomo-reference-clear")?.getAttr("data-tooltip-position"), "top");
@@ -54,7 +54,7 @@ test("renders composer input, tools, actions, and reference preview", async () =
 	renderComposerReferencePreview(elements.referencePreviewEl, null, {
 		setTooltipIfDesktopOnly: (element) => element.setAttr("data-tooltip-position", "top"),
 	});
-	assert.equal(elements.referencePreviewEl.style.display, "none");
+	assert.equal(elements.referencePreviewEl.hasClass("is-visible"), false);
 	assert.equal(elements.referencePreviewEl.find(".knomo-reference-content"), null);
 });
 
@@ -152,6 +152,10 @@ class TestElement {
 
 	addClass(cls: string): void {
 		this.classes.add(cls);
+	}
+
+	removeClass(cls: string): void {
+		this.classes.delete(cls);
 	}
 
 	hasClass(cls: string): boolean {

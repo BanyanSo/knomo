@@ -1844,7 +1844,9 @@ test("restoreIndexes removes index files that were created by a failed rebuild",
 					filesByPath.set(path, folder);
 					return folder;
 				},
-				delete: async (file: { path: string }) => {
+			},
+			fileManager: {
+				trashFile: async (file: { path: string }) => {
 					deletedPaths.push(file.path);
 					filesByPath.delete(file.path);
 				},
@@ -1912,7 +1914,9 @@ test("restoreMonthlyArchives restores old archives and removes failed rebuild ar
 					filesByPath.set(path, folder);
 					return folder;
 				},
-				delete: async (file: { path: string }) => {
+			},
+			fileManager: {
+				trashFile: async (file: { path: string }) => {
 					deletedPaths.push(file.path);
 					filesByPath.delete(file.path);
 				},

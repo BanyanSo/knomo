@@ -58,7 +58,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 		const settings = this.settingsService.getSettings();
 
-		containerEl.createEl("h2", { text: t("settings.title") });
+		new Setting(containerEl)
+			.setName(t("settings.title"))
+			.setHeading();
 
 		new Setting(containerEl)
 			.setName(t("settings.dailyHeading.name"))

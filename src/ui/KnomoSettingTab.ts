@@ -19,6 +19,15 @@ import { normalizeVaultPath } from "../utils/path";
 import { formatSettingsText } from "../utils/serviceText";
 import { KnomoView } from "./KnomoView";
 
+const SETTING_NOTICE_DELAY_MS = 800;
+
+type SettingNoticeKey = "dailyHeading" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat";
+
+interface DelayedSettingNotice {
+	value: string;
+	timeoutId: number;
+}
+
 export class KnomoSettingTab extends PluginSettingTab {
 	private issueListEl: HTMLElement | null = null;
 	private legacyImportResultEl: HTMLElement | null = null;
@@ -29,6 +38,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildResultEl: HTMLElement | null = null;
 	private monthlyExcludeStatusEl: HTMLElement | null = null;
 	private rebuildRunning = false;
+	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
+	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 
 	constructor(
 		app: App,
@@ -42,6 +53,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const { containerEl } = this;
+		this.cancelAllDelayedSettingNotices();
 		containerEl.empty();
 
 		const settings = this.settingsService.getSettings();
@@ -207,32 +219,118 @@ export class KnomoSettingTab extends PluginSettingTab {
 		void this.renderIssueList();
 	}
 
-	private async saveDailyHeading(value: string): Promise<void> {
-		const nextHeading = value.trim();
-		if (!this.settingsService.validateDailyHeading(nextHeading)) {
-			new Notice(t("settings.dailyHeading.invalid"));
+	hide(): void {
+		super.hide();
+		this.cancelAllDelayedSettingNotices();
+	}
+
+	private rememberSettingNoticeValue(key: SettingNoticeKey, value: string): void {
+		this.latestSettingNoticeValues.set(key, value);
+	}
+
+	private isLatestSettingNoticeValue(key: SettingNoticeKey, value: string): boolean {
+		return this.latestSettingNoticeValues.get(key) === value;
+	}
+
+	private scheduleDelayedSettingNotice(
+		key: SettingNoticeKey,
+		value: string,
+		message: string,
+		shouldShowNotice: () => boolean,
+	): void {
+		this.cancelDelayedSettingNotice(key);
+		const timeoutId = this.containerEl.win.setTimeout(() => {
+			const pendingNotice = this.delayedSettingNotices.get(key);
+			if (pendingNotice === undefined || pendingNotice.timeoutId !== timeoutId || !this.isLatestSettingNoticeValue(key, value)) {
+				return;
+			}
+			this.delayedSettingNotices.delete(key);
+			if (shouldShowNotice()) {
+				new Notice(message);
+			}
+		}, SETTING_NOTICE_DELAY_MS);
+		this.delayedSettingNotices.set(key, { value, timeoutId });
+	}
+
+	private cancelDelayedSettingNotice(key: SettingNoticeKey): void {
+		const pendingNotice = this.delayedSettingNotices.get(key);
+		if (pendingNotice === undefined) {
 			return;
 		}
+		this.containerEl.win.clearTimeout(pendingNotice.timeoutId);
+		this.delayedSettingNotices.delete(key);
+	}
+
+	private cancelAllDelayedSettingNotices(): void {
+		for (const key of this.delayedSettingNotices.keys()) {
+			this.cancelDelayedSettingNotice(key);
+		}
+	}
+
+	private async saveDailyHeading(value: string): Promise<void> {
+		const key: SettingNoticeKey = "dailyHeading";
+		const nextHeading = value.trim();
+		this.rememberSettingNoticeValue(key, nextHeading);
+		if (!this.settingsService.validateDailyHeading(nextHeading)) {
+			this.scheduleDelayedSettingNotice(
+				key,
+				nextHeading,
+				t("settings.dailyHeading.invalid"),
+				() => !this.settingsService.validateDailyHeading(nextHeading),
+			);
+			return;
+		}
+		this.cancelDelayedSettingNotice(key);
 		if (nextHeading === this.settingsService.getSettings().dailyHeading) {
 			return;
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
-		new Notice(t("settings.dailyHeading.changed"));
+		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
+			return;
+		}
+		this.scheduleDelayedSettingNotice(
+			key,
+			nextHeading,
+			t("settings.dailyHeading.changed"),
+			() => this.settingsService.getSettings().dailyHeading === nextHeading,
+		);
 	}
 
 	private async saveMonthlyDateHeadingFormat(value: string): Promise<void> {
+		const key: SettingNoticeKey = "monthlyDateHeadingFormat";
 		const nextFormat = value.trim();
+		this.rememberSettingNoticeValue(key, nextFormat);
 		if (!this.settingsService.validateMarkdownHeading(nextFormat)) {
-			new Notice(t("settings.dateHeadingFormat.invalid"));
+			this.scheduleDelayedSettingNotice(
+				key,
+				nextFormat,
+				t("settings.dateHeadingFormat.invalid"),
+				() => !this.settingsService.validateMarkdownHeading(nextFormat),
+			);
+			return;
+		}
+		this.cancelDelayedSettingNotice(key);
+		if (nextFormat === this.settingsService.getSettings().monthlyDateHeadingFormat) {
 			return;
 		}
 		await this.settingsService.updateSettings({ monthlyDateHeadingFormat: nextFormat });
 	}
 
 	private async saveMonthlyMemoFileFormat(value: string): Promise<void> {
+		const key: SettingNoticeKey = "monthlyMemoFileFormat";
 		const nextFormat = value.trim();
+		this.rememberSettingNoticeValue(key, nextFormat);
 		if (!this.settingsService.validateMonthlyMemoFileFormat(nextFormat)) {
-			new Notice(t("settings.monthlyFileFormat.invalid"));
+			this.scheduleDelayedSettingNotice(
+				key,
+				nextFormat,
+				t("settings.monthlyFileFormat.invalid"),
+				() => !this.settingsService.validateMonthlyMemoFileFormat(nextFormat),
+			);
+			return;
+		}
+		this.cancelDelayedSettingNotice(key);
+		if (nextFormat === this.settingsService.getSettings().monthlyMemoFileFormat) {
 			return;
 		}
 		await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });

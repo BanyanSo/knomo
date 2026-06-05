@@ -62,6 +62,7 @@ import {
 } from "./KnomoSidebar";
 import type { SidebarDragState } from "./KnomoSidebar";
 import { KnomoTagSuggest } from "./KnomoTagSuggest";
+import { KnomoWikiLinkSuggest } from "./KnomoWikiLinkSuggest";
 import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { MemoSearchCache } from "./MemoSearchCache";
@@ -161,6 +162,7 @@ export class KnomoView extends ItemView {
 	private trashCountEls: HTMLElement[] = [];
 	private inputEl: HTMLTextAreaElement | null = null;
 	private tagSuggest: KnomoTagSuggest | null = null;
+	private wikiLinkSuggest: KnomoWikiLinkSuggest | null = null;
 	private sendButtonEl: HTMLButtonElement | null = null;
 	private cancelEditButtonEl: HTMLButtonElement | null = null;
 	private statusEl: HTMLElement | null = null;
@@ -322,6 +324,8 @@ export class KnomoView extends ItemView {
 		this.mobileNavbarCompactController = null;
 		this.tagSuggest?.close();
 		this.tagSuggest = null;
+		this.wikiLinkSuggest?.destroy();
+		this.wikiLinkSuggest = null;
 		this.clearSearchDebounce();
 		this.clearMobileSearchDebounce();
 		this.mobileComposerController.dispose();
@@ -371,6 +375,8 @@ export class KnomoView extends ItemView {
 		this.trashCountEls = [];
 		this.tagSuggest?.close();
 		this.tagSuggest = null;
+		this.wikiLinkSuggest?.destroy();
+		this.wikiLinkSuggest = null;
 
 		const settings = this.settingsService.getSettings();
 		this.sidebarWidth = clampSidebarWidth(settings.desktopSidebarWidth);
@@ -493,6 +499,13 @@ export class KnomoView extends ItemView {
 		});
 		this.registerDomEvent(composer.composerEl, "pointerdown", (event) => this.handleMobileComposerActionPointerDown(event));
 		this.registerDomEvent(composer.composerEl, "mousedown", (event) => this.handleMobileComposerActionPointerDown(event));
+		this.tagSuggest = new KnomoTagSuggest(this.app, this.inputEl, () => this.syncInputState());
+		this.wikiLinkSuggest = new KnomoWikiLinkSuggest(this.app, this.inputEl, {
+			getSourcePath: () => this.getWikiLinkSourcePath(),
+			onInputChanged: () => this.syncInputState(),
+			closeTagSuggest: () => this.tagSuggest?.close(),
+			registerVaultEvent: (eventRef) => this.registerEvent(eventRef),
+		});
 		this.registerDomEvent(this.inputEl, "beforeinput", (event: InputEvent) => {
 			this.handleComposerBeforeInput(event);
 		});
@@ -505,9 +518,20 @@ export class KnomoView extends ItemView {
 		this.registerDomEvent(this.inputEl, "blur", () => {
 			this.handleComposerInputBlur();
 		});
-		this.tagSuggest = new KnomoTagSuggest(this.app, this.inputEl, () => this.syncInputState());
+		this.registerDomEvent(this.inputEl, "compositionstart", () => {
+			this.wikiLinkSuggest?.handleCompositionStart();
+		});
+		this.registerDomEvent(this.inputEl, "compositionend", () => {
+			this.wikiLinkSuggest?.handleCompositionEnd();
+		});
+		this.registerDomEvent(this.inputEl, "click", () => {
+			this.wikiLinkSuggest?.refreshForCursor();
+		});
 		this.registerDomEvent(this.inputEl, "keydown", (event) => {
 			if (this.handleComposerSaveShortcut(event)) {
+				return;
+			}
+			if (this.wikiLinkSuggest?.handleKeydown(event)) {
 				return;
 			}
 			if (this.currentLayout === "mobile") {
@@ -524,6 +548,7 @@ export class KnomoView extends ItemView {
 		});
 		this.registerDomEvent(this.inputEl, "keyup", (event) => {
 			this.handleComposerKeyup(event);
+			this.wikiLinkSuggest?.refreshForCursor();
 		});
 		this.registerDomEvent(composer.toolsEl, "pointerdown", (event) => this.handleComposerToolPointerDown(event));
 		this.registerDomEvent(composer.toolsEl, "mousedown", (event) => this.handleComposerToolPointerDown(event));
@@ -2215,6 +2240,7 @@ export class KnomoView extends ItemView {
 
 	private handleComposerInputBlur(): void {
 		this.composerSaveShortcutDown = false;
+		this.wikiLinkSuggest?.close();
 		if (this.currentLayout === "mobile" && this.mobileImagePickerActive) {
 			return;
 		}
@@ -2333,6 +2359,9 @@ export class KnomoView extends ItemView {
 			!event.isComposing &&
 			isListEnterInputEvent(event);
 		if (shouldHandleListEnter && this.handleListEnterBeforeInput(event)) {
+			return;
+		}
+		if (this.wikiLinkSuggest?.handleBeforeInput(event)) {
 			return;
 		}
 		if (event.inputType !== "insertText" || event.data !== "#") {
@@ -2625,6 +2654,9 @@ export class KnomoView extends ItemView {
 		if (this.handleListEnterInputFallback(event)) {
 			return;
 		}
+		if (this.wikiLinkSuggest?.handleInput()) {
+			return;
+		}
 		this.syncInputState();
 	}
 
@@ -2782,6 +2814,7 @@ export class KnomoView extends ItemView {
 		if (this.inputEl === null || this.tagSuggest === null) {
 			return;
 		}
+		this.wikiLinkSuggest?.close();
 		const win = this.containerEl.win;
 		win.requestAnimationFrame(() => {
 			try {
@@ -3504,6 +3537,18 @@ export class KnomoView extends ItemView {
 		this.updateStatus(message, true);
 		new Notice(message);
 		return null;
+	}
+
+	private getWikiLinkSourcePath(): string {
+		const todayDailyNotePath = this.syncOrchestrator.getTodayDailyNotePath();
+		if (todayDailyNotePath !== null) {
+			return todayDailyNotePath;
+		}
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile !== null && activeFile.extension === "md") {
+			return activeFile.path;
+		}
+		return "";
 	}
 
 	private async copyText(text: string): Promise<void> {

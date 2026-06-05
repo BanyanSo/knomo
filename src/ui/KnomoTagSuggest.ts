@@ -2,6 +2,12 @@ import { AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults } f
 import type { App, SearchResult } from "obsidian";
 
 import { getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../utils/composerInput";
+import {
+	clamp,
+	getTextareaCharacterRect,
+	measureSuggestionContentHeight,
+	measureSuggestionContentWidth,
+} from "./composerSuggestPosition";
 
 interface TagSuggestion {
 	tag: string;
@@ -153,7 +159,7 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		if (range === null) {
 			return;
 		}
-		const anchor = this.getTextareaCharacterRect(range.to);
+		const anchor = getTextareaCharacterRect(this.inputEl, range.to);
 		const container = this.getSuggestionContainer();
 		if (anchor === null || container === null) {
 			return;
@@ -168,7 +174,7 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			const maxHeightLimit = 240;
 			const availableAbove = Math.max(0, anchor.top - viewportTop - topGuard - gap);
 			const maxHeight = Math.min(maxHeightLimit, availableAbove);
-			const contentHeight = this.measureSuggestionContentHeight(container);
+			const contentHeight = measureSuggestionContentHeight(this.inputEl, container, ".suggestion-item");
 			const measuredHeight = Math.min(maxHeight, contentHeight > 0 ? contentHeight : maxHeight);
 			container.addClass("knomo-tag-suggest-popover");
 			container.style.position = "fixed";
@@ -183,7 +189,7 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 				: win?.innerWidth ?? this.inputEl.ownerDocument.documentElement.clientWidth;
 			const viewportMargin = 12;
 			const availableWidth = Math.max(0, viewportRight - viewportLeft - viewportMargin * 2);
-			const contentWidth = this.measureSuggestionContentWidth(container);
+			const contentWidth = measureSuggestionContentWidth(this.inputEl, container, ".suggestion-item");
 			const targetWidth = contentWidth > 0 ? contentWidth + 44 : inputRect.width - 24;
 			const width = Math.max(0, Math.min(targetWidth, availableWidth));
 			const minLeft = viewportLeft + viewportMargin;
@@ -207,7 +213,10 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		const viewportMargin = 12;
 		const availableWidth = Math.max(0, viewportRight - viewportLeft - viewportMargin * 2);
 		const inputRect = this.inputEl.getBoundingClientRect();
-		const contentWidth = this.measureSuggestionContentWidth(container, true, 12);
+		const contentWidth = measureSuggestionContentWidth(this.inputEl, container, ".suggestion-item", {
+			includeScrollbarWidth: true,
+			extraWidth: 12,
+		});
 		const targetWidth = contentWidth > 0 ? contentWidth : inputRect.width;
 		const width = Math.max(0, Math.min(targetWidth, 320, availableWidth));
 		const minLeft = viewportLeft + viewportMargin;
@@ -230,105 +239,6 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		}
 		win.cancelAnimationFrame(this.popoverRepositionFrameId);
 		this.popoverRepositionFrameId = null;
-	}
-
-	private measureSuggestionContentHeight(container: HTMLElement): number {
-		const win = this.inputEl.ownerDocument.defaultView;
-		if (win === null) {
-			return Math.ceil(container.scrollHeight || container.getBoundingClientRect().height);
-		}
-		const computed = win.getComputedStyle(container);
-		const verticalInset =
-			parseCssPixels(computed.paddingTop) +
-			parseCssPixels(computed.paddingBottom) +
-			parseCssPixels(computed.borderTopWidth) +
-			parseCssPixels(computed.borderBottomWidth);
-		const items = Array.from(container.querySelectorAll<HTMLElement>(".suggestion-item"));
-		if (items.length === 0) {
-			return Math.ceil(container.scrollHeight || container.getBoundingClientRect().height);
-		}
-		const itemHeight = items.reduce((height, item) => height + item.getBoundingClientRect().height, 0);
-		return Math.ceil(Math.max(container.scrollHeight, itemHeight + verticalInset));
-	}
-
-	private measureSuggestionContentWidth(container: HTMLElement, includeScrollbarWidth = false, extraWidth = 2): number {
-		const doc = this.inputEl.ownerDocument;
-		const items = Array.from(container.querySelectorAll<HTMLElement>(".suggestion-item"));
-		if (items.length === 0) {
-			return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
-		}
-		const host = container.cloneNode(false);
-		if (!host.instanceOf(HTMLElement)) {
-			return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
-		}
-		host.style.position = "fixed";
-		host.style.visibility = "hidden";
-		host.style.pointerEvents = "none";
-		host.style.width = "max-content";
-		host.style.maxWidth = "none";
-		host.style.minWidth = "0";
-		host.style.left = "-10000px";
-		host.style.top = "0";
-		doc.body.appendChild(host);
-		let width = 0;
-		for (const item of items) {
-			const clone = item.cloneNode(true);
-			if (!clone.instanceOf(HTMLElement)) {
-				continue;
-			}
-			clone.style.width = "max-content";
-			clone.style.maxWidth = "none";
-			clone.style.minWidth = "0";
-			host.appendChild(clone);
-			width = Math.max(width, clone.getBoundingClientRect().width);
-		}
-		host.detach();
-		const win = doc.defaultView;
-		if (win === null) {
-			return Math.ceil(width);
-		}
-		const computed = win.getComputedStyle(container);
-		const horizontalInset =
-			parseCssPixels(computed.paddingLeft) +
-			parseCssPixels(computed.paddingRight) +
-			parseCssPixels(computed.borderLeftWidth) +
-			parseCssPixels(computed.borderRightWidth);
-		const scrollbarWidth = includeScrollbarWidth ? measureScrollbarWidth(doc) : 0;
-		return Math.ceil(width + horizontalInset + scrollbarWidth + extraWidth);
-	}
-
-	private getTextareaCharacterRect(index: number): DOMRect | null {
-		const doc = this.inputEl.ownerDocument;
-		const win = doc.defaultView;
-		if (win === null) {
-			return null;
-		}
-		const inputRect = this.inputEl.getBoundingClientRect();
-		const computed = win.getComputedStyle(this.inputEl);
-		const mirror = doc.body.createDiv();
-		const mirrorStyle = mirror.style;
-		mirrorStyle.position = "fixed";
-		mirrorStyle.visibility = "hidden";
-		mirrorStyle.pointerEvents = "none";
-		mirrorStyle.whiteSpace = "pre-wrap";
-		mirrorStyle.overflowWrap = "break-word";
-		mirrorStyle.wordBreak = computed.wordBreak;
-		mirrorStyle.boxSizing = computed.boxSizing;
-		mirrorStyle.width = `${inputRect.width}px`;
-		mirrorStyle.minHeight = computed.minHeight;
-		mirrorStyle.padding = computed.padding;
-		mirrorStyle.border = computed.border;
-		mirrorStyle.font = computed.font;
-		mirrorStyle.lineHeight = computed.lineHeight;
-		mirrorStyle.letterSpacing = computed.letterSpacing;
-		mirrorStyle.textTransform = computed.textTransform;
-		mirrorStyle.left = `${inputRect.left - this.inputEl.scrollLeft}px`;
-		mirrorStyle.top = `${inputRect.top - this.inputEl.scrollTop}px`;
-		mirror.setText(this.inputEl.value.slice(0, index));
-		const marker = mirror.createSpan({ text: this.inputEl.value.charAt(index) || "\u200b" });
-		const rect = marker.getBoundingClientRect();
-		mirror.detach();
-		return rect;
 	}
 
 	private getSuggestionContainer(): HTMLElement | null {
@@ -356,31 +266,4 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		}
 		return value instanceof win.HTMLElement ? value : null;
 	}
-}
-
-function clamp(value: number, min: number, max: number): number {
-	return Math.min(max, Math.max(min, value));
-}
-
-function parseCssPixels(value: string): number {
-	const parsed = Number.parseFloat(value);
-	return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function measureScrollbarWidth(doc: Document): number {
-	const outer = doc.body.createDiv();
-	const inner = outer.createDiv();
-	outer.style.position = "fixed";
-	outer.style.visibility = "hidden";
-	outer.style.pointerEvents = "none";
-	outer.style.overflow = "scroll";
-	outer.style.width = "100px";
-	outer.style.height = "100px";
-	outer.style.left = "-10000px";
-	outer.style.top = "0";
-	inner.style.width = "100%";
-	inner.style.height = "120px";
-	const scrollbarWidth = outer.offsetWidth - outer.clientWidth;
-	outer.detach();
-	return Math.max(0, scrollbarWidth);
 }

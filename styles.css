@@ -25,6 +25,9 @@ body {
 	--knomo-dropdown-width: 168px;
 	--knomo-title-popover-left: max(16px, env(safe-area-inset-left));
 	--knomo-title-popover-top: max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px));
+	--knomo-desktop-header-composer-gap: 12px;
+	--knomo-header-offset-y: 6px;
+	--knomo-desktop-compact-edge-padding: 12px;
 
 	/* Surfaces — derived from Obsidian theme */
 	--knomo-page-background: var(--knomo-app-background-secondary);
@@ -47,9 +50,15 @@ body {
 	--knomo-menu-shadow: var(--shadow-s);
 
 	/* Motion */
+	--knomo-transition-icon: 120ms ease;
 	--knomo-transition-fast: 140ms ease;
+	--knomo-transition-control: 160ms ease;
 	--knomo-transition-menu: 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+	--knomo-transition-drawer-fade: 180ms ease;
+	--knomo-transition-backdrop: 220ms ease;
 	--knomo-transition-panel: 240ms cubic-bezier(0.32, 0.72, 0, 1);
+	--knomo-transition-panel-offset: 160ms cubic-bezier(0.32, 0.72, 0, 1);
+	--knomo-transition-panel-size: 120ms linear;
 
 	/* Typography */
 	position: relative;
@@ -262,8 +271,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	pointer-events: none;
 	transition:
 		transform var(--knomo-transition-panel),
-		opacity 180ms ease,
-		visibility 180ms ease;
+		opacity var(--knomo-transition-drawer-fade),
+		visibility var(--knomo-transition-drawer-fade);
 }
 
 .knomo-plugin.is-layout-desktop-medium.is-drawer-open .knomo-sidebar,
@@ -291,8 +300,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	visibility: hidden;
 	pointer-events: none;
 	transition:
-		opacity 220ms ease,
-		visibility 220ms ease;
+		opacity var(--knomo-transition-backdrop),
+		visibility var(--knomo-transition-backdrop);
 }
 
 .knomo-plugin.is-layout-desktop-medium.is-drawer-open .knomo-drawer-backdrop,
@@ -416,7 +425,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	gap: 4px;
 	opacity: 1;
 	pointer-events: auto;
-	transition: opacity 160ms ease;
+	transition: opacity var(--knomo-transition-control);
 }
 
 .knomo-plugin .knomo-sidebar-header:hover .knomo-sidebar-actions,
@@ -641,7 +650,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 .knomo-plugin .knomo-tag-toggle svg {
 	width: 14px;
 	height: 14px;
-	transition: transform 120ms ease;
+	transition: transform var(--knomo-transition-icon);
 }
 
 .knomo-plugin .knomo-tag-toggle-icon {
@@ -714,7 +723,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	width: 1px;
 	background: var(--knomo-soft-border);
 	opacity: 0;
-	transition: opacity 160ms ease;
+	transition: opacity var(--knomo-transition-control);
 }
 
 .knomo-plugin .knomo-sidebar:hover .knomo-sidebar-resizer::after,
@@ -755,8 +764,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	overflow: hidden auto;
 	transition:
 		transform var(--knomo-transition-panel),
-		opacity 180ms ease,
-		visibility 180ms ease;
+		opacity var(--knomo-transition-drawer-fade),
+		visibility var(--knomo-transition-drawer-fade);
 }
 
 .knomo-plugin.is-layout-mobile.is-drawer-open .knomo-sidebar,
@@ -781,8 +790,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	visibility: hidden;
 	pointer-events: none;
 	transition:
-		opacity 220ms ease,
-		visibility 220ms ease;
+		opacity var(--knomo-transition-backdrop),
+		visibility var(--knomo-transition-backdrop);
 }
 
 .knomo-plugin.is-layout-mobile.is-drawer-open .knomo-drawer-backdrop {
@@ -837,7 +846,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin.is-layout-desktop-medium .knomo-content-column,
 .knomo-plugin.is-layout-desktop-narrow .knomo-content-column {
 	max-width: none;
-	padding: 0 12px 0;
+	padding: 0 var(--knomo-desktop-compact-edge-padding) 0;
 }
 
 
@@ -857,11 +866,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	gap: 12px;
 	height: 40px;
 	min-height: 40px;
-	margin: 0 0 20px;
+	margin: 0 0 calc(var(--knomo-desktop-header-composer-gap) + var(--knomo-header-offset-y));
 	padding: 0;
 	background: transparent;
 	border: 0;
-	transform: translateY(2px);
+	transform: translateY(var(--knomo-header-offset-y));
 }
 
 .knomo-plugin.is-desktop-search-open .knomo-topbar,
@@ -1006,9 +1015,9 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: var(--knomo-surface);
 	color: var(--text-faint);
 	transition:
-		background 160ms ease,
-		border-color 160ms ease,
-		box-shadow 160ms ease;
+		background var(--knomo-transition-control),
+		border-color var(--knomo-transition-control),
+		box-shadow var(--knomo-transition-control);
 }
 
 .knomo-plugin .knomo-search-wrap:focus-within {
@@ -1229,7 +1238,15 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	height: 48px;
 	min-height: 48px;
 	padding: 0 4px 6px 0;
-	transform: translateY(2px);
+	transform: translateY(var(--knomo-header-offset-y));
+}
+
+.knomo-plugin.is-layout-desktop-medium .knomo-compact-header,
+.knomo-plugin.is-layout-desktop-narrow .knomo-compact-header {
+	height: calc(40px + var(--knomo-desktop-header-composer-gap) + var(--knomo-header-offset-y));
+	min-height: calc(40px + var(--knomo-desktop-header-composer-gap) + var(--knomo-header-offset-y));
+	padding: 0 var(--knomo-desktop-compact-edge-padding)
+		calc(var(--knomo-desktop-header-composer-gap) + var(--knomo-header-offset-y));
 }
 
 .knomo-plugin .knomo-compact-menu-btn,
@@ -1327,8 +1344,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	border-radius: 20px;
 	background: var(--knomo-surface);
 	transition:
-		background 160ms ease,
-		box-shadow 160ms ease;
+		background var(--knomo-transition-control),
+		box-shadow var(--knomo-transition-control);
 }
 
 .knomo-plugin.is-desktop-search-open .knomo-compact-search-wrap:focus-within {
@@ -1369,8 +1386,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	pointer-events: none;
 	transition:
 		transform var(--knomo-transition-panel),
-		opacity 180ms ease,
-		visibility 180ms ease;
+		opacity var(--knomo-transition-drawer-fade),
+		visibility var(--knomo-transition-drawer-fade);
 }
 
 .knomo-plugin.is-mobile-search-open .knomo-mobile-search-page,
@@ -1845,8 +1862,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-on-accent);
 	cursor: pointer;
 	transition:
-		background 160ms ease,
-		box-shadow 160ms ease;
+		background var(--knomo-transition-control),
+		box-shadow var(--knomo-transition-control);
 }
 
 .knomo-plugin .knomo-send-button:hover:not(:disabled),
@@ -2438,10 +2455,10 @@ body .knomo-mobile-create-fab {
 	touch-action: manipulation;
 	-webkit-tap-highlight-color: transparent;
 	transition:
-		opacity 160ms ease,
-		transform 160ms ease,
-		visibility 160ms ease,
-		background 120ms ease;
+		opacity var(--knomo-transition-control),
+		transform var(--knomo-transition-control),
+		visibility var(--knomo-transition-control),
+		background var(--knomo-transition-icon);
 }
 
 body .knomo-mobile-create-fab svg {
@@ -2504,8 +2521,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 	transform: translate(-50%, -50%);
 	transition:
-		background 160ms ease,
-		box-shadow 160ms ease;
+		background var(--knomo-transition-control),
+		box-shadow var(--knomo-transition-control);
 }
 
 .knomo-plugin.is-layout-mobile .knomo-send-button:hover:not(:disabled),
@@ -2566,7 +2583,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	pointer-events: auto;
 	background: rgba(0, 0, 0, 0.82);
 	opacity: 0;
-	transition: opacity 220ms ease;
+	transition: opacity var(--knomo-transition-backdrop);
 }
 
 .knomo-mobile-composer-layer .knomo-mobile-composer-stage {
@@ -2590,9 +2607,9 @@ body .knomo-mobile-create-fab.is-hidden {
 	border-radius: 18px 18px 0 0;
 	transform: translateY(100%);
 	transition:
-		transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
-		bottom 160ms cubic-bezier(0.32, 0.72, 0, 1),
-		max-height 120ms linear;
+		transform var(--knomo-transition-panel),
+		bottom var(--knomo-transition-panel-offset),
+		max-height var(--knomo-transition-panel-size);
 }
 
 .knomo-mobile-composer-layer .knomo-mobile-composer-content::after {
@@ -2604,13 +2621,13 @@ body .knomo-mobile-create-fab.is-hidden {
 	height: var(--knomo-mobile-composer-fill-height, 0px);
 	background: var(--knomo-composer-surface);
 	pointer-events: none;
-	transition: height 160ms cubic-bezier(0.32, 0.72, 0, 1);
+	transition: height var(--knomo-transition-panel-offset);
 }
 
 .knomo-mobile-composer-layer.is-keyboard-tracking .knomo-mobile-composer-content {
 	transition:
-		transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
-		max-height 120ms linear;
+		transform var(--knomo-transition-panel),
+		max-height var(--knomo-transition-panel-size);
 }
 
 .knomo-mobile-composer-layer.is-keyboard-tracking .knomo-mobile-composer-content::after {
@@ -2655,8 +2672,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	visibility: visible;
 	transform: none;
 	transition:
-		box-shadow 120ms ease,
-		background 120ms ease;
+		box-shadow var(--knomo-transition-icon),
+		background var(--knomo-transition-icon);
 	overflow: hidden;
 	pointer-events: auto;
 }
@@ -2836,12 +2853,26 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.knomo-plugin {
+		--knomo-transition-icon: 0.01ms linear;
+		--knomo-transition-fast: 0.01ms linear;
+		--knomo-transition-control: 0.01ms linear;
+		--knomo-transition-menu: 0.01ms linear;
+		--knomo-transition-drawer-fade: 0.01ms linear;
+		--knomo-transition-backdrop: 0.01ms linear;
+		--knomo-transition-panel: 0.01ms linear;
+		--knomo-transition-panel-offset: 0.01ms linear;
+		--knomo-transition-panel-size: 0.01ms linear;
+		--knomo-animation-duration: 0.01ms;
+		--knomo-animation-iteration-count: 1;
+		--knomo-scroll-behavior: auto;
+	}
+
 	.knomo-plugin *,
 	.knomo-plugin *::before,
 	.knomo-plugin *::after {
-		transition-duration: 0.01ms !important;
-		animation-duration: 0.01ms !important;
-		animation-iteration-count: 1 !important;
-		scroll-behavior: auto !important;
+		animation-duration: var(--knomo-animation-duration);
+		animation-iteration-count: var(--knomo-animation-iteration-count);
+		scroll-behavior: var(--knomo-scroll-behavior);
 	}
 }

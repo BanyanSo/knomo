@@ -74,8 +74,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-main,
 body .workspace-leaf-content[data-type="knomo-view"] .knomo-content-column,
 body .workspace-leaf-content[data-type="knomo-view"] .knomo-card-flow,
 body .workspace-leaf-content[data-type="knomo-view"] .knomo-sidebar {
-	background-color: var(--knomo-page-background) !important;
-	background-image: none !important;
+	background-color: var(--knomo-page-background);
+	background-image: none;
 }
 
 body:not(.is-mobile) .workspace-leaf-content[data-type="knomo-view"] .view-header {
@@ -118,9 +118,9 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	stroke-width: 2;
 }
 
-.workspace-leaf-content[data-type="knomo-view"] .view-content,
-.knomo-view-host {
-	padding: 0 !important;
+body .workspace-leaf-content[data-type="knomo-view"] .view-content,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
+	padding: 0;
 	overflow: hidden;
 	min-height: 0;
 }
@@ -607,7 +607,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) 52px 20px;
 	align-items: center;
-	column-gap: 0;
 	min-width: 0;
 	padding: 0;
 }
@@ -617,7 +616,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	grid-column: 2 / 4;
 	grid-template-columns: 52px 20px;
 	align-items: center;
-	column-gap: 0;
 	width: 100%;
 	min-width: 72px;
 	height: 32px;
@@ -721,9 +719,9 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	opacity: 1;
 }
 
-.knomo-plugin.is-resizing-sidebar,
-.knomo-plugin.is-resizing-sidebar * {
-	cursor: col-resize !important;
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-sidebar,
+body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-sidebar * {
+	cursor: col-resize;
 	user-select: none;
 }
 
@@ -2281,7 +2279,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	opacity: 0;
 	overflow: hidden;
 	pointer-events: none;
-	clip-path: inset(50%);
 }
 
 /* Focus visible ring */
@@ -2296,13 +2293,13 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 /* --------------------------------------------------------------------------
    12b. Mobile Navbar Compact Mode
    -------------------------------------------------------------------------- */
-body.knomo-mobile-navbar-compact-active .knomo-mobile-navbar-hidden {
-	display: none !important;
+body.knomo-mobile-navbar-compact-active .mobile-navbar .knomo-mobile-navbar-hidden {
+	display: none;
 }
 
 body.knomo-mobile-search-active .mobile-navbar,
 body.knomo-mobile-search-active .knomo-mobile-create-fab {
-	display: none !important;
+	display: none;
 }
 
 body.knomo-mobile-navbar-compact-active .mobile-navbar .knomo-mobile-navbar-sidebar-action {

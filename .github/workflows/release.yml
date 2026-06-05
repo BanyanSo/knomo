@@ -45,10 +45,6 @@ jobs:
           mkdir -p dist
           cp main.js manifest.json styles.css dist/
 
-          cd dist
-          zip -q "knomo-${GITHUB_REF_NAME}.zip" main.js manifest.json styles.css
-          sha256sum main.js manifest.json styles.css "knomo-${GITHUB_REF_NAME}.zip" > SHA256SUMS.txt
-
       - name: Verify release assets
         shell: bash
         run: |
@@ -56,8 +52,6 @@ jobs:
             "dist/main.js"
             "dist/manifest.json"
             "dist/styles.css"
-            "dist/knomo-${GITHUB_REF_NAME}.zip"
-            "dist/SHA256SUMS.txt"
           )
 
           for asset in "${assets[@]}"; do
@@ -74,8 +68,6 @@ jobs:
             dist/main.js
             dist/manifest.json
             dist/styles.css
-            dist/knomo-${{ github.ref_name }}.zip
-            dist/SHA256SUMS.txt
 
       - name: Create GitHub Release
         env:
@@ -87,8 +79,6 @@ jobs:
             "dist/main.js"
             "dist/manifest.json"
             "dist/styles.css"
-            "dist/knomo-${GITHUB_REF_NAME}.zip"
-            "dist/SHA256SUMS.txt"
           )
 
           if [[ -f "$notes_file" ]]; then

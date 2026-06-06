@@ -3,6 +3,7 @@ import type { App, TFile } from "obsidian";
 import type { MarkdownSyncSource, MemoRecord } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
+import { getIndexFolderPath } from "../utils/path";
 import { DailyNoteService } from "./DailyNoteService";
 import type { DailyNotesStatus } from "./DailyNoteService";
 import { MarkdownBlockService } from "./MarkdownBlockService";
@@ -180,6 +181,15 @@ export class SyncOrchestrator {
 			folder: status.folder,
 			format: status.format,
 		});
+	}
+
+	isMemoIndexFile(path: string): boolean {
+		const indexFolderPath = getIndexFolderPath(this.getSettings().monthlyMemoFolder);
+		if (!path.startsWith(`${indexFolderPath}/`)) {
+			return false;
+		}
+		const fileName = path.slice(indexFolderPath.length + 1);
+		return /^memo-index-\d{4}-\d{2}\.json$/.test(fileName);
 	}
 
 	async listCurrentMonthMemos(): Promise<MemoRecord[]> {

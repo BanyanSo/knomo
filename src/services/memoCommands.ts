@@ -134,19 +134,23 @@ export class MemoCommandService {
 		}
 
 		const settings = this.getSettings();
-		const dailyFile = this.getTextFile(memo.dailyRef.path, "Daily note file does not exist.");
+		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memo.id);
+		if (currentMemo === null || currentMemo.status !== "active") {
+			throw new Error("Memo does not exist or has already been cleaned up.");
+		}
+		const dailyFile = this.getTextFile(currentMemo.dailyRef.path, "Daily note file does not exist.");
 		const opId = createOperationId(new Date());
 		let nextDailyBlock = "";
 		let dailyIssueType: MemoRecord["issue"] = null;
 		let dailyContent = "";
-		let dailyLineNumberHint = memo.dailyRef.lineNumberHint;
+		let dailyLineNumberHint = currentMemo.dailyRef.lineNumberHint;
 		try {
 			dailyContent = await this.app.vault.process(dailyFile, (currentContent) => {
 				const location = this.markdownBlockService.findMemoBlock(currentContent, {
-					lineNumberHint: memo.dailyRef.lineNumberHint,
-					lastKnownBlock: memo.dailyRef.lastKnownBlock,
-					lastKnownHash: memo.dailyRef.lastKnownHash,
-					contentHash: memo.contentHash,
+					lineNumberHint: currentMemo.dailyRef.lineNumberHint,
+					lastKnownBlock: currentMemo.dailyRef.lastKnownBlock,
+					lastKnownHash: currentMemo.dailyRef.lastKnownHash,
+					contentHash: currentMemo.contentHash,
 					allowLineHintTimeMatch: true,
 				}, "daily_block_missing");
 				if (location.parsedBlock === null) {
@@ -174,7 +178,7 @@ export class MemoCommandService {
 		} catch (error) {
 			if (dailyIssueType !== null) {
 				await this.memoIndexStore.upsertMemo(settings.monthlyMemoFolder, {
-					...memo,
+					...currentMemo,
 					issue: dailyIssueType,
 				});
 			}
@@ -186,10 +190,10 @@ export class MemoCommandService {
 		const contentHash = hashMemoContent(content);
 		let syncStatus: MemoRecord["syncStatus"] = "synced";
 		let issue: MemoRecord["issue"] = null;
-		let monthlyRef = memo.monthlyRef;
+		let monthlyRef = currentMemo.monthlyRef;
 		try {
 			const monthlyResult = await this.monthlyArchiveService.upsertMemoBlock(settings, {
-				...memo,
+				...currentMemo,
 				contentSnapshot: content,
 				contentHash,
 				tags: metadata.tags,
@@ -206,24 +210,24 @@ export class MemoCommandService {
 		let updatedMemo: MemoRecord;
 		try {
 			updatedMemo = await this.memoIndexStore.upsertMemo(settings.monthlyMemoFolder, {
-				...memo,
+				...currentMemo,
 				updatedAt: new Date().toISOString(),
 				contentSnapshot: content,
 				contentHash,
 				syncStatus,
-				version: memo.version + 1,
+				version: currentMemo.version + 1,
 				tags: metadata.tags,
 				links: metadata.links,
 				images: metadata.images,
-				references: buildMemoReferences(content, memo.sourceMemoId, memo.references[0]?.referenceText ?? null),
+				references: buildMemoReferences(content, currentMemo.sourceMemoId, currentMemo.references[0]?.referenceText ?? null),
 				issue,
-				dailyRef: buildDailyRef(dailyFile.path, memo.dailyRef.heading, nextDailyBlock, dailyLineNumberHint),
+				dailyRef: buildDailyRef(dailyFile.path, currentMemo.dailyRef.heading, nextDailyBlock, dailyLineNumberHint),
 				monthlyRef,
 			});
 		} catch (error) {
 			throw buildIndexWriteFailedError("editing", error, dailyFile.path, monthlyRef.path);
 		}
-		markIndexSelfWrite(this.selfWriteTracker, opId, settings, new Date(memo.createdAt));
+		markIndexSelfWrite(this.selfWriteTracker, opId, settings, new Date(currentMemo.createdAt));
 		return updatedMemo;
 	}
 

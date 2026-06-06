@@ -1,3 +1,5 @@
+import { getMarkdownTaskEnterPatch, getMarkdownTaskEnterPatchAfterNativeNewline } from "./markdownTasks";
+
 export interface TagQueryRange {
 	from: number;
 	to: number;
@@ -95,6 +97,10 @@ export function getListEnterPatch(value: string, start: number, end: number): Te
 	if (start !== end) {
 		return null;
 	}
+	const task = getMarkdownTaskEnterPatch(value, start, end);
+	if (task !== null) {
+		return task;
+	}
 	const lineStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
 	const line = value.slice(lineStart, start);
 	const bullet = parseBulletListLine(line);
@@ -140,6 +146,10 @@ export function getListEnterPatch(value: string, start: number, end: number): Te
 export function getListEnterPatchAfterNativeNewline(value: string, start: number, end: number): TextReplacement | null {
 	if (start !== end || start <= 0 || value.charAt(start - 1) !== "\n") {
 		return null;
+	}
+	const task = getMarkdownTaskEnterPatchAfterNativeNewline(value, start, end);
+	if (task !== null) {
+		return task;
 	}
 	const newlineIndex = start - 1;
 	const lineStart = value.lastIndexOf("\n", Math.max(0, newlineIndex - 1)) + 1;

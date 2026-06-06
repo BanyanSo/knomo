@@ -103,6 +103,7 @@ export const en: Record<TranslationKey, string> = {
 	"card.copyText": "Copy text",
 	"card.copyLink": "Copy link",
 	"card.delete": "Delete",
+	"task.updateFailed": "Failed to update task list status",
 	"trash.createdAt": "Created: {{time}}",
 	"trash.deletedAt": "Deleted: {{time}}",
 	"trash.deleteSource": "Delete source: {{source}}",

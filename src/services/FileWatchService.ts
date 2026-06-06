@@ -7,7 +7,7 @@ import type { SyncOrchestrator } from "./SyncOrchestrator";
 
 export type FileWatchSyncErrorHandler = (path: string, error: unknown) => void;
 
-// 职责：监听相关文件变化，并结合 SelfWriteTracker 判断是否为自身写入。
+// 职责：监听日记与 memo-index 变化；日记写入结合 SelfWriteTracker 防循环。
 export class FileWatchService {
 	private readonly timersByPath = new Map<string, number>();
 
@@ -20,15 +20,9 @@ export class FileWatchService {
 	) {}
 
 	start(owner: Component): void {
-		owner.registerEvent(this.app.vault.on("modify", (file) => {
-			if (!(file instanceof TFile) || file.extension !== "md") {
-				return;
-			}
-			if (!this.syncOrchestrator.isPotentialDailyFile(file.path)) {
-				return;
-			}
-			this.queueSync(file);
-		}));
+		owner.registerEvent(this.app.vault.on("modify", (file) => this.handleFileChanged(file)));
+		owner.registerEvent(this.app.vault.on("create", (file) => this.handleFileChanged(file)));
+		owner.registerEvent(this.app.vault.on("rename", (file) => this.handleFileChanged(file)));
 		owner.register(() => this.clearTimers());
 	}
 
@@ -37,7 +31,29 @@ export class FileWatchService {
 		this.selfWriteTracker.cleanup();
 	}
 
-	private queueSync(file: TFile): void {
+	private queueDailySync(file: TFile): void {
+		this.queueFileTask(file, () => this.runSync(file));
+	}
+
+	private handleFileChanged(file: unknown): void {
+		if (!(file instanceof TFile)) {
+			return;
+		}
+		if (file.extension === "md" && this.syncOrchestrator.isPotentialDailyFile(file.path)) {
+			this.queueDailySync(file);
+		}
+		if (file.extension === "json" && this.syncOrchestrator.isMemoIndexFile(file.path)) {
+			this.queueIndexRefresh(file);
+		}
+	}
+
+	private queueIndexRefresh(file: TFile): void {
+		this.queueFileTask(file, async () => {
+			await this.onSynced?.();
+		});
+	}
+
+	private queueFileTask(file: TFile, task: () => Promise<void>): void {
 		const existingTimer = this.timersByPath.get(file.path);
 		if (existingTimer !== undefined) {
 			this.app.workspace.containerEl.win.clearTimeout(existingTimer);
@@ -45,7 +61,7 @@ export class FileWatchService {
 
 		const timer = this.app.workspace.containerEl.win.setTimeout(() => {
 			this.timersByPath.delete(file.path);
-			void this.runSync(file).catch((error) => this.handleSyncError(file, error));
+			void task().catch((error) => this.handleSyncError(file, error));
 		}, this.syncOrchestrator.getSyncDebounceMs());
 		this.timersByPath.set(file.path, timer);
 	}

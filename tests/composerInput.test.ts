@@ -114,6 +114,43 @@ test("continues and exits Markdown ordered lists", () => {
 	assert.equal(getListEnterPatch("- hello", 0, 7), null);
 });
 
+test("continues Markdown task lists with unchecked tasks", () => {
+	assert.deepEqual(getListEnterPatch("- [ ] task", 10, 10), {
+		value: "- [ ] task\n- [ ] ",
+		cursor: 17,
+	});
+	assert.deepEqual(getListEnterPatch("- [x] done", 10, 10), {
+		value: "- [x] done\n- [ ] ",
+		cursor: 17,
+	});
+	assert.deepEqual(getListEnterPatch("- [-] cancelled", 15, 15), {
+		value: "- [-] cancelled\n- [ ] ",
+		cursor: 22,
+	});
+});
+
+test("exits empty Markdown task lists", () => {
+	assert.deepEqual(getListEnterPatch("- [ ]", 5, 5), {
+		value: "",
+		cursor: 0,
+	});
+	assert.deepEqual(getListEnterPatch("  - [ ] ", 8, 8), {
+		value: "  ",
+		cursor: 2,
+	});
+});
+
+test("continues nested and ordered Markdown task lists", () => {
+	assert.deepEqual(getListEnterPatch("  - [ ] child", 13, 13), {
+		value: "  - [ ] child\n  - [ ] ",
+		cursor: 22,
+	});
+	assert.deepEqual(getListEnterPatch("2. [x] done", 11, 11), {
+		value: "2. [x] done\n3. [ ] ",
+		cursor: 19,
+	});
+});
+
 test("corrects native newline insertion in Markdown bullet lists", () => {
 	assert.deepEqual(getListEnterPatchAfterNativeNewline("- abc\n", 6, 6), {
 		value: "- abc\n- ",
@@ -140,6 +177,17 @@ test("corrects native newline insertion in Markdown ordered lists", () => {
 		cursor: 7,
 	});
 	assert.equal(getListEnterPatchAfterNativeNewline("1. abc\n", 0, 7), null);
+});
+
+test("corrects native newline insertion in Markdown task lists", () => {
+	assert.deepEqual(getListEnterPatchAfterNativeNewline("- [x] done\n", 11, 11), {
+		value: "- [x] done\n- [ ] ",
+		cursor: 17,
+	});
+	assert.deepEqual(getListEnterPatchAfterNativeNewline("- [ ] \n", 7, 7), {
+		value: "",
+		cursor: 0,
+	});
 });
 
 test("corrects list Enter when keyboard inputType is not reliable", () => {

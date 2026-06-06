@@ -40,6 +40,19 @@ test("card content CSS justifies CJK cards while list items inherit the card ali
 	assert.doesNotMatch(getCjkSelectors(css), /\bli\b/);
 });
 
+test("card content CSS keeps mixed lists compact and task checkboxes aligned", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-content :is(ul, ol)"), /margin-block-start:\s*0;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-content :is(ul, ol)"), /margin-block-end:\s*0;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-content li"), /margin-block-start:\s*0;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-content li"), /margin-block-end:\s*0;/);
+	assert.match(
+		getStyleRule(css, ".knomo-plugin .knomo-card-content .task-list-item-checkbox,\n.knomo-plugin .knomo-card-content .knomo-task-checkbox"),
+		/vertical-align:\s*middle;/,
+	);
+});
+
 test("CJK card CSS keeps headings, code, and tables start-aligned", async () => {
 	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
 	const selectors = getCjkSelectors(css);
@@ -59,6 +72,25 @@ test("memo markdown post-processing still keeps internal links, tags, and lazy i
 	assert.match(source, /imageEl\.setAttr\("loading", "lazy"\);/);
 	assert.match(source, /tagEl\.setAttr\("data-tag", tag\);/);
 	assert.match(source, /tagEl\.setAttr\("data-tag-key", tagKey\);/);
+});
+
+test("task checkbox handling stays delegated and does not enter composer edit flow", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const changeMethod = getMethodSource(source, "handleTaskCheckboxChange");
+	const clickMethod = getMethodSource(source, "handleTaskCheckboxClick");
+	const savedMethod = getMethodSource(source, "handleTaskMemoSaved");
+
+	assert.match(source, /this\.registerDomEvent\(this\.cardFlowEl, "change", \(event\) => \{/);
+	assert.match(source, /this\.registerDomEvent\(this\.mobileSearchResultsEl, "change", \(event\) => \{/);
+	assert.match(source, /input\.setAttr\("data-knomo-task-index", String\(taskIndex\)\);/);
+	assert.match(source, /input\.setAttr\("data-task", renderedMarker\);/);
+	assert.match(changeMethod, /event\.stopPropagation\(\);/);
+	assert.match(changeMethod, /toggleMarkdownTaskMarkerByIndex\(latestContent, taskIndex\);/);
+	assert.match(changeMethod, /this\.memoTaskUpdateCoordinator\.enqueue\(memo, result\.content\);/);
+	assert.match(clickMethod, /event\.stopPropagation\(\);/);
+	assert.doesNotMatch(savedMethod, /syncTaskCheckboxesForMemo/);
+	assert.doesNotMatch(changeMethod, /preventDefault\(/);
+	assert.doesNotMatch(changeMethod, /openComposer|startEditing|inputEl\.value|draftContent/);
 });
 
 async function renderMemoCard(contentSnapshot: string): Promise<{
@@ -126,6 +158,20 @@ function getCjkSelectors(css: string): string {
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getMethodSource(source: string, methodName: string): string {
+	const start = getMethodStart(source, methodName);
+	if (start === -1) {
+		throw new Error(`Expected method ${methodName}`);
+	}
+	const nextMethod = source.indexOf("\n\tprivate ", start + 1);
+	return nextMethod === -1 ? source.slice(start) : source.slice(start, nextMethod);
+}
+
+function getMethodStart(source: string, methodName: string): number {
+	const start = source.indexOf(`private ${methodName}`);
+	return start === -1 ? source.indexOf(`private async ${methodName}`) : start;
 }
 
 async function ensureObsidianStub(): Promise<void> {

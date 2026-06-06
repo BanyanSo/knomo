@@ -15,6 +15,13 @@ import type { MobileCompactMode } from "../types/settings";
 import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
+import {
+	getMarkdownTaskLines,
+	isMarkdownTaskChecked,
+	type MarkdownTaskMarker,
+	toggleMarkdownTaskMarkerByIndex,
+	type WritableMarkdownTaskMarker,
+} from "../utils/markdownTasks";
 import { buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
 import { formatSettingsText } from "../utils/serviceText";
 import {
@@ -66,6 +73,7 @@ import { KnomoWikiLinkSuggest } from "./KnomoWikiLinkSuggest";
 import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { MemoSearchCache } from "./MemoSearchCache";
+import { MemoTaskUpdateCoordinator } from "./MemoTaskUpdateCoordinator";
 import { MobileComposerController } from "./MobileComposerController";
 import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
 import { normalizeTagKey } from "../utils/tags";
@@ -237,6 +245,7 @@ export class KnomoView extends ItemView {
 	private mobileImagePickerActive = false;
 	private mobileImagePickerFocusTimerId: number | null = null;
 	private readonly mobileComposerController: MobileComposerController;
+	private readonly memoTaskUpdateCoordinator: MemoTaskUpdateCoordinator;
 	private mobileNavbarCompactController: MobileNavbarCompactController | null = null;
 	private renderGeneration = 0;
 	private markdownRenderQueue = new MarkdownRenderQueue({
@@ -255,6 +264,12 @@ export class KnomoView extends ItemView {
 		private readonly onManualRefresh: () => Promise<ScanDailyMemosResult>,
 	) {
 		super(leaf);
+		this.memoTaskUpdateCoordinator = new MemoTaskUpdateCoordinator({
+			updateMemo: (memo, content) => this.syncOrchestrator.updateMemo(memo, content),
+			onSaved: (memo) => this.handleTaskMemoSaved(memo),
+			onIssue: (memo) => this.handleTaskMemoIssue(memo),
+			onFailed: (memo, error) => this.handleTaskMemoFailed(memo, error),
+		});
 		this.mobileComposerController = new MobileComposerController({
 			getWindow: () => this.containerEl.win,
 			getDocument: () => this.containerEl.doc,
@@ -409,6 +424,12 @@ export class KnomoView extends ItemView {
 		});
 		this.registerDomEvent(this.cardFlowEl, "click", (event) => {
 			void this.handleMarkdownInternalLinkClick(event);
+		});
+		this.registerDomEvent(this.cardFlowEl, "click", (event) => {
+			this.handleTaskCheckboxClick(event);
+		});
+		this.registerDomEvent(this.cardFlowEl, "change", (event) => {
+			this.handleTaskCheckboxChange(event);
 		});
 
 		this.registerDomEvent(root, "click", (event) => {
@@ -999,6 +1020,12 @@ export class KnomoView extends ItemView {
 		});
 		this.registerDomEvent(this.mobileSearchResultsEl, "click", (event) => {
 			void this.handleMarkdownInternalLinkClick(event);
+		});
+		this.registerDomEvent(this.mobileSearchResultsEl, "click", (event) => {
+			this.handleTaskCheckboxClick(event);
+		});
+		this.registerDomEvent(this.mobileSearchResultsEl, "change", (event) => {
+			this.handleTaskCheckboxChange(event);
 		});
 	}
 
@@ -3368,11 +3395,168 @@ export class KnomoView extends ItemView {
 					tagEl.setAttr("data-tag-key", tagKey);
 				}
 			}
+			this.prepareRenderedTaskCheckboxes(container, memo);
 		} catch {
 			if (generation !== this.renderGeneration) {
 				return;
 			}
 			container.setText(memo.contentSnapshot);
+		}
+	}
+
+	private prepareRenderedTaskCheckboxes(container: HTMLElement, memo: MemoRecord): void {
+		const tasks = getMarkdownTaskLines(memo.contentSnapshot);
+		if (tasks.length === 0) {
+			return;
+		}
+		let taskIndex = 0;
+		for (const checkboxEl of container.findAll("input[type='checkbox']")) {
+			if (taskIndex >= tasks.length) {
+				return;
+			}
+			const input = checkboxEl as HTMLInputElement;
+			input.addClass("knomo-task-checkbox");
+			input.setAttr("data-knomo-memo-id", memo.id);
+			input.setAttr("data-knomo-task-index", String(taskIndex));
+			const taskItem = input.closest("li");
+			if (taskItem?.instanceOf(HTMLElement)) {
+				taskItem.setAttr("data-knomo-task-index", String(taskIndex));
+			}
+			taskIndex += 1;
+		}
+	}
+
+	private handleTaskCheckboxClick(event: MouseEvent): void {
+		if (this.getTaskCheckboxInput(event.target) !== null) {
+			event.stopPropagation();
+		}
+	}
+
+	private handleTaskCheckboxChange(event: Event): void {
+		const input = this.getTaskCheckboxInput(event.target);
+		if (input === null) {
+			return;
+		}
+		event.stopPropagation();
+		const memo = this.findMemoForTaskCheckbox(input);
+		const taskIndex = this.getTaskCheckboxIndex(input);
+		if (memo === null || taskIndex === null) {
+			return;
+		}
+		const latestContent = this.memoTaskUpdateCoordinator.getLatestContent(memo);
+		const result = toggleMarkdownTaskMarkerByIndex(latestContent, taskIndex);
+		if (result === null) {
+			this.syncTaskCheckboxDom(input, memo);
+			return;
+		}
+		this.applyTaskCheckboxDomState(input, result.marker);
+		this.memoTaskUpdateCoordinator.enqueue(memo, result.content);
+	}
+
+	private getTaskCheckboxInput(target: EventTarget | null): HTMLInputElement | null {
+		const node = target as Node | null;
+		if (!node?.instanceOf(HTMLElement)) {
+			return null;
+		}
+		if (node.tagName !== "INPUT" || node.closest(".knomo-card-content") === null) {
+			return null;
+		}
+		const input = node as HTMLInputElement;
+		if (input.type !== "checkbox" || input.getAttr("data-knomo-task-index") === null) {
+			return null;
+		}
+		return input;
+	}
+
+	private findMemoForTaskCheckbox(input: HTMLInputElement): MemoRecord | null {
+		const memoId = input.getAttr("data-knomo-memo-id");
+		if (memoId === null) {
+			return null;
+		}
+		return this.memos.find((memo) => memo.id === memoId) ?? null;
+	}
+
+	private getTaskCheckboxIndex(input: HTMLInputElement): number | null {
+		const value = input.getAttr("data-knomo-task-index");
+		if (value === null) {
+			return null;
+		}
+		const taskIndex = Number(value);
+		return Number.isInteger(taskIndex) && taskIndex >= 0 ? taskIndex : null;
+	}
+
+	private async handleTaskMemoSaved(memo: MemoRecord): Promise<void> {
+		this.replaceMemoInMemory(memo);
+	}
+
+	private async handleTaskMemoIssue(memo: MemoRecord): Promise<void> {
+		this.replaceMemoInMemory(memo);
+		new Notice(t("task.updateFailed"));
+		this.renderUiState();
+	}
+
+	private async handleTaskMemoFailed(memo: MemoRecord, _error: unknown): Promise<void> {
+		this.replaceMemoInMemory(memo);
+		this.syncTaskCheckboxesForMemo(memo);
+		new Notice(t("task.updateFailed"));
+		await this.onMemosChanged();
+	}
+
+	private replaceMemoInMemory(updatedMemo: MemoRecord): void {
+		let changed = false;
+		this.memos = this.memos.map((memo) => {
+			if (memo.id !== updatedMemo.id) {
+				return memo;
+			}
+			changed = true;
+			return updatedMemo;
+		});
+		if (!changed) {
+			return;
+		}
+		if (this.randomReunionMemos !== null) {
+			this.randomReunionMemos = this.randomReunionMemos.map((memo) => memo.id === updatedMemo.id ? updatedMemo : memo);
+		}
+		this.filteredMemosCache = null;
+		this.invalidateMemoSearchCache();
+		this.renderStats();
+		this.renderTags();
+	}
+
+	private syncTaskCheckboxesForMemo(memo: MemoRecord): void {
+		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl]) {
+			if (container === null) {
+				continue;
+			}
+			for (const checkboxEl of container.findAll(".knomo-task-checkbox")) {
+				const input = checkboxEl as HTMLInputElement;
+				if (input.getAttr("data-knomo-memo-id") === memo.id) {
+					this.syncTaskCheckboxDom(input, memo);
+				}
+			}
+		}
+	}
+
+	private syncTaskCheckboxDom(input: HTMLInputElement, memo: MemoRecord): void {
+		const taskIndex = this.getTaskCheckboxIndex(input);
+		if (taskIndex === null) {
+			return;
+		}
+		const task = getMarkdownTaskLines(memo.contentSnapshot)[taskIndex] ?? null;
+		if (task === null) {
+			return;
+		}
+		this.applyTaskCheckboxDomState(input, task.marker);
+	}
+
+	private applyTaskCheckboxDomState(input: HTMLInputElement, marker: MarkdownTaskMarker | WritableMarkdownTaskMarker): void {
+		const renderedMarker = marker === "X" ? "x" : marker;
+		input.checked = renderedMarker !== " ";
+		input.indeterminate = renderedMarker === "-";
+		input.setAttr("data-task", renderedMarker);
+		const taskItem = input.closest("li");
+		if (taskItem?.instanceOf(HTMLElement)) {
+			taskItem.setAttr("data-task", renderedMarker);
 		}
 	}
 

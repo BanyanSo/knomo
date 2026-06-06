@@ -101,6 +101,7 @@ export const zhCN = {
 	"card.copyText": "复制文本",
 	"card.copyLink": "复制链接",
 	"card.delete": "删除",
+	"task.updateFailed": "任务列表状态更新失败",
 	"trash.createdAt": "原创建：{{time}}",
 	"trash.deletedAt": "删除时间：{{time}}",
 	"trash.deleteSource": "删除来源：{{source}}",

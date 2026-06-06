@@ -2176,6 +2176,21 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	line-height: 1.7;
 }
 
+.knomo-plugin .knomo-card-content :is(ul, ol) {
+	margin-block-start: 0;
+	margin-block-end: 0;
+}
+
+.knomo-plugin .knomo-card-content li {
+	margin-block-start: 0;
+	margin-block-end: 0;
+}
+
+.knomo-plugin .knomo-card-content .task-list-item-checkbox,
+.knomo-plugin .knomo-card-content .knomo-task-checkbox {
+	vertical-align: middle;
+}
+
 .knomo-plugin .knomo-card-content > :first-child {
 	margin-top: 0;
 }

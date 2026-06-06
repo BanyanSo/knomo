@@ -35,6 +35,13 @@ test("builds list-leading memo content as a nested Markdown block", () => {
 	);
 });
 
+test("builds task-list-leading memo content as nested memo content", () => {
+	assert.equal(
+		service.buildMemoBlock("- [ ] 第一项\n- [x] 第二项\n- [-] 第三项", "12:00:00"),
+		"- 12:00:00\n\t- [ ] 第一项\n\t- [x] 第二项\n\t- [-] 第三项",
+	);
+});
+
 test("parses list-leading memo content from a detached timestamp line", () => {
 	const parsed = service.parseMemoBlock([
 		"- 12:00:00",
@@ -1258,6 +1265,68 @@ test("syncExternalDailyFile syncs a manual edit under the daily heading", async 
 	assert.equal(savedMemos[0]?.issue, null);
 });
 
+test("syncExternalDailyFile refreshes task status changed in the daily note", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), {
+		path: "Daily/2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const rawBlock = "- 08:00:00\n\t- [ ] task";
+	const memo = createReferenceMemo(rawBlock);
+	memo.contentSnapshot = "- [ ] task";
+	memo.contentHash = hashMemoContent("- [ ] task");
+	memo.dailyRef.lineNumberHint = 4;
+	memo.dailyRef.lastKnownHash = hashText(rawBlock);
+	const savedMemos: MemoRecord[] = [];
+	const monthlyBlocks: string[] = [];
+	const settings = createTestSettings();
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				cachedRead: async () => "# 2026-05-18\n\n## Knomo\n- 08:00:00\n\t- [x] task",
+			},
+		} as never,
+		() => settings,
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, _memo: MemoRecord, block: string) => {
+				monthlyBlocks.push(block);
+				return {
+					file: { path: "Memos/Memos-2026-05.md" },
+					content: block,
+					ref: {
+						path: "Memos/Memos-2026-05.md",
+						dateHeading: "## 2026-05-18",
+						lastKnownBlock: block,
+						lastKnownHash: hashText(block),
+						lineNumberHint: 1,
+						lastSyncedAt: "2026-05-18T08:00:00.000+08:00",
+					},
+				};
+			},
+		} as never,
+		{
+			loadAll: async () => [memo],
+			upsertMemo: async (_folder: string, updatedMemo: MemoRecord) => {
+				savedMemos.push(updatedMemo);
+				return updatedMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	assert.equal(await orchestrator.syncExternalDailyFile(file), true);
+	assert.deepEqual(monthlyBlocks, ["- 08:00:00\n\t- [x] task"]);
+	assert.equal(savedMemos[0]?.contentSnapshot, "- [x] task");
+	assert.equal(savedMemos[0]?.lastMarkdownSyncSource, "file_watch");
+});
+
 test("syncExternalDailyFile imports new blocks and tombstones missing indexed memos", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
@@ -1382,6 +1451,81 @@ test("listDeletedMemos returns only deleted memos by deletedAt descending", asyn
 		"older",
 		"without-time",
 	]);
+});
+
+test("updateMemo reloads the latest index memo before syncing monthly archive", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const dailyFile = Object.assign(new TFile(), {
+		path: "Daily/2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	let dailyContent = "# 2026-05-18\n\n## Knomo\n- 08:00:00 远端内容";
+	const staleMemo = createReferenceMemo("- 08:00:00 旧内容");
+	staleMemo.contentSnapshot = "旧内容";
+	staleMemo.contentHash = hashMemoContent("旧内容");
+	staleMemo.monthlyRef.lastKnownBlock = "- 08:00:00 旧内容";
+	staleMemo.monthlyRef.lastKnownHash = hashText(staleMemo.monthlyRef.lastKnownBlock);
+	const latestMemo = createReferenceMemo("- 08:00:00 远端内容");
+	latestMemo.contentSnapshot = "远端内容";
+	latestMemo.contentHash = hashMemoContent("远端内容");
+	latestMemo.version = 7;
+	latestMemo.dailyRef.lineNumberHint = 4;
+	latestMemo.dailyRef.lastKnownHash = hashText(latestMemo.dailyRef.lastKnownBlock);
+	latestMemo.monthlyRef.lastKnownBlock = "- 08:00:00 远端内容";
+	latestMemo.monthlyRef.lastKnownHash = hashText(latestMemo.monthlyRef.lastKnownBlock);
+	const monthlyBlocks: string[] = [];
+	const savedMemos: MemoRecord[] = [];
+	let monthlyLastKnownBlockForUpdate = "";
+	const settings = createTestSettings();
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: (path: string) => path === dailyFile.path ? dailyFile : null,
+				process: async (_file: unknown, callback: (content: string) => string) => {
+					dailyContent = callback(dailyContent);
+					return dailyContent;
+				},
+			},
+		} as never,
+		() => settings,
+		{} as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, memo: MemoRecord, block: string) => {
+				monthlyLastKnownBlockForUpdate = memo.monthlyRef.lastKnownBlock;
+				monthlyBlocks.push(block);
+				return {
+					file: { path: memo.monthlyRef.path },
+					content: block,
+					ref: {
+						...memo.monthlyRef,
+						lastKnownBlock: block,
+						lastKnownHash: hashText(block),
+						lineNumberHint: 1,
+						lastSyncedAt: "2026-05-18T09:00:00.000+08:00",
+					},
+				};
+			},
+		} as never,
+		{
+			findMemoById: async () => latestMemo,
+			upsertMemo: async (_folder: string, memo: MemoRecord) => {
+				savedMemos.push(memo);
+				return memo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const updatedMemo = await orchestrator.updateMemo(staleMemo, "最终内容");
+
+	assert.equal(dailyContent, "# 2026-05-18\n\n## Knomo\n- 08:00:00 最终内容");
+	assert.deepEqual(monthlyBlocks, ["- 08:00:00 最终内容"]);
+	assert.equal(monthlyLastKnownBlockForUpdate, "- 08:00:00 远端内容");
+	assert.equal(updatedMemo.version, 8);
+	assert.equal(savedMemos[0]?.monthlyRef.lastKnownBlock, "- 08:00:00 最终内容");
 });
 
 test("restoreMemo writes daily and monthly blocks before reactivating the index", async () => {

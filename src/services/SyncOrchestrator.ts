@@ -200,6 +200,14 @@ export class SyncOrchestrator {
 		return this.memoQueryService.listRecentMemos();
 	}
 
+	listMemoIndexPeriods(): string[] {
+		return this.memoQueryService.listMemoIndexPeriods();
+	}
+
+	async listMemosInPeriods(periods: string[]): Promise<MemoRecord[]> {
+		return this.memoQueryService.listMemosInPeriods(periods);
+	}
+
 	async listMemos(): Promise<MemoRecord[]> {
 		return this.memoQueryService.listMemos();
 	}

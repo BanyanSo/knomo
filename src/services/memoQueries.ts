@@ -33,6 +33,19 @@ export class MemoQueryService {
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 	}
 
+	listMemoIndexPeriods(): string[] {
+		const settings = this.getSettings();
+		return this.memoIndexStore.listExistingPeriods(settings.monthlyMemoFolder);
+	}
+
+	async listMemosInPeriods(periods: string[]): Promise<MemoRecord[]> {
+		const settings = this.getSettings();
+		const memos = await this.memoIndexStore.loadPeriods(settings.monthlyMemoFolder, periods);
+		return memos
+			.filter((memo) => memo.status === "active")
+			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+	}
+
 	async listMemos(): Promise<MemoRecord[]> {
 		const settings = this.getSettings();
 		const memos = await this.memoIndexStore.loadAll(settings.monthlyMemoFolder);

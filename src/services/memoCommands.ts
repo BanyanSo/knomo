@@ -3,7 +3,7 @@ import type { App } from "obsidian";
 
 import type { MemoRecord, MonthlyRef } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
-import { formatLocalIsoString, formatTimePart } from "../utils/date";
+import { formatLocalIsoString, formatMonthPeriod, formatTimePart } from "../utils/date";
 import { hashMemoContent } from "../utils/hash";
 import { splitMarkdownLines } from "../utils/markdown";
 import { buildDailyRef } from "../utils/memoRefs";
@@ -134,9 +134,16 @@ export class MemoCommandService {
 		}
 
 		const settings = this.getSettings();
-		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memo.id);
+		const currentMemo = await this.memoIndexStore.findMemoByIdInPeriod(
+			settings.monthlyMemoFolder,
+			formatMonthPeriod(new Date(memo.createdAt)),
+			memo.id,
+		);
 		if (currentMemo === null || currentMemo.status !== "active") {
 			throw new Error("Memo does not exist or has already been cleaned up.");
+		}
+		if (content === currentMemo.contentSnapshot) {
+			return currentMemo;
 		}
 		const dailyFile = this.getTextFile(currentMemo.dailyRef.path, "Daily note file does not exist.");
 		const opId = createOperationId(new Date());

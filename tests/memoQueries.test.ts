@@ -75,8 +75,32 @@ test("loads current and previous periods for recent memos", async () => {
 	assert.deepEqual(memos.map((memo) => memo.id), ["recent"]);
 });
 
-function createService(memos: MemoRecord[], requestedPeriods: string[][] = []): MemoQueryService {
+test("lists memo index periods without loading memo files", () => {
+	const requestedPeriods: string[][] = [];
+	const service = createService([], requestedPeriods, ["2026-06", "2026-05"]);
+
+	const periods = service.listMemoIndexPeriods();
+
+	assert.deepEqual(periods, ["2026-06", "2026-05"]);
+	assert.deepEqual(requestedPeriods, []);
+});
+
+test("loads active memos from selected periods", async () => {
+	const requestedPeriods: string[][] = [];
+	const activeOlder = makeMemo("active-older", "2026-04-18T08:00:00.000+08:00");
+	const activeNewer = makeMemo("active-newer", "2026-04-19T08:00:00.000+08:00");
+	const deletedMemo = makeMemo("deleted", "2026-04-20T08:00:00.000+08:00", { status: "deleted" });
+	const service = createService([activeOlder, deletedMemo, activeNewer], requestedPeriods);
+
+	const memos = await service.listMemosInPeriods(["2026-04"]);
+
+	assert.deepEqual(requestedPeriods, [["2026-04"]]);
+	assert.deepEqual(memos.map((memo) => memo.id), ["active-newer", "active-older"]);
+});
+
+function createService(memos: MemoRecord[], requestedPeriods: string[][] = [], existingPeriods: string[] = []): MemoQueryService {
 	const store = {
+		listExistingPeriods: () => existingPeriods,
 		loadPeriod: async () => ({
 			memos: Object.fromEntries(memos.map((memo) => [memo.id, memo])),
 		}),

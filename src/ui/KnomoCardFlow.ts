@@ -82,6 +82,10 @@ export class KnomoCardFlowBatcher {
 		return this.hasMore;
 	}
 
+	get remainingCount(): number {
+		return Math.max(0, this.items.length - this.renderOffset);
+	}
+
 	reset(): void {
 		this.items = [];
 		this.renderOffset = 0;
@@ -98,6 +102,11 @@ export class KnomoCardFlowBatcher {
 		this.loading = false;
 		this.hasMore = memos.length > 0;
 		return this.beginNextBatch(initialBatchSize);
+	}
+
+	updateItems(memos: MemoRecord[]): void {
+		this.items = memos;
+		this.hasMore = this.renderOffset < this.items.length;
 	}
 
 	beginNextBatch(batchSize: number): CardFlowBatch | null {

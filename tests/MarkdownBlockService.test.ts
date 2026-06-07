@@ -1509,7 +1509,7 @@ test("updateMemo reloads the latest index memo before syncing monthly archive", 
 			},
 		} as never,
 		{
-			findMemoById: async () => latestMemo,
+			findMemoByIdInPeriod: async () => latestMemo,
 			upsertMemo: async (_folder: string, memo: MemoRecord) => {
 				savedMemos.push(memo);
 				return memo;

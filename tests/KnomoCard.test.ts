@@ -84,13 +84,39 @@ test("task checkbox handling stays delegated and does not enter composer edit fl
 	assert.match(source, /this\.registerDomEvent\(this\.mobileSearchResultsEl, "change", \(event\) => \{/);
 	assert.match(source, /input\.setAttr\("data-knomo-task-index", String\(taskIndex\)\);/);
 	assert.match(source, /input\.setAttr\("data-task", renderedMarker\);/);
+	assert.match(changeMethod, /if \(!event\.isTrusted\) \{/);
 	assert.match(changeMethod, /event\.stopPropagation\(\);/);
-	assert.match(changeMethod, /toggleMarkdownTaskMarkerByIndex\(latestContent, taskIndex\);/);
-	assert.match(changeMethod, /this\.memoTaskUpdateCoordinator\.enqueue\(memo, result\.content\);/);
+	assert.match(changeMethod, /replaceMarkdownTaskMarkerByIndex\(latestContent, taskIndex, marker\);/);
+	assert.match(changeMethod, /this\.memoTaskUpdateCoordinator\.enqueue\(memo, nextContent\);/);
 	assert.match(clickMethod, /event\.stopPropagation\(\);/);
 	assert.doesNotMatch(savedMethod, /syncTaskCheckboxesForMemo/);
 	assert.doesNotMatch(changeMethod, /preventDefault\(/);
 	assert.doesNotMatch(changeMethod, /openComposer|startEditing|inputEl\.value|draftContent/);
+});
+
+test("mobile memo hydration reads memo indexes without restoring startup scans", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const renderMethod = getMethodSource(source, "render");
+	const initialLoadMethod = getMethodSource(source, "loadInitialMobileMemos");
+	const hydrationMethod = getMethodSource(source, "hydrateMobileMemos");
+	const ensureMethod = getMethodSource(source, "ensureAllMemosLoaded");
+	const sidebarMethod = getMethodSource(source, "requestMobileMemoHydrationForSidebar");
+	const deferSidebarMethod = getMethodSource(source, "deferMobileMemoHydrationForSidebar");
+
+	assert.match(source, /this\.scheduleMobileMemoHydration\(\);/);
+	assert.match(source, /this\.requestMobileMemoHydrationForSidebar\(\);/);
+	assert.match(source, /this\.requestMobileMemoHydrationForCardFlow\(\);/);
+	assert.match(renderMethod, /void this\.loadInitialMobileMemos\(\);/);
+	assert.doesNotMatch(renderMethod, /await this\.reloadMemos\(false\);/);
+	assert.match(initialLoadMethod, /await this\.syncOrchestrator\.listRecentMemos\(\);/);
+	assert.match(initialLoadMethod, /runId !== this\.mobileMemoHydrateRunId/);
+	assert.match(hydrationMethod, /this\.syncOrchestrator\.listMemoIndexPeriods\(\);/);
+	assert.match(hydrationMethod, /this\.syncOrchestrator\.listMemosInPeriods\(\[period\]\);/);
+	assert.doesNotMatch(hydrationMethod, /scanRecentDailyMemos|scanDailyMemos|reloadMemos\(true\)/);
+	assert.match(ensureMethod, /Platform\.isMobile && !forceReload/);
+	assert.match(sidebarMethod, /this\.mobileMemoHydrateFastMode = true;/);
+	assert.match(deferSidebarMethod, /this\.containerEl\.win\.setTimeout/);
+	assert.match(deferSidebarMethod, /this\.requestMobileMemoHydrationForSidebar\(\);/);
 });
 
 async function renderMemoCard(contentSnapshot: string): Promise<{
@@ -170,8 +196,8 @@ function getMethodSource(source: string, methodName: string): string {
 }
 
 function getMethodStart(source: string, methodName: string): number {
-	const start = source.indexOf(`private ${methodName}`);
-	return start === -1 ? source.indexOf(`private async ${methodName}`) : start;
+	const start = source.indexOf(`private ${methodName}(`);
+	return start === -1 ? source.indexOf(`private async ${methodName}(`) : start;
 }
 
 async function ensureObsidianStub(): Promise<void> {

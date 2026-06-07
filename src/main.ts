@@ -185,6 +185,9 @@ export default class KnomoPlugin extends Plugin {
 
 	private async initializeAfterLayoutSafely(): Promise<void> {
 		await this.initializeSystemFoldersSafely();
+		if (Platform.isMobile) {
+			return;
+		}
 		await this.scanRecentDailyMemosSafely();
 	}
 

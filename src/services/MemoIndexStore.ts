@@ -38,6 +38,11 @@ export class MemoIndexStore {
 		return memos.find((memo) => memo.id === memoId) ?? null;
 	}
 
+	async findMemoByIdInPeriod(monthlyMemoFolder: string, period: string, memoId: string): Promise<MemoRecord | null> {
+		const index = await this.loadPeriod(monthlyMemoFolder, period);
+		return index.memos[memoId] ?? null;
+	}
+
 	async mergePeriod(
 		monthlyMemoFolder: string,
 		period: string,
@@ -240,7 +245,7 @@ export class MemoIndexStore {
 		return ensureTextFile(this.app, getIndexFilePath(monthlyMemoFolder, period));
 	}
 
-	private listExistingPeriods(monthlyMemoFolder: string): string[] {
+	listExistingPeriods(monthlyMemoFolder: string): string[] {
 		const indexFolder = this.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
 		if (!(indexFolder instanceof TFolder)) {
 			return [formatMonthPeriod(new Date())];
@@ -250,7 +255,7 @@ export class MemoIndexStore {
 			.filter((child): child is TFile => child instanceof TFile)
 			.map((file) => file.name.match(/^memo-index-(\d{4}-\d{2})\.json$/)?.[1] ?? null)
 			.filter((period): period is string => period !== null);
-		return periods.length > 0 ? periods : [formatMonthPeriod(new Date())];
+		return periods.length > 0 ? periods.sort((left, right) => right.localeCompare(left)) : [formatMonthPeriod(new Date())];
 	}
 }
 

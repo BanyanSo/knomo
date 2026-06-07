@@ -230,6 +230,205 @@ test("FileWatchService scans daily notes delivered through rename events", async
 	assert.equal(refreshCount, 1);
 });
 
+test("FileWatchService runs queued file tasks serially", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const firstFile = Object.assign(new TFile(), {
+		path: "Daily/2026-06-02.md",
+		extension: "md",
+	});
+	const secondFile = Object.assign(new TFile(), {
+		path: "Daily/2026-06-03.md",
+		extension: "md",
+	});
+	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const timerHandlers: Array<() => void> = [];
+	const deferredSyncs: Array<Deferred<boolean>> = [];
+	const syncedPaths: string[] = [];
+	let activeSyncs = 0;
+	let maxActiveSyncs = 0;
+	const app = {
+		vault: {
+			on: (eventName: string, handler: (file: unknown) => void) => {
+				handlersByEvent.set(eventName, handler);
+				return {};
+			},
+			cachedRead: async (file: { path: string }) => `${file.path} changed content`,
+		},
+		workspace: {
+			containerEl: {
+				win: {
+					setTimeout: (handler: () => void) => {
+						timerHandlers.push(handler);
+						return timerHandlers.length;
+					},
+					clearTimeout: () => undefined,
+				},
+			},
+		},
+	};
+	const service = new FileWatchService(
+		app as never,
+		{
+			consumeByExpectedHash: () => null,
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => true,
+			isMemoIndexFile: () => false,
+			getSyncDebounceMs: () => 0,
+			syncExternalDailyFile: async (file: { path: string }) => {
+				activeSyncs += 1;
+				maxActiveSyncs = Math.max(maxActiveSyncs, activeSyncs);
+				syncedPaths.push(file.path);
+				const deferred = createDeferred<boolean>();
+				deferredSyncs.push(deferred);
+				const changed = await deferred.promise;
+				activeSyncs -= 1;
+				return changed;
+			},
+		} as never,
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+
+	const triggerModify = handlersByEvent.get("modify");
+	assert.notEqual(triggerModify, undefined);
+	if (triggerModify === undefined) {
+		throw new Error("modify handler was not registered.");
+	}
+	triggerModify(firstFile);
+	triggerModify(secondFile);
+	timerHandlers[0]?.();
+	timerHandlers[1]?.();
+	await waitImmediate();
+
+	assert.deepEqual(syncedPaths, [firstFile.path]);
+	assert.equal(maxActiveSyncs, 1);
+
+	deferredSyncs[0]?.resolve(true);
+	await waitImmediate();
+	await waitImmediate();
+
+	assert.deepEqual(syncedPaths, [firstFile.path, secondFile.path]);
+	assert.equal(maxActiveSyncs, 1);
+	deferredSyncs[1]?.resolve(true);
+});
+
+test("FileWatchService coalesces pending file tasks by path", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const firstFile = Object.assign(new TFile(), {
+		path: "Daily/2026-06-02.md",
+		extension: "md",
+		label: "first",
+	});
+	const queuedFile = Object.assign(new TFile(), {
+		path: "Daily/2026-06-03.md",
+		extension: "md",
+		label: "queued",
+	});
+	const latestFile = Object.assign(new TFile(), {
+		path: queuedFile.path,
+		extension: "md",
+		label: "latest",
+	});
+	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const timerHandlers: Array<() => void> = [];
+	const deferredSyncs: Array<Deferred<boolean>> = [];
+	const syncedLabels: string[] = [];
+	const app = {
+		vault: {
+			on: (eventName: string, handler: (file: unknown) => void) => {
+				handlersByEvent.set(eventName, handler);
+				return {};
+			},
+			cachedRead: async (file: { path: string }) => `${file.path} changed content`,
+		},
+		workspace: {
+			containerEl: {
+				win: {
+					setTimeout: (handler: () => void) => {
+						timerHandlers.push(handler);
+						return timerHandlers.length;
+					},
+					clearTimeout: () => undefined,
+				},
+			},
+		},
+	};
+	const service = new FileWatchService(
+		app as never,
+		{
+			consumeByExpectedHash: () => null,
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => true,
+			isMemoIndexFile: () => false,
+			getSyncDebounceMs: () => 0,
+			syncExternalDailyFile: async (file: { label: string }) => {
+				syncedLabels.push(file.label);
+				const deferred = createDeferred<boolean>();
+				deferredSyncs.push(deferred);
+				return deferred.promise;
+			},
+		} as never,
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+
+	const triggerModify = handlersByEvent.get("modify");
+	assert.notEqual(triggerModify, undefined);
+	if (triggerModify === undefined) {
+		throw new Error("modify handler was not registered.");
+	}
+	triggerModify(firstFile);
+	timerHandlers[0]?.();
+	await waitImmediate();
+	assert.deepEqual(syncedLabels, ["first"]);
+
+	triggerModify(queuedFile);
+	timerHandlers[1]?.();
+	triggerModify(latestFile);
+	timerHandlers[2]?.();
+	await waitImmediate();
+	assert.deepEqual(syncedLabels, ["first"]);
+
+	deferredSyncs[0]?.resolve(true);
+	await waitImmediate();
+	await waitImmediate();
+	assert.deepEqual(syncedLabels, ["first", "latest"]);
+	assert.equal(deferredSyncs.length, 2);
+
+	deferredSyncs[1]?.resolve(true);
+	await waitImmediate();
+	await waitImmediate();
+	assert.deepEqual(syncedLabels, ["first", "latest"]);
+	assert.equal(deferredSyncs.length, 2);
+});
+
+interface Deferred<T> {
+	promise: Promise<T>;
+	resolve: (value: T) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((promiseResolve) => {
+		resolve = promiseResolve;
+	});
+	return { promise, resolve };
+}
+
 async function ensureObsidianStub(): Promise<void> {
 	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
 	await mkdir(dirname(stubPath), { recursive: true });

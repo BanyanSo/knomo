@@ -489,6 +489,25 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	line-height: var(--line-height-tight);
 }
 
+.knomo-plugin .knomo-sidebar-stats.is-loading .knomo-stat-value {
+	animation: knomo-stat-loading 900ms linear infinite;
+}
+
+@keyframes knomo-stat-loading {
+	0% {
+		opacity: 0.55;
+		transform: translateY(1px);
+	}
+	50% {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	100% {
+		opacity: 0.55;
+		transform: translateY(-1px);
+	}
+}
+
 .knomo-plugin .knomo-stat-label {
 	margin-top: 2px;
 	color: var(--text-muted);

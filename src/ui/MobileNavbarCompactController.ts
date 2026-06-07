@@ -63,6 +63,7 @@ const MIN_COLLISION_GAP = 8;
 const CHROME_EDGE_FALLBACK_INSET = 8;
 const CHROME_EDGE_MAX_INSET = 72;
 const STABILIZED_SYNC_DELAYS = [120, 320];
+const SYNC_THROTTLE_MS = 300;
 const NAVBAR_EDGE_LEFT_VAR = "--knomo-mobile-navbar-edge-left";
 const NAVBAR_RESERVED_RIGHT_VAR = "--knomo-mobile-navbar-reserved-right";
 const CREATE_BUTTON_RIGHT_VAR = "--knomo-mobile-create-fab-right";
@@ -71,7 +72,12 @@ const CREATE_BUTTON_BOTTOM_VAR = "--knomo-mobile-create-fab-bottom";
 export class MobileNavbarCompactController {
 	private started = false;
 	private observer: MutationObserver | null = null;
+	private readonly observedElements = new Set<HTMLElement>();
 	private syncFrameId: number | null = null;
+	private syncThrottleTimerId: number | null = null;
+	private mutationSuppressionTimerId: number | null = null;
+	private pendingTrailingSync = false;
+	private suppressMutations = false;
 	private sidebarButtonEl: HTMLButtonElement | null = null;
 	private createButtonEl: HTMLButtonElement | null = null;
 	private readonly eventRefs: EventRef[] = [];
@@ -109,7 +115,9 @@ export class MobileNavbarCompactController {
 		this.started = false;
 		this.disconnectObserver();
 		this.clearSyncFrame();
+		this.clearSyncThrottle();
 		this.clearDelayedSyncs();
+		this.clearMutationSuppression();
 		for (const eventRef of this.eventRefs) {
 			this.view.app.workspace.offref(eventRef);
 		}
@@ -123,7 +131,6 @@ export class MobileNavbarCompactController {
 			return;
 		}
 
-		this.ensureObserver();
 		const navbarEl = this.findNavbar();
 		if (navbarEl === null) {
 			this.recordDebugInfo("mobile navbar not found");
@@ -132,18 +139,24 @@ export class MobileNavbarCompactController {
 			return;
 		}
 
-		const body = this.doc.body;
-		const floating = this.isFloatingNavbar(navbarEl);
-		const edgeInsets = this.getChromeEdgeInsets(navbarEl);
-		body.addClass(BODY_ACTIVE_CLASS);
-		body.toggleClass(BODY_FLOATING_CLASS, floating);
-		body.toggleClass(BODY_FIXED_CLASS, !floating);
-		navbarEl.addClass(NAVBAR_COMPACT_CLASS);
-		this.syncNavbarPlacement(navbarEl, floating, edgeInsets);
+		this.ensureObserver(navbarEl);
+		this.beginMutationSuppression();
+		try {
+			const body = this.doc.body;
+			const floating = this.isFloatingNavbar(navbarEl);
+			const edgeInsets = this.getChromeEdgeInsets(navbarEl);
+			body.addClass(BODY_ACTIVE_CLASS);
+			body.toggleClass(BODY_FLOATING_CLASS, floating);
+			body.toggleClass(BODY_FIXED_CLASS, !floating);
+			navbarEl.addClass(NAVBAR_COMPACT_CLASS);
+			this.syncNavbarPlacement(navbarEl, floating, edgeInsets);
 
-		this.hideNativeActions(navbarEl);
-		this.syncSidebarButton(navbarEl);
-		this.syncCreateButton(navbarEl, floating, edgeInsets);
+			this.hideNativeActions(navbarEl);
+			this.syncSidebarButton(navbarEl);
+			this.syncCreateButton(navbarEl, floating, edgeInsets);
+		} finally {
+			this.endMutationSuppressionSoon();
+		}
 	}
 
 	private get doc(): Document {
@@ -159,8 +172,23 @@ export class MobileNavbarCompactController {
 	}
 
 	private queueSyncCycle(): void {
+		if (!this.started) {
+			return;
+		}
+		if (this.syncThrottleTimerId !== null) {
+			this.pendingTrailingSync = true;
+			return;
+		}
 		this.syncSoon();
 		this.scheduleStabilizedSyncs();
+		this.syncThrottleTimerId = this.win.setTimeout(() => {
+			this.syncThrottleTimerId = null;
+			if (!this.pendingTrailingSync) {
+				return;
+			}
+			this.pendingTrailingSync = false;
+			this.queueSyncCycle();
+		}, SYNC_THROTTLE_MS);
 	}
 
 	private syncSoon(): void {
@@ -179,6 +207,14 @@ export class MobileNavbarCompactController {
 		}
 		this.win.cancelAnimationFrame(this.syncFrameId);
 		this.syncFrameId = null;
+	}
+
+	private clearSyncThrottle(): void {
+		if (this.syncThrottleTimerId !== null) {
+			this.win.clearTimeout(this.syncThrottleTimerId);
+			this.syncThrottleTimerId = null;
+		}
+		this.pendingTrailingSync = false;
 	}
 
 	private scheduleStabilizedSyncs(): void {
@@ -204,24 +240,91 @@ export class MobileNavbarCompactController {
 		this.delayedSyncTimerIds.clear();
 	}
 
-	private ensureObserver(): void {
-		if (this.observer !== null) {
+	private ensureObserver(navbarEl: HTMLElement): void {
+		if (this.observer === null) {
+			const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
+			this.observer = new MutationObserverConstructor((mutations) => this.handleObservedMutations(mutations));
+		}
+		this.observeElement(navbarEl, true);
+		for (const selectorKey of ["topLeftChrome", "topRightChrome", "topChrome"] satisfies MobileNavbarSelectorKey[]) {
+			const element = this.findElement(this.doc.body, MOBILE_NAVBAR_SELECTORS[selectorKey]);
+			if (element !== null) {
+				this.observeElement(element, false);
+			}
+		}
+	}
+
+	private observeElement(element: HTMLElement, subtree: boolean): void {
+		if (this.observer === null || this.observedElements.has(element)) {
 			return;
 		}
-		const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
-		const observer = new MutationObserverConstructor(() => this.queueSyncCycle());
-		observer.observe(this.doc.body, {
+		this.observer.observe(element, {
 			attributes: true,
 			attributeFilter: ["class", "style"],
-			childList: true,
-			subtree: true,
+			childList: subtree,
+			subtree,
 		});
-		this.observer = observer;
+		this.observedElements.add(element);
+	}
+
+	private handleObservedMutations(mutations: MutationRecord[]): void {
+		if (this.suppressMutations) {
+			return;
+		}
+		if (!mutations.some((mutation) => this.shouldHandleMutation(mutation))) {
+			return;
+		}
+		this.queueSyncCycle();
+	}
+
+	private shouldHandleMutation(mutation: MutationRecord): boolean {
+		const target = mutation.target;
+		if (target.instanceOf(HTMLElement) && this.isIgnoredMutationTarget(target)) {
+			return false;
+		}
+		for (const node of Array.from(mutation.addedNodes).concat(Array.from(mutation.removedNodes))) {
+			if (node.instanceOf(HTMLElement) && !this.isIgnoredMutationTarget(node)) {
+				return true;
+			}
+		}
+		return mutation.type !== "childList";
+	}
+
+	private isIgnoredMutationTarget(element: HTMLElement): boolean {
+		return (
+			element.closest(".knomo-plugin") !== null ||
+			element.closest(`.${CREATE_BUTTON_CLASS}`) !== null ||
+			element.closest(`.${SIDEBAR_ACTION_CLASS}`) !== null
+		);
+	}
+
+	private beginMutationSuppression(): void {
+		this.suppressMutations = true;
+		if (this.mutationSuppressionTimerId !== null) {
+			this.win.clearTimeout(this.mutationSuppressionTimerId);
+			this.mutationSuppressionTimerId = null;
+		}
+	}
+
+	private endMutationSuppressionSoon(): void {
+		this.mutationSuppressionTimerId = this.win.setTimeout(() => {
+			this.mutationSuppressionTimerId = null;
+			this.suppressMutations = false;
+		}, 0);
+	}
+
+	private clearMutationSuppression(): void {
+		if (this.mutationSuppressionTimerId !== null) {
+			this.win.clearTimeout(this.mutationSuppressionTimerId);
+			this.mutationSuppressionTimerId = null;
+		}
+		this.suppressMutations = false;
 	}
 
 	private disconnectObserver(): void {
 		this.observer?.disconnect();
 		this.observer = null;
+		this.observedElements.clear();
 	}
 
 	private disable(): void {

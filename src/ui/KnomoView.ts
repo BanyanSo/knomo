@@ -14,11 +14,11 @@ import type { MemoRecord } from "../types/memo";
 import type { MobileCompactMode } from "../types/settings";
 import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
-import { formatDatePart } from "../utils/date";
+import { formatDatePart, formatMonthPeriod } from "../utils/date";
 import {
 	getMarkdownTaskLines,
 	type MarkdownTaskMarker,
-	toggleMarkdownTaskMarkerByIndex,
+	replaceMarkdownTaskMarkerByIndex,
 	type WritableMarkdownTaskMarker,
 } from "../utils/markdownTasks";
 import { buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
@@ -126,6 +126,8 @@ const MOBILE_SEARCH_BATCH_SIZE = 30;
 const INITIAL_VISIBLE_RENDER_COUNT = 16;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
 const SEARCH_DEBOUNCE_MS = 220;
+const MOBILE_MEMO_HYDRATE_INITIAL_DELAY_MS = 1200;
+const MOBILE_MEMO_HYDRATE_BACKGROUND_DELAY_MS = 180;
 const MOBILE_VIEW_HEADER_SELECTORS = [
 	".workspace-leaf.mod-active .view-header",
 	".mod-active .view-header",
@@ -134,6 +136,7 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
 type ComposerMode = "create" | "edit" | "quote";
+type MemoLoadMode = "recent" | "hydrating" | "all";
 type WindowWithIntersectionObserver = Window & {
 	IntersectionObserver?: typeof IntersectionObserver;
 };
@@ -189,6 +192,14 @@ export class KnomoView extends ItemView {
 	private cardFlowError: string | null = null;
 	private allMemosLoaded = false;
 	private allMemosLoadingPromise: Promise<boolean> | null = null;
+	private memoLoadMode: MemoLoadMode = "recent";
+	private loadedMemoPeriods = new Set<string>();
+	private allMemoPeriods: string[] = [];
+	private mobileMemoHydrateTimerId: number | null = null;
+	private mobileSidebarHydrateTimerId: number | null = null;
+	private mobileMemoHydrateRunId = 0;
+	private mobileMemoHydrateFastMode = false;
+	private renderNextBatchAfterMobileHydration = false;
 	private scopeFilter: ScopeFilter = "all";
 	private searchQuery = "";
 	private searchDateFilter: SearchDateFilter | null = null;
@@ -340,6 +351,7 @@ export class KnomoView extends ItemView {
 		this.wikiLinkSuggest = null;
 		this.clearSearchDebounce();
 		this.clearMobileSearchDebounce();
+		this.cancelMobileMemoHydration();
 		this.mobileComposerController.dispose();
 		this.clearListEnterKeydownPatch();
 		this.clearSkipListEnterInputFallback();
@@ -365,7 +377,9 @@ export class KnomoView extends ItemView {
 		}
 		await this.waitForAllMemosLoading();
 		await this.reloadMemos(this.allMemosLoaded);
-		void this.refreshTrashCount(false);
+		if (!Platform.isMobile) {
+			void this.refreshTrashCount(false);
+		}
 		if (this.activeNav === "random") {
 			await this.refreshRandomReunionMemos();
 		}
@@ -440,8 +454,15 @@ export class KnomoView extends ItemView {
 
 		this.renderScopeState();
 		this.syncRootState();
-		await this.ensureAllMemosLoaded(true);
-		void this.refreshTrashCount(false);
+		if (Platform.isMobile) {
+			this.renderStats();
+			this.renderTags();
+			this.renderTrashCount();
+			void this.loadInitialMobileMemos();
+		} else {
+			await this.ensureAllMemosLoaded(true);
+			void this.refreshTrashCount(false);
+		}
 	}
 
 	private renderSidebar(sidebar: HTMLElement): void {
@@ -702,6 +723,8 @@ export class KnomoView extends ItemView {
 				? await this.syncOrchestrator.listMemos()
 				: await this.syncOrchestrator.listRecentMemos();
 			this.allMemosLoaded = loadAll;
+			this.memoLoadMode = loadAll ? "all" : "recent";
+			this.loadedMemoPeriods = loadAll ? new Set(this.syncOrchestrator.listMemoIndexPeriods()) : new Set(this.getRecentMemoPeriods());
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
@@ -712,6 +735,8 @@ export class KnomoView extends ItemView {
 			loaded = true;
 		} catch (error) {
 			this.memos = [];
+			this.memoLoadMode = "recent";
+			this.loadedMemoPeriods.clear();
 			this.invalidateMemoSearchCache();
 			this.cardFlowError = formatSettingsText(error instanceof Error ? error.message : t("empty.cardFlowFailed"));
 			this.updateStatus(this.cardFlowError, true);
@@ -721,6 +746,43 @@ export class KnomoView extends ItemView {
 			void this.refreshRandomReunionMemos();
 		}
 		return loaded;
+	}
+
+	private async loadInitialMobileMemos(): Promise<void> {
+		const runId = this.mobileMemoHydrateRunId;
+		try {
+			const memos = await this.syncOrchestrator.listRecentMemos();
+			if (runId !== this.mobileMemoHydrateRunId || this.cardFlowEl === null || !this.cardFlowEl.isConnected) {
+				return;
+			}
+			this.memos = memos;
+			this.allMemosLoaded = false;
+			this.memoLoadMode = "recent";
+			this.loadedMemoPeriods = new Set(this.getRecentMemoPeriods());
+			this.cardFlowError = null;
+			this.filteredMemosCache = null;
+			this.invalidateMemoSearchCache();
+			this.resetVisibleMemos();
+			if (this.activeNav === "random" && !this.randomReunionLoading) {
+				this.randomReunionMemos = null;
+			}
+			this.renderUiState();
+			if (this.activeNav === "random" && !this.randomReunionLoading && this.randomReunionMemos === null) {
+				void this.refreshRandomReunionMemos();
+			}
+			this.scheduleMobileMemoHydration();
+		} catch (error) {
+			if (runId !== this.mobileMemoHydrateRunId || this.cardFlowEl === null || !this.cardFlowEl.isConnected) {
+				return;
+			}
+			this.memos = [];
+			this.memoLoadMode = "recent";
+			this.loadedMemoPeriods.clear();
+			this.invalidateMemoSearchCache();
+			this.cardFlowError = formatSettingsText(error instanceof Error ? error.message : t("empty.cardFlowFailed"));
+			this.updateStatus(this.cardFlowError, true);
+			this.renderUiState();
+		}
 	}
 
 	private renderUiState(options: RenderUiStateOptions = {}): void {
@@ -1223,8 +1285,10 @@ export class KnomoView extends ItemView {
 
 	private renderStats(): void {
 		const stats = getMemoStats(this.memos);
+		const loading = Platform.isMobile && this.mobileDrawerOpen && this.memoLoadMode === "hydrating";
 		for (const statsEl of this.statsEls) {
 			statsEl.empty();
+			statsEl.toggleClass("is-loading", loading);
 			renderSidebarStat(statsEl, String(stats.memoCount), t("stats.notes"));
 			renderSidebarStat(statsEl, String(stats.tagCount), t("stats.tags"));
 			renderSidebarStat(statsEl, stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount), stats.imageCount > 0 ? t("stats.images") : t("stats.words"));
@@ -1232,6 +1296,10 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderTags(): void {
+		if (Platform.isMobile && this.mobileDrawerOpen && this.memoLoadMode !== "all") {
+			this.allTagsEl?.empty();
+			return;
+		}
 		const allTags = collectTags(this.memos, collectVaultTagDisplayMap(this.app));
 		if (this.activeTagKey !== null) {
 			const activeTag = allTags.find((tag) => tag.key === this.activeTagKey);
@@ -1440,10 +1508,10 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const batch = this.cardFlowBatcher.beginNextBatch(batchSize);
-		this.renderCardBatch(batch, generation);
+		this.renderCardBatch(batch, generation, true);
 	}
 
-	private renderCardBatch(batch: CardFlowBatch | null, generation: number): void {
+	private renderCardBatch(batch: CardFlowBatch | null, generation: number, hydrateWhenExhausted = false): void {
 		const result = runCardFlowBatch({
 			batch,
 			generation,
@@ -1462,6 +1530,9 @@ export class KnomoView extends ItemView {
 		});
 		const cardFlow = this.cardFlowEl;
 		if (result.type !== "completed" || !result.completion.hasMoreItems || cardFlow === null) {
+			if (hydrateWhenExhausted && result.type === "completed") {
+				this.requestMobileMemoHydrationForCardFlow();
+			}
 			return;
 		}
 		this.cardFlowSentinel.render({
@@ -1675,7 +1746,11 @@ export class KnomoView extends ItemView {
 				await this.refreshRandomReunionMemos();
 				return;
 			case "load-more":
-				this.renderNextCardBatch(this.renderGeneration);
+				if (this.cardFlowBatcher.hasMoreItems) {
+					this.renderNextCardBatch(this.renderGeneration);
+				} else {
+					this.requestMobileMemoHydrationForCardFlow();
+				}
 				return;
 			case "load-more-mobile-search":
 				this.loadMoreMobileSearchResults();
@@ -1691,6 +1766,7 @@ export class KnomoView extends ItemView {
 					this.closeComposerKeepingDraft();
 				}
 				this.mobileDrawerOpen = true;
+				this.deferMobileMemoHydrationForSidebar();
 				break;
 			case "close-drawer":
 				this.mobileDrawerOpen = false;
@@ -3059,6 +3135,9 @@ export class KnomoView extends ItemView {
 			}
 			this.sidebarCollapsed = false;
 			this.syncRootState();
+			if (this.mobileDrawerOpen) {
+				this.deferMobileMemoHydrationForSidebar();
+			}
 			return;
 		}
 		this.toggleSidebarCollapsed();
@@ -3133,10 +3212,225 @@ export class KnomoView extends ItemView {
 		if (this.allMemosLoadingPromise !== null) {
 			return this.allMemosLoadingPromise;
 		}
+		if (Platform.isMobile && !forceReload) {
+			this.allMemosLoadingPromise = this.startMobileMemoHydration(true).finally(() => {
+				this.allMemosLoadingPromise = null;
+			});
+			return this.allMemosLoadingPromise;
+		}
+		if (forceReload) {
+			this.cancelMobileMemoHydration();
+		}
 		this.allMemosLoadingPromise = this.reloadMemos(true).finally(() => {
 			this.allMemosLoadingPromise = null;
 		});
 		return this.allMemosLoadingPromise;
+	}
+
+	private scheduleMobileMemoHydration(): void {
+		if (!Platform.isMobile || this.allMemosLoaded || this.allMemosLoadingPromise !== null || this.mobileMemoHydrateTimerId !== null) {
+			return;
+		}
+		this.mobileMemoHydrateTimerId = this.containerEl.win.setTimeout(() => {
+			this.mobileMemoHydrateTimerId = null;
+			if (this.allMemosLoadingPromise !== null) {
+				return;
+			}
+			this.allMemosLoadingPromise = this.startMobileMemoHydration(false).finally(() => {
+				this.allMemosLoadingPromise = null;
+			});
+		}, MOBILE_MEMO_HYDRATE_INITIAL_DELAY_MS);
+	}
+
+	private startMobileMemoHydration(fastMode: boolean): Promise<boolean> {
+		if (!Platform.isMobile || this.allMemosLoaded) {
+			return Promise.resolve(this.allMemosLoaded);
+		}
+		if (fastMode) {
+			this.mobileMemoHydrateFastMode = true;
+		}
+		this.clearScheduledMobileMemoHydration();
+		this.memoLoadMode = "hydrating";
+		this.renderStats();
+		if (this.mobileDrawerOpen) {
+			this.renderTags();
+		}
+		const runId = this.mobileMemoHydrateRunId + 1;
+		this.mobileMemoHydrateRunId = runId;
+		return this.hydrateMobileMemos(runId);
+	}
+
+	private async hydrateMobileMemos(runId: number): Promise<boolean> {
+		try {
+			this.allMemoPeriods = this.syncOrchestrator.listMemoIndexPeriods();
+			for (const period of this.allMemoPeriods) {
+				if (this.loadedMemoPeriods.has(period)) {
+					continue;
+				}
+				const shouldContinue = await this.waitForMobileMemoHydrationTurn(runId);
+				if (!shouldContinue) {
+					return false;
+				}
+				const periodMemos = await this.syncOrchestrator.listMemosInPeriods([period]);
+				if (runId !== this.mobileMemoHydrateRunId) {
+					return false;
+				}
+				this.loadedMemoPeriods.add(period);
+				this.mergeHydratedMemos(periodMemos);
+				this.renderStats();
+				this.syncCardFlowAfterMemoHydration();
+			}
+			if (runId !== this.mobileMemoHydrateRunId) {
+				return false;
+			}
+			this.completeMobileMemoHydration();
+			return true;
+		} catch {
+			if (runId === this.mobileMemoHydrateRunId) {
+				this.mobileMemoHydrateFastMode = false;
+				this.memoLoadMode = this.allMemosLoaded ? "all" : "recent";
+				this.renderStats();
+				this.renderTags();
+			}
+			return false;
+		}
+	}
+
+	private waitForMobileMemoHydrationTurn(runId: number): Promise<boolean> {
+		const delay = this.mobileMemoHydrateFastMode ? 0 : MOBILE_MEMO_HYDRATE_BACKGROUND_DELAY_MS;
+		return new Promise((resolve) => {
+			this.containerEl.win.setTimeout(() => {
+				resolve(runId === this.mobileMemoHydrateRunId);
+			}, delay);
+		});
+	}
+
+	private mergeHydratedMemos(memos: MemoRecord[]): void {
+		if (memos.length === 0) {
+			return;
+		}
+		const memoById = new Map(this.memos.map((memo) => [memo.id, memo]));
+		for (const memo of memos) {
+			memoById.set(memo.id, memo);
+		}
+		this.memos = Array.from(memoById.values())
+			.filter((memo) => memo.status === "active")
+			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+		this.filteredMemosCache = null;
+		this.invalidateMemoSearchCache();
+	}
+
+	private completeMobileMemoHydration(): void {
+		this.allMemosLoaded = true;
+		this.memoLoadMode = "all";
+		this.mobileMemoHydrateFastMode = false;
+		this.renderNextBatchAfterMobileHydration = false;
+		this.filteredMemosCache = null;
+		this.invalidateMemoSearchCache();
+		if (this.shouldRenderFullUiAfterMobileHydration()) {
+			this.renderUiState();
+			return;
+		}
+		this.renderStats();
+		this.renderTags();
+		this.syncCardFlowAfterMemoHydration();
+	}
+
+	private shouldRenderFullUiAfterMobileHydration(): boolean {
+		return this.activeNav !== "all" ||
+			this.mobileSearchPageOpen ||
+			needsAllMemos(this.scopeFilter, this.searchQuery, this.searchDateFilter);
+	}
+
+	private syncCardFlowAfterMemoHydration(): void {
+		if (this.cardFlowEl === null || this.cardFlowError !== null || this.activeNav === "trash" || this.activeNav === "random") {
+			return;
+		}
+		const memos = this.getFilteredMemos();
+		this.cardFlowBatcher.updateItems(memos);
+		if (this.renderNextBatchAfterMobileHydration && this.cardFlowBatcher.remainingCount > 0) {
+			this.renderNextBatchAfterMobileHydration = false;
+			this.renderNextCardBatch(this.renderGeneration);
+			return;
+		}
+		this.renderCardFlowSentinelIfNeeded();
+	}
+
+	private renderCardFlowSentinelIfNeeded(): void {
+		if (this.cardFlowEl === null || !this.cardFlowBatcher.hasMoreItems) {
+			return;
+		}
+		this.cardFlowSentinel.render({
+			root: this.cardFlowEl,
+			remainingCount: this.cardFlowBatcher.remainingCount,
+			generation: this.renderGeneration,
+			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
+			isCurrentGeneration: (value) => value === this.renderGeneration,
+			onIntersect: (value) => this.renderNextCardBatch(value),
+		});
+	}
+
+	private requestMobileMemoHydrationForSidebar(): void {
+		if (!Platform.isMobile || this.allMemosLoaded) {
+			return;
+		}
+		this.mobileMemoHydrateFastMode = true;
+		this.memoLoadMode = "hydrating";
+		void this.ensureAllMemosLoaded();
+		this.renderStats();
+		this.renderTags();
+	}
+
+	private deferMobileMemoHydrationForSidebar(): void {
+		if (!Platform.isMobile || this.allMemosLoaded || this.mobileSidebarHydrateTimerId !== null) {
+			return;
+		}
+		this.mobileSidebarHydrateTimerId = this.containerEl.win.setTimeout(() => {
+			this.mobileSidebarHydrateTimerId = null;
+			this.requestMobileMemoHydrationForSidebar();
+		}, 0);
+	}
+
+	private requestMobileMemoHydrationForCardFlow(): void {
+		if (!Platform.isMobile || this.allMemosLoaded || this.activeNav === "trash" || this.activeNav === "random") {
+			return;
+		}
+		this.mobileMemoHydrateFastMode = true;
+		this.memoLoadMode = "hydrating";
+		this.renderNextBatchAfterMobileHydration = true;
+		void this.ensureAllMemosLoaded();
+	}
+
+	private clearScheduledMobileMemoHydration(): void {
+		if (this.mobileMemoHydrateTimerId === null) {
+			return;
+		}
+		this.containerEl.win.clearTimeout(this.mobileMemoHydrateTimerId);
+		this.mobileMemoHydrateTimerId = null;
+	}
+
+	private clearDeferredMobileSidebarHydration(): void {
+		if (this.mobileSidebarHydrateTimerId === null) {
+			return;
+		}
+		this.containerEl.win.clearTimeout(this.mobileSidebarHydrateTimerId);
+		this.mobileSidebarHydrateTimerId = null;
+	}
+
+	private cancelMobileMemoHydration(): void {
+		this.mobileMemoHydrateRunId += 1;
+		this.mobileMemoHydrateFastMode = false;
+		this.renderNextBatchAfterMobileHydration = false;
+		this.clearScheduledMobileMemoHydration();
+		this.clearDeferredMobileSidebarHydration();
+	}
+
+	private getRecentMemoPeriods(): string[] {
+		const now = new Date();
+		return [
+			formatMonthPeriod(now),
+			formatMonthPeriod(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+		];
 	}
 
 	private async waitForAllMemosLoading(): Promise<void> {
@@ -3162,12 +3456,15 @@ export class KnomoView extends ItemView {
 		if (
 			cardFlow === null ||
 			this.cardFlowSentinel.isObserving ||
-			!this.cardFlowBatcher.hasMoreItems ||
 			cardFlow.scrollTop + cardFlow.clientHeight < cardFlow.scrollHeight - 160
 		) {
 			return;
 		}
-		this.renderNextCardBatch(this.renderGeneration);
+		if (this.cardFlowBatcher.hasMoreItems) {
+			this.renderNextCardBatch(this.renderGeneration);
+			return;
+		}
+		this.requestMobileMemoHydrationForCardFlow();
 	}
 
 	private async refreshTrashCount(render = true): Promise<void> {
@@ -3432,6 +3729,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleTaskCheckboxChange(event: Event): void {
+		if (!event.isTrusted) {
+			return;
+		}
 		const input = this.getTaskCheckboxInput(event.target);
 		if (input === null) {
 			return;
@@ -3443,13 +3743,17 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const latestContent = this.memoTaskUpdateCoordinator.getLatestContent(memo);
-		const result = toggleMarkdownTaskMarkerByIndex(latestContent, taskIndex);
-		if (result === null) {
+		const marker: WritableMarkdownTaskMarker = input.checked ? "x" : " ";
+		const nextContent = replaceMarkdownTaskMarkerByIndex(latestContent, taskIndex, marker);
+		if (nextContent === null) {
 			this.syncTaskCheckboxDom(input, memo);
 			return;
 		}
-		this.applyTaskCheckboxDomState(input, result.marker);
-		this.memoTaskUpdateCoordinator.enqueue(memo, result.content);
+		this.applyTaskCheckboxDomState(input, marker);
+		if (nextContent === latestContent) {
+			return;
+		}
+		this.memoTaskUpdateCoordinator.enqueue(memo, nextContent);
 	}
 
 	private getTaskCheckboxInput(target: EventTarget | null): HTMLInputElement | null {

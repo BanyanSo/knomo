@@ -7,9 +7,16 @@ import type { SyncOrchestrator } from "./SyncOrchestrator";
 
 export type FileWatchSyncErrorHandler = (path: string, error: unknown) => void;
 
+interface QueuedFileTask {
+	file: TFile;
+	task: () => Promise<void>;
+}
+
 // 职责：监听日记与 memo-index 变化；日记写入结合 SelfWriteTracker 防循环。
 export class FileWatchService {
 	private readonly timersByPath = new Map<string, number>();
+	private readonly queuedTasks: QueuedFileTask[] = [];
+	private taskRunning = false;
 
 	constructor(
 		private readonly app: App,
@@ -61,9 +68,45 @@ export class FileWatchService {
 
 		const timer = this.app.workspace.containerEl.win.setTimeout(() => {
 			this.timersByPath.delete(file.path);
-			void task().catch((error) => this.handleSyncError(file, error));
+			this.enqueueTask(file, task);
 		}, this.syncOrchestrator.getSyncDebounceMs());
 		this.timersByPath.set(file.path, timer);
+	}
+
+	private enqueueTask(file: TFile, task: () => Promise<void>): void {
+		const queuedTask = this.queuedTasks.find((item) => item.file.path === file.path);
+		if (queuedTask !== undefined) {
+			queuedTask.file = file;
+			queuedTask.task = task;
+			return;
+		}
+		this.queuedTasks.push({ file, task });
+		void this.flushTaskQueue();
+	}
+
+	private async flushTaskQueue(): Promise<void> {
+		if (this.taskRunning) {
+			return;
+		}
+		this.taskRunning = true;
+		try {
+			for (;;) {
+				const queuedTask = this.queuedTasks.shift();
+				if (queuedTask === undefined) {
+					return;
+				}
+				try {
+					await queuedTask.task();
+				} catch (error) {
+					this.handleSyncError(queuedTask.file, error);
+				}
+			}
+		} finally {
+			this.taskRunning = false;
+			if (this.queuedTasks.length > 0) {
+				void this.flushTaskQueue();
+			}
+		}
 	}
 
 	private async runSync(file: TFile): Promise<void> {
@@ -87,5 +130,6 @@ export class FileWatchService {
 			this.app.workspace.containerEl.win.clearTimeout(timer);
 		}
 		this.timersByPath.clear();
+		this.queuedTasks.length = 0;
 	}
 }

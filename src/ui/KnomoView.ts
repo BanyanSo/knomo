@@ -17,7 +17,6 @@ import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
 import {
 	getMarkdownTaskLines,
-	isMarkdownTaskChecked,
 	type MarkdownTaskMarker,
 	toggleMarkdownTaskMarkerByIndex,
 	type WritableMarkdownTaskMarker,

@@ -328,7 +328,7 @@ export class MemoScanService {
 				await this.markDailyIssue(settings, existingMemos, memo, opId, result, source);
 				continue;
 			}
-			await this.softDeleteMissingDailyMemo(settings, existingMemos, memo, opId, result, source, deleteSource);
+			await this.softDeleteMissingDailyMemo(settings, existingMemos, memo, opId, result, source, deleteSource, syncMonthly);
 		}
 
 		for (const block of blocks) {
@@ -498,12 +498,13 @@ export class MemoScanService {
 		result: ScanDailyMemosResult,
 		source: MarkdownSyncSource,
 		deleteSource: string,
+		syncMonthly: boolean,
 	): Promise<void> {
 		let syncStatus: MemoRecord["syncStatus"] = "synced";
 		let issue: MemoRecord["issue"] = null;
 		let deletedMonthlyBlock = memo.monthlyRef.lastKnownBlock;
 
-		if (memo.monthlyRef.path.trim().length > 0) {
+		if (syncMonthly && memo.monthlyRef.path.trim().length > 0) {
 			try {
 				const monthlyResult = await this.monthlyArchiveService.deleteMemoBlock(memo);
 				deletedMonthlyBlock = monthlyResult.ref.lastKnownBlock;

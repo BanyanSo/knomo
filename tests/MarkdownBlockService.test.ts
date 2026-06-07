@@ -1868,6 +1868,76 @@ test("rebuild index estimates recent files and backs up before all-diary rebuild
 	assert.equal(result.backupPath, "Memos/_knomo-system/backups/rebuild-index");
 });
 
+test("index-only rebuild does not delete monthly block when indexed memo is missing", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const today = new Date();
+	const todayPath = `${formatTestDate(today)}.md`;
+	const todayFile = Object.assign(new TFile(), {
+		path: todayPath,
+		basename: todayPath.replace(/\.md$/, ""),
+		extension: "md",
+	});
+	const rawBlock = "- 08:00:00 旧内容";
+	const missingMemo = createReferenceMemo(rawBlock);
+	missingMemo.id = "missing-index-only-memo";
+	missingMemo.createdAt = `${formatTestDate(today)}T08:00:00.000+08:00`;
+	missingMemo.updatedAt = missingMemo.createdAt;
+	missingMemo.contentSnapshot = "旧内容";
+	missingMemo.contentHash = hashMemoContent("旧内容");
+	missingMemo.dailyRef = {
+		...missingMemo.dailyRef,
+		path: todayPath,
+		lastKnownBlock: rawBlock,
+		lastKnownHash: hashText(rawBlock),
+	};
+	missingMemo.monthlyRef = {
+		...missingMemo.monthlyRef,
+		path: "Memos/Memos-2026-05.md",
+		lastKnownBlock: rawBlock,
+		lastKnownHash: hashText(rawBlock),
+	};
+	let monthlyDeleteCalled = false;
+	const savedMemos: MemoRecord[] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [todayFile],
+				cachedRead: async () => `# ${formatTestDate(today)}\n\n## Knomo\n`,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			deleteMemoBlock: async () => {
+				monthlyDeleteCalled = true;
+				throw new Error("index-only rebuild should not delete monthly archives");
+			},
+		} as never,
+		{
+			loadAll: async () => [missingMemo],
+			upsertMemo: async (_folder: string, memo: MemoRecord) => {
+				savedMemos.push(memo);
+				return memo;
+			},
+			backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-index",
+			restoreIndexes: async () => undefined,
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.rebuildIndex("30d", "index-only");
+
+	assert.equal(monthlyDeleteCalled, false);
+	assert.equal(result.deleted, 1);
+	assert.equal(savedMemos[0]?.status, "deleted");
+	assert.equal(savedMemos[0]?.deletedMonthlyBlock, rawBlock);
+});
+
 test("rebuild index restores backup when monthly rebuild fails", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");

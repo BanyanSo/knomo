@@ -15,6 +15,7 @@ import { ReferenceService } from "./services/ReferenceService";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SettingsService } from "./services/SettingsService";
 import { SyncOrchestrator } from "./services/SyncOrchestrator";
+import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
 import type { ScanDailyMemosResult } from "./services/MemoScanService";
 import { KNOMO_LOGO_ICON, registerKnomoIcons } from "./icons";
 import { t } from "./i18n";
@@ -23,10 +24,13 @@ import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactControlle
 import { KnomoView } from "./ui/KnomoView";
 import { formatSettingsText } from "./utils/serviceText";
 
+const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
+
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
 	syncOrchestrator!: SyncOrchestrator;
 	manualRefreshPromise: Promise<ScanDailyMemosResult> | null = null;
+	private viewRefreshScheduler: ViewRefreshScheduler | null = null;
 
 	async onload(): Promise<void> {
 		registerKnomoIcons();
@@ -49,6 +53,11 @@ export default class KnomoPlugin extends Plugin {
 			selfWriteTracker,
 			markdownBlockService,
 		);
+		this.viewRefreshScheduler = new ViewRefreshScheduler(
+			() => this.app.workspace.containerEl.win,
+			() => this.runRefreshOpenViews(),
+			OPEN_VIEWS_REFRESH_DEBOUNCE_MS,
+		);
 		const referenceService = new ReferenceService(
 			this.app,
 			markdownBlockService,
@@ -60,7 +69,7 @@ export default class KnomoPlugin extends Plugin {
 			this.app,
 			selfWriteTracker,
 			this.syncOrchestrator,
-			() => this.refreshOpenViews(),
+			() => this.queueRefreshOpenViews(),
 			(path, error) => this.notifyWatchSyncError(path, error),
 		);
 		fileWatchService.start(this);
@@ -74,7 +83,7 @@ export default class KnomoPlugin extends Plugin {
 				referenceService,
 				randomReunionService,
 				attachmentService,
-				() => this.refreshOpenViews(),
+				() => this.queueRefreshOpenViews(),
 				() => this.runManualRefresh(),
 			),
 		);
@@ -104,6 +113,7 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.viewRefreshScheduler?.clear();
 		MobileNavbarCompactController.cleanupDocument(this.app.workspace.containerEl.doc);
 	}
 
@@ -128,6 +138,22 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	private async refreshOpenViews(): Promise<void> {
+		if (this.viewRefreshScheduler === null) {
+			await this.runRefreshOpenViews();
+			return;
+		}
+		await this.viewRefreshScheduler.runNow();
+	}
+
+	private async queueRefreshOpenViews(): Promise<void> {
+		if (this.viewRefreshScheduler === null) {
+			await this.runRefreshOpenViews();
+			return;
+		}
+		await this.viewRefreshScheduler.queue();
+	}
+
+	private async runRefreshOpenViews(): Promise<void> {
 		const refreshes = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
 			if (leaf.view instanceof KnomoView) {
 				await leaf.view.refresh();
@@ -174,7 +200,7 @@ export default class KnomoPlugin extends Plugin {
 		try {
 			const result = await this.syncOrchestrator.scanRecentDailyMemos(30);
 			if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
-				await this.refreshOpenViews();
+				await this.queueRefreshOpenViews();
 			}
 		} catch {
 			// 启动扫描只做轻量修复，不打断用户。

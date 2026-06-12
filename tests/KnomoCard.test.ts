@@ -136,6 +136,8 @@ test("card image CSS keeps thumbnails lightweight and the modal touch area mobil
 		/--knomo-image-preview-control-background:\s*rgba\(0,\s*0,\s*0,\s*0\.72\);/,
 	);
 	assert.match(getStyleRule(css, ".knomo-image-preview-modal .modal-close-button"), /display:\s*none;/);
+	assert.match(getStyleRule(css, ".knomo-image-preview-modal .modal-title"), /opacity:\s*0;/);
+	assert.doesNotMatch(getStyleRule(css, ".knomo-image-preview-modal .modal-title"), /clip-path:/);
 	assert.match(
 		getStyleRule(css, ".knomo-image-preview-modal .knomo-image-preview-close,\n.knomo-image-preview-modal .knomo-image-preview-nav"),
 		/background:\s*var\(--knomo-image-preview-control-background\);/,

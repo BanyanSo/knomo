@@ -22,6 +22,7 @@ import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
+import type { MemoMutation } from "./types/memo";
 import { formatSettingsText } from "./utils/serviceText";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
@@ -83,7 +84,8 @@ export default class KnomoPlugin extends Plugin {
 				referenceService,
 				randomReunionService,
 				attachmentService,
-				() => this.queueRefreshOpenViews(),
+				(mutation, sourceView) => this.broadcastMemoMutation(mutation, sourceView),
+				() => this.runRefreshOpenViews(true),
 				() => this.runManualRefresh(),
 			),
 		);
@@ -139,10 +141,11 @@ export default class KnomoPlugin extends Plugin {
 
 	private async refreshOpenViews(): Promise<void> {
 		if (this.viewRefreshScheduler === null) {
-			await this.runRefreshOpenViews();
+			await this.runRefreshOpenViews(true);
 			return;
 		}
-		await this.viewRefreshScheduler.runNow();
+		this.viewRefreshScheduler.clear();
+		await this.runRefreshOpenViews(true);
 	}
 
 	private async queueRefreshOpenViews(): Promise<void> {
@@ -153,13 +156,21 @@ export default class KnomoPlugin extends Plugin {
 		await this.viewRefreshScheduler.queue();
 	}
 
-	private async runRefreshOpenViews(): Promise<void> {
+	private async runRefreshOpenViews(forceRebuild = false): Promise<void> {
 		const refreshes = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
 			if (leaf.view instanceof KnomoView) {
-				await leaf.view.refresh();
+				await leaf.view.refresh(forceRebuild);
 			}
 		});
 		await Promise.all(refreshes);
+	}
+
+	private broadcastMemoMutation(mutation: MemoMutation, sourceView: KnomoView): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+			if (leaf.view instanceof KnomoView && leaf.view !== sourceView) {
+				leaf.view.applyMemoMutation(mutation);
+			}
+		}
 	}
 
 	private notifyWatchSyncError(path: string, error: unknown): void {

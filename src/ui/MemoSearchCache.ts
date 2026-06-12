@@ -3,27 +3,32 @@ import { buildMemoSearchText } from "./viewFilters";
 
 type BuildMemoSearchText = (memo: MemoRecord) => string;
 
+interface MemoSearchCacheEntry {
+	key: string;
+	text: string;
+}
+
 export class MemoSearchCache {
-	private textCache = new Map<string, string>();
-	private source: MemoRecord[] | null = null;
+	private textCache = new Map<string, MemoSearchCacheEntry>();
 
 	constructor(private readonly buildSearchText: BuildMemoSearchText = buildMemoSearchText) {}
 
-	invalidate(memos: MemoRecord[]): void {
+	invalidate(): void {
 		this.textCache.clear();
-		this.source = memos;
 	}
 
-	get(memo: MemoRecord, memos: MemoRecord[]): string {
-		if (this.source !== memos) {
-			this.invalidate(memos);
-		}
-		const cachedText = this.textCache.get(memo.id);
-		if (cachedText !== undefined) {
-			return cachedText;
+	remove(memoId: string): void {
+		this.textCache.delete(memoId);
+	}
+
+	get(memo: MemoRecord): string {
+		const key = `${memo.version}:${memo.contentHash}:${memo.updatedAt}`;
+		const cached = this.textCache.get(memo.id);
+		if (cached?.key === key) {
+			return cached.text;
 		}
 		const searchText = this.buildSearchText(memo);
-		this.textCache.set(memo.id, searchText);
+		this.textCache.set(memo.id, { key, text: searchText });
 		return searchText;
 	}
 }

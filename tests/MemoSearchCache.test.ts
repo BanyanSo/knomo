@@ -4,21 +4,20 @@ import assert from "node:assert/strict";
 import type { MemoRecord } from "../src/types/memo";
 import { MemoSearchCache } from "../src/ui/MemoSearchCache";
 
-test("caches memo search text while the memo list reference is unchanged", () => {
+test("caches memo search text while the memo content key is unchanged", () => {
 	let calls = 0;
 	const memo = makeMemo("a");
-	const memos = [memo];
 	const cache = new MemoSearchCache((value) => {
 		calls += 1;
 		return `${value.id}:${calls}`;
 	});
 
-	assert.equal(cache.get(memo, memos), "a:1");
-	assert.equal(cache.get(memo, memos), "a:1");
+	assert.equal(cache.get(memo), "a:1");
+	assert.equal(cache.get(memo), "a:1");
 	assert.equal(calls, 1);
 });
 
-test("invalidates memo search text when the memo list reference changes", () => {
+test("invalidates one memo search text when its content key changes", () => {
 	let calls = 0;
 	const memo = makeMemo("a");
 	const cache = new MemoSearchCache((value) => {
@@ -26,8 +25,8 @@ test("invalidates memo search text when the memo list reference changes", () => 
 		return `${value.id}:${calls}`;
 	});
 
-	assert.equal(cache.get(memo, [memo]), "a:1");
-	assert.equal(cache.get(memo, [memo]), "a:2");
+	assert.equal(cache.get(memo), "a:1");
+	assert.equal(cache.get({ ...memo, version: 2, contentHash: "changed" }), "a:2");
 	assert.equal(calls, 2);
 });
 

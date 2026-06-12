@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { KnomoCardFlowBatcher, runCardFlowBatch } from "../src/ui/KnomoCardFlow";
+import {
+	getVisibleCardFlowMemoStateKey,
+	KnomoCardFlowBatcher,
+	runCardFlowBatch,
+} from "../src/ui/KnomoCardFlow";
 import type { MemoRecord } from "../src/types/memo";
 
 test("starts card flow with the default batch size", () => {
@@ -56,6 +60,41 @@ test("updates card flow items without resetting rendered offset", () => {
 	if (nextBatch?.type !== "items") return;
 	assert.deepEqual(nextBatch.items.map((item) => item.memo.id), ["memo-2", "memo-3"]);
 	assert.deepEqual(nextBatch.items.map((item) => item.renderIndex), [2, 3]);
+});
+
+test("compares only the rendered memo window during hydration", () => {
+	const visibleMemos = makeMemos(2);
+	const previousKey = getVisibleCardFlowMemoStateKey(visibleMemos, 2, 50);
+	const appendedKey = getVisibleCardFlowMemoStateKey(
+		[...visibleMemos, makeMemo("older-0"), makeMemo("older-1")],
+		2,
+		50,
+	);
+	const prependedKey = getVisibleCardFlowMemoStateKey(
+		[makeMemo("new-0"), ...visibleMemos],
+		2,
+		50,
+	);
+
+	assert.equal(appendedKey, previousKey);
+	assert.notEqual(prependedKey, previousKey);
+});
+
+test("syncs the rendered count after inserting a memo at the front", () => {
+	const batcher = new KnomoCardFlowBatcher();
+	const firstBatch = batcher.start(makeMemos(4), "memo", 3);
+	assert.equal(firstBatch?.type, "items");
+	if (firstBatch?.type !== "items") return;
+	batcher.completeBatch(firstBatch);
+
+	const memos = [makeMemo("new-0"), ...makeMemos(4)];
+	batcher.sync(memos, "memo", 4);
+	const nextBatch = batcher.beginNextBatch(2);
+
+	assert.equal(nextBatch?.type, "items");
+	if (nextBatch?.type !== "items") return;
+	assert.deepEqual(nextBatch.items.map((item) => item.memo.id), ["memo-3"]);
+	assert.deepEqual(nextBatch.items.map((item) => item.renderIndex), [4]);
 });
 
 test("preserves the previous rendered count when restarting", () => {

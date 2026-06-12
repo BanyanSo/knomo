@@ -1,4 +1,4 @@
-import type { SelfWriteMarker } from "../types";
+import type { SelfWriteMarker, SelfWriteReason } from "../types";
 
 // 职责：记录近期插件自身写入，用于文件监听防循环；不承担写入队列职责。
 export class SelfWriteTracker {
@@ -32,6 +32,24 @@ export class SelfWriteTracker {
 		}
 
 		const matchIndex = markers.findIndex((marker) => marker.expectedHash === expectedHash);
+		if (matchIndex === -1) {
+			return null;
+		}
+		const [marker] = markers.splice(matchIndex, 1);
+		if (markers.length === 0) {
+			this.markersByPath.delete(path);
+		}
+		return marker ?? null;
+	}
+
+	consumeByReason(path: string, reason: SelfWriteReason): SelfWriteMarker | null {
+		this.cleanup();
+		const markers = this.markersByPath.get(path);
+		if (!markers || markers.length === 0) {
+			return null;
+		}
+
+		const matchIndex = markers.findIndex((marker) => marker.reason === reason);
 		if (matchIndex === -1) {
 			return null;
 		}

@@ -14,6 +14,7 @@ import {
 	isCjkMemoContent,
 } from "./KnomoCardMetadata";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
+import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 
 export interface RenderMemoCardOptions {
 	generation: number;
@@ -26,8 +27,12 @@ export interface RenderMemoCardOptions {
 	formatDisplayTime: (value: string) => string;
 	formatSettingsText: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
-	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority) => void;
+	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
+	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
 	queueSourceReferenceMarkdown: (container: HTMLElement, text: string, sourcePath: string, generation: number) => void;
+	reusedBodyEl?: HTMLElement | null;
+	reusedImagesEl?: HTMLElement | null;
 }
 
 export interface RenderTrashMemoCardOptions {
@@ -39,10 +44,12 @@ export interface RenderTrashMemoCardOptions {
 	formatDeleteSource: (value: string) => string;
 	formatSettingsText: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
-	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority) => void;
+	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
+	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
 }
 
-export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): void {
+export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): HTMLElement {
 	const markdownPriority = options.getMarkdownPriority(options.renderIndex);
 	const shell = getMemoCardShell({
 		memoId: memo.id,
@@ -84,12 +91,23 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 		}
 	}
 
-	const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
-	options.queueMemoMarkdown(memo, content, options.generation, markdownPriority);
+	if (options.reusedBodyEl !== undefined && options.reusedBodyEl !== null) {
+		card.appendChild(options.reusedBodyEl);
+	} else {
+		renderMemoCardBody(card, memo, {
+			generation: options.generation,
+			markdownPriority,
+			getMemoCardPreview: options.getMemoCardPreview,
+			queueMemoMarkdown: options.queueMemoMarkdown,
+			renderMemoCardImages: options.renderMemoCardImages,
+			reusedImagesEl: options.reusedImagesEl,
+		});
+	}
 	renderCardMeta(card, memo, options);
+	return card;
 }
 
-export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderTrashMemoCardOptions): void {
+export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderTrashMemoCardOptions): HTMLElement {
 	const markdownPriority = options.getMarkdownPriority(options.renderIndex);
 	const card = container.createEl("article", {
 		cls: getTrashMemoCardClass(options.busyAction),
@@ -109,8 +127,13 @@ export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecor
 		);
 	}
 
-	const content = card.createDiv({ cls: "knomo-card-content markdown-rendered" });
-	options.queueMemoMarkdown(memo, content, options.generation, markdownPriority);
+	renderMemoCardBody(card, memo, {
+		generation: options.generation,
+		markdownPriority,
+		getMemoCardPreview: options.getMemoCardPreview,
+		queueMemoMarkdown: options.queueMemoMarkdown,
+		renderMemoCardImages: options.renderMemoCardImages,
+	});
 
 	const meta = card.createDiv({ cls: "knomo-card-meta knomo-trash-meta" });
 	meta.createDiv({ text: t("trash.deletedAt", { time: options.formatOptionalTime(memo.deletedAt) }) });
@@ -121,6 +144,31 @@ export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecor
 	if (warningText !== null) {
 		card.createDiv({ cls: "knomo-card-warning", text: options.formatSettingsText(warningText) });
 	}
+	return card;
+}
+
+interface RenderMemoCardBodyOptions {
+	generation: number;
+	markdownPriority: MarkdownRenderPriority;
+	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
+	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
+	reusedImagesEl?: HTMLElement | null;
+}
+
+export function renderMemoCardBody(card: HTMLElement, memo: MemoRecord, options: RenderMemoCardBodyOptions): HTMLElement {
+	const preview = options.getMemoCardPreview(memo);
+	const body = card.createDiv({ cls: "knomo-card-body" });
+	if (preview.text.trim().length > 0) {
+		const content = body.createDiv({ cls: "knomo-card-content markdown-rendered" });
+		options.queueMemoMarkdown(memo, content, options.generation, options.markdownPriority, preview.text);
+	}
+	if (options.reusedImagesEl !== undefined && options.reusedImagesEl !== null) {
+		body.appendChild(options.reusedImagesEl);
+	} else {
+		options.renderMemoCardImages(body, memo, preview.images, options.generation);
+	}
+	return body;
 }
 
 function renderCardMeta(card: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): void {

@@ -39,6 +39,17 @@ export interface RunCardFlowBatchOptions {
 	cancelBatch: () => void;
 }
 
+export function getVisibleCardFlowMemoStateKey(
+	memos: MemoRecord[],
+	renderedCount: number,
+	defaultBatchSize: number,
+): string {
+	const visibleCount = renderedCount > 0
+		? renderedCount
+		: Math.min(defaultBatchSize, memos.length);
+	return JSON.stringify(memos.slice(0, visibleCount));
+}
+
 export function runCardFlowBatch(options: RunCardFlowBatchOptions): CardFlowBatchRunResult {
 	const batch = options.batch;
 	if (batch === null) {
@@ -106,6 +117,14 @@ export class KnomoCardFlowBatcher {
 
 	updateItems(memos: MemoRecord[]): void {
 		this.items = memos;
+		this.hasMore = this.renderOffset < this.items.length;
+	}
+
+	sync(memos: MemoRecord[], mode: CardFlowRenderMode, renderedCount: number): void {
+		this.items = memos;
+		this.renderOffset = Math.min(Math.max(0, renderedCount), memos.length);
+		this.mode = mode;
+		this.loading = false;
 		this.hasMore = this.renderOffset < this.items.length;
 	}
 

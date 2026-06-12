@@ -86,3 +86,8 @@ export interface MemoRecord {
 	deletedDailyBlock?: string;
 	deletedMonthlyBlock?: string;
 }
+
+export type MemoMutation =
+	| { type: "create"; memo: MemoRecord }
+	| { type: "update"; previousMemo: MemoRecord; memo: MemoRecord }
+	| { type: "delete"; previousMemo: MemoRecord; memo: MemoRecord };

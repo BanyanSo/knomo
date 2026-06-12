@@ -56,3 +56,25 @@ test("SelfWriteTracker ignores expired scan markers", () => {
 
 	assert.equal(tracker.consumeByExpectedHash("Daily/today.md", hash), null);
 });
+
+test("SelfWriteTracker consumes index writes by reason", () => {
+	const tracker = new SelfWriteTracker(1000);
+	const now = Date.now();
+	tracker.mark("Memos/_knomo-system/indexes/memo-index-2026-06.json", {
+		opId: "op-index",
+		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
+		reason: "index",
+		writtenAt: now,
+		expiresAt: now + 1000,
+		expectedHash: null,
+	});
+
+	assert.equal(
+		tracker.consumeByReason("Memos/_knomo-system/indexes/memo-index-2026-06.json", "index")?.opId,
+		"op-index",
+	);
+	assert.equal(
+		tracker.consumeByReason("Memos/_knomo-system/indexes/memo-index-2026-06.json", "index"),
+		null,
+	);
+});

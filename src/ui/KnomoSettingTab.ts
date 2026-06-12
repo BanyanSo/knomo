@@ -738,7 +738,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private async refreshOpenKnomoViews(): Promise<void> {
 		const refreshes = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
 			if (leaf.view instanceof KnomoView) {
-				await leaf.view.refresh();
+				await leaf.view.refresh(true);
 			}
 		});
 		await Promise.all(refreshes);

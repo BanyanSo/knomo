@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import type { MemoRecord } from "../src/types/memo";
+import type { MemoCardPreview } from "../src/ui/MemoCardPreview";
 
 test("adds is-cjk-content to long Chinese memo cards", async () => {
 	const { card, queued, content } = await renderMemoCard("## 标题\n这是一段**中文 Memo**，包含[[页面|内部链接]]和 #标签，用来验证卡片级判断。");
@@ -30,6 +31,40 @@ test("does not add is-cjk-content to short Chinese memo cards below the threshol
 	assert.equal(card.hasClass("is-cjk-content"), false);
 });
 
+test("memo card body queues preview text instead of the raw content snapshot", async () => {
+	const { queued } = await renderMemoCard("raw ![[image.png]]", {
+		text: "raw",
+		images: [
+			{
+				raw: "![[image.png]]",
+				path: "image.png",
+				isRemote: false,
+				unresolved: true,
+			},
+		],
+	});
+
+	assert.equal(queued?.previewText, "raw");
+});
+
+test("image-only memo cards do not render an empty card content container", async () => {
+	const { body, content, images } = await renderMemoCard("![[image.png]]", {
+		text: "",
+		images: [
+			{
+				raw: "![[image.png]]",
+				path: "image.png",
+				isRemote: false,
+				unresolved: true,
+			},
+		],
+	});
+
+	assert.notEqual(body, null);
+	assert.equal(content, null);
+	assert.notEqual(images, null);
+});
+
 test("card content CSS justifies CJK cards while list items inherit the card alignment", async () => {
 	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
 
@@ -51,6 +86,90 @@ test("card content CSS keeps mixed lists compact and task checkboxes aligned", a
 		getStyleRule(css, ".knomo-plugin .knomo-card-content .task-list-item-checkbox,\n.knomo-plugin .knomo-card-content .knomo-task-checkbox"),
 		/vertical-align:\s*middle;/,
 	);
+});
+
+test("card image CSS keeps thumbnails lightweight and the modal touch area mobile-safe", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-images--single"), /width:\s*min\(50%, 360px\);/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-images--grid"), /height:\s*136px;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-images"), /gap:\s*4px;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-image-item"), /border-radius:\s*2px;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-image-button"), /justify-content:\s*flex-start;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-image-button"), /background:\s*transparent;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-image-button"), /--no-tooltip:\s*true;/);
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card-images--grid .knomo-card-image-button img"), /object-fit:\s*cover;/);
+	assert.match(
+		getStyleRule(css, ".knomo-plugin .knomo-card-images--single .knomo-card-image-button img"),
+		/object-position:\s*left center;/,
+	);
+	assert.doesNotMatch(getStyleRule(css, ".knomo-plugin .knomo-card-image-button img"), /opacity:/);
+	assert.doesNotMatch(getStyleRule(css, ".knomo-plugin .knomo-card-image-button img"), /transition:\s*opacity/);
+	assert.doesNotMatch(css, /\.knomo-card-image-item\.is-loaded/);
+	assert.doesNotMatch(css, /\.knomo-card-images--single[^{}]*\{[^}]*aspect-ratio:/s);
+	assert.match(
+		getStyleRule(
+			css,
+			".knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button,\n\t.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img",
+		),
+		/height:\s*auto;/,
+	);
+	assert.match(
+		getStyleRule(
+			css,
+			".knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button,\n\t.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img",
+		),
+		/max-height:\s*180px;/,
+	);
+	assert.match(
+		getStyleRule(
+			css,
+			".knomo-plugin .knomo-card-images--single .knomo-card-image-button,\n\t.knomo-plugin .knomo-card-images--single .knomo-card-image-button img",
+		),
+		/height:\s*auto;[\s\S]*max-height:\s*180px;/,
+	);
+	assert.match(getStyleRule(css, ".knomo-image-preview-stage"), /object-fit:\s*contain;|touch-action:\s*pan-y;/);
+	assert.match(getStyleRule(css, ".knomo-image-preview-img"), /object-fit:\s*contain;/);
+	assert.match(getStyleRule(css, ".knomo-image-preview-modal"), /background:\s*rgba\(0,\s*0,\s*0,\s*0\.82\);/);
+	assert.match(
+		getStyleRule(css, ".knomo-image-preview-modal"),
+		/--knomo-image-preview-control-background:\s*rgba\(0,\s*0,\s*0,\s*0\.72\);/,
+	);
+	assert.match(getStyleRule(css, ".knomo-image-preview-modal .modal-close-button"), /display:\s*none;/);
+	assert.match(
+		getStyleRule(css, ".knomo-image-preview-modal .knomo-image-preview-close,\n.knomo-image-preview-modal .knomo-image-preview-nav"),
+		/background:\s*var\(--knomo-image-preview-control-background\);/,
+	);
+	assert.match(getStyleRule(css, ".knomo-image-preview-footer"), /justify-content:\s*center;/);
+	assert.match(getStyleRule(css, ".knomo-image-preview-counter"), /color:\s*var\(--knomo-image-preview-control-foreground\);/);
+});
+
+test("image preview modal omits tooltips, original-file actions, and single-image navigation", async () => {
+	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const modalSource = await readFile(resolve(process.cwd(), "src/ui/KnomoImagePreviewModal.ts"), "utf8");
+
+	assert.doesNotMatch(modalSource, /modalEl\.setAttr\("aria-label", t\("image\.previewLabel"\)\)/);
+	assert.doesNotMatch(modalSource, /originalButtonEl|handleOpenOriginalClick|image\.openOriginal|image\.openExternal/);
+	assert.match(modalSource, /if \(this\.images\.length > 1\) \{/);
+	assert.match(viewSource, /"aria-label": t\("image\.previewLabel"\)/);
+});
+
+test("card images load as memo-card tasks without changing the initial batch size", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const renderImagesMethod = getMethodSource(source, "renderMemoCardImages");
+	const renderMethod = getMethodSource(source, "renderMemoCardImage");
+
+	assert.match(source, /const CARD_BATCH_SIZE = 50;/);
+	assert.match(renderMethod, /loading:\s*"lazy"/);
+	assert.match(renderMethod, /decoding:\s*"async"/);
+	assert.match(renderMethod, /if \(image\.isRemote\)/);
+	assert.match(renderMethod, /imageEl\.setAttr\("fetchpriority", "low"\)/);
+	assert.match(renderImagesMethod, /queue\.observe/);
+	assert.match(renderImagesMethod, /targetEl:\s*imagesEl/);
+	assert.match(renderImagesMethod, /images:\s*loadItems/);
+	assert.doesNotMatch(renderMethod, /createEl\("img",\s*\{\s*attr:\s*\{[^}]*\bsrc:/s);
+	assert.doesNotMatch(source, /cardImageLoadQueue\.setPaused/);
+	assert.doesNotMatch(source, /requestIdleCallback|CARD_IMAGE_IDLE_TIMEOUT_MS/);
 });
 
 test("CJK card CSS keeps headings, code, and tables start-aligned", async () => {
@@ -119,16 +238,68 @@ test("mobile memo hydration reads memo indexes without restoring startup scans",
 	assert.match(deferSidebarMethod, /this\.requestMobileMemoHydrationForSidebar\(\);/);
 });
 
-async function renderMemoCard(contentSnapshot: string): Promise<{
+test("mobile memo hydration compares only the rendered card window", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const hydrationMethod = getMethodSource(source, "hydrateMobileMemos");
+
+	assert.match(hydrationMethod, /const renderedCardCount = this\.getRenderedCardCount\(\);/);
+	assert.match(hydrationMethod, /this\.getVisibleCardFlowStateKey\(renderedCardCount\)/);
+	assert.doesNotMatch(hydrationMethod, /this\.getCardFlowStateKey\(\)/);
+});
+
+test("ordinary card-flow renders preserve existing cards and image queue state", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const renderMethod = getMethodSource(source, "renderCardFlow");
+
+	assert.doesNotMatch(renderMethod, /cardImageLoadQueue\.clear\(\)/);
+	assert.doesNotMatch(renderMethod, /cardFlowEl\.empty\(\)/);
+	assert.doesNotMatch(renderMethod, /renderGeneration \+ 1/);
+	assert.match(source, /private forceRebuildCardFlow\(/);
+});
+
+test("memo writes apply local mutations instead of refreshing every open view", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const saveMethod = getMethodSource(source, "saveInput");
+	const deleteMethod = getMethodSource(source, "handleMemoAction");
+
+	assert.match(saveMethod, /this\.applyMemoMutation\(/);
+	assert.match(saveMethod, /this\.onMemoMutation\(/);
+	assert.doesNotMatch(saveMethod, /onMemosChanged/);
+	assert.match(deleteMethod, /this\.applyMemoMutation\(/);
+	assert.doesNotMatch(deleteMethod, /onMemosChanged/);
+});
+
+test("memo delete mutations increment the trash count only once", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const mutationMethod = getMethodSource(source, "applyMemoMutation");
+
+	assert.match(mutationMethod, /const wasAlreadyDeleted = this\.deletedMemoIds\.has\(mutation\.memo\.id\);/);
+	assert.match(mutationMethod, /if \(!wasAlreadyDeleted\) \{\s*this\.trashCount \+= 1;\s*\}/);
+});
+
+test("purging a memo refreshes every open view", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const trashActionMethod = getMethodSource(source, "handleTrashAction");
+
+	assert.match(
+		trashActionMethod,
+		/await this\.syncOrchestrator\.purgeDeletedMemo\(memo\.id\);[\s\S]*await this\.onForceRefreshViews\(\);/,
+	);
+	assert.doesNotMatch(trashActionMethod, /void this\.refreshTrashCount\(false\);/);
+});
+
+async function renderMemoCard(contentSnapshot: string, preview?: MemoCardPreview): Promise<{
 	card: TestElement;
+	body: TestElement | null;
 	content: TestElement | null;
-	queued: { container: HTMLElement; memo: MemoRecord } | null;
+	images: TestElement | null;
+	queued: { container: HTMLElement; memo: MemoRecord; previewText: string } | null;
 }> {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const root = new TestElement("div");
 	const memo = makeMemo({ contentSnapshot });
-	let queued: { container: HTMLElement; memo: MemoRecord } | null = null;
+	let queued: { container: HTMLElement; memo: MemoRecord; previewText: string } | null = null;
 
 	renderKnomoMemoCard(root.asHtml(), memo, {
 		generation: 7,
@@ -141,8 +312,14 @@ async function renderMemoCard(contentSnapshot: string): Promise<{
 		formatDisplayTime: (value) => value,
 		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
-		queueMemoMarkdown: (queuedMemo, container) => {
-			queued = { container, memo: queuedMemo };
+		getMemoCardPreview: (queuedMemo) => preview ?? { text: queuedMemo.contentSnapshot, images: [] },
+		queueMemoMarkdown: (queuedMemo, container, _generation, _priority, previewText) => {
+			queued = { container, memo: queuedMemo, previewText };
+		},
+		renderMemoCardImages: (container, _memo, images) => {
+			if (images.length > 0) {
+				container.createDiv({ cls: "knomo-card-images" });
+			}
 		},
 		queueSourceReferenceMarkdown: () => {
 			throw new Error("Unexpected source reference render");
@@ -155,7 +332,9 @@ async function renderMemoCard(contentSnapshot: string): Promise<{
 	}
 	return {
 		card,
+		body: root.find(".knomo-card-body"),
 		content: root.find(".knomo-card-content"),
+		images: root.find(".knomo-card-images"),
 		queued,
 	};
 }
@@ -197,7 +376,11 @@ function getMethodSource(source: string, methodName: string): string {
 
 function getMethodStart(source: string, methodName: string): number {
 	const start = source.indexOf(`private ${methodName}(`);
-	return start === -1 ? source.indexOf(`private async ${methodName}(`) : start;
+	if (start !== -1) {
+		return start;
+	}
+	const asyncStart = source.indexOf(`private async ${methodName}(`);
+	return asyncStart === -1 ? source.indexOf(`\n\t${methodName}(`) : asyncStart;
 }
 
 async function ensureObsidianStub(): Promise<void> {

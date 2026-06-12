@@ -56,6 +56,9 @@ export class FileWatchService {
 
 	private queueIndexRefresh(file: TFile): void {
 		this.queueFileTask(file, async () => {
+			if (this.selfWriteTracker.consumeByReason(file.path, "index") !== null) {
+				return;
+			}
 			await this.onSynced?.();
 		});
 	}

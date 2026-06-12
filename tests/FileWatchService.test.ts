@@ -40,6 +40,7 @@ test("FileWatchService delegates sync errors to the injected callback", async ()
 	const service = new FileWatchService(
 		app as never,
 		{
+			consumeByReason: () => null,
 			consumeByExpectedHash: () => null,
 			cleanup: () => undefined,
 		} as never,
@@ -115,6 +116,7 @@ test("FileWatchService refreshes views when a memo-index file changes", async ()
 	const service = new FileWatchService(
 		app as never,
 		{
+			consumeByReason: () => null,
 			consumeByExpectedHash: () => null,
 			cleanup: () => undefined,
 		} as never,
@@ -153,6 +155,64 @@ test("FileWatchService refreshes views when a memo-index file changes", async ()
 
 	assert.equal(refreshCount, 1);
 	assert.equal(dailySyncCalled, false);
+});
+
+test("FileWatchService ignores memo-index changes caused by Knomo writes", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const file = Object.assign(new TFile(), {
+		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
+		extension: "json",
+	});
+	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const timerHandlers: Array<() => void> = [];
+	let refreshCount = 0;
+	const app = {
+		vault: {
+			on: (eventName: string, handler: (file: unknown) => void) => {
+				handlersByEvent.set(eventName, handler);
+				return {};
+			},
+		},
+		workspace: {
+			containerEl: {
+				win: {
+					setTimeout: (handler: () => void) => {
+						timerHandlers.push(handler);
+						return 1;
+					},
+					clearTimeout: () => undefined,
+				},
+			},
+		},
+	};
+	const service = new FileWatchService(
+		app as never,
+		{
+			consumeByReason: () => ({ opId: "op-index" }),
+			consumeByExpectedHash: () => null,
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => false,
+			isMemoIndexFile: (path: string) => path === file.path,
+			getSyncDebounceMs: () => 0,
+		} as never,
+		() => {
+			refreshCount += 1;
+		},
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+	handlersByEvent.get("modify")?.(file);
+	timerHandlers[0]?.();
+	await waitImmediate();
+
+	assert.equal(refreshCount, 0);
 });
 
 test("FileWatchService scans daily notes delivered through rename events", async () => {

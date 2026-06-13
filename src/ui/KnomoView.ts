@@ -2515,6 +2515,8 @@ export class KnomoView extends ItemView {
 				this.closeMobileComposerKeepingDraft();
 			} else {
 				this.composerOpen = false;
+				this.syncComposerMode();
+				this.updateCancelEditButtonState();
 				if (this.inputEl !== null) {
 					this.resizeInput();
 				}

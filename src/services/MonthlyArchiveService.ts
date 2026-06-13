@@ -3,6 +3,8 @@ import type { App } from "obsidian";
 
 import { DEFAULT_MONTHLY_DATE_HEADING_FORMAT, DEFAULT_MONTHLY_MEMO_FILE_FORMAT } from "../constants";
 import type { MemoRecord, MonthlyRef } from "../types/memo";
+import type { PreparedMonthlyMemoWrite } from "../types/pending";
+import { PendingMemoWriteConflictError } from "../types/pending";
 import type { KnomoSettings, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart, formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
@@ -22,6 +24,10 @@ export interface MonthlyArchiveWriteResult {
 	file: TFile;
 	ref: MonthlyRef;
 	content: string;
+}
+
+export interface MonthlyArchivePreparedWriteResult extends MonthlyArchiveWriteResult {
+	changed: boolean;
 }
 
 export interface MonthlyArchiveUpsertOptions {
@@ -113,6 +119,66 @@ export class MonthlyArchiveService {
 			file,
 			content,
 			ref: buildMonthlyRef(file.path, dateHeading, content, block),
+		};
+	}
+
+	async prepareMemoBlockInsert(
+		settings: KnomoSettings,
+		createdAt: Date,
+		block: string,
+	): Promise<PreparedMonthlyMemoWrite> {
+		const period = formatMonthPeriod(createdAt);
+		const dateHeading = formatMonthlyDateHeading(settings.monthlyDateHeadingFormat, createdAt);
+		const path = getMonthlyArchivePath(settings, period);
+		const file = await ensureTextFile(this.app, path);
+		const beforeContent = await this.app.vault.cachedRead(file);
+		const afterContent = this.buildInsertedMemoContent(beforeContent, settings, period, dateHeading, block);
+		return {
+			path: file.path,
+			beforeHash: hashText(beforeContent),
+			afterHash: hashText(afterContent),
+			blockOccurrencesBefore: this.countMemoBlockOccurrences(beforeContent, block),
+			ref: buildMonthlyRef(file.path, dateHeading, afterContent, block),
+		};
+	}
+
+	async commitPreparedMemoBlock(
+		settings: KnomoSettings,
+		createdAt: Date,
+		block: string,
+		prepared: PreparedMonthlyMemoWrite,
+	): Promise<MonthlyArchivePreparedWriteResult> {
+		const file = this.app.vault.getAbstractFileByPath(prepared.path);
+		if (!(file instanceof TFile)) {
+			throw new PendingMemoWriteConflictError(`Prepared monthly archive does not exist: ${prepared.path}`);
+		}
+		const period = formatMonthPeriod(createdAt);
+		const dateHeading = prepared.ref.dateHeading;
+		let changed = false;
+		const content = await this.app.vault.process(file, (currentContent) => {
+			const currentHash = hashText(currentContent);
+			if (currentHash === prepared.afterHash) {
+				return currentContent;
+			}
+			if (currentHash !== prepared.beforeHash) {
+				const occurrenceCount = this.countMemoBlockOccurrences(currentContent, block);
+				if (occurrenceCount === prepared.blockOccurrencesBefore + 1) {
+					return currentContent;
+				}
+				throw new PendingMemoWriteConflictError(`Monthly archive changed during pending memo create: ${prepared.path}`);
+			}
+			const nextContent = this.buildInsertedMemoContent(currentContent, settings, period, dateHeading, block);
+			if (hashText(nextContent) !== prepared.afterHash) {
+				throw new PendingMemoWriteConflictError(`Prepared monthly archive content no longer matches: ${prepared.path}`);
+			}
+			changed = true;
+			return nextContent;
+		});
+		return {
+			file,
+			content,
+			ref: prepared.ref,
+			changed,
 		};
 	}
 
@@ -234,6 +300,30 @@ export class MonthlyArchiveService {
 				await this.app.fileManager.trashFile(file);
 			}
 		}
+	}
+
+	private buildInsertedMemoContent(
+		currentContent: string,
+		settings: KnomoSettings,
+		period: string,
+		dateHeading: string,
+		block: string,
+	): string {
+		const withMonthHeading = ensureMonthHeading(currentContent, period);
+		const withComment = ensureReadOnlyComment(withMonthHeading);
+		const withDateHeading = ensureDateHeading(withComment, dateHeading, settings.monthlyDateOrder);
+		return this.markdownBlockService.insertMemoBlock(withDateHeading, {
+			heading: dateHeading,
+			block,
+			position: "bottom",
+			createHeadingIfMissing: true,
+		});
+	}
+
+	private countMemoBlockOccurrences(content: string, block: string): number {
+		return this.markdownBlockService.parseMemoBlocks(content)
+			.filter((candidate) => candidate.rawBlock === block)
+			.length;
 	}
 }
 

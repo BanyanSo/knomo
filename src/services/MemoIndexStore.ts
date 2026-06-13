@@ -5,12 +5,26 @@ import type { MemoIndex } from "../types";
 import type { MemoRecord } from "../types/memo";
 import { formatMonthPeriod } from "../utils/date";
 import { isRecord } from "../utils/object";
-import { getIndexFilePath, getIndexFolderPath, getSystemFolderPath } from "../utils/path";
+import {
+	getIndexFolderPath as getConfiguredIndexFolderPath,
+	getSystemFolderPath,
+} from "../utils/path";
 import { ensureFolder, ensureTextFile, getParentFolderPath } from "../utils/vault";
 
 // 职责：按月分片读写 memo-index，并在 process 回调内完成 JSON merge。
 export class MemoIndexStore {
-	constructor(private readonly app: App) {}
+	constructor(
+		private readonly app: App,
+		private readonly indexFolderPathOverride?: string,
+	) {}
+
+	getIndexFilePath(monthlyMemoFolder: string, period: string): string {
+		return normalizePath(`${this.getIndexFolderPath(monthlyMemoFolder)}/memo-index-${period}.json`);
+	}
+
+	createStoreAtIndexFolder(indexFolderPath: string): MemoIndexStore {
+		return new MemoIndexStore(this.app, indexFolderPath);
+	}
 
 	async loadPeriod(monthlyMemoFolder: string, period: string): Promise<MemoIndex> {
 		const file = await this.getOrCreateIndexFile(monthlyMemoFolder, period);
@@ -82,6 +96,37 @@ export class MemoIndexStore {
 				};
 			}
 			throw new Error("Unable to allocate a unique memoId.");
+		});
+		if (savedMemo === null) {
+			throw new Error("Memo index write did not return a saved memo.");
+		}
+		return savedMemo;
+	}
+
+	async addMemoWithId(monthlyMemoFolder: string, memo: MemoRecord): Promise<MemoRecord> {
+		const period = formatMonthPeriod(new Date(memo.createdAt));
+		let savedMemo: MemoRecord | null = null;
+		await this.mergePeriod(monthlyMemoFolder, period, (index) => {
+			const existingMemo = index.memos[memo.id];
+			if (existingMemo !== undefined) {
+				if (
+					existingMemo.createdAt !== memo.createdAt
+					|| existingMemo.dailyRef.path !== memo.dailyRef.path
+				) {
+					throw new Error(`memoId collision: ${memo.id}`);
+				}
+				savedMemo = existingMemo;
+				return index;
+			}
+			savedMemo = memo;
+			return {
+				...index,
+				updatedAt: new Date().toISOString(),
+				memos: {
+					...index.memos,
+					[memo.id]: memo,
+				},
+			};
 		});
 		if (savedMemo === null) {
 			throw new Error("Memo index write did not return a saved memo.");
@@ -163,7 +208,7 @@ export class MemoIndexStore {
 		const backupRoot = normalizePath(`${getSystemFolderPath(monthlyMemoFolder)}/backups/${reason}-${formatBackupTimestamp(new Date())}`);
 		const indexBackupRoot = normalizePath(`${backupRoot}/indexes`);
 		await ensureFolder(this.app, indexBackupRoot);
-		const indexFolder = this.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
+		const indexFolder = this.app.vault.getAbstractFileByPath(this.getIndexFolderPath(monthlyMemoFolder));
 		if (!(indexFolder instanceof TFolder)) {
 			return backupRoot;
 		}
@@ -203,7 +248,7 @@ export class MemoIndexStore {
 		});
 		const backupRelativePaths = new Set(files.map((file) => file.path.slice(backupFolder.path.length + 1)));
 		await this.removeIndexFilesExcept(monthlyMemoFolder, backupRelativePaths);
-		const indexFolderPath = getIndexFolderPath(monthlyMemoFolder);
+		const indexFolderPath = this.getIndexFolderPath(monthlyMemoFolder);
 		await ensureFolder(this.app, indexFolderPath);
 		for (const file of files) {
 			const relativePath = file.path.slice(backupFolder.path.length + 1);
@@ -222,8 +267,40 @@ export class MemoIndexStore {
 		}
 	}
 
+	async initializeEmptyPeriods(monthlyMemoFolder: string, periods: string[]): Promise<void> {
+		for (const period of [...new Set(periods)]) {
+			const file = await this.getOrCreateIndexFile(monthlyMemoFolder, period);
+			await this.app.vault.process(file, () => `${JSON.stringify(createEmptyIndex(period), null, "\t")}\n`);
+		}
+	}
+
+	async commitCandidateIndexes(
+		monthlyMemoFolder: string,
+		candidateIndexFolderPath: string,
+		periods: string[],
+	): Promise<void> {
+		const indexFolderPath = this.getIndexFolderPath(monthlyMemoFolder);
+		await ensureFolder(this.app, indexFolderPath);
+		for (const period of [...new Set(periods)]) {
+			const candidatePath = normalizePath(`${candidateIndexFolderPath}/memo-index-${period}.json`);
+			const candidateFile = this.app.vault.getAbstractFileByPath(candidatePath);
+			if (!(candidateFile instanceof TFile)) {
+				throw new Error(`Rebuilt memo-index does not exist: ${candidatePath}`);
+			}
+			const content = await this.app.vault.cachedRead(candidateFile);
+			parseIndex(content, period);
+			const targetPath = this.getIndexFilePath(monthlyMemoFolder, period);
+			const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
+			if (targetFile instanceof TFile) {
+				await this.app.vault.process(targetFile, () => content);
+			} else {
+				await this.app.vault.create(targetPath, content);
+			}
+		}
+	}
+
 	private async removeIndexFilesExcept(monthlyMemoFolder: string, keepRelativePaths: Set<string>): Promise<void> {
-		const indexFolder = this.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
+		const indexFolder = this.app.vault.getAbstractFileByPath(this.getIndexFolderPath(monthlyMemoFolder));
 		if (!(indexFolder instanceof TFolder)) {
 			return;
 		}
@@ -242,11 +319,11 @@ export class MemoIndexStore {
 	}
 
 	private async getOrCreateIndexFile(monthlyMemoFolder: string, period: string): Promise<TFile> {
-		return ensureTextFile(this.app, getIndexFilePath(monthlyMemoFolder, period));
+		return ensureTextFile(this.app, this.getIndexFilePath(monthlyMemoFolder, period));
 	}
 
 	listExistingPeriods(monthlyMemoFolder: string): string[] {
-		const indexFolder = this.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
+		const indexFolder = this.app.vault.getAbstractFileByPath(this.getIndexFolderPath(monthlyMemoFolder));
 		if (!(indexFolder instanceof TFolder)) {
 			return [formatMonthPeriod(new Date())];
 		}
@@ -256,6 +333,12 @@ export class MemoIndexStore {
 			.map((file) => file.name.match(/^memo-index-(\d{4}-\d{2})\.json$/)?.[1] ?? null)
 			.filter((period): period is string => period !== null);
 		return periods.length > 0 ? periods.sort((left, right) => right.localeCompare(left)) : [formatMonthPeriod(new Date())];
+	}
+
+	private getIndexFolderPath(monthlyMemoFolder: string): string {
+		return this.indexFolderPathOverride === undefined
+			? getConfiguredIndexFolderPath(monthlyMemoFolder)
+			: normalizePath(this.indexFolderPathOverride);
 	}
 }
 

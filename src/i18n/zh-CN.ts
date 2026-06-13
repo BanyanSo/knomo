@@ -187,7 +187,7 @@ export const zhCN = {
 	"settings.legacyImport.desc": "从历史 Daily Notes 中识别符合 Memos 格式的内容。适合第一次安装 Knomo 后导入旧日记。导入前会先预览，不会直接修改你的日记。",
 	"settings.scope30d": "最近 30 天",
 	"settings.scope90d": "最近 90 天",
-	"settings.scopeAll": "全部日记",
+	"settings.scopeAll": "全部日记（完全重建）",
 	"settings.preview.start": "开始预览",
 	"settings.preview.running": "预览中...",
 	"settings.legacyImport.previewing": "正在预览旧日记 Memos...",

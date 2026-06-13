@@ -189,7 +189,7 @@ export const en: Record<TranslationKey, string> = {
 	"settings.legacyImport.desc": "Identify memo-shaped content in historical daily notes. This is useful after installing Knomo for the first time. You will preview the import before any daily notes are changed.",
 	"settings.scope30d": "Last 30 days",
 	"settings.scope90d": "Last 90 days",
-	"settings.scopeAll": "All daily notes",
+	"settings.scopeAll": "All daily notes (full rebuild)",
 	"settings.preview.start": "Start preview",
 	"settings.preview.running": "Previewing...",
 	"settings.legacyImport.previewing": "Previewing legacy daily memos...",

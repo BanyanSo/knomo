@@ -8,7 +8,8 @@ import type { SyncOrchestrator } from "./SyncOrchestrator";
 export type FileWatchSyncErrorHandler = (path: string, error: unknown) => void;
 
 interface QueuedFileTask {
-	file: TFile;
+	key: string;
+	path: string;
 	task: () => Promise<void>;
 }
 
@@ -29,7 +30,8 @@ export class FileWatchService {
 	start(owner: Component): void {
 		owner.registerEvent(this.app.vault.on("modify", (file) => this.handleFileChanged(file)));
 		owner.registerEvent(this.app.vault.on("create", (file) => this.handleFileChanged(file)));
-		owner.registerEvent(this.app.vault.on("rename", (file) => this.handleFileChanged(file)));
+		owner.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.handleFileRenamed(file, oldPath)));
+		owner.registerEvent(this.app.vault.on("delete", (file) => this.handleFileDeleted(file)));
 		owner.register(() => this.clearTimers());
 	}
 
@@ -39,7 +41,7 @@ export class FileWatchService {
 	}
 
 	private queueDailySync(file: TFile): void {
-		this.queueFileTask(file, () => this.runSync(file));
+		this.queueFileTask(file.path, file.path, () => this.runSync(file));
 	}
 
 	private handleFileChanged(file: unknown): void {
@@ -54,8 +56,37 @@ export class FileWatchService {
 		}
 	}
 
+	private handleFileRenamed(file: unknown, oldPath: string): void {
+		if (!(file instanceof TFile) || file.extension !== "md") {
+			return;
+		}
+		if (!this.syncOrchestrator.isPotentialDailyFile(oldPath) && !this.syncOrchestrator.isPotentialDailyFile(file.path)) {
+			return;
+		}
+		const key = `rename:${oldPath}->${file.path}`;
+		this.queueFileTask(key, oldPath, async () => {
+			const changed = await this.syncOrchestrator.syncRenamedDailyFile(file, oldPath);
+			if (changed) {
+				await this.onSynced?.();
+			}
+		});
+	}
+
+	private handleFileDeleted(file: unknown): void {
+		if (!(file instanceof TFile) || file.extension !== "md" || !this.syncOrchestrator.isPotentialDailyFile(file.path)) {
+			return;
+		}
+		const path = file.path;
+		this.queueFileTask(`delete:${path}`, path, async () => {
+			const changed = await this.syncOrchestrator.syncDeletedDailyFile(path);
+			if (changed) {
+				await this.onSynced?.();
+			}
+		});
+	}
+
 	private queueIndexRefresh(file: TFile): void {
-		this.queueFileTask(file, async () => {
+		this.queueFileTask(file.path, file.path, async () => {
 			if (this.selfWriteTracker.consumeByReason(file.path, "index") !== null) {
 				return;
 			}
@@ -63,27 +94,27 @@ export class FileWatchService {
 		});
 	}
 
-	private queueFileTask(file: TFile, task: () => Promise<void>): void {
-		const existingTimer = this.timersByPath.get(file.path);
+	private queueFileTask(key: string, path: string, task: () => Promise<void>): void {
+		const existingTimer = this.timersByPath.get(key);
 		if (existingTimer !== undefined) {
 			this.app.workspace.containerEl.win.clearTimeout(existingTimer);
 		}
 
 		const timer = this.app.workspace.containerEl.win.setTimeout(() => {
-			this.timersByPath.delete(file.path);
-			this.enqueueTask(file, task);
+			this.timersByPath.delete(key);
+			this.enqueueTask(key, path, task);
 		}, this.syncOrchestrator.getSyncDebounceMs());
-		this.timersByPath.set(file.path, timer);
+		this.timersByPath.set(key, timer);
 	}
 
-	private enqueueTask(file: TFile, task: () => Promise<void>): void {
-		const queuedTask = this.queuedTasks.find((item) => item.file.path === file.path);
+	private enqueueTask(key: string, path: string, task: () => Promise<void>): void {
+		const queuedTask = this.queuedTasks.find((item) => item.key === key);
 		if (queuedTask !== undefined) {
-			queuedTask.file = file;
+			queuedTask.path = path;
 			queuedTask.task = task;
 			return;
 		}
-		this.queuedTasks.push({ file, task });
+		this.queuedTasks.push({ key, path, task });
 		void this.flushTaskQueue();
 	}
 
@@ -101,7 +132,7 @@ export class FileWatchService {
 				try {
 					await queuedTask.task();
 				} catch (error) {
-					this.handleSyncError(queuedTask.file, error);
+					this.handleSyncError(queuedTask.path, error);
 				}
 			}
 		} finally {
@@ -124,8 +155,8 @@ export class FileWatchService {
 		}
 	}
 
-	private handleSyncError(file: TFile, error: unknown): void {
-		this.onSyncError?.(file.path, error);
+	private handleSyncError(path: string, error: unknown): void {
+		this.onSyncError?.(path, error);
 	}
 
 	private clearTimers(): void {

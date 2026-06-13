@@ -19,3 +19,7 @@ export function getIndexFolderPath(monthlyMemoFolder: string): string {
 export function getIndexFilePath(monthlyMemoFolder: string, period: string): string {
 	return normalizePath(`${getIndexFolderPath(monthlyMemoFolder)}/memo-index-${period}.json`);
 }
+
+export function getPendingMemoCreateFilePath(monthlyMemoFolder: string): string {
+	return normalizePath(`${getSystemFolderPath(monthlyMemoFolder)}/pending-memo-creates.json`);
+}

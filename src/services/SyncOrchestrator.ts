@@ -1,6 +1,7 @@
 import type { App, TFile } from "obsidian";
 
 import type { MarkdownSyncSource, MemoRecord } from "../types/memo";
+import type { PendingMemoCreate } from "../types/pending";
 import type { KnomoSettings } from "../types/settings";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
 import { getIndexFolderPath } from "../utils/path";
@@ -27,6 +28,7 @@ import type {
 import { MonthlyArchiveService } from "./MonthlyArchiveService";
 import { MemoRebuildService } from "./memoRebuild";
 import type { RebuildIndexMode, RebuildIndexResult, RebuildIndexScope } from "./memoRebuild";
+import type { PendingMemoCreateStoreLike } from "./PendingMemoCreateStore";
 import { SelfWriteTracker } from "./SelfWriteTracker";
 import {
 	createMemoId,
@@ -55,7 +57,10 @@ export class SyncOrchestrator {
 		private readonly memoIndexStore: MemoIndexStore,
 		private readonly selfWriteTracker: SelfWriteTracker,
 		private readonly markdownBlockService = new MarkdownBlockService(),
+		pendingMemoCreateStore?: PendingMemoCreateStoreLike,
 	) {
+		const activePendingMemoCreateStore = pendingMemoCreateStore
+			?? createTransientPendingMemoCreateStore();
 		this.memoScanService = new MemoScanService(
 			this.app,
 			this.getSettings,
@@ -80,6 +85,7 @@ export class SyncOrchestrator {
 			this.memoIndexStore,
 			this.selfWriteTracker,
 			this.markdownBlockService,
+			activePendingMemoCreateStore,
 		);
 		this.memoRestoreService = new MemoRestoreService(
 			this.app,
@@ -121,6 +127,7 @@ export class SyncOrchestrator {
 	}
 
 	async scanDailyMemos(onProgress?: (progress: ScanDailyMemosProgress) => void | Promise<void>): Promise<ScanDailyMemosResult> {
+		await this.memoCommandService.recoverPendingCreates();
 		const now = new Date();
 		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress);
 	}
@@ -130,11 +137,13 @@ export class SyncOrchestrator {
 	}
 
 	async importLegacyDailyMemos(options: LegacyDailyMemosImportOptions): Promise<LegacyDailyMemosImportResult> {
+		await this.memoCommandService.recoverPendingCreates();
 		const now = new Date();
 		return this.memoScanService.importLegacyDailyMemos((date) => createMemoId(date), createOperationId(now), options);
 	}
 
 	async scanRecentDailyMemos(days: number, source: MarkdownSyncSource = "startup_scan"): Promise<ScanDailyMemosResult> {
+		await this.memoCommandService.recoverPendingCreates();
 		const now = new Date();
 		const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
 		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), undefined, {
@@ -153,7 +162,12 @@ export class SyncOrchestrator {
 		mode: RebuildIndexMode,
 		onProgress?: (progress: ScanDailyMemosProgress) => void | Promise<void>,
 	): Promise<RebuildIndexResult> {
+		await this.memoCommandService.recoverPendingCreates();
 		return this.memoRebuildService.rebuildIndex(scope, mode, onProgress);
+	}
+
+	async recoverPendingMemoCreates(): Promise<number> {
+		return this.memoCommandService.recoverPendingCreates();
 	}
 
 	getDailyNotesStatus(): DailyNotesStatus {
@@ -244,8 +258,56 @@ export class SyncOrchestrator {
 		if (!this.isPotentialDailyFile(file.path)) {
 			return false;
 		}
+		await this.memoCommandService.recoverPendingCreates();
 		const result = await this.memoScanService.syncDailyFile(file, (date) => createMemoId(date), createOperationId(new Date()));
 		return result.created > 0 || result.updated > 0 || result.deleted > 0;
 	}
 
+	async syncRenamedDailyFile(file: TFile, oldPath: string): Promise<boolean> {
+		const wasDailyFile = this.isPotentialDailyFile(oldPath);
+		const isDailyFile = this.isPotentialDailyFile(file.path);
+		if (!wasDailyFile && !isDailyFile) {
+			return false;
+		}
+		await this.memoCommandService.recoverPendingCreates();
+		const opId = createOperationId(new Date());
+		const result = wasDailyFile && isDailyFile
+			? await this.memoScanService.syncRenamedDailyFile(file, oldPath, (date) => createMemoId(date), opId)
+			: wasDailyFile
+				? await this.memoScanService.syncDeletedDailyPath(oldPath, opId)
+				: await this.memoScanService.syncDailyFile(file, (date) => createMemoId(date), opId);
+		return result.created > 0 || result.updated > 0 || result.deleted > 0;
+	}
+
+	async syncDeletedDailyFile(path: string): Promise<boolean> {
+		if (!this.isPotentialDailyFile(path)) {
+			return false;
+		}
+		await this.memoCommandService.recoverPendingCreates();
+		const result = await this.memoScanService.syncDeletedDailyPath(path, createOperationId(new Date()));
+		return result.deleted > 0 || result.updated > 0;
+	}
+
+}
+
+function createTransientPendingMemoCreateStore(): PendingMemoCreateStoreLike {
+	const operations = new Map<string, PendingMemoCreate>();
+	return {
+		list: async () => [...operations.values()],
+		add: async (operation) => {
+			if (operations.has(operation.memoId)) {
+				throw new Error(`Pending memo create already exists: ${operation.memoId}`);
+			}
+			operations.set(operation.memoId, operation);
+		},
+		update: async (operation) => {
+			if (!operations.has(operation.memoId)) {
+				throw new Error(`Pending memo create does not exist: ${operation.memoId}`);
+			}
+			operations.set(operation.memoId, operation);
+		},
+		remove: async (memoId) => {
+			operations.delete(memoId);
+		},
+	};
 }

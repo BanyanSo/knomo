@@ -1,3 +1,5 @@
+import { normalizePath } from "obsidian";
+
 import type { KnomoSettings } from "../types/settings";
 import type { MemoIndexStore } from "./MemoIndexStore";
 import type {
@@ -34,6 +36,7 @@ export class MemoRebuildService {
 			since: getRebuildSince(scope),
 			source: "manual_scan",
 			deleteSource: "manual_scan",
+			existingMemos: scope === "all" ? [] : undefined,
 		});
 	}
 
@@ -49,6 +52,41 @@ export class MemoRebuildService {
 		}
 		const now = new Date();
 		try {
+			if (scope === "all") {
+				if (backupPath === null) {
+					throw new Error("Rebuild index backup path was not created.");
+				}
+				const candidateIndexFolder = normalizePath(`${backupPath}/rebuilt-indexes`);
+				const candidateStore = this.memoIndexStore.createStoreAtIndexFolder(candidateIndexFolder);
+				const existingPeriods = this.memoIndexStore.listExistingPeriods(settings.monthlyMemoFolder);
+				await candidateStore.initializeEmptyPeriods(settings.monthlyMemoFolder, existingPeriods);
+				const result = await this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress, {
+					source: "manual_scan",
+					deleteSource: "manual_scan",
+					syncMonthly: mode === "index-and-monthly",
+					existingMemos: [],
+					memoIndexStore: candidateStore,
+				});
+				if (result.failed > 0) {
+					throw buildRebuildIndexFailedError(result.failed, backupPath);
+				}
+				const rebuiltPeriods = [
+					...new Set([
+						...existingPeriods,
+						...candidateStore.listExistingPeriods(settings.monthlyMemoFolder),
+					]),
+				];
+				await candidateStore.loadPeriods(settings.monthlyMemoFolder, rebuiltPeriods);
+				await this.memoIndexStore.commitCandidateIndexes(
+					settings.monthlyMemoFolder,
+					candidateIndexFolder,
+					rebuiltPeriods,
+				);
+				return {
+					...result,
+					backupPath,
+				};
+			}
 			const result = await this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress, {
 				since: getRebuildSince(scope),
 				source: "manual_scan",

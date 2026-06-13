@@ -195,6 +195,15 @@ test("memo markdown post-processing still keeps internal links, tags, and lazy i
 	assert.match(source, /tagEl\.setAttr\("data-tag-key", tagKey\);/);
 });
 
+test("desktop save clears the rendered reference and edit state", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const saveMethod = getMethodSource(source, "saveInput");
+	const desktopSaveBranch = saveMethod.slice(saveMethod.indexOf("} else {", saveMethod.indexOf("if (isMobileSave)")));
+
+	assert.match(desktopSaveBranch, /this\.syncComposerMode\(\);/);
+	assert.match(desktopSaveBranch, /this\.updateCancelEditButtonState\(\);/);
+});
+
 test("task checkbox handling stays delegated and does not enter composer edit flow", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const changeMethod = getMethodSource(source, "handleTaskCheckboxChange");

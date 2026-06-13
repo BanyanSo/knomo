@@ -945,9 +945,11 @@ test("createMemo writes quote-create metadata through service orchestration", as
 		pinnedTags: [],
 	};
 	const dailyNoteService = {
-		insertMemoBlock: async () => ({
-			file: { path: "Daily/2026-05-17.md" },
-			content: "daily-content",
+		prepareMemoBlockInsert: async () => ({
+			path: "Daily/2026-05-17.md",
+			beforeHash: "daily-before",
+			afterHash: "daily-after",
+			blockOccurrencesBefore: 0,
 			ref: {
 				path: "Daily/2026-05-17.md",
 				heading: "## Knomo",
@@ -957,12 +959,20 @@ test("createMemo writes quote-create metadata through service orchestration", as
 				lastSyncedAt: "2026-05-17T12:00:00.000+08:00",
 			},
 		}),
+		commitPreparedMemoBlock: async (_settings: unknown, _block: string, prepared: { ref: unknown }) => ({
+			file: { path: "Daily/2026-05-17.md" },
+			content: "daily-content",
+			ref: prepared.ref,
+			changed: true,
+		}),
 		getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
 	};
 	const monthlyArchiveService = {
-		insertMemoBlock: async () => ({
-			file: { path: "Memos/Memos-2026-05.md" },
-			content: "monthly-content",
+		prepareMemoBlockInsert: async () => ({
+			path: "Memos/Memos-2026-05.md",
+			beforeHash: "monthly-before",
+			afterHash: "monthly-after",
+			blockOccurrencesBefore: 0,
 			ref: {
 				path: "Memos/Memos-2026-05.md",
 				dateHeading: "## 2026-05-17",
@@ -972,9 +982,16 @@ test("createMemo writes quote-create metadata through service orchestration", as
 				lastSyncedAt: "2026-05-17T12:00:00.000+08:00",
 			},
 		}),
+		commitPreparedMemoBlock: async (_settings: unknown, _date: Date, _block: string, prepared: { ref: unknown }) => ({
+			file: { path: "Memos/Memos-2026-05.md" },
+			content: "monthly-content",
+			ref: prepared.ref,
+			changed: true,
+		}),
 	};
 	const memoIndexStore = {
-		addMemo: async (_folder: string, memo: unknown) => memo,
+		findMemoByIdInPeriod: async () => null,
+		addMemoWithId: async (_folder: string, memo: unknown) => memo,
 	};
 	const selfWriteTracker = {
 		mark: (path: string) => {
@@ -1411,6 +1428,236 @@ test("syncExternalDailyFile imports new blocks and tombstones missing indexed me
 	assert.deepEqual(deletedMonthly, [deletedMemo.id]);
 });
 
+test("syncRenamedDailyFile preserves memoId and updates the indexed daily path", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const oldPath = "Daily/2026-05-18.md";
+	const file = Object.assign(new TFile(), {
+		path: "Daily/2026-05-19.md",
+		basename: "2026-05-19",
+		extension: "md",
+	});
+	const memo = createReferenceMemo("- 08:00:00 内容");
+	memo.dailyRef.path = oldPath;
+	memo.dailyRef.lineNumberHint = 4;
+	memo.dailyRef.lastKnownHash = hashText(memo.dailyRef.lastKnownBlock);
+	const savedMemos: MemoRecord[] = [];
+	let created = 0;
+	const settings = createTestSettings();
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				cachedRead: async () => "# 2026-05-19\n\n## Knomo\n- 08:00:00 内容",
+			},
+		} as never,
+		() => settings,
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, _memo: MemoRecord, block: string) => ({
+				file: { path: "Memos/Memos-2026-05.md" },
+				content: block,
+				ref: {
+					...memo.monthlyRef,
+					lastKnownBlock: block,
+					lastKnownHash: hashText(block),
+				},
+			}),
+		} as never,
+		{
+			loadAll: async () => [memo],
+			addMemo: async (_folder: string, createdMemo: MemoRecord) => {
+				created += 1;
+				return createdMemo;
+			},
+			upsertMemo: async (_folder: string, updatedMemo: MemoRecord) => {
+				savedMemos.push(updatedMemo);
+				return updatedMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	assert.equal(await orchestrator.syncRenamedDailyFile(file, oldPath), true);
+	assert.equal(created, 0);
+	assert.equal(savedMemos[0]?.id, memo.id);
+	assert.equal(savedMemos[0]?.dailyRef.path, file.path);
+	assert.equal(savedMemos[0]?.status, "active");
+});
+
+test("syncDeletedDailyFile tombstones memos indexed under the deleted path", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const path = "Daily/2026-05-18.md";
+	const memo = createReferenceMemo("- 08:00:00 内容");
+	memo.dailyRef.path = path;
+	const savedMemos: MemoRecord[] = [];
+	const deletedMonthly: string[] = [];
+	const orchestrator = new SyncOrchestrator(
+		{} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			deleteMemoBlock: async (deletedMemo: MemoRecord) => {
+				deletedMonthly.push(deletedMemo.id);
+				return {
+					file: { path: deletedMemo.monthlyRef.path },
+					content: "",
+					ref: deletedMemo.monthlyRef,
+				};
+			},
+		} as never,
+		{
+			loadAll: async () => [memo],
+			upsertMemo: async (_folder: string, deletedMemo: MemoRecord) => {
+				savedMemos.push(deletedMemo);
+				return deletedMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	assert.equal(await orchestrator.syncDeletedDailyFile(path), true);
+	assert.deepEqual(deletedMonthly, [memo.id]);
+	assert.equal(savedMemos[0]?.status, "deleted");
+	assert.equal(savedMemos[0]?.deleteSource, "file_watch");
+});
+
+test("syncRenamedDailyFile tombstones memos moved outside the daily note path", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const oldPath = "Daily/2026-05-18.md";
+	const file = Object.assign(new TFile(), {
+		path: "Archive/2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const memo = createReferenceMemo("- 08:00:00 内容");
+	memo.dailyRef.path = oldPath;
+	const savedMemos: MemoRecord[] = [];
+	const orchestrator = new SyncOrchestrator(
+		{} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			deleteMemoBlock: async (deletedMemo: MemoRecord) => ({
+				file: { path: deletedMemo.monthlyRef.path },
+				content: "",
+				ref: deletedMemo.monthlyRef,
+			}),
+		} as never,
+		{
+			loadAll: async () => [memo],
+			upsertMemo: async (_folder: string, deletedMemo: MemoRecord) => {
+				savedMemos.push(deletedMemo);
+				return deletedMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	assert.equal(await orchestrator.syncRenamedDailyFile(file, oldPath), true);
+	assert.equal(savedMemos[0]?.status, "deleted");
+	assert.equal(savedMemos[0]?.dailyRef.path, oldPath);
+});
+
+test("full daily scan tombstones indexed memos whose daily file no longer exists", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const path = "2026-05-18.md";
+	const memo = createReferenceMemo("- 08:00:00 内容");
+	memo.dailyRef.path = path;
+	const savedMemos: MemoRecord[] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [],
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			deleteMemoBlock: async (deletedMemo: MemoRecord) => ({
+				file: { path: deletedMemo.monthlyRef.path },
+				content: "",
+				ref: deletedMemo.monthlyRef,
+			}),
+		} as never,
+		{
+			loadAll: async () => [memo],
+			upsertMemo: async (_folder: string, deletedMemo: MemoRecord) => {
+				savedMemos.push(deletedMemo);
+				return deletedMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.scanDailyMemos();
+
+	assert.equal(result.deleted, 1);
+	assert.equal(savedMemos[0]?.status, "deleted");
+	assert.equal(savedMemos[0]?.dailyRef.path, path);
+});
+
+test("full daily scan keeps indexed memos whose file still exists outside the current daily folder", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile, TFolder } = await import("obsidian");
+	const path = "Archive/2026-05-18.md";
+	const file = Object.assign(new TFile(), {
+		path,
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const dailyFolder = Object.assign(new TFolder(), {
+		path: "Daily",
+		children: [],
+	});
+	const memo = createReferenceMemo("- 08:00:00 内容");
+	memo.dailyRef.path = path;
+	let saved = false;
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: (requestedPath: string) => requestedPath === "Daily" ? dailyFolder : requestedPath === path ? file : null,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{} as never,
+		{
+			loadAll: async () => [memo],
+			upsertMemo: async (_folder: string, savedMemo: MemoRecord) => {
+				saved = true;
+				return savedMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.scanDailyMemos();
+
+	assert.equal(result.deleted, 0);
+	assert.equal(saved, false);
+});
+
 test("listDeletedMemos returns only deleted memos by deletedAt descending", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const deletedOlder = {
@@ -1799,7 +2046,7 @@ test("deleteMemo marks deleted without monthly_delete_failed when monthlyRef is 
 	assert.equal(deletedMemo.issue, null);
 });
 
-test("rebuild index estimates recent files and backs up before all-diary rebuild", async () => {
+test("all-diary rebuild does not read a corrupt live index before committing candidate indexes", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
 	const today = new Date();
@@ -1823,6 +2070,18 @@ test("rebuild index estimates recent files and backs up before all-diary rebuild
 	let backupCalled = false;
 	let monthlyCalled = false;
 	let created = 0;
+	let committed = false;
+	let rejectLiveIndexRead = false;
+	const candidateStore = {
+		initializeEmptyPeriods: async () => undefined,
+		addMemo: async (_folder: string, memo: MemoRecord) => {
+			created += 1;
+			return memo;
+		},
+		listExistingPeriods: () => [formatTestDate(today).slice(0, 7), formatTestDate(oldDate).slice(0, 7)],
+		loadPeriods: async () => [],
+		getIndexFilePath: (_folder: string, period: string) => `Memos/_knomo-system/backups/rebuild-index/rebuilt-indexes/memo-index-${period}.json`,
+	};
 	const orchestrator = new SyncOrchestrator(
 		{
 			vault: {
@@ -1842,14 +2101,20 @@ test("rebuild index estimates recent files and backs up before all-diary rebuild
 			},
 		} as never,
 		{
-			loadAll: async () => [],
-			addMemo: async (_folder: string, memo: MemoRecord) => {
-				created += 1;
-				return memo;
+			loadAll: async () => {
+				if (rejectLiveIndexRead) {
+					throw new Error("Corrupt memo-index JSON");
+				}
+				return [];
 			},
 			backupIndexes: async () => {
 				backupCalled = true;
 				return "Memos/_knomo-system/backups/rebuild-index";
+			},
+			createStoreAtIndexFolder: () => candidateStore,
+			listExistingPeriods: () => [formatTestDate(today).slice(0, 7)],
+			commitCandidateIndexes: async () => {
+				committed = true;
 			},
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
@@ -1860,12 +2125,85 @@ test("rebuild index estimates recent files and backs up before all-diary rebuild
 	assert.equal(estimate.scannedFiles, 1);
 	assert.equal(estimate.estimatedNew, 1);
 
+	rejectLiveIndexRead = true;
 	const result = await orchestrator.rebuildIndex("all", "index-only");
 	assert.equal(result.scannedFiles, 2);
 	assert.equal(created, 2);
 	assert.equal(backupCalled, true);
+	assert.equal(committed, true);
 	assert.equal(monthlyCalled, false);
 	assert.equal(result.backupPath, "Memos/_knomo-system/backups/rebuild-index");
+});
+
+test("all-diary monthly rebuild reuses the existing monthly block reference", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const today = new Date();
+	const dateText = formatTestDate(today);
+	const period = dateText.slice(0, 7);
+	const dailyPath = `${dateText}.md`;
+	const monthlyPath = `Memos/Memos-${period}.md`;
+	const rawBlock = "- 08:00:00 今日内容";
+	const dailyFile = Object.assign(new TFile(), {
+		path: dailyPath,
+		basename: dateText,
+		extension: "md",
+	});
+	const monthlyFile = Object.assign(new TFile(), {
+		path: monthlyPath,
+		basename: `Memos-${period}`,
+		extension: "md",
+	});
+	const monthlyMemos: MemoRecord[] = [];
+	const candidateStore = {
+		initializeEmptyPeriods: async () => undefined,
+		addMemo: async (_folder: string, memo: MemoRecord) => memo,
+		listExistingPeriods: () => [period],
+		loadPeriods: async () => [],
+		getIndexFilePath: (_folder: string, memoPeriod: string) => `Memos/_knomo-system/backups/rebuild-index/rebuilt-indexes/memo-index-${memoPeriod}.json`,
+	};
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [dailyFile],
+				getAbstractFileByPath: (path: string) => path === monthlyPath ? monthlyFile : null,
+				cachedRead: async (file: { path: string }) => file.path === monthlyPath
+					? `# ${period}\n\n## ${dateText}\n${rawBlock}`
+					: `# ${dateText}\n\n## Knomo\n${rawBlock}`,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			backupMonthlyArchives: async () => undefined,
+			upsertMemoBlock: async (_settings: KnomoSettings, memo: MemoRecord, block: string) => {
+				monthlyMemos.push(memo);
+				return {
+					file: monthlyFile,
+					content: block,
+					ref: memo.monthlyRef,
+				};
+			},
+		} as never,
+		{
+			backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-index",
+			createStoreAtIndexFolder: () => candidateStore,
+			listExistingPeriods: () => [period],
+			commitCandidateIndexes: async () => undefined,
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.rebuildIndex("all", "index-and-monthly");
+
+	assert.equal(result.created, 1);
+	assert.equal(monthlyMemos[0]?.monthlyRef.path, monthlyPath);
+	assert.equal(monthlyMemos[0]?.monthlyRef.lineNumberHint, 4);
+	assert.equal(monthlyMemos[0]?.monthlyRef.lastKnownBlock, rawBlock);
 });
 
 test("index-only rebuild does not delete monthly block when indexed memo is missing", async () => {

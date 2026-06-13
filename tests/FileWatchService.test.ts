@@ -13,13 +13,13 @@ test("FileWatchService delegates sync errors to the injected callback", async ()
 		extension: "md",
 	});
 	const syncError = new Error("manual sync failed");
-	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
 	const timerHandlers: Array<() => void> = [];
 	let receivedPath: string | null = null;
 	let receivedError: unknown = null;
 	const app = {
 		vault: {
-			on: (eventName: string, handler: (file: unknown) => void) => {
+			on: (eventName: string, handler: (...args: unknown[]) => void) => {
 				handlersByEvent.set(eventName, handler);
 				return {};
 			},
@@ -63,7 +63,7 @@ test("FileWatchService delegates sync errors to the injected callback", async ()
 		register: () => undefined,
 	} as never);
 
-	assert.deepEqual([...handlersByEvent.keys()], ["modify", "create", "rename"]);
+	assert.deepEqual([...handlersByEvent.keys()], ["modify", "create", "rename", "delete"]);
 	const triggerModify = handlersByEvent.get("modify");
 	assert.notEqual(triggerModify, undefined);
 	if (triggerModify === undefined) {
@@ -90,13 +90,13 @@ test("FileWatchService refreshes views when a memo-index file changes", async ()
 		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
 		extension: "json",
 	});
-	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
 	const timerHandlers: Array<() => void> = [];
 	let refreshCount = 0;
 	let dailySyncCalled = false;
 	const app = {
 		vault: {
-			on: (eventName: string, handler: (file: unknown) => void) => {
+			on: (eventName: string, handler: (...args: unknown[]) => void) => {
 				handlersByEvent.set(eventName, handler);
 				return {};
 			},
@@ -165,12 +165,12 @@ test("FileWatchService ignores memo-index changes caused by Knomo writes", async
 		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
 		extension: "json",
 	});
-	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
 	const timerHandlers: Array<() => void> = [];
 	let refreshCount = 0;
 	const app = {
 		vault: {
-			on: (eventName: string, handler: (file: unknown) => void) => {
+			on: (eventName: string, handler: (...args: unknown[]) => void) => {
 				handlersByEvent.set(eventName, handler);
 				return {};
 			},
@@ -215,7 +215,7 @@ test("FileWatchService ignores memo-index changes caused by Knomo writes", async
 	assert.equal(refreshCount, 0);
 });
 
-test("FileWatchService scans daily notes delivered through rename events", async () => {
+test("FileWatchService syncs daily note renames with the old path", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");
 	const { FileWatchService } = await import("../src/services/FileWatchService");
@@ -223,13 +223,14 @@ test("FileWatchService scans daily notes delivered through rename events", async
 		path: "Daily/2026-06-02.md",
 		extension: "md",
 	});
-	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const oldPath = "Daily/2026-06-01.md";
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
 	const timerHandlers: Array<() => void> = [];
-	let syncedPath = "";
+	let syncedPaths: [string, string] | null = null;
 	let refreshCount = 0;
 	const app = {
 		vault: {
-			on: (eventName: string, handler: (file: unknown) => void) => {
+			on: (eventName: string, handler: (...args: unknown[]) => void) => {
 				handlersByEvent.set(eventName, handler);
 				return {};
 			},
@@ -254,11 +255,11 @@ test("FileWatchService scans daily notes delivered through rename events", async
 			cleanup: () => undefined,
 		} as never,
 		{
-			isPotentialDailyFile: (path: string) => path === file.path,
+			isPotentialDailyFile: (path: string) => path === file.path || path === oldPath,
 			isMemoIndexFile: () => false,
 			getSyncDebounceMs: () => 0,
-			syncExternalDailyFile: async (changedFile: { path: string }) => {
-				syncedPath = changedFile.path;
+			syncRenamedDailyFile: async (changedFile: { path: string }, previousPath: string) => {
+				syncedPaths = [changedFile.path, previousPath];
 				return true;
 			},
 		} as never,
@@ -277,7 +278,7 @@ test("FileWatchService scans daily notes delivered through rename events", async
 	if (triggerRename === undefined) {
 		throw new Error("rename handler was not registered.");
 	}
-	triggerRename(file);
+	triggerRename(file, oldPath);
 	const triggerTimer = timerHandlers[0];
 	assert.notEqual(triggerTimer, undefined);
 	if (triggerTimer === undefined) {
@@ -286,8 +287,65 @@ test("FileWatchService scans daily notes delivered through rename events", async
 	triggerTimer();
 	await waitImmediate();
 
-	assert.equal(syncedPath, file.path);
+	assert.deepEqual(syncedPaths, [file.path, oldPath]);
 	assert.equal(refreshCount, 1);
+});
+
+test("FileWatchService syncs deleted daily notes", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const file = Object.assign(new TFile(), {
+		path: "Daily/2026-06-02.md",
+		extension: "md",
+	});
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
+	const timerHandlers: Array<() => void> = [];
+	let deletedPath = "";
+	const app = {
+		vault: {
+			on: (eventName: string, handler: (...args: unknown[]) => void) => {
+				handlersByEvent.set(eventName, handler);
+				return {};
+			},
+		},
+		workspace: {
+			containerEl: {
+				win: {
+					setTimeout: (handler: () => void) => {
+						timerHandlers.push(handler);
+						return 1;
+					},
+					clearTimeout: () => undefined,
+				},
+			},
+		},
+	};
+	const service = new FileWatchService(
+		app as never,
+		{
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: (path: string) => path === file.path,
+			getSyncDebounceMs: () => 0,
+			syncDeletedDailyFile: async (path: string) => {
+				deletedPath = path;
+				return true;
+			},
+		} as never,
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+
+	handlersByEvent.get("delete")?.(file);
+	timerHandlers[0]?.();
+	await waitImmediate();
+
+	assert.equal(deletedPath, file.path);
 });
 
 test("FileWatchService runs queued file tasks serially", async () => {
@@ -302,7 +360,7 @@ test("FileWatchService runs queued file tasks serially", async () => {
 		path: "Daily/2026-06-03.md",
 		extension: "md",
 	});
-	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
 	const timerHandlers: Array<() => void> = [];
 	const deferredSyncs: Array<Deferred<boolean>> = [];
 	const syncedPaths: string[] = [];
@@ -310,7 +368,7 @@ test("FileWatchService runs queued file tasks serially", async () => {
 	let maxActiveSyncs = 0;
 	const app = {
 		vault: {
-			on: (eventName: string, handler: (file: unknown) => void) => {
+			on: (eventName: string, handler: (...args: unknown[]) => void) => {
 				handlersByEvent.set(eventName, handler);
 				return {};
 			},
@@ -398,13 +456,13 @@ test("FileWatchService coalesces pending file tasks by path", async () => {
 		extension: "md",
 		label: "latest",
 	});
-	const handlersByEvent = new Map<string, (file: unknown) => void>();
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
 	const timerHandlers: Array<() => void> = [];
 	const deferredSyncs: Array<Deferred<boolean>> = [];
 	const syncedLabels: string[] = [];
 	const app = {
 		vault: {
-			on: (eventName: string, handler: (file: unknown) => void) => {
+			on: (eventName: string, handler: (...args: unknown[]) => void) => {
 				handlersByEvent.set(eventName, handler);
 				return {};
 			},

@@ -10,6 +10,7 @@ import { MarkdownBlockService } from "./services/MarkdownBlockService";
 import { MemoIndexStore } from "./services/MemoIndexStore";
 import { MonthlyArchiveService } from "./services/MonthlyArchiveService";
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
+import { PendingMemoCreateStore } from "./services/PendingMemoCreateStore";
 import { RandomReunionService } from "./services/RandomReunionService";
 import { ReferenceService } from "./services/ReferenceService";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
@@ -44,6 +45,10 @@ export default class KnomoPlugin extends Plugin {
 		await this.refreshDailyStatusSafely(dailyNoteService);
 		const monthlyArchiveService = new MonthlyArchiveService(this.app, markdownBlockService);
 		const memoIndexStore = new MemoIndexStore(this.app);
+		const pendingMemoCreateStore = new PendingMemoCreateStore(
+			this.app,
+			() => this.settingsService.getSettings(),
+		);
 		const attachmentService = new AttachmentService(this.app);
 		this.syncOrchestrator = new SyncOrchestrator(
 			this.app,
@@ -53,6 +58,7 @@ export default class KnomoPlugin extends Plugin {
 			memoIndexStore,
 			selfWriteTracker,
 			markdownBlockService,
+			pendingMemoCreateStore,
 		);
 		this.viewRefreshScheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
@@ -196,6 +202,9 @@ export default class KnomoPlugin extends Plugin {
 
 	private async initializeAfterLayoutSafely(): Promise<void> {
 		await this.initializeSystemFoldersSafely();
+		if (!await this.recoverPendingMemoCreatesSafely()) {
+			return;
+		}
 		if (Platform.isMobile) {
 			return;
 		}
@@ -218,6 +227,16 @@ export default class KnomoPlugin extends Plugin {
 			}
 		} catch {
 			// 启动扫描只做轻量修复，不打断用户。
+		}
+	}
+
+	private async recoverPendingMemoCreatesSafely(): Promise<boolean> {
+		try {
+			await this.syncOrchestrator.recoverPendingMemoCreates();
+			return true;
+		} catch {
+			// 未完成创建必须先保留现场，避免启动扫描生成重复 memo。
+			return false;
 		}
 	}
 

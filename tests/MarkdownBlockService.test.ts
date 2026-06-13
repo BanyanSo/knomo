@@ -1366,6 +1366,7 @@ test("syncExternalDailyFile imports new blocks and tombstones missing indexed me
 	const orchestrator = new SyncOrchestrator(
 		{
 			vault: {
+				getAbstractFileByPath: () => null,
 				cachedRead: async () => "# 2026-05-18\n\n## Knomo\n- 09:00:00 手动新增",
 			},
 		} as never,
@@ -1581,6 +1582,7 @@ test("full daily scan tombstones indexed memos whose daily file no longer exists
 		{
 			vault: {
 				getMarkdownFiles: () => [],
+				getAbstractFileByPath: () => null,
 			},
 		} as never,
 		() => createTestSettings(),
@@ -2086,6 +2088,7 @@ test("all-diary rebuild does not read a corrupt live index before committing can
 		{
 			vault: {
 				getMarkdownFiles: () => [todayFile, oldFile],
+				getAbstractFileByPath: () => null,
 				cachedRead: async (file: { path: string }) => contents.get(file.path) ?? "",
 			},
 		} as never,
@@ -2295,6 +2298,7 @@ test("rebuild index restores backup when monthly rebuild fails", async () => {
 		{
 			vault: {
 				getMarkdownFiles: () => [todayFile],
+				getAbstractFileByPath: () => null,
 				cachedRead: async () => `# ${formatTestDate(today)}\n\n## Knomo\n- 08:00 今日内容`,
 			},
 		} as never,

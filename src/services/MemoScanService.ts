@@ -884,11 +884,7 @@ export class MemoScanService {
 		requireUniqueMatch: boolean,
 	): Promise<MonthlyRef> {
 		const expectedRef = buildExpectedMonthlyRef(settings, createdAt, rawBlock);
-		const getAbstractFileByPath = this.app.vault.getAbstractFileByPath;
-		if (typeof getAbstractFileByPath !== "function") {
-			return expectedRef;
-		}
-		const file = getAbstractFileByPath.call(this.app.vault, expectedRef.path);
+		const file = this.app.vault.getAbstractFileByPath(expectedRef.path);
 		if (!(file instanceof TFile)) {
 			return expectedRef;
 		}
@@ -992,11 +988,7 @@ export class MemoScanService {
 		if (scannedPaths.has(path)) {
 			return false;
 		}
-		const getAbstractFileByPath = this.app.vault.getAbstractFileByPath;
-		if (typeof getAbstractFileByPath !== "function") {
-			return true;
-		}
-		return !(getAbstractFileByPath.call(this.app.vault, path) instanceof TFile);
+		return !(this.app.vault.getAbstractFileByPath(path) instanceof TFile);
 	}
 
 	private getDailyFiles(config: DailyNotesConfig): TFile[] {

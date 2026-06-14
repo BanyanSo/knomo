@@ -144,6 +144,18 @@ test("card image CSS keeps thumbnails lightweight and the modal touch area mobil
 	);
 	assert.match(getStyleRule(css, ".knomo-image-preview-footer"), /justify-content:\s*center;/);
 	assert.match(getStyleRule(css, ".knomo-image-preview-counter"), /color:\s*var\(--knomo-image-preview-control-foreground\);/);
+	assert.match(
+		getStyleRule(css, ".knomo-image-preview-backdrop--mobile .knomo-image-preview-modal"),
+		/width:\s*100vw;[\s\S]*height:\s*100vh;[\s\S]*height:\s*100dvh;[\s\S]*border-radius:\s*0;/,
+	);
+	assert.match(
+		getStyleRule(css, ".knomo-image-preview-backdrop--mobile .knomo-image-preview-stage"),
+		/calc\(12px \+ env\(safe-area-inset-right,\s*0px\)\)[\s\S]*calc\(12px \+ env\(safe-area-inset-left,\s*0px\)\)/,
+	);
+	assert.match(
+		getStyleRule(css, ".knomo-image-preview-backdrop--mobile .knomo-image-preview-nav"),
+		/opacity:\s*0\.6;/,
+	);
 });
 
 test("image preview modal omits tooltips, original-file actions, and single-image navigation", async () => {
@@ -154,6 +166,19 @@ test("image preview modal omits tooltips, original-file actions, and single-imag
 	assert.doesNotMatch(modalSource, /originalButtonEl|handleOpenOriginalClick|image\.openOriginal|image\.openExternal/);
 	assert.match(modalSource, /if \(this\.images\.length > 1\) \{/);
 	assert.match(viewSource, /"aria-label": t\("image\.previewLabel"\)/);
+});
+
+test("image preview modal keeps mobile gestures isolated and preloads adjacent images", async () => {
+	const modalSource = await readFile(resolve(process.cwd(), "src/ui/KnomoImagePreviewModal.ts"), "utf8");
+
+	assert.match(modalSource, /toggleClass\("knomo-image-preview-backdrop--mobile", Platform\.isMobile\)/);
+	assert.match(modalSource, /if \(event\.target === this\.stageEl\)/);
+	assert.match(modalSource, /if \(event\.touches\.length !== 1\)/);
+	assert.match(modalSource, /const TOUCH_EDGE_GUARD = 24;/);
+	assert.match(modalSource, /suppressStageClickUntil/);
+	assert.match(modalSource, /preloadedImageUrls\.has\(image\.url\)/);
+	assert.match(modalSource, /this\.preloadAdjacentImages\(\);/);
+	assert.match(modalSource, /t\("image\.loadFailed"\)/);
 });
 
 test("card images load as memo-card tasks without changing the initial batch size", async () => {

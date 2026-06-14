@@ -104,6 +104,7 @@ export const en: Record<TranslationKey, string> = {
 	"card.copyLink": "Copy link",
 	"card.delete": "Delete",
 	"image.unavailable": "Image unavailable",
+	"image.loadFailed": "Image failed to load",
 	"image.previous": "Previous image",
 	"image.next": "Next image",
 	"image.closePreview": "Close image preview",

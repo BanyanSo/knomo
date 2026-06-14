@@ -1,4 +1,4 @@
-import { Modal, setIcon } from "obsidian";
+import { Modal, Platform, setIcon } from "obsidian";
 import type { App } from "obsidian";
 
 import { t } from "../i18n";
@@ -14,12 +14,20 @@ interface KnomoImagePreviewModalOptions {
 interface TouchStartState {
 	x: number;
 	y: number;
+	startedAt: number;
 	horizontal: boolean;
 }
 
-const TOUCH_EDGE_GUARD = 28;
-const TOUCH_SWIPE_THRESHOLD = 40;
+type ImageConstructor = new (width?: number, height?: number) => HTMLImageElement;
+
+const TOUCH_EDGE_GUARD = 24;
+const TOUCH_INTENT_THRESHOLD = 12;
+const TOUCH_INTENT_RATIO = 1.25;
+const TOUCH_SWIPE_THRESHOLD = 48;
+const TOUCH_QUICK_SWIPE_THRESHOLD = 24;
+const TOUCH_QUICK_SWIPE_DURATION = 220;
 const TOUCH_HORIZONTAL_RATIO = 1.5;
+const TOUCH_CLICK_SUPPRESSION_MS = 400;
 
 export class KnomoImagePreviewModal extends Modal {
 	private readonly images: MemoPreviewImage[];
@@ -29,6 +37,10 @@ export class KnomoImagePreviewModal extends Modal {
 	private stageEl: HTMLElement | null = null;
 	private counterEl: HTMLElement | null = null;
 	private touchStart: TouchStartState | null = null;
+	private suppressStageClickUntil = 0;
+	private renderGeneration = 0;
+	private readonly preloadedImageUrls = new Set<string>();
+	private readonly preloadImages = new Map<string, HTMLImageElement>();
 
 	constructor(app: App, options: KnomoImagePreviewModalOptions) {
 		super(app);
@@ -41,6 +53,7 @@ export class KnomoImagePreviewModal extends Modal {
 	onOpen(): void {
 		this.lockCardFlowScroll();
 		this.containerEl.addClass("knomo-image-preview-backdrop");
+		this.containerEl.toggleClass("knomo-image-preview-backdrop--mobile", Platform.isMobile);
 		this.modalEl.addClass("knomo-image-preview-modal");
 		this.titleEl.setText(t("image.previewLabel"));
 		this.contentEl.empty();
@@ -104,6 +117,10 @@ export class KnomoImagePreviewModal extends Modal {
 		this.stageEl = null;
 		this.counterEl = null;
 		this.touchStart = null;
+		this.suppressStageClickUntil = 0;
+		this.renderGeneration += 1;
+		this.preloadedImageUrls.clear();
+		this.preloadImages.clear();
 		this.unlockCardFlowScroll();
 		this.contentEl.empty();
 	}
@@ -114,25 +131,29 @@ export class KnomoImagePreviewModal extends Modal {
 			return;
 		}
 		const image = this.images[this.currentIndex];
+		const renderGeneration = ++this.renderGeneration;
 		stage.empty();
 		if (image === undefined || image.url === undefined || image.unresolved === true) {
 			this.renderPlaceholder(stage);
 		} else {
+			this.preloadedImageUrls.add(image.url);
 			const img = stage.createEl("img", {
 				cls: "knomo-image-preview-img",
 				attr: {
 					src: image.url,
 					alt: image.alt ?? "",
+					decoding: "async",
 				},
 			});
 			img.addEventListener("error", () => {
-				if (this.stageEl === stage && this.images[this.currentIndex] === image) {
+				if (this.stageEl === stage && this.renderGeneration === renderGeneration) {
 					stage.empty();
-					this.renderPlaceholder(stage);
+					this.renderLoadError(stage);
 				}
 			});
 		}
 		this.syncFooter();
+		this.preloadAdjacentImages();
 	}
 
 	private renderPlaceholder(container: HTMLElement): void {
@@ -140,6 +161,35 @@ export class KnomoImagePreviewModal extends Modal {
 			cls: "knomo-card-image-placeholder knomo-image-preview-placeholder",
 			text: t("image.unavailable"),
 		});
+	}
+
+	private renderLoadError(container: HTMLElement): void {
+		container.createDiv({
+			cls: "knomo-image-preview-error",
+			text: t("image.loadFailed"),
+			attr: {
+				role: "status",
+				"aria-live": "polite",
+			},
+		});
+	}
+
+	private preloadAdjacentImages(): void {
+		for (const index of getAdjacentImageIndexes(this.currentIndex, this.images.length)) {
+			const image = this.images[index];
+			if (image === undefined || image.url === undefined || image.unresolved === true) {
+				continue;
+			}
+			if (this.preloadedImageUrls.has(image.url)) {
+				continue;
+			}
+			this.preloadedImageUrls.add(image.url);
+			const ImageClass = (this.containerEl.win as Window & { Image: ImageConstructor }).Image;
+			const preloadImage = new ImageClass();
+			preloadImage.decoding = "async";
+			this.preloadImages.set(image.url, preloadImage);
+			preloadImage.src = image.url;
+		}
 	}
 
 	private syncFooter(): void {
@@ -170,6 +220,13 @@ export class KnomoImagePreviewModal extends Modal {
 	};
 
 	private readonly handleStageClick = (event: MouseEvent): void => {
+		if (this.containerEl.win.performance.now() < this.suppressStageClickUntil) {
+			this.suppressStageClickUntil = 0;
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+		this.suppressStageClickUntil = 0;
 		if (event.target === this.stageEl) {
 			event.preventDefault();
 			this.close();
@@ -206,11 +263,11 @@ export class KnomoImagePreviewModal extends Modal {
 	};
 
 	private readonly handleTouchStart = (event: TouchEvent): void => {
-		const touch = event.touches[0];
-		if (touch === undefined) {
+		if (event.touches.length !== 1) {
 			this.touchStart = null;
 			return;
 		}
+		const touch = event.touches[0];
 		const width = this.containerEl.win.innerWidth;
 		if (touch.clientX <= TOUCH_EDGE_GUARD || touch.clientX >= width - TOUCH_EDGE_GUARD) {
 			this.touchStart = null;
@@ -219,24 +276,21 @@ export class KnomoImagePreviewModal extends Modal {
 		this.touchStart = {
 			x: touch.clientX,
 			y: touch.clientY,
+			startedAt: event.timeStamp,
 			horizontal: false,
 		};
 	};
 
 	private readonly handleTouchMove = (event: TouchEvent): void => {
-		if (this.touchStart === null) {
+		if (this.touchStart === null || event.touches.length !== 1) {
+			this.touchStart = null;
 			return;
 		}
 		const touch = event.touches[0];
-		if (touch === undefined) {
-			return;
-		}
 		const deltaX = touch.clientX - this.touchStart.x;
 		const deltaY = touch.clientY - this.touchStart.y;
-		if (isHorizontalSwipe(deltaX, deltaY)) {
+		if (hasHorizontalIntent(deltaX, deltaY)) {
 			this.touchStart.horizontal = true;
-		}
-		if (this.touchStart.horizontal) {
 			event.preventDefault();
 			event.stopPropagation();
 		}
@@ -246,22 +300,23 @@ export class KnomoImagePreviewModal extends Modal {
 		if (this.touchStart === null) {
 			return;
 		}
-		const touch = event.changedTouches[0];
 		const touchStart = this.touchStart;
 		this.touchStart = null;
-		if (touch === undefined) {
+		if (event.touches.length !== 0 || event.changedTouches.length !== 1) {
 			return;
 		}
+		const touch = event.changedTouches[0];
 		const deltaX = touch.clientX - touchStart.x;
 		const deltaY = touch.clientY - touchStart.y;
-		if (!touchStart.horizontal || !isHorizontalSwipe(deltaX, deltaY)) {
-			return;
+		const direction = getImageSwipeDirection(deltaX, deltaY, event.timeStamp - touchStart.startedAt);
+		if (touchStart.horizontal || direction !== null) {
+			event.preventDefault();
+			event.stopPropagation();
+			this.suppressStageClickUntil = this.containerEl.win.performance.now() + TOUCH_CLICK_SUPPRESSION_MS;
 		}
-		event.preventDefault();
-		event.stopPropagation();
-		if (deltaX < 0) {
+		if (direction === "next") {
 			this.showNextImage();
-		} else {
+		} else if (direction === "previous") {
 			this.showPreviousImage();
 		}
 	};
@@ -278,8 +333,36 @@ function clampImageIndex(index: number, imageCount: number): number {
 	return Math.min(Math.max(index, 0), imageCount - 1);
 }
 
-function isHorizontalSwipe(deltaX: number, deltaY: number): boolean {
+function hasHorizontalIntent(deltaX: number, deltaY: number): boolean {
 	const absX = Math.abs(deltaX);
 	const absY = Math.abs(deltaY);
-	return absX > TOUCH_SWIPE_THRESHOLD && absX > absY * TOUCH_HORIZONTAL_RATIO;
+	return absX >= TOUCH_INTENT_THRESHOLD && absX > absY * TOUCH_INTENT_RATIO;
+}
+
+export function getImageSwipeDirection(
+	deltaX: number,
+	deltaY: number,
+	duration: number,
+): "previous" | "next" | null {
+	const absX = Math.abs(deltaX);
+	const absY = Math.abs(deltaY);
+	const threshold = duration <= TOUCH_QUICK_SWIPE_DURATION
+		? TOUCH_QUICK_SWIPE_THRESHOLD
+		: TOUCH_SWIPE_THRESHOLD;
+	if (absX < threshold || absX <= absY * TOUCH_HORIZONTAL_RATIO) {
+		return null;
+	}
+	return deltaX < 0 ? "next" : "previous";
+}
+
+export function getAdjacentImageIndexes(currentIndex: number, imageCount: number): number[] {
+	if (imageCount <= 1) {
+		return [];
+	}
+	const current = clampImageIndex(currentIndex, imageCount);
+	const indexes = [
+		(current - 1 + imageCount) % imageCount,
+		(current + 1) % imageCount,
+	];
+	return indexes.filter((index, position) => index !== current && indexes.indexOf(index) === position);
 }

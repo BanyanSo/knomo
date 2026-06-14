@@ -25,7 +25,7 @@ body {
 	--knomo-dropdown-width: 168px;
 	--knomo-title-popover-left: max(16px, env(safe-area-inset-left));
 	--knomo-title-popover-top: max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px));
-	--knomo-desktop-header-composer-gap: 12px;
+	--knomo-desktop-header-composer-gap: 10px;
 	--knomo-header-offset-y: 6px;
 	--knomo-desktop-compact-edge-padding: 12px;
 
@@ -1026,11 +1026,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	width: 200px;
 	min-width: 80px;
 	max-width: 200px;
-	min-height: 40px;
-	height: 40px;
-	padding: 0 20px;
+	min-height: 35px;
+	height: 35px;
+	padding: 0 14px;
 	border: 1px solid var(--knomo-soft-border);
-	border-radius: 20px;
+	border-radius: 8px;
 	background: var(--knomo-surface);
 	color: var(--text-faint);
 	transition:
@@ -1356,11 +1356,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	height: 40px;
-	min-height: 40px;
-	padding: 0 20px;
+	height: 35px;
+	min-height: 35px;
+	padding: 0 14px;
 	border: 1px solid var(--knomo-soft-border);
-	border-radius: 20px;
+	border-radius: 8px;
 	background: var(--knomo-surface);
 	transition:
 		background var(--knomo-transition-control),
@@ -1378,10 +1378,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin.is-layout-desktop-medium .knomo-compact-inline-search,
 .knomo-plugin.is-layout-desktop-narrow .knomo-compact-inline-search {
 	display: flex;
-	flex: 0 1 200px;
+	flex: 0 1 180px;
 	width: auto;
 	min-width: 80px;
-	max-width: 200px;
+	max-width: 180px;
 }
 
 .knomo-plugin .knomo-compact-search-wrap:focus-within {
@@ -3141,6 +3141,88 @@ body .knomo-mobile-create-fab.is-hidden {
 	border-radius: 8px;
 }
 
+.knomo-image-preview-error {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: min(240px, 70vw);
+	min-height: 72px;
+	padding: 12px 16px;
+	border-radius: 8px;
+	color: var(--knomo-image-preview-control-foreground);
+	background: var(--knomo-image-preview-control-background);
+	font-size: var(--font-ui-medium);
+	text-align: center;
+}
+
+.knomo-image-preview-backdrop--mobile {
+	padding: 0;
+}
+
+.knomo-image-preview-backdrop--mobile .modal-bg {
+	background: rgba(0, 0, 0, 0.94);
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-modal {
+	width: 100vw;
+	min-width: 100vw;
+	max-width: none;
+	height: 100vh;
+	height: 100dvh;
+	min-height: 100vh;
+	min-height: 100dvh;
+	max-height: none;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	background: rgba(0, 0, 0, 0.94);
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-modal .modal-content {
+	width: 100%;
+	max-width: none;
+	height: 100%;
+	max-height: none;
+	margin: 0;
+	padding: 0;
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-stage {
+	padding:
+		calc(56px + env(safe-area-inset-top, 0px))
+		calc(12px + env(safe-area-inset-right, 0px))
+		calc(56px + env(safe-area-inset-bottom, 0px))
+		calc(12px + env(safe-area-inset-left, 0px));
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-close {
+	top: calc(8px + env(safe-area-inset-top, 0px));
+	right: calc(8px + env(safe-area-inset-right, 0px));
+	width: 44px;
+	height: 44px;
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-nav {
+	width: 44px;
+	height: 56px;
+	opacity: 0.6;
+	background: rgba(0, 0, 0, 0.44);
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-nav--previous {
+	left: calc(2px + env(safe-area-inset-left, 0px));
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-nav--next {
+	right: calc(2px + env(safe-area-inset-right, 0px));
+}
+
+.knomo-image-preview-backdrop--mobile .knomo-image-preview-footer {
+	bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+}
+
 /* --------------------------------------------------------------------------
    14. Small Phone (≤ 420px)
    -------------------------------------------------------------------------- */
@@ -3190,34 +3272,6 @@ body .knomo-mobile-create-fab.is-hidden {
 		gap: 4px;
 	}
 
-	.knomo-image-preview-modal {
-		width: calc(100vw - 16px);
-		height: calc(100vh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-	}
-
-	.knomo-image-preview-stage {
-		padding: calc(44px + env(safe-area-inset-top)) 44px max(44px, env(safe-area-inset-bottom));
-	}
-
-	.knomo-image-preview-modal .knomo-image-preview-close {
-		top: max(8px, env(safe-area-inset-top));
-		right: 8px;
-		width: 44px;
-		height: 44px;
-	}
-
-	.knomo-image-preview-modal .knomo-image-preview-nav--previous {
-		left: 2px;
-	}
-
-	.knomo-image-preview-modal .knomo-image-preview-nav--next {
-		right: 2px;
-	}
-
-	.knomo-image-preview-modal .knomo-image-preview-nav {
-		width: 44px;
-		height: 60px;
-	}
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -102,6 +102,7 @@ export const zhCN = {
 	"card.copyLink": "复制链接",
 	"card.delete": "删除",
 	"image.unavailable": "图片无法显示",
+	"image.loadFailed": "图片加载失败",
 	"image.previous": "上一张",
 	"image.next": "下一张",
 	"image.closePreview": "关闭图片预览",

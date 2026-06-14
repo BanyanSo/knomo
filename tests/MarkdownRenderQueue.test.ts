@@ -79,6 +79,26 @@ test("skips stale queued markdown tasks", async () => {
 	assert.deepEqual(order, ["active"]);
 });
 
+test("pauses queued markdown work until resumed", async () => {
+	const order: string[] = [];
+	const queue = new MarkdownRenderQueue({
+		concurrency: 1,
+		getGeneration: () => 1,
+	});
+
+	queue.setPaused(true);
+	queue.enqueue("normal", 1, async () => {
+		order.push("queued");
+	});
+	await delay();
+
+	assert.deepEqual(order, []);
+	queue.setPaused(false);
+	await waitFor(() => order.length === 1);
+
+	assert.deepEqual(order, ["queued"]);
+});
+
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 	let resolve: () => void = () => {};
 	const promise = new Promise<void>((innerResolve) => {

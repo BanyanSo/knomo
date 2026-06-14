@@ -181,22 +181,36 @@ test("image preview modal keeps mobile gestures isolated and preloads adjacent i
 	assert.match(modalSource, /t\("image\.loadFailed"\)/);
 });
 
-test("card images load as memo-card tasks without changing the initial batch size", async () => {
+test("mobile card flow starts with 25 cards while desktop keeps 50", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const renderImagesMethod = getMethodSource(source, "renderMemoCardImages");
 	const renderMethod = getMethodSource(source, "renderMemoCardImage");
 
 	assert.match(source, /const CARD_BATCH_SIZE = 50;/);
+	assert.match(source, /const MOBILE_INITIAL_CARD_BATCH_SIZE = 25;/);
+	assert.match(source, /Platform\.isMobile \? MOBILE_INITIAL_CARD_BATCH_SIZE : CARD_BATCH_SIZE/);
 	assert.match(renderMethod, /loading:\s*"lazy"/);
 	assert.match(renderMethod, /decoding:\s*"async"/);
 	assert.match(renderMethod, /if \(image\.isRemote\)/);
 	assert.match(renderMethod, /imageEl\.setAttr\("fetchpriority", "low"\)/);
+	assert.doesNotMatch(renderMethod, /if \(Platform\.isMobile && !image\.isRemote\)/);
+	assert.match(renderMethod, /const loadItem: CardImageLoadItem/);
+	assert.match(renderMethod, /src:\s*image\.url/);
+	assert.doesNotMatch(renderMethod, /releaseSlotAfterStart/);
 	assert.match(renderImagesMethod, /queue\.observe/);
 	assert.match(renderImagesMethod, /targetEl:\s*imagesEl/);
 	assert.match(renderImagesMethod, /images:\s*loadItems/);
 	assert.doesNotMatch(renderMethod, /createEl\("img",\s*\{\s*attr:\s*\{[^}]*\bsrc:/s);
-	assert.doesNotMatch(source, /cardImageLoadQueue\.setPaused/);
-	assert.doesNotMatch(source, /requestIdleCallback|CARD_IMAGE_IDLE_TIMEOUT_MS/);
+	assert.match(source, /const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;/);
+	assert.match(source, /rootMargin:\s*Platform\.isMobile \? "0px 0px" : undefined/);
+	assert.match(source, /scheduleStartTask:\s*Platform\.isMobile/);
+	assert.match(source, /const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;/);
+	assert.match(source, /const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;/);
+	assert.match(source, /cardImageLoadQueue\.setPaused/);
+	assert.match(source, /markdownRenderQueue\.setPaused/);
+	assert.match(source, /if \(!Platform\.isMobile \|\| !this\.composerOpen\)/);
+	assert.match(source, /this\.mobileCardFlowRenderPending = true/);
+	assert.match(source, /if \(shouldRenderCardFlow\)/);
 });
 
 test("CJK card CSS keeps headings, code, and tables start-aligned", async () => {

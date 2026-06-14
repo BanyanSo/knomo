@@ -72,6 +72,7 @@ import {
 	SIDEBAR_MAX_WIDTH,
 	SIDEBAR_MIN_WIDTH,
 	syncSidebarNavButtons,
+	syncSidebarTagGroupExpanded,
 } from "./KnomoSidebar";
 import type { SidebarDragState } from "./KnomoSidebar";
 import { KnomoTagSuggest } from "./KnomoTagSuggest";
@@ -131,10 +132,14 @@ interface FilteredMemosCache {
 
 const RANDOM_REUNION_DEFAULT_COUNT = 5;
 const CARD_BATCH_SIZE = 50;
+const MOBILE_INITIAL_CARD_BATCH_SIZE = 25;
+const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;
+const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;
 const MOBILE_SEARCH_BATCH_SIZE = 30;
 const INITIAL_VISIBLE_RENDER_COUNT = 16;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
-const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 1;
+const MOBILE_MARKDOWN_RENDER_CONCURRENCY = 4;
+const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;
 const DESKTOP_CARD_IMAGE_LOAD_CONCURRENCY = 2;
 const CARD_IMAGE_LOAD_WATCHDOG_MS = 10_000;
 const MAX_CARD_PREVIEW_IMAGES = 3;
@@ -282,13 +287,22 @@ export class KnomoView extends ItemView {
 	private mobileNavbarCompactController: MobileNavbarCompactController | null = null;
 	private renderGeneration = 0;
 	private mobileSearchRenderGeneration = 0;
+	private mobileCardFlowRenderPending = false;
+	private mobileCardFlowForceRebuildPending = false;
+	private mobileCardFlowPreserveMemoId: string | null = null;
+	private mobileCardBatchFrameId: number | null = null;
+	private mobileCardBatchContinuation: (() => void) | null = null;
 	private readonly renderedCardMemos = new Map<string, MemoRecord>();
 	private readonly markdownRenderQueue = new MarkdownRenderQueue({
-		concurrency: MARKDOWN_RENDER_CONCURRENCY,
+		concurrency: Platform.isMobile
+			? MOBILE_MARKDOWN_RENDER_CONCURRENCY
+			: MARKDOWN_RENDER_CONCURRENCY,
 		getGeneration: () => this.renderGeneration,
 	});
 	private readonly mobileSearchMarkdownRenderQueue = new MarkdownRenderQueue({
-		concurrency: MARKDOWN_RENDER_CONCURRENCY,
+		concurrency: Platform.isMobile
+			? MOBILE_MARKDOWN_RENDER_CONCURRENCY
+			: MARKDOWN_RENDER_CONCURRENCY,
 		getGeneration: () => this.mobileSearchRenderGeneration,
 	});
 
@@ -312,16 +326,32 @@ export class KnomoView extends ItemView {
 			getGeneration: () => this.renderGeneration,
 			scheduleTask: (callback, delayMs) => imageQueueWindow.setTimeout(callback, delayMs),
 			cancelTask: (taskId) => imageQueueWindow.clearTimeout(taskId),
+			scheduleStartTask: Platform.isMobile
+				? (callback) => imageQueueWindow.requestAnimationFrame(callback)
+				: undefined,
+			cancelStartTask: Platform.isMobile
+				? (taskId) => imageQueueWindow.cancelAnimationFrame(taskId)
+				: undefined,
 			watchdogMs: CARD_IMAGE_LOAD_WATCHDOG_MS,
 			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
+			rootMargin: Platform.isMobile ? "0px 0px" : undefined,
+			waitForDecode: !Platform.isMobile,
 		});
 		this.mobileSearchImageLoadQueue = new CardImageLoadQueue({
 			concurrency: MOBILE_CARD_IMAGE_LOAD_CONCURRENCY,
 			getGeneration: () => this.mobileSearchRenderGeneration,
 			scheduleTask: (callback, delayMs) => imageQueueWindow.setTimeout(callback, delayMs),
 			cancelTask: (taskId) => imageQueueWindow.clearTimeout(taskId),
+			scheduleStartTask: Platform.isMobile
+				? (callback) => imageQueueWindow.requestAnimationFrame(callback)
+				: undefined,
+			cancelStartTask: Platform.isMobile
+				? (taskId) => imageQueueWindow.cancelAnimationFrame(taskId)
+				: undefined,
 			watchdogMs: CARD_IMAGE_LOAD_WATCHDOG_MS,
 			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
+			rootMargin: "0px 0px",
+			waitForDecode: !Platform.isMobile,
 		});
 		this.memoTaskUpdateCoordinator = new MemoTaskUpdateCoordinator({
 			updateMemo: (memo, content) => this.syncOrchestrator.updateMemo(memo, content),
@@ -356,6 +386,7 @@ export class KnomoView extends ItemView {
 			syncComposerMode: () => this.syncComposerMode(),
 			updateSendButtonState: () => this.updateSendButtonState(),
 			updateCancelEditButtonState: () => this.updateCancelEditButtonState(),
+			onClosed: () => this.resumeMobileBackgroundWork(),
 		});
 		this.scope = new Scope(this.app.scope);
 		this.scope.register(["Mod"], "Enter", (event) => {
@@ -379,7 +410,13 @@ export class KnomoView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		this.contentEl.addClass("knomo-view-host");
+		if (Platform.isMobile) {
+			this.updateCurrentLayout();
+		}
 		await this.render();
+		if (Platform.isMobile) {
+			this.mobileComposerController.prepare();
+		}
 		this.mobileNavbarCompactController = new MobileNavbarCompactController(this, {
 			isActive: () => this.app.workspace.getActiveViewOfType(KnomoView) === this,
 			isComposerOpen: () => this.composerOpen,
@@ -401,6 +438,7 @@ export class KnomoView extends ItemView {
 		this.clearSearchDebounce();
 		this.clearMobileSearchDebounce();
 		this.cancelMobileMemoHydration();
+		this.clearMobileCardBatchContinuation();
 		this.mobileComposerController.dispose();
 		this.cardImageLoadQueue.dispose();
 		this.mobileSearchImageLoadQueue.dispose();
@@ -1580,6 +1618,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderCardFlow(preserveCardMemoId: string | null = null): void {
+		if (this.deferMobileCardFlowRender(preserveCardMemoId, false)) {
+			return;
+		}
 		if (this.cardFlowEl === null) {
 			return;
 		}
@@ -1593,6 +1634,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private forceRebuildCardFlow(): void {
+		if (this.deferMobileCardFlowRender(null, true)) {
+			return;
+		}
 		if (this.cardFlowEl === null) {
 			return;
 		}
@@ -1600,11 +1644,24 @@ export class KnomoView extends ItemView {
 		this.renderGeneration = generation;
 		this.clearMarkdownRenderQueue();
 		this.cardImageLoadQueue.clear();
+		this.clearMobileCardBatchContinuation();
 		this.cardFlowSentinel.remove();
 		this.cardFlowEl.empty();
 		this.renderedCardMemos.clear();
 		this.cardFlowBatcher.reset();
 		this.renderCardFlowPresentation(this.getCurrentCardFlowPresentation(), generation);
+	}
+
+	private deferMobileCardFlowRender(preserveCardMemoId: string | null, forceRebuild: boolean): boolean {
+		if (!Platform.isMobile || !this.composerOpen) {
+			return false;
+		}
+		this.mobileCardFlowRenderPending = true;
+		this.mobileCardFlowForceRebuildPending ||= forceRebuild;
+		if (preserveCardMemoId !== null) {
+			this.mobileCardFlowPreserveMemoId = preserveCardMemoId;
+		}
+		return true;
 	}
 
 	private getCurrentCardFlowPresentation(): CardFlowPresentation {
@@ -1629,6 +1686,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.cardFlowSentinel.remove();
+		this.clearMobileCardBatchContinuation();
 		for (const card of this.getDirectCardElements(this.cardFlowEl)) {
 			this.removeCardElement(card, "card-flow");
 		}
@@ -1646,6 +1704,7 @@ export class KnomoView extends ItemView {
 		if (cardFlow === null) {
 			return;
 		}
+		this.clearMobileCardBatchContinuation();
 		this.cardFlowSentinel.remove();
 		for (const child of Array.from(cardFlow.children)) {
 			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card")) {
@@ -1660,7 +1719,7 @@ export class KnomoView extends ItemView {
 		);
 		const visibleCount = Math.min(
 			presentation.memos.length,
-			Math.max(CARD_BATCH_SIZE, existingCards.size),
+			Math.max(this.getInitialCardBatchSize(), existingCards.size),
 		);
 		const visibleMemos = presentation.memos.slice(0, visibleCount);
 		const desiredIds = new Set(visibleMemos.map((memo) => memo.id));
@@ -1817,8 +1876,13 @@ export class KnomoView extends ItemView {
 	}
 
 	private startCardFeed(memos: MemoRecord[], mode: CardFlowRenderMode, generation: number): void {
-		const batch = this.cardFlowBatcher.start(memos, mode, CARD_BATCH_SIZE);
+		this.clearMobileCardBatchContinuation();
+		const batch = this.cardFlowBatcher.start(memos, mode, this.getInitialCardBatchSize());
 		this.renderCardBatch(batch, generation);
+	}
+
+	private getInitialCardBatchSize(): number {
+		return Platform.isMobile ? MOBILE_INITIAL_CARD_BATCH_SIZE : CARD_BATCH_SIZE;
 	}
 
 	private renderNextCardBatch(generation: number, batchSize = CARD_BATCH_SIZE): void {
@@ -1830,6 +1894,19 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderCardBatch(batch: CardFlowBatch | null, generation: number, hydrateWhenExhausted = false): void {
+		const maxItems = Platform.isMobile && batch?.type === "items"
+			? MOBILE_INITIAL_SYNC_CARD_COUNT
+			: undefined;
+		this.runCardBatchChunk(batch, generation, hydrateWhenExhausted, 0, maxItems);
+	}
+
+	private runCardBatchChunk(
+		batch: CardFlowBatch | null,
+		generation: number,
+		hydrateWhenExhausted: boolean,
+		startIndex: number,
+		maxItems: number | undefined,
+	): void {
 		const result = runCardFlowBatch({
 			batch,
 			generation,
@@ -1845,7 +1922,21 @@ export class KnomoView extends ItemView {
 			},
 			completeBatch: (completedBatch) => this.cardFlowBatcher.completeBatch(completedBatch),
 			cancelBatch: () => this.cardFlowBatcher.cancelBatch(),
+			startIndex,
+			maxItems,
 		});
+		if (result.type === "pending") {
+			this.scheduleMobileCardBatchContinuation(() => {
+				this.runCardBatchChunk(
+					batch,
+					generation,
+					hydrateWhenExhausted,
+					result.nextIndex,
+					MOBILE_CARD_FRAME_CHUNK_SIZE,
+				);
+			});
+			return;
+		}
 		const cardFlow = this.cardFlowEl;
 		if (result.type !== "completed" || !result.completion.hasMoreItems || cardFlow === null) {
 			if (hydrateWhenExhausted && result.type === "completed") {
@@ -1861,6 +1952,40 @@ export class KnomoView extends ItemView {
 			isCurrentGeneration: (value) => value === this.renderGeneration,
 			onIntersect: (value) => this.renderNextCardBatch(value),
 		});
+	}
+
+	private scheduleMobileCardBatchContinuation(continuation: () => void): void {
+		this.mobileCardBatchContinuation = continuation;
+		if (this.composerOpen || this.mobileCardBatchFrameId !== null) {
+			return;
+		}
+		this.mobileCardBatchFrameId = this.containerEl.win.requestAnimationFrame(() => {
+			this.mobileCardBatchFrameId = null;
+			const next = this.mobileCardBatchContinuation;
+			this.mobileCardBatchContinuation = null;
+			next?.();
+		});
+	}
+
+	private pauseMobileCardBatchContinuation(): void {
+		if (this.mobileCardBatchFrameId === null) {
+			return;
+		}
+		this.containerEl.win.cancelAnimationFrame(this.mobileCardBatchFrameId);
+		this.mobileCardBatchFrameId = null;
+	}
+
+	private resumeMobileCardBatchContinuation(): void {
+		const continuation = this.mobileCardBatchContinuation;
+		if (continuation === null) {
+			return;
+		}
+		this.scheduleMobileCardBatchContinuation(continuation);
+	}
+
+	private clearMobileCardBatchContinuation(): void {
+		this.pauseMobileCardBatchContinuation();
+		this.mobileCardBatchContinuation = null;
 	}
 
 	private renderMemoCard(memo: MemoRecord, generation: number, renderIndex: number): void {
@@ -2021,18 +2146,19 @@ export class KnomoView extends ItemView {
 		if (image.isRemote) {
 			imageEl.setAttr("fetchpriority", "low");
 		}
-		const loadItem: CardImageLoadItem = {
-			imageEl,
-			src: image.url,
-			onError: () => {
-				item.addClass("is-error");
-				button.empty();
-				this.renderMemoCardImagePlaceholder(button, hiddenCount);
-			},
+		const handleError = () => {
+			item.addClass("is-error");
+			button.empty();
+			this.renderMemoCardImagePlaceholder(button, hiddenCount);
 		};
 		if (hiddenCount > 0) {
 			this.renderMemoCardImageMore(button, hiddenCount);
 		}
+		const loadItem: CardImageLoadItem = {
+			imageEl,
+			src: image.url,
+			onError: handleError,
+		};
 		return loadItem;
 	}
 
@@ -2136,12 +2262,16 @@ export class KnomoView extends ItemView {
 			if (tag === null) {
 				return;
 			}
-			if (this.expandedTagGroups.has(tag)) {
-				this.expandedTagGroups.delete(tag);
-			} else {
+			const expanded = !this.expandedTagGroups.has(tag);
+			if (expanded) {
 				this.expandedTagGroups.add(tag);
+			} else {
+				this.expandedTagGroups.delete(tag);
 			}
-			this.renderTags();
+			const node = route.element.closest(".knomo-tag-node");
+			if (node?.instanceOf(HTMLElement)) {
+				syncSidebarTagGroupExpanded(node, route.element, expanded);
+			}
 			return;
 		}
 
@@ -2799,7 +2929,45 @@ export class KnomoView extends ItemView {
 	private openMobileComposer(): void {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
+		this.pauseMobileBackgroundWork();
 		this.mobileComposerController.open();
+	}
+
+	private pauseMobileBackgroundWork(): void {
+		if (!Platform.isMobile) {
+			return;
+		}
+		this.clearScheduledMobileMemoHydration();
+		this.pauseMobileCardBatchContinuation();
+		this.markdownRenderQueue.setPaused(true);
+		this.mobileSearchMarkdownRenderQueue.setPaused(true);
+		this.cardImageLoadQueue.setPaused(true);
+		this.mobileSearchImageLoadQueue.setPaused(true);
+	}
+
+	private resumeMobileBackgroundWork(): void {
+		if (!Platform.isMobile) {
+			return;
+		}
+		const shouldRenderCardFlow = this.mobileCardFlowRenderPending;
+		const shouldForceRebuild = this.mobileCardFlowForceRebuildPending;
+		const preserveCardMemoId = this.mobileCardFlowPreserveMemoId;
+		this.mobileCardFlowRenderPending = false;
+		this.mobileCardFlowForceRebuildPending = false;
+		this.mobileCardFlowPreserveMemoId = null;
+		if (shouldRenderCardFlow) {
+			if (shouldForceRebuild) {
+				this.forceRebuildCardFlow();
+			} else {
+				this.renderCardFlow(preserveCardMemoId);
+			}
+		}
+		this.resumeMobileCardBatchContinuation();
+		this.markdownRenderQueue.setPaused(false);
+		this.mobileSearchMarkdownRenderQueue.setPaused(false);
+		this.cardImageLoadQueue.setPaused(false);
+		this.mobileSearchImageLoadQueue.setPaused(false);
+		this.scheduleMobileMemoHydration();
 	}
 
 	private closeComposerWithConfirm(): void {
@@ -3997,6 +4165,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private resetVisibleMemos(): void {
+		this.clearMobileCardBatchContinuation();
 		this.cardFlowBatcher.reset();
 	}
 
@@ -4028,7 +4197,7 @@ export class KnomoView extends ItemView {
 		return `${presentation.mode}:${getVisibleCardFlowMemoStateKey(
 			presentation.memos,
 			renderedCardCount,
-			CARD_BATCH_SIZE,
+			this.getInitialCardBatchSize(),
 		)}`;
 	}
 

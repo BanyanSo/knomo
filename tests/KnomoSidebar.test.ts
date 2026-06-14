@@ -12,6 +12,7 @@ test("renders sidebar navigation, trash, stats, tags, and resizer structure", as
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		syncSidebarNavButtons,
+		syncSidebarTagGroupExpanded,
 	} = await import("../src/ui/KnomoSidebar");
 	const sidebar = new TestElement("aside");
 	const elements = renderKnomoSidebar(sidebar.asHtml(), {
@@ -58,9 +59,27 @@ test("renders sidebar navigation, trash, stats, tags, and resizer structure", as
 		expandedTagGroups: new Set<string>(),
 		emptyText: "No tags",
 	});
-	assert.equal(elements.allTagsEl.find("[data-tag-toggle='project']")?.getAttr("aria-expanded"), "false");
+	const projectNode = elements.allTagsEl.find(".knomo-tag-node");
+	const projectToggle = elements.allTagsEl.find("[data-tag-toggle='project']");
+	const projectChild = elements.allTagsEl.find("[data-tag-key='project/knomo']");
+	assert.notEqual(projectNode, null);
+	assert.notEqual(projectToggle, null);
+	assert.equal(projectNode?.hasClass("is-collapsed"), true);
+	assert.equal(projectToggle?.getAttr("aria-expanded"), "false");
 	assert.equal(elements.allTagsEl.find("[data-tag-key='project/knomo']")?.hasClass("is-active"), true);
 	assert.equal(elements.allTagsEl.find("[data-tag-key='project/knomo']")?.getAttr("aria-pressed"), "true");
+
+	const collapsedLabel = projectToggle?.getAttr("aria-label");
+	syncSidebarTagGroupExpanded(projectNode!, projectToggle!, true);
+	assert.equal(projectNode?.hasClass("is-collapsed"), false);
+	assert.equal(projectToggle?.getAttr("aria-expanded"), "true");
+	assert.notEqual(projectToggle?.getAttr("aria-label"), collapsedLabel);
+	assert.equal(elements.allTagsEl.find("[data-tag-key='project/knomo']"), projectChild);
+
+	syncSidebarTagGroupExpanded(projectNode!, projectToggle!, false);
+	assert.equal(projectNode?.hasClass("is-collapsed"), true);
+	assert.equal(projectToggle?.getAttr("aria-expanded"), "false");
+	assert.equal(projectToggle?.getAttr("aria-label"), collapsedLabel);
 
 	syncSidebarNavButtons(sidebar.asHtml(), "review");
 	assert.equal(sidebar.find("[data-nav='review']")?.hasClass("is-active"), true);

@@ -26,6 +26,7 @@ export type CardFlowBatchRunResult =
 	| { type: "skipped" }
 	| { type: "empty" }
 	| { type: "cancelled" }
+	| { type: "pending"; nextIndex: number }
 	| { type: "completed"; completion: CardFlowBatchCompletion };
 
 export interface RunCardFlowBatchOptions {
@@ -37,6 +38,8 @@ export interface RunCardFlowBatchOptions {
 	renderItem: (item: CardFlowBatchItem) => void;
 	completeBatch: (batch: CardFlowBatch) => CardFlowBatchCompletion;
 	cancelBatch: () => void;
+	startIndex?: number;
+	maxItems?: number;
 }
 
 export function getVisibleCardFlowMemoStateKey(
@@ -64,13 +67,21 @@ export function runCardFlowBatch(options: RunCardFlowBatchOptions): CardFlowBatc
 		return { type: "cancelled" };
 	}
 
-	options.removeSentinel();
-	for (const item of batch.items) {
+	const startIndex = Math.max(0, options.startIndex ?? 0);
+	const maxItems = Math.max(1, options.maxItems ?? batch.items.length);
+	const endIndex = Math.min(startIndex + maxItems, batch.items.length);
+	if (startIndex === 0) {
+		options.removeSentinel();
+	}
+	for (let index = startIndex; index < endIndex; index += 1) {
 		if (!options.isCurrentGeneration(options.generation)) {
 			options.cancelBatch();
 			return { type: "cancelled" };
 		}
-		options.renderItem(item);
+		options.renderItem(batch.items[index]);
+	}
+	if (endIndex < batch.items.length) {
+		return { type: "pending", nextIndex: endIndex };
 	}
 	if (!options.isCurrentGeneration(options.generation)) {
 		options.cancelBatch();

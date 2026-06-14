@@ -14,6 +14,7 @@ export class MarkdownRenderQueue {
 	private highPriorityQueue: MarkdownRenderTask[] = [];
 	private normalPriorityQueue: MarkdownRenderTask[] = [];
 	private activeCount = 0;
+	private paused = false;
 
 	constructor(private readonly options: MarkdownRenderQueueOptions) {}
 
@@ -35,7 +36,20 @@ export class MarkdownRenderQueue {
 		this.normalPriorityQueue = [];
 	}
 
+	setPaused(paused: boolean): void {
+		if (this.paused === paused) {
+			return;
+		}
+		this.paused = paused;
+		if (!paused) {
+			this.pump();
+		}
+	}
+
 	private pump(): void {
+		if (this.paused) {
+			return;
+		}
 		while (this.activeCount < this.options.concurrency) {
 			const task = this.highPriorityQueue.shift() ?? this.normalPriorityQueue.shift();
 			if (task === undefined) {

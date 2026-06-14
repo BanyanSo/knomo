@@ -15,9 +15,12 @@ interface CardImageLoadQueueOptions {
 	getGeneration: () => number;
 	scheduleTask: (callback: () => void, delayMs: number) => number;
 	cancelTask: (taskId: number) => void;
+	scheduleStartTask?: (callback: () => void) => number;
+	cancelStartTask?: (taskId: number) => void;
 	watchdogMs: number;
 	Observer?: typeof IntersectionObserver;
 	rootMargin?: string;
+	waitForDecode?: boolean;
 }
 
 interface ActiveCardImage {
@@ -41,6 +44,7 @@ export class CardImageLoadQueue {
 	private readonly slotEntries = new Set<CardImageLoadEntry>();
 	private readonly runningEntries = new Set<CardImageLoadEntry>();
 	private readonly loadedSources = new Set<string>();
+	private paused = false;
 
 	constructor(private readonly options: CardImageLoadQueueOptions) {
 		const Observer = options.Observer;
@@ -127,6 +131,16 @@ export class CardImageLoadQueue {
 		this.observer = null;
 	}
 
+	setPaused(paused: boolean): void {
+		if (this.paused === paused) {
+			return;
+		}
+		this.paused = paused;
+		if (!paused) {
+			this.pump();
+		}
+	}
+
 	private handleIntersections(entries: IntersectionObserverEntry[]): void {
 		for (const observerEntry of entries) {
 			if (!observerEntry.isIntersecting) {
@@ -144,6 +158,9 @@ export class CardImageLoadQueue {
 	}
 
 	private pump(): void {
+		if (this.paused) {
+			return;
+		}
 		while (this.slotEntries.size < this.options.concurrency) {
 			const entry = this.pendingEntries.shift();
 			if (entry === undefined) {
@@ -154,15 +171,23 @@ export class CardImageLoadQueue {
 			}
 			this.slotEntries.add(entry);
 			this.runningEntries.add(entry);
-			entry.startTaskId = this.options.scheduleTask(() => {
+			const start = () => {
 				entry.startTaskId = null;
 				this.startEntry(entry);
-			}, 0);
+			};
+			entry.startTaskId = this.options.scheduleStartTask?.(start)
+				?? this.options.scheduleTask(start, 0);
 		}
 	}
 
 	private startEntry(entry: CardImageLoadEntry): void {
 		if (!this.runningEntries.has(entry)) {
+			return;
+		}
+		if (this.paused) {
+			this.runningEntries.delete(entry);
+			this.slotEntries.delete(entry);
+			this.pendingEntries.unshift(entry);
 			return;
 		}
 		if (!this.isCurrentEntry(entry)) {
@@ -207,6 +232,11 @@ export class CardImageLoadQueue {
 				: Promise.resolve();
 		} catch {
 			decodePromise = Promise.resolve();
+		}
+		if (this.options.waitForDecode === false) {
+			this.completeImage(entry, activeImage, true);
+			void decodePromise.catch(() => undefined);
+			return;
 		}
 		void decodePromise
 			.catch(() => undefined)
@@ -263,7 +293,8 @@ export class CardImageLoadQueue {
 
 	private cancelEntryTasks(entry: CardImageLoadEntry): void {
 		if (entry.startTaskId !== null) {
-			this.options.cancelTask(entry.startTaskId);
+			const cancelStartTask = this.options.cancelStartTask ?? this.options.cancelTask;
+			cancelStartTask(entry.startTaskId);
 			entry.startTaskId = null;
 		}
 		if (entry.watchdogTaskId !== null) {

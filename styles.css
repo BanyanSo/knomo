@@ -2743,7 +2743,6 @@ body .knomo-mobile-create-fab.is-hidden {
 /* 移动端 composer body layer：最终层级覆盖 */
 .knomo-mobile-composer-layer {
 	--knomo-mobile-composer-bottom-offset: 0px;
-	--knomo-mobile-composer-fill-height: 0px;
 	position: fixed;
 	inset: 0;
 	z-index: 10000;
@@ -2756,7 +2755,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	position: absolute;
 	inset: 0;
 	z-index: 1;
-	pointer-events: auto;
+	pointer-events: none;
 	background: rgba(0, 0, 0, 0.82);
 	opacity: 0;
 	transition: opacity var(--knomo-transition-backdrop);
@@ -2778,7 +2777,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	z-index: 3;
 	max-height: var(--knomo-composer-content-max-height, calc(100dvh - 52px));
 	overflow: visible;
-	pointer-events: auto;
+	pointer-events: none;
 	background: var(--knomo-composer-surface);
 	border-radius: 18px 18px 0 0;
 	transform: translateY(100%);
@@ -2788,13 +2787,18 @@ body .knomo-mobile-create-fab.is-hidden {
 		max-height var(--knomo-transition-panel-size);
 }
 
+.knomo-mobile-composer-layer.is-active .knomo-mobile-composer-backdrop,
+.knomo-mobile-composer-layer.is-active .knomo-mobile-composer-content {
+	pointer-events: auto;
+}
+
 .knomo-mobile-composer-layer .knomo-mobile-composer-content::after {
 	content: "";
 	position: absolute;
 	left: 0;
 	right: 0;
 	top: 100%;
-	height: var(--knomo-mobile-composer-fill-height, 0px);
+	height: max(0px, var(--knomo-mobile-composer-bottom-offset, 0px));
 	background: var(--knomo-composer-surface);
 	pointer-events: none;
 	transition: height var(--knomo-transition-panel-offset);

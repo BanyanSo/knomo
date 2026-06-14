@@ -241,6 +241,54 @@ test("renders and completes current card flow batches", () => {
 	assert.deepEqual(rendered, ["trash:memo-0:0", "trash:memo-1:1"]);
 });
 
+test("renders a card flow batch in bounded chunks before completing it", () => {
+	const batch = makeItemsBatch(makeMemos(15));
+	const rendered: string[] = [];
+	let completeCount = 0;
+	const options = {
+		batch,
+		generation: 3,
+		hasRenderTarget: true,
+		isCurrentGeneration: (generation: number) => generation === 3,
+		removeSentinel: () => undefined,
+		renderItem: (item: (typeof batch.items)[number]) => rendered.push(item.memo.id),
+		completeBatch: () => {
+			completeCount += 1;
+			return { hasMoreItems: false, remainingCount: 0 };
+		},
+		cancelBatch: () => undefined,
+	};
+
+	const firstResult = runCardFlowBatch({
+		...options,
+		maxItems: 8,
+	});
+	assert.deepEqual(firstResult, { type: "pending", nextIndex: 8 });
+	assert.equal(rendered.length, 8);
+	assert.equal(completeCount, 0);
+
+	const secondResult = runCardFlowBatch({
+		...options,
+		startIndex: 8,
+		maxItems: 6,
+	});
+	assert.deepEqual(secondResult, { type: "pending", nextIndex: 14 });
+	assert.equal(rendered.length, 14);
+	assert.equal(completeCount, 0);
+
+	const finalResult = runCardFlowBatch({
+		...options,
+		startIndex: 14,
+		maxItems: 6,
+	});
+	assert.deepEqual(finalResult, {
+		type: "completed",
+		completion: { hasMoreItems: false, remainingCount: 0 },
+	});
+	assert.equal(rendered.length, 15);
+	assert.equal(completeCount, 1);
+});
+
 test("cancels stale card flow batches before completion", () => {
 	const batch = makeItemsBatch(makeMemos(2));
 	const rendered: string[] = [];

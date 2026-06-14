@@ -12,6 +12,9 @@ export interface MobileComposerLayerPlacement {
 export function createMobileComposerLayer(doc: Document): MobileComposerLayerElements {
 	const layerEl = doc.body.createDiv({
 		cls: "knomo-plugin knomo-mobile-composer-layer is-layout-mobile",
+		attr: {
+			"aria-hidden": "true",
+		},
 	});
 	const backdropEl = layerEl.createDiv({
 		cls: "knomo-mobile-composer-backdrop",

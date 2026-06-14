@@ -131,6 +131,12 @@ export function renderSidebarTags(container: HTMLElement | null, tags: TagSummar
 	}
 }
 
+export function syncSidebarTagGroupExpanded(node: HTMLElement, toggle: HTMLElement, expanded: boolean): void {
+	node.toggleClass("is-collapsed", !expanded);
+	toggle.setAttr("aria-expanded", expanded ? "true" : "false");
+	toggle.setAttr("aria-label", expanded ? t("tags.collapseGroup") : t("tags.expandGroup"));
+}
+
 export function syncSidebarNavButtons(rootEl: HTMLElement | null, activeNav: SidebarNav): void {
 	rootEl?.findAll("[data-nav]").forEach((element) => {
 		const active = element.getAttr("data-nav") === activeNav;

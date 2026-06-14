@@ -177,17 +177,201 @@ test("reuses a decoded image source without scheduling another load", async () =
 	assert.equal(scheduler.size, 0);
 });
 
+test("can release the mobile card slot on load without waiting for decode", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const firstCard = new FakeCard();
+	const secondCard = new FakeCard();
+	const firstImage = new FakeImage();
+	const secondImage = new FakeImage();
+	const queue = createQueue(scheduler, () => 1, false);
+
+	queue.observe({
+		targetEl: firstCard.asElement(),
+		images: [createLoadItem(firstImage, "app://first.png")],
+		generation: 1,
+	});
+	queue.observe({
+		targetEl: secondCard.asElement(),
+		images: [createLoadItem(secondImage, "app://second.png")],
+		generation: 1,
+	});
+	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard]);
+	scheduler.flushDelay(0);
+
+	firstImage.dispatch("load");
+
+	assert.equal(firstImage.decodeCalls, 1);
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(secondImage.getAttr("src"), "app://second.png");
+});
+
+test("can start mobile image work on the next animation frame", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const frameScheduler = new FakeScheduler();
+	const card = new FakeCard();
+	const image = new FakeImage();
+	const queue = createQueue(scheduler, () => 1, false, 1, frameScheduler);
+
+	queue.observe({
+		targetEl: card.asElement(),
+		images: [createLoadItem(image, "app://frame.png")],
+		generation: 1,
+	});
+	FakeIntersectionObserver.instances[0].trigger([card]);
+
+	assert.deepEqual(scheduler.delays, []);
+	assert.deepEqual(frameScheduler.delays, [0]);
+	frameScheduler.flushDelay(0);
+	assert.equal(image.getAttr("src"), "app://frame.png");
+	assert.deepEqual(scheduler.delays, [10_000]);
+});
+
+test("limits mobile local images to two active card loads", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const firstCard = new FakeCard();
+	const secondCard = new FakeCard();
+	const thirdCard = new FakeCard();
+	const firstImage = new FakeImage();
+	const secondImage = new FakeImage();
+	const thirdImage = new FakeImage();
+	const queue = createQueue(scheduler, () => 1, false, 2);
+
+	queue.observe({
+		targetEl: firstCard.asElement(),
+		images: [createLoadItem(firstImage, "app://first.png")],
+		generation: 1,
+	});
+	queue.observe({
+		targetEl: secondCard.asElement(),
+		images: [createLoadItem(secondImage, "app://second.png")],
+		generation: 1,
+	});
+	queue.observe({
+		targetEl: thirdCard.asElement(),
+		images: [createLoadItem(thirdImage, "app://third.png")],
+		generation: 1,
+	});
+	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard, thirdCard]);
+
+	scheduler.flushDelay(0);
+	assert.equal(firstImage.getAttr("src"), "app://first.png");
+	scheduler.flushDelay(0);
+	assert.equal(secondImage.getAttr("src"), "app://second.png");
+	assert.equal(thirdImage.getAttr("src"), null);
+
+	firstImage.dispatch("load");
+
+	assert.equal(firstImage.decodeCalls, 1);
+	assert.deepEqual([...scheduler.delays].sort((left, right) => left - right), [0, 10_000]);
+	scheduler.flushDelay(0);
+	assert.equal(thirdImage.getAttr("src"), "app://third.png");
+});
+
+test("can pause the next card after an active image load completes", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const firstCard = new FakeCard();
+	const secondCard = new FakeCard();
+	const firstImage = new FakeImage();
+	const secondImage = new FakeImage();
+	const queue = createQueue(scheduler, () => 1, false);
+
+	queue.observe({
+		targetEl: firstCard.asElement(),
+		images: [createLoadItem(firstImage, "app://first.png")],
+		generation: 1,
+	});
+	queue.observe({
+		targetEl: secondCard.asElement(),
+		images: [createLoadItem(secondImage, "app://second.png")],
+		generation: 1,
+	});
+	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard]);
+	scheduler.flushDelay(0);
+	firstImage.dispatch("load");
+
+	queue.setPaused(true);
+	scheduler.flushDelay(0);
+	assert.equal(secondImage.getAttr("src"), null);
+
+	queue.setPaused(false);
+	scheduler.flushDelay(0);
+	assert.equal(secondImage.getAttr("src"), "app://second.png");
+});
+
+test("pauses pending card image work until resumed", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const card = new FakeCard();
+	const image = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.setPaused(true);
+	queue.observe({
+		targetEl: card.asElement(),
+		images: [createLoadItem(image, "app://paused.png")],
+		generation: 1,
+	});
+	FakeIntersectionObserver.instances[0].trigger([card]);
+
+	assert.deepEqual(scheduler.delays, []);
+	queue.setPaused(false);
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(image.getAttr("src"), "app://paused.png");
+});
+
+test("does not start an already scheduled image task while paused", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const card = new FakeCard();
+	const image = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.observe({
+		targetEl: card.asElement(),
+		images: [createLoadItem(image, "app://scheduled.png")],
+		generation: 1,
+	});
+	FakeIntersectionObserver.instances[0].trigger([card]);
+	assert.deepEqual(scheduler.delays, [0]);
+
+	queue.setPaused(true);
+	scheduler.flushDelay(0);
+	assert.equal(image.getAttr("src"), null);
+	assert.deepEqual(scheduler.delays, []);
+
+	queue.setPaused(false);
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(image.getAttr("src"), "app://scheduled.png");
+});
+
 function createQueue(
 	scheduler: FakeScheduler,
 	getGeneration: () => number = () => 1,
+	waitForDecode = true,
+	concurrency = 1,
+	startScheduler?: FakeScheduler,
 ): CardImageLoadQueue {
 	return new CardImageLoadQueue({
-		concurrency: 1,
+		concurrency,
 		getGeneration,
 		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
 		cancelTask: (taskId) => scheduler.cancel(taskId),
+		scheduleStartTask: startScheduler === undefined
+			? undefined
+			: (callback) => startScheduler.schedule(callback, 0),
+		cancelStartTask: startScheduler === undefined
+			? undefined
+			: (taskId) => startScheduler.cancel(taskId),
 		watchdogMs: 10_000,
 		Observer: FakeIntersectionObserver as unknown as typeof IntersectionObserver,
+		waitForDecode,
 	});
 }
 

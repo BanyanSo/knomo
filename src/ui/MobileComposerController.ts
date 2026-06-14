@@ -16,14 +16,11 @@ import {
 
 const MOBILE_COMPOSER_TOP_GUARD = 52;
 const MOBILE_COMPOSER_TOOLBAR_KEYBOARD_GAP = 4;
-const MOBILE_COMPOSER_REVEAL_FALLBACK_DELAY = 70;
 const MOBILE_COMPOSER_CLOSE_FALLBACK_DELAY = 420;
 const MOBILE_COMPOSER_EXIT_TRANSITION_DELAY = 160;
-const MOBILE_KEYBOARD_DOCK_TRACKING_DURATION = 780;
-const MOBILE_KEYBOARD_DOCK_STABLE_FRAME_LIMIT = 8;
 const MOBILE_KEYBOARD_DOCK_STABLE_DELTA = 1;
-const MOBILE_KEYBOARD_DOCK_MAX_FRAMES = 90;
-const MOBILE_KEYBOARD_CLOSE_STABLE_FRAME_LIMIT = 3;
+const MOBILE_KEYBOARD_DOCK_SETTLE_DELAY = 120;
+const MOBILE_KEYBOARD_VIEWPORT_FALLBACK_DELAY = 80;
 
 interface VirtualKeyboardLike extends EventTarget {
 	boundingRect?: DOMRectReadOnly;
@@ -67,6 +64,7 @@ export interface MobileComposerControllerOptions {
 	syncComposerMode: () => void;
 	updateSendButtonState: () => void;
 	updateCancelEditButtonState: () => void;
+	onClosed?: () => void;
 }
 
 export class MobileComposerController {
@@ -79,15 +77,12 @@ export class MobileComposerController {
 	private mobileCapacitorKeyboardHideHandler: (() => void) | null = null;
 	private mobileCapacitorKeyboardHeight: number | null = null;
 	private mobileComposerFocusFrameId: number | null = null;
-	private mobileComposerFocusTimerId: number | null = null;
+	private mobileComposerOpenSyncFrameId: number | null = null;
 	private mobileComposerResizeFrameId: number | null = null;
 	private mobileKeyboardDockFrameId: number | null = null;
-	private mobileKeyboardDockStartedAt: number | null = null;
-	private mobileKeyboardDockStableFrames = 0;
-	private mobileKeyboardDockFrames = 0;
-	private mobileKeyboardDockLastOffset: number | null = null;
+	private mobileKeyboardDockStopTimerId: number | null = null;
+	private mobileKeyboardViewportFallbackTimerId: number | null = null;
 	private mobileToolbarAnchorFrameId: number | null = null;
-	private mobileKeyboardFocusStartedAt: number | null = null;
 	private mobileComposerInputFocused = false;
 	private mobileWindowResizeHandler: (() => void) | null = null;
 	private mobileOrientationChangeHandler: (() => void) | null = null;
@@ -110,6 +105,7 @@ export class MobileComposerController {
 	private mobileComposerToolbarAnchorBottom: number | null = null;
 	private mobileComposerToolbarAnchorSource: MobileComposerToolbarAnchorSource = "unknown";
 	private mobileComposerToolbarWrapperBottom: number | null = null;
+	private mobileComposerPrepared = false;
 
 	constructor(private readonly options: MobileComposerControllerOptions) {}
 
@@ -132,6 +128,19 @@ export class MobileComposerController {
 		return this.updateMeasurements();
 	}
 
+	prepare(): void {
+		if (this.options.getLayout() !== "mobile") {
+			return;
+		}
+		this.mobileComposerPrepared = true;
+		this.ensureLayer();
+		this.clearLayerState();
+		this.initializeBaseMetrics();
+		this.updateMeasurements();
+		this.options.resizeInput();
+		this.updateToolbarAnchorInset();
+	}
+
 	prepareDesktopOpen(): void {
 		this.clearCloseTimer();
 		this.mobileComposerPhase = "closed";
@@ -140,14 +149,15 @@ export class MobileComposerController {
 	resetInactiveState(): void {
 		this.clearFocus();
 		this.mobileComposerInputFocused = false;
-		this.mobileKeyboardFocusStartedAt = null;
 		this.stopViewportTracking();
 	}
 
 	dispose(): void {
 		this.clearFocus();
+		this.clearOpenSyncFrame();
 		this.clearResizeFrame();
 		this.stopKeyboardDockTracking();
+		this.clearKeyboardViewportFallback();
 		this.clearToolbarAnchorFrame();
 		this.clearCloseTimer();
 		this.stopViewportTracking();
@@ -176,6 +186,10 @@ export class MobileComposerController {
 	}
 
 	syncLayer(): void {
+		if (this.mobileComposerPrepared && this.options.getLayout() === "mobile") {
+			this.ensureLayer();
+			return;
+		}
 		const shouldShow = this.options.getLayout() === "mobile" && this.options.isComposerOpen();
 		if (shouldShow) {
 			if (this.mobileComposerPhase === "closing") {
@@ -196,11 +210,13 @@ export class MobileComposerController {
 		}
 		this.clearCloseTimer();
 		this.clearFocus();
+		this.clearOpenSyncFrame();
 		this.options.setComposerOpen(true);
 		this.mobileComposerPhase = "opening";
 		this.mobileComposerInputFocused = false;
-		this.mobileKeyboardFocusStartedAt = null;
 		this.ensureLayer();
+		this.mobileComposerLayerEl?.toggleClass("is-active", true);
+		this.mobileComposerLayerEl?.setAttr("aria-hidden", "false");
 		this.mobileComposerRevealed = false;
 		this.mobileComposerLayerEl?.toggleClass("is-open", false);
 		this.mobileComposerLayerEl?.toggleClass("is-closing", false);
@@ -210,51 +226,29 @@ export class MobileComposerController {
 		this.mobileComposerLayerBottom = null;
 		this.mobileKeyboardHeight = 0;
 		this.mobileCapacitorKeyboardHeight = null;
-		this.mobileComposerToolbarAnchorInset = null;
-		this.mobileComposerToolbarAnchorBottom = null;
-		this.mobileComposerToolbarAnchorSource = "unknown";
-		this.mobileComposerToolbarWrapperBottom = null;
-		this.setKeyboardMetrics(0, win.innerHeight, 0);
+		this.setKeyboardMetrics(0);
 		this.setComposerBottomOffset(0);
-		this.updateMeasurements();
-		this.updateToolbarAnchorInset();
-		this.scheduleToolbarAnchorRefresh();
-		this.options.syncRootState();
+		this.revealMobileComposer();
+		this.mobileComposerPhase = "focusing";
+		this.mobileComposerInputFocused = true;
 		this.startViewportTracking();
-		this.startKeyboardDockTracking();
-		this.mobileComposerFocusTimerId = win.setTimeout(() => {
-			this.mobileComposerFocusTimerId = null;
-			this.updateKeyboardMetrics();
-			if (this.mobileComposerPhase === "opening" || this.mobileComposerPhase === "focusing") {
-				this.revealMobileComposer();
-			}
-		}, MOBILE_COMPOSER_REVEAL_FALLBACK_DELAY);
-		this.mobileComposerFocusFrameId = win.requestAnimationFrame(() => {
-			this.mobileComposerFocusFrameId = null;
-			if (this.mobileComposerPhase !== "opening") {
-				return;
-			}
-			this.mobileComposerPhase = "focusing";
-			this.mobileComposerInputFocused = true;
-			this.mobileKeyboardFocusStartedAt = Date.now();
-			this.options.focusInputNow(false, false);
-			this.startKeyboardDockTracking();
-			this.scheduleToolbarAnchorRefresh();
-			this.updateKeyboardMetrics();
-		});
+		this.options.focusInputNow(false, false);
+		this.queueViewportUpdate();
+		this.scheduleKeyboardViewportFallback();
+		this.scheduleOpenRootSync();
 	}
 
 	closeKeepingDraft(): void {
 		this.mobileComposerOpenScrollTop = null;
 		this.clearFocus();
+		this.clearOpenSyncFrame();
 		this.clearCloseTimer();
 		this.mobileComposerPhase = "closing";
+		this.clearKeyboardViewportFallback();
 		this.mobileComposerLayerEl?.toggleClass("is-closing", true);
 		this.options.getInputEl()?.blur();
 		this.mobileComposerInputFocused = false;
-		this.mobileKeyboardFocusStartedAt = null;
-		this.updateToolbarAnchorInset();
-		this.startKeyboardDockTracking();
+		this.queueViewportUpdate();
 		this.mobileComposerCloseTimer = this.options.getWindow().setTimeout(() => {
 			this.mobileComposerCloseTimer = null;
 			this.completeClose();
@@ -283,11 +277,7 @@ export class MobileComposerController {
 			return true;
 		}
 		this.mobileComposerInputFocused = true;
-		this.mobileKeyboardFocusStartedAt = Date.now();
-		this.startKeyboardDockTracking();
-		if (this.mobileComposerPhase === "open") {
-			this.queueViewportUpdate();
-		}
+		this.queueViewportUpdate();
 		return this.mobileComposerPhase !== "opening" && this.mobileComposerPhase !== "focusing";
 	}
 
@@ -296,12 +286,10 @@ export class MobileComposerController {
 			return true;
 		}
 		this.mobileComposerInputFocused = false;
-		this.mobileKeyboardFocusStartedAt = null;
 		if (this.mobileComposerPhase === "closing") {
 			return false;
 		}
-		this.startKeyboardDockTracking();
-		this.updateKeyboardMetrics();
+		this.queueViewportUpdate();
 		return true;
 	}
 
@@ -328,8 +316,6 @@ export class MobileComposerController {
 		}
 		const viewport = win.visualViewport;
 		if (viewport === undefined || viewport === null) {
-			this.updateKeyboardMetrics();
-			this.startKeyboardDockTracking();
 			return;
 		}
 		if (this.mobileVisualViewportHandler === null) {
@@ -338,8 +324,6 @@ export class MobileComposerController {
 			viewport.addEventListener("resize", this.mobileVisualViewportHandler);
 			viewport.addEventListener("scroll", this.mobileVisualViewportHandler);
 		}
-		this.updateKeyboardMetrics();
-		this.startKeyboardDockTracking();
 	}
 
 	stopViewportTracking(clearMetrics = true): void {
@@ -366,8 +350,8 @@ export class MobileComposerController {
 		this.mobileWindowResizeHandler = null;
 		this.mobileOrientationChangeHandler = null;
 		this.stopKeyboardDockTracking();
+		this.clearKeyboardViewportFallback();
 		this.clearToolbarAnchorFrame();
-		this.mobileKeyboardFocusStartedAt = null;
 		if (clearMetrics) {
 			this.clearKeyboardMetrics();
 		}
@@ -391,10 +375,14 @@ export class MobileComposerController {
 			win.cancelAnimationFrame(this.mobileComposerFocusFrameId);
 			this.mobileComposerFocusFrameId = null;
 		}
-		if (this.mobileComposerFocusTimerId !== null) {
-			win.clearTimeout(this.mobileComposerFocusTimerId);
-			this.mobileComposerFocusTimerId = null;
+	}
+
+	private clearOpenSyncFrame(): void {
+		if (this.mobileComposerOpenSyncFrameId === null) {
+			return;
 		}
+		this.options.getWindow().cancelAnimationFrame(this.mobileComposerOpenSyncFrameId);
+		this.mobileComposerOpenSyncFrameId = null;
 	}
 
 	clearResizeFrame(): void {
@@ -415,6 +403,43 @@ export class MobileComposerController {
 
 	queueViewportUpdate(): void {
 		this.startKeyboardDockTracking();
+	}
+
+	private initializeBaseMetrics(): void {
+		this.setKeyboardMetrics(0);
+		this.setComposerBottomOffset(0);
+	}
+
+	private scheduleOpenRootSync(): void {
+		this.clearOpenSyncFrame();
+		const win = this.options.getWindow();
+		this.mobileComposerOpenSyncFrameId = win.requestAnimationFrame(() => {
+			this.mobileComposerOpenSyncFrameId = win.requestAnimationFrame(() => {
+				this.mobileComposerOpenSyncFrameId = null;
+				if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
+					return;
+				}
+				this.options.syncRootState();
+			});
+		});
+	}
+
+	private scheduleKeyboardViewportFallback(): void {
+		this.clearKeyboardViewportFallback();
+		this.mobileKeyboardViewportFallbackTimerId = this.options.getWindow().setTimeout(() => {
+			this.mobileKeyboardViewportFallbackTimerId = null;
+			if (this.options.getLayout() === "mobile" && this.options.isComposerOpen()) {
+				this.queueViewportUpdate();
+			}
+		}, MOBILE_KEYBOARD_VIEWPORT_FALLBACK_DELAY);
+	}
+
+	private clearKeyboardViewportFallback(): void {
+		if (this.mobileKeyboardViewportFallbackTimerId === null) {
+			return;
+		}
+		this.options.getWindow().clearTimeout(this.mobileKeyboardViewportFallbackTimerId);
+		this.mobileKeyboardViewportFallbackTimerId = null;
 	}
 
 	updateMeasurements(): number {
@@ -489,6 +514,8 @@ export class MobileComposerController {
 
 	private clearLayerState(): void {
 		clearMobileComposerLayerState(this.mobileComposerLayerEl);
+		this.mobileComposerLayerEl?.toggleClass("is-active", false);
+		this.mobileComposerLayerEl?.setAttr("aria-hidden", "true");
 		this.mobileComposerRevealed = false;
 	}
 
@@ -534,20 +561,23 @@ export class MobileComposerController {
 		this.mobileComposerLayerEl?.detach();
 		this.mobileComposerLayerEl = null;
 		this.mobileComposerContentEl = null;
+		this.mobileComposerPrepared = false;
 	}
 
 	private startKeyboardDockTracking(): void {
 		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
 			return;
 		}
-		if (this.mobileKeyboardDockStartedAt === null) {
-			this.mobileKeyboardDockStartedAt = Date.now();
-			this.mobileKeyboardDockStableFrames = 0;
-			this.mobileKeyboardDockFrames = 0;
-			this.mobileKeyboardDockLastOffset = null;
+		if (this.mobileKeyboardDockStopTimerId !== null) {
+			this.options.getWindow().clearTimeout(this.mobileKeyboardDockStopTimerId);
+			this.mobileKeyboardDockStopTimerId = null;
 		}
 		this.mobileComposerLayerEl?.toggleClass("is-keyboard-tracking", true);
 		this.scheduleKeyboardDockFrame();
+		this.mobileKeyboardDockStopTimerId = this.options.getWindow().setTimeout(() => {
+			this.mobileKeyboardDockStopTimerId = null;
+			this.stopKeyboardDockTracking();
+		}, MOBILE_KEYBOARD_DOCK_SETTLE_DELAY);
 	}
 
 	private scheduleKeyboardDockFrame(): void {
@@ -556,31 +586,11 @@ export class MobileComposerController {
 		}
 		this.mobileKeyboardDockFrameId = this.options.getWindow().requestAnimationFrame(() => {
 			this.mobileKeyboardDockFrameId = null;
-			this.mobileKeyboardDockFrames += 1;
 			this.updateKeyboardMetrics();
-			if (this.shouldContinueKeyboardDockTracking()) {
-				this.scheduleKeyboardDockFrame();
-			} else {
-				this.stopKeyboardDockTracking();
+			if (this.mobileComposerPhase === "opening" || this.mobileComposerPhase === "focusing") {
+				this.mobileComposerPhase = "open";
 			}
 		});
-	}
-
-	private shouldContinueKeyboardDockTracking(): boolean {
-		if (this.mobileKeyboardDockStartedAt === null
-			|| this.options.getLayout() !== "mobile"
-			|| !this.options.isComposerOpen()) {
-			return false;
-		}
-		if (this.mobileComposerPhase === "closing") {
-			return true;
-		}
-		if (this.mobileKeyboardDockFrames >= MOBILE_KEYBOARD_DOCK_MAX_FRAMES) {
-			return false;
-		}
-		const elapsed = Date.now() - this.mobileKeyboardDockStartedAt;
-		return elapsed < MOBILE_KEYBOARD_DOCK_TRACKING_DURATION
-			|| this.mobileKeyboardDockStableFrames < MOBILE_KEYBOARD_DOCK_STABLE_FRAME_LIMIT;
 	}
 
 	private stopKeyboardDockTracking(): void {
@@ -588,11 +598,18 @@ export class MobileComposerController {
 			this.options.getWindow().cancelAnimationFrame(this.mobileKeyboardDockFrameId);
 			this.mobileKeyboardDockFrameId = null;
 		}
-		this.mobileKeyboardDockStartedAt = null;
-		this.mobileKeyboardDockStableFrames = 0;
-		this.mobileKeyboardDockFrames = 0;
-		this.mobileKeyboardDockLastOffset = null;
+		if (this.mobileKeyboardDockStopTimerId !== null) {
+			this.options.getWindow().clearTimeout(this.mobileKeyboardDockStopTimerId);
+			this.mobileKeyboardDockStopTimerId = null;
+		}
 		this.mobileComposerLayerEl?.toggleClass("is-keyboard-tracking", false);
+		if (this.options.getLayout() === "mobile"
+			&& this.options.isComposerOpen()
+			&& this.mobileComposerPhase !== "closing") {
+			this.updateMeasurements();
+			this.options.resizeInput();
+			this.refreshToolbarAnchorAndDock();
+		}
 	}
 
 	private updateKeyboardMetrics(): void {
@@ -617,28 +634,10 @@ export class MobileComposerController {
 		this.mobileComposerDockTop = composerDock.dockTop;
 		this.mobileComposerDockSource = composerDock.source;
 		this.mobileKeyboardHeight = keyboardHeight;
-		this.setKeyboardMetrics(metrics.visibleTop, metrics.visibleHeight, keyboardHeight);
-		if (this.mobileComposerToolbarAnchorInset === null || this.mobileComposerRevealed) {
-			this.updateToolbarAnchorInset();
-		}
-		this.syncComposerDockOffset(composerDock.dockTop, baselineHeight);
-		this.setComposerDockDiagnostics(composerDock, baselineHeight);
-		this.updateKeyboardDockStability();
-		this.revealMobileComposerForDock(composerDock, keyboardHeight, baselineHeight);
-		this.updateMeasurements();
+		this.setKeyboardMetrics(keyboardHeight);
+		this.syncComposerDockOffset(composerDock, baselineHeight);
+		this.mobileComposerLayerEl?.setAttr("data-knomo-composer-dock-source", composerDock.source);
 		this.maybeFinishClosingAfterDockSettles();
-		if (this.mobileComposerPhase === "focusing"
-			&& this.mobileKeyboardFocusStartedAt !== null
-			&& Date.now() - this.mobileKeyboardFocusStartedAt > 240) {
-			this.mobileComposerPhase = "open";
-		}
-		if (this.options.getLayout() === "mobile"
-			&& this.options.isComposerOpen()
-			&& this.mobileComposerPhase !== "opening"
-			&& this.mobileComposerPhase !== "closing") {
-			this.options.resizeInput();
-			this.scheduleToolbarAnchorRefresh();
-		}
 	}
 
 	private handleViewportOrientationChange(): void {
@@ -647,6 +646,7 @@ export class MobileComposerController {
 			this.mobileComposerDockTop = this.mobileComposerViewportBaselineHeight;
 			this.mobileComposerDockSource = "fallback";
 		}
+		this.scheduleResize();
 		this.queueViewportUpdate();
 	}
 
@@ -704,8 +704,8 @@ export class MobileComposerController {
 			return;
 		}
 		this.mobileCapacitorKeyboardHeight = keyboardHeight;
-		this.startKeyboardDockTracking();
-		this.updateKeyboardMetrics();
+		this.clearKeyboardViewportFallback();
+		this.queueViewportUpdate();
 	}
 
 	private handleCapacitorKeyboardHide(): void {
@@ -713,8 +713,8 @@ export class MobileComposerController {
 		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
 			return;
 		}
-		this.startKeyboardDockTracking();
-		this.updateKeyboardMetrics();
+		this.clearKeyboardViewportFallback();
+		this.queueViewportUpdate();
 	}
 
 	private getCapacitorKeyboardHeightFromEvent(event: Event): number | null {
@@ -757,22 +757,12 @@ export class MobileComposerController {
 		this.mobileVirtualKeyboardPreviousOverlaysContent = null;
 	}
 
-	private revealMobileComposerForDock(composerDock: MobileComposerDockTop, keyboardHeight: number, baselineHeight: number): void {
-		if (this.mobileComposerPhase !== "opening" && this.mobileComposerPhase !== "focusing") {
-			return;
-		}
-		if (keyboardHeight > 0 || composerDock.dockTop < baselineHeight - 1) {
-			this.revealMobileComposer();
-		}
-	}
-
 	private revealMobileComposer(): void {
 		if (this.mobileComposerRevealed) {
 			return;
 		}
 		this.mobileComposerRevealed = true;
 		this.mobileComposerLayerEl?.toggleClass("is-open", true);
-		this.scheduleToolbarAnchorRefresh();
 	}
 
 	private maybeFinishClosingAfterDockSettles(): void {
@@ -780,7 +770,7 @@ export class MobileComposerController {
 			return;
 		}
 		if (Math.abs(this.mobileComposerBottomOffset) > MOBILE_KEYBOARD_DOCK_STABLE_DELTA
-			|| this.mobileKeyboardDockStableFrames < MOBILE_KEYBOARD_CLOSE_STABLE_FRAME_LIMIT) {
+			|| this.mobileKeyboardHeight > 0) {
 			return;
 		}
 		this.finishClosingWithExitAnimation();
@@ -805,9 +795,11 @@ export class MobileComposerController {
 		}
 		this.clearCloseTimer();
 		this.mobileComposerLayerEl?.toggleClass("is-open", false);
-		this.restoreLayer();
 		this.clearLayerState();
-		this.mobileComposerLayerEl?.detach();
+		if (!this.mobileComposerPrepared) {
+			this.restoreLayer();
+			this.mobileComposerLayerEl?.detach();
+		}
 		this.stopViewportTracking(false);
 		this.clearKeyboardMetrics();
 		this.options.setComposerOpen(false);
@@ -816,61 +808,32 @@ export class MobileComposerController {
 		this.options.syncComposerMode();
 		this.options.updateSendButtonState();
 		this.options.updateCancelEditButtonState();
+		this.options.onClosed?.();
 	}
 
-	private setKeyboardMetrics(visibleTop: number, visibleHeight: number, keyboardHeight: number): void {
-		const visibleTopValue = `${Math.round(visibleTop)}px`;
-		const visibleHeightValue = `${Math.round(visibleHeight)}px`;
+	private setKeyboardMetrics(keyboardHeight: number): void {
 		const keyboardHeightValue = `${Math.round(keyboardHeight)}px`;
-		for (const element of [this.options.getRootEl(), this.mobileComposerLayerEl]) {
-			element?.style.setProperty("--knomo-visible-top", visibleTopValue);
-			element?.style.setProperty("--knomo-visible-height", visibleHeightValue);
-			element?.style.setProperty("--knomo-keyboard-height", keyboardHeightValue);
-			element?.style.setProperty("--knomo-vv-top", visibleTopValue);
-			element?.style.setProperty("--knomo-vv-height", visibleHeightValue);
-		}
+		this.mobileComposerLayerEl?.style.setProperty("--knomo-keyboard-height", keyboardHeightValue);
 		this.mobileComposerLayerEl?.toggleClass("is-keyboard-open", keyboardHeight > 0);
 	}
 
-	private syncComposerDockOffset(composerDockTop: number, baselineHeight: number): void {
-		const layerBottom = this.getComposerLayerBottom(baselineHeight);
+	private syncComposerDockOffset(composerDock: MobileComposerDockTop, baselineHeight: number): void {
+		const layerBottom = composerDock.source === "layout-viewport"
+			? this.options.getWindow().innerHeight
+			: baselineHeight;
 		this.mobileComposerLayerBottom = layerBottom;
-		if (composerDockTop >= baselineHeight) {
+		if (composerDock.dockTop >= baselineHeight) {
 			this.setComposerBottomOffset(0);
 			return;
-		}
-		if (this.mobileComposerToolbarAnchorInset === null) {
-			this.updateToolbarAnchorInset();
 		}
 		const toolbarAnchorInset = this.mobileComposerToolbarAnchorInset ?? 0;
 		const nextBottomOffset = calculateMobileComposerDockOffset({
 			layerBottom,
-			composerDockTop,
+			composerDockTop: composerDock.dockTop,
 			toolbarAnchorInset,
 			targetGap: MOBILE_COMPOSER_TOOLBAR_KEYBOARD_GAP,
 		});
 		this.setComposerBottomOffset(nextBottomOffset);
-	}
-
-	private getComposerLayerBottom(fallbackBottom: number): number {
-		const layerBottom = this.mobileComposerLayerEl?.getBoundingClientRect().bottom ?? fallbackBottom;
-		if (!Number.isFinite(layerBottom) || layerBottom <= 0) {
-			return fallbackBottom;
-		}
-		return layerBottom;
-	}
-
-	private updateKeyboardDockStability(): void {
-		if (this.mobileKeyboardDockStartedAt === null) {
-			return;
-		}
-		if (this.mobileKeyboardDockLastOffset !== null
-			&& Math.abs(this.mobileComposerBottomOffset - this.mobileKeyboardDockLastOffset) <= MOBILE_KEYBOARD_DOCK_STABLE_DELTA) {
-			this.mobileKeyboardDockStableFrames += 1;
-		} else {
-			this.mobileKeyboardDockStableFrames = 0;
-		}
-		this.mobileKeyboardDockLastOffset = this.mobileComposerBottomOffset;
 	}
 
 	private scheduleToolbarAnchorRefresh(): void {
@@ -879,15 +842,20 @@ export class MobileComposerController {
 		}
 		this.mobileToolbarAnchorFrameId = this.options.getWindow().requestAnimationFrame(() => {
 			this.mobileToolbarAnchorFrameId = null;
-			this.updateToolbarAnchorInset();
-			const baselineHeight = this.mobileComposerViewportBaselineHeight ?? this.options.getWindow().innerHeight;
-			const viewport = this.mobileVisualViewport ?? this.options.getWindow().visualViewport;
-			const composerDock = this.mobileComposerDockTop === null
-				? this.getComposerDockTop(this.options.getWindow(), baselineHeight, viewport)
-				: { dockTop: this.mobileComposerDockTop, source: this.mobileComposerDockSource };
-			this.syncComposerDockOffset(composerDock.dockTop, baselineHeight);
-			this.setComposerDockDiagnostics(composerDock, baselineHeight);
+			this.refreshToolbarAnchorAndDock();
 		});
+	}
+
+	private refreshToolbarAnchorAndDock(): void {
+		this.updateToolbarAnchorInset();
+		const win = this.options.getWindow();
+		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
+		const viewport = this.mobileVisualViewport ?? win.visualViewport;
+		const composerDock = this.mobileComposerDockTop === null
+			? this.getComposerDockTop(win, baselineHeight, viewport)
+			: { dockTop: this.mobileComposerDockTop, source: this.mobileComposerDockSource };
+		this.syncComposerDockOffset(composerDock, baselineHeight);
+		this.setComposerDockDiagnostics(composerDock, baselineHeight);
 	}
 
 	private updateToolbarAnchorInset(): void {
@@ -932,11 +900,7 @@ export class MobileComposerController {
 	private setComposerBottomOffset(bottomOffset: number): void {
 		this.mobileComposerBottomOffset = Math.round(bottomOffset);
 		const bottomOffsetValue = `${this.mobileComposerBottomOffset}px`;
-		const fillHeightValue = `${Math.max(0, this.mobileComposerBottomOffset)}px`;
-		for (const element of [this.options.getRootEl(), this.mobileComposerLayerEl]) {
-			element?.style.setProperty("--knomo-mobile-composer-bottom-offset", bottomOffsetValue);
-			element?.style.setProperty("--knomo-mobile-composer-fill-height", fillHeightValue);
-		}
+		this.mobileComposerLayerEl?.style.setProperty("--knomo-mobile-composer-bottom-offset", bottomOffsetValue);
 	}
 
 	private setComposerDockDiagnostics(composerDock: MobileComposerDockTop, baselineHeight: number): void {
@@ -974,7 +938,7 @@ export class MobileComposerController {
 		this.mobileComposerToolbarAnchorBottom = null;
 		this.mobileComposerToolbarAnchorSource = "unknown";
 		this.mobileComposerToolbarWrapperBottom = null;
-		this.setKeyboardMetrics(0, win.innerHeight, 0);
+		this.setKeyboardMetrics(0);
 		this.setComposerBottomOffset(0);
 		this.updateMeasurements();
 	}

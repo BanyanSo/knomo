@@ -927,7 +927,6 @@ export class MobileComposerController {
 	}
 
 	private clearKeyboardMetrics(): void {
-		const win = this.options.getWindow();
 		this.mobileKeyboardHeight = 0;
 		this.mobileComposerViewportBaselineHeight = null;
 		this.mobileComposerDockTop = null;

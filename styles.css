@@ -3172,9 +3172,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	min-width: 100vw;
 	max-width: none;
 	height: 100vh;
-	height: 100dvh;
 	min-height: 100vh;
-	min-height: 100dvh;
 	max-height: none;
 	margin: 0;
 	padding: 0;
@@ -3182,6 +3180,13 @@ body .knomo-mobile-create-fab.is-hidden {
 	border-radius: 0;
 	box-shadow: none;
 	background: rgba(0, 0, 0, 0.94);
+}
+
+@supports (height: 100dvh) {
+	.knomo-image-preview-backdrop--mobile .knomo-image-preview-modal {
+		height: 100dvh;
+		min-height: 100dvh;
+	}
 }
 
 .knomo-image-preview-backdrop--mobile .knomo-image-preview-modal .modal-content {

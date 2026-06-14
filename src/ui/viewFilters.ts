@@ -4,7 +4,7 @@ import type { App } from "obsidian";
 import { t } from "../i18n";
 import type { MemoRecord } from "../types/memo";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
-import { isSupportedMemoImage } from "../utils/markdown";
+import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { withMemoIdAlias } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
 import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
@@ -269,7 +269,7 @@ export function matchesScope(memo: MemoRecord, filter: ScopeFilter, todayDate = 
 	const today = startOfDay(todayDate);
 	if (filter === "all") return true;
 	if (filter === "no-tag") return memo.tags.length === 0;
-	if (filter === "with-link") return memo.links.length > 0;
+	if (filter === "with-link") return memo.links.length > 0 || parseMemoLinks(memo.contentSnapshot).length > 0;
 	if (filter === "with-image") return getMemoImages(memo).length > 0;
 	if (filter === "anniversary") {
 		return date.getMonth() === today.getMonth() && date.getDate() === today.getDate() && date.getFullYear() !== today.getFullYear();

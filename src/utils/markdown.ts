@@ -8,6 +8,9 @@ const OBSIDIAN_IMAGE_REGEX = /!\[\[([^\]]+)\]\]/g;
 const OBSIDIAN_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
 const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
+const WEB_URL_REGEX = /\bhttps?:\/\/[^\s<>"'，。！？；：、（）【】《》]+/gi;
+const URL_TRAILING_PUNCTUATION_REGEX = /[.,!?;:，。！？；：、]+$/u;
+const URL_CLOSING_DELIMITERS = [["(", ")"], ["[", "]"], ["{", "}"]] as const;
 const TAG_REGEX = /(^|[\s([{])#([^\s#\]]+)/g;
 const OBSIDIAN_IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
 
@@ -129,9 +132,11 @@ export function isSupportedMemoImage(image: MemoImageRef): boolean {
 
 export function parseMemoLinks(content: string): MemoLinkRef[] {
 	const links: MemoLinkRef[] = [];
+	const wrappedLinkRanges: Array<[number, number]> = [];
 	OBSIDIAN_LINK_REGEX.lastIndex = 0;
 	let obsidianLinkMatch = OBSIDIAN_LINK_REGEX.exec(content);
 	while (obsidianLinkMatch !== null) {
+		wrappedLinkRanges.push([obsidianLinkMatch.index, obsidianLinkMatch.index + obsidianLinkMatch[0].length]);
 		if (content.charAt(obsidianLinkMatch.index - 1) !== "!") {
 			const [target, displayText] = splitLinkAlias(obsidianLinkMatch[1]);
 			links.push({
@@ -146,6 +151,7 @@ export function parseMemoLinks(content: string): MemoLinkRef[] {
 	MARKDOWN_LINK_REGEX.lastIndex = 0;
 	let markdownLinkMatch = MARKDOWN_LINK_REGEX.exec(content);
 	while (markdownLinkMatch !== null) {
+		wrappedLinkRanges.push([markdownLinkMatch.index, markdownLinkMatch.index + markdownLinkMatch[0].length]);
 		if (content.charAt(markdownLinkMatch.index - 1) !== "!") {
 			links.push({
 				target: markdownLinkMatch[2],
@@ -155,7 +161,35 @@ export function parseMemoLinks(content: string): MemoLinkRef[] {
 		}
 		markdownLinkMatch = MARKDOWN_LINK_REGEX.exec(content);
 	}
+
+	WEB_URL_REGEX.lastIndex = 0;
+	let webUrlMatch = WEB_URL_REGEX.exec(content);
+	while (webUrlMatch !== null) {
+		const matchIndex = webUrlMatch.index;
+		const isWrappedLink = wrappedLinkRanges.some(([start, end]) => matchIndex >= start && matchIndex < end);
+		if (!isWrappedLink) {
+			links.push({
+				target: trimBareUrl(webUrlMatch[0]),
+				displayText: null,
+				syntax: "url",
+			});
+		}
+		webUrlMatch = WEB_URL_REGEX.exec(content);
+	}
 	return links;
+}
+
+function trimBareUrl(value: string): string {
+	let target = value.replace(URL_TRAILING_PUNCTUATION_REGEX, "");
+	for (const [opening, closing] of URL_CLOSING_DELIMITERS) {
+		while (
+			target.endsWith(closing)
+			&& target.split(closing).length > target.split(opening).length
+		) {
+			target = target.slice(0, -1);
+		}
+	}
+	return target;
 }
 
 function splitLinkAlias(value: string): [string, string | null] {

@@ -93,6 +93,31 @@ test("parses a three-line memo block with tags and links", () => {
 	]);
 });
 
+test("parses bare web URLs without duplicating wrapped links", () => {
+	const metadata = service.parseMemoMetadata(
+		"裸链接 https://example.com/docs?q=1，括号 (http://example.org/a_(b)). "
+		+ "Markdown [官网](https://knomo.app) 图片 ![封面](https://example.com/a.png) www.example.com",
+	);
+
+	assert.deepEqual(metadata.links, [
+		{
+			target: "https://knomo.app",
+			displayText: "官网",
+			syntax: "markdown_link",
+		},
+		{
+			target: "https://example.com/docs?q=1",
+			displayText: null,
+			syntax: "url",
+		},
+		{
+			target: "http://example.org/a_(b)",
+			displayText: null,
+			syntax: "url",
+		},
+	]);
+});
+
 test("parses memo time in HH:mm format", () => {
 	const parsed = service.parseMemoBlock(["- 18:30 内容"], 0);
 

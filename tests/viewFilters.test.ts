@@ -66,6 +66,7 @@ test("matches scope filters against a fixed day", () => {
 	assert.equal(matchesScope(makeMemo("all"), "all", today), true);
 	assert.equal(matchesScope(makeMemo("tagged", { tags: ["x"] }), "no-tag", today), false);
 	assert.equal(matchesScope(makeMemo("link", { links: [{ target: "Note", displayText: null, syntax: "wiki_link" }] }), "with-link", today), true);
+	assert.equal(matchesScope(makeMemo("bare-url", { contentSnapshot: "Visit https://example.com", links: [] }), "with-link", today), true);
 	assert.equal(matchesScope(makeMemo("image", { images: [{ path: "a.png", altText: "", syntax: "obsidian_embed" }] }), "with-image", today), true);
 	assert.equal(matchesScope(makeMemo("anniversary", { createdAt: "2025-05-21T09:00:00" }), "anniversary", today), true);
 	assert.equal(matchesScope(makeMemo("this-week", { createdAt: "2026-05-18T09:00:00" }), "week", today), true);

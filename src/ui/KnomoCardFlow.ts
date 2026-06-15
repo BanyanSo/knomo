@@ -1,4 +1,5 @@
 import type { MemoRecord } from "../types/memo";
+import { getMemoListStateKey } from "./MemoRenderRevision";
 
 export type CardFlowRenderMode = "memo" | "trash";
 
@@ -50,7 +51,7 @@ export function getVisibleCardFlowMemoStateKey(
 	const visibleCount = renderedCount > 0
 		? renderedCount
 		: Math.min(defaultBatchSize, memos.length);
-	return JSON.stringify(memos.slice(0, visibleCount));
+	return getMemoListStateKey(memos.slice(0, visibleCount));
 }
 
 export function runCardFlowBatch(options: RunCardFlowBatchOptions): CardFlowBatchRunResult {

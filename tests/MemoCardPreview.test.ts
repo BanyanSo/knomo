@@ -99,10 +99,58 @@ test("marks missing local images unresolved and leaves pure image memo text empt
 	assert.equal(preview.images[0].unresolved, true);
 });
 
-function createAppStub(paths: string[]): App {
+test("parses nested destinations, optional titles, escaped brackets, and Obsidian dimensions", () => {
+	const app = createAppStub([
+		"folder/photo(1).png",
+		"folder/image name.png",
+		"image.png",
+	]);
+	const preview = parseMemoCardPreview(
+		[
+			"![nested](folder/photo(1).png \"title\")",
+			"![angle](<folder/image name.png> 'title')",
+			"![escaped \\] alt](image.png)",
+			"![[image.png|300x200]]",
+		].join(" "),
+		"Daily/2026-06-15.md",
+		app,
+	);
+
+	assert.equal(preview.text, "");
+	assert.deepEqual(preview.images.map((image) => image.path), [
+		"folder/photo(1).png",
+		"folder/image name.png",
+		"image.png",
+		"image.png",
+	]);
+	assert.equal(preview.images[2].alt, "escaped ] alt");
+});
+
+test("keeps malformed Markdown image syntax in preview text", () => {
+	const app = createAppStub([]);
+	const content = "before ![bad](photo.png \"unfinished) after";
+
+	const preview = parseMemoCardPreview(content, "Daily/2026-06-15.md", app);
+
+	assert.equal(preview.text, content);
+	assert.equal(preview.images.length, 0);
+});
+
+test("versions local resource urls with the attachment modification time", () => {
+	const app = createAppStub(["photo.png"], 1_718_438_400_000);
+	const preview = parseMemoCardPreview("![[photo.png]]", "Daily/2026-06-15.md", app);
+
+	assert.equal(preview.images[0].url, "app://photo.png?knomo-mtime=1718438400000");
+	assert.equal(preview.images[0].resourcePath, "photo.png");
+});
+
+function createAppStub(paths: string[], modifiedAt?: number): App {
 	const files = new Map<string, TFile>();
 	for (const path of paths) {
-		files.set(path, { path } as TFile);
+		files.set(path, {
+			path,
+			stat: modifiedAt === undefined ? undefined : { mtime: modifiedAt },
+		} as TFile);
 	}
 	return {
 		metadataCache: {

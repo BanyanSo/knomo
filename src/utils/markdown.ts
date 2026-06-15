@@ -1,12 +1,11 @@
 import type { MemoImageRef, MemoLinkRef } from "../types/memo";
+import { parseMarkdownImages } from "./markdownImages";
 
 const MARKDOWN_HEADING_REGEX = /^(#{1,6})\s+\S.*$/;
 const TRAILING_BLOCK_ID_REGEX = /\s+\^[A-Za-z0-9_-]+\s*$/;
 const MEMO_START_LINE_REGEX = /^- \d{2}:\d{2}(?::\d{2})?(?: .*)?$/;
 const MEMO_CONTINUATION_INDENT_REGEX = /^(?:\t| {2,})/;
-const OBSIDIAN_IMAGE_REGEX = /!\[\[([^\]]+)\]\]/g;
 const OBSIDIAN_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
-const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
 const WEB_URL_REGEX = /\bhttps?:\/\/[^\s<>"'，。！？；：、（）【】《》]+/gi;
 const URL_TRAILING_PUNCTUATION_REGEX = /[.,!?;:，。！？；：、]+$/u;
@@ -95,32 +94,13 @@ export function parseMemoTags(content: string): string[] {
 }
 
 export function parseMemoImages(content: string): MemoImageRef[] {
-	const images: MemoImageRef[] = [];
-	OBSIDIAN_IMAGE_REGEX.lastIndex = 0;
-	let obsidianImageMatch = OBSIDIAN_IMAGE_REGEX.exec(content);
-	while (obsidianImageMatch !== null) {
-		const path = extractObsidianEmbedPath(obsidianImageMatch[1]);
-		if (isSupportedObsidianImagePath(path)) {
-			images.push({
-				path,
-				altText: "",
-				syntax: "obsidian_embed",
-			});
-		}
-		obsidianImageMatch = OBSIDIAN_IMAGE_REGEX.exec(content);
-	}
-
-	MARKDOWN_IMAGE_REGEX.lastIndex = 0;
-	let markdownImageMatch = MARKDOWN_IMAGE_REGEX.exec(content);
-	while (markdownImageMatch !== null) {
-		images.push({
-			path: markdownImageMatch[2],
-			altText: markdownImageMatch[1],
-			syntax: "markdown_image",
-		});
-		markdownImageMatch = MARKDOWN_IMAGE_REGEX.exec(content);
-	}
-	return images;
+	return parseMarkdownImages(content)
+		.filter((image) => image.syntax === "markdown_image" || isSupportedObsidianImagePath(image.path))
+		.map((image) => ({
+			path: image.path,
+			altText: image.altText,
+			syntax: image.syntax,
+		}));
 }
 
 export function isSupportedMemoImage(image: MemoImageRef): boolean {

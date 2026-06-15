@@ -2,387 +2,307 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { CardImageLoadQueue } from "../src/ui/CardImageLoadQueue";
+import type {
+	CardImageLoadItem,
+	CardImageLoadSurface,
+} from "../src/ui/CardImageLoadQueue";
 
-test("starts all images in one memo card together and waits before starting the next card", async () => {
-	FakeIntersectionObserver.instances = [];
+test("limits concurrency by individual image and waits for decode", async () => {
 	const scheduler = new FakeScheduler();
-	const failed: string[] = [];
-	const firstCard = new FakeCard();
-	const secondCard = new FakeCard();
-	const firstImage = new FakeImage();
-	const secondImage = new FakeImage();
-	const thirdImage = new FakeImage();
-	const queue = createQueue(scheduler);
+	const first = new FakeImage();
+	const second = new FakeImage();
+	const third = new FakeImage();
+	const queue = createQueue(scheduler, { concurrency: 2 });
 
-	queue.observe({
-		targetEl: firstCard.asElement(),
-		images: [
-			createLoadItem(firstImage, "app://first.png", () => failed.push("first")),
-			createLoadItem(secondImage, "app://second.png", () => failed.push("second")),
-		],
-		generation: 1,
-	});
-	queue.observe({
-		targetEl: secondCard.asElement(),
-		images: [
-			createLoadItem(thirdImage, "app://third.png", () => failed.push("third")),
-		],
-		generation: 1,
-	});
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(first, "app://first.png"),
+		createLoadItem(second, "app://second.png"),
+		createLoadItem(third, "app://third.png"),
+	]));
 
-	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard]);
-	assert.deepEqual(scheduler.delays, [0]);
-
+	assert.deepEqual(scheduler.delays, [0, 0]);
 	scheduler.flushDelay(0);
-
-	assert.deepEqual(getSources(firstImage, secondImage, thirdImage), [
+	scheduler.flushDelay(0);
+	assert.deepEqual(getSources(first, second, third), [
 		"app://first.png",
 		"app://second.png",
 		null,
 	]);
-	assert.deepEqual(scheduler.delays, [10_000]);
 
-	firstImage.dispatch("load");
-	secondImage.dispatch("error");
+	first.dispatch("load");
+	assert.equal(first.decodeCalls, 1);
+	assert.equal(third.getAttr("src"), null);
 
-	assert.equal(firstImage.decodeCalls, 1);
-	assert.deepEqual(failed, ["second"]);
-	assert.equal(thirdImage.getAttr("src"), null);
-
-	firstImage.resolveDecode();
+	first.resolveDecode();
 	await flushMicrotasks();
-
-	assert.deepEqual(scheduler.delays, [0]);
-
+	assert.ok(scheduler.delays.includes(0));
 	scheduler.flushDelay(0);
-	assert.equal(thirdImage.getAttr("src"), "app://third.png");
+	assert.equal(third.getAttr("src"), "app://third.png");
 });
 
-test("releases the card slot after the watchdog without cancelling slow images", async () => {
-	FakeIntersectionObserver.instances = [];
+test("shares in-flight and decoded sources across surfaces", async () => {
 	const scheduler = new FakeScheduler();
-	const firstCard = new FakeCard();
-	const secondCard = new FakeCard();
-	const slowImage = new FakeImage();
-	const nextImage = new FakeImage();
-	const queue = createQueue(scheduler);
+	const cardImage = new FakeImage();
+	const searchImage = new FakeImage();
+	const queue = createQueue(scheduler, { concurrency: 2 });
 
-	queue.observe({
-		targetEl: firstCard.asElement(),
-		images: [
-			createLoadItem(slowImage, "https://example.com/slow.png"),
-		],
-		generation: 1,
-	});
-	queue.observe({
-		targetEl: secondCard.asElement(),
-		images: [createLoadItem(nextImage, "app://next.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard]);
-	scheduler.flushDelay(0);
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(cardImage, "app://shared.png"),
+	]));
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		createLoadItem(searchImage, "app://shared.png"),
+	]));
 
-	scheduler.flushDelay(10_000);
 	assert.deepEqual(scheduler.delays, [0]);
-
 	scheduler.flushDelay(0);
-	assert.equal(nextImage.getAttr("src"), "app://next.png");
-
-	slowImage.dispatch("load");
-	slowImage.resolveDecode();
+	cardImage.dispatch("load");
+	cardImage.resolveDecode();
 	await flushMicrotasks();
 
-	assert.equal(slowImage.getAttr("src"), "https://example.com/slow.png");
-});
-
-test("clears stale image sources when the render generation changes during decode", async () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const card = new FakeCard();
-	const firstImage = new FakeImage();
-	const secondImage = new FakeImage();
-	let generation = 1;
-	const queue = createQueue(scheduler, () => generation);
-
-	queue.observe({
-		targetEl: card.asElement(),
-		images: [
-			createLoadItem(firstImage, "app://first.png"),
-			createLoadItem(secondImage, "app://second.png"),
-		],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([card]);
-	scheduler.flushDelay(0);
-	firstImage.dispatch("load");
-
-	generation = 2;
-	firstImage.resolveDecode();
-	await flushMicrotasks();
-
-	assert.deepEqual(getSources(firstImage, secondImage), [null, null]);
+	assert.equal(searchImage.getAttr("src"), "app://shared.png");
+	assert.equal(searchImage.decodeCalls, 0);
 	assert.equal(scheduler.size, 0);
 });
 
-test("completes the card image task when decode rejects", async () => {
-	FakeIntersectionObserver.instances = [];
+test("reuses a decoded source without another scheduled decode", async () => {
 	const scheduler = new FakeScheduler();
-	const card = new FakeCard();
-	const image = new FakeImage();
+	const first = new FakeImage();
+	const second = new FakeImage();
+	let reusedLoadCount = 0;
 	const queue = createQueue(scheduler);
 
-	queue.observe({
-		targetEl: card.asElement(),
-		images: [
-			createLoadItem(image, "https://example.com/image.png"),
-		],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([card]);
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(first, "app://decoded.png"),
+	]));
+	scheduler.flushDelay(0);
+	first.dispatch("load");
+	first.resolveDecode();
+	await flushMicrotasks();
+
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		{
+			...createLoadItem(second, "app://decoded.png"),
+			onLoad: () => {
+				reusedLoadCount += 1;
+			},
+		},
+	]));
+
+	assert.equal(second.getAttr("src"), "app://decoded.png");
+	assert.equal(second.decodeCalls, 0);
+	assert.equal(reusedLoadCount, 0);
+	assert.equal(scheduler.size, 0);
+	await flushMicrotasks();
+	assert.equal(reusedLoadCount, 1);
+});
+
+test("can pause one surface without blocking another", () => {
+	const scheduler = new FakeScheduler();
+	const cardImage = new FakeImage();
+	const searchImage = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.setSurfacePaused("card-flow", true);
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(cardImage, "app://card.png"),
+	]));
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		createLoadItem(searchImage, "app://search.png"),
+	]));
+
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(searchImage.getAttr("src"), "app://search.png");
+	assert.equal(cardImage.getAttr("src"), null);
+
+	searchImage.dispatch("error");
+	queue.setSurfacePaused("card-flow", false);
+	scheduler.flushDelay(0);
+	assert.equal(cardImage.getAttr("src"), "app://card.png");
+});
+
+test("clears one surface without cancelling another", () => {
+	const scheduler = new FakeScheduler();
+	const cardImage = new FakeImage();
+	const searchImage = new FakeImage();
+	const queue = createQueue(scheduler, { concurrency: 2 });
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(cardImage, "app://card.png"),
+	]));
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		createLoadItem(searchImage, "app://search.png"),
+	]));
+	scheduler.flushDelay(0);
+	scheduler.flushDelay(0);
+
+	queue.clear("card-flow");
+
+	assert.equal(cardImage.getAttr("src"), null);
+	assert.equal(searchImage.getAttr("src"), "app://search.png");
+});
+
+test("clears stale image sources when a surface generation changes during decode", async () => {
+	const scheduler = new FakeScheduler();
+	const image = new FakeImage();
+	const generations = new Map<CardImageLoadSurface, number>([
+		["card-flow", 1],
+		["mobile-search", 1],
+		["image-preview", 1],
+	]);
+	const queue = createQueue(scheduler, { generations });
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(image, "app://stale.png"),
+	]));
 	scheduler.flushDelay(0);
 	image.dispatch("load");
-	image.rejectDecode();
+
+	generations.set("card-flow", 2);
+	image.resolveDecode();
 	await flushMicrotasks();
 
-	assert.equal(scheduler.size, 0);
-});
-
-test("reuses a decoded image source without scheduling another load", async () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const firstCard = new FakeCard();
-	const secondCard = new FakeCard();
-	const firstImage = new FakeImage();
-	const secondImage = new FakeImage();
-	const queue = createQueue(scheduler);
-
-	queue.observe({
-		targetEl: firstCard.asElement(),
-		images: [createLoadItem(firstImage, "app://shared.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([firstCard]);
-	scheduler.flushDelay(0);
-	firstImage.dispatch("load");
-	firstImage.resolveDecode();
-	await flushMicrotasks();
-
-	queue.observe({
-		targetEl: secondCard.asElement(),
-		images: [createLoadItem(secondImage, "app://shared.png")],
-		generation: 1,
-	});
-
-	assert.equal(secondImage.getAttr("src"), "app://shared.png");
-	assert.equal(scheduler.size, 0);
-});
-
-test("can release the mobile card slot on load without waiting for decode", () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const firstCard = new FakeCard();
-	const secondCard = new FakeCard();
-	const firstImage = new FakeImage();
-	const secondImage = new FakeImage();
-	const queue = createQueue(scheduler, () => 1, false);
-
-	queue.observe({
-		targetEl: firstCard.asElement(),
-		images: [createLoadItem(firstImage, "app://first.png")],
-		generation: 1,
-	});
-	queue.observe({
-		targetEl: secondCard.asElement(),
-		images: [createLoadItem(secondImage, "app://second.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard]);
-	scheduler.flushDelay(0);
-
-	firstImage.dispatch("load");
-
-	assert.equal(firstImage.decodeCalls, 1);
-	assert.deepEqual(scheduler.delays, [0]);
-	scheduler.flushDelay(0);
-	assert.equal(secondImage.getAttr("src"), "app://second.png");
-});
-
-test("can start mobile image work on the next animation frame", () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const frameScheduler = new FakeScheduler();
-	const card = new FakeCard();
-	const image = new FakeImage();
-	const queue = createQueue(scheduler, () => 1, false, 1, frameScheduler);
-
-	queue.observe({
-		targetEl: card.asElement(),
-		images: [createLoadItem(image, "app://frame.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([card]);
-
-	assert.deepEqual(scheduler.delays, []);
-	assert.deepEqual(frameScheduler.delays, [0]);
-	frameScheduler.flushDelay(0);
-	assert.equal(image.getAttr("src"), "app://frame.png");
-	assert.deepEqual(scheduler.delays, [10_000]);
-});
-
-test("limits mobile local images to two active card loads", () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const firstCard = new FakeCard();
-	const secondCard = new FakeCard();
-	const thirdCard = new FakeCard();
-	const firstImage = new FakeImage();
-	const secondImage = new FakeImage();
-	const thirdImage = new FakeImage();
-	const queue = createQueue(scheduler, () => 1, false, 2);
-
-	queue.observe({
-		targetEl: firstCard.asElement(),
-		images: [createLoadItem(firstImage, "app://first.png")],
-		generation: 1,
-	});
-	queue.observe({
-		targetEl: secondCard.asElement(),
-		images: [createLoadItem(secondImage, "app://second.png")],
-		generation: 1,
-	});
-	queue.observe({
-		targetEl: thirdCard.asElement(),
-		images: [createLoadItem(thirdImage, "app://third.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard, thirdCard]);
-
-	scheduler.flushDelay(0);
-	assert.equal(firstImage.getAttr("src"), "app://first.png");
-	scheduler.flushDelay(0);
-	assert.equal(secondImage.getAttr("src"), "app://second.png");
-	assert.equal(thirdImage.getAttr("src"), null);
-
-	firstImage.dispatch("load");
-
-	assert.equal(firstImage.decodeCalls, 1);
-	assert.deepEqual([...scheduler.delays].sort((left, right) => left - right), [0, 10_000]);
-	scheduler.flushDelay(0);
-	assert.equal(thirdImage.getAttr("src"), "app://third.png");
-});
-
-test("can pause the next card after an active image load completes", () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const firstCard = new FakeCard();
-	const secondCard = new FakeCard();
-	const firstImage = new FakeImage();
-	const secondImage = new FakeImage();
-	const queue = createQueue(scheduler, () => 1, false);
-
-	queue.observe({
-		targetEl: firstCard.asElement(),
-		images: [createLoadItem(firstImage, "app://first.png")],
-		generation: 1,
-	});
-	queue.observe({
-		targetEl: secondCard.asElement(),
-		images: [createLoadItem(secondImage, "app://second.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([firstCard, secondCard]);
-	scheduler.flushDelay(0);
-	firstImage.dispatch("load");
-
-	queue.setPaused(true);
-	scheduler.flushDelay(0);
-	assert.equal(secondImage.getAttr("src"), null);
-
-	queue.setPaused(false);
-	scheduler.flushDelay(0);
-	assert.equal(secondImage.getAttr("src"), "app://second.png");
-});
-
-test("pauses pending card image work until resumed", () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const card = new FakeCard();
-	const image = new FakeImage();
-	const queue = createQueue(scheduler);
-
-	queue.setPaused(true);
-	queue.observe({
-		targetEl: card.asElement(),
-		images: [createLoadItem(image, "app://paused.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([card]);
-
-	assert.deepEqual(scheduler.delays, []);
-	queue.setPaused(false);
-	assert.deepEqual(scheduler.delays, [0]);
-	scheduler.flushDelay(0);
-	assert.equal(image.getAttr("src"), "app://paused.png");
-});
-
-test("does not start an already scheduled image task while paused", () => {
-	FakeIntersectionObserver.instances = [];
-	const scheduler = new FakeScheduler();
-	const card = new FakeCard();
-	const image = new FakeImage();
-	const queue = createQueue(scheduler);
-
-	queue.observe({
-		targetEl: card.asElement(),
-		images: [createLoadItem(image, "app://scheduled.png")],
-		generation: 1,
-	});
-	FakeIntersectionObserver.instances[0].trigger([card]);
-	assert.deepEqual(scheduler.delays, [0]);
-
-	queue.setPaused(true);
-	scheduler.flushDelay(0);
 	assert.equal(image.getAttr("src"), null);
-	assert.deepEqual(scheduler.delays, []);
-
-	queue.setPaused(false);
-	assert.deepEqual(scheduler.delays, [0]);
-	scheduler.flushDelay(0);
-	assert.equal(image.getAttr("src"), "app://scheduled.png");
+	assert.equal(scheduler.size, 0);
 });
 
-function createQueue(
-	scheduler: FakeScheduler,
-	getGeneration: () => number = () => 1,
-	waitForDecode = true,
-	concurrency = 1,
-	startScheduler?: FakeScheduler,
-): CardImageLoadQueue {
+test("watchdog cancels a slow image and starts the next task", () => {
+	const scheduler = new FakeScheduler();
+	const failed: string[] = [];
+	const slow = new FakeImage();
+	const next = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(slow, "app://slow.png", undefined, () => failed.push("slow")),
+		createLoadItem(next, "app://next.png"),
+	]));
+	scheduler.flushDelay(0);
+	scheduler.flushDelay(10_000);
+
+	assert.equal(slow.getAttr("src"), null);
+	assert.deepEqual(failed, ["slow"]);
+	scheduler.flushDelay(0);
+	assert.equal(next.getAttr("src"), "app://next.png");
+});
+
+test("starts high-priority images before earlier low-priority work", () => {
+	const scheduler = new FakeScheduler();
+	const low = new FakeImage();
+	const high = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.setPaused(true);
+	queue.observe({
+		...createRequest("card-flow", new FakeCard(), [
+			createLoadItem(low, "app://low.png"),
+		]),
+		priority: "low",
+	});
+	queue.observe({
+		...createRequest("image-preview", new FakeCard(), [
+			createLoadItem(high, "app://high.png"),
+		]),
+		priority: "high",
+	});
+	queue.setPaused(false);
+	scheduler.flushDelay(0);
+
+	assert.equal(high.getAttr("src"), "app://high.png");
+	assert.equal(low.getAttr("src"), null);
+});
+
+test("invalidates decoded state by local resource path", async () => {
+	const scheduler = new FakeScheduler();
+	const first = new FakeImage();
+	const second = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(first, "app://photo.png", "Attachments/photo.png"),
+	]));
+	scheduler.flushDelay(0);
+	first.dispatch("load");
+	first.resolveDecode();
+	await flushMicrotasks();
+
+	queue.invalidateResourcePaths(["Attachments/photo.png"]);
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		createLoadItem(second, "app://photo.png", "Attachments/photo.png"),
+	]));
+
+	assert.deepEqual(scheduler.delays, [0]);
+	assert.equal(second.getAttr("src"), null);
+});
+
+test("defers observed work until the target intersects", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const card = new FakeCard();
+	const image = new FakeImage();
+	const queue = createQueue(scheduler, { observe: true });
+
+	queue.observe({
+		...createRequest("card-flow", card, [
+			createLoadItem(image, "app://lazy.png"),
+		]),
+		observe: true,
+	});
+	assert.equal(scheduler.size, 0);
+
+	FakeIntersectionObserver.instances[0].trigger([card]);
+	scheduler.flushDelay(0);
+	assert.equal(image.getAttr("src"), "app://lazy.png");
+});
+
+interface CreateQueueOptions {
+	concurrency?: number;
+	generations?: Map<CardImageLoadSurface, number>;
+	observe?: boolean;
+}
+
+function createQueue(scheduler: FakeScheduler, options: CreateQueueOptions = {}): CardImageLoadQueue {
+	const generations = options.generations ?? new Map<CardImageLoadSurface, number>([
+		["card-flow", 1],
+		["mobile-search", 1],
+		["image-preview", 1],
+	]);
 	return new CardImageLoadQueue({
-		concurrency,
-		getGeneration,
+		concurrency: options.concurrency ?? 1,
+		getGeneration: (surface) => generations.get(surface) ?? 0,
 		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
 		cancelTask: (taskId) => scheduler.cancel(taskId),
-		scheduleStartTask: startScheduler === undefined
-			? undefined
-			: (callback) => startScheduler.schedule(callback, 0),
-		cancelStartTask: startScheduler === undefined
-			? undefined
-			: (taskId) => startScheduler.cancel(taskId),
 		watchdogMs: 10_000,
-		Observer: FakeIntersectionObserver as unknown as typeof IntersectionObserver,
-		waitForDecode,
+		Observer: options.observe
+			? FakeIntersectionObserver as unknown as typeof IntersectionObserver
+			: undefined,
 	});
+}
+
+function createRequest(
+	surface: CardImageLoadSurface,
+	card: FakeCard,
+	images: readonly CardImageLoadItem[],
+) {
+	return {
+		targetEl: card.asElement(),
+		images,
+		generation: 1,
+		surface,
+		observe: false,
+	};
 }
 
 function createLoadItem(
 	image: FakeImage,
 	src: string,
-	onError: () => void = () => undefined,
-) {
+	resourcePath?: string,
+	onError?: () => void,
+): CardImageLoadItem {
 	return {
 		imageEl: image.asImage(),
 		src,
+		resourcePath,
 		onError,
 	};
 }
@@ -489,12 +409,10 @@ class FakeImage {
 	private readonly listeners = new Map<string, Set<() => void>>();
 	private readonly decodePromise: Promise<void>;
 	private resolveDecodePromise: () => void = () => undefined;
-	private rejectDecodePromise: () => void = () => undefined;
 
 	constructor() {
-		this.decodePromise = new Promise<void>((resolve, reject) => {
+		this.decodePromise = new Promise<void>((resolve) => {
 			this.resolveDecodePromise = resolve;
-			this.rejectDecodePromise = reject;
 		});
 	}
 
@@ -537,9 +455,5 @@ class FakeImage {
 
 	resolveDecode(): void {
 		this.resolveDecodePromise();
-	}
-
-	rejectDecode(): void {
-		this.rejectDecodePromise();
 	}
 }

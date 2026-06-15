@@ -172,7 +172,7 @@ test("image preview modal omits tooltips, original-file actions, and single-imag
 	assert.match(viewSource, /"aria-label": t\("image\.previewLabel"\)/);
 });
 
-test("image preview modal keeps mobile gestures isolated and preloads adjacent images", async () => {
+test("image preview modal keeps mobile gestures isolated and queues one adjacent image", async () => {
 	const modalSource = await readFile(resolve(process.cwd(), "src/ui/KnomoImagePreviewModal.ts"), "utf8");
 
 	assert.match(modalSource, /toggleClass\("knomo-image-preview-backdrop--mobile", Platform\.isMobile\)/);
@@ -181,7 +181,10 @@ test("image preview modal keeps mobile gestures isolated and preloads adjacent i
 	assert.match(modalSource, /const TOUCH_EDGE_GUARD = 24;/);
 	assert.match(modalSource, /suppressStageClickUntil/);
 	assert.match(modalSource, /preloadedImageUrls\.has\(image\.url\)/);
-	assert.match(modalSource, /this\.preloadAdjacentImages\(\);/);
+	assert.match(modalSource, /this\.preloadAdjacentImage\(stage\);/);
+	assert.match(modalSource, /priority:\s*"high"/);
+	assert.match(modalSource, /priority:\s*"low"/);
+	assert.match(modalSource, /allowDisconnected:\s*true/);
 	assert.match(modalSource, /t\("image\.loadFailed"\)/);
 });
 
@@ -201,9 +204,10 @@ test("mobile card flow starts with 25 cards while desktop keeps 50", async () =>
 	assert.match(renderMethod, /const loadItem: CardImageLoadItem/);
 	assert.match(renderMethod, /src:\s*image\.url/);
 	assert.doesNotMatch(renderMethod, /releaseSlotAfterStart/);
-	assert.match(renderImagesMethod, /queue\.observe/);
+	assert.match(renderImagesMethod, /cardImageLoadQueue\.observe/);
 	assert.match(renderImagesMethod, /targetEl:\s*imagesEl/);
 	assert.match(renderImagesMethod, /images:\s*loadItems/);
+	assert.match(renderImagesMethod, /surface,/);
 	assert.doesNotMatch(renderMethod, /createEl\("img",\s*\{\s*attr:\s*\{[^}]*\bsrc:/s);
 	assert.match(source, /const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;/);
 	assert.match(source, /rootMargin:\s*Platform\.isMobile \? "0px 0px" : undefined/);
@@ -231,6 +235,7 @@ test("CJK card CSS keeps headings, code, and tables start-aligned", async () => 
 test("memo markdown post-processing still keeps internal links, tags, and lazy images", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 
+	assert.match(source, /prepareMemoCardMarkdown\(previewText\)/);
 	assert.match(source, /this\.prepareInternalLinks\(container, memo\.dailyRef\.path\);/);
 	assert.match(source, /event\.preventDefault\(\);\s*await this\.app\.workspace\.openLinkText\(linktext, sourcePath, Keymap\.isModEvent\(event\)\);/);
 	assert.match(source, /imageEl\.setAttr\("loading", "lazy"\);/);

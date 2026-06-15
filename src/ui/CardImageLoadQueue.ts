@@ -1,18 +1,27 @@
 export interface CardImageLoadItem {
 	imageEl: HTMLImageElement;
 	src: string;
-	onError: () => void;
+	resourcePath?: string;
+	onLoad?: () => void;
+	onError?: () => void;
+	allowDisconnected?: boolean;
 }
+
+export type CardImageLoadSurface = "card-flow" | "mobile-search" | "image-preview";
+export type CardImageLoadPriority = "high" | "normal" | "low";
 
 export interface CardImageLoadRequest {
 	targetEl: HTMLElement;
-	images: CardImageLoadItem[];
+	images: readonly CardImageLoadItem[];
 	generation: number;
+	surface: CardImageLoadSurface;
+	priority?: CardImageLoadPriority;
+	observe?: boolean;
 }
 
 interface CardImageLoadQueueOptions {
 	concurrency: number;
-	getGeneration: () => number;
+	getGeneration: (surface: CardImageLoadSurface) => number;
 	scheduleTask: (callback: () => void, delayMs: number) => number;
 	cancelTask: (taskId: number) => void;
 	scheduleStartTask?: (callback: () => void) => number;
@@ -20,30 +29,32 @@ interface CardImageLoadQueueOptions {
 	watchdogMs: number;
 	Observer?: typeof IntersectionObserver;
 	rootMargin?: string;
-	waitForDecode?: boolean;
 }
 
-interface ActiveCardImage {
+interface CardImageLoadTask {
+	targetEl: HTMLElement;
 	item: CardImageLoadItem;
+	generation: number;
+	surface: CardImageLoadSurface;
+	priority: CardImageLoadPriority;
+	sequence: number;
+	startTaskId: number | null;
+	watchdogTaskId: number | null;
 	handleLoad: () => void;
 	handleError: () => void;
 	listening: boolean;
 }
 
-interface CardImageLoadEntry extends CardImageLoadRequest {
-	startTaskId: number | null;
-	watchdogTaskId: number | null;
-	remainingImages: number;
-	activeImages: Map<HTMLImageElement, ActiveCardImage>;
-}
-
 export class CardImageLoadQueue {
 	private observer: IntersectionObserver | null = null;
-	private readonly observedEntries = new Map<Element, CardImageLoadEntry>();
-	private pendingEntries: CardImageLoadEntry[] = [];
-	private readonly slotEntries = new Set<CardImageLoadEntry>();
-	private readonly runningEntries = new Set<CardImageLoadEntry>();
-	private readonly loadedSources = new Set<string>();
+	private readonly observedRequests = new Map<Element, CardImageLoadRequest>();
+	private pendingTasks: CardImageLoadTask[] = [];
+	private readonly activeTasks = new Set<CardImageLoadTask>();
+	private readonly activeSources = new Set<string>();
+	private readonly decodedSources = new Set<string>();
+	private readonly decodedSourcePaths = new Map<string, string>();
+	private readonly pausedSurfaces = new Set<CardImageLoadSurface>();
+	private nextSequence = 0;
 	private paused = false;
 
 	constructor(private readonly options: CardImageLoadQueueOptions) {
@@ -58,72 +69,73 @@ export class CardImageLoadQueue {
 	}
 
 	observe(request: CardImageLoadRequest): void {
-		const pendingImages = request.images.filter((item) => {
-			if (!this.loadedSources.has(item.src)) {
-				return true;
-			}
-			item.imageEl.setAttr("src", item.src);
-			return false;
-		});
-		if (pendingImages.length === 0) {
+		if (request.images.length === 0) {
 			return;
 		}
-		const entry: CardImageLoadEntry = {
-			...request,
-			images: pendingImages,
-			startTaskId: null,
-			watchdogTaskId: null,
-			remainingImages: pendingImages.length,
-			activeImages: new Map(),
-		};
-		if (this.observer === null) {
-			this.pendingEntries.push(entry);
-			this.pump();
+		if (this.observer === null || request.observe === false) {
+			this.enqueueRequest(request);
 			return;
 		}
-		this.observedEntries.set(request.targetEl, entry);
+		this.forget(request.targetEl);
+		this.observedRequests.set(request.targetEl, request);
 		this.observer.observe(request.targetEl);
 	}
 
 	forget(targetEl: HTMLElement, clearSources = false): void {
-		const observedEntry = this.observedEntries.get(targetEl);
-		if (observedEntry !== undefined) {
-			this.observedEntries.delete(targetEl);
+		const observedRequest = this.observedRequests.get(targetEl);
+		if (observedRequest !== undefined) {
+			this.observedRequests.delete(targetEl);
 			this.observer?.unobserve(targetEl);
 			if (clearSources) {
-				for (const item of observedEntry.images) {
+				for (const item of observedRequest.images) {
 					item.imageEl.removeAttribute("src");
 				}
 			}
 		}
-		this.pendingEntries = this.pendingEntries.filter((entry) => {
-			if (entry.targetEl !== targetEl) {
+		this.pendingTasks = this.pendingTasks.filter((task) => {
+			if (task.targetEl !== targetEl) {
 				return true;
 			}
 			if (clearSources) {
-				for (const item of entry.images) {
-					item.imageEl.removeAttribute("src");
-				}
+				task.item.imageEl.removeAttribute("src");
 			}
 			return false;
 		});
-		for (const entry of [...this.runningEntries]) {
-			if (entry.targetEl === targetEl) {
-				this.cancelEntry(entry, clearSources);
+		for (const task of [...this.activeTasks]) {
+			if (task.targetEl === targetEl) {
+				this.cancelActiveTask(task, clearSources);
 			}
 		}
 	}
 
-	clear(): void {
-		this.observer?.disconnect();
-		this.observedEntries.clear();
-		this.pendingEntries = [];
-		for (const entry of [...this.runningEntries]) {
-			this.cancelEntry(entry, true);
+	clear(surface?: CardImageLoadSurface): void {
+		for (const [target, request] of this.observedRequests) {
+			if (surface !== undefined && request.surface !== surface) {
+				continue;
+			}
+			this.observedRequests.delete(target);
+			this.observer?.unobserve(target);
+			for (const item of request.images) {
+				item.imageEl.removeAttribute("src");
+			}
 		}
-		this.slotEntries.clear();
-		this.runningEntries.clear();
-		this.loadedSources.clear();
+		this.pendingTasks = this.pendingTasks.filter((task) => {
+			if (surface !== undefined && task.surface !== surface) {
+				return true;
+			}
+			task.item.imageEl.removeAttribute("src");
+			return false;
+		});
+		for (const task of [...this.activeTasks]) {
+			if (surface === undefined || task.surface === surface) {
+				this.cancelActiveTask(task, true);
+			}
+		}
+		if (surface === undefined) {
+			this.observer?.disconnect();
+			this.decodedSources.clear();
+			this.decodedSourcePaths.clear();
+		}
 	}
 
 	dispose(): void {
@@ -141,18 +153,88 @@ export class CardImageLoadQueue {
 		}
 	}
 
+	setSurfacePaused(surface: CardImageLoadSurface, paused: boolean): void {
+		if (paused) {
+			this.pausedSurfaces.add(surface);
+			return;
+		}
+		if (this.pausedSurfaces.delete(surface)) {
+			this.pump();
+		}
+	}
+
+	invalidateResourcePaths(paths: readonly string[]): void {
+		const normalizedPaths = new Set(paths.map(normalizeResourcePath));
+		for (const [source, resourcePath] of this.decodedSourcePaths) {
+			if (normalizedPaths.has(normalizeResourcePath(resourcePath))) {
+				this.decodedSourcePaths.delete(source);
+				this.decodedSources.delete(source);
+			}
+		}
+		for (const [target, request] of this.observedRequests) {
+			const images = request.images.filter((item) => !matchesResourcePath(item, normalizedPaths));
+			if (images.length === request.images.length) {
+				continue;
+			}
+			for (const item of request.images) {
+				if (matchesResourcePath(item, normalizedPaths)) {
+					item.imageEl.removeAttribute("src");
+				}
+			}
+			if (images.length === 0) {
+				this.observedRequests.delete(target);
+				this.observer?.unobserve(target);
+			} else {
+				this.observedRequests.set(target, { ...request, images });
+			}
+		}
+		this.pendingTasks = this.pendingTasks.filter((task) => {
+			if (!matchesResourcePath(task.item, normalizedPaths)) {
+				return true;
+			}
+			task.item.imageEl.removeAttribute("src");
+			return false;
+		});
+		for (const task of [...this.activeTasks]) {
+			if (matchesResourcePath(task.item, normalizedPaths)) {
+				this.cancelActiveTask(task, true);
+			}
+		}
+	}
+
 	private handleIntersections(entries: IntersectionObserverEntry[]): void {
 		for (const observerEntry of entries) {
 			if (!observerEntry.isIntersecting) {
 				continue;
 			}
-			const entry = this.observedEntries.get(observerEntry.target);
-			if (entry === undefined) {
+			const request = this.observedRequests.get(observerEntry.target);
+			if (request === undefined) {
 				continue;
 			}
-			this.observedEntries.delete(observerEntry.target);
+			this.observedRequests.delete(observerEntry.target);
 			this.observer?.unobserve(observerEntry.target);
-			this.pendingEntries.push(entry);
+			this.enqueueRequest(request);
+		}
+	}
+
+	private enqueueRequest(request: CardImageLoadRequest): void {
+		for (const item of request.images) {
+			let task: CardImageLoadTask;
+			task = {
+				targetEl: request.targetEl,
+				item,
+				generation: request.generation,
+				surface: request.surface,
+				priority: request.priority ?? "normal",
+				sequence: this.nextSequence,
+				startTaskId: null,
+				watchdogTaskId: null,
+				handleLoad: () => this.handleImageLoad(task),
+				handleError: () => this.handleImageError(task),
+				listening: false,
+			};
+			this.nextSequence += 1;
+			this.pendingTasks.push(task);
 		}
 		this.pump();
 	}
@@ -161,164 +243,224 @@ export class CardImageLoadQueue {
 		if (this.paused) {
 			return;
 		}
-		while (this.slotEntries.size < this.options.concurrency) {
-			const entry = this.pendingEntries.shift();
-			if (entry === undefined) {
+		while (this.activeTasks.size < this.options.concurrency) {
+			const task = this.takeNextPendingTask();
+			if (task === null) {
 				return;
 			}
-			if (!this.isCurrentEntry(entry)) {
-				continue;
-			}
-			this.slotEntries.add(entry);
-			this.runningEntries.add(entry);
+			this.activeTasks.add(task);
+			this.activeSources.add(task.item.src);
 			const start = () => {
-				entry.startTaskId = null;
-				this.startEntry(entry);
+				task.startTaskId = null;
+				this.startTask(task);
 			};
-			entry.startTaskId = this.options.scheduleStartTask?.(start)
+			task.startTaskId = this.options.scheduleStartTask?.(start)
 				?? this.options.scheduleTask(start, 0);
 		}
 	}
 
-	private startEntry(entry: CardImageLoadEntry): void {
-		if (!this.runningEntries.has(entry)) {
-			return;
-		}
-		if (this.paused) {
-			this.runningEntries.delete(entry);
-			this.slotEntries.delete(entry);
-			this.pendingEntries.unshift(entry);
-			return;
-		}
-		if (!this.isCurrentEntry(entry)) {
-			this.cancelEntry(entry, true);
-			return;
-		}
-		for (const item of entry.images) {
-			if (!item.imageEl.isConnected) {
-				entry.remainingImages -= 1;
+	private takeNextPendingTask(): CardImageLoadTask | null {
+		while (true) {
+			let selectedIndex = -1;
+			for (const [index, task] of this.pendingTasks.entries()) {
+				if (!this.isCurrentTask(task)) {
+					task.item.imageEl.removeAttribute("src");
+					this.pendingTasks.splice(index, 1);
+					selectedIndex = -2;
+					break;
+				}
+				if (this.decodedSources.has(task.item.src)) {
+					this.pendingTasks.splice(index, 1);
+					this.applyDecodedSource(task);
+					selectedIndex = -2;
+					break;
+				}
+				if (this.pausedSurfaces.has(task.surface) || this.activeSources.has(task.item.src)) {
+					continue;
+				}
+				if (
+					selectedIndex === -1
+					|| compareTaskPriority(task, this.pendingTasks[selectedIndex]) < 0
+				) {
+					selectedIndex = index;
+				}
+			}
+			if (selectedIndex === -2) {
 				continue;
 			}
-			const activeImage: ActiveCardImage = {
-				item,
-				handleLoad: () => this.handleImageLoad(entry, activeImage),
-				handleError: () => this.handleImageError(entry, activeImage),
-				listening: true,
-			};
-			entry.activeImages.set(item.imageEl, activeImage);
-			item.imageEl.addEventListener("load", activeImage.handleLoad);
-			item.imageEl.addEventListener("error", activeImage.handleError);
-			item.imageEl.setAttr("src", item.src);
+			if (selectedIndex === -1) {
+				return null;
+			}
+			return this.pendingTasks.splice(selectedIndex, 1)[0];
 		}
-		if (entry.remainingImages === 0) {
-			this.completeEntry(entry);
+	}
+
+	private startTask(task: CardImageLoadTask): void {
+		if (!this.activeTasks.has(task)) {
 			return;
 		}
-		entry.watchdogTaskId = this.options.scheduleTask(() => {
-			entry.watchdogTaskId = null;
-			this.releaseSlot(entry);
+		if (this.paused || this.pausedSurfaces.has(task.surface)) {
+			this.releaseActiveTask(task);
+			this.pendingTasks.push(task);
+			return;
+		}
+		if (!this.isCurrentTask(task)) {
+			this.cancelActiveTask(task, true);
+			return;
+		}
+		task.listening = true;
+		task.item.imageEl.addEventListener("load", task.handleLoad);
+		task.item.imageEl.addEventListener("error", task.handleError);
+		task.item.imageEl.setAttr("src", task.item.src);
+		task.watchdogTaskId = this.options.scheduleTask(() => {
+			task.watchdogTaskId = null;
+			if (!this.activeTasks.has(task)) {
+				return;
+			}
+			const shouldNotify = this.isCurrentTask(task);
+			this.finishTask(task, false, true, shouldNotify);
 		}, this.options.watchdogMs);
 	}
 
-	private handleImageLoad(entry: CardImageLoadEntry, activeImage: ActiveCardImage): void {
-		if (entry.activeImages.get(activeImage.item.imageEl) !== activeImage) {
+	private handleImageLoad(task: CardImageLoadTask): void {
+		if (!this.activeTasks.has(task)) {
 			return;
 		}
-		this.removeActiveImageListeners(activeImage);
+		this.removeTaskListeners(task);
 		let decodePromise: Promise<void>;
 		try {
-			decodePromise = typeof activeImage.item.imageEl.decode === "function"
-				? activeImage.item.imageEl.decode()
+			decodePromise = typeof task.item.imageEl.decode === "function"
+				? task.item.imageEl.decode()
 				: Promise.resolve();
 		} catch {
 			decodePromise = Promise.resolve();
 		}
-		if (this.options.waitForDecode === false) {
-			this.completeImage(entry, activeImage, true);
-			void decodePromise.catch(() => undefined);
-			return;
-		}
 		void decodePromise
 			.catch(() => undefined)
-			.then(() => this.completeImage(entry, activeImage, true));
+			.then(() => {
+				if (!this.activeTasks.has(task)) {
+					return;
+				}
+				if (!this.isCurrentTask(task)) {
+					this.cancelActiveTask(task, true);
+					return;
+				}
+				this.finishTask(task, true, false, true);
+			});
 	}
 
-	private handleImageError(entry: CardImageLoadEntry, activeImage: ActiveCardImage): void {
-		if (entry.activeImages.get(activeImage.item.imageEl) !== activeImage) {
+	private handleImageError(task: CardImageLoadTask): void {
+		if (!this.activeTasks.has(task)) {
 			return;
 		}
-		this.removeActiveImageListeners(activeImage);
-		this.completeImage(entry, activeImage, false);
+		this.finishTask(task, false, false, this.isCurrentTask(task));
 	}
 
-	private completeImage(entry: CardImageLoadEntry, activeImage: ActiveCardImage, loaded: boolean): void {
-		if (!this.runningEntries.has(entry)) {
-			return;
+	private finishTask(
+		task: CardImageLoadTask,
+		loaded: boolean,
+		clearSource: boolean,
+		notify: boolean,
+	): void {
+		this.cancelTaskTimers(task);
+		this.removeTaskListeners(task);
+		if (clearSource) {
+			task.item.imageEl.removeAttribute("src");
 		}
-		if (!this.isCurrentEntry(entry)) {
-			this.cancelEntry(entry, true);
-			return;
-		}
-		entry.activeImages.delete(activeImage.item.imageEl);
 		if (loaded) {
-			this.loadedSources.add(activeImage.item.src);
-		}
-		if (!loaded && activeImage.item.imageEl.isConnected) {
-			activeImage.item.onError();
-		}
-		entry.remainingImages -= 1;
-		if (entry.remainingImages === 0) {
-			this.completeEntry(entry);
-		}
-	}
-
-	private completeEntry(entry: CardImageLoadEntry): void {
-		this.cancelEntryTasks(entry);
-		this.runningEntries.delete(entry);
-		this.releaseSlot(entry);
-	}
-
-	private cancelEntry(entry: CardImageLoadEntry, clearSources: boolean): void {
-		this.cancelEntryTasks(entry);
-		for (const activeImage of entry.activeImages.values()) {
-			this.removeActiveImageListeners(activeImage);
-			if (clearSources) {
-				activeImage.item.imageEl.removeAttribute("src");
+			this.decodedSources.add(task.item.src);
+			if (task.item.resourcePath !== undefined) {
+				this.decodedSourcePaths.set(task.item.src, task.item.resourcePath);
 			}
 		}
-		entry.activeImages.clear();
-		this.runningEntries.delete(entry);
-		this.releaseSlot(entry);
+		if (notify) {
+			if (loaded) {
+				task.item.onLoad?.();
+			} else {
+				task.item.onError?.();
+			}
+		}
+		this.releaseActiveTask(task);
 	}
 
-	private cancelEntryTasks(entry: CardImageLoadEntry): void {
-		if (entry.startTaskId !== null) {
+	private cancelActiveTask(task: CardImageLoadTask, clearSource: boolean): void {
+		this.cancelTaskTimers(task);
+		this.removeTaskListeners(task);
+		if (clearSource) {
+			task.item.imageEl.removeAttribute("src");
+		}
+		this.releaseActiveTask(task);
+	}
+
+	private cancelTaskTimers(task: CardImageLoadTask): void {
+		if (task.startTaskId !== null) {
 			const cancelStartTask = this.options.cancelStartTask ?? this.options.cancelTask;
-			cancelStartTask(entry.startTaskId);
-			entry.startTaskId = null;
+			cancelStartTask(task.startTaskId);
+			task.startTaskId = null;
 		}
-		if (entry.watchdogTaskId !== null) {
-			this.options.cancelTask(entry.watchdogTaskId);
-			entry.watchdogTaskId = null;
+		if (task.watchdogTaskId !== null) {
+			this.options.cancelTask(task.watchdogTaskId);
+			task.watchdogTaskId = null;
 		}
 	}
 
-	private removeActiveImageListeners(activeImage: ActiveCardImage): void {
-		if (!activeImage.listening) {
+	private removeTaskListeners(task: CardImageLoadTask): void {
+		if (!task.listening) {
 			return;
 		}
-		activeImage.item.imageEl.removeEventListener("load", activeImage.handleLoad);
-		activeImage.item.imageEl.removeEventListener("error", activeImage.handleError);
-		activeImage.listening = false;
+		task.item.imageEl.removeEventListener("load", task.handleLoad);
+		task.item.imageEl.removeEventListener("error", task.handleError);
+		task.listening = false;
 	}
 
-	private releaseSlot(entry: CardImageLoadEntry): void {
-		if (this.slotEntries.delete(entry)) {
-			this.pump();
+	private releaseActiveTask(task: CardImageLoadTask): void {
+		if (!this.activeTasks.delete(task)) {
+			return;
+		}
+		this.activeSources.delete(task.item.src);
+		this.pump();
+	}
+
+	private applyDecodedSource(task: CardImageLoadTask): void {
+		if (!this.isCurrentTask(task)) {
+			return;
+		}
+		task.item.imageEl.setAttr("src", task.item.src);
+		if (task.item.onLoad !== undefined) {
+			void Promise.resolve().then(() => {
+				if (this.isCurrentTask(task) && this.decodedSources.has(task.item.src)) {
+					task.item.onLoad?.();
+				}
+			});
 		}
 	}
 
-	private isCurrentEntry(entry: CardImageLoadEntry): boolean {
-		return entry.generation === this.options.getGeneration() && entry.targetEl.isConnected;
+	private isCurrentTask(task: CardImageLoadTask): boolean {
+		return task.generation === this.options.getGeneration(task.surface)
+			&& task.targetEl.isConnected
+			&& (task.item.allowDisconnected === true || task.item.imageEl.isConnected);
 	}
+}
+
+function compareTaskPriority(left: CardImageLoadTask, right: CardImageLoadTask): number {
+	const priorityDifference = getPriorityRank(left.priority) - getPriorityRank(right.priority);
+	return priorityDifference !== 0 ? priorityDifference : left.sequence - right.sequence;
+}
+
+function getPriorityRank(priority: CardImageLoadPriority): number {
+	if (priority === "high") {
+		return 0;
+	}
+	if (priority === "low") {
+		return 2;
+	}
+	return 1;
+}
+
+function matchesResourcePath(item: CardImageLoadItem, paths: ReadonlySet<string>): boolean {
+	return item.resourcePath !== undefined && paths.has(normalizeResourcePath(item.resourcePath));
+}
+
+function normalizeResourcePath(path: string): string {
+	return path.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
 }

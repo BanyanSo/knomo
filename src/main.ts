@@ -1,4 +1,4 @@
-import { Notice, Platform, Plugin } from "obsidian";
+import { Notice, Platform, Plugin, TFile } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
@@ -95,6 +95,7 @@ export default class KnomoPlugin extends Plugin {
 				() => this.runManualRefresh(),
 			),
 		);
+		this.registerAttachmentEvents();
 
 		this.registerHoverLinkSource(KNOMO_VIEW_TYPE, {
 			display: "Knomo",
@@ -179,6 +180,41 @@ export default class KnomoPlugin extends Plugin {
 		}
 	}
 
+	private registerAttachmentEvents(): void {
+		this.registerEvent(this.app.vault.on("create", (file) => {
+			if (file instanceof TFile && isSupportedImagePath(file.path)) {
+				this.broadcastAttachmentChanges([file.path]);
+			}
+		}));
+		this.registerEvent(this.app.vault.on("modify", (file) => {
+			if (file instanceof TFile && isSupportedImagePath(file.path)) {
+				this.broadcastAttachmentChanges([file.path]);
+			}
+		}));
+		this.registerEvent(this.app.vault.on("delete", (file) => {
+			if (file instanceof TFile && isSupportedImagePath(file.path)) {
+				this.broadcastAttachmentChanges([file.path]);
+			}
+		}));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+			const paths = [
+				isSupportedImagePath(oldPath) ? oldPath : null,
+				file instanceof TFile && isSupportedImagePath(file.path) ? file.path : null,
+			].filter((path): path is string => path !== null);
+			if (paths.length > 0) {
+				this.broadcastAttachmentChanges(paths);
+			}
+		}));
+	}
+
+	private broadcastAttachmentChanges(paths: readonly string[]): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+			if (leaf.view instanceof KnomoView) {
+				leaf.view.handleAttachmentFilesChanged(paths);
+			}
+		}
+	}
+
 	private notifyWatchSyncError(path: string, error: unknown): void {
 		const message = formatSettingsText(error instanceof Error ? error.message : t("service.unknownError"));
 		new Notice(t("service.watchSyncFailed", { path, message }));
@@ -254,4 +290,11 @@ export default class KnomoPlugin extends Plugin {
 			});
 		return this.manualRefreshPromise;
 	}
+}
+
+const SUPPORTED_IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
+
+function isSupportedImagePath(path: string): boolean {
+	const extensionIndex = path.lastIndexOf(".");
+	return extensionIndex !== -1 && SUPPORTED_IMAGE_EXTENSIONS.has(path.slice(extensionIndex + 1).toLowerCase());
 }

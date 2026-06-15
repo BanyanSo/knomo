@@ -5,10 +5,22 @@ import { t } from "../i18n";
 import type { MemoPreviewImage } from "./MemoCardPreview";
 
 interface KnomoImagePreviewModalOptions {
-	images: MemoPreviewImage[];
+	images: readonly MemoPreviewImage[];
 	initialIndex: number;
 	lockCardFlowScroll: () => void;
 	unlockCardFlowScroll: () => void;
+	loadImage: (request: ImagePreviewLoadRequest) => void;
+	clearImageLoads: () => void;
+}
+
+interface ImagePreviewLoadRequest {
+	targetEl: HTMLElement;
+	imageEl: HTMLImageElement;
+	image: MemoPreviewImage;
+	priority: "high" | "low";
+	allowDisconnected?: boolean;
+	onLoad?: () => void;
+	onError?: () => void;
 }
 
 interface TouchStartState {
@@ -30,9 +42,11 @@ const TOUCH_HORIZONTAL_RATIO = 1.5;
 const TOUCH_CLICK_SUPPRESSION_MS = 400;
 
 export class KnomoImagePreviewModal extends Modal {
-	private readonly images: MemoPreviewImage[];
+	private readonly images: readonly MemoPreviewImage[];
 	private readonly lockCardFlowScroll: () => void;
 	private readonly unlockCardFlowScroll: () => void;
+	private readonly loadImage: (request: ImagePreviewLoadRequest) => void;
+	private readonly clearImageLoads: () => void;
 	private currentIndex: number;
 	private stageEl: HTMLElement | null = null;
 	private counterEl: HTMLElement | null = null;
@@ -48,6 +62,8 @@ export class KnomoImagePreviewModal extends Modal {
 		this.currentIndex = clampImageIndex(options.initialIndex, options.images.length);
 		this.lockCardFlowScroll = options.lockCardFlowScroll;
 		this.unlockCardFlowScroll = options.unlockCardFlowScroll;
+		this.loadImage = options.loadImage;
+		this.clearImageLoads = options.clearImageLoads;
 	}
 
 	onOpen(): void {
@@ -119,6 +135,7 @@ export class KnomoImagePreviewModal extends Modal {
 		this.touchStart = null;
 		this.suppressStageClickUntil = 0;
 		this.renderGeneration += 1;
+		this.clearImageLoads();
 		this.preloadedImageUrls.clear();
 		this.preloadImages.clear();
 		this.unlockCardFlowScroll();
@@ -132,6 +149,7 @@ export class KnomoImagePreviewModal extends Modal {
 		}
 		const image = this.images[this.currentIndex];
 		const renderGeneration = ++this.renderGeneration;
+		this.clearImageLoads();
 		stage.empty();
 		if (image === undefined || image.url === undefined || image.unresolved === true) {
 			this.renderPlaceholder(stage);
@@ -140,20 +158,29 @@ export class KnomoImagePreviewModal extends Modal {
 			const img = stage.createEl("img", {
 				cls: "knomo-image-preview-img",
 				attr: {
-					src: image.url,
 					alt: image.alt ?? "",
 					decoding: "async",
 				},
 			});
-			img.addEventListener("error", () => {
-				if (this.stageEl === stage && this.renderGeneration === renderGeneration) {
-					stage.empty();
-					this.renderLoadError(stage);
-				}
+			this.loadImage({
+				targetEl: stage,
+				imageEl: img,
+				image,
+				priority: "high",
+				onLoad: () => {
+					if (this.stageEl === stage && this.renderGeneration === renderGeneration) {
+						this.preloadAdjacentImage(stage);
+					}
+				},
+				onError: () => {
+					if (this.stageEl === stage && this.renderGeneration === renderGeneration) {
+						stage.empty();
+						this.renderLoadError(stage);
+					}
+				},
 			});
 		}
 		this.syncFooter();
-		this.preloadAdjacentImages();
 	}
 
 	private renderPlaceholder(container: HTMLElement): void {
@@ -174,7 +201,7 @@ export class KnomoImagePreviewModal extends Modal {
 		});
 	}
 
-	private preloadAdjacentImages(): void {
+	private preloadAdjacentImage(stage: HTMLElement): void {
 		for (const index of getAdjacentImageIndexes(this.currentIndex, this.images.length)) {
 			const image = this.images[index];
 			if (image === undefined || image.url === undefined || image.unresolved === true) {
@@ -188,7 +215,14 @@ export class KnomoImagePreviewModal extends Modal {
 			const preloadImage = new ImageClass();
 			preloadImage.decoding = "async";
 			this.preloadImages.set(image.url, preloadImage);
-			preloadImage.src = image.url;
+			this.loadImage({
+				targetEl: stage,
+				imageEl: preloadImage,
+				image,
+				priority: "low",
+				allowDisconnected: true,
+			});
+			return;
 		}
 	}
 

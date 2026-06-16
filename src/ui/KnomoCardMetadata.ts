@@ -4,17 +4,13 @@ import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 
 export interface MemoCardShellOptions {
 	memoId: string;
-	renderIndex: number;
-	randomCard: boolean;
 	includeActions: boolean;
 	activeMenuMemoId: string | null;
-	getA11yId: (id: string) => string;
 }
 
 export interface MemoCardShell {
 	className: string;
 	attrs: Record<string, string>;
-	randomCardDescriptionId: string | null;
 }
 
 export type MemoSourceReferenceMeta =
@@ -38,7 +34,7 @@ export interface TrashCardActionMeta {
 	state: TrashActionState;
 }
 
-const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "copy-text", "copy-link", "delete"];
+const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"];
 const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
 const CJK_CONTENT_MIN_HAN_COUNT = 8;
 const CJK_CONTENT_MIN_HAN_RATIO = 0.25;
@@ -54,20 +50,14 @@ export function isCjkMemoContent(content: string): boolean {
 }
 
 export function getMemoCardShell(options: MemoCardShellOptions): MemoCardShell {
-	const attrs: Record<string, string> = { "data-memo-id": options.memoId };
-	let randomCardDescriptionId: string | null = null;
-	if (options.randomCard) {
-		randomCardDescriptionId = options.getA11yId(`random-card-${options.renderIndex}-description`);
-		attrs.tabindex = "0";
-		attrs["aria-describedby"] = randomCardDescriptionId;
-		attrs["data-random-reunion-card"] = "true";
-	}
+	const attrs: Record<string, string> = {
+		"data-memo-id": options.memoId,
+	};
 	return {
 		className: options.includeActions && options.activeMenuMemoId === options.memoId
 			? "knomo-card is-menu-open"
 			: "knomo-card",
 		attrs,
-		randomCardDescriptionId,
 	};
 }
 

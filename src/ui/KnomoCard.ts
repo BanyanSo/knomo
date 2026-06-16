@@ -23,7 +23,6 @@ export interface RenderMemoCardOptions {
 	randomCard: boolean;
 	activeMenuMemoId: string | null;
 	deletedMemoIds: ReadonlySet<string>;
-	getA11yId: (id: string) => string;
 	formatDisplayTime: (value: string) => string;
 	formatSettingsText: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
@@ -53,25 +52,15 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 	const markdownPriority = options.getMarkdownPriority(options.renderIndex);
 	const shell = getMemoCardShell({
 		memoId: memo.id,
-		renderIndex: options.renderIndex,
-		randomCard: options.randomCard,
 		includeActions: options.includeActions,
 		activeMenuMemoId: options.activeMenuMemoId,
-		getA11yId: options.getA11yId,
 	});
 	const card = container.createEl("article", {
 		cls: isCjkMemoContent(memo.contentSnapshot) ? `${shell.className} is-cjk-content` : shell.className,
 		attr: shell.attrs,
 	});
-	if (shell.randomCardDescriptionId !== null) {
-		card.createSpan({
-			cls: "knomo-visually-hidden",
-			text: t("card.openSourceHint"),
-			attr: { id: shell.randomCardDescriptionId },
-		});
-	}
 	const head = card.createDiv({ cls: "knomo-card-head" });
-	head.createDiv({ cls: "knomo-card-time", text: options.formatDisplayTime(memo.createdAt) });
+	renderMemoCardTime(head, memo, options);
 	if (options.includeActions) {
 		const menu = head.createEl("button", {
 			cls: "knomo-card-menu",
@@ -105,6 +94,23 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 	}
 	renderCardMeta(card, memo, options);
 	return card;
+}
+
+function renderMemoCardTime(container: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): void {
+	const attrs: Record<string, string> = {
+		type: "button",
+		"aria-label": t("card.openDaily"),
+		"data-memo-time-open": "daily",
+		"data-memo-id": memo.id,
+	};
+	if (options.randomCard) {
+		attrs["data-random-reunion-card"] = "true";
+	}
+	container.createEl("button", {
+		cls: "knomo-card-time",
+		text: options.formatDisplayTime(memo.createdAt),
+		attr: attrs,
+	});
 }
 
 export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderTrashMemoCardOptions): HTMLElement {
@@ -227,6 +233,7 @@ function renderTrashAction(
 function getMemoActionLabel(action: MemoAction): string {
 	if (action === "edit") return t("card.edit");
 	if (action === "reference") return t("card.reference");
+	if (action === "open-daily") return t("card.openDaily");
 	if (action === "copy-text") return t("card.copyText");
 	if (action === "copy-link") return t("card.copyLink");
 	return t("card.delete");

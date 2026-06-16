@@ -38,6 +38,14 @@ export function parseMarkdownImages(content: string): ParsedMarkdownImage[] {
 	return images;
 }
 
+export function decodePercentEncodedImagePath(path: string): string {
+	try {
+		return decodeURI(path);
+	} catch {
+		return path;
+	}
+}
+
 function parseImageAt(content: string, index: number): ParsedMarkdownImage | null {
 	if (content.startsWith("![[", index)) {
 		return parseObsidianImageAt(content, index);
@@ -259,7 +267,7 @@ function normalizeObsidianImagePath(value: string): string {
 	const pathWithFragment = (aliasIndex === -1 ? value : value.slice(0, aliasIndex)).trim();
 	const fragmentIndex = findUnescapedCharacter(pathWithFragment, 0, "#");
 	const path = fragmentIndex === -1 ? pathWithFragment : pathWithFragment.slice(0, fragmentIndex);
-	return unescapeMarkdownText(path.trim());
+	return decodePercentEncodedImagePath(unescapeMarkdownText(path.trim()));
 }
 
 function findUnescapedSequence(content: string, start: number, sequence: string): number {

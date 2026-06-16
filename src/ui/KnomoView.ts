@@ -1,4 +1,4 @@
-import { ItemView, Keymap, MarkdownRenderer, Notice, Platform, Scope, setIcon } from "obsidian";
+import { ItemView, Keymap, MarkdownRenderer, Notice, Platform, Scope, setIcon, TFile } from "obsidian";
 import type { HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
@@ -25,7 +25,7 @@ import { buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } 
 import { formatSettingsText } from "../utils/serviceText";
 import {
 	getComposerToolButtonRoute,
-	getRandomReunionCardRoute,
+	getMemoCardOpenRoute,
 	getRootClickRoute,
 } from "./KnomoActionRouter";
 import {
@@ -46,6 +46,7 @@ import {
 import type { CardFlowBatch, CardFlowRenderMode } from "./KnomoCardFlow";
 import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
 import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
+import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
 import {
 	renderKnomoCardFlowHeaders,
 	renderKnomoEmptyState,
@@ -258,6 +259,8 @@ export class KnomoView extends ItemView {
 	private quoteReferenceText: string | null = null;
 	private quoteMarkdownText: string | null = null;
 	private activeMenuMemoId: string | null = null;
+	private suppressNextOpenPopupDismissClick = false;
+	private suppressNextOpenPopupDismissClickTimerId: number | null = null;
 	private draftContent = "";
 	private isSaving = false;
 	private composerSaveShortcutDown = false;
@@ -452,6 +455,7 @@ export class KnomoView extends ItemView {
 		this.clearSkipListEnterInputFallback();
 		this.clearHandledMobileToolPointer();
 		this.clearMobileImagePickerFocusGuard();
+		this.clearSuppressNextOpenPopupDismissClick();
 		this.pendingMobileListEnterCorrection = null;
 		this.removeMobileSearchPage();
 		this.containerEl.doc.body.removeClass("knomo-mobile-search-active");
@@ -605,6 +609,9 @@ export class KnomoView extends ItemView {
 			this.handleTaskCheckboxChange(event);
 		});
 
+		this.registerDomEvent(root, "pointerdown", (event) => {
+			this.handleRootPointerDown(event);
+		}, { capture: true });
 		this.registerDomEvent(root, "click", (event) => {
 			void this.handleRootClick(event);
 		});
@@ -1120,18 +1127,14 @@ export class KnomoView extends ItemView {
 			this.mobileHeaderTitleRegisteredEl = titleEl;
 			this.registerDomEvent(titleEl, "click", (event) => {
 				event.preventDefault();
-				this.scopeMenuOpen = !this.scopeMenuOpen;
-				this.desktopSearchOpen = false;
-				this.syncRootState();
+				this.toggleScopeMenu();
 			});
 			this.registerDomEvent(titleEl, "keydown", (event) => {
 				if (event.key !== "Enter" && event.key !== " ") {
 					return;
 				}
 				event.preventDefault();
-				this.scopeMenuOpen = !this.scopeMenuOpen;
-				this.desktopSearchOpen = false;
-				this.syncRootState();
+				this.toggleScopeMenu();
 			});
 		}
 		titleEl.empty();
@@ -2050,7 +2053,6 @@ export class KnomoView extends ItemView {
 			randomCard,
 			activeMenuMemoId: this.activeMenuMemoId,
 			deletedMemoIds: this.deletedMemoIds,
-			getA11yId: (id) => this.getA11yId(id),
 			formatDisplayTime: formatMemoDisplayTime,
 			formatSettingsText,
 			getMarkdownPriority: getMarkdownRenderPriority,
@@ -2344,9 +2346,23 @@ export class KnomoView extends ItemView {
 		this.mobileSearchImagePreviewScrollTop = null;
 	}
 
+	private handleRootPointerDown(event: PointerEvent): void {
+		if (this.currentLayout !== "mobile") {
+			return;
+		}
+		this.handleOpenPopupOutsideEvent(event, event.target, true);
+	}
+
 	private async handleRootClick(event: MouseEvent): Promise<void> {
 		const target = event.target as Node | null;
 		if (target === null || !target.instanceOf(Element)) {
+			return;
+		}
+
+		if (this.consumeSuppressedOpenPopupDismissClick(event)) {
+			return;
+		}
+		if (this.handleOpenPopupOutsideEvent(event, target, false)) {
 			return;
 		}
 
@@ -2460,9 +2476,9 @@ export class KnomoView extends ItemView {
 			return;
 		}
 
-		if (route.type === "random-reunion-card") {
+		if (route.type === "memo-card-open") {
 			if (route.memoId !== null) {
-				await this.openRandomReunionMemo(route.memoId);
+				await this.openMemoCardDailyNote(route.memoId, route.randomReunion);
 			}
 			return;
 		}
@@ -2484,20 +2500,39 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private toggleCardMenu(memoId: string | null): void {
+		if (this.activeMenuMemoId === memoId) {
+			this.closeCardMenu();
+			return;
+		}
+		if (this.currentLayout !== "mobile") {
+			this.desktopSearchOpen = false;
+			this.compactSearchOpen = false;
+		}
+		this.scopeMenuOpen = false;
+		this.activeMenuMemoId = memoId;
+		this.syncRootState();
+		this.syncCardMenuState();
+	}
+
+	private toggleScopeMenu(): void {
+		this.scopeMenuOpen = !this.scopeMenuOpen;
+		this.desktopSearchOpen = false;
+		if (this.currentLayout !== "mobile") {
+			this.compactSearchOpen = false;
+		}
+		this.closeCardMenu();
+		this.syncRootState();
+		this.syncCardMenuState();
+	}
+
 	private async handleAction(action: string | null, memoId: string | null): Promise<void> {
 		const dispatch = getKnomoActionDispatch(action);
 		switch (dispatch.type) {
 			case "none":
 				return;
 			case "toggle-card-menu":
-				if (this.currentLayout !== "mobile") {
-					this.scopeMenuOpen = false;
-					this.desktopSearchOpen = false;
-					this.compactSearchOpen = false;
-					this.syncRootState();
-				}
-				this.activeMenuMemoId = this.activeMenuMemoId === memoId ? null : memoId;
-				this.syncCardMenuState();
+				this.toggleCardMenu(memoId);
 				return;
 			case "refresh-random-reunion":
 				await this.refreshRandomReunionMemos();
@@ -2529,12 +2564,7 @@ export class KnomoView extends ItemView {
 				this.mobileDrawerOpen = false;
 				break;
 			case "toggle-scope-menu":
-				this.scopeMenuOpen = !this.scopeMenuOpen;
-				this.desktopSearchOpen = false;
-				if (this.currentLayout !== "mobile") {
-					this.compactSearchOpen = false;
-					this.activeMenuMemoId = null;
-				}
+				this.toggleScopeMenu();
 				break;
 			case "toggle-sidebar":
 				this.toggleSidebar();
@@ -2604,12 +2634,11 @@ export class KnomoView extends ItemView {
 		}
 		const target = event.target as Node | null;
 		if ((event.key === "Enter" || event.key === " ") && target?.instanceOf(Element)) {
-			const randomReunionCardEl = getRandomReunionCardRoute(target);
-			if (randomReunionCardEl !== null) {
-				const memoId = randomReunionCardEl.getAttr("data-memo-id");
-				if (memoId !== null) {
+			const memoCardOpenRoute = getMemoCardOpenRoute(target);
+			if (memoCardOpenRoute !== null) {
+				if (memoCardOpenRoute.memoId !== null) {
 					event.preventDefault();
-					await this.openRandomReunionMemo(memoId);
+					await this.openMemoCardDailyNote(memoCardOpenRoute.memoId, memoCardOpenRoute.randomReunion);
 				}
 				return;
 			}
@@ -2641,7 +2670,7 @@ export class KnomoView extends ItemView {
 			this.composerOpen
 		) {
 			event.preventDefault();
-			this.activeMenuMemoId = null;
+			this.closeCardMenu();
 			this.scopeMenuOpen = false;
 			this.desktopSearchOpen = false;
 			this.compactSearchOpen = false;
@@ -2654,23 +2683,33 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
-		this.activeMenuMemoId = null;
+		this.closeCardMenu();
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		try {
 			if (action === "edit") {
-				if (shouldCloseMobileSearch) {
-					this.closeMobileSearchPage();
-				}
 				this.startEditing(memo);
 				this.syncCardMenuState();
 				return;
 			} else if (action === "reference") {
 				const referenceText = await this.referenceService.createReferenceText(memo, "link");
+				this.startReferenceMemo(memo, withMemoIdAlias(referenceText, memo.id));
+				this.syncCardMenuState();
+				return;
+			} else if (action === "open-daily") {
+				const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
 				if (shouldCloseMobileSearch) {
 					this.closeMobileSearchPage();
 				}
-				this.startReferenceMemo(memo, withMemoIdAlias(referenceText, memo.id));
 				this.syncCardMenuState();
+				if (!(file instanceof TFile)) {
+					new Notice(t("error.dailyNoteMissing"));
+					return;
+				}
+				try {
+					await openMemoDailyNoteInNewTab(this.app.workspace, file, memo.dailyRef.lineNumberHint);
+				} catch {
+					new Notice(t("error.openDailyFailed"));
+				}
 				return;
 			} else if (action === "copy-text") {
 				await this.copyText(memo.contentSnapshot);
@@ -3895,8 +3934,129 @@ export class KnomoView extends ItemView {
 		if (this.activeMenuMemoId === null) {
 			return;
 		}
+		const memoId = this.activeMenuMemoId;
 		this.activeMenuMemoId = null;
 		this.syncCardMenuState();
+		this.blurCardMenuButton(memoId);
+	}
+
+	private handleOpenPopupOutsideEvent(event: Event, target: EventTarget | null, suppressFollowingClick: boolean): boolean {
+		const element = this.getEventElement(target);
+		if (element === null || !this.hasOpenPopup() || this.isTargetInOpenPopup(element)) {
+			return false;
+		}
+		this.closeOpenPopups();
+		if (suppressFollowingClick) {
+			this.markSuppressNextOpenPopupDismissClick();
+		}
+		if (!this.shouldPreserveDefaultForPopupDismiss(element)) {
+			event.preventDefault();
+		}
+		event.stopPropagation();
+		return true;
+	}
+
+	private consumeSuppressedOpenPopupDismissClick(event: Event): boolean {
+		if (!this.suppressNextOpenPopupDismissClick) {
+			return false;
+		}
+		this.clearSuppressNextOpenPopupDismissClick();
+		event.preventDefault();
+		event.stopPropagation();
+		event.stopImmediatePropagation();
+		return true;
+	}
+
+	private markSuppressNextOpenPopupDismissClick(): void {
+		this.clearSuppressNextOpenPopupDismissClick();
+		this.suppressNextOpenPopupDismissClick = true;
+		this.suppressNextOpenPopupDismissClickTimerId = this.containerEl.win.setTimeout(() => {
+			this.suppressNextOpenPopupDismissClick = false;
+			this.suppressNextOpenPopupDismissClickTimerId = null;
+		}, 350);
+	}
+
+	private clearSuppressNextOpenPopupDismissClick(): void {
+		this.suppressNextOpenPopupDismissClick = false;
+		if (this.suppressNextOpenPopupDismissClickTimerId === null) {
+			return;
+		}
+		this.containerEl.win.clearTimeout(this.suppressNextOpenPopupDismissClickTimerId);
+		this.suppressNextOpenPopupDismissClickTimerId = null;
+	}
+
+	private hasOpenPopup(): boolean {
+		return this.activeMenuMemoId !== null || this.scopeMenuOpen;
+	}
+
+	private isTargetInOpenPopup(target: Element): boolean {
+		return this.isOpenPopupTrigger(target) || this.isTargetInOpenCardMenu(target) || this.isTargetInOpenScopeMenu(target);
+	}
+
+	private isOpenPopupTrigger(target: Element): boolean {
+		return target.closest(".knomo-card-menu") !== null ||
+			target.closest("[data-action='toggle-card-menu']") !== null ||
+			target.closest("[data-action='toggle-scope-menu']") !== null ||
+			target.closest(".knomo-mobile-title") !== null;
+	}
+
+	private closeOpenPopups(): void {
+		const shouldCloseScopeMenu = this.scopeMenuOpen;
+		this.closeCardMenu();
+		if (shouldCloseScopeMenu) {
+			this.scopeMenuOpen = false;
+			this.syncRootState();
+		}
+	}
+
+	private getEventElement(target: EventTarget | null): Element | null {
+		const node = target as Node | null;
+		return node?.instanceOf(Element) ? node : null;
+	}
+
+	private isTargetInOpenCardMenu(target: Element): boolean {
+		if (this.activeMenuMemoId === null) {
+			return false;
+		}
+		const card = target.closest(".knomo-card");
+		if (!card?.instanceOf(HTMLElement) || card.getAttr("data-memo-id") !== this.activeMenuMemoId) {
+			return false;
+		}
+		return target.closest(".knomo-card-actions") !== null || target.closest(".knomo-card-menu") !== null;
+	}
+
+	private isTargetInOpenScopeMenu(target: Element): boolean {
+		if (!this.scopeMenuOpen) {
+			return false;
+		}
+		return target.closest(".knomo-scope-popover") !== null ||
+			target.closest("[data-action='toggle-scope-menu']") !== null ||
+			target.closest(".knomo-mobile-title") !== null;
+	}
+
+	private shouldPreserveDefaultForPopupDismiss(target: Element): boolean {
+		const editable = target.closest("input, textarea, select, [contenteditable='true']");
+		if (!editable?.instanceOf(HTMLElement)) {
+			return false;
+		}
+		if (!editable.instanceOf(HTMLInputElement)) {
+			return true;
+		}
+		return !["button", "checkbox", "color", "file", "image", "radio", "range", "reset", "submit"].includes(editable.type.toLowerCase());
+	}
+
+	private blurCardMenuButton(memoId: string): void {
+		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl]) {
+			if (container === null) {
+				continue;
+			}
+			for (const card of container.findAll(".knomo-card")) {
+				if (card.getAttr("data-memo-id") !== memoId) {
+					continue;
+				}
+				card.find(".knomo-card-menu")?.blur();
+			}
+		}
 	}
 
 	private syncCardMenuState(): void {
@@ -3907,7 +4067,6 @@ export class KnomoView extends ItemView {
 			for (const card of container.findAll(".knomo-card")) {
 				const isOpen = this.activeMenuMemoId !== null && card.getAttr("data-memo-id") === this.activeMenuMemoId;
 				card.toggleClass("is-menu-open", isOpen);
-				card.toggleClass("is-menu-above", false);
 				card.find(".knomo-card-menu")?.setAttr("aria-expanded", isOpen ? "true" : "false");
 				if (isOpen) {
 					this.positionOpenCardMenu(card);
@@ -4480,22 +4639,25 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private async openRandomReunionMemo(memoId: string): Promise<void> {
+	private async openMemoCardDailyNote(memoId: string, markRandomReunionReviewed: boolean): Promise<void> {
 		const memo = this.findMemoById(memoId);
 		if (memo === null) {
 			return;
 		}
-		const line = memo.dailyRef.lineNumberHint === null
-			? undefined
-			: Math.max(0, memo.dailyRef.lineNumberHint - 1);
-		const openState = line === undefined
-			? { active: true }
-			: { active: true, eState: { line } };
+		this.activeMenuMemoId = null;
+		if (this.currentLayout === "mobile" && this.mobileSearchPageOpen) {
+			this.closeMobileSearchPage();
+		} else {
+			this.syncCardMenuState();
+		}
 		try {
-			await this.app.workspace.openLinkText(memo.dailyRef.path, "", false, openState);
-			await this.randomReunionService.markRandomReunionReviewed(memo.id);
+			await openMemoDailyNoteDefault(this.app.workspace, memo);
+			if (markRandomReunionReviewed) {
+				await this.randomReunionService.markRandomReunionReviewed(memo.id);
+			}
 		} catch (error) {
-			new Notice(formatSettingsText(error instanceof Error ? error.message : t("error.randomOpenFailed")));
+			const fallbackMessage = markRandomReunionReviewed ? t("error.randomOpenFailed") : t("error.openDailyFailed");
+			new Notice(formatSettingsText(error instanceof Error ? error.message : fallbackMessage));
 		}
 	}
 
@@ -4671,6 +4833,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleTaskCheckboxClick(event: MouseEvent): void {
+		if (this.consumeSuppressedOpenPopupDismissClick(event)) {
+			return;
+		}
+		if (this.handleOpenPopupOutsideEvent(event, event.target, false)) {
+			return;
+		}
 		if (this.getTaskCheckboxInput(event.target) !== null) {
 			event.stopPropagation();
 		}
@@ -4678,6 +4846,13 @@ export class KnomoView extends ItemView {
 
 	private handleTaskCheckboxChange(event: Event): void {
 		if (!event.isTrusted) {
+			return;
+		}
+		if (this.suppressNextOpenPopupDismissClick) {
+			event.stopPropagation();
+			return;
+		}
+		if (this.handleOpenPopupOutsideEvent(event, event.target, false)) {
 			return;
 		}
 		const input = this.getTaskCheckboxInput(event.target);
@@ -4858,6 +5033,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleMarkdownInternalLinkClick(event: MouseEvent): Promise<void> {
+		if (this.consumeSuppressedOpenPopupDismissClick(event)) {
+			return;
+		}
+		if (this.handleOpenPopupOutsideEvent(event, event.target, false)) {
+			return;
+		}
 		const linkEl = this.getMarkdownInternalLink(event.target);
 		if (linkEl === null) {
 			return;

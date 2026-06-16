@@ -164,6 +164,19 @@ test("parses Obsidian image embeds", () => {
 	assert.deepEqual(parsed.links, []);
 });
 
+test("decodes percent-encoded Obsidian image embed paths", () => {
+	const parsed = service.parseMemoBlock(["- 12:00:00 图片 ![[Assets/a%20b%20c.jpg|300]]"], 0);
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images, [
+		{
+			path: "Assets/a b c.jpg",
+			altText: "",
+			syntax: "obsidian_embed",
+		},
+	]);
+});
+
 test("parses supported Obsidian image embeds", () => {
 	const parsed = service.parseMemoBlock([
 		"- 12:00:00 图片 ![[Assets/a.avif]] ![[Assets/a.bmp]] ![[Assets/a.gif]] ![[Assets/a.jpeg]]",
@@ -212,6 +225,31 @@ test("parses Markdown images", () => {
 		{
 			path: "Assets/a.png",
 			altText: "alt",
+			syntax: "markdown_image",
+		},
+	]);
+});
+
+test("decodes percent-encoded local Markdown image paths", () => {
+	const parsed = service.parseMemoBlock(["- 12:00:00 图片 ![](Pasted%20image%2020260606110900.png)"], 0);
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images, [
+		{
+			path: "Pasted image 20260606110900.png",
+			altText: "",
+			syntax: "markdown_image",
+		},
+	]);
+});
+
+test("keeps remote Markdown image URLs percent-encoded", () => {
+	const metadata = service.parseMemoMetadata("![remote](https://example.com/Pasted%20image%2020260606110900.png)");
+
+	assert.deepEqual(metadata.images, [
+		{
+			path: "https://example.com/Pasted%20image%2020260606110900.png",
+			altText: "remote",
 			syntax: "markdown_image",
 		},
 	]);

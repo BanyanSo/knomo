@@ -1,5 +1,5 @@
 import type { MemoImageRef, MemoLinkRef } from "../types/memo";
-import { parseMarkdownImages } from "./markdownImages";
+import { decodePercentEncodedImagePath, parseMarkdownImages } from "./markdownImages";
 
 const MARKDOWN_HEADING_REGEX = /^(#{1,6})\s+\S.*$/;
 const TRAILING_BLOCK_ID_REGEX = /\s+\^[A-Za-z0-9_-]+\s*$/;
@@ -97,7 +97,7 @@ export function parseMemoImages(content: string): MemoImageRef[] {
 	return parseMarkdownImages(content)
 		.filter((image) => image.syntax === "markdown_image" || isSupportedObsidianImagePath(image.path))
 		.map((image) => ({
-			path: image.path,
+			path: normalizeMemoImagePath(image),
 			altText: image.altText,
 			syntax: image.syntax,
 		}));
@@ -192,4 +192,15 @@ function isSupportedObsidianImagePath(path: string): boolean {
 		return false;
 	}
 	return OBSIDIAN_IMAGE_EXTENSIONS.has(path.slice(extensionIndex + 1).toLowerCase());
+}
+
+function normalizeMemoImagePath(image: { path: string; syntax: string }): string {
+	if (image.syntax === "markdown_image" && !hasUrlScheme(image.path)) {
+		return decodePercentEncodedImagePath(image.path);
+	}
+	return image.path;
+}
+
+function hasUrlScheme(value: string): boolean {
+	return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value);
 }

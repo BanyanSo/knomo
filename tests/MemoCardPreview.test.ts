@@ -144,6 +144,38 @@ test("versions local resource urls with the attachment modification time", () =>
 	assert.equal(preview.images[0].resourcePath, "photo.png");
 });
 
+test("resolves percent-encoded Obsidian image embed paths", () => {
+	const app = createAppStub(["Assets/a b c.jpg"]);
+	const preview = parseMemoCardPreview("![[Assets/a%20b%20c.jpg]]", "Daily/2026-06-15.md", app);
+
+	assert.equal(preview.text, "");
+	assert.equal(preview.images[0].path, "Assets/a b c.jpg");
+	assert.equal(preview.images[0].url, "app://Assets/a b c.jpg");
+	assert.equal(preview.images[0].resourcePath, "Assets/a b c.jpg");
+	assert.equal(preview.images[0].unresolved, undefined);
+});
+
+test("resolves percent-encoded local Markdown image paths", () => {
+	const app = createAppStub(["Pasted image 20260606110900.png"]);
+	const preview = parseMemoCardPreview(
+		"![](Pasted%20image%2020260606110900.png) ![remote](https://example.com/Pasted%20image%2020260606110900.png)",
+		"Daily/2026-06-15.md",
+		app,
+	);
+
+	assert.equal(preview.text, "");
+	assert.deepEqual(preview.images.map((image) => image.path), [
+		"Pasted image 20260606110900.png",
+		"https://example.com/Pasted%20image%2020260606110900.png",
+	]);
+	assert.deepEqual(preview.images.map((image) => image.url), [
+		"app://Pasted image 20260606110900.png",
+		"https://example.com/Pasted%20image%2020260606110900.png",
+	]);
+	assert.equal(preview.images[0].resourcePath, "Pasted image 20260606110900.png");
+	assert.equal(preview.images[1].isRemote, true);
+});
+
 function createAppStub(paths: string[], modifiedAt?: number): App {
 	const files = new Map<string, TFile>();
 	for (const path of paths) {

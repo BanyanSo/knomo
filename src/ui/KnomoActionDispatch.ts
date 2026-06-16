@@ -1,5 +1,5 @@
 export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-list" | "insert-numbered-list";
-export type MemoAction = "edit" | "reference" | "copy-text" | "copy-link" | "delete";
+export type MemoAction = "edit" | "reference" | "open-daily" | "copy-text" | "copy-link" | "delete";
 export type TrashAction = "restore" | "purge";
 
 export type KnomoActionDispatch =
@@ -98,6 +98,7 @@ export function isComposerToolAction(action: string): action is ComposerToolActi
 export function isMemoAction(action: string): action is MemoAction {
 	return action === "edit" ||
 		action === "reference" ||
+		action === "open-daily" ||
 		action === "copy-text" ||
 		action === "copy-link" ||
 		action === "delete";

@@ -1393,7 +1393,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-mobile-search-page {
 	position: fixed;
 	inset: 0;
-	z-index: 2147483647;
+	z-index: 9990;
 	display: flex;
 	flex-direction: column;
 	gap: 0;
@@ -2017,10 +2017,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: var(--knomo-row-hover);
 }
 
-.knomo-plugin .knomo-card[data-random-reunion-card="true"] {
-	cursor: pointer;
-}
-
 /* ---- Memo Card ---- */
 .knomo-plugin .knomo-card {
 	position: relative;
@@ -2054,7 +2050,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	margin-bottom: 6px;
+	margin-bottom: 2px;
 	color: var(--text-faint);
 	font-size: 12px;
 	line-height: 1.3;
@@ -2063,6 +2059,34 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-time {
 	color: var(--text-faint);
 	font-size: 13px;
+}
+
+.knomo-plugin .knomo-card-time[data-memo-time-open="daily"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-start;
+	height: var(--knomo-touch-target);
+	min-height: var(--knomo-touch-target);
+	margin: -14px 0;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	color: var(--text-faint);
+	background: transparent;
+	box-shadow: none;
+	font: inherit;
+	font-size: 13px;
+	line-height: 1.3;
+	text-align: left;
+	cursor: pointer;
+}
+
+.knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:hover,
+.knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:focus,
+.knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:focus-visible,
+.knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:active {
+	color: var(--text-muted);
+	background: transparent;
 }
 
 .knomo-plugin .knomo-trash-actions {
@@ -2077,10 +2101,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 24px;
-	min-width: 24px;
-	height: 22px;
-	min-height: 22px;
+	width: var(--knomo-touch-target);
+	min-width: var(--knomo-touch-target);
+	height: var(--knomo-touch-target);
+	min-height: var(--knomo-touch-target);
+	margin: -11px -10px;
 	padding: 0;
 	border: 0;
 	border-radius: 4px;
@@ -2091,9 +2116,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-card-menu:hover,
-.knomo-plugin .knomo-card-menu:focus-visible {
+.knomo-plugin .knomo-card-menu:focus,
+.knomo-plugin .knomo-card-menu:focus-visible,
+.knomo-plugin .knomo-card-menu:active,
+.knomo-plugin .knomo-card-menu[aria-expanded="true"] {
 	color: var(--text-muted);
-	background: var(--knomo-row-hover);
+	background: transparent;
 }
 
 /* Card action dropdown */
@@ -2173,7 +2201,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-body {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 6px;
 	min-width: 0;
 }
 

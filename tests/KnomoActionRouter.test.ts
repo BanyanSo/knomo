@@ -64,9 +64,8 @@ test("routes generic actions, random cards, composer tools, and outside clicks",
 	try {
 		const {
 			getComposerToolButtonRoute,
-			getRandomReunionCardRoute,
+			getMemoCardOpenRoute,
 			getRootClickRoute,
-			shouldOpenRandomReunionCard,
 		} = await import("../src/ui/KnomoActionRouter");
 
 		const toolButton = new TestElement("button", {
@@ -86,19 +85,51 @@ test("routes generic actions, random cards, composer tools, and outside clicks",
 		assert.equal(composerToolRoute?.element, toolButton.asElement());
 		assert.equal(composerToolRoute?.action, "insert-tag");
 
+		const memoCard = new TestElement("article", {
+			attr: { "data-memo-id": "memo-4" },
+		});
+		const memoContent = memoCard.createChild("div");
+		const memoTime = memoCard.createChild("button", {
+			attr: { "data-memo-time-open": "daily", "data-memo-id": "memo-4" },
+		});
+		assert.equal(getMemoCardOpenRoute(memoContent.asElement()), null);
+		assert.deepEqual(getMemoCardOpenRoute(memoTime.asElement()), {
+			element: memoTime.asElement(),
+			memoId: "memo-4",
+			randomReunion: false,
+		});
+		assert.deepEqual(pickRoute(getRootClickRoute(memoTime.asElement(), false)), {
+			type: "memo-card-open",
+			memoId: "memo-4",
+			randomReunion: false,
+		});
+
 		const randomCard = new TestElement("article", {
-			attr: { "data-random-reunion-card": "true", "data-memo-id": "memo-4" },
+			attr: { "data-memo-id": "memo-5" },
 		});
 		const randomContent = randomCard.createChild("div");
-		assert.equal(getRandomReunionCardRoute(randomContent.asElement()), randomCard.asElement());
-		assert.deepEqual(pickRoute(getRootClickRoute(randomContent.asElement(), false)), {
-			type: "random-reunion-card",
-			memoId: "memo-4",
+		const randomTime = randomCard.createChild("button", {
+			attr: { "data-memo-time-open": "daily", "data-random-reunion-card": "true", "data-memo-id": "memo-5" },
+		});
+		assert.equal(getMemoCardOpenRoute(randomContent.asElement()), null);
+		assert.deepEqual(getMemoCardOpenRoute(randomTime.asElement()), {
+			element: randomTime.asElement(),
+			memoId: "memo-5",
+			randomReunion: true,
+		});
+		assert.deepEqual(pickRoute(getRootClickRoute(randomTime.asElement(), false)), {
+			type: "memo-card-open",
+			memoId: "memo-5",
+			randomReunion: true,
 		});
 
 		const linkInRandomCard = randomCard.createChild("a");
-		assert.equal(shouldOpenRandomReunionCard(linkInRandomCard.asElement()), false);
-		assert.equal(getRandomReunionCardRoute(linkInRandomCard.asElement()), null);
+		assert.equal(getMemoCardOpenRoute(linkInRandomCard.asElement()), null);
+
+		const legacyCard = new TestElement("article", {
+			attr: { "data-memo-card-open": "daily", "data-memo-id": "legacy-memo" },
+		});
+		assert.equal(getMemoCardOpenRoute(legacyCard.createChild("div").asElement()), null);
 
 		const outside = new TestElement("div");
 		assert.deepEqual(pickRoute(getRootClickRoute(outside.asElement(), false)), {
@@ -118,6 +149,56 @@ test("routes generic actions, random cards, composer tools, and outside clicks",
 			closeDesktopSearch: true,
 			closeCompactSearch: true,
 		});
+	} finally {
+		cleanup();
+	}
+});
+
+test("does not open memo cards from interactive card regions", async () => {
+	const cleanup = installDomGlobals();
+	try {
+		const { getMemoCardOpenRoute } = await import("../src/ui/KnomoActionRouter");
+		const cardWithTime = new TestElement("article", {
+			attr: { "data-memo-id": "memo-time" },
+		});
+		const timeButton = cardWithTime.createChild("button", {
+			attr: { "data-memo-time-open": "daily", "data-memo-id": "memo-time" },
+		});
+		const timeLabel = timeButton.createChild("span");
+		assert.deepEqual(getMemoCardOpenRoute(timeLabel.asElement()), {
+			element: timeButton.asElement(),
+			memoId: "memo-time",
+			randomReunion: false,
+		});
+
+		const cases: Array<{ tagName: string; cls?: string; attr?: Record<string, string> }> = [
+			{ tagName: "a" },
+			{ tagName: "a", cls: "internal-link" },
+			{ tagName: "button" },
+			{ tagName: "input" },
+			{ tagName: "textarea" },
+			{ tagName: "select" },
+			{ tagName: "label" },
+			{ tagName: "button", attr: { "data-memo-action": "open-daily" } },
+			{ tagName: "button", attr: { "data-action": "toggle-card-menu" } },
+			{ tagName: "a", attr: { "data-tag": "project" } },
+			{ tagName: "button", attr: { "data-tag-toggle": "project" } },
+			{ tagName: "a", cls: "tag" },
+			{ tagName: "div", cls: "knomo-card-actions" },
+			{ tagName: "button", cls: "knomo-card-menu" },
+			{ tagName: "div", cls: "knomo-card-images" },
+			{ tagName: "button", cls: "knomo-card-image-button" },
+			{ tagName: "input", cls: "knomo-task-checkbox" },
+			{ tagName: "input", cls: "task-list-item-checkbox" },
+		];
+
+		for (const item of cases) {
+			const card = new TestElement("article", {
+				attr: { "data-memo-id": "memo-interactive" },
+			});
+			const target = card.createChild(item.tagName, { cls: item.cls, attr: item.attr });
+			assert.equal(getMemoCardOpenRoute(target.asElement()), null, item.tagName);
+		}
 	} finally {
 		cleanup();
 	}
@@ -144,7 +225,7 @@ function pickRoute(route: ReturnType<typeof import("../src/ui/KnomoActionRouter"
 	if (route.type === "trash-action") return { type: route.type, action: route.action, memoId: route.memoId };
 	if (route.type === "memo-action") return { type: route.type, action: route.action, memoId: route.memoId };
 	if (route.type === "action") return { type: route.type, action: route.action, memoId: route.memoId };
-	if (route.type === "random-reunion-card") return { type: route.type, memoId: route.memoId };
+	if (route.type === "memo-card-open") return { type: route.type, memoId: route.memoId, randomReunion: route.randomReunion };
 	return {
 		type: route.type,
 		closeCardMenu: route.closeCardMenu,

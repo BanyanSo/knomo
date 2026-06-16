@@ -37,6 +37,7 @@ test("classifies memo and trash actions", () => {
 	assert.deepEqual(getMemoActionDispatch(null), { type: "none" });
 	assert.deepEqual(getMemoActionDispatch("edit"), { type: "memo-action", action: "edit" });
 	assert.deepEqual(getMemoActionDispatch("reference"), { type: "memo-action", action: "reference" });
+	assert.deepEqual(getMemoActionDispatch("open-daily"), { type: "memo-action", action: "open-daily" });
 	assert.deepEqual(getMemoActionDispatch("copy-text"), { type: "memo-action", action: "copy-text" });
 	assert.deepEqual(getMemoActionDispatch("copy-link"), { type: "memo-action", action: "copy-link" });
 	assert.deepEqual(getMemoActionDispatch("delete"), { type: "memo-action", action: "delete" });
@@ -47,6 +48,7 @@ test("classifies memo and trash actions", () => {
 	assert.deepEqual(getTrashActionDispatch(null), { type: "none" });
 	assert.deepEqual(getTrashActionDispatch("restore"), { type: "trash-action", action: "restore" });
 	assert.deepEqual(getTrashActionDispatch("purge"), { type: "trash-action", action: "purge" });
+	assert.deepEqual(getTrashActionDispatch("open-daily"), { type: "unknown", action: "open-daily" });
 	assert.deepEqual(getTrashActionDispatch("copy-text"), { type: "unknown", action: "copy-text" });
 	assert.equal(isTrashAction("restore"), true);
 	assert.equal(isTrashAction("copy-text"), false);

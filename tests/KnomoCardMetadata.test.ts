@@ -15,36 +15,27 @@ import {
 } from "../src/ui/KnomoCardMetadata";
 import type { MemoRecord } from "../src/types/memo";
 
-test("builds regular and random memo card shell metadata", () => {
+test("builds memo card shell metadata without daily-open card attributes", () => {
 	assert.deepEqual(getMemoCardShell({
 		memoId: "memo-1",
-		renderIndex: 2,
-		randomCard: false,
 		includeActions: true,
 		activeMenuMemoId: "memo-1",
-		getA11yId: (id) => `a11y-${id}`,
 	}), {
 		className: "knomo-card is-menu-open",
-		attrs: { "data-memo-id": "memo-1" },
-		randomCardDescriptionId: null,
+		attrs: {
+			"data-memo-id": "memo-1",
+		},
 	});
 
 	assert.deepEqual(getMemoCardShell({
 		memoId: "memo-2",
-		renderIndex: 4,
-		randomCard: true,
 		includeActions: false,
 		activeMenuMemoId: "memo-2",
-		getA11yId: (id) => `a11y-${id}`,
 	}), {
 		className: "knomo-card",
 		attrs: {
 			"data-memo-id": "memo-2",
-			tabindex: "0",
-			"aria-describedby": "a11y-random-card-4-description",
-			"data-random-reunion-card": "true",
 		},
-		randomCardDescriptionId: "a11y-random-card-4-description",
 	});
 });
 
@@ -54,6 +45,7 @@ test("builds card action and trash action metadata", () => {
 	assert.deepEqual(getMemoCardActions(), [
 		{ action: "edit", className: "knomo-card-action" },
 		{ action: "reference", className: "knomo-card-action" },
+		{ action: "open-daily", className: "knomo-card-action" },
 		{ action: "copy-text", className: "knomo-card-action" },
 		{ action: "copy-link", className: "knomo-card-action" },
 		{ action: "delete", className: "knomo-card-action is-danger" },

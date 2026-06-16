@@ -1,6 +1,6 @@
 import type { App, TFile } from "obsidian";
 
-import { parseMarkdownImages } from "../utils/markdownImages";
+import { decodePercentEncodedImagePath, parseMarkdownImages } from "../utils/markdownImages";
 import type { ParsedMarkdownImage } from "../utils/markdownImages";
 
 export interface MemoCardPreview {
@@ -67,15 +67,16 @@ function resolvePreviewImage(syntax: ParsedMarkdownImage, sourcePath: string, ap
 		return null;
 	}
 
-	if (!isSupportedImagePath(syntax.path)) {
+	const localPath = decodePercentEncodedImagePath(syntax.path);
+	if (!isSupportedImagePath(localPath)) {
 		return null;
 	}
 
-	const file = app.metadataCache.getFirstLinkpathDest(syntax.path, sourcePath);
+	const file = app.metadataCache.getFirstLinkpathDest(localPath, sourcePath);
 	if (file === null) {
 		return {
 			raw: syntax.raw,
-			path: syntax.path,
+			path: localPath,
 			alt: syntax.altText,
 			isRemote: false,
 			unresolved: true,
@@ -84,7 +85,7 @@ function resolvePreviewImage(syntax: ParsedMarkdownImage, sourcePath: string, ap
 	const resourceUrl = app.vault.getResourcePath(file);
 	return {
 		raw: syntax.raw,
-		path: syntax.path,
+		path: localPath,
 		alt: syntax.altText,
 		url: appendResourceVersion(resourceUrl, file.stat?.mtime),
 		isRemote: false,

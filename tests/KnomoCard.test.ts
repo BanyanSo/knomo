@@ -65,6 +65,101 @@ test("image-only memo cards do not render an empty card content container", asyn
 	assert.notEqual(images, null);
 });
 
+test("memo card action menu includes open daily in the requested order", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo(), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: true,
+		randomCard: false,
+		activeMenuMemoId: null,
+		deletedMemoIds: new Set(),
+		formatDisplayTime: (value) => value,
+		formatSettingsText: (value) => value,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	const actions = root.findAll("[data-memo-action]");
+	assert.deepEqual(actions.map((action) => action.getAttr("data-memo-action")), [
+		"edit",
+		"reference",
+		"open-daily",
+		"copy-text",
+		"copy-link",
+		"delete",
+	]);
+	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
+	const card = root.find("article");
+	assert.equal(card?.getAttr("data-memo-card-open"), null);
+	assert.equal(card?.getAttr("tabindex"), null);
+	const timeButton = root.find("[data-memo-time-open='daily']");
+	assert.equal(timeButton?.getText(), "2026-06-02T00:00:00+08:00");
+	assert.equal(timeButton?.getAttr("aria-label"), "Open daily note");
+	assert.equal(timeButton?.getAttr("data-memo-id"), "memo-1");
+	assert.equal(timeButton?.getAttr("data-random-reunion-card"), null);
+});
+
+test("random memo card keeps random review marking on the time opener", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo({ id: "random-1" }), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: false,
+		randomCard: true,
+		activeMenuMemoId: null,
+		deletedMemoIds: new Set(),
+		formatDisplayTime: (value) => value,
+		formatSettingsText: (value) => value,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	const card = root.find("article");
+	const timeButton = root.find("[data-memo-time-open='daily']");
+	assert.equal(card?.getAttr("data-random-reunion-card"), null);
+	assert.equal(timeButton?.getAttr("data-memo-id"), "random-1");
+	assert.equal(timeButton?.getAttr("data-random-reunion-card"), "true");
+});
+
+test("trash memo cards do not get daily note card-open attributes", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoTrashMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+
+	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({ status: "deleted" }), {
+		generation: 7,
+		renderIndex: 0,
+		busyAction: null,
+		formatDisplayTime: (value) => value,
+		formatOptionalTime: (value) => value ?? "",
+		formatDeleteSource: (value) => value,
+		formatSettingsText: (value) => value,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+	});
+
+	const card = root.find("article");
+	assert.equal(card?.getAttr("data-memo-card-open"), null);
+	assert.equal(card?.getAttr("data-random-reunion-card"), null);
+	assert.equal(card?.getAttr("tabindex"), null);
+	assert.equal(root.find("[data-memo-time-open='daily']"), null);
+});
+
 test("card content CSS justifies CJK cards while list items inherit the card alignment", async () => {
 	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
 
@@ -73,6 +168,59 @@ test("card content CSS justifies CJK cards while list items inherit the card ali
 	assert.match(getStyleRule(css, ".knomo-plugin .knomo-card.is-cjk-content .knomo-card-content"), /text-align-last:\s*start;/);
 	assert.equal(css.includes("text-justify"), false);
 	assert.doesNotMatch(getCjkSelectors(css), /\bli\b/);
+});
+
+test("memo card time opener CSS expands the hit target without changing text width", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+	const rule = getStyleRule(css, ".knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]");
+	const interactiveRule = getStyleRule(
+		css,
+		".knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:hover,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:focus,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:focus-visible,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:active",
+	);
+
+	assert.doesNotMatch(css, /\.knomo-card\[data-memo-card-open="daily"\]/);
+	assert.match(rule, /height:\s*var\(--knomo-touch-target\);/);
+	assert.match(rule, /min-height:\s*var\(--knomo-touch-target\);/);
+	assert.match(rule, /margin:\s*-14px 0;/);
+	assert.match(rule, /padding:\s*0;/);
+	assert.match(rule, /cursor:\s*pointer;/);
+	assert.doesNotMatch(rule, /width:\s*100%/);
+	assert.match(interactiveRule, /color:\s*var\(--text-muted\);/);
+	assert.match(interactiveRule, /background:\s*transparent;/);
+	assert.doesNotMatch(css, /\.knomo-card\[data-random-reunion-card="true"\]\s*\{[^}]*cursor:/s);
+});
+
+test("card menu button expands hit target without changing the layout footprint", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+	const match = css.match(/\/\* Card menu button \*\/[\s\S]*?\.knomo-plugin \.knomo-card-menu\s*\{([^}]*)\}/);
+	if (match === null) {
+		throw new Error("Expected card menu button CSS rule");
+	}
+	const rule = match[1];
+
+	assert.match(rule, /width:\s*var\(--knomo-touch-target\);/);
+	assert.match(rule, /min-width:\s*var\(--knomo-touch-target\);/);
+	assert.match(rule, /height:\s*var\(--knomo-touch-target\);/);
+	assert.match(rule, /min-height:\s*var\(--knomo-touch-target\);/);
+	assert.match(rule, /margin:\s*-11px -10px;/);
+	assert.match(rule, /padding:\s*0;/);
+	assert.doesNotMatch(css, /\.knomo-card-menu svg\s*\{/);
+	const interactiveRule = getStyleRule(
+		css,
+		".knomo-plugin .knomo-card-menu:hover,\n.knomo-plugin .knomo-card-menu:focus,\n.knomo-plugin .knomo-card-menu:focus-visible,\n.knomo-plugin .knomo-card-menu:active,\n.knomo-plugin .knomo-card-menu[aria-expanded=\"true\"]",
+	);
+	assert.match(interactiveRule, /color:\s*var\(--text-muted\);/);
+	assert.match(interactiveRule, /background:\s*transparent;/);
+	assert.doesNotMatch(css, /\.knomo-card-menu[^{]*\{[^}]*background:\s*var\(--knomo-row-hover\)/s);
+});
+
+test("mobile composer layers above the mobile search page and suggestions", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+
+	assert.match(getStyleRule(css, ".knomo-plugin .knomo-mobile-search-page"), /z-index:\s*9990;/);
+	assert.match(getStyleRule(css, ".knomo-mobile-composer-layer"), /z-index:\s*10000;/);
+	assert.match(getStyleRule(css, ".knomo-tag-suggest-popover"), /z-index:\s*var\(--knomo-suggest-z-index,\s*10020\);/);
+	assert.match(getStyleRule(css, ".knomo-link-suggest-popover"), /z-index:\s*var\(--knomo-suggest-z-index,\s*10020\);/);
 });
 
 test("card content CSS keeps mixed lists compact and task checkboxes aligned", async () => {
@@ -328,6 +476,120 @@ test("memo writes apply local mutations instead of refreshing every open view", 
 	assert.doesNotMatch(deleteMethod, /onMemosChanged/);
 });
 
+test("open daily memo action reads the existing daily ref and opens through the helper", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const memoActionMethod = getMethodSource(source, "handleMemoAction");
+
+	assert.match(memoActionMethod, /action === "open-daily"/);
+	assert.match(memoActionMethod, /this\.app\.vault\.getAbstractFileByPath\(memo\.dailyRef\.path\)/);
+	assert.match(
+		memoActionMethod,
+		/if \(shouldCloseMobileSearch\) \{\s*this\.closeMobileSearchPage\(\);\s*\}\s*this\.syncCardMenuState\(\);/,
+	);
+	assert.match(memoActionMethod, /if \(!\(file instanceof TFile\)\) \{\s*new Notice\(t\("error\.dailyNoteMissing"\)\);/);
+	assert.match(memoActionMethod, /await openMemoDailyNoteInNewTab\(this\.app\.workspace, file, memo\.dailyRef\.lineNumberHint\);/);
+});
+
+test("mobile popover toggles keep card and scope menus mutually exclusive", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const cardMenuMethod = getMethodSource(source, "toggleCardMenu");
+	const scopeMenuMethod = getMethodSource(source, "toggleScopeMenu");
+	const actionMethod = getMethodSource(source, "handleAction");
+
+	assert.match(cardMenuMethod, /this\.scopeMenuOpen = false;/);
+	assert.match(cardMenuMethod, /if \(this\.activeMenuMemoId === memoId\) \{\s*this\.closeCardMenu\(\);\s*return;\s*\}/);
+	assert.match(cardMenuMethod, /this\.activeMenuMemoId = memoId;/);
+	assert.match(cardMenuMethod, /this\.syncRootState\(\);/);
+	assert.match(cardMenuMethod, /this\.syncCardMenuState\(\);/);
+	assert.match(scopeMenuMethod, /this\.scopeMenuOpen = !this\.scopeMenuOpen;/);
+	assert.match(scopeMenuMethod, /this\.closeCardMenu\(\);/);
+	assert.match(scopeMenuMethod, /this\.syncRootState\(\);/);
+	assert.match(scopeMenuMethod, /this\.syncCardMenuState\(\);/);
+	assert.match(actionMethod, /case "toggle-card-menu":[\s\S]*this\.toggleCardMenu\(memoId\);/);
+	assert.match(actionMethod, /case "toggle-scope-menu":[\s\S]*this\.toggleScopeMenu\(\);/);
+});
+
+test("open popups consume outside card interactions before running card actions", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const rootPointerDownMethod = getMethodSource(source, "handleRootPointerDown");
+	const rootClickMethod = getMethodSource(source, "handleRootClick");
+	const guardMethod = getMethodSource(source, "handleOpenPopupOutsideEvent");
+	const popupMethod = getMethodSource(source, "isTargetInOpenPopup");
+	const triggerMethod = getMethodSource(source, "isOpenPopupTrigger");
+	const closePopupsMethod = getMethodSource(source, "closeOpenPopups");
+	const scopeGuardMethod = getMethodSource(source, "isTargetInOpenScopeMenu");
+	const closeMethod = getMethodSource(source, "closeCardMenu");
+	const blurMethod = getMethodSource(source, "blurCardMenuButton");
+	const syncCardMenuMethod = getMethodSource(source, "syncCardMenuState");
+	const markdownClickMethod = getMethodSource(source, "handleMarkdownInternalLinkClick");
+	const checkboxClickMethod = getMethodSource(source, "handleTaskCheckboxClick");
+	const checkboxChangeMethod = getMethodSource(source, "handleTaskCheckboxChange");
+
+	assert.match(rootPointerDownMethod, /this\.currentLayout !== "mobile"/);
+	assert.match(rootPointerDownMethod, /this\.handleOpenPopupOutsideEvent\(event, event\.target, true\);/);
+	assert.ok(rootClickMethod.indexOf("this.consumeSuppressedOpenPopupDismissClick(event)") < rootClickMethod.indexOf("const imageTrigger"));
+	assert.ok(rootClickMethod.indexOf("this.handleOpenPopupOutsideEvent(event, target, false)") < rootClickMethod.indexOf("route.type === \"memo-card-open\""));
+	assert.match(markdownClickMethod, /this\.consumeSuppressedOpenPopupDismissClick\(event\)/);
+	assert.match(markdownClickMethod, /this\.handleOpenPopupOutsideEvent\(event, event\.target, false\)/);
+	assert.match(checkboxClickMethod, /this\.consumeSuppressedOpenPopupDismissClick\(event\)/);
+	assert.match(checkboxClickMethod, /this\.handleOpenPopupOutsideEvent\(event, event\.target, false\)/);
+	assert.match(checkboxChangeMethod, /this\.suppressNextOpenPopupDismissClick/);
+	assert.match(checkboxChangeMethod, /this\.handleOpenPopupOutsideEvent\(event, event\.target, false\)/);
+	assert.match(guardMethod, /this\.hasOpenPopup\(\)/);
+	assert.match(guardMethod, /this\.isTargetInOpenPopup\(element\)/);
+	assert.match(guardMethod, /this\.closeOpenPopups\(\);/);
+	assert.match(guardMethod, /this\.markSuppressNextOpenPopupDismissClick\(\);/);
+	assert.match(guardMethod, /this\.shouldPreserveDefaultForPopupDismiss\(element\)/);
+	assert.match(popupMethod, /this\.isOpenPopupTrigger\(target\)/);
+	assert.match(triggerMethod, /\.knomo-card-menu/);
+	assert.match(triggerMethod, /toggle-card-menu/);
+	assert.match(triggerMethod, /toggle-scope-menu/);
+	assert.match(closePopupsMethod, /this\.closeCardMenu\(\);/);
+	assert.match(closePopupsMethod, /this\.scopeMenuOpen = false;/);
+	assert.match(closePopupsMethod, /this\.syncRootState\(\);/);
+	assert.match(scopeGuardMethod, /this\.scopeMenuOpen/);
+	assert.match(scopeGuardMethod, /\.knomo-scope-popover/);
+	assert.match(scopeGuardMethod, /toggle-scope-menu/);
+	assert.match(closeMethod, /const memoId = this\.activeMenuMemoId;/);
+	assert.match(closeMethod, /this\.blurCardMenuButton\(memoId\);/);
+	assert.match(blurMethod, /card\.find\("\.knomo-card-menu"\)\?\.blur\(\);/);
+	assert.doesNotMatch(syncCardMenuMethod, /toggleClass\("is-menu-above", false\)/);
+});
+
+test("mobile search edit and reference actions keep the search page open under composer", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const memoActionMethod = getMethodSource(source, "handleMemoAction");
+	const openDailyBranch = memoActionMethod.slice(memoActionMethod.indexOf("action === \"open-daily\""));
+	const startEditingMethod = getMethodSource(source, "startEditing");
+	const startReferenceMethod = getMethodSource(source, "startReferenceMemo");
+	const closeMobileComposerMethod = getMethodSource(source, "closeMobileComposerKeepingDraft");
+
+	assert.doesNotMatch(source, /hideMobileSearchPageForComposer|restoreMobileSearchAfterComposerClose|openMobileSearchPage\(false\)/);
+	assert.match(memoActionMethod, /if \(action === "edit"\) \{[\s\S]*this\.startEditing\(memo\);/);
+	assert.match(memoActionMethod, /action === "reference"[\s\S]*this\.startReferenceMemo/);
+	assert.match(openDailyBranch, /if \(shouldCloseMobileSearch\) \{\s*this\.closeMobileSearchPage\(\);/);
+	assert.doesNotMatch(startEditingMethod, /closeMobileSearchPage|mobileSearchPageOpen = false|resetMobileSearchState/);
+	assert.doesNotMatch(startReferenceMethod, /closeMobileSearchPage|mobileSearchPageOpen = false|resetMobileSearchState/);
+	assert.doesNotMatch(closeMobileComposerMethod, /closeMobileSearchPage|mobileSearchPageOpen = false|resetMobileSearchState/);
+});
+
+test("memo time clicks open daily notes with default pane behavior and random review marking after success", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const clickMethod = getMethodSource(source, "handleRootClick");
+	const keydownMethod = getMethodSource(source, "handleRootKeydown");
+	const openMethod = getMethodSource(source, "openMemoCardDailyNote");
+
+	assert.match(clickMethod, /route\.type === "memo-card-open"/);
+	assert.match(clickMethod, /await this\.openMemoCardDailyNote\(route\.memoId, route\.randomReunion\);/);
+	assert.match(keydownMethod, /getMemoCardOpenRoute\(target\)/);
+	assert.match(keydownMethod, /await this\.openMemoCardDailyNote\(memoCardOpenRoute\.memoId, memoCardOpenRoute\.randomReunion\);/);
+	assert.match(openMethod, /await openMemoDailyNoteDefault\(this\.app\.workspace, memo\);/);
+	assert.match(
+		openMethod,
+		/await openMemoDailyNoteDefault\(this\.app\.workspace, memo\);[\s\S]*if \(markRandomReunionReviewed\) \{[\s\S]*await this\.randomReunionService\.markRandomReunionReviewed\(memo\.id\);/,
+	);
+});
+
 test("memo delete mutations increment the trash count only once", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const mutationMethod = getMethodSource(source, "applyMemoMutation");
@@ -367,7 +629,6 @@ async function renderMemoCard(contentSnapshot: string, preview?: MemoCardPreview
 		randomCard: false,
 		activeMenuMemoId: null,
 		deletedMemoIds: new Set(),
-		getA11yId: (id) => `a11y-${id}`,
 		formatDisplayTime: (value) => value,
 		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
@@ -487,6 +748,10 @@ class TestElement {
 		return this.createEl("div", options);
 	}
 
+	createSpan(options: CreateElementOptions = {}): TestElement {
+		return this.createEl("span", options);
+	}
+
 	createEl(tagName: string, options: CreateElementOptions = {}): TestElement {
 		const child = new TestElement(tagName);
 		if (options.cls !== undefined) {
@@ -508,6 +773,10 @@ class TestElement {
 
 	setText(value: string): void {
 		this.text = value;
+	}
+
+	getText(): string {
+		return this.text + this.children.map((child) => child.getText()).join("");
 	}
 
 	setAttr(key: string, value: string): void {

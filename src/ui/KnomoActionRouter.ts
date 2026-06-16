@@ -7,7 +7,7 @@ export type RootClickRoute =
 	| { type: "trash-action"; element: HTMLElement; memoId: string | null; action: string | null }
 	| { type: "memo-action"; element: HTMLElement; memoId: string | null; action: string | null }
 	| { type: "action"; element: HTMLElement; memoId: string | null; action: string | null; mobileToolButtonEl: HTMLElement | null }
-	| { type: "random-reunion-card"; element: HTMLElement; memoId: string | null }
+	| { type: "memo-card-open"; element: HTMLElement; memoId: string | null; randomReunion: boolean }
 	| {
 		type: "outside";
 		closeCardMenu: boolean;
@@ -79,12 +79,13 @@ export function getRootClickRoute(target: Element, mobile: boolean): RootClickRo
 		};
 	}
 
-	const randomReunionCardEl = getRandomReunionCardRoute(target);
-	if (randomReunionCardEl !== null) {
+	const memoCardOpenRoute = getMemoCardOpenRoute(target);
+	if (memoCardOpenRoute !== null) {
 		return {
-			type: "random-reunion-card",
-			element: randomReunionCardEl,
-			memoId: randomReunionCardEl.getAttr("data-memo-id"),
+			type: "memo-card-open",
+			element: memoCardOpenRoute.element,
+			memoId: memoCardOpenRoute.memoId,
+			randomReunion: memoCardOpenRoute.randomReunion,
 		};
 	}
 
@@ -97,12 +98,16 @@ export function getRootClickRoute(target: Element, mobile: boolean): RootClickRo
 	};
 }
 
-export function getRandomReunionCardRoute(target: Element): HTMLElement | null {
-	const randomReunionCardEl = closestHTMLElement(target, "[data-random-reunion-card]");
-	if (randomReunionCardEl === null || !shouldOpenRandomReunionCard(target)) {
+export function getMemoCardOpenRoute(target: Element): { element: HTMLElement; memoId: string | null; randomReunion: boolean } | null {
+	const memoTimeEl = closestHTMLElement(target, "[data-memo-time-open='daily']");
+	if (memoTimeEl === null) {
 		return null;
 	}
-	return randomReunionCardEl;
+	return {
+		element: memoTimeEl,
+		memoId: memoTimeEl.getAttr("data-memo-id"),
+		randomReunion: memoTimeEl.getAttr("data-random-reunion-card") === "true",
+	};
 }
 
 export function getComposerToolButtonRoute(target: Element): { element: HTMLElement; action: string | null } | null {
@@ -114,10 +119,6 @@ export function getComposerToolButtonRoute(target: Element): { element: HTMLElem
 		element: toolButtonEl,
 		action: toolButtonEl.getAttr("data-action"),
 	};
-}
-
-export function shouldOpenRandomReunionCard(target: Element): boolean {
-	return target.closest("a, button, input, textarea, select, [data-tag], .knomo-card-actions, .knomo-card-menu") === null;
 }
 
 function closestHTMLElement(target: Element, selector: string): HTMLElement | null {

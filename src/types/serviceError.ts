@@ -41,6 +41,18 @@ export const KNOMO_ERROR_DEFINITIONS = {
 		messageKey: "service.monthlyArchiveBlockMissing",
 		fallbackMessage: "Monthly archive block does not exist.",
 	},
+	monthly_archive_period_invalid: {
+		messageKey: "service.monthlyArchivePeriodInvalid",
+		fallbackMessage: "Invalid monthly archive period: {{period}}",
+	},
+	monthly_archive_index_missing: {
+		messageKey: "service.monthlyArchiveIndexMissing",
+		fallbackMessage: "Monthly memo-index does not exist for {{period}}.",
+	},
+	monthly_archive_period_unresolved: {
+		messageKey: "service.monthlyArchivePeriodUnresolved",
+		fallbackMessage: "Unable to resolve a unique monthly archive period for {{path}}.",
+	},
 	trash_only_purge: {
 		messageKey: "service.trashOnlyPurge",
 		fallbackMessage: "Only memos in trash can be permanently deleted.",

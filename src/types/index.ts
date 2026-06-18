@@ -12,6 +12,7 @@ export type SelfWriteReason =
 	| "edit"
 	| "delete"
 	| "archive"
+	| "archive_delete"
 	| "index"
 	| "scan"
 	| "repair";

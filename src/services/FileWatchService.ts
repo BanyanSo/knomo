@@ -73,12 +73,27 @@ export class FileWatchService {
 	}
 
 	private handleFileDeleted(file: unknown): void {
-		if (!(file instanceof TFile) || file.extension !== "md" || !this.syncOrchestrator.isPotentialDailyFile(file.path)) {
+		if (!(file instanceof TFile) || file.extension !== "md") {
 			return;
 		}
 		const path = file.path;
-		this.queueFileTask(`delete:${path}`, path, async () => {
-			const changed = await this.syncOrchestrator.syncDeletedDailyFile(path);
+		if (this.syncOrchestrator.isPotentialDailyFile(path)) {
+			this.queueFileTask(`delete:${path}`, path, async () => {
+				const changed = await this.syncOrchestrator.syncDeletedDailyFile(path);
+				if (changed) {
+					await this.onSynced?.();
+				}
+			});
+			return;
+		}
+		if (!this.syncOrchestrator.isMonthlyArchiveFile(path)) {
+			return;
+		}
+		if (this.selfWriteTracker.consumeByReason(path, "archive_delete") !== null) {
+			return;
+		}
+		this.queueFileTask(`monthly-delete:${path}`, path, async () => {
+			const changed = await this.syncOrchestrator.recoverDeletedMonthlyArchive(path);
 			if (changed) {
 				await this.onSynced?.();
 			}

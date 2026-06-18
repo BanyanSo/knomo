@@ -348,6 +348,121 @@ test("FileWatchService syncs deleted daily notes", async () => {
 	assert.equal(deletedPath, file.path);
 });
 
+test("FileWatchService rebuilds a deleted monthly archive after debounce", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const file = Object.assign(new TFile(), {
+		path: "Memos/Memos-2026-06.md",
+		extension: "md",
+	});
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
+	const timerHandlers: Array<() => void> = [];
+	let rebuiltPath = "";
+	let refreshCount = 0;
+	const service = new FileWatchService(
+		{
+			vault: {
+				on: (eventName: string, handler: (...args: unknown[]) => void) => {
+					handlersByEvent.set(eventName, handler);
+					return {};
+				},
+			},
+			workspace: {
+				containerEl: {
+					win: {
+						setTimeout: (handler: () => void) => {
+							timerHandlers.push(handler);
+							return 1;
+						},
+						clearTimeout: () => undefined,
+					},
+				},
+			},
+		} as never,
+		{
+			consumeByReason: () => null,
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => false,
+			isMonthlyArchiveFile: (path: string) => path === file.path,
+			getSyncDebounceMs: () => 0,
+			recoverDeletedMonthlyArchive: async (path: string) => {
+				rebuiltPath = path;
+				return true;
+			},
+		} as never,
+		() => {
+			refreshCount += 1;
+		},
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+	handlersByEvent.get("delete")?.(file);
+	assert.equal(rebuiltPath, "");
+	timerHandlers[0]?.();
+	await waitImmediate();
+
+	assert.equal(rebuiltPath, file.path);
+	assert.equal(refreshCount, 1);
+});
+
+test("FileWatchService ignores monthly archive deletes caused by Knomo rollback", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const file = Object.assign(new TFile(), {
+		path: "Memos/Memos-2026-06.md",
+		extension: "md",
+	});
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
+	let rebuildCalled = false;
+	const service = new FileWatchService(
+		{
+			vault: {
+				on: (eventName: string, handler: (...args: unknown[]) => void) => {
+					handlersByEvent.set(eventName, handler);
+					return {};
+				},
+			},
+			workspace: {
+				containerEl: {
+					win: {
+						setTimeout: () => 1,
+						clearTimeout: () => undefined,
+					},
+				},
+			},
+		} as never,
+		{
+			consumeByReason: (_path: string, reason: string) => reason === "archive_delete" ? { opId: "rollback" } : null,
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => false,
+			isMonthlyArchiveFile: () => true,
+			getSyncDebounceMs: () => 0,
+			recoverDeletedMonthlyArchive: async () => {
+				rebuildCalled = true;
+				return true;
+			},
+		} as never,
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+	handlersByEvent.get("delete")?.(file);
+	await waitImmediate();
+
+	assert.equal(rebuildCalled, false);
+});
+
 test("FileWatchService runs queued file tasks serially", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");

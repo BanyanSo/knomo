@@ -43,7 +43,17 @@ export default class KnomoPlugin extends Plugin {
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
 		const dailyNoteService = new DailyNoteService(this.app, markdownBlockService, dailyNotesProvider);
 		await this.refreshDailyStatusSafely(dailyNoteService);
-		const monthlyArchiveService = new MonthlyArchiveService(this.app, markdownBlockService);
+		const monthlyArchiveService = new MonthlyArchiveService(this.app, markdownBlockService, (path) => {
+			const now = Date.now();
+			selfWriteTracker.mark(path, {
+				opId: `archive-delete-${now}`,
+				path,
+				reason: "archive_delete",
+				writtenAt: now,
+				expiresAt: now + 10000,
+				expectedHash: null,
+			});
+		});
 		const memoIndexStore = new MemoIndexStore(this.app);
 		const pendingMemoCreateStore = new PendingMemoCreateStore(
 			this.app,

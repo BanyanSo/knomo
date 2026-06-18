@@ -2505,6 +2505,7 @@ test("restoreMonthlyArchives restores old archives and removes failed rebuild ar
 		[backupMonthlyFile.path, "backup content"],
 	]);
 	const deletedPaths: string[] = [];
+	const internallyMarkedPaths: string[] = [];
 	const originalRecurseChildren = Vault.recurseChildren;
 	Vault.recurseChildren = ((folder: { children: unknown[] }, callback: (child: unknown) => void) => {
 		for (const child of folder.children) {
@@ -2540,7 +2541,9 @@ test("restoreMonthlyArchives restores old archives and removes failed rebuild ar
 					filesByPath.delete(file.path);
 				},
 			},
-		} as never);
+		} as never, undefined, (path) => {
+			internallyMarkedPaths.push(path);
+		});
 
 		await service.restoreMonthlyArchives(createTestSettings(), backupPath);
 	} finally {
@@ -2548,6 +2551,7 @@ test("restoreMonthlyArchives restores old archives and removes failed rebuild ar
 	}
 
 	assert.deepEqual(deletedPaths, [failedMonthlyFile.path]);
+	assert.deepEqual(internallyMarkedPaths, [failedMonthlyFile.path]);
 	assert.equal(contents.get(existingMonthlyFile.path), "backup content");
 });
 

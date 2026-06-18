@@ -36,8 +36,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private legacyImportScope: LegacyDailyMemosImportScope = "90d";
 	private legacyImportRunning = false;
 	private rebuildResultEl: HTMLElement | null = null;
+	private monthlyRebuildResultEl: HTMLElement | null = null;
 	private monthlyExcludeStatusEl: HTMLElement | null = null;
 	private rebuildRunning = false;
+	private monthlyRebuildRunning = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -243,6 +245,29 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 		this.rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
 		this.renderRebuildResult(t("settings.rebuild.before"));
+
+		const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
+		let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
+		new Setting(containerEl)
+			.setName(t("settings.monthlyRebuild.name"))
+			.setDesc(t("settings.monthlyRebuild.desc"))
+			.addDropdown((dropdown) => {
+				for (const period of monthlyPeriods) {
+					dropdown.addOption(period, period);
+				}
+				dropdown.setValue(monthlyRebuildPeriod);
+				dropdown.onChange((value) => {
+					monthlyRebuildPeriod = value;
+				});
+			})
+			.addButton((button) => {
+				button.setButtonText(t("settings.monthlyRebuild.start"));
+				button.onClick(() => {
+					void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button);
+				});
+			});
+		this.monthlyRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
+		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"));
 		this.issueListEl = containerEl.createDiv({ cls: "knomo-issue-list" });
 		void this.renderIssueList();
 	}
@@ -783,12 +808,61 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
+	private async runMonthlyArchiveRebuild(
+		period: string,
+		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
+	): Promise<void> {
+		if (this.monthlyRebuildRunning || period.length === 0) {
+			return;
+		}
+		const confirmed = this.containerEl.win.confirm(t("settings.monthlyRebuild.confirm", { period }));
+		if (!confirmed) {
+			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.cancelled"));
+			return;
+		}
+
+		this.monthlyRebuildRunning = true;
+		button.setDisabled(true);
+		button.setButtonText(t("settings.monthlyRebuild.running"));
+		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.status", { period }));
+		try {
+			const result = await this.syncOrchestrator.rebuildMonthlyArchive(period);
+			const backup = result.backupPath === null
+				? t("settings.monthlyRebuild.noBackup")
+				: t("settings.rebuild.backup", { path: result.backupPath });
+			this.renderMonthlyRebuildResult(`${t("settings.monthlyRebuild.complete", {
+				period: result.period,
+				rebuilt: result.rebuilt,
+				issues: result.issues,
+			})}\n${backup}`);
+			await this.renderIssueList();
+			await this.refreshOpenKnomoViews();
+			new Notice(t("settings.monthlyRebuild.completedNotice", { period: result.period }));
+		} catch (error) {
+			const message = formatServiceError(error, t("settings.monthlyRebuild.failed"));
+			this.renderMonthlyRebuildResult(message);
+			new Notice(message);
+		} finally {
+			this.monthlyRebuildRunning = false;
+			button.setDisabled(false);
+			button.setButtonText(t("settings.monthlyRebuild.start"));
+		}
+	}
+
 	private renderRebuildResult(message: string): void {
 		if (this.rebuildResultEl === null) {
 			return;
 		}
 		this.rebuildResultEl.empty();
 		this.rebuildResultEl.createDiv({ cls: "knomo-setting-help", text: message });
+	}
+
+	private renderMonthlyRebuildResult(message: string): void {
+		if (this.monthlyRebuildResultEl === null) {
+			return;
+		}
+		this.monthlyRebuildResultEl.empty();
+		this.monthlyRebuildResultEl.createDiv({ cls: "knomo-setting-help", text: message });
 	}
 
 	private async refreshOpenKnomoViews(): Promise<void> {

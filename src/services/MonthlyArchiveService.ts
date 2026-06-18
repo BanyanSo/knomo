@@ -40,6 +40,18 @@ export interface MonthlyArchiveUpsertOptions {
 	allowMissingInsert?: boolean;
 }
 
+export interface MonthlyArchiveRebuildEntry {
+	memoId: string;
+	createdAt: Date;
+	block: string;
+}
+
+export interface MonthlyArchiveRebuildWriteResult {
+	file: TFile;
+	content: string;
+	refsByMemoId: Map<string, MonthlyRef>;
+}
+
 export class MonthlyArchiveMissingError extends KnomoError {
 	constructor(code: Extract<KnomoErrorCode, "monthly_archive_file_missing" | "monthly_archive_block_missing">) {
 		super(code);
@@ -51,6 +63,7 @@ export class MonthlyArchiveService {
 	constructor(
 		private readonly app: App,
 		private readonly markdownBlockService = new MarkdownBlockService(),
+		private readonly onBeforeInternalTrash?: (path: string) => void,
 	) {}
 
 	async backupMonthlyArchives(settings: KnomoSettings, backupPath: string | null): Promise<void> {
@@ -277,6 +290,50 @@ export class MonthlyArchiveService {
 		};
 	}
 
+	async rebuildMonthlyArchive(
+		settings: KnomoSettings,
+		period: string,
+		entries: MonthlyArchiveRebuildEntry[],
+		replaceExisting: boolean,
+	): Promise<MonthlyArchiveRebuildWriteResult | null> {
+		const path = getMonthlyArchivePath(settings, period);
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		if (existing !== null && !(existing instanceof TFile)) {
+			throw new Error(`Monthly archive path is not a file: ${path}`);
+		}
+		if (existing instanceof TFile && !replaceExisting) {
+			return null;
+		}
+
+		const previousContent = existing instanceof TFile ? await this.app.vault.cachedRead(existing) : "";
+		const content = this.buildRebuiltMonthlyArchiveContent(settings, period, entries, previousContent);
+		const parentPath = getParentFolderPath(path);
+		if (parentPath !== null) {
+			await ensureFolder(this.app, parentPath);
+		}
+
+		let file: TFile;
+		if (existing instanceof TFile) {
+			await this.app.vault.process(existing, () => content);
+			file = existing;
+		} else {
+			const current = this.app.vault.getAbstractFileByPath(path);
+			if (current instanceof TFile && !replaceExisting) {
+				return null;
+			}
+			if (current !== null) {
+				throw new Error(`Monthly archive path is not available: ${path}`);
+			}
+			file = await this.app.vault.create(path, content);
+		}
+
+		return {
+			file,
+			content,
+			refsByMemoId: this.buildRebuiltMonthlyRefs(settings, file.path, content, entries),
+		};
+	}
+
 	private listMonthlyArchiveFiles(settings: KnomoSettings): TFile[] {
 		const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
 		const monthlyFolder = this.app.vault.getAbstractFileByPath(monthlyFolderPath);
@@ -303,9 +360,54 @@ export class MonthlyArchiveService {
 		for (const file of this.listMonthlyArchiveFiles(settings)) {
 			const relativePath = file.path.slice(monthlyFolderPath.length + 1);
 			if (!keepRelativePaths.has(relativePath)) {
+				this.onBeforeInternalTrash?.(file.path);
 				await this.app.fileManager.trashFile(file);
 			}
 		}
+	}
+
+	private buildRebuiltMonthlyArchiveContent(
+		settings: KnomoSettings,
+		period: string,
+		entries: MonthlyArchiveRebuildEntry[],
+		previousContent: string,
+	): string {
+		const preservedComment = extractLeadingReadOnlyComment(previousContent);
+		let content = preservedComment === null
+			? ensureReadOnlyComment(`# ${period}`)
+			: `${preservedComment}\n\n# ${period}`;
+		for (const entry of entries) {
+			const dateHeading = formatMonthlyDateHeading(settings.monthlyDateHeadingFormat, entry.createdAt);
+			content = ensureDateHeading(content, dateHeading, settings.monthlyDateOrder);
+			content = this.markdownBlockService.insertMemoBlock(content, {
+				heading: dateHeading,
+				block: entry.block,
+				position: "bottom",
+				createHeadingIfMissing: true,
+			});
+		}
+		return content;
+	}
+
+	private buildRebuiltMonthlyRefs(
+		settings: KnomoSettings,
+		path: string,
+		content: string,
+		entries: MonthlyArchiveRebuildEntry[],
+	): Map<string, MonthlyRef> {
+		const refs = new Map<string, MonthlyRef>();
+		const usedLines = new Set<number>();
+		for (const entry of entries) {
+			const dateHeading = formatMonthlyDateHeading(settings.monthlyDateHeadingFormat, entry.createdAt);
+			const block = this.markdownBlockService.parseMemoBlocksUnderHeading(content, dateHeading)
+				.find((candidate) => candidate.rawBlock === entry.block && !usedLines.has(candidate.startLine));
+			if (block === undefined) {
+				throw new Error(`Unable to locate rebuilt monthly memo: ${entry.memoId}`);
+			}
+			usedLines.add(block.startLine);
+			refs.set(entry.memoId, buildMonthlyRef(path, dateHeading, content, block.rawBlock, block.startLine + 1));
+		}
+		return refs;
 	}
 
 	private buildInsertedMemoContent(
@@ -338,6 +440,10 @@ export function getMonthlyArchivePath(settings: KnomoSettings, period: string): 
 	const format = settings.monthlyMemoFileFormat.trim() || DEFAULT_MONTHLY_MEMO_FILE_FORMAT;
 	const fileName = format.replace(/YYYY-MM/g, period);
 	return normalizePath(`${folder}/${fileName}`);
+}
+
+export function isMonthlyArchivePath(settings: KnomoSettings, path: string): boolean {
+	return buildMonthlyArchivePathPattern(settings).test(path);
 }
 
 export function formatMonthlyDateHeading(format: string, date: Date): string {
@@ -429,4 +535,19 @@ function buildMonthlyArchivePathPattern(settings: KnomoSettings): RegExp {
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractLeadingReadOnlyComment(content: string): string | null {
+	const trimmed = normalizeMarkdownLineEndings(content).trimStart();
+	if (!trimmed.startsWith("<!--")) {
+		return null;
+	}
+	const endIndex = trimmed.indexOf("-->");
+	if (endIndex === -1) {
+		return null;
+	}
+	const comment = trimmed.slice(0, endIndex + 3);
+	return comment.includes(MONTHLY_ARCHIVE_MARKER) || comment === LEGACY_MONTHLY_ARCHIVE_READONLY_COMMENT
+		? comment
+		: null;
 }

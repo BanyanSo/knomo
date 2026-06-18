@@ -2,6 +2,7 @@ import type { App, TFile } from "obsidian";
 
 import type { MarkdownSyncSource, MemoRecord } from "../types/memo";
 import type { PendingMemoCreate } from "../types/pending";
+import { KnomoError } from "../types/serviceError";
 import type { KnomoSettings } from "../types/settings";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
 import { getIndexFolderPath } from "../utils/path";
@@ -25,7 +26,9 @@ import type {
 	ScanDailyMemosProgress,
 	ScanDailyMemosResult,
 } from "./MemoScanService";
-import { MonthlyArchiveService } from "./MonthlyArchiveService";
+import { getMonthlyArchivePath, isMonthlyArchivePath, MonthlyArchiveService } from "./MonthlyArchiveService";
+import { MonthlyArchiveRebuildService } from "./MonthlyArchiveRebuildService";
+import type { RebuildMonthlyArchiveResult } from "./MonthlyArchiveRebuildService";
 import { MemoRebuildService } from "./memoRebuild";
 import type { RebuildIndexMode, RebuildIndexResult, RebuildIndexScope } from "./memoRebuild";
 import type { PendingMemoCreateStoreLike } from "./PendingMemoCreateStore";
@@ -48,6 +51,7 @@ export class SyncOrchestrator {
 	private readonly memoRestoreService: MemoRestoreService;
 	private readonly memoReferenceService: MemoReferenceService;
 	private readonly memoRepairService: MemoRepairService;
+	private readonly monthlyArchiveRebuildService: MonthlyArchiveRebuildService;
 
 	constructor(
 		private readonly app: App,
@@ -105,6 +109,14 @@ export class SyncOrchestrator {
 			this.markdownBlockService,
 		);
 		this.memoRepairService = new MemoRepairService(
+			this.app,
+			this.getSettings,
+			this.monthlyArchiveService,
+			this.memoIndexStore,
+			this.selfWriteTracker,
+			this.markdownBlockService,
+		);
+		this.monthlyArchiveRebuildService = new MonthlyArchiveRebuildService(
 			this.app,
 			this.getSettings,
 			this.monthlyArchiveService,
@@ -204,6 +216,36 @@ export class SyncOrchestrator {
 		}
 		const fileName = path.slice(indexFolderPath.length + 1);
 		return /^memo-index-\d{4}-\d{2}\.json$/.test(fileName);
+	}
+
+	isMonthlyArchiveFile(path: string): boolean {
+		return isMonthlyArchivePath(this.getSettings(), path);
+	}
+
+	async rebuildMonthlyArchive(period: string): Promise<RebuildMonthlyArchiveResult> {
+		await this.memoCommandService.recoverPendingCreates();
+		return this.monthlyArchiveRebuildService.rebuildPeriod(period, {
+			replaceExisting: true,
+			createBackup: true,
+		});
+	}
+
+	async recoverDeletedMonthlyArchive(path: string): Promise<boolean> {
+		const settings = this.getSettings();
+		if (!isMonthlyArchivePath(settings, path)) {
+			return false;
+		}
+		const periods = this.memoIndexStore.listExistingPeriods(settings.monthlyMemoFolder)
+			.filter((period) => getMonthlyArchivePath(settings, period) === path);
+		if (periods.length !== 1) {
+			throw new KnomoError("monthly_archive_period_unresolved", { path });
+		}
+		await this.memoCommandService.recoverPendingCreates();
+		const result = await this.monthlyArchiveRebuildService.rebuildPeriod(periods[0], {
+			replaceExisting: false,
+			createBackup: false,
+		});
+		return result.archiveChanged || result.indexChanged;
 	}
 
 	async listCurrentMonthMemos(): Promise<MemoRecord[]> {

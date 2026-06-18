@@ -33,6 +33,18 @@ export class MemoIndexStore {
 		return parseIndex(data, period);
 	}
 
+	async loadExistingPeriod(monthlyMemoFolder: string, period: string): Promise<MemoIndex | null> {
+		const file = this.app.vault.getAbstractFileByPath(this.getIndexFilePath(monthlyMemoFolder, period));
+		if (file === null) {
+			return null;
+		}
+		if (!(file instanceof TFile)) {
+			throw new Error(`Memo-index path is not a file: ${file.path}`);
+		}
+		const data = await this.app.vault.cachedRead(file);
+		return parseIndex(data, period);
+	}
+
 	async loadAll(monthlyMemoFolder: string): Promise<MemoRecord[]> {
 		const periods = this.listExistingPeriods(monthlyMemoFolder);
 		return this.loadPeriods(monthlyMemoFolder, periods);

@@ -536,6 +536,20 @@ test("mobile popover toggles keep card and scope menus mutually exclusive", asyn
 	assert.match(actionMethod, /case "toggle-scope-menu":[\s\S]*this\.toggleScopeMenu\(\);/);
 });
 
+test("card menu placement does not depend on its previous open direction", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const syncMethod = getMethodSource(source, "syncCardMenuState");
+	const positionMethod = getMethodSource(source, "positionOpenCardMenu");
+
+	assert.ok(syncMethod.indexOf("this.positionOpenCardMenu(card)") < syncMethod.indexOf('card.toggleClass("is-menu-open", isOpen)'));
+	assert.match(positionMethod, /const head = card\.find\("\.knomo-card-head"\);/);
+	assert.match(positionMethod, /const menuHeight = actions\.offsetHeight;/);
+	assert.match(positionMethod, /const spaceBelow = flowRect\.bottom - 8 - headRect\.bottom - 6;/);
+	assert.match(positionMethod, /const spaceAbove = headRect\.top - flowRect\.top - 8 - 6;/);
+	assert.match(positionMethod, /menuHeight > spaceBelow && spaceAbove > spaceBelow/);
+	assert.doesNotMatch(positionMethod, /actions\.getBoundingClientRect\(\)/);
+});
+
 test("open popups consume outside card interactions before running card actions", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const rootPointerDownMethod = getMethodSource(source, "handleRootPointerDown");

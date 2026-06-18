@@ -4118,18 +4118,19 @@ export class KnomoView extends ItemView {
 			}
 			for (const card of container.findAll(".knomo-card")) {
 				const isOpen = this.activeMenuMemoId !== null && card.getAttr("data-memo-id") === this.activeMenuMemoId;
-				card.toggleClass("is-menu-open", isOpen);
-				card.find(".knomo-card-menu")?.setAttr("aria-expanded", isOpen ? "true" : "false");
 				if (isOpen) {
 					this.positionOpenCardMenu(card);
 				}
+				card.toggleClass("is-menu-open", isOpen);
+				card.find(".knomo-card-menu")?.setAttr("aria-expanded", isOpen ? "true" : "false");
 			}
 		}
 	}
 
 	private positionOpenCardMenu(card: HTMLElement): void {
 		const actions = card.find(".knomo-card-actions");
-		if (!actions?.instanceOf(HTMLElement)) {
+		const head = card.find(".knomo-card-head");
+		if (!actions?.instanceOf(HTMLElement) || !head?.instanceOf(HTMLElement)) {
 			return;
 		}
 		const mobileSearchResults = card.closest(".knomo-mobile-search-results");
@@ -4138,8 +4139,11 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const flowRect = flowEl.getBoundingClientRect();
-		const actionsRect = actions.getBoundingClientRect();
-		card.toggleClass("is-menu-above", actionsRect.bottom > flowRect.bottom - 8);
+		const headRect = head.getBoundingClientRect();
+		const menuHeight = actions.offsetHeight;
+		const spaceBelow = flowRect.bottom - 8 - headRect.bottom - 6;
+		const spaceAbove = headRect.top - flowRect.top - 8 - 6;
+		card.toggleClass("is-menu-above", menuHeight > spaceBelow && spaceAbove > spaceBelow);
 	}
 
 	private toggleSidebar(): void {

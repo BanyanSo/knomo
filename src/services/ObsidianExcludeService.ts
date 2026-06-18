@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 
+import { KnomoError } from "../types/serviceError";
 import { getSystemFolderPath } from "../utils/path";
 
 interface VaultConfigAccess {
@@ -22,7 +23,7 @@ export class ObsidianExcludeService {
 		const uniqueRules = [...new Set(rules)];
 		const vault = this.getVaultConfigAccess();
 		if (typeof vault.setConfig !== "function") {
-			throw new Error("This Obsidian environment does not support automatic exclude rule updates.");
+			throw new KnomoError("auto_exclude_unsupported");
 		}
 		await vault.setConfig(EXCLUDE_RULES_CONFIG_KEY, uniqueRules);
 	}

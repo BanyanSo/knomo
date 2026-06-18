@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 
 import type { DailyRefSectionType, MarkdownSyncSource, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { formatLocalIsoString, formatMonthPeriod } from "../utils/date";
 import { matchesDailyNotePath, parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { hashText } from "../utils/hash";
@@ -605,6 +606,7 @@ export class MemoScanService {
 			...memo,
 			issue: {
 				type: "daily_block_ambiguous",
+				code: "daily_block_ambiguous",
 				detectedAt: now,
 				message: "Multiple memo blocks may match under the current daily note heading, so Knomo cannot sync automatically.",
 			},
@@ -649,6 +651,7 @@ export class MemoScanService {
 					syncStatus = "monthly_delete_failed";
 					issue = {
 						type: "delete_failed",
+						...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
 						detectedAt: new Date().toISOString(),
 						message,
 					};
@@ -870,6 +873,7 @@ export class MemoScanService {
 				syncStatus: "monthly_failed",
 				issue: {
 					type: "monthly_sync_failed",
+					...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
 					detectedAt: new Date().toISOString(),
 					message,
 				},

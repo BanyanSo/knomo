@@ -6,6 +6,7 @@ import type { DailyRef } from "../types/memo";
 import type { PreparedDailyMemoWrite } from "../types/pending";
 import { PendingMemoWriteConflictError } from "../types/pending";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { findLineNumber } from "../utils/markdown";
 import { hashText } from "../utils/hash";
 import { buildDailyRef } from "../utils/memoRefs";
@@ -71,7 +72,7 @@ export class DailyNoteService {
 	async getOrCreateDailyNoteForDate(date: Date): Promise<TFile> {
 		const status = await this.getFreshStatus();
 		if (!status.enabled) {
-			throw new Error(status.message);
+			throw new KnomoError("daily_notes_disabled");
 		}
 		const path = this.getDailyNotePathForDate(date, status);
 		const existing = this.app.vault.getAbstractFileByPath(path);
@@ -95,7 +96,7 @@ export class DailyNoteService {
 
 	getDailyNotePathForDate(date: Date, status = this.getStatus()): string {
 		if (!status.enabled || status.format === null) {
-			throw new Error("Daily Notes core plugin is unavailable; Knomo cannot resolve the daily note.");
+			throw new KnomoError("daily_notes_unavailable");
 		}
 		const momentFactory = obsidianMoment as unknown as MomentFactory;
 		const fileName = ensureMarkdownExtension(momentFactory(date).format(status.format));
@@ -108,7 +109,7 @@ export class DailyNoteService {
 	async getDailyNotesConfig(): Promise<DailyNotesConfig> {
 		const status = await this.getFreshStatus();
 		if (!status.enabled || status.format === null) {
-			throw new Error(status.message);
+			throw new KnomoError("daily_notes_disabled");
 		}
 		return {
 			folder: status.folder,

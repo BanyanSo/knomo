@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 
 import type { MemoRecord } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { hashText } from "../utils/hash";
 import { buildMemoReferences } from "../utils/references";
 import type { MarkdownBlockService } from "./MarkdownBlockService";
@@ -30,7 +31,7 @@ export class MemoRepairService {
 
 	async retryMonthlySync(memo: MemoRecord): Promise<MemoRecord> {
 		const settings = this.getSettings();
-		const dailyFile = this.getTextFile(memo.dailyRef.path, "Daily note file does not exist.");
+		const dailyFile = this.getTextFile(memo.dailyRef.path);
 		const content = await this.app.vault.cachedRead(dailyFile);
 		const location = this.markdownBlockService.findMemoBlock(content, {
 			lineNumberHint: memo.dailyRef.lineNumberHint,
@@ -45,6 +46,7 @@ export class MemoRepairService {
 				...memo,
 				issue: {
 					type: location.issueType ?? "daily_block_missing",
+					code: "retry_monthly_sync_daily_missing",
 					detectedAt: new Date().toISOString(),
 					message: "Unable to find the daily memo block before retrying monthly sync.",
 				},
@@ -98,10 +100,10 @@ export class MemoRepairService {
 		}
 	}
 
-	private getTextFile(path: string, errorMessage: string): TFile {
+	private getTextFile(path: string): TFile {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) {
-			throw new Error(errorMessage);
+			throw new KnomoError("daily_file_missing");
 		}
 		return file;
 	}

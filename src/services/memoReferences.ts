@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 
 import type { MemoRecord } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { splitMarkdownLines } from "../utils/markdown";
 import { buildDailyRef } from "../utils/memoRefs";
 import type { MarkdownBlockService } from "./MarkdownBlockService";
@@ -31,7 +32,7 @@ export class MemoReferenceService {
 
 	async ensureReferenceBlockId(memo: MemoRecord): Promise<string> {
 		const settings = this.getSettings();
-		const dailyFile = this.getTextFile(memo.dailyRef.path, "Daily note file does not exist.");
+		const dailyFile = this.getTextFile(memo.dailyRef.path);
 		const initialContent = await this.app.vault.cachedRead(dailyFile);
 		const initialLocation = this.markdownBlockService.findMemoBlock(initialContent, {
 			lineNumberHint: memo.dailyRef.lineNumberHint,
@@ -45,11 +46,12 @@ export class MemoReferenceService {
 				...memo,
 				issue: {
 					type: initialLocation.issueType ?? "daily_block_missing",
+					code: "daily_block_missing",
 					detectedAt: new Date().toISOString(),
 					message: "Unable to find the memo block in the daily note.",
 				},
 			});
-			throw new Error("Unable to find the memo block in the daily note.");
+			throw new KnomoError("daily_block_missing");
 		}
 		if (initialLocation.parsedBlock.blockId !== null) {
 			return initialLocation.parsedBlock.blockId;
@@ -69,7 +71,7 @@ export class MemoReferenceService {
 				allowLineHintTimeMatch: true,
 			}, "daily_block_missing");
 			if (location.parsedBlock === null) {
-				throw new Error("Unable to find the memo block in the daily note.");
+				throw new KnomoError("daily_block_missing");
 			}
 			if (location.parsedBlock.blockId !== null) {
 				blockId = location.parsedBlock.blockId;
@@ -121,10 +123,10 @@ export class MemoReferenceService {
 		return blockId;
 	}
 
-	private getTextFile(path: string, errorMessage: string): TFile {
+	private getTextFile(path: string): TFile {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) {
-			throw new Error(errorMessage);
+			throw new KnomoError("daily_file_missing");
 		}
 		return file;
 	}
@@ -140,7 +142,7 @@ function createUniqueReferenceBlockId(content: string): string {
 			return blockId;
 		}
 	}
-	throw new Error("Unable to generate a unique blockId.");
+	throw new KnomoError("unique_block_id_failed");
 }
 
 function createReferenceBlockId(): string {

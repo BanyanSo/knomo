@@ -175,7 +175,7 @@ test("memo card time opener CSS expands the hit target without changing text wid
 	const rule = getStyleRule(css, ".knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]");
 	const interactiveRule = getStyleRule(
 		css,
-		".knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:hover,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:focus,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:focus-visible,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:active",
+		".knomo-plugin:not(.is-layout-mobile) .knomo-card-time[data-memo-time-open=\"daily\"]:hover,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:focus,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:focus-visible,\n.knomo-plugin .knomo-card-time[data-memo-time-open=\"daily\"]:active",
 	);
 
 	assert.doesNotMatch(css, /\.knomo-card\[data-memo-card-open="daily"\]/);
@@ -363,7 +363,7 @@ test("mobile card flow starts with 25 cards while desktop keeps 50", async () =>
 	assert.match(source, /const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;/);
 	assert.match(source, /const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;/);
 	assert.match(source, /cardImageLoadQueue\.setPaused/);
-	assert.match(source, /markdownRenderQueue\.setPaused/);
+	assert.match(source, /memoMarkdownRenderer\.setPaused/);
 	assert.match(source, /if \(!Platform\.isMobile \|\| !this\.composerOpen\)/);
 	assert.match(source, /this\.mobileCardFlowRenderPending = true/);
 	assert.match(source, /if \(shouldRenderCardFlow\)/);
@@ -381,14 +381,18 @@ test("CJK card CSS keeps headings, code, and tables start-aligned", async () => 
 });
 
 test("memo markdown post-processing still keeps internal links, tags, and lazy images", async () => {
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const rendererSource = await readFile(resolve(process.cwd(), "src/ui/MemoMarkdownRenderer.ts"), "utf8");
 
-	assert.match(source, /prepareMemoCardMarkdown\(previewText\)/);
-	assert.match(source, /this\.prepareInternalLinks\(container, memo\.dailyRef\.path\);/);
-	assert.match(source, /event\.preventDefault\(\);\s*await this\.app\.workspace\.openLinkText\(linktext, sourcePath, Keymap\.isModEvent\(event\)\);/);
-	assert.match(source, /imageEl\.setAttr\("loading", "lazy"\);/);
-	assert.match(source, /tagEl\.setAttr\("data-tag", tag\);/);
-	assert.match(source, /tagEl\.setAttr\("data-tag-key", tagKey\);/);
+	assert.match(viewSource, /this\.memoMarkdownRenderer\.queueMemoMarkdown/);
+	assert.match(viewSource, /this\.memoMarkdownRenderer\.queueSourceReferenceMarkdown/);
+	assert.doesNotMatch(viewSource, /prepareMemoCardMarkdown\(previewText\)/);
+	assert.match(rendererSource, /prepareMemoCardMarkdown\(previewText\)/);
+	assert.match(rendererSource, /prepareInternalLinks\(container, memo\.dailyRef\.path\);/);
+	assert.match(viewSource, /event\.preventDefault\(\);\s*await this\.app\.workspace\.openLinkText\(linktext, sourcePath, Keymap\.isModEvent\(event\)\);/);
+	assert.match(rendererSource, /imageEl\.setAttr\("loading", "lazy"\);/);
+	assert.match(rendererSource, /tagEl\.setAttr\("data-tag", tag\);/);
+	assert.match(rendererSource, /tagEl\.setAttr\("data-tag-key", tagKey\);/);
 });
 
 test("desktop save clears the rendered reference and edit state", async () => {
@@ -400,20 +404,38 @@ test("desktop save clears the rendered reference and edit state", async () => {
 	assert.match(desktopSaveBranch, /this\.updateCancelEditButtonState\(\);/);
 });
 
+test("setting draft commits preserve newer edits while an older value is saving", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoSettingTab.ts"), "utf8");
+	const cases = [
+		["commitDailyHeadingDraft", "dailyHeading"],
+		["commitMonthlyMemoFileFormatDraft", "monthlyMemoFileFormat"],
+		["commitMonthlyDateHeadingFormatDraft", "monthlyDateHeadingFormat"],
+	] as const;
+
+	for (const [methodName, key] of cases) {
+		const method = getMethodSource(source, methodName);
+		assert.match(method, new RegExp(`pendingSettingDrafts\\.get\\("${key}"\\) === value`));
+		assert.match(method, new RegExp(`pendingSettingDrafts\\.delete\\("${key}"\\)`));
+	}
+});
+
 test("task checkbox handling stays delegated and does not enter composer edit flow", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const rendererSource = await readFile(resolve(process.cwd(), "src/ui/MemoMarkdownRenderer.ts"), "utf8");
 	const changeMethod = getMethodSource(source, "handleTaskCheckboxChange");
 	const clickMethod = getMethodSource(source, "handleTaskCheckboxClick");
 	const savedMethod = getMethodSource(source, "handleTaskMemoSaved");
 
 	assert.match(source, /this\.registerDomEvent\(this\.cardFlowEl, "change", \(event\) => \{/);
 	assert.match(source, /this\.registerDomEvent\(this\.mobileSearchResultsEl, "change", \(event\) => \{/);
-	assert.match(source, /input\.setAttr\("data-knomo-task-index", String\(taskIndex\)\);/);
-	assert.match(source, /input\.setAttr\("data-task", renderedMarker\);/);
+	assert.match(rendererSource, /input\.setAttr\("data-knomo-task-index", String\(taskIndex\)\);/);
+	assert.match(rendererSource, /input\.setAttr\("data-task", renderedMarker\);/);
 	assert.match(changeMethod, /if \(!event\.isTrusted\) \{/);
 	assert.match(changeMethod, /event\.stopPropagation\(\);/);
 	assert.match(changeMethod, /replaceMarkdownTaskMarkerByIndex\(latestContent, taskIndex, marker\);/);
 	assert.match(changeMethod, /this\.memoTaskUpdateCoordinator\.enqueue\(memo, nextContent\);/);
+	assert.match(changeMethod, /this\.memoMarkdownRenderer\.getTaskCheckboxInput\(event\.target\)/);
+	assert.match(changeMethod, /this\.memoMarkdownRenderer\.applyTaskCheckboxDomState\(input, marker\);/);
 	assert.match(clickMethod, /event\.stopPropagation\(\);/);
 	assert.doesNotMatch(savedMethod, /syncTaskCheckboxesForMemo/);
 	assert.doesNotMatch(changeMethod, /preventDefault\(/);
@@ -421,37 +443,42 @@ test("task checkbox handling stays delegated and does not enter composer edit fl
 });
 
 test("mobile memo hydration reads memo indexes without restoring startup scans", async () => {
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
-	const renderMethod = getMethodSource(source, "render");
-	const initialLoadMethod = getMethodSource(source, "loadInitialMobileMemos");
-	const hydrationMethod = getMethodSource(source, "hydrateMobileMemos");
-	const ensureMethod = getMethodSource(source, "ensureAllMemosLoaded");
-	const sidebarMethod = getMethodSource(source, "requestMobileMemoHydrationForSidebar");
-	const deferSidebarMethod = getMethodSource(source, "deferMobileMemoHydrationForSidebar");
+	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const hydratorSource = await readFile(resolve(process.cwd(), "src/ui/MobileMemoHydrator.ts"), "utf8");
+	const renderMethod = getMethodSource(viewSource, "render");
+	const initialLoadMethod = getMethodSource(viewSource, "loadInitialMobileMemos");
+	const hydrationMethod = getMethodSource(hydratorSource, "hydrate");
+	const ensureMethod = getMethodSource(viewSource, "ensureAllMemosLoaded");
+	const sidebarMethod = getMethodSource(hydratorSource, "requestSidebarHydration");
+	const deferSidebarMethod = getMethodSource(hydratorSource, "deferSidebarHydration");
 
-	assert.match(source, /this\.scheduleMobileMemoHydration\(\);/);
-	assert.match(source, /this\.requestMobileMemoHydrationForSidebar\(\);/);
-	assert.match(source, /this\.requestMobileMemoHydrationForCardFlow\(\);/);
+	assert.match(viewSource, /this\.mobileMemoHydrator\.schedule\(\);/);
+	assert.match(viewSource, /this\.mobileMemoHydrator\.deferSidebarHydration\(\);/);
+	assert.match(viewSource, /this\.mobileMemoHydrator\.requestCardFlowHydration\(\);/);
 	assert.match(renderMethod, /void this\.loadInitialMobileMemos\(\);/);
 	assert.doesNotMatch(renderMethod, /await this\.reloadMemos\(false\);/);
 	assert.match(initialLoadMethod, /await this\.syncOrchestrator\.listRecentMemos\(\);/);
-	assert.match(initialLoadMethod, /runId !== this\.mobileMemoHydrateRunId/);
-	assert.match(hydrationMethod, /this\.syncOrchestrator\.listMemoIndexPeriods\(\);/);
-	assert.match(hydrationMethod, /this\.syncOrchestrator\.listMemosInPeriods\(\[period\]\);/);
+	assert.match(initialLoadMethod, /this\.mobileMemoHydrator\.isCurrentRun\(runId\)/);
+	assert.match(hydrationMethod, /this\.options\.listMemoIndexPeriods\(\);/);
+	assert.match(hydrationMethod, /this\.options\.listMemosInPeriods\(\[period\]\);/);
 	assert.doesNotMatch(hydrationMethod, /scanRecentDailyMemos|scanDailyMemos|reloadMemos\(true\)/);
 	assert.match(ensureMethod, /Platform\.isMobile && !forceReload/);
-	assert.match(sidebarMethod, /this\.mobileMemoHydrateFastMode = true;/);
-	assert.match(deferSidebarMethod, /this\.containerEl\.win\.setTimeout/);
-	assert.match(deferSidebarMethod, /this\.requestMobileMemoHydrationForSidebar\(\);/);
+	assert.match(ensureMethod, /this\.mobileMemoHydrator\.start\(true\)/);
+	assert.match(sidebarMethod, /this\.fastMode = true;/);
+	assert.match(deferSidebarMethod, /this\.options\.scheduleTask/);
+	assert.match(deferSidebarMethod, /this\.requestSidebarHydration\(\);/);
 });
 
 test("mobile memo hydration compares only the rendered card window", async () => {
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
-	const hydrationMethod = getMethodSource(source, "hydrateMobileMemos");
+	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const hydratorSource = await readFile(resolve(process.cwd(), "src/ui/MobileMemoHydrator.ts"), "utf8");
+	const captureMethod = getMethodSource(viewSource, "captureMobileMemoHydrationRenderState");
+	const hydrationMethod = getMethodSource(hydratorSource, "hydrate");
 
-	assert.match(hydrationMethod, /const renderedCardCount = this\.getRenderedCardCount\(\);/);
-	assert.match(hydrationMethod, /this\.getVisibleCardFlowStateKey\(renderedCardCount\)/);
-	assert.doesNotMatch(hydrationMethod, /this\.getCardFlowStateKey\(\)/);
+	assert.match(hydrationMethod, /this\.options\.captureRenderState\(\)/);
+	assert.match(captureMethod, /const renderedCardCount = this\.getRenderedCardCount\(\);/);
+	assert.match(captureMethod, /this\.getVisibleCardFlowStateKey\(renderedCardCount\)/);
+	assert.doesNotMatch(captureMethod, /this\.getCardFlowStateKey\(\)/);
 });
 
 test("ordinary card-flow renders preserve existing cards and image queue state", async () => {
@@ -514,6 +541,7 @@ test("open popups consume outside card interactions before running card actions"
 	const rootPointerDownMethod = getMethodSource(source, "handleRootPointerDown");
 	const rootClickMethod = getMethodSource(source, "handleRootClick");
 	const guardMethod = getMethodSource(source, "handleOpenPopupOutsideEvent");
+	const consumeMethod = getMethodSource(source, "consumeSuppressedOpenPopupDismissClick");
 	const popupMethod = getMethodSource(source, "isTargetInOpenPopup");
 	const triggerMethod = getMethodSource(source, "isOpenPopupTrigger");
 	const closePopupsMethod = getMethodSource(source, "closeOpenPopups");
@@ -540,6 +568,10 @@ test("open popups consume outside card interactions before running card actions"
 	assert.match(guardMethod, /this\.closeOpenPopups\(\);/);
 	assert.match(guardMethod, /this\.markSuppressNextOpenPopupDismissClick\(\);/);
 	assert.match(guardMethod, /this\.shouldPreserveDefaultForPopupDismiss\(element\)/);
+	assert.match(consumeMethod, /this\.getEventElement\(event\.target\)/);
+	assert.match(consumeMethod, /target\?\.closest\("\[data-memo-time-open='daily'\]"\)/);
+	assert.match(consumeMethod, /memoTimeButton\?\.instanceOf\(HTMLElement\)/);
+	assert.match(consumeMethod, /memoTimeButton\.blur\(\);/);
 	assert.match(popupMethod, /this\.isOpenPopupTrigger\(target\)/);
 	assert.match(triggerMethod, /\.knomo-card-menu/);
 	assert.match(triggerMethod, /toggle-card-menu/);
@@ -575,9 +607,11 @@ test("mobile search edit and reference actions keep the search page open under c
 
 test("memo time clicks open daily notes with default pane behavior and random review marking after success", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const controllerSource = await readFile(resolve(process.cwd(), "src/ui/RandomReunionController.ts"), "utf8");
 	const clickMethod = getMethodSource(source, "handleRootClick");
 	const keydownMethod = getMethodSource(source, "handleRootKeydown");
 	const openMethod = getMethodSource(source, "openMemoCardDailyNote");
+	const markReviewedMethod = getMethodSource(controllerSource, "markReviewedAfterOpen");
 
 	assert.match(clickMethod, /route\.type === "memo-card-open"/);
 	assert.match(clickMethod, /await this\.openMemoCardDailyNote\(route\.memoId, route\.randomReunion\);/);
@@ -586,27 +620,33 @@ test("memo time clicks open daily notes with default pane behavior and random re
 	assert.match(openMethod, /await openMemoDailyNoteDefault\(this\.app\.workspace, memo\);/);
 	assert.match(
 		openMethod,
-		/await openMemoDailyNoteDefault\(this\.app\.workspace, memo\);[\s\S]*if \(markRandomReunionReviewed\) \{[\s\S]*await this\.randomReunionService\.markRandomReunionReviewed\(memo\.id\);/,
+		/await openMemoDailyNoteDefault\(this\.app\.workspace, memo\);[\s\S]*if \(markRandomReunionReviewed\) \{[\s\S]*await this\.randomReunionController\.markReviewedAfterOpen\(memo\.id\);/,
 	);
+	assert.match(markReviewedMethod, /await this\.options\.markRandomReunionReviewed\(memoId\);/);
 });
 
 test("memo delete mutations increment the trash count only once", async () => {
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
-	const mutationMethod = getMethodSource(source, "applyMemoMutation");
+	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const controllerSource = await readFile(resolve(process.cwd(), "src/ui/TrashMemoController.ts"), "utf8");
+	const mutationMethod = getMethodSource(viewSource, "applyMemoMutation");
+	const recordDeletedMethod = getMethodSource(controllerSource, "recordDeletedMemo");
 
-	assert.match(mutationMethod, /const wasAlreadyDeleted = this\.deletedMemoIds\.has\(mutation\.memo\.id\);/);
-	assert.match(mutationMethod, /if \(!wasAlreadyDeleted\) \{\s*this\.trashCount \+= 1;\s*\}/);
+	assert.match(mutationMethod, /this\.trashMemoController\.recordDeletedMemo\(mutation\.memo\.id\);/);
+	assert.match(recordDeletedMethod, /if \(this\.deletedMemoIds\.has\(memoId\)\) \{\s*return;\s*\}/);
+	assert.match(recordDeletedMethod, /this\.deletedMemoIds\.add\(memoId\);\s*this\.trashCount \+= 1;/);
 });
 
 test("purging a memo refreshes every open view", async () => {
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
-	const trashActionMethod = getMethodSource(source, "handleTrashAction");
+	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const controllerSource = await readFile(resolve(process.cwd(), "src/ui/TrashMemoController.ts"), "utf8");
+	const trashActionMethod = getMethodSource(controllerSource, "handleTrashAction");
 
 	assert.match(
 		trashActionMethod,
-		/await this\.syncOrchestrator\.purgeDeletedMemo\(memo\.id\);[\s\S]*await this\.onForceRefreshViews\(\);/,
+		/await this\.options\.purgeDeletedMemo\(memo\.id\);[\s\S]*await this\.options\.forceRefreshViews\(\);/,
 	);
-	assert.doesNotMatch(trashActionMethod, /void this\.refreshTrashCount\(false\);/);
+	assert.match(viewSource, /await this\.trashMemoController\.handleTrashAction\(dispatch\.action, memo\);/);
+	assert.doesNotMatch(trashActionMethod, /refreshTrashCount/);
 });
 
 async function renderMemoCard(contentSnapshot: string, preview?: MemoCardPreview): Promise<{
@@ -700,7 +740,11 @@ function getMethodStart(source: string, methodName: string): number {
 		return start;
 	}
 	const asyncStart = source.indexOf(`private async ${methodName}(`);
-	return asyncStart === -1 ? source.indexOf(`\n\t${methodName}(`) : asyncStart;
+	if (asyncStart !== -1) {
+		return asyncStart;
+	}
+	const publicAsyncStart = source.indexOf(`\n\tasync ${methodName}(`);
+	return publicAsyncStart === -1 ? source.indexOf(`\n\t${methodName}(`) : publicAsyncStart;
 }
 
 async function ensureObsidianStub(): Promise<void> {

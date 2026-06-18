@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 
 import type { MemoIndex } from "../types";
 import type { MemoRecord } from "../types/memo";
+import { KnomoError } from "../types/serviceError";
 import { formatMonthPeriod } from "../utils/date";
 import { isRecord } from "../utils/object";
 import {
@@ -182,7 +183,7 @@ export class MemoIndexStore {
 			throw new Error(`Memo not found: ${memoId}`);
 		}
 		if (memo.status !== "deleted") {
-			throw new Error("Only memos in trash can be permanently deleted.");
+			throw new KnomoError("trash_only_purge");
 		}
 
 		const period = formatMonthPeriod(new Date(memo.createdAt));
@@ -192,7 +193,7 @@ export class MemoIndexStore {
 				throw new Error(`Memo not found: ${memoId}`);
 			}
 			if (currentMemo.status !== "deleted") {
-				throw new Error("Only memos in trash can be permanently deleted.");
+				throw new KnomoError("trash_only_purge");
 			}
 			const nextMemos = { ...index.memos };
 			delete nextMemos[memoId];
@@ -238,7 +239,7 @@ export class MemoIndexStore {
 		const backupFolderPath = normalizePath(`${backupPath}/indexes`);
 		const backupFolder = this.app.vault.getAbstractFileByPath(backupFolderPath);
 		if (!(backupFolder instanceof TFolder)) {
-			throw new Error(`Index backup does not exist: ${backupFolderPath}`);
+			throw new KnomoError("index_backup_missing", { path: backupFolderPath });
 		}
 		const files: TFile[] = [];
 		Vault.recurseChildren(backupFolder, (child) => {

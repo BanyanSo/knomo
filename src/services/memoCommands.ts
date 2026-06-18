@@ -5,6 +5,7 @@ import type { MemoRecord, MonthlyRef } from "../types/memo";
 import type { PendingMemoCreate } from "../types/pending";
 import { PendingMemoWriteConflictError } from "../types/pending";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { formatLocalIsoString, formatMonthPeriod, formatTimePart } from "../utils/date";
 import { hashMemoContent } from "../utils/hash";
 import { splitMarkdownLines } from "../utils/markdown";
@@ -56,7 +57,7 @@ export class MemoCommandService {
 	async createMemo(input: string, options: CreateMemoOptions = {}): Promise<CreateMemoResult> {
 		const content = normalizeMemoInput(input);
 		if (content.trim().length === 0) {
-			throw new Error("Memo content cannot be empty.");
+			throw new KnomoError("memo_content_empty");
 		}
 
 		await this.recoverPendingCreates();
@@ -127,7 +128,7 @@ export class MemoCommandService {
 	async updateMemo(memo: MemoRecord, input: string): Promise<MemoRecord> {
 		const content = normalizeMemoInput(input);
 		if (content.trim().length === 0) {
-			throw new Error("Memo content cannot be empty.");
+			throw new KnomoError("memo_content_empty");
 		}
 
 		const settings = this.getSettings();
@@ -137,12 +138,12 @@ export class MemoCommandService {
 			memo.id,
 		);
 		if (currentMemo === null || currentMemo.status !== "active") {
-			throw new Error("Memo does not exist or has already been cleaned up.");
+			throw new KnomoError("memo_not_found_or_cleaned");
 		}
 		if (content === currentMemo.contentSnapshot) {
 			return currentMemo;
 		}
-		const dailyFile = this.getTextFile(currentMemo.dailyRef.path, "Daily note file does not exist.");
+		const dailyFile = this.getTextFile(currentMemo.dailyRef.path);
 		const opId = createOperationId(new Date());
 		let nextDailyBlock = "";
 		let dailyIssueType: MemoRecord["issue"] = null;
@@ -160,10 +161,11 @@ export class MemoCommandService {
 				if (location.parsedBlock === null) {
 					dailyIssueType = {
 						type: location.issueType ?? "daily_block_missing",
+						code: "daily_block_missing",
 						detectedAt: new Date().toISOString(),
 						message: "Unable to find the memo block in the daily note.",
 					};
-					throw new Error(dailyIssueType.message);
+					throw new KnomoError("daily_block_missing");
 				}
 				nextDailyBlock = this.markdownBlockService.buildMemoBlockWithBlockId(
 					content,
@@ -239,7 +241,7 @@ export class MemoCommandService {
 		const settings = this.getSettings();
 		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memo.id);
 		if (currentMemo === null) {
-			throw new Error("Memo does not exist or has already been cleaned up.");
+			throw new KnomoError("memo_not_found_or_cleaned");
 		}
 		if (currentMemo.status === "deleted") {
 			return currentMemo;
@@ -248,7 +250,7 @@ export class MemoCommandService {
 			return currentMemo;
 		}
 
-		const dailyFile = this.getTextFile(currentMemo.dailyRef.path, "Daily note file does not exist.");
+		const dailyFile = this.getTextFile(currentMemo.dailyRef.path);
 		const opId = createOperationId(new Date());
 		let deletedDailyBlock = "";
 		let dailyIssueType: MemoRecord["issue"] = null;
@@ -264,10 +266,11 @@ export class MemoCommandService {
 				if (location.parsedBlock === null) {
 					dailyIssueType = {
 						type: "delete_failed",
+						code: "delete_daily_block_missing",
 						detectedAt: new Date().toISOString(),
 						message: "Unable to find the daily memo block to delete.",
 					};
-					throw new Error(dailyIssueType.message);
+					throw new KnomoError("delete_daily_block_missing");
 				}
 				deletedDailyBlock = location.parsedBlock.rawBlock;
 				return this.markdownBlockService.deleteMemoBlock(currentContent, location.parsedBlock.startLine);
@@ -295,6 +298,7 @@ export class MemoCommandService {
 				syncStatus = "monthly_delete_failed";
 				issue = {
 					type: "delete_failed",
+					...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
 					detectedAt: new Date().toISOString(),
 					message: error instanceof Error ? error.message : "Monthly archive delete failed.",
 				};
@@ -321,10 +325,10 @@ export class MemoCommandService {
 		return deletedMemo;
 	}
 
-	private getTextFile(path: string, errorMessage: string): TFile {
+	private getTextFile(path: string): TFile {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) {
-			throw new Error(errorMessage);
+			throw new KnomoError("daily_file_missing");
 		}
 		return file;
 	}

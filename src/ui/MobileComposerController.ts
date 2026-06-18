@@ -83,7 +83,6 @@ export class MobileComposerController {
 	private mobileKeyboardDockStopTimerId: number | null = null;
 	private mobileKeyboardViewportFallbackTimerId: number | null = null;
 	private mobileToolbarAnchorFrameId: number | null = null;
-	private mobileComposerInputFocused = false;
 	private mobileWindowResizeHandler: (() => void) | null = null;
 	private mobileOrientationChangeHandler: (() => void) | null = null;
 	private mobileComposerPhase: MobileComposerPhase = "closed";
@@ -148,7 +147,6 @@ export class MobileComposerController {
 
 	resetInactiveState(): void {
 		this.clearFocus();
-		this.mobileComposerInputFocused = false;
 		this.stopViewportTracking();
 	}
 
@@ -213,7 +211,6 @@ export class MobileComposerController {
 		this.clearOpenSyncFrame();
 		this.options.setComposerOpen(true);
 		this.mobileComposerPhase = "opening";
-		this.mobileComposerInputFocused = false;
 		this.ensureLayer();
 		this.mobileComposerLayerEl?.toggleClass("is-active", true);
 		this.mobileComposerLayerEl?.setAttr("aria-hidden", "false");
@@ -230,7 +227,6 @@ export class MobileComposerController {
 		this.setComposerBottomOffset(0);
 		this.revealMobileComposer();
 		this.mobileComposerPhase = "focusing";
-		this.mobileComposerInputFocused = true;
 		this.startViewportTracking();
 		this.options.focusInputNow(false, false);
 		this.queueViewportUpdate();
@@ -247,7 +243,6 @@ export class MobileComposerController {
 		this.clearKeyboardViewportFallback();
 		this.mobileComposerLayerEl?.toggleClass("is-closing", true);
 		this.options.getInputEl()?.blur();
-		this.mobileComposerInputFocused = false;
 		this.queueViewportUpdate();
 		this.mobileComposerCloseTimer = this.options.getWindow().setTimeout(() => {
 			this.mobileComposerCloseTimer = null;
@@ -276,7 +271,6 @@ export class MobileComposerController {
 		if (this.options.getLayout() !== "mobile") {
 			return true;
 		}
-		this.mobileComposerInputFocused = true;
 		this.queueViewportUpdate();
 		return this.mobileComposerPhase !== "opening" && this.mobileComposerPhase !== "focusing";
 	}
@@ -285,7 +279,6 @@ export class MobileComposerController {
 		if (this.options.getLayout() !== "mobile") {
 			return true;
 		}
-		this.mobileComposerInputFocused = false;
 		if (this.mobileComposerPhase === "closing") {
 			return false;
 		}

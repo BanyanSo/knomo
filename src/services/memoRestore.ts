@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 
 import type { DailyRef, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { formatMonthPeriod, formatTimePart } from "../utils/date";
 import { hashMemoContent, hashText } from "../utils/hash";
 import { findLineNumber, splitMarkdownLines } from "../utils/markdown";
@@ -58,7 +59,7 @@ export class MemoRestoreService {
 		const settings = this.getSettings();
 		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memoId);
 		if (currentMemo === null) {
-			throw new Error("Memo does not exist or has already been cleaned up.");
+			throw new KnomoError("memo_not_found_or_cleaned");
 		}
 		if (currentMemo.status !== "deleted") {
 			return currentMemo;
@@ -88,7 +89,7 @@ export class MemoRestoreService {
 				markSelfWrite(this.selfWriteTracker, opId, monthlyResult.filePath, "archive", monthlyResult.content);
 			}
 		} catch (error) {
-			throw error instanceof Error ? error : new Error("Restore failed. Please try again later.");
+			throw error instanceof Error ? error : new KnomoError("restore_failed_retry");
 		}
 
 		const now = new Date().toISOString();
@@ -125,10 +126,10 @@ export class MemoRestoreService {
 		const settings = this.getSettings();
 		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memoId);
 		if (currentMemo === null) {
-			throw new Error("Memo does not exist or has already been cleaned up.");
+			throw new KnomoError("memo_not_found_or_cleaned");
 		}
 		if (currentMemo.status !== "deleted") {
-			throw new Error("Only memos in trash can be permanently deleted.");
+			throw new KnomoError("trash_only_purge");
 		}
 		const opId = createOperationId(new Date());
 		await this.memoIndexStore.purgeDeletedMemo(settings.monthlyMemoFolder, memoId);
@@ -160,6 +161,7 @@ export class MemoRestoreService {
 					...memo,
 					issue: {
 						type: "delete_failed",
+						...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
 						detectedAt: new Date().toISOString(),
 						message: error instanceof Error ? error.message : "Monthly archive delete retry failed.",
 					},
@@ -210,7 +212,7 @@ export class MemoRestoreService {
 			restoredLineNumber = findLineNumber(content, restoredBlock, settings.dailyInsertPosition === "bottom");
 			const parsedBlock = this.parseRestoredBlockFromContent(content, restoredBlock, restoredLineNumber);
 			if (parsedBlock === null) {
-				throw new Error("Restore failed: unable to verify the daily block.");
+				throw new KnomoError("restore_verify_daily_failed");
 			}
 			restoredParsedBlock = parsedBlock;
 		}
@@ -334,7 +336,7 @@ export class MemoRestoreService {
 			}
 		}
 		if (memo.contentSnapshot.trim().length === 0) {
-			throw new Error("Missing delete snapshot.");
+			throw new KnomoError("missing_delete_snapshot");
 		}
 		return this.markdownBlockService.buildMemoBlock(memo.contentSnapshot, formatTimePart(new Date(memo.createdAt), this.getSettings().memoTimeFormat));
 	}

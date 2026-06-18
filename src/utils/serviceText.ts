@@ -2,6 +2,33 @@ import { t } from "../i18n";
 import type { TranslationKey } from "../i18n";
 import { en } from "../i18n/en";
 import { legacyZhCNText } from "../i18n/zh-CN";
+import type { MemoIssue } from "../types/issue";
+import {
+	KNOMO_ERROR_DEFINITIONS,
+	isKnomoErrorCode,
+	KnomoError,
+} from "../types/serviceError";
+import type { KnomoErrorCode, ServiceErrorParams } from "../types/serviceError";
+
+export function formatServiceError(error: unknown, fallbackMessage = t("service.unknownError")): string {
+	if (error instanceof KnomoError) {
+		return formatKnomoError(error.code, error.params, error.detail);
+	}
+	if (error instanceof Error) {
+		return error.message.length > 0 ? formatSettingsText(error.message) : fallbackMessage;
+	}
+	if (typeof error === "string" && error.length > 0) {
+		return formatSettingsText(error);
+	}
+	return fallbackMessage;
+}
+
+export function formatMemoIssue(issue: MemoIssue): string {
+	if (isKnomoErrorCode(issue.code)) {
+		return formatKnomoError(issue.code, issue.context ?? {});
+	}
+	return formatSettingsText(issue.message);
+}
 
 export function formatSettingsText(text: string): string {
 	const sourceText = formatStructuredServiceText(text)
@@ -116,6 +143,31 @@ function getIndexWriteActionLabel(action: string): string {
 	if (action === "restoring") return t("service.actionRestore");
 	if (action === "generating reference") return t("service.actionReference");
 	return action;
+}
+
+function formatKnomoError(code: KnomoErrorCode, sourceParams: ServiceErrorParams, detail?: unknown): string {
+	const params: ServiceErrorParams = { ...sourceParams };
+	if (code === "index_write_failed") {
+		if (typeof params.action === "string") {
+			params.action = getIndexWriteActionLabel(params.action);
+		}
+		if (params.monthlyIncomplete === true) {
+			params.monthlyPath = t("service.monthlyIncomplete");
+		}
+		if (detail !== undefined) {
+			params.reason = formatServiceError(detail);
+		} else if (typeof params.reason === "string") {
+			params.reason = formatSettingsText(params.reason);
+		}
+	}
+	const message = t(KNOMO_ERROR_DEFINITIONS[code].messageKey, params);
+	if (typeof params.backupPath === "string") {
+		return `${message}\n${t("service.backupPath", { path: params.backupPath })}`;
+	}
+	if (params.backupMissing === true) {
+		return `${message}\n${t("service.backupNotFound")}`;
+	}
+	return message;
 }
 
 function replaceLiteral(text: string, search: string, replacement: string): string {

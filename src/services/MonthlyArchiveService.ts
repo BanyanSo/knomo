@@ -2,9 +2,13 @@ import { normalizePath, TFile, TFolder, Vault } from "obsidian";
 import type { App } from "obsidian";
 
 import { DEFAULT_MONTHLY_DATE_HEADING_FORMAT, DEFAULT_MONTHLY_MEMO_FILE_FORMAT } from "../constants";
+import { getKnomoLocale, translate } from "../i18n";
+import type { KnomoLocale } from "../i18n";
 import type { MemoRecord, MonthlyRef } from "../types/memo";
 import type { PreparedMonthlyMemoWrite } from "../types/pending";
 import { PendingMemoWriteConflictError } from "../types/pending";
+import { KnomoError } from "../types/serviceError";
+import type { KnomoErrorCode } from "../types/serviceError";
 import type { KnomoSettings, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart, formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
@@ -14,11 +18,13 @@ import { ensureFolder, ensureTextFile, getParentFolderPath } from "../utils/vaul
 import { MarkdownBlockService } from "./MarkdownBlockService";
 
 // 职责：维护月度归档文件中的月份标题、日期标题和完整 memo block。
-export const MONTHLY_ARCHIVE_READONLY_COMMENT = [
+export const MONTHLY_ARCHIVE_MARKER = "knomo:monthly-archive";
+export const LEGACY_MONTHLY_ARCHIVE_READONLY_COMMENT = [
 	"<!--",
 	"Knomo monthly archive file: this file is generated automatically from Daily Notes. Do not edit memos here directly; edit them in Knomo or the corresponding daily note.",
 	"-->",
 ].join("\n");
+export const MONTHLY_ARCHIVE_READONLY_COMMENT = buildMonthlyArchiveReadOnlyComment("en");
 
 export interface MonthlyArchiveWriteResult {
 	file: TFile;
@@ -34,9 +40,9 @@ export interface MonthlyArchiveUpsertOptions {
 	allowMissingInsert?: boolean;
 }
 
-export class MonthlyArchiveMissingError extends Error {
-	constructor(message: string) {
-		super(message);
+export class MonthlyArchiveMissingError extends KnomoError {
+	constructor(code: Extract<KnomoErrorCode, "monthly_archive_file_missing" | "monthly_archive_block_missing">) {
+		super(code);
 		this.name = "MonthlyArchiveMissingError";
 	}
 }
@@ -197,7 +203,7 @@ export class MonthlyArchiveService {
 			if (options.allowMissingInsert === true) {
 				return this.insertMemoBlock(settings, new Date(memo.createdAt), block);
 			}
-			throw new MonthlyArchiveMissingError("Monthly archive file does not exist.");
+			throw new MonthlyArchiveMissingError("monthly_archive_file_missing");
 		}
 		const file = existing;
 		const dateHeading = memo.monthlyRef.dateHeading || formatMonthlyDateHeading(settings.monthlyDateHeadingFormat, new Date(memo.createdAt));
@@ -211,7 +217,7 @@ export class MonthlyArchiveService {
 			}, "monthly_block_missing");
 			if (location.parsedBlock === null) {
 				if (options.allowMissingInsert !== true) {
-					throw new MonthlyArchiveMissingError("Monthly archive block does not exist.");
+					throw new MonthlyArchiveMissingError("monthly_archive_block_missing");
 				}
 				const withMonthHeading = ensureMonthHeading(currentContent, formatMonthPeriod(new Date(memo.createdAt)));
 				const withComment = ensureReadOnlyComment(withMonthHeading);
@@ -242,7 +248,7 @@ export class MonthlyArchiveService {
 	async deleteMemoBlock(memo: MemoRecord): Promise<MonthlyArchiveWriteResult> {
 		const existing = this.app.vault.getAbstractFileByPath(memo.monthlyRef.path);
 		if (!(existing instanceof TFile)) {
-			throw new MonthlyArchiveMissingError("Monthly archive file does not exist.");
+			throw new MonthlyArchiveMissingError("monthly_archive_file_missing");
 		}
 		const file = existing;
 		let deletedBlock = "";
@@ -254,7 +260,7 @@ export class MonthlyArchiveService {
 				contentHash: memo.contentHash,
 			}, "monthly_block_missing");
 			if (location.parsedBlock === null) {
-				throw new MonthlyArchiveMissingError("Monthly archive block does not exist.");
+				throw new MonthlyArchiveMissingError("monthly_archive_block_missing");
 			}
 			deletedBlock = location.parsedBlock.rawBlock;
 			return this.markdownBlockService.deleteMemoBlock(currentContent, location.parsedBlock.startLine);
@@ -352,16 +358,28 @@ function ensureMonthHeading(content: string, period: string): string {
 	return `${monthHeading}\n\n${normalizeMarkdownLineEndings(content).replace(/^\s+/, "")}`;
 }
 
-export function ensureReadOnlyComment(content: string): string {
+export function ensureReadOnlyComment(content: string, locale: KnomoLocale = getKnomoLocale()): string {
 	const normalizedContent = normalizeMarkdownLineEndings(content);
 	const trimmedStart = normalizedContent.trimStart();
-	if (trimmedStart.startsWith(MONTHLY_ARCHIVE_READONLY_COMMENT)) {
+	if (
+		trimmedStart.startsWith(`<!-- ${MONTHLY_ARCHIVE_MARKER}`)
+		|| trimmedStart.startsWith(LEGACY_MONTHLY_ARCHIVE_READONLY_COMMENT)
+	) {
 		return normalizedContent;
 	}
+	const comment = buildMonthlyArchiveReadOnlyComment(locale);
 	const contentWithoutOldLeadingSpace = normalizedContent.replace(/^\s+/, "");
 	return contentWithoutOldLeadingSpace.length === 0
-		? MONTHLY_ARCHIVE_READONLY_COMMENT
-		: `${MONTHLY_ARCHIVE_READONLY_COMMENT}\n\n${contentWithoutOldLeadingSpace}`;
+		? comment
+		: `${comment}\n\n${contentWithoutOldLeadingSpace}`;
+}
+
+function buildMonthlyArchiveReadOnlyComment(locale: KnomoLocale): string {
+	return [
+		`<!-- ${MONTHLY_ARCHIVE_MARKER}`,
+		translate(locale, "archive.readOnlyComment"),
+		"-->",
+	].join("\n");
 }
 
 function ensureDateHeading(content: string, dateHeading: string, order: MonthlyDateOrder): string {

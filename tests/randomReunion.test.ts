@@ -24,6 +24,19 @@ test("filters random reunion candidates lightly", () => {
 	assert.deepEqual(filterRandomReunionCandidates(memos, { today }).map((memo) => memo.id), ["valid"]);
 });
 
+test("filters bilingual default blacklist tags without treating archive as archived", () => {
+	const today = new Date(2026, 4, 21);
+	const memos = [
+		makeMemo("temp", { tags: ["temp"] }),
+		makeMemo("temporary", { tags: ["Temporary"] }),
+		makeMemo("draft-child", { tags: ["Draft/work"] }),
+		makeMemo("archived", { tags: ["archived"] }),
+		makeMemo("archive-topic", { tags: ["archive"] }),
+	];
+
+	assert.deepEqual(filterRandomReunionCandidates(memos, { today }).map((memo) => memo.id), ["archive-topic"]);
+});
+
 test("calculates random reunion weights", () => {
 	const today = new Date(2026, 4, 21);
 	const historicalToday = makeMemo("historical", { createdAt: "2025-05-21T09:00:00" });

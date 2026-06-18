@@ -241,6 +241,7 @@ export const zhCN = {
 	"sync.pendingMonthly": "等待月度 Memos 同步",
 	"sync.monthlyFailed": "月度 Memos 同步失败",
 	"sync.monthlyDeleteFailed": "月度 Memos 删除失败",
+	"archive.readOnlyComment": "Knomo 月度归档文件：此文件根据日记自动生成。请勿直接在此编辑 memo；请在 Knomo 或对应日记中编辑。",
 	"term.memoIndex": "Memos 索引",
 	"term.memoBlock": "Memos 内容块",
 	"term.memoId": "Memos ID",

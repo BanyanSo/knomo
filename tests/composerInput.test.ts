@@ -218,6 +218,38 @@ test("corrects mobile list Enter when candidate confirmation and newline share o
 	});
 });
 
+test("corrects mobile list Enter when native input omits marker spacing", () => {
+	assert.equal(getListEnterPatchForNativeInput("- abc", "- abc\n-", 7, 7), null);
+	assert.deepEqual(getListEnterPatchForNativeInput("- abc", "- abc\n-", 7, 7, {
+		allowInsertedMarkerCorrection: true,
+	}), {
+		value: "- abc\n- ",
+		cursor: 8,
+	});
+	assert.deepEqual(getListEnterPatchForNativeInput("1. abc", "1. abc\n2.", 9, 9, {
+		allowInsertedMarkerCorrection: true,
+	}), {
+		value: "1. abc\n2. ",
+		cursor: 10,
+	});
+	assert.deepEqual(getListEnterPatchForNativeInput("- [x] done", "- [x] done\n- [ ]", 16, 16, {
+		allowInsertedMarkerCorrection: true,
+	}), {
+		value: "- [x] done\n- [ ] ",
+		cursor: 17,
+	});
+	assert.equal(getListEnterPatchForNativeInput("- ", "- \n-", 4, 4, {
+		allowInsertedMarkerCorrection: true,
+	}), null);
+	assert.deepEqual(getListEnterPatchForNativeInput("- ni", "- 你好\n-", 6, 6, {
+		allowTextChangeWithNewline: true,
+		allowInsertedMarkerCorrection: true,
+	}), {
+		value: "- 你好\n- ",
+		cursor: 7,
+	});
+});
+
 test("parses tags at content and line starts", () => {
 	assert.deepEqual(parseMemoTags("#daily\n第二行 #project/knomo\n#idea"), ["daily", "project/knomo", "idea"]);
 });

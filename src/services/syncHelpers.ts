@@ -1,5 +1,6 @@
 import type { MemoRecord } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { formatMemoIdPrefix, formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
 import { getIndexFilePath } from "../utils/path";
@@ -25,20 +26,24 @@ export function normalizeMemoInput(input: string): string {
 }
 
 export function buildMonthlyIssue(error: unknown): MemoRecord["issue"] {
+	const code = error instanceof KnomoError ? error.code : undefined;
 	return {
 		type: error instanceof MonthlyArchiveMissingError ? "monthly_block_missing" : "monthly_sync_failed",
+		...(code === undefined ? {} : { code }),
 		detectedAt: new Date().toISOString(),
 		message: error instanceof Error ? error.message : "Monthly archive sync failed.",
+		...(error instanceof KnomoError && Object.keys(error.params).length > 0 ? { context: error.params } : {}),
 	};
 }
 
 export function buildIndexWriteFailedError(action: string, error: unknown, dailyPath: string, monthlyPath: string): Error {
-	const reason = error instanceof Error ? error.message : "Unknown error";
 	const monthlyText = monthlyPath.trim().length > 0 ? monthlyPath : "Monthly archive incomplete";
-	return new Error(
-		`Failed to write memo-index while ${action} memo. The daily note may already be written: ${dailyPath}; monthly archive: ${monthlyText}. ` +
-				`Repair memo-index or run manual scan before sending again. Original error: ${reason}`,
-	);
+	return new KnomoError("index_write_failed", {
+		action,
+		dailyPath,
+		monthlyPath: monthlyText,
+		monthlyIncomplete: monthlyPath.trim().length === 0,
+	}, error);
 }
 
 export function hasValidMonthlyRef(memo: MemoRecord): boolean {

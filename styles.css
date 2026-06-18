@@ -2081,7 +2081,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	cursor: pointer;
 }
 
-.knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:hover,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-time[data-memo-time-open="daily"]:hover,
 .knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:focus,
 .knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:focus-visible,
 .knomo-plugin .knomo-card-time[data-memo-time-open="daily"]:active {

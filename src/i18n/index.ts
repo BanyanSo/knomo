@@ -18,7 +18,11 @@ export function getKnomoLocale(): KnomoLocale {
 }
 
 export function t(key: TranslationKey, params: TranslationParams = {}): string {
-	const template = dictionaries[activeLocale][key] ?? dictionaries.en[key] ?? key;
+	return translate(activeLocale, key, params);
+}
+
+export function translate(locale: KnomoLocale, key: TranslationKey, params: TranslationParams = {}): string {
+	const template = dictionaries[locale][key] ?? dictionaries.en[key] ?? key;
 	return template.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
 		const value = params[name];
 		return value === null || value === undefined ? match : String(value);

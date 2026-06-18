@@ -24,7 +24,7 @@ import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
 import type { MemoMutation } from "./types/memo";
-import { formatSettingsText } from "./utils/serviceText";
+import { formatServiceError } from "./utils/serviceText";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
 
@@ -216,7 +216,7 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	private notifyWatchSyncError(path: string, error: unknown): void {
-		const message = formatSettingsText(error instanceof Error ? error.message : t("service.unknownError"));
+		const message = formatServiceError(error);
 		new Notice(t("service.watchSyncFailed", { path, message }));
 	}
 

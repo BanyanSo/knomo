@@ -19,7 +19,7 @@ interface WeightedMemo {
 }
 
 const DEFAULT_MIN_CONTENT_LENGTH = 8;
-const DEFAULT_BLACKLIST_TAGS = ["临时", "草稿", "已归档"];
+const DEFAULT_BLACKLIST_TAGS = ["临时", "草稿", "已归档", "temp", "temporary", "draft", "archived"];
 const DEFAULT_BLACKLIST_PATH_PREFIXES = ["Template/", "Archive/"];
 const DEFAULT_DIVERSITY_LIMIT = 2;
 const MIN_WEIGHT = 0.01;

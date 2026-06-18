@@ -4,6 +4,7 @@ import type { Plugin } from "obsidian";
 import { ensureReadOnlyComment } from "../services/MonthlyArchiveService";
 import { buildMonthlyFolderExcludeRule, buildSystemFolderExcludeRule, ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import { isRecord } from "../utils/object";
 import { getIndexFolderPath, getSystemFolderPath, normalizeVaultPath } from "../utils/path";
 import { ensureFolder, getParentFolderPath } from "../utils/vault";
@@ -43,7 +44,7 @@ export class MonthlyFolderMigrationService {
 			};
 		}
 		if (plan.conflicts.length > 0) {
-			throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
+			throw new KnomoError("target_path_conflicts", { paths: plan.conflicts.join("; ") });
 		}
 
 		const movedPaths: Array<{ from: string; to: string }> = [];
@@ -74,7 +75,7 @@ export class MonthlyFolderMigrationService {
 				await this.plugin.app.vault.rename(oldSystemFolder, plan.newSystemPath);
 				movedPaths.push({ from: plan.oldSystemPath, to: plan.newSystemPath });
 			} else if (oldSystemFolder !== null) {
-				throw new Error(`Old system path is not a folder: ${plan.oldSystemPath}`);
+				throw new KnomoError("old_system_path_not_folder", { path: plan.oldSystemPath });
 			} else {
 				await ensureFolder(this.plugin.app, getIndexFolderPath(plan.newMonthlyMemoFolder));
 			}

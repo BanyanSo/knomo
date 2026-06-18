@@ -2,6 +2,7 @@ import { setIcon } from "obsidian";
 
 import { t } from "../i18n";
 import type { MemoRecord } from "../types/memo";
+import { formatMemoIssue } from "../utils/serviceText";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
 	getMemoCardActions,
@@ -148,7 +149,10 @@ export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecor
 	}
 	const warningText = getTrashMemoWarningText(memo);
 	if (warningText !== null) {
-		card.createDiv({ cls: "knomo-card-warning", text: options.formatSettingsText(warningText) });
+		card.createDiv({
+			cls: "knomo-card-warning",
+			text: memo.issue === null ? options.formatSettingsText(warningText) : formatMemoIssue(memo.issue),
+		});
 	}
 	return card;
 }
@@ -194,7 +198,10 @@ function renderCardMeta(card: HTMLElement, memo: MemoRecord, options: RenderMemo
 	}
 	const warningText = getMemoWarningText(memo);
 	if (warningText !== null) {
-		card.createDiv({ cls: "knomo-card-warning", text: options.formatSettingsText(warningText) });
+		card.createDiv({
+			cls: "knomo-card-warning",
+			text: memo.issue === null ? options.formatSettingsText(warningText) : formatMemoIssue(memo.issue),
+		});
 	}
 }
 

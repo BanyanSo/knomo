@@ -1,6 +1,7 @@
 import { normalizePath } from "obsidian";
 
 import type { KnomoSettings } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import type { MemoIndexStore } from "./MemoIndexStore";
 import type {
 	EstimateDailyMemosResult,
@@ -111,10 +112,19 @@ export class MemoRebuildService {
 }
 
 function buildRebuildIndexFailedError(failedFiles: number, backupPath: string | null): Error {
-	return appendBackupPathToError(new Error(`Rebuild index failed: ${failedFiles} files did not sync; stopped refreshing the view.`), backupPath);
+	return appendBackupPathToError(new KnomoError("rebuild_index_failed", { count: failedFiles }), backupPath);
 }
 
 function appendBackupPathToError(error: unknown, backupPath: string | null): Error {
+	if (error instanceof KnomoError) {
+		if (error.params.backupPath !== undefined || error.params.backupMissing === true) {
+			return error;
+		}
+		return new KnomoError(error.code, {
+			...error.params,
+			...(backupPath === null ? { backupMissing: true } : { backupPath }),
+		}, error.detail);
+	}
 	const message = error instanceof Error ? error.message : "Rebuild index failed.";
 	const backupText = backupPath === null ? "No restorable previous index backup was found." : `Backup path: ${backupPath}`;
 	if (message.includes("Backup path:") || message.includes("No restorable previous index backup was found.")) {

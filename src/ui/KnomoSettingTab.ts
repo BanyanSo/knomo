@@ -16,7 +16,7 @@ import type { LegacyDailyMemosGroupPreview, LegacyDailyMemosImportScope, LegacyD
 import type { MemoRecord } from "../types/memo";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { normalizeVaultPath } from "../utils/path";
-import { formatSettingsText } from "../utils/serviceText";
+import { formatMemoIssue, formatServiceError, formatSettingsText } from "../utils/serviceText";
 import { KnomoView } from "./KnomoView";
 
 const SETTING_NOTICE_DELAY_MS = 800;
@@ -40,6 +40,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildRunning = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
+	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
 
 	constructor(
 		app: App,
@@ -54,6 +55,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		this.cancelAllDelayedSettingNotices();
+		this.pendingSettingDrafts.clear();
 		containerEl.empty();
 
 		const settings = this.settingsService.getSettings();
@@ -69,7 +71,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 				text.setPlaceholder(DEFAULT_DAILY_HEADING);
 				text.setValue(settings.dailyHeading);
 				text.onChange((value) => {
-					void this.saveDailyHeading(value);
+					this.updateTextSettingDraft(
+						"dailyHeading",
+						value,
+						(nextValue) => this.settingsService.validateDailyHeading(nextValue),
+						t("settings.dailyHeading.invalid"),
+					);
+				});
+				text.inputEl.addEventListener("blur", () => {
+					void this.commitDailyHeadingDraft();
 				});
 			});
 		new Setting(containerEl)
@@ -133,7 +143,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
 				text.setValue(settings.monthlyMemoFileFormat);
 				text.onChange((value) => {
-					void this.saveMonthlyMemoFileFormat(value);
+					this.updateTextSettingDraft(
+						"monthlyMemoFileFormat",
+						value,
+						(nextValue) => this.settingsService.validateMonthlyMemoFileFormat(nextValue),
+						t("settings.monthlyFileFormat.invalid"),
+					);
+				});
+				text.inputEl.addEventListener("blur", () => {
+					void this.commitMonthlyMemoFileFormatDraft();
 				});
 			});
 		new Setting(containerEl)
@@ -143,7 +161,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 				text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
 				text.setValue(settings.monthlyDateHeadingFormat);
 				text.onChange((value) => {
-					void this.saveMonthlyDateHeadingFormat(value);
+					this.updateTextSettingDraft(
+						"monthlyDateHeadingFormat",
+						value,
+						(nextValue) => this.settingsService.validateMarkdownHeading(nextValue),
+						t("settings.dateHeadingFormat.invalid"),
+					);
+				});
+				text.inputEl.addEventListener("blur", () => {
+					void this.commitMonthlyDateHeadingFormatDraft();
 				});
 			});
 		new Setting(containerEl)
@@ -222,6 +248,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
+		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
 		this.cancelAllDelayedSettingNotices();
 	}
@@ -269,7 +296,82 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async saveDailyHeading(value: string): Promise<void> {
+	private updateTextSettingDraft(
+		key: SettingNoticeKey,
+		value: string,
+		validate: (value: string) => boolean,
+		invalidMessage: string,
+	): void {
+		const nextValue = value.trim();
+		this.pendingSettingDrafts.set(key, value);
+		this.rememberSettingNoticeValue(key, nextValue);
+		if (!validate(nextValue)) {
+			this.scheduleDelayedSettingNotice(
+				key,
+				nextValue,
+				invalidMessage,
+				() => !validate(nextValue),
+			);
+			return;
+		}
+		this.cancelDelayedSettingNotice(key);
+	}
+
+	private async commitAllPendingSettingDrafts(showChangedNotice: boolean): Promise<void> {
+		const dailyHeading = this.pendingSettingDrafts.get("dailyHeading");
+		const monthlyMemoFileFormat = this.pendingSettingDrafts.get("monthlyMemoFileFormat");
+		const monthlyDateHeadingFormat = this.pendingSettingDrafts.get("monthlyDateHeadingFormat");
+		if (dailyHeading !== undefined) {
+			await this.commitDailyHeadingDraft(showChangedNotice, dailyHeading);
+		}
+		if (monthlyMemoFileFormat !== undefined) {
+			await this.commitMonthlyMemoFileFormatDraft(monthlyMemoFileFormat);
+		}
+		if (monthlyDateHeadingFormat !== undefined) {
+			await this.commitMonthlyDateHeadingFormatDraft(monthlyDateHeadingFormat);
+		}
+	}
+
+	private async commitDailyHeadingDraft(showChangedNotice = true, draftValue?: string): Promise<void> {
+		const value = draftValue ?? this.pendingSettingDrafts.get("dailyHeading");
+		if (value === undefined) {
+			return;
+		}
+		if (
+			await this.saveDailyHeading(value, showChangedNotice)
+			&& this.pendingSettingDrafts.get("dailyHeading") === value
+		) {
+			this.pendingSettingDrafts.delete("dailyHeading");
+		}
+	}
+
+	private async commitMonthlyMemoFileFormatDraft(draftValue?: string): Promise<void> {
+		const value = draftValue ?? this.pendingSettingDrafts.get("monthlyMemoFileFormat");
+		if (value === undefined) {
+			return;
+		}
+		if (
+			await this.saveMonthlyMemoFileFormat(value)
+			&& this.pendingSettingDrafts.get("monthlyMemoFileFormat") === value
+		) {
+			this.pendingSettingDrafts.delete("monthlyMemoFileFormat");
+		}
+	}
+
+	private async commitMonthlyDateHeadingFormatDraft(draftValue?: string): Promise<void> {
+		const value = draftValue ?? this.pendingSettingDrafts.get("monthlyDateHeadingFormat");
+		if (value === undefined) {
+			return;
+		}
+		if (
+			await this.saveMonthlyDateHeadingFormat(value)
+			&& this.pendingSettingDrafts.get("monthlyDateHeadingFormat") === value
+		) {
+			this.pendingSettingDrafts.delete("monthlyDateHeadingFormat");
+		}
+	}
+
+	private async saveDailyHeading(value: string, showChangedNotice = true): Promise<boolean> {
 		const key: SettingNoticeKey = "dailyHeading";
 		const nextHeading = value.trim();
 		this.rememberSettingNoticeValue(key, nextHeading);
@@ -280,25 +382,28 @@ export class KnomoSettingTab extends PluginSettingTab {
 				t("settings.dailyHeading.invalid"),
 				() => !this.settingsService.validateDailyHeading(nextHeading),
 			);
-			return;
+			return false;
 		}
 		this.cancelDelayedSettingNotice(key);
 		if (nextHeading === this.settingsService.getSettings().dailyHeading) {
-			return;
+			return true;
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
-			return;
+			return true;
 		}
-		this.scheduleDelayedSettingNotice(
-			key,
-			nextHeading,
-			t("settings.dailyHeading.changed"),
-			() => this.settingsService.getSettings().dailyHeading === nextHeading,
-		);
+		if (showChangedNotice) {
+			this.scheduleDelayedSettingNotice(
+				key,
+				nextHeading,
+				t("settings.dailyHeading.changed"),
+				() => this.settingsService.getSettings().dailyHeading === nextHeading,
+			);
+		}
+		return true;
 	}
 
-	private async saveMonthlyDateHeadingFormat(value: string): Promise<void> {
+	private async saveMonthlyDateHeadingFormat(value: string): Promise<boolean> {
 		const key: SettingNoticeKey = "monthlyDateHeadingFormat";
 		const nextFormat = value.trim();
 		this.rememberSettingNoticeValue(key, nextFormat);
@@ -309,16 +414,17 @@ export class KnomoSettingTab extends PluginSettingTab {
 				t("settings.dateHeadingFormat.invalid"),
 				() => !this.settingsService.validateMarkdownHeading(nextFormat),
 			);
-			return;
+			return false;
 		}
 		this.cancelDelayedSettingNotice(key);
 		if (nextFormat === this.settingsService.getSettings().monthlyDateHeadingFormat) {
-			return;
+			return true;
 		}
 		await this.settingsService.updateSettings({ monthlyDateHeadingFormat: nextFormat });
+		return true;
 	}
 
-	private async saveMonthlyMemoFileFormat(value: string): Promise<void> {
+	private async saveMonthlyMemoFileFormat(value: string): Promise<boolean> {
 		const key: SettingNoticeKey = "monthlyMemoFileFormat";
 		const nextFormat = value.trim();
 		this.rememberSettingNoticeValue(key, nextFormat);
@@ -329,13 +435,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 				t("settings.monthlyFileFormat.invalid"),
 				() => !this.settingsService.validateMonthlyMemoFileFormat(nextFormat),
 			);
-			return;
+			return false;
 		}
 		this.cancelDelayedSettingNotice(key);
 		if (nextFormat === this.settingsService.getSettings().monthlyMemoFileFormat) {
-			return;
+			return true;
 		}
 		await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
+		return true;
 	}
 
 	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<void> {
@@ -365,7 +472,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder);
 			new Notice(t("settings.monthlyFolder.saved"));
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.monthlyFolder.saveFailed"));
+			const message = formatServiceError(error, t("settings.monthlyFolder.saveFailed"));
 			new Notice(message);
 		} finally {
 			button.setDisabled(false);
@@ -447,57 +554,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 			: t("settings.excludeMonthly.keepExisting"));
 	}
 
-	private async syncMonthlyMemosExcludeRuleAfterFolderChange(
-		nextMonthlyMemoFolder: string,
-		previousSettings: ReturnType<SettingsService["getSettings"]>,
-	): Promise<void> {
-		if (!previousSettings.excludeMonthlyMemosFromObsidian) {
-			return;
-		}
-		const nextRule = buildMonthlyFolderExcludeRule(nextMonthlyMemoFolder);
-		if (nextRule === null) {
-			await this.settingsService.updateSettings({
-				managedObsidianExcludeRule: undefined,
-				managedObsidianExcludeRuleOwned: false,
-			});
-			this.setExcludeStatus(t("settings.excludeMonthly.empty"), true);
-			return;
-		}
-		try {
-			const previousRule = previousSettings.managedObsidianExcludeRule;
-			if (previousRule === nextRule) {
-				const result = await this.obsidianExcludeService.ensureRule(nextRule);
-				await this.settingsService.updateSettings({
-					excludeMonthlyMemosFromObsidian: true,
-					managedObsidianExcludeRule: nextRule,
-					managedObsidianExcludeRuleOwned: previousSettings.managedObsidianExcludeRuleOwned === true
-						? true
-						: result.addedByKnomo,
-				});
-				return;
-			}
-			if (
-				previousSettings.managedObsidianExcludeRuleOwned === true &&
-				previousRule !== undefined
-			) {
-				await this.obsidianExcludeService.removeRule(previousRule);
-			}
-			const result = await this.obsidianExcludeService.ensureRule(nextRule);
-			await this.settingsService.updateSettings({
-				excludeMonthlyMemosFromObsidian: true,
-				managedObsidianExcludeRule: nextRule,
-				managedObsidianExcludeRuleOwned: result.addedByKnomo,
-			});
-		} catch {
-			await this.settingsService.updateSettings({
-				excludeMonthlyMemosFromObsidian: true,
-				managedObsidianExcludeRule: nextRule,
-				managedObsidianExcludeRuleOwned: false,
-			});
-			new Notice(t("settings.excludeMonthly.addManual", { rule: nextRule }));
-		}
-	}
-
 	private async runLegacyImportPreview(button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void }): Promise<void> {
 		if (this.legacyImportRunning) {
 			return;
@@ -512,7 +568,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			this.legacyImportPreview = await this.syncOrchestrator.previewLegacyDailyMemos(this.legacyImportScope);
 			this.renderLegacyImportPreview();
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.legacyImport.previewFailed"));
+			const message = formatServiceError(error, t("settings.legacyImport.previewFailed"));
 			this.renderLegacyImportStatus(message, true);
 			new Notice(message);
 		} finally {
@@ -616,7 +672,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				new Notice(t("settings.legacyImport.failedCount", { count: result.failed }));
 			}
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.legacyImport.failed"));
+			const message = formatServiceError(error, t("settings.legacyImport.failed"));
 			this.renderLegacyImportStatus(message, true);
 			new Notice(message);
 		} finally {
@@ -717,7 +773,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.rebuild.completedNotice"));
 		} catch (error) {
-			const message = formatSettingsText(error instanceof Error ? error.message : t("settings.rebuild.failed"));
+			const message = formatServiceError(error, t("settings.rebuild.failed"));
 			this.renderRebuildResult(message);
 			new Notice(message);
 		} finally {
@@ -787,7 +843,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		} catch (error) {
 			this.issueListEl.createDiv({
 				cls: "knomo-setting-help is-error",
-				text: formatSettingsText(error instanceof Error ? error.message : t("settings.issues.loadFailed")),
+				text: formatServiceError(error, t("settings.issues.loadFailed")),
 			});
 		}
 	}
@@ -803,7 +859,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		});
 		item.createDiv({
 			cls: memo.issue === null ? "knomo-setting-help" : "knomo-setting-help is-error",
-			text: formatSettingsText(memo.issue?.message ?? t("settings.issues.needsHandling")),
+			text: memo.issue === null ? t("settings.issues.needsHandling") : formatMemoIssue(memo.issue),
 		});
 		if (memo.syncStatus === "monthly_delete_failed") {
 			const button = item.createEl("button", {
@@ -835,7 +891,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.issues.monthlyDeleteComplete"));
 		} catch (error) {
-			new Notice(formatSettingsText(error instanceof Error ? error.message : t("settings.issues.monthlyDeleteFailed")));
+			new Notice(formatServiceError(error, t("settings.issues.monthlyDeleteFailed")));
 		} finally {
 			button.disabled = false;
 			button.setText(t("settings.issues.retryMonthlyDelete"));
@@ -851,7 +907,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.issues.monthlySyncComplete"));
 		} catch (error) {
-			new Notice(formatSettingsText(error instanceof Error ? error.message : t("settings.issues.monthlySyncFailed")));
+			new Notice(formatServiceError(error, t("settings.issues.monthlySyncFailed")));
 		} finally {
 			button.disabled = false;
 			button.setText(t("settings.issues.retryMonthlySync"));

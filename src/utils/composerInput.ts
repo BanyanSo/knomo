@@ -13,6 +13,7 @@ export interface TextReplacement {
 
 export interface NativeListInputOptions {
 	allowTextChangeWithNewline?: boolean;
+	allowInsertedMarkerCorrection?: boolean;
 }
 
 export type ListFormatType = "bullet" | "ordered";
@@ -201,6 +202,12 @@ export function getListEnterPatchForNativeInput(
 	end: number,
 	options: NativeListInputOptions = {},
 ): TextReplacement | null {
+	if (options.allowInsertedMarkerCorrection === true) {
+		const markerPatch = getListEnterPatchForNativeInsertedMarker(previousValue, value, start, end, options);
+		if (markerPatch !== null) {
+			return markerPatch;
+		}
+	}
 	if (start !== end || start <= 0 || value.charAt(start - 1) !== "\n") {
 		return null;
 	}
@@ -211,6 +218,50 @@ export function getListEnterPatchForNativeInput(
 		}
 	}
 	return getListEnterPatchAfterNativeNewline(value, start, end);
+}
+
+function getListEnterPatchForNativeInsertedMarker(
+	previousValue: string,
+	value: string,
+	start: number,
+	end: number,
+	options: NativeListInputOptions,
+): TextReplacement | null {
+	if (start !== end || start <= 0) {
+		return null;
+	}
+	const markerLineStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+	if (markerLineStart <= 0) {
+		return null;
+	}
+	const markerLine = value.slice(markerLineStart, start);
+	if (!isIncompleteListContinuationMarker(markerLine)) {
+		return null;
+	}
+	const newlineIndex = markerLineStart - 1;
+	const withoutInsertedMarker = `${value.slice(0, newlineIndex)}${value.slice(start)}`;
+	if (withoutInsertedMarker !== previousValue) {
+		if (!options.allowTextChangeWithNewline || countLineBreaks(value) !== countLineBreaks(previousValue) + 1) {
+			return null;
+		}
+	}
+	const expectedPatch = getListEnterPatch(withoutInsertedMarker, newlineIndex, newlineIndex);
+	if (expectedPatch === null) {
+		return null;
+	}
+	const correctedValue = `${value.slice(0, start)} ${value.slice(start)}`;
+	const correctedCursor = start + 1;
+	if (expectedPatch.value !== correctedValue || expectedPatch.cursor !== correctedCursor) {
+		return null;
+	}
+	return {
+		value: correctedValue,
+		cursor: correctedCursor,
+	};
+}
+
+function isIncompleteListContinuationMarker(line: string): boolean {
+	return /^([ \t]*)(?:[-*+]|\d+[.)])$/.test(line) || /^([ \t]*)(?:[-*+]|\d+[.)])([ \t]+)\[ \]$/.test(line);
 }
 
 function countLineBreaks(value: string): number {

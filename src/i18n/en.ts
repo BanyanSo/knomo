@@ -243,6 +243,7 @@ export const en: Record<TranslationKey, string> = {
 	"sync.pendingMonthly": "Waiting for monthly memo sync",
 	"sync.monthlyFailed": "Monthly memo sync failed",
 	"sync.monthlyDeleteFailed": "Monthly memo delete failed",
+	"archive.readOnlyComment": "Knomo monthly archive file: this file is generated automatically from Daily Notes. Do not edit memos here directly; edit them in Knomo or the corresponding daily note.",
 	"term.memoIndex": "memo-index",
 	"term.memoBlock": "memo block",
 	"term.memoId": "memo ID",

@@ -2,7 +2,7 @@ import { KNOMO_ALL_NOTES_ICON, KNOMO_RANDOM_REUNION_ICON } from "../icons";
 import { t } from "../i18n";
 import type { ScopeFilter, SearchDateFilter } from "./viewFilters";
 
-export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "trash";
+export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "record-stats" | "trash";
 export type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random";
 
 export interface ScopeOption {
@@ -36,6 +36,7 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
 	{ nav: "review", label: t("nav.review"), icon: "calendar-check" },
 	{ nav: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON },
+	{ nav: "record-stats", label: t("nav.recordStats"), icon: "chart-column-increasing" },
 ];
 
 export const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: t("nav.trash"), icon: "trash-2" };

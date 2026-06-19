@@ -17,6 +17,12 @@ export type KnomoActionDispatch =
 	| { type: "collapse-sidebar" }
 	| { type: "refresh" }
 	| { type: "focus-stats" }
+	| { type: "record-stats-previous" }
+	| { type: "record-stats-next" }
+	| { type: "record-stats-retry" }
+	| { type: "record-stats-view-week" }
+	| { type: "record-stats-view-month" }
+	| { type: "record-stats-view-year" }
 	| { type: "open-composer" }
 	| { type: "close-composer" }
 	| { type: "toggle-compact-search" }
@@ -53,6 +59,12 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "collapse-sidebar" ||
 		action === "refresh" ||
 		action === "focus-stats" ||
+		action === "record-stats-previous" ||
+		action === "record-stats-next" ||
+		action === "record-stats-retry" ||
+		action === "record-stats-view-week" ||
+		action === "record-stats-view-month" ||
+		action === "record-stats-view-year" ||
 		action === "open-composer" ||
 		action === "close-composer" ||
 		action === "toggle-compact-search" ||

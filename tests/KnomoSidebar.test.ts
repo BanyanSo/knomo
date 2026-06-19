@@ -44,6 +44,7 @@ test("renders sidebar navigation, trash, stats, tags, and resizer structure", as
 		"all",
 		"review",
 		"random",
+		"record-stats",
 		"trash",
 	]);
 	assert.equal(sidebar.find("[data-nav='trash']")?.hasClass("knomo-trash-nav-button"), true);

@@ -47,6 +47,12 @@ test("memo card body queues preview text instead of the raw content snapshot", a
 	assert.equal(queued?.previewText, "raw");
 });
 
+test("memo card can show preview text while Markdown rendering is pending", async () => {
+	const { content } = await renderMemoCard("**stable preview**", undefined, true);
+
+	assert.equal(content?.getText(), "**stable preview**");
+});
+
 test("image-only memo cards do not render an empty card content container", async () => {
 	const { body, content, images } = await renderMemoCard("![[image.png]]", {
 		text: "",
@@ -664,6 +670,16 @@ test("memo delete mutations increment the trash count only once", async () => {
 	assert.match(recordDeletedMethod, /this\.deletedMemoIds\.add\(memoId\);\s*this\.trashCount \+= 1;/);
 });
 
+test("record statistics reuse one preparation request and skip unchanged renders", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const prepareMethod = getMethodSource(source, "prepareRecordStats");
+	const renderMethod = getMethodSource(source, "renderRecordStatsPage");
+
+	assert.match(prepareMethod, /if \(this\.recordStatsRequestPromise !== null\) \{\s*return this\.recordStatsRequestPromise;/);
+	assert.match(renderMethod, /this\.recordStatsRenderedKey === renderKey/);
+	assert.doesNotMatch(source, /recordStatsLoadingPromise/);
+});
+
 test("purging a memo refreshes every open view", async () => {
 	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const controllerSource = await readFile(resolve(process.cwd(), "src/ui/TrashMemoController.ts"), "utf8");
@@ -677,7 +693,11 @@ test("purging a memo refreshes every open view", async () => {
 	assert.doesNotMatch(trashActionMethod, /refreshTrashCount/);
 });
 
-async function renderMemoCard(contentSnapshot: string, preview?: MemoCardPreview): Promise<{
+async function renderMemoCard(
+	contentSnapshot: string,
+	preview?: MemoCardPreview,
+	showPreviewTextImmediately = false,
+): Promise<{
 	card: TestElement;
 	body: TestElement | null;
 	content: TestElement | null;
@@ -712,6 +732,7 @@ async function renderMemoCard(contentSnapshot: string, preview?: MemoCardPreview
 		queueSourceReferenceMarkdown: () => {
 			throw new Error("Unexpected source reference render");
 		},
+		showPreviewTextImmediately,
 	});
 
 	const card = root.find("article");

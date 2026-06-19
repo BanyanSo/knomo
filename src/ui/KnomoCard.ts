@@ -32,6 +32,7 @@ export interface RenderMemoCardOptions {
 	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
 	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
 	queueSourceReferenceMarkdown: (container: HTMLElement, text: string, sourcePath: string, generation: number) => void;
+	showPreviewTextImmediately?: boolean;
 	reusedBodyEl?: HTMLElement | null;
 	reusedImagesEl?: HTMLElement | null;
 }
@@ -95,6 +96,7 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 			getMemoCardPreview: options.getMemoCardPreview,
 			queueMemoMarkdown: options.queueMemoMarkdown,
 			renderMemoCardImages: options.renderMemoCardImages,
+			showPreviewTextImmediately: options.showPreviewTextImmediately,
 			reusedImagesEl: options.reusedImagesEl,
 		});
 	}
@@ -168,6 +170,7 @@ interface RenderMemoCardBodyOptions {
 	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
 	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
 	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
+	showPreviewTextImmediately?: boolean;
 	reusedImagesEl?: HTMLElement | null;
 }
 
@@ -176,6 +179,9 @@ export function renderMemoCardBody(card: HTMLElement, memo: MemoRecord, options:
 	const body = card.createDiv({ cls: "knomo-card-body" });
 	if (preview.text.trim().length > 0) {
 		const content = body.createDiv({ cls: "knomo-card-content markdown-rendered" });
+		if (options.showPreviewTextImmediately === true) {
+			content.setText(preview.text);
+		}
 		options.queueMemoMarkdown(memo, content, options.generation, options.markdownPriority, preview.text);
 	}
 	if (options.reusedImagesEl !== undefined && options.reusedImagesEl !== null) {
@@ -193,9 +199,13 @@ function renderCardMeta(card: HTMLElement, memo: MemoRecord, options: RenderMemo
 		if (sourceReference.type === "plain") {
 			meta.setText(`${t("reference.fromPrefix")}${sourceReference.sourceMemoId}`);
 		} else {
+			const referenceText = `${t("reference.fromPrefix")}${sourceReference.text}`;
+			if (options.showPreviewTextImmediately === true) {
+				meta.setText(referenceText);
+			}
 			options.queueSourceReferenceMarkdown(
 				meta,
-				`${t("reference.fromPrefix")}${sourceReference.text}`,
+				referenceText,
 				sourceReference.sourcePath,
 				options.generation,
 			);

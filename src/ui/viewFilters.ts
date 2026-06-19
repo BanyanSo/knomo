@@ -5,6 +5,7 @@ import { t } from "../i18n";
 import type { MemoRecord } from "../types/memo";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
+import { getMemoContentStats } from "../utils/memoContentStats";
 import { withMemoIdAlias } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
 import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
@@ -51,7 +52,7 @@ export function getMemoStats(memos: MemoRecord[]): MemoStats {
 			return memo.tags.map(normalizeTagKey).filter((tagKey) => tagKey.length > 0);
 		})).size,
 		imageCount: memos.reduce((count, memo) => count + getMemoImages(memo).length, 0),
-		wordCount: memos.reduce((count, memo) => count + memo.contentSnapshot.replace(/\s/g, "").length, 0),
+		wordCount: memos.reduce((count, memo) => count + getMemoContentStats(memo).wordCount, 0),
 	};
 }
 

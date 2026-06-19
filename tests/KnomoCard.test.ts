@@ -96,6 +96,8 @@ test("memo card action menu includes open daily in the requested order", async (
 		"delete",
 	]);
 	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
+	assert.equal(root.find(".knomo-card-word-count")?.getText(), "Words: 1");
+	assert.equal(root.find(".knomo-card-actions")?.getText().endsWith("DeleteWords: 1"), true);
 	const card = root.find("article");
 	assert.equal(card?.getAttr("data-memo-card-open"), null);
 	assert.equal(card?.getAttr("tabindex"), null);
@@ -212,6 +214,18 @@ test("card menu button expands hit target without changing the layout footprint"
 	assert.match(interactiveRule, /color:\s*var\(--text-muted\);/);
 	assert.match(interactiveRule, /background:\s*transparent;/);
 	assert.doesNotMatch(css, /\.knomo-card-menu[^{]*\{[^}]*background:\s*var\(--knomo-row-hover\)/s);
+});
+
+test("card word count keeps the menu width and uses the card time font size", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+	const menuRule = getStyleRule(css, ".knomo-plugin .knomo-card-actions");
+	const wordCountRule = getStyleRule(css, ".knomo-plugin .knomo-card-word-count");
+
+	assert.match(menuRule, /width:\s*118px;/);
+	assert.match(wordCountRule, /border-top:\s*var\(--border-width\) solid var\(--knomo-soft-border\);/);
+	assert.match(wordCountRule, /font-size:\s*var\(--knomo-card-time-font-size\);/);
+	assert.match(wordCountRule, /overflow-wrap:\s*anywhere;/);
+	assert.match(wordCountRule, /text-align:\s*right;/);
 });
 
 test("mobile composer layers above the mobile search page and suggestions", async () => {

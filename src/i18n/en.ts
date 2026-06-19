@@ -103,6 +103,7 @@ export const en: Record<TranslationKey, string> = {
 	"card.copyText": "Copy text",
 	"card.copyLink": "Copy link",
 	"card.delete": "Delete",
+	"card.wordCount": "Words: {{count}}",
 	"image.unavailable": "Image unavailable",
 	"image.loadFailed": "Image failed to load",
 	"image.previous": "Previous image",

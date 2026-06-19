@@ -2,6 +2,7 @@ import { setIcon } from "obsidian";
 
 import { t } from "../i18n";
 import type { MemoRecord } from "../types/memo";
+import { getMemoContentStats } from "../utils/memoContentStats";
 import { formatMemoIssue } from "../utils/serviceText";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
@@ -79,6 +80,10 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 		for (const action of getMemoCardActions()) {
 			renderCardAction(actions, memo.id, action.action, getMemoActionLabel(action.action), action.className);
 		}
+		actions.createDiv({
+			cls: "knomo-card-word-count",
+			text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }),
+		});
 	}
 
 	if (options.reusedBodyEl !== undefined && options.reusedBodyEl !== null) {

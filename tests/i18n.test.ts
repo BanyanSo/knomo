@@ -32,6 +32,14 @@ test("detects Knomo locale from Obsidian language", async () => {
 	assert.equal(detectKnomoLocale(), "en");
 });
 
+test("formats card word count with locale-specific colons", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(translate("zh-CN", "card.wordCount", { count: 123 }), "字数：123");
+	assert.equal(translate("en", "card.wordCount", { count: 123 }), "Words: 123");
+});
+
 async function loadLocaleModule(): Promise<typeof import("../src/i18n/locale")> {
 	await ensureObsidianStub();
 	return import("../src/i18n/locale");

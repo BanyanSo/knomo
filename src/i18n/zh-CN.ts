@@ -101,6 +101,7 @@ export const zhCN = {
 	"card.copyText": "复制文本",
 	"card.copyLink": "复制链接",
 	"card.delete": "删除",
+	"card.wordCount": "字数：{{count}}",
 	"image.unavailable": "图片无法显示",
 	"image.loadFailed": "图片加载失败",
 	"image.previous": "上一张",

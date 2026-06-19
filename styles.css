@@ -28,6 +28,7 @@ body {
 	--knomo-desktop-header-composer-gap: 10px;
 	--knomo-header-offset-y: 6px;
 	--knomo-desktop-compact-edge-padding: 12px;
+	--knomo-card-time-font-size: 13px;
 
 	/* Surfaces — derived from Obsidian theme */
 	--knomo-page-background: var(--knomo-app-background-secondary);
@@ -2058,7 +2059,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-card-time {
 	color: var(--text-faint);
-	font-size: 13px;
+	font-size: var(--knomo-card-time-font-size);
 }
 
 .knomo-plugin .knomo-card-time[data-memo-time-open="daily"] {
@@ -2075,7 +2076,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: transparent;
 	box-shadow: none;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--knomo-card-time-font-size);
 	line-height: 1.3;
 	text-align: left;
 	cursor: pointer;
@@ -2195,6 +2196,21 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-action.is-danger:focus-visible {
 	color: var(--text-error);
 	background: var(--background-modifier-error-hover, var(--knomo-row-hover));
+}
+
+.knomo-plugin .knomo-card-word-count {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	margin-top: 6px;
+	padding: 8px 10px 2px;
+	border-top: var(--border-width) solid var(--knomo-soft-border);
+	overflow-wrap: anywhere;
+	color: var(--text-faint);
+	font-size: var(--knomo-card-time-font-size);
+	font-variant-numeric: tabular-nums;
+	line-height: 1.3;
+	text-align: right;
 }
 
 /* Card content */

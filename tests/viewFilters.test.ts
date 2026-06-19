@@ -37,7 +37,7 @@ test("computes memo stats from normalized tags and supported images", () => {
 		memoCount: 2,
 		tagCount: 2,
 		imageCount: 2,
-		wordCount: 13,
+		wordCount: 5,
 	});
 	assert.deepEqual(getMemoImages(memos[0]).map((image) => image.path), ["image.png"]);
 });

@@ -7,6 +7,8 @@ import {
 	collectTags,
 	getMemoImages,
 	getMemoStats,
+	getRecordStatsSearchFilterKey,
+	matchesRecordStatsSearchFilter,
 	matchesScope,
 	matchesSearchDateFilter,
 	needsAllMemos,
@@ -89,6 +91,62 @@ test("matches search date filters against a fixed day", () => {
 	assert.equal(matchesSearchDateFilter(new Date(2026, 3, 22), "last-30", today), true);
 });
 
+test("matches record statistics drill-down filters with local date and hour semantics", () => {
+	const morning = makeMemo("morning", { createdAt: "2026-06-08T09:15:00+08:00" });
+	const late = makeMemo("late", { createdAt: "2026-06-30T23:45:00+09:00" });
+	const nextMonth = makeMemo("next-month", { createdAt: "2026-07-01T09:00:00+08:00" });
+	const inactive = makeMemo("inactive", { createdAt: "2026-06-09T09:00:00+08:00" });
+	inactive.status = "deleted";
+	const referenced = makeMemo("referenced", {
+		createdAt: "2026-06-09T09:00:00+08:00",
+		sourceMemoId: "source",
+	});
+
+	assert.equal(matchesRecordStatsSearchFilter(morning, { type: "day", date: "2026-06-08" }), true);
+	assert.equal(matchesRecordStatsSearchFilter(late, { type: "month", month: "2026-06" }), true);
+	assert.equal(matchesRecordStatsSearchFilter(nextMonth, { type: "month", month: "2026-06" }), false);
+	const rangeFilter = {
+		type: "range" as const,
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	};
+	assert.equal(matchesRecordStatsSearchFilter(morning, rangeFilter), true);
+	assert.equal(matchesRecordStatsSearchFilter(nextMonth, rangeFilter), false);
+	assert.equal(matchesRecordStatsSearchFilter(inactive, rangeFilter), false);
+	assert.equal(matchesRecordStatsSearchFilter(late, {
+		type: "hour",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+		hour: 23,
+	}), true);
+	assert.equal(matchesRecordStatsSearchFilter(morning, {
+		type: "hour",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+		hour: 23,
+	}), false);
+	assert.equal(matchesRecordStatsSearchFilter(referenced, {
+		type: "references",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), true);
+	assert.equal(matchesRecordStatsSearchFilter(morning, {
+		type: "references",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), false);
+	assert.equal(matchesRecordStatsSearchFilter(morning, {
+		type: "max-daily-notes",
+		dates: ["2026-06-08", "2026-06-09"],
+	}), true);
+	assert.equal(matchesRecordStatsSearchFilter(nextMonth, {
+		type: "max-daily-words",
+		dates: ["2026-06-08", "2026-06-09"],
+	}), false);
+	assert.equal(getRecordStatsSearchFilterKey({ type: "day", date: "2026-06-08" }), "day:2026-06-08");
+	assert.equal(getRecordStatsSearchFilterKey(rangeFilter), "range:2026-06-01:2026-07-01");
+});
+
 test("parses memo local date from createdAt, daily path, and monthly refs", () => {
 	const createdAtMemo = makeMemo("created", { createdAt: "2026-05-20T08:09:10" });
 	assert.equal(parseMemoLocalDate(createdAtMemo, disabledDailyStatus())?.getHours(), 8);
@@ -131,6 +189,7 @@ test("builds memo search text and all-memo loading flags", () => {
 	assert.equal(needsAllMemos("all", "", null), false);
 	assert.equal(needsAllMemos("all", "knomo", null), true);
 	assert.equal(needsAllMemos("all", "", "week"), true);
+	assert.equal(needsAllMemos("all", "", null, { type: "day", date: "2026-05-20" }), true);
 	assert.equal(needsAllMemos("anniversary", "", null), true);
 });
 
@@ -149,6 +208,7 @@ function makeMemo(
 		dailyPath?: string;
 		dailyBlock?: string;
 		monthlyDateHeading?: string;
+		sourceMemoId?: string | null;
 	} = {},
 ): MemoRecord {
 	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
@@ -168,7 +228,7 @@ function makeMemo(
 		links: overrides.links ?? [],
 		images: overrides.images ?? [],
 		references: [],
-		sourceMemoId: null,
+		sourceMemoId: overrides.sourceMemoId ?? null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,

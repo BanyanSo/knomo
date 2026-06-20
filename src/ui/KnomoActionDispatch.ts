@@ -1,35 +1,43 @@
 export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-list" | "insert-numbered-list";
 export type MemoAction = "edit" | "reference" | "open-daily" | "copy-text" | "copy-link" | "delete";
 export type TrashAction = "restore" | "purge";
+export type KnomoSimpleAction =
+	| "toggle-card-menu"
+	| "refresh-random-reunion"
+	| "load-more"
+	| "load-more-mobile-search"
+	| "reset-list-state"
+	| "close-mobile-search"
+	| "open-drawer"
+	| "close-drawer"
+	| "toggle-scope-menu"
+	| "toggle-sidebar"
+	| "collapse-sidebar"
+	| "refresh"
+	| "focus-stats"
+	| "record-stats-previous"
+	| "record-stats-next"
+	| "record-stats-retry"
+	| "record-stats-view-week"
+	| "record-stats-view-month"
+	| "record-stats-view-year"
+	| "record-stats-filter-trend"
+	| "record-stats-filter-hour"
+	| "record-stats-filter-notes"
+	| "record-stats-filter-references"
+	| "record-stats-filter-max-daily-notes"
+	| "record-stats-filter-max-daily-words"
+	| "open-composer"
+	| "close-composer"
+	| "toggle-compact-search"
+	| "clear-reference"
+	| "cancel-edit"
+	| "save-input";
 
 export type KnomoActionDispatch =
 	| { type: "none" }
-	| { type: "toggle-card-menu" }
-	| { type: "refresh-random-reunion" }
-	| { type: "load-more" }
-	| { type: "load-more-mobile-search" }
-	| { type: "reset-list-state" }
-	| { type: "close-mobile-search" }
-	| { type: "open-drawer" }
-	| { type: "close-drawer" }
-	| { type: "toggle-scope-menu" }
-	| { type: "toggle-sidebar" }
-	| { type: "collapse-sidebar" }
-	| { type: "refresh" }
-	| { type: "focus-stats" }
-	| { type: "record-stats-previous" }
-	| { type: "record-stats-next" }
-	| { type: "record-stats-retry" }
-	| { type: "record-stats-view-week" }
-	| { type: "record-stats-view-month" }
-	| { type: "record-stats-view-year" }
-	| { type: "open-composer" }
-	| { type: "close-composer" }
-	| { type: "toggle-compact-search" }
+	| { type: KnomoSimpleAction }
 	| { type: "composer-tool"; action: ComposerToolAction }
-	| { type: "clear-reference" }
-	| { type: "cancel-edit" }
-	| { type: "save-input" }
 	| { type: "unknown"; action: string };
 
 export type MemoActionDispatch =
@@ -65,6 +73,12 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-view-week" ||
 		action === "record-stats-view-month" ||
 		action === "record-stats-view-year" ||
+		action === "record-stats-filter-trend" ||
+		action === "record-stats-filter-hour" ||
+		action === "record-stats-filter-notes" ||
+		action === "record-stats-filter-references" ||
+		action === "record-stats-filter-max-daily-notes" ||
+		action === "record-stats-filter-max-daily-words" ||
 		action === "open-composer" ||
 		action === "close-composer" ||
 		action === "toggle-compact-search" ||

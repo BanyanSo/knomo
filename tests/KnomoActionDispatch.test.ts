@@ -20,6 +20,18 @@ test("classifies known view actions", () => {
 	assert.deepEqual(getKnomoActionDispatch("save-input"), { type: "save-input" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-next"), { type: "record-stats-next" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-view-month"), { type: "record-stats-view-month" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-trend"), { type: "record-stats-filter-trend" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-hour"), { type: "record-stats-filter-hour" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-notes"), { type: "record-stats-filter-notes" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-references"), {
+		type: "record-stats-filter-references",
+	});
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-max-daily-notes"), {
+		type: "record-stats-filter-max-daily-notes",
+	});
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-max-daily-words"), {
+		type: "record-stats-filter-max-daily-words",
+	});
 	assert.deepEqual(getKnomoActionDispatch("something-new"), { type: "unknown", action: "something-new" });
 });
 

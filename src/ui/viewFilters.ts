@@ -6,7 +6,7 @@ import type { MemoRecord } from "../types/memo";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
-import { withMemoIdAlias } from "../utils/references";
+import { hasMemoReference, withMemoIdAlias } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
 import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 import type { TagDisplaySource } from "../utils/tags";
@@ -26,10 +26,20 @@ export type ScopeFilter =
 export type SearchDateFilter = "week" | "month" | "last-7" | "last-30" | "last-week" | "last-month";
 export type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "anniversary";
 
+export type RecordStatsSearchFilter =
+	| { type: "day"; date: string }
+	| { type: "month"; month: string }
+	| { type: "range"; startDate: string; endDateExclusive: string }
+	| { type: "references"; startDate: string; endDateExclusive: string }
+	| { type: "max-daily-notes"; dates: string[] }
+	| { type: "max-daily-words"; dates: string[] }
+	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };
+
 export type RegularFilterCondition =
 	| { type: "tag"; text: string }
 	| { type: "search"; text: string; query: string }
 	| { type: "date"; text: string; filter: SearchDateFilter }
+	| { type: "record-stats"; text: string }
 	| { type: "scope"; text: string; filter: SummaryScopeFilter };
 
 export interface DailyDateConfig {
@@ -152,20 +162,32 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 	if (condition.type === "date") {
 		return getSearchDateEmptyTitle(condition.filter);
 	}
+	if (condition.type === "record-stats") {
+		return t("recordStats.filter.empty", { label: condition.text });
+	}
 	return getScopeEmptyTitle(condition.filter);
 }
 
-export function formatMobileSearchSummary(query: string, dateFilter: SearchDateFilter | null, count: number): string | null {
+export function formatMobileSearchSummary(
+	query: string,
+	dateFilter: SearchDateFilter | null,
+	count: number,
+	recordStatsFilter: RecordStatsSearchFilter | null = null,
+): string | null {
 	const hasQuery = query.length > 0;
-	if (!hasQuery && dateFilter === null) {
+	if (!hasQuery && dateFilter === null && recordStatsFilter === null) {
 		return null;
 	}
-	if (hasQuery && dateFilter !== null) {
-		const conditions = [
-			t("mobileSearchSummary.searchCondition", { query }),
-			getSearchDateLabel(dateFilter),
-		].join(t("mobileSearchSummary.separator"));
-		return t("mobileSearchSummary.combo", { conditions, count });
+	const conditions = [
+		hasQuery ? t("mobileSearchSummary.searchCondition", { query }) : null,
+		dateFilter === null ? null : getSearchDateLabel(dateFilter),
+		recordStatsFilter === null ? null : getRecordStatsSearchFilterLabel(recordStatsFilter),
+	].filter((condition): condition is string => condition !== null);
+	if (conditions.length > 1) {
+		return t("mobileSearchSummary.combo", {
+			conditions: conditions.join(t("mobileSearchSummary.separator")),
+			count,
+		});
 	}
 	if (hasQuery) {
 		return t("mobileSearchSummary.search", { query, count });
@@ -173,17 +195,28 @@ export function formatMobileSearchSummary(query: string, dateFilter: SearchDateF
 	if (dateFilter !== null) {
 		return t("mobileSearchSummary.date", { label: getSearchDateLabel(dateFilter), count });
 	}
-	return null;
+	return recordStatsFilter === null ? null : t("mobileSearchSummary.date", {
+		label: getRecordStatsSearchFilterLabel(recordStatsFilter),
+		count,
+	});
 }
 
-export function formatMobileSearchEmptyTitle(query: string, dateFilter: SearchDateFilter | null): string {
+export function formatMobileSearchEmptyTitle(
+	query: string,
+	dateFilter: SearchDateFilter | null,
+	recordStatsFilter: RecordStatsSearchFilter | null = null,
+): string {
 	const hasQuery = query.length > 0;
-	if (hasQuery && dateFilter !== null) {
-		const conditions = [
-			t("mobileSearchSummary.searchCondition", { query }),
-			getSearchDateLabel(dateFilter),
-		].join(t("mobileSearchSummary.separator"));
-		return t("mobileSearchSummary.combo", { conditions, count: 0 });
+	const conditions = [
+		hasQuery ? t("mobileSearchSummary.searchCondition", { query }) : null,
+		dateFilter === null ? null : getSearchDateLabel(dateFilter),
+		recordStatsFilter === null ? null : getRecordStatsSearchFilterLabel(recordStatsFilter),
+	].filter((condition): condition is string => condition !== null);
+	if (conditions.length > 1) {
+		return t("mobileSearchSummary.combo", {
+			conditions: conditions.join(t("mobileSearchSummary.separator")),
+			count: 0,
+		});
 	}
 	if (hasQuery) {
 		return t("mobileSearchSummary.emptySearch", { query });
@@ -191,7 +224,81 @@ export function formatMobileSearchEmptyTitle(query: string, dateFilter: SearchDa
 	if (dateFilter !== null) {
 		return getSearchDateEmptyTitle(dateFilter);
 	}
+	if (recordStatsFilter !== null) {
+		return t("recordStats.filter.empty", { label: getRecordStatsSearchFilterLabel(recordStatsFilter) });
+	}
 	return t("search.noResults");
+}
+
+export function getRecordStatsSearchFilterLabel(filter: RecordStatsSearchFilter): string {
+	if (filter.type === "day") {
+		return t("recordStats.filter.day", { date: filter.date });
+	}
+	if (filter.type === "month") {
+		return t("recordStats.filter.month", { month: filter.month });
+	}
+	if (filter.type === "range") {
+		return t("recordStats.filter.range", {
+			startDate: filter.startDate,
+			endDate: getInclusiveEndDate(filter.endDateExclusive),
+		});
+	}
+	if (filter.type === "references") {
+		return t("recordStats.filter.references", {
+			startDate: filter.startDate,
+			endDate: getInclusiveEndDate(filter.endDateExclusive),
+		});
+	}
+	if (filter.type === "max-daily-notes") {
+		return t("recordStats.filter.maxDailyNotes", { dates: formatFilterDates(filter.dates) });
+	}
+	if (filter.type === "max-daily-words") {
+		return t("recordStats.filter.maxDailyWords", { dates: formatFilterDates(filter.dates) });
+	}
+	return t("recordStats.filter.hour", {
+		startDate: filter.startDate,
+		endDate: getInclusiveEndDate(filter.endDateExclusive),
+		hour: String(filter.hour).padStart(2, "0"),
+	});
+}
+
+export function getRecordStatsSearchFilterKey(filter: RecordStatsSearchFilter | null): string {
+	if (filter === null) {
+		return "";
+	}
+	if (filter.type === "day") return `day:${filter.date}`;
+	if (filter.type === "month") return `month:${filter.month}`;
+	if (filter.type === "range") return `range:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "references") return `references:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "max-daily-notes") return `max-daily-notes:${filter.dates.join(",")}`;
+	if (filter.type === "max-daily-words") return `max-daily-words:${filter.dates.join(",")}`;
+	return `hour:${filter.startDate}:${filter.endDateExclusive}:${filter.hour}`;
+}
+
+export function matchesRecordStatsSearchFilter(memo: MemoRecord, filter: RecordStatsSearchFilter): boolean {
+	if (memo.status !== "active") {
+		return false;
+	}
+	const date = parseLocalDateText(memo.createdAt);
+	if (date === null) {
+		return false;
+	}
+	const dateKey = formatLocalDateKey(date);
+	if (filter.type === "day") return dateKey === filter.date;
+	if (filter.type === "month") return dateKey.startsWith(`${filter.month}-`);
+	if (filter.type === "max-daily-notes" || filter.type === "max-daily-words") {
+		return filter.dates.includes(dateKey);
+	}
+	if (dateKey < filter.startDate || dateKey >= filter.endDateExclusive) {
+		return false;
+	}
+	if (filter.type === "range") {
+		return true;
+	}
+	if (filter.type === "references") {
+		return hasMemoReference(memo);
+	}
+	return date.getHours() === filter.hour;
 }
 
 export function formatTagFilterText(tag: string): string {
@@ -332,8 +439,13 @@ export function matchesSearchDateFilter(date: Date, filter: SearchDateFilter, to
 	return true;
 }
 
-export function needsAllMemos(scope: ScopeFilter, query: string, searchDateFilter: SearchDateFilter | null): boolean {
-	return query.trim().length > 0 || searchDateFilter !== null || scope === "anniversary";
+export function needsAllMemos(
+	scope: ScopeFilter,
+	query: string,
+	searchDateFilter: SearchDateFilter | null,
+	recordStatsFilter: RecordStatsSearchFilter | null = null,
+): boolean {
+	return query.trim().length > 0 || searchDateFilter !== null || recordStatsFilter !== null || scope === "anniversary";
 }
 
 function getTagDisplayName(key: string, fallbackName: string, displayTags: Map<string, string>): string {
@@ -373,6 +485,30 @@ function getScopeEmptyTitle(filter: SummaryScopeFilter): string {
 
 function formatMemoDisplayTime(value: string): string {
 	return value.replace("T", " ").replace(/\.\d{3}[+-]\d{2}:\d{2}$/, "");
+}
+
+function formatFilterDates(dates: string[]): string {
+	if (dates.length <= 1) {
+		return dates[0] ?? "";
+	}
+	return t("recordStats.filter.tiedDates", { count: dates.length });
+}
+
+function getInclusiveEndDate(endDateExclusive: string): string {
+	const date = parseLocalDateText(endDateExclusive);
+	if (date === null) {
+		return endDateExclusive;
+	}
+	date.setDate(date.getDate() - 1);
+	return formatLocalDateKey(date);
+}
+
+function formatLocalDateKey(date: Date): string {
+	return [
+		String(date.getFullYear()).padStart(4, "0"),
+		String(date.getMonth() + 1).padStart(2, "0"),
+		String(date.getDate()).padStart(2, "0"),
+	].join("-");
 }
 
 function startOfDay(date: Date): Date {

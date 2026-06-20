@@ -15,12 +15,21 @@ export interface RenderKnomoRecordStatsPageOptions {
 	view: RecordStatsView;
 	canAdvance: boolean;
 	canRetreat: boolean;
+	createHiddenText: (container: HTMLElement, name: string, text: string) => string;
 	renderMemoPreview: (container: HTMLElement, memo: MemoRecord, renderIndex: number) => HTMLElement;
 }
 
 interface MetricItem {
 	label: string;
 	value: number;
+	action?: string;
+	ariaLabel?: string;
+}
+
+interface BarAction {
+	action: string;
+	ariaLabel: string;
+	attrs: Record<string, string>;
 }
 
 export function renderKnomoRecordStatsPage(
@@ -96,9 +105,9 @@ function renderSelectedRange(container: HTMLElement, options: RenderKnomoRecordS
 	const section = createSection(container, "knomo-record-stats-range-section");
 	renderViewControls(section, options.view);
 	renderRangeNavigation(section, selected, options.canRetreat, options.canAdvance);
-	renderTrendChart(section, options.view, selected);
+	renderTrendChart(section, options.view, selected, options.createHiddenText);
 	renderRangeMetrics(section, options.view, selected);
-	renderActiveHours(section, selected);
+	renderActiveHours(section, selected, options.createHiddenText);
 	renderMemoExtremes(section, selected, options.renderMemoPreview);
 }
 
@@ -162,8 +171,14 @@ function renderRangeNavigation(
 	setIcon(next, "chevron-right");
 }
 
-function renderTrendChart(container: HTMLElement, view: RecordStatsView, selected: SelectedRecordStats): void {
+function renderTrendChart(
+	container: HTMLElement,
+	view: RecordStatsView,
+	selected: SelectedRecordStats,
+	createHiddenText: RenderKnomoRecordStatsPageOptions["createHiddenText"],
+): void {
 	const chartSection = container.createDiv({ cls: "knomo-record-stats-chart-section" });
+	const chartLabelId = createHiddenText(chartSection, "record-stats-trend-label", t("recordStats.trend"));
 	const scroll = chartSection.createDiv({
 		cls: view !== "week"
 			? "knomo-record-stats-chart-scroll is-scrollable"
@@ -171,11 +186,21 @@ function renderTrendChart(container: HTMLElement, view: RecordStatsView, selecte
 	});
 	renderBarChart(scroll, selected.trend, {
 		chartClass: `knomo-record-stats-chart is-${view}`,
-		ariaLabel: t("recordStats.trend"),
+		labelledBy: chartLabelId,
 		getVisibleLabel: (point, index) => getTrendVisibleLabel(view, point, index, selected.trend.length),
 		getAriaLabel: (point, index) => t("recordStats.chart.memoCount", {
 			label: getTrendAriaLabel(view, point, index),
 			count: point.count,
+		}),
+		getAction: (point) => ({
+			action: "record-stats-filter-trend",
+			ariaLabel: view === "year"
+				? t("recordStats.action.filterMonth", { month: point.key, count: point.count })
+				: t("recordStats.action.filterDay", { date: point.key, count: point.count }),
+			attrs: {
+				"data-record-stats-key": point.key,
+				"data-record-stats-unit": view === "year" ? "month" : "day",
+			},
 		}),
 	});
 	if (selected.range.memoCount === 0) {
@@ -187,18 +212,43 @@ function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selec
 	const section = container.createDiv({ cls: "knomo-record-stats-metrics-section" });
 	section.createEl("h3", { cls: "knomo-record-stats-subtitle", text: getRangeStatsTitle(view) });
 	renderMetricGrid(section, [
-		{ label: t("recordStats.metric.notes"), value: selected.range.memoCount },
+		{
+			label: t("recordStats.metric.notes"),
+			value: selected.range.memoCount,
+			action: "record-stats-filter-notes",
+			ariaLabel: t("recordStats.action.filterNotes", { count: selected.range.memoCount }),
+		},
 		{ label: t("recordStats.metric.words"), value: selected.range.wordCount },
 		{ label: t("recordStats.metric.recordDays"), value: selected.range.recordDayCount },
-		{ label: t("recordStats.metric.references"), value: selected.range.referenceMemoCount },
-		{ label: t("recordStats.metric.maxDailyNotes"), value: selected.range.maxDailyMemoCount },
-		{ label: t("recordStats.metric.maxDailyWords"), value: selected.range.maxDailyWordCount },
+		{
+			label: t("recordStats.metric.references"),
+			value: selected.range.referenceMemoCount,
+			action: "record-stats-filter-references",
+			ariaLabel: t("recordStats.action.filterReferences", { count: selected.range.referenceMemoCount }),
+		},
+		{
+			label: t("recordStats.metric.maxDailyNotes"),
+			value: selected.range.maxDailyMemoCount,
+			action: "record-stats-filter-max-daily-notes",
+			ariaLabel: t("recordStats.action.filterMaxDailyNotes"),
+		},
+		{
+			label: t("recordStats.metric.maxDailyWords"),
+			value: selected.range.maxDailyWordCount,
+			action: "record-stats-filter-max-daily-words",
+			ariaLabel: t("recordStats.action.filterMaxDailyWords"),
+		},
 	], "knomo-record-stats-range-grid");
 }
 
-function renderActiveHours(container: HTMLElement, selected: SelectedRecordStats): void {
+function renderActiveHours(
+	container: HTMLElement,
+	selected: SelectedRecordStats,
+	createHiddenText: RenderKnomoRecordStatsPageOptions["createHiddenText"],
+): void {
 	const section = container.createDiv({ cls: "knomo-record-stats-chart-section" });
 	section.createEl("h3", { cls: "knomo-record-stats-subtitle", text: t("recordStats.activeHours") });
+	const chartLabelId = createHiddenText(section, "record-stats-hours-label", t("recordStats.activeHours"));
 	const scroll = section.createDiv({ cls: "knomo-record-stats-chart-scroll is-scrollable" });
 	const chart = renderBarChart(scroll, selected.activeHours.map((point) => ({
 		key: String(point.hour),
@@ -206,9 +256,14 @@ function renderActiveHours(container: HTMLElement, selected: SelectedRecordStats
 		count: point.count,
 	})), {
 		chartClass: "knomo-record-stats-chart is-hours",
-		ariaLabel: t("recordStats.activeHours"),
+		labelledBy: chartLabelId,
 		getVisibleLabel: (point, index) => index % 2 === 0 || index === 23 ? point.label : "",
 		getAriaLabel: (point) => t("recordStats.chart.hourCount", { hour: point.label, count: point.count }),
+		getAction: (point) => ({
+			action: "record-stats-filter-hour",
+			ariaLabel: t("recordStats.action.filterHour", { hour: point.label, count: point.count }),
+			attrs: { "data-record-stats-hour": point.key },
+		}),
 	});
 	centerChartItem(scroll, chart.children.item(12));
 	if (selected.range.memoCount === 0) {
@@ -221,22 +276,27 @@ function renderBarChart(
 	points: RecordStatsTrendPoint[],
 	options: {
 		chartClass: string;
-		ariaLabel: string;
+		labelledBy: string;
 		getVisibleLabel: (point: RecordStatsTrendPoint, index: number) => string;
 		getAriaLabel: (point: RecordStatsTrendPoint, index: number) => string;
+		getAction?: (point: RecordStatsTrendPoint, index: number) => BarAction;
 	},
 ): HTMLElement {
 	const chart = container.createDiv({
 		cls: options.chartClass,
-		attr: { role: "list", "aria-label": options.ariaLabel },
+		attr: { role: "list", "aria-labelledby": options.labelledBy },
 	});
 	chart.setCssProps({ "--knomo-record-stats-columns": String(points.length) });
 	const max = Math.max(0, ...points.map((point) => point.count));
 	for (const [index, point] of points.entries()) {
+		const action = point.count > 0 ? options.getAction?.(point, index) ?? null : null;
 		const item = chart.createDiv({
-			cls: "knomo-record-stats-bar-item",
-			attr: { role: "listitem", "aria-label": options.getAriaLabel(point, index) },
+			cls: action === null ? "knomo-record-stats-bar-item" : "knomo-record-stats-bar-item is-interactive",
+			attr: { role: "listitem" },
 		});
+		if (action === null) {
+			item.setAttr("aria-label", options.getAriaLabel(point, index));
+		}
 		item.createDiv({
 			cls: "knomo-record-stats-bar-value",
 			text: point.count > 0 ? formatNumber(point.count) : "",
@@ -245,6 +305,17 @@ function renderBarChart(
 			"--knomo-record-stats-ratio": max === 0 ? "0" : String(point.count / max),
 		});
 		item.createDiv({ cls: "knomo-record-stats-bar-label", text: options.getVisibleLabel(point, index) });
+		if (action !== null) {
+			item.createEl("button", {
+				cls: "knomo-record-stats-bar-hit",
+				attr: {
+					type: "button",
+					"aria-label": action.ariaLabel,
+					"data-action": action.action,
+					...action.attrs,
+				},
+			});
+		}
 	}
 	return chart;
 }
@@ -288,7 +359,17 @@ function renderMemoExtreme(
 function renderMetricGrid(container: HTMLElement, items: MetricItem[], cls: string): void {
 	const grid = container.createDiv({ cls: `knomo-record-stats-metric-grid ${cls}` });
 	for (const item of items) {
-		const metric = grid.createDiv({ cls: "knomo-record-stats-metric" });
+		const action = item.value > 0 ? item.action ?? null : null;
+		const metric = action !== null
+			? grid.createEl("button", {
+				cls: "knomo-record-stats-metric is-interactive",
+				attr: {
+					type: "button",
+					"data-action": action,
+					"aria-label": item.ariaLabel ?? item.label,
+				},
+			})
+			: grid.createDiv({ cls: "knomo-record-stats-metric" });
 		metric.createDiv({ cls: "knomo-record-stats-metric-value", text: formatNumber(item.value) });
 		metric.createDiv({ cls: "knomo-record-stats-metric-label", text: item.label });
 	}

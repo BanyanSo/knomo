@@ -1,5 +1,9 @@
 import type { MemoRecord } from "../types/memo";
 
+export function hasMemoReference(memo: MemoRecord): boolean {
+	return memo.sourceMemoId !== null || memo.references.length > 0;
+}
+
 export function buildMemoReferences(
 	content: string,
 	sourceMemoId: string | null,

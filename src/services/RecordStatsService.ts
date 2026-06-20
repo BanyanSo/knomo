@@ -1,5 +1,6 @@
 import type { MemoRecord } from "../types/memo";
 import { getMemoContentStats } from "../utils/memoContentStats";
+import { hasMemoReference } from "../utils/references";
 
 export type RecordStatsView = "week" | "month" | "year";
 export type RecordStatsLoadState = "idle" | "loading" | "ready" | "empty" | "error";
@@ -438,10 +439,6 @@ function getDaysInMonth(year: number, month: number): number {
 
 function isLeapYear(year: number): boolean {
 	return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-}
-
-function hasMemoReference(memo: MemoRecord): boolean {
-	return memo.sourceMemoId !== null || memo.references.length > 0;
 }
 
 function compareMemoTime(left: MemoRecord, leftTimestamp: number, right: MemoRecord, rightTimestamp: number): number {

@@ -9,6 +9,7 @@ import {
 	shiftRecordStatsDate,
 } from "../src/services/RecordStatsService";
 import type { MemoRecord } from "../src/types/memo";
+import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
 
 test("prepares overview and selects weekly statistics with natural-day boundaries", async () => {
 	const service = new RecordStatsService();
@@ -45,6 +46,26 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	assert.equal(selected?.activeHours[23].count, 2);
 	assert.equal(selected?.earliestMemo?.id, "monday-early");
 	assert.equal(selected?.latestMemo?.id, "sunday");
+	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		type: "day",
+		date: "2026-06-08",
+	})).length, 2);
+	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		type: "range",
+		startDate: selected?.startDate ?? "",
+		endDateExclusive: selected?.endDateExclusive ?? "",
+	})).length, selected?.range.memoCount);
+	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		type: "references",
+		startDate: selected?.startDate ?? "",
+		endDateExclusive: selected?.endDateExclusive ?? "",
+	})).length, selected?.range.referenceMemoCount);
+	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		type: "hour",
+		startDate: selected?.startDate ?? "",
+		endDateExclusive: selected?.endDateExclusive ?? "",
+		hour: 23,
+	})).length, selected?.activeHours[23].count);
 });
 
 test("uses createdAt wall-clock date and hour while sorting by the real instant", async () => {

@@ -117,16 +117,24 @@ import {
 	formatRegularFilterSummary,
 	formatTagFilterText,
 	getMemoStats,
+	getRecordStatsSearchFilterKey,
+	getRecordStatsSearchFilterLabel,
 	getScopeLabel,
 	getSearchDateLabel,
 	isSummaryScopeFilter,
+	matchesRecordStatsSearchFilter,
 	matchesScope,
 	matchesSearchDateFilter,
 	needsAllMemos,
 	parseMemoLocalDate,
 	tagMatchesActiveTagKey,
 } from "./viewFilters";
-import type { RegularFilterCondition, ScopeFilter, SearchDateFilter } from "./viewFilters";
+import type {
+	RecordStatsSearchFilter,
+	RegularFilterCondition,
+	ScopeFilter,
+	SearchDateFilter,
+} from "./viewFilters";
 import {
 	getSidebarNavLabel,
 	isSearchDateFilter,
@@ -148,6 +156,7 @@ interface FilteredMemosCache {
 	scopeFilter: ScopeFilter;
 	searchQuery: string;
 	searchDateFilter: SearchDateFilter | null;
+	recordStatsFilterKey: string;
 	todayKey: string;
 	result: MemoRecord[];
 }
@@ -245,8 +254,10 @@ export class KnomoView extends ItemView {
 	private scopeFilter: ScopeFilter = "all";
 	private searchQuery = "";
 	private searchDateFilter: SearchDateFilter | null = null;
+	private recordStatsSearchFilter: RecordStatsSearchFilter | null = null;
 	private mobileSearchQuery = "";
 	private mobileSearchDateFilter: SearchDateFilter | null = null;
+	private mobileRecordStatsSearchFilter: RecordStatsSearchFilter | null = null;
 	private mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
 	private activeTag: string | null = null;
 	private activeTagKey: string | null = null;
@@ -1325,7 +1336,7 @@ export class KnomoView extends ItemView {
 		this.openMobileSearchPage();
 	}
 
-	private openMobileSearchPage(): void {
+	private openMobileSearchPage(options: { focusInput?: boolean } = {}): void {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.compactSearchOpen = false;
@@ -1339,7 +1350,9 @@ export class KnomoView extends ItemView {
 		}
 		this.renderMobileSearchResults();
 		this.syncRootState();
-		this.focusMobileSearchInputSoon();
+		if (options.focusInput !== false) {
+			this.focusMobileSearchInputSoon();
+		}
 	}
 
 	private ensureMobileSearchPage(): void {
@@ -1381,6 +1394,7 @@ export class KnomoView extends ItemView {
 		this.containerEl.doc.body.toggleClass("knomo-mobile-search-active", shouldOpen);
 		if (this.currentLayout !== "mobile") {
 			this.mobileSearchPageOpen = false;
+			this.mobileRecordStatsSearchFilter = null;
 			this.cardImageLoadQueue.clear("mobile-search");
 			this.cardImageLoadQueue.setSurfacePaused("card-flow", false);
 			this.rootEl?.toggleClass("is-mobile-search-open", false);
@@ -1448,6 +1462,7 @@ export class KnomoView extends ItemView {
 	private setMobileSearchDateFilter(filter: SearchDateFilter): void {
 		this.flushMobileSearchQuery();
 		this.mobileSearchDateFilter = this.mobileSearchDateFilter === filter ? null : filter;
+		this.mobileRecordStatsSearchFilter = null;
 		this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
 		this.renderMobileSearchResults();
 	}
@@ -1456,6 +1471,7 @@ export class KnomoView extends ItemView {
 		this.clearMobileSearchDebounce();
 		this.mobileSearchQuery = "";
 		this.mobileSearchDateFilter = null;
+		this.mobileRecordStatsSearchFilter = null;
 		this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
 		this.mobileSearchRenderGeneration += 1;
 		this.memoMarkdownRenderer.clear("mobile-search");
@@ -1490,16 +1506,39 @@ export class KnomoView extends ItemView {
 		this.syncMobileSearchDateButtons();
 		const query = this.mobileSearchQuery.trim();
 		const normalizedQuery = query.toLowerCase();
-		if (normalizedQuery.length === 0 && this.mobileSearchDateFilter === null) {
+		if (
+			normalizedQuery.length === 0
+			&& this.mobileSearchDateFilter === null
+			&& this.mobileRecordStatsSearchFilter === null
+		) {
 			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.emptyPrompt") });
 			return;
 		}
-		const memos = this.memos.filter((memo) => this.memoMatchesSearch(memo, normalizedQuery, this.mobileSearchDateFilter));
+		const memos = this.memos.filter((memo) => {
+			return this.memoMatchesSearch(
+				memo,
+				normalizedQuery,
+				this.mobileSearchDateFilter,
+				this.mobileRecordStatsSearchFilter,
+			);
+		});
 		if (memos.length === 0) {
-			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: formatMobileSearchEmptyTitle(query, this.mobileSearchDateFilter) });
+			resultsEl.createDiv({
+				cls: "knomo-mobile-search-empty",
+				text: formatMobileSearchEmptyTitle(
+					query,
+					this.mobileSearchDateFilter,
+					this.mobileRecordStatsSearchFilter,
+				),
+			});
 			return;
 		}
-		const summary = formatMobileSearchSummary(query, this.mobileSearchDateFilter, memos.length);
+		const summary = formatMobileSearchSummary(
+			query,
+			this.mobileSearchDateFilter,
+			memos.length,
+			this.mobileRecordStatsSearchFilter,
+		);
 		if (summary !== null) {
 			renderKnomoListSummary(resultsEl, summary);
 		}
@@ -1681,6 +1720,9 @@ export class KnomoView extends ItemView {
 		if (this.searchDateFilter !== null) {
 			return getSearchDateLabel(this.searchDateFilter);
 		}
+		if (this.recordStatsSearchFilter !== null) {
+			return getRecordStatsSearchFilterLabel(this.recordStatsSearchFilter);
+		}
 		return this.getListTitleLabel();
 	}
 
@@ -1713,7 +1755,8 @@ export class KnomoView extends ItemView {
 			&& this.activeTagKey === null
 			&& this.scopeFilter === "all"
 			&& this.searchQuery.trim().length === 0
-			&& this.searchDateFilter === null;
+			&& this.searchDateFilter === null
+			&& this.recordStatsSearchFilter === null;
 	}
 
 	private getRegularFilterCopy(count: number): CardFlowRegularFilterCopy | null {
@@ -1736,6 +1779,12 @@ export class KnomoView extends ItemView {
 		const tag = this.activeTag?.trim() || this.activeTagKey || "";
 		if (this.activeTagKey !== null && tag.length > 0) {
 			conditions.push({ type: "tag", text: formatTagFilterText(tag) });
+		}
+		if (this.recordStatsSearchFilter !== null) {
+			conditions.push({
+				type: "record-stats",
+				text: getRecordStatsSearchFilterLabel(this.recordStatsSearchFilter),
+			});
 		}
 		const query = this.searchQuery.trim();
 		if (query.length > 0) {
@@ -1802,11 +1851,12 @@ export class KnomoView extends ItemView {
 		this.renderedCardMemos.clear();
 		cardFlow.empty();
 		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
-		renderKnomoRecordStatsPage(cardFlow, {
-			snapshot: this.recordStatsService.getSnapshot(),
-			selected,
-			view: this.recordStatsView,
-			canAdvance: canAdvanceRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate),
+			renderKnomoRecordStatsPage(cardFlow, {
+				snapshot: this.recordStatsService.getSnapshot(),
+				selected,
+				view: this.recordStatsView,
+				createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
+				canAdvance: canAdvanceRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate),
 			canRetreat: canRetreatRecordStatsDate(
 				this.recordStatsView,
 				this.recordStatsSelectedDate,
@@ -2642,7 +2692,7 @@ export class KnomoView extends ItemView {
 			if (this.shouldIgnoreHandledMobileToolClick(route.element, route.action)) {
 				return;
 			}
-			await this.handleAction(route.action, route.memoId);
+			await this.handleAction(route.action, route.memoId, route.element);
 			if (route.mobileToolButtonEl !== null) {
 				route.mobileToolButtonEl.blur();
 			}
@@ -2699,7 +2749,11 @@ export class KnomoView extends ItemView {
 		this.syncCardMenuState();
 	}
 
-	private async handleAction(action: string | null, memoId: string | null): Promise<void> {
+	private async handleAction(
+		action: string | null,
+		memoId: string | null,
+		sourceEl: HTMLElement | null = null,
+	): Promise<void> {
 		const dispatch = getKnomoActionDispatch(action);
 		switch (dispatch.type) {
 			case "none":
@@ -2788,6 +2842,24 @@ export class KnomoView extends ItemView {
 				this.recordStatsView = "year";
 				this.renderCardFlow();
 				return;
+			case "record-stats-filter-trend":
+				this.openRecordStatsTrendFilter(sourceEl);
+				return;
+			case "record-stats-filter-hour":
+				this.openRecordStatsHourFilter(sourceEl);
+				return;
+			case "record-stats-filter-notes":
+				this.openRecordStatsMetricFilter("range");
+				return;
+			case "record-stats-filter-references":
+				this.openRecordStatsMetricFilter("references");
+				return;
+			case "record-stats-filter-max-daily-notes":
+				this.openRecordStatsMetricFilter("max-daily-notes");
+				return;
+			case "record-stats-filter-max-daily-words":
+				this.openRecordStatsMetricFilter("max-daily-words");
+				return;
 			case "open-composer":
 				this.openComposer();
 				return;
@@ -2830,6 +2902,101 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 			}
 		}
+	}
+
+	private openRecordStatsTrendFilter(sourceEl: HTMLElement | null): void {
+		const key = sourceEl?.getAttr("data-record-stats-key") ?? null;
+		const unit = sourceEl?.getAttr("data-record-stats-unit") ?? null;
+		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
+		if (key === null || selected?.trend.some((point) => point.key === key && point.count > 0) !== true) {
+			return;
+		}
+		if (unit === "day" && /^\d{4}-\d{2}-\d{2}$/.test(key)) {
+			this.openRecordStatsSearchFilter({ type: "day", date: key });
+			return;
+		}
+		if (unit === "month" && /^\d{4}-\d{2}$/.test(key)) {
+			this.openRecordStatsSearchFilter({ type: "month", month: key });
+		}
+	}
+
+	private openRecordStatsHourFilter(sourceEl: HTMLElement | null): void {
+		const hourText = sourceEl?.getAttr("data-record-stats-hour") ?? "";
+		const hour = Number(hourText);
+		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
+		if (
+			!Number.isInteger(hour)
+			|| hour < 0
+			|| hour > 23
+			|| selected?.activeHours[hour]?.count === 0
+		) {
+			return;
+		}
+		if (selected === null) {
+			return;
+		}
+		this.openRecordStatsSearchFilter({
+			type: "hour",
+			startDate: selected.startDate,
+			endDateExclusive: selected.endDateExclusive,
+			hour,
+		});
+	}
+
+	private openRecordStatsMetricFilter(
+		type: "range" | "references" | "max-daily-notes" | "max-daily-words",
+	): void {
+		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
+		if (selected === null) {
+			return;
+		}
+		if (type === "range" && selected.range.memoCount > 0) {
+			this.openRecordStatsSearchFilter({
+				type,
+				startDate: selected.startDate,
+				endDateExclusive: selected.endDateExclusive,
+			});
+			return;
+		}
+		if (type === "references" && selected.range.referenceMemoCount > 0) {
+			this.openRecordStatsSearchFilter({
+				type,
+				startDate: selected.startDate,
+				endDateExclusive: selected.endDateExclusive,
+			});
+			return;
+		}
+		if (type === "max-daily-notes" && selected.range.maxDailyMemoCount > 0) {
+			this.openRecordStatsSearchFilter({ type, dates: [...selected.range.maxDailyMemoDates] });
+			return;
+		}
+		if (type === "max-daily-words" && selected.range.maxDailyWordCount > 0) {
+			this.openRecordStatsSearchFilter({ type, dates: [...selected.range.maxDailyWordDates] });
+		}
+	}
+
+	private openRecordStatsSearchFilter(filter: RecordStatsSearchFilter): void {
+		if (this.currentLayout === "mobile") {
+			this.resetMobileSearchState();
+			this.mobileRecordStatsSearchFilter = filter;
+			this.openMobileSearchPage({ focusInput: false });
+			return;
+		}
+
+		this.clearSearchDebounce();
+		this.clearDesktopSearchState();
+		this.recordStatsSearchFilter = filter;
+		this.clearActiveTag();
+		this.activeNav = "all";
+		this.scopeFilter = "all";
+		this.resetVisibleMemos();
+		this.mobileDrawerOpen = false;
+		this.scopeMenuOpen = false;
+		this.desktopSearchOpen = false;
+		this.compactSearchOpen = false;
+		this.activeMenuMemoId = null;
+		this.randomReunionController.clearMemos();
+		this.renderFilteredListState(true);
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
@@ -3051,9 +3218,10 @@ export class KnomoView extends ItemView {
 		if (
 			this.activeNav === "all" &&
 			this.activeTagKey === null &&
-			this.scopeFilter === scope &&
-			this.searchQuery.trim().length === 0 &&
-			this.searchDateFilter === null
+				this.scopeFilter === scope &&
+				this.searchQuery.trim().length === 0 &&
+				this.searchDateFilter === null &&
+				this.recordStatsSearchFilter === null
 		) {
 			this.mobileDrawerOpen = false;
 			this.desktopSearchOpen = false;
@@ -3077,7 +3245,7 @@ export class KnomoView extends ItemView {
 	private setSearchQuery(query: string): void {
 		this.clearSearchDebounce();
 		this.searchQuery = query;
-		if (query.trim().length > 0 || this.searchDateFilter !== null) {
+		if (query.trim().length > 0 || this.searchDateFilter !== null || this.recordStatsSearchFilter !== null) {
 			this.clearActiveTag();
 			this.activeNav = "all";
 			this.scopeFilter = "all";
@@ -3091,6 +3259,7 @@ export class KnomoView extends ItemView {
 	private setSearchDateFilter(filter: SearchDateFilter, sourceEl: HTMLElement | null = null): void {
 		this.flushDesktopSearchQuery(sourceEl);
 		this.searchDateFilter = this.searchDateFilter === filter ? null : filter;
+		this.recordStatsSearchFilter = null;
 		this.clearActiveTag();
 		this.activeNav = "all";
 		this.scopeFilter = "all";
@@ -3133,6 +3302,7 @@ export class KnomoView extends ItemView {
 	private clearDesktopSearchState(): void {
 		this.searchQuery = "";
 		this.searchDateFilter = null;
+		this.recordStatsSearchFilter = null;
 	}
 
 	private clearActiveTag(): void {
@@ -3239,7 +3409,12 @@ export class KnomoView extends ItemView {
 
 	private shouldDeferCardFlowForAllMemos(): boolean {
 		return !this.mobileMemoHydrator.getSnapshot().allMemosLoaded
-			&& needsAllMemos(this.scopeFilter, this.searchQuery, this.searchDateFilter);
+			&& needsAllMemos(
+				this.scopeFilter,
+				this.searchQuery,
+				this.searchDateFilter,
+				this.recordStatsSearchFilter,
+			);
 	}
 
 	private openDesktopSearch(): void {
@@ -4049,18 +4224,21 @@ export class KnomoView extends ItemView {
 		}
 		const normalizedQuery = this.searchQuery.trim().toLowerCase();
 		const searchDateFilter = this.searchDateFilter;
+		const recordStatsFilter = this.recordStatsSearchFilter;
+		const recordStatsFilterKey = getRecordStatsSearchFilterKey(recordStatsFilter);
 		const activeTagKey = this.activeTagKey;
 		const today = new Date();
 		const todayKey = formatDatePart(today);
 		const cache = this.filteredMemosCache;
 		if (
 			cache !== null &&
-			cache.memos === this.memos &&
-			cache.activeTagKey === activeTagKey &&
-			cache.activeNav === this.activeNav &&
-			cache.scopeFilter === this.scopeFilter &&
-			cache.searchQuery === normalizedQuery &&
-			cache.searchDateFilter === searchDateFilter &&
+				cache.memos === this.memos &&
+				cache.activeTagKey === activeTagKey &&
+				cache.activeNav === this.activeNav &&
+				cache.scopeFilter === this.scopeFilter &&
+				cache.searchQuery === normalizedQuery &&
+				cache.searchDateFilter === searchDateFilter &&
+				cache.recordStatsFilterKey === recordStatsFilterKey &&
 			cache.todayKey === todayKey
 		) {
 			return cache.result;
@@ -4068,7 +4246,9 @@ export class KnomoView extends ItemView {
 
 		let filteredMemos: MemoRecord[];
 		if (this.isDesktopSearchActive()) {
-			filteredMemos = this.memos.filter((memo) => this.memoMatchesSearch(memo, normalizedQuery, searchDateFilter));
+			filteredMemos = this.memos.filter((memo) => {
+				return this.memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter);
+			});
 		} else if (this.activeNav === "review") {
 			filteredMemos = this.getOutsideTodayMemos(today);
 		} else {
@@ -4089,6 +4269,7 @@ export class KnomoView extends ItemView {
 			scopeFilter: this.scopeFilter,
 			searchQuery: normalizedQuery,
 			searchDateFilter,
+			recordStatsFilterKey,
 			todayKey,
 			result: filteredMemos,
 		};
@@ -4096,14 +4277,24 @@ export class KnomoView extends ItemView {
 	}
 
 	private isDesktopSearchActive(): boolean {
-		return this.searchQuery.trim().length > 0 || this.searchDateFilter !== null;
+		return this.searchQuery.trim().length > 0
+			|| this.searchDateFilter !== null
+			|| this.recordStatsSearchFilter !== null;
 	}
 
-	private memoMatchesSearch(memo: MemoRecord, normalizedQuery: string, dateFilter: SearchDateFilter | null): boolean {
+	private memoMatchesSearch(
+		memo: MemoRecord,
+		normalizedQuery: string,
+		dateFilter: SearchDateFilter | null,
+		recordStatsFilter: RecordStatsSearchFilter | null = null,
+	): boolean {
 		if (normalizedQuery.length > 0 && !this.getMemoSearchText(memo).includes(normalizedQuery)) {
 			return false;
 		}
 		if (dateFilter !== null && !this.memoMatchesSearchDate(memo, dateFilter)) {
+			return false;
+		}
+		if (recordStatsFilter !== null && !matchesRecordStatsSearchFilter(memo, recordStatsFilter)) {
 			return false;
 		}
 		return true;
@@ -4558,7 +4749,12 @@ export class KnomoView extends ItemView {
 	private shouldRenderFullUiAfterMobileHydration(): boolean {
 		return this.activeNav !== "all" ||
 			this.mobileSearchPageOpen ||
-			needsAllMemos(this.scopeFilter, this.searchQuery, this.searchDateFilter);
+			needsAllMemos(
+				this.scopeFilter,
+				this.searchQuery,
+				this.searchDateFilter,
+				this.recordStatsSearchFilter,
+			);
 	}
 
 	private syncCardFlowAfterMemoHydration(): void {
@@ -4683,11 +4879,17 @@ export class KnomoView extends ItemView {
 		}
 		const query = this.mobileSearchQuery.trim().toLowerCase();
 		const memos = this.memos
-			.filter((memo) => this.memoMatchesSearch(memo, query, this.mobileSearchDateFilter))
+			.filter((memo) => this.memoMatchesSearch(
+				memo,
+				query,
+				this.mobileSearchDateFilter,
+				this.mobileRecordStatsSearchFilter,
+			))
 			.slice(0, this.mobileSearchVisibleCount);
 		return getStateKey([
 			query,
 			this.mobileSearchDateFilter ?? "",
+			getRecordStatsSearchFilterKey(this.mobileRecordStatsSearchFilter),
 			getMemoListStateKey(memos),
 		]);
 	}
@@ -4698,7 +4900,12 @@ export class KnomoView extends ItemView {
 		}
 		const query = this.mobileSearchQuery.trim().toLowerCase();
 		return this.memos
-			.filter((memo) => this.memoMatchesSearch(memo, query, this.mobileSearchDateFilter))
+			.filter((memo) => this.memoMatchesSearch(
+				memo,
+				query,
+				this.mobileSearchDateFilter,
+				this.mobileRecordStatsSearchFilter,
+			))
 			.slice(0, this.mobileSearchVisibleCount)
 			.map((memo) => memo.id)
 			.join("\n");

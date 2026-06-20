@@ -27,3 +27,16 @@ test("record statistics metric labels wrap consistently and chart headings do no
 	assert.doesNotMatch(source, /attr:\s*\{\s*role:\s*"list",\s*"aria-label":\s*options\.ariaLabel\s*\}/);
 	assert.match(source, /"aria-label":\s*action\.ariaLabel/);
 });
+
+test("record statistics loading skeleton reserves the ready page structure", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoRecordStatsPage.ts"), "utf8");
+
+	assert.match(source, /knomo-record-stats-skeleton-controls/);
+	assert.match(source, /knomo-record-stats-skeleton-navigation/);
+	assert.match(source, /knomo-record-stats-skeleton-preview-grid/);
+	assert.equal(source.match(/knomo-record-stats-skeleton-chart/g)?.length, 2);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-loading\s*\{[^}]*position:\s*absolute;/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-skeleton-item\s*\{[^}]*height:\s*76px;/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-skeleton-preview-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+});

@@ -120,6 +120,7 @@ export const en: Record<TranslationKey, string> = {
 	"tags.collapseGroup": "Collapse tag group",
 	"title.backAllNotes": "Back to all notes",
 	"empty.generic": "Nothing here yet",
+	"empty.loadingAllMemos": "Loading all Memos",
 	"empty.cardFlowFailed": "Card feed refresh failed",
 	"empty.randomLoading": "Looking for memos to revisit",
 	"empty.trashLoading": "Loading trash",

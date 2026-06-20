@@ -118,6 +118,7 @@ export const zhCN = {
 	"tags.collapseGroup": "收起标签组",
 	"title.backAllNotes": "返回全部笔记",
 	"empty.generic": "暂无内容",
+	"empty.loadingAllMemos": "正在读取全部 Memos",
 	"empty.cardFlowFailed": "卡片流刷新失败",
 	"empty.randomLoading": "正在寻找可以随机重逢的 Memos",
 	"empty.trashLoading": "正在加载回收站",

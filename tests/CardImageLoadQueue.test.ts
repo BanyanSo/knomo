@@ -7,7 +7,7 @@ import type {
 	CardImageLoadSurface,
 } from "../src/ui/CardImageLoadQueue";
 
-test("limits concurrency by individual image and waits for decode", async () => {
+test("loads one image per card at a time and waits for decode", async () => {
 	const scheduler = new FakeScheduler();
 	const first = new FakeImage();
 	const second = new FakeImage();
@@ -20,24 +20,48 @@ test("limits concurrency by individual image and waits for decode", async () => 
 		createLoadItem(third, "app://third.png"),
 	]));
 
-	assert.deepEqual(scheduler.delays, [0, 0]);
-	scheduler.flushDelay(0);
+	assert.deepEqual(scheduler.delays, [0]);
 	scheduler.flushDelay(0);
 	assert.deepEqual(getSources(first, second, third), [
 		"app://first.png",
-		"app://second.png",
+		null,
 		null,
 	]);
 
 	first.dispatch("load");
 	assert.equal(first.decodeCalls, 1);
-	assert.equal(third.getAttr("src"), null);
+	assert.equal(second.getAttr("src"), null);
 
 	first.resolveDecode();
 	await flushMicrotasks();
 	assert.ok(scheduler.delays.includes(0));
 	scheduler.flushDelay(0);
-	assert.equal(third.getAttr("src"), "app://third.png");
+	assert.equal(second.getAttr("src"), "app://second.png");
+});
+
+test("starts the primary image from each card before secondary images", () => {
+	const scheduler = new FakeScheduler();
+	const firstPrimary = new FakeImage();
+	const firstSecondary = new FakeImage();
+	const secondPrimary = new FakeImage();
+	const queue = createQueue(scheduler, { concurrency: 2 });
+
+	queue.setPaused(true);
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		{ ...createLoadItem(firstPrimary, "app://first-primary.png"), priority: "high" },
+		{ ...createLoadItem(firstSecondary, "app://first-secondary.png"), priority: "low" },
+	]));
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		{ ...createLoadItem(secondPrimary, "app://second-primary.png"), priority: "high" },
+	]));
+	queue.setPaused(false);
+
+	assert.deepEqual(scheduler.delays, [0, 0]);
+	scheduler.flushDelay(0);
+	scheduler.flushDelay(0);
+	assert.equal(firstPrimary.getAttr("src"), "app://first-primary.png");
+	assert.equal(secondPrimary.getAttr("src"), "app://second-primary.png");
+	assert.equal(firstSecondary.getAttr("src"), null);
 });
 
 test("shares in-flight and decoded sources across surfaces", async () => {

@@ -191,6 +191,9 @@ test("builds memo search text and all-memo loading flags", () => {
 	assert.equal(needsAllMemos("all", "", "week"), true);
 	assert.equal(needsAllMemos("all", "", null, { type: "day", date: "2026-05-20" }), true);
 	assert.equal(needsAllMemos("anniversary", "", null), true);
+	assert.equal(needsAllMemos("no-tag", "", null), true);
+	assert.equal(needsAllMemos("with-link", "", null), true);
+	assert.equal(needsAllMemos("with-image", "", null), true);
 });
 
 function disabledDailyStatus(): { enabled: false; folder: null; format: null } {

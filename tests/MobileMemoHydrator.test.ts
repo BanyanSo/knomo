@@ -177,6 +177,43 @@ test("card-flow and sidebar requests switch hydration to fast mode", async () =>
 	assert.equal(ensureCalls, 2);
 });
 
+test("accelerates a background hydration run after the current wait", async () => {
+	const scheduler = new TestScheduler();
+	const listedPeriods: string[] = [];
+	const hydrator = new MobileMemoHydrator({
+		isMobile: () => true,
+		isLoading: () => false,
+		canHydrateCardFlow: () => true,
+		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
+		cancelTask: (taskId) => scheduler.cancel(taskId),
+		listMemoIndexPeriods: () => ["2026-05", "2026-04"],
+		listMemosInPeriods: async ([period]) => {
+			listedPeriods.push(period);
+			return [];
+		},
+		getMemos: () => [],
+		setMemos: () => {},
+		invalidateFilteredMemos: () => {},
+		captureRenderState: makeRenderState,
+		onStarted: () => {},
+		onPeriodHydrated: () => {},
+		onCompleted: () => {},
+		onFailed: () => {},
+		onSidebarRequested: () => {},
+		beginScheduledHydration: () => {},
+		ensureAllMemosLoaded: () => {},
+	});
+
+	const hydration = hydrator.start(false);
+	assert.deepEqual(scheduler.pendingDelays(), [180]);
+	hydrator.accelerate();
+	await scheduler.runNextAndFlush();
+	assert.deepEqual(listedPeriods, ["2026-05"]);
+	assert.deepEqual(scheduler.pendingDelays(), [0]);
+	await scheduler.runNextAndFlush();
+	assert.equal(await hydration, true);
+});
+
 test("cancels a pending hydration run before period reads", async () => {
 	const scheduler = new TestScheduler();
 	let periodReadCalls = 0;

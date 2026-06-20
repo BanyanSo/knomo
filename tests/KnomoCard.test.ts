@@ -364,7 +364,7 @@ test("mobile card flow starts with 25 cards while desktop keeps 50", async () =>
 	assert.match(source, /const CARD_BATCH_SIZE = 50;/);
 	assert.match(source, /const MOBILE_INITIAL_CARD_BATCH_SIZE = 25;/);
 	assert.match(source, /Platform\.isMobile \? MOBILE_INITIAL_CARD_BATCH_SIZE : CARD_BATCH_SIZE/);
-	assert.match(renderMethod, /loading:\s*"lazy"/);
+	assert.doesNotMatch(renderMethod, /loading:\s*"lazy"/);
 	assert.match(renderMethod, /decoding:\s*"async"/);
 	assert.match(renderMethod, /if \(image\.isRemote\)/);
 	assert.match(renderMethod, /imageEl\.setAttr\("fetchpriority", "low"\)/);
@@ -376,9 +376,10 @@ test("mobile card flow starts with 25 cards while desktop keeps 50", async () =>
 	assert.match(renderImagesMethod, /targetEl:\s*imagesEl/);
 	assert.match(renderImagesMethod, /images:\s*loadItems/);
 	assert.match(renderImagesMethod, /surface,/);
+	assert.match(renderMethod, /priority:\s*index === 0 \? "high" : "low"/);
 	assert.doesNotMatch(renderMethod, /createEl\("img",\s*\{\s*attr:\s*\{[^}]*\bsrc:/s);
 	assert.match(source, /const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;/);
-	assert.match(source, /rootMargin:\s*Platform\.isMobile \? "0px 0px" : undefined/);
+	assert.match(source, /rootMargin:\s*Platform\.isMobile \? "280px 0px" : undefined/);
 	assert.match(source, /scheduleStartTask:\s*Platform\.isMobile/);
 	assert.match(source, /const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;/);
 	assert.match(source, /const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;/);
@@ -483,6 +484,7 @@ test("mobile memo hydration reads memo indexes without restoring startup scans",
 	assert.match(hydrationMethod, /this\.options\.listMemosInPeriods\(\[period\]\);/);
 	assert.doesNotMatch(hydrationMethod, /scanRecentDailyMemos|scanDailyMemos|reloadMemos\(true\)/);
 	assert.match(ensureMethod, /Platform\.isMobile && !forceReload/);
+	assert.match(ensureMethod, /this\.mobileMemoHydrator\.accelerate\(\);/);
 	assert.match(ensureMethod, /this\.mobileMemoHydrator\.start\(true\)/);
 	assert.match(sidebarMethod, /this\.fastMode = true;/);
 	assert.match(deferSidebarMethod, /this\.options\.scheduleTask/);
@@ -499,6 +501,17 @@ test("mobile memo hydration compares only the rendered card window", async () =>
 	assert.match(captureMethod, /const renderedCardCount = this\.getRenderedCardCount\(\);/);
 	assert.match(captureMethod, /this\.getVisibleCardFlowStateKey\(renderedCardCount\)/);
 	assert.doesNotMatch(captureMethod, /this\.getCardFlowStateKey\(\)/);
+});
+
+test("all-memo filters keep one loading state until mobile hydration completes", async () => {
+	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const filteredRenderMethod = getMethodSource(viewSource, "renderFilteredListState");
+	const periodHydratedMethod = getMethodSource(viewSource, "handleMobileMemoPeriodHydrated");
+	const hydrationCompletedMethod = getMethodSource(viewSource, "handleMobileMemoHydrationCompleted");
+
+	assert.match(filteredRenderMethod, /this\.renderAllMemosLoadingState\(\);/);
+	assert.match(periodHydratedMethod, /if \(this\.shouldDeferCardFlowForAllMemos\(\)\) \{\s*return;/);
+	assert.match(hydrationCompletedMethod, /shouldRenderDeferredCardFlow/);
 });
 
 test("ordinary card-flow renders preserve existing cards and image queue state", async () => {

@@ -66,6 +66,17 @@ test("ignores punctuation, whitespace, and emoji", () => {
 	assert.equal(getMemoContentStats(makeSource("，。！？；：、,.!? 😄\n\t")).wordCount, 0);
 });
 
+test("reuses cached statistics until countable memo content changes", () => {
+	const memo = makeSource("one two");
+	const first = getMemoContentStats(memo);
+	assert.equal(getMemoContentStats(memo), first);
+
+	memo.contentSnapshot = "one two three";
+	const updated = getMemoContentStats(memo);
+	assert.notEqual(updated, first);
+	assert.equal(updated.wordCount, 3);
+});
+
 function makeSource(contentSnapshot: string): { contentSnapshot: string; references: [] } {
 	return { contentSnapshot, references: [] };
 }

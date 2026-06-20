@@ -62,10 +62,22 @@ function renderLoadingState(container: HTMLElement): void {
 	});
 	status.createDiv({ cls: "knomo-record-stats-state-title", text: t("recordStats.loading.title") });
 	status.createDiv({ cls: "knomo-record-stats-state-description", text: t("recordStats.loading.desc") });
-	const skeleton = status.createDiv({ cls: "knomo-record-stats-skeleton", attr: { "aria-hidden": "true" } });
-	renderSkeletonGrid(skeleton, 3);
-	skeleton.createDiv({ cls: "knomo-record-stats-skeleton-chart" });
-	renderSkeletonGrid(skeleton, 6);
+	const skeleton = container.createDiv({ cls: "knomo-record-stats-skeleton", attr: { "aria-hidden": "true" } });
+	const overview = skeleton.createDiv({ cls: "knomo-record-stats-skeleton-section" });
+	renderSkeletonGrid(overview, 3);
+	const range = skeleton.createDiv({ cls: "knomo-record-stats-skeleton-section knomo-record-stats-skeleton-range" });
+	range.createDiv({ cls: "knomo-record-stats-skeleton-controls" });
+	range.createDiv({ cls: "knomo-record-stats-skeleton-navigation" });
+	range.createDiv({ cls: "knomo-record-stats-skeleton-chart" });
+	const metrics = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
+	metrics.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
+	renderSkeletonGrid(metrics, 6);
+	const hours = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
+	hours.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
+	hours.createDiv({ cls: "knomo-record-stats-skeleton-chart" });
+	const previews = range.createDiv({ cls: "knomo-record-stats-skeleton-preview-grid" });
+	previews.createDiv({ cls: "knomo-record-stats-skeleton-preview" });
+	previews.createDiv({ cls: "knomo-record-stats-skeleton-preview" });
 }
 
 function renderErrorState(container: HTMLElement, error: string | null): void {

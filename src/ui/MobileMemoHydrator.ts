@@ -122,6 +122,13 @@ export class MobileMemoHydrator {
 		return this.hydrate(runId);
 	}
 
+	accelerate(): void {
+		if (this.options.isMobile() && !this.allMemosLoaded) {
+			this.fastMode = true;
+			this.clearScheduled();
+		}
+	}
+
 	requestSidebarHydration(): void {
 		if (!this.options.isMobile() || this.allMemosLoaded) {
 			return;

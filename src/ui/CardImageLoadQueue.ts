@@ -2,6 +2,7 @@ export interface CardImageLoadItem {
 	imageEl: HTMLImageElement;
 	src: string;
 	resourcePath?: string;
+	priority?: CardImageLoadPriority;
 	onLoad?: () => void;
 	onError?: () => void;
 	allowDisconnected?: boolean;
@@ -51,6 +52,7 @@ export class CardImageLoadQueue {
 	private pendingTasks: CardImageLoadTask[] = [];
 	private readonly activeTasks = new Set<CardImageLoadTask>();
 	private readonly activeSources = new Set<string>();
+	private readonly activeTargets = new Set<HTMLElement>();
 	private readonly decodedSources = new Set<string>();
 	private readonly decodedSourcePaths = new Map<string, string>();
 	private readonly pausedSurfaces = new Set<CardImageLoadSurface>();
@@ -225,7 +227,7 @@ export class CardImageLoadQueue {
 				item,
 				generation: request.generation,
 				surface: request.surface,
-				priority: request.priority ?? "normal",
+				priority: item.priority ?? request.priority ?? "normal",
 				sequence: this.nextSequence,
 				startTaskId: null,
 				watchdogTaskId: null,
@@ -250,6 +252,7 @@ export class CardImageLoadQueue {
 			}
 			this.activeTasks.add(task);
 			this.activeSources.add(task.item.src);
+			this.activeTargets.add(task.targetEl);
 			const start = () => {
 				task.startTaskId = null;
 				this.startTask(task);
@@ -275,7 +278,11 @@ export class CardImageLoadQueue {
 					selectedIndex = -2;
 					break;
 				}
-				if (this.pausedSurfaces.has(task.surface) || this.activeSources.has(task.item.src)) {
+				if (
+					this.pausedSurfaces.has(task.surface) ||
+					this.activeSources.has(task.item.src) ||
+					this.activeTargets.has(task.targetEl)
+				) {
 					continue;
 				}
 				if (
@@ -418,6 +425,7 @@ export class CardImageLoadQueue {
 			return;
 		}
 		this.activeSources.delete(task.item.src);
+		this.activeTargets.delete(task.targetEl);
 		this.pump();
 	}
 

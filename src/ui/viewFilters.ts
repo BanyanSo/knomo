@@ -445,7 +445,10 @@ export function needsAllMemos(
 	searchDateFilter: SearchDateFilter | null,
 	recordStatsFilter: RecordStatsSearchFilter | null = null,
 ): boolean {
-	return query.trim().length > 0 || searchDateFilter !== null || recordStatsFilter !== null || scope === "anniversary";
+	return query.trim().length > 0 ||
+		searchDateFilter !== null ||
+		recordStatsFilter !== null ||
+		isSummaryScopeFilter(scope);
 }
 
 function getTagDisplayName(key: string, fallbackName: string, displayTags: Map<string, string>): string {

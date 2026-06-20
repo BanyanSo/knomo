@@ -11,6 +11,12 @@ export interface MemoContentStats {
 
 type MemoContentStatsSource = Pick<MemoRecord, "contentSnapshot" | "references">;
 
+interface MemoContentStatsCacheEntry {
+	contentSnapshot: string;
+	hasReference: boolean;
+	stats: MemoContentStats;
+}
+
 const CHINESE_CHARACTER_PATTERN = /\p{Script=Han}/gu;
 const ENGLISH_WORD_PATTERN = /\p{Script=Latin}+(?:['’-]\p{Script=Latin}+)*/gu;
 const NUMBER_PATTERN = /\p{Number}+/gu;
@@ -19,21 +25,37 @@ const MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\([^)]+\)/g;
 const WIKI_LINK_PATTERN = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 const WEB_URL_PATTERN = /\bhttps?:\/\/[^\s<>"'，。！？；：、（）【】《》]+/gi;
 const BLOCK_ID_PATTERN = /\^[A-Za-z0-9_-]+\b/g;
+const statsCache = new WeakMap<MemoContentStatsSource, MemoContentStatsCacheEntry>();
 
 export function getMemoContentStats(memo: MemoContentStatsSource): MemoContentStats {
-	const content = memo.references.length > 0
+	const hasReference = memo.references.length > 0;
+	const cached = statsCache.get(memo);
+	if (
+		cached !== undefined &&
+		cached.contentSnapshot === memo.contentSnapshot &&
+		cached.hasReference === hasReference
+	) {
+		return cached.stats;
+	}
+	const content = hasReference
 		? stripTrailingWikiLink(memo.contentSnapshot)
 		: memo.contentSnapshot;
 	const countableText = getCountableMemoText(content);
 	const chineseCharacterCount = (countableText.match(CHINESE_CHARACTER_PATTERN) ?? []).length;
 	const englishWordCount = (countableText.match(ENGLISH_WORD_PATTERN) ?? []).length;
 	const numberCount = (countableText.match(NUMBER_PATTERN) ?? []).length;
-	return {
+	const stats = {
 		chineseCharacterCount,
 		englishWordCount,
 		numberCount,
 		wordCount: chineseCharacterCount + englishWordCount + numberCount,
 	};
+	statsCache.set(memo, {
+		contentSnapshot: memo.contentSnapshot,
+		hasReference,
+		stats,
+	});
+	return stats;
 }
 
 function getCountableMemoText(content: string): string {

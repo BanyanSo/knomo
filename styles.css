@@ -3321,6 +3321,7 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-plugin .knomo-record-stats-page {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: var(--size-4-5);
@@ -3679,6 +3680,15 @@ body .knomo-mobile-create-fab.is-hidden {
 	text-align: center;
 }
 
+.knomo-plugin .knomo-record-stats-loading {
+	position: absolute;
+	z-index: 2;
+	inset-block-start: 0;
+	inset-inline: 0;
+	min-height: 76px;
+	padding: var(--size-4-2) var(--size-4-4);
+}
+
 .knomo-plugin .knomo-record-stats-state-title {
 	color: var(--text-normal);
 	font-weight: var(--font-semibold);
@@ -3703,9 +3713,19 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-plugin .knomo-record-stats-skeleton {
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-4-3);
+	gap: var(--size-4-5);
 	width: 100%;
-	margin-top: var(--size-4-3);
+}
+
+.knomo-plugin .knomo-record-stats-skeleton-section,
+.knomo-plugin .knomo-record-stats-skeleton-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+}
+
+.knomo-plugin .knomo-record-stats-skeleton-range {
+	gap: var(--size-4-3);
 }
 
 .knomo-plugin .knomo-record-stats-skeleton-grid {
@@ -3715,17 +3735,46 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-plugin .knomo-record-stats-skeleton-item,
-.knomo-plugin .knomo-record-stats-skeleton-chart {
+.knomo-plugin .knomo-record-stats-skeleton-chart,
+.knomo-plugin .knomo-record-stats-skeleton-controls,
+.knomo-plugin .knomo-record-stats-skeleton-navigation,
+.knomo-plugin .knomo-record-stats-skeleton-subtitle,
+.knomo-plugin .knomo-record-stats-skeleton-preview {
 	border-radius: 8px;
 	background: var(--background-modifier-hover);
 }
 
 .knomo-plugin .knomo-record-stats-skeleton-item {
-	height: 72px;
+	height: 76px;
 }
 
 .knomo-plugin .knomo-record-stats-skeleton-chart {
 	height: 190px;
+}
+
+.knomo-plugin .knomo-record-stats-skeleton-controls,
+.knomo-plugin .knomo-record-stats-skeleton-navigation {
+	height: var(--knomo-touch-target);
+}
+
+.knomo-plugin .knomo-record-stats-skeleton-navigation {
+	width: 60%;
+	align-self: center;
+}
+
+.knomo-plugin .knomo-record-stats-skeleton-subtitle {
+	width: 30%;
+	height: var(--font-ui-small);
+}
+
+.knomo-plugin .knomo-record-stats-skeleton-preview-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--size-4-3);
+}
+
+.knomo-plugin .knomo-record-stats-skeleton-preview {
+	height: 160px;
 }
 
 .knomo-plugin.is-layout-mobile .knomo-record-stats-page,
@@ -3734,13 +3783,19 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-plugin.is-layout-mobile .knomo-record-stats-memo-grid,
-.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-memo-grid {
+.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-memo-grid,
+.knomo-plugin.is-layout-mobile .knomo-record-stats-skeleton-preview-grid,
+.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-skeleton-preview-grid {
 	grid-template-columns: minmax(0, 1fr);
 }
 
 .knomo-plugin.is-layout-mobile .knomo-record-stats-chart {
 	min-height: 170px;
 	grid-template-rows: auto;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-record-stats-skeleton-chart {
+	height: 170px;
 }
 
 .knomo-plugin.is-layout-mobile .knomo-record-stats-bar-item {

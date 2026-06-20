@@ -320,6 +320,7 @@ export class KnomoView extends ItemView {
 	private mobileCardFlowPreserveMemoId: string | null = null;
 	private mobileCardBatchFrameId: number | null = null;
 	private mobileCardBatchContinuation: (() => void) | null = null;
+	private cardFlowDeferredForAllMemos = false;
 	private readonly renderedCardMemos = new Map<string, MemoRecord>();
 	private readonly renderedPreviewImages = new WeakMap<HTMLElement, readonly MemoPreviewImage[]>();
 	private readonly memoCardPreviewCache = new MemoCardPreviewCache((memo, displayContent) => {
@@ -362,7 +363,7 @@ export class KnomoView extends ItemView {
 				: undefined,
 			watchdogMs: CARD_IMAGE_LOAD_WATCHDOG_MS,
 			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
-			rootMargin: Platform.isMobile ? "0px 0px" : undefined,
+			rootMargin: Platform.isMobile ? "280px 0px" : undefined,
 		});
 		this.memoMarkdownRenderer = new MemoMarkdownRenderer({
 			app: this.app,
@@ -403,6 +404,9 @@ export class KnomoView extends ItemView {
 			onPeriodHydrated: (state) => this.handleMobileMemoPeriodHydrated(state),
 			onCompleted: (state) => this.handleMobileMemoHydrationCompleted(state),
 			onFailed: () => {
+				if (this.cardFlowDeferredForAllMemos) {
+					this.renderCardFlow();
+				}
 				this.renderStats();
 				this.renderTags();
 			},
@@ -1818,6 +1822,7 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
+		this.cardFlowDeferredForAllMemos = false;
 		if (this.activeNav === "record-stats") {
 			this.renderRecordStatsPage();
 			return;
@@ -2448,7 +2453,6 @@ export class KnomoView extends ItemView {
 		const imageEl = button.createEl("img", {
 			attr: {
 				alt: image.alt ?? "",
-				loading: "lazy",
 				decoding: "async",
 			},
 		});
@@ -2467,6 +2471,7 @@ export class KnomoView extends ItemView {
 			imageEl,
 			src: image.url,
 			resourcePath: image.resourcePath,
+			priority: index === 0 ? "high" : "low",
 			onError: handleError,
 		};
 		return loadItem;
@@ -3403,8 +3408,26 @@ export class KnomoView extends ItemView {
 			this.syncSearchInputs();
 		}
 		if (shouldDeferCardFlow) {
+			this.renderAllMemosLoadingState();
 			void this.ensureAllMemosLoaded();
 		}
+	}
+
+	private renderAllMemosLoadingState(): void {
+		const cardFlow = this.cardFlowEl;
+		if (cardFlow === null) {
+			return;
+		}
+		this.cardFlowDeferredForAllMemos = true;
+		this.renderGeneration += 1;
+		this.memoMarkdownRenderer.clear();
+		this.cardImageLoadQueue.clear("card-flow");
+		this.clearMobileCardBatchContinuation();
+		this.cardFlowSentinel.remove();
+		this.cardFlowBatcher.reset();
+		this.renderedCardMemos.clear();
+		cardFlow.empty();
+		renderKnomoEmptyState(cardFlow, t("empty.loadingAllMemos"));
 	}
 
 	private shouldDeferCardFlowForAllMemos(): boolean {
@@ -4583,6 +4606,9 @@ export class KnomoView extends ItemView {
 			return true;
 		}
 		if (this.allMemosLoadingPromise !== null) {
+			if (Platform.isMobile && !forceReload) {
+				this.mobileMemoHydrator.accelerate();
+			}
 			return this.allMemosLoadingPromise;
 		}
 		if (Platform.isMobile && !forceReload) {
@@ -4708,6 +4734,9 @@ export class KnomoView extends ItemView {
 
 	private handleMobileMemoPeriodHydrated(state: MobileMemoHydrationRenderState): void {
 		this.renderStats();
+		if (this.shouldDeferCardFlowForAllMemos()) {
+			return;
+		}
 		if (state.previousCardFlowKey !== this.getVisibleCardFlowStateKey(state.renderedCardCount)) {
 			this.renderCardFlow();
 		} else {
@@ -4717,6 +4746,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleMobileMemoHydrationCompleted(state: MobileMemoHydrationRenderState): void {
+		const shouldRenderDeferredCardFlow = this.cardFlowDeferredForAllMemos;
+		this.cardFlowDeferredForAllMemos = false;
 		if (this.activeNav === "record-stats" && this.recordStatsRequestPromise === null) {
 			void this.prepareRecordStats();
 		} else {
@@ -4730,7 +4761,8 @@ export class KnomoView extends ItemView {
 			if (
 				this.cardFlowEl !== null
 				&& (
-					this.cardFlowEl.childElementCount === 0
+					shouldRenderDeferredCardFlow
+					|| this.cardFlowEl.childElementCount === 0
 					|| state.previousCardFlowKey !== this.getVisibleCardFlowStateKey(state.renderedCardCount)
 				)
 			) {

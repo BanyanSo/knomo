@@ -536,6 +536,35 @@ test("ordinary card-flow renders preserve existing cards and image queue state",
 	assert.match(source, /private forceRebuildCardFlow\(/);
 });
 
+test("view-scope card-flow renders reset the feed while content rebuilds preserve position", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const renderMethod = getMethodSource(source, "renderCardFlow");
+	const rebuildMethod = getMethodSource(source, "forceRebuildCardFlow");
+	const filteredRenderMethod = getMethodSource(source, "renderFilteredListState");
+
+	assert.match(renderMethod, /changeIntent === "view-scope-change"[\s\S]*this\.forceRebuildCardFlow\(changeIntent\);/);
+	assert.match(rebuildMethod, /this\.getCardFlowScrollTop\(\) \?\? 0/);
+	assert.match(rebuildMethod, /Math\.max\(this\.getInitialCardBatchSize\(\), this\.getRenderedCardCount\(\)\)/);
+	assert.match(rebuildMethod, /this\.restoreCardFlowScrollTop\(0\);/);
+	assert.match(rebuildMethod, /this\.cardFlowSentinel\.remove\(\);/);
+	assert.match(rebuildMethod, /this\.cardFlowBatcher\.reset\(\);/);
+	assert.match(filteredRenderMethod, /cardFlowChangeIntent: changeIntent/);
+});
+
+test("mobile search resets new result ranges and preserves content-refresh scroll", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const queryMethod = getMethodSource(source, "queueMobileSearchQuery");
+	const dateFilterMethod = getMethodSource(source, "setMobileSearchDateFilter");
+	const renderMethod = getMethodSource(source, "renderMobileSearchResults");
+
+	assert.match(queryMethod, /this\.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;/);
+	assert.match(queryMethod, /this\.getMobileSearchChangeIntent\(previousViewStateKey\)/);
+	assert.match(dateFilterMethod, /this\.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;/);
+	assert.match(dateFilterMethod, /this\.getMobileSearchChangeIntent\(previousViewStateKey\)/);
+	assert.match(renderMethod, /changeIntent === "view-scope-change" \? 0 : resultsEl\.scrollTop/);
+	assert.match(renderMethod, /this\.restoreElementScrollTop\(resultsEl, scrollTop\);/);
+});
+
 test("memo writes apply local mutations instead of refreshing every open view", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const saveMethod = getMethodSource(source, "saveInput");

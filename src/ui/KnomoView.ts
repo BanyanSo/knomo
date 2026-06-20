@@ -182,6 +182,7 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
 type ComposerMode = "create" | "edit" | "quote";
+type CardFlowChangeIntent = "content-change" | "view-scope-change";
 type WindowWithIntersectionObserver = Window & {
 	IntersectionObserver?: typeof IntersectionObserver;
 };
@@ -202,6 +203,7 @@ interface HandledMobileToolPointer {
 interface RenderUiStateOptions {
 	renderCardFlow?: boolean;
 	renderMobileSearchResults?: boolean;
+	cardFlowChangeIntent?: CardFlowChangeIntent;
 }
 
 type CardRenderSurface = "card-flow" | "mobile-search";
@@ -317,9 +319,15 @@ export class KnomoView extends ItemView {
 	private imagePreviewRenderGeneration = 0;
 	private mobileCardFlowRenderPending = false;
 	private mobileCardFlowForceRebuildPending = false;
+	private mobileCardFlowChangeIntentPending: CardFlowChangeIntent = "content-change";
 	private mobileCardFlowPreserveMemoId: string | null = null;
 	private mobileCardBatchFrameId: number | null = null;
 	private mobileCardBatchContinuation: (() => void) | null = null;
+	private pendingCardFlowScrollRestore: {
+		generation: number;
+		scrollTop: number;
+		visibleCount: number;
+	} | null = null;
 	private cardFlowDeferredForAllMemos = false;
 	private readonly renderedCardMemos = new Map<string, MemoRecord>();
 	private readonly renderedPreviewImages = new WeakMap<HTMLElement, readonly MemoPreviewImage[]>();
@@ -531,6 +539,7 @@ export class KnomoView extends ItemView {
 		this.recordStatsService.invalidate();
 		this.mobileMemoHydrator.cancel();
 		this.clearMobileCardBatchContinuation();
+		this.pendingCardFlowScrollRestore = null;
 		this.mobileComposerController.dispose();
 		this.cardImageLoadQueue.dispose();
 		this.memoCardPreviewCache.clear();
@@ -1066,7 +1075,7 @@ export class KnomoView extends ItemView {
 		this.renderTags();
 		this.renderTrashCount();
 		if (options.renderCardFlow !== false) {
-			this.renderCardFlow();
+			this.renderCardFlow(null, options.cardFlowChangeIntent ?? "content-change");
 		}
 		if (options.renderMobileSearchResults !== false) {
 			this.renderMobileSearchResults();
@@ -1342,7 +1351,10 @@ export class KnomoView extends ItemView {
 		this.openMobileSearchPage();
 	}
 
-	private openMobileSearchPage(options: { focusInput?: boolean } = {}): void {
+	private openMobileSearchPage(options: {
+		focusInput?: boolean;
+		changeIntent?: CardFlowChangeIntent;
+	} = {}): void {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.compactSearchOpen = false;
@@ -1354,7 +1366,7 @@ export class KnomoView extends ItemView {
 		if (this.mobileSearchInputEl !== null && this.mobileSearchInputEl.value !== this.mobileSearchQuery) {
 			this.mobileSearchInputEl.value = this.mobileSearchQuery;
 		}
-		this.renderMobileSearchResults();
+		this.renderMobileSearchResults(options.changeIntent ?? "content-change");
 		this.syncRootState();
 		if (options.focusInput !== false) {
 			this.focusMobileSearchInputSoon();
@@ -1451,9 +1463,13 @@ export class KnomoView extends ItemView {
 		this.clearMobileSearchDebounce();
 		this.mobileSearchDebounceTimeoutId = this.containerEl.win.setTimeout(() => {
 			this.mobileSearchDebounceTimeoutId = null;
+			const previousViewStateKey = this.getMobileSearchViewStateKey();
 			this.mobileSearchQuery = query;
-			this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
-			this.renderMobileSearchResults();
+			const changeIntent = this.getMobileSearchChangeIntent(previousViewStateKey);
+			if (changeIntent === "view-scope-change") {
+				this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
+			}
+			this.renderMobileSearchResults(changeIntent);
 		}, SEARCH_DEBOUNCE_MS);
 	}
 
@@ -1466,11 +1482,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private setMobileSearchDateFilter(filter: SearchDateFilter): void {
+		const previousViewStateKey = this.getMobileSearchViewStateKey();
 		this.flushMobileSearchQuery();
 		this.mobileSearchDateFilter = this.mobileSearchDateFilter === filter ? null : filter;
 		this.mobileRecordStatsSearchFilter = null;
 		this.mobileSearchVisibleCount = MOBILE_SEARCH_BATCH_SIZE;
-		this.renderMobileSearchResults();
+		this.renderMobileSearchResults(this.getMobileSearchChangeIntent(previousViewStateKey));
 	}
 
 	private resetMobileSearchState(): void {
@@ -1499,11 +1516,12 @@ export class KnomoView extends ItemView {
 		this.renderMobileSearchResults();
 	}
 
-	private renderMobileSearchResults(): void {
+	private renderMobileSearchResults(changeIntent: CardFlowChangeIntent = "content-change"): void {
 		const resultsEl = this.mobileSearchResultsEl;
 		if (resultsEl === null || !this.mobileSearchPageOpen) {
 			return;
 		}
+		const scrollTop = changeIntent === "view-scope-change" ? 0 : resultsEl.scrollTop;
 		const generation = this.mobileSearchRenderGeneration + 1;
 		this.mobileSearchRenderGeneration = generation;
 		this.memoMarkdownRenderer.clear("mobile-search");
@@ -1518,6 +1536,7 @@ export class KnomoView extends ItemView {
 			&& this.mobileRecordStatsSearchFilter === null
 		) {
 			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.emptyPrompt") });
+			this.restoreElementScrollTop(resultsEl, scrollTop);
 			return;
 		}
 		const memos = this.memos.filter((memo) => {
@@ -1537,6 +1556,7 @@ export class KnomoView extends ItemView {
 					this.mobileRecordStatsSearchFilter,
 				),
 			});
+			this.restoreElementScrollTop(resultsEl, scrollTop);
 			return;
 		}
 		const summary = formatMobileSearchSummary(
@@ -1559,6 +1579,7 @@ export class KnomoView extends ItemView {
 				extraClass: "knomo-mobile-search-more",
 			});
 		}
+		this.restoreElementScrollTop(resultsEl, scrollTop);
 	}
 
 	private syncMobileSearchDateButtons(): void {
@@ -1765,6 +1786,23 @@ export class KnomoView extends ItemView {
 			&& this.recordStatsSearchFilter === null;
 	}
 
+	private getCardFlowViewStateKey(): string {
+		return getStateKey([
+			this.activeNav,
+			this.scopeFilter,
+			this.activeTagKey ?? "",
+			this.searchQuery.trim().toLowerCase(),
+			this.searchDateFilter ?? "",
+			getRecordStatsSearchFilterKey(this.recordStatsSearchFilter),
+		]);
+	}
+
+	private getCardFlowChangeIntent(previousViewStateKey: string): CardFlowChangeIntent {
+		return previousViewStateKey === this.getCardFlowViewStateKey()
+			? "content-change"
+			: "view-scope-change";
+	}
+
 	private getRegularFilterCopy(count: number): CardFlowRegularFilterCopy | null {
 		if (this.activeNav !== "all") {
 			return null;
@@ -1817,8 +1855,15 @@ export class KnomoView extends ItemView {
 		return conditions;
 	}
 
-	private renderCardFlow(preserveCardMemoId: string | null = null): void {
-		if (this.deferMobileCardFlowRender(preserveCardMemoId, false)) {
+	private renderCardFlow(
+		preserveCardMemoId: string | null = null,
+		changeIntent: CardFlowChangeIntent = "content-change",
+	): void {
+		if (changeIntent === "view-scope-change") {
+			this.forceRebuildCardFlow(changeIntent);
+			return;
+		}
+		if (this.deferMobileCardFlowRender(preserveCardMemoId, false, changeIntent)) {
 			return;
 		}
 		if (this.cardFlowEl === null) {
@@ -1872,15 +1917,26 @@ export class KnomoView extends ItemView {
 		this.recordStatsRenderedKey = renderKey;
 	}
 
-	private forceRebuildCardFlow(): void {
-		if (this.deferMobileCardFlowRender(null, true)) {
+	private forceRebuildCardFlow(changeIntent: CardFlowChangeIntent = "content-change"): void {
+		if (this.deferMobileCardFlowRender(null, true, changeIntent)) {
 			return;
 		}
 		if (this.cardFlowEl === null) {
 			return;
 		}
+		this.pendingCardFlowScrollRestore = null;
+		const scrollTop = changeIntent === "view-scope-change"
+			? 0
+			: this.getCardFlowScrollTop() ?? 0;
+		const initialBatchSize = changeIntent === "view-scope-change"
+			? this.getInitialCardBatchSize()
+			: Math.max(this.getInitialCardBatchSize(), this.getRenderedCardCount());
+		if (changeIntent === "view-scope-change") {
+			this.restoreCardFlowScrollTop(0);
+		}
 		if (this.activeNav === "record-stats") {
 			this.renderRecordStatsPage(true);
+			this.restoreCardFlowScrollTop(scrollTop);
 			return;
 		}
 		this.recordStatsRenderedKey = null;
@@ -1893,15 +1949,23 @@ export class KnomoView extends ItemView {
 		this.cardFlowEl.empty();
 		this.renderedCardMemos.clear();
 		this.cardFlowBatcher.reset();
-		this.renderCardFlowPresentation(this.getCurrentCardFlowPresentation(), generation);
+		this.pendingCardFlowScrollRestore = { generation, scrollTop, visibleCount: initialBatchSize };
+		this.renderCardFlowPresentation(this.getCurrentCardFlowPresentation(), generation, initialBatchSize);
 	}
 
-	private deferMobileCardFlowRender(preserveCardMemoId: string | null, forceRebuild: boolean): boolean {
+	private deferMobileCardFlowRender(
+		preserveCardMemoId: string | null,
+		forceRebuild: boolean,
+		changeIntent: CardFlowChangeIntent,
+	): boolean {
 		if (!Platform.isMobile || !this.composerOpen) {
 			return false;
 		}
 		this.mobileCardFlowRenderPending = true;
 		this.mobileCardFlowForceRebuildPending ||= forceRebuild;
+		if (changeIntent === "view-scope-change") {
+			this.mobileCardFlowChangeIntentPending = changeIntent;
+		}
 		if (preserveCardMemoId !== null) {
 			this.mobileCardFlowPreserveMemoId = preserveCardMemoId;
 		}
@@ -1932,6 +1996,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.cardFlowSentinel.remove();
+		this.pendingCardFlowScrollRestore = null;
 		this.clearMobileCardBatchContinuation();
 		for (const card of this.getDirectCardElements(this.cardFlowEl)) {
 			this.removeCardElement(card);
@@ -1963,9 +2028,12 @@ export class KnomoView extends ItemView {
 				.map((card) => [card.getAttr("data-memo-id"), card] as const)
 				.filter((entry): entry is [string, HTMLElement] => entry[0] !== null),
 		);
+		const pendingRestore = this.pendingCardFlowScrollRestore?.generation === this.renderGeneration
+			? this.pendingCardFlowScrollRestore
+			: null;
 		const visibleCount = Math.min(
 			presentation.memos.length,
-			Math.max(this.getInitialCardBatchSize(), existingCards.size),
+			Math.max(this.getInitialCardBatchSize(), existingCards.size, pendingRestore?.visibleCount ?? 0),
 		);
 		const visibleMemos = presentation.memos.slice(0, visibleCount);
 		const desiredIds = new Set(visibleMemos.map((memo) => memo.id));
@@ -2016,6 +2084,7 @@ export class KnomoView extends ItemView {
 		this.cardFlowBatcher.sync(presentation.memos, presentation.mode, visibleMemos.length);
 		this.renderCardFlowSentinelIfNeeded();
 		this.syncCardMenuState();
+		this.restorePendingCardFlowScrollTop(this.renderGeneration);
 	}
 
 	private replaceMemoCard(
@@ -2106,23 +2175,33 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private renderCardFlowPresentation(presentation: CardFlowPresentation, generation: number): void {
+	private renderCardFlowPresentation(
+		presentation: CardFlowPresentation,
+		generation: number,
+		initialBatchSize = this.getInitialCardBatchSize(),
+	): void {
 		if (presentation.type === "empty") {
 			if (this.cardFlowEl !== null) {
 				renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
 			}
+			this.restorePendingCardFlowScrollTop(generation);
 			return;
 		}
 		if (this.cardFlowEl === null) {
 			return;
 		}
 		renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers);
-		this.startCardFeed(presentation.memos, presentation.mode, generation);
+		this.startCardFeed(presentation.memos, presentation.mode, generation, initialBatchSize);
 	}
 
-	private startCardFeed(memos: MemoRecord[], mode: CardFlowRenderMode, generation: number): void {
+	private startCardFeed(
+		memos: MemoRecord[],
+		mode: CardFlowRenderMode,
+		generation: number,
+		initialBatchSize = this.getInitialCardBatchSize(),
+	): void {
 		this.clearMobileCardBatchContinuation();
-		const batch = this.cardFlowBatcher.start(memos, mode, this.getInitialCardBatchSize());
+		const batch = this.cardFlowBatcher.start(memos, mode, initialBatchSize);
 		this.renderCardBatch(batch, generation);
 	}
 
@@ -2183,20 +2262,19 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const cardFlow = this.cardFlowEl;
-		if (result.type !== "completed" || !result.completion.hasMoreItems || cardFlow === null) {
-			if (hydrateWhenExhausted && result.type === "completed") {
-				this.mobileMemoHydrator.requestCardFlowHydration();
-			}
-			return;
+		if (result.type === "completed" && result.completion.hasMoreItems && cardFlow !== null) {
+			this.cardFlowSentinel.render({
+				root: cardFlow,
+				remainingCount: result.completion.remainingCount,
+				generation,
+				Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
+				isCurrentGeneration: (value) => value === this.renderGeneration,
+				onIntersect: (value) => this.renderNextCardBatch(value),
+			});
+		} else if (hydrateWhenExhausted && result.type === "completed") {
+			this.mobileMemoHydrator.requestCardFlowHydration();
 		}
-		this.cardFlowSentinel.render({
-			root: cardFlow,
-			remainingCount: result.completion.remainingCount,
-			generation,
-			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
-			isCurrentGeneration: (value) => value === this.renderGeneration,
-			onIntersect: (value) => this.renderNextCardBatch(value),
-		});
+		this.restorePendingCardFlowScrollTop(generation);
 	}
 
 	private scheduleMobileCardBatchContinuation(continuation: () => void): void {
@@ -2620,6 +2698,7 @@ export class KnomoView extends ItemView {
 			if (tagKey.length === 0) {
 				return;
 			}
+			const previousViewStateKey = this.getCardFlowViewStateKey();
 			this.clearSearchDebounce();
 			this.clearDesktopSearchState();
 			if (this.activeTagKey === tagKey) {
@@ -2630,11 +2709,12 @@ export class KnomoView extends ItemView {
 			}
 			this.scopeFilter = "all";
 			this.activeNav = "all";
-			this.resetVisibleMemos();
 			this.mobileDrawerOpen = false;
 			this.scopeMenuOpen = false;
 			this.activeMenuMemoId = null;
-			this.renderUiState();
+			this.renderUiState({
+				cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
+			});
 			return;
 		}
 
@@ -2809,13 +2889,13 @@ export class KnomoView extends ItemView {
 					this.recordStatsService.getEarliestYear(),
 				)) {
 					this.recordStatsSelectedDate = shiftRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate, -1);
-					this.renderCardFlow();
+					this.renderCardFlow(null, "view-scope-change");
 				}
 				return;
 			case "record-stats-next":
 				if (canAdvanceRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate)) {
 					this.recordStatsSelectedDate = shiftRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate, 1);
-					this.renderCardFlow();
+					this.renderCardFlow(null, "view-scope-change");
 				}
 				return;
 			case "record-stats-retry":
@@ -2831,16 +2911,22 @@ export class KnomoView extends ItemView {
 				await this.ensureAllMemosLoaded();
 				return;
 			case "record-stats-view-week":
-				this.recordStatsView = "week";
-				this.renderCardFlow();
+				if (this.recordStatsView !== "week") {
+					this.recordStatsView = "week";
+					this.renderCardFlow(null, "view-scope-change");
+				}
 				return;
 			case "record-stats-view-month":
-				this.recordStatsView = "month";
-				this.renderCardFlow();
+				if (this.recordStatsView !== "month") {
+					this.recordStatsView = "month";
+					this.renderCardFlow(null, "view-scope-change");
+				}
 				return;
 			case "record-stats-view-year":
-				this.recordStatsView = "year";
-				this.renderCardFlow();
+				if (this.recordStatsView !== "year") {
+					this.recordStatsView = "year";
+					this.renderCardFlow(null, "view-scope-change");
+				}
 				return;
 			case "record-stats-filter-trend":
 				this.openRecordStatsTrendFilter(sourceEl);
@@ -3031,24 +3117,27 @@ export class KnomoView extends ItemView {
 		if (this.currentLayout === "mobile") {
 			this.resetMobileSearchState();
 			this.mobileRecordStatsSearchFilter = filter;
-			this.openMobileSearchPage({ focusInput: false });
+			this.openMobileSearchPage({
+				focusInput: false,
+				changeIntent: "view-scope-change",
+			});
 			return;
 		}
 
+		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearSearchDebounce();
 		this.clearDesktopSearchState();
 		this.recordStatsSearchFilter = filter;
 		this.clearActiveTag();
 		this.activeNav = "all";
 		this.scopeFilter = "all";
-		this.resetVisibleMemos();
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.desktopSearchOpen = false;
 		this.compactSearchOpen = false;
 		this.activeMenuMemoId = null;
 		this.randomReunionController.clearMemos();
-		this.renderFilteredListState(true);
+		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
@@ -3283,18 +3372,19 @@ export class KnomoView extends ItemView {
 			this.syncSearchInputs();
 			return;
 		}
+		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearDesktopSearchState();
 		this.scopeFilter = scope;
 		this.clearActiveTag();
 		this.activeNav = "all";
-		this.resetVisibleMemos();
 		this.mobileDrawerOpen = false;
 		this.desktopSearchOpen = false;
 		this.scopeMenuOpen = false;
-		this.renderFilteredListState(true);
+		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private setSearchQuery(query: string): void {
+		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearSearchDebounce();
 		this.searchQuery = query;
 		if (query.trim().length > 0 || this.searchDateFilter !== null || this.recordStatsSearchFilter !== null) {
@@ -3304,11 +3394,11 @@ export class KnomoView extends ItemView {
 		}
 		this.activeMenuMemoId = null;
 		this.activeNav = "all";
-		this.resetVisibleMemos();
-		this.renderFilteredListState(false);
+		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private setSearchDateFilter(filter: SearchDateFilter, sourceEl: HTMLElement | null = null): void {
+		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.flushDesktopSearchQuery(sourceEl);
 		this.searchDateFilter = this.searchDateFilter === filter ? null : filter;
 		this.recordStatsSearchFilter = null;
@@ -3321,8 +3411,7 @@ export class KnomoView extends ItemView {
 		if (this.currentLayout !== "mobile") {
 			this.syncRootState();
 		}
-		this.resetVisibleMemos();
-		this.renderFilteredListState(false);
+		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private flushDesktopSearchQuery(sourceEl: HTMLElement | null): void {
@@ -3373,18 +3462,20 @@ export class KnomoView extends ItemView {
 			this.syncCardMenuState();
 			return;
 		}
+		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearDesktopSearchState();
 		this.activeNav = nav;
 		this.clearActiveTag();
 		this.scopeFilter = "all";
-		this.resetVisibleMemos();
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = null;
 		if (nav !== "random") {
 			this.randomReunionController.clearMemos();
 		}
-		this.renderUiState();
+		this.renderUiState({
+			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
+		});
 		if (nav === "review") {
 			void this.ensureAllMemosLoaded();
 		}
@@ -3414,6 +3505,7 @@ export class KnomoView extends ItemView {
 	private resetToAllNotes(): void {
 		this.clearSearchDebounce();
 		const isAlreadyDefault = this.isDefaultListState();
+		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearDesktopSearchState();
 		this.clearActiveTag();
 		this.activeNav = "all";
@@ -3430,12 +3522,19 @@ export class KnomoView extends ItemView {
 			this.syncCardMenuState();
 			return;
 		}
-		this.resetVisibleMemos();
-		this.renderUiState();
+		this.renderUiState({
+			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
+		});
 	}
 
-	private renderFilteredListState(fullUi: boolean): void {
+	private renderFilteredListState(
+		fullUi: boolean,
+		changeIntent: CardFlowChangeIntent = "content-change",
+	): void {
 		const shouldDeferCardFlow = this.shouldDeferCardFlowForAllMemos();
+		if (changeIntent === "view-scope-change") {
+			this.restoreCardFlowScrollTop(0);
+		}
 		if (shouldDeferCardFlow) {
 			this.cardFlowSentinel.remove();
 			this.syncCardMenuState();
@@ -3444,13 +3543,14 @@ export class KnomoView extends ItemView {
 			this.renderUiState({
 				renderCardFlow: !shouldDeferCardFlow,
 				renderMobileSearchResults: !shouldDeferCardFlow,
+				cardFlowChangeIntent: changeIntent,
 			});
 		} else if (shouldDeferCardFlow) {
 			this.syncRootState();
 			this.renderScopeState();
 			this.syncSearchInputs();
 		} else {
-			this.renderCardFlow();
+			this.renderCardFlow(null, changeIntent);
 			this.renderScopeState();
 			this.syncSearchInputs();
 		}
@@ -3527,14 +3627,28 @@ export class KnomoView extends ItemView {
 	}
 
 	private restoreCardFlowScrollTop(scrollTop: number | null): void {
-		if (scrollTop === null || this.cardFlowEl === null) {
+		this.restoreElementScrollTop(this.cardFlowEl, scrollTop);
+	}
+
+	private restoreElementScrollTop(element: HTMLElement | null, scrollTop: number | null): void {
+		if (scrollTop === null || element === null) {
 			return;
 		}
-		const flow = this.cardFlowEl;
-		flow.scrollTop = scrollTop;
+		element.scrollTop = scrollTop;
 		this.containerEl.win.requestAnimationFrame(() => {
-			flow.scrollTop = scrollTop;
+			if (element.isConnected) {
+				element.scrollTop = scrollTop;
+			}
 		});
+	}
+
+	private restorePendingCardFlowScrollTop(generation: number): void {
+		const pending = this.pendingCardFlowScrollRestore;
+		if (pending === null || pending.generation !== generation || generation !== this.renderGeneration) {
+			return;
+		}
+		this.pendingCardFlowScrollRestore = null;
+		this.restoreCardFlowScrollTop(pending.scrollTop);
 	}
 
 	private openComposer(): void {
@@ -3573,15 +3687,17 @@ export class KnomoView extends ItemView {
 		}
 		const shouldRenderCardFlow = this.mobileCardFlowRenderPending;
 		const shouldForceRebuild = this.mobileCardFlowForceRebuildPending;
+		const changeIntent = this.mobileCardFlowChangeIntentPending;
 		const preserveCardMemoId = this.mobileCardFlowPreserveMemoId;
 		this.mobileCardFlowRenderPending = false;
 		this.mobileCardFlowForceRebuildPending = false;
+		this.mobileCardFlowChangeIntentPending = "content-change";
 		this.mobileCardFlowPreserveMemoId = null;
 		if (shouldRenderCardFlow) {
 			if (shouldForceRebuild) {
-				this.forceRebuildCardFlow();
+				this.forceRebuildCardFlow(changeIntent);
 			} else {
-				this.renderCardFlow(preserveCardMemoId);
+				this.renderCardFlow(preserveCardMemoId, changeIntent);
 			}
 		}
 		this.resumeMobileCardBatchContinuation();
@@ -4996,6 +5112,20 @@ export class KnomoView extends ItemView {
 			getRecordStatsSearchFilterKey(this.mobileRecordStatsSearchFilter),
 			getMemoListStateKey(memos),
 		]);
+	}
+
+	private getMobileSearchViewStateKey(): string {
+		return getStateKey([
+			this.mobileSearchQuery.trim().toLowerCase(),
+			this.mobileSearchDateFilter ?? "",
+			getRecordStatsSearchFilterKey(this.mobileRecordStatsSearchFilter),
+		]);
+	}
+
+	private getMobileSearchChangeIntent(previousViewStateKey: string): CardFlowChangeIntent {
+		return previousViewStateKey === this.getMobileSearchViewStateKey()
+			? "content-change"
+			: "view-scope-change";
 	}
 
 	private getMobileSearchIdsKey(): string {

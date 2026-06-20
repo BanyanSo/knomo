@@ -121,6 +121,25 @@ test("preserves the previous rendered count when restarting", () => {
 	assert.equal(preservedBatch.items.length, 6);
 });
 
+test("uses the initial batch size after resetting before restart", () => {
+	const batcher = new KnomoCardFlowBatcher();
+	const firstBatch = batcher.start(makeMemos(6), "memo", 2);
+	assert.equal(firstBatch?.type, "items");
+	if (firstBatch?.type !== "items") return;
+	batcher.completeBatch(firstBatch);
+
+	const largerBatch = batcher.beginNextBatch(4);
+	assert.equal(largerBatch?.type, "items");
+	if (largerBatch?.type !== "items") return;
+	batcher.completeBatch(largerBatch);
+
+	batcher.reset();
+	const resetBatch = batcher.start(makeMemos(6, "new"), "memo", 2);
+	assert.equal(resetBatch?.type, "items");
+	if (resetBatch?.type !== "items") return;
+	assert.deepEqual(resetBatch.items.map((item) => item.memo.id), ["new-0", "new-1"]);
+});
+
 test("blocks overlapping batches until completion or cancel", () => {
 	const batcher = new KnomoCardFlowBatcher();
 	const batch = batcher.start(makeMemos(3), "memo", 2);

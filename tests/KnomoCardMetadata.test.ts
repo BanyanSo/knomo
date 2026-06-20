@@ -14,6 +14,7 @@ import {
 	getTrashMemoWarningText,
 } from "../src/ui/KnomoCardMetadata";
 import type { MemoRecord } from "../src/types/memo";
+import { recoverMemoReferenceMetadata } from "../src/utils/references";
 
 test("builds memo card shell metadata without daily-open card attributes", () => {
 	assert.deepEqual(getMemoCardShell({
@@ -85,6 +86,27 @@ test("builds memo source reference metadata", () => {
 	}), deletedMemoIds), {
 		type: "markdown",
 		text: "[[Daily/2026-06-02#^abc|source-1]]",
+		sourcePath: "Daily/2026-06-02.md",
+	});
+});
+
+test("builds source metadata after recovering a historical reference", () => {
+	const source = makeMemo({
+		id: "2026060208000000",
+		dailyRef: {
+			...makeMemo().dailyRef,
+			lastKnownBlock: "- 08:00 source ^abc123",
+		},
+	});
+	const child = makeMemo({
+		id: "2026060209000001",
+		contentSnapshot: "child [[Daily/2026-06-02#^abc123|20260602-080000-00]]",
+	});
+	const recovered = recoverMemoReferenceMetadata([source, child], (linkPath) => `${linkPath}.md`)[1];
+
+	assert.deepEqual(getMemoSourceReferenceMeta(recovered, new Set()), {
+		type: "markdown",
+		text: "[[Daily/2026-06-02#^abc123|20260602-080000-00]]",
 		sourcePath: "Daily/2026-06-02.md",
 	});
 });

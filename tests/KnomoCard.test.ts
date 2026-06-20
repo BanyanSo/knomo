@@ -47,12 +47,6 @@ test("memo card body queues preview text instead of the raw content snapshot", a
 	assert.equal(queued?.previewText, "raw");
 });
 
-test("memo card can show preview text while Markdown rendering is pending", async () => {
-	const { content } = await renderMemoCard("**stable preview**", undefined, true);
-
-	assert.equal(content?.getText(), "**stable preview**");
-});
-
 test("image-only memo cards do not render an empty card content container", async () => {
 	const { body, content, images } = await renderMemoCard("![[image.png]]", {
 		text: "",
@@ -727,7 +721,6 @@ test("purging a memo refreshes every open view", async () => {
 async function renderMemoCard(
 	contentSnapshot: string,
 	preview?: MemoCardPreview,
-	showPreviewTextImmediately = false,
 ): Promise<{
 	card: TestElement;
 	body: TestElement | null;
@@ -763,7 +756,6 @@ async function renderMemoCard(
 		queueSourceReferenceMarkdown: () => {
 			throw new Error("Unexpected source reference render");
 		},
-		showPreviewTextImmediately,
 	});
 
 	const card = root.find("article");

@@ -25,6 +25,10 @@ export type KnomoSimpleAction =
 	| "record-stats-filter-trend"
 	| "record-stats-filter-hour"
 	| "record-stats-filter-notes"
+	| "record-stats-filter-with-tag"
+	| "record-stats-filter-no-tag"
+	| "record-stats-filter-with-image"
+	| "record-stats-filter-tag"
 	| "record-stats-filter-references"
 	| "record-stats-filter-max-daily-notes"
 	| "record-stats-filter-max-daily-words"
@@ -78,6 +82,10 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-filter-trend" ||
 		action === "record-stats-filter-hour" ||
 		action === "record-stats-filter-notes" ||
+		action === "record-stats-filter-with-tag" ||
+		action === "record-stats-filter-no-tag" ||
+		action === "record-stats-filter-with-image" ||
+		action === "record-stats-filter-tag" ||
 		action === "record-stats-filter-references" ||
 		action === "record-stats-filter-max-daily-notes" ||
 		action === "record-stats-filter-max-daily-words" ||

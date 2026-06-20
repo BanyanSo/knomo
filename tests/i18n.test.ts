@@ -40,6 +40,49 @@ test("formats card word count with locale-specific colons", async () => {
 	assert.equal(translate("en", "card.wordCount", { count: 123 }), "Words: 123");
 });
 
+test("adds spacing only to record statistics summaries", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(
+		translate("zh-CN", "filterSummary.recordStats", { label: "2026-06-01 至 2026-06-30", count: 13 }),
+		"2026-06-01 至 2026-06-30 共有 13 条 Memos",
+	);
+	assert.equal(
+		translate("zh-CN", "mobileSearchSummary.recordStats", { label: "2026-06-01 至 2026-06-30", count: 13 }),
+		"2026-06-01 至 2026-06-30 共有 13 条 Memos",
+	);
+	assert.equal(
+		translate("zh-CN", "filterSummary.label", { label: "本月", count: 13 }),
+		"本月共有 13 条 Memos",
+	);
+	assert.equal(
+		translate("zh-CN", "mobileSearchSummary.date", { label: "本月", count: 13 }),
+		"本月共有 13 条 Memos",
+	);
+});
+
+test("formats common-tag chart, action, filter, and empty-state text", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(translate("zh-CN", "recordStats.commonTags"), "常用标签");
+	assert.equal(translate("zh-CN", "recordStats.commonTags.empty"), "这一范围内还没有标签");
+	assert.equal(translate("zh-CN", "recordStats.chart.tagCount", { tag: "Work", count: 3 }), "#Work，3 条记录");
+	assert.equal(
+		translate("zh-CN", "recordStats.action.filterTag", { tag: "Work", count: 3 }),
+		"筛选标签 #Work 的 3 条记录",
+	);
+	assert.equal(
+		translate("zh-CN", "recordStats.filter.tag", {
+			startDate: "2026-06-01",
+			endDate: "2026-06-30",
+			tag: "Work",
+		}),
+		"2026-06-01 至 2026-06-30 · #Work",
+	);
+});
+
 async function loadLocaleModule(): Promise<typeof import("../src/i18n/locale")> {
 	await ensureObsidianStub();
 	return import("../src/i18n/locale");

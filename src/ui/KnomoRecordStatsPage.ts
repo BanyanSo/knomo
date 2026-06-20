@@ -7,7 +7,7 @@ import type {
 	RecordStatsView,
 	SelectedRecordStats,
 } from "../services/RecordStatsService";
-import type { MemoRecord } from "../types/memo";
+import { formatTagFilterText } from "./viewFilters";
 
 export interface RenderKnomoRecordStatsPageOptions {
 	snapshot: RecordStatsSnapshot;
@@ -16,7 +16,6 @@ export interface RenderKnomoRecordStatsPageOptions {
 	canAdvance: boolean;
 	canRetreat: boolean;
 	createHiddenText: (container: HTMLElement, name: string, text: string) => string;
-	renderMemoPreview: (container: HTMLElement, memo: MemoRecord, renderIndex: number) => HTMLElement;
 }
 
 interface MetricItem {
@@ -71,13 +70,16 @@ function renderLoadingState(container: HTMLElement): void {
 	range.createDiv({ cls: "knomo-record-stats-skeleton-chart" });
 	const metrics = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
 	metrics.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
-	renderSkeletonGrid(metrics, 6);
+	renderSkeletonGrid(metrics, 9);
 	const hours = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
 	hours.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
 	hours.createDiv({ cls: "knomo-record-stats-skeleton-chart" });
-	const previews = range.createDiv({ cls: "knomo-record-stats-skeleton-preview-grid" });
-	previews.createDiv({ cls: "knomo-record-stats-skeleton-preview" });
-	previews.createDiv({ cls: "knomo-record-stats-skeleton-preview" });
+	const tags = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
+	tags.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
+	const tagChart = tags.createDiv({ cls: "knomo-record-stats-skeleton-tag-chart" });
+	for (let index = 0; index < 5; index += 1) {
+		tagChart.createDiv({ cls: "knomo-record-stats-skeleton-tag-row" });
+	}
 }
 
 function renderErrorState(container: HTMLElement, error: string | null): void {
@@ -103,7 +105,12 @@ function renderGlobalEmptyState(container: HTMLElement): void {
 function renderOverview(container: HTMLElement, selected: SelectedRecordStats): void {
 	const section = createSection(container);
 	renderMetricGrid(section, [
-		{ label: t("recordStats.overview.notes"), value: selected.overview.memoCount },
+		{
+			label: t("recordStats.overview.notes"),
+			value: selected.overview.memoCount,
+			action: "reset-list-state",
+			ariaLabel: t("title.backAllNotes"),
+		},
 		{ label: t("recordStats.overview.words"), value: selected.overview.wordCount },
 		{ label: t("recordStats.metric.recordDays"), value: selected.overview.recordDayCount },
 	], "knomo-record-stats-overview-grid");
@@ -120,7 +127,7 @@ function renderSelectedRange(container: HTMLElement, options: RenderKnomoRecordS
 	renderTrendChart(section, options.view, selected, options.createHiddenText);
 	renderRangeMetrics(section, options.view, selected);
 	renderActiveHours(section, selected, options.createHiddenText);
-	renderMemoExtremes(section, selected, options.renderMemoPreview);
+	renderCommonTags(section, selected);
 }
 
 function createSection(container: HTMLElement, cls = ""): HTMLElement {
@@ -233,6 +240,24 @@ function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selec
 		{ label: t("recordStats.metric.words"), value: selected.range.wordCount },
 		{ label: t("recordStats.metric.recordDays"), value: selected.range.recordDayCount },
 		{
+			label: t("recordStats.metric.withTag"),
+			value: selected.range.taggedMemoCount,
+			action: "record-stats-filter-with-tag",
+			ariaLabel: t("recordStats.action.filterWithTag", { count: selected.range.taggedMemoCount }),
+		},
+		{
+			label: t("recordStats.metric.noTag"),
+			value: selected.range.untaggedMemoCount,
+			action: "record-stats-filter-no-tag",
+			ariaLabel: t("recordStats.action.filterNoTag", { count: selected.range.untaggedMemoCount }),
+		},
+		{
+			label: t("recordStats.metric.withImage"),
+			value: selected.range.imageMemoCount,
+			action: "record-stats-filter-with-image",
+			ariaLabel: t("recordStats.action.filterWithImage", { count: selected.range.imageMemoCount }),
+		},
+		{
 			label: t("recordStats.metric.references"),
 			value: selected.range.referenceMemoCount,
 			action: "record-stats-filter-references",
@@ -280,6 +305,34 @@ function renderActiveHours(
 	centerChartItem(scroll, chart.children.item(12));
 	if (selected.range.memoCount === 0) {
 		section.createDiv({ cls: "knomo-record-stats-chart-empty", text: t("recordStats.range.empty") });
+	}
+}
+
+function renderCommonTags(container: HTMLElement, selected: SelectedRecordStats): void {
+	const section = container.createDiv({ cls: "knomo-record-stats-chart-section" });
+	section.createEl("h3", { cls: "knomo-record-stats-subtitle", text: t("recordStats.commonTags") });
+	if (selected.commonTags.length === 0) {
+		section.createDiv({ cls: "knomo-record-stats-tag-empty", text: t("recordStats.commonTags.empty") });
+		return;
+	}
+	const chart = section.createDiv({ cls: "knomo-record-stats-tag-chart", attr: { role: "list" } });
+	const max = Math.max(...selected.commonTags.map((tag) => tag.count));
+	for (const tag of selected.commonTags) {
+		const item = chart.createDiv({ cls: "knomo-record-stats-tag-item", attr: { role: "listitem" } });
+		const button = item.createEl("button", {
+			cls: "knomo-record-stats-tag-button",
+			attr: {
+				type: "button",
+				"data-action": "record-stats-filter-tag",
+				"data-record-stats-tag-key": tag.key,
+				"aria-label": t("recordStats.action.filterTag", { tag: tag.label, count: tag.count }),
+			},
+		});
+		button.createSpan({ cls: "knomo-record-stats-tag-label", text: formatTagFilterText(tag.label) });
+		button.createDiv({ cls: "knomo-record-stats-tag-track" })
+			.createDiv({ cls: "knomo-record-stats-tag-bar" })
+			.setCssProps({ "--knomo-record-stats-tag-ratio": String(tag.count / max) });
+		button.createSpan({ cls: "knomo-record-stats-tag-count", text: formatNumber(tag.count) });
 	}
 }
 
@@ -339,33 +392,6 @@ function centerChartItem(scroll: HTMLElement, item: Element | null): void {
 	const scrollRect = scroll.getBoundingClientRect();
 	const itemRect = item.getBoundingClientRect();
 	scroll.scrollLeft += itemRect.left + itemRect.width / 2 - scrollRect.left - scrollRect.width / 2;
-}
-
-function renderMemoExtremes(
-	container: HTMLElement,
-	selected: SelectedRecordStats,
-	renderMemoPreview: RenderKnomoRecordStatsPageOptions["renderMemoPreview"],
-): void {
-	const grid = container.createDiv({ cls: "knomo-record-stats-memo-grid" });
-	renderMemoExtreme(grid, t("recordStats.earliest"), selected.earliestMemo, 0, renderMemoPreview);
-	renderMemoExtreme(grid, t("recordStats.latest"), selected.latestMemo, 1, renderMemoPreview);
-}
-
-function renderMemoExtreme(
-	container: HTMLElement,
-	title: string,
-	memo: MemoRecord | null,
-	renderIndex: number,
-	renderMemoPreview: RenderKnomoRecordStatsPageOptions["renderMemoPreview"],
-): void {
-	const section = container.createEl("section", { cls: "knomo-record-stats-memo-section" });
-	section.createEl("h3", { cls: "knomo-record-stats-subtitle", text: title });
-	if (memo === null) {
-		section.createDiv({ cls: "knomo-record-stats-memo-empty", text: t("recordStats.range.empty") });
-		return;
-	}
-	const card = renderMemoPreview(section, memo, renderIndex);
-	card.addClass("knomo-record-stats-memo-preview");
 }
 
 function renderMetricGrid(container: HTMLElement, items: MetricItem[], cls: string): void {

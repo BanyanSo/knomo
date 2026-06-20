@@ -175,6 +175,56 @@ test("loadExistingPeriod returns null without creating an empty memo-index", asy
 	assert.equal(createCalled, false);
 });
 
+test("memo-index loading restores historical reference metadata", async () => {
+	await ensureObsidianStub();
+	const { MemoIndexStore } = await import("../src/services/MemoIndexStore");
+	const { MarkdownBlockService } = await import("../src/services/MarkdownBlockService");
+	const { TFile, TFolder } = await import("obsidian");
+	const markdownBlockService = new MarkdownBlockService();
+	const indexFolder = Object.assign(new TFolder(), {
+		path: "Memos/_knomo-system/indexes",
+		children: [] as unknown[],
+	});
+	const indexFile = Object.assign(new TFile(), {
+		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
+		name: "memo-index-2026-06.json",
+	});
+	indexFolder.children = [indexFile];
+	const source = createMemo(
+		"2026060208000000",
+		"2026-06-02T08:00:00",
+		"Daily/2026-06-02.md",
+		parseBlock(markdownBlockService, "- 08:00 source ^abc123"),
+	);
+	const childBlock = parseBlock(
+		markdownBlockService,
+		"- 09:00 child [[Daily/2026-06-02#^abc123|20260602-080000-00]]",
+	);
+	const child = createMemo("2026060209000001", "2026-06-02T09:00:00", "Daily/2026-06-02.md", childBlock);
+	const indexData = JSON.stringify(createIndex("2026-06", [source, child]));
+	const store = new MemoIndexStore({
+		vault: {
+			getAbstractFileByPath: (path: string) => {
+				if (path === indexFolder.path) return indexFolder;
+				if (path === indexFile.path) return indexFile;
+				return null;
+			},
+			cachedRead: async () => indexData,
+		},
+		metadataCache: {
+			getFirstLinkpathDest: (linkPath: string) => linkPath === "Daily/2026-06-02"
+				? { path: "Daily/2026-06-02.md" }
+				: null,
+		},
+	} as never);
+
+	const memos = await store.loadAll("Memos");
+	const recovered = memos.find((memo) => memo.id === child.id);
+
+	assert.equal(recovered?.sourceMemoId, source.id);
+	assert.equal(recovered?.references[0]?.referenceText, "[[Daily/2026-06-02#^abc123|20260602-080000-00]]");
+});
+
 test("automatic monthly archive recovery leaves a restored file unchanged", async () => {
 	await ensureObsidianStub();
 	const { TFile, TFolder } = await import("obsidian");

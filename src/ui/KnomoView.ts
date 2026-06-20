@@ -1848,8 +1848,7 @@ export class KnomoView extends ItemView {
 		if (!force && cardFlow.childElementCount > 0 && this.recordStatsRenderedKey === renderKey) {
 			return;
 		}
-		const generation = this.renderGeneration + 1;
-		this.renderGeneration = generation;
+		this.renderGeneration += 1;
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.clearMobileCardBatchContinuation();
@@ -1869,18 +1868,6 @@ export class KnomoView extends ItemView {
 				this.recordStatsSelectedDate,
 				this.recordStatsService.getEarliestYear(),
 			),
-			renderMemoPreview: (container, memo, renderIndex) => {
-				this.renderedCardMemos.set(memo.id, memo);
-				return this.renderMemoCardInContainer(
-					container,
-					memo,
-					generation,
-					renderIndex,
-					false,
-					false,
-					"card-flow",
-				);
-				},
 		});
 		this.recordStatsRenderedKey = renderKey;
 	}
@@ -2294,8 +2281,7 @@ export class KnomoView extends ItemView {
 				queueSourceReferenceMarkdown: (content, text, sourcePath, renderGeneration) => {
 					this.memoMarkdownRenderer.queueSourceReferenceMarkdown(content, text, sourcePath, renderGeneration, surface);
 				},
-				showPreviewTextImmediately: this.activeNav === "record-stats",
-				reusedBodyEl,
+			reusedBodyEl,
 			reusedImagesEl,
 		});
 	}
@@ -2865,6 +2851,18 @@ export class KnomoView extends ItemView {
 			case "record-stats-filter-notes":
 				this.openRecordStatsMetricFilter("range");
 				return;
+			case "record-stats-filter-with-tag":
+				this.openRecordStatsMetricFilter("with-tag");
+				return;
+			case "record-stats-filter-no-tag":
+				this.openRecordStatsMetricFilter("no-tag");
+				return;
+			case "record-stats-filter-with-image":
+				this.openRecordStatsMetricFilter("with-image");
+				return;
+			case "record-stats-filter-tag":
+				this.openRecordStatsTagFilter(sourceEl);
+				return;
 			case "record-stats-filter-references":
 				this.openRecordStatsMetricFilter("references");
 				return;
@@ -2958,7 +2956,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private openRecordStatsMetricFilter(
-		type: "range" | "references" | "max-daily-notes" | "max-daily-words",
+		type: "range" | "with-tag" | "no-tag" | "with-image" | "references" | "max-daily-notes" | "max-daily-words",
 	): void {
 		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
 		if (selected === null) {
@@ -2980,6 +2978,30 @@ export class KnomoView extends ItemView {
 			});
 			return;
 		}
+		if (type === "with-tag" && selected.range.taggedMemoCount > 0) {
+			this.openRecordStatsSearchFilter({
+				type,
+				startDate: selected.startDate,
+				endDateExclusive: selected.endDateExclusive,
+			});
+			return;
+		}
+		if (type === "no-tag" && selected.range.untaggedMemoCount > 0) {
+			this.openRecordStatsSearchFilter({
+				type,
+				startDate: selected.startDate,
+				endDateExclusive: selected.endDateExclusive,
+			});
+			return;
+		}
+		if (type === "with-image" && selected.range.imageMemoCount > 0) {
+			this.openRecordStatsSearchFilter({
+				type,
+				startDate: selected.startDate,
+				endDateExclusive: selected.endDateExclusive,
+			});
+			return;
+		}
 		if (type === "max-daily-notes" && selected.range.maxDailyMemoCount > 0) {
 			this.openRecordStatsSearchFilter({ type, dates: [...selected.range.maxDailyMemoDates] });
 			return;
@@ -2987,6 +3009,22 @@ export class KnomoView extends ItemView {
 		if (type === "max-daily-words" && selected.range.maxDailyWordCount > 0) {
 			this.openRecordStatsSearchFilter({ type, dates: [...selected.range.maxDailyWordDates] });
 		}
+	}
+
+	private openRecordStatsTagFilter(sourceEl: HTMLElement | null): void {
+		const tagKey = sourceEl?.getAttr("data-record-stats-tag-key") ?? null;
+		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
+		const tag = tagKey === null ? undefined : selected?.commonTags.find((item) => item.key === tagKey);
+		if (selected === null || tag === undefined || tag.count <= 0) {
+			return;
+		}
+		this.openRecordStatsSearchFilter({
+			type: "tag",
+			startDate: selected.startDate,
+			endDateExclusive: selected.endDateExclusive,
+			tagKey: tag.key,
+			tagLabel: tag.label,
+		});
 	}
 
 	private openRecordStatsSearchFilter(filter: RecordStatsSearchFilter): void {
@@ -5102,11 +5140,6 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const input = this.memoMarkdownRenderer.getTaskCheckboxInput(event.target);
-		if (input !== null && input.closest(".knomo-record-stats-memo-preview") !== null) {
-			event.preventDefault();
-			event.stopPropagation();
-			return;
-		}
 		if (input !== null) {
 			event.stopPropagation();
 		}
@@ -5128,13 +5161,6 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		event.stopPropagation();
-		if (input.closest(".knomo-record-stats-memo-preview") !== null) {
-			const memo = this.findMemoForTaskCheckbox(input);
-			if (memo !== null) {
-				this.memoMarkdownRenderer.syncTaskCheckboxDom(input, memo);
-			}
-			return;
-		}
 		const memo = this.findMemoForTaskCheckbox(input);
 		const taskIndex = this.memoMarkdownRenderer.getTaskCheckboxIndex(input);
 		if (memo === null || taskIndex === null) {

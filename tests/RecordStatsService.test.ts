@@ -14,9 +14,16 @@ import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
 test("prepares overview and selects weekly statistics with natural-day boundaries", async () => {
 	const service = new RecordStatsService();
 	const memos = [
-		makeMemo("monday-early", "2026-06-08T00:00:00.000+08:00", "中文 one 1"),
+		makeMemo("monday-early", "2026-06-08T00:00:00.000+08:00", "中文 one 1", {
+			tags: ["work"],
+			images: [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }],
+		}),
 		makeMemo("monday-late", "2026-06-08T23:59:59.999+08:00", "two words"),
-		makeMemo("sunday", "2026-06-14T23:30:00.000+08:00", "三", { sourceMemoId: "source" }),
+		makeMemo("sunday", "2026-06-14T23:30:00.000+08:00", "三", {
+			sourceMemoId: "source",
+			tags: ["journal"],
+			images: [{ path: "document.pdf", altText: "", syntax: "obsidian_embed" }],
+		}),
 		makeMemo("next-week", "2026-06-15T00:00:00.000+08:00", "next"),
 		makeMemo("deleted", "2020-06-09T12:00:00.000+08:00", "deleted", { status: "deleted" }),
 	];
@@ -36,6 +43,9 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 		wordCount: 7,
 		recordDayCount: 2,
 		referenceMemoCount: 1,
+		taggedMemoCount: 2,
+		untaggedMemoCount: 1,
+		imageMemoCount: 1,
 		maxDailyMemoCount: 2,
 		maxDailyWordCount: 6,
 		maxDailyMemoDates: ["2026-06-08"],
@@ -44,8 +54,6 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	assert.deepEqual(selected?.trend.map((point) => point.count), [2, 0, 0, 0, 0, 0, 1]);
 	assert.equal(selected?.activeHours[0].count, 1);
 	assert.equal(selected?.activeHours[23].count, 2);
-	assert.equal(selected?.earliestMemo?.id, "monday-early");
-	assert.equal(selected?.latestMemo?.id, "sunday");
 	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
 		type: "day",
 		date: "2026-06-08",
@@ -61,6 +69,21 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 		endDateExclusive: selected?.endDateExclusive ?? "",
 	})).length, selected?.range.referenceMemoCount);
 	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		type: "with-tag",
+		startDate: selected?.startDate ?? "",
+		endDateExclusive: selected?.endDateExclusive ?? "",
+	})).length, selected?.range.taggedMemoCount);
+	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		type: "no-tag",
+		startDate: selected?.startDate ?? "",
+		endDateExclusive: selected?.endDateExclusive ?? "",
+	})).length, selected?.range.untaggedMemoCount);
+	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		type: "with-image",
+		startDate: selected?.startDate ?? "",
+		endDateExclusive: selected?.endDateExclusive ?? "",
+	})).length, selected?.range.imageMemoCount);
+	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
 		type: "hour",
 		startDate: selected?.startDate ?? "",
 		endDateExclusive: selected?.endDateExclusive ?? "",
@@ -68,7 +91,7 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	})).length, selected?.activeHours[23].count);
 });
 
-test("uses createdAt wall-clock date and hour while sorting by the real instant", async () => {
+test("uses createdAt wall-clock date and hour", async () => {
 	const service = new RecordStatsService();
 	const memos = [
 		makeMemo("later-instant", "2026-06-08T01:00:00.000+08:00", "a"),
@@ -80,8 +103,25 @@ test("uses createdAt wall-clock date and hour while sorting by the real instant"
 	assert.equal(selected?.range.memoCount, 2);
 	assert.equal(selected?.activeHours[0].count, 1);
 	assert.equal(selected?.activeHours[1].count, 1);
-	assert.equal(selected?.earliestMemo?.id, "earlier-instant");
-	assert.equal(selected?.latestMemo?.id, "later-instant");
+});
+
+test("counts historical references recoverable from a Knomo memoId alias", async () => {
+	const service = new RecordStatsService();
+	const historicalReference = makeMemo(
+		"historical-reference",
+		"2026-06-08T09:00:00.000+08:00",
+		"内容 [[Daily/2026-06-07#^abc123|20260607-080000-01]]",
+	);
+
+	await service.prepare([historicalReference], async () => {});
+	const selected = service.select("week", new Date(2026, 5, 8));
+
+	assert.equal(selected?.range.referenceMemoCount, 1);
+	assert.equal(matchesRecordStatsSearchFilter(historicalReference, {
+		type: "references",
+		startDate: "2026-06-08",
+		endDateExclusive: "2026-06-15",
+	}), true);
 });
 
 test("builds month and year trends including leap day", async () => {
@@ -112,6 +152,47 @@ test("retains every tied maximum date", async () => {
 	const selected = service.select("week", new Date(2026, 5, 8));
 	assert.deepEqual(selected?.range.maxDailyMemoDates, ["2026-06-08", "2026-06-09"]);
 	assert.deepEqual(selected?.range.maxDailyWordDates, ["2026-06-08", "2026-06-09"]);
+});
+
+test("returns the top five normalized tags by memo count", async () => {
+	const service = new RecordStatsService();
+	const memos = [
+		makeMemo("a", "2026-06-08T10:00:00+08:00", "one", { tags: ["#Work", "work", "alpha"] }),
+		makeMemo("b", "2026-06-09T10:00:00+08:00", "two", { tags: ["WORK", "beta"] }),
+		makeMemo("c", "2026-06-10T10:00:00+08:00", "three", { tags: ["gamma"] }),
+		makeMemo("d", "2026-06-11T10:00:00+08:00", "four", { tags: ["delta"] }),
+		makeMemo("e", "2026-06-12T10:00:00+08:00", "five", { tags: ["epsilon"] }),
+		makeMemo("f", "2026-06-13T10:00:00+08:00", "six", { tags: ["zeta"] }),
+		makeMemo("outside", "2026-06-15T10:00:00+08:00", "outside", { tags: ["alpha"] }),
+	];
+
+	await service.prepare(memos, async () => {});
+	const selected = service.select("week", new Date(2026, 5, 10));
+	assert.deepEqual(selected?.commonTags, [
+		{ key: "work", label: "WORK", count: 2 },
+		{ key: "alpha", label: "alpha", count: 1 },
+		{ key: "beta", label: "beta", count: 1 },
+		{ key: "delta", label: "delta", count: 1 },
+		{ key: "epsilon", label: "epsilon", count: 1 },
+	]);
+	for (const tag of selected?.commonTags ?? []) {
+		assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+			type: "tag",
+			startDate: selected?.startDate ?? "",
+			endDateExclusive: selected?.endDateExclusive ?? "",
+			tagKey: tag.key,
+			tagLabel: tag.label,
+		})).length, tag.count);
+	}
+});
+
+test("returns an empty common-tag list when the selected range has no tags", async () => {
+	const service = new RecordStatsService();
+	await service.prepare([
+		makeMemo("plain", "2026-06-08T10:00:00+08:00", "plain"),
+	], async () => {});
+
+	assert.deepEqual(service.select("week", new Date(2026, 5, 8))?.commonTags, []);
 });
 
 test("reports empty and error states without exposing partial statistics", async () => {
@@ -165,7 +246,12 @@ function makeMemo(
 	id: string,
 	createdAt: string,
 	contentSnapshot: string,
-	overrides: { status?: MemoRecord["status"]; sourceMemoId?: string | null } = {},
+	overrides: {
+		status?: MemoRecord["status"];
+		sourceMemoId?: string | null;
+		tags?: MemoRecord["tags"];
+		images?: MemoRecord["images"];
+	} = {},
 ): MemoRecord {
 	return {
 		id,
@@ -177,9 +263,9 @@ function makeMemo(
 		syncStatus: "synced",
 		source: "plugin_input",
 		version: 1,
-		tags: [],
+		tags: overrides.tags ?? [],
 		links: [],
-		images: [],
+		images: overrides.images ?? [],
 		references: overrides.sourceMemoId === undefined ? [] : [{ memoId: overrides.sourceMemoId ?? "source", referenceText: "[[Daily#^abc]]" }],
 		sourceMemoId: overrides.sourceMemoId ?? null,
 		issue: null,

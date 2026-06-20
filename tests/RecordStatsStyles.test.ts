@@ -34,9 +34,35 @@ test("record statistics loading skeleton reserves the ready page structure", asy
 
 	assert.match(source, /knomo-record-stats-skeleton-controls/);
 	assert.match(source, /knomo-record-stats-skeleton-navigation/);
-	assert.match(source, /knomo-record-stats-skeleton-preview-grid/);
 	assert.equal(source.match(/knomo-record-stats-skeleton-chart/g)?.length, 2);
 	assert.match(css, /\.knomo-plugin \.knomo-record-stats-loading\s*\{[^}]*position:\s*absolute;/s);
 	assert.match(css, /\.knomo-plugin \.knomo-record-stats-skeleton-item\s*\{[^}]*height:\s*76px;/s);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-skeleton-preview-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+});
+
+test("record statistics renders all-note navigation and feature metrics in the requested order", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoRecordStatsPage.ts"), "utf8");
+
+	assert.match(source, /recordStats\.overview\.notes[\s\S]*action:\s*"reset-list-state"/);
+	assert.match(source, /renderSkeletonGrid\(metrics, 9\)/);
+	assert.match(
+		source,
+		/recordStats\.metric\.recordDays[\s\S]*recordStats\.metric\.withTag[\s\S]*recordStats\.metric\.noTag[\s\S]*recordStats\.metric\.withImage[\s\S]*recordStats\.metric\.references/,
+	);
+});
+
+test("record statistics renders accessible common-tag bars after active hours with an empty state", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoRecordStatsPage.ts"), "utf8");
+
+	assert.match(source, /renderActiveHours\([\s\S]*renderCommonTags\(/);
+	assert.match(source, /recordStats\.commonTags\.empty/);
+	assert.match(source, /data-record-stats-tag-key/);
+	assert.match(source, /--knomo-record-stats-tag-ratio/);
+	assert.match(source, /knomo-record-stats-skeleton-tag-chart/);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-button\s*\{[^}]*min-height:\s*var\(--knomo-touch-target\);/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-button:focus-visible\s*\{[^}]*outline:/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-track\s*\{[^}]*height:\s*18px;/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-track\s*\{[^}]*border-radius:\s*var\(--radius-xl\);/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-bar\s*\{[^}]*width:\s*calc\(var\(--knomo-record-stats-tag-ratio, 0\) \* 100%\);/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-bar\s*\{[^}]*border-radius:\s*inherit;/s);
 });

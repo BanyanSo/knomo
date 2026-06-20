@@ -1,6 +1,9 @@
 import type { MemoRecord } from "../types/memo";
+import { isSupportedMemoImage } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import { hasMemoReference } from "../utils/references";
+import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
+import type { TagDisplaySource } from "../utils/tags";
 
 export type RecordStatsView = "week" | "month" | "year";
 export type RecordStatsLoadState = "idle" | "loading" | "ready" | "empty" | "error";
@@ -16,6 +19,9 @@ export interface RecordStatsRange {
 	wordCount: number;
 	recordDayCount: number;
 	referenceMemoCount: number;
+	taggedMemoCount: number;
+	untaggedMemoCount: number;
+	imageMemoCount: number;
 	maxDailyMemoCount: number;
 	maxDailyWordCount: number;
 	maxDailyMemoDates: string[];
@@ -33,6 +39,12 @@ export interface RecordStatsHourPoint {
 	count: number;
 }
 
+export interface RecordStatsTagPoint {
+	key: string;
+	label: string;
+	count: number;
+}
+
 export interface SelectedRecordStats {
 	startDate: string;
 	endDateExclusive: string;
@@ -40,8 +52,7 @@ export interface SelectedRecordStats {
 	range: RecordStatsRange;
 	trend: RecordStatsTrendPoint[];
 	activeHours: RecordStatsHourPoint[];
-	earliestMemo: MemoRecord | null;
-	latestMemo: MemoRecord | null;
+	commonTags: RecordStatsTagPoint[];
 }
 
 export interface RecordStatsSnapshot {
@@ -53,17 +64,18 @@ interface DailyRecordStats {
 	memoCount: number;
 	wordCount: number;
 	referenceMemoCount: number;
+	taggedMemoCount: number;
+	untaggedMemoCount: number;
+	imageMemoCount: number;
 	hourCounts: number[];
-	earliestMemo: MemoRecord;
-	earliestTimestamp: number;
-	latestMemo: MemoRecord;
-	latestTimestamp: number;
+	tagMemoCounts: Map<string, number>;
 }
 
 interface PreparedRecordStats {
 	overview: RecordStatsOverview;
 	daily: Map<string, DailyRecordStats>;
 	earliestYear: number | null;
+	tagDisplayNames: Map<string, string>;
 }
 
 interface LocalMemoTimestamp {
@@ -71,7 +83,6 @@ interface LocalMemoTimestamp {
 	month: number;
 	day: number;
 	hour: number;
-	timestamp: number;
 }
 
 const PREPARE_BATCH_SIZE = 250;
@@ -161,6 +172,8 @@ async function prepareRecordStats(
 	let memoCount = 0;
 	let wordCount = 0;
 	let earliestYear: number | null = null;
+	const tagDisplaySources: TagDisplaySource[] = [];
+	let tagDisplayOrder = 0;
 
 	for (let index = 0; index < memos.length; index += 1) {
 		if (index > 0 && index % PREPARE_BATCH_SIZE === 0) {
@@ -178,35 +191,50 @@ async function prepareRecordStats(
 			throw new Error(`Invalid memo createdAt: ${memo.id}`);
 		}
 		const memoWordCount = getMemoContentStats(memo).wordCount;
+		const isTagged = memo.tags.length > 0;
+		const hasImage = memo.images.some(isSupportedMemoImage);
+		const memoTagDisplays = new Map<string, string>();
+		for (const tag of memo.tags) {
+			const key = normalizeTagKey(tag);
+			const label = normalizeTagDisplay(tag);
+			if (key.length > 0 && label.length > 0 && !memoTagDisplays.has(key)) {
+				memoTagDisplays.set(key, label);
+			}
+		}
+		const updatedTimestamp = Date.parse(memo.updatedAt);
+		const tagModifiedTime = Number.isFinite(updatedTimestamp) ? updatedTimestamp : Date.parse(memo.createdAt);
+		for (const label of memoTagDisplays.values()) {
+			tagDisplaySources.push({ tag: label, modifiedTime: tagModifiedTime, order: tagDisplayOrder });
+			tagDisplayOrder += 1;
+		}
 		earliestYear = earliestYear === null ? localTimestamp.year : Math.min(earliestYear, localTimestamp.year);
 		const dayKey = formatDateKey(localTimestamp.year, localTimestamp.month, localTimestamp.day);
-		const current = daily.get(dayKey);
+		let current = daily.get(dayKey);
 		if (current === undefined) {
 			const hourCounts = Array.from({ length: 24 }, () => 0);
 			hourCounts[localTimestamp.hour] = 1;
-			daily.set(dayKey, {
+			current = {
 				memoCount: 1,
 				wordCount: memoWordCount,
 				referenceMemoCount: hasMemoReference(memo) ? 1 : 0,
+				taggedMemoCount: isTagged ? 1 : 0,
+				untaggedMemoCount: isTagged ? 0 : 1,
+				imageMemoCount: hasImage ? 1 : 0,
 				hourCounts,
-				earliestMemo: memo,
-				earliestTimestamp: localTimestamp.timestamp,
-				latestMemo: memo,
-				latestTimestamp: localTimestamp.timestamp,
-			});
+				tagMemoCounts: new Map<string, number>(),
+			};
+			daily.set(dayKey, current);
 		} else {
 			current.memoCount += 1;
 			current.wordCount += memoWordCount;
 			current.referenceMemoCount += hasMemoReference(memo) ? 1 : 0;
+			current.taggedMemoCount += isTagged ? 1 : 0;
+			current.untaggedMemoCount += isTagged ? 0 : 1;
+			current.imageMemoCount += hasImage ? 1 : 0;
 			current.hourCounts[localTimestamp.hour] += 1;
-			if (compareMemoTime(memo, localTimestamp.timestamp, current.earliestMemo, current.earliestTimestamp) < 0) {
-				current.earliestMemo = memo;
-				current.earliestTimestamp = localTimestamp.timestamp;
-			}
-			if (compareMemoTime(memo, localTimestamp.timestamp, current.latestMemo, current.latestTimestamp) > 0) {
-				current.latestMemo = memo;
-				current.latestTimestamp = localTimestamp.timestamp;
-			}
+		}
+		for (const key of memoTagDisplays.keys()) {
+			current.tagMemoCounts.set(key, (current.tagMemoCounts.get(key) ?? 0) + 1);
 		}
 		memoCount += 1;
 		wordCount += memoWordCount;
@@ -220,6 +248,7 @@ async function prepareRecordStats(
 		},
 		daily,
 		earliestYear,
+		tagDisplayNames: buildTagDisplayMap(tagDisplaySources),
 	};
 }
 
@@ -231,14 +260,14 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 	let wordCount = 0;
 	let recordDayCount = 0;
 	let referenceMemoCount = 0;
+	let taggedMemoCount = 0;
+	let untaggedMemoCount = 0;
+	let imageMemoCount = 0;
 	let maxDailyMemoCount = 0;
 	let maxDailyWordCount = 0;
 	let maxDailyMemoDates: string[] = [];
 	let maxDailyWordDates: string[] = [];
-	let earliestMemo: MemoRecord | null = null;
-	let earliestTimestamp = Number.POSITIVE_INFINITY;
-	let latestMemo: MemoRecord | null = null;
-	let latestTimestamp = Number.NEGATIVE_INFINITY;
+	const tagMemoCounts = new Map<string, number>();
 
 	for (const dayKey of dayKeys) {
 		const day = prepared.daily.get(dayKey);
@@ -249,8 +278,14 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 		wordCount += day.wordCount;
 		recordDayCount += 1;
 		referenceMemoCount += day.referenceMemoCount;
+		taggedMemoCount += day.taggedMemoCount;
+		untaggedMemoCount += day.untaggedMemoCount;
+		imageMemoCount += day.imageMemoCount;
 		for (let hour = 0; hour < hourCounts.length; hour += 1) {
 			hourCounts[hour] += day.hourCounts[hour];
+		}
+		for (const [key, count] of day.tagMemoCounts) {
+			tagMemoCounts.set(key, (tagMemoCounts.get(key) ?? 0) + count);
 		}
 		if (day.memoCount > maxDailyMemoCount) {
 			maxDailyMemoCount = day.memoCount;
@@ -264,22 +299,6 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 		} else if (day.wordCount === maxDailyWordCount) {
 			maxDailyWordDates.push(dayKey);
 		}
-		const dayEarliestTimestamp = parseMemoInstant(day.earliestMemo.createdAt);
-		if (
-			earliestMemo === null ||
-			compareMemoTime(day.earliestMemo, dayEarliestTimestamp, earliestMemo, earliestTimestamp) < 0
-		) {
-			earliestMemo = day.earliestMemo;
-			earliestTimestamp = dayEarliestTimestamp;
-		}
-		const dayLatestTimestamp = parseMemoInstant(day.latestMemo.createdAt);
-		if (
-			latestMemo === null ||
-			compareMemoTime(day.latestMemo, dayLatestTimestamp, latestMemo, latestTimestamp) > 0
-		) {
-			latestMemo = day.latestMemo;
-			latestTimestamp = dayLatestTimestamp;
-		}
 	}
 
 	return {
@@ -291,6 +310,9 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 			wordCount,
 			recordDayCount,
 			referenceMemoCount,
+			taggedMemoCount,
+			untaggedMemoCount,
+			imageMemoCount,
 			maxDailyMemoCount,
 			maxDailyWordCount,
 			maxDailyMemoDates,
@@ -298,9 +320,18 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 		},
 		trend: buildTrend(view, range.start, dayKeys, prepared.daily),
 		activeHours: hourCounts.map((count, hour) => ({ hour, count })),
-		earliestMemo,
-		latestMemo,
+		commonTags: buildCommonTags(tagMemoCounts, prepared.tagDisplayNames),
 	};
+}
+
+function buildCommonTags(
+	tagMemoCounts: ReadonlyMap<string, number>,
+	tagDisplayNames: ReadonlyMap<string, string>,
+): RecordStatsTagPoint[] {
+	return [...tagMemoCounts.entries()]
+		.map(([key, count]) => ({ key, label: tagDisplayNames.get(key) ?? key, count }))
+		.sort((left, right) => right.count - left.count || left.key.localeCompare(right.key))
+		.slice(0, 5);
 }
 
 export function getRecordStatsRange(view: RecordStatsView, selectedDate: Date): { start: Date; endExclusive: Date } {
@@ -423,7 +454,7 @@ function parseLocalMemoTimestamp(value: string): LocalMemoTimestamp | null {
 	) {
 		return null;
 	}
-	return { year, month, day, hour, timestamp };
+	return { year, month, day, hour };
 }
 
 function parseMemoInstant(value: string): number {
@@ -439,10 +470,6 @@ function getDaysInMonth(year: number, month: number): number {
 
 function isLeapYear(year: number): boolean {
 	return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-}
-
-function compareMemoTime(left: MemoRecord, leftTimestamp: number, right: MemoRecord, rightTimestamp: number): number {
-	return leftTimestamp - rightTimestamp || left.id.localeCompare(right.id);
 }
 
 function formatDateKey(year: number, month: number, day: number): string {

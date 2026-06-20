@@ -8,6 +8,7 @@ import {
 	getMemoImages,
 	getMemoStats,
 	getRecordStatsSearchFilterKey,
+	getRecordStatsSearchFilterLabel,
 	matchesRecordStatsSearchFilter,
 	matchesScope,
 	matchesSearchDateFilter,
@@ -101,6 +102,18 @@ test("matches record statistics drill-down filters with local date and hour sema
 		createdAt: "2026-06-09T09:00:00+08:00",
 		sourceMemoId: "source",
 	});
+	const tagged = makeMemo("tagged", {
+		createdAt: "2026-06-10T09:00:00+08:00",
+		tags: ["Work"],
+	});
+	const childTagged = makeMemo("child-tagged", {
+		createdAt: "2026-06-10T10:00:00+08:00",
+		tags: ["work/project"],
+	});
+	const imaged = makeMemo("imaged", {
+		createdAt: "2026-06-11T09:00:00+08:00",
+		images: [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }],
+	});
 
 	assert.equal(matchesRecordStatsSearchFilter(morning, { type: "day", date: "2026-06-08" }), true);
 	assert.equal(matchesRecordStatsSearchFilter(late, { type: "month", month: "2026-06" }), true);
@@ -135,6 +148,36 @@ test("matches record statistics drill-down filters with local date and hour sema
 		startDate: "2026-06-01",
 		endDateExclusive: "2026-07-01",
 	}), false);
+	assert.equal(matchesRecordStatsSearchFilter(tagged, {
+		type: "with-tag",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), true);
+	assert.equal(matchesRecordStatsSearchFilter(morning, {
+		type: "no-tag",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), true);
+	assert.equal(matchesRecordStatsSearchFilter(tagged, {
+		type: "no-tag",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), false);
+	assert.equal(matchesRecordStatsSearchFilter(imaged, {
+		type: "with-image",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), true);
+	const tagFilter = {
+		type: "tag" as const,
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+		tagKey: "work",
+		tagLabel: "Work",
+	};
+	assert.equal(matchesRecordStatsSearchFilter(tagged, tagFilter), true);
+	assert.equal(matchesRecordStatsSearchFilter(childTagged, tagFilter), false);
+	assert.equal(matchesRecordStatsSearchFilter(nextMonth, tagFilter), false);
 	assert.equal(matchesRecordStatsSearchFilter(morning, {
 		type: "max-daily-notes",
 		dates: ["2026-06-08", "2026-06-09"],
@@ -145,6 +188,38 @@ test("matches record statistics drill-down filters with local date and hour sema
 	}), false);
 	assert.equal(getRecordStatsSearchFilterKey({ type: "day", date: "2026-06-08" }), "day:2026-06-08");
 	assert.equal(getRecordStatsSearchFilterKey(rangeFilter), "range:2026-06-01:2026-07-01");
+	assert.equal(getRecordStatsSearchFilterKey({
+		type: "with-tag",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), "with-tag:2026-06-01:2026-07-01");
+	assert.equal(getRecordStatsSearchFilterKey({
+		type: "no-tag",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), "no-tag:2026-06-01:2026-07-01");
+	assert.equal(getRecordStatsSearchFilterKey({
+		type: "with-image",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), "with-image:2026-06-01:2026-07-01");
+	assert.equal(getRecordStatsSearchFilterLabel({
+		type: "with-tag",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), "2026-06-01 to 2026-06-30 · With tags");
+	assert.equal(getRecordStatsSearchFilterLabel({
+		type: "no-tag",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), "2026-06-01 to 2026-06-30 · Without tags");
+	assert.equal(getRecordStatsSearchFilterLabel({
+		type: "with-image",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	}), "2026-06-01 to 2026-06-30 · With images");
+	assert.equal(getRecordStatsSearchFilterKey(tagFilter), "tag:2026-06-01:2026-07-01:work");
+	assert.equal(getRecordStatsSearchFilterLabel(tagFilter), "2026-06-01 to 2026-06-30 · #Work");
 });
 
 test("parses memo local date from createdAt, daily path, and monthly refs", () => {

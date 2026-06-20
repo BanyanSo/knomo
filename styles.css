@@ -3625,45 +3625,92 @@ body .knomo-mobile-create-fab.is-hidden {
 	text-align: center;
 }
 
-.knomo-plugin .knomo-record-stats-memo-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: var(--size-4-3);
-}
-
-.knomo-plugin .knomo-record-stats-memo-section {
+.knomo-plugin .knomo-record-stats-tag-chart {
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-4-2);
+	gap: var(--size-2-1);
+	padding: var(--size-4-2);
+	border: var(--border-width) solid var(--knomo-soft-border);
+	border-radius: var(--radius-m);
+	background: var(--knomo-surface);
+}
+
+.knomo-plugin .knomo-record-stats-tag-item {
 	min-width: 0;
 }
 
-.knomo-plugin .knomo-record-stats-memo-preview {
+.knomo-plugin .knomo-record-stats-tag-button {
+	display: grid;
+	align-items: center;
+	grid-template-columns: minmax(88px, 30%) minmax(0, 1fr) auto;
+	gap: var(--size-4-2);
+	width: 100%;
+	min-width: 0;
+	min-height: var(--knomo-touch-target);
 	margin: 0;
-	padding: var(--size-4-3);
+	padding: var(--size-2-2) var(--size-4-2);
+	border: 0;
+	border-radius: var(--radius-s);
+	color: var(--text-normal);
+	background: transparent;
+	box-shadow: none;
+	font: inherit;
+	text-align: start;
+	appearance: none;
+	cursor: pointer;
 }
 
-.knomo-plugin .knomo-record-stats-memo-preview .knomo-card-content {
-	max-height: 180px;
+.knomo-plugin .knomo-record-stats-tag-button:hover {
+	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-record-stats-tag-button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
+}
+
+.knomo-plugin .knomo-record-stats-tag-label {
+	min-width: 0;
+	overflow: hidden;
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.knomo-plugin .knomo-record-stats-tag-track {
+	height: 18px;
+	border-radius: var(--radius-xl);
+	background: var(--background-modifier-hover);
 	overflow: hidden;
 }
 
-.knomo-plugin .knomo-record-stats-memo-preview .knomo-card-images--single .knomo-card-image-button,
-.knomo-plugin .knomo-record-stats-memo-preview .knomo-card-images--single .knomo-card-image-button img {
-	max-height: 128px;
+.knomo-plugin .knomo-record-stats-tag-bar {
+	width: calc(var(--knomo-record-stats-tag-ratio, 0) * 100%);
+	height: 100%;
+	border-radius: inherit;
+	background: var(--knomo-accent);
 }
 
-.knomo-plugin .knomo-record-stats-memo-preview .task-list-item-checkbox,
-.knomo-plugin .knomo-record-stats-memo-preview .knomo-task-checkbox {
-	cursor: default;
+.knomo-plugin .knomo-record-stats-tag-count {
+	min-width: 2ch;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+	text-align: end;
 }
 
-.knomo-plugin .knomo-record-stats-memo-empty {
-	padding: var(--size-4-4);
+.knomo-plugin .knomo-record-stats-tag-empty {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: calc(var(--knomo-touch-target) + var(--knomo-touch-target));
+	padding: var(--size-4-3);
 	border: var(--border-width) solid var(--knomo-soft-border);
-	border-radius: 8px;
+	border-radius: var(--radius-m);
 	color: var(--text-faint);
 	background: var(--knomo-surface);
+	font-size: var(--font-ui-small);
 	text-align: center;
 }
 
@@ -3743,8 +3790,7 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-plugin .knomo-record-stats-skeleton-chart,
 .knomo-plugin .knomo-record-stats-skeleton-controls,
 .knomo-plugin .knomo-record-stats-skeleton-navigation,
-.knomo-plugin .knomo-record-stats-skeleton-subtitle,
-.knomo-plugin .knomo-record-stats-skeleton-preview {
+.knomo-plugin .knomo-record-stats-skeleton-subtitle {
 	border-radius: 8px;
 	background: var(--background-modifier-hover);
 }
@@ -3772,26 +3818,25 @@ body .knomo-mobile-create-fab.is-hidden {
 	height: var(--font-ui-small);
 }
 
-.knomo-plugin .knomo-record-stats-skeleton-preview-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: var(--size-4-3);
+.knomo-plugin .knomo-record-stats-skeleton-tag-chart {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	padding: var(--size-4-3);
+	border-radius: var(--radius-m);
+	background: var(--knomo-surface);
 }
 
-.knomo-plugin .knomo-record-stats-skeleton-preview {
-	height: 160px;
+.knomo-plugin .knomo-record-stats-skeleton-tag-row {
+	width: 100%;
+	height: var(--size-4-3);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
 }
 
 .knomo-plugin.is-layout-mobile .knomo-record-stats-page,
 .knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-page {
 	gap: var(--size-4-4);
-}
-
-.knomo-plugin.is-layout-mobile .knomo-record-stats-memo-grid,
-.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-memo-grid,
-.knomo-plugin.is-layout-mobile .knomo-record-stats-skeleton-preview-grid,
-.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-skeleton-preview-grid {
-	grid-template-columns: minmax(0, 1fr);
 }
 
 .knomo-plugin.is-layout-mobile .knomo-record-stats-chart {
@@ -3809,6 +3854,11 @@ body .knomo-mobile-create-fab.is-hidden {
 
 .knomo-plugin.is-layout-mobile .knomo-record-stats-bar-track {
 	height: 113px;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-record-stats-tag-button,
+.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-tag-button {
+	grid-template-columns: minmax(72px, 36%) minmax(0, 1fr) auto;
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title:not([role="button"]) {

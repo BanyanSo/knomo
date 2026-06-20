@@ -30,6 +30,10 @@ export type RecordStatsSearchFilter =
 	| { type: "day"; date: string }
 	| { type: "month"; month: string }
 	| { type: "range"; startDate: string; endDateExclusive: string }
+	| { type: "with-tag"; startDate: string; endDateExclusive: string }
+	| { type: "no-tag"; startDate: string; endDateExclusive: string }
+	| { type: "with-image"; startDate: string; endDateExclusive: string }
+	| { type: "tag"; startDate: string; endDateExclusive: string; tagKey: string; tagLabel: string }
 	| { type: "references"; startDate: string; endDateExclusive: string }
 	| { type: "max-daily-notes"; dates: string[] }
 	| { type: "max-daily-words"; dates: string[] }
@@ -139,6 +143,9 @@ export function formatRegularFilterSummary(conditions: RegularFilterCondition[],
 		if (condition.type === "search") {
 			return t("filterSummary.search", { query: condition.query, count });
 		}
+		if (condition.type === "record-stats") {
+			return t("filterSummary.recordStats", { label: condition.text, count });
+		}
 		return t("filterSummary.label", { label: condition.text, count });
 	}
 	const conditionText = conditions.map((condition) => condition.text).join(t("filterSummary.separator"));
@@ -195,7 +202,7 @@ export function formatMobileSearchSummary(
 	if (dateFilter !== null) {
 		return t("mobileSearchSummary.date", { label: getSearchDateLabel(dateFilter), count });
 	}
-	return recordStatsFilter === null ? null : t("mobileSearchSummary.date", {
+	return recordStatsFilter === null ? null : t("mobileSearchSummary.recordStats", {
 		label: getRecordStatsSearchFilterLabel(recordStatsFilter),
 		count,
 	});
@@ -243,6 +250,24 @@ export function getRecordStatsSearchFilterLabel(filter: RecordStatsSearchFilter)
 			endDate: getInclusiveEndDate(filter.endDateExclusive),
 		});
 	}
+	if (filter.type === "with-tag" || filter.type === "no-tag" || filter.type === "with-image") {
+		const key = filter.type === "with-tag"
+			? "recordStats.filter.withTag"
+			: filter.type === "no-tag"
+				? "recordStats.filter.noTag"
+				: "recordStats.filter.withImage";
+		return t(key, {
+			startDate: filter.startDate,
+			endDate: getInclusiveEndDate(filter.endDateExclusive),
+		});
+	}
+	if (filter.type === "tag") {
+		return t("recordStats.filter.tag", {
+			startDate: filter.startDate,
+			endDate: getInclusiveEndDate(filter.endDateExclusive),
+			tag: filter.tagLabel,
+		});
+	}
 	if (filter.type === "references") {
 		return t("recordStats.filter.references", {
 			startDate: filter.startDate,
@@ -269,6 +294,10 @@ export function getRecordStatsSearchFilterKey(filter: RecordStatsSearchFilter | 
 	if (filter.type === "day") return `day:${filter.date}`;
 	if (filter.type === "month") return `month:${filter.month}`;
 	if (filter.type === "range") return `range:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "with-tag") return `with-tag:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "no-tag") return `no-tag:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "with-image") return `with-image:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "tag") return `tag:${filter.startDate}:${filter.endDateExclusive}:${filter.tagKey}`;
 	if (filter.type === "references") return `references:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "max-daily-notes") return `max-daily-notes:${filter.dates.join(",")}`;
 	if (filter.type === "max-daily-words") return `max-daily-words:${filter.dates.join(",")}`;
@@ -294,6 +323,18 @@ export function matchesRecordStatsSearchFilter(memo: MemoRecord, filter: RecordS
 	}
 	if (filter.type === "range") {
 		return true;
+	}
+	if (filter.type === "with-tag") {
+		return memo.tags.length > 0;
+	}
+	if (filter.type === "no-tag") {
+		return memo.tags.length === 0;
+	}
+	if (filter.type === "with-image") {
+		return getMemoImages(memo).length > 0;
+	}
+	if (filter.type === "tag") {
+		return memo.tags.some((tag) => normalizeTagKey(tag) === filter.tagKey);
 	}
 	if (filter.type === "references") {
 		return hasMemoReference(memo);

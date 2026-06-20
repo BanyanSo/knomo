@@ -6,6 +6,7 @@ import type { MemoRecord } from "../types/memo";
 import { KnomoError } from "../types/serviceError";
 import { formatMonthPeriod } from "../utils/date";
 import { isRecord } from "../utils/object";
+import { recoverMemoReferenceMetadata } from "../utils/references";
 import {
 	getIndexFolderPath as getConfiguredIndexFolderPath,
 	getSystemFolderPath,
@@ -30,7 +31,7 @@ export class MemoIndexStore {
 	async loadPeriod(monthlyMemoFolder: string, period: string): Promise<MemoIndex> {
 		const file = await this.getOrCreateIndexFile(monthlyMemoFolder, period);
 		const data = await this.app.vault.cachedRead(file);
-		return parseIndex(data, period);
+		return this.recoverIndexReferences(parseIndex(data, period));
 	}
 
 	async loadExistingPeriod(monthlyMemoFolder: string, period: string): Promise<MemoIndex | null> {
@@ -42,7 +43,7 @@ export class MemoIndexStore {
 			throw new Error(`Memo-index path is not a file: ${file.path}`);
 		}
 		const data = await this.app.vault.cachedRead(file);
-		return parseIndex(data, period);
+		return this.recoverIndexReferences(parseIndex(data, period));
 	}
 
 	async loadAll(monthlyMemoFolder: string): Promise<MemoRecord[]> {
@@ -57,7 +58,7 @@ export class MemoIndexStore {
 			const index = await this.loadPeriod(monthlyMemoFolder, period);
 			memos.push(...Object.values(index.memos));
 		}
-		return memos.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+		return this.recoverReferences(memos).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 	}
 
 	async findMemoById(monthlyMemoFolder: string, memoId: string): Promise<MemoRecord | null> {
@@ -77,7 +78,7 @@ export class MemoIndexStore {
 	): Promise<MemoIndex> {
 		const file = await this.getOrCreateIndexFile(monthlyMemoFolder, period);
 		const nextData = await this.app.vault.process(file, (data) => {
-			const index = parseIndex(data, period);
+			const index = this.recoverIndexReferences(parseIndex(data, period));
 			const nextIndex = mergeIndex(index);
 			return `${JSON.stringify(nextIndex, null, "\t")}\n`;
 		});
@@ -352,6 +353,24 @@ export class MemoIndexStore {
 		return this.indexFolderPathOverride === undefined
 			? getConfiguredIndexFolderPath(monthlyMemoFolder)
 			: normalizePath(this.indexFolderPathOverride);
+	}
+
+	private recoverIndexReferences(index: MemoIndex): MemoIndex {
+		const memos = this.recoverReferences(Object.values(index.memos));
+		if (memos.every((memo) => index.memos[memo.id] === memo)) {
+			return index;
+		}
+		return {
+			...index,
+			memos: Object.fromEntries(memos.map((memo) => [memo.id, memo])),
+		};
+	}
+
+	private recoverReferences(memos: readonly MemoRecord[]): MemoRecord[] {
+		return recoverMemoReferenceMetadata(memos, (linkPath, sourcePath) => {
+			const destination = this.app.metadataCache?.getFirstLinkpathDest(linkPath, sourcePath) ?? null;
+			return destination?.path ?? null;
+		});
 	}
 }
 

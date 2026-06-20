@@ -10,7 +10,7 @@ import { hashText } from "../utils/hash";
 import { buildDailyRef } from "../utils/memoRefs";
 import { isMarkdownHeadingLine, splitMarkdownLines } from "../utils/markdown";
 import { getIndexFilePath } from "../utils/path";
-import { buildMemoReferences } from "../utils/references";
+import { buildMemoReferences, recoverMemoReferenceMetadata } from "../utils/references";
 import { DailyNoteService } from "./DailyNoteService";
 import type { DailyNotesConfig } from "./DailyNoteService";
 import { MarkdownBlockService } from "./MarkdownBlockService";
@@ -183,7 +183,15 @@ export class MemoScanService {
 						result.skipped += 1;
 						continue;
 					}
-					const savedMemo = await this.importLegacyCandidate(settings, candidate, candidate.block, createMemoId, opId, result);
+					const savedMemo = await this.importLegacyCandidate(
+						settings,
+						candidate,
+						candidate.block,
+						existingMemos,
+						createMemoId,
+						opId,
+						result,
+					);
 					existingMemos.push(savedMemo);
 					if (candidate.heading !== null) {
 						importedHeadings.add(candidate.heading);
@@ -493,7 +501,7 @@ export class MemoScanService {
 
 		const createdAtText = formatLocalIsoString(createdAt);
 		const monthlyRef = await this.resolveMonthlyRef(settings, createdAt, block.rawBlock, syncMonthly);
-		const memo: MemoRecord = {
+		const memo = this.recoverScannedMemoReference({
 			id: createMemoId(createdAt),
 			createdAt: createdAtText,
 			updatedAt: createdAtText,
@@ -513,7 +521,7 @@ export class MemoScanService {
 			lastMarkdownSyncSource: source,
 			dailyRef: buildDailyRef(file.path, headingBlock.heading, block),
 			monthlyRef,
-		};
+		}, existingMemos);
 		const monthlySync = syncMonthly
 			? await this.syncMonthlyBlock(settings, memo, block.rawBlock, opId, result, file.path)
 			: { monthlyRef, syncStatus: "synced" as const, issue: null };
@@ -546,6 +554,14 @@ export class MemoScanService {
 	): Promise<void> {
 		const block = headingBlock.block;
 		const nextDailyRef = buildDailyRef(file.path, headingBlock.heading, block);
+		const recoveredMemo = this.recoverScannedMemoReference({
+			...memo,
+			contentSnapshot: block.content,
+			dailyRef: nextDailyRef,
+		}, existingMemos);
+		const referenceMetadataChanged = recoveredMemo.sourceMemoId !== memo.sourceMemoId
+			|| recoveredMemo.references[0]?.memoId !== memo.references[0]?.memoId
+			|| recoveredMemo.references[0]?.referenceText !== memo.references[0]?.referenceText;
 		if (
 			memo.contentHash === block.contentHash &&
 			memo.dailyRef.path === nextDailyRef.path &&
@@ -553,14 +569,15 @@ export class MemoScanService {
 			memo.dailyRef.lastKnownHash === nextDailyRef.lastKnownHash &&
 			memo.dailyRef.lineNumberHint === nextDailyRef.lineNumberHint &&
 			memo.syncStatus === "synced" &&
-			memo.issue === null
+			memo.issue === null &&
+			!referenceMetadataChanged
 		) {
 			result.skipped += 1;
 			return;
 		}
 
 		const monthlyMemo = {
-			...memo,
+			...recoveredMemo,
 			contentSnapshot: block.content,
 			contentHash: block.contentHash,
 			tags: block.tags,
@@ -572,14 +589,18 @@ export class MemoScanService {
 			: { monthlyRef: memo.monthlyRef, syncStatus: "synced" as const, issue: null };
 		const now = new Date().toISOString();
 		const updatedMemo = await memoIndexStore.upsertMemo(settings.monthlyMemoFolder, {
-			...memo,
+			...recoveredMemo,
 			updatedAt: now,
 			contentSnapshot: block.content,
 			contentHash: block.contentHash,
 			tags: block.tags,
 			links: block.links,
 			images: block.images,
-			references: buildMemoReferences(block.content, memo.sourceMemoId, memo.references[0]?.referenceText ?? null),
+			references: buildMemoReferences(
+				block.content,
+				recoveredMemo.sourceMemoId,
+				recoveredMemo.references[0]?.referenceText ?? null,
+			),
 			syncStatus: monthlySync.syncStatus,
 			issue: monthlySync.issue,
 			lastMarkdownSyncAt: now,
@@ -790,13 +811,14 @@ export class MemoScanService {
 		settings: KnomoSettings,
 		candidate: LegacyMemoCandidate,
 		block: ParsedMemoBlock,
+		existingMemos: MemoRecord[],
 		createMemoId: (date: Date) => string,
 		opId: string,
 		result: ScanDailyMemosResult,
 	): Promise<MemoRecord> {
 		const now = new Date().toISOString();
 		const createdAtText = formatLocalIsoString(candidate.createdAt);
-		const memo: MemoRecord = {
+		const memo = this.recoverScannedMemoReference({
 			id: createMemoId(candidate.createdAt),
 			createdAt: createdAtText,
 			updatedAt: createdAtText,
@@ -823,7 +845,7 @@ export class MemoScanService {
 				lineNumberHint: null,
 				lastSyncedAt: null,
 			},
-		};
+		}, existingMemos);
 		const monthlySync = await this.syncMonthlyBlock(settings, memo, block.rawBlock, opId, result, candidate.path);
 		const savedMemo = await this.memoIndexStore.addMemo(
 			settings.monthlyMemoFolder,
@@ -1014,15 +1036,25 @@ export class MemoScanService {
 	}
 
 	private filterDailyFiles(files: TFile[], config: DailyNotesConfig, since?: Date): TFile[] {
+		const sortedFiles = [...files].sort((left, right) => left.path.localeCompare(right.path));
 		if (since === undefined) {
-			return files;
+			return sortedFiles;
 		}
 		const start = startOfDay(since);
 		const end = addDays(startOfDay(new Date()), 1);
-		return files.filter((file) => {
+		return sortedFiles.filter((file) => {
 			const date = parseDailyNoteDateFromPath(file.path, config);
 			return date !== null && date >= start && date < end;
 		});
+	}
+
+	private recoverScannedMemoReference(memo: MemoRecord, existingMemos: readonly MemoRecord[]): MemoRecord {
+		const context = [...existingMemos.filter((item) => item.id !== memo.id), memo];
+		const recovered = recoverMemoReferenceMetadata(context, (linkPath, sourcePath) => {
+			const destination = this.app.metadataCache?.getFirstLinkpathDest(linkPath, sourcePath) ?? null;
+			return destination?.path ?? null;
+		});
+		return recovered[recovered.length - 1] ?? memo;
 	}
 
 	private markIndexSelfWrite(

@@ -9,7 +9,14 @@ import type { KnomoSettings } from "../src/types/settings";
 import { matchesDailyNotePath, parseDailyNoteDateFromPath } from "../src/utils/dailyNotes";
 import { hashMemoContent, hashText } from "../src/utils/hash";
 import { isSupportedMemoImage } from "../src/utils/markdown";
-import { buildMemoReferences, buildQuoteCreatedMemoContent, formatMemoIdAlias, stripTrailingWikiLink, withMemoIdAlias } from "../src/utils/references";
+import {
+	buildMemoReferences,
+	buildQuoteCreatedMemoContent,
+	formatMemoIdAlias,
+	recoverMemoReferenceMetadata,
+	stripTrailingWikiLink,
+	withMemoIdAlias,
+} from "../src/utils/references";
 
 const service = new MarkdownBlockService();
 
@@ -920,6 +927,59 @@ test("formats numeric memoId alias for Obsidian block links", () => {
 	);
 });
 
+test("recovers historical reference metadata from an unquoted memoId alias", () => {
+	const source = createReferenceMemo("- 08:00:00 内容 ^abc123");
+	const child = {
+		...createReferenceMemo("- 09:00:00 新内容"),
+		id: "2026051809000001",
+		contentSnapshot: [
+			"新内容 [[Daily/2026-05-18#^abc123|20260518-080000-00]]",
+			"> 上一层 [[Daily/2026-05-17#^older|20260517-070000-01]]",
+		].join("\n"),
+	};
+
+	const recovered = recoverMemoReferenceMetadata([source, child], (linkPath) => `${linkPath}.md`);
+
+	assert.equal(recovered[1].sourceMemoId, source.id);
+	assert.deepEqual(recovered[1].references, [{
+		memoId: source.id,
+		referenceText: "[[Daily/2026-05-18#^abc123|20260518-080000-00]]",
+	}]);
+});
+
+test("recovers legacy unaliased references through a unique daily block target", () => {
+	const source = {
+		...createReferenceMemo("- 08:00:00 内容 ^abc123"),
+		id: "rebuilt-source",
+	};
+	const child = {
+		...createReferenceMemo("- 09:00:00 新内容"),
+		id: "rebuilt-child",
+		contentSnapshot: "新内容 [[Daily/2026-05-18#^abc123]]",
+	};
+
+	const recovered = recoverMemoReferenceMetadata([source, child], (linkPath) => `${linkPath}.md`);
+
+	assert.equal(recovered[1].sourceMemoId, source.id);
+	assert.deepEqual(recovered[1].references, [{
+		memoId: source.id,
+		referenceText: "[[Daily/2026-05-18#^abc123]]",
+	}]);
+});
+
+test("does not infer reference metadata from an unresolved ordinary block link", () => {
+	const memo = {
+		...createReferenceMemo("- 09:00:00 普通内容"),
+		id: "ordinary-link",
+		contentSnapshot: "手动链接 [[Other#^abc123]]",
+	};
+
+	const [recovered] = recoverMemoReferenceMetadata([memo], () => null);
+
+	assert.equal(recovered.sourceMemoId, null);
+	assert.deepEqual(recovered.references, []);
+});
+
 test("creates an embed reference from an existing Obsidian blockId without mutating the file", async () => {
 	const { ReferenceService } = await loadReferenceService();
 	const { TFile } = await import("obsidian");
@@ -1490,6 +1550,75 @@ test("syncExternalDailyFile imports new blocks and tombstones missing indexed me
 	assert.equal(tombstone.deletedMonthlyBlock, "- 08:00:00 旧内容");
 	assert.equal(tombstone.issue, null);
 	assert.deepEqual(deletedMonthly, [deletedMemo.id]);
+});
+
+test("daily scan persists recovered reference metadata for historical quote blocks", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), {
+		path: "Daily/2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const source = createReferenceMemo("- 08:00:00 source ^abc123");
+	source.contentSnapshot = "source";
+	source.contentHash = hashMemoContent("source");
+	source.dailyRef.lineNumberHint = 4;
+	source.dailyRef.lastKnownHash = hashText(source.dailyRef.lastKnownBlock);
+	const createdMemos: MemoRecord[] = [];
+	const settings = createTestSettings();
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: (path: string) => path === file.path ? file : null,
+				cachedRead: async () => [
+					"# 2026-05-18",
+					"",
+					"## Knomo",
+					"- 08:00:00 source ^abc123",
+					"- 09:00:00 child [[Daily/2026-05-18#^abc123|20260518-080000-00]]",
+				].join("\n"),
+			},
+			metadataCache: {
+				getFirstLinkpathDest: (linkPath: string) => linkPath === "Daily/2026-05-18" ? file : null,
+			},
+		} as never,
+		() => settings,
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, _memo: MemoRecord, block: string) => ({
+				file: { path: "Memos/Memos-2026-05.md" },
+				content: block,
+				ref: {
+					path: "Memos/Memos-2026-05.md",
+					dateHeading: "## 2026-05-18",
+					lastKnownBlock: block,
+					lastKnownHash: hashText(block),
+					lineNumberHint: 1,
+					lastSyncedAt: "2026-05-18T09:00:00.000+08:00",
+				},
+			}),
+		} as never,
+		{
+			loadAll: async () => [source],
+			addMemo: async (_folder: string, memo: MemoRecord) => {
+				createdMemos.push(memo);
+				return memo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	assert.equal(await orchestrator.syncExternalDailyFile(file), true);
+	assert.equal(createdMemos[0]?.sourceMemoId, source.id);
+	assert.deepEqual(createdMemos[0]?.references, [{
+		memoId: source.id,
+		referenceText: "[[Daily/2026-05-18#^abc123|20260518-080000-00]]",
+	}]);
 });
 
 test("syncRenamedDailyFile preserves memoId and updates the indexed daily path", async () => {

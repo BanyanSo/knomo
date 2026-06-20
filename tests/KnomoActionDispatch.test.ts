@@ -24,6 +24,10 @@ test("classifies known view actions", () => {
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-trend"), { type: "record-stats-filter-trend" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-hour"), { type: "record-stats-filter-hour" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-notes"), { type: "record-stats-filter-notes" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-with-tag"), { type: "record-stats-filter-with-tag" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-no-tag"), { type: "record-stats-filter-no-tag" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-with-image"), { type: "record-stats-filter-with-image" });
+	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-tag"), { type: "record-stats-filter-tag" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-references"), {
 		type: "record-stats-filter-references",
 	});

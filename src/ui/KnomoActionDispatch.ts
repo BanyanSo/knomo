@@ -18,6 +18,7 @@ export type KnomoSimpleAction =
 	| "record-stats-previous"
 	| "record-stats-next"
 	| "record-stats-retry"
+	| "retry-all-memos"
 	| "record-stats-view-week"
 	| "record-stats-view-month"
 	| "record-stats-view-year"
@@ -70,6 +71,7 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-previous" ||
 		action === "record-stats-next" ||
 		action === "record-stats-retry" ||
+		action === "retry-all-memos" ||
 		action === "record-stats-view-week" ||
 		action === "record-stats-view-month" ||
 		action === "record-stats-view-year" ||

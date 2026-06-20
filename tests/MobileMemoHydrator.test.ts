@@ -254,6 +254,47 @@ test("cancels a pending hydration run before period reads", async () => {
 	assert.equal(hydrator.getSnapshot().fastMode, false);
 });
 
+test("reports a failed period read without completing hydration", async () => {
+	const scheduler = new TestScheduler();
+	let failedCalls = 0;
+	let completedCalls = 0;
+	const hydrator = new MobileMemoHydrator({
+		isMobile: () => true,
+		isLoading: () => false,
+		canHydrateCardFlow: () => true,
+		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
+		cancelTask: (taskId) => scheduler.cancel(taskId),
+		listMemoIndexPeriods: () => ["2026-05"],
+		listMemosInPeriods: async () => {
+			throw new Error("period read failed");
+		},
+		getMemos: () => [],
+		setMemos: () => {},
+		invalidateFilteredMemos: () => {},
+		captureRenderState: makeRenderState,
+		onStarted: () => {},
+		onPeriodHydrated: () => {},
+		onCompleted: () => {
+			completedCalls += 1;
+		},
+		onFailed: () => {
+			failedCalls += 1;
+		},
+		onSidebarRequested: () => {},
+		beginScheduledHydration: () => {},
+		ensureAllMemosLoaded: () => {},
+	});
+
+	const hydration = hydrator.start(true);
+	await scheduler.runNextAndFlush();
+
+	assert.equal(await hydration, false);
+	assert.equal(failedCalls, 1);
+	assert.equal(completedCalls, 0);
+	assert.equal(hydrator.getSnapshot().allMemosLoaded, false);
+	assert.equal(hydrator.getSnapshot().loadMode, "recent");
+});
+
 function makeRenderState(): MobileMemoHydrationRenderState {
 	return {
 		renderedCardCount: 4,

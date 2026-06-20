@@ -404,8 +404,10 @@ export class KnomoView extends ItemView {
 			onPeriodHydrated: (state) => this.handleMobileMemoPeriodHydrated(state),
 			onCompleted: (state) => this.handleMobileMemoHydrationCompleted(state),
 			onFailed: () => {
-				if (this.cardFlowDeferredForAllMemos) {
-					this.renderCardFlow();
+				if (this.cardFlowDeferredForAllMemos && this.shouldDeferCardFlowForAllMemos()) {
+					this.renderAllMemosLoadErrorState();
+				} else {
+					this.cardFlowDeferredForAllMemos = false;
 				}
 				this.renderStats();
 				this.renderTags();
@@ -2835,6 +2837,13 @@ export class KnomoView extends ItemView {
 				this.renderCardFlow();
 				await this.prepareRecordStats();
 				return;
+			case "retry-all-memos":
+				if (!this.shouldDeferCardFlowForAllMemos()) {
+					return;
+				}
+				this.renderAllMemosLoadingState();
+				await this.ensureAllMemosLoaded();
+				return;
 			case "record-stats-view-week":
 				this.recordStatsView = "week";
 				this.renderCardFlow();
@@ -3427,7 +3436,32 @@ export class KnomoView extends ItemView {
 		this.cardFlowBatcher.reset();
 		this.renderedCardMemos.clear();
 		cardFlow.empty();
-		renderKnomoEmptyState(cardFlow, t("empty.loadingAllMemos"));
+		const loadingState = renderKnomoEmptyState(cardFlow, t("empty.loadingAllMemos"));
+		loadingState.setAttrs({
+			role: "status",
+			"aria-live": "polite",
+			"aria-atomic": "true",
+		});
+	}
+
+	private renderAllMemosLoadErrorState(): void {
+		const cardFlow = this.cardFlowEl;
+		this.cardFlowDeferredForAllMemos = false;
+		if (cardFlow === null) {
+			return;
+		}
+		cardFlow.empty();
+		const errorState = renderKnomoEmptyState(
+			cardFlow,
+			t("empty.allMemosLoadFailed"),
+			t("empty.allMemosLoadFailedDesc"),
+		);
+		errorState.setAttr("role", "alert");
+		errorState.createEl("button", {
+			cls: "knomo-inline-button knomo-all-memos-retry",
+			text: t("empty.allMemosRetry"),
+			attr: { type: "button", "data-action": "retry-all-memos" },
+		});
 	}
 
 	private shouldDeferCardFlowForAllMemos(): boolean {

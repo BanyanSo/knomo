@@ -3706,8 +3706,13 @@ body .knomo-mobile-create-fab.is-hidden {
 	overflow-wrap: anywhere;
 }
 
-.knomo-plugin .knomo-record-stats-retry {
+.knomo-plugin .knomo-record-stats-retry,
+.knomo-plugin .knomo-all-memos-retry {
 	min-height: var(--knomo-touch-target);
+}
+
+.knomo-plugin .knomo-all-memos-retry {
+	margin-top: var(--size-4-2);
 }
 
 .knomo-plugin .knomo-record-stats-skeleton {

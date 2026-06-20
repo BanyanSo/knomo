@@ -19,6 +19,7 @@ test("classifies known view actions", () => {
 	assert.deepEqual(getKnomoActionDispatch("clear-reference"), { type: "clear-reference" });
 	assert.deepEqual(getKnomoActionDispatch("save-input"), { type: "save-input" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-next"), { type: "record-stats-next" });
+	assert.deepEqual(getKnomoActionDispatch("retry-all-memos"), { type: "retry-all-memos" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-view-month"), { type: "record-stats-view-month" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-trend"), { type: "record-stats-filter-trend" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-hour"), { type: "record-stats-filter-hour" });
@@ -92,6 +93,7 @@ test("keeps legacy render-after-action behavior explicit", () => {
 		"reset-list-state",
 		"close-mobile-search",
 		"refresh",
+		"retry-all-memos",
 		"open-composer",
 		"close-composer",
 		"insert-tag",

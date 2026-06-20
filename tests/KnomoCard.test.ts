@@ -505,13 +505,31 @@ test("mobile memo hydration compares only the rendered card window", async () =>
 
 test("all-memo filters keep one loading state until mobile hydration completes", async () => {
 	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
 	const filteredRenderMethod = getMethodSource(viewSource, "renderFilteredListState");
+	const loadingMethod = getMethodSource(viewSource, "renderAllMemosLoadingState");
+	const errorMethod = getMethodSource(viewSource, "renderAllMemosLoadErrorState");
+	const actionMethod = getMethodSource(viewSource, "handleAction");
 	const periodHydratedMethod = getMethodSource(viewSource, "handleMobileMemoPeriodHydrated");
 	const hydrationCompletedMethod = getMethodSource(viewSource, "handleMobileMemoHydrationCompleted");
+	const failureBranch = viewSource.slice(
+		viewSource.indexOf("onFailed: () =>"),
+		viewSource.indexOf("onSidebarRequested:", viewSource.indexOf("onFailed: () =>")),
+	);
 
 	assert.match(filteredRenderMethod, /this\.renderAllMemosLoadingState\(\);/);
+	assert.match(loadingMethod, /role:\s*"status"/);
+	assert.match(loadingMethod, /"aria-live":\s*"polite"/);
+	assert.match(loadingMethod, /"aria-atomic":\s*"true"/);
+	assert.match(errorMethod, /setAttr\("role", "alert"\)/);
+	assert.match(errorMethod, /"data-action":\s*"retry-all-memos"/);
+	assert.match(actionMethod, /case "retry-all-memos":[\s\S]*this\.renderAllMemosLoadingState\(\);[\s\S]*await this\.ensureAllMemosLoaded\(\);/);
+	assert.match(failureBranch, /this\.renderAllMemosLoadErrorState\(\);/);
+	assert.doesNotMatch(failureBranch, /this\.renderCardFlow\(\);/);
 	assert.match(periodHydratedMethod, /if \(this\.shouldDeferCardFlowForAllMemos\(\)\) \{\s*return;/);
 	assert.match(hydrationCompletedMethod, /shouldRenderDeferredCardFlow/);
+	assert.match(css, /\.knomo-plugin \.knomo-all-memos-retry\s*\{[^}]*margin-top:\s*var\(--size-4-2\);/s);
+	assert.match(css, /\.knomo-plugin \.knomo-record-stats-retry,\s*\.knomo-plugin \.knomo-all-memos-retry\s*\{[^}]*min-height:\s*var\(--knomo-touch-target\);/s);
 });
 
 test("ordinary card-flow renders preserve existing cards and image queue state", async () => {

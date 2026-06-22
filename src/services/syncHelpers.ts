@@ -4,7 +4,7 @@ import { KnomoError } from "../types/serviceError";
 import { formatMemoIdPrefix, formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
 import { getIndexFilePath } from "../utils/path";
-import { MonthlyArchiveMissingError } from "./MonthlyArchiveService";
+import { MonthlyArchiveAmbiguousError, MonthlyArchiveMissingError } from "./MonthlyArchiveService";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 
 export type SelfWriteReason = "create" | "edit" | "delete" | "archive" | "repair";
@@ -25,10 +25,14 @@ export function normalizeMemoInput(input: string): string {
 	return input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-export function buildMonthlyIssue(error: unknown): MemoRecord["issue"] {
+export function buildMonthlyIssue(error: unknown): NonNullable<MemoRecord["issue"]> {
 	const code = error instanceof KnomoError ? error.code : undefined;
 	return {
-		type: error instanceof MonthlyArchiveMissingError ? "monthly_block_missing" : "monthly_sync_failed",
+		type: error instanceof MonthlyArchiveAmbiguousError
+			? "monthly_block_ambiguous"
+			: error instanceof MonthlyArchiveMissingError
+				? "monthly_block_missing"
+				: "monthly_sync_failed",
 		...(code === undefined ? {} : { code }),
 		detectedAt: new Date().toISOString(),
 		message: error instanceof Error ? error.message : "Monthly archive sync failed.",

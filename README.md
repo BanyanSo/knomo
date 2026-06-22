@@ -2,26 +2,19 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-> A lightweight Memos entry for Obsidian: quick capture, daily context, monthly collection, and local-first control.
+> A local-first Memos entry for Obsidian: quick capture, Daily Note context, monthly Markdown collection, card review, and mobile-friendly input.
 
-Knomo is a local memo-first capture plugin built for Obsidian. It creates a smoother workflow for capturing fragmented thoughts inside your Vault:
+Knomo is a memo-first capture plugin for Obsidian. It helps you write down fragmented thoughts quickly while keeping the content inside your own Vault, in regular Markdown files that remain readable and editable outside the plugin.
 
-- Each memo is automatically written to the Daily Note of the day;
-- At the same time, Knomo automatically creates or updates monthly Memos Markdown files;
-- Daily Notes preserve the context of each day, while monthly Memos files provide a centralized view for review;
-- Memo content, Markdown files, and necessary related data are all stored locally in your Vault.
+Knomo is built around a simple idea:
 
-This allows you to capture thoughts as quickly as posting a memo, without moving your content away from Obsidian’s Daily Notes, tags, backlinks, and Markdown system.
+- Write quickly, without deciding the final note structure first;
+- Keep every memo in the context of the day through Daily Notes;
+- Automatically collect memos into monthly Markdown files for browsing and review;
+- Use cards, filters, search, references, images, tasks, and statistics to rediscover and reuse what you wrote;
+- Stay local-first and non-destructive.
 
-Knomo does not try to replace Obsidian’s files, folders, tags, backlinks, or Daily Notes. It also does not automatically organize or rewrite your Markdown content. It simply provides a lighter and smoother capture entry, letting each memo enter your local Obsidian Markdown workflow while preserving the original content.
-
----
-
-## Name Origin
-
-**Knomo** is a combination of **Knowledge** and **Memo**.
-
-It represents the connection between knowledge, ideas, and everyday flashes of thought: fragments that have not yet become long-form notes, projects, or structured systems can first be captured as memos, then gradually settle, connect, and become reusable inside your local Obsidian knowledge base.
+Knomo does not try to replace Obsidian's files, folders, tags, links, backlinks, or Daily Notes. It provides a lighter capture layer on top of Obsidian's Markdown workflow.
 
 ---
 
@@ -29,56 +22,32 @@ It represents the connection between knowledge, ideas, and everyday flashes of t
 
 ### Desktop
 
-![](./screenshots/screenshot-main.png)
+![](./screenshots/desktop-1.png)
 
-![](./screenshots/screenshot-sidebar.png)
+![](./screenshots/desktop-2.png)
 
-![](./screenshots/screenshot-settingstab.png)
-
+![](./screenshots/desktop-3.png)
 
 ### Mobile
 
-![](./screenshots/screenshot-mobile-collage.png)
-
-![](./screenshots/screenshot-mobile-collage2.png)
-
+![](./screenshots/mobile.png)
 
 
 ---
 
 ## Why Knomo?
 
-Obsidian is great for long-term knowledge management, but many ideas, excerpts, work reminders, and temporary thoughts are not suitable for complex structures from the very beginning.
+Obsidian is excellent for long-term knowledge management, but many thoughts do not arrive as polished notes. They arrive as fragments: a sentence from reading, a meeting idea, a task, a screenshot, a link, a small decision, a feeling, or a half-formed connection.
 
-Knomo lets these pieces of content be captured quickly as memos, then automatically enter your local Obsidian Markdown workflow.
+If every fragment requires opening the right file, finding the right heading, choosing the right folder, and deciding the final structure, many of them never get written down.
 
-It mainly solves the following problems:
+Knomo gives those fragments a low-friction entry point:
 
-### 1. Faster capture
-
-You do not need to open a file, find a heading, or decide where the content should go first. Open Knomo, write the memo, and save it.
-
-### 2. Daily context is preserved
-
-Each memo is automatically written to the Daily Note of the day, preserving the real context of when it happened. When you review your day in the evening, you do not need to search for fragmented notes in another tool.
-
-### 3. Automatic monthly collection
-
-Knomo automatically creates or updates monthly Memos Markdown files.
-
-Daily Notes answer “what happened today,” while monthly Memos files answer “what did I write down this month.”
-
-### 4. Non-destructive to your existing Daily Notes
-
-Knomo tries to write memos into a specified area, without forcibly reorganizing your Daily Note or turning it into a plugin-specific format.
-
-### 5. Smoother on mobile
-
-Many fragmented thoughts happen on your phone. Knomo includes many interaction improvements for Obsidian mobile, including input, keyboard adaptation, touch-friendly buttons, card browsing, search entry, and sidebar experience.
-
-### 6. Content stays in your local Vault
-
-Memo content, monthly collection files, and necessary related data are all stored in your local Vault, making them easy to back up, sync, migrate, and preserve long-term.
+1. **Capture first** — open Knomo, write a memo, save it.
+2. **Keep daily context** — the memo is written to the Daily Note of the day.
+3. **Collect by month** — Knomo maintains monthly Memos Markdown files for centralized browsing.
+4. **Review as cards** — use the card flow, filters, search, and statistics to revisit what you wrote.
+5. **Return to Markdown** — every memo remains part of your local Obsidian workflow.
 
 ---
 
@@ -86,221 +55,294 @@ Memo content, monthly collection files, and necessary related data are all store
 
 ### Memo-first
 
-Knomo treats the memo as the primary entry point. You first capture ideas, then use tags, search, Daily Notes, monthly collections, and reviews to view, locate, and reuse those pieces of content.
+Knomo treats the memo as the first capture unit. You can record first, then later connect, tag, search, reference, develop, or move content into larger notes.
 
 ### Daily Note + Monthly Memos
 
-Knomo’s core workflow consists of two parts:
+Knomo's core workflow has two Markdown layers:
 
-- **Daily Note**: records memos created on that day and preserves daily context;
-- **Monthly Memos Markdown file**: automatically collects memos by month for centralized browsing and long-term review.
+- **Daily Note**: preserves when and where the memo happened;
+- **Monthly Memos file**: collects memos into a month-level stream for browsing and review.
 
-Both files are stored in your Vault and can be read, edited, backed up, and migrated directly. Knomo tries to preserve the original Markdown content and does not actively perform additional organization, classification, or rewriting.
+Daily Notes answer: **What happened today?**
 
-### Obsidian Markdown-friendly
-
-Knomo tries to support and preserve common Obsidian Markdown syntax, such as tags, internal links, image embeds, lists, quotes, and regular Markdown text.
-
-The content you write in a memo remains Markdown that Obsidian can understand, rather than a private format that only belongs to Knomo.
+Monthly Memos answer: **What did I write down this month?**
 
 ### Local-first
 
-Your memo content, Markdown files, and necessary related data are stored locally in your Vault. Knomo does not rely on external servers, does not require account registration, and does not actively upload your notes.
+Memo content is stored in your Obsidian Vault. Knomo does not require an account, does not rely on an external server, and does not actively upload your notes.
+
+### Markdown-friendly
+
+Knomo tries to support and preserve common Obsidian / Markdown syntax, including tags, internal links, Markdown links, URLs, images, lists, task lists, block references, quotes, headings, and code blocks.
 
 ### Non-destructive
 
-Knomo tries not to break your existing Daily Note structure and does not forcibly turn your Daily Notes into a plugin-specific database.
+Knomo does not turn your Daily Notes into a private database. It writes memo-shaped Markdown and keeps the original content readable.
 
 ### Mobile-friendly
 
-Knomo does not treat mobile as a smaller version of desktop. Instead, it optimizes input, browsing, search, and touch interactions around real mobile capture scenarios.
-
-### Low friction
-
-Knomo tries to reduce confirmation dialogs, complex settings, and interruptive operations, keeping the capture process lightweight.
+Knomo treats Obsidian mobile as a core use case, not as a smaller desktop window. The composer, keyboard behavior, touch targets, sidebar, search, and card browsing are optimized for mobile capture.
 
 ---
 
-## Key Features
+## Feature Highlights
 
 ### Quick capture
 
-Write and save directly inside the Knomo view, without opening a specific Markdown file first.
+Write and save memos directly inside Knomo without opening a Markdown file first.
 
-Suitable for capturing:
+Good for:
 
-- Fragmented thoughts;
-- Reading excerpts;
-- Work reminders;
-- Project ideas;
-- Daily review materials;
-- Temporary content to process later.
+- fleeting thoughts;
+- reading excerpts;
+- project ideas;
+- meeting notes;
+- work reminders;
+- daily review material;
+- temporary notes to process later.
 
 ---
 
-### Write to Daily Note
+### Daily Note writing
 
-Knomo depends on Obsidian’s core Daily Notes plugin.
+Knomo depends on Obsidian's core **Daily Notes** plugin.
 
-New memos can be automatically written under a specified heading in the Daily Note of the day, for example:
+New memos are written under a configured heading in the Daily Note of the day. The default heading is:
+
+```md
+## Memos
+```
+
+Example:
 
 ```md
 ## Memos
 
-- 18:30:12 I came up with a new product idea today #idea
-- 21:10:03 I found a great point while reading #reading
+- 18:30:12 I came up with a new product idea #idea
+- 21:10:03 This paragraph from a book is worth revisiting #reading
 ```
 
-This means your fragmented notes will not be scattered in another tool, but will naturally enter the context of each day.
+You can configure the heading, insertion position, and time format in Knomo settings.
 
 ---
 
 ### Monthly Memos files
 
-In addition to writing to Daily Notes, Knomo also automatically maintains monthly Memos files for centralized browsing and archiving.
+In addition to Daily Notes, Knomo automatically maintains monthly Memos Markdown files.
 
-The default structure is similar to:
+Default example:
 
 ```md
-# Knomo/Memos-2026-05.md
-## [[2026-05-20]]
-- 15:03:03 Today feels like having 37 browser tabs open. I need to write down the cache in my head, otherwise it will get messy tonight.
-- 21:33:27 Today’s review: not every idea needs to be acted on immediately. Put it into a memo first and let it ferment on its own.
-  
-## [[2026-05-19]]
-- 18:30:12 I came up with a new product idea today #idea
-- 21:10:03 I found a great point while reading #reading
+# Knomo/Memos-2026-06.md
+
+## [[2026-06-21]]
+
+- 09:20:10 A small product idea that should not be lost #idea
+- 22:15:42 Review note: this needs to become a project brief later #review
+
+## [[2026-06-20]]
+
+- 16:42:03 Useful quote from reading #reading
 ```
 
-This serves two needs at the same time:
-
-- Daily Notes preserve the context of each day;
-- Monthly files provide a centralized view of the long-term memo stream.
+Monthly files make it easier to browse a long memo stream without losing the daily source context.
 
 ---
 
 ### Card-based browsing
 
-Knomo displays memos in a card flow, making it more suitable for quick review, scrolling, and lightweight filtering.
+Knomo displays memos as cards instead of forcing you to read the raw Markdown stream.
 
-Compared with reading Markdown files directly, the card flow is better for:
+Cards are useful for:
 
-- Quickly browsing recent notes;
-- Viewing search results;
-- Filtering by tags;
-- Reading on mobile;
-- Daily review.
+- quickly browsing recent memos;
+- reading on mobile;
+- scanning search results;
+- filtering by tags, links, images, or date ranges;
+- opening the source Daily Note;
+- copying text or links;
+- editing, deleting, restoring, or referencing a memo.
 
 ---
 
-### Tags and search
+### Filters and search
 
-Knomo recognizes tags inside memos, for example:
+Knomo supports multiple ways to narrow down your memo stream:
+
+- all notes;
+- untagged memos;
+- memos with links;
+- memos with images;
+- on-this-day / anniversary review;
+- recent ranges such as this week, this month, last 7 days, last 30 days, last week, and last month;
+- tag filtering;
+- keyword search;
+- statistics-driven filters.
+
+For large Vaults, Knomo can load recent content first and then hydrate the full memo set for filters and statistics that require all data.
+
+---
+
+### Tags, links, and backlinks-friendly Markdown
+
+Knomo recognizes tags and links written inside memos.
 
 ```md
-- 16:20:00 Knomo’s mobile input box should feel more like a bottom panel #knomo #interaction
+- 16:20:00 Improve the mobile composer spacing #knomo #interaction
+- 19:05:00 This connects to [[Product Design]] and [[Mobile UX]]
+- 20:10:00 Reference: https://obsidian.md
 ```
 
-You can quickly find related memos by tag or keyword. Knomo does not automatically organize tags for you; it preserves the original Markdown content you wrote.
+Knomo preserves the original Markdown instead of replacing it with a private format.
 
 ---
 
-### Import memos from existing Daily Notes
+### Reference cards
 
-If you already use time-formatted lists in your Daily Notes, Knomo can recognize those list items and import them as memos.
+When a memo should respond to or build on another memo, Knomo can create a reference from the card action menu.
 
-For example:
+This is useful when you want to:
+
+- continue an old thought;
+- cite a previous memo in a new memo;
+- connect scattered fragments over time;
+- keep the original source memo traceable.
+
+References use Obsidian-friendly links or block references so the connection remains meaningful outside Knomo.
+
+---
+
+### Image preview
+
+Knomo supports lightweight image previews in memo cards.
+
+Supported use cases include:
+
+- local Obsidian embeds such as `![[image.png]]`;
+- regular Markdown images such as `![alt](image.png)`;
+- multiple images in one memo;
+- opening a larger preview from the card;
+- switching between images in the preview.
+
+The goal is not to become an image manager. Knomo only provides compact previews so image-based memos remain easy to browse.
+
+---
+
+### Task lists and checkboxes
+
+Knomo supports Markdown task lists inside memos.
+
+Example:
 
 ```md
-- 09:30 Read an interesting point about product design #reading
-- 14:20 Thought of a mobile interaction improvement for Knomo #knomo
+- 09:30:00
+	- [ ] Send the project note
+	- [x] Check yesterday's meeting memo
 ```
 
-During import, Knomo tries to recognize existing time formats and avoid damaging your original Daily Note content.
+Task status can be updated from the card view and synced back to the source Markdown content.
 
 ---
 
-### Images and links
+### Record statistics
 
-Knomo tries to follow Obsidian / Markdown’s native syntax.
+Knomo includes a record statistics view for understanding your memo habits and reviewing your writing rhythm.
 
-Image example:
+It can show:
 
-```md
-- 18:30:12 This is an inspiration screenshot ![[image.png]]
-```
+- total notes;
+- total words;
+- recording days;
+- notes with tags;
+- notes without tags;
+- notes with images;
+- referenced notes;
+- busiest days by note count;
+- wordiest days;
+- weekly, monthly, and yearly trends;
+- recording time distribution;
+- common tags.
 
-Link example:
-
-```md
-- 19:05:00 This idea can be connected to [[Product Design]] #product
-```
-
----
-
-### Mobile-friendly experience
-
-Knomo treats Obsidian mobile as a core use case from the beginning, not as an afterthought.
-
-Many memos happen away from the computer: ideas while walking, excerpts while reading, thoughts after meetings, or late-night flashes before sleep. Knomo aims to let these moments be captured quickly, reliably, and with minimal interruption on mobile.
-
-Mobile-focused improvements include:
-
-- A touch-friendly quick create entry;
-- A smoother bottom input experience;
-- Coordination between the input box and the system keyboard;
-- Height and scrolling control when writing long content;
-- Larger touch targets to reduce mis-taps;
-- Card flow browsing on mobile;
-- Mobile search entry;
-- Sidebar drawer and tag filtering;
-- Adaptation for Obsidian mobile navigation bars and safe areas.
-
-Knomo’s goal is not just to “open on mobile,” but to make Obsidian mobile genuinely suitable for capturing memos on the go.
-
-> Mobile compatibility will continue to improve. Feedback with specific devices, system versions, Obsidian versions, and reproduction steps is welcome.
+Statistics are designed for review and navigation, not for turning writing into a productivity scoreboard. You can use statistics to notice patterns and jump back into related memo cards.
 
 ---
 
-### Theme compatibility and Minimal support
+### Random revisit and review
 
-Knomo tries to build its interface with Obsidian theme variables so that it can adapt more naturally to different community themes.
+Knomo includes lightweight review entry points such as random revisit and date-based review. They are designed to help old fragments meet the present again without requiring AI or external services.
 
-It currently includes support for the Minimal theme, helping cards, input boxes, sidebars, popover menus, and mobile interfaces maintain a more consistent visual appearance under Minimal.
+A memo does not need to become useful immediately. Sometimes its value appears when you encounter it again in a different context.
 
-If you use other Obsidian themes, feedback is also welcome for display issues, spacing problems, color conflicts, or mobile styling issues.
+---
+
+### Trash, restore, and repair
+
+Knomo includes safer maintenance flows for day-to-day use:
+
+- deleted memos can appear in Trash;
+- memos can be restored when possible;
+- permanent deletion requires a separate action;
+- the memo index can be repaired from Markdown sources;
+- legacy Daily Note memo-shaped content can be previewed and imported.
+
+Markdown remains the long-term trusted source. The plugin index is used to improve browsing, filtering, and synchronization.
+
+---
+
+### Mobile input experience
+
+Knomo has dedicated mobile interaction improvements:
+
+- touch-friendly quick create entry;
+- bottom composer designed for phone input;
+- better coordination with the system keyboard;
+- long-content height and scrolling control;
+- larger touch targets;
+- mobile search page;
+- mobile sidebar drawer;
+- mobile-friendly image preview;
+- adaptation for safe areas and Obsidian mobile navigation bars.
+
+Knomo's mobile goal is not just to open inside Obsidian mobile, but to make quick memo capture feel natural there.
+
+---
+
+### Theme compatibility
+
+Knomo uses Obsidian theme variables where possible and includes compatibility work for community themes such as Minimal.
+
+If you use a different theme and see spacing, color, contrast, or mobile layout issues, feedback is welcome.
 
 ---
 
 ## Installation
 
-### Install from the Obsidian community plugin marketplace
+### Install from Obsidian Community Plugins
 
-> To be added after listing.
+When Knomo is available in the Obsidian community plugin marketplace:
 
 1. Open Obsidian Settings;
-2. Go to “Community plugins”;
-3. Turn off Restricted Mode;
+2. Go to **Community plugins**;
+3. Turn off Restricted Mode if needed;
 4. Search for `Knomo`;
 5. Install and enable the plugin.
 
 ### Manual installation
 
-> This method will be available after a Release is published.
-
-1. Download the latest versions of the following files:
+1. Download the latest release files:
    - `main.js`
    - `manifest.json`
    - `styles.css`
-2. Create the following directory in your Vault:
+2. Create this folder in your Vault:
 
 ```text
 .obsidian/plugins/knomo/
 ```
 
-3. Put the three files into this directory;
+3. Put the three files into the folder;
 4. Restart Obsidian;
-5. Enable Knomo in “Community plugins”;
+5. Enable Knomo in **Community plugins**;
 6. Run `Open Knomo` from the command palette.
 
 ---
@@ -309,60 +351,51 @@ If you use other Obsidian themes, feedback is also welcome for display issues, s
 
 ### 1. Enable Daily Notes
 
-Knomo depends on Obsidian’s core plugin **Daily Notes** to write memos into the Daily Note of the day.
+Knomo requires Obsidian's core **Daily Notes** plugin.
 
-Before using Knomo, please enable Obsidian’s core plugin “Daily Notes”.
+Before using Knomo, make sure:
 
-Please make sure that:
+- Daily Notes is enabled;
+- the Daily Notes folder is configured;
+- the date format is configured;
+- Obsidian can create Daily Note files normally.
 
-- Obsidian’s core plugin “Daily Notes” is enabled;
-- The Daily Notes folder path is configured;
-- The date format is configured;
-- Daily Note files can be created normally.
+### 2. Open Knomo
 
----
+You can open Knomo by:
 
-### 2. Set the memo insertion heading
+- clicking the Ribbon icon;
+- running `Open Knomo` from the command palette;
+- pinning the Knomo view to your workspace.
 
-The default heading is:
+### 3. Create your first memo
 
-```md
-## Memos
-```
-
-Knomo will write memos created on the current day under this heading.
-
-If the heading does not exist in the Daily Note of the day, Knomo will try to create it according to your settings.
-
----
-
-### 3. Open Knomo
-
-You can open Knomo in the following ways:
-
-- Click the Ribbon icon on the left;
-- Run `Open Knomo` from the command palette;
-- Pin the Knomo view to the sidebar or main workspace.
-
----
-
-### 4. Create your first memo
-
-Enter:
+Write:
 
 ```text
-Today I started using Knomo to capture fragmented thoughts #knomo
+Today I started using Knomo to capture small thoughts #knomo
 ```
 
-After saving, it will appear in the Knomo card flow and be written to the corresponding Markdown file.
+After saving, the memo appears in the card flow and is written to the corresponding Markdown files.
+
+### 4. Review and connect
+
+After writing for a while, try:
+
+- filtering by tags;
+- searching keywords;
+- opening memos with links or images;
+- using Random revisit;
+- checking Record statistics;
+- referencing an older memo when creating a new one.
 
 ---
 
 ## Markdown Format
 
-Knomo tries to use a simple, readable, and portable Markdown format.
+Knomo uses simple Markdown that stays readable outside the plugin.
 
-### Memo in Daily Note
+### Single-line memo
 
 ```md
 - 18:30:12 This is a memo
@@ -379,57 +412,91 @@ Knomo tries to use a simple, readable, and portable Markdown format.
 ### Memo with tags
 
 ```md
-- 18:30:12 I read a great point today #reading #product
+- 18:30:12 I read a useful point today #reading #product
+```
+
+### Memo with links
+
+```md
+- 18:30:12 This connects to [[Product Design]] and https://obsidian.md
 ```
 
 ### Memo with image
 
 ```md
-- 18:30:12 This is an inspiration screenshot ![[image.png]]
+- 18:30:12 Inspiration screenshot ![[image.png]]
 ```
 
-### Memo with Obsidian link
+### Memo with task list
 
 ```md
-- 18:30:12 An idea that can be connected to [[Product Design]] #idea
+- 09:30:00
+	- [ ] Follow up with the project owner
+	- [x] Check yesterday's memo
 ```
 
-### Memo in monthly archive
+### Memo with quote
 
 ```md
-## [[2026-05-25]]
+- 20:15:00
+	> A small note can become useful when it returns at the right time.
+```
+
+### Monthly archive
+
+```md
+## [[2026-06-21]]
 
 - 18:30:12 This is a memo
 ```
 
 ---
 
+## Settings Overview
+
+Knomo settings include:
+
+- Daily Note insertion heading;
+- new memo insertion position;
+- memo time format;
+- monthly memos folder;
+- monthly memos filename format;
+- date heading format inside monthly files;
+- monthly date sort order;
+- optional exclusion of monthly memo files from Obsidian search / graph / statistics;
+- pinned tags;
+- legacy Daily Note memo import;
+- data repair and rebuild tools.
+
+---
+
 ## Data and Privacy
 
-Knomo’s core principle is: **your data belongs to you**.
+Knomo's core principle is: **your data belongs to you**.
 
 - Memo content is stored in your Obsidian Vault;
-- Markdown files can be read, backed up, and migrated directly;
-- The plugin index is used to improve browsing, search, and sync experience;
-- The plugin index is not the only source of data;
-- Knomo does not rely on external servers;
-- Knomo does not require account registration;
+- Daily Notes and monthly Memos files are regular Markdown files;
+- Markdown files can be read, backed up, synced, and migrated directly;
+- the plugin index improves browsing, filtering, statistics, and sync behavior;
+- the plugin index is not the only source of truth;
+- Knomo does not require an account;
+- Knomo does not rely on an external server;
 - Knomo does not actively upload your notes.
 
 ---
 
 ## Data Safety Notes
 
-Knomo writes to your Markdown files. To reduce risk, please pay attention to the following in early versions:
+Knomo writes to Markdown files. To reduce risk:
 
-- Back up your Vault before first use;
-- If you use Obsidian Sync, Git, or another third-party sync tool, make sure the sync status is normal;
-- Always back up before importing old content;
-- If the Daily Note and Knomo card flow look inconsistent, check the original Markdown first;
-- The plugin index can be rebuilt, while Markdown files are the long-term trusted source;
-- Delete, restore, and import features may still change in early versions.
+- back up your Vault before first use;
+- make sure Obsidian Sync, Git, or other sync tools are working normally;
+- back up before importing legacy Daily Note content;
+- check the original Markdown if the card flow looks inconsistent;
+- use repair / rebuild tools if the index becomes outdated;
+- treat Markdown files as the long-term trusted source.
 
-Knomo’s goal is not to hide Markdown, but to make Markdown easier to capture, browse, and reuse.
+Knomo's goal is not to hide Markdown. It is to make Markdown easier to capture, browse, and reuse.
 
 ---
 
@@ -437,41 +504,52 @@ Knomo’s goal is not to hide Markdown, but to make Markdown easier to capture, 
 
 ### Daily fragmented capture
 
-Use Knomo as a quick input box inside Obsidian.
-
-Write down whatever comes to mind first. There is no need to classify it immediately. Later, you can use tags, search, Daily Notes, and links to process it.
-
----
+Use Knomo as a quick input box inside Obsidian. Write first; organize later.
 
 ### Reading excerpts
 
 ```md
-- 10:32:00 This sentence reminded me: the key to product design is not the number of features, but the path users take to complete their goals. #reading #product
+- 10:32:00 The important part is not the number of features, but the path users take to complete their goals. #reading #product
 ```
-
----
 
 ### Project idea pool
 
 ```md
-- 16:20:00 Knomo’s mobile input box should feel more like a panel above the keyboard. #knomo #interaction
+- 16:20:00 The mobile input box should feel like a calm panel above the keyboard. #knomo #interaction
 ```
 
-Later, you can filter related ideas with `#knomo`.
+### Task capture
+
+```md
+- 09:30:00
+	- [ ] Draft the release note
+	- [ ] Review the mobile card layout
+```
+
+### Image-based inspiration
+
+```md
+- 18:30:12 Layout reference for a compact card ![[card-layout-reference.png]] #design
+```
+
+### Review and reuse
+
+Use tags, search, Random revisit, Record statistics, and references to bring old fragments back into current work.
 
 ---
 
-### Daily review
+## What Knomo Is Not
 
-Open the Daily Note at night and you will see all memos from that day.
+Knomo is not:
 
-These pieces of content can be further developed into:
+- a replacement for Obsidian files or folders;
+- a cloud memo service;
+- an AI note organizer;
+- a full task manager;
+- an image manager;
+- a private database that locks your content away.
 
-- Daily reports;
-- Project records;
-- Long-form drafts;
-- Product requirements;
-- Task lists.
+Knomo is a local memo-first capture and review layer for Obsidian Markdown.
 
 ---
 
@@ -481,13 +559,7 @@ These pieces of content can be further developed into:
 
 flomo is a standalone Memos product. Knomo is an Obsidian plugin.
 
-Knomo is more suitable for users who want to keep fragmented notes in their own Vault while continuing to use Obsidian’s tags, search, backlinks, and Markdown workflow.
-
-Simply put:
-
-> Knomo is not a replacement for flomo, but a local memo-first workflow for Obsidian users.
-
----
+Knomo is more suitable for users who want to keep fragmented notes in their own Vault while continuing to use Obsidian's tags, links, search, backlinks, Daily Notes, and Markdown workflow.
 
 ### How is Knomo different from Thino?
 
@@ -496,13 +568,13 @@ Thino is a mature Obsidian Memos plugin.
 Knomo focuses more on:
 
 - Daily Note integration;
-- Local monthly Markdown collection;
-- Mobile input experience;
-- A low-friction personal memo workflow.
+- monthly Markdown collection;
+- local-first memo storage;
+- mobile input experience;
+- lightweight card review;
+- low-friction personal capture.
 
-If you need a mature, complete, and feature-rich Memos plugin, you can consider Thino first.
-
-If you want a lightweight capture entry that is closer to Daily Notes and local Markdown, you can try Knomo.
+If you need a mature and feature-rich Memos plugin, Thino may be a better fit. If you want a lightweight memo entry that stays close to Daily Notes and local Markdown, Knomo may fit your workflow.
 
 ---
 
@@ -510,69 +582,50 @@ If you want a lightweight capture entry that is closer to Daily Notes and local 
 
 ### Will Knomo lock my data inside the plugin?
 
-No. Knomo’s core content is written to Markdown files. The plugin index is used to improve the experience, but it should not become the only source of data.
-
----
+No. Core memo content is written to Markdown files. The index improves the experience, but Markdown remains the long-term trusted source.
 
 ### Do I have to enable Daily Notes?
 
-Yes. Knomo’s main workflow is built around Daily Notes.
-
-If Daily Notes is not enabled, some writing features may not work properly.
-
----
+Yes. Knomo's main writing workflow is built around Obsidian's core Daily Notes plugin.
 
 ### Will Knomo upload my notes?
 
 No. Knomo does not rely on external servers and does not actively upload your notes.
 
----
-
 ### Does Knomo support mobile?
 
-Yes, and mobile is one of Knomo’s key optimization directions.
-
-Knomo does not simply shrink the desktop interface onto a phone. Instead, it includes dedicated interaction improvements for Obsidian mobile, including:
-
-- A quick entry for creating memos;
-- A bottom composer better suited for mobile input;
-- Input experience coordinated with the system keyboard;
-- Height and scrolling control for long content;
-- Larger touch targets to reduce mis-taps;
-- Mobile card flow browsing;
-- Search page and tag filtering;
-- Sidebar drawer;
-- Adaptation for Obsidian mobile navigation bars;
-- Optimization for safe areas, bottom navigation bars, and floating create buttons.
-
-Knomo aims to bring the Obsidian mobile experience closer to that of a dedicated memo app.
-
-Because Obsidian mobile, system keyboards, themes, and devices can differ significantly, specific feedback is welcome if you run into issues.
-
----
+Yes. Mobile is one of Knomo's main optimization areas. Knomo includes a mobile composer, keyboard adaptation, mobile search, touch-friendly controls, safe-area handling, mobile sidebar behavior, and mobile-friendly card browsing.
 
 ### Why do my card flow and Markdown files look inconsistent?
 
-The index may not have refreshed yet, or the Markdown files may have been edited externally and not rescanned.
+The index may not have refreshed yet, or Markdown files may have been edited externally.
 
-Suggestions:
+Try:
 
-1. Check the original Markdown first;
-2. Try refreshing Knomo;
-3. If the problem persists, submit an Issue with reproduction steps.
+1. checking the original Markdown file;
+2. refreshing Knomo;
+3. using repair / rebuild tools;
+4. opening an issue with reproduction steps if the problem persists.
+
+### Can I edit Markdown files manually?
+
+Yes. Knomo is designed to keep content readable in Markdown. If you edit files manually, refresh or rebuild the index if the card flow does not update as expected.
 
 ---
 
 ## Feedback and Contribution
 
-Feedback and contributions are welcome, including:
+Feedback is welcome, especially:
 
-- Bug reports;
-- Feature suggestions;
-- UI / UX improvement suggestions;
-- Documentation improvements;
-- Mobile experience feedback;
-- Compatibility issues under different Obsidian themes.
+- bug reports;
+- mobile experience feedback;
+- theme compatibility issues;
+- Markdown parsing edge cases;
+- data sync / index repair issues;
+- UI / UX suggestions;
+- documentation improvements.
+
+When reporting mobile issues, please include device model, OS version, Obsidian version, theme, and reproduction steps.
 
 ---
 

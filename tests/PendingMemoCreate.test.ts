@@ -5,6 +5,7 @@ import test from "node:test";
 
 import type { MemoRecord } from "../src/types/memo";
 import type { PendingMemoCreate } from "../src/types/pending";
+import { PendingMemoWriteConflictError } from "../src/types/pending";
 import type { KnomoSettings } from "../src/types/settings";
 import type { PendingMemoCreateStoreLike } from "../src/services/PendingMemoCreateStore";
 
@@ -62,6 +63,77 @@ test("journal cleanup failure is removed later without replaying committed write
 	assert.deepEqual(await harness.pendingStore.list(), []);
 	assert.equal(harness.dailyInsertions(), 1);
 	assert.equal(harness.monthlyInsertions(), 1);
+});
+
+test("serializes concurrent creates so identical memo blocks remain distinct", async () => {
+	const harness = await createHarness();
+	const [first, second] = await Promise.all([
+		harness.service.createMemo("same content"),
+		harness.service.createMemo("same content"),
+	]);
+
+	assert.notEqual(first.memo.id, second.memo.id);
+	assert.equal(harness.dailyInsertions(), 2);
+	assert.equal(harness.monthlyInsertions(), 2);
+	assert.equal(harness.indexStore.memos.size, 2);
+	assert.deepEqual(await harness.pendingStore.list(), []);
+});
+
+test("releases the create queue after a failed operation", async () => {
+	const harness = await createHarness();
+	harness.pendingStore.failAdd = true;
+	await assert.rejects(harness.service.createMemo("first fails"), /journal add failed/);
+
+	harness.pendingStore.failAdd = false;
+	const result = await harness.service.createMemo("second succeeds");
+
+	assert.equal(harness.indexStore.memos.get(result.memo.id)?.id, result.memo.id);
+	assert.equal(harness.dailyInsertions(), 1);
+	assert.equal(harness.monthlyInsertions(), 1);
+});
+
+test("rebuilds and persists a stale prepared daily write before retrying", async () => {
+	const harness = await createHarness();
+	harness.conflicts.daily = 1;
+
+	const result = await harness.service.createMemo("daily conflict");
+
+	assert.equal(harness.indexStore.memos.get(result.memo.id)?.id, result.memo.id);
+	assert.equal(harness.dailyPreparations(), 2);
+	assert.equal(harness.dailyInsertions(), 1);
+	assert.equal(harness.monthlyInsertions(), 1);
+	assert.equal(harness.pendingStore.updateCount, 2);
+	assert.deepEqual(await harness.pendingStore.list(), []);
+});
+
+test("rebuilds and persists a stale prepared monthly write without replaying the daily write", async () => {
+	const harness = await createHarness();
+	harness.conflicts.monthly = 1;
+
+	const result = await harness.service.createMemo("monthly conflict");
+
+	assert.equal(harness.indexStore.memos.get(result.memo.id)?.id, result.memo.id);
+	assert.equal(harness.dailyInsertions(), 1);
+	assert.equal(harness.monthlyPreparations(), 2);
+	assert.equal(harness.monthlyInsertions(), 1);
+	assert.equal(harness.pendingStore.updateCount, 2);
+	assert.deepEqual(await harness.pendingStore.list(), []);
+});
+
+test("keeps the journal after the bounded prepared write retry is exhausted", async () => {
+	const harness = await createHarness();
+	harness.conflicts.daily = 2;
+
+	await assert.rejects(
+		harness.service.createMemo("persistent conflict"),
+		/Pending daily write conflict/,
+	);
+
+	assert.equal(harness.dailyPreparations(), 2);
+	assert.equal(harness.dailyInsertions(), 0);
+	assert.equal(harness.monthlyInsertions(), 0);
+	assert.equal(harness.indexStore.memos.size, 0);
+	assert.equal((await harness.pendingStore.list()).length, 1);
 });
 
 test("prepared daily and monthly writes are idempotent without adding block IDs", async () => {
@@ -170,8 +242,11 @@ async function createHarness() {
 	const settings = createTestSettings();
 	const pendingStore = new MemoryPendingMemoCreateStore();
 	const indexStore = new MemoryMemoIndexStore();
-	let dailyWritten = false;
-	let monthlyWritten = false;
+	const conflicts = { daily: 0, monthly: 0 };
+	let dailyContent = "";
+	let monthlyContent = "";
+	let dailyPreparations = 0;
+	let monthlyPreparations = 0;
 	let dailyInsertions = 0;
 	let monthlyInsertions = 0;
 
@@ -180,34 +255,46 @@ async function createHarness() {
 			_settings: KnomoSettings,
 			_createdAt: Date,
 			block: string,
-		) => ({
-			path: "Daily/today.md",
-			beforeHash: "daily-before",
-			afterHash: "daily-after",
-			blockOccurrencesBefore: 0,
-			ref: {
+		) => {
+			dailyPreparations += 1;
+			return {
 				path: "Daily/today.md",
-				heading: "## Knomo",
-				sectionType: "heading" as const,
-				lastKnownBlock: block,
-				lastKnownHash: "daily-block",
-				lineNumberHint: 2,
-				lastSyncedAt: "2026-06-13T10:00:00.000+08:00",
-			},
-		}),
+				beforeHash: dailyContent,
+				afterHash: appendBlock(dailyContent, block),
+				blockOccurrencesBefore: countBlockOccurrences(dailyContent, block),
+				ref: {
+					path: "Daily/today.md",
+					heading: "## Knomo",
+					sectionType: "heading" as const,
+					lastKnownBlock: block,
+					lastKnownHash: `daily-block-${dailyPreparations}`,
+					lineNumberHint: dailyPreparations + 1,
+					lastSyncedAt: "2026-06-13T10:00:00.000+08:00",
+				},
+			};
+		},
 		commitPreparedMemoBlock: async (
 			_settings: KnomoSettings,
-			_block: string,
+			block: string,
 			prepared: PendingMemoCreate["dailyWrite"],
 		) => {
-			const changed = !dailyWritten;
-			if (changed) {
-				dailyWritten = true;
-				dailyInsertions += 1;
+			if (conflicts.daily > 0) {
+				conflicts.daily -= 1;
+				dailyContent = appendBlock(dailyContent, "external daily edit");
+				throw new PendingMemoWriteConflictError("Pending daily write conflict");
 			}
+			const changed = commitPreparedBlock(
+				block,
+				prepared,
+				() => dailyContent,
+				(content) => {
+					dailyContent = content;
+					dailyInsertions += 1;
+				},
+			);
 			return {
 				file: { path: prepared.path },
-				content: "daily-content",
+				content: dailyContent,
 				ref: prepared.ref,
 				changed,
 			};
@@ -218,34 +305,46 @@ async function createHarness() {
 			_settings: KnomoSettings,
 			_createdAt: Date,
 			block: string,
-		) => ({
-			path: "Memos/Memos-2026-06.md",
-			beforeHash: "monthly-before",
-			afterHash: "monthly-after",
-			blockOccurrencesBefore: 0,
-			ref: {
+		) => {
+			monthlyPreparations += 1;
+			return {
 				path: "Memos/Memos-2026-06.md",
-				dateHeading: "## 2026-06-13",
-				lastKnownBlock: block,
-				lastKnownHash: "monthly-block",
-				lineNumberHint: 4,
-				lastSyncedAt: "2026-06-13T10:00:00.000+08:00",
-			},
-		}),
+				beforeHash: monthlyContent,
+				afterHash: appendBlock(monthlyContent, block),
+				blockOccurrencesBefore: countBlockOccurrences(monthlyContent, block),
+				ref: {
+					path: "Memos/Memos-2026-06.md",
+					dateHeading: "## 2026-06-13",
+					lastKnownBlock: block,
+					lastKnownHash: `monthly-block-${monthlyPreparations}`,
+					lineNumberHint: monthlyPreparations + 3,
+					lastSyncedAt: "2026-06-13T10:00:00.000+08:00",
+				},
+			};
+		},
 		commitPreparedMemoBlock: async (
 			_settings: KnomoSettings,
 			_createdAt: Date,
-			_block: string,
+			block: string,
 			prepared: NonNullable<PendingMemoCreate["monthlyWrite"]>,
 		) => {
-			const changed = !monthlyWritten;
-			if (changed) {
-				monthlyWritten = true;
-				monthlyInsertions += 1;
+			if (conflicts.monthly > 0) {
+				conflicts.monthly -= 1;
+				monthlyContent = appendBlock(monthlyContent, "external monthly edit");
+				throw new PendingMemoWriteConflictError("Pending monthly write conflict");
 			}
+			const changed = commitPreparedBlock(
+				block,
+				prepared,
+				() => monthlyContent,
+				(content) => {
+					monthlyContent = content;
+					monthlyInsertions += 1;
+				},
+			);
 			return {
 				file: { path: prepared.path },
-				content: "monthly-content",
+				content: monthlyContent,
 				ref: prepared.ref,
 				changed,
 			};
@@ -267,15 +366,47 @@ async function createHarness() {
 		createService,
 		pendingStore,
 		indexStore,
+		conflicts,
+		dailyPreparations: () => dailyPreparations,
+		monthlyPreparations: () => monthlyPreparations,
 		dailyInsertions: () => dailyInsertions,
 		monthlyInsertions: () => monthlyInsertions,
 	};
+}
+
+function appendBlock(content: string, block: string): string {
+	return content.length === 0 ? block : `${content}\n${block}`;
+}
+
+function countBlockOccurrences(content: string, block: string): number {
+	return content.split(block).length - 1;
+}
+
+function commitPreparedBlock(
+	block: string,
+	prepared: Pick<PendingMemoCreate["dailyWrite"], "beforeHash" | "afterHash" | "blockOccurrencesBefore">,
+	getContent: () => string,
+	commit: (content: string) => void,
+): boolean {
+	const currentContent = getContent();
+	if (currentContent === prepared.afterHash) {
+		return false;
+	}
+	if (currentContent !== prepared.beforeHash) {
+		if (countBlockOccurrences(currentContent, block) === prepared.blockOccurrencesBefore + 1) {
+			return false;
+		}
+		throw new PendingMemoWriteConflictError("Prepared write changed");
+	}
+	commit(prepared.afterHash);
+	return true;
 }
 
 class MemoryPendingMemoCreateStore implements PendingMemoCreateStoreLike {
 	readonly operations = new Map<string, PendingMemoCreate>();
 	failAdd = false;
 	failNextRemove = false;
+	updateCount = 0;
 
 	async list(): Promise<PendingMemoCreate[]> {
 		return [...this.operations.values()];
@@ -285,10 +416,14 @@ class MemoryPendingMemoCreateStore implements PendingMemoCreateStoreLike {
 		if (this.failAdd) {
 			throw new Error("journal add failed");
 		}
+		if (this.operations.has(operation.memoId)) {
+			throw new Error(`Pending memo create already exists: ${operation.memoId}`);
+		}
 		this.operations.set(operation.memoId, operation);
 	}
 
 	async update(operation: PendingMemoCreate): Promise<void> {
+		this.updateCount += 1;
 		this.operations.set(operation.memoId, operation);
 	}
 

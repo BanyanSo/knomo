@@ -1,6 +1,7 @@
 import { TFile } from "obsidian";
 import type { App, Component } from "obsidian";
 
+import { KnomoError } from "../types/serviceError";
 import { hashText } from "../utils/hash";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 import type { SyncOrchestrator } from "./SyncOrchestrator";
@@ -57,7 +58,25 @@ export class FileWatchService {
 	}
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {
-		if (!(file instanceof TFile) || file.extension !== "md") {
+		if (!(file instanceof TFile)) {
+			return;
+		}
+		if (this.syncOrchestrator.isMonthlyArchiveFile(oldPath)) {
+			if (this.selfWriteTracker.consumeByReason(oldPath, "archive_move", file.path) !== null) {
+				return;
+			}
+			this.queueFileTask(`monthly-rename:${oldPath}`, oldPath, async () => {
+				const changed = await this.syncOrchestrator.recoverDeletedMonthlyArchive(oldPath);
+				if (changed) {
+					await this.onSynced?.();
+				}
+				if (this.syncOrchestrator.isMonthlyArchiveFile(file.path)) {
+					throw new KnomoError("target_path_conflicts", { paths: file.path });
+				}
+			});
+			return;
+		}
+		if (file.extension !== "md") {
 			return;
 		}
 		if (!this.syncOrchestrator.isPotentialDailyFile(oldPath) && !this.syncOrchestrator.isPotentialDailyFile(file.path)) {
@@ -73,11 +92,11 @@ export class FileWatchService {
 	}
 
 	private handleFileDeleted(file: unknown): void {
-		if (!(file instanceof TFile) || file.extension !== "md") {
+		if (!(file instanceof TFile)) {
 			return;
 		}
 		const path = file.path;
-		if (this.syncOrchestrator.isPotentialDailyFile(path)) {
+		if (file.extension === "md" && this.syncOrchestrator.isPotentialDailyFile(path)) {
 			this.queueFileTask(`delete:${path}`, path, async () => {
 				const changed = await this.syncOrchestrator.syncDeletedDailyFile(path);
 				if (changed) {

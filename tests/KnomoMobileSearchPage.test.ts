@@ -16,6 +16,10 @@ test("renders mobile search page input, close action, quick chips, and results",
 	});
 
 	assert.equal(elements.pageEl.hasClass("knomo-mobile-search-page"), true);
+	assert.equal(elements.pageEl.getAttr("aria-hidden"), "true");
+	assert.equal(elements.pageEl.getAttr("inert"), "");
+	assert.equal(elements.pageEl.find(".knomo-mobile-search-surface")?.getAttr("aria-hidden"), "true");
+	assert.equal(elements.pageEl.find(".knomo-mobile-search-content")?.hasClass("knomo-mobile-search-content"), true);
 	assert.equal(elements.inputEl.getAttr("type"), "search");
 	assert.equal(elements.inputEl.getAttr("aria-labelledby"), "mobile-search-label");
 	assert.equal(elements.closeButtonEl.getAttr("data-action"), "close-mobile-search");

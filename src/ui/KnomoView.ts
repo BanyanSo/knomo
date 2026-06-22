@@ -161,6 +161,16 @@ interface FilteredMemosCache {
 	result: MemoRecord[];
 }
 
+interface RecordStatsReturnState {
+	activeNav: Exclude<SidebarNav, "record-stats">;
+	scopeFilter: ScopeFilter;
+	searchQuery: string;
+	searchDateFilter: SearchDateFilter | null;
+	recordStatsSearchFilter: RecordStatsSearchFilter | null;
+	activeTag: string | null;
+	activeTagKey: string | null;
+}
+
 const CARD_BATCH_SIZE = 50;
 const MOBILE_INITIAL_CARD_BATCH_SIZE = 25;
 const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;
@@ -237,6 +247,7 @@ export class KnomoView extends ItemView {
 	private compactInlineSearchInputEl: HTMLInputElement | null = null;
 	private compactSearchInputEl: HTMLInputElement | null = null;
 	private mobileSearchHeaderActionEl: HTMLElement | null = null;
+	private mobileRecordStatsBackActionEl: HTMLElement | null = null;
 	private mobileHeaderTitleEl: HTMLElement | null = null;
 	private mobileHeaderTitleRegisteredEl: HTMLElement | null = null;
 	private mobileHeaderTitleOriginalText: string | null = null;
@@ -253,6 +264,7 @@ export class KnomoView extends ItemView {
 	private recordStatsRenderedKey: string | null = null;
 	private recordStatsView: RecordStatsView = "week";
 	private recordStatsSelectedDate = new Date();
+	private recordStatsReturnState: RecordStatsReturnState | null = null;
 	private scopeFilter: ScopeFilter = "all";
 	private searchQuery = "";
 	private searchDateFilter: SearchDateFilter | null = null;
@@ -705,6 +717,9 @@ export class KnomoView extends ItemView {
 			void this.handleRootKeydown(event);
 		});
 
+		if (Platform.isMobile) {
+			this.ensureMobileSearchPage();
+		}
 		this.renderScopeState();
 		this.syncRootState();
 		if (Platform.isMobile) {
@@ -1201,11 +1216,17 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncMobileHeaderActions(): void {
-		if (this.currentLayout === "mobile" && this.activeNav !== "record-stats") {
-			this.ensureMobileHeaderActions();
+		if (this.currentLayout !== "mobile") {
+			this.removeMobileHeaderActions();
 			return;
 		}
-		this.removeMobileHeaderActions();
+		if (this.activeNav === "record-stats") {
+			this.removeMobileSearchHeaderAction();
+			this.ensureMobileRecordStatsBackAction();
+			return;
+		}
+		this.removeMobileRecordStatsBackAction();
+		this.ensureMobileSearchHeaderAction();
 	}
 
 	private syncMobileHeaderTitle(): void {
@@ -1313,7 +1334,7 @@ export class KnomoView extends ItemView {
 		return null;
 	}
 
-	private ensureMobileHeaderActions(): void {
+	private ensureMobileSearchHeaderAction(): void {
 		if (this.mobileSearchHeaderActionEl === null || !this.mobileSearchHeaderActionEl.isConnected) {
 			this.mobileSearchHeaderActionEl?.remove();
 			this.mobileSearchHeaderActionEl = this.addAction(KNOMO_SEARCH_ICON, t("search.knomo"), () => this.openMobileHeaderSearch());
@@ -1322,9 +1343,28 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private ensureMobileRecordStatsBackAction(): void {
+		if (this.mobileRecordStatsBackActionEl === null || !this.mobileRecordStatsBackActionEl.isConnected) {
+			this.mobileRecordStatsBackActionEl?.remove();
+			this.mobileRecordStatsBackActionEl = this.addAction("arrow-left", t("recordStats.back"), () => this.returnFromRecordStats());
+			this.mobileRecordStatsBackActionEl.addClass("knomo-mobile-header-action", "knomo-record-stats-back");
+			this.mobileRecordStatsBackActionEl.setAttr("aria-label", t("recordStats.back"));
+		}
+	}
+
 	private removeMobileHeaderActions(): void {
+		this.removeMobileSearchHeaderAction();
+		this.removeMobileRecordStatsBackAction();
+	}
+
+	private removeMobileSearchHeaderAction(): void {
 		this.mobileSearchHeaderActionEl?.remove();
 		this.mobileSearchHeaderActionEl = null;
+	}
+
+	private removeMobileRecordStatsBackAction(): void {
+		this.mobileRecordStatsBackActionEl?.remove();
+		this.mobileRecordStatsBackActionEl = null;
 	}
 
 	private removeMobileHeaderTitle(): void {
@@ -1369,7 +1409,7 @@ export class KnomoView extends ItemView {
 		this.renderMobileSearchResults(options.changeIntent ?? "content-change");
 		this.syncRootState();
 		if (options.focusInput !== false) {
-			this.focusMobileSearchInputSoon();
+			this.focusMobileSearchInputNow();
 		}
 	}
 
@@ -1416,15 +1456,29 @@ export class KnomoView extends ItemView {
 			this.cardImageLoadQueue.clear("mobile-search");
 			this.cardImageLoadQueue.setSurfacePaused("card-flow", false);
 			this.rootEl?.toggleClass("is-mobile-search-open", false);
-			this.mobileSearchPageEl?.toggleClass("is-open", false);
+			this.setMobileSearchPageActive(false);
 			return;
 		}
 		if (!this.mobileSearchPageOpen) {
-			this.mobileSearchPageEl?.toggleClass("is-open", false);
+			this.setMobileSearchPageActive(false);
 			return;
 		}
 		this.ensureMobileSearchPage();
-		this.mobileSearchPageEl?.toggleClass("is-open", true);
+		this.setMobileSearchPageActive(true);
+	}
+
+	private setMobileSearchPageActive(active: boolean): void {
+		const page = this.mobileSearchPageEl;
+		if (page === null) {
+			return;
+		}
+		page.toggleClass("is-open", active);
+		page.setAttr("aria-hidden", active ? "false" : "true");
+		if (active) {
+			page.removeAttribute("inert");
+		} else {
+			page.setAttr("inert", "");
+		}
 	}
 
 	private closeMobileSearchPage(): void {
@@ -1445,18 +1499,16 @@ export class KnomoView extends ItemView {
 		this.mobileSearchResultsEl = null;
 	}
 
-	private focusMobileSearchInputSoon(): void {
-		this.containerEl.win.requestAnimationFrame(() => {
-			const input = this.mobileSearchInputEl;
-			if (input === null || !input.isConnected) {
-				return;
-			}
-			try {
-				input.focus({ preventScroll: true });
-			} catch {
-				input.focus();
-			}
-		});
+	private focusMobileSearchInputNow(): void {
+		const input = this.mobileSearchInputEl;
+		if (input === null || !input.isConnected) {
+			return;
+		}
+		try {
+			input.focus({ preventScroll: true });
+		} catch {
+			input.focus();
+		}
 	}
 
 	private queueMobileSearchQuery(query: string): void {
@@ -2882,6 +2934,9 @@ export class KnomoView extends ItemView {
 			case "focus-stats":
 				this.sidebarEl?.querySelector<HTMLElement>(".knomo-sidebar-stats")?.focus();
 				break;
+			case "record-stats-back":
+				this.returnFromRecordStats();
+				return;
 			case "record-stats-previous":
 				if (canRetreatRecordStatsDate(
 					this.recordStatsView,
@@ -3463,6 +3518,20 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const previousViewStateKey = this.getCardFlowViewStateKey();
+		const previousNav = this.activeNav;
+		if (nav === "record-stats" && previousNav !== "record-stats") {
+			this.recordStatsReturnState = {
+				activeNav: previousNav,
+				scopeFilter: this.scopeFilter,
+				searchQuery: this.searchQuery,
+				searchDateFilter: this.searchDateFilter,
+				recordStatsSearchFilter: this.recordStatsSearchFilter,
+				activeTag: this.activeTag,
+				activeTagKey: this.activeTagKey,
+			};
+		} else if (nav !== "record-stats") {
+			this.recordStatsReturnState = null;
+		}
 		this.clearDesktopSearchState();
 		this.activeNav = nav;
 		this.clearActiveTag();
@@ -3470,7 +3539,7 @@ export class KnomoView extends ItemView {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = null;
-		if (nav !== "random") {
+		if (nav !== "random" && !(nav === "record-stats" && previousNav === "random")) {
 			this.randomReunionController.clearMemos();
 		}
 		this.renderUiState({
@@ -3487,6 +3556,48 @@ export class KnomoView extends ItemView {
 		}
 		if (nav === "record-stats") {
 			void this.prepareRecordStats();
+		}
+	}
+
+	private returnFromRecordStats(): void {
+		if (this.activeNav !== "record-stats") {
+			return;
+		}
+		const previousViewStateKey = this.getCardFlowViewStateKey();
+		const returnState = this.recordStatsReturnState ?? {
+			activeNav: "all",
+			scopeFilter: "all",
+			searchQuery: "",
+			searchDateFilter: null,
+			recordStatsSearchFilter: null,
+			activeTag: null,
+			activeTagKey: null,
+		} satisfies RecordStatsReturnState;
+		this.clearSearchDebounce();
+		this.recordStatsReturnState = null;
+		this.activeNav = returnState.activeNav;
+		this.scopeFilter = returnState.scopeFilter;
+		this.searchQuery = returnState.searchQuery;
+		this.searchDateFilter = returnState.searchDateFilter;
+		this.recordStatsSearchFilter = returnState.recordStatsSearchFilter;
+		this.activeTag = returnState.activeTag;
+		this.activeTagKey = returnState.activeTagKey;
+		this.mobileDrawerOpen = false;
+		this.desktopSearchOpen = false;
+		this.scopeMenuOpen = false;
+		this.compactSearchOpen = false;
+		this.activeMenuMemoId = null;
+		this.renderUiState({
+			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
+		});
+		if (returnState.activeNav === "review") {
+			void this.ensureAllMemosLoaded();
+		}
+		if (returnState.activeNav === "random" && this.randomReunionController.getSnapshot().memos === null) {
+			void this.randomReunionController.refresh();
+		}
+		if (returnState.activeNav === "trash") {
+			void this.trashMemoController.loadTrashMemos();
 		}
 	}
 
@@ -4096,7 +4207,11 @@ export class KnomoView extends ItemView {
 	private finishMobileImagePickerFocusGuard(shouldRestoreFocus: boolean): void {
 		this.mobileImagePickerActive = false;
 		this.clearMobileImagePickerFocusTimer();
-		if (!shouldRestoreFocus || this.currentLayout === "mobile") {
+		if (!shouldRestoreFocus || this.currentLayout !== "mobile" || !this.composerOpen) {
+			return;
+		}
+		const input = this.inputEl;
+		if (input === null || !input.isConnected || input.disabled) {
 			return;
 		}
 		this.mobileImagePickerFocusTimerId = this.containerEl.win.setTimeout(() => {
@@ -5418,9 +5533,14 @@ export class KnomoView extends ItemView {
 			this.finishMobileImagePickerFocusGuard(shouldRestoreMobileFocus);
 		};
 		this.registerDomEvent(input, "change", () => {
+			const files = input.files;
+			if (files === null || files.length === 0) {
+				finishWithoutFiles();
+				return;
+			}
 			handledChange = true;
 			this.finishMobileImagePickerFocusGuard(false);
-			void this.insertImageFiles(input.files).finally(cleanup);
+			void this.insertImageFiles(files).finally(cleanup);
 		});
 		this.registerDomEvent(input, "cancel", () => {
 			finishWithoutFiles();

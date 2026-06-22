@@ -5,6 +5,7 @@ export type MemoIssueType =
 	| "daily_block_ambiguous"
 	| "monthly_sync_failed"
 	| "monthly_block_missing"
+	| "monthly_block_ambiguous"
 	| "index_parse_failed"
 	| "delete_failed"
 	| "file_path_invalid"

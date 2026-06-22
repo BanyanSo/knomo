@@ -13,6 +13,7 @@ export type SelfWriteReason =
 	| "delete"
 	| "archive"
 	| "archive_delete"
+	| "archive_move"
 	| "index"
 	| "scan"
 	| "repair";
@@ -24,4 +25,5 @@ export interface SelfWriteMarker {
 	writtenAt: number;
 	expiresAt: number;
 	expectedHash: string | null;
+	targetPath?: string;
 }

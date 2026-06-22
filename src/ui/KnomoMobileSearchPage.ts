@@ -21,7 +21,14 @@ export function renderKnomoMobileSearchPage(
 	container: HTMLElement,
 	options: RenderMobileSearchPageOptions,
 ): MobileSearchPageElements {
-	const pageEl = container.createDiv({ cls: "knomo-mobile-search-page" });
+	const pageEl = container.createDiv({
+		cls: "knomo-mobile-search-page",
+		attr: {
+			"aria-hidden": "true",
+			inert: "",
+		},
+	});
+	pageEl.createDiv({ cls: "knomo-mobile-search-surface", attr: { "aria-hidden": "true" } });
 	const header = pageEl.createDiv({ cls: "knomo-mobile-search-header" });
 	const searchWrap = header.createDiv({ cls: "knomo-mobile-search-wrap" });
 	setIcon(searchWrap.createSpan({ cls: "knomo-search-icon" }), KNOMO_SEARCH_ICON);
@@ -44,13 +51,14 @@ export function renderKnomoMobileSearchPage(
 	});
 	setIcon(closeButtonEl, "x");
 
-	const quickSection = pageEl.createDiv({ cls: "knomo-mobile-search-quick" });
+	const contentEl = pageEl.createDiv({ cls: "knomo-mobile-search-content" });
+	const quickSection = contentEl.createDiv({ cls: "knomo-mobile-search-quick" });
 	quickSection.createDiv({ cls: "knomo-mobile-search-section-title", text: t("search.quick") });
 	const quickListEl = quickSection.createDiv({ cls: "knomo-mobile-search-chip-list" });
 	for (const option of SEARCH_DATE_OPTIONS) {
 		renderSearchDateButton(quickListEl, option, "knomo-mobile-search-chip", option.mobileLabel ?? option.label);
 	}
-	const resultsEl = pageEl.createDiv({ cls: "knomo-mobile-search-results" });
+	const resultsEl = contentEl.createDiv({ cls: "knomo-mobile-search-results" });
 
 	return {
 		pageEl,

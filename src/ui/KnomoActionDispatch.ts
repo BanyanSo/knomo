@@ -15,6 +15,7 @@ export type KnomoSimpleAction =
 	| "collapse-sidebar"
 	| "refresh"
 	| "focus-stats"
+	| "record-stats-back"
 	| "record-stats-previous"
 	| "record-stats-next"
 	| "record-stats-retry"
@@ -72,6 +73,7 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "collapse-sidebar" ||
 		action === "refresh" ||
 		action === "focus-stats" ||
+		action === "record-stats-back" ||
 		action === "record-stats-previous" ||
 		action === "record-stats-next" ||
 		action === "record-stats-retry" ||

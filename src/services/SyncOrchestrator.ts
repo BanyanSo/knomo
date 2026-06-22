@@ -1,4 +1,5 @@
-import type { App, TFile } from "obsidian";
+import { TFile } from "obsidian";
+import type { App } from "obsidian";
 
 import type { MarkdownSyncSource, MemoRecord } from "../types/memo";
 import type { PendingMemoCreate } from "../types/pending";
@@ -52,6 +53,7 @@ export class SyncOrchestrator {
 	private readonly memoReferenceService: MemoReferenceService;
 	private readonly memoRepairService: MemoRepairService;
 	private readonly monthlyArchiveRebuildService: MonthlyArchiveRebuildService;
+	private readonly operationGate = new MaintenanceOperationGate();
 
 	constructor(
 		private readonly app: App,
@@ -127,21 +129,56 @@ export class SyncOrchestrator {
 	}
 
 	async createMemo(input: string, options: CreateMemoOptions = {}): Promise<CreateMemoResult> {
-		return this.memoCommandService.createMemo(input, options);
+		return this.operationGate.runOperation(() => this.memoCommandService.createMemo(input, options));
 	}
 
 	async updateMemo(memo: MemoRecord, input: string): Promise<MemoRecord> {
-		return this.memoCommandService.updateMemo(memo, input);
+		return this.operationGate.runOperation(() => this.memoCommandService.updateMemo(memo, input));
 	}
 
 	async deleteMemo(memo: MemoRecord): Promise<MemoRecord> {
-		return this.memoCommandService.deleteMemo(memo);
+		return this.operationGate.runOperation(async () => {
+			const currentMemo = await this.refreshDailyIssueBeforeDelete(memo);
+			if (currentMemo.status === "deleted") {
+				return currentMemo;
+			}
+			if (currentMemo.issue?.type === "daily_block_ambiguous") {
+				throw new KnomoError("delete_daily_block_ambiguous");
+			}
+			return this.memoCommandService.deleteMemo(currentMemo);
+		});
+	}
+
+	private async refreshDailyIssueBeforeDelete(memo: MemoRecord): Promise<MemoRecord> {
+		if (!hasDailyLocationIssue(memo)) {
+			return memo;
+		}
+		const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
+		const now = new Date();
+		if (file instanceof TFile) {
+			await this.memoScanService.syncDailyFile(
+				file,
+				(date) => createMemoId(date),
+				createOperationId(now),
+				"file_watch",
+				"file_watch",
+			);
+		} else {
+			await this.memoScanService.syncDeletedDailyPath(memo.dailyRef.path, createOperationId(now));
+		}
+		const currentMemo = await this.memoIndexStore.findMemoById(this.getSettings().monthlyMemoFolder, memo.id);
+		if (currentMemo === null) {
+			throw new KnomoError("memo_not_found_or_cleaned");
+		}
+		return currentMemo;
 	}
 
 	async scanDailyMemos(onProgress?: (progress: ScanDailyMemosProgress) => void | Promise<void>): Promise<ScanDailyMemosResult> {
-		await this.memoCommandService.recoverPendingCreates();
-		const now = new Date();
-		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress);
+		return this.operationGate.runOperation(async () => {
+			await this.memoCommandService.recoverPendingCreates();
+			const now = new Date();
+			return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress);
+		});
 	}
 
 	async previewLegacyDailyMemos(scope: LegacyDailyMemosImportScope): Promise<LegacyDailyMemosPreview> {
@@ -149,19 +186,23 @@ export class SyncOrchestrator {
 	}
 
 	async importLegacyDailyMemos(options: LegacyDailyMemosImportOptions): Promise<LegacyDailyMemosImportResult> {
-		await this.memoCommandService.recoverPendingCreates();
-		const now = new Date();
-		return this.memoScanService.importLegacyDailyMemos((date) => createMemoId(date), createOperationId(now), options);
+		return this.operationGate.runOperation(async () => {
+			await this.memoCommandService.recoverPendingCreates();
+			const now = new Date();
+			return this.memoScanService.importLegacyDailyMemos((date) => createMemoId(date), createOperationId(now), options);
+		});
 	}
 
 	async scanRecentDailyMemos(days: number, source: MarkdownSyncSource = "startup_scan"): Promise<ScanDailyMemosResult> {
-		await this.memoCommandService.recoverPendingCreates();
-		const now = new Date();
-		const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
-		return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), undefined, {
-			since,
-			source,
-			deleteSource: source,
+		return this.operationGate.runOperation(async () => {
+			await this.memoCommandService.recoverPendingCreates();
+			const now = new Date();
+			const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
+			return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), undefined, {
+				since,
+				source,
+				deleteSource: source,
+			});
 		});
 	}
 
@@ -174,12 +215,14 @@ export class SyncOrchestrator {
 		mode: RebuildIndexMode,
 		onProgress?: (progress: ScanDailyMemosProgress) => void | Promise<void>,
 	): Promise<RebuildIndexResult> {
-		await this.memoCommandService.recoverPendingCreates();
-		return this.memoRebuildService.rebuildIndex(scope, mode, onProgress);
+		return this.operationGate.runOperation(async () => {
+			await this.memoCommandService.recoverPendingCreates();
+			return this.memoRebuildService.rebuildIndex(scope, mode, onProgress);
+		});
 	}
 
 	async recoverPendingMemoCreates(): Promise<number> {
-		return this.memoCommandService.recoverPendingCreates();
+		return this.operationGate.runOperation(() => this.memoCommandService.recoverPendingCreates());
 	}
 
 	getDailyNotesStatus(): DailyNotesStatus {
@@ -223,29 +266,69 @@ export class SyncOrchestrator {
 	}
 
 	async rebuildMonthlyArchive(period: string): Promise<RebuildMonthlyArchiveResult> {
-		await this.memoCommandService.recoverPendingCreates();
-		return this.monthlyArchiveRebuildService.rebuildPeriod(period, {
-			replaceExisting: true,
-			createBackup: true,
+		return this.operationGate.runOperation(async () => {
+			await this.memoCommandService.recoverPendingCreates();
+			return this.monthlyArchiveRebuildService.rebuildPeriod(period, {
+				replaceExisting: true,
+				createBackup: true,
+			});
 		});
 	}
 
-	async recoverDeletedMonthlyArchive(path: string): Promise<boolean> {
-		const settings = this.getSettings();
-		if (!isMonthlyArchivePath(settings, path)) {
-			return false;
-		}
-		const periods = this.memoIndexStore.listExistingPeriods(settings.monthlyMemoFolder)
-			.filter((period) => getMonthlyArchivePath(settings, period) === path);
-		if (periods.length !== 1) {
-			throw new KnomoError("monthly_archive_period_unresolved", { path });
-		}
-		await this.memoCommandService.recoverPendingCreates();
-		const result = await this.monthlyArchiveRebuildService.rebuildPeriod(periods[0], {
-			replaceExisting: false,
-			createBackup: false,
+	async runMonthlyMemoFileFormatMigration<T>(migration: () => Promise<T>): Promise<T> {
+		return this.operationGate.runMaintenance(migration);
+	}
+
+	async runMonthlyMemoFolderMigration<T>(migration: () => Promise<T>): Promise<T> {
+		return this.operationGate.runMaintenance(async () => {
+			await this.memoCommandService.recoverPendingCreates();
+			return migration();
 		});
-		return result.archiveChanged || result.indexChanged;
+	}
+
+	async rebuildMonthlyArchivesForFileFormatMigration(
+		periods: string[],
+		trackGeneratedPath: (path: string) => void,
+	): Promise<void> {
+		await this.memoCommandService.recoverPendingCreates();
+		for (const period of periods) {
+			const path = getMonthlyArchivePath(this.getSettings(), period);
+			const targetExisted = this.app.vault.getAbstractFileByPath(path) !== null;
+			let result: RebuildMonthlyArchiveResult;
+			try {
+				result = await this.monthlyArchiveRebuildService.rebuildPeriod(period, {
+					replaceExisting: true,
+					createBackup: false,
+				});
+			} finally {
+				if (!targetExisted && this.app.vault.getAbstractFileByPath(path) !== null) {
+					trackGeneratedPath(path);
+				}
+			}
+			if (result.issues > 0) {
+				throw new Error(`Monthly archive rebuild has ${result.issues} unresolved memos for ${period}.`);
+			}
+		}
+	}
+
+	async recoverDeletedMonthlyArchive(path: string): Promise<boolean> {
+		return this.operationGate.runOperation(async () => {
+			const settings = this.getSettings();
+			if (!isMonthlyArchivePath(settings, path)) {
+				return false;
+			}
+			const periods = this.memoIndexStore.listExistingPeriods(settings.monthlyMemoFolder)
+				.filter((period) => getMonthlyArchivePath(settings, period) === path);
+			if (periods.length !== 1) {
+				throw new KnomoError("monthly_archive_period_unresolved", { path });
+			}
+			await this.memoCommandService.recoverPendingCreates();
+			const result = await this.monthlyArchiveRebuildService.rebuildPeriod(periods[0], {
+				replaceExisting: false,
+				createBackup: false,
+			});
+			return result.archiveChanged || result.indexChanged;
+		});
 	}
 
 	async listCurrentMonthMemos(): Promise<MemoRecord[]> {
@@ -273,11 +356,11 @@ export class SyncOrchestrator {
 	}
 
 	async restoreMemo(memoId: string): Promise<MemoRecord> {
-		return this.memoRestoreService.restoreMemo(memoId);
+		return this.operationGate.runOperation(() => this.memoRestoreService.restoreMemo(memoId));
 	}
 
 	async purgeDeletedMemo(memoId: string): Promise<void> {
-		await this.memoRestoreService.purgeDeletedMemo(memoId);
+		await this.operationGate.runOperation(() => this.memoRestoreService.purgeDeletedMemo(memoId));
 	}
 
 	async listIssueMemos(): Promise<MemoRecord[]> {
@@ -285,51 +368,113 @@ export class SyncOrchestrator {
 	}
 
 	async retryMonthlyDelete(memo: MemoRecord): Promise<MemoRecord> {
-		return this.memoRestoreService.retryMonthlyDelete(memo);
+		return this.operationGate.runOperation(() => this.memoRestoreService.retryMonthlyDelete(memo));
 	}
 
 	async retryMonthlySync(memo: MemoRecord): Promise<MemoRecord> {
-		return this.memoRepairService.retryMonthlySync(memo);
+		return this.operationGate.runOperation(() => this.memoRepairService.retryMonthlySync(memo));
 	}
 
 	async ensureReferenceBlockId(memo: MemoRecord): Promise<string> {
-		return this.memoReferenceService.ensureReferenceBlockId(memo);
+		return this.operationGate.runOperation(() => this.memoReferenceService.ensureReferenceBlockId(memo));
 	}
 
 	async syncExternalDailyFile(file: TFile): Promise<boolean> {
-		if (!this.isPotentialDailyFile(file.path)) {
-			return false;
-		}
-		await this.memoCommandService.recoverPendingCreates();
-		const result = await this.memoScanService.syncDailyFile(file, (date) => createMemoId(date), createOperationId(new Date()));
-		return result.created > 0 || result.updated > 0 || result.deleted > 0;
+		return this.operationGate.runOperation(async () => {
+			if (!this.isPotentialDailyFile(file.path)) {
+				return false;
+			}
+			await this.memoCommandService.recoverPendingCreates();
+			const result = await this.memoScanService.syncDailyFile(file, (date) => createMemoId(date), createOperationId(new Date()));
+			return result.created > 0 || result.updated > 0 || result.deleted > 0;
+		});
 	}
 
 	async syncRenamedDailyFile(file: TFile, oldPath: string): Promise<boolean> {
-		const wasDailyFile = this.isPotentialDailyFile(oldPath);
-		const isDailyFile = this.isPotentialDailyFile(file.path);
-		if (!wasDailyFile && !isDailyFile) {
-			return false;
-		}
-		await this.memoCommandService.recoverPendingCreates();
-		const opId = createOperationId(new Date());
-		const result = wasDailyFile && isDailyFile
-			? await this.memoScanService.syncRenamedDailyFile(file, oldPath, (date) => createMemoId(date), opId)
-			: wasDailyFile
-				? await this.memoScanService.syncDeletedDailyPath(oldPath, opId)
-				: await this.memoScanService.syncDailyFile(file, (date) => createMemoId(date), opId);
-		return result.created > 0 || result.updated > 0 || result.deleted > 0;
+		return this.operationGate.runOperation(async () => {
+			const wasDailyFile = this.isPotentialDailyFile(oldPath);
+			const isDailyFile = this.isPotentialDailyFile(file.path);
+			if (!wasDailyFile && !isDailyFile) {
+				return false;
+			}
+			await this.memoCommandService.recoverPendingCreates();
+			const opId = createOperationId(new Date());
+			const result = wasDailyFile && isDailyFile
+				? await this.memoScanService.syncRenamedDailyFile(file, oldPath, (date) => createMemoId(date), opId)
+				: wasDailyFile
+					? await this.memoScanService.syncDeletedDailyPath(oldPath, opId)
+					: await this.memoScanService.syncDailyFile(file, (date) => createMemoId(date), opId);
+			return result.created > 0 || result.updated > 0 || result.deleted > 0;
+		});
 	}
 
 	async syncDeletedDailyFile(path: string): Promise<boolean> {
-		if (!this.isPotentialDailyFile(path)) {
-			return false;
-		}
-		await this.memoCommandService.recoverPendingCreates();
-		const result = await this.memoScanService.syncDeletedDailyPath(path, createOperationId(new Date()));
-		return result.deleted > 0 || result.updated > 0;
+		return this.operationGate.runOperation(async () => {
+			if (!this.isPotentialDailyFile(path)) {
+				return false;
+			}
+			await this.memoCommandService.recoverPendingCreates();
+			const result = await this.memoScanService.syncDeletedDailyPath(path, createOperationId(new Date()));
+			return result.deleted > 0 || result.updated > 0;
+		});
 	}
 
+}
+
+function hasDailyLocationIssue(memo: MemoRecord): boolean {
+	return memo.issue?.type === "daily_block_missing"
+		|| memo.issue?.type === "daily_block_ambiguous"
+		|| memo.issue?.code === "delete_daily_block_missing"
+		|| memo.issue?.code === "delete_daily_block_ambiguous";
+}
+
+class MaintenanceOperationGate {
+	private activeOperations = 0;
+	private readonly idleResolvers: Array<() => void> = [];
+	private maintenanceBarrier: Promise<void> | null = null;
+	private releaseMaintenanceBarrier: (() => void) | null = null;
+	private maintenanceQueue: Promise<void> = Promise.resolve();
+
+	async runOperation<T>(operation: () => Promise<T>): Promise<T> {
+		while (this.maintenanceBarrier !== null) {
+			await this.maintenanceBarrier;
+		}
+		this.activeOperations += 1;
+		try {
+			return await operation();
+		} finally {
+			this.activeOperations -= 1;
+			if (this.activeOperations === 0) {
+				for (const resolve of this.idleResolvers.splice(0)) {
+					resolve();
+				}
+			}
+		}
+	}
+
+	async runMaintenance<T>(operation: () => Promise<T>): Promise<T> {
+		const previousMaintenance = this.maintenanceQueue;
+		let releaseQueue: () => void = () => undefined;
+		this.maintenanceQueue = new Promise<void>((resolve) => {
+			releaseQueue = resolve;
+		});
+		await previousMaintenance;
+		this.maintenanceBarrier = new Promise<void>((resolve) => {
+			this.releaseMaintenanceBarrier = resolve;
+		});
+		if (this.activeOperations > 0) {
+			await new Promise<void>((resolve) => this.idleResolvers.push(resolve));
+		}
+		try {
+			return await operation();
+		} finally {
+			const releaseBarrier = this.releaseMaintenanceBarrier;
+			this.maintenanceBarrier = null;
+			this.releaseMaintenanceBarrier = null;
+			releaseBarrier?.();
+			releaseQueue();
+		}
+	}
 }
 
 function createTransientPendingMemoCreateStore(): PendingMemoCreateStoreLike {

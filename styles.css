@@ -115,8 +115,19 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knom
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header .view-actions {
-	display: none;
+	display: flex;
+	margin-inline-start: auto;
 	border: 0;
+}
+
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header .knomo-record-stats-back {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	min-width: 44px;
+	height: 44px;
+	min-height: 44px;
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .view-action:not(.knomo-mobile-header-action) {
@@ -1290,7 +1301,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-compact-menu-btn,
-.knomo-plugin .knomo-compact-search-btn {
+.knomo-plugin .knomo-compact-search-btn,
+.knomo-plugin .knomo-record-stats-back {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -1310,9 +1322,15 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-compact-menu-btn:hover,
 .knomo-plugin .knomo-compact-menu-btn:focus-visible,
 .knomo-plugin .knomo-compact-search-btn:hover,
-.knomo-plugin .knomo-compact-search-btn:focus-visible {
+.knomo-plugin .knomo-compact-search-btn:focus-visible,
+.knomo-plugin .knomo-record-stats-back:hover,
+.knomo-plugin .knomo-record-stats-back:focus-visible {
 	color: var(--text-normal);
 	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-record-stats-back {
+	display: none;
 }
 
 .knomo-plugin .knomo-compact-title {
@@ -1419,31 +1437,53 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	flex-direction: column;
 	gap: 0;
 	padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
-	background: var(--knomo-page-background);
+	background: transparent;
 	opacity: 0;
-	transform: translateX(100%);
-	visibility: hidden;
 	pointer-events: none;
-	transition:
-		transform var(--knomo-transition-panel),
-		opacity var(--knomo-transition-drawer-fade),
-		visibility var(--knomo-transition-drawer-fade);
+	transition: opacity var(--knomo-transition-drawer-fade);
 }
 
 .knomo-plugin.is-mobile-search-open .knomo-mobile-search-page,
 .knomo-plugin .knomo-mobile-search-page.is-open {
 	opacity: 1;
-	transform: translateX(0);
-	visibility: visible;
 	pointer-events: auto;
 }
 
+.knomo-plugin .knomo-mobile-search-surface {
+	position: absolute;
+	inset: 0;
+	z-index: 0;
+	background: var(--knomo-page-background);
+	transform: translateX(100%);
+	transition: transform var(--knomo-transition-panel);
+}
+
 .knomo-plugin .knomo-mobile-search-header {
+	position: relative;
+	z-index: 1;
 	display: flex;
 	align-items: center;
 	gap: 10px;
 	flex: 0 0 auto;
 	margin-bottom: 12px;
+}
+
+.knomo-plugin .knomo-mobile-search-content {
+	position: relative;
+	z-index: 1;
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+	transform: translateX(100%);
+	transition: transform var(--knomo-transition-panel);
+}
+
+.knomo-plugin.is-mobile-search-open .knomo-mobile-search-surface,
+.knomo-plugin.is-mobile-search-open .knomo-mobile-search-content,
+.knomo-plugin .knomo-mobile-search-page.is-open .knomo-mobile-search-surface,
+.knomo-plugin .knomo-mobile-search-page.is-open .knomo-mobile-search-content {
+	transform: translateX(0);
 }
 
 .knomo-plugin .knomo-mobile-search-wrap {
@@ -1461,6 +1501,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: var(--knomo-surface);
 	color: var(--text-faint);
 	box-shadow: var(--knomo-card-shadow);
+}
+
+.knomo-plugin .knomo-mobile-search-wrap .knomo-search-input {
+	box-shadow: none;
+	transition: none;
+	-webkit-tap-highlight-color: transparent;
 }
 
 .knomo-plugin .knomo-mobile-search-close {
@@ -3310,6 +3356,12 @@ body .knomo-mobile-create-fab.is-hidden {
 
 .knomo-plugin.is-record-stats .knomo-topbar {
 	margin-bottom: var(--knomo-desktop-header-composer-gap);
+}
+
+.knomo-plugin.is-record-stats.is-layout-desktop-medium .knomo-record-stats-back,
+.knomo-plugin.is-record-stats.is-layout-desktop-narrow .knomo-record-stats-back,
+.knomo-plugin.is-record-stats.is-layout-desktop-wide.is-sidebar-collapsed .knomo-record-stats-back {
+	display: inline-flex;
 }
 
 .knomo-plugin.is-record-stats .knomo-card-flow {

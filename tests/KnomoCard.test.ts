@@ -565,6 +565,39 @@ test("mobile search resets new result ranges and preserves content-refresh scrol
 	assert.match(renderMethod, /this\.restoreElementScrollTop\(resultsEl, scrollTop\);/);
 });
 
+test("mobile search is pre-mounted before synchronous focus so the mobile keyboard can open", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const renderMethod = getMethodSource(source, "render");
+	const openMethod = getMethodSource(source, "openMobileSearchPage");
+	const syncMethod = getMethodSource(source, "syncMobileSearchPage");
+	const focusMethod = getMethodSource(source, "focusMobileSearchInputNow");
+
+	assert.match(renderMethod, /if \(Platform\.isMobile\) \{\s*this\.ensureMobileSearchPage\(\);\s*\}/);
+	assert.match(openMethod, /this\.syncRootState\(\);[\s\S]*this\.focusMobileSearchInputNow\(\);/);
+	assert.match(syncMethod, /this\.setMobileSearchPageActive\(true\);/);
+	assert.match(focusMethod, /input\.focus\(\{ preventScroll: true \}\);/);
+	assert.doesNotMatch(focusMethod, /requestAnimationFrame|setTimeout/);
+});
+
+test("mobile search keeps its focus layer fixed while its visual layers slide", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+	const pageRule = getStyleRule(css, ".knomo-plugin .knomo-mobile-search-page");
+	const surfaceRule = getStyleRule(css, ".knomo-plugin .knomo-mobile-search-surface");
+	const contentRule = getStyleRule(css, ".knomo-plugin .knomo-mobile-search-content");
+	const inputRule = getStyleRule(css, ".knomo-plugin .knomo-mobile-search-wrap .knomo-search-input");
+
+	assert.doesNotMatch(pageRule, /visibility:\s*hidden/);
+	assert.doesNotMatch(pageRule, /transform:/);
+	assert.match(pageRule, /pointer-events:\s*none;/);
+	assert.match(surfaceRule, /transform:\s*translateX\(100%\);/);
+	assert.match(surfaceRule, /transition:\s*transform var\(--knomo-transition-panel\);/);
+	assert.match(contentRule, /transform:\s*translateX\(100%\);/);
+	assert.match(contentRule, /transition:\s*transform var\(--knomo-transition-panel\);/);
+	assert.match(inputRule, /box-shadow:\s*none;/);
+	assert.match(inputRule, /transition:\s*none;/);
+	assert.match(inputRule, /-webkit-tap-highlight-color:\s*transparent;/);
+});
+
 test("memo writes apply local mutations instead of refreshing every open view", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const saveMethod = getMethodSource(source, "saveInput");

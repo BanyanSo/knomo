@@ -42,14 +42,17 @@ export class SelfWriteTracker {
 		return marker ?? null;
 	}
 
-	consumeByReason(path: string, reason: SelfWriteReason): SelfWriteMarker | null {
+	consumeByReason(path: string, reason: SelfWriteReason, targetPath?: string): SelfWriteMarker | null {
 		this.cleanup();
 		const markers = this.markersByPath.get(path);
 		if (!markers || markers.length === 0) {
 			return null;
 		}
 
-		const matchIndex = markers.findIndex((marker) => marker.reason === reason);
+		const matchIndex = markers.findIndex((marker) => (
+			marker.reason === reason
+			&& (targetPath === undefined || marker.targetPath === targetPath)
+		));
 		if (matchIndex === -1) {
 			return null;
 		}
@@ -58,6 +61,20 @@ export class SelfWriteTracker {
 			this.markersByPath.delete(path);
 		}
 		return marker ?? null;
+	}
+
+	discard(path: string, opId: string): void {
+		this.cleanup();
+		const markers = this.markersByPath.get(path);
+		if (!markers) {
+			return;
+		}
+		const activeMarkers = markers.filter((marker) => marker.opId !== opId);
+		if (activeMarkers.length === 0) {
+			this.markersByPath.delete(path);
+		} else {
+			this.markersByPath.set(path, activeMarkers);
+		}
 	}
 
 	cleanup(): void {

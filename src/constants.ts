@@ -1,5 +1,3 @@
-export const PLUGIN_ID = "knomo";
-export const PLUGIN_NAME = "Knomo";
 export const KNOMO_VIEW_TYPE = "knomo-view";
 export const KNOMO_VIEW_DISPLAY_TEXT = "Knomo";
 

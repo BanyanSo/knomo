@@ -59,6 +59,13 @@ export class MonthlyArchiveMissingError extends KnomoError {
 	}
 }
 
+export class MonthlyArchiveAmbiguousError extends KnomoError {
+	constructor() {
+		super("monthly_archive_block_ambiguous");
+		this.name = "MonthlyArchiveAmbiguousError";
+	}
+}
+
 export class MonthlyArchiveService {
 	constructor(
 		private readonly app: App,
@@ -227,8 +234,14 @@ export class MonthlyArchiveService {
 				lastKnownBlock: memo.monthlyRef.lastKnownBlock,
 				lastKnownHash: memo.monthlyRef.lastKnownHash,
 				contentHash: memo.contentHash,
+				heading: dateHeading,
+				allowLineHintTimeMatch: true,
+				matchPolicy: "safe-mutation",
 			}, "monthly_block_missing");
 			if (location.parsedBlock === null) {
+				if (location.issueType === "monthly_block_ambiguous") {
+					throw new MonthlyArchiveAmbiguousError();
+				}
 				if (options.allowMissingInsert !== true) {
 					throw new MonthlyArchiveMissingError("monthly_archive_block_missing");
 				}
@@ -264,6 +277,7 @@ export class MonthlyArchiveService {
 			throw new MonthlyArchiveMissingError("monthly_archive_file_missing");
 		}
 		const file = existing;
+		const dateHeading = memo.monthlyRef.dateHeading;
 		let deletedBlock = "";
 		const content = await this.app.vault.process(file, (currentContent) => {
 			const location = this.markdownBlockService.findMemoBlock(currentContent, {
@@ -271,8 +285,14 @@ export class MonthlyArchiveService {
 				lastKnownBlock: memo.monthlyRef.lastKnownBlock,
 				lastKnownHash: memo.monthlyRef.lastKnownHash,
 				contentHash: memo.contentHash,
+				heading: dateHeading,
+				allowLineHintTimeMatch: true,
+				matchPolicy: "safe-mutation",
 			}, "monthly_block_missing");
 			if (location.parsedBlock === null) {
+				if (location.issueType === "monthly_block_ambiguous") {
+					throw new MonthlyArchiveAmbiguousError();
+				}
 				throw new MonthlyArchiveMissingError("monthly_archive_block_missing");
 			}
 			deletedBlock = location.parsedBlock.rawBlock;

@@ -755,6 +755,77 @@ test("reports ambiguity only when repeated content cannot be uniquely located", 
 	assert.equal(location.issueType, "daily_block_ambiguous");
 });
 
+test("safe mutation does not locate a removed memo by another block's content hash", () => {
+	const content = "- 09:00:00 重复内容";
+	const location = service.findMemoBlock(content, {
+		lineNumberHint: 2,
+		lastKnownBlock: "- 08:00:00 重复内容",
+		lastKnownHash: "stale-hash",
+		contentHash: hashMemoContent("重复内容"),
+		allowLineHintTimeMatch: true,
+		matchPolicy: "safe-mutation",
+	}, "daily_block_missing");
+
+	assert.equal(location.parsedBlock, null);
+	assert.equal(location.issueType, "daily_block_missing");
+});
+
+test("safe mutation does not use an exact line and time match after another memo shifts into place", () => {
+	const location = service.findMemoBlock("- 08:00:00 另一条 memo", {
+		lineNumberHint: 1,
+		lastKnownBlock: "- 08:00:00 已删除的 memo",
+		lastKnownHash: "stale-hash",
+		contentHash: hashMemoContent("已删除的 memo"),
+		allowLineHintTimeMatch: true,
+		matchPolicy: "safe-mutation",
+	}, "daily_block_missing");
+
+	assert.equal(location.parsedBlock, null);
+	assert.equal(location.issueType, "daily_block_missing");
+});
+
+test("safe mutation uses the exact line hint to disambiguate repeated raw block hashes", () => {
+	const block = "- 08:00:00 重复内容";
+	const location = service.findMemoBlock(`${block}\n${block}`, {
+		lineNumberHint: 1,
+		lastKnownBlock: block,
+		lastKnownHash: hashText(block),
+		contentHash: hashMemoContent("重复内容"),
+		matchPolicy: "safe-mutation",
+	}, "daily_block_missing");
+
+	assert.equal(location.parsedBlock?.startLine, 0);
+	assert.equal(location.issueType, null);
+});
+
+test("safe mutation keeps repeated raw block hashes ambiguous when the line hint misses", () => {
+	const block = "- 08:00:00 重复内容";
+	const location = service.findMemoBlock(`${block}\n${block}`, {
+		lineNumberHint: 3,
+		lastKnownBlock: block,
+		lastKnownHash: hashText(block),
+		contentHash: hashMemoContent("重复内容"),
+		matchPolicy: "safe-mutation",
+	}, "daily_block_missing");
+
+	assert.equal(location.parsedBlock, null);
+	assert.equal(location.issueType, "daily_block_ambiguous");
+});
+
+test("safe mutation reports monthly ambiguity for a monthly locator", () => {
+	const block = "- 08:00:00 重复内容";
+	const location = service.findMemoBlock(`${block}\n${block}`, {
+		lineNumberHint: null,
+		lastKnownBlock: block,
+		lastKnownHash: hashText(block),
+		contentHash: hashMemoContent("重复内容"),
+		matchPolicy: "safe-mutation",
+	}, "monthly_block_missing");
+
+	assert.equal(location.parsedBlock, null);
+	assert.equal(location.issueType, "monthly_block_ambiguous");
+});
+
 test("parses daily note dates from custom formats and folders", () => {
 	const date = parseDailyNoteDateFromPath("Daily/2026/05/17.md", {
 		folder: "Daily",
@@ -1552,6 +1623,156 @@ test("syncExternalDailyFile imports new blocks and tombstones missing indexed me
 	assert.deepEqual(deletedMonthly, [deletedMemo.id]);
 });
 
+test("syncExternalDailyFile tombstones only the removed memo when same-time siblings shift lines", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const settings = createTestSettings();
+	const rawBlocks = [
+		"- 08:00:00 第一条",
+		"- 08:00:00 第二条",
+		"- 08:00:00 第三条",
+	];
+
+	for (const removedIndex of [0, 1, 2]) {
+		const file = Object.assign(new TFile(), {
+			path: "Daily/2026-05-18.md",
+			basename: "2026-05-18",
+			extension: "md",
+		});
+		const memos = rawBlocks.map((rawBlock, index) => {
+			const memo = createReferenceMemo(rawBlock);
+			memo.id = `same-time-${index}`;
+			memo.createdAt = `2026-05-18T08:00:00.00${index}+08:00`;
+			memo.updatedAt = memo.createdAt;
+			memo.contentSnapshot = ["第一条", "第二条", "第三条"][index] ?? "";
+			memo.contentHash = hashMemoContent(memo.contentSnapshot);
+			memo.dailyRef.lineNumberHint = index + 4;
+			memo.dailyRef.lastKnownHash = hashText(rawBlock);
+			memo.monthlyRef.lastKnownBlock = rawBlock;
+			memo.monthlyRef.lastKnownHash = hashText(rawBlock);
+			return memo;
+		});
+		const storedMemos = new Map(memos.map((memo) => [memo.id, memo]));
+		const remainingBlocks = rawBlocks.filter((_block, index) => index !== removedIndex);
+		const deletedMonthlyIds: string[] = [];
+		let createdCount = 0;
+		const orchestrator = new SyncOrchestrator(
+			{
+				vault: {
+					cachedRead: async () => `# 2026-05-18\n\n## Knomo\n${remainingBlocks.join("\n")}`,
+				},
+			} as never,
+			() => settings,
+			{
+				getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+				getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+			} as never,
+			{
+				upsertMemoBlock: async (_settings: KnomoSettings, memo: MemoRecord, block: string) => ({
+					file: { path: memo.monthlyRef.path },
+					content: block,
+					ref: {
+						...memo.monthlyRef,
+						lastKnownBlock: block,
+						lastKnownHash: hashText(block),
+					},
+				}),
+				deleteMemoBlock: async (memo: MemoRecord) => {
+					deletedMonthlyIds.push(memo.id);
+					return {
+						file: { path: memo.monthlyRef.path },
+						content: "",
+						ref: memo.monthlyRef,
+					};
+				},
+			} as never,
+			{
+				loadAll: async () => [...storedMemos.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+				upsertMemo: async (_folder: string, memo: MemoRecord) => {
+					storedMemos.set(memo.id, memo);
+					return memo;
+				},
+				addMemo: async (_folder: string, memo: MemoRecord) => {
+					createdCount += 1;
+					storedMemos.set(memo.id, memo);
+					return memo;
+				},
+			} as never,
+			{ mark: (_path: string) => undefined } as never,
+			service,
+		);
+
+		assert.equal(await orchestrator.syncExternalDailyFile(file), true);
+		assert.deepEqual(deletedMonthlyIds, [`same-time-${removedIndex}`]);
+		assert.equal(createdCount, 0);
+		for (const [index, memo] of memos.entries()) {
+			const storedMemo = storedMemos.get(memo.id);
+			assert.equal(storedMemo?.status, index === removedIndex ? "deleted" : "active");
+			assert.equal(storedMemo?.issue, null);
+		}
+	}
+});
+
+test("syncExternalDailyFile preserves true ambiguity for indistinguishable memo blocks", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), {
+		path: "Daily/2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const rawBlock = "- 08:00:00 完全相同";
+	const memos = [0, 1].map((index) => {
+		const memo = createReferenceMemo(rawBlock);
+		memo.id = `duplicate-${index}`;
+		memo.createdAt = `2026-05-18T08:00:00.00${index}+08:00`;
+		memo.updatedAt = memo.createdAt;
+		memo.contentSnapshot = "完全相同";
+		memo.contentHash = hashMemoContent(memo.contentSnapshot);
+		memo.dailyRef.lineNumberHint = index + 4;
+		memo.dailyRef.lastKnownHash = hashText(rawBlock);
+		return memo;
+	});
+	const storedMemos = new Map(memos.map((memo) => [memo.id, memo]));
+	let createdCount = 0;
+	let deletedMonthlyCount = 0;
+	const orchestrator = new SyncOrchestrator(
+		{ vault: { cachedRead: async () => `# 2026-05-18\n\n## Knomo\n${rawBlock}` } } as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			deleteMemoBlock: async () => {
+				deletedMonthlyCount += 1;
+				throw new Error("不应删除月度归档");
+			},
+		} as never,
+		{
+			loadAll: async () => [...storedMemos.values()].reverse(),
+			upsertMemo: async (_folder: string, memo: MemoRecord) => {
+				storedMemos.set(memo.id, memo);
+				return memo;
+			},
+			addMemo: async (_folder: string, memo: MemoRecord) => {
+				createdCount += 1;
+				return memo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	assert.equal(await orchestrator.syncExternalDailyFile(file), true);
+	assert.equal(createdCount, 0);
+	assert.equal(deletedMonthlyCount, 0);
+	for (const memo of storedMemos.values()) {
+		assert.equal(memo.status, "active");
+		assert.equal(memo.issue?.type, "daily_block_ambiguous");
+	}
+});
+
 test("daily scan persists recovered reference metadata for historical quote blocks", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
@@ -1566,6 +1787,8 @@ test("daily scan persists recovered reference metadata for historical quote bloc
 	source.dailyRef.lineNumberHint = 4;
 	source.dailyRef.lastKnownHash = hashText(source.dailyRef.lastKnownBlock);
 	const createdMemos: MemoRecord[] = [];
+	const indexedMemos: Record<string, MemoRecord> = { [source.id]: source };
+	let mergeCalls = 0;
 	const settings = createTestSettings();
 	const orchestrator = new SyncOrchestrator(
 		{
@@ -1606,7 +1829,19 @@ test("daily scan persists recovered reference metadata for historical quote bloc
 			loadAll: async () => [source],
 			addMemo: async (_folder: string, memo: MemoRecord) => {
 				createdMemos.push(memo);
+				indexedMemos[memo.id] = memo;
 				return memo;
+			},
+			mergePeriod: async (_folder: string, period: string, merge: (index: unknown) => unknown) => {
+				mergeCalls += 1;
+				const nextIndex = merge({
+					schemaVersion: 2,
+					period,
+					updatedAt: "2026-05-18T09:00:00.000+08:00",
+					memos: indexedMemos,
+				}) as { memos: Record<string, MemoRecord> };
+				Object.assign(indexedMemos, nextIndex.memos);
+				return nextIndex;
 			},
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
@@ -1614,8 +1849,11 @@ test("daily scan persists recovered reference metadata for historical quote bloc
 	);
 
 	assert.equal(await orchestrator.syncExternalDailyFile(file), true);
-	assert.equal(createdMemos[0]?.sourceMemoId, source.id);
-	assert.deepEqual(createdMemos[0]?.references, [{
+	const createdMemo = createdMemos[0];
+	assert.ok(createdMemo);
+	assert.equal(mergeCalls, 1);
+	assert.equal(indexedMemos[createdMemo.id]?.sourceMemoId, source.id);
+	assert.deepEqual(indexedMemos[createdMemo.id]?.references, [{
 		memoId: source.id,
 		referenceText: "[[Daily/2026-05-18#^abc123|20260518-080000-00]]",
 	}]);
@@ -1969,6 +2207,54 @@ test("updateMemo reloads the latest index memo before syncing monthly archive", 
 	assert.equal(savedMemos[0]?.monthlyRef.lastKnownBlock, "- 08:00:00 最终内容");
 });
 
+test("updateMemo does not update another memo matched only by content hash", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const dailyFile = Object.assign(new TFile(), { path: "Daily/2026-05-18.md" });
+	let dailyContent = "# 2026-05-18\n\n## Knomo\n- 09:00:00 重复内容";
+	const memo = createReferenceMemo("- 08:00:00 重复内容");
+	memo.contentSnapshot = "重复内容";
+	memo.contentHash = hashMemoContent("重复内容");
+	memo.dailyRef.lineNumberHint = 4;
+	memo.dailyRef.lastKnownHash = hashText(memo.dailyRef.lastKnownBlock);
+	let monthlyUpdated = false;
+	const savedIssues: MemoRecord["issue"][] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: () => dailyFile,
+				process: async (_file: unknown, callback: (content: string) => string) => {
+					dailyContent = callback(dailyContent);
+					return dailyContent;
+				},
+			},
+		} as never,
+		() => createTestSettings(),
+		{} as never,
+		{
+			upsertMemoBlock: async () => {
+				monthlyUpdated = true;
+				throw new Error("不应更新月度归档");
+			},
+		} as never,
+		{
+			findMemoByIdInPeriod: async () => memo,
+			upsertMemo: async (_folder: string, nextMemo: MemoRecord) => {
+				savedIssues.push(nextMemo.issue);
+				return nextMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	await assert.rejects(() => orchestrator.updateMemo(memo, "最终内容"));
+
+	assert.equal(dailyContent, "# 2026-05-18\n\n## Knomo\n- 09:00:00 重复内容");
+	assert.equal(monthlyUpdated, false);
+	assert.equal(savedIssues[0]?.code, "daily_block_missing");
+});
+
 test("restoreMemo writes daily and monthly blocks before reactivating the index", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
@@ -2059,6 +2345,86 @@ test("restoreMemo writes daily and monthly blocks before reactivating the index"
 	assert.equal(savedMemos[0]?.monthlyRef.lastKnownBlock, "- 08:00:00 内容 ^abc123");
 });
 
+test("restoreMemo does not reuse blocks from other headings or different times", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const dailyFile = Object.assign(new TFile(), { path: "Daily/2026-05-18.md" });
+	const monthlyFile = Object.assign(new TFile(), { path: "Memos/Memos-2026-05.md" });
+	const block = "- 08:00:00 重复内容";
+	let dailyContent = [
+		"# 2026-05-18",
+		"",
+		"## Other",
+		block,
+		"## Knomo",
+		"- 09:00:00 重复内容",
+	].join("\n");
+	let monthlyContent = [
+		"# 2026-05",
+		"",
+		"## 2026-05-17",
+		block,
+		"## 2026-05-18",
+		"- 09:00:00 重复内容",
+	].join("\n");
+	const deletedMemo = {
+		...createReferenceMemo(block),
+		status: "deleted" as const,
+		deletedAt: "2026-05-18T09:00:00.000+08:00",
+		deletedDailyBlock: block,
+		deletedMonthlyBlock: block,
+	};
+	let monthlyUpserts = 0;
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: (path: string) => path === dailyFile.path ? dailyFile : path === monthlyFile.path ? monthlyFile : null,
+				cachedRead: async (file: { path: string }) => file.path === monthlyFile.path ? monthlyContent : dailyContent,
+				process: async (_file: unknown, callback: (content: string) => string) => {
+					dailyContent = callback(dailyContent);
+					return dailyContent;
+				},
+			},
+		} as never,
+		() => createTestSettings(),
+		{ getOrCreateDailyNoteForDate: async () => dailyFile } as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, _memo: MemoRecord, restoredBlock: string) => {
+				monthlyUpserts += 1;
+				monthlyContent = `${monthlyContent}\n${restoredBlock}`;
+				return {
+					file: monthlyFile,
+					content: monthlyContent,
+					ref: {
+						path: monthlyFile.path,
+						dateHeading: "## 2026-05-18",
+						lastKnownBlock: restoredBlock,
+						lastKnownHash: hashText(restoredBlock),
+						lineNumberHint: 6,
+						lastSyncedAt: "2026-05-18T09:00:00.000+08:00",
+					},
+				};
+			},
+		} as never,
+		{
+			findMemoById: async () => deletedMemo,
+			updateMemo: async (_folder: string, memo: MemoRecord, update: (memo: MemoRecord) => MemoRecord) => update(memo),
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const restoredMemo = await orchestrator.restoreMemo(deletedMemo.id);
+
+	assert.equal(service.parseMemoBlocksUnderHeading(dailyContent, "## Other").length, 1);
+	assert.equal(service.parseMemoBlocksUnderHeading(dailyContent, "## Knomo").length, 2);
+	assert.equal(service.parseMemoBlocksUnderHeading(monthlyContent, "## 2026-05-17").length, 1);
+	assert.equal(service.parseMemoBlocksUnderHeading(monthlyContent, "## 2026-05-18").length, 2);
+	assert.equal(monthlyUpserts, 1);
+	assert.equal(restoredMemo.dailyRef.lastKnownBlock, block);
+	assert.equal(restoredMemo.monthlyRef.lastKnownBlock, block);
+});
+
 test("restoreMemo keeps deleted status when monthly restore fails and does not duplicate restored daily block", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
@@ -2141,6 +2507,184 @@ test("purgeDeletedMemo only clears a deleted tombstone from the index", async ()
 
 	await orchestrator.purgeDeletedMemo(deletedMemo.id);
 	assert.equal(purgedMemoId, deletedMemo.id);
+});
+
+test("deleteMemo does not delete another memo matched only by the stale line and time", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const dailyFile = Object.assign(new TFile(), { path: "Daily/2026-05-18.md" });
+	let dailyContent = "# 2026-05-18\n\n## Knomo\n- 08:00:00 另一条内容";
+	const memo = createReferenceMemo("- 08:00:00 重复内容");
+	memo.contentSnapshot = "重复内容";
+	memo.contentHash = hashMemoContent("重复内容");
+	memo.dailyRef.lineNumberHint = 4;
+	memo.dailyRef.lastKnownHash = hashText(memo.dailyRef.lastKnownBlock);
+	let monthlyDeleted = false;
+	const savedIssues: MemoRecord["issue"][] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: () => dailyFile,
+				process: async (_file: unknown, callback: (content: string) => string) => {
+					dailyContent = callback(dailyContent);
+					return dailyContent;
+				},
+			},
+		} as never,
+		() => createTestSettings(),
+		{} as never,
+		{
+			deleteMemoBlock: async () => {
+				monthlyDeleted = true;
+				throw new Error("不应删除月度归档");
+			},
+		} as never,
+		{
+			findMemoById: async () => memo,
+			upsertMemo: async (_folder: string, nextMemo: MemoRecord) => {
+				savedIssues.push(nextMemo.issue);
+				return nextMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	await assert.rejects(() => orchestrator.deleteMemo(memo));
+
+	assert.equal(dailyContent, "# 2026-05-18\n\n## Knomo\n- 08:00:00 另一条内容");
+	assert.equal(monthlyDeleted, false);
+	assert.equal(savedIssues[0]?.code, "delete_daily_block_missing");
+});
+
+test("deleteMemo records ambiguity and leaves both Markdown stores unchanged", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const dailyFile = Object.assign(new TFile(), { path: "Daily/2026-05-18.md" });
+	const block = "- 08:00:00 重复内容";
+	const originalDailyContent = `# 2026-05-18\n\n## Knomo\n${block}\n${block}`;
+	let dailyContent = originalDailyContent;
+	const memo = createReferenceMemo(block);
+	memo.dailyRef.lineNumberHint = null;
+	memo.dailyRef.lastKnownHash = hashText(block);
+	let monthlyDeleted = false;
+	const savedIssues: MemoRecord["issue"][] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: () => dailyFile,
+				process: async (_file: unknown, callback: (content: string) => string) => {
+					dailyContent = callback(dailyContent);
+					return dailyContent;
+				},
+			},
+		} as never,
+		() => createTestSettings(),
+		{} as never,
+		{
+			deleteMemoBlock: async () => {
+				monthlyDeleted = true;
+				throw new Error("不应删除月度归档");
+			},
+		} as never,
+		{
+			findMemoById: async () => memo,
+			upsertMemo: async (_folder: string, nextMemo: MemoRecord) => {
+				savedIssues.push(nextMemo.issue);
+				return nextMemo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	await assert.rejects(() => orchestrator.deleteMemo(memo), /Multiple daily memo blocks may match/);
+
+	assert.equal(dailyContent, originalDailyContent);
+	assert.equal(monthlyDeleted, false);
+	assert.equal(savedIssues[0]?.type, "daily_block_ambiguous");
+	assert.equal(savedIssues[0]?.code, "delete_daily_block_ambiguous");
+});
+
+test("deleteMemo rescans a stale daily ambiguity before mutating Markdown", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const dailyFile = Object.assign(new TFile(), {
+		path: "Daily/2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	let dailyContent = "# 2026-05-18\n\n## Knomo\n- 08:00:00 保留内容";
+	const removedMemo = createReferenceMemo("- 08:00:00 已删除内容");
+	removedMemo.id = "removed-memo";
+	removedMemo.contentSnapshot = "已删除内容";
+	removedMemo.contentHash = hashMemoContent(removedMemo.contentSnapshot);
+	removedMemo.dailyRef.lineNumberHint = 4;
+	removedMemo.dailyRef.lastKnownHash = hashText(removedMemo.dailyRef.lastKnownBlock);
+	removedMemo.issue = {
+		type: "daily_block_ambiguous",
+		code: "daily_block_ambiguous",
+		detectedAt: "2026-05-18T08:01:00.000+08:00",
+		message: "旧版本留下的歧义状态",
+	};
+	const keptMemo = createReferenceMemo("- 08:00:00 保留内容");
+	keptMemo.id = "kept-memo";
+	keptMemo.createdAt = "2026-05-18T08:00:00.001+08:00";
+	keptMemo.updatedAt = keptMemo.createdAt;
+	keptMemo.contentSnapshot = "保留内容";
+	keptMemo.contentHash = hashMemoContent(keptMemo.contentSnapshot);
+	keptMemo.dailyRef.lineNumberHint = 5;
+	keptMemo.dailyRef.lastKnownHash = hashText(keptMemo.dailyRef.lastKnownBlock);
+	const storedMemos = new Map([
+		[removedMemo.id, removedMemo],
+		[keptMemo.id, keptMemo],
+	]);
+	const deletedMonthlyIds: string[] = [];
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: () => dailyFile,
+				cachedRead: async () => dailyContent,
+				process: async (_file: unknown, callback: (content: string) => string) => {
+					dailyContent = callback(dailyContent);
+					return dailyContent;
+				},
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			upsertMemoBlock: async (_settings: KnomoSettings, memo: MemoRecord, block: string) => ({
+				file: { path: memo.monthlyRef.path },
+				content: block,
+				ref: { ...memo.monthlyRef, lastKnownBlock: block, lastKnownHash: hashText(block) },
+			}),
+			deleteMemoBlock: async (memo: MemoRecord) => {
+				deletedMonthlyIds.push(memo.id);
+				return { file: { path: memo.monthlyRef.path }, content: "", ref: memo.monthlyRef };
+			},
+		} as never,
+		{
+			loadAll: async () => [...storedMemos.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+			findMemoById: async (_folder: string, memoId: string) => storedMemos.get(memoId) ?? null,
+			upsertMemo: async (_folder: string, memo: MemoRecord) => {
+				storedMemos.set(memo.id, memo);
+				return memo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const deletedMemo = await orchestrator.deleteMemo(removedMemo);
+
+	assert.equal(deletedMemo.status, "deleted");
+	assert.equal(dailyContent, "# 2026-05-18\n\n## Knomo\n- 08:00:00 保留内容");
+	assert.equal(storedMemos.get(keptMemo.id)?.status, "active");
+	assert.deepEqual(deletedMonthlyIds, [removedMemo.id]);
 });
 
 test("deleteMemo no-ops when the latest index memo is already deleted", async () => {
@@ -2738,6 +3282,77 @@ test("monthly archive insertion preserves trailing blank lines in a date heading
 			"## 2026-05-15",
 		].join("\n"),
 	);
+});
+
+test("monthly archive mutations do not use matching content from another date heading", async () => {
+	const { MonthlyArchiveService } = await loadMonthlyArchiveService();
+	const { TFile } = await import("obsidian");
+	const monthlyFile = Object.assign(new TFile(), { path: "Memos/Memos-2026-05.md" });
+	const originalContent = [
+		"# 2026-05",
+		"## 2026-05-17",
+		"- 09:00:00 重复内容",
+		"## 2026-05-18",
+	].join("\n");
+	let monthlyContent = originalContent;
+	const archiveService = new MonthlyArchiveService({
+		vault: {
+			getAbstractFileByPath: () => monthlyFile,
+			process: async (_file: unknown, callback: (content: string) => string) => {
+				monthlyContent = callback(monthlyContent);
+				return monthlyContent;
+			},
+		},
+	} as never);
+	const memo = createReferenceMemo("- 08:00:00 重复内容");
+	memo.contentSnapshot = "重复内容";
+	memo.contentHash = hashMemoContent("重复内容");
+	memo.monthlyRef.dateHeading = "## 2026-05-18";
+	memo.monthlyRef.lineNumberHint = 5;
+	memo.monthlyRef.lastKnownHash = hashText(memo.monthlyRef.lastKnownBlock);
+
+	await assert.rejects(() => archiveService.upsertMemoBlock(
+		createTestSettings(),
+		memo,
+		"- 08:00:00 更新内容",
+	));
+	assert.equal(monthlyContent, originalContent);
+
+	await assert.rejects(() => archiveService.deleteMemoBlock(memo));
+	assert.equal(monthlyContent, originalContent);
+});
+
+test("monthly archive recovery does not insert when the target block is ambiguous", async () => {
+	const { MonthlyArchiveService } = await loadMonthlyArchiveService();
+	const { TFile } = await import("obsidian");
+	const monthlyFile = Object.assign(new TFile(), { path: "Memos/Memos-2026-05.md" });
+	const block = "- 08:00:00 重复内容";
+	const originalContent = [
+		"# 2026-05",
+		"## 2026-05-18",
+		block,
+		block,
+	].join("\n");
+	let monthlyContent = originalContent;
+	const archiveService = new MonthlyArchiveService({
+		vault: {
+			getAbstractFileByPath: () => monthlyFile,
+			process: async (_file: unknown, callback: (content: string) => string) => {
+				monthlyContent = callback(monthlyContent);
+				return monthlyContent;
+			},
+		},
+	} as never);
+	const memo = createReferenceMemo(block);
+	memo.monthlyRef.dateHeading = "## 2026-05-18";
+	memo.monthlyRef.lineNumberHint = null;
+	memo.monthlyRef.lastKnownHash = hashText(block);
+
+	await assert.rejects(
+		() => archiveService.upsertMemoBlock(createTestSettings(), memo, block, { allowMissingInsert: true }),
+		/Multiple memo blocks may match under the monthly archive date heading/,
+	);
+	assert.equal(monthlyContent, originalContent);
 });
 
 test("legacy daily memo preview groups headings and root while ignoring frontmatter, tasks, and code fences", async () => {

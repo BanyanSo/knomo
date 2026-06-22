@@ -5,12 +5,6 @@ import type { ScopeFilter, SearchDateFilter } from "./viewFilters";
 export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "record-stats" | "trash";
 export type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random";
 
-export interface ScopeOption {
-	filter: ScopeFilter;
-	label: string;
-	icon: string;
-}
-
 export interface SearchDateOption {
 	filter: SearchDateFilter;
 	label: string;
@@ -40,14 +34,6 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 ];
 
 export const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: t("nav.trash"), icon: "trash-2" };
-
-export const TITLE_SCOPE_OPTIONS: ScopeOption[] = [
-	{ filter: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
-	{ filter: "no-tag", label: t("filter.noTag"), icon: "tag" },
-	{ filter: "with-link", label: t("filter.withLink"), icon: "link" },
-	{ filter: "with-image", label: t("filter.withImage"), icon: "image" },
-	{ filter: "anniversary", label: t("filter.anniversary"), icon: "history" },
-];
 
 export const TITLE_MODE_OPTIONS: TitleModeOption[] = [
 	{ mode: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON, scope: "all" },

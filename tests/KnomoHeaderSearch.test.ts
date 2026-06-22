@@ -34,6 +34,7 @@ test("renders desktop and compact header search structure", async () => {
 
 	const desktop = renderKnomoDesktopTopbar(root.asHtml(), options);
 	assert.equal(root.find("[data-action='toggle-sidebar']")?.hasClass("knomo-sidebar-toggle"), true);
+	assert.equal(root.find("[data-action='record-stats-back']")?.hasClass("knomo-record-stats-back"), true);
 	assert.equal(desktop.titleHostEl.hasClass("knomo-title-host"), true);
 	assert.equal(desktop.searchInputEl.getAttr("type"), "search");
 	assert.equal(desktop.searchInputEl.getAttr("aria-labelledby"), "desktop-search-label");
@@ -61,6 +62,7 @@ test("renders desktop and compact header search structure", async () => {
 	const compact = renderKnomoCompactHeader(root.asHtml(), options);
 	assert.equal(root.find("[data-action='open-drawer']")?.hasClass("knomo-compact-menu-btn"), true);
 	assert.equal(root.find("[data-action='toggle-compact-search']")?.hasClass("knomo-compact-search-btn"), true);
+	assert.equal(root.findAll("[data-action='record-stats-back']").length, 2);
 	assert.equal(compact.titleHostEl.hasClass("knomo-compact-title"), true);
 	assert.equal(compact.inlineSearchInputEl.getAttr("aria-labelledby"), "compact-inline-search-label");
 

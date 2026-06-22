@@ -30,6 +30,8 @@ import {
 
 type GetSettings = () => KnomoSettings;
 
+const MAX_PREPARED_WRITE_REBASES = 1;
+
 export interface CreateMemoResult {
 	memo: MemoRecord;
 	opId: string;
@@ -43,6 +45,8 @@ export interface CreateMemoOptions {
 }
 
 export class MemoCommandService {
+	private pendingCreateQueue: Promise<void> = Promise.resolve();
+
 	constructor(
 		private readonly app: App,
 		private readonly getSettings: GetSettings,
@@ -55,12 +59,20 @@ export class MemoCommandService {
 	) {}
 
 	async createMemo(input: string, options: CreateMemoOptions = {}): Promise<CreateMemoResult> {
+		return this.runPendingCreateExclusive(() => this.createMemoWithoutLock(input, options));
+	}
+
+	async recoverPendingCreates(): Promise<number> {
+		return this.runPendingCreateExclusive(() => this.recoverPendingCreatesWithoutLock());
+	}
+
+	private async createMemoWithoutLock(input: string, options: CreateMemoOptions): Promise<CreateMemoResult> {
 		const content = normalizeMemoInput(input);
 		if (content.trim().length === 0) {
 			throw new KnomoError("memo_content_empty");
 		}
 
-		await this.recoverPendingCreates();
+		await this.recoverPendingCreatesWithoutLock();
 		const settings = this.getSettings();
 		const createdAt = new Date();
 		const createdAtText = formatLocalIsoString(createdAt);
@@ -92,7 +104,7 @@ export class MemoCommandService {
 		return this.completePendingCreate(operation);
 	}
 
-	async recoverPendingCreates(): Promise<number> {
+	private async recoverPendingCreatesWithoutLock(): Promise<number> {
 		const operations = await this.pendingMemoCreateStore.list();
 		const errors: string[] = [];
 		let recovered = 0;
@@ -123,6 +135,20 @@ export class MemoCommandService {
 			throw new Error(`Pending memo create recovery failed: ${errors.join("; ")}`);
 		}
 		return recovered;
+	}
+
+	private async runPendingCreateExclusive<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.pendingCreateQueue;
+		let releaseQueue: () => void = () => undefined;
+		this.pendingCreateQueue = new Promise<void>((resolve) => {
+			releaseQueue = resolve;
+		});
+		await previous;
+		try {
+			return await operation();
+		} finally {
+			releaseQueue();
+		}
 	}
 
 	async updateMemo(memo: MemoRecord, input: string): Promise<MemoRecord> {
@@ -156,16 +182,21 @@ export class MemoCommandService {
 					lastKnownBlock: currentMemo.dailyRef.lastKnownBlock,
 					lastKnownHash: currentMemo.dailyRef.lastKnownHash,
 					contentHash: currentMemo.contentHash,
+					heading: currentMemo.dailyRef.heading,
 					allowLineHintTimeMatch: true,
+					matchPolicy: "safe-mutation",
 				}, "daily_block_missing");
 				if (location.parsedBlock === null) {
+					const issueCode = location.issueType === "daily_block_ambiguous"
+						? "daily_block_ambiguous"
+						: "daily_block_missing";
 					dailyIssueType = {
 						type: location.issueType ?? "daily_block_missing",
-						code: "daily_block_missing",
+						code: issueCode,
 						detectedAt: new Date().toISOString(),
 						message: "Unable to find the memo block in the daily note.",
 					};
-					throw new KnomoError("daily_block_missing");
+					throw new KnomoError(issueCode);
 				}
 				nextDailyBlock = this.markdownBlockService.buildMemoBlockWithBlockId(
 					content,
@@ -262,15 +293,22 @@ export class MemoCommandService {
 					lastKnownBlock: currentMemo.dailyRef.lastKnownBlock,
 					lastKnownHash: currentMemo.dailyRef.lastKnownHash,
 					contentHash: currentMemo.contentHash,
+					heading: currentMemo.dailyRef.heading,
+					allowLineHintTimeMatch: true,
+					matchPolicy: "safe-mutation",
 				}, "daily_block_missing");
 				if (location.parsedBlock === null) {
+					const ambiguous = location.issueType === "daily_block_ambiguous";
+					const issueCode = ambiguous
+						? "delete_daily_block_ambiguous"
+						: "delete_daily_block_missing";
 					dailyIssueType = {
-						type: "delete_failed",
-						code: "delete_daily_block_missing",
+						type: ambiguous ? "daily_block_ambiguous" : "delete_failed",
+						code: issueCode,
 						detectedAt: new Date().toISOString(),
 						message: "Unable to find the daily memo block to delete.",
 					};
-					throw new KnomoError("delete_daily_block_missing");
+					throw new KnomoError(issueCode);
 				}
 				deletedDailyBlock = location.parsedBlock.rawBlock;
 				return this.markdownBlockService.deleteMemoBlock(currentContent, location.parsedBlock.startLine);
@@ -294,14 +332,17 @@ export class MemoCommandService {
 				const monthlyResult = await this.monthlyArchiveService.deleteMemoBlock(currentMemo);
 				deletedMonthlyBlock = monthlyResult.ref.lastKnownBlock;
 				markSelfWrite(this.selfWriteTracker, opId, monthlyResult.file.path, "archive", monthlyResult.content);
-			} catch (error) {
-				syncStatus = "monthly_delete_failed";
-				issue = {
-					type: "delete_failed",
-					...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
-					detectedAt: new Date().toISOString(),
-					message: error instanceof Error ? error.message : "Monthly archive delete failed.",
-				};
+				} catch (error) {
+					syncStatus = "monthly_delete_failed";
+					const monthlyIssue = buildMonthlyIssue(error);
+					issue = monthlyIssue.type === "monthly_block_ambiguous"
+						? monthlyIssue
+						: {
+							type: "delete_failed",
+							...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
+							detectedAt: new Date().toISOString(),
+							message: error instanceof Error ? error.message : "Monthly archive delete failed.",
+						};
 			}
 		}
 
@@ -335,17 +376,13 @@ export class MemoCommandService {
 
 	private async completePendingCreate(operation: PendingMemoCreate): Promise<CreateMemoResult> {
 		const createdAt = new Date(operation.createdAt);
-		const dailyResult = await this.dailyNoteService.commitPreparedMemoBlock(
-			operation.settings,
-			operation.block,
-			operation.dailyWrite,
-			operation.dailyTrailer ?? undefined,
-		);
+		const dailyCompletion = await this.commitPreparedDailyWrite(operation, createdAt);
+		let currentOperation = dailyCompletion.operation;
+		const dailyResult = dailyCompletion.result;
 		if (dailyResult.changed) {
-			markSelfWrite(this.selfWriteTracker, operation.opId, dailyResult.file.path, "create", dailyResult.content);
+			markSelfWrite(this.selfWriteTracker, currentOperation.opId, dailyResult.file.path, "create", dailyResult.content);
 		}
 
-		let currentOperation = operation;
 		let monthlyRef = createEmptyMonthlyRef();
 		let syncStatus: MemoRecord["syncStatus"] = "synced";
 		let issue: MemoRecord["issue"] = null;
@@ -372,12 +409,13 @@ export class MemoCommandService {
 
 		if (monthlyWrite !== null) {
 			try {
-				const monthlyResult = await this.monthlyArchiveService.commitPreparedMemoBlock(
-					currentOperation.settings,
+				const monthlyCompletion = await this.commitPreparedMonthlyWrite(
+					currentOperation,
 					createdAt,
-					currentOperation.block,
 					monthlyWrite,
 				);
+				currentOperation = monthlyCompletion.operation;
+				const monthlyResult = monthlyCompletion.result;
 				monthlyRef = monthlyResult.ref;
 				if (monthlyResult.changed) {
 					markSelfWrite(this.selfWriteTracker, currentOperation.opId, monthlyResult.file.path, "archive", monthlyResult.content);
@@ -411,6 +449,73 @@ export class MemoCommandService {
 			memo: savedMemo,
 			opId: currentOperation.opId,
 		};
+	}
+
+	private async commitPreparedDailyWrite(
+		operation: PendingMemoCreate,
+		createdAt: Date,
+	): Promise<{
+		operation: PendingMemoCreate;
+		result: Awaited<ReturnType<DailyNoteService["commitPreparedMemoBlock"]>>;
+	}> {
+		let currentOperation = operation;
+		for (let rebaseCount = 0; ; rebaseCount += 1) {
+			try {
+				const result = await this.dailyNoteService.commitPreparedMemoBlock(
+					currentOperation.settings,
+					currentOperation.block,
+					currentOperation.dailyWrite,
+					currentOperation.dailyTrailer ?? undefined,
+				);
+				return { operation: currentOperation, result };
+			} catch (error) {
+				if (!(error instanceof PendingMemoWriteConflictError) || rebaseCount >= MAX_PREPARED_WRITE_REBASES) {
+					throw error;
+				}
+				const dailyWrite = await this.dailyNoteService.prepareMemoBlockInsert(
+					currentOperation.settings,
+					createdAt,
+					currentOperation.block,
+					currentOperation.dailyTrailer ?? undefined,
+				);
+				currentOperation = { ...currentOperation, dailyWrite };
+				await this.pendingMemoCreateStore.update(currentOperation);
+			}
+		}
+	}
+
+	private async commitPreparedMonthlyWrite(
+		operation: PendingMemoCreate,
+		createdAt: Date,
+		monthlyWrite: NonNullable<PendingMemoCreate["monthlyWrite"]>,
+	): Promise<{
+		operation: PendingMemoCreate;
+		result: Awaited<ReturnType<MonthlyArchiveService["commitPreparedMemoBlock"]>>;
+	}> {
+		let currentOperation = operation;
+		let currentMonthlyWrite = monthlyWrite;
+		for (let rebaseCount = 0; ; rebaseCount += 1) {
+			try {
+				const result = await this.monthlyArchiveService.commitPreparedMemoBlock(
+					currentOperation.settings,
+					createdAt,
+					currentOperation.block,
+					currentMonthlyWrite,
+				);
+				return { operation: currentOperation, result };
+			} catch (error) {
+				if (!(error instanceof PendingMemoWriteConflictError) || rebaseCount >= MAX_PREPARED_WRITE_REBASES) {
+					throw error;
+				}
+				currentMonthlyWrite = await this.monthlyArchiveService.prepareMemoBlockInsert(
+					currentOperation.settings,
+					createdAt,
+					currentOperation.block,
+				);
+				currentOperation = { ...currentOperation, monthlyWrite: currentMonthlyWrite };
+				await this.pendingMemoCreateStore.update(currentOperation);
+			}
+		}
 	}
 
 	private buildPendingMemo(

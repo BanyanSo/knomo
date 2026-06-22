@@ -1,3 +1,5 @@
+import { moment as obsidianMoment } from "obsidian";
+
 interface DailyNotesPathConfig {
 	folder: string | null;
 	format: string;
@@ -104,6 +106,10 @@ export function parseDailyNoteDateFromPath(path: string, config: DailyNotesPathC
 	if (relativePath === null) {
 		return null;
 	}
+	const momentDate = parseDateWithObsidianMoment(relativePath, config.format);
+	if (momentDate !== null) {
+		return momentDate;
+	}
 
 	const pattern = buildDatePattern(config.format);
 	const match = relativePath.match(pattern.regex);
@@ -206,7 +212,53 @@ function parseMonthName(value: string): number | null {
 		const parsedMonth = Number(numericMonth);
 		return parsedMonth >= 1 && parsedMonth <= 12 ? parsedMonth : null;
 	}
-	return MONTH_NAMES.get(normalizedName) ?? null;
+	const knownMonth = MONTH_NAMES.get(normalizedName);
+	if (knownMonth !== undefined) {
+		return knownMonth;
+	}
+	return parseLocalizedMonthName(value.trim());
+}
+
+function parseLocalizedMonthName(value: string): number | null {
+	if (typeof obsidianMoment !== "function") {
+		return null;
+	}
+	const parsed = (obsidianMoment as unknown as StrictMomentFactory)(value, ["MMMM", "MMM"], true);
+	if (
+		typeof parsed !== "object"
+		|| parsed === null
+		|| !("isValid" in parsed)
+		|| typeof parsed.isValid !== "function"
+		|| !("month" in parsed)
+		|| typeof parsed.month !== "function"
+		|| !parsed.isValid()
+	) {
+		return null;
+	}
+	const month = parsed.month() + 1;
+	return month >= 1 && month <= 12 ? month : null;
+}
+
+type StrictMomentFactory = (input: string, formats: string | string[], strict: boolean) => unknown;
+
+function parseDateWithObsidianMoment(value: string, format: string): Date | null {
+	if (typeof obsidianMoment !== "function") {
+		return null;
+	}
+	const parsed = (obsidianMoment as unknown as StrictMomentFactory)(value, format, true);
+	if (
+		typeof parsed !== "object"
+		|| parsed === null
+		|| !("isValid" in parsed)
+		|| typeof parsed.isValid !== "function"
+		|| !("toDate" in parsed)
+		|| typeof parsed.toDate !== "function"
+		|| !parsed.isValid()
+	) {
+		return null;
+	}
+	const date: unknown = parsed.toDate();
+	return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
 function escapeRegExp(value: string): string {

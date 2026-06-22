@@ -41,6 +41,10 @@ export const KNOMO_ERROR_DEFINITIONS = {
 		messageKey: "service.monthlyArchiveBlockMissing",
 		fallbackMessage: "Monthly archive block does not exist.",
 	},
+	monthly_archive_block_ambiguous: {
+		messageKey: "service.monthlyArchiveBlockAmbiguous",
+		fallbackMessage: "Multiple memo blocks may match under the monthly archive date heading, so Knomo cannot update the archive automatically.",
+	},
 	monthly_archive_period_invalid: {
 		messageKey: "service.monthlyArchivePeriodInvalid",
 		fallbackMessage: "Invalid monthly archive period: {{period}}",
@@ -92,6 +96,10 @@ export const KNOMO_ERROR_DEFINITIONS = {
 	delete_daily_block_missing: {
 		messageKey: "service.deleteDailyBlockMissing",
 		fallbackMessage: "Unable to find the daily memo block to delete.",
+	},
+	delete_daily_block_ambiguous: {
+		messageKey: "service.deleteDailyBlockAmbiguous",
+		fallbackMessage: "Multiple daily memo blocks may match, so Knomo cannot delete the memo automatically.",
 	},
 	memo_not_found_or_cleaned: {
 		messageKey: "service.memoNotFoundOrCleaned",

@@ -78,3 +78,27 @@ test("SelfWriteTracker consumes index writes by reason", () => {
 		null,
 	);
 });
+
+test("SelfWriteTracker matches archive moves by destination and can discard failed moves", () => {
+	const tracker = new SelfWriteTracker(1000);
+	const now = Date.now();
+	tracker.mark("Memos/Memos-2026-06.md", {
+		opId: "op-move",
+		path: "Memos/Memos-2026-06.md",
+		reason: "archive_move",
+		writtenAt: now,
+		expiresAt: now + 1000,
+		expectedHash: null,
+		targetPath: "Archive/Memos-2026-06.md",
+	});
+
+	assert.equal(
+		tracker.consumeByReason("Memos/Memos-2026-06.md", "archive_move", "User/June.md"),
+		null,
+	);
+	tracker.discard("Memos/Memos-2026-06.md", "op-move");
+	assert.equal(
+		tracker.consumeByReason("Memos/Memos-2026-06.md", "archive_move", "Archive/Memos-2026-06.md"),
+		null,
+	);
+});

@@ -46,7 +46,16 @@ function optionalString(value: unknown): string | undefined {
 }
 
 export function isValidMonthlyMemoFileFormat(value: string): boolean {
-	return !/[\\/]/.test(value);
+	const format = value.trim();
+	const tokenCount = format.split("YYYY-MM").length - 1;
+	if (format.length === 0 || /[\\/]/.test(format) || tokenCount !== 1) {
+		return false;
+	}
+	return format.replace("YYYY-MM", "2026-05") !== format.replace("YYYY-MM", "2026-06");
+}
+
+function isSafePersistedMonthlyMemoFileFormat(value: string): boolean {
+	return value.trim().length > 0 && !/[\\/]/.test(value);
 }
 
 function stringArrayOrDefault(value: unknown, fallback: string[]): string[] {
@@ -84,7 +93,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 		monthlyMemoFolder: normalizeVaultPath(
 			stringOrDefault(merged.monthlyMemoFolder, DEFAULT_KNOMO_SETTINGS.monthlyMemoFolder),
 		),
-		monthlyMemoFileFormat: isValidMonthlyMemoFileFormat(monthlyMemoFileFormat)
+		monthlyMemoFileFormat: isSafePersistedMonthlyMemoFileFormat(monthlyMemoFileFormat)
 			? monthlyMemoFileFormat
 			: DEFAULT_KNOMO_SETTINGS.monthlyMemoFileFormat,
 		monthlyDateHeadingFormat: stringOrDefault(

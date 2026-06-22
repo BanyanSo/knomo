@@ -191,8 +191,9 @@ export class MemoRestoreService {
 		let restoredBlock = block;
 		let restoredLineNumber: number | null = null;
 		let restoredParsedBlock: ParsedMemoBlock | null = null;
+		const dailyHeading = memo.dailyRef.heading || settings.dailyHeading;
 		const content = await this.app.vault.process(dailyFile, (currentContent) => {
-			const existingBlock = this.findExistingRestoredBlock(currentContent, block);
+			const existingBlock = this.findExistingRestoredBlock(currentContent, block, dailyHeading);
 			if (existingBlock !== null) {
 				restoredBlock = existingBlock.rawBlock;
 				restoredLineNumber = existingBlock.startLine + 1;
@@ -201,7 +202,7 @@ export class MemoRestoreService {
 			}
 			changed = true;
 			return this.markdownBlockService.insertMemoBlock(currentContent, {
-				heading: memo.dailyRef.heading || settings.dailyHeading,
+				heading: dailyHeading,
 				block,
 				position: settings.dailyInsertPosition,
 				createHeadingIfMissing: true,
@@ -218,7 +219,7 @@ export class MemoRestoreService {
 		}
 
 		return {
-			ref: buildDailyRef(dailyFile.path, memo.dailyRef.heading || settings.dailyHeading, restoredBlock, restoredLineNumber),
+			ref: buildDailyRef(dailyFile.path, dailyHeading, restoredBlock, restoredLineNumber),
 			block: restoredParsedBlock,
 			content,
 			changed,
@@ -276,7 +277,7 @@ export class MemoRestoreService {
 			return null;
 		}
 		const content = await this.app.vault.cachedRead(file);
-		const existingBlock = this.findExistingRestoredBlock(content, block);
+		const existingBlock = this.findExistingRestoredBlock(content, block, dateHeading);
 		if (existingBlock === null) {
 			return null;
 		}
@@ -295,20 +296,20 @@ export class MemoRestoreService {
 		};
 	}
 
-	private findExistingRestoredBlock(currentContent: string, block: string): ParsedMemoBlock | null {
+	private findExistingRestoredBlock(currentContent: string, block: string, heading: string): ParsedMemoBlock | null {
 		const parsedBlock = this.parseRestoredBlock(block);
 		if (parsedBlock === null) {
 			return null;
 		}
 
-		const existingBlocks = this.markdownBlockService.parseMemoBlocks(currentContent);
+		const existingBlocks = this.markdownBlockService.parseMemoBlocksUnderHeading(currentContent, heading);
 		if (parsedBlock.blockId !== null) {
 			const blockIdMatch = existingBlocks.find((existingBlock) => existingBlock.blockId === parsedBlock.blockId);
 			if (blockIdMatch !== undefined) {
 				return blockIdMatch;
 			}
 		}
-		return existingBlocks.find((existingBlock) => existingBlock.contentHash === parsedBlock.contentHash) ?? null;
+		return existingBlocks.find((existingBlock) => existingBlock.rawBlock === parsedBlock.rawBlock) ?? null;
 	}
 
 	private parseRestoredBlockFromContent(

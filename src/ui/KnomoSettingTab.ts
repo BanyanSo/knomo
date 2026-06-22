@@ -38,8 +38,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildResultEl: HTMLElement | null = null;
 	private monthlyRebuildResultEl: HTMLElement | null = null;
 	private monthlyExcludeStatusEl: HTMLElement | null = null;
+	private monthlyFileFormatStatusEl: HTMLElement | null = null;
 	private rebuildRunning = false;
 	private monthlyRebuildRunning = false;
+	private monthlyFileFormatMigrationRunning = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -156,6 +158,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 					void this.commitMonthlyMemoFileFormatDraft();
 				});
 			});
+		this.monthlyFileFormatStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
+		this.updateMonthlyFileFormatStatus();
 		new Setting(containerEl)
 			.setName(t("settings.dateHeadingFormat.name"))
 			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }))
@@ -466,8 +470,49 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (nextFormat === this.settingsService.getSettings().monthlyMemoFileFormat) {
 			return true;
 		}
-		await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
-		return true;
+		if (this.monthlyFileFormatMigrationRunning) {
+			return false;
+		}
+		this.monthlyFileFormatMigrationRunning = true;
+		try {
+			const plan = await this.settingsService.planMonthlyMemoFileFormatMigration(nextFormat);
+			if (plan.conflicts.length > 0) {
+				throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
+			}
+			const confirmed = this.containerEl.win.confirm(t("settings.monthlyFileFormat.confirm", {
+				current: plan.oldFormat,
+				next: plan.newFormat,
+				count: plan.periods.length,
+			}));
+			if (!confirmed) {
+				return false;
+			}
+			await this.syncOrchestrator.runMonthlyMemoFileFormatMigration(() => (
+				this.settingsService.migrateMonthlyMemoFileFormat(nextFormat, (periods, trackGeneratedPath) => (
+					this.syncOrchestrator.rebuildMonthlyArchivesForFileFormatMigration(periods, trackGeneratedPath)
+				))
+			));
+			this.updateMonthlyFileFormatStatus();
+			new Notice(t("settings.monthlyFileFormat.migrated", { count: plan.periods.length }));
+			return true;
+		} catch (error) {
+			new Notice(formatServiceError(error, t("settings.monthlyFileFormat.migrationFailed")));
+			return false;
+		} finally {
+			this.monthlyFileFormatMigrationRunning = false;
+		}
+	}
+
+	private updateMonthlyFileFormatStatus(): void {
+		if (this.monthlyFileFormatStatusEl === null) {
+			return;
+		}
+		const currentFormat = this.settingsService.getSettings().monthlyMemoFileFormat;
+		const isLegacyFormat = !this.settingsService.validateMonthlyMemoFileFormat(currentFormat);
+		this.monthlyFileFormatStatusEl.setText(
+			isLegacyFormat ? t("settings.monthlyFileFormat.legacyWarning") : "",
+		);
+		this.monthlyFileFormatStatusEl.toggleClass("is-error", isLegacyFormat);
 	}
 
 	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<void> {
@@ -494,7 +539,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 					return;
 				}
 			}
-			await this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder);
+			await this.syncOrchestrator.runMonthlyMemoFolderMigration(() => (
+				this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder)
+			));
 			new Notice(t("settings.monthlyFolder.saved"));
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.monthlyFolder.saveFailed"));
@@ -944,7 +991,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 			button.addEventListener("click", () => {
 				void this.retryMonthlyDelete(memo, button);
 			});
-		} else if (memo.syncStatus === "monthly_failed" || memo.issue?.type === "monthly_block_missing" || memo.issue?.type === "monthly_sync_failed") {
+		} else if (
+			memo.syncStatus === "monthly_failed"
+			|| memo.issue?.type === "monthly_block_missing"
+			|| memo.issue?.type === "monthly_block_ambiguous"
+			|| memo.issue?.type === "monthly_sync_failed"
+		) {
 			const button = item.createEl("button", {
 				cls: "mod-cta",
 				text: t("settings.issues.retryMonthlySync"),

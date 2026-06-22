@@ -255,6 +255,7 @@ test("FileWatchService syncs daily note renames with the old path", async () => 
 			cleanup: () => undefined,
 		} as never,
 		{
+			isMonthlyArchiveFile: () => false,
 			isPotentialDailyFile: (path: string) => path === file.path || path === oldPath,
 			isMemoIndexFile: () => false,
 			getSyncDebounceMs: () => 0,
@@ -463,6 +464,56 @@ test("FileWatchService ignores monthly archive deletes caused by Knomo rollback"
 	assert.equal(rebuildCalled, false);
 });
 
+test("FileWatchService rebuilds the expected archive once after a user rename", async () => {
+	const oldPath = "Memos/Memos-2026-06";
+	const harness = await createMonthlyRenameHarness([oldPath]);
+	const file = harness.createFile("Memos/June archive", "");
+
+	harness.triggerRename(file, oldPath);
+	harness.triggerRename(file, oldPath);
+	await harness.runTimers();
+
+	assert.deepEqual(harness.recoveredPaths, [oldPath]);
+	assert.equal(harness.refreshCount(), 1);
+	assert.equal(harness.errors.length, 0);
+});
+
+test("FileWatchService ignores monthly archive moves marked by internal migration", async () => {
+	const oldPath = "Memos/Memos-2026-06.md";
+	const newPath = "Archive/Memos/Memos-2026-06.md";
+	const harness = await createMonthlyRenameHarness([oldPath], newPath);
+
+	harness.triggerRename(harness.createFile(newPath), oldPath);
+	await harness.runTimers();
+
+	assert.deepEqual(harness.recoveredPaths, []);
+	assert.equal(harness.timerCount(), 0);
+});
+
+test("FileWatchService does not consume an archive move marker for another destination", async () => {
+	const oldPath = "Memos/Memos-2026-06.md";
+	const harness = await createMonthlyRenameHarness([oldPath], "Archive/Memos/Memos-2026-06.md");
+
+	harness.triggerRename(harness.createFile("User/June.md"), oldPath);
+	await harness.runTimers();
+
+	assert.deepEqual(harness.recoveredPaths, [oldPath]);
+});
+
+test("FileWatchService restores the old period and reports a conflicting monthly rename target", async () => {
+	const oldPath = "Memos/Memos-2026-06.md";
+	const newPath = "Memos/Memos-2026-07.md";
+	const harness = await createMonthlyRenameHarness([oldPath, newPath]);
+
+	harness.triggerRename(harness.createFile(newPath), oldPath);
+	await harness.runTimers();
+
+	assert.deepEqual(harness.recoveredPaths, [oldPath]);
+	assert.equal(harness.refreshCount(), 1);
+	assert.equal(harness.errors.length, 1);
+	assert.match(String(harness.errors[0]), /Target path has conflicts/);
+});
+
 test("FileWatchService runs queued file tasks serially", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");
@@ -652,6 +703,87 @@ test("FileWatchService coalesces pending file tasks by path", async () => {
 interface Deferred<T> {
 	promise: Promise<T>;
 	resolve: (value: T) => void;
+}
+
+async function createMonthlyRenameHarness(expectedPaths: string[], internalMoveTarget: string | null = null) {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
+	const timers: Array<{ id: number; handler: () => void; cancelled: boolean }> = [];
+	const recoveredPaths: string[] = [];
+	const errors: unknown[] = [];
+	let refreshes = 0;
+	const service = new FileWatchService(
+		{
+			vault: {
+				on: (eventName: string, handler: (...args: unknown[]) => void) => {
+					handlersByEvent.set(eventName, handler);
+					return {};
+				},
+			},
+			workspace: {
+				containerEl: {
+					win: {
+						setTimeout: (handler: () => void) => {
+							const id = timers.length + 1;
+							timers.push({ id, handler, cancelled: false });
+							return id;
+						},
+						clearTimeout: (id: number) => {
+							const timer = timers.find((item) => item.id === id);
+							if (timer !== undefined) timer.cancelled = true;
+						},
+					},
+				},
+			},
+		} as never,
+		{
+			consumeByReason: (_path: string, reason: string, targetPath?: string) => (
+				internalMoveTarget !== null && reason === "archive_move" && targetPath === internalMoveTarget
+					? { opId: "internal-move" }
+					: null
+			),
+			cleanup: () => undefined,
+		} as never,
+		{
+			isMonthlyArchiveFile: (path: string) => expectedPaths.includes(path),
+			isPotentialDailyFile: () => false,
+			getSyncDebounceMs: () => 0,
+			recoverDeletedMonthlyArchive: async (path: string) => {
+				recoveredPaths.push(path);
+				return true;
+			},
+		} as never,
+		() => {
+			refreshes += 1;
+		},
+		(_path, error) => {
+			errors.push(error);
+		},
+	);
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+
+	return {
+		createFile: (path: string, extension = "md") => Object.assign(new TFile(), { path, extension }),
+		triggerRename: (file: InstanceType<typeof TFile>, oldPath: string) => {
+			handlersByEvent.get("rename")?.(file, oldPath);
+		},
+		runTimers: async () => {
+			for (const timer of timers) {
+				if (!timer.cancelled) timer.handler();
+			}
+			await waitImmediate();
+			await waitImmediate();
+		},
+		timerCount: () => timers.filter((timer) => !timer.cancelled).length,
+		refreshCount: () => refreshes,
+		recoveredPaths,
+		errors,
+	};
 }
 
 function createDeferred<T>(): Deferred<T> {

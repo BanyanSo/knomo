@@ -1,22 +1,31 @@
 import { normalizePath, TFile, TFolder, Vault } from "obsidian";
 import type { Plugin } from "obsidian";
 
-import { ensureReadOnlyComment } from "../services/MonthlyArchiveService";
+import {
+	ensureReadOnlyComment,
+	getMonthlyArchivePath,
+	MONTHLY_ARCHIVE_MARKER,
+} from "../services/MonthlyArchiveService";
 import { buildMonthlyFolderExcludeRule, buildSystemFolderExcludeRule, ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { KnomoSettings } from "../types/settings";
 import { KnomoError } from "../types/serviceError";
 import { isRecord } from "../utils/object";
-import { getIndexFolderPath, getSystemFolderPath, normalizeVaultPath } from "../utils/path";
+import { getIndexFilePath, getIndexFolderPath, getSystemFolderPath, normalizeVaultPath } from "../utils/path";
 import { ensureFolder, getParentFolderPath } from "../utils/vault";
+import { isValidMonthlyMemoFileFormat } from "./normalizeSettings";
 
 type GetSettings = () => KnomoSettings;
 type SaveSettings = (settings: KnomoSettings) => Promise<KnomoSettings>;
+type StageSettings = (settings: KnomoSettings) => void;
+type BeforeArchiveMove = (oldPath: string, newPath: string) => void | (() => void);
 
 export class MonthlyFolderMigrationService {
 	constructor(
 		private readonly plugin: Plugin,
 		private readonly getSettings: GetSettings,
 		private readonly saveSettings: SaveSettings,
+		private readonly stageSettings: StageSettings,
+		private readonly onBeforeArchiveMove: BeforeArchiveMove = () => undefined,
 	) {}
 
 	async initializeSystemFolders(): Promise<void> {
@@ -58,7 +67,13 @@ export class MonthlyFolderMigrationService {
 				if (!(file instanceof TFile)) {
 					continue;
 				}
-				await this.plugin.app.vault.rename(file, move.to);
+				const discardMoveMarker = this.onBeforeArchiveMove(move.from, move.to);
+				try {
+					await this.plugin.app.vault.rename(file, move.to);
+				} catch (error) {
+					discardMoveMarker?.();
+					throw error;
+				}
 				movedPaths.push(move);
 				const movedFile = this.plugin.app.vault.getAbstractFileByPath(move.to);
 				if (movedFile instanceof TFile) {
@@ -113,13 +128,10 @@ export class MonthlyFolderMigrationService {
 		const newMonthlyMemoFolder = normalizeVaultPath(nextMonthlyMemoFolder);
 		const oldSystemPath = getSystemFolderPath(oldMonthlyMemoFolder);
 		const newSystemPath = getSystemFolderPath(newMonthlyMemoFolder);
-		const oldFolder = this.plugin.app.vault.getAbstractFileByPath(oldMonthlyMemoFolder);
-		const monthlyFiles = oldFolder instanceof TFolder
-			? oldFolder.children.filter((child): child is TFile => child instanceof TFile && child.extension === "md")
-			: [];
+		const monthlyFiles = await this.listRecognizedMonthlyArchiveFiles(settings);
 		const monthlyFileMoves = monthlyFiles.map((file) => ({
 			from: file.path,
-			to: normalizePath(`${newMonthlyMemoFolder}/${file.name}`),
+			to: normalizePath(`${newMonthlyMemoFolder}/${file.path.slice(oldMonthlyMemoFolder.length + 1)}`),
 		}));
 		const rewrittenMonthlyRefs = await this.countMonthlyRefRewrites(oldMonthlyMemoFolder);
 		const conflicts = this.findMigrationConflicts(monthlyFileMoves, oldSystemPath, newSystemPath, oldMonthlyMemoFolder, newMonthlyMemoFolder);
@@ -135,6 +147,170 @@ export class MonthlyFolderMigrationService {
 			rewrittenMonthlyRefs,
 			conflicts,
 		};
+	}
+
+	async planMonthlyMemoFileFormatMigration(nextMonthlyMemoFileFormat: string): Promise<MonthlyMemoFileFormatMigrationPlan> {
+		const settings = this.getSettings();
+		const oldFormat = settings.monthlyMemoFileFormat;
+		const newFormat = nextMonthlyMemoFileFormat.trim();
+		if (!isValidMonthlyMemoFileFormat(newFormat)) {
+			throw new Error("Invalid monthly memo filename format.");
+		}
+		const periods = this.listIndexPeriods(settings.monthlyMemoFolder);
+		const targetPaths = periods.map((period) => getMonthlyArchivePath({
+			...settings,
+			monthlyMemoFileFormat: newFormat,
+		}, period));
+		const oldArchivePaths = (await this.listRecognizedMonthlyArchiveFiles(settings)).map((file) => file.path);
+		const conflicts = oldFormat === newFormat
+			? []
+			: targetPaths.filter((path) => this.plugin.app.vault.getAbstractFileByPath(path) !== null);
+
+		return {
+			status: oldFormat === newFormat ? "unchanged" : "planned",
+			oldFormat,
+			newFormat,
+			periods,
+			oldArchivePaths,
+			targetPaths,
+			conflicts: [...new Set(conflicts)].sort(),
+		};
+	}
+
+	async migrateMonthlyMemoFileFormat(
+		nextMonthlyMemoFileFormat: string,
+		rebuildPeriods: (periods: string[], trackGeneratedPath: (path: string) => void) => Promise<void>,
+	): Promise<MonthlyMemoFileFormatMigrationResult> {
+		const plan = await this.planMonthlyMemoFileFormatMigration(nextMonthlyMemoFileFormat);
+		if (plan.status === "unchanged") {
+			return { status: "unchanged", backupPath: null, plan };
+		}
+		if (plan.conflicts.length > 0) {
+			throw new KnomoError("target_path_conflicts", { paths: plan.conflicts.join("; ") });
+		}
+
+		const oldSettings = this.getSettings();
+		const nextSettings = { ...oldSettings, monthlyMemoFileFormat: plan.newFormat };
+		const backupPath = await this.backupMonthlyMemoFileFormatMigration(plan, oldSettings.monthlyMemoFolder);
+		const generatedPaths = new Set<string>();
+		this.stageSettings(nextSettings);
+		try {
+			await rebuildPeriods(plan.periods, (path) => generatedPaths.add(path));
+			await this.rewriteMonthlyRefsForFileFormat(plan, oldSettings.monthlyMemoFolder);
+			await this.saveSettings(nextSettings);
+			return { status: "migrated", backupPath, plan };
+		} catch (error) {
+			this.stageSettings(oldSettings);
+			await this.restoreIndexBackup(oldSettings.monthlyMemoFolder, backupPath);
+			await this.trashGeneratedMonthlyFiles([...generatedPaths]);
+			throw error;
+		}
+	}
+
+	private async listRecognizedMonthlyArchiveFiles(settings: KnomoSettings): Promise<TFile[]> {
+		const monthlyFolder = normalizeVaultPath(settings.monthlyMemoFolder);
+		const systemPath = getSystemFolderPath(monthlyFolder);
+		const filesByPath = new Map<string, TFile>();
+		const indexFolder = this.plugin.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyFolder));
+		if (indexFolder instanceof TFolder) {
+			for (const indexFile of listIndexFiles(indexFolder)) {
+				const content = await this.plugin.app.vault.cachedRead(indexFile);
+				for (const path of listMonthlyRefPaths(content)) {
+					if (!isPathInsideFolder(path, monthlyFolder) || isPathInsideFolder(path, systemPath)) {
+						continue;
+					}
+					const file = this.plugin.app.vault.getAbstractFileByPath(path);
+					if (file instanceof TFile) {
+						filesByPath.set(file.path, file);
+					}
+				}
+			}
+		}
+
+		const folder = this.plugin.app.vault.getAbstractFileByPath(monthlyFolder);
+		if (folder instanceof TFolder) {
+			for (const child of folder.children) {
+				if (!(child instanceof TFile)) {
+					continue;
+				}
+				if (getPeriodFromMonthlyFileName(child.name, settings.monthlyMemoFileFormat) !== null) {
+					filesByPath.set(child.path, child);
+					continue;
+				}
+				if (child.extension !== "md") {
+					continue;
+				}
+				const content = await this.plugin.app.vault.cachedRead(child);
+				if (content.includes(MONTHLY_ARCHIVE_MARKER)) {
+					filesByPath.set(child.path, child);
+				}
+			}
+		}
+		return [...filesByPath.values()].sort((left, right) => left.path.localeCompare(right.path));
+	}
+
+	private listIndexPeriods(monthlyMemoFolder: string): string[] {
+		const indexFolder = this.plugin.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
+		if (!(indexFolder instanceof TFolder)) {
+			return [];
+		}
+		const periods = listIndexFiles(indexFolder)
+			.map((file) => /^memo-index-(\d{4}-(?:0[1-9]|1[0-2]))\.json$/.exec(file.name)?.[1])
+			.filter((period): period is string => period !== undefined);
+		return [...new Set(periods)].sort();
+	}
+
+	private async backupMonthlyMemoFileFormatMigration(
+		plan: MonthlyMemoFileFormatMigrationPlan,
+		monthlyMemoFolder: string,
+	): Promise<string> {
+		const backupRoot = normalizePath(`${getSystemFolderPath(monthlyMemoFolder)}/backups/monthly-format-${Date.now()}`);
+		const indexBackupRoot = normalizePath(`${backupRoot}/indexes`);
+		const monthlyBackupRoot = normalizePath(`${backupRoot}/monthly`);
+		await ensureFolder(this.plugin.app, indexBackupRoot);
+		await ensureFolder(this.plugin.app, monthlyBackupRoot);
+
+		const indexFolder = this.plugin.app.vault.getAbstractFileByPath(getIndexFolderPath(monthlyMemoFolder));
+		if (indexFolder instanceof TFolder) {
+			for (const file of listMarkdownAndJsonFiles(indexFolder)) {
+				const relativePath = file.path.slice(indexFolder.path.length + 1);
+				await this.copyFileToBackup(file, normalizePath(`${indexBackupRoot}/${relativePath}`));
+			}
+		}
+		for (const path of plan.oldArchivePaths) {
+			const file = this.plugin.app.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile) {
+				const relativePath = file.path.slice(normalizeVaultPath(monthlyMemoFolder).length + 1);
+				await this.copyFileToBackup(file, normalizePath(`${monthlyBackupRoot}/${relativePath}`));
+			}
+		}
+		return backupRoot;
+	}
+
+	private async trashGeneratedMonthlyFiles(paths: string[]): Promise<void> {
+		for (const path of paths) {
+			const file = this.plugin.app.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile) {
+				await this.plugin.app.fileManager.trashFile(file);
+			}
+		}
+	}
+
+	private async rewriteMonthlyRefsForFileFormat(
+		plan: MonthlyMemoFileFormatMigrationPlan,
+		monthlyMemoFolder: string,
+	): Promise<void> {
+		for (let index = 0; index < plan.periods.length; index += 1) {
+			const indexFile = this.plugin.app.vault.getAbstractFileByPath(
+				getIndexFilePath(monthlyMemoFolder, plan.periods[index]),
+			);
+			if (!(indexFile instanceof TFile)) {
+				throw new Error(`Monthly memo-index does not exist for ${plan.periods[index]}.`);
+			}
+			await this.plugin.app.vault.process(indexFile, (content) => (
+				rewriteAllMonthlyRefPaths(content, plan.targetPaths[index])
+			));
+		}
 	}
 
 	private findMigrationConflicts(
@@ -176,7 +352,8 @@ export class MonthlyFolderMigrationService {
 		for (const move of plan.monthlyFileMoves) {
 			const file = this.plugin.app.vault.getAbstractFileByPath(move.from);
 			if (file instanceof TFile) {
-				await this.copyFileToBackup(file, normalizePath(`${monthlyBackupRoot}/${file.name}`));
+				const relativePath = file.path.slice(plan.oldMonthlyMemoFolder.length + 1);
+				await this.copyFileToBackup(file, normalizePath(`${monthlyBackupRoot}/${relativePath}`));
 			}
 		}
 		return backupRoot;
@@ -332,6 +509,16 @@ export class MonthlyFolderMigrationService {
 			if (moved === null || this.plugin.app.vault.getAbstractFileByPath(move.from) !== null) {
 				continue;
 			}
+			if (moved instanceof TFile) {
+				const discardMoveMarker = this.onBeforeArchiveMove(move.to, move.from);
+				try {
+					await this.plugin.app.vault.rename(moved, move.from);
+				} catch (error) {
+					discardMoveMarker?.();
+					throw error;
+				}
+				continue;
+			}
 			await this.plugin.app.vault.rename(moved, move.from);
 		}
 	}
@@ -355,6 +542,22 @@ export interface MonthlyFolderMigrationPlan {
 	moveSystemFolder: boolean;
 	rewrittenMonthlyRefs: number;
 	conflicts: string[];
+}
+
+export interface MonthlyMemoFileFormatMigrationPlan {
+	status: "unchanged" | "planned";
+	oldFormat: string;
+	newFormat: string;
+	periods: string[];
+	oldArchivePaths: string[];
+	targetPaths: string[];
+	conflicts: string[];
+}
+
+export interface MonthlyMemoFileFormatMigrationResult {
+	status: "unchanged" | "migrated";
+	backupPath: string | null;
+	plan: MonthlyMemoFileFormatMigrationPlan;
 }
 
 function listIndexFiles(folder: TFolder): TFile[] {
@@ -407,6 +610,22 @@ function rewriteMonthlyRefPaths(content: string, oldMonthlyMemoFolder: string, n
 	return changed ? `${JSON.stringify(parsed, null, "\t")}\n` : content;
 }
 
+function rewriteAllMonthlyRefPaths(content: string, targetPath: string): string {
+	const parsed = parseIndexContent(content);
+	if (!isRecord(parsed) || !isRecord(parsed.memos)) {
+		throw new Error("Monthly memo-index content is invalid.");
+	}
+	let changed = false;
+	for (const memo of Object.values(parsed.memos)) {
+		if (!isRecord(memo) || !isRecord(memo.monthlyRef) || memo.monthlyRef.path === targetPath) {
+			continue;
+		}
+		memo.monthlyRef.path = targetPath;
+		changed = true;
+	}
+	return changed ? `${JSON.stringify(parsed, null, "\t")}\n` : content;
+}
+
 function parseIndexContent(content: string): unknown {
 	if (content.trim().length === 0) {
 		return null;
@@ -416,6 +635,38 @@ function parseIndexContent(content: string): unknown {
 	} catch {
 		return null;
 	}
+}
+
+function listMonthlyRefPaths(content: string): string[] {
+	const parsed = parseIndexContent(content);
+	if (!isRecord(parsed) || !isRecord(parsed.memos)) {
+		return [];
+	}
+	const paths: string[] = [];
+	for (const memo of Object.values(parsed.memos)) {
+		if (isRecord(memo) && isRecord(memo.monthlyRef) && typeof memo.monthlyRef.path === "string") {
+			paths.push(normalizeVaultPath(memo.monthlyRef.path));
+		}
+	}
+	return paths;
+}
+
+function getPeriodFromMonthlyFileName(fileName: string, format: string): string | null {
+	if (!isValidMonthlyMemoFileFormat(format)) {
+		return null;
+	}
+	const [prefix, suffix] = format.split("YYYY-MM");
+	if (!fileName.startsWith(prefix) || !fileName.endsWith(suffix)) {
+		return null;
+	}
+	const period = fileName.slice(prefix.length, suffix.length === 0 ? undefined : -suffix.length);
+	return /^\d{4}-(?:0[1-9]|1[0-2])$/.test(period) ? period : null;
+}
+
+function isPathInsideFolder(path: string, folder: string): boolean {
+	const normalizedPath = normalizeVaultPath(path);
+	const normalizedFolder = normalizeVaultPath(folder);
+	return normalizedPath.startsWith(`${normalizedFolder}/`);
 }
 
 function rewriteMonthlyPath(path: string, oldMonthlyMemoFolder: string, newMonthlyMemoFolder: string): string {

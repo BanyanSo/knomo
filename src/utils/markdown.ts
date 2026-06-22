@@ -2,7 +2,6 @@ import type { MemoImageRef, MemoLinkRef } from "../types/memo";
 import { decodePercentEncodedImagePath, parseMarkdownImages } from "./markdownImages";
 
 const MARKDOWN_HEADING_REGEX = /^(#{1,6})\s+\S.*$/;
-const TRAILING_BLOCK_ID_REGEX = /\s+\^[A-Za-z0-9_-]+\s*$/;
 const MEMO_START_LINE_REGEX = /^- \d{2}:\d{2}(?::\d{2})?(?: .*)?$/;
 const MEMO_CONTINUATION_INDENT_REGEX = /^(?:\t| {2,})/;
 const OBSIDIAN_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
@@ -15,10 +14,6 @@ const OBSIDIAN_IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", 
 
 export function isValidMarkdownHeading(value: string): boolean {
 	return MARKDOWN_HEADING_REGEX.test(value.trim());
-}
-
-export function stripTrailingBlockId(value: string): string {
-	return value.replace(TRAILING_BLOCK_ID_REGEX, "");
 }
 
 export function extractTrailingBlockId(value: string): { text: string; blockId: string | null } {

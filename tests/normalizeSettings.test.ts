@@ -47,8 +47,21 @@ test("normalizes invalid settings to safe defaults", async () => {
 	assert.equal(settings.managedSystemFolderExcludeRule, undefined);
 	assert.deepEqual(settings.pinnedTags, ["project", "knomo"]);
 	assert.equal(isValidMonthlyMemoFileFormat("Memos-YYYY-MM.md"), true);
+	assert.equal(isValidMonthlyMemoFileFormat("Memos-YYYY-MM"), true);
+	assert.equal(isValidMonthlyMemoFileFormat("Memos.md"), false);
+	assert.equal(isValidMonthlyMemoFileFormat("Memos-YYYY-MM-YYYY-MM.md"), false);
 	assert.equal(isValidMonthlyMemoFileFormat("YYYY/Memos-YYYY-MM.md"), false);
 	assert.equal(isValidMonthlyMemoFileFormat("YYYY\\Memos-YYYY-MM.md"), false);
+});
+
+test("preserves safe historical monthly filename formats for explicit migration", async () => {
+	await ensureObsidianStub();
+	const { isValidMonthlyMemoFileFormat, normalizeSettings } = await import("../src/settings/normalizeSettings");
+
+	const settings = normalizeSettings({ monthlyMemoFileFormat: "Memos.md" });
+
+	assert.equal(settings.monthlyMemoFileFormat, "Memos.md");
+	assert.equal(isValidMonthlyMemoFileFormat(settings.monthlyMemoFileFormat), false);
 });
 
 test("clones normalized settings arrays", async () => {

@@ -80,7 +80,8 @@ export class MemoIndexStore {
 		const nextData = await this.app.vault.process(file, (data) => {
 			const index = this.recoverIndexReferences(parseIndex(data, period));
 			const nextIndex = mergeIndex(index);
-			return `${JSON.stringify(nextIndex, null, "\t")}\n`;
+			const serialized = `${JSON.stringify(nextIndex, null, "\t")}\n`;
+			return serialized === data ? data : serialized;
 		});
 		return parseIndex(nextData, period);
 	}

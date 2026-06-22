@@ -36,10 +36,23 @@ export default class KnomoPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		registerKnomoIcons();
-		this.settingsService = new SettingsService(this);
+		const selfWriteTracker = new SelfWriteTracker();
+		this.settingsService = new SettingsService(this, (oldPath, newPath) => {
+			const now = Date.now();
+			const opId = `archive-move-${now}-${newPath}`;
+			selfWriteTracker.mark(oldPath, {
+				opId,
+				path: oldPath,
+				reason: "archive_move",
+				writtenAt: now,
+				expiresAt: now + 10000,
+				expectedHash: null,
+				targetPath: newPath,
+			});
+			return () => selfWriteTracker.discard(oldPath, opId);
+		});
 		await this.loadSettingsSafely();
 		const markdownBlockService = new MarkdownBlockService();
-		const selfWriteTracker = new SelfWriteTracker();
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
 		const dailyNoteService = new DailyNoteService(this.app, markdownBlockService, dailyNotesProvider);
 		await this.refreshDailyStatusSafely(dailyNoteService);
@@ -138,14 +151,9 @@ export default class KnomoPlugin extends Plugin {
 
 	async activateView(): Promise<void> {
 		const existingLeaves = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE);
-		if (!Platform.isMobile && existingLeaves.length > 0) {
+		if (existingLeaves.length > 0) {
 			await this.app.workspace.revealLeaf(existingLeaves[0]);
 			return;
-		}
-		if (Platform.isMobile) {
-			for (const leaf of existingLeaves) {
-				leaf.detach();
-			}
 		}
 
 		const leaf = this.app.workspace.getLeaf("tab");

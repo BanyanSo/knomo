@@ -66,3 +66,23 @@ test("record statistics renders accessible common-tag bars after active hours wi
 	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-bar\s*\{[^}]*width:\s*calc\(var\(--knomo-record-stats-tag-ratio, 0\) \* 100%\);/s);
 	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-bar\s*\{[^}]*border-radius:\s*inherit;/s);
 });
+
+test("record statistics back button follows compact, collapsed-wide, and mobile header rules", async () => {
+	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+	const headerSource = await readFile(resolve(process.cwd(), "src/ui/KnomoHeaderSearch.ts"), "utf8");
+
+	assert.equal(headerSource.match(/"record-stats-back"/g)?.length, 2);
+	assert.match(css, /\.is-record-stats\.is-layout-desktop-medium \.knomo-record-stats-back,/);
+	assert.match(css, /\.is-record-stats\.is-layout-desktop-narrow \.knomo-record-stats-back,/);
+	assert.match(css, /\.is-record-stats\.is-layout-desktop-wide\.is-sidebar-collapsed \.knomo-record-stats-back\s*\{/);
+	assert.match(css, /\.view-header\.knomo-record-stats-header \.knomo-record-stats-back\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/s);
+});
+
+test("record statistics back navigation preserves and restores the source route", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+
+	assert.match(source, /interface RecordStatsReturnState[\s\S]*activeNav:[\s\S]*recordStatsSearchFilter:[\s\S]*activeTagKey:/);
+	assert.match(source, /nav === "record-stats" && previousNav !== "record-stats"[\s\S]*this\.recordStatsReturnState = \{[\s\S]*this\.clearDesktopSearchState\(\);/);
+	assert.match(source, /private returnFromRecordStats\(\): void[\s\S]*this\.activeNav = returnState\.activeNav;[\s\S]*this\.recordStatsSearchFilter = returnState\.recordStatsSearchFilter;[\s\S]*this\.renderUiState\(/);
+	assert.match(source, /nav !== "random" && !\(nav === "record-stats" && previousNav === "random"\)/);
+});

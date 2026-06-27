@@ -152,7 +152,10 @@ export default class KnomoPlugin extends Plugin {
 	async activateView(): Promise<void> {
 		const existingLeaves = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE);
 		if (existingLeaves.length > 0) {
-			await this.app.workspace.revealLeaf(existingLeaves[0]);
+			const leaf = existingLeaves[0];
+			await this.app.workspace.revealLeaf(leaf);
+			this.app.workspace.setActiveLeaf(leaf, { focus: true });
+			this.requestMobileNavbarSync(leaf);
 			return;
 		}
 
@@ -162,6 +165,14 @@ export default class KnomoPlugin extends Plugin {
 			active: true,
 		});
 		await this.app.workspace.revealLeaf(leaf);
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		this.requestMobileNavbarSync(leaf);
+	}
+
+	private requestMobileNavbarSync(leaf: WorkspaceLeaf): void {
+		if (Platform.isMobile && leaf.view instanceof KnomoView) {
+			leaf.view.requestMobileNavbarSync();
+		}
 	}
 
 	private async refreshOpenViews(): Promise<void> {

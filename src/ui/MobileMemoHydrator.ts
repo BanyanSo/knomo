@@ -2,6 +2,8 @@ import type { MemoRecord } from "../types/memo";
 
 const MOBILE_MEMO_HYDRATE_INITIAL_DELAY_MS = 1200;
 const MOBILE_MEMO_HYDRATE_BACKGROUND_DELAY_MS = 180;
+const MOBILE_MEMO_HYDRATE_BATCH_PERIODS = 4;
+const MOBILE_MEMO_HYDRATE_BATCH_MEMOS = 200;
 
 export type MemoLoadMode = "recent" | "hydrating" | "all";
 
@@ -23,6 +25,7 @@ export interface MobileMemoHydratorSnapshot {
 interface MobileMemoHydratorOptions {
 	isMobile: () => boolean;
 	isLoading: () => boolean;
+	isPaused?: () => boolean;
 	canHydrateCardFlow: () => boolean;
 	scheduleTask: (callback: () => void, delayMs: number) => number;
 	cancelTask: (taskId: number) => void;
@@ -182,11 +185,14 @@ export class MobileMemoHydrator {
 	private async hydrate(runId: number): Promise<boolean> {
 		try {
 			this.allMemoPeriods = this.options.listMemoIndexPeriods();
-			for (const period of this.allMemoPeriods) {
+			let pendingPeriods: string[] = [];
+			let pendingMemos: MemoRecord[] = [];
+			for (let index = 0; index < this.allMemoPeriods.length; index += 1) {
+				const period = this.allMemoPeriods[index];
 				if (this.loadedMemoPeriods.has(period)) {
 					continue;
 				}
-				const shouldContinue = await this.waitForTurn(runId);
+				const shouldContinue = await this.waitForHydrationTurn(runId);
 				if (!shouldContinue) {
 					return false;
 				}
@@ -194,13 +200,32 @@ export class MobileMemoHydrator {
 				if (!this.isCurrentRun(runId)) {
 					return false;
 				}
-				const renderState = this.options.captureRenderState();
-				this.loadedMemoPeriods.add(period);
-				this.mergeHydratedMemos(periodMemos);
-				this.options.onPeriodHydrated(renderState);
+				if (periodMemos.length === 0) {
+					this.loadedMemoPeriods.add(period);
+					continue;
+				}
+				pendingPeriods.push(period);
+				pendingMemos.push(...periodMemos);
+				if (
+					this.hasHydrationPeriodsAfter(index)
+					&& this.shouldCommitHydratedMemos(pendingPeriods.length, pendingMemos.length)
+				) {
+					const committed = await this.commitHydratedMemos(runId, pendingPeriods, pendingMemos, true);
+					if (!committed) {
+						return false;
+					}
+					pendingPeriods = [];
+					pendingMemos = [];
+				}
 			}
 			if (!this.isCurrentRun(runId)) {
 				return false;
+			}
+			if (pendingMemos.length > 0) {
+				const committed = await this.commitHydratedMemos(runId, pendingPeriods, pendingMemos, false);
+				if (!committed) {
+					return false;
+				}
 			}
 			this.completeMobileMemoHydration();
 			return true;
@@ -214,8 +239,17 @@ export class MobileMemoHydrator {
 		}
 	}
 
-	private waitForTurn(runId: number): Promise<boolean> {
-		const delay = this.fastMode ? 0 : MOBILE_MEMO_HYDRATE_BACKGROUND_DELAY_MS;
+	private async waitForHydrationTurn(runId: number): Promise<boolean> {
+		while (true) {
+			const delay = this.isPaused() || !this.fastMode ? MOBILE_MEMO_HYDRATE_BACKGROUND_DELAY_MS : 0;
+			const shouldContinue = await this.waitForTurn(runId, delay);
+			if (!shouldContinue || !this.isPaused()) {
+				return shouldContinue;
+			}
+		}
+	}
+
+	private waitForTurn(runId: number, delay: number): Promise<boolean> {
 		return new Promise((resolve) => {
 			this.options.scheduleTask(() => {
 				resolve(this.isCurrentRun(runId));
@@ -223,7 +257,46 @@ export class MobileMemoHydrator {
 		});
 	}
 
-	private mergeHydratedMemos(memos: MemoRecord[]): void {
+	private shouldCommitHydratedMemos(periodCount: number, memoCount: number): boolean {
+		return periodCount >= MOBILE_MEMO_HYDRATE_BATCH_PERIODS || memoCount >= MOBILE_MEMO_HYDRATE_BATCH_MEMOS;
+	}
+
+	private hasHydrationPeriodsAfter(periodIndex: number): boolean {
+		for (let index = periodIndex + 1; index < this.allMemoPeriods.length; index += 1) {
+			if (!this.loadedMemoPeriods.has(this.allMemoPeriods[index])) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private async commitHydratedMemos(
+		runId: number,
+		periods: readonly string[],
+		memos: readonly MemoRecord[],
+		notifyUi: boolean,
+	): Promise<boolean> {
+		if (this.isPaused()) {
+			const shouldContinue = await this.waitForHydrationTurn(runId);
+			if (!shouldContinue) {
+				return false;
+			}
+		}
+		if (!this.isCurrentRun(runId)) {
+			return false;
+		}
+		const renderState = notifyUi ? this.options.captureRenderState() : null;
+		this.mergeHydratedMemos(memos, notifyUi);
+		for (const period of periods) {
+			this.loadedMemoPeriods.add(period);
+		}
+		if (renderState !== null) {
+			this.options.onPeriodHydrated(renderState);
+		}
+		return true;
+	}
+
+	private mergeHydratedMemos(memos: readonly MemoRecord[], invalidateFilteredMemos: boolean): void {
 		if (memos.length === 0) {
 			return;
 		}
@@ -234,7 +307,9 @@ export class MobileMemoHydrator {
 		this.options.setMemos(Array.from(memoById.values())
 			.filter((memo) => memo.status === "active")
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
-		this.options.invalidateFilteredMemos();
+		if (invalidateFilteredMemos) {
+			this.options.invalidateFilteredMemos();
+		}
 	}
 
 	private completeMobileMemoHydration(): void {
@@ -245,6 +320,10 @@ export class MobileMemoHydrator {
 		this.renderNextBatchAfterHydration = false;
 		this.options.invalidateFilteredMemos();
 		this.options.onCompleted(renderState);
+	}
+
+	private isPaused(): boolean {
+		return this.options.isPaused?.() ?? false;
 	}
 
 	private clearDeferredSidebarHydration(): void {

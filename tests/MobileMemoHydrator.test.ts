@@ -44,15 +44,19 @@ test("schedules background hydration after the initial recent memo periods", () 
 	assert.equal(beginCalls, 1);
 });
 
-test("hydrates missing periods in background and merges active memos", async () => {
+test("hydrates missing periods in background and batches memo commits", async () => {
 	const scheduler = new TestScheduler();
 	const recentMemo = makeMemo("recent", "2026-06-10T08:00:00+08:00");
-	const olderMemo = makeMemo("older", "2026-05-10T08:00:00+08:00");
+	const mayMemo = makeMemo("may", "2026-05-10T08:00:00+08:00");
+	const aprilMemo = makeMemo("april", "2026-04-10T08:00:00+08:00");
+	const marchMemo = makeMemo("march", "2026-03-10T08:00:00+08:00");
+	const februaryMemo = makeMemo("february", "2026-02-10T08:00:00+08:00");
+	const januaryMemo = makeMemo("january", "2026-01-10T08:00:00+08:00");
 	const updatedRecentMemo = { ...recentMemo, contentSnapshot: "updated" };
 	const deletedMemo = { ...makeMemo("deleted", "2026-04-10T08:00:00+08:00"), status: "deleted" as const };
 	let memos = [recentMemo];
 	const listedPeriods: string[] = [];
-	const periodStates: MobileMemoHydrationRenderState[] = [];
+	const batchStates: MobileMemoHydrationRenderState[] = [];
 	let completedState: MobileMemoHydrationRenderState | null = null;
 	let invalidateCalls = 0;
 	const hydrator = new MobileMemoHydrator({
@@ -61,10 +65,14 @@ test("hydrates missing periods in background and merges active memos", async () 
 		canHydrateCardFlow: () => true,
 		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
 		cancelTask: (taskId) => scheduler.cancel(taskId),
-		listMemoIndexPeriods: () => ["2026-06", "2026-05", "2026-04"],
+		listMemoIndexPeriods: () => ["2026-06", "2026-05", "2026-04", "2026-03", "2026-02", "2026-01"],
 		listMemosInPeriods: async ([period]) => {
 			listedPeriods.push(period);
-			return period === "2026-05" ? [olderMemo] : [updatedRecentMemo, deletedMemo];
+			if (period === "2026-05") return [mayMemo, updatedRecentMemo];
+			if (period === "2026-04") return [aprilMemo, deletedMemo];
+			if (period === "2026-03") return [marchMemo];
+			if (period === "2026-02") return [februaryMemo];
+			return [januaryMemo];
 		},
 		getMemos: () => memos,
 		setMemos: (nextMemos) => {
@@ -75,7 +83,7 @@ test("hydrates missing periods in background and merges active memos", async () 
 		},
 		captureRenderState: makeRenderState,
 		onStarted: () => {},
-		onPeriodHydrated: (state) => periodStates.push(state),
+		onPeriodHydrated: (state) => batchStates.push(state),
 		onCompleted: (state) => {
 			completedState = state;
 		},
@@ -91,14 +99,17 @@ test("hydrates missing periods in background and merges active memos", async () 
 	await scheduler.runNextAndFlush();
 	assert.deepEqual(scheduler.pendingDelays(), [180]);
 	await scheduler.runNextAndFlush();
+	await scheduler.runNextAndFlush();
+	await scheduler.runNextAndFlush();
+	await scheduler.runNextAndFlush();
 	assert.equal(await hydration, true);
 
-	assert.deepEqual(listedPeriods, ["2026-05", "2026-04"]);
-	assert.deepEqual(memos.map((memo) => memo.id), ["recent", "older"]);
+	assert.deepEqual(listedPeriods, ["2026-05", "2026-04", "2026-03", "2026-02", "2026-01"]);
+	assert.deepEqual(memos.map((memo) => memo.id), ["recent", "may", "april", "march", "february", "january"]);
 	assert.equal(memos[0].contentSnapshot, "updated");
-	assert.equal(periodStates.length, 2);
+	assert.equal(batchStates.length, 1);
 	assert.notEqual(completedState, null);
-	assert.equal(invalidateCalls, 3);
+	assert.equal(invalidateCalls, 2);
 	assert.equal(hydrator.getSnapshot().allMemosLoaded, true);
 	assert.equal(hydrator.getSnapshot().loadMode, "all");
 });
@@ -212,6 +223,57 @@ test("accelerates a background hydration run after the current wait", async () =
 	assert.deepEqual(scheduler.pendingDelays(), [0]);
 	await scheduler.runNextAndFlush();
 	assert.equal(await hydration, true);
+});
+
+test("pauses background hydration while mobile background work is paused", async () => {
+	const scheduler = new TestScheduler();
+	const olderMemo = makeMemo("older", "2026-05-10T08:00:00+08:00");
+	let paused = true;
+	let periodReadCalls = 0;
+	let completedCalls = 0;
+	let memos: MemoRecord[] = [];
+	const hydrator = new MobileMemoHydrator({
+		isMobile: () => true,
+		isLoading: () => false,
+		isPaused: () => paused,
+		canHydrateCardFlow: () => true,
+		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
+		cancelTask: (taskId) => scheduler.cancel(taskId),
+		listMemoIndexPeriods: () => ["2026-05"],
+		listMemosInPeriods: async () => {
+			periodReadCalls += 1;
+			return [olderMemo];
+		},
+		getMemos: () => memos,
+		setMemos: (nextMemos) => {
+			memos = nextMemos;
+		},
+		invalidateFilteredMemos: () => {},
+		captureRenderState: makeRenderState,
+		onStarted: () => {},
+		onPeriodHydrated: () => {},
+		onCompleted: () => {
+			completedCalls += 1;
+		},
+		onFailed: () => {},
+		onSidebarRequested: () => {},
+		beginScheduledHydration: () => {},
+		ensureAllMemosLoaded: () => {},
+	});
+
+	const hydration = hydrator.start(false);
+	assert.deepEqual(scheduler.pendingDelays(), [180]);
+	await scheduler.runNextAndFlush();
+	assert.equal(periodReadCalls, 0);
+	assert.equal(completedCalls, 0);
+	assert.deepEqual(scheduler.pendingDelays(), [180]);
+
+	paused = false;
+	await scheduler.runNextAndFlush();
+	assert.equal(await hydration, true);
+	assert.equal(periodReadCalls, 1);
+	assert.equal(completedCalls, 1);
+	assert.deepEqual(memos.map((memo) => memo.id), ["older"]);
 });
 
 test("cancels a pending hydration run before period reads", async () => {
@@ -337,8 +399,9 @@ class TestScheduler {
 
 	async runNextAndFlush(): Promise<void> {
 		this.runNext();
-		await Promise.resolve();
-		await Promise.resolve();
+		for (let index = 0; index < 6; index += 1) {
+			await Promise.resolve();
+		}
 	}
 }
 

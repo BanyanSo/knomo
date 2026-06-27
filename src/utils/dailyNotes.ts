@@ -18,6 +18,16 @@ interface FormatToken {
 	dateToken: DateToken | null;
 }
 
+interface StrictMomentWithMonth {
+	isValid: () => unknown;
+	month: () => unknown;
+}
+
+interface StrictMomentWithDate {
+	isValid: () => unknown;
+	toDate: () => unknown;
+}
+
 const FORMAT_TOKENS: FormatToken[] = [
 	{ text: "YYYY", regex: "(\\d{4})", dateToken: "year4" },
 	{ text: "MMMM", regex: "([^/]+?)", dateToken: "monthName" },
@@ -224,18 +234,18 @@ function parseLocalizedMonthName(value: string): number | null {
 		return null;
 	}
 	const parsed = (obsidianMoment as unknown as StrictMomentFactory)(value, ["MMMM", "MMM"], true);
-	if (
-		typeof parsed !== "object"
-		|| parsed === null
-		|| !("isValid" in parsed)
-		|| typeof parsed.isValid !== "function"
-		|| !("month" in parsed)
-		|| typeof parsed.month !== "function"
-		|| !parsed.isValid()
-	) {
+	if (!isStrictMomentWithMonth(parsed)) {
 		return null;
 	}
-	const month = parsed.month() + 1;
+	const isValid = parsed.isValid();
+	if (typeof isValid !== "boolean" || !isValid) {
+		return null;
+	}
+	const monthIndex = parsed.month();
+	if (typeof monthIndex !== "number") {
+		return null;
+	}
+	const month = monthIndex + 1;
 	return month >= 1 && month <= 12 ? month : null;
 }
 
@@ -246,19 +256,37 @@ function parseDateWithObsidianMoment(value: string, format: string): Date | null
 		return null;
 	}
 	const parsed = (obsidianMoment as unknown as StrictMomentFactory)(value, format, true);
-	if (
-		typeof parsed !== "object"
-		|| parsed === null
-		|| !("isValid" in parsed)
-		|| typeof parsed.isValid !== "function"
-		|| !("toDate" in parsed)
-		|| typeof parsed.toDate !== "function"
-		|| !parsed.isValid()
-	) {
+	if (!isStrictMomentWithDate(parsed)) {
+		return null;
+	}
+	const isValid = parsed.isValid();
+	if (typeof isValid !== "boolean" || !isValid) {
 		return null;
 	}
 	const date: unknown = parsed.toDate();
 	return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function isStrictMomentWithMonth(value: unknown): value is StrictMomentWithMonth {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return isUnknownFunction(value.isValid) && isUnknownFunction(value.month);
+}
+
+function isStrictMomentWithDate(value: unknown): value is StrictMomentWithDate {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return isUnknownFunction(value.isValid) && isUnknownFunction(value.toDate);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isUnknownFunction(value: unknown): value is () => unknown {
+	return typeof value === "function";
 }
 
 function escapeRegExp(value: string): string {

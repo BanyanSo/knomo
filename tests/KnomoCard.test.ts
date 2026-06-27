@@ -419,6 +419,17 @@ test("desktop save clears the rendered reference and edit state", async () => {
 	assert.match(desktopSaveBranch, /this\.updateCancelEditButtonState\(\);/);
 });
 
+test("mobile cancel edit closes composer without changing reference clear", async () => {
+	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	const cancelEditingMethod = getMethodSource(source, "cancelEditing");
+	const mobileActionPointerMethod = getMethodSource(source, "handleMobileComposerActionPointerDown");
+	const clearReferenceMethod = getMethodSource(source, "clearReference");
+
+	assert.match(cancelEditingMethod, /this\.clearComposerMode\(\);[\s\S]*if \(this\.currentLayout === "mobile"\) \{\s*this\.closeMobileComposerKeepingDraft\(\);/);
+	assert.match(mobileActionPointerMethod, /if \(action === "clear-reference"\) \{\s*this\.clearReference\(\);\s*\} else \{\s*this\.cancelEditing\(\);/);
+	assert.doesNotMatch(clearReferenceMethod, /closeMobileComposerKeepingDraft|closeComposerKeepingDraft|cancelEditing|clearComposerMode/);
+});
+
 test("setting draft commits preserve newer edits while an older value is saving", async () => {
 	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoSettingTab.ts"), "utf8");
 	const cases = [
@@ -489,9 +500,9 @@ test("mobile memo hydration compares only the rendered card window", async () =>
 	const viewSource = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
 	const hydratorSource = await readFile(resolve(process.cwd(), "src/ui/MobileMemoHydrator.ts"), "utf8");
 	const captureMethod = getMethodSource(viewSource, "captureMobileMemoHydrationRenderState");
-	const hydrationMethod = getMethodSource(hydratorSource, "hydrate");
+	const commitMethod = getMethodSource(hydratorSource, "commitHydratedMemos");
 
-	assert.match(hydrationMethod, /this\.options\.captureRenderState\(\)/);
+	assert.match(commitMethod, /this\.options\.captureRenderState\(\)/);
 	assert.match(captureMethod, /const renderedCardCount = this\.getRenderedCardCount\(\);/);
 	assert.match(captureMethod, /this\.getVisibleCardFlowStateKey\(renderedCardCount\)/);
 	assert.doesNotMatch(captureMethod, /this\.getCardFlowStateKey\(\)/);

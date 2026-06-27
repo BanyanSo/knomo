@@ -401,6 +401,7 @@ export class KnomoView extends ItemView {
 		this.mobileMemoHydrator = new MobileMemoHydrator({
 			isMobile: () => Platform.isMobile,
 			isLoading: () => this.allMemosLoadingPromise !== null,
+			isPaused: () => this.composerOpen,
 			canHydrateCardFlow: () => this.activeNav !== "trash" && this.activeNav !== "random" && this.activeNav !== "record-stats",
 			scheduleTask: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
 			cancelTask: (taskId) => this.containerEl.win.clearTimeout(taskId),
@@ -517,6 +518,10 @@ export class KnomoView extends ItemView {
 		return KNOMO_LOGO_ICON;
 	}
 
+	requestMobileNavbarSync(): void {
+		this.mobileNavbarCompactController?.requestSync();
+	}
+
 	async onOpen(): Promise<void> {
 		this.contentEl.addClass("knomo-view-host");
 		if (Platform.isMobile) {
@@ -527,7 +532,7 @@ export class KnomoView extends ItemView {
 			this.mobileComposerController.prepare();
 		}
 		this.mobileNavbarCompactController = new MobileNavbarCompactController(this, {
-			isActive: () => this.app.workspace.getActiveViewOfType(KnomoView) === this,
+			isActive: () => this.isMobileNavbarSyncTarget(),
 			isComposerOpen: () => this.composerOpen,
 			toggleSidebar: () => this.toggleSidebar(),
 			openComposer: () => this.openComposer(),
@@ -535,6 +540,11 @@ export class KnomoView extends ItemView {
 		this.mobileNavbarCompactController.start();
 		this.startLayoutObserver();
 		this.startDateChangeWatcher();
+	}
+
+	private isMobileNavbarSyncTarget(): boolean {
+		return this.app.workspace.getActiveViewOfType(KnomoView) === this
+			|| (Platform.isMobile && this.containerEl.isShown());
 	}
 
 	async onClose(): Promise<void> {
@@ -3915,6 +3925,9 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.clearComposerMode();
+		if (this.currentLayout === "mobile") {
+			this.closeMobileComposerKeepingDraft();
+		}
 	}
 
 	private clearReference(): void {

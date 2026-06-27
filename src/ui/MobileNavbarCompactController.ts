@@ -108,6 +108,14 @@ export class MobileNavbarCompactController {
 		this.queueSyncCycle();
 	}
 
+	requestSync(): void {
+		if (!this.started) {
+			return;
+		}
+		this.clearSyncThrottle();
+		this.queueSyncCycle();
+	}
+
 	stop(): void {
 		if (!this.started) {
 			return;
@@ -127,7 +135,8 @@ export class MobileNavbarCompactController {
 
 	sync(): void {
 		if (!this.shouldEnable()) {
-			this.disable();
+			this.disconnectObserver();
+			this.cleanupRenderedState();
 			return;
 		}
 

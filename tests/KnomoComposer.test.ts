@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dirname, resolve } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("renders composer input, tools, actions, and reference preview", async () => {
 	await ensureObsidianStub();
@@ -57,29 +56,6 @@ test("renders composer input, tools, actions, and reference preview", async () =
 	assert.equal(elements.referencePreviewEl.hasClass("is-visible"), false);
 	assert.equal(elements.referencePreviewEl.find(".knomo-reference-content"), null);
 });
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder { constructor() { this.children = []; } }",
-			"const Vault = { recurseChildren() {} };",
-			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-			"function setIcon(el, icon) { if (el && typeof el.setAttr === 'function') el.setAttr('data-icon', icon); return el; }",
-			"function addIcon() {}",
-			"let languageValue = 'en';",
-			"function getLanguage() { return languageValue; }",
-			"getLanguage.set = (value) => { languageValue = value; };",
-			"let localeValue = 'en';",
-			"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
-			"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
-			"module.exports = { TFile, TFolder, Vault, setIcon, addIcon, getLanguage, moment, normalizePath };",
-		].join("\n"),
-	);
-}
 
 interface CreateElementOptions {
 	cls?: string;

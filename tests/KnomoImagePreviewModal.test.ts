@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dirname, resolve } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("image preview swipe requires clear horizontal intent", async () => {
 	const { getImageSwipeDirection } = await loadImagePreviewModule();
@@ -27,20 +26,4 @@ test("image preview adjacent indexes wrap without duplicates or overflow", async
 async function loadImagePreviewModule(): Promise<typeof import("../src/ui/KnomoImagePreviewModal")> {
 	await ensureObsidianStub();
 	return import("../src/ui/KnomoImagePreviewModal");
-}
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class Modal {}",
-			"const Platform = { isMobile: false };",
-			"let languageValue = 'en';",
-			"function getLanguage() { return languageValue; }",
-			"function setIcon() {}",
-			"module.exports = { Modal, Platform, getLanguage, setIcon };",
-		].join("\n"),
-	);
 }

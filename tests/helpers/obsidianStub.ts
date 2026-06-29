@@ -1,0 +1,114 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+
+export async function ensureObsidianStub(): Promise<void> {
+	const obsidianStubPath = resolve(__dirname, "../../node_modules/obsidian/index.js");
+	await mkdir(dirname(obsidianStubPath), { recursive: true });
+	await writeFile(obsidianStubPath, buildObsidianStub());
+
+	const dailyNotesInterfaceStubPath = resolve(__dirname, "../../node_modules/obsidian-daily-notes-interface/index.js");
+	await mkdir(dirname(dailyNotesInterfaceStubPath), { recursive: true });
+	await writeFile(dailyNotesInterfaceStubPath, buildDailyNotesInterfaceStub());
+}
+
+function buildObsidianStub(): string {
+	return [
+		"class TFile {",
+		"  constructor(path = '') {",
+		"    this.path = path;",
+		"    this.name = String(path).split('/').pop() || '';",
+		"    const dotIndex = this.name.lastIndexOf('.');",
+		"    this.extension = dotIndex === -1 ? '' : this.name.slice(dotIndex + 1);",
+		"    this.basename = dotIndex === -1 ? this.name : this.name.slice(0, dotIndex);",
+		"  }",
+		"}",
+		"class TFolder {",
+		"  constructor(path = '') {",
+		"    this.path = path;",
+		"    this.name = String(path).split('/').pop() || '';",
+		"    this.children = [];",
+		"  }",
+		"}",
+		"const Vault = {",
+		"  recurseChildren(folder, callback) {",
+		"    for (const child of folder.children ?? []) {",
+		"      callback(child);",
+		"      if (child instanceof TFolder) Vault.recurseChildren(child, callback);",
+		"    }",
+		"  },",
+		"};",
+		"const normalizePath = (value) => String(value)",
+		"  .replace(/\\\\/g, '/')",
+		"  .replace(/\\/+/g, '/')",
+		"  .replace(/^\\.\\//, '')",
+		"  .replace(/^\\/+/, '')",
+		"  .replace(/\\/\\.\\//g, '/')",
+		"  .replace(/\\/$/, '');",
+		"let languageValue = 'en';",
+		"function getLanguage() { return languageValue; }",
+		"getLanguage.set = (value) => { languageValue = value; };",
+		"const localizedMonths = {",
+		"  fr: ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'],",
+		"  frShort: ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'],",
+		"};",
+		"let localeValue = 'en';",
+		"const momentDate = (date) => ({",
+		"  isValid: () => !Number.isNaN(date.getTime()),",
+		"  toDate: () => new Date(date),",
+		"  month: () => date.getMonth(),",
+		"  format: () => date.toISOString().slice(0, 10),",
+		"});",
+		"const moment = (input = new Date(), formats, strict) => {",
+		"  if (strict === true && typeof input === 'string') {",
+		"    if (formats === 'YYYY-DDD') {",
+		"      const match = input.match(/^(\\d{4})-(\\d{3})$/);",
+		"      if (match === null) return momentDate(new Date(Number.NaN));",
+		"      return momentDate(new Date(Number(match[1]), 0, Number(match[2])));",
+		"    }",
+		"    if (formats === 'GGGG-[W]WW-E') {",
+		"      const match = input.match(/^(\\d{4})-W(\\d{2})-(\\d)$/);",
+		"      if (match === null) return momentDate(new Date(Number.NaN));",
+		"      const jan4 = new Date(Number(match[1]), 0, 4);",
+		"      const isoWeekday = jan4.getDay() || 7;",
+		"      const date = new Date(Number(match[1]), 0, 4 - isoWeekday + 1);",
+		"      date.setDate(date.getDate() + (Number(match[2]) - 1) * 7 + Number(match[3]) - 1);",
+		"      return momentDate(date);",
+		"    }",
+		"    const normalized = input.trim().toLowerCase();",
+		"    const names = localeValue === 'fr' ? [...localizedMonths.fr, ...localizedMonths.frShort] : [];",
+		"    const index = names.indexOf(normalized);",
+		"    const monthIndex = index < 0 ? -1 : index % 12;",
+		"    return { isValid: () => monthIndex >= 0, month: () => monthIndex };",
+		"  }",
+		"  const date = input instanceof Date ? input : new Date(input);",
+		"  return momentDate(date);",
+		"};",
+		"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
+		"function setIcon(el, icon) { if (el && typeof el.setAttr === 'function') el.setAttr('data-icon', icon); return el; }",
+		"function addIcon() {}",
+		"class Notice { constructor(message) { this.message = message; Notice.messages.push(message); } }",
+		"Notice.messages = [];",
+		"const Platform = { isMobile: false, isDesktop: true };",
+		"class Modal { constructor(app) { this.app = app; this.containerEl = app?.workspace?.containerEl ?? {}; this.modalEl = {}; this.contentEl = {}; this.titleEl = { setText() {} }; } open() {} close() {} }",
+		"class ItemView { constructor(leaf) { this.leaf = leaf; this.app = leaf?.app; this.containerEl = leaf?.containerEl ?? {}; this.contentEl = this.containerEl; } registerDomEvent(target, type, listener, options) { target?.addEventListener?.(type, listener, options); } registerEvent() {} register() {} }",
+		"class Scope { constructor(parent) { this.parent = parent; } register() {} }",
+		"class Plugin {}",
+		"class PluginSettingTab { constructor(app, plugin) { this.app = app; this.plugin = plugin; this.containerEl = {}; } display() {} hide() {} }",
+		"class Setting { constructor(containerEl) { this.containerEl = containerEl; } setName() { return this; } setDesc() { return this; } setHeading() { return this; } addButton(callback) { callback?.({ setButtonText() { return this; }, setCta() { return this; }, onClick() { return this; }, setDisabled() { return this; } }); return this; } addText(callback) { callback?.({ inputEl: { addEventListener() {} }, setValue() { return this; }, onChange() { return this; }, setPlaceholder() { return this; } }); return this; } addToggle(callback) { callback?.({ setValue() { return this; }, onChange() { return this; } }); return this; } addDropdown(callback) { callback?.({ addOption() { return this; }, setValue() { return this; }, onChange() { return this; } }); return this; } }",
+		"class AbstractInputSuggest { constructor(app, inputEl) { this.app = app; this.inputEl = inputEl; } close() {} }",
+		"function getAllTags() { return {}; }",
+		"function prepareFuzzySearch(query) { return (text) => ({ score: String(text).includes(query) ? 0 : null, matches: [] }); }",
+		"function renderResults() {}",
+		"class MarkdownRenderer { static async render() {} }",
+		"module.exports = { TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon, Notice, Platform, Modal, ItemView, Scope, Plugin, PluginSettingTab, Setting, AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults, MarkdownRenderer };",
+	].join("\n");
+}
+
+function buildDailyNotesInterfaceStub(): string {
+	return [
+		"async function createDailyNote(date) {",
+		"  return window.__knomoCreateDailyNote(date);",
+		"}",
+		"module.exports = { createDailyNote };",
+	].join("\n");
+}

@@ -5,6 +5,7 @@ import {
 	canAdvanceRecordStatsDate,
 	canRetreatRecordStatsDate,
 	getRecordStatsRange,
+	RecordStatsBuilder,
 	RecordStatsService,
 	shiftRecordStatsDate,
 } from "../src/services/RecordStatsService";
@@ -223,6 +224,29 @@ test("invalidating an in-flight preparation discards its result", async () => {
 	assert.equal(await preparing, false);
 	assert.equal(yielded, true);
 	assert.equal(service.getSnapshot().state, "idle");
+});
+
+test("prepares statistics from a scanned source key", async () => {
+	const service = new RecordStatsService();
+	const builder = new RecordStatsBuilder();
+	builder.addMemos([
+		makeMemo("memo-1", "2026-06-08T10:00:00+08:00", "one"),
+		makeMemo("memo-2", "2026-06-09T10:00:00+08:00", "two words"),
+	]);
+	let loadCalls = 0;
+
+	assert.equal(await service.prepareFromSource("memo-index:1", async () => {
+		loadCalls += 1;
+		return builder.build();
+	}), true);
+	assert.equal(await service.prepareFromSource("memo-index:1", async () => {
+		loadCalls += 1;
+		return null;
+	}), true);
+
+	assert.equal(loadCalls, 1);
+	assert.equal(service.getSnapshot().state, "ready");
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
 });
 
 test("calculates Monday ranges and bounded calendar navigation", () => {

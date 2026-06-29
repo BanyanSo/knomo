@@ -1,88 +1,226 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import type { RecordStatsSnapshot, SelectedRecordStats } from "../src/services/RecordStatsService";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("record statistics bars expand hit areas without changing chart widths", async () => {
-	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
+test("record statistics renders loading state with reserved skeleton sections", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
+	const root = new TestElement("div");
 
-	assert.match(css, /\.knomo-record-stats-chart\.is-month\s*\{[^}]*min-width:\s*620px;/s);
-	assert.match(css, /\.knomo-record-stats-chart\.is-year\s*\{[^}]*min-width:\s*420px;/s);
-	assert.match(css, /\.knomo-record-stats-chart\.is-hours\s*\{[^}]*min-width:\s*540px;/s);
-	assert.match(css, /--knomo-record-stats-column-gap:\s*var\(--size-2-2\);/);
-	assert.match(css, /--knomo-record-stats-hit-inset:\s*var\(--size-2-1\);/);
-	assert.match(css, /\.knomo-record-stats-bar-item\s*\{[^}]*display:\s*grid;/s);
-	assert.match(css, /\.knomo-record-stats-bar-hit\s*\{[^}]*position:\s*absolute;/s);
-	assert.match(css, /inset-inline:\s*calc\(0px - var\(--knomo-record-stats-hit-inset\)\);/);
-	assert.match(css, /\.knomo-record-stats-bar-hit\s*\{[^}]*height:\s*auto;/s);
+	renderKnomoRecordStatsPage(root.asHtml(), {
+		snapshot: { state: "loading", error: null },
+		selected: null,
+		view: "month",
+		canAdvance: false,
+		canRetreat: false,
+		createHiddenText,
+	});
+
+	assert.equal(root.find("[role='status']")?.hasClass("knomo-record-stats-loading"), true);
+	assert.equal(root.findAll(".knomo-record-stats-skeleton-chart").length, 2);
+	assert.notEqual(root.find(".knomo-record-stats-skeleton-tag-chart"), null);
 });
 
-test("record statistics metric labels wrap consistently and chart headings do not create tooltips", async () => {
-	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoRecordStatsPage.ts"), "utf8");
+test("record statistics renders actionable range metrics, charts, hours, and common tags", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
+	const root = new TestElement("div");
 
-	assert.match(css, /\.knomo-record-stats-metric-label\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
-	assert.match(css, /\.knomo-record-stats-metric-label\s*\{[^}]*white-space:\s*normal;/s);
-	assert.match(source, /attr:\s*\{\s*role:\s*"list",\s*"aria-labelledby":\s*options\.labelledBy\s*\}/);
-	assert.doesNotMatch(source, /attr:\s*\{\s*role:\s*"list",\s*"aria-label":\s*options\.ariaLabel\s*\}/);
-	assert.match(source, /"aria-label":\s*action\.ariaLabel/);
+	renderKnomoRecordStatsPage(root.asHtml(), {
+		snapshot: { state: "ready", error: null } satisfies RecordStatsSnapshot,
+		selected: makeSelectedStats(),
+		view: "month",
+		canAdvance: false,
+		canRetreat: true,
+		createHiddenText,
+	});
+
+	assert.equal(root.find("[data-action='reset-list-state']")?.getAttr("aria-label"), "Back to all notes");
+	assert.equal(root.find("[data-action='record-stats-view-month']")?.getAttr("aria-pressed"), "true");
+	assert.equal(root.find("[data-action='record-stats-next']")?.disabled, true);
+	assert.equal(root.find("[data-action='record-stats-previous']")?.disabled, false);
+	assert.equal(root.find("[data-record-stats-key='2026-06-01']")?.getAttr("data-record-stats-unit"), "day");
+	assert.equal(root.find("[data-record-stats-hour='8']")?.getAttr("data-action"), "record-stats-filter-hour");
+
+	const tagButton = root.find("[data-record-stats-tag-key='work']");
+	assert.equal(tagButton?.getAttr("data-action"), "record-stats-filter-tag");
+	assert.equal(tagButton?.getText(), "#Work3");
+	assert.equal(tagButton?.find(".knomo-record-stats-tag-bar")?.getCssProp("--knomo-record-stats-tag-ratio"), "1");
 });
 
-test("record statistics loading skeleton reserves the ready page structure", async () => {
-	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoRecordStatsPage.ts"), "utf8");
+function createHiddenText(container: HTMLElement, id: string, text: string): string {
+	container.createSpan({ cls: "sr-only", text, attr: { id } });
+	return id;
+}
 
-	assert.match(source, /knomo-record-stats-skeleton-controls/);
-	assert.match(source, /knomo-record-stats-skeleton-navigation/);
-	assert.equal(source.match(/knomo-record-stats-skeleton-chart/g)?.length, 2);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-loading\s*\{[^}]*position:\s*absolute;/s);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-skeleton-item\s*\{[^}]*height:\s*76px;/s);
-});
+function makeSelectedStats(): SelectedRecordStats {
+	return {
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+		overview: {
+			memoCount: 13,
+			wordCount: 233,
+			recordDayCount: 4,
+		},
+		range: {
+			memoCount: 8,
+			wordCount: 144,
+			recordDayCount: 3,
+			referenceMemoCount: 2,
+			taggedMemoCount: 5,
+			untaggedMemoCount: 3,
+			imageMemoCount: 1,
+			maxDailyMemoCount: 4,
+			maxDailyWordCount: 88,
+			maxDailyMemoDates: ["2026-06-01"],
+			maxDailyWordDates: ["2026-06-02"],
+		},
+		trend: [
+			{ key: "2026-06-01", label: "1", count: 4 },
+			{ key: "2026-06-02", label: "2", count: 0 },
+			{ key: "2026-06-03", label: "3", count: 2 },
+		],
+		activeHours: Array.from({ length: 24 }, (_, hour) => ({
+			hour,
+			count: hour === 8 ? 3 : 0,
+		})),
+		commonTags: [
+			{ key: "work", label: "Work", count: 3 },
+			{ key: "life", label: "Life", count: 1 },
+		],
+	};
+}
 
-test("record statistics renders all-note navigation and feature metrics in the requested order", async () => {
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoRecordStatsPage.ts"), "utf8");
+interface CreateElementOptions {
+	cls?: string;
+	text?: string;
+	attr?: Record<string, string>;
+}
 
-	assert.match(source, /recordStats\.overview\.notes[\s\S]*action:\s*"reset-list-state"/);
-	assert.match(source, /renderSkeletonGrid\(metrics, 9\)/);
-	assert.match(
-		source,
-		/recordStats\.metric\.recordDays[\s\S]*recordStats\.metric\.withTag[\s\S]*recordStats\.metric\.noTag[\s\S]*recordStats\.metric\.withImage[\s\S]*recordStats\.metric\.references/,
-	);
-});
+class TestElement {
+	private readonly childElements: TestElement[] = [];
+	private readonly classes = new Set<string>();
+	private readonly attrs = new Map<string, string>();
+	private readonly cssProps = new Map<string, string>();
+	readonly children = {
+		item: (index: number): Element | null => this.childElements[index]?.asHtml() ?? null,
+	};
+	disabled = false;
+	scrollLeft = 0;
+	private text = "";
 
-test("record statistics renders accessible common-tag bars after active hours with an empty state", async () => {
-	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoRecordStatsPage.ts"), "utf8");
+	constructor(private readonly tagName: string) {}
 
-	assert.match(source, /renderActiveHours\([\s\S]*renderCommonTags\(/);
-	assert.match(source, /recordStats\.commonTags\.empty/);
-	assert.match(source, /data-record-stats-tag-key/);
-	assert.match(source, /--knomo-record-stats-tag-ratio/);
-	assert.match(source, /knomo-record-stats-skeleton-tag-chart/);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-button\s*\{[^}]*min-height:\s*var\(--knomo-touch-target\);/s);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-button:focus-visible\s*\{[^}]*outline:/s);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-track\s*\{[^}]*height:\s*18px;/s);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-track\s*\{[^}]*border-radius:\s*var\(--radius-xl\);/s);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-bar\s*\{[^}]*width:\s*calc\(var\(--knomo-record-stats-tag-ratio, 0\) \* 100%\);/s);
-	assert.match(css, /\.knomo-plugin \.knomo-record-stats-tag-bar\s*\{[^}]*border-radius:\s*inherit;/s);
-});
+	asHtml(): HTMLElement {
+		return this as unknown as HTMLElement;
+	}
 
-test("record statistics back button follows compact, collapsed-wide, and mobile header rules", async () => {
-	const css = await readFile(resolve(process.cwd(), "styles.css"), "utf8");
-	const headerSource = await readFile(resolve(process.cwd(), "src/ui/KnomoHeaderSearch.ts"), "utf8");
+	createDiv(options: CreateElementOptions = {}): TestElement {
+		return this.createEl("div", options);
+	}
 
-	assert.equal(headerSource.match(/"record-stats-back"/g)?.length, 2);
-	assert.match(css, /\.is-record-stats\.is-layout-desktop-medium \.knomo-record-stats-back,/);
-	assert.match(css, /\.is-record-stats\.is-layout-desktop-narrow \.knomo-record-stats-back,/);
-	assert.match(css, /\.is-record-stats\.is-layout-desktop-wide\.is-sidebar-collapsed \.knomo-record-stats-back\s*\{/);
-	assert.match(css, /\.view-header\.knomo-record-stats-header \.knomo-record-stats-back\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/s);
-});
+	createSpan(options: CreateElementOptions = {}): TestElement {
+		return this.createEl("span", options);
+	}
 
-test("record statistics back navigation preserves and restores the source route", async () => {
-	const source = await readFile(resolve(process.cwd(), "src/ui/KnomoView.ts"), "utf8");
+	createEl(tagName: string, options: CreateElementOptions = {}): TestElement {
+		const child = new TestElement(tagName);
+		if (options.cls !== undefined) {
+			for (const cls of options.cls.split(/\s+/)) {
+				if (cls.length > 0) {
+					child.addClass(cls);
+				}
+			}
+		}
+		if (options.text !== undefined) {
+			child.setText(options.text);
+		}
+		for (const [key, value] of Object.entries(options.attr ?? {})) {
+			child.setAttr(key, value);
+		}
+		this.childElements.push(child);
+		return child;
+	}
 
-	assert.match(source, /interface RecordStatsReturnState[\s\S]*activeNav:[\s\S]*recordStatsSearchFilter:[\s\S]*activeTagKey:/);
-	assert.match(source, /nav === "record-stats" && previousNav !== "record-stats"[\s\S]*this\.recordStatsReturnState = \{[\s\S]*this\.clearDesktopSearchState\(\);/);
-	assert.match(source, /private returnFromRecordStats\(\): void[\s\S]*this\.activeNav = returnState\.activeNav;[\s\S]*this\.recordStatsSearchFilter = returnState\.recordStatsSearchFilter;[\s\S]*this\.renderUiState\(/);
-	assert.match(source, /nav !== "random" && !\(nav === "record-stats" && previousNav === "random"\)/);
-});
+	setText(value: string): void {
+		this.text = value;
+	}
+
+	getText(): string {
+		return this.text + this.childElements.map((child) => child.getText()).join("");
+	}
+
+	setAttr(key: string, value: string): void {
+		this.attrs.set(key, value);
+	}
+
+	getAttr(key: string): string | null {
+		return this.attrs.get(key) ?? null;
+	}
+
+	setCssProps(props: Record<string, string>): void {
+		for (const [key, value] of Object.entries(props)) {
+			this.cssProps.set(key, value);
+		}
+	}
+
+	getCssProp(key: string): string | null {
+		return this.cssProps.get(key) ?? null;
+	}
+
+	addClass(cls: string): void {
+		this.classes.add(cls);
+	}
+
+	hasClass(cls: string): boolean {
+		return this.classes.has(cls);
+	}
+
+	find(selector: string): TestElement | null {
+		return this.findAll(selector)[0] ?? null;
+	}
+
+	findAll(selector: string): TestElement[] {
+		const result: TestElement[] = [];
+		for (const child of this.childElements) {
+			child.collect(selector, result);
+		}
+		return result;
+	}
+
+	getBoundingClientRect(): DOMRect {
+		return {
+			left: 0,
+			right: 0,
+			top: 0,
+			bottom: 0,
+			width: 0,
+			height: 0,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		} as DOMRect;
+	}
+
+	private collect(selector: string, result: TestElement[]): void {
+		if (this.matches(selector)) {
+			result.push(this);
+		}
+		for (const child of this.childElements) {
+			child.collect(selector, result);
+		}
+	}
+
+	private matches(selector: string): boolean {
+		if (selector.startsWith(".")) {
+			return this.classes.has(selector.slice(1));
+		}
+		const attrMatch = selector.match(/^\[([^=\]]+)(?:='([^']*)')?\]$/);
+		if (attrMatch !== null) {
+			const value = this.attrs.get(attrMatch[1]);
+			return attrMatch[2] === undefined ? value !== undefined : value === attrMatch[2];
+		}
+		return this.tagName === selector;
+	}
+}

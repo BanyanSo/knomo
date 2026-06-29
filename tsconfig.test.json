@@ -3,7 +3,7 @@
 	"compilerOptions": {
 		"module": "CommonJS",
 		"rootDir": ".",
-		"outDir": "/private/tmp/knomo-tests",
+		"outDir": ".tmp/knomo-tests",
 		"inlineSourceMap": false,
 		"sourceMap": true
 	},

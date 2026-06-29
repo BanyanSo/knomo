@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("normalizes invalid settings to safe defaults", async () => {
 	await ensureObsidianStub();
@@ -79,26 +78,3 @@ test("clones normalized settings arrays", async () => {
 	assert.deepEqual(settings.legacyDailyHeadings, ["## One"]);
 	assert.deepEqual(settings.pinnedTags, ["project"]);
 });
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder { constructor() { this.children = []; } }",
-			"const Vault = { recurseChildren() {} };",
-			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-			"function setIcon(el, icon) { if (el && typeof el.setAttr === 'function') el.setAttr('data-icon', icon); return el; }",
-			"function addIcon() {}",
-			"let languageValue = 'en';",
-			"function getLanguage() { return languageValue; }",
-			"getLanguage.set = (value) => { languageValue = value; };",
-			"let localeValue = 'en';",
-			"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
-			"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
-			"module.exports = { TFile, TFolder, Vault, normalizePath, setIcon, addIcon, getLanguage, moment };",
-		].join("\n"),
-	);
-}

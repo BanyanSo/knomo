@@ -1,12 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 
 import type { MemoIndex } from "../src/types";
 import type { MemoRecord, ParsedMemoBlock } from "../src/types/memo";
 import type { KnomoSettings } from "../src/types/settings";
 import { hashText } from "../src/utils/hash";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("monthly archive rebuild writes every active memo from daily notes without changing memoId", async () => {
 	await ensureObsidianStub();
@@ -383,23 +382,4 @@ function createSettings(): KnomoSettings {
 		excludeMonthlyMemosFromObsidian: false,
 		pinnedTags: [],
 	};
-}
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder { constructor() { this.children = []; } }",
-			"const Vault = { recurseChildren() {} };",
-			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-			"function getLanguage() { return 'en'; }",
-			"let localeValue = 'en';",
-			"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
-			"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
-			"module.exports = { TFile, TFolder, Vault, normalizePath, getLanguage, moment };",
-		].join("\n"),
-	);
 }

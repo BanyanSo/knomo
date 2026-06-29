@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("formats structured service errors before falling back to legacy text", async () => {
 	await ensureObsidianStub();
@@ -42,23 +41,3 @@ test("formats persisted issue codes and keeps legacy messages compatible", async
 		message: "Monthly archive sync failed.",
 	}), "Monthly archive sync failed.");
 });
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder {}",
-			"const Vault = { recurseChildren() {} };",
-			"const normalizePath = (value) => value;",
-			"function setIcon() {}",
-			"function addIcon() {}",
-			"function getLanguage() { return 'en'; }",
-			"const moment = () => ({ format: () => '2026-06-18' });",
-			"moment.locale = () => 'en';",
-			"module.exports = { TFile, TFolder, Vault, normalizePath, setIcon, addIcon, getLanguage, moment };",
-		].join("\n"),
-	);
-}

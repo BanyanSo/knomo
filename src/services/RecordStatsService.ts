@@ -60,7 +60,7 @@ export interface RecordStatsSnapshot {
 	error: string | null;
 }
 
-interface DailyRecordStats {
+export interface DailyRecordStats {
 	memoCount: number;
 	wordCount: number;
 	referenceMemoCount: number;
@@ -71,7 +71,7 @@ interface DailyRecordStats {
 	tagMemoCounts: Map<string, number>;
 }
 
-interface PreparedRecordStats {
+export interface PreparedRecordStats {
 	overview: RecordStatsOverview;
 	daily: Map<string, DailyRecordStats>;
 	earliestYear: number | null;
@@ -90,7 +90,7 @@ const PREPARE_BATCH_SIZE = 250;
 export class RecordStatsService {
 	private state: RecordStatsLoadState = "idle";
 	private error: string | null = null;
-	private source: readonly MemoRecord[] | null = null;
+	private source: unknown = null;
 	private prepared: PreparedRecordStats | null = null;
 	private runId = 0;
 
@@ -106,7 +106,11 @@ export class RecordStatsService {
 	}
 
 	isPreparedFor(memos: readonly MemoRecord[]): boolean {
-		return this.source === memos && (this.state === "ready" || this.state === "empty");
+		return this.isPreparedForSource(memos);
+	}
+
+	isPreparedForSource(source: unknown): boolean {
+		return this.source === source && (this.state === "ready" || this.state === "empty");
 	}
 
 	invalidate(): void {
@@ -126,18 +130,25 @@ export class RecordStatsService {
 	}
 
 	async prepare(memos: readonly MemoRecord[], yieldToUi: () => Promise<void>): Promise<boolean> {
-		if (this.isPreparedFor(memos)) {
+		return this.prepareFromSource(memos, (isCurrent) => prepareRecordStats(memos, yieldToUi, isCurrent));
+	}
+
+	async prepareFromSource(
+		source: unknown,
+		loadPrepared: (isCurrent: () => boolean) => Promise<PreparedRecordStats | null>,
+	): Promise<boolean> {
+		if (this.isPreparedForSource(source)) {
 			return true;
 		}
 		const runId = this.runId + 1;
 		this.runId = runId;
 		this.state = "loading";
 		this.error = null;
-		this.source = memos;
+		this.source = source;
 		this.prepared = null;
 
 		try {
-			const prepared = await prepareRecordStats(memos, yieldToUi, () => this.runId === runId);
+			const prepared = await loadPrepared(() => this.runId === runId);
 			if (prepared === null || this.runId !== runId) {
 				return false;
 			}
@@ -163,28 +174,23 @@ export class RecordStatsService {
 	}
 }
 
-async function prepareRecordStats(
-	memos: readonly MemoRecord[],
-	yieldToUi: () => Promise<void>,
-	isCurrent: () => boolean,
-): Promise<PreparedRecordStats | null> {
-	const daily = new Map<string, DailyRecordStats>();
-	let memoCount = 0;
-	let wordCount = 0;
-	let earliestYear: number | null = null;
-	const tagDisplaySources: TagDisplaySource[] = [];
-	let tagDisplayOrder = 0;
+export class RecordStatsBuilder {
+	private readonly daily = new Map<string, DailyRecordStats>();
+	private readonly tagDisplaySources: TagDisplaySource[] = [];
+	private memoCount = 0;
+	private wordCount = 0;
+	private earliestYear: number | null = null;
+	private tagDisplayOrder = 0;
 
-	for (let index = 0; index < memos.length; index += 1) {
-		if (index > 0 && index % PREPARE_BATCH_SIZE === 0) {
-			await yieldToUi();
-			if (!isCurrent()) {
-				return null;
-			}
+	addMemos(memos: readonly MemoRecord[]): void {
+		for (const memo of memos) {
+			this.addMemo(memo);
 		}
-		const memo = memos[index];
+	}
+
+	addMemo(memo: MemoRecord): void {
 		if (memo.status !== "active") {
-			continue;
+			return;
 		}
 		const localTimestamp = parseLocalMemoTimestamp(memo.createdAt);
 		if (localTimestamp === null) {
@@ -204,12 +210,14 @@ async function prepareRecordStats(
 		const updatedTimestamp = Date.parse(memo.updatedAt);
 		const tagModifiedTime = Number.isFinite(updatedTimestamp) ? updatedTimestamp : Date.parse(memo.createdAt);
 		for (const label of memoTagDisplays.values()) {
-			tagDisplaySources.push({ tag: label, modifiedTime: tagModifiedTime, order: tagDisplayOrder });
-			tagDisplayOrder += 1;
+			this.tagDisplaySources.push({ tag: label, modifiedTime: tagModifiedTime, order: this.tagDisplayOrder });
+			this.tagDisplayOrder += 1;
 		}
-		earliestYear = earliestYear === null ? localTimestamp.year : Math.min(earliestYear, localTimestamp.year);
+		this.earliestYear = this.earliestYear === null
+			? localTimestamp.year
+			: Math.min(this.earliestYear, localTimestamp.year);
 		const dayKey = formatDateKey(localTimestamp.year, localTimestamp.month, localTimestamp.day);
-		let current = daily.get(dayKey);
+		let current = this.daily.get(dayKey);
 		if (current === undefined) {
 			const hourCounts = Array.from({ length: 24 }, () => 0);
 			hourCounts[localTimestamp.hour] = 1;
@@ -223,7 +231,7 @@ async function prepareRecordStats(
 				hourCounts,
 				tagMemoCounts: new Map<string, number>(),
 			};
-			daily.set(dayKey, current);
+			this.daily.set(dayKey, current);
 		} else {
 			current.memoCount += 1;
 			current.wordCount += memoWordCount;
@@ -236,20 +244,42 @@ async function prepareRecordStats(
 		for (const key of memoTagDisplays.keys()) {
 			current.tagMemoCounts.set(key, (current.tagMemoCounts.get(key) ?? 0) + 1);
 		}
-		memoCount += 1;
-		wordCount += memoWordCount;
+		this.memoCount += 1;
+		this.wordCount += memoWordCount;
 	}
 
-	return {
-		overview: {
-			memoCount,
-			wordCount,
-			recordDayCount: daily.size,
-		},
-		daily,
-		earliestYear,
-		tagDisplayNames: buildTagDisplayMap(tagDisplaySources),
-	};
+	build(): PreparedRecordStats {
+		return {
+			overview: {
+				memoCount: this.memoCount,
+				wordCount: this.wordCount,
+				recordDayCount: this.daily.size,
+			},
+			daily: this.daily,
+			earliestYear: this.earliestYear,
+			tagDisplayNames: buildTagDisplayMap(this.tagDisplaySources),
+		};
+	}
+}
+
+async function prepareRecordStats(
+	memos: readonly MemoRecord[],
+	yieldToUi: () => Promise<void>,
+	isCurrent: () => boolean,
+): Promise<PreparedRecordStats | null> {
+	const builder = new RecordStatsBuilder();
+
+	for (let index = 0; index < memos.length; index += 1) {
+		if (index > 0 && index % PREPARE_BATCH_SIZE === 0) {
+			await yieldToUi();
+			if (!isCurrent()) {
+				return null;
+			}
+		}
+		builder.addMemo(memos[index]);
+	}
+
+	return builder.build();
 }
 
 function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView, selectedDate: Date): SelectedRecordStats {

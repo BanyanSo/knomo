@@ -1,10 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import { setImmediate as waitImmediate } from "node:timers/promises";
 
 import type { KnomoSettings } from "../src/types/settings";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("monthly filename migration waits for active mutations", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
@@ -204,27 +203,4 @@ function createSettings(): KnomoSettings {
 async function loadSyncOrchestrator(): Promise<typeof import("../src/services/SyncOrchestrator")> {
 	await ensureObsidianStub();
 	return import("../src/services/SyncOrchestrator");
-}
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder { constructor() { this.children = []; } }",
-			"const Vault = { recurseChildren() {} };",
-			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-			"function setIcon(el, icon) { if (el && typeof el.setAttr === 'function') el.setAttr('data-icon', icon); return el; }",
-			"function addIcon() {}",
-			"let languageValue = 'en';",
-			"function getLanguage() { return languageValue; }",
-			"getLanguage.set = (value) => { languageValue = value; };",
-			"let localeValue = 'en';",
-			"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
-			"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
-			"module.exports = { TFile, TFolder, Vault, normalizePath, setIcon, addIcon, getLanguage, moment };",
-		].join("\n"),
-	);
 }

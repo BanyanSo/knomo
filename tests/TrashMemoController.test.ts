@@ -1,16 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 
 import type { MemoRecord } from "../src/types/memo";
 import type { TrashMemoRenderTarget } from "../src/ui/TrashMemoController";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("tracks deleted memo ids once and refreshes the trash snapshot", async () => {
 	const { TrashMemoController } = await loadController();
 	const deletedMemos = [makeMemo("memo-1"), makeMemo("memo-2")];
 	const renderTargets: TrashMemoRenderTarget[] = [];
 	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: deletedMemos.length, ids: deletedMemos.map((memo) => memo.id) }),
 		listDeletedMemos: async () => deletedMemos,
 		restoreMemo: async () => deletedMemos[0],
 		purgeDeletedMemo: async () => {},
@@ -43,6 +43,7 @@ test("loads trash once while busy and preserves loading render transitions", asy
 		resolveList = resolve;
 	});
 	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 0, ids: [] }),
 		listDeletedMemos: () => {
 			listCalls += 1;
 			return listPromise;
@@ -84,6 +85,7 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 		resolveRestore = resolve;
 	});
 	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 2, ids: [memo.id, "memo-2"] }),
 		listDeletedMemos: async () => [memo, makeMemo("memo-2")],
 		restoreMemo: async () => {
 			restoreCalls += 1;
@@ -128,6 +130,7 @@ test("purge requires confirmation and preserves force refresh behavior", async (
 	let purgeCalls = 0;
 	let forceRefreshCalls = 0;
 	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
 		listDeletedMemos: async () => [memo],
 		restoreMemo: async () => memo,
 		purgeDeletedMemo: async () => {
@@ -169,20 +172,6 @@ test("formats trash action errors without duplicating the action label", async (
 async function loadController(): Promise<typeof import("../src/ui/TrashMemoController")> {
 	await ensureObsidianStub();
 	return import("../src/ui/TrashMemoController");
-}
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"let languageValue = 'en';",
-			"function getLanguage() { return languageValue; }",
-			"getLanguage.set = (value) => { languageValue = value; };",
-			"module.exports = { getLanguage };",
-		].join("\n"),
-	);
 }
 
 function makeMemo(id: string): MemoRecord {

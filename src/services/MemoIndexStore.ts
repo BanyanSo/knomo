@@ -13,6 +13,11 @@ import {
 } from "../utils/path";
 import { ensureFolder, ensureTextFile, getParentFolderPath } from "../utils/vault";
 
+export type MemoIndexPeriodVisitor = (
+	period: string,
+	memos: readonly MemoRecord[],
+) => boolean | void | Promise<boolean | void>;
+
 // 职责：按月分片读写 memo-index，并在 process 回调内完成 JSON merge。
 export class MemoIndexStore {
 	constructor(
@@ -49,6 +54,26 @@ export class MemoIndexStore {
 	async loadAll(monthlyMemoFolder: string): Promise<MemoRecord[]> {
 		const periods = this.listExistingPeriods(monthlyMemoFolder);
 		return this.loadPeriods(monthlyMemoFolder, periods);
+	}
+
+	async scanAll(monthlyMemoFolder: string, visitor: MemoIndexPeriodVisitor): Promise<boolean> {
+		return this.scanPeriods(monthlyMemoFolder, this.listExistingPeriods(monthlyMemoFolder), visitor);
+	}
+
+	async scanPeriods(
+		monthlyMemoFolder: string,
+		periods: readonly string[],
+		visitor: MemoIndexPeriodVisitor,
+	): Promise<boolean> {
+		const uniquePeriods = [...new Set(periods)];
+		for (const period of uniquePeriods) {
+			const index = await this.loadPeriod(monthlyMemoFolder, period);
+			const shouldContinue = await visitor(period, Object.values(index.memos));
+			if (shouldContinue === false) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	async loadPeriods(monthlyMemoFolder: string, periods: string[]): Promise<MemoRecord[]> {

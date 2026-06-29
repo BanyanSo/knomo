@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 
 import type { MemoRecord } from "../src/types/memo";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("refreshes random reunion once while loading and preserves render transitions", async () => {
 	const { RandomReunionController } = await loadController();
@@ -130,20 +129,6 @@ test("marks a random reunion memo reviewed only when requested after open", asyn
 async function loadController(): Promise<typeof import("../src/ui/RandomReunionController")> {
 	await ensureObsidianStub();
 	return import("../src/ui/RandomReunionController");
-}
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"let languageValue = 'en';",
-			"function getLanguage() { return languageValue; }",
-			"getLanguage.set = (value) => { languageValue = value; };",
-			"module.exports = { getLanguage };",
-		].join("\n"),
-	);
 }
 
 function makeMemo(id: string): MemoRecord {

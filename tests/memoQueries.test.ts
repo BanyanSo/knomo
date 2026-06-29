@@ -10,11 +10,13 @@ test("lists active memos by created date descending", async () => {
 	const activeOlder = makeMemo("active-older", "2026-05-18T08:00:00.000+08:00");
 	const activeNewer = makeMemo("active-newer", "2026-05-19T08:00:00.000+08:00");
 	const deletedMemo = makeMemo("deleted", "2026-05-20T08:00:00.000+08:00", { status: "deleted" });
-	const service = createService([activeOlder, deletedMemo, activeNewer]);
+	const loadAllCalls: string[] = [];
+	const service = createService([activeOlder, deletedMemo, activeNewer], [], [], loadAllCalls);
 
 	const memos = await service.listMemos();
 
 	assert.deepEqual(memos.map((memo) => memo.id), ["active-newer", "active-older"]);
+	assert.deepEqual(loadAllCalls, []);
 });
 
 test("lists deleted memos by deleted date with created date fallback", async () => {
@@ -34,6 +36,18 @@ test("lists deleted memos by deleted date with created date fallback", async () 
 	const memos = await service.listDeletedMemos();
 
 	assert.deepEqual(memos.map((memo) => memo.id), ["deleted-newer", "deleted-older", "deleted-without-date"]);
+});
+
+test("summarizes deleted memos without loading full memo list", async () => {
+	const deletedMemo = makeMemo("deleted", "2026-05-20T08:00:00.000+08:00", { status: "deleted" });
+	const activeMemo = makeMemo("active", "2026-05-21T08:00:00.000+08:00");
+	const loadAllCalls: string[] = [];
+	const service = createService([deletedMemo, activeMemo], [], [], loadAllCalls);
+
+	const summary = await service.getDeletedMemoSummary();
+
+	assert.deepEqual(summary, { count: 1, ids: ["deleted"] });
+	assert.deepEqual(loadAllCalls, []);
 });
 
 test("lists issue memos by updated date descending", async () => {
@@ -98,7 +112,30 @@ test("loads active memos from selected periods", async () => {
 	assert.deepEqual(memos.map((memo) => memo.id), ["active-newer", "active-older"]);
 });
 
-function createService(memos: MemoRecord[], requestedPeriods: string[][] = [], existingPeriods: string[] = []): MemoQueryService {
+test("builds record stats from scanned index periods", async () => {
+	const activeMemo = makeMemo("active", "2026-05-20T08:00:00.000+08:00");
+	const deletedMemo = makeMemo("deleted", "2026-05-21T08:00:00.000+08:00", { status: "deleted" });
+	const service = createService([activeMemo, deletedMemo]);
+	let yieldCalls = 0;
+
+	const prepared = await service.buildRecordStats(async () => {
+		yieldCalls += 1;
+	}, () => true);
+
+	assert.equal(yieldCalls, 1);
+	assert.deepEqual(prepared?.overview, {
+		memoCount: 1,
+		wordCount: 1,
+		recordDayCount: 1,
+	});
+});
+
+function createService(
+	memos: MemoRecord[],
+	requestedPeriods: string[][] = [],
+	existingPeriods: string[] = [],
+	loadAllCalls: string[] = [],
+): MemoQueryService {
 	const store = {
 		listExistingPeriods: () => existingPeriods,
 		loadPeriod: async () => ({
@@ -108,7 +145,17 @@ function createService(memos: MemoRecord[], requestedPeriods: string[][] = [], e
 			requestedPeriods.push(periods);
 			return memos;
 		},
-		loadAll: async () => memos,
+		scanAll: async (
+			_monthlyMemoFolder: string,
+			visitor: (period: string, periodMemos: MemoRecord[]) => boolean | void | Promise<boolean | void>,
+		) => {
+			const shouldContinue = await visitor("2026-05", memos);
+			return shouldContinue !== false;
+		},
+		loadAll: async () => {
+			loadAllCalls.push("loadAll");
+			return memos;
+		},
 	};
 	return new MemoQueryService(() => ({ monthlyMemoFolder: "Memos" } as KnomoSettings), store as never);
 }

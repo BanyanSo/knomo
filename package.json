@@ -1,6 +1,6 @@
 {
 	"name": "knomo",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "Capture local-first memos into daily notes and monthly archives.",
 	"main": "main.js",
 	"scripts": {
@@ -10,7 +10,7 @@
 		"check:i18n": "node scripts/check-i18n.mjs",
 		"lint": "eslint src package.json",
 		"lint:fix": "eslint src package.json --fix",
-		"test": "tsc -p tsconfig.test.json && node --test --test-concurrency=1 /private/tmp/knomo-tests/tests/*.test.js"
+		"test": "tsc -p tsconfig.test.json && node --test --test-concurrency=1 .tmp/knomo-tests/tests/*.test.js"
 	},
 	"keywords": [
 		"memo",
@@ -26,7 +26,7 @@
 		"esbuild": "^0.25.0",
 		"eslint": "^9.39.4",
 		"eslint-plugin-obsidianmd": "^0.3.0",
-		"obsidian": "^1.11.0",
+		"obsidian": "1.11.0",
 		"typescript": "^5.8.0"
 	},
 	"dependencies": {

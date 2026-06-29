@@ -1,7 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import type { MemoRecord } from "../src/types/memo";
@@ -17,6 +15,7 @@ import {
 	stripTrailingWikiLink,
 	withMemoIdAlias,
 } from "../src/utils/references";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 const service = new MarkdownBlockService();
 
@@ -2120,6 +2119,10 @@ test("listDeletedMemos returns only deleted memos by deletedAt descending", asyn
 		{} as never,
 		{
 			loadAll: async () => [activeMemo, deletedWithoutTime, deletedOlder, deletedNewer],
+			scanAll: async (_folder: string, visitor: (period: string, memos: MemoRecord[]) => void) => {
+				visitor("2026-05", [activeMemo, deletedWithoutTime, deletedOlder, deletedNewer]);
+				return true;
+			},
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
 		service,
@@ -3694,38 +3697,4 @@ function setTestWindow(value: unknown): () => void {
 		}
 		globalRecord["window"] = previousWindow;
 	};
-}
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-			[
-				"class TFile {}",
-				"class TFolder { constructor() { this.children = []; } }",
-				"const Vault = { recurseChildren() {} };",
-				"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-				"let languageValue = 'en';",
-				"function getLanguage() { return languageValue; }",
-				"getLanguage.set = (value) => { languageValue = value; };",
-				"function setIcon(el, icon) { if (el && typeof el.setAttr === 'function') el.setAttr('data-icon', icon); return el; }",
-				"function addIcon() {}",
-				"let localeValue = 'en';",
-				"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
-				"moment.locale = (value) => { if (typeof value === 'string') localeValue = value; return localeValue; };",
-				"module.exports = { TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon };",
-			].join("\n"),
-	);
-	const dailyNotesInterfaceStubPath = resolve(__dirname, "../node_modules/obsidian-daily-notes-interface/index.js");
-	await mkdir(dirname(dailyNotesInterfaceStubPath), { recursive: true });
-	await writeFile(
-		dailyNotesInterfaceStubPath,
-		[
-			"async function createDailyNote(date) {",
-			"  return window.__knomoCreateDailyNote(date);",
-			"}",
-			"module.exports = { createDailyNote };",
-		].join("\n"),
-	);
 }

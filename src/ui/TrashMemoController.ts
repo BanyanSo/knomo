@@ -15,6 +15,7 @@ export interface TrashMemoSnapshot {
 }
 
 interface TrashMemoControllerOptions {
+	getDeletedMemoSummary: () => Promise<{ count: number; ids: string[] }>;
 	listDeletedMemos: () => Promise<MemoRecord[]>;
 	restoreMemo: (memoId: string) => Promise<MemoRecord>;
 	purgeDeletedMemo: (memoId: string) => Promise<void>;
@@ -56,12 +57,9 @@ export class TrashMemoController {
 
 	async refreshTrashCount(render = true): Promise<void> {
 		try {
-			const deletedMemos = await this.options.listDeletedMemos();
-			this.trashCount = deletedMemos.length;
-			this.deletedMemoIds = new Set(deletedMemos.map((memo) => memo.id));
-			if (this.trashMemos !== null) {
-				this.trashMemos = deletedMemos;
-			}
+			const summary = await this.options.getDeletedMemoSummary();
+			this.trashCount = summary.count;
+			this.deletedMemoIds = new Set(summary.ids);
 			this.trashError = null;
 		} catch (error) {
 			this.trashError = formatServiceError(error, t("error.trashCountFailed"));

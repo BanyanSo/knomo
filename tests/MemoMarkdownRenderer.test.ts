@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dirname, resolve } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
 
 import type { MemoRecord } from "../src/types/memo";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("post-processes memo markdown DOM metadata", async () => {
 	await ensureObsidianStub();
@@ -69,19 +68,6 @@ test("recognizes delegated task checkbox inputs", async () => {
 	assert.equal(renderer.getTaskCheckboxIndex(input.asInput()), 2);
 	assert.equal(renderer.getTaskCheckboxInput(outside.asHtml()), null);
 });
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class MarkdownRenderer { static async render(_app, markdown, el) { el.setText(markdown); } }",
-			"class Component {}",
-			"module.exports = { MarkdownRenderer, Component };",
-		].join("\n"),
-	);
-}
 
 function setDomGlobals(): void {
 	(globalThis as unknown as { HTMLElement: typeof TestElement }).HTMLElement = TestElement;

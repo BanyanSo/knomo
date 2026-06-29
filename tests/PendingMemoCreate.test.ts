@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import test from "node:test";
 
 import type { MemoRecord } from "../src/types/memo";
@@ -8,6 +6,7 @@ import type { PendingMemoCreate } from "../src/types/pending";
 import { PendingMemoWriteConflictError } from "../src/types/pending";
 import type { KnomoSettings } from "../src/types/settings";
 import type { PendingMemoCreateStoreLike } from "../src/services/PendingMemoCreateStore";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("journal failure stops before daily and monthly memo writes", async () => {
 	const harness = await createHarness();
@@ -512,20 +511,4 @@ function createTestSettings(): KnomoSettings {
 		managedObsidianExcludeRuleOwned: false,
 		pinnedTags: [],
 	};
-}
-
-async function ensureObsidianStub(): Promise<void> {
-	const stubPath = resolve(__dirname, "../node_modules/obsidian/index.js");
-	await mkdir(dirname(stubPath), { recursive: true });
-	await writeFile(
-		stubPath,
-		[
-			"class TFile {}",
-			"class TFolder { constructor() { this.children = []; } }",
-			"const Vault = { recurseChildren() {} };",
-			"const normalizePath = (value) => value.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/^\\//, '').replace(/\\/$/, '');",
-			"const moment = (date = new Date()) => ({ format: () => date.toISOString().slice(0, 10) });",
-			"module.exports = { TFile, TFolder, Vault, normalizePath, moment };",
-		].join("\n"),
-	);
 }

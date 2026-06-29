@@ -14,6 +14,7 @@ import { MemoCommandService } from "./memoCommands";
 import type { CreateMemoOptions, CreateMemoResult } from "./memoCommands";
 import { MemoIndexStore } from "./MemoIndexStore";
 import { MemoQueryService } from "./memoQueries";
+import type { DeletedMemoSummary, MemoListPageOptions } from "./memoQueries";
 import { MemoReferenceService } from "./memoReferences";
 import { MemoRepairService } from "./memoRepair";
 import { MemoRestoreService } from "./memoRestore";
@@ -33,6 +34,7 @@ import type { RebuildMonthlyArchiveResult } from "./MonthlyArchiveRebuildService
 import { MemoRebuildService } from "./memoRebuild";
 import type { RebuildIndexMode, RebuildIndexResult, RebuildIndexScope } from "./memoRebuild";
 import type { PendingMemoCreateStoreLike } from "./PendingMemoCreateStore";
+import type { PreparedRecordStats } from "./RecordStatsService";
 import { SelfWriteTracker } from "./SelfWriteTracker";
 import {
 	createMemoId,
@@ -351,8 +353,12 @@ export class SyncOrchestrator {
 		return this.memoQueryService.listMemos();
 	}
 
-	async listDeletedMemos(): Promise<MemoRecord[]> {
-		return this.memoQueryService.listDeletedMemos();
+	async getDeletedMemoSummary(): Promise<DeletedMemoSummary> {
+		return this.memoQueryService.getDeletedMemoSummary();
+	}
+
+	async listDeletedMemos(options: MemoListPageOptions = {}): Promise<MemoRecord[]> {
+		return this.memoQueryService.listDeletedMemos(options);
 	}
 
 	async restoreMemo(memoId: string): Promise<MemoRecord> {
@@ -363,8 +369,15 @@ export class SyncOrchestrator {
 		await this.operationGate.runOperation(() => this.memoRestoreService.purgeDeletedMemo(memoId));
 	}
 
-	async listIssueMemos(): Promise<MemoRecord[]> {
-		return this.memoQueryService.listIssueMemos();
+	async listIssueMemos(options: MemoListPageOptions = {}): Promise<MemoRecord[]> {
+		return this.memoQueryService.listIssueMemos(options);
+	}
+
+	async buildRecordStats(
+		yieldToUi: () => Promise<void>,
+		isCurrent: () => boolean,
+	): Promise<PreparedRecordStats | null> {
+		return this.memoQueryService.buildRecordStats(yieldToUi, isCurrent);
 	}
 
 	async retryMonthlyDelete(memo: MemoRecord): Promise<MemoRecord> {

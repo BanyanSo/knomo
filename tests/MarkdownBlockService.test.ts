@@ -2275,6 +2275,7 @@ test("restoreMemo writes daily and monthly blocks before reactivating the index"
 	let monthlyContent = "# 2026-05\n\n## 2026-05-18";
 	const monthlyBlocks: string[] = [];
 	const savedMemos: MemoRecord[] = [];
+	const queriedPeriods: string[] = [];
 	const deletedMemo = {
 		...createReferenceMemo("- 08:00:00 内容 ^abc123"),
 		status: "deleted" as const,
@@ -2326,7 +2327,10 @@ test("restoreMemo writes daily and monthly blocks before reactivating the index"
 			},
 		} as never,
 		{
-			findMemoById: async () => deletedMemo,
+			findMemoByIdInPeriod: async (_folder: string, period: string) => {
+				queriedPeriods.push(period);
+				return deletedMemo;
+			},
 			updateMemo: async (_folder: string, memo: MemoRecord, update: (memo: MemoRecord) => MemoRecord) => {
 				const updatedMemo = update(memo);
 				savedMemos.push(updatedMemo);
@@ -2337,10 +2341,11 @@ test("restoreMemo writes daily and monthly blocks before reactivating the index"
 		service,
 	);
 
-	const restoredMemo = await orchestrator.restoreMemo(deletedMemo.id);
+	const restoredMemo = await orchestrator.restoreMemoRecord(deletedMemo);
 
 	assert.equal(dailyContent, "# 2026-05-18\n\n## Knomo\n- 08:00:00 内容 ^abc123");
 	assert.deepEqual(monthlyBlocks, ["- 08:00:00 内容 ^abc123"]);
+	assert.deepEqual(queriedPeriods, ["2026-05"]);
 	assert.equal(restoredMemo.status, "active");
 	assert.equal(restoredMemo.deletedAt, undefined);
 	assert.equal(restoredMemo.deletedDailyBlock, undefined);
@@ -2489,6 +2494,7 @@ test("purgeDeletedMemo only clears a deleted tombstone from the index", async ()
 		deletedAt: "2026-05-18T09:00:00.000+08:00",
 	};
 	let purgedMemoId = "";
+	const queriedPeriods: string[] = [];
 	const orchestrator = new SyncOrchestrator(
 		{} as never,
 		() => createTestSettings(),
@@ -2499,17 +2505,21 @@ test("purgeDeletedMemo only clears a deleted tombstone from the index", async ()
 			},
 		} as never,
 		{
-			findMemoById: async () => deletedMemo,
-			purgeDeletedMemo: async (_folder: string, memoId: string) => {
-				purgedMemoId = memoId;
+			findMemoByIdInPeriod: async (_folder: string, period: string) => {
+				queriedPeriods.push(period);
+				return deletedMemo;
+			},
+			purgeDeletedMemoRecord: async (_folder: string, memo: MemoRecord) => {
+				purgedMemoId = memo.id;
 			},
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
 		service,
 	);
 
-	await orchestrator.purgeDeletedMemo(deletedMemo.id);
+	await orchestrator.purgeDeletedMemoRecord(deletedMemo);
 	assert.equal(purgedMemoId, deletedMemo.id);
+	assert.deepEqual(queriedPeriods, ["2026-05"]);
 });
 
 test("deleteMemo does not delete another memo matched only by the stale line and time", async () => {
@@ -2524,6 +2534,7 @@ test("deleteMemo does not delete another memo matched only by the stale line and
 	memo.dailyRef.lastKnownHash = hashText(memo.dailyRef.lastKnownBlock);
 	let monthlyDeleted = false;
 	const savedIssues: MemoRecord["issue"][] = [];
+	const queriedPeriods: string[] = [];
 	const orchestrator = new SyncOrchestrator(
 		{
 			vault: {
@@ -2543,7 +2554,10 @@ test("deleteMemo does not delete another memo matched only by the stale line and
 			},
 		} as never,
 		{
-			findMemoById: async () => memo,
+			findMemoByIdInPeriod: async (_folder: string, period: string) => {
+				queriedPeriods.push(period);
+				return memo;
+			},
 			upsertMemo: async (_folder: string, nextMemo: MemoRecord) => {
 				savedIssues.push(nextMemo.issue);
 				return nextMemo;
@@ -2558,6 +2572,7 @@ test("deleteMemo does not delete another memo matched only by the stale line and
 	assert.equal(dailyContent, "# 2026-05-18\n\n## Knomo\n- 08:00:00 另一条内容");
 	assert.equal(monthlyDeleted, false);
 	assert.equal(savedIssues[0]?.code, "delete_daily_block_missing");
+	assert.deepEqual(queriedPeriods, ["2026-05"]);
 });
 
 test("deleteMemo records ambiguity and leaves both Markdown stores unchanged", async () => {
@@ -2591,7 +2606,7 @@ test("deleteMemo records ambiguity and leaves both Markdown stores unchanged", a
 			},
 		} as never,
 		{
-			findMemoById: async () => memo,
+			findMemoByIdInPeriod: async () => memo,
 			upsertMemo: async (_folder: string, nextMemo: MemoRecord) => {
 				savedIssues.push(nextMemo.issue);
 				return nextMemo;
@@ -2672,7 +2687,7 @@ test("deleteMemo rescans a stale daily ambiguity before mutating Markdown", asyn
 		} as never,
 		{
 			loadAll: async () => [...storedMemos.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-			findMemoById: async (_folder: string, memoId: string) => storedMemos.get(memoId) ?? null,
+			findMemoByIdInPeriod: async (_folder: string, _period: string, memoId: string) => storedMemos.get(memoId) ?? null,
 			upsertMemo: async (_folder: string, memo: MemoRecord) => {
 				storedMemos.set(memo.id, memo);
 				return memo;
@@ -2715,7 +2730,7 @@ test("deleteMemo no-ops when the latest index memo is already deleted", async ()
 			},
 		} as never,
 		{
-			findMemoById: async () => deletedMemo,
+			findMemoByIdInPeriod: async () => deletedMemo,
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
 		service,
@@ -2766,7 +2781,7 @@ test("deleteMemo marks deleted without monthly_delete_failed when monthlyRef is 
 			},
 		} as never,
 		{
-			findMemoById: async () => memo,
+			findMemoByIdInPeriod: async () => memo,
 			upsertMemo: async (_folder: string, nextMemo: MemoRecord) => {
 				savedMemo = nextMemo;
 				return nextMemo;

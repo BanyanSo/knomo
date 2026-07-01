@@ -34,11 +34,7 @@ export class MemoQueryService {
 
 	async listRecentMemos(): Promise<MemoRecord[]> {
 		const settings = this.getSettings();
-		const now = new Date();
-		const periods = [
-			formatMonthPeriod(now),
-			formatMonthPeriod(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
-		];
+		const periods = getRecentMemoPeriods();
 		const memos = await this.memoIndexStore.loadPeriods(settings.monthlyMemoFolder, periods);
 		return memos
 			.filter((memo) => memo.status === "active")
@@ -126,6 +122,13 @@ export class MemoQueryService {
 		const settings = this.getSettings();
 		return this.memoIndexStore.scanAll(settings.monthlyMemoFolder, visitor);
 	}
+}
+
+export function getRecentMemoPeriods(now = new Date()): string[] {
+	return [
+		formatMonthPeriod(now),
+		formatMonthPeriod(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+	];
 }
 
 function isIssueMemo(memo: MemoRecord): boolean {

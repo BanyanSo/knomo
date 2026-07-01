@@ -66,6 +66,8 @@ const STABILIZED_SYNC_DELAYS = [120, 320];
 const SYNC_THROTTLE_MS = 300;
 const NAVBAR_EDGE_LEFT_VAR = "--knomo-mobile-navbar-edge-left";
 const NAVBAR_RESERVED_RIGHT_VAR = "--knomo-mobile-navbar-reserved-right";
+const NAVBAR_EDGE_LEFT_DEFAULT = `${CHROME_EDGE_FALLBACK_INSET}px`;
+const NAVBAR_RESERVED_RIGHT_DEFAULT = `${CHROME_EDGE_FALLBACK_INSET + CREATE_BUTTON_SIZE + MIN_COLLISION_GAP}px`;
 const CREATE_BUTTON_RIGHT_VAR = "--knomo-mobile-create-fab-right";
 const CREATE_BUTTON_BOTTOM_VAR = "--knomo-mobile-create-fab-bottom";
 
@@ -89,6 +91,7 @@ export class MobileNavbarCompactController {
 	};
 	private stableFloatingCreateButtonBottom = CREATE_BUTTON_SIZE + CREATE_BUTTON_GAP;
 	private stableFixedCreateButtonBottom = CREATE_BUTTON_SIZE + CREATE_BUTTON_GAP;
+	private readonly stylePropsByElement = new WeakMap<HTMLElement, Map<string, string>>();
 
 	constructor(
 		private readonly view: ItemView,
@@ -625,14 +628,21 @@ export class MobileNavbarCompactController {
 	}
 
 	private setStyleProperty(element: HTMLElement, name: string, value: string): void {
-		if (element.style.getPropertyValue(name) !== value) {
-			element.style.setProperty(name, value);
+		const styleProps = this.stylePropsByElement.get(element) ?? new Map<string, string>();
+		if (styleProps.get(name) === value) {
+			return;
 		}
+		styleProps.set(name, value);
+		this.stylePropsByElement.set(element, styleProps);
+		element.setCssProps({ [name]: value });
 	}
 
 	private clearNavbarStyleProperties(element: HTMLElement): void {
-		element.style.removeProperty(NAVBAR_EDGE_LEFT_VAR);
-		element.style.removeProperty(NAVBAR_RESERVED_RIGHT_VAR);
+		this.stylePropsByElement.delete(element);
+		element.setCssProps({
+			[NAVBAR_EDGE_LEFT_VAR]: NAVBAR_EDGE_LEFT_DEFAULT,
+			[NAVBAR_RESERVED_RIGHT_VAR]: NAVBAR_RESERVED_RIGHT_DEFAULT,
+		});
 	}
 
 	private removeCreateButton(): void {
@@ -675,8 +685,10 @@ export class MobileNavbarCompactController {
 			element.remove();
 		}
 		for (const element of body.findAll(`.${NAVBAR_COMPACT_CLASS}`)) {
-			element.style.removeProperty(NAVBAR_EDGE_LEFT_VAR);
-			element.style.removeProperty(NAVBAR_RESERVED_RIGHT_VAR);
+			element.setCssProps({
+				[NAVBAR_EDGE_LEFT_VAR]: NAVBAR_EDGE_LEFT_DEFAULT,
+				[NAVBAR_RESERVED_RIGHT_VAR]: NAVBAR_RESERVED_RIGHT_DEFAULT,
+			});
 			element.removeClass(NAVBAR_COMPACT_CLASS);
 		}
 		for (const element of body.findAll(`.${NATIVE_HIDDEN_CLASS}`)) {

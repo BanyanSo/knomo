@@ -442,7 +442,7 @@ export class MobileComposerController {
 		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? win.innerHeight;
 		const toolbarHeight = this.options.getComposerBarEl()?.offsetHeight ?? 52;
 		const referencePreviewEl = this.options.getReferencePreviewEl();
-		const referenceHeight = referencePreviewEl !== null && referencePreviewEl.style.display !== "none"
+		const referenceHeight = referencePreviewEl !== null && referencePreviewEl.hasClass("is-visible")
 			? referencePreviewEl.offsetHeight
 			: 0;
 		const measurements = calculateMobileComposerMeasurements({
@@ -460,8 +460,10 @@ export class MobileComposerController {
 		this.mobileComposerInputMaxHeight = measurements.inputMaxHeight;
 		const inputMaxHeightValue = `${this.mobileComposerInputMaxHeight}px`;
 		for (const element of [this.options.getRootEl(), this.mobileComposerLayerEl]) {
-			element?.style.setProperty("--knomo-composer-content-max-height", contentMaxHeightValue);
-			element?.style.setProperty("--knomo-composer-input-max-height", inputMaxHeightValue);
+			element?.setCssProps({
+				"--knomo-composer-content-max-height": contentMaxHeightValue,
+				"--knomo-composer-input-max-height": inputMaxHeightValue,
+			});
 		}
 		return measurements.inputMaxHeight;
 	}
@@ -806,7 +808,7 @@ export class MobileComposerController {
 
 	private setKeyboardMetrics(keyboardHeight: number): void {
 		const keyboardHeightValue = `${Math.round(keyboardHeight)}px`;
-		this.mobileComposerLayerEl?.style.setProperty("--knomo-keyboard-height", keyboardHeightValue);
+		this.mobileComposerLayerEl?.setCssProps({ "--knomo-keyboard-height": keyboardHeightValue });
 		this.mobileComposerLayerEl?.toggleClass("is-keyboard-open", keyboardHeight > 0);
 	}
 
@@ -893,7 +895,7 @@ export class MobileComposerController {
 	private setComposerBottomOffset(bottomOffset: number): void {
 		this.mobileComposerBottomOffset = Math.round(bottomOffset);
 		const bottomOffsetValue = `${this.mobileComposerBottomOffset}px`;
-		this.mobileComposerLayerEl?.style.setProperty("--knomo-mobile-composer-bottom-offset", bottomOffsetValue);
+		this.mobileComposerLayerEl?.setCssProps({ "--knomo-mobile-composer-bottom-offset": bottomOffsetValue });
 	}
 
 	private setComposerDockDiagnostics(composerDock: MobileComposerDockTop, baselineHeight: number): void {
@@ -906,14 +908,16 @@ export class MobileComposerController {
 		const toolbarWrapperBottomValue = `${Math.round(this.mobileComposerToolbarWrapperBottom ?? 0)}px`;
 		const capacitorKeyboardHeightValue = `${Math.round(this.mobileCapacitorKeyboardHeight ?? 0)}px`;
 		for (const element of [this.options.getRootEl(), this.mobileComposerLayerEl]) {
-			element?.style.setProperty("--knomo-mobile-composer-dock-top", dockTopValue);
-			element?.style.setProperty("--knomo-mobile-composer-baseline-height", baselineHeightValue);
-			element?.style.setProperty("--knomo-mobile-composer-layer-bottom", layerBottomValue);
-			element?.style.setProperty("--knomo-mobile-composer-applied-bottom-offset", bottomOffsetValue);
-			element?.style.setProperty("--knomo-mobile-composer-toolbar-anchor-inset", toolbarAnchorInsetValue);
-			element?.style.setProperty("--knomo-mobile-composer-toolbar-anchor-bottom", toolbarAnchorBottomValue);
-			element?.style.setProperty("--knomo-mobile-composer-toolbar-wrapper-bottom", toolbarWrapperBottomValue);
-			element?.style.setProperty("--knomo-mobile-composer-capacitor-keyboard-height", capacitorKeyboardHeightValue);
+			element?.setCssProps({
+				"--knomo-mobile-composer-dock-top": dockTopValue,
+				"--knomo-mobile-composer-baseline-height": baselineHeightValue,
+				"--knomo-mobile-composer-layer-bottom": layerBottomValue,
+				"--knomo-mobile-composer-applied-bottom-offset": bottomOffsetValue,
+				"--knomo-mobile-composer-toolbar-anchor-inset": toolbarAnchorInsetValue,
+				"--knomo-mobile-composer-toolbar-anchor-bottom": toolbarAnchorBottomValue,
+				"--knomo-mobile-composer-toolbar-wrapper-bottom": toolbarWrapperBottomValue,
+				"--knomo-mobile-composer-capacitor-keyboard-height": capacitorKeyboardHeightValue,
+			});
 		}
 		this.mobileComposerLayerEl?.setAttr("data-knomo-composer-dock-source", composerDock.source);
 		this.mobileComposerLayerEl?.setAttr("data-knomo-composer-toolbar-anchor-source", this.mobileComposerToolbarAnchorSource);

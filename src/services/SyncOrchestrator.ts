@@ -6,6 +6,7 @@ import type { PendingMemoCreate } from "../types/pending";
 import { KnomoError } from "../types/serviceError";
 import type { KnomoSettings } from "../types/settings";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
+import { formatMonthPeriod } from "../utils/date";
 import { getIndexFolderPath } from "../utils/path";
 import { DailyNoteService } from "./DailyNoteService";
 import type { DailyNotesStatus } from "./DailyNoteService";
@@ -168,7 +169,11 @@ export class SyncOrchestrator {
 		} else {
 			await this.memoScanService.syncDeletedDailyPath(memo.dailyRef.path, createOperationId(now));
 		}
-		const currentMemo = await this.memoIndexStore.findMemoById(this.getSettings().monthlyMemoFolder, memo.id);
+		const currentMemo = await this.memoIndexStore.findMemoByIdInPeriod(
+			this.getSettings().monthlyMemoFolder,
+			formatMonthPeriod(new Date(memo.createdAt)),
+			memo.id,
+		);
 		if (currentMemo === null) {
 			throw new KnomoError("memo_not_found_or_cleaned");
 		}
@@ -365,8 +370,16 @@ export class SyncOrchestrator {
 		return this.operationGate.runOperation(() => this.memoRestoreService.restoreMemo(memoId));
 	}
 
+	async restoreMemoRecord(memo: MemoRecord): Promise<MemoRecord> {
+		return this.operationGate.runOperation(() => this.memoRestoreService.restoreMemoRecord(memo));
+	}
+
 	async purgeDeletedMemo(memoId: string): Promise<void> {
 		await this.operationGate.runOperation(() => this.memoRestoreService.purgeDeletedMemo(memoId));
+	}
+
+	async purgeDeletedMemoRecord(memo: MemoRecord): Promise<void> {
+		await this.operationGate.runOperation(() => this.memoRestoreService.purgeDeletedMemoRecord(memo));
 	}
 
 	async listIssueMemos(options: MemoListPageOptions = {}): Promise<MemoRecord[]> {

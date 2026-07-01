@@ -7,6 +7,8 @@ import {
 	collectTags,
 	getMemoImages,
 	getMemoStats,
+	getRegularFilterConditions,
+	getRegularFilterCopy,
 	getRecordStatsSearchFilterKey,
 	getRecordStatsSearchFilterLabel,
 	matchesRecordStatsSearchFilter,
@@ -61,6 +63,44 @@ test("collects display tags and matches nested active tag keys", () => {
 	]);
 	assert.equal(tagMatchesActiveTagKey("project/knomo/ui", "project/knomo"), true);
 	assert.equal(tagMatchesActiveTagKey("project/other", "project/knomo"), false);
+});
+
+test("builds regular filter copy from active filters", () => {
+	const state = {
+		activeTag: "Project/Knomo",
+		activeTagKey: "project/knomo",
+		searchQuery: "  alpha  ",
+		searchDateFilter: "last-7" as const,
+		recordStatsSearchFilter: {
+			type: "with-image" as const,
+			startDate: "2026-06-01",
+			endDateExclusive: "2026-07-01",
+		},
+		scopeFilter: "with-link" as const,
+	};
+
+	assert.deepEqual(getRegularFilterConditions(state), [
+		{ type: "tag", text: "#Project/Knomo" },
+		{ type: "record-stats", text: "2026-06-01 to 2026-06-30 · With images" },
+		{ type: "search", text: "“alpha”", query: "alpha" },
+		{ type: "date", text: "Last 7 days", filter: "last-7" },
+		{ type: "scope", text: "With links", filter: "with-link" },
+	]);
+	assert.deepEqual(getRegularFilterCopy(state, 3), {
+		summary: "#Project/Knomo · 2026-06-01 to 2026-06-30 · With images · “alpha” · Last 7 days · With links: 3 Memos",
+		emptyTitle: "#Project/Knomo · 2026-06-01 to 2026-06-30 · With images · “alpha” · Last 7 days · With links: 3 Memos",
+	});
+});
+
+test("regular filter copy is empty when filters are inactive", () => {
+	assert.equal(getRegularFilterCopy({
+		activeTag: null,
+		activeTagKey: null,
+		searchQuery: "  ",
+		searchDateFilter: null,
+		recordStatsSearchFilter: null,
+		scopeFilter: "all",
+	}, 0), null);
 });
 
 test("matches scope filters against a fixed day", () => {

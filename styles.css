@@ -2532,6 +2532,31 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin: var(--size-4-2) 0 var(--size-4-4);
 }
 
+@media (max-width: 900px) {
+	.knomo-maintenance-setting {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.knomo-maintenance-setting .setting-item-info,
+	.knomo-maintenance-setting .setting-item-control {
+		width: 100%;
+	}
+
+	.knomo-maintenance-setting .setting-item-control {
+		justify-content: flex-start;
+		flex-wrap: wrap;
+	}
+
+	.knomo-maintenance-setting .setting-item-control > * {
+		flex: 1 1 min(12rem, 100%);
+	}
+
+	.knomo-maintenance-setting .setting-item-control button {
+		flex: 0 1 auto;
+	}
+}
+
 .knomo-legacy-import-group {
 	padding: var(--size-4-2) 0;
 	border-bottom: var(--border-width) solid var(--background-modifier-border);

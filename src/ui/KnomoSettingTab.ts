@@ -222,6 +222,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		let rebuildScope: RebuildIndexScope = "30d";
 		let rebuildMode: RebuildIndexMode = "index-only";
 		new Setting(containerEl)
+			.setClass("knomo-maintenance-setting")
 			.setName(t("settings.rebuild.name"))
 			.setDesc(t("settings.rebuild.desc"))
 			.addDropdown((dropdown) => {
@@ -253,6 +254,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
 		let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
 		new Setting(containerEl)
+			.setClass("knomo-maintenance-setting")
 			.setName(t("settings.monthlyRebuild.name"))
 			.setDesc(t("settings.monthlyRebuild.desc"))
 			.addDropdown((dropdown) => {

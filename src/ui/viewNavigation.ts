@@ -1,6 +1,11 @@
 import { KNOMO_ALL_NOTES_ICON, KNOMO_RANDOM_REUNION_ICON } from "../icons";
 import { t } from "../i18n";
-import type { ScopeFilter, SearchDateFilter } from "./viewFilters";
+import {
+	getRecordStatsSearchFilterLabel,
+	getScopeLabel,
+	getSearchDateLabel,
+} from "./viewFilters";
+import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 
 export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "record-stats" | "trash";
 export type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random";
@@ -24,6 +29,16 @@ export interface SidebarNavItem {
 	nav: SidebarNav;
 	label: string;
 	icon: string;
+}
+
+export interface ViewTitleState {
+	activeTag: string | null;
+	activeTagKey: string | null;
+	activeNav: SidebarNav;
+	scopeFilter: ScopeFilter;
+	searchQuery: string;
+	searchDateFilter: SearchDateFilter | null;
+	recordStatsSearchFilter: RecordStatsSearchFilter | null;
 }
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
@@ -76,6 +91,44 @@ export function isSidebarNav(value: string | null): value is SidebarNav {
 
 export function getSidebarNavLabel(value: SidebarNav): string {
 	return getAllSidebarNavItems().find((item) => item.nav === value)?.label ?? t("nav.allNotes");
+}
+
+export function getDesktopTitleLabel(state: ViewTitleState): string {
+	const query = state.searchQuery.trim();
+	if (query.length > 0) {
+		return t("search.label");
+	}
+	if (state.searchDateFilter !== null) {
+		return getSearchDateLabel(state.searchDateFilter);
+	}
+	if (state.recordStatsSearchFilter !== null) {
+		return getRecordStatsSearchFilterLabel(state.recordStatsSearchFilter);
+	}
+	return getListTitleLabel(state);
+}
+
+export function getMobileTitleLabel(state: ViewTitleState): string {
+	return getListTitleLabel(state);
+}
+
+export function getListTitleLabel(state: ViewTitleState): string {
+	if (state.activeTag !== null) {
+		return `#${state.activeTag}`;
+	}
+	if (state.activeNav !== "all") {
+		return getSidebarNavLabel(state.activeNav);
+	}
+	return getScopeLabel(state.scopeFilter);
+}
+
+export function getCurrentTitleMode(state: ViewTitleState): string {
+	if (state.activeNav === "review" || state.activeNav === "random") {
+		return state.activeNav;
+	}
+	if (state.activeTagKey !== null || state.activeNav !== "all") {
+		return "";
+	}
+	return state.scopeFilter;
 }
 
 export function getEmptyStateTitle(activeNav: SidebarNav): string {

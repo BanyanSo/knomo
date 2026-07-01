@@ -17,8 +17,9 @@ export interface TrashMemoSnapshot {
 interface TrashMemoControllerOptions {
 	getDeletedMemoSummary: () => Promise<{ count: number; ids: string[] }>;
 	listDeletedMemos: () => Promise<MemoRecord[]>;
-	restoreMemo: (memoId: string) => Promise<MemoRecord>;
-	purgeDeletedMemo: (memoId: string) => Promise<void>;
+	restoreMemo: (memo: MemoRecord) => Promise<MemoRecord>;
+	handleRestoredMemo: (deletedMemo: MemoRecord, restoredMemo: MemoRecord) => void;
+	purgeDeletedMemo: (memo: MemoRecord) => Promise<void>;
 	isTrashActive: () => boolean;
 	confirmPurge: () => boolean;
 	showNotice: (message: string) => void;
@@ -104,14 +105,15 @@ export class TrashMemoController {
 		this.options.requestRender("card-flow");
 		try {
 			if (action === "restore") {
-				await this.options.restoreMemo(memo.id);
+				const restoredMemo = await this.options.restoreMemo(memo);
 				this.removeTrashMemo(memo.id);
+				this.options.handleRestoredMemo(memo, restoredMemo);
 				this.options.showNotice(t("notice.restored"));
 				await this.options.forceRefreshViews();
 				return;
 			}
 
-			await this.options.purgeDeletedMemo(memo.id);
+			await this.options.purgeDeletedMemo(memo);
 			this.removeTrashMemo(memo.id);
 			this.options.showNotice(t("notice.purged"));
 			await this.options.forceRefreshViews();

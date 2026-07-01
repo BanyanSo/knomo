@@ -6,47 +6,52 @@ import { KNOMO_LOGO_ICON, KNOMO_SEARCH_ICON } from "../icons";
 import { t } from "../i18n";
 import type { AttachmentService } from "../services/AttachmentService";
 import type { RandomReunionService } from "../services/RandomReunionService";
-import {
-	canAdvanceRecordStatsDate,
-	canRetreatRecordStatsDate,
-	RecordStatsService,
-	shiftRecordStatsDate,
-} from "../services/RecordStatsService";
+import { RecordStatsService } from "../services/RecordStatsService";
 import type { RecordStatsView } from "../services/RecordStatsService";
 import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
 import type { SyncOrchestrator } from "../services/SyncOrchestrator";
 import type { ScanDailyMemosResult } from "../services/MemoScanService";
+import { getRecentMemoPeriods } from "../services/memoQueries";
 import type { MemoMutation, MemoRecord } from "../types/memo";
-import type { MobileCompactMode } from "../types/settings";
 import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart, formatMonthPeriod } from "../utils/date";
-import {
-	replaceMarkdownTaskMarkerByIndex,
-	type WritableMarkdownTaskMarker,
-} from "../utils/markdownTasks";
-import { buildQuoteCreatedMemoContent, stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
+import { stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
 import { formatServiceError, formatSettingsText } from "../utils/serviceText";
 import { getComposerToolButtonRoute } from "./KnomoActionRouter";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import { CardImageLoadQueue } from "./CardImageLoadQueue";
-import type { CardImageLoadItem } from "./CardImageLoadQueue";
+import { DateChangeWatcher } from "./DateChangeWatcher";
+import { DesktopSidebarStateController } from "./DesktopSidebarStateController";
 import { renderKnomoMemoCard, renderKnomoTrashMemoCard } from "./KnomoCard";
+import {
+	parseCardImageIndex,
+	renderMemoCardImages,
+} from "./KnomoCardImages";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import { KnomoCardFlowCoordinator } from "./KnomoCardFlowCoordinator";
 import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
+import {
+	formatMarkdownQuoteDraft,
+	getComposerMode,
+	getDraftForComposerClose,
+	prepareComposerSaveInput,
+} from "./ComposerDraft";
+import { getPreferredComposerSourcePath } from "./ComposerSourcePath";
+import { ComposerListEnterState } from "./ComposerListEnterState";
+import type { PendingListEnterCorrection } from "./ComposerListEnterState";
+import { ComposerSaveShortcutController } from "./ComposerSaveShortcutController";
+import { ImagePreviewScrollLock } from "./ImagePreviewScrollLock";
 import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
+import { filterVisibleMemos, memoMatchesSearch } from "./KnomoMemoFilter";
 import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
 import {
 	renderKnomoCardFlowHeaders,
 	renderKnomoEmptyState,
 } from "./KnomoFeed";
 import { getCardFlowPresentation } from "./KnomoCardFlowPresenter";
-import type {
-	CardFlowPresentation,
-	CardFlowRegularFilterCopy,
-} from "./KnomoCardFlowPresenter";
+import type { CardFlowPresentation } from "./KnomoCardFlowPresenter";
 import {
 	renderKnomoCompactHeader,
 	renderKnomoCompactSearchPanel,
@@ -56,9 +61,6 @@ import {
 import { MobileSearchController } from "./MobileSearchController";
 import { renderKnomoRecordStatsPage } from "./KnomoRecordStatsPage";
 import {
-	clampSidebarWidth,
-	createSidebarDragState,
-	getSidebarDragWidth,
 	renderKnomoSidebar,
 	renderSidebarStat,
 	renderSidebarTags,
@@ -67,11 +69,16 @@ import {
 	syncSidebarNavButtons,
 	syncSidebarTagGroupExpanded,
 } from "./KnomoSidebar";
-import type { SidebarDragState } from "./KnomoSidebar";
 import { KnomoTagSuggest } from "./KnomoTagSuggest";
 import { KnomoWikiLinkSuggest } from "./KnomoWikiLinkSuggest";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { MemoMarkdownRenderer } from "./MemoMarkdownRenderer";
+import { getMarkdownInternalLinkInfo } from "./MarkdownInternalLink";
+import {
+	formatDeleteSource,
+	formatMemoDisplayTime,
+	formatOptionalMemoTime,
+} from "./MemoDisplayFormatters";
 import { parseMemoCardPreview } from "./MemoCardPreview";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 import { MemoCardPreviewCache } from "./MemoCardPreviewCache";
@@ -80,13 +87,29 @@ import {
 	getMemoRenderRevision,
 } from "./MemoRenderRevision";
 import { MemoSearchCache } from "./MemoSearchCache";
+import { getMemoTaskCheckboxChangePlan } from "./MemoTaskCheckboxChange";
 import { MemoTaskUpdateCoordinator } from "./MemoTaskUpdateCoordinator";
+import { MobileHandledToolPointer } from "./MobileHandledToolPointer";
+import { MobileHeaderTitleController } from "./MobileHeaderTitleController";
+import { MobileImagePickerFocusGuard } from "./MobileImagePickerFocusGuard";
+import { MobileSendPointerGuard } from "./MobileSendPointerGuard";
 import { MobileComposerController } from "./MobileComposerController";
 import { MobileMemoHydrator } from "./MobileMemoHydrator";
 import type { MobileMemoHydrationRenderState } from "./MobileMemoHydrator";
 import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
+import { NativeImagePickerController } from "./NativeImagePickerController";
 import { KnomoPopupState } from "./KnomoPopupState";
 import { RandomReunionController } from "./RandomReunionController";
+import {
+	getRecordStatsHourSearchFilter,
+	getRecordStatsMetricSearchFilter,
+	getRecordStatsTagSearchFilter,
+	getRecordStatsTrendSearchFilter,
+	type RecordStatsMetricFilterType,
+} from "./RecordStatsDrilldownFilters";
+import { RecordStatsPreparationController } from "./RecordStatsPreparationController";
+import { RecordStatsViewStateController } from "./RecordStatsViewStateController";
+import { SearchQueryDebounce } from "./SearchQueryDebounce";
 import { TrashMemoController } from "./TrashMemoController";
 import type { TrashMemoRenderTarget } from "./TrashMemoController";
 import { KnomoUserActionController } from "./KnomoUserActionController";
@@ -102,33 +125,23 @@ import type { KnomoViewStateTransitionEffects } from "./KnomoViewStateController
 import {
 	collectTags,
 	collectVaultTagDisplayMap,
-	formatRegularFilterEmptyTitle,
-	formatRegularFilterSummary,
-	formatTagFilterText,
 	getMemoStats,
+	getRegularFilterCopy,
 	getRecordStatsSearchFilterKey,
-	getRecordStatsSearchFilterLabel,
-	getScopeLabel,
-	getSearchDateLabel,
-	isSummaryScopeFilter,
-	matchesRecordStatsSearchFilter,
-	matchesScope,
-	matchesSearchDateFilter,
 	needsAllMemos,
-	parseMemoLocalDate,
-	tagMatchesActiveTagKey,
 } from "./viewFilters";
 import type {
 	RecordStatsSearchFilter,
-	RegularFilterCondition,
 	ScopeFilter,
 	SearchDateFilter,
 } from "./viewFilters";
 import {
-	getSidebarNavLabel,
+	getCurrentTitleMode,
+	getDesktopTitleLabel,
+	getMobileTitleLabel,
 	TITLE_MODE_OPTIONS,
 } from "./viewNavigation";
-import type { SidebarNav, TitleMode } from "./viewNavigation";
+import type { SidebarNav, TitleMode, ViewTitleState } from "./viewNavigation";
 
 interface TitleHost {
 	el: HTMLElement;
@@ -158,32 +171,23 @@ const MOBILE_MARKDOWN_RENDER_CONCURRENCY = 4;
 const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;
 const DESKTOP_CARD_IMAGE_LOAD_CONCURRENCY = 2;
 const CARD_IMAGE_LOAD_WATCHDOG_MS = 10_000;
-const MAX_CARD_PREVIEW_IMAGES = 3;
 const SEARCH_DEBOUNCE_MS = 220;
 const MOBILE_VIEW_HEADER_SELECTORS = [
 	".workspace-leaf.mod-active .view-header",
 	".mod-active .view-header",
 	".view-header",
 ];
+const MOBILE_DRAWER_TOP_DEFAULT = "max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px))";
+const TITLE_POPOVER_LEFT_DEFAULT = "max(16px, env(safe-area-inset-left))";
+const TITLE_POPOVER_TOP_DEFAULT = MOBILE_DRAWER_TOP_DEFAULT;
 
 type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
-type ComposerMode = "create" | "edit" | "quote";
 type WindowWithIntersectionObserver = Window & {
 	IntersectionObserver?: typeof IntersectionObserver;
 };
 type WindowWithResizeObserver = Window & {
 	ResizeObserver?: typeof ResizeObserver;
 };
-
-interface PendingMobileListEnterCorrection {
-	patch: TextReplacement;
-	nativeValue: string;
-}
-
-interface HandledMobileToolPointer {
-	button: HTMLElement;
-	action: string;
-}
 
 interface RenderUiStateOptions {
 	renderCardFlow?: boolean;
@@ -223,23 +227,11 @@ export class KnomoView extends ItemView {
 	private compactSearchInputEl: HTMLInputElement | null = null;
 	private mobileSearchHeaderActionEl: HTMLElement | null = null;
 	private mobileRecordStatsBackActionEl: HTMLElement | null = null;
-	private mobileHeaderTitleEl: HTMLElement | null = null;
-	private mobileHeaderTitleRegisteredEl: HTMLElement | null = null;
-	private mobileHeaderTitleOriginalText: string | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
 	private memos: MemoRecord[] = [];
 	private cardFlowError: string | null = null;
 	private allMemosLoadingPromise: Promise<boolean> | null = null;
-	private recordStatsRequestPromise: Promise<boolean> | null = null;
-	private recordStatsRequestInvalidated = false;
-	private recordStatsPrepareTimerId: number | null = null;
-	private recordStatsRenderedKey: string | null = null;
-	private recordStatsSourceRevision = 0;
-	private recordStatsView: RecordStatsView = "week";
-	private recordStatsSelectedDate = new Date();
 	private expandedTagGroups = new Set<string>();
-	private sidebarCollapsed = false;
-	private sidebarWidth = 248;
 	private composerOpen = false;
 	private editingMemo: MemoRecord | null = null;
 	private quoteSourceMemoId: string | null = null;
@@ -247,33 +239,30 @@ export class KnomoView extends ItemView {
 	private quoteMarkdownText: string | null = null;
 	private draftContent = "";
 	private isSaving = false;
-	private composerSaveShortcutDown = false;
-	private sidebarDrag: SidebarDragState | null = null;
 	private currentLayout: LayoutMode = "desktop-wide";
 	private layoutObserver: ResizeObserver | null = null;
 	private filteredMemosCache: FilteredMemosCache | null = null;
-	private dateChangeTimeoutId: number | null = null;
 	private readonly cardFlowCoordinator = new KnomoCardFlowCoordinator();
 	private memoSearchCache = new MemoSearchCache();
-	private searchDebounceTimeoutId: number | null = null;
-	private lastMobileSendPointerAt = 0;
-	private pendingMobileListEnterCorrection: PendingMobileListEnterCorrection | null = null;
-	private listEnterKeydownPatch: TextReplacement | null = null;
-	private listEnterKeydownPatchTimerId: number | null = null;
-	private skipListEnterInputFallback = false;
-	private skipListEnterInputFallbackTimerId: number | null = null;
-	private handledMobileToolPointer: HandledMobileToolPointer | null = null;
-	private handledMobileToolPointerTimerId: number | null = null;
-	private mobileImagePickerActive = false;
-	private mobileImagePickerFocusTimerId: number | null = null;
-	private imagePreviewScrollTop: number | null = null;
-	private mobileSearchImagePreviewScrollTop: number | null = null;
+	private readonly searchQueryDebounce: SearchQueryDebounce;
+	private readonly dateChangeWatcher: DateChangeWatcher;
+	private readonly desktopSidebarStateController = new DesktopSidebarStateController();
+	private readonly composerListEnterState: ComposerListEnterState;
+	private readonly composerSaveShortcutController = new ComposerSaveShortcutController();
+	private readonly imagePreviewScrollLock = new ImagePreviewScrollLock();
+	private readonly mobileHandledToolPointer: MobileHandledToolPointer;
+	private readonly mobileHeaderTitleController: MobileHeaderTitleController;
+	private readonly mobileImagePickerFocusGuard: MobileImagePickerFocusGuard;
+	private readonly mobileSendPointerGuard = new MobileSendPointerGuard({ getNow: () => Date.now() });
+	private readonly nativeImagePickerController: NativeImagePickerController;
 	private readonly cardImageLoadQueue: CardImageLoadQueue;
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly mobileMemoHydrator: MobileMemoHydrator;
 	private readonly randomReunionController: RandomReunionController;
 	private readonly trashMemoController: TrashMemoController;
 	private readonly recordStatsService = new RecordStatsService();
+	private readonly recordStatsPreparationController: RecordStatsPreparationController;
+	private readonly recordStatsViewStateController = new RecordStatsViewStateController();
 	private readonly viewStateController = new KnomoViewStateController();
 	private readonly popupState: KnomoPopupState;
 	private readonly mobileSearchController: MobileSearchController;
@@ -449,6 +438,55 @@ export class KnomoView extends ItemView {
 	) {
 		super(leaf);
 		this.popupState = new KnomoPopupState(() => this.containerEl.win);
+		this.composerListEnterState = new ComposerListEnterState({
+			scheduleTask: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
+			cancelTask: (taskId) => this.containerEl.win.clearTimeout(taskId),
+		});
+		this.searchQueryDebounce = new SearchQueryDebounce({
+			scheduleTask: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
+			cancelTask: (taskId) => this.containerEl.win.clearTimeout(taskId),
+			delayMs: SEARCH_DEBOUNCE_MS,
+		});
+		this.dateChangeWatcher = new DateChangeWatcher({
+			getNow: () => new Date(),
+			scheduleTask: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
+			cancelTask: (taskId) => this.containerEl.win.clearTimeout(taskId),
+		});
+		this.recordStatsPreparationController = new RecordStatsPreparationController({
+			scheduleTask: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
+			cancelTask: (taskId) => this.containerEl.win.clearTimeout(taskId),
+		});
+		this.mobileHandledToolPointer = new MobileHandledToolPointer({
+			scheduleClear: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
+			cancelClear: (taskId) => this.containerEl.win.clearTimeout(taskId),
+		});
+		this.mobileHeaderTitleController = new MobileHeaderTitleController({
+			registerDomEvent: (target, type, listener) => {
+				this.registerDomEvent(target, type, listener);
+			},
+			renderChevron: (container) => {
+				setIcon(container.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
+			},
+			canToggleScopeMenu: () => this.activeNav !== "record-stats",
+			onToggleScopeMenu: () => this.toggleScopeMenu(),
+		});
+		this.mobileImagePickerFocusGuard = new MobileImagePickerFocusGuard({
+			scheduleRestore: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
+			cancelRestore: (taskId) => this.containerEl.win.clearTimeout(taskId),
+		});
+		this.nativeImagePickerController = new NativeImagePickerController({
+			createInput: () => this.containerEl.createEl("input", {
+				cls: "knomo-hidden-file-input",
+				attr: {
+					type: "file",
+					accept: "image/*",
+					multiple: "true",
+				},
+			}),
+			beginFocusGuard: () => this.beginMobileImagePickerFocusGuard(),
+			finishFocusGuard: (shouldRestoreFocus) => this.finishMobileImagePickerFocusGuard(shouldRestoreFocus),
+			insertImageFiles: (files) => this.insertImageFiles(files),
+		});
 		this.mobileSearchController = new MobileSearchController({
 			batchSize: MOBILE_SEARCH_BATCH_SIZE,
 			debounceMs: SEARCH_DEBOUNCE_MS,
@@ -462,7 +500,14 @@ export class KnomoView extends ItemView {
 			},
 			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
 			memoMatchesSearch: (memo, normalizedQuery, dateFilter, recordStatsFilter) => {
-				return this.memoMatchesSearch(memo, normalizedQuery, dateFilter, recordStatsFilter);
+				return memoMatchesSearch(
+					memo,
+					normalizedQuery,
+					dateFilter,
+					recordStatsFilter,
+					this.syncOrchestrator.getDailyNotesStatus(),
+					(searchMemo) => this.getMemoSearchText(searchMemo),
+				);
 			},
 			renderMemoCard: (container, memo, generation, index) => {
 				this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search");
@@ -576,8 +621,9 @@ export class KnomoView extends ItemView {
 		this.trashMemoController = new TrashMemoController({
 			getDeletedMemoSummary: () => this.syncOrchestrator.getDeletedMemoSummary(),
 			listDeletedMemos: () => this.syncOrchestrator.listDeletedMemos(),
-			restoreMemo: (memoId) => this.syncOrchestrator.restoreMemo(memoId),
-			purgeDeletedMemo: (memoId) => this.syncOrchestrator.purgeDeletedMemo(memoId),
+			restoreMemo: (memo) => this.syncOrchestrator.restoreMemoRecord(memo),
+			handleRestoredMemo: (deletedMemo, restoredMemo) => this.handleRestoredTrashMemo(deletedMemo, restoredMemo),
+			purgeDeletedMemo: (memo) => this.syncOrchestrator.purgeDeletedMemoRecord(memo),
 			isTrashActive: () => this.activeNav === "trash",
 			confirmPurge: () => this.containerEl.win.confirm(t("confirm.purgeMemo")),
 			showNotice: (message) => new Notice(message),
@@ -646,7 +692,7 @@ export class KnomoView extends ItemView {
 			getRenderGeneration: () => this.renderGeneration,
 			hasMoreCardFlowItems: () => this.cardFlowCoordinator.hasMoreItems,
 			shouldDeferCardFlowForAllMemos: () => this.shouldDeferCardFlowForAllMemos(),
-			shouldIgnoreMobileSaveInput: () => this.currentLayout === "mobile" && Date.now() - this.lastMobileSendPointerAt < 700,
+			shouldIgnoreMobileSaveInput: () => this.mobileSendPointerGuard.shouldIgnoreClick(this.currentLayout === "mobile"),
 			getEscapeState: () => ({
 				mobileSearchPageOpen: this.mobileSearchPageOpen,
 				composerOpen: this.composerOpen,
@@ -787,7 +833,7 @@ export class KnomoView extends ItemView {
 		this.clearSearchDebounce();
 		this.clearMobileSearchDebounce();
 		this.clearRecordStatsPreparation();
-		this.recordStatsRequestInvalidated = false;
+		this.recordStatsPreparationController.clearRetryRequest();
 		this.recordStatsService.invalidate();
 		this.mobileMemoHydrator.cancel();
 		this.clearMobileCardBatchContinuation();
@@ -795,12 +841,11 @@ export class KnomoView extends ItemView {
 		this.mobileComposerController.dispose();
 		this.cardImageLoadQueue.dispose();
 		this.memoCardPreviewCache.clear();
-		this.clearListEnterKeydownPatch();
-		this.clearSkipListEnterInputFallback();
+		this.composerListEnterState.clear();
 		this.clearHandledMobileToolPointer();
+		this.nativeImagePickerController.dispose();
 		this.clearMobileImagePickerFocusGuard();
 		this.clearSuppressNextOpenPopupDismissClick();
-		this.pendingMobileListEnterCorrection = null;
 		this.removeMobileSearchPage();
 		this.containerEl.doc.body.removeClass("knomo-mobile-search-active");
 		this.removeMobileHeaderTitle();
@@ -884,6 +929,12 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private handleRestoredTrashMemo(_deletedMemo: MemoRecord, restoredMemo: MemoRecord): void {
+		const mutation: MemoMutation = { type: "create", memo: restoredMemo };
+		this.applyMemoMutation(mutation);
+		this.onMemoMutation(mutation, this);
+	}
+
 	handleAttachmentFilesChanged(paths: readonly string[]): void {
 		this.cardImageLoadQueue.invalidateResourcePaths(paths);
 		const affectedMemoIds = this.memoCardPreviewCache.invalidateImagePaths(paths);
@@ -907,8 +958,7 @@ export class KnomoView extends ItemView {
 		this.wikiLinkSuggest = null;
 
 		const settings = this.settingsService.getSettings();
-		this.sidebarWidth = clampSidebarWidth(settings.desktopSidebarWidth);
-		this.sidebarCollapsed = settings.desktopSidebarCollapsed;
+		this.desktopSidebarStateController.setFromSettings(settings.desktopSidebarWidth, settings.desktopSidebarCollapsed);
 
 		const root = container.createDiv({ cls: "knomo-plugin knomo-view" });
 		this.rootEl = root;
@@ -994,10 +1044,10 @@ export class KnomoView extends ItemView {
 		this.registerDomEvent(this.sidebarResizerEl, "keydown", (event) => {
 			if (event.key === "ArrowLeft") {
 				event.preventDefault();
-				this.setSidebarWidth(this.sidebarWidth - 8, true);
+				this.setSidebarWidth(this.desktopSidebarStateController.getSnapshot().width - 8, true);
 			} else if (event.key === "ArrowRight") {
 				event.preventDefault();
-				this.setSidebarWidth(this.sidebarWidth + 8, true);
+				this.setSidebarWidth(this.desktopSidebarStateController.getSnapshot().width + 8, true);
 			}
 		});
 	}
@@ -1236,7 +1286,7 @@ export class KnomoView extends ItemView {
 			this.invalidateRecordStats();
 			this.mobileMemoHydrator.setReloadSuccess(
 				loadAll,
-				loadAll ? this.syncOrchestrator.listMemoIndexPeriods() : this.getRecentMemoPeriods(),
+				loadAll ? this.syncOrchestrator.listMemoIndexPeriods() : getRecentMemoPeriods(),
 			);
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
@@ -1295,7 +1345,7 @@ export class KnomoView extends ItemView {
 			}
 			this.memos = memos;
 			this.invalidateRecordStats();
-			this.mobileMemoHydrator.setInitialLoadSuccess(this.getRecentMemoPeriods());
+			this.mobileMemoHydrator.setInitialLoadSuccess(getRecentMemoPeriods());
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
@@ -1379,30 +1429,31 @@ export class KnomoView extends ItemView {
 		if (root === null) {
 			return;
 		}
+		const sidebarState = this.desktopSidebarStateController.getSnapshot();
 		root.toggleClass("is-layout-desktop-wide", this.currentLayout === "desktop-wide");
 		root.toggleClass("is-layout-desktop-medium", this.currentLayout === "desktop-medium");
 		root.toggleClass("is-layout-desktop-narrow", this.currentLayout === "desktop-narrow");
 		root.toggleClass("is-layout-mobile", this.currentLayout === "mobile");
-		root.toggleClass("is-sidebar-collapsed", this.sidebarCollapsed);
+		root.toggleClass("is-sidebar-collapsed", sidebarState.collapsed);
 		root.toggleClass("is-drawer-open", this.mobileDrawerOpen);
 		root.toggleClass("is-desktop-search-open", this.desktopSearchOpen);
 		root.toggleClass("is-scope-open", this.scopeMenuOpen);
 		root.toggleClass("is-composer-open", this.composerOpen);
 		root.toggleClass("is-compact-search-open", this.compactSearchOpen);
 		root.toggleClass("is-mobile-search-open", this.mobileSearchPageOpen);
-		root.toggleClass("is-mobile-compact", shouldUseMobileCompact(this.settingsService.getSettings().mobileCompactMode));
+		root.toggleClass("is-mobile-compact", this.settingsService.getSettings().mobileCompactMode !== "off");
 		root.toggleClass("is-record-stats", this.activeNav === "record-stats");
-		root.style.setProperty("--knomo-sidebar-width", `${this.sidebarWidth}px`);
-			this.syncTooltipState(root);
-			this.syncMobileHeaderActions();
-			this.syncMobileHeaderTitle();
-			this.syncTitlePopoverPosition();
-			this.syncMobileSearchPage();
-			this.syncMobileDrawerTop(root);
+		root.setCssProps({ "--knomo-sidebar-width": `${sidebarState.width}px` });
+		this.syncTooltipState(root);
+		this.syncMobileHeaderActions();
+		this.syncMobileHeaderTitle();
+		this.syncTitlePopoverPosition();
+		this.syncMobileSearchPage();
+		this.syncMobileDrawerTop(root);
 		this.mobileComposerController.syncViewportTracking();
 		this.mobileComposerController.syncLayer();
 		if (this.sidebarResizerEl !== null) {
-			this.sidebarResizerEl.setAttr("aria-valuenow", String(this.sidebarWidth));
+			this.sidebarResizerEl.setAttr("aria-valuenow", String(sidebarState.width));
 		}
 		this.rootEl?.findAll("[aria-expanded]").forEach((element) => {
 			if (element.getAttr("data-action") === "toggle-scope-menu") {
@@ -1414,15 +1465,15 @@ export class KnomoView extends ItemView {
 
 	private syncMobileDrawerTop(root: HTMLElement): void {
 		if (this.currentLayout !== "mobile") {
-			root.style.removeProperty("--knomo-mobile-drawer-top");
+			root.setCssProps({ "--knomo-mobile-drawer-top": MOBILE_DRAWER_TOP_DEFAULT });
 			return;
 		}
 		const headerBottom = this.measureMobileHeaderBottom();
 		if (headerBottom === null) {
-			root.style.removeProperty("--knomo-mobile-drawer-top");
+			root.setCssProps({ "--knomo-mobile-drawer-top": MOBILE_DRAWER_TOP_DEFAULT });
 			return;
 		}
-		root.style.setProperty("--knomo-mobile-drawer-top", `${headerBottom}px`);
+		root.setCssProps({ "--knomo-mobile-drawer-top": `${headerBottom}px` });
 	}
 
 	private measureMobileHeaderBottom(): number | null {
@@ -1482,52 +1533,13 @@ export class KnomoView extends ItemView {
 		if (!titleEl?.instanceOf(HTMLElement)) {
 			return;
 		}
-		if (this.activeNav === "record-stats") {
-			headerEl.addClass("knomo-record-stats-header");
-		} else {
-			headerEl.removeClass("knomo-record-stats-header");
-		}
-		if (this.mobileHeaderTitleEl !== titleEl) {
-			this.removeMobileHeaderTitle();
-			this.mobileHeaderTitleEl = titleEl;
-			this.mobileHeaderTitleOriginalText = titleEl.textContent;
-		}
-		if (this.mobileHeaderTitleRegisteredEl !== titleEl) {
-			this.mobileHeaderTitleRegisteredEl = titleEl;
-			this.registerDomEvent(titleEl, "click", (event) => {
-				if (this.activeNav === "record-stats") {
-					return;
-				}
-				event.preventDefault();
-				this.toggleScopeMenu();
-			});
-			this.registerDomEvent(titleEl, "keydown", (event) => {
-				if (this.activeNav === "record-stats") {
-					return;
-				}
-				if (event.key !== "Enter" && event.key !== " ") {
-					return;
-				}
-				event.preventDefault();
-				this.toggleScopeMenu();
-			});
-		}
-		titleEl.empty();
-		titleEl.addClass("knomo-mobile-title");
-		if (this.activeNav === "record-stats") {
-			titleEl.removeAttribute("role");
-			titleEl.removeAttribute("aria-haspopup");
-			titleEl.removeAttribute("aria-expanded");
-			titleEl.removeAttribute("tabindex");
-			titleEl.createSpan({ text: this.getMobileTitleLabel() });
-			return;
-		}
-		titleEl.setAttr("role", "button");
-		titleEl.setAttr("aria-haspopup", "menu");
-		titleEl.setAttr("aria-expanded", this.scopeMenuOpen ? "true" : "false");
-		titleEl.setAttr("tabindex", "0");
-		titleEl.createSpan({ text: this.getMobileTitleLabel() });
-		setIcon(titleEl.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
+		this.mobileHeaderTitleController.sync({
+			headerEl,
+			titleEl,
+			isRecordStats: this.activeNav === "record-stats",
+			scopeMenuOpen: this.scopeMenuOpen,
+			label: getMobileTitleLabel(this.getTitleState()),
+		});
 	}
 
 	private syncTitlePopoverPosition(): void {
@@ -1537,31 +1549,38 @@ export class KnomoView extends ItemView {
 		}
 		const anchor = this.getTitlePopoverAnchor();
 		if (anchor === null) {
-			root.style.removeProperty("--knomo-title-popover-left");
-			root.style.removeProperty("--knomo-title-popover-top");
+			root.setCssProps({
+				"--knomo-title-popover-left": TITLE_POPOVER_LEFT_DEFAULT,
+				"--knomo-title-popover-top": TITLE_POPOVER_TOP_DEFAULT,
+			});
 			return;
 		}
 		const rect = anchor.getBoundingClientRect();
 		if (this.currentLayout === "mobile") {
-			root.style.setProperty("--knomo-title-popover-top", `${Math.round(rect.bottom + 6)}px`);
-			root.style.removeProperty("--knomo-title-popover-left");
+			root.setCssProps({
+				"--knomo-title-popover-left": TITLE_POPOVER_LEFT_DEFAULT,
+				"--knomo-title-popover-top": `${Math.round(rect.bottom + 6)}px`,
+			});
 			return;
 		}
 		const container = anchor.closest(".knomo-main");
 		const containerRect = container?.getBoundingClientRect() ?? root.getBoundingClientRect();
 		const dropdownWidth = 168;
-		const left = clamp(
-			Math.round(rect.left - containerRect.left),
-			12,
-			Math.max(12, Math.round(containerRect.width - dropdownWidth - 12)),
+		const popoverPadding = 12;
+		const maxLeft = Math.max(popoverPadding, Math.round(containerRect.width - dropdownWidth - popoverPadding));
+		const left = Math.min(
+			maxLeft,
+			Math.max(popoverPadding, Math.round(rect.left - containerRect.left)),
 		);
-		root.style.setProperty("--knomo-title-popover-left", `${left}px`);
-		root.style.setProperty("--knomo-title-popover-top", `${Math.round(rect.bottom - containerRect.top + 6)}px`);
+		root.setCssProps({
+			"--knomo-title-popover-left": `${left}px`,
+			"--knomo-title-popover-top": `${Math.round(rect.bottom - containerRect.top + 6)}px`,
+		});
 	}
 
 	private getTitlePopoverAnchor(): HTMLElement | null {
 		if (this.currentLayout === "mobile") {
-			return this.mobileHeaderTitleEl;
+			return this.mobileHeaderTitleController.getAnchor();
 		}
 		if (this.currentLayout === "desktop-medium" || this.currentLayout === "desktop-narrow") {
 			for (const titleHost of this.titleHosts) {
@@ -1608,23 +1627,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private removeMobileHeaderTitle(): void {
-		if (this.mobileHeaderTitleEl !== null) {
-			const headerEl = this.mobileHeaderTitleEl.closest(".view-header");
-			if (headerEl?.instanceOf(HTMLElement)) {
-				headerEl.removeClass("knomo-record-stats-header");
-			}
-			this.mobileHeaderTitleEl.empty();
-			if (this.mobileHeaderTitleOriginalText !== null) {
-				this.mobileHeaderTitleEl.setText(this.mobileHeaderTitleOriginalText);
-			}
-			this.mobileHeaderTitleEl.removeClass("knomo-mobile-title");
-			this.mobileHeaderTitleEl.removeAttribute("role");
-			this.mobileHeaderTitleEl.removeAttribute("aria-haspopup");
-			this.mobileHeaderTitleEl.removeAttribute("aria-expanded");
-			this.mobileHeaderTitleEl.removeAttribute("tabindex");
-		}
-		this.mobileHeaderTitleEl = null;
-		this.mobileHeaderTitleOriginalText = null;
+		this.mobileHeaderTitleController.remove();
 	}
 
 	private openMobileHeaderSearch(): void {
@@ -1778,8 +1781,9 @@ export class KnomoView extends ItemView {
 		}
 		this.syncMobileHeaderTitle();
 		syncSidebarNavButtons(this.rootEl, this.activeNav);
+		const titleState = this.getTitleState();
 		this.rootEl?.findAll("[data-title-mode]").forEach((element) => {
-			const active = element.getAttr("data-title-mode") === this.getCurrentTitleMode();
+			const active = element.getAttr("data-title-mode") === getCurrentTitleMode(titleState);
 			element.toggleClass("is-active", active);
 			element.setAttr("aria-pressed", active ? "true" : "false");
 		});
@@ -1792,7 +1796,8 @@ export class KnomoView extends ItemView {
 
 	private renderTitleHost(host: TitleHost): void {
 		host.el.empty();
-		const label = host.mobile ? this.getMobileTitleLabel() : this.getDesktopTitleLabel();
+		const titleState = this.getTitleState();
+		const label = host.mobile ? getMobileTitleLabel(titleState) : getDesktopTitleLabel(titleState);
 		if (this.activeNav === "record-stats") {
 			host.el.createSpan({ cls: "knomo-title-label", text: label });
 			return;
@@ -1823,42 +1828,16 @@ export class KnomoView extends ItemView {
 		setIcon(trigger.createSpan({ cls: "knomo-title-chevron" }), "chevron-down");
 	}
 
-	private getDesktopTitleLabel(): string {
-		const query = this.searchQuery.trim();
-		if (query.length > 0) {
-			return t("search.label");
-		}
-		if (this.searchDateFilter !== null) {
-			return getSearchDateLabel(this.searchDateFilter);
-		}
-		if (this.recordStatsSearchFilter !== null) {
-			return getRecordStatsSearchFilterLabel(this.recordStatsSearchFilter);
-		}
-		return this.getListTitleLabel();
-	}
-
-	private getMobileTitleLabel(): string {
-		return this.getListTitleLabel();
-	}
-
-	private getListTitleLabel(): string {
-		if (this.activeTag !== null) {
-			return `#${this.activeTag}`;
-		}
-		if (this.activeNav !== "all") {
-			return getSidebarNavLabel(this.activeNav);
-		}
-		return getScopeLabel(this.scopeFilter);
-	}
-
-	private getCurrentTitleMode(): string {
-		if (this.activeNav === "review" || this.activeNav === "random") {
-			return this.activeNav;
-		}
-		if (this.activeTagKey !== null || this.activeNav !== "all") {
-			return "";
-		}
-		return this.scopeFilter;
+	private getTitleState(): ViewTitleState {
+		return {
+			activeTag: this.activeTag,
+			activeTagKey: this.activeTagKey,
+			activeNav: this.activeNav,
+			scopeFilter: this.scopeFilter,
+			searchQuery: this.searchQuery,
+			searchDateFilter: this.searchDateFilter,
+			recordStatsSearchFilter: this.recordStatsSearchFilter,
+		};
 	}
 
 	private isDefaultListState(): boolean {
@@ -1887,58 +1866,6 @@ export class KnomoView extends ItemView {
 		});
 	}
 
-	private getRegularFilterCopy(count: number): CardFlowRegularFilterCopy | null {
-		if (this.activeNav !== "all") {
-			return null;
-		}
-		const conditions = this.getRegularFilterConditions();
-		if (conditions.length === 0) {
-			return null;
-		}
-		const summary = formatRegularFilterSummary(conditions, count);
-		return {
-			summary,
-			emptyTitle: formatRegularFilterEmptyTitle(conditions, summary),
-		};
-	}
-
-	private getRegularFilterConditions(): RegularFilterCondition[] {
-		const conditions: RegularFilterCondition[] = [];
-		const tag = this.activeTag?.trim() || this.activeTagKey || "";
-		if (this.activeTagKey !== null && tag.length > 0) {
-			conditions.push({ type: "tag", text: formatTagFilterText(tag) });
-		}
-		if (this.recordStatsSearchFilter !== null) {
-			conditions.push({
-				type: "record-stats",
-				text: getRecordStatsSearchFilterLabel(this.recordStatsSearchFilter),
-			});
-		}
-		const query = this.searchQuery.trim();
-		if (query.length > 0) {
-			conditions.push({
-				type: "search",
-				text: t("filterSummary.searchCondition", { query }),
-				query,
-			});
-		}
-		if (this.searchDateFilter !== null) {
-			conditions.push({
-				type: "date",
-				text: getSearchDateLabel(this.searchDateFilter),
-				filter: this.searchDateFilter,
-			});
-		}
-		if (isSummaryScopeFilter(this.scopeFilter)) {
-			conditions.push({
-				type: "scope",
-				text: getScopeLabel(this.scopeFilter),
-				filter: this.scopeFilter,
-			});
-		}
-		return conditions;
-	}
-
 	private renderCardFlow(
 		preserveCardMemoId: string | null = null,
 		changeIntent: CardFlowChangeIntent = "content-change",
@@ -1958,7 +1885,7 @@ export class KnomoView extends ItemView {
 			this.renderRecordStatsPage();
 			return;
 		}
-		this.recordStatsRenderedKey = null;
+		this.recordStatsViewStateController.clearRendered();
 
 		const presentation = this.getCurrentCardFlowPresentation();
 		if (presentation.type === "empty") {
@@ -1974,29 +1901,26 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const renderKey = this.getCardFlowStateKey();
-		if (!force && cardFlow.childElementCount > 0 && this.recordStatsRenderedKey === renderKey) {
+		if (!force && cardFlow.childElementCount > 0 && this.recordStatsViewStateController.isRendered(renderKey)) {
 			return;
 		}
+		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
 		this.renderGeneration += 1;
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
 		this.renderedCardMemos.clear();
 		cardFlow.empty();
-		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
-			renderKnomoRecordStatsPage(cardFlow, {
-				snapshot: this.recordStatsService.getSnapshot(),
-				selected,
-				view: this.recordStatsView,
-				createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
-				canAdvance: canAdvanceRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate),
-			canRetreat: canRetreatRecordStatsDate(
-				this.recordStatsView,
-				this.recordStatsSelectedDate,
-				this.recordStatsService.getEarliestYear(),
-			),
+		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
+		renderKnomoRecordStatsPage(cardFlow, {
+			snapshot: this.recordStatsService.getSnapshot(),
+			selected,
+			view: recordStatsState.view,
+			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
+			canAdvance: this.recordStatsViewStateController.canAdvance(),
+			canRetreat: this.recordStatsViewStateController.canRetreat(this.recordStatsService.getEarliestYear()),
 		});
-		this.recordStatsRenderedKey = renderKey;
+		this.recordStatsViewStateController.markRendered(renderKey);
 	}
 
 	private forceRebuildCardFlow(changeIntent: CardFlowChangeIntent = "content-change"): void {
@@ -2021,7 +1945,7 @@ export class KnomoView extends ItemView {
 			this.restoreCardFlowScrollTop(scrollTop);
 			return;
 		}
-		this.recordStatsRenderedKey = null;
+		this.recordStatsViewStateController.clearRendered();
 		const generation = this.renderGeneration + 1;
 		this.renderGeneration = generation;
 		this.memoMarkdownRenderer.clear();
@@ -2059,7 +1983,14 @@ export class KnomoView extends ItemView {
 			activeNav: this.activeNav,
 			randomReunionLoading: randomSnapshot.loading,
 			memos,
-			regularFilterCopy: shouldLoadListMemos ? this.getRegularFilterCopy(memos.length) : null,
+			regularFilterCopy: shouldLoadListMemos && this.activeNav === "all" ? getRegularFilterCopy({
+				activeTag: this.activeTag,
+				activeTagKey: this.activeTagKey,
+				searchQuery: this.searchQuery,
+				searchDateFilter: this.searchDateFilter,
+				recordStatsSearchFilter: this.recordStatsSearchFilter,
+				scopeFilter: this.scopeFilter,
+			}, memos.length) : null,
 			trashLoading: trashSnapshot.trashLoading,
 			trashError: trashSnapshot.trashError,
 			trashMemos: trashSnapshot.trashMemos,
@@ -2445,27 +2376,17 @@ export class KnomoView extends ItemView {
 		generation: number,
 		surface: CardRenderSurface,
 	): void {
-		if (images.length === 0) {
+		const rendered = renderMemoCardImages(container, memo, images, {
+			previewLabel: t("image.previewLabel"),
+			unavailableLabel: t("image.unavailable"),
+		});
+		if (rendered === null) {
 			return;
 		}
-		const visibleImages = images.slice(0, MAX_CARD_PREVIEW_IMAGES);
-		const imagesEl = container.createDiv({
-			cls: images.length === 1
-				? "knomo-card-images knomo-card-images--single"
-				: "knomo-card-images knomo-card-images--grid",
-		});
-		this.renderedPreviewImages.set(imagesEl, images);
-		const loadItems: CardImageLoadItem[] = [];
-		visibleImages.forEach((image, index) => {
-			const hiddenCount = index === MAX_CARD_PREVIEW_IMAGES - 1 ? images.length - MAX_CARD_PREVIEW_IMAGES : 0;
-			const loadItem = this.renderMemoCardImage(imagesEl, memo, image, index, hiddenCount);
-			if (loadItem !== null) {
-				loadItems.push(loadItem);
-			}
-		});
+		this.renderedPreviewImages.set(rendered.imagesEl, images);
 		this.cardImageLoadQueue.observe({
-			targetEl: imagesEl,
-			images: loadItems,
+			targetEl: rendered.imagesEl,
+			images: rendered.loadItems,
 			generation,
 			surface,
 		});
@@ -2515,72 +2436,6 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private renderMemoCardImage(
-		container: HTMLElement,
-		memo: MemoRecord,
-		image: MemoPreviewImage,
-		index: number,
-		hiddenCount: number,
-	): CardImageLoadItem | null {
-		const item = container.createDiv({ cls: "knomo-card-image-item" });
-		const button = item.createEl("button", {
-			cls: "knomo-card-image-button",
-			attr: {
-				type: "button",
-				"aria-label": t("image.previewLabel"),
-				"data-knomo-card-image": "true",
-				"data-memo-id": memo.id,
-				"data-image-index": String(index),
-			},
-		});
-		if (image.url === undefined || image.unresolved === true) {
-			this.renderMemoCardImagePlaceholder(button, hiddenCount);
-			return null;
-		}
-		const imageEl = button.createEl("img", {
-			attr: {
-				alt: image.alt ?? "",
-				decoding: "async",
-			},
-		});
-		if (image.isRemote) {
-			imageEl.setAttr("fetchpriority", "low");
-		}
-		const handleError = () => {
-			item.addClass("is-error");
-			button.empty();
-			this.renderMemoCardImagePlaceholder(button, hiddenCount);
-		};
-		if (hiddenCount > 0) {
-			this.renderMemoCardImageMore(button, hiddenCount);
-		}
-		const loadItem: CardImageLoadItem = {
-			imageEl,
-			src: image.url,
-			resourcePath: image.resourcePath,
-			priority: index === 0 ? "high" : "low",
-			onError: handleError,
-		};
-		return loadItem;
-	}
-
-	private renderMemoCardImagePlaceholder(container: HTMLElement, hiddenCount: number): void {
-		container.createDiv({
-			cls: "knomo-card-image-placeholder",
-			text: t("image.unavailable"),
-		});
-		if (hiddenCount > 0) {
-			this.renderMemoCardImageMore(container, hiddenCount);
-		}
-	}
-
-	private renderMemoCardImageMore(container: HTMLElement, hiddenCount: number): void {
-		container.createSpan({
-			cls: "knomo-card-image-more",
-			text: `+${hiddenCount}`,
-		});
-	}
-
 	private handleCardImageClick(trigger: HTMLElement): void {
 		const imagesElement = trigger.closest(".knomo-card-images");
 		if (imagesElement === null || !imagesElement.instanceOf(HTMLElement)) {
@@ -2590,7 +2445,7 @@ export class KnomoView extends ItemView {
 		if (images === undefined || images.length === 0) {
 			return;
 		}
-		const imageIndex = parseImageIndex(trigger.getAttr("data-image-index"));
+		const imageIndex = parseCardImageIndex(trigger.getAttr("data-image-index"));
 		this.openImagePreviewModal(images, imageIndex);
 	}
 
@@ -2636,29 +2491,15 @@ export class KnomoView extends ItemView {
 	}
 
 	private lockCardFlowScrollForImagePreview(): void {
-		if (this.cardFlowEl !== null) {
-			this.imagePreviewScrollTop = this.cardFlowEl.scrollTop;
-			this.cardFlowEl.addClass("is-image-preview-open");
-		}
-		if (this.mobileSearchResultsEl !== null) {
-			this.mobileSearchImagePreviewScrollTop = this.mobileSearchResultsEl.scrollTop;
-			this.mobileSearchResultsEl.addClass("is-image-preview-open");
-		}
+		this.imagePreviewScrollLock.lock(this.cardFlowEl, this.mobileSearchResultsEl);
 	}
 
 	private unlockCardFlowScrollForImagePreview(): void {
-		if (this.cardFlowEl !== null) {
-			this.cardFlowEl.removeClass("is-image-preview-open");
-			this.restoreCardFlowScrollTop(this.imagePreviewScrollTop);
-		}
-		this.imagePreviewScrollTop = null;
-		if (this.mobileSearchResultsEl !== null) {
-			this.mobileSearchResultsEl.removeClass("is-image-preview-open");
-			if (this.mobileSearchImagePreviewScrollTop !== null) {
-				this.mobileSearchResultsEl.scrollTop = this.mobileSearchImagePreviewScrollTop;
-			}
-		}
-		this.mobileSearchImagePreviewScrollTop = null;
+		this.imagePreviewScrollLock.unlock(
+			this.cardFlowEl,
+			this.mobileSearchResultsEl,
+			(scrollTop) => this.restoreCardFlowScrollTop(scrollTop),
+		);
 	}
 
 	private toggleSidebarTagGroup(tag: string, element: HTMLElement): void {
@@ -2717,22 +2558,16 @@ export class KnomoView extends ItemView {
 	}
 
 	private goToPreviousRecordStatsPeriod(): void {
-		if (!canRetreatRecordStatsDate(
-			this.recordStatsView,
-			this.recordStatsSelectedDate,
-			this.recordStatsService.getEarliestYear(),
-		)) {
+		if (!this.recordStatsViewStateController.goToPrevious(this.recordStatsService.getEarliestYear())) {
 			return;
 		}
-		this.recordStatsSelectedDate = shiftRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate, -1);
 		this.renderCardFlow(null, "view-scope-change");
 	}
 
 	private goToNextRecordStatsPeriod(): void {
-		if (!canAdvanceRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate)) {
+		if (!this.recordStatsViewStateController.goToNext()) {
 			return;
 		}
-		this.recordStatsSelectedDate = shiftRecordStatsDate(this.recordStatsView, this.recordStatsSelectedDate, 1);
 		this.renderCardFlow(null, "view-scope-change");
 	}
 
@@ -2743,10 +2578,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private setRecordStatsViewFromAction(view: RecordStatsView): void {
-		if (this.recordStatsView === view) {
+		if (!this.recordStatsViewStateController.setView(view)) {
 			return;
 		}
-		this.recordStatsView = view;
 		this.renderCardFlow(null, "view-scope-change");
 	}
 
@@ -2815,112 +2649,41 @@ export class KnomoView extends ItemView {
 	private openRecordStatsTrendFilter(sourceEl: HTMLElement | null): void {
 		const key = sourceEl?.getAttr("data-record-stats-key") ?? null;
 		const unit = sourceEl?.getAttr("data-record-stats-unit") ?? null;
-		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
-		if (key === null || selected?.trend.some((point) => point.key === key && point.count > 0) !== true) {
-			return;
-		}
-		if (unit === "day" && /^\d{4}-\d{2}-\d{2}$/.test(key)) {
-			this.openRecordStatsSearchFilter({ type: "day", date: key });
-			return;
-		}
-		if (unit === "month" && /^\d{4}-\d{2}$/.test(key)) {
-			this.openRecordStatsSearchFilter({ type: "month", month: key });
+		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
+		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
+		const filter = getRecordStatsTrendSearchFilter(selected, key, unit);
+		if (filter !== null) {
+			this.openRecordStatsSearchFilter(filter);
 		}
 	}
 
 	private openRecordStatsHourFilter(sourceEl: HTMLElement | null): void {
 		const hourText = sourceEl?.getAttr("data-record-stats-hour") ?? "";
-		const hour = Number(hourText);
-		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
-		if (
-			!Number.isInteger(hour)
-			|| hour < 0
-			|| hour > 23
-			|| selected?.activeHours[hour]?.count === 0
-		) {
-			return;
+		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
+		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
+		const filter = getRecordStatsHourSearchFilter(selected, hourText);
+		if (filter !== null) {
+			this.openRecordStatsSearchFilter(filter);
 		}
-		if (selected === null) {
-			return;
-		}
-		this.openRecordStatsSearchFilter({
-			type: "hour",
-			startDate: selected.startDate,
-			endDateExclusive: selected.endDateExclusive,
-			hour,
-		});
 	}
 
-	private openRecordStatsMetricFilter(
-		type: "range" | "with-tag" | "no-tag" | "with-image" | "references" | "max-daily-notes" | "max-daily-words",
-	): void {
-		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
-		if (selected === null) {
-			return;
-		}
-		if (type === "range" && selected.range.memoCount > 0) {
-			this.openRecordStatsSearchFilter({
-				type,
-				startDate: selected.startDate,
-				endDateExclusive: selected.endDateExclusive,
-			});
-			return;
-		}
-		if (type === "references" && selected.range.referenceMemoCount > 0) {
-			this.openRecordStatsSearchFilter({
-				type,
-				startDate: selected.startDate,
-				endDateExclusive: selected.endDateExclusive,
-			});
-			return;
-		}
-		if (type === "with-tag" && selected.range.taggedMemoCount > 0) {
-			this.openRecordStatsSearchFilter({
-				type,
-				startDate: selected.startDate,
-				endDateExclusive: selected.endDateExclusive,
-			});
-			return;
-		}
-		if (type === "no-tag" && selected.range.untaggedMemoCount > 0) {
-			this.openRecordStatsSearchFilter({
-				type,
-				startDate: selected.startDate,
-				endDateExclusive: selected.endDateExclusive,
-			});
-			return;
-		}
-		if (type === "with-image" && selected.range.imageMemoCount > 0) {
-			this.openRecordStatsSearchFilter({
-				type,
-				startDate: selected.startDate,
-				endDateExclusive: selected.endDateExclusive,
-			});
-			return;
-		}
-		if (type === "max-daily-notes" && selected.range.maxDailyMemoCount > 0) {
-			this.openRecordStatsSearchFilter({ type, dates: [...selected.range.maxDailyMemoDates] });
-			return;
-		}
-		if (type === "max-daily-words" && selected.range.maxDailyWordCount > 0) {
-			this.openRecordStatsSearchFilter({ type, dates: [...selected.range.maxDailyWordDates] });
+	private openRecordStatsMetricFilter(type: RecordStatsMetricFilterType): void {
+		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
+		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
+		const filter = getRecordStatsMetricSearchFilter(selected, type);
+		if (filter !== null) {
+			this.openRecordStatsSearchFilter(filter);
 		}
 	}
 
 	private openRecordStatsTagFilter(sourceEl: HTMLElement | null): void {
 		const tagKey = sourceEl?.getAttr("data-record-stats-tag-key") ?? null;
-		const selected = this.recordStatsService.select(this.recordStatsView, this.recordStatsSelectedDate);
-		const tag = tagKey === null ? undefined : selected?.commonTags.find((item) => item.key === tagKey);
-		if (selected === null || tag === undefined || tag.count <= 0) {
-			return;
+		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
+		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
+		const filter = getRecordStatsTagSearchFilter(selected, tagKey);
+		if (filter !== null) {
+			this.openRecordStatsSearchFilter(filter);
 		}
-		this.openRecordStatsSearchFilter({
-			type: "tag",
-			startDate: selected.startDate,
-			endDateExclusive: selected.endDateExclusive,
-			tagKey: tag.key,
-			tagLabel: tag.label,
-		});
 	}
 
 	private openRecordStatsSearchFilter(filter: RecordStatsSearchFilter): void {
@@ -3023,32 +2786,34 @@ export class KnomoView extends ItemView {
 		}
 
 		const input = this.inputEl.value;
-		if (input.trim().length === 0) {
+		const preparedInput = prepareComposerSaveInput(input, this.editingMemo, {
+			sourceMemoId: this.quoteSourceMemoId,
+			referenceText: this.quoteReferenceText,
+			markdownText: this.quoteMarkdownText,
+		});
+		if (preparedInput.type === "empty") {
 			this.updateStatus(t("composer.emptyContent"), true);
 			this.updateSendButtonState();
 			return;
 		}
 		const isMobileSave = this.currentLayout === "mobile";
 		const mobileScrollTop = isMobileSave ? this.mobileComposerController.getOpenScrollTop() ?? this.getCardFlowScrollTop() : null;
-		const createInput = this.editingMemo === null ? this.prepareCreateMemoInput(input) : null;
-		const content = createInput?.content ?? input;
 
 		this.isSaving = true;
 		this.updateStatus("", false);
 		this.updateSendButtonState();
 		try {
 			let mutation: MemoMutation;
-			if (this.editingMemo !== null) {
-				const previousMemo = this.editingMemo;
-				const memo = await this.syncOrchestrator.updateMemo(previousMemo, content);
+			if (preparedInput.type === "update") {
+				const previousMemo = preparedInput.previousMemo;
+				const memo = await this.syncOrchestrator.updateMemo(previousMemo, preparedInput.content);
 				mutation = { type: "update", previousMemo, memo };
 			} else {
-				const sourceMemoId = createInput?.sourceMemoId ?? null;
-				const { memo } = await this.syncOrchestrator.createMemo(content, {
-					source: sourceMemoId === null ? "plugin_input" : "quote_create",
-					sourceMemoId,
-					sourceReferenceText: createInput?.sourceReferenceText ?? null,
-					dailyTrailer: createInput?.quoteTrailer ?? null,
+				const { memo } = await this.syncOrchestrator.createMemo(preparedInput.content, {
+					source: preparedInput.source,
+					sourceMemoId: preparedInput.sourceMemoId,
+					sourceReferenceText: preparedInput.sourceReferenceText,
+					dailyTrailer: preparedInput.dailyTrailer,
 				});
 				mutation = { type: "create", memo };
 			}
@@ -3154,19 +2919,11 @@ export class KnomoView extends ItemView {
 	}
 
 	private queueSearchQuery(query: string): void {
-		this.clearSearchDebounce();
-		this.searchDebounceTimeoutId = this.containerEl.win.setTimeout(() => {
-			this.searchDebounceTimeoutId = null;
-			this.setSearchQuery(query);
-		}, SEARCH_DEBOUNCE_MS);
+		this.searchQueryDebounce.queue(query, (nextQuery) => this.setSearchQuery(nextQuery));
 	}
 
 	private clearSearchDebounce(): void {
-		if (this.searchDebounceTimeoutId === null) {
-			return;
-		}
-		this.containerEl.win.clearTimeout(this.searchDebounceTimeoutId);
-		this.searchDebounceTimeoutId = null;
+		this.searchQueryDebounce.clear();
 	}
 
 	private applyViewStateTransitionEffects(effects: KnomoViewStateTransitionEffects): void {
@@ -3452,7 +3209,11 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (this.inputEl !== null) {
-			this.draftContent = this.getDraftForClose(this.inputEl.value);
+			this.draftContent = getDraftForComposerClose(
+				this.inputEl.value,
+				getComposerMode(this.editingMemo, this.quoteSourceMemoId),
+				this.quoteMarkdownText,
+			);
 			this.inputEl.value = this.draftContent;
 		}
 		this.composerOpen = false;
@@ -3465,7 +3226,11 @@ export class KnomoView extends ItemView {
 
 	private closeMobileComposerKeepingDraft(): void {
 		if (this.inputEl !== null) {
-			this.draftContent = this.getDraftForClose(this.inputEl.value);
+			this.draftContent = getDraftForComposerClose(
+				this.inputEl.value,
+				getComposerMode(this.editingMemo, this.quoteSourceMemoId),
+				this.quoteMarkdownText,
+			);
 			this.inputEl.value = this.draftContent;
 		}
 		this.mobileComposerController.closeKeepingDraft();
@@ -3500,9 +3265,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleComposerInputBlur(): void {
-		this.composerSaveShortcutDown = false;
+		this.composerSaveShortcutController.reset();
 		this.wikiLinkSuggest?.close();
-		if (this.currentLayout === "mobile" && this.mobileImagePickerActive) {
+		if (this.mobileImagePickerFocusGuard.shouldIgnoreBlur(this.currentLayout === "mobile")) {
 			return;
 		}
 		if (!this.mobileComposerController.handleInputBlur()) {
@@ -3560,28 +3325,6 @@ export class KnomoView extends ItemView {
 		this.quoteMarkdownText = null;
 	}
 
-	private getComposerMode(): ComposerMode {
-		if (this.editingMemo !== null) {
-			return "edit";
-		}
-		if (this.quoteSourceMemoId !== null) {
-			return "quote";
-		}
-		return "create";
-	}
-
-	private getDraftForClose(draft: string): string {
-		if (this.getComposerMode() !== "quote" || this.quoteMarkdownText === null) {
-			return draft;
-		}
-		const normalizedDraft = draft.replace(/\s+$/g, "");
-		const normalizedQuote = this.quoteMarkdownText.trim();
-		if (normalizedDraft === normalizedQuote) {
-			return "";
-		}
-		return draft;
-	}
-
 	private startEditing(memo: MemoRecord): void {
 		this.editingMemo = memo;
 		this.quoteSourceMemoId = null;
@@ -3603,7 +3346,7 @@ export class KnomoView extends ItemView {
 		this.editingMemo = null;
 		this.quoteSourceMemoId = memo.id;
 		this.quoteReferenceText = referenceText;
-		this.quoteMarkdownText = toMarkdownQuote(memo.contentSnapshot);
+		this.quoteMarkdownText = formatMarkdownQuoteDraft(memo.contentSnapshot);
 		this.openComposer();
 		const cursor = this.inputEl?.value.length ?? 0;
 		this.inputEl?.setSelectionRange(cursor, cursor);
@@ -3619,7 +3362,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const shouldHandleListEnter =
-			!this.skipListEnterInputFallback &&
+			!this.composerListEnterState.shouldSkipInputFallback() &&
 			!event.isComposing &&
 			isListEnterInputEvent(event);
 		if (shouldHandleListEnter && this.handleListEnterBeforeInput(event)) {
@@ -3636,14 +3379,6 @@ export class KnomoView extends ItemView {
 		if (this.currentLayout === "mobile") {
 			this.openTagSuggestAfterHashInsert();
 		}
-	}
-
-	private isComposerSaveShortcut(event: KeyboardEvent): boolean {
-		const isMod = event.metaKey || event.ctrlKey;
-		if (!isMod) {
-			return false;
-		}
-		return event.key === "Enter" || event.code === "Enter" || event.code === "NumpadEnter";
 	}
 
 	private handleComposerKeydown(event: KeyboardEvent): void {
@@ -3666,31 +3401,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleComposerKeyup(event: KeyboardEvent): void {
-		if (!this.composerSaveShortcutDown) {
-			return;
-		}
-		if (event.key === "Enter" || event.code === "Enter" || event.code === "NumpadEnter" || (!event.metaKey && !event.ctrlKey)) {
-			this.composerSaveShortcutDown = false;
-		}
+		this.composerSaveShortcutController.handleKeyup(event);
 	}
 
 	private handleComposerSaveShortcut(event: KeyboardEvent): boolean {
-		if (this.inputEl === null || !this.isComposerSaveShortcut(event)) {
-			return false;
-		}
-		const isComposerEvent = event.target === this.inputEl || this.containerEl.doc.activeElement === this.inputEl;
-		if (!isComposerEvent) {
-			return false;
-		}
-		event.preventDefault();
-		event.stopPropagation();
-		event.stopImmediatePropagation();
-		if (this.composerSaveShortcutDown || this.isSaving) {
-			return true;
-		}
-		this.composerSaveShortcutDown = true;
-		void this.saveInput();
-		return true;
+		return this.composerSaveShortcutController.handleKeydown(event, {
+			inputEl: this.inputEl,
+			activeElement: this.containerEl.doc.activeElement,
+			isSaving: this.isSaving,
+			saveInput: () => {
+				void this.saveInput();
+			},
+		});
 	}
 
 	private handleComposerToolPointerDown(event: PointerEvent | MouseEvent): void {
@@ -3714,11 +3436,11 @@ export class KnomoView extends ItemView {
 		if (action === "insert-image") {
 			return;
 		}
-		if (this.isHandledMobileToolPointer(toolButton, action)) {
+		if (this.mobileHandledToolPointer.isHandled(toolButton, action)) {
 			return;
 		}
 		if (this.runComposerToolAction(action)) {
-			this.markHandledMobileToolPointer(toolButton, action);
+			this.mobileHandledToolPointer.mark(toolButton, action);
 		}
 	}
 
@@ -3740,7 +3462,7 @@ export class KnomoView extends ItemView {
 		}
 		event.preventDefault();
 		event.stopPropagation();
-		if (this.isHandledMobileToolPointer(actionEl, action)) {
+		if (this.mobileHandledToolPointer.isHandled(actionEl, action)) {
 			return;
 		}
 		if (action === "clear-reference") {
@@ -3748,7 +3470,7 @@ export class KnomoView extends ItemView {
 		} else {
 			this.cancelEditing();
 		}
-		this.markHandledMobileToolPointer(actionEl, action);
+		this.mobileHandledToolPointer.mark(actionEl, action);
 	}
 
 	private runComposerToolAction(action: string | null): boolean {
@@ -3760,7 +3482,7 @@ export class KnomoView extends ItemView {
 			return true;
 		}
 		if (action === "insert-image") {
-			this.openNativeImagePicker();
+			this.nativeImagePickerController.open();
 			return true;
 		}
 		if (action === "insert-list") {
@@ -3774,86 +3496,41 @@ export class KnomoView extends ItemView {
 		return false;
 	}
 
-	private markHandledMobileToolPointer(button: HTMLElement, action: string): void {
-		this.clearHandledMobileToolPointer();
-		this.handledMobileToolPointer = { button, action };
-		this.handledMobileToolPointerTimerId = this.containerEl.win.setTimeout(() => {
-			this.handledMobileToolPointer = null;
-			this.handledMobileToolPointerTimerId = null;
-		}, 350);
-	}
-
 	private shouldIgnoreHandledMobileToolClick(actionEl: HTMLElement, action: string | null): boolean {
-		const handled = this.handledMobileToolPointer;
-		if (this.currentLayout !== "mobile" || handled === null || action === null) {
-			return false;
-		}
-		const shouldIgnore = this.isHandledMobileToolPointer(actionEl, action);
-		if (shouldIgnore) {
-			this.clearHandledMobileToolPointer();
-		}
-		return shouldIgnore;
-	}
-
-	private isHandledMobileToolPointer(button: HTMLElement, action: string): boolean {
-		const handled = this.handledMobileToolPointer;
-		return handled !== null && handled.button === button && handled.action === action;
+		return this.mobileHandledToolPointer.shouldIgnoreClick(actionEl, action, this.currentLayout === "mobile");
 	}
 
 	private clearHandledMobileToolPointer(): void {
-		this.handledMobileToolPointer = null;
-		if (this.handledMobileToolPointerTimerId !== null) {
-			this.containerEl.win.clearTimeout(this.handledMobileToolPointerTimerId);
-			this.handledMobileToolPointerTimerId = null;
-		}
+		this.mobileHandledToolPointer.clear();
 	}
 
 	private beginMobileImagePickerFocusGuard(): boolean {
-		this.clearMobileImagePickerFocusGuard();
-		if (this.currentLayout !== "mobile" || this.inputEl === null || !this.inputEl.isConnected) {
-			return false;
-		}
-		if (this.containerEl.doc.activeElement !== this.inputEl) {
-			return false;
-		}
-		this.mobileImagePickerActive = true;
-		return true;
+		return this.mobileImagePickerFocusGuard.begin(
+			this.currentLayout === "mobile" &&
+			this.inputEl !== null &&
+			this.inputEl.isConnected &&
+			this.containerEl.doc.activeElement === this.inputEl,
+		);
 	}
 
 	private finishMobileImagePickerFocusGuard(shouldRestoreFocus: boolean): void {
-		this.mobileImagePickerActive = false;
-		this.clearMobileImagePickerFocusTimer();
-		if (!shouldRestoreFocus || this.currentLayout !== "mobile" || !this.composerOpen) {
-			return;
-		}
-		const input = this.inputEl;
-		if (input === null || !input.isConnected || input.disabled) {
-			return;
-		}
-		this.mobileImagePickerFocusTimerId = this.containerEl.win.setTimeout(() => {
-			this.mobileImagePickerFocusTimerId = null;
-			if (this.currentLayout !== "mobile" || !this.composerOpen) {
-				return;
-			}
-			const input = this.inputEl;
-			if (input === null || !input.isConnected || input.disabled) {
-				return;
-			}
-			this.focusComposerInputNow(true, true);
-		}, 50);
+		this.mobileImagePickerFocusGuard.finish(
+			shouldRestoreFocus,
+			() => this.canRestoreMobileImagePickerFocus(),
+			() => this.focusComposerInputNow(true, true),
+		);
 	}
 
 	private clearMobileImagePickerFocusGuard(): void {
-		this.mobileImagePickerActive = false;
-		this.clearMobileImagePickerFocusTimer();
+		this.mobileImagePickerFocusGuard.clear();
 	}
 
-	private clearMobileImagePickerFocusTimer(): void {
-		if (this.mobileImagePickerFocusTimerId === null) {
-			return;
+	private canRestoreMobileImagePickerFocus(): boolean {
+		if (this.currentLayout !== "mobile" || !this.composerOpen) {
+			return false;
 		}
-		this.containerEl.win.clearTimeout(this.mobileImagePickerFocusTimerId);
-		this.mobileImagePickerFocusTimerId = null;
+		const input = this.inputEl;
+		return input !== null && input.isConnected && !input.disabled;
 	}
 
 	private handleSendPointerDown(event: PointerEvent | MouseEvent): void {
@@ -3868,7 +3545,7 @@ export class KnomoView extends ItemView {
 		}
 		event.preventDefault();
 		event.stopPropagation();
-		this.lastMobileSendPointerAt = Date.now();
+		this.mobileSendPointerGuard.markPointer();
 		void this.saveInput();
 	}
 
@@ -3909,13 +3586,10 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleComposerInput(event: Event): void {
-		const pending = this.pendingMobileListEnterCorrection;
-		if (pending !== null) {
-			this.pendingMobileListEnterCorrection = null;
-			if (this.inputEl?.value === pending.nativeValue) {
-				this.applyTextareaPatch(pending.patch);
-				return;
-			}
+		const pendingCorrection = this.composerListEnterState.consumePendingCorrection(this.inputEl?.value ?? null);
+		if (pendingCorrection !== null) {
+			this.applyTextareaPatch(pendingCorrection);
+			return;
 		}
 		if (this.handleListEnterInputFallback(event)) {
 			return;
@@ -3935,18 +3609,18 @@ export class KnomoView extends ItemView {
 			return false;
 		}
 		if (!event.cancelable) {
-			this.pendingMobileListEnterCorrection = this.getPendingMobileListEnterCorrection(patch);
+			this.composerListEnterState.setPendingCorrection(this.getPendingMobileListEnterCorrection(patch));
 			return false;
 		}
 		event.preventDefault();
 		event.stopPropagation();
-		this.pendingMobileListEnterCorrection = null;
+		this.composerListEnterState.setPendingCorrection(null);
 		this.applyTextareaPatch(patch);
 		return true;
 	}
 
 	private handleListEnterInputFallback(event: Event): boolean {
-		if (this.skipListEnterInputFallback || this.inputEl === null) {
+		if (this.composerListEnterState.shouldSkipInputFallback() || this.inputEl === null) {
 			return false;
 		}
 		const inputEvent = this.asInputEvent(event);
@@ -3969,7 +3643,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleListEnterKeydownDuplicateBeforeInput(event: InputEvent): boolean {
-		const patch = this.listEnterKeydownPatch;
+		const patch = this.composerListEnterState.getKeydownPatch();
 		if (patch === null || this.inputEl === null) {
 			return false;
 		}
@@ -3979,7 +3653,7 @@ export class KnomoView extends ItemView {
 		}
 		this.clearListEnterKeydownPatch();
 		if (!event.cancelable) {
-			this.pendingMobileListEnterCorrection = this.getPendingMobileListEnterCorrection(patch);
+			this.composerListEnterState.setPendingCorrection(this.getPendingMobileListEnterCorrection(patch));
 			return true;
 		}
 		event.preventDefault();
@@ -4003,37 +3677,19 @@ export class KnomoView extends ItemView {
 	}
 
 	private markListEnterKeydownPatch(patch: TextReplacement): void {
-		this.clearListEnterKeydownPatch();
-		this.listEnterKeydownPatch = patch;
-		this.listEnterKeydownPatchTimerId = this.containerEl.win.setTimeout(() => {
-			this.listEnterKeydownPatch = null;
-			this.listEnterKeydownPatchTimerId = null;
-		}, 0);
+		this.composerListEnterState.markKeydownPatch(patch);
 	}
 
 	private clearListEnterKeydownPatch(): void {
-		this.listEnterKeydownPatch = null;
-		if (this.listEnterKeydownPatchTimerId !== null) {
-			this.containerEl.win.clearTimeout(this.listEnterKeydownPatchTimerId);
-			this.listEnterKeydownPatchTimerId = null;
-		}
+		this.composerListEnterState.clearKeydownPatch();
 	}
 
 	private markSkipListEnterInputFallback(): void {
-		this.clearSkipListEnterInputFallback();
-		this.skipListEnterInputFallback = true;
-		this.skipListEnterInputFallbackTimerId = this.containerEl.win.setTimeout(() => {
-			this.skipListEnterInputFallback = false;
-			this.skipListEnterInputFallbackTimerId = null;
-		}, 0);
+		this.composerListEnterState.markSkipInputFallback();
 	}
 
 	private clearSkipListEnterInputFallback(): void {
-		this.skipListEnterInputFallback = false;
-		if (this.skipListEnterInputFallbackTimerId !== null) {
-			this.containerEl.win.clearTimeout(this.skipListEnterInputFallbackTimerId);
-			this.skipListEnterInputFallbackTimerId = null;
-		}
+		this.composerListEnterState.clearSkipInputFallback();
 	}
 
 	private asInputEvent(event: Event): InputEvent | null {
@@ -4052,7 +3708,7 @@ export class KnomoView extends ItemView {
 		return getListEnterPatch(input.value, input.selectionStart, input.selectionEnd);
 	}
 
-	private getPendingMobileListEnterCorrection(patch: TextReplacement): PendingMobileListEnterCorrection | null {
+	private getPendingMobileListEnterCorrection(patch: TextReplacement): PendingListEnterCorrection | null {
 		if (this.inputEl === null) {
 			return null;
 		}
@@ -4186,24 +3842,19 @@ export class KnomoView extends ItemView {
 			return cache.result;
 		}
 
-		let filteredMemos: MemoRecord[];
-		if (this.isDesktopSearchActive()) {
-			filteredMemos = this.memos.filter((memo) => {
-				return this.memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter);
-			});
-		} else if (this.activeNav === "review") {
-			filteredMemos = this.getOutsideTodayMemos(today);
-		} else {
-			filteredMemos = this.memos.filter((memo) => {
-				if (activeTagKey !== null && !memo.tags.some((tag) => tagMatchesActiveTagKey(tag, activeTagKey))) {
-					return false;
-				}
-				if (normalizedQuery.length > 0 && !this.getMemoSearchText(memo).includes(normalizedQuery)) {
-					return false;
-				}
-				return matchesScope(memo, this.scopeFilter);
-			});
-		}
+		const filteredMemos = filterVisibleMemos({
+			memos: this.memos,
+			randomMemos: this.randomReunionController.getSnapshot().memos ?? [],
+			activeNav: this.activeNav,
+			activeTagKey,
+			scopeFilter: this.scopeFilter,
+			normalizedQuery,
+			searchDateFilter,
+			recordStatsFilter,
+			dailyStatus: this.syncOrchestrator.getDailyNotesStatus(),
+			getMemoSearchText: (memo) => this.getMemoSearchText(memo),
+			today,
+		});
 		this.filteredMemosCache = {
 			memos: this.memos,
 			activeTagKey,
@@ -4216,60 +3867,6 @@ export class KnomoView extends ItemView {
 			result: filteredMemos,
 		};
 		return filteredMemos;
-	}
-
-	private isDesktopSearchActive(): boolean {
-		return this.searchQuery.trim().length > 0
-			|| this.searchDateFilter !== null
-			|| this.recordStatsSearchFilter !== null;
-	}
-
-	private memoMatchesSearch(
-		memo: MemoRecord,
-		normalizedQuery: string,
-		dateFilter: SearchDateFilter | null,
-		recordStatsFilter: RecordStatsSearchFilter | null = null,
-	): boolean {
-		if (normalizedQuery.length > 0 && !this.getMemoSearchText(memo).includes(normalizedQuery)) {
-			return false;
-		}
-		if (dateFilter !== null && !this.memoMatchesSearchDate(memo, dateFilter)) {
-			return false;
-		}
-		if (recordStatsFilter !== null && !matchesRecordStatsSearchFilter(memo, recordStatsFilter)) {
-			return false;
-		}
-		return true;
-	}
-
-	private memoMatchesSearchDate(memo: MemoRecord, filter: SearchDateFilter): boolean {
-		const date = this.parseMemoLocalDate(memo);
-		if (date === null) {
-			return false;
-		}
-		return matchesSearchDateFilter(date, filter);
-	}
-
-	private getOutsideTodayMemos(today: Date): MemoRecord[] {
-		const todayDay = today.getDate();
-		const todayKey = formatDatePart(today);
-		const isLeapDay = today.getMonth() === 1 && todayDay === 29;
-		return this.memos
-			.map((memo) => ({ memo, date: this.parseMemoLocalDate(memo) }))
-			.filter((item): item is { memo: MemoRecord; date: Date } => {
-				if (item.date === null || item.date.getDate() !== todayDay || formatDatePart(item.date) === todayKey) {
-					return false;
-				}
-				return !isLeapDay || item.date.getMonth() === 1;
-			})
-			.sort((left, right) => {
-				return right.date.getTime() - left.date.getTime() || right.memo.createdAt.localeCompare(left.memo.createdAt);
-			})
-			.map((item) => item.memo);
-	}
-
-	private parseMemoLocalDate(memo: MemoRecord): Date | null {
-		return parseMemoLocalDate(memo, this.syncOrchestrator.getDailyNotesStatus());
 	}
 
 	private closeCardMenu(): void {
@@ -4358,7 +3955,7 @@ export class KnomoView extends ItemView {
 			if (this.mobileDrawerOpen && this.composerOpen) {
 				this.closeComposerKeepingDraft();
 			}
-			this.sidebarCollapsed = false;
+			this.desktopSidebarStateController.expandWithoutPersisting();
 			this.syncRootState();
 			if (this.mobileDrawerOpen) {
 				this.mobileMemoHydrator.deferSidebarHydration();
@@ -4369,46 +3966,46 @@ export class KnomoView extends ItemView {
 	}
 
 	private toggleSidebarCollapsed(): void {
-		this.setSidebarCollapsed(!this.sidebarCollapsed);
+		this.desktopSidebarStateController.toggleCollapsed();
+		this.syncRootState();
+		void this.persistSidebarPreferences();
 	}
 
 	private setSidebarCollapsed(collapsed: boolean): void {
-		this.sidebarCollapsed = collapsed;
+		this.desktopSidebarStateController.setCollapsed(collapsed);
 		this.syncRootState();
 		void this.persistSidebarPreferences();
 	}
 
 	private startSidebarResize(event: PointerEvent): void {
-		if (this.sidebarCollapsed || this.sidebarResizerEl === null) {
+		if (this.sidebarResizerEl === null || !this.desktopSidebarStateController.startResize(event.pointerId, event.clientX)) {
 			return;
 		}
-		this.sidebarDrag = createSidebarDragState(event, this.sidebarWidth);
 		this.sidebarResizerEl.setPointerCapture(event.pointerId);
 		this.rootEl?.toggleClass("is-resizing-sidebar", true);
 		event.preventDefault();
 	}
 
 	private resizeSidebar(event: PointerEvent): void {
-		if (this.sidebarDrag === null || this.sidebarDrag.pointerId !== event.pointerId) {
+		if (!this.desktopSidebarStateController.resize(event.pointerId, event.clientX)) {
 			return;
 		}
-		this.setSidebarWidth(getSidebarDragWidth(this.sidebarDrag, event.clientX), false);
+		this.syncRootState();
 	}
 
 	private stopSidebarResize(event: PointerEvent): void {
-		if (this.sidebarDrag === null || this.sidebarDrag.pointerId !== event.pointerId) {
+		if (!this.desktopSidebarStateController.stopResize(event.pointerId)) {
 			return;
 		}
 		if (this.sidebarResizerEl?.hasPointerCapture(event.pointerId)) {
 			this.sidebarResizerEl.releasePointerCapture(event.pointerId);
 		}
-		this.sidebarDrag = null;
 		this.rootEl?.toggleClass("is-resizing-sidebar", false);
 		void this.persistSidebarPreferences();
 	}
 
 	private setSidebarWidth(width: number, persist: boolean): void {
-		this.sidebarWidth = clampSidebarWidth(width);
+		this.desktopSidebarStateController.setWidth(width);
 		this.syncRootState();
 		if (persist) {
 			void this.persistSidebarPreferences();
@@ -4424,9 +4021,10 @@ export class KnomoView extends ItemView {
 	}
 
 	private async persistSidebarPreferences(): Promise<void> {
+		const sidebarState = this.desktopSidebarStateController.getSnapshot();
 		await this.settingsService.updateSettings({
-			desktopSidebarWidth: this.sidebarWidth,
-			desktopSidebarCollapsed: this.sidebarCollapsed,
+			desktopSidebarWidth: sidebarState.width,
+			desktopSidebarCollapsed: sidebarState.collapsed,
 		});
 	}
 
@@ -4457,66 +4055,36 @@ export class KnomoView extends ItemView {
 	}
 
 	private invalidateRecordStats(): void {
-		this.recordStatsSourceRevision += 1;
-		this.clearRecordStatsPreparation();
-		if (this.recordStatsRequestPromise !== null) {
-			this.recordStatsRequestInvalidated = true;
-		}
+		this.recordStatsPreparationController.invalidate();
 		this.recordStatsService.invalidate();
 	}
 
 	private scheduleRecordStatsPreparation(): void {
-		if (
-			this.recordStatsService.isPreparedForSource(this.getRecordStatsSourceKey()) ||
-			this.recordStatsRequestPromise !== null ||
-			this.recordStatsPrepareTimerId !== null
-		) {
-			return;
-		}
-		this.recordStatsPrepareTimerId = this.containerEl.win.setTimeout(() => {
-			this.recordStatsPrepareTimerId = null;
-			void this.prepareRecordStats();
-		}, 180);
+		this.recordStatsPreparationController.schedulePreparation({
+			isPreparedForSource: (source) => this.recordStatsService.isPreparedForSource(source),
+			prepare: () => {
+				void this.prepareRecordStats();
+			},
+		});
 	}
 
 	private clearRecordStatsPreparation(): void {
-		if (this.recordStatsPrepareTimerId === null) {
-			return;
-		}
-		this.containerEl.win.clearTimeout(this.recordStatsPrepareTimerId);
-		this.recordStatsPrepareTimerId = null;
+		this.recordStatsPreparationController.clearScheduledPreparation();
 	}
 
 	private prepareRecordStats(): Promise<boolean> {
-		this.clearRecordStatsPreparation();
-		if (this.recordStatsService.isPreparedForSource(this.getRecordStatsSourceKey())) {
-			if (this.activeNav === "record-stats") {
-				this.renderCardFlow();
-			}
-			return Promise.resolve(true);
-		}
-		if (this.recordStatsRequestPromise !== null) {
-			return this.recordStatsRequestPromise;
-		}
-		this.recordStatsRequestInvalidated = false;
-		const request = this.runRecordStatsPreparation();
-		const trackedRequest = request.finally(() => {
-			const shouldRetry = this.recordStatsRequestInvalidated
-				&& !this.recordStatsService.isPreparedForSource(this.getRecordStatsSourceKey());
-			this.recordStatsRequestInvalidated = false;
-			if (this.recordStatsRequestPromise === trackedRequest) {
-				this.recordStatsRequestPromise = null;
-			}
-			if (shouldRetry) {
-				void this.prepareRecordStats();
-			}
+		return this.recordStatsPreparationController.prepare({
+			isPreparedForSource: (source) => this.recordStatsService.isPreparedForSource(source),
+			runPreparation: (source) => this.runRecordStatsPreparation(source),
+			onPreparedForCurrentSource: () => {
+				if (this.activeNav === "record-stats") {
+					this.renderCardFlow();
+				}
+			},
 		});
-		this.recordStatsRequestPromise = trackedRequest;
-		return trackedRequest;
 	}
 
-	private async runRecordStatsPreparation(): Promise<boolean> {
-		const source = this.getRecordStatsSourceKey();
+	private async runRecordStatsPreparation(source: string): Promise<boolean> {
 		const yieldToUi = () => {
 			return new Promise<void>((resolve) => {
 				this.containerEl.win.setTimeout(resolve, 0);
@@ -4533,10 +4101,6 @@ export class KnomoView extends ItemView {
 			this.renderCardFlow();
 		}
 		return prepared;
-	}
-
-	private getRecordStatsSourceKey(): string {
-		return `memo-index:${this.recordStatsSourceRevision}`;
 	}
 
 	private beginScheduledMobileMemoHydration(): void {
@@ -4573,7 +4137,7 @@ export class KnomoView extends ItemView {
 	private handleMobileMemoHydrationCompleted(state: MobileMemoHydrationRenderState): void {
 		const shouldRenderDeferredCardFlow = this.cardFlowDeferredForAllMemos;
 		this.cardFlowDeferredForAllMemos = false;
-		if (this.activeNav === "record-stats" && this.recordStatsRequestPromise === null) {
+		if (this.activeNav === "record-stats" && !this.recordStatsPreparationController.hasActiveRequest()) {
 			void this.prepareRecordStats();
 		} else {
 			this.scheduleRecordStatsPreparation();
@@ -4645,14 +4209,6 @@ export class KnomoView extends ItemView {
 		});
 	}
 
-	private getRecentMemoPeriods(): string[] {
-		const now = new Date();
-		return [
-			formatMonthPeriod(now),
-			formatMonthPeriod(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
-		];
-	}
-
 	private async waitForAllMemosLoading(): Promise<void> {
 		if (this.allMemosLoadingPromise !== null) {
 			await this.allMemosLoadingPromise;
@@ -4673,22 +4229,24 @@ export class KnomoView extends ItemView {
 	}
 
 	private getCardFlowStateKey(): string {
+		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
 		return getCardFlowStateKeyValue({
 			activeNav: this.activeNav,
 			recordStatsSnapshot: this.recordStatsService.getSnapshot(),
-			recordStatsView: this.recordStatsView,
-			recordStatsSelectedDate: this.recordStatsSelectedDate,
+			recordStatsView: recordStatsState.view,
+			recordStatsSelectedDate: recordStatsState.selectedDate,
 			today: new Date(),
 			presentation: this.getCurrentCardFlowPresentation(),
 		});
 	}
 
 	private getVisibleCardFlowStateKey(renderedCardCount: number): string {
+		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
 		return getVisibleCardFlowStateKeyValue({
 			activeNav: this.activeNav,
 			recordStatsSnapshot: this.recordStatsService.getSnapshot(),
-			recordStatsView: this.recordStatsView,
-			recordStatsSelectedDate: this.recordStatsSelectedDate,
+			recordStatsView: recordStatsState.view,
+			recordStatsSelectedDate: recordStatsState.selectedDate,
 			today: new Date(),
 			presentation: this.getCurrentCardFlowPresentation(),
 			renderedCardCount,
@@ -4778,51 +4336,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private startDateChangeWatcher(): void {
-		if (this.dateChangeTimeoutId !== null) {
-			return;
-		}
-		const win = this.containerEl.win;
-		const now = new Date();
-		const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
-		const delay = Math.max(1000, nextDay.getTime() - now.getTime());
-		this.dateChangeTimeoutId = win.setTimeout(() => {
-			this.dateChangeTimeoutId = null;
+		this.dateChangeWatcher.start(() => {
 			this.filteredMemosCache = null;
 			this.renderUiState();
 			this.startDateChangeWatcher();
 			if (this.activeNav === "review") {
 				void this.ensureAllMemosLoaded();
 			}
-		}, delay);
+		});
 	}
 
 	private stopDateChangeWatcher(): void {
-		if (this.dateChangeTimeoutId === null) {
-			return;
-		}
-		this.containerEl.win.clearTimeout(this.dateChangeTimeoutId);
-		this.dateChangeTimeoutId = null;
-	}
-
-	private prepareCreateMemoInput(input: string): { content: string; sourceMemoId: string | null; sourceReferenceText: string | null; quoteTrailer: string | null } {
-		if (this.quoteSourceMemoId === null || this.quoteReferenceText === null || this.quoteMarkdownText === null) {
-			return {
-				content: input,
-				sourceMemoId: null,
-				sourceReferenceText: null,
-				quoteTrailer: null,
-			};
-		}
-		return {
-			content: buildQuoteCreatedMemoContent(
-				`${this.quoteMarkdownText}\n\n${input}`,
-				this.quoteMarkdownText,
-				this.quoteReferenceText,
-			),
-			sourceMemoId: this.quoteSourceMemoId,
-			sourceReferenceText: this.quoteReferenceText,
-			quoteTrailer: null,
-		};
+		this.dateChangeWatcher.stop();
 	}
 
 	private handleTaskCheckboxClick(event: MouseEvent): void {
@@ -4860,17 +4385,16 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const latestContent = this.memoTaskUpdateCoordinator.getLatestContent(memo);
-		const marker: WritableMarkdownTaskMarker = input.checked ? "x" : " ";
-		const nextContent = replaceMarkdownTaskMarkerByIndex(latestContent, taskIndex, marker);
-		if (nextContent === null) {
+		const plan = getMemoTaskCheckboxChangePlan(latestContent, taskIndex, input.checked);
+		if (plan.type === "sync-dom") {
 			this.memoMarkdownRenderer.syncTaskCheckboxDom(input, memo);
 			return;
 		}
-		this.memoMarkdownRenderer.applyTaskCheckboxDomState(input, marker);
-		if (nextContent === latestContent) {
+		this.memoMarkdownRenderer.applyTaskCheckboxDomState(input, plan.marker);
+		if (!plan.shouldEnqueue) {
 			return;
 		}
-		this.memoTaskUpdateCoordinator.enqueue(memo, nextContent);
+		this.memoTaskUpdateCoordinator.enqueue(memo, plan.nextContent);
 	}
 
 	private findMemoForTaskCheckbox(input: HTMLInputElement): MemoRecord | null {
@@ -4907,22 +4431,17 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleMarkdownInternalLinkHover(event: MouseEvent): void {
-		const linkEl = this.getMarkdownInternalLink(event.target);
-		if (linkEl === null) {
-			return;
-		}
-		const linktext = linkEl.getAttribute("data-href") ?? linkEl.getAttribute("href");
-		const sourcePath = linkEl.getAttr("data-knomo-source-path");
-		if (!linktext || sourcePath === null) {
+		const linkInfo = getMarkdownInternalLinkInfo(event.target);
+		if (linkInfo === null) {
 			return;
 		}
 		this.app.workspace.trigger("hover-link", {
 			event,
 			source: "preview",
 			hoverParent: this,
-			targetEl: linkEl,
-			linktext,
-			sourcePath,
+			targetEl: linkInfo.element,
+			linktext: linkInfo.linktext,
+			sourcePath: linkInfo.sourcePath,
 		});
 	}
 
@@ -4933,74 +4452,12 @@ export class KnomoView extends ItemView {
 		if (this.handleOpenPopupOutsideEvent(event, event.target, false)) {
 			return;
 		}
-		const linkEl = this.getMarkdownInternalLink(event.target);
-		if (linkEl === null) {
-			return;
-		}
-		const linktext = linkEl.getAttribute("data-href") ?? linkEl.getAttribute("href");
-		const sourcePath = linkEl.getAttr("data-knomo-source-path");
-		if (!linktext || sourcePath === null) {
+		const linkInfo = getMarkdownInternalLinkInfo(event.target);
+		if (linkInfo === null) {
 			return;
 		}
 		event.preventDefault();
-		await this.app.workspace.openLinkText(linktext, sourcePath, Keymap.isModEvent(event));
-	}
-
-	private getMarkdownInternalLink(target: EventTarget | null): HTMLAnchorElement | null {
-		const targetNode = target as Node | null;
-		if (targetNode === null || !targetNode.instanceOf(Element)) {
-			return null;
-		}
-		const linkEl = targetNode.closest("a.internal-link");
-		return linkEl?.instanceOf(HTMLAnchorElement) ? linkEl : null;
-	}
-
-	private openNativeImagePicker(): void {
-		const shouldRestoreMobileFocus = this.beginMobileImagePickerFocusGuard();
-		const input = this.containerEl.createEl("input", {
-			cls: "knomo-hidden-file-input",
-			attr: {
-				type: "file",
-				accept: "image/*",
-				multiple: "true",
-			},
-		});
-		const win = this.containerEl.win;
-		let handledChange = false;
-		let cleanedUp = false;
-		const cleanup = () => {
-			if (cleanedUp) {
-				return;
-			}
-			cleanedUp = true;
-			input.detach();
-		};
-		const finishWithoutFiles = () => {
-			handledChange = true;
-			cleanup();
-			this.finishMobileImagePickerFocusGuard(shouldRestoreMobileFocus);
-		};
-		this.registerDomEvent(input, "change", () => {
-			const files = input.files;
-			if (files === null || files.length === 0) {
-				finishWithoutFiles();
-				return;
-			}
-			handledChange = true;
-			this.finishMobileImagePickerFocusGuard(false);
-			void this.insertImageFiles(files).finally(cleanup);
-		});
-		this.registerDomEvent(input, "cancel", () => {
-			finishWithoutFiles();
-		});
-		this.registerDomEvent(win, "focus", () => {
-			win.setTimeout(() => {
-				if (!handledChange) {
-					finishWithoutFiles();
-				}
-			}, 1000);
-		}, { once: true });
-		input.click();
+		await this.app.workspace.openLinkText(linkInfo.linktext, linkInfo.sourcePath, Keymap.isModEvent(event));
 	}
 
 	private async insertImageFiles(files: FileList | null): Promise<void> {
@@ -5022,13 +4479,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private getAttachmentSourcePath(): string | null {
-		const todayDailyNotePath = this.syncOrchestrator.getTodayDailyNotePath();
-		if (todayDailyNotePath !== null) {
-			return todayDailyNotePath;
-		}
-		const activeFile = this.app.workspace.getActiveFile();
-		if (activeFile !== null && activeFile.extension === "md") {
-			return activeFile.path;
+		const sourcePath = this.getComposerSourcePath();
+		if (sourcePath !== null) {
+			return sourcePath;
 		}
 		const message = t("composer.enableDailyOrOpenMarkdown");
 		this.updateStatus(message, true);
@@ -5037,15 +4490,14 @@ export class KnomoView extends ItemView {
 	}
 
 	private getWikiLinkSourcePath(): string {
-		const todayDailyNotePath = this.syncOrchestrator.getTodayDailyNotePath();
-		if (todayDailyNotePath !== null) {
-			return todayDailyNotePath;
-		}
-		const activeFile = this.app.workspace.getActiveFile();
-		if (activeFile !== null && activeFile.extension === "md") {
-			return activeFile.path;
-		}
-		return "";
+		return this.getComposerSourcePath() ?? "";
+	}
+
+	private getComposerSourcePath(): string | null {
+		return getPreferredComposerSourcePath({
+			todayDailyNotePath: this.syncOrchestrator.getTodayDailyNotePath(),
+			activeFile: this.app.workspace.getActiveFile(),
+		});
 	}
 
 	private async copyText(text: string): Promise<void> {
@@ -5064,51 +4516,4 @@ function isListEnterInputEvent(event: InputEvent): boolean {
 
 function getMarkdownRenderPriority(renderIndex: number): MarkdownRenderPriority {
 	return renderIndex < INITIAL_VISIBLE_RENDER_COUNT ? "high" : "normal";
-}
-
-function parseImageIndex(value: string | null): number {
-	if (value === null) {
-		return 0;
-	}
-	const index = Number(value);
-	return Number.isInteger(index) && index >= 0 ? index : 0;
-}
-
-function toMarkdownQuote(content: string): string {
-	return content
-		.split("\n")
-		.map((line) => `> ${line}`)
-		.join("\n");
-}
-
-function shouldUseMobileCompact(mode: MobileCompactMode): boolean {
-	return mode === "auto" || mode === "on";
-}
-
-function formatMemoDisplayTime(value: string): string {
-	return value.replace("T", " ").replace(/\.\d{3}[+-]\d{2}:\d{2}$/, "");
-}
-
-function formatOptionalMemoTime(value: string | undefined): string {
-	return value === undefined || value.trim().length === 0 ? t("trash.unknownTime") : formatMemoDisplayTime(value);
-}
-
-function formatDeleteSource(value: string): string {
-	if (value === "knomo_ui") {
-		return "Knomo";
-	}
-	if (value === "file_watch") {
-		return t("deleteSource.fileWatch");
-	}
-	if (value === "manual_scan") {
-		return t("deleteSource.manualScan");
-	}
-	if (value === "startup_scan") {
-		return t("deleteSource.startupScan");
-	}
-	return value;
-}
-
-function clamp(value: number, min: number, max: number): number {
-	return Math.min(max, Math.max(min, value));
 }

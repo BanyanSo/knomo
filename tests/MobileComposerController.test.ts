@@ -358,7 +358,6 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile") {
 	const composerBar = new FakeElement("div");
 	composerBar.offsetHeight = 52;
 	const referencePreview = new FakeElement("div");
-	referencePreview.style.display = "none";
 	home.appendChild(composer);
 	let composerOpen = false;
 	let syncRootCalls = 0;
@@ -567,6 +566,13 @@ class FakeElement {
 
 	removeAttribute(key: string): void {
 		this.attrs.delete(key);
+	}
+
+	setCssProps(props: Record<string, string>): void {
+		const style = this.style;
+		for (const [key, value] of Object.entries(props)) {
+			style.setProperty(key, value);
+		}
 	}
 
 	querySelectorAll(selector: string): FakeElement[] {

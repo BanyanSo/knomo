@@ -10,6 +10,7 @@ import { hasMemoReference, withMemoIdAlias } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
 import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 import type { TagDisplaySource } from "../utils/tags";
+import { formatMemoDisplayTime } from "./MemoDisplayFormatters";
 
 export type ScopeFilter =
 	| "all"
@@ -45,6 +46,20 @@ export type RegularFilterCondition =
 	| { type: "date"; text: string; filter: SearchDateFilter }
 	| { type: "record-stats"; text: string }
 	| { type: "scope"; text: string; filter: SummaryScopeFilter };
+
+export interface RegularFilterState {
+	activeTag: string | null;
+	activeTagKey: string | null;
+	searchQuery: string;
+	searchDateFilter: SearchDateFilter | null;
+	recordStatsSearchFilter: RecordStatsSearchFilter | null;
+	scopeFilter: ScopeFilter;
+}
+
+export interface RegularFilterCopy {
+	summary: string;
+	emptyTitle: string;
+}
 
 export interface DailyDateConfig {
 	enabled: boolean;
@@ -173,6 +188,55 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 		return t("recordStats.filter.empty", { label: condition.text });
 	}
 	return getScopeEmptyTitle(condition.filter);
+}
+
+export function getRegularFilterCopy(state: RegularFilterState, count: number): RegularFilterCopy | null {
+	const conditions = getRegularFilterConditions(state);
+	if (conditions.length === 0) {
+		return null;
+	}
+	const summary = formatRegularFilterSummary(conditions, count);
+	return {
+		summary,
+		emptyTitle: formatRegularFilterEmptyTitle(conditions, summary),
+	};
+}
+
+export function getRegularFilterConditions(state: RegularFilterState): RegularFilterCondition[] {
+	const conditions: RegularFilterCondition[] = [];
+	const tag = state.activeTag?.trim() || state.activeTagKey || "";
+	if (state.activeTagKey !== null && tag.length > 0) {
+		conditions.push({ type: "tag", text: formatTagFilterText(tag) });
+	}
+	if (state.recordStatsSearchFilter !== null) {
+		conditions.push({
+			type: "record-stats",
+			text: getRecordStatsSearchFilterLabel(state.recordStatsSearchFilter),
+		});
+	}
+	const query = state.searchQuery.trim();
+	if (query.length > 0) {
+		conditions.push({
+			type: "search",
+			text: t("filterSummary.searchCondition", { query }),
+			query,
+		});
+	}
+	if (state.searchDateFilter !== null) {
+		conditions.push({
+			type: "date",
+			text: getSearchDateLabel(state.searchDateFilter),
+			filter: state.searchDateFilter,
+		});
+	}
+	if (isSummaryScopeFilter(state.scopeFilter)) {
+		conditions.push({
+			type: "scope",
+			text: getScopeLabel(state.scopeFilter),
+			filter: state.scopeFilter,
+		});
+	}
+	return conditions;
 }
 
 export function formatMobileSearchSummary(
@@ -525,10 +589,6 @@ function getScopeEmptyTitle(filter: SummaryScopeFilter): string {
 	if (filter === "with-link") return t("filterEmpty.scope.withLink");
 	if (filter === "with-image") return t("filterEmpty.scope.withImage");
 	return t("filterEmpty.scope.anniversary");
-}
-
-function formatMemoDisplayTime(value: string): string {
-	return value.replace("T", " ").replace(/\.\d{3}[+-]\d{2}:\d{2}$/, "");
 }
 
 function formatFilterDates(dates: string[]): string {

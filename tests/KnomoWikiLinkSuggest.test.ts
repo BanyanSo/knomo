@@ -542,11 +542,6 @@ class FakeDocument {
 		this.body = new FakeElement("body", this);
 	}
 
-	createEvent(_type: string): Event {
-		return {
-			initEvent() {},
-		} as unknown as Event;
-	}
 }
 
 class FakeWindow {

@@ -613,6 +613,20 @@ Yes. Knomo is designed to keep content readable in Markdown. If you edit files m
 
 ---
 
+## Development Verification
+
+Before handing off a change, run:
+
+```bash
+npm run verify
+```
+
+This runs type checking, tests, the production build, i18n checks, diff whitespace checks, Obsidian forbidden source pattern scans, and trailing whitespace scans. For mobile-facing changes, also complete the manual scenarios in [docs/mobile-qa-checklist.md](./docs/mobile-qa-checklist.md).
+
+For focused test loops, pass Node test runner arguments through `npm test`, for example `npm test -- --test-name-pattern=WikiLink`. Run `npm run verify` before handing off the change.
+
+---
+
 ## Feedback and Contribution
 
 Feedback is welcome, especially:

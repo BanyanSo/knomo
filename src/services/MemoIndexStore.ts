@@ -2,7 +2,7 @@ import { normalizePath, TFile, TFolder, Vault } from "obsidian";
 import type { App } from "obsidian";
 
 import type { MemoIndex } from "../types";
-import type { MemoRecord } from "../types/memo";
+import type { DailyRef, MemoRecord, MemoStatus, MemoSyncStatus, MonthlyRef } from "../types/memo";
 import { KnomoError } from "../types/serviceError";
 import { formatMonthPeriod } from "../utils/date";
 import { isRecord } from "../utils/object";
@@ -221,21 +221,25 @@ export class MemoIndexStore {
 		if (memo === null) {
 			throw new Error(`Memo not found: ${memoId}`);
 		}
+		await this.purgeDeletedMemoRecord(monthlyMemoFolder, memo);
+	}
+
+	async purgeDeletedMemoRecord(monthlyMemoFolder: string, memo: MemoRecord): Promise<void> {
 		if (memo.status !== "deleted") {
 			throw new KnomoError("trash_only_purge");
 		}
 
 		const period = formatMonthPeriod(new Date(memo.createdAt));
 		await this.mergePeriod(monthlyMemoFolder, period, (index) => {
-			const currentMemo = index.memos[memoId];
+			const currentMemo = index.memos[memo.id];
 			if (currentMemo === undefined) {
-				throw new Error(`Memo not found: ${memoId}`);
+				throw new Error(`Memo not found: ${memo.id}`);
 			}
 			if (currentMemo.status !== "deleted") {
 				throw new KnomoError("trash_only_purge");
 			}
 			const nextMemos = { ...index.memos };
-			delete nextMemos[memoId];
+			delete nextMemos[memo.id];
 			return {
 				...index,
 				updatedAt: new Date().toISOString(),
@@ -414,11 +418,14 @@ function parseIndex(data: string, period: string): MemoIndex {
 	if (data.trim().length === 0) {
 		return createEmptyIndex(period);
 	}
-	const parsed = JSON.parse(data) as unknown;
-	if (!isMemoIndex(parsed)) {
-		throw new Error(`Invalid memo-index schema for ${period}.`);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(data) as unknown;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "Invalid JSON";
+		throw new Error(`Invalid memo-index JSON for ${period}: ${message}`);
 	}
-	return parsed;
+	return parseMemoIndex(parsed, period);
 }
 
 function createEmptyIndex(period: string): MemoIndex {
@@ -430,9 +437,191 @@ function createEmptyIndex(period: string): MemoIndex {
 	};
 }
 
-function isMemoIndex(value: unknown): value is MemoIndex {
+function parseMemoIndex(value: unknown, period: string): MemoIndex {
 	if (!isRecord(value)) {
-		return false;
+		throw new Error(`Invalid memo-index schema for ${period}.`);
 	}
-	return value.schemaVersion === 2 && typeof value.period === "string" && isRecord(value.memos);
+	if (value.schemaVersion !== 2 || typeof value.period !== "string" || !isRecord(value.memos)) {
+		throw new Error(`Invalid memo-index schema for ${period}.`);
+	}
+
+	const memos: Record<string, MemoRecord> = {};
+	for (const [memoId, memo] of Object.entries(value.memos)) {
+		memos[memoId] = parseMemoRecord(memo, period, memoId);
+	}
+	return {
+		schemaVersion: 2,
+		period: value.period,
+		updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : "",
+		memos,
+	};
+}
+
+function parseMemoRecord(value: unknown, period: string, memoId: string): MemoRecord {
+	if (!isRecord(value)) {
+		throw invalidMemoRecordError(period, memoId, "record");
+	}
+	const id = requireString(value, period, memoId, "id");
+	if (id !== memoId) {
+		throw invalidMemoRecordError(period, memoId, "id");
+	}
+	const dailyRef = parseDailyRef(value.dailyRef, period, memoId);
+	const monthlyRef = parseMonthlyRef(value.monthlyRef, period, memoId);
+	return {
+		id,
+		createdAt: requireString(value, period, memoId, "createdAt"),
+		updatedAt: requireString(value, period, memoId, "updatedAt"),
+		contentSnapshot: requireString(value, period, memoId, "contentSnapshot"),
+		contentHash: requireString(value, period, memoId, "contentHash"),
+		status: requireMemoStatus(value.status, period, memoId),
+		syncStatus: requireMemoSyncStatus(value.syncStatus, period, memoId),
+		source: requireString(value, period, memoId, "source") as MemoRecord["source"],
+		version: requireNumber(value, period, memoId, "version"),
+		tags: requireStringArray(value, period, memoId, "tags"),
+		links: requireArray(value, period, memoId, "links") as MemoRecord["links"],
+		images: requireArray(value, period, memoId, "images") as MemoRecord["images"],
+		references: requireArray(value, period, memoId, "references") as MemoRecord["references"],
+		sourceMemoId: requireNullableString(value, period, memoId, "sourceMemoId"),
+		issue: value.issue === null || isRecord(value.issue)
+			? value.issue as MemoRecord["issue"]
+			: throwInvalidMemoRecord(period, memoId, "issue"),
+		lastMarkdownSyncAt: requireNullableString(value, period, memoId, "lastMarkdownSyncAt"),
+		lastMarkdownSyncSource: requireNullableString(value, period, memoId, "lastMarkdownSyncSource") as MemoRecord["lastMarkdownSyncSource"],
+		dailyRef,
+		monthlyRef,
+		...optionalStringProperty(value, period, memoId, "deletedAt"),
+		...optionalStringProperty(value, period, memoId, "deleteSource"),
+		...optionalStringProperty(value, period, memoId, "deletedDailyBlock"),
+		...optionalStringProperty(value, period, memoId, "deletedMonthlyBlock"),
+	};
+}
+
+function parseDailyRef(value: unknown, period: string, memoId: string): DailyRef {
+	if (!isRecord(value)) {
+		throw invalidMemoRecordError(period, memoId, "dailyRef");
+	}
+	const sectionType = value.sectionType;
+	if (sectionType !== undefined && sectionType !== "heading" && sectionType !== "root") {
+		throw invalidMemoRecordError(period, memoId, "dailyRef.sectionType");
+	}
+	return {
+		path: requireString(value, period, memoId, "dailyRef.path", "path"),
+		heading: requireNullableString(value, period, memoId, "dailyRef.heading", "heading"),
+		...(sectionType === undefined ? {} : { sectionType }),
+		lastKnownBlock: requireString(value, period, memoId, "dailyRef.lastKnownBlock", "lastKnownBlock"),
+		lastKnownHash: requireString(value, period, memoId, "dailyRef.lastKnownHash", "lastKnownHash"),
+		lineNumberHint: requireNullableNumber(value, period, memoId, "dailyRef.lineNumberHint", "lineNumberHint"),
+		lastSyncedAt: requireNullableString(value, period, memoId, "dailyRef.lastSyncedAt", "lastSyncedAt"),
+	};
+}
+
+function parseMonthlyRef(value: unknown, period: string, memoId: string): MonthlyRef {
+	if (!isRecord(value)) {
+		throw invalidMemoRecordError(period, memoId, "monthlyRef");
+	}
+	return {
+		path: requireString(value, period, memoId, "monthlyRef.path", "path"),
+		dateHeading: requireString(value, period, memoId, "monthlyRef.dateHeading", "dateHeading"),
+		lastKnownBlock: requireString(value, period, memoId, "monthlyRef.lastKnownBlock", "lastKnownBlock"),
+		lastKnownHash: requireString(value, period, memoId, "monthlyRef.lastKnownHash", "lastKnownHash"),
+		lineNumberHint: requireNullableNumber(value, period, memoId, "monthlyRef.lineNumberHint", "lineNumberHint"),
+		lastSyncedAt: requireNullableString(value, period, memoId, "monthlyRef.lastSyncedAt", "lastSyncedAt"),
+	};
+}
+
+function requireString(value: Record<string, unknown>, period: string, memoId: string, field: string, fieldKey = field): string {
+	const fieldValue = readField(value, fieldKey);
+	if (typeof fieldValue !== "string") {
+		throw invalidMemoRecordError(period, memoId, field);
+	}
+	return fieldValue;
+}
+
+function requireNullableString(value: Record<string, unknown>, period: string, memoId: string, field: string, fieldKey = field): string | null {
+	const fieldValue = readField(value, fieldKey);
+	if (typeof fieldValue !== "string" && fieldValue !== null) {
+		throw invalidMemoRecordError(period, memoId, field);
+	}
+	return fieldValue;
+}
+
+function requireNumber(value: Record<string, unknown>, period: string, memoId: string, field: string): number {
+	const fieldValue = readField(value, field);
+	if (typeof fieldValue !== "number" || !Number.isFinite(fieldValue)) {
+		throw invalidMemoRecordError(period, memoId, field);
+	}
+	return fieldValue;
+}
+
+function requireNullableNumber(value: Record<string, unknown>, period: string, memoId: string, field: string, fieldKey = field): number | null {
+	const fieldValue = readField(value, fieldKey);
+	if ((typeof fieldValue !== "number" || !Number.isFinite(fieldValue)) && fieldValue !== null) {
+		throw invalidMemoRecordError(period, memoId, field);
+	}
+	return fieldValue;
+}
+
+function requireArray(value: Record<string, unknown>, period: string, memoId: string, field: string): unknown[] {
+	const fieldValue = readField(value, field);
+	if (!Array.isArray(fieldValue)) {
+		throw invalidMemoRecordError(period, memoId, field);
+	}
+	return fieldValue;
+}
+
+function requireStringArray(value: Record<string, unknown>, period: string, memoId: string, field: string): string[] {
+	const fieldValue = requireArray(value, period, memoId, field);
+	if (!fieldValue.every((item) => typeof item === "string")) {
+		throw invalidMemoRecordError(period, memoId, field);
+	}
+	return fieldValue;
+}
+
+function requireMemoStatus(value: unknown, period: string, memoId: string): MemoStatus {
+	if (value !== "active" && value !== "deleted" && value !== "error") {
+		throw invalidMemoRecordError(period, memoId, "status");
+	}
+	return value;
+}
+
+function requireMemoSyncStatus(value: unknown, period: string, memoId: string): MemoSyncStatus {
+	if (
+		value !== "synced" &&
+		value !== "pending_monthly" &&
+		value !== "monthly_failed" &&
+		value !== "monthly_delete_failed"
+	) {
+		throw invalidMemoRecordError(period, memoId, "syncStatus");
+	}
+	return value;
+}
+
+function optionalStringProperty(
+	value: Record<string, unknown>,
+	period: string,
+	memoId: string,
+	field: "deletedAt" | "deleteSource" | "deletedDailyBlock" | "deletedMonthlyBlock",
+): Partial<Pick<MemoRecord, typeof field>> {
+	const fieldValue = value[field];
+	if (fieldValue === undefined) {
+		return {};
+	}
+	if (typeof fieldValue !== "string") {
+		throw invalidMemoRecordError(period, memoId, field);
+	}
+	return { [field]: fieldValue };
+}
+
+function readField(value: Record<string, unknown>, field: string): unknown {
+	return field.split(".").reduce<unknown>((current, key) => (
+		isRecord(current) ? current[key] : undefined
+	), value);
+}
+
+function throwInvalidMemoRecord(period: string, memoId: string, field: string): never {
+	throw invalidMemoRecordError(period, memoId, field);
+}
+
+function invalidMemoRecordError(period: string, memoId: string, field: string): Error {
+	return new Error(`Invalid memo-index record for ${period}: memoId=${memoId}, field=${field}.`);
 }

@@ -613,6 +613,20 @@ Knomo 更聚焦：
 
 ---
 
+## 开发验证
+
+交付改动前，请运行：
+
+```bash
+npm run verify
+```
+
+该命令会运行类型检查、测试、生产构建、i18n 检查、diff 空白检查、Obsidian 禁用源码模式扫描和尾随空白扫描。涉及移动端行为的改动，还需要完成 [docs/mobile-qa-checklist.md](./docs/mobile-qa-checklist.md) 中的手测场景。
+
+局部开发时，可以通过 `npm test` 透传 Node test runner 参数，例如 `npm test -- --test-name-pattern=WikiLink`。交付改动前仍应运行 `npm run verify`。
+
+---
+
 ## 反馈与贡献
 
 欢迎反馈，尤其是：

@@ -13,6 +13,7 @@ test("tracks deleted memo ids once and refreshes the trash snapshot", async () =
 		getDeletedMemoSummary: async () => ({ count: deletedMemos.length, ids: deletedMemos.map((memo) => memo.id) }),
 		listDeletedMemos: async () => deletedMemos,
 		restoreMemo: async () => deletedMemos[0],
+		handleRestoredMemo: () => {},
 		purgeDeletedMemo: async () => {},
 		isTrashActive: () => false,
 		confirmPurge: () => true,
@@ -49,6 +50,7 @@ test("loads trash once while busy and preserves loading render transitions", asy
 			return listPromise;
 		},
 		restoreMemo: async () => makeMemo("memo-1"),
+		handleRestoredMemo: () => {},
 		purgeDeletedMemo: async () => {},
 		isTrashActive: () => true,
 		confirmPurge: () => true,
@@ -79,6 +81,8 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 	const renderTargets: TrashMemoRenderTarget[] = [];
 	const notices: string[] = [];
 	let restoreCalls = 0;
+	let restoredMemo: MemoRecord | null = null;
+	const handledRestoredMemos: Array<{ deletedMemo: MemoRecord; restoredMemo: MemoRecord }> = [];
 	let forceRefreshCalls = 0;
 	let resolveRestore!: () => void;
 	const restorePromise = new Promise<void>((resolve) => {
@@ -87,10 +91,14 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 	const controller = new TrashMemoController({
 		getDeletedMemoSummary: async () => ({ count: 2, ids: [memo.id, "memo-2"] }),
 		listDeletedMemos: async () => [memo, makeMemo("memo-2")],
-		restoreMemo: async () => {
+		restoreMemo: async (memoToRestore) => {
 			restoreCalls += 1;
+			restoredMemo = memoToRestore;
 			await restorePromise;
-			return memo;
+			return { ...memo, status: "active" };
+		},
+		handleRestoredMemo: (deletedMemo, memoAfterRestore) => {
+			handledRestoredMemos.push({ deletedMemo, restoredMemo: memoAfterRestore });
 		},
 		purgeDeletedMemo: async () => {},
 		isTrashActive: () => false,
@@ -108,6 +116,7 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 	const secondAction = controller.handleTrashAction("restore", memo);
 	assert.equal(controller.getSnapshot().trashBusyMemoActions.get(memo.id), "restore");
 	assert.equal(restoreCalls, 1);
+	assert.equal(restoredMemo, memo);
 	assert.deepEqual(renderTargets, ["card-flow"]);
 
 	resolveRestore();
@@ -117,6 +126,9 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 	assert.equal(snapshot.trashBusyMemoActions.has(memo.id), false);
 	assert.deepEqual(snapshot.trashMemos?.map((item) => item.id), ["memo-2"]);
 	assert.equal(snapshot.trashCount, 1);
+	assert.equal(handledRestoredMemos.length, 1);
+	assert.equal(handledRestoredMemos[0].deletedMemo, memo);
+	assert.equal(handledRestoredMemos[0].restoredMemo.status, "active");
 	assert.equal(forceRefreshCalls, 1);
 	assert.deepEqual(notices, ["Restored"]);
 	assert.deepEqual(renderTargets, ["card-flow", "card-flow"]);
@@ -128,13 +140,16 @@ test("purge requires confirmation and preserves force refresh behavior", async (
 	const renderTargets: TrashMemoRenderTarget[] = [];
 	let confirmed = false;
 	let purgeCalls = 0;
+	let purgedMemo: MemoRecord | null = null;
 	let forceRefreshCalls = 0;
 	const controller = new TrashMemoController({
 		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
 		listDeletedMemos: async () => [memo],
 		restoreMemo: async () => memo,
-		purgeDeletedMemo: async () => {
+		handleRestoredMemo: () => {},
+		purgeDeletedMemo: async (memoToPurge) => {
 			purgeCalls += 1;
+			purgedMemo = memoToPurge;
 		},
 		isTrashActive: () => false,
 		confirmPurge: () => confirmed,
@@ -155,6 +170,7 @@ test("purge requires confirmation and preserves force refresh behavior", async (
 	confirmed = true;
 	await controller.handleTrashAction("purge", memo);
 	assert.equal(purgeCalls, 1);
+	assert.equal(purgedMemo, memo);
 	assert.equal(forceRefreshCalls, 1);
 	assert.equal(controller.getSnapshot().trashCount, 0);
 	assert.deepEqual(controller.getSnapshot().trashMemos, []);

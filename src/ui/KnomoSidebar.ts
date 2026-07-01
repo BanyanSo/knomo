@@ -98,14 +98,6 @@ export function clampSidebarWidth(width: number): number {
 	return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
 }
 
-export function createSidebarDragState(event: PointerEvent, startWidth: number): SidebarDragState {
-	return {
-		pointerId: event.pointerId,
-		startX: event.clientX,
-		startWidth,
-	};
-}
-
 export function getSidebarDragWidth(drag: SidebarDragState, clientX: number): number {
 	return drag.startWidth + clientX - drag.startX;
 }

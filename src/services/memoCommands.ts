@@ -270,7 +270,11 @@ export class MemoCommandService {
 
 	async deleteMemo(memo: MemoRecord): Promise<MemoRecord> {
 		const settings = this.getSettings();
-		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memo.id);
+		const currentMemo = await this.memoIndexStore.findMemoByIdInPeriod(
+			settings.monthlyMemoFolder,
+			formatMonthPeriod(new Date(memo.createdAt)),
+			memo.id,
+		);
 		if (currentMemo === null) {
 			throw new KnomoError("memo_not_found_or_cleaned");
 		}

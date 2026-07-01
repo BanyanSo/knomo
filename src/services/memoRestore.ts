@@ -61,6 +61,23 @@ export class MemoRestoreService {
 		if (currentMemo === null) {
 			throw new KnomoError("memo_not_found_or_cleaned");
 		}
+		return this.restoreCurrentMemo(settings, currentMemo);
+	}
+
+	async restoreMemoRecord(memo: MemoRecord): Promise<MemoRecord> {
+		const settings = this.getSettings();
+		const currentMemo = await this.memoIndexStore.findMemoByIdInPeriod(
+			settings.monthlyMemoFolder,
+			formatMonthPeriod(new Date(memo.createdAt)),
+			memo.id,
+		);
+		if (currentMemo === null) {
+			throw new KnomoError("memo_not_found_or_cleaned");
+		}
+		return this.restoreCurrentMemo(settings, currentMemo);
+	}
+
+	private async restoreCurrentMemo(settings: KnomoSettings, currentMemo: MemoRecord): Promise<MemoRecord> {
 		if (currentMemo.status !== "deleted") {
 			return currentMemo;
 		}
@@ -128,11 +145,28 @@ export class MemoRestoreService {
 		if (currentMemo === null) {
 			throw new KnomoError("memo_not_found_or_cleaned");
 		}
+		await this.purgeCurrentDeletedMemo(settings, currentMemo);
+	}
+
+	async purgeDeletedMemoRecord(memo: MemoRecord): Promise<void> {
+		const settings = this.getSettings();
+		const currentMemo = await this.memoIndexStore.findMemoByIdInPeriod(
+			settings.monthlyMemoFolder,
+			formatMonthPeriod(new Date(memo.createdAt)),
+			memo.id,
+		);
+		if (currentMemo === null) {
+			throw new KnomoError("memo_not_found_or_cleaned");
+		}
+		await this.purgeCurrentDeletedMemo(settings, currentMemo);
+	}
+
+	private async purgeCurrentDeletedMemo(settings: KnomoSettings, currentMemo: MemoRecord): Promise<void> {
 		if (currentMemo.status !== "deleted") {
 			throw new KnomoError("trash_only_purge");
 		}
 		const opId = createOperationId(new Date());
-		await this.memoIndexStore.purgeDeletedMemo(settings.monthlyMemoFolder, memoId);
+		await this.memoIndexStore.purgeDeletedMemoRecord(settings.monthlyMemoFolder, currentMemo);
 		markIndexSelfWrite(this.selfWriteTracker, opId, settings, new Date(currentMemo.createdAt));
 	}
 

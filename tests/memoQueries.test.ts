@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MemoQueryService } from "../src/services/memoQueries";
+import {
+	getRecentMemoPeriods,
+	MemoQueryService,
+} from "../src/services/memoQueries";
 import type { MemoRecord } from "../src/types/memo";
 import type { KnomoSettings } from "../src/types/settings";
-import { formatMonthPeriod } from "../src/utils/date";
 
 test("lists active memos by created date descending", async () => {
 	const activeOlder = makeMemo("active-older", "2026-05-18T08:00:00.000+08:00");
@@ -73,11 +75,7 @@ test("lists issue memos by updated date descending", async () => {
 
 test("loads current and previous periods for recent memos", async () => {
 	const requestedPeriods: string[][] = [];
-	const now = new Date();
-	const expectedPeriods = [
-		formatMonthPeriod(now),
-		formatMonthPeriod(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
-	];
+	const expectedPeriods = getRecentMemoPeriods();
 	const service = createService([
 		makeMemo("recent", "2026-05-20T08:00:00.000+08:00"),
 		makeMemo("deleted", "2026-05-21T08:00:00.000+08:00", { status: "deleted" }),
@@ -87,6 +85,10 @@ test("loads current and previous periods for recent memos", async () => {
 
 	assert.deepEqual(requestedPeriods, [expectedPeriods]);
 	assert.deepEqual(memos.map((memo) => memo.id), ["recent"]);
+});
+
+test("builds recent memo periods across year boundaries", () => {
+	assert.deepEqual(getRecentMemoPeriods(new Date(2026, 0, 15)), ["2026-01", "2025-12"]);
 });
 
 test("lists memo index periods without loading memo files", () => {

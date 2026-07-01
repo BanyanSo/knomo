@@ -239,6 +239,7 @@ export class KnomoView extends ItemView {
 	private quoteMarkdownText: string | null = null;
 	private draftContent = "";
 	private isSaving = false;
+	private isManualRefreshing = false;
 	private currentLayout: LayoutMode = "desktop-wide";
 	private layoutObserver: ResizeObserver | null = null;
 	private filteredMemosCache: FilteredMemosCache | null = null;
@@ -1445,6 +1446,7 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-record-stats", this.activeNav === "record-stats");
 		root.setCssProps({ "--knomo-sidebar-width": `${sidebarState.width}px` });
 		this.syncTooltipState(root);
+		this.syncManualRefreshButtonState();
 		this.syncMobileHeaderActions();
 		this.syncMobileHeaderTitle();
 		this.syncTitlePopoverPosition();
@@ -1461,6 +1463,25 @@ export class KnomoView extends ItemView {
 			}
 		});
 		this.mobileNavbarCompactController?.sync();
+	}
+
+	private syncManualRefreshButtonState(): void {
+		const root = this.rootEl;
+		if (root === null) {
+			return;
+		}
+		for (const element of root.findAll('[data-action="refresh"]')) {
+			if (!element.instanceOf(HTMLButtonElement)) {
+				continue;
+			}
+			element.toggleClass("is-loading", this.isManualRefreshing);
+			element.disabled = this.isManualRefreshing;
+			if (this.isManualRefreshing) {
+				element.setAttr("aria-busy", "true");
+			} else {
+				element.removeAttribute("aria-busy");
+			}
+		}
 	}
 
 	private syncMobileDrawerTop(root: HTMLElement): void {
@@ -2851,29 +2872,39 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleManualRefresh(): Promise<void> {
-		if (this.activeNav === "trash") {
-			await this.trashMemoController.loadTrashMemos();
-			if (this.trashMemoController.getSnapshot().trashError === null) {
-				new Notice(t("notice.trashRefreshed"));
-			}
+		if (this.isManualRefreshing) {
 			return;
 		}
+		this.isManualRefreshing = true;
+		this.syncManualRefreshButtonState();
 		try {
-			const result = await this.onManualRefresh();
-			const failed = result.failed;
-			if (failed > 0) {
-				const message = t("notice.refreshFailedCount", { count: failed });
+			if (this.activeNav === "trash") {
+				await this.trashMemoController.loadTrashMemos();
+				if (this.trashMemoController.getSnapshot().trashError === null) {
+					new Notice(t("notice.trashRefreshed"));
+				}
+				return;
+			}
+			try {
+				const result = await this.onManualRefresh();
+				const failed = result.failed;
+				if (failed > 0) {
+					const message = t("notice.refreshFailedCount", { count: failed });
+					new Notice(message);
+					return;
+				}
+				if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
+					new Notice(t("notice.refreshComplete", { created: result.created, updated: result.updated, deleted: result.deleted }));
+					return;
+				}
+				new Notice(t("notice.upToDate"));
+			} catch (error) {
+				const message = formatServiceError(error, t("error.refreshFailed"));
 				new Notice(message);
-				return;
 			}
-			if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
-				new Notice(t("notice.refreshComplete", { created: result.created, updated: result.updated, deleted: result.deleted }));
-				return;
-			}
-			new Notice(t("notice.upToDate"));
-		} catch (error) {
-			const message = formatServiceError(error, t("error.refreshFailed"));
-			new Notice(message);
+		} finally {
+			this.isManualRefreshing = false;
+			this.syncManualRefreshButtonState();
 		}
 	}
 

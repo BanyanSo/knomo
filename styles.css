@@ -499,6 +499,24 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	background: var(--knomo-row-hover);
 }
 
+.knomo-plugin .knomo-sidebar-action[data-action="refresh"].is-loading {
+	color: var(--text-accent);
+	background: var(--knomo-row-hover);
+	opacity: 1;
+	cursor: default;
+}
+
+.knomo-plugin .knomo-sidebar-action[data-action="refresh"].is-loading svg {
+	transform-origin: center;
+	animation: knomo-refresh-spin 900ms linear infinite;
+}
+
+@keyframes knomo-refresh-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 /* ---- Sidebar Stats ---- */
 .knomo-plugin .knomo-sidebar-stats {
 	display: grid;

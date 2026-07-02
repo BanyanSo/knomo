@@ -8,12 +8,18 @@ import { buildMemoSearchText } from "../src/ui/viewFilters";
 test("filterVisibleMemos returns random, trash, and record stats branches directly", () => {
 	const memos = [makeMemo("regular")];
 	const randomMemos = [makeMemo("random")];
+	const shuffleDayMemos = [makeMemo("shuffle")];
 
 	assert.deepEqual(filterVisibleMemos({
 		...baseOptions(memos),
 		activeNav: "random",
 		randomMemos,
 	}), randomMemos);
+	assert.deepEqual(filterVisibleMemos({
+		...baseOptions(memos),
+		activeNav: "shuffleDay",
+		shuffleDayMemos,
+	}), shuffleDayMemos);
 	assert.deepEqual(filterVisibleMemos({
 		...baseOptions(memos),
 		activeNav: "trash",
@@ -97,6 +103,7 @@ function baseOptions(memos: MemoRecord[]) {
 	return {
 		memos,
 		randomMemos: [],
+		shuffleDayMemos: [],
 		activeNav: "all" as const,
 		activeTagKey: null,
 		scopeFilter: "all" as const,

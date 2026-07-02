@@ -18,6 +18,7 @@ import type {
 interface FilterVisibleMemosOptions {
 	memos: MemoRecord[];
 	randomMemos: MemoRecord[];
+	shuffleDayMemos: MemoRecord[];
 	activeNav: SidebarNav;
 	activeTagKey: string | null;
 	scopeFilter: ScopeFilter;
@@ -33,6 +34,7 @@ export function filterVisibleMemos(options: FilterVisibleMemosOptions): MemoReco
 	const {
 		memos,
 		randomMemos,
+		shuffleDayMemos,
 		activeNav,
 		activeTagKey,
 		scopeFilter,
@@ -48,6 +50,9 @@ export function filterVisibleMemos(options: FilterVisibleMemosOptions): MemoReco
 	}
 	if (activeNav === "random") {
 		return randomMemos;
+	}
+	if (activeNav === "shuffleDay") {
+		return shuffleDayMemos;
 	}
 	if (hasActiveMemoSearch(normalizedQuery, searchDateFilter, recordStatsFilter)) {
 		return memos.filter((memo) => {

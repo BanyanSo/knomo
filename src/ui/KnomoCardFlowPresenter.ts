@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import type { MemoRecord } from "../types/memo";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
+import type { ShuffleDaySnapshot } from "./ShuffleDayController";
 import { getEmptyStateTitle } from "./viewNavigation";
 import type { SidebarNav } from "./viewNavigation";
 
@@ -11,7 +12,8 @@ export interface CardFlowRegularFilterCopy {
 
 export type CardFlowHeader =
 	| { type: "summary"; text: string }
-	| { type: "random-toolbar"; count: number };
+	| { type: "random-toolbar"; count: number }
+	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
 
 export type CardFlowPresentation =
 	| {
@@ -30,6 +32,7 @@ export interface CardFlowPresentationOptions {
 	cardFlowError: string | null;
 	activeNav: SidebarNav;
 	randomReunionLoading: boolean;
+	shuffleDay: ShuffleDaySnapshot;
 	memos: MemoRecord[];
 	regularFilterCopy: CardFlowRegularFilterCopy | null;
 	trashLoading: boolean;
@@ -59,6 +62,9 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 			description: "",
 		};
 	}
+	if (options.activeNav === "shuffleDay") {
+		return getShuffleDayCardFlowPresentation(options.shuffleDay);
+	}
 	if (options.memos.length === 0) {
 		return {
 			type: "empty",
@@ -82,6 +88,57 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 		memos: options.memos,
 		mode: "memo",
 		headers,
+	};
+}
+
+function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFlowPresentation {
+	if (snapshot.status === "idle" || snapshot.status === "loading") {
+		return {
+			type: "empty",
+			title: t("shuffleDay.loadingTitle"),
+			description: "",
+		};
+	}
+	if (snapshot.status === "empty-no-memos") {
+		return {
+			type: "empty",
+			title: t("shuffleDay.emptyNoMemosTitle"),
+			description: t("shuffleDay.emptyNoMemosDesc"),
+		};
+	}
+	if (snapshot.status === "empty-not-enough-history") {
+		return {
+			type: "empty",
+			title: t("shuffleDay.emptyNotEnoughTitle"),
+			description: t("shuffleDay.emptyNotEnoughDesc"),
+		};
+	}
+	if (snapshot.status === "empty-day-cleared") {
+		return {
+			type: "empty",
+			title: t("shuffleDay.emptyDayClearedTitle"),
+			description: t("shuffleDay.emptyDayClearedDesc"),
+		};
+	}
+	if (snapshot.status === "failed") {
+		return {
+			type: "empty",
+			title: t("shuffleDay.failedTitle"),
+			description: t("shuffleDay.failedDesc"),
+		};
+	}
+	if (snapshot.selectedDate === null || snapshot.stats === null || snapshot.memos.length === 0) {
+		return {
+			type: "empty",
+			title: t("shuffleDay.emptyDayClearedTitle"),
+			description: t("shuffleDay.emptyDayClearedDesc"),
+		};
+	}
+	return {
+		type: "items",
+		memos: snapshot.memos,
+		mode: "memo",
+		headers: [{ type: "shuffle-day", selectedDate: snapshot.selectedDate, stats: snapshot.stats }],
 	};
 }
 

@@ -43,6 +43,7 @@ test("renders sidebar navigation, trash, stats, tags, and resizer structure", as
 		"all",
 		"review",
 		"random",
+		"shuffleDay",
 		"record-stats",
 		"trash",
 	]);

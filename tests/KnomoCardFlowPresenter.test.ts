@@ -105,6 +105,49 @@ test("presents random loading before random list", async () => {
 	});
 });
 
+test("presents shuffle day headers without a random toolbar", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const memos = makeMemos(2);
+
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "shuffleDay",
+		shuffleDay: {
+			status: "ready",
+			selectedDate: "2026-06-02",
+			memos,
+			stats: {
+				memoCount: 2,
+				wordCount: 4,
+				tagCount: 1,
+				imageCount: 0,
+				linkCount: 1,
+				firstMemoTime: "09:00",
+				lastMemoTime: "10:00",
+			},
+			error: null,
+		},
+	}), {
+		type: "items",
+		memos,
+		mode: "memo",
+		headers: [{
+			type: "shuffle-day",
+			selectedDate: "2026-06-02",
+			stats: {
+				memoCount: 2,
+				wordCount: 4,
+				tagCount: 1,
+				imageCount: 0,
+				linkCount: 1,
+				firstMemoTime: "09:00",
+				lastMemoTime: "10:00",
+			},
+		}],
+	});
+});
+
 test("presents trash states and trash items", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
@@ -155,6 +198,13 @@ function baseOptions() {
 		cardFlowError: null,
 		activeNav: "all" as const,
 		randomReunionLoading: false,
+		shuffleDay: {
+			status: "idle" as const,
+			selectedDate: null,
+			memos: [],
+			stats: null,
+			error: null,
+		},
 		memos: [],
 		regularFilterCopy: null,
 		trashLoading: false,

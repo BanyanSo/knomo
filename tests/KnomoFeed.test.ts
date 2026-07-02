@@ -10,6 +10,7 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 		renderKnomoListSummary,
 		renderKnomoLoadMoreButton,
 		renderKnomoRandomReunionToolbar,
+		renderKnomoShuffleDayHeader,
 	} = await import("../src/ui/KnomoFeed");
 	const root = new TestElement("div");
 
@@ -36,6 +37,19 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 		"3 memos were written on this day",
 		"2 memos found for a random revisit",
 	]);
+
+	const shuffleHeader = renderKnomoShuffleDayHeader(root.asHtml(), "2026-06-02", {
+		memoCount: 2,
+		wordCount: 5,
+		tagCount: 1,
+		imageCount: 0,
+		linkCount: 1,
+		firstMemoTime: "09:00",
+		lastMemoTime: "10:00",
+	});
+	assert.equal(shuffleHeader.hasClass("knomo-shuffle-day-header"), true);
+	assert.equal(shuffleHeader.find(".knomo-shuffle-day-date")?.getText(), "Jun 2, 2026 · Tuesday");
+	assert.equal(shuffleHeader.find(".knomo-shuffle-day-summary")?.getText(), "2 memos · 5 words · 1 tag · 1 link");
 
 	const sentinel = renderKnomoLoadMoreButton(root.asHtml(), {
 		remainingCount: 12,

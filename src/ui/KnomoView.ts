@@ -10,6 +10,7 @@ import { RecordStatsService } from "../services/RecordStatsService";
 import type { RecordStatsView } from "../services/RecordStatsService";
 import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
+import type { ShuffleDayService } from "../services/ShuffleDayService";
 import type { SyncOrchestrator } from "../services/SyncOrchestrator";
 import type { ScanDailyMemosResult } from "../services/MemoScanService";
 import { getRecentMemoPeriods } from "../services/memoQueries";
@@ -110,6 +111,7 @@ import {
 import { RecordStatsPreparationController } from "./RecordStatsPreparationController";
 import { RecordStatsViewStateController } from "./RecordStatsViewStateController";
 import { SearchQueryDebounce } from "./SearchQueryDebounce";
+import { ShuffleDayController } from "./ShuffleDayController";
 import { TrashMemoController } from "./TrashMemoController";
 import type { TrashMemoRenderTarget } from "./TrashMemoController";
 import { KnomoUserActionController } from "./KnomoUserActionController";
@@ -260,6 +262,7 @@ export class KnomoView extends ItemView {
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly mobileMemoHydrator: MobileMemoHydrator;
 	private readonly randomReunionController: RandomReunionController;
+	private readonly shuffleDayController: ShuffleDayController;
 	private readonly trashMemoController: TrashMemoController;
 	private readonly recordStatsService = new RecordStatsService();
 	private readonly recordStatsPreparationController: RecordStatsPreparationController;
@@ -432,6 +435,7 @@ export class KnomoView extends ItemView {
 		private readonly syncOrchestrator: SyncOrchestrator,
 		private readonly referenceService: ReferenceService,
 		private readonly randomReunionService: RandomReunionService,
+		private readonly shuffleDayService: ShuffleDayService,
 		private readonly attachmentService: AttachmentService,
 		private readonly onMemoMutation: (mutation: MemoMutation, sourceView: KnomoView) => void,
 		private readonly onForceRefreshViews: () => Promise<void>,
@@ -580,7 +584,10 @@ export class KnomoView extends ItemView {
 			isMobile: () => Platform.isMobile,
 			isLoading: () => this.allMemosLoadingPromise !== null,
 			isPaused: () => this.composerOpen,
-			canHydrateCardFlow: () => this.activeNav !== "trash" && this.activeNav !== "random" && this.activeNav !== "record-stats",
+			canHydrateCardFlow: () => this.activeNav !== "trash"
+				&& this.activeNav !== "random"
+				&& this.activeNav !== "shuffleDay"
+				&& this.activeNav !== "record-stats",
 			scheduleTask: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
 			cancelTask: (taskId) => this.containerEl.win.clearTimeout(taskId),
 			listMemoIndexPeriods: () => this.syncOrchestrator.listMemoIndexPeriods(),
@@ -639,6 +646,19 @@ export class KnomoView extends ItemView {
 			getRandomReunionMemos: (count, memos) => this.randomReunionService.getRandomReunionMemos(count, memos),
 			markRandomReunionReviewed: (memoId) => this.randomReunionService.markRandomReunionReviewed(memoId),
 			isRandomActive: () => this.activeNav === "random",
+			showNotice: (message) => new Notice(message),
+			requestRender: () => this.renderUiState(),
+		});
+		this.shuffleDayController = new ShuffleDayController({
+			ensureAllMemosLoaded: async () => {
+				const loaded = await this.ensureAllMemosLoaded();
+				if (!loaded) {
+					throw new Error(t("shuffleDay.failedDesc"));
+				}
+			},
+			getMemos: () => this.memos,
+			service: this.shuffleDayService,
+			isShuffleDayActive: () => this.activeNav === "shuffleDay",
 			showNotice: (message) => new Notice(message),
 			requestRender: () => this.renderUiState(),
 		});
@@ -873,6 +893,9 @@ export class KnomoView extends ItemView {
 		}
 		if (this.activeNav === "random") {
 			await this.randomReunionController.refresh();
+		} else if (this.activeNav === "shuffleDay") {
+			this.shuffleDayController.reconcileWithMemos();
+			this.renderCardFlow();
 		}
 	}
 
@@ -904,6 +927,7 @@ export class KnomoView extends ItemView {
 		this.invalidateRecordStats();
 
 		this.randomReunionController.applyMemoMutation(mutation);
+		this.shuffleDayController.applyMemoMutation(mutation);
 		this.filteredMemosCache = null;
 		this.memoSearchCache.remove(mutation.memo.id);
 		this.memoCardPreviewCache.remove(mutation.memo.id);
@@ -1299,6 +1323,9 @@ export class KnomoView extends ItemView {
 			if (this.activeNav === "random" && !this.randomReunionController.getSnapshot().loading) {
 				this.randomReunionController.clearMemos();
 			}
+			if (this.activeNav === "shuffleDay") {
+				this.shuffleDayController.reconcileWithMemos();
+			}
 			loaded = true;
 		} catch (error) {
 			this.memos = [];
@@ -1354,6 +1381,9 @@ export class KnomoView extends ItemView {
 			this.resetVisibleMemos();
 			if (this.activeNav === "random" && !this.randomReunionController.getSnapshot().loading) {
 				this.randomReunionController.clearMemos();
+			}
+			if (this.activeNav === "shuffleDay") {
+				this.shuffleDayController.reconcileWithMemos();
 			}
 			this.renderUiState();
 			const randomSnapshot = this.randomReunionController.getSnapshot();
@@ -1444,6 +1474,7 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-mobile-search-open", this.mobileSearchPageOpen);
 		root.toggleClass("is-mobile-compact", this.settingsService.getSettings().mobileCompactMode !== "off");
 		root.toggleClass("is-record-stats", this.activeNav === "record-stats");
+		root.toggleClass("is-shuffle-day", this.activeNav === "shuffleDay");
 		root.setCssProps({ "--knomo-sidebar-width": `${sidebarState.width}px` });
 		this.syncTooltipState(root);
 		this.syncManualRefreshButtonState();
@@ -1994,15 +2025,18 @@ export class KnomoView extends ItemView {
 
 	private getCurrentCardFlowPresentation(): CardFlowPresentation {
 		const randomSnapshot = this.randomReunionController.getSnapshot();
+		const shuffleDaySnapshot = this.shuffleDayController.getSnapshot();
 		const trashSnapshot = this.trashMemoController.getSnapshot();
 		const shouldLoadListMemos = this.cardFlowError === null
 			&& this.activeNav !== "trash"
+			&& this.activeNav !== "shuffleDay"
 			&& !(this.activeNav === "random" && randomSnapshot.loading);
 		const memos = shouldLoadListMemos ? this.getFilteredMemos() : [];
 		return getCardFlowPresentation({
-			cardFlowError: this.cardFlowError,
+			cardFlowError: this.activeNav === "shuffleDay" ? null : this.cardFlowError,
 			activeNav: this.activeNav,
 			randomReunionLoading: randomSnapshot.loading,
+			shuffleDay: shuffleDaySnapshot,
 			memos,
 			regularFilterCopy: shouldLoadListMemos && this.activeNav === "all" ? getRegularFilterCopy({
 				activeTag: this.activeTag,
@@ -2229,6 +2263,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private getInitialCardBatchSize(): number {
+		if (this.activeNav === "shuffleDay") {
+			return Number.MAX_SAFE_INTEGER;
+		}
 		return Platform.isMobile ? MOBILE_INITIAL_CARD_BATCH_SIZE : CARD_BATCH_SIZE;
 	}
 
@@ -2980,6 +3017,9 @@ export class KnomoView extends ItemView {
 		if (result.clearRandomReunion) {
 			this.randomReunionController.clearMemos();
 		}
+		if (result.clearShuffleDay) {
+			this.shuffleDayController.clearSelection();
+		}
 		this.renderUiState({
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
@@ -2988,6 +3028,9 @@ export class KnomoView extends ItemView {
 		}
 		if (result.refreshRandomReunion) {
 			void this.randomReunionController.refresh();
+		}
+		if (result.refreshShuffleDay) {
+			void this.shuffleDayController.refresh();
 		}
 		if (result.loadTrashMemos) {
 			void this.trashMemoController.loadTrashMemos();
@@ -3016,6 +3059,9 @@ export class KnomoView extends ItemView {
 		}
 		if (result.refreshRandomReunionIfEmpty && this.randomReunionController.getSnapshot().memos === null) {
 			void this.randomReunionController.refresh();
+		}
+		if (result.refreshShuffleDayIfEmpty && this.shuffleDayController.getSnapshot().selectedDate === null) {
+			void this.shuffleDayController.refresh();
 		}
 		if (result.loadTrashMemos) {
 			void this.trashMemoController.loadTrashMemos();
@@ -3851,6 +3897,9 @@ export class KnomoView extends ItemView {
 		if (this.activeNav === "random") {
 			return this.randomReunionController.getSnapshot().memos ?? [];
 		}
+		if (this.activeNav === "shuffleDay") {
+			return this.shuffleDayController.getSnapshot().memos;
+		}
 		const normalizedQuery = this.searchQuery.trim().toLowerCase();
 		const searchDateFilter = this.searchDateFilter;
 		const recordStatsFilter = this.recordStatsSearchFilter;
@@ -3876,6 +3925,7 @@ export class KnomoView extends ItemView {
 		const filteredMemos = filterVisibleMemos({
 			memos: this.memos,
 			randomMemos: this.randomReunionController.getSnapshot().memos ?? [],
+			shuffleDayMemos: this.shuffleDayController.getSnapshot().memos,
 			activeNav: this.activeNav,
 			activeTagKey,
 			scopeFilter: this.scopeFilter,
@@ -4215,6 +4265,7 @@ export class KnomoView extends ItemView {
 			this.cardFlowError !== null ||
 			this.activeNav === "trash" ||
 			this.activeNav === "random" ||
+			this.activeNav === "shuffleDay" ||
 			this.activeNav === "record-stats"
 		) {
 			return;
@@ -4361,6 +4412,7 @@ export class KnomoView extends ItemView {
 
 	private findMemoById(memoId: string): MemoRecord | null {
 		return this.randomReunionController.getSnapshot().memos?.find((memo) => memo.id === memoId)
+			?? this.shuffleDayController.getSnapshot().memos.find((memo) => memo.id === memoId)
 			?? this.memos.find((memo) => memo.id === memoId)
 			?? this.trashMemoController.getSnapshot().trashMemos?.find((memo) => memo.id === memoId)
 			?? null;

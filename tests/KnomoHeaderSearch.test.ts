@@ -56,6 +56,7 @@ test("renders desktop and compact header search structure", async () => {
 		"anniversary",
 		"review",
 		"random",
+		"shuffleDay",
 	]);
 
 	const compact = renderKnomoCompactHeader(root.asHtml(), options);

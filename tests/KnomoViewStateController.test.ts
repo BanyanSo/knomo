@@ -141,7 +141,23 @@ test("sidebar navigation exposes follow-up side effects for heavy routes", () =>
 
 	assert.equal(state.setSidebarNav("review").ensureAllMemosLoaded, true);
 	assert.equal(state.setSidebarNav("random").refreshRandomReunion, true);
+	assert.equal(state.setSidebarNav("shuffleDay").refreshShuffleDay, true);
 	assert.equal(state.setSidebarNav("trash").loadTrashMemos, true);
+});
+
+test("record statistics return preserves shuffle day state", () => {
+	const state = new KnomoViewStateController();
+	state.activeNav = "shuffleDay";
+
+	const openStats = state.setSidebarNav("record-stats");
+	assert.equal(openStats.clearShuffleDay, false);
+	assert.equal(state.activeNav, "record-stats");
+
+	const returned = state.returnFromRecordStats();
+	assert.equal(returned.type, "returned");
+	assert.equal(returned.returnedNav, "shuffleDay");
+	assert.equal(returned.refreshShuffleDayIfEmpty, true);
+	assert.equal(state.activeNav, "shuffleDay");
 });
 
 test("reset to all notes reports whether only chrome sync is needed", () => {

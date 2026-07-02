@@ -150,8 +150,20 @@ function getChangeIntent(previousViewStateKey: string, currentViewStateKey: stri
 
 function getCardFlowHeadersStateKey(headers: readonly CardFlowHeader[]): string {
 	return headers.map((header) => {
-		return header.type === "summary"
-			? getStateKey([header.type, header.text])
-			: getStateKey([header.type, header.count]);
+		if (header.type === "summary") {
+			return getStateKey([header.type, header.text]);
+		}
+		if (header.type === "random-toolbar") {
+			return getStateKey([header.type, header.count]);
+		}
+		return getStateKey([
+			header.type,
+			header.selectedDate,
+			header.stats.memoCount,
+			header.stats.wordCount,
+			header.stats.tagCount,
+			header.stats.imageCount,
+			header.stats.linkCount,
+		]);
 	}).join("");
 }

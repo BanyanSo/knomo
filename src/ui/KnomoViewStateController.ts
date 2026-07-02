@@ -21,6 +21,8 @@ interface SidebarNavResult extends KnomoViewStateTransitionEffects {
 	refreshRandomReunion: boolean;
 	loadTrashMemos: boolean;
 	prepareRecordStats: boolean;
+	clearShuffleDay: boolean;
+	refreshShuffleDay: boolean;
 }
 
 interface ReturnFromRecordStatsResult extends KnomoViewStateTransitionEffects {
@@ -29,6 +31,7 @@ interface ReturnFromRecordStatsResult extends KnomoViewStateTransitionEffects {
 	ensureAllMemosLoaded: boolean;
 	refreshRandomReunionIfEmpty: boolean;
 	loadTrashMemos: boolean;
+	refreshShuffleDayIfEmpty: boolean;
 }
 
 interface ResetToAllNotesResult extends KnomoViewStateTransitionEffects {
@@ -124,6 +127,8 @@ export class KnomoViewStateController {
 				refreshRandomReunion: false,
 				loadTrashMemos: false,
 				prepareRecordStats: false,
+				clearShuffleDay: false,
+				refreshShuffleDay: false,
 			};
 		}
 		const previousNav = this.activeNav;
@@ -150,8 +155,10 @@ export class KnomoViewStateController {
 			closeScopeMenu: true,
 			clearCardMenu: true,
 			clearRandomReunion: nav !== "random" && !(nav === "record-stats" && previousNav === "random"),
+			clearShuffleDay: nav !== "shuffleDay" && !(nav === "record-stats" && previousNav === "shuffleDay"),
 			ensureAllMemosLoaded: nav === "review",
 			refreshRandomReunion: nav === "random",
+			refreshShuffleDay: nav === "shuffleDay" && previousNav !== "shuffleDay",
 			loadTrashMemos: nav === "trash",
 			prepareRecordStats: nav === "record-stats",
 		};
@@ -165,6 +172,7 @@ export class KnomoViewStateController {
 				ensureAllMemosLoaded: false,
 				refreshRandomReunionIfEmpty: false,
 				loadTrashMemos: false,
+				refreshShuffleDayIfEmpty: false,
 			};
 		}
 		const returnState = this.recordStatsReturnState ?? {
@@ -195,6 +203,7 @@ export class KnomoViewStateController {
 			ensureAllMemosLoaded: returnState.activeNav === "review",
 			refreshRandomReunionIfEmpty: returnState.activeNav === "random",
 			loadTrashMemos: returnState.activeNav === "trash",
+			refreshShuffleDayIfEmpty: returnState.activeNav === "shuffleDay",
 		};
 	}
 

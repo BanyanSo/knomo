@@ -15,6 +15,7 @@ import { RandomReunionService } from "./services/RandomReunionService";
 import { ReferenceService } from "./services/ReferenceService";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SettingsService } from "./services/SettingsService";
+import { ShuffleDayService } from "./services/ShuffleDayService";
 import { SyncOrchestrator } from "./services/SyncOrchestrator";
 import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
 import type { ScanDailyMemosResult } from "./services/MemoScanService";
@@ -94,6 +95,7 @@ export default class KnomoPlugin extends Plugin {
 			(memo) => this.syncOrchestrator.ensureReferenceBlockId(memo),
 		);
 		const randomReunionService = new RandomReunionService(this);
+		const shuffleDayService = new ShuffleDayService(this);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
 		const fileWatchService = new FileWatchService(
 			this.app,
@@ -112,6 +114,7 @@ export default class KnomoPlugin extends Plugin {
 				this.syncOrchestrator,
 				referenceService,
 				randomReunionService,
+				shuffleDayService,
 				attachmentService,
 				(mutation, sourceView) => this.broadcastMemoMutation(mutation, sourceView),
 				() => this.runRefreshOpenViews(true),

@@ -7,8 +7,8 @@ import {
 } from "./viewFilters";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 
-export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "record-stats" | "trash";
-export type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random";
+export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "record-stats" | "trash";
+export type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random" | "shuffleDay";
 
 export interface SearchDateOption {
 	filter: SearchDateFilter;
@@ -45,6 +45,7 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
 	{ nav: "review", label: t("nav.review"), icon: "calendar-check" },
 	{ nav: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON },
+	{ nav: "shuffleDay", label: t("nav.shuffleDay"), icon: "calendar-days" },
 	{ nav: "record-stats", label: t("nav.recordStats"), icon: "chart-column-increasing" },
 ];
 
@@ -58,6 +59,7 @@ export const TITLE_MODE_OPTIONS: TitleModeOption[] = [
 	{ mode: "anniversary", label: t("filter.anniversary"), icon: "history", scope: "anniversary" },
 	{ mode: "review", label: t("nav.review"), icon: "calendar-check", nav: "review" },
 	{ mode: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON, nav: "random" },
+	{ mode: "shuffleDay", label: t("nav.shuffleDay"), icon: "calendar-days", nav: "shuffleDay" },
 ];
 
 export const SEARCH_DATE_OPTIONS: SearchDateOption[] = [
@@ -122,7 +124,7 @@ export function getListTitleLabel(state: ViewTitleState): string {
 }
 
 export function getCurrentTitleMode(state: ViewTitleState): string {
-	if (state.activeNav === "review" || state.activeNav === "random") {
+	if (state.activeNav === "review" || state.activeNav === "random" || state.activeNav === "shuffleDay") {
 		return state.activeNav;
 	}
 	if (state.activeTagKey !== null || state.activeNav !== "all") {
@@ -137,6 +139,9 @@ export function getEmptyStateTitle(activeNav: SidebarNav): string {
 	}
 	if (activeNav === "random") {
 		return t("empty.random");
+	}
+	if (activeNav === "shuffleDay") {
+		return t("shuffleDay.emptyNotEnoughTitle");
 	}
 	return t("empty.generic");
 }

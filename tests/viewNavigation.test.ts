@@ -64,6 +64,10 @@ test("current title mode follows nav and scope state", () => {
 	}), "random");
 	assert.equal(getCurrentTitleMode({
 		...baseTitleState,
+		activeNav: "shuffleDay",
+	}), "shuffleDay");
+	assert.equal(getCurrentTitleMode({
+		...baseTitleState,
 		activeTagKey: "project",
 	}), "");
 	assert.equal(getCurrentTitleMode({

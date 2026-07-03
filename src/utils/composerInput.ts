@@ -81,7 +81,7 @@ export function applyListFormatToText(value: string, start: number, end: number,
 	const formatted = lines.map((line, index) => {
 		const match = line.match(/^(\s*)(?:[-*+]\s+|\d+[.)]\s+)?(.*)$/);
 		const indent = match?.[1] ?? "";
-		const content = match?.[2] ?? line.trimStart();
+		const content = match?.[2] ?? line.replace(/^\s+/, "");
 		if (type === "bullet") {
 			return `${indent}- ${content}`;
 		}

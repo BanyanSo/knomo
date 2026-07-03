@@ -390,9 +390,13 @@ export class MemoIndexStore {
 		if (memos.every((memo) => index.memos[memo.id] === memo)) {
 			return index;
 		}
+		const recoveredMemos: Record<string, MemoRecord> = {};
+		for (const memo of memos) {
+			recoveredMemos[memo.id] = memo;
+		}
 		return {
 			...index,
-			memos: Object.fromEntries(memos.map((memo) => [memo.id, memo])),
+			memos: recoveredMemos,
 		};
 	}
 

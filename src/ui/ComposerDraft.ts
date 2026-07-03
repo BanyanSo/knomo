@@ -31,7 +31,7 @@ export type PreparedComposerSaveInput<TEditingMemo> =
 		dailyTrailer: string | null;
 	};
 
-export function getComposerMode(editingMemo: unknown | null, quoteSourceMemoId: string | null): ComposerMode {
+export function getComposerMode(editingMemo: object | null, quoteSourceMemoId: string | null): ComposerMode {
 	if (editingMemo !== null) {
 		return "edit";
 	}

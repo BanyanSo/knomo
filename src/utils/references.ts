@@ -53,7 +53,7 @@ export function buildQuoteCreatedMemoContent(input: string, quoteText: string, r
 		}
 		return `${quoteText}\n${referenceText}`;
 	}
-	return `${input.trimEnd()}${referenceText}`;
+	return `${input.replace(/\s+$/, "")}${referenceText}`;
 }
 
 export function stripTrailingWikiLink(content: string): string {

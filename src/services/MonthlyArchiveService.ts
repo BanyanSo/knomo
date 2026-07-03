@@ -486,7 +486,7 @@ function ensureMonthHeading(content: string, period: string): string {
 
 export function ensureReadOnlyComment(content: string, locale: KnomoLocale = getKnomoLocale()): string {
 	const normalizedContent = normalizeMarkdownLineEndings(content);
-	const trimmedStart = normalizedContent.trimStart();
+	const trimmedStart = normalizedContent.replace(/^\s+/, "");
 	if (
 		trimmedStart.startsWith(`<!-- ${MONTHLY_ARCHIVE_MARKER}`)
 		|| trimmedStart.startsWith(LEGACY_MONTHLY_ARCHIVE_READONLY_COMMENT)
@@ -558,7 +558,7 @@ function escapeRegExp(value: string): string {
 }
 
 function extractLeadingReadOnlyComment(content: string): string | null {
-	const trimmed = normalizeMarkdownLineEndings(content).trimStart();
+	const trimmed = normalizeMarkdownLineEndings(content).replace(/^\s+/, "");
 	if (!trimmed.startsWith("<!--")) {
 		return null;
 	}

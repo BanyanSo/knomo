@@ -75,11 +75,18 @@ export interface MemoStats {
 }
 
 export function getMemoStats(memos: MemoRecord[]): MemoStats {
+	const tagKeys = new Set<string>();
+	for (const memo of memos) {
+		for (const tag of memo.tags) {
+			const tagKey = normalizeTagKey(tag);
+			if (tagKey.length > 0) {
+				tagKeys.add(tagKey);
+			}
+		}
+	}
 	return {
 		memoCount: memos.length,
-		tagCount: new Set(memos.flatMap((memo) => {
-			return memo.tags.map(normalizeTagKey).filter((tagKey) => tagKey.length > 0);
-		})).size,
+		tagCount: tagKeys.size,
 		imageCount: memos.reduce((count, memo) => count + getMemoImages(memo).length, 0),
 		wordCount: memos.reduce((count, memo) => count + getMemoContentStats(memo).wordCount, 0),
 	};

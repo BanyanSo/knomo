@@ -30,7 +30,7 @@ export interface RenderMemoCardOptions {
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
 	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
 	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
-	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
 	queueSourceReferenceMarkdown: (container: HTMLElement, text: string, sourcePath: string, generation: number) => void;
 	reusedBodyEl?: HTMLElement | null;
 	reusedImagesEl?: HTMLElement | null;
@@ -47,7 +47,7 @@ export interface RenderTrashMemoCardOptions {
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
 	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
 	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
-	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
 }
 
 export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): HTMLElement {
@@ -167,7 +167,7 @@ interface RenderMemoCardBodyOptions {
 	markdownPriority: MarkdownRenderPriority;
 	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
 	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
-	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
 	reusedImagesEl?: HTMLElement | null;
 }
 
@@ -178,11 +178,7 @@ export function renderMemoCardBody(card: HTMLElement, memo: MemoRecord, options:
 		const content = body.createDiv({ cls: "knomo-card-content markdown-rendered" });
 		options.queueMemoMarkdown(memo, content, options.generation, options.markdownPriority, preview.text);
 	}
-	if (options.reusedImagesEl !== undefined && options.reusedImagesEl !== null) {
-		body.appendChild(options.reusedImagesEl);
-	} else {
-		options.renderMemoCardImages(body, memo, preview.images, options.generation);
-	}
+	options.renderMemoCardImages(body, memo, preview.images, options.generation, options.reusedImagesEl ?? null);
 	return body;
 }
 

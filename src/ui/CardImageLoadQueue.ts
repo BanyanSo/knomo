@@ -28,6 +28,7 @@ interface CardImageLoadQueueOptions {
 	scheduleStartTask?: (callback: () => void) => number;
 	cancelStartTask?: (taskId: number) => void;
 	watchdogMs: number;
+	releaseSlotOnLoad?: (surface: CardImageLoadSurface) => boolean;
 	Observer?: typeof IntersectionObserver;
 	rootMargin?: string;
 }
@@ -55,6 +56,7 @@ export class CardImageLoadQueue {
 	private readonly activeTargets = new Set<HTMLElement>();
 	private readonly decodedSources = new Set<string>();
 	private readonly decodedSourcePaths = new Map<string, string>();
+	private readonly resourceInvalidationVersions = new Map<string, number>();
 	private readonly pausedSurfaces = new Set<CardImageLoadSurface>();
 	private nextSequence = 0;
 	private paused = false;
@@ -165,8 +167,19 @@ export class CardImageLoadQueue {
 		}
 	}
 
+	preemptActiveSurface(surface: CardImageLoadSurface): void {
+		for (const task of [...this.activeTasks]) {
+			if (task.surface === surface) {
+				this.preemptActiveTask(task);
+			}
+		}
+	}
+
 	invalidateResourcePaths(paths: readonly string[]): void {
 		const normalizedPaths = new Set(paths.map(normalizeResourcePath));
+		for (const path of normalizedPaths) {
+			this.resourceInvalidationVersions.set(path, (this.resourceInvalidationVersions.get(path) ?? 0) + 1);
+		}
 		for (const [source, resourcePath] of this.decodedSourcePaths) {
 			if (normalizedPaths.has(normalizeResourcePath(resourcePath))) {
 				this.decodedSourcePaths.delete(source);
@@ -325,7 +338,7 @@ export class CardImageLoadQueue {
 				return;
 			}
 			const shouldNotify = this.isCurrentTask(task);
-			this.finishTask(task, false, true, shouldNotify);
+			this.finishTask(task, false, true, shouldNotify, false);
 		}, this.options.watchdogMs);
 	}
 
@@ -334,13 +347,16 @@ export class CardImageLoadQueue {
 			return;
 		}
 		this.removeTaskListeners(task);
-		let decodePromise: Promise<void>;
-		try {
-			decodePromise = typeof task.item.imageEl.decode === "function"
-				? task.item.imageEl.decode()
-				: Promise.resolve();
-		} catch {
-			decodePromise = Promise.resolve();
+		const decodePromise = this.decodeImage(task);
+		if (this.options.releaseSlotOnLoad?.(task.surface) === true) {
+			if (!this.isCurrentTask(task)) {
+				this.cancelActiveTask(task, true);
+				return;
+			}
+			const resourceInvalidationVersion = this.getResourceInvalidationVersion(task.item.resourcePath);
+			this.finishTask(task, true, false, true, false);
+			this.rememberDecodedSourceAfterDecode(task, decodePromise, resourceInvalidationVersion);
+			return;
 		}
 		void decodePromise
 			.catch(() => undefined)
@@ -352,7 +368,7 @@ export class CardImageLoadQueue {
 					this.cancelActiveTask(task, true);
 					return;
 				}
-				this.finishTask(task, true, false, true);
+				this.finishTask(task, true, false, true, true);
 			});
 	}
 
@@ -360,7 +376,7 @@ export class CardImageLoadQueue {
 		if (!this.activeTasks.has(task)) {
 			return;
 		}
-		this.finishTask(task, false, false, this.isCurrentTask(task));
+		this.finishTask(task, false, false, this.isCurrentTask(task), false);
 	}
 
 	private finishTask(
@@ -368,17 +384,15 @@ export class CardImageLoadQueue {
 		loaded: boolean,
 		clearSource: boolean,
 		notify: boolean,
+		cacheDecoded: boolean,
 	): void {
 		this.cancelTaskTimers(task);
 		this.removeTaskListeners(task);
 		if (clearSource) {
 			task.item.imageEl.removeAttribute("src");
 		}
-		if (loaded) {
-			this.decodedSources.add(task.item.src);
-			if (task.item.resourcePath !== undefined) {
-				this.decodedSourcePaths.set(task.item.src, task.item.resourcePath);
-			}
+		if (cacheDecoded) {
+			this.rememberDecodedSource(task.item.src, task.item.resourcePath);
 		}
 		if (notify) {
 			if (loaded) {
@@ -390,6 +404,45 @@ export class CardImageLoadQueue {
 		this.releaseActiveTask(task);
 	}
 
+	private decodeImage(task: CardImageLoadTask): Promise<void> {
+		try {
+			return typeof task.item.imageEl.decode === "function"
+				? task.item.imageEl.decode()
+				: Promise.resolve();
+		} catch {
+			return Promise.reject();
+		}
+	}
+
+	private rememberDecodedSourceAfterDecode(
+		task: CardImageLoadTask,
+		decodePromise: Promise<void>,
+		resourceInvalidationVersion: number,
+	): void {
+		void decodePromise.then(() => {
+			if (!this.isCurrentTask(task)) {
+				return;
+			}
+			if (resourceInvalidationVersion !== this.getResourceInvalidationVersion(task.item.resourcePath)) {
+				return;
+			}
+			this.rememberDecodedSource(task.item.src, task.item.resourcePath);
+		}, () => undefined);
+	}
+
+	private rememberDecodedSource(source: string, resourcePath?: string): void {
+		this.decodedSources.add(source);
+		if (resourcePath !== undefined) {
+			this.decodedSourcePaths.set(source, resourcePath);
+		}
+	}
+
+	private getResourceInvalidationVersion(resourcePath: string | undefined): number {
+		return resourcePath === undefined
+			? 0
+			: this.resourceInvalidationVersions.get(normalizeResourcePath(resourcePath)) ?? 0;
+	}
+
 	private cancelActiveTask(task: CardImageLoadTask, clearSource: boolean): void {
 		this.cancelTaskTimers(task);
 		this.removeTaskListeners(task);
@@ -397,6 +450,21 @@ export class CardImageLoadQueue {
 			task.item.imageEl.removeAttribute("src");
 		}
 		this.releaseActiveTask(task);
+	}
+
+	private preemptActiveTask(task: CardImageLoadTask): void {
+		this.cancelTaskTimers(task);
+		this.removeTaskListeners(task);
+		task.item.imageEl.removeAttribute("src");
+		const shouldResume = this.isCurrentTask(task);
+		if (this.activeTasks.delete(task)) {
+			this.activeSources.delete(task.item.src);
+			this.activeTargets.delete(task.targetEl);
+		}
+		if (shouldResume) {
+			this.pendingTasks.push(task);
+		}
+		this.pump();
 	}
 
 	private cancelTaskTimers(task: CardImageLoadTask): void {

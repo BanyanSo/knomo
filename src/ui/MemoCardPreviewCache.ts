@@ -1,19 +1,19 @@
 import type { MemoRecord } from "../types/memo";
-import type { MemoCardPreview } from "./MemoCardPreview";
+import type { MemoCardPreviewLite } from "./MemoCardPreview";
 
 interface MemoCardPreviewCacheEntry {
 	key: string;
-	preview: MemoCardPreview;
+	preview: MemoCardPreviewLite;
 }
 
-type BuildMemoCardPreview = (memo: MemoRecord, displayContent: string) => MemoCardPreview;
+type BuildMemoCardPreview = (memo: MemoRecord, displayContent: string) => MemoCardPreviewLite;
 
 export class MemoCardPreviewCache {
 	private readonly entries = new Map<string, MemoCardPreviewCacheEntry>();
 
 	constructor(private readonly buildPreview: BuildMemoCardPreview) {}
 
-	get(memo: MemoRecord, displayContent: string): MemoCardPreview {
+	get(memo: MemoRecord, displayContent: string): MemoCardPreviewLite {
 		const key = getMemoCardPreviewKey(memo);
 		const cached = this.entries.get(memo.id);
 		if (cached?.key === key) {
@@ -40,28 +40,23 @@ export class MemoCardPreviewCache {
 		this.entries.clear();
 	}
 
-	invalidateImagePaths(paths: readonly string[]): string[] {
+	findImagePathMemoIds(paths: readonly string[]): string[] {
 		const normalizedPaths = paths.map(normalizeComparablePath);
 		const basenames = new Set(normalizedPaths.map(getPathBasename));
-		const invalidatedMemoIds: string[] = [];
+		const affectedMemoIds: string[] = [];
 		for (const [memoId, entry] of this.entries) {
-			const affected = entry.preview.images.some((image) => {
+			const affected = entry.preview.imageRefs.some((image) => {
 				if (image.isRemote) {
 					return false;
-				}
-				const resolvedPath = image.file?.path;
-				if (resolvedPath !== undefined && normalizedPaths.includes(normalizeComparablePath(resolvedPath))) {
-					return true;
 				}
 				const imagePath = normalizeComparablePath(image.path);
 				return normalizedPaths.includes(imagePath) || basenames.has(getPathBasename(imagePath));
 			});
 			if (affected) {
-				this.entries.delete(memoId);
-				invalidatedMemoIds.push(memoId);
+				affectedMemoIds.push(memoId);
 			}
 		}
-		return invalidatedMemoIds;
+		return affectedMemoIds;
 	}
 }
 

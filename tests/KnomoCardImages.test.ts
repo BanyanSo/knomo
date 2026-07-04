@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import type { MemoRecord } from "../src/types/memo";
 import {
 	parseCardImageIndex,
+	planMemoCardImageLoads,
 	renderMemoCardImages,
 	type RenderedMemoCardImages,
 } from "../src/ui/KnomoCardImages";
@@ -48,6 +49,36 @@ test("renderMemoCardImages renders a single local image load item", () => {
 	assert.equal(rendered.loadItems[0].src, "app://local.png");
 	assert.equal(rendered.loadItems[0].resourcePath, "Images/local.png");
 	assert.equal(rendered.loadItems[0].priority, "high");
+	assert.equal(root.find(".knomo-card-image-item")?.hasClass("is-loading"), true);
+
+	rendered.loadItems[0].onLoad?.();
+	assert.equal(root.find(".knomo-card-image-item")?.hasClass("is-loading"), false);
+});
+
+test("renderMemoCardImages reuses loaded image items with unchanged keys", () => {
+	const root = new TestElement("div");
+	const image = makeImage({
+		url: "app://local.png?knomo-mtime=100",
+		resourcePath: "Images/local.png",
+		mtime: 100,
+	});
+	const rendered = renderMemoCardImages(root.asHtml(), makeMemo(), [image], labels);
+	assertRendered(rendered);
+	const item = root.find(".knomo-card-image-item");
+	const imageEl = root.find("img");
+	assert.notEqual(item, null);
+	assert.notEqual(imageEl, null);
+	rendered.loadItems[0].imageEl.setAttr("src", rendered.loadItems[0].src);
+	rendered.loadItems[0].onLoad?.();
+
+	const rerendered = renderMemoCardImages(root.asHtml(), makeMemo(), [image], labels, rendered.imagesEl);
+
+	assertRendered(rerendered);
+	assert.equal(rerendered.imagesEl, rendered.imagesEl);
+	assert.equal(rerendered.loadItems.length, 0);
+	assert.equal(root.find(".knomo-card-image-item"), item);
+	assert.equal(root.find("img"), imageEl);
+	assert.equal(root.find(".knomo-card-image-item")?.hasClass("is-loading"), false);
 });
 
 test("renderMemoCardImages limits visible images and shows the hidden count", () => {
@@ -73,6 +104,31 @@ test("renderMemoCardImages limits visible images and shows the hidden count", ()
 	assert.equal(root.find("img")?.getAttr("fetchpriority"), "low");
 });
 
+test("planMemoCardImageLoads splits only the first load item for eager loading", () => {
+	const root = new TestElement("div");
+	const rendered = renderMemoCardImages(root.asHtml(), makeMemo(), [
+		makeImage({ url: "app://first.png" }),
+		makeImage({ url: "app://second.png" }),
+		makeImage({ url: "app://third.png" }),
+	], labels);
+
+	assertRendered(rendered);
+	const regularPlan = planMemoCardImageLoads(rendered.loadItems, false);
+	assert.deepEqual(regularPlan.eagerLoadItems.map((item) => item.src), []);
+	assert.deepEqual(regularPlan.observedLoadItems.map((item) => item.src), [
+		"app://first.png",
+		"app://second.png",
+		"app://third.png",
+	]);
+
+	const eagerPlan = planMemoCardImageLoads(rendered.loadItems, true);
+	assert.deepEqual(eagerPlan.eagerLoadItems.map((item) => item.src), ["app://first.png"]);
+	assert.deepEqual(eagerPlan.observedLoadItems.map((item) => item.src), [
+		"app://second.png",
+		"app://third.png",
+	]);
+});
+
 test("renderMemoCardImages renders placeholders for unresolved images", () => {
 	const root = new TestElement("div");
 	const rendered = renderMemoCardImages(root.asHtml(), makeMemo(), [
@@ -94,9 +150,12 @@ test("renderMemoCardImages replaces failed loads with placeholders", () => {
 	assertRendered(rendered);
 	const item = root.find(".knomo-card-image-item");
 	const button = root.find(".knomo-card-image-button");
+	assert.equal(item?.hasClass("is-loading"), true);
+
 	rendered.loadItems[0].onError?.();
 
 	assert.equal(item?.hasClass("is-error"), true);
+	assert.equal(item?.hasClass("is-loading"), false);
 	assert.equal(button?.find("img"), null);
 	assert.equal(button?.find(".knomo-card-image-placeholder")?.getText(), "Image unavailable");
 });
@@ -120,6 +179,7 @@ class TestElement {
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
 	private text = "";
+	private parent: TestElement | null = null;
 
 	constructor(private readonly tagName: string) {}
 
@@ -137,6 +197,7 @@ class TestElement {
 
 	createEl(tagName: string, options: CreateElementOptions = {}): TestElement {
 		const child = new TestElement(tagName);
+		child.parent = this;
 		if (options.cls !== undefined) {
 			for (const cls of options.cls.split(/\s+/)) {
 				if (cls.length > 0) {
@@ -155,8 +216,29 @@ class TestElement {
 	}
 
 	empty(): void {
+		for (const child of this.children) {
+			child.parent = null;
+		}
 		this.children.length = 0;
 		this.text = "";
+	}
+
+	appendChild(child: TestElement): TestElement {
+		child.remove();
+		child.parent = this;
+		this.children.push(child);
+		return child;
+	}
+
+	remove(): void {
+		if (this.parent === null) {
+			return;
+		}
+		const index = this.parent.children.indexOf(this);
+		if (index !== -1) {
+			this.parent.children.splice(index, 1);
+		}
+		this.parent = null;
 	}
 
 	setText(value: string): void {
@@ -177,6 +259,10 @@ class TestElement {
 
 	addClass(cls: string): void {
 		this.classes.add(cls);
+	}
+
+	removeClass(cls: string): void {
+		this.classes.delete(cls);
 	}
 
 	hasClass(cls: string): boolean {

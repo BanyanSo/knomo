@@ -2448,6 +2448,25 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	outline-offset: 2px;
 }
 
+.knomo-plugin .knomo-card-image-item.is-loading .knomo-card-image-button {
+	min-height: 96px;
+	background: var(--background-modifier-hover);
+}
+
+.knomo-plugin .knomo-card-image-item.is-loading .knomo-card-image-button::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		var(--background-modifier-active-hover, var(--background-modifier-hover)),
+		transparent
+	);
+	opacity: 0.45;
+	pointer-events: none;
+}
+
 .knomo-plugin .knomo-card-image-button img {
 	display: block;
 	width: 100%;
@@ -2833,8 +2852,19 @@ body .knomo-mobile-create-fab.is-hidden {
 	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button,
 	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img {
 		width: 100%;
-		height: auto;
 		max-height: 180px;
+	}
+
+	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button {
+		aspect-ratio: 4 / 3;
+		height: auto;
+	}
+
+	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img {
+		height: 100%;
+		max-height: none;
+		object-fit: contain;
+		object-position: left center;
 	}
 
 	.knomo-plugin.is-mobile-compact .knomo-card-images--grid,
@@ -3209,6 +3239,7 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-image-preview-stage {
+	position: relative;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -3220,6 +3251,22 @@ body .knomo-mobile-create-fab.is-hidden {
 	overflow: hidden;
 	overscroll-behavior: contain;
 	touch-action: pan-y;
+}
+
+.knomo-image-preview-stage.is-loading::before {
+	content: "";
+	position: absolute;
+	width: min(240px, 56vw);
+	aspect-ratio: 4 / 3;
+	border-radius: 8px;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		var(--background-modifier-border-hover),
+		transparent
+	);
+	opacity: 0.42;
+	pointer-events: none;
 }
 
 .knomo-image-preview-img {
@@ -4019,8 +4066,17 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	.knomo-plugin .knomo-card-images--single .knomo-card-image-button,
 	.knomo-plugin .knomo-card-images--single .knomo-card-image-button img {
 		width: 100%;
-		height: auto;
 		max-height: 180px;
+	}
+
+	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button {
+		aspect-ratio: 4 / 3;
+		height: auto;
+	}
+
+	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img {
+		height: 100%;
+		max-height: none;
 	}
 
 	.knomo-plugin .knomo-card-images--grid {

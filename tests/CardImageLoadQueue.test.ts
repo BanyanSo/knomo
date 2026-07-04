@@ -39,6 +39,154 @@ test("loads one image per card at a time and waits for decode", async () => {
 	assert.equal(second.getAttr("src"), "app://second.png");
 });
 
+test("release-on-load frees the queue slot before decode finishes", () => {
+	const scheduler = new FakeScheduler();
+	const first = new FakeImage();
+	const second = new FakeImage();
+	let firstLoadCount = 0;
+	const queue = createQueue(scheduler, {
+		releaseSlotOnLoad: (surface) => surface === "card-flow",
+	});
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		{
+			...createLoadItem(first, "app://first.png"),
+			onLoad: () => {
+				firstLoadCount += 1;
+			},
+		},
+		createLoadItem(second, "app://second.png"),
+	]));
+	scheduler.flushDelay(0);
+
+	first.dispatch("load");
+
+	assert.equal(first.decodeCalls, 1);
+	assert.equal(firstLoadCount, 1);
+	assert.equal(second.getAttr("src"), null);
+	assert.equal(scheduler.delays.includes(10_000), false);
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(second.getAttr("src"), "app://second.png");
+});
+
+test("release-on-load reuses a source only after async decode succeeds", async () => {
+	const scheduler = new FakeScheduler();
+	const first = new FakeImage();
+	const second = new FakeImage();
+	let reusedLoadCount = 0;
+	const queue = createQueue(scheduler, {
+		releaseSlotOnLoad: (surface) => surface === "card-flow",
+	});
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(first, "app://decoded-after-load.png"),
+	]));
+	scheduler.flushDelay(0);
+	first.dispatch("load");
+	first.resolveDecode();
+	await flushMicrotasks();
+
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		{
+			...createLoadItem(second, "app://decoded-after-load.png"),
+			onLoad: () => {
+				reusedLoadCount += 1;
+			},
+		},
+	]));
+
+	assert.equal(second.getAttr("src"), "app://decoded-after-load.png");
+	assert.equal(second.decodeCalls, 0);
+	assert.equal(scheduler.size, 0);
+	await flushMicrotasks();
+	assert.equal(reusedLoadCount, 1);
+});
+
+test("release-on-load skips async decode caching after generation changes", async () => {
+	const scheduler = new FakeScheduler();
+	const first = new FakeImage();
+	const second = new FakeImage();
+	const generations = new Map<CardImageLoadSurface, number>([
+		["card-flow", 1],
+		["mobile-search", 1],
+		["image-preview", 1],
+	]);
+	const queue = createQueue(scheduler, {
+		generations,
+		releaseSlotOnLoad: (surface) => surface === "card-flow",
+	});
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(first, "app://stale-after-load.png"),
+	]));
+	scheduler.flushDelay(0);
+	first.dispatch("load");
+	generations.set("card-flow", 2);
+	first.resolveDecode();
+	await flushMicrotasks();
+
+	queue.observe({
+		...createRequest("card-flow", new FakeCard(), [
+			createLoadItem(second, "app://stale-after-load.png"),
+		]),
+		generation: 2,
+	});
+
+	assert.equal(second.getAttr("src"), null);
+	assert.deepEqual(scheduler.delays, [0]);
+});
+
+test("release-on-load skips async decode caching after resource invalidation", async () => {
+	const scheduler = new FakeScheduler();
+	const first = new FakeImage();
+	const second = new FakeImage();
+	const queue = createQueue(scheduler, {
+		releaseSlotOnLoad: (surface) => surface === "card-flow",
+	});
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(first, "app://photo.png", "Attachments/photo.png"),
+	]));
+	scheduler.flushDelay(0);
+	first.dispatch("load");
+	queue.invalidateResourcePaths(["Attachments/photo.png"]);
+	first.resolveDecode();
+	await flushMicrotasks();
+
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		createLoadItem(second, "app://photo.png", "Attachments/photo.png"),
+	]));
+
+	assert.equal(second.getAttr("src"), null);
+	assert.deepEqual(scheduler.delays, [0]);
+});
+
+test("forget clears a stale active target before a direct eager replacement", () => {
+	const scheduler = new FakeScheduler();
+	const card = new FakeCard();
+	const stale = new FakeImage();
+	const replacement = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.observe(createRequest("card-flow", card, [
+		createLoadItem(stale, "app://stale.png"),
+	]));
+	scheduler.flushDelay(0);
+	assert.equal(stale.getAttr("src"), "app://stale.png");
+	assert.deepEqual(scheduler.delays, [10_000]);
+
+	queue.forget(card.asElement(), true);
+	queue.observe(createRequest("card-flow", card, [
+		createLoadItem(replacement, "app://replacement.png"),
+	]));
+
+	assert.equal(stale.getAttr("src"), null);
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(replacement.getAttr("src"), "app://replacement.png");
+});
+
 test("starts the primary image from each card before secondary images", () => {
 	const scheduler = new FakeScheduler();
 	const firstPrimary = new FakeImage();
@@ -143,6 +291,126 @@ test("can pause one surface without blocking another", () => {
 	queue.setSurfacePaused("card-flow", false);
 	scheduler.flushDelay(0);
 	assert.equal(cardImage.getAttr("src"), "app://card.png");
+});
+
+test("paused background surfaces do not block image preview", () => {
+	const scheduler = new FakeScheduler();
+	const cardImage = new FakeImage();
+	const searchImage = new FakeImage();
+	const previewImage = new FakeImage();
+	const queue = createQueue(scheduler);
+
+	queue.setSurfacePaused("card-flow", true);
+	queue.setSurfacePaused("mobile-search", true);
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(cardImage, "app://card.png"),
+	]));
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		createLoadItem(searchImage, "app://search.png"),
+	]));
+	queue.observe({
+		...createRequest("image-preview", new FakeCard(), [
+			createLoadItem(previewImage, "app://preview.png"),
+		]),
+		priority: "high",
+	});
+
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(previewImage.getAttr("src"), "app://preview.png");
+	assert.equal(cardImage.getAttr("src"), null);
+	assert.equal(searchImage.getAttr("src"), null);
+
+	previewImage.dispatch("error");
+	queue.setSurfacePaused("card-flow", false);
+	scheduler.flushDelay(0);
+	assert.equal(cardImage.getAttr("src"), "app://card.png");
+	assert.equal(searchImage.getAttr("src"), null);
+});
+
+test("preempted active card flow does not block mobile search images", () => {
+	const scheduler = new FakeScheduler();
+	const firstCardImage = new FakeImage();
+	const secondCardImage = new FakeImage();
+	const searchImage = new FakeImage();
+	const queue = createQueue(scheduler, { concurrency: 2 });
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(firstCardImage, "app://first-card.png"),
+	]));
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(secondCardImage, "app://second-card.png"),
+	]));
+	scheduler.flushDelay(0);
+	scheduler.flushDelay(0);
+	assert.equal(firstCardImage.getAttr("src"), "app://first-card.png");
+	assert.equal(secondCardImage.getAttr("src"), "app://second-card.png");
+
+	queue.observe({
+		...createRequest("mobile-search", new FakeCard(), [
+			createLoadItem(searchImage, "app://search.png"),
+		]),
+		priority: "high",
+	});
+	queue.setSurfacePaused("card-flow", true);
+	queue.preemptActiveSurface("card-flow");
+
+	assert.equal(firstCardImage.getAttr("src"), null);
+	assert.equal(secondCardImage.getAttr("src"), null);
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(searchImage.getAttr("src"), "app://search.png");
+
+	searchImage.dispatch("error");
+	queue.setSurfacePaused("card-flow", false);
+	scheduler.flushDelay(0);
+	scheduler.flushDelay(0);
+	assert.equal(firstCardImage.getAttr("src"), "app://first-card.png");
+	assert.equal(secondCardImage.getAttr("src"), "app://second-card.png");
+});
+
+test("preempted active background surfaces do not block image preview", () => {
+	const scheduler = new FakeScheduler();
+	const cardImage = new FakeImage();
+	const searchImage = new FakeImage();
+	const previewImage = new FakeImage();
+	const queue = createQueue(scheduler, { concurrency: 2 });
+
+	queue.observe(createRequest("card-flow", new FakeCard(), [
+		createLoadItem(cardImage, "app://card.png"),
+	]));
+	queue.observe(createRequest("mobile-search", new FakeCard(), [
+		createLoadItem(searchImage, "app://search.png"),
+	]));
+	scheduler.flushDelay(0);
+	scheduler.flushDelay(0);
+	assert.equal(cardImage.getAttr("src"), "app://card.png");
+	assert.equal(searchImage.getAttr("src"), "app://search.png");
+
+	queue.observe({
+		...createRequest("image-preview", new FakeCard(), [
+			createLoadItem(previewImage, "app://preview.png"),
+		]),
+		priority: "high",
+	});
+	queue.setSurfacePaused("card-flow", true);
+	queue.preemptActiveSurface("card-flow");
+	queue.setSurfacePaused("mobile-search", true);
+	queue.preemptActiveSurface("mobile-search");
+
+	assert.equal(cardImage.getAttr("src"), null);
+	assert.equal(searchImage.getAttr("src"), null);
+	assert.deepEqual(scheduler.delays, [0]);
+	scheduler.flushDelay(0);
+	assert.equal(previewImage.getAttr("src"), "app://preview.png");
+
+	previewImage.dispatch("error");
+	queue.setSurfacePaused("card-flow", false);
+	queue.setSurfacePaused("mobile-search", false);
+	scheduler.flushDelay(0);
+	scheduler.flushDelay(0);
+	assert.equal(cardImage.getAttr("src"), "app://card.png");
+	assert.equal(searchImage.getAttr("src"), "app://search.png");
 });
 
 test("clears one surface without cancelling another", () => {
@@ -283,6 +551,7 @@ interface CreateQueueOptions {
 	concurrency?: number;
 	generations?: Map<CardImageLoadSurface, number>;
 	observe?: boolean;
+	releaseSlotOnLoad?: (surface: CardImageLoadSurface) => boolean;
 }
 
 function createQueue(scheduler: FakeScheduler, options: CreateQueueOptions = {}): CardImageLoadQueue {
@@ -297,6 +566,7 @@ function createQueue(scheduler: FakeScheduler, options: CreateQueueOptions = {})
 		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
 		cancelTask: (taskId) => scheduler.cancel(taskId),
 		watchdogMs: 10_000,
+		releaseSlotOnLoad: options.releaseSlotOnLoad,
 		Observer: options.observe
 			? FakeIntersectionObserver as unknown as typeof IntersectionObserver
 			: undefined,

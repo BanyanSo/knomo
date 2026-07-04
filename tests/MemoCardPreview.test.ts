@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 
 import type { App, TFile } from "obsidian";
 
-import { parseMemoCardPreview } from "../src/ui/MemoCardPreview";
+import { ImageResourceCache } from "../src/ui/ImageResourceCache";
+import { parseMemoCardPreview, parseMemoCardPreviewLite } from "../src/ui/MemoCardPreview";
 
 test("parses memo card images in source order and removes image syntax from preview text", () => {
 	const app = createAppStub([
@@ -35,6 +36,22 @@ test("parses memo card images in source order and removes image syntax from prev
 	]);
 	assert.equal(preview.images[1].alt, "local");
 	assert.equal(preview.images[3].isRemote, true);
+});
+
+test("parseMemoCardPreviewLite strips image syntax without resolving local files", () => {
+	const content = "before ![[image.png|300]] middle ![local](<folder/image name.png>) after";
+	const preview = parseMemoCardPreviewLite(content);
+
+	assert.equal(preview.text, "before  middle  after");
+	assert.deepEqual(preview.imageRefs.map((image) => image.path), [
+		"image.png",
+		"folder/image name.png",
+	]);
+	assert.deepEqual(preview.imageRefs.map((image) => content.slice(image.start, image.end)), [
+		"![[image.png|300]]",
+		"![local](<folder/image name.png>)",
+	]);
+	assert.equal(preview.imageRefs[1].alt, "local");
 });
 
 test("skips fenced code blocks, inline code, and incomplete image syntax", () => {
@@ -144,6 +161,29 @@ test("versions local resource urls with the attachment modification time", () =>
 	assert.equal(preview.images[0].resourcePath, "photo.png");
 });
 
+test("caches resolved image resources across preview text changes", () => {
+	const app = createAppStub(["photo.png"]);
+	const cache = new ImageResourceCache();
+
+	const first = parseMemoCardPreview("first ![[photo.png]]", "Daily/2026-06-15.md", app, cache);
+	const second = parseMemoCardPreview("second ![[photo.png]]", "Daily/2026-06-15.md", app, cache);
+
+	assert.equal(first.images[0].url, "app://photo.png");
+	assert.equal(second.images[0].url, "app://photo.png");
+	assert.equal(getResolveCount(app), 1);
+});
+
+test("invalidates cached image resources by changed attachment path", () => {
+	const app = createAppStub(["photo.png"]);
+	const cache = new ImageResourceCache();
+
+	parseMemoCardPreview("![[photo.png]]", "Daily/2026-06-15.md", app, cache);
+	cache.invalidateImagePaths(["Attachments/photo.png"]);
+	parseMemoCardPreview("![[photo.png]]", "Daily/2026-06-15.md", app, cache);
+
+	assert.equal(getResolveCount(app), 2);
+});
+
 test("resolves percent-encoded Obsidian image embed paths", () => {
 	const app = createAppStub(["Assets/a b c.jpg"]);
 	const preview = parseMemoCardPreview("![[Assets/a%20b%20c.jpg]]", "Daily/2026-06-15.md", app);
@@ -178,6 +218,7 @@ test("resolves percent-encoded local Markdown image paths", () => {
 
 function createAppStub(paths: string[], modifiedAt?: number): App {
 	const files = new Map<string, TFile>();
+	let resolveCount = 0;
 	for (const path of paths) {
 		files.set(path, {
 			path,
@@ -186,10 +227,18 @@ function createAppStub(paths: string[], modifiedAt?: number): App {
 	}
 	return {
 		metadataCache: {
-			getFirstLinkpathDest: (path: string) => files.get(path) ?? null,
+			getFirstLinkpathDest: (path: string) => {
+				resolveCount += 1;
+				return files.get(path) ?? null;
+			},
 		},
 		vault: {
 			getResourcePath: (file: TFile) => `app://${file.path}`,
 		},
+		knomoResolveCount: () => resolveCount,
 	} as unknown as App;
+}
+
+function getResolveCount(app: App): number {
+	return (app as unknown as { knomoResolveCount: () => number }).knomoResolveCount();
 }

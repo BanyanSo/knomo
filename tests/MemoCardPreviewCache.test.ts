@@ -9,7 +9,7 @@ test("reuses a memo preview while its fixed cache key is unchanged", () => {
 	const memo = makeMemo("memo-1");
 	const cache = new MemoCardPreviewCache((_value, content) => {
 		calls += 1;
-		return { text: content, images: [] };
+		return { text: content, imageRefs: [] };
 	});
 
 	assert.equal(cache.get(memo, "memo").text, "memo");
@@ -22,27 +22,34 @@ test("invalidates a memo preview when its content revision changes", () => {
 	const memo = makeMemo("memo-1");
 	const cache = new MemoCardPreviewCache(() => {
 		calls += 1;
-		return { text: String(calls), images: [] };
+		return { text: String(calls), imageRefs: [] };
 	});
 
 	assert.equal(cache.get(memo, "memo").text, "1");
 	assert.equal(cache.get({ ...memo, version: 2, contentHash: "changed" }, "memo").text, "2");
 });
 
-test("invalidates local image previews by resolved path or basename", () => {
+test("finds local image previews affected by changed path or basename without dropping cached text", () => {
+	let calls = 0;
 	const memo = makeMemo("memo-1");
-	const cache = new MemoCardPreviewCache(() => ({
-		text: "",
-		images: [{
-			raw: "![[photo.png]]",
-			path: "photo.png",
-			isRemote: false,
-			unresolved: true,
-		}],
-	}));
+	const cache = new MemoCardPreviewCache(() => {
+		calls += 1;
+		return {
+			text: "",
+			imageRefs: [{
+				raw: "![[photo.png]]",
+				path: "photo.png",
+				isRemote: false,
+				start: 0,
+				end: 14,
+			}],
+		};
+	});
 
 	cache.get(memo, "memo");
-	assert.deepEqual(cache.invalidateImagePaths(["Attachments/photo.png"]), ["memo-1"]);
+	assert.deepEqual(cache.findImagePathMemoIds(["Attachments/photo.png"]), ["memo-1"]);
+	cache.get(memo, "memo");
+	assert.equal(calls, 1);
 });
 
 function makeMemo(id: string): MemoRecord {

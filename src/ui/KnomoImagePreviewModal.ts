@@ -150,10 +150,12 @@ export class KnomoImagePreviewModal extends Modal {
 		const image = this.images[this.currentIndex];
 		const renderGeneration = ++this.renderGeneration;
 		this.clearImageLoads();
+		setImagePreviewLoadingState(stage, false);
 		stage.empty();
 		if (image === undefined || image.url === undefined || image.unresolved === true) {
 			this.renderPlaceholder(stage);
 		} else {
+			setImagePreviewLoadingState(stage, true);
 			this.preloadedImageUrls.add(image.url);
 			const img = stage.createEl("img", {
 				cls: "knomo-image-preview-img",
@@ -169,11 +171,13 @@ export class KnomoImagePreviewModal extends Modal {
 				priority: "high",
 				onLoad: () => {
 					if (this.stageEl === stage && this.renderGeneration === renderGeneration) {
+						setImagePreviewLoadingState(stage, false);
 						this.preloadAdjacentImage(stage);
 					}
 				},
 				onError: () => {
 					if (this.stageEl === stage && this.renderGeneration === renderGeneration) {
+						setImagePreviewLoadingState(stage, false);
 						stage.empty();
 						this.renderLoadError(stage);
 					}
@@ -395,8 +399,17 @@ export function getAdjacentImageIndexes(currentIndex: number, imageCount: number
 	}
 	const current = clampImageIndex(currentIndex, imageCount);
 	const indexes = [
-		(current - 1 + imageCount) % imageCount,
 		(current + 1) % imageCount,
+		(current - 1 + imageCount) % imageCount,
 	];
 	return indexes.filter((index, position) => index !== current && indexes.indexOf(index) === position);
+}
+
+export function setImagePreviewLoadingState(stage: HTMLElement, loading: boolean): void {
+	stage.toggleClass("is-loading", loading);
+	if (loading) {
+		stage.setAttr("aria-busy", "true");
+		return;
+	}
+	stage.removeAttribute("aria-busy");
 }

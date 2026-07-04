@@ -22,12 +22,13 @@ import { stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
 import { formatServiceError, formatSettingsText } from "../utils/serviceText";
 import { getComposerToolButtonRoute } from "./KnomoActionRouter";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
-import { CardImageLoadQueue } from "./CardImageLoadQueue";
+import { CardImageLoadQueue, type CardImageLoadSurface } from "./CardImageLoadQueue";
 import { DateChangeWatcher } from "./DateChangeWatcher";
 import { DesktopSidebarStateController } from "./DesktopSidebarStateController";
 import { renderKnomoMemoCard, renderKnomoTrashMemoCard } from "./KnomoCard";
 import {
 	parseCardImageIndex,
+	planMemoCardImageLoads,
 	renderMemoCardImages,
 } from "./KnomoCardImages";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
@@ -44,6 +45,7 @@ import { ComposerListEnterState } from "./ComposerListEnterState";
 import type { PendingListEnterCorrection } from "./ComposerListEnterState";
 import { ComposerSaveShortcutController } from "./ComposerSaveShortcutController";
 import { ImagePreviewScrollLock } from "./ImagePreviewScrollLock";
+import { ImageResourceCache } from "./ImageResourceCache";
 import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
 import { filterVisibleMemos, memoMatchesSearch } from "./KnomoMemoFilter";
 import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
@@ -80,11 +82,10 @@ import {
 	formatMemoDisplayTime,
 	formatOptionalMemoTime,
 } from "./MemoDisplayFormatters";
-import { parseMemoCardPreview } from "./MemoCardPreview";
+import { parseMemoCardPreviewLite, resolveMemoPreviewImages } from "./MemoCardPreview";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 import { MemoCardPreviewCache } from "./MemoCardPreviewCache";
 import {
-	getMemoImageRevision,
 	getMemoRenderRevision,
 } from "./MemoRenderRevision";
 import { MemoSearchCache } from "./MemoSearchCache";
@@ -168,6 +169,7 @@ const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;
 const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;
 const MOBILE_SEARCH_BATCH_SIZE = 30;
 const INITIAL_VISIBLE_RENDER_COUNT = 16;
+const MOBILE_EAGER_CARD_IMAGE_RENDER_COUNT = 6;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
 const MOBILE_MARKDOWN_RENDER_CONCURRENCY = 4;
 const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;
@@ -198,6 +200,8 @@ interface RenderUiStateOptions {
 }
 
 type CardRenderSurface = "card-flow" | "mobile-search";
+type ImageLoadPauseReason = "image-preview" | "mobile-search";
+type PausableImageLoadSurface = Exclude<CardImageLoadSurface, "image-preview">;
 
 interface ApplyMemoMutationOptions {
 	preserveCardMemoId?: string;
@@ -259,6 +263,7 @@ export class KnomoView extends ItemView {
 	private readonly mobileSendPointerGuard = new MobileSendPointerGuard({ getNow: () => Date.now() });
 	private readonly nativeImagePickerController: NativeImagePickerController;
 	private readonly cardImageLoadQueue: CardImageLoadQueue;
+	private readonly imageLoadPauseReasons = new Map<PausableImageLoadSurface, Set<ImageLoadPauseReason>>();
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly mobileMemoHydrator: MobileMemoHydrator;
 	private readonly randomReunionController: RandomReunionController;
@@ -277,8 +282,9 @@ export class KnomoView extends ItemView {
 	private imagePreviewRenderGeneration = 0;
 	private readonly renderedCardMemos = new Map<string, MemoRecord>();
 	private readonly renderedPreviewImages = new WeakMap<HTMLElement, readonly MemoPreviewImage[]>();
-	private readonly memoCardPreviewCache = new MemoCardPreviewCache((memo, displayContent) => {
-		return parseMemoCardPreview(displayContent, memo.dailyRef.path, this.app);
+	private readonly imageResourceCache = new ImageResourceCache();
+	private readonly memoCardPreviewCache = new MemoCardPreviewCache((_memo, displayContent) => {
+		return parseMemoCardPreviewLite(displayContent);
 	});
 
 	private get renderGeneration(): number {
@@ -519,7 +525,7 @@ export class KnomoView extends ItemView {
 			},
 			clearMarkdown: (surface) => this.memoMarkdownRenderer.clear(surface),
 			clearImages: (surface) => this.cardImageLoadQueue.clear(surface),
-			setCardFlowPaused: (paused) => this.cardImageLoadQueue.setSurfacePaused("card-flow", paused),
+			setCardFlowPaused: (paused) => this.setImageLoadSurfacePaused("card-flow", "mobile-search", paused),
 			closeSurroundingChrome: () => {
 				this.mobileDrawerOpen = false;
 				this.scopeMenuOpen = false;
@@ -564,6 +570,8 @@ export class KnomoView extends ItemView {
 				? (taskId) => imageQueueWindow.cancelAnimationFrame(taskId)
 				: undefined,
 			watchdogMs: CARD_IMAGE_LOAD_WATCHDOG_MS,
+			releaseSlotOnLoad: (surface) => Platform.isMobile
+				&& (surface === "card-flow" || surface === "mobile-search"),
 			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
 			rootMargin: Platform.isMobile ? "280px 0px" : undefined,
 		});
@@ -862,6 +870,7 @@ export class KnomoView extends ItemView {
 		this.mobileComposerController.dispose();
 		this.cardImageLoadQueue.dispose();
 		this.memoCardPreviewCache.clear();
+		this.imageResourceCache.clear();
 		this.composerListEnterState.clear();
 		this.clearHandledMobileToolPointer();
 		this.nativeImagePickerController.dispose();
@@ -962,7 +971,8 @@ export class KnomoView extends ItemView {
 
 	handleAttachmentFilesChanged(paths: readonly string[]): void {
 		this.cardImageLoadQueue.invalidateResourcePaths(paths);
-		const affectedMemoIds = this.memoCardPreviewCache.invalidateImagePaths(paths);
+		this.imageResourceCache.invalidateImagePaths(paths);
+		const affectedMemoIds = this.memoCardPreviewCache.findImagePathMemoIds(paths);
 		for (const memoId of affectedMemoIds) {
 			const memo = this.findMemoById(memoId);
 			if (memo !== null) {
@@ -2161,7 +2171,6 @@ export class KnomoView extends ItemView {
 		const reusedImagesEl = reusedBodyEl === null
 			&& mode === "memo"
 			&& previousMemo !== null
-			&& this.getMemoImageKey(previousMemo) === this.getMemoImageKey(memo)
 			? existingCard.find(".knomo-card-images")
 			: null;
 		const replacement = this.renderCardForMode(
@@ -2205,10 +2214,6 @@ export class KnomoView extends ItemView {
 
 	private canReuseRenderedMemo(previousMemo: MemoRecord | null, memo: MemoRecord): boolean {
 		return previousMemo !== null && getMemoRenderRevision(previousMemo) === getMemoRenderRevision(memo);
-	}
-
-	private getMemoImageKey(memo: MemoRecord): string {
-		return getMemoImageRevision(memo);
 	}
 
 	private getDirectCardElements(container: HTMLElement): HTMLElement[] {
@@ -2363,12 +2368,12 @@ export class KnomoView extends ItemView {
 			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority, previewText) => {
 				this.memoMarkdownRenderer.queueMemoMarkdown(memoRecord, content, renderGeneration, priority, previewText, surface);
 			},
-			renderMemoCardImages: (content, memoRecord, images, renderGeneration) => {
-				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, surface);
+			renderMemoCardImages: (content, memoRecord, images, renderGeneration, reusedImagesEl) => {
+				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, surface, renderIndex, reusedImagesEl ?? null);
 			},
-				queueSourceReferenceMarkdown: (content, text, sourcePath, renderGeneration) => {
-					this.memoMarkdownRenderer.queueSourceReferenceMarkdown(content, text, sourcePath, renderGeneration, surface);
-				},
+			queueSourceReferenceMarkdown: (content, text, sourcePath, renderGeneration) => {
+				this.memoMarkdownRenderer.queueSourceReferenceMarkdown(content, text, sourcePath, renderGeneration, surface);
+			},
 			reusedBodyEl,
 			reusedImagesEl,
 		});
@@ -2402,14 +2407,19 @@ export class KnomoView extends ItemView {
 			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority, previewText) => {
 				this.memoMarkdownRenderer.queueMemoMarkdown(memoRecord, content, renderGeneration, priority, previewText, "card-flow");
 			},
-			renderMemoCardImages: (content, memoRecord, images, renderGeneration) => {
-				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, "card-flow");
+			renderMemoCardImages: (content, memoRecord, images, renderGeneration, reusedImagesEl) => {
+				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, "card-flow", renderIndex, reusedImagesEl ?? null);
 			},
 		});
 	}
 
 	private getMemoCardPreview(memo: MemoRecord): MemoCardPreview {
-		return this.memoCardPreviewCache.get(memo, this.getMemoDisplayContent(memo));
+		return resolveMemoPreviewImages(
+			this.memoCardPreviewCache.get(memo, this.getMemoDisplayContent(memo)),
+			memo.dailyRef.path,
+			this.app,
+			this.imageResourceCache,
+		);
 	}
 
 	private getMemoDisplayContent(memo: MemoRecord): string {
@@ -2433,21 +2443,41 @@ export class KnomoView extends ItemView {
 		images: MemoPreviewImage[],
 		generation: number,
 		surface: CardRenderSurface,
+		renderIndex = Number.POSITIVE_INFINITY,
+		reusedImagesEl: HTMLElement | null = null,
 	): void {
 		const rendered = renderMemoCardImages(container, memo, images, {
 			previewLabel: t("image.previewLabel"),
 			unavailableLabel: t("image.unavailable"),
-		});
+		}, reusedImagesEl);
 		if (rendered === null) {
 			return;
 		}
+		if (rendered.loadItems.length > 0) {
+			this.cardImageLoadQueue.forget(rendered.imagesEl, true);
+		}
 		this.renderedPreviewImages.set(rendered.imagesEl, images);
-		this.cardImageLoadQueue.observe({
-			targetEl: rendered.imagesEl,
-			images: rendered.loadItems,
-			generation,
-			surface,
-		});
+		const eagerFirstImage = surface === "card-flow"
+			&& Platform.isMobile
+			&& renderIndex < MOBILE_EAGER_CARD_IMAGE_RENDER_COUNT;
+		const { observedLoadItems, eagerLoadItems } = planMemoCardImageLoads(rendered.loadItems, eagerFirstImage);
+		if (observedLoadItems.length > 0) {
+			this.cardImageLoadQueue.observe({
+				targetEl: rendered.imagesEl,
+				images: observedLoadItems,
+				generation,
+				surface,
+			});
+		}
+		if (eagerLoadItems.length > 0) {
+			this.cardImageLoadQueue.observe({
+				targetEl: rendered.imagesEl,
+				images: eagerLoadItems,
+				generation,
+				surface,
+				observe: false,
+			});
+		}
 	}
 
 	private refreshVisibleMemoImages(memo: MemoRecord): void {
@@ -2549,6 +2579,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private lockCardFlowScrollForImagePreview(): void {
+		this.setImagePreviewBackgroundLoadsPaused(true);
 		this.imagePreviewScrollLock.lock(this.cardFlowEl, this.mobileSearchResultsEl);
 	}
 
@@ -2558,6 +2589,35 @@ export class KnomoView extends ItemView {
 			this.mobileSearchResultsEl,
 			(scrollTop) => this.restoreCardFlowScrollTop(scrollTop),
 		);
+		this.setImagePreviewBackgroundLoadsPaused(false);
+	}
+
+	private setImagePreviewBackgroundLoadsPaused(paused: boolean): void {
+		this.setImageLoadSurfacePaused("card-flow", "image-preview", paused);
+		this.setImageLoadSurfacePaused("mobile-search", "image-preview", paused);
+	}
+
+	private setImageLoadSurfacePaused(
+		surface: PausableImageLoadSurface,
+		reason: ImageLoadPauseReason,
+		paused: boolean,
+	): void {
+		let reasons = this.imageLoadPauseReasons.get(surface);
+		if (reasons === undefined) {
+			reasons = new Set<ImageLoadPauseReason>();
+			this.imageLoadPauseReasons.set(surface, reasons);
+		}
+		const wasPaused = reasons.size > 0;
+		if (paused) {
+			reasons.add(reason);
+		} else {
+			reasons.delete(reason);
+		}
+		const shouldPause = reasons.size > 0;
+		this.cardImageLoadQueue.setSurfacePaused(surface, shouldPause);
+		if (paused && !wasPaused && shouldPause) {
+			this.cardImageLoadQueue.preemptActiveSurface(surface);
+		}
 	}
 
 	private toggleSidebarTagGroup(tag: string, element: HTMLElement): void {

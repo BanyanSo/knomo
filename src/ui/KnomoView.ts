@@ -93,6 +93,11 @@ import { getMemoTaskCheckboxChangePlan } from "./MemoTaskCheckboxChange";
 import { MemoTaskUpdateCoordinator } from "./MemoTaskUpdateCoordinator";
 import { MobileHandledToolPointer } from "./MobileHandledToolPointer";
 import { MobileHeaderTitleController } from "./MobileHeaderTitleController";
+import {
+	measureMobileHeaderOffsets,
+	MOBILE_DRAWER_TOP_DEFAULT,
+	MOBILE_SEARCH_TOP_DEFAULT,
+} from "./mobileHeaderMetrics";
 import { MobileImagePickerFocusGuard } from "./MobileImagePickerFocusGuard";
 import { MobileSendPointerGuard } from "./MobileSendPointerGuard";
 import { MobileComposerController } from "./MobileComposerController";
@@ -181,7 +186,6 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 	".mod-active .view-header",
 	".view-header",
 ];
-const MOBILE_DRAWER_TOP_DEFAULT = "max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px))";
 const TITLE_POPOVER_LEFT_DEFAULT = "max(16px, env(safe-area-inset-left))";
 const TITLE_POPOVER_TOP_DEFAULT = MOBILE_DRAWER_TOP_DEFAULT;
 
@@ -878,6 +882,9 @@ export class KnomoView extends ItemView {
 		this.clearSuppressNextOpenPopupDismissClick();
 		this.removeMobileSearchPage();
 		this.containerEl.doc.body.removeClass("knomo-mobile-search-active");
+		if (this.rootEl !== null) {
+			this.resetMobileTopOffsets(this.rootEl);
+		}
 		this.removeMobileHeaderTitle();
 		this.removeMobileHeaderActions();
 		this.stopDateChangeWatcher();
@@ -1490,9 +1497,9 @@ export class KnomoView extends ItemView {
 		this.syncManualRefreshButtonState();
 		this.syncMobileHeaderActions();
 		this.syncMobileHeaderTitle();
+		this.syncMobileTopOffsets(root);
 		this.syncTitlePopoverPosition();
 		this.syncMobileSearchPage();
-		this.syncMobileDrawerTop(root);
 		this.mobileComposerController.syncViewportTracking();
 		this.mobileComposerController.syncLayer();
 		if (this.sidebarResizerEl !== null) {
@@ -1525,32 +1532,27 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private syncMobileDrawerTop(root: HTMLElement): void {
+	private syncMobileTopOffsets(root: HTMLElement): void {
 		if (this.currentLayout !== "mobile") {
-			root.setCssProps({ "--knomo-mobile-drawer-top": MOBILE_DRAWER_TOP_DEFAULT });
+			this.resetMobileTopOffsets(root);
 			return;
 		}
-		const headerBottom = this.measureMobileHeaderBottom();
-		if (headerBottom === null) {
-			root.setCssProps({ "--knomo-mobile-drawer-top": MOBILE_DRAWER_TOP_DEFAULT });
+		const metrics = measureMobileHeaderOffsets(this.findMobileViewHeader(), this.containerEl.win.innerHeight);
+		if (metrics === null) {
+			this.resetMobileTopOffsets(root);
 			return;
 		}
-		root.setCssProps({ "--knomo-mobile-drawer-top": `${headerBottom}px` });
+		root.setCssProps({
+			"--knomo-mobile-drawer-top": `${metrics.drawerTop}px`,
+			"--knomo-mobile-search-top": `${metrics.searchTop}px`,
+		});
 	}
 
-	private measureMobileHeaderBottom(): number | null {
-		const headerEl = this.findMobileViewHeader();
-		const rect = headerEl?.getBoundingClientRect();
-		if (
-			rect === undefined ||
-			rect.width <= 0 ||
-			rect.height <= 0 ||
-			rect.bottom <= 0 ||
-			rect.bottom > this.containerEl.win.innerHeight / 2
-		) {
-			return null;
-		}
-		return Math.ceil(rect.bottom);
+	private resetMobileTopOffsets(root: HTMLElement): void {
+		root.setCssProps({
+			"--knomo-mobile-drawer-top": MOBILE_DRAWER_TOP_DEFAULT,
+			"--knomo-mobile-search-top": MOBILE_SEARCH_TOP_DEFAULT,
+		});
 	}
 
 	private findMobileViewHeader(): HTMLElement | null {

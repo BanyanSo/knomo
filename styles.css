@@ -19,6 +19,7 @@ body {
 	--knomo-mobile-drawer-reserved-right: calc(75px + env(safe-area-inset-right));
 	--knomo-mobile-drawer-width: min(360px, calc(100vw - var(--knomo-mobile-drawer-reserved-right)));
 	--knomo-mobile-drawer-top: max(calc(44px + env(safe-area-inset-top)), var(--header-height, 44px));
+	--knomo-mobile-search-top: max(14px, env(safe-area-inset-top));
 	--knomo-mobile-drawer-bottom-clearance: calc(var(--mobile-navbar-action-size, 44px) + 20px);
 	--knomo-touch-target: 44px;
 	--knomo-radius: 10px;
@@ -1454,7 +1455,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: flex;
 	flex-direction: column;
 	gap: 0;
-	padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+	padding: var(--knomo-mobile-search-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 	background: transparent;
 	opacity: 0;
 	pointer-events: none;
@@ -1511,11 +1512,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	gap: 10px;
 	flex: 1;
 	min-width: 0;
-	height: 48px;
-	min-height: 48px;
+	height: 44px;
+	min-height: 44px;
 	padding: 0 16px;
 	border: 1px solid var(--knomo-soft-border);
-	border-radius: 24px;
+	border-radius: 22px;
 	background: var(--knomo-surface);
 	color: var(--text-faint);
 	box-shadow: var(--knomo-card-shadow);
@@ -1531,10 +1532,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 48px;
-	min-width: 48px;
-	height: 48px;
-	min-height: 48px;
+	width: 44px;
+	min-width: 44px;
+	height: 44px;
+	min-height: 44px;
 	padding: 0;
 	border: 0;
 	border-radius: 50%;
@@ -1545,8 +1546,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-mobile-search-close svg {
-	width: 28px;
-	height: 28px;
+	width: 24px;
+	height: 24px;
 }
 
 .knomo-plugin .knomo-mobile-search-quick {

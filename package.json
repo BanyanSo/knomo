@@ -1,6 +1,6 @@
 {
 	"name": "knomo",
-	"version": "1.1.3",
+	"version": "1.1.4",
 	"description": "Capture local-first memos into daily notes and monthly archives.",
 	"main": "main.js",
 	"scripts": {

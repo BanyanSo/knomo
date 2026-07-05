@@ -410,7 +410,7 @@ export class CardImageLoadQueue {
 				? task.item.imageEl.decode()
 				: Promise.resolve();
 		} catch {
-			return Promise.reject();
+			return Promise.reject(new Error("Failed to decode card image."));
 		}
 	}
 

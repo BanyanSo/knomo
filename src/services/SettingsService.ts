@@ -11,7 +11,13 @@ import type {
 import { cloneSettings, isValidMonthlyMemoFileFormat, normalizeSettings } from "../settings/normalizeSettings";
 import type { KnomoSettings } from "../types/settings";
 import { isValidMarkdownHeading } from "../utils/markdown";
-import { buildPluginDataWithSettings, extractSettingsData } from "../utils/pluginData";
+import {
+	buildPluginDataWithMaintenanceDiagnostic,
+	buildPluginDataWithSettings,
+	extractMaintenanceDiagnostic,
+	extractSettingsData,
+	type MaintenanceDiagnostic,
+} from "../utils/pluginData";
 
 export { DEFAULT_KNOMO_SETTINGS, isValidMonthlyMemoFileFormat };
 export type {
@@ -59,6 +65,18 @@ export class SettingsService {
 		return this.runSettingsWriteExclusive(() => this.persistSettings(
 			Object.assign({}, this.settings, patch),
 		));
+	}
+
+	async loadMaintenanceDiagnostic(): Promise<MaintenanceDiagnostic | null> {
+		const savedData: unknown = await this.plugin.loadData();
+		return extractMaintenanceDiagnostic(savedData);
+	}
+
+	async saveMaintenanceDiagnostic(diagnostic: MaintenanceDiagnostic): Promise<void> {
+		await this.runSettingsWriteExclusive(async () => {
+			const savedData: unknown = await this.plugin.loadData();
+			await this.plugin.saveData(buildPluginDataWithMaintenanceDiagnostic(savedData, diagnostic));
+		});
 	}
 
 	private async persistSettings(settings: KnomoSettings): Promise<KnomoSettings> {

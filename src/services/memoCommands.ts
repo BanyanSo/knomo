@@ -336,17 +336,17 @@ export class MemoCommandService {
 				const monthlyResult = await this.monthlyArchiveService.deleteMemoBlock(currentMemo);
 				deletedMonthlyBlock = monthlyResult.ref.lastKnownBlock;
 				markSelfWrite(this.selfWriteTracker, opId, monthlyResult.file.path, "archive", monthlyResult.content);
-				} catch (error) {
-					syncStatus = "monthly_delete_failed";
-					const monthlyIssue = buildMonthlyIssue(error);
-					issue = monthlyIssue.type === "monthly_block_ambiguous"
-						? monthlyIssue
-						: {
-							type: "delete_failed",
-							...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
-							detectedAt: new Date().toISOString(),
-							message: error instanceof Error ? error.message : "Monthly archive delete failed.",
-						};
+			} catch (error) {
+				syncStatus = "monthly_delete_failed";
+				const monthlyIssue = buildMonthlyIssue(error);
+				issue = monthlyIssue.type === "monthly_block_ambiguous"
+					? monthlyIssue
+					: {
+						type: "delete_failed",
+						...(error instanceof KnomoError ? { code: error.code, context: error.params } : {}),
+						detectedAt: new Date().toISOString(),
+						message: error instanceof Error ? error.message : "Monthly archive delete failed.",
+					};
 			}
 		}
 
@@ -363,7 +363,6 @@ export class MemoCommandService {
 				deletedMonthlyBlock,
 			});
 		} catch (error) {
-			console.error("Knomo delete memo index write failed.", error);
 			throw buildIndexWriteFailedError("deleting", error, dailyFile.path, currentMemo.monthlyRef.path);
 		}
 		markIndexSelfWrite(this.selfWriteTracker, opId, settings, new Date(currentMemo.createdAt));

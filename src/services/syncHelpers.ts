@@ -1,13 +1,12 @@
 import type { MemoRecord } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
 import { KnomoError } from "../types/serviceError";
+import type { SelfWriteReason } from "../types";
 import { formatMemoIdPrefix, formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
 import { getIndexFilePath } from "../utils/path";
 import { MonthlyArchiveAmbiguousError, MonthlyArchiveMissingError } from "./MonthlyArchiveService";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
-
-export type SelfWriteReason = "create" | "edit" | "delete" | "archive" | "repair";
 
 export function createOperationId(date: Date): string {
 	return `op-${formatMemoIdPrefix(date)}-${Math.floor(Math.random() * 10000)

@@ -722,6 +722,7 @@ export class KnomoView extends ItemView {
 			isMobileLayout: () => this.currentLayout === "mobile",
 			isMobileSearchPageOpen: () => this.mobileSearchPageOpen,
 			isComposerOpen: () => this.composerOpen,
+			isDrawerOpen: () => this.mobileDrawerOpen,
 			getRenderGeneration: () => this.renderGeneration,
 			hasMoreCardFlowItems: () => this.cardFlowCoordinator.hasMoreItems,
 			shouldDeferCardFlowForAllMemos: () => this.shouldDeferCardFlowForAllMemos(),

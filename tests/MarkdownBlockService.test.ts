@@ -521,11 +521,6 @@ test("daily note creation falls back when Daily Notes interface fails", async ()
 	const { TFile } = await import("obsidian");
 	const files = new Map<string, InstanceType<typeof TFile>>();
 	const restoreWindow = setTestWindow(undefined);
-	const originalConsoleError = console.error;
-	let loggedFallback = false;
-	console.error = (...args: unknown[]) => {
-		loggedFallback = String(args[0]).includes("Daily Notes interface failed");
-	};
 	try {
 		const dailyNoteService = new DailyNoteService(
 			{
@@ -553,9 +548,7 @@ test("daily note creation falls back when Daily Notes interface fails", async ()
 		const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
 
 		assert.equal(file.path, "Daily/2026-05-14.md");
-		assert.equal(loggedFallback, true);
 	} finally {
-		console.error = originalConsoleError;
 		restoreWindow();
 	}
 });
@@ -1622,6 +1615,62 @@ test("syncExternalDailyFile imports new blocks and tombstones missing indexed me
 	assert.deepEqual(deletedMonthly, [deletedMemo.id]);
 });
 
+test("syncExternalDailyFile imports daily memo when monthly archive block is ambiguous", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), {
+		path: "Daily/2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const monthlyFile = Object.assign(new TFile(), {
+		path: "Memos/Memos-2026-05.md",
+		basename: "Memos-2026-05",
+		extension: "md",
+	});
+	const createdMemos: MemoRecord[] = [];
+	let monthlySyncCalled = false;
+	const settings = createTestSettings();
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getAbstractFileByPath: (path: string) => path === monthlyFile.path ? monthlyFile : null,
+				cachedRead: async (target: { path: string }) => target.path === monthlyFile.path
+					? "# 2026-05\n\n## 2026-05-18\n- 09:00:00 手动新增\n- 09:00:00 手动新增"
+					: "# 2026-05-18\n\n## Knomo\n- 09:00:00 手动新增",
+			},
+		} as never,
+		() => settings,
+		{
+			getStatus: () => ({ enabled: true, folder: "Daily", format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			upsertMemoBlock: async () => {
+				monthlySyncCalled = true;
+				throw new Error("ambiguous monthly archive should not be mutated");
+			},
+		} as never,
+		{
+			loadAll: async () => [],
+			addMemo: async (_folder: string, memo: MemoRecord) => {
+				createdMemos.push(memo);
+				return memo;
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.syncExternalDailyFile(file);
+
+	assert.equal(result, true);
+	assert.equal(createdMemos[0]?.contentSnapshot, "手动新增");
+	assert.equal(createdMemos[0]?.syncStatus, "monthly_failed");
+	assert.equal(createdMemos[0]?.issue?.type, "monthly_block_ambiguous");
+	assert.equal(monthlySyncCalled, false);
+});
+
 test("syncExternalDailyFile tombstones only the removed memo when same-time siblings shift lines", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const { TFile } = await import("obsidian");
@@ -2119,6 +2168,10 @@ test("listDeletedMemos returns only deleted memos by deletedAt descending", asyn
 		{} as never,
 		{
 			loadAll: async () => [activeMemo, deletedWithoutTime, deletedOlder, deletedNewer],
+			scanAllExisting: async (_folder: string, visitor: (period: string, memos: MemoRecord[]) => void) => {
+				visitor("2026-05", [activeMemo, deletedWithoutTime, deletedOlder, deletedNewer]);
+				return true;
+			},
 			scanAll: async (_folder: string, visitor: (period: string, memos: MemoRecord[]) => void) => {
 				visitor("2026-05", [activeMemo, deletedWithoutTime, deletedOlder, deletedNewer]);
 				return true;
@@ -2827,6 +2880,7 @@ test("all-diary rebuild does not read a corrupt live index before committing can
 	let monthlyCalled = false;
 	let created = 0;
 	let committed = false;
+	let cleanupPeriods: ReadonlySet<string> | undefined;
 	let rejectLiveIndexRead = false;
 	const candidateStore = {
 		initializeEmptyPeriods: async () => undefined,
@@ -2864,6 +2918,10 @@ test("all-diary rebuild does not read a corrupt live index before committing can
 				}
 				return [];
 			},
+			loadRecoverableMemos: async () => {
+				throw new Error("Strict recoverable memo loading should not be used during repair.");
+			},
+			loadRepairRecoverableMemos: async () => [],
 			backupIndexes: async () => {
 				backupCalled = true;
 				return "Memos/_knomo-system/backups/rebuild-index";
@@ -2872,6 +2930,10 @@ test("all-diary rebuild does not read a corrupt live index before committing can
 			listExistingPeriods: () => [formatTestDate(today).slice(0, 7)],
 			commitCandidateIndexes: async () => {
 				committed = true;
+			},
+			trashPotentialSyncConflictFiles: async (_folder: string, periods?: ReadonlySet<string>) => {
+				cleanupPeriods = periods;
+				return { deleted: 1, failed: 0, firstFailedPath: null };
 			},
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
@@ -2890,6 +2952,181 @@ test("all-diary rebuild does not read a corrupt live index before committing can
 	assert.equal(committed, true);
 	assert.equal(monthlyCalled, false);
 	assert.equal(result.backupPath, "Memos/_knomo-system/backups/rebuild-index");
+	assert.equal(cleanupPeriods, undefined);
+	assert.equal(result.syncConflictIndexFilesDeleted, 1);
+});
+
+test("all-diary rebuild seeds recoverable memos to preserve memoId", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const rawBlock = "- 08:00:00 内容";
+	const memo = createReferenceMemo(rawBlock);
+	memo.dailyRef.path = "2026-05-18.md";
+	memo.dailyRef.lastKnownHash = hashText(rawBlock);
+	memo.dailyRef.lineNumberHint = 4;
+	memo.contentHash = hashMemoContent("内容");
+	const dailyFile = Object.assign(new TFile(), {
+		path: "2026-05-18.md",
+		basename: "2026-05-18",
+		extension: "md",
+	});
+	const seededMemoIds: string[] = [];
+	const addedMemoIds: string[] = [];
+	const candidateStore = {
+		initializeEmptyPeriods: async () => undefined,
+		upsertMemo: async (_folder: string, savedMemo: MemoRecord) => {
+			seededMemoIds.push(savedMemo.id);
+			return savedMemo;
+		},
+		addMemo: async (_folder: string, savedMemo: MemoRecord) => {
+			addedMemoIds.push(savedMemo.id);
+			return savedMemo;
+		},
+		listExistingPeriods: () => ["2026-05"],
+		loadPeriods: async () => [memo],
+		getIndexFilePath: (_folder: string, period: string) => `Memos/_knomo-system/backups/rebuild-index/rebuilt-indexes/memo-index-${period}.json`,
+	};
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [dailyFile],
+				getAbstractFileByPath: () => null,
+				cachedRead: async () => `# 2026-05-18\n\n## Knomo\n${rawBlock}`,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			upsertMemoBlock: async () => {
+				throw new Error("index-only rebuild should not write monthly archives");
+			},
+		} as never,
+		{
+			loadRepairRecoverableMemos: async () => [memo],
+			backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-index",
+			createStoreAtIndexFolder: () => candidateStore,
+			listExistingPeriods: () => ["2026-05"],
+			commitCandidateIndexes: async () => undefined,
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.rebuildIndex("all", "index-only");
+
+	assert.equal(result.created, 0);
+	assert.equal(result.updated, 0);
+	assert.deepEqual(seededMemoIds, [memo.id]);
+	assert.deepEqual(addedMemoIds, []);
+});
+
+test("scoped rebuild seeds in-scope recoverable memos before scanning", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const { TFile } = await import("obsidian");
+	const today = new Date();
+	const oldDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 120);
+	const dateText = formatTestDate(today);
+	const oldDateText = formatTestDate(oldDate);
+	const period = dateText.slice(0, 7);
+	const oldPeriod = oldDateText.slice(0, 7);
+	const dailyPath = `${dateText}.md`;
+	const rawBlock = "- 08:00:00 内容";
+	const memo = createReferenceMemo(rawBlock);
+	memo.id = "scoped-recoverable-memo";
+	memo.createdAt = `${dateText}T08:00:00.000+08:00`;
+	memo.updatedAt = memo.createdAt;
+	memo.dailyRef.path = dailyPath;
+	memo.dailyRef.lastKnownBlock = rawBlock;
+	memo.dailyRef.lastKnownHash = hashText(rawBlock);
+	memo.dailyRef.lineNumberHint = 4;
+	memo.contentHash = hashMemoContent("内容");
+	const oldMemo = {
+		...createReferenceMemo("- 09:00:00 旧内容"),
+		id: "out-of-scope-recoverable-memo",
+		createdAt: `${oldDateText}T09:00:00.000+08:00`,
+		updatedAt: `${oldDateText}T09:00:00.000+08:00`,
+	};
+	const dailyFile = Object.assign(new TFile(), {
+		path: dailyPath,
+		basename: dateText,
+		extension: "md",
+	});
+	const seededMemoIds: string[] = [];
+	const addedMemoIds: string[] = [];
+	const initializedPeriods: string[][] = [];
+	let committedPeriods: string[] = [];
+	let cleanupPeriods: ReadonlySet<string> | undefined;
+	const candidateStore = {
+		initializeEmptyPeriods: async (_folder: string, periods: string[]) => {
+			initializedPeriods.push(periods);
+		},
+		upsertMemo: async (_folder: string, savedMemo: MemoRecord) => {
+			seededMemoIds.push(savedMemo.id);
+			return savedMemo;
+		},
+		addMemo: async (_folder: string, savedMemo: MemoRecord) => {
+			addedMemoIds.push(savedMemo.id);
+			return savedMemo;
+		},
+		listExistingPeriods: () => [period],
+		loadPeriods: async () => [memo],
+		getIndexFilePath: (_folder: string, memoPeriod: string) => `Memos/_knomo-system/backups/rebuild-index/rebuilt-indexes/memo-index-${memoPeriod}.json`,
+	};
+	const orchestrator = new SyncOrchestrator(
+		{
+			vault: {
+				getMarkdownFiles: () => [dailyFile],
+				getAbstractFileByPath: () => null,
+				cachedRead: async () => `# ${dateText}\n\n## Knomo\n${rawBlock}`,
+			},
+		} as never,
+		() => createTestSettings(),
+		{
+			getStatus: () => ({ enabled: true, folder: null, format: "YYYY-MM-DD", message: "ok" }),
+			getDailyNotesConfig: async () => ({ folder: null, format: "YYYY-MM-DD" }),
+		} as never,
+		{
+			upsertMemoBlock: async () => {
+				throw new Error("index-only rebuild should not write monthly archives");
+			},
+		} as never,
+		{
+			loadRepairRecoverableMemos: async () => [memo, oldMemo],
+			upsertMemo: async () => {
+				throw new Error("Scoped rebuild should not seed live memo-index files.");
+			},
+			createStoreAtIndexFolder: () => candidateStore,
+			commitCandidateIndexes: async (_folder: string, _candidateFolder: string, periods: string[]) => {
+				committedPeriods = periods;
+			},
+			backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-index",
+			compactDuplicateDailyBlockMemos: async () => 2,
+			trashPotentialSyncConflictFiles: async (_folder: string, periods?: ReadonlySet<string>) => {
+				cleanupPeriods = periods;
+				return { deleted: 1, failed: 0, firstFailedPath: null };
+			},
+		} as never,
+		{ mark: (_path: string) => undefined } as never,
+		service,
+	);
+
+	const result = await orchestrator.rebuildIndex("30d", "index-only");
+
+	assert.equal(result.created, 0);
+	assert.equal(result.updated, 0);
+	assert.equal(result.duplicateIndexRecordsRemoved, 2);
+	assert.equal(result.syncConflictIndexFilesDeleted, 1);
+	assert.deepEqual(seededMemoIds, [memo.id]);
+	assert.deepEqual(addedMemoIds, []);
+	assert.equal(initializedPeriods[0]?.includes(period), true);
+	assert.equal(initializedPeriods[0]?.includes(oldPeriod), false);
+	assert.equal(committedPeriods.includes(period), true);
+	assert.equal(committedPeriods.includes(oldPeriod), false);
+	assert.equal(cleanupPeriods?.has(period), true);
+	assert.equal(cleanupPeriods?.has(oldPeriod), false);
 });
 
 test("all-diary monthly rebuild reuses the existing monthly block reference", async () => {
@@ -2947,6 +3184,7 @@ test("all-diary monthly rebuild reuses the existing monthly block reference", as
 		} as never,
 		{
 			backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-index",
+			loadRepairRecoverableMemos: async () => [],
 			createStoreAtIndexFolder: () => candidateStore,
 			listExistingPeriods: () => [period],
 			commitCandidateIndexes: async () => undefined,
@@ -2994,6 +3232,17 @@ test("index-only rebuild does not delete monthly block when indexed memo is miss
 	};
 	let monthlyDeleteCalled = false;
 	const savedMemos: MemoRecord[] = [];
+	let committed = false;
+	const candidateStore = {
+		initializeEmptyPeriods: async () => undefined,
+		upsertMemo: async (_folder: string, memo: MemoRecord) => {
+			savedMemos.push(memo);
+			return memo;
+		},
+		listExistingPeriods: () => [formatTestDate(today).slice(0, 7)],
+		loadPeriods: async () => savedMemos,
+		getIndexFilePath: (_folder: string, period: string) => `Memos/_knomo-system/backups/rebuild-index/rebuilt-indexes/memo-index-${period}.json`,
+	};
 	const orchestrator = new SyncOrchestrator(
 		{
 			vault: {
@@ -3013,10 +3262,10 @@ test("index-only rebuild does not delete monthly block when indexed memo is miss
 			},
 		} as never,
 		{
-			loadAll: async () => [missingMemo],
-			upsertMemo: async (_folder: string, memo: MemoRecord) => {
-				savedMemos.push(memo);
-				return memo;
+			loadRepairRecoverableMemos: async () => [missingMemo],
+			createStoreAtIndexFolder: () => candidateStore,
+			commitCandidateIndexes: async () => {
+				committed = true;
 			},
 			backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-index",
 			restoreIndexes: async () => undefined,
@@ -3029,8 +3278,10 @@ test("index-only rebuild does not delete monthly block when indexed memo is miss
 
 	assert.equal(monthlyDeleteCalled, false);
 	assert.equal(result.deleted, 1);
-	assert.equal(savedMemos[0]?.status, "deleted");
-	assert.equal(savedMemos[0]?.deletedMonthlyBlock, rawBlock);
+	assert.equal(committed, true);
+	const deletedMemo = savedMemos.find((memo) => memo.status === "deleted");
+	assert.ok(deletedMemo);
+	assert.equal(deletedMemo.deletedMonthlyBlock, rawBlock);
 });
 
 test("rebuild index restores backup when monthly rebuild fails", async () => {
@@ -3048,6 +3299,15 @@ test("rebuild index restores backup when monthly rebuild fails", async () => {
 	let monthlyBackupCalled = false;
 	let monthlyRestoreCalled = false;
 	let restoreCalled = false;
+	let cleanupCalled = false;
+	let commitCalled = false;
+	const candidateStore = {
+		initializeEmptyPeriods: async () => undefined,
+		addMemo: async (_folder: string, memo: MemoRecord) => memo,
+		listExistingPeriods: () => [formatTestDate(today).slice(0, 7)],
+		loadPeriods: async () => [],
+		getIndexFilePath: (_folder: string, period: string) => `Memos/_knomo-system/backups/rebuild-index/rebuilt-indexes/memo-index-${period}.json`,
+	};
 	const orchestrator = new SyncOrchestrator(
 		{
 			vault: {
@@ -3076,12 +3336,19 @@ test("rebuild index restores backup when monthly rebuild fails", async () => {
 			},
 		} as never,
 		{
-			loadAll: async () => [],
-			addMemo: async (_folder: string, memo: MemoRecord) => memo,
+			loadRepairRecoverableMemos: async () => [],
+			createStoreAtIndexFolder: () => candidateStore,
+			commitCandidateIndexes: async () => {
+				commitCalled = true;
+			},
 			backupIndexes: async () => backupPath,
 			restoreIndexes: async (_folder: string, restoredBackupPath: string | null) => {
 				restoreCalled = true;
 				assert.equal(restoredBackupPath, backupPath);
+			},
+			trashPotentialSyncConflictFiles: async () => {
+				cleanupCalled = true;
+				return { deleted: 1, failed: 0, firstFailedPath: null };
 			},
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
@@ -3096,6 +3363,8 @@ test("rebuild index restores backup when monthly rebuild fails", async () => {
 	assert.equal(monthlyBackupCalled, true);
 	assert.equal(monthlyRestoreCalled, true);
 	assert.equal(restoreCalled, true);
+	assert.equal(commitCalled, false);
+	assert.equal(cleanupCalled, false);
 });
 
 test("restoreIndexes removes index files that were created by a failed rebuild", async () => {

@@ -4,6 +4,7 @@ import type { App } from "obsidian";
 import type { MemoIndex } from "../types";
 import type { DailyRef, MemoRecord, MemoStatus, MemoSyncStatus, MonthlyRef } from "../types/memo";
 import { KnomoError } from "../types/serviceError";
+import type { SyncConflictFile } from "../types/syncConflict";
 import { formatMonthPeriod } from "../utils/date";
 import { isRecord } from "../utils/object";
 import { recoverMemoReferenceMetadata } from "../utils/references";
@@ -17,6 +18,12 @@ export type MemoIndexPeriodVisitor = (
 	period: string,
 	memos: readonly MemoRecord[],
 ) => boolean | void | Promise<boolean | void>;
+
+export interface SyncConflictIndexCleanupResult {
+	deleted: number;
+	failed: number;
+	firstFailedPath: string | null;
+}
 
 // 职责：按月分片读写 memo-index，并在 process 回调内完成 JSON merge。
 export class MemoIndexStore {
@@ -51,13 +58,66 @@ export class MemoIndexStore {
 		return this.recoverIndexReferences(parseIndex(data, period));
 	}
 
+	async loadExistingPeriods(monthlyMemoFolder: string, periods: string[]): Promise<MemoRecord[]> {
+		const uniquePeriods = [...new Set(periods)];
+		const memos: MemoRecord[] = [];
+		for (const period of uniquePeriods) {
+			const index = await this.loadExistingPeriod(monthlyMemoFolder, period);
+			if (index !== null) {
+				memos.push(...Object.values(index.memos));
+			}
+		}
+		return this.normalizeReadableMemos(memos);
+	}
+
 	async loadAll(monthlyMemoFolder: string): Promise<MemoRecord[]> {
 		const periods = this.listExistingPeriods(monthlyMemoFolder);
 		return this.loadPeriods(monthlyMemoFolder, periods);
 	}
 
+	async loadAllExisting(monthlyMemoFolder: string): Promise<MemoRecord[]> {
+		return this.loadExistingPeriods(monthlyMemoFolder, this.listStoredPeriods(monthlyMemoFolder));
+	}
+
+	async loadRecoverableMemos(monthlyMemoFolder: string): Promise<MemoRecord[]> {
+		const byId = new Map<string, MemoRecord>();
+		for (const memo of await this.loadAllExisting(monthlyMemoFolder)) {
+			byId.set(memo.id, memo);
+		}
+		for (const memo of await this.loadPotentialSyncConflictMemos(monthlyMemoFolder)) {
+			const current = byId.get(memo.id);
+			if (current === undefined || memo.updatedAt.localeCompare(current.updatedAt) > 0) {
+				byId.set(memo.id, memo);
+			}
+		}
+		return this.normalizeReadableMemos([...byId.values()]);
+	}
+
+	async loadRepairRecoverableMemos(monthlyMemoFolder: string): Promise<MemoRecord[]> {
+		const byId = new Map<string, MemoRecord>();
+		for (const memo of await this.loadAllExistingBestEffort(monthlyMemoFolder)) {
+			if (hasValidCreatedAt(memo)) {
+				byId.set(memo.id, memo);
+			}
+		}
+		for (const memo of await this.loadPotentialSyncConflictMemos(monthlyMemoFolder)) {
+			if (!hasValidCreatedAt(memo)) {
+				continue;
+			}
+			const current = byId.get(memo.id);
+			if (current === undefined || memo.updatedAt.localeCompare(current.updatedAt) > 0) {
+				byId.set(memo.id, memo);
+			}
+		}
+		return this.normalizeReadableMemos([...byId.values()]);
+	}
+
 	async scanAll(monthlyMemoFolder: string, visitor: MemoIndexPeriodVisitor): Promise<boolean> {
 		return this.scanPeriods(monthlyMemoFolder, this.listExistingPeriods(monthlyMemoFolder), visitor);
+	}
+
+	async scanAllExisting(monthlyMemoFolder: string, visitor: MemoIndexPeriodVisitor): Promise<boolean> {
+		return this.scanPeriods(monthlyMemoFolder, this.listStoredPeriods(monthlyMemoFolder), visitor);
 	}
 
 	async scanPeriods(
@@ -68,7 +128,7 @@ export class MemoIndexStore {
 		const uniquePeriods = [...new Set(periods)];
 		for (const period of uniquePeriods) {
 			const index = await this.loadPeriod(monthlyMemoFolder, period);
-			const shouldContinue = await visitor(period, Object.values(index.memos));
+			const shouldContinue = await visitor(period, this.normalizeReadableMemos(Object.values(index.memos)));
 			if (shouldContinue === false) {
 				return false;
 			}
@@ -83,7 +143,7 @@ export class MemoIndexStore {
 			const index = await this.loadPeriod(monthlyMemoFolder, period);
 			memos.push(...Object.values(index.memos));
 		}
-		return this.recoverReferences(memos).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+		return this.normalizeReadableMemos(memos);
 	}
 
 	async findMemoById(monthlyMemoFolder: string, memoId: string): Promise<MemoRecord | null> {
@@ -248,6 +308,38 @@ export class MemoIndexStore {
 		});
 	}
 
+	async compactDuplicateDailyBlockMemos(
+		monthlyMemoFolder: string,
+		periods?: ReadonlySet<string>,
+	): Promise<number> {
+		let removed = 0;
+		for (const period of this.listStoredPeriods(monthlyMemoFolder)) {
+			if (periods !== undefined && !periods.has(period)) {
+				continue;
+			}
+			const file = this.app.vault.getAbstractFileByPath(this.getIndexFilePath(monthlyMemoFolder, period));
+			if (!(file instanceof TFile)) {
+				continue;
+			}
+			await this.app.vault.process(file, (data) => {
+				const index = parseIndex(data, period);
+				const memos = Object.values(index.memos);
+				const dedupedMemos = dedupeRecoverableMemos(memos);
+				const removedInPeriod = memos.length - dedupedMemos.length;
+				if (removedInPeriod === 0) {
+					return data;
+				}
+				removed += removedInPeriod;
+				return `${JSON.stringify({
+					...index,
+					updatedAt: new Date().toISOString(),
+					memos: toMemoRecordMap(dedupedMemos),
+				}, null, "\t")}\n`;
+			});
+		}
+		return removed;
+	}
+
 	async backupIndexes(monthlyMemoFolder: string, reason: string): Promise<string | null> {
 		const backupRoot = normalizePath(`${getSystemFolderPath(monthlyMemoFolder)}/backups/${reason}-${formatBackupTimestamp(new Date())}`);
 		const indexBackupRoot = normalizePath(`${backupRoot}/indexes`);
@@ -367,22 +459,112 @@ export class MemoIndexStore {
 	}
 
 	listExistingPeriods(monthlyMemoFolder: string): string[] {
+		const periods = this.listStoredPeriods(monthlyMemoFolder);
+		return periods.length > 0 ? periods : [formatMonthPeriod(new Date())];
+	}
+
+	listStoredPeriods(monthlyMemoFolder: string): string[] {
 		const indexFolder = this.app.vault.getAbstractFileByPath(this.getIndexFolderPath(monthlyMemoFolder));
 		if (!(indexFolder instanceof TFolder)) {
-			return [formatMonthPeriod(new Date())];
+			return [];
 		}
 
 		const periods = indexFolder.children
 			.filter((child): child is TFile => child instanceof TFile)
 			.map((file) => file.name.match(/^memo-index-(\d{4}-\d{2})\.json$/)?.[1] ?? null)
 			.filter((period): period is string => period !== null);
-		return periods.length > 0 ? periods.sort((left, right) => right.localeCompare(left)) : [formatMonthPeriod(new Date())];
+		return periods.sort((left, right) => right.localeCompare(left));
+	}
+
+	listPotentialSyncConflictFiles(monthlyMemoFolder: string): SyncConflictFile[] {
+		return this.listPotentialSyncConflictIndexFiles(monthlyMemoFolder).map(({ file, period }) => ({
+			kind: "memo-index",
+			path: file.path,
+			period,
+		}));
+	}
+
+	async trashPotentialSyncConflictFiles(
+		monthlyMemoFolder: string,
+		periods?: ReadonlySet<string>,
+	): Promise<SyncConflictIndexCleanupResult> {
+		let deleted = 0;
+		let failed = 0;
+		let firstFailedPath: string | null = null;
+		for (const { file, period } of this.listPotentialSyncConflictIndexFiles(monthlyMemoFolder)) {
+			if (period === null || (periods !== undefined && !periods.has(period))) {
+				continue;
+			}
+			try {
+				await this.app.fileManager.trashFile(file);
+				deleted += 1;
+			} catch {
+				failed += 1;
+				firstFailedPath ??= file.path;
+			}
+		}
+		return { deleted, failed, firstFailedPath };
 	}
 
 	private getIndexFolderPath(monthlyMemoFolder: string): string {
 		return this.indexFolderPathOverride === undefined
 			? getConfiguredIndexFolderPath(monthlyMemoFolder)
 			: normalizePath(this.indexFolderPathOverride);
+	}
+
+	private async loadPotentialSyncConflictMemos(monthlyMemoFolder: string): Promise<MemoRecord[]> {
+		const memos: MemoRecord[] = [];
+		for (const { file, period } of this.listPotentialSyncConflictIndexFiles(monthlyMemoFolder)) {
+			try {
+				const data = await this.app.vault.cachedRead(file);
+				const indexPeriod = period ?? readIndexPeriod(data);
+				if (indexPeriod === null) {
+					continue;
+				}
+				const index = this.recoverIndexReferences(parseIndex(data, indexPeriod));
+				memos.push(...Object.values(index.memos));
+			} catch {
+				continue;
+			}
+		}
+		return this.recoverReferences(memos);
+	}
+
+	private async loadAllExistingBestEffort(monthlyMemoFolder: string): Promise<MemoRecord[]> {
+		const memos: MemoRecord[] = [];
+		for (const period of this.listStoredPeriods(monthlyMemoFolder)) {
+			try {
+				const index = await this.loadExistingPeriod(monthlyMemoFolder, period);
+				if (index !== null) {
+					memos.push(...Object.values(index.memos));
+				}
+			} catch {
+				continue;
+			}
+		}
+		return memos;
+	}
+
+	private listPotentialSyncConflictIndexFiles(monthlyMemoFolder: string): Array<{ file: TFile; period: string | null }> {
+		const indexFolder = this.app.vault.getAbstractFileByPath(this.getIndexFolderPath(monthlyMemoFolder));
+		if (!(indexFolder instanceof TFolder)) {
+			return [];
+		}
+		const files: Array<{ file: TFile; period: string | null }> = [];
+		Vault.recurseChildren(indexFolder, (child) => {
+			if (!(child instanceof TFile) || child.extension !== "json") {
+				return;
+			}
+			const period = getMemoIndexSideCopyPeriod(child.name);
+			if (period === null) {
+				return;
+			}
+			files.push({
+				file: child,
+				period,
+			});
+		});
+		return files.sort((left, right) => left.file.path.localeCompare(right.file.path));
 	}
 
 	private recoverIndexReferences(index: MemoIndex): MemoIndex {
@@ -405,6 +587,10 @@ export class MemoIndexStore {
 			const destination = this.app.metadataCache?.getFirstLinkpathDest(linkPath, sourcePath) ?? null;
 			return destination?.path ?? null;
 		});
+	}
+
+	private normalizeReadableMemos(memos: readonly MemoRecord[]): MemoRecord[] {
+		return sortMemosByCreatedAt(dedupeRecoverableMemos(this.recoverReferences(memos)));
 	}
 }
 
@@ -439,6 +625,99 @@ function createEmptyIndex(period: string): MemoIndex {
 		updatedAt: new Date().toISOString(),
 		memos: {},
 	};
+}
+
+function readIndexPeriod(data: string): string | null {
+	try {
+		const parsed = JSON.parse(data) as unknown;
+		return isRecord(parsed) && typeof parsed.period === "string" ? parsed.period : null;
+	} catch {
+		return null;
+	}
+}
+
+function getMemoIndexSideCopyPeriod(fileName: string): string | null {
+	return fileName.match(/^memo-index-(\d{4}-\d{2}).+\.json$/)?.[1] ?? null;
+}
+
+function sortMemosByCreatedAt(memos: MemoRecord[]): MemoRecord[] {
+	return memos.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function hasValidCreatedAt(memo: MemoRecord): boolean {
+	return Number.isFinite(new Date(memo.createdAt).getTime());
+}
+
+function dedupeRecoverableMemos(memos: MemoRecord[]): MemoRecord[] {
+	const result: MemoRecord[] = [];
+	const memoIndexesByDailyKey = new Map<string, number>();
+	for (const memo of memos) {
+		const key = getRecoverableDailyBlockKey(memo);
+		if (key === null) {
+			result.push(memo);
+			continue;
+		}
+		const existingIndex = memoIndexesByDailyKey.get(key);
+		if (existingIndex === undefined) {
+			memoIndexesByDailyKey.set(key, result.length);
+			result.push(memo);
+			continue;
+		}
+		if (compareRecoverableMemoPriority(memo, result[existingIndex]) > 0) {
+			result[existingIndex] = memo;
+		}
+	}
+	return result;
+}
+
+function getRecoverableDailyBlockKey(memo: MemoRecord): string | null {
+	if (memo.status !== "active" || memo.dailyRef.lineNumberHint === null) {
+		return null;
+	}
+	if (
+		memo.dailyRef.path.trim().length === 0
+		|| memo.dailyRef.lastKnownBlock.trim().length === 0
+		|| memo.dailyRef.lastKnownHash.trim().length === 0
+		|| memo.contentHash.trim().length === 0
+	) {
+		return null;
+	}
+	return [
+		memo.dailyRef.path,
+		memo.dailyRef.heading ?? "",
+		memo.dailyRef.sectionType ?? "",
+		String(memo.dailyRef.lineNumberHint),
+		memo.dailyRef.lastKnownBlock,
+		memo.dailyRef.lastKnownHash,
+		memo.contentHash,
+		memo.createdAt,
+	].join("\u0001");
+}
+
+function compareRecoverableMemoPriority(left: MemoRecord, right: MemoRecord): number {
+	const leftIssuePriority = left.issue === null ? 1 : 0;
+	const rightIssuePriority = right.issue === null ? 1 : 0;
+	if (leftIssuePriority !== rightIssuePriority) {
+		return leftIssuePriority - rightIssuePriority;
+	}
+	const leftSyncPriority = left.syncStatus === "synced" ? 1 : 0;
+	const rightSyncPriority = right.syncStatus === "synced" ? 1 : 0;
+	if (leftSyncPriority !== rightSyncPriority) {
+		return leftSyncPriority - rightSyncPriority;
+	}
+	const updatedAtCompare = left.updatedAt.localeCompare(right.updatedAt);
+	if (updatedAtCompare !== 0) {
+		return updatedAtCompare;
+	}
+	return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
+}
+
+function toMemoRecordMap(memos: readonly MemoRecord[]): Record<string, MemoRecord> {
+	const result: Record<string, MemoRecord> = {};
+	for (const memo of memos) {
+		result[memo.id] = memo;
+	}
+	return result;
 }
 
 function parseMemoIndex(value: unknown, period: string): MemoIndex {

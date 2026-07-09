@@ -8,16 +8,24 @@ import type { SyncOrchestrator } from "./SyncOrchestrator";
 
 export type FileWatchSyncErrorHandler = (path: string, error: unknown) => void;
 
+interface FileWatchServiceOptions {
+	memoIndexRecoveryScanDays?: number;
+}
+
 interface QueuedFileTask {
 	key: string;
 	path: string;
 	task: () => Promise<void>;
 }
 
+const DEFAULT_MEMO_INDEX_RECOVERY_SCAN_DAYS = 30;
+const MEMO_INDEX_RECOVERY_TASK_KEY = "memo-index-recovery";
+
 // 职责：监听日记与 memo-index 变化；日记写入结合 SelfWriteTracker 防循环。
 export class FileWatchService {
 	private readonly timersByPath = new Map<string, number>();
 	private readonly queuedTasks: QueuedFileTask[] = [];
+	private readonly memoIndexRecoveryScanDays: number;
 	private taskRunning = false;
 
 	constructor(
@@ -26,7 +34,10 @@ export class FileWatchService {
 		private readonly syncOrchestrator: SyncOrchestrator,
 		private readonly onSynced?: () => Promise<void> | void,
 		private readonly onSyncError?: FileWatchSyncErrorHandler,
-	) {}
+		options: FileWatchServiceOptions = {},
+	) {
+		this.memoIndexRecoveryScanDays = options.memoIndexRecoveryScanDays ?? DEFAULT_MEMO_INDEX_RECOVERY_SCAN_DAYS;
+	}
 
 	start(owner: Component): void {
 		owner.registerEvent(this.app.vault.on("modify", (file) => this.handleFileChanged(file)));
@@ -59,6 +70,14 @@ export class FileWatchService {
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {
 		if (!(file instanceof TFile)) {
+			return;
+		}
+		if (this.syncOrchestrator.isMemoIndexFile(oldPath)) {
+			this.queueMemoIndexRecovery(oldPath);
+			return;
+		}
+		if (this.syncOrchestrator.isMemoIndexFile(file.path)) {
+			this.queueIndexRefresh(file);
 			return;
 		}
 		if (this.syncOrchestrator.isMonthlyArchiveFile(oldPath)) {
@@ -105,6 +124,10 @@ export class FileWatchService {
 			});
 			return;
 		}
+		if (file.extension === "json" && this.syncOrchestrator.isMemoIndexFile(path)) {
+			this.queueMemoIndexRecovery(path);
+			return;
+		}
 		if (!this.syncOrchestrator.isMonthlyArchiveFile(path)) {
 			return;
 		}
@@ -126,6 +149,20 @@ export class FileWatchService {
 			}
 			await this.onSynced?.();
 		});
+	}
+
+	private queueMemoIndexRecovery(path: string): void {
+		this.queueFileTask(MEMO_INDEX_RECOVERY_TASK_KEY, path, () => this.runMemoIndexRecovery());
+	}
+
+	private async runMemoIndexRecovery(): Promise<void> {
+		const result = await this.syncOrchestrator.scanRecentDailyMemos(
+			this.memoIndexRecoveryScanDays,
+			"file_watch",
+		);
+		if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
+			await this.onSynced?.();
+		}
 	}
 
 	private queueFileTask(key: string, path: string, task: () => Promise<void>): void {

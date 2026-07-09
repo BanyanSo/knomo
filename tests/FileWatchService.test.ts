@@ -214,6 +214,191 @@ test("FileWatchService ignores memo-index changes caused by Knomo writes", async
 	assert.equal(refreshCount, 0);
 });
 
+test("FileWatchService scans recent daily notes when a memo-index file is deleted", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const file = Object.assign(new TFile(), {
+		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
+		extension: "json",
+	});
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
+	const timerHandlers: Array<() => void> = [];
+	let refreshCount = 0;
+	let scanArgs: [number, string] | null = null;
+	const service = new FileWatchService(
+		{
+			vault: {
+				on: (eventName: string, handler: (...args: unknown[]) => void) => {
+					handlersByEvent.set(eventName, handler);
+					return {};
+				},
+			},
+			workspace: {
+				containerEl: {
+					win: {
+						setTimeout: (handler: () => void) => {
+							timerHandlers.push(handler);
+							return 1;
+						},
+						clearTimeout: () => undefined,
+					},
+				},
+			},
+		} as never,
+		{
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => false,
+			isMemoIndexFile: (path: string) => path === file.path,
+			isMonthlyArchiveFile: () => false,
+			getSyncDebounceMs: () => 0,
+			scanRecentDailyMemos: async (days: number, source: string) => {
+				scanArgs = [days, source];
+				return { scannedFiles: 1, created: 1, updated: 0, deleted: 0, skipped: 0, failed: 0, errors: [] };
+			},
+		} as never,
+		() => {
+			refreshCount += 1;
+		},
+		undefined,
+		{ memoIndexRecoveryScanDays: 7 },
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+	handlersByEvent.get("delete")?.(file);
+	timerHandlers[0]?.();
+	await waitImmediate();
+
+	assert.deepEqual(scanArgs, [7, "file_watch"]);
+	assert.equal(refreshCount, 1);
+});
+
+test("FileWatchService scans once when a memo-index file is moved away", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const oldPath = "Memos/_knomo-system/indexes/memo-index-2026-06.json";
+	const movedFile = Object.assign(new TFile(), {
+		path: "Memos/_knomo-system/indexes/memo-index-2026-06 conflict.json",
+		extension: "json",
+	});
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
+	const timers: Array<{ handler: () => void; cancelled: boolean }> = [];
+	let scanCount = 0;
+	let refreshCount = 0;
+	const service = new FileWatchService(
+		{
+			vault: {
+				on: (eventName: string, handler: (...args: unknown[]) => void) => {
+					handlersByEvent.set(eventName, handler);
+					return {};
+				},
+			},
+			workspace: {
+				containerEl: {
+					win: {
+						setTimeout: (handler: () => void) => {
+							timers.push({ handler, cancelled: false });
+							return timers.length;
+						},
+						clearTimeout: (id: number) => {
+							const timer = timers[id - 1];
+							if (timer !== undefined) timer.cancelled = true;
+						},
+					},
+				},
+			},
+		} as never,
+		{
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => false,
+			isMemoIndexFile: (path: string) => path === oldPath,
+			isMonthlyArchiveFile: () => false,
+			getSyncDebounceMs: () => 0,
+			scanRecentDailyMemos: async () => {
+				scanCount += 1;
+				return { scannedFiles: 1, created: 0, updated: 1, deleted: 0, skipped: 0, failed: 0, errors: [] };
+			},
+		} as never,
+		() => {
+			refreshCount += 1;
+		},
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+	handlersByEvent.get("rename")?.(movedFile, oldPath);
+	handlersByEvent.get("rename")?.(movedFile, oldPath);
+	for (const timer of timers) {
+		if (!timer.cancelled) timer.handler();
+	}
+	await waitImmediate();
+
+	assert.equal(scanCount, 1);
+	assert.equal(refreshCount, 1);
+});
+
+test("FileWatchService ignores deleted sync-conflict memo-index copies", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { FileWatchService } = await import("../src/services/FileWatchService");
+	const file = Object.assign(new TFile(), {
+		path: "Memos/_knomo-system/indexes/memo-index-2026-06 conflict.json",
+		extension: "json",
+	});
+	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
+	let scanCalled = false;
+	const service = new FileWatchService(
+		{
+			vault: {
+				on: (eventName: string, handler: (...args: unknown[]) => void) => {
+					handlersByEvent.set(eventName, handler);
+					return {};
+				},
+			},
+			workspace: {
+				containerEl: {
+					win: {
+						setTimeout: () => 1,
+						clearTimeout: () => undefined,
+					},
+				},
+			},
+		} as never,
+		{
+			cleanup: () => undefined,
+		} as never,
+		{
+			isPotentialDailyFile: () => false,
+			isMemoIndexFile: () => false,
+			isMonthlyArchiveFile: () => false,
+			getSyncDebounceMs: () => 0,
+			scanRecentDailyMemos: async () => {
+				scanCalled = true;
+				return { scannedFiles: 0, created: 0, updated: 0, deleted: 0, skipped: 0, failed: 0, errors: [] };
+			},
+		} as never,
+	);
+
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as never);
+	handlersByEvent.get("delete")?.(file);
+	await waitImmediate();
+
+	assert.equal(scanCalled, false);
+});
+
 test("FileWatchService syncs daily note renames with the old path", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");
@@ -747,6 +932,7 @@ async function createMonthlyRenameHarness(expectedPaths: string[], internalMoveT
 		} as never,
 		{
 			isMonthlyArchiveFile: (path: string) => expectedPaths.includes(path),
+			isMemoIndexFile: () => false,
 			isPotentialDailyFile: () => false,
 			getSyncDebounceMs: () => 0,
 			recoverDeletedMonthlyArchive: async (path: string) => {

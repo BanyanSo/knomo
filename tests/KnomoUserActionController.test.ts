@@ -26,21 +26,65 @@ test("root click dispatches search date filters to desktop or mobile search", as
 	}
 });
 
-test("root click preserves popup interception and routes memo, trash, and generic actions", async () => {
+test("root click preserves popup interception except sidebar layer actions", async () => {
 	const cleanup = installDomGlobals();
 	try {
 		const suppressed = createHarness({ consumeSuppressed: true });
 		await suppressed.controller.handleRootClick(createMouseEvent(new TestElement("button", {
-			attr: { "data-action": "open-drawer" },
+			attr: { "data-action": "refresh" },
 		})));
 		assert.deepEqual(suppressed.calls, ["consume-popup"]);
 
 		const outsideHandled = createHarness({ outsideHandled: true });
 		await outsideHandled.controller.handleRootClick(createMouseEvent(new TestElement("button", {
-			attr: { "data-action": "open-drawer" },
+			attr: { "data-action": "refresh" },
 		})));
 		assert.deepEqual(outsideHandled.calls, ["outside-popup:false"]);
 
+		const drawer = createHarness({ consumeSuppressed: true, outsideHandled: true });
+		await drawer.controller.handleRootClick(createMouseEvent(new TestElement("button", {
+			attr: { "data-action": "open-drawer" },
+		})));
+		assert.deepEqual(drawer.calls, ["open-drawer", "defer-sidebar", "sync-chrome", "sync-card-menu"]);
+
+		const sidebarToggle = createHarness({ outsideHandled: true });
+		await sidebarToggle.controller.handleRootClick(createMouseEvent(new TestElement("button", {
+			attr: { "data-action": "toggle-sidebar" },
+		})));
+		assert.deepEqual(sidebarToggle.calls, ["toggle-sidebar", "sync-chrome", "sync-card-menu"]);
+	} finally {
+		cleanup();
+	}
+});
+
+test("sidebar layer interactions keep underlying popup chrome open", async () => {
+	const cleanup = installDomGlobals();
+	try {
+		const closeDrawer = createHarness({ consumeSuppressed: true, outsideHandled: true });
+		await closeDrawer.controller.handleRootClick(createMouseEvent(new TestElement("button", {
+			attr: { "data-action": "close-drawer" },
+		})));
+		assert.deepEqual(closeDrawer.calls, ["close-drawer", "sync-chrome", "sync-card-menu"]);
+
+		const drawerSidebar = createHarness({ drawerOpen: true, outsideHandled: true });
+		const sidebar = new TestElement("aside", { cls: "knomo-sidebar" });
+		const blankSidebarTarget = sidebar.createChild("div");
+		await drawerSidebar.controller.handleRootClick(createMouseEvent(blankSidebarTarget));
+		assert.deepEqual(drawerSidebar.calls, []);
+
+		const drawerBackdrop = createHarness({ drawerOpen: true, outsideHandled: true });
+		await drawerBackdrop.controller.handleRootClick(createMouseEvent(new TestElement("div", {
+			cls: "knomo-drawer-backdrop",
+		})));
+		assert.deepEqual(drawerBackdrop.calls, []);
+	} finally {
+		cleanup();
+	}
+});
+
+test("root click routes memo, trash, and generic actions", async () => {
+	const cleanup = installDomGlobals();
+	try {
 		const actions = createHarness();
 		await actions.controller.handleRootClick(createMouseEvent(new TestElement("button", {
 			attr: { "data-memo-action": "edit", "data-memo-id": "memo-1" },
@@ -62,13 +106,29 @@ test("root click preserves popup interception and routes memo, trash, and generi
 });
 
 test("mobile pointer down only intercepts popups on mobile layout", () => {
-	const desktop = createHarness();
-	desktop.controller.handleRootPointerDown(createPointerEvent(new TestElement("button")));
-	assert.deepEqual(desktop.calls, []);
+	const cleanup = installDomGlobals();
+	try {
+		const desktop = createHarness();
+		desktop.controller.handleRootPointerDown(createPointerEvent(new TestElement("button")));
+		assert.deepEqual(desktop.calls, []);
 
-	const mobile = createHarness({ mobile: true });
-	mobile.controller.handleRootPointerDown(createPointerEvent(new TestElement("button")));
-	assert.deepEqual(mobile.calls, ["outside-popup:true"]);
+		const mobile = createHarness({ mobile: true });
+		mobile.controller.handleRootPointerDown(createPointerEvent(new TestElement("button")));
+		assert.deepEqual(mobile.calls, ["outside-popup:true"]);
+
+		const mobileDrawerAction = createHarness({ mobile: true });
+		mobileDrawerAction.controller.handleRootPointerDown(createPointerEvent(new TestElement("button", {
+			attr: { "data-action": "open-drawer" },
+		})));
+		assert.deepEqual(mobileDrawerAction.calls, []);
+
+		const mobileOpenDrawer = createHarness({ mobile: true, drawerOpen: true });
+		const sidebar = new TestElement("aside", { cls: "knomo-sidebar" });
+		mobileOpenDrawer.controller.handleRootPointerDown(createPointerEvent(sidebar.createChild("div")));
+		assert.deepEqual(mobileOpenDrawer.calls, []);
+	} finally {
+		cleanup();
+	}
 });
 
 test("Escape key keeps the legacy close priority", async () => {
@@ -302,6 +362,7 @@ interface HarnessState {
 	mobile: boolean;
 	mobileSearchPageOpen: boolean;
 	composerOpen: boolean;
+	drawerOpen: boolean;
 	cardFlowHasMore: boolean;
 	deferAllMemos: boolean;
 	ignoreMobileSave: boolean;
@@ -326,6 +387,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 		mobile: false,
 		mobileSearchPageOpen: false,
 		composerOpen: false,
+		drawerOpen: false,
 		cardFlowHasMore: false,
 		deferAllMemos: false,
 		ignoreMobileSave: false,
@@ -346,6 +408,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			isMobileLayout: () => state.mobile,
 			isMobileSearchPageOpen: () => state.mobileSearchPageOpen,
 			isComposerOpen: () => state.composerOpen,
+			isDrawerOpen: () => state.drawerOpen,
 			getRenderGeneration: () => 7,
 			hasMoreCardFlowItems: () => state.cardFlowHasMore,
 			shouldDeferCardFlowForAllMemos: () => state.deferAllMemos,

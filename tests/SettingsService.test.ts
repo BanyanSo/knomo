@@ -176,6 +176,62 @@ test("serializes concurrent setting patches without losing earlier updates", asy
 	assert.equal(plugin.savedSettings?.memoTimeFormat, "HH:mm");
 });
 
+test("persists maintenance diagnostics without losing settings", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const vault = await createMemoryVault({});
+	const plugin = createPlugin(vault, createSettings());
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.saveMaintenanceDiagnostic({
+		task: "startup_scan",
+		status: "failed",
+		occurredAt: "2026-07-09T08:00:00.000+08:00",
+		scope: "7d",
+		mode: null,
+		message: "scan failed",
+		scannedFiles: null,
+		created: null,
+		updated: null,
+		deleted: null,
+		failed: null,
+	});
+
+	assert.equal(plugin.savedSettings?.dailyHeading, "## Knomo");
+	assert.deepEqual(await service.loadMaintenanceDiagnostic(), {
+		task: "startup_scan",
+		status: "failed",
+		occurredAt: "2026-07-09T08:00:00.000+08:00",
+		scope: "7d",
+		mode: null,
+		message: "scan failed",
+		scannedFiles: null,
+		created: null,
+		updated: null,
+		deleted: null,
+		failed: null,
+	});
+});
+
+test("ignores invalid maintenance diagnostics", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const vault = await createMemoryVault({});
+	const plugin = createPlugin(vault, createSettings(), {
+		initialData: {
+			settings: createSettings(),
+			maintenanceDiagnostic: {
+				task: "unknown",
+				status: "failed",
+				occurredAt: "2026-07-09T08:00:00.000+08:00",
+				message: "bad",
+			},
+		},
+	});
+	const service = new SettingsService(plugin as never);
+
+	assert.equal(await service.loadMaintenanceDiagnostic(), null);
+});
+
 test("rejects monthly memo file formats with path separators", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const vault = await createMemoryVault({});
@@ -442,8 +498,9 @@ async function createMemoryVault(initialFiles: Record<string, string>) {
 function createPlugin(
 	vault: Awaited<ReturnType<typeof createMemoryVault>>,
 	settings: KnomoSettings,
-	options: { failSaveData?: boolean } = {},
+	options: { failSaveData?: boolean; initialData?: Record<string, unknown> } = {},
 ) {
+	const initialData = options.initialData ?? { settings };
 	const plugin = {
 		app: {
 			vault,
@@ -453,13 +510,15 @@ function createPlugin(
 				},
 			},
 		},
+		savedData: initialData,
 		savedSettings: null as KnomoSettings | null,
-		loadData: async () => ({ settings }),
-		saveData: async (data: { settings: KnomoSettings }) => {
+		loadData: async () => plugin.savedData,
+		saveData: async (data: Record<string, unknown>) => {
 			if (options.failSaveData === true) {
 				throw new Error("保存设置失败");
 			}
-			plugin.savedSettings = data.settings;
+			plugin.savedData = data;
+			plugin.savedSettings = data.settings as KnomoSettings;
 		},
 	};
 	return plugin;

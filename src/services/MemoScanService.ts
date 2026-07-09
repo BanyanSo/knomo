@@ -19,6 +19,7 @@ import { MemoIndexStore } from "./MemoIndexStore";
 import {
 	formatMonthlyDateHeading,
 	getMonthlyArchivePath,
+	MonthlyArchiveAmbiguousError,
 	MonthlyArchiveMissingError,
 	MonthlyArchiveService,
 } from "./MonthlyArchiveService";
@@ -551,7 +552,17 @@ export class MemoScanService {
 		}
 
 		const createdAtText = formatLocalIsoString(createdAt);
-		const monthlyRef = await this.resolveMonthlyRef(settings, createdAt, block.rawBlock, syncMonthly);
+		let monthlyRef = buildExpectedMonthlyRef(settings, createdAt, block.rawBlock);
+		let syncStatus: MemoRecord["syncStatus"] = "synced";
+		let issue: MemoRecord["issue"] = null;
+		try {
+			monthlyRef = await this.resolveMonthlyRef(settings, createdAt, block.rawBlock, syncMonthly);
+		} catch (error) {
+			issue = buildMonthlyIssue(error);
+			syncStatus = "monthly_failed";
+			result.failed += 1;
+			result.errors.push(`${file.path}: ${issue.message}`);
+		}
 		const memo: MemoRecord = {
 			id: createMemoId(createdAt),
 			createdAt: createdAtText,
@@ -559,7 +570,7 @@ export class MemoScanService {
 			contentSnapshot: block.content,
 			contentHash: block.contentHash,
 			status: "active",
-			syncStatus: "synced",
+			syncStatus,
 			source: "daily_scan",
 			version: 1,
 			tags: block.tags,
@@ -567,15 +578,15 @@ export class MemoScanService {
 			images: block.images,
 			references: [],
 			sourceMemoId: null,
-			issue: null,
+			issue,
 			lastMarkdownSyncAt: new Date().toISOString(),
 			lastMarkdownSyncSource: source,
 			dailyRef: buildDailyRef(file.path, headingBlock.heading, block),
 			monthlyRef,
 		};
-		const monthlySync = syncMonthly
+		const monthlySync = syncMonthly && issue === null
 			? await this.syncMonthlyBlock(settings, memo, block.rawBlock, opId, result, file.path)
-			: { monthlyRef, syncStatus: "synced" as const, issue: null };
+			: { monthlyRef, syncStatus, issue };
 		const savedMemo = await memoIndexStore.addMemo(
 			settings.monthlyMemoFolder,
 			{
@@ -1047,12 +1058,12 @@ export class MemoScanService {
 			}
 			if ([exactMatches, blockIdMatches, contentAndTimeMatches, timeMatches].some((matches) => matches.length > 1)) {
 				if (requireUniqueMatch) {
-					throw new MonthlyArchiveBlockAmbiguousError(`Monthly archive block is ambiguous: ${expectedRef.path}`);
+					throw new MonthlyArchiveAmbiguousError();
 				}
 				return expectedRef;
 			}
 		} catch (error) {
-			if (error instanceof MonthlyArchiveBlockAmbiguousError) {
+			if (error instanceof MonthlyArchiveAmbiguousError) {
 				throw error;
 			}
 		}
@@ -1297,8 +1308,6 @@ function pickUniqueMonthlyBlock(candidateGroups: ParsedMemoBlock[][]): ParsedMem
 	}
 	return null;
 }
-
-class MonthlyArchiveBlockAmbiguousError extends Error {}
 
 function parseCreatedAt(path: string, config: DailyNotesConfig, time: string): Date | null {
 	const date = parseDailyNoteDateFromPath(path, config);

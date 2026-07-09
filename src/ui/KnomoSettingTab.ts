@@ -15,6 +15,8 @@ import type { RebuildIndexMode, RebuildIndexScope, SyncOrchestrator } from "../s
 import type { LegacyDailyMemosGroupPreview, LegacyDailyMemosImportScope, LegacyDailyMemosPreview } from "../services/MemoScanService";
 import type { MemoRecord } from "../types/memo";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
+import type { SyncConflictFile } from "../types/syncConflict";
+import type { MaintenanceDiagnostic } from "../utils/pluginData";
 import { normalizeVaultPath } from "../utils/path";
 import { formatMemoIssue, formatServiceError, formatSettingsText } from "../utils/serviceText";
 import { KnomoView } from "./KnomoView";
@@ -249,7 +251,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 		this.rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderRebuildResult(t("settings.rebuild.before"));
+		void this.renderInitialRebuildResult();
 
 		const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
 		let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
@@ -842,12 +844,60 @@ export class KnomoSettingTab extends PluginSettingTab {
 				skipped: result.skipped,
 			});
 			const backup = result.backupPath === null ? t("settings.rebuild.noBackup") : t("settings.rebuild.backup", { path: result.backupPath });
-			this.renderRebuildResult(`${message}\n${backup}`);
+			const resultLines = [message, backup];
+			if (result.duplicateIndexRecordsRemoved > 0) {
+				resultLines.push(t("settings.rebuild.cleanedDuplicateIndexRecords", { count: result.duplicateIndexRecordsRemoved }));
+			}
+			if (result.syncConflictIndexFilesDeleted > 0) {
+				resultLines.push(t("settings.rebuild.cleanedIndexConflicts", { count: result.syncConflictIndexFilesDeleted }));
+			}
+			if (result.syncConflictIndexFileDeleteFailed > 0) {
+				resultLines.push(t("settings.rebuild.indexConflictCleanupFailed", {
+					count: result.syncConflictIndexFileDeleteFailed,
+					path: result.firstFailedSyncConflictIndexPath ?? "",
+				}));
+			}
+			const remainingMonthlyConflicts = this.syncOrchestrator.listPotentialSyncConflictFiles()
+				.filter((conflict) => conflict.kind === "monthly-archive");
+			const firstMonthlyConflict = remainingMonthlyConflicts[0];
+			if (firstMonthlyConflict !== undefined) {
+				resultLines.push(t("settings.rebuild.monthlyConflictsRemain", {
+					count: remainingMonthlyConflicts.length,
+					path: firstMonthlyConflict.path,
+				}));
+			}
+			await this.saveMaintenanceDiagnosticSafely({
+				task: "repair",
+				status: "completed",
+				occurredAt: new Date().toISOString(),
+				scope,
+				mode,
+				message,
+				scannedFiles: result.scannedFiles,
+				created: result.created,
+				updated: result.updated,
+				deleted: result.deleted,
+				failed: result.failed,
+			});
+			this.renderRebuildResult(resultLines.join("\n"));
 			await this.renderIssueList();
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.rebuild.completedNotice"));
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.rebuild.failed"));
+			await this.saveMaintenanceDiagnosticSafely({
+				task: "repair",
+				status: "failed",
+				occurredAt: new Date().toISOString(),
+				scope,
+				mode,
+				message,
+				scannedFiles: null,
+				created: null,
+				updated: null,
+				deleted: null,
+				failed: null,
+			});
 			this.renderRebuildResult(message);
 			new Notice(message);
 		} finally {
@@ -904,6 +954,86 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.rebuildResultEl.empty();
 		this.rebuildResultEl.createDiv({ cls: "knomo-setting-help", text: message });
+	}
+
+	private async saveMaintenanceDiagnosticSafely(diagnostic: MaintenanceDiagnostic): Promise<void> {
+		try {
+			await this.settingsService.saveMaintenanceDiagnostic(diagnostic);
+		} catch {
+			// 维护诊断写入失败不应覆盖用户正在执行的维护结果。
+		}
+	}
+
+	private async renderInitialRebuildResult(): Promise<void> {
+		let message = this.getRebuildBeforeMessage();
+		try {
+			const diagnostic = await this.settingsService.loadMaintenanceDiagnostic();
+			if (diagnostic !== null) {
+				message = `${message}\n${this.formatMaintenanceDiagnostic(diagnostic)}`;
+			}
+		} catch {
+			// 诊断只辅助维护说明，读取失败时保留基础提示。
+		}
+		this.renderRebuildResult(message);
+	}
+
+	private getRebuildBeforeMessage(): string {
+		const conflicts = this.syncOrchestrator.listPotentialSyncConflictFiles();
+		if (conflicts.length === 0) {
+			return t("settings.rebuild.before");
+		}
+		return `${t("settings.rebuild.before")}\n${this.formatSyncConflictMessage(conflicts)}`;
+	}
+
+	private formatSyncConflictMessage(conflicts: readonly SyncConflictFile[]): string {
+		const firstConflict = conflicts[0];
+		if (firstConflict === undefined) {
+			return "";
+		}
+		const indexCount = conflicts.filter((conflict) => conflict.kind === "memo-index").length;
+		const monthlyCount = conflicts.length - indexCount;
+		const messageKey = indexCount > 0 && monthlyCount > 0
+			? "settings.rebuild.conflictMixedFiles"
+			: indexCount > 0
+				? "settings.rebuild.conflictIndexFiles"
+				: "settings.rebuild.conflictMonthlyFiles";
+		return t(messageKey, {
+			count: conflicts.length,
+			indexCount,
+			monthlyCount,
+			path: firstConflict.path,
+		});
+	}
+
+	private formatMaintenanceDiagnostic(diagnostic: MaintenanceDiagnostic): string {
+		const task = diagnostic.task === "startup_scan"
+			? t("settings.maintenanceDiagnostic.startupScan")
+			: diagnostic.task === "file_watch"
+				? t("settings.maintenanceDiagnostic.fileWatch")
+				: t("settings.maintenanceDiagnostic.repair");
+		const status = diagnostic.status === "completed"
+			? t("settings.maintenanceDiagnostic.completed")
+			: t("settings.maintenanceDiagnostic.failed");
+		const scope = diagnostic.scope === null ? "" : t("settings.maintenanceDiagnostic.scope", { scope: diagnostic.scope });
+		const mode = diagnostic.mode === null ? "" : t("settings.maintenanceDiagnostic.mode", { mode: diagnostic.mode });
+		const stats = diagnostic.scannedFiles === null
+			? ""
+			: t("settings.maintenanceDiagnostic.stats", {
+				scanned: diagnostic.scannedFiles,
+				created: diagnostic.created ?? 0,
+				updated: diagnostic.updated ?? 0,
+				deleted: diagnostic.deleted ?? 0,
+				failed: diagnostic.failed ?? 0,
+			});
+		return t("settings.maintenanceDiagnostic.latest", {
+			task,
+			status,
+			time: diagnostic.occurredAt,
+			scope,
+			mode,
+			stats,
+			message: diagnostic.message,
+		});
 	}
 
 	private renderMonthlyRebuildResult(message: string): void {

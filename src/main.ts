@@ -26,14 +26,22 @@ import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactControlle
 import { KnomoView } from "./ui/KnomoView";
 import type { MemoMutation } from "./types/memo";
 import { formatServiceError } from "./utils/serviceText";
+import type { MaintenanceDiagnostic } from "./utils/pluginData";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
+const DESKTOP_STARTUP_DAILY_SCAN_DAYS = 30;
+const MOBILE_STARTUP_DAILY_SCAN_DAYS = 7;
+
+export function getStartupDailyScanDays(isMobile: boolean): number {
+	return isMobile ? MOBILE_STARTUP_DAILY_SCAN_DAYS : DESKTOP_STARTUP_DAILY_SCAN_DAYS;
+}
 
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
 	syncOrchestrator!: SyncOrchestrator;
 	manualRefreshPromise: Promise<ScanDailyMemosResult> | null = null;
 	private viewRefreshScheduler: ViewRefreshScheduler | null = null;
+	private syncConflictNoticeShown = false;
 
 	async onload(): Promise<void> {
 		registerKnomoIcons();
@@ -103,6 +111,7 @@ export default class KnomoPlugin extends Plugin {
 			this.syncOrchestrator,
 			() => this.queueRefreshOpenViews(),
 			(path, error) => this.notifyWatchSyncError(path, error),
+			{ memoIndexRecoveryScanDays: getStartupDailyScanDays(Platform.isMobile) },
 		);
 		fileWatchService.start(this);
 
@@ -249,6 +258,19 @@ export default class KnomoPlugin extends Plugin {
 
 	private notifyWatchSyncError(path: string, error: unknown): void {
 		const message = formatServiceError(error);
+		void this.recordMaintenanceDiagnosticSafely({
+			task: "file_watch",
+			status: "failed",
+			occurredAt: new Date().toISOString(),
+			scope: null,
+			mode: null,
+			message: `${path}: ${message}`,
+			scannedFiles: null,
+			created: null,
+			updated: null,
+			deleted: null,
+			failed: null,
+		});
 		new Notice(t("service.watchSyncFailed", { path, message }));
 	}
 
@@ -273,10 +295,8 @@ export default class KnomoPlugin extends Plugin {
 		if (!await this.recoverPendingMemoCreatesSafely()) {
 			return;
 		}
-		if (Platform.isMobile) {
-			return;
-		}
-		await this.scanRecentDailyMemosSafely();
+		this.notifyPotentialSyncConflictsSafely();
+		await this.scanRecentDailyMemosSafely(getStartupDailyScanDays(Platform.isMobile));
 	}
 
 	private async initializeSystemFoldersSafely(): Promise<void> {
@@ -287,14 +307,79 @@ export default class KnomoPlugin extends Plugin {
 		}
 	}
 
-	private async scanRecentDailyMemosSafely(): Promise<void> {
+	private async scanRecentDailyMemosSafely(days: number): Promise<void> {
 		try {
-			const result = await this.syncOrchestrator.scanRecentDailyMemos(30);
+			const result = await this.syncOrchestrator.scanRecentDailyMemos(days);
 			if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
 				await this.queueRefreshOpenViews();
 			}
-		} catch {
+			if (result.failed > 0) {
+				await this.recordMaintenanceDiagnosticSafely({
+					task: "startup_scan",
+					status: "failed",
+					occurredAt: new Date().toISOString(),
+					scope: `${days}d`,
+					mode: null,
+					message: result.errors[0] ?? t("service.rebuildIndexFailedGeneric"),
+					scannedFiles: result.scannedFiles,
+					created: result.created,
+					updated: result.updated,
+					deleted: result.deleted,
+					failed: result.failed,
+				});
+			}
+		} catch (error) {
+			await this.recordMaintenanceDiagnosticSafely({
+				task: "startup_scan",
+				status: "failed",
+				occurredAt: new Date().toISOString(),
+				scope: `${days}d`,
+				mode: null,
+				message: formatServiceError(error),
+				scannedFiles: null,
+				created: null,
+				updated: null,
+				deleted: null,
+				failed: null,
+			});
 			// 启动扫描只做轻量修复，不打断用户。
+		}
+	}
+
+	private async recordMaintenanceDiagnosticSafely(diagnostic: MaintenanceDiagnostic): Promise<void> {
+		try {
+			await this.settingsService.saveMaintenanceDiagnostic(diagnostic);
+		} catch {
+			// 诊断只辅助排查，不应影响 memo 读写。
+		}
+	}
+
+	private notifyPotentialSyncConflictsSafely(): void {
+		if (this.syncConflictNoticeShown) {
+			return;
+		}
+		try {
+			const conflicts = this.syncOrchestrator.listPotentialSyncConflictFiles();
+			const firstConflict = conflicts[0];
+			if (firstConflict === undefined) {
+				return;
+			}
+			const indexCount = conflicts.filter((conflict) => conflict.kind === "memo-index").length;
+			const monthlyCount = conflicts.length - indexCount;
+			const messageKey = indexCount > 0 && monthlyCount > 0
+				? "notice.syncConflictMixedFiles"
+				: indexCount > 0
+					? "notice.syncConflictIndexFiles"
+					: "notice.syncConflictMonthlyFiles";
+			this.syncConflictNoticeShown = true;
+			new Notice(t(messageKey, {
+				count: conflicts.length,
+				indexCount,
+				monthlyCount,
+				path: firstConflict.path,
+			}));
+		} catch {
+			// 同步冲突提示只是辅助信息，检测失败不阻断启动。
 		}
 	}
 

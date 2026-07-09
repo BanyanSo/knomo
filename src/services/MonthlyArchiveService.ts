@@ -8,12 +8,14 @@ import type { MemoRecord, MonthlyRef } from "../types/memo";
 import type { PreparedMonthlyMemoWrite } from "../types/pending";
 import { PendingMemoWriteConflictError } from "../types/pending";
 import { KnomoError } from "../types/serviceError";
+import type { SyncConflictFile } from "../types/syncConflict";
 import type { KnomoErrorCode } from "../types/serviceError";
 import type { KnomoSettings, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart, formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
 import { findLineNumber, normalizeMarkdownLineEndings } from "../utils/markdown";
 import { getSystemFolderPath, normalizeVaultPath } from "../utils/path";
+import { isLikelySyncConflictPath } from "../utils/syncConflict";
 import { ensureFolder, ensureTextFile, getParentFolderPath } from "../utils/vault";
 import { MarkdownBlockService } from "./MarkdownBlockService";
 
@@ -354,6 +356,30 @@ export class MonthlyArchiveService {
 		};
 	}
 
+	listPotentialSyncConflictFiles(settings: KnomoSettings): SyncConflictFile[] {
+		const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
+		const monthlyFolder = this.app.vault.getAbstractFileByPath(monthlyFolderPath);
+		if (!(monthlyFolder instanceof TFolder)) {
+			return [];
+		}
+		const systemFolderPath = getSystemFolderPath(settings.monthlyMemoFolder);
+		const files: SyncConflictFile[] = [];
+		Vault.recurseChildren(monthlyFolder, (child) => {
+			if (
+				child instanceof TFile &&
+				child.extension === "md" &&
+				!child.path.startsWith(`${systemFolderPath}/`) &&
+				isLikelySyncConflictPath(child.name)
+			) {
+				const conflict = buildMonthlyArchiveConflictFile(settings, child);
+				if (conflict !== null) {
+					files.push(conflict);
+				}
+			}
+		});
+		return files.sort((left, right) => left.path.localeCompare(right.path));
+	}
+
 	private listMonthlyArchiveFiles(settings: KnomoSettings): TFile[] {
 		const monthlyFolderPath = normalizeVaultPath(settings.monthlyMemoFolder);
 		const monthlyFolder = this.app.vault.getAbstractFileByPath(monthlyFolderPath);
@@ -464,6 +490,40 @@ export function getMonthlyArchivePath(settings: KnomoSettings, period: string): 
 
 export function isMonthlyArchivePath(settings: KnomoSettings, path: string): boolean {
 	return buildMonthlyArchivePathPattern(settings).test(path);
+}
+
+function buildMonthlyArchiveConflictFile(settings: KnomoSettings, file: TFile): SyncConflictFile | null {
+	const period = file.name.match(/(\d{4}-\d{2})/)?.[1] ?? null;
+	if (period === null) {
+		return null;
+	}
+	const canonicalPath = getMonthlyArchivePath(settings, period);
+	if (getParentFolderPath(file.path) !== getParentFolderPath(canonicalPath)) {
+		return null;
+	}
+	const canonicalName = canonicalPath.split("/").pop() ?? "";
+	const canonicalStem = stripMarkdownExtension(canonicalName);
+	const fileStem = stripMarkdownExtension(file.name);
+	if (file.name === canonicalName || !isMonthlyArchiveSideCopyStem(fileStem, canonicalStem)) {
+		return null;
+	}
+	return {
+		kind: "monthly-archive",
+		path: file.path,
+		period,
+	};
+}
+
+function stripMarkdownExtension(fileName: string): string {
+	return fileName.replace(/\.md$/i, "");
+}
+
+function isMonthlyArchiveSideCopyStem(fileStem: string, canonicalStem: string): boolean {
+	if (canonicalStem.length === 0 || !fileStem.startsWith(canonicalStem) || fileStem === canonicalStem) {
+		return false;
+	}
+	const suffix = fileStem.slice(canonicalStem.length);
+	return /^[-\s(._]/.test(suffix);
 }
 
 export function formatMonthlyDateHeading(format: string, date: Date): string {

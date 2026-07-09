@@ -4,6 +4,7 @@ import type { App } from "obsidian";
 import type { MarkdownSyncSource, MemoRecord } from "../types/memo";
 import type { PendingMemoCreate } from "../types/pending";
 import { KnomoError } from "../types/serviceError";
+import type { SyncConflictFile } from "../types/syncConflict";
 import type { KnomoSettings } from "../types/settings";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
 import { formatMonthPeriod } from "../utils/date";
@@ -348,6 +349,14 @@ export class SyncOrchestrator {
 
 	listMemoIndexPeriods(): string[] {
 		return this.memoQueryService.listMemoIndexPeriods();
+	}
+
+	listPotentialSyncConflictFiles(): SyncConflictFile[] {
+		const settings = this.getSettings();
+		return [
+			...this.memoIndexStore.listPotentialSyncConflictFiles(settings.monthlyMemoFolder),
+			...this.monthlyArchiveService.listPotentialSyncConflictFiles(settings),
+		].sort((left, right) => left.path.localeCompare(right.path));
 	}
 
 	async listMemosInPeriods(periods: string[]): Promise<MemoRecord[]> {

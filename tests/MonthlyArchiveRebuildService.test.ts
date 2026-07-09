@@ -65,6 +65,60 @@ test("monthly archive rebuild writes every active memo from daily notes without 
 	assert.equal(index.memos["memo-b"]?.monthlyRef.lastKnownBlock, secondBlock.rawBlock);
 });
 
+test("monthly archive rebuild uses deduped active memos", async () => {
+	await ensureObsidianStub();
+	const { TFile, TFolder } = await import("obsidian");
+	const { MarkdownBlockService } = await import("../src/services/MarkdownBlockService");
+	const { MonthlyArchiveService } = await import("../src/services/MonthlyArchiveService");
+	const { MonthlyArchiveRebuildService } = await import("../src/services/MonthlyArchiveRebuildService");
+	const markdownBlockService = new MarkdownBlockService();
+	const daily = Object.assign(new TFile(), { path: "Daily/2026-06-02.md", extension: "md" });
+	const monthlyFolder = Object.assign(new TFolder(), { path: "Memos", children: [] });
+	const files = new Map<string, unknown>([
+		[daily.path, daily],
+		[monthlyFolder.path, monthlyFolder],
+	]);
+	const contents = new Map<string, string>([
+		[daily.path, "## Memos\n- 08:00 duplicated memo"],
+	]);
+	const block = parseBlock(markdownBlockService, "- 08:00 duplicated memo");
+	const duplicateMemo = createMemo("memo-duplicate", "2026-06-02T08:00:00", daily.path, block);
+	const keptMemo = {
+		...createMemo("memo-kept", "2026-06-02T08:00:00", daily.path, block),
+		updatedAt: "2026-06-02T08:01:00",
+	};
+	const index = createIndex("2026-06", [duplicateMemo, keptMemo]);
+	const indexStore = {
+		loadExistingPeriod: async () => index,
+		loadExistingPeriods: async () => [keptMemo],
+		backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-monthly",
+		mergePeriod: async (_folder: string, _period: string, merge: (current: MemoIndex) => MemoIndex) => {
+			const next = merge(index);
+			Object.assign(index, next);
+			return index;
+		},
+	};
+	const app = createApp(files, contents, TFile, TFolder);
+	const rebuildService = new MonthlyArchiveRebuildService(
+		app as never,
+		createSettings,
+		new MonthlyArchiveService(app as never, markdownBlockService),
+		indexStore as never,
+		{ mark: () => undefined } as never,
+		markdownBlockService,
+	);
+
+	const result = await rebuildService.rebuildPeriod("2026-06", {
+		replaceExisting: false,
+		createBackup: false,
+	});
+
+	const monthlyContent = contents.get("Memos/Memos-2026-06.md") ?? "";
+	assert.equal(result.active, 1);
+	assert.equal(result.rebuilt, 1);
+	assert.equal((monthlyContent.match(/duplicated memo/g) ?? []).length, 1);
+});
+
 test("monthly archive rebuild records missing and ambiguous daily blocks without using snapshots", async () => {
 	await ensureObsidianStub();
 	const { TFile, TFolder } = await import("obsidian");
@@ -299,6 +353,7 @@ function createApp(
 function createIndexStore(index: MemoIndex): unknown {
 	return {
 		loadExistingPeriod: async () => index,
+		loadExistingPeriods: async () => Object.values(index.memos),
 		backupIndexes: async () => "Memos/_knomo-system/backups/rebuild-monthly",
 		mergePeriod: async (_folder: string, _period: string, merge: (current: MemoIndex) => MemoIndex) => {
 			const next = merge(index);

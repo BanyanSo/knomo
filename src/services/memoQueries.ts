@@ -26,8 +26,8 @@ export class MemoQueryService {
 	async listCurrentMonthMemos(): Promise<MemoRecord[]> {
 		const settings = this.getSettings();
 		const period = formatMonthPeriod(new Date());
-		const index = await this.memoIndexStore.loadPeriod(settings.monthlyMemoFolder, period);
-		return Object.values(index.memos)
+		const memos = await this.memoIndexStore.loadExistingPeriods(settings.monthlyMemoFolder, [period]);
+		return memos
 			.filter((memo) => memo.status === "active")
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 	}
@@ -35,7 +35,7 @@ export class MemoQueryService {
 	async listRecentMemos(): Promise<MemoRecord[]> {
 		const settings = this.getSettings();
 		const periods = getRecentMemoPeriods();
-		const memos = await this.memoIndexStore.loadPeriods(settings.monthlyMemoFolder, periods);
+		const memos = await this.memoIndexStore.loadExistingPeriods(settings.monthlyMemoFolder, periods);
 		return memos
 			.filter((memo) => memo.status === "active")
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -48,7 +48,7 @@ export class MemoQueryService {
 
 	async listMemosInPeriods(periods: string[]): Promise<MemoRecord[]> {
 		const settings = this.getSettings();
-		const memos = await this.memoIndexStore.loadPeriods(settings.monthlyMemoFolder, periods);
+		const memos = await this.memoIndexStore.loadExistingPeriods(settings.monthlyMemoFolder, periods);
 		return memos
 			.filter((memo) => memo.status === "active")
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -120,7 +120,7 @@ export class MemoQueryService {
 		visitor: (period: string, memos: readonly MemoRecord[]) => boolean | void | Promise<boolean | void>,
 	): Promise<boolean> {
 		const settings = this.getSettings();
-		return this.memoIndexStore.scanAll(settings.monthlyMemoFolder, visitor);
+		return this.memoIndexStore.scanAllExisting(settings.monthlyMemoFolder, visitor);
 	}
 }
 

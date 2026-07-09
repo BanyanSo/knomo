@@ -28,6 +28,7 @@ interface KnomoUserActionControllerOptions {
 	isMobileLayout: () => boolean;
 	isMobileSearchPageOpen: () => boolean;
 	isComposerOpen: () => boolean;
+	isDrawerOpen: () => boolean;
 	getRenderGeneration: () => number;
 	hasMoreCardFlowItems: () => boolean;
 	shouldDeferCardFlowForAllMemos: () => boolean;
@@ -100,6 +101,10 @@ export class KnomoUserActionController {
 		if (!this.options.isMobileLayout()) {
 			return;
 		}
+		const target = event.target as Node | null;
+		if (target?.instanceOf(Element) && this.isSidebarLayerTarget(target)) {
+			return;
+		}
 		this.options.handleOpenPopupOutsideEvent(event, event.target, true);
 	}
 
@@ -109,10 +114,11 @@ export class KnomoUserActionController {
 			return;
 		}
 
-		if (this.options.consumeSuppressedOpenPopupDismissClick(event)) {
+		const sidebarLayerTarget = this.isSidebarLayerTarget(target);
+		if (!sidebarLayerTarget && this.options.consumeSuppressedOpenPopupDismissClick(event)) {
 			return;
 		}
-		if (this.options.handleOpenPopupOutsideEvent(event, target, false)) {
+		if (!sidebarLayerTarget && this.options.handleOpenPopupOutsideEvent(event, target, false)) {
 			return;
 		}
 
@@ -203,6 +209,9 @@ export class KnomoUserActionController {
 			return;
 		}
 
+		if (sidebarLayerTarget) {
+			return;
+		}
 		if (route.closeCardMenu) {
 			this.options.closeCardMenu();
 		}
@@ -215,6 +224,22 @@ export class KnomoUserActionController {
 		if (route.closeCompactSearch) {
 			this.options.closeCompactSearch();
 		}
+	}
+
+	private isSidebarLayerTarget(target: Element): boolean {
+		const actionEl = target.closest("[data-action]");
+		if (actionEl?.instanceOf(HTMLElement)) {
+			const action = actionEl.getAttr("data-action");
+			if (
+				action === "open-drawer" ||
+				action === "close-drawer" ||
+				action === "toggle-sidebar" ||
+				action === "collapse-sidebar"
+			) {
+				return true;
+			}
+		}
+		return this.options.isDrawerOpen() && target.closest(".knomo-sidebar, .knomo-drawer-backdrop") !== null;
 	}
 
 	async handleAction(

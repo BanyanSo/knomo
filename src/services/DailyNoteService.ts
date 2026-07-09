@@ -86,9 +86,8 @@ export class DailyNoteService {
 			if (createdFile instanceof TFile) {
 				return createdFile;
 			}
-			console.warn("Knomo: Daily Notes interface did not return a file; falling back to Knomo daily note creation.");
-		} catch (error) {
-			console.error("Knomo: Daily Notes interface failed to create a daily note; falling back to Knomo daily note creation.", error);
+		} catch {
+			// Daily Notes 可能在移动端或异常配置下失败；继续走本地兜底创建。
 		}
 
 		return ensureTextFile(this.app, path);

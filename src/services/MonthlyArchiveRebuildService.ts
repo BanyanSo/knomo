@@ -65,7 +65,7 @@ export class MonthlyArchiveRebuildService {
 			throw new KnomoError("monthly_archive_index_missing", { period });
 		}
 
-		const activeMemos = Object.values(existingIndex.memos)
+		const activeMemos = (await this.memoIndexStore.loadExistingPeriods(settings.monthlyMemoFolder, [period]))
 			.filter((memo) => memo.status === "active")
 			.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 		const initialResult: RebuildMonthlyArchiveResult = {

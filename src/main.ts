@@ -11,6 +11,7 @@ import { MemoIndexStore } from "./services/MemoIndexStore";
 import { MonthlyArchiveService } from "./services/MonthlyArchiveService";
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
 import { PendingMemoCreateStore } from "./services/PendingMemoCreateStore";
+import { PluginDataStore } from "./services/PluginDataStore";
 import { RandomReunionService } from "./services/RandomReunionService";
 import { ReferenceService } from "./services/ReferenceService";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
@@ -46,6 +47,7 @@ export default class KnomoPlugin extends Plugin {
 	async onload(): Promise<void> {
 		registerKnomoIcons();
 		const selfWriteTracker = new SelfWriteTracker();
+		const pluginDataStore = new PluginDataStore(this);
 		this.settingsService = new SettingsService(this, (oldPath, newPath) => {
 			const now = Date.now();
 			const opId = `archive-move-${now}-${newPath}`;
@@ -59,7 +61,7 @@ export default class KnomoPlugin extends Plugin {
 				targetPath: newPath,
 			});
 			return () => selfWriteTracker.discard(oldPath, opId);
-		});
+		}, pluginDataStore);
 		await this.loadSettingsSafely();
 		const markdownBlockService = new MarkdownBlockService();
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
@@ -102,8 +104,8 @@ export default class KnomoPlugin extends Plugin {
 			markdownBlockService,
 			(memo) => this.syncOrchestrator.ensureReferenceBlockId(memo),
 		);
-		const randomReunionService = new RandomReunionService(this);
-		const shuffleDayService = new ShuffleDayService(this);
+		const randomReunionService = new RandomReunionService(pluginDataStore);
+		const shuffleDayService = new ShuffleDayService(pluginDataStore);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
 		const fileWatchService = new FileWatchService(
 			this.app,

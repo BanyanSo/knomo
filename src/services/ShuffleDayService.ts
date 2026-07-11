@@ -1,5 +1,3 @@
-import type { Plugin } from "obsidian";
-
 import type { MemoRecord } from "../types/memo";
 import {
 	buildPluginDataWithShuffleDayHistory,
@@ -7,29 +5,24 @@ import {
 } from "../utils/pluginData";
 import {
 	selectShuffleDay,
-	type ShuffleDayHistoryEntry,
 	type ShuffleDaySelectionResult,
 } from "../utils/shuffleDay";
+import type { PluginDataStore } from "./PluginDataStore";
 
 export class ShuffleDayService {
-	constructor(private readonly plugin: Plugin) {}
+	constructor(private readonly pluginDataStore: PluginDataStore) {}
 
 	async selectShuffleDay(memos: MemoRecord[]): Promise<ShuffleDaySelectionResult> {
-		const history = await this.loadHistory();
-		const result = selectShuffleDay(memos, { history });
-		if (result.status === "ready") {
-			await this.saveHistory(result.nextHistory);
-		}
-		return result;
-	}
-
-	private async loadHistory(): Promise<ShuffleDayHistoryEntry[]> {
-		const savedData: unknown = await this.plugin.loadData();
-		return extractShuffleDayHistory(savedData);
-	}
-
-	private async saveHistory(history: ShuffleDayHistoryEntry[]): Promise<void> {
-		const savedData: unknown = await this.plugin.loadData();
-		await this.plugin.saveData(buildPluginDataWithShuffleDayHistory(savedData, history));
+		return this.pluginDataStore.mutate((savedData) => {
+			const result = selectShuffleDay(memos, {
+				history: extractShuffleDayHistory(savedData),
+			});
+			return {
+				nextData: result.status === "ready"
+					? buildPluginDataWithShuffleDayHistory(savedData, result.nextHistory)
+					: null,
+				result,
+			};
+		});
 	}
 }

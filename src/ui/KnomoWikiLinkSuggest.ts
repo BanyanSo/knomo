@@ -16,6 +16,7 @@ import {
 } from "./composerSuggestPosition";
 
 interface KnomoWikiLinkSuggestOptions {
+	listboxId: string;
 	getSourcePath: () => string;
 	onInputChanged: () => void;
 	closeTagSuggest: () => void;
@@ -43,6 +44,10 @@ export class KnomoWikiLinkSuggest {
 		private readonly inputEl: HTMLTextAreaElement,
 		private readonly options: KnomoWikiLinkSuggestOptions,
 	) {
+		this.inputEl.setAttr("aria-autocomplete", "list");
+		this.inputEl.setAttr("aria-haspopup", "listbox");
+		this.inputEl.setAttr("aria-controls", this.options.listboxId);
+		this.inputEl.setAttr("aria-expanded", "false");
 		this.options.registerVaultEvent(this.app.vault.on("create", () => this.invalidateFiles()));
 		this.options.registerVaultEvent(this.app.vault.on("delete", () => this.invalidateFiles()));
 		this.options.registerVaultEvent(this.app.vault.on("rename", () => this.invalidateFiles()));
@@ -51,6 +56,10 @@ export class KnomoWikiLinkSuggest {
 	destroy(): void {
 		this.close();
 		this.filesSnapshot = null;
+		this.inputEl.removeAttribute("aria-autocomplete");
+		this.inputEl.removeAttribute("aria-haspopup");
+		this.inputEl.removeAttribute("aria-controls");
+		this.inputEl.removeAttribute("aria-expanded");
 	}
 
 	close(): void {
@@ -59,6 +68,8 @@ export class KnomoWikiLinkSuggest {
 		this.popoverEl = null;
 		this.suggestions = [];
 		this.selectedIndex = 0;
+		this.inputEl.setAttr("aria-expanded", "false");
+		this.inputEl.removeAttribute("aria-activedescendant");
 	}
 
 	handleBeforeInput(event: InputEvent): boolean {
@@ -213,11 +224,14 @@ export class KnomoWikiLinkSuggest {
 		}
 		popover.empty();
 		for (const [index, suggestion] of this.suggestions.entries()) {
+			const optionId = this.getOptionId(index);
 			const item = popover.createDiv({
 				cls: "knomo-link-suggest-item",
 				attr: {
+					id: optionId,
 					role: "option",
 					tabindex: "-1",
+					"aria-selected": index === this.selectedIndex ? "true" : "false",
 				},
 			});
 			item.toggleClass("is-selected", index === this.selectedIndex);
@@ -265,6 +279,8 @@ export class KnomoWikiLinkSuggest {
 			item.addEventListener("touchend", choose);
 			item.addEventListener("click", choose);
 		}
+		this.inputEl.setAttr("aria-expanded", "true");
+		this.inputEl.setAttr("aria-activedescendant", this.getOptionId(this.selectedIndex));
 		this.queueReposition();
 	}
 
@@ -338,11 +354,16 @@ export class KnomoWikiLinkSuggest {
 		const popover = this.inputEl.ownerDocument.body.createDiv({
 			cls: "knomo-link-suggest-popover knomo-link-suggest-positioning",
 			attr: {
+				id: this.options.listboxId,
 				role: "listbox",
 			},
 		});
 		popover.setCssProps({ "--knomo-suggest-z-index": WIKI_LINK_POPOVER_Z_INDEX });
 		this.popoverEl = popover;
+	}
+
+	private getOptionId(index: number): string {
+		return `${this.options.listboxId}-option-${index}`;
 	}
 
 	private queueReposition(): void {

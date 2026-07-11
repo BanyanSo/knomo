@@ -5,6 +5,78 @@ import { setImmediate as waitImmediate } from "node:timers/promises";
 import type { KnomoSettings } from "../src/types/settings";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("ordinary mutations run serially", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const finishFirstMutation = createDeferred<void>();
+	let pendingListCalls = 0;
+	const orchestrator = createOrchestrator(SyncOrchestrator, async () => {
+		pendingListCalls += 1;
+		if (pendingListCalls === 1) {
+			await finishFirstMutation.promise;
+		}
+		return [];
+	});
+
+	const firstMutation = orchestrator.recoverPendingMemoCreates();
+	await waitImmediate();
+	const secondMutation = orchestrator.recoverPendingMemoCreates();
+	await waitImmediate();
+
+	assert.equal(pendingListCalls, 1);
+	finishFirstMutation.resolve();
+	await Promise.all([firstMutation, secondMutation]);
+	assert.equal(pendingListCalls, 2);
+});
+
+test("failed ordinary mutation releases the next mutation", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	let pendingListCalls = 0;
+	const orchestrator = createOrchestrator(SyncOrchestrator, async () => {
+		pendingListCalls += 1;
+		if (pendingListCalls === 1) {
+			throw new Error("mutation failed");
+		}
+		return [];
+	});
+
+	const firstMutation = orchestrator.recoverPendingMemoCreates();
+	const secondMutation = orchestrator.recoverPendingMemoCreates();
+	await assert.rejects(firstMutation, /mutation failed/);
+	await secondMutation;
+
+	assert.equal(pendingListCalls, 2);
+});
+
+test("maintenance runs before an ordinary mutation already waiting in the queue", async () => {
+	const { SyncOrchestrator } = await loadSyncOrchestrator();
+	const finishFirstMutation = createDeferred<void>();
+	const events: string[] = [];
+	let pendingListCalls = 0;
+	const orchestrator = createOrchestrator(SyncOrchestrator, async () => {
+		pendingListCalls += 1;
+		if (pendingListCalls === 1) {
+			events.push("first-started");
+			await finishFirstMutation.promise;
+			events.push("first-finished");
+		} else {
+			events.push("second-started");
+		}
+		return [];
+	});
+
+	const firstMutation = orchestrator.recoverPendingMemoCreates();
+	await waitImmediate();
+	const secondMutation = orchestrator.recoverPendingMemoCreates();
+	const maintenance = orchestrator.runMonthlyMemoFileFormatMigration(async () => {
+		events.push("maintenance");
+	});
+	await waitImmediate();
+	finishFirstMutation.resolve();
+	await Promise.all([firstMutation, secondMutation, maintenance]);
+
+	assert.deepEqual(events, ["first-started", "first-finished", "maintenance", "second-started"]);
+});
+
 test("monthly filename migration waits for active mutations", async () => {
 	const { SyncOrchestrator } = await loadSyncOrchestrator();
 	const pendingList = createDeferred<never[]>();

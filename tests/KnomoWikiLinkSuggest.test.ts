@@ -68,6 +68,40 @@ test("handles ArrowUp ArrowDown Enter Tab and Escape", () => {
 	assert.equal(escapeHarness.suggest.isOpen(), false);
 });
 
+test("connects the textarea to the active WikiLink listbox option", () => {
+	const harness = createHarness([
+		makeFile("Projects/Alpha.md"),
+		makeFile("Projects/Beta.md"),
+	]);
+	assert.equal(harness.input.getAttr("role"), null);
+	assert.equal(harness.input.getAttr("aria-autocomplete"), "list");
+	assert.equal(harness.input.getAttr("aria-haspopup"), "listbox");
+	assert.equal(harness.input.getAttr("aria-controls"), "wiki-link-suggestions-test");
+	assert.equal(harness.input.getAttr("aria-expanded"), "false");
+
+	harness.input.value = "[[]]";
+	harness.input.setSelectionRange(2, 2);
+	harness.suggest.openForCurrentRange();
+	const popover = harness.suggest.getPopoverForTest() as unknown as FakeElement;
+	assert.equal(popover.getAttr("id"), "wiki-link-suggestions-test");
+	assert.equal(popover.getAttr("role"), "listbox");
+	assert.equal(harness.input.getAttr("aria-expanded"), "true");
+	assert.equal(harness.input.getAttr("aria-activedescendant"), "wiki-link-suggestions-test-option-0");
+	assert.equal(popover.children[0]?.getAttr("aria-selected"), "true");
+	assert.equal(popover.children[1]?.getAttr("aria-selected"), "false");
+
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
+	assert.equal(harness.input.getAttr("aria-activedescendant"), "wiki-link-suggestions-test-option-1");
+	assert.equal(popover.children[0]?.getAttr("aria-selected"), "false");
+	assert.equal(popover.children[1]?.getAttr("aria-selected"), "true");
+
+	harness.suggest.handleKeydown(createKeyboardEvent("Escape"));
+	assert.equal(harness.input.getAttr("aria-expanded"), "false");
+	assert.equal(harness.input.getAttr("aria-activedescendant"), null);
+	harness.suggest.destroy();
+	assert.equal(harness.input.getAttr("aria-controls"), null);
+});
+
 test("does not insert on Tab when there are no candidates", () => {
 	const harness = createHarness([makeFile("Projects/Alpha.md")]);
 	harness.input.value = "[[missing]]";
@@ -199,6 +233,7 @@ function createHarness(files: TFile[], options: HarnessOptions = {}) {
 		},
 	} as unknown as App;
 	const suggest = new KnomoWikiLinkSuggest(app, input.asTextArea(), {
+		listboxId: "wiki-link-suggestions-test",
 		getSourcePath: () => "Daily/2026-06-05.md",
 		onInputChanged: () => undefined,
 		closeTagSuggest: () => {
@@ -361,6 +396,18 @@ class FakeElement {
 
 	setText(text: string): void {
 		this.text = text;
+	}
+
+	setAttr(key: string, value: string): void {
+		this.attrs.set(key, value);
+	}
+
+	getAttr(key: string): string | null {
+		return this.attrs.get(key) ?? null;
+	}
+
+	removeAttribute(key: string): void {
+		this.attrs.delete(key);
 	}
 
 	setCssProps(props: Record<string, string>): void {

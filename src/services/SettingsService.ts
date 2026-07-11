@@ -18,6 +18,7 @@ import {
 	extractSettingsData,
 	type MaintenanceDiagnostic,
 } from "../utils/pluginData";
+import { PluginDataStore } from "./PluginDataStore";
 
 export { DEFAULT_KNOMO_SETTINGS, isValidMonthlyMemoFileFormat };
 export type {
@@ -35,6 +36,7 @@ export class SettingsService {
 	constructor(
 		private readonly plugin: Plugin,
 		onBeforeArchiveMove?: (oldPath: string, newPath: string) => void | (() => void),
+		private readonly pluginDataStore = new PluginDataStore(plugin),
 	) {
 		this.monthlyFolderMigrationService = new MonthlyFolderMigrationService(
 			plugin,
@@ -48,7 +50,7 @@ export class SettingsService {
 	}
 
 	async loadSettings(): Promise<KnomoSettings> {
-		const savedData: unknown = await this.plugin.loadData();
+		const savedData = await this.pluginDataStore.read();
 		this.settings = this.migrateSettings(extractSettingsData(savedData));
 		return this.getSettings();
 	}
@@ -68,21 +70,25 @@ export class SettingsService {
 	}
 
 	async loadMaintenanceDiagnostic(): Promise<MaintenanceDiagnostic | null> {
-		const savedData: unknown = await this.plugin.loadData();
+		const savedData = await this.pluginDataStore.read();
 		return extractMaintenanceDiagnostic(savedData);
 	}
 
 	async saveMaintenanceDiagnostic(diagnostic: MaintenanceDiagnostic): Promise<void> {
 		await this.runSettingsWriteExclusive(async () => {
-			const savedData: unknown = await this.plugin.loadData();
-			await this.plugin.saveData(buildPluginDataWithMaintenanceDiagnostic(savedData, diagnostic));
+			await this.pluginDataStore.mutate((savedData) => ({
+				nextData: buildPluginDataWithMaintenanceDiagnostic(savedData, diagnostic),
+				result: undefined,
+			}));
 		});
 	}
 
 	private async persistSettings(settings: KnomoSettings): Promise<KnomoSettings> {
 		const nextSettings = this.migrateSettings(settings);
-		const savedData: unknown = await this.plugin.loadData();
-		await this.plugin.saveData(buildPluginDataWithSettings(savedData, nextSettings));
+		await this.pluginDataStore.mutate((savedData) => ({
+			nextData: buildPluginDataWithSettings(savedData, nextSettings),
+			result: undefined,
+		}));
 		this.settings = nextSettings;
 		return this.getSettings();
 	}

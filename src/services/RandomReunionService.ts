@@ -1,5 +1,3 @@
-import type { Plugin } from "obsidian";
-
 import type { MemoRecord } from "../types/memo";
 import type { MemoReviewStateMap } from "../types/review";
 import {
@@ -10,9 +8,10 @@ import {
 	getRandomReunionMemos,
 	markMemoReviewed,
 } from "../utils/randomReunion";
+import type { PluginDataStore } from "./PluginDataStore";
 
 export class RandomReunionService {
-	constructor(private readonly plugin: Plugin) {}
+	constructor(private readonly pluginDataStore: PluginDataStore) {}
 
 	async getRandomReunionMemos(count: number, memos: MemoRecord[]): Promise<MemoRecord[]> {
 		const reviewStates = await this.loadReviewStates();
@@ -20,18 +19,20 @@ export class RandomReunionService {
 	}
 
 	async markRandomReunionReviewed(memoId: string): Promise<void> {
-		const savedData: unknown = await this.plugin.loadData();
-		const reviewStates = extractRandomReunionReviewStates(savedData);
-		await this.saveReviewStates(markMemoReviewed(reviewStates, memoId));
+		await this.pluginDataStore.mutate((savedData) => {
+			const reviewStates = extractRandomReunionReviewStates(savedData);
+			return {
+				nextData: buildPluginDataWithRandomReunionReviewStates(
+					savedData,
+					markMemoReviewed(reviewStates, memoId),
+				),
+				result: undefined,
+			};
+		});
 	}
 
 	async loadReviewStates(): Promise<MemoReviewStateMap> {
-		const savedData: unknown = await this.plugin.loadData();
+		const savedData = await this.pluginDataStore.read();
 		return extractRandomReunionReviewStates(savedData);
-	}
-
-	private async saveReviewStates(reviewStates: MemoReviewStateMap): Promise<void> {
-		const savedData: unknown = await this.plugin.loadData();
-		await this.plugin.saveData(buildPluginDataWithRandomReunionReviewStates(savedData, reviewStates));
 	}
 }

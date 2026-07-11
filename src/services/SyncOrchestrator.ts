@@ -469,21 +469,32 @@ class MaintenanceOperationGate {
 	private maintenanceBarrier: Promise<void> | null = null;
 	private releaseMaintenanceBarrier: (() => void) | null = null;
 	private maintenanceQueue: Promise<void> = Promise.resolve();
+	private operationQueue: Promise<void> = Promise.resolve();
 
 	async runOperation<T>(operation: () => Promise<T>): Promise<T> {
-		while (this.maintenanceBarrier !== null) {
-			await this.maintenanceBarrier;
-		}
-		this.activeOperations += 1;
+		const previousOperation = this.operationQueue;
+		let releaseOperation: () => void = () => undefined;
+		this.operationQueue = new Promise<void>((resolve) => {
+			releaseOperation = resolve;
+		});
+		await previousOperation;
 		try {
-			return await operation();
-		} finally {
-			this.activeOperations -= 1;
-			if (this.activeOperations === 0) {
-				for (const resolve of this.idleResolvers.splice(0)) {
-					resolve();
+			while (this.maintenanceBarrier !== null) {
+				await this.maintenanceBarrier;
+			}
+			this.activeOperations += 1;
+			try {
+				return await operation();
+			} finally {
+				this.activeOperations -= 1;
+				if (this.activeOperations === 0) {
+					for (const resolve of this.idleResolvers.splice(0)) {
+						resolve();
+					}
 				}
 			}
+		} finally {
+			releaseOperation();
 		}
 	}
 

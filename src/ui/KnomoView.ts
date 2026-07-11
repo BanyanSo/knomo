@@ -1113,6 +1113,7 @@ export class KnomoView extends ItemView {
 
 	private renderComposer(main: HTMLElement): void {
 		const dailyStatus = this.syncOrchestrator.getDailyNotesStatus();
+		const wikiLinkListboxId = this.getA11yId("wiki-link-suggestions");
 		const composer = renderKnomoComposer(main, {
 			dailyEnabled: dailyStatus.enabled,
 			draftContent: this.draftContent,
@@ -1142,6 +1143,7 @@ export class KnomoView extends ItemView {
 		this.registerDomEvent(composer.composerEl, "mousedown", (event) => this.handleMobileComposerActionPointerDown(event));
 		this.tagSuggest = new KnomoTagSuggest(this.app, this.inputEl, () => this.syncInputState());
 		this.wikiLinkSuggest = new KnomoWikiLinkSuggest(this.app, this.inputEl, {
+			listboxId: wikiLinkListboxId,
 			getSourcePath: () => this.getWikiLinkSourcePath(),
 			onInputChanged: () => this.syncInputState(),
 			closeTagSuggest: () => this.tagSuggest?.close(),

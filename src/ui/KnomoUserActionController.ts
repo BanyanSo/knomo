@@ -16,6 +16,7 @@ import {
 	type TitleMode,
 } from "./viewNavigation";
 import type { SearchDateFilter } from "./viewFilters";
+import type { TimeBuoyTab } from "./TimeBuoyViewController";
 
 export interface EscapeState {
 	mobileSearchPageOpen: boolean;
@@ -71,6 +72,14 @@ interface KnomoUserActionControllerOptions {
 	goToPreviousRecordStatsPeriod: () => void;
 	goToNextRecordStatsPeriod: () => void;
 	retryRecordStats: () => Promise<void>;
+	retryTimeBuoy?: () => Promise<void>;
+	rebuildTimeBuoy?: () => Promise<void>;
+	cancelTimeBuoyRebuild?: () => void;
+	setTimeBuoyTab?: (tab: TimeBuoyTab) => void;
+	loadMoreTimeBuoyCards?: () => void;
+	openTimeBuoy?: () => void;
+	enableTimeBuoyIntro?: () => Promise<void>;
+	dismissTimeBuoyIntro?: () => Promise<void>;
 	renderAllMemosLoadingState: () => void;
 	ensureAllMemosLoaded: () => Promise<void>;
 	setRecordStatsView: (view: "week" | "month" | "year") => void;
@@ -309,6 +318,36 @@ export class KnomoUserActionController {
 				return;
 			case "record-stats-retry":
 				await this.options.retryRecordStats();
+				return;
+			case "retry-time-buoy":
+				await this.options.retryTimeBuoy?.();
+				return;
+			case "rebuild-time-buoy":
+				await this.options.rebuildTimeBuoy?.();
+				return;
+			case "cancel-time-buoy-rebuild":
+				this.options.cancelTimeBuoyRebuild?.();
+				return;
+			case "time-buoy-tab-today":
+				this.options.setTimeBuoyTab?.("today");
+				return;
+			case "time-buoy-tab-upcoming":
+				this.options.setTimeBuoyTab?.("upcoming");
+				return;
+			case "time-buoy-tab-past":
+				this.options.setTimeBuoyTab?.("past");
+				return;
+			case "load-more-time-buoy-cards":
+				this.options.loadMoreTimeBuoyCards?.();
+				return;
+			case "open-time-buoy":
+				this.options.openTimeBuoy?.();
+				return;
+			case "enable-time-buoy-intro":
+				await this.options.enableTimeBuoyIntro?.();
+				return;
+			case "dismiss-time-buoy-intro":
+				await this.options.dismissTimeBuoyIntro?.();
 				return;
 			case "retry-all-memos":
 				if (!this.options.shouldDeferCardFlowForAllMemos()) {

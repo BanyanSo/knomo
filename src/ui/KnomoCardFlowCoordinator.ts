@@ -127,6 +127,10 @@ export class KnomoCardFlowCoordinator {
 		this.batcher.updateItems(memos);
 	}
 
+	updateBatchItemsAfterRendered(memos: MemoRecord[], renderedMemoIds: readonly string[]): void {
+		this.batcher.updateItemsAfterRendered(memos, renderedMemoIds);
+	}
+
 	setPendingScrollRestore(pending: PendingCardFlowScrollRestore | null): void {
 		this.pendingScrollRestore = pending;
 	}

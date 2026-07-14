@@ -2,7 +2,7 @@ import { getKnomoLocale, t } from "../i18n";
 import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import type { ShuffleDayStats } from "../utils/shuffleDay";
 
-type LoadMoreAction = "load-more" | "load-more-mobile-search";
+type LoadMoreAction = "load-more" | "load-more-mobile-search" | "load-more-time-buoy-cards";
 
 interface RenderLoadMoreButtonOptions {
 	remainingCount: number;

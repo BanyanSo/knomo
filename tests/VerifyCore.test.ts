@@ -84,6 +84,35 @@ test("verify core reports forbidden source pattern matches with file and line", 
 	}
 });
 
+test("verify core covers project-specific Obsidian source constraints", async () => {
+	const verifyCore = await loadVerifyCore();
+	const forbiddenSources = [
+		"await this.app.vault.trash(file);",
+		"await this.app.vault.delete(file);",
+		"input.style.color = 'red';",
+		"input.style.setProperty('--knomo-color', value);",
+		"input.setAttribute('style', 'color: red');",
+		"containerEl.createEl('style');",
+		"createEl('link');",
+	];
+	const allowedSources = [
+		"await this.app.fileManager.trashFile(file);",
+		"myvault.deleteCache();",
+		"previousVault.trashState;",
+		"const color = input.style.color;",
+		"input.setCssProps({ '--knomo-color': value });",
+		"file instanceof TFile;",
+		"event instanceof win.InputEvent;",
+	];
+
+	for (const source of forbiddenSources) {
+		assert.match(source, verifyCore.FORBIDDEN_SOURCE_PATTERN);
+	}
+	for (const source of allowedSources) {
+		assert.doesNotMatch(source, verifyCore.FORBIDDEN_SOURCE_PATTERN);
+	}
+});
+
 test("verify core stops checks after the first failure", async () => {
 	const verifyCore = await loadVerifyCore();
 	const visited: string[] = [];

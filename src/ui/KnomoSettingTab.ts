@@ -44,6 +44,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildRunning = false;
 	private monthlyRebuildRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
+	private timeBuoyToggleRunning = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -112,6 +113,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 					void this.settingsService.updateSettings({
 						memoTimeFormat: value as MemoTimeFormat,
 					});
+				});
+			});
+		new Setting(containerEl)
+			.setName(t("settings.timeBuoy.name"))
+			.setDesc(t("settings.timeBuoy.desc"))
+			.addToggle((toggle) => {
+				toggle.setValue(settings.timeBuoyEnabled);
+				toggle.onChange((value) => {
+					void this.toggleTimeBuoy(value, toggle);
 				});
 			});
 
@@ -567,6 +577,45 @@ export class KnomoSettingTab extends PluginSettingTab {
 		} finally {
 			toggle.setDisabled(false);
 			toggle.setValue(this.settingsService.getSettings().excludeMonthlyMemosFromObsidian);
+		}
+	}
+
+	private async toggleTimeBuoy(enabled: boolean, toggle: ToggleComponent): Promise<void> {
+		if (this.timeBuoyToggleRunning) {
+			return;
+		}
+		this.timeBuoyToggleRunning = true;
+		toggle.setDisabled(true);
+		try {
+			await this.settingsService.updateSettings({ timeBuoyEnabled: enabled, timeBuoyIntroDismissed: true });
+			await this.refreshOpenKnomoViews();
+			if (!enabled) {
+				new Notice(t("settings.timeBuoy.disabled"));
+				return;
+			}
+			new Notice(t("settings.timeBuoy.building"));
+			const result = await this.syncOrchestrator.rebuildTimeBuoyIndex({
+				yieldToUi: () => new Promise<void>((resolve) => {
+					this.containerEl.win.setTimeout(resolve, 0);
+				}),
+			});
+			if (result.status === "completed") {
+				new Notice(t("settings.timeBuoy.buildComplete", {
+					total: result.total,
+					indexed: result.indexed,
+					skipped: result.skipped,
+				}));
+			} else {
+				new Notice(t("settings.timeBuoy.enabled"));
+			}
+			await this.refreshOpenKnomoViews();
+		} catch (error) {
+			new Notice(formatServiceError(error, t("settings.timeBuoy.buildFailed")));
+			await this.refreshOpenKnomoViews();
+		} finally {
+			this.timeBuoyToggleRunning = false;
+			toggle.setDisabled(false);
+			toggle.setValue(this.settingsService.getSettings().timeBuoyEnabled);
 		}
 	}
 

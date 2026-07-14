@@ -82,6 +82,32 @@ test("formats common-tag chart, action, filter, and empty-state text", async () 
 	);
 });
 
+test("keeps Time buoy tab empty-state copy aligned in Chinese and English", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(translate("zh-CN", "timeBuoy.empty.today.title"), "今天没有浮标");
+	assert.equal(translate("zh-CN", "timeBuoy.empty.today.desc"), "设为今天浮现的 Memos，会出现在这里。");
+	assert.equal(translate("en", "timeBuoy.empty.today.title"), "No buoys today");
+	assert.equal(translate("en", "timeBuoy.empty.today.desc"), "Memos set to surface today will appear here.");
+	assert.equal(translate("zh-CN", "timeBuoy.empty.upcoming.title"), "还没有待浮现的 Memos");
+	assert.equal(translate("zh-CN", "timeBuoy.empty.upcoming.desc"), "为 Memos 设定未来日期，它会在那一天浮现。");
+	assert.equal(translate("en", "timeBuoy.empty.upcoming.title"), "No upcoming buoys");
+	assert.equal(translate("en", "timeBuoy.empty.upcoming.desc"), "Memos set for a future date will surface when the day arrives.");
+	assert.equal(translate("zh-CN", "timeBuoy.empty.past.title"), "还没有往日浮标");
+	assert.equal(translate("zh-CN", "timeBuoy.empty.past.desc"), "已经浮现过的 Memos，会留在这里供你回看。");
+	assert.equal(translate("en", "timeBuoy.empty.past.title"), "No past buoys yet");
+	assert.equal(translate("en", "timeBuoy.empty.past.desc"), "Memos that have surfaced will remain here for revisiting.");
+});
+
+test("translates the 90-day Time buoy shortcut", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(translate("zh-CN", "timeBuoy.picker.after90"), "90 天后");
+	assert.equal(translate("en", "timeBuoy.picker.after90"), "In 90 days");
+});
+
 async function loadLocaleModule(): Promise<typeof import("../src/i18n/locale")> {
 	await ensureObsidianStub();
 	return import("../src/i18n/locale");

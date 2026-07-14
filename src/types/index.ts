@@ -15,6 +15,7 @@ export type SelfWriteReason =
 	| "archive_delete"
 	| "archive_move"
 	| "index"
+	| "time_buoy_index"
 	| "scan"
 	| "repair";
 

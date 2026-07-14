@@ -1,14 +1,14 @@
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
-import type { MarkdownSyncSource, MemoRecord } from "../types/memo";
+import type { MarkdownSyncSource, MemoMutation, MemoRecord } from "../types/memo";
 import type { PendingMemoCreate } from "../types/pending";
 import { KnomoError } from "../types/serviceError";
 import type { SyncConflictFile } from "../types/syncConflict";
 import type { KnomoSettings } from "../types/settings";
 import { matchesDailyNotePath } from "../utils/dailyNotes";
 import { formatMonthPeriod } from "../utils/date";
-import { getIndexFolderPath } from "../utils/path";
+import { getIndexFolderPath, getTimeBuoyIndexFolderPath } from "../utils/path";
 import { DailyNoteService } from "./DailyNoteService";
 import type { DailyNotesStatus } from "./DailyNoteService";
 import { MarkdownBlockService } from "./MarkdownBlockService";
@@ -38,6 +38,10 @@ import type { RebuildIndexMode, RebuildIndexResult, RebuildIndexScope } from "./
 import type { PendingMemoCreateStoreLike } from "./PendingMemoCreateStore";
 import type { PreparedRecordStats } from "./RecordStatsService";
 import { SelfWriteTracker } from "./SelfWriteTracker";
+import { TimeBuoyService } from "./TimeBuoyService";
+import type { TimeBuoyMaintenanceOutcome } from "./TimeBuoyService";
+import type { TimeBuoyAllQueryResult, TimeBuoyQueryResult } from "./TimeBuoyQueryService";
+import type { TimeBuoyRebuildOptions, TimeBuoyRebuildResult } from "./TimeBuoyRebuildService";
 import {
 	createMemoId,
 	createOperationId,
@@ -57,6 +61,7 @@ export class SyncOrchestrator {
 	private readonly memoReferenceService: MemoReferenceService;
 	private readonly memoRepairService: MemoRepairService;
 	private readonly monthlyArchiveRebuildService: MonthlyArchiveRebuildService;
+	private readonly timeBuoyService: TimeBuoyService;
 	private readonly operationGate = new MaintenanceOperationGate();
 
 	constructor(
@@ -71,6 +76,12 @@ export class SyncOrchestrator {
 	) {
 		const activePendingMemoCreateStore = pendingMemoCreateStore
 			?? createTransientPendingMemoCreateStore();
+		this.timeBuoyService = new TimeBuoyService(
+			this.app,
+			this.getSettings,
+			this.memoIndexStore,
+			this.selfWriteTracker,
+		);
 		this.memoScanService = new MemoScanService(
 			this.app,
 			this.getSettings,
@@ -79,6 +90,7 @@ export class SyncOrchestrator {
 			this.memoIndexStore,
 			this.selfWriteTracker,
 			this.markdownBlockService,
+			(mutation) => this.syncTimeBuoyMutation(mutation),
 		);
 		this.memoRebuildService = new MemoRebuildService(
 			this.getSettings,
@@ -133,11 +145,41 @@ export class SyncOrchestrator {
 	}
 
 	async createMemo(input: string, options: CreateMemoOptions = {}): Promise<CreateMemoResult> {
-		return this.operationGate.runOperation(() => this.memoCommandService.createMemo(input, options));
+		return this.operationGate.runOperation(async () => {
+			const result = await this.memoCommandService.createMemo(input, options);
+			await this.timeBuoyService.syncMemoRecords(null, result.memo);
+			return result;
+		});
+	}
+
+	async createMemoWithTimeBuoyOutcome(
+		input: string,
+		options: CreateMemoOptions = {},
+	): Promise<{ result: CreateMemoResult; timeBuoy: TimeBuoyMaintenanceOutcome }> {
+		return this.operationGate.runOperation(async () => {
+			const result = await this.memoCommandService.createMemo(input, options);
+			const timeBuoy = await this.timeBuoyService.syncMemoRecords(null, result.memo);
+			return { result, timeBuoy };
+		});
 	}
 
 	async updateMemo(memo: MemoRecord, input: string): Promise<MemoRecord> {
-		return this.operationGate.runOperation(() => this.memoCommandService.updateMemo(memo, input));
+		return this.operationGate.runOperation(async () => {
+			const updatedMemo = await this.memoCommandService.updateMemo(memo, input);
+			await this.timeBuoyService.syncMemoRecords(memo, updatedMemo);
+			return updatedMemo;
+		});
+	}
+
+	async updateMemoWithTimeBuoyOutcome(
+		memo: MemoRecord,
+		input: string,
+	): Promise<{ memo: MemoRecord; timeBuoy: TimeBuoyMaintenanceOutcome }> {
+		return this.operationGate.runOperation(async () => {
+			const updatedMemo = await this.memoCommandService.updateMemo(memo, input);
+			const timeBuoy = await this.timeBuoyService.syncMemoRecords(memo, updatedMemo);
+			return { memo: updatedMemo, timeBuoy };
+		});
 	}
 
 	async deleteMemo(memo: MemoRecord): Promise<MemoRecord> {
@@ -149,7 +191,9 @@ export class SyncOrchestrator {
 			if (currentMemo.issue?.type === "daily_block_ambiguous") {
 				throw new KnomoError("delete_daily_block_ambiguous");
 			}
-			return this.memoCommandService.deleteMemo(currentMemo);
+			const deletedMemo = await this.memoCommandService.deleteMemo(currentMemo);
+			await this.timeBuoyService.syncMemoRecords(currentMemo, deletedMemo);
+			return deletedMemo;
 		});
 	}
 
@@ -223,10 +267,18 @@ export class SyncOrchestrator {
 		mode: RebuildIndexMode,
 		onProgress?: (progress: ScanDailyMemosProgress) => void | Promise<void>,
 	): Promise<RebuildIndexResult> {
-		return this.operationGate.runOperation(async () => {
+		const result = await this.operationGate.runOperation(async () => {
 			await this.memoCommandService.recoverPendingCreates();
 			return this.memoRebuildService.rebuildIndex(scope, mode, onProgress);
 		});
+		if (this.timeBuoyService.isEnabled()) {
+			try {
+				await this.rebuildTimeBuoyIndex();
+			} catch {
+				this.timeBuoyService.markRebuildRequired();
+			}
+		}
+		return result;
 	}
 
 	async recoverPendingMemoCreates(): Promise<number> {
@@ -267,6 +319,11 @@ export class SyncOrchestrator {
 		}
 		const fileName = path.slice(indexFolderPath.length + 1);
 		return /^memo-index-\d{4}-\d{2}\.json$/.test(fileName);
+	}
+
+	isTimeBuoyIndexFile(path: string): boolean {
+		const folderPath = getTimeBuoyIndexFolderPath(this.getSettings().monthlyMemoFolder);
+		return path.startsWith(`${folderPath}/time-buoy-`) && path.endsWith(".json");
 	}
 
 	isMonthlyArchiveFile(path: string): boolean {
@@ -376,19 +433,36 @@ export class SyncOrchestrator {
 	}
 
 	async restoreMemo(memoId: string): Promise<MemoRecord> {
-		return this.operationGate.runOperation(() => this.memoRestoreService.restoreMemo(memoId));
+		return this.operationGate.runOperation(async () => {
+			const memo = await this.memoRestoreService.restoreMemo(memoId);
+			await this.timeBuoyService.syncMemoRecords(null, memo);
+			return memo;
+		});
 	}
 
 	async restoreMemoRecord(memo: MemoRecord): Promise<MemoRecord> {
-		return this.operationGate.runOperation(() => this.memoRestoreService.restoreMemoRecord(memo));
+		return this.operationGate.runOperation(async () => {
+			const restoredMemo = await this.memoRestoreService.restoreMemoRecord(memo);
+			await this.timeBuoyService.syncMemoRecords(memo, restoredMemo);
+			return restoredMemo;
+		});
 	}
 
 	async purgeDeletedMemo(memoId: string): Promise<void> {
-		await this.operationGate.runOperation(() => this.memoRestoreService.purgeDeletedMemo(memoId));
+		await this.operationGate.runOperation(async () => {
+			const memo = await this.memoIndexStore.findMemoById(this.getSettings().monthlyMemoFolder, memoId);
+			await this.memoRestoreService.purgeDeletedMemo(memoId);
+			if (memo !== null) {
+				await this.timeBuoyService.syncMemoRecords(memo, null);
+			}
+		});
 	}
 
 	async purgeDeletedMemoRecord(memo: MemoRecord): Promise<void> {
-		await this.operationGate.runOperation(() => this.memoRestoreService.purgeDeletedMemoRecord(memo));
+		await this.operationGate.runOperation(async () => {
+			await this.memoRestoreService.purgeDeletedMemoRecord(memo);
+			await this.timeBuoyService.syncMemoRecords(memo, null);
+		});
 	}
 
 	async listIssueMemos(options: MemoListPageOptions = {}): Promise<MemoRecord[]> {
@@ -452,6 +526,38 @@ export class SyncOrchestrator {
 			const result = await this.memoScanService.syncDeletedDailyPath(path, createOperationId(new Date()));
 			return result.deleted > 0 || result.updated > 0;
 		});
+	}
+
+	async queryTimeBuoysForDate(targetDate: string): Promise<TimeBuoyQueryResult> {
+		return this.timeBuoyService.queryDate(targetDate);
+	}
+
+	async queryAllTimeBuoys(): Promise<TimeBuoyAllQueryResult> {
+		return this.timeBuoyService.queryAll();
+	}
+
+	async queryTimeBuoysForRange(startDate: string, endDate: string): Promise<TimeBuoyQueryResult> {
+		return this.timeBuoyService.queryRange(startDate, endDate);
+	}
+
+	async rebuildTimeBuoyIndex(options: TimeBuoyRebuildOptions = {}): Promise<TimeBuoyRebuildResult> {
+		return this.timeBuoyService.rebuild(options);
+	}
+
+	hasPendingTimeBuoyRepair(): boolean {
+		return this.timeBuoyService.hasPendingRepair();
+	}
+
+	async needsTimeBuoyStartupRebuild(): Promise<boolean> {
+		return this.timeBuoyService.needsStartupRebuild();
+	}
+
+	listTimeBuoyIndexPeriods(): string[] {
+		return this.timeBuoyService.listStoredPeriods();
+	}
+
+	private async syncTimeBuoyMutation(mutation: MemoMutation): Promise<void> {
+		await this.timeBuoyService.syncMutation(mutation);
 	}
 
 }

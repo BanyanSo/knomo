@@ -430,6 +430,7 @@ function createSettings(): KnomoSettings {
 		monthlyDateHeadingFormat: "## YYYY-MM-DD",
 		monthlyDateOrder: "asc",
 		legacyDailyHeadings: [],
+		timeBuoyEnabled: false,
 		mobileCompactMode: "auto",
 		syncDebounceMs: 0,
 		desktopSidebarWidth: 360,

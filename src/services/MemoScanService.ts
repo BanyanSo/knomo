@@ -1,7 +1,7 @@
 import { TFile, TFolder, Vault } from "obsidian";
 import type { App } from "obsidian";
 
-import type { DailyRefSectionType, MarkdownSyncSource, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
+import type { DailyRefSectionType, MarkdownSyncSource, MemoMutation, MemoRecord, MonthlyRef, ParsedMemoBlock } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
 import { KnomoError } from "../types/serviceError";
 import { formatLocalIsoString, formatMonthPeriod } from "../utils/date";
@@ -130,6 +130,7 @@ export class MemoScanService {
 		private readonly memoIndexStore: MemoIndexStore,
 		private readonly selfWriteTracker: SelfWriteTracker,
 		private readonly markdownBlockService = new MarkdownBlockService(),
+		private readonly onMemoMutation?: (mutation: MemoMutation) => Promise<void> | void,
 	) {}
 
 	async previewLegacyDailyMemos(scope: LegacyDailyMemosImportScope): Promise<LegacyDailyMemosPreview> {
@@ -213,6 +214,7 @@ export class MemoScanService {
 					}
 					result.created += 1;
 					result.imported += 1;
+					await this.notifyMemoMutation({ type: "create", memo: savedMemo }, this.memoIndexStore);
 				} catch (error) {
 					result.failed += 1;
 					result.errors.push(error instanceof Error ? error.message : `Import failed: ${candidate.path}:${candidate.block.startLine + 1}`);
@@ -600,6 +602,7 @@ export class MemoScanService {
 		existingMemos.push(savedMemo);
 		this.markIndexSelfWrite(settings, createdAt, opId, memoIndexStore);
 		result.created += 1;
+		await this.notifyMemoMutation({ type: "create", memo: savedMemo }, memoIndexStore);
 	}
 
 	private async syncMatchedBlock(
@@ -669,6 +672,7 @@ export class MemoScanService {
 		this.markIndexSelfWrite(settings, new Date(memo.createdAt), opId, memoIndexStore);
 		replaceMemo(existingMemos, updatedMemo);
 		result.updated += 1;
+		await this.notifyMemoMutation({ type: "update", previousMemo: memo, memo: updatedMemo }, memoIndexStore);
 	}
 
 	private async markDailyIssue(
@@ -759,6 +763,18 @@ export class MemoScanService {
 		this.markIndexSelfWrite(settings, new Date(memo.createdAt), opId, memoIndexStore);
 		replaceMemo(existingMemos, deletedMemo);
 		result.deleted += 1;
+		await this.notifyMemoMutation({ type: "delete", previousMemo: memo, memo: deletedMemo }, memoIndexStore);
+	}
+
+	private async notifyMemoMutation(mutation: MemoMutation, memoIndexStore: MemoIndexStore): Promise<void> {
+		if (memoIndexStore !== this.memoIndexStore || this.onMemoMutation === undefined) {
+			return;
+		}
+		try {
+			await this.onMemoMutation(mutation);
+		} catch {
+			// 派生浮标索引不得阻断 Daily Note、月度归档或核心索引同步。
+		}
 	}
 
 	private matchIndexedMemoBlocks(

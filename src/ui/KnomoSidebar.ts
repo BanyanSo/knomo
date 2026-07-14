@@ -12,6 +12,7 @@ export const SIDEBAR_MAX_WIDTH = 300;
 interface KnomoSidebarOptions {
 	sidebarMinWidth: number;
 	sidebarMaxWidth: number;
+	timeBuoyEnabled?: boolean;
 	createHiddenText: (container: HTMLElement, id: string, text: string) => string;
 	createIconButton: (
 		container: HTMLElement,
@@ -60,7 +61,7 @@ export function renderKnomoSidebar(sidebar: HTMLElement, options: KnomoSidebarOp
 		cls: "knomo-nav",
 		attr: { "aria-labelledby": navLabelId },
 	});
-	for (const item of getSidebarNavItems()) {
+	for (const item of getSidebarNavItems(options.timeBuoyEnabled === true)) {
 		renderSidebarNavButton(nav, item);
 	}
 

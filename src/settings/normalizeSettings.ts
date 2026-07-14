@@ -105,6 +105,14 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 			merged.legacyDailyHeadings,
 			DEFAULT_KNOMO_SETTINGS.legacyDailyHeadings,
 		).filter((heading) => isValidMarkdownHeading(heading)),
+		timeBuoyEnabled: booleanOrDefault(
+			merged.timeBuoyEnabled,
+			DEFAULT_KNOMO_SETTINGS.timeBuoyEnabled,
+		),
+		timeBuoyIntroDismissed: booleanOrDefault(
+			merged.timeBuoyIntroDismissed,
+			DEFAULT_KNOMO_SETTINGS.timeBuoyIntroDismissed ?? false,
+		),
 		mobileCompactMode,
 		syncDebounceMs: numberOrDefault(merged.syncDebounceMs, DEFAULT_KNOMO_SETTINGS.syncDebounceMs),
 		desktopSidebarWidth: numberOrDefault(

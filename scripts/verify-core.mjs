@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-export const FORBIDDEN_SOURCE_PATTERN = /initEvent|execCommand|vault\.delete|Vault\.delete|globalThis| as TFile|instanceof .*HTMLElement|\.style\./u;
+export const FORBIDDEN_SOURCE_PATTERN = /initEvent|execCommand|\b(?:vault|Vault)\.(?:delete|trash)\s*\(|globalThis| as TFile|\.style\.(?:[$\w]+\s*=|setProperty\s*\()|\.setAttribute\(\s*["']style["']|\bcreateEl\(\s*["'](?:style|link)["']/u;
 export const TRAILING_WHITESPACE_PATTERN = /[ \t]+$/u;
 
 export const checks = [

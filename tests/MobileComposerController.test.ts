@@ -260,6 +260,67 @@ test("clears the Capacitor keyboard dock source when the keyboard hides", () => 
 	assert.equal(layer?.attrs.get("data-knomo-composer-dock-source"), "fallback");
 });
 
+test("waits for keyboardDidHide before completing a Capacitor keyboard dismissal", () => {
+	const harness = createHarness();
+	prepareComposerGeometry(harness, 800, 780);
+	harness.win.visualViewport.height = 500;
+	harness.controller.open();
+	harness.win.flushAnimationFrames();
+	harness.win.dispatchKeyboardEvent("keyboardWillShow", 260);
+	harness.win.flushAnimationFrames();
+	let settledCalls = 0;
+	harness.controller.waitForKeyboardDismissal(() => {
+		settledCalls += 1;
+	});
+
+	harness.win.dispatchEvent("keyboardWillHide");
+	harness.win.flushAnimationFrameCycles(4);
+	assert.equal(settledCalls, 0);
+
+	harness.win.dispatchEvent("keyboardDidHide");
+	harness.win.flushAnimationFrameCycles(4);
+	assert.equal(settledCalls, 1);
+});
+
+test("completes a visual viewport keyboard dismissal after stable frames", () => {
+	const harness = createHarness();
+	prepareComposerGeometry(harness, 800, 780);
+	harness.win.visualViewport.height = 500;
+	harness.controller.open();
+	harness.win.flushAnimationFrames();
+	let settledCalls = 0;
+	const cancel = harness.controller.waitForKeyboardDismissal(() => {
+		settledCalls += 1;
+	});
+
+	harness.win.visualViewport.height = 800;
+	harness.win.visualViewport.dispatchEvent("resize");
+	harness.win.flushAnimationFrameCycles(4);
+	assert.equal(settledCalls, 1);
+
+	cancel();
+	assert.equal(settledCalls, 1);
+});
+
+test("cancels a pending keyboard dismissal callback", () => {
+	const harness = createHarness();
+	prepareComposerGeometry(harness, 800, 780);
+	harness.win.visualViewport.height = 500;
+	harness.controller.open();
+	harness.win.flushAnimationFrames();
+	let settledCalls = 0;
+	const cancel = harness.controller.waitForKeyboardDismissal(() => {
+		settledCalls += 1;
+	});
+
+	cancel();
+	harness.win.visualViewport.height = 800;
+	harness.win.visualViewport.dispatchEvent("resize");
+	harness.win.flushAnimationFrameCycles(4);
+	harness.win.flushAllTimers();
+	assert.equal(settledCalls, 0);
+});
+
 test("keeps the composer docked when a focused input receives no keyboard signal", () => {
 	const harness = createHarness();
 	prepareComposerGeometry(harness, 800, 780);
@@ -773,7 +834,7 @@ class FakeWindow {
 		this.listeners.get(type)?.delete(handler);
 	}
 
-	dispatchEvent(type: string, event = {} as Event): void {
+	dispatchEvent(type: string, event = { type } as Event): void {
 		for (const handler of this.listeners.get(type) ?? []) {
 			handler(event);
 		}
@@ -781,6 +842,7 @@ class FakeWindow {
 
 	dispatchKeyboardEvent(type: string, keyboardHeight: number): void {
 		this.dispatchEvent(type, {
+			type,
 			keyboardHeight,
 			detail: { keyboardHeight },
 		} as unknown as Event);

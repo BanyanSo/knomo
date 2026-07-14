@@ -1,5 +1,6 @@
 import { setIcon } from "obsidian";
 
+import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
 
 export interface KnomoComposerElements {
@@ -8,6 +9,8 @@ export interface KnomoComposerElements {
 	referencePreviewEl: HTMLElement;
 	composerBarEl: HTMLElement;
 	toolsEl: HTMLElement;
+	timeBuoyButtonEl: HTMLButtonElement | null;
+	timeBuoyMonthStatusEl: HTMLElement | null;
 	cancelEditButtonEl: HTMLButtonElement;
 	statusEl: HTMLElement;
 	sendButtonEl: HTMLButtonElement;
@@ -15,6 +18,8 @@ export interface KnomoComposerElements {
 
 interface RenderKnomoComposerOptions {
 	dailyEnabled: boolean;
+	timeBuoyEnabled?: boolean;
+	timeBuoyPickerId?: string;
 	draftContent: string;
 	createHiddenText: (container: HTMLElement, name: string, text: string) => string;
 	createIconButton: (
@@ -50,6 +55,27 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 	const toolsEl = composerBarEl.createDiv({ cls: "knomo-tool-group" });
 	options.createIconButton(toolsEl, "hash", t("composer.insertTag"), "knomo-tool-button", "insert-tag", false);
 	options.createIconButton(toolsEl, "image", t("composer.insertImage"), "knomo-tool-button", "insert-image", false);
+	const timeBuoyButtonEl = options.timeBuoyEnabled === true
+		? options.createIconButton(toolsEl, KNOMO_TIME_BUOY_ICON, t("composer.addTimeBuoy"), "knomo-tool-button", "insert-time-buoy", true)
+		: null;
+	if (timeBuoyButtonEl !== null) {
+		timeBuoyButtonEl.disabled = !options.dailyEnabled;
+		timeBuoyButtonEl.setAttrs({
+			"aria-haspopup": "dialog",
+			"aria-expanded": "false",
+			"aria-controls": options.timeBuoyPickerId ?? "knomo-time-buoy-picker",
+		});
+	}
+	const timeBuoyMonthStatusEl = options.timeBuoyEnabled === true
+		? composerEl.createDiv({
+			cls: "knomo-visually-hidden",
+			attr: {
+				role: "status",
+				"aria-live": "polite",
+				"aria-atomic": "true",
+			},
+		})
+		: null;
 	options.createIconButton(toolsEl, "list", t("composer.insertList"), "knomo-tool-button", "insert-list", false);
 	options.createIconButton(toolsEl, "list-ordered", t("composer.insertNumberedList"), "knomo-tool-button", "insert-numbered-list", false);
 
@@ -82,6 +108,8 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 		referencePreviewEl,
 		composerBarEl,
 		toolsEl,
+		timeBuoyButtonEl,
+		timeBuoyMonthStatusEl,
 		cancelEditButtonEl,
 		statusEl,
 		sendButtonEl,

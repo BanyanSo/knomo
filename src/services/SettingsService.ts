@@ -11,6 +11,7 @@ import type {
 import { cloneSettings, isValidMonthlyMemoFileFormat, normalizeSettings } from "../settings/normalizeSettings";
 import type { KnomoSettings } from "../types/settings";
 import { isValidMarkdownHeading } from "../utils/markdown";
+import { isRecord } from "../utils/object";
 import {
 	buildPluginDataWithMaintenanceDiagnostic,
 	buildPluginDataWithSettings,
@@ -30,6 +31,8 @@ export type {
 
 export class SettingsService {
 	private settings = cloneSettings(DEFAULT_KNOMO_SETTINGS);
+	private timeBuoySettingPersisted = false;
+	private initialTimeBuoyBuildPending = false;
 	private settingsWriteQueue: Promise<void> = Promise.resolve();
 	private readonly monthlyFolderMigrationService: MonthlyFolderMigrationService;
 
@@ -51,8 +54,37 @@ export class SettingsService {
 
 	async loadSettings(): Promise<KnomoSettings> {
 		const savedData = await this.pluginDataStore.read();
-		this.settings = this.migrateSettings(extractSettingsData(savedData));
+		const settingsData = extractSettingsData(savedData);
+		this.timeBuoySettingPersisted = isRecord(settingsData)
+			&& typeof settingsData.timeBuoyEnabled === "boolean";
+		this.settings = this.migrateSettings(settingsData);
+		if (
+			this.timeBuoySettingPersisted
+			&& isRecord(settingsData)
+			&& typeof settingsData.timeBuoyIntroDismissed !== "boolean"
+		) {
+			this.settings.timeBuoyIntroDismissed = true;
+		}
 		return this.getSettings();
+	}
+
+	async initializeTimeBuoyDefault(hasExistingMemoIndex: boolean): Promise<KnomoSettings> {
+		if (this.timeBuoySettingPersisted) {
+			return this.getSettings();
+		}
+		const settings = await this.updateSettings({
+			timeBuoyEnabled: !hasExistingMemoIndex,
+			timeBuoyIntroDismissed: !hasExistingMemoIndex,
+		});
+		this.initialTimeBuoyBuildPending = !hasExistingMemoIndex;
+		this.timeBuoySettingPersisted = true;
+		return settings;
+	}
+
+	consumeInitialTimeBuoyBuildPending(): boolean {
+		const pending = this.initialTimeBuoyBuildPending;
+		this.initialTimeBuoyBuildPending = false;
+		return pending;
 	}
 
 	getSettings(): KnomoSettings {

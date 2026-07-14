@@ -62,7 +62,11 @@ export default class KnomoPlugin extends Plugin {
 			});
 			return () => selfWriteTracker.discard(oldPath, opId);
 		}, pluginDataStore);
-		await this.loadSettingsSafely();
+		const memoIndexStore = new MemoIndexStore(this.app);
+		const settingsLoaded = await this.loadSettingsSafely();
+		if (settingsLoaded) {
+			await this.initializeTimeBuoyDefaultSafely(memoIndexStore);
+		}
 		const markdownBlockService = new MarkdownBlockService();
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
 		const dailyNoteService = new DailyNoteService(this.app, markdownBlockService, dailyNotesProvider);
@@ -78,7 +82,6 @@ export default class KnomoPlugin extends Plugin {
 				expectedHash: null,
 			});
 		});
-		const memoIndexStore = new MemoIndexStore(this.app);
 		const pendingMemoCreateStore = new PendingMemoCreateStore(
 			this.app,
 			() => this.settingsService.getSettings(),
@@ -276,11 +279,24 @@ export default class KnomoPlugin extends Plugin {
 		new Notice(t("service.watchSyncFailed", { path, message }));
 	}
 
-	private async loadSettingsSafely(): Promise<void> {
+	private async loadSettingsSafely(): Promise<boolean> {
 		try {
 			await this.settingsService.loadSettings();
+			return true;
 		} catch {
 			// 启动提示会干扰快速记录；读取失败时继续使用默认设置。
+			return false;
+		}
+	}
+
+	private async initializeTimeBuoyDefaultSafely(memoIndexStore: MemoIndexStore): Promise<void> {
+		try {
+			const settings = this.settingsService.getSettings();
+			const hasExistingMemoIndex = memoIndexStore.listStoredPeriods(settings.monthlyMemoFolder).length > 0
+				|| memoIndexStore.listPotentialSyncConflictFiles(settings.monthlyMemoFolder).length > 0;
+			await this.settingsService.initializeTimeBuoyDefault(hasExistingMemoIndex);
+		} catch {
+			// 默认策略初始化失败时保持关闭，避免升级用户被意外扫描。
 		}
 	}
 
@@ -298,7 +314,18 @@ export default class KnomoPlugin extends Plugin {
 			return;
 		}
 		this.notifyPotentialSyncConflictsSafely();
+		const needsTimeBuoyStartupRebuild = await this.syncOrchestrator.needsTimeBuoyStartupRebuild();
 		await this.scanRecentDailyMemosSafely(getStartupDailyScanDays(Platform.isMobile));
+		if (this.settingsService.consumeInitialTimeBuoyBuildPending() || needsTimeBuoyStartupRebuild) {
+			try {
+				await this.syncOrchestrator.rebuildTimeBuoyIndex({
+					yieldToUi: () => new Promise<void>((resolve) => this.app.workspace.containerEl.win.setTimeout(resolve, 0)),
+				});
+				await this.queueRefreshOpenViews();
+			} catch {
+				// 新安装的派生索引失败不影响普通 memo；用户可在设置或浮标页重试。
+			}
+		}
 	}
 
 	private async initializeSystemFoldersSafely(): Promise<void> {

@@ -20,6 +20,18 @@ export function getIndexFilePath(monthlyMemoFolder: string, period: string): str
 	return normalizePath(`${getIndexFolderPath(monthlyMemoFolder)}/memo-index-${period}.json`);
 }
 
+export function getTimeBuoyIndexFolderPath(monthlyMemoFolder: string): string {
+	return normalizePath(`${getIndexFolderPath(monthlyMemoFolder)}/time-buoy`);
+}
+
+export function getTimeBuoyIndexFilePath(monthlyMemoFolder: string, targetPeriod: string): string {
+	return normalizePath(`${getTimeBuoyIndexFolderPath(monthlyMemoFolder)}/time-buoy-${targetPeriod}.json`);
+}
+
+export function getTimeBuoyIndexStateFilePath(monthlyMemoFolder: string): string {
+	return normalizePath(`${getTimeBuoyIndexFolderPath(monthlyMemoFolder)}/time-buoy-state.json`);
+}
+
 export function getPendingMemoCreateFilePath(monthlyMemoFolder: string): string {
 	return normalizePath(`${getSystemFolderPath(monthlyMemoFolder)}/pending-memo-creates.json`);
 }

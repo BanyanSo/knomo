@@ -1,7 +1,7 @@
 export const KNOMO_VIEW_TYPE = "knomo-view";
 export const KNOMO_VIEW_DISPLAY_TEXT = "Knomo";
 
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 export const DEFAULT_DAILY_HEADING = "## Memos";
 export const DEFAULT_MEMO_TIME_FORMAT = "HH:mm:ss";
 export const DEFAULT_MONTHLY_MEMO_FOLDER = "Knomo";

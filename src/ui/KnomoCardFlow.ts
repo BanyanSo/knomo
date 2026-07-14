@@ -132,6 +132,19 @@ export class KnomoCardFlowBatcher {
 		this.hasMore = this.renderOffset < this.items.length;
 	}
 
+	updateItemsAfterRendered(memos: MemoRecord[], renderedMemoIds: readonly string[]): void {
+		const memosById = new Map(memos.map((memo) => [memo.id, memo]));
+		const renderedIds = new Set(renderedMemoIds);
+		const rendered = renderedMemoIds.flatMap((memoId) => {
+			const memo = memosById.get(memoId);
+			return memo === undefined ? [] : [memo];
+		});
+		const pending = memos.filter((memo) => !renderedIds.has(memo.id));
+		this.items = [...rendered, ...pending];
+		this.renderOffset = rendered.length;
+		this.hasMore = this.renderOffset < this.items.length;
+	}
+
 	sync(memos: MemoRecord[], mode: CardFlowRenderMode, renderedCount: number): void {
 		this.items = memos;
 		this.renderOffset = Math.min(Math.max(0, renderedCount), memos.length);

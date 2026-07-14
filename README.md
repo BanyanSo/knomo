@@ -276,6 +276,22 @@ A memo does not need to become useful immediately. Sometimes its value appears w
 
 ---
 
+### Shuffle day
+
+Shuffle day brings back one complete day from at least seven days ago and displays that day's memos in chronological order. It favors varied dates and avoids immediately repeating recently shown days when possible.
+
+Alongside the memo cards, Knomo summarizes the day's memo count, word count, tags, images, and links. Selection happens entirely from your local memo index, without AI or external services.
+
+---
+
+### Time buoy
+
+Add `@YYYY-MM-DD` to a memo to make it surface on a chosen date. You can type the marker directly or use the date picker in the composer, then review buoys in **Today**, **Upcoming**, and **Past** views.
+
+The date marker remains part of the memo's Markdown content. Knomo only builds a local, removable, and rebuildable index for fast lookup; the index does not replace or rewrite the source memo in your Daily Note.
+
+---
+
 ### Trash, restore, and repair
 
 Knomo includes safer maintenance flows for day-to-day use:

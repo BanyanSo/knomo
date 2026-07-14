@@ -1,7 +1,9 @@
 import { setIcon } from "obsidian";
 
+import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
 import type { MemoRecord } from "../types/memo";
+import type { TimeBuoyDateStatus } from "../types/timeBuoy";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import { formatMemoIssue } from "../utils/serviceText";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
@@ -18,11 +20,17 @@ import {
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 
+export interface MemoCardTimeBuoy {
+	status: TimeBuoyDateStatus;
+	label: string;
+}
+
 export interface RenderMemoCardOptions {
 	generation: number;
 	renderIndex: number;
 	includeActions: boolean;
 	randomCard: boolean;
+	timeBuoy?: MemoCardTimeBuoy;
 	activeMenuMemoId: string | null;
 	deletedMemoIds: ReadonlySet<string>;
 	formatDisplayTime: (value: string) => string;
@@ -57,8 +65,13 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 		includeActions: options.includeActions,
 		activeMenuMemoId: options.activeMenuMemoId,
 	});
+	const timeBuoyClass = options.timeBuoy === undefined
+		? ""
+		: ` has-time-buoy is-time-buoy-${options.timeBuoy.status}`;
 	const card = container.createEl("article", {
-		cls: isCjkMemoContent(memo.contentSnapshot) ? `${shell.className} is-cjk-content` : shell.className,
+		cls: isCjkMemoContent(memo.contentSnapshot)
+			? `${shell.className} is-cjk-content${timeBuoyClass}`
+			: `${shell.className}${timeBuoyClass}`,
 		attr: shell.attrs,
 	});
 	const head = card.createDiv({ cls: "knomo-card-head" });
@@ -99,6 +112,7 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 		});
 	}
 	renderCardMeta(card, memo, options);
+	renderMemoCardTimeBuoy(card, options.timeBuoy);
 	return card;
 }
 
@@ -117,6 +131,42 @@ function renderMemoCardTime(container: HTMLElement, memo: MemoRecord, options: R
 		text: options.formatDisplayTime(memo.createdAt),
 		attr: attrs,
 	});
+}
+
+function renderMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBuoy | undefined): void {
+	if (timeBuoy === undefined) {
+		return;
+	}
+	if (timeBuoy.status === "today") {
+		const wave = card.createSvg("svg", {
+			cls: "knomo-card-time-buoy-wave",
+			attr: {
+				viewBox: "0 0 100 10",
+				preserveAspectRatio: "none",
+				"aria-hidden": "true",
+				focusable: "false",
+			},
+		});
+		const wavePath = "M0 6 C10 2 20 10 30 6 C40 2 50 10 60 6 C70 2 80 10 90 6 C94 4.4 97 4.6 100 6";
+		wave.createSvg("path", {
+			cls: "knomo-card-time-buoy-wave-fill",
+			attr: { d: `${wavePath} L100 10 L0 10 Z` },
+		});
+		wave.createSvg("path", {
+			cls: "knomo-card-time-buoy-wave-line",
+			attr: { d: wavePath },
+		});
+	}
+	const indicator = card.createSpan({
+		cls: "knomo-card-time-buoy",
+		attr: {
+			role: "img",
+			"aria-label": timeBuoy.label,
+			"data-time-buoy-card": "true",
+			"data-time-buoy-status": timeBuoy.status,
+		},
+	});
+	setIcon(indicator, KNOMO_TIME_BUOY_ICON);
 }
 
 export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderTrashMemoCardOptions): HTMLElement {

@@ -21,6 +21,10 @@ test("classifies known view actions", () => {
 	assert.deepEqual(getKnomoActionDispatch("record-stats-back"), { type: "record-stats-back" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-next"), { type: "record-stats-next" });
 	assert.deepEqual(getKnomoActionDispatch("retry-all-memos"), { type: "retry-all-memos" });
+	assert.deepEqual(getKnomoActionDispatch("enable-time-buoy-intro"), { type: "enable-time-buoy-intro" });
+	assert.deepEqual(getKnomoActionDispatch("time-buoy-tab-today"), { type: "time-buoy-tab-today" });
+	assert.deepEqual(getKnomoActionDispatch("time-buoy-tab-upcoming"), { type: "time-buoy-tab-upcoming" });
+	assert.deepEqual(getKnomoActionDispatch("time-buoy-tab-past"), { type: "time-buoy-tab-past" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-view-month"), { type: "record-stats-view-month" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-trend"), { type: "record-stats-filter-trend" });
 	assert.deepEqual(getKnomoActionDispatch("record-stats-filter-hour"), { type: "record-stats-filter-hour" });

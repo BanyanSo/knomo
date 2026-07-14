@@ -1,4 +1,4 @@
-export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-list" | "insert-numbered-list";
+export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-time-buoy" | "insert-list" | "insert-numbered-list";
 export type MemoAction = "edit" | "reference" | "open-daily" | "copy-text" | "copy-link" | "delete";
 export type TrashAction = "restore" | "purge";
 export type KnomoSimpleAction =
@@ -20,6 +20,16 @@ export type KnomoSimpleAction =
 	| "record-stats-next"
 	| "record-stats-retry"
 	| "retry-all-memos"
+	| "retry-time-buoy"
+	| "rebuild-time-buoy"
+	| "cancel-time-buoy-rebuild"
+	| "time-buoy-tab-today"
+	| "time-buoy-tab-upcoming"
+	| "time-buoy-tab-past"
+	| "load-more-time-buoy-cards"
+	| "open-time-buoy"
+	| "enable-time-buoy-intro"
+	| "dismiss-time-buoy-intro"
 	| "record-stats-view-week"
 	| "record-stats-view-month"
 	| "record-stats-view-year"
@@ -78,6 +88,16 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-next" ||
 		action === "record-stats-retry" ||
 		action === "retry-all-memos" ||
+		action === "retry-time-buoy" ||
+		action === "rebuild-time-buoy" ||
+		action === "cancel-time-buoy-rebuild" ||
+		action === "time-buoy-tab-today" ||
+		action === "time-buoy-tab-upcoming" ||
+		action === "time-buoy-tab-past" ||
+		action === "load-more-time-buoy-cards" ||
+		action === "open-time-buoy" ||
+		action === "enable-time-buoy-intro" ||
+		action === "dismiss-time-buoy-intro" ||
 		action === "record-stats-view-week" ||
 		action === "record-stats-view-month" ||
 		action === "record-stats-view-year" ||
@@ -129,6 +149,7 @@ export function getTrashActionDispatch(action: string | null): TrashActionDispat
 export function isComposerToolAction(action: string): action is ComposerToolAction {
 	return action === "insert-tag" ||
 		action === "insert-image" ||
+		action === "insert-time-buoy" ||
 		action === "insert-list" ||
 		action === "insert-numbered-list";
 }

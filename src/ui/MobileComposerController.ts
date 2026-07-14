@@ -20,6 +20,8 @@ const MOBILE_COMPOSER_CLOSE_FALLBACK_DELAY = 420;
 const MOBILE_COMPOSER_EXIT_TRANSITION_DELAY = 160;
 const MOBILE_KEYBOARD_DOCK_STABLE_DELTA = 1;
 const MOBILE_KEYBOARD_DOCK_SETTLE_DELAY = 120;
+const MOBILE_KEYBOARD_DISMISS_FALLBACK_DELAY = 520;
+const MOBILE_KEYBOARD_DISMISS_STABLE_FRAMES = 2;
 const MOBILE_KEYBOARD_VIEWPORT_FALLBACK_DELAY = 80;
 
 interface VirtualKeyboardLike extends EventTarget {
@@ -39,6 +41,25 @@ interface CapacitorKeyboardEventLike extends Event {
 }
 
 type MobileComposerToolbarAnchorSource = "button-row" | "toolbar-wrapper" | "unknown";
+type MobileKeyboardDismissSource = "capacitor" | "virtual-keyboard" | "visual-viewport";
+
+interface MobileKeyboardDismissSample {
+	windowHeight: number;
+	viewportOffsetTop: number;
+	viewportHeight: number;
+	keyboardHeight: number;
+	bottomOffset: number;
+}
+
+interface MobileKeyboardDismissRequest {
+	callback: () => void;
+	source: MobileKeyboardDismissSource;
+	startDidHideRevision: number;
+	frameId: number | null;
+	fallbackTimerId: number;
+	lastSample: MobileKeyboardDismissSample | null;
+	stableFrames: number;
+}
 
 export type MobileComposerPhase = "closed" | "opening" | "focusing" | "open" | "closing";
 export type MobileComposerLayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
@@ -74,8 +95,10 @@ export class MobileComposerController {
 	private mobileVirtualKeyboardHandler: (() => void) | null = null;
 	private mobileVirtualKeyboardPreviousOverlaysContent: boolean | null = null;
 	private mobileCapacitorKeyboardShowHandler: ((event: Event) => void) | null = null;
-	private mobileCapacitorKeyboardHideHandler: (() => void) | null = null;
+	private mobileCapacitorKeyboardHideHandler: ((event: Event) => void) | null = null;
 	private mobileCapacitorKeyboardHeight: number | null = null;
+	private mobileCapacitorKeyboardDidHideRevision = 0;
+	private mobileKeyboardDismissRequest: MobileKeyboardDismissRequest | null = null;
 	private mobileComposerFocusFrameId: number | null = null;
 	private mobileComposerOpenSyncFrameId: number | null = null;
 	private mobileComposerResizeFrameId: number | null = null;
@@ -146,11 +169,13 @@ export class MobileComposerController {
 	}
 
 	resetInactiveState(): void {
+		this.cancelKeyboardDismissRequest();
 		this.clearFocus();
 		this.stopViewportTracking();
 	}
 
 	dispose(): void {
+		this.cancelKeyboardDismissRequest();
 		this.clearFocus();
 		this.clearOpenSyncFrame();
 		this.clearResizeFrame();
@@ -235,6 +260,7 @@ export class MobileComposerController {
 	}
 
 	closeKeepingDraft(): void {
+		this.cancelKeyboardDismissRequest();
 		this.mobileComposerOpenScrollTop = null;
 		this.clearFocus();
 		this.clearOpenSyncFrame();
@@ -284,6 +310,38 @@ export class MobileComposerController {
 		}
 		this.queueViewportUpdate();
 		return true;
+	}
+
+	waitForKeyboardDismissal(callback: () => void): () => void {
+		this.cancelKeyboardDismissRequest();
+		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
+			callback();
+			return () => undefined;
+		}
+		const win = this.options.getWindow();
+		const virtualKeyboardHeight = this.getVirtualKeyboard(win)?.boundingRect?.height ?? 0;
+		const source: MobileKeyboardDismissSource = (this.mobileCapacitorKeyboardHeight ?? 0) > 0
+			? "capacitor"
+			: virtualKeyboardHeight > 0
+				? "virtual-keyboard"
+				: "visual-viewport";
+		const request: MobileKeyboardDismissRequest = {
+			callback,
+			source,
+			startDidHideRevision: this.mobileCapacitorKeyboardDidHideRevision,
+			frameId: null,
+			fallbackTimerId: win.setTimeout(() => this.finishKeyboardDismissRequest(request), MOBILE_KEYBOARD_DISMISS_FALLBACK_DELAY),
+			lastSample: null,
+			stableFrames: 0,
+		};
+		this.mobileKeyboardDismissRequest = request;
+		this.scheduleKeyboardDismissCheck(request);
+		this.queueViewportUpdate();
+		return () => {
+			if (this.mobileKeyboardDismissRequest === request) {
+				this.cancelKeyboardDismissRequest();
+			}
+		};
 	}
 
 	startViewportTracking(): void {
@@ -396,6 +454,96 @@ export class MobileComposerController {
 
 	queueViewportUpdate(): void {
 		this.startKeyboardDockTracking();
+	}
+
+	private scheduleKeyboardDismissCheck(request: MobileKeyboardDismissRequest): void {
+		if (this.mobileKeyboardDismissRequest !== request || request.frameId !== null) {
+			return;
+		}
+		request.frameId = this.options.getWindow().requestAnimationFrame(() => {
+			request.frameId = null;
+			if (this.mobileKeyboardDismissRequest !== request) {
+				return;
+			}
+			const sample = this.getKeyboardDismissSample();
+			request.stableFrames = this.isSameKeyboardDismissSample(request.lastSample, sample)
+				? request.stableFrames + 1
+				: 0;
+			request.lastSample = sample;
+			if (request.stableFrames >= MOBILE_KEYBOARD_DISMISS_STABLE_FRAMES && this.isKeyboardDismissed(request, sample)) {
+				this.finishKeyboardDismissRequest(request);
+				return;
+			}
+			this.scheduleKeyboardDismissCheck(request);
+		});
+	}
+
+	private getKeyboardDismissSample(): MobileKeyboardDismissSample {
+		const win = this.options.getWindow();
+		const viewport = this.mobileVisualViewport ?? win.visualViewport;
+		return {
+			windowHeight: win.innerHeight,
+			viewportOffsetTop: viewport?.offsetTop ?? 0,
+			viewportHeight: viewport?.height ?? win.innerHeight,
+			keyboardHeight: this.mobileKeyboardHeight,
+			bottomOffset: this.mobileComposerBottomOffset,
+		};
+	}
+
+	private isSameKeyboardDismissSample(
+		previous: MobileKeyboardDismissSample | null,
+		next: MobileKeyboardDismissSample,
+	): boolean {
+		if (previous === null) {
+			return false;
+		}
+		return Math.abs(previous.windowHeight - next.windowHeight) <= MOBILE_KEYBOARD_DOCK_STABLE_DELTA
+			&& Math.abs(previous.viewportOffsetTop - next.viewportOffsetTop) <= MOBILE_KEYBOARD_DOCK_STABLE_DELTA
+			&& Math.abs(previous.viewportHeight - next.viewportHeight) <= MOBILE_KEYBOARD_DOCK_STABLE_DELTA
+			&& Math.abs(previous.keyboardHeight - next.keyboardHeight) <= MOBILE_KEYBOARD_DOCK_STABLE_DELTA
+			&& Math.abs(previous.bottomOffset - next.bottomOffset) <= MOBILE_KEYBOARD_DOCK_STABLE_DELTA;
+	}
+
+	private isKeyboardDismissed(
+		request: MobileKeyboardDismissRequest,
+		sample: MobileKeyboardDismissSample,
+	): boolean {
+		if (Math.abs(sample.keyboardHeight) > MOBILE_KEYBOARD_DOCK_STABLE_DELTA
+			|| Math.abs(sample.bottomOffset) > MOBILE_KEYBOARD_DOCK_STABLE_DELTA) {
+			return false;
+		}
+		if (request.source === "capacitor") {
+			return this.mobileCapacitorKeyboardDidHideRevision > request.startDidHideRevision;
+		}
+		if (request.source === "virtual-keyboard") {
+			return (this.getVirtualKeyboard(this.options.getWindow())?.boundingRect?.height ?? 0)
+				<= MOBILE_KEYBOARD_DOCK_STABLE_DELTA;
+		}
+		const baselineHeight = this.mobileComposerViewportBaselineHeight ?? sample.windowHeight;
+		return sample.viewportOffsetTop + sample.viewportHeight >= baselineHeight - MOBILE_KEYBOARD_DOCK_STABLE_DELTA;
+	}
+
+	private finishKeyboardDismissRequest(request: MobileKeyboardDismissRequest): void {
+		if (this.mobileKeyboardDismissRequest !== request) {
+			return;
+		}
+		this.cancelKeyboardDismissRequest();
+		if (this.options.getLayout() === "mobile" && this.options.isComposerOpen()) {
+			request.callback();
+		}
+	}
+
+	private cancelKeyboardDismissRequest(): void {
+		const request = this.mobileKeyboardDismissRequest;
+		if (request === null) {
+			return;
+		}
+		const win = this.options.getWindow();
+		if (request.frameId !== null) {
+			win.cancelAnimationFrame(request.frameId);
+		}
+		win.clearTimeout(request.fallbackTimerId);
+		this.mobileKeyboardDismissRequest = null;
 	}
 
 	private initializeBaseMetrics(): void {
@@ -671,7 +819,7 @@ export class MobileComposerController {
 			win.addEventListener("keyboardDidShow", this.mobileCapacitorKeyboardShowHandler);
 		}
 		if (this.mobileCapacitorKeyboardHideHandler === null) {
-			this.mobileCapacitorKeyboardHideHandler = () => this.handleCapacitorKeyboardHide();
+			this.mobileCapacitorKeyboardHideHandler = (event) => this.handleCapacitorKeyboardHide(event);
 			win.addEventListener("keyboardWillHide", this.mobileCapacitorKeyboardHideHandler);
 			win.addEventListener("keyboardDidHide", this.mobileCapacitorKeyboardHideHandler);
 		}
@@ -703,7 +851,10 @@ export class MobileComposerController {
 		this.queueViewportUpdate();
 	}
 
-	private handleCapacitorKeyboardHide(): void {
+	private handleCapacitorKeyboardHide(event: Event): void {
+		if (event.type === "keyboardDidHide") {
+			this.mobileCapacitorKeyboardDidHideRevision += 1;
+		}
 		this.mobileCapacitorKeyboardHeight = 0;
 		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
 			return;

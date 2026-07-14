@@ -12,12 +12,22 @@ import type { ReferenceService } from "../services/ReferenceService";
 import type { SettingsService } from "../services/SettingsService";
 import type { ShuffleDayService } from "../services/ShuffleDayService";
 import type { SyncOrchestrator } from "../services/SyncOrchestrator";
+import type { TimeBuoyMaintenanceOutcome } from "../services/TimeBuoyService";
 import type { ScanDailyMemosResult } from "../services/MemoScanService";
 import { getRecentMemoPeriods } from "../services/memoQueries";
 import type { MemoMutation, MemoRecord } from "../types/memo";
 import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart, formatMonthPeriod } from "../utils/date";
+import { formatTimeBuoyDate, getTimeBuoyCardStatus } from "../utils/timeBuoyDate";
+import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
+import {
+	alreadyHasTimeBuoyDate,
+	getTimeBuoyTriggerStartAfterComposition,
+	getTimeBuoyTriggerStartForDirectInput,
+	insertTimeBuoyDateAtSelection,
+	replaceTimeBuoyTrigger,
+} from "../utils/timeBuoyComposer";
 import { stripTrailingWikiLink, withMemoIdAlias } from "../utils/references";
 import { formatServiceError, formatSettingsText } from "../utils/serviceText";
 import { getComposerToolButtonRoute } from "./KnomoActionRouter";
@@ -26,6 +36,7 @@ import { CardImageLoadQueue, type CardImageLoadSurface } from "./CardImageLoadQu
 import { DateChangeWatcher } from "./DateChangeWatcher";
 import { DesktopSidebarStateController } from "./DesktopSidebarStateController";
 import { renderKnomoMemoCard, renderKnomoTrashMemoCard } from "./KnomoCard";
+import type { MemoCardTimeBuoy } from "./KnomoCard";
 import {
 	parseCardImageIndex,
 	planMemoCardImageLoads,
@@ -34,6 +45,11 @@ import {
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import { KnomoCardFlowCoordinator } from "./KnomoCardFlowCoordinator";
 import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
+import {
+	getTimeBuoyPickerLeft,
+	renderTimeBuoyDatePicker,
+	type TimeBuoyPickerSource,
+} from "./TimeBuoyDatePicker";
 import {
 	formatMarkdownQuoteDraft,
 	getComposerMode,
@@ -44,6 +60,7 @@ import { getPreferredComposerSourcePath } from "./ComposerSourcePath";
 import { ComposerListEnterState } from "./ComposerListEnterState";
 import type { PendingListEnterCorrection } from "./ComposerListEnterState";
 import { ComposerSaveShortcutController } from "./ComposerSaveShortcutController";
+import { getTextareaCharacterRect } from "./composerSuggestPosition";
 import { ImagePreviewScrollLock } from "./ImagePreviewScrollLock";
 import { ImageResourceCache } from "./ImageResourceCache";
 import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
@@ -52,6 +69,7 @@ import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDaily
 import {
 	renderKnomoCardFlowHeaders,
 	renderKnomoEmptyState,
+	renderKnomoLoadMoreButton,
 } from "./KnomoFeed";
 import { getCardFlowPresentation } from "./KnomoCardFlowPresenter";
 import type { CardFlowPresentation } from "./KnomoCardFlowPresenter";
@@ -107,6 +125,13 @@ import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
 import { NativeImagePickerController } from "./NativeImagePickerController";
 import { KnomoPopupState } from "./KnomoPopupState";
 import { RandomReunionController } from "./RandomReunionController";
+import { appendTimeBuoyItems, renderTimeBuoyPage } from "./TimeBuoyPage";
+import {
+	mergeTodayTimeBuoyFeed,
+	TimeBuoyViewController,
+	type TimeBuoyTab,
+	type TimeBuoyTabItem,
+} from "./TimeBuoyViewController";
 import {
 	getRecordStatsHourSearchFilter,
 	getRecordStatsMetricSearchFilter,
@@ -181,6 +206,7 @@ const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;
 const DESKTOP_CARD_IMAGE_LOAD_CONCURRENCY = 2;
 const CARD_IMAGE_LOAD_WATCHDOG_MS = 10_000;
 const SEARCH_DEBOUNCE_MS = 220;
+const TIME_BUOY_PICKER_CLOSE_FALLBACK_MS = 280;
 const MOBILE_VIEW_HEADER_SELECTORS = [
 	".workspace-leaf.mod-active .view-header",
 	".mod-active .view-header",
@@ -211,6 +237,20 @@ interface ApplyMemoMutationOptions {
 	preserveCardMemoId?: string;
 }
 
+type TimeBuoyPickerFocusTarget = "default" | "input";
+
+interface OpenTimeBuoyPickerState {
+	source: TimeBuoyPickerSource;
+	phase: "preparing" | "open" | "closing";
+	savedValue: string;
+	selectionEnd: number;
+	triggerStart: number | null;
+	triggerEnd: number | null;
+	browseYear: number;
+	browseMonth: number;
+	mobile: boolean;
+}
+
 let nextA11yId = 0;
 
 export class KnomoView extends ItemView {
@@ -224,6 +264,19 @@ export class KnomoView extends ItemView {
 	private cardFlowEl: HTMLElement | null = null;
 	private trashCountEls: HTMLElement[] = [];
 	private inputEl: HTMLTextAreaElement | null = null;
+	private timeBuoyButtonEl: HTMLButtonElement | null = null;
+	private timeBuoyMonthStatusEl: HTMLElement | null = null;
+	private timeBuoyPickerEl: HTMLElement | null = null;
+	private timeBuoyPickerBackdropEl: HTMLElement | null = null;
+	private timeBuoyPickerEventCleanups: Array<() => void> = [];
+	private timeBuoyPickerState: OpenTimeBuoyPickerState | null = null;
+	private timeBuoyPickerKeyboardWaitCancel: (() => void) | null = null;
+	private timeBuoyPickerFocusFrameId: number | null = null;
+	private timeBuoyPickerCloseTimerId: number | null = null;
+	private timeBuoyBrowseMonth: Date | null = null;
+	private suppressTimeBuoyAutoOpen = false;
+	private pendingTimeBuoyButtonOpenAfterComposition = false;
+	private composerIsComposing = false;
 	private tagSuggest: KnomoTagSuggest | null = null;
 	private wikiLinkSuggest: KnomoWikiLinkSuggest | null = null;
 	private sendButtonEl: HTMLButtonElement | null = null;
@@ -250,7 +303,9 @@ export class KnomoView extends ItemView {
 	private draftContent = "";
 	private isSaving = false;
 	private isManualRefreshing = false;
+	private lastKnownLocalDate = formatTimeBuoyDate(new Date());
 	private currentLayout: LayoutMode = "desktop-wide";
+	private renderedTimeBuoyEnabled: boolean | null = null;
 	private layoutObserver: ResizeObserver | null = null;
 	private filteredMemosCache: FilteredMemosCache | null = null;
 	private readonly cardFlowCoordinator = new KnomoCardFlowCoordinator();
@@ -273,6 +328,12 @@ export class KnomoView extends ItemView {
 	private readonly randomReunionController: RandomReunionController;
 	private readonly shuffleDayController: ShuffleDayController;
 	private readonly trashMemoController: TrashMemoController;
+	private readonly timeBuoyViewController: TimeBuoyViewController;
+	private timeBuoyPanelEl: HTMLElement | null = null;
+	private timeBuoyRenderItems: TimeBuoyTabItem[] = [];
+	private timeBuoyRenderedCount = 0;
+	private timeBuoyBatchFrameId: number | null = null;
+	private timeBuoyLoadMoreObserver: IntersectionObserver | null = null;
 	private readonly recordStatsService = new RecordStatsService();
 	private readonly recordStatsPreparationController: RecordStatsPreparationController;
 	private readonly recordStatsViewStateController = new RecordStatsViewStateController();
@@ -599,6 +660,7 @@ export class KnomoView extends ItemView {
 			canHydrateCardFlow: () => this.activeNav !== "trash"
 				&& this.activeNav !== "random"
 				&& this.activeNav !== "shuffleDay"
+				&& this.activeNav !== "time-buoy"
 				&& this.activeNav !== "record-stats",
 			scheduleTask: (callback, delayMs) => this.containerEl.win.setTimeout(callback, delayMs),
 			cancelTask: (taskId) => this.containerEl.win.clearTimeout(taskId),
@@ -649,6 +711,24 @@ export class KnomoView extends ItemView {
 			showNotice: (message) => new Notice(message),
 			forceRefreshViews: () => this.onForceRefreshViews(),
 			requestRender: (target) => this.handleTrashRenderRequest(target),
+		});
+		this.timeBuoyViewController = new TimeBuoyViewController({
+			getNow: () => new Date(),
+			queryAll: () => this.syncOrchestrator.queryAllTimeBuoys(),
+			queryDate: (date) => this.syncOrchestrator.queryTimeBuoysForDate(date),
+			rebuild: (options = {}) => this.syncOrchestrator.rebuildTimeBuoyIndex({
+				...options,
+				yieldToUi: () => new Promise<void>((resolve) => {
+					this.containerEl.win.setTimeout(resolve, 0);
+				}),
+			}),
+			requestRender: () => {
+				if (this.activeNav === "time-buoy") {
+					this.renderCardFlow();
+				} else if (this.shouldShowTodayTimeBuoys()) {
+					this.renderCardFlow();
+				}
+			},
 		});
 		this.randomReunionController = new RandomReunionController({
 			ensureAllMemosLoaded: async () => {
@@ -792,6 +872,14 @@ export class KnomoView extends ItemView {
 			goToPreviousRecordStatsPeriod: () => this.goToPreviousRecordStatsPeriod(),
 			goToNextRecordStatsPeriod: () => this.goToNextRecordStatsPeriod(),
 			retryRecordStats: () => this.retryRecordStats(),
+			retryTimeBuoy: () => this.timeBuoyViewController.retry(),
+			rebuildTimeBuoy: () => this.timeBuoyViewController.rebuild(),
+			cancelTimeBuoyRebuild: () => this.timeBuoyViewController.cancelRebuild(),
+			setTimeBuoyTab: (tab) => this.setTimeBuoyTabFromAction(tab),
+			loadMoreTimeBuoyCards: () => this.renderNextTimeBuoyBatch(this.renderGeneration),
+			openTimeBuoy: () => this.setSidebarNav("time-buoy"),
+			enableTimeBuoyIntro: () => this.enableTimeBuoyFromIntro(),
+			dismissTimeBuoyIntro: () => this.dismissTimeBuoyIntro(),
 			renderAllMemosLoadingState: () => this.renderAllMemosLoadingState(),
 			ensureAllMemosLoaded: async () => {
 				await this.ensureAllMemosLoaded();
@@ -833,6 +921,7 @@ export class KnomoView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.lastKnownLocalDate = formatTimeBuoyDate(new Date());
 		this.contentEl.addClass("knomo-view-host");
 		if (Platform.isMobile) {
 			this.updateCurrentLayout();
@@ -848,6 +937,24 @@ export class KnomoView extends ItemView {
 			openComposer: () => this.openComposer(),
 		});
 		this.mobileNavbarCompactController.start();
+		this.register(() => this.clearTimeBuoyPickerEventListeners());
+		this.registerDomEvent(this.containerEl.win, "focus", () => this.handleLocalDateChange());
+		this.registerDomEvent(this.containerEl.win, "orientationchange", () => this.closeTimeBuoyPicker(false));
+		const handleMobileBack = (event: Event): void => {
+			if (this.timeBuoyPickerState === null) {
+				return;
+			}
+			event.preventDefault();
+			event.stopPropagation();
+			this.closeTimeBuoyPicker(true);
+		};
+		this.containerEl.doc.addEventListener("backbutton", handleMobileBack, { capture: true });
+		this.register(() => this.containerEl.doc.removeEventListener("backbutton", handleMobileBack, { capture: true }));
+		this.registerDomEvent(this.containerEl.doc, "visibilitychange", () => {
+			if (this.containerEl.doc.visibilityState === "visible") {
+				this.handleLocalDateChange();
+			}
+		});
 		this.startLayoutObserver();
 		this.startDateChangeWatcher();
 	}
@@ -864,11 +971,14 @@ export class KnomoView extends ItemView {
 		this.tagSuggest = null;
 		this.wikiLinkSuggest?.destroy();
 		this.wikiLinkSuggest = null;
+		this.closeTimeBuoyPicker(false);
 		this.clearSearchDebounce();
 		this.clearMobileSearchDebounce();
 		this.clearRecordStatsPreparation();
 		this.recordStatsPreparationController.clearRetryRequest();
 		this.recordStatsService.invalidate();
+		this.timeBuoyViewController.clear();
+		this.resetTimeBuoyCardFlow();
 		this.mobileMemoHydrator.cancel();
 		this.clearMobileCardBatchContinuation();
 		this.cardFlowCoordinator.setPendingScrollRestore(null);
@@ -899,6 +1009,18 @@ export class KnomoView extends ItemView {
 	}
 
 	async refresh(forceRebuild = false): Promise<void> {
+		const timeBuoyEnabled = this.settingsService.getSettings().timeBuoyEnabled;
+		if (this.renderedTimeBuoyEnabled !== timeBuoyEnabled) {
+			if (!timeBuoyEnabled && this.activeNav === "time-buoy") {
+				this.activeNav = "all";
+			}
+			await this.render();
+			return;
+		}
+		if (this.activeNav === "time-buoy") {
+			await this.timeBuoyViewController.loadInitial();
+			return;
+		}
 		if (this.activeNav === "trash") {
 			await this.trashMemoController.loadTrashMemos();
 			return;
@@ -907,6 +1029,9 @@ export class KnomoView extends ItemView {
 		await this.reloadMemos(this.mobileMemoHydrator.getSnapshot().allMemosLoaded, forceRebuild);
 		if (!Platform.isMobile) {
 			void this.trashMemoController.refreshTrashCount(false);
+		}
+		if (this.settingsService.getSettings().timeBuoyEnabled) {
+			await this.timeBuoyViewController.loadTodayOnly();
 		}
 		if (this.activeNav === "random") {
 			await this.randomReunionController.refresh();
@@ -945,12 +1070,20 @@ export class KnomoView extends ItemView {
 
 		this.randomReunionController.applyMemoMutation(mutation);
 		this.shuffleDayController.applyMemoMutation(mutation);
+		this.timeBuoyViewController.applyMemoMutation(mutation);
 		this.filteredMemosCache = null;
 		this.memoSearchCache.remove(mutation.memo.id);
 		this.memoCardPreviewCache.remove(mutation.memo.id);
 		this.renderStats();
 		this.renderTags();
 		this.renderTrashCount();
+		if (this.activeNav === "time-buoy") {
+			void this.timeBuoyViewController.loadInitial();
+			return;
+		}
+		if (this.settingsService.getSettings().timeBuoyEnabled) {
+			void this.timeBuoyViewController.loadTodayOnly();
+		}
 
 		if (previousCardFlowKey !== this.getCardFlowStateKey()) {
 			this.renderCardFlow(options.preserveCardMemoId ?? null);
@@ -990,6 +1123,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async render(): Promise<void> {
+		this.closeTimeBuoyPicker(false);
 		const container = this.contentEl;
 		container.empty();
 		this.titleHosts = [];
@@ -1001,6 +1135,7 @@ export class KnomoView extends ItemView {
 		this.wikiLinkSuggest = null;
 
 		const settings = this.settingsService.getSettings();
+		this.renderedTimeBuoyEnabled = settings.timeBuoyEnabled;
 		this.desktopSidebarStateController.setFromSettings(settings.desktopSidebarWidth, settings.desktopSidebarCollapsed);
 
 		const root = container.createDiv({ cls: "knomo-plugin knomo-view" });
@@ -1065,12 +1200,20 @@ export class KnomoView extends ItemView {
 			this.scheduleRecordStatsPreparation();
 			void this.trashMemoController.refreshTrashCount(false);
 		}
+		if (this.settingsService.getSettings().timeBuoyEnabled) {
+			if (this.activeNav === "time-buoy") {
+				void this.timeBuoyViewController.loadInitial();
+			} else {
+				void this.timeBuoyViewController.loadTodayOnly();
+			}
+		}
 	}
 
 	private renderSidebar(sidebar: HTMLElement): void {
 		const elements = renderKnomoSidebar(sidebar, {
 			sidebarMinWidth: SIDEBAR_MIN_WIDTH,
 			sidebarMaxWidth: SIDEBAR_MAX_WIDTH,
+			timeBuoyEnabled: this.settingsService.getSettings().timeBuoyEnabled,
 			createHiddenText: (container, id, text) => this.createHiddenText(container, id, text),
 			createIconButton: (container, icon, ariaLabel, cls, action, showTooltip) => {
 				return this.createIconButton(container, icon, ariaLabel, cls, action, showTooltip);
@@ -1116,6 +1259,8 @@ export class KnomoView extends ItemView {
 		const wikiLinkListboxId = this.getA11yId("wiki-link-suggestions");
 		const composer = renderKnomoComposer(main, {
 			dailyEnabled: dailyStatus.enabled,
+			timeBuoyEnabled: this.settingsService.getSettings().timeBuoyEnabled,
+			timeBuoyPickerId: this.getA11yId("time-buoy-picker"),
 			draftContent: this.draftContent,
 			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
 			createIconButton: (container, icon, ariaLabel, cls, action, showTooltip) => {
@@ -1124,6 +1269,8 @@ export class KnomoView extends ItemView {
 		});
 		this.composerEl = composer.composerEl;
 		this.inputEl = composer.inputEl;
+		this.timeBuoyButtonEl = composer.timeBuoyButtonEl;
+		this.timeBuoyMonthStatusEl = composer.timeBuoyMonthStatusEl;
 		this.referencePreviewEl = composer.referencePreviewEl;
 		this.composerBarEl = composer.composerBarEl;
 		this.cancelEditButtonEl = composer.cancelEditButtonEl;
@@ -1162,13 +1309,17 @@ export class KnomoView extends ItemView {
 			this.handleComposerInputBlur();
 		});
 		this.registerDomEvent(this.inputEl, "compositionstart", () => {
+			this.composerIsComposing = true;
 			this.wikiLinkSuggest?.handleCompositionStart();
 		});
-		this.registerDomEvent(this.inputEl, "compositionend", () => {
+		this.registerDomEvent(this.inputEl, "compositionend", (event: CompositionEvent) => {
+			this.composerIsComposing = false;
 			this.wikiLinkSuggest?.handleCompositionEnd();
+			this.handleTimeBuoyCompositionEnd(event);
 		});
 		this.registerDomEvent(this.inputEl, "click", () => {
 			this.wikiLinkSuggest?.refreshForCursor();
+			this.closeTimeBuoyPickerIfTriggerMoved();
 		});
 		this.registerDomEvent(this.inputEl, "keydown", (event) => {
 			if (this.handleComposerSaveShortcut(event)) {
@@ -1192,6 +1343,7 @@ export class KnomoView extends ItemView {
 		this.registerDomEvent(this.inputEl, "keyup", (event) => {
 			this.handleComposerKeyup(event);
 			this.wikiLinkSuggest?.refreshForCursor();
+			this.closeTimeBuoyPickerIfTriggerMoved();
 		});
 		this.registerDomEvent(composer.toolsEl, "pointerdown", (event) => this.handleComposerToolPointerDown(event));
 		this.registerDomEvent(composer.toolsEl, "mousedown", (event) => this.handleComposerToolPointerDown(event));
@@ -1772,6 +1924,9 @@ export class KnomoView extends ItemView {
 		this.syncRootState();
 		this.updateMobileComposerMeasurements();
 		this.resizeInput();
+		if (this.timeBuoyPickerEl !== null && this.timeBuoyPickerState?.mobile === false) {
+			this.positionDesktopTimeBuoyPicker(this.timeBuoyPickerEl);
+		}
 	}
 
 	private isMobileComposerLayered(): boolean {
@@ -1787,8 +1942,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private updateCurrentLayout(): void {
+		const previousLayout = this.currentLayout;
 		if (Platform.isMobile) {
 			this.currentLayout = "mobile";
+			if (previousLayout !== this.currentLayout) {
+				this.closeTimeBuoyPicker(false);
+			}
 			return;
 		}
 		const width = this.containerEl.getBoundingClientRect().width;
@@ -1798,6 +1957,9 @@ export class KnomoView extends ItemView {
 			this.currentLayout = "desktop-medium";
 		} else {
 			this.currentLayout = "desktop-narrow";
+		}
+		if (previousLayout !== this.currentLayout) {
+			this.closeTimeBuoyPicker(false);
 		}
 	}
 
@@ -1948,6 +2110,11 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.cardFlowDeferredForAllMemos = false;
+		if (this.activeNav === "time-buoy") {
+			this.renderTimeBuoyPage();
+			return;
+		}
+		this.resetTimeBuoyCardFlow();
 		if (this.activeNav === "record-stats") {
 			this.renderRecordStatsPage();
 			return;
@@ -1990,6 +2157,145 @@ export class KnomoView extends ItemView {
 		this.recordStatsViewStateController.markRendered(renderKey);
 	}
 
+	private renderTimeBuoyPage(): void {
+		const cardFlow = this.cardFlowEl;
+		if (cardFlow === null) {
+			return;
+		}
+		this.resetTimeBuoyCardFlow();
+		this.renderGeneration += 1;
+		const generation = this.renderGeneration;
+		this.memoMarkdownRenderer.clear();
+		this.cardImageLoadQueue.clear("card-flow");
+		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
+		this.renderedCardMemos.clear();
+		const result = renderTimeBuoyPage(cardFlow, this.timeBuoyViewController.getSnapshot(), {
+			idPrefix: this.getA11yId("time-buoy"),
+		});
+		this.timeBuoyPanelEl = result.panelEl;
+		this.timeBuoyRenderItems = result.items;
+		this.renderNextTimeBuoyBatch(generation, this.getInitialCardBatchSize());
+		this.syncCardMenuState();
+	}
+
+	private renderNextTimeBuoyBatch(generation: number, batchSize = CARD_BATCH_SIZE): void {
+		const panel = this.timeBuoyPanelEl;
+		if (
+			panel === null
+			|| generation !== this.renderGeneration
+			|| this.timeBuoyBatchFrameId !== null
+			|| this.timeBuoyRenderedCount >= this.timeBuoyRenderItems.length
+		) {
+			return;
+		}
+		this.removeTimeBuoyLoadMore();
+		const start = this.timeBuoyRenderedCount;
+		const end = Math.min(start + batchSize, this.timeBuoyRenderItems.length);
+		const items = this.timeBuoyRenderItems.slice(start, end);
+		const synchronousCount = Platform.isMobile
+			? Math.min(MOBILE_INITIAL_SYNC_CARD_COUNT, items.length)
+			: items.length;
+		this.appendTimeBuoyBatchItems(panel, items.slice(0, synchronousCount), start, generation);
+		if (synchronousCount >= items.length) {
+			this.finishTimeBuoyBatch(end, generation);
+			return;
+		}
+		let offset = synchronousCount;
+		const continueBatch = (): void => {
+			this.timeBuoyBatchFrameId = null;
+			if (generation !== this.renderGeneration || panel !== this.timeBuoyPanelEl) {
+				return;
+			}
+			const nextOffset = Math.min(offset + MOBILE_CARD_FRAME_CHUNK_SIZE, items.length);
+			this.appendTimeBuoyBatchItems(panel, items.slice(offset, nextOffset), start + offset, generation);
+			offset = nextOffset;
+			if (offset < items.length) {
+				this.timeBuoyBatchFrameId = this.containerEl.win.requestAnimationFrame(continueBatch);
+				return;
+			}
+			this.finishTimeBuoyBatch(end, generation);
+		};
+		this.timeBuoyBatchFrameId = this.containerEl.win.requestAnimationFrame(continueBatch);
+	}
+
+	private appendTimeBuoyBatchItems(
+		panel: HTMLElement,
+		items: readonly TimeBuoyTabItem[],
+		renderIndexStart: number,
+		generation: number,
+	): void {
+		appendTimeBuoyItems(panel, items, renderIndexStart, (container, item, renderIndex) => {
+			const today = formatTimeBuoyDate(new Date());
+			const status = item.primaryTargetDate === today
+				? "today"
+				: item.primaryTargetDate > today ? "upcoming" : "past";
+			const label = item.primaryTargetDate === today
+				? t("timeBuoy.surfacedToday", { date: item.primaryTargetDate })
+				: t("timeBuoy.badge.single", { date: item.primaryTargetDate });
+			this.renderMemoCardInContainer(
+				container,
+				item.memo,
+				generation,
+				renderIndex,
+				true,
+				false,
+				"card-flow",
+				null,
+				null,
+				{ status, label },
+			);
+		});
+	}
+
+	private finishTimeBuoyBatch(renderedCount: number, generation: number): void {
+		if (generation !== this.renderGeneration) {
+			return;
+		}
+		this.timeBuoyRenderedCount = renderedCount;
+		this.renderTimeBuoyLoadMore(generation);
+	}
+
+	private renderTimeBuoyLoadMore(generation: number): void {
+		const panel = this.timeBuoyPanelEl;
+		const remainingCount = this.timeBuoyRenderItems.length - this.timeBuoyRenderedCount;
+		if (panel === null || remainingCount <= 0) {
+			return;
+		}
+		const button = renderKnomoLoadMoreButton(panel, {
+			remainingCount,
+			action: "load-more-time-buoy-cards",
+			extraClass: "knomo-time-buoy-load-more",
+			sentinel: true,
+		});
+		const Observer = (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver;
+		if (Observer === undefined || this.cardFlowEl === null) {
+			return;
+		}
+		this.timeBuoyLoadMoreObserver = new Observer((entries) => {
+			if (entries.some((entry) => entry.isIntersecting)) {
+				this.renderNextTimeBuoyBatch(generation);
+			}
+		}, { root: this.cardFlowEl, rootMargin: "240px 0px" });
+		this.timeBuoyLoadMoreObserver.observe(button);
+	}
+
+	private removeTimeBuoyLoadMore(): void {
+		this.timeBuoyLoadMoreObserver?.disconnect();
+		this.timeBuoyLoadMoreObserver = null;
+		this.timeBuoyPanelEl?.querySelector<HTMLElement>(".knomo-time-buoy-load-more")?.remove();
+	}
+
+	private resetTimeBuoyCardFlow(): void {
+		if (this.timeBuoyBatchFrameId !== null) {
+			this.containerEl.win.cancelAnimationFrame(this.timeBuoyBatchFrameId);
+			this.timeBuoyBatchFrameId = null;
+		}
+		this.removeTimeBuoyLoadMore();
+		this.timeBuoyPanelEl = null;
+		this.timeBuoyRenderItems = [];
+		this.timeBuoyRenderedCount = 0;
+	}
+
 	private forceRebuildCardFlow(changeIntent: CardFlowChangeIntent = "content-change"): void {
 		if (this.deferMobileCardFlowRender(null, true, changeIntent)) {
 			return;
@@ -2007,6 +2313,12 @@ export class KnomoView extends ItemView {
 		if (changeIntent === "view-scope-change") {
 			this.restoreCardFlowScrollTop(0);
 		}
+		if (this.activeNav === "time-buoy") {
+			this.renderTimeBuoyPage();
+			this.restoreCardFlowScrollTop(scrollTop);
+			return;
+		}
+		this.resetTimeBuoyCardFlow();
 		if (this.activeNav === "record-stats") {
 			this.renderRecordStatsPage(true);
 			this.restoreCardFlowScrollTop(scrollTop);
@@ -2046,8 +2358,11 @@ export class KnomoView extends ItemView {
 			&& this.activeNav !== "trash"
 			&& this.activeNav !== "shuffleDay"
 			&& !(this.activeNav === "random" && randomSnapshot.loading);
-		const memos = shouldLoadListMemos ? this.getFilteredMemos() : [];
-		return getCardFlowPresentation({
+		const todayItems = this.getTodayTimeBuoyItems();
+		const memos = shouldLoadListMemos
+			? mergeTodayTimeBuoyFeed(this.getFilteredMemos(), todayItems)
+			: [];
+		const presentation = getCardFlowPresentation({
 			cardFlowError: this.activeNav === "shuffleDay" ? null : this.cardFlowError,
 			activeNav: this.activeNav,
 			randomReunionLoading: randomSnapshot.loading,
@@ -2065,6 +2380,31 @@ export class KnomoView extends ItemView {
 			trashError: trashSnapshot.trashError,
 			trashMemos: trashSnapshot.trashMemos,
 		});
+		if (
+			this.cardFlowError === null
+			&& this.shouldShowTodayTimeBuoys()
+			&& this.timeBuoyViewController.getSnapshot().todayError !== null
+		) {
+			const warning = { type: "summary" as const, text: t("timeBuoy.todayLoadFailed") };
+			return presentation.type === "items"
+				? { ...presentation, headers: [warning, ...presentation.headers] }
+				: { type: "items", memos: [], mode: "memo", headers: [warning] };
+		}
+		if (presentation.type === "empty" && this.shouldShowTimeBuoyIntro() && this.cardFlowError === null) {
+			return { type: "items", memos: [], mode: "memo", headers: [] };
+		}
+		return presentation;
+	}
+
+	private getTodayTimeBuoyItems() {
+		if (!this.shouldShowTodayTimeBuoys()) {
+			return [];
+		}
+		return this.timeBuoyViewController.getSnapshot().today;
+	}
+
+	private shouldShowTodayTimeBuoys(): boolean {
+		return this.settingsService.getSettings().timeBuoyEnabled && this.isDefaultListState();
 	}
 
 	private renderEmptyCardFlow(presentation: Extract<CardFlowPresentation, { type: "empty" }>): void {
@@ -2093,6 +2433,9 @@ export class KnomoView extends ItemView {
 		this.cardFlowCoordinator.removeSentinel();
 		for (const child of Array.from(cardFlow.children)) {
 			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card")) {
+				for (const card of child.findAll(".knomo-card")) {
+					this.removeCardImageTargets(card);
+				}
 				child.remove();
 			}
 		}
@@ -2152,6 +2495,10 @@ export class KnomoView extends ItemView {
 			for (const header of headers) {
 				cardFlow.insertBefore(header, firstCard);
 			}
+		}
+		const intro = this.renderTimeBuoyIntro(cardFlow);
+		if (intro !== null) {
+			cardFlow.prepend(intro);
 		}
 		this.cardFlowCoordinator.syncBatch(presentation.memos, presentation.mode, visibleMemos.length);
 		this.renderCardFlowSentinelIfNeeded();
@@ -2257,8 +2604,54 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
+		this.renderTimeBuoyIntro(this.cardFlowEl);
 		renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers);
 		this.startCardFeed(presentation.memos, presentation.mode, generation, initialBatchSize);
+	}
+
+	private shouldShowTimeBuoyIntro(): boolean {
+		const settings = this.settingsService.getSettings();
+		return !settings.timeBuoyEnabled && settings.timeBuoyIntroDismissed !== true && this.isDefaultListState();
+	}
+
+	private renderTimeBuoyIntro(container: HTMLElement): HTMLElement | null {
+		if (!this.shouldShowTimeBuoyIntro()) {
+			return null;
+		}
+		const intro = container.createEl("aside", { cls: "knomo-time-buoy-intro" });
+		intro.createDiv({ text: t("timeBuoy.intro") });
+		const actions = intro.createDiv({ cls: "knomo-time-buoy-intro-actions" });
+		actions.createEl("button", {
+			cls: "mod-cta knomo-inline-button",
+			text: t("timeBuoy.intro.enable"),
+			attr: { type: "button", "data-action": "enable-time-buoy-intro" },
+		});
+		actions.createEl("button", {
+			cls: "knomo-inline-button",
+			text: t("timeBuoy.intro.dismiss"),
+			attr: { type: "button", "data-action": "dismiss-time-buoy-intro" },
+		});
+		return intro;
+	}
+
+	private async enableTimeBuoyFromIntro(): Promise<void> {
+		await this.settingsService.updateSettings({ timeBuoyEnabled: true, timeBuoyIntroDismissed: true });
+		await this.render();
+		new Notice(t("settings.timeBuoy.building"));
+		try {
+			await this.syncOrchestrator.rebuildTimeBuoyIndex({
+				yieldToUi: () => new Promise<void>((resolve) => this.containerEl.win.setTimeout(resolve, 0)),
+			});
+		} catch (error) {
+			new Notice(formatServiceError(error, t("settings.timeBuoy.buildFailed")));
+		} finally {
+			await this.timeBuoyViewController.loadTodayOnly();
+		}
+	}
+
+	private async dismissTimeBuoyIntro(): Promise<void> {
+		await this.settingsService.updateSettings({ timeBuoyIntroDismissed: true });
+		this.forceRebuildCardFlow();
 	}
 
 	private startCardFeed(
@@ -2357,13 +2750,16 @@ export class KnomoView extends ItemView {
 		surface: CardRenderSurface,
 		reusedBodyEl: HTMLElement | null = null,
 		reusedImagesEl: HTMLElement | null = null,
+		timeBuoy?: MemoCardTimeBuoy,
 	): HTMLElement {
 		const { deletedMemoIds } = this.trashMemoController.getSnapshot();
+		const effectiveTimeBuoy = timeBuoy ?? this.getVisibleMemoTimeBuoy(memo);
 		return renderKnomoMemoCard(container, memo, {
 			generation,
 			renderIndex,
 			includeActions,
 			randomCard,
+			timeBuoy: effectiveTimeBuoy,
 			activeMenuMemoId: this.activeMenuMemoId,
 			deletedMemoIds,
 			formatDisplayTime: formatMemoDisplayTime,
@@ -2382,6 +2778,21 @@ export class KnomoView extends ItemView {
 			reusedBodyEl,
 			reusedImagesEl,
 		});
+	}
+
+	private getVisibleMemoTimeBuoy(memo: MemoRecord): MemoCardTimeBuoy | undefined {
+		if (!this.settingsService.getSettings().timeBuoyEnabled || memo.status !== "active") {
+			return undefined;
+		}
+		const dates = extractTimeBuoyDates(memo.contentSnapshot);
+		const status = getTimeBuoyCardStatus(dates);
+		if (status === null) {
+			return undefined;
+		}
+		const label = dates.length === 1
+			? t("timeBuoy.badge.single", { date: dates[0] })
+			: t("timeBuoy.badge.multiple", { count: dates.length });
+		return { status, label };
 	}
 
 	private renderTrashMemoCard(memo: MemoRecord, generation: number, renderIndex: number): void {
@@ -2666,8 +3077,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private async runMemoActionById(action: MemoAction, memoId: string | null): Promise<void> {
-		const memo = this.memos.find((item) => item.id === memoId);
-		if (memo !== undefined) {
+		const memo = memoId === null ? null : this.findMemoById(memoId);
+		if (memo !== null) {
 			await this.handleMemoAction(action, memo);
 		}
 	}
@@ -2728,6 +3139,16 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleRootPointerDown(event: PointerEvent): void {
+		const target = event.target as Node | null;
+		if (
+			this.timeBuoyPickerState !== null
+			&& !this.timeBuoyPickerState.mobile
+			&& target !== null
+			&& !this.timeBuoyPickerEl?.contains(target)
+			&& !this.timeBuoyButtonEl?.contains(target)
+		) {
+			this.closeTimeBuoyPicker(false);
+		}
 		this.userActionController.handleRootPointerDown(event);
 	}
 
@@ -2837,7 +3258,54 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
+		if (event.key === "Escape" && this.timeBuoyPickerState !== null) {
+			event.preventDefault();
+			event.stopPropagation();
+			this.closeTimeBuoyPicker(true);
+			return;
+		}
+		if (this.handleTimeBuoyTabKeydown(event)) {
+			return;
+		}
 		await this.userActionController.handleRootKeydown(event);
+	}
+
+	private handleTimeBuoyTabKeydown(event: KeyboardEvent): boolean {
+		if (!isTimeBuoyTabNavigationKey(event.key)) {
+			return false;
+		}
+		const target = event.target as Node | null;
+		if (target === null || !target.instanceOf(Element)) {
+			return false;
+		}
+		const tab = target.closest<HTMLElement>(".knomo-time-buoy-tab");
+		const tabList = tab?.closest<HTMLElement>(".knomo-time-buoy-tabs") ?? null;
+		if (tab === null || tabList === null) {
+			return false;
+		}
+		const tabs = tabList.findAll(".knomo-time-buoy-tab");
+		const currentIndex = tabs.indexOf(tab);
+		if (currentIndex < 0 || tabs.length === 0) {
+			return false;
+		}
+		const nextIndex = event.key === "Home"
+			? 0
+			: event.key === "End"
+				? tabs.length - 1
+				: event.key === "ArrowRight"
+					? (currentIndex + 1) % tabs.length
+					: (currentIndex - 1 + tabs.length) % tabs.length;
+		const nextTab = tabs[nextIndex];
+		const nextValue = nextTab?.getAttr("data-time-buoy-tab");
+		if (nextTab === undefined || !isTimeBuoyTab(nextValue)) {
+			return false;
+		}
+		event.preventDefault();
+		this.setTimeBuoyTabFromAction(nextValue);
+		this.cardFlowEl
+			?.querySelector<HTMLElement>(`.knomo-time-buoy-tab[data-time-buoy-tab="${nextValue}"]`)
+			?.focus();
+		return true;
 	}
 
 	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
@@ -2907,6 +3375,7 @@ export class KnomoView extends ItemView {
 		if (this.inputEl === null || this.isSaving) {
 			return;
 		}
+		this.closeTimeBuoyPicker(false);
 
 		const input = this.inputEl.value;
 		const preparedInput = prepareComposerSaveInput(input, this.editingMemo, {
@@ -2927,17 +3396,22 @@ export class KnomoView extends ItemView {
 		this.updateSendButtonState();
 		try {
 			let mutation: MemoMutation;
+			let timeBuoyOutcome: TimeBuoyMaintenanceOutcome;
 			if (preparedInput.type === "update") {
 				const previousMemo = preparedInput.previousMemo;
-				const memo = await this.syncOrchestrator.updateMemo(previousMemo, preparedInput.content);
+				const result = await this.syncOrchestrator.updateMemoWithTimeBuoyOutcome(previousMemo, preparedInput.content);
+				const memo = result.memo;
+				timeBuoyOutcome = result.timeBuoy;
 				mutation = { type: "update", previousMemo, memo };
 			} else {
-				const { memo } = await this.syncOrchestrator.createMemo(preparedInput.content, {
+				const created = await this.syncOrchestrator.createMemoWithTimeBuoyOutcome(preparedInput.content, {
 					source: preparedInput.source,
 					sourceMemoId: preparedInput.sourceMemoId,
 					sourceReferenceText: preparedInput.sourceReferenceText,
 					dailyTrailer: preparedInput.dailyTrailer,
 				});
+				const { memo } = created.result;
+				timeBuoyOutcome = created.timeBuoy;
 				mutation = { type: "create", memo };
 			}
 			this.draftContent = "";
@@ -2958,6 +3432,7 @@ export class KnomoView extends ItemView {
 			this.updateStatus("", false);
 			this.applyMemoMutation(mutation);
 			this.onMemoMutation(mutation, this);
+			this.showTimeBuoySaveFeedback(timeBuoyOutcome);
 			if (isMobileSave) {
 				this.restoreCardFlowScrollTop(mobileScrollTop);
 				this.mobileComposerController.clearOpenScrollTop();
@@ -2971,6 +3446,22 @@ export class KnomoView extends ItemView {
 			this.updateSendButtonState();
 			this.syncRootState();
 		}
+	}
+
+	private showTimeBuoySaveFeedback(outcome: TimeBuoyMaintenanceOutcome): void {
+		if (outcome.status === "disabled") {
+			return;
+		}
+		if (outcome.status === "failed") {
+			new Notice(t("timeBuoy.saved.indexFailed"));
+			return;
+		}
+		if (outcome.dates.length === 0) {
+			return;
+		}
+		new Notice(outcome.dates.length === 1
+			? t("timeBuoy.saved.single", { date: outcome.dates[0] })
+			: t("timeBuoy.saved.multiple", { count: outcome.dates.length }));
 	}
 
 	private async handleManualRefresh(): Promise<void> {
@@ -3100,9 +3591,20 @@ export class KnomoView extends ItemView {
 		if (result.loadTrashMemos) {
 			void this.trashMemoController.loadTrashMemos();
 		}
+		if (nav === "time-buoy") {
+			void this.timeBuoyViewController.loadInitial();
+		}
 		if (result.prepareRecordStats) {
 			void this.prepareRecordStats();
 		}
+	}
+
+	private setTimeBuoyTabFromAction(tab: TimeBuoyTab): void {
+		if (this.activeNav !== "time-buoy") {
+			return;
+		}
+		this.restoreCardFlowScrollTop(0);
+		this.timeBuoyViewController.setActiveTab(tab);
 	}
 
 	private returnFromRecordStats(): void {
@@ -3330,6 +3832,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeComposerWithConfirm(): void {
+		this.closeTimeBuoyPicker(false);
 		if (this.currentLayout === "mobile") {
 			this.closeComposerKeepingDraft();
 			return;
@@ -3346,6 +3849,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeComposerKeepingDraft(): void {
+		this.closeTimeBuoyPicker(false);
 		if (this.currentLayout === "mobile") {
 			this.closeMobileComposerKeepingDraft();
 			return;
@@ -3367,6 +3871,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeMobileComposerKeepingDraft(): void {
+		this.closeTimeBuoyPicker(false);
 		if (this.inputEl !== null) {
 			this.draftContent = getDraftForComposerClose(
 				this.inputEl.value,
@@ -3461,6 +3966,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private clearComposerContext(): void {
+		this.closeTimeBuoyPicker(false);
 		this.editingMemo = null;
 		this.quoteSourceMemoId = null;
 		this.quoteReferenceText = null;
@@ -3538,6 +4044,10 @@ export class KnomoView extends ItemView {
 		if (event.key === "Escape") {
 			event.preventDefault();
 			event.stopPropagation();
+			if (this.timeBuoyPickerState !== null) {
+				this.closeTimeBuoyPicker(true);
+				return;
+			}
 			this.cancelEditingOrCloseComposer();
 		}
 	}
@@ -3627,6 +4137,10 @@ export class KnomoView extends ItemView {
 			this.nativeImagePickerController.open();
 			return true;
 		}
+		if (action === "insert-time-buoy") {
+			this.toggleTimeBuoyPickerFromButton();
+			return true;
+		}
 		if (action === "insert-list") {
 			this.applyListFormat("bullet");
 			return true;
@@ -3636,6 +4150,505 @@ export class KnomoView extends ItemView {
 			return true;
 		}
 		return false;
+	}
+
+	private toggleTimeBuoyPickerFromButton(): void {
+		if (this.timeBuoyPickerState?.source === "button") {
+			this.closeTimeBuoyPicker(true);
+			return;
+		}
+		const input = this.inputEl;
+		if (
+			input === null
+			|| input.disabled
+			|| this.isSaving
+			|| !this.settingsService.getSettings().timeBuoyEnabled
+		) {
+			return;
+		}
+		if (this.composerIsComposing) {
+			this.pendingTimeBuoyButtonOpenAfterComposition = true;
+			input.blur();
+			return;
+		}
+		this.openTimeBuoyPicker("button", null);
+	}
+
+	private openTimeBuoyPicker(source: TimeBuoyPickerSource, triggerStart: number | null): void {
+		const input = this.inputEl;
+		if (input === null || input.disabled || this.isSaving) {
+			return;
+		}
+		this.closeTimeBuoyPicker(false);
+		this.tagSuggest?.close();
+		this.wikiLinkSuggest?.close();
+		this.closeCardMenu();
+		this.scopeMenuOpen = false;
+		this.desktopSearchOpen = false;
+		this.compactSearchOpen = false;
+		const today = new Date();
+		const browseMonth = this.timeBuoyBrowseMonth ?? today;
+		const mobile = this.currentLayout === "mobile";
+		const state: OpenTimeBuoyPickerState = {
+			source,
+			phase: mobile ? "preparing" : "open",
+			savedValue: input.value,
+			selectionEnd: input.selectionEnd,
+			triggerStart,
+			triggerEnd: triggerStart === null ? null : triggerStart + 1,
+			browseYear: browseMonth.getFullYear(),
+			browseMonth: browseMonth.getMonth(),
+			mobile,
+		};
+		this.timeBuoyPickerState = state;
+		this.composerEl?.addClass("is-time-buoy-picker-open");
+		this.renderTimeBuoyPicker();
+		if (mobile) {
+			this.timeBuoyPickerKeyboardWaitCancel = this.mobileComposerController.waitForKeyboardDismissal(() => {
+				this.timeBuoyPickerKeyboardWaitCancel = null;
+				this.revealMobileTimeBuoyPicker(state);
+			});
+			input.blur();
+		}
+	}
+
+	private renderTimeBuoyPicker(): void {
+		const state = this.timeBuoyPickerState;
+		const composer = this.composerEl;
+		if (state === null || composer === null) {
+			return;
+		}
+		this.clearTimeBuoyPickerEventListeners();
+		this.timeBuoyPickerEl?.remove();
+		this.timeBuoyPickerBackdropEl?.remove();
+		this.timeBuoyPickerEl = null;
+		this.timeBuoyPickerBackdropEl = null;
+		const isModal = state.mobile;
+		if (isModal && this.timeBuoyPickerBackdropEl === null) {
+			const backdropHost = composer.closest<HTMLElement>(".knomo-mobile-composer-stage") ?? composer;
+			this.timeBuoyPickerBackdropEl = backdropHost.createDiv({
+				cls: "knomo-time-buoy-picker-backdrop",
+				attr: { "aria-hidden": "true" },
+			});
+			this.timeBuoyPickerBackdropEl.toggleClass("is-preparing", state.phase === "preparing");
+			this.timeBuoyPickerBackdropEl.toggleClass("is-open", state.phase === "open");
+			this.timeBuoyPickerBackdropEl.toggleClass("is-closing", state.phase === "closing");
+			this.addTimeBuoyPickerEvent(this.timeBuoyPickerBackdropEl, "click", (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				this.closeTimeBuoyPicker(true);
+			});
+		}
+		const pickerId = this.timeBuoyButtonEl?.getAttr("aria-controls") ?? this.getA11yId("time-buoy-picker");
+		const picker = renderTimeBuoyDatePicker(composer, pickerId, {
+			source: state.source,
+			mobile: state.mobile,
+			browseYear: state.browseYear,
+			browseMonth: state.browseMonth,
+			today: new Date(),
+		});
+		this.timeBuoyPickerEl = picker;
+		if (state.mobile) {
+			picker.toggleClass("is-preparing", state.phase === "preparing");
+			picker.toggleClass("is-open", state.phase === "open");
+			picker.toggleClass("is-closing", state.phase === "closing");
+			picker.setAttr("aria-hidden", state.phase === "open" ? "false" : "true");
+		}
+		this.timeBuoyButtonEl?.setAttr("aria-expanded", state.phase === "open" ? "true" : "false");
+		if (state.source === "at-input" && !state.mobile) {
+			const keepTextareaFocused = (event: PointerEvent | MouseEvent): void => {
+				const target = event.target as Node | null;
+				if (!target?.instanceOf(Element) || target.closest("button") === null) {
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+			};
+			this.addTimeBuoyPickerEvent(picker, "pointerdown", keepTextareaFocused);
+			this.addTimeBuoyPickerEvent(picker, "mousedown", keepTextareaFocused);
+		}
+		if (!state.mobile) {
+			this.positionDesktopTimeBuoyPicker(picker);
+		}
+		this.addTimeBuoyPickerEvent(picker, "click", (event) => this.handleTimeBuoyPickerClick(event));
+		this.addTimeBuoyPickerEvent(picker, "keydown", (event) => this.handleTimeBuoyPickerKeydown(event));
+		if (state.source === "button" && !state.mobile) {
+			this.focusDefaultTimeBuoyPickerButton(picker);
+		}
+	}
+
+	private revealMobileTimeBuoyPicker(state: OpenTimeBuoyPickerState): void {
+		const picker = this.timeBuoyPickerEl;
+		const backdrop = this.timeBuoyPickerBackdropEl;
+		if (
+			this.timeBuoyPickerState !== state
+			|| state.phase !== "preparing"
+			|| this.currentLayout !== "mobile"
+			|| !this.composerOpen
+			|| picker === null
+			|| backdrop === null
+		) {
+			this.closeTimeBuoyPicker(false);
+			return;
+		}
+		state.phase = "open";
+		picker.removeClass("is-preparing");
+		picker.addClass("is-open");
+		picker.setAttr("aria-hidden", "false");
+		backdrop.removeClass("is-preparing");
+		backdrop.addClass("is-open");
+		this.timeBuoyButtonEl?.setAttr("aria-expanded", "true");
+		this.clearTimeBuoyPickerFocusFrame();
+		this.timeBuoyPickerFocusFrameId = this.containerEl.win.requestAnimationFrame(() => {
+			this.timeBuoyPickerFocusFrameId = null;
+			if (this.timeBuoyPickerState === state && state.phase === "open") {
+				this.focusDefaultTimeBuoyPickerButton(picker);
+			}
+		});
+	}
+
+	private focusDefaultTimeBuoyPickerButton(picker: HTMLElement): void {
+		const focusTarget = picker.querySelector<HTMLButtonElement>(".knomo-time-buoy-picker-day.is-today:not(:disabled)")
+			?? picker.querySelector<HTMLButtonElement>(".knomo-time-buoy-picker-day:not(:disabled)")
+			?? picker.querySelector<HTMLButtonElement>("button:not(:disabled)");
+		focusTarget?.focus();
+	}
+
+	private positionDesktopTimeBuoyPicker(picker: HTMLElement): void {
+		const composer = this.composerEl;
+		const state = this.timeBuoyPickerState;
+		const input = this.inputEl;
+		const anchor = state?.source === "button" ? this.timeBuoyButtonEl : input;
+		if (composer === null || input === null || anchor === null) {
+			return;
+		}
+		const composerRect = composer.getBoundingClientRect();
+		const anchorRect = state?.source === "at-input"
+			? getTextareaCharacterRect(input, state.triggerStart ?? input.selectionStart)
+				?? input.getBoundingClientRect()
+			: anchor.getBoundingClientRect();
+		const pickerRect = picker.getBoundingClientRect();
+		const composerLeft = composerRect.left + composer.clientLeft;
+		const left = getTimeBuoyPickerLeft(
+			composer.clientWidth,
+			anchorRect.left - composerLeft,
+			pickerRect.width,
+		);
+		const availableAbove = Math.max(160, anchorRect.top - 12);
+		const availableBelow = Math.max(160, this.containerEl.win.innerHeight - anchorRect.bottom - 12);
+		const isBelow = availableAbove < pickerRect.height && availableBelow > availableAbove;
+		picker.setCssProps({
+			"--knomo-time-buoy-picker-left": `${left}px`,
+			"--knomo-time-buoy-picker-max-height": `${isBelow ? availableBelow : availableAbove}px`,
+			"--knomo-time-buoy-picker-top": `${Math.round(anchorRect.bottom - composerRect.top + 8)}px`,
+			"--knomo-time-buoy-picker-bottom": `${Math.round(composerRect.bottom - anchorRect.top + 8)}px`,
+		});
+		picker.toggleClass("is-below", isBelow);
+	}
+
+	private handleTimeBuoyPickerClick(event: MouseEvent): void {
+		const target = event.target as Node | null;
+		if (!target?.instanceOf(Element)) {
+			return;
+		}
+		const actionEl = target.closest<HTMLElement>("[data-time-buoy-picker-action]");
+		const dateEl = target.closest<HTMLElement>("[data-time-buoy-date]");
+		if (actionEl === null && dateEl === null) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		const action = actionEl?.getAttr("data-time-buoy-picker-action");
+		if (action === "cancel") {
+			this.closeTimeBuoyPicker(true);
+			return;
+		}
+		if (action === "previous-month" || action === "next-month") {
+			this.changeTimeBuoyPickerMonth(action === "previous-month" ? -1 : 1);
+			return;
+		}
+		const date = dateEl?.getAttr("data-time-buoy-date");
+		const state = this.timeBuoyPickerState;
+		if (date === null || date === undefined || state === null) {
+			return;
+		}
+		this.submitTimeBuoyDate(date);
+	}
+
+	private handleTimeBuoyPickerKeydown(event: KeyboardEvent): void {
+		const picker = this.timeBuoyPickerEl;
+		const state = this.timeBuoyPickerState;
+		if (picker === null || state === null) {
+			return;
+		}
+		if (event.key === "Escape") {
+			event.preventDefault();
+			event.stopPropagation();
+			this.closeTimeBuoyPicker(true);
+			return;
+		}
+		if (event.key === "PageUp" || event.key === "PageDown") {
+			event.preventDefault();
+			this.changeTimeBuoyPickerMonth(event.key === "PageUp" ? -1 : 1);
+			return;
+		}
+		if (event.key === "Tab" && state.mobile) {
+			const focusable = Array.from(picker.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+			const activeIndex = focusable.indexOf(this.containerEl.doc.activeElement as HTMLButtonElement);
+			const nextIndex = event.shiftKey
+				? (activeIndex <= 0 ? focusable.length - 1 : activeIndex - 1)
+				: (activeIndex < 0 || activeIndex === focusable.length - 1 ? 0 : activeIndex + 1);
+			if (focusable[nextIndex] !== undefined) {
+				event.preventDefault();
+				focusable[nextIndex].focus();
+			}
+			return;
+		}
+		const target = event.target as Node | null;
+		if (!target?.instanceOf(HTMLElement) || !target.hasClass("knomo-time-buoy-picker-day")) {
+			return;
+		}
+		const offset = event.key === "ArrowLeft" ? -1
+			: event.key === "ArrowRight" ? 1
+				: event.key === "ArrowUp" ? -7
+					: event.key === "ArrowDown" ? 7
+						: 0;
+		if (offset === 0) {
+			return;
+		}
+		event.preventDefault();
+		const days = Array.from(picker.querySelectorAll<HTMLButtonElement>(".knomo-time-buoy-picker-day"));
+		let nextIndex = days.indexOf(target as HTMLButtonElement) + offset;
+		while (nextIndex >= 0 && nextIndex < days.length && days[nextIndex].disabled) {
+			nextIndex += offset > 0 ? 1 : -1;
+		}
+		days[nextIndex]?.focus();
+	}
+
+	private changeTimeBuoyPickerMonth(offset: number): void {
+		const state = this.timeBuoyPickerState;
+		if (state === null) {
+			return;
+		}
+		const month = new Date(state.browseYear, state.browseMonth + offset, 1);
+		const current = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+		if (month < current) {
+			return;
+		}
+		state.browseYear = month.getFullYear();
+		state.browseMonth = month.getMonth();
+		this.timeBuoyBrowseMonth = month;
+		this.renderTimeBuoyPicker();
+		const monthLabel = this.timeBuoyPickerEl?.find(".knomo-time-buoy-picker-month-label");
+		this.timeBuoyMonthStatusEl?.setText(monthLabel?.getText() ?? "");
+	}
+
+	private submitTimeBuoyDate(targetDate: string): void {
+		const state = this.timeBuoyPickerState;
+		const input = this.inputEl;
+		if (state === null || input === null) {
+			return;
+		}
+		if (alreadyHasTimeBuoyDate(input.value, targetDate)) {
+			new Notice(t("timeBuoy.duplicate"));
+			return;
+		}
+		const insertion = state.source === "at-input"
+			? replaceTimeBuoyTrigger(input.value, state.triggerStart ?? -1, state.triggerEnd ?? -1, targetDate)
+			: insertTimeBuoyDateAtSelection(
+				input.value,
+				input.value === state.savedValue ? state.selectionEnd : input.selectionEnd,
+				targetDate,
+			);
+		if (insertion === null) {
+			this.closeTimeBuoyPicker(true);
+			new Notice(t("timeBuoy.picker.triggerChanged"));
+			return;
+		}
+		this.suppressTimeBuoyAutoOpen = true;
+		input.value = insertion.value;
+		input.setSelectionRange(insertion.cursor, insertion.cursor);
+		try {
+			dispatchTextareaInputEvent(input);
+		} finally {
+			this.suppressTimeBuoyAutoOpen = false;
+		}
+		this.closeTimeBuoyPicker(true, "input");
+	}
+
+	private closeTimeBuoyPicker(
+		restoreFocus: boolean,
+		focusTarget: TimeBuoyPickerFocusTarget = "default",
+	): void {
+		const state = this.timeBuoyPickerState;
+		this.pendingTimeBuoyButtonOpenAfterComposition = false;
+		if (
+			state !== null
+			&& state.mobile
+			&& state.phase === "open"
+			&& restoreFocus
+			&& this.currentLayout === "mobile"
+			&& this.composerOpen
+			&& this.timeBuoyPickerEl !== null
+		) {
+			this.beginMobileTimeBuoyPickerClose(state, focusTarget);
+			return;
+		}
+		if (state?.phase === "closing" && restoreFocus) {
+			return;
+		}
+		this.finishTimeBuoyPickerClose(state, restoreFocus, focusTarget);
+	}
+
+	private beginMobileTimeBuoyPickerClose(
+		state: OpenTimeBuoyPickerState,
+		focusTarget: TimeBuoyPickerFocusTarget,
+	): void {
+		const picker = this.timeBuoyPickerEl;
+		if (picker === null) {
+			this.finishTimeBuoyPickerClose(state, true, focusTarget);
+			return;
+		}
+		this.clearTimeBuoyPickerTransitionTasks();
+		state.phase = "closing";
+		picker.removeClass("is-open");
+		picker.addClass("is-closing");
+		picker.setAttr("aria-hidden", "true");
+		this.timeBuoyPickerBackdropEl?.removeClass("is-open");
+		this.timeBuoyPickerBackdropEl?.addClass("is-closing");
+		this.timeBuoyButtonEl?.setAttr("aria-expanded", "false");
+		const finish = (): void => this.finishTimeBuoyPickerClose(state, true, focusTarget);
+		this.addTimeBuoyPickerEvent(picker, "transitionend", (event) => {
+			if (event.target === picker && event.propertyName === "transform") {
+				finish();
+			}
+		});
+		this.timeBuoyPickerCloseTimerId = this.containerEl.win.setTimeout(finish, TIME_BUOY_PICKER_CLOSE_FALLBACK_MS);
+	}
+
+	private finishTimeBuoyPickerClose(
+		state: OpenTimeBuoyPickerState | null,
+		restoreFocus: boolean,
+		focusTarget: TimeBuoyPickerFocusTarget,
+	): void {
+		if (this.timeBuoyPickerState !== state) {
+			return;
+		}
+		const source = state?.source ?? null;
+		this.clearTimeBuoyPickerTransitionTasks();
+		this.clearTimeBuoyPickerEventListeners();
+		this.timeBuoyPickerEl?.remove();
+		this.timeBuoyPickerBackdropEl?.remove();
+		this.timeBuoyPickerEl = null;
+		this.timeBuoyPickerBackdropEl = null;
+		this.timeBuoyPickerState = null;
+		this.timeBuoyMonthStatusEl?.setText("");
+		this.composerEl?.removeClass("is-time-buoy-picker-open");
+		this.timeBuoyButtonEl?.setAttr("aria-expanded", "false");
+		if (!restoreFocus) {
+			return;
+		}
+		if (focusTarget === "input") {
+			this.focusComposerInputNow();
+		} else if (source === "button" && this.currentLayout !== "mobile") {
+			this.timeBuoyButtonEl?.focus();
+		} else {
+			this.focusComposerInputNow();
+		}
+	}
+
+	private clearTimeBuoyPickerTransitionTasks(): void {
+		this.timeBuoyPickerKeyboardWaitCancel?.();
+		this.timeBuoyPickerKeyboardWaitCancel = null;
+		this.clearTimeBuoyPickerFocusFrame();
+		if (this.timeBuoyPickerCloseTimerId !== null) {
+			this.containerEl.win.clearTimeout(this.timeBuoyPickerCloseTimerId);
+			this.timeBuoyPickerCloseTimerId = null;
+		}
+	}
+
+	private clearTimeBuoyPickerFocusFrame(): void {
+		if (this.timeBuoyPickerFocusFrameId === null) {
+			return;
+		}
+		this.containerEl.win.cancelAnimationFrame(this.timeBuoyPickerFocusFrameId);
+		this.timeBuoyPickerFocusFrameId = null;
+	}
+
+	private addTimeBuoyPickerEvent<K extends keyof HTMLElementEventMap>(
+		element: HTMLElement,
+		type: K,
+		listener: (event: HTMLElementEventMap[K]) => void,
+	): void {
+		element.addEventListener(type, listener as EventListener);
+		this.timeBuoyPickerEventCleanups.push(() => element.removeEventListener(type, listener as EventListener));
+	}
+
+	private clearTimeBuoyPickerEventListeners(): void {
+		for (const cleanup of this.timeBuoyPickerEventCleanups.splice(0)) {
+			cleanup();
+		}
+	}
+
+	private handleTimeBuoyComposerInput(event: Event): boolean {
+		if (this.suppressTimeBuoyAutoOpen || this.inputEl === null) {
+			return false;
+		}
+		if (this.timeBuoyPickerState?.source === "at-input") {
+			this.closeTimeBuoyPicker(false);
+		}
+		if (!this.settingsService.getSettings().timeBuoyEnabled || this.isSaving) {
+			return false;
+		}
+		const inputEvent = this.asInputEvent(event);
+		if (inputEvent === null) {
+			return false;
+		}
+		const triggerStart = getTimeBuoyTriggerStartForDirectInput(this.inputEl.value, {
+			inputType: inputEvent.inputType,
+			data: inputEvent.data,
+			isComposing: inputEvent.isComposing,
+			selectionStart: this.inputEl.selectionStart,
+			selectionEnd: this.inputEl.selectionEnd,
+		});
+		if (triggerStart === null) {
+			return false;
+		}
+		this.openTimeBuoyPicker("at-input", triggerStart);
+		return true;
+	}
+
+	private handleTimeBuoyCompositionEnd(event: CompositionEvent): void {
+		if (this.pendingTimeBuoyButtonOpenAfterComposition) {
+			this.pendingTimeBuoyButtonOpenAfterComposition = false;
+			this.openTimeBuoyPicker("button", null);
+			return;
+		}
+		const input = this.inputEl;
+		if (input === null || !this.settingsService.getSettings().timeBuoyEnabled || this.isSaving) {
+			return;
+		}
+		const triggerStart = getTimeBuoyTriggerStartAfterComposition(
+			input.value,
+			input.selectionStart,
+			input.selectionEnd,
+			event.data,
+		);
+		if (triggerStart !== null) {
+			this.openTimeBuoyPicker("at-input", triggerStart);
+		}
+	}
+
+	private closeTimeBuoyPickerIfTriggerMoved(): void {
+		const state = this.timeBuoyPickerState;
+		const input = this.inputEl;
+		if (
+			state?.source === "at-input"
+			&& input !== null
+			&& (input.selectionStart !== state.triggerEnd || input.selectionEnd !== state.triggerEnd)
+		) {
+			this.closeTimeBuoyPicker(false);
+		}
 	}
 
 	private shouldIgnoreHandledMobileToolClick(actionEl: HTMLElement, action: string | null): boolean {
@@ -3734,6 +4747,10 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (this.handleListEnterInputFallback(event)) {
+			return;
+		}
+		if (this.handleTimeBuoyComposerInput(event)) {
+			this.syncInputState();
 			return;
 		}
 		if (this.wikiLinkSuggest?.handleInput()) {
@@ -3933,6 +4950,9 @@ export class KnomoView extends ItemView {
 			this.isSaving || this.inputEl.disabled || this.inputEl.value.trim().length === 0;
 		const label = this.isSaving ? t("composer.saving") : t("composer.send");
 		this.sendButtonEl.setAttr("aria-label", label);
+		if (this.timeBuoyButtonEl !== null) {
+			this.timeBuoyButtonEl.disabled = this.isSaving || this.inputEl.disabled;
+		}
 	}
 
 	private updateCancelEditButtonState(): void {
@@ -4331,12 +5351,19 @@ export class KnomoView extends ItemView {
 			this.activeNav === "trash" ||
 			this.activeNav === "random" ||
 			this.activeNav === "shuffleDay" ||
+			this.activeNav === "time-buoy" ||
 			this.activeNav === "record-stats"
 		) {
 			return;
 		}
-		const memos = this.getFilteredMemos();
-		this.cardFlowCoordinator.updateBatchItems(memos);
+		const presentation = this.getCurrentCardFlowPresentation();
+		if (presentation.type !== "items") {
+			return;
+		}
+		const renderedMemoIds = this.getDirectCardElements(this.cardFlowEl)
+			.map((card) => card.getAttr("data-memo-id"))
+			.filter((memoId): memoId is string => memoId !== null);
+		this.cardFlowCoordinator.updateBatchItemsAfterRendered(presentation.memos, renderedMemoIds);
 		if (
 			this.mobileMemoHydrator.getSnapshot().renderNextBatchAfterHydration
 			&& this.cardFlowCoordinator.remainingCount > 0
@@ -4428,6 +5455,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleCardFlowScroll(): void {
+		if (this.activeNav === "time-buoy") {
+			const cardFlow = this.cardFlowEl;
+			if (
+				cardFlow !== null
+				&& this.timeBuoyLoadMoreObserver === null
+				&& this.timeBuoyRenderedCount < this.timeBuoyRenderItems.length
+				&& cardFlow.scrollTop + cardFlow.clientHeight >= cardFlow.scrollHeight - 160
+			) {
+				this.renderNextTimeBuoyBatch(this.renderGeneration);
+			}
+			return;
+		}
 		this.cardFlowCoordinator.handleScroll({
 			cardFlow: this.cardFlowEl,
 			isRecordStatsActive: this.activeNav === "record-stats",
@@ -4476,22 +5515,37 @@ export class KnomoView extends ItemView {
 	}
 
 	private findMemoById(memoId: string): MemoRecord | null {
-		return this.randomReunionController.getSnapshot().memos?.find((memo) => memo.id === memoId)
+		return this.memos.find((memo) => memo.id === memoId)
+			?? this.randomReunionController.getSnapshot().memos?.find((memo) => memo.id === memoId)
 			?? this.shuffleDayController.getSnapshot().memos.find((memo) => memo.id === memoId)
-			?? this.memos.find((memo) => memo.id === memoId)
+			?? this.timeBuoyViewController.getMemos().find((memo) => memo.id === memoId)
 			?? this.trashMemoController.getSnapshot().trashMemos?.find((memo) => memo.id === memoId)
 			?? null;
 	}
 
 	private startDateChangeWatcher(): void {
 		this.dateChangeWatcher.start(() => {
-			this.filteredMemosCache = null;
-			this.renderUiState();
+			this.handleLocalDateChange();
 			this.startDateChangeWatcher();
-			if (this.activeNav === "review") {
-				void this.ensureAllMemosLoaded();
-			}
 		});
+	}
+
+	private handleLocalDateChange(): void {
+		const nextDate = formatTimeBuoyDate(new Date());
+		if (nextDate === this.lastKnownLocalDate) {
+			return;
+		}
+		this.lastKnownLocalDate = nextDate;
+		this.filteredMemosCache = null;
+		this.renderUiState();
+		if (this.activeNav === "review") {
+			void this.ensureAllMemosLoaded();
+		}
+		if (this.activeNav === "time-buoy") {
+			void this.timeBuoyViewController.loadInitial();
+		} else if (this.settingsService.getSettings().timeBuoyEnabled) {
+			void this.timeBuoyViewController.loadTodayOnly();
+		}
 	}
 
 	private stopDateChangeWatcher(): void {
@@ -4550,12 +5604,12 @@ export class KnomoView extends ItemView {
 		if (memoId === null) {
 			return null;
 		}
-		return this.memos.find((memo) => memo.id === memoId) ?? null;
+		return this.findMemoById(memoId);
 	}
 
 	private async handleTaskMemoSaved(memo: MemoRecord): Promise<void> {
-		const previousMemo = this.memos.find((item) => item.id === memo.id);
-		if (previousMemo === undefined) {
+		const previousMemo = this.findMemoById(memo.id);
+		if (previousMemo === null) {
 			return;
 		}
 		const mutation: MemoMutation = { type: "update", previousMemo, memo };
@@ -4564,8 +5618,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleTaskMemoIssue(memo: MemoRecord): Promise<void> {
-		const previousMemo = this.memos.find((item) => item.id === memo.id);
-		if (previousMemo !== undefined) {
+		const previousMemo = this.findMemoById(memo.id);
+		if (previousMemo !== null) {
 			const mutation: MemoMutation = { type: "update", previousMemo, memo };
 			this.applyMemoMutation(mutation);
 			this.onMemoMutation(mutation, this);
@@ -4664,4 +5718,12 @@ function isListEnterInputEvent(event: InputEvent): boolean {
 
 function getMarkdownRenderPriority(renderIndex: number): MarkdownRenderPriority {
 	return renderIndex < INITIAL_VISIBLE_RENDER_COUNT ? "high" : "normal";
+}
+
+function isTimeBuoyTab(value: string | null): value is TimeBuoyTab {
+	return value === "today" || value === "upcoming" || value === "past";
+}
+
+function isTimeBuoyTabNavigationKey(key: string): boolean {
+	return key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End";
 }

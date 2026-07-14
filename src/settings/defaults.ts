@@ -21,6 +21,8 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	monthlyDateHeadingFormat: DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
 	monthlyDateOrder: DEFAULT_MONTHLY_DATE_ORDER,
 	legacyDailyHeadings: [],
+	timeBuoyEnabled: false,
+	timeBuoyIntroDismissed: false,
 	mobileCompactMode: "auto",
 	syncDebounceMs: DEFAULT_SYNC_DEBOUNCE_MS,
 	desktopSidebarWidth: DEFAULT_DESKTOP_SIDEBAR_WIDTH,

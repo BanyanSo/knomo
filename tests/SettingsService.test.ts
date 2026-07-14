@@ -4,11 +4,65 @@ import assert from "node:assert/strict";
 import type { KnomoSettings } from "../src/types/settings";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("enables time buoy by default only when no persisted setting or memo index exists", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const vault = await createMemoryVault({});
+	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
+	delete legacySettings.timeBuoyEnabled;
+	const plugin = createPlugin(vault, createSettings(), { initialData: { settings: legacySettings } });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeTimeBuoyDefault(false);
+
+	assert.equal(service.getSettings().timeBuoyEnabled, true);
+	assert.equal(service.getSettings().timeBuoyIntroDismissed, true);
+	assert.equal(service.consumeInitialTimeBuoyBuildPending(), true);
+	assert.equal(plugin.savedSettings?.timeBuoyEnabled, true);
+});
+
+test("keeps time buoy disabled for upgrades with an existing memo index", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const vault = await createMemoryVault({});
+	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
+	delete legacySettings.timeBuoyEnabled;
+	const plugin = createPlugin(vault, createSettings(), { initialData: { settings: legacySettings } });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeTimeBuoyDefault(true);
+
+	assert.equal(service.getSettings().timeBuoyEnabled, false);
+	assert.equal(service.getSettings().timeBuoyIntroDismissed, false);
+	assert.equal(service.consumeInitialTimeBuoyBuildPending(), false);
+	assert.equal(plugin.savedSettings?.timeBuoyEnabled, false);
+});
+
+test("does not override an explicitly persisted time buoy setting", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const vault = await createMemoryVault({});
+	const plugin = createPlugin(vault, { ...createSettings(), timeBuoyEnabled: true });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeTimeBuoyDefault(true);
+
+	assert.equal(service.getSettings().timeBuoyEnabled, true);
+	assert.equal(service.getSettings().timeBuoyIntroDismissed, true);
+	assert.equal(plugin.savedSettings, null);
+});
+
 test("migrates monthly files, system folder, monthlyRef paths, exclude rule, and backups", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const vault = await createMemoryVault({
 		"Memos/Memos-2026-05.md": "# 2026-05\n\n## 2026-05-18\n- 08:00:00 内容",
 		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/Memos-2026-05.md"), null, "\t"),
+		"Memos/_knomo-system/indexes/time-buoy/time-buoy-2026-07.json": JSON.stringify({
+			schemaVersion: 1,
+			targetPeriod: "2026-07",
+			updatedAt: "2026-07-01T00:00:00.000Z",
+			dates: {},
+		}),
 	});
 	vault.config.userIgnoreFilters = ["Memos/", "Memos/_knomo-system/"];
 	const plugin = createPlugin(vault, {
@@ -30,6 +84,7 @@ test("migrates monthly files, system folder, monthlyRef paths, exclude rule, and
 	assert.equal(result.status, "migrated");
 	assert.equal(vault.exists("Archive/Memos/Memos-2026-05.md"), true);
 	assert.equal(vault.exists("Archive/Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
+	assert.equal(vault.exists("Archive/Memos/_knomo-system/indexes/time-buoy/time-buoy-2026-07.json"), true);
 	assert.equal(vault.exists("Memos/Memos-2026-05.md"), false);
 	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md").startsWith("<!-- knomo:monthly-archive\nKnomo monthly archive file"), true);
 	const index = JSON.parse(vault.readText("Archive/Memos/_knomo-system/indexes/memo-index-2026-05.json")) as ReturnType<typeof createIndex>;
@@ -535,6 +590,7 @@ function createSettings(): KnomoSettings {
 		monthlyDateHeadingFormat: "## YYYY-MM-DD",
 		monthlyDateOrder: "asc",
 		legacyDailyHeadings: [],
+		timeBuoyEnabled: false,
 		mobileCompactMode: "auto",
 		syncDebounceMs: 1000,
 		desktopSidebarWidth: 248,

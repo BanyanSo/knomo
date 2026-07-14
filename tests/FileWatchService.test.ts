@@ -81,12 +81,16 @@ test("FileWatchService delegates sync errors to the injected callback", async ()
 	assert.equal(receivedError, syncError);
 });
 
-test("FileWatchService refreshes views when a memo-index file changes", async () => {
+test("FileWatchService refreshes views when a memo-index or Time buoy index file changes", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");
 	const { FileWatchService } = await import("../src/services/FileWatchService");
 	const file = Object.assign(new TFile(), {
 		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
+		extension: "json",
+	});
+	const timeBuoyFile = Object.assign(new TFile(), {
+		path: "Memos/_knomo-system/indexes/time-buoy/time-buoy-2026-07 conflict.json",
 		extension: "json",
 	});
 	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
@@ -122,6 +126,7 @@ test("FileWatchService refreshes views when a memo-index file changes", async ()
 		{
 			isPotentialDailyFile: () => false,
 			isMemoIndexFile: (path: string) => path === file.path,
+			isTimeBuoyIndexFile: (path: string) => path === timeBuoyFile.path,
 			getSyncDebounceMs: () => 0,
 			syncExternalDailyFile: async () => {
 				dailySyncCalled = true;
@@ -154,14 +159,25 @@ test("FileWatchService refreshes views when a memo-index file changes", async ()
 
 	assert.equal(refreshCount, 1);
 	assert.equal(dailySyncCalled, false);
+
+	triggerCreate(timeBuoyFile);
+	const timeBuoyTimer = timerHandlers[1];
+	assert.notEqual(timeBuoyTimer, undefined);
+	timeBuoyTimer?.();
+	await waitImmediate();
+	assert.equal(refreshCount, 2);
 });
 
-test("FileWatchService ignores memo-index changes caused by Knomo writes", async () => {
+test("FileWatchService ignores memo-index and Time buoy index changes caused by Knomo writes", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");
 	const { FileWatchService } = await import("../src/services/FileWatchService");
 	const file = Object.assign(new TFile(), {
 		path: "Memos/_knomo-system/indexes/memo-index-2026-06.json",
+		extension: "json",
+	});
+	const timeBuoyFile = Object.assign(new TFile(), {
+		path: "Memos/_knomo-system/indexes/time-buoy/time-buoy-2026-07.json",
 		extension: "json",
 	});
 	const handlersByEvent = new Map<string, (...args: unknown[]) => void>();
@@ -189,13 +205,16 @@ test("FileWatchService ignores memo-index changes caused by Knomo writes", async
 	const service = new FileWatchService(
 		app as never,
 		{
-			consumeByReason: () => ({ opId: "op-index" }),
+			consumeByReason: (_path: string, reason: string) => (
+				reason === "index" || reason === "time_buoy_index" ? { opId: `op-${reason}` } : null
+			),
 			consumeByExpectedHash: () => null,
 			cleanup: () => undefined,
 		} as never,
 		{
 			isPotentialDailyFile: () => false,
 			isMemoIndexFile: (path: string) => path === file.path,
+			isTimeBuoyIndexFile: (path: string) => path === timeBuoyFile.path,
 			getSyncDebounceMs: () => 0,
 		} as never,
 		() => {
@@ -211,6 +230,11 @@ test("FileWatchService ignores memo-index changes caused by Knomo writes", async
 	timerHandlers[0]?.();
 	await waitImmediate();
 
+	assert.equal(refreshCount, 0);
+
+	handlersByEvent.get("modify")?.(timeBuoyFile);
+	timerHandlers[1]?.();
+	await waitImmediate();
 	assert.equal(refreshCount, 0);
 });
 

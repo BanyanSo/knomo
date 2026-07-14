@@ -11,6 +11,111 @@ body {
 	--knomo-app-background-secondary: var(--background-secondary);
 }
 
+/* Time buoy */
+.knomo-plugin .knomo-time-buoy-intro {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-3);
+	margin-block-end: var(--size-4-5);
+	padding: var(--size-4-4);
+	border: var(--border-width) solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+}
+
+.knomo-plugin .knomo-time-buoy-intro-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+
+.knomo-plugin .knomo-time-buoy-intro-actions button {
+	min-height: 44px;
+}
+
+.knomo-plugin .knomo-time-buoy-panel {
+	display: block;
+}
+
+.knomo-plugin .knomo-time-buoy-panel[hidden] {
+	display: none;
+}
+
+.knomo-plugin .knomo-time-buoy-tabs {
+	margin-block-end: var(--size-4-4);
+}
+
+.knomo-plugin .knomo-card.has-time-buoy {
+	padding-block-end: 18px;
+}
+
+.knomo-plugin .knomo-card-time-buoy {
+	position: absolute;
+	right: 12px;
+	bottom: 0;
+	z-index: 2;
+	display: block;
+	width: 18px;
+	height: 18px;
+	color: var(--interactive-accent);
+	pointer-events: none;
+}
+
+.knomo-plugin .knomo-card-time-buoy > svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.knomo-plugin .knomo-card.is-time-buoy-past .knomo-card-time-buoy {
+	color: var(--text-faint);
+}
+
+.knomo-plugin .knomo-card-time-buoy-wave {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	z-index: 1;
+	display: block;
+	width: 100%;
+	height: 12px;
+	overflow: hidden;
+	border-radius: 0 0 8px 8px;
+	color: var(--interactive-accent);
+	pointer-events: none;
+}
+
+.knomo-plugin .knomo-card-time-buoy-wave-fill {
+	fill: currentColor;
+	opacity: 0.08;
+}
+
+.knomo-plugin .knomo-card-time-buoy-wave-line {
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.2;
+	stroke-linecap: round;
+	vector-effect: non-scaling-stroke;
+}
+
+.knomo-plugin .knomo-time-buoy-error-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--size-4-2);
+}
+
+.knomo-plugin .knomo-time-buoy-action {
+	min-height: 44px;
+}
+
+.knomo-plugin .knomo-time-buoy-action:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
 .knomo-plugin {
 	--knomo-sidebar-width: 248px;
 	--knomo-sidebar-content-gap: 10px;
@@ -1632,6 +1737,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
    8. Composer
    -------------------------------------------------------------------------- */
 .knomo-plugin .knomo-composer {
+	position: relative;
 	flex: 0 0 auto;
 	min-height: 96px;
 	margin: 0 0 8px;
@@ -1831,7 +1937,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: flex;
 	flex: 1 1 auto;
 	min-width: 0;
-	gap: 8px;
+	gap: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-tool-group::-webkit-scrollbar {
+	display: none;
 }
 
 .knomo-plugin .knomo-tool-button {
@@ -1852,7 +1964,176 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	cursor: pointer;
 }
 
+.knomo-plugin .knomo-tool-button[aria-expanded="true"] {
+	color: var(--text-accent);
+}
+
+.knomo-plugin .knomo-time-buoy-picker {
+	box-sizing: border-box;
+	z-index: 10030;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+	width: min(328px, calc(100% - 24px));
+	padding: 10px 10px 16px;
+	border: var(--border-width) solid var(--background-modifier-border);
+	border-radius: var(--radius-l);
+	background: var(--background-primary);
+	box-shadow: var(--shadow-l);
+}
+
+.knomo-plugin .knomo-time-buoy-picker.is-desktop {
+	position: absolute;
+	left: var(--knomo-time-buoy-picker-left, 8px);
+	bottom: var(--knomo-time-buoy-picker-bottom, calc(100% + 8px));
+	max-height: var(--knomo-time-buoy-picker-max-height, calc(100dvh - 24px));
+	overflow-y: auto;
+}
+
+.knomo-plugin .knomo-time-buoy-picker.is-desktop.is-below {
+	top: var(--knomo-time-buoy-picker-top, calc(100% + 8px));
+	bottom: auto;
+}
+
+.knomo-plugin .knomo-time-buoy-picker.is-desktop .knomo-time-buoy-picker-shortcut,
+.knomo-plugin .knomo-time-buoy-picker.is-desktop .knomo-time-buoy-picker-day {
+	width: 100%;
+	min-width: 0;
+}
+
+.knomo-plugin .knomo-time-buoy-picker-header,
+.knomo-plugin .knomo-time-buoy-picker-month-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+}
+
+.knomo-plugin .knomo-time-buoy-picker-title,
+.knomo-plugin .knomo-time-buoy-picker-month-label {
+	font-weight: var(--font-semibold);
+}
+
+.knomo-plugin .knomo-time-buoy-picker-month-label {
+	text-align: center;
+}
+
+.knomo-plugin .knomo-time-buoy-picker-icon-button,
+.knomo-plugin .knomo-time-buoy-picker-shortcut,
+.knomo-plugin .knomo-time-buoy-picker-day {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 36px;
+	min-height: 36px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-s);
+	background: transparent;
+	box-shadow: none;
+}
+
+.knomo-plugin .knomo-time-buoy-picker-icon-button {
+	width: 44px;
+	height: 44px;
+}
+
+.knomo-plugin .knomo-time-buoy-picker-shortcuts {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: var(--size-4-1);
+}
+
+.knomo-plugin .knomo-time-buoy-picker-shortcut {
+	padding-inline: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+}
+
+.knomo-plugin .knomo-time-buoy-picker-grid {
+	display: grid;
+	grid-template-columns: repeat(7, minmax(0, 1fr));
+	gap: 2px;
+}
+
+.knomo-plugin .knomo-time-buoy-picker-weekday {
+	padding-block: var(--size-4-1);
+	color: var(--text-muted);
+	text-align: center;
+	font-size: var(--font-ui-smaller);
+}
+
+.knomo-plugin .knomo-time-buoy-picker-day.is-adjacent {
+	color: var(--text-faint);
+}
+
+.knomo-plugin .knomo-time-buoy-picker-day.is-today {
+	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.knomo-plugin .knomo-time-buoy-picker-day:disabled {
+	color: var(--text-faint);
+	opacity: 0.45;
+}
+
+.knomo-plugin .knomo-time-buoy-picker button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.knomo-plugin .knomo-time-buoy-picker-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 10029;
+	background: rgba(0, 0, 0, 0.48);
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity var(--knomo-transition-backdrop);
+}
+
+.knomo-plugin .knomo-mobile-composer-stage > .knomo-time-buoy-picker-backdrop {
+	z-index: 2;
+}
+
+.knomo-plugin .knomo-mobile-composer-stage > .knomo-time-buoy-picker-backdrop.is-open {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-time-buoy-picker.is-mobile {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	width: 100%;
+	padding-bottom: var(--size-4-8);
+	max-height: min(70dvh, 560px);
+	overflow-y: auto;
+	border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+	opacity: 0;
+	transform: translateY(100%);
+	pointer-events: none;
+	transition:
+		transform var(--knomo-transition-panel),
+		opacity var(--knomo-transition-backdrop);
+}
+
+.knomo-plugin .knomo-time-buoy-picker.is-mobile.is-open {
+	opacity: 1;
+	transform: translateY(0);
+	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-time-buoy-picker.is-mobile .knomo-time-buoy-picker-day,
+.knomo-plugin .knomo-time-buoy-picker.is-mobile .knomo-time-buoy-picker-shortcut {
+	min-width: 44px;
+	min-height: 44px;
+}
+
 @media (hover: hover) and (pointer: fine) {
+	.knomo-plugin .knomo-time-buoy-picker.is-desktop button:hover:not(:disabled) {
+		background: var(--background-modifier-hover);
+	}
+
 	.knomo-plugin .knomo-tool-button:hover,
 	.knomo-plugin .knomo-tool-button:focus-visible {
 		color: var(--text-muted);
@@ -1868,6 +2149,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	border-radius: 22px;
 	color: var(--text-muted);
 	font-size: 24px;
+	margin-block: 0;
 }
 
 .knomo-plugin.is-layout-mobile .knomo-tool-button:hover,
@@ -2132,6 +2414,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: var(--knomo-card-surface);
 	box-shadow: var(--knomo-card-shadow);
 	transition: box-shadow var(--knomo-transition-fast);
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-card {
+	padding-inline: 12px;
 }
 
 .knomo-plugin .knomo-card:hover,
@@ -2840,6 +3126,10 @@ body .knomo-mobile-create-fab.is-hidden {
 		padding: var(--size-4-2) var(--size-4-3);
 	}
 
+	.knomo-plugin.is-mobile-compact .knomo-card.has-time-buoy {
+		padding-block-end: 18px;
+	}
+
 	.knomo-plugin.is-mobile-compact .knomo-card-content {
 		font-size: 15px;
 	}
@@ -3077,9 +3367,19 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-mobile-composer-layer .knomo-tool-group {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 0;
 	flex: 1 1 auto;
 	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.knomo-mobile-composer-layer .knomo-tool-group::-webkit-scrollbar {
+	display: none;
+}
+
+.knomo-mobile-composer-layer.knomo-plugin.is-layout-mobile .knomo-composer.is-time-buoy-picker-open {
+	overflow: visible;
 }
 
 .knomo-mobile-composer-layer .knomo-tool-button {
@@ -3092,6 +3392,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	min-height: 44px;
 	flex: 0 0 44px;
 	font-size: 28px;
+	margin-block: 0;
 }
 
 .knomo-mobile-composer-layer .knomo-tool-button svg {
@@ -3568,7 +3869,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	white-space: normal;
 }
 
-.knomo-plugin .knomo-record-stats-view-controls {
+.knomo-plugin .knomo-record-stats-view-controls,
+.knomo-plugin .knomo-time-buoy-tabs {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: var(--size-2-1);
@@ -3577,7 +3879,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	background: var(--background-modifier-hover);
 }
 
-.knomo-plugin .knomo-record-stats-view-button {
+.knomo-plugin .knomo-record-stats-view-button,
+.knomo-plugin .knomo-time-buoy-tab {
 	min-height: var(--knomo-touch-target);
 	padding: 0 var(--size-4-2);
 	border: 0;
@@ -3589,12 +3892,15 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-plugin .knomo-record-stats-view-button:hover,
-.knomo-plugin .knomo-record-stats-view-button:focus-visible {
+.knomo-plugin .knomo-record-stats-view-button:focus-visible,
+.knomo-plugin .knomo-time-buoy-tab:hover,
+.knomo-plugin .knomo-time-buoy-tab:focus-visible {
 	color: var(--text-normal);
 	background: var(--knomo-row-hover);
 }
 
-.knomo-plugin .knomo-record-stats-view-button.is-active {
+.knomo-plugin .knomo-record-stats-view-button.is-active,
+.knomo-plugin .knomo-time-buoy-tab.is-active {
 	color: var(--text-on-accent);
 	background: var(--knomo-accent);
 }

@@ -258,6 +258,36 @@ test("handleAction dispatches every simple action to the expected view callbacks
 		"record-stats-retry": {
 			expected: ["record-retry"],
 		},
+		"retry-time-buoy": {
+			expected: ["time-buoy-retry"],
+		},
+		"rebuild-time-buoy": {
+			expected: ["time-buoy-rebuild"],
+		},
+		"cancel-time-buoy-rebuild": {
+			expected: ["time-buoy-cancel-rebuild"],
+		},
+		"time-buoy-tab-today": {
+			expected: ["time-buoy-tab:today"],
+		},
+		"time-buoy-tab-upcoming": {
+			expected: ["time-buoy-tab:upcoming"],
+		},
+		"time-buoy-tab-past": {
+			expected: ["time-buoy-tab:past"],
+		},
+		"load-more-time-buoy-cards": {
+			expected: ["time-buoy-more-cards"],
+		},
+		"open-time-buoy": {
+			expected: ["time-buoy-open"],
+		},
+		"enable-time-buoy-intro": {
+			expected: ["time-buoy-intro-enable"],
+		},
+		"dismiss-time-buoy-intro": {
+			expected: ["time-buoy-intro-dismiss"],
+		},
 		"retry-all-memos": {
 			overrides: { deferAllMemos: true },
 			expected: ["all-memos-loading", "ensure-all-memos"],
@@ -474,6 +504,22 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			goToNextRecordStatsPeriod: () => calls.push("record-next"),
 			retryRecordStats: async () => {
 				calls.push("record-retry");
+			},
+			retryTimeBuoy: async () => {
+				calls.push("time-buoy-retry");
+			},
+			rebuildTimeBuoy: async () => {
+				calls.push("time-buoy-rebuild");
+			},
+			cancelTimeBuoyRebuild: () => calls.push("time-buoy-cancel-rebuild"),
+			setTimeBuoyTab: (tab) => calls.push(`time-buoy-tab:${tab}`),
+			loadMoreTimeBuoyCards: () => calls.push("time-buoy-more-cards"),
+			openTimeBuoy: () => calls.push("time-buoy-open"),
+			enableTimeBuoyIntro: async () => {
+				calls.push("time-buoy-intro-enable");
+			},
+			dismissTimeBuoyIntro: async () => {
+				calls.push("time-buoy-intro-dismiss");
 			},
 			renderAllMemosLoadingState: () => calls.push("all-memos-loading"),
 			ensureAllMemosLoaded: async () => {

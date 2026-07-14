@@ -17,6 +17,7 @@ test("renders sidebar navigation, trash, stats, tags, and resizer structure", as
 	const elements = renderKnomoSidebar(sidebar.asHtml(), {
 		sidebarMinWidth: SIDEBAR_MIN_WIDTH,
 		sidebarMaxWidth: SIDEBAR_MAX_WIDTH,
+		timeBuoyEnabled: true,
 		createHiddenText: (container, id, text) => {
 			container.createSpan({ cls: "sr-only", text, attr: { id } });
 			return id;
@@ -44,9 +45,11 @@ test("renders sidebar navigation, trash, stats, tags, and resizer structure", as
 		"review",
 		"random",
 		"shuffleDay",
+		"time-buoy",
 		"record-stats",
 		"trash",
 	]);
+	assert.equal(sidebar.find(".knomo-time-buoy-count"), null);
 	assert.equal(sidebar.find("[data-nav='trash']")?.hasClass("knomo-trash-nav-button"), true);
 	assert.equal(elements.resizerEl.getAttr("role"), "separator");
 	assert.equal(elements.resizerEl.getAttr("aria-valuemin"), String(SIDEBAR_MIN_WIDTH));

@@ -135,6 +135,46 @@ test("random memo card keeps random review marking on the time opener", async ()
 	assert.equal(timeButton?.getAttr("data-random-reunion-card"), "true");
 });
 
+test("renders Time buoy card states with the project icon and a today wave", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const { KNOMO_TIME_BUOY_ICON } = await import("../src/icons");
+	const renderState = (status: "today" | "upcoming" | "past"): TestElement => {
+		const root = new TestElement("div");
+		renderKnomoMemoCard(root.asHtml(), makeMemo(), {
+			generation: 7,
+			renderIndex: 0,
+			includeActions: false,
+			randomCard: false,
+			timeBuoy: { status, label: `Time buoy ${status}` },
+			activeMenuMemoId: null,
+			deletedMemoIds: new Set(),
+			formatDisplayTime: (value) => value,
+			formatSettingsText: (value) => value,
+			getMarkdownPriority: () => "normal" as const,
+			getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+			queueMemoMarkdown: () => undefined,
+			renderMemoCardImages: () => undefined,
+			queueSourceReferenceMarkdown: () => undefined,
+		});
+		return root;
+	};
+
+	const today = renderState("today");
+	const upcoming = renderState("upcoming");
+	const past = renderState("past");
+	const indicator = today.find("[data-time-buoy-card='true']");
+	assert.equal(indicator?.getAttr("data-icon"), KNOMO_TIME_BUOY_ICON);
+	assert.equal(indicator?.getAttr("role"), "img");
+	assert.equal(indicator?.getAttr("aria-label"), "Time buoy today");
+	assert.equal(today.find("article")?.hasClass("is-time-buoy-today"), true);
+	assert.notEqual(today.find(".knomo-card-time-buoy-wave"), null);
+	assert.equal(upcoming.find("article")?.hasClass("is-time-buoy-upcoming"), true);
+	assert.equal(upcoming.find(".knomo-card-time-buoy-wave"), null);
+	assert.equal(past.find("article")?.hasClass("is-time-buoy-past"), true);
+	assert.equal(past.find(".knomo-card-time-buoy-wave"), null);
+});
+
 test("trash memo cards do not get daily note card-open attributes", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoTrashMemoCard } = await import("../src/ui/KnomoCard");
@@ -238,6 +278,10 @@ class TestElement {
 
 	createSpan(options: CreateElementOptions = {}): TestElement {
 		return this.createEl("span", options);
+	}
+
+	createSvg(tagName: string, options: CreateElementOptions = {}): TestElement {
+		return this.createEl(tagName, options);
 	}
 
 	createEl(tagName: string, options: CreateElementOptions = {}): TestElement {

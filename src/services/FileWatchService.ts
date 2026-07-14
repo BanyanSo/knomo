@@ -66,10 +66,17 @@ export class FileWatchService {
 		if (file.extension === "json" && this.syncOrchestrator.isMemoIndexFile(file.path)) {
 			this.queueIndexRefresh(file);
 		}
+		if (file.extension === "json" && this.isTimeBuoyIndexFile(file.path)) {
+			this.queueTimeBuoyRefresh(file.path);
+		}
 	}
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {
 		if (!(file instanceof TFile)) {
+			return;
+		}
+		if (this.isTimeBuoyIndexFile(oldPath) || this.isTimeBuoyIndexFile(file.path)) {
+			this.queueTimeBuoyRefresh(oldPath);
 			return;
 		}
 		if (this.syncOrchestrator.isMemoIndexFile(oldPath)) {
@@ -115,6 +122,13 @@ export class FileWatchService {
 			return;
 		}
 		const path = file.path;
+		if (this.isTimeBuoyIndexFile(path)) {
+			if (this.selfWriteTracker.consumeByReason(path, "time_buoy_index") !== null) {
+				return;
+			}
+			this.queueTimeBuoyRefresh(path);
+			return;
+		}
 		if (file.extension === "md" && this.syncOrchestrator.isPotentialDailyFile(path)) {
 			this.queueFileTask(`delete:${path}`, path, async () => {
 				const changed = await this.syncOrchestrator.syncDeletedDailyFile(path);
@@ -153,6 +167,22 @@ export class FileWatchService {
 
 	private queueMemoIndexRecovery(path: string): void {
 		this.queueFileTask(MEMO_INDEX_RECOVERY_TASK_KEY, path, () => this.runMemoIndexRecovery());
+	}
+
+	private queueTimeBuoyRefresh(path: string): void {
+		this.queueFileTask(`time-buoy-refresh:${path}`, path, async () => {
+			if (this.selfWriteTracker.consumeByReason(path, "time_buoy_index") !== null) {
+				return;
+			}
+			await this.onSynced?.();
+		});
+	}
+
+	private isTimeBuoyIndexFile(path: string): boolean {
+		const orchestrator = this.syncOrchestrator as SyncOrchestrator & {
+			isTimeBuoyIndexFile?: (candidatePath: string) => boolean;
+		};
+		return orchestrator.isTimeBuoyIndexFile?.(path) === true;
 	}
 
 	private async runMemoIndexRecovery(): Promise<void> {

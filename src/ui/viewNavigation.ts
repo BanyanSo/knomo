@@ -1,4 +1,4 @@
-import { KNOMO_ALL_NOTES_ICON, KNOMO_RANDOM_REUNION_ICON } from "../icons";
+import { KNOMO_ALL_NOTES_ICON, KNOMO_RANDOM_REUNION_ICON, KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
 import {
 	getRecordStatsSearchFilterLabel,
@@ -7,7 +7,7 @@ import {
 } from "./viewFilters";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 
-export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "record-stats" | "trash";
+export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "time-buoy" | "record-stats" | "trash";
 export type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random" | "shuffleDay";
 
 export interface SearchDateOption {
@@ -46,6 +46,7 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "review", label: t("nav.review"), icon: "calendar-check" },
 	{ nav: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON },
 	{ nav: "shuffleDay", label: t("nav.shuffleDay"), icon: "calendar-days" },
+	{ nav: "time-buoy", label: t("nav.timeBuoy"), icon: KNOMO_TIME_BUOY_ICON },
 	{ nav: "record-stats", label: t("nav.recordStats"), icon: "chart-column-increasing" },
 ];
 
@@ -71,8 +72,10 @@ export const SEARCH_DATE_OPTIONS: SearchDateOption[] = [
 	{ filter: "last-month", label: t("date.lastMonth"), icon: "calendar-minus" },
 ];
 
-export function getSidebarNavItems(): SidebarNavItem[] {
-	return SIDEBAR_NAV_ITEMS;
+export function getSidebarNavItems(timeBuoyEnabled = false): SidebarNavItem[] {
+	return timeBuoyEnabled
+		? SIDEBAR_NAV_ITEMS
+		: SIDEBAR_NAV_ITEMS.filter((item) => item.nav !== "time-buoy");
 }
 
 export function getAllSidebarNavItems(): SidebarNavItem[] {
@@ -142,6 +145,9 @@ export function getEmptyStateTitle(activeNav: SidebarNav): string {
 	}
 	if (activeNav === "shuffleDay") {
 		return t("shuffleDay.emptyNotEnoughTitle");
+	}
+	if (activeNav === "time-buoy") {
+		return t("timeBuoy.empty.today.title");
 	}
 	return t("empty.generic");
 }

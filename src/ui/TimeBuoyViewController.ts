@@ -16,8 +16,8 @@ export interface TimeBuoyTabItem {
 
 export interface TimeBuoyViewSnapshot {
 	loading: boolean;
-	error: unknown | null;
-	todayError: unknown | null;
+	error: unknown;
+	todayError: unknown;
 	activeTab: TimeBuoyTab;
 	today: TimeBuoyTabItem[];
 	upcoming: TimeBuoyTabItem[];

@@ -131,7 +131,7 @@ function isEmbeddedInUrlEmailOrPath(content: string, start: number, end: number)
 	if (before.includes("@") || after.startsWith("@") || after.startsWith("＠")) {
 		return true;
 	}
-	const strippedAfter = after.replace(/^[)\]}>）】》」』〉〕”’\"']+/, "");
+	const strippedAfter = after.replace(/^[)\]}>）】》」』〉〕”’"']+/, "");
 	return /^\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(strippedAfter);
 }
 

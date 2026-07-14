@@ -448,9 +448,13 @@ export function parseTimeBuoyIndexState(content: string): TimeBuoyIndexState {
 		|| !Number.isFinite(new Date(value.updatedAt).getTime())
 		|| typeof value.dirty !== "boolean"
 		|| !Array.isArray(value.affectedMemoIds)
-		|| !value.affectedMemoIds.every((memoId) => typeof memoId === "string" && memoId.length > 0)
+		|| !value.affectedMemoIds.every((memoId: unknown): memoId is string => (
+			typeof memoId === "string" && memoId.length > 0
+		))
 		|| !Array.isArray(value.expectedPeriods)
-		|| !value.expectedPeriods.every((period) => typeof period === "string" && isTimeBuoyPeriod(period))
+		|| !value.expectedPeriods.every((period: unknown): period is string => (
+			typeof period === "string" && isTimeBuoyPeriod(period)
+		))
 	) {
 		throw new Error("Invalid time buoy index state schema.");
 	}

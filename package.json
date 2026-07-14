@@ -9,8 +9,8 @@
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"check:i18n": "node scripts/check-i18n.mjs",
 		"verify": "node scripts/verify.mjs",
-		"lint": "eslint src package.json",
-		"lint:fix": "eslint src package.json --fix",
+		"lint": "eslint src",
+		"lint:fix": "eslint src --fix",
 		"test": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js"
 	},
 	"keywords": [
@@ -26,7 +26,6 @@
 		"@typescript-eslint/parser": "^8.61.0",
 		"esbuild": "^0.25.0",
 		"eslint": "^9.39.4",
-		"eslint-plugin-obsidianmd": "^0.3.0",
 		"obsidian": "1.11.0",
 		"typescript": "^5.8.0"
 	},

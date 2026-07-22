@@ -28,10 +28,6 @@ export class ObsidianExcludeService {
 		await vault.setConfig(EXCLUDE_RULES_CONFIG_KEY, uniqueRules);
 	}
 
-	hasRule(rule: string): boolean {
-		return this.getExcludeRules().includes(rule);
-	}
-
 	async ensureRule(rule: string): Promise<{ addedByKnomo: boolean }> {
 		const rules = this.getExcludeRules();
 		if (rules.includes(rule)) {

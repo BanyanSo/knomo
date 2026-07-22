@@ -23,15 +23,6 @@ export class MemoQueryService {
 		private readonly memoIndexStore: MemoIndexStore,
 	) {}
 
-	async listCurrentMonthMemos(): Promise<MemoRecord[]> {
-		const settings = this.getSettings();
-		const period = formatMonthPeriod(new Date());
-		const memos = await this.memoIndexStore.loadExistingPeriods(settings.monthlyMemoFolder, [period]);
-		return memos
-			.filter((memo) => memo.status === "active")
-			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-	}
-
 	async listRecentMemos(): Promise<MemoRecord[]> {
 		const settings = this.getSettings();
 		const periods = getRecentMemoPeriods();

@@ -37,7 +37,7 @@ export class SettingsService {
 	private readonly monthlyFolderMigrationService: MonthlyFolderMigrationService;
 
 	constructor(
-		private readonly plugin: Plugin,
+		plugin: Plugin,
 		onBeforeArchiveMove?: (oldPath: string, newPath: string) => void | (() => void),
 		private readonly pluginDataStore = new PluginDataStore(plugin),
 	) {

@@ -19,11 +19,6 @@ export class SelfWriteTracker {
 		this.markersByPath.set(path, markers);
 	}
 
-	hasRecent(path: string): boolean {
-		this.cleanup();
-		return (this.markersByPath.get(path)?.length ?? 0) > 0;
-	}
-
 	consumeByExpectedHash(path: string, expectedHash: string): SelfWriteMarker | null {
 		this.cleanup();
 		const markers = this.markersByPath.get(path);

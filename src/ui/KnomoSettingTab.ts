@@ -19,6 +19,7 @@ import type { SyncConflictFile } from "../types/syncConflict";
 import type { MaintenanceDiagnostic } from "../utils/pluginData";
 import { normalizeVaultPath } from "../utils/path";
 import { formatMemoIssue, formatServiceError, formatSettingsText } from "../utils/serviceText";
+import { showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoView } from "./KnomoView";
 
 const SETTING_NOTICE_DELAY_MS = 800;
@@ -493,11 +494,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 			if (plan.conflicts.length > 0) {
 				throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
 			}
-			const confirmed = this.containerEl.win.confirm(t("settings.monthlyFileFormat.confirm", {
-				current: plan.oldFormat,
-				next: plan.newFormat,
-				count: plan.periods.length,
-			}));
+			const confirmed = await showKnomoConfirmModal(this.app, {
+				message: t("settings.monthlyFileFormat.confirm", {
+					current: plan.oldFormat,
+					next: plan.newFormat,
+					count: plan.periods.length,
+				}),
+			});
 			if (!confirmed) {
 				return false;
 			}
@@ -540,15 +543,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 				if (plan.conflicts.length > 0) {
 					throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
 				}
-				const confirmed = this.containerEl.win.confirm(
-					t("settings.monthlyFolder.confirm", {
+				const confirmed = await showKnomoConfirmModal(this.app, {
+					message: t("settings.monthlyFolder.confirm", {
 						current: currentSettings.monthlyMemoFolder,
 						next: monthlyMemoFolder,
 						count: plan.monthlyFileMoves.length,
 						systemAction: plan.moveSystemFolder ? t("settings.monthlyFolder.moveSystem") : t("settings.monthlyFolder.createSystem"),
 						rewritten: plan.rewrittenMonthlyRefs,
 					}),
-				);
+				});
 				if (!confirmed) {
 					return;
 				}
@@ -856,15 +859,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 		try {
 			const estimate = await this.syncOrchestrator.estimateRebuildIndex(scope);
 			const monthlyModeText = mode === "index-and-monthly" ? t("settings.rebuild.monthlySync") : t("settings.rebuild.monthlyMissingOnly");
-			const confirmed = this.containerEl.win.confirm(
-				t("settings.rebuild.confirm", {
+			const confirmed = await showKnomoConfirmModal(this.app, {
+				message: t("settings.rebuild.confirm", {
 					scanned: estimate.scannedFiles,
 					created: estimate.estimatedNew,
 					updated: estimate.estimatedUpdated,
 					missing: estimate.estimatedMissing,
 					monthlyMode: monthlyModeText,
 				}),
-			);
+			});
 			if (!confirmed) {
 				this.renderRebuildResult(t("settings.rebuild.cancelled"));
 				return;
@@ -963,7 +966,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (this.monthlyRebuildRunning || period.length === 0) {
 			return;
 		}
-		const confirmed = this.containerEl.win.confirm(t("settings.monthlyRebuild.confirm", { period }));
+		const confirmed = await showKnomoConfirmModal(this.app, {
+			message: t("settings.monthlyRebuild.confirm", { period }),
+		});
 		if (!confirmed) {
 			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.cancelled"));
 			return;

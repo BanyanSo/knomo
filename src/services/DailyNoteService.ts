@@ -116,35 +116,8 @@ export class DailyNoteService {
 		};
 	}
 
-	async getOrCreateTodayDailyNote(): Promise<TFile> {
-		return this.getOrCreateDailyNoteForDate(new Date());
-	}
-
 	getTodayDailyNotePath(status = this.getStatus()): string {
 		return this.getDailyNotePathForDate(new Date(), status);
-	}
-
-	async insertMemoBlock(settings: KnomoSettings, block: string, trailer?: string): Promise<DailyNoteWriteResult> {
-		const file = await this.getOrCreateTodayDailyNote();
-		const combinedBlock = trailer ? block + "\n" + trailer : block;
-		const content = await this.app.vault.process(file, (currentContent) =>
-			this.markdownBlockService.insertMemoBlock(currentContent, {
-				heading: settings.dailyHeading,
-				block: combinedBlock,
-				position: settings.dailyInsertPosition,
-				createHeadingIfMissing: true,
-			}),
-		);
-		return {
-			file,
-			content,
-			ref: buildDailyRef(
-				file.path,
-				settings.dailyHeading,
-				block,
-				findLineNumber(content, block, settings.dailyInsertPosition === "bottom"),
-			),
-		};
 	}
 
 	async prepareMemoBlockInsert(

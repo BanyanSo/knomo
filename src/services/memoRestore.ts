@@ -55,15 +55,6 @@ export class MemoRestoreService {
 		private readonly markdownBlockService: MarkdownBlockService,
 	) {}
 
-	async restoreMemo(memoId: string): Promise<MemoRecord> {
-		const settings = this.getSettings();
-		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memoId);
-		if (currentMemo === null) {
-			throw new KnomoError("memo_not_found_or_cleaned");
-		}
-		return this.restoreCurrentMemo(settings, currentMemo);
-	}
-
 	async restoreMemoRecord(memo: MemoRecord): Promise<MemoRecord> {
 		const settings = this.getSettings();
 		const currentMemo = await this.memoIndexStore.findMemoByIdInPeriod(
@@ -137,15 +128,6 @@ export class MemoRestoreService {
 		}
 		markIndexSelfWrite(this.selfWriteTracker, opId, settings, new Date(restoredMemo.createdAt));
 		return restoredMemo;
-	}
-
-	async purgeDeletedMemo(memoId: string): Promise<void> {
-		const settings = this.getSettings();
-		const currentMemo = await this.memoIndexStore.findMemoById(settings.monthlyMemoFolder, memoId);
-		if (currentMemo === null) {
-			throw new KnomoError("memo_not_found_or_cleaned");
-		}
-		await this.purgeCurrentDeletedMemo(settings, currentMemo);
 	}
 
 	async purgeDeletedMemoRecord(memo: MemoRecord): Promise<void> {

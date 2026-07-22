@@ -18,15 +18,6 @@ import {
 import type { DailyInsertPosition } from "../types/settings";
 
 // 职责：提供完整 memo block 的解析、插入、更新和删除纯函数。
-export type MemoChangeType = "create" | "edit" | "delete" | "scan" | "repair";
-
-export interface MemoChange {
-	type: MemoChangeType;
-	memoId: string;
-	block: string;
-	startLine?: number;
-}
-
 export interface MemoMetadata {
 	tags: string[];
 	links: ParsedMemoBlock["links"];
@@ -100,30 +91,6 @@ export class MarkdownBlockService {
 		}
 		lines[targetLineIndex] = `${lines[targetLineIndex]} ^${blockId}`;
 		return lines.join("\n");
-	}
-
-	updateDailyBlock(currentContent: string, change: MemoChange): string {
-		if (change.type === "create") {
-			const normalizedContent = normalizeMarkdownLineEndings(currentContent).replace(/\s*$/, "");
-			return normalizedContent.length === 0 ? change.block : `${normalizedContent}\n${change.block}`;
-		}
-		if (change.startLine === undefined) {
-			throw new Error("Updating or deleting a memo block requires startLine.");
-		}
-		if (change.type === "edit") {
-			const lines = splitMarkdownLines(currentContent);
-			const parsedBlock = this.parseMemoBlock(lines, change.startLine);
-			if (parsedBlock === null) {
-				throw new Error(`Memo block not found at line ${change.startLine}.`);
-			}
-			const nextLines = [...lines];
-			nextLines.splice(change.startLine, parsedBlock.endLine - parsedBlock.startLine + 1, ...splitMarkdownLines(change.block));
-			return nextLines.join("\n");
-		}
-		if (change.type === "delete") {
-			return this.deleteMemoBlock(currentContent, change.startLine);
-		}
-		return currentContent;
 	}
 
 	parseMemoBlock(lines: string[], startLine: number): ParsedMemoBlock | null {
@@ -339,19 +306,6 @@ export class MarkdownBlockService {
 				: findBottomInsertIndex(lines, headingIndex, sectionEnd);
 		const nextLines = [...lines];
 		nextLines.splice(insertIndex, 0, ...blockLines);
-		return nextLines.join("\n");
-	}
-
-	updateMemoBlock(currentContent: string, startLine: number, nextContent: string): string {
-		const lines = splitMarkdownLines(currentContent);
-		const parsedBlock = this.parseMemoBlock(lines, startLine);
-		if (parsedBlock === null) {
-			throw new Error(`Memo block not found at line ${startLine}.`);
-		}
-
-		const nextBlock = this.buildMemoBlockWithBlockId(nextContent, parsedBlock.time, parsedBlock.blockId);
-		const nextLines = [...lines];
-		nextLines.splice(startLine, parsedBlock.endLine - parsedBlock.startLine + 1, ...splitMarkdownLines(nextBlock));
 		return nextLines.join("\n");
 	}
 

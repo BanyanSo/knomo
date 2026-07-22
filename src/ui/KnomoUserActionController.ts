@@ -90,7 +90,6 @@ interface KnomoUserActionControllerOptions {
 	) => void;
 	openRecordStatsTagFilter: (sourceEl: HTMLElement | null) => void;
 	openComposer: () => void;
-	closeComposerWithConfirm: () => void;
 	toggleCompactSearch: () => void;
 	runComposerToolAction: (action: ComposerToolAction) => boolean;
 	clearReference: () => void;
@@ -99,7 +98,7 @@ interface KnomoUserActionControllerOptions {
 	renderUiState: () => void;
 	syncUiChrome: () => void;
 	syncCardMenuState: () => void;
-	cancelEditingOrCloseComposer: () => void;
+	cancelComposerFromEscape: () => void;
 	closeOpenChromeFromEscape: () => void;
 }
 
@@ -398,9 +397,6 @@ export class KnomoUserActionController {
 			case "open-composer":
 				this.options.openComposer();
 				return;
-			case "close-composer":
-				this.options.closeComposerWithConfirm();
-				return;
 			case "toggle-compact-search":
 				this.options.toggleCompactSearch();
 				break;
@@ -467,7 +463,7 @@ export class KnomoUserActionController {
 		}
 		if (state.editingOrQuoting) {
 			event.preventDefault();
-			this.options.cancelEditingOrCloseComposer();
+			this.options.cancelComposerFromEscape();
 			return;
 		}
 		if (state.hasOpenChrome) {

@@ -126,14 +126,6 @@ export class TimeBuoyIndexStore {
 		});
 	}
 
-	async replacePeriod(
-		monthlyMemoFolder: string,
-		targetPeriod: string,
-		dates: TimeBuoyIndexShard["dates"],
-	): Promise<TimeBuoyIndexShard> {
-		return this.runWriteExclusive(() => this.writeReplacement(monthlyMemoFolder, targetPeriod, dates));
-	}
-
 	async replacePeriodsWithRollback(
 		monthlyMemoFolder: string,
 		replacements: ReadonlyMap<string, TimeBuoyIndexShard["dates"]>,

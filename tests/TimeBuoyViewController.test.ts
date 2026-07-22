@@ -53,6 +53,205 @@ test("loads every Time buoy once and partitions the complete result into tabs", 
 	assert.equal(snapshot.error, null);
 });
 
+test("shows a blocking loading state only for the first complete Time buoy load", async () => {
+	const firstQuery = createDeferred<TimeBuoyAllQueryResult>();
+	let renderCount = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: () => firstQuery.promise,
+		queryDate: async () => EMPTY_RESULT,
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => {
+			renderCount += 1;
+		},
+	});
+
+	const loading = controller.loadInitial();
+	assert.equal(controller.getSnapshot().loading, true);
+	assert.equal(renderCount, 1);
+
+	firstQuery.resolve({
+		items: [makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00")],
+		stale: [],
+		missingPeriods: [],
+		complete: true,
+	});
+	await loading;
+
+	assert.equal(controller.getSnapshot().loading, false);
+	assert.deepEqual(controller.getSnapshot().today.map((item) => item.memo.id), ["today"]);
+	assert.equal(renderCount, 2);
+});
+
+test("keeps complete Time buoy content visible and skips rendering when a warm refresh is unchanged", async () => {
+	const item = makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00");
+	const refreshQuery = createDeferred<TimeBuoyAllQueryResult>();
+	let queryCount = 0;
+	let renderCount = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: () => {
+			queryCount += 1;
+			return queryCount === 1
+				? Promise.resolve({ items: [item], stale: [], missingPeriods: [], complete: true })
+				: refreshQuery.promise;
+		},
+		queryDate: async () => EMPTY_RESULT,
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => {
+			renderCount += 1;
+		},
+	});
+	await controller.loadInitial();
+	renderCount = 0;
+
+	const refreshing = controller.loadInitial();
+	assert.equal(controller.getSnapshot().loading, false);
+	assert.deepEqual(controller.getSnapshot().today.map((entry) => entry.memo.id), ["today"]);
+	assert.equal(renderCount, 0);
+
+	refreshQuery.resolve({ items: [item], stale: [], missingPeriods: [], complete: true });
+	await refreshing;
+	assert.equal(renderCount, 0);
+});
+
+test("keeps a tab selected while a warm Time buoy refresh is pending", async () => {
+	const refreshQuery = createDeferred<TimeBuoyAllQueryResult>();
+	let queryCount = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: () => {
+			queryCount += 1;
+			return queryCount === 1 ? Promise.resolve(EMPTY_ALL_RESULT) : refreshQuery.promise;
+		},
+		queryDate: async () => EMPTY_RESULT,
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => undefined,
+	});
+	await controller.loadInitial();
+
+	const refreshing = controller.loadInitial();
+	controller.setActiveTab("upcoming");
+	refreshQuery.resolve(EMPTY_ALL_RESULT);
+	await refreshing;
+
+	assert.equal(controller.getSnapshot().activeTab, "upcoming");
+});
+
+test("restores the blocking loading state when retrying after a warm refresh failure", async () => {
+	const retryQuery = createDeferred<TimeBuoyAllQueryResult>();
+	let queryCount = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: () => {
+			queryCount += 1;
+			if (queryCount === 1) {
+				return Promise.resolve(EMPTY_ALL_RESULT);
+			}
+			if (queryCount === 2) {
+				return Promise.reject(new Error("transient refresh failure"));
+			}
+			return retryQuery.promise;
+		},
+		queryDate: async () => EMPTY_RESULT,
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => undefined,
+	});
+	await controller.loadInitial();
+	await controller.loadInitial();
+	assert.notEqual(controller.getSnapshot().error, null);
+
+	const retrying = controller.retry();
+	assert.equal(controller.getSnapshot().loading, true);
+	assert.equal(controller.getSnapshot().error, null);
+
+	retryQuery.resolve(EMPTY_ALL_RESULT);
+	await retrying;
+});
+
+test("renders a warm Time buoy refresh exactly once when its content changes", async () => {
+	const original = makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00");
+	const changed = makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00");
+	changed.memo = {
+		...changed.memo,
+		updatedAt: "2026-07-11T10:00:00+08:00",
+		contentHash: "changed-hash",
+	};
+	let result: TimeBuoyAllQueryResult = {
+		items: [original],
+		stale: [],
+		missingPeriods: [],
+		complete: true,
+	};
+	let renderCount = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: async () => result,
+		queryDate: async () => EMPTY_RESULT,
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => {
+			renderCount += 1;
+		},
+	});
+	await controller.loadInitial();
+	renderCount = 0;
+
+	result = { items: [changed], stale: [], missingPeriods: [], complete: true };
+	await controller.loadInitial();
+
+	assert.equal(controller.getSnapshot().today[0]?.memo.contentHash, "changed-hash");
+	assert.equal(renderCount, 1);
+});
+
+test("a today-only query does not suppress the first complete Time buoy loading state", async () => {
+	const completeQuery = createDeferred<TimeBuoyAllQueryResult>();
+	let renderCount = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: () => completeQuery.promise,
+		queryDate: async () => ({
+			items: [makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00")],
+			stale: [],
+			missingPeriods: [],
+		}),
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => {
+			renderCount += 1;
+		},
+	});
+	await controller.loadTodayOnly();
+	renderCount = 0;
+
+	const loading = controller.loadInitial();
+	assert.equal(controller.getSnapshot().loading, true);
+	assert.deepEqual(controller.getSnapshot().today, []);
+	assert.equal(renderCount, 1);
+
+	completeQuery.resolve(EMPTY_ALL_RESULT);
+	await loading;
+});
+
+test("clear restores the blocking state for the next complete Time buoy load", async () => {
+	const nextQuery = createDeferred<TimeBuoyAllQueryResult>();
+	let useDeferredQuery = false;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: () => useDeferredQuery ? nextQuery.promise : Promise.resolve(EMPTY_ALL_RESULT),
+		queryDate: async () => EMPTY_RESULT,
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => undefined,
+	});
+	await controller.loadInitial();
+
+	controller.clear();
+	useDeferredQuery = true;
+	const loading = controller.loadInitial();
+
+	assert.equal(controller.getSnapshot().loading, true);
+	nextQuery.resolve(EMPTY_ALL_RESULT);
+	await loading;
+});
+
 test("today-only refresh requests render only when the visible result changes", async () => {
 	let renderCount = 0;
 	let result: TimeBuoyQueryResult = {
@@ -254,17 +453,19 @@ test("reports rebuild progress and supports cancellation before commit", async (
 
 test("removes a deleted memo from visible buoy sections immediately", async () => {
 	const memo = { id: "memo-1", contentSnapshot: "回看 @2026-07-11", status: "active" } as MemoRecord;
+	let result: TimeBuoyAllQueryResult = {
+		items: [{
+			memo,
+			instance: { memoId: "memo-1", targetDate: "2026-07-11", sourcePeriod: "2026-07", buoyRevision: "revision" },
+		}],
+		stale: [],
+		missingPeriods: [],
+		complete: true,
+	};
+	let renderCount = 0;
 	const controller = new TimeBuoyViewController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: async () => ({
-			items: [{
-				memo,
-				instance: { memoId: "memo-1", targetDate: "2026-07-11", sourcePeriod: "2026-07", buoyRevision: "revision" },
-			}],
-			stale: [],
-			missingPeriods: [],
-			complete: true,
-		}),
+		queryAll: async () => result,
 		queryDate: async () => ({
 			items: [{
 				memo,
@@ -274,17 +475,23 @@ test("removes a deleted memo from visible buoy sections immediately", async () =
 			missingPeriods: [],
 		}),
 		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
-		requestRender: () => undefined,
+		requestRender: () => {
+			renderCount += 1;
+		},
 	});
 	await controller.loadInitial();
+	renderCount = 0;
+	result = EMPTY_ALL_RESULT;
 
 	controller.applyMemoMutation({
 		type: "delete",
 		previousMemo: memo,
 		memo: { ...memo, status: "deleted" },
 	});
+	await controller.loadInitial();
 
 	assert.deepEqual(controller.getSnapshot().today, []);
+	assert.equal(renderCount, 1);
 });
 
 function createController(
@@ -298,6 +505,14 @@ function createController(
 		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
 		requestRender: () => undefined,
 	});
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolve: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((innerResolve) => {
+		resolve = innerResolve;
+	});
+	return { promise, resolve };
 }
 
 function makeItem(memoId: string, targetDate: string, createdAt: string): TimeBuoyQueryItem {

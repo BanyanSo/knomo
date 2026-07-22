@@ -39,16 +39,6 @@ export class ViewRefreshScheduler {
 		return queuedPromise;
 	}
 
-	runNow(): Promise<void> {
-		const runningBefore = this.runningPromise !== null;
-		const refreshPromise = this.startRefresh();
-		if (!runningBefore) {
-			this.clearTimer();
-			this.settleQueuedWith(refreshPromise);
-		}
-		return refreshPromise;
-	}
-
 	clear(): void {
 		this.clearTimer();
 		this.queuedResolve?.();
@@ -98,16 +88,6 @@ export class ViewRefreshScheduler {
 		}
 		this.getWindow().clearTimeout(this.timerId);
 		this.timerId = null;
-	}
-
-	private settleQueuedWith(refreshPromise: Promise<void>): void {
-		const queuedResolve = this.queuedResolve;
-		const queuedReject = this.queuedReject;
-		this.clearQueuedPromise();
-		void refreshPromise.then(
-			() => queuedResolve?.(),
-			(error) => queuedReject?.(error),
-		);
 	}
 
 	private clearQueuedPromise(): void {

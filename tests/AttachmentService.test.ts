@@ -46,6 +46,79 @@ test("AttachmentService creates image embed links through Obsidian attachment AP
 	]);
 });
 
+test("AttachmentService trashes attachments created earlier in a failed batch", async () => {
+	const trashedPaths: string[] = [];
+	let createCount = 0;
+	const service = new AttachmentService({
+		fileManager: {
+			getAvailablePathForAttachment: async (name: string) => `Attachments/${name}`,
+			generateMarkdownLink: (attachment: { path: string }) => `[[${attachment.path}]]`,
+			trashFile: async (attachment: { path: string }) => {
+				trashedPaths.push(attachment.path);
+			},
+		},
+		vault: {
+			createBinary: async (path: string) => {
+				createCount += 1;
+				if (createCount === 2) {
+					throw new Error("disk full");
+				}
+				return { path };
+			},
+		},
+	} as never);
+
+	await assert.rejects(
+		service.createImageEmbedLinks("Daily/2026-06-02.md", [
+			createTestFile("first.png", "first-data"),
+			createTestFile("second.png", "second-data"),
+		]),
+		/disk full/,
+	);
+	assert.deepEqual(trashedPaths, ["Attachments/first.png"]);
+});
+
+test("AttachmentService continues rollback after one attachment cannot be trashed", async () => {
+	const trashAttempts: string[] = [];
+	let createCount = 0;
+	const service = new AttachmentService({
+		fileManager: {
+			getAvailablePathForAttachment: async (name: string) => `Attachments/${name}`,
+			generateMarkdownLink: (attachment: { path: string }) => `[[${attachment.path}]]`,
+			trashFile: async (attachment: { path: string }) => {
+				trashAttempts.push(attachment.path);
+				if (attachment.path.endsWith("second.png")) {
+					throw new Error("trash unavailable");
+				}
+			},
+		},
+		vault: {
+			createBinary: async (path: string) => {
+				createCount += 1;
+				if (createCount === 3) {
+					throw new Error("disk full");
+				}
+				return { path };
+			},
+		},
+	} as never);
+
+	await assert.rejects(
+		service.createImageEmbedLinks("Daily/2026-06-02.md", [
+			createTestFile("first.png", "first-data"),
+			createTestFile("second.png", "second-data"),
+			createTestFile("third.png", "third-data"),
+		]),
+		(error: unknown) => {
+			assert.equal(error instanceof Error, true);
+			assert.match((error as Error).message, /disk full/);
+			assert.match((error as Error).message, /Attachments\/second\.png/);
+			return true;
+		},
+	);
+	assert.deepEqual(trashAttempts, ["Attachments/second.png", "Attachments/first.png"]);
+});
+
 function createTestFile(name: string, content: string): File {
 	return {
 		name,

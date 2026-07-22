@@ -127,11 +127,6 @@ export class KnomoCardFlowBatcher {
 		return this.beginNextBatch(initialBatchSize);
 	}
 
-	updateItems(memos: MemoRecord[]): void {
-		this.items = memos;
-		this.hasMore = this.renderOffset < this.items.length;
-	}
-
 	updateItemsAfterRendered(memos: MemoRecord[], renderedMemoIds: readonly string[]): void {
 		const memosById = new Map(memos.map((memo) => [memo.id, memo]));
 		const renderedIds = new Set(renderedMemoIds);

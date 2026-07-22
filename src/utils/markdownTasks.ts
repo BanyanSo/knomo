@@ -25,12 +25,6 @@ export interface IndexedMarkdownTaskLine extends ParsedMarkdownTaskLine {
 	line: string;
 }
 
-export interface MarkdownTaskToggleResult {
-	content: string;
-	marker: WritableMarkdownTaskMarker;
-	task: IndexedMarkdownTaskLine;
-}
-
 const TASK_LINE_REGEX = /^([ \t]*)([-*+]|\d+[.)])([ \t]+)\[([ xX-])\]([ \t]*)(.*)$/;
 
 export function parseMarkdownTaskLine(line: string): ParsedMarkdownTaskLine | null {
@@ -93,16 +87,6 @@ export function getMarkdownTaskLineByIndex(content: string, taskIndex: number): 
 	return getMarkdownTaskLines(content)[taskIndex] ?? null;
 }
 
-export function toggleMarkdownTaskMarkerByIndex(content: string, taskIndex: number): MarkdownTaskToggleResult | null {
-	const task = getMarkdownTaskLineByIndex(content, taskIndex);
-	if (task === null) {
-		return null;
-	}
-	const marker = getToggledTaskMarker(task.marker);
-	const nextContent = replaceMarkdownTaskMarker(content, task, marker);
-	return nextContent === null ? null : { content: nextContent, marker, task };
-}
-
 export function replaceMarkdownTaskMarkerByIndex(
 	content: string,
 	taskIndex: number,
@@ -110,10 +94,6 @@ export function replaceMarkdownTaskMarkerByIndex(
 ): string | null {
 	const task = getMarkdownTaskLineByIndex(content, taskIndex);
 	return task === null ? null : replaceMarkdownTaskMarker(content, task, marker);
-}
-
-export function isMarkdownTaskChecked(marker: MarkdownTaskMarker): boolean {
-	return marker === "x" || marker === "X";
 }
 
 export function getMarkdownTaskEnterPatch(value: string, start: number, end: number): TextReplacement | null {
@@ -185,10 +165,6 @@ function replaceMarkdownTaskMarker(
 	}
 	lines[task.lineIndex] = `${line.slice(0, task.markerStart)}[${marker}]${line.slice(task.markerEnd)}`;
 	return lines.join("\n");
-}
-
-function getToggledTaskMarker(marker: MarkdownTaskMarker): WritableMarkdownTaskMarker {
-	return isMarkdownTaskChecked(marker) ? " " : marker === "-" ? " " : "x";
 }
 
 function isMarkdownTaskMarker(value: string): value is MarkdownTaskMarker {

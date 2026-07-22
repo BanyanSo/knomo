@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
 	getMarkdownTaskLines,
 	replaceMarkdownTaskMarkerByIndex,
-	toggleMarkdownTaskMarkerByIndex,
 } from "../src/utils/markdownTasks";
 
 test("indexes Markdown task lines outside fenced code blocks", () => {
@@ -32,19 +31,12 @@ test("indexes Markdown task lines outside fenced code blocks", () => {
 	]);
 });
 
-test("toggles only the requested task by task index", () => {
+test("updates only the requested task by task index", () => {
 	const content = "- [ ] first\n- [ ] second\n- [x] third";
 
-	const result = toggleMarkdownTaskMarkerByIndex(content, 1);
+	const result = replaceMarkdownTaskMarkerByIndex(content, 1, "x");
 
-	assert.equal(result?.content, "- [ ] first\n- [x] second\n- [x] third");
-	assert.equal(result?.marker, "x");
-});
-
-test("toggles completed and cancelled tasks back to unchecked", () => {
-	assert.equal(toggleMarkdownTaskMarkerByIndex("- [x] done", 0)?.content, "- [ ] done");
-	assert.equal(toggleMarkdownTaskMarkerByIndex("- [X] done", 0)?.content, "- [ ] done");
-	assert.equal(toggleMarkdownTaskMarkerByIndex("- [-] cancelled", 0)?.content, "- [ ] cancelled");
+	assert.equal(result, "- [ ] first\n- [x] second\n- [x] third");
 });
 
 test("preserves indentation, list marker, task body, and other Markdown", () => {
@@ -63,8 +55,8 @@ test("does not rewrite task-like text inside fenced code blocks", () => {
 		"- [ ] real",
 	].join("\n");
 
-	const result = toggleMarkdownTaskMarkerByIndex(content, 0);
+	const result = replaceMarkdownTaskMarkerByIndex(content, 0, "x");
 
-	assert.equal(result?.content, "```markdown\n- [ ] code\n```\n- [x] real");
-	assert.equal(toggleMarkdownTaskMarkerByIndex(content, 1), null);
+	assert.equal(result, "```markdown\n- [ ] code\n```\n- [x] real");
+	assert.equal(replaceMarkdownTaskMarkerByIndex(content, 1, "x"), null);
 });

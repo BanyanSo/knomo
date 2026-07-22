@@ -3503,6 +3503,58 @@ body .knomo-mobile-create-fab.is-hidden {
 	line-height: 1.25;
 }
 
+.modal.knomo-confirm-modal {
+	width: min(440px, calc(100vw - var(--size-4-8)));
+	max-width: calc(100vw - var(--size-4-8));
+}
+
+.modal.knomo-confirm-modal .modal-content {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+}
+
+.modal.knomo-confirm-modal .knomo-confirm-message {
+	margin: 0;
+	color: var(--text-normal);
+	line-height: var(--line-height-normal);
+	white-space: pre-wrap;
+}
+
+.modal.knomo-confirm-modal .knomo-confirm-actions {
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--size-4-3);
+	width: 100%;
+	margin-top: var(--size-4-4);
+	padding: 0;
+}
+
+.modal.knomo-confirm-modal .knomo-confirm-button {
+	min-width: 88px;
+	min-height: 44px;
+	padding-inline: var(--size-4-4);
+}
+
+.modal.knomo-confirm-modal .knomo-confirm-button:focus-visible {
+	outline: var(--size-2-1) solid var(--interactive-accent);
+	outline-offset: var(--size-2-1);
+}
+
+@media (max-width: 480px) {
+	.modal.knomo-confirm-modal .knomo-confirm-actions {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.modal.knomo-confirm-modal .knomo-confirm-button {
+		width: 100%;
+		min-width: 0;
+	}
+}
+
 .knomo-image-preview-modal {
 	--no-tooltip: true;
 	--knomo-image-preview-control-background: rgba(0, 0, 0, 0.72);

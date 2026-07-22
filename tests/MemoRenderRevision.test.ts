@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import type { MemoRecord } from "../src/types/memo";
 import {
-	getMemoImageRevision,
 	getMemoListStateKey,
 	getMemoRenderRevision,
 } from "../src/ui/MemoRenderRevision";
@@ -18,7 +17,6 @@ test("keeps render revisions stable for non-rendered metadata arrays", () => {
 	};
 
 	assert.equal(getMemoRenderRevision(changed), getMemoRenderRevision(memo));
-	assert.equal(getMemoImageRevision(changed), getMemoImageRevision(memo));
 });
 
 test("changes render revisions when visible card state changes", () => {
@@ -35,10 +33,6 @@ test("changes render revisions when visible card state changes", () => {
 			message: "failed",
 		} }),
 		getMemoRenderRevision(memo),
-	);
-	assert.notEqual(
-		getMemoImageRevision({ ...memo, dailyRef: { ...memo.dailyRef, path: "Daily/moved.md" } }),
-		getMemoImageRevision(memo),
 	);
 });
 

@@ -6,7 +6,7 @@ import type { MemoRecord } from "../types/memo";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
-import { hasMemoReference, withMemoIdAlias } from "../utils/references";
+import { hasMemoReference } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
 import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 import type { TagDisplaySource } from "../utils/tags";
@@ -145,15 +145,6 @@ export function tagMatchesActiveTagKey(tag: string, activeTagKey: string): boole
 
 export function getMemoImages(memo: MemoRecord): MemoRecord["images"] {
 	return memo.images.filter(isSupportedMemoImage);
-}
-
-export function getSourceReferenceText(memo: MemoRecord): string | null {
-	const sourceMemoId = memo.sourceMemoId ?? memo.references[0]?.memoId ?? null;
-	const referenceText = memo.references[0]?.referenceText ?? null;
-	if (sourceMemoId === null || referenceText === null) {
-		return null;
-	}
-	return withMemoIdAlias(referenceText, sourceMemoId);
 }
 
 export function formatRegularFilterSummary(conditions: RegularFilterCondition[], count: number): string {

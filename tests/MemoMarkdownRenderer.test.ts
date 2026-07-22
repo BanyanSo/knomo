@@ -44,7 +44,7 @@ test("recognizes delegated task checkbox inputs", async () => {
 	setDomGlobals();
 	const renderer = new MemoMarkdownRenderer({
 		app: {} as never,
-		component: {} as never,
+		createComponent: () => new TestComponent() as never,
 		getDocument: () => ({ createElement: (tagName: string) => new TestElement(tagName).asHtml() }) as Document,
 		getGeneration: () => 0,
 		concurrency: 1,
@@ -69,6 +69,100 @@ test("recognizes delegated task checkbox inputs", async () => {
 	assert.equal(renderer.getTaskCheckboxInput(outside.asHtml()), null);
 });
 
+test("owns one render component per container and unloads it when replaced or cleared", async () => {
+	await ensureObsidianStub();
+	const obsidian = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const markdownRenderer = obsidian.MarkdownRenderer as unknown as {
+		render: (
+			app: unknown,
+			markdown: string,
+			container: HTMLElement,
+			sourcePath: string,
+			component: unknown,
+		) => Promise<void>;
+	};
+	const originalRender = markdownRenderer.render;
+	const components: TestComponent[] = [];
+	markdownRenderer.render = async (_app, markdown, container) => {
+		(container as unknown as TestElement).createSpan({ text: markdown });
+	};
+
+	try {
+		const renderer = new MemoMarkdownRenderer({
+			app: {} as never,
+			createComponent: () => {
+				const component = new TestComponent();
+				components.push(component);
+				return component as never;
+			},
+			getDocument: () => ({ createElement: (tagName: string) => new TestElement(tagName).asHtml() }) as Document,
+			getGeneration: () => 0,
+			concurrency: 1,
+		});
+		const container = new TestElement("div");
+
+		renderer.queueMemoMarkdown(makeMemo(), container.asHtml(), 0, "normal", "first", "card-flow");
+		await waitFor(() => components.length === 1 && container.getText().includes("first"));
+		assert.equal(components[0].loadCalls, 1);
+		assert.equal(components[0].unloadCalls, 0);
+
+		renderer.queueMemoMarkdown(makeMemo(), container.asHtml(), 0, "normal", "second", "card-flow");
+		await waitFor(() => components.length === 2 && container.getText().includes("second"));
+		assert.equal(components[0].unloadCalls, 1);
+		assert.equal(components[1].loadCalls, 1);
+		assert.equal(components[1].unloadCalls, 0);
+
+		renderer.clear("card-flow");
+		assert.equal(components[1].unloadCalls, 1);
+	} finally {
+		markdownRenderer.render = originalRender;
+	}
+});
+
+test("unloads an in-flight render component when its generation becomes stale", async () => {
+	await ensureObsidianStub();
+	const obsidian = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const markdownRenderer = obsidian.MarkdownRenderer as unknown as {
+		render: () => Promise<void>;
+	};
+	const originalRender = markdownRenderer.render;
+	const renderGate = deferred<void>();
+	const components: TestComponent[] = [];
+	let generation = 0;
+	markdownRenderer.render = () => renderGate.promise;
+
+	try {
+		const renderer = new MemoMarkdownRenderer({
+			app: {} as never,
+			createComponent: () => {
+				const component = new TestComponent();
+				components.push(component);
+				return component as never;
+			},
+			getDocument: () => ({ createElement: (tagName: string) => new TestElement(tagName).asHtml() }) as Document,
+			getGeneration: () => generation,
+			concurrency: 1,
+		});
+		const container = new TestElement("div");
+
+		renderer.queueMemoMarkdown(makeMemo(), container.asHtml(), 0, "normal", "pending", "card-flow");
+		await waitFor(() => components.length === 1);
+		generation = 1;
+		renderer.clear("card-flow");
+		renderGate.resolve();
+		await waitFor(() => components[0].unloadCalls === 1);
+
+		assert.equal(components[0].loadCalls, 1);
+		assert.equal(container.getText(), "");
+	} finally {
+		markdownRenderer.render = originalRender;
+	}
+});
+
 function setDomGlobals(): void {
 	(globalThis as unknown as { HTMLElement: typeof TestElement }).HTMLElement = TestElement;
 }
@@ -80,7 +174,7 @@ interface CreateElementOptions {
 }
 
 class TestElement {
-	private readonly children: TestElement[] = [];
+	private children: TestElement[] = [];
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
 	private text = "";
@@ -91,7 +185,7 @@ class TestElement {
 	constructor(
 		readonly tagName: string,
 		options: CreateElementOptions = {},
-		private readonly parent: TestElement | null = null,
+		private parent: TestElement | null = null,
 	) {
 		if (options.cls !== undefined) {
 			for (const cls of options.cls.split(/\s+/)) {
@@ -116,6 +210,10 @@ class TestElement {
 		return this as unknown as HTMLInputElement;
 	}
 
+	get firstChild(): TestElement | null {
+		return this.children[0] ?? null;
+	}
+
 	createSpan(options: CreateElementOptions = {}): TestElement {
 		return this.createEl("span", options);
 	}
@@ -124,6 +222,21 @@ class TestElement {
 		const child = new TestElement(tagName.toUpperCase(), options, this);
 		this.children.push(child);
 		return child;
+	}
+
+	appendChild(child: TestElement): TestElement {
+		child.parent?.removeChild(child);
+		child.parent = this;
+		this.children.push(child);
+		return child;
+	}
+
+	empty(): void {
+		for (const child of this.children) {
+			child.parent = null;
+		}
+		this.children = [];
+		this.text = "";
 	}
 
 	querySelectorAll<T extends Element = Element>(selector: string): T[] {
@@ -189,6 +302,10 @@ class TestElement {
 		}
 	}
 
+	private removeChild(child: TestElement): void {
+		this.children = this.children.filter((candidate) => candidate !== child);
+	}
+
 	private matches(selector: string): boolean {
 		if (selector.startsWith(".")) {
 			return this.classes.has(selector.slice(1));
@@ -203,6 +320,37 @@ class TestElement {
 		}
 		return this.tagName === selector.toUpperCase();
 	}
+}
+
+class TestComponent {
+	loadCalls = 0;
+	unloadCalls = 0;
+
+	load(): void {
+		this.loadCalls += 1;
+	}
+
+	unload(): void {
+		this.unloadCalls += 1;
+	}
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((promiseResolve) => {
+		resolve = promiseResolve;
+	});
+	return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		if (predicate()) {
+			return;
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	}
+	assert.fail("Timed out waiting for asynchronous render");
 }
 
 function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {

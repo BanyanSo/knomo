@@ -172,7 +172,7 @@ test("MemoIndexStore lists and reads likely sync-conflict index files", async ()
 		},
 	]);
 	assert.deepEqual(
-		(await store.loadRecoverableMemos("Memos")).map((memo) => memo.id).sort(),
+		(await store.loadRepairRecoverableMemos("Memos")).map((memo) => memo.id).sort(),
 		["memo-active", "memo-conflict", "memo-numbered-copy", "memo-typo-conflict"],
 	);
 });
@@ -210,10 +210,6 @@ test("MemoIndexStore repair recoverable load skips corrupt canonical indexes", a
 		}),
 	});
 
-	await assert.rejects(
-		store.loadRecoverableMemos("Memos"),
-		/Invalid memo-index JSON for 2026-07:/,
-	);
 	assert.deepEqual(
 		(await store.loadRepairRecoverableMemos("Memos")).map((memo) => memo.id).sort(),
 		["memo-active", "memo-conflict"],

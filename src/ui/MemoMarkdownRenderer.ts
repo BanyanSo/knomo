@@ -16,15 +16,27 @@ export type MemoMarkdownSurface = "card-flow" | "mobile-search";
 
 interface MemoMarkdownRendererOptions {
 	app: App;
-	component: Component;
+	createComponent: () => Component;
 	getDocument: () => Document;
 	getGeneration: (surface: MemoMarkdownSurface) => number;
 	concurrency: number;
 }
 
+interface MarkdownRenderToken {
+	generation: number;
+	requestId: number;
+	surfaceEpoch: number;
+}
+
 export class MemoMarkdownRenderer {
 	private readonly cardFlowQueue: MarkdownRenderQueue;
 	private readonly mobileSearchQueue: MarkdownRenderQueue;
+	private readonly activeComponents = createSurfaceMap(() => new Map<HTMLElement, Component>());
+	private readonly pendingComponents = createSurfaceMap(() => new Set<Component>());
+	private readonly latestRequestIds = createSurfaceMap(() => new WeakMap<HTMLElement, number>());
+	private readonly surfaceEpochs = createSurfaceMap(() => 0);
+	private readonly unloadedComponents = new WeakSet<Component>();
+	private nextRequestId = 0;
 
 	constructor(private readonly options: MemoMarkdownRendererOptions) {
 		this.cardFlowQueue = new MarkdownRenderQueue({
@@ -45,10 +57,11 @@ export class MemoMarkdownRenderer {
 		previewText: string,
 		surface: MemoMarkdownSurface,
 	): void {
+		const token = this.createRenderToken(container, generation, surface);
 		this.getQueue(surface).enqueue(
 			priority,
 			generation,
-			() => this.renderMemoMarkdown(memo, container, generation, previewText, surface),
+			() => this.renderMemoMarkdown(memo, container, token, previewText, surface),
 		);
 	}
 
@@ -59,15 +72,25 @@ export class MemoMarkdownRenderer {
 		generation: number,
 		surface: MemoMarkdownSurface,
 	): void {
+		const token = this.createRenderToken(container, generation, surface);
 		this.getQueue(surface).enqueue(
 			"normal",
 			generation,
-			() => this.renderSourceReferenceMarkdown(container, text, sourcePath, generation, surface),
+			() => this.renderSourceReferenceMarkdown(container, text, sourcePath, token, surface),
 		);
 	}
 
 	clear(surface: MemoMarkdownSurface = "card-flow"): void {
 		this.getQueue(surface).clear();
+		this.surfaceEpochs[surface] += 1;
+		for (const component of this.activeComponents[surface].values()) {
+			this.unloadComponent(component);
+		}
+		this.activeComponents[surface].clear();
+		for (const component of this.pendingComponents[surface]) {
+			this.unloadComponent(component);
+		}
+		this.pendingComponents[surface].clear();
 	}
 
 	setPaused(paused: boolean): void {
@@ -136,35 +159,45 @@ export class MemoMarkdownRenderer {
 	private async renderMemoMarkdown(
 		memo: MemoRecord,
 		container: HTMLElement,
-		generation: number,
+		token: MarkdownRenderToken,
 		previewText: string,
 		surface: MemoMarkdownSurface,
 	): Promise<void> {
-		if (!this.isCurrentRenderGeneration(surface, generation)) {
+		if (!this.isCurrentRender(container, token, surface)) {
 			return;
 		}
 		const renderTarget = this.options.getDocument().createElement("div");
+		const component = this.createRenderComponent(surface);
+		let adopted = false;
 		try {
 			await MarkdownRenderer.render(
 				this.options.app,
 				prepareMemoCardMarkdown(previewText),
 				renderTarget,
 				memo.dailyRef.path,
-				this.options.component,
+				component,
 			);
-			if (!this.isCurrentRenderGeneration(surface, generation)) {
+			if (!this.isCurrentRender(container, token, surface)) {
 				return;
 			}
+			this.releaseContainerComponent(container, surface);
 			container.empty();
 			while (renderTarget.firstChild !== null) {
 				container.appendChild(renderTarget.firstChild);
 			}
 			prepareRenderedMemoMarkdown(container, memo);
+			this.adoptRenderComponent(container, component, surface);
+			adopted = true;
 		} catch {
-			if (!this.isCurrentRenderGeneration(surface, generation)) {
+			if (!this.isCurrentRender(container, token, surface)) {
 				return;
 			}
+			this.releaseContainerComponent(container, surface);
 			container.setText(previewText);
+		} finally {
+			if (!adopted) {
+				this.releasePendingComponent(component, surface);
+			}
 		}
 	}
 
@@ -172,18 +205,21 @@ export class MemoMarkdownRenderer {
 		container: HTMLElement,
 		text: string,
 		sourcePath: string,
-		generation: number,
+		token: MarkdownRenderToken,
 		surface: MemoMarkdownSurface,
 	): Promise<void> {
-		if (!this.isCurrentRenderGeneration(surface, generation)) {
+		if (!this.isCurrentRender(container, token, surface)) {
 			return;
 		}
 		const renderTarget = this.options.getDocument().createElement("div");
+		const component = this.createRenderComponent(surface);
+		let adopted = false;
 		try {
-			await MarkdownRenderer.render(this.options.app, text, renderTarget, sourcePath, this.options.component);
-			if (!this.isCurrentRenderGeneration(surface, generation)) {
+			await MarkdownRenderer.render(this.options.app, text, renderTarget, sourcePath, component);
+			if (!this.isCurrentRender(container, token, surface)) {
 				return;
 			}
+			this.releaseContainerComponent(container, surface);
 			container.empty();
 			while (renderTarget.firstChild !== null) {
 				container.appendChild(renderTarget.firstChild);
@@ -192,17 +228,90 @@ export class MemoMarkdownRenderer {
 				imageEl.setAttr("loading", "lazy");
 			}
 			prepareInternalLinks(container, sourcePath);
+			this.adoptRenderComponent(container, component, surface);
+			adopted = true;
 		} catch {
-			if (!this.isCurrentRenderGeneration(surface, generation)) {
+			if (!this.isCurrentRender(container, token, surface)) {
 				return;
 			}
+			this.releaseContainerComponent(container, surface);
 			container.setText(text);
+		} finally {
+			if (!adopted) {
+				this.releasePendingComponent(component, surface);
+			}
 		}
 	}
 
-	private isCurrentRenderGeneration(surface: MemoMarkdownSurface, generation: number): boolean {
-		return generation === this.options.getGeneration(surface);
+	private createRenderToken(
+		container: HTMLElement,
+		generation: number,
+		surface: MemoMarkdownSurface,
+	): MarkdownRenderToken {
+		const requestId = this.nextRequestId;
+		this.nextRequestId += 1;
+		this.latestRequestIds[surface].set(container, requestId);
+		return {
+			generation,
+			requestId,
+			surfaceEpoch: this.surfaceEpochs[surface],
+		};
 	}
+
+	private createRenderComponent(surface: MemoMarkdownSurface): Component {
+		const component = this.options.createComponent();
+		component.load();
+		this.pendingComponents[surface].add(component);
+		return component;
+	}
+
+	private adoptRenderComponent(
+		container: HTMLElement,
+		component: Component,
+		surface: MemoMarkdownSurface,
+	): void {
+		this.pendingComponents[surface].delete(component);
+		this.activeComponents[surface].set(container, component);
+	}
+
+	private releaseContainerComponent(container: HTMLElement, surface: MemoMarkdownSurface): void {
+		const component = this.activeComponents[surface].get(container);
+		if (component === undefined) {
+			return;
+		}
+		this.activeComponents[surface].delete(container);
+		this.unloadComponent(component);
+	}
+
+	private releasePendingComponent(component: Component, surface: MemoMarkdownSurface): void {
+		this.pendingComponents[surface].delete(component);
+		this.unloadComponent(component);
+	}
+
+	private unloadComponent(component: Component): void {
+		if (this.unloadedComponents.has(component)) {
+			return;
+		}
+		this.unloadedComponents.add(component);
+		component.unload();
+	}
+
+	private isCurrentRender(
+		container: HTMLElement,
+		token: MarkdownRenderToken,
+		surface: MemoMarkdownSurface,
+	): boolean {
+		return token.generation === this.options.getGeneration(surface)
+			&& token.surfaceEpoch === this.surfaceEpochs[surface]
+			&& token.requestId === this.latestRequestIds[surface].get(container);
+	}
+}
+
+function createSurfaceMap<T>(createValue: () => T): Record<MemoMarkdownSurface, T> {
+	return {
+		"card-flow": createValue(),
+		"mobile-search": createValue(),
+	};
 }
 
 export function prepareRenderedMemoMarkdown(container: HTMLElement, memo: MemoRecord): void {

@@ -88,15 +88,6 @@ export class KnomoCardFlowCoordinator {
 		return this.batcher.remainingCount;
 	}
 
-	get isSentinelObserving(): boolean {
-		return this.sentinel.isObserving;
-	}
-
-	nextGeneration(): number {
-		this.generation += 1;
-		return this.generation;
-	}
-
 	removeSentinel(): void {
 		this.sentinel.remove();
 	}
@@ -121,10 +112,6 @@ export class KnomoCardFlowCoordinator {
 
 	syncBatch(memos: MemoRecord[], mode: CardFlowRenderMode, renderedCount: number): void {
 		this.batcher.sync(memos, mode, renderedCount);
-	}
-
-	updateBatchItems(memos: MemoRecord[]): void {
-		this.batcher.updateItems(memos);
 	}
 
 	updateBatchItemsAfterRendered(memos: MemoRecord[], renderedMemoIds: readonly string[]): void {

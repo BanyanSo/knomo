@@ -544,7 +544,6 @@ class FakeElement {
 	offsetHeight = 0;
 	top = 0;
 	bottom = 0;
-	private text = "";
 
 	constructor(private readonly tagName: string) {}
 
@@ -576,9 +575,6 @@ class FakeElement {
 					child.classes.add(cls);
 				}
 			}
-		}
-		if (options.text !== undefined) {
-			child.text = options.text;
 		}
 		for (const [key, value] of Object.entries(options.attr ?? {})) {
 			child.attrs.set(key, value);
@@ -786,7 +782,7 @@ class FakeWindow {
 		const frames = Array.from(this.frames.entries());
 		this.frames.clear();
 		this.frameTime += 16;
-		for (const [id, callback] of frames) {
+		for (const [, callback] of frames) {
 			callback(this.frameTime);
 		}
 	}

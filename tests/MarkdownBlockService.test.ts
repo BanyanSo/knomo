@@ -419,6 +419,7 @@ test("daily note writes create the heading when missing", async () => {
 		{
 			vault: {
 				getAbstractFileByPath: (_path: string) => file,
+				cachedRead: async () => dailyContent,
 				process: async (_file: unknown, callback: (content: string) => string) => {
 					dailyContent = callback(dailyContent);
 					return dailyContent;
@@ -432,8 +433,14 @@ test("daily note writes create the heading when missing", async () => {
 		},
 	);
 	const settings = createTestSettings();
+	const block = service.buildMemoBlock("新 memo", "12:00:00");
+	const prepared = await dailyNoteService.prepareMemoBlockInsert(
+		settings,
+		new Date("2026-05-14T12:00:00"),
+		block,
+	);
 
-	await dailyNoteService.insertMemoBlock(settings, service.buildMemoBlock("新 memo", "12:00:00"));
+	await dailyNoteService.commitPreparedMemoBlock(settings, block, prepared);
 
 	assert.equal(dailyContent, "# Today\n\n## Knomo\n- 12:00:00 新 memo");
 });
@@ -576,24 +583,6 @@ test("daily note creation still errors when Daily Notes core plugin is disabled"
 	);
 });
 
-test("updates a complete memo block without touching the next memo", () => {
-	const content = "- 12:00:00 第一行\n  第二行\n- 13:00:00 下一条";
-
-	assert.equal(
-		service.updateMemoBlock(content, 0, "新的第一行\n新的第二行"),
-		"- 12:00:00 新的第一行\n\t新的第二行\n- 13:00:00 下一条",
-	);
-});
-
-test("keeps blockId after edit and moves it to the last effective content line", () => {
-	const content = "- 12:00:00 第一行 ^abc123\n  第二行";
-
-	assert.equal(
-		service.updateMemoBlock(content, 0, "新的第一行\n新的第二行"),
-		"- 12:00:00 新的第一行\n\t新的第二行 ^abc123",
-	);
-});
-
 test("appends blockId to a single-line memo block", () => {
 	assert.equal(
 		service.appendBlockIdToMemoBlock("- 12:00:00 第一行", "abc123"),
@@ -627,20 +616,6 @@ test("parses all memo blocks in content", () => {
 	assert.equal(blocks.length, 2);
 	assert.equal(blocks[0].content, "第一行\n第二行");
 	assert.equal(blocks[1].content, "下一条");
-});
-
-test("updates a daily block through the change helper", () => {
-	const content = "- 12:00:00 第一行\n  第二行\n- 13:00:00 下一条";
-
-	assert.equal(
-		service.updateDailyBlock(content, {
-			type: "edit",
-			memoId: "memo-1",
-			startLine: 0,
-			block: "- 12:00:00 新内容",
-		}),
-		"- 12:00:00 新内容\n- 13:00:00 下一条",
-	);
 });
 
 test("does not locate a memo by time-only line hint", () => {
@@ -1195,7 +1170,7 @@ test("createMemo writes quote-create metadata through service orchestration", as
 		service,
 	);
 
-	const result = await orchestrator.createMemo("新内容\n\n> 来源 memo", {
+	const { result } = await orchestrator.createMemoWithTimeBuoyOutcome("新内容\n\n> 来源 memo", {
 		source: "quote_create",
 		sourceMemoId: "source-memo",
 		sourceReferenceText: "[[Daily/2026-05-17#^abc123|source-memo]]",
@@ -2087,7 +2062,7 @@ test("full daily scan tombstones indexed memos whose daily file no longer exists
 		service,
 	);
 
-	const result = await orchestrator.scanDailyMemos();
+	const result = await orchestrator.scanRecentDailyMemos(36_500);
 
 	assert.equal(result.deleted, 1);
 	assert.equal(savedMemos[0]?.status, "deleted");
@@ -2133,7 +2108,7 @@ test("full daily scan keeps indexed memos whose file still exists outside the cu
 		service,
 	);
 
-	const result = await orchestrator.scanDailyMemos();
+	const result = await orchestrator.scanRecentDailyMemos(36_500);
 
 	assert.equal(result.deleted, 0);
 	assert.equal(saved, false);
@@ -2469,14 +2444,14 @@ test("restoreMemo does not reuse blocks from other headings or different times",
 			},
 		} as never,
 		{
-			findMemoById: async () => deletedMemo,
+			findMemoByIdInPeriod: async () => deletedMemo,
 			updateMemo: async (_folder: string, memo: MemoRecord, update: (memo: MemoRecord) => MemoRecord) => update(memo),
 		} as never,
 		{ mark: (_path: string) => undefined } as never,
 		service,
 	);
 
-	const restoredMemo = await orchestrator.restoreMemo(deletedMemo.id);
+	const restoredMemo = await orchestrator.restoreMemoRecord(deletedMemo);
 
 	assert.equal(service.parseMemoBlocksUnderHeading(dailyContent, "## Other").length, 1);
 	assert.equal(service.parseMemoBlocksUnderHeading(dailyContent, "## Knomo").length, 2);
@@ -2525,7 +2500,7 @@ test("restoreMemo keeps deleted status when monthly restore fails and does not d
 			},
 		} as never,
 		{
-			findMemoById: async () => deletedMemo,
+			findMemoByIdInPeriod: async () => deletedMemo,
 			updateMemo: async () => {
 				updateCalled = true;
 				throw new Error("不应更新索引");
@@ -2535,7 +2510,7 @@ test("restoreMemo keeps deleted status when monthly restore fails and does not d
 		service,
 	);
 
-	await assert.rejects(() => orchestrator.restoreMemo(deletedMemo.id), /月度失败/);
+	await assert.rejects(() => orchestrator.restoreMemoRecord(deletedMemo), /月度失败/);
 	assert.equal(dailyContent, "# 2026-05-18\n\n## Knomo\n- 08:00:00 内容 ^abc123");
 	assert.equal(updateCalled, false);
 });
@@ -2815,7 +2790,6 @@ test("deleteMemo marks deleted without monthly_delete_failed when monthlyRef is 
 		lastSyncedAt: null,
 	};
 	let monthlyDeleteCalled = false;
-	let savedMemo: MemoRecord | null = null;
 	const orchestrator = new SyncOrchestrator(
 		{
 			vault: {
@@ -2837,7 +2811,6 @@ test("deleteMemo marks deleted without monthly_delete_failed when monthlyRef is 
 		{
 			findMemoByIdInPeriod: async () => memo,
 			upsertMemo: async (_folder: string, nextMemo: MemoRecord) => {
-				savedMemo = nextMemo;
 				return nextMemo;
 			},
 		} as never,
@@ -3517,15 +3490,16 @@ test("restoreMonthlyArchives restores old archives and removes failed rebuild ar
 });
 
 test("monthly archive insertion preserves trailing blank lines in a date heading section", async () => {
-	const { MonthlyArchiveService, MONTHLY_ARCHIVE_READONLY_COMMENT } = await loadMonthlyArchiveService();
+	const { MonthlyArchiveService, getMonthlyArchiveReadOnlyComment } = await loadMonthlyArchiveService();
 	const { TFile } = await import("obsidian");
+	const monthlyArchiveReadonlyComment = getMonthlyArchiveReadOnlyComment("en");
 	const monthlyFile = Object.assign(new TFile(), {
 		path: "Memos/Memos-2026-05.md",
 		basename: "Memos-2026-05",
 		extension: "md",
 	});
 	const content = [
-		MONTHLY_ARCHIVE_READONLY_COMMENT,
+		monthlyArchiveReadonlyComment,
 		"",
 		"# 2026-05",
 		"",
@@ -3557,7 +3531,7 @@ test("monthly archive insertion preserves trailing blank lines in a date heading
 	assert.equal(
 		result.content,
 		[
-			MONTHLY_ARCHIVE_READONLY_COMMENT,
+			monthlyArchiveReadonlyComment,
 			"",
 			"# 2026-05",
 			"",

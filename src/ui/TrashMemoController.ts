@@ -21,7 +21,7 @@ interface TrashMemoControllerOptions {
 	handleRestoredMemo: (deletedMemo: MemoRecord, restoredMemo: MemoRecord) => void;
 	purgeDeletedMemo: (memo: MemoRecord) => Promise<void>;
 	isTrashActive: () => boolean;
-	confirmPurge: () => boolean;
+	confirmPurge: () => Promise<boolean>;
 	showNotice: (message: string) => void;
 	forceRefreshViews: () => Promise<void>;
 	requestRender: (target: TrashMemoRenderTarget) => void;
@@ -34,6 +34,7 @@ export class TrashMemoController {
 	private trashCount = 0;
 	private deletedMemoIds = new Set<string>();
 	private trashBusyMemoActions = new Map<string, TrashAction>();
+	private readonly confirmingPurgeMemoIds = new Set<string>();
 
 	constructor(private readonly options: TrashMemoControllerOptions) {}
 
@@ -94,11 +95,18 @@ export class TrashMemoController {
 	}
 
 	async handleTrashAction(action: TrashAction, memo: MemoRecord): Promise<void> {
-		if (this.trashBusyMemoActions.has(memo.id)) {
+		if (this.trashBusyMemoActions.has(memo.id) || this.confirmingPurgeMemoIds.has(memo.id)) {
 			return;
 		}
-		if (action === "purge" && !this.options.confirmPurge()) {
-			return;
+		if (action === "purge") {
+			this.confirmingPurgeMemoIds.add(memo.id);
+			try {
+				if (!await this.options.confirmPurge()) {
+					return;
+			}
+			} finally {
+				this.confirmingPurgeMemoIds.delete(memo.id);
+			}
 		}
 
 		this.trashBusyMemoActions.set(memo.id, action);

@@ -79,20 +79,6 @@ export class MemoIndexStore {
 		return this.loadExistingPeriods(monthlyMemoFolder, this.listStoredPeriods(monthlyMemoFolder));
 	}
 
-	async loadRecoverableMemos(monthlyMemoFolder: string): Promise<MemoRecord[]> {
-		const byId = new Map<string, MemoRecord>();
-		for (const memo of await this.loadAllExisting(monthlyMemoFolder)) {
-			byId.set(memo.id, memo);
-		}
-		for (const memo of await this.loadPotentialSyncConflictMemos(monthlyMemoFolder)) {
-			const current = byId.get(memo.id);
-			if (current === undefined || memo.updatedAt.localeCompare(current.updatedAt) > 0) {
-				byId.set(memo.id, memo);
-			}
-		}
-		return this.normalizeReadableMemos([...byId.values()]);
-	}
-
 	async loadRepairRecoverableMemos(monthlyMemoFolder: string): Promise<MemoRecord[]> {
 		const byId = new Map<string, MemoRecord>();
 		for (const memo of await this.loadAllExistingBestEffort(monthlyMemoFolder)) {
@@ -110,10 +96,6 @@ export class MemoIndexStore {
 			}
 		}
 		return this.normalizeReadableMemos([...byId.values()]);
-	}
-
-	async scanAll(monthlyMemoFolder: string, visitor: MemoIndexPeriodVisitor): Promise<boolean> {
-		return this.scanPeriods(monthlyMemoFolder, this.listExistingPeriods(monthlyMemoFolder), visitor);
 	}
 
 	async scanAllExisting(monthlyMemoFolder: string, visitor: MemoIndexPeriodVisitor): Promise<boolean> {
@@ -144,11 +126,6 @@ export class MemoIndexStore {
 			memos.push(...Object.values(index.memos));
 		}
 		return this.normalizeReadableMemos(memos);
-	}
-
-	async findMemoById(monthlyMemoFolder: string, memoId: string): Promise<MemoRecord | null> {
-		const memos = await this.loadAll(monthlyMemoFolder);
-		return memos.find((memo) => memo.id === memoId) ?? null;
 	}
 
 	async findMemoByIdInPeriod(monthlyMemoFolder: string, period: string, memoId: string): Promise<MemoRecord | null> {
@@ -274,14 +251,6 @@ export class MemoIndexStore {
 			throw new Error("Memo index update did not return a memo.");
 		}
 		return updatedMemo;
-	}
-
-	async purgeDeletedMemo(monthlyMemoFolder: string, memoId: string): Promise<void> {
-		const memo = await this.findMemoById(monthlyMemoFolder, memoId);
-		if (memo === null) {
-			throw new Error(`Memo not found: ${memoId}`);
-		}
-		await this.purgeDeletedMemoRecord(monthlyMemoFolder, memo);
 	}
 
 	async purgeDeletedMemoRecord(monthlyMemoFolder: string, memo: MemoRecord): Promise<void> {

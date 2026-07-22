@@ -47,11 +47,6 @@ export class FileWatchService {
 		owner.register(() => this.clearTimers());
 	}
 
-	stop(): void {
-		this.clearTimers();
-		this.selfWriteTracker.cleanup();
-	}
-
 	private queueDailySync(file: TFile): void {
 		this.queueFileTask(file.path, file.path, () => this.runSync(file));
 	}

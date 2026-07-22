@@ -32,7 +32,7 @@ test("returns a non-blocking failure and marks repair pending for corrupt shards
 	const outcome = await service.syncMemoRecords(null, createMemo("memo-1", "回看 @2026-07-20"));
 
 	assert.equal(outcome.status, "failed");
-	assert.equal(service.hasPendingRepair(), true);
+	assert.equal(await service.needsStartupRebuild(), true);
 });
 
 test("marks sync side copies as requiring a rebuild", async () => {
@@ -40,7 +40,7 @@ test("marks sync side copies as requiring a rebuild", async () => {
 		"Memos/_knomo-system/indexes/time-buoy/time-buoy-2026-07 conflict.json": "{}",
 	});
 
-	assert.equal(service.hasPendingRepair(), true);
+	assert.equal(await service.needsStartupRebuild(), true);
 	assert.deepEqual((await service.queryDate("2026-07-20")).missingPeriods, ["2026-07"]);
 });
 
@@ -48,6 +48,7 @@ test("updates, deletes, and restores derived dates without changing memo identit
 	const { service, contents } = await createHarness({ value: true });
 	const original = createMemo("memo-1", "回看 @2026-07-20 @2026-08-15");
 	const updated = { ...createMemo("memo-1", "改到 @2026-09-01"), createdAt: original.createdAt };
+	const deleted = { ...updated, status: "deleted" as const };
 
 	await service.syncMemoRecords(null, original);
 	await service.syncMemoRecords(original, updated);
@@ -55,9 +56,9 @@ test("updates, deletes, and restores derived dates without changing memo identit
 	assert.deepEqual(readDates(contents, "2026-08"), {});
 	assert.deepEqual(Object.keys(readDates(contents, "2026-09")["2026-09-01"] ?? {}), ["memo-1"]);
 
-	await service.syncMemoRecords(updated, null);
+	await service.syncMemoRecords(updated, deleted);
 	assert.deepEqual(readDates(contents, "2026-09"), {});
-	await service.syncMemoRecords(null, updated);
+	await service.syncMemoRecords(deleted, updated);
 	assert.deepEqual(Object.keys(readDates(contents, "2026-09")["2026-09-01"] ?? {}), ["memo-1"]);
 });
 
@@ -246,7 +247,7 @@ test("does not clear a pre-existing dirty state after retrying one incremental c
 	const state = JSON.parse(contents.get(statePath) ?? "{}") as { dirty?: boolean };
 	assert.equal(attempts, 2);
 	assert.equal(state.dirty, true);
-	assert.equal(service.hasPendingRepair(), true);
+	assert.equal(await service.needsStartupRebuild(), true);
 });
 
 async function createHarness(

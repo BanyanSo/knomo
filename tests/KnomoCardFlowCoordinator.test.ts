@@ -7,7 +7,7 @@ import type { CardFlowSentinelRenderOptions } from "../src/ui/KnomoCardFlowSenti
 
 test("tracks pending scroll restore by generation and consumes it once", () => {
 	const coordinator = new KnomoCardFlowCoordinator();
-	const generation = coordinator.nextGeneration();
+	const generation = advanceGeneration(coordinator);
 	const restored: number[] = [];
 
 	coordinator.setPendingScrollRestore({ generation, scrollTop: 72, visibleCount: 12 });
@@ -58,7 +58,7 @@ test("merges deferred mobile render requests while composer is open", () => {
 
 test("renders mobile card batches in bounded continuations", () => {
 	const coordinator = new KnomoCardFlowCoordinator({ sentinel: new FakeSentinel() });
-	const generation = coordinator.nextGeneration();
+	const generation = advanceGeneration(coordinator);
 	const batch = coordinator.startBatch(makeMemos(5), "memo", 5);
 	const rendered: string[] = [];
 	const continuations: Array<() => void> = [];
@@ -92,7 +92,7 @@ test("renders mobile card batches in bounded continuations", () => {
 
 test("scroll bottom requests next batch before hydration", () => {
 	const coordinator = new KnomoCardFlowCoordinator({ sentinel: new FakeSentinel() });
-	const generation = coordinator.nextGeneration();
+	const generation = advanceGeneration(coordinator);
 	coordinator.syncBatch(makeMemos(3), "memo", 1);
 	const nextBatchGenerations: number[] = [];
 	let hydrationCount = 0;
@@ -142,6 +142,11 @@ function makeScrollTarget(scrollTop: number, clientHeight: number, scrollHeight:
 		clientHeight,
 		scrollHeight,
 	} as HTMLElement;
+}
+
+function advanceGeneration(coordinator: KnomoCardFlowCoordinator): number {
+	coordinator.generation += 1;
+	return coordinator.generation;
 }
 
 function makeMemos(count: number, prefix = "memo"): MemoRecord[] {

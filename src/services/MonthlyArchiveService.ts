@@ -26,7 +26,6 @@ export const LEGACY_MONTHLY_ARCHIVE_READONLY_COMMENT = [
 	"Knomo monthly archive file: this file is generated automatically from Daily Notes. Do not edit memos here directly; edit them in Knomo or the corresponding daily note.",
 	"-->",
 ].join("\n");
-export const MONTHLY_ARCHIVE_READONLY_COMMENT = buildMonthlyArchiveReadOnlyComment("en");
 
 export interface MonthlyArchiveWriteResult {
 	file: TFile;
@@ -553,14 +552,14 @@ export function ensureReadOnlyComment(content: string, locale: KnomoLocale = get
 	) {
 		return normalizedContent;
 	}
-	const comment = buildMonthlyArchiveReadOnlyComment(locale);
+	const comment = getMonthlyArchiveReadOnlyComment(locale);
 	const contentWithoutOldLeadingSpace = normalizedContent.replace(/^\s+/, "");
 	return contentWithoutOldLeadingSpace.length === 0
 		? comment
 		: `${comment}\n\n${contentWithoutOldLeadingSpace}`;
 }
 
-function buildMonthlyArchiveReadOnlyComment(locale: KnomoLocale): string {
+export function getMonthlyArchiveReadOnlyComment(locale: KnomoLocale): string {
 	return [
 		`<!-- ${MONTHLY_ARCHIVE_MARKER}`,
 		translate(locale, "archive.readOnlyComment"),

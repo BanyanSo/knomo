@@ -198,10 +198,6 @@ export class KnomoWikiLinkSuggest {
 		return this.selectedIndex;
 	}
 
-	getSuggestionsForTest(): WikiLinkSuggestion[] {
-		return this.suggestions;
-	}
-
 	getPopoverForTest(): HTMLElement | null {
 		return this.popoverEl;
 	}

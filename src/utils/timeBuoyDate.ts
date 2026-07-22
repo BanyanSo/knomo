@@ -45,10 +45,6 @@ export function addTimeBuoyCalendarDays(date: Date, days: number): Date {
 	return nextDate;
 }
 
-export function compareTimeBuoyDates(left: string, right: string): number {
-	return left.localeCompare(right);
-}
-
 export function getTimeBuoyDateStatus(targetDate: string, today = new Date()): TimeBuoyDateStatus | null {
 	if (!isValidTimeBuoyDate(targetDate)) {
 		return null;

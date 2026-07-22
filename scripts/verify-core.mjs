@@ -57,7 +57,10 @@ export function runChecks(checksToRun) {
 }
 
 export function runCommand(command, args) {
-	const result = spawnSync(command, args, {
+	const isWindowsNpm = process.platform === "win32" && command === "npm";
+	const executable = isWindowsNpm ? (process.env.ComSpec ?? "cmd.exe") : command;
+	const executableArgs = isWindowsNpm ? ["/d", "/s", "/c", "npm.cmd", ...args] : args;
+	const result = spawnSync(executable, executableArgs, {
 		stdio: "inherit",
 	});
 	if (result.error !== undefined) {

@@ -24,14 +24,6 @@ export function getMemoRenderRevision(memo: MemoRecord): string {
 	]);
 }
 
-export function getMemoImageRevision(memo: MemoRecord): string {
-	return encodeParts([
-		memo.contentHash,
-		memo.dailyRef.path,
-		memo.references.length > 0 ? "reference" : "plain",
-	]);
-}
-
 export function getMemoListStateKey(memos: readonly MemoRecord[]): string {
 	return memos.map(getMemoRenderRevision).join("");
 }

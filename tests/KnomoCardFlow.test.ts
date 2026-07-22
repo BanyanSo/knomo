@@ -43,25 +43,6 @@ test("continues card flow batches and reports exhaustion", () => {
 	assert.equal(batcher.hasMoreItems, false);
 });
 
-test("updates card flow items without resetting rendered offset", () => {
-	const batcher = new KnomoCardFlowBatcher();
-	const firstBatch = batcher.start(makeMemos(2), "memo", 2);
-	assert.equal(firstBatch?.type, "items");
-	if (firstBatch?.type !== "items") return;
-	assert.deepEqual(batcher.completeBatch(firstBatch), { hasMoreItems: false, remainingCount: 0 });
-	assert.equal(batcher.hasMoreItems, false);
-
-	batcher.updateItems(makeMemos(4));
-	assert.equal(batcher.hasMoreItems, true);
-	assert.equal(batcher.remainingCount, 2);
-
-	const nextBatch = batcher.beginNextBatch(2);
-	assert.equal(nextBatch?.type, "items");
-	if (nextBatch?.type !== "items") return;
-	assert.deepEqual(nextBatch.items.map((item) => item.memo.id), ["memo-2", "memo-3"]);
-	assert.deepEqual(nextBatch.items.map((item) => item.renderIndex), [2, 3]);
-});
-
 test("updates hydrated items from rendered memo ids without duplicating promoted cards", () => {
 	const batcher = new KnomoCardFlowBatcher();
 	const firstBatch = batcher.start([

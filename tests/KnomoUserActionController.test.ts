@@ -131,7 +131,7 @@ test("mobile pointer down only intercepts popups on mobile layout", () => {
 	}
 });
 
-test("Escape key keeps the legacy close priority", async () => {
+test("Escape key closes the highest-priority active surface", async () => {
 	const cleanup = installDomGlobals();
 	try {
 		const mobileSearch = createHarness({
@@ -167,7 +167,7 @@ test("Escape key keeps the legacy close priority", async () => {
 			},
 		});
 		await editing.controller.handleRootKeydown(createKeyboardEvent("Escape"));
-		assert.deepEqual(editing.calls, ["cancel-editing-or-close"]);
+		assert.deepEqual(editing.calls, ["cancel-composer-mode"]);
 
 		const chrome = createHarness({
 			escapeState: {
@@ -333,9 +333,6 @@ test("handleAction dispatches every simple action to the expected view callbacks
 		},
 		"open-composer": {
 			expected: ["open-composer"],
-		},
-		"close-composer": {
-			expected: ["close-composer-confirm"],
 		},
 		"toggle-compact-search": {
 			expected: ["toggle-compact", "sync-chrome", "sync-card-menu"],
@@ -531,7 +528,6 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			openRecordStatsMetricFilter: (type) => calls.push(`record-metric:${type}`),
 			openRecordStatsTagFilter: () => calls.push("record-tag"),
 			openComposer: () => calls.push("open-composer"),
-			closeComposerWithConfirm: () => calls.push("close-composer-confirm"),
 			toggleCompactSearch: () => calls.push("toggle-compact"),
 			runComposerToolAction: (action) => {
 				calls.push(`composer-tool:${action}`);
@@ -545,7 +541,9 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			renderUiState: () => calls.push("render-ui"),
 			syncUiChrome: () => calls.push("sync-chrome"),
 			syncCardMenuState: () => calls.push("sync-card-menu"),
-			cancelEditingOrCloseComposer: () => calls.push("cancel-editing-or-close"),
+			cancelComposerFromEscape: () => {
+				calls.push("cancel-composer-mode");
+			},
 			closeOpenChromeFromEscape: () => calls.push("close-open-chrome"),
 		}),
 	};

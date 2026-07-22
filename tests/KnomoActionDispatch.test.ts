@@ -105,7 +105,6 @@ test("keeps legacy render-after-action behavior explicit", () => {
 		"refresh",
 		"retry-all-memos",
 		"open-composer",
-		"close-composer",
 		"insert-tag",
 		"clear-reference",
 		"cancel-edit",

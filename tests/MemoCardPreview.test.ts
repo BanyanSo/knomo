@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import type { App, TFile } from "obsidian";
 
 import { ImageResourceCache } from "../src/ui/ImageResourceCache";
-import { parseMemoCardPreview, parseMemoCardPreviewLite } from "../src/ui/MemoCardPreview";
+import {
+	parseMemoCardPreviewLite,
+	resolveMemoPreviewImages,
+} from "../src/ui/MemoCardPreview";
 
 test("parses memo card images in source order and removes image syntax from preview text", () => {
 	const app = createAppStub([
@@ -241,4 +244,13 @@ function createAppStub(paths: string[], modifiedAt?: number): App {
 
 function getResolveCount(app: App): number {
 	return (app as unknown as { knomoResolveCount: () => number }).knomoResolveCount();
+}
+
+function parseMemoCardPreview(
+	content: string,
+	sourcePath: string,
+	app: App,
+	imageResourceCache = new ImageResourceCache(),
+) {
+	return resolveMemoPreviewImages(parseMemoCardPreviewLite(content), sourcePath, app, imageResourceCache);
 }

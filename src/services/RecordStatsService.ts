@@ -85,8 +85,6 @@ interface LocalMemoTimestamp {
 	hour: number;
 }
 
-const PREPARE_BATCH_SIZE = 250;
-
 export class RecordStatsService {
 	private state: RecordStatsLoadState = "idle";
 	private error: string | null = null;
@@ -103,10 +101,6 @@ export class RecordStatsService {
 
 	getEarliestYear(): number | null {
 		return this.prepared?.earliestYear ?? null;
-	}
-
-	isPreparedFor(memos: readonly MemoRecord[]): boolean {
-		return this.isPreparedForSource(memos);
 	}
 
 	isPreparedForSource(source: unknown): boolean {
@@ -127,10 +121,6 @@ export class RecordStatsService {
 		this.error = message;
 		this.source = null;
 		this.prepared = null;
-	}
-
-	async prepare(memos: readonly MemoRecord[], yieldToUi: () => Promise<void>): Promise<boolean> {
-		return this.prepareFromSource(memos, (isCurrent) => prepareRecordStats(memos, yieldToUi, isCurrent));
 	}
 
 	async prepareFromSource(
@@ -260,26 +250,6 @@ export class RecordStatsBuilder {
 			tagDisplayNames: buildTagDisplayMap(this.tagDisplaySources),
 		};
 	}
-}
-
-async function prepareRecordStats(
-	memos: readonly MemoRecord[],
-	yieldToUi: () => Promise<void>,
-	isCurrent: () => boolean,
-): Promise<PreparedRecordStats | null> {
-	const builder = new RecordStatsBuilder();
-
-	for (let index = 0; index < memos.length; index += 1) {
-		if (index > 0 && index % PREPARE_BATCH_SIZE === 0) {
-			await yieldToUi();
-			if (!isCurrent()) {
-				return null;
-			}
-		}
-		builder.addMemo(memos[index]);
-	}
-
-	return builder.build();
 }
 
 function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView, selectedDate: Date): SelectedRecordStats {

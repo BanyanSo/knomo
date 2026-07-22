@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { setImmediate as waitImmediate } from "node:timers/promises";
 
 import type { MemoRecord } from "../src/types/memo";
-import { toggleMarkdownTaskMarkerByIndex } from "../src/utils/markdownTasks";
+import { replaceMarkdownTaskMarkerByIndex } from "../src/utils/markdownTasks";
 import { MemoTaskUpdateCoordinator } from "../src/ui/MemoTaskUpdateCoordinator";
 
 test("serializes task updates for the same memo and saves the latest content", async () => {
@@ -40,18 +40,8 @@ test("serializes task updates for the same memo and saves the latest content", a
 		},
 	});
 
-	const first = toggleMarkdownTaskMarkerByIndex(coordinator.getLatestContent(memo), 0);
-	assert.notEqual(first, null);
-	if (first === null) {
-		throw new Error("Expected first task toggle");
-	}
-	coordinator.enqueue(memo, first.content);
-	const second = toggleMarkdownTaskMarkerByIndex(coordinator.getLatestContent(memo), 1);
-	assert.notEqual(second, null);
-	if (second === null) {
-		throw new Error("Expected second task toggle");
-	}
-	coordinator.enqueue(memo, second.content);
+	coordinator.enqueue(memo, replaceTaskMarker(coordinator.getLatestContent(memo), 0, "x"));
+	coordinator.enqueue(memo, replaceTaskMarker(coordinator.getLatestContent(memo), 1, "x"));
 	await waitImmediate();
 
 	assert.deepEqual(saves, ["- [x] first\n- [ ] second"]);
@@ -97,18 +87,8 @@ test("collapses rapid repeated clicks into the final task state", async () => {
 		},
 	});
 
-	const first = toggleMarkdownTaskMarkerByIndex(coordinator.getLatestContent(memo), 0);
-	assert.notEqual(first, null);
-	if (first === null) {
-		throw new Error("Expected first task toggle");
-	}
-	coordinator.enqueue(memo, first.content);
-	const second = toggleMarkdownTaskMarkerByIndex(coordinator.getLatestContent(memo), 0);
-	assert.notEqual(second, null);
-	if (second === null) {
-		throw new Error("Expected second task toggle");
-	}
-	coordinator.enqueue(memo, second.content);
+	coordinator.enqueue(memo, replaceTaskMarker(coordinator.getLatestContent(memo), 0, "x"));
+	coordinator.enqueue(memo, replaceTaskMarker(coordinator.getLatestContent(memo), 0, " "));
 	await waitImmediate();
 
 	assert.deepEqual(saves, ["- [x] task"]);
@@ -201,6 +181,15 @@ function createDeferred<T>(): Deferred<T> {
 		reject = promiseReject;
 	});
 	return { promise, resolve, reject };
+}
+
+function replaceTaskMarker(content: string, taskIndex: number, marker: " " | "x"): string {
+	const nextContent = replaceMarkdownTaskMarkerByIndex(content, taskIndex, marker);
+	assert.notEqual(nextContent, null);
+	if (nextContent === null) {
+		throw new Error(`Expected task marker replacement at index ${taskIndex}`);
+	}
+	return nextContent;
 }
 
 function makeMemo(contentSnapshot: string): MemoRecord {

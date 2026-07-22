@@ -2,7 +2,7 @@ import type { App, TFile } from "obsidian";
 
 import { decodePercentEncodedImagePath, parseMarkdownImages } from "../utils/markdownImages";
 import type { ParsedMarkdownImage } from "../utils/markdownImages";
-import { ImageResourceCache } from "./ImageResourceCache";
+import type { ImageResourceCache } from "./ImageResourceCache";
 
 export interface MemoCardPreview {
 	text: string;
@@ -41,15 +41,6 @@ export interface MemoPreviewImage {
 
 const IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
 const UNSUPPORTED_URL_SCHEMES = new Set(["blob", "data", "file", "javascript", "obsidian"]);
-
-export function parseMemoCardPreview(
-	content: string,
-	sourcePath: string,
-	app: App,
-	imageResourceCache = new ImageResourceCache(),
-): MemoCardPreview {
-	return resolveMemoPreviewImages(parseMemoCardPreviewLite(content), sourcePath, app, imageResourceCache);
-}
 
 export function parseMemoCardPreviewLite(content: string): MemoCardPreviewLite {
 	const imageRefs: MemoPreviewImageRef[] = [];

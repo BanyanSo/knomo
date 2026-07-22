@@ -44,7 +44,6 @@ export type KnomoSimpleAction =
 	| "record-stats-filter-max-daily-notes"
 	| "record-stats-filter-max-daily-words"
 	| "open-composer"
-	| "close-composer"
 	| "toggle-compact-search"
 	| "clear-reference"
 	| "cancel-edit"
@@ -112,7 +111,6 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-filter-max-daily-notes" ||
 		action === "record-stats-filter-max-daily-words" ||
 		action === "open-composer" ||
-		action === "close-composer" ||
 		action === "toggle-compact-search" ||
 		action === "clear-reference" ||
 		action === "cancel-edit" ||

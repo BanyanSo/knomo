@@ -1,4 +1,4 @@
-import { ItemView, Keymap, Notice, Platform, Scope, setIcon, TFile } from "obsidian";
+import { Component, ItemView, Keymap, Notice, Platform, Scope, setIcon, TFile } from "obsidian";
 import type { HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
@@ -63,6 +63,7 @@ import { ComposerSaveShortcutController } from "./ComposerSaveShortcutController
 import { getTextareaCharacterRect } from "./composerSuggestPosition";
 import { ImagePreviewScrollLock } from "./ImagePreviewScrollLock";
 import { ImageResourceCache } from "./ImageResourceCache";
+import { getDestructiveConfirmReturnFocus, showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
 import { filterVisibleMemos, memoMatchesSearch } from "./KnomoMemoFilter";
 import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
@@ -464,14 +465,6 @@ export class KnomoView extends ItemView {
 		this.popupState.scopeMenuOpen = open;
 	}
 
-	private get mobileSearchPageEl(): HTMLElement | null {
-		return this.mobileSearchController.page;
-	}
-
-	private get mobileSearchInputEl(): HTMLInputElement | null {
-		return this.mobileSearchController.input;
-	}
-
 	private get mobileSearchResultsEl(): HTMLElement | null {
 		return this.mobileSearchController.results;
 	}
@@ -642,7 +635,7 @@ export class KnomoView extends ItemView {
 		});
 		this.memoMarkdownRenderer = new MemoMarkdownRenderer({
 			app: this.app,
-			component: this,
+			createComponent: () => new Component(),
 			getDocument: () => this.containerEl.doc,
 			getGeneration: (surface) => {
 				return surface === "card-flow"
@@ -707,7 +700,12 @@ export class KnomoView extends ItemView {
 			handleRestoredMemo: (deletedMemo, restoredMemo) => this.handleRestoredTrashMemo(deletedMemo, restoredMemo),
 			purgeDeletedMemo: (memo) => this.syncOrchestrator.purgeDeletedMemoRecord(memo),
 			isTrashActive: () => this.activeNav === "trash",
-			confirmPurge: () => this.containerEl.win.confirm(t("confirm.purgeMemo")),
+			confirmPurge: () => showKnomoConfirmModal(this.app, {
+				title: t("trash.purge"),
+				message: t("confirm.purgeMemo"),
+				danger: true,
+				getReturnFocus: getDestructiveConfirmReturnFocus,
+			}),
 			showNotice: (message) => new Notice(message),
 			forceRefreshViews: () => this.onForceRefreshViews(),
 			requestRender: (target) => this.handleTrashRenderRequest(target),
@@ -890,7 +888,6 @@ export class KnomoView extends ItemView {
 			openRecordStatsMetricFilter: (type) => this.openRecordStatsMetricFilter(type),
 			openRecordStatsTagFilter: (sourceEl) => this.openRecordStatsTagFilter(sourceEl),
 			openComposer: () => this.openComposer(),
-			closeComposerWithConfirm: () => this.closeComposerWithConfirm(),
 			toggleCompactSearch: () => this.toggleCompactSearchFromUserAction(),
 			runComposerToolAction: (action) => this.runComposerToolAction(action),
 			clearReference: () => this.clearReference(),
@@ -899,7 +896,7 @@ export class KnomoView extends ItemView {
 			renderUiState: () => this.renderUiState(),
 			syncUiChrome: () => this.syncUiChrome(),
 			syncCardMenuState: () => this.syncCardMenuState(),
-			cancelEditingOrCloseComposer: () => this.cancelEditingOrCloseComposer(),
+			cancelComposerFromEscape: () => this.cancelComposerFromEscape(),
 			closeOpenChromeFromEscape: () => this.closeOpenChromeFromEscape(),
 		});
 	}
@@ -3182,14 +3179,6 @@ export class KnomoView extends ItemView {
 		this.syncCardMenuState();
 	}
 
-	private async handleAction(
-		action: string | null,
-		memoId: string | null,
-		sourceEl: HTMLElement | null = null,
-	): Promise<void> {
-		await this.userActionController.handleAction(action, memoId, sourceEl);
-	}
-
 	private openRecordStatsTrendFilter(sourceEl: HTMLElement | null): void {
 		const key = sourceEl?.getAttr("data-record-stats-key") ?? null;
 		const unit = sourceEl?.getAttr("data-record-stats-unit") ?? null;
@@ -3349,11 +3338,6 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "delete") {
-				const confirmed = this.containerEl.win.confirm(t("confirm.deleteMemo"));
-				if (!confirmed) {
-					this.syncCardMenuState();
-					return;
-				}
 				const deletedMemo = await this.syncOrchestrator.deleteMemo(memo);
 				new Notice(t("notice.deleted"));
 				const mutation: MemoMutation = { type: "delete", previousMemo: memo, memo: deletedMemo };
@@ -3831,23 +3815,6 @@ export class KnomoView extends ItemView {
 		this.mobileMemoHydrator.schedule();
 	}
 
-	private closeComposerWithConfirm(): void {
-		this.closeTimeBuoyPicker(false);
-		if (this.currentLayout === "mobile") {
-			this.closeComposerKeepingDraft();
-			return;
-		}
-		if (this.inputEl !== null && this.inputEl.value.trim().length > 0) {
-			const confirmed = this.containerEl.win.confirm(t("composer.closeConfirm"));
-			if (!confirmed) {
-				return;
-			}
-			this.draftContent = this.inputEl.value;
-		}
-		this.composerOpen = false;
-		this.syncRootState();
-	}
-
 	private closeComposerKeepingDraft(): void {
 		this.closeTimeBuoyPicker(false);
 		if (this.currentLayout === "mobile") {
@@ -3923,16 +3890,14 @@ export class KnomoView extends ItemView {
 		this.resizeInput();
 	}
 
-	private cancelEditingOrCloseComposer(): void {
+	private cancelComposerFromEscape(): void {
 		if (this.currentLayout === "mobile") {
 			this.closeComposerKeepingDraft();
 			return;
 		}
 		if (this.editingMemo !== null || this.quoteSourceMemoId !== null) {
 			this.clearComposerMode();
-			return;
 		}
-		this.closeComposerWithConfirm();
 	}
 
 	private cancelEditing(): void {
@@ -4048,7 +4013,7 @@ export class KnomoView extends ItemView {
 				this.closeTimeBuoyPicker(true);
 				return;
 			}
-			this.cancelEditingOrCloseComposer();
+			this.cancelComposerFromEscape();
 		}
 	}
 
@@ -4845,10 +4810,6 @@ export class KnomoView extends ItemView {
 
 	private markSkipListEnterInputFallback(): void {
 		this.composerListEnterState.markSkipInputFallback();
-	}
-
-	private clearSkipListEnterInputFallback(): void {
-		this.composerListEnterState.clearSkipInputFallback();
 	}
 
 	private asInputEvent(event: Event): InputEvent | null {

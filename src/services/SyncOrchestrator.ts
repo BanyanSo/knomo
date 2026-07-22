@@ -144,14 +144,6 @@ export class SyncOrchestrator {
 		);
 	}
 
-	async createMemo(input: string, options: CreateMemoOptions = {}): Promise<CreateMemoResult> {
-		return this.operationGate.runOperation(async () => {
-			const result = await this.memoCommandService.createMemo(input, options);
-			await this.timeBuoyService.syncMemoRecords(null, result.memo);
-			return result;
-		});
-	}
-
 	async createMemoWithTimeBuoyOutcome(
 		input: string,
 		options: CreateMemoOptions = {},
@@ -223,14 +215,6 @@ export class SyncOrchestrator {
 			throw new KnomoError("memo_not_found_or_cleaned");
 		}
 		return currentMemo;
-	}
-
-	async scanDailyMemos(onProgress?: (progress: ScanDailyMemosProgress) => void | Promise<void>): Promise<ScanDailyMemosResult> {
-		return this.operationGate.runOperation(async () => {
-			await this.memoCommandService.recoverPendingCreates();
-			const now = new Date();
-			return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), onProgress);
-		});
 	}
 
 	async previewLegacyDailyMemos(scope: LegacyDailyMemosImportScope): Promise<LegacyDailyMemosPreview> {
@@ -396,10 +380,6 @@ export class SyncOrchestrator {
 		});
 	}
 
-	async listCurrentMonthMemos(): Promise<MemoRecord[]> {
-		return this.memoQueryService.listCurrentMonthMemos();
-	}
-
 	async listRecentMemos(): Promise<MemoRecord[]> {
 		return this.memoQueryService.listRecentMemos();
 	}
@@ -432,29 +412,11 @@ export class SyncOrchestrator {
 		return this.memoQueryService.listDeletedMemos(options);
 	}
 
-	async restoreMemo(memoId: string): Promise<MemoRecord> {
-		return this.operationGate.runOperation(async () => {
-			const memo = await this.memoRestoreService.restoreMemo(memoId);
-			await this.timeBuoyService.syncMemoRecords(null, memo);
-			return memo;
-		});
-	}
-
 	async restoreMemoRecord(memo: MemoRecord): Promise<MemoRecord> {
 		return this.operationGate.runOperation(async () => {
 			const restoredMemo = await this.memoRestoreService.restoreMemoRecord(memo);
 			await this.timeBuoyService.syncMemoRecords(memo, restoredMemo);
 			return restoredMemo;
-		});
-	}
-
-	async purgeDeletedMemo(memoId: string): Promise<void> {
-		await this.operationGate.runOperation(async () => {
-			const memo = await this.memoIndexStore.findMemoById(this.getSettings().monthlyMemoFolder, memoId);
-			await this.memoRestoreService.purgeDeletedMemo(memoId);
-			if (memo !== null) {
-				await this.timeBuoyService.syncMemoRecords(memo, null);
-			}
 		});
 	}
 
@@ -536,24 +498,12 @@ export class SyncOrchestrator {
 		return this.timeBuoyService.queryAll();
 	}
 
-	async queryTimeBuoysForRange(startDate: string, endDate: string): Promise<TimeBuoyQueryResult> {
-		return this.timeBuoyService.queryRange(startDate, endDate);
-	}
-
 	async rebuildTimeBuoyIndex(options: TimeBuoyRebuildOptions = {}): Promise<TimeBuoyRebuildResult> {
 		return this.timeBuoyService.rebuild(options);
 	}
 
-	hasPendingTimeBuoyRepair(): boolean {
-		return this.timeBuoyService.hasPendingRepair();
-	}
-
 	async needsTimeBuoyStartupRebuild(): Promise<boolean> {
 		return this.timeBuoyService.needsStartupRebuild();
-	}
-
-	listTimeBuoyIndexPeriods(): string[] {
-		return this.timeBuoyService.listStoredPeriods();
 	}
 
 	private async syncTimeBuoyMutation(mutation: MemoMutation): Promise<void> {

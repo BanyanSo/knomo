@@ -6,11 +6,29 @@ import {
 	canRetreatRecordStatsDate,
 	getRecordStatsRange,
 	RecordStatsBuilder,
-	RecordStatsService,
+	RecordStatsService as ProductionRecordStatsService,
 	shiftRecordStatsDate,
 } from "../src/services/RecordStatsService";
 import type { MemoRecord } from "../src/types/memo";
 import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
+
+class RecordStatsService extends ProductionRecordStatsService {
+	async prepare(memos: readonly MemoRecord[], yieldToUi: () => Promise<void>): Promise<boolean> {
+		return this.prepareFromSource(memos, async (isCurrent) => {
+			const builder = new RecordStatsBuilder();
+			for (let index = 0; index < memos.length; index += 1) {
+				if (index > 0 && index % 250 === 0) {
+					await yieldToUi();
+					if (!isCurrent()) {
+						return null;
+					}
+				}
+				builder.addMemo(memos[index]);
+			}
+			return builder.build();
+		});
+	}
+}
 
 test("prepares overview and selects weekly statistics with natural-day boundaries", async () => {
 	const service = new RecordStatsService();

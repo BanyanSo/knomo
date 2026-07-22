@@ -3,7 +3,7 @@ import type { App } from "obsidian";
 import type { MemoMutation, MemoRecord } from "../types/memo";
 import type { KnomoSettings } from "../types/settings";
 import { formatMonthPeriod } from "../utils/date";
-import { getTimeBuoyTargetPeriod, listTimeBuoyTargetPeriods } from "../utils/timeBuoyDate";
+import { getTimeBuoyTargetPeriod } from "../utils/timeBuoyDate";
 import { extractTimeBuoyDates, getTimeBuoyRevision } from "../utils/timeBuoyParser";
 import type { MemoIndexStore } from "./MemoIndexStore";
 import { MarkdownBlockService } from "./MarkdownBlockService";
@@ -55,12 +55,6 @@ export class TimeBuoyService {
 		return this.getSettings().timeBuoyEnabled;
 	}
 
-	hasPendingRepair(): boolean {
-		return this.rebuildRequired
-			|| this.failedMemoIds.size > 0
-			|| this.indexStore.listPotentialSyncConflictFiles(this.getSettings().monthlyMemoFolder).length > 0;
-	}
-
 	async needsStartupRebuild(): Promise<boolean> {
 		if (!this.isEnabled()) {
 			return false;
@@ -91,8 +85,9 @@ export class TimeBuoyService {
 		previousMemo: MemoRecord | null,
 		nextMemo: MemoRecord | null,
 	): Promise<TimeBuoyMaintenanceOutcome> {
+		const activePreviousMemo = previousMemo?.status === "active" ? previousMemo : null;
 		const activeNextMemo = nextMemo?.status === "active" ? nextMemo : null;
-		const previousDates = normalizeDates(previousMemo === null ? [] : extractTimeBuoyDates(previousMemo.contentSnapshot));
+		const previousDates = normalizeDates(activePreviousMemo === null ? [] : extractTimeBuoyDates(activePreviousMemo.contentSnapshot));
 		const nextDates = normalizeDates(activeNextMemo === null ? [] : extractTimeBuoyDates(activeNextMemo.contentSnapshot));
 		if (!this.isEnabled()) {
 			if (previousMemo !== null || nextMemo !== null) {
@@ -100,7 +95,7 @@ export class TimeBuoyService {
 			}
 			return { status: "disabled", dates: nextDates };
 		}
-		const identityMemo = activeNextMemo ?? previousMemo;
+		const identityMemo = activeNextMemo ?? activePreviousMemo;
 		if (identityMemo === null) {
 			return { status: "synced", dates: nextDates };
 		}
@@ -181,22 +176,6 @@ export class TimeBuoyService {
 		} catch {
 			await this.recordReadFailure(periods);
 			return { items: [], stale: [], missingPeriods: periods, complete: false };
-		}
-	}
-
-	async queryRange(startDate: string, endDate: string): Promise<TimeBuoyQueryResult> {
-		if (!this.isEnabled()) {
-			return { items: [], stale: [], missingPeriods: [] };
-		}
-		const periods = listTimeBuoyTargetPeriods(startDate, endDate);
-		if (await this.loadHealthyExpectedPeriods() === null) {
-			return { items: [], stale: [], missingPeriods: periods };
-		}
-		try {
-			return await this.trackStale(await this.queryService.queryRange(startDate, endDate), periods);
-		} catch {
-			await this.recordReadFailure(periods);
-			return { items: [], stale: [], missingPeriods: periods };
 		}
 	}
 

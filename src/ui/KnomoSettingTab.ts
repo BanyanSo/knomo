@@ -1,5 +1,5 @@
 import { Notice, PluginSettingTab, Setting } from "obsidian";
-import type { App, ButtonComponent, Plugin, ToggleComponent } from "obsidian";
+import type { App, ButtonComponent, Plugin, SettingDefinitionItem, ToggleComponent } from "obsidian";
 
 import {
 	DEFAULT_DAILY_HEADING,
@@ -58,6 +58,282 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly obsidianExcludeService: ObsidianExcludeService,
 	) {
 		super(app, plugin);
+	}
+
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				type: "group",
+				heading: t("settings.title"),
+				items: [
+					{
+						name: t("settings.dailyHeading.name"),
+						desc: t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING }),
+						render: (setting) => {
+							const settings = this.settingsService.getSettings();
+							setting.addText((text) => {
+								text.setPlaceholder(DEFAULT_DAILY_HEADING);
+								text.setValue(settings.dailyHeading);
+								text.onChange((value) => {
+									this.updateTextSettingDraft(
+										"dailyHeading",
+										value,
+										(nextValue) => this.settingsService.validateDailyHeading(nextValue),
+										t("settings.dailyHeading.invalid"),
+									);
+								});
+								text.inputEl.addEventListener("blur", () => {
+									void this.commitDailyHeadingDraft();
+								});
+							});
+						},
+					},
+					{
+						name: t("settings.insertPosition.name"),
+						desc: t("settings.insertPosition.desc"),
+						render: (setting) => {
+							const settings = this.settingsService.getSettings();
+							setting.addDropdown((dropdown) => {
+								dropdown.addOption("bottom", t("settings.insertPosition.bottom"));
+								dropdown.addOption("top", t("settings.insertPosition.top"));
+								dropdown.setValue(settings.dailyInsertPosition);
+								dropdown.onChange((value) => {
+									void this.settingsService.updateSettings({
+										dailyInsertPosition: value as DailyInsertPosition,
+									});
+								});
+							});
+						},
+					},
+					{
+						name: t("settings.timeFormat.name"),
+						desc: t("settings.timeFormat.desc"),
+						render: (setting) => {
+							const settings = this.settingsService.getSettings();
+							setting.addDropdown((dropdown) => {
+								dropdown.addOption("HH:mm:ss", "HH:mm:ss");
+								dropdown.addOption("HH:mm", "HH:mm");
+								dropdown.setValue(settings.memoTimeFormat);
+								dropdown.onChange((value) => {
+									void this.settingsService.updateSettings({
+										memoTimeFormat: value as MemoTimeFormat,
+									});
+								});
+							});
+						},
+					},
+					{
+						name: t("settings.timeBuoy.name"),
+						desc: t("settings.timeBuoy.desc"),
+						render: (setting) => {
+							const settings = this.settingsService.getSettings();
+							setting.addToggle((toggle) => {
+								toggle.setValue(settings.timeBuoyEnabled);
+								toggle.onChange((value) => {
+									void this.toggleTimeBuoy(value, toggle);
+								});
+							});
+						},
+					},
+					{
+						name: t("settings.monthlyFolder.name"),
+						desc: t("settings.monthlyFolder.desc"),
+						render: (setting) => {
+							const settings = this.settingsService.getSettings();
+							let monthlyFolderDraft = settings.monthlyMemoFolder;
+							setting
+								.addText((text) => {
+									text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
+									text.setValue(settings.monthlyMemoFolder);
+									text.onChange((value) => {
+										monthlyFolderDraft = value;
+									});
+								})
+								.addButton((button) => {
+									button.setButtonText(t("settings.monthlyFolder.save"));
+									button.onClick(() => {
+										void this.saveMonthlyFolder(monthlyFolderDraft, button);
+									});
+								});
+						},
+					},
+					{
+						name: t("settings.excludeMonthly.name"),
+						desc: t("settings.excludeMonthly.desc"),
+						render: (setting, group) => {
+							const settings = this.settingsService.getSettings();
+							setting.addToggle((toggle) => {
+								toggle.setValue(settings.excludeMonthlyMemosFromObsidian);
+								toggle.onChange((value) => {
+									void this.toggleMonthlyMemosExcludeRule(value, toggle);
+								});
+							});
+							this.monthlyExcludeStatusEl = group.listEl.createDiv({ cls: "knomo-setting-help" });
+						},
+					},
+					{
+						name: t("settings.monthlyFileFormat.name"),
+						desc: t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }),
+						render: (setting, group) => {
+							const settings = this.settingsService.getSettings();
+							setting.addText((text) => {
+								text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
+								text.setValue(settings.monthlyMemoFileFormat);
+								text.onChange((value) => {
+									this.updateTextSettingDraft(
+										"monthlyMemoFileFormat",
+										value,
+										(nextValue) => this.settingsService.validateMonthlyMemoFileFormat(nextValue),
+										t("settings.monthlyFileFormat.invalid"),
+									);
+								});
+								text.inputEl.addEventListener("blur", () => {
+									void this.commitMonthlyMemoFileFormatDraft();
+								});
+							});
+							this.monthlyFileFormatStatusEl = group.listEl.createDiv({ cls: "knomo-setting-help" });
+							this.updateMonthlyFileFormatStatus();
+						},
+					},
+					{
+						name: t("settings.dateHeadingFormat.name"),
+						desc: t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }),
+						render: (setting) => {
+							const settings = this.settingsService.getSettings();
+							setting.addText((text) => {
+								text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
+								text.setValue(settings.monthlyDateHeadingFormat);
+								text.onChange((value) => {
+									this.updateTextSettingDraft(
+										"monthlyDateHeadingFormat",
+										value,
+										(nextValue) => this.settingsService.validateMarkdownHeading(nextValue),
+										t("settings.dateHeadingFormat.invalid"),
+									);
+								});
+								text.inputEl.addEventListener("blur", () => {
+									void this.commitMonthlyDateHeadingFormatDraft();
+								});
+							});
+						},
+					},
+					{
+						name: t("settings.dateOrder.name"),
+						desc: t("settings.dateOrder.desc"),
+						render: (setting) => {
+							const settings = this.settingsService.getSettings();
+							setting.addDropdown((dropdown) => {
+								dropdown.addOption("asc", t("settings.dateOrder.asc"));
+								dropdown.addOption("desc", t("settings.dateOrder.descOption"));
+								dropdown.setValue(settings.monthlyDateOrder);
+								dropdown.onChange((value) => {
+									void this.settingsService.updateSettings({
+										monthlyDateOrder: value as MonthlyDateOrder,
+									});
+								});
+							});
+						},
+					},
+				],
+			},
+			{
+				type: "group",
+				heading: t("settings.maintenance.heading"),
+				items: [
+					{
+						name: t("settings.legacyImport.name"),
+						desc: t("settings.legacyImport.desc"),
+						render: (setting, group) => {
+							setting
+								.addDropdown((dropdown) => {
+									dropdown.addOption("30d", t("settings.scope30d"));
+									dropdown.addOption("90d", t("settings.scope90d"));
+									dropdown.addOption("all", t("settings.scopeAll"));
+									dropdown.setValue(this.legacyImportScope);
+									dropdown.onChange((value) => {
+										this.legacyImportScope = value as LegacyDailyMemosImportScope;
+										this.legacyImportPreview = null;
+										this.renderLegacyImportPreview();
+									});
+								})
+								.addButton((button) => {
+									button.setButtonText(t("settings.preview.start"));
+									button.onClick(() => {
+										void this.runLegacyImportPreview(button);
+									});
+								});
+							this.legacyImportResultEl = group.listEl.createDiv({ cls: "knomo-scan-result" });
+							this.legacyImportGroupsEl = group.listEl.createDiv({ cls: "knomo-legacy-import-groups" });
+							this.renderLegacyImportPreview();
+						},
+					},
+					{
+						name: t("settings.rebuild.name"),
+						desc: t("settings.rebuild.desc"),
+						render: (setting, group) => {
+							let rebuildScope: RebuildIndexScope = "30d";
+							let rebuildMode: RebuildIndexMode = "index-only";
+							setting
+								.setClass("knomo-maintenance-setting")
+								.addDropdown((dropdown) => {
+									dropdown.addOption("30d", t("settings.scope30d"));
+									dropdown.addOption("90d", t("settings.scope90d"));
+									dropdown.addOption("all", t("settings.scopeAll"));
+									dropdown.setValue(rebuildScope);
+									dropdown.onChange((value) => {
+										rebuildScope = value as RebuildIndexScope;
+									});
+								})
+								.addDropdown((dropdown) => {
+									dropdown.addOption("index-only", t("settings.rebuild.indexOnly"));
+									dropdown.addOption("index-and-monthly", t("settings.rebuild.indexAndMonthly"));
+									dropdown.setValue(rebuildMode);
+									dropdown.onChange((value) => {
+										rebuildMode = value as RebuildIndexMode;
+									});
+								})
+								.addButton((button) => {
+									button.setButtonText(t("settings.rebuild.start"));
+									button.onClick(() => {
+										void this.runRebuildIndex(rebuildScope, rebuildMode, button);
+									});
+								});
+							this.rebuildResultEl = group.listEl.createDiv({ cls: "knomo-scan-result" });
+							void this.renderInitialRebuildResult();
+						},
+					},
+					{
+						name: t("settings.monthlyRebuild.name"),
+						desc: t("settings.monthlyRebuild.desc"),
+						render: (setting, group) => {
+							const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
+							let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
+							setting
+								.setClass("knomo-maintenance-setting")
+								.addDropdown((dropdown) => {
+									for (const period of monthlyPeriods) {
+										dropdown.addOption(period, period);
+									}
+									dropdown.setValue(monthlyRebuildPeriod);
+									dropdown.onChange((value) => {
+										monthlyRebuildPeriod = value;
+									});
+								})
+								.addButton((button) => {
+									button.setButtonText(t("settings.monthlyRebuild.start"));
+									button.onClick(() => {
+										void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button);
+									});
+								});
+							this.monthlyRebuildResultEl = group.listEl.createDiv({ cls: "knomo-scan-result" });
+							this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"));
+							this.issueListEl = group.listEl.createDiv({ cls: "knomo-issue-list" });
+							void this.renderIssueList();
+						},
+					},
+				],
+			},
+		];
 	}
 
 	display(): void {

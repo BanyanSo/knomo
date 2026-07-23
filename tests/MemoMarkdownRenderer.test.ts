@@ -218,10 +218,19 @@ class TestElement {
 		return this.createEl("span", options);
 	}
 
+	createDiv(options: CreateElementOptions = {}): TestElement {
+		return this.createEl("div", options);
+	}
+
 	createEl(tagName: string, options: CreateElementOptions = {}): TestElement {
 		const child = new TestElement(tagName.toUpperCase(), options, this);
 		this.children.push(child);
 		return child;
+	}
+
+	detach(): void {
+		this.parent?.removeChild(this);
+		this.parent = null;
 	}
 
 	appendChild(child: TestElement): TestElement {

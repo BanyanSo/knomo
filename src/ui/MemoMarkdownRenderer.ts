@@ -166,7 +166,8 @@ export class MemoMarkdownRenderer {
 		if (!this.isCurrentRender(container, token, surface)) {
 			return;
 		}
-		const renderTarget = this.options.getDocument().createElement("div");
+		const renderTarget = container.createDiv();
+		renderTarget.detach();
 		const component = this.createRenderComponent(surface);
 		let adopted = false;
 		try {
@@ -211,7 +212,8 @@ export class MemoMarkdownRenderer {
 		if (!this.isCurrentRender(container, token, surface)) {
 			return;
 		}
-		const renderTarget = this.options.getDocument().createElement("div");
+		const renderTarget = container.createDiv();
+		renderTarget.detach();
 		const component = this.createRenderComponent(surface);
 		let adopted = false;
 		try {

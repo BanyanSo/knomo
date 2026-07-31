@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 
 import { t } from "../i18n";
 import type { MemoPreviewImage } from "./MemoCardPreview";
+import { removeObsidianModalCloseButtons } from "./ObsidianModalCloseButton";
 
 interface KnomoImagePreviewModalOptions {
 	images: readonly MemoPreviewImage[];
@@ -71,6 +72,7 @@ export class KnomoImagePreviewModal extends Modal {
 		this.containerEl.addClass("knomo-image-preview-backdrop");
 		this.containerEl.toggleClass("knomo-image-preview-backdrop--mobile", Platform.isMobile);
 		this.modalEl.addClass("knomo-image-preview-modal");
+		removeObsidianModalCloseButtons(this.modalEl);
 		this.titleEl.setText(t("image.previewLabel"));
 		this.contentEl.empty();
 

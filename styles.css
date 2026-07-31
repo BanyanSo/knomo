@@ -3572,10 +3572,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	background: rgba(0, 0, 0, 0.82);
 }
 
-.knomo-image-preview-modal .modal-close-button {
-	display: none;
-}
-
 .knomo-image-preview-modal .modal-title {
 	position: absolute;
 	width: 1px;
@@ -3806,7 +3802,7 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 /* --------------------------------------------------------------------------
-   13b. 记录统计
+   13b. 特殊页面底部留白与记录统计
    -------------------------------------------------------------------------- */
 .knomo-plugin.is-record-stats .knomo-composer,
 .knomo-plugin.is-record-stats .knomo-compact-search-panel,
@@ -3827,11 +3823,13 @@ body .knomo-mobile-create-fab.is-hidden {
 	display: inline-flex;
 }
 
-.knomo-plugin.is-record-stats .knomo-card-flow {
+.knomo-plugin.is-record-stats .knomo-card-flow,
+.knomo-plugin.is-time-buoy .knomo-card-flow {
 	padding-bottom: max(var(--size-4-6), env(safe-area-inset-bottom));
 }
 
-.knomo-plugin.is-layout-mobile.is-record-stats .knomo-card-flow {
+.knomo-plugin.is-layout-mobile.is-record-stats .knomo-card-flow,
+.knomo-plugin.is-layout-mobile.is-time-buoy:not(.is-composer-open) .knomo-card-flow {
 	padding-bottom: calc(var(--mobile-navbar-action-size, 44px) + var(--size-4-8) + env(safe-area-inset-bottom));
 }
 

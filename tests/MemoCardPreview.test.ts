@@ -57,6 +57,21 @@ test("parseMemoCardPreviewLite strips image syntax without resolving local files
 	assert.equal(preview.imageRefs[1].alt, "local");
 });
 
+test("keeps size-only Markdown image labels out of local and remote preview alt text", () => {
+	const app = createAppStub(["local.png", "labeled.png"]);
+	const preview = parseMemoCardPreview(
+		[
+			"![200](local.png)",
+			"![ 320 ](https://example.com/remote.png)",
+			"![图 200](labeled.png)",
+		].join(" "),
+		"Daily/2026-06-11.md",
+		app,
+	);
+
+	assert.deepEqual(preview.images.map((image) => image.alt), ["", "", "图 200"]);
+});
+
 test("skips fenced code blocks, inline code, and incomplete image syntax", () => {
 	const app = createAppStub(["real.png"]);
 	const preview = parseMemoCardPreview(

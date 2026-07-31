@@ -1643,6 +1643,7 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-mobile-search-open", this.mobileSearchPageOpen);
 		root.toggleClass("is-mobile-compact", this.settingsService.getSettings().mobileCompactMode !== "off");
 		root.toggleClass("is-record-stats", this.activeNav === "record-stats");
+		root.toggleClass("is-time-buoy", this.activeNav === "time-buoy");
 		root.toggleClass("is-shuffle-day", this.activeNav === "shuffleDay");
 		root.setCssProps({ "--knomo-sidebar-width": `${sidebarState.width}px` });
 		this.syncTooltipState(root);

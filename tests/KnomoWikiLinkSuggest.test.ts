@@ -68,6 +68,91 @@ test("handles ArrowUp ArrowDown Enter Tab and Escape", () => {
 	assert.equal(escapeHarness.suggest.isOpen(), false);
 });
 
+test("keeps keyboard-selected candidates visible inside the popover", () => {
+	const harness = createHarness([
+		makeFile("Notes/01.md"),
+		makeFile("Notes/02.md"),
+		makeFile("Notes/03.md"),
+		makeFile("Notes/04.md"),
+		makeFile("Notes/05.md"),
+		makeFile("Notes/06.md"),
+		makeFile("Notes/07.md"),
+		makeFile("Notes/08.md"),
+		makeFile("Notes/09.md"),
+		makeFile("Notes/10.md"),
+	]);
+	harness.input.value = "[[]]";
+	harness.input.setSelectionRange(2, 2);
+	harness.input.focus();
+	harness.suggest.openForCurrentRange();
+	const popover = harness.suggest.getPopoverForTest() as unknown as FakeElement;
+
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
+	assert.equal(harness.suggest.getSelectedIndex(), 3);
+	assert.equal(popover.scrollTop, 88);
+
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
+	assert.equal(harness.suggest.getSelectedIndex(), 0);
+	assert.equal(popover.scrollTop, 0);
+
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
+	assert.equal(harness.suggest.getSelectedIndex(), 9);
+	assert.equal(popover.scrollTop, 352);
+
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
+	assert.equal(harness.suggest.getSelectedIndex(), 0);
+	assert.equal(popover.scrollTop, 0);
+	assert.equal(harness.doc.activeElement, harness.input.asHtml());
+});
+
+test("handles Ctrl-N and Ctrl-P navigation without consuming unrelated modifiers", () => {
+	const harness = createHarness([
+		makeFile("Projects/Alpha.md"),
+		makeFile("Projects/Beta.md"),
+	]);
+	harness.input.value = "[[]]";
+	harness.input.setSelectionRange(2, 2);
+	harness.suggest.openForCurrentRange();
+	harness.win.flushAnimationFrames();
+
+	const previous = createKeyboardEvent("p", { ctrlKey: true });
+	assert.equal(harness.suggest.handleKeydown(previous), true);
+	assert.equal(harness.suggest.getSelectedIndex(), 1);
+	assert.equal(previous.prevented, true);
+
+	const next = createKeyboardEvent("n", { ctrlKey: true });
+	assert.equal(harness.suggest.handleKeydown(next), true);
+	assert.equal(harness.suggest.getSelectedIndex(), 0);
+	assert.equal(next.prevented, true);
+
+	for (const event of [
+		createKeyboardEvent("n"),
+		createKeyboardEvent("n", { metaKey: true }),
+		createKeyboardEvent("n", { ctrlKey: true, shiftKey: true }),
+		createKeyboardEvent("p", { ctrlKey: true, altKey: true }),
+	]) {
+		assert.equal(harness.suggest.handleKeydown(event), false);
+		assert.equal(event.prevented, false);
+	}
+
+	const closedHarness = createHarness([makeFile("Projects/Alpha.md")]);
+	const closedEvent = createKeyboardEvent("n", { ctrlKey: true });
+	assert.equal(closedHarness.suggest.handleKeydown(closedEvent), false);
+	assert.equal(closedEvent.prevented, false);
+
+	const emptyHarness = createHarness([makeFile("Projects/Alpha.md")]);
+	emptyHarness.input.value = "[[missing]]";
+	emptyHarness.input.setSelectionRange(9, 9);
+	emptyHarness.suggest.openForCurrentRange();
+	const emptyEvent = createKeyboardEvent("p", { ctrlKey: true });
+	assert.equal(emptyHarness.suggest.handleKeydown(emptyEvent), false);
+	assert.equal(emptyEvent.prevented, false);
+});
+
 test("connects the textarea to the active WikiLink listbox option", () => {
 	const harness = createHarness([
 		makeFile("Projects/Alpha.md"),
@@ -272,9 +357,17 @@ function makeFile(path: string): TFile {
 	} as unknown as TFile;
 }
 
-function createKeyboardEvent(key: string): KeyboardEvent & { prevented: boolean } {
+function createKeyboardEvent(
+	key: string,
+	modifiers: Partial<Pick<KeyboardEvent, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">> = {},
+): KeyboardEvent & { prevented: boolean } {
 	return {
 		key,
+		altKey: false,
+		ctrlKey: false,
+		metaKey: false,
+		shiftKey: false,
+		...modifiers,
 		prevented: false,
 		preventDefault() {
 			this.prevented = true;
@@ -350,8 +443,11 @@ class FakeElement {
 	parentElement: FakeElement | null = null;
 	scrollHeight = 88;
 	scrollWidth = 300;
+	scrollTop = 0;
 	offsetWidth = 100;
+	offsetHeight = 44;
 	clientWidth = 88;
+	clientHeight = 88;
 	private text = "";
 
 	constructor(
@@ -365,6 +461,13 @@ class FakeElement {
 
 	get win(): FakeWindow {
 		return this.ownerDocument.defaultView;
+	}
+
+	get offsetTop(): number {
+		if (this.parentElement === null) {
+			return 0;
+		}
+		return this.parentElement.children.indexOf(this) * this.offsetHeight;
 	}
 
 	createDiv(options: FakeElementOptions = {}): FakeElement {
@@ -553,7 +656,6 @@ class FakeTextArea extends FakeElement {
 	selectionStart = 0;
 	selectionEnd = 0;
 	scrollLeft = 0;
-	scrollTop = 0;
 
 	constructor(doc: FakeDocument) {
 		super("textarea", doc);

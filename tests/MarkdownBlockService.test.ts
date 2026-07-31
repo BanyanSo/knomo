@@ -261,6 +261,32 @@ test("keeps remote Markdown image URLs percent-encoded", () => {
 	]);
 });
 
+test("treats numeric-only Markdown image labels as sizes for local and remote images", () => {
+	const metadata = service.parseMemoMetadata([
+		"![200](Assets/local.png)",
+		"![ 320 ](https://example.com/remote.png)",
+		"![图 200](Assets/labeled.png)",
+	].join(" "));
+
+	assert.deepEqual(metadata.images, [
+		{
+			path: "Assets/local.png",
+			altText: "",
+			syntax: "markdown_image",
+		},
+		{
+			path: "https://example.com/remote.png",
+			altText: "",
+			syntax: "markdown_image",
+		},
+		{
+			path: "Assets/labeled.png",
+			altText: "图 200",
+			syntax: "markdown_image",
+		},
+	]);
+});
+
 test("ignores blockId on the first line", () => {
 	const parsed = service.parseMemoBlock(["- 12:00:00 第一行 ^abc123", "  第二行"], 0);
 

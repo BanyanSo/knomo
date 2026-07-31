@@ -93,14 +93,19 @@ function parseMarkdownImageAt(content: string, start: number): ParsedMarkdownIma
 	if (destination === null || destination.path.length === 0) {
 		return null;
 	}
+	const altText = unescapeMarkdownText(content.slice(start + 2, altEnd));
 	return {
 		raw: content.slice(start, destination.end),
 		path: destination.path,
-		altText: unescapeMarkdownText(content.slice(start + 2, altEnd)),
+		altText: isMarkdownImageSize(altText) ? "" : altText,
 		syntax: "markdown_image",
 		start,
 		end: destination.end,
 	};
+}
+
+function isMarkdownImageSize(value: string): boolean {
+	return /^[1-9]\d*$/.test(value.trim());
 }
 
 function parseMarkdownDestination(content: string, start: number): { path: string; end: number } | null {

@@ -2,6 +2,7 @@ import { Modal } from "obsidian";
 import type { App } from "obsidian";
 
 import { t } from "../i18n";
+import { removeObsidianModalCloseButtons } from "./ObsidianModalCloseButton";
 
 type ScheduleAnimationFrame = (callback: FrameRequestCallback) => number;
 
@@ -34,7 +35,7 @@ export class KnomoConfirmModal extends Modal {
 
 	onOpen(): void {
 		this.modalEl.addClass("knomo-confirm-modal");
-		removeKnomoConfirmCloseButton(this.modalEl);
+		removeObsidianModalCloseButtons(this.modalEl);
 		this.titleEl.setText(this.options.title ?? t("confirm.title"));
 		this.contentEl.empty();
 
@@ -114,10 +115,6 @@ export function getDestructiveConfirmReturnFocus(
 	previousFocus: HTMLElement | null,
 ): HTMLElement | null {
 	return confirmed ? null : previousFocus;
-}
-
-export function removeKnomoConfirmCloseButton(modalEl: HTMLElement): void {
-	modalEl.querySelector(".modal-close-button")?.remove();
 }
 
 export function scheduleKnomoConfirmFocus(

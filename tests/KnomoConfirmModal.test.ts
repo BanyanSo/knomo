@@ -11,27 +11,6 @@ test("destructive confirmation restores the trigger only when cancelled", async 
 	assert.equal(getDestructiveConfirmReturnFocus(true, previousFocus), null);
 });
 
-test("confirm modal removes Obsidian's redundant close button", async () => {
-	const { removeKnomoConfirmCloseButton } = await loadConfirmModalModule();
-	let queriedSelector = "";
-	let removeCalls = 0;
-	const modalEl = {
-		querySelector: (selector: string) => {
-			queriedSelector = selector;
-			return {
-				remove: () => {
-					removeCalls += 1;
-				},
-			};
-		},
-	} as unknown as HTMLElement;
-
-	removeKnomoConfirmCloseButton(modalEl);
-
-	assert.equal(queriedSelector, ".modal-close-button");
-	assert.equal(removeCalls, 1);
-});
-
 test("confirm modal restores a connected focus target on the next frame", async () => {
 	const { scheduleKnomoConfirmFocus } = await loadConfirmModalModule();
 	const callbacks: FrameRequestCallback[] = [];

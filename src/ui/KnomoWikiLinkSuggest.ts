@@ -142,20 +142,18 @@ export class KnomoWikiLinkSuggest {
 		if (this.suggestions.length === 0) {
 			return false;
 		}
-		if (event.key === "ArrowDown") {
+		if (event.key === "ArrowDown" || isControlNavigationKey(event, "n")) {
 			event.preventDefault();
 			event.stopPropagation();
 			event.stopImmediatePropagation();
-			this.selectedIndex = (this.selectedIndex + 1) % this.suggestions.length;
-			this.renderSuggestions();
+			this.moveSelection(1);
 			return true;
 		}
-		if (event.key === "ArrowUp") {
+		if (event.key === "ArrowUp" || isControlNavigationKey(event, "p")) {
 			event.preventDefault();
 			event.stopPropagation();
 			event.stopImmediatePropagation();
-			this.selectedIndex = (this.selectedIndex + this.suggestions.length - 1) % this.suggestions.length;
-			this.renderSuggestions();
+			this.moveSelection(-1);
 			return true;
 		}
 		if (event.key === "Enter" || event.key === "Tab") {
@@ -213,12 +211,18 @@ export class KnomoWikiLinkSuggest {
 		this.renderSuggestions();
 	}
 
-	private renderSuggestions(): void {
+	private moveSelection(offset: number): void {
+		this.selectedIndex = (this.selectedIndex + this.suggestions.length + offset) % this.suggestions.length;
+		this.renderSuggestions(true);
+	}
+
+	private renderSuggestions(ensureSelectedVisible = false): void {
 		const popover = this.popoverEl;
 		if (popover === null) {
 			return;
 		}
 		popover.empty();
+		let selectedItem: HTMLElement | null = null;
 		for (const [index, suggestion] of this.suggestions.entries()) {
 			const optionId = this.getOptionId(index);
 			const item = popover.createDiv({
@@ -230,7 +234,11 @@ export class KnomoWikiLinkSuggest {
 					"aria-selected": index === this.selectedIndex ? "true" : "false",
 				},
 			});
-			item.toggleClass("is-selected", index === this.selectedIndex);
+			const selected = index === this.selectedIndex;
+			item.toggleClass("is-selected", selected);
+			if (selected) {
+				selectedItem = item;
+			}
 			item.createDiv({ cls: "knomo-link-suggest-title", text: suggestion.basename });
 			if (suggestion.showPath) {
 				item.createDiv({ cls: "knomo-link-suggest-path", text: suggestion.path });
@@ -277,7 +285,24 @@ export class KnomoWikiLinkSuggest {
 		}
 		this.inputEl.setAttr("aria-expanded", "true");
 		this.inputEl.setAttr("aria-activedescendant", this.getOptionId(this.selectedIndex));
+		if (ensureSelectedVisible && selectedItem !== null) {
+			this.ensureSuggestionVisible(popover, selectedItem);
+		}
 		this.queueReposition();
+	}
+
+	private ensureSuggestionVisible(popover: HTMLElement, item: HTMLElement): void {
+		const itemTop = item.offsetTop;
+		const itemBottom = itemTop + item.offsetHeight;
+		const visibleTop = popover.scrollTop;
+		const visibleBottom = visibleTop + popover.clientHeight;
+		if (itemTop < visibleTop) {
+			popover.scrollTop = itemTop;
+			return;
+		}
+		if (itemBottom > visibleBottom) {
+			popover.scrollTop = itemBottom - popover.clientHeight;
+		}
 	}
 
 	private selectSuggestion(index: number): void {
@@ -447,6 +472,14 @@ export class KnomoWikiLinkSuggest {
 		this.repositionFrameId = null;
 	}
 
+}
+
+function isControlNavigationKey(event: KeyboardEvent, key: "n" | "p"): boolean {
+	return event.ctrlKey
+		&& !event.altKey
+		&& !event.metaKey
+		&& !event.shiftKey
+		&& event.key.toLowerCase() === key;
 }
 
 function isTouchPointerEvent(event: Event): boolean {

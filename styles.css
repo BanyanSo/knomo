@@ -3572,10 +3572,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	background: rgba(0, 0, 0, 0.82);
 }
 
-.knomo-image-preview-modal .modal-close-button {
-	display: none;
-}
-
 .knomo-image-preview-modal .modal-title {
 	position: absolute;
 	width: 1px;

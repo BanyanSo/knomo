@@ -5601,7 +5601,7 @@ export class KnomoView extends ItemView {
 		}
 		this.app.workspace.trigger("hover-link", {
 			event,
-			source: "preview",
+			source: KNOMO_VIEW_TYPE,
 			hoverParent: this,
 			targetEl: linkInfo.element,
 			linktext: linkInfo.linktext,

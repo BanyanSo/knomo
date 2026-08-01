@@ -2078,7 +2078,7 @@ test("full daily scan tombstones indexed memos whose daily file no longer exists
 			}),
 		} as never,
 		{
-			loadAll: async () => [memo],
+			loadExistingPeriods: async () => [memo],
 			upsertMemo: async (_folder: string, deletedMemo: MemoRecord) => {
 				savedMemos.push(deletedMemo);
 				return deletedMemo;
@@ -2124,7 +2124,7 @@ test("full daily scan keeps indexed memos whose file still exists outside the cu
 		} as never,
 		{} as never,
 		{
-			loadAll: async () => [memo],
+			loadExistingPeriods: async () => [memo],
 			upsertMemo: async (_folder: string, savedMemo: MemoRecord) => {
 				saved = true;
 				return savedMemo;

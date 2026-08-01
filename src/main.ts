@@ -8,6 +8,7 @@ import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { FileWatchService } from "./services/FileWatchService";
 import { MarkdownBlockService } from "./services/MarkdownBlockService";
 import { MemoIndexStore } from "./services/MemoIndexStore";
+import { MemoSummaryService } from "./services/MemoSummaryService";
 import { MonthlyArchiveService } from "./services/MonthlyArchiveService";
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
 import { PendingMemoCreateStore } from "./services/PendingMemoCreateStore";
@@ -19,6 +20,7 @@ import { SettingsService } from "./services/SettingsService";
 import { ShuffleDayService } from "./services/ShuffleDayService";
 import { SyncOrchestrator } from "./services/SyncOrchestrator";
 import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
+import { VaultTagIndex } from "./services/VaultTagIndex";
 import type { ScanDailyMemosResult } from "./services/MemoScanService";
 import { KNOMO_LOGO_ICON, registerKnomoIcons } from "./icons";
 import { t } from "./i18n";
@@ -27,6 +29,7 @@ import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactControlle
 import { KnomoView } from "./ui/KnomoView";
 import type { MemoMutation } from "./types/memo";
 import { formatServiceError } from "./utils/serviceText";
+import { formatMonthPeriod } from "./utils/date";
 import type { MaintenanceDiagnostic } from "./utils/pluginData";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
@@ -43,6 +46,8 @@ export default class KnomoPlugin extends Plugin {
 	manualRefreshPromise: Promise<ScanDailyMemosResult> | null = null;
 	private viewRefreshScheduler: ViewRefreshScheduler | null = null;
 	private syncConflictNoticeShown = false;
+	private memoSummaryService!: MemoSummaryService;
+	private vaultTagIndex!: VaultTagIndex;
 
 	async onload(): Promise<void> {
 		registerKnomoIcons();
@@ -63,6 +68,12 @@ export default class KnomoPlugin extends Plugin {
 			return () => selfWriteTracker.discard(oldPath, opId);
 		}, pluginDataStore);
 		const memoIndexStore = new MemoIndexStore(this.app);
+		this.memoSummaryService = this.addChild(new MemoSummaryService(
+			this.app,
+			() => this.settingsService.getSettings(),
+			memoIndexStore,
+		));
+		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
 		const settingsLoaded = await this.loadSettingsSafely();
 		if (settingsLoaded) {
 			await this.initializeTimeBuoyDefaultSafely(memoIndexStore);
@@ -130,6 +141,8 @@ export default class KnomoPlugin extends Plugin {
 				randomReunionService,
 				shuffleDayService,
 				attachmentService,
+				this.memoSummaryService,
+				this.vaultTagIndex,
 				(mutation, sourceView) => this.broadcastMemoMutation(mutation, sourceView),
 				() => this.runRefreshOpenViews(true),
 				() => this.runManualRefresh(),
@@ -219,6 +232,7 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	private broadcastMemoMutation(mutation: MemoMutation, sourceView: KnomoView): void {
+		this.memoSummaryService.invalidatePeriod(formatMonthPeriod(new Date(mutation.memo.createdAt)));
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 			if (leaf.view instanceof KnomoView && leaf.view !== sourceView) {
 				leaf.view.applyMemoMutation(mutation);
@@ -316,7 +330,13 @@ export default class KnomoPlugin extends Plugin {
 		this.notifyPotentialSyncConflictsSafely();
 		const needsTimeBuoyStartupRebuild = await this.syncOrchestrator.needsTimeBuoyStartupRebuild();
 		await this.scanRecentDailyMemosSafely(getStartupDailyScanDays(Platform.isMobile));
-		if (this.settingsService.consumeInitialTimeBuoyBuildPending() || needsTimeBuoyStartupRebuild) {
+		const initialTimeBuoyBuildPending = this.settingsService.consumeInitialTimeBuoyBuildPending();
+		if (Platform.isMobile && (initialTimeBuoyBuildPending || needsTimeBuoyStartupRebuild)) {
+			// 移动端仅记录待重建状态，首次进入浮标页时再执行全量工作。
+			this.syncOrchestrator.deferTimeBuoyStartupRebuild();
+			return;
+		}
+		if (initialTimeBuoyBuildPending || needsTimeBuoyStartupRebuild) {
 			try {
 				await this.syncOrchestrator.rebuildTimeBuoyIndex({
 					yieldToUi: () => new Promise<void>((resolve) => this.app.workspace.containerEl.win.setTimeout(resolve, 0)),

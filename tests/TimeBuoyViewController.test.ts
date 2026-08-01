@@ -53,6 +53,27 @@ test("loads every Time buoy once and partitions the complete result into tabs", 
 	assert.equal(snapshot.error, null);
 });
 
+test("prepares a deferred Time buoy index before the first full query", async () => {
+	const calls: string[] = [];
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		ensureReady: async () => {
+			calls.push("rebuild");
+		},
+		queryAll: async () => {
+			calls.push("query");
+			return EMPTY_ALL_RESULT;
+		},
+		queryDate: async () => EMPTY_RESULT,
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => {},
+	});
+
+	await controller.loadInitial();
+
+	assert.deepEqual(calls, ["rebuild", "query"]);
+});
+
 test("shows a blocking loading state only for the first complete Time buoy load", async () => {
 	const firstQuery = createDeferred<TimeBuoyAllQueryResult>();
 	let renderCount = 0;
@@ -306,6 +327,33 @@ test("today-only refresh preserves the last successful result when the index bec
 	const snapshot = controller.getSnapshot();
 	assert.deepEqual(snapshot.today.map((item) => item.memo.id), ["today"]);
 	assert.notEqual(snapshot.todayError, null);
+});
+
+test("today-only refresh clears stale items while a startup rebuild is pending", async () => {
+	let todayIndexReady = true;
+	let queryDateCalls = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		isTodayIndexReady: async () => todayIndexReady,
+		queryAll: async () => EMPTY_ALL_RESULT,
+		queryDate: async () => {
+			queryDateCalls += 1;
+			return {
+				items: [makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00")],
+				stale: [],
+				missingPeriods: [],
+			};
+		},
+		rebuild: async () => ({ status: "completed", total: 0, indexed: 0, skipped: 0, periods: [] }),
+		requestRender: () => undefined,
+	});
+
+	await controller.loadTodayOnly();
+	todayIndexReady = false;
+	await controller.loadTodayOnly();
+
+	assert.equal(queryDateCalls, 1);
+	assert.deepEqual(controller.getSnapshot().today, []);
 });
 
 test("checkbox mutation with images does not trigger a competing Time buoy render", async () => {

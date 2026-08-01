@@ -238,7 +238,7 @@ export class MemoScanService {
 	async estimateDailyMemos(options: ScanDailyMemosOptions = {}): Promise<EstimateDailyMemosResult> {
 		const settings = this.getSettings();
 		const config = await this.dailyNoteService.getDailyNotesConfig();
-		const files = this.filterDailyFiles(this.getDailyFiles(config), config, options.since);
+		const files = this.filterDailyFiles(this.getDailyFiles(config, options.since), config, options.since);
 		const existingMemos = options.existingMemos ?? await this.memoIndexStore.loadAll(settings.monthlyMemoFolder);
 		const result: EstimateDailyMemosResult = {
 			scannedFiles: files.length,
@@ -290,7 +290,7 @@ export class MemoScanService {
 	): Promise<ScanDailyMemosResult> {
 		const settings = this.getSettings();
 		const config = await this.dailyNoteService.getDailyNotesConfig();
-		const files = this.filterDailyFiles(this.getDailyFiles(config), config, options.since);
+		const files = this.filterDailyFiles(this.getDailyFiles(config, options.since), config, options.since);
 		const memoIndexStore = options.memoIndexStore ?? this.memoIndexStore;
 		const existingMemos = options.existingMemos ?? await memoIndexStore.loadAll(settings.monthlyMemoFolder);
 		const initialMemosById = new Map(existingMemos.map((memo) => [memo.id, memo]));
@@ -1147,7 +1147,25 @@ export class MemoScanService {
 		return !(this.app.vault.getAbstractFileByPath(path) instanceof TFile);
 	}
 
-	private getDailyFiles(config: DailyNotesConfig): TFile[] {
+	private getDailyFiles(config: DailyNotesConfig, since?: Date): TFile[] {
+		if (since !== undefined && typeof this.dailyNoteService.getDailyNotePathForDate === "function") {
+			const filesByPath = new Map<string, TFile>();
+			const start = startOfDay(since);
+			const end = startOfDay(new Date());
+			for (let date = start; date <= end; date = addDays(date, 1)) {
+				const path = this.dailyNoteService.getDailyNotePathForDate(date, {
+					enabled: true,
+					folder: config.folder,
+					format: config.format,
+					message: "",
+				});
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (file instanceof TFile) {
+					filesByPath.set(file.path, file);
+				}
+			}
+			return [...filesByPath.values()];
+		}
 		if (config.folder !== null && config.folder.trim().length > 0) {
 			const folder = this.app.vault.getAbstractFileByPath(config.folder);
 			if (!(folder instanceof TFolder)) {

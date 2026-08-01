@@ -686,7 +686,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 .knomo-plugin .knomo-tag-nav {
 	display: flex;
 	align-items: center;
-	min-height: 38px;
+	min-height: 44px;
 	padding: 0 16px;
 	border: 0;
 	border-radius: var(--knomo-radius);

@@ -31,6 +31,26 @@ test("keeps declarative and legacy setting structures in parity", () => {
 	assert.deepEqual(legacyControls, declarativeControls);
 });
 
+test("keeps declarative dynamic output scoped to its setting render", () => {
+	const source = fs.readFileSync(path.resolve("src/ui/KnomoSettingTab.ts"), "utf8");
+	const declarativeSource = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
+	const dynamicElementFields = [
+		"issueListEl",
+		"legacyImportResultEl",
+		"legacyImportGroupsEl",
+		"rebuildResultEl",
+		"monthlyRebuildResultEl",
+		"monthlyExcludeStatusEl",
+		"monthlyFileFormatStatusEl",
+	];
+
+	assert.doesNotMatch(declarativeSource, /group\.listEl\.createDiv/u);
+	assert.equal(extractMatches(declarativeSource, /setting\.infoEl\.createDiv\(/gu).length, dynamicElementFields.length);
+	for (const field of dynamicElementFields) {
+		assert.doesNotMatch(source, new RegExp(`private ${field}:`, "u"));
+	}
+});
+
 function getSourceBetween(source: string, startMarker: string, endMarker: string): string {
 	const start = source.indexOf(startMarker);
 	const end = source.indexOf(endMarker, start);

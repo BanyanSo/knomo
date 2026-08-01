@@ -15,7 +15,9 @@ import {
 	matchesScope,
 	matchesSearchDateFilter,
 	needsAllMemos,
+	getMemoDataRequirement,
 	parseMemoLocalDate,
+	periodHasActiveTag,
 	tagMatchesActiveTagKey,
 } from "../src/ui/viewFilters";
 
@@ -55,14 +57,17 @@ test("collects display tags and matches nested active tag keys", () => {
 	], new Map([
 		["project", "Project"],
 		["project/knomo", "Project/Knomo"],
+		["vault-only", "Vault only"],
 	]));
 
 	assert.deepEqual(tags, [
 		{ key: "project/knomo", name: "Project/Knomo", count: 2 },
 		{ key: "life", name: "life", count: 1 },
+		{ key: "project", name: "Project", count: 0 },
 	]);
 	assert.equal(tagMatchesActiveTagKey("project/knomo/ui", "project/knomo"), true);
 	assert.equal(tagMatchesActiveTagKey("project/other", "project/knomo"), false);
+	assert.equal(tags.some((tag) => tag.key === "vault-only"), false);
 });
 
 test("builds regular filter copy from active filters", () => {
@@ -309,6 +314,45 @@ test("builds memo search text and all-memo loading flags", () => {
 	assert.equal(needsAllMemos("no-tag", "", null), true);
 	assert.equal(needsAllMemos("with-link", "", null), true);
 	assert.equal(needsAllMemos("with-image", "", null), true);
+});
+
+test("resolves tag and date filters to only the required memo periods", () => {
+	assert.deepEqual(getMemoDataRequirement({
+		scope: "all",
+		query: "",
+		searchDateFilter: null,
+		recordStatsFilter: null,
+		activeTagKey: "project",
+		tagPeriods: ["2026-05", "2025-12"],
+	}), { kind: "periods", periods: ["2026-05", "2025-12"] });
+	assert.deepEqual(getMemoDataRequirement({
+		scope: "all",
+		query: "",
+		searchDateFilter: "last-30",
+		recordStatsFilter: null,
+		activeTagKey: null,
+		tagPeriods: null,
+		today: new Date(2026, 2, 2),
+	}), { kind: "periods", periods: ["2026-02", "2026-03"] });
+	assert.deepEqual(getMemoDataRequirement({
+		scope: "all",
+		query: "historical text",
+		searchDateFilter: null,
+		recordStatsFilter: null,
+		activeTagKey: null,
+		tagPeriods: null,
+	}), { kind: "all-active" });
+	assert.deepEqual(getMemoDataRequirement({
+		activeNav: "review",
+		scope: "all",
+		query: "",
+		searchDateFilter: null,
+		recordStatsFilter: null,
+		activeTagKey: null,
+		tagPeriods: null,
+	}), { kind: "all-active" });
+	assert.equal(periodHasActiveTag({ "project/sub": 2 }, "project"), true);
+	assert.equal(periodHasActiveTag({ "project-other": 1 }, "project"), false);
 });
 
 function disabledDailyStatus(): { enabled: false; folder: null; format: null } {

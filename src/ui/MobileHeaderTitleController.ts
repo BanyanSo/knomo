@@ -69,6 +69,7 @@ export class MobileHeaderTitleController {
 		}
 		this.headerEl = null;
 		this.titleEl = null;
+		this.registeredTitleEl = null;
 		this.originalText = null;
 	}
 

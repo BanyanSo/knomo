@@ -93,6 +93,27 @@ test("mobile header title remove restores the original Obsidian title", () => {
 	assert.equal(harness.title.getAttr("tabindex"), null);
 });
 
+test("mobile header title rebinds events after a render-scope reset", () => {
+	const harness = createHarness();
+	harness.controller.sync({
+		headerEl: harness.header.asHtml(),
+		titleEl: harness.title.asHtml(),
+		isRecordStats: false,
+		scopeMenuOpen: false,
+		label: "All memos",
+	});
+	harness.controller.remove();
+	harness.controller.sync({
+		headerEl: harness.header.asHtml(),
+		titleEl: harness.title.asHtml(),
+		isRecordStats: false,
+		scopeMenuOpen: false,
+		label: "All memos",
+	});
+
+	assert.equal(harness.registrations.length, 4);
+});
+
 test("mobile header title restores old title before binding a replacement element", () => {
 	const harness = createHarness();
 	const nextHeader = new TestElement("header");

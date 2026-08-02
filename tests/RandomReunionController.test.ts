@@ -82,6 +82,32 @@ test("reports random reunion refresh errors and leaves an empty result", async (
 	assert.equal(renderCalls, 2);
 });
 
+test("does not select random memos when full loading fails", async () => {
+	const { RandomReunionController } = await loadController();
+	let randomCalls = 0;
+	const notices: string[] = [];
+	const controller = new RandomReunionController({
+		ensureAllMemosLoaded: async () => {
+			throw new Error("full load failed");
+		},
+		getMemos: () => [makeMemo("memo-1")],
+		getRandomReunionMemos: async () => {
+			randomCalls += 1;
+			return [];
+		},
+		markRandomReunionReviewed: async () => {},
+		isRandomActive: () => true,
+		showNotice: (message) => notices.push(message),
+		requestRender: () => {},
+	});
+
+	await controller.refresh();
+
+	assert.equal(randomCalls, 0);
+	assert.equal(controller.getSnapshot().memos?.length, 0);
+	assert.equal(notices.length, 1);
+});
+
 test("keeps random reunion memos in sync with memo mutations", async () => {
 	const { RandomReunionController } = await loadController();
 	const firstMemo = makeMemo("memo-1");

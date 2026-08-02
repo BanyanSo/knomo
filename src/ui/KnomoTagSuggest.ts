@@ -1,6 +1,7 @@
-import { AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults } from "obsidian";
+import { AbstractInputSuggest, prepareFuzzySearch, renderResults } from "obsidian";
 import type { App, SearchResult } from "obsidian";
 
+import type { VaultTagIndex } from "../services/VaultTagIndex";
 import { getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../utils/composerInput";
 import {
 	clamp,
@@ -15,13 +16,13 @@ interface TagSuggestion {
 }
 
 export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
-	private tagsSnapshot: string[] | null = null;
 	private popoverRepositionFrameId: number | null = null;
 
 	constructor(
 		app: App,
 		private readonly inputEl: HTMLTextAreaElement,
 		private readonly onInputChanged: () => void,
+		private readonly vaultTagIndex: VaultTagIndex,
 	) {
 		super(app, inputEl as unknown as HTMLInputElement);
 		this.limit = 0;
@@ -37,10 +38,15 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		this.clearPopoverReposition();
 		this.showPositionedPopover();
 		super.close();
-		this.tagsSnapshot = null;
 	}
 
 	openForCurrentTrigger(): void {
+		void this.vaultTagIndex.ensureReady().then(() => {
+			const win = this.inputEl.ownerDocument.defaultView;
+			if (win !== null && getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart) !== null) {
+				this.inputEl.dispatchEvent(new win.Event("input", { bubbles: true }));
+			}
+		});
 		this.open();
 		this.queuePopoverReposition();
 		const container = this.getSuggestionContainer();
@@ -102,10 +108,7 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 	}
 
 	private getTagsSnapshot(): string[] {
-		if (this.tagsSnapshot === null) {
-			this.tagsSnapshot = this.getVaultTags();
-		}
-		return this.tagsSnapshot;
+		return [...this.vaultTagIndex.getSnapshot().suggestions];
 	}
 
 	private getFuzzySuggestions(tags: string[], query: string): TagSuggestion[] {
@@ -118,23 +121,6 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			}
 		}
 		return suggestions;
-	}
-
-	private getVaultTags(): string[] {
-		const tags = new Set<string>();
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const cache = this.app.metadataCache.getFileCache(file);
-			if (cache === null) {
-				continue;
-			}
-			for (const tag of getAllTags(cache) ?? []) {
-				const normalizedTag = tag.replace(/^#/, "");
-				if (normalizedTag.length > 0) {
-					tags.add(normalizedTag);
-				}
-			}
-		}
-		return Array.from(tags).sort((first, second) => first.localeCompare(second));
 	}
 
 	private queuePopoverReposition(): void {

@@ -55,14 +55,14 @@ interface KnomoUserActionControllerOptions {
 	toggleCardMenu: (memoId: string | null) => void;
 	refreshRandomReunion: () => Promise<void>;
 	renderNextCardBatch: (generation: number) => void;
-	requestCardFlowHydration: () => void;
+	loadOlderMemoPeriods: () => void;
 	loadMoreMobileSearchResults: () => void;
 	resetToAllNotes: () => void;
 	closeMobileSearchPage: () => void;
 	closeComposerKeepingDraft: () => void;
 	openDrawer: () => void;
 	closeDrawer: () => void;
-	deferSidebarHydration: () => void;
+	ensureSidebarIndexes: () => void;
 	toggleScopeMenu: () => void;
 	toggleSidebar: () => void;
 	collapseSidebar: () => void;
@@ -269,7 +269,7 @@ export class KnomoUserActionController {
 				if (this.options.hasMoreCardFlowItems()) {
 					this.options.renderNextCardBatch(this.options.getRenderGeneration());
 				} else {
-					this.options.requestCardFlowHydration();
+					this.options.loadOlderMemoPeriods();
 				}
 				return;
 			case "load-more-mobile-search":
@@ -286,7 +286,7 @@ export class KnomoUserActionController {
 					this.options.closeComposerKeepingDraft();
 				}
 				this.options.openDrawer();
-				this.options.deferSidebarHydration();
+				this.options.ensureSidebarIndexes();
 				break;
 			case "close-drawer":
 				this.options.closeDrawer();

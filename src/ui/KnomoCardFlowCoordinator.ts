@@ -49,6 +49,7 @@ interface RenderCardFlowBatchOptions {
 	requestHydration: () => void;
 	restorePendingScrollTop: (scrollTop: number) => void;
 	scheduleContinuation: (continuation: () => void) => void;
+	onExhausted?: () => void;
 }
 
 interface CardFlowScrollOptions {
@@ -289,6 +290,9 @@ export class KnomoCardFlowCoordinator {
 			});
 		} else if (options.hydrateWhenExhausted === true && result.type === "completed") {
 			options.requestHydration();
+		}
+		if (result.type === "completed" && !result.completion.hasMoreItems) {
+			options.onExhausted?.();
 		}
 		this.restorePendingScrollTop(options.generation, options.restorePendingScrollTop);
 	}

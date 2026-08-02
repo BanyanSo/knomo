@@ -39,6 +39,14 @@ test("formats card word count with locale-specific colons", async () => {
 	assert.equal(translate("en", "card.wordCount", { count: 123 }), "Words: 123");
 });
 
+test("uses matching load-more copy for historical Memos", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(translate("zh-CN", "list.loadOlder"), "加载更多 Memos");
+	assert.equal(translate("en", "list.loadOlder"), "Load more memos");
+});
+
 test("adds spacing only to record statistics summaries", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");

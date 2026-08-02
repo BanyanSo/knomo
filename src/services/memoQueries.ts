@@ -37,6 +37,11 @@ export class MemoQueryService {
 		return this.memoIndexStore.listExistingPeriods(settings.monthlyMemoFolder);
 	}
 
+	listStoredMemoIndexPeriods(): string[] {
+		const settings = this.getSettings();
+		return this.memoIndexStore.listStoredPeriods(settings.monthlyMemoFolder);
+	}
+
 	async listMemosInPeriods(periods: string[]): Promise<MemoRecord[]> {
 		const settings = this.getSettings();
 		const memos = await this.memoIndexStore.loadExistingPeriods(settings.monthlyMemoFolder, periods);

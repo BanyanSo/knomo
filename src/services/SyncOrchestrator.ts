@@ -234,8 +234,13 @@ export class SyncOrchestrator {
 			await this.memoCommandService.recoverPendingCreates();
 			const now = new Date();
 			const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Math.max(days - 1, 0));
+			const existingMemos = await this.memoIndexStore.loadExistingPeriods(
+				this.getSettings().monthlyMemoFolder,
+				getMonthPeriodsInRange(since, now),
+			);
 			return this.memoScanService.scanDailyMemos((date) => createMemoId(date), createOperationId(now), undefined, {
 				since,
+				existingMemos,
 				source,
 				deleteSource: source,
 			});
@@ -388,6 +393,10 @@ export class SyncOrchestrator {
 		return this.memoQueryService.listMemoIndexPeriods();
 	}
 
+	listStoredMemoIndexPeriods(): string[] {
+		return this.memoQueryService.listStoredMemoIndexPeriods();
+	}
+
 	listPotentialSyncConflictFiles(): SyncConflictFile[] {
 		const settings = this.getSettings();
 		return [
@@ -506,10 +515,25 @@ export class SyncOrchestrator {
 		return this.timeBuoyService.needsStartupRebuild();
 	}
 
+	deferTimeBuoyStartupRebuild(): void {
+		this.timeBuoyService.markRebuildRequired();
+	}
+
 	private async syncTimeBuoyMutation(mutation: MemoMutation): Promise<void> {
 		await this.timeBuoyService.syncMutation(mutation);
 	}
 
+}
+
+export function getMonthPeriodsInRange(start: Date, end: Date): string[] {
+	const periods: string[] = [];
+	const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+	const last = new Date(end.getFullYear(), end.getMonth(), 1);
+	while (cursor <= last) {
+		periods.push(formatMonthPeriod(cursor));
+		cursor.setMonth(cursor.getMonth() + 1);
+	}
+	return periods;
 }
 
 function hasDailyLocationIssue(memo: MemoRecord): boolean {

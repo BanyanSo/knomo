@@ -32,20 +32,14 @@ interface DelayedSettingNotice {
 }
 
 export class KnomoSettingTab extends PluginSettingTab {
-	private issueListEl: HTMLElement | null = null;
-	private legacyImportResultEl: HTMLElement | null = null;
-	private legacyImportGroupsEl: HTMLElement | null = null;
 	private legacyImportPreview: LegacyDailyMemosPreview | null = null;
 	private legacyImportScope: LegacyDailyMemosImportScope = "90d";
 	private legacyImportRunning = false;
-	private rebuildResultEl: HTMLElement | null = null;
-	private monthlyRebuildResultEl: HTMLElement | null = null;
-	private monthlyExcludeStatusEl: HTMLElement | null = null;
-	private monthlyFileFormatStatusEl: HTMLElement | null = null;
 	private rebuildRunning = false;
 	private monthlyRebuildRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
 	private timeBuoyToggleRunning = false;
+	private readonly issueListEls = new Set<HTMLElement>();
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -160,22 +154,23 @@ export class KnomoSettingTab extends PluginSettingTab {
 					{
 						name: t("settings.excludeMonthly.name"),
 						desc: t("settings.excludeMonthly.desc"),
-						render: (setting, group) => {
+						render: (setting) => {
 							const settings = this.settingsService.getSettings();
+							const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
 							setting.addToggle((toggle) => {
 								toggle.setValue(settings.excludeMonthlyMemosFromObsidian);
 								toggle.onChange((value) => {
-									void this.toggleMonthlyMemosExcludeRule(value, toggle);
+									void this.toggleMonthlyMemosExcludeRule(value, toggle, statusEl);
 								});
 							});
-							this.monthlyExcludeStatusEl = group.listEl.createDiv({ cls: "knomo-setting-help" });
 						},
 					},
 					{
 						name: t("settings.monthlyFileFormat.name"),
 						desc: t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }),
-						render: (setting, group) => {
+						render: (setting) => {
 							const settings = this.settingsService.getSettings();
+							const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
 							setting.addText((text) => {
 								text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
 								text.setValue(settings.monthlyMemoFileFormat);
@@ -188,11 +183,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 									);
 								});
 								text.inputEl.addEventListener("blur", () => {
-									void this.commitMonthlyMemoFileFormatDraft();
+									void this.commitMonthlyMemoFileFormatDraft(undefined, statusEl);
 								});
 							});
-							this.monthlyFileFormatStatusEl = group.listEl.createDiv({ cls: "knomo-setting-help" });
-							this.updateMonthlyFileFormatStatus();
+							this.updateMonthlyFileFormatStatus(statusEl);
 						},
 					},
 					{
@@ -243,7 +237,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 					{
 						name: t("settings.legacyImport.name"),
 						desc: t("settings.legacyImport.desc"),
-						render: (setting, group) => {
+						render: (setting) => {
+							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
+							const groupsEl = setting.infoEl.createDiv({ cls: "knomo-legacy-import-groups" });
 							setting
 								.addDropdown((dropdown) => {
 									dropdown.addOption("30d", t("settings.scope30d"));
@@ -253,26 +249,25 @@ export class KnomoSettingTab extends PluginSettingTab {
 									dropdown.onChange((value) => {
 										this.legacyImportScope = value as LegacyDailyMemosImportScope;
 										this.legacyImportPreview = null;
-										this.renderLegacyImportPreview();
+										this.renderLegacyImportPreview(resultEl, groupsEl);
 									});
 								})
 								.addButton((button) => {
 									button.setButtonText(t("settings.preview.start"));
 									button.onClick(() => {
-										void this.runLegacyImportPreview(button);
+										void this.runLegacyImportPreview(button, resultEl, groupsEl);
 									});
 								});
-							this.legacyImportResultEl = group.listEl.createDiv({ cls: "knomo-scan-result" });
-							this.legacyImportGroupsEl = group.listEl.createDiv({ cls: "knomo-legacy-import-groups" });
-							this.renderLegacyImportPreview();
+							this.renderLegacyImportPreview(resultEl, groupsEl);
 						},
 					},
 					{
 						name: t("settings.rebuild.name"),
 						desc: t("settings.rebuild.desc"),
-						render: (setting, group) => {
+						render: (setting) => {
 							let rebuildScope: RebuildIndexScope = "30d";
 							let rebuildMode: RebuildIndexMode = "index-only";
+							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
 							setting
 								.setClass("knomo-maintenance-setting")
 								.addDropdown((dropdown) => {
@@ -295,19 +290,21 @@ export class KnomoSettingTab extends PluginSettingTab {
 								.addButton((button) => {
 									button.setButtonText(t("settings.rebuild.start"));
 									button.onClick(() => {
-										void this.runRebuildIndex(rebuildScope, rebuildMode, button);
+										void this.runRebuildIndex(rebuildScope, rebuildMode, button, resultEl);
 									});
 								});
-							this.rebuildResultEl = group.listEl.createDiv({ cls: "knomo-scan-result" });
-							void this.renderInitialRebuildResult();
+							void this.renderInitialRebuildResult(resultEl);
 						},
 					},
 					{
 						name: t("settings.monthlyRebuild.name"),
 						desc: t("settings.monthlyRebuild.desc"),
-						render: (setting, group) => {
+						render: (setting) => {
 							const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
 							let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
+							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
+							const issueListEl = setting.infoEl.createDiv({ cls: "knomo-issue-list" });
+							this.issueListEls.add(issueListEl);
 							setting
 								.setClass("knomo-maintenance-setting")
 								.addDropdown((dropdown) => {
@@ -322,13 +319,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 								.addButton((button) => {
 									button.setButtonText(t("settings.monthlyRebuild.start"));
 									button.onClick(() => {
-										void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button);
+										void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, resultEl);
 									});
 								});
-							this.monthlyRebuildResultEl = group.listEl.createDiv({ cls: "knomo-scan-result" });
-							this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"));
-							this.issueListEl = group.listEl.createDiv({ cls: "knomo-issue-list" });
-							void this.renderIssueList();
+							this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), resultEl);
+							void this.renderIssueList(issueListEl);
+							return () => {
+								this.issueListEls.delete(issueListEl);
+							};
 						},
 					},
 				],
@@ -340,6 +338,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		this.cancelAllDelayedSettingNotices();
 		this.pendingSettingDrafts.clear();
+		this.issueListEls.clear();
 		containerEl.empty();
 
 		const settings = this.settingsService.getSettings();
@@ -425,10 +424,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.addToggle((toggle) => {
 				toggle.setValue(settings.excludeMonthlyMemosFromObsidian);
 				toggle.onChange((value) => {
-					void this.toggleMonthlyMemosExcludeRule(value, toggle);
+					void this.toggleMonthlyMemosExcludeRule(value, toggle, monthlyExcludeStatusEl);
 				});
 			});
-		this.monthlyExcludeStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
+		const monthlyExcludeStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
 		new Setting(containerEl)
 			.setName(t("settings.monthlyFileFormat.name"))
 			.setDesc(t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }))
@@ -444,11 +443,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 					);
 				});
 				text.inputEl.addEventListener("blur", () => {
-					void this.commitMonthlyMemoFileFormatDraft();
+					void this.commitMonthlyMemoFileFormatDraft(undefined, monthlyFileFormatStatusEl);
 				});
 			});
-		this.monthlyFileFormatStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
-		this.updateMonthlyFileFormatStatus();
+		const monthlyFileFormatStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
+		this.updateMonthlyFileFormatStatus(monthlyFileFormatStatusEl);
 		new Setting(containerEl)
 			.setName(t("settings.dateHeadingFormat.name"))
 			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }))
@@ -495,18 +494,18 @@ export class KnomoSettingTab extends PluginSettingTab {
 				dropdown.onChange((value) => {
 					this.legacyImportScope = value as LegacyDailyMemosImportScope;
 					this.legacyImportPreview = null;
-					this.renderLegacyImportPreview();
+					this.renderLegacyImportPreview(legacyImportResultEl, legacyImportGroupsEl);
 				});
 			})
 			.addButton((button) => {
 				button.setButtonText(t("settings.preview.start"));
 				button.onClick(() => {
-					void this.runLegacyImportPreview(button);
+					void this.runLegacyImportPreview(button, legacyImportResultEl, legacyImportGroupsEl);
 				});
 			});
-		this.legacyImportResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.legacyImportGroupsEl = containerEl.createDiv({ cls: "knomo-legacy-import-groups" });
-		this.renderLegacyImportPreview();
+		const legacyImportResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
+		const legacyImportGroupsEl = containerEl.createDiv({ cls: "knomo-legacy-import-groups" });
+		this.renderLegacyImportPreview(legacyImportResultEl, legacyImportGroupsEl);
 
 		let rebuildScope: RebuildIndexScope = "30d";
 		let rebuildMode: RebuildIndexMode = "index-only";
@@ -534,11 +533,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.addButton((button) => {
 				button.setButtonText(t("settings.rebuild.start"));
 				button.onClick(() => {
-					void this.runRebuildIndex(rebuildScope, rebuildMode, button);
+					void this.runRebuildIndex(rebuildScope, rebuildMode, button, rebuildResultEl);
 				});
 			});
-		this.rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		void this.renderInitialRebuildResult();
+		const rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
+		void this.renderInitialRebuildResult(rebuildResultEl);
 
 		const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
 		let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
@@ -558,19 +557,21 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.addButton((button) => {
 				button.setButtonText(t("settings.monthlyRebuild.start"));
 				button.onClick(() => {
-					void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button);
+					void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, monthlyRebuildResultEl);
 				});
 			});
-		this.monthlyRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"));
-		this.issueListEl = containerEl.createDiv({ cls: "knomo-issue-list" });
-		void this.renderIssueList();
+		const monthlyRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
+		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), monthlyRebuildResultEl);
+		const issueListEl = containerEl.createDiv({ cls: "knomo-issue-list" });
+		this.issueListEls.add(issueListEl);
+		void this.renderIssueList(issueListEl);
 	}
 
 	hide(): void {
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
 		this.cancelAllDelayedSettingNotices();
+		this.issueListEls.clear();
 	}
 
 	private rememberSettingNoticeValue(key: SettingNoticeKey, value: string): void {
@@ -665,13 +666,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async commitMonthlyMemoFileFormatDraft(draftValue?: string): Promise<void> {
+	private async commitMonthlyMemoFileFormatDraft(draftValue?: string, statusEl?: HTMLElement): Promise<void> {
 		const value = draftValue ?? this.pendingSettingDrafts.get("monthlyMemoFileFormat");
 		if (value === undefined) {
 			return;
 		}
 		if (
-			await this.saveMonthlyMemoFileFormat(value)
+			await this.saveMonthlyMemoFileFormat(value, statusEl)
 			&& this.pendingSettingDrafts.get("monthlyMemoFileFormat") === value
 		) {
 			this.pendingSettingDrafts.delete("monthlyMemoFileFormat");
@@ -744,7 +745,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		return true;
 	}
 
-	private async saveMonthlyMemoFileFormat(value: string): Promise<boolean> {
+	private async saveMonthlyMemoFileFormat(value: string, statusEl?: HTMLElement): Promise<boolean> {
 		const key: SettingNoticeKey = "monthlyMemoFileFormat";
 		const nextFormat = value.trim();
 		this.rememberSettingNoticeValue(key, nextFormat);
@@ -785,7 +786,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 					this.syncOrchestrator.rebuildMonthlyArchivesForFileFormatMigration(periods, trackGeneratedPath)
 				))
 			));
-			this.updateMonthlyFileFormatStatus();
+			if (statusEl !== undefined) {
+				this.updateMonthlyFileFormatStatus(statusEl);
+			}
 			new Notice(t("settings.monthlyFileFormat.migrated", { count: plan.periods.length }));
 			return true;
 		} catch (error) {
@@ -796,16 +799,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private updateMonthlyFileFormatStatus(): void {
-		if (this.monthlyFileFormatStatusEl === null) {
-			return;
-		}
+	private updateMonthlyFileFormatStatus(statusEl: HTMLElement): void {
 		const currentFormat = this.settingsService.getSettings().monthlyMemoFileFormat;
 		const isLegacyFormat = !this.settingsService.validateMonthlyMemoFileFormat(currentFormat);
-		this.monthlyFileFormatStatusEl.setText(
+		statusEl.setText(
 			isLegacyFormat ? t("settings.monthlyFileFormat.legacyWarning") : "",
 		);
-		this.monthlyFileFormatStatusEl.toggleClass("is-error", isLegacyFormat);
+		statusEl.toggleClass("is-error", isLegacyFormat);
 	}
 
 	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<void> {
@@ -845,13 +845,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async toggleMonthlyMemosExcludeRule(enabled: boolean, toggle: ToggleComponent): Promise<void> {
+	private async toggleMonthlyMemosExcludeRule(enabled: boolean, toggle: ToggleComponent, statusEl: HTMLElement): Promise<void> {
 		toggle.setDisabled(true);
 		try {
 			if (enabled) {
-				await this.enableMonthlyMemosExcludeRule();
+				await this.enableMonthlyMemosExcludeRule(statusEl);
 			} else {
-				await this.disableMonthlyMemosExcludeRule();
+				await this.disableMonthlyMemosExcludeRule(statusEl);
 			}
 		} finally {
 			toggle.setDisabled(false);
@@ -898,13 +898,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private setExcludeStatus(text: string, isError = false): void {
-		if (this.monthlyExcludeStatusEl === null) return;
-		this.monthlyExcludeStatusEl.setText(text);
-		this.monthlyExcludeStatusEl.toggleClass("is-error", isError);
+	private setExcludeStatus(statusEl: HTMLElement, text: string, isError = false): void {
+		statusEl.setText(text);
+		statusEl.toggleClass("is-error", isError);
 	}
 
-	private async enableMonthlyMemosExcludeRule(): Promise<void> {
+	private async enableMonthlyMemosExcludeRule(statusEl: HTMLElement): Promise<void> {
 		const settings = this.settingsService.getSettings();
 		const rule = buildMonthlyFolderExcludeRule(settings.monthlyMemoFolder);
 		if (rule === null) {
@@ -913,7 +912,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				managedObsidianExcludeRule: undefined,
 				managedObsidianExcludeRuleOwned: false,
 			});
-			this.setExcludeStatus(t("settings.excludeMonthly.empty"), true);
+			this.setExcludeStatus(statusEl, t("settings.excludeMonthly.empty"), true);
 			return;
 		}
 		try {
@@ -923,7 +922,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				managedObsidianExcludeRule: rule,
 				managedObsidianExcludeRuleOwned: result.addedByKnomo,
 			});
-			this.setExcludeStatus(result.addedByKnomo
+			this.setExcludeStatus(statusEl, result.addedByKnomo
 				? t("settings.excludeMonthly.added")
 				: t("settings.excludeMonthly.existing"));
 		} catch {
@@ -936,7 +935,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async disableMonthlyMemosExcludeRule(): Promise<void> {
+	private async disableMonthlyMemosExcludeRule(statusEl: HTMLElement): Promise<void> {
 		const settings = this.settingsService.getSettings();
 		const rule = settings.managedObsidianExcludeRule;
 		let removedRule = false;
@@ -953,12 +952,16 @@ export class KnomoSettingTab extends PluginSettingTab {
 			managedObsidianExcludeRule: undefined,
 			managedObsidianExcludeRuleOwned: false,
 		});
-		this.setExcludeStatus(removedRule
+		this.setExcludeStatus(statusEl, removedRule
 			? t("settings.excludeMonthly.removed")
 			: t("settings.excludeMonthly.keepExisting"));
 	}
 
-	private async runLegacyImportPreview(button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void }): Promise<void> {
+	private async runLegacyImportPreview(
+		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
+		resultEl: HTMLElement,
+		groupsEl: HTMLElement,
+	): Promise<void> {
 		if (this.legacyImportRunning) {
 			return;
 		}
@@ -966,14 +969,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setDisabled(true);
 		button.setButtonText(t("settings.preview.running"));
 		this.legacyImportPreview = null;
-		this.legacyImportGroupsEl?.empty();
-		this.renderLegacyImportStatus(t("settings.legacyImport.previewing"));
+		groupsEl.empty();
+		this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.previewing"));
 		try {
 			this.legacyImportPreview = await this.syncOrchestrator.previewLegacyDailyMemos(this.legacyImportScope);
-			this.renderLegacyImportPreview();
+			this.renderLegacyImportPreview(resultEl, groupsEl);
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.legacyImport.previewFailed"));
-			this.renderLegacyImportStatus(message, true);
+			this.renderLegacyImportStatus(resultEl, message, true);
 			new Notice(message);
 		} finally {
 			this.legacyImportRunning = false;
@@ -982,14 +985,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderLegacyImportPreview(): void {
-		if (this.legacyImportGroupsEl === null) {
-			return;
-		}
-		this.legacyImportGroupsEl.empty();
+	private renderLegacyImportPreview(resultEl: HTMLElement, groupsEl: HTMLElement): void {
+		groupsEl.empty();
 		const preview = this.legacyImportPreview;
 		if (preview === null) {
-			this.renderLegacyImportStatus(t("settings.legacyImport.notPreviewed"));
+			this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.notPreviewed"));
 			return;
 		}
 		const summary = [
@@ -999,28 +999,25 @@ export class KnomoSettingTab extends PluginSettingTab {
 				count: group.count,
 			})),
 		].join("\n");
-		this.renderLegacyImportStatus(summary);
+		this.renderLegacyImportStatus(resultEl, summary);
 		if (preview.groups.length === 0) {
 			return;
 		}
 		for (const group of preview.groups) {
-			this.renderLegacyImportGroup(group);
+			this.renderLegacyImportGroup(group, groupsEl);
 		}
-		const button = this.legacyImportGroupsEl.createEl("button", {
+		const button = groupsEl.createEl("button", {
 			cls: "mod-cta",
 			text: t("settings.legacyImport.importSelected"),
 			attr: { type: "button" },
 		});
 		button.addEventListener("click", () => {
-			void this.runLegacyImport(button);
+			void this.runLegacyImport(button, resultEl, groupsEl);
 		});
 	}
 
-	private renderLegacyImportGroup(group: LegacyDailyMemosGroupPreview): void {
-		if (this.legacyImportGroupsEl === null) {
-			return;
-		}
-		const item = this.legacyImportGroupsEl.createDiv({ cls: "knomo-legacy-import-group" });
+	private renderLegacyImportGroup(group: LegacyDailyMemosGroupPreview, groupsEl: HTMLElement): void {
+		const item = groupsEl.createDiv({ cls: "knomo-legacy-import-group" });
 		const label = item.createEl("label", { cls: "knomo-legacy-import-label" });
 		const checkbox = label.createEl("input", {
 			attr: {
@@ -1039,12 +1036,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async runLegacyImport(button: HTMLButtonElement): Promise<void> {
+	private async runLegacyImport(button: HTMLButtonElement, resultEl: HTMLElement, groupsEl: HTMLElement): Promise<void> {
 		const preview = this.legacyImportPreview;
-		if (preview === null || this.legacyImportGroupsEl === null || this.legacyImportRunning) {
+		if (preview === null || this.legacyImportRunning) {
 			return;
 		}
-		const selectedGroupKeys = this.getSelectedLegacyImportGroupKeys();
+		const selectedGroupKeys = this.getSelectedLegacyImportGroupKeys(groupsEl);
 		if (selectedGroupKeys.length === 0) {
 			new Notice(t("settings.legacyImport.chooseGroup"));
 			return;
@@ -1053,14 +1050,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.legacyImportRunning = true;
 		button.disabled = true;
 		button.setText(t("settings.legacyImport.importing"));
-		this.renderLegacyImportStatus(t("settings.legacyImport.importingStatus"));
+		this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.importingStatus"));
 		try {
 			const result = await this.syncOrchestrator.importLegacyDailyMemos({
 				scope: this.legacyImportScope,
 				selectedGroupKeys,
 			});
 			await this.addLegacyDailyHeadings(result.importedHeadings);
-			await this.renderIssueList();
+			await this.refreshIssueLists();
 			const message = t("settings.legacyImport.complete", {
 				imported: result.imported,
 				failed: result.failed,
@@ -1068,8 +1065,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 			const errors = result.errors.map(formatSettingsText);
 			this.legacyImportPreview = null;
-			this.legacyImportGroupsEl.empty();
-			this.renderLegacyImportStatus(errors.length > 0 ? `${message}\n${errors.join("\n")}` : message, result.failed > 0);
+			groupsEl.empty();
+			this.renderLegacyImportStatus(resultEl, errors.length > 0 ? `${message}\n${errors.join("\n")}` : message, result.failed > 0);
 			importCompleted = true;
 			void this.reloadAllMemosInOpenKnomoViewsAfterImport();
 			if (result.failed > 0) {
@@ -1077,7 +1074,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			}
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.legacyImport.failed"));
-			this.renderLegacyImportStatus(message, true);
+			this.renderLegacyImportStatus(resultEl, message, true);
 			new Notice(message);
 		} finally {
 			this.legacyImportRunning = false;
@@ -1088,11 +1085,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private getSelectedLegacyImportGroupKeys(): string[] {
-		const groupsEl = this.legacyImportGroupsEl;
-		if (groupsEl === null) {
-			return [];
-		}
+	private getSelectedLegacyImportGroupKeys(groupsEl: HTMLElement): string[] {
 		return groupsEl.findAll("input[data-legacy-import-group]")
 			.filter((input): input is HTMLInputElement => input.instanceOf(HTMLInputElement) && input.checked)
 			.map((input) => input.getAttr("data-legacy-import-group"))
@@ -1113,18 +1106,16 @@ export class KnomoSettingTab extends PluginSettingTab {
 		await this.settingsService.updateSettings({ legacyDailyHeadings: nextHeadings });
 	}
 
-	private renderLegacyImportStatus(message: string, isError = false): void {
-		if (this.legacyImportResultEl === null) {
-			return;
-		}
-		this.legacyImportResultEl.empty();
-		this.legacyImportResultEl.createDiv({ cls: isError ? "knomo-setting-help is-error" : "knomo-setting-help", text: message });
+	private renderLegacyImportStatus(resultEl: HTMLElement, message: string, isError = false): void {
+		resultEl.empty();
+		resultEl.createDiv({ cls: isError ? "knomo-setting-help is-error" : "knomo-setting-help", text: message });
 	}
 
 	private async runRebuildIndex(
 		scope: RebuildIndexScope,
 		mode: RebuildIndexMode,
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
+		resultEl: HTMLElement,
 	): Promise<void> {
 		if (this.rebuildRunning) {
 			return;
@@ -1145,11 +1136,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 				}),
 			});
 			if (!confirmed) {
-				this.renderRebuildResult(t("settings.rebuild.cancelled"));
+				this.renderRebuildResult(t("settings.rebuild.cancelled"), resultEl);
 				return;
 			}
 			button.setButtonText(t("settings.rebuild.running"));
-			this.renderRebuildResult(t("settings.rebuild.status", { monthlyMode: monthlyModeText }));
+			this.renderRebuildResult(t("settings.rebuild.status", { monthlyMode: monthlyModeText }), resultEl);
 			const result = await this.syncOrchestrator.rebuildIndex(scope, mode, (progress) => {
 				this.renderRebuildResult(
 					t("settings.rebuild.progress", {
@@ -1162,6 +1153,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 						failed: progress.failed,
 						currentFile: progress.currentFile === null ? "" : t("settings.rebuild.currentFile", { file: progress.currentFile }),
 					}),
+					resultEl,
 				);
 			});
 			const message = t("settings.rebuild.complete", {
@@ -1207,8 +1199,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 				deleted: result.deleted,
 				failed: result.failed,
 			});
-			this.renderRebuildResult(resultLines.join("\n"));
-			await this.renderIssueList();
+			this.renderRebuildResult(resultLines.join("\n"), resultEl);
+			await this.refreshIssueLists();
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.rebuild.completedNotice"));
 		} catch (error) {
@@ -1226,7 +1218,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				deleted: null,
 				failed: null,
 			});
-			this.renderRebuildResult(message);
+			this.renderRebuildResult(message, resultEl);
 			new Notice(message);
 		} finally {
 			this.rebuildRunning = false;
@@ -1238,6 +1230,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private async runMonthlyArchiveRebuild(
 		period: string,
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
+		resultEl: HTMLElement,
 	): Promise<void> {
 		if (this.monthlyRebuildRunning || period.length === 0) {
 			return;
@@ -1246,14 +1239,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 			message: t("settings.monthlyRebuild.confirm", { period }),
 		});
 		if (!confirmed) {
-			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.cancelled"));
+			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.cancelled"), resultEl);
 			return;
 		}
 
 		this.monthlyRebuildRunning = true;
 		button.setDisabled(true);
 		button.setButtonText(t("settings.monthlyRebuild.running"));
-		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.status", { period }));
+		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.status", { period }), resultEl);
 		try {
 			const result = await this.syncOrchestrator.rebuildMonthlyArchive(period);
 			const backup = result.backupPath === null
@@ -1263,13 +1256,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 				period: result.period,
 				rebuilt: result.rebuilt,
 				issues: result.issues,
-			})}\n${backup}`);
-			await this.renderIssueList();
+			})}\n${backup}`, resultEl);
+			await this.refreshIssueLists();
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.monthlyRebuild.completedNotice", { period: result.period }));
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.monthlyRebuild.failed"));
-			this.renderMonthlyRebuildResult(message);
+			this.renderMonthlyRebuildResult(message, resultEl);
 			new Notice(message);
 		} finally {
 			this.monthlyRebuildRunning = false;
@@ -1278,12 +1271,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderRebuildResult(message: string): void {
-		if (this.rebuildResultEl === null) {
-			return;
-		}
-		this.rebuildResultEl.empty();
-		this.rebuildResultEl.createDiv({ cls: "knomo-setting-help", text: message });
+	private renderRebuildResult(message: string, resultEl: HTMLElement): void {
+		resultEl.empty();
+		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
 	}
 
 	private async saveMaintenanceDiagnosticSafely(diagnostic: MaintenanceDiagnostic): Promise<void> {
@@ -1294,7 +1284,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async renderInitialRebuildResult(): Promise<void> {
+	private async renderInitialRebuildResult(resultEl: HTMLElement): Promise<void> {
 		let message = this.getRebuildBeforeMessage();
 		try {
 			const diagnostic = await this.settingsService.loadMaintenanceDiagnostic();
@@ -1304,7 +1294,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		} catch {
 			// 诊断只辅助维护说明，读取失败时保留基础提示。
 		}
-		this.renderRebuildResult(message);
+		this.renderRebuildResult(message, resultEl);
 	}
 
 	private getRebuildBeforeMessage(): string {
@@ -1366,12 +1356,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private renderMonthlyRebuildResult(message: string): void {
-		if (this.monthlyRebuildResultEl === null) {
-			return;
-		}
-		this.monthlyRebuildResultEl.empty();
-		this.monthlyRebuildResultEl.createDiv({ cls: "knomo-setting-help", text: message });
+	private renderMonthlyRebuildResult(message: string, resultEl: HTMLElement): void {
+		resultEl.empty();
+		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
 	}
 
 	private async refreshOpenKnomoViews(): Promise<void> {
@@ -1409,33 +1396,31 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async renderIssueList(): Promise<void> {
-		if (this.issueListEl === null) {
-			return;
-		}
-		this.issueListEl.empty();
+	private async refreshIssueLists(): Promise<void> {
+		await Promise.all(Array.from(this.issueListEls, (issueListEl) => this.renderIssueList(issueListEl)));
+	}
+
+	private async renderIssueList(issueListEl: HTMLElement): Promise<void> {
+		issueListEl.empty();
 		try {
 			const memos = await this.syncOrchestrator.listIssueMemos();
 			if (memos.length === 0) {
-				this.issueListEl.createDiv({ cls: "knomo-setting-help", text: t("settings.issues.none") });
+				issueListEl.createDiv({ cls: "knomo-setting-help", text: t("settings.issues.none") });
 				return;
 			}
 			for (const memo of memos) {
-				this.renderIssueItem(memo);
+				this.renderIssueItem(memo, issueListEl);
 			}
 		} catch (error) {
-			this.issueListEl.createDiv({
+			issueListEl.createDiv({
 				cls: "knomo-setting-help is-error",
 				text: formatServiceError(error, t("settings.issues.loadFailed")),
 			});
 		}
 	}
 
-	private renderIssueItem(memo: MemoRecord): void {
-		if (this.issueListEl === null) {
-			return;
-		}
-		const item = this.issueListEl.createDiv({ cls: "knomo-issue-item" });
+	private renderIssueItem(memo: MemoRecord, issueListEl: HTMLElement): void {
+		const item = issueListEl.createDiv({ cls: "knomo-issue-item" });
 		item.createDiv({
 			cls: "knomo-setting-code",
 			text: `${memo.id} · ${getSyncStatusLabel(memo.syncStatus)}`,
@@ -1475,7 +1460,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setText(t("settings.issues.retrying"));
 		try {
 			await this.syncOrchestrator.retryMonthlyDelete(memo);
-			await this.renderIssueList();
+			await this.refreshIssueLists();
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.issues.monthlyDeleteComplete"));
 		} catch (error) {
@@ -1491,7 +1476,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setText(t("settings.issues.retrying"));
 		try {
 			await this.syncOrchestrator.retryMonthlySync(memo);
-			await this.renderIssueList();
+			await this.refreshIssueLists();
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.issues.monthlySyncComplete"));
 		} catch (error) {

@@ -41,6 +41,8 @@ export function mergeTodayTimeBuoyFeed(
 
 interface TimeBuoyViewControllerOptions {
 	getNow: () => Date;
+	ensureReady?: () => Promise<void>;
+	isTodayIndexReady?: () => Promise<boolean>;
 	queryAll: () => Promise<TimeBuoyAllQueryResult>;
 	queryDate: (date: string) => Promise<TimeBuoyQueryResult>;
 	rebuild: (options?: TimeBuoyRebuildOptions) => Promise<TimeBuoyRebuildResult>;
@@ -125,6 +127,10 @@ export class TimeBuoyViewController {
 		}
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
+			await this.options.ensureReady?.();
+			if (requestId !== this.requestId) {
+				return;
+			}
 			const result = await this.options.queryAll();
 			if (requestId !== this.requestId) {
 				return;
@@ -161,6 +167,20 @@ export class TimeBuoyViewController {
 		const requestId = ++this.requestId;
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
+			const todayIndexReady = (await this.options.isTodayIndexReady?.()) ?? true;
+			if (!todayIndexReady) {
+				if (requestId !== this.requestId) {
+					return;
+				}
+				const nextSnapshot = { ...this.snapshot, today: [], todayError: null };
+				const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
+				this.snapshot = nextSnapshot;
+				this.hasLoadedAll = false;
+				if (changed) {
+					this.options.requestRender();
+				}
+				return;
+			}
 			const result = await this.options.queryDate(today);
 			if (requestId !== this.requestId) {
 				return;

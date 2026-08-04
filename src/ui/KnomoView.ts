@@ -20,7 +20,7 @@ import { getRecentMemoPeriods } from "../services/memoQueries";
 import type { MemoMutation, MemoRecord } from "../types/memo";
 import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
-import { formatDatePart, formatMonthPeriod } from "../utils/date";
+import { formatDatePart } from "../utils/date";
 import { formatTimeBuoyDate, getTimeBuoyCardStatus } from "../utils/timeBuoyDate";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import {

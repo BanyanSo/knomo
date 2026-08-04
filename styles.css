@@ -135,6 +135,15 @@ body {
 	--knomo-header-offset-y: 6px;
 	--knomo-desktop-compact-edge-padding: 12px;
 	--knomo-card-time-font-size: 13px;
+	--knomo-content-end-base: 60px;
+	--knomo-content-end-clearance: var(--size-4-6);
+	--knomo-content-bottom-occlusion: 0px;
+	--knomo-content-end-space: max(
+		var(--knomo-content-end-base),
+		calc(var(--knomo-content-bottom-occlusion) + var(--knomo-content-end-clearance)),
+		calc(env(safe-area-inset-bottom, 0px) + var(--knomo-content-end-clearance))
+	);
+	--knomo-mobile-create-fab-size: 60px;
 
 	/* Surfaces — derived from Obsidian theme */
 	--knomo-page-background: var(--knomo-app-background-secondary);
@@ -1554,6 +1563,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-mobile-search-page {
+	--knomo-mobile-search-end-space: calc(var(--size-4-4) + env(safe-area-inset-bottom, 0px));
 	position: fixed;
 	inset: 0;
 	z-index: 9990;
@@ -1713,7 +1723,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	flex: 1 1 auto;
 	min-height: 0;
 	overflow-y: auto;
-	padding: 0 0 max(8px, env(safe-area-inset-bottom));
+	padding-block-end: var(--knomo-mobile-search-end-space);
+	scroll-padding-block-end: var(--knomo-mobile-search-end-space);
 	scrollbar-width: none;
 }
 
@@ -1723,7 +1734,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-mobile-search-empty {
-	padding: 24px 0;
+	padding: 24px 0 0;
 	color: var(--text-muted);
 	font-size: 14px;
 	text-align: center;
@@ -2290,7 +2301,16 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	overflow-y: auto;
 	overflow-x: hidden;
 	overscroll-behavior: contain;
+	scroll-padding-block-end: var(--knomo-content-end-space);
 	scrollbar-width: none;
+}
+
+.knomo-plugin .knomo-card-flow::after {
+	content: "";
+	display: block;
+	width: 100%;
+	block-size: var(--knomo-content-end-space);
+	pointer-events: none;
 }
 
 .knomo-plugin .knomo-card-flow.is-image-preview-open {
@@ -2305,12 +2325,19 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin-bottom: 0;
 }
 
-.knomo-plugin.is-layout-mobile .knomo-card-flow {
-	padding-bottom: calc(48px + 8px + env(safe-area-inset-bottom));
+.knomo-plugin .knomo-card-flow .knomo-card.has-card-actions:not(.is-menu-open),
+.knomo-plugin .knomo-mobile-search-results .knomo-card.has-card-actions:not(.is-menu-open) {
+	overflow: clip;
+}
+
+.knomo-plugin.is-layout-mobile {
+	--knomo-content-bottom-occlusion: var(
+		--knomo-mobile-create-fab-occlusion,
+		calc(var(--mobile-navbar-action-size, 44px) + var(--knomo-mobile-create-fab-size) + var(--size-4-2))
+	);
 }
 
 .knomo-plugin.is-layout-mobile.is-composer-open .knomo-card-flow {
-	padding-bottom: env(safe-area-inset-bottom);
 	overflow: hidden;
 }
 
@@ -2398,6 +2425,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	cursor: pointer;
 }
 
+.knomo-plugin.is-layout-mobile .knomo-load-more {
+	min-height: var(--knomo-touch-target);
+}
+
 .knomo-plugin .knomo-load-more:hover,
 .knomo-plugin .knomo-load-more:focus-visible {
 	color: var(--text-normal);
@@ -2414,6 +2445,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: var(--knomo-card-surface);
 	box-shadow: var(--knomo-card-shadow);
 	transition: box-shadow var(--knomo-transition-fast);
+}
+
+.knomo-plugin .knomo-mobile-search-results .knomo-card:last-child {
+	margin-bottom: 0;
 }
 
 .knomo-plugin:not(.is-layout-mobile) .knomo-card {
@@ -2585,7 +2620,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-action.is-danger:hover,
 .knomo-plugin .knomo-card-action.is-danger:focus-visible {
 	color: var(--text-error);
-	background: var(--background-modifier-error-hover, var(--knomo-row-hover));
 }
 
 .knomo-plugin .knomo-card-word-count {
@@ -2837,7 +2871,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
    10. Empty State
    -------------------------------------------------------------------------- */
 .knomo-plugin .knomo-empty-state {
-	margin: 60px 0;
+	margin: 60px 0 0;
 	padding: 0 20px;
 	border: 0;
 	background: transparent;
@@ -3074,10 +3108,10 @@ body .knomo-mobile-create-fab {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 60px;
-	min-width: 60px;
-	height: 60px;
-	min-height: 60px;
+	width: var(--knomo-mobile-create-fab-size, 60px);
+	min-width: var(--knomo-mobile-create-fab-size, 60px);
+	height: var(--knomo-mobile-create-fab-size, 60px);
+	min-height: var(--knomo-mobile-create-fab-size, 60px);
 	padding: 0;
 	border: 0;
 	border-radius: 50%;
@@ -3802,7 +3836,7 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 /* --------------------------------------------------------------------------
-   13b. 特殊页面底部留白与记录统计
+   13b. 记录统计
    -------------------------------------------------------------------------- */
 .knomo-plugin.is-record-stats .knomo-composer,
 .knomo-plugin.is-record-stats .knomo-compact-search-panel,
@@ -3823,16 +3857,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	display: inline-flex;
 }
 
-.knomo-plugin.is-record-stats .knomo-card-flow,
-.knomo-plugin.is-time-buoy .knomo-card-flow {
-	padding-bottom: max(var(--size-4-6), env(safe-area-inset-bottom));
-}
-
-.knomo-plugin.is-layout-mobile.is-record-stats .knomo-card-flow,
-.knomo-plugin.is-layout-mobile.is-time-buoy:not(.is-composer-open) .knomo-card-flow {
-	padding-bottom: calc(var(--mobile-navbar-action-size, 44px) + var(--size-4-8) + env(safe-area-inset-bottom));
-}
-
 .knomo-plugin .knomo-record-stats-page {
 	position: relative;
 	display: flex;
@@ -3840,7 +3864,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	gap: var(--size-4-5);
 	width: 100%;
 	min-width: 0;
-	padding-bottom: var(--size-4-6);
 }
 
 .knomo-plugin .knomo-record-stats-subtitle {

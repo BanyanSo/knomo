@@ -70,6 +70,26 @@ const NAVBAR_EDGE_LEFT_DEFAULT = `${CHROME_EDGE_FALLBACK_INSET}px`;
 const NAVBAR_RESERVED_RIGHT_DEFAULT = `${CHROME_EDGE_FALLBACK_INSET + CREATE_BUTTON_SIZE + MIN_COLLISION_GAP}px`;
 const CREATE_BUTTON_RIGHT_VAR = "--knomo-mobile-create-fab-right";
 const CREATE_BUTTON_BOTTOM_VAR = "--knomo-mobile-create-fab-bottom";
+const CREATE_BUTTON_OCCLUSION_VAR = "--knomo-mobile-create-fab-occlusion";
+
+export function getMobileContentBottomOcclusion(
+	contentBottom: number,
+	createButtonTop: number,
+	isCreateButtonVisible = true,
+): number | null {
+	if (!isCreateButtonVisible) {
+		return 0;
+	}
+	if (
+		!Number.isFinite(contentBottom)
+		|| !Number.isFinite(createButtonTop)
+		|| contentBottom <= 0
+		|| createButtonTop <= 0
+	) {
+		return null;
+	}
+	return Math.max(0, Math.round(contentBottom - createButtonTop));
+}
 
 export class MobileNavbarCompactController {
 	private started = false;
@@ -484,19 +504,32 @@ export class MobileNavbarCompactController {
 				duplicate.remove();
 			}
 		}
-		this.positionCreateButton(navbarEl, floating, edgeInsets);
 		const hidden = this.options.isComposerOpen();
 		this.createButtonEl.toggleClass(CREATE_BUTTON_HIDDEN_CLASS, hidden);
 		this.createButtonEl.setAttr("aria-hidden", hidden ? "true" : "false");
+		this.positionCreateButton(navbarEl, floating, edgeInsets, !hidden && this.createButtonEl.getClientRects().length > 0);
 	}
 
-	private positionCreateButton(navbarEl: HTMLElement, floating: boolean, edgeInsets: ChromeEdgeInsets): void {
+	private positionCreateButton(
+		navbarEl: HTMLElement,
+		floating: boolean,
+		edgeInsets: ChromeEdgeInsets,
+		isCreateButtonVisible: boolean,
+	): void {
 		if (this.createButtonEl === null) {
 			return;
 		}
 		const bottom = floating ? this.getFloatingCreateButtonBottom(navbarEl) : this.getFixedCreateButtonBottom(navbarEl);
 		this.setStyleProperty(this.createButtonEl, CREATE_BUTTON_RIGHT_VAR, `${edgeInsets.right}px`);
 		this.setStyleProperty(this.createButtonEl, CREATE_BUTTON_BOTTOM_VAR, `${bottom}px`);
+		const occlusion = getMobileContentBottomOcclusion(
+			this.view.containerEl.getBoundingClientRect().bottom,
+			this.createButtonEl.getBoundingClientRect().top,
+			isCreateButtonVisible,
+		);
+		if (occlusion !== null) {
+			this.view.containerEl.setCssProps({ [CREATE_BUTTON_OCCLUSION_VAR]: `${occlusion}px` });
+		}
 	}
 
 	private getFloatingCreateButtonBottom(navbarEl: HTMLElement): number {
@@ -652,6 +685,7 @@ export class MobileNavbarCompactController {
 		for (const element of this.doc.body.findAll(`.${CREATE_BUTTON_CLASS}`)) {
 			element.remove();
 		}
+		this.view.containerEl.setCssProps({ [CREATE_BUTTON_OCCLUSION_VAR]: "0px" });
 	}
 
 	private isFloatingNavbar(navbarEl: HTMLElement): boolean {

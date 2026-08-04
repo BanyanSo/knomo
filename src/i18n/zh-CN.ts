@@ -337,7 +337,7 @@ export const zhCN = {
 	"settings.monthlyFileFormat.migrated": "月度 Memos 文件名格式迁移完成，已重建 {{count}} 个月份的归档",
 	"settings.monthlyFileFormat.migrationFailed": "月度 Memos 文件名格式迁移失败，设置和索引已保持原状态",
 	"settings.dateHeadingFormat.name": "日期标题格式",
-	"settings.dateHeadingFormat.desc": "设置月度 Memos 文件中每天分组标题的格式，例如 {{format}}。",
+	"settings.dateHeadingFormat.desc": "设置月度 Memos 文件中每天分组标题的格式，例如 {{format}}。支持的日期标记：YYYY、M、MM、D、DD、MMMM、dddd。",
 	"settings.dateHeadingFormat.invalid": "日期标题格式必须是 1-6 级标题。",
 	"settings.dateOrder.name": "日期排序方式",
 	"settings.dateOrder.desc": "设置月度 Memos 文件中日期分组的排列顺序。",

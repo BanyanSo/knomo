@@ -7,14 +7,14 @@ interface BlockReferenceCandidate {
 	referenceText: string;
 	linkPath: string;
 	blockId: string;
-	sourceMemoId: string | null;
+	sourceMemoIdAlias: string | null;
 	quoted: boolean;
 }
 
 export function hasMemoReference(memo: MemoRecord): boolean {
 	return memo.sourceMemoId !== null
 		|| memo.references.length > 0
-		|| getPreferredReferenceCandidates(memo.contentSnapshot).some((candidate) => candidate.sourceMemoId !== null);
+		|| getPreferredReferenceCandidates(memo.contentSnapshot).some((candidate) => candidate.sourceMemoIdAlias !== null);
 }
 
 export function recoverMemoReferenceMetadata(
@@ -23,7 +23,14 @@ export function recoverMemoReferenceMetadata(
 ): MemoRecord[] {
 	const memoIds = new Set(memos.map((memo) => memo.id));
 	const sourceMemoIdsByTarget = buildSourceMemoIdsByTarget(memos);
-	return memos.map((memo) => recoverMemoReference(memo, memoIds, sourceMemoIdsByTarget, resolveLinkPath));
+	const sourceMemoIdsByTimestamp = buildSourceMemoIdsByTimestamp(memos);
+	return memos.map((memo) => recoverMemoReference(
+		memo,
+		memoIds,
+		sourceMemoIdsByTarget,
+		sourceMemoIdsByTimestamp,
+		resolveLinkPath,
+	));
 }
 
 export function buildMemoReferences(
@@ -73,7 +80,7 @@ export function formatMemoIdAlias(memoId: string): string {
 	if (!/^\d{16}$/.test(memoId)) {
 		return memoId;
 	}
-	return `${memoId.slice(0, 8)}-${memoId.slice(8, 14)}-${memoId.slice(14)}`;
+	return `${memoId.slice(0, 8)}-${memoId.slice(8, 14)}`;
 }
 
 function extractFirstBlockReference(content: string): string | null {
@@ -84,6 +91,7 @@ function recoverMemoReference(
 	memo: MemoRecord,
 	memoIds: ReadonlySet<string>,
 	sourceMemoIdsByTarget: ReadonlyMap<string, ReadonlySet<string>>,
+	sourceMemoIdsByTimestamp: ReadonlyMap<string, ReadonlySet<string>>,
 	resolveLinkPath: ResolveReferenceLinkPath,
 ): MemoRecord {
 	if (memo.sourceMemoId === null && memo.references.length > 0) {
@@ -92,7 +100,12 @@ function recoverMemoReference(
 	if (memo.sourceMemoId !== null && memo.references.length > 0 && memoIds.has(memo.sourceMemoId)) {
 		return memo;
 	}
-	const recovered = resolveReferenceCandidate(memo, sourceMemoIdsByTarget, resolveLinkPath);
+	const recovered = resolveReferenceCandidate(
+		memo,
+		sourceMemoIdsByTarget,
+		sourceMemoIdsByTimestamp,
+		resolveLinkPath,
+	);
 	if (recovered === null) {
 		return memo;
 	}
@@ -117,6 +130,7 @@ function recoverMemoReference(
 function resolveReferenceCandidate(
 	memo: MemoRecord,
 	sourceMemoIdsByTarget: ReadonlyMap<string, ReadonlySet<string>>,
+	sourceMemoIdsByTimestamp: ReadonlyMap<string, ReadonlySet<string>>,
 	resolveLinkPath: ResolveReferenceLinkPath,
 ): { sourceMemoId: string; referenceText: string } | null {
 	const resolved = new Map<string, BlockReferenceCandidate>();
@@ -128,7 +142,8 @@ function resolveReferenceCandidate(
 			? undefined
 			: sourceMemoIdsByTarget.get(getReferenceTargetKey(resolvedPath, candidate.blockId));
 		const targetMemoId = targetMemoIds?.size === 1 ? [...targetMemoIds][0] : null;
-		const sourceMemoId = targetMemoId ?? candidate.sourceMemoId;
+		const sourceMemoId = targetMemoId
+			?? resolveMemoIdAlias(candidate.sourceMemoIdAlias, sourceMemoIdsByTimestamp);
 		if (sourceMemoId !== null && !resolved.has(sourceMemoId)) {
 			resolved.set(sourceMemoId, candidate);
 		}
@@ -151,6 +166,20 @@ function buildSourceMemoIdsByTarget(memos: readonly MemoRecord[]): Map<string, S
 		const memoIds = result.get(key) ?? new Set<string>();
 		memoIds.add(memo.id);
 		result.set(key, memoIds);
+	}
+	return result;
+}
+
+function buildSourceMemoIdsByTimestamp(memos: readonly MemoRecord[]): Map<string, Set<string>> {
+	const result = new Map<string, Set<string>>();
+	for (const memo of memos) {
+		if (!/^\d{16}$/.test(memo.id)) {
+			continue;
+		}
+		const timestamp = memo.id.slice(0, 14);
+		const memoIds = result.get(timestamp) ?? new Set<string>();
+		memoIds.add(memo.id);
+		result.set(timestamp, memoIds);
 	}
 	return result;
 }
@@ -190,7 +219,7 @@ function parseBlockReferenceCandidates(content: string): BlockReferenceCandidate
 					referenceText: match[0],
 					linkPath: target.slice(0, fragmentIndex),
 					blockId: target.slice(fragmentIndex + 2),
-					sourceMemoId: parseMemoIdAlias(alias),
+					sourceMemoIdAlias: parseMemoIdAlias(alias),
 					quoted,
 				});
 			}
@@ -204,11 +233,22 @@ function parseMemoIdAlias(alias: string | null): string | null {
 	if (alias === null) {
 		return null;
 	}
-	if (/^\d{16}$/.test(alias)) {
+	if (/^\d{14}(?:\d{2})?$/.test(alias)) {
 		return alias;
 	}
-	const formatted = alias.match(/^(\d{8})-(\d{6})-(\d{2})$/);
-	return formatted === null ? null : `${formatted[1]}${formatted[2]}${formatted[3]}`;
+	const formatted = alias.match(/^(\d{8})-(\d{6})(?:-(\d{2}))?$/);
+	return formatted === null ? null : `${formatted[1]}${formatted[2]}${formatted[3] ?? ""}`;
+}
+
+function resolveMemoIdAlias(
+	sourceMemoIdAlias: string | null,
+	sourceMemoIdsByTimestamp: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+	if (sourceMemoIdAlias === null || /^\d{16}$/.test(sourceMemoIdAlias)) {
+		return sourceMemoIdAlias;
+	}
+	const memoIds = sourceMemoIdsByTimestamp.get(sourceMemoIdAlias);
+	return memoIds?.size === 1 ? [...memoIds][0] : null;
 }
 
 function getReferenceTargetKey(path: string, blockId: string): string {

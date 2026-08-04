@@ -53,10 +53,11 @@ export function getMemoCardShell(options: MemoCardShellOptions): MemoCardShell {
 	const attrs: Record<string, string> = {
 		"data-memo-id": options.memoId,
 	};
+	const className = options.includeActions ? "knomo-card has-card-actions" : "knomo-card";
 	return {
 		className: options.includeActions && options.activeMenuMemoId === options.memoId
-			? "knomo-card is-menu-open"
-			: "knomo-card",
+			? `${className} is-menu-open`
+			: className,
 		attrs,
 	};
 }

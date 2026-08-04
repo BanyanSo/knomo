@@ -979,16 +979,71 @@ test("strips inline wiki link from content for card display", () => {
 });
 
 test("formats numeric memoId alias for Obsidian block links", () => {
-	assert.equal(formatMemoIdAlias("2026060514301207"), "20260605-143012-07");
+	assert.equal(formatMemoIdAlias("2026060514301207"), "20260605-143012");
 	assert.equal(formatMemoIdAlias("memo-1"), "memo-1");
 	assert.equal(
 		withMemoIdAlias("[[Daily/2026-05-17#^abc123]]", "2026060514301207"),
-		"[[Daily/2026-05-17#^abc123|20260605-143012-07]]",
+		"[[Daily/2026-05-17#^abc123|20260605-143012]]",
 	);
 	assert.equal(
 		withMemoIdAlias("![[Daily/2026-05-17#^abc123]]", "memo-1"),
 		"[[Daily/2026-05-17#^abc123|memo-1]]",
 	);
+});
+
+test("recovers a unique memo from a timestamp-only alias", () => {
+	const source = createReferenceMemo("- 08:00:00 内容 ^abc123");
+	const child = {
+		...createReferenceMemo("- 09:00:00 新内容"),
+		id: "2026051809000001",
+		contentSnapshot: "新内容 [[Missing#^missing|20260518-080000]]",
+	};
+
+	const recovered = recoverMemoReferenceMetadata([source, child], () => null);
+
+	assert.equal(recovered[1].sourceMemoId, source.id);
+	assert.deepEqual(recovered[1].references, [{
+		memoId: source.id,
+		referenceText: "[[Missing#^missing|20260518-080000]]",
+	}]);
+});
+
+test("prefers a unique block target when a timestamp-only alias is ambiguous", () => {
+	const source = createReferenceMemo("- 08:00:00 第一条 ^first");
+	const sameSecondMemo = {
+		...createReferenceMemo("- 08:00:00 第二条 ^second"),
+		id: "2026051808000001",
+	};
+	const child = {
+		...createReferenceMemo("- 09:00:00 新内容"),
+		id: "2026051809000001",
+		contentSnapshot: "新内容 [[Daily/2026-05-18#^first|20260518-080000]]",
+	};
+
+	const recovered = recoverMemoReferenceMetadata(
+		[source, sameSecondMemo, child],
+		(linkPath) => `${linkPath}.md`,
+	);
+
+	assert.equal(recovered[2].sourceMemoId, source.id);
+});
+
+test("does not guess from a timestamp-only alias shared by multiple memos", () => {
+	const firstSource = createReferenceMemo("- 08:00:00 第一条 ^first");
+	const secondSource = {
+		...createReferenceMemo("- 08:00:00 第二条 ^second"),
+		id: "2026051808000001",
+	};
+	const child = {
+		...createReferenceMemo("- 09:00:00 新内容"),
+		id: "2026051809000001",
+		contentSnapshot: "新内容 [[Missing#^missing|20260518-080000]]",
+	};
+
+	const recovered = recoverMemoReferenceMetadata([firstSource, secondSource, child], () => null);
+
+	assert.equal(recovered[2].sourceMemoId, null);
+	assert.deepEqual(recovered[2].references, []);
 });
 
 test("recovers historical reference metadata from an unquoted memoId alias", () => {
@@ -1002,7 +1057,7 @@ test("recovers historical reference metadata from an unquoted memoId alias", () 
 		].join("\n"),
 	};
 
-	const recovered = recoverMemoReferenceMetadata([source, child], (linkPath) => `${linkPath}.md`);
+	const recovered = recoverMemoReferenceMetadata([source, child], () => null);
 
 	assert.equal(recovered[1].sourceMemoId, source.id);
 	assert.deepEqual(recovered[1].references, [{

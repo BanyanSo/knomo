@@ -339,7 +339,7 @@ export const en: Record<TranslationKey, string> = {
 	"settings.monthlyFileFormat.migrated": "Monthly memos filename format migrated; rebuilt {{count}} monthly archives",
 	"settings.monthlyFileFormat.migrationFailed": "Monthly memos filename format migration failed. Settings and indexes remain unchanged",
 	"settings.dateHeadingFormat.name": "Date heading format",
-	"settings.dateHeadingFormat.desc": "Set the daily group heading format inside monthly memo files, for example {{format}}.",
+	"settings.dateHeadingFormat.desc": "Set the daily group heading format inside monthly memo files, for example {{format}}. Supported date tokens: YYYY, M, MM, D, DD, MMMM, dddd.",
 	"settings.dateHeadingFormat.invalid": "Date heading format must be a level 1-6 heading.",
 	"settings.dateOrder.name": "Date sort order",
 	"settings.dateOrder.desc": "Set the order of date groups in monthly memo files.",

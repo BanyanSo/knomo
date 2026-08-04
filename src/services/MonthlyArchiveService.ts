@@ -1,4 +1,4 @@
-import { normalizePath, TFile, TFolder, Vault } from "obsidian";
+import { moment as obsidianMoment, normalizePath, TFile, TFolder, Vault } from "obsidian";
 import type { App } from "obsidian";
 
 import { DEFAULT_MONTHLY_DATE_HEADING_FORMAT, DEFAULT_MONTHLY_MEMO_FILE_FORMAT } from "../constants";
@@ -11,7 +11,7 @@ import { KnomoError } from "../types/serviceError";
 import type { SyncConflictFile } from "../types/syncConflict";
 import type { KnomoErrorCode } from "../types/serviceError";
 import type { KnomoSettings, MonthlyDateOrder } from "../types/settings";
-import { formatDatePart, formatMonthPeriod } from "../utils/date";
+import { formatMonthPeriod } from "../utils/date";
 import { hashText } from "../utils/hash";
 import { findLineNumber, normalizeMarkdownLineEndings } from "../utils/markdown";
 import { getSystemFolderPath, normalizeVaultPath } from "../utils/path";
@@ -21,11 +21,19 @@ import { MarkdownBlockService } from "./MarkdownBlockService";
 
 // 职责：维护月度归档文件中的月份标题、日期标题和完整 memo block。
 export const MONTHLY_ARCHIVE_MARKER = "knomo:monthly-archive";
+const MONTHLY_DATE_TOKEN_PATTERN = /YYYY|MMMM|dddd|MM|DD|M|D/g;
+const ASCII_LETTER_PATTERN = /[A-Za-z]/;
 export const LEGACY_MONTHLY_ARCHIVE_READONLY_COMMENT = [
 	"<!--",
 	"Knomo monthly archive file: this file is generated automatically from Daily Notes. Do not edit memos here directly; edit them in Knomo or the corresponding daily note.",
 	"-->",
 ].join("\n");
+
+interface MomentFormatter {
+	format(format: string): string;
+}
+
+type MomentFactory = (input: Date) => MomentFormatter;
 
 export interface MonthlyArchiveWriteResult {
 	file: TFile;
@@ -527,8 +535,16 @@ function isMonthlyArchiveSideCopyStem(fileStem: string, canonicalStem: string): 
 
 export function formatMonthlyDateHeading(format: string, date: Date): string {
 	const dateFormat = format.trim() || DEFAULT_MONTHLY_DATE_HEADING_FORMAT;
-	const datePart = formatDatePart(date);
-	return dateFormat.replace(/YYYY-MM-DD/g, datePart).replace(/YYYY-MM/g, datePart.slice(0, 7));
+	const momentFactory = obsidianMoment as unknown as MomentFactory;
+	const momentDate = momentFactory(date);
+	return dateFormat.replace(MONTHLY_DATE_TOKEN_PATTERN, (token: string, offset: number, source: string) => {
+		const previousCharacter = source[offset - 1] ?? "";
+		const nextCharacter = source[offset + token.length] ?? "";
+		if (ASCII_LETTER_PATTERN.test(previousCharacter) || ASCII_LETTER_PATTERN.test(nextCharacter)) {
+			return token;
+		}
+		return momentDate.format(token);
+	});
 }
 
 function ensureMonthHeading(content: string, period: string): string {

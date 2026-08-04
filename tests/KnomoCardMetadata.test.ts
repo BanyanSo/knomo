@@ -22,7 +22,7 @@ test("builds memo card shell metadata without daily-open card attributes", () =>
 		includeActions: true,
 		activeMenuMemoId: "memo-1",
 	}), {
-		className: "knomo-card is-menu-open",
+		className: "knomo-card has-card-actions is-menu-open",
 		attrs: {
 			"data-memo-id": "memo-1",
 		},
@@ -30,12 +30,23 @@ test("builds memo card shell metadata without daily-open card attributes", () =>
 
 	assert.deepEqual(getMemoCardShell({
 		memoId: "memo-2",
+		includeActions: true,
+		activeMenuMemoId: null,
+	}), {
+		className: "knomo-card has-card-actions",
+		attrs: {
+			"data-memo-id": "memo-2",
+		},
+	});
+
+	assert.deepEqual(getMemoCardShell({
+		memoId: "memo-3",
 		includeActions: false,
-		activeMenuMemoId: "memo-2",
+		activeMenuMemoId: "memo-3",
 	}), {
 		className: "knomo-card",
 		attrs: {
-			"data-memo-id": "memo-2",
+			"data-memo-id": "memo-3",
 		},
 	});
 });
@@ -106,7 +117,7 @@ test("builds source metadata after recovering a historical reference", () => {
 
 	assert.deepEqual(getMemoSourceReferenceMeta(recovered, new Set()), {
 		type: "markdown",
-		text: "[[Daily/2026-06-02#^abc123|20260602-080000-00]]",
+		text: "[[Daily/2026-06-02#^abc123|20260602-080000]]",
 		sourcePath: "Daily/2026-06-02.md",
 	});
 });

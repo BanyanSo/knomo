@@ -61,6 +61,18 @@ test("mobile navbar compact cleanup removes injected chrome and resets CSS varia
 	assert.equal(nativeAction.hasClass("knomo-mobile-navbar-hidden"), false);
 });
 
+test("mobile content bottom occlusion measures from the scrollable content edge", async () => {
+	await ensureObsidianStub();
+	const { getMobileContentBottomOcclusion } = await import("../src/ui/MobileNavbarCompactController");
+
+	assert.equal(getMobileContentBottomOcclusion(800, 688), 112);
+	assert.equal(getMobileContentBottomOcclusion(756, 680), 76);
+	assert.equal(getMobileContentBottomOcclusion(756, 780), 0);
+	assert.equal(getMobileContentBottomOcclusion(0, 680), null);
+	assert.equal(getMobileContentBottomOcclusion(800, 688, false), 0);
+	assert.equal(getMobileContentBottomOcclusion(800, 0), null);
+});
+
 function createControllerEnv() {
 	let nextTimerId = 1;
 	let nextFrameId = 1;
@@ -72,6 +84,7 @@ function createControllerEnv() {
 	const domEvents: string[] = [];
 	const offRefs: unknown[] = [];
 	const bodyRemovedClasses: string[] = [];
+	const contentCssProps = new Map<string, string>();
 	const body = {
 		removeClass: (cls: string) => {
 			bodyRemovedClasses.push(cls);
@@ -116,6 +129,11 @@ function createControllerEnv() {
 		containerEl: {
 			doc: { body },
 			win,
+			setCssProps: (props: Record<string, string>) => {
+				for (const [key, value] of Object.entries(props)) {
+					contentCssProps.set(key, value);
+				}
+			},
 		},
 		registerDomEvent: (_target: unknown, eventName: string) => {
 			domEvents.push(eventName);

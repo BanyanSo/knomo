@@ -1,0 +1,501 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knomo.local/schemas/catalog-v2/migration-package-v1.json",
+  "title": "Knomo Catalog v2 migration package v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "importerVersion",
+    "source",
+    "identityClaims",
+    "deletedRecords",
+    "relations",
+    "reviews",
+    "pendingCreates",
+    "diagnostics",
+    "counts"
+  ],
+  "properties": {
+    "kind": {
+      "const": "knomo.catalog-v2.migration-package"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "importerVersion": {
+      "const": 1
+    },
+    "source": {
+      "$ref": "#/$defs/sourceArtifact"
+    },
+    "identityClaims": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/identityClaim"
+      }
+    },
+    "deletedRecords": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/deletedRecord"
+      }
+    },
+    "relations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "reviews": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/review"
+      }
+    },
+    "pendingCreates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/pendingCreate"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "counts": {
+      "$ref": "#/$defs/counts"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "legacyHash": {
+      "type": "string",
+      "pattern": "^fnv1a-[a-f0-9]{8}$"
+    },
+    "memoId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^/\\\\\\u0000-\\u001f]+$"
+    },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "vaultPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^\\u0000-\\u001f]+$"
+    },
+    "logicalDate": {
+      "type": "string",
+      "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])$"
+    },
+    "memoTime": {
+      "type": "string",
+      "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?$"
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "byteLength"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/vaultPath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "sourceArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactDigest",
+        "artifactKind",
+        "byteLength",
+        "legacySchemaVersion",
+        "period",
+        "recordCount"
+      ],
+      "properties": {
+        "artifactDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifactKind": {
+          "enum": [
+            "memo_index",
+            "pending_create",
+            "plugin_data",
+            "time_buoy_index",
+            "time_buoy_state",
+            "repair_candidate"
+          ]
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "legacySchemaVersion": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "period": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])$"
+        },
+        "recordCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "legacyEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourcePath",
+        "logicalDate",
+        "section",
+        "time",
+        "contentHash",
+        "lastKnownBlockHash",
+        "existingBlockId",
+        "lineNumberHint"
+      ],
+      "properties": {
+        "sourcePath": {
+          "$ref": "#/$defs/vaultPath"
+        },
+        "logicalDate": {
+          "$ref": "#/$defs/logicalDate"
+        },
+        "section": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "time": {
+          "$ref": "#/$defs/memoTime"
+        },
+        "contentHash": {
+          "$ref": "#/$defs/legacyHash"
+        },
+        "lastKnownBlockHash": {
+          "$ref": "#/$defs/legacyHash"
+        },
+        "existingBlockId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "lineNumberHint": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      }
+    },
+    "identityClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memoId",
+        "legacyStatus",
+        "legacyRecordDigest",
+        "evidence"
+      ],
+      "properties": {
+        "memoId": {
+          "$ref": "#/$defs/memoId"
+        },
+        "legacyStatus": {
+          "enum": [
+            "active",
+            "error"
+          ]
+        },
+        "legacyRecordDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evidence": {
+          "$ref": "#/$defs/legacyEvidence"
+        }
+      }
+    },
+    "deletedRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memoId",
+        "deleteOpId",
+        "deletedAt",
+        "deleteSource",
+        "legacyRecordDigest",
+        "payload"
+      ],
+      "properties": {
+        "memoId": {
+          "$ref": "#/$defs/memoId"
+        },
+        "deleteOpId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "deletedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "deleteSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "legacyRecordDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "payload": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memoId",
+        "sourceMemoId",
+        "legacyRecordDigest"
+      ],
+      "properties": {
+        "memoId": {
+          "$ref": "#/$defs/memoId"
+        },
+        "sourceMemoId": {
+          "$ref": "#/$defs/memoId"
+        },
+        "legacyRecordDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memoId",
+        "reviewCount",
+        "lastReviewedAt",
+        "legacyRecordDigest"
+      ],
+      "properties": {
+        "memoId": {
+          "$ref": "#/$defs/memoId"
+        },
+        "reviewCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastReviewedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "legacyRecordDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "pendingCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memoId",
+        "legacyOpId",
+        "createdAt",
+        "rawBlock",
+        "contentHash",
+        "dailyPath",
+        "dailyBeforeHash",
+        "dailyAfterHash",
+        "source",
+        "sourceMemoId",
+        "legacyRecordDigest"
+      ],
+      "properties": {
+        "memoId": {
+          "$ref": "#/$defs/memoId"
+        },
+        "legacyOpId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "rawBlock": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentHash": {
+          "$ref": "#/$defs/legacyHash"
+        },
+        "dailyPath": {
+          "$ref": "#/$defs/vaultPath"
+        },
+        "dailyBeforeHash": {
+          "$ref": "#/$defs/legacyHash"
+        },
+        "dailyAfterHash": {
+          "$ref": "#/$defs/legacyHash"
+        },
+        "source": {
+          "enum": [
+            "plugin_input",
+            "daily_scan",
+            "quote_create"
+          ]
+        },
+        "sourceMemoId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/memoId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "legacyRecordDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entryKey",
+        "severity",
+        "code",
+        "memoId",
+        "fieldNames"
+      ],
+      "properties": {
+        "entryKey": {
+          "$ref": "#/$defs/safeId"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "attention"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "memoId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/memoId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fieldNames": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identityClaims",
+        "deletedRecords",
+        "relations",
+        "reviewOrdinals",
+        "pendingCreates",
+        "diagnostics"
+      ],
+      "properties": {
+        "identityClaims": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletedRecords": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reviewOrdinals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pendingCreates": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

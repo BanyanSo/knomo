@@ -47,6 +47,7 @@ import {
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import { KnomoCardFlowCoordinator } from "./KnomoCardFlowCoordinator";
 import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
+import { handleComposerClipboardImagePaste } from "./ComposerClipboardImages";
 import {
 	getTimeBuoyPickerLeft,
 	renderTimeBuoyDatePicker,
@@ -1356,6 +1357,9 @@ export class KnomoView extends ItemView {
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "input", (event) => {
 			this.handleComposerInput(event);
+		});
+		this.getRenderScope().registerDomEvent(this.inputEl, "paste", (event: ClipboardEvent) => {
+			this.handleComposerPaste(event);
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "focus", () => {
 			this.handleComposerInputFocus();
@@ -4135,6 +4139,18 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private handleComposerPaste(event: ClipboardEvent): void {
+		if (this.inputEl === null || this.inputEl.disabled || this.isSaving) {
+			return;
+		}
+		handleComposerClipboardImagePaste(event, (files) => {
+			this.closeTimeBuoyPicker(false);
+			this.tagSuggest?.close();
+			this.wikiLinkSuggest?.close();
+			void this.insertImageFiles(files);
+		});
+	}
+
 	private handleComposerKeydown(event: KeyboardEvent): void {
 		if (this.handleComposerSaveShortcut(event)) {
 			return;
@@ -5819,7 +5835,7 @@ export class KnomoView extends ItemView {
 		await this.app.workspace.openLinkText(linkInfo.linktext, linkInfo.sourcePath, Keymap.isModEvent(event));
 	}
 
-	private async insertImageFiles(files: FileList | null): Promise<void> {
+	private async insertImageFiles(files: FileList | readonly File[] | null): Promise<void> {
 		if (files === null || files.length === 0) {
 			return;
 		}

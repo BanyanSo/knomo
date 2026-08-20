@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { KnomoCardFlowCoordinator } from "../src/ui/KnomoCardFlowCoordinator";
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import type { CardFlowSentinelRenderOptions } from "../src/ui/KnomoCardFlowSentinel";
 
 test("tracks pending scroll restore by generation and consumes it once", () => {

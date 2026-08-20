@@ -1,12 +1,12 @@
 import { t } from "../i18n";
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import type { TrashAction } from "./KnomoActionDispatch";
 
 export type TrashMemoRenderTarget = "ui-state" | "trash-count" | "trash-count-and-scope" | "card-flow";
 
-export interface TrashMemoSnapshot {
-	trashMemos: MemoRecord[] | null;
+export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
+	trashMemos: TMemo[] | null;
 	trashLoading: boolean;
 	trashError: string | null;
 	trashCount: number;
@@ -14,12 +14,12 @@ export interface TrashMemoSnapshot {
 	trashBusyMemoActions: ReadonlyMap<string, TrashAction>;
 }
 
-interface TrashMemoControllerOptions {
+interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	getDeletedMemoSummary: () => Promise<{ count: number; ids: string[] }>;
-	listDeletedMemos: () => Promise<MemoRecord[]>;
-	restoreMemo: (memo: MemoRecord) => Promise<MemoRecord>;
-	handleRestoredMemo: (deletedMemo: MemoRecord, restoredMemo: MemoRecord) => void;
-	purgeDeletedMemo: (memo: MemoRecord) => Promise<void>;
+	listDeletedMemos: () => Promise<TMemo[]>;
+	restoreMemo: (memo: TMemo) => Promise<TMemo | null>;
+	handleRestoredMemo: (deletedMemo: TMemo, restoredMemo: TMemo) => void;
+	purgeDeletedMemo: (memo: TMemo) => Promise<void>;
 	isTrashActive: () => boolean;
 	confirmPurge: () => Promise<boolean>;
 	showNotice: (message: string) => void;
@@ -27,8 +27,8 @@ interface TrashMemoControllerOptions {
 	requestRender: (target: TrashMemoRenderTarget) => void;
 }
 
-export class TrashMemoController {
-	private trashMemos: MemoRecord[] | null = null;
+export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
+	private trashMemos: TMemo[] | null = null;
 	private trashLoading = false;
 	private trashError: string | null = null;
 	private trashCount = 0;
@@ -36,9 +36,9 @@ export class TrashMemoController {
 	private trashBusyMemoActions = new Map<string, TrashAction>();
 	private readonly confirmingPurgeMemoIds = new Set<string>();
 
-	constructor(private readonly options: TrashMemoControllerOptions) {}
+	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
-	getSnapshot(): TrashMemoSnapshot {
+	getSnapshot(): TrashMemoSnapshot<TMemo> {
 		return {
 			trashMemos: this.trashMemos,
 			trashLoading: this.trashLoading,
@@ -80,10 +80,13 @@ export class TrashMemoController {
 			this.options.requestRender("ui-state");
 		}
 		try {
-			const deletedMemos = await this.options.listDeletedMemos();
+			const [deletedMemos, summary] = await Promise.all([
+				this.options.listDeletedMemos(),
+				this.options.getDeletedMemoSummary(),
+			]);
 			this.trashMemos = deletedMemos;
-			this.trashCount = deletedMemos.length;
-			this.deletedMemoIds = new Set(deletedMemos.map((memo) => memo.id));
+			this.trashCount = Math.max(summary.count, deletedMemos.length);
+			this.deletedMemoIds = new Set([...summary.ids, ...deletedMemos.map((memo) => memo.id)]);
 		} catch (error) {
 			this.trashMemos = [];
 			this.trashError = formatServiceError(error, t("error.trashLoadFailed"));
@@ -94,7 +97,14 @@ export class TrashMemoController {
 		}
 	}
 
-	async handleTrashAction(action: TrashAction, memo: MemoRecord): Promise<void> {
+	appendTrashMemos(memos: readonly TMemo[], limit = Number.MAX_SAFE_INTEGER): void {
+		const byId = new Map((this.trashMemos ?? []).map((memo) => [memo.id, memo]));
+		for (const memo of memos) byId.set(memo.id, memo);
+		this.trashMemos = [...byId.values()].slice(-Math.max(1, Math.trunc(limit)));
+		this.options.requestRender("card-flow");
+	}
+
+	async handleTrashAction(action: TrashAction, memo: TMemo): Promise<void> {
 		if (this.trashBusyMemoActions.has(memo.id) || this.confirmingPurgeMemoIds.has(memo.id)) {
 			return;
 		}
@@ -115,9 +125,13 @@ export class TrashMemoController {
 			if (action === "restore") {
 				const restoredMemo = await this.options.restoreMemo(memo);
 				this.removeTrashMemo(memo.id);
-				this.options.handleRestoredMemo(memo, restoredMemo);
+				if (restoredMemo !== null) this.options.handleRestoredMemo(memo, restoredMemo);
 				this.options.showNotice(t("notice.restored"));
-				await this.options.forceRefreshViews();
+				try {
+					await this.options.forceRefreshViews();
+				} catch {
+					this.options.showNotice(t("catalog.savedRefreshPending"));
+				}
 				return;
 			}
 

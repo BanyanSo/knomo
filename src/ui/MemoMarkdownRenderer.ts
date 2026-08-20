@@ -1,7 +1,7 @@
 import { MarkdownRenderer } from "obsidian";
 import type { App, Component } from "obsidian";
 
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
 	getMarkdownTaskLines,
 	type MarkdownTaskMarker,

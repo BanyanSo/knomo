@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import { MemoCardPreviewCache } from "../src/ui/MemoCardPreviewCache";
 
 test("reuses a memo preview while its fixed cache key is unchanged", () => {

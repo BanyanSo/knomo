@@ -6,6 +6,7 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 	await ensureObsidianStub();
 	const {
 		renderKnomoCardFlowHeaders,
+		renderKnomoActionableListSummary,
 		renderKnomoEmptyState,
 		renderKnomoListSummary,
 		renderKnomoLoadMoreButton,
@@ -17,6 +18,11 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 	const summary = renderKnomoListSummary(root.asHtml(), "Filtered 3 memos");
 	assert.equal(summary.hasClass("knomo-list-summary"), true);
 	assert.equal(summary.getText(), "Filtered 3 memos");
+	const actionable = renderKnomoActionableListSummary(root.asHtml(), "Local storage unavailable", {
+		label: "Retry",
+		action: "refresh-catalog-sync-state",
+	});
+	assert.equal(actionable.find("[data-action='refresh-catalog-sync-state']")?.getText(), "Retry");
 
 	const toolbar = renderKnomoRandomReunionToolbar(root.asHtml(), 5);
 	assert.equal(toolbar.hasClass("knomo-list-toolbar"), true);

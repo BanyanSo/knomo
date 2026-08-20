@@ -76,7 +76,7 @@ test("record stats preparation controller shares in-flight requests", async () =
 
 	assert.equal(first, second);
 	assert.equal(controller.hasActiveRequest(), true);
-	assert.deepEqual(runSources, ["memo-index:0"]);
+	assert.deepEqual(runSources, ["catalog:0"]);
 	deferred.resolve(true);
 	assert.equal(await first, true);
 	assert.equal(controller.hasActiveRequest(), false);
@@ -100,7 +100,7 @@ test("record stats preparation controller retries invalidated requests with the 
 	first.resolve(true);
 	await preparing;
 
-	assert.deepEqual(runSources, ["memo-index:0", "memo-index:1"]);
+	assert.deepEqual(runSources, ["catalog:0", "catalog:1"]);
 	assert.equal(controller.hasActiveRequest(), true);
 	second.resolve(true);
 	await flushPromises();
@@ -124,7 +124,7 @@ test("record stats preparation controller can clear a pending retry request", as
 	deferred.resolve(true);
 	await preparing;
 
-	assert.deepEqual(runSources, ["memo-index:0"]);
+	assert.deepEqual(runSources, ["catalog:0"]);
 	assert.equal(controller.hasActiveRequest(), false);
 });
 

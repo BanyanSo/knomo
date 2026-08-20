@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import { filterVisibleMemos, memoMatchesSearch } from "../src/ui/KnomoMemoFilter";
 import { buildMemoSearchText } from "../src/ui/viewFilters";
 

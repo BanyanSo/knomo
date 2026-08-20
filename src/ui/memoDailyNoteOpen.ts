@@ -1,6 +1,6 @@
 import type { OpenViewState, TFile, Workspace } from "obsidian";
 
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 
 export type MemoDailyNoteRef = Pick<MemoRecord, "dailyRef">;
 

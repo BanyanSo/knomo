@@ -6,7 +6,7 @@ import {
 	KnomoCardFlowBatcher,
 	runCardFlowBatch,
 } from "../src/ui/KnomoCardFlow";
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 
 test("starts card flow with the default batch size", () => {
 	const batcher = new KnomoCardFlowBatcher();

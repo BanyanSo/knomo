@@ -1,31 +1,31 @@
 import { t } from "../i18n";
-import type { MemoMutation, MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 
 const RANDOM_REUNION_DEFAULT_COUNT = 5;
 
-export interface RandomReunionSnapshot {
-	memos: MemoRecord[] | null;
+export interface RandomReunionSnapshot<TMemo extends MemoRecord = MemoRecord> {
+	memos: TMemo[] | null;
 	loading: boolean;
 }
 
-interface RandomReunionControllerOptions {
+interface RandomReunionControllerOptions<TMemo extends MemoRecord> {
 	ensureAllMemosLoaded: () => Promise<void>;
-	getMemos: () => MemoRecord[];
-	getRandomReunionMemos: (count: number, memos: MemoRecord[]) => Promise<MemoRecord[]>;
+	getMemos: () => TMemo[];
+	getRandomReunionMemos: (count: number, memos: TMemo[]) => Promise<TMemo[]>;
 	markRandomReunionReviewed: (memoId: string) => Promise<void>;
 	isRandomActive: () => boolean;
 	showNotice: (message: string) => void;
 	requestRender: () => void;
 }
 
-export class RandomReunionController {
-	private memos: MemoRecord[] | null = null;
+export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
+	private memos: TMemo[] | null = null;
 	private loading = false;
 
-	constructor(private readonly options: RandomReunionControllerOptions) {}
+	constructor(private readonly options: RandomReunionControllerOptions<TMemo>) {}
 
-	getSnapshot(): RandomReunionSnapshot {
+	getSnapshot(): RandomReunionSnapshot<TMemo> {
 		return {
 			memos: this.memos,
 			loading: this.loading,
@@ -34,17 +34,6 @@ export class RandomReunionController {
 
 	clearMemos(): void {
 		this.memos = null;
-	}
-
-	applyMemoMutation(mutation: MemoMutation): void {
-		if (this.memos === null) {
-			return;
-		}
-		if (mutation.type === "delete") {
-			this.memos = this.memos.filter((memo) => memo.id !== mutation.memo.id);
-			return;
-		}
-		this.memos = this.memos.map((memo) => memo.id === mutation.memo.id ? mutation.memo : memo);
 	}
 
 	async refresh(): Promise<void> {
@@ -73,7 +62,7 @@ export class RandomReunionController {
 		}
 	}
 
-	async markReviewedAfterOpen(memoId: string): Promise<void> {
+	async markReviewed(memoId: string): Promise<void> {
 		await this.options.markRandomReunionReviewed(memoId);
 	}
 }

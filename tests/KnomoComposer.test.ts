@@ -179,7 +179,7 @@ test("narrows Time buoy input events with the composer window constructor", asyn
 	assert.equal(opened.length, 1);
 });
 
-test("renders retry and rebuild actions for a Time buoy index error", async () => {
+test("renders a retry action for a Time buoy Catalog error", async () => {
 	await obsidianStubReady;
 	const { renderTimeBuoyPage } = await import("../src/ui/TimeBuoyPage");
 	const root = new TestElement("div");
@@ -192,12 +192,10 @@ test("renders retry and rebuild actions for a Time buoy index error", async () =
 		today: [],
 		upcoming: [],
 		past: [],
-		rebuilding: false,
-		rebuildProgress: null,
 	}, { idPrefix: "time-buoy-test" });
 
 	assert.notEqual(root.find("[data-action='retry-time-buoy']"), null);
-	assert.notEqual(root.find("[data-action='rebuild-time-buoy']"), null);
+	assert.equal(root.find("[data-action='rebuild-time-buoy']"), null);
 });
 
 test("renders accessible Time buoy tabs and the active tab empty state", async () => {
@@ -213,8 +211,6 @@ test("renders accessible Time buoy tabs and the active tab empty state", async (
 		today: [],
 		upcoming: [],
 		past: [],
-		rebuilding: false,
-		rebuildProgress: null,
 	}, { idPrefix: "time-buoy-test" });
 
 	assert.equal(result.panelEl, null);

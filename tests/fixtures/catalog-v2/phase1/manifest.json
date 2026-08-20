@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "phase": 1,
+  "fixtures": [
+    "PARSE-CUSTOM-ROOT",
+    "PARSE-DUPLICATE-TIME-CONTENT",
+    "PARSE-MULTILINE-TASK",
+    "PARSE-MEDIA-LINKS",
+    "PARSE-CODE-FENCES",
+    "PARSE-EXISTING-BLOCK-ID",
+    "PARSE-LINE-ENDINGS"
+  ]
+}

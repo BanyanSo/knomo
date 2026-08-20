@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { isSupportedMemoImage } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import { hasMemoReference } from "../utils/references";

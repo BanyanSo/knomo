@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import {
 	buildMemoSearchText,
 	collectTags,
@@ -267,28 +267,21 @@ test("matches record statistics drill-down filters with local date and hour sema
 	assert.equal(getRecordStatsSearchFilterLabel(tagFilter), "2026-06-01 to 2026-06-30 · #Work");
 });
 
-test("parses memo local date from createdAt, daily path, and monthly refs", () => {
+test("parses memo local date from createdAt and falls back to the Daily path date", () => {
 	const createdAtMemo = makeMemo("created", { createdAt: "2026-05-20T08:09:10" });
 	assert.equal(parseMemoLocalDate(createdAtMemo, disabledDailyStatus())?.getHours(), 8);
 
 	const dailyMemo = makeMemo("daily", {
 		createdAt: "invalid",
 		dailyPath: "Daily/2026-05-20.md",
-		dailyBlock: "- 18:30:45 daily memo",
 	});
 	const dailyDate = parseMemoLocalDate(dailyMemo, { enabled: true, folder: "Daily", format: "YYYY-MM-DD" });
 	assert.equal(dailyDate?.getFullYear(), 2026);
 	assert.equal(dailyDate?.getMonth(), 4);
 	assert.equal(dailyDate?.getDate(), 20);
-	assert.equal(dailyDate?.getHours(), 18);
-	assert.equal(dailyDate?.getMinutes(), 30);
-	assert.equal(dailyDate?.getSeconds(), 45);
-
-	const monthlyMemo = makeMemo("monthly", {
-		createdAt: "invalid",
-		monthlyDateHeading: "## [[2026-05-19]]",
-	});
-	assert.equal(parseMemoLocalDate(monthlyMemo, disabledDailyStatus())?.getDate(), 19);
+	assert.equal(dailyDate?.getHours(), 0);
+	assert.equal(dailyDate?.getMinutes(), 0);
+	assert.equal(dailyDate?.getSeconds(), 0);
 });
 
 test("builds memo search text and all-memo loading flags", () => {

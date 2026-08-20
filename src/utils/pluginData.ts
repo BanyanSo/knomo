@@ -1,5 +1,4 @@
 import type { KnomoSettings } from "../types/settings";
-import type { MemoReviewState, MemoReviewStateMap } from "../types/review";
 import type { ShuffleDayHistoryEntry } from "./shuffleDay";
 import { isRecord } from "./object";
 import { normalizeShuffleDayHistory } from "./shuffleDay";
@@ -7,23 +6,23 @@ import { normalizeShuffleDayHistory } from "./shuffleDay";
 const SETTINGS_KEY = "settings";
 const RANDOM_REUNION_REVIEW_STATES_KEY = "randomReunionReviewStates";
 const SHUFFLE_DAY_HISTORY_KEY = "shuffleDayHistory";
-const MAINTENANCE_DIAGNOSTIC_KEY = "maintenanceDiagnostic";
+const CATALOG_V2_CONFIG_KEY = "catalogV2";
 
-export type MaintenanceDiagnosticTask = "startup_scan" | "file_watch" | "repair";
-export type MaintenanceDiagnosticStatus = "completed" | "failed";
+export interface CatalogV2PluginConfig {
+	schemaVersion: 2;
+	catalogDataRoot: string;
+	vaultInstanceId: string;
+	contractDigest: string;
+}
 
-export interface MaintenanceDiagnostic {
-	task: MaintenanceDiagnosticTask;
-	status: MaintenanceDiagnosticStatus;
-	occurredAt: string;
-	scope: string | null;
-	mode: string | null;
-	message: string;
-	scannedFiles: number | null;
-	created: number | null;
-	updated: number | null;
-	deleted: number | null;
-	failed: number | null;
+export interface IntermediateCatalogV2PluginConfig {
+	schemaVersion: 1;
+	catalogDataRoot: string;
+}
+
+export interface LegacyCatalogV2PluginConfig {
+	schemaVersion: 1;
+	systemDataRoot: string;
 }
 
 export function extractSettingsData(savedData: unknown): unknown {
@@ -39,42 +38,38 @@ export function buildPluginDataWithSettings(savedData: unknown, settings: KnomoS
 	return nextData;
 }
 
-export function extractMaintenanceDiagnostic(savedData: unknown): MaintenanceDiagnostic | null {
-	if (!isRecord(savedData)) {
+export function extractCatalogV2PluginConfig(
+	savedData: unknown,
+): CatalogV2PluginConfig | IntermediateCatalogV2PluginConfig | LegacyCatalogV2PluginConfig | null {
+	if (!isRecord(savedData) || !isRecord(savedData[CATALOG_V2_CONFIG_KEY])) {
 		return null;
 	}
-	return normalizeMaintenanceDiagnostic(savedData[MAINTENANCE_DIAGNOSTIC_KEY]);
+	const value = savedData[CATALOG_V2_CONFIG_KEY];
+	if (value.schemaVersion === 2 && typeof value.catalogDataRoot === "string"
+		&& typeof value.vaultInstanceId === "string" && typeof value.contractDigest === "string") {
+		return {
+			schemaVersion: 2,
+			catalogDataRoot: value.catalogDataRoot,
+			vaultInstanceId: value.vaultInstanceId,
+			contractDigest: value.contractDigest,
+		};
+	}
+	if (value.schemaVersion !== 1) return null;
+	if (typeof value.catalogDataRoot === "string") {
+		return { schemaVersion: 1, catalogDataRoot: value.catalogDataRoot };
+	}
+	if (typeof value.systemDataRoot === "string") {
+		return { schemaVersion: 1, systemDataRoot: value.systemDataRoot };
+	}
+	return null;
 }
 
-export function buildPluginDataWithMaintenanceDiagnostic(
+export function buildPluginDataWithCatalogV2Config(
 	savedData: unknown,
-	diagnostic: MaintenanceDiagnostic,
+	config: CatalogV2PluginConfig,
 ): Record<string, unknown> {
 	const nextData = getStructuredPluginData(savedData);
-	nextData[MAINTENANCE_DIAGNOSTIC_KEY] = diagnostic;
-	return nextData;
-}
-
-export function extractRandomReunionReviewStates(savedData: unknown): MemoReviewStateMap {
-	if (!isRecord(savedData) || !isRecord(savedData[RANDOM_REUNION_REVIEW_STATES_KEY])) {
-		return {};
-	}
-	const states: MemoReviewStateMap = {};
-	for (const [memoId, value] of Object.entries(savedData[RANDOM_REUNION_REVIEW_STATES_KEY])) {
-		const state = normalizeReviewState(memoId, value);
-		if (state !== null) {
-			states[memoId] = state;
-		}
-	}
-	return states;
-}
-
-export function buildPluginDataWithRandomReunionReviewStates(
-	savedData: unknown,
-	states: MemoReviewStateMap,
-): Record<string, unknown> {
-	const nextData = getStructuredPluginData(savedData);
-	nextData[RANDOM_REUNION_REVIEW_STATES_KEY] = states;
+	nextData[CATALOG_V2_CONFIG_KEY] = config;
 	return nextData;
 }
 
@@ -97,7 +92,9 @@ export function buildPluginDataWithShuffleDayHistory(
 
 function getStructuredPluginData(savedData: unknown): Record<string, unknown> {
 	if (isStructuredPluginData(savedData)) {
-		return Object.assign({}, savedData);
+		const nextData = Object.assign({}, savedData);
+		delete nextData.maintenanceDiagnostic;
+		return nextData;
 	}
 	return {
 		[SETTINGS_KEY]: extractSettingsData(savedData),
@@ -109,66 +106,8 @@ function isStructuredPluginData(value: unknown): value is Record<string, unknown
 		SETTINGS_KEY in value ||
 		RANDOM_REUNION_REVIEW_STATES_KEY in value ||
 		SHUFFLE_DAY_HISTORY_KEY in value ||
-		MAINTENANCE_DIAGNOSTIC_KEY in value
+		CATALOG_V2_CONFIG_KEY in value
 	);
-}
-
-function normalizeMaintenanceDiagnostic(value: unknown): MaintenanceDiagnostic | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-	const task = normalizeDiagnosticTask(value.task);
-	const status = normalizeDiagnosticStatus(value.status);
-	const occurredAt = typeof value.occurredAt === "string" ? value.occurredAt : "";
-	const message = typeof value.message === "string" ? value.message : "";
-	if (task === null || status === null || occurredAt.length === 0 || message.length === 0) {
-		return null;
-	}
-	return {
-		task,
-		status,
-		occurredAt,
-		scope: normalizeNullableString(value.scope),
-		mode: normalizeNullableString(value.mode),
-		message,
-		scannedFiles: normalizeNullableNumber(value.scannedFiles),
-		created: normalizeNullableNumber(value.created),
-		updated: normalizeNullableNumber(value.updated),
-		deleted: normalizeNullableNumber(value.deleted),
-		failed: normalizeNullableNumber(value.failed),
-	};
-}
-
-function normalizeDiagnosticTask(value: unknown): MaintenanceDiagnosticTask | null {
-	return value === "startup_scan" || value === "file_watch" || value === "repair" ? value : null;
-}
-
-function normalizeDiagnosticStatus(value: unknown): MaintenanceDiagnosticStatus | null {
-	return value === "completed" || value === "failed" ? value : null;
-}
-
-function normalizeNullableString(value: unknown): string | null {
-	return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function normalizeNullableNumber(value: unknown): number | null {
-	return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function normalizeReviewState(memoId: string, value: unknown): MemoReviewState | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-	const stateMemoId = typeof value.memoId === "string" && value.memoId.length > 0 ? value.memoId : memoId;
-	const reviewCount = typeof value.reviewCount === "number" && Number.isFinite(value.reviewCount)
-		? Math.max(0, Math.floor(value.reviewCount))
-		: 0;
-	const lastReviewedAt = typeof value.lastReviewedAt === "string" && value.lastReviewedAt.length > 0
-		? value.lastReviewedAt
-		: undefined;
-	return lastReviewedAt === undefined
-		? { memoId: stateMemoId, reviewCount }
-		: { memoId: stateMemoId, lastReviewedAt, reviewCount };
 }
 
 function normalizeShuffleDayHistoryEntry(value: unknown): ShuffleDayHistoryEntry | null {

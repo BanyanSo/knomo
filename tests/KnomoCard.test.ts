@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import type { MemoCardPreview } from "../src/ui/MemoCardPreview";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -77,7 +77,6 @@ test("memo card action menu includes open daily in the requested order", async (
 		activeMenuMemoId: null,
 		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
-		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -120,7 +119,6 @@ test("random memo card keeps random review marking on the time opener", async ()
 		activeMenuMemoId: null,
 		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
-		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -150,7 +148,6 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 			activeMenuMemoId: null,
 			deletedMemoIds: new Set(),
 			formatDisplayTime: (value) => value,
-			formatSettingsText: (value) => value,
 			getMarkdownPriority: () => "normal" as const,
 			getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 			queueMemoMarkdown: () => undefined,
@@ -187,7 +184,6 @@ test("trash memo cards do not get daily note card-open attributes", async () => 
 		formatDisplayTime: (value) => value,
 		formatOptionalTime: (value) => value ?? "",
 		formatDeleteSource: (value) => value,
-		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -225,7 +221,6 @@ async function renderMemoCard(
 		activeMenuMemoId: null,
 		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
-		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (queuedMemo) => preview ?? { text: queuedMemo.contentSnapshot, images: [] },
 		queueMemoMarkdown: (queuedMemo, container, _generation, _priority, previewText) => {

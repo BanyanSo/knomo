@@ -32,5 +32,7 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	managedObsidianExcludeRuleOwned: false,
 	managedSystemFolderExcludeRule: undefined,
 	managedSystemFolderExcludeRuleOwned: false,
+	managedLegacySystemFolderExcludeRule: undefined,
+	managedLegacySystemFolderExcludeRuleOwned: false,
 	pinnedTags: [],
 };

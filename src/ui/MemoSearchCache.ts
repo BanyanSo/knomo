@@ -1,7 +1,8 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { buildMemoSearchText } from "./viewFilters";
 
 type BuildMemoSearchText = (memo: MemoRecord) => string;
+type MemoSearchCacheItem = MemoRecord & { version?: number };
 
 interface MemoSearchCacheEntry {
 	key: string;
@@ -21,8 +22,8 @@ export class MemoSearchCache {
 		this.textCache.delete(memoId);
 	}
 
-	get(memo: MemoRecord): string {
-		const key = `${memo.version}:${memo.contentHash}:${memo.updatedAt}`;
+	get(memo: MemoSearchCacheItem): string {
+		const key = `${memo.contentHash}:${memo.updatedAt}`;
 		const cached = this.textCache.get(memo.id);
 		if (cached?.key === key) {
 			return cached.text;

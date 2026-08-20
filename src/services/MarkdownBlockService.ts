@@ -1,6 +1,5 @@
 import type { ParsedMemoBlock } from "../types/memo";
-import type { MemoIssueType } from "../types/issue";
-import { hashMemoContent, hashText } from "../utils/hash";
+import { hashMemoContent } from "../utils/hash";
 import {
 	extractTrailingBlockId,
 	findLastEffectiveLineIndex,
@@ -22,29 +21,6 @@ export interface MemoMetadata {
 	tags: string[];
 	links: ParsedMemoBlock["links"];
 	images: ParsedMemoBlock["images"];
-}
-
-export interface MemoBlockLocator {
-	lineNumberHint: number | null;
-	lastKnownBlock: string;
-	lastKnownHash: string;
-	contentHash: string;
-	heading?: string | null;
-	allowLineHintTimeMatch?: boolean;
-	matchPolicy?: "flexible" | "safe-mutation";
-	excludedStartLines?: ReadonlySet<number>;
-}
-
-export type MemoBlockMatchKind = "block-id" | "last-known-hash" | "content-hash" | "time";
-
-export interface MemoBlockLocation {
-	parsedBlock: ParsedMemoBlock | null;
-	issueType: Extract<
-		MemoIssueType,
-		"daily_block_missing" | "daily_block_ambiguous" | "monthly_block_missing" | "monthly_block_ambiguous"
-	> | null;
-	matchKind: MemoBlockMatchKind | null;
-	candidateStartLines: number[];
 }
 
 export interface InsertMemoBlockOptions {
@@ -197,94 +173,6 @@ export class MarkdownBlockService {
 		return blocks;
 	}
 
-	findMemoBlock(
-		currentContent: string,
-		locator: MemoBlockLocator,
-		missingIssueType: Extract<MemoIssueType, "daily_block_missing" | "monthly_block_missing">,
-	): MemoBlockLocation {
-		const parsedBlocks = locator.heading === undefined || locator.heading === null || locator.heading.trim().length === 0
-			? this.parseMemoBlocks(currentContent)
-			: this.parseMemoBlocksUnderHeading(currentContent, locator.heading);
-		const blocks = locator.excludedStartLines === undefined
-			? parsedBlocks
-			: parsedBlocks.filter((block) => !locator.excludedStartLines?.has(block.startLine));
-		const hintIndex = locator.lineNumberHint === null ? -1 : locator.lineNumberHint - 1;
-		const knownBlock = this.parseMemoBlock(splitMarkdownLines(locator.lastKnownBlock), 0);
-		const knownBlockId = knownBlock?.blockId ?? null;
-		const knownTime = knownBlock?.time ?? extractMemoTime(locator.lastKnownBlock);
-		const safeMutation = locator.matchPolicy === "safe-mutation";
-		const ambiguousIssueType = missingIssueType === "monthly_block_missing"
-			? "monthly_block_ambiguous"
-			: "daily_block_ambiguous";
-		const byBlockId = knownBlockId === null
-			? []
-			: blocks.filter((block) => block.blockId === knownBlockId);
-		const blockIdMatch = safeMutation
-			? pickUniqueOrExactHint(byBlockId, hintIndex)
-			: pickUniqueOrNearest(byBlockId, hintIndex);
-		if (blockIdMatch.status === "matched") {
-			return buildMatchedLocation(blockIdMatch.block, "block-id");
-		}
-		if (blockIdMatch.status === "ambiguous") {
-			return buildAmbiguousLocation(ambiguousIssueType, byBlockId, "block-id");
-		}
-
-		const byLastKnownHash = locator.lastKnownHash.trim().length === 0
-			? []
-			: blocks.filter((block) => hashText(block.rawBlock) === locator.lastKnownHash);
-		const hashMatch = safeMutation
-			? pickUniqueOrExactHint(byLastKnownHash, hintIndex)
-			: pickUniqueOrNearest(byLastKnownHash, hintIndex);
-		if (hashMatch.status === "matched") {
-			return buildMatchedLocation(hashMatch.block, "last-known-hash");
-		}
-		if (hashMatch.status === "ambiguous") {
-			return buildAmbiguousLocation(ambiguousIssueType, byLastKnownHash, "last-known-hash");
-		}
-
-		if (safeMutation) {
-			return buildMissingLocation(missingIssueType);
-		}
-
-		const byContentHash = locator.contentHash.trim().length === 0
-			? []
-			: blocks.filter((block) => block.contentHash === locator.contentHash);
-		const contentHashMatch = pickUniqueOrNearest(byContentHash, hintIndex);
-		if (contentHashMatch.status === "matched") {
-			return buildMatchedLocation(contentHashMatch.block, "content-hash");
-		}
-		if (contentHashMatch.status === "ambiguous") {
-			return buildAmbiguousLocation(ambiguousIssueType, byContentHash, "content-hash");
-		}
-
-		const nearbyBlocks = getNearbyBlocks(blocks, hintIndex);
-		const nearbyStrongCandidates = nearbyBlocks.filter((block) =>
-			(knownBlockId !== null && block.blockId === knownBlockId) ||
-			(locator.lastKnownHash.trim().length > 0 && hashText(block.rawBlock) === locator.lastKnownHash) ||
-			(locator.contentHash.trim().length > 0 && block.contentHash === locator.contentHash),
-		);
-		const nearbyStrongMatch = pickNearest(nearbyStrongCandidates, hintIndex);
-		if (nearbyStrongMatch.status === "matched") {
-			return buildMatchedLocation(nearbyStrongMatch.block, "content-hash");
-		}
-		if (nearbyStrongMatch.status === "ambiguous") {
-			return buildAmbiguousLocation(ambiguousIssueType, nearbyStrongCandidates, "content-hash");
-		}
-
-		if (locator.allowLineHintTimeMatch === true && knownTime !== null) {
-			const nearbyTimeCandidates = nearbyBlocks.filter((block) => block.time === knownTime);
-			const nearbyTimeMatch = pickNearest(nearbyTimeCandidates, hintIndex);
-			if (nearbyTimeMatch.status === "matched") {
-				return buildMatchedLocation(nearbyTimeMatch.block, "time");
-			}
-			if (nearbyTimeMatch.status === "ambiguous") {
-				return buildAmbiguousLocation(ambiguousIssueType, nearbyTimeCandidates, "time");
-			}
-		}
-
-		return buildMissingLocation(missingIssueType);
-	}
-
 	insertMemoBlock(currentContent: string, options: InsertMemoBlockOptions): string {
 		const normalizedContent = normalizeMarkdownLineEndings(currentContent);
 		const lines = normalizedContent.length > 0 ? splitMarkdownLines(normalizedContent) : [];
@@ -324,103 +212,6 @@ export class MarkdownBlockService {
 
 function shouldDetachFirstContentLine(line: string): boolean {
 	return /^(\s*)(?:[-*+]\s+|\d+[.)]\s+)/.test(line);
-}
-
-function extractMemoTime(block: string): string | null {
-	return block.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: |\n|$)/)?.[1] ?? null;
-}
-
-type PickMatch =
-	| { status: "matched"; block: ParsedMemoBlock }
-	| { status: "ambiguous" }
-	| { status: "missing" };
-
-const LINE_HINT_WINDOW = 5;
-
-function buildMatchedLocation(block: ParsedMemoBlock, matchKind: MemoBlockMatchKind): MemoBlockLocation {
-	return {
-		parsedBlock: block,
-		issueType: null,
-		matchKind,
-		candidateStartLines: [block.startLine],
-	};
-}
-
-function buildAmbiguousLocation(
-	issueType: NonNullable<MemoBlockLocation["issueType"]>,
-	blocks: readonly ParsedMemoBlock[],
-	matchKind: MemoBlockMatchKind,
-): MemoBlockLocation {
-	return {
-		parsedBlock: null,
-		issueType,
-		matchKind,
-		candidateStartLines: blocks.map((block) => block.startLine),
-	};
-}
-
-function buildMissingLocation(issueType: NonNullable<MemoBlockLocation["issueType"]>): MemoBlockLocation {
-	return {
-		parsedBlock: null,
-		issueType,
-		matchKind: null,
-		candidateStartLines: [],
-	};
-}
-
-function pickUniqueOrExactHint(blocks: ParsedMemoBlock[], hintIndex: number): PickMatch {
-	if (blocks.length === 0) {
-		return { status: "missing" };
-	}
-	if (blocks.length === 1) {
-		return { status: "matched", block: blocks[0] };
-	}
-	const hintedBlock = hintIndex < 0
-		? undefined
-		: blocks.find((block) => block.startLine === hintIndex);
-	return hintedBlock === undefined
-		? { status: "ambiguous" }
-		: { status: "matched", block: hintedBlock };
-}
-
-function pickUniqueOrNearest(blocks: ParsedMemoBlock[], hintIndex: number): PickMatch {
-	if (blocks.length === 0) {
-		return { status: "missing" };
-	}
-	if (blocks.length === 1) {
-		return { status: "matched", block: blocks[0] };
-	}
-	return pickNearest(getNearbyBlocks(blocks, hintIndex), hintIndex);
-}
-
-function pickNearest(blocks: ParsedMemoBlock[], hintIndex: number): PickMatch {
-	if (blocks.length === 0) {
-		return { status: "missing" };
-	}
-	if (blocks.length === 1 || hintIndex < 0) {
-		return blocks.length === 1 ? { status: "matched", block: blocks[0] } : { status: "ambiguous" };
-	}
-	let nearestDistance = Number.POSITIVE_INFINITY;
-	let nearestBlocks: ParsedMemoBlock[] = [];
-	for (const block of blocks) {
-		const distance = Math.abs(block.startLine - hintIndex);
-		if (distance < nearestDistance) {
-			nearestDistance = distance;
-			nearestBlocks = [block];
-		} else if (distance === nearestDistance) {
-			nearestBlocks.push(block);
-		}
-	}
-	return nearestBlocks.length === 1
-		? { status: "matched", block: nearestBlocks[0] }
-		: { status: "ambiguous" };
-}
-
-function getNearbyBlocks(blocks: ParsedMemoBlock[], hintIndex: number): ParsedMemoBlock[] {
-	if (hintIndex < 0) {
-		return blocks;
-	}
-	return blocks.filter((block) => Math.abs(block.startLine - hintIndex) <= LINE_HINT_WINDOW);
 }
 
 function findHeadingIndex(lines: string[], heading: string): number {

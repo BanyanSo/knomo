@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { MemoCardPreviewLite } from "./MemoCardPreview";
 
 interface MemoCardPreviewCacheEntry {
@@ -7,13 +7,14 @@ interface MemoCardPreviewCacheEntry {
 }
 
 type BuildMemoCardPreview = (memo: MemoRecord, displayContent: string) => MemoCardPreviewLite;
+type MemoPreviewCacheItem = MemoRecord & { version?: number };
 
 export class MemoCardPreviewCache {
 	private readonly entries = new Map<string, MemoCardPreviewCacheEntry>();
 
 	constructor(private readonly buildPreview: BuildMemoCardPreview) {}
 
-	get(memo: MemoRecord, displayContent: string): MemoCardPreviewLite {
+	get(memo: MemoPreviewCacheItem, displayContent: string): MemoCardPreviewLite {
 		const key = getMemoCardPreviewKey(memo);
 		const cached = this.entries.get(memo.id);
 		if (cached?.key === key) {
@@ -60,10 +61,10 @@ export class MemoCardPreviewCache {
 	}
 }
 
-export function getMemoCardPreviewKey(memo: MemoRecord): string {
+export function getMemoCardPreviewKey(memo: MemoPreviewCacheItem): string {
 	const displayVariant = memo.references.length > 0 ? "reference" : "plain";
 	return [
-		memo.version,
+		memo.updatedAt,
 		memo.contentHash,
 		memo.updatedAt,
 		memo.dailyRef.path,

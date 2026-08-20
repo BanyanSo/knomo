@@ -1,213 +1,130 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 
 import type { KnomoSettings } from "../src/types/settings";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("enables time buoy by default only when no persisted setting or memo index exists", async () => {
+test("enables Time Buoy by default when no setting was persisted", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
 	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
 	delete legacySettings.timeBuoyEnabled;
-	const plugin = createPlugin(vault, createSettings(), { initialData: { settings: legacySettings } });
+	const plugin = await createPlugin({}, { settings: legacySettings });
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
-	await service.initializeTimeBuoyDefault(false);
+	await service.initializeTimeBuoyDefault();
 
 	assert.equal(service.getSettings().timeBuoyEnabled, true);
 	assert.equal(service.getSettings().timeBuoyIntroDismissed, true);
 	assert.equal(service.consumeInitialTimeBuoyBuildPending(), true);
-	assert.equal(plugin.savedSettings?.timeBuoyEnabled, true);
 });
 
-test("keeps time buoy disabled for upgrades with an existing memo index", async () => {
+test("does not override an explicitly persisted Time Buoy setting", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
-	delete legacySettings.timeBuoyEnabled;
-	const plugin = createPlugin(vault, createSettings(), { initialData: { settings: legacySettings } });
+	const settings = { ...createSettings(), timeBuoyEnabled: true };
+	const plugin = await createPlugin({}, { settings });
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
-	await service.initializeTimeBuoyDefault(true);
-
-	assert.equal(service.getSettings().timeBuoyEnabled, false);
-	assert.equal(service.getSettings().timeBuoyIntroDismissed, false);
-	assert.equal(service.consumeInitialTimeBuoyBuildPending(), false);
-	assert.equal(plugin.savedSettings?.timeBuoyEnabled, false);
-});
-
-test("does not override an explicitly persisted time buoy setting", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, { ...createSettings(), timeBuoyEnabled: true });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await service.initializeTimeBuoyDefault(true);
+	await service.initializeTimeBuoyDefault();
 
 	assert.equal(service.getSettings().timeBuoyEnabled, true);
-	assert.equal(service.getSettings().timeBuoyIntroDismissed, true);
-	assert.equal(plugin.savedSettings, null);
+	assert.equal(plugin.saveCalls, 0);
 });
 
-test("migrates monthly files, system folder, monthlyRef paths, exclude rule, and backups", async () => {
+test("Monthly folder migration only changes projection configuration", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({
-		"Memos/Memos-2026-05.md": "# 2026-05\n\n## 2026-05-18\n- 08:00:00 内容",
-		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/Memos-2026-05.md"), null, "\t"),
-		"Memos/_knomo-system/indexes/time-buoy/time-buoy-2026-07.json": JSON.stringify({
-			schemaVersion: 1,
-			targetPeriod: "2026-07",
-			updatedAt: "2026-07-01T00:00:00.000Z",
-			dates: {},
-		}),
-	});
-	vault.config.userIgnoreFilters = ["Memos/", "Memos/_knomo-system/"];
-	const plugin = createPlugin(vault, {
-		...createSettings(),
-		excludeMonthlyMemosFromObsidian: true,
-		managedObsidianExcludeRule: "Memos/",
-		managedObsidianExcludeRuleOwned: true,
-		managedSystemFolderExcludeRule: "Memos/_knomo-system/",
-		managedSystemFolderExcludeRuleOwned: true,
-	});
-	const archiveMoves: Array<{ from: string; to: string }> = [];
-	const service = new SettingsService(plugin as never, (from, to) => {
-		archiveMoves.push({ from, to });
-	});
+	const plugin = await createPlugin({
+		"Memos/Memos-2026-05.md": "# old projection",
+		"Memos/_knomo-system/indexes/memo-index-2026-05.json": "legacy index",
+	}, { settings: createSettings() });
+	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
-
+	const plan = await service.planMonthlyMemoFolderMigration("Archive/Memos");
 	const result = await service.migrateMonthlyMemoFolder("Archive/Memos");
 
+	assert.deepEqual(plan.conflicts, []);
 	assert.equal(result.status, "migrated");
-	assert.equal(vault.exists("Archive/Memos/Memos-2026-05.md"), true);
-	assert.equal(vault.exists("Archive/Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
-	assert.equal(vault.exists("Archive/Memos/_knomo-system/indexes/time-buoy/time-buoy-2026-07.json"), true);
-	assert.equal(vault.exists("Memos/Memos-2026-05.md"), false);
-	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md").startsWith("<!-- knomo:monthly-archive\nKnomo monthly archive file"), true);
-	const index = JSON.parse(vault.readText("Archive/Memos/_knomo-system/indexes/memo-index-2026-05.json")) as ReturnType<typeof createIndex>;
-	assert.equal(index.memos.memo1.monthlyRef.path, "Archive/Memos/Memos-2026-05.md");
-	assert.deepEqual(vault.config.userIgnoreFilters, ["Archive/Memos/", "Archive/Memos/_knomo-system/"]);
-	assert.equal(vault.listPaths().some((path) => path.includes("_knomo-system/backups/monthly-folder-")), true);
-	assert.equal(plugin.savedSettings?.monthlyMemoFolder, "Archive/Memos");
-	assert.equal(plugin.savedSettings?.managedSystemFolderExcludeRule, "Archive/Memos/_knomo-system/");
-	assert.deepEqual(archiveMoves, [{
-		from: "Memos/Memos-2026-05.md",
-		to: "Archive/Memos/Memos-2026-05.md",
-	}]);
+	assert.equal(service.getSettings().monthlyMemoFolder, "Archive/Memos");
+	assert.equal(plugin.vault.exists("Memos/Memos-2026-05.md"), true);
+	assert.equal(plugin.vault.exists("Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
+	assert.equal(plugin.vault.exists("Archive/Memos/Memos-2026-05.md"), false);
 });
 
-test("stops monthly folder migration on target path conflicts without moving old data", async () => {
+test("Monthly filename migration derives periods from projection files and creates no backup", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({
-		"Memos/Memos-2026-05.md": "# 2026-05",
-		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/Memos-2026-05.md"), null, "\t"),
-		"Archive/Memos/Memos-2026-05.md": "conflict",
-	});
-	const plugin = createPlugin(vault, createSettings());
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await assert.rejects(() => service.migrateMonthlyMemoFolder("Archive/Memos"), /Target path has conflicts/);
-	assert.equal(vault.exists("Memos/Memos-2026-05.md"), true);
-	assert.equal(vault.readText("Archive/Memos/Memos-2026-05.md"), "conflict");
-	assert.equal(plugin.savedSettings, null);
-});
-
-test("discards the archive move marker when an internal rename fails", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({
-		"Memos/Memos-2026-05.md": "# 2026-05",
-	});
-	vault.rename = async () => {
-		throw new Error("rename failed");
-	};
-	const plugin = createPlugin(vault, createSettings());
-	let discardedMarkers = 0;
-	const service = new SettingsService(plugin as never, () => () => {
-		discardedMarkers += 1;
-	});
-	await service.loadSettings();
-
-	await assert.rejects(() => service.migrateMonthlyMemoFolder("Archive/Memos"), /rename failed/);
-
-	assert.equal(discardedMarkers, 1);
-	assert.equal(vault.exists("Memos/Memos-2026-05.md"), true);
-});
-
-test("only plans recognized monthly archive files for folder migration", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({
-		"Memos/Memos-2026-05.md": "# 2026-05",
-		"Memos/indexed.md": "# indexed archive",
-		"Memos/marked.md": "<!-- knomo:monthly-archive -->\n# marked archive",
+	const plugin = await createPlugin({
+		"Memos/Memos-2026-05.md": "# projection",
 		"Memos/notes.md": "# ordinary note",
-		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/indexed.md"), null, "\t"),
-	});
-	const plugin = createPlugin(vault, createSettings());
+		"Memos/_knomo-system/indexes/memo-index-2026-05.json": "legacy index",
+	}, { settings: createSettings() });
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
+	const rebuilt: string[][] = [];
 
-	const plan = await service.planMonthlyMemoFolderMigration("Archive/Memos");
+	const result = await service.migrateMonthlyMemoFileFormat(
+		"Archive-YYYY-MM.md",
+		async (periods) => { rebuilt.push([...periods]); },
+	);
 
-	assert.equal(plan.monthlyFileMoves.length, 3);
-	assert.deepEqual(new Set(plan.monthlyFileMoves.map((move) => move.from)), new Set([
-		"Memos/Memos-2026-05.md",
-		"Memos/indexed.md",
-		"Memos/marked.md",
-	]));
-	assert.equal(plan.monthlyFileMoves.some((move) => move.from === "Memos/notes.md"), false);
+	assert.equal(result.status, "migrated");
+	assert.deepEqual(result.plan.periods, ["2026-05"]);
+	assert.deepEqual(rebuilt, [["2026-05"]]);
+	assert.equal(service.getSettings().monthlyMemoFileFormat, "Archive-YYYY-MM.md");
+	assert.equal(plugin.vault.exists("Memos/Memos-2026-05.md"), true);
+	assert.equal(plugin.vault.exists("Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
 });
 
-test("recognizes monthly archive filenames without requiring a markdown extension", async () => {
+test("restores staged Monthly settings when projection rebuild fails", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({
-		"Memos/Memos-2026-05": "# 2026-05",
-		"Memos/notes.md": "# ordinary note",
-	});
-	const plugin = createPlugin(vault, {
-		...createSettings(),
-		monthlyMemoFileFormat: "Memos-YYYY-MM",
-	});
+	const plugin = await createPlugin({
+		"Memos/Memos-2026-05.md": "# projection",
+	}, { settings: createSettings() });
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
-	const plan = await service.planMonthlyMemoFolderMigration("Archive/Memos");
+	await assert.rejects(() => service.migrateMonthlyMemoFileFormat(
+		"Archive-YYYY-MM.md",
+		async () => { throw new Error("projection failed"); },
+	), /projection failed/u);
 
-	assert.deepEqual(plan.monthlyFileMoves, [{
-		from: "Memos/Memos-2026-05",
-		to: "Archive/Memos/Memos-2026-05",
-	}]);
+	assert.equal(service.getSettings().monthlyMemoFileFormat, "Memos-YYYY-MM.md");
+	assert.equal(plugin.saveCalls, 0);
 });
 
-test("initializes system folder exclude rule without duplicates", async () => {
+test("Catalog exclusion state is independent from the Monthly folder", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, createSettings());
+	const plugin = await createPlugin({}, { settings: createSettings() });
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
-	await service.initializeSystemFolders();
-	await service.initializeSystemFolders();
+	await service.ensureCatalogDataExcludeRules(
+		"Shared/_knomo-data",
+		"Memos/_knomo-system",
+		true,
+	);
 
-	assert.equal(vault.exists("Memos/_knomo-system/indexes"), true);
-	assert.deepEqual(vault.config.userIgnoreFilters, ["Memos/_knomo-system/"]);
-	assert.equal(plugin.savedSettings?.managedSystemFolderExcludeRule, "Memos/_knomo-system/");
-	assert.equal(plugin.savedSettings?.managedSystemFolderExcludeRuleOwned, true);
+	assert.deepEqual(plugin.vault.config.userIgnoreFilters, [
+		"Shared/_knomo-data/",
+		"Memos/_knomo-system/",
+	]);
+	assert.equal(service.getSettings().managedSystemFolderExcludeRule, "Shared/_knomo-data/");
+	assert.equal(service.getSettings().managedLegacySystemFolderExcludeRule, "Memos/_knomo-system/");
+
+	await service.retireLegacySystemExcludeRule();
+	assert.deepEqual(plugin.vault.config.userIgnoreFilters, ["Shared/_knomo-data/"]);
+	assert.equal(service.getSettings().managedLegacySystemFolderExcludeRule, undefined);
 });
 
 test("keeps runtime settings unchanged when persistence fails", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, createSettings(), { failSaveData: true });
+	const plugin = await createPlugin({}, { settings: createSettings() }, true);
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
 	await assert.rejects(
 		() => service.updateSettings({ dailyHeading: "## Changed" }),
-		/保存设置失败/,
+		/保存设置失败/u,
 	);
 
 	assert.equal(service.getSettings().dailyHeading, "## Knomo");
@@ -215,8 +132,7 @@ test("keeps runtime settings unchanged when persistence fails", async () => {
 
 test("serializes concurrent setting patches without losing earlier updates", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, createSettings());
+	const plugin = await createPlugin({}, { settings: createSettings() });
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
@@ -227,215 +143,20 @@ test("serializes concurrent setting patches without losing earlier updates", asy
 
 	assert.equal(service.getSettings().dailyInsertPosition, "top");
 	assert.equal(service.getSettings().memoTimeFormat, "HH:mm");
-	assert.equal(plugin.savedSettings?.dailyInsertPosition, "top");
-	assert.equal(plugin.savedSettings?.memoTimeFormat, "HH:mm");
 });
 
-test("persists maintenance diagnostics without losing settings", async () => {
+test("retires legacy maintenance diagnostics on the next plugin-data write", async () => {
 	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, createSettings());
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await service.saveMaintenanceDiagnostic({
-		task: "startup_scan",
-		status: "failed",
-		occurredAt: "2026-07-09T08:00:00.000+08:00",
-		scope: "7d",
-		mode: null,
-		message: "scan failed",
-		scannedFiles: null,
-		created: null,
-		updated: null,
-		deleted: null,
-		failed: null,
-	});
-
-	assert.equal(plugin.savedSettings?.dailyHeading, "## Knomo");
-	assert.deepEqual(await service.loadMaintenanceDiagnostic(), {
-		task: "startup_scan",
-		status: "failed",
-		occurredAt: "2026-07-09T08:00:00.000+08:00",
-		scope: "7d",
-		mode: null,
-		message: "scan failed",
-		scannedFiles: null,
-		created: null,
-		updated: null,
-		deleted: null,
-		failed: null,
-	});
-});
-
-test("ignores invalid maintenance diagnostics", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, createSettings(), {
-		initialData: {
-			settings: createSettings(),
-			maintenanceDiagnostic: {
-				task: "unknown",
-				status: "failed",
-				occurredAt: "2026-07-09T08:00:00.000+08:00",
-				message: "bad",
-			},
-		},
-	});
-	const service = new SettingsService(plugin as never);
-
-	assert.equal(await service.loadMaintenanceDiagnostic(), null);
-});
-
-test("rejects monthly memo file formats with path separators", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, {
-		...createSettings(),
-		monthlyMemoFileFormat: "YYYY/Memos-YYYY-MM.md",
-	});
-	const service = new SettingsService(plugin as never);
-
-	const settings = await service.loadSettings();
-
-	assert.equal(settings.monthlyMemoFileFormat, "Memos-YYYY-MM.md");
-	assert.equal(service.validateMonthlyMemoFileFormat("Memos-YYYY-MM.md"), true);
-	assert.equal(service.validateMonthlyMemoFileFormat("Memos-YYYY-MM"), true);
-	assert.equal(service.validateMonthlyMemoFileFormat("Memos.md"), false);
-	assert.equal(service.validateMonthlyMemoFileFormat("Memos-YYYY-MM-YYYY-MM.md"), false);
-	assert.equal(service.validateMonthlyMemoFileFormat("YYYY/Memos-YYYY-MM.md"), false);
-	assert.equal(service.validateMonthlyMemoFileFormat("YYYY\\Memos-YYYY-MM.md"), false);
-});
-
-test("keeps historical monthly filename formats until explicit migration", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({});
-	const plugin = createPlugin(vault, {
-		...createSettings(),
-		monthlyMemoFileFormat: "Memos.md",
-	});
-	const service = new SettingsService(plugin as never);
-
-	const settings = await service.loadSettings();
-
-	assert.equal(settings.monthlyMemoFileFormat, "Memos.md");
-	assert.equal(service.validateMonthlyMemoFileFormat(settings.monthlyMemoFileFormat), false);
-	assert.equal(plugin.savedSettings, null);
-});
-
-test("backs up and explicitly migrates monthly filename format", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const indexPath = "Memos/_knomo-system/indexes/memo-index-2026-05.json";
-	const vault = await createMemoryVault({
-		"Memos/Memos.md": "# historical archive",
-		[indexPath]: JSON.stringify(createIndex("Memos/Memos.md"), null, "\t"),
-	});
-	const plugin = createPlugin(vault, {
-		...createSettings(),
-		monthlyMemoFileFormat: "Memos.md",
+	const plugin = await createPlugin({}, {
+		settings: createSettings(),
+		maintenanceDiagnostic: { task: "file_watch", status: "completed" },
 	});
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
-	const plan = await service.planMonthlyMemoFileFormatMigration("Archive-YYYY-MM.md");
-	assert.deepEqual(plan.periods, ["2026-05"]);
-	assert.deepEqual(plan.oldArchivePaths, ["Memos/Memos.md"]);
+	await service.updateSettings({ dailyHeading: "## Daily Memos" });
 
-	const result = await service.migrateMonthlyMemoFileFormat("Archive-YYYY-MM.md", async (periods, trackGeneratedPath) => {
-		assert.deepEqual(periods, ["2026-05"]);
-		assert.equal(service.getSettings().monthlyMemoFileFormat, "Archive-YYYY-MM.md");
-		await vault.create("Memos/Archive-2026-05.md", "# rebuilt archive");
-		trackGeneratedPath("Memos/Archive-2026-05.md");
-	});
-
-	assert.equal(result.status, "migrated");
-	assert.equal(vault.exists("Memos/Memos.md"), true);
-	assert.equal(vault.exists("Memos/Archive-2026-05.md"), true);
-	assert.equal(vault.readText(indexPath).includes("Memos/Archive-2026-05.md"), true);
-	assert.equal(vault.listPaths().some((path) => path.includes("_knomo-system/backups/monthly-format-")), true);
-	assert.equal(plugin.savedSettings?.monthlyMemoFileFormat, "Archive-YYYY-MM.md");
-});
-
-test("stops monthly filename format migration before writes on target conflicts", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const vault = await createMemoryVault({
-		"Memos/Memos.md": "# historical archive",
-		"Memos/Archive-2026-05.md": "# existing target",
-		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/Memos.md"), null, "\t"),
-	});
-	const plugin = createPlugin(vault, {
-		...createSettings(),
-		monthlyMemoFileFormat: "Memos.md",
-	});
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-	let rebuildCalled = false;
-
-	await assert.rejects(
-		() => service.migrateMonthlyMemoFileFormat("Archive-YYYY-MM.md", async () => {
-			rebuildCalled = true;
-		}),
-		/Target path has conflicts/,
-	);
-
-	assert.equal(rebuildCalled, false);
-	assert.equal(service.getSettings().monthlyMemoFileFormat, "Memos.md");
-	assert.equal(vault.readText("Memos/Archive-2026-05.md"), "# existing target");
-	assert.equal(plugin.savedSettings, null);
-});
-
-test("rolls back index and generated archives when monthly filename format save fails", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const indexPath = "Memos/_knomo-system/indexes/memo-index-2026-05.json";
-	const vault = await createMemoryVault({
-		"Memos/Memos.md": "# historical archive",
-		[indexPath]: JSON.stringify(createIndex("Memos/Memos.md"), null, "\t"),
-	});
-	const plugin = createPlugin(vault, {
-		...createSettings(),
-		monthlyMemoFileFormat: "Memos.md",
-	}, { failSaveData: true });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await assert.rejects(
-		() => service.migrateMonthlyMemoFileFormat("Archive-YYYY-MM.md", async (_periods, trackGeneratedPath) => {
-			await vault.create("Memos/Archive-2026-05.md", "# rebuilt archive");
-			trackGeneratedPath("Memos/Archive-2026-05.md");
-			await vault.create("Memos/User-during-migration.md", "# user file");
-		}),
-		/保存设置失败/,
-	);
-
-	assert.equal(service.getSettings().monthlyMemoFileFormat, "Memos.md");
-	assert.equal(vault.exists("Memos/Memos.md"), true);
-	assert.equal(vault.exists("Memos/Archive-2026-05.md"), false);
-	assert.equal(vault.exists("Memos/User-during-migration.md"), true);
-	assert.equal(vault.readText(indexPath).includes("Memos/Memos.md"), true);
-	assert.equal(vault.listPaths().some((path) => path.includes("_knomo-system/backups/monthly-format-")), true);
-});
-
-test("restores monthly files and indexes when migration save fails", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const originalMonthlyContent = "# 2026-05\n\n## 2026-05-18\n- 08:00:00 内容";
-	const vault = await createMemoryVault({
-		"Memos/Memos-2026-05.md": originalMonthlyContent,
-		"Memos/_knomo-system/indexes/memo-index-2026-05.json": JSON.stringify(createIndex("Memos/Memos-2026-05.md"), null, "\t"),
-	});
-	const plugin = createPlugin(vault, createSettings(), { failSaveData: true });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await assert.rejects(() => service.migrateMonthlyMemoFolder("Archive/Memos"), /保存设置失败/);
-
-	assert.equal(vault.exists("Memos/Memos-2026-05.md"), true);
-	assert.equal(vault.exists("Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
-	assert.equal(vault.exists("Archive/Memos/Memos-2026-05.md"), false);
-	assert.equal(vault.readText("Memos/Memos-2026-05.md"), originalMonthlyContent);
-	const restoredIndex = JSON.parse(vault.readText("Memos/_knomo-system/indexes/memo-index-2026-05.json")) as ReturnType<typeof createIndex>;
-	assert.equal(restoredIndex.memos.memo1.monthlyRef.path, "Memos/Memos-2026-05.md");
-	assert.deepEqual(vault.config.userIgnoreFilters, []);
-	assert.equal(service.getSettings().monthlyMemoFolder, "Memos");
+	assert.equal(Object.prototype.hasOwnProperty.call(plugin.savedData, "maintenanceDiagnostic"), false);
 });
 
 async function loadSettingsService(): Promise<typeof import("../src/services/SettingsService")> {
@@ -443,137 +164,77 @@ async function loadSettingsService(): Promise<typeof import("../src/services/Set
 	return import("../src/services/SettingsService");
 }
 
-async function createMemoryVault(initialFiles: Record<string, string>) {
+async function createPlugin(
+	initialFiles: Record<string, string>,
+	initialData: Record<string, unknown>,
+	failSaveData = false,
+) {
 	await ensureObsidianStub();
 	const { TFile, TFolder } = await import("obsidian");
-	const entries = new Map<string, { node: InstanceType<typeof TFile> | InstanceType<typeof TFolder>; content?: string }>();
-	const root = Object.assign(new TFolder(), { path: "", name: "", children: [] as Array<InstanceType<typeof TFile> | InstanceType<typeof TFolder>>, parent: null });
-	entries.set("", { node: root });
+	type TestFile = InstanceType<typeof TFile>;
+	type TestFolder = InstanceType<typeof TFolder>;
+	const entries = new Map<string, TestFile | TestFolder>();
+	const root = Object.assign(new TFolder(), {
+		path: "",
+		name: "",
+		children: [] as Array<TestFile | TestFolder>,
+		parent: null,
+	});
+	entries.set("", root);
 
-	const ensureFolderNode = (folderPath: string): InstanceType<typeof TFolder> => {
+	const ensureFolder = (folderPath: string): TestFolder => {
 		const normalized = normalizeTestPath(folderPath);
 		if (normalized.length === 0) return root;
-		const existing = entries.get(normalized)?.node;
+		const existing = entries.get(normalized);
 		if (existing instanceof TFolder) return existing;
-		const parentPath = getParentPath(normalized);
-		const parent = ensureFolderNode(parentPath);
+		const parent = ensureFolder(getParentPath(normalized));
 		const folder = Object.assign(new TFolder(), {
 			path: normalized,
 			name: getName(normalized),
-			children: [] as Array<InstanceType<typeof TFile> | InstanceType<typeof TFolder>>,
+			children: [] as Array<TestFile | TestFolder>,
 			parent,
 		});
 		parent.children.push(folder);
-		entries.set(normalized, { node: folder });
+		entries.set(normalized, folder);
 		return folder;
 	};
 
-	const createFileNode = (path: string, content: string): InstanceType<typeof TFile> => {
+	for (const path of Object.keys(initialFiles)) {
 		const normalized = normalizeTestPath(path);
-		const parent = ensureFolderNode(getParentPath(normalized));
+		const parent = ensureFolder(getParentPath(normalized));
+		const name = getName(normalized);
 		const file = Object.assign(new TFile(), {
 			path: normalized,
-			name: getName(normalized),
-			basename: getName(normalized).replace(/\.[^.]+$/, ""),
-			extension: getName(normalized).split(".").pop() ?? "",
+			name,
+			basename: name.replace(/\.[^.]+$/u, ""),
+			extension: name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "",
 			parent,
 		});
 		parent.children.push(file);
-		entries.set(normalized, { node: file, content });
-		return file;
-	};
-
-	for (const [path, content] of Object.entries(initialFiles)) {
-		createFileNode(path, content);
+		entries.set(normalized, file);
 	}
 
-	const renameEntry = (node: InstanceType<typeof TFile> | InstanceType<typeof TFolder>, nextPath: string): void => {
-		const previousPath = node.path;
-		const normalizedNextPath = normalizeTestPath(nextPath);
-		const oldParent = "parent" in node ? node.parent as InstanceType<typeof TFolder> | null : null;
-		if (oldParent !== null) {
-			oldParent.children = oldParent.children.filter((child) => child !== node);
-		}
-		const nextParent = ensureFolderNode(getParentPath(normalizedNextPath));
-		node.path = normalizedNextPath;
-		node.name = getName(normalizedNextPath);
-		if (node instanceof TFile) {
-			node.basename = node.name.replace(/\.[^.]+$/, "");
-			node.extension = node.name.split(".").pop() ?? "";
-		}
-		node.parent = nextParent;
-		nextParent.children.push(node);
-		const entry = entries.get(previousPath);
-		entries.delete(previousPath);
-		entries.set(normalizedNextPath, { node, content: entry?.content });
-		if (node instanceof TFolder) {
-			for (const child of [...node.children]) {
-				renameEntry(child as InstanceType<typeof TFile> | InstanceType<typeof TFolder>, `${normalizedNextPath}/${child.name}`);
-			}
-		}
-	};
-
-	const removeFile = (file: InstanceType<typeof TFile>): void => {
-		const parent = file.parent;
-		if (parent !== null) {
-			parent.children = parent.children.filter((child) => child !== file);
-		}
-		entries.delete(file.path);
-	};
-
-	return {
-		config: {} as Record<string, unknown>,
-		getAbstractFileByPath: (path: string) => entries.get(normalizeTestPath(path))?.node ?? null,
-		cachedRead: async (file: InstanceType<typeof TFile>) => entries.get(file.path)?.content ?? "",
-		process: async (file: InstanceType<typeof TFile>, callback: (content: string) => string) => {
-			const nextContent = callback(entries.get(file.path)?.content ?? "");
-			entries.set(file.path, { node: file, content: nextContent });
-			return nextContent;
-		},
-		create: async (path: string, content: string) => createFileNode(path, content),
-		createFolder: async (path: string) => {
-			ensureFolderNode(path);
-		},
-		rename: async (node: InstanceType<typeof TFile> | InstanceType<typeof TFolder>, nextPath: string) => {
-			renameEntry(node, nextPath);
-		},
+	const vault = {
+		config: { userIgnoreFilters: [] as string[] },
+		getAbstractFileByPath: (path: string) => entries.get(normalizeTestPath(path)) ?? null,
 		getConfig(key: string): unknown {
-			return this.config[key];
+			return this.config[key as keyof typeof this.config];
 		},
 		async setConfig(key: string, value: unknown): Promise<void> {
-			this.config[key] = value;
+			(this.config as Record<string, unknown>)[key] = value;
 		},
 		exists: (path: string) => entries.has(normalizeTestPath(path)),
-		readText: (path: string) => entries.get(normalizeTestPath(path))?.content ?? "",
-		listPaths: () => [...entries.keys()],
-		removeFile,
 	};
-}
-
-function createPlugin(
-	vault: Awaited<ReturnType<typeof createMemoryVault>>,
-	settings: KnomoSettings,
-	options: { failSaveData?: boolean; initialData?: Record<string, unknown> } = {},
-) {
-	const initialData = options.initialData ?? { settings };
 	const plugin = {
-		app: {
-			vault,
-			fileManager: {
-				trashFile: async (file: Parameters<typeof vault.removeFile>[0]) => {
-					vault.removeFile(file);
-				},
-			},
-		},
+		app: { vault },
+		vault,
 		savedData: initialData,
-		savedSettings: null as KnomoSettings | null,
+		saveCalls: 0,
 		loadData: async () => plugin.savedData,
 		saveData: async (data: Record<string, unknown>) => {
-			if (options.failSaveData === true) {
-				throw new Error("保存设置失败");
-			}
+			if (failSaveData) throw new Error("保存设置失败");
+			plugin.saveCalls += 1;
 			plugin.savedData = data;
-			plugin.savedSettings = data.settings as KnomoSettings;
 		},
 	};
 	return plugin;
@@ -602,28 +263,14 @@ function createSettings(): KnomoSettings {
 	};
 }
 
-function createIndex(monthlyPath: string) {
-	return {
-		schemaVersion: 2,
-		period: "2026-05",
-		updatedAt: "2026-05-18T08:00:00.000+08:00",
-		memos: {
-			memo1: {
-				monthlyRef: {
-					path: monthlyPath,
-				},
-			},
-		},
-	};
-}
-
 function normalizeTestPath(path: string): string {
-	return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
+	return path.replace(/\\/gu, "/").replace(/\/+/gu, "/").replace(/^\/|\/$/gu, "");
 }
 
 function getParentPath(path: string): string {
-	const index = normalizeTestPath(path).lastIndexOf("/");
-	return index === -1 ? "" : path.slice(0, index);
+	const normalized = normalizeTestPath(path);
+	const index = normalized.lastIndexOf("/");
+	return index === -1 ? "" : normalized.slice(0, index);
 }
 
 function getName(path: string): string {

@@ -1,30 +1,25 @@
+import type { MemoViewItem } from "./memoView";
+
 export type TimeBuoyDateStatus = "today" | "upcoming" | "past";
 
 export interface TimeBuoyInstance {
 	memoId: string;
 	targetDate: string;
-	sourcePeriod: string;
-	buoyRevision: string;
 }
 
-export interface TimeBuoyIndexEntry {
-	sourcePeriod: string;
-	buoyRevision: string;
+export interface TimeBuoyQueryItem {
+	instance: TimeBuoyInstance;
+	memo: MemoViewItem;
 }
 
-export interface TimeBuoyIndexShard {
-	schemaVersion: 2;
-	targetPeriod: string;
-	updatedAt: string;
-	dates: Record<string, Record<string, TimeBuoyIndexEntry>>;
+export interface TimeBuoyQueryResult {
+	items: TimeBuoyQueryItem[];
+	stale: TimeBuoyInstance[];
+	missingPeriods: string[];
 }
 
-export interface TimeBuoyIndexState {
-	schemaVersion: 1;
-	updatedAt: string;
-	dirty: boolean;
-	affectedMemoIds: string[];
-	expectedPeriods: string[];
+export interface TimeBuoyAllQueryResult extends TimeBuoyQueryResult {
+	complete: boolean;
 }
 
 export interface TimeBuoyMatch {

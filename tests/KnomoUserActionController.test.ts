@@ -261,12 +261,6 @@ test("handleAction dispatches every simple action to the expected view callbacks
 		"retry-time-buoy": {
 			expected: ["time-buoy-retry"],
 		},
-		"rebuild-time-buoy": {
-			expected: ["time-buoy-rebuild"],
-		},
-		"cancel-time-buoy-rebuild": {
-			expected: ["time-buoy-cancel-rebuild"],
-		},
 		"time-buoy-tab-today": {
 			expected: ["time-buoy-tab:today"],
 		},
@@ -505,10 +499,6 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			retryTimeBuoy: async () => {
 				calls.push("time-buoy-retry");
 			},
-			rebuildTimeBuoy: async () => {
-				calls.push("time-buoy-rebuild");
-			},
-			cancelTimeBuoyRebuild: () => calls.push("time-buoy-cancel-rebuild"),
 			setTimeBuoyTab: (tab) => calls.push(`time-buoy-tab:${tab}`),
 			loadMoreTimeBuoyCards: () => calls.push("time-buoy-more-cards"),
 			openTimeBuoy: () => calls.push("time-buoy-open"),

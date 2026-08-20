@@ -54,6 +54,16 @@ test("routes root clicks by DOM action priority", async () => {
 			action: "edit",
 			memoId: "memo-2",
 		});
+		const confirmIdentity = parentAction.createChild("button", {
+			attr: {
+				"data-memo-action": "confirm-identity",
+				"data-memo-id": "memo-3",
+				"data-candidate-memo-id": "stable-memo",
+			},
+		});
+		const confirmRoute = getRootClickRoute(confirmIdentity.asElement(), false);
+		assert.equal(confirmRoute.type, "memo-action");
+		if (confirmRoute.type === "memo-action") assert.equal(confirmRoute.candidateMemoId, "stable-memo");
 	} finally {
 		cleanup();
 	}

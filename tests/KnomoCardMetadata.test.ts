@@ -6,15 +6,12 @@ import {
 	getMemoCardActions,
 	getMemoCardShell,
 	getMemoSourceReferenceMeta,
-	getMemoWarningText,
 	getTrashActionClass,
 	getTrashCardActions,
 	getTrashActionState,
 	getTrashMemoCardClass,
-	getTrashMemoWarningText,
 } from "../src/ui/KnomoCardMetadata";
-import type { MemoRecord } from "../src/types/memo";
-import { recoverMemoReferenceMetadata } from "../src/utils/references";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 
 test("builds memo card shell metadata without daily-open card attributes", () => {
 	assert.deepEqual(getMemoCardShell({
@@ -83,6 +80,32 @@ test("builds card action and trash action metadata", () => {
 	assert.equal(getTrashMemoCardClass("purge"), "knomo-card knomo-trash-card is-busy");
 });
 
+test("filters identity actions while keeping ordinary reading actions", () => {
+	const memo = makeMemo({});
+	assert.deepEqual(getMemoCardActions(memo), getMemoCardActions());
+	assert.deepEqual(getMemoCardActions({
+		...memo,
+		catalogV2: {
+			capabilities: {
+				view: true,
+				copy: true,
+				openDaily: true,
+				openLinks: true,
+				openImages: true,
+				copyAsNew: "blocked_ambiguous",
+				edit: "blocked_ambiguous",
+				toggleTask: "blocked_ambiguous",
+				delete: "blocked_ambiguous",
+				createReference: "blocked_ambiguous",
+				recordReview: "blocked_ambiguous",
+			},
+		} as never,
+	}), [
+		{ action: "open-daily", className: "knomo-card-action" },
+		{ action: "copy-text", className: "knomo-card-action" },
+	]);
+});
+
 test("builds memo source reference metadata", () => {
 	const deletedMemoIds = new Set<string>();
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: null }), deletedMemoIds), { type: "none" });
@@ -99,39 +122,6 @@ test("builds memo source reference metadata", () => {
 		text: "[[Daily/2026-06-02#^abc|source-1]]",
 		sourcePath: "Daily/2026-06-02.md",
 	});
-});
-
-test("builds source metadata after recovering a historical reference", () => {
-	const source = makeMemo({
-		id: "2026060208000000",
-		dailyRef: {
-			...makeMemo().dailyRef,
-			lastKnownBlock: "- 08:00 source ^abc123",
-		},
-	});
-	const child = makeMemo({
-		id: "2026060209000001",
-		contentSnapshot: "child [[Daily/2026-06-02#^abc123|20260602-080000-00]]",
-	});
-	const recovered = recoverMemoReferenceMetadata([source, child], (linkPath) => `${linkPath}.md`)[1];
-
-	assert.deepEqual(getMemoSourceReferenceMeta(recovered, new Set()), {
-		type: "markdown",
-		text: "[[Daily/2026-06-02#^abc123|20260602-080000]]",
-		sourcePath: "Daily/2026-06-02.md",
-	});
-});
-
-test("builds memo and trash warning metadata", () => {
-	assert.equal(getMemoWarningText(makeMemo()), null);
-	assert.equal(getMemoWarningText(makeMemo({ syncStatus: "pending_monthly" })), "pending_monthly");
-	assert.equal(getMemoWarningText(makeMemo({
-		syncStatus: "monthly_failed",
-		issue: makeIssue("Monthly failed"),
-	})), "Monthly failed");
-	assert.equal(getMemoWarningText(makeMemo({ issue: makeIssue("Block missing") })), "Block missing");
-	assert.equal(getTrashMemoWarningText(makeMemo()), null);
-	assert.equal(getTrashMemoWarningText(makeMemo({ issue: makeIssue("Delete failed") })), "Delete failed");
 });
 
 function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
@@ -170,13 +160,5 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 			lastSyncedAt: null,
 		},
 		...overrides,
-	};
-}
-
-function makeIssue(message: string): MemoRecord["issue"] {
-	return {
-		type: "monthly_sync_failed",
-		detectedAt: "2026-06-02T00:00:00+08:00",
-		message,
 	};
 }

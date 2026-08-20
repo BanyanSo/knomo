@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatDatePart, formatLocalIsoString } from "./date";
 import { getMemoContentStats } from "./memoContentStats";
 import { normalizeTagKey } from "./tags";

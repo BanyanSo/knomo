@@ -1,12 +1,13 @@
 import { t } from "../i18n";
 import type { ShuffleDayService } from "../services/ShuffleDayService";
-import type { MemoMutation, MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import {
 	buildShuffleDayStats,
 	getMemoLocalDateKey,
 	sortShuffleDayMemos,
 	type ShuffleDayStats,
+	type ShuffleDaySelectionResult,
 } from "../utils/shuffleDay";
 
 export type ShuffleDayStatus =
@@ -30,6 +31,7 @@ interface ShuffleDayControllerOptions {
 	ensureAllMemosLoaded: () => Promise<void>;
 	getMemos: () => MemoRecord[];
 	service: ShuffleDayService;
+	selectShuffleDay?: (memos: MemoRecord[]) => Promise<ShuffleDaySelectionResult>;
 	isShuffleDayActive: () => boolean;
 	showNotice: (message: string) => void;
 	requestRender: () => void;
@@ -63,28 +65,6 @@ export class ShuffleDayController {
 		this.error = null;
 	}
 
-	applyMemoMutation(mutation: MemoMutation): void {
-		if (this.selectedDate === null || (this.status !== "ready" && this.status !== "empty-day-cleared")) {
-			return;
-		}
-		if (mutation.type === "delete") {
-			this.setSelectedMemos(this.memos.filter((memo) => memo.id !== mutation.memo.id));
-			return;
-		}
-		const memoDate = getMemoLocalDateKey(mutation.memo);
-		const currentIndex = this.memos.findIndex((memo) => memo.id === mutation.memo.id);
-		if (memoDate !== this.selectedDate) {
-			if (currentIndex >= 0) {
-				this.setSelectedMemos(this.memos.filter((memo) => memo.id !== mutation.memo.id));
-			}
-			return;
-		}
-		const nextMemos = currentIndex >= 0
-			? this.memos.map((memo) => memo.id === mutation.memo.id ? mutation.memo : memo)
-			: [...this.memos, mutation.memo];
-		this.setSelectedMemos(nextMemos);
-	}
-
 	reconcileWithMemos(): void {
 		if (this.selectedDate === null || (this.status !== "ready" && this.status !== "empty-day-cleared")) {
 			return;
@@ -110,7 +90,8 @@ export class ShuffleDayController {
 		}
 		try {
 			await this.options.ensureAllMemosLoaded();
-			const result = await this.options.service.selectShuffleDay(this.options.getMemos());
+			const result = await (this.options.selectShuffleDay?.(this.options.getMemos())
+				?? this.options.service.selectShuffleDay(this.options.getMemos()));
 			if (result.status === "ready") {
 				this.selectedDate = result.selectedDate;
 				this.setSelectedMemos(result.memos);

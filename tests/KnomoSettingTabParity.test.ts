@@ -35,11 +35,7 @@ test("keeps declarative dynamic output scoped to its setting render", () => {
 	const source = fs.readFileSync(path.resolve("src/ui/KnomoSettingTab.ts"), "utf8");
 	const declarativeSource = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
 	const dynamicElementFields = [
-		"issueListEl",
-		"legacyImportResultEl",
-		"legacyImportGroupsEl",
-		"rebuildResultEl",
-		"monthlyRebuildResultEl",
+		"catalogRebuildResultEl",
 		"monthlyExcludeStatusEl",
 		"monthlyFileFormatStatusEl",
 	];

@@ -9,7 +9,7 @@ import {
 	RecordStatsService as ProductionRecordStatsService,
 	shiftRecordStatsDate,
 } from "../src/services/RecordStatsService";
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
 
 class RecordStatsService extends ProductionRecordStatsService {
@@ -253,11 +253,11 @@ test("prepares statistics from a scanned source key", async () => {
 	]);
 	let loadCalls = 0;
 
-	assert.equal(await service.prepareFromSource("memo-index:1", async () => {
+	assert.equal(await service.prepareFromSource("catalog:1", async () => {
 		loadCalls += 1;
 		return builder.build();
 	}), true);
-	assert.equal(await service.prepareFromSource("memo-index:1", async () => {
+	assert.equal(await service.prepareFromSource("catalog:1", async () => {
 		loadCalls += 1;
 		return null;
 	}), true);

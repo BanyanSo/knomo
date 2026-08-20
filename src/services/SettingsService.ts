@@ -4,29 +4,28 @@ import { DEFAULT_KNOMO_SETTINGS } from "../settings/defaults";
 import { MonthlyFolderMigrationService } from "../settings/MonthlyFolderMigrationService";
 import type {
 	MonthlyFolderMigrationPlan,
+	MonthlyFolderMigrationResult,
 	MonthlyMemoFileFormatMigrationPlan,
 	MonthlyMemoFileFormatMigrationResult,
-	SystemFolderMigrationResult,
 } from "../settings/MonthlyFolderMigrationService";
 import { cloneSettings, isValidMonthlyMemoFileFormat, normalizeSettings } from "../settings/normalizeSettings";
 import type { KnomoSettings } from "../types/settings";
 import { isValidMarkdownHeading } from "../utils/markdown";
 import { isRecord } from "../utils/object";
+import { normalizeVaultPath } from "../utils/path";
 import {
-	buildPluginDataWithMaintenanceDiagnostic,
 	buildPluginDataWithSettings,
-	extractMaintenanceDiagnostic,
 	extractSettingsData,
-	type MaintenanceDiagnostic,
 } from "../utils/pluginData";
 import { PluginDataStore } from "./PluginDataStore";
+import { ObsidianExcludeService } from "./ObsidianExcludeService";
 
 export { DEFAULT_KNOMO_SETTINGS, isValidMonthlyMemoFileFormat };
 export type {
 	MonthlyFolderMigrationPlan,
+	MonthlyFolderMigrationResult,
 	MonthlyMemoFileFormatMigrationPlan,
 	MonthlyMemoFileFormatMigrationResult,
-	SystemFolderMigrationResult,
 } from "../settings/MonthlyFolderMigrationService";
 
 export class SettingsService {
@@ -37,8 +36,7 @@ export class SettingsService {
 	private readonly monthlyFolderMigrationService: MonthlyFolderMigrationService;
 
 	constructor(
-		plugin: Plugin,
-		onBeforeArchiveMove?: (oldPath: string, newPath: string) => void | (() => void),
+		private readonly plugin: Plugin,
 		private readonly pluginDataStore = new PluginDataStore(plugin),
 	) {
 		this.monthlyFolderMigrationService = new MonthlyFolderMigrationService(
@@ -48,8 +46,54 @@ export class SettingsService {
 			(settings) => {
 				this.settings = cloneSettings(settings);
 			},
-			onBeforeArchiveMove,
 		);
+	}
+
+	async ensureCatalogDataExcludeRules(
+		catalogDataRoot: string,
+		legacySystemRoot: string,
+		keepLegacyRule: boolean,
+	): Promise<void> {
+		const excludeService = new ObsidianExcludeService(this.plugin.app);
+		const catalogRule = `${normalizeVaultPath(catalogDataRoot)}/`;
+		const legacyRule = `${normalizeVaultPath(legacySystemRoot)}/`;
+		const settings = this.getSettings();
+		const catalogResult = await excludeService.ensureRule(catalogRule);
+		let legacyOwned = settings.managedLegacySystemFolderExcludeRuleOwned === true;
+		let managedLegacyRule = settings.managedLegacySystemFolderExcludeRule;
+		if (settings.managedSystemFolderExcludeRule?.split("/").includes("_knomo-system") === true) {
+			managedLegacyRule = settings.managedSystemFolderExcludeRule;
+			legacyOwned = settings.managedSystemFolderExcludeRuleOwned === true;
+		}
+		if (keepLegacyRule) {
+			const legacyResult = await excludeService.ensureRule(legacyRule);
+			managedLegacyRule = legacyRule;
+			legacyOwned = managedLegacyRule === settings.managedLegacySystemFolderExcludeRule
+				? legacyOwned || legacyResult.addedByKnomo
+				: legacyResult.addedByKnomo;
+		}
+		await this.saveSettings({
+			...settings,
+			managedSystemFolderExcludeRule: catalogRule,
+			managedSystemFolderExcludeRuleOwned: settings.managedSystemFolderExcludeRule === catalogRule
+				? settings.managedSystemFolderExcludeRuleOwned === true || catalogResult.addedByKnomo
+				: catalogResult.addedByKnomo,
+			managedLegacySystemFolderExcludeRule: managedLegacyRule,
+			managedLegacySystemFolderExcludeRuleOwned: legacyOwned,
+		});
+	}
+
+	async retireLegacySystemExcludeRule(): Promise<void> {
+		const settings = this.getSettings();
+		const rule = settings.managedLegacySystemFolderExcludeRule;
+		if (rule !== undefined && settings.managedLegacySystemFolderExcludeRuleOwned === true) {
+			await new ObsidianExcludeService(this.plugin.app).removeRule(rule);
+		}
+		await this.saveSettings({
+			...settings,
+			managedLegacySystemFolderExcludeRule: undefined,
+			managedLegacySystemFolderExcludeRuleOwned: false,
+		});
 	}
 
 	async loadSettings(): Promise<KnomoSettings> {
@@ -68,15 +112,15 @@ export class SettingsService {
 		return this.getSettings();
 	}
 
-	async initializeTimeBuoyDefault(hasExistingMemoIndex: boolean): Promise<KnomoSettings> {
+	async initializeTimeBuoyDefault(): Promise<KnomoSettings> {
 		if (this.timeBuoySettingPersisted) {
 			return this.getSettings();
 		}
 		const settings = await this.updateSettings({
-			timeBuoyEnabled: !hasExistingMemoIndex,
-			timeBuoyIntroDismissed: !hasExistingMemoIndex,
+			timeBuoyEnabled: true,
+			timeBuoyIntroDismissed: true,
 		});
-		this.initialTimeBuoyBuildPending = !hasExistingMemoIndex;
+		this.initialTimeBuoyBuildPending = true;
 		this.timeBuoySettingPersisted = true;
 		return settings;
 	}
@@ -99,20 +143,6 @@ export class SettingsService {
 		return this.runSettingsWriteExclusive(() => this.persistSettings(
 			Object.assign({}, this.settings, patch),
 		));
-	}
-
-	async loadMaintenanceDiagnostic(): Promise<MaintenanceDiagnostic | null> {
-		const savedData = await this.pluginDataStore.read();
-		return extractMaintenanceDiagnostic(savedData);
-	}
-
-	async saveMaintenanceDiagnostic(diagnostic: MaintenanceDiagnostic): Promise<void> {
-		await this.runSettingsWriteExclusive(async () => {
-			await this.pluginDataStore.mutate((savedData) => ({
-				nextData: buildPluginDataWithMaintenanceDiagnostic(savedData, diagnostic),
-				result: undefined,
-			}));
-		});
 	}
 
 	private async persistSettings(settings: KnomoSettings): Promise<KnomoSettings> {
@@ -155,11 +185,7 @@ export class SettingsService {
 		return isValidMonthlyMemoFileFormat(value);
 	}
 
-	async initializeSystemFolders(): Promise<void> {
-		await this.monthlyFolderMigrationService.initializeSystemFolders();
-	}
-
-	async migrateMonthlyMemoFolder(nextMonthlyMemoFolder: string): Promise<SystemFolderMigrationResult> {
+	async migrateMonthlyMemoFolder(nextMonthlyMemoFolder: string): Promise<MonthlyFolderMigrationResult> {
 		return this.monthlyFolderMigrationService.migrateMonthlyMemoFolder(nextMonthlyMemoFolder);
 	}
 
@@ -169,8 +195,12 @@ export class SettingsService {
 
 	async planMonthlyMemoFileFormatMigration(
 		nextMonthlyMemoFileFormat: string,
+		sourcePeriods?: readonly string[],
 	): Promise<MonthlyMemoFileFormatMigrationPlan> {
-		return this.monthlyFolderMigrationService.planMonthlyMemoFileFormatMigration(nextMonthlyMemoFileFormat);
+		return this.monthlyFolderMigrationService.planMonthlyMemoFileFormatMigration(
+			nextMonthlyMemoFileFormat,
+			sourcePeriods,
+		);
 	}
 
 	async migrateMonthlyMemoFileFormat(

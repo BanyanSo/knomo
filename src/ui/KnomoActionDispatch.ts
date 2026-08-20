@@ -1,5 +1,6 @@
 export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-time-buoy" | "insert-list" | "insert-numbered-list";
-export type MemoAction = "edit" | "reference" | "open-daily" | "copy-text" | "copy-link" | "delete";
+export type MemoAction = "edit" | "reference" | "open-daily" | "copy-text" | "copy-link" | "delete"
+	| "confirm-identity" | "mark-reviewed";
 export type TrashAction = "restore" | "purge";
 export type KnomoSimpleAction =
 	| "toggle-card-menu"
@@ -21,8 +22,6 @@ export type KnomoSimpleAction =
 	| "record-stats-retry"
 	| "retry-all-memos"
 	| "retry-time-buoy"
-	| "rebuild-time-buoy"
-	| "cancel-time-buoy-rebuild"
 	| "time-buoy-tab-today"
 	| "time-buoy-tab-upcoming"
 	| "time-buoy-tab-past"
@@ -88,8 +87,6 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-retry" ||
 		action === "retry-all-memos" ||
 		action === "retry-time-buoy" ||
-		action === "rebuild-time-buoy" ||
-		action === "cancel-time-buoy-rebuild" ||
 		action === "time-buoy-tab-today" ||
 		action === "time-buoy-tab-upcoming" ||
 		action === "time-buoy-tab-past" ||
@@ -153,12 +150,14 @@ export function isComposerToolAction(action: string): action is ComposerToolActi
 }
 
 export function isMemoAction(action: string): action is MemoAction {
-	return action === "edit" ||
+		return action === "edit" ||
 		action === "reference" ||
 		action === "open-daily" ||
 		action === "copy-text" ||
 		action === "copy-link" ||
-		action === "delete";
+		action === "delete" ||
+		action === "confirm-identity" ||
+		action === "mark-reviewed";
 }
 
 export function isTrashAction(action: string): action is TrashAction {

@@ -2890,6 +2890,41 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	font-size: var(--font-ui-small);
 }
 
+.knomo-plugin .knomo-catalog-onboarding {
+	max-width: 560px;
+	margin-inline: auto;
+}
+
+.knomo-plugin .knomo-catalog-onboarding-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-4);
+}
+
+.knomo-plugin .knomo-catalog-onboarding-actions button {
+	min-height: 44px;
+	padding-inline: var(--size-4-4);
+}
+
+.knomo-plugin .knomo-catalog-onboarding-actions button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.knomo-plugin .knomo-catalog-status {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-3);
+}
+
+.knomo-plugin .knomo-catalog-status button {
+	min-height: 44px;
+	flex: 0 0 auto;
+}
+
 /* --------------------------------------------------------------------------
    11. Settings Tab
    -------------------------------------------------------------------------- */

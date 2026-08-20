@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
@@ -474,10 +474,10 @@ export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfi
 			format: dailyStatus.format,
 		});
 		if (dailyDate !== null) {
-			return applyMemoBlockTime(dailyDate, memo.dailyRef.lastKnownBlock);
+			return dailyDate;
 		}
 	}
-	return parseLocalDateText(memo.monthlyRef.dateHeading) ?? parseLocalDateText(memo.monthlyRef.path);
+	return null;
 }
 
 export function parseLocalDateText(value: string): Date | null {

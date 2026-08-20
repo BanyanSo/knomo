@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { withMemoIdAlias } from "../utils/references";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 
@@ -70,11 +70,22 @@ export function getMemoActionClass(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-action is-danger" : "knomo-card-action";
 }
 
-export function getMemoCardActions(): MemoCardActionMeta[] {
-	return MEMO_CARD_ACTIONS.map((action) => ({
+export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
+	return MEMO_CARD_ACTIONS.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
 		action,
 		className: getMemoActionClass(action),
 	}));
+}
+
+function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction): boolean {
+	const capabilities = memo?.catalogV2?.capabilities;
+	if (capabilities === undefined) return true;
+	if (action === "open-daily") return capabilities.openDaily;
+	if (action === "copy-text") return capabilities.copy;
+	if (action === "edit") return capabilities.edit === "ready";
+	if (action === "delete") return capabilities.delete === "ready";
+	if (action === "reference" || action === "copy-link") return capabilities.createReference === "ready";
+	return false;
 }
 
 export function getTrashActionClass(action: TrashAction): string {
@@ -109,17 +120,6 @@ export function getMemoSourceReferenceMeta(memo: MemoRecord, deletedMemoIds: Rea
 		text: sourceReferenceText,
 		sourcePath: memo.dailyRef.path,
 	};
-}
-
-export function getMemoWarningText(memo: MemoRecord): string | null {
-	if (memo.syncStatus !== "synced") {
-		return memo.issue?.message ?? memo.syncStatus;
-	}
-	return memo.issue?.message ?? null;
-}
-
-export function getTrashMemoWarningText(memo: MemoRecord): string | null {
-	return memo.issue?.message ?? null;
 }
 
 function getSourceReferenceText(memo: MemoRecord): string | null {

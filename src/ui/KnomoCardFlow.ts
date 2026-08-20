@@ -1,19 +1,19 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { getMemoListStateKey } from "./MemoRenderRevision";
 
 export type CardFlowRenderMode = "memo" | "trash";
 
-export interface CardFlowBatchItem {
-	memo: MemoRecord;
+export interface CardFlowBatchItem<TMemo extends MemoRecord = MemoRecord> {
+	memo: TMemo;
 	mode: CardFlowRenderMode;
 	renderIndex: number;
 }
 
-export type CardFlowBatch =
+export type CardFlowBatch<TMemo extends MemoRecord = MemoRecord> =
 	| { type: "empty" }
 	| {
 		type: "items";
-		items: CardFlowBatchItem[];
+		items: CardFlowBatchItem<TMemo>[];
 		batchEnd: number;
 		totalCount: number;
 	};
@@ -30,14 +30,14 @@ export type CardFlowBatchRunResult =
 	| { type: "pending"; nextIndex: number }
 	| { type: "completed"; completion: CardFlowBatchCompletion };
 
-export interface RunCardFlowBatchOptions {
-	batch: CardFlowBatch | null;
+export interface RunCardFlowBatchOptions<TMemo extends MemoRecord = MemoRecord> {
+	batch: CardFlowBatch<TMemo> | null;
 	generation: number;
 	hasRenderTarget: boolean;
 	isCurrentGeneration: (generation: number) => boolean;
 	removeSentinel: () => void;
-	renderItem: (item: CardFlowBatchItem) => void;
-	completeBatch: (batch: CardFlowBatch) => CardFlowBatchCompletion;
+	renderItem: (item: CardFlowBatchItem<TMemo>) => void;
+	completeBatch: (batch: CardFlowBatch<TMemo>) => CardFlowBatchCompletion;
 	cancelBatch: () => void;
 	startIndex?: number;
 	maxItems?: number;
@@ -54,7 +54,7 @@ export function getVisibleCardFlowMemoStateKey(
 	return getMemoListStateKey(memos.slice(0, visibleCount));
 }
 
-export function runCardFlowBatch(options: RunCardFlowBatchOptions): CardFlowBatchRunResult {
+export function runCardFlowBatch<TMemo extends MemoRecord>(options: RunCardFlowBatchOptions<TMemo>): CardFlowBatchRunResult {
 	const batch = options.batch;
 	if (batch === null) {
 		return { type: "skipped" };

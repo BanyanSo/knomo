@@ -137,6 +137,11 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 			merged.managedSystemFolderExcludeRuleOwned,
 			DEFAULT_KNOMO_SETTINGS.managedSystemFolderExcludeRuleOwned ?? false,
 		),
+		managedLegacySystemFolderExcludeRule: optionalString(merged.managedLegacySystemFolderExcludeRule),
+		managedLegacySystemFolderExcludeRuleOwned: booleanOrDefault(
+			merged.managedLegacySystemFolderExcludeRuleOwned,
+			DEFAULT_KNOMO_SETTINGS.managedLegacySystemFolderExcludeRuleOwned ?? false,
+		),
 		pinnedTags: stringArrayOrDefault(merged.pinnedTags, DEFAULT_KNOMO_SETTINGS.pinnedTags),
 	};
 }

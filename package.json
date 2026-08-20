@@ -9,6 +9,10 @@
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"check:i18n": "node scripts/check-i18n.mjs",
 		"verify": "node scripts/verify.mjs",
+		"benchmark:catalog:build": "tsc -p tsconfig.benchmark.json",
+		"benchmark:catalog:generate": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog-v2/generate-benchmark-vault.js",
+		"benchmark:catalog:node": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog-v2/run-node-benchmarks.js",
+		"benchmark:catalog:summarize": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog-v2/summarize-device-traces.js",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",
 		"test": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js"
@@ -24,8 +28,10 @@
 	"devDependencies": {
 		"@types/node": "^22.15.0",
 		"@typescript-eslint/parser": "^8.61.0",
+		"ajv": "^8.17.1",
 		"esbuild": "^0.25.0",
 		"eslint": "^9.39.4",
+		"fake-indexeddb": "^6.2.5",
 		"obsidian": "1.13.1",
 		"typescript": "^5.8.0"
 	},

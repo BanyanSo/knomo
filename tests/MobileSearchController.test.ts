@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import type { RecordStatsSearchFilter } from "../src/ui/viewFilters";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 

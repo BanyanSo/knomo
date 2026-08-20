@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import type { ShuffleDaySnapshot } from "./ShuffleDayController";
 import { getEmptyStateTitle } from "./viewNavigation";
@@ -11,7 +11,7 @@ export interface CardFlowRegularFilterCopy {
 }
 
 export type CardFlowHeader =
-	| { type: "summary"; text: string }
+	| { type: "summary"; text: string; action?: { label: string; action: string } }
 	| { type: "random-toolbar"; count: number }
 	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
 
@@ -20,6 +20,12 @@ export type CardFlowPresentation =
 		type: "empty";
 		title: string;
 		description: string;
+	}
+	| {
+		type: "onboarding";
+		title: string;
+		description: string;
+		actions: Array<{ label: string; action: string; modCta?: boolean }>;
 	}
 	| {
 		type: "items";

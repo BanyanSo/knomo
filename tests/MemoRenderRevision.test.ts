@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import {
 	getMemoListStateKey,
 	getMemoRenderRevision,
@@ -24,14 +24,6 @@ test("changes render revisions when visible card state changes", () => {
 
 	assert.notEqual(
 		getMemoRenderRevision({ ...memo, contentHash: "changed" }),
-		getMemoRenderRevision(memo),
-	);
-	assert.notEqual(
-		getMemoRenderRevision({ ...memo, issue: {
-			type: "monthly_sync_failed",
-			detectedAt: "2026-06-15T10:00:00",
-			message: "failed",
-		} }),
 		getMemoRenderRevision(memo),
 	);
 });

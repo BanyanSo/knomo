@@ -11,18 +11,20 @@ import {
 import { t } from "../i18n";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
-import type { RebuildIndexMode, RebuildIndexScope, SyncOrchestrator } from "../services/SyncOrchestrator";
-import type { LegacyDailyMemosGroupPreview, LegacyDailyMemosImportScope, LegacyDailyMemosPreview } from "../services/MemoScanService";
-import type { MemoRecord } from "../types/memo";
+import type { CatalogV2FeatureService } from "../services/CatalogV2FeatureService";
+import type { CatalogV2ReadService } from "../services/CatalogV2ReadService";
+import type { CatalogV2MonthlyProjectionCoordinator } from "../services/CatalogV2MonthlyProjectionCoordinator";
+import type { CatalogV2PendingMutationInspectionItem } from "../types/catalogV2Runtime";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
-import type { SyncConflictFile } from "../types/syncConflict";
-import type { MaintenanceDiagnostic } from "../utils/pluginData";
 import { normalizeVaultPath } from "../utils/path";
-import { formatMemoIssue, formatServiceError, formatSettingsText } from "../utils/serviceText";
+import { formatDatePart } from "../utils/date";
+import { formatServiceError, formatSettingsText } from "../utils/serviceText";
 import { showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoView } from "./KnomoView";
 
 const SETTING_NOTICE_DELAY_MS = 800;
+type RebuildIndexMode = "index-only" | "index-and-monthly";
+type RebuildIndexScope = "30d" | "90d" | "all";
 
 type SettingNoticeKey = "dailyHeading" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat";
 
@@ -32,14 +34,10 @@ interface DelayedSettingNotice {
 }
 
 export class KnomoSettingTab extends PluginSettingTab {
-	private legacyImportPreview: LegacyDailyMemosPreview | null = null;
-	private legacyImportScope: LegacyDailyMemosImportScope = "90d";
-	private legacyImportRunning = false;
 	private rebuildRunning = false;
 	private monthlyRebuildRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
 	private timeBuoyToggleRunning = false;
-	private readonly issueListEls = new Set<HTMLElement>();
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -48,8 +46,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 		app: App,
 		plugin: Plugin,
 		private readonly settingsService: SettingsService,
-		private readonly syncOrchestrator: SyncOrchestrator,
 		private readonly obsidianExcludeService: ObsidianExcludeService,
+		private readonly catalogV2FeatureService: CatalogV2FeatureService,
+		private readonly catalogV2ReadService: CatalogV2ReadService,
+		private readonly catalogV2MonthlyProjectionCoordinator: CatalogV2MonthlyProjectionCoordinator,
 	) {
 		super(app, plugin);
 	}
@@ -235,98 +235,31 @@ export class KnomoSettingTab extends PluginSettingTab {
 				heading: t("settings.maintenance.heading"),
 				items: [
 					{
-						name: t("settings.legacyImport.name"),
-						desc: t("settings.legacyImport.desc"),
-						render: (setting) => {
+						name: t("settings.localHistory.name"),
+						desc: t("settings.localHistory.desc"),
+						render: (setting: Setting) => {
 							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-							const groupsEl = setting.infoEl.createDiv({ cls: "knomo-legacy-import-groups" });
-							setting
-								.addDropdown((dropdown) => {
-									dropdown.addOption("30d", t("settings.scope30d"));
-									dropdown.addOption("90d", t("settings.scope90d"));
-									dropdown.addOption("all", t("settings.scopeAll"));
-									dropdown.setValue(this.legacyImportScope);
-									dropdown.onChange((value) => {
-										this.legacyImportScope = value as LegacyDailyMemosImportScope;
-										this.legacyImportPreview = null;
-										this.renderLegacyImportPreview(resultEl, groupsEl);
-									});
-								})
-								.addButton((button) => {
-									button.setButtonText(t("settings.preview.start"));
-									button.onClick(() => {
-										void this.runLegacyImportPreview(button, resultEl, groupsEl);
-									});
+							setting.setClass("knomo-maintenance-setting").addButton((button) => {
+								button.setButtonText(t("settings.rebuild.start"));
+								button.onClick(() => {
+									void this.runRebuildIndex("all", "index-only", button, resultEl);
 								});
-							this.renderLegacyImportPreview(resultEl, groupsEl);
+							});
+							void this.renderInitialRebuildResult(resultEl);
 						},
 					},
 					{
-						name: t("settings.rebuild.name"),
-						desc: t("settings.rebuild.desc"),
-						render: (setting) => {
-							let rebuildScope: RebuildIndexScope = "30d";
-							let rebuildMode: RebuildIndexMode = "index-only";
-							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-							setting
-								.setClass("knomo-maintenance-setting")
-								.addDropdown((dropdown) => {
-									dropdown.addOption("30d", t("settings.scope30d"));
-									dropdown.addOption("90d", t("settings.scope90d"));
-									dropdown.addOption("all", t("settings.scopeAll"));
-									dropdown.setValue(rebuildScope);
-									dropdown.onChange((value) => {
-										rebuildScope = value as RebuildIndexScope;
-									});
-								})
-								.addDropdown((dropdown) => {
-									dropdown.addOption("index-only", t("settings.rebuild.indexOnly"));
-									dropdown.addOption("index-and-monthly", t("settings.rebuild.indexAndMonthly"));
-									dropdown.setValue(rebuildMode);
-									dropdown.onChange((value) => {
-										rebuildMode = value as RebuildIndexMode;
-									});
-								})
-								.addButton((button) => {
-									button.setButtonText(t("settings.rebuild.start"));
-									button.onClick(() => {
-										void this.runRebuildIndex(rebuildScope, rebuildMode, button, resultEl);
-									});
-								});
-							void this.renderInitialRebuildResult(resultEl);
+						name: t("settings.pendingRecovery.name"),
+						desc: t("settings.pendingRecovery.desc"),
+						render: (setting: Setting) => {
+							this.renderPendingMutationRecovery(setting);
 						},
 					},
 					{
 						name: t("settings.monthlyRebuild.name"),
 						desc: t("settings.monthlyRebuild.desc"),
-						render: (setting) => {
-							const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
-							let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
-							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-							const issueListEl = setting.infoEl.createDiv({ cls: "knomo-issue-list" });
-							this.issueListEls.add(issueListEl);
-							setting
-								.setClass("knomo-maintenance-setting")
-								.addDropdown((dropdown) => {
-									for (const period of monthlyPeriods) {
-										dropdown.addOption(period, period);
-									}
-									dropdown.setValue(monthlyRebuildPeriod);
-									dropdown.onChange((value) => {
-										monthlyRebuildPeriod = value;
-									});
-								})
-								.addButton((button) => {
-									button.setButtonText(t("settings.monthlyRebuild.start"));
-									button.onClick(() => {
-										void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, resultEl);
-									});
-								});
-							this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), resultEl);
-							void this.renderIssueList(issueListEl);
-							return () => {
-								this.issueListEls.delete(issueListEl);
-							};
+						render: (setting: Setting) => {
+							this.renderCatalogV2MonthlyRebuildSetting(setting);
 						},
 					},
 				],
@@ -338,7 +271,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		this.cancelAllDelayedSettingNotices();
 		this.pendingSettingDrafts.clear();
-		this.issueListEls.clear();
 		containerEl.empty();
 
 		const settings = this.settingsService.getSettings();
@@ -484,94 +416,175 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setName(t("settings.maintenance.heading"))
 			.setHeading();
 		new Setting(containerEl)
-			.setName(t("settings.legacyImport.name"))
-			.setDesc(t("settings.legacyImport.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("30d", t("settings.scope30d"));
-				dropdown.addOption("90d", t("settings.scope90d"));
-				dropdown.addOption("all", t("settings.scopeAll"));
-				dropdown.setValue(this.legacyImportScope);
-				dropdown.onChange((value) => {
-					this.legacyImportScope = value as LegacyDailyMemosImportScope;
-					this.legacyImportPreview = null;
-					this.renderLegacyImportPreview(legacyImportResultEl, legacyImportGroupsEl);
-				});
-			})
-			.addButton((button) => {
-				button.setButtonText(t("settings.preview.start"));
-				button.onClick(() => {
-					void this.runLegacyImportPreview(button, legacyImportResultEl, legacyImportGroupsEl);
-				});
-			});
-		const legacyImportResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		const legacyImportGroupsEl = containerEl.createDiv({ cls: "knomo-legacy-import-groups" });
-		this.renderLegacyImportPreview(legacyImportResultEl, legacyImportGroupsEl);
-
-		let rebuildScope: RebuildIndexScope = "30d";
-		let rebuildMode: RebuildIndexMode = "index-only";
-		new Setting(containerEl)
 			.setClass("knomo-maintenance-setting")
-			.setName(t("settings.rebuild.name"))
-			.setDesc(t("settings.rebuild.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("30d", t("settings.scope30d"));
-				dropdown.addOption("90d", t("settings.scope90d"));
-				dropdown.addOption("all", t("settings.scopeAll"));
-				dropdown.setValue(rebuildScope);
-				dropdown.onChange((value) => {
-					rebuildScope = value as RebuildIndexScope;
-				});
-			})
-			.addDropdown((dropdown) => {
-				dropdown.addOption("index-only", t("settings.rebuild.indexOnly"));
-				dropdown.addOption("index-and-monthly", t("settings.rebuild.indexAndMonthly"));
-				dropdown.setValue(rebuildMode);
-				dropdown.onChange((value) => {
-					rebuildMode = value as RebuildIndexMode;
-				});
-			})
+			.setName(t("settings.localHistory.name"))
+			.setDesc(t("settings.localHistory.desc"))
 			.addButton((button) => {
 				button.setButtonText(t("settings.rebuild.start"));
 				button.onClick(() => {
-					void this.runRebuildIndex(rebuildScope, rebuildMode, button, rebuildResultEl);
+					void this.runRebuildIndex("all", "index-only", button, catalogRebuildResultEl);
 				});
 			});
-		const rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		void this.renderInitialRebuildResult(rebuildResultEl);
-
-		const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
-		let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
-		new Setting(containerEl)
+		const catalogRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
+		void this.renderInitialRebuildResult(catalogRebuildResultEl);
+		const pendingRecoverySetting = new Setting(containerEl)
 			.setClass("knomo-maintenance-setting")
-			.setName(t("settings.monthlyRebuild.name"))
-			.setDesc(t("settings.monthlyRebuild.desc"))
-			.addDropdown((dropdown) => {
-				for (const period of monthlyPeriods) {
-					dropdown.addOption(period, period);
-				}
-				dropdown.setValue(monthlyRebuildPeriod);
-				dropdown.onChange((value) => {
-					monthlyRebuildPeriod = value;
-				});
-			})
-			.addButton((button) => {
-				button.setButtonText(t("settings.monthlyRebuild.start"));
-				button.onClick(() => {
-					void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, monthlyRebuildResultEl);
-				});
-			});
-		const monthlyRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), monthlyRebuildResultEl);
-		const issueListEl = containerEl.createDiv({ cls: "knomo-issue-list" });
-		this.issueListEls.add(issueListEl);
-		void this.renderIssueList(issueListEl);
+			.setName(t("settings.pendingRecovery.name"))
+			.setDesc(t("settings.pendingRecovery.desc"));
+		this.renderPendingMutationRecovery(pendingRecoverySetting);
+		const monthlySetting = new Setting(containerEl).setName(t("settings.monthlyRebuild.name"));
+		this.renderCatalogV2MonthlyRebuildSetting(monthlySetting);
 	}
 
 	hide(): void {
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
 		this.cancelAllDelayedSettingNotices();
-		this.issueListEls.clear();
+	}
+
+	private renderPendingMutationRecovery(setting: Setting): void {
+		const statusEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
+		statusEl.setAttr("role", "status");
+		statusEl.setAttr("aria-live", "polite");
+		statusEl.setAttr("aria-atomic", "true");
+		statusEl.setAttr("tabindex", "-1");
+		void this.refreshPendingMutationRecovery(statusEl);
+	}
+
+	private renderCatalogV2MonthlyRebuildSetting(setting: Setting): void {
+		let monthlyRebuildPeriod = formatDatePart(new Date()).slice(0, 7);
+		const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
+		setting
+			.setClass("knomo-maintenance-setting")
+			.setName(t("settings.monthlyRebuild.name"))
+			.setDesc(t("settings.monthlyRebuild.desc"))
+			.addDropdown((dropdown) => {
+				dropdown.addOption(monthlyRebuildPeriod, monthlyRebuildPeriod);
+				dropdown.setValue(monthlyRebuildPeriod);
+				dropdown.onChange((value) => { monthlyRebuildPeriod = value; });
+				void this.catalogV2MonthlyProjectionCoordinator.listPeriods().then((periods) => {
+					for (const period of periods) {
+						if (period !== monthlyRebuildPeriod) dropdown.addOption(period, period);
+					}
+					const firstPeriod = periods[0];
+					if (firstPeriod !== undefined) {
+						monthlyRebuildPeriod = firstPeriod;
+						dropdown.setValue(firstPeriod);
+					}
+				}).catch(() => undefined);
+			})
+			.addButton((button) => {
+				button.setButtonText(t("settings.monthlyRebuild.start"));
+				button.onClick(() => {
+					void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, resultEl);
+				});
+			});
+		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), resultEl);
+	}
+
+	private async refreshPendingMutationRecovery(statusEl: HTMLElement, focus = false): Promise<void> {
+		statusEl.empty();
+		statusEl.setText(t("settings.pendingRecovery.loading"));
+		try {
+			const inspection = await this.catalogV2FeatureService.inspectPendingMutations();
+			const items = inspection.items.filter((item) => item.status !== "abandoned");
+			statusEl.empty();
+			if (items.length === 0) {
+				statusEl.setText(t("settings.pendingRecovery.none"));
+			} else {
+				for (const item of items) this.renderPendingMutationItem(statusEl, item);
+			}
+		} catch {
+			statusEl.setText(t("settings.pendingRecovery.loadFailed"));
+		}
+		if (focus) statusEl.focus({ preventScroll: true });
+	}
+
+	private renderPendingMutationItem(
+		statusEl: HTMLElement,
+		item: CatalogV2PendingMutationInspectionItem,
+	): void {
+		const itemEl = statusEl.createDiv({ cls: "knomo-pending-recovery-item" });
+		itemEl.createDiv({
+			cls: "knomo-setting-help",
+			text: t("settings.pendingRecovery.item", {
+				paths: item.paths.join(", ") || t("settings.pendingRecovery.unknownPath"),
+				status: this.getPendingMutationStatusText(item),
+			}),
+		});
+		const actionsEl = itemEl.createDiv({ cls: "knomo-pending-recovery-actions" });
+		const canContinue = item.status === "prepared" || item.status === "daily_after"
+			|| item.status === "committed_unbound" || item.reasons.includes("daily_partial");
+		if (canContinue) {
+			const continueButton = actionsEl.createEl("button", {
+				text: t("settings.pendingRecovery.continue"),
+				attr: {
+					type: "button",
+					"aria-label": t("settings.pendingRecovery.continueLabel", {
+						paths: item.paths.join(", ") || t("settings.pendingRecovery.unknownPath"),
+					}),
+				},
+			});
+			continueButton.addEventListener("click", () => {
+				void this.runPendingMutationRecovery(item, "continue", continueButton, statusEl);
+			});
+		}
+		if (item.status === "prepared") {
+			const abandonButton = actionsEl.createEl("button", {
+				text: t("settings.pendingRecovery.abandon"),
+				attr: {
+					type: "button",
+					"aria-label": t("settings.pendingRecovery.abandonLabel", {
+						paths: item.paths.join(", ") || t("settings.pendingRecovery.unknownPath"),
+					}),
+				},
+			});
+			abandonButton.addEventListener("click", () => {
+				void this.runPendingMutationRecovery(item, "abandon", abandonButton, statusEl);
+			});
+		}
+	}
+
+	private getPendingMutationStatusText(item: CatalogV2PendingMutationInspectionItem): string {
+		if (item.reasons.includes("daily_partial")) return t("settings.pendingRecovery.partial");
+		switch (item.status) {
+			case "prepared": return t("settings.pendingRecovery.prepared");
+			case "daily_after": return t("settings.pendingRecovery.dailyAfter");
+			case "committed_unbound": return t("settings.pendingRecovery.committedUnbound");
+			case "abandoned": return t("settings.pendingRecovery.abandonedStatus");
+			case "attention": return t("settings.pendingRecovery.attention");
+		}
+	}
+
+	private async runPendingMutationRecovery(
+		item: CatalogV2PendingMutationInspectionItem,
+		action: "continue" | "abandon",
+		button: HTMLButtonElement,
+		statusEl: HTMLElement,
+	): Promise<void> {
+		const confirmed = await showKnomoConfirmModal(this.app, {
+			message: action === "continue"
+				? t("settings.pendingRecovery.continueConfirm")
+				: t("settings.pendingRecovery.abandonConfirm"),
+			confirmLabel: action === "continue"
+				? t("settings.pendingRecovery.continue")
+				: t("settings.pendingRecovery.abandon"),
+			danger: action === "abandon",
+		});
+		if (!confirmed) return;
+		button.disabled = true;
+		statusEl.setAttr("aria-busy", "true");
+		try {
+			const completed = await this.catalogV2FeatureService?.recoverPendingMutation(item.mutationId, action) ?? false;
+			new Notice(completed
+				? action === "continue" ? t("settings.pendingRecovery.completed") : t("settings.pendingRecovery.abandoned")
+				: t("settings.pendingRecovery.failed"));
+		} catch {
+			new Notice(t("settings.pendingRecovery.failed"));
+		} finally {
+			statusEl.removeAttribute("aria-busy");
+			await this.refreshPendingMutationRecovery(statusEl, true);
+		}
 	}
 
 	private rememberSettingNoticeValue(key: SettingNoticeKey, value: string): void {
@@ -710,6 +723,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return true;
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
+		await this.catalogV2FeatureService?.rebuildLocalCatalog();
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
 			return true;
 		}
@@ -767,7 +781,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.monthlyFileFormatMigrationRunning = true;
 		try {
-			const plan = await this.settingsService.planMonthlyMemoFileFormatMigration(nextFormat);
+			const sourcePeriods = await this.catalogV2MonthlyProjectionCoordinator.listPeriods();
+			const plan = await this.settingsService.planMonthlyMemoFileFormatMigration(nextFormat, sourcePeriods);
 			if (plan.conflicts.length > 0) {
 				throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
 			}
@@ -781,11 +796,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 			if (!confirmed) {
 				return false;
 			}
-			await this.syncOrchestrator.runMonthlyMemoFileFormatMigration(() => (
-				this.settingsService.migrateMonthlyMemoFileFormat(nextFormat, (periods, trackGeneratedPath) => (
-					this.syncOrchestrator.rebuildMonthlyArchivesForFileFormatMigration(periods, trackGeneratedPath)
-				))
-			));
+			await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
+			for (const period of plan.periods) {
+				await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
+			}
 			if (statusEl !== undefined) {
 				this.updateMonthlyFileFormatStatus(statusEl);
 			}
@@ -823,18 +837,18 @@ export class KnomoSettingTab extends PluginSettingTab {
 					message: t("settings.monthlyFolder.confirm", {
 						current: currentSettings.monthlyMemoFolder,
 						next: monthlyMemoFolder,
-						count: plan.monthlyFileMoves.length,
-						systemAction: plan.moveSystemFolder ? t("settings.monthlyFolder.moveSystem") : t("settings.monthlyFolder.createSystem"),
-						rewritten: plan.rewrittenMonthlyRefs,
 					}),
 				});
 				if (!confirmed) {
 					return;
 				}
 			}
-			await this.syncOrchestrator.runMonthlyMemoFolderMigration(() => (
-				this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder)
-			));
+			await this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder);
+			if (monthlyMemoFolder !== currentSettings.monthlyMemoFolder) {
+				for (const period of await this.catalogV2MonthlyProjectionCoordinator.listPeriods()) {
+					await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
+				}
+			}
 			new Notice(t("settings.monthlyFolder.saved"));
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.monthlyFolder.saveFailed"));
@@ -873,20 +887,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 				return;
 			}
 			new Notice(t("settings.timeBuoy.building"));
-			const result = await this.syncOrchestrator.rebuildTimeBuoyIndex({
-				yieldToUi: () => new Promise<void>((resolve) => {
-					this.containerEl.win.setTimeout(resolve, 0);
-				}),
-			});
-			if (result.status === "completed") {
-				new Notice(t("settings.timeBuoy.buildComplete", {
-					total: result.total,
-					indexed: result.indexed,
-					skipped: result.skipped,
-				}));
-			} else {
-				new Notice(t("settings.timeBuoy.enabled"));
-			}
+			await this.catalogV2ReadService.queryTimeBuoysForDate(formatDatePart(new Date()));
+			new Notice(t("settings.timeBuoy.enabled"));
 			await this.refreshOpenKnomoViews();
 		} catch (error) {
 			new Notice(formatServiceError(error, t("settings.timeBuoy.buildFailed")));
@@ -957,160 +959,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 			: t("settings.excludeMonthly.keepExisting"));
 	}
 
-	private async runLegacyImportPreview(
-		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
-		resultEl: HTMLElement,
-		groupsEl: HTMLElement,
-	): Promise<void> {
-		if (this.legacyImportRunning) {
-			return;
-		}
-		this.legacyImportRunning = true;
-		button.setDisabled(true);
-		button.setButtonText(t("settings.preview.running"));
-		this.legacyImportPreview = null;
-		groupsEl.empty();
-		this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.previewing"));
-		try {
-			this.legacyImportPreview = await this.syncOrchestrator.previewLegacyDailyMemos(this.legacyImportScope);
-			this.renderLegacyImportPreview(resultEl, groupsEl);
-		} catch (error) {
-			const message = formatServiceError(error, t("settings.legacyImport.previewFailed"));
-			this.renderLegacyImportStatus(resultEl, message, true);
-			new Notice(message);
-		} finally {
-			this.legacyImportRunning = false;
-			button.setDisabled(false);
-			button.setButtonText(t("settings.preview.start"));
-		}
-	}
-
-	private renderLegacyImportPreview(resultEl: HTMLElement, groupsEl: HTMLElement): void {
-		groupsEl.empty();
-		const preview = this.legacyImportPreview;
-		if (preview === null) {
-			this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.notPreviewed"));
-			return;
-		}
-		const summary = [
-			t("settings.legacyImport.summary", { count: preview.candidateCount }),
-			...preview.groups.map((group) => t("settings.legacyImport.groupCount", {
-				label: formatSettingsText(group.label),
-				count: group.count,
-			})),
-		].join("\n");
-		this.renderLegacyImportStatus(resultEl, summary);
-		if (preview.groups.length === 0) {
-			return;
-		}
-		for (const group of preview.groups) {
-			this.renderLegacyImportGroup(group, groupsEl);
-		}
-		const button = groupsEl.createEl("button", {
-			cls: "mod-cta",
-			text: t("settings.legacyImport.importSelected"),
-			attr: { type: "button" },
-		});
-		button.addEventListener("click", () => {
-			void this.runLegacyImport(button, resultEl, groupsEl);
-		});
-	}
-
-	private renderLegacyImportGroup(group: LegacyDailyMemosGroupPreview, groupsEl: HTMLElement): void {
-		const item = groupsEl.createDiv({ cls: "knomo-legacy-import-group" });
-		const label = item.createEl("label", { cls: "knomo-legacy-import-label" });
-		const checkbox = label.createEl("input", {
-			attr: {
-				type: "checkbox",
-				"data-legacy-import-group": group.key,
-			},
-		});
-		checkbox.checked = group.selectedByDefault;
-		label.createSpan({ text: t("settings.legacyImport.groupCount", { label: formatSettingsText(group.label), count: group.count }) });
-		const samples = item.createDiv({ cls: "knomo-legacy-import-samples" });
-		for (const sample of group.samples) {
-			samples.createDiv({
-				cls: "knomo-setting-code",
-				text: `${sample.path}:${sample.lineNumber} ${sample.time} ${formatLegacyImportSample(sample.content)}`,
-			});
-		}
-	}
-
-	private async runLegacyImport(button: HTMLButtonElement, resultEl: HTMLElement, groupsEl: HTMLElement): Promise<void> {
-		const preview = this.legacyImportPreview;
-		if (preview === null || this.legacyImportRunning) {
-			return;
-		}
-		const selectedGroupKeys = this.getSelectedLegacyImportGroupKeys(groupsEl);
-		if (selectedGroupKeys.length === 0) {
-			new Notice(t("settings.legacyImport.chooseGroup"));
-			return;
-		}
-		let importCompleted = false;
-		this.legacyImportRunning = true;
-		button.disabled = true;
-		button.setText(t("settings.legacyImport.importing"));
-		this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.importingStatus"));
-		try {
-			const result = await this.syncOrchestrator.importLegacyDailyMemos({
-				scope: this.legacyImportScope,
-				selectedGroupKeys,
-			});
-			await this.addLegacyDailyHeadings(result.importedHeadings);
-			await this.refreshIssueLists();
-			const message = t("settings.legacyImport.complete", {
-				imported: result.imported,
-				failed: result.failed,
-				skipped: result.skipped,
-			});
-			const errors = result.errors.map(formatSettingsText);
-			this.legacyImportPreview = null;
-			groupsEl.empty();
-			this.renderLegacyImportStatus(resultEl, errors.length > 0 ? `${message}\n${errors.join("\n")}` : message, result.failed > 0);
-			importCompleted = true;
-			void this.reloadAllMemosInOpenKnomoViewsAfterImport();
-			if (result.failed > 0) {
-				new Notice(t("settings.legacyImport.failedCount", { count: result.failed }));
-			}
-		} catch (error) {
-			const message = formatServiceError(error, t("settings.legacyImport.failed"));
-			this.renderLegacyImportStatus(resultEl, message, true);
-			new Notice(message);
-		} finally {
-			this.legacyImportRunning = false;
-			if (!importCompleted) {
-				button.disabled = false;
-				button.setText(t("settings.legacyImport.importSelected"));
-			}
-		}
-	}
-
-	private getSelectedLegacyImportGroupKeys(groupsEl: HTMLElement): string[] {
-		return groupsEl.findAll("input[data-legacy-import-group]")
-			.filter((input): input is HTMLInputElement => input.instanceOf(HTMLInputElement) && input.checked)
-			.map((input) => input.getAttr("data-legacy-import-group"))
-			.filter((key): key is string => key !== null);
-	}
-
-	private async addLegacyDailyHeadings(headings: string[]): Promise<void> {
-		if (headings.length === 0) {
-			return;
-		}
-		const settings = this.settingsService.getSettings();
-		const nextHeadings = [...settings.legacyDailyHeadings];
-		for (const heading of headings) {
-			if (!nextHeadings.includes(heading)) {
-				nextHeadings.push(heading);
-			}
-		}
-		await this.settingsService.updateSettings({ legacyDailyHeadings: nextHeadings });
-	}
-
-	private renderLegacyImportStatus(resultEl: HTMLElement, message: string, isError = false): void {
-		resultEl.empty();
-		resultEl.createDiv({ cls: isError ? "knomo-setting-help is-error" : "knomo-setting-help", text: message });
-	}
-
 	private async runRebuildIndex(
 		scope: RebuildIndexScope,
 		mode: RebuildIndexMode,
@@ -1124,100 +972,21 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setDisabled(true);
 		button.setButtonText(t("settings.rebuild.checking"));
 		try {
-			const estimate = await this.syncOrchestrator.estimateRebuildIndex(scope);
-			const monthlyModeText = mode === "index-and-monthly" ? t("settings.rebuild.monthlySync") : t("settings.rebuild.monthlyMissingOnly");
 			const confirmed = await showKnomoConfirmModal(this.app, {
-				message: t("settings.rebuild.confirm", {
-					scanned: estimate.scannedFiles,
-					created: estimate.estimatedNew,
-					updated: estimate.estimatedUpdated,
-					missing: estimate.estimatedMissing,
-					monthlyMode: monthlyModeText,
-				}),
+				message: t("settings.rebuild.catalogConfirm"),
 			});
 			if (!confirmed) {
 				this.renderRebuildResult(t("settings.rebuild.cancelled"), resultEl);
 				return;
 			}
 			button.setButtonText(t("settings.rebuild.running"));
-			this.renderRebuildResult(t("settings.rebuild.status", { monthlyMode: monthlyModeText }), resultEl);
-			const result = await this.syncOrchestrator.rebuildIndex(scope, mode, (progress) => {
-				this.renderRebuildResult(
-					t("settings.rebuild.progress", {
-						completed: progress.completedFiles,
-						scanned: progress.scannedFiles,
-						created: progress.created,
-						updated: progress.updated,
-						deleted: progress.deleted,
-						skipped: progress.skipped,
-						failed: progress.failed,
-						currentFile: progress.currentFile === null ? "" : t("settings.rebuild.currentFile", { file: progress.currentFile }),
-					}),
-					resultEl,
-				);
-			});
-			const message = t("settings.rebuild.complete", {
-				scanned: result.scannedFiles,
-				created: result.created,
-				updated: result.updated,
-				deleted: result.deleted,
-				skipped: result.skipped,
-			});
-			const backup = result.backupPath === null ? t("settings.rebuild.noBackup") : t("settings.rebuild.backup", { path: result.backupPath });
-			const resultLines = [message, backup];
-			if (result.duplicateIndexRecordsRemoved > 0) {
-				resultLines.push(t("settings.rebuild.cleanedDuplicateIndexRecords", { count: result.duplicateIndexRecordsRemoved }));
-			}
-			if (result.syncConflictIndexFilesDeleted > 0) {
-				resultLines.push(t("settings.rebuild.cleanedIndexConflicts", { count: result.syncConflictIndexFilesDeleted }));
-			}
-			if (result.syncConflictIndexFileDeleteFailed > 0) {
-				resultLines.push(t("settings.rebuild.indexConflictCleanupFailed", {
-					count: result.syncConflictIndexFileDeleteFailed,
-					path: result.firstFailedSyncConflictIndexPath ?? "",
-				}));
-			}
-			const remainingMonthlyConflicts = this.syncOrchestrator.listPotentialSyncConflictFiles()
-				.filter((conflict) => conflict.kind === "monthly-archive");
-			const firstMonthlyConflict = remainingMonthlyConflicts[0];
-			if (firstMonthlyConflict !== undefined) {
-				resultLines.push(t("settings.rebuild.monthlyConflictsRemain", {
-					count: remainingMonthlyConflicts.length,
-					path: firstMonthlyConflict.path,
-				}));
-			}
-			await this.saveMaintenanceDiagnosticSafely({
-				task: "repair",
-				status: "completed",
-				occurredAt: new Date().toISOString(),
-				scope,
-				mode,
-				message,
-				scannedFiles: result.scannedFiles,
-				created: result.created,
-				updated: result.updated,
-				deleted: result.deleted,
-				failed: result.failed,
-			});
-			this.renderRebuildResult(resultLines.join("\n"), resultEl);
-			await this.refreshIssueLists();
+			this.renderRebuildResult(t("settings.rebuild.catalogStatus"), resultEl);
+			await this.catalogV2FeatureService.rebuildLocalCatalog();
+			this.renderRebuildResult(t("settings.rebuild.catalogComplete"), resultEl);
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.rebuild.completedNotice"));
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.rebuild.failed"));
-			await this.saveMaintenanceDiagnosticSafely({
-				task: "repair",
-				status: "failed",
-				occurredAt: new Date().toISOString(),
-				scope,
-				mode,
-				message,
-				scannedFiles: null,
-				created: null,
-				updated: null,
-				deleted: null,
-				failed: null,
-			});
 			this.renderRebuildResult(message, resultEl);
 			new Notice(message);
 		} finally {
@@ -1248,18 +1017,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setButtonText(t("settings.monthlyRebuild.running"));
 		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.status", { period }), resultEl);
 		try {
-			const result = await this.syncOrchestrator.rebuildMonthlyArchive(period);
-			const backup = result.backupPath === null
-				? t("settings.monthlyRebuild.noBackup")
-				: t("settings.rebuild.backup", { path: result.backupPath });
-			this.renderMonthlyRebuildResult(`${t("settings.monthlyRebuild.complete", {
-				period: result.period,
-				rebuilt: result.rebuilt,
-				issues: result.issues,
-			})}\n${backup}`, resultEl);
-			await this.refreshIssueLists();
+			const projection = await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
+			if (projection.failed > 0) throw new Error(t("settings.monthlyRebuild.failed"));
+			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.complete", {
+				period,
+				rebuilt: projection.projected,
+				issues: 0,
+			}), resultEl);
 			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.monthlyRebuild.completedNotice", { period: result.period }));
+			new Notice(t("settings.monthlyRebuild.completedNotice", { period }));
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.monthlyRebuild.failed"));
 			this.renderMonthlyRebuildResult(message, resultEl);
@@ -1276,84 +1042,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
 	}
 
-	private async saveMaintenanceDiagnosticSafely(diagnostic: MaintenanceDiagnostic): Promise<void> {
-		try {
-			await this.settingsService.saveMaintenanceDiagnostic(diagnostic);
-		} catch {
-			// 维护诊断写入失败不应覆盖用户正在执行的维护结果。
-		}
-	}
-
 	private async renderInitialRebuildResult(resultEl: HTMLElement): Promise<void> {
-		let message = this.getRebuildBeforeMessage();
-		try {
-			const diagnostic = await this.settingsService.loadMaintenanceDiagnostic();
-			if (diagnostic !== null) {
-				message = `${message}\n${this.formatMaintenanceDiagnostic(diagnostic)}`;
-			}
-		} catch {
-			// 诊断只辅助维护说明，读取失败时保留基础提示。
-		}
-		this.renderRebuildResult(message, resultEl);
-	}
-
-	private getRebuildBeforeMessage(): string {
-		const conflicts = this.syncOrchestrator.listPotentialSyncConflictFiles();
-		if (conflicts.length === 0) {
-			return t("settings.rebuild.before");
-		}
-		return `${t("settings.rebuild.before")}\n${this.formatSyncConflictMessage(conflicts)}`;
-	}
-
-	private formatSyncConflictMessage(conflicts: readonly SyncConflictFile[]): string {
-		const firstConflict = conflicts[0];
-		if (firstConflict === undefined) {
-			return "";
-		}
-		const indexCount = conflicts.filter((conflict) => conflict.kind === "memo-index").length;
-		const monthlyCount = conflicts.length - indexCount;
-		const messageKey = indexCount > 0 && monthlyCount > 0
-			? "settings.rebuild.conflictMixedFiles"
-			: indexCount > 0
-				? "settings.rebuild.conflictIndexFiles"
-				: "settings.rebuild.conflictMonthlyFiles";
-		return t(messageKey, {
-			count: conflicts.length,
-			indexCount,
-			monthlyCount,
-			path: firstConflict.path,
-		});
-	}
-
-	private formatMaintenanceDiagnostic(diagnostic: MaintenanceDiagnostic): string {
-		const task = diagnostic.task === "startup_scan"
-			? t("settings.maintenanceDiagnostic.startupScan")
-			: diagnostic.task === "file_watch"
-				? t("settings.maintenanceDiagnostic.fileWatch")
-				: t("settings.maintenanceDiagnostic.repair");
-		const status = diagnostic.status === "completed"
-			? t("settings.maintenanceDiagnostic.completed")
-			: t("settings.maintenanceDiagnostic.failed");
-		const scope = diagnostic.scope === null ? "" : t("settings.maintenanceDiagnostic.scope", { scope: diagnostic.scope });
-		const mode = diagnostic.mode === null ? "" : t("settings.maintenanceDiagnostic.mode", { mode: diagnostic.mode });
-		const stats = diagnostic.scannedFiles === null
-			? ""
-			: t("settings.maintenanceDiagnostic.stats", {
-				scanned: diagnostic.scannedFiles,
-				created: diagnostic.created ?? 0,
-				updated: diagnostic.updated ?? 0,
-				deleted: diagnostic.deleted ?? 0,
-				failed: diagnostic.failed ?? 0,
-			});
-		return t("settings.maintenanceDiagnostic.latest", {
-			task,
-			status,
-			time: diagnostic.occurredAt,
-			scope,
-			mode,
-			stats,
-			message: diagnostic.message,
-		});
+		this.renderRebuildResult(t("settings.rebuild.before"), resultEl);
 	}
 
 	private renderMonthlyRebuildResult(message: string, resultEl: HTMLElement): void {
@@ -1370,141 +1060,4 @@ export class KnomoSettingTab extends PluginSettingTab {
 		await Promise.all(refreshes);
 	}
 
-	private async reloadAllMemosInOpenKnomoViewsAfterImport(): Promise<void> {
-		let failed = false;
-		try {
-			const preloads = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
-				if (!(leaf.view instanceof KnomoView)) {
-					return true;
-				}
-				try {
-					return await leaf.view.reloadAllMemosAfterImport();
-				} catch {
-					return false;
-				}
-			});
-			const results = await Promise.all(preloads);
-			failed = results.some((loaded) => !loaded);
-			if (results.length > 0 && !failed) {
-				new Notice(t("settings.legacyImport.loadedAll"));
-			}
-		} catch {
-			failed = true;
-		}
-		if (failed) {
-			new Notice(t("settings.legacyImport.loadAllFailed"));
-		}
-	}
-
-	private async refreshIssueLists(): Promise<void> {
-		await Promise.all(Array.from(this.issueListEls, (issueListEl) => this.renderIssueList(issueListEl)));
-	}
-
-	private async renderIssueList(issueListEl: HTMLElement): Promise<void> {
-		issueListEl.empty();
-		try {
-			const memos = await this.syncOrchestrator.listIssueMemos();
-			if (memos.length === 0) {
-				issueListEl.createDiv({ cls: "knomo-setting-help", text: t("settings.issues.none") });
-				return;
-			}
-			for (const memo of memos) {
-				this.renderIssueItem(memo, issueListEl);
-			}
-		} catch (error) {
-			issueListEl.createDiv({
-				cls: "knomo-setting-help is-error",
-				text: formatServiceError(error, t("settings.issues.loadFailed")),
-			});
-		}
-	}
-
-	private renderIssueItem(memo: MemoRecord, issueListEl: HTMLElement): void {
-		const item = issueListEl.createDiv({ cls: "knomo-issue-item" });
-		item.createDiv({
-			cls: "knomo-setting-code",
-			text: `${memo.id} · ${getSyncStatusLabel(memo.syncStatus)}`,
-		});
-		item.createDiv({
-			cls: memo.issue === null ? "knomo-setting-help" : "knomo-setting-help is-error",
-			text: memo.issue === null ? t("settings.issues.needsHandling") : formatMemoIssue(memo.issue),
-		});
-		if (memo.syncStatus === "monthly_delete_failed") {
-			const button = item.createEl("button", {
-				cls: "mod-cta",
-				text: t("settings.issues.retryMonthlyDelete"),
-				attr: { type: "button" },
-			});
-			button.addEventListener("click", () => {
-				void this.retryMonthlyDelete(memo, button);
-			});
-		} else if (
-			memo.syncStatus === "monthly_failed"
-			|| memo.issue?.type === "monthly_block_missing"
-			|| memo.issue?.type === "monthly_block_ambiguous"
-			|| memo.issue?.type === "monthly_sync_failed"
-		) {
-			const button = item.createEl("button", {
-				cls: "mod-cta",
-				text: t("settings.issues.retryMonthlySync"),
-				attr: { type: "button" },
-			});
-			button.addEventListener("click", () => {
-				void this.retryMonthlySync(memo, button);
-			});
-		}
-	}
-
-	private async retryMonthlyDelete(memo: MemoRecord, button: HTMLButtonElement): Promise<void> {
-		button.disabled = true;
-		button.setText(t("settings.issues.retrying"));
-		try {
-			await this.syncOrchestrator.retryMonthlyDelete(memo);
-			await this.refreshIssueLists();
-			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.issues.monthlyDeleteComplete"));
-		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.issues.monthlyDeleteFailed")));
-		} finally {
-			button.disabled = false;
-			button.setText(t("settings.issues.retryMonthlyDelete"));
-		}
-	}
-
-	private async retryMonthlySync(memo: MemoRecord, button: HTMLButtonElement): Promise<void> {
-		button.disabled = true;
-		button.setText(t("settings.issues.retrying"));
-		try {
-			await this.syncOrchestrator.retryMonthlySync(memo);
-			await this.refreshIssueLists();
-			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.issues.monthlySyncComplete"));
-		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.issues.monthlySyncFailed")));
-		} finally {
-			button.disabled = false;
-			button.setText(t("settings.issues.retryMonthlySync"));
-		}
-	}
-}
-
-function getSyncStatusLabel(status: MemoRecord["syncStatus"]): string {
-	if (status === "synced") {
-		return t("sync.synced");
-	}
-	if (status === "pending_monthly") {
-		return t("sync.pendingMonthly");
-	}
-	if (status === "monthly_failed") {
-		return t("sync.monthlyFailed");
-	}
-	return t("sync.monthlyDeleteFailed");
-}
-
-function formatLegacyImportSample(content: string): string {
-	const normalizedContent = content.replace(/\s+/g, " ").trim();
-	if (normalizedContent.length <= 80) {
-		return normalizedContent;
-	}
-	return `${normalizedContent.slice(0, 77)}...`;
 }

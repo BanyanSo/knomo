@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import type { TrashMemoRenderTarget } from "../src/ui/TrashMemoController";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -213,6 +213,31 @@ test("purge waits for asynchronous confirmation and suppresses duplicate prompts
 	resolveConfirmation(true);
 	await Promise.all([firstAction, duplicateAction]);
 	assert.equal(purgeCalls, 1);
+});
+
+test("restore 已成功后视图刷新失败不会再显示恢复失败", async () => {
+	const { TrashMemoController } = await loadController();
+	const memo = makeMemo("memo-1");
+	const notices: string[] = [];
+	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
+		listDeletedMemos: async () => [memo],
+		restoreMemo: async () => ({ ...memo, status: "active" }),
+		handleRestoredMemo: () => {},
+		purgeDeletedMemo: async () => {},
+		isTrashActive: () => false,
+		confirmPurge: async () => true,
+		showNotice: (message) => notices.push(message),
+		forceRefreshViews: async () => { throw new Error("local refresh failed"); },
+		requestRender: () => {},
+	});
+	await controller.loadTrashMemos();
+
+	await controller.handleTrashAction("restore", memo);
+
+	assert.equal(notices.includes("Restored"), true);
+	assert.equal(notices.some((message) => message.startsWith("Restore failed")), false);
+	assert.equal(controller.getSnapshot().trashCount, 0);
 });
 
 test("formats trash action errors without duplicating the action label", async () => {

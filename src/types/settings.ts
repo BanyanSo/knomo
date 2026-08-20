@@ -25,5 +25,7 @@ export interface KnomoSettings {
 	managedObsidianExcludeRuleOwned?: boolean;
 	managedSystemFolderExcludeRule?: string;
 	managedSystemFolderExcludeRuleOwned?: boolean;
+	managedLegacySystemFolderExcludeRule?: string;
+	managedLegacySystemFolderExcludeRuleOwned?: boolean;
 	pinnedTags: string[];
 }

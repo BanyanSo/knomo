@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.test.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": ".tmp/knomo-catalog-benchmark",
+		"inlineSourceMap": false,
+		"sourceMap": true,
+		"types": ["node"]
+	},
+	"include": [
+		"src/**/*.ts",
+		"scripts/catalog-v2/**/*.ts"
+	]
+}

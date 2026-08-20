@@ -45,7 +45,7 @@ interface KnomoUserActionControllerOptions {
 	setSearchDateFilter: (filter: SearchDateFilter, sourceEl: HTMLElement | null) => void;
 	setMobileSearchDateFilter: (filter: SearchDateFilter) => void;
 	runTrashAction: (action: TrashAction, memoId: string | null) => Promise<void>;
-	runMemoAction: (action: MemoAction, memoId: string | null) => Promise<void>;
+	runMemoAction: (action: MemoAction, memoId: string | null, candidateMemoId: string | null) => Promise<void>;
 	shouldIgnoreHandledMobileToolClick: (element: HTMLElement, action: string | null) => boolean;
 	openMemoCardDailyNote: (memoId: string, randomReunion: boolean) => Promise<void>;
 	closeCardMenu: () => void;
@@ -73,8 +73,6 @@ interface KnomoUserActionControllerOptions {
 	goToNextRecordStatsPeriod: () => void;
 	retryRecordStats: () => Promise<void>;
 	retryTimeBuoy?: () => Promise<void>;
-	rebuildTimeBuoy?: () => Promise<void>;
-	cancelTimeBuoyRebuild?: () => void;
 	setTimeBuoyTab?: (tab: TimeBuoyTab) => void;
 	loadMoreTimeBuoyCards?: () => void;
 	openTimeBuoy?: () => void;
@@ -100,6 +98,9 @@ interface KnomoUserActionControllerOptions {
 	syncCardMenuState: () => void;
 	cancelComposerFromEscape: () => void;
 	closeOpenChromeFromEscape: () => void;
+	initializeCatalogVault?: () => Promise<void>;
+	refreshCatalogSyncState?: () => Promise<void>;
+	openCatalogSettings?: () => void;
 }
 
 export class KnomoUserActionController {
@@ -194,12 +195,24 @@ export class KnomoUserActionController {
 		if (route.type === "memo-action") {
 			const dispatch = getMemoActionDispatch(route.action);
 			if (dispatch.type === "memo-action") {
-				await this.options.runMemoAction(dispatch.action, route.memoId);
+				await this.options.runMemoAction(dispatch.action, route.memoId, route.candidateMemoId);
 			}
 			return;
 		}
 
 		if (route.type === "action") {
+			if (route.action === "initialize-catalog-vault") {
+				await this.options.initializeCatalogVault?.();
+				return;
+			}
+			if (route.action === "refresh-catalog-sync-state") {
+				await this.options.refreshCatalogSyncState?.();
+				return;
+			}
+			if (route.action === "open-catalog-settings") {
+				this.options.openCatalogSettings?.();
+				return;
+			}
 			if (this.options.shouldIgnoreHandledMobileToolClick(route.element, route.action)) {
 				return;
 			}
@@ -320,12 +333,6 @@ export class KnomoUserActionController {
 				return;
 			case "retry-time-buoy":
 				await this.options.retryTimeBuoy?.();
-				return;
-			case "rebuild-time-buoy":
-				await this.options.rebuildTimeBuoy?.();
-				return;
-			case "cancel-time-buoy-rebuild":
-				this.options.cancelTimeBuoyRebuild?.();
 				return;
 			case "time-buoy-tab-today":
 				this.options.setTimeBuoyTab?.("today");

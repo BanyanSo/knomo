@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoRecord } from "./helpers/memoViewFixture";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("refreshes random reunion once while loading and preserves render transitions", async () => {
@@ -108,7 +108,7 @@ test("does not select random memos when full loading fails", async () => {
 	assert.equal(notices.length, 1);
 });
 
-test("keeps random reunion memos in sync with memo mutations", async () => {
+test("clears cached random reunion memos before the next Catalog refresh", async () => {
 	const { RandomReunionController } = await loadController();
 	const firstMemo = makeMemo("memo-1");
 	const secondMemo = makeMemo("memo-2");
@@ -123,16 +123,12 @@ test("keeps random reunion memos in sync with memo mutations", async () => {
 	});
 	await controller.refresh();
 
-	const updatedMemo = { ...firstMemo, contentSnapshot: "updated" };
-	controller.applyMemoMutation({ type: "update", previousMemo: firstMemo, memo: updatedMemo });
-	controller.applyMemoMutation({ type: "delete", previousMemo: secondMemo, memo: secondMemo });
-
-	assert.deepEqual(controller.getSnapshot().memos, [updatedMemo]);
+	assert.deepEqual(controller.getSnapshot().memos, [firstMemo, secondMemo]);
 	controller.clearMemos();
 	assert.equal(controller.getSnapshot().memos, null);
 });
 
-test("marks a random reunion memo reviewed only when requested after open", async () => {
+test("marks a random reunion memo reviewed only through the explicit command", async () => {
 	const { RandomReunionController } = await loadController();
 	const reviewedMemoIds: string[] = [];
 	const controller = new RandomReunionController({
@@ -147,7 +143,7 @@ test("marks a random reunion memo reviewed only when requested after open", asyn
 		requestRender: () => {},
 	});
 
-	await controller.markReviewedAfterOpen("memo-1");
+	await controller.markReviewed("memo-1");
 
 	assert.deepEqual(reviewedMemoIds, ["memo-1"]);
 });

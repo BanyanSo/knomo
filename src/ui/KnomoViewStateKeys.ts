@@ -1,7 +1,7 @@
 import type { RecordStatsSnapshot, RecordStatsView } from "../services/RecordStatsService";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatDatePart } from "../utils/date";
-import { getMemoListStateKey } from "./MemoRenderRevision";
+import { getMemoListStateKey, getMemoRenderKey } from "./MemoRenderRevision";
 import type { CardFlowHeader, CardFlowPresentation } from "./KnomoCardFlowPresenter";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 import { getRecordStatsSearchFilterKey } from "./viewFilters";
@@ -150,7 +150,7 @@ export function getMobileSearchIdsKey(open: boolean, visibleMemos: readonly Memo
 	if (!open) {
 		return "closed";
 	}
-	return visibleMemos.map((memo) => memo.id).join("\n");
+	return visibleMemos.map(getMemoRenderKey).join("\n");
 }
 
 function getChangeIntent(previousViewStateKey: string, currentViewStateKey: string): CardFlowChangeIntent {

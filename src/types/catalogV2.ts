@@ -521,6 +521,7 @@ export type CatalogV2UpgradePhase =
 
 export type CatalogV2InstallMode =
 	| "uninitialized"
+	| "nonempty_unconfigured"
 	| "joining"
 	| "attention"
 	| "existing_v2"

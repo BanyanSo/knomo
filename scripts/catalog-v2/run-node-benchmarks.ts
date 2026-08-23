@@ -5,7 +5,7 @@ import { performance } from "node:perf_hooks";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
 import type { CatalogCursor, CatalogQuery } from "../../src/types/catalog";
-import type { CatalogV2MaterializedState } from "../../src/types/catalogV2";
+import type { IdentityLedgerClaimEvent, IdentityLedgerEventEnvelope } from "../../src/types/identityLedger";
 import type { CatalogPartitionInput } from "../../src/services/MemoCatalogService";
 import {
 	DEFAULT_BENCHMARK_ROOT,
@@ -31,17 +31,19 @@ interface CatalogNodeBenchmarkResult {
 		parsedObservationCount: number;
 		paginationPages: number;
 		cursorInvalidations: number;
+		incrementalPartitionUpdateCount: number;
+		incrementalUpdatedObservationCount: number;
 		aggregateMemoCount: number;
 		checkpointRoundTrip: boolean;
-		identityCheckpointMemoCount: number;
-		identityVaultReplayCount: number;
+		identityReducerMemoCount: number;
+		identityReducerEventCount: number;
 	};
 }
 
-export interface IdentityCheckpointBenchmarkResult {
+export interface IdentityLedgerReducerBenchmarkResult {
 	memoCount: number;
-	vaultReplayCount: number;
-	coldStartMs: number;
+	eventCount: number;
+	materializeMs: number;
 }
 
 const SEARCH_QUERIES = [
@@ -55,12 +57,10 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 	const [
 		{ DiaryMemoParser },
 		{ IndexedDbMemoCatalogStore },
-		{ IndexedDbCatalogV2StateStore },
 		{ MemoCatalogService },
 	] = await Promise.all([
 		import("../../src/services/DiaryMemoParser"),
 		import("../../src/services/IndexedDbMemoCatalogStore"),
-		import("../../src/services/IndexedDbCatalogV2StateStore"),
 		import("../../src/services/MemoCatalogService"),
 	]);
 	const rootDir = readStringArg(process.argv.slice(2), "--root") ?? DEFAULT_BENCHMARK_ROOT;
@@ -161,6 +161,8 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 	let cursor: CatalogCursor | null = null;
 	let paginationPages = 0;
 	let cursorInvalidations = 0;
+	let incrementalPartitionUpdateCount = 0;
+	let incrementalUpdatedObservationCount = 0;
 	for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
 		const request: CatalogQuery = { limit: manifest.pageSize, cursor };
 		const startedAt = performance.now();
@@ -175,8 +177,13 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 		if (pageIndex === 24) {
 			const file = benchmarkFiles[0];
 			if (file !== undefined) {
-				const bytes = fs.readFileSync(path.join(vaultDir, ...file.path.split("/")));
+				const originalBytes = fs.readFileSync(path.join(vaultDir, ...file.path.split("/")));
+				const originalText = new TextDecoder().decode(originalBytes);
+				const updatedText = originalText.replace("benchmark memo", "benchmark incremental memo");
+				if (updatedText === originalText) throw new Error("Incremental benchmark fixture has no mutable memo.");
+				const bytes = new TextEncoder().encode(updatedText);
 				const parsed = await parser.parse({ sourcePath: file.path, logicalDate: file.logicalDate, headings: [manifest.heading], bytes });
+				const incrementalStartedAt = performance.now();
 				await catalog.replaceFile({
 					inventory: { sourcePath: file.path, logicalDate: file.logicalDate, mtime: 999_999, size: bytes.byteLength },
 					sourceRevision: parsed.sourceRevision,
@@ -185,6 +192,11 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 					settingsFingerprint: "benchmark-v1",
 					auditedAt: 999_999,
 				});
+				pushMetric(metrics, "catalog.incrementalPartitionMs", performance.now() - incrementalStartedAt);
+				incrementalPartitionUpdateCount += 1;
+				const updatedBatch = await catalog.getFileRevisionBatch(file.path);
+				incrementalUpdatedObservationCount = updatedBatch?.observations.filter((observation) =>
+					observation.content.includes("benchmark incremental memo")).length ?? 0;
 			}
 		}
 		if (cursor === null) {
@@ -208,8 +220,8 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 	await store.setMeta("benchmarkCheckpoint", checkpoint);
 	const restoredCheckpoint = await store.getMeta<typeof checkpoint>("benchmarkCheckpoint");
 	pushMetric(metrics, "checkpoint.roundTripMs", performance.now() - checkpointStartedAt);
-	const identityCheckpoint = await runIdentityCheckpointBenchmark(factory, `${databaseName}-state`, 30_000);
-	pushMetric(metrics, "state.checkpointColdStartMs", identityCheckpoint.coldStartMs);
+	const identityReducer = await runIdentityLedgerReducerBenchmark(30_000);
+	pushMetric(metrics, "identity.reducerMaterializeMs", identityReducer.materializeMs);
 
 	const result: CatalogNodeBenchmarkResult = {
 		schemaVersion: 1,
@@ -223,10 +235,12 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 			parsedObservationCount,
 			paginationPages,
 			cursorInvalidations,
+			incrementalPartitionUpdateCount,
+			incrementalUpdatedObservationCount,
 			aggregateMemoCount,
 			checkpointRoundTrip: JSON.stringify(restoredCheckpoint) === JSON.stringify(checkpoint),
-			identityCheckpointMemoCount: identityCheckpoint.memoCount,
-			identityVaultReplayCount: identityCheckpoint.vaultReplayCount,
+			identityReducerMemoCount: identityReducer.memoCount,
+			identityReducerEventCount: identityReducer.eventCount,
 		},
 	};
 	const resultsDir = path.join(rootDir, "results");
@@ -237,58 +251,53 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 	return result;
 }
 
-export async function runIdentityCheckpointBenchmark(
-	factory: IDBFactory,
-	databaseName: string,
+export async function runIdentityLedgerReducerBenchmark(
 	memoCount: number,
-): Promise<IdentityCheckpointBenchmarkResult> {
+): Promise<IdentityLedgerReducerBenchmarkResult> {
 	await ensureBenchmarkObsidianStub();
-	const { IndexedDbCatalogV2StateStore } = await import("../../src/services/IndexedDbCatalogV2StateStore");
-	const store = new IndexedDbCatalogV2StateStore(databaseName, { factory, keyRange: IDBKeyRange });
-	await store.open();
-	const memos: CatalogV2MaterializedState["memos"] = {};
+	const { materializeIdentityLedger } = await import("../../src/services/IdentityLedgerService");
+	const envelopes: IdentityLedgerEventEnvelope[] = [];
 	for (let index = 0; index < memoCount; index += 1) {
-		const memoId = `benchmark-${String(index).padStart(5, "0")}`;
-		memos[memoId] = {
+		const ordinal = index + 1;
+		const eventId = `e_${ordinal.toString(16).padStart(32, "0")}`;
+		const memoId = `01991f40-7c00-7000-8000-${ordinal.toString(16).padStart(12, "0")}`;
+		const hashSuffix = ordinal.toString(16).padStart(8, "0").slice(-8);
+		const event: IdentityLedgerClaimEvent = {
+			schemaVersion: 1,
+			eventId,
+			writerId: "w_11111111111111111111111111111111",
 			memoId,
-			identityOperationIds: [`l_${String(index).padStart(64, "0")}`],
-			activeBindingHeads: [],
-			identityBindings: [],
-			deleteOperationIds: [],
-			deleteVersions: [],
-			restoreVersions: [],
-			restoredDeleteOperationIds: [],
-			purgedDeleteOperationIds: [],
-			relationEntries: [],
-			supersededRelationIds: [],
-			sourceMemoIds: [],
-			reviewOperationIds: [],
-			reviewCount: 0,
-			lastReviewedAt: null,
-			pendingCreateIds: [],
-			pendingCreateIntents: [],
+			type: "claim",
+			baseBindingId: null,
+			occurredAt: "2026-08-22T00:00:00.000Z",
+			evidence: {
+				observation: {
+					sourcePath: `Daily/${String(ordinal).padStart(5, "0")}.md`,
+					sourceRevision: ordinal.toString(16).padStart(64, "0"),
+					rawBlockHash: `fnv1a-${hashSuffix}`,
+					logicalDate: "2026-08-22",
+					section: "## Memos",
+					startLine: 1,
+					endLine: 1,
+					time: "09:00",
+					contentHash: `fnv1a-${hashSuffix}`,
+				},
+				createIntentEventId: null,
+			},
 		};
+		envelopes.push({
+			event,
+			digest: ordinal.toString(16).padStart(64, "0"),
+			sourcePath: `identity/segment-${eventId}.jsonl`,
+		});
 	}
-	await store.saveMaterializedState({
-		schemaVersion: 1,
-		memos,
-		quarantine: [],
-		awaitingWriterIds: [],
-		forkedWriterIds: [],
-		processedOperationCount: memoCount,
-	});
-	store.close();
-
-	const reopened = new IndexedDbCatalogV2StateStore(databaseName, { factory, keyRange: IDBKeyRange });
 	const startedAt = performance.now();
-	await reopened.open();
-	const restored = await reopened.loadMaterializedState();
-	const coldStartMs = performance.now() - startedAt;
-	reopened.close();
+	const snapshot = await materializeIdentityLedger(envelopes);
+	const materializeMs = performance.now() - startedAt;
 	return {
-		memoCount: Object.keys(restored?.memos ?? {}).length,
-		vaultReplayCount: 0,
-		coldStartMs,
+		memoCount: Object.keys(snapshot.memos).length,
+		eventCount: snapshot.eventCount,
+		materializeMs,
 	};
 }
 

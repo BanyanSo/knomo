@@ -51,6 +51,34 @@ test("Monthly folder migration only changes projection configuration", async () 
 	assert.equal(plugin.vault.exists("Archive/Memos/Memos-2026-05.md"), false);
 });
 
+test("legacy settings inherit the Knomo data root without silently initializing identity", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
+	delete legacySettings.knomoDataRoot;
+	delete legacySettings.knomoDataRootConfigured;
+	const plugin = await createPlugin({}, { settings: legacySettings });
+	const service = new SettingsService(plugin as never);
+
+	await service.loadSettings();
+
+	assert.equal(service.getSettings().knomoDataRoot, "Memos");
+	assert.equal(service.getSettings().knomoDataRootConfigured, false);
+	assert.equal(service.getSettings().settingsVersion, 4);
+});
+
+test("committing a Knomo data root updates identity location and Monthly projection together", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: createSettings() });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.commitKnomoDataRoot("Archive/Knomo");
+
+	assert.equal(service.getSettings().knomoDataRoot, "Archive/Knomo");
+	assert.equal(service.getSettings().knomoDataRootConfigured, true);
+	assert.equal(service.getSettings().monthlyMemoFolder, "Archive/Knomo");
+});
+
 test("Monthly filename migration derives periods from projection files and creates no backup", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const plugin = await createPlugin({
@@ -242,10 +270,12 @@ async function createPlugin(
 
 function createSettings(): KnomoSettings {
 	return {
-		settingsVersion: 2,
+		settingsVersion: 4,
 		dailyHeading: "## Knomo",
 		dailyInsertPosition: "bottom",
 		memoTimeFormat: "HH:mm:ss",
+		knomoDataRoot: "Memos",
+		knomoDataRootConfigured: true,
 		monthlyMemoFolder: "Memos",
 		monthlyMemoFileFormat: "Memos-YYYY-MM.md",
 		monthlyDateHeadingFormat: "## YYYY-MM-DD",

@@ -87,6 +87,7 @@ export function buildCatalogPartition(input: CatalogPartitionInput): CatalogFile
 		parserVersion: input.parserVersion,
 		settingsFingerprint: input.settingsFingerprint,
 		observationCount: observations.length,
+		observationKeys: observations.map((observation) => observation.observationKey),
 		auditedAt: input.auditedAt,
 	};
 	return {

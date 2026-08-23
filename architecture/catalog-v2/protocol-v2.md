@@ -1,5 +1,7 @@
 # Catalog V2 Protocol V2
 
+> 状态：冻结的只读兼容协议。自 2026-08-21 的 Protocol V3 架构决策起，V2 只作为既有工件的只读迁移输入；不得通过修改本文件来扩展或重解释 V2，也不得把 V3 语义写入 `protocolVersion = 2` / `schemaVersion = 2` 工件。当前运行时退出 V2 控制面的实现工作属于后续迁移阶段，本状态声明本身不代表该迁移已经完成。
+
 ## 1. 结论与边界
 
 Catalog V2 采用“每台设备独立重建本机 Catalog”的方向，本机 Catalog 仅是可丢弃的查询缓存。清空任意设备的 IndexedDB 后，共享 Vault 字节必须保持不变：Catalog 从 Daily 重建，稳定 identity 从 `_knomo-data` 的共享协议工件恢复。

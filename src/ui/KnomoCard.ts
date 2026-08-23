@@ -13,9 +13,11 @@ import {
 	getTrashCardActions,
 	getTrashMemoCardClass,
 	isCjkMemoContent,
+	isMemoCardMenuReady,
 } from "./KnomoCardMetadata";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
+import { getMemoRenderKey } from "./MemoRenderRevision";
 
 export interface MemoCardTimeBuoy {
 	status: TimeBuoyDateStatus;
@@ -55,10 +57,12 @@ export interface RenderTrashMemoCardOptions<TMemo extends MemoRecord = MemoRecor
 
 export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLElement, memo: TMemo, options: RenderMemoCardOptions<TMemo>): HTMLElement {
 	const markdownPriority = options.getMarkdownPriority(options.renderIndex);
+	const cardMenuReady = isMemoCardMenuReady(memo);
 	const shell = getMemoCardShell({
 		memoId: memo.id,
+		renderKey: getMemoRenderKey(memo),
 		includeActions: options.includeActions,
-		activeMenuMemoId: options.activeMenuMemoId,
+		activeMenuMemoId: cardMenuReady ? options.activeMenuMemoId : null,
 	});
 	const timeBuoyClass = options.timeBuoy === undefined
 		? ""
@@ -76,43 +80,37 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 			cls: "knomo-card-menu",
 			attr: {
 				type: "button",
-				"aria-label": t("card.moreActions"),
-				"aria-expanded": options.activeMenuMemoId === memo.id ? "true" : "false",
-				"data-action": "toggle-card-menu",
-				"data-memo-id": memo.id,
+				"aria-label": cardMenuReady ? t("card.moreActions") : t("card.actionsPreparing"),
+				"aria-expanded": cardMenuReady && options.activeMenuMemoId === memo.id ? "true" : "false",
+				...(cardMenuReady
+					? { "data-action": "toggle-card-menu", "data-memo-id": memo.id }
+					: { "aria-disabled": "true", title: t("card.actionsPreparing") }),
 			},
 		});
+		menu.disabled = !cardMenuReady;
 		setIcon(menu, "more-horizontal");
 
-		const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
-		for (const action of getMemoCardActions(memo)) {
-			renderCardAction(actions, memo.id, action.action, getMemoActionLabel(action.action), action.className);
-		}
-		if (memo.catalogV2?.resolved.kind === "ambiguous"
-			&& memo.catalogV2.resolved.reason !== "known_predecessor") {
-			for (const candidate of new Map(memo.catalogV2.resolved.candidates.map((item) => [item.memoId, item])).values()) {
-				const origin = candidate.origin;
-				const detail = origin === undefined
-					? candidate.memoId
-					: `${origin.sourcePath} · ${origin.logicalDate} ${origin.time}`;
+		if (cardMenuReady) {
+			const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
+			for (const action of getMemoCardActions(memo)) {
 				renderCardAction(
 					actions,
 					memo.id,
-					"confirm-identity",
-					t("card.confirmIdentityCandidate", { detail }),
-					"knomo-card-action",
-					candidate.memoId,
+					action.action,
+					getMemoActionLabel(action.action),
+					action.className,
+					action.candidateMemoId,
 				);
 			}
+			if ((options.randomCard || options.timeBuoy !== undefined)
+				&& (memo.catalogV2 === undefined || memo.catalogV2.capabilities.identity.review === "ready")) {
+				renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
+			}
+			actions.createDiv({
+				cls: "knomo-card-word-count",
+				text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }),
+			});
 		}
-		if ((options.randomCard || options.timeBuoy !== undefined)
-			&& (memo.catalogV2 === undefined || memo.catalogV2.capabilities.recordReview === "ready")) {
-			renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
-		}
-		actions.createDiv({
-			cls: "knomo-card-word-count",
-			text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }),
-		});
 	}
 
 	if (options.reusedBodyEl !== undefined && options.reusedBodyEl !== null) {

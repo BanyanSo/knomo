@@ -127,6 +127,7 @@ function makeObservation(
 	return {
 		sourcePath: inventory.sourcePath,
 		sourceRevision: "sha",
+		rawBlockHash: `raw-${startLine}`,
 		logicalDate: inventory.logicalDate,
 		section: "## Memos",
 		startLine,

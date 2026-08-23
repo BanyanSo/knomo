@@ -32,13 +32,13 @@ test("absence of a bootstrap remains uninitialized and writes no protocol files"
 	assert.equal(extractCatalogV2PluginConfig(harness.readData()), null);
 });
 
-test("Daily evidence without a bootstrap is joining, never fresh", async () => {
+test("Markdown evidence without Knomo data is nonempty and unconfigured, not joining", async () => {
 	const harness = createHarness({ settings: { monthlyMemoFolder: "Memos" } });
 	harness.addFile("Daily/2026-08-11.md", "## Memos\n");
 	const service = new CatalogV2SystemRootService(harness.app, harness.store, () => "Memos");
 
 	await service.initialize();
-	assert.equal(service.installMode, "joining");
+	assert.equal(service.installMode, "nonempty_unconfigured");
 	assert.equal(service.initializationAllowed, true);
 	assert.equal(harness.readFile(getCatalogBootstrapPath()), null);
 });
@@ -97,30 +97,30 @@ test("an orphaned V2 artifact blocks replacement initialization", async () => {
 	);
 });
 
-test("a bootstrap arriving after startup moves joining mode to existing V2", async () => {
+test("a bootstrap arriving after startup moves an unconfigured Vault to existing V2", async () => {
 	const harness = createHarness({ settings: { monthlyMemoFolder: "Memos" } });
 	harness.addFile("Daily/2026-08-11.md", "## Memos\n");
-	const joining = new CatalogV2SystemRootService(harness.app, harness.store, () => "Memos");
-	await joining.initialize();
+	const unconfigured = new CatalogV2SystemRootService(harness.app, harness.store, () => "Memos");
+	await unconfigured.initialize();
 	const initializer = new CatalogV2SystemRootService(harness.app, harness.store, () => "Memos");
 	await initializer.initialize();
 	await initializer.initializeVault(makeContract(), WRITER_ID, CREATED_AT, VAULT_ID);
 
-	assert.notEqual(await joining.refreshVaultContext(), null);
-	assert.equal(joining.installMode, "existing_v2");
+	assert.notEqual(await unconfigured.refreshVaultContext(), null);
+	assert.equal(unconfigured.installMode, "existing_v2");
 });
 
 test("root-bound artifact stores follow a late bootstrap instead of the local guessed root", async () => {
 	const harness = createHarness({ settings: { monthlyMemoFolder: "Memos" } });
 	harness.addFile("Daily/2026-08-11.md", "## Memos\n");
-	const joining = new CatalogV2SystemRootService(harness.app, harness.store, () => "Memos");
-	await joining.initialize();
-	const artifacts = new CatalogV2MigrationArtifactStore(harness.app, () => joining.catalogDataRoot);
-	const payloads = new CatalogV2DeletedPayloadStore(harness.app, () => joining.catalogDataRoot);
+	const unconfigured = new CatalogV2SystemRootService(harness.app, harness.store, () => "Memos");
+	await unconfigured.initialize();
+	const artifacts = new CatalogV2MigrationArtifactStore(harness.app, () => unconfigured.catalogDataRoot);
+	const payloads = new CatalogV2DeletedPayloadStore(harness.app, () => unconfigured.catalogDataRoot);
 	const initializer = new CatalogV2SystemRootService(harness.app, harness.store, () => "Shared");
 	await initializer.initialize();
 	await initializer.initializeVault(makeContract(), WRITER_ID, CREATED_AT, VAULT_ID);
-	await joining.refreshVaultContext();
+	await unconfigured.refreshVaultContext();
 	const result = await makeMigrationResult();
 	await artifacts.persistImportResults([result]);
 	const payload = await payloads.write({
@@ -138,7 +138,7 @@ test("root-bound artifact stores follow a late bootstrap instead of the local gu
 	});
 	if (result.kind !== "imported") throw new Error("Expected imported migration fixture.");
 
-	assert.equal(joining.catalogDataRoot, "Shared/_knomo-data");
+	assert.equal(unconfigured.catalogDataRoot, "Shared/_knomo-data");
 	assert.notEqual(harness.readFile(`Shared/_knomo-data/${result.packagePath}`), null);
 	assert.equal(harness.readFile(`Memos/_knomo-data/${result.packagePath}`), null);
 	assert.equal(payload.path.startsWith("Shared/_knomo-data/state/deleted/"), true);
@@ -244,10 +244,12 @@ function makeContract() {
 
 function makeSettings(): KnomoSettings {
 	return {
-		settingsVersion: 3,
+		settingsVersion: 4,
 		dailyHeading: "## Memos",
 		dailyInsertPosition: "bottom",
 		memoTimeFormat: "HH:mm:ss",
+		knomoDataRoot: "Memos",
+		knomoDataRootConfigured: true,
 		monthlyMemoFolder: "Memos",
 		monthlyMemoFileFormat: "Memos-YYYY-MM.md",
 		monthlyDateHeadingFormat: "## [[YYYY-MM-DD]]",

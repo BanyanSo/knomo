@@ -145,6 +145,22 @@ export class SettingsService {
 		));
 	}
 
+	async commitKnomoDataRoot(nextDataRoot: string): Promise<KnomoSettings> {
+		return this.runSettingsWriteExclusive(async () => {
+			const normalizedRoot = normalizeVaultPath(nextDataRoot);
+			const prepared = await this.monthlyFolderMigrationService.prepareMonthlyMemoFolderSettings(
+				this.settings,
+				normalizedRoot,
+			);
+			return this.persistSettings({
+				...prepared,
+				knomoDataRoot: normalizedRoot,
+				knomoDataRootConfigured: true,
+				monthlyMemoFolder: normalizedRoot,
+			});
+		});
+	}
+
 	private async persistSettings(settings: KnomoSettings): Promise<KnomoSettings> {
 		const nextSettings = this.migrateSettings(settings);
 		await this.pluginDataStore.mutate((savedData) => ({

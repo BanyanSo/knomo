@@ -13,8 +13,17 @@ import type { IndexedDbCatalogV2TransactionStore } from "../src/services/Indexed
 import { buildCatalogPartition, MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { MemoObservation } from "../src/types/catalog";
-import type { CatalogV2MaterializedState, IdentityEvidence, StateOperation } from "../src/types/catalogV2";
+import type {
+	IdentityLedgerBinding,
+	IdentityLedgerCreatePlan,
+	IdentityLedgerDeleteRecord,
+	IdentityLedgerMutationService,
+	IdentityLedgerSnapshot,
+} from "../src/types/identityLedger";
+import type { MarkdownMutationService } from "../src/types/memoOperations";
+import type { CatalogV2InstallMode, CatalogV2MaterializedState, IdentityEvidence, StateOperation } from "../src/types/catalogV2";
 import type { CatalogV2SharedMutationInspection, CatalogV2VerifiedVaultContext } from "../src/types/catalogV2Protocol";
+import type { CatalogV2DeletedMemoItem } from "../src/types/catalogV2View";
 
 test("分页只决定展示窗口，身份解析仍使用完整文件 revision", async () => {
 	const sourcePath = "Daily/2026-08-09.md";
@@ -72,7 +81,7 @@ test("分页只决定展示窗口，身份解析仍使用完整文件 revision",
 	assert.equal(page.items[0]?.resolved.kind, "ambiguous");
 });
 
-test("a manual Daily edit remains read-only and never commits an external rebind", async () => {
+test("a manual Daily edit remains content-editable and never commits an external rebind during resolution", async () => {
 	const sourcePath = "Daily/2026-08-09.md";
 	const previous = makeObservation(sourcePath, "a".repeat(64), 1);
 	const current = { ...makeObservation(sourcePath, "b".repeat(64), 1), content: "edited", contentHash: "fnv1a-87654321" };
@@ -149,7 +158,8 @@ test("a manual Daily edit remains read-only and never commits an external rebind
 
 	const page = await service.getReadService().query({ limit: 10 });
 	assert.equal(page.items[0]?.memoId, null);
-	assert.notEqual(page.items[0]?.capabilities.edit, "ready");
+	assert.equal(page.items[0]?.capabilities.markdown.edit, true);
+	assert.equal(page.items[0]?.capabilities.identity.crossDeviceIdentity, "conflicted");
 	assert.deepEqual(reboundOperations, []);
 });
 
@@ -269,7 +279,8 @@ test("a shared prepare restores the original memoId candidate after local transa
 	const item = (await service.getReadService().query({ limit: 1 })).items[0];
 	assert.equal(item?.resolved.kind, "ambiguous");
 	assert.equal(item?.resolved.kind === "ambiguous" ? item.resolved.candidates[0]?.memoId : null, memoId);
-	assert.equal(item?.capabilities.edit, "blocked_ambiguous");
+	assert.equal(item?.capabilities.markdown.edit, true);
+	assert.equal(item?.capabilities.identity.relation, "conflicted");
 });
 
 test("verified native reads do not report legacy migration as user-visible settling", async () => {
@@ -286,7 +297,7 @@ test("verified native reads do not report legacy migration as user-visible settl
 	assert.equal(page.degraded, false);
 });
 
-test("legacy upgrade and fresh history building expose different read states", async () => {
+test("legacy install mode does not alter Catalog read state", async () => {
 	const settlement = {
 		stateComplete: true,
 		migrationComplete: false,
@@ -296,14 +307,14 @@ test("legacy upgrade and fresh history building expose different read states", a
 	const upgrade = await createReadStateService("legacy_upgrade", settlement);
 	await upgrade.getReadService().query({ limit: 1 });
 	const upgradePage = await upgrade.getReadService().query({ limit: 1 });
-	assert.equal(upgradePage.readState, "upgrade_building");
+	assert.equal(upgradePage.readState, "ready");
 
 	const fresh = await createReadStateService("existing_v2", settlement, "partial");
 	const freshPage = await fresh.getReadService().query({ limit: 1 });
 	assert.equal(freshPage.readState, "history_building");
 });
 
-test("ordinary edit uses per-memo readiness while unrelated Catalog history is still building", async () => {
+test("ordinary edit uses ObservationHandle while unrelated Catalog history is still building", async () => {
 	const sourcePath = "Daily/2026-08-09.md";
 	const observation = makeObservation(sourcePath, "a".repeat(64), 1);
 	const memoId = "m_77777777777777777777777777777777";
@@ -349,19 +360,24 @@ test("ordinary edit uses per-memo readiness while unrelated Catalog history is s
 		stat: { ctime: 1, mtime: 1, size: 1 },
 	});
 	let editCalls = 0;
-	const mutationRuntime = {
-		edit: async (input: { handle: import("../src/types/catalog").ResolvedMemoHandle }) => {
+	const markdownMutations = {
+		edit: async () => {
 			editCalls += 1;
-			return { handle: input.handle, dailySaved: true as const, followUpPending: false };
+			return {
+				status: "committed_identity_pending" as const,
+				observation,
+				sourcePaths: [sourcePath],
+				catalogUpdatePending: false,
+			};
 		},
-	} as unknown as CatalogV2MutationRuntime;
+	} as unknown as MarkdownMutationService;
 	const service = new CatalogV2FeatureService(
 		{ vault: { getAbstractFileByPath: () => file } } as unknown as App,
 		catalog,
 		null,
 		stateCoordinator,
 		null,
-		mutationRuntime,
+		null,
 		null,
 		{
 			installMode: "existing_v2",
@@ -373,13 +389,15 @@ test("ordinary edit uses per-memo readiness while unrelated Catalog history is s
 			getMemoTimeFormat: () => "HH:mm",
 			rebuildLocalCatalog: async () => undefined,
 		},
+		markdownMutations,
 	);
 	await service.getReadService().materializeResolutionSnapshot();
 	const page = await service.getReadService().query({ limit: 1 });
 	const item = page.items[0];
 	assert.equal(page.readState, "history_building");
-	assert.equal(item?.capabilities.edit, "ready");
-	assert.equal(service.getOperationalState(page.readState).capabilities.createNew, false);
+	assert.equal(item?.capabilities.markdown.edit, true);
+	assert.equal(item?.capabilities.identity.crossDeviceIdentity, "ready");
+	assert.equal(service.getOperationalState(page.readState).capabilities.createNew, true);
 	assert.ok(item !== undefined);
 
 	const result = await service.edit(item, "updated");
@@ -388,16 +406,18 @@ test("ordinary edit uses per-memo readiness while unrelated Catalog history is s
 	assert.equal(result.status, "saved");
 });
 
-test("install modes expose actionable operational states", async () => {
+test("install modes do not gate Markdown or Catalog operational states", async () => {
 	const settlement = { stateComplete: false, migrationComplete: false, revisionStable: false, historical: false };
 	const uninitialized = await createReadStateService("uninitialized", settlement);
+	const nonemptyUnconfigured = await createReadStateService("nonempty_unconfigured", settlement);
 	const joining = await createReadStateService("joining", settlement);
 	const attention = await createReadStateService("attention", settlement);
 
-	assert.equal((await uninitialized.getReadService().query({ limit: 1 })).readState, "needs_initialization");
-	assert.equal((await joining.getReadService().query({ limit: 1 })).readState, "waiting_for_sync");
-	assert.equal((await attention.getReadService().query({ limit: 1 })).readState, "attention");
-	assert.equal(uninitialized.getOperationalState().capabilities.createNew, false);
+	assert.equal((await uninitialized.getReadService().query({ limit: 1 })).readState, "ready");
+	assert.equal((await nonemptyUnconfigured.getReadService().query({ limit: 1 })).readState, "ready");
+	assert.equal((await joining.getReadService().query({ limit: 1 })).readState, "ready");
+	assert.equal((await attention.getReadService().query({ limit: 1 })).readState, "ready");
+	assert.equal(uninitialized.getOperationalState().capabilities.createNew, true);
 	assert.equal(joining.getOperationalState().capabilities.projectMonthly, false);
 	assert.equal(attention.getOperationalState().capabilities.physicalGc, false);
 });
@@ -464,6 +484,7 @@ test("explicit recovery refreshes only the affected Daily path after runtime val
 			getMemoTimeFormat: () => "HH:mm",
 			rebuildLocalCatalog: async () => undefined,
 		},
+		{} as MarkdownMutationService,
 	);
 
 	assert.equal((await service.inspectPendingMutations()).items.length, 1);
@@ -472,8 +493,151 @@ test("explicit recovery refreshes only the affected Daily path after runtime val
 	assert.deepEqual(refreshedPaths, [[sourcePath]]);
 });
 
+test("P1 第 5 步：V3 edit/move 在 Daily commit 后续写 rebind，review 不依赖 V2 authority", async () => {
+	const before = makeObservation("Daily/2026-08-09.md", "a".repeat(64), 1);
+	const afterEdit = { ...makeObservation(before.sourcePath, "b".repeat(64), 1), content: "edited" };
+	const afterMove = { ...makeObservation("Daily/2026-08-10.md", "c".repeat(64), 1), logicalDate: "2026-08-10" };
+	const order: string[] = [];
+	const ledger = makeIdentityLedgerMutationMock(before, {
+		onRebind: (_before, _after, reason) => {
+			order.push(`rebind:${reason}`);
+			return makeLedgerBinding(_after);
+		},
+		onReview: () => { order.push("review"); },
+	});
+	const markdownMutations = {
+		edit: async () => {
+			order.push("daily:edit");
+			return committedMarkdownResult(afterEdit);
+		},
+		move: async () => {
+			order.push("daily:move");
+			return committedMarkdownResult(afterMove);
+		},
+	} as unknown as MarkdownMutationService;
+	const service = await createV3FeatureService(before, ledger, markdownMutations);
+	const item = (await service.getReadService().query({ limit: 1 })).items[0];
+	assert.ok(item !== undefined);
+
+	await service.edit(item, "edited");
+	await service.move(item, "2026-08-10");
+	await service.recordReview(item);
+
+	assert.deepEqual(order, ["daily:edit", "rebind:edit", "daily:move", "rebind:move", "review"]);
+});
+
+test("P1 第 5 步：V3 repair 与 adoption 都只走 Identity Ledger", async () => {
+	const observation = makeObservation("Daily/2026-08-09.md", "a".repeat(64), 1);
+	const repairedMemoId = "01991f40-7c00-7111-9111-111111111111";
+	let repairCalls = 0;
+	let adoptionCalls = 0;
+	const conflictLedger = makeIdentityLedgerMutationMock(observation, {
+		state: "conflicted",
+		onRepair: () => {
+			repairCalls += 1;
+			return makeLedgerBinding(observation, repairedMemoId);
+		},
+	});
+	const repairService = await createV3FeatureService(observation, conflictLedger, {} as MarkdownMutationService);
+	const conflictItem = (await repairService.getReadService().query({ limit: 1 })).items[0];
+	assert.ok(conflictItem !== undefined);
+	assert.equal(conflictItem.resolved.kind, "ambiguous");
+
+	await repairService.repairIdentity(conflictItem, repairedMemoId);
+
+	const adoptionLedger = makeIdentityLedgerMutationMock(observation, {
+		state: "unbound",
+		onAdopt: () => {
+			adoptionCalls += 1;
+			return makeLedgerBinding(observation, repairedMemoId);
+		},
+	});
+	const adoptionService = await createV3FeatureService(observation, adoptionLedger, {} as MarkdownMutationService);
+	const observedItem = (await adoptionService.getReadService().query({ limit: 1 })).items[0];
+	assert.ok(observedItem !== undefined);
+	assert.equal(observedItem.resolved.kind, "observed");
+	assert.equal(adoptionService.getOperationalState().capabilities.adoptExisting, true);
+	assert.equal(await adoptionService.adoptMemo(observedItem), repairedMemoId);
+
+	assert.equal(repairCalls, 1);
+	assert.equal(adoptionCalls, 1);
+});
+
+test("P1 第 7 步：可恢复删除先持久化 payload 再删 Daily，恢复先写正文再追加 restore", async () => {
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1);
+	const order: string[] = [];
+	let activeDelete: IdentityLedgerDeleteRecord | null = null;
+	const baseLedger = makeIdentityLedgerMutationMock(observation);
+	const binding = baseLedger.resolveObservation(observation);
+	assert.ok(binding !== null);
+	const identityLedger: IdentityLedgerMutationService = {
+		...baseLedger,
+		getActiveDeletes: () => activeDelete === null ? [] : [activeDelete],
+		recordDeletePayload: async (current, evidence) => {
+			order.push("identity-delete-payload");
+			activeDelete = {
+				memoId: current.memoId,
+				deleteEventId: "e_33333333333333333333333333333333",
+				baseBindingId: current.bindingId,
+				evidence,
+			};
+			return activeDelete;
+		},
+		recordRestore: async (_record, restored) => {
+			order.push("identity-restore");
+			activeDelete = null;
+			return makeLedgerBinding(restored, binding.memoId);
+		},
+	};
+	const rawBlock = "- 09:00 same";
+	const markdownMutations = {
+		captureObservation: async () => {
+			order.push("capture-daily");
+			return { observation, rawBlock };
+		},
+		remove: async () => {
+			order.push("remove-daily");
+			return {
+				status: "committed_identity_pending" as const,
+				observation: null,
+				sourcePaths: [observation.sourcePath],
+				catalogUpdatePending: false,
+			};
+		},
+		restore: async () => {
+			order.push("restore-daily");
+			return {
+				status: "committed_identity_pending" as const,
+				observation,
+				sourcePaths: [observation.sourcePath],
+				catalogUpdatePending: false,
+			};
+		},
+	} as unknown as MarkdownMutationService;
+	const service = await createV3FeatureService(observation, identityLedger, markdownMutations);
+	const item = (await service.getReadService().query({ limit: 1 })).items[0];
+	assert.ok(item !== undefined);
+
+	await service.delete(item);
+	assert.deepEqual(order, ["capture-daily", "identity-delete-payload", "remove-daily"]);
+	const deleteRecord = identityLedger.getActiveDeletes?.()[0];
+	assert.ok(deleteRecord !== undefined);
+	await service.restore({
+		memoId: binding.memoId,
+		identityDeleteEventId: deleteRecord.deleteEventId,
+	} as CatalogV2DeletedMemoItem);
+	assert.deepEqual(order, [
+		"capture-daily",
+		"identity-delete-payload",
+		"remove-daily",
+		"restore-daily",
+		"identity-restore",
+	]);
+	assert.equal(activeDelete, null);
+});
+
 async function createReadStateService(
-	installMode: "uninitialized" | "joining" | "attention" | "existing_v2" | "legacy_upgrade",
+	installMode: CatalogV2InstallMode,
 	settlement: { stateComplete: boolean; migrationComplete: boolean; revisionStable: boolean; historical: boolean },
 	coverageKind: "complete" | "partial" = "complete",
 	transactionStore: IndexedDbCatalogV2TransactionStore | null = null,
@@ -523,15 +687,179 @@ async function createReadStateService(
 			getMemoTimeFormat: () => "HH:mm",
 			rebuildLocalCatalog: async () => undefined,
 		},
+		{} as MarkdownMutationService,
 	);
 	await service.getReadService().materializeResolutionSnapshot();
 	return service;
+}
+
+async function createV3FeatureService(
+	observation: MemoObservation,
+	identityLedger: IdentityLedgerMutationService,
+	markdownMutations: MarkdownMutationService,
+): Promise<CatalogV2FeatureService> {
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	await store.replaceFilePartition(buildCatalogPartition({
+		inventory: {
+			sourcePath: observation.sourcePath,
+			logicalDate: observation.logicalDate,
+			mtime: 1,
+			size: 1,
+		},
+		sourceRevision: observation.sourceRevision,
+		observations: [observation],
+		parserVersion: 1,
+		settingsFingerprint: "settings-v3",
+		auditedAt: 1,
+	}));
+	await store.setCoverage({
+		kind: "complete",
+		coveredFromDate: observation.logicalDate,
+		pendingFileCount: 0,
+		coveredFileCount: 1,
+		totalFileCount: 1,
+	});
+	const service = new CatalogV2FeatureService(
+		{} as App,
+		catalog,
+		null,
+		null,
+		null,
+		null,
+		null,
+		{
+			installMode: "uninitialized",
+			getHeadings: () => ["## Memos"],
+			getOrCreateDailyFile: async () => { throw new Error("not used"); },
+			getDailyFileForDate: async () => { throw new Error("not used"); },
+			refreshCatalogPaths: async () => undefined,
+			refreshLocalCatalog: async () => undefined,
+			getMemoTimeFormat: () => "HH:mm",
+			rebuildLocalCatalog: async () => undefined,
+		},
+		markdownMutations,
+		identityLedger,
+	);
+	await service.getReadService().materializeResolutionSnapshot();
+	return service;
+}
+
+function makeIdentityLedgerMutationMock(
+	observation: MemoObservation,
+	options: {
+		state?: "identified" | "conflicted" | "unbound";
+		onRebind?: (
+			before: MemoObservation,
+			after: MemoObservation,
+			reason: "edit" | "move" | "rename" | "restore" | "manual_resolution",
+		) => IdentityLedgerBinding;
+		onReview?: () => void;
+		onRepair?: () => IdentityLedgerBinding;
+		onAdopt?: () => IdentityLedgerBinding;
+	} = {},
+): IdentityLedgerMutationService {
+	const memoId = "01991f40-7c00-7111-9111-111111111111";
+	const binding = makeLedgerBinding(observation, memoId);
+	const state = options.state ?? "identified";
+	const plan: IdentityLedgerCreatePlan = {
+		memoId,
+		intentDurable: true,
+		intent: {
+			schemaVersion: 1,
+			eventId: "e_22222222222222222222222222222222",
+			writerId: "w_11111111111111111111111111111111",
+			memoId,
+			type: "create_intent",
+			baseBindingId: null,
+			occurredAt: "2026-08-22T00:00:00.000Z",
+			evidence: {
+				targetPath: observation.sourcePath,
+				logicalDate: observation.logicalDate,
+				time: observation.time,
+				contentHash: observation.contentHash,
+				sourceMemoId: null,
+			},
+		},
+	};
+	const memos: IdentityLedgerSnapshot["memos"] = {};
+	if (state === "conflicted") {
+		memos[memoId] = {
+			memoId,
+			bindings: [binding],
+			conflicted: true,
+			conflictBaseBindingId: "e_00000000000000000000000000000000",
+			sourceMemoIds: [],
+			reviewCount: 0,
+			lastReviewedAt: null,
+		};
+	}
+	return {
+		getRevision: () => "identity-v3-test",
+		getStatus: () => "ready",
+		getSnapshot: () => ({
+			revision: "identity-v3-test",
+			eventCount: 2,
+			memos,
+			pendingIntents: [],
+			quarantinedEventIds: [],
+		}),
+		resolveObservation: () => state === "identified" ? binding : null,
+		resolveObservationState: () => state === "identified"
+			? { kind: "identified", binding }
+			: state === "conflicted"
+				? { kind: "conflicted", memoIds: [memoId], bindings: [binding] }
+				: { kind: "unbound" },
+		getSourceMemoId: () => null,
+		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		beginCreate: async () => plan,
+		finishCreate: async () => binding,
+		reconcilePendingCreates: async () => 0,
+		reconcileRevision: async () => ({ appendedEventCount: 0, conflictedMemoIds: [] }),
+		rebindObservation: async (before, after, reason) => options.onRebind?.(before, after, reason) ?? binding,
+		adoptObservation: async () => options.onAdopt?.() ?? binding,
+		repairConflict: async () => options.onRepair?.() ?? binding,
+		recordReview: async () => { options.onReview?.(); },
+	};
+}
+
+function makeLedgerBinding(
+	observation: MemoObservation,
+	memoId = "01991f40-7c00-7111-9111-111111111111",
+): IdentityLedgerBinding {
+	return {
+		memoId,
+		bindingId: "e_11111111111111111111111111111111",
+		identityRevision: "identity-v3-test",
+		evidence: {
+			sourcePath: observation.sourcePath,
+			sourceRevision: observation.sourceRevision,
+			rawBlockHash: observation.rawBlockHash,
+			logicalDate: observation.logicalDate,
+			section: observation.section,
+			startLine: observation.startLine,
+			endLine: observation.endLine,
+			time: observation.time,
+			contentHash: observation.contentHash,
+		},
+	};
+}
+
+function committedMarkdownResult(observation: MemoObservation) {
+	return {
+		status: "committed_identity_pending" as const,
+		observation,
+		sourcePaths: [observation.sourcePath],
+		catalogUpdatePending: false,
+	};
 }
 
 function makeObservation(sourcePath: string, sourceRevision: string, startLine: number): MemoObservation {
 	return {
 		sourcePath,
 		sourceRevision,
+		rawBlockHash: "fnv1a-rawblock",
 		logicalDate: "2026-08-09",
 		section: "## Memos",
 		startLine,

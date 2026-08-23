@@ -1450,7 +1450,8 @@ function getLineStarts(content: string): number[] {
 }
 
 export function insertRawBlock(content: string, rawBlock: string, section: string | null): string {
-	if (!/^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?: |$)/u.test(rawBlock)) {
+	const firstLine = rawBlock.split(/\r\n|\r|\n/u, 1)[0] ?? "";
+	if (!/^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?: |$)/u.test(firstLine)) {
 		throw new Error("A Daily memo raw block must start with a valid root-level time line.");
 	}
 	const eol = content.includes("\r\n") ? "\r\n" : "\n";

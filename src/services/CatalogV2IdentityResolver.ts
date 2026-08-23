@@ -1,7 +1,6 @@
 import type {
 	CatalogFileRevisionBatch,
 	IdentityCandidate,
-	MemoCapabilities,
 	MemoObservation,
 	ResolvedMemo,
 	ResolvedMemoHandle,
@@ -13,6 +12,7 @@ import type {
 	LegacyEvidence,
 } from "../types/catalogV2";
 import type { CatalogV2FileRevisionTransition } from "../types/catalogV2Protocol";
+import { createResolvedMemoCapabilities } from "./MemoCapabilityModel";
 
 export interface CatalogV2LocalIdentityIntent {
 	memoId: string;
@@ -121,11 +121,14 @@ function resolveSelections(
 					&& !hasBlockingStateAttention(state, assigned.memoId);
 				return {
 					kind: "identified",
-					memoId: assigned.memoId,
-					activeBindingId: assigned.bindingId,
 					bindingEvidence: getActiveBindingEvidence(state, assigned.memoId, assigned.bindingId),
+					identityHandle: {
+						memoId: assigned.memoId,
+						activeBindingId: assigned.bindingId,
+						identityRevision: stateRevision,
+					},
 					observation: selection.observation,
-					capabilities: createCapabilities(ready ? "ready" : "blocked_settling"),
+					capabilities: createResolvedMemoCapabilities(ready ? "ready" : "syncing"),
 					stateRevision,
 				};
 			}
@@ -134,6 +137,7 @@ function resolveSelections(
 				const binding = state.memos[predecessor]?.activeBindingHeads[0];
 				return {
 					kind: "ambiguous",
+					identityHandle: null,
 					observation: selection.observation,
 					candidates: [{
 						memoId: predecessor,
@@ -141,7 +145,7 @@ function resolveSelections(
 						...(binding === undefined ? {} : { origin: evidenceOrigin(binding.evidence) }),
 					}],
 					reason: "known_predecessor",
-					capabilities: createCapabilities("blocked_waiting_sync"),
+					capabilities: createResolvedMemoCapabilities("syncing"),
 					stateRevision,
 				};
 			}
@@ -153,11 +157,12 @@ function resolveSelections(
 				}
 				return {
 					kind: "ambiguous",
+					identityHandle: null,
 					observation: selection.observation,
 					candidates: dedupePublicCandidates(candidates),
 					reason: selection.candidates.every((candidate) => candidate.source === "manual_successor")
 						? "manual_successor" : "ambiguous",
-					capabilities: createCapabilities("blocked_ambiguous"),
+					capabilities: createResolvedMemoCapabilities("conflicted"),
 					stateRevision,
 				};
 			}
@@ -167,9 +172,10 @@ function resolveSelections(
 				: complete ? "eligible" : "settling";
 			return {
 				kind: "observed",
+				identityHandle: null,
 				observation: selection.observation,
 				adoption,
-				capabilities: createCapabilities(adoption === "eligible" ? "adopt_then_retry" : "blocked_settling"),
+				capabilities: createResolvedMemoCapabilities(adoption === "settling" ? "syncing" : "absent"),
 				stateRevision,
 			};
 		});
@@ -198,15 +204,19 @@ function blockDuplicateAssignments(
 ): ResolvedMemo[] {
 	const counts = new Map<string, number>();
 	for (const memo of resolved) {
-		if (memo.kind === "identified") counts.set(memo.memoId, (counts.get(memo.memoId) ?? 0) + 1);
+		if (memo.kind === "identified") {
+			const memoId = memo.identityHandle.memoId;
+			counts.set(memoId, (counts.get(memoId) ?? 0) + 1);
+		}
 	}
 	return resolved.map((memo, index) => {
-		if (memo.kind !== "identified" || counts.get(memo.memoId) === 1) return memo;
+		if (memo.kind !== "identified" || counts.get(memo.identityHandle.memoId) === 1) return memo;
 		return {
 			kind: "ambiguous",
+			identityHandle: null,
 			observation: memo.observation,
 			candidates: dedupePublicCandidates((selections[index]?.candidates ?? []).map(toPublicCandidate)),
-			capabilities: createCapabilities("blocked_ambiguous"),
+			capabilities: createResolvedMemoCapabilities("conflicted"),
 			stateRevision,
 		};
 	});
@@ -248,13 +258,14 @@ export class CatalogV2IdentityIndex {
 }
 
 export function createResolvedMemoHandle(memo: ResolvedMemo | null): ResolvedMemoHandle | null {
-	if (memo === null || memo.kind !== "identified" || memo.capabilities.edit !== "ready") return null;
+	if (memo === null || memo.kind !== "identified"
+		|| memo.capabilities.identity.crossDeviceIdentity !== "ready") return null;
 	return {
-		memoId: memo.memoId,
-		activeBindingId: memo.activeBindingId,
+		memoId: memo.identityHandle.memoId,
+		activeBindingId: memo.identityHandle.activeBindingId,
 		evidence: observationToIdentityEvidence(memo.observation),
 		bindingEvidence: memo.bindingEvidence,
-		stateRevision: memo.stateRevision,
+		stateRevision: memo.identityHandle.identityRevision,
 	};
 }
 
@@ -608,22 +619,6 @@ function isMemoReady(
 		&& !blockedMemoIds.includes(memoId)
 		&& !state.forkedWriterIds.length
 		&& !hasBlockingStateAttention(state, memoId);
-}
-
-function createCapabilities(mode: MemoCapabilities["edit"]): MemoCapabilities {
-	return {
-		view: true,
-		copy: true,
-		openDaily: true,
-		openLinks: true,
-		openImages: true,
-		copyAsNew: mode,
-		edit: mode,
-		toggleTask: mode,
-		delete: mode,
-		createReference: mode,
-		recordReview: mode,
-	};
 }
 
 function dedupeCandidates(candidates: readonly ResolverCandidate[]): ResolverCandidate[] {

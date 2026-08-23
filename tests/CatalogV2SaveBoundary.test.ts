@@ -5,10 +5,17 @@ import type { App } from "obsidian";
 
 import { t } from "../src/i18n";
 import { CatalogV2FeatureService, type CatalogV2FeatureServiceOptions } from "../src/services/CatalogV2FeatureService";
+import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import type { CatalogV2MutationRuntime } from "../src/services/CatalogV2MutationRuntime";
 import type { CatalogV2StateShadowCoordinator } from "../src/services/CatalogV2StateShadowCoordinator";
 import type { MemoCatalogService } from "../src/services/MemoCatalogService";
 import type { MemoObservation, ResolvedMemoHandle } from "../src/types/catalog";
+import type { MarkdownMutationService } from "../src/types/memoOperations";
+import type {
+	IdentityLedgerBinding,
+	IdentityLedgerCreatePlan,
+	IdentityLedgerMutationService,
+} from "../src/types/identityLedger";
 import type {
 	CatalogV2DeletedMemoItem,
 	CatalogV2MemoItem,
@@ -23,7 +30,7 @@ type FailurePoint = "catalog_refresh" | "state_capture" | "resolution_materializ
 
 interface ExpectedSaveResult {
 	status: "saved";
-	memoId: string;
+	memoId: string | null;
 	memo: CatalogV2MemoItem | null;
 	timeBuoyDates: string[];
 	followUpPending: boolean;
@@ -38,7 +45,7 @@ test("create/edit 的 post-commit 本机收尾失败仍返回已保存状态", a
 				const result = await runFeatureSave(harness, operation) as unknown as ExpectedSaveResult;
 
 				assert.equal(result.status, "saved");
-				assert.equal(result.memoId, "memo-save-boundary");
+				assert.equal(result.memoId, null);
 				assert.equal(result.localRefreshPending, true);
 				assert.equal(harness.getCommitCount(), 1);
 				assert.equal(harness.getDailyContent(), "## Memos\n- 09:00 edited @2026-08-30\n");
@@ -103,7 +110,7 @@ test("显式 Daily recovery 已完成后本机收尾失败仍返回完成", asyn
 	}
 });
 
-test("composer 在 post-commit 收尾失败后清空草稿且不会再次创建正文", async () => {
+test("composer 在 post-commit 收尾失败后清空草稿且不显示内联刷新提示", async () => {
 	const harness = createViewHarness("post_commit");
 
 	await harness.saveInput();
@@ -112,7 +119,7 @@ test("composer 在 post-commit 收尾失败后清空草稿且不会再次创建�
 	assert.equal(harness.getDraftContent(), "");
 	assert.equal(harness.getCreateCalls(), 1);
 	assert.equal(harness.getStatuses().some((item) => item.isError), false);
-	assert.notEqual(harness.getStatuses().at(-1)?.message, "");
+	assert.equal(harness.getStatuses().some((item) => item.message.length > 0), false);
 
 	await harness.saveInput();
 	assert.equal(harness.getCreateCalls(), 1);
@@ -127,6 +134,75 @@ test("composer 在 pre-commit 失败后显示错误并保留草稿", async () =>
 	assert.equal(harness.getDraftContent(), "draft memo");
 	assert.equal(harness.getCreateCalls(), 1);
 	assert.equal(harness.getStatuses().at(-1)?.isError, true);
+});
+
+test("非空未配置 Vault 不再初始化身份协议，直接保存当前草稿", async () => {
+	const harness = createViewHarness("post_commit", {
+		installMode: "nonempty_unconfigured",
+		initializeResult: true,
+	});
+
+	await harness.saveInput();
+
+	assert.equal(harness.getInitializeCalls(), 0);
+	assert.equal(harness.getCreateCalls(), 1);
+	assert.equal(harness.input.value, "");
+});
+
+test("身份初始化回调不可用也不阻塞首次 Daily 保存", async () => {
+	const harness = createViewHarness("post_commit", {
+		installMode: "nonempty_unconfigured",
+		initializeResult: false,
+	});
+
+	await harness.saveInput();
+
+	assert.equal(harness.getInitializeCalls(), 0);
+	assert.equal(harness.getCreateCalls(), 1);
+	assert.equal(harness.input.value, "");
+	assert.equal(harness.getDraftContent(), "");
+});
+
+test("P0 第 4 步 create 顺序固定为 intent -> Daily -> claim，成功后返回稳定 memoId", async () => {
+	const order: string[] = [];
+	const plan = makeIdentityCreatePlan(true);
+	const ledger = makeIdentityLedgerStub(plan, order);
+	const harness = createFeatureHarness(null, false, { identityLedger: ledger, order });
+
+	const result = await harness.service.create("edited @2026-08-30", null);
+
+	assert.deepEqual(order, ["intent", "daily", "claim"]);
+	assert.equal(result.status, "saved");
+	assert.equal(result.memoId, plan.memoId);
+	assert.equal(result.followUpPending, false);
+	assert.equal(harness.getCommitCount(), 1);
+});
+
+test("V3-FAIL-005：Identity Ledger 写失败不阻塞 Daily，结果明确保持 pending", async () => {
+	const order: string[] = [];
+	const plan = makeIdentityCreatePlan(false);
+	const ledger = makeIdentityLedgerStub(plan, order, true);
+	const harness = createFeatureHarness(null, false, { identityLedger: ledger, order });
+
+	const result = await harness.service.create("edited @2026-08-30", null);
+
+	assert.deepEqual(order, ["intent", "daily", "claim"]);
+	assert.equal(result.status, "saved");
+	assert.equal(result.memoId, plan.memoId);
+	assert.equal(result.followUpPending, true);
+	assert.equal(harness.getCommitCount(), 1);
+});
+
+test("V3-OP-003：intent durable 后 Daily 失败，不追加 claim 且不产生可见 memo", async () => {
+	const order: string[] = [];
+	const plan = makeIdentityCreatePlan(true);
+	const ledger = makeIdentityLedgerStub(plan, order);
+	const harness = createFeatureHarness(null, true, { identityLedger: ledger, order });
+
+	await assert.rejects(() => harness.service.create("edited @2026-08-30", null), /pre-commit failed/u);
+
+	assert.deepEqual(order, ["intent", "daily"]);
+	assert.equal(harness.getCommitCount(), 0);
 });
 
 test("task 在 Daily 已提交后即使 UI reload 失败也不回滚 checkbox 或显示更新失败", async () => {
@@ -164,7 +240,7 @@ test("task 在 Daily 已提交后即使 UI reload 失败也不回滚 checkbox �
 
 	assert.equal(checkboxRollbackCalls, 0);
 	assert.equal(notices.includes(t("task.updateFailed")), false);
-	assert.equal(statuses.at(-1)?.isError, false);
+	assert.deepEqual(statuses, []);
 });
 
 test("delete 在 Daily 已提交后即使 UI reload 失败也不显示操作失败", async () => {
@@ -204,13 +280,21 @@ test("delete 在 Daily 已提交后即使 UI reload 失败也不显示操作失�
 
 	assert.equal(notices.includes(t("error.operationFailed")), false);
 	assert.equal(notices.includes(t("notice.deleted")), true);
-	assert.equal(statuses.at(-1)?.isError, false);
+	assert.deepEqual(statuses, []);
 });
 
-function createFeatureHarness(failurePoint: FailurePoint | null, preCommitFailure: boolean): {
+function createFeatureHarness(
+	failurePoint: FailurePoint | null,
+	preCommitFailure: boolean,
+	harnessOptions: {
+		identityLedger?: IdentityLedgerMutationService;
+		order?: string[];
+	} = {},
+): {
 	service: CatalogV2FeatureService;
 	item: CatalogV2MemoItem;
 	deletedItem: CatalogV2DeletedMemoItem;
+	enableV3Delete: () => void;
 	getCommitCount: () => number;
 	getDailyContent: () => string;
 } {
@@ -317,13 +401,40 @@ function createFeatureHarness(failurePoint: FailurePoint | null, preCommitFailur
 			};
 		},
 	} as unknown as CatalogV2MutationRuntime;
+	const runMarkdownMutation = async (operation: "create" | "edit" | "copy" | "move" | "toggleTask" | "reference") => {
+		harnessOptions.order?.push("daily");
+		if (preCommitFailure) throw new Error("pre-commit failed");
+		commitCount += 1;
+		dailyContent = operation === "create" || operation === "edit"
+			? "## Memos\n- 09:00 edited @2026-08-30\n"
+			: "## Memos\n- 09:00 mutated\n";
+		return {
+			status: "committed_identity_pending" as const,
+			observation: after,
+			sourcePaths: [sourcePath],
+			catalogUpdatePending: failurePoint === "catalog_refresh",
+		};
+	};
+	const markdownMutations = {
+		create: async () => runMarkdownMutation("create"),
+		edit: async () => runMarkdownMutation("edit"),
+		copy: async () => runMarkdownMutation("copy"),
+		move: async () => runMarkdownMutation("move"),
+		toggleTask: async () => runMarkdownMutation("toggleTask"),
+		captureObservation: async () => ({ observation: before, rawBlock: "- 09:00 before" }),
+		remove: async () => ({ ...await runMarkdownMutation("toggleTask"), observation: null }),
+		createBlockReference: async () => ({
+			...await runMarkdownMutation("reference"),
+			blockId: "abc123",
+		}),
+	} as MarkdownMutationService;
 	const options: CatalogV2FeatureServiceOptions = {
 		installMode: "existing_v2",
 		getHeadings: () => ["## Memos"],
 		getOrCreateDailyFile: async () => targetFile,
 		getDailyFileForDate: async (logicalDate) => logicalDate === "2026-08-31" ? targetFile : file,
 		refreshCatalogPaths: async () => {
-			if (failurePoint === "catalog_refresh") throw new Error("catalog refresh failed");
+			if (failurePoint === "catalog_refresh" && commitCount > 0) throw new Error("catalog refresh failed");
 		},
 		refreshLocalCatalog: async () => undefined,
 		getMemoTimeFormat: () => "HH:mm",
@@ -339,9 +450,10 @@ function createFeatureHarness(failurePoint: FailurePoint | null, preCommitFailur
 		mutationRuntime,
 		null,
 		options,
+		markdownMutations,
+		harnessOptions.identityLedger ?? null,
 	);
 	const operationalState: CatalogV2OperationalState = {
-		installMode: "existing_v2",
 		readState: "ready",
 		capabilities: {
 			readKnown: true,
@@ -353,18 +465,21 @@ function createFeatureHarness(failurePoint: FailurePoint | null, preCommitFailur
 	};
 	Object.assign(service, {
 		getOperationalState: () => operationalState,
+		isIdentityMutationReady: () => true,
 		getWritableHandle: async () => handle,
 		findMemoById: async () => null,
 		readService: {
 			materializeResolutionSnapshot: async () => {
-				if (failurePoint === "resolution_materialization") {
+				if (failurePoint === "resolution_materialization" && commitCount > 0) {
 					throw new Error("resolution materialization failed");
 				}
 				return null;
 			},
-			query: async () => ({ items: [] }),
+			resolveObservationInFile: async () => makeMemoItem(before).resolved,
+			query: async () => ({ items: [], nextCursor: null }),
 		},
 	});
+	const deleteLedger = makeIdentityLedgerStub(makeIdentityCreatePlan(true), []);
 	return {
 		service,
 		item: makeMemoItem(before),
@@ -390,8 +505,96 @@ function createFeatureHarness(failurePoint: FailurePoint | null, preCommitFailur
 			sourceMemoId: null,
 			payloadAvailable: true,
 		},
+		enableV3Delete: () => {
+			Object.assign(service, { identityLedger: deleteLedger });
+		},
 		getCommitCount: () => commitCount,
 		getDailyContent: () => dailyContent,
+	};
+}
+
+function makeIdentityCreatePlan(intentDurable: boolean): IdentityLedgerCreatePlan {
+	return {
+		memoId: "01991f40-7c00-7111-9111-111111111111",
+		intentDurable,
+		intent: {
+			schemaVersion: 1,
+			eventId: "e_11111111111111111111111111111111",
+			writerId: "w_11111111111111111111111111111111",
+			memoId: "01991f40-7c00-7111-9111-111111111111",
+			type: "create_intent",
+			baseBindingId: null,
+			occurredAt: "2026-08-30T09:00:00.000Z",
+			evidence: {
+				targetPath: "Daily/2026-08-30.md",
+				logicalDate: "2026-08-30",
+				time: "09:00",
+				contentHash: "fnv1a-12345678",
+				sourceMemoId: null,
+			},
+		},
+	};
+}
+
+function makeIdentityLedgerStub(
+	plan: IdentityLedgerCreatePlan,
+	order: string[],
+	failClaim = false,
+): IdentityLedgerMutationService {
+	const binding: IdentityLedgerBinding = {
+		memoId: plan.memoId,
+		bindingId: "e_22222222222222222222222222222222",
+		identityRevision: "identity-v3-test",
+		evidence: {
+			sourcePath: "Daily/2026-08-30.md",
+			sourceRevision: "b".repeat(64),
+			rawBlockHash: "fnv1a-12345678",
+			logicalDate: "2026-08-30",
+			section: "## Memos",
+			startLine: 1,
+			endLine: 1,
+			time: "09:00",
+			contentHash: "fnv1a-12345678",
+		},
+	};
+	return {
+		getRevision: () => binding.identityRevision,
+		getStatus: () => failClaim ? "unavailable" : "ready",
+		getSnapshot: () => ({
+			revision: binding.identityRevision,
+			eventCount: failClaim ? 1 : 2,
+			memos: {},
+			pendingIntents: [],
+			quarantinedEventIds: [],
+		}),
+		resolveObservation: () => failClaim ? null : binding,
+		resolveObservationState: () => failClaim
+			? { kind: "unbound" }
+			: { kind: "identified", binding },
+		getSourceMemoId: () => null,
+		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		beginCreate: async () => {
+			order.push("intent");
+			return plan;
+		},
+		finishCreate: async () => {
+			order.push("claim");
+			if (failClaim) throw new Error("identity root unavailable");
+			return binding;
+		},
+		reconcilePendingCreates: async () => 0,
+		reconcileRevision: async () => ({ appendedEventCount: 0, conflictedMemoIds: [] }),
+		rebindObservation: async () => failClaim ? null : binding,
+		adoptObservation: async () => binding,
+		repairConflict: async () => binding,
+		recordReview: async () => undefined,
+		getActiveDeletes: () => [],
+		recordDeletePayload: async (current, evidence) => ({
+			memoId: current.memoId,
+			deleteEventId: "e_33333333333333333333333333333333",
+			baseBindingId: current.bindingId,
+			evidence,
+		}),
 	};
 }
 
@@ -407,6 +610,7 @@ async function runOtherDailyMutation(
 		case "toggleTask":
 			return harness.service.toggleTask(harness.item, 0, true);
 		case "delete":
+			harness.enableV3Delete();
 			return harness.service.delete(harness.item);
 		case "restore":
 			return harness.service.restore(harness.deletedItem);
@@ -424,10 +628,17 @@ async function runFeatureSave(
 		: harness.service.edit(harness.item, "edited @2026-08-30");
 }
 
-function createViewHarness(mode: "pre_commit" | "post_commit"): {
+function createViewHarness(
+	mode: "pre_commit" | "post_commit",
+	options: {
+		installMode?: "existing_v2" | "nonempty_unconfigured";
+		initializeResult?: boolean;
+	} = {},
+): {
 	input: { value: string };
 	saveInput: () => Promise<void>;
 	getCreateCalls: () => number;
+	getInitializeCalls: () => number;
 	getDraftContent: () => string;
 	getStatuses: () => Array<{ message: string; isError: boolean }>;
 } {
@@ -435,7 +646,13 @@ function createViewHarness(mode: "pre_commit" | "post_commit"): {
 	const input = { value: "draft memo" };
 	const statuses: Array<{ message: string; isError: boolean }> = [];
 	let createCalls = 0;
+	let initializeCalls = 0;
+	let installMode = options.installMode ?? "existing_v2";
 	const feature = {
+		getOperationalState: () => ({
+			installMode,
+			capabilities: { createNew: installMode === "existing_v2" },
+		}),
 		create: async () => {
 			createCalls += 1;
 			if (mode === "pre_commit") throw new Error("pre-commit failed");
@@ -460,11 +677,20 @@ function createViewHarness(mode: "pre_commit" | "post_commit"): {
 		draftContent: "draft memo",
 		composerOpen: true,
 		catalogV2FeatureService: feature,
+		getCatalogInstallMode: () => installMode,
+		getCatalogInitializationAllowed: () => true,
+		onInitializeCatalogVault: async () => {
+			initializeCalls += 1;
+			const initialized = options.initializeResult ?? true;
+			if (initialized) installMode = "existing_v2";
+			return initialized;
+		},
 		mobileMemoHydrator: { getSnapshot: () => ({ allMemosLoaded: false }) },
 		closeTimeBuoyPicker: () => undefined,
 		updateStatus: (message: string, isError: boolean) => { statuses.push({ message, isError }); },
 		updateSendButtonState: () => undefined,
 		reloadMemos: async () => { throw new Error("local reload failed"); },
+		refresh: async () => undefined,
 		clearComposerContext: () => undefined,
 		syncComposerMode: () => undefined,
 		updateCancelEditButtonState: () => undefined,
@@ -476,6 +702,7 @@ function createViewHarness(mode: "pre_commit" | "post_commit"): {
 		input,
 		saveInput: () => (view as unknown as { saveInput: () => Promise<void> }).saveInput(),
 		getCreateCalls: () => createCalls,
+		getInitializeCalls: () => initializeCalls,
 		getDraftContent: () => (view as unknown as { draftContent: string }).draftContent,
 		getStatuses: () => statuses,
 	};
@@ -485,6 +712,7 @@ function makeObservation(content: string, sourceRevision: string, timeBuoyDates:
 	return {
 		sourcePath: "Daily/2026-08-30.md",
 		sourceRevision,
+		rawBlockHash: `fnv1a-raw-${sourceRevision.slice(0, 8)}`,
 		logicalDate: "2026-08-30",
 		section: "## Memos",
 		startLine: 1,
@@ -516,9 +744,24 @@ function toHandleEvidence(observation: MemoObservation): ResolvedMemoHandle["evi
 }
 
 function makeMemoItem(observation: MemoObservation): CatalogV2MemoItem {
+	const identityHandle = {
+		memoId: "memo-save-boundary",
+		activeBindingId: "binding-before",
+		identityRevision: observation.sourceRevision,
+	};
+	const resolvedCapabilities = createResolvedMemoCapabilities("ready");
 	return {
 		key: "memo-save-boundary",
+		renderKey: `${observation.sourcePath}\u0000${observation.startLine.toString().padStart(10, "0")}`,
 		memoId: "memo-save-boundary",
+		identityHandle,
+		observationHandle: {
+			sourcePath: observation.sourcePath,
+			sourceRevision: observation.sourceRevision,
+			startLine: observation.startLine,
+			endLine: observation.endLine,
+			rawBlockHash: observation.rawBlockHash,
+		},
 		createdAt: "2026-08-30T09:00:00",
 		content: observation.content,
 		tags: [],
@@ -530,37 +773,21 @@ function makeMemoItem(observation: MemoObservation): CatalogV2MemoItem {
 		lineNumberHint: observation.startLine,
 		sourceMemoId: null,
 		capabilities: {
-			view: true,
-			copy: true,
-			openDaily: true,
-			openLinks: true,
-			openImages: true,
-			copyAsNew: "ready",
-			edit: "ready",
-			toggleTask: "ready",
-			delete: "ready",
-			createReference: "ready",
-			recordReview: "ready",
+			...resolvedCapabilities,
+			catalog: createCatalogCapabilities({
+				kind: "complete",
+				coveredFromDate: observation.logicalDate,
+				pendingFileCount: 0,
+				coveredFileCount: 1,
+				totalFileCount: 1,
+			}),
 		},
 		resolved: {
 			kind: "identified",
-			memoId: "memo-save-boundary",
-			activeBindingId: "binding-before",
 			bindingEvidence: toHandleEvidence(observation),
+			identityHandle,
 			observation,
-			capabilities: {
-				view: true,
-				copy: true,
-				openDaily: true,
-				openLinks: true,
-				openImages: true,
-				copyAsNew: "ready",
-				edit: "ready",
-				toggleTask: "ready",
-				delete: "ready",
-				createReference: "ready",
-				recordReview: "ready",
-			},
+			capabilities: resolvedCapabilities,
 			stateRevision: observation.sourceRevision,
 		},
 		observation: observation as CatalogV2MemoItem["observation"],

@@ -2,6 +2,7 @@ import { TFile } from "obsidian";
 import type { App, Component } from "obsidian";
 
 import type { KnomoSettings } from "../types/settings";
+import type { CatalogV2ProjectionState } from "../types/catalogV2View";
 import { ensureTextFile } from "../utils/vault";
 import {
 	buildCatalogV2MonthlyProjection,
@@ -28,6 +29,8 @@ export interface CatalogV2MonthlyProjectionCoordinatorOptions {
 	cooldownMs?: number;
 	retryDelayMs?: number;
 	now?: () => number;
+	onStateChanged?: () => void;
+	isProjectionAllowed?: () => boolean;
 }
 
 // 职责：合并月份失效并更新可重建的 Monthly view；失败不得进入 Daily、Catalog 或 identity 链路。
@@ -71,6 +74,10 @@ export class CatalogV2MonthlyProjectionCoordinator {
 		await this.invalidatePeriods(await this.options.inputBuilder.listPeriods());
 	}
 
+	async handleConfigurationChanged(): Promise<void> {
+		await this.invalidatePeriods(await this.options.inputBuilder.listPeriods());
+	}
+
 	listPeriods(): Promise<string[]> {
 		return this.options.inputBuilder.listPeriods();
 	}
@@ -79,7 +86,10 @@ export class CatalogV2MonthlyProjectionCoordinator {
 		for (const period of [...new Set(periods)].sort()) {
 			if (/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)) this.markPending(period);
 		}
-		if (this.pendingPeriods.size > 0) this.scheduleRun(this.getNextDelay());
+		if (this.pendingPeriods.size > 0) {
+			this.notifyStateChanged();
+			this.scheduleRun(this.getNextDelay());
+		}
 	}
 
 	rebuildPeriod(period: string): Promise<{ projected: number; failed: number }> {
@@ -90,6 +100,10 @@ export class CatalogV2MonthlyProjectionCoordinator {
 
 	run(ignoreCooldown = false): Promise<{ projected: number; failed: number }> {
 		if (this.stopped) return Promise.resolve({ projected: 0, failed: 0 });
+		if (!this.isProjectionAllowed()) {
+			this.notifyStateChanged();
+			return Promise.resolve({ projected: 0, failed: 0 });
+		}
 		if (this.running !== null) return this.running;
 		this.running = this.runOnce(ignoreCooldown).then((result) => {
 			if (this.pendingPeriods.size > 0) {
@@ -98,8 +112,16 @@ export class CatalogV2MonthlyProjectionCoordinator {
 			return result;
 		}).finally(() => {
 			this.running = null;
+			this.notifyStateChanged();
 		});
 		return this.running;
+	}
+
+	getProjectionState(): CatalogV2ProjectionState {
+		if (this.failedPeriods.size > 0) return "failed";
+		if (!this.isProjectionAllowed()) return "stale";
+		if (this.pendingPeriods.size > 0 || this.running !== null) return "stale";
+		return "ready";
 	}
 
 	getProjectionMetadata(period: string): CatalogV2MonthlyProjectionMetadata | null {
@@ -241,13 +263,17 @@ export class CatalogV2MonthlyProjectionCoordinator {
 	}
 
 	private scheduleRun(delay = this.debounceMs): void {
-		if (this.stopped) return;
+		if (this.stopped || !this.isProjectionAllowed()) return;
 		const win = this.app.workspace.containerEl.win;
 		if (this.timer !== null) win.clearTimeout(this.timer);
 		this.timer = win.setTimeout(() => {
 			this.timer = null;
 			void this.run();
 		}, delay);
+	}
+
+	private isProjectionAllowed(): boolean {
+		return this.options.isProjectionAllowed?.() ?? true;
 	}
 
 	private getNextDelay(): number {
@@ -258,6 +284,14 @@ export class CatalogV2MonthlyProjectionCoordinator {
 			delay = Math.max(delay, this.cooldownMs - Math.max(0, this.now() - lastProjected));
 		}
 		return delay;
+	}
+
+	private notifyStateChanged(): void {
+		try {
+			this.options.onStateChanged?.();
+		} catch {
+			// 状态提示刷新失败不影响 Monthly projection 主流程。
+		}
 	}
 
 	private stop(): void {

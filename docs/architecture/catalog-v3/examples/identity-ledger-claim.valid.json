@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "eventId": "e_11111111111111111111111111111111",
+  "writerId": "w_11111111111111111111111111111111",
+  "memoId": "01991f40-7c00-7111-9111-111111111111",
+  "type": "claim",
+  "baseBindingId": null,
+  "occurredAt": "2026-08-22T09:00:00.000Z",
+  "evidence": {
+    "observation": {
+      "sourcePath": "Daily/2026-08-22.md",
+      "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rawBlockHash": "fnv1a-12345678",
+      "logicalDate": "2026-08-22",
+      "section": "## Memos",
+      "startLine": 1,
+      "endLine": 1,
+      "time": "09:00",
+      "contentHash": "fnv1a-87654321"
+    },
+    "createIntentEventId": null
+  }
+}

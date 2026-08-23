@@ -119,7 +119,7 @@ export class CatalogV2UpgradeCoordinator {
 		const currentInstallMode = this.options.getInstallMode?.() ?? this.options.installMode;
 		if (currentInstallMode === "legacy_upgrade") {
 			status.installMode = "legacy_upgrade";
-		} else if ((status.installMode === "uninitialized" || status.installMode === "joining")
+		} else if ((status.installMode === "uninitialized" || status.installMode === "nonempty_unconfigured" || status.installMode === "joining")
 			&& currentInstallMode === "existing_v2") {
 			status.installMode = "existing_v2";
 		}
@@ -632,7 +632,7 @@ function hasUniqueCatalogIdentityParity(
 	const counts = new Map<string, number>();
 	for (const memo of resolved) {
 		const memoIds = memo.kind === "identified"
-			? [memo.memoId]
+			? [memo.identityHandle.memoId]
 			: memo.kind === "ambiguous" ? [...new Set(memo.candidates.map((candidate) => candidate.memoId))] : [];
 		if (memoIds.length !== 1) continue;
 		const memoId = memoIds[0] as string;

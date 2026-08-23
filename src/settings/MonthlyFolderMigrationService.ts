@@ -41,7 +41,7 @@ export class MonthlyFolderMigrationService {
 		}
 
 		const settings = this.getSettings();
-		const nextSettings = await this.updateMonthlyExcludeRule(settings, plan.newMonthlyMemoFolder);
+		const nextSettings = await this.prepareMonthlyMemoFolderSettings(settings, plan.newMonthlyMemoFolder);
 		await this.saveSettings({
 			...nextSettings,
 			monthlyMemoFolder: plan.newMonthlyMemoFolder,
@@ -106,7 +106,7 @@ export class MonthlyFolderMigrationService {
 			.filter((period): period is string => period !== null));
 	}
 
-	private async updateMonthlyExcludeRule(settings: KnomoSettings, newFolder: string): Promise<KnomoSettings> {
+	async prepareMonthlyMemoFolderSettings(settings: KnomoSettings, newFolder: string): Promise<KnomoSettings> {
 		if (!settings.excludeMonthlyMemosFromObsidian) return settings;
 		const nextRule = buildMonthlyFolderExcludeRule(newFolder);
 		if (nextRule === null) {

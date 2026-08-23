@@ -4,6 +4,7 @@ import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 
 export interface MemoCardShellOptions {
 	memoId: string;
+	renderKey?: string;
 	includeActions: boolean;
 	activeMenuMemoId: string | null;
 }
@@ -26,6 +27,7 @@ export interface TrashActionState {
 export interface MemoCardActionMeta {
 	action: MemoAction;
 	className: string;
+	candidateMemoId?: string;
 }
 
 export interface TrashCardActionMeta {
@@ -52,6 +54,7 @@ export function isCjkMemoContent(content: string): boolean {
 export function getMemoCardShell(options: MemoCardShellOptions): MemoCardShell {
 	const attrs: Record<string, string> = {
 		"data-memo-id": options.memoId,
+		"data-memo-render-key": options.renderKey ?? options.memoId,
 	};
 	const className = options.includeActions ? "knomo-card has-card-actions" : "knomo-card";
 	return {
@@ -71,20 +74,38 @@ export function getMemoActionClass(action: MemoAction): string {
 }
 
 export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
-	return MEMO_CARD_ACTIONS.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
+	const actions = MEMO_CARD_ACTIONS.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
 		action,
 		className: getMemoActionClass(action),
 	}));
+	const resolved = memo?.catalogV2?.resolved;
+	if (memo?.catalogV2?.capabilities.identity.repair !== "ready" || resolved?.kind !== "ambiguous") {
+		return actions;
+	}
+	const repairs = [...new Set(resolved.candidates.map((candidate) => candidate.memoId))].sort().map((candidateMemoId) => ({
+		action: "confirm-identity" as const,
+		className: getMemoActionClass("confirm-identity"),
+		candidateMemoId,
+	}));
+	return [...actions, ...repairs];
+}
+
+export function isMemoCardMenuReady(memo: MemoRecord): boolean {
+	const capabilities = memo.catalogV2?.capabilities;
+	if (capabilities === undefined) return true;
+	return capabilities.markdown.view
+		&& capabilities.markdown.copy
+		&& capabilities.markdown.openDaily;
 }
 
 function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction): boolean {
 	const capabilities = memo?.catalogV2?.capabilities;
 	if (capabilities === undefined) return true;
-	if (action === "open-daily") return capabilities.openDaily;
-	if (action === "copy-text") return capabilities.copy;
-	if (action === "edit") return capabilities.edit === "ready";
-	if (action === "delete") return capabilities.delete === "ready";
-	if (action === "reference" || action === "copy-link") return capabilities.createReference === "ready";
+	if (action === "open-daily") return capabilities.markdown.openDaily;
+	if (action === "copy-text") return capabilities.markdown.copy;
+	if (action === "edit") return capabilities.markdown.edit;
+	if (action === "delete") return capabilities.identity.recoverableDelete === "ready";
+	if (action === "reference" || action === "copy-link") return capabilities.markdown.explicitBlockReference;
 	return false;
 }
 

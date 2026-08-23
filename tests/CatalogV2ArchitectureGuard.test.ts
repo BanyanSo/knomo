@@ -68,7 +68,7 @@ test("legacy importer 无 Vault 写入，cleanup 仅使用 FileManager.trashFile
 	assert.doesNotMatch(cleanup, /\.vault\.(?:delete|trash)\s*\(/u);
 });
 
-test("阶段 6 正式入口不创建旧索引运行时或旧文件监听器", () => {
+test("P1 第 7 步正式入口只保留旧数据只读兼容导入，不创建旧写运行时", () => {
 	const source = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
 	for (const forbidden of [
 		/\.\/services\/MemoIndexStore/u,
@@ -77,26 +77,49 @@ test("阶段 6 正式入口不创建旧索引运行时或旧文件监听器", ()
 		/\.\/services\/FileWatchService/u,
 		/new\s+MemoIndexStore\s*\(/u,
 		/new\s+SyncOrchestrator\s*\(/u,
+		/CatalogV2MutationRuntime|CatalogV2StateShadowCoordinator|CatalogV2UpgradeCoordinator/u,
+		/CatalogV2ImmutableStateWriter|CatalogV2OperationWriter|CatalogV2SystemRootService/u,
+		/initialize-vault-protocol|request-catalog-authority-transfer|approve-catalog-authority-transfer/u,
 	]) {
 		assert.doesNotMatch(source, forbidden);
 	}
-	assert.match(source, /legacyReadsDisabled:\s*\(\)\s*=>\s*true/u);
-	assert.match(source, /legacyWriterRemoved:\s*\(\)\s*=>\s*true/u);
+	assert.match(source, /new CatalogV2ReadOnlyCompatibilitySource\(/u);
+	assert.match(source, /new CatalogV3LegacyIdentityImporter\(/u);
 });
 
-test("阶段 6 在注册视图前打开 Catalog 查询依赖", () => {
+test("P1 第 7 步兼容源只读且 installMode 不再参与展示或 Markdown mutation", () => {
+	const source = fs.readFileSync(path.resolve("src/services/CatalogV2ReadOnlyCompatibilitySource.ts"), "utf8");
+	const importer = fs.readFileSync(path.resolve("src/services/CatalogV3LegacyIdentityImporter.ts"), "utf8");
+	const readService = fs.readFileSync(path.resolve("src/services/CatalogV2ReadService.ts"), "utf8");
+	const feature = fs.readFileSync(path.resolve("src/services/CatalogV2FeatureService.ts"), "utf8");
+	const main = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
+
+	assert.match(source, /loadConfiguredVaultContext\(catalogDataRoot\)/u);
+	assert.match(source, /getKnomoDataRoot/u);
+	assert.doesNotMatch(`${source}\n${importer}`, /\.vault\.(?:create|modify|process|delete|trash)\s*\(/u);
+	assert.doesNotMatch(`${source}\n${importer}`, /\.vault\.(?:getFiles|getMarkdownFiles)\s*\(/u);
+	assert.match(importer, /importVerifiedLegacyEvents\(/u);
+	assert.doesNotMatch(importer, /fileManager\.trashFile|LegacyCleanup/u);
+	assert.doesNotMatch(readService, /this\.options\.(?:getInstallMode|installMode)/u);
+	assert.doesNotMatch(feature, /this\.options\.(?:getInstallMode|installMode)/u);
+	assert.doesNotMatch(main, /CatalogV2InstallMode|installMode|initialize-vault-protocol/u);
+});
+
+test("P1 第 7 步在注册视图前打开 V3 查询和身份依赖", () => {
 	const source = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
 	const registerViewAt = source.indexOf("this.registerView(");
 	assert.notEqual(registerViewAt, -1);
 	for (const prerequisite of [
 		"await this.memoCatalogService.open();",
-		"await catalogV2StateStore?.open();",
-		"await catalogV2TransactionStore?.open();",
+		"await identityLedgerService.initialize();",
+		"await knomoSharedConfigService.initialize();",
+		"await this.legacyIdentityImporter.run();",
 	]) {
 		const prerequisiteAt = source.indexOf(prerequisite);
 		assert.notEqual(prerequisiteAt, -1, prerequisite);
 		assert.ok(prerequisiteAt < registerViewAt, prerequisite);
 	}
+	assert.doesNotMatch(source, /catalogV2StateStore|catalogV2TransactionStore/u);
 });
 
 test("阶段 6 查询使用有界状态切片，卡片窗口不超过 150 条", () => {
@@ -108,6 +131,71 @@ test("阶段 6 查询使用有界状态切片，卡片窗口不超过 150 条", 
 	assert.doesNotMatch(readService, /query\([\s\S]{0,400}loadLocalStateSnapshot/u);
 	assert.match(view, /CATALOG_V2_PAGE_SIZE\s*=\s*50/u);
 	assert.match(view, /CATALOG_V2_MEMO_WINDOW_LIMIT\s*=\s*150/u);
+});
+
+test("后台刷新状态不写入 Composer 的内联状态区域", () => {
+	const view = fs.readFileSync(path.resolve("src/ui/KnomoView.ts"), "utf8");
+	assert.doesNotMatch(view, /updateStatus\(t\("catalog\.savedRefreshPending"/u);
+});
+
+test("非空未配置 Vault 不覆盖 Observation 列表，首次保存不再请求身份初始化", () => {
+	const view = fs.readFileSync(path.resolve("src/ui/KnomoView.ts"), "utf8");
+	assert.doesNotMatch(view, /getCatalogOnboardingPresentation/u);
+	assert.match(view, /getCatalogReadStatusHeaders/u);
+	const saveInput = view.slice(view.indexOf("private async saveInput()"), view.indexOf("private showTimeBuoySaveFeedback"));
+	assert.doesNotMatch(saveInput, /nonempty_unconfigured|initializeCatalogVaultFromView|capabilities\.createNew/u);
+});
+
+test("P0 第 3 步普通正文入口只依赖 MarkdownMutationService", () => {
+	const markdown = fs.readFileSync(path.resolve("src/services/MarkdownMutationService.ts"), "utf8");
+	const feature = fs.readFileSync(path.resolve("src/services/CatalogV2FeatureService.ts"), "utf8");
+	const main = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
+	assert.doesNotMatch(markdown, /CatalogV2MutationRuntime|ResolvedMemoHandle|IdentityHandle|IndexedDb|bootstrap|installMode|StateGeneration/u);
+	assert.match(main, /new MarkdownMutationService\(this\.app/u);
+	for (const [method, nextMethod] of [
+		["async create(", "async copy("],
+		["async copy(", "async move("],
+		["async move(", "async repairIdentity("],
+		["async edit(", "async toggleTask("],
+		["async toggleTask(", "async delete("],
+		["async removePermanently(", "async delete("],
+		["async createReferenceText(", "async recordReview("],
+	] as const) {
+		const body = feature.slice(feature.indexOf(method), feature.indexOf(nextMethod));
+		assert.match(body, /getMarkdownMutations\(\)/u, method);
+		assert.doesNotMatch(body, /getWritableHandle|getMutationRuntime|assertSharedMutationReady/u, method);
+	}
+});
+
+test("P0 第 4 步 Identity Ledger 使用配置数据根与无控制面的不可变事件", () => {
+	const protocol = fs.readFileSync(path.resolve("src/services/IdentityLedgerProtocol.ts"), "utf8");
+	const service = fs.readFileSync(path.resolve("src/services/IdentityLedgerService.ts"), "utf8");
+	const migration = fs.readFileSync(path.resolve("src/services/KnomoDataRootMigrationService.ts"), "utf8");
+	const types = fs.readFileSync(path.resolve("src/types/identityLedger.ts"), "utf8");
+	const main = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
+	assert.match(protocol, /IDENTITY_LEDGER_RELATIVE_ROOT = "_knomo-data\/identity\/v3"/u);
+	assert.match(protocol, /getIdentityLedgerRootPath/u);
+	assert.doesNotMatch(`${protocol}\n${service}\n${main}`, /_knomo-identity/u);
+	assert.match(service, /options\.getRootPath\(\)/u);
+	assert.match(service, /app\.vault\.create\(path, content\)/u);
+	assert.match(service, /parseIdentityLedgerSegment\(rootPath, file\.path, await this\.app\.vault\.cachedRead\(file\)\)/u);
+	assert.doesNotMatch(service, /\.vault\.(?:modify|process|delete|trash)\s*\(/u);
+	assert.doesNotMatch(`${protocol}\n${service}\n${migration}\n${types}`, /bootstrap|genesis|authority|epoch|generation|manifest|vaultInstanceId/iu);
+	assert.doesNotMatch(`${service}\n${migration}`, /\.vault\.(?:getFiles|getMarkdownFiles)\s*\(/u);
+	assert.doesNotMatch(types, /existingBlockId/u);
+	assert.doesNotMatch(service, /snapshots?\//u);
+	assert.match(main, /new IdentityLedgerService\(this\.app/u);
+	assert.match(main, /knomoDataRootConfigured/u);
+	assert.match(main, /identityLedgerService\.start\(this/u);
+});
+
+test("P0 第 4 步 create 固定按 intent、Daily、claim 顺序执行", () => {
+	const feature = fs.readFileSync(path.resolve("src/services/CatalogV2FeatureService.ts"), "utf8");
+	const body = feature.slice(feature.indexOf("async create("), feature.indexOf("async copy("));
+	const intentAt = body.indexOf("this.beginIdentityCreate(");
+	const dailyAt = body.indexOf("this.getMarkdownMutations().create(");
+	const claimAt = body.indexOf("this.finishIdentityCreate(");
+	assert.ok(intentAt >= 0 && dailyAt > intentAt && claimAt > dailyAt);
 });
 
 test("阶段 4 Monthly 投影独立于读取服务和 mutation runtime", () => {
@@ -127,16 +215,17 @@ test("阶段 4 Monthly 投影独立于读取服务和 mutation runtime", () => {
 	assert.doesNotMatch(main, /CatalogV2RuntimeCoordinator/u);
 	assert.doesNotMatch(feature, /runtimeCoordinator\?\.initialize|notifyProjectionPeriods|invalidateProjectionPeriods/u);
 	assert.doesNotMatch(settings, /catalogV2FeatureService\.query(?:TimeBuoysForDate|AllTimeBuoys)?\(/u);
-	assert.match(settings, /inspectPendingMutations\(\)/u);
-	assert.match(settings, /recoverPendingMutation\(item\.mutationId, action\)/u);
+	assert.doesNotMatch(settings, /inspectPendingMutations\(\)|recoverPendingMutation\(/u);
+	assert.match(settings, /legacyIdentityImporter\.getReport\(\)/u);
 });
 
-test("protocol-v2 正式入口只使用不可变状态协议且不执行共享 GC", () => {
+test("P1 第 7 步正式入口不再使用 protocol-v2 写控制面或共享 GC", () => {
 	const main = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
 	const monthly = fs.readFileSync(path.resolve("src/services/CatalogV2MonthlyProjectionCoordinator.ts"), "utf8");
 	const inputBuilder = fs.readFileSync(path.resolve("src/services/CatalogV2ProjectionInputBuilder.ts"), "utf8");
-	assert.match(main, /CatalogV2ImmutableStateWriter/u);
-	assert.match(main, /CatalogV2VaultProtocol/u);
+	assert.doesNotMatch(main, /CatalogV2ImmutableStateWriter|CatalogV2VaultProtocol/u);
+	assert.match(main, /CatalogV2ReadOnlyCompatibilitySource/u);
+	assert.match(main, /CatalogV3LegacyIdentityImporter/u);
 	assert.doesNotMatch(main, /CatalogV2StateTransport/u);
 	assert.doesNotMatch(main, /CatalogV2StateCompactionService/u);
 	assert.doesNotMatch(main, /CatalogV2LegacyCleanupService/u);
@@ -163,29 +252,65 @@ test("阶段 5 冻结 schema 不含 Monthly 控制面，Catalog rebuild 不触�
 	assert.match(inputBuilder, /getDailyPeriod/u);
 });
 
-test("阶段 0 启动与只读路径不提交共享状态", () => {
+test("P1 第 7 步启动与只读兼容路径不恢复 V2 共享写控制面", () => {
 	const main = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
 	const feature = fs.readFileSync(path.resolve("src/services/CatalogV2FeatureService.ts"), "utf8");
 	const monthly = fs.readFileSync(path.resolve("src/services/CatalogV2MonthlyProjectionCoordinator.ts"), "utf8");
 	const compaction = fs.readFileSync(path.resolve("src/services/CatalogV2StateCompactionService.ts"), "utf8");
-	assert.doesNotMatch(main, /getGenerationSelectionKind\(\)\s*===\s*"forked"[\s\S]{0,240}reconcile/u);
-	assert.match(main, /canPersistMigrationArtifacts:\s*\(\)\s*=>\s*catalogUpgradeAuthorized/u);
-	assert.match(main, /canWriteSharedUpgrade:\s*\(\)\s*=>\s*catalogUpgradeAuthorized/u);
-	assert.match(main, /finally\s*\{\s*catalogUpgradeAuthorized\s*=\s*false;/u);
+	assert.doesNotMatch(main, /getGenerationSelectionKind|catalogUpgradeAuthorized|canPersistMigrationArtifacts|canWriteSharedUpgrade/u);
+	assert.doesNotMatch(main, /CatalogV2StateShadowCoordinator|CatalogV2MutationRuntime|CatalogV2UpgradeCoordinator/u);
+	assert.match(main, /new CatalogV2FeatureService\([\s\S]{0,220}?null,[\s\S]{0,80}?null,[\s\S]{0,80}?null/u);
 	assert.doesNotMatch(feature, /commitUniqueExternalRebinds|createObserved/u);
-	assert.match(feature, /createNew:[\s\S]{0,320}stateStore\?\.isAuthoritative\(\)[\s\S]{0,160}transactionStore\?\.isAuthoritative\(\)/u);
-	assert.match(feature, /adoptExisting:\s*false/u);
-	assert.match(feature, /Existing Daily memo adoption is disabled/u);
+	assert.match(feature, /createNew:\s*this\.markdownMutations !== null/u);
+	assert.match(feature, /adoptExisting:\s*this\.canAdoptIdentityLedgerObservation\(\)/u);
+	assert.match(feature, /identityLedger\.adoptObservation\(refreshed\.observation\)/u);
 	assert.doesNotMatch(monthly, /sharedWritesEnabled|projectionAuthorityWriterId|writeProjectionReceipt/u);
 	assert.match(compaction, /sharedCompactionEnabled:\s*boolean\s*=\s*false/u);
+	const retryMarker = main.indexOf("const catalogWasUsingFallback");
 	const retryState = main.slice(
-		main.indexOf("async () => {", main.indexOf("() => this.initializeCatalogVaultProtocol")),
+		main.lastIndexOf("async () => {", retryMarker),
 		main.indexOf("() => this.openCatalogDataSettings()"),
 	);
-	assert.match(retryState, /refreshCatalogVaultContext/u);
-	assert.match(retryState, /retryOpen/u);
 	assert.match(retryState, /memoCatalogService\?\.open/u);
-	assert.doesNotMatch(retryState, /catalogV2RuntimeCoordinator\?\.initialize/u);
+	assert.match(retryState, /legacyIdentityImporter\?\.run/u);
+	assert.doesNotMatch(retryState, /retryOpen|refreshCatalogVaultContext|StateShadow|Transaction/u);
+});
+
+test("P1 第 5 步协调使用完整 revision，repair 只写 Identity Ledger", () => {
+	const coordinator = fs.readFileSync(path.resolve("src/services/CatalogShadowCoordinator.ts"), "utf8");
+	const identity = fs.readFileSync(path.resolve("src/services/IdentityLedgerService.ts"), "utf8");
+	const readService = fs.readFileSync(path.resolve("src/services/CatalogV2ReadService.ts"), "utf8");
+	const feature = fs.readFileSync(path.resolve("src/services/CatalogV2FeatureService.ts"), "utf8");
+	const main = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
+	assert.match(coordinator, /onRevisionTransition/u);
+	assert.match(coordinator, /before:\s*\{[\s\S]{0,180}sourceRevision:[\s\S]{0,180}observations:/u);
+	assert.match(main, /identityLedgerService\.reconcileRevision\(/u);
+	assert.match(identity, /baseBindingId:\s*base\.bindingId/u);
+	assert.match(identity, /repairs\.length > 0 \? repairs : allChildren/u);
+	assert.match(readService, /ledgerState\.kind === "conflicted"/u);
+	assert.match(feature, /identityLedger\.repairConflict\(candidateMemoId, refreshed\.observation\)/u);
+	const repairBody = identity.slice(identity.indexOf("async repairConflict("), identity.indexOf("async recordReview("));
+	assert.match(repairBody, /this\.appendEvent\(/u);
+	assert.doesNotMatch(repairBody, /vault\.(?:process|modify|create|delete|trash)|getMarkdownMutations/u);
+});
+
+test("P1 第 6 步配置协议独立于 V2 control plane，Monthly 只读取 Daily 与有效配置", () => {
+	const main = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
+	const protocol = fs.readFileSync(path.resolve("src/services/KnomoSharedConfigProtocol.ts"), "utf8");
+	const service = fs.readFileSync(path.resolve("src/services/KnomoSharedConfigService.ts"), "utf8");
+	const catalog = fs.readFileSync(path.resolve("src/services/CatalogShadowCoordinator.ts"), "utf8");
+	const monthly = fs.readFileSync(path.resolve("src/services/CatalogV2MonthlyProjectionCoordinator.ts"), "utf8");
+	const inputBuilder = fs.readFileSync(path.resolve("src/services/CatalogV2ProjectionInputBuilder.ts"), "utf8");
+
+	assert.match(protocol, /KNOMO_SHARED_CONFIG_RELATIVE_ROOT = "_knomo-data\/schema\/config\/v1"/u);
+	assert.match(main, /new KnomoSharedConfigService/u);
+	assert.match(main, /isConfigurationComplete:\s*\(\) => knomoSharedConfigService\.isCoverageComplete\(\)/u);
+	assert.match(main, /isProjectionAllowed:\s*\(\) => knomoSharedConfigService\.isMonthlyProjectionAllowed\(\)/u);
+	assert.doesNotMatch(main, /contract\.daily|contract\.monthly/u);
+	assert.doesNotMatch(`${protocol}\n${service}`, /IdentityLedger|bootstrap|authority|StateGeneration|vaultInstanceId/u);
+	assert.match(catalog, /isConfigurationComplete/u);
+	assert.match(monthly, /isProjectionAllowed/u);
+	assert.doesNotMatch(inputBuilder, /IdentityLedger|MemoCatalogService|CatalogV2ReadService/u);
 });
 
 test("正式可达的 v2 文案不暴露底层数据术语", () => {

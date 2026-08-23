@@ -168,7 +168,8 @@ test("state R2 with Daily R1 is waiting for sync and never becomes writable", ()
 
 	assert.equal(resolved?.kind, "ambiguous");
 	assert.equal(resolved?.kind === "ambiguous" ? resolved.reason : null, "known_predecessor");
-	assert.equal(resolved?.capabilities.edit, "blocked_waiting_sync");
+	assert.equal(resolved?.capabilities.markdown.edit, true);
+	assert.equal(resolved?.capabilities.identity.crossDeviceIdentity, "syncing");
 	assert.equal(createResolvedMemoHandle(resolved ?? null), null);
 });
 
@@ -432,6 +433,7 @@ function makeObservation(startLine: number, content: string, sourcePath = "Daily
 	return {
 		sourcePath,
 		sourceRevision: "1".repeat(64),
+		rawBlockHash: `fnv1a-raw-${content}`,
 		logicalDate: "2026-08-08",
 		section: "# Memos",
 		startLine,

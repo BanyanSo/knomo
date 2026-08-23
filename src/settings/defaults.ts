@@ -16,6 +16,8 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	dailyHeading: DEFAULT_DAILY_HEADING,
 	dailyInsertPosition: "bottom",
 	memoTimeFormat: DEFAULT_MEMO_TIME_FORMAT,
+	knomoDataRoot: DEFAULT_MONTHLY_MEMO_FOLDER,
+	knomoDataRootConfigured: false,
 	monthlyMemoFolder: DEFAULT_MONTHLY_MEMO_FOLDER,
 	monthlyMemoFileFormat: DEFAULT_MONTHLY_MEMO_FILE_FORMAT,
 	monthlyDateHeadingFormat: DEFAULT_MONTHLY_DATE_HEADING_FORMAT,

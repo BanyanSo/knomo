@@ -16,3 +16,10 @@ knomo-assets/
 .claude/
 .codex/
 docs/
+architecure/
+!docs/
+docs/*
+!docs/architecture/
+docs/architecture/*
+!docs/architecture/catalog-v3/
+!docs/architecture/catalog-v3/**

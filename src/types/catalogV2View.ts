@@ -1,14 +1,16 @@
 import type {
 	CatalogCoverage,
+	CatalogCapabilities,
 	CatalogCursor,
 	CatalogObservation,
 	CatalogQuery,
 	CatalogStoreLifecycle,
+	IdentityHandle,
 	MemoCapabilities,
+	ObservationHandle,
 	ResolvedMemo,
 } from "./catalog";
 import type { CatalogV2MaterializedDeleteVersion } from "./catalogV2";
-import type { CatalogV2InstallMode } from "./catalogV2";
 
 export type CatalogV2ReadState =
 	| "needs_initialization"
@@ -21,9 +23,26 @@ export type CatalogV2ReadState =
 	| "state_settling"
 	| "storage_unavailable";
 
+export type CatalogV2ContentState = "ready" | "scanning" | "unavailable";
+export type CatalogV2CatalogState = "partial" | "complete" | "degraded";
+export type CatalogV2IdentityState = "absent" | "syncing" | "ready" | "conflicted";
+export type CatalogV2ProjectionState = "ready" | "stale" | "failed";
+export type CatalogV2MigrationState = "none" | "detected" | "running" | "attention";
+
+export interface CatalogV2ReadStatus {
+	content: CatalogV2ContentState;
+	catalog: CatalogV2CatalogState;
+	identity: CatalogV2IdentityState;
+	projection: CatalogV2ProjectionState;
+	migration: CatalogV2MigrationState;
+}
+
 export interface CatalogV2MemoItem {
 	key: string;
+	renderKey: string;
 	memoId: string | null;
+	identityHandle: IdentityHandle | null;
+	observationHandle: ObservationHandle;
 	createdAt: string;
 	content: string;
 	tags: string[];
@@ -45,8 +64,8 @@ export interface CatalogV2MutationFollowUpState {
 }
 
 export interface CatalogV2DailyMutationResult extends CatalogV2MutationFollowUpState {
-	status: "saved";
-	memoId: string;
+	status: "saved" | "content_pending";
+	memoId: string | null;
 }
 
 export interface CatalogV2MemoSaveResult extends CatalogV2DailyMutationResult {
@@ -56,7 +75,6 @@ export interface CatalogV2MemoSaveResult extends CatalogV2DailyMutationResult {
 
 export interface CatalogV2FeatureCursor {
 	catalog: CatalogCursor;
-	stateRevision: string;
 }
 
 export interface CatalogV2MemoPage {
@@ -64,22 +82,15 @@ export interface CatalogV2MemoPage {
 	nextCursor: CatalogV2FeatureCursor | null;
 	coverage: CatalogCoverage;
 	lifecycle: CatalogStoreLifecycle;
-	capabilities: CatalogV2CoverageCapabilities;
+	capabilities: CatalogCapabilities;
+	status: CatalogV2ReadStatus;
+	// 仅供冻结的 Protocol V2 mutation 运行时兼容；展示层必须读取 status。
 	readState: CatalogV2ReadState;
 	degraded: boolean;
 	invalidated: boolean;
 }
 
-export interface CatalogV2CoverageCapabilities {
-	browseKnown: true;
-	completeStats: boolean;
-	completeShuffleDayPool: boolean;
-	completeRandomPool: boolean;
-	completeTimeBuoyIndex: boolean;
-}
-
 export interface CatalogV2OperationalState {
-	installMode: CatalogV2InstallMode;
 	readState: CatalogV2ReadState;
 	capabilities: {
 		readKnown: true;
@@ -105,6 +116,7 @@ export interface CatalogV2DeletedMemoItem {
 	content: string;
 	sourceMemoId: string | null;
 	payloadAvailable: boolean;
+	identityDeleteEventId?: string;
 }
 
 export interface CatalogV2DeletedMemoPage {

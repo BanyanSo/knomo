@@ -36,6 +36,24 @@ test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async 
 	assert.notEqual(result.observations[1].contentHash, result.observations[2].contentHash);
 });
 
+test("ObservationHandle 的 rawBlockHash 覆盖时间行与完整原始 block", async () => {
+	const first = await parser.parse({
+		sourcePath: "2026-08-09.md",
+		logicalDate: "2026-08-09",
+		headings: ["## Memos"],
+		bytes: Buffer.from("## Memos\n- 09:00 same", "utf8"),
+	});
+	const second = await parser.parse({
+		sourcePath: "2026-08-09.md",
+		logicalDate: "2026-08-09",
+		headings: ["## Memos"],
+		bytes: Buffer.from("## Memos\n- 10:00 same", "utf8"),
+	});
+
+	assert.equal(first.observations[0]?.contentHash, second.observations[0]?.contentHash);
+	assert.notEqual(first.observations[0]?.rawBlockHash, second.observations[0]?.rawBlockHash);
+});
+
 test("PARSE-MULTILINE-TASK：保留正文、行范围和稳定 taskIndex", async () => {
 	const result = await parseFixture("PARSE-MULTILINE-TASK");
 	const observation = result.observations[0];

@@ -69,7 +69,6 @@ export function prepareComposerCreateInput(
 	quoteContext: ComposerQuoteContext,
 ): PreparedComposerCreateInput {
 	if (
-		quoteContext.sourceMemoId === null ||
 		quoteContext.referenceText === null ||
 		quoteContext.markdownText === null
 	) {
@@ -111,7 +110,7 @@ export function prepareComposerSaveInput<TEditingMemo>(
 	return {
 		type: "create",
 		content: createInput.content,
-		source: createInput.sourceMemoId === null ? "plugin_input" : "quote_create",
+		source: createInput.sourceReferenceText === null ? "plugin_input" : "quote_create",
 		sourceMemoId: createInput.sourceMemoId,
 		sourceReferenceText: createInput.sourceReferenceText,
 		dailyTrailer: createInput.quoteTrailer,

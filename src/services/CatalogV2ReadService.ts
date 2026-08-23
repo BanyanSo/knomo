@@ -1,12 +1,13 @@
 import type {
 	CatalogCoverage,
 	CatalogObservation,
+	CatalogCapabilities,
+	CatalogQueryPage,
 	CatalogStoreLifecycle,
 	CatalogV2ResolutionSnapshot,
 	ResolvedMemo,
 } from "../types/catalog";
 import type {
-	CatalogV2InstallMode,
 	CatalogV2MaterializedState,
 	IdentityEvidence,
 } from "../types/catalogV2";
@@ -20,15 +21,19 @@ import type {
 	CatalogV2FeatureQuery,
 	CatalogV2MemoItem,
 	CatalogV2MemoPage,
+	CatalogV2ProjectionState,
+	CatalogV2ReadStatus,
 	CatalogV2ReadState,
-	CatalogV2CoverageCapabilities,
 } from "../types/catalogV2View";
 import type { MemoViewItem } from "../types/memoView";
 import { toCatalogV2MemoView } from "../types/memoView";
 import type { MemoReviewStateMap } from "../types/review";
+import type { IdentityLedgerBinding, IdentityLedgerReader } from "../types/identityLedger";
+import type { LegacyIdentityImportStatus } from "../types/legacyIdentityImport";
 import { formatDatePart } from "../utils/date";
 import {
 	CatalogV2IdentityResolver,
+	observationToIdentityEvidence,
 	type CatalogV2IdentitySettlement,
 	type CatalogV2LocalIdentityIntent,
 } from "./CatalogV2IdentityResolver";
@@ -42,6 +47,14 @@ import type { MemoCatalogService } from "./MemoCatalogService";
 import { RecordStatsBuilder, type PreparedRecordStats } from "./RecordStatsService";
 import type { TimeBuoyAllQueryResult, TimeBuoyQueryResult } from "../types/timeBuoy";
 import { getRandomReunionMemos } from "../utils/randomReunion";
+import {
+	createCatalogCapabilities,
+	createIdentityLedgerConflictCapabilities,
+	createIdentityLedgerMemoCapabilities,
+	createResolvedMemoCapabilities,
+} from "./MemoCapabilityModel";
+
+type CatalogV2StateInput = Awaited<ReturnType<CatalogV2StateShadowCoordinator["loadLocalStateSnapshot"]>>;
 
 export interface CatalogV2ReadServiceOptions {
 	catalog: MemoCatalogService;
@@ -49,10 +62,14 @@ export interface CatalogV2ReadServiceOptions {
 	stateCoordinator: CatalogV2StateShadowCoordinator | null;
 	transactionStore: IndexedDbCatalogV2TransactionStore | null;
 	deletedPayloadStore: CatalogV2DeletedPayloadStore | null;
-	installMode: CatalogV2InstallMode;
-	getInstallMode?: () => CatalogV2InstallMode;
+	installMode?: import("../types/catalogV2").CatalogV2InstallMode;
+	getInstallMode?: () => import("../types/catalogV2").CatalogV2InstallMode;
 	getVaultContext?: () => CatalogV2VerifiedVaultContext | null | Promise<CatalogV2VerifiedVaultContext | null>;
 	inspectSharedMutations?: () => Promise<CatalogV2SharedMutationInspection>;
+	requestObservationScan?: () => void | Promise<void>;
+	getProjectionState?: () => CatalogV2ProjectionState;
+	identityLedger?: IdentityLedgerReader | null;
+	getLegacyImportStatus?: () => LegacyIdentityImportStatus;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -79,61 +96,95 @@ export class CatalogV2ReadService {
 	}
 
 	async query(request: CatalogV2FeatureQuery): Promise<CatalogV2MemoPage> {
-		const page = await this.options.catalog.query({ ...request, cursor: request.cursor?.catalog ?? null });
+		let page: CatalogQueryPage;
+		try {
+			page = await this.options.catalog.query({ ...request, cursor: request.cursor?.catalog ?? null });
+		} catch {
+			void Promise.resolve().then(() => this.options.requestObservationScan?.()).catch(() => undefined);
+			return this.createUnavailablePage();
+		}
+		const stateInput = await this.loadStateSnapshot(false);
+		const resolutionStateRevision = this.getResolutionStateRevision(stateInput);
 		if (page.invalidated) return this.rememberPage({
 			items: [],
 			nextCursor: null,
 			coverage: page.coverage,
 			lifecycle: page.lifecycle,
-			capabilities: buildCoverageCapabilities(page.coverage),
-			readState: this.getReadState(page.coverage, page.lifecycle, null),
+			capabilities: createCatalogCapabilities(page.coverage),
+			status: this.getReadStatus(page.coverage, page.lifecycle, stateInput, false, [], false),
+			readState: this.getReadState(page.coverage, page.lifecycle, stateInput?.settlement ?? null),
 			degraded: true,
 			invalidated: true,
 		});
 		const snapshot = await this.options.catalog.loadResolutionSnapshot().catch(() => null);
-		const stateInput = await this.loadStateSnapshot(false);
 		const snapshotCurrent = snapshot !== null && snapshot.catalogRevision === page.catalogRevision
-			&& stateInput !== null && snapshot.stateRevision === stateInput.snapshot.revision;
-		if (request.cursor !== undefined && request.cursor !== null
-			&& request.cursor.stateRevision !== (snapshotCurrent ? snapshot.stateRevision : "state-unavailable")) {
-			return this.rememberPage({
-				items: [],
-				nextCursor: null,
-				coverage: page.coverage,
-				lifecycle: page.lifecycle,
-				capabilities: buildCoverageCapabilities(page.coverage),
-				readState: this.getReadState(page.coverage, page.lifecycle, stateInput?.settlement ?? null),
-				degraded: true,
-				invalidated: true,
-			});
-		}
+			&& resolutionStateRevision !== null && snapshot.stateRevision === resolutionStateRevision;
 		const state = stateInput?.snapshot.state ?? createUnavailableState();
 		const resolved = page.items.map((observation) => snapshotCurrent
 			? snapshot.results[observation.observationKey] ?? createUnresolvedMemo(observation)
 			: createUnresolvedMemo(observation));
-		const readState = this.getReadState(page.coverage, page.lifecycle, snapshotCurrent ? stateInput.settlement : null);
+		const readState = this.getReadState(page.coverage, page.lifecycle, snapshotCurrent ? stateInput?.settlement ?? null : null);
+		const status = this.getReadStatus(page.coverage, page.lifecycle, stateInput, snapshotCurrent, resolved, false);
+		const catalogCapabilities = createCatalogCapabilities(page.coverage);
 		return this.rememberPage({
-			items: resolved.map((memo) => this.toMemoItem(memo, state)),
+			items: resolved.map((memo) => this.toMemoItem(memo, state, catalogCapabilities)),
 			nextCursor: page.nextCursor === null ? null : {
 				catalog: page.nextCursor,
-				stateRevision: snapshotCurrent ? snapshot.stateRevision : "state-unavailable",
 			},
 			coverage: page.coverage,
 			lifecycle: page.lifecycle,
-			capabilities: buildCoverageCapabilities(page.coverage),
+			capabilities: catalogCapabilities,
+			status,
 			readState,
-			degraded: readState !== "ready" || !snapshotCurrent,
+			degraded: status.content === "unavailable" || status.catalog === "degraded",
 			invalidated: false,
 		});
 	}
 
 	async getDeletedSummary(): Promise<{ count: number; ids: string[] }> {
+		if (this.options.identityLedger?.getActiveDeletes !== undefined) {
+			const records = await this.listVisibleIdentityDeletes();
+			return { count: records.length, ids: [...new Set(records.map((item) => item.memoId))].sort() };
+		}
 		if (this.options.stateStore === null) return { count: 0, ids: [] };
 		const summary = await this.options.stateStore.getDeletedMemoSummary();
 		return { count: summary.count, ids: summary.memoIds };
 	}
 
 	async listDeleted(limit: number, cursor: string | null = null): Promise<CatalogV2DeletedMemoPage> {
+		if (this.options.identityLedger?.getActiveDeletes !== undefined) {
+			const records = await this.listVisibleIdentityDeletes();
+			const offset = cursor === null ? 0 : Math.max(0, Number.parseInt(cursor, 10) || 0);
+			const selected = records.slice(offset, offset + Math.max(0, limit));
+			const nextOffset = offset + selected.length;
+			return {
+				items: selected.map((record) => ({
+					key: `${record.memoId}:${record.deleteEventId}`,
+					memoId: record.memoId,
+					deleteVersion: {
+						deleteOpId: record.deleteEventId,
+						entryId: record.deleteEventId,
+						payload: {
+							path: `identity-ledger/${record.deleteEventId}`,
+							sha256: "0".repeat(64),
+							byteLength: new TextEncoder().encode(record.evidence.rawBlock).byteLength,
+						},
+						baseEvidence: null,
+						baseBindingId: record.baseBindingId,
+					},
+					deletedAt: record.evidence.deletedAt,
+					logicalDate: record.evidence.logicalDate,
+					sourcePath: record.evidence.sourcePath,
+					section: record.evidence.section,
+					content: readDeletedPayloadContent(record.evidence.rawBlock),
+					sourceMemoId: record.evidence.sourceMemoId,
+					payloadAvailable: true,
+					identityDeleteEventId: record.deleteEventId,
+				})),
+				nextCursor: nextOffset < records.length ? String(nextOffset) : null,
+				stateRevision: this.options.identityLedger.getRevision(),
+			};
+		}
 		if (this.options.stateStore === null || this.options.deletedPayloadStore === null) {
 			return { items: [], nextCursor: null, stateRevision: "state-unavailable" };
 		}
@@ -238,7 +289,7 @@ export class CatalogV2ReadService {
 				builder = new RecordStatsBuilder();
 				continue;
 			}
-			if (!page.capabilities.completeStats) throw new Error("Record statistics require complete Catalog coverage.");
+			if (page.capabilities.stats !== "complete") throw new Error("Record statistics require complete Catalog coverage.");
 			for (const memo of page.items) builder.addMemo(toCatalogV2MemoView(memo));
 			cursor = page.nextCursor;
 			await yieldToUi();
@@ -259,13 +310,28 @@ export class CatalogV2ReadService {
 		}
 		await this.requireCompleteCoverage("Random reunion");
 		const reviews: MemoReviewStateMap = {};
-		const reviewMemos = await this.options.stateStore?.listMaterializedMemosByIds(
-			candidates.flatMap((candidate) => candidate.memoId === null ? [] : [candidate.memoId]),
-		) ?? [];
-		for (const memo of reviewMemos) {
-			reviews[memo.memoId] = memo.lastReviewedAt === null
-				? { memoId: memo.memoId, reviewCount: memo.reviewCount }
-				: { memoId: memo.memoId, reviewCount: memo.reviewCount, lastReviewedAt: memo.lastReviewedAt };
+		for (const candidate of candidates) {
+			if (candidate.memoId === null) continue;
+			const ledgerReview = this.options.identityLedger?.getReviewState(candidate.memoId);
+			if (ledgerReview !== undefined) {
+				reviews[candidate.memoId] = ledgerReview.lastReviewedAt === null
+					? { memoId: candidate.memoId, reviewCount: ledgerReview.reviewCount }
+					: {
+						memoId: candidate.memoId,
+						reviewCount: ledgerReview.reviewCount,
+						lastReviewedAt: ledgerReview.lastReviewedAt,
+					};
+			}
+		}
+		if (this.options.identityLedger === null || this.options.identityLedger === undefined) {
+			const reviewMemos = await this.options.stateStore?.listMaterializedMemosByIds(
+				candidates.flatMap((candidate) => candidate.memoId === null ? [] : [candidate.memoId]),
+			) ?? [];
+			for (const memo of reviewMemos) {
+				reviews[memo.memoId] = memo.lastReviewedAt === null
+					? { memoId: memo.memoId, reviewCount: memo.reviewCount }
+					: { memoId: memo.memoId, reviewCount: memo.reviewCount, lastReviewedAt: memo.lastReviewedAt };
+			}
 		}
 		return getRandomReunionMemos(candidates.map(toCatalogV2MemoView), reviews, count, {
 			today: this.now(),
@@ -311,33 +377,54 @@ export class CatalogV2ReadService {
 		const catalogRevision = batches[0]?.catalogRevision ?? 0;
 		if (batches.some((batch) => batch.catalogRevision !== catalogRevision)) return null;
 		const stateInput = await this.loadStateSnapshot(false);
-		if (stateInput === null) return null;
-		const sharedInspection = await this.loadSharedMutationInspection();
-		if (this.options.inspectSharedMutations !== undefined && sharedInspection === null) {
-			const snapshot: CatalogV2ResolutionSnapshot = {
-				catalogRevision,
-				stateRevision: stateInput.snapshot.revision,
-				mutationInventoryDigest: await sha256Text("unavailable"),
-				results: {},
-			};
-			await this.options.catalog.saveResolutionSnapshot(snapshot);
-			return snapshot;
+		const stateRevision = this.getResolutionStateRevision(stateInput);
+		if (stateRevision === null) return null;
+		let v2Results = new Map<string, ResolvedMemo>();
+		let mutationInventoryDigest = await sha256Text("unavailable");
+		if (stateInput !== null) {
+			const sharedInspection = await this.loadSharedMutationInspection();
+			if (this.options.inspectSharedMutations === undefined || sharedInspection !== null) {
+				const localIntents = [
+					...await this.listLocalIdentityIntents(stateInput.snapshot.state),
+					...await this.listSharedIdentityIntents(stateInput.snapshot.state, sharedInspection),
+				];
+				v2Results = this.resolver.resolveVault({
+					batches,
+					state: stateInput.snapshot.state,
+					stateRevision: stateInput.snapshot.revision,
+					localIntents,
+					settlement: stateInput.settlement,
+				});
+				mutationInventoryDigest = await this.getMutationInventoryDigest(sharedInspection);
+			}
 		}
-		const localIntents = [
-			...await this.listLocalIdentityIntents(stateInput.snapshot.state),
-			...await this.listSharedIdentityIntents(stateInput.snapshot.state, sharedInspection),
-		];
-		const results = this.resolver.resolveVault({
-			batches,
-			state: stateInput.snapshot.state,
-			stateRevision: stateInput.snapshot.revision,
-			localIntents,
-			settlement: stateInput.settlement,
-		});
+		const identityLedgerSnapshot = this.options.identityLedger?.getSnapshot() ?? null;
+		const results = new Map<string, ResolvedMemo>();
+		for (const batch of batches) {
+			for (const observation of batch.observations) {
+				const ledgerState = this.options.identityLedger?.resolveObservationState(observation) ?? { kind: "unbound" as const };
+				results.set(
+					observation.observationKey,
+					ledgerState.kind === "identified"
+						? createIdentityLedgerResolvedMemo(observation, ledgerState.binding)
+						: ledgerState.kind === "conflicted"
+							? createIdentityLedgerConflictedMemo(
+								observation,
+								ledgerState.memoIds,
+								this.options.identityLedger?.getRevision() ?? "identity-v3-unavailable",
+								ledgerState.memoIds.some((memoId) => {
+									const memo = identityLedgerSnapshot?.memos[memoId];
+									return memo?.conflicted === true && memo.conflictBaseBindingId !== null;
+								}),
+							)
+							: v2Results.get(observation.observationKey) ?? createUnresolvedMemo(observation),
+				);
+			}
+		}
 		const snapshot: CatalogV2ResolutionSnapshot = {
 			catalogRevision,
-			stateRevision: stateInput.snapshot.revision,
-			mutationInventoryDigest: await this.getMutationInventoryDigest(sharedInspection),
+			stateRevision,
+			mutationInventoryDigest,
 			results: Object.fromEntries(results),
 		};
 		await this.options.catalog.saveResolutionSnapshot(snapshot);
@@ -349,24 +436,96 @@ export class CatalogV2ReadService {
 		return page;
 	}
 
+	private async createUnavailablePage(): Promise<CatalogV2MemoPage> {
+		const store = this.options.catalog.getStore();
+		const coverage = await store.getCoverage().catch((): CatalogCoverage => ({
+			kind: "partial",
+			coveredFromDate: null,
+			pendingFileCount: 0,
+			coveredFileCount: 0,
+			totalFileCount: 0,
+		}));
+		let lifecycle: CatalogStoreLifecycle;
+		try {
+			lifecycle = store.getLifecycle();
+		} catch {
+			lifecycle = { state: "degraded", persistent: false, writable: false, reason: "catalog_query_failed" };
+		}
+		const stateInput = await this.loadStateSnapshot(false);
+		return this.rememberPage({
+			items: [],
+			nextCursor: null,
+			coverage,
+			lifecycle,
+			capabilities: createCatalogCapabilities(coverage),
+			status: this.getReadStatus(coverage, lifecycle, stateInput, false, [], true),
+			readState: "storage_unavailable",
+			degraded: true,
+			invalidated: false,
+		});
+	}
+
+	private getReadStatus(
+		coverage: CatalogCoverage,
+		lifecycle: CatalogStoreLifecycle,
+		stateInput: CatalogV2StateInput,
+		snapshotCurrent: boolean,
+		resolved: readonly ResolvedMemo[],
+		contentUnavailable: boolean,
+	): CatalogV2ReadStatus {
+		const state = stateInput?.snapshot.state ?? null;
+		const settlement = stateInput?.settlement ?? null;
+		const identityLedgerStatus = this.options.identityLedger?.getStatus() ?? null;
+		const legacyImportStatus = this.options.getLegacyImportStatus?.() ?? "missing";
+		const catalogDegraded = contentUnavailable
+			|| lifecycle.state === "degraded"
+			|| lifecycle.state === "retrying"
+			|| lifecycle.state === "read-only";
+		const identityConflicted = identityLedgerStatus === "conflicted"
+			|| resolved.some((memo) => memo.kind === "ambiguous" && memo.capabilities.identity.repair !== "ready")
+			|| (state?.quarantine.length ?? 0) > 0
+			|| (state?.forkedWriterIds.length ?? 0) > 0
+			|| (settlement?.blockedMemoIds?.length ?? 0) > 0;
+		return {
+			content: contentUnavailable
+				? "unavailable"
+				: coverage.kind === "complete" && lifecycle.state !== "opening" && lifecycle.state !== "rebuilding"
+					? "ready"
+					: "scanning",
+			catalog: catalogDegraded ? "degraded" : coverage.kind === "complete" ? "complete" : "partial",
+			identity: identityLedgerStatus === "ready"
+				? identityConflicted ? "conflicted" : "ready"
+				: identityLedgerStatus === "conflicted"
+					? "conflicted"
+					: identityLedgerStatus === "missing" || identityLedgerStatus === "absent"
+						? "absent"
+						: identityLedgerStatus === "unavailable"
+							? "syncing"
+							: identityConflicted ? "conflicted" : "absent",
+			projection: this.getProjectionState(),
+			migration: legacyImportStatus === "attention" || legacyImportStatus === "partial"
+				|| legacyImportStatus === "unavailable" ? "attention" : "none",
+		};
+	}
+
+	private getProjectionState(): CatalogV2ProjectionState {
+		try {
+			return this.options.getProjectionState?.() ?? "ready";
+		} catch {
+			return "failed";
+		}
+	}
+
 	private getReadState(
 		coverage: CatalogCoverage,
 		lifecycle: CatalogStoreLifecycle,
 		settlement: CatalogV2IdentitySettlement | null,
 	): CatalogV2ReadState {
-		const installReadState = this.getStaticInstallReadState();
-		if (installReadState !== null) return installReadState;
 		if (lifecycle.state === "degraded" || lifecycle.state === "retrying" || lifecycle.state === "read-only"
-			|| this.options.stateStore?.isAuthoritative() === false
-			|| this.options.transactionStore?.isAuthoritative() === false) {
+		) {
 			return "storage_unavailable";
 		}
-		const migrationRequired = settlement?.migrationRequired
-			?? (this.options.getInstallMode?.() ?? this.options.installMode) === "legacy_upgrade";
-		if (migrationRequired && settlement === null) return "legacy_detected";
-		if (coverage.kind !== "complete") return migrationRequired ? "upgrade_building" : "history_building";
-		if (settlement === null || !settlement.stateComplete || !settlement.revisionStable) return "state_settling";
-		if (migrationRequired && !settlement.migrationComplete) return "upgrade_building";
+		if (coverage.kind !== "complete") return "history_building";
 		return "ready";
 	}
 
@@ -376,14 +535,6 @@ export class CatalogV2ReadService {
 			throw new Error(`${feature} requires complete Catalog coverage.`);
 		}
 		return coverage;
-	}
-
-	private getStaticInstallReadState(): CatalogV2ReadState | null {
-		const installMode = this.options.getInstallMode?.() ?? this.options.installMode;
-		if (installMode === "uninitialized") return "needs_initialization";
-		if (installMode === "joining") return "waiting_for_sync";
-		if (installMode === "attention") return "attention";
-		return null;
 	}
 
 	private async queryAllItems(
@@ -405,6 +556,18 @@ export class CatalogV2ReadService {
 		return items;
 	}
 
+	private async listVisibleIdentityDeletes() {
+		const ledger = this.options.identityLedger;
+		if (ledger?.getActiveDeletes === undefined) return [];
+		const resolution = await this.options.catalog.loadResolutionSnapshot().catch(() => null);
+		const visibleMemoIds = new Set(Object.values(resolution?.results ?? {}).flatMap((memo) =>
+			memo.kind === "identified" ? [memo.identityHandle.memoId] : []));
+		return ledger.getActiveDeletes()
+			.filter((record) => !visibleMemoIds.has(record.memoId))
+			.sort((left, right) => right.evidence.deletedAt.localeCompare(left.evidence.deletedAt)
+				|| left.deleteEventId.localeCompare(right.deleteEventId));
+	}
+
 	private async loadStateSnapshot(
 		historical: boolean,
 	): Promise<Awaited<ReturnType<CatalogV2StateShadowCoordinator["loadLocalStateSnapshot"]>>> {
@@ -418,6 +581,12 @@ export class CatalogV2ReadService {
 				return null;
 			}
 		}
+	}
+
+	private getResolutionStateRevision(stateInput: CatalogV2StateInput): string | null {
+		const ledger = this.options.identityLedger;
+		if (ledger === null || ledger === undefined) return stateInput?.snapshot.revision ?? null;
+		return `${ledger.getRevision()}|v2:${stateInput?.snapshot.revision ?? "unavailable"}`;
 	}
 
 	private async listLocalIdentityIntents(state: CatalogV2MaterializedState): Promise<CatalogV2LocalIdentityIntent[]> {
@@ -530,16 +699,31 @@ export class CatalogV2ReadService {
 		}
 	}
 
-	private toMemoItem(resolved: ResolvedMemo, state: CatalogV2MaterializedState): CatalogV2MemoItem {
+	private toMemoItem(
+		resolved: ResolvedMemo,
+		state: CatalogV2MaterializedState,
+		catalogCapabilities: CatalogCapabilities,
+	): CatalogV2MemoItem {
 		const observation = resolved.observation as CatalogObservation;
-		const memoId = resolved.kind === "identified" ? resolved.memoId : null;
+		const identityHandle = resolved.identityHandle;
+		const memoId = identityHandle?.memoId ?? null;
 		const materialized = memoId === null ? undefined : state.memos[memoId];
 		const activeRelations = materialized?.relationEntries.filter((entry) =>
 			!materialized.supersededRelationIds.includes(entry.relationId)) ?? [];
 		const sourceMemoIds = [...new Set(activeRelations.map((entry) => entry.sourceMemoId))];
+		const ledgerSourceMemoId = memoId === null ? null : this.options.identityLedger?.getSourceMemoId(memoId) ?? null;
 		return {
 			key: memoId ?? observation.observationKey,
+			renderKey: observation.observationKey,
 			memoId,
+			identityHandle,
+			observationHandle: {
+				sourcePath: observation.sourcePath,
+				sourceRevision: observation.sourceRevision,
+				startLine: observation.startLine,
+				endLine: observation.endLine,
+				rawBlockHash: observation.rawBlockHash,
+			},
 			createdAt: `${observation.logicalDate}T${normalizeTime(observation.time)}`,
 			content: observation.content,
 			tags: [...observation.tags],
@@ -549,8 +733,11 @@ export class CatalogV2ReadService {
 			timeBuoyDates: [...observation.timeBuoyDates],
 			sourcePath: observation.sourcePath,
 			lineNumberHint: observation.startLine + 1,
-			sourceMemoId: sourceMemoIds.length === 1 ? sourceMemoIds[0] ?? null : null,
-			capabilities: resolved.capabilities,
+			sourceMemoId: ledgerSourceMemoId ?? (sourceMemoIds.length === 1 ? sourceMemoIds[0] ?? null : null),
+			capabilities: {
+				...resolved.capabilities,
+				catalog: catalogCapabilities,
+			},
 			resolved,
 			observation,
 		};
@@ -580,17 +767,6 @@ function buildTimeBuoyInstance(memo: CatalogV2MemoItem, targetDate: string) {
 	return {
 		memoId: memo.memoId ?? memo.key,
 		targetDate,
-	};
-}
-
-function buildCoverageCapabilities(coverage: CatalogCoverage): CatalogV2CoverageCapabilities {
-	const complete = coverage.kind === "complete";
-	return {
-		browseKnown: true,
-		completeStats: complete,
-		completeShuffleDayPool: complete,
-		completeRandomPool: complete,
-		completeTimeBuoyIndex: complete,
 	};
 }
 
@@ -624,21 +800,50 @@ function createUnavailableState(): CatalogV2MaterializedState {
 function createUnresolvedMemo(observation: CatalogObservation): ResolvedMemo {
 	return {
 		kind: "observed",
+		identityHandle: null,
 		observation,
 		adoption: "settling",
-		capabilities: {
-			view: true,
-			copy: true,
-			openDaily: true,
-			openLinks: true,
-			openImages: true,
-			copyAsNew: "blocked_settling",
-			edit: "blocked_settling",
-			toggleTask: "blocked_settling",
-			delete: "blocked_settling",
-			createReference: "blocked_settling",
-			recordReview: "blocked_settling",
-		},
+		capabilities: createResolvedMemoCapabilities("syncing"),
 		stateRevision: "state-unavailable",
+	};
+}
+
+function createIdentityLedgerResolvedMemo(
+	observation: CatalogObservation,
+	binding: IdentityLedgerBinding,
+): ResolvedMemo {
+	return {
+		kind: "identified",
+		identityHandle: {
+			memoId: binding.memoId,
+			activeBindingId: binding.bindingId,
+			identityRevision: binding.identityRevision,
+		},
+		observation,
+		bindingEvidence: observationToIdentityEvidence(observation),
+		capabilities: createIdentityLedgerMemoCapabilities(),
+		stateRevision: binding.identityRevision,
+	};
+}
+
+function createIdentityLedgerConflictedMemo(
+	observation: CatalogObservation,
+	memoIds: readonly string[],
+	identityRevision: string,
+	repairable: boolean,
+): ResolvedMemo {
+	return {
+		kind: "ambiguous",
+		identityHandle: null,
+		observation,
+		candidates: [...new Set(memoIds)].sort().map((memoId) => ({
+			memoId,
+			source: "manual_successor" as const,
+		})),
+		reason: "manual_successor",
+		capabilities: repairable
+			? createIdentityLedgerConflictCapabilities()
+			: createResolvedMemoCapabilities("conflicted"),
+		stateRevision: identityRevision,
 	};
 }

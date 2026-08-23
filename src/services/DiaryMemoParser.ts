@@ -1,6 +1,6 @@
 import type { MemoObservation } from "../types/catalog";
 import type { MemoLinkRef } from "../types/memo";
-import { hashMemoContent } from "../utils/hash";
+import { hashMemoContent, hashText } from "../utils/hash";
 import { getMarkdownTaskLines } from "../utils/markdownTasks";
 import {
 	extractTrailingBlockId,
@@ -28,6 +28,14 @@ export interface DiaryMemoParseResult {
 	observations: MemoObservation[];
 }
 
+export interface DiaryMemoRevisionParseInput {
+	sourcePath: string;
+	logicalDate: string;
+	headings: readonly string[];
+	content: string;
+	sourceRevision: string;
+}
+
 export type CatalogDigestBytes = (bytes: Uint8Array) => Promise<string>;
 
 interface CodeFenceMarker {
@@ -50,6 +58,17 @@ export class DiaryMemoParser {
 	async parse(input: DiaryMemoParseInput): Promise<DiaryMemoParseResult> {
 		const sourceRevision = await this.digestBytes(input.bytes);
 		const content = decodeUtf8(input.bytes);
+		return this.parseRevision({
+			sourcePath: input.sourcePath,
+			logicalDate: input.logicalDate,
+			headings: input.headings,
+			content,
+			sourceRevision,
+		});
+	}
+
+	parseRevision(input: DiaryMemoRevisionParseInput): DiaryMemoParseResult {
+		const { content, sourceRevision } = input;
 		const lines = splitMarkdownLines(content);
 		const allowedHeadings = new Set(input.headings.map((heading) => heading.trim()).filter(Boolean));
 		const observations: MemoObservation[] = [];
@@ -104,6 +123,7 @@ export class DiaryMemoParser {
 			observations.push({
 				sourcePath: normalizeVaultPath(input.sourcePath),
 				sourceRevision,
+				rawBlockHash: hashText(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n")),
 				logicalDate: input.logicalDate,
 				section: currentSection,
 				startLine: parsed.startLine,

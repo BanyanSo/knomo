@@ -9,6 +9,8 @@ export interface KnomoSettings {
 	dailyHeading: string;
 	dailyInsertPosition: DailyInsertPosition;
 	memoTimeFormat: MemoTimeFormat;
+	knomoDataRoot: string;
+	knomoDataRootConfigured: boolean;
 	monthlyMemoFolder: string;
 	monthlyMemoFileFormat: string;
 	monthlyDateHeadingFormat: string;

@@ -11,10 +11,12 @@ import {
 import { t } from "../i18n";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
+import type { KnomoDataRootMigrationService } from "../services/KnomoDataRootMigrationService";
+import type { KnomoSharedConfigService } from "../services/KnomoSharedConfigService";
 import type { CatalogV2FeatureService } from "../services/CatalogV2FeatureService";
 import type { CatalogV2ReadService } from "../services/CatalogV2ReadService";
 import type { CatalogV2MonthlyProjectionCoordinator } from "../services/CatalogV2MonthlyProjectionCoordinator";
-import type { CatalogV2PendingMutationInspectionItem } from "../types/catalogV2Runtime";
+import type { CatalogV3LegacyIdentityImporter } from "../services/CatalogV3LegacyIdentityImporter";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { normalizeVaultPath } from "../utils/path";
 import { formatDatePart } from "../utils/date";
@@ -50,6 +52,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly catalogV2FeatureService: CatalogV2FeatureService,
 		private readonly catalogV2ReadService: CatalogV2ReadService,
 		private readonly catalogV2MonthlyProjectionCoordinator: CatalogV2MonthlyProjectionCoordinator,
+		private readonly knomoDataRootMigrationService: KnomoDataRootMigrationService,
+		private readonly knomoSharedConfigService: KnomoSharedConfigService,
+		private readonly legacyIdentityImporter: CatalogV3LegacyIdentityImporter,
 	) {
 		super(app, plugin);
 	}
@@ -130,26 +135,31 @@ export class KnomoSettingTab extends PluginSettingTab {
 						},
 					},
 					{
-						name: t("settings.monthlyFolder.name"),
-						desc: t("settings.monthlyFolder.desc"),
+						name: t("settings.dataRoot.name"),
+						desc: t("settings.dataRoot.desc"),
 						render: (setting) => {
 							const settings = this.settingsService.getSettings();
-							let monthlyFolderDraft = settings.monthlyMemoFolder;
+							let dataRootDraft = settings.knomoDataRoot;
 							setting
 								.addText((text) => {
 									text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
-									text.setValue(settings.monthlyMemoFolder);
+									text.setValue(settings.knomoDataRoot);
 									text.onChange((value) => {
-										monthlyFolderDraft = value;
+										dataRootDraft = value;
 									});
 								})
 								.addButton((button) => {
-									button.setButtonText(t("settings.monthlyFolder.save"));
+									button.setButtonText(t("settings.dataRoot.save"));
 									button.onClick(() => {
-										void this.saveMonthlyFolder(monthlyFolderDraft, button);
+										void this.saveKnomoDataRoot(dataRootDraft, button);
 									});
 								});
 						},
+					},
+					{
+						name: t("settings.sharedConfig.name"),
+						desc: this.getSharedConfigDescription(),
+						render: (setting) => { this.renderSharedConfigSetting(setting); },
 					},
 					{
 						name: t("settings.excludeMonthly.name"),
@@ -221,9 +231,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 								dropdown.addOption("desc", t("settings.dateOrder.descOption"));
 								dropdown.setValue(settings.monthlyDateOrder);
 								dropdown.onChange((value) => {
-									void this.settingsService.updateSettings({
-										monthlyDateOrder: value as MonthlyDateOrder,
-									});
+									void (async () => {
+										await this.settingsService.updateSettings({
+											monthlyDateOrder: value as MonthlyDateOrder,
+										});
+										await this.syncSharedConfiguration();
+									})();
 								});
 							});
 						},
@@ -249,10 +262,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 						},
 					},
 					{
-						name: t("settings.pendingRecovery.name"),
-						desc: t("settings.pendingRecovery.desc"),
+						name: t("settings.legacyIdentityImport.name"),
+						desc: t("settings.legacyIdentityImport.desc"),
 						render: (setting: Setting) => {
-							this.renderPendingMutationRecovery(setting);
+							this.renderLegacyIdentityImport(setting);
 						},
 					},
 					{
@@ -333,23 +346,25 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 
-		let monthlyFolderDraft = settings.monthlyMemoFolder;
+		let dataRootDraft = settings.knomoDataRoot;
 		new Setting(containerEl)
-			.setName(t("settings.monthlyFolder.name"))
-			.setDesc(t("settings.monthlyFolder.desc"))
+			.setName(t("settings.dataRoot.name"))
+			.setDesc(t("settings.dataRoot.desc"))
 			.addText((text) => {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
-				text.setValue(settings.monthlyMemoFolder);
+				text.setValue(settings.knomoDataRoot);
 				text.onChange((value) => {
-					monthlyFolderDraft = value;
+					dataRootDraft = value;
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText(t("settings.monthlyFolder.save"));
+				button.setButtonText(t("settings.dataRoot.save"));
 				button.onClick(() => {
-					void this.saveMonthlyFolder(monthlyFolderDraft, button);
+					void this.saveKnomoDataRoot(dataRootDraft, button);
 				});
 			});
+		this.renderSharedConfigSetting(new Setting(containerEl)
+			.setName(t("settings.sharedConfig.name")));
 		new Setting(containerEl)
 			.setName(t("settings.excludeMonthly.name"))
 			.setDesc(t("settings.excludeMonthly.desc"))
@@ -406,9 +421,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 				dropdown.addOption("desc", t("settings.dateOrder.descOption"));
 				dropdown.setValue(settings.monthlyDateOrder);
 				dropdown.onChange((value) => {
-					void this.settingsService.updateSettings({
-						monthlyDateOrder: value as MonthlyDateOrder,
-					});
+					void (async () => {
+						await this.settingsService.updateSettings({
+							monthlyDateOrder: value as MonthlyDateOrder,
+						});
+						await this.syncSharedConfiguration();
+					})();
 				});
 			});
 
@@ -427,11 +445,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 		const catalogRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
 		void this.renderInitialRebuildResult(catalogRebuildResultEl);
-		const pendingRecoverySetting = new Setting(containerEl)
+		const legacyIdentityImportSetting = new Setting(containerEl)
 			.setClass("knomo-maintenance-setting")
-			.setName(t("settings.pendingRecovery.name"))
-			.setDesc(t("settings.pendingRecovery.desc"));
-		this.renderPendingMutationRecovery(pendingRecoverySetting);
+			.setName(t("settings.legacyIdentityImport.name"))
+			.setDesc(t("settings.legacyIdentityImport.desc"));
+		this.renderLegacyIdentityImport(legacyIdentityImportSetting);
 		const monthlySetting = new Setting(containerEl).setName(t("settings.monthlyRebuild.name"));
 		this.renderCatalogV2MonthlyRebuildSetting(monthlySetting);
 	}
@@ -442,13 +460,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.cancelAllDelayedSettingNotices();
 	}
 
-	private renderPendingMutationRecovery(setting: Setting): void {
+	private renderLegacyIdentityImport(setting: Setting): void {
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
 		statusEl.setAttr("role", "status");
 		statusEl.setAttr("aria-live", "polite");
 		statusEl.setAttr("aria-atomic", "true");
 		statusEl.setAttr("tabindex", "-1");
-		void this.refreshPendingMutationRecovery(statusEl);
+		this.refreshLegacyIdentityImport(statusEl);
 	}
 
 	private renderCatalogV2MonthlyRebuildSetting(setting: Setting): void {
@@ -482,108 +500,23 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), resultEl);
 	}
 
-	private async refreshPendingMutationRecovery(statusEl: HTMLElement, focus = false): Promise<void> {
+	private refreshLegacyIdentityImport(statusEl: HTMLElement): void {
 		statusEl.empty();
-		statusEl.setText(t("settings.pendingRecovery.loading"));
-		try {
-			const inspection = await this.catalogV2FeatureService.inspectPendingMutations();
-			const items = inspection.items.filter((item) => item.status !== "abandoned");
-			statusEl.empty();
-			if (items.length === 0) {
-				statusEl.setText(t("settings.pendingRecovery.none"));
-			} else {
-				for (const item of items) this.renderPendingMutationItem(statusEl, item);
-			}
-		} catch {
-			statusEl.setText(t("settings.pendingRecovery.loadFailed"));
-		}
-		if (focus) statusEl.focus({ preventScroll: true });
-	}
-
-	private renderPendingMutationItem(
-		statusEl: HTMLElement,
-		item: CatalogV2PendingMutationInspectionItem,
-	): void {
-		const itemEl = statusEl.createDiv({ cls: "knomo-pending-recovery-item" });
-		itemEl.createDiv({
-			cls: "knomo-setting-help",
-			text: t("settings.pendingRecovery.item", {
-				paths: item.paths.join(", ") || t("settings.pendingRecovery.unknownPath"),
-				status: this.getPendingMutationStatusText(item),
-			}),
-		});
-		const actionsEl = itemEl.createDiv({ cls: "knomo-pending-recovery-actions" });
-		const canContinue = item.status === "prepared" || item.status === "daily_after"
-			|| item.status === "committed_unbound" || item.reasons.includes("daily_partial");
-		if (canContinue) {
-			const continueButton = actionsEl.createEl("button", {
-				text: t("settings.pendingRecovery.continue"),
-				attr: {
-					type: "button",
-					"aria-label": t("settings.pendingRecovery.continueLabel", {
-						paths: item.paths.join(", ") || t("settings.pendingRecovery.unknownPath"),
-					}),
-				},
+		const report = this.legacyIdentityImporter.getReport();
+		const messageKey = `settings.legacyIdentityImport.${report.status}` as const;
+		statusEl.setText(t(messageKey, {
+			imported: report.importedMemoIds.length,
+			skipped: report.skippedMemoIds.length,
+		}));
+		for (const item of report.diagnostics) {
+			statusEl.createDiv({
+				cls: "knomo-setting-help",
+				text: t("settings.legacyIdentityImport.diagnostic", {
+					code: item.code,
+					path: item.sourcePath ?? t("settings.legacyIdentityImport.unknownPath"),
+					detail: item.detail,
+				}),
 			});
-			continueButton.addEventListener("click", () => {
-				void this.runPendingMutationRecovery(item, "continue", continueButton, statusEl);
-			});
-		}
-		if (item.status === "prepared") {
-			const abandonButton = actionsEl.createEl("button", {
-				text: t("settings.pendingRecovery.abandon"),
-				attr: {
-					type: "button",
-					"aria-label": t("settings.pendingRecovery.abandonLabel", {
-						paths: item.paths.join(", ") || t("settings.pendingRecovery.unknownPath"),
-					}),
-				},
-			});
-			abandonButton.addEventListener("click", () => {
-				void this.runPendingMutationRecovery(item, "abandon", abandonButton, statusEl);
-			});
-		}
-	}
-
-	private getPendingMutationStatusText(item: CatalogV2PendingMutationInspectionItem): string {
-		if (item.reasons.includes("daily_partial")) return t("settings.pendingRecovery.partial");
-		switch (item.status) {
-			case "prepared": return t("settings.pendingRecovery.prepared");
-			case "daily_after": return t("settings.pendingRecovery.dailyAfter");
-			case "committed_unbound": return t("settings.pendingRecovery.committedUnbound");
-			case "abandoned": return t("settings.pendingRecovery.abandonedStatus");
-			case "attention": return t("settings.pendingRecovery.attention");
-		}
-	}
-
-	private async runPendingMutationRecovery(
-		item: CatalogV2PendingMutationInspectionItem,
-		action: "continue" | "abandon",
-		button: HTMLButtonElement,
-		statusEl: HTMLElement,
-	): Promise<void> {
-		const confirmed = await showKnomoConfirmModal(this.app, {
-			message: action === "continue"
-				? t("settings.pendingRecovery.continueConfirm")
-				: t("settings.pendingRecovery.abandonConfirm"),
-			confirmLabel: action === "continue"
-				? t("settings.pendingRecovery.continue")
-				: t("settings.pendingRecovery.abandon"),
-			danger: action === "abandon",
-		});
-		if (!confirmed) return;
-		button.disabled = true;
-		statusEl.setAttr("aria-busy", "true");
-		try {
-			const completed = await this.catalogV2FeatureService?.recoverPendingMutation(item.mutationId, action) ?? false;
-			new Notice(completed
-				? action === "continue" ? t("settings.pendingRecovery.completed") : t("settings.pendingRecovery.abandoned")
-				: t("settings.pendingRecovery.failed"));
-		} catch {
-			new Notice(t("settings.pendingRecovery.failed"));
-		} finally {
-			statusEl.removeAttribute("aria-busy");
-			await this.refreshPendingMutationRecovery(statusEl, true);
 		}
 	}
 
@@ -723,6 +656,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return true;
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
+		await this.syncSharedConfiguration();
 		await this.catalogV2FeatureService?.rebuildLocalCatalog();
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
 			return true;
@@ -756,6 +690,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return true;
 		}
 		await this.settingsService.updateSettings({ monthlyDateHeadingFormat: nextFormat });
+		await this.syncSharedConfiguration();
 		return true;
 	}
 
@@ -797,6 +732,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				return false;
 			}
 			await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
+			await this.syncSharedConfiguration();
 			for (const period of plan.periods) {
 				await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
 			}
@@ -822,40 +758,40 @@ export class KnomoSettingTab extends PluginSettingTab {
 		statusEl.toggleClass("is-error", isLegacyFormat);
 	}
 
-	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<void> {
-		const monthlyMemoFolder = normalizeVaultPath(value);
+	private async saveKnomoDataRoot(value: string, button: ButtonComponent): Promise<void> {
+		const knomoDataRoot = normalizeVaultPath(value);
 		const currentSettings = this.settingsService.getSettings();
 		button.setDisabled(true);
-		button.setButtonText(t("settings.monthlyFolder.saving"));
+		button.setButtonText(t("settings.dataRoot.saving"));
 		try {
-			if (monthlyMemoFolder !== currentSettings.monthlyMemoFolder) {
-				const plan = await this.settingsService.planMonthlyMemoFolderMigration(monthlyMemoFolder);
-				if (plan.conflicts.length > 0) {
-					throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
-				}
+			const plan = await this.knomoDataRootMigrationService.plan(knomoDataRoot);
+			if (plan.action === "migrate" || plan.action === "adopt") {
 				const confirmed = await showKnomoConfirmModal(this.app, {
-					message: t("settings.monthlyFolder.confirm", {
-						current: currentSettings.monthlyMemoFolder,
-						next: monthlyMemoFolder,
+					message: t("settings.dataRoot.confirm", {
+						current: currentSettings.knomoDataRoot,
+						next: knomoDataRoot,
 					}),
 				});
 				if (!confirmed) {
 					return;
 				}
 			}
-			await this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder);
-			if (monthlyMemoFolder !== currentSettings.monthlyMemoFolder) {
+			await this.knomoDataRootMigrationService.migrate(knomoDataRoot);
+			await this.knomoSharedConfigService.reloadConfiguredRoot();
+			await this.syncSharedConfiguration();
+			await this.legacyIdentityImporter.run();
+			if (knomoDataRoot !== currentSettings.monthlyMemoFolder) {
 				for (const period of await this.catalogV2MonthlyProjectionCoordinator.listPeriods()) {
 					await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
 				}
 			}
-			new Notice(t("settings.monthlyFolder.saved"));
+			new Notice(t("settings.dataRoot.saved"));
 		} catch (error) {
-			const message = formatServiceError(error, t("settings.monthlyFolder.saveFailed"));
+			const message = formatServiceError(error, t("settings.dataRoot.saveFailed"));
 			new Notice(message);
 		} finally {
 			button.setDisabled(false);
-			button.setButtonText(t("settings.monthlyFolder.save"));
+			button.setButtonText(t("settings.dataRoot.save"));
 		}
 	}
 
@@ -1044,6 +980,61 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private async renderInitialRebuildResult(resultEl: HTMLElement): Promise<void> {
 		this.renderRebuildResult(t("settings.rebuild.before"), resultEl);
+	}
+
+	private getSharedConfigDescription(): string {
+		switch (this.knomoSharedConfigService.getStatus()) {
+			case "ready":
+				return t("settings.sharedConfig.ready");
+			case "conflicted":
+				return t("settings.sharedConfig.conflicted");
+			case "unsupported":
+				return t("settings.sharedConfig.unsupported");
+			case "unavailable":
+				return t("settings.sharedConfig.unavailable");
+			case "missing":
+				return t("settings.sharedConfig.missing");
+		}
+	}
+
+	private renderSharedConfigSetting(setting: Setting): void {
+		const status = this.knomoSharedConfigService.getStatus();
+		setting.setDesc(this.getSharedConfigDescription());
+		if (status === "unsupported" || status === "unavailable") return;
+		setting.addButton((button) => {
+			button.setButtonText(status === "conflicted"
+				? t("settings.sharedConfig.resolve")
+				: t("settings.sharedConfig.publish"));
+			button.onClick(() => {
+				void (async () => {
+					button.setDisabled(true);
+					try {
+						if (status === "conflicted") await this.knomoSharedConfigService.resolveWithLocalConfig();
+						else await this.knomoSharedConfigService.publishLocalConfig();
+						await this.catalogV2FeatureService.rebuildLocalCatalog();
+						await this.catalogV2MonthlyProjectionCoordinator.handleConfigurationChanged();
+						new Notice(t("settings.sharedConfig.saved"));
+						this.display();
+					} catch {
+						new Notice(t("settings.sharedConfig.failed"));
+					} finally {
+						button.setDisabled(false);
+					}
+				})();
+			});
+		});
+	}
+
+	private async syncSharedConfiguration(): Promise<void> {
+		try {
+			await this.knomoSharedConfigService.refreshLocalConfig();
+			const status = this.knomoSharedConfigService.getStatus();
+			if (status === "ready" || status === "missing") {
+				await this.knomoSharedConfigService.publishLocalConfig();
+			}
+		} catch {
+			// 本机设置保存成功后，共享配置写入失败只保留待处理状态。
+		}
 	}
 
 	private renderMonthlyRebuildResult(message: string, resultEl: HTMLElement): void {

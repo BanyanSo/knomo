@@ -9,14 +9,12 @@ import type { AnySchema } from "ajv";
 import { buildStateCompactionCommit, buildStateSnapshot } from "../src/services/CatalogV2Protocol";
 import type { StateOperation } from "../src/types/catalogV2";
 
-test("frozen phase 2 JSON Schemas accept canonical examples and built snapshot artifacts", async (context) => {
+test("frozen phase 2 JSON Schemas accept canonical examples and built snapshot artifacts", async () => {
 	const ajv = new Ajv2020({ strict: false, validateFormats: false });
 	const schemaRoot = path.join(process.cwd(), "docs/architecture/catalog-v2/schemas");
 	const exampleRoot = path.join(process.cwd(), "docs/architecture/catalog-v2/examples");
-	if (!existsSync(schemaRoot) || !existsSync(exampleRoot)) {
-		context.skip("docs/ is intentionally device-local and is not a release dependency");
-		return;
-	}
+	assert.equal(existsSync(schemaRoot), true, "Versioned Catalog V2 schemas are required for release tests.");
+	assert.equal(existsSync(exampleRoot), true, "Versioned Catalog V2 examples are required for release tests.");
 	const migrationPackageValidator = ajv.compile(await readSchema(path.join(schemaRoot, "migration-package.schema.json")));
 	const migrationCommitValidator = ajv.compile(await readSchema(path.join(schemaRoot, "migration-commit.schema.json")));
 	assert.equal(migrationPackageValidator(await readJson(path.join(exampleRoot, "migration-package.valid.json"))), true, JSON.stringify(migrationPackageValidator.errors));

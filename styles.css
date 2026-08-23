@@ -2541,6 +2541,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	cursor: pointer;
 }
 
+.knomo-plugin .knomo-card-menu:disabled {
+	opacity: 0.55;
+	cursor: wait;
+}
+
 .knomo-plugin .knomo-card-menu:hover,
 .knomo-plugin .knomo-card-menu:focus,
 .knomo-plugin .knomo-card-menu:focus-visible,

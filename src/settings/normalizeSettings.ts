@@ -68,6 +68,10 @@ function stringArrayOrDefault(value: unknown, fallback: string[]): string[] {
 export function normalizeSettings(value: unknown): KnomoSettings {
 	const savedSettings = isRecord(value) ? value : {};
 	const merged = Object.assign({}, DEFAULT_KNOMO_SETTINGS, savedSettings);
+	const persistedKnomoDataRoot = typeof savedSettings.knomoDataRoot === "string"
+		&& savedSettings.knomoDataRoot.trim().length > 0
+		? savedSettings.knomoDataRoot
+		: null;
 	const dailyInsertPosition = isDailyInsertPosition(merged.dailyInsertPosition)
 		? merged.dailyInsertPosition
 		: DEFAULT_KNOMO_SETTINGS.dailyInsertPosition;
@@ -90,6 +94,10 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 		dailyHeading: stringOrDefault(merged.dailyHeading, DEFAULT_KNOMO_SETTINGS.dailyHeading),
 		dailyInsertPosition,
 		memoTimeFormat,
+		knomoDataRoot: normalizeVaultPath(persistedKnomoDataRoot
+			?? stringOrDefault(merged.monthlyMemoFolder, DEFAULT_KNOMO_SETTINGS.monthlyMemoFolder)),
+		knomoDataRootConfigured: persistedKnomoDataRoot !== null
+			&& booleanOrDefault(savedSettings.knomoDataRootConfigured, false),
 		monthlyMemoFolder: normalizeVaultPath(
 			stringOrDefault(merged.monthlyMemoFolder, DEFAULT_KNOMO_SETTINGS.monthlyMemoFolder),
 		),

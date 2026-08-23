@@ -44,6 +44,7 @@ test("background Daily writes through Vault.process with a compare-and-swap guar
 	const file = makeFile("Daily/2026-08-09.md");
 	let content = "## Memos\n- 09:00 before\n";
 	let processCalls = 0;
+	let updateCalls = 0;
 	const app = {
 		workspace: { getActiveViewOfType: () => null },
 		vault: {
@@ -61,12 +62,16 @@ test("background Daily writes through Vault.process with a compare-and-swap guar
 		logicalDate: "2026-08-09",
 		headings: ["## Memos"],
 		expectedRevision: null,
-		update: (current) => current.replace("before", "after"),
+		update: (current) => {
+			updateCalls += 1;
+			return current.replace("before", "after");
+		},
 	});
 	const result = await gateway.commit(prepared);
 
 	assert.equal(result.mode, "vault_process");
 	assert.equal(processCalls, 1);
+	assert.equal(updateCalls, 2);
 	assert.equal(content, "## Memos\n- 09:00 after\n");
 });
 

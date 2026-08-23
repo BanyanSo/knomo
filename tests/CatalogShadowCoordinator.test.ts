@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { setImmediate as waitImmediate, setTimeout as waitTimer } from "node:timers/promises";
 import test from "node:test";
+import type { App } from "obsidian";
+
+import type { CatalogRevisionTransition } from "../src/services/CatalogShadowCoordinator";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 test("Catalog 扫描 off switch 不注册事件、不读取 Daily", async () => {
@@ -26,6 +29,68 @@ test("Catalog 扫描 off switch 不注册事件、不读取 Daily", async () => 
 	assert.equal(fixture.registeredVaultEvents.length, 0);
 	assert.equal(fixture.readCount(), 0);
 	assert.deepEqual(await store.listFiles(), []);
+});
+
+test("V3-FAIL-007：本机 fallback 扫描完成后仍明确报告 partial coverage", async () => {
+	await ensureObsidianStub();
+	const { CatalogShadowCoordinator } = await import("../src/services/CatalogShadowCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const fixture = await createCoordinatorFixture([
+		{ path: "Journal/2026-08-22.md", content: "## Memos\n- 09:00 fallback memo", mtime: 10 },
+	]);
+	const store = new InMemoryMemoCatalogStore();
+	const coordinator = new CatalogShadowCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ fullAuditIntervalMs: 0, isConfigurationComplete: () => false },
+	);
+	coordinator.start(fixture.owner);
+	await coordinator.initialize();
+	await coordinator.waitForIdle();
+
+	const page = await store.query({ limit: 50 });
+	assert.deepEqual(page.items.map((item) => item.content), ["fallback memo"]);
+	assert.equal(page.coverage.kind, "partial");
+	assert.equal(page.coverage.pendingFileCount, 0);
+	fixture.unload();
+});
+
+test("配置晚到触发同一文件分区重扫，不重复 observation", async () => {
+	await ensureObsidianStub();
+	const { CatalogShadowCoordinator } = await import("../src/services/CatalogShadowCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const fixture = await createCoordinatorFixture([
+		{ path: "Journal/2026-08-22.md", content: "## Memos\n- 09:00 one memo", mtime: 10 },
+	]);
+	const store = new InMemoryMemoCatalogStore();
+	let configurationComplete = false;
+	const coordinator = new CatalogShadowCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ fullAuditIntervalMs: 0, isConfigurationComplete: () => configurationComplete },
+	);
+	coordinator.start(fixture.owner);
+	await coordinator.initialize();
+	await coordinator.waitForIdle();
+	assert.equal((await store.query({ limit: 50 })).coverage.kind, "partial");
+
+	configurationComplete = true;
+	await coordinator.refreshLocalCatalog();
+	const page = await store.query({ limit: 50 });
+	assert.equal(page.coverage.kind, "complete");
+	assert.equal(page.items.length, 1);
+	assert.equal(new Set(page.items.map((item) => item.observationKey)).size, 1);
+	fixture.unload();
 });
 
 test("DAILY-RENAME / DAILY-MOVE / CATALOG-OFFLINE-CHANGES：启动 inventory diff 删除旧分区且不阻塞全历史读取", async () => {
@@ -101,19 +166,28 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 	const second = await createCoordinatorFixture([
 		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 bravo", mtime: 10 },
 	]);
+	const transitions: CatalogRevisionTransition[] = [];
 	const secondCoordinator = new CatalogShadowCoordinator(
 		second.app,
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
 		() => ["## Memos"],
-		{ now: () => 2_001, fullAuditIntervalMs: 1_000 },
+		{
+			now: () => 2_001,
+			fullAuditIntervalMs: 1_000,
+			onRevisionTransition: (transition) => { transitions.push(transition); },
+		},
 	);
 	secondCoordinator.start(second.owner);
 	await secondCoordinator.initialize();
 	assert.equal(second.readCount(), 0);
 	await secondCoordinator.waitForIdle();
 	assert.deepEqual((await store.query({ limit: 50 })).items.map((item) => item.content), ["bravo"]);
+	assert.deepEqual(transitions.map((transition) => ({
+		before: transition.before?.observations.map((item) => item.content) ?? [],
+		after: transition.after.observations.map((item) => item.content),
+	})), [{ before: ["alpha"], after: ["bravo"] }]);
 	second.unload();
 });
 
@@ -170,6 +244,123 @@ test("MOBILE-BACKGROUND-RESUME：隐藏时保存 checkpoint，重启只续跑 pe
 	assert.equal(completedPage.coverage.kind, "complete");
 	assert.equal(await store.getMeta(CATALOG_CHECKPOINT_META_KEY), null);
 	second.unload();
+});
+
+test("V3-FAIL-001/V3-FAIL-002：Catalog 持久层不可用时从 Daily 渐进扫描并展示全部 observation", async () => {
+	await ensureObsidianStub();
+	const { CatalogShadowCoordinator } = await import("../src/services/CatalogShadowCoordinator");
+	const { CatalogV2ReadService } = await import("../src/services/CatalogV2ReadService");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	class FailingPrimaryStore extends InMemoryMemoCatalogStore {
+		override async open(): Promise<void> {
+			throw new Error("indexeddb unavailable");
+		}
+	}
+	const fixture = await createCoordinatorFixture([
+		{ path: "Journal/2026-08-20.md", content: "## Memos\n- 09:00 first observation\n", mtime: 10 },
+		{ path: "Journal/2026-08-21.md", content: "## Memos\n- 10:00 second observation\n", mtime: 11 },
+	]);
+	const dailyBefore = fixture.snapshot();
+	const store = new FallbackMemoCatalogStore(new FailingPrimaryStore(), new InMemoryMemoCatalogStore());
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const coordinator = new CatalogShadowCoordinator(
+		fixture.app,
+		catalog,
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 21).getTime() },
+	);
+	const readService = new CatalogV2ReadService({
+		catalog,
+		stateStore: null,
+		stateCoordinator: null,
+		transactionStore: null,
+		deletedPayloadStore: null,
+		installMode: "uninitialized",
+	});
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+		const page = await readService.query({ limit: 50 });
+
+		assert.equal(store.isUsingFallback, true);
+		assert.deepEqual(page.items.map((item) => item.content), ["second observation", "first observation"]);
+		assert.equal(page.status.catalog, "degraded");
+		assert.equal(page.status.identity, "absent");
+		assert.equal(page.capabilities.stats, "partial");
+		assert.deepEqual(fixture.snapshot(), dailyBefore);
+	} finally {
+		fixture.unload();
+	}
+});
+
+test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { CatalogShadowCoordinator } = await import("../src/services/CatalogShadowCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const sourcePath = "Journal/2026-08-22.md";
+	const fixture = await createCoordinatorFixture([
+		{ path: sourcePath, content: "## Memos\n- 09:00 before\n", mtime: 10 },
+	]);
+	const store = new InMemoryMemoCatalogStore();
+	const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
+	const transitions: CatalogRevisionTransition[] = [];
+	const coordinator = new CatalogShadowCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		parser,
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{
+			now: () => 20,
+			onRevisionTransition: (transition) => { transitions.push(transition); },
+		},
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+		const content = "## Memos\n- 09:00 after\n";
+		const parsed = await parser.parse({
+			sourcePath,
+			logicalDate: "2026-08-22",
+			headings: ["## Memos"],
+			bytes: Buffer.from(content, "utf8"),
+		});
+		const file = (fixture.app as unknown as App).vault.getAbstractFileByPath(sourcePath);
+		assert.ok(file instanceof TFile);
+
+		await coordinator.replaceCommittedFile({
+			file,
+			logicalDate: "2026-08-22",
+			content,
+			parsed,
+		});
+
+		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["after"]);
+		assert.deepEqual(transitions.map((transition) => ({
+			beforeRevision: transition.before?.sourceRevision ?? null,
+			beforeContent: transition.before?.observations.map((item) => item.content) ?? [],
+			afterRevision: transition.after.sourceRevision,
+			afterContent: transition.after.observations.map((item) => item.content),
+		})), [{
+			beforeRevision: await sha256(Buffer.from("## Memos\n- 09:00 before\n", "utf8")),
+			beforeContent: ["before"],
+			afterRevision: parsed.sourceRevision,
+			afterContent: ["after"],
+		}]);
+		assert.equal(fixture.snapshot()[sourcePath], "## Memos\n- 09:00 before\n");
+	} finally {
+		fixture.unload();
+	}
 });
 
 test("普通刷新加入当前扫描且进度持续上报，不清空本机 Catalog", async () => {

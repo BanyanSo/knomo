@@ -87,8 +87,10 @@ test("Daily 事件直接失效 Monthly，不经过 Catalog 扫描或 coverage", 
 	const dailyFile = fixture.replica.app.vault.getAbstractFileByPath("Daily/2026-08-01.md");
 	assert.ok(dailyFile instanceof TFile);
 	await invokeVaultChanged(fixture.coordinator, dailyFile);
+	assert.equal(fixture.coordinator.getProjectionState(), "stale");
 
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.equal(fixture.coordinator.getProjectionState(), "ready");
 	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /changed directly/u);
 });
 
@@ -107,13 +109,32 @@ test("Monthly 写入失败只留下 stale projection，Daily 与其他运行时�
 
 	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 0, failed: 1 });
 	assert.deepEqual(fixture.coordinator.getFailedPeriods(), ["2026-08"]);
+	assert.equal(fixture.coordinator.getProjectionState(), "failed");
 	assert.equal(fixture.replica.read("Daily/2026-08-01.md"), dailyBefore);
 
 	fail = false;
 	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 1, failed: 0 });
 	assert.deepEqual(fixture.coordinator.getFailedPeriods(), []);
+	assert.equal(fixture.coordinator.getProjectionState(), "ready");
 	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /unresolved memo/u);
 	assert.equal(fixture.replica.read("Daily/2026-08-01.md"), dailyBefore);
+});
+
+test("V3-FAIL-008：配置冲突暂停 Monthly，显式解决后才允许覆盖", async () => {
+	let projectionAllowed = false;
+	const fixture = createFixture({ "Daily/2026-08-01.md": DAILY_A }, () => projectionAllowed);
+	const dailyBefore = fixture.replica.read("Daily/2026-08-01.md");
+
+	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 0, failed: 0 });
+	assert.equal(fixture.coordinator.getProjectionState(), "stale");
+	assert.equal(fixture.replica.read(MONTHLY_PATH), null);
+	assert.equal(fixture.replica.read("Daily/2026-08-01.md"), dailyBefore);
+
+	projectionAllowed = true;
+	await fixture.coordinator.handleConfigurationChanged();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.equal(fixture.coordinator.getProjectionState(), "ready");
+	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /unresolved memo/u);
 });
 
 test("投影进行中再次失效不会丢失更新", async () => {
@@ -201,7 +222,10 @@ test("Monthly 与 Daily 乱序到达和同步突发只造成暂时 stale，最�
 	assert.equal(right.replica.read(dailyPath), burst[burst.length - 1]);
 });
 
-function createFixture(initialFiles: Readonly<Record<string, string>>) {
+function createFixture(
+	initialFiles: Readonly<Record<string, string>>,
+	isProjectionAllowed: () => boolean = () => true,
+) {
 	const replica = new CatalogV2ReplicaVault(initialFiles);
 	(replica.app as unknown as { workspace: unknown }).workspace = {
 		containerEl: {
@@ -222,6 +246,7 @@ function createFixture(initialFiles: Readonly<Record<string, string>>) {
 	const coordinator = new CatalogV2MonthlyProjectionCoordinator(replica.app, {
 		inputBuilder,
 		selfWriteTracker: new SelfWriteTracker(),
+		isProjectionAllowed,
 		debounceMs: 0,
 		cooldownMs: 0,
 	});

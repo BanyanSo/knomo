@@ -5,7 +5,16 @@ import type {
 	ResolvedMemo,
 	ResolvedMemoHandle,
 } from "../types/catalog";
-import type { CatalogV2InstallMode } from "../types/catalogV2";
+import type {
+	MarkdownMutationResult,
+	MarkdownMutationService as MarkdownMutationContract,
+} from "../types/memoOperations";
+import type {
+	IdentityLedgerBinding,
+	IdentityLedgerCreatePlan,
+	IdentityLedgerMutationService,
+	IdentityLedgerRebindReason,
+} from "../types/identityLedger";
 import type { CatalogV2SharedMutationInspection, CatalogV2VerifiedVaultContext } from "../types/catalogV2Protocol";
 import type {
 	CatalogV2DeletedMemoItem,
@@ -15,9 +24,11 @@ import type {
 	CatalogV2MemoSaveResult,
 	CatalogV2MutationFollowUpState,
 	CatalogV2OperationalState,
+	CatalogV2ProjectionState,
 	CatalogV2ReadState,
 } from "../types/catalogV2View";
 import { formatDatePart, formatTimePart } from "../utils/date";
+import { hashMemoContent } from "../utils/hash";
 import { withCreatedAtAlias } from "../utils/references";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { createResolvedMemoHandle, observationToIdentityEvidence } from "./CatalogV2IdentityResolver";
@@ -27,21 +38,22 @@ import type { CatalogV2StateShadowCoordinator } from "./CatalogV2StateShadowCoor
 import type { CatalogV2DeletedPayloadStore } from "./CatalogV2DeletedPayloadStore";
 import type { IndexedDbCatalogV2StateStore } from "./IndexedDbCatalogV2StateStore";
 import type { IndexedDbCatalogV2TransactionStore } from "./IndexedDbCatalogV2TransactionStore";
-import { MarkdownBlockService } from "./MarkdownBlockService";
 import type { MemoCatalogService } from "./MemoCatalogService";
 import type { CatalogV2PendingMutationInspection } from "../types/catalogV2Runtime";
 import { canonicalJson, sha256Text } from "./CatalogV2Protocol";
 import { CatalogV2ReadService } from "./CatalogV2ReadService";
 
 export interface CatalogV2FeatureServiceOptions {
-	installMode: CatalogV2InstallMode;
-	getInstallMode?: () => CatalogV2InstallMode;
+	installMode?: import("../types/catalogV2").CatalogV2InstallMode;
+	getInstallMode?: () => import("../types/catalogV2").CatalogV2InstallMode;
 	getHeadings: () => readonly string[];
 	getOrCreateDailyFile: (date: Date) => Promise<TFile>;
 	removeEmptyCreatedDailyFile?: (file: TFile) => Promise<void>;
 	getDailyFileForDate: (logicalDate: string) => Promise<TFile>;
+	getDailyPathForDate?: (logicalDate: string) => Promise<string>;
 	refreshCatalogPaths: (paths: readonly string[]) => Promise<void>;
 	refreshLocalCatalog: () => Promise<void>;
+	getProjectionState?: () => CatalogV2ProjectionState;
 	getMemoTimeFormat: () => "HH:mm" | "HH:mm:ss";
 	rebuildLocalCatalog: () => Promise<void>;
 	getVaultContext?: () => CatalogV2VerifiedVaultContext | null | Promise<CatalogV2VerifiedVaultContext | null>;
@@ -49,6 +61,7 @@ export interface CatalogV2FeatureServiceOptions {
 	isControlAuthority?: () => boolean;
 	vaultProtocol?: CatalogV2VaultProtocol;
 	inspectSharedMutations?: () => Promise<CatalogV2SharedMutationInspection>;
+	getLegacyImportStatus?: () => import("../types/legacyIdentityImport").LegacyIdentityImportStatus;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -59,13 +72,11 @@ function normalizeMemoInput(input: string): string {
 
 export interface CatalogV2ReferenceResult extends CatalogV2MutationFollowUpState {
 	text: string;
-	memoId: string;
+	memoId: string | null;
 }
 
 export class CatalogV2FeatureService {
-	private readonly markdownBlockService = new MarkdownBlockService();
 	private readonly now: () => Date;
-	private readonly random: () => number;
 	private readonly readService: CatalogV2ReadService;
 
 	constructor(
@@ -77,9 +88,10 @@ export class CatalogV2FeatureService {
 		private readonly mutationRuntime: CatalogV2MutationRuntime | null,
 		deletedPayloadStore: CatalogV2DeletedPayloadStore | null,
 		private readonly options: CatalogV2FeatureServiceOptions,
+		private readonly markdownMutations: MarkdownMutationContract | null = null,
+		private readonly identityLedger: IdentityLedgerMutationService | null = null,
 	) {
 		this.now = options.now ?? (() => new Date());
-		this.random = options.random ?? Math.random;
 		this.readService = new CatalogV2ReadService({
 			catalog,
 			stateStore,
@@ -90,6 +102,10 @@ export class CatalogV2FeatureService {
 			getInstallMode: options.getInstallMode,
 			getVaultContext: options.getVaultContext,
 			inspectSharedMutations: options.inspectSharedMutations,
+			requestObservationScan: options.refreshLocalCatalog,
+			getProjectionState: options.getProjectionState,
+			identityLedger,
+			getLegacyImportStatus: options.getLegacyImportStatus,
 			now: options.now,
 			random: options.random,
 		});
@@ -127,21 +143,13 @@ export class CatalogV2FeatureService {
 		return true;
 	}
 
-	getOperationalState(readState: CatalogV2ReadState = this.getStaticInstallReadState()
-		?? this.readService.getLastReadState()
-		?? ((this.options.getInstallMode?.() ?? this.options.installMode) === "legacy_upgrade"
-			? "legacy_detected" : "state_settling")): CatalogV2OperationalState {
-		const installMode = this.options.getInstallMode?.() ?? this.options.installMode;
+	getOperationalState(readState: CatalogV2ReadState = this.readService.getLastReadState() ?? "history_building"): CatalogV2OperationalState {
 		return {
-			installMode,
 			readState,
 			capabilities: {
 				readKnown: true,
-				createNew: (installMode === "existing_v2" || installMode === "legacy_upgrade")
-					&& readState === "ready" && this.mutationRuntime !== null
-					&& this.stateStore?.isAuthoritative() === true
-					&& this.transactionStore?.isAuthoritative() === true,
-				adoptExisting: false,
+				createNew: this.markdownMutations !== null,
+				adoptExisting: this.canAdoptIdentityLedgerObservation(),
 				projectMonthly: false,
 				physicalGc: false,
 			},
@@ -149,104 +157,75 @@ export class CatalogV2FeatureService {
 	}
 
 	async adoptMemo(item: CatalogV2MemoItem): Promise<string> {
-		void item;
-		throw new Error("Existing Daily memo adoption is disabled.");
-	}
-
-	private getStaticInstallReadState(): CatalogV2ReadState | null {
-		const installMode = this.options.getInstallMode?.() ?? this.options.installMode;
-		if (installMode === "uninitialized") return "needs_initialization";
-		if (installMode === "joining") return "waiting_for_sync";
-		if (installMode === "attention") return "attention";
-		return null;
+		if (!this.canAdoptIdentityLedgerObservation() || this.identityLedger === null) {
+			throw new Error("Existing Daily memo adoption is unavailable.");
+		}
+		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		if (refreshed.kind !== "observed"
+			|| this.identityLedger.resolveObservationState(refreshed.observation).kind !== "unbound") {
+			throw new Error("Only a current historical observation without identity can be adopted.");
+		}
+		const binding = await this.identityLedger.adoptObservation(refreshed.observation);
+		await this.readService.materializeResolutionSnapshot();
+		return binding.memoId;
 	}
 
 	async create(contentInput: string, sourceMemoId: string | null = null): Promise<CatalogV2MemoSaveResult> {
-		if (!this.getOperationalState().capabilities.createNew) {
-			throw new Error("Knomo Vault identity is not ready; Daily was not changed.");
-		}
-		if (this.mutationRuntime === null) throw new Error("Memo identity is still preparing; Daily was not changed.");
 		const content = normalizeMemoInput(contentInput);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
 		const createdAt = this.now();
-		const existingPaths = new Set(this.app.vault.getFiles().map((item) => item.path));
-		const file = await this.options.getOrCreateDailyFile(createdAt);
-		const removeFileOnAbort = this.options.removeEmptyCreatedDailyFile === undefined || existingPaths.has(file.path)
-			? null
-			: () => this.options.removeEmptyCreatedDailyFile?.(file) ?? Promise.resolve();
-		const rawBlock = this.markdownBlockService.buildMemoBlock(
-			content,
-			formatTimePart(createdAt, this.options.getMemoTimeFormat()),
-		);
-		const result = await this.mutationRuntime.create({
-			file,
-			logicalDate: formatDatePart(createdAt),
-			headings: this.options.getHeadings(),
-			rawBlock,
-			sourceMemoId,
-			removeFileOnAbort,
-		}).catch(async (error: unknown) => {
-			await removeFileOnAbort?.().catch(() => undefined);
-			throw error;
-		});
-		return this.finishSavedMemo({
-			memoId: result.memoId,
-			sourcePath: file.path,
-			timeBuoyDates: result.observation.timeBuoyDates,
-			followUpPending: result.followUpPending,
-			provisionalObservation: result.observation,
+		const logicalDate = formatDatePart(createdAt);
+		const plan = await this.beginIdentityCreate(content, logicalDate, createdAt, sourceMemoId);
+		const result = await this.getMarkdownMutations().create({ content, targetLogicalDate: logicalDate, createdAt });
+		const identityPending = await this.finishIdentityCreate(plan, result.observation);
+		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? [], {
+			memoId: plan?.memoId ?? null,
+			pending: identityPending,
 		});
 	}
 
 	async copy(item: CatalogV2MemoItem, logicalDate = formatDatePart(this.now())): Promise<CatalogV2MemoSaveResult> {
-		this.assertSharedMutationReady();
-		if (item.memoId === null || item.capabilities.copyAsNew !== "ready") {
-			throw new Error("Only a memo with stable identity can be copied as a new memo.");
-		}
-		const file = await this.options.getOrCreateDailyFile(new Date(`${logicalDate}T12:00:00`));
-		const result = await this.getMutationRuntime().copy({
-			file,
-			logicalDate,
-			headings: this.options.getHeadings(),
-			rawBlock: `- ${formatTimePart(this.now(), this.options.getMemoTimeFormat())} ${item.content}`,
-			sourceMemoId: item.memoId,
-			removeFileOnAbort: this.options.removeEmptyCreatedDailyFile === undefined
-				? null
-				: () => this.options.removeEmptyCreatedDailyFile?.(file) ?? Promise.resolve(),
+		const createdAt = this.now();
+		const plan = await this.beginIdentityCreate(item.content, logicalDate, createdAt, item.memoId);
+		const result = await this.getMarkdownMutations().copy({
+			observation: item.observationHandle,
+			targetLogicalDate: logicalDate,
+			createdAt,
 		});
-		return this.finishSavedMemo({
-			memoId: result.memoId,
-			sourcePath: file.path,
-			timeBuoyDates: result.observation.timeBuoyDates,
-			followUpPending: result.followUpPending,
-			provisionalObservation: result.observation,
+		const identityPending = await this.finishIdentityCreate(plan, result.observation);
+		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates, {
+			memoId: plan?.memoId ?? null,
+			pending: identityPending,
 		});
 	}
 
 	async move(item: CatalogV2MemoItem, targetLogicalDate: string): Promise<CatalogV2MemoSaveResult> {
-		this.assertSharedMutationReady();
-		const handle = await this.getWritableHandle(item, "edit");
-		const targetFile = await this.options.getDailyFileForDate(targetLogicalDate);
-		const moved = await this.getMutationRuntime().move({
-			file: this.getFile(handle.evidence.sourcePath),
-			logicalDate: handle.evidence.logicalDate,
-			headings: this.options.getHeadings(),
-			handle,
-			targetFile,
+		const result = await this.getMarkdownMutations().move({
+			observation: item.observationHandle,
 			targetLogicalDate,
-			targetHeadings: this.options.getHeadings(),
 		});
-		return this.finishSavedMemo({
-			memoId: moved.handle.memoId,
-			sourcePath: targetFile.path,
-			additionalPaths: [handle.evidence.sourcePath],
-			timeBuoyDates: item.timeBuoyDates,
-			followUpPending: moved.followUpPending,
-			provisionalObservation: null,
-		});
+		const identity = result.status === "committed_content_pending"
+			? this.createPendingIdentityResult(item.memoId)
+			: await this.finishIdentityRebind(item, result.observation, "move");
+		return this.finishMarkdownSavedMemo(
+			result,
+			result.observation?.timeBuoyDates ?? item.timeBuoyDates,
+			identity,
+		);
 	}
 
 	async repairIdentity(target: CatalogV2MemoItem, candidateMemoId: string): Promise<void> {
+		const ledgerMemo = this.identityLedger?.getSnapshot().memos[candidateMemoId];
+		if (this.identityLedger !== null && ledgerMemo?.conflicted === true) {
+			const refreshed = await this.refreshResolvedMemo(target.resolved);
+			if (refreshed.kind !== "ambiguous"
+				|| !refreshed.candidates.some((candidate) => candidate.memoId === candidateMemoId)) {
+				throw new Error("The selected V3 identity conflict is no longer current.");
+			}
+			await this.identityLedger.repairConflict(candidateMemoId, refreshed.observation);
+			await this.readService.materializeResolutionSnapshot();
+			return;
+		}
 		this.assertSharedMutationReady();
 		if (this.options.isControlAuthority?.() !== true) {
 			throw new Error("Only the current Catalog control authority can repair memo identity.");
@@ -297,62 +276,99 @@ export class CatalogV2FeatureService {
 	async edit(item: CatalogV2MemoItem, contentInput: string): Promise<CatalogV2MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
-		const handle = await this.getWritableHandle(item, "edit", false);
-		const file = this.getFile(handle.evidence.sourcePath);
-		const result = await this.getMutationRuntime().edit({
-			file,
-			logicalDate: handle.evidence.logicalDate,
-			headings: this.options.getHeadings(),
-			handle,
-			rawBlock: this.markdownBlockService.buildMemoBlockWithBlockId(
-				content,
-				item.observation.time,
-				item.observation.existingBlockId,
-			),
+		const result = await this.getMarkdownMutations().edit({
+			observation: item.observationHandle,
+			content,
 		});
-		return this.finishSavedMemo({
-			memoId: handle.memoId,
-			sourcePath: file.path,
-			timeBuoyDates: extractTimeBuoyDates(content),
-			followUpPending: result.followUpPending,
-			provisionalObservation: null,
-		});
+		const identity = await this.finishIdentityRebind(item, result.observation, "edit");
+		return this.finishMarkdownSavedMemo(result, extractTimeBuoyDates(content), identity);
 	}
 
 	async toggleTask(item: CatalogV2MemoItem, taskIndex: number, checked: boolean): Promise<CatalogV2MemoSaveResult> {
-		const handle = await this.getWritableHandle(item, "toggleTask", false);
-		const file = this.getFile(handle.evidence.sourcePath);
-		const result = await this.getMutationRuntime().toggleTask({
-			file,
-			logicalDate: handle.evidence.logicalDate,
-			headings: this.options.getHeadings(),
-			handle,
+		const result = await this.getMarkdownMutations().toggleTask({
+			observation: item.observationHandle,
 			taskIndex,
 			checked,
 		});
-		return this.finishSavedMemo({
-			memoId: handle.memoId,
-			sourcePath: file.path,
-			timeBuoyDates: item.timeBuoyDates,
-			followUpPending: result.followUpPending,
-			provisionalObservation: null,
-		});
+		const identity = await this.finishIdentityRebind(item, result.observation, "edit");
+		return this.finishMarkdownSavedMemo(
+			result,
+			result.observation?.timeBuoyDates ?? item.timeBuoyDates,
+			identity,
+		);
+	}
+
+	async removePermanently(item: CatalogV2MemoItem): Promise<CatalogV2DailyMutationResult> {
+		const result = await this.getMarkdownMutations().remove({ observation: item.observationHandle });
+		const saved = await this.finishMarkdownSavedMemo(result, []);
+		return {
+			status: saved.status,
+			memoId: saved.memoId,
+			followUpPending: saved.followUpPending,
+			localRefreshPending: saved.localRefreshPending,
+		};
 	}
 
 	async delete(item: CatalogV2MemoItem): Promise<CatalogV2DailyMutationResult> {
-		const handle = await this.getWritableHandle(item, "delete");
-		const file = this.getFile(handle.evidence.sourcePath);
-		const result = await this.getMutationRuntime().delete({
-			file,
-			logicalDate: handle.evidence.logicalDate,
-			headings: this.options.getHeadings(),
-			handle,
+		if (this.identityLedger?.recordDeletePayload === undefined
+			|| this.markdownMutations?.captureObservation === undefined) {
+			throw new Error("Recoverable delete requires an available Identity Ledger.");
+		}
+		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		const ledgerState = this.identityLedger.resolveObservationState(refreshed.observation);
+		if (ledgerState.kind !== "identified") {
+			throw new Error("Recoverable delete requires one confirmed memo identity.");
+		}
+		const captured = await this.markdownMutations.captureObservation({ observation: item.observationHandle });
+		await this.identityLedger.recordDeletePayload(ledgerState.binding, {
+			deletedAt: this.now().toISOString(),
+			sourcePath: captured.observation.sourcePath,
+			logicalDate: captured.observation.logicalDate,
+			section: captured.observation.section,
+			rawBlock: captured.rawBlock,
+			contentHash: captured.observation.contentHash,
 			sourceMemoId: item.sourceMemoId,
 		});
-		return this.finishDailyMutation(handle.memoId, [file.path], result.followUpPending);
+		const result = await this.getMarkdownMutations().remove({ observation: item.observationHandle });
+		const saved = await this.finishMarkdownSavedMemo(result, [], { memoId: ledgerState.binding.memoId, pending: false });
+		return {
+			status: saved.status,
+			memoId: saved.memoId,
+			followUpPending: saved.followUpPending,
+			localRefreshPending: saved.localRefreshPending,
+		};
 	}
 
 	async restore(item: CatalogV2DeletedMemoItem): Promise<CatalogV2MemoSaveResult> {
+		if (item.identityDeleteEventId !== undefined) {
+			if (this.identityLedger?.getActiveDeletes === undefined
+				|| this.identityLedger.recordRestore === undefined
+				|| this.markdownMutations?.restore === undefined) {
+				throw new Error("Identity Ledger restore is unavailable.");
+			}
+			const record = this.identityLedger.getActiveDeletes()
+				.find((candidate) => candidate.deleteEventId === item.identityDeleteEventId);
+			if (record === undefined) throw new Error("Deleted memo payload is no longer active.");
+			const result = await this.markdownMutations.restore({
+				targetLogicalDate: record.evidence.logicalDate,
+				rawBlock: record.evidence.rawBlock,
+				section: record.evidence.section,
+			});
+			let pending = true;
+			if (result.observation !== null) {
+				try {
+					await this.identityLedger.recordRestore(record, result.observation);
+					pending = false;
+				} catch {
+					pending = true;
+				}
+			}
+			return this.finishMarkdownSavedMemo(
+				result,
+				result.observation?.timeBuoyDates ?? [],
+				{ memoId: item.memoId, pending },
+			);
+		}
 		this.assertSharedMutationReady();
 		if (!item.payloadAvailable) throw new Error("Deleted memo payload is unavailable and cannot be restored.");
 		const existing = this.app.vault.getAbstractFileByPath(item.sourcePath);
@@ -374,6 +390,9 @@ export class CatalogV2FeatureService {
 	}
 
 	async purge(item: CatalogV2DeletedMemoItem): Promise<void> {
+		if (item.identityDeleteEventId !== undefined) {
+			throw new Error("Identity Ledger physical cleanup requires a future explicit cleanup operation.");
+		}
 		this.assertSharedMutationReady();
 		await this.getMutationRuntime().purge({
 			memoId: item.memoId,
@@ -384,44 +403,50 @@ export class CatalogV2FeatureService {
 	}
 
 	async createReferenceText(item: CatalogV2MemoItem, sourcePath = ""): Promise<CatalogV2ReferenceResult> {
-		let handle = await this.getWritableHandle(item, "createReference");
-		const file = this.getFile(handle.evidence.sourcePath);
-		let blockId = handle.evidence.existingBlockId;
-		let followUp: CatalogV2MutationFollowUpState = { followUpPending: false, localRefreshPending: false };
-		if (blockId === null) {
-			blockId = await this.createUniqueReferenceBlockId(file);
-			const anchored = await this.getMutationRuntime().ensureReferenceAnchor({
-				file,
-				logicalDate: handle.evidence.logicalDate,
-				headings: this.options.getHeadings(),
-				handle,
-				rawBlock: "",
-			}, blockId);
-			handle = anchored.handle;
-			followUp = await this.finishDailyMutation(handle.memoId, [file.path], anchored.followUpPending);
-		}
-		const link = this.app.fileManager.generateMarkdownLink(file, sourcePath, `#^${blockId}`);
-		return { text: withCreatedAtAlias(link, item.createdAt), memoId: handle.memoId, ...followUp };
+		const file = this.getFile(item.sourcePath);
+		const anchored = await this.getMarkdownMutations().createBlockReference({
+			observation: item.observationHandle,
+			sourcePath,
+		});
+		const identity = await this.finishIdentityRebind(item, anchored.observation, "edit");
+		const saved = await this.finishMarkdownSavedMemo(
+			anchored,
+			anchored.observation?.timeBuoyDates ?? item.timeBuoyDates,
+			identity,
+		);
+		const link = this.app.fileManager.generateMarkdownLink(file, sourcePath, `#^${anchored.blockId}`);
+		return {
+			text: withCreatedAtAlias(link, item.createdAt),
+			memoId: item.memoId,
+			followUpPending: saved.followUpPending,
+			localRefreshPending: saved.localRefreshPending,
+		};
 	}
 
 	async recordReview(item: CatalogV2MemoItem): Promise<void> {
+		const ledgerState = this.identityLedger?.resolveObservationState(item.observation);
+		if (this.identityLedger !== null && ledgerState?.kind === "identified") {
+			await this.identityLedger.recordReview(ledgerState.binding, this.now().toISOString());
+			await this.readService.materializeResolutionSnapshot();
+			return;
+		}
 		this.assertSharedMutationReady();
-		const handle = await this.getWritableHandle(item, "recordReview");
+		const handle = await this.getWritableHandle(item, "review");
 		await this.getMutationRuntime().recordReview(handle);
 		await this.finishMutation([]);
 	}
 
 	private async getWritableHandle(
 		item: CatalogV2MemoItem,
-		capability: "edit" | "toggleTask" | "delete" | "createReference" | "recordReview",
+		capability: keyof CatalogV2MemoItem["capabilities"]["identity"],
 		requireSharedReadiness = true,
 	): Promise<ResolvedMemoHandle> {
-		if (requireSharedReadiness && !this.getOperationalState().capabilities.createNew) {
+		if (requireSharedReadiness && !this.isIdentityMutationReady()) {
 			throw new Error("Knomo Vault identity is not ready; Daily was not changed.");
 		}
 		let resolved = await this.refreshResolvedMemo(item.resolved);
 		const handle = createResolvedMemoHandle(resolved);
-		if (handle !== null && resolved.capabilities[capability] === "ready") return handle;
+		if (handle !== null && resolved.capabilities.identity[capability] === "ready") return handle;
 		throw new Error(resolved.kind === "ambiguous"
 			? "This memo has multiple possible sources and cannot be changed automatically."
 			: resolved.kind === "observed" && resolved.adoption === "eligible"
@@ -477,6 +502,102 @@ export class CatalogV2FeatureService {
 		};
 	}
 
+	private async finishMarkdownSavedMemo(
+		input: MarkdownMutationResult,
+		timeBuoyDates: readonly string[],
+		identity?: { memoId: string | null; pending: boolean },
+	): Promise<CatalogV2MemoSaveResult> {
+		let localRefreshPending = input.catalogUpdatePending;
+		let memo: CatalogV2MemoItem | null = null;
+		try {
+			await this.stateCoordinator?.capture(false);
+			await this.readService.materializeResolutionSnapshot();
+		} catch {
+			localRefreshPending = true;
+		}
+		if (!localRefreshPending && input.observation !== null) {
+			try {
+				memo = await this.findMemoByObservation(input.observation);
+			} catch {
+				localRefreshPending = true;
+			}
+		}
+		if (input.observation !== null && memo === null) localRefreshPending = true;
+		return {
+			status: input.status === "committed_content_pending" ? "content_pending" : "saved",
+			memoId: memo?.memoId ?? identity?.memoId ?? null,
+			memo,
+			timeBuoyDates: [...(memo?.timeBuoyDates ?? timeBuoyDates)],
+			followUpPending: identity?.pending ?? true,
+			localRefreshPending,
+		};
+	}
+
+	private async beginIdentityCreate(
+		content: string,
+		logicalDate: string,
+		createdAt: Date,
+		sourceMemoId: string | null,
+	): Promise<IdentityLedgerCreatePlan | null> {
+		if (this.identityLedger === null) return null;
+		let targetPath: string | null = null;
+		try {
+			targetPath = await this.options.getDailyPathForDate?.(logicalDate) ?? null;
+		} catch {
+			targetPath = null;
+		}
+		try {
+			return await this.identityLedger.beginCreate({
+				targetPath,
+				logicalDate,
+				time: formatTimePart(createdAt, this.options.getMemoTimeFormat()),
+				contentHash: hashMemoContent(content),
+				sourceMemoId,
+			});
+		} catch {
+			return null;
+		}
+	}
+
+	private async finishIdentityCreate(
+		plan: IdentityLedgerCreatePlan | null,
+		observation: ResolvedMemo["observation"] | null,
+	): Promise<boolean> {
+		if (plan === null || observation === null || this.identityLedger === null) return true;
+		try {
+			await this.identityLedger.finishCreate(plan, observation);
+			return false;
+		} catch {
+			return true;
+		}
+	}
+
+	private async finishIdentityRebind(
+		item: CatalogV2MemoItem,
+		observation: ResolvedMemo["observation"] | null,
+		reason: IdentityLedgerRebindReason,
+	): Promise<{ memoId: string | null; pending: boolean } | undefined> {
+		if (this.identityLedger === null) return undefined;
+		if (observation === null) return this.createPendingIdentityResult(item.memoId);
+		try {
+			const binding = await this.identityLedger.rebindObservation(item.observation, observation, reason);
+			return binding === null
+				? this.createPendingIdentityResult(item.memoId)
+				: { memoId: binding.memoId, pending: false };
+		} catch {
+			return this.createPendingIdentityResult(item.memoId);
+		}
+	}
+
+	private createPendingIdentityResult(memoId: string | null): { memoId: string | null; pending: true } | undefined {
+		return this.identityLedger === null ? undefined : { memoId, pending: true };
+	}
+
+	private canAdoptIdentityLedgerObservation(): boolean {
+		const status = this.identityLedger?.getStatus();
+		return status === "ready" || status === "absent";
+	}
+
 	private async finishDailyMutation(
 		memoId: string,
 		paths: readonly string[],
@@ -503,6 +624,21 @@ export class CatalogV2FeatureService {
 		return null;
 	}
 
+	private async findMemoByObservation(observation: ResolvedMemo["observation"]): Promise<CatalogV2MemoItem | null> {
+		let cursor: CatalogV2FeatureQuery["cursor"] = null;
+		do {
+			const page = await this.readService.query({ sourcePaths: [observation.sourcePath], limit: 150, cursor });
+			const found = page.items.find((item) => item.observation.sourceRevision === observation.sourceRevision
+				&& item.observation.startLine === observation.startLine
+				&& item.observation.endLine === observation.endLine
+				&& item.observation.rawBlockHash === observation.rawBlockHash);
+			if (found !== undefined) return found;
+			if (page.invalidated) return null;
+			cursor = page.nextCursor;
+		} while (cursor !== null);
+		return null;
+	}
+
 	private getFile(path: string): TFile {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) throw new Error(`Daily file is unavailable: ${path}`);
@@ -514,29 +650,20 @@ export class CatalogV2FeatureService {
 		return this.mutationRuntime;
 	}
 
+	private getMarkdownMutations(): MarkdownMutationContract {
+		if (this.markdownMutations === null) throw new Error("Markdown mutation service is unavailable.");
+		return this.markdownMutations;
+	}
+
 	private assertSharedMutationReady(): void {
-		if (!this.getOperationalState().capabilities.createNew) {
+		if (!this.isIdentityMutationReady()) {
 			throw new Error("Knomo Vault identity is not ready; shared state was not changed.");
 		}
 	}
 
-	private async createUniqueReferenceBlockId(file: TFile): Promise<string> {
-		const content = await this.app.vault.cachedRead(file);
-		const ids = new Set<string>();
-		const pattern = /(?:^|[^A-Za-z0-9_-])\^([A-Za-z0-9_-]+)/gu;
-		let match = pattern.exec(content);
-		while (match !== null) {
-			ids.add(match[1] ?? "");
-			match = pattern.exec(content);
-		}
-		const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-		for (let attempt = 0; attempt < 1000; attempt += 1) {
-			let blockId = "";
-			for (let index = 0; index < 6; index += 1) {
-				blockId += chars.charAt(Math.min(Math.floor(this.random() * chars.length), chars.length - 1));
-			}
-			if (!ids.has(blockId)) return blockId;
-		}
-		throw new Error("Unable to create a unique reference block ID.");
+	private isIdentityMutationReady(): boolean {
+		return this.mutationRuntime !== null
+			&& this.stateStore?.isAuthoritative() === true
+			&& this.transactionStore?.isAuthoritative() === true;
 	}
 }

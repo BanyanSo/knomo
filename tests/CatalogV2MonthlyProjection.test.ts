@@ -107,10 +107,12 @@ test("Monthly outbox 按 period 合并，失败时保留整月请求", async () 
 
 function makeSettings(): KnomoSettings {
 	return {
-		settingsVersion: 3,
+		settingsVersion: 4,
 		dailyHeading: "## Memos",
 		dailyInsertPosition: "bottom",
 		memoTimeFormat: "HH:mm:ss",
+		knomoDataRoot: "Knomo",
+		knomoDataRootConfigured: true,
 		monthlyMemoFolder: "Knomo",
 		monthlyMemoFileFormat: "Memos-YYYY-MM.md",
 		monthlyDateHeadingFormat: "## [[YYYY-MM-DD]]",
@@ -132,6 +134,7 @@ function makeObservation(overrides: Partial<CatalogObservation>): CatalogObserva
 		createdAtKey: "2026-08-09T09:00:00",
 		sourcePath: "Daily/2026-08-09.md",
 		sourceRevision: "a".repeat(64),
+		rawBlockHash: "fnv1a-rawblock",
 		logicalDate: "2026-08-09",
 		section: "## Memos",
 		startLine: 1,

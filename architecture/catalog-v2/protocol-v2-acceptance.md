@@ -1,5 +1,7 @@
 # Catalog V2 Protocol V2 验收矩阵
 
+> 状态：仅用于验证冻结的 V2 兼容读取与迁移输入，不是 Markdown-first Protocol V3 的运行时验收标准。V3 的规范性验收要求见 `protocol-v3-acceptance.md`。
+
 ## P0 阻断项
 
 | 场景 | 必须结果 |

@@ -1,13 +1,20 @@
 import { normalizePath, TFile } from "obsidian";
 import type { App, Component } from "obsidian";
 
-import type { CatalogCheckpoint, CatalogCoverage, CatalogFileRecord, CatalogInventoryEntry } from "../types/catalog";
+import type {
+	CatalogCheckpoint,
+	CatalogCoverage,
+	CatalogFileRecord,
+	CatalogInventoryEntry,
+	MemoObservation,
+} from "../types/catalog";
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { hashText } from "../utils/hash";
 import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "./DiaryMemoParser";
 import type { DailyNotesConfig } from "./DailyNoteService";
 import type { MemoCatalogService } from "./MemoCatalogService";
+import type { MarkdownCatalogCommitInput } from "./MarkdownMutationService";
 
 export const CATALOG_V2_SCANNER_ENABLED = true;
 export const CATALOG_CHECKPOINT_META_KEY = "catalogCheckpoint";
@@ -23,6 +30,17 @@ interface CatalogFailure {
 	message: string;
 }
 
+export interface CatalogRevisionTransitionSide {
+	sourceRevision: string;
+	observations: readonly MemoObservation[];
+}
+
+export interface CatalogRevisionTransition {
+	sourcePath: string;
+	before: CatalogRevisionTransitionSide | null;
+	after: CatalogRevisionTransitionSide;
+}
+
 export interface CatalogShadowCoordinatorOptions {
 	enabled?: boolean;
 	fullAuditIntervalMs?: number;
@@ -31,6 +49,8 @@ export interface CatalogShadowCoordinatorOptions {
 	now?: () => number;
 	onProgress?: (coverage: CatalogCoverage) => void | Promise<void>;
 	onCatalogSettled?: () => void | Promise<void>;
+	onRevisionTransition?: (transition: CatalogRevisionTransition) => void | Promise<void>;
+	isConfigurationComplete?: () => boolean;
 }
 
 export class CatalogShadowCoordinator {
@@ -41,6 +61,8 @@ export class CatalogShadowCoordinator {
 	private readonly now: () => number;
 	private readonly onProgress: ((coverage: CatalogCoverage) => void | Promise<void>) | null;
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
+	private readonly onRevisionTransition: ((transition: CatalogRevisionTransition) => void | Promise<void>) | null;
+	private readonly isConfigurationComplete: () => boolean;
 	private readonly inventoryByPath = new Map<string, CatalogInventoryEntry>();
 	private readonly coveredPaths = new Set<string>();
 	private readonly forcedPaths = new Set<string>();
@@ -82,6 +104,8 @@ export class CatalogShadowCoordinator {
 		this.now = options.now ?? Date.now;
 		this.onProgress = options.onProgress ?? null;
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
+		this.onRevisionTransition = options.onRevisionTransition ?? null;
+		this.isConfigurationComplete = options.isConfigurationComplete ?? (() => true);
 	}
 
 	start(owner: Component): void {
@@ -130,6 +154,32 @@ export class CatalogShadowCoordinator {
 		this.scheduleReconcile(0);
 		this.scheduleDrain();
 		await Promise.all(refreshed);
+	}
+
+	async replaceCommittedFile(input: MarkdownCatalogCommitInput): Promise<void> {
+		if (!this.opened || this.stopped) throw new Error("Memo Catalog is not available.");
+		const sourcePath = normalizePath(input.file.path);
+		const inventory: CatalogInventoryEntry = {
+			sourcePath,
+			logicalDate: input.logicalDate,
+			mtime: input.file.stat.mtime,
+			size: new TextEncoder().encode(input.content).byteLength,
+		};
+		await this.reconcileRevisionTransition(sourcePath, input.parsed.sourceRevision, input.parsed.observations);
+		await this.catalogService.replaceFile({
+			inventory,
+			sourceRevision: input.parsed.sourceRevision,
+			observations: input.parsed.observations,
+			parserVersion: CATALOG_PARSER_VERSION,
+			settingsFingerprint: this.settingsFingerprint,
+			auditedAt: this.now(),
+		});
+		this.inventoryByPath.set(sourcePath, inventory);
+		this.coveredPaths.add(sourcePath);
+		this.failedPaths.delete(sourcePath);
+		const coverage = this.buildCoverage();
+		await this.catalogService.getStore().setCoverage(coverage);
+		this.notifyProgress(coverage);
 	}
 
 	async rebuildLocalCatalog(): Promise<void> {
@@ -384,6 +434,7 @@ export class CatalogShadowCoordinator {
 				|| stored.settingsFingerprint !== this.settingsFingerprint
 				|| stored.mtime !== abstractFile.stat.mtime
 				|| stored.size !== abstractFile.stat.size) {
+				await this.reconcileRevisionTransition(sourcePath, parsed.sourceRevision, parsed.observations);
 				await this.catalogService.replaceFile({
 					inventory: {
 						...inventory,
@@ -404,6 +455,28 @@ export class CatalogShadowCoordinator {
 			this.failedPaths.set(sourcePath, { sourcePath, message: getErrorMessage(error) });
 		} finally {
 			this.resolvePath(sourcePath);
+		}
+	}
+
+	private async reconcileRevisionTransition(
+		sourcePath: string,
+		sourceRevision: string,
+		observations: readonly MemoObservation[],
+	): Promise<void> {
+		if (this.onRevisionTransition === null) return;
+		try {
+			const before = await this.catalogService.getFileRevisionBatch(sourcePath);
+			if (before === null || before.file.sourceRevision === sourceRevision) return;
+			await this.onRevisionTransition({
+				sourcePath,
+				before: {
+					sourceRevision: before.file.sourceRevision,
+					observations: before.observations,
+				},
+				after: { sourceRevision, observations },
+			});
+		} catch {
+			// 身份协调属于 Daily 提交后的 follow-up，失败不能阻止 Catalog 采用真实正文。
 		}
 	}
 
@@ -496,7 +569,9 @@ export class CatalogShadowCoordinator {
 		return {
 			kind: this.rebuilding
 				? "rebuilding"
-				: pendingFileCount === 0 && this.failedPaths.size === 0 ? "complete" : "partial",
+				: pendingFileCount === 0 && this.failedPaths.size === 0 && this.isConfigurationComplete()
+					? "complete"
+					: "partial",
 			coveredFromDate,
 			pendingFileCount,
 			coveredFileCount,

@@ -302,7 +302,7 @@ function detectUnbootstrappedState(
 	});
 	return noteEvidence
 		? {
-			mode: "joining",
+			mode: "nonempty_unconfigured",
 			catalogDataRoot: roots.catalogDataRoot,
 			legacySystemRoot: roots.legacySystemRoot,
 			initializationAllowed: true,

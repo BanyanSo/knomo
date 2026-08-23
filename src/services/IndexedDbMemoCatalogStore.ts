@@ -184,31 +184,56 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		const postings = transaction.objectStore(POSTINGS_STORE);
 		const aggregates = transaction.objectStore(AGGREGATES_STORE);
 		const metadata = transaction.objectStore(META_STORE);
-		const keyRequests = partitions.map((partition) => {
-			const observationKeys = requestResult(observations.index(BY_SOURCE_PATH).getAllKeys(partition.file.sourcePath));
-			const postingKeys = requestResult(postings.index(BY_SOURCE_PATH).getAllKeys(partition.file.sourcePath));
-			return Promise.all([observationKeys, postingKeys]).then(([resolvedObservationKeys, resolvedPostingKeys]) => ({
-				partition,
-				observationKeys: resolvedObservationKeys,
-				postingKeys: resolvedPostingKeys,
-			}));
-		});
+		const partitionRequests = partitions.map((partition) =>
+			(requestResult(files.get(partition.file.sourcePath)) as Promise<CatalogFileRecord | undefined>)
+				.then(async (existingFile) => {
+					if (existingFile === undefined) {
+						return { partition, observationKeys: [], postingKeys: [], existingObservations: [], reuseExisting: false };
+					}
+					if (existingFile.sourceRevision === partition.file.sourceRevision
+						&& existingFile.parserVersion === partition.file.parserVersion
+						&& existingFile.settingsFingerprint === partition.file.settingsFingerprint) {
+						return { partition, observationKeys: [], postingKeys: [], existingObservations: [], reuseExisting: true };
+					}
+					const [observationKeys, postingKeys, existingObservations] = await Promise.all([
+						existingFile.observationKeys === undefined
+							? requestResult(observations.index(BY_SOURCE_PATH).getAllKeys(partition.file.sourcePath))
+							: Promise.resolve(existingFile.observationKeys),
+						existingFile.observationKeys === undefined
+							? requestResult(postings.index(BY_SOURCE_PATH).getAllKeys(partition.file.sourcePath))
+							: Promise.resolve(existingFile.observationKeys),
+						Promise.all(partition.observations.map((observation) =>
+							requestResult(observations.get(observation.observationKey)) as Promise<CatalogObservation | undefined>)),
+					]);
+					return { partition, observationKeys, postingKeys, existingObservations, reuseExisting: false };
+				}));
+		const revisionRequest = requestResult(metadata.get(CATALOG_REVISION_META)) as
+			Promise<CatalogMetaRecord<number> | undefined>;
 		const [partitionsWithKeys, revisionRecord] = await Promise.all([
-			Promise.all(keyRequests),
-			requestResult(metadata.get(CATALOG_REVISION_META)) as Promise<CatalogMetaRecord<number> | undefined>,
+			Promise.all(partitionRequests),
+			revisionRequest,
 		]);
-		for (const item of partitionsWithKeys) {
-			for (const key of item.observationKeys) {
-				observations.delete(key);
+		for (const { partition, observationKeys, postingKeys, existingObservations, reuseExisting } of partitionsWithKeys) {
+			files.put(partition.file);
+			if (reuseExisting) continue;
+			const nextKeys = new Set(partition.file.observationKeys ?? []);
+			const existingByKey = new Map(existingObservations.flatMap((observation) =>
+				observation === undefined ? [] : [[observation.observationKey, observation] as const]));
+			for (const key of observationKeys) {
+				if (!nextKeys.has(String(key))) observations.delete(key);
 			}
-			for (const key of item.postingKeys) {
-				postings.delete(key);
+			for (const key of postingKeys) {
+				if (!nextKeys.has(String(key))) postings.delete(key);
 			}
-			files.put(item.partition.file);
-			aggregates.put(item.partition.aggregate);
-			for (const observation of item.partition.observations) {
+			aggregates.put(partition.aggregate);
+			for (const observation of partition.observations) {
 				observations.put(observation);
-				postings.put(buildPostingRecord(observation));
+				const posting = buildPostingRecord(observation);
+				const existingObservation = existingByKey.get(observation.observationKey);
+				if (existingObservation === undefined
+					|| !sameLookupKeys(buildPostingRecord(existingObservation).lookupKeys, posting.lookupKeys)) {
+					postings.put(posting);
+				}
 			}
 		}
 		const revision = (revisionRecord?.value ?? 0) + 1;
@@ -228,10 +253,20 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		const observations = transaction.objectStore(OBSERVATIONS_STORE);
 		const postings = transaction.objectStore(POSTINGS_STORE);
 		const metadata = transaction.objectStore(META_STORE);
-		const [file, observationKeys, postingKeys, revisionRecord] = await Promise.all([
-			requestResult(files.get(sourcePath)) as Promise<CatalogFileRecord | undefined>,
-			requestResult(observations.index(BY_SOURCE_PATH).getAllKeys(sourcePath)),
-			requestResult(postings.index(BY_SOURCE_PATH).getAllKeys(sourcePath)),
+		const fileRequest = (requestResult(files.get(sourcePath)) as Promise<CatalogFileRecord | undefined>)
+			.then(async (file) => {
+				if (file === undefined) return { file, observationKeys: [], postingKeys: [] };
+				if (file.observationKeys !== undefined) {
+					return { file, observationKeys: file.observationKeys, postingKeys: file.observationKeys };
+				}
+				const [observationKeys, postingKeys] = await Promise.all([
+					requestResult(observations.index(BY_SOURCE_PATH).getAllKeys(sourcePath)),
+					requestResult(postings.index(BY_SOURCE_PATH).getAllKeys(sourcePath)),
+				]);
+				return { file, observationKeys, postingKeys };
+			});
+		const [{ file, observationKeys, postingKeys }, revisionRecord] = await Promise.all([
+			fileRequest,
 			requestResult(metadata.get(CATALOG_REVISION_META)) as Promise<CatalogMetaRecord<number> | undefined>,
 		]);
 		const currentRevision = revisionRecord?.value ?? 0;
@@ -239,12 +274,8 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			await done;
 			return currentRevision;
 		}
-		for (const key of observationKeys) {
-			observations.delete(key);
-		}
-		for (const key of postingKeys) {
-			postings.delete(key);
-		}
+		for (const key of observationKeys) observations.delete(key);
+		for (const key of postingKeys) postings.delete(key);
 		files.delete(sourcePath);
 		transaction.objectStore(AGGREGATES_STORE).delete(sourcePath);
 		const revision = currentRevision + 1;
@@ -679,6 +710,10 @@ function buildPostingRecord(observation: CatalogObservation): CatalogPostingReco
 		observationKey: observation.observationKey,
 		lookupKeys,
 	};
+}
+
+function sameLookupKeys(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function selectCatalogIndex(request: CatalogQuery): CatalogIndexSelection | null {

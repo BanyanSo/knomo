@@ -12,14 +12,24 @@ export interface MemoTaskRef {
 	text: string;
 }
 
-// Observation 只描述当前 Daily 字节，不承担身份职责。
-export interface MemoObservation {
+export interface ObservationHandle {
 	sourcePath: string;
 	sourceRevision: string;
-	logicalDate: string;
-	section: string | null;
 	startLine: number;
 	endLine: number;
+	rawBlockHash: string;
+}
+
+export interface IdentityHandle {
+	memoId: string;
+	activeBindingId: string;
+	identityRevision: string;
+}
+
+// Observation 只描述当前 Daily 字节，不承担身份职责。
+export interface MemoObservation extends ObservationHandle {
+	logicalDate: string;
+	section: string | null;
 	time: string;
 	content: string;
 	contentHash: string;
@@ -31,20 +41,53 @@ export interface MemoObservation {
 	timeBuoyDates: string[];
 }
 
-export type IdentityWriteMode = "ready" | "adopt_then_retry" | "blocked_settling" | "blocked_ambiguous" | "blocked_waiting_sync";
-
-export interface MemoCapabilities {
+export interface MarkdownCapabilities {
 	view: true;
+	create: true;
+	edit: true;
+	task: true;
 	copy: true;
+	move: true;
+	remove: true;
 	openDaily: true;
 	openLinks: true;
 	openImages: true;
-	copyAsNew: IdentityWriteMode;
-	edit: IdentityWriteMode;
-	toggleTask: IdentityWriteMode;
-	delete: IdentityWriteMode;
-	createReference: IdentityWriteMode;
-	recordReview: IdentityWriteMode;
+	explicitBlockReference: true;
+}
+
+export type CatalogCapabilityCoverage = "complete" | "partial";
+
+export interface CatalogCapabilities {
+	browse: CatalogCapabilityCoverage;
+	search: CatalogCapabilityCoverage;
+	stats: CatalogCapabilityCoverage;
+	shuffle: CatalogCapabilityCoverage;
+	random: CatalogCapabilityCoverage;
+	timeBuoy: CatalogCapabilityCoverage;
+	fullHistory: CatalogCapabilityCoverage;
+}
+
+export type IdentityCapabilityState = "ready" | "absent" | "syncing" | "conflicted";
+
+export interface IdentityCapabilities {
+	relation: IdentityCapabilityState;
+	review: IdentityCapabilityState;
+	recoverableDelete: IdentityCapabilityState;
+	restore: IdentityCapabilityState;
+	merge: IdentityCapabilityState;
+	repair: IdentityCapabilityState;
+	crossDeviceIdentity: IdentityCapabilityState;
+}
+
+export interface ResolvedMemoCapabilities {
+	markdown: MarkdownCapabilities;
+	identity: IdentityCapabilities;
+}
+
+export interface MemoCapabilities {
+	markdown: MarkdownCapabilities;
+	catalog: CatalogCapabilities;
+	identity: IdentityCapabilities;
 }
 
 export interface IdentityCandidate {
@@ -60,29 +103,31 @@ export interface IdentityCandidate {
 export type ResolvedMemo =
 	| {
 		kind: "identified";
-		memoId: string;
-		activeBindingId: string;
 		bindingEvidence: IdentityEvidence;
+		identityHandle: IdentityHandle;
 		observation: MemoObservation;
-		capabilities: MemoCapabilities;
+		capabilities: ResolvedMemoCapabilities;
 		stateRevision: string;
 	}
 	| {
 		kind: "observed";
+		identityHandle: null;
 		observation: MemoObservation;
 		adoption: "eligible" | "settling" | "historical_readonly";
-		capabilities: MemoCapabilities;
+		capabilities: ResolvedMemoCapabilities;
 		stateRevision: string;
 	}
 	| {
 		kind: "ambiguous";
+		identityHandle: null;
 		observation: MemoObservation;
 		candidates: IdentityCandidate[];
 		reason?: "ambiguous" | "manual_successor" | "known_predecessor";
-		capabilities: MemoCapabilities;
+		capabilities: ResolvedMemoCapabilities;
 		stateRevision: string;
 	};
 
+// 仅供冻结的 Protocol V2 运行时兼容使用；新的正文操作接口不得依赖此组合句柄。
 export interface ResolvedMemoHandle {
 	memoId: string;
 	activeBindingId: string;
@@ -115,6 +160,7 @@ export interface CatalogFileRecord {
 	parserVersion: number;
 	settingsFingerprint: string;
 	observationCount: number;
+	observationKeys?: string[];
 	auditedAt: number;
 }
 

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import type { MemoRecord } from "./helpers/memoViewFixture";
 import type { MemoCardPreview } from "../src/ui/MemoCardPreview";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
@@ -104,6 +105,79 @@ test("memo card action menu includes open daily in the requested order", async (
 	assert.equal(timeButton?.getAttr("aria-label"), "Open daily note");
 	assert.equal(timeButton?.getAttr("data-memo-id"), "memo-1");
 	assert.equal(timeButton?.getAttr("data-random-reunion-card"), null);
+});
+
+test("memo card menu keeps Markdown actions available while identity is settling", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+	const capabilities = makeCapabilities("syncing");
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo({
+		catalogV2: { capabilities } as never,
+	}), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: true,
+		randomCard: false,
+		activeMenuMemoId: "memo-1",
+		deletedMemoIds: new Set(),
+		formatDisplayTime: (value) => value,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	const menu = root.find(".knomo-card-menu");
+	assert.equal(menu?.getAttr("aria-label"), "More actions");
+	assert.equal(menu?.getAttr("aria-disabled"), null);
+	assert.equal(menu?.getAttr("title"), null);
+	assert.equal(menu?.getAttr("data-action"), "toggle-card-menu");
+	assert.notEqual(root.find(".knomo-card-actions"), null);
+	assert.equal(root.find("article")?.hasClass("is-menu-open"), true);
+});
+
+test("P1 第 5 步：局部 identity conflict 只为当前 memo 暴露显式 repair 操作", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+	const blockedCapabilities = makeCapabilities("conflicted");
+	blockedCapabilities.identity.repair = "ready";
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo({
+		catalogV2: {
+			capabilities: blockedCapabilities,
+			resolved: {
+				kind: "ambiguous",
+				reason: "competing_match",
+				candidates: [{ memoId: "memo-original" }],
+			},
+		} as never,
+	}), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: true,
+		randomCard: false,
+		activeMenuMemoId: null,
+		deletedMemoIds: new Set(),
+		formatDisplayTime: (value) => value,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	assert.deepEqual(
+		root.findAll("[data-memo-action]").map((action) => action.getAttr("data-memo-action")),
+		["edit", "reference", "open-daily", "copy-text", "copy-link", "confirm-identity"],
+	);
+	assert.equal(
+		root.find("[data-memo-action='confirm-identity']")?.getAttr("data-candidate-memo-id"),
+		"memo-original",
+	);
 });
 
 test("random memo card keeps random review marking on the time opener", async () => {
@@ -392,5 +466,18 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 			lastSyncedAt: null,
 		},
 		...overrides,
+	};
+}
+
+function makeCapabilities(identityState: "ready" | "absent" | "syncing" | "conflicted") {
+	return {
+		...createResolvedMemoCapabilities(identityState),
+		catalog: createCatalogCapabilities({
+			kind: "complete",
+			coveredFromDate: "2026-06-02",
+			pendingFileCount: 0,
+			coveredFileCount: 1,
+			totalFileCount: 1,
+		}),
 	};
 }

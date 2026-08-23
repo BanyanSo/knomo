@@ -134,6 +134,7 @@ function makeObservation(): MemoObservation {
 	return {
 		sourcePath: "Daily/2026-08-09.md",
 		sourceRevision: "a".repeat(64),
+		rawBlockHash: "fnv1a-rawblock",
 		logicalDate: "2026-08-09",
 		section: "## Memos",
 		startLine: 1,

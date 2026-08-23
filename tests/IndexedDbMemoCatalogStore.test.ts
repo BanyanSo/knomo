@@ -3,6 +3,7 @@ import test from "node:test";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
+import { createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
@@ -190,21 +191,10 @@ test("resolution snapshot atomically persists every observation result without a
 		const observation = makeObservation("Daily/2026-08-09.md", "2026-08-09", index, "09:00", `memo-${index}`);
 		return [observation.sourcePath + "\0" + index.toString().padStart(10, "0"), {
 			kind: "observed" as const,
+			identityHandle: null,
 			observation,
 			adoption: "settling" as const,
-			capabilities: {
-				view: true as const,
-				copy: true as const,
-				openDaily: true as const,
-				openLinks: true as const,
-				openImages: true as const,
-				copyAsNew: "blocked_settling" as const,
-				edit: "blocked_settling" as const,
-				toggleTask: "blocked_settling" as const,
-				delete: "blocked_settling" as const,
-				createReference: "blocked_settling" as const,
-				recordReview: "blocked_settling" as const,
-			},
+			capabilities: createResolvedMemoCapabilities("syncing"),
 			stateRevision: "state-1",
 		}];
 	}));
@@ -338,6 +328,7 @@ function makeObservation(
 	return {
 		sourcePath,
 		sourceRevision: "sha",
+		rawBlockHash: `raw-${startLine}`,
 		logicalDate,
 		section: "## Memos",
 		startLine,

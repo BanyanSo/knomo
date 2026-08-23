@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import {
 	getMemoActionClass,
 	getMemoCardActions,
@@ -10,6 +11,7 @@ import {
 	getTrashCardActions,
 	getTrashActionState,
 	getTrashMemoCardClass,
+	isMemoCardMenuReady,
 } from "../src/ui/KnomoCardMetadata";
 import type { MemoRecord } from "./helpers/memoViewFixture";
 
@@ -22,6 +24,7 @@ test("builds memo card shell metadata without daily-open card attributes", () =>
 		className: "knomo-card has-card-actions is-menu-open",
 		attrs: {
 			"data-memo-id": "memo-1",
+			"data-memo-render-key": "memo-1",
 		},
 	});
 
@@ -33,6 +36,7 @@ test("builds memo card shell metadata without daily-open card attributes", () =>
 		className: "knomo-card has-card-actions",
 		attrs: {
 			"data-memo-id": "memo-2",
+			"data-memo-render-key": "memo-2",
 		},
 	});
 
@@ -44,8 +48,16 @@ test("builds memo card shell metadata without daily-open card attributes", () =>
 		className: "knomo-card",
 		attrs: {
 			"data-memo-id": "memo-3",
+			"data-memo-render-key": "memo-3",
 		},
 	});
+
+	assert.equal(getMemoCardShell({
+		memoId: "memo-4",
+		renderKey: "observation-4",
+		includeActions: true,
+		activeMenuMemoId: null,
+	}).attrs["data-memo-render-key"], "observation-4");
 });
 
 test("builds card action and trash action metadata", () => {
@@ -80,30 +92,32 @@ test("builds card action and trash action metadata", () => {
 	assert.equal(getTrashMemoCardClass("purge"), "knomo-card knomo-trash-card is-busy");
 });
 
-test("filters identity actions while keeping ordinary reading actions", () => {
+test("filters recoverable delete while keeping Markdown actions", () => {
 	const memo = makeMemo({});
 	assert.deepEqual(getMemoCardActions(memo), getMemoCardActions());
 	assert.deepEqual(getMemoCardActions({
 		...memo,
 		catalogV2: {
-			capabilities: {
-				view: true,
-				copy: true,
-				openDaily: true,
-				openLinks: true,
-				openImages: true,
-				copyAsNew: "blocked_ambiguous",
-				edit: "blocked_ambiguous",
-				toggleTask: "blocked_ambiguous",
-				delete: "blocked_ambiguous",
-				createReference: "blocked_ambiguous",
-				recordReview: "blocked_ambiguous",
-			},
+			capabilities: makeCapabilities("conflicted"),
 		} as never,
 	}), [
+		{ action: "edit", className: "knomo-card-action" },
+		{ action: "reference", className: "knomo-card-action" },
 		{ action: "open-daily", className: "knomo-card-action" },
 		{ action: "copy-text", className: "knomo-card-action" },
+		{ action: "copy-link", className: "knomo-card-action" },
 	]);
+});
+
+test("keeps the card menu available while identity actions are settling", () => {
+	const memo = makeMemo({});
+	assert.equal(isMemoCardMenuReady(memo), true);
+	assert.equal(isMemoCardMenuReady({
+		...memo,
+		catalogV2: {
+			capabilities: makeCapabilities("syncing"),
+		} as never,
+	}), true);
 });
 
 test("builds memo source reference metadata", () => {
@@ -160,5 +174,18 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 			lastSyncedAt: null,
 		},
 		...overrides,
+	};
+}
+
+function makeCapabilities(identityState: "ready" | "absent" | "syncing" | "conflicted") {
+	return {
+		...createResolvedMemoCapabilities(identityState),
+		catalog: createCatalogCapabilities({
+			kind: "complete",
+			coveredFromDate: "2026-06-02",
+			pendingFileCount: 0,
+			coveredFileCount: 1,
+			totalFileCount: 1,
+		}),
 	};
 }

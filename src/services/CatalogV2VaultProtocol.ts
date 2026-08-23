@@ -111,6 +111,22 @@ export class CatalogV2VaultProtocol {
 		if (!candidatePaths.includes(canonicalPath)) {
 			return { kind: "attention", reasons: ["canonical_bootstrap_missing"] };
 		}
+		return this.loadVaultContextCandidates(candidatePaths);
+	}
+
+	async loadConfiguredVaultContext(catalogDataRoot: string): Promise<CatalogV2VaultContextLoadResult> {
+		const canonicalPath = getCatalogBootstrapPath();
+		if (!(this.app.vault.getAbstractFileByPath(canonicalPath) instanceof TFile)) return { kind: "missing" };
+		const result = await this.loadVaultContextCandidates([canonicalPath]);
+		if (result.kind !== "ready") return result;
+		return normalizePath(result.context.bootstrap.catalogDataRoot) === normalizePath(catalogDataRoot)
+			? result
+			: { kind: "attention", reasons: ["configured_catalog_root_mismatch"] };
+	}
+
+	private async loadVaultContextCandidates(
+		candidatePaths: readonly string[],
+	): Promise<CatalogV2VaultContextLoadResult> {
 		const contexts: CatalogV2VerifiedVaultContext[] = [];
 		const reasons: string[] = [];
 		const missingPaths: string[] = [];

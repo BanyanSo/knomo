@@ -91,6 +91,9 @@ export function validateDeviceTraces(traceDir = DEFAULT_TRACE_DIR): {
 }
 
 function readDeviceTraces(traceDir: string): DeviceTrace[] {
+	if (!fs.existsSync(traceDir)) {
+		throw new Error(`Device trace directory does not exist: ${traceDir}`);
+	}
 	return fs.readdirSync(traceDir)
 		.filter((name) => name.endsWith(".json"))
 		.sort()

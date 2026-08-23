@@ -1,8 +1,13 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 
+export function getMemoRenderKey(memo: MemoRecord): string {
+	return memo.catalogV2?.renderKey ?? memo.id;
+}
+
 export function getMemoRenderRevision(memo: MemoRecord): string {
 	const reference = memo.references[0];
 	return encodeParts([
+		getMemoRenderKey(memo),
 		memo.id,
 		memo.updatedAt,
 		memo.createdAt,

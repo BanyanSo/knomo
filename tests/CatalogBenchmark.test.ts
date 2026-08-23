@@ -10,8 +10,7 @@ import {
 	generateCatalogBenchmarkVault,
 } from "../scripts/catalog-v2/generate-benchmark-vault";
 import { summarizeDeviceTraces, validateDeviceTraces } from "../scripts/catalog-v2/summarize-device-traces";
-import { runIdentityCheckpointBenchmark } from "../scripts/catalog-v2/run-node-benchmarks";
-import { IDBFactory } from "fake-indexeddb";
+import { runIdentityLedgerReducerBenchmark } from "../scripts/catalog-v2/run-node-benchmarks";
 
 test("PERF-30K generator 使用冻结 seed、路径、20 memos/Daily 和确定性 SHA", async () => {
 	const rootDir = path.join(".tmp", "catalog-v2-benchmark-test");
@@ -67,6 +66,12 @@ test("device trace summarizer 使用 nearest-rank 汇总平台样本", () => {
 	assert.deepEqual(summary.desktop?.["query.nextPageMs"], { samples: 4, p50: 20, p95: 40, max: 40 });
 });
 
+test("P2 第 8 步：真实设备 trace 缺失时发布门禁必须失败而非跳过", () => {
+	const traceDir = path.join(".tmp", `catalog-v2-device-trace-missing-${process.pid}`);
+	assert.equal(fs.existsSync(traceDir), false);
+	assert.throws(() => validateDeviceTraces(traceDir), /Device trace directory does not exist/u);
+});
+
 test("phase 6 device trace gate enforces frozen samples, fixture and platform thresholds", () => {
 	const traceDir = path.join(".tmp", `catalog-v2-device-validation-${process.pid}`);
 	fs.mkdirSync(traceDir, { recursive: true });
@@ -95,11 +100,11 @@ test("phase 6 device trace gate enforces frozen samples, fixture and platform th
 	assert.equal(validation.summary.android?.pageMs?.samples, 30);
 });
 
-test("identity checkpoint cold start restores materialized state without Vault replay", async () => {
-	const result = await runIdentityCheckpointBenchmark(new IDBFactory(), "identity-checkpoint-test", 300);
-	assert.equal(result.memoCount, 300);
-	assert.equal(result.vaultReplayCount, 0);
-	assert.equal(result.coldStartMs >= 0, true);
+test("V3 Identity Ledger reducer materializes 30k immutable events without quadratic memo scans", async () => {
+	const result = await runIdentityLedgerReducerBenchmark(30_000);
+	assert.equal(result.memoCount, 30_000);
+	assert.equal(result.eventCount, 30_000);
+	assert.equal(result.materializeMs < 10_000, true);
 });
 
 function sha256(bytes: Uint8Array): string {

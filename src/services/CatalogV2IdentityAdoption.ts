@@ -45,7 +45,7 @@ export class CatalogV2IdentityAdoption {
 	): Promise<CatalogV2IdentityAdoptionResult> {
 		const refreshed = await this.refresh(memo);
 		if (refreshed.kind !== "observed" || refreshed.adoption !== "eligible"
-			|| refreshed.capabilities.edit !== "adopt_then_retry"
+			|| refreshed.capabilities.identity.crossDeviceIdentity !== "absent"
 			|| refreshed.observation.sourcePath !== memo.observation.sourcePath
 			|| refreshed.observation.sourceRevision !== memo.observation.sourceRevision
 			|| refreshed.observation.startLine !== memo.observation.startLine

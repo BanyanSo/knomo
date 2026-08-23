@@ -245,6 +245,7 @@ test("uncommitted migration input can be verified in staging and then bound to S
 		observations: [{
 			sourcePath: evidence.sourcePath,
 			sourceRevision: "e".repeat(64),
+			rawBlockHash: "fnv1a-rawblock",
 			logicalDate: evidence.logicalDate,
 			section: evidence.section,
 			startLine: evidence.lineNumberHint ?? 1,

@@ -10,7 +10,11 @@ import { CatalogV2DeletedPayloadCleanupRunner } from "../src/services/CatalogV2D
 import { CatalogV2DeletedPayloadStore } from "../src/services/CatalogV2DeletedPayloadStore";
 import { observationToIdentityEvidence } from "../src/services/CatalogV2IdentityResolver";
 import { CatalogV2MonthlyProjectionOutboxRunner } from "../src/services/CatalogV2MonthlyProjectionOutbox";
-import { CatalogV2MutationRuntime, type CatalogV2RuntimeIdFactory } from "../src/services/CatalogV2MutationRuntime";
+import {
+	CatalogV2MutationRuntime,
+	insertRawBlock,
+	type CatalogV2RuntimeIdFactory,
+} from "../src/services/CatalogV2MutationRuntime";
 import { CatalogV2OperationWriter } from "../src/services/CatalogV2OperationWriter";
 import { deriveObservationMemoId } from "../src/services/CatalogV2SharedMutationStore";
 import type { CatalogV2SharedMutationStore } from "../src/services/CatalogV2SharedMutationStore";
@@ -23,6 +27,20 @@ import type {
 	CatalogV2SharedMutationRecord,
 	CatalogV2VerifiedVaultContext,
 } from "../src/types/catalogV2Protocol";
+
+test("insertRawBlock accepts a detached root time line for list memo content", () => {
+	assert.equal(
+		insertRawBlock("## Memos\n", "- 09:00\n\t- first\n\t- second", "## Memos"),
+		"## Memos\n- 09:00\n\t- first\n\t- second\n",
+	);
+});
+
+test("insertRawBlock still rejects an invalid or indented root time line", () => {
+	assert.throws(
+		() => insertRawBlock("## Memos\n", "\t- 09:00\n\t- first", "## Memos"),
+		/A Daily memo raw block must start with a valid root-level time line\./u,
+	);
+});
 
 test("create saves Daily without identity markers or monthly projection outbox", async () => {
 	const fixture = await createFixture("create", "## Memos\nexisting text\n## Other\nnot a memo\n");
@@ -170,6 +188,22 @@ test("delete writes and verifies payload before Daily removal, then restore keep
 	const cleaned = await new CatalogV2DeletedPayloadCleanupRunner(fixture.store, fixture.payloadStore).run();
 	assert.deepEqual(cleaned, { cleaned: 0, waiting: 0 });
 	assert.equal(fixture.vault.hasPath(deletedPayload.path), true);
+});
+
+test("V3-OP-008：recoverable delete payload 写入失败时 Daily 逐字节不变", async () => {
+	const fixture = await createFixture("delete-payload-failure", "## Memos\n- 09:00 keep me\n");
+	const handle = await makeHandle(fixture, "memo-delete-payload-failure");
+	fixture.payloadStore.write = async () => { throw new Error("payload write failed"); };
+
+	await assert.rejects(() => fixture.runtime.delete({
+		file: fixture.dailyFile,
+		logicalDate: "2026-08-09",
+		headings: ["## Memos"],
+		handle,
+		sourceMemoId: null,
+	}), /payload write failed/u);
+
+	assert.equal(fixture.vault.readText(fixture.dailyFile), "## Memos\n- 09:00 keep me\n");
 });
 
 test("ordinary edit returns saved with follow-up pending when identity evidence flush fails", async () => {

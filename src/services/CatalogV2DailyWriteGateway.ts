@@ -24,6 +24,7 @@ export interface CatalogV2PreparedDailyWrite {
 	before: DiaryMemoParseResult;
 	after: DiaryMemoParseResult;
 	editor: Editor | null;
+	update: CatalogV2DailyWritePrepareInput["update"];
 }
 
 export interface CatalogV2DailyWriteResult {
@@ -65,29 +66,46 @@ export class CatalogV2DailyWriteGateway {
 			before,
 			after,
 			editor,
+			update: input.update,
 		};
 	}
 
 	async commit(prepared: CatalogV2PreparedDailyWrite): Promise<CatalogV2DailyWriteResult> {
 		if (prepared.mode === "active_editor") {
 			const editor = prepared.editor;
-			if (editor === null || this.getActiveEditor(prepared.file) !== editor || editor.getValue() !== prepared.beforeContent) {
+			if (editor === null || this.getActiveEditor(prepared.file) !== editor) {
 				throw new CatalogV2StaleDailyError(prepared.file.path);
 			}
-			if (prepared.beforeContent !== prepared.afterContent) {
+			const afterContent = this.replayPreparedUpdate(prepared, editor.getValue());
+			if (prepared.beforeContent !== afterContent) {
 				editor.transaction({ changes: [{
 					from: { line: 0, ch: 0 },
 					to: editor.offsetToPos(prepared.beforeContent.length),
-					text: prepared.afterContent,
+					text: afterContent,
 				}] });
 			}
 		} else {
-			await this.app.vault.process(prepared.file, (content) => {
-				if (content !== prepared.beforeContent) throw new CatalogV2StaleDailyError(prepared.file.path);
-				return prepared.afterContent;
-			});
+			await this.app.vault.process(prepared.file, (content) => this.replayPreparedUpdate(prepared, content));
 		}
 		return { mode: prepared.mode, before: prepared.before, after: prepared.after };
+	}
+
+	private replayPreparedUpdate(prepared: CatalogV2PreparedDailyWrite, currentContent: string): string {
+		const current = this.parser.parseRevision({
+			sourcePath: normalizePath(prepared.file.path),
+			logicalDate: prepared.logicalDate,
+			headings: prepared.headings,
+			content: currentContent,
+			sourceRevision: prepared.before.sourceRevision,
+		});
+		if (currentContent !== prepared.beforeContent) {
+			throw new CatalogV2StaleDailyError(prepared.file.path);
+		}
+		const afterContent = prepared.update(currentContent, current);
+		if (afterContent !== prepared.afterContent) {
+			throw new CatalogV2StaleDailyError(prepared.file.path);
+		}
+		return afterContent;
 	}
 
 	async prepareTransition(input: {

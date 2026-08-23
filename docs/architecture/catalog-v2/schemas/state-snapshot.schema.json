@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knomo.local/schemas/catalog-v2/state-snapshot-v1.json",
+  "title": "Knomo Catalog v2 state snapshot v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "sourceWriterId",
+    "firstSequence",
+    "lastSequence",
+    "coveredSegments",
+    "operationDigests",
+    "operations"
+  ],
+  "properties": {
+    "kind": { "const": "knomo.catalog-v2.state-snapshot" },
+    "schemaVersion": { "const": 1 },
+    "sourceWriterId": { "$ref": "#/$defs/writerId" },
+    "firstSequence": { "type": "integer", "minimum": 1 },
+    "lastSequence": { "type": "integer", "minimum": 1 },
+    "coveredSegments": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/stateSegmentRef" }
+    },
+    "operationDigests": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["opId", "sha256"],
+        "properties": {
+          "opId": { "$ref": "#/$defs/opId" },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "object" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "writerId": { "type": "string", "pattern": "^w_[a-f0-9]{32}$" },
+    "opId": { "type": "string", "pattern": "^o_[a-f0-9]{32}$" },
+    "vaultPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^\\u0000-\\u001f]+$"
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "byteLength"],
+      "properties": {
+        "path": { "$ref": "#/$defs/vaultPath" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "byteLength": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "stateSegmentRef": {
+      "allOf": [
+        { "$ref": "#/$defs/artifactRef" },
+        {
+          "properties": {
+            "path": {
+              "pattern": "^(?:(?:[^/]+/)*_knomo-data/)?state/devices/w_[a-f0-9]{32}/segment-[0-9]{6}\\.jsonl$"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knomo.local/schemas/catalog-v2/migration-commit-v1.json",
+  "title": "Knomo Catalog v2 migration commit manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "importerVersion",
+    "generationDigest",
+    "writerId",
+    "committedAt",
+    "legacySources",
+    "requiredArtifacts",
+    "domainCounts",
+    "verification"
+  ],
+  "properties": {
+    "kind": {
+      "const": "knomo.catalog-v2.migration-commit"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "importerVersion": {
+      "const": 1
+    },
+    "generationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "writerId": {
+      "type": "string",
+      "pattern": "^w_[a-f0-9]{32}$"
+    },
+    "committedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "legacySources": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/legacySource"
+      }
+    },
+    "requiredArtifacts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/requiredArtifact"
+      }
+    },
+    "domainCounts": {
+      "$ref": "#/$defs/domainCounts"
+    },
+    "verification": {
+      "$ref": "#/$defs/verification"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "vaultPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^\\u0000-\\u001f]+$"
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "byteLength"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/vaultPath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "legacySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactDigest",
+        "artifactKind",
+        "disposition",
+        "receipt"
+      ],
+      "properties": {
+        "artifactDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifactKind": {
+          "enum": [
+            "memo_index",
+            "pending_create",
+            "plugin_data",
+            "time_buoy_index",
+            "time_buoy_state",
+            "repair_candidate"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "imported",
+            "quarantined"
+          ]
+        },
+        "receipt": {
+          "$ref": "#/$defs/upgradeReceiptRef"
+        }
+      }
+    },
+    "requiredArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactKind",
+        "path",
+        "sha256",
+        "byteLength"
+      ],
+      "properties": {
+        "artifactKind": {
+          "enum": [
+            "migration_package",
+            "quarantine_receipt",
+            "deleted_payload"
+          ]
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/vaultPath"
+            },
+            {
+              "pattern": "^(?:(?:[^/]+/)*_knomo-data/)?(?:upgrade/(?:packages|issues)/[A-Za-z0-9_-]+-[a-f0-9]{64}\\.json|state/deleted/[^/]+/[A-Za-z0-9._-]+\\.json)$"
+            }
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "upgradeReceiptRef": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifactRef"
+        },
+        {
+          "properties": {
+            "path": {
+              "pattern": "^(?:(?:[^/]+/)*_knomo-data/)?upgrade/(?:packages|issues)/[A-Za-z0-9_-]+-[a-f0-9]{64}\\.json$"
+            }
+          }
+        }
+      ]
+    },
+    "domainCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identityClaims",
+        "deletedRecords",
+        "relations",
+        "reviewOrdinals",
+        "pendingCreates",
+        "diagnostics",
+        "quarantinedArtifacts"
+      ],
+      "properties": {
+        "identityClaims": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletedRecords": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reviewOrdinals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pendingCreates": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantinedArtifacts": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "structure",
+        "runtime",
+        "catalog"
+      ],
+      "properties": {
+        "structure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requiredArtifactsVerified",
+            "existingMemoIdsPreserved",
+            "domainCountsVerified",
+            "deletedPayloadsVerified",
+            "dailyHashesUnchanged"
+          ],
+          "properties": {
+            "requiredArtifactsVerified": {
+              "const": true
+            },
+            "existingMemoIdsPreserved": {
+              "const": true
+            },
+            "domainCountsVerified": {
+              "const": true
+            },
+            "deletedPayloadsVerified": {
+              "const": true
+            },
+            "dailyHashesUnchanged": {
+              "const": true
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "legacyReadsDisabled",
+            "legacyWriterRemoved",
+            "v2ColdStartPassed",
+            "outboxDrained"
+          ],
+          "properties": {
+            "legacyReadsDisabled": {
+              "const": true
+            },
+            "legacyWriterRemoved": {
+              "const": true
+            },
+            "v2ColdStartPassed": {
+              "const": true
+            },
+            "outboxDrained": {
+              "const": true
+            }
+          }
+        },
+        "catalog": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "coverage",
+            "observationCount",
+            "identifiedCount",
+            "observedCount",
+            "ambiguousCount",
+            "failedPaths"
+          ],
+          "properties": {
+            "coverage": {
+              "const": "complete"
+            },
+            "observationCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "identifiedCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observedCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ambiguousCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failedPaths": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/failedPath"
+              }
+            }
+          }
+        }
+      }
+    },
+    "failedPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "disposition",
+        "receiptSha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/vaultPath"
+        },
+        "disposition": {
+          "enum": [
+            "quarantined",
+            "user_attention"
+          ]
+        },
+        "receiptSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

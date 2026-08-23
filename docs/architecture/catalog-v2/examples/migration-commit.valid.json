@@ -1,0 +1,66 @@
+{
+  "committedAt": "2026-08-09T02:00:00.000Z",
+  "domainCounts": {
+    "deletedRecords": 1,
+    "diagnostics": 0,
+    "identityClaims": 1,
+    "pendingCreates": 0,
+    "quarantinedArtifacts": 0,
+    "relations": 1,
+    "reviewOrdinals": 0
+  },
+  "generationDigest": "9999999999999999999999999999999999999999999999999999999999999999",
+  "importerVersion": 1,
+  "kind": "knomo.catalog-v2.migration-commit",
+  "legacySources": [
+    {
+      "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifactKind": "memo_index",
+      "disposition": "imported",
+      "receipt": {
+        "byteLength": 2048,
+        "path": "upgrade/packages/memo_index-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    }
+  ],
+  "requiredArtifacts": [
+    {
+      "artifactKind": "migration_package",
+      "byteLength": 2048,
+      "path": "upgrade/packages/memo_index-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "artifactKind": "deleted_payload",
+      "byteLength": 248,
+      "path": "state/deleted/20260602-090000-02/l_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "schemaVersion": 1,
+  "verification": {
+    "catalog": {
+      "ambiguousCount": 0,
+      "coverage": "complete",
+      "failedPaths": [],
+      "identifiedCount": 1,
+      "observationCount": 1,
+      "observedCount": 0
+    },
+    "runtime": {
+      "legacyReadsDisabled": true,
+      "legacyWriterRemoved": true,
+      "outboxDrained": true,
+      "v2ColdStartPassed": true
+    },
+    "structure": {
+      "dailyHashesUnchanged": true,
+      "deletedPayloadsVerified": true,
+      "domainCountsVerified": true,
+      "existingMemoIdsPreserved": true,
+      "requiredArtifactsVerified": true
+    }
+  },
+  "writerId": "w_0123456789abcdef0123456789abcdef"
+}

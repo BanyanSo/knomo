@@ -21,5 +21,15 @@ architecure/
 docs/*
 !docs/architecture/
 docs/architecture/*
+!docs/architecture/catalog-v2/
+docs/architecture/catalog-v2/**
+!docs/architecture/catalog-v2/schemas/
+!docs/architecture/catalog-v2/schemas/migration-package.schema.json
+!docs/architecture/catalog-v2/schemas/migration-commit.schema.json
+!docs/architecture/catalog-v2/schemas/state-snapshot.schema.json
+!docs/architecture/catalog-v2/schemas/state-compaction-commit.schema.json
+!docs/architecture/catalog-v2/examples/
+!docs/architecture/catalog-v2/examples/migration-package.valid.json
+!docs/architecture/catalog-v2/examples/migration-commit.valid.json
 !docs/architecture/catalog-v3/
 !docs/architecture/catalog-v3/**

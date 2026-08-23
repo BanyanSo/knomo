@@ -29,9 +29,7 @@ export function getCatalogReadStatusHeaders(
 		headers.push(summary(coverageText, t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
 	}
 
-	if (options.status.identity === "absent") {
-		headers.push(summary(t("catalog.needsInitializationDesc"), t("catalog.openDiagnostics"), "open-catalog-settings"));
-	} else if (options.status.identity === "syncing") {
+	if (options.status.identity === "syncing") {
 		headers.push(summary(
 			t("catalog.stateSettling"),
 			t("catalog.retrySyncState"),

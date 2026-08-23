@@ -203,7 +203,6 @@ export const zhCN = {
 	"catalog.authorityTransferApproved": "Knomo 控制权已转移。",
 	"catalog.authorityTransferFailed": "控制权转移未完成；请等待协议数据同步完整后重试。",
 	"catalog.needsInitializationTitle": "开始使用 Knomo",
-	"catalog.needsInitializationDesc": "这个 Vault 尚未完成 Knomo 初始化。初始化后才能创建、引用和同步 memo；Daily 正文不会写入额外标记。",
 	"catalog.startUsing": "开始使用 Knomo",
 	"catalog.waitingForSyncTitle": "正在等待 Knomo 数据同步",
 	"catalog.waitingForSyncDesc": "当前 Vault 已有内容或部分 Knomo 数据尚未完整到达。已知内容可以查看，暂不建立新关联或覆盖月度文件。",

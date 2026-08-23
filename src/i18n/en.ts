@@ -205,7 +205,6 @@ export const en: Record<TranslationKey, string> = {
 	"catalog.authorityTransferApproved": "Knomo authority was transferred.",
 	"catalog.authorityTransferFailed": "Authority transfer did not complete. Wait for all protocol data to sync and try again.",
 	"catalog.needsInitializationTitle": "Start using Knomo",
-	"catalog.needsInitializationDesc": "This Vault has not finished Knomo setup. Initialize it before creating, referencing, or syncing memos. Daily notes will not receive extra markers.",
 	"catalog.startUsing": "Start using Knomo",
 	"catalog.waitingForSyncTitle": "Waiting for Knomo data to sync",
 	"catalog.waitingForSyncDesc": "This Vault contains notes or partial Knomo data that has not arrived completely. Known content remains readable while new links and monthly writes stay paused.",

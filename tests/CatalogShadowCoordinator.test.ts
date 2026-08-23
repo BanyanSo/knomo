@@ -60,6 +60,37 @@ test("V3-FAIL-007：本机 fallback 扫描完成后仍明确报告 partial cover
 	fixture.unload();
 });
 
+test("fresh empty Vault 在共享配置缺失时也把 0/0 Daily 视为 complete", async () => {
+	await ensureObsidianStub();
+	const { CatalogShadowCoordinator } = await import("../src/services/CatalogShadowCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const fixture = await createCoordinatorFixture([]);
+	const store = new InMemoryMemoCatalogStore();
+	const coordinator = new CatalogShadowCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ isConfigurationComplete: () => false },
+	);
+	coordinator.start(fixture.owner);
+	await coordinator.initialize();
+	await coordinator.waitForIdle();
+
+	assert.deepEqual((await store.query({ limit: 50 })).coverage, {
+		kind: "complete",
+		coveredFromDate: null,
+		pendingFileCount: 0,
+		coveredFileCount: 0,
+		totalFileCount: 0,
+	});
+	assert.equal(fixture.readCount(), 0);
+	fixture.unload();
+});
+
 test("配置晚到触发同一文件分区重扫，不重复 observation", async () => {
 	await ensureObsidianStub();
 	const { CatalogShadowCoordinator } = await import("../src/services/CatalogShadowCoordinator");

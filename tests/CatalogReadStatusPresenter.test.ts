@@ -25,7 +25,7 @@ test("Observation-first 全部就绪时不添加状态提示", () => {
 	}), []);
 });
 
-test("identity absent 只添加非阻塞初始化提示", () => {
+test("fresh empty Vault 的 identity absent 不显示初始化 gate", () => {
 	const headers = getCatalogReadStatusHeaders({
 		status: {
 			content: "ready",
@@ -34,12 +34,16 @@ test("identity absent 只添加非阻塞初始化提示", () => {
 			projection: "ready",
 			migration: "none",
 		},
-		coverage: completeCoverage,
+		coverage: {
+			kind: "complete",
+			coveredFromDate: null,
+			pendingFileCount: 0,
+			coveredFileCount: 0,
+			totalFileCount: 0,
+		},
 	});
 
-	assert.equal(headers.length, 1);
-	assert.equal(headers[0]?.type, "summary");
-	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "open-catalog-settings");
+	assert.deepEqual(headers, []);
 });
 
 test("Catalog、identity、projection、migration 状态按独立维度同时呈现", () => {

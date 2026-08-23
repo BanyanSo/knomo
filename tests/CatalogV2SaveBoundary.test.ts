@@ -149,9 +149,9 @@ test("非空未配置 Vault 不再初始化身份协议，直接保存当前草�
 	assert.equal(harness.input.value, "");
 });
 
-test("身份初始化回调不可用也不阻塞首次 Daily 保存", async () => {
+test("fresh empty Vault 不依赖身份初始化，可直接完成首次 Daily 保存", async () => {
 	const harness = createViewHarness("post_commit", {
-		installMode: "nonempty_unconfigured",
+		installMode: "uninitialized",
 		initializeResult: false,
 	});
 
@@ -631,7 +631,7 @@ async function runFeatureSave(
 function createViewHarness(
 	mode: "pre_commit" | "post_commit",
 	options: {
-		installMode?: "existing_v2" | "nonempty_unconfigured";
+		installMode?: "existing_v2" | "nonempty_unconfigured" | "uninitialized";
 		initializeResult?: boolean;
 	} = {},
 ): {

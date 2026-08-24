@@ -4,7 +4,7 @@ import test from "node:test";
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
-import { CatalogV2DailyWriteGateway } from "../src/services/CatalogV2DailyWriteGateway";
+import { DailyMemoWriteGateway } from "../src/services/DailyMemoWriteGateway";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import {
 	MarkdownMutationService,
@@ -15,7 +15,7 @@ import type { MemoObservation, ObservationHandle } from "../src/types/catalog";
 
 const HEADINGS = ["## Memos"] as const;
 
-test("V3-OP-002/004/005 与 V3-FAIL-002/004：正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (context) => {
+test("正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (context) => {
 	for (const scenario of [
 		"no-bootstrap",
 		"identity-syncing",
@@ -57,7 +57,7 @@ test("V3-OP-002/004/005 与 V3-FAIL-002/004：正文 mutation 不依赖 bootstra
 	}
 });
 
-test("V3-ORDER-006/V3-PURITY-001：同一分钟相同正文创建两条 observation，Daily 不含内部身份字符", async () => {
+test("同一分钟相同正文创建两条 observation，Daily 不含内部身份字符", async () => {
 	const fixture = createFixture();
 
 	await fixture.service.create({ content: "same" });
@@ -92,7 +92,7 @@ test("用户配置 top 时新 memo 插入标题下方，bottom 仍追加到分�
 	);
 });
 
-test("V3-LAYER-004：stale ObservationHandle 拒绝写入并刷新 Catalog，不按旧行号猜测", async () => {
+test("stale ObservationHandle 拒绝写入并刷新 Catalog，不按旧行号猜测", async () => {
 	const fixture = createFixture({
 		initialFiles: { "Daily/2026-08-22.md": "## Memos\n- 08:00 first\n- 08:01 second\n" },
 	});
@@ -110,7 +110,7 @@ test("V3-LAYER-004：stale ObservationHandle 拒绝写入并刷新 Catalog，不
 	assert.deepEqual(fixture.refreshedPaths, [[fixture.getPath("2026-08-22")]]);
 });
 
-test("V3-OP-005：copy 保留 multiline、列表、任务和代码块结构，但不复制显式 block ID", async (context) => {
+test("copy 保留 multiline、列表、任务和代码块结构，但不复制显式 block ID", async (context) => {
 	for (const [name, content] of [
 		["multiline", "first\nsecond"],
 		["list", "- first\n- second"],
@@ -141,7 +141,7 @@ test("V3-OP-005：copy 保留 multiline、列表、任务和代码块结构，�
 	assert.equal(copied.existingBlockId, null);
 });
 
-test("V3-OP-006：move 来源删除失败时精确回滚目标，不留下无恢复记录的重复正文", async () => {
+test("move 来源删除失败时精确回滚目标，不留下无恢复记录的重复正文", async () => {
 	const sourcePath = "Daily/2026-08-22.md";
 	const targetPath = "Daily/2026-08-23.md";
 	const fixture = createFixture({
@@ -162,7 +162,7 @@ test("V3-OP-006：move 来源删除失败时精确回滚目标，不留下无恢
 	assert.doesNotMatch(fixture.vault.readText(targetPath), /move me/u);
 });
 
-test("V3-OP-006：move 回滚目标遇到并发修改时保留两份正文并明确报告 content pending", async () => {
+test("move 回滚目标遇到并发修改时保留两份正文并明确报告 content pending", async () => {
 	const sourcePath = "Daily/2026-08-22.md";
 	const targetPath = "Daily/2026-08-23.md";
 	const fixture = createFixture({
@@ -188,7 +188,7 @@ test("V3-OP-006：move 回滚目标遇到并发修改时保留两份正文并明
 	assert.match(fixture.vault.readText(targetPath), /concurrent/u);
 });
 
-test("V3-OP-007/012：remove 删除当前 block；显式 reference 只写用户请求的 block ID", async () => {
+test("remove 删除当前 block；显式 reference 只写用户请求的 block ID", async () => {
 	const fixture = createFixture({
 		initialFiles: { "Daily/2026-08-22.md": "## Memos\n- 08:00 referenced\n" },
 	});
@@ -258,7 +258,7 @@ function createFixture(options: FixtureOptions = {}) {
 		refreshCatalogPaths: async (paths) => { refreshedPaths.push([...paths]); },
 		now: () => new Date(2026, 7, 22, 9, 0, 0),
 		random: () => 0,
-	}, new CatalogV2DailyWriteGateway(app, parser));
+	}, new DailyMemoWriteGateway(app, parser));
 
 	const getPath = (logicalDate: string) => `Daily/${logicalDate}.md`;
 	const parse = async (logicalDate: string): Promise<MemoObservation[]> => {

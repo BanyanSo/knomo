@@ -1,6 +1,6 @@
 import { normalizePath } from "obsidian";
 
-import { CATALOG_V2_MONTHLY_RENDERER_VERSION } from "./CatalogV2MonthlyProjection";
+import { MONTHLY_RENDERER_VERSION } from "./MonthlyProjection";
 import type { DailyNotesConfig } from "./DailyNoteService";
 import type {
 	KnomoSharedConfig,
@@ -13,7 +13,7 @@ import { isValidMarkdownHeading } from "../utils/markdown";
 import { isRecord } from "../utils/object";
 import { normalizeVaultPath } from "../utils/path";
 
-export const KNOMO_SHARED_CONFIG_RELATIVE_ROOT = "_knomo-data/schema/config/v1";
+export const KNOMO_SHARED_CONFIG_RELATIVE_ROOT = "_knomo-data/config";
 
 const WRITER_ID_PATTERN = /^w_[a-f0-9]{32}$/u;
 const EVENT_ID_PATTERN = /^c_[a-f0-9]{32}$/u;
@@ -50,7 +50,7 @@ export function buildKnomoSharedConfig(
 			fileFormat: settings.monthlyMemoFileFormat.trim(),
 			dateHeadingFormat: settings.monthlyDateHeadingFormat.trim(),
 			dateOrder: settings.monthlyDateOrder,
-			rendererVersion: CATALOG_V2_MONTHLY_RENDERER_VERSION,
+			rendererVersion: MONTHLY_RENDERER_VERSION,
 		},
 	};
 	assertKnomoSharedConfig(config);

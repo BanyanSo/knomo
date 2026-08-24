@@ -19,9 +19,7 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	listDeletedMemos: () => Promise<TMemo[]>;
 	restoreMemo: (memo: TMemo) => Promise<TMemo | null>;
 	handleRestoredMemo: (deletedMemo: TMemo, restoredMemo: TMemo) => void;
-	purgeDeletedMemo: (memo: TMemo) => Promise<void>;
 	isTrashActive: () => boolean;
-	confirmPurge: () => Promise<boolean>;
 	showNotice: (message: string) => void;
 	forceRefreshViews: () => Promise<void>;
 	requestRender: (target: TrashMemoRenderTarget) => void;
@@ -34,7 +32,6 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	private trashCount = 0;
 	private deletedMemoIds = new Set<string>();
 	private trashBusyMemoActions = new Map<string, TrashAction>();
-	private readonly confirmingPurgeMemoIds = new Set<string>();
 
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
@@ -105,40 +102,22 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	}
 
 	async handleTrashAction(action: TrashAction, memo: TMemo): Promise<void> {
-		if (this.trashBusyMemoActions.has(memo.id) || this.confirmingPurgeMemoIds.has(memo.id)) {
+		if (this.trashBusyMemoActions.has(memo.id)) {
 			return;
-		}
-		if (action === "purge") {
-			this.confirmingPurgeMemoIds.add(memo.id);
-			try {
-				if (!await this.options.confirmPurge()) {
-					return;
-			}
-			} finally {
-				this.confirmingPurgeMemoIds.delete(memo.id);
-			}
 		}
 
 		this.trashBusyMemoActions.set(memo.id, action);
 		this.options.requestRender("card-flow");
 		try {
-			if (action === "restore") {
-				const restoredMemo = await this.options.restoreMemo(memo);
-				this.removeTrashMemo(memo.id);
-				if (restoredMemo !== null) this.options.handleRestoredMemo(memo, restoredMemo);
-				this.options.showNotice(t("notice.restored"));
-				try {
-					await this.options.forceRefreshViews();
-				} catch {
-					this.options.showNotice(t("catalog.savedRefreshPending"));
-				}
-				return;
-			}
-
-			await this.options.purgeDeletedMemo(memo);
+			const restoredMemo = await this.options.restoreMemo(memo);
 			this.removeTrashMemo(memo.id);
-			this.options.showNotice(t("notice.purged"));
-			await this.options.forceRefreshViews();
+			if (restoredMemo !== null) this.options.handleRestoredMemo(memo, restoredMemo);
+			this.options.showNotice(t("notice.restored"));
+			try {
+				await this.options.forceRefreshViews();
+			} catch {
+				this.options.showNotice(t("catalog.savedRefreshPending"));
+			}
 		} catch (error) {
 			this.options.showNotice(formatTrashActionErrorMessage(action, error));
 			this.options.requestRender("ui-state");
@@ -154,9 +133,9 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	}
 }
 
-export function formatTrashActionErrorMessage(action: TrashAction, error: unknown): string {
-	const actionLabel = action === "restore" ? t("error.restoreFailed") : t("error.purgeFailed");
-	const fallbackMessage = action === "restore" ? t("error.restoreFailedRetry") : t("error.purgeFailedRetry");
+export function formatTrashActionErrorMessage(_action: TrashAction, error: unknown): string {
+	const actionLabel = t("error.restoreFailed");
+	const fallbackMessage = t("error.restoreFailedRetry");
 	const message = formatServiceError(error, fallbackMessage);
 	if (message === fallbackMessage || message.startsWith(actionLabel)) {
 		return message;

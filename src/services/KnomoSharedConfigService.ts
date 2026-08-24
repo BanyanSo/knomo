@@ -18,6 +18,7 @@ import {
 	sha256KnomoSharedConfigText,
 	UnsupportedKnomoSharedConfigSchemaError,
 	getKnomoSharedConfigRootPath,
+	KNOMO_SHARED_CONFIG_RELATIVE_ROOT,
 } from "./KnomoSharedConfigProtocol";
 
 export interface KnomoSharedConfigServiceOptions {
@@ -474,7 +475,7 @@ function parentPath(path: string): string {
 
 function getDataFolderFromConfigRoot(rootPath: string): string {
 	const normalizedRoot = normalizePath(rootPath);
-	const suffix = "/schema/config/v1";
+	const suffix = KNOMO_SHARED_CONFIG_RELATIVE_ROOT.slice("_knomo-data".length);
 	if (!normalizedRoot.endsWith(suffix)) {
 		throw new Error("Knomo shared configuration root is outside Knomo Data Root.");
 	}

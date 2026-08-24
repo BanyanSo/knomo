@@ -4,20 +4,17 @@ import type { WorkspaceLeaf } from "obsidian";
 import { KNOMO_VIEW_TYPE } from "./constants";
 import { AttachmentService } from "./services/AttachmentService";
 import {
-	CATALOG_V2_SCANNER_ENABLED,
-	CatalogShadowCoordinator,
+	CATALOG_SCANNER_ENABLED,
+	CatalogIndexCoordinator,
 	createCatalogDatabaseName,
-} from "./services/CatalogShadowCoordinator";
+} from "./services/CatalogIndexCoordinator";
 import { DailyNoteService } from "./services/DailyNoteService";
 import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { DiaryMemoParser } from "./services/DiaryMemoParser";
-import { CatalogV2DailyWriteGateway } from "./services/CatalogV2DailyWriteGateway";
-import { CatalogV2FeatureService } from "./services/CatalogV2FeatureService";
-import type { CatalogV2ReadService } from "./services/CatalogV2ReadService";
-import { CatalogV2MonthlyProjectionCoordinator } from "./services/CatalogV2MonthlyProjectionCoordinator";
-import { CatalogV2ProjectionInputBuilder } from "./services/CatalogV2ProjectionInputBuilder";
-import { CatalogV2ReadOnlyCompatibilitySource } from "./services/CatalogV2ReadOnlyCompatibilitySource";
-import { CatalogV3LegacyIdentityImporter } from "./services/CatalogV3LegacyIdentityImporter";
+import { DailyMemoWriteGateway } from "./services/DailyMemoWriteGateway";
+import type { CatalogReadService } from "./services/CatalogReadService";
+import { MonthlyProjectionCoordinator } from "./services/MonthlyProjectionCoordinator";
+import { MonthlyProjectionInputBuilder } from "./services/MonthlyProjectionInputBuilder";
 import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore";
 import { createIdentityLedgerWriterId, getIdentityLedgerRootPath } from "./services/IdentityLedgerProtocol";
 import { IdentityLedgerService } from "./services/IdentityLedgerService";
@@ -28,7 +25,10 @@ import {
 } from "./services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "./services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
+import { LegacyIndexMigrationService } from "./services/LegacyIndexMigrationService";
+import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { MemoCatalogService } from "./services/MemoCatalogService";
+import { MemoCommandService } from "./services/MemoCommandService";
 import { MarkdownMutationService } from "./services/MarkdownMutationService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "./services/MemoCatalogStore";
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
@@ -61,11 +61,11 @@ export default class KnomoPlugin extends Plugin {
 	manualRefreshPromise: Promise<CatalogRefreshResult> | null = null;
 	private viewRefreshScheduler: ViewRefreshScheduler | null = null;
 	private vaultTagIndex!: VaultTagIndex;
-	private catalogShadowCoordinator: CatalogShadowCoordinator | null = null;
-	private catalogV2FeatureService: CatalogV2FeatureService | null = null;
-	private catalogV2ReadService: CatalogV2ReadService | null = null;
-	private catalogV2MonthlyProjectionCoordinator: CatalogV2MonthlyProjectionCoordinator | null = null;
-	private legacyIdentityImporter: CatalogV3LegacyIdentityImporter | null = null;
+	private catalogIndexCoordinator: CatalogIndexCoordinator | null = null;
+	private memoCommandService: MemoCommandService | null = null;
+	private catalogReadService: CatalogReadService | null = null;
+	private monthlyProjectionCoordinator: MonthlyProjectionCoordinator | null = null;
+	private legacyIndexMigrationService: LegacyIndexMigrationService | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
 
@@ -87,7 +87,7 @@ export default class KnomoPlugin extends Plugin {
 		const memoCatalogStore = new FallbackMemoCatalogStore(
 			new IndexedDbMemoCatalogStore(createCatalogDatabaseName(this.app)),
 			new InMemoryMemoCatalogStore(),
-			() => this.catalogShadowCoordinator?.refreshLocalCatalog(),
+			() => this.catalogIndexCoordinator?.refreshLocalCatalog(),
 		);
 		this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
 		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
@@ -176,7 +176,7 @@ export default class KnomoPlugin extends Plugin {
 			}
 		};
 
-		const projectionInputBuilder = new CatalogV2ProjectionInputBuilder(
+		const projectionInputBuilder = new MonthlyProjectionInputBuilder(
 			this.app,
 			diaryMemoParser,
 			{
@@ -186,7 +186,7 @@ export default class KnomoPlugin extends Plugin {
 				getRendererVersion: () => knomoSharedConfigService.getEffectiveConfig().monthly.rendererVersion,
 			},
 		);
-		this.catalogV2MonthlyProjectionCoordinator = new CatalogV2MonthlyProjectionCoordinator(
+		this.monthlyProjectionCoordinator = new MonthlyProjectionCoordinator(
 			this.app,
 			{
 				inputBuilder: projectionInputBuilder,
@@ -196,14 +196,14 @@ export default class KnomoPlugin extends Plugin {
 			},
 		);
 
-		this.catalogShadowCoordinator = new CatalogShadowCoordinator(
+		this.catalogIndexCoordinator = new CatalogIndexCoordinator(
 			this.app,
 			this.memoCatalogService,
 			diaryMemoParser,
 			() => Promise.resolve(getEffectiveDailyConfig()),
 			getEffectiveHeadings,
 			{
-				enabled: CATALOG_V2_SCANNER_ENABLED,
+				enabled: CATALOG_SCANNER_ENABLED,
 				isConfigurationComplete: () => knomoSharedConfigService.isCoverageComplete(),
 				onProgress: () => this.queueRefreshOpenViews(),
 				onRevisionTransition: async (transition) => {
@@ -213,9 +213,9 @@ export default class KnomoPlugin extends Plugin {
 					);
 				},
 				onCatalogSettled: async () => {
-					await this.legacyIdentityImporter?.run();
+					await this.legacyIndexMigrationService?.run();
 					await reconcileIdentityLedger();
-					await this.catalogV2ReadService?.materializeResolutionSnapshot();
+					await this.catalogReadService?.materializeResolutionSnapshot();
 					await this.queueRefreshOpenViews();
 				},
 			},
@@ -235,51 +235,36 @@ export default class KnomoPlugin extends Plugin {
 			getMemoTimeFormat: () => this.settingsService.getSettings().memoTimeFormat,
 			getInsertPosition: () => this.settingsService.getSettings().dailyInsertPosition,
 			updateCatalogPartition: async (input) => {
-				if (this.catalogShadowCoordinator === null) throw new Error("Memo Catalog is not available.");
-				await this.catalogShadowCoordinator.replaceCommittedFile(input);
+				if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
+				await this.catalogIndexCoordinator.replaceCommittedFile(input);
 			},
-			refreshCatalogPaths: (paths) => this.catalogShadowCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
+			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
 			removeEmptyCreatedDailyFile: async (file) => {
 				if ((await this.app.vault.cachedRead(file)).length === 0) await this.app.fileManager.trashFile(file);
 			},
-		}, new CatalogV2DailyWriteGateway(this.app, diaryMemoParser));
+		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
 
-		this.catalogV2FeatureService = new CatalogV2FeatureService(
+		this.memoCommandService = new MemoCommandService(
 			this.app,
 			this.memoCatalogService,
-			null,
-			null,
-			null,
-			null,
-			null,
 			{
-				getHeadings: getEffectiveHeadings,
-				getOrCreateDailyFile: (date) =>
-					dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig()),
-				removeEmptyCreatedDailyFile: async (file) => {
-					if ((await this.app.vault.cachedRead(file)).length === 0) await this.app.fileManager.trashFile(file);
-				},
-				getDailyFileForDate: (logicalDate) => {
-					const date = parseLogicalDate(logicalDate);
-					return dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig());
-				},
 				getDailyPathForDate: async (logicalDate) => {
 					const date = parseLogicalDate(logicalDate);
 					return dailyNoteService.getDailyNotePathForDateWithConfig(date, getEffectiveDailyConfig());
 				},
-				refreshCatalogPaths: (paths) => this.catalogShadowCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
-				refreshLocalCatalog: () => this.catalogShadowCoordinator?.refreshLocalCatalog() ?? Promise.resolve(),
-				getProjectionState: () => this.catalogV2MonthlyProjectionCoordinator?.getProjectionState() ?? "ready",
+				refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
+				refreshLocalCatalog: () => this.catalogIndexCoordinator?.refreshLocalCatalog() ?? Promise.resolve(),
+				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
 				getMemoTimeFormat: () => this.settingsService.getSettings().memoTimeFormat,
-				rebuildLocalCatalog: () => this.catalogShadowCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
-				getLegacyImportStatus: () => this.legacyIdentityImporter?.getReport().status ?? "idle",
+				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
+				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
 			},
 			markdownMutationService,
 			identityLedgerService,
 		);
-		this.catalogV2ReadService = this.catalogV2FeatureService.getReadService();
+		this.catalogReadService = this.memoCommandService.getReadService();
 
-		const legacyIdentitySource = new CatalogV2ReadOnlyCompatibilitySource(
+		const legacyIndexReader = new LegacyIndexReader(
 			this.app,
 			this.manifest.id,
 			() => {
@@ -287,30 +272,30 @@ export default class KnomoPlugin extends Plugin {
 				return settings.knomoDataRootConfigured ? settings.knomoDataRoot : null;
 			},
 		);
-		this.legacyIdentityImporter = new CatalogV3LegacyIdentityImporter(
+		this.legacyIndexMigrationService = new LegacyIndexMigrationService(
 			this.app,
-			legacyIdentitySource,
+			legacyIndexReader,
 			identityLedgerService,
 			{ getObservationBatches: loadObservationBatches },
 		);
 
 		identityLedgerService.start(this, async () => {
 			await reconcileIdentityLedger();
-			await this.catalogV2ReadService?.materializeResolutionSnapshot();
+			await this.catalogReadService?.materializeResolutionSnapshot();
 			await this.queueRefreshOpenViews();
 		});
 		knomoSharedConfigService.start(this, async () => {
-			await this.catalogShadowCoordinator?.refreshLocalCatalog().catch(() => undefined);
-			await this.catalogV2MonthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-			await this.legacyIdentityImporter?.run();
+			await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
+			await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
+			await this.legacyIndexMigrationService?.run();
 			await this.queueRefreshOpenViews();
 		});
-		this.legacyIdentityImporter.start(this, async () => {
-			await this.catalogV2ReadService?.materializeResolutionSnapshot();
+		this.legacyIndexMigrationService.start(this, async () => {
+			await this.catalogReadService?.materializeResolutionSnapshot();
 			await this.queueRefreshOpenViews();
 		});
-		this.catalogV2MonthlyProjectionCoordinator.start(this);
-		this.catalogShadowCoordinator.start(this);
+		this.monthlyProjectionCoordinator.start(this);
+		this.catalogIndexCoordinator.start(this);
 
 		this.viewRefreshScheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
@@ -329,22 +314,19 @@ export default class KnomoPlugin extends Plugin {
 				this.vaultTagIndex,
 				() => this.runRefreshOpenViews(true),
 				() => this.runManualRefresh(),
-				this.catalogV2FeatureService!,
-				this.catalogV2ReadService!,
+				this.memoCommandService!,
+				this.catalogReadService!,
 				() => dailyNoteService.getStatus(),
 				() => dailyNoteService.getTodayDailyNotePath(),
-				null,
-				null,
-				null,
 				async () => {
 					const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
 					await this.memoCatalogService?.open();
 					if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
-						await this.catalogShadowCoordinator?.refreshLocalCatalog();
+						await this.catalogIndexCoordinator?.refreshLocalCatalog();
 					}
-					await this.legacyIdentityImporter?.run();
+					await this.legacyIndexMigrationService?.run();
 					await reconcileIdentityLedger();
-					await this.catalogV2ReadService?.materializeResolutionSnapshot();
+					await this.catalogReadService?.materializeResolutionSnapshot();
 				},
 				() => this.openCatalogDataSettings(),
 			),
@@ -373,12 +355,12 @@ export default class KnomoPlugin extends Plugin {
 			this,
 			this.settingsService,
 			obsidianExcludeService,
-			this.catalogV2FeatureService,
-			this.catalogV2ReadService,
-			this.catalogV2MonthlyProjectionCoordinator,
+			this.memoCommandService,
+			this.catalogReadService,
+			this.monthlyProjectionCoordinator,
 			knomoDataRootMigrationService,
 			knomoSharedConfigService,
-			this.legacyIdentityImporter,
+			this.legacyIndexMigrationService,
 		));
 
 		this.runtimeInitializationPromise = (async () => {
@@ -398,12 +380,12 @@ export default class KnomoPlugin extends Plugin {
 					path: this.settingsService.getSettings().knomoDataRoot,
 				}));
 			}
-			await this.catalogV2MonthlyProjectionCoordinator?.initialize().catch(() => undefined);
-			await this.catalogShadowCoordinator?.initialize();
-			await this.legacyIdentityImporter?.run();
+			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);
+			await this.catalogIndexCoordinator?.initialize();
+			await this.legacyIndexMigrationService?.run();
 			await reconcileIdentityLedger();
-			await this.catalogV2ReadService?.materializeResolutionSnapshot();
-			await this.catalogV2ReadService?.prime().catch(() => undefined);
+			await this.catalogReadService?.materializeResolutionSnapshot();
+			await this.catalogReadService?.prime().catch(() => undefined);
 			return true;
 		})().catch(() => {
 			// 后台初始化失败不阻塞视图注册与 Daily 快速记录。
@@ -553,10 +535,10 @@ export default class KnomoPlugin extends Plugin {
 				&& await this.runtimeInitializationPromise) {
 				return;
 			}
-			await this.catalogShadowCoordinator?.initialize();
-			await this.legacyIdentityImporter?.run();
-			await this.catalogV2ReadService?.materializeResolutionSnapshot();
-			await this.catalogV2ReadService?.prime();
+			await this.catalogIndexCoordinator?.initialize();
+			await this.legacyIndexMigrationService?.run();
+			await this.catalogReadService?.materializeResolutionSnapshot();
+			await this.catalogReadService?.prime();
 		} catch {
 			// 本机 Catalog 或兼容导入失败不能影响 Daily 快速记录能力。
 		}
@@ -566,7 +548,7 @@ export default class KnomoPlugin extends Plugin {
 		if (this.manualRefreshPromise !== null) {
 			return this.manualRefreshPromise;
 		}
-		const refresh = (this.catalogV2FeatureService?.refreshLocalCatalog() ?? Promise.resolve()).then(async () => {
+		const refresh = (this.memoCommandService?.refreshLocalCatalog() ?? Promise.resolve()).then(async () => {
 				const coverage = await this.memoCatalogService?.getStore().getCoverage();
 				return {
 					scannedFiles: coverage?.totalFileCount ?? 0,

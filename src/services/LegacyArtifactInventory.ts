@@ -1,6 +1,6 @@
 import { normalizePath } from "obsidian";
 
-import type { LegacyArtifactKind } from "../types/catalogV2";
+import type { LegacyArtifactKind } from "../types/legacyIndex";
 import { isLikelySyncConflictPath } from "../utils/syncConflict";
 
 export interface LegacyArtifactPathClassification {

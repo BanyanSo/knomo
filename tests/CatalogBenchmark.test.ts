@@ -8,12 +8,12 @@ import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import {
 	CATALOG_BENCHMARK_SEED,
 	generateCatalogBenchmarkVault,
-} from "../scripts/catalog-v2/generate-benchmark-vault";
-import { summarizeDeviceTraces, validateDeviceTraces } from "../scripts/catalog-v2/summarize-device-traces";
-import { runIdentityLedgerReducerBenchmark } from "../scripts/catalog-v2/run-node-benchmarks";
+} from "../scripts/catalog/generate-benchmark-vault";
+import { summarizeDeviceTraces, validateDeviceTraces } from "../scripts/catalog/summarize-device-traces";
+import { runIdentityLedgerReducerBenchmark } from "../scripts/catalog/run-node-benchmarks";
 
 test("PERF-30K generator 使用冻结 seed、路径、20 memos/Daily 和确定性 SHA", async () => {
-	const rootDir = path.join(".tmp", "catalog-v2-benchmark-test");
+	const rootDir = path.join(".tmp", "catalog-benchmark-test");
 	const first = generateCatalogBenchmarkVault({ rootDir, dailyCount: 3, memosPerDaily: 20 });
 	const firstManifest = fs.readFileSync(path.join(rootDir, "manifest.json"), "utf8");
 	const second = generateCatalogBenchmarkVault({ rootDir, dailyCount: 3, memosPerDaily: 20 });
@@ -54,7 +54,7 @@ test("PERF-30K generator 使用冻结 seed、路径、20 memos/Daily 和确定�
 });
 
 test("device trace summarizer 使用 nearest-rank 汇总平台样本", () => {
-	const traceDir = path.join(".tmp", "catalog-v2-device-trace-test");
+	const traceDir = path.join(".tmp", "catalog-device-trace-test");
 	fs.mkdirSync(traceDir, { recursive: true });
 	fs.writeFileSync(path.join(traceDir, "desktop.json"), JSON.stringify({
 		device: "test",
@@ -67,13 +67,13 @@ test("device trace summarizer 使用 nearest-rank 汇总平台样本", () => {
 });
 
 test("P2 第 8 步：真实设备 trace 缺失时发布门禁必须失败而非跳过", () => {
-	const traceDir = path.join(".tmp", `catalog-v2-device-trace-missing-${process.pid}`);
+	const traceDir = path.join(".tmp", `catalog-device-trace-missing-${process.pid}`);
 	assert.equal(fs.existsSync(traceDir), false);
 	assert.throws(() => validateDeviceTraces(traceDir), /Device trace directory does not exist/u);
 });
 
 test("phase 6 device trace gate enforces frozen samples, fixture and platform thresholds", () => {
-	const traceDir = path.join(".tmp", `catalog-v2-device-validation-${process.pid}`);
+	const traceDir = path.join(".tmp", `catalog-device-validation-${process.pid}`);
 	fs.mkdirSync(traceDir, { recursive: true });
 	writeDeviceTrace(traceDir, "desktop", {
 		warmOpenMs: samples(30, 100),
@@ -95,12 +95,12 @@ test("phase 6 device trace gate enforces frozen samples, fixture and platform th
 	}
 
 	const validation = validateDeviceTraces(traceDir);
-	assert.equal(validation.commit, "worktree-catalog-v2-rebuild");
+	assert.equal(validation.commit, "worktree-catalog-rebuild");
 	assert.equal(validation.fixtureSeed, CATALOG_BENCHMARK_SEED);
 	assert.equal(validation.summary.android?.pageMs?.samples, 30);
 });
 
-test("V3 Identity Ledger reducer materializes 30k immutable events without quadratic memo scans", async () => {
+test("Identity Ledger reducer materializes 30k immutable events without quadratic memo scans", async () => {
 	const result = await runIdentityLedgerReducerBenchmark(30_000);
 	assert.equal(result.memoCount, 30_000);
 	assert.equal(result.eventCount, 30_000);
@@ -143,7 +143,7 @@ function writeDeviceTrace(
 		schemaVersion: 1,
 		device: `${platform}-test`,
 		platform,
-		commit: "worktree-catalog-v2-rebuild",
+		commit: "worktree-catalog-rebuild",
 		fixtureSeed: CATALOG_BENCHMARK_SEED,
 		backgroundInterruptions,
 		forceKills,

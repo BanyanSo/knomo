@@ -48,7 +48,6 @@ export interface RenderTrashMemoCardOptions<TMemo extends MemoRecord = MemoRecor
 	busyAction: TrashAction | null;
 	formatDisplayTime: (value: string) => string;
 	formatOptionalTime: (value: string | undefined) => string;
-	formatDeleteSource: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
 	getMemoCardPreview: (memo: TMemo) => MemoCardPreview;
 	queueMemoMarkdown: (memo: TMemo, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
@@ -103,7 +102,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				);
 			}
 			if ((options.randomCard || options.timeBuoy !== undefined)
-				&& (memo.catalogV2 === undefined || memo.catalogV2.capabilities.identity.review === "ready")) {
+				&& (memo.catalog === undefined || memo.catalog.capabilities.identity.review === "ready")) {
 				renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
 			}
 			actions.createDiv({
@@ -193,34 +192,26 @@ export function renderKnomoTrashMemoCard<TMemo extends MemoRecord>(container: HT
 	head.createDiv({ cls: "knomo-card-time", text: t("trash.createdAt", { time: options.formatDisplayTime(memo.createdAt) }) });
 	const actions = head.createDiv({ cls: "knomo-trash-actions" });
 	for (const action of getTrashCardActions(options.busyAction)) {
-		const missingPayload = memo.catalogV2Deleted?.payloadAvailable === false;
 		renderTrashAction(
 			actions,
 			memo.id,
 			action.action,
 			getTrashActionLabel(action.action, action.state.busy),
-			action.state.disabled || (missingPayload && action.action === "restore"),
+			action.state.disabled,
 			action.className,
 		);
 	}
 
-	if (memo.catalogV2Deleted?.payloadAvailable === false) {
-		card.createDiv({ cls: "knomo-card-warning", text: t("trash.payloadMissing") });
-	} else {
-		renderMemoCardBody(card, memo, {
-			generation: options.generation,
-			markdownPriority,
-			getMemoCardPreview: options.getMemoCardPreview,
-			queueMemoMarkdown: options.queueMemoMarkdown,
-			renderMemoCardImages: options.renderMemoCardImages,
-		});
-	}
+	renderMemoCardBody(card, memo, {
+		generation: options.generation,
+		markdownPriority,
+		getMemoCardPreview: options.getMemoCardPreview,
+		queueMemoMarkdown: options.queueMemoMarkdown,
+		renderMemoCardImages: options.renderMemoCardImages,
+	});
 
 	const meta = card.createDiv({ cls: "knomo-card-meta knomo-trash-meta" });
 	meta.createDiv({ text: t("trash.deletedAt", { time: options.formatOptionalTime(memo.deletedAt) }) });
-	if (memo.deleteSource !== undefined && memo.deleteSource.trim().length > 0) {
-		meta.createDiv({ text: t("trash.deleteSource", { source: options.formatDeleteSource(memo.deleteSource) }) });
-	}
 	return card;
 }
 
@@ -314,9 +305,6 @@ function getMemoActionLabel(action: MemoAction): string {
 	return t("card.delete");
 }
 
-function getTrashActionLabel(action: TrashAction, busy: boolean): string {
-	if (action === "restore") {
-		return busy ? t("trash.restoring") : t("trash.restore");
-	}
-	return busy ? t("trash.purging") : t("trash.purge");
+function getTrashActionLabel(_action: TrashAction, busy: boolean): string {
+	return busy ? t("trash.restoring") : t("trash.restore");
 }

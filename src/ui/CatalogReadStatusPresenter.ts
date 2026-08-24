@@ -1,10 +1,10 @@
 import { t } from "../i18n";
 import type { CatalogCoverage } from "../types/catalog";
-import type { CatalogV2ReadStatus } from "../types/catalogV2View";
+import type { CatalogReadStatus } from "../types/catalogView";
 import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 
 export interface CatalogReadStatusPresentationOptions {
-	status: CatalogV2ReadStatus;
+	status: CatalogReadStatus;
 	coverage: CatalogCoverage | null;
 }
 
@@ -38,7 +38,7 @@ export function getCatalogReadStatusHeaders(
 			"refresh-catalog-sync-state",
 		));
 	} else if (options.status.identity === "conflicted") {
-		headers.push(summary(t("catalog.attentionDesc"), t("catalog.openDiagnostics"), "open-catalog-settings"));
+		headers.push(summary(t("catalog.identityConflict"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	}
 
 	if (options.status.projection === "stale") {
@@ -47,19 +47,10 @@ export function getCatalogReadStatusHeaders(
 		headers.push(summary(t("sync.monthlyFailed"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	}
 
-	if (options.status.migration === "detected") {
-		headers.push(summary(t("catalog.legacyDetectedDesc"), t("catalog.openDiagnostics"), "open-catalog-settings"));
-	} else if (options.status.migration === "running") {
-		headers.push(summary(
-			t("catalog.upgradeBuilding", {
-				covered: options.coverage?.coveredFileCount ?? 0,
-				total: options.coverage?.totalFileCount ?? 0,
-			}),
-			t("catalog.openUpgrade"),
-			"open-catalog-settings",
-		));
-	} else if (options.status.migration === "attention") {
-		headers.push(summary(t("catalog.attentionDesc"), t("catalog.openDiagnostics"), "open-catalog-settings"));
+	if (options.status.migration === "attention") {
+		headers.push(summary(t("catalog.legacyMigrationAttention"), t("catalog.openDiagnostics"), "open-catalog-settings"));
+	} else if (options.status.migration === "unavailable") {
+		headers.push(summary(t("catalog.legacyMigrationUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
 	}
 
 	return dedupeHeaders(headers);

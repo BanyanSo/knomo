@@ -841,7 +841,7 @@ async function buildIdentityLedgerRevision(
 		eventId: item.event.eventId,
 		digest: item.digest,
 	}))));
-	return `identity-v3-${revisionDigest}`;
+	return `identity-${revisionDigest}`;
 }
 
 async function materializeIdentityLedgerIncrementally(
@@ -1189,7 +1189,7 @@ class MissingIdentityLedgerRootError extends Error {
 
 function createEmptySnapshot(): IdentityLedgerSnapshot {
 	return {
-		revision: "identity-v3-empty",
+		revision: "identity-empty",
 		eventCount: 0,
 		memos: {},
 		pendingIntents: [],

@@ -1,5 +1,4 @@
 import type { MemoImageRef, MemoLinkRef } from "./memo";
-import type { IdentityEvidence } from "./catalogV2";
 
 export type CatalogCoverageKind = "partial" | "complete" | "rebuilding";
 export type CatalogStoreLifecycleState = "opening" | "ready" | "degraded" | "retrying" | "read-only" | "rebuilding";
@@ -24,6 +23,18 @@ export interface IdentityHandle {
 	memoId: string;
 	activeBindingId: string;
 	identityRevision: string;
+}
+
+export interface ResolvedIdentityEvidence {
+	sourcePath: string;
+	sourceRevision: string;
+	logicalDate: string;
+	section: string | null;
+	startLine: number;
+	endLine: number;
+	time: string;
+	contentHash: string;
+	existingBlockId: string | null;
 }
 
 // Observation 只描述当前 Daily 字节，不承担身份职责。
@@ -92,7 +103,7 @@ export interface MemoCapabilities {
 
 export interface IdentityCandidate {
 	memoId: string;
-	source: "local_intent" | "existing_block_id" | "state" | "migration" | "tuple" | "manual_successor" | "lifecycle_conflict";
+	source: "manual_successor";
 	origin?: {
 		sourcePath: string;
 		logicalDate: string;
@@ -103,38 +114,29 @@ export interface IdentityCandidate {
 export type ResolvedMemo =
 	| {
 		kind: "identified";
-		bindingEvidence: IdentityEvidence;
+		bindingEvidence: ResolvedIdentityEvidence;
 		identityHandle: IdentityHandle;
 		observation: MemoObservation;
 		capabilities: ResolvedMemoCapabilities;
-		stateRevision: string;
+		identityRevision: string;
 	}
 	| {
 		kind: "observed";
 		identityHandle: null;
 		observation: MemoObservation;
-		adoption: "eligible" | "settling" | "historical_readonly";
+		adoption: "eligible" | "settling";
 		capabilities: ResolvedMemoCapabilities;
-		stateRevision: string;
+		identityRevision: string;
 	}
 	| {
 		kind: "ambiguous";
 		identityHandle: null;
 		observation: MemoObservation;
 		candidates: IdentityCandidate[];
-		reason?: "ambiguous" | "manual_successor" | "known_predecessor";
+		reason?: "manual_successor";
 		capabilities: ResolvedMemoCapabilities;
-		stateRevision: string;
+		identityRevision: string;
 	};
-
-// 仅供冻结的 Protocol V2 运行时兼容使用；新的正文操作接口不得依赖此组合句柄。
-export interface ResolvedMemoHandle {
-	memoId: string;
-	activeBindingId: string;
-	evidence: IdentityEvidence;
-	bindingEvidence: IdentityEvidence;
-	stateRevision: string;
-}
 
 export interface CatalogObservation extends MemoObservation {
 	observationKey: string;
@@ -272,10 +274,9 @@ export interface CatalogFileRevisionBatch<TObservation extends MemoObservation =
 	catalogRevision: number;
 }
 
-export interface CatalogV2ResolutionSnapshot {
+export interface CatalogResolutionSnapshot {
 	catalogRevision: number;
-	stateRevision: string;
-	mutationInventoryDigest: string;
+	identityRevision: string;
 	results: Record<string, ResolvedMemo>;
 }
 
@@ -284,21 +285,4 @@ export interface CatalogInventoryEntry {
 	logicalDate: string;
 	mtime: number;
 	size: number;
-}
-
-export interface CatalogShadowMismatch {
-	kind: "missing-in-catalog" | "catalog-only" | "content" | "aggregate-not-comparable";
-	sourcePath: string;
-	line: number | null;
-	detail: string;
-}
-
-export interface CatalogShadowReport {
-	comparedAt: number;
-	coverage: CatalogCoverage;
-	coveredSourcePaths: string[];
-	stableCount: number;
-	catalogCount: number;
-	referenceAggregateComparable: false;
-	mismatches: CatalogShadowMismatch[];
 }

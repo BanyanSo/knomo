@@ -9,8 +9,8 @@ import type {
 	CatalogPostingKind,
 	CatalogQuery,
 	CatalogQueryPage,
+	CatalogResolutionSnapshot,
 	CatalogStoreLifecycle,
-	CatalogV2ResolutionSnapshot,
 } from "../types/catalog";
 import {
 	clampPageLimit,
@@ -35,7 +35,7 @@ const BY_LOOKUP = "byLookup";
 const BY_LOGICAL_DATE = "byLogicalDate";
 const CATALOG_REVISION_META = "catalogRevision";
 const COVERAGE_META = "coverage";
-const RESOLUTION_SNAPSHOT_META = "catalogV2ResolutionSnapshot";
+const RESOLUTION_SNAPSHOT_META = "catalogResolutionSnapshot";
 
 interface CatalogPostingRecord {
 	postingKey: string;
@@ -508,11 +508,11 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		await done;
 	}
 
-	loadResolutionSnapshot(): Promise<CatalogV2ResolutionSnapshot | null> {
-		return this.getMeta<CatalogV2ResolutionSnapshot>(RESOLUTION_SNAPSHOT_META);
+	loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
+		return this.getMeta<CatalogResolutionSnapshot>(RESOLUTION_SNAPSHOT_META);
 	}
 
-	saveResolutionSnapshot(snapshot: CatalogV2ResolutionSnapshot): Promise<void> {
+	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void> {
 		return this.setMeta(RESOLUTION_SNAPSHOT_META, snapshot);
 	}
 

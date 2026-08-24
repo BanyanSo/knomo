@@ -9,6 +9,6 @@
 	},
 	"include": [
 		"src/**/*.ts",
-		"scripts/catalog-v2/**/*.ts"
+		"scripts/catalog/**/*.ts"
 	]
 }

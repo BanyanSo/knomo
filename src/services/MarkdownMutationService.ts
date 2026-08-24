@@ -20,10 +20,10 @@ import type {
 import { formatDatePart, formatTimePart } from "../utils/date";
 import type { DiaryMemoParseResult } from "./DiaryMemoParser";
 import {
-	CatalogV2DailyWriteGateway,
-	CatalogV2StaleDailyError,
-	type CatalogV2PreparedDailyWrite,
-} from "./CatalogV2DailyWriteGateway";
+	DailyMemoWriteGateway,
+	StaleDailyWriteError,
+	type PreparedDailyWrite,
+} from "./DailyMemoWriteGateway";
 import { MarkdownBlockService } from "./MarkdownBlockService";
 
 export interface MarkdownCatalogCommitInput {
@@ -61,7 +61,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 	constructor(
 		private readonly app: App,
 		private readonly options: MarkdownMutationServiceOptions,
-		private readonly dailyGateway = new CatalogV2DailyWriteGateway(app),
+		private readonly dailyGateway = new DailyMemoWriteGateway(app),
 	) {
 		this.now = options.now ?? (() => new Date());
 		this.random = options.random ?? Math.random;
@@ -350,7 +350,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		});
 	}
 
-	private async commitAndUpdateCatalog(prepared: CatalogV2PreparedDailyWrite): Promise<boolean> {
+	private async commitAndUpdateCatalog(prepared: PreparedDailyWrite): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
 		try {
 			await this.options.updateCatalogPartition({
@@ -443,7 +443,7 @@ function requireObservation(observation: MemoObservation | null): MemoObservatio
 }
 
 function findReplacementObservation(
-	prepared: CatalogV2PreparedDailyWrite,
+	prepared: PreparedDailyWrite,
 	before: MemoObservation,
 	afterRawBlock: string,
 	existingBlockId: string | null = before.existingBlockId,
@@ -456,7 +456,7 @@ function findReplacementObservation(
 }
 
 function findAppendedObservation(
-	prepared: CatalogV2PreparedDailyWrite,
+	prepared: PreparedDailyWrite,
 	rawBlock: string,
 	section: string | null,
 	position: DailyInsertPosition,
@@ -474,7 +474,7 @@ function findAppendedObservation(
 }
 
 function isStaleError(error: unknown): boolean {
-	return error instanceof MarkdownMutationStaleError || error instanceof CatalogV2StaleDailyError;
+	return error instanceof MarkdownMutationStaleError || error instanceof StaleDailyWriteError;
 }
 
 function normalizeRawBlock(value: string): string {

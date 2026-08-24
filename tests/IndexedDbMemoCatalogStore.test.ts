@@ -195,13 +195,12 @@ test("resolution snapshot atomically persists every observation result without a
 			observation,
 			adoption: "settling" as const,
 			capabilities: createResolvedMemoCapabilities("syncing"),
-			stateRevision: "state-1",
+			identityRevision: "identity-1",
 		}];
 	}));
 	await store.saveResolutionSnapshot({
 		catalogRevision: 7,
-		stateRevision: "state-1",
-		mutationInventoryDigest: "a".repeat(64),
+		identityRevision: "identity-1",
 		results,
 	});
 

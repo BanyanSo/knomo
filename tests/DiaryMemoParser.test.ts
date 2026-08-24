@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 
-const FIXTURE_DIR = path.join("tests", "fixtures", "catalog-v2", "phase1");
+const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
 
 test("PARSE-CUSTOM-ROOT：识别根层和自定义 heading，排除 frontmatter、其他 heading 与代码块", async () => {

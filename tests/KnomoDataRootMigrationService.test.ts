@@ -10,13 +10,13 @@ import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
 import { KnomoDataRootMigrationService } from "../src/services/KnomoDataRootMigrationService";
 import type { IdentityLedgerClaimEvent } from "../src/types/identityLedger";
 import type { MemoObservation } from "../src/types/catalog";
-import { CatalogV2ReplicaVault } from "./helpers/CatalogV2ReplicaVault";
+import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const WRITER_A = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const MEMO_A = "01991f40-7c00-7111-9111-111111111111";
 
-test("V3-ROOT-005：首次设置动作只创建配置根下的最小 Identity Ledger", async () => {
-	const vault = new CatalogV2ReplicaVault();
+test("首次设置动作只创建配置根下的最小 Identity Ledger", async () => {
+	const vault = new InMemoryVault();
 	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
 	const ledger = createLedger(vault, () => location);
 	await ledger.initialize();
@@ -40,9 +40,9 @@ test("V3-ROOT-005：首次设置动作只创建配置根下的最小 Identity Le
 	assert.equal(ledger.getStatus(), "absent");
 });
 
-test("V3-ROOT-006：显式迁移复制并验证全部事件，切换后 memoId、关系和 review 不变", async () => {
+test("显式迁移复制并验证全部事件，切换后 memoId、关系和 review 不变", async () => {
 	const dailyPath = "Daily/2026-08-22.md";
-	const vault = new CatalogV2ReplicaVault({ [dailyPath]: "## Memos\n- 09:00 正文\n" });
+	const vault = new InMemoryVault({ [dailyPath]: "## Memos\n- 09:00 正文\n" });
 	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: false };
 	const ledger = createLedger(vault, () => location);
 	const commits: string[] = [];
@@ -90,14 +90,14 @@ test("V3-ROOT-006：显式迁移复制并验证全部事件，切换后 memoId�
 	assert.equal(vault.read(dailyPath), dailyBefore);
 });
 
-test("V3-ROOT-007：手动移动但未改配置时不搜索，用户明确选择目标后才采用", async () => {
+test("手动移动但未改配置时不搜索，用户明确选择目标后才采用", async () => {
 	const observation = makeObservation("Daily/2026-08-22.md");
 	const claim = makeClaim(observation);
 	const content = serializeIdentityLedgerSegment([claim]);
 	const digest = await sha256IdentityLedgerText(content);
 	const targetRoot = getIdentityLedgerRootPath("Knomo-B");
 	const targetPath = `${targetRoot}/writers/${WRITER_A}/segments/segment-${claim.eventId}-${digest}.jsonl`;
-	const vault = new CatalogV2ReplicaVault({ [targetPath]: content });
+	const vault = new InMemoryVault({ [targetPath]: content });
 	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: true };
 	const ledger = createLedger(vault, () => location);
 	await ledger.initialize();
@@ -118,8 +118,8 @@ test("V3-ROOT-007：手动移动但未改配置时不搜索，用户明确选择
 	assert.equal(ledger.resolveObservation(observation)?.memoId, MEMO_A);
 });
 
-test("V3-ROOT-008：已配置根丢失时不创建新 Ledger，也不切换配置", async () => {
-	const vault = new CatalogV2ReplicaVault({ "Daily/2026-08-22.md": "## Memos\n" });
+test("已配置根丢失时不创建新 Ledger，也不切换配置", async () => {
+	const vault = new InMemoryVault({ "Daily/2026-08-22.md": "## Memos\n" });
 	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: true };
 	const ledger = createLedger(vault, () => location);
 	await ledger.initialize();
@@ -141,8 +141,8 @@ test("V3-ROOT-008：已配置根丢失时不创建新 Ledger，也不切换配�
 	assert.equal(vault.read("Daily/2026-08-22.md"), "## Memos\n");
 });
 
-test("V3-ROOT-009：目标存在冲突字节时验证失败，配置保持旧根", async () => {
-	const vault = new CatalogV2ReplicaVault();
+test("目标存在冲突字节时验证失败，配置保持旧根", async () => {
+	const vault = new InMemoryVault();
 	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: false };
 	const ledger = createLedger(vault, () => location);
 	const migration = new KnomoDataRootMigrationService(
@@ -174,7 +174,7 @@ test("V3-ROOT-009：目标存在冲突字节时验证失败，配置保持旧根
 });
 
 test("数据根迁移拒绝互相嵌套的源目录和目标目录", async () => {
-	const vault = new CatalogV2ReplicaVault();
+	const vault = new InMemoryVault();
 	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: false };
 	const ledger = createLedger(vault, () => location);
 	const migration = new KnomoDataRootMigrationService(
@@ -192,8 +192,8 @@ test("数据根迁移拒绝互相嵌套的源目录和目标目录", async () =>
 	assert.equal(location.knomoDataRoot, "Knomo-A");
 });
 
-test("V3-ROOT-006：复制期间源 Ledger 发生变化时不切换配置", async () => {
-	const vault = new CatalogV2ReplicaVault();
+test("复制期间源 Ledger 发生变化时不切换配置", async () => {
+	const vault = new InMemoryVault();
 	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: false };
 	const ledger = createLedger(vault, () => location);
 	const migration = new KnomoDataRootMigrationService(
@@ -242,7 +242,7 @@ test("V3-ROOT-006：复制期间源 Ledger 发生变化时不切换配置", asyn
 });
 
 function createLedger(
-	vault: CatalogV2ReplicaVault,
+	vault: InMemoryVault,
 	getLocation: () => { knomoDataRoot: string; knomoDataRootConfigured: boolean },
 ): IdentityLedgerService {
 	let eventIndex = 0;

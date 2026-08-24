@@ -10,12 +10,12 @@ import {
 } from "../src/services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "../src/services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "../src/services/KnomoStartupBootstrapService";
-import { CatalogV2ReplicaVault } from "./helpers/CatalogV2ReplicaVault";
+import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const WRITER_ID = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 test("首次启用默认创建 Identity 根并发布共享配置", async () => {
-	const vault = new CatalogV2ReplicaVault();
+	const vault = new InMemoryVault();
 	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
 	const ledger = createLedger(vault, () => location);
 	const migration = new KnomoDataRootMigrationService(
@@ -43,7 +43,7 @@ test("首次启用默认创建 Identity 根并发布共享配置", async () => {
 });
 
 test("已配置但 Identity 根丢失时只补共享配置，不伪造新的 Identity Ledger", async () => {
-	const vault = new CatalogV2ReplicaVault();
+	const vault = new InMemoryVault();
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
 	const shared = createSharedConfig(vault, () => location, "## Memos");
 	await shared.initialize();
@@ -62,7 +62,7 @@ test("已配置但 Identity 根丢失时只补共享配置，不伪造新的 Ide
 });
 
 test("已有共享配置时启动不追加事件也不覆盖其他设备配置", async () => {
-	const vault = new CatalogV2ReplicaVault();
+	const vault = new InMemoryVault();
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
 	await vault.app.vault.createFolder("Knomo/_knomo-data");
 	const writer = createSharedConfig(vault, () => location, "## Shared");
@@ -84,7 +84,7 @@ test("已有共享配置时启动不追加事件也不覆盖其他设备配置",
 });
 
 function createLedger(
-	vault: CatalogV2ReplicaVault,
+	vault: InMemoryVault,
 	getLocation: () => { knomoDataRoot: string; knomoDataRootConfigured: boolean },
 ): IdentityLedgerService {
 	return new IdentityLedgerService(vault.app, {
@@ -97,7 +97,7 @@ function createLedger(
 }
 
 function createSharedConfig(
-	vault: CatalogV2ReplicaVault,
+	vault: InMemoryVault,
 	getLocation: () => { knomoDataRoot: string; knomoDataRootConfigured: boolean },
 	heading: string,
 ): KnomoSharedConfigService {

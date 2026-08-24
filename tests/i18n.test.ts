@@ -47,12 +47,13 @@ test("uses matching load-more copy for historical Memos", async () => {
 	assert.equal(translate("en", "list.loadOlder"), "Load more memos");
 });
 
-test("uses distinct local-history, upgrade, and storage status copy", async () => {
+test("uses distinct local-history, migration, identity, and storage status copy", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");
 
 	assert.match(translate("zh-CN", "catalog.coveragePartial", { covered: 1, total: 3 }), /本机历史/u);
-	assert.match(translate("zh-CN", "catalog.upgradeBuilding", { covered: 1, total: 3 }), /后台升级旧数据/u);
+	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧 Index/u);
+	assert.match(translate("zh-CN", "catalog.identityConflict"), /部分 Memo/u);
 	assert.match(translate("zh-CN", "catalog.storageUnavailable"), /本机缓存/u);
 	assert.doesNotMatch(translate("zh-CN", "catalog.stateSettling"), /关联信息仍在同步/u);
 });

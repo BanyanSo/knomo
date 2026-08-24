@@ -74,7 +74,7 @@ test("Catalog、identity、projection、migration 状态按独立维度同时呈
 			catalog: "partial",
 			identity: "conflicted",
 			projection: "stale",
-			migration: "running",
+			migration: "attention",
 		},
 		coverage: {
 			kind: "partial",
@@ -90,6 +90,28 @@ test("Catalog、identity、projection、migration 状态按独立维度同时呈
 	assert.deepEqual(headers.flatMap((header) => header.type === "summary" && header.action !== undefined
 		? [header.action.action]
 		: []), ["refresh-catalog-sync-state", "open-catalog-settings", "open-catalog-settings"]);
+	const text = headers.flatMap((header) => header.type === "summary" ? [header.text] : []).join("\n");
+	assert.match(text, /Some memos/u);
+	assert.match(text, /old Index/u);
+	assert.doesNotMatch(text, /Creation, adoption, and monthly writes are paused/u);
+});
+
+test("旧数据暂时不可读取时显示可重试提示，不冒充数据根冲突", () => {
+	const headers = getCatalogReadStatusHeaders({
+		status: {
+			content: "ready",
+			catalog: "complete",
+			identity: "ready",
+			projection: "ready",
+			migration: "unavailable",
+		},
+		coverage: completeCoverage,
+	});
+
+	assert.equal(headers.length, 1);
+	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "refresh-catalog-sync-state");
+	assert.match(headers[0]?.type === "summary" ? headers[0].text : "", /Old Index data is temporarily unavailable/u);
+	assert.doesNotMatch(headers[0]?.type === "summary" ? headers[0].text : "", /conflicting data roots/u);
 });
 
 test("降级 Catalog 扫描时同时显示扫描进度与存储降级", () => {

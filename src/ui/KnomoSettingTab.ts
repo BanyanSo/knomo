@@ -13,10 +13,10 @@ import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../s
 import type { SettingsService } from "../services/SettingsService";
 import type { KnomoDataRootMigrationService } from "../services/KnomoDataRootMigrationService";
 import type { KnomoSharedConfigService } from "../services/KnomoSharedConfigService";
-import type { CatalogV2FeatureService } from "../services/CatalogV2FeatureService";
-import type { CatalogV2ReadService } from "../services/CatalogV2ReadService";
-import type { CatalogV2MonthlyProjectionCoordinator } from "../services/CatalogV2MonthlyProjectionCoordinator";
-import type { CatalogV3LegacyIdentityImporter } from "../services/CatalogV3LegacyIdentityImporter";
+import type { CatalogReadService } from "../services/CatalogReadService";
+import type { MemoCommandService } from "../services/MemoCommandService";
+import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
+import type { LegacyIndexMigrationService } from "../services/LegacyIndexMigrationService";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { normalizeVaultPath } from "../utils/path";
 import { formatDatePart } from "../utils/date";
@@ -25,8 +25,6 @@ import { showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoView } from "./KnomoView";
 
 const SETTING_NOTICE_DELAY_MS = 800;
-type RebuildIndexMode = "index-only" | "index-and-monthly";
-type RebuildIndexScope = "30d" | "90d" | "all";
 
 type SettingNoticeKey = "dailyHeading" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat";
 
@@ -49,12 +47,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		plugin: Plugin,
 		private readonly settingsService: SettingsService,
 		private readonly obsidianExcludeService: ObsidianExcludeService,
-		private readonly catalogV2FeatureService: CatalogV2FeatureService,
-		private readonly catalogV2ReadService: CatalogV2ReadService,
-		private readonly catalogV2MonthlyProjectionCoordinator: CatalogV2MonthlyProjectionCoordinator,
+		private readonly memoCommandService: MemoCommandService,
+		private readonly catalogReadService: CatalogReadService,
+		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
 		private readonly knomoDataRootMigrationService: KnomoDataRootMigrationService,
 		private readonly knomoSharedConfigService: KnomoSharedConfigService,
-		private readonly legacyIdentityImporter: CatalogV3LegacyIdentityImporter,
+		private readonly legacyIndexMigrationService: LegacyIndexMigrationService,
 	) {
 		super(app, plugin);
 	}
@@ -253,26 +251,26 @@ export class KnomoSettingTab extends PluginSettingTab {
 						render: (setting: Setting) => {
 							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
 							setting.setClass("knomo-maintenance-setting").addButton((button) => {
-								button.setButtonText(t("settings.rebuild.start"));
-								button.onClick(() => {
-									void this.runRebuildIndex("all", "index-only", button, resultEl);
-								});
+							button.setButtonText(t("settings.rebuild.start"));
+							button.onClick(() => {
+								void this.runRebuildIndex(button, resultEl);
+							});
 							});
 							void this.renderInitialRebuildResult(resultEl);
 						},
 					},
-					{
+					...(this.shouldShowLegacyIdentityImport() ? [{
 						name: t("settings.legacyIdentityImport.name"),
 						desc: t("settings.legacyIdentityImport.desc"),
 						render: (setting: Setting) => {
 							this.renderLegacyIdentityImport(setting);
 						},
-					},
+					}] : []),
 					{
 						name: t("settings.monthlyRebuild.name"),
 						desc: t("settings.monthlyRebuild.desc"),
 						render: (setting: Setting) => {
-							this.renderCatalogV2MonthlyRebuildSetting(setting);
+							this.renderMonthlyRebuildSetting(setting);
 						},
 					},
 				],
@@ -440,18 +438,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.addButton((button) => {
 				button.setButtonText(t("settings.rebuild.start"));
 				button.onClick(() => {
-					void this.runRebuildIndex("all", "index-only", button, catalogRebuildResultEl);
+					void this.runRebuildIndex(button, catalogRebuildResultEl);
 				});
 			});
 		const catalogRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
 		void this.renderInitialRebuildResult(catalogRebuildResultEl);
-		const legacyIdentityImportSetting = new Setting(containerEl)
-			.setClass("knomo-maintenance-setting")
-			.setName(t("settings.legacyIdentityImport.name"))
-			.setDesc(t("settings.legacyIdentityImport.desc"));
-		this.renderLegacyIdentityImport(legacyIdentityImportSetting);
+		if (this.shouldShowLegacyIdentityImport()) {
+			const legacyIdentityImportSetting = new Setting(containerEl)
+				.setClass("knomo-maintenance-setting")
+				.setName(t("settings.legacyIdentityImport.name"))
+				.setDesc(t("settings.legacyIdentityImport.desc"));
+			this.renderLegacyIdentityImport(legacyIdentityImportSetting);
+		}
 		const monthlySetting = new Setting(containerEl).setName(t("settings.monthlyRebuild.name"));
-		this.renderCatalogV2MonthlyRebuildSetting(monthlySetting);
+		this.renderMonthlyRebuildSetting(monthlySetting);
 	}
 
 	hide(): void {
@@ -469,7 +469,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.refreshLegacyIdentityImport(statusEl);
 	}
 
-	private renderCatalogV2MonthlyRebuildSetting(setting: Setting): void {
+	private shouldShowLegacyIdentityImport(): boolean {
+		const status = this.legacyIndexMigrationService.getReport().status;
+		return status === "partial" || status === "attention" || status === "unavailable";
+	}
+
+	private renderMonthlyRebuildSetting(setting: Setting): void {
 		let monthlyRebuildPeriod = formatDatePart(new Date()).slice(0, 7);
 		const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
 		setting
@@ -480,7 +485,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				dropdown.addOption(monthlyRebuildPeriod, monthlyRebuildPeriod);
 				dropdown.setValue(monthlyRebuildPeriod);
 				dropdown.onChange((value) => { monthlyRebuildPeriod = value; });
-				void this.catalogV2MonthlyProjectionCoordinator.listPeriods().then((periods) => {
+				void this.monthlyProjectionCoordinator.listPeriods().then((periods) => {
 					for (const period of periods) {
 						if (period !== monthlyRebuildPeriod) dropdown.addOption(period, period);
 					}
@@ -502,8 +507,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private refreshLegacyIdentityImport(statusEl: HTMLElement): void {
 		statusEl.empty();
-		const report = this.legacyIdentityImporter.getReport();
-		const messageKey = `settings.legacyIdentityImport.${report.status}` as const;
+		const report = this.legacyIndexMigrationService.getReport();
+		const messageKey = report.status === "partial"
+			? "settings.legacyIdentityImport.partial"
+			: report.status === "attention"
+				? "settings.legacyIdentityImport.attention"
+				: "settings.legacyIdentityImport.unavailable";
 		statusEl.setText(t(messageKey, {
 			imported: report.importedMemoIds.length,
 			skipped: report.skippedMemoIds.length,
@@ -657,7 +666,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
 		await this.syncSharedConfiguration();
-		await this.catalogV2FeatureService?.rebuildLocalCatalog();
+		await this.memoCommandService.rebuildLocalCatalog();
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
 			return true;
 		}
@@ -716,7 +725,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.monthlyFileFormatMigrationRunning = true;
 		try {
-			const sourcePeriods = await this.catalogV2MonthlyProjectionCoordinator.listPeriods();
+			const sourcePeriods = await this.monthlyProjectionCoordinator.listPeriods();
 			const plan = await this.settingsService.planMonthlyMemoFileFormatMigration(nextFormat, sourcePeriods);
 			if (plan.conflicts.length > 0) {
 				throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
@@ -734,7 +743,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
 			await this.syncSharedConfiguration();
 			for (const period of plan.periods) {
-				await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
+				await this.monthlyProjectionCoordinator.rebuildPeriod(period);
 			}
 			if (statusEl !== undefined) {
 				this.updateMonthlyFileFormatStatus(statusEl);
@@ -779,10 +788,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.knomoDataRootMigrationService.migrate(knomoDataRoot);
 			await this.knomoSharedConfigService.reloadConfiguredRoot();
 			await this.syncSharedConfiguration();
-			await this.legacyIdentityImporter.run();
+			await this.legacyIndexMigrationService.run();
 			if (knomoDataRoot !== currentSettings.monthlyMemoFolder) {
-				for (const period of await this.catalogV2MonthlyProjectionCoordinator.listPeriods()) {
-					await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
+				for (const period of await this.monthlyProjectionCoordinator.listPeriods()) {
+					await this.monthlyProjectionCoordinator.rebuildPeriod(period);
 				}
 			}
 			new Notice(t("settings.dataRoot.saved"));
@@ -823,7 +832,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				return;
 			}
 			new Notice(t("settings.timeBuoy.building"));
-			await this.catalogV2ReadService.queryTimeBuoysForDate(formatDatePart(new Date()));
+			await this.catalogReadService.queryTimeBuoysForDate(formatDatePart(new Date()));
 			new Notice(t("settings.timeBuoy.enabled"));
 			await this.refreshOpenKnomoViews();
 		} catch (error) {
@@ -896,8 +905,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private async runRebuildIndex(
-		scope: RebuildIndexScope,
-		mode: RebuildIndexMode,
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
 		resultEl: HTMLElement,
 	): Promise<void> {
@@ -917,7 +924,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			}
 			button.setButtonText(t("settings.rebuild.running"));
 			this.renderRebuildResult(t("settings.rebuild.catalogStatus"), resultEl);
-			await this.catalogV2FeatureService.rebuildLocalCatalog();
+			await this.memoCommandService.rebuildLocalCatalog();
 			this.renderRebuildResult(t("settings.rebuild.catalogComplete"), resultEl);
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.rebuild.completedNotice"));
@@ -953,7 +960,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setButtonText(t("settings.monthlyRebuild.running"));
 		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.status", { period }), resultEl);
 		try {
-			const projection = await this.catalogV2MonthlyProjectionCoordinator.rebuildPeriod(period);
+			const projection = await this.monthlyProjectionCoordinator.rebuildPeriod(period);
 			if (projection.failed > 0) throw new Error(t("settings.monthlyRebuild.failed"));
 			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.complete", {
 				period,
@@ -1011,8 +1018,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 					try {
 						if (status === "conflicted") await this.knomoSharedConfigService.resolveWithLocalConfig();
 						else await this.knomoSharedConfigService.publishLocalConfig();
-						await this.catalogV2FeatureService.rebuildLocalCatalog();
-						await this.catalogV2MonthlyProjectionCoordinator.handleConfigurationChanged();
+						await this.memoCommandService.rebuildLocalCatalog();
+						await this.monthlyProjectionCoordinator.handleConfigurationChanged();
 						new Notice(t("settings.sharedConfig.saved"));
 						this.display();
 					} catch {

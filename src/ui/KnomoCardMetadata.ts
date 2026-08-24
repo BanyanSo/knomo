@@ -37,7 +37,7 @@ export interface TrashCardActionMeta {
 }
 
 const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"];
-const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
+const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore"];
 const CJK_CONTENT_MIN_HAN_COUNT = 8;
 const CJK_CONTENT_MIN_HAN_RATIO = 0.25;
 const HAN_CHARACTER_PATTERN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
@@ -78,8 +78,8 @@ export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
 		action,
 		className: getMemoActionClass(action),
 	}));
-	const resolved = memo?.catalogV2?.resolved;
-	if (memo?.catalogV2?.capabilities.identity.repair !== "ready" || resolved?.kind !== "ambiguous") {
+	const resolved = memo?.catalog?.resolved;
+	if (memo?.catalog?.capabilities.identity.repair !== "ready" || resolved?.kind !== "ambiguous") {
 		return actions;
 	}
 	const repairs = [...new Set(resolved.candidates.map((candidate) => candidate.memoId))].sort().map((candidateMemoId) => ({
@@ -93,7 +93,7 @@ export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
 export type MemoDeleteMode = "recoverable" | "permanent" | "unavailable";
 
 export function isMemoCardMenuReady(memo: MemoRecord): boolean {
-	const capabilities = memo.catalogV2?.capabilities;
+	const capabilities = memo.catalog?.capabilities;
 	if (capabilities === undefined) return true;
 	return capabilities.markdown.view
 		&& capabilities.markdown.copy
@@ -101,7 +101,7 @@ export function isMemoCardMenuReady(memo: MemoRecord): boolean {
 }
 
 function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction): boolean {
-	const capabilities = memo?.catalogV2?.capabilities;
+	const capabilities = memo?.catalog?.capabilities;
 	if (capabilities === undefined) return true;
 	if (action === "open-daily") return capabilities.markdown.openDaily;
 	if (action === "copy-text") return capabilities.markdown.copy;
@@ -111,8 +111,8 @@ function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction)
 	return false;
 }
 
-export function getTrashActionClass(action: TrashAction): string {
-	return action === "purge" ? "knomo-inline-button is-danger" : "knomo-inline-button";
+export function getTrashActionClass(_action: TrashAction): string {
+	return "knomo-inline-button";
 }
 
 export function getTrashActionState(action: TrashAction, busyAction: TrashAction | null): TrashActionState {
@@ -159,7 +159,7 @@ function getSourceReferenceText(memo: MemoRecord): string | null {
 }
 
 export function getMemoDeleteMode(memo: MemoRecord): MemoDeleteMode {
-	const capabilities = memo.catalogV2?.capabilities;
+	const capabilities = memo.catalog?.capabilities;
 	if (capabilities === undefined || capabilities.identity.recoverableDelete === "ready") {
 		return "recoverable";
 	}

@@ -7,19 +7,3 @@ export function formatMemoDisplayTime(value: string): string {
 export function formatOptionalMemoTime(value: string | undefined): string {
 	return value === undefined || value.trim().length === 0 ? t("trash.unknownTime") : formatMemoDisplayTime(value);
 }
-
-export function formatDeleteSource(value: string): string {
-	if (value === "knomo_ui") {
-		return "Knomo";
-	}
-	if (value === "file_watch") {
-		return t("deleteSource.fileWatch");
-	}
-	if (value === "manual_scan") {
-		return t("deleteSource.manualScan");
-	}
-	if (value === "startup_scan") {
-		return t("deleteSource.startupScan");
-	}
-	return value;
-}

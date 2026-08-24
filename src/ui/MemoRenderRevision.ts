@@ -1,7 +1,7 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 
 export function getMemoRenderKey(memo: MemoRecord): string {
-	return memo.catalogV2?.renderKey ?? memo.id;
+	return memo.catalog?.renderKey ?? memo.id;
 }
 
 export function getMemoRenderRevision(memo: MemoRecord): string {
@@ -19,7 +19,6 @@ export function getMemoRenderRevision(memo: MemoRecord): string {
 		reference?.referenceText,
 		memo.dailyRef.path,
 		memo.deletedAt,
-		memo.deleteSource,
 	]);
 }
 

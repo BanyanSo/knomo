@@ -39,7 +39,7 @@ test("builds an ordered memo list state key", () => {
 
 test("identity 后到时保持 observation render key，但刷新可见卡片内容", () => {
 	const memo = makeMemo("Daily/2026-06-15.md\u00000000000001");
-	const observed = { ...memo, catalogV2: { renderKey: "observation-1" } as never };
+	const observed = { ...memo, catalog: { renderKey: "observation-1" } as never };
 	const identified = { ...observed, id: "m_11111111111111111111111111111111" };
 
 	assert.equal(getMemoRenderKey(observed), "observation-1");

@@ -5,8 +5,8 @@ import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
 import { KNOMO_LOGO_ICON, KNOMO_SEARCH_ICON } from "../icons";
 import { t } from "../i18n";
 import type { AttachmentService } from "../services/AttachmentService";
-import type { CatalogV2FeatureService } from "../services/CatalogV2FeatureService";
-import type { CatalogV2ReadService } from "../services/CatalogV2ReadService";
+import type { MemoCommandService } from "../services/MemoCommandService";
+import type { CatalogReadService } from "../services/CatalogReadService";
 import type { DailyNotesStatus } from "../services/DailyNoteService";
 import type { VaultTagIndex } from "../services/VaultTagIndex";
 import { RecordStatsService } from "../services/RecordStatsService";
@@ -15,17 +15,17 @@ import type { SettingsService } from "../services/SettingsService";
 import type { ShuffleDayService } from "../services/ShuffleDayService";
 import type { CatalogCoverage } from "../types/catalog";
 import type {
-	CatalogV2FeatureCursor,
-	CatalogV2FeatureQuery,
-	CatalogV2ReadState,
-	CatalogV2ReadStatus,
-} from "../types/catalogV2View";
+	CatalogFeatureCursor,
+	CatalogFeatureQuery,
+	CatalogReadState,
+	CatalogReadStatus,
+} from "../types/catalogView";
 import type { MemoViewItem } from "../types/memoView";
 import {
-	isCatalogV2DeletedMemoView,
-	isCatalogV2MemoView,
-	toCatalogV2DeletedMemoView,
-	toCatalogV2MemoView,
+	isTrashMemoView,
+	isCatalogMemoView,
+	toTrashMemoView,
+	toCatalogMemoView,
 } from "../types/memoView";
 import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
 import type { TextReplacement } from "../utils/composerInput";
@@ -109,11 +109,7 @@ import { KnomoWikiLinkSuggest } from "./KnomoWikiLinkSuggest";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { MemoMarkdownRenderer } from "./MemoMarkdownRenderer";
 import { getMarkdownInternalLinkInfo } from "./MarkdownInternalLink";
-import {
-	formatDeleteSource,
-	formatMemoDisplayTime,
-	formatOptionalMemoTime,
-} from "./MemoDisplayFormatters";
+import { formatMemoDisplayTime, formatOptionalMemoTime } from "./MemoDisplayFormatters";
 import { parseMemoCardPreviewLite, resolveMemoPreviewImages } from "./MemoCardPreview";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 import { MemoCardPreviewCache } from "./MemoCardPreviewCache";
@@ -205,8 +201,8 @@ interface FilteredMemosCache {
 }
 
 const CARD_BATCH_SIZE = 50;
-const CATALOG_V2_PAGE_SIZE = 50;
-const CATALOG_V2_MEMO_WINDOW_LIMIT = 150;
+const CATALOG_PAGE_SIZE = 50;
+const CATALOG_MEMO_WINDOW_LIMIT = 150;
 const MOBILE_INITIAL_CARD_BATCH_SIZE = 25;
 const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;
 const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;
@@ -312,21 +308,21 @@ export class KnomoView extends ItemView {
 	private mobileRecordStatsBackActionEl: HTMLElement | null = null;
 	private sidebarResizerEl: HTMLElement | null = null;
 	private memos: MemoRecord[] = [];
-	private catalogV2Cursor: CatalogV2FeatureCursor | null = null;
-	private catalogV2LoadingNextPage = false;
-	private catalogV2Coverage: CatalogCoverage | null = null;
-	private catalogV2ReadState: CatalogV2ReadState = "ready";
-	private catalogV2Status: CatalogV2ReadStatus = {
+	private catalogCursor: CatalogFeatureCursor | null = null;
+	private catalogLoadingNextPage = false;
+	private catalogCoverage: CatalogCoverage | null = null;
+	private catalogReadState: CatalogReadState = "ready";
+	private catalogStatus: CatalogReadStatus = {
 		content: "ready",
 		catalog: "complete",
 		identity: "ready",
 		projection: "ready",
 		migration: "none",
 	};
-	private catalogV2MobileCursor: CatalogV2FeatureCursor | null = null;
-	private catalogV2MobileQueryRun = 0;
-	private catalogV2DeletedCursor: string | null = null;
-	private catalogV2DeletedRevision: string | null = null;
+	private catalogMobileCursor: CatalogFeatureCursor | null = null;
+	private catalogMobileQueryRun = 0;
+	private trashCursor: string | null = null;
+	private trashIdentityRevision: string | null = null;
 	private cardFlowError: string | null = null;
 	private memoLoadingPromise: Promise<boolean> | null = null;
 	private memoSourceGeneration = 0;
@@ -537,13 +533,10 @@ export class KnomoView extends ItemView {
 		private readonly vaultTagIndex: VaultTagIndex,
 		private readonly onForceRefreshViews: () => Promise<void>,
 		private readonly onManualRefresh: () => Promise<CatalogRefreshResult>,
-		private readonly catalogV2FeatureService: CatalogV2FeatureService,
-		private readonly catalogV2ReadService: CatalogV2ReadService,
+		private readonly memoCommandService: MemoCommandService,
+		private readonly catalogReadService: CatalogReadService,
 		getDailyNotesStatus: () => DailyNotesStatus,
 		getTodayDailyNotePath: () => string | null,
-		_getCatalogInstallMode: (() => unknown) | null = null,
-		_getCatalogInitializationAllowed: (() => boolean) | null = null,
-		_onInitializeCatalogVault: (() => Promise<boolean>) | null = null,
 		private readonly onRefreshCatalogProtocolState: (() => Promise<void>) | null = null,
 		private readonly onOpenCatalogSettings: (() => void) | null = null,
 	) {
@@ -647,16 +640,16 @@ export class KnomoView extends ItemView {
 			},
 			handleTaskCheckboxClick: (event) => this.handleTaskCheckboxClick(event),
 			handleTaskCheckboxChange: (event) => this.handleTaskCheckboxChange(event),
-			loadRemoteResults: (query, dateFilter, recordStatsFilter, reset) => this.loadCatalogV2MobileSearchResults(
+			loadRemoteResults: (query, dateFilter, recordStatsFilter, reset) => this.loadCatalogMobileSearchResults(
 					query,
 					dateFilter,
 					recordStatsFilter,
 					reset,
 				),
-			hasRemoteNextPage: () => this.catalogV2MobileCursor !== null,
+			hasRemoteNextPage: () => this.catalogMobileCursor !== null,
 			restoreRemoteResults: async () => {
-					this.catalogV2MobileQueryRun += 1;
-					this.catalogV2MobileCursor = null;
+					this.catalogMobileQueryRun += 1;
+					this.catalogMobileCursor = null;
 					await this.reloadMemos(false, true);
 			},
 		});
@@ -703,33 +696,22 @@ export class KnomoView extends ItemView {
 				: MARKDOWN_RENDER_CONCURRENCY,
 		});
 		this.trashMemoController = new TrashMemoController<MemoRecord>({
-			getDeletedMemoSummary: () => this.catalogV2ReadService.getDeletedSummary(),
+			getDeletedMemoSummary: () => this.catalogReadService.getDeletedSummary(),
 			listDeletedMemos: async () => {
-				const page = await this.catalogV2ReadService.listDeleted(CATALOG_V2_PAGE_SIZE);
-				this.catalogV2DeletedCursor = page.nextCursor;
-				this.catalogV2DeletedRevision = page.stateRevision;
-				return page.items.map(toCatalogV2DeletedMemoView);
+				const page = await this.catalogReadService.listDeleted(CATALOG_PAGE_SIZE);
+				this.trashCursor = page.nextCursor;
+				this.trashIdentityRevision = page.identityRevision;
+				return page.items.map(toTrashMemoView);
 			},
 			restoreMemo: async (memo) => {
-				if (isCatalogV2DeletedMemoView(memo)) {
-					const result = await this.catalogV2FeatureService.restore(memo.catalogV2Deleted);
-					return result.memo === null ? null : toCatalogV2MemoView(result.memo);
+				if (isTrashMemoView(memo)) {
+					const result = await this.memoCommandService.restore(memo.trashItem);
+					return result.memo === null ? null : toCatalogMemoView(result.memo);
 				}
 				throw new Error("Deleted memo source is unavailable.");
 			},
 			handleRestoredMemo: (deletedMemo, restoredMemo) => this.handleRestoredTrashMemo(deletedMemo, restoredMemo),
-			purgeDeletedMemo: async (memo) => {
-				if (isCatalogV2DeletedMemoView(memo)) {
-					await this.catalogV2FeatureService.purge(memo.catalogV2Deleted);
-				}
-			},
 			isTrashActive: () => this.activeNav === "trash",
-			confirmPurge: () => showKnomoConfirmModal(this.app, {
-				title: t("trash.purge"),
-				message: t("confirm.purgeMemo"),
-				danger: true,
-				getReturnFocus: getDestructiveConfirmReturnFocus,
-			}),
 			showNotice: (message) => new Notice(message),
 			forceRefreshViews: () => this.onForceRefreshViews(),
 			requestRender: (target) => this.handleTrashRenderRequest(target),
@@ -738,8 +720,8 @@ export class KnomoView extends ItemView {
 			getNow: () => new Date(),
 			isTodayIndexReady: async () => true,
 			ensureReady: async () => undefined,
-			queryAll: () => this.catalogV2ReadService.queryAllTimeBuoys(),
-			queryDate: (date) => this.catalogV2ReadService.queryTimeBuoysForDate(date),
+			queryAll: () => this.catalogReadService.queryAllTimeBuoys(),
+			queryDate: (date) => this.catalogReadService.queryTimeBuoysForDate(date),
 			requestRender: () => {
 				if (this.activeNav === "time-buoy") {
 					this.renderCardFlow();
@@ -751,11 +733,11 @@ export class KnomoView extends ItemView {
 		this.randomReunionController = new RandomReunionController({
 			ensureAllMemosLoaded: async () => undefined,
 			getMemos: () => this.memos,
-			getRandomReunionMemos: (count) => this.catalogV2ReadService.getRandomReunionItems(count),
+			getRandomReunionMemos: (count) => this.catalogReadService.getRandomReunionItems(count),
 			markRandomReunionReviewed: async (memoId) => {
 				const memo = this.findMemoById(memoId);
-				if (memo !== null && isCatalogV2MemoView(memo)) {
-					await this.catalogV2FeatureService.recordReview(await this.resolveCatalogV2Memo(memo));
+				if (memo !== null && isCatalogMemoView(memo)) {
+					await this.memoCommandService.recordReview(await this.resolveCatalogMemo(memo));
 				}
 			},
 			isRandomActive: () => this.activeNav === "random",
@@ -767,8 +749,8 @@ export class KnomoView extends ItemView {
 			getMemos: () => this.memos,
 			service: this.shuffleDayService,
 			selectShuffleDay: async () => this.shuffleDayService.selectCatalogShuffleDay(
-					await this.getCatalogV2ReadService().listDailyAggregates(),
-					(date) => this.catalogV2ReadService.listMemoViewsForDate(date),
+					await this.getCatalogReadService().listDailyAggregates(),
+					(date) => this.catalogReadService.listMemoViewsForDate(date),
 				),
 			isShuffleDayActive: () => this.activeNav === "shuffleDay",
 			showNotice: (message) => new Notice(message),
@@ -1067,7 +1049,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleRestoredTrashMemo(_deletedMemo: MemoRecord, restoredMemo: MemoRecord): void {
-		if (isCatalogV2MemoView(restoredMemo)) void this.reloadMemos(false, true);
+		if (isCatalogMemoView(restoredMemo)) void this.reloadMemos(false, true);
 	}
 
 	handleAttachmentFilesChanged(paths: readonly string[]): void {
@@ -1461,7 +1443,7 @@ export class KnomoView extends ItemView {
 		const previousMobileSearchKey = this.getMobileSearchStateKey();
 		let loaded = false;
 		try {
-			const memos = await this.loadCatalogV2Memos(loadAll);
+			const memos = await this.loadCatalogMemos(loadAll);
 			if (sourceGeneration !== this.memoSourceGeneration) {
 				return false;
 			}
@@ -1517,60 +1499,60 @@ export class KnomoView extends ItemView {
 
 	private async refreshCatalogSyncState(): Promise<void> {
 		await this.onRefreshCatalogProtocolState?.();
-		await this.catalogV2FeatureService.refreshLocalCatalog();
+		await this.memoCommandService.refreshLocalCatalog();
 		await this.onForceRefreshViews();
 	}
 
-	private async loadCatalogV2Memos(loadAll: boolean): Promise<MemoRecord[]> {
-		const page = await this.catalogV2ReadService.query({
-			...this.buildCatalogV2ActiveQuery(loadAll),
-			limit: CATALOG_V2_PAGE_SIZE,
+	private async loadCatalogMemos(loadAll: boolean): Promise<MemoRecord[]> {
+		const page = await this.catalogReadService.query({
+			...this.buildCatalogActiveQuery(loadAll),
+			limit: CATALOG_PAGE_SIZE,
 			cursor: null,
 		});
 		if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
-		this.catalogV2Cursor = page.nextCursor;
-		this.catalogV2Coverage = page.coverage;
-		this.catalogV2ReadState = page.readState;
-		this.catalogV2Status = page.status;
-		return page.items.map(toCatalogV2MemoView);
+		this.catalogCursor = page.nextCursor;
+		this.catalogCoverage = page.coverage;
+		this.catalogReadState = page.readState;
+		this.catalogStatus = page.status;
+		return page.items.map(toCatalogMemoView);
 	}
 
-	private async loadNextCatalogV2Page(): Promise<boolean> {
-		if (this.catalogV2Cursor === null || this.catalogV2LoadingNextPage) return false;
-		this.catalogV2LoadingNextPage = true;
+	private async loadNextCatalogPage(): Promise<boolean> {
+		if (this.catalogCursor === null || this.catalogLoadingNextPage) return false;
+		this.catalogLoadingNextPage = true;
 		try {
-			const page = await this.getCatalogV2ReadService().query({
-				...this.buildCatalogV2ActiveQuery(true),
-				limit: CATALOG_V2_PAGE_SIZE,
-				cursor: this.catalogV2Cursor,
+			const page = await this.getCatalogReadService().query({
+				...this.buildCatalogActiveQuery(true),
+				limit: CATALOG_PAGE_SIZE,
+				cursor: this.catalogCursor,
 			});
 			if (page.invalidated) return this.reloadMemos(false, true);
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
-			for (const memo of page.items.map(toCatalogV2MemoView)) byRenderKey.set(getMemoRenderKey(memo), memo);
-			this.memos = retainOlderMemoWindow([...byRenderKey.values()], CATALOG_V2_MEMO_WINDOW_LIMIT);
-			this.catalogV2Cursor = page.nextCursor;
-			this.catalogV2Coverage = page.coverage;
-			this.catalogV2ReadState = page.readState;
-			this.catalogV2Status = page.status;
+			for (const memo of page.items.map(toCatalogMemoView)) byRenderKey.set(getMemoRenderKey(memo), memo);
+			this.memos = retainOlderMemoWindow([...byRenderKey.values()], CATALOG_MEMO_WINDOW_LIMIT);
+			this.catalogCursor = page.nextCursor;
+			this.catalogCoverage = page.coverage;
+			this.catalogReadState = page.readState;
+			this.catalogStatus = page.status;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
 			this.forceRebuildCardFlow();
 			return true;
 		} finally {
-			this.catalogV2LoadingNextPage = false;
+			this.catalogLoadingNextPage = false;
 		}
 	}
 
-	private async loadCatalogV2MobileSearchResults(
+	private async loadCatalogMobileSearchResults(
 		text: string,
 		dateFilter: SearchDateFilter | null,
 		recordStatsFilter: RecordStatsSearchFilter | null,
 		reset: boolean,
 	): Promise<void> {
-		const run = reset ? ++this.catalogV2MobileQueryRun : this.catalogV2MobileQueryRun;
-		const query: Omit<CatalogV2FeatureQuery, "limit" | "cursor"> = {};
+		const run = reset ? ++this.catalogMobileQueryRun : this.catalogMobileQueryRun;
+		const query: Omit<CatalogFeatureQuery, "limit" | "cursor"> = {};
 		if (text.trim().length > 0) query.text = text.trim();
-		const dateRange = getCatalogV2DateRange(dateFilter, new Date());
+		const dateRange = getCatalogDateRange(dateFilter, new Date());
 		if (dateRange !== null) {
 			query.fromDate = dateRange.fromDate;
 			query.toDate = dateRange.toDate;
@@ -1592,34 +1574,34 @@ export class KnomoView extends ItemView {
 			if (recordStatsFilter.type === "no-tag") query.hasTag = false;
 			if (recordStatsFilter.type === "tag") query.tags = [recordStatsFilter.tagKey];
 		}
-		const page = await this.getCatalogV2ReadService().query({
+		const page = await this.getCatalogReadService().query({
 			...query,
-			limit: CATALOG_V2_PAGE_SIZE,
-			cursor: reset ? null : this.catalogV2MobileCursor,
+			limit: CATALOG_PAGE_SIZE,
+			cursor: reset ? null : this.catalogMobileCursor,
 		});
-		if (run !== this.catalogV2MobileQueryRun) return;
+		if (run !== this.catalogMobileQueryRun) return;
 		if (page.invalidated) {
-			if (!reset) await this.loadCatalogV2MobileSearchResults(text, dateFilter, recordStatsFilter, true);
+			if (!reset) await this.loadCatalogMobileSearchResults(text, dateFilter, recordStatsFilter, true);
 			return;
 		}
-		const next = page.items.map(toCatalogV2MemoView);
+		const next = page.items.map(toCatalogMemoView);
 		if (reset) {
 			this.memos = next;
 		} else {
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
 			for (const memo of next) byRenderKey.set(getMemoRenderKey(memo), memo);
-			this.memos = retainOlderMemoWindow([...byRenderKey.values()], CATALOG_V2_MEMO_WINDOW_LIMIT);
+			this.memos = retainOlderMemoWindow([...byRenderKey.values()], CATALOG_MEMO_WINDOW_LIMIT);
 		}
-		this.catalogV2MobileCursor = page.nextCursor;
-		this.catalogV2Coverage = page.coverage;
-		this.catalogV2ReadState = page.readState;
-		this.catalogV2Status = page.status;
+		this.catalogMobileCursor = page.nextCursor;
+		this.catalogCoverage = page.coverage;
+		this.catalogReadState = page.readState;
+		this.catalogStatus = page.status;
 		this.invalidateMemoSearchCache();
 		this.retainMemoCardPreviews();
 	}
 
-	private buildCatalogV2ActiveQuery(loadAll: boolean): Omit<CatalogV2FeatureQuery, "limit" | "cursor"> {
-		const query: Omit<CatalogV2FeatureQuery, "limit" | "cursor"> = {};
+	private buildCatalogActiveQuery(loadAll: boolean): Omit<CatalogFeatureQuery, "limit" | "cursor"> {
+		const query: Omit<CatalogFeatureQuery, "limit" | "cursor"> = {};
 		const text = this.searchQuery.trim();
 		if (text.length > 0) query.text = text;
 		if (this.activeTagKey !== null) query.tags = [this.activeTagKey];
@@ -1630,7 +1612,7 @@ export class KnomoView extends ItemView {
 		if (this.scopeFilter === "anniversary") {
 			query.monthDay = formatDatePart(today).slice(5);
 		} else {
-			const range = getCatalogV2DateRange(this.searchDateFilter ?? toSearchDateFilter(this.scopeFilter), today);
+			const range = getCatalogDateRange(this.searchDateFilter ?? toSearchDateFilter(this.scopeFilter), today);
 			if (range !== null) {
 				query.fromDate = range.fromDate;
 				query.toDate = range.toDate;
@@ -1658,7 +1640,7 @@ export class KnomoView extends ItemView {
 	private async loadInitialMobileMemos(): Promise<void> {
 		const sourceGeneration = this.memoSourceGeneration;
 		try {
-			const memos = await this.loadCatalogV2Memos(false);
+			const memos = await this.loadCatalogMemos(false);
 			if (
 				sourceGeneration !== this.memoSourceGeneration
 				|| this.cardFlowEl === null
@@ -1737,7 +1719,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private isComposerCreationAvailable(): boolean {
-		return this.catalogV2FeatureService.getOperationalState(this.catalogV2ReadState).capabilities.createNew;
+		return this.memoCommandService.getOperationalState(this.catalogReadState).capabilities.createNew;
 	}
 
 	private syncComposerMode(): void {
@@ -2535,8 +2517,8 @@ export class KnomoView extends ItemView {
 		}
 		if (this.cardFlowError === null && this.activeNav !== "trash") {
 			const headers = getCatalogReadStatusHeaders({
-				status: this.catalogV2Status,
-				coverage: this.catalogV2Coverage,
+				status: this.catalogStatus,
+				coverage: this.catalogCoverage,
 			});
 			if (headers.length === 0) return presentation;
 			return presentation.type === "items"
@@ -2966,7 +2948,6 @@ export class KnomoView extends ItemView {
 			busyAction: trashBusyMemoActions.get(memo.id) ?? null,
 			formatDisplayTime: formatMemoDisplayTime,
 			formatOptionalTime: formatOptionalMemoTime,
-			formatDeleteSource,
 			getMarkdownPriority: getMarkdownRenderPriority,
 			getMemoCardPreview: (memoRecord) => this.getMemoCardPreview(memoRecord),
 			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority, previewText) => {
@@ -3216,7 +3197,7 @@ export class KnomoView extends ItemView {
 		this.renderUiState({
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
-		this.refreshCatalogV2ActiveQuery();
+		this.refreshCatalogActiveQuery();
 	}
 
 	private renderCatalogOnboarding(presentation: Extract<CardFlowPresentation, { type: "onboarding" }>): void {
@@ -3420,7 +3401,7 @@ export class KnomoView extends ItemView {
 		this.activeMenuMemoId = null;
 		this.randomReunionController.clearMemos();
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
-		this.refreshCatalogV2ActiveQuery();
+		this.refreshCatalogActiveQuery();
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
@@ -3474,8 +3455,8 @@ export class KnomoView extends ItemView {
 		return true;
 	}
 
-	private async resolveCatalogV2Memo(memo: MemoRecord): Promise<NonNullable<MemoViewItem["catalogV2"]>> {
-		if (isCatalogV2MemoView(memo)) return memo.catalogV2;
+	private async resolveCatalogMemo(memo: MemoRecord): Promise<NonNullable<MemoViewItem["catalog"]>> {
+		if (isCatalogMemoView(memo)) return memo.catalog;
 		throw new Error("The current memo source changed; refresh and retry.");
 	}
 
@@ -3484,10 +3465,10 @@ export class KnomoView extends ItemView {
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		try {
 			if (action === "confirm-identity") {
-				if (!isCatalogV2MemoView(memo) || candidateMemoId === null) {
+				if (!isCatalogMemoView(memo) || candidateMemoId === null) {
 					throw new Error("Identity confirmation is unavailable for this memo.");
 				}
-				await this.catalogV2FeatureService.repairIdentity(memo.catalogV2, candidateMemoId);
+				await this.memoCommandService.repairIdentity(memo.catalog, candidateMemoId);
 				await this.reloadMemos(false, true);
 				new Notice(t("notice.identityConfirmed"));
 				return;
@@ -3501,8 +3482,8 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "reference") {
-				const reference = await this.catalogV2FeatureService.createReferenceText(
-					await this.resolveCatalogV2Memo(memo),
+				const reference = await this.memoCommandService.createReferenceText(
+					await this.resolveCatalogMemo(memo),
 				);
 				this.startReferenceMemo(memo, reference.text, reference.memoId);
 				this.syncCardMenuState();
@@ -3529,8 +3510,8 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "copy-link") {
-				const reference = await this.catalogV2FeatureService.createReferenceText(
-					await this.resolveCatalogV2Memo(memo),
+				const reference = await this.memoCommandService.createReferenceText(
+					await this.resolveCatalogMemo(memo),
 				);
 				await this.copyText(reference.text);
 				new Notice(t("notice.copiedLink"));
@@ -3538,12 +3519,12 @@ export class KnomoView extends ItemView {
 				return;
 			} else if (action === "delete") {
 				const deleteMode = getMemoDeleteMode(memo);
-				const resolvedMemo = await this.resolveCatalogV2Memo(memo);
+				const resolvedMemo = await this.resolveCatalogMemo(memo);
 				if (deleteMode === "permanent") {
 					if (!await this.confirmPermanentDelete()) return;
-					await this.catalogV2FeatureService.removePermanently(resolvedMemo);
+					await this.memoCommandService.removePermanently(resolvedMemo);
 				} else if (deleteMode === "recoverable") {
-					await this.catalogV2FeatureService.delete(resolvedMemo);
+					await this.memoCommandService.delete(resolvedMemo);
 				} else {
 					throw new Error("Memo delete is unavailable.");
 				}
@@ -3608,14 +3589,14 @@ export class KnomoView extends ItemView {
 		this.updateSendButtonState();
 		try {
 			if (preparedInput.type === "update") {
-				const result = await this.catalogV2FeatureService.edit(
-					await this.resolveCatalogV2Memo(preparedInput.previousMemo),
+				const result = await this.memoCommandService.edit(
+					await this.resolveCatalogMemo(preparedInput.previousMemo),
 					preparedInput.content,
 				);
 				dailySaved = result.status === "saved";
 				timeBuoyDates = result.timeBuoyDates;
 			} else {
-				const result = await this.catalogV2FeatureService.create(preparedInput.content, preparedInput.sourceMemoId);
+				const result = await this.memoCommandService.create(preparedInput.content, preparedInput.sourceMemoId);
 				dailySaved = result.status === "saved";
 				timeBuoyDates = result.timeBuoyDates;
 			}
@@ -3702,7 +3683,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
-		this.refreshCatalogV2ActiveQuery();
+		this.refreshCatalogActiveQuery();
 	}
 
 	private confirmPermanentDelete(): Promise<boolean> {
@@ -3719,7 +3700,7 @@ export class KnomoView extends ItemView {
 		this.clearSearchDebounce();
 		this.applyViewStateTransitionEffects(this.viewStateController.setSearchQuery(query));
 		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
-		this.refreshCatalogV2ActiveQuery();
+		this.refreshCatalogActiveQuery();
 	}
 
 	private setSearchDateFilter(filter: SearchDateFilter, sourceEl: HTMLElement | null = null): void {
@@ -3730,7 +3711,7 @@ export class KnomoView extends ItemView {
 			this.syncRootState();
 		}
 		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
-		this.refreshCatalogV2ActiveQuery();
+		this.refreshCatalogActiveQuery();
 	}
 
 	private flushDesktopSearchQuery(sourceEl: HTMLElement | null): void {
@@ -3747,7 +3728,7 @@ export class KnomoView extends ItemView {
 		this.searchQueryDebounce.queue(query, (nextQuery) => this.setSearchQuery(nextQuery));
 	}
 
-	private refreshCatalogV2ActiveQuery(): void {
+	private refreshCatalogActiveQuery(): void {
 		void this.reloadMemos(false, true);
 	}
 
@@ -5436,7 +5417,7 @@ export class KnomoView extends ItemView {
 			});
 		};
 		const preparation = this.recordStatsService.prepareFromSource(source, (isCurrent) => {
-			return this.catalogV2ReadService.buildRecordStats(yieldToUi, isCurrent);
+			return this.catalogReadService.buildRecordStats(yieldToUi, isCurrent);
 		});
 		if (this.activeNav === "record-stats") {
 			this.renderCardFlow();
@@ -5473,8 +5454,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private canLoadOlderMemoPeriods(): boolean {
-		if (this.activeNav === "trash") return this.catalogV2DeletedCursor !== null;
-		return this.catalogV2Cursor !== null
+		if (this.activeNav === "trash") return this.trashCursor !== null;
+		return this.catalogCursor !== null
 			&& this.activeNav !== "random"
 			&& this.activeNav !== "shuffleDay"
 			&& this.activeNav !== "time-buoy"
@@ -5483,8 +5464,8 @@ export class KnomoView extends ItemView {
 
 	private async loadOlderMemoPeriods(): Promise<boolean> {
 		return this.activeNav === "trash"
-			? this.loadNextCatalogV2DeletedPage()
-			: this.loadNextCatalogV2Page();
+			? this.loadNextTrashPage()
+			: this.loadNextCatalogPage();
 	}
 
 	private async waitForAllMemosLoading(): Promise<void> {
@@ -5689,17 +5670,17 @@ export class KnomoView extends ItemView {
 		if (memo === null || taskIndex === null) {
 			return;
 		}
-		if (isCatalogV2MemoView(memo)) {
-			this.enqueueCatalogV2TaskToggle(memo, taskIndex, input.checked);
+		if (isCatalogMemoView(memo)) {
+			this.enqueueCatalogTaskToggle(memo, taskIndex, input.checked);
 		}
 	}
 
-	private enqueueCatalogV2TaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): void {
+	private enqueueCatalogTaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): void {
 		const previous = this.taskUpdateQueues.get(memo.id) ?? Promise.resolve();
 		const queued = previous.catch(() => undefined).then(async () => {
 			const latestMemo = this.findMemoById(memo.id);
-			const targetMemo = latestMemo !== null && isCatalogV2MemoView(latestMemo) ? latestMemo : memo;
-			await this.handleCatalogV2TaskToggle(targetMemo, taskIndex, checked);
+			const targetMemo = latestMemo !== null && isCatalogMemoView(latestMemo) ? latestMemo : memo;
+			await this.handleCatalogTaskToggle(targetMemo, taskIndex, checked);
 		});
 		const settled = queued.catch(() => undefined).finally(() => {
 			if (this.taskUpdateQueues.get(memo.id) === settled) {
@@ -5710,23 +5691,23 @@ export class KnomoView extends ItemView {
 		void settled;
 	}
 
-	private async loadNextCatalogV2DeletedPage(): Promise<boolean> {
-		if (this.catalogV2DeletedCursor === null) return false;
-		const page = await this.getCatalogV2ReadService().listDeleted(CATALOG_V2_PAGE_SIZE, this.catalogV2DeletedCursor);
-		if (this.catalogV2DeletedRevision !== null && page.stateRevision !== this.catalogV2DeletedRevision) {
+	private async loadNextTrashPage(): Promise<boolean> {
+		if (this.trashCursor === null) return false;
+		const page = await this.getCatalogReadService().listDeleted(CATALOG_PAGE_SIZE, this.trashCursor);
+		if (this.trashIdentityRevision !== null && page.identityRevision !== this.trashIdentityRevision) {
 			await this.trashMemoController.loadTrashMemos();
 			return false;
 		}
-		this.catalogV2DeletedCursor = page.nextCursor;
-		this.catalogV2DeletedRevision = page.stateRevision;
-		this.trashMemoController.appendTrashMemos(page.items.map(toCatalogV2DeletedMemoView), CATALOG_V2_MEMO_WINDOW_LIMIT);
+		this.trashCursor = page.nextCursor;
+		this.trashIdentityRevision = page.identityRevision;
+		this.trashMemoController.appendTrashMemos(page.items.map(toTrashMemoView), CATALOG_MEMO_WINDOW_LIMIT);
 		return true;
 	}
 
-	private async handleCatalogV2TaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): Promise<void> {
+	private async handleCatalogTaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): Promise<void> {
 		let dailySaved = false;
 		try {
-			const result = await this.catalogV2FeatureService.toggleTask(await this.resolveCatalogV2Memo(memo), taskIndex, checked);
+			const result = await this.memoCommandService.toggleTask(await this.resolveCatalogMemo(memo), taskIndex, checked);
 			dailySaved = result.status === "saved";
 			await this.reloadMemos(false, true).catch(() => false);
 		} catch {
@@ -5817,8 +5798,8 @@ export class KnomoView extends ItemView {
 		});
 	}
 
-	private getCatalogV2ReadService(): CatalogV2ReadService {
-		return this.catalogV2ReadService;
+	private getCatalogReadService(): CatalogReadService {
+		return this.catalogReadService;
 	}
 
 	private async copyText(text: string): Promise<void> {
@@ -5839,7 +5820,7 @@ export function retainOlderMemoWindow(memos: readonly MemoViewItem[], limit: num
 	return sorted.slice(Math.max(0, sorted.length - Math.max(1, Math.trunc(limit))));
 }
 
-function getCatalogV2DateRange(filter: SearchDateFilter | null, today: Date): { fromDate: string; toDate: string } | null {
+function getCatalogDateRange(filter: SearchDateFilter | null, today: Date): { fromDate: string; toDate: string } | null {
 	if (filter === null) return null;
 	const day = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 	if (filter === "last-7") return { fromDate: formatDatePart(addLocalDays(day, -6)), toDate: formatDatePart(day) };

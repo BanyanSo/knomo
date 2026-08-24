@@ -8,11 +8,11 @@ import type {
 import { isRecord } from "../utils/object";
 import { normalizeVaultPath } from "../utils/path";
 
-export const IDENTITY_LEDGER_RELATIVE_ROOT = "_knomo-data/identity/v3";
+export const IDENTITY_LEDGER_RELATIVE_ROOT = "_knomo-data/identity";
 
 const WRITER_ID_PATTERN = /^w_[a-f0-9]{32}$/u;
 const EVENT_ID_PATTERN = /^e_[a-f0-9]{32}$/u;
-const MEMO_ID_PATTERN = /^(?:[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}|m_[a-f0-9]{32})$/u;
+const MEMO_ID_PATTERN = /^(?:\d{16}|[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const CONTENT_HASH_PATTERN = /^fnv1a-[a-f0-9]{8}$/u;
 const LOGICAL_DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/u;
@@ -136,6 +136,10 @@ export function getIdentityLedgerSegmentPath(
 
 export async function sha256IdentityLedgerText(value: string): Promise<string> {
 	return sha256Bytes(new TextEncoder().encode(value));
+}
+
+export async function sha256IdentityLedgerBytes(bytes: Uint8Array): Promise<string> {
+	return sha256Bytes(bytes);
 }
 
 export function toIdentityLedgerObservationEvidence(

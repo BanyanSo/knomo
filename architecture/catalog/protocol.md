@@ -1,0 +1,129 @@
+# Catalog 架构协议
+
+## 1. 状态与命名
+
+本文件描述 Knomo 当前唯一的 Catalog 架构。对外已发布基线是 `1.2.9`，该版本只有 Daily、Monthly 和 `_knomo-system` 下的旧 Memo Index，不包含 Catalog 协议。
+
+业务模块、类型、配置键和存储目录使用稳定语义名，不使用开发阶段编号：
+
+- `CatalogIndexCoordinator`：维护本机可重建索引；
+- `CatalogReadService`：组合 Catalog observation 与 Identity Ledger；
+- `MemoCommandService`：协调 Daily 正文与身份增强操作；
+- `DailyMemoWriteGateway`：提交带 revision 校验的 Daily 修改；
+- `MonthlyProjection`：从 Daily 派生月度投影。
+
+`schemaVersion`、IndexedDB database version 和 renderer version 仍可使用整数。它们描述持久化格式，不是并行存在的业务架构。
+
+## 2. 数据边界
+
+### 2.1 Daily 是正文真相
+
+- memo 正文只以 Daily 文件中的 Markdown block 为准；
+- Catalog、Identity Ledger 或 Monthly 都不能隐藏 Daily 中真实存在的 observation；
+- 普通 create、edit、task、copy、move、remove 和 restore 不得写入内部 ID、HTML comment、frontmatter 或隐藏字符；
+- 只有用户显式创建 Obsidian block reference 时，才允许把 block ID 作为用户正文写入。
+
+### 2.2 Catalog 是本机派生缓存
+
+- Catalog 存储在本机 IndexedDB，可随时删除并从 Daily 重建；
+- Catalog 保存 observation、搜索字段、过滤字段和聚合，不承担 memo 身份；
+- observation 以文件 revision、行范围和 raw block hash 形成写入校验句柄；
+- Catalog 不向 Vault 写共享状态，也不作为 Monthly 的主数据来源。
+
+### 2.3 Identity Ledger 是可选增强数据
+
+- `memoId` 是唯一 memo 身份；新记录生成 UUIDv7；
+- Identity Ledger 只保存 claim、rebind、relation、review、recoverable delete、restore 和 repair 等不可由正文重建的信息；
+- identity 缺失或同步中时，已扫描正文仍可查看和安全编辑；
+- 局部冲突只降级相关 memo 的身份能力，不阻断其他 observation；
+- Identity Ledger 到达后增强原 observation，不创建第二份正文卡片。
+
+### 2.4 Monthly 是派生投影
+
+- Monthly 直接以实际 Daily 与有效共享配置为输入；
+- Catalog 只用于发现待投影范围，不得充当正文来源；
+- 投影失败独立标记 stale 或 failed，不改变 Daily 保存结果。
+
+## 3. 稳定存储路径
+
+所有增强数据只位于用户配置的 Knomo Data Root 内：
+
+```text
+<knomoDataRoot>/_knomo-data/identity/
+<knomoDataRoot>/_knomo-data/config/
+```
+
+路径本身不携带协议编号。事件内部通过 `schemaVersion` 校验格式。插件不得扫描其他目录来猜测数据根。
+
+旧版兼容输入只允许来自：
+
+```text
+<knomoDataRoot>/_knomo-system/
+```
+
+旧目录是只读迁移源；迁移不得覆盖、追加、移动或删除其中的任何字节。
+
+## 4. 从 1.2.9 直接迁移
+
+升级只执行 `Legacy Index -> Identity Ledger`，不存在中间控制面迁移：
+
+1. `LegacyIndexReader` 精确读取当前配置根中的 Memo Index 和旧 review 状态；
+2. `LegacyIndexMigrationService` 只接受能够由当前 Daily observation 唯一验证的关系；
+3. 旧的 16 位数字 `memoId` 原样保留，之后新建 memo 继续生成 UUIDv7；
+4. 迁移事件 ID 和内容由来源证据确定，相同输入重复执行不会产生重复事件；
+5. 同一 `memoId` 出现不一致同步副本、摘要失败或无法唯一匹配时，只记录诊断并跳过；
+6. Daily、旧 Index 和旧插件数据全程只读；Time Buoy 与 Monthly 继续从当前数据重建。
+
+## 5. 写入顺序
+
+### 5.1 创建
+
+```text
+create_intent -> Daily commit -> claim
+```
+
+- intent 失败：Daily 仍可保存，返回 identity pending；
+- Daily 失败：不得写 claim，未绑定 intent 不产生可见 memo；
+- claim 失败：正文保存成功，后续按幂等规则续写身份。
+
+### 5.2 编辑、任务和移动
+
+- 先以 observation revision 校验并提交 Daily；
+- 内容层成功后再追加 rebind；
+- rebind 失败只标记 identity pending，不回滚已成功正文；
+- move 的来源删除失败时，只能回滚未被并发修改的目标；无法安全回滚时保留正文并明确报告 content pending。
+
+### 5.3 可恢复删除与恢复
+
+删除顺序：
+
+```text
+delete_payload -> Daily remove -> delete_commit
+```
+
+恢复顺序：
+
+```text
+Daily restore -> identity restore
+```
+
+payload 未持久化时不得删除 Daily。只有 `delete_commit` 完成后记录才进入废纸篓。Daily 删除或恢复已经成功时，后续身份失败只能标记 pending，不得重复正文操作。
+
+## 6. 失败与重建
+
+- IndexedDB 不可用：切换到有界内存 Catalog，并从 Daily 渐进扫描；
+- Identity Ledger 不可用：正文能力继续，纯身份操作拒绝或 pending；
+- 共享配置缺失：使用本机可用配置扫描，同时明确范围可能不完整；
+- 共享配置冲突：Daily 与 Catalog 继续，Monthly 暂停覆盖；
+- 数据根迁移：按 `copy -> verify -> update setting` 执行，旧根保留；
+- 任一重建或迁移都不得改变 Daily 字节。
+
+## 7. 机器可读协议
+
+当前事件 schema 与示例位于：
+
+```text
+docs/architecture/catalog/
+```
+
+生产入口不得重新引入带开发阶段编号的 Catalog 模块、配置键、数据库名或 Vault 路径。

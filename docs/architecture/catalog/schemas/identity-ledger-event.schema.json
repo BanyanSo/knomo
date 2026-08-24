@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knomo.local/schemas/catalog/identity-ledger-event-v1.json",
+  "title": "Knomo Identity Ledger Event V1",
+  "type": "object",
+  "required": ["schemaVersion", "eventId", "writerId", "memoId", "type", "baseBindingId", "occurredAt", "evidence"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "eventId": { "$ref": "#/$defs/eventId" },
+    "writerId": { "$ref": "#/$defs/writerId" },
+    "memoId": { "$ref": "#/$defs/memoId" },
+    "type": {
+      "enum": ["create_intent", "claim", "rebind", "repair", "relation", "review", "delete_payload", "delete_commit", "restore"]
+    },
+    "baseBindingId": {
+      "anyOf": [{ "$ref": "#/$defs/eventId" }, { "type": "null" }]
+    },
+    "occurredAt": { "type": "string", "minLength": 1 },
+    "evidence": { "type": "object" }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "create_intent" },
+            "evidence": { "$ref": "#/$defs/createIntentEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "claim" },
+            "evidence": { "$ref": "#/$defs/claimEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "rebind" },
+            "evidence": { "$ref": "#/$defs/rebindEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "repair" },
+            "evidence": { "$ref": "#/$defs/observationEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "relation" },
+            "evidence": { "$ref": "#/$defs/relationEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "review" },
+            "evidence": { "$ref": "#/$defs/reviewEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "delete_payload" },
+            "evidence": { "$ref": "#/$defs/deletePayloadEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "delete_commit" },
+            "evidence": { "$ref": "#/$defs/deleteCommitEvidence" }
+          }
+        },
+        {
+          "properties": {
+            "type": { "const": "restore" },
+            "evidence": { "$ref": "#/$defs/restoreEvidence" }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "eventId": { "type": "string", "pattern": "^e_[a-f0-9]{32}$" },
+    "writerId": { "type": "string", "pattern": "^w_[a-f0-9]{32}$" },
+    "memoId": {
+      "type": "string",
+      "pattern": "^(?:\\d{16}|[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$"
+    },
+    "contentHash": { "type": "string", "pattern": "^fnv1a-[a-f0-9]{8}$" },
+    "observation": {
+      "type": "object",
+      "required": ["sourcePath", "sourceRevision", "rawBlockHash", "logicalDate", "section", "startLine", "endLine", "time", "contentHash"],
+      "properties": {
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "sourceRevision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "rawBlockHash": { "$ref": "#/$defs/contentHash" },
+        "logicalDate": { "type": "string", "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])$" },
+        "section": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "startLine": { "type": "integer", "minimum": 0 },
+        "endLine": { "type": "integer", "minimum": 0 },
+        "time": { "type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?$" },
+        "contentHash": { "$ref": "#/$defs/contentHash" }
+      },
+      "additionalProperties": false
+    },
+    "observationEvidence": {
+      "type": "object",
+      "required": ["observation"],
+      "properties": { "observation": { "$ref": "#/$defs/observation" } },
+      "additionalProperties": false
+    },
+    "createIntentEvidence": {
+      "type": "object",
+      "required": ["targetPath", "logicalDate", "time", "contentHash", "sourceMemoId"],
+      "properties": {
+        "targetPath": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "logicalDate": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "time": { "type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?$" },
+        "contentHash": { "$ref": "#/$defs/contentHash" },
+        "sourceMemoId": { "anyOf": [{ "$ref": "#/$defs/memoId" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "claimEvidence": {
+      "type": "object",
+      "required": ["observation", "createIntentEventId"],
+      "properties": {
+        "observation": { "$ref": "#/$defs/observation" },
+        "createIntentEventId": { "anyOf": [{ "$ref": "#/$defs/eventId" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "rebindEvidence": {
+      "type": "object",
+      "required": ["observation", "reason"],
+      "properties": {
+        "observation": { "$ref": "#/$defs/observation" },
+        "reason": { "enum": ["edit", "move", "rename", "restore", "manual_resolution"] }
+      },
+      "additionalProperties": false
+    },
+    "relationEvidence": {
+      "type": "object",
+      "required": ["sourceMemoId"],
+      "properties": {
+        "sourceMemoId": { "anyOf": [{ "$ref": "#/$defs/memoId" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "reviewEvidence": {
+      "type": "object",
+      "required": ["reviewedAt"],
+      "properties": { "reviewedAt": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "deletePayloadEvidence": {
+      "type": "object",
+      "required": ["deletedAt", "sourcePath", "deletedSourceRevision", "logicalDate", "section", "rawBlock", "contentHash", "sourceMemoId"],
+      "properties": {
+        "deletedAt": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "deletedSourceRevision": {
+          "anyOf": [{ "type": "string", "pattern": "^[a-f0-9]{64}$" }, { "type": "null" }]
+        },
+        "logicalDate": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "section": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "rawBlock": { "type": "string", "minLength": 1 },
+        "contentHash": { "$ref": "#/$defs/contentHash" },
+        "sourceMemoId": { "anyOf": [{ "$ref": "#/$defs/memoId" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "deleteCommitEvidence": {
+      "type": "object",
+      "required": ["deleteEventId"],
+      "properties": { "deleteEventId": { "$ref": "#/$defs/eventId" } },
+      "additionalProperties": false
+    },
+    "restoreEvidence": {
+      "type": "object",
+      "required": ["observation", "deleteEventId"],
+      "properties": {
+        "observation": { "$ref": "#/$defs/observation" },
+        "deleteEventId": { "$ref": "#/$defs/eventId" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

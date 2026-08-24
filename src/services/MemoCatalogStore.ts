@@ -7,8 +7,8 @@ import type {
 	CatalogObservation,
 	CatalogQuery,
 	CatalogQueryPage,
+	CatalogResolutionSnapshot,
 	CatalogStoreLifecycle,
-	CatalogV2ResolutionSnapshot,
 } from "../types/catalog";
 
 export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
@@ -37,8 +37,8 @@ export interface MemoCatalogStore {
 	getMeta<T>(key: string): Promise<T | null>;
 	setMeta<T>(key: string, value: T): Promise<void>;
 	deleteMeta(key: string): Promise<void>;
-	loadResolutionSnapshot(): Promise<CatalogV2ResolutionSnapshot | null>;
-	saveResolutionSnapshot(snapshot: CatalogV2ResolutionSnapshot): Promise<void>;
+	loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null>;
+	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void>;
 	clear(): Promise<void>;
 }
 
@@ -195,12 +195,12 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		this.metadata.delete(key);
 	}
 
-	async loadResolutionSnapshot(): Promise<CatalogV2ResolutionSnapshot | null> {
-		return this.getMeta<CatalogV2ResolutionSnapshot>("catalogV2ResolutionSnapshot");
+	async loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
+		return this.getMeta<CatalogResolutionSnapshot>("catalogResolutionSnapshot");
 	}
 
-	async saveResolutionSnapshot(snapshot: CatalogV2ResolutionSnapshot): Promise<void> {
-		await this.setMeta("catalogV2ResolutionSnapshot", snapshot);
+	async saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void> {
+		await this.setMeta("catalogResolutionSnapshot", snapshot);
 	}
 
 	async clear(): Promise<void> {
@@ -345,10 +345,10 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	getMeta<T>(key: string): Promise<T | null> { return this.run((store) => store.getMeta<T>(key)); }
 	setMeta<T>(key: string, value: T): Promise<void> { return this.run((store) => store.setMeta(key, value)); }
 	deleteMeta(key: string): Promise<void> { return this.run((store) => store.deleteMeta(key)); }
-	loadResolutionSnapshot(): Promise<CatalogV2ResolutionSnapshot | null> {
+	loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
 		return this.run((store) => store.loadResolutionSnapshot());
 	}
-	saveResolutionSnapshot(snapshot: CatalogV2ResolutionSnapshot): Promise<void> {
+	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void> {
 		return this.run((store) => store.saveResolutionSnapshot(snapshot));
 	}
 	clear(): Promise<void> { return this.run((store) => store.clear()); }

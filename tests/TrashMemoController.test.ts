@@ -14,9 +14,7 @@ test("tracks deleted memo ids once and refreshes the trash snapshot", async () =
 		listDeletedMemos: async () => deletedMemos,
 		restoreMemo: async () => deletedMemos[0],
 		handleRestoredMemo: () => {},
-		purgeDeletedMemo: async () => {},
 		isTrashActive: () => false,
-		confirmPurge: async () => true,
 		showNotice: () => {},
 		forceRefreshViews: async () => {},
 		requestRender: (target) => renderTargets.push(target),
@@ -51,9 +49,7 @@ test("loads trash once while busy and preserves loading render transitions", asy
 		},
 		restoreMemo: async () => makeMemo("memo-1"),
 		handleRestoredMemo: () => {},
-		purgeDeletedMemo: async () => {},
 		isTrashActive: () => true,
-		confirmPurge: async () => true,
 		showNotice: () => {},
 		forceRefreshViews: async () => {},
 		requestRender: (target) => renderTargets.push(target),
@@ -100,9 +96,7 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 		handleRestoredMemo: (deletedMemo, memoAfterRestore) => {
 			handledRestoredMemos.push({ deletedMemo, restoredMemo: memoAfterRestore });
 		},
-		purgeDeletedMemo: async () => {},
 		isTrashActive: () => false,
-		confirmPurge: async () => true,
 		showNotice: (message) => notices.push(message),
 		forceRefreshViews: async () => {
 			forceRefreshCalls += 1;
@@ -134,87 +128,6 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 	assert.deepEqual(renderTargets, ["card-flow", "card-flow"]);
 });
 
-test("purge requires confirmation and preserves force refresh behavior", async () => {
-	const { TrashMemoController } = await loadController();
-	const memo = makeMemo("memo-1");
-	const renderTargets: TrashMemoRenderTarget[] = [];
-	let confirmed = false;
-	let purgeCalls = 0;
-	let purgedMemo: MemoRecord | null = null;
-	let forceRefreshCalls = 0;
-	const controller = new TrashMemoController({
-		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
-		listDeletedMemos: async () => [memo],
-		restoreMemo: async () => memo,
-		handleRestoredMemo: () => {},
-		purgeDeletedMemo: async (memoToPurge) => {
-			purgeCalls += 1;
-			purgedMemo = memoToPurge;
-		},
-		isTrashActive: () => false,
-		confirmPurge: async () => confirmed,
-		showNotice: () => {},
-		forceRefreshViews: async () => {
-			forceRefreshCalls += 1;
-		},
-		requestRender: (target) => renderTargets.push(target),
-	});
-	await controller.loadTrashMemos();
-	renderTargets.length = 0;
-
-	await controller.handleTrashAction("purge", memo);
-	assert.equal(purgeCalls, 0);
-	assert.equal(controller.getSnapshot().trashCount, 1);
-	assert.deepEqual(renderTargets, []);
-
-	confirmed = true;
-	await controller.handleTrashAction("purge", memo);
-	assert.equal(purgeCalls, 1);
-	assert.equal(purgedMemo, memo);
-	assert.equal(forceRefreshCalls, 1);
-	assert.equal(controller.getSnapshot().trashCount, 0);
-	assert.deepEqual(controller.getSnapshot().trashMemos, []);
-	assert.deepEqual(renderTargets, ["card-flow", "card-flow"]);
-});
-
-test("purge waits for asynchronous confirmation and suppresses duplicate prompts", async () => {
-	const { TrashMemoController } = await loadController();
-	const memo = makeMemo("memo-1");
-	let confirmCalls = 0;
-	let purgeCalls = 0;
-	let resolveConfirmation!: (confirmed: boolean) => void;
-	const confirmation = new Promise<boolean>((resolve) => {
-		resolveConfirmation = resolve;
-	});
-	const controller = new TrashMemoController({
-		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
-		listDeletedMemos: async () => [memo],
-		restoreMemo: async () => memo,
-		handleRestoredMemo: () => {},
-		purgeDeletedMemo: async () => {
-			purgeCalls += 1;
-		},
-		isTrashActive: () => false,
-		confirmPurge: () => {
-			confirmCalls += 1;
-			return confirmation;
-		},
-		showNotice: () => {},
-		forceRefreshViews: async () => {},
-		requestRender: () => {},
-	});
-
-	const firstAction = controller.handleTrashAction("purge", memo);
-	const duplicateAction = controller.handleTrashAction("purge", memo);
-	await Promise.resolve();
-
-	assert.equal(confirmCalls, 1);
-	assert.equal(purgeCalls, 0);
-	resolveConfirmation(true);
-	await Promise.all([firstAction, duplicateAction]);
-	assert.equal(purgeCalls, 1);
-});
-
 test("restore 已成功后视图刷新失败不会再显示恢复失败", async () => {
 	const { TrashMemoController } = await loadController();
 	const memo = makeMemo("memo-1");
@@ -224,9 +137,7 @@ test("restore 已成功后视图刷新失败不会再显示恢复失败", async 
 		listDeletedMemos: async () => [memo],
 		restoreMemo: async () => ({ ...memo, status: "active" }),
 		handleRestoredMemo: () => {},
-		purgeDeletedMemo: async () => {},
 		isTrashActive: () => false,
-		confirmPurge: async () => true,
 		showNotice: (message) => notices.push(message),
 		forceRefreshViews: async () => { throw new Error("local refresh failed"); },
 		requestRender: () => {},

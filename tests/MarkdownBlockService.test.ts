@@ -753,7 +753,7 @@ test("formats numeric memoId alias for Obsidian block links", () => {
 	);
 });
 
-test("formats new reference aliases from createdAt without exposing Catalog v2 memoId", () => {
+test("formats new reference aliases from createdAt without exposing internal memoId", () => {
 	const memoId = "m_0123456789abcdef0123456789abcdef";
 	const referenceText = withCreatedAtAlias(
 		`[[Daily/2026-06-05#^abc123|${memoId}]]`,

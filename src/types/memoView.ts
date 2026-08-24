@@ -1,4 +1,4 @@
-import type { CatalogV2DeletedMemoItem, CatalogV2MemoItem } from "./catalogV2View";
+import type { CatalogMemoItem, TrashMemoItem } from "./catalogView";
 import type { DailyRef, MemoImageRef, MemoLinkRef, MemoReference, MemoStatus } from "./memo";
 
 // 仅供界面渲染与定位，不承担同步身份或 Monthly 快照职责。
@@ -16,16 +16,15 @@ export interface MemoViewItem {
 	sourceMemoId: string | null;
 	dailyRef: DailyRef;
 	deletedAt?: string;
-	deleteSource?: string;
-	catalogV2?: CatalogV2MemoItem;
-	catalogV2Deleted?: CatalogV2DeletedMemoItem;
+	catalog?: CatalogMemoItem;
+	trashItem?: TrashMemoItem;
 }
 
-export function isCatalogV2MemoView(item: MemoViewItem): item is MemoViewItem & { catalogV2: CatalogV2MemoItem } {
-	return item.catalogV2 !== undefined;
+export function isCatalogMemoView(item: MemoViewItem): item is MemoViewItem & { catalog: CatalogMemoItem } {
+	return item.catalog !== undefined;
 }
 
-export function toCatalogV2MemoView(item: CatalogV2MemoItem): MemoViewItem {
+export function toCatalogMemoView(item: CatalogMemoItem): MemoViewItem {
 	return {
 		id: item.key,
 		createdAt: item.createdAt,
@@ -44,21 +43,21 @@ export function toCatalogV2MemoView(item: CatalogV2MemoItem): MemoViewItem {
 			sectionType: item.observation.section === null ? "root" : "heading",
 			lineNumberHint: item.lineNumberHint,
 		},
-		catalogV2: item,
+		catalog: item,
 	};
 }
 
-export function isCatalogV2DeletedMemoView(item: MemoViewItem): item is MemoViewItem & { catalogV2Deleted: CatalogV2DeletedMemoItem } {
-	return item.catalogV2Deleted !== undefined;
+export function isTrashMemoView(item: MemoViewItem): item is MemoViewItem & { trashItem: TrashMemoItem } {
+	return item.trashItem !== undefined;
 }
 
-export function toCatalogV2DeletedMemoView(item: CatalogV2DeletedMemoItem): MemoViewItem {
+export function toTrashMemoView(item: TrashMemoItem): MemoViewItem {
 	return {
 		id: item.key,
 		createdAt: `${item.logicalDate}T00:00:00`,
 		updatedAt: item.deletedAt,
 		contentSnapshot: item.content,
-		contentHash: item.deleteVersion.payload.sha256,
+		contentHash: item.contentHash,
 		status: "deleted",
 		tags: [],
 		links: [],
@@ -72,6 +71,6 @@ export function toCatalogV2DeletedMemoView(item: CatalogV2DeletedMemoItem): Memo
 			lineNumberHint: null,
 		},
 		deletedAt: item.deletedAt,
-		catalogV2Deleted: item,
+		trashItem: item,
 	};
 }

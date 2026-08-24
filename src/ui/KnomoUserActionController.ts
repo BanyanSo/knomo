@@ -98,7 +98,6 @@ interface KnomoUserActionControllerOptions {
 	syncCardMenuState: () => void;
 	cancelComposerFromEscape: () => void;
 	closeOpenChromeFromEscape: () => void;
-	initializeCatalogVault?: () => Promise<void>;
 	refreshCatalogSyncState?: () => Promise<void>;
 	openCatalogSettings?: () => void;
 }
@@ -201,10 +200,6 @@ export class KnomoUserActionController {
 		}
 
 		if (route.type === "action") {
-			if (route.action === "initialize-catalog-vault") {
-				await this.options.initializeCatalogVault?.();
-				return;
-			}
 			if (route.action === "refresh-catalog-sync-state") {
 				await this.options.refreshCatalogSyncState?.();
 				return;

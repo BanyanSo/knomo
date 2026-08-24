@@ -63,7 +63,7 @@ export class MemoCatalogService {
 		return this.store.loadResolutionSnapshot();
 	}
 
-	saveResolutionSnapshot(snapshot: import("../types/catalog").CatalogV2ResolutionSnapshot) {
+	saveResolutionSnapshot(snapshot: import("../types/catalog").CatalogResolutionSnapshot) {
 		return this.store.saveResolutionSnapshot(snapshot);
 	}
 

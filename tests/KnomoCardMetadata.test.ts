@@ -73,24 +73,17 @@ test("builds card action and trash action metadata", () => {
 		{ action: "delete", className: "knomo-card-action is-danger" },
 	]);
 	assert.equal(getTrashActionClass("restore"), "knomo-inline-button");
-	assert.equal(getTrashActionClass("purge"), "knomo-inline-button is-danger");
 	assert.deepEqual(getTrashActionState("restore", null), { disabled: false, busy: false });
 	assert.deepEqual(getTrashActionState("restore", "restore"), { disabled: true, busy: true });
-	assert.deepEqual(getTrashActionState("purge", "restore"), { disabled: true, busy: false });
 	assert.deepEqual(getTrashCardActions("restore"), [
 		{
 			action: "restore",
 			className: "knomo-inline-button",
 			state: { disabled: true, busy: true },
 		},
-		{
-			action: "purge",
-			className: "knomo-inline-button is-danger",
-			state: { disabled: true, busy: false },
-		},
 	]);
 	assert.equal(getTrashMemoCardClass(null), "knomo-card knomo-trash-card");
-	assert.equal(getTrashMemoCardClass("purge"), "knomo-card knomo-trash-card is-busy");
+	assert.equal(getTrashMemoCardClass("restore"), "knomo-card knomo-trash-card is-busy");
 });
 
 test("只有明确无身份的 memo 才显示永久删除，identity 同步或冲突时暂停删除", () => {
@@ -98,7 +91,7 @@ test("只有明确无身份的 memo 才显示永久删除，identity 同步或�
 	assert.deepEqual(getMemoCardActions(memo), getMemoCardActions());
 	assert.deepEqual(getMemoCardActions({
 		...memo,
-		catalogV2: {
+		catalog: {
 			capabilities: makeCapabilities("conflicted"),
 		} as never,
 	}), [
@@ -110,25 +103,25 @@ test("只有明确无身份的 memo 才显示永久删除，identity 同步或�
 	]);
 	assert.equal(getMemoDeleteMode({
 		...memo,
-		catalogV2: {
+		catalog: {
 			capabilities: makeCapabilities("conflicted"),
 		} as never,
 	}), "unavailable");
 	assert.equal(getMemoDeleteMode({
 		...memo,
-		catalogV2: {
+		catalog: {
 			capabilities: makeCapabilities("syncing"),
 		} as never,
 	}), "unavailable");
 	assert.equal(getMemoDeleteMode({
 		...memo,
-		catalogV2: {
+		catalog: {
 			capabilities: makeCapabilities("absent"),
 		} as never,
 	}), "permanent");
 	assert.equal(getMemoDeleteMode({
 		...memo,
-		catalogV2: {
+		catalog: {
 			capabilities: makeCapabilities("ready"),
 		} as never,
 	}), "recoverable");
@@ -139,7 +132,7 @@ test("keeps the card menu available while identity actions are settling", () => 
 	assert.equal(isMemoCardMenuReady(memo), true);
 	assert.equal(isMemoCardMenuReady({
 		...memo,
-		catalogV2: {
+		catalog: {
 			capabilities: makeCapabilities("syncing"),
 		} as never,
 	}), true);

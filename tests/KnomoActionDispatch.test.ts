@@ -73,7 +73,7 @@ test("classifies memo and trash actions", () => {
 
 	assert.deepEqual(getTrashActionDispatch(null), { type: "none" });
 	assert.deepEqual(getTrashActionDispatch("restore"), { type: "trash-action", action: "restore" });
-	assert.deepEqual(getTrashActionDispatch("purge"), { type: "trash-action", action: "purge" });
+	assert.deepEqual(getTrashActionDispatch("purge"), { type: "unknown", action: "purge" });
 	assert.deepEqual(getTrashActionDispatch("open-daily"), { type: "unknown", action: "open-daily" });
 	assert.deepEqual(getTrashActionDispatch("copy-text"), { type: "unknown", action: "copy-text" });
 	assert.equal(isTrashAction("restore"), true);

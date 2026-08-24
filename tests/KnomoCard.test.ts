@@ -114,7 +114,7 @@ test("memo card menu keeps Markdown actions available while identity is settling
 	const capabilities = makeCapabilities("syncing");
 
 	renderKnomoMemoCard(root.asHtml(), makeMemo({
-		catalogV2: { capabilities } as never,
+		catalog: { capabilities } as never,
 	}), {
 		generation: 7,
 		renderIndex: 0,
@@ -147,7 +147,7 @@ test("P1 第 5 步：局部 identity conflict 只为当前 memo 暴露显式 rep
 	blockedCapabilities.identity.repair = "ready";
 
 	renderKnomoMemoCard(root.asHtml(), makeMemo({
-		catalogV2: {
+		catalog: {
 			capabilities: blockedCapabilities,
 			resolved: {
 				kind: "ambiguous",
@@ -257,7 +257,6 @@ test("trash memo cards do not get daily note card-open attributes", async () => 
 		busyAction: null,
 		formatDisplayTime: (value) => value,
 		formatOptionalTime: (value) => value ?? "",
-		formatDeleteSource: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -269,6 +268,7 @@ test("trash memo cards do not get daily note card-open attributes", async () => 
 	assert.equal(card?.getAttr("data-random-reunion-card"), null);
 	assert.equal(card?.getAttr("tabindex"), null);
 	assert.equal(root.find("[data-memo-time-open='daily']"), null);
+	assert.equal(root.find("[data-action='purge']"), null);
 });
 
 async function renderMemoCard(

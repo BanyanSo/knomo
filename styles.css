@@ -159,7 +159,6 @@ body {
 	--knomo-accent: var(--interactive-accent);
 	--knomo-accent-hover: var(--interactive-accent-hover, var(--interactive-accent));
 	--knomo-accent-soft: color-mix(in srgb, var(--interactive-accent) 15%, transparent);
-	--knomo-accent-text: var(--text-accent);
 
 	/* Shadows */
 	--knomo-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
@@ -2862,12 +2861,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	gap: 4px 12px;
 }
 
-.knomo-plugin .knomo-card-warning {
-	margin-top: 6px;
-	color: var(--text-error);
-	font-size: 12px;
-}
-
 .knomo-plugin .knomo-source-reference p {
 	margin: 0;
 }
@@ -2943,9 +2936,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-error);
 }
 
-.knomo-scan-result,
-.knomo-issue-list,
-.knomo-legacy-import-groups {
+.knomo-scan-result {
 	margin: var(--size-4-2) 0 var(--size-4-4);
 }
 
@@ -2972,39 +2963,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	.knomo-maintenance-setting .setting-item-control button {
 		flex: 0 1 auto;
 	}
-}
-
-.knomo-legacy-import-group {
-	padding: var(--size-4-2) 0;
-	border-bottom: var(--border-width) solid var(--background-modifier-border);
-}
-
-.knomo-legacy-import-label {
-	display: flex;
-	gap: var(--size-2-2);
-	align-items: center;
-	margin-bottom: var(--size-2-2);
-	color: var(--text-normal);
-}
-
-.knomo-legacy-import-samples {
-	padding-left: var(--size-4-6);
-}
-
-.knomo-issue-item {
-	padding: var(--size-4-2) 0;
-	border-bottom: var(--border-width) solid var(--background-modifier-border);
-}
-
-.knomo-issue-item:last-child {
-	border-bottom: 0;
-}
-
-.knomo-setting-code {
-	margin-bottom: var(--size-2-2);
-	font-family: var(--font-monospace);
-	color: var(--text-normal);
-	overflow-wrap: anywhere;
 }
 
 .knomo-plugin .knomo-muted-text {
@@ -4452,7 +4410,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 @media (max-width: 420px) {
 	.knomo-plugin.is-layout-mobile .knomo-content-column {
 		min-width: 232px;
-		padding: 0 12px 0;
 	}
 
 	.knomo-plugin .knomo-topbar {
@@ -4464,18 +4421,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 		margin-bottom: 18px;
 	}
 
-	.knomo-plugin .knomo-scope-wrap {
-		min-width: 0;
-	}
-
 	.knomo-plugin .knomo-search-wrap {
 		order: 3;
 		flex: 0 0 100%;
 		width: 100%;
-	}
-
-	.knomo-plugin .knomo-search-menu {
-		top: 44px;
 	}
 
 	.knomo-plugin .knomo-card-images--single {
@@ -4487,16 +4436,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	.knomo-plugin .knomo-card-images--single .knomo-card-image-button img {
 		width: 100%;
 		max-height: 180px;
-	}
-
-	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button {
-		aspect-ratio: 4 / 3;
-		height: auto;
-	}
-
-	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img {
-		height: 100%;
-		max-height: none;
 	}
 
 	.knomo-plugin .knomo-card-images--grid {

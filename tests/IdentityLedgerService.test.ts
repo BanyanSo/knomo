@@ -4,7 +4,6 @@ import test from "node:test";
 import type { App } from "obsidian";
 
 import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
-import { CatalogV3LegacyIdentityImporter } from "../src/services/CatalogV3LegacyIdentityImporter";
 import {
 	createIdentityLedgerMemoId,
 	getIdentityLedgerSegmentPath,
@@ -18,10 +17,7 @@ import type {
 	IdentityLedgerObservationEvidence,
 } from "../src/types/identityLedger";
 import type { MemoObservation } from "../src/types/catalog";
-import type { CatalogFileRevisionBatch } from "../src/types/catalog";
-import type { CatalogV2MaterializedState, DeletedMemoPayload, IdentityEvidence, StateOperation } from "../src/types/catalogV2";
-import type { LegacyIdentitySource } from "../src/types/legacyIdentityImport";
-import { CatalogV2ReplicaVault } from "./helpers/CatalogV2ReplicaVault";
+import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const WRITER_A = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const WRITER_B = "w_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -45,7 +41,36 @@ test("P0 第 4 步：memoId 使用 UUIDv7 且不依赖 Vault、正文或 observa
 	assert.notEqual(first, second);
 });
 
-test("P0 第 4 步：Identity Ledger 只接受冻结的九种 V3 基础事件", async () => {
+test("1.2.9 升级保留16位数字 memoId，新格式生成规则保持不变", async () => {
+	const legacyMemoId = "2026082212345601";
+	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
+	const event: IdentityLedgerEvent = {
+		schemaVersion: 1,
+		eventId: eventId(99),
+		writerId: WRITER_A,
+		memoId: legacyMemoId,
+		type: "claim",
+		baseBindingId: null,
+		occurredAt: "2026-08-22T12:34:56.000Z",
+		evidence: { observation, createIntentEventId: null },
+	};
+	const content = serializeIdentityLedgerSegment([event]);
+	const digest = await sha256IdentityLedgerText(content);
+	const parsed = await parseIdentityLedgerSegment(
+		IDENTITY_ROOT_A,
+		`${IDENTITY_ROOT_A}/writers/${WRITER_A}/segments/segment-${event.eventId}-${digest}.jsonl`,
+		content,
+	);
+
+	assert.equal(parsed.events[0]?.event.memoId, legacyMemoId);
+	assert.match(createIdentityLedgerMemoId(), /^[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u);
+	assert.throws(() => serializeIdentityLedgerSegment([{
+		...event,
+		memoId: "m_11111111111111111111111111111111",
+	}]), /Invalid Identity Ledger event/u);
+});
+
+test("Identity Ledger 只接受冻结的九种基础事件", async () => {
 	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
 	const base = {
 		schemaVersion: 1 as const,
@@ -161,7 +186,7 @@ test("P0 第 4 步：Identity Ledger 只接受冻结的九种 V3 基础事件", 
 	), /Invalid Identity Ledger event/u);
 });
 
-test("V3-ORDER-002/004：create_intent 单独存在时不产生幽灵 memo", async () => {
+test("create_intent 单独存在时不产生幽灵 memo", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1)]);
 	await service.initialize();
@@ -180,7 +205,7 @@ test("V3-ORDER-002/004：create_intent 单独存在时不产生幽灵 memo", asy
 	assert.equal(vault.paths().every((path) => path.startsWith(`${IDENTITY_ROOT_A}/`)), true);
 });
 
-test("V3-ORDER-001/003：claim 后原 observation 原地获得 memoId 和关系", async () => {
+test("claim 后原 observation 原地获得 memoId 和关系", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1), eventId(2), eventId(3)]);
 	await service.initialize();
@@ -200,7 +225,7 @@ test("V3-ORDER-001/003：claim 后原 observation 原地获得 memoId 和关系"
 	assert.equal(service.getSnapshot().pendingIntents.length, 0);
 });
 
-test("V3-ORDER-007：重启后从 durable intent 安全续写唯一 claim，不重复 Daily mutation", async () => {
+test("重启后从 durable intent 安全续写唯一 claim，不重复 Daily mutation", async () => {
 	const dailyPath = "Daily/2026-08-22.md";
 	const vault = await createLedgerVault({ [dailyPath]: "## Memos\n- 09:00 正文\n" });
 	const first = createService(vault, WRITER_A, [MEMO_A], [eventId(1)]);
@@ -235,10 +260,10 @@ test("P0 第 4 步：两台离线设备生成不同 memoId，事件任意合并�
 	await serviceA.finishCreate(await serviceA.beginCreate(createIntentInput(observationA)), observationA);
 	await serviceB.finishCreate(await serviceB.beginCreate(createIntentInput(observationB)), observationB);
 
-	const mergedAB = new CatalogV2ReplicaVault();
+	const mergedAB = new InMemoryVault();
 	mergedAB.deliverFrom(vaultA);
 	mergedAB.deliverFrom(vaultB);
-	const mergedBA = new CatalogV2ReplicaVault();
+	const mergedBA = new InMemoryVault();
 	mergedBA.deliverFrom(vaultB);
 	mergedBA.deliverFrom(vaultA);
 	const readerAB = createService(mergedAB, WRITER_A, [], []);
@@ -277,7 +302,7 @@ test("P0 第 4 步：删除本机 snapshot 后只从 immutable events 重建相�
 	assert.equal(vault.paths().some((path) => path.includes("/snapshots/")), false);
 });
 
-test("V3-FAIL-005：identity root 不可写时保留 create plan，但 claim 失败且不触碰 Daily", async () => {
+test("identity root 不可写时保留 create plan，但 claim 失败且不触碰 Daily", async () => {
 	const dailyPath = "Daily/2026-08-22.md";
 	const fixture = await createLedgerVault({ [dailyPath]: "## Memos\n" });
 	const app = {
@@ -308,7 +333,7 @@ test("V3-FAIL-005：identity root 不可写时保留 create plan，但 claim 失
 	assert.equal(fixture.read(dailyPath), before);
 });
 
-test("V3-ROOT-001/004：只读取用户配置根，其他目录中的 identity 不参与启动", async () => {
+test("只读取用户配置根，其他目录中的 identity 不参与启动", async () => {
 	const sourceVault = await createLedgerVault({}, IDENTITY_ROOT_B);
 	const source = createService(sourceVault, WRITER_B, [MEMO_B], [eventId(10), eventId(11)], () => IDENTITY_ROOT_B);
 	await source.initialize();
@@ -325,9 +350,9 @@ test("V3-ROOT-001/004：只读取用户配置根，其他目录中的 identity �
 	assert.equal(service.getSnapshot().eventCount, 0);
 });
 
-test("V3-ROOT-002/003：配置根缺失时不创建 identity，Daily 仍保持可用", async () => {
+test("配置根缺失时不创建 identity，Daily 仍保持可用", async () => {
 	const dailyPath = "Daily/2026-08-22.md";
-	const vault = new CatalogV2ReplicaVault({ [dailyPath]: "## Memos\n- 09:00 正文\n" });
+	const vault = new InMemoryVault({ [dailyPath]: "## Memos\n- 09:00 正文\n" });
 	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1)]);
 	await service.initialize();
 	const before = vault.snapshot();
@@ -551,7 +576,7 @@ test("P1 第 5 步：delete payload 不能隐藏 Daily 中仍存在的 observati
 	assert.equal(vault.read(dailyPath), dailyBefore);
 });
 
-test("V3-DELETE-003/004：payload 保持 pending，只有 delete_commit 后才进入废纸篓", async () => {
+test("payload 保持 pending，只有 delete_commit 后才进入废纸篓", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [MEMO_A], [
 		eventId(1), eventId(2), eventId(3), eventId(4), eventId(5),
@@ -587,7 +612,7 @@ test("V3-DELETE-003/004：payload 保持 pending，只有 delete_commit 后才�
 	assert.equal(restarted.getActiveDeletes().length, 0);
 });
 
-test("V3-DELETE-003：重启续跑只在 Daily 精确命中删除后 revision 时 finalize", async () => {
+test("重启续跑只在 Daily 精确命中删除后 revision 时 finalize", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1), eventId(2), eventId(3)]);
 	await service.initialize();
@@ -648,7 +673,7 @@ test("P0 Identity 性能：legacy events 使用有界批量 segment 且只导入
 			schemaVersion: 1,
 			eventId: eventId(index + 100),
 			writerId: WRITER_A,
-			memoId: `m_${(index + 1).toString(16).padStart(32, "0")}`,
+			memoId: `01991f40-7c00-7000-8000-${(index + 1).toString(16).padStart(12, "0")}`,
 			type: "claim",
 			baseBindingId: null,
 			occurredAt: "2026-08-22T06:00:00.000Z",
@@ -663,223 +688,8 @@ test("P0 Identity 性能：legacy events 使用有界批量 segment 且只导入
 	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 3);
 });
 
-test("P1 第 7 步：旧 V2 memoId、relation、review 与可恢复删除可幂等导入", async () => {
-	const vault = await createLedgerVault();
-	const target = createService(vault, WRITER_A, [], []);
-	await target.initialize();
-	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
-	const evidence = legacyEvidence(observation);
-	const deletedPayload: DeletedMemoPayload = {
-		kind: "knomo.catalog-v2.deleted-payload",
-		schemaVersion: 1,
-		memoId: MEMO_B,
-		deleteOpId: "o_66666666666666666666666666666666",
-		deletedAt: "2026-08-22T06:00:00.000Z",
-		sourcePath: "Daily/2026-08-21.md",
-		logicalDate: "2026-08-21",
-		section: "Memos",
-		rawBlock: "- 08:00 已删除正文",
-		contentHash: "fnv1a-22222222",
-		sourceMemoId: null,
-	};
-	const operations: StateOperation[] = [
-		legacyClaim("o_11111111111111111111111111111111", MEMO_A, evidence, 1),
-		legacyClaim("o_22222222222222222222222222222222", MEMO_B, {
-			...evidence,
-			sourcePath: deletedPayload.sourcePath,
-			logicalDate: deletedPayload.logicalDate,
-			time: "08:00",
-			contentHash: deletedPayload.contentHash,
-		}, 2),
-		legacyRelation(MEMO_A, MEMO_B, 3),
-		legacyReview(MEMO_A, 4, "2026-08-22T04:00:00.000Z"),
-		legacyReview(MEMO_A, 5, "2026-08-22T05:00:00.000Z"),
-	];
-	const state = makeLegacyState(evidence, deletedPayload);
-	const source: LegacyIdentitySource = {
-		load: async () => ({
-			kind: "ready",
-			snapshot: {
-				sourceKind: "catalog_v2",
-				sourceId: "v_11111111111111111111111111111111",
-				sourceRevision: "f".repeat(64),
-				state,
-				operations,
-				deletedPayloads: { [deletedPayload.deleteOpId]: deletedPayload },
-				diagnostics: [],
-			},
-		}),
-		isSourcePath: () => false,
-	};
-	const importer = new CatalogV3LegacyIdentityImporter(vault.app, source, target, {
-		getObservationBatches: async () => [makeBatch(observation)],
-	});
-
-	const first = await importer.run();
-	const second = await importer.run();
-
-	assert.equal(first.status, "ready");
-	assert.equal(first.importedEventCount, 7);
-	assert.equal(second.importedEventCount, 0);
-	assert.equal(target.resolveObservation(observation)?.memoId, MEMO_A);
-	assert.equal(target.getSourceMemoId(MEMO_A), MEMO_B);
-	assert.deepEqual(target.getReviewState(MEMO_A), {
-		reviewCount: 2,
-		lastReviewedAt: "2026-08-22T05:00:00.000Z",
-	});
-	assert.equal(target.getActiveDeletes()[0]?.memoId, MEMO_B);
-	assert.equal(target.getActiveDeletes()[0]?.evidence.rawBlock, deletedPayload.rawBlock);
-});
-
-function legacyEvidence(observation: MemoObservation): IdentityEvidence {
-	return {
-		sourcePath: observation.sourcePath,
-		sourceRevision: observation.sourceRevision,
-		logicalDate: observation.logicalDate,
-		section: observation.section,
-		startLine: observation.startLine,
-		endLine: observation.endLine,
-		time: observation.time,
-		contentHash: observation.contentHash,
-		existingBlockId: observation.existingBlockId,
-	};
-}
-
-function legacyClaim(
-	opId: string,
-	memoId: string,
-	evidence: IdentityEvidence,
-	sequence: number,
-): StateOperation {
-	return {
-		schemaVersion: 1,
-		writerId: WRITER_A,
-		sequence,
-		opId,
-		memoId,
-		occurredAt: `2026-08-22T0${sequence}:00:00.000Z`,
-		type: "identity.claim",
-		baseEvidence: null,
-		payload: { evidence, origin: "plugin_create", createIntentOpId: null },
-	};
-}
-
-function legacyRelation(memoId: string, sourceMemoId: string, sequence: number): StateOperation {
-	return {
-		schemaVersion: 1,
-		writerId: WRITER_A,
-		sequence,
-		opId: "o_33333333333333333333333333333333",
-		memoId,
-		occurredAt: "2026-08-22T03:00:00.000Z",
-		type: "relation.set_source",
-		baseEvidence: null,
-		payload: { sourceMemoId, supersedesRelationIds: [] },
-	};
-}
-
-function legacyReview(memoId: string, sequence: number, reviewedAt: string): StateOperation {
-	return {
-		schemaVersion: 1,
-		writerId: WRITER_A,
-		sequence,
-		opId: sequence === 4 ? "o_44444444444444444444444444444444" : "o_55555555555555555555555555555555",
-		memoId,
-		occurredAt: reviewedAt,
-		type: "review.record",
-		baseEvidence: null,
-		payload: { reviewedAt },
-	};
-}
-
-function makeLegacyState(evidence: IdentityEvidence, deletedPayload: DeletedMemoPayload): CatalogV2MaterializedState {
-	const activeMemo = {
-		memoId: MEMO_A,
-		identityOperationIds: ["o_11111111111111111111111111111111"],
-		activeBindingHeads: [{
-			entryId: "o_11111111111111111111111111111111",
-			source: "state" as const,
-			evidence,
-			baseBindingId: null,
-			baseEvidence: null,
-		}],
-		identityBindings: [],
-		deleteOperationIds: [],
-		deleteVersions: [],
-		restoreVersions: [],
-		restoredDeleteOperationIds: [],
-		purgedDeleteOperationIds: [],
-		relationEntries: [{ relationId: "o_33333333333333333333333333333333", sourceMemoId: MEMO_B }],
-		supersededRelationIds: [],
-		sourceMemoIds: [MEMO_B],
-		reviewOperationIds: ["o_44444444444444444444444444444444", "o_55555555555555555555555555555555"],
-		reviewCount: 2,
-		lastReviewedAt: "2026-08-22T05:00:00.000Z",
-		pendingCreateIds: [],
-		pendingCreateIntents: [],
-	};
-	const deletedEvidence: IdentityEvidence = {
-		...evidence,
-		sourcePath: deletedPayload.sourcePath,
-		logicalDate: deletedPayload.logicalDate,
-		time: "08:00",
-		contentHash: deletedPayload.contentHash,
-	};
-	const deletedMemo = {
-		...activeMemo,
-		memoId: MEMO_B,
-		identityOperationIds: ["o_22222222222222222222222222222222"],
-		activeBindingHeads: [{
-			entryId: "o_22222222222222222222222222222222",
-			source: "state" as const,
-			evidence: deletedEvidence,
-			baseBindingId: null,
-			baseEvidence: null,
-		}],
-		deleteOperationIds: [deletedPayload.deleteOpId],
-		deleteVersions: [{
-			deleteOpId: deletedPayload.deleteOpId,
-			entryId: deletedPayload.deleteOpId,
-			payload: { path: "Knomo/_knomo-data/state/deleted/payload.json", sha256: "1".repeat(64), byteLength: 1 },
-			baseEvidence: deletedEvidence,
-			baseBindingId: "o_22222222222222222222222222222222",
-		}],
-		relationEntries: [],
-		sourceMemoIds: [],
-		reviewOperationIds: [],
-		reviewCount: 0,
-		lastReviewedAt: null,
-	};
-	return {
-		schemaVersion: 1,
-		memos: { [MEMO_A]: activeMemo, [MEMO_B]: deletedMemo },
-		quarantine: [],
-		awaitingWriterIds: [],
-		forkedWriterIds: [],
-		processedOperationCount: 5,
-	};
-}
-
-function makeBatch(observation: MemoObservation): CatalogFileRevisionBatch<MemoObservation> {
-	return {
-		file: {
-			sourcePath: observation.sourcePath,
-			sourceRevision: observation.sourceRevision,
-			logicalDate: observation.logicalDate,
-			mtime: 0,
-			size: 0,
-			parserVersion: 3,
-			settingsFingerprint: "test",
-			observationCount: 1,
-			auditedAt: 0,
-		},
-		observations: [observation],
-		catalogRevision: 1,
-	};
-}
-
 function createService(
-	vault: CatalogV2ReplicaVault,
+	vault: InMemoryVault,
 	writerId: string,
 	memoIds: readonly string[],
 	eventIds: readonly string[],
@@ -899,8 +709,8 @@ function createService(
 async function createLedgerVault(
 	initialFiles: Readonly<Record<string, string>> = {},
 	rootPath = IDENTITY_ROOT_A,
-): Promise<CatalogV2ReplicaVault> {
-	const vault = new CatalogV2ReplicaVault(initialFiles);
+): Promise<InMemoryVault> {
+	const vault = new InMemoryVault(initialFiles);
 	await vault.app.vault.createFolder(rootPath);
 	await vault.app.vault.createFolder(`${rootPath}/writers`);
 	return vault;
@@ -960,13 +770,13 @@ function eventId(index: number): string {
 	return `e_${index.toString(16).padStart(32, "0")}`;
 }
 
-function cloneVault(source: CatalogV2ReplicaVault): CatalogV2ReplicaVault {
-	const target = new CatalogV2ReplicaVault();
+function cloneVault(source: InMemoryVault): InMemoryVault {
+	const target = new InMemoryVault();
 	target.deliverFrom(source);
 	return target;
 }
 
-function mergeVaults(first: CatalogV2ReplicaVault, second: CatalogV2ReplicaVault): CatalogV2ReplicaVault {
+function mergeVaults(first: InMemoryVault, second: InMemoryVault): InMemoryVault {
 	const target = cloneVault(first);
 	target.deliverFrom(second);
 	return target;

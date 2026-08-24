@@ -29,6 +29,15 @@ test("P2 第 8 步：V3 schemas/examples 必须纳入版本控制且与运行时
 	assert.equal(configValidator(config), true, JSON.stringify(configValidator.errors));
 	assert.doesNotThrow(() => assertIdentityLedgerEvent(identity));
 	assert.doesNotThrow(() => assertKnomoSharedConfigEvent(config));
+	const deleteCommit = {
+		...(identity as Record<string, unknown>),
+		eventId: "e_11111111111111111111111111111111",
+		type: "delete_commit",
+		baseBindingId: (identity as { eventId: string }).eventId,
+		evidence: { deleteEventId: "e_22222222222222222222222222222222" },
+	};
+	assert.equal(identityValidator(deleteCommit), true, JSON.stringify(identityValidator.errors));
+	assert.doesNotThrow(() => assertIdentityLedgerEvent(deleteCommit));
 	const invalidIdentity = structuredClone(identity) as Record<string, unknown>;
 	const evidence = invalidIdentity.evidence as { observation: Record<string, unknown> };
 	evidence.observation.existingBlockId = "knomo-internal";

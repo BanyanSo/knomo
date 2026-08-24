@@ -23,7 +23,7 @@
 | ID | 场景 | 必须结果 |
 | --- | --- | --- |
 | V3-COMPAT-001 | 当前配置 `knomoDataRoot=A`，其他目录存在旧协议或备份 | 只读取 A 对应的旧目录；旧 bootstrap 只有在其 Catalog root 严格等于 A 的规范路径时可用；不扫描其他目录 |
-| V3-COMPAT-002 | 对同一组已验证旧工件重复或重启执行 importer | Identity Ledger event 不重复；已确认 memoId、binding、relation、review 与可恢复删除 payload 一致 |
+| V3-COMPAT-002 | 对同一组已验证旧工件重复或重启执行 importer | Identity Ledger event 不重复；已确认 memoId、binding、relation、review 与可恢复删除 payload/commit 一致 |
 | V3-COMPAT-003 | 旧工件缺失、摘要失败、分叉或无法唯一匹配 Daily | 只产生局部诊断并跳过不确定记录；Daily observation 继续完整显示和安全编辑 |
 | V3-COMPAT-004 | 新安装或兼容导入后的正式运行时 | 不创建或写入 V2 bootstrap、generation、writer journal、mutation、migration 或 control artifact |
 | V3-COMPAT-005 | 旧 `CatalogV2InstallMode` 为任意值或旧 bootstrap 不存在 | 不改变 Catalog 展示状态，不成为 Markdown mutation 准入条件 |
@@ -37,7 +37,7 @@
 | V3-ROOT-002 | 已配置的数据目录或 Identity Ledger root 缺失 | identity=`missing/pending`；提示用户配置路径缺失；不得创建替代 root 或自动恢复 |
 | V3-ROOT-003 | V3-ROOT-002 下浏览、create、edit、task、copy 等普通 Markdown 操作 | Daily 正常扫描、展示和安全编辑；Identity follow-up 可 pending，不得进入 Vault initialization 门禁 |
 | V3-ROOT-004 | 用户手动把 A 移到 B，但尚未修改配置 | 仍只读取 A 并报告 missing；明确选择 B 且验证前不搜索、不切换 |
-| V3-ROOT-005 | 新安装或旧设置首次明确保存 Knomo Data Root | 允许创建 `<root>/_knomo-data/identity/v3/writers`；第 6 步在同一显式流程发布配置时还可创建 `schema/config/v1`；不创建固定 Vault root、全局 events 或 catalog |
+| V3-ROOT-005 | 新安装或旧设置尚未配置 Knomo Data Root 时启用插件 | 使用本机根目录或默认 `Knomo` 创建 `<root>/_knomo-data/identity/v3/writers`，持久化数据根并发布 `schema/config/v1`；不创建固定 Vault root、全局 events 或 catalog；失败不阻塞 Daily 且下次启用可重试 |
 | V3-ROOT-006 | 用户从设置将 A 改为 B | 暂停本机 identity 写入，按 `copy -> verify -> update config` 执行；所有 event 字节与 reducer 结果一致后才切换，旧根保留 |
 | V3-ROOT-007 | V3-ROOT-006 成功后重启 | 全部 `memoId`、binding、relation 和 review 不变；只读取 B |
 | V3-ROOT-008 | 迁移复制、碰撞或验证失败 | 配置保持 A，A 不删除，Daily 字节与可用性不受影响；允许对相同 A/B 显式重试 |
@@ -47,7 +47,7 @@
 
 | ID | 场景 | 必须结果 |
 | --- | --- | --- |
-| V3-CONFIG-001 | 共享配置缺失，本机 Daily Notes 和 Knomo 设置可用 | 使用本机配置输入、扫描和浏览；Catalog coverage 明确为 partial；初始化不写共享 Vault |
+| V3-CONFIG-001 | 共享配置缺失，本机 Daily Notes 和 Knomo 设置可用 | 启用时发布本机默认配置；已有配置不覆盖。发布失败时继续输入、扫描和浏览，本地扫描完成态与共享范围不完整分别报告 |
 | V3-CONFIG-002 | 同一有效配置同步到另一设备 | Daily 定位、heading aliases 和 Monthly renderer 设置采用同步配置，不读取 V2 contract/control plane |
 | V3-CONFIG-003 | 配置晚到或更新 | 按新 fingerprint 替换文件 partition；同一 observation 不重复，identity 不重新生成 |
 | V3-CONFIG-004 | 两设备基于同一 base 并发写入相同配置 | reducer 得到同一语义配置；到达顺序不影响结果 |
@@ -68,10 +68,10 @@
 | V3-OP-003 | create，intent 成功而 Daily 写失败 | Daily 不出现新 memo | intent 未绑定且不可见，可供诊断/续跑 | `rejected_no_daily_change` |
 | V3-OP-004 | edit/task/标签/图片/链接修改 | 通过 observation revision 校验后提交 | rebind/enrichment 失败仅 pending | Daily commit 后必须报告正文成功 |
 | V3-OP-005 | copy 为新 memo | 完整 Markdown 结构提交到目标 Daily | 新身份或 source relation 可 pending | Daily commit 后成功，不因 relation 失败回滚 |
-| V3-OP-006 | move，identity rebind 失败 | 内容恢复协议保证至少保留一份正文；不得因 identity 失败丢正文 | rebind pending | 仅在内容层 move 完成后报告成功 |
+| V3-OP-006 | move，来源删除或 identity rebind 失败 | 来源删除失败时精确回滚未被并发修改的目标；回滚不安全时保留两份正文并报告 content pending，始终至少保留一份正文 | 只有内容层 move 完成后才追加 rebind；失败则 pending | 仅在内容层 move 完成后报告成功 |
 | V3-OP-007 | 永久删除，identity 不可写 | 用户明确选择后删除 Daily block | 清理/事件可 pending | 成功，但明确不可从 Knomo 废纸篓恢复 |
 | V3-OP-008 | 可恢复删除，`delete_payload` 写失败 | Daily 逐字节不变 | 不得产生“已入废纸篓”状态 | `identity_failed_no_daily_change` |
-| V3-OP-009 | 可恢复删除，payload durable 后 Daily 删除失败 | Daily 仍保留正文 | payload 保留为未完成记录；tombstone 不得隐藏正文 | `rejected_no_daily_change` |
+| V3-OP-009 | 可恢复删除，payload durable 后 Daily 删除失败 | Daily 仍保留正文 | payload 保留为未完成记录且不得产生 `delete_commit`；tombstone 不得隐藏正文 | `rejected_no_daily_change` |
 | V3-OP-010 | restore 的 Daily 写失败 | Daily 不新增正文 | deleted payload 继续可恢复，不标记 restore 完成 | `rejected_no_daily_change` |
 | V3-OP-011 | relation/review/adoption/merge/repair 持久化失败 | Daily 不变 | 操作不提交，不降级为 observation 猜测 | `identity_failed_no_daily_change` |
 | V3-OP-012 | 用户显式创建 Obsidian block reference | 作为正文提交 | block ID 不进入内部 identity 判断 | Daily commit 后成功 |
@@ -93,7 +93,7 @@
 | V3-FAIL-011 | Daily create/edit/task/copy 写失败 | 返回失败，Daily 保持原状态；Catalog/Monthly 不采用预期内容；intent 不产生可见 memo |
 | V3-FAIL-012 | Daily permanent/recoverable delete 写失败 | observation 继续显示；identity tombstone 不得隐藏它；可恢复 payload 保留有效 |
 | V3-FAIL-013 | 单 memo 出现多个 identity successor | 仅该 memo 的身份为 conflicted；当前 observation 与无关 memo 的内容能力继续；不得静默任选 |
-| V3-FAIL-014 | Catalog coverage 为 partial | 已覆盖 memo 可浏览；完整统计、全量随机池等能力不得伪装 complete |
+| V3-FAIL-014 | 本地 Catalog 扫描仍为 partial | 已覆盖 memo 可浏览；完整统计、全量随机池等能力不得伪装 complete。仅共享配置缺失而本地扫描已完成时，本地功能可用但必须提示范围可能不完整 |
 
 ## 4. 创建与乱序验收
 
@@ -127,10 +127,11 @@
 | --- | --- | --- |
 | V3-DELETE-001 | Identity 不可用，用户选择可恢复删除 | 拒绝，Daily 逐字节不变，并明确说明暂时无法保证恢复 |
 | V3-DELETE-002 | Identity 不可用，用户明确改选永久删除 | 允许按 Daily revision 校验后删除，明确不提供 Knomo restore |
-| V3-DELETE-003 | payload 已 durable，Daily 删除成功，后续 identity finalize 失败 | 正文删除成功；保留 pending 并可续跑，不把正文操作报为失败 |
+| V3-DELETE-003 | payload 已 durable，Daily 删除成功，后续 `delete_commit` 失败 | 正文删除成功；保留 pending；仅在源 Daily 精确命中预期删除后 revision 时续跑，不把正文操作报为失败 |
 | V3-DELETE-004 | payload 已 durable，Daily 删除失败 | 正文仍显示；payload 不得令正文消失，也不得显示为已完成删除 |
 | V3-DELETE-005 | restore 写回 Daily 成功，identity finalize 失败 | 正文恢复成功且可见；identity 状态 pending，不重复写正文 |
 | V3-DELETE-006 | 只有 tombstone/delete event，Daily block 仍存在 | observation 仍显示；身份状态可以提示冲突，但不能覆盖内容真相 |
+| V3-DELETE-007 | 只有 `delete_payload`，没有 `delete_commit` | 不进入用户废纸篓；作为 pending 保留，restore 不可见 |
 
 ## 7. Vault clone 与身份验收
 

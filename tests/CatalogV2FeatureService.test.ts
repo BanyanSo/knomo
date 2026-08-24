@@ -563,9 +563,36 @@ test("P1 第 5 步：V3 repair 与 adoption 都只走 Identity Ledger", async ()
 	assert.equal(adoptionCalls, 1);
 });
 
+test("永久删除在执行前重查身份，拒绝沿用过期的无身份 UI 决策", async () => {
+	const observation = makeObservation("Daily/2026-08-09.md", "a".repeat(64), 1);
+	let removeCalls = 0;
+	const markdownMutations = {
+		remove: async () => {
+			removeCalls += 1;
+			return committedMarkdownResult(observation);
+		},
+	} as unknown as MarkdownMutationService;
+	const service = await createV3FeatureService(
+		observation,
+		makeIdentityLedgerMutationMock(observation),
+		markdownMutations,
+	);
+	const item = (await service.getReadService().query({ limit: 1 })).items[0];
+	assert.ok(item !== undefined);
+	item.capabilities.identity.recoverableDelete = "absent";
+
+	await assert.rejects(
+		() => service.removePermanently(item),
+		/requires a current memo without recoverable identity/u,
+	);
+	assert.equal(removeCalls, 0);
+});
+
 test("P1 第 7 步：可恢复删除先持久化 payload 再删 Daily，恢复先写正文再追加 restore", async () => {
 	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1);
 	const order: string[] = [];
+	let failDeleteCommit = false;
+	let pendingDelete: IdentityLedgerDeleteRecord | null = null;
 	let activeDelete: IdentityLedgerDeleteRecord | null = null;
 	const baseLedger = makeIdentityLedgerMutationMock(observation);
 	const binding = baseLedger.resolveObservation(observation);
@@ -573,14 +600,23 @@ test("P1 第 7 步：可恢复删除先持久化 payload 再删 Daily，恢复�
 	const identityLedger: IdentityLedgerMutationService = {
 		...baseLedger,
 		getActiveDeletes: () => activeDelete === null ? [] : [activeDelete],
+		getPendingDeletes: () => pendingDelete === null ? [] : [pendingDelete],
 		recordDeletePayload: async (current, evidence) => {
 			order.push("identity-delete-payload");
-			activeDelete = {
+			pendingDelete = {
 				memoId: current.memoId,
 				deleteEventId: "e_33333333333333333333333333333333",
+				deleteCommitEventId: null,
 				baseBindingId: current.bindingId,
 				evidence,
 			};
+			return pendingDelete;
+		},
+		recordDeleteCommit: async (record) => {
+			order.push("identity-delete-commit");
+			if (failDeleteCommit) throw new Error("identity unavailable");
+			activeDelete = { ...record, deleteCommitEventId: "e_44444444444444444444444444444444" };
+			pendingDelete = null;
 			return activeDelete;
 		},
 		recordRestore: async (_record, restored) => {
@@ -593,7 +629,7 @@ test("P1 第 7 步：可恢复删除先持久化 payload 再删 Daily，恢复�
 	const markdownMutations = {
 		captureObservation: async () => {
 			order.push("capture-daily");
-			return { observation, rawBlock };
+			return { observation, rawBlock, deletedSourceRevision: "b".repeat(64) };
 		},
 		remove: async () => {
 			order.push("remove-daily");
@@ -618,8 +654,14 @@ test("P1 第 7 步：可恢复删除先持久化 payload 再删 Daily，恢复�
 	const item = (await service.getReadService().query({ limit: 1 })).items[0];
 	assert.ok(item !== undefined);
 
-	await service.delete(item);
-	assert.deepEqual(order, ["capture-daily", "identity-delete-payload", "remove-daily"]);
+	const deletedResult = await service.delete(item);
+	assert.equal(deletedResult.followUpPending, false);
+	assert.deepEqual(order, [
+		"capture-daily",
+		"identity-delete-payload",
+		"remove-daily",
+		"identity-delete-commit",
+	]);
 	const deleteRecord = identityLedger.getActiveDeletes?.()[0];
 	assert.ok(deleteRecord !== undefined);
 	await service.restore({
@@ -630,10 +672,24 @@ test("P1 第 7 步：可恢复删除先持久化 payload 再删 Daily，恢复�
 		"capture-daily",
 		"identity-delete-payload",
 		"remove-daily",
+		"identity-delete-commit",
 		"restore-daily",
 		"identity-restore",
 	]);
 	assert.equal(activeDelete, null);
+
+	order.length = 0;
+	failDeleteCommit = true;
+	const pendingResult = await service.delete(item);
+	assert.equal(pendingResult.followUpPending, true);
+	assert.deepEqual(order, [
+		"capture-daily",
+		"identity-delete-payload",
+		"remove-daily",
+		"identity-delete-commit",
+	]);
+	assert.equal(identityLedger.getActiveDeletes?.().length, 0);
+	assert.equal(identityLedger.getPendingDeletes?.().length, 1);
 });
 
 async function createReadStateService(

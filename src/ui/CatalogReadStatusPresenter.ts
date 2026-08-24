@@ -26,7 +26,9 @@ export function getCatalogReadStatusHeaders(
 	if (options.status.catalog === "degraded") {
 		headers.push(summary(t("catalog.storageUnavailable"), t("catalog.retryLocalStorage"), "refresh-catalog-sync-state"));
 	} else if (options.status.catalog === "partial") {
-		headers.push(summary(coverageText, t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
+		headers.push(options.coverage?.sharedConfigurationComplete === false
+			? summary(t("catalog.sharedConfigurationPartial"), t("catalog.openDiagnostics"), "open-catalog-settings")
+			: summary(coverageText, t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
 	}
 
 	if (options.status.identity === "syncing") {

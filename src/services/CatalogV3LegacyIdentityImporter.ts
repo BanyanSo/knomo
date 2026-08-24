@@ -113,11 +113,12 @@ export class CatalogV3LegacyIdentityImporter {
 		const observationMatches = resolveLegacyObservations(source, batches);
 		const writerId = await deterministicWriterId(source.sourceId);
 		const claims: IdentityLedgerEvent[] = [];
+		const initialSnapshot = this.target.getSnapshot();
 		const importedMemoIds = new Set<string>();
 		const skippedMemoIds = new Set<string>();
 		const plans = new Map<string, LegacyMemoImportPlan>();
 		for (const memo of Object.values(source.state.memos).sort((left, right) => left.memoId.localeCompare(right.memoId))) {
-			const existing = this.target.getSnapshot().memos[memo.memoId];
+			const existing = initialSnapshot.memos[memo.memoId];
 			if (!isSupportedMemoId(memo.memoId)) {
 				skippedMemoIds.add(memo.memoId);
 				diagnostics.push(diagnostic("legacy_memo_id_unsupported", null, memo.memoId, "The legacy memoId does not match a frozen V3 format."));
@@ -170,8 +171,9 @@ export class CatalogV3LegacyIdentityImporter {
 
 		let importedEventCount = await this.target.importVerifiedLegacyEvents(claims);
 		const metadataEvents: IdentityLedgerEvent[] = [];
+		const claimedSnapshot = this.target.getSnapshot();
 		for (const [memoId, plan] of plans) {
-			const current = this.target.getSnapshot().memos[memoId];
+			const current = claimedSnapshot.memos[memoId];
 			const binding = current?.bindings.length === 1 ? current.bindings[0] ?? plan.binding : plan.binding;
 			metadataEvents.push(...await buildMetadataEvents(source, writerId, plan, binding, diagnostics));
 		}
@@ -241,21 +243,40 @@ async function buildMetadataEvents(
 		const evidence: IdentityLedgerDeletePayloadEvent["evidence"] = {
 			deletedAt: plan.payload.deletedAt,
 			sourcePath: normalizePath(plan.payload.sourcePath),
+			deletedSourceRevision: null,
 			logicalDate: plan.payload.logicalDate,
 			section: plan.payload.section,
 			rawBlock: plan.payload.rawBlock,
 			contentHash: plan.payload.contentHash,
 			sourceMemoId: isSupportedMemoId(plan.payload.sourceMemoId) ? plan.payload.sourceMemoId : null,
 		};
+		const deleteEventId = await deterministicEventId(
+			"delete",
+			source.sourceId,
+			plan.memo.memoId,
+			binding.bindingId,
+			plan.activeDelete.deleteOpId,
+			evidence,
+		);
 		events.push({
 			schemaVersion: 1,
-			eventId: await deterministicEventId("delete", source.sourceId, plan.memo.memoId, binding.bindingId, plan.activeDelete.deleteOpId, evidence),
+			eventId: deleteEventId,
 			writerId,
 			memoId: plan.memo.memoId,
 			type: "delete_payload",
 			baseBindingId: binding.bindingId,
 			occurredAt: plan.payload.deletedAt,
 			evidence,
+		});
+		events.push({
+			schemaVersion: 1,
+			eventId: await deterministicEventId("delete-commit", source.sourceId, deleteEventId),
+			writerId,
+			memoId: plan.memo.memoId,
+			type: "delete_commit",
+			baseBindingId: binding.bindingId,
+			occurredAt: plan.payload.deletedAt,
+			evidence: { deleteEventId },
 		});
 	}
 	return events;

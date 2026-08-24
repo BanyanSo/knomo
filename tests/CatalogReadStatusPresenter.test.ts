@@ -46,6 +46,27 @@ test("fresh empty Vault 的 identity absent 不显示初始化 gate", () => {
 	assert.deepEqual(headers, []);
 });
 
+test("本地扫描完成但共享配置缺失时提示配置范围，不再显示历史构建或重建动作", () => {
+	const headers = getCatalogReadStatusHeaders({
+		status: {
+			content: "ready",
+			catalog: "partial",
+			identity: "absent",
+			projection: "ready",
+			migration: "none",
+		},
+		coverage: {
+			...completeCoverage,
+			sharedConfigurationComplete: false,
+		},
+	});
+
+	assert.equal(headers.length, 1);
+	assert.equal(headers[0]?.type, "summary");
+	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "open-catalog-settings");
+	assert.doesNotMatch(headers[0]?.type === "summary" ? headers[0].text : "", /历史仍在构建/u);
+});
+
 test("Catalog、identity、projection、migration 状态按独立维度同时呈现", () => {
 	const headers = getCatalogReadStatusHeaders({
 		status: {

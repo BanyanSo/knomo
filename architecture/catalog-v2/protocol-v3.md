@@ -2,7 +2,7 @@
 
 ## 0. 文档状态
 
-本文件是 2026-08-21 冻结的 Markdown-first 目标协议，协议版本为 `3`。本文中的“必须”“不得”和“仅”均为规范性要求。2026-08-22 的第 4 步修订进一步冻结了 Knomo Data Root、Identity Ledger 位置和显式迁移语义；这些修订不改变 Markdown-first 失败边界，因此不建立 Protocol V4。
+本文件是 Markdown-first 目标协议，协议版本为 `3`。本文中的“必须”“不得”和“仅”均为规范性要求。2026-08-24 开发期修订在尚未对外发布的 V3 中补齐 `delete_commit`，明确 payload 与已完成删除的边界；该修订不改变 Daily-first 原则，因此不建立 Protocol V4。
 
 本文首先冻结架构边界、成功边界和失败语义。到 2026-08-22，第 1～7 步已实现类型拆分、observation-first 读取、独立 Markdown mutation、Identity Ledger、配置/Monthly 协调和 V2 只读兼容导入；第 8 步性能、故障注入与发布门禁仍须独立验证。后续实现可以补充 wire schema 和内部算法，但不得改变本文的不变量；需要改变时必须建立新的协议版本并显式迁移。
 
@@ -34,7 +34,7 @@ Protocol V2 被定义为**冻结的只读兼容协议**，不是可继续演进�
 | Daily | memo 当前是否存在、正文、任务、标签、图片、链接及用户显式 block reference | 用户 Markdown，正文真相；依靠 Vault 本身同步与备份 | 目标 Daily 不可读时该文件内容不可用；写失败时本次正文操作失败 | `memoId`、关系、review、内部删除记录、Catalog 状态 |
 | Observation | 某个 Daily revision 中一个 memo block 的定位证据 | 从实际 Daily 字节解析；revision 改变后重新生成 | stale 或不唯一时拒绝本次 mutation 并刷新 | 稳定身份、跨 revision 关系、持久业务关系 |
 | Catalog | observation 的本机查询索引、分页、搜索、筛选、统计覆盖信息 | 可删除；从 Daily 重建；允许明确标记 partial | 已索引内容可浏览，完整查询能力降级 | 正文真相、身份真相、Monthly 输入、共享授权 |
-| Identity Ledger | `memoId`、binding、relation、review、可恢复删除 payload、restore/repair 历史 | 外部持久用户元数据；必须同步和备份；本机 snapshot 只用于加速 | 身份增强变为 pending/absent/conflicted；正文仍工作 | 决定 Markdown 是否存在、隐藏仍在 Daily 的 observation、授权普通正文操作 |
+| Identity Ledger | `memoId`、binding、relation、review、可恢复删除 payload/commit、restore/repair 历史 | 外部持久用户元数据；必须同步和备份；本机 snapshot 只用于加速 | 身份增强变为 pending/absent/conflicted；正文仍工作 | 决定 Markdown 是否存在、隐藏仍在 Daily 的 observation、授权普通正文操作 |
 | Monthly | 月度浏览文件 | 由实际 Daily、有效配置和 renderer 确定性重建 | stale/failed，可重试；不回滚 Daily | 身份真相、Daily 写入授权、Catalog 完整性判断 |
 
 ### 3.1 依赖方向
@@ -123,9 +123,9 @@ V3 使用以下结果语义：
 | create | 先生成随机 `memoId` 并尽力持久化自包含 `create_intent`；intent 失败仍允许写 Daily，结果为 `committed_identity_pending` | Daily commit |
 | edit、task、正文标签/图片/链接修改 | 继续；identity rebind 或增强作为 follow-up，失败时 pending | Daily commit |
 | copy 为新 memo | 继续复制完整 Markdown 结构；新身份与 source relation 可以 pending | 目标 Daily commit |
-| move | 只要 Markdown 层的内容恢复机制可用就可继续；identity rebind 失败时 pending。任一 Daily 写失败必须按内容恢复协议保持至少一份正文，不得伪装完整成功 | 内容层 move commit |
+| move | 只要 Markdown 层的内容恢复机制可用就可继续；identity rebind 失败时 pending。目标写入后若来源删除失败，先按目标 observation 精确回滚；目标已并发变化而无法回滚时保留两份正文并报告 content pending。任一 Daily 写失败不得造成正文丢失或伪装完整成功 | 内容层 move commit |
 | 永久删除 | 经用户明确选择后可删除当前 Daily block；不承诺可恢复，identity 清理失败时只报告 pending | Daily commit |
-| 可恢复删除 / 移入废纸篓 | 必须先持久化足够恢复正文的 `delete_payload`；该写入失败时返回 `identity_failed_no_daily_change` | durable delete payload 后的 Daily commit |
+| 可恢复删除 / 移入废纸篓 | 必须先持久化足够恢复正文的 `delete_payload`；该写入失败时返回 `identity_failed_no_daily_change` | durable payload 后提交 Daily，成功后追加 `delete_commit`；commit 失败只进入 pending |
 | restore | 必须已有可验证的 durable delete payload；Daily 写失败时 payload 继续保留，不得标记已恢复 | Daily commit，随后 identity restore follow-up |
 | relation、review、merge、repair、adoption | 不降级为正文猜测；持久化失败则操作失败，Daily 不变 | Identity Ledger durable commit |
 | 用户显式创建 block reference | 作为用户正文操作继续；该 block ID 不能成为内部 identity | Daily commit |
@@ -145,7 +145,8 @@ V3 使用以下结果语义：
 两者是不同的用户承诺，不能共用含糊的“删除成功”：
 
 - **永久删除**只承诺从当前 Daily 删除正文，不承诺 trash/restore。它可以在 Identity Ledger 不可用时执行，但必须由 UI 明确标识为不可恢复操作。
-- **可恢复删除**承诺可从 Knomo 废纸篓恢复，因此必须先把完整 deleted payload 和所需身份信息持久化到 Identity Ledger。前置写失败时 Daily 必须逐字节保持不变。
+- **可恢复删除**承诺可从 Knomo 废纸篓恢复，因此必须先把完整 deleted payload、预期删除后 Daily revision 和所需身份信息持久化到 Identity Ledger。前置写失败时 Daily 必须逐字节保持不变。
+- `delete_payload` 只表示恢复材料已持久化，不能单独进入废纸篓。Daily 精确删除成功后追加 `delete_commit`；commit 失败时 payload 保持 pending，并且只允许在源 Daily revision 精确等于 payload 记录的删除后 revision 时自动续跑。
 - identity tombstone 或 delete event 不能单独让仍在 Daily 的 observation 消失；Daily 删除失败时仍按现存正文显示。
 
 ### 6.3 身份协调、局部冲突与 repair
@@ -203,9 +204,9 @@ V3 共享配置只位于用户当前配置的 Knomo Data Root：
 - 配置包含 Daily folder/date format、主 heading 与 aliases，以及 Monthly folder/file format/date heading/date order/renderer version。heading 数组首项仍是新 memo 的目标 heading。
 - reducer 只按 `baseEventIds` 形成 DAG。并发 head 的配置字节相同可视为同一有效配置；配置不同则状态为 `conflicted`，不得按时间、writer 或到达顺序任选。
 - 显式冲突处理以当前所有 active heads 为 base 追加一个新 event；普通设置更新在已有冲突时不得暗中充当 resolution。
-- `missing` 时读取本机可用设置，Catalog coverage 保持 partial，但 Monthly 可按本机配置重建；`conflicted`、`unsupported` 或不可安全读取时继续使用本机配置服务 Daily，并暂停 Monthly 写入。
+- 插件启用后若共享配置为 `missing`，使用本机可用设置发布首个配置事件；发布失败时继续使用本机设置，Catalog 的本地扫描完成态与共享范围可信度必须分别报告，Monthly 可按本机配置重建。`conflicted`、`unsupported` 或不可安全读取时不得自动覆盖，继续使用本机配置服务 Daily，并暂停 Monthly 写入。
 - 未知 schema、非 canonical bytes、digest/path 不匹配或 eventId 碰撞只隔离共享配置范围；不得改变 Identity 状态，不得隐藏或阻止现有 Daily observation。
-- 启动只读配置，不隐式创建目录。只有用户明确发布/解决配置时才可创建 `schema/config/v1`；迁移 Knomo Data Root 时配置 event bytes 与 Identity events 一并复制、验证，旧根仍保留。
+- 插件启用时允许在当前配置根下补齐 `_knomo-data` 并发布缺失的默认共享配置；已有共享配置只读取，不追加或覆盖，冲突仍需用户明确解决。迁移 Knomo Data Root 时配置 event bytes 与 Identity events 一并复制、验证，旧根仍保留。
 
 ### 8.2 Knomo Data Root 与 Identity Ledger 位置
 
@@ -220,9 +221,9 @@ V3 Identity Ledger 的唯一配置内位置是：
 ```
 
 - Monthly 派生 Markdown 仍直接写在 `<knomoDataRoot>`，文件名由 Monthly 设置决定；不新增固定的 `Monthly/` 子目录。
-- 第 4 步不创建全局 `events/`，也不预创建 `_knomo-data/catalog` 或 `_knomo-data/schema`；第 6 步仅在用户明确发布配置时创建 `schema/config/v1`。所有 durable identity events 仍只存在于 per-writer immutable JSONL segments。
+- 默认启用流程只创建最小 Identity Ledger root 与 `schema/config/v1`，不创建全局 `events/` 或 `_knomo-data/catalog`。所有 durable identity events 仍只存在于 per-writer immutable JSONL segments。
 - 启动只精确读取配置指向的一个 Identity Ledger root。不得扫描 Vault 或其他数据目录寻找 identity、catalog、旧备份或冲突副本。
-- 首次创建该 root 必须由用户在 Knomo 设置中明确保存数据目录；启动、扫描和普通 Markdown mutation 均不得隐式创建。
+- 新安装或尚未配置数据根的旧库在插件启用时，以本机根目录或默认 `Knomo` 自动创建一次最小 Identity Ledger root 并持久化配置。普通扫描和 Markdown mutation 本身仍不得创建或替换 root。
 - 已配置 root 缺失时，identity 为 `missing/pending`。Daily 继续扫描、显示和编辑；不得新建替代 root，也不得自动采用其他副本。
 - 手动移动目录但未更新配置时，运行时仍只访问旧配置路径。只有用户显式选择新路径并验证通过后，配置才能切换。
 - 数据目录迁移使用明确的旧根和新根，顺序固定为 `copy -> verify immutable bytes and reducer result -> update config`。旧根保留；自动删除不属于本协议。
@@ -244,13 +245,13 @@ V3 Identity Ledger 的唯一配置内位置是：
 11. Vault clone 默认保留已复制的 `memoId`；运行时不自动判断或重置所谓“数据库身份”。
 12. 全局协议、配置或 identity 冲突不得让无关 observation 停止显示或安全编辑。
 13. Knomo Data Root 的存在、路径或迁移状态不得参与 Vault identity、bootstrap 或 Markdown 准入判断。
-14. 除显式设置或迁移流程外，Identity Ledger root 不得被自动创建、搜索或恢复。
+14. 除首次启用的默认初始化、显式设置或迁移流程外，Identity Ledger root 不得被自动创建、搜索或恢复；已配置 root 丢失时不得自动创建替代 Ledger。
 
 ## 10. 本阶段未冻结的实现细节
 
 以下内容留给后续阶段，但其设计必须满足本文：
 
-- Identity Ledger 后续事件扩展、snapshot 和 compaction 细节；第 4 步已经冻结的 root、基础事件、canonical bytes 与 per-writer segment 布局不得被这些实现改变；
+- Identity Ledger snapshot、增量索引和 compaction 细节；当前开发期冻结的 root、九种基础事件、canonical bytes 与 per-writer segment 布局不得被这些实现改变；
 - `ObservationHandle` / `IdentityHandle` 的最终 TypeScript 声明；
 - move 的具体内容恢复日志格式；
 - V2/legacy 物理清理的未来独立授权协议；

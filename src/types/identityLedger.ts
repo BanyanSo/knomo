@@ -7,6 +7,7 @@ export type IdentityLedgerEventType =
 	| "relation"
 	| "review"
 	| "delete_payload"
+	| "delete_commit"
 	| "restore"
 	| "repair";
 
@@ -80,14 +81,23 @@ export type IdentityLedgerReviewEvent = IdentityLedgerEventBase & {
 export type IdentityLedgerDeletePayloadEvent = IdentityLedgerEventBase & {
 	type: "delete_payload";
 	baseBindingId: string;
-	evidence: {
-		deletedAt: string;
-		sourcePath: string;
-		logicalDate: string;
+		evidence: {
+			deletedAt: string;
+			sourcePath: string;
+			deletedSourceRevision: string | null;
+			logicalDate: string;
 		section: string | null;
 		rawBlock: string;
 		contentHash: string;
 		sourceMemoId: string | null;
+	};
+};
+
+export type IdentityLedgerDeleteCommitEvent = IdentityLedgerEventBase & {
+	type: "delete_commit";
+	baseBindingId: string;
+	evidence: {
+		deleteEventId: string;
 	};
 };
 
@@ -115,6 +125,7 @@ export type IdentityLedgerEvent =
 	| IdentityLedgerRelationEvent
 	| IdentityLedgerReviewEvent
 	| IdentityLedgerDeletePayloadEvent
+	| IdentityLedgerDeleteCommitEvent
 	| IdentityLedgerRestoreEvent
 	| IdentityLedgerRepairEvent;
 
@@ -159,12 +170,14 @@ export interface IdentityLedgerMaterializedMemo {
 	sourceMemoIds: string[];
 	reviewCount: number;
 	lastReviewedAt: string | null;
+	pendingDeletes?: IdentityLedgerDeleteRecord[];
 	activeDeletes?: IdentityLedgerDeleteRecord[];
 }
 
 export interface IdentityLedgerDeleteRecord {
 	memoId: string;
 	deleteEventId: string;
+	deleteCommitEventId: string | null;
 	baseBindingId: string;
 	evidence: IdentityLedgerDeletePayloadEvent["evidence"];
 }
@@ -201,6 +214,7 @@ export interface IdentityLedgerReader {
 	resolveObservationState(observation: MemoObservation): IdentityLedgerObservationState;
 	getSourceMemoId(memoId: string): string | null;
 	getReviewState(memoId: string): { reviewCount: number; lastReviewedAt: string | null };
+	getPendingDeletes?(): IdentityLedgerDeleteRecord[];
 	getActiveDeletes?(): IdentityLedgerDeleteRecord[];
 }
 
@@ -212,6 +226,7 @@ export interface IdentityLedgerMutationService extends IdentityLedgerReader {
 	beginCreate(input: IdentityLedgerCreateInput): Promise<IdentityLedgerCreatePlan>;
 	finishCreate(plan: IdentityLedgerCreatePlan, observation: MemoObservation): Promise<IdentityLedgerBinding>;
 	reconcilePendingCreates(observations: readonly MemoObservation[]): Promise<number>;
+	reconcilePendingDeletes?(sourceRevisions: Readonly<Record<string, string>>): Promise<number>;
 	reconcileRevision(
 		before: readonly MemoObservation[],
 		after: readonly MemoObservation[],
@@ -228,5 +243,6 @@ export interface IdentityLedgerMutationService extends IdentityLedgerReader {
 		binding: IdentityLedgerBinding,
 		payload: IdentityLedgerDeletePayloadEvent["evidence"],
 	): Promise<IdentityLedgerDeleteRecord>;
+	recordDeleteCommit?(deleteRecord: IdentityLedgerDeleteRecord): Promise<IdentityLedgerDeleteRecord>;
 	recordRestore?(deleteRecord: IdentityLedgerDeleteRecord, observation: MemoObservation): Promise<IdentityLedgerBinding>;
 }

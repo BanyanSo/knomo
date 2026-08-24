@@ -31,7 +31,7 @@ test("Catalog 扫描 off switch 不注册事件、不读取 Daily", async () => 
 	assert.deepEqual(await store.listFiles(), []);
 });
 
-test("V3-FAIL-007：本机 fallback 扫描完成后仍明确报告 partial coverage", async () => {
+test("V3-FAIL-007：本机 fallback 扫描完成后内容就绪但共享配置范围仍不完整", async () => {
 	await ensureObsidianStub();
 	const { CatalogShadowCoordinator } = await import("../src/services/CatalogShadowCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -55,7 +55,8 @@ test("V3-FAIL-007：本机 fallback 扫描完成后仍明确报告 partial cover
 
 	const page = await store.query({ limit: 50 });
 	assert.deepEqual(page.items.map((item) => item.content), ["fallback memo"]);
-	assert.equal(page.coverage.kind, "partial");
+	assert.equal(page.coverage.kind, "complete");
+	assert.equal(page.coverage.sharedConfigurationComplete, false);
 	assert.equal(page.coverage.pendingFileCount, 0);
 	fixture.unload();
 });
@@ -82,6 +83,7 @@ test("fresh empty Vault 在共享配置缺失时也把 0/0 Daily 视为 complete
 
 	assert.deepEqual((await store.query({ limit: 50 })).coverage, {
 		kind: "complete",
+		sharedConfigurationComplete: false,
 		coveredFromDate: null,
 		pendingFileCount: 0,
 		coveredFileCount: 0,
@@ -113,12 +115,23 @@ test("配置晚到触发同一文件分区重扫，不重复 observation", async
 	coordinator.start(fixture.owner);
 	await coordinator.initialize();
 	await coordinator.waitForIdle();
-	assert.equal((await store.query({ limit: 50 })).coverage.kind, "partial");
+	assert.deepEqual(
+		((await store.query({ limit: 50 })).coverage),
+		{
+			kind: "complete",
+			sharedConfigurationComplete: false,
+			coveredFromDate: "2026-08-22",
+			pendingFileCount: 0,
+			coveredFileCount: 1,
+			totalFileCount: 1,
+		},
+	);
 
 	configurationComplete = true;
 	await coordinator.refreshLocalCatalog();
 	const page = await store.query({ limit: 50 });
 	assert.equal(page.coverage.kind, "complete");
+	assert.equal(page.coverage.sharedConfigurationComplete, true);
 	assert.equal(page.items.length, 1);
 	assert.equal(new Set(page.items.map((item) => item.observationKey)).size, 1);
 	fixture.unload();

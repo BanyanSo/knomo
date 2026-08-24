@@ -1,4 +1,4 @@
-import { Notice, Platform, Plugin, TFile } from "obsidian";
+import { normalizePath, Notice, Platform, Plugin, TFile } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
@@ -27,6 +27,7 @@ import {
 	getKnomoSharedConfigRootPath,
 } from "./services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "./services/KnomoSharedConfigService";
+import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MarkdownMutationService } from "./services/MarkdownMutationService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "./services/MemoCatalogStore";
@@ -66,6 +67,7 @@ export default class KnomoPlugin extends Plugin {
 	private catalogV2MonthlyProjectionCoordinator: CatalogV2MonthlyProjectionCoordinator | null = null;
 	private legacyIdentityImporter: CatalogV3LegacyIdentityImporter | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
+	private runtimeInitializationPromise: Promise<boolean> | null = null;
 
 	async onload(): Promise<void> {
 		registerKnomoIcons();
@@ -101,7 +103,6 @@ export default class KnomoPlugin extends Plugin {
 			},
 			getWriterId: async () => sessionWriterId,
 		});
-		await identityLedgerService.initialize();
 
 		const knomoSharedConfigService = new KnomoSharedConfigService(this.app, {
 			getRootPath: () => {
@@ -116,7 +117,7 @@ export default class KnomoPlugin extends Plugin {
 				this.settingsService.getSettings(),
 			),
 		});
-		await knomoSharedConfigService.initialize();
+		await knomoSharedConfigService.initializeLocalConfig();
 
 		const getEffectiveDailyConfig = () => {
 			const config = knomoSharedConfigService.getEffectiveConfig();
@@ -133,14 +134,6 @@ export default class KnomoPlugin extends Plugin {
 			};
 		};
 
-		if (settingsLoaded
-			&& this.settingsService.getSettings().knomoDataRootConfigured
-			&& identityLedgerService.getStatus() === "missing") {
-			new Notice(t("settings.dataRoot.missing", {
-				path: this.settingsService.getSettings().knomoDataRoot,
-			}));
-		}
-
 		const knomoDataRootMigrationService = new KnomoDataRootMigrationService(
 			this.app,
 			identityLedgerService,
@@ -153,6 +146,15 @@ export default class KnomoPlugin extends Plugin {
 					knomoSharedConfigService.copyAndVerifyDataRoot(sourceDataRoot, targetDataRoot),
 			},
 		);
+		const startupBootstrapService = settingsLoaded
+			? new KnomoStartupBootstrapService(this.app, {
+				getLocation: () => this.settingsService.getSettings(),
+				initializeDataRoot: async (dataRoot) => {
+					await knomoDataRootMigrationService.migrate(dataRoot);
+				},
+				sharedConfig: knomoSharedConfigService,
+			})
+			: null;
 
 		const loadObservationBatches = async (): Promise<CatalogFileRevisionBatch[]> => {
 			const files = await this.memoCatalogService!.listFiles();
@@ -165,6 +167,13 @@ export default class KnomoPlugin extends Plugin {
 			await identityLedgerService.reconcilePendingCreates(
 				batches.flatMap((batch) => batch.observations),
 			);
+			const coverage = await this.memoCatalogService!.getStore().getCoverage();
+			if (coverage.kind === "complete") {
+				await identityLedgerService.reconcilePendingDeletes(Object.fromEntries(batches.map((batch) => [
+					normalizePath(batch.file.sourcePath),
+					batch.file.sourceRevision,
+				])));
+			}
 		};
 
 		const projectionInputBuilder = new CatalogV2ProjectionInputBuilder(
@@ -224,6 +233,7 @@ export default class KnomoPlugin extends Plugin {
 				return formatDatePart(date);
 			},
 			getMemoTimeFormat: () => this.settingsService.getSettings().memoTimeFormat,
+			getInsertPosition: () => this.settingsService.getSettings().dailyInsertPosition,
 			updateCatalogPartition: async (input) => {
 				if (this.catalogShadowCoordinator === null) throw new Error("Memo Catalog is not available.");
 				await this.catalogShadowCoordinator.replaceCommittedFile(input);
@@ -302,13 +312,6 @@ export default class KnomoPlugin extends Plugin {
 		this.catalogV2MonthlyProjectionCoordinator.start(this);
 		this.catalogShadowCoordinator.start(this);
 
-		await this.catalogV2MonthlyProjectionCoordinator.initialize().catch(() => undefined);
-		await this.catalogShadowCoordinator.initialize();
-		await this.legacyIdentityImporter.run();
-		await reconcileIdentityLedger();
-		await this.catalogV2ReadService.materializeResolutionSnapshot();
-		await this.catalogV2ReadService.prime().catch(() => undefined);
-
 		this.viewRefreshScheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
 			() => this.runRefreshOpenViews(),
@@ -377,6 +380,35 @@ export default class KnomoPlugin extends Plugin {
 			knomoSharedConfigService,
 			this.legacyIdentityImporter,
 		));
+
+		this.runtimeInitializationPromise = (async () => {
+			if (startupBootstrapService !== null) {
+				try {
+					await startupBootstrapService.initialize();
+				} catch {
+					// 自动初始化失败不阻塞 Daily；下次启用会继续补齐缺失配置。
+				}
+			}
+			await identityLedgerService.initialize();
+			await knomoSharedConfigService.initialize();
+			if (settingsLoaded
+				&& this.settingsService.getSettings().knomoDataRootConfigured
+				&& identityLedgerService.getStatus() === "missing") {
+				new Notice(t("settings.dataRoot.missing", {
+					path: this.settingsService.getSettings().knomoDataRoot,
+				}));
+			}
+			await this.catalogV2MonthlyProjectionCoordinator?.initialize().catch(() => undefined);
+			await this.catalogShadowCoordinator?.initialize();
+			await this.legacyIdentityImporter?.run();
+			await reconcileIdentityLedger();
+			await this.catalogV2ReadService?.materializeResolutionSnapshot();
+			await this.catalogV2ReadService?.prime().catch(() => undefined);
+			return true;
+		})().catch(() => {
+			// 后台初始化失败不阻塞视图注册与 Daily 快速记录。
+			return false;
+		});
 
 		this.app.workspace.onLayoutReady(() => {
 			void this.initializeAfterLayoutWithCatalogSafely();
@@ -517,6 +549,10 @@ export default class KnomoPlugin extends Plugin {
 
 	private async initializeAfterLayoutWithCatalogSafely(): Promise<void> {
 		try {
+			if (this.runtimeInitializationPromise !== null
+				&& await this.runtimeInitializationPromise) {
+				return;
+			}
 			await this.catalogShadowCoordinator?.initialize();
 			await this.legacyIdentityImporter?.run();
 			await this.catalogV2ReadService?.materializeResolutionSnapshot();

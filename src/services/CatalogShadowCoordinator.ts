@@ -556,7 +556,7 @@ export class CatalogShadowCoordinator {
 	private buildCoverage(): CatalogCoverage {
 		const entries = [...this.inventoryByPath.values()];
 		const coveredFileCount = entries.filter((entry) => this.coveredPaths.has(entry.sourcePath)).length;
-		const configurationComplete = entries.length === 0 || this.isConfigurationComplete();
+		const sharedConfigurationComplete = this.isConfigurationComplete();
 		const dates = [...new Set(entries.map((entry) => entry.logicalDate))].sort((left, right) => right.localeCompare(left));
 		let coveredFromDate: string | null = null;
 		for (const date of dates) {
@@ -570,9 +570,10 @@ export class CatalogShadowCoordinator {
 		return {
 			kind: this.rebuilding
 				? "rebuilding"
-				: pendingFileCount === 0 && this.failedPaths.size === 0 && configurationComplete
+				: pendingFileCount === 0 && this.failedPaths.size === 0
 					? "complete"
 					: "partial",
+			sharedConfigurationComplete,
 			coveredFromDate,
 			pendingFileCount,
 			coveredFileCount,

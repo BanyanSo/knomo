@@ -18,6 +18,7 @@ test("post-processes memo markdown DOM metadata", async () => {
 	const image = container.createEl("img");
 	const taskItem = container.createEl("li");
 	const checkbox = taskItem.createEl("input", { attr: { type: "checkbox" } });
+	checkbox.disabled = true;
 
 	prepareRenderedMemoMarkdown(container.asHtml(), makeMemo({ contentSnapshot: "- [ ] task" }));
 
@@ -29,6 +30,7 @@ test("post-processes memo markdown DOM metadata", async () => {
 	assert.equal(checkbox.getAttr("data-knomo-memo-id"), "memo-1");
 	assert.equal(checkbox.getAttr("data-knomo-task-index"), "0");
 	assert.equal(taskItem.getAttr("data-knomo-task-index"), "0");
+	assert.equal(checkbox.disabled, false);
 
 	applyTaskCheckboxDomState(checkbox.asInput(), "-");
 
@@ -179,6 +181,7 @@ class TestElement {
 	private readonly attrs = new Map<string, string>();
 	private text = "";
 	checked = false;
+	disabled = false;
 	indeterminate = false;
 	type = "";
 

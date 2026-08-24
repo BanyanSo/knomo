@@ -51,6 +51,7 @@ export interface MarkdownRestoreInput {
 export interface MarkdownCapturedObservation {
 	observation: MemoObservation;
 	rawBlock: string;
+	deletedSourceRevision: string;
 }
 
 export interface MarkdownBlockReferenceInput {

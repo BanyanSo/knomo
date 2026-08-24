@@ -6,6 +6,7 @@ type MemoReferenceView = Pick<MemoRecord, "sourceMemoId" | "references" | "conte
 interface BlockReferenceCandidate {
 	sourceMemoIdAlias: string | null;
 	quoted: boolean;
+	referenceText: string;
 }
 
 export function hasMemoReference(memo: MemoReferenceView): boolean {
@@ -32,6 +33,15 @@ export function stripTrailingWikiLink(content: string): string {
 
 export function withCreatedAtAlias(referenceText: string, createdAt: string): string {
 	return withReferenceAlias(referenceText, formatCreatedAtAlias(createdAt));
+}
+
+export function getPreferredMemoBlockReferenceText(content: string): string | null {
+	const candidate = getPreferredReferenceCandidates(content)
+		.find((item) => item.sourceMemoIdAlias !== null);
+	if (candidate === undefined) {
+		return null;
+	}
+	return candidate.referenceText.startsWith("![[") ? candidate.referenceText.slice(1) : candidate.referenceText;
 }
 
 export function formatCreatedAtAlias(createdAt: string): string {
@@ -87,6 +97,7 @@ function parseBlockReferenceCandidates(content: string): BlockReferenceCandidate
 				candidates.push({
 					sourceMemoIdAlias: parseMemoIdAlias(alias),
 					quoted,
+					referenceText: match[0],
 				});
 			}
 			match = referencePattern.exec(line);

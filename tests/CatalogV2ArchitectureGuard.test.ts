@@ -105,21 +105,37 @@ test("P1 第 7 步兼容源只读且 installMode 不再参与展示或 Markdown 
 	assert.doesNotMatch(main, /CatalogV2InstallMode|installMode|initialize-vault-protocol/u);
 });
 
-test("P1 第 7 步在注册视图前打开 V3 查询和身份依赖", () => {
+test("P0 启动边界：视图只等待本地查询和 fallback 配置，Identity 与兼容导入后台完成", () => {
 	const source = fs.readFileSync(path.resolve("src/main.ts"), "utf8");
 	const registerViewAt = source.indexOf("this.registerView(");
 	assert.notEqual(registerViewAt, -1);
 	for (const prerequisite of [
 		"await this.memoCatalogService.open();",
-		"await identityLedgerService.initialize();",
-		"await knomoSharedConfigService.initialize();",
-		"await this.legacyIdentityImporter.run();",
+		"await knomoSharedConfigService.initializeLocalConfig();",
+		"identityLedgerService.start(this",
 	]) {
 		const prerequisiteAt = source.indexOf(prerequisite);
 		assert.notEqual(prerequisiteAt, -1, prerequisite);
 		assert.ok(prerequisiteAt < registerViewAt, prerequisite);
 	}
+	for (const deferred of [
+		"await identityLedgerService.initialize();",
+		"await knomoSharedConfigService.initialize();",
+		"await this.legacyIdentityImporter?.run();",
+	]) {
+		const deferredAt = source.indexOf(deferred, registerViewAt);
+		assert.notEqual(deferredAt, -1, deferred);
+		assert.ok(deferredAt > registerViewAt, deferred);
+	}
 	assert.doesNotMatch(source, /catalogV2StateStore|catalogV2TransactionStore/u);
+});
+
+test("P0 同步窗口：Identity 与共享配置注册监听后立即补一次 refresh", () => {
+	for (const file of ["IdentityLedgerService.ts", "KnomoSharedConfigService.ts"]) {
+		const source = fs.readFileSync(path.resolve("src/services", file), "utf8");
+		const start = source.slice(source.indexOf("start("), source.indexOf("async initialize("));
+		assert.match(start, /this\.scheduleRefresh\(\)/u, file);
+	}
 });
 
 test("阶段 6 查询使用有界状态切片，卡片窗口不超过 150 条", () => {
@@ -304,6 +320,8 @@ test("P1 第 6 步配置协议独立于 V2 control plane，Monthly 只读取 Dai
 
 	assert.match(protocol, /KNOMO_SHARED_CONFIG_RELATIVE_ROOT = "_knomo-data\/schema\/config\/v1"/u);
 	assert.match(main, /new KnomoSharedConfigService/u);
+	assert.match(main, /new KnomoStartupBootstrapService/u);
+	assert.match(main, /startupBootstrapService\.initialize\(\)/u);
 	assert.match(main, /isConfigurationComplete:\s*\(\) => knomoSharedConfigService\.isCoverageComplete\(\)/u);
 	assert.match(main, /isProjectionAllowed:\s*\(\) => knomoSharedConfigService\.isMonthlyProjectionAllowed\(\)/u);
 	assert.doesNotMatch(main, /contract\.daily|contract\.monthly/u);

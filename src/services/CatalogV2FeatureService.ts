@@ -299,7 +299,11 @@ export class CatalogV2FeatureService {
 	}
 
 	async removePermanently(item: CatalogV2MemoItem): Promise<CatalogV2DailyMutationResult> {
-		const result = await this.getMarkdownMutations().remove({ observation: item.observationHandle });
+		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		if (refreshed.capabilities.identity.recoverableDelete !== "absent") {
+			throw new Error("Permanent delete requires a current memo without recoverable identity.");
+		}
+		const result = await this.getMarkdownMutations().remove({ observation: refreshed.observation });
 		const saved = await this.finishMarkdownSavedMemo(result, []);
 		return {
 			status: saved.status,
@@ -311,6 +315,7 @@ export class CatalogV2FeatureService {
 
 	async delete(item: CatalogV2MemoItem): Promise<CatalogV2DailyMutationResult> {
 		if (this.identityLedger?.recordDeletePayload === undefined
+			|| this.identityLedger.recordDeleteCommit === undefined
 			|| this.markdownMutations?.captureObservation === undefined) {
 			throw new Error("Recoverable delete requires an available Identity Ledger.");
 		}
@@ -319,18 +324,29 @@ export class CatalogV2FeatureService {
 		if (ledgerState.kind !== "identified") {
 			throw new Error("Recoverable delete requires one confirmed memo identity.");
 		}
-		const captured = await this.markdownMutations.captureObservation({ observation: item.observationHandle });
-		await this.identityLedger.recordDeletePayload(ledgerState.binding, {
+		const captured = await this.markdownMutations.captureObservation({ observation: refreshed.observation });
+		const deleteRecord = await this.identityLedger.recordDeletePayload(ledgerState.binding, {
 			deletedAt: this.now().toISOString(),
 			sourcePath: captured.observation.sourcePath,
+			deletedSourceRevision: captured.deletedSourceRevision,
 			logicalDate: captured.observation.logicalDate,
 			section: captured.observation.section,
 			rawBlock: captured.rawBlock,
 			contentHash: captured.observation.contentHash,
 			sourceMemoId: item.sourceMemoId,
 		});
-		const result = await this.getMarkdownMutations().remove({ observation: item.observationHandle });
-		const saved = await this.finishMarkdownSavedMemo(result, [], { memoId: ledgerState.binding.memoId, pending: false });
+		const result = await this.getMarkdownMutations().remove({ observation: captured.observation });
+		let pending = true;
+		try {
+			await this.identityLedger.recordDeleteCommit(deleteRecord);
+			pending = false;
+		} catch {
+			pending = true;
+		}
+		const saved = await this.finishMarkdownSavedMemo(result, [], {
+			memoId: ledgerState.binding.memoId,
+			pending,
+		});
 		return {
 			status: saved.status,
 			memoId: saved.memoId,

@@ -40,6 +40,8 @@ export function createIdentityLedgerMemoCapabilities(): ResolvedMemoCapabilities
 			...capabilities.identity,
 			relation: "ready",
 			review: "ready",
+			recoverableDelete: "ready",
+			restore: "ready",
 			repair: "ready",
 			crossDeviceIdentity: "ready",
 		},

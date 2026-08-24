@@ -56,6 +56,7 @@ import {
 } from "./KnomoCardImages";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import { KnomoCardFlowCoordinator } from "./KnomoCardFlowCoordinator";
+import { getMemoDeleteMode } from "./KnomoCardMetadata";
 import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
 import {
 	getTimeBuoyPickerLeft,
@@ -381,6 +382,7 @@ export class KnomoView extends ItemView {
 	private mobileNavbarCompactController: MobileNavbarCompactController | null = null;
 	private imagePreviewRenderGeneration = 0;
 	private readonly renderedCardMemos = new Map<string, MemoRecord>();
+	private readonly taskUpdateQueues = new Map<string, Promise<void>>();
 	private readonly renderedPreviewImages = new WeakMap<HTMLElement, readonly MemoPreviewImage[]>();
 	private readonly imageResourceCache = new ImageResourceCache();
 	private readonly memoCardPreviewCache = new MemoCardPreviewCache((_memo, displayContent) => {
@@ -3535,7 +3537,16 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "delete") {
-				await this.catalogV2FeatureService.delete(await this.resolveCatalogV2Memo(memo));
+				const deleteMode = getMemoDeleteMode(memo);
+				const resolvedMemo = await this.resolveCatalogV2Memo(memo);
+				if (deleteMode === "permanent") {
+					if (!await this.confirmPermanentDelete()) return;
+					await this.catalogV2FeatureService.removePermanently(resolvedMemo);
+				} else if (deleteMode === "recoverable") {
+					await this.catalogV2FeatureService.delete(resolvedMemo);
+				} else {
+					throw new Error("Memo delete is unavailable.");
+				}
 				await this.reloadMemos(false, true).catch(() => false);
 				new Notice(t("notice.deleted"));
 				return;
@@ -3692,6 +3703,15 @@ export class KnomoView extends ItemView {
 		}
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogV2ActiveQuery();
+	}
+
+	private confirmPermanentDelete(): Promise<boolean> {
+		return showKnomoConfirmModal(this.app, {
+			title: t("card.delete"),
+			message: t("confirm.deleteMemoPermanently"),
+			danger: true,
+			getReturnFocus: getDestructiveConfirmReturnFocus,
+		});
 	}
 
 	private setSearchQuery(query: string): void {
@@ -5670,8 +5690,24 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (isCatalogV2MemoView(memo)) {
-			void this.handleCatalogV2TaskToggle(memo, taskIndex, input.checked);
+			this.enqueueCatalogV2TaskToggle(memo, taskIndex, input.checked);
 		}
+	}
+
+	private enqueueCatalogV2TaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): void {
+		const previous = this.taskUpdateQueues.get(memo.id) ?? Promise.resolve();
+		const queued = previous.catch(() => undefined).then(async () => {
+			const latestMemo = this.findMemoById(memo.id);
+			const targetMemo = latestMemo !== null && isCatalogV2MemoView(latestMemo) ? latestMemo : memo;
+			await this.handleCatalogV2TaskToggle(targetMemo, taskIndex, checked);
+		});
+		const settled = queued.catch(() => undefined).finally(() => {
+			if (this.taskUpdateQueues.get(memo.id) === settled) {
+				this.taskUpdateQueues.delete(memo.id);
+			}
+		});
+		this.taskUpdateQueues.set(memo.id, settled);
+		void settled;
 	}
 
 	private async loadNextCatalogV2DeletedPage(): Promise<boolean> {

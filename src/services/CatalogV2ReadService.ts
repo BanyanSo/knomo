@@ -492,7 +492,11 @@ export class CatalogV2ReadService {
 				: coverage.kind === "complete" && lifecycle.state !== "opening" && lifecycle.state !== "rebuilding"
 					? "ready"
 					: "scanning",
-			catalog: catalogDegraded ? "degraded" : coverage.kind === "complete" ? "complete" : "partial",
+			catalog: catalogDegraded
+				? "degraded"
+				: coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false
+					? "complete"
+					: "partial",
 			identity: identityLedgerStatus === "ready"
 				? identityConflicted ? "conflicted" : "ready"
 				: identityLedgerStatus === "conflicted"

@@ -8,6 +8,7 @@ import type {
 	IdentityLedgerCreateInput,
 	IdentityLedgerCreatePlan,
 	IdentityLedgerCreateIntentEvent,
+	IdentityLedgerDeleteCommitEvent,
 	IdentityLedgerDeletePayloadEvent,
 	IdentityLedgerDeleteRecord,
 	IdentityLedgerEvent,
@@ -34,6 +35,8 @@ import {
 	sha256IdentityLedgerText,
 } from "./IdentityLedgerProtocol";
 
+const LEGACY_IMPORT_SEGMENT_EVENT_LIMIT = 256;
+
 export interface IdentityLedgerServiceOptions {
 	getRootPath: () => string | null;
 	getWriterId?: () => Promise<string>;
@@ -49,7 +52,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private readonly createEventId: () => string;
 	private envelopes: IdentityLedgerEventEnvelope[] = [];
 	private snapshot: IdentityLedgerSnapshot = createEmptySnapshot();
-	private status: IdentityLedgerStatus = "missing";
+	private status: IdentityLedgerStatus = "unavailable";
 	private scanErrorCount = 0;
 	private onChanged: (() => void | Promise<void>) | null = null;
 	private refreshQueue: Promise<void> = Promise.resolve();
@@ -80,6 +83,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		owner.register(() => {
 			this.onChanged = null;
 		});
+		// 监听建立后补扫一次，覆盖初始化扫描与事件注册之间的变更窗口。
+		this.scheduleRefresh();
 	}
 
 	async initialize(): Promise<void> {
@@ -158,22 +163,80 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			.sort((left, right) => left.deleteEventId.localeCompare(right.deleteEventId));
 	}
 
+	getPendingDeletes(): IdentityLedgerDeleteRecord[] {
+		return Object.values(this.snapshot.memos)
+			.flatMap((memo) => (memo.pendingDeletes ?? []).map(cloneDeleteRecord))
+			.sort((left, right) => left.deleteEventId.localeCompare(right.deleteEventId));
+	}
+
 	async importVerifiedLegacyEvents(events: readonly IdentityLedgerEvent[]): Promise<number> {
-		let imported = 0;
+		if (events.length === 0) return 0;
+		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
+		const existingByEventId = new Map<string, IdentityLedgerEventEnvelope[]>();
+		for (const envelope of this.envelopes) {
+			const values = existingByEventId.get(envelope.event.eventId) ?? [];
+			values.push(envelope);
+			existingByEventId.set(envelope.event.eventId, values);
+		}
+		const pendingByEventId = new Map<string, { event: IdentityLedgerEvent; digest: string }>();
 		for (const event of events) {
-			const existing = this.envelopes.filter((item) => item.event.eventId === event.eventId);
+			const content = serializeIdentityLedgerSegment([event]);
+			const digest = await sha256IdentityLedgerText(content.trimEnd());
+			const existing = existingByEventId.get(event.eventId) ?? [];
 			if (existing.length > 0) {
-				const content = serializeIdentityLedgerSegment([event]);
-				const digest = await sha256IdentityLedgerText(content.trimEnd());
 				if (existing.some((item) => item.digest !== digest)) {
 					throw new Error(`Identity Ledger legacy event collision: ${event.eventId}`);
 				}
 				continue;
 			}
-			await this.appendEvent(event);
-			imported += 1;
+			const pending = pendingByEventId.get(event.eventId);
+			if (pending !== undefined) {
+				if (pending.digest !== digest) {
+					throw new Error(`Identity Ledger legacy event collision: ${event.eventId}`);
+				}
+				continue;
+			}
+			pendingByEventId.set(event.eventId, { event, digest });
 		}
-		return imported;
+		const pendingEvents = [...pendingByEventId.values()].map((item) => item.event);
+		if (pendingEvents.length === 0) return 0;
+
+		const previous = this.writeQueue;
+		let releaseQueue: () => void = () => undefined;
+		this.writeQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
+		await previous;
+		try {
+			const rootPath = this.requireRootPath();
+			const incoming: IdentityLedgerEventEnvelope[] = [];
+			const byWriter = new Map<string, IdentityLedgerEvent[]>();
+			for (const event of pendingEvents) {
+				const writerEvents = byWriter.get(event.writerId) ?? [];
+				writerEvents.push(event);
+				byWriter.set(event.writerId, writerEvents);
+			}
+			for (const [writerId, writerEvents] of byWriter) {
+				await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, writerId));
+				for (let index = 0; index < writerEvents.length; index += LEGACY_IMPORT_SEGMENT_EVENT_LIMIT) {
+					const batch = writerEvents.slice(index, index + LEGACY_IMPORT_SEGMENT_EVENT_LIMIT);
+					const first = batch[0];
+					if (first === undefined) continue;
+					const content = serializeIdentityLedgerSegment(batch);
+					const digest = await sha256IdentityLedgerText(content);
+					const path = getIdentityLedgerSegmentPath(rootPath, writerId, first.eventId, digest);
+					await this.writeImmutable(path, content);
+					incoming.push(...(await parseIdentityLedgerSegment(rootPath, path, content)).events);
+				}
+			}
+			this.envelopes = mergeEnvelopes(this.envelopes, incoming);
+			await this.materialize();
+		} catch (error) {
+			this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
+			throw error;
+		} finally {
+			releaseQueue();
+		}
+		await this.notifyChanged();
+		return pendingEvents.length;
 	}
 
 	async beginCreate(input: IdentityLedgerCreateInput): Promise<IdentityLedgerCreatePlan> {
@@ -254,6 +317,24 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			if (candidates.length !== 1) continue;
 			try {
 				await this.finishCreate({ memoId: intent.memoId, intent, intentDurable: true }, candidates[0] as MemoObservation);
+				completed += 1;
+			} catch {
+				continue;
+			}
+		}
+		return completed;
+	}
+
+	async reconcilePendingDeletes(sourceRevisions: Readonly<Record<string, string>>): Promise<number> {
+		let completed = 0;
+		for (const record of this.getPendingDeletes()) {
+			const expectedRevision = record.evidence.deletedSourceRevision;
+			if (expectedRevision === null
+				|| sourceRevisions[normalizePath(record.evidence.sourcePath)] !== expectedRevision) {
+				continue;
+			}
+			try {
+				await this.recordDeleteCommit(record);
 				completed += 1;
 			} catch {
 				continue;
@@ -390,9 +471,33 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			evidence: { ...payload },
 		};
 		await this.appendEvent(event);
-		const record = this.getActiveDeletes().find((item) => item.deleteEventId === event.eventId);
+		const record = this.getPendingDeletes().find((item) => item.deleteEventId === event.eventId);
 		if (record === undefined) throw new Error("Identity Ledger delete payload did not materialize.");
 		return record;
+	}
+
+	async recordDeleteCommit(deleteRecord: IdentityLedgerDeleteRecord): Promise<IdentityLedgerDeleteRecord> {
+		const active = this.getActiveDeletes().find((item) => item.deleteEventId === deleteRecord.deleteEventId);
+		if (active !== undefined) return active;
+		const pending = this.getPendingDeletes().find((item) => item.deleteEventId === deleteRecord.deleteEventId);
+		if (pending === undefined || pending.memoId !== deleteRecord.memoId
+			|| pending.baseBindingId !== deleteRecord.baseBindingId) {
+			throw new Error("Identity Ledger delete payload is no longer pending.");
+		}
+		const event: IdentityLedgerDeleteCommitEvent = {
+			schemaVersion: 1,
+			eventId: this.createEventId(),
+			writerId: await this.getWriterId(),
+			memoId: pending.memoId,
+			type: "delete_commit",
+			baseBindingId: pending.baseBindingId,
+			occurredAt: this.now().toISOString(),
+			evidence: { deleteEventId: pending.deleteEventId },
+		};
+		await this.appendEvent(event);
+		const committed = this.getActiveDeletes().find((item) => item.deleteEventId === pending.deleteEventId);
+		if (committed === undefined) throw new Error("Identity Ledger delete commit did not materialize.");
+		return committed;
 	}
 
 	async recordRestore(
@@ -476,8 +581,14 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, event.writerId));
 			await this.writeImmutable(path, content);
 			const parsed = await parseIdentityLedgerSegment(rootPath, path, content);
+			const affectedMemoIds = collectAffectedMemoIds(this.envelopes, parsed.events);
 			this.envelopes = mergeEnvelopes(this.envelopes, parsed.events);
-			await this.materialize();
+			this.snapshot = await materializeIdentityLedgerIncrementally(
+				this.snapshot,
+				this.envelopes,
+				affectedMemoIds,
+			);
+			this.updateStatus();
 		} catch (error) {
 			this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
 			throw error;
@@ -517,6 +628,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	private async materialize(): Promise<void> {
 		this.snapshot = await materializeIdentityLedger(this.envelopes);
+		this.updateStatus();
+	}
+
+	private updateStatus(): void {
 		this.status = this.scanErrorCount > 0 || this.snapshot.quarantinedEventIds.length > 0
 			? "conflicted"
 			: this.snapshot.eventCount === 0 ? "absent" : "ready";
@@ -614,30 +729,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 export async function materializeIdentityLedger(
 	envelopes: readonly IdentityLedgerEventEnvelope[],
 ): Promise<IdentityLedgerSnapshot> {
-	const byEventId = new Map<string, IdentityLedgerEventEnvelope[]>();
-	for (const envelope of envelopes) {
-		const values = byEventId.get(envelope.event.eventId) ?? [];
-		values.push(envelope);
-		byEventId.set(envelope.event.eventId, values);
-	}
-	const accepted: IdentityLedgerEventEnvelope[] = [];
-	const quarantinedEventIds: string[] = [];
-	for (const [eventId, values] of [...byEventId.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-		const digests = new Set(values.map((value) => value.digest));
-		if (digests.size !== 1) {
-			quarantinedEventIds.push(eventId);
-			continue;
-		}
-		const selected = [...values].sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))[0];
-		if (selected !== undefined) accepted.push(selected);
-	}
-	accepted.sort((left, right) => left.event.eventId.localeCompare(right.event.eventId)
-		|| left.event.writerId.localeCompare(right.event.writerId));
-	const revisionDigest = await sha256IdentityLedgerText(canonicalIdentityLedgerJson(accepted.map((item) => ({
-		eventId: item.event.eventId,
-		digest: item.digest,
-	}))));
-	const revision = `identity-v3-${revisionDigest}`;
+	const { accepted, quarantinedEventIds } = selectIdentityLedgerEnvelopes(envelopes);
+	const revision = await buildIdentityLedgerRevision(accepted);
 	const acceptedEvents = accepted.map((item) => item.event);
 	const eventsByMemoId = new Map<string, IdentityLedgerEvent[]>();
 	for (const event of acceptedEvents) {
@@ -666,16 +759,34 @@ export async function materializeIdentityLedger(
 		const reviewedAt = reviews.flatMap((event) => event.type === "review" ? [event.evidence.reviewedAt] : []).sort();
 		const restoredDeleteIds = new Set(memoEvents.flatMap((event) =>
 			event.type === "restore" ? [event.evidence.deleteEventId] : []));
-		const activeDeletes = memoEvents
-			.filter((event): event is IdentityLedgerDeletePayloadEvent => event.type === "delete_payload")
+		const deletePayloads = memoEvents
+			.filter((event): event is IdentityLedgerDeletePayloadEvent => event.type === "delete_payload");
+		const deletePayloadById = new Map(deletePayloads.map((event) => [event.eventId, event]));
+		const deleteCommits = memoEvents
+			.filter((event): event is IdentityLedgerDeleteCommitEvent => event.type === "delete_commit")
+			.filter((event) => {
+				const payload = deletePayloadById.get(event.evidence.deleteEventId);
+				return payload !== undefined && payload.baseBindingId === event.baseBindingId;
+			})
+			.sort((left, right) => left.eventId.localeCompare(right.eventId));
+		const commitByDeleteId = new Map<string, IdentityLedgerDeleteCommitEvent>();
+		for (const commit of deleteCommits) {
+			if (!commitByDeleteId.has(commit.evidence.deleteEventId)) {
+				commitByDeleteId.set(commit.evidence.deleteEventId, commit);
+			}
+		}
+		const deleteRecords = deletePayloads
 			.filter((event) => !restoredDeleteIds.has(event.eventId))
 			.map((event): IdentityLedgerDeleteRecord => ({
 				memoId,
 				deleteEventId: event.eventId,
+				deleteCommitEventId: commitByDeleteId.get(event.eventId)?.eventId ?? null,
 				baseBindingId: event.baseBindingId,
 				evidence: { ...event.evidence },
 			}))
 			.sort((left, right) => left.deleteEventId.localeCompare(right.deleteEventId));
+		const pendingDeletes = deleteRecords.filter((record) => record.deleteCommitEventId === null);
+		const activeDeletes = deleteRecords.filter((record) => record.deleteCommitEventId !== null);
 		memos[memoId] = {
 			memoId,
 			bindings: bindingState.bindings,
@@ -684,6 +795,7 @@ export async function materializeIdentityLedger(
 			sourceMemoIds,
 			reviewCount: reviews.length,
 			lastReviewedAt: reviewedAt[reviewedAt.length - 1] ?? null,
+			pendingDeletes,
 			activeDeletes,
 		};
 	}
@@ -695,6 +807,94 @@ export async function materializeIdentityLedger(
 			.sort((left, right) => left.eventId.localeCompare(right.eventId)),
 		quarantinedEventIds,
 	};
+}
+
+function selectIdentityLedgerEnvelopes(
+	envelopes: readonly IdentityLedgerEventEnvelope[],
+): { accepted: IdentityLedgerEventEnvelope[]; quarantinedEventIds: string[] } {
+	const byEventId = new Map<string, IdentityLedgerEventEnvelope[]>();
+	for (const envelope of envelopes) {
+		const values = byEventId.get(envelope.event.eventId) ?? [];
+		values.push(envelope);
+		byEventId.set(envelope.event.eventId, values);
+	}
+	const accepted: IdentityLedgerEventEnvelope[] = [];
+	const quarantinedEventIds: string[] = [];
+	for (const [eventId, values] of [...byEventId.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+		const digests = new Set(values.map((value) => value.digest));
+		if (digests.size !== 1) {
+			quarantinedEventIds.push(eventId);
+			continue;
+		}
+		const selected = [...values].sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))[0];
+		if (selected !== undefined) accepted.push(selected);
+	}
+	accepted.sort((left, right) => left.event.eventId.localeCompare(right.event.eventId)
+		|| left.event.writerId.localeCompare(right.event.writerId));
+	return { accepted, quarantinedEventIds };
+}
+
+async function buildIdentityLedgerRevision(
+	accepted: readonly IdentityLedgerEventEnvelope[],
+): Promise<string> {
+	const revisionDigest = await sha256IdentityLedgerText(canonicalIdentityLedgerJson(accepted.map((item) => ({
+		eventId: item.event.eventId,
+		digest: item.digest,
+	}))));
+	return `identity-v3-${revisionDigest}`;
+}
+
+async function materializeIdentityLedgerIncrementally(
+	previous: IdentityLedgerSnapshot,
+	envelopes: readonly IdentityLedgerEventEnvelope[],
+	affectedMemoIds: ReadonlySet<string>,
+): Promise<IdentityLedgerSnapshot> {
+	const { accepted, quarantinedEventIds } = selectIdentityLedgerEnvelopes(envelopes);
+	const revision = await buildIdentityLedgerRevision(accepted);
+	const memos: Record<string, IdentityLedgerMaterializedMemo> = {};
+	for (const [memoId, memo] of Object.entries(previous.memos)) {
+		if (affectedMemoIds.has(memoId)) continue;
+		memos[memoId] = {
+			...memo,
+			bindings: memo.bindings.map((binding) => ({ ...binding, identityRevision: revision })),
+		};
+	}
+	for (const memoId of [...affectedMemoIds].sort()) {
+		const memoSnapshot = await materializeIdentityLedger(
+			accepted.filter((item) => item.event.memoId === memoId),
+		);
+		const memo = memoSnapshot.memos[memoId];
+		if (memo === undefined) continue;
+		memos[memoId] = {
+			...memo,
+			bindings: memo.bindings.map((binding) => ({ ...binding, identityRevision: revision })),
+		};
+	}
+	const claimedIntentIds = new Set(accepted.flatMap((item) =>
+		item.event.type === "claim" && item.event.evidence.createIntentEventId !== null
+			? [item.event.evidence.createIntentEventId]
+			: []));
+	return {
+		revision,
+		eventCount: accepted.length,
+		memos,
+		pendingIntents: accepted.map((item) => item.event)
+			.filter((event): event is IdentityLedgerCreateIntentEvent => event.type === "create_intent")
+			.filter((intent) => !claimedIntentIds.has(intent.eventId))
+			.sort((left, right) => left.eventId.localeCompare(right.eventId)),
+		quarantinedEventIds,
+	};
+}
+
+function collectAffectedMemoIds(
+	existing: readonly IdentityLedgerEventEnvelope[],
+	incoming: readonly IdentityLedgerEventEnvelope[],
+): Set<string> {
+	const incomingEventIds = new Set(incoming.map((item) => item.event.eventId));
+	return new Set([
+		...incoming.map((item) => item.event.memoId),
+		...existing.filter((item) => incomingEventIds.has(item.event.eventId)).map((item) => item.event.memoId),
+	]);
 }
 
 type IdentityLedgerBindingEvent = Extract<IdentityLedgerEvent, {
@@ -1012,6 +1212,7 @@ function cloneSnapshot(snapshot: IdentityLedgerSnapshot): IdentityLedgerSnapshot
 			sourceMemoIds: [...memo.sourceMemoIds],
 			reviewCount: memo.reviewCount,
 			lastReviewedAt: memo.lastReviewedAt,
+			pendingDeletes: (memo.pendingDeletes ?? []).map(cloneDeleteRecord),
 			activeDeletes: (memo.activeDeletes ?? []).map(cloneDeleteRecord),
 		}])),
 		pendingIntents: snapshot.pendingIntents.map((intent) => ({
@@ -1026,6 +1227,7 @@ function cloneDeleteRecord(record: IdentityLedgerDeleteRecord): IdentityLedgerDe
 	return {
 		memoId: record.memoId,
 		deleteEventId: record.deleteEventId,
+		deleteCommitEventId: record.deleteCommitEventId,
 		baseBindingId: record.baseBindingId,
 		evidence: { ...record.evidence },
 	};

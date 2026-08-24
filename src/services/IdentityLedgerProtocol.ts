@@ -210,15 +210,24 @@ export function assertIdentityLedgerEvent(value: unknown): asserts value is Iden
 			}
 			return;
 		case "delete_payload":
-			if (!hasExactKeys(evidence, ["deletedAt", "sourcePath", "logicalDate", "section", "rawBlock", "contentHash", "sourceMemoId"])
+			if (!hasExactKeys(evidence, ["deletedAt", "sourcePath", "deletedSourceRevision", "logicalDate", "section", "rawBlock", "contentHash", "sourceMemoId"])
 				|| !EVENT_ID_PATTERN.test(readString(value.baseBindingId))
 				|| !isValidDateTime(evidence.deletedAt)
 				|| !isVaultPath(evidence.sourcePath)
+				|| (evidence.deletedSourceRevision !== null
+					&& !SHA256_PATTERN.test(readString(evidence.deletedSourceRevision)))
 				|| !isLogicalDate(evidence.logicalDate)
 				|| (evidence.section !== null && typeof evidence.section !== "string")
 				|| typeof evidence.rawBlock !== "string" || evidence.rawBlock.length === 0
 				|| !CONTENT_HASH_PATTERN.test(readString(evidence.contentHash))
 				|| (evidence.sourceMemoId !== null && !MEMO_ID_PATTERN.test(readString(evidence.sourceMemoId)))) {
+				throw new Error("Invalid Identity Ledger event.");
+			}
+			return;
+		case "delete_commit":
+			if (!hasExactKeys(evidence, ["deleteEventId"])
+				|| !EVENT_ID_PATTERN.test(readString(value.baseBindingId))
+				|| !EVENT_ID_PATTERN.test(readString(evidence.deleteEventId))) {
 				throw new Error("Invalid Identity Ledger event.");
 			}
 			return;

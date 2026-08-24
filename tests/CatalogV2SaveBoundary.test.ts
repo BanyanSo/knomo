@@ -283,6 +283,77 @@ test("delete 在 Daily 已提交后即使 UI reload 失败也不显示操作失�
 	assert.deepEqual(statuses, []);
 });
 
+test("Identity 不可用时删除动作经确认后走永久删除，不调用可恢复删除", async () => {
+	const item = makeMemoItem(makeObservation("delete permanently", "a".repeat(64), []));
+	item.capabilities.identity.recoverableDelete = "absent";
+	const memo = toCatalogV2MemoView(item);
+	const view = Object.create(KnomoView.prototype) as KnomoView;
+	let permanentDeleteCalls = 0;
+	let recoverableDeleteCalls = 0;
+	let confirmationCalls = 0;
+	Object.assign(view, {
+		currentLayout: "desktop-wide",
+		mobileSearchController: { results: null, isOpen: false },
+		catalogV2FeatureService: {
+			removePermanently: async () => {
+				permanentDeleteCalls += 1;
+				return { status: "saved" as const, memoId: null, followUpPending: false, localRefreshPending: false };
+			},
+			delete: async () => {
+				recoverableDeleteCalls += 1;
+				throw new Error("不应调用可恢复删除");
+			},
+		},
+		resolveCatalogV2Memo: async () => item,
+		confirmPermanentDelete: async () => {
+			confirmationCalls += 1;
+			return true;
+		},
+		reloadMemos: async () => true,
+		closeCardMenu: () => undefined,
+		syncUiChrome: () => undefined,
+		syncCardMenuState: () => undefined,
+	});
+
+	await (view as unknown as {
+		handleMemoAction: (action: "delete", memoInput: ReturnType<typeof toCatalogV2MemoView>, candidateMemoId: null) => Promise<void>;
+	}).handleMemoAction("delete", memo, null);
+
+	assert.equal(confirmationCalls, 1);
+	assert.equal(permanentDeleteCalls, 1);
+	assert.equal(recoverableDeleteCalls, 0);
+});
+
+test("同一 memo 的连续 checkbox 更新按顺序执行", async () => {
+	const item = makeMemoItem(makeObservation("- [ ] task", "a".repeat(64), []));
+	const memo = toCatalogV2MemoView(item);
+	const view = Object.create(KnomoView.prototype) as KnomoView;
+	const firstGate = deferred<void>();
+	const calls: boolean[] = [];
+	Object.assign(view, {
+		taskUpdateQueues: new Map<string, Promise<void>>(),
+		findMemoById: () => memo,
+		handleCatalogV2TaskToggle: async (_memo: unknown, _taskIndex: number, checked: boolean) => {
+			calls.push(checked);
+			if (calls.length === 1) await firstGate.promise;
+		},
+	});
+	const enqueue = (view as unknown as {
+		enqueueCatalogV2TaskToggle: (memoInput: ReturnType<typeof toCatalogV2MemoView>, taskIndex: number, checked: boolean) => void;
+	}).enqueueCatalogV2TaskToggle.bind(view);
+
+	enqueue(memo, 0, true);
+	enqueue(memo, 0, false);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(calls, [true]);
+
+	firstGate.resolve();
+	const queue = (view as unknown as { taskUpdateQueues: Map<string, Promise<void>> }).taskUpdateQueues;
+	await queue.get(memo.id);
+	assert.deepEqual(calls, [true, false]);
+});
+
 function createFeatureHarness(
 	failurePoint: FailurePoint | null,
 	preCommitFailure: boolean,
@@ -421,7 +492,11 @@ function createFeatureHarness(
 		copy: async () => runMarkdownMutation("copy"),
 		move: async () => runMarkdownMutation("move"),
 		toggleTask: async () => runMarkdownMutation("toggleTask"),
-		captureObservation: async () => ({ observation: before, rawBlock: "- 09:00 before" }),
+		captureObservation: async () => ({
+			observation: before,
+			rawBlock: "- 09:00 before",
+			deletedSourceRevision: "b".repeat(64),
+		}),
 		remove: async () => ({ ...await runMarkdownMutation("toggleTask"), observation: null }),
 		createBlockReference: async () => ({
 			...await runMarkdownMutation("reference"),
@@ -513,6 +588,12 @@ function createFeatureHarness(
 	};
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((promiseResolve) => { resolve = promiseResolve; });
+	return { promise, resolve };
+}
+
 function makeIdentityCreatePlan(intentDurable: boolean): IdentityLedgerCreatePlan {
 	return {
 		memoId: "01991f40-7c00-7111-9111-111111111111",
@@ -592,8 +673,13 @@ function makeIdentityLedgerStub(
 		recordDeletePayload: async (current, evidence) => ({
 			memoId: current.memoId,
 			deleteEventId: "e_33333333333333333333333333333333",
+			deleteCommitEventId: null,
 			baseBindingId: current.bindingId,
 			evidence,
+		}),
+		recordDeleteCommit: async (record) => ({
+			...record,
+			deleteCommitEventId: "e_44444444444444444444444444444444",
 		}),
 	};
 }

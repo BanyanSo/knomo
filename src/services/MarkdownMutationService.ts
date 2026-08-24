@@ -2,6 +2,7 @@ import { normalizePath, TFile } from "obsidian";
 import type { App } from "obsidian";
 
 import type { MemoObservation, ObservationHandle } from "../types/catalog";
+import type { DailyInsertPosition } from "../types/settings";
 import type {
 	MarkdownBlockReferenceInput,
 	MarkdownBlockReferenceResult,
@@ -37,6 +38,7 @@ export interface MarkdownMutationServiceOptions {
 	getDailyFileForDate: (logicalDate: string) => Promise<TFile>;
 	getLogicalDateForPath: (sourcePath: string) => Promise<string>;
 	getMemoTimeFormat: () => "HH:mm" | "HH:mm:ss";
+	getInsertPosition?: () => DailyInsertPosition;
 	updateCatalogPartition: (input: MarkdownCatalogCommitInput) => Promise<void>;
 	refreshCatalogPaths: (paths: readonly string[]) => Promise<void>;
 	removeEmptyCreatedDailyFile?: (file: TFile) => Promise<void>;
@@ -199,6 +201,19 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					targetResult.catalogUpdatePending || sourceCatalogPending,
 				);
 			} catch (error) {
+				let rollbackSucceeded = false;
+				if (targetResult.observation !== null) {
+					try {
+						await this.remove({ observation: targetResult.observation });
+						if (target.created) {
+							await this.options.removeEmptyCreatedDailyFile?.(target.file).catch(() => undefined);
+						}
+						rollbackSucceeded = true;
+					} catch {
+						// 目标已被并发修改时不猜测删除，保留两份正文并报告待恢复。
+					}
+				}
+				if (rollbackSucceeded) throw error;
 				if (isStaleError(error)) {
 					await this.options.refreshCatalogPaths([sourceFile.path]).catch(() => undefined);
 				}
@@ -206,7 +221,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					status: "committed_content_pending",
 					observation: targetResult.observation,
 					sourcePaths: [normalizePath(sourceFile.path), normalizePath(target.file.path)],
-					catalogUpdatePending: targetResult.catalogUpdatePending,
+					catalogUpdatePending: true,
 				};
 			}
 		});
@@ -238,7 +253,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		const logicalDate = await this.options.getLogicalDateForPath(file.path);
 		let observation: MemoObservation | null = null;
 		let rawBlock = "";
-		await this.dailyGateway.prepare({
+		const prepared = await this.dailyGateway.prepare({
 			file,
 			logicalDate,
 			headings: this.options.getHeadings(),
@@ -246,10 +261,14 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			update: (content, parsed) => {
 				observation = findObservation(parsed, input.observation, file.path);
 				rawBlock = getRawBlock(content, observation);
-				return content;
+				return replaceObservation(content, observation, "", true);
 			},
 		});
-		return { observation: requireObservation(observation), rawBlock };
+		return {
+			observation: requireObservation(observation),
+			rawBlock,
+			deletedSourceRevision: prepared.after.sourceRevision,
+		};
 	}
 
 	async restore(input: MarkdownRestoreInput): Promise<MarkdownMutationResult> {
@@ -304,6 +323,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		return this.withStaleRefresh([file.path], async () => {
 			try {
 				const headings = this.options.getHeadings();
+				const position = this.options.getInsertPosition?.() ?? "bottom";
 				const section = preferredSection !== undefined
 					&& (preferredSection === null || headings.includes(preferredSection))
 					? preferredSection
@@ -317,10 +337,10 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 						if (existingBlockId !== null && parsed.observations.some((item) => item.existingBlockId === existingBlockId)) {
 							throw new Error("Moved Obsidian block ID already exists in the target Daily file.");
 						}
-						return insertRawBlock(content, rawBlock, section);
+						return insertRawBlock(content, rawBlock, section, position);
 					},
 				});
-				const created = findAppendedObservation(prepared, rawBlock, section);
+				const created = findAppendedObservation(prepared, rawBlock, section, position);
 				const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
 				return committedResult(created, [file.path], catalogUpdatePending);
 			} catch (error) {
@@ -439,13 +459,16 @@ function findAppendedObservation(
 	prepared: CatalogV2PreparedDailyWrite,
 	rawBlock: string,
 	section: string | null,
+	position: DailyInsertPosition,
 ): MemoObservation {
 	if (prepared.after.observations.length !== prepared.before.observations.length + 1) {
 		throw new Error("Create must add exactly one parsed memo observation.");
 	}
 	const matches = prepared.after.observations.filter((item) => item.section === section
 		&& normalizeRawBlock(getRawBlock(prepared.afterContent, item)) === normalizeRawBlock(rawBlock))
-		.sort((left, right) => right.startLine - left.startLine);
+		.sort((left, right) => position === "top"
+			? left.startLine - right.startLine
+			: right.startLine - left.startLine);
 	if (matches.length === 0) throw new Error("Created Daily observation was not parsed.");
 	return matches[0] as MemoObservation;
 }
@@ -496,7 +519,12 @@ function getLineStarts(content: string): number[] {
 	return starts;
 }
 
-function insertRawBlock(content: string, rawBlock: string, section: string | null): string {
+function insertRawBlock(
+	content: string,
+	rawBlock: string,
+	section: string | null,
+	position: DailyInsertPosition,
+): string {
 	const firstLine = rawBlock.split(/\r\n|\r|\n/u, 1)[0] ?? "";
 	if (!/^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?: |$)/u.test(firstLine)) {
 		throw new Error("A Daily memo raw block must start with a valid root-level time line.");
@@ -504,13 +532,27 @@ function insertRawBlock(content: string, rawBlock: string, section: string | nul
 	const eol = content.includes("\r\n") ? "\r\n" : "\n";
 	const normalizedBlock = rawBlock.replace(/\r\n|\r|\n/gu, eol).replace(/(?:\r\n|\n)$/u, "");
 	const headings = findHeadingOffsets(content);
-	if (section === null) return insertAtOffset(content, headings[0]?.start ?? content.length, normalizedBlock, eol);
+	if (section === null) {
+		const rootStart = findRootContentStart(content);
+		const rootEnd = headings[0]?.start ?? content.length;
+		const offset = position === "top"
+			? rootStart
+			: findBottomInsertOffset(content, rootStart, rootEnd);
+		return insertAtOffset(content, offset, normalizedBlock, eol);
+	}
 	const headingIndex = headings.findIndex((heading) => heading.text.trim() === section.trim());
 	if (headingIndex === -1) {
 		const sectionBlock = `${section.replace(/\r\n|\r|\n/gu, "").trim()}${eol}${normalizedBlock}`;
 		return insertAtOffset(content, content.length, sectionBlock, eol);
 	}
-	return insertAtOffset(content, headings[headingIndex + 1]?.start ?? content.length, normalizedBlock, eol);
+	const offset = position === "top"
+		? headings[headingIndex]?.contentStart ?? content.length
+		: findBottomInsertOffset(
+			content,
+			headings[headingIndex]?.contentStart ?? content.length,
+			headings[headingIndex + 1]?.start ?? content.length,
+		);
+	return insertAtOffset(content, offset, normalizedBlock, eol);
 }
 
 function insertAtOffset(content: string, offset: number, block: string, eol: string): string {
@@ -520,9 +562,9 @@ function insertAtOffset(content: string, offset: number, block: string, eol: str
 	return `${prefix}${block}${eol}${suffix}`;
 }
 
-function findHeadingOffsets(content: string): Array<{ start: number; text: string }> {
+function findHeadingOffsets(content: string): Array<{ start: number; contentStart: number; text: string }> {
 	const starts = getLineStarts(content);
-	const result: Array<{ start: number; text: string }> = [];
+	const result: Array<{ start: number; contentStart: number; text: string }> = [];
 	let fence: { char: string; length: number } | null = null;
 	let frontmatter = content.slice(0, getLineEnd(content, starts, 0)).trim() === "---";
 	for (let lineIndex = 0; lineIndex < starts.length; lineIndex += 1) {
@@ -538,9 +580,35 @@ function findHeadingOffsets(content: string): Array<{ start: number; text: strin
 			else if (fence.char === marker.charAt(0) && marker.length >= fence.length) fence = null;
 			continue;
 		}
-		if (fence === null && /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) result.push({ start, text: line });
+		if (fence === null && /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) {
+			result.push({ start, contentStart: starts[lineIndex + 1] ?? content.length, text: line });
+		}
 	}
 	return result;
+}
+
+function findRootContentStart(content: string): number {
+	const starts = getLineStarts(content);
+	if (content.slice(0, getLineEnd(content, starts, 0)).trim() !== "---") return 0;
+	for (let lineIndex = 1; lineIndex < starts.length; lineIndex += 1) {
+		const line = content.slice(starts[lineIndex], getLineEnd(content, starts, lineIndex)).trim();
+		if (line === "---" || line === "...") return starts[lineIndex + 1] ?? content.length;
+	}
+	return content.length;
+}
+
+function findBottomInsertOffset(content: string, start: number, end: number): number {
+	const starts = getLineStarts(content);
+	let boundary = starts.findIndex((offset) => offset >= end);
+	if (boundary === -1) boundary = starts.length;
+	while (boundary > 0) {
+		const lineIndex = boundary - 1;
+		const lineStart = starts[lineIndex] ?? 0;
+		if (lineStart < start) break;
+		if (content.slice(lineStart, getLineEnd(content, starts, lineIndex)).trim().length > 0) break;
+		boundary -= 1;
+	}
+	return starts[boundary] ?? end;
 }
 
 function getLineEnd(content: string, starts: readonly number[], lineIndex: number): number {

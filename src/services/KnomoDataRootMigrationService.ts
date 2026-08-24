@@ -40,7 +40,7 @@ interface IdentityLedgerImage {
 	snapshot: IdentityLedgerSnapshot;
 }
 
-/** 只在用户明确修改设置时初始化、采用或迁移 Identity Ledger。 */
+/** 供首次启用默认初始化及用户明确修改设置时初始化、采用或迁移 Identity Ledger。 */
 export class KnomoDataRootMigrationService {
 	constructor(
 		private readonly app: App,
@@ -56,7 +56,6 @@ export class KnomoDataRootMigrationService {
 		const newDataRoot = normalizeVaultPath(nextDataRoot);
 		const oldIdentityRoot = getIdentityLedgerRootPath(oldDataRoot);
 		const newIdentityRoot = getIdentityLedgerRootPath(newDataRoot);
-		this.assertSeparateRoots(oldIdentityRoot, newIdentityRoot);
 
 		if (!location.knomoDataRootConfigured) {
 			const target = await this.readTargetImage(newIdentityRoot);
@@ -68,6 +67,7 @@ export class KnomoDataRootMigrationService {
 				newIdentityRoot,
 			};
 		}
+		this.assertSeparateRoots(oldDataRoot, newDataRoot);
 
 		const source = await this.readImage(oldIdentityRoot);
 		if (oldIdentityRoot === newIdentityRoot) {

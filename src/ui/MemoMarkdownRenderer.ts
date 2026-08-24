@@ -350,6 +350,7 @@ export function prepareRenderedTaskCheckboxes(container: HTMLElement, memo: Memo
 			return;
 		}
 		const input = checkboxEl as HTMLInputElement;
+		input.disabled = false;
 		input.addClass("knomo-task-checkbox");
 		input.setAttr("data-knomo-memo-id", memo.id);
 		input.setAttr("data-knomo-task-index", String(taskIndex));

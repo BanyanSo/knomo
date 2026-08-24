@@ -63,15 +63,22 @@ export class KnomoSharedConfigService {
 		owner.registerEvent(this.app.vault.on("delete", handle));
 		owner.registerEvent(this.app.vault.on("rename", handle));
 		owner.register(() => { this.onChanged = null; });
+		// 监听建立后补扫一次，覆盖初始化扫描与事件注册之间的变更窗口。
+		this.scheduleRefresh();
 	}
 
-	async initialize(): Promise<void> {
-		this.localConfig = null;
+	async initializeLocalConfig(): Promise<void> {
+		let localConfig: KnomoSharedConfig | null = null;
 		try {
-			this.localConfig = cloneConfig(await this.options.getLocalConfig());
+			localConfig = cloneConfig(await this.options.getLocalConfig());
 		} catch {
 			// 共享配置可在本机 Daily Notes 设置不可用时继续提供只读解析配置。
 		}
+		this.localConfig = localConfig;
+	}
+
+	async initialize(): Promise<void> {
+		await this.initializeLocalConfig();
 		try {
 			await this.refreshFromVault();
 			if (this.status !== "ready" && this.localConfig === null) this.status = "unavailable";

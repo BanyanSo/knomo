@@ -6,6 +6,7 @@ import {
 	getMemoActionClass,
 	getMemoCardActions,
 	getMemoCardShell,
+	getMemoDeleteMode,
 	getMemoSourceReferenceMeta,
 	getTrashActionClass,
 	getTrashCardActions,
@@ -92,7 +93,7 @@ test("builds card action and trash action metadata", () => {
 	assert.equal(getTrashMemoCardClass("purge"), "knomo-card knomo-trash-card is-busy");
 });
 
-test("filters recoverable delete while keeping Markdown actions", () => {
+test("只有明确无身份的 memo 才显示永久删除，identity 同步或冲突时暂停删除", () => {
 	const memo = makeMemo({});
 	assert.deepEqual(getMemoCardActions(memo), getMemoCardActions());
 	assert.deepEqual(getMemoCardActions({
@@ -107,6 +108,30 @@ test("filters recoverable delete while keeping Markdown actions", () => {
 		{ action: "copy-text", className: "knomo-card-action" },
 		{ action: "copy-link", className: "knomo-card-action" },
 	]);
+	assert.equal(getMemoDeleteMode({
+		...memo,
+		catalogV2: {
+			capabilities: makeCapabilities("conflicted"),
+		} as never,
+	}), "unavailable");
+	assert.equal(getMemoDeleteMode({
+		...memo,
+		catalogV2: {
+			capabilities: makeCapabilities("syncing"),
+		} as never,
+	}), "unavailable");
+	assert.equal(getMemoDeleteMode({
+		...memo,
+		catalogV2: {
+			capabilities: makeCapabilities("absent"),
+		} as never,
+	}), "permanent");
+	assert.equal(getMemoDeleteMode({
+		...memo,
+		catalogV2: {
+			capabilities: makeCapabilities("ready"),
+		} as never,
+	}), "recoverable");
 });
 
 test("keeps the card menu available while identity actions are settling", () => {
@@ -134,6 +159,14 @@ test("builds memo source reference metadata", () => {
 	}), deletedMemoIds), {
 		type: "markdown",
 		text: "[[Daily/2026-06-02#^abc|source-1]]",
+		sourcePath: "Daily/2026-06-02.md",
+	});
+	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({
+		contentSnapshot: "引用 [[Daily/2026-06-01#^block-a|20260601-083000]]\n> 原文",
+		sourceMemoId: null,
+	}), deletedMemoIds), {
+		type: "markdown",
+		text: "[[Daily/2026-06-01#^block-a|20260601-083000]]",
 		sourcePath: "Daily/2026-06-02.md",
 	});
 });

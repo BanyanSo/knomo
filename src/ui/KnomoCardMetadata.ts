@@ -1,5 +1,5 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
-import { withMemoIdAlias } from "../utils/references";
+import { getPreferredMemoBlockReferenceText, withMemoIdAlias } from "../utils/references";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 
 export interface MemoCardShellOptions {
@@ -90,6 +90,8 @@ export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
 	return [...actions, ...repairs];
 }
 
+export type MemoDeleteMode = "recoverable" | "permanent" | "unavailable";
+
 export function isMemoCardMenuReady(memo: MemoRecord): boolean {
 	const capabilities = memo.catalogV2?.capabilities;
 	if (capabilities === undefined) return true;
@@ -104,7 +106,7 @@ function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction)
 	if (action === "open-daily") return capabilities.markdown.openDaily;
 	if (action === "copy-text") return capabilities.markdown.copy;
 	if (action === "edit") return capabilities.markdown.edit;
-	if (action === "delete") return capabilities.identity.recoverableDelete === "ready";
+	if (action === "delete") return memo === undefined || getMemoDeleteMode(memo) !== "unavailable";
 	if (action === "reference" || action === "copy-link") return capabilities.markdown.explicitBlockReference;
 	return false;
 }
@@ -129,27 +131,41 @@ export function getTrashCardActions(busyAction: TrashAction | null): TrashCardAc
 }
 
 export function getMemoSourceReferenceMeta(memo: MemoRecord, deletedMemoIds: ReadonlySet<string>): MemoSourceReferenceMeta {
-	if (memo.sourceMemoId === null || deletedMemoIds.has(memo.sourceMemoId)) {
+	if (memo.sourceMemoId !== null && deletedMemoIds.has(memo.sourceMemoId)) {
 		return { type: "none" };
 	}
 	const sourceReferenceText = getSourceReferenceText(memo);
-	if (sourceReferenceText === null) {
+	if (sourceReferenceText !== null) {
+		return {
+			type: "markdown",
+			text: sourceReferenceText,
+			sourcePath: memo.dailyRef.path,
+		};
+	}
+	if (memo.sourceMemoId !== null) {
 		return { type: "plain", sourceMemoId: memo.sourceMemoId };
 	}
-	return {
-		type: "markdown",
-		text: sourceReferenceText,
-		sourcePath: memo.dailyRef.path,
-	};
+	return { type: "none" };
 }
 
 function getSourceReferenceText(memo: MemoRecord): string | null {
 	const sourceMemoId = memo.sourceMemoId ?? memo.references[0]?.memoId ?? null;
-	const referenceText = memo.references[0]?.referenceText ?? null;
-	if (sourceMemoId === null || referenceText === null) {
+	const referenceText = memo.references[0]?.referenceText
+		?? getPreferredMemoBlockReferenceText(memo.contentSnapshot);
+	if (referenceText === null) {
 		return null;
 	}
-	return withMemoIdAlias(referenceText, sourceMemoId);
+	return sourceMemoId === null ? referenceText : withMemoIdAlias(referenceText, sourceMemoId);
+}
+
+export function getMemoDeleteMode(memo: MemoRecord): MemoDeleteMode {
+	const capabilities = memo.catalogV2?.capabilities;
+	if (capabilities === undefined || capabilities.identity.recoverableDelete === "ready") {
+		return "recoverable";
+	}
+	return capabilities.identity.recoverableDelete === "absent" && capabilities.markdown.remove
+		? "permanent"
+		: "unavailable";
 }
 
 function getVisibleMemoText(content: string): string {

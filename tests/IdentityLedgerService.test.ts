@@ -45,7 +45,7 @@ test("P0 第 4 步：memoId 使用 UUIDv7 且不依赖 Vault、正文或 observa
 	assert.notEqual(first, second);
 });
 
-test("P0 第 4 步：Identity Ledger 只接受冻结的八种 V3 基础事件", async () => {
+test("P0 第 4 步：Identity Ledger 只接受冻结的九种 V3 基础事件", async () => {
 	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
 	const base = {
 		schemaVersion: 1 as const,
@@ -103,6 +103,7 @@ test("P0 第 4 步：Identity Ledger 只接受冻结的八种 V3 基础事件", 
 			evidence: {
 				deletedAt: "2026-08-22T02:00:00.000Z",
 				sourcePath: observation.sourcePath,
+				deletedSourceRevision: "b".repeat(64),
 				logicalDate: observation.logicalDate,
 				section: observation.section,
 				rawBlock: "- 09:00 正文",
@@ -113,13 +114,20 @@ test("P0 第 4 步：Identity Ledger 只接受冻结的八种 V3 基础事件", 
 		{
 			...base,
 			eventId: eventId(7),
+			type: "delete_commit",
+			baseBindingId: eventId(2),
+			evidence: { deleteEventId: eventId(6) },
+		},
+		{
+			...base,
+			eventId: eventId(8),
 			type: "restore",
 			baseBindingId: eventId(2),
 			evidence: { observation, deleteEventId: eventId(6) },
 		},
 		{
 			...base,
-			eventId: eventId(8),
+			eventId: eventId(9),
 			type: "repair",
 			baseBindingId: eventId(2),
 			evidence: { observation },
@@ -140,14 +148,15 @@ test("P0 第 4 步：Identity Ledger 只接受冻结的八种 V3 基础事件", 
 		"relation",
 		"review",
 		"delete_payload",
+		"delete_commit",
 		"restore",
 		"repair",
 	]);
-	const invalidContent = `${JSON.stringify({ ...base, eventId: eventId(9), type: "authority", baseBindingId: null, evidence: {} })}\n`;
+	const invalidContent = `${JSON.stringify({ ...base, eventId: eventId(10), type: "authority", baseBindingId: null, evidence: {} })}\n`;
 	const invalidDigest = await sha256IdentityLedgerText(invalidContent);
 	await assert.rejects(() => parseIdentityLedgerSegment(
 		IDENTITY_ROOT_A,
-		`${IDENTITY_ROOT_A}/writers/${WRITER_A}/segments/segment-${eventId(9)}-${invalidDigest}.jsonl`,
+		`${IDENTITY_ROOT_A}/writers/${WRITER_A}/segments/segment-${eventId(10)}-${invalidDigest}.jsonl`,
 		invalidContent,
 	), /Invalid Identity Ledger event/u);
 });
@@ -520,6 +529,7 @@ test("P1 第 5 步：delete payload 不能隐藏 Daily 中仍存在的 observati
 		evidence: {
 			deletedAt: "2026-08-22T05:00:00.000Z",
 			sourcePath: dailyPath,
+			deletedSourceRevision: "b".repeat(64),
 			logicalDate: observation.logicalDate,
 			section: observation.section,
 			rawBlock: "- 09:00 正文",
@@ -541,9 +551,11 @@ test("P1 第 5 步：delete payload 不能隐藏 Daily 中仍存在的 observati
 	assert.equal(vault.read(dailyPath), dailyBefore);
 });
 
-test("P1 第 7 步：可恢复删除 payload 与 restore 都可从八类 Ledger events 重建", async () => {
+test("V3-DELETE-003/004：payload 保持 pending，只有 delete_commit 后才进入废纸篓", async () => {
 	const vault = await createLedgerVault();
-	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1), eventId(2), eventId(3), eventId(4)]);
+	const service = createService(vault, WRITER_A, [MEMO_A], [
+		eventId(1), eventId(2), eventId(3), eventId(4), eventId(5),
+	]);
 	await service.initialize();
 	const before = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
 	const restored = makeObservation("Daily/2026-08-22.md", "b".repeat(64), 1, "正文");
@@ -552,6 +564,7 @@ test("P1 第 7 步：可恢复删除 payload 与 restore 都可从八类 Ledger 
 	const deleted = await service.recordDeletePayload(binding, {
 		deletedAt: "2026-08-22T05:00:00.000Z",
 		sourcePath: before.sourcePath,
+		deletedSourceRevision: "b".repeat(64),
 		logicalDate: before.logicalDate,
 		section: before.section,
 		rawBlock: "- 09:00 正文",
@@ -559,9 +572,12 @@ test("P1 第 7 步：可恢复删除 payload 与 restore 都可从八类 Ledger 
 		sourceMemoId: null,
 	});
 
-	assert.equal(service.getActiveDeletes().length, 1);
-	assert.equal(service.getActiveDeletes()[0]?.deleteEventId, deleted.deleteEventId);
-	const restoredBinding = await service.recordRestore(deleted, restored);
+	assert.equal(service.getPendingDeletes().length, 1);
+	assert.equal(service.getActiveDeletes().length, 0);
+	const committed = await service.recordDeleteCommit(deleted);
+	assert.equal(service.getPendingDeletes().length, 0);
+	assert.equal(service.getActiveDeletes()[0]?.deleteEventId, committed.deleteEventId);
+	const restoredBinding = await service.recordRestore(committed, restored);
 	assert.equal(restoredBinding.memoId, MEMO_A);
 	assert.equal(service.getActiveDeletes().length, 0);
 
@@ -569,6 +585,30 @@ test("P1 第 7 步：可恢复删除 payload 与 restore 都可从八类 Ledger 
 	await restarted.initialize();
 	assert.equal(restarted.resolveObservation(restored)?.memoId, MEMO_A);
 	assert.equal(restarted.getActiveDeletes().length, 0);
+});
+
+test("V3-DELETE-003：重启续跑只在 Daily 精确命中删除后 revision 时 finalize", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1), eventId(2), eventId(3)]);
+	await service.initialize();
+	const before = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
+	const binding = await service.finishCreate(await service.beginCreate(createIntentInput(before)), before);
+	await service.recordDeletePayload(binding, {
+		deletedAt: "2026-08-22T05:00:00.000Z",
+		sourcePath: before.sourcePath,
+		deletedSourceRevision: "b".repeat(64),
+		logicalDate: before.logicalDate,
+		section: before.section,
+		rawBlock: "- 09:00 正文",
+		contentHash: before.contentHash,
+		sourceMemoId: null,
+	});
+
+	assert.equal(await service.reconcilePendingDeletes({ [before.sourcePath]: "a".repeat(64) }), 0);
+	assert.equal(service.getPendingDeletes().length, 1);
+	assert.equal(await service.reconcilePendingDeletes({ [before.sourcePath]: "b".repeat(64) }), 1);
+	assert.equal(service.getPendingDeletes().length, 0);
+	assert.equal(service.getActiveDeletes().length, 1);
 });
 
 test("P1 第 7 步：重复导入相同旧事件不产生重复 Identity events", async () => {
@@ -591,6 +631,36 @@ test("P1 第 7 步：重复导入相同旧事件不产生重复 Identity events"
 	assert.equal(await service.importVerifiedLegacyEvents([claim]), 0);
 	assert.equal(service.getSnapshot().eventCount, 1);
 	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 1);
+});
+
+test("P0 Identity 性能：legacy events 使用有界批量 segment 且只导入一次", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const events: IdentityLedgerEvent[] = Array.from({ length: 600 }, (_, index) => {
+		const observation = makeObservation(
+			"Daily/2026-08-22.md",
+			(index + 1).toString(16).padStart(64, "0"),
+			index + 1,
+			`memo-${index + 1}`,
+		);
+		return {
+			schemaVersion: 1,
+			eventId: eventId(index + 100),
+			writerId: WRITER_A,
+			memoId: `m_${(index + 1).toString(16).padStart(32, "0")}`,
+			type: "claim",
+			baseBindingId: null,
+			occurredAt: "2026-08-22T06:00:00.000Z",
+			evidence: { observation: makeEvidence(observation), createIntentEventId: null },
+		};
+	});
+
+	assert.equal(await service.importVerifiedLegacyEvents(events), 600);
+	assert.equal(service.getSnapshot().eventCount, 600);
+	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 3);
+	assert.equal(await service.importVerifiedLegacyEvents(events), 0);
+	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 3);
 });
 
 test("P1 第 7 步：旧 V2 memoId、relation、review 与可恢复删除可幂等导入", async () => {
@@ -649,7 +719,7 @@ test("P1 第 7 步：旧 V2 memoId、relation、review 与可恢复删除可幂�
 	const second = await importer.run();
 
 	assert.equal(first.status, "ready");
-	assert.equal(first.importedEventCount, 6);
+	assert.equal(first.importedEventCount, 7);
 	assert.equal(second.importedEventCount, 0);
 	assert.equal(target.resolveObservation(observation)?.memoId, MEMO_A);
 	assert.equal(target.getSourceMemoId(MEMO_A), MEMO_B);

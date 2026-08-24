@@ -73,6 +73,36 @@ test("CatalogV2ReadService keeps unresolved observations queryable without write
 	assert.deepEqual(await service.getDeletedSummary(), { count: 0, ids: [] });
 });
 
+test("共享配置缺失不把已完成的本地扫描伪装成构建中，也不阻塞本地统计与时光浮标", async () => {
+	const observation = makeObservation("2026-08-13", 1, "local fallback @2026-08-13");
+	const { catalog, store } = await makeCatalog([observation], "complete");
+	await store.setCoverage({
+		kind: "complete",
+		sharedConfigurationComplete: false,
+		coveredFromDate: observation.logicalDate,
+		pendingFileCount: 0,
+		coveredFileCount: 1,
+		totalFileCount: 1,
+	});
+	const service = new CatalogV2ReadService({
+		catalog,
+		stateStore: null,
+		stateCoordinator: null,
+		transactionStore: null,
+		deletedPayloadStore: null,
+		installMode: "uninitialized",
+	});
+
+	const page = await service.query({ limit: 10 });
+
+	assert.equal(page.readState, "ready");
+	assert.equal(page.status.content, "ready");
+	assert.equal(page.status.catalog, "partial");
+	assert.equal(page.capabilities.stats, "complete");
+	assert.equal((await service.buildRecordStats(async () => undefined, () => true))?.overview.memoCount, 1);
+	assert.equal((await service.queryAllTimeBuoys()).complete, true);
+});
+
 test("partial Catalog 只允许浏览已加载 Memo，完整数据功能明确拒绝缩减结果", async () => {
 	const observation: MemoObservation = {
 		sourcePath: "Daily/2026-08-13.md",
@@ -357,7 +387,7 @@ test("P0 第 4 步：V3 claim 后到时不依赖 V2 state 或 bootstrap，原 ob
 	assert.equal(identified.memoId, memoId);
 	assert.equal(identified.sourceMemoId, "01991f40-7c00-7222-a222-222222222222");
 	assert.equal(identified.capabilities.identity.crossDeviceIdentity, "ready");
-	assert.equal(identified.capabilities.identity.recoverableDelete, "syncing");
+	assert.equal(identified.capabilities.identity.recoverableDelete, "ready");
 	assert.equal(identifiedPage.status.identity, "ready");
 });
 

@@ -74,6 +74,24 @@ test("V3-ORDER-006/V3-PURITY-001：同一分钟相同正文创建两条 observat
 	);
 });
 
+test("用户配置 top 时新 memo 插入标题下方，bottom 仍追加到分组末尾", async () => {
+	const path = "Daily/2026-08-22.md";
+	const initial = "## Memos\n- 08:00 existing\n\n\n## Notes\ntext\n";
+	const top = createFixture({ initialFiles: { [path]: initial }, insertPosition: "top" });
+	await top.service.create({ content: "new" });
+	assert.equal(
+		top.vault.readText(path),
+		"## Memos\n- 09:00 new\n- 08:00 existing\n\n\n## Notes\ntext\n",
+	);
+
+	const bottom = createFixture({ initialFiles: { [path]: initial }, insertPosition: "bottom" });
+	await bottom.service.create({ content: "new" });
+	assert.equal(
+		bottom.vault.readText(path),
+		"## Memos\n- 08:00 existing\n- 09:00 new\n\n\n## Notes\ntext\n",
+	);
+});
+
 test("V3-LAYER-004：stale ObservationHandle 拒绝写入并刷新 Catalog，不按旧行号猜测", async () => {
 	const fixture = createFixture({
 		initialFiles: { "Daily/2026-08-22.md": "## Memos\n- 08:00 first\n- 08:01 second\n" },
@@ -123,7 +141,7 @@ test("V3-OP-005：copy 保留 multiline、列表、任务和代码块结构，�
 	assert.equal(copied.existingBlockId, null);
 });
 
-test("V3-OP-006：move 先提交目标；来源删除失败时保留两份正文并报告 content pending", async () => {
+test("V3-OP-006：move 来源删除失败时精确回滚目标，不留下无恢复记录的重复正文", async () => {
 	const sourcePath = "Daily/2026-08-22.md";
 	const targetPath = "Daily/2026-08-23.md";
 	const fixture = createFixture({
@@ -135,14 +153,39 @@ test("V3-OP-006：move 先提交目标；来源删除失败时保留两份正文
 	const source = await fixture.getOnlyObservation("2026-08-22");
 	fixture.vault.failNextProcess(sourcePath);
 
+	await assert.rejects(() => fixture.service.move({
+		observation: toHandle(source),
+		targetLogicalDate: "2026-08-23",
+	}), /process failed/u);
+
+	assert.match(fixture.vault.readText(sourcePath), /move me/u);
+	assert.doesNotMatch(fixture.vault.readText(targetPath), /move me/u);
+});
+
+test("V3-OP-006：move 回滚目标遇到并发修改时保留两份正文并明确报告 content pending", async () => {
+	const sourcePath = "Daily/2026-08-22.md";
+	const targetPath = "Daily/2026-08-23.md";
+	const fixture = createFixture({
+		initialFiles: {
+			[sourcePath]: "## Memos\n- 08:00 move me\n",
+			[targetPath]: "## Memos\n",
+		},
+	});
+	const source = await fixture.getOnlyObservation("2026-08-22");
+	fixture.vault.failNextProcess(sourcePath, () => {
+		fixture.vault.writeText(targetPath, `${fixture.vault.readText(targetPath)}- 08:01 concurrent\n`);
+	});
+
 	const result = await fixture.service.move({
 		observation: toHandle(source),
 		targetLogicalDate: "2026-08-23",
 	});
 
 	assert.equal(result.status, "committed_content_pending");
+	assert.equal(result.catalogUpdatePending, true);
 	assert.match(fixture.vault.readText(sourcePath), /move me/u);
 	assert.match(fixture.vault.readText(targetPath), /move me/u);
+	assert.match(fixture.vault.readText(targetPath), /concurrent/u);
 });
 
 test("V3-OP-007/012：remove 删除当前 block；显式 reference 只写用户请求的 block ID", async () => {
@@ -186,6 +229,7 @@ test("P1 第 7 步：可恢复删除先只读捕获精确 block，restore 原样
 interface FixtureOptions {
 	catalogDegraded?: boolean;
 	initialFiles?: Readonly<Record<string, string>>;
+	insertPosition?: "top" | "bottom";
 }
 
 function createFixture(options: FixtureOptions = {}) {
@@ -206,6 +250,7 @@ function createFixture(options: FixtureOptions = {}) {
 		getLogicalDateForPath: async (sourcePath) => sourcePath.match(/(\d{4}-\d{2}-\d{2})\.md$/u)?.[1]
 			?? Promise.reject(new Error(`Not a Daily path: ${sourcePath}`)),
 		getMemoTimeFormat: () => "HH:mm",
+		getInsertPosition: () => options.insertPosition ?? "bottom",
 		updateCatalogPartition: async (input) => {
 			committedPartitions.push(input);
 			if (options.catalogDegraded) throw new Error("Catalog storage is degraded.");
@@ -253,7 +298,7 @@ function toHandle(observation: MemoObservation): ObservationHandle {
 class MemoryVault {
 	private readonly files = new Map<string, TFile>();
 	private readonly contents = new Map<string, string>();
-	private readonly failingProcessPaths = new Set<string>();
+	private readonly failingProcessPaths = new Map<string, (() => void) | null>();
 
 	constructor(initialFiles: Readonly<Record<string, string>>) {
 		for (const [path, content] of Object.entries(initialFiles)) this.ensureFile(path, content);
@@ -272,7 +317,12 @@ class MemoryVault {
 	}
 
 	async process(file: TFile, update: (content: string) => string): Promise<string> {
-		if (this.failingProcessPaths.delete(file.path)) throw new Error(`process failed: ${file.path}`);
+		if (this.failingProcessPaths.has(file.path)) {
+			const onFailure = this.failingProcessPaths.get(file.path);
+			this.failingProcessPaths.delete(file.path);
+			onFailure?.();
+			throw new Error(`process failed: ${file.path}`);
+		}
 		const next = update(this.readText(file.path));
 		this.writeText(file.path, next);
 		return next;
@@ -306,7 +356,7 @@ class MemoryVault {
 		file.stat = { ...file.stat, mtime: file.stat.mtime + 1, size: Buffer.byteLength(content) };
 	}
 
-	failNextProcess(path: string): void {
-		this.failingProcessPaths.add(path);
+	failNextProcess(path: string, onFailure: (() => void) | null = null): void {
+		this.failingProcessPaths.set(path, onFailure);
 	}
 }

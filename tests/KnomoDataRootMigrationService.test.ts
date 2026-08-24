@@ -173,6 +173,25 @@ test("V3-ROOT-009：目标存在冲突字节时验证失败，配置保持旧根
 	assert.equal(ledger.resolveObservation(observation)?.memoId, MEMO_A);
 });
 
+test("数据根迁移拒绝互相嵌套的源目录和目标目录", async () => {
+	const vault = new CatalogV2ReplicaVault();
+	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: false };
+	const ledger = createLedger(vault, () => location);
+	const migration = new KnomoDataRootMigrationService(
+		vault.app,
+		ledger,
+		() => location,
+		async (nextRoot) => { location = { knomoDataRoot: nextRoot, knomoDataRootConfigured: true }; },
+	);
+	await migration.migrate("Knomo-A");
+
+	await assert.rejects(
+		() => migration.migrate("Knomo-A/Nested"),
+		/nested source and target roots/u,
+	);
+	assert.equal(location.knomoDataRoot, "Knomo-A");
+});
+
 test("V3-ROOT-006：复制期间源 Ledger 发生变化时不切换配置", async () => {
 	const vault = new CatalogV2ReplicaVault();
 	let location = { knomoDataRoot: "Knomo-A", knomoDataRootConfigured: false };

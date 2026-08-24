@@ -76,7 +76,10 @@ export default class KnomoPlugin extends Plugin {
 		this.settingsService = new SettingsService(this, pluginDataStore);
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
 		const settingsLoaded = await this.loadSettingsSafely();
-		if (settingsLoaded) await this.initializeTimeBuoyDefaultSafely();
+		if (settingsLoaded) {
+			await this.initializeTimeBuoyDefaultSafely();
+			await this.initializeMonthlyExcludeDefaultSafely();
+		}
 
 		const diaryMemoParser = new DiaryMemoParser();
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
@@ -186,13 +189,19 @@ export default class KnomoPlugin extends Plugin {
 				getRendererVersion: () => knomoSharedConfigService.getEffectiveConfig().monthly.rendererVersion,
 			},
 		);
+		let monthlyProjectionFailureVisible = false;
 		this.monthlyProjectionCoordinator = new MonthlyProjectionCoordinator(
 			this.app,
 			{
 				inputBuilder: projectionInputBuilder,
 				selfWriteTracker,
 				isProjectionAllowed: () => knomoSharedConfigService.isMonthlyProjectionAllowed(),
-				onStateChanged: () => { void this.queueRefreshOpenViews(); },
+				onStateChanged: () => {
+					const failureVisible = this.monthlyProjectionCoordinator?.getProjectionState() === "failed";
+					if (failureVisible === monthlyProjectionFailureVisible) return;
+					monthlyProjectionFailureVisible = failureVisible;
+					void this.queueRefreshOpenViews();
+				},
 			},
 		);
 
@@ -215,7 +224,6 @@ export default class KnomoPlugin extends Plugin {
 				onCatalogSettled: async () => {
 					await this.legacyIndexMigrationService?.run();
 					await reconcileIdentityLedger();
-					await this.catalogReadService?.materializeResolutionSnapshot();
 					await this.queueRefreshOpenViews();
 				},
 			},
@@ -281,7 +289,6 @@ export default class KnomoPlugin extends Plugin {
 
 		identityLedgerService.start(this, async () => {
 			await reconcileIdentityLedger();
-			await this.catalogReadService?.materializeResolutionSnapshot();
 			await this.queueRefreshOpenViews();
 		});
 		knomoSharedConfigService.start(this, async () => {
@@ -291,7 +298,6 @@ export default class KnomoPlugin extends Plugin {
 			await this.queueRefreshOpenViews();
 		});
 		this.legacyIndexMigrationService.start(this, async () => {
-			await this.catalogReadService?.materializeResolutionSnapshot();
 			await this.queueRefreshOpenViews();
 		});
 		this.monthlyProjectionCoordinator.start(this);
@@ -504,6 +510,14 @@ export default class KnomoPlugin extends Plugin {
 			await this.settingsService.initializeTimeBuoyDefault();
 		} catch {
 			// 默认策略初始化失败时保持关闭，避免升级用户被意外扫描。
+		}
+	}
+
+	private async initializeMonthlyExcludeDefaultSafely(): Promise<void> {
+		try {
+			await this.settingsService.initializeMonthlyExcludeDefault();
+		} catch {
+			// 默认排除初始化失败时保持当前状态，用户仍可在设置页重试。
 		}
 	}
 

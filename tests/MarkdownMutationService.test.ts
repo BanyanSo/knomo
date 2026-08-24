@@ -57,6 +57,95 @@ test("正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (cont
 	}
 });
 
+test("任务列表起始的 memo 按原始 Daily 行切换 checkbox，不失败也不跳行", async () => {
+	const fixture = createFixture();
+	await fixture.service.create({ content: "- [ ] first\n- [ ] second" });
+
+	const firstObservation = await fixture.getOnlyObservation("2026-08-22");
+	const firstResult = await fixture.service.toggleTask({
+		observation: toHandle(firstObservation),
+		taskIndex: 0,
+		checked: true,
+	});
+	assert.equal(firstResult.observation?.content, "- [x] first\n- [ ] second");
+	assert.equal(
+		fixture.vault.readText(fixture.getPath("2026-08-22")),
+		"## Memos\n- 09:00\n\t- [x] first\n\t- [ ] second\n",
+	);
+
+	const secondObservation = await fixture.getOnlyObservation("2026-08-22");
+	const secondResult = await fixture.service.toggleTask({
+		observation: toHandle(secondObservation),
+		taskIndex: 1,
+		checked: true,
+	});
+	assert.equal(secondResult.observation?.content, "- [x] first\n- [x] second");
+	assert.equal(
+		fixture.vault.readText(fixture.getPath("2026-08-22")),
+		"## Memos\n- 09:00\n\t- [x] first\n\t- [x] second\n",
+	);
+});
+
+test("Daily committed 回调先于 Catalog 更新完成", async () => {
+	const catalogGate = createDeferred<void>();
+	const catalogStarted = createDeferred<void>();
+	const dailyCommitted = createDeferred<void>();
+	const fixture = createFixture({
+		updateCatalogPartition: async () => {
+			catalogStarted.resolve(undefined);
+			await catalogGate.promise;
+		},
+	});
+
+	const saving = fixture.service.create({
+		content: "created",
+		onDailyCommitted: () => dailyCommitted.resolve(undefined),
+	});
+	await dailyCommitted.promise;
+
+	assert.equal(fixture.vault.readText(fixture.getPath("2026-08-22")), "## Memos\n- 09:00 created\n");
+	assert.equal(fixture.committedPartitions.length, 0);
+	await catalogStarted.promise;
+	assert.equal(fixture.committedPartitions.length, 1);
+	catalogGate.resolve(undefined);
+	assert.equal((await saving).catalogUpdatePending, false);
+});
+
+test("同一 Daily 的后续 Catalog 分区按提交顺序串行", async () => {
+	const firstCatalogGate = createDeferred<void>();
+	const firstCommitted = createDeferred<void>();
+	const secondCommitted = createDeferred<void>();
+	let catalogCalls = 0;
+	const fixture = createFixture({
+		updateCatalogPartition: async () => {
+			catalogCalls += 1;
+			if (catalogCalls === 1) await firstCatalogGate.promise;
+		},
+	});
+
+	const first = fixture.service.create({
+		content: "first",
+		onDailyCommitted: () => firstCommitted.resolve(undefined),
+	});
+	await firstCommitted.promise;
+	const second = fixture.service.create({
+		content: "second",
+		onDailyCommitted: () => secondCommitted.resolve(undefined),
+	});
+	await secondCommitted.promise;
+
+	assert.equal(catalogCalls, 1);
+	assert.equal(
+		fixture.vault.readText(fixture.getPath("2026-08-22")),
+		"## Memos\n- 09:00 first\n- 09:00 second\n",
+	);
+	firstCatalogGate.resolve(undefined);
+	await Promise.all([first, second]);
+	assert.equal(catalogCalls, 2);
+	assert.equal(fixture.committedPartitions[0]?.parsed.observations.length, 1);
+	assert.equal(fixture.committedPartitions[1]?.parsed.observations.length, 2);
+});
+
 test("同一分钟相同正文创建两条 observation，Daily 不含内部身份字符", async () => {
 	const fixture = createFixture();
 
@@ -230,6 +319,7 @@ interface FixtureOptions {
 	catalogDegraded?: boolean;
 	initialFiles?: Readonly<Record<string, string>>;
 	insertPosition?: "top" | "bottom";
+	updateCatalogPartition?: (input: MarkdownCatalogCommitInput) => Promise<void>;
 }
 
 function createFixture(options: FixtureOptions = {}) {
@@ -253,6 +343,7 @@ function createFixture(options: FixtureOptions = {}) {
 		getInsertPosition: () => options.insertPosition ?? "bottom",
 		updateCatalogPartition: async (input) => {
 			committedPartitions.push(input);
+			await options.updateCatalogPartition?.(input);
 			if (options.catalogDegraded) throw new Error("Catalog storage is degraded.");
 		},
 		refreshCatalogPaths: async (paths) => { refreshedPaths.push([...paths]); },
@@ -359,4 +450,12 @@ class MemoryVault {
 	failNextProcess(path: string, onFailure: (() => void) | null = null): void {
 		this.failingProcessPaths.set(path, onFailure);
 	}
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolvePromise: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
 }

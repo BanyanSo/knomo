@@ -1,5 +1,5 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
-import { getPreferredMemoBlockReferenceText, withMemoIdAlias } from "../utils/references";
+import { getPreferredMemoBlockReferenceText, stripTrailingWikiLink } from "../utils/references";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 
 export interface MemoCardShellOptions {
@@ -16,7 +16,6 @@ export interface MemoCardShell {
 
 export type MemoSourceReferenceMeta =
 	| { type: "none" }
-	| { type: "plain"; sourceMemoId: string }
 	| { type: "markdown"; text: string; sourcePath: string };
 
 export interface TrashActionState {
@@ -142,20 +141,19 @@ export function getMemoSourceReferenceMeta(memo: MemoRecord, deletedMemoIds: Rea
 			sourcePath: memo.dailyRef.path,
 		};
 	}
-	if (memo.sourceMemoId !== null) {
-		return { type: "plain", sourceMemoId: memo.sourceMemoId };
-	}
 	return { type: "none" };
 }
 
 function getSourceReferenceText(memo: MemoRecord): string | null {
-	const sourceMemoId = memo.sourceMemoId ?? memo.references[0]?.memoId ?? null;
 	const referenceText = memo.references[0]?.referenceText
 		?? getPreferredMemoBlockReferenceText(memo.contentSnapshot);
-	if (referenceText === null) {
-		return null;
-	}
-	return sourceMemoId === null ? referenceText : withMemoIdAlias(referenceText, sourceMemoId);
+	return referenceText;
+}
+
+export function getMemoDisplayContent(memo: MemoRecord): string {
+	return getSourceReferenceText(memo) === null
+		? memo.contentSnapshot
+		: stripTrailingWikiLink(memo.contentSnapshot);
 }
 
 export function getMemoDeleteMode(memo: MemoRecord): MemoDeleteMode {

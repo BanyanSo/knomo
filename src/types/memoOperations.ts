@@ -17,11 +17,13 @@ export interface MarkdownCreateInput {
 	content: string;
 	targetLogicalDate?: string;
 	createdAt?: Date;
+	onDailyCommitted?: () => void;
 }
 
 export interface MarkdownEditInput {
 	observation: ObservationHandle;
 	content: string;
+	onDailyCommitted?: () => void;
 }
 
 export interface MarkdownTaskInput {

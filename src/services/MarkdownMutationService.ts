@@ -57,6 +57,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 	private readonly blockService = new MarkdownBlockService();
 	private readonly now: () => Date;
 	private readonly random: () => number;
+	private readonly catalogUpdateQueues = new Map<string, Promise<void>>();
 
 	constructor(
 		private readonly app: App,
@@ -77,7 +78,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			content,
 			formatTimePart(createdAt, this.options.getMemoTimeFormat()),
 		);
-		return this.appendRawBlock(target.file, logicalDate, rawBlock, target.created);
+		return this.appendRawBlock(target.file, logicalDate, rawBlock, target.created, null, undefined, input.onDailyCommitted);
 	}
 
 	async edit(input: MarkdownEditInput): Promise<MarkdownMutationResult> {
@@ -104,7 +105,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				},
 			});
 			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted);
 			return committedResult(changed, [file.path], catalogUpdatePending);
 		});
 	}
@@ -319,6 +320,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		createdFile: boolean,
 		existingBlockId: string | null = null,
 		preferredSection?: string | null,
+		onDailyCommitted?: () => void,
 	): Promise<MarkdownMutationResult> {
 		return this.withStaleRefresh([file.path], async () => {
 			try {
@@ -341,7 +343,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					},
 				});
 				const created = findAppendedObservation(prepared, rawBlock, section, position);
-				const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
+				const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, onDailyCommitted);
 				return committedResult(created, [file.path], catalogUpdatePending);
 			} catch (error) {
 				if (createdFile) await this.options.removeEmptyCreatedDailyFile?.(file).catch(() => undefined);
@@ -350,20 +352,47 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		});
 	}
 
-	private async commitAndUpdateCatalog(prepared: PreparedDailyWrite): Promise<boolean> {
+	private async commitAndUpdateCatalog(
+		prepared: PreparedDailyWrite,
+		onDailyCommitted?: () => void,
+	): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
+		const catalogUpdate = this.enqueueCatalogUpdate({
+			file: prepared.file,
+			logicalDate: prepared.logicalDate,
+			content: prepared.afterContent,
+			parsed: prepared.after,
+		});
 		try {
-			await this.options.updateCatalogPartition({
-				file: prepared.file,
-				logicalDate: prepared.logicalDate,
-				content: prepared.afterContent,
-				parsed: prepared.after,
-			});
+			onDailyCommitted?.();
+		} catch {
+			// Daily 已提交，阶段观察者失败不能反向把正文保存标记为失败。
+		}
+		try {
+			await catalogUpdate;
 			return false;
 		} catch {
 			void this.options.refreshCatalogPaths([prepared.file.path]).catch(() => undefined);
 			return true;
 		}
+	}
+
+	private enqueueCatalogUpdate(input: MarkdownCatalogCommitInput): Promise<void> {
+		const sourcePath = normalizePath(input.file.path);
+		const previous = this.catalogUpdateQueues.get(sourcePath) ?? Promise.resolve();
+		const queued = previous
+			.catch(() => undefined)
+			.then(() => this.options.updateCatalogPartition(input));
+		this.catalogUpdateQueues.set(sourcePath, queued);
+		void queued.then(
+			() => {
+				if (this.catalogUpdateQueues.get(sourcePath) === queued) this.catalogUpdateQueues.delete(sourcePath);
+			},
+			() => {
+				if (this.catalogUpdateQueues.get(sourcePath) === queued) this.catalogUpdateQueues.delete(sourcePath);
+			},
+		);
+		return queued;
 	}
 
 	private async getTargetFile(logicalDate: string): Promise<{ file: TFile; created: boolean }> {

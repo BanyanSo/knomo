@@ -62,6 +62,11 @@ export interface MemoSaveResult extends DailyMutationResult {
 	timeBuoyDates: string[];
 }
 
+export interface MemoSaveOperation {
+	dailyCommitted: Promise<void>;
+	settled: Promise<MemoSaveResult>;
+}
+
 export interface CatalogFeatureCursor {
 	catalog: CatalogCursor;
 }

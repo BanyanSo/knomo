@@ -32,6 +32,55 @@ test("does not override an explicitly persisted Time Buoy setting", async () => 
 	assert.equal(plugin.saveCalls, 0);
 });
 
+test("hides monthly archives from Obsidian by default when no choice was persisted", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
+	delete legacySettings.excludeMonthlyMemosFromObsidian;
+	const plugin = await createPlugin({}, { settings: legacySettings });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeMonthlyExcludeDefault();
+
+	assert.equal(service.getSettings().excludeMonthlyMemosFromObsidian, true);
+	assert.equal(service.getSettings().managedObsidianExcludeRule, "Memos/");
+	assert.equal(service.getSettings().managedObsidianExcludeRuleOwned, true);
+	assert.deepEqual(plugin.vault.config.userIgnoreFilters, ["Memos/"]);
+});
+
+test("keeps an explicitly disabled monthly archive exclusion", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: createSettings() });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeMonthlyExcludeDefault();
+
+	assert.equal(service.getSettings().excludeMonthlyMemosFromObsidian, false);
+	assert.deepEqual(plugin.vault.config.userIgnoreFilters, []);
+	assert.equal(plugin.saveCalls, 0);
+});
+
+test("repairs a missing Obsidian rule when monthly archive exclusion is already enabled", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const settings = {
+		...createSettings(),
+		excludeMonthlyMemosFromObsidian: true,
+		managedObsidianExcludeRule: "Memos/",
+		managedObsidianExcludeRuleOwned: true,
+	};
+	const plugin = await createPlugin({}, { settings });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeMonthlyExcludeDefault();
+
+	assert.deepEqual(plugin.vault.config.userIgnoreFilters, ["Memos/"]);
+	assert.equal(service.getSettings().excludeMonthlyMemosFromObsidian, true);
+	assert.equal(service.getSettings().managedObsidianExcludeRule, "Memos/");
+	assert.equal(service.getSettings().managedObsidianExcludeRuleOwned, true);
+});
+
 test("Monthly folder migration only changes projection configuration", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const plugin = await createPlugin({

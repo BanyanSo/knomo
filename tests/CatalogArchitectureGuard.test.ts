@@ -24,6 +24,7 @@ test("生产源码只暴露无版本 Catalog 模块和存储名称", async () =>
 		assert.equal(fs.existsSync(expected), true, `${expected} should remain the canonical module.`);
 	}
 	const main = fs.readFileSync("src/main.ts", "utf8");
+	assert.equal(main.includes("initializeMonthlyExcludeDefaultSafely"), true);
 	for (const serviceName of [
 		"CatalogReadService",
 		"MemoCommandService",

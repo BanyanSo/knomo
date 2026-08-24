@@ -239,17 +239,13 @@ function renderCardMeta<TMemo extends MemoRecord>(card: HTMLElement, memo: TMemo
 	const sourceReference = getMemoSourceReferenceMeta(memo, options.deletedMemoIds);
 	if (sourceReference.type !== "none") {
 		const meta = card.createDiv({ cls: "knomo-card-meta knomo-source-reference markdown-rendered" });
-		if (sourceReference.type === "plain") {
-			meta.setText(`${t("reference.fromPrefix")}${sourceReference.sourceMemoId}`);
-		} else {
-			const referenceText = `${t("reference.fromPrefix")}${sourceReference.text}`;
-			options.queueSourceReferenceMarkdown(
-				meta,
-				referenceText,
-				sourceReference.sourcePath,
-				options.generation,
-			);
-		}
+		const referenceText = `${t("reference.fromPrefix")}${sourceReference.text}`;
+		options.queueSourceReferenceMarkdown(
+			meta,
+			referenceText,
+			sourceReference.sourcePath,
+			options.generation,
+		);
 	}
 }
 

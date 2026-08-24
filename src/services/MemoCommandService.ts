@@ -8,6 +8,7 @@ import type {
 	CatalogOperationalState,
 	CatalogReadState,
 	DailyMutationResult,
+	MemoSaveOperation,
 	MemoSaveResult,
 	MonthlyProjectionState,
 	MutationFollowUpState,
@@ -101,17 +102,37 @@ export class MemoCommandService {
 			throw new Error("Only a current historical observation without identity can be adopted.");
 		}
 		const binding = await this.identityLedger.adoptObservation(refreshed.observation);
-		await this.readService.materializeResolutionSnapshot();
 		return binding.memoId;
 	}
 
+	startCreate(contentInput: string, sourceMemoId: string | null = null): MemoSaveOperation {
+		return this.startSaveOperation((onDailyCommitted) => this.createInternal(
+			contentInput,
+			sourceMemoId,
+			onDailyCommitted,
+		));
+	}
+
 	async create(contentInput: string, sourceMemoId: string | null = null): Promise<MemoSaveResult> {
+		return this.createInternal(contentInput, sourceMemoId);
+	}
+
+	private async createInternal(
+		contentInput: string,
+		sourceMemoId: string | null,
+		onDailyCommitted?: () => void,
+	): Promise<MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
 		const createdAt = this.now();
 		const logicalDate = formatDatePart(createdAt);
 		const plan = await this.beginIdentityCreate(content, logicalDate, createdAt, sourceMemoId);
-		const result = await this.markdownMutations.create({ content, targetLogicalDate: logicalDate, createdAt });
+		const result = await this.markdownMutations.create({
+			content,
+			targetLogicalDate: logicalDate,
+			createdAt,
+			onDailyCommitted,
+		});
 		const identityPending = await this.finishIdentityCreate(plan, result.observation);
 		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? [], {
 			memoId: plan?.memoId ?? null,
@@ -154,13 +175,28 @@ export class MemoCommandService {
 			throw new Error("The selected identity conflict is no longer current.");
 		}
 		await this.identityLedger.repairConflict(candidateMemoId, refreshed.observation);
-		await this.readService.materializeResolutionSnapshot();
+	}
+
+	startEdit(item: CatalogMemoItem, contentInput: string): MemoSaveOperation {
+		return this.startSaveOperation((onDailyCommitted) => this.editInternal(item, contentInput, onDailyCommitted));
 	}
 
 	async edit(item: CatalogMemoItem, contentInput: string): Promise<MemoSaveResult> {
+		return this.editInternal(item, contentInput);
+	}
+
+	private async editInternal(
+		item: CatalogMemoItem,
+		contentInput: string,
+		onDailyCommitted?: () => void,
+	): Promise<MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
-		const result = await this.markdownMutations.edit({ observation: item.observationHandle, content });
+		const result = await this.markdownMutations.edit({
+			observation: item.observationHandle,
+			content,
+			onDailyCommitted,
+		});
 		const identity = await this.finishIdentityRebind(item, result.observation, "edit");
 		return this.finishMarkdownSavedMemo(result, extractTimeBuoyDates(content), identity);
 	}
@@ -271,12 +307,10 @@ export class MemoCommandService {
 		const state = this.identityLedger.resolveObservationState(item.observation);
 		if (state.kind !== "identified") throw new Error("Review requires one confirmed memo identity.");
 		await this.identityLedger.recordReview(state.binding, this.now().toISOString());
-		await this.readService.materializeResolutionSnapshot();
 	}
 
 	private async refreshResolvedMemo(memo: ResolvedMemo): Promise<ResolvedMemo> {
 		await this.options.refreshCatalogPaths([memo.observation.sourcePath]);
-		await this.readService.materializeResolutionSnapshot();
 		return this.readService.resolveObservationInFile(memo.observation.sourcePath, memo.observation.startLine);
 	}
 
@@ -287,11 +321,6 @@ export class MemoCommandService {
 	): Promise<MemoSaveResult> {
 		let localRefreshPending = input.catalogUpdatePending;
 		let memo: CatalogMemoItem | null = null;
-		try {
-			await this.readService.materializeResolutionSnapshot();
-		} catch {
-			localRefreshPending = true;
-		}
 		if (!localRefreshPending && input.observation !== null) {
 			try {
 				memo = await this.findMemoByObservation(input.observation);
@@ -308,6 +337,38 @@ export class MemoCommandService {
 			followUpPending: identity?.pending ?? true,
 			localRefreshPending,
 		};
+	}
+
+	private startSaveOperation(
+		action: (onDailyCommitted: () => void) => Promise<MemoSaveResult>,
+	): MemoSaveOperation {
+		let committed = false;
+		let resolveCommitted: () => void = () => undefined;
+		let rejectCommitted: (error: unknown) => void = () => undefined;
+		const dailyCommitted = new Promise<void>((resolve, reject) => {
+			resolveCommitted = resolve;
+			rejectCommitted = reject;
+		});
+		const markCommitted = (): void => {
+			if (committed) return;
+			committed = true;
+			resolveCommitted();
+		};
+		const settled = Promise.resolve()
+			.then(() => action(markCommitted))
+			.then((result) => {
+				// 兼容只实现最终结果的测试替身；真实链路会在 Daily 提交点先触发。
+				markCommitted();
+				return result;
+			})
+			.catch((error: unknown) => {
+				if (!committed) rejectCommitted(error);
+				throw error;
+			});
+		// 阶段 Promise 允许调用方只观察其中一个，不产生未处理拒绝。
+		void dailyCommitted.catch(() => undefined);
+		void settled.catch(() => undefined);
+		return { dailyCommitted, settled };
 	}
 
 	private async beginIdentityCreate(

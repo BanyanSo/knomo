@@ -55,10 +55,13 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private status: IdentityLedgerStatus = "unavailable";
 	private scanErrorCount = 0;
 	private onChanged: (() => void | Promise<void>) | null = null;
+	private notificationRequested = false;
+	private notificationRunning = false;
 	private refreshQueue: Promise<void> = Promise.resolve();
 	private refreshRequested = false;
 	private writeQueue: Promise<void> = Promise.resolve();
 	private writePauseCount = 0;
+	private readonly selfWrittenPaths = new Map<string, number>();
 
 	constructor(
 		private readonly app: App,
@@ -74,6 +77,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		const handle = (file: unknown, oldPath?: unknown) => {
 			const rootPath = this.getRootPath();
 			if (!isIdentityLedgerFile(file, rootPath) && !isIdentityLedgerPath(oldPath, rootPath)) return;
+			if (file instanceof TFile && this.consumeSelfWrittenPath(file.path)) return;
 			this.scheduleRefresh();
 		};
 		owner.registerEvent(this.app.vault.on("create", handle));
@@ -82,6 +86,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		owner.registerEvent(this.app.vault.on("rename", handle));
 		owner.register(() => {
 			this.onChanged = null;
+			this.notificationRequested = false;
 		});
 		// 监听建立后补扫一次，覆盖初始化扫描与事件注册之间的变更窗口。
 		this.scheduleRefresh();
@@ -235,7 +240,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		} finally {
 			releaseQueue();
 		}
-		await this.notifyChanged();
+		this.scheduleNotification();
 		return pendingEvents.length;
 	}
 
@@ -258,7 +263,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			},
 		};
 		try {
-			await this.appendEvent(intent);
+			await this.appendEvent(intent, false);
 			return { memoId, intent, intentDurable: true };
 		} catch {
 			return { memoId, intent, intentDurable: false };
@@ -268,13 +273,14 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	async finishCreate(plan: IdentityLedgerCreatePlan, observation: MemoObservation): Promise<IdentityLedgerBinding> {
 		let intentDurable = plan.intentDurable;
 		if (!intentDurable) {
-			await this.appendEvent(plan.intent);
+			await this.appendEvent(plan.intent, false);
 			intentDurable = true;
 		}
+		const writerId = await this.getWriterId();
 		const claim: IdentityLedgerClaimEvent = {
 			schemaVersion: 1,
 			eventId: this.createEventId(),
-			writerId: await this.getWriterId(),
+			writerId,
 			memoId: plan.memoId,
 			type: "claim",
 			baseBindingId: null,
@@ -284,22 +290,23 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				createIntentEventId: intentDurable ? plan.intent.eventId : null,
 			},
 		};
-		await this.appendEvent(claim);
-		const binding = this.resolveObservation(observation);
-		if (binding === null || binding.memoId !== plan.memoId) {
-			throw new Error("Identity Ledger claim did not resolve the committed observation.");
-		}
+		const events: IdentityLedgerEvent[] = [claim];
 		if (plan.intent.evidence.sourceMemoId !== null) {
-			await this.appendEvent({
+			events.push({
 				schemaVersion: 1,
 				eventId: this.createEventId(),
-				writerId: await this.getWriterId(),
+				writerId,
 				memoId: plan.memoId,
 				type: "relation",
-				baseBindingId: binding.bindingId,
+				baseBindingId: claim.eventId,
 				occurredAt: this.now().toISOString(),
 				evidence: { sourceMemoId: plan.intent.evidence.sourceMemoId },
 			});
+		}
+		await this.appendEvents(events);
+		const binding = this.resolveObservation(observation);
+		if (binding === null || binding.memoId !== plan.memoId) {
+			throw new Error("Identity Ledger claim did not resolve the committed observation.");
 		}
 		return this.resolveObservation(observation) ?? binding;
 	}
@@ -355,16 +362,17 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				successor,
 			}));
 		});
-		let appendedEventCount = 0;
+		const writerId = await this.getWriterId();
+		const events: IdentityLedgerRebindEvent[] = [];
 		const affectedMemoIds = new Set<string>();
 		for (const plan of plans) {
 			if (this.hasActiveSuccessor(plan.base.memoId, plan.base.bindingId, plan.successor)) continue;
-			await this.appendRebind(plan.base, plan.successor, "edit");
-			appendedEventCount += 1;
+			events.push(this.createRebindEvent(plan.base, plan.successor, "edit", writerId));
 			affectedMemoIds.add(plan.base.memoId);
 		}
+		await this.appendEvents(events);
 		return {
-			appendedEventCount,
+			appendedEventCount: events.length,
 			conflictedMemoIds: [...affectedMemoIds]
 				.filter((memoId) => this.snapshot.memos[memoId]?.conflicted === true)
 				.sort(),
@@ -545,10 +553,24 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		observation: MemoObservation,
 		reason: IdentityLedgerRebindReason,
 	): Promise<IdentityLedgerBinding> {
-		const event: IdentityLedgerRebindEvent = {
+		const event = this.createRebindEvent(base, observation, reason, await this.getWriterId());
+		await this.appendEvent(event);
+		const bindings = this.findObservationBindings(observation).filter((binding) => binding.memoId === base.memoId);
+		const binding = bindings.find((candidate) => candidate.bindingId === event.eventId) ?? bindings[0];
+		if (binding === undefined) throw new Error("Identity Ledger rebind did not materialize its successor.");
+		return binding;
+	}
+
+	private createRebindEvent(
+		base: IdentityLedgerBinding,
+		observation: MemoObservation,
+		reason: IdentityLedgerRebindReason,
+		writerId: string,
+	): IdentityLedgerRebindEvent {
+		return {
 			schemaVersion: 1,
 			eventId: this.createEventId(),
-			writerId: await this.getWriterId(),
+			writerId,
 			memoId: base.memoId,
 			type: "rebind",
 			baseBindingId: base.bindingId,
@@ -558,15 +580,19 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				reason,
 			},
 		};
-		await this.appendEvent(event);
-		const bindings = this.findObservationBindings(observation).filter((binding) => binding.memoId === base.memoId);
-		const binding = bindings.find((candidate) => candidate.bindingId === event.eventId) ?? bindings[0];
-		if (binding === undefined) throw new Error("Identity Ledger rebind did not materialize its successor.");
-		return binding;
 	}
 
-	private async appendEvent(event: IdentityLedgerEvent): Promise<void> {
+	private async appendEvent(event: IdentityLedgerEvent, notify = true): Promise<void> {
+		await this.appendEvents([event], notify);
+	}
+
+	private async appendEvents(events: readonly IdentityLedgerEvent[], notify = true): Promise<void> {
+		if (events.length === 0) return;
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
+		const first = events[0];
+		if (first === undefined || events.some((event) => event.writerId !== first.writerId)) {
+			throw new Error("Identity Ledger segment events must share one writer.");
+		}
 		const previous = this.writeQueue;
 		let releaseQueue: () => void = () => undefined;
 		this.writeQueue = new Promise<void>((resolve) => {
@@ -575,10 +601,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		await previous;
 		try {
 			const rootPath = this.requireRootPath();
-			const content = serializeIdentityLedgerSegment([event]);
+			const content = serializeIdentityLedgerSegment(events);
 			const digest = await sha256IdentityLedgerText(content);
-			const path = getIdentityLedgerSegmentPath(rootPath, event.writerId, event.eventId, digest);
-			await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, event.writerId));
+			const path = getIdentityLedgerSegmentPath(rootPath, first.writerId, first.eventId, digest);
+			await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, first.writerId));
 			await this.writeImmutable(path, content);
 			const parsed = await parseIdentityLedgerSegment(rootPath, path, content);
 			const affectedMemoIds = collectAffectedMemoIds(this.envelopes, parsed.events);
@@ -595,7 +621,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		} finally {
 			releaseQueue();
 		}
-		await this.notifyChanged();
+		if (notify) this.scheduleNotification();
 	}
 
 	private async refreshFromVault(): Promise<void> {
@@ -643,10 +669,31 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			if (!this.refreshRequested) return;
 			this.refreshRequested = false;
 			await this.refreshFromVault();
-			await this.notifyChanged();
+			this.scheduleNotification();
 		}).catch(() => {
 			this.status = "unavailable";
 		});
+	}
+
+	private scheduleNotification(): void {
+		this.notificationRequested = true;
+		if (this.notificationRunning) return;
+		this.notificationRunning = true;
+		void this.flushNotifications();
+	}
+
+	private async flushNotifications(): Promise<void> {
+		try {
+			while (this.notificationRequested) {
+				this.notificationRequested = false;
+				await this.notifyChanged();
+			}
+		} catch {
+			// 观察者失败不能改变已持久化 Identity 事件的结果。
+		} finally {
+			this.notificationRunning = false;
+			if (this.notificationRequested) this.scheduleNotification();
+		}
 	}
 
 	private async notifyChanged(): Promise<void> {
@@ -709,7 +756,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	private async writeImmutable(path: string, content: string): Promise<void> {
-		const existing = this.app.vault.getAbstractFileByPath(path);
+		const normalizedPath = normalizePath(path);
+		const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
 		if (existing instanceof TFile) {
 			if (await this.app.vault.cachedRead(existing) !== content) {
 				throw new Error(`Identity Ledger immutable path collision: ${path}`);
@@ -717,12 +765,29 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			return;
 		}
 		if (existing !== null) throw new Error(`Identity Ledger path is not a file: ${path}`);
+		this.markSelfWrittenPath(normalizedPath);
 		try {
-			await this.app.vault.create(path, content);
+			await this.app.vault.create(normalizedPath, content);
 		} catch (error) {
-			const raced = this.app.vault.getAbstractFileByPath(path);
+			const raced = this.app.vault.getAbstractFileByPath(normalizedPath);
 			if (!(raced instanceof TFile) || await this.app.vault.cachedRead(raced) !== content) throw error;
 		}
+	}
+
+	private markSelfWrittenPath(path: string): void {
+		const now = Date.now();
+		for (const [candidate, expiresAt] of this.selfWrittenPaths) {
+			if (expiresAt <= now) this.selfWrittenPaths.delete(candidate);
+		}
+		this.selfWrittenPaths.set(normalizePath(path), now + 30_000);
+	}
+
+	private consumeSelfWrittenPath(path: string): boolean {
+		const normalizedPath = normalizePath(path);
+		const expiresAt = this.selfWrittenPaths.get(normalizedPath);
+		if (expiresAt === undefined) return false;
+		this.selfWrittenPaths.delete(normalizedPath);
+		return expiresAt > Date.now();
 	}
 }
 

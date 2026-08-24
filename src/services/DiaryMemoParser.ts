@@ -48,6 +48,7 @@ interface ParsedDiaryMemoBlock {
 	endLine: number;
 	time: string;
 	content: string;
+	contentStartLineOffset: number;
 	contentHash: string;
 	blockId: string | null;
 }
@@ -116,7 +117,7 @@ export class DiaryMemoParser {
 			const metadataContent = maskProtectedMarkdown(parsed.content);
 			const tasks = getMarkdownTaskLines(parsed.content).map((task) => ({
 				taskIndex: task.index,
-				lineOffset: task.lineIndex,
+				lineOffset: parsed.contentStartLineOffset + task.lineIndex,
 				marker: task.marker,
 				text: task.body,
 			}));
@@ -185,6 +186,7 @@ function parseDiaryMemoBlock(lines: readonly string[], startLine: number): Parse
 		endLine,
 		time: match[1],
 		content,
+		contentStartLineOffset: match[2] === undefined ? 1 : 0,
 		contentHash: hashMemoContent(content),
 		blockId,
 	};

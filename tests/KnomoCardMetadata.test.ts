@@ -7,6 +7,7 @@ import {
 	getMemoCardActions,
 	getMemoCardShell,
 	getMemoDeleteMode,
+	getMemoDisplayContent,
 	getMemoSourceReferenceMeta,
 	getTrashActionClass,
 	getTrashCardActions,
@@ -142,16 +143,16 @@ test("builds memo source reference metadata", () => {
 	const deletedMemoIds = new Set<string>();
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: null }), deletedMemoIds), { type: "none" });
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: "source-1" }), new Set(["source-1"])), { type: "none" });
-	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: "source-1" }), deletedMemoIds), {
-		type: "plain",
-		sourceMemoId: "source-1",
-	});
+	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: "source-1" }), deletedMemoIds), { type: "none" });
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({
-		sourceMemoId: "source-1",
-		references: [{ memoId: "source-1", referenceText: "[[Daily/2026-06-02#^abc]]" }],
+		sourceMemoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
+		references: [{
+			memoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
+			referenceText: "[[Daily/2026-06-02#^abc|20260602-083000]]",
+		}],
 	}), deletedMemoIds), {
 		type: "markdown",
-		text: "[[Daily/2026-06-02#^abc|source-1]]",
+		text: "[[Daily/2026-06-02#^abc|20260602-083000]]",
 		sourcePath: "Daily/2026-06-02.md",
 	});
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({
@@ -162,6 +163,16 @@ test("builds memo source reference metadata", () => {
 		text: "[[Daily/2026-06-01#^block-a|20260601-083000]]",
 		sourcePath: "Daily/2026-06-02.md",
 	});
+});
+
+test("hides the source block link from referenced card content", () => {
+	assert.equal(getMemoDisplayContent(makeMemo({
+		contentSnapshot: "引用 [[Daily/2026-06-01#^block-a|20260601-083000]]\n> 原文",
+		sourceMemoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
+	})), "引用\n> 原文");
+	assert.equal(getMemoDisplayContent(makeMemo({
+		contentSnapshot: "普通链接 [[Daily/2026-06-01]]",
+	})), "普通链接 [[Daily/2026-06-01]]");
 });
 
 function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {

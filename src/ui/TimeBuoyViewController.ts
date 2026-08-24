@@ -1,7 +1,7 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../types/timeBuoy";
 import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
-import { getMemoRenderRevision } from "./MemoRenderRevision";
+import { getMemoRenderKey, getMemoRenderRevision } from "./MemoRenderRevision";
 
 export type TimeBuoyTab = "today" | "upcoming" | "past";
 
@@ -25,12 +25,19 @@ export function mergeTodayTimeBuoyFeed(
 	memos: readonly MemoRecord[],
 	todayItems: readonly TimeBuoyTabItem[],
 ): MemoRecord[] {
-	const promotedByMemoId = new Map(todayItems.map((item) => [item.memo.id, item.memo]));
+	const latestByMemoId = new Map(memos.map((memo) => [memo.id, memo]));
+	const latestByRenderKey = new Map(memos.map((memo) => [getMemoRenderKey(memo), memo]));
+	const promotedByMemoId = new Map(todayItems.map((item) => [
+		item.memo.id,
+		latestByMemoId.get(item.memo.id) ?? latestByRenderKey.get(getMemoRenderKey(item.memo)) ?? item.memo,
+	]));
 	const promoted = [...promotedByMemoId.values()]
 		.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+	const promotedMemoIds = new Set(promoted.map((memo) => memo.id));
+	const promotedRenderKeys = new Set(promoted.map(getMemoRenderKey));
 	return [
 		...promoted,
-		...memos.filter((memo) => !promotedByMemoId.has(memo.id)),
+		...memos.filter((memo) => !promotedMemoIds.has(memo.id) && !promotedRenderKeys.has(getMemoRenderKey(memo))),
 	];
 }
 
@@ -72,6 +79,24 @@ export class TimeBuoyViewController {
 			return false;
 		}
 		this.snapshot = { ...this.snapshot, activeTab: tab };
+		this.options.requestRender();
+		return true;
+	}
+
+	replaceMemo(memo: MemoRecord): boolean {
+		let changed = false;
+		const renderKey = getMemoRenderKey(memo);
+		const replace = (items: readonly TimeBuoyTabItem[]): TimeBuoyTabItem[] => items.map((item) => {
+			if (item.memo.id !== memo.id && getMemoRenderKey(item.memo) !== renderKey) return item;
+			if (getMemoRenderRevision(item.memo) === getMemoRenderRevision(memo)) return item;
+			changed = true;
+			return { ...item, memo };
+		});
+		const today = replace(this.snapshot.today);
+		const upcoming = replace(this.snapshot.upcoming);
+		const past = replace(this.snapshot.past);
+		if (!changed) return false;
+		this.snapshot = { ...this.snapshot, today, upcoming, past };
 		this.options.requestRender();
 		return true;
 	}
@@ -130,13 +155,8 @@ export class TimeBuoyViewController {
 				if (requestId !== this.requestId) {
 					return;
 				}
-				const nextSnapshot = { ...this.snapshot, today: [], todayError: null };
-				const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
-				this.snapshot = nextSnapshot;
+				// 后台重建期间保留最后一次成功结果，避免已显示的今日浮标短暂消失。
 				this.hasLoadedAll = false;
-				if (changed) {
-					this.options.requestRender();
-				}
 				return;
 			}
 			const result = await this.options.queryDate(today);

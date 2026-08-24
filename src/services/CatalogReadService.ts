@@ -60,7 +60,6 @@ export class CatalogReadService {
 	}
 
 	async prime(): Promise<void> {
-		await this.materializeResolutionSnapshot();
 		await this.query({ limit: 1 });
 	}
 

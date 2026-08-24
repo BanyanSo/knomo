@@ -3,49 +3,98 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-test("keeps declarative and legacy setting structures in parity", () => {
-	const source = fs.readFileSync(path.resolve("src/ui/KnomoSettingTab.ts"), "utf8");
+const expectedGroupKeys = [
+	"settings.attention.heading",
+	"settings.capture.heading",
+	"settings.monthly.heading",
+	"settings.files.heading",
+	"settings.maintenance.heading",
+];
+
+const expectedRenderOrder = [
+	"renderSharedConfigSetting",
+	"renderDailyHeadingSetting",
+	"renderInsertPositionSetting",
+	"renderTimeFormatSetting",
+	"renderTimeBuoySetting",
+	"renderDateOrderSetting",
+	"renderMonthlyFileFormatSetting",
+	"renderDateHeadingFormatSetting",
+	"renderMonthlyExcludeSetting",
+	"renderDataRootSetting",
+	"renderLocalHistorySetting",
+	"renderMonthlyRebuildSetting",
+	"renderLegacyIdentityImport",
+];
+
+test("keeps declarative and legacy setting groups in task order", () => {
+	const source = readSettingTabSource();
 	const declarativeSource = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
 	const legacySource = getSourceBetween(source, "\tdisplay(): void", "\n\thide(): void");
 
-	const declarativeSettingKeys = extractMatches(
-		declarativeSource,
-		/(?:heading|name):\s*t\("([^"]+)"/g,
+	assert.deepEqual(
+		extractMatches(declarativeSource, /heading:\s*t\("([^"]+)"/g),
+		expectedGroupKeys,
 	);
-	const legacySettingKeys = extractMatches(
-		legacySource,
-		/\.setName\(t\("([^"]+)"/g,
+	assert.deepEqual(
+		extractMatches(legacySource, /\.setName\(t\("([^"]+\.heading)"\)\)[\s\S]*?\.setHeading\(\)/g),
+		expectedGroupKeys,
 	);
-	assert.notEqual(declarativeSettingKeys.length, 0);
-	assert.deepEqual(legacySettingKeys, declarativeSettingKeys);
-
-	const declarativeControls = extractMatches(
-		declarativeSource,
-		/\.add(Text|Dropdown|Toggle|Button)\(/g,
-	);
-	const legacyControls = extractMatches(
-		legacySource,
-		/\.add(Text|Dropdown|Toggle|Button)\(/g,
-	);
-	assert.notEqual(declarativeControls.length, 0);
-	assert.deepEqual(legacyControls, declarativeControls);
 });
 
-test("keeps declarative dynamic output scoped to its setting render", () => {
-	const source = fs.readFileSync(path.resolve("src/ui/KnomoSettingTab.ts"), "utf8");
+test("keeps declarative and legacy setting rows in parity", () => {
+	const source = readSettingTabSource();
 	const declarativeSource = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
-	const dynamicElementFields = [
-		"catalogRebuildResultEl",
-		"monthlyExcludeStatusEl",
-		"monthlyFileFormatStatusEl",
-	];
+	const legacySource = getSourceBetween(source, "\tdisplay(): void", "\n\thide(): void");
 
-	assert.doesNotMatch(declarativeSource, /group\.listEl\.createDiv/u);
-	assert.equal(extractMatches(declarativeSource, /setting\.infoEl\.createDiv\(/gu).length, dynamicElementFields.length);
-	for (const field of dynamicElementFields) {
-		assert.doesNotMatch(source, new RegExp(`private ${field}:`, "u"));
-	}
+	assert.deepEqual(extractRenderCalls(declarativeSource), expectedRenderOrder);
+	assert.deepEqual(extractRenderCalls(legacySource), expectedRenderOrder);
 });
+
+test("only shows device-setting attention when shared settings need action", () => {
+	const source = readSettingTabSource();
+	const attentionSource = getSourceBetween(
+		source,
+		"\t\t\t{\n\t\t\t\ttype: \"group\",\n\t\t\t\theading: t(\"settings.attention.heading\")",
+		"\n\t\t\t{\n\t\t\t\ttype: \"group\",\n\t\t\t\theading: t(\"settings.capture.heading\")",
+	);
+
+	assert.match(attentionSource, /visible:\s*\(\) => this\.shouldShowSharedConfigAttention\(\)/u);
+	assert.match(source, /return this\.knomoSharedConfigService\.getStatus\(\) !== "ready";/u);
+});
+
+test("keeps monthly filename and date heading visible without a formatting expander", () => {
+	const source = readSettingTabSource();
+	assert.doesNotMatch(source, /monthlyFormattingExpanded|renderMonthlyFormattingSetting|settings\.monthlyFormatting/u);
+});
+
+test("requires an explicit action before changing the monthly filename", () => {
+	const source = readSettingTabSource();
+	const renderSource = getSourceBetween(
+		source,
+		"\tprivate renderMonthlyFileFormatSetting(",
+		"\n\tprivate renderDateHeadingFormatSetting(",
+	);
+
+	assert.doesNotMatch(renderSource, /addEventListener\("blur"/u);
+	assert.match(renderSource, /settings\.monthlyFileFormat\.apply/u);
+});
+
+test("refreshes search and statistics without a confirmation step", () => {
+	const source = readSettingTabSource();
+	const rebuildSource = getSourceBetween(
+		source,
+		"\tprivate async runRebuildIndex(",
+		"\n\tprivate async runMonthlyArchiveRebuild(",
+	);
+
+	assert.doesNotMatch(rebuildSource, /showKnomoConfirmModal/u);
+	assert.match(rebuildSource, /rebuildLocalCatalog\(\)/u);
+});
+
+function readSettingTabSource(): string {
+	return fs.readFileSync(path.resolve("src/ui/KnomoSettingTab.ts"), "utf8");
+}
 
 function getSourceBetween(source: string, startMarker: string, endMarker: string): string {
 	const start = source.indexOf(startMarker);
@@ -57,4 +106,8 @@ function getSourceBetween(source: string, startMarker: string, endMarker: string
 
 function extractMatches(source: string, pattern: RegExp): string[] {
 	return Array.from(source.matchAll(pattern), (match) => match[1]);
+}
+
+function extractRenderCalls(source: string): string[] {
+	return extractMatches(source, /this\.(render[A-Z][A-Za-z]+Setting|renderLegacyIdentityImport)\(/g);
 }

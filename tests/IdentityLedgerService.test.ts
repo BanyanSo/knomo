@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { App } from "obsidian";
+import type { App, Component } from "obsidian";
 
 import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
 import {
@@ -302,6 +302,44 @@ test("P0 第 4 步：删除本机 snapshot 后只从 immutable events 重建相�
 	assert.equal(vault.paths().some((path) => path.includes("/snapshots/")), false);
 });
 
+test("引用创建把 claim 与 relation 写入同一不可变 segment", async () => {
+	const vault = await createLedgerVault();
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "引用正文");
+	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1), eventId(2), eventId(3)]);
+	await service.initialize();
+	const plan = await service.beginCreate({ ...createIntentInput(observation), sourceMemoId: MEMO_B });
+
+	await service.finishCreate(plan, observation);
+
+	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 2);
+	assert.equal(service.getSourceMemoId(MEMO_A), MEMO_B);
+	assert.equal(service.getSnapshot().eventCount, 3);
+});
+
+test("Identity 持久化完成后不等待视图观察者返回", async () => {
+	const vault = await createLedgerVault();
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
+	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(1), eventId(2)]);
+	await service.initialize();
+	const plan = await service.beginCreate(createIntentInput(observation));
+	const notificationStarted = createDeferred<void>();
+	const releaseNotification = createDeferred<void>();
+	(vault.app.vault as App["vault"] & { on: (...args: unknown[]) => unknown }).on = () => ({});
+	service.start({
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as unknown as Component, async () => {
+		notificationStarted.resolve(undefined);
+		await releaseNotification.promise;
+	});
+	await notificationStarted.promise;
+
+	const binding = await withTimeout(service.finishCreate(plan, observation));
+
+	assert.equal(binding.memoId, MEMO_A);
+	releaseNotification.resolve(undefined);
+});
+
 test("identity root 不可写时保留 create plan，但 claim 失败且不触碰 Daily", async () => {
 	const dailyPath = "Daily/2026-08-22.md";
 	const fixture = await createLedgerVault({ [dailyPath]: "## Memos\n" });
@@ -400,6 +438,7 @@ test("P1 第 5 步：唯一内容锚点分隔出的多个一对一区间可以�
 	const afterC = makeObservation("Daily/2026-08-22.md", "b".repeat(64), 3, "正文 C 已编辑");
 	await service.finishCreate(await service.beginCreate(createIntentInput(beforeA)), beforeA);
 	await service.finishCreate(await service.beginCreate(createIntentInput(beforeC)), beforeC);
+	const segmentCountBefore = vault.paths().filter((path) => path.endsWith(".jsonl")).length;
 
 	const result = await service.reconcileRevision(
 		[beforeA, anchorBefore, beforeC],
@@ -407,6 +446,7 @@ test("P1 第 5 步：唯一内容锚点分隔出的多个一对一区间可以�
 	);
 
 	assert.equal(result.appendedEventCount, 2);
+	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, segmentCountBefore + 1);
 	assert.equal(service.resolveObservation(afterA)?.memoId, MEMO_A);
 	assert.equal(service.resolveObservation(afterC)?.memoId, MEMO_C);
 });
@@ -764,6 +804,30 @@ function makeEvidence(observation: MemoObservation): IdentityLedgerObservationEv
 		time: observation.time,
 		contentHash: observation.contentHash,
 	};
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolvePromise: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs = 250): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timeout = setTimeout(() => reject(new Error("Timed out waiting for Identity persistence.")), timeoutMs);
+		void promise.then(
+			(value) => {
+				clearTimeout(timeout);
+				resolve(value);
+			},
+			(error: unknown) => {
+				clearTimeout(timeout);
+				reject(error);
+			},
+		);
+	});
 }
 
 function eventId(index: number): string {

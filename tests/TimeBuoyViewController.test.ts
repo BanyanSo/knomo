@@ -25,6 +25,44 @@ test("promotes every today card in creation-time order without duplicating ordin
 	assert.deepEqual(result.map((memo) => memo.id), memos.map((memo) => memo.id));
 });
 
+test("today promotion keeps the latest Catalog memo when the controller snapshot is stale", () => {
+	const staleMemo = makeMemo("memo-1", "- [ ] task", "2026-07-10T08:00:00+08:00");
+	const latestMemo = makeMemo("memo-1", "- [x] task", "2026-07-10T08:00:00+08:00");
+	const result = mergeTodayTimeBuoyFeed([latestMemo], [{
+		memo: staleMemo,
+		targetDates: ["2026-07-11"],
+		primaryTargetDate: "2026-07-11",
+	}]);
+
+	assert.equal(result[0], latestMemo);
+});
+
+test("replaces a memo in loaded Time buoy tabs without querying again", async () => {
+	const staleMemo = makeMemo("memo-1", "- [ ] task", "2026-07-10T08:00:00+08:00");
+	const latestMemo = makeMemo("memo-1", "- [x] task", "2026-07-10T08:00:00+08:00");
+	let renderCount = 0;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11),
+		queryAll: async () => ({
+			items: [makeQueryItem(staleMemo, "2026-07-11")],
+			stale: [],
+			missingPeriods: [],
+			complete: true,
+		}),
+		queryDate: async () => EMPTY_RESULT,
+		requestRender: () => {
+			renderCount += 1;
+		},
+	});
+	await controller.loadInitial();
+	const rendersAfterLoad = renderCount;
+
+	assert.equal(controller.replaceMemo(latestMemo), true);
+	assert.equal(controller.getSnapshot().today[0]?.memo, latestMemo);
+	assert.equal(renderCount, rendersAfterLoad + 1);
+	assert.equal(controller.replaceMemo(latestMemo), false);
+});
+
 test("loads every Time buoy once and partitions the complete result into tabs", async () => {
 	let queryCount = 0;
 	const controller = createController(new Date(2026, 6, 11), async () => {
@@ -319,7 +357,7 @@ test("today-only refresh preserves the last successful result when the index bec
 	assert.notEqual(snapshot.todayError, null);
 });
 
-test("today-only refresh clears stale items while a startup rebuild is pending", async () => {
+test("today-only refresh preserves visible items while a background rebuild is pending", async () => {
 	let todayIndexReady = true;
 	let queryDateCalls = 0;
 	const controller = new TimeBuoyViewController({
@@ -342,7 +380,7 @@ test("today-only refresh clears stale items while a startup rebuild is pending",
 	await controller.loadTodayOnly();
 
 	assert.equal(queryDateCalls, 1);
-	assert.deepEqual(controller.getSnapshot().today, []);
+	assert.deepEqual(controller.getSnapshot().today.map((item) => item.memo.id), ["today"]);
 });
 
 test("merges one memo within each tab, preserves its dates, and keeps cross-tab entries independent", async () => {

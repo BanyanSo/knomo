@@ -67,6 +67,21 @@ test("PARSE-MULTILINE-TASK：保留正文、行范围和稳定 taskIndex", async
 	]);
 });
 
+test("任务列表起始的 memo 使用原始 block 行偏移", async () => {
+	const result = parser.parseRevision({
+		sourcePath: "2026-08-09.md",
+		logicalDate: "2026-08-09",
+		headings: ["## Memos"],
+		content: "## Memos\n- 09:00\n\t- [ ] first task\n\t- [x] second task\n",
+		sourceRevision: "revision",
+	});
+
+	assert.deepEqual(result.observations[0]?.tasks, [
+		{ taskIndex: 0, lineOffset: 1, marker: " ", text: "first task" },
+		{ taskIndex: 1, lineOffset: 2, marker: "x", text: "second task" },
+	]);
+});
+
 test("PARSE-MEDIA-LINKS：建立图片、链接和标签元数据，不读取图片文件", async () => {
 	const result = await parseFixture("PARSE-MEDIA-LINKS");
 	const observation = result.observations[0];

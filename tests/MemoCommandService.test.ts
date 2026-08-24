@@ -89,6 +89,64 @@ test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim",
 	assert.deepEqual(events, ["intent", "daily"]);
 });
 
+test("阶段化 create 在 Daily 提交后先完成 committed，identity 与读模型继续结算", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const events: string[] = [];
+	const catalogGate = createDeferred<void>();
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created memo");
+	const binding = makeBinding(observation, "2026082212345601", "identity-1");
+	const identityLedger = {
+		getRevision: () => "identity-1",
+		getStatus: () => "ready",
+		getSnapshot: () => ({ revision: "identity-1", eventCount: 2, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
+		resolveObservation: () => binding,
+		resolveObservationState: () => ({ kind: "identified", binding }) as const,
+		getSourceMemoId: () => null,
+		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		beginCreate: async () => {
+			events.push("intent");
+			return makeCreatePlan(binding.memoId);
+		},
+		finishCreate: async () => {
+			events.push("claim");
+			return binding;
+		},
+	} as unknown as IdentityLedgerMutationService;
+	const markdownMutations = {
+		create: async (input: { onDailyCommitted?: () => void }) => {
+			events.push("daily");
+			input.onDailyCommitted?.();
+			await catalogGate.promise;
+			await seedCatalog(catalog, store, observation);
+			return mutationResult(observation);
+		},
+	} as unknown as MarkdownMutationService;
+	const service = new MemoCommandService(
+		{} as App,
+		catalog,
+		makeCommandOptions(),
+		markdownMutations,
+		identityLedger,
+	);
+
+	const operation = service.startCreate(observation.content);
+	let settled = false;
+	void operation.settled.then(() => { settled = true; });
+	await operation.dailyCommitted;
+
+	assert.deepEqual(events, ["intent", "daily"]);
+	assert.equal(settled, false);
+	catalogGate.resolve(undefined);
+	await operation.settled;
+	assert.deepEqual(events, ["intent", "daily", "claim"]);
+});
+
 test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再恢复 identity", async () => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
@@ -303,4 +361,12 @@ function makeTrashItem(record: IdentityLedgerDeleteRecord): TrashMemoItem {
 		contentHash: record.evidence.contentHash,
 		sourceMemoId: record.evidence.sourceMemoId,
 	};
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolvePromise: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
 }

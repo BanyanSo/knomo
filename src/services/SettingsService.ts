@@ -18,7 +18,7 @@ import {
 	extractSettingsData,
 } from "../utils/pluginData";
 import { PluginDataStore } from "./PluginDataStore";
-import { ObsidianExcludeService } from "./ObsidianExcludeService";
+import { buildMonthlyFolderExcludeRule, ObsidianExcludeService } from "./ObsidianExcludeService";
 
 export { DEFAULT_KNOMO_SETTINGS, isValidMonthlyMemoFileFormat };
 export type {
@@ -31,6 +31,7 @@ export type {
 export class SettingsService {
 	private settings = cloneSettings(DEFAULT_KNOMO_SETTINGS);
 	private timeBuoySettingPersisted = false;
+	private monthlyExcludeSettingPersisted = false;
 	private initialTimeBuoyBuildPending = false;
 	private settingsWriteQueue: Promise<void> = Promise.resolve();
 	private readonly monthlyFolderMigrationService: MonthlyFolderMigrationService;
@@ -101,6 +102,8 @@ export class SettingsService {
 		const settingsData = extractSettingsData(savedData);
 		this.timeBuoySettingPersisted = isRecord(settingsData)
 			&& typeof settingsData.timeBuoyEnabled === "boolean";
+		this.monthlyExcludeSettingPersisted = isRecord(settingsData)
+			&& typeof settingsData.excludeMonthlyMemosFromObsidian === "boolean";
 		this.settings = this.migrateSettings(settingsData);
 		if (
 			this.timeBuoySettingPersisted
@@ -122,6 +125,58 @@ export class SettingsService {
 		});
 		this.initialTimeBuoyBuildPending = true;
 		this.timeBuoySettingPersisted = true;
+		return settings;
+	}
+
+	async initializeMonthlyExcludeDefault(): Promise<KnomoSettings> {
+		if (
+			this.monthlyExcludeSettingPersisted
+			&& !this.settings.excludeMonthlyMemosFromObsidian
+		) {
+			return this.getSettings();
+		}
+		const currentSettings = this.getSettings();
+		const rule = buildMonthlyFolderExcludeRule(currentSettings.monthlyMemoFolder);
+		if (rule === null) {
+			const settings = await this.updateSettings({
+				excludeMonthlyMemosFromObsidian: false,
+				managedObsidianExcludeRule: undefined,
+				managedObsidianExcludeRuleOwned: false,
+			});
+			this.monthlyExcludeSettingPersisted = true;
+			return settings;
+		}
+
+		let addedByKnomo: boolean;
+		try {
+			({ addedByKnomo } = await new ObsidianExcludeService(this.plugin.app).ensureRule(rule));
+		} catch {
+			const settings = await this.updateSettings({
+				excludeMonthlyMemosFromObsidian: false,
+				managedObsidianExcludeRule: undefined,
+				managedObsidianExcludeRuleOwned: false,
+			});
+			this.monthlyExcludeSettingPersisted = true;
+			return settings;
+		}
+
+		const managedRuleOwned = addedByKnomo || (
+			currentSettings.managedObsidianExcludeRule === rule
+			&& currentSettings.managedObsidianExcludeRuleOwned === true
+		);
+		if (
+			this.monthlyExcludeSettingPersisted
+			&& currentSettings.managedObsidianExcludeRule === rule
+			&& currentSettings.managedObsidianExcludeRuleOwned === managedRuleOwned
+		) {
+			return currentSettings;
+		}
+		const settings = await this.updateSettings({
+			excludeMonthlyMemosFromObsidian: true,
+			managedObsidianExcludeRule: rule,
+			managedObsidianExcludeRuleOwned: managedRuleOwned,
+		});
+		this.monthlyExcludeSettingPersisted = true;
 		return settings;
 	}
 

@@ -1,0 +1,146 @@
+{
+	"schemaVersion": 1,
+	"baselineVersion": "1.2.9",
+	"today": "2026-08-24",
+	"memos": [
+		{
+			"memoId": "1290000000000001",
+			"dailyPath": "Daily/2024-01-24.md",
+			"createdAt": "2024-01-24T09:00:00+08:00",
+			"content": "Notebook 项目记录 #project/knomo/ui\n![[assets/design.png]]",
+			"tags": ["project/knomo/ui"],
+			"imageLinks": ["assets/design.png"],
+			"taskCount": 0,
+			"references": [],
+			"status": "active",
+			"review": {
+				"reviewCount": 2,
+				"lastReviewedAt": "2026-08-01T10:00:00+08:00"
+			}
+		},
+		{
+			"memoId": "1290000000000002",
+			"dailyPath": "Daily/2024-01-24.md",
+			"createdAt": "2024-01-24T12:00:00+08:00",
+			"content": "English alpha 123456 #project\n- [ ] 跟进任务",
+			"tags": ["project"],
+			"imageLinks": [],
+			"taskCount": 1,
+			"references": [],
+			"status": "active",
+			"review": {
+				"reviewCount": 0,
+				"lastReviewedAt": null
+			}
+		},
+		{
+			"memoId": "1290000000000003",
+			"dailyPath": "Daily/2025-06-24.md",
+			"createdAt": "2025-06-24T10:30:00+08:00",
+			"content": "中文检索 alpha 654321 #project/research\n引用 [[Daily/2024-01-24]]",
+			"tags": ["project/research"],
+			"imageLinks": [],
+			"taskCount": 0,
+			"references": ["Daily/2024-01-24"],
+			"status": "active",
+			"review": {
+				"reviewCount": 1,
+				"lastReviewedAt": "2026-07-24T08:30:00+08:00"
+			}
+		},
+		{
+			"memoId": "1290000000000004",
+			"dailyPath": "Daily/2025-08-09.md",
+			"createdAt": "2025-08-09T18:20:00+08:00",
+			"content": "无标签记录，适合测试统计。",
+			"tags": [],
+			"imageLinks": [],
+			"taskCount": 0,
+			"references": [],
+			"status": "active",
+			"review": {
+				"reviewCount": 0,
+				"lastReviewedAt": null
+			}
+		},
+		{
+			"memoId": "1290000000000005",
+			"dailyPath": "Daily/2026-08-24.md",
+			"createdAt": "2026-08-24T11:00:00+08:00",
+			"content": "今天的 Notebook #today",
+			"tags": ["today"],
+			"imageLinks": [],
+			"taskCount": 0,
+			"references": [],
+			"status": "active",
+			"review": {
+				"reviewCount": 0,
+				"lastReviewedAt": null
+			}
+		},
+		{
+			"memoId": "1290000000000006",
+			"dailyPath": "Daily/2025-02-24.md",
+			"createdAt": "2025-02-24T15:40:00+08:00",
+			"content": "已删除的中文记录 #archive",
+			"tags": ["archive"],
+			"imageLinks": [],
+			"taskCount": 0,
+			"references": [],
+			"status": "recoverableDeleted",
+			"deletedAt": "2026-08-10T09:00:00+08:00",
+			"review": {
+				"reviewCount": 0,
+				"lastReviewedAt": null
+			}
+		}
+	],
+	"expectations": {
+		"substringSearch": {
+			"book": ["1290000000000005", "1290000000000001"],
+			"中文": ["1290000000000003"],
+			"123": ["1290000000000002"],
+			"alpha": ["1290000000000003", "1290000000000002"]
+		},
+		"tagFilters": {
+			"project": ["1290000000000003", "1290000000000002", "1290000000000001"],
+			"project/knomo": ["1290000000000001"],
+			"today": ["1290000000000005"]
+		},
+		"librarySummary": {
+			"memoCount": 5,
+			"tagCount": 4,
+			"imageCount": 1,
+			"taskCount": 1,
+			"referenceCount": 1,
+			"reviewedMemoCount": 2
+		},
+		"historicalSameDayReview": [
+			"1290000000000003",
+			"1290000000000002",
+			"1290000000000001"
+		],
+		"recordStatsDrilldowns": {
+			"withTag": ["1290000000000005", "1290000000000003", "1290000000000002", "1290000000000001"],
+			"withoutTag": ["1290000000000004"],
+			"withImage": ["1290000000000001"],
+			"withTask": ["1290000000000002"],
+			"withReference": ["1290000000000003"],
+			"busiestDailyPaths": ["Daily/2024-01-24.md"]
+		},
+		"trash": ["1290000000000006"],
+		"randomReview": {
+			"memoId": "1290000000000002",
+			"reviewCountBeforeOpen": 0,
+			"reviewCountAfterSuccessfulOpen": 1
+		}
+	},
+	"intentionalDifferences": {
+		"monthlyLocaleSource": "shared-config",
+		"randomReviewTrigger": "successful-card-open",
+		"trashPermanentPurge": true,
+		"timeBuoyManualRebuild": false,
+		"monthlyExcludeDefault": true,
+		"legacyCleanup": "prompt-user-delete-after-verified-migration"
+	}
+}

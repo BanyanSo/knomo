@@ -33,7 +33,7 @@
 ### 2.3 Identity Ledger 是可选增强数据
 
 - `memoId` 是唯一 memo 身份；新记录生成 UUIDv7；
-- Identity Ledger 只保存 claim、rebind、relation、review、recoverable delete、restore 和 repair 等不可由正文重建的信息；
+- Identity Ledger 只保存 claim、rebind、relation、review、recoverable delete、restore、purge 和 repair 等不可由正文重建的信息；
 - identity 缺失或同步中时，已扫描正文仍可查看和安全编辑；
 - 局部冲突只降级相关 memo 的身份能力，不阻断其他 observation；
 - Identity Ledger 到达后增强原 observation，不创建第二份正文卡片。
@@ -42,7 +42,25 @@
 
 - Monthly 直接以实际 Daily 与有效共享配置为输入；
 - Catalog 只用于发现待投影范围，不得充当正文来源；
-- 投影失败独立标记 stale 或 failed，不改变 Daily 保存结果。
+- 投影失败独立标记 stale 或 failed，不改变 Daily 保存结果；
+- Monthly 标题及其他 locale 相关输出只使用共享配置中的 `locale`，不得读取设备当前 locale 临时决定；
+- 共享 `locale` 缺失或冲突时暂停覆盖 Monthly，直到形成有效共享配置；
+- Monthly 默认排除规则只在用户从未作出选择时初始化为开启，已有显式设置不得被升级覆盖。
+
+### 2.5 Catalog 读取与全库语义
+
+- 普通列表允许分页或虚拟化，但搜索、标签、统计、往日回顾和全部记录钻取都基于完整 Catalog 逻辑结果，不得只计算当前已加载页；
+- 文本搜索保留 `1.2.9` 的子串匹配语义，支持中文、英文和数字；
+- 选择父标签时包含其嵌套子标签；
+- 并发查询只允许最后一次已发起请求更新界面；翻页必须绑定查询条件和 Catalog revision，不得混入其他查询或静默漏项；
+- Catalog 渐进扫描时，依赖全量范围的界面必须展示覆盖范围或未完成状态，不得把部分结果呈现为全库结果。
+
+### 2.6 用户交互契约
+
+- 随机重逢卡片成功打开并展示后，自动为对应 `memoId` 追加一次 review；同一次打开流程的重试不得重复计数；
+- 时光浮标是从 Catalog 与 Daily 派生的视图，不提供专属手动重建入口；恢复依赖统一的 Catalog 重扫与状态提示；
+- 日期范围、标签和统计钻取产生的结果必须可返回原上下文，且不得因分页改变结果口径；
+- 交互控件必须支持键盘操作、可见焦点和可读名称；视图卸载时注销事件监听、定时器和订阅。
 
 ## 3. 稳定存储路径
 
@@ -63,6 +81,8 @@
 
 旧目录是只读迁移源；迁移不得覆盖、追加、移动或删除其中的任何字节。
 
+旧 Monthly 文件同样保留。插件不得自动删除旧 `_knomo-system` 或旧 Monthly 文件，也不得把旧文件当作新协议的持续写入目标。
+
 ## 4. 从 1.2.9 直接迁移
 
 升级只执行 `Legacy Index -> Identity Ledger`，不存在中间控制面迁移：
@@ -72,7 +92,9 @@
 3. 旧的 16 位数字 `memoId` 原样保留，之后新建 memo 继续生成 UUIDv7；
 4. 迁移事件 ID 和内容由来源证据确定，相同输入重复执行不会产生重复事件；
 5. 同一 `memoId` 出现不一致同步副本、摘要失败或无法唯一匹配时，只记录诊断并跳过；
-6. Daily、旧 Index 和旧插件数据全程只读；Time Buoy 与 Monthly 继续从当前数据重建。
+6. Daily、旧 Index 和旧插件数据全程只读；Time Buoy 与 Monthly 继续从当前数据重建；
+7. 只有迁移校验确认可迁移数据已经持久化、重启后仍可读取且没有待处理冲突时，才提示用户“`_knomo-system` 已迁移，原文件夹可删除”；
+8. 提示只说明用户可以自行删除旧目录，不自动删除目录或旧 Monthly 文件；同一迁移来源修订只提示一次。
 
 ## 5. 写入顺序
 
@@ -109,11 +131,24 @@ Daily restore -> identity restore
 
 payload 未持久化时不得删除 Daily。只有 `delete_commit` 完成后记录才进入废纸篓。Daily 删除或恢复已经成功时，后续身份失败只能标记 pending，不得重复正文操作。
 
+### 5.4 废纸篓永久清理
+
+永久清理只作用于已经完成 recoverable delete 的 `memoId`：
+
+```text
+purge -> trash read model hide -> discard recoverable payload
+```
+
+- purge 事件持久化成功前，记录仍可恢复；
+- purge 之后该 `memoId` 不再出现在废纸篓或恢复入口，重复清理必须幂等；
+- 永久清理不得再次修改 Daily，也不得复用已清理的 `memoId`；
+- “永久”表示 Knomo 不再保留可恢复 payload，不承诺擦除文件系统历史、同步服务版本或用户备份中的字节。
+
 ## 6. 失败与重建
 
 - IndexedDB 不可用：切换到有界内存 Catalog，并从 Daily 渐进扫描；
 - Identity Ledger 不可用：正文能力继续，纯身份操作拒绝或 pending；
-- 共享配置缺失：使用本机可用配置扫描，同时明确范围可能不完整；
+- 共享配置缺失：Catalog 可使用本机可用配置扫描并明确范围可能不完整；Monthly 不得基于设备 locale 覆盖已有投影；
 - 共享配置冲突：Daily 与 Catalog 继续，Monthly 暂停覆盖；
 - 数据根迁移：按 `copy -> verify -> update setting` 执行，旧根保留；
 - 任一重建或迁移都不得改变 Daily 字节。

@@ -1,4 +1,4 @@
-import { normalizePath, Notice, Platform, Plugin, TFile } from "obsidian";
+import { getLanguage, normalizePath, Notice, Platform, Plugin, TFile } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
@@ -115,9 +115,11 @@ export default class KnomoPlugin extends Plugin {
 					: null;
 			},
 			getWriterId: async () => sessionWriterId,
-			getLocalConfig: async () => buildKnomoSharedConfig(
+			getCurrentLocale: () => getLanguage(),
+			getLocalConfig: async (monthlyLocale) => buildKnomoSharedConfig(
 				await dailyNoteService.getDailyNotesConfig(),
 				this.settingsService.getSettings(),
+				monthlyLocale,
 			),
 		});
 		await knomoSharedConfigService.initializeLocalConfig();
@@ -134,6 +136,7 @@ export default class KnomoPlugin extends Plugin {
 				monthlyMemoFileFormat: monthly.fileFormat,
 				monthlyDateHeadingFormat: monthly.dateHeadingFormat,
 				monthlyDateOrder: monthly.dateOrder,
+				locale: monthly.locale,
 			};
 		};
 
@@ -186,7 +189,6 @@ export default class KnomoPlugin extends Plugin {
 				getDailyConfig: () => Promise.resolve(getEffectiveDailyConfig()),
 				getHeadings: getEffectiveHeadings,
 				getSettings: getEffectiveMonthlySettings,
-				getRendererVersion: () => knomoSharedConfigService.getEffectiveConfig().monthly.rendererVersion,
 			},
 		);
 		let monthlyProjectionFailureVisible = false;

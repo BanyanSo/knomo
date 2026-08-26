@@ -16,15 +16,16 @@ import {
 	parseKnomoSharedConfigSegment,
 	serializeKnomoSharedConfigSegment,
 	sha256KnomoSharedConfigText,
-	UnsupportedKnomoSharedConfigSchemaError,
 	getKnomoSharedConfigRootPath,
 	KNOMO_SHARED_CONFIG_RELATIVE_ROOT,
 } from "./KnomoSharedConfigProtocol";
+import { normalizeMonthlyLocaleKey } from "./MonthlyProjection";
 
 export interface KnomoSharedConfigServiceOptions {
 	getRootPath: () => string | null;
 	getWriterId: () => Promise<string>;
-	getLocalConfig: () => Promise<KnomoSharedConfig>;
+	getCurrentLocale: () => string;
+	getLocalConfig: (monthlyLocale: string) => Promise<KnomoSharedConfig>;
 	createEventId?: () => string;
 	now?: () => Date;
 }
@@ -33,11 +34,11 @@ export class KnomoSharedConfigService {
 	private readonly createEventId: () => string;
 	private readonly now: () => Date;
 	private localConfig: KnomoSharedConfig | null = null;
+	private monthlyLocale: string | null = null;
 	private envelopes: KnomoSharedConfigEventEnvelope[] = [];
 	private snapshot: KnomoSharedConfigSnapshot = createEmptySnapshot();
 	private status: KnomoSharedConfigStatus = "missing";
 	private invalidFileCount = 0;
-	private unsupportedFileCount = 0;
 	private onChanged: (() => void | Promise<void>) | null = null;
 	private refreshQueue: Promise<void> = Promise.resolve();
 	private refreshRequested = false;
@@ -71,7 +72,7 @@ export class KnomoSharedConfigService {
 	async initializeLocalConfig(): Promise<void> {
 		let localConfig: KnomoSharedConfig | null = null;
 		try {
-			localConfig = cloneConfig(await this.options.getLocalConfig());
+			localConfig = cloneConfig(await this.options.getLocalConfig(this.getPinnedMonthlyLocale()));
 		} catch {
 			// 共享配置可在本机 Daily Notes 设置不可用时继续提供只读解析配置。
 		}
@@ -95,7 +96,7 @@ export class KnomoSharedConfigService {
 	}
 
 	async refreshLocalConfig(): Promise<void> {
-		this.localConfig = cloneConfig(await this.options.getLocalConfig());
+		this.localConfig = cloneConfig(await this.options.getLocalConfig(this.getPinnedMonthlyLocale()));
 		await this.notifyChanged();
 	}
 
@@ -107,8 +108,16 @@ export class KnomoSharedConfigService {
 		return cloneSnapshot(this.snapshot);
 	}
 
+	getMonthlyLocale(): string | null {
+		if (this.status === "ready" && this.snapshot.config !== null) {
+			return this.snapshot.config.monthly.locale;
+		}
+		return this.localConfig?.monthly.locale ?? this.monthlyLocale;
+	}
+
 	getEffectiveConfig(): KnomoSharedConfig {
-		const config = this.status === "ready" ? this.snapshot.config : this.localConfig;
+		const sharedConfig = this.status === "ready" ? this.snapshot.config : null;
+		const config = sharedConfig ?? this.localConfig;
 		if (config === null) throw new Error("Knomo shared configuration is not initialized.");
 		return cloneConfig(config);
 	}
@@ -118,7 +127,7 @@ export class KnomoSharedConfigService {
 	}
 
 	isMonthlyProjectionAllowed(): boolean {
-		return this.status === "ready" || this.status === "missing";
+		return this.status === "ready" && this.snapshot.config !== null;
 	}
 
 	async publishLocalConfig(): Promise<void> {
@@ -126,7 +135,7 @@ export class KnomoSharedConfigService {
 		if (this.status === "conflicted") {
 			throw new Error("Shared configuration is conflicted; explicit resolution is required.");
 		}
-		if (this.status === "unsupported" || this.status === "unavailable") {
+		if (this.status === "unavailable") {
 			throw new Error("Shared configuration cannot be safely updated.");
 		}
 		const localConfig = this.requireLocalConfig();
@@ -144,6 +153,28 @@ export class KnomoSharedConfigService {
 			return;
 		}
 		await this.appendConfig(this.requireLocalConfig(), this.snapshot.headEventIds);
+	}
+
+	async useCurrentObsidianLocale(): Promise<boolean> {
+		if (this.status === "conflicted") {
+			throw new Error("Shared configuration is conflicted; explicit resolution is required.");
+		}
+		if (this.status === "unavailable") {
+			throw new Error("Shared configuration cannot be safely updated.");
+		}
+		const locale = normalizeMonthlyLocaleKey(this.options.getCurrentLocale());
+		const source = this.status === "ready" && this.snapshot.config !== null
+			? this.snapshot.config
+			: this.requireLocalConfig();
+		const nextConfig = withMonthlyLocale(source, locale);
+		this.monthlyLocale = locale;
+		if (this.localConfig !== null) this.localConfig = withMonthlyLocale(this.localConfig, locale);
+		if (this.status === "ready" && this.snapshot.config !== null
+			&& canonicalKnomoSharedConfigJson(this.snapshot.config) === canonicalKnomoSharedConfigJson(nextConfig)) {
+			return false;
+		}
+		await this.appendConfig(nextConfig, this.status === "ready" ? this.snapshot.headEventIds : []);
+		return true;
 	}
 
 	async runWithWritesPaused<T>(operation: () => Promise<T>): Promise<T> {
@@ -189,7 +220,6 @@ export class KnomoSharedConfigService {
 	private async appendConfig(config: KnomoSharedConfig, baseEventIds: readonly string[]): Promise<void> {
 		if (this.writePauseCount > 0) throw new Error("Shared configuration writes are paused.");
 		const event: KnomoSharedConfigEvent = {
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId: await this.options.getWriterId(),
 			type: "set_config",
@@ -234,19 +264,16 @@ export class KnomoSharedConfigService {
 		if (!(root instanceof TFolder)) throw new Error("Knomo shared configuration root is not a folder.");
 		const envelopes: KnomoSharedConfigEventEnvelope[] = [];
 		let invalidFiles = 0;
-		let unsupportedFiles = 0;
 		for (const file of listFiles(root).sort((left, right) => left.path.localeCompare(right.path))) {
 			try {
 				const parsed = await parseKnomoSharedConfigSegment(rootPath, file.path, await this.app.vault.cachedRead(file));
 				envelopes.push(...parsed.events);
-			} catch (error) {
-				if (error instanceof UnsupportedKnomoSharedConfigSchemaError) unsupportedFiles += 1;
-				else invalidFiles += 1;
+			} catch {
+				invalidFiles += 1;
 			}
 		}
 		this.envelopes = envelopes;
 		this.invalidFileCount = invalidFiles;
-		this.unsupportedFileCount = unsupportedFiles;
 		await this.materialize();
 	}
 
@@ -264,11 +291,12 @@ export class KnomoSharedConfigService {
 
 	private async materialize(): Promise<void> {
 		this.snapshot = await materializeKnomoSharedConfig(this.envelopes);
-		this.status = this.unsupportedFileCount > 0
-			? "unsupported"
-			: this.invalidFileCount > 0 || this.snapshot.status === "conflicted"
-				? "conflicted"
-				: this.snapshot.status;
+		this.status = this.invalidFileCount > 0 || this.snapshot.status === "conflicted"
+			? "conflicted"
+			: this.snapshot.status;
+		if (this.status === "ready" && this.snapshot.config !== null) {
+			this.monthlyLocale = this.snapshot.config.monthly.locale;
+		}
 	}
 
 	private scheduleRefresh(): void {
@@ -305,11 +333,15 @@ export class KnomoSharedConfigService {
 		return cloneConfig(this.localConfig);
 	}
 
+	private getPinnedMonthlyLocale(): string {
+		this.monthlyLocale ??= normalizeMonthlyLocaleKey(this.options.getCurrentLocale());
+		return this.monthlyLocale;
+	}
+
 	private setMissing(): void {
 		this.envelopes = [];
 		this.snapshot = createEmptySnapshot();
 		this.invalidFileCount = 0;
-		this.unsupportedFileCount = 0;
 		this.status = "missing";
 	}
 
@@ -420,9 +452,18 @@ function createEmptySnapshot(): KnomoSharedConfigSnapshot {
 
 function cloneConfig(config: KnomoSharedConfig): KnomoSharedConfig {
 	return {
-		schemaVersion: 1,
 		daily: { ...config.daily, headings: [...config.daily.headings] },
 		monthly: { ...config.monthly },
+	};
+}
+
+function withMonthlyLocale(config: KnomoSharedConfig, locale: string): KnomoSharedConfig {
+	return {
+		daily: { ...config.daily, headings: [...config.daily.headings] },
+		monthly: {
+			...config.monthly,
+			locale: normalizeMonthlyLocaleKey(locale),
+		},
 	};
 }
 

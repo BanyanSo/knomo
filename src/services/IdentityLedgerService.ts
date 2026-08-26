@@ -247,7 +247,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	async beginCreate(input: IdentityLedgerCreateInput): Promise<IdentityLedgerCreatePlan> {
 		const memoId = this.createMemoId();
 		const intent: IdentityLedgerCreateIntentEvent = {
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId: await this.getWriterId(),
 			memoId,
@@ -278,7 +277,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		}
 		const writerId = await this.getWriterId();
 		const claim: IdentityLedgerClaimEvent = {
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId,
 			memoId: plan.memoId,
@@ -293,7 +291,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		const events: IdentityLedgerEvent[] = [claim];
 		if (plan.intent.evidence.sourceMemoId !== null) {
 			events.push({
-				schemaVersion: 1,
 				eventId: this.createEventId(),
 				writerId,
 				memoId: plan.memoId,
@@ -404,7 +401,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		}
 		const memoId = this.createMemoId();
 		const claim: IdentityLedgerClaimEvent = {
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId: await this.getWriterId(),
 			memoId,
@@ -435,7 +431,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		}
 		const eventId = this.createEventId();
 		await this.appendEvent({
-			schemaVersion: 1,
 			eventId,
 			writerId: await this.getWriterId(),
 			memoId,
@@ -453,7 +448,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	async recordReview(binding: IdentityLedgerBinding, reviewedAt: string): Promise<void> {
 		await this.appendEvent({
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId: await this.getWriterId(),
 			memoId: binding.memoId,
@@ -469,7 +463,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		payload: IdentityLedgerDeletePayloadEvent["evidence"],
 	): Promise<IdentityLedgerDeleteRecord> {
 		const event: IdentityLedgerDeletePayloadEvent = {
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId: await this.getWriterId(),
 			memoId: binding.memoId,
@@ -493,7 +486,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			throw new Error("Identity Ledger delete payload is no longer pending.");
 		}
 		const event: IdentityLedgerDeleteCommitEvent = {
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId: await this.getWriterId(),
 			memoId: pending.memoId,
@@ -514,7 +506,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	): Promise<IdentityLedgerBinding> {
 		const eventId = this.createEventId();
 		await this.appendEvent({
-			schemaVersion: 1,
 			eventId,
 			writerId: await this.getWriterId(),
 			memoId: deleteRecord.memoId,
@@ -568,7 +559,6 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		writerId: string,
 	): IdentityLedgerRebindEvent {
 		return {
-			schemaVersion: 1,
 			eventId: this.createEventId(),
 			writerId,
 			memoId: base.memoId,

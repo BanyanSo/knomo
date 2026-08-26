@@ -160,8 +160,7 @@ export function toIdentityLedgerObservationEvidence(
 
 export function assertIdentityLedgerEvent(value: unknown): asserts value is IdentityLedgerEvent {
 	if (!isRecord(value)
-		|| !hasExactKeys(value, ["schemaVersion", "eventId", "writerId", "memoId", "type", "baseBindingId", "occurredAt", "evidence"])
-		|| value.schemaVersion !== 1
+		|| !hasExactKeys(value, ["eventId", "writerId", "memoId", "type", "baseBindingId", "occurredAt", "evidence"])
 		|| !EVENT_ID_PATTERN.test(readString(value.eventId))
 		|| !WRITER_ID_PATTERN.test(readString(value.writerId))
 		|| !MEMO_ID_PATTERN.test(readString(value.memoId))

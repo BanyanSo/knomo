@@ -42,7 +42,7 @@ test("生产源码只暴露无版本 Catalog 模块和存储名称", async () =>
 	assert.equal(identitySchema.includes("m_[a-f0-9]{32}"), false);
 });
 
-test("Identity 与共享配置使用稳定目录，协议版本只留在 schemaVersion", async () => {
+test("当前共享协议使用稳定目录且不携带开发期版本字段", async () => {
 	await ensureObsidianStub();
 	const { IDENTITY_LEDGER_RELATIVE_ROOT } = await import("../src/services/IdentityLedgerProtocol");
 	const { KNOMO_SHARED_CONFIG_RELATIVE_ROOT } = await import("../src/services/KnomoSharedConfigProtocol");
@@ -51,6 +51,24 @@ test("Identity 与共享配置使用稳定目录，协议版本只留在 schemaV
 	assert.equal(KNOMO_SHARED_CONFIG_RELATIVE_ROOT, "_knomo-data/config");
 	assert.equal(fs.existsSync("docs/architecture/catalog/schemas/identity-ledger-event.schema.json"), true);
 	assert.equal(fs.existsSync("docs/architecture/catalog/schemas/shared-config-event.schema.json"), true);
+	for (const protocolPath of [
+		"src/services/IdentityLedgerProtocol.ts",
+		"src/services/IdentityLedgerService.ts",
+		"src/services/LegacyIndexMigrationService.ts",
+		"src/services/KnomoSharedConfigProtocol.ts",
+		"src/services/KnomoSharedConfigService.ts",
+		"src/types/identityLedger.ts",
+		"src/types/knomoConfig.ts",
+		"docs/architecture/catalog/examples/identity-ledger-claim.valid.json",
+		"docs/architecture/catalog/examples/shared-config-set.valid.json",
+		"docs/architecture/catalog/schemas/identity-ledger-event.schema.json",
+		"docs/architecture/catalog/schemas/shared-config-event.schema.json",
+	]) {
+		const content = fs.readFileSync(protocolPath, "utf8");
+		assert.equal(content.includes("schemaVersion"), false, protocolPath);
+		assert.equal(content.includes("rendererVersion"), false, protocolPath);
+	}
+	assert.equal(fs.readFileSync("src/services/LegacyIndexReader.ts", "utf8").includes("schemaVersion"), true);
 });
 
 test("全库统计和功能查询只从 Catalog Read Service 获取", () => {

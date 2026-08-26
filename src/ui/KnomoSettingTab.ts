@@ -118,6 +118,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 						render: (setting: Setting) => { this.renderDateHeadingFormatSetting(setting); },
 					},
 					{
+						name: t("settings.monthlyLocale.name"),
+						desc: t("settings.monthlyLocale.desc", {
+							locale: this.knomoSharedConfigService.getMonthlyLocale() ?? "—",
+						}),
+						render: (setting: Setting) => { this.renderMonthlyLocaleSetting(setting); },
+					},
+					{
 						name: t("settings.excludeMonthly.name"),
 						desc: t("settings.excludeMonthly.desc"),
 						render: (setting: Setting) => { this.renderMonthlyExcludeSetting(setting); },
@@ -199,6 +206,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.renderDateHeadingFormatSetting(new Setting(containerEl)
 			.setName(t("settings.dateHeadingFormat.name"))
 			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT })));
+		this.renderMonthlyLocaleSetting(new Setting(containerEl)
+			.setName(t("settings.monthlyLocale.name")));
 		this.renderMonthlyExcludeSetting(new Setting(containerEl)
 			.setName(t("settings.excludeMonthly.name"))
 			.setDesc(t("settings.excludeMonthly.desc")));
@@ -380,6 +389,40 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 			text.inputEl.addEventListener("blur", () => {
 				void this.commitMonthlyDateHeadingFormatDraft();
+			});
+		});
+	}
+
+	private renderMonthlyLocaleSetting(setting: Setting): void {
+		const locale = this.knomoSharedConfigService.getMonthlyLocale() ?? "—";
+		setting.setDesc(t("settings.monthlyLocale.desc", { locale }));
+		setting.addButton((button) => {
+			button.setButtonText(t("settings.monthlyLocale.useCurrent"));
+			button.setDisabled(
+				this.knomoSharedConfigService.getStatus() !== "ready"
+				&& this.knomoSharedConfigService.getStatus() !== "missing",
+			);
+			button.onClick(() => {
+				void (async () => {
+					button.setDisabled(true);
+					button.setButtonText(t("settings.monthlyLocale.applying"));
+					try {
+						const changed = await this.knomoSharedConfigService.useCurrentObsidianLocale();
+						if (changed) {
+							await this.monthlyProjectionCoordinator.handleConfigurationChanged();
+							await this.refreshOpenKnomoViews();
+						}
+						new Notice(t(changed
+							? "settings.monthlyLocale.saved"
+							: "settings.monthlyLocale.unchanged"));
+						this.refreshSettingTab();
+					} catch {
+						new Notice(t("settings.monthlyLocale.failed"));
+					} finally {
+						button.setButtonText(t("settings.monthlyLocale.useCurrent"));
+						button.setDisabled(false);
+					}
+				})();
 			});
 		});
 	}
@@ -991,8 +1034,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 				return t("settings.sharedConfig.ready");
 			case "conflicted":
 				return t("settings.sharedConfig.conflicted");
-			case "unsupported":
-				return t("settings.sharedConfig.unsupported");
 			case "unavailable":
 				return t("settings.sharedConfig.unavailable");
 			case "missing":
@@ -1007,7 +1048,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private renderSharedConfigSetting(setting: Setting): void {
 		const status = this.knomoSharedConfigService.getStatus();
 		setting.setDesc(this.getSharedConfigDescription());
-		if (status === "ready" || status === "unsupported") return;
+		if (status === "ready") return;
 		setting.addButton((button) => {
 			button.setButtonText(status === "unavailable"
 				? t("settings.sharedConfig.checkAgain")

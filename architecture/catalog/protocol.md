@@ -12,7 +12,7 @@
 - `DailyMemoWriteGateway`：提交带 revision 校验的 Daily 修改；
 - `MonthlyProjection`：从 Daily 派生月度投影。
 
-`schemaVersion`、IndexedDB database version 和 renderer version 仍可使用整数。它们描述持久化格式，不是并行存在的业务架构。
+当前 Catalog 新增的 Identity Ledger 与共享配置协议不携带开发期版本字段，也不兼容未发布的开发快照。IndexedDB database version 只用于本机数据库技术升级，不代表共享协议版本。
 
 ## 2. 数据边界
 
@@ -45,6 +45,8 @@
 - 投影失败独立标记 stale 或 failed，不改变 Daily 保存结果；
 - Monthly 标题及其他 locale 相关输出只使用共享配置中的 `locale`，不得读取设备当前 locale 临时决定；
 - 共享 `locale` 缺失或冲突时暂停覆盖 Monthly，直到形成有效共享配置；
+- 共享配置只接受当前唯一结构；开发期间产生的旧结构不做降级读取或后继迁移；
+- locale 首次取自 Obsidian 当前语言并规范化持久化，之后只有用户显式执行“使用当前 Obsidian 语言”才允许改变；
 - Monthly 默认排除规则只在用户从未作出选择时初始化为开启，已有显式设置不得被升级覆盖。
 
 ### 2.5 Catalog 读取与全库语义
@@ -71,7 +73,7 @@
 <knomoDataRoot>/_knomo-data/config/
 ```
 
-路径本身不携带协议编号。事件内部通过 `schemaVersion` 校验格式。插件不得扫描其他目录来猜测数据根。
+路径和事件都不携带协议版本。reader 按当前唯一结构严格校验，插件不得扫描其他目录来猜测数据根。
 
 旧版兼容输入只允许来自：
 
@@ -84,6 +86,8 @@
 旧 Monthly 文件同样保留。插件不得自动删除旧 `_knomo-system` 或旧 Monthly 文件，也不得把旧文件当作新协议的持续写入目标。
 
 ## 4. 从 1.2.9 直接迁移
+
+当前架构唯一的版本兼容边界是读取 Knomo `1.2.9` 的旧 Index 与插件数据；不得为尚未发布的 Catalog、Identity Ledger 或共享配置开发快照增加版本分支。
 
 升级只执行 `Legacy Index -> Identity Ledger`，不存在中间控制面迁移：
 

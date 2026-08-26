@@ -137,7 +137,6 @@ test("已有同 memoId binding 与旧 Index 证据不一致时跳过迁移", asy
 	await target.initialize();
 	const unrelated = makeObservation("Daily/2026-08-20.md", "- 09:00 无关正文", "无关正文");
 	await target.importVerifiedLegacyEvents([{
-		schemaVersion: 1,
 		eventId: "e_99999999999999999999999999999999",
 		writerId: "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		memoId: LEGACY_MEMO_A,

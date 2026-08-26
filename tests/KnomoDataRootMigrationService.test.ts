@@ -283,7 +283,6 @@ function makeObservation(sourcePath: string): MemoObservation {
 
 function makeClaim(observation: MemoObservation, claimEventId = eventId(1)): IdentityLedgerClaimEvent {
 	return {
-		schemaVersion: 1,
 		eventId: claimEventId,
 		writerId: WRITER_A,
 		memoId: MEMO_A,

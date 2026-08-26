@@ -24,7 +24,6 @@ export interface IdentityLedgerObservationEvidence {
 }
 
 interface IdentityLedgerEventBase {
-	schemaVersion: 1;
 	eventId: string;
 	writerId: string;
 	memoId: string;

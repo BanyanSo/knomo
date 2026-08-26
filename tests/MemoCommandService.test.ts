@@ -321,7 +321,6 @@ function makeCreatePlan(memoId: string): IdentityLedgerCreatePlan {
 		memoId,
 		intentDurable: true,
 		intent: {
-			schemaVersion: 1,
 			eventId: "e_00000000000000000000000000000001",
 			writerId: "w_00000000000000000000000000000001",
 			memoId,

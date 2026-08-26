@@ -1,4 +1,4 @@
-import { normalizePath } from "obsidian";
+import { moment as obsidianMoment, normalizePath } from "obsidian";
 
 import {
 	DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
@@ -16,23 +16,22 @@ export const MONTHLY_READONLY_COMMENT = [
 	translate("zh-CN", "archive.deterministicReadOnlyComment"),
 	"-->",
 ].join("\n");
-export const MONTHLY_RENDERER_VERSION = 1;
 
 const MONTHLY_PERIOD_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 const LOGICAL_DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
-const DATE_TOKEN_PATTERN = /YYYY|MMMM|dddd|MM|DD|M|D/g;
-const ASCII_LETTER_PATTERN = /[A-Za-z]/;
-const ENGLISH_MONTHS = [
-	"January", "February", "March", "April", "May", "June",
-	"July", "August", "September", "October", "November", "December",
-];
-const ENGLISH_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DATE_TOKEN_RUN_PATTERN = /[A-Za-z]+/g;
+const DATE_TOKENS = ["YYYY", "MMMM", "dddd", "MM", "DD", "M", "D"] as const;
+const MONTHLY_LOCALE_PATTERN = /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/u;
+
+export type MonthlyProjectionSettings = Pick<
+	KnomoSettings,
+	"monthlyMemoFolder" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat" | "monthlyDateOrder"
+> & { locale: string };
 
 export interface MonthlyProjectionInput {
 	period: string;
-	settings: Pick<KnomoSettings, "monthlyMemoFolder" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat" | "monthlyDateOrder">;
+	settings: MonthlyProjectionSettings;
 	observations: readonly MemoObservation[];
-	rendererVersion?: number;
 	sourceDigest?: string;
 }
 
@@ -41,7 +40,6 @@ export interface MonthlyProjectionResult {
 	path: string;
 	content: string;
 	bytes: Uint8Array;
-	rendererVersion: number;
 	sourceDigest: string;
 	outputHash: string;
 	semanticHash: string;
@@ -54,6 +52,7 @@ export async function buildMonthlyProjection(
 	markdownBlockService = new MarkdownBlockService(),
 ): Promise<MonthlyProjectionResult> {
 	assertMonthlyPeriod(input.period);
+	const monthlyLocale = normalizeMonthlyLocaleKey(input.settings.locale);
 	const observations = [...input.observations]
 		.filter((observation) => observation.logicalDate.startsWith(`${input.period}-`))
 		.sort(compareMonthlyObservations);
@@ -66,7 +65,7 @@ export async function buildMonthlyProjection(
 	}
 	const dates = [...byDate.keys()].sort((left, right) => compareMonthlyDates(left, right, input.settings.monthlyDateOrder));
 	const sections = dates.map((logicalDate) => {
-		const heading = formatMonthlyDateHeading(input.settings.monthlyDateHeadingFormat, logicalDate);
+		const heading = formatMonthlyDateHeading(input.settings.monthlyDateHeadingFormat, logicalDate, monthlyLocale);
 		const blocks = (byDate.get(logicalDate) ?? []).map((observation) =>
 			markdownBlockService.buildMemoBlockWithBlockId(
 				observation.content,
@@ -80,14 +79,13 @@ export async function buildMonthlyProjection(
 		`# ${input.period}`,
 		...sections,
 	].join("\n\n") + "\n";
-	const rendererVersion = input.rendererVersion ?? MONTHLY_RENDERER_VERSION;
 	const semanticValue = {
 		period: input.period,
-		rendererVersion,
 		targetPath: getMonthlyArchivePath(input.settings, input.period),
 		fileFormat: input.settings.monthlyMemoFileFormat,
 		dateHeadingFormat: input.settings.monthlyDateHeadingFormat.trim() || DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
 		dateOrder: input.settings.monthlyDateOrder,
+		locale: monthlyLocale,
 		observations: observations.map((observation) => ({
 			sourcePath: observation.sourcePath,
 			sourceRevision: observation.sourceRevision,
@@ -109,7 +107,6 @@ export async function buildMonthlyProjection(
 		path: getMonthlyArchivePath(input.settings, input.period),
 		content,
 		bytes,
-		rendererVersion,
 		sourceDigest,
 		outputHash,
 		semanticHash: sourceDigest,
@@ -154,7 +151,14 @@ export function getMonthlyCanonicalPeriod(
 	return period !== null && getMonthlyArchivePath(settings, period) === normalizedPath ? period : null;
 }
 
-export function formatMonthlyDateHeading(format: string, logicalDate: string): string {
+export function normalizeMonthlyLocaleKey(value: unknown): string {
+	if (typeof value !== "string") return "en";
+	const normalized = value.trim().replace(/_/g, "-").toLowerCase();
+	if (normalized === "zh") return "zh-cn";
+	return MONTHLY_LOCALE_PATTERN.test(normalized) ? normalized : "en";
+}
+
+export function formatMonthlyDateHeading(format: string, logicalDate: string, locale: string): string {
 	assertLogicalDate(logicalDate);
 	const [yearText, monthText, dayText] = logicalDate.split("-");
 	const year = Number(yearText);
@@ -164,23 +168,44 @@ export function formatMonthlyDateHeading(format: string, logicalDate: string): s
 	if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
 		throw new Error(`Invalid Monthly logical date: ${logicalDate}`);
 	}
-	const values: Record<string, string> = {
+	const requestedLocale = normalizeMonthlyLocaleKey(locale);
+	const localizedDate = obsidianMoment.utc(logicalDate, "YYYY-MM-DD", true);
+	localizedDate.locale("en");
+	localizedDate.locale(requestedLocale);
+	const resolvedLocale = normalizeMonthlyLocaleKey(localizedDate.locale());
+	if (!areCompatibleLocaleKeys(requestedLocale, resolvedLocale)) localizedDate.locale("en");
+	const values: Record<(typeof DATE_TOKENS)[number], string> = {
 		YYYY: yearText ?? "",
-		MMMM: ENGLISH_MONTHS[month - 1] ?? "",
+		MMMM: localizedDate.format("MMMM"),
 		MM: monthText ?? "",
 		M: String(month),
 		DD: dayText ?? "",
 		D: String(day),
-		dddd: ENGLISH_WEEKDAYS[date.getUTCDay()] ?? "",
+		dddd: localizedDate.format("dddd"),
 	};
 	const resolvedFormat = format.trim() || DEFAULT_MONTHLY_DATE_HEADING_FORMAT;
-	return resolvedFormat.replace(DATE_TOKEN_PATTERN, (token: string, offset: number, source: string) => {
-		const previous = source[offset - 1] ?? "";
-		const next = source[offset + token.length] ?? "";
-		return ASCII_LETTER_PATTERN.test(previous) || ASCII_LETTER_PATTERN.test(next)
-			? token
-			: values[token] ?? token;
-	});
+	return resolvedFormat.replace(DATE_TOKEN_RUN_PATTERN, (run) => formatDateTokenRun(run, values));
+}
+
+function areCompatibleLocaleKeys(requested: string, resolved: string): boolean {
+	return requested === resolved
+		|| requested.startsWith(`${resolved}-`)
+		|| resolved.startsWith(`${requested}-`);
+}
+
+function formatDateTokenRun(
+	run: string,
+	values: Readonly<Record<(typeof DATE_TOKENS)[number], string>>,
+): string {
+	let offset = 0;
+	let output = "";
+	while (offset < run.length) {
+		const token = DATE_TOKENS.find((candidate) => run.startsWith(candidate, offset));
+		if (token === undefined) return run;
+		output += values[token];
+		offset += token.length;
+	}
+	return output;
 }
 
 function compareMonthlyObservations(left: MemoObservation, right: MemoObservation): number {

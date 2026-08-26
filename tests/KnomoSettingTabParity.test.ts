@@ -20,6 +20,7 @@ const expectedRenderOrder = [
 	"renderDateOrderSetting",
 	"renderMonthlyFileFormatSetting",
 	"renderDateHeadingFormatSetting",
+	"renderMonthlyLocaleSetting",
 	"renderMonthlyExcludeSetting",
 	"renderDataRootSetting",
 	"renderLocalHistorySetting",

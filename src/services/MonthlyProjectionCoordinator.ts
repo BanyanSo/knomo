@@ -17,7 +17,6 @@ const DEFAULT_COOLDOWN_MS = 1_000;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
 
 export interface MonthlyProjectionMetadata {
-	rendererVersion: number;
 	sourceDigest: string;
 	outputHash: string;
 }
@@ -161,7 +160,6 @@ export class MonthlyProjectionCoordinator {
 			period,
 			settings: built.settings,
 			observations: built.observations,
-			rendererVersion: built.rendererVersion,
 			sourceDigest: built.sourceDigest,
 		});
 		await this.enqueuePath(projection.path, async () => {
@@ -304,7 +302,6 @@ export class MonthlyProjectionCoordinator {
 
 function toMetadata(projection: Awaited<ReturnType<typeof buildMonthlyProjection>>): MonthlyProjectionMetadata {
 	return {
-		rendererVersion: projection.rendererVersion,
 		sourceDigest: projection.sourceDigest,
 		outputHash: projection.outputHash,
 	};

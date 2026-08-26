@@ -2,28 +2,21 @@ import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
 import type { MemoObservation } from "../types/catalog";
-import type { KnomoSettings } from "../types/settings";
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { canonicalJson, sha256Text } from "./CanonicalJson";
 import {
-	MONTHLY_RENDERER_VERSION,
 	getMonthlyArchivePath,
 	getMonthlyCanonicalPeriod,
 } from "./MonthlyProjection";
+import type { MonthlyProjectionSettings } from "./MonthlyProjection";
 import type { DailyNotesConfig } from "./DailyNoteService";
 import { DiaryMemoParser } from "./DiaryMemoParser";
-
-type MonthlyProjectionSettings = Pick<
-	KnomoSettings,
-	"monthlyMemoFolder" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat" | "monthlyDateOrder"
->;
 
 export interface MonthlyProjectionBuildResult {
 	period: string;
 	observations: MemoObservation[];
 	settings: MonthlyProjectionSettings;
-	rendererVersion: number;
 	sourceDigest: string;
 	sourcePaths: string[];
 }
@@ -32,20 +25,15 @@ export interface MonthlyProjectionInputBuilderOptions {
 	getDailyConfig: () => DailyNotesConfig | Promise<DailyNotesConfig>;
 	getHeadings: () => readonly string[];
 	getSettings: () => MonthlyProjectionSettings;
-	getRendererVersion?: () => number;
 }
 
 // 职责：从实际 Daily 文件构造完整月份输入；Catalog 和 identity state 不参与正向数据选择。
 export class MonthlyProjectionInputBuilder {
-	private readonly getRendererVersion: () => number;
-
 	constructor(
 		private readonly app: App,
 		private readonly parser: DiaryMemoParser,
 		private readonly options: MonthlyProjectionInputBuilderOptions,
-	) {
-		this.getRendererVersion = options.getRendererVersion ?? (() => MONTHLY_RENDERER_VERSION);
-	}
+	) {}
 
 	async listPeriods(): Promise<string[]> {
 		const dailyConfig = await this.options.getDailyConfig();
@@ -65,7 +53,6 @@ export class MonthlyProjectionInputBuilder {
 		const dailyConfig = await this.options.getDailyConfig();
 		const headings = [...new Set(this.options.getHeadings().map((heading) => heading.trim()).filter(Boolean))].sort();
 		const settings = this.getSettings();
-		const rendererVersion = this.getRendererVersion();
 		const dailyFiles = this.app.vault.getMarkdownFiles().flatMap((file) => {
 			const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
 			if (date === null) return [];
@@ -97,7 +84,6 @@ export class MonthlyProjectionInputBuilder {
 		}
 		const sourceDigest = await sha256Text(canonicalJson({
 			period,
-			rendererVersion,
 			daily: { config: dailyConfig, headings, files: parsedFiles },
 			monthly: settings,
 			targetPath: getMonthlyArchivePath(settings, period),
@@ -106,7 +92,6 @@ export class MonthlyProjectionInputBuilder {
 			period,
 			observations,
 			settings,
-			rendererVersion,
 			sourceDigest,
 			sourcePaths: parsedFiles.map((file) => file.sourcePath),
 		};
@@ -128,6 +113,7 @@ export class MonthlyProjectionInputBuilder {
 			monthlyMemoFileFormat: settings.monthlyMemoFileFormat,
 			monthlyDateHeadingFormat: settings.monthlyDateHeadingFormat,
 			monthlyDateOrder: settings.monthlyDateOrder,
+			locale: settings.locale,
 		};
 	}
 }

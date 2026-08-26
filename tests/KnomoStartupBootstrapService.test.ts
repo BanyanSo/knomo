@@ -107,7 +107,8 @@ function createSharedConfig(
 			return location.knomoDataRootConfigured ? getKnomoSharedConfigRootPath(location.knomoDataRoot) : null;
 		},
 		getWriterId: async () => WRITER_ID,
-		getLocalConfig: async () => buildKnomoSharedConfig(
+		getCurrentLocale: () => "en",
+		getLocalConfig: async (monthlyLocale) => buildKnomoSharedConfig(
 			{ folder: "Daily", format: "YYYY-MM-DD" },
 			{
 				dailyHeading: heading,
@@ -117,6 +118,7 @@ function createSharedConfig(
 				monthlyDateHeadingFormat: "## YYYY-MM-DD",
 				monthlyDateOrder: "asc",
 			},
+			monthlyLocale,
 		),
 		createEventId: () => "c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		now: () => new Date("2026-08-23T00:00:00.000Z"),

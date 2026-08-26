@@ -74,7 +74,6 @@ test("相同输出 no-op，Monthly 自写事件不会形成再次投影", async 
 	await fixture.coordinator.rebuildPeriod("2026-08");
 	assert.equal(processCount, 1);
 	assert.deepEqual(fixture.coordinator.getProjectionMetadata("2026-08"), {
-		rendererVersion: 1,
 		sourceDigest: assertString(fixture.coordinator.getProjectionMetadata("2026-08")?.sourceDigest),
 		outputHash: assertString(fixture.coordinator.getProjectionMetadata("2026-08")?.outputHash),
 	});
@@ -241,6 +240,7 @@ function createFixture(
 			monthlyMemoFileFormat: "YYYY-MM.md",
 			monthlyDateHeadingFormat: "## YYYY-MM-DD",
 			monthlyDateOrder: "asc",
+			locale: "en",
 		}),
 	});
 	const coordinator = new MonthlyProjectionCoordinator(replica.app, {

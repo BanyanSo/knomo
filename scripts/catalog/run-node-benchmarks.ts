@@ -263,7 +263,6 @@ export async function runIdentityLedgerReducerBenchmark(
 		const memoId = `01991f40-7c00-7000-8000-${ordinal.toString(16).padStart(12, "0")}`;
 		const hashSuffix = ordinal.toString(16).padStart(8, "0").slice(-8);
 		const event: IdentityLedgerClaimEvent = {
-			schemaVersion: 1,
 			eventId,
 			writerId: "w_11111111111111111111111111111111",
 			memoId,

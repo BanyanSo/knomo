@@ -1,25 +1,27 @@
 import type { MonthlyDateOrder } from "./settings";
 
-export type KnomoSharedConfigStatus = "missing" | "ready" | "conflicted" | "unsupported" | "unavailable";
+export type KnomoSharedConfigStatus = "missing" | "ready" | "conflicted" | "unavailable";
+
+interface KnomoSharedDailyConfig {
+	folder: string | null;
+	dateFormat: string;
+	headings: string[];
+}
+
+interface KnomoSharedMonthlyConfig {
+	folder: string;
+	fileFormat: string;
+	dateHeadingFormat: string;
+	dateOrder: MonthlyDateOrder;
+	locale: string;
+}
 
 export interface KnomoSharedConfig {
-	schemaVersion: 1;
-	daily: {
-		folder: string | null;
-		dateFormat: string;
-		headings: string[];
-	};
-	monthly: {
-		folder: string;
-		fileFormat: string;
-		dateHeadingFormat: string;
-		dateOrder: MonthlyDateOrder;
-		rendererVersion: number;
-	};
+	daily: KnomoSharedDailyConfig;
+	monthly: KnomoSharedMonthlyConfig;
 }
 
 export interface KnomoSharedConfigEvent {
-	schemaVersion: 1;
 	eventId: string;
 	writerId: string;
 	type: "set_config";

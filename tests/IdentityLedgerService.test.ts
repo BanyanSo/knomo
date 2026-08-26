@@ -45,7 +45,6 @@ test("1.2.9 升级保留16位数字 memoId，新格式生成规则保持不变",
 	const legacyMemoId = "2026082212345601";
 	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
 	const event: IdentityLedgerEvent = {
-		schemaVersion: 1,
 		eventId: eventId(99),
 		writerId: WRITER_A,
 		memoId: legacyMemoId,
@@ -73,7 +72,6 @@ test("1.2.9 升级保留16位数字 memoId，新格式生成规则保持不变",
 test("Identity Ledger 只接受冻结的九种基础事件", async () => {
 	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
 	const base = {
-		schemaVersion: 1 as const,
 		writerId: WRITER_A,
 		memoId: MEMO_A,
 		occurredAt: "2026-08-22T00:00:00.000Z",
@@ -584,7 +582,6 @@ test("P1 第 5 步：delete payload 不能隐藏 Daily 中仍存在的 observati
 	const observation = makeObservation(dailyPath, "a".repeat(64), 1, "正文");
 	const binding = await service.finishCreate(await service.beginCreate(createIntentInput(observation)), observation);
 	const deleteEvent: IdentityLedgerEvent = {
-		schemaVersion: 1,
 		eventId: eventId(10),
 		writerId: WRITER_B,
 		memoId: MEMO_A,
@@ -682,7 +679,6 @@ test("P1 第 7 步：重复导入相同旧事件不产生重复 Identity events"
 	await service.initialize();
 	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
 	const claim: IdentityLedgerEvent = {
-		schemaVersion: 1,
 		eventId: eventId(20),
 		writerId: WRITER_A,
 		memoId: MEMO_A,
@@ -710,7 +706,6 @@ test("P0 Identity 性能：legacy events 使用有界批量 segment 且只导入
 			`memo-${index + 1}`,
 		);
 		return {
-			schemaVersion: 1,
 			eventId: eventId(index + 100),
 			writerId: WRITER_A,
 			memoId: `01991f40-7c00-7000-8000-${(index + 1).toString(16).padStart(12, "0")}`,

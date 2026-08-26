@@ -24,7 +24,7 @@ test("共享配置缺失时只使用本机 fallback，初始化不写 Vault", as
 
 	assert.equal(service.getStatus(), "missing");
 	assert.equal(service.isCoverageComplete(), false);
-	assert.equal(service.isMonthlyProjectionAllowed(), true);
+	assert.equal(service.isMonthlyProjectionAllowed(), false);
 	assert.equal(service.getEffectiveConfig().daily.headings[0], "## Local");
 	assert.equal(replica.paths().some((path) => path.includes("/_knomo-data/schema/")), false);
 });
@@ -44,7 +44,108 @@ test("共享配置事件在设备间同步，并且相同事件字节得到相�
 	assert.equal(reader.getStatus(), "ready");
 	assert.equal(reader.isCoverageComplete(), true);
 	assert.equal(reader.getEffectiveConfig().daily.headings[0], "## Shared");
+	assert.equal("schemaVersion" in reader.getEffectiveConfig(), false);
+	assert.equal("rendererVersion" in reader.getEffectiveConfig().monthly, false);
+	assert.equal(left.paths().some((path) => left.read(path)?.includes("schemaVersion")), false);
 	assert.deepEqual(reader.getSnapshot(), writer.getSnapshot());
+});
+
+test("设备语言变化不会静默改写已持久化的 Monthly locale", async () => {
+	const replica = new InMemoryVault();
+	await replica.app.vault.createFolder("Knomo/_knomo-data");
+	let currentLocale = "en";
+	const service = createService(
+		replica,
+		WRITER_A,
+		["c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "c_dddddddddddddddddddddddddddddddd"],
+		makeConfig("## Shared"),
+		() => currentLocale,
+	);
+	await service.initialize();
+	await service.publishLocalConfig();
+	const before = service.getSnapshot();
+
+	currentLocale = "fr";
+	await service.refreshLocalConfig();
+	await service.publishLocalConfig();
+
+	assert.equal(service.getEffectiveConfig().monthly.locale, "en");
+	assert.equal(service.getSnapshot().eventCount, before.eventCount);
+});
+
+test("显式使用当前 Obsidian 语言后，各设备最终读取同一 Monthly locale", async () => {
+	const left = new InMemoryVault();
+	await left.app.vault.createFolder("Knomo/_knomo-data");
+	let currentLocale = "en";
+	const writer = createService(
+		left,
+		WRITER_A,
+		["c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "c_dddddddddddddddddddddddddddddddd"],
+		makeConfig("## Shared"),
+		() => currentLocale,
+	);
+	await writer.initialize();
+	await writer.publishLocalConfig();
+
+	currentLocale = "fr_FR";
+	assert.equal(await writer.useCurrentObsidianLocale(), true);
+	assert.equal(writer.getEffectiveConfig().monthly.locale, "fr-fr");
+
+	const right = new InMemoryVault();
+	right.deliverFrom(left);
+	const reader = createService(
+		right,
+		WRITER_B,
+		"c_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		makeConfig("## Other"),
+		() => "de",
+	);
+	await reader.initialize();
+	assert.equal(reader.getEffectiveConfig().monthly.locale, "fr-fr");
+});
+
+test("两设备离线选择不同 locale 时保留冲突并暂停 Monthly", async () => {
+	const leftVault = new InMemoryVault();
+	const rightVault = new InMemoryVault();
+	await leftVault.app.vault.createFolder("Knomo/_knomo-data");
+	await rightVault.app.vault.createFolder("Knomo/_knomo-data");
+	const left = createService(
+		leftVault,
+		WRITER_A,
+		"c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		makeConfig("## Local"),
+		() => "en",
+	);
+	const right = createService(
+		rightVault,
+		WRITER_B,
+		"c_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		makeConfig("## Local"),
+		() => "fr",
+	);
+	await left.initialize();
+	await right.initialize();
+	await left.publishLocalConfig();
+	await right.publishLocalConfig();
+
+	const merged = new InMemoryVault({
+		"Daily/2026-08-22.md": "## Memos\n- 09:00 unchanged\n",
+	});
+	merged.deliverFrom(leftVault);
+	merged.deliverFrom(rightVault);
+	const reader = createService(
+		merged,
+		WRITER_C,
+		"c_dddddddddddddddddddddddddddddddd",
+		makeConfig("## Local"),
+		() => "de",
+	);
+	await reader.initialize();
+
+	assert.equal(reader.getStatus(), "conflicted");
+	assert.equal(reader.isCoverageComplete(), false);
+	assert.equal(reader.isMonthlyProjectionAllowed(), false);
+	assert.equal(merged.read("Daily/2026-08-22.md"), "## Memos\n- 09:00 unchanged\n");
 });
 
 test("并发不同配置保留分叉并暂停 Monthly，显式 resolution 后收敛", async () => {
@@ -104,18 +205,18 @@ test("P2 第 8 步：两设备离线配置事件按任意到达顺序保持同�
 	assert.deepEqual(readerAB.getSnapshot(), readerBA.getSnapshot());
 });
 
-test("未知配置 schema 只隔离共享配置，仍保留本机 Daily fallback 且不覆盖 Monthly", async () => {
+test("非法共享配置文件只隔离共享配置，仍保留本机 Daily fallback 且不覆盖 Monthly", async () => {
 	const replica = new InMemoryVault();
 	const root = getKnomoSharedConfigRootPath("Knomo");
 	await replica.app.vault.create(
 		`${root}/writers/${WRITER_A}/segments/segment-c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-${"a".repeat(64)}.jsonl`,
-		'{"schemaVersion":99}\n',
+		'{"unexpected":true}\n',
 	);
 	const service = createService(replica, WRITER_B, "c_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", makeConfig("## Local"));
 
 	await service.initialize();
 
-	assert.equal(service.getStatus(), "unsupported");
+	assert.equal(service.getStatus(), "conflicted");
 	assert.equal(service.getEffectiveConfig().daily.headings[0], "## Local");
 	assert.equal(service.isCoverageComplete(), false);
 	assert.equal(service.isMonthlyProjectionAllowed(), false);
@@ -127,7 +228,8 @@ test("用户迁移 Knomo Data Root 时逐字节复制并验证共享配置事件
 	const service = new KnomoSharedConfigService(replica.app, {
 		getRootPath: () => getKnomoSharedConfigRootPath("Knomo-A"),
 		getWriterId: async () => WRITER_A,
-		getLocalConfig: async () => makeConfig("## Shared"),
+		getCurrentLocale: () => "en",
+		getLocalConfig: async (monthlyLocale) => makeConfig("## Shared", monthlyLocale),
 		createEventId: () => "c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		now: () => new Date("2026-08-22T00:00:00.000Z"),
 	});
@@ -147,22 +249,30 @@ test("用户迁移 Knomo Data Root 时逐字节复制并验证共享配置事件
 function createService(
 	replica: InMemoryVault,
 	writerId: string,
-	eventId: string,
+	eventId: string | string[],
 	localConfig: KnomoSharedConfig,
+	getCurrentLocale: () => string = () => "en",
 ): KnomoSharedConfigService {
+	const eventIds = Array.isArray(eventId) ? eventId : [eventId];
+	let eventIndex = 0;
 	return new KnomoSharedConfigService(replica.app, {
 		getRootPath: () => getKnomoSharedConfigRootPath("Knomo"),
 		getWriterId: async () => writerId,
-		getLocalConfig: async () => localConfig,
-		createEventId: () => eventId,
+		getCurrentLocale,
+		getLocalConfig: async (monthlyLocale) => ({
+			...localConfig,
+			monthly: { ...localConfig.monthly, locale: monthlyLocale },
+		}),
+		createEventId: () => eventIds[Math.min(eventIndex++, eventIds.length - 1)] ?? eventIds[0] ?? "",
 		now: () => new Date("2026-08-22T00:00:00.000Z"),
 	});
 }
 
-function makeConfig(heading: string): KnomoSharedConfig {
+function makeConfig(heading: string, locale = "en"): KnomoSharedConfig {
 	return buildKnomoSharedConfig(
 		{ folder: "Daily", format: "YYYY-MM-DD" },
 		makeSettings(heading),
+		locale,
 	);
 }
 

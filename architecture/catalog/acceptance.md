@@ -9,6 +9,7 @@
 | CAT-NAME-001 | 扫描生产源码 | 只存在无版本 Catalog 业务模块、类型和配置键 |
 | CAT-NAME-002 | 创建本机 IndexedDB | 数据库名使用 `knomo-catalog-<device-local-hash>` |
 | CAT-NAME-003 | 创建增强数据目录 | 只使用 `_knomo-data/identity` 和 `_knomo-data/config` |
+| CAT-NAME-004 | 检查当前共享事件与配置 | 不包含开发期 schema 或 renderer 版本字段；不读取未发布开发快照 |
 | CAT-ENTRY-001 | 检查 `main.ts` | 正式入口只装配 Catalog、Identity Ledger、Monthly 和旧 Index 直接迁移服务 |
 
 ## 2. 1.2.9 升级
@@ -74,6 +75,8 @@
 | CAT-LOCALE-001 | 首台设备初始化 Monthly locale | 将 locale 写入共享配置后再生成 locale 相关标题 |
 | CAT-LOCALE-002 | 不同系统 locale 的第二台设备打开同一 Vault | 使用共享 locale，生成与首台设备一致的 Monthly |
 | CAT-LOCALE-003 | 共享 locale 冲突 | Daily 与 Catalog 继续，Monthly 暂停覆盖并提示解决冲突 |
+| CAT-LOCALE-004 | 设备语言在共享 locale 落盘后改变 | 不自动改变共享 locale，也不静默重写 Monthly |
+| CAT-LOCALE-005 | 用户显式使用当前 Obsidian 语言 | 追加共享配置后继事件，两设备最终生成逐字节相同的 Monthly |
 | CAT-EXCLUDE-001 | 新用户或从未设置 Monthly 排除规则的用户升级 | 默认初始化为开启 |
 | CAT-EXCLUDE-002 | 用户已显式关闭 Monthly 排除规则 | 升级不得改回开启 |
 | CAT-PROJ-001 | 重建 Monthly | 正文只从实际 Daily 读取 |

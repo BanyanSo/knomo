@@ -141,7 +141,6 @@ export class LegacyIndexMigrationService {
 			if (binding === null) {
 				const eventId = await deterministicEventId("claim", source.sourceId, record.memoId, expectedEvidence);
 				claims.push({
-					schemaVersion: 1,
 					eventId,
 					writerId,
 					memoId: record.memoId,
@@ -225,7 +224,6 @@ async function buildMetadataEvents(
 	const events: IdentityLedgerEvent[] = [];
 	if (record.sourceMemoId !== null) {
 		events.push({
-			schemaVersion: 1,
 			eventId: await deterministicEventId("relation", source.sourceId, record.memoId, binding.bindingId, record.sourceMemoId),
 			writerId,
 			memoId: record.memoId,
@@ -239,7 +237,6 @@ async function buildMetadataEvents(
 		const reviewedAt = review.lastReviewedAt ?? ("updatedAt" in record ? record.updatedAt : record.createdAt);
 		for (let index = 0; index < review.reviewCount; index += 1) {
 			events.push({
-				schemaVersion: 1,
 				eventId: await deterministicEventId("review", source.sourceId, record.memoId, binding.bindingId, index),
 				writerId,
 				memoId: record.memoId,
@@ -264,7 +261,6 @@ async function buildMetadataEvents(
 		};
 		const deleteEventId = await deterministicEventId("delete", source.sourceId, record.memoId, binding.bindingId, evidence);
 		events.push({
-			schemaVersion: 1,
 			eventId: deleteEventId,
 			writerId,
 			memoId: record.memoId,
@@ -274,7 +270,6 @@ async function buildMetadataEvents(
 			evidence,
 		});
 		events.push({
-			schemaVersion: 1,
 			eventId: await deterministicEventId("delete-commit", source.sourceId, deleteEventId),
 			writerId,
 			memoId: record.memoId,

@@ -1,6 +1,6 @@
 import { normalizePath } from "obsidian";
 
-import { MONTHLY_RENDERER_VERSION } from "./MonthlyProjection";
+import { normalizeMonthlyLocaleKey } from "./MonthlyProjection";
 import type { DailyNotesConfig } from "./DailyNoteService";
 import type {
 	KnomoSharedConfig,
@@ -19,13 +19,6 @@ const WRITER_ID_PATTERN = /^w_[a-f0-9]{32}$/u;
 const EVENT_ID_PATTERN = /^c_[a-f0-9]{32}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
-export class UnsupportedKnomoSharedConfigSchemaError extends Error {
-	constructor() {
-		super("Unsupported Knomo shared configuration schema.");
-		this.name = "UnsupportedKnomoSharedConfigSchemaError";
-	}
-}
-
 export function buildKnomoSharedConfig(
 	dailyConfig: DailyNotesConfig,
 	settings: Pick<
@@ -33,11 +26,11 @@ export function buildKnomoSharedConfig(
 		"dailyHeading" | "legacyDailyHeadings" | "monthlyMemoFolder" | "monthlyMemoFileFormat"
 		| "monthlyDateHeadingFormat" | "monthlyDateOrder"
 	>,
+	monthlyLocale: string,
 ): KnomoSharedConfig {
 	const headings = [...new Set([settings.dailyHeading, ...settings.legacyDailyHeadings]
 		.map((heading) => heading.trim()).filter(Boolean))];
 	const config: KnomoSharedConfig = {
-		schemaVersion: 1,
 		daily: {
 			folder: dailyConfig.folder === null || dailyConfig.folder.trim().length === 0
 				? null
@@ -50,7 +43,7 @@ export function buildKnomoSharedConfig(
 			fileFormat: settings.monthlyMemoFileFormat.trim(),
 			dateHeadingFormat: settings.monthlyDateHeadingFormat.trim(),
 			dateOrder: settings.monthlyDateOrder,
-			rendererVersion: MONTHLY_RENDERER_VERSION,
+			locale: normalizeMonthlyLocaleKey(monthlyLocale),
 		},
 	};
 	assertKnomoSharedConfig(config);
@@ -145,11 +138,9 @@ export async function sha256KnomoSharedConfigText(value: string): Promise<string
 }
 
 export function assertKnomoSharedConfigEvent(value: unknown): asserts value is KnomoSharedConfigEvent {
-	if (isRecord(value) && value.schemaVersion !== 1) throw new UnsupportedKnomoSharedConfigSchemaError();
 	const baseEventIds = isRecord(value) && Array.isArray(value.baseEventIds) ? value.baseEventIds : null;
 	if (!isRecord(value)
-		|| !hasExactKeys(value, ["schemaVersion", "eventId", "writerId", "type", "baseEventIds", "occurredAt", "config"])
-		|| value.schemaVersion !== 1
+		|| !hasExactKeys(value, ["eventId", "writerId", "type", "baseEventIds", "occurredAt", "config"])
 		|| !EVENT_ID_PATTERN.test(readString(value.eventId))
 		|| !WRITER_ID_PATTERN.test(readString(value.writerId))
 		|| value.type !== "set_config"
@@ -164,14 +155,12 @@ export function assertKnomoSharedConfigEvent(value: unknown): asserts value is K
 }
 
 export function assertKnomoSharedConfig(value: unknown): asserts value is KnomoSharedConfig {
-	if (isRecord(value) && value.schemaVersion !== 1) throw new UnsupportedKnomoSharedConfigSchemaError();
 	if (!isRecord(value)
-		|| !hasExactKeys(value, ["schemaVersion", "daily", "monthly"])
-		|| value.schemaVersion !== 1
+		|| !hasExactKeys(value, ["daily", "monthly"])
 		|| !isRecord(value.daily)
 		|| !hasExactKeys(value.daily, ["folder", "dateFormat", "headings"])
 		|| !isRecord(value.monthly)
-		|| !hasExactKeys(value.monthly, ["folder", "fileFormat", "dateHeadingFormat", "dateOrder", "rendererVersion"])) {
+		|| !hasExactKeys(value.monthly, ["folder", "fileFormat", "dateHeadingFormat", "dateOrder", "locale"])) {
 		throw new Error("Invalid Knomo shared configuration.");
 	}
 	const daily = value.daily;
@@ -185,7 +174,8 @@ export function assertKnomoSharedConfig(value: unknown): asserts value is KnomoS
 		|| typeof monthly.fileFormat !== "string" || !isValidMonthlyMemoFileFormat(monthly.fileFormat)
 		|| typeof monthly.dateHeadingFormat !== "string" || !isValidMarkdownHeading(monthly.dateHeadingFormat)
 		|| (monthly.dateOrder !== "asc" && monthly.dateOrder !== "desc")
-		|| !Number.isInteger(monthly.rendererVersion) || Number(monthly.rendererVersion) < 1) {
+		|| typeof monthly.locale !== "string"
+		|| normalizeMonthlyLocaleKey(monthly.locale) !== monthly.locale) {
 		throw new Error("Invalid Knomo shared configuration.");
 	}
 }

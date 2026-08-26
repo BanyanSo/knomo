@@ -1,49 +1,114 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://knomo.local/schemas/catalog/shared-config-event-v1.json",
-  "title": "Knomo Shared Configuration Event V1",
+  "$id": "https://knomo.local/schemas/catalog/shared-config-event.json",
+  "title": "Knomo Shared Configuration Event",
   "type": "object",
-  "required": ["schemaVersion", "eventId", "writerId", "type", "baseEventIds", "occurredAt", "config"],
+  "required": [
+    "eventId",
+    "writerId",
+    "type",
+    "baseEventIds",
+    "occurredAt",
+    "config"
+  ],
   "properties": {
-    "schemaVersion": { "const": 1 },
-    "eventId": { "type": "string", "pattern": "^c_[a-f0-9]{32}$" },
-    "writerId": { "type": "string", "pattern": "^w_[a-f0-9]{32}$" },
-    "type": { "const": "set_config" },
+    "eventId": {
+      "type": "string",
+      "pattern": "^c_[a-f0-9]{32}$"
+    },
+    "writerId": {
+      "type": "string",
+      "pattern": "^w_[a-f0-9]{32}$"
+    },
+    "type": {
+      "const": "set_config"
+    },
     "baseEventIds": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^c_[a-f0-9]{32}$" }
+      "items": {
+        "type": "string",
+        "pattern": "^c_[a-f0-9]{32}$"
+      }
     },
-    "occurredAt": { "type": "string", "minLength": 1 },
+    "occurredAt": {
+      "type": "string",
+      "minLength": 1
+    },
     "config": {
       "type": "object",
-      "required": ["schemaVersion", "daily", "monthly"],
+      "required": [
+        "daily",
+        "monthly"
+      ],
       "properties": {
-        "schemaVersion": { "const": 1 },
         "daily": {
           "type": "object",
-          "required": ["folder", "dateFormat", "headings"],
+          "required": [
+            "folder",
+            "dateFormat",
+            "headings"
+          ],
           "properties": {
-            "folder": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
-            "dateFormat": { "type": "string", "minLength": 1 },
+            "folder": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "dateFormat": {
+              "type": "string",
+              "minLength": 1
+            },
             "headings": {
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,
-              "items": { "type": "string", "pattern": "^#{1,6}\\s+\\S" }
+              "items": {
+                "type": "string",
+                "pattern": "^#{1,6}\\s+\\S"
+              }
             }
           },
           "additionalProperties": false
         },
         "monthly": {
           "type": "object",
-          "required": ["folder", "fileFormat", "dateHeadingFormat", "dateOrder", "rendererVersion"],
+          "required": [
+            "folder",
+            "fileFormat",
+            "dateHeadingFormat",
+            "dateOrder",
+            "locale"
+          ],
           "properties": {
-            "folder": { "type": "string", "minLength": 1 },
-            "fileFormat": { "type": "string", "minLength": 1 },
-            "dateHeadingFormat": { "type": "string", "pattern": "^#{1,6}\\s+\\S" },
-            "dateOrder": { "enum": ["asc", "desc"] },
-            "rendererVersion": { "type": "integer", "minimum": 1 }
+            "folder": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fileFormat": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dateHeadingFormat": {
+              "type": "string",
+              "pattern": "^#{1,6}\\s+\\S"
+            },
+            "dateOrder": {
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "locale": {
+              "type": "string",
+              "pattern": "^[a-z]{2,3}(-[a-z0-9]{2,8})*$"
+            }
           },
           "additionalProperties": false
         }

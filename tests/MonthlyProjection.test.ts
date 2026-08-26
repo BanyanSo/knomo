@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { moment } from "obsidian";
+
 import {
 	buildMonthlyProjection,
 	MONTHLY_READONLY_COMMENT,
 	formatMonthlyDateHeading,
 	getMonthlyConflictPeriod,
+	normalizeMonthlyLocaleKey,
 } from "../src/services/MonthlyProjection";
 import type { CatalogObservation } from "../src/types/catalog";
 import type { KnomoSettings } from "../src/types/settings";
@@ -54,8 +57,40 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 	assert.equal(first.content.endsWith("\n\n"), false);
 });
 
-test("Monthly heading 的名称 token 固定为英文，不读取设备 locale", () => {
-	assert.equal(formatMonthlyDateHeading("## D MMMM YYYY dddd", "2026-08-09"), "## 9 August 2026 Sunday");
+test("Monthly heading 只使用传入 locale，且支持相邻的完整 token", () => {
+	assert.equal(normalizeMonthlyLocaleKey("zh"), "zh-cn");
+	assert.equal(normalizeMonthlyLocaleKey("fr_FR"), "fr-fr");
+	moment.locale("fr");
+	assert.equal(
+		formatMonthlyDateHeading("## D MMMM YYYY dddd", "2026-08-09", "en"),
+		"## 9 August 2026 Sunday",
+	);
+	moment.locale("en");
+	assert.equal(
+		formatMonthlyDateHeading("## YYYYM MMMMM MMMMD DDdddd", "2026-08-09", "fr"),
+		"## 20268 août8 août9 09dimanche",
+	);
+});
+
+test("两台不同 UI 语言设备使用同一共享 locale 时生成字节级相同 Monthly", async () => {
+	const observation = makeObservation({ logicalDate: "2026-08-09" });
+	moment.locale("en");
+	const left = await buildMonthlyProjection({
+		period: "2026-08",
+		settings: makeSettings("fr"),
+		observations: [observation],
+	});
+	moment.locale("fr");
+	const right = await buildMonthlyProjection({
+		period: "2026-08",
+		settings: makeSettings("fr"),
+		observations: [observation],
+	});
+	moment.locale("en");
+
+	assert.deepEqual(right.bytes, left.bytes);
+	assert.equal(right.content, left.content);
+	assert.match(right.content, /## \[\[2026-08-09\]\]/u);
 });
 
 test("Monthly conflict copy 只识别 canonical 同目录的 side copy", () => {
@@ -65,7 +100,7 @@ test("Monthly conflict copy 只识别 canonical 同目录的 side copy", () => {
 	assert.equal(getMonthlyConflictPeriod(settings, "Elsewhere/Memos-2026-08 (conflict).md"), null);
 });
 
-function makeSettings(): KnomoSettings {
+function makeSettings(locale = "en"): KnomoSettings & { locale: string } {
 	return {
 		settingsVersion: 4,
 		dailyHeading: "## Memos",
@@ -85,6 +120,7 @@ function makeSettings(): KnomoSettings {
 		desktopSidebarCollapsed: false,
 		excludeMonthlyMemosFromObsidian: true,
 		pinnedTags: [],
+		locale,
 	};
 }
 

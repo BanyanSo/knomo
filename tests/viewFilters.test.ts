@@ -221,7 +221,7 @@ test("matches record statistics drill-down filters with local date and hour sema
 		tagLabel: "Work",
 	};
 	assert.equal(matchesRecordStatsSearchFilter(tagged, tagFilter), true);
-	assert.equal(matchesRecordStatsSearchFilter(childTagged, tagFilter), false);
+	assert.equal(matchesRecordStatsSearchFilter(childTagged, tagFilter), true);
 	assert.equal(matchesRecordStatsSearchFilter(nextMonth, tagFilter), false);
 	assert.equal(matchesRecordStatsSearchFilter(morning, {
 		type: "max-daily-notes",

@@ -74,6 +74,7 @@ export interface CatalogFeatureCursor {
 export interface CatalogMemoPage {
 	items: CatalogMemoItem[];
 	nextCursor: CatalogFeatureCursor | null;
+	catalogRevision: number;
 	coverage: CatalogCoverage;
 	lifecycle: CatalogStoreLifecycle;
 	capabilities: CatalogCapabilities;
@@ -82,6 +83,44 @@ export interface CatalogMemoPage {
 	degraded: boolean;
 	invalidated: boolean;
 }
+
+export interface CatalogLibrarySummary {
+	memoCount: number;
+	tagCount: number;
+	imageCount: number;
+	wordCount: number;
+}
+
+export interface CatalogTagFacet {
+	key: string;
+	label: string;
+	count: number;
+}
+
+export interface CatalogAggregateResult<T> {
+	value: T | null;
+	complete: boolean;
+	coverage: CatalogCoverage;
+}
+
+export interface CatalogFunctionPageRequest {
+	limit: number;
+	cursor?: CatalogFeatureCursor | null;
+	text?: string;
+}
+
+export type CatalogRecordStatsFilter =
+	| { type: "day"; date: string }
+	| { type: "month"; month: string }
+	| { type: "range"; startDate: string; endDateExclusive: string }
+	| { type: "with-tag"; startDate: string; endDateExclusive: string }
+	| { type: "no-tag"; startDate: string; endDateExclusive: string }
+	| { type: "with-image"; startDate: string; endDateExclusive: string }
+	| { type: "tag"; startDate: string; endDateExclusive: string; tagKey: string; tagLabel: string }
+	| { type: "references"; startDate: string; endDateExclusive: string }
+	| { type: "max-daily-notes"; dates: string[] }
+	| { type: "max-daily-words"; dates: string[] }
+	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };
 
 export interface CatalogOperationalState {
 	readState: CatalogReadState;

@@ -28,7 +28,7 @@ export interface ShuffleDaySnapshot {
 }
 
 interface ShuffleDayControllerOptions {
-	ensureAllMemosLoaded: () => Promise<void>;
+	prepareCatalogData: () => Promise<void>;
 	getMemos: () => MemoRecord[];
 	service: ShuffleDayService;
 	selectShuffleDay?: (memos: MemoRecord[]) => Promise<ShuffleDaySelectionResult>;
@@ -89,7 +89,7 @@ export class ShuffleDayController {
 			this.options.requestRender();
 		}
 		try {
-			await this.options.ensureAllMemosLoaded();
+			await this.options.prepareCatalogData();
 			const result = await (this.options.selectShuffleDay?.(this.options.getMemos())
 				?? this.options.service.selectShuffleDay(this.options.getMemos()));
 			if (result.status === "ready") {

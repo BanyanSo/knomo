@@ -9,11 +9,11 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 test("refreshes shuffle day through the service and renders loading transitions", async () => {
 	const { ShuffleDayController } = await loadController();
 	const memo = makeMemo("memo-1", "2026-05-01T09:00:00");
-	let ensureCalls = 0;
+	let prepareCalls = 0;
 	let renderCalls = 0;
 	const controller = new ShuffleDayController({
-		ensureAllMemosLoaded: async () => {
-			ensureCalls += 1;
+		prepareCatalogData: async () => {
+			prepareCalls += 1;
 		},
 		getMemos: () => [memo],
 		service: makeService(async () => ({
@@ -33,7 +33,7 @@ test("refreshes shuffle day through the service and renders loading transitions"
 
 	await controller.refresh();
 
-	assert.equal(ensureCalls, 1);
+	assert.equal(prepareCalls, 1);
 	assert.equal(renderCalls, 2);
 	assert.equal(controller.getSnapshot().status, "ready");
 	assert.equal(controller.getSnapshot().selectedDate, "2026-05-01");

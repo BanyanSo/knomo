@@ -10,7 +10,7 @@ export interface RandomReunionSnapshot<TMemo extends MemoRecord = MemoRecord> {
 }
 
 interface RandomReunionControllerOptions<TMemo extends MemoRecord> {
-	ensureAllMemosLoaded: () => Promise<void>;
+	prepareCatalogData: () => Promise<void>;
 	getMemos: () => TMemo[];
 	getRandomReunionMemos: (count: number, memos: TMemo[]) => Promise<TMemo[]>;
 	markRandomReunionReviewed: (memoId: string) => Promise<void>;
@@ -46,7 +46,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 			this.options.requestRender();
 		}
 		try {
-			await this.options.ensureAllMemosLoaded();
+			await this.options.prepareCatalogData();
 			this.memos = await this.options.getRandomReunionMemos(
 				RANDOM_REUNION_DEFAULT_COUNT,
 				this.options.getMemos(),

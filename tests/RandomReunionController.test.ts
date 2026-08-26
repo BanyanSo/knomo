@@ -8,7 +8,7 @@ test("refreshes random reunion once while loading and preserves render transitio
 	const { RandomReunionController } = await loadController();
 	const sourceMemos = [makeMemo("memo-1"), makeMemo("memo-2")];
 	const randomMemos = [sourceMemos[1]];
-	let ensureCalls = 0;
+	let prepareCalls = 0;
 	let randomCalls = 0;
 	let requestedCount = 0;
 	let requestedMemos: MemoRecord[] | null = null;
@@ -18,8 +18,8 @@ test("refreshes random reunion once while loading and preserves render transitio
 		resolveRandom = resolve;
 	});
 	const controller = new RandomReunionController({
-		ensureAllMemosLoaded: async () => {
-			ensureCalls += 1;
+		prepareCatalogData: async () => {
+			prepareCalls += 1;
 		},
 		getMemos: () => sourceMemos,
 		getRandomReunionMemos: (count, memos) => {
@@ -42,7 +42,7 @@ test("refreshes random reunion once while loading and preserves render transitio
 
 	assert.equal(controller.getSnapshot().loading, true);
 	assert.equal(controller.getSnapshot().memos, null);
-	assert.equal(ensureCalls, 1);
+	assert.equal(prepareCalls, 1);
 	assert.equal(randomCalls, 1);
 	assert.equal(requestedCount, 5);
 	assert.equal(requestedMemos, sourceMemos);
@@ -61,7 +61,7 @@ test("reports random reunion refresh errors and leaves an empty result", async (
 	const notices: string[] = [];
 	let renderCalls = 0;
 	const controller = new RandomReunionController({
-		ensureAllMemosLoaded: async () => {},
+		prepareCatalogData: async () => {},
 		getMemos: () => [],
 		getRandomReunionMemos: async () => {
 			throw new Error("random source unavailable");
@@ -87,7 +87,7 @@ test("does not select random memos when full loading fails", async () => {
 	let randomCalls = 0;
 	const notices: string[] = [];
 	const controller = new RandomReunionController({
-		ensureAllMemosLoaded: async () => {
+		prepareCatalogData: async () => {
 			throw new Error("full load failed");
 		},
 		getMemos: () => [makeMemo("memo-1")],
@@ -113,7 +113,7 @@ test("clears cached random reunion memos before the next Catalog refresh", async
 	const firstMemo = makeMemo("memo-1");
 	const secondMemo = makeMemo("memo-2");
 	const controller = new RandomReunionController({
-		ensureAllMemosLoaded: async () => {},
+		prepareCatalogData: async () => {},
 		getMemos: () => [firstMemo, secondMemo],
 		getRandomReunionMemos: async () => [firstMemo, secondMemo],
 		markRandomReunionReviewed: async () => {},
@@ -132,7 +132,7 @@ test("marks a random reunion memo reviewed only through the explicit command", a
 	const { RandomReunionController } = await loadController();
 	const reviewedMemoIds: string[] = [];
 	const controller = new RandomReunionController({
-		ensureAllMemosLoaded: async () => {},
+		prepareCatalogData: async () => {},
 		getMemos: () => [],
 		getRandomReunionMemos: async () => [],
 		markRandomReunionReviewed: async (memoId) => {

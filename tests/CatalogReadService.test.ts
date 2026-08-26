@@ -154,6 +154,173 @@ test("回收站忽略过期 resolution snapshot，并按当前 Catalog 显示删
 	assert.equal(page.items[0]?.memoId, binding.memoId);
 });
 
+test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影响", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const first = makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "中文 first");
+	first.tags = ["#Project/Alpha"];
+	first.images = [{ path: "first.png", altText: "", syntax: "obsidian_embed" }];
+	const second = makeObservation("Daily/2026-08-21.md", "2026-08-21", 1, "second 42");
+	second.tags = ["#project/alpha", "#Life"];
+	await seedCatalogFiles(catalog, store, [first, second]);
+	const service = new CatalogReadService({ catalog, identityLedger: createIdentityReader().reader });
+
+	assert.equal((await service.query({ limit: 1 })).items.length, 1);
+	const summary = await service.getLibrarySummary();
+	const facets = await service.getTagFacets();
+
+	assert.equal(summary.complete, true);
+	assert.deepEqual(summary.value, { memoCount: 2, tagCount: 2, imageCount: 1, wordCount: 5 });
+	assert.equal(facets.complete, true);
+	assert.deepEqual(facets.value, [
+		{ key: "project/alpha", label: "project/alpha", count: 2 },
+		{ key: "life", label: "Life", count: 1 },
+	]);
+});
+
+test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalogFiles(catalog, store, [makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "known")]);
+	await store.setCoverage({
+		kind: "partial",
+		sharedConfigurationComplete: true,
+		coveredFromDate: "2026-08-01",
+		pendingFileCount: 2,
+		coveredFileCount: 1,
+		totalFileCount: 3,
+	});
+	const service = new CatalogReadService({ catalog, identityLedger: createIdentityReader().reader });
+
+	assert.equal((await service.getLibrarySummary()).value, null);
+	assert.equal(await service.getCoverageForRange("2026-08-01", "2026-08-31"), true);
+	assert.equal(await service.getCoverageForRange("2026-07-31", "2026-08-31"), false);
+	const pending = await service.queryRecordStatsDrilldown({
+		type: "range",
+		startDate: "2026-07-01",
+		endDateExclusive: "2026-09-01",
+	}, { limit: 50 });
+	assert.deepEqual(pending.items, []);
+	assert.equal(pending.readState, "history_building");
+});
+
+test("往日漫游按同日号查询、排除当天并支持跨页", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalogFiles(catalog, store, [
+		makeObservation("Daily/2026-03-15.md", "2026-03-15", 1, "today"),
+		makeObservation("Daily/2026-02-15.md", "2026-02-15", 1, "february"),
+		makeObservation("Daily/2025-11-15.md", "2025-11-15", 1, "november"),
+		makeObservation("Daily/2025-03-14.md", "2025-03-14", 1, "other day"),
+	]);
+	const service = new CatalogReadService({ catalog, identityLedger: createIdentityReader().reader });
+
+	const first = await service.queryReviewItems(new Date(2026, 2, 15), { limit: 1 });
+	const second = await service.queryReviewItems(new Date(2026, 2, 15), { limit: 1, cursor: first.nextCursor });
+
+	assert.deepEqual(first.items.map((item) => item.content), ["february"]);
+	assert.deepEqual(second.items.map((item) => item.content), ["november"]);
+	assert.equal(second.nextCursor, null);
+});
+
+test("2 月 29 日往日漫游只返回历史闰日", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalogFiles(catalog, store, [
+		makeObservation("Daily/2024-02-29.md", "2024-02-29", 1, "today"),
+		makeObservation("Daily/2020-02-29.md", "2020-02-29", 1, "leap day"),
+		makeObservation("Daily/2023-03-29.md", "2023-03-29", 1, "march"),
+	]);
+	const service = new CatalogReadService({ catalog, identityLedger: createIdentityReader().reader });
+
+	const page = await service.queryReviewItems(new Date(2024, 1, 29), { limit: 50 });
+
+	assert.deepEqual(page.items.map((item) => item.content), ["leap day"]);
+});
+
+test("记录统计钻取在分页前处理标签、引用、小时和并列日期", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const parentTag = makeObservation("Daily/2026-08-01.md", "2026-08-01", 1, "parent");
+	parentTag.tags = ["#Project/Alpha"];
+	parentTag.time = "09:10";
+	const explicitReference = makeObservation("Daily/2026-08-02.md", "2026-08-02", 1, "explicit [[Daily#^abc]]");
+	explicitReference.time = "09:20";
+	const identityReference = makeObservation("Daily/2026-08-03.md", "2026-08-03", 1, "identity");
+	identityReference.time = "12:00";
+	const image = makeObservation("Daily/2026-08-04.md", "2026-08-04", 1, "image");
+	image.images = [{ path: "image.png", altText: "", syntax: "obsidian_embed" }];
+	await seedCatalogFiles(catalog, store, [parentTag, explicitReference, identityReference, image]);
+	const identity = createIdentityReader();
+	const binding = makeBinding(identityReference, "2026080312000001", "identity-1");
+	identity.setState(identityReference.content, { kind: "identified", binding }, "ready", "identity-1");
+	identity.setSourceMemoId(binding.memoId, "2026080112000001");
+	const service = new CatalogReadService({ catalog, identityLedger: identity.reader });
+
+	const range = { startDate: "2026-08-01", endDateExclusive: "2026-08-05" };
+	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "day", date: "2026-08-03" }, { limit: 50 })).items.map((item) => item.content), ["identity"]);
+	assert.equal((await service.queryRecordStatsDrilldown({ type: "month", month: "2026-08" }, { limit: 50 })).items.length, 4);
+	assert.equal((await service.queryRecordStatsDrilldown({ type: "range", ...range }, { limit: 50 })).items.length, 4);
+	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "with-tag", ...range }, { limit: 50 })).items.map((item) => item.content), ["parent"]);
+	assert.equal((await service.queryRecordStatsDrilldown({ type: "no-tag", ...range }, { limit: 50 })).items.length, 3);
+	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "with-image", ...range }, { limit: 50 })).items.map((item) => item.content), ["image"]);
+	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "tag", ...range, tagKey: "project", tagLabel: "Project" }, { limit: 50 })).items.map((item) => item.content), ["parent"]);
+	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "hour", ...range, hour: 9 }, { limit: 50 })).items.map((item) => item.content), ["explicit [[Daily#^abc]]", "parent"]);
+	const references = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1 });
+	const moreReferences = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1, cursor: references.nextCursor });
+	assert.deepEqual([...references.items, ...moreReferences.items].map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
+	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-notes", dates: ["2026-08-01", "2026-08-04"] }, { limit: 50 })).items.map((item) => item.content), ["image", "parent"]);
+	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-words", dates: ["2026-08-02", "2026-08-03"] }, { limit: 50 })).items.map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
+});
+
+test("记录统计从 Daily aggregate 构建，并补齐 Identity relation 引用", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const tagged = makeObservation("Daily/2026-08-01.md", "2026-08-01", 1, "中文 hello");
+	tagged.tags = ["#Work/Project"];
+	tagged.time = "08:30";
+	const related = makeObservation("Daily/2026-08-02.md", "2026-08-02", 1, "related memo");
+	related.time = "22:00";
+	await seedCatalogFiles(catalog, store, [tagged, related]);
+	const identity = createIdentityReader();
+	const binding = makeBinding(related, "2026080222000001", "identity-1");
+	identity.setState(related.content, { kind: "identified", binding }, "ready", "identity-1");
+	identity.setSourceMemoId(binding.memoId, "2026080108000001");
+	const service = new CatalogReadService({ catalog, identityLedger: identity.reader });
+
+	const prepared = await service.buildRecordStats(async () => undefined, () => true);
+
+	assert.deepEqual(prepared?.overview, { memoCount: 2, wordCount: 5, recordDayCount: 2 });
+	assert.equal(prepared?.daily.get("2026-08-02")?.referenceMemoCount, 1);
+	assert.equal(prepared?.daily.get("2026-08-01")?.hourCounts[8], 1);
+	assert.equal(prepared?.daily.get("2026-08-01")?.tagMemoCounts.get("work/project"), 1);
+	assert.equal(prepared?.tagDisplayNames.get("work/project"), "Work/Project");
+});
+
 async function seedCatalog(
 	catalog: import("../src/services/MemoCatalogService").MemoCatalogService,
 	store: import("../src/services/MemoCatalogStore").MemoCatalogStore,
@@ -191,12 +358,14 @@ function createIdentityReader(): {
 		revision: string,
 	) => void;
 	setActiveDeletes: (records: IdentityLedgerDeleteRecord[], revision: string) => void;
+	setSourceMemoId: (memoId: string, sourceMemoId: string) => void;
 } {
 	let revision = "identity-absent";
 	let status: IdentityLedgerStatus = "absent";
 	const states = new Map<string, IdentityLedgerObservationState>();
 	const memos: Record<string, IdentityLedgerMaterializedMemo> = {};
 	let activeDeletes: IdentityLedgerDeleteRecord[] = [];
+	const sourceMemoIds = new Map<string, string>();
 	const reader: IdentityLedgerReader = {
 		getRevision: () => revision,
 		getStatus: () => status,
@@ -212,7 +381,7 @@ function createIdentityReader(): {
 			return state?.kind === "identified" ? state.binding : null;
 		},
 		resolveObservationState: (observation) => states.get(observation.content) ?? { kind: "unbound" },
-		getSourceMemoId: () => null,
+		getSourceMemoId: (memoId) => sourceMemoIds.get(memoId) ?? null,
 		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
 		getActiveDeletes: () => activeDeletes,
 	};
@@ -240,7 +409,41 @@ function createIdentityReader(): {
 			activeDeletes = records;
 			revision = nextRevision;
 		},
+		setSourceMemoId: (memoId, sourceMemoId) => {
+			sourceMemoIds.set(memoId, sourceMemoId);
+		},
 	};
+}
+
+async function seedCatalogFiles(
+	catalog: import("../src/services/MemoCatalogService").MemoCatalogService,
+	store: import("../src/services/MemoCatalogStore").MemoCatalogStore,
+	observations: readonly MemoObservation[],
+): Promise<void> {
+	await catalog.open();
+	for (const observation of observations) {
+		await catalog.replaceFile({
+			inventory: {
+				sourcePath: observation.sourcePath,
+				logicalDate: observation.logicalDate,
+				mtime: 1,
+				size: 1,
+			},
+			sourceRevision: observation.sourceRevision,
+			observations: [observation],
+			parserVersion: 2,
+			settingsFingerprint: "settings-1",
+			auditedAt: 1,
+		});
+	}
+	await store.setCoverage({
+		kind: "complete",
+		sharedConfigurationComplete: true,
+		coveredFromDate: observations.map((item) => item.logicalDate).sort()[0] ?? null,
+		pendingFileCount: 0,
+		coveredFileCount: observations.length,
+		totalFileCount: observations.length,
+	});
 }
 
 function makeObservation(sourcePath: string, logicalDate: string, startLine: number, content: string): MemoObservation {

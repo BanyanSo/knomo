@@ -53,6 +53,23 @@ test("Identity 与共享配置使用稳定目录，协议版本只留在 schemaV
 	assert.equal(fs.existsSync("docs/architecture/catalog/schemas/shared-config-event.schema.json"), true);
 });
 
+test("全库统计和功能查询只从 Catalog Read Service 获取", () => {
+	const view = fs.readFileSync("src/ui/KnomoView.ts", "utf8");
+	const readService = fs.readFileSync("src/services/CatalogReadService.ts", "utf8");
+	assert.equal(view.includes("getMemoStats(this.memos)"), false);
+	assert.equal(view.includes("collectTags(this.memos"), false);
+	assert.equal(view.includes("ensureAllMemosLoaded"), false);
+	for (const method of [
+		"getLibrarySummary",
+		"getTagFacets",
+		"queryReviewItems",
+		"queryRecordStatsDrilldown",
+		"getCoverageForRange",
+	]) {
+		assert.equal(readService.includes(method), true, `${method} should remain a Catalog Read Service API.`);
+	}
+});
+
 function listFiles(root: string): string[] {
 	return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
 		const fullPath = path.join(root, entry.name);

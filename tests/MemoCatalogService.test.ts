@@ -56,6 +56,27 @@ test("reference aggregate 只统计 Daily 可重建的显式 block reference", a
 	assert.deepEqual(partition.aggregate.explicitReferenceTargets, ["Third#^block-c", "Note#^block-a", "Other#^block-b"]);
 });
 
+test("文件聚合提供全库统计和标签 facet 所需的 memo 级指标", () => {
+	const inventory = makeInventory("Journal/2026-08-12.md", "2026-08-12");
+	const tagged = makeObservation(inventory, 1, "09:15", "中文 hello 42 ![[photo.png]]");
+	tagged.tags = ["#Project/Alpha", "#project/alpha"];
+	tagged.images = [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }];
+	const plain = makeObservation(inventory, 3, "21:45", "second memo");
+	const partition = buildCatalogPartition(makePartitionInput(inventory, [tagged, plain], "sha-summary"));
+
+	assert.equal(partition.aggregate.memoCount, 2);
+	assert.equal(partition.aggregate.wordCount, 6);
+	assert.equal(partition.aggregate.imageMemoCount, 1);
+	assert.equal(partition.aggregate.taggedMemoCount, 1);
+	assert.equal(partition.aggregate.untaggedMemoCount, 1);
+	assert.deepEqual(partition.aggregate.hourCounts, [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+	]);
+	assert.deepEqual(partition.aggregate.tagMemoCounts, { "project/alpha": 1 });
+	assert.deepEqual(partition.aggregate.tagDisplayNames, { "project/alpha": "Project/Alpha" });
+});
+
 test("search index 排除 fenced code 文本", async () => {
 	const inventory = makeInventory("Journal/2026-08-11.md", "2026-08-11");
 	const store = new InMemoryMemoCatalogStore();

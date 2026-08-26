@@ -122,7 +122,7 @@ test("sidebar navigation stores and restores record statistics return state", ()
 	assert.equal(returned.type, "returned");
 	assert.equal(returned.returnedNav, "random");
 	assert.equal(returned.refreshRandomReunionIfEmpty, true);
-	assert.equal(returned.ensureAllMemosLoaded, false);
+	assert.equal(returned.reloadCatalogQuery, false);
 	assert.equal(state.activeNav, "random");
 	assert.equal(state.scopeFilter, "with-image");
 	assert.equal(state.searchQuery, "memo");
@@ -139,7 +139,7 @@ test("sidebar navigation stores and restores record statistics return state", ()
 test("sidebar navigation exposes follow-up side effects for heavy routes", () => {
 	const state = new KnomoViewStateController();
 
-	assert.equal(state.setSidebarNav("review").ensureAllMemosLoaded, true);
+	assert.equal(state.setSidebarNav("review").reloadCatalogQuery, true);
 	assert.equal(state.setSidebarNav("random").refreshRandomReunion, true);
 	assert.equal(state.setSidebarNav("shuffleDay").refreshShuffleDay, true);
 	assert.equal(state.setSidebarNav("trash").loadTrashMemos, true);

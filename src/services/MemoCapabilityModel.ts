@@ -60,7 +60,9 @@ export function createIdentityLedgerConflictCapabilities(): ResolvedMemoCapabili
 }
 
 export function createCatalogCapabilities(coverage: CatalogCoverage): CatalogCapabilities {
-	const state = coverage.kind === "complete" ? "complete" : "partial";
+	const state = coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false
+		? "complete"
+		: "partial";
 	return {
 		browse: state,
 		search: state,

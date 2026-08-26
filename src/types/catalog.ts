@@ -176,7 +176,15 @@ export interface CatalogFileAggregate {
 	taskCount: number;
 	timeBuoyCount: number;
 	explicitReferenceCount: number;
+	explicitReferenceMemoCount: number;
 	explicitReferenceTargets: string[];
+	wordCount: number;
+	imageMemoCount: number;
+	taggedMemoCount: number;
+	untaggedMemoCount: number;
+	hourCounts: number[];
+	tagMemoCounts: Record<string, number>;
+	tagDisplayNames: Record<string, string>;
 }
 
 export interface CatalogDailyAggregate {
@@ -188,7 +196,15 @@ export interface CatalogDailyAggregate {
 	taskCount: number;
 	timeBuoyCount: number;
 	explicitReferenceCount: number;
+	explicitReferenceMemoCount: number;
 	explicitReferenceTargets: string[];
+	wordCount: number;
+	imageMemoCount: number;
+	taggedMemoCount: number;
+	untaggedMemoCount: number;
+	hourCounts: number[];
+	tagMemoCounts: Record<string, number>;
+	tagDisplayNames: Record<string, string>;
 }
 
 export interface CatalogCoverage {
@@ -240,6 +256,9 @@ export interface CatalogQuery {
 	fromDate?: string;
 	toDate?: string;
 	monthDay?: string;
+	dayOfMonth?: string;
+	hour?: number;
+	logicalDates?: readonly string[];
 	sourcePaths?: readonly string[];
 	limit: number;
 	cursor?: CatalogCursor | null;

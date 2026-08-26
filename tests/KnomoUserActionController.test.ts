@@ -509,7 +509,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 				calls.push("time-buoy-intro-dismiss");
 			},
 			renderAllMemosLoadingState: () => calls.push("all-memos-loading"),
-			ensureAllMemosLoaded: async () => {
+			reloadCatalogQuery: async () => {
 				calls.push("ensure-all-memos");
 			},
 			setRecordStatsView: (view) => calls.push(`record-view:${view}`),

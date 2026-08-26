@@ -1,5 +1,6 @@
 import type {
 	CatalogCoverage,
+	CatalogDailyAggregate,
 	CatalogObservation,
 	CatalogCapabilities,
 	CatalogQueryPage,
@@ -10,11 +11,16 @@ import type {
 } from "../types/catalog";
 import type {
 	CatalogFeatureQuery,
+	CatalogFunctionPageRequest,
+	CatalogAggregateResult,
+	CatalogLibrarySummary,
 	CatalogMemoItem,
 	CatalogMemoPage,
+	CatalogRecordStatsFilter,
 	CatalogReadState,
 	CatalogReadStatus,
 	MonthlyProjectionState,
+	CatalogTagFacet,
 	TrashMemoItem,
 	TrashMemoPage,
 } from "../types/catalogView";
@@ -33,7 +39,7 @@ import {
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
 import type { MemoCatalogService } from "./MemoCatalogService";
-import { RecordStatsBuilder, type PreparedRecordStats } from "./RecordStatsService";
+import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
 
 export interface CatalogReadServiceOptions {
 	catalog: MemoCatalogService;
@@ -75,6 +81,7 @@ export class CatalogReadService {
 			return this.rememberPage({
 				items: [],
 				nextCursor: null,
+				catalogRevision: page.catalogRevision,
 				coverage: page.coverage,
 				lifecycle: page.lifecycle,
 				capabilities: createCatalogCapabilities(page.coverage),
@@ -96,6 +103,7 @@ export class CatalogReadService {
 		return this.rememberPage({
 			items: resolved.map((memo) => this.toMemoItem(memo, catalogCapabilities)),
 			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
+			catalogRevision: page.catalogRevision,
 			coverage: page.coverage,
 			lifecycle: page.lifecycle,
 			capabilities: catalogCapabilities,
@@ -104,6 +112,83 @@ export class CatalogReadService {
 			degraded: status.content === "unavailable" || status.catalog === "degraded",
 			invalidated: false,
 		});
+	}
+
+	async getLibrarySummary(): Promise<CatalogAggregateResult<CatalogLibrarySummary>> {
+		const coverage = await this.options.catalog.getStore().getCoverage();
+		if (!isCompleteCoverage(coverage)) return { value: null, complete: false, coverage };
+		const aggregates = await this.options.catalog.listDailyAggregates();
+		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
+		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
+		const tagKeys = new Set(aggregates.flatMap((aggregate) => Object.keys(aggregate.tagMemoCounts ?? {})));
+		return {
+			value: {
+				memoCount: sumAggregates(aggregates, (aggregate) => aggregate.memoCount),
+				tagCount: tagKeys.size,
+				imageCount: sumAggregates(aggregates, (aggregate) => aggregate.imageCount),
+				wordCount: sumAggregates(aggregates, (aggregate) => aggregate.wordCount ?? 0),
+			},
+			complete: true,
+			coverage: verifiedCoverage,
+		};
+	}
+
+	async getTagFacets(): Promise<CatalogAggregateResult<CatalogTagFacet[]>> {
+		const coverage = await this.options.catalog.getStore().getCoverage();
+		if (!isCompleteCoverage(coverage)) return { value: null, complete: false, coverage };
+		const aggregates = await this.options.catalog.listDailyAggregates();
+		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
+		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
+		const counts = new Map<string, number>();
+		const labels = new Map<string, string>();
+		for (const aggregate of aggregates) {
+			for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
+				counts.set(key, (counts.get(key) ?? 0) + count);
+			}
+			for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
+				if (!labels.has(key)) labels.set(key, label);
+			}
+		}
+		return {
+			value: [...counts.entries()]
+				.map(([key, count]) => ({ key, label: labels.get(key) ?? key, count }))
+				.sort((left, right) => right.count - left.count || left.key.localeCompare(right.key)),
+			complete: true,
+			coverage: verifiedCoverage,
+		};
+	}
+
+	async getCoverageForRange(fromDate: string, toDate: string): Promise<boolean> {
+		const coverage = await this.options.catalog.getStore().getCoverage();
+		return isRangeCovered(coverage, fromDate, toDate);
+	}
+
+	async queryReviewItems(date: Date, page: CatalogFunctionPageRequest): Promise<CatalogMemoPage> {
+		const coverage = await this.options.catalog.getStore().getCoverage();
+		const logicalDate = formatDatePart(date);
+		const query: Omit<CatalogFeatureQuery, "limit" | "cursor"> = {
+			toDate: formatDatePart(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)),
+			...(date.getMonth() === 1 && date.getDate() === 29
+				? { monthDay: "02-29" }
+				: { dayOfMonth: logicalDate.slice(8) }),
+		};
+		if (page.text?.trim()) query.text = page.text.trim();
+		if (!isCompleteCoverage(coverage)) return this.createCoveragePendingPage(query);
+		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
+	}
+
+	async queryRecordStatsDrilldown(
+		filter: CatalogRecordStatsFilter,
+		page: CatalogFunctionPageRequest,
+	): Promise<CatalogMemoPage> {
+		const { query, fromDate, toDate } = buildRecordStatsCatalogQuery(filter);
+		if (page.text?.trim()) query.text = page.text.trim();
+		if (!await this.getCoverageForRange(fromDate, toDate)) return this.createCoveragePendingPage(query);
+		const request = { ...query, limit: page.limit, cursor: page.cursor ?? null };
+		if (filter.type !== "references") return this.query(request);
+		return this.queryFiltered(request, (memo) => (
+			memo.sourceMemoId !== null || memo.observation.explicitReferenceTargets.length > 0
+		));
 	}
 
 	async getDeletedSummary(): Promise<{ count: number; ids: string[] }> {
@@ -173,7 +258,7 @@ export class CatalogReadService {
 				|| right.memo.createdAt.localeCompare(left.memo.createdAt)),
 			stale: [],
 			missingPeriods: [],
-			complete: (await this.options.catalog.getStore().getCoverage()).kind === "complete",
+			complete: isCompleteCoverage(await this.options.catalog.getStore().getCoverage()),
 		};
 	}
 
@@ -181,23 +266,32 @@ export class CatalogReadService {
 		yieldToUi: () => Promise<void>,
 		isCurrent: () => boolean,
 	): Promise<PreparedRecordStats | null> {
-		await this.requireCompleteCoverage("Record statistics");
-		let builder = new RecordStatsBuilder();
-		let cursor: CatalogFeatureQuery["cursor"] = null;
-		do {
-			if (!isCurrent()) return null;
-			const page = await this.query({ limit: 150, cursor });
-			if (page.invalidated) {
-				cursor = null;
-				builder = new RecordStatsBuilder();
-				continue;
-			}
-			if (page.capabilities.stats !== "complete") throw new Error("Record statistics require complete Catalog coverage.");
-			for (const memo of page.items) builder.addMemo(toCatalogMemoView(memo));
-			cursor = page.nextCursor;
-			await yieldToUi();
-		} while (cursor !== null);
-		return builder.build();
+		while (isCurrent()) {
+			await this.requireCompleteCoverage("Record statistics");
+			const aggregates = await this.options.catalog.listDailyAggregates();
+			await this.requireCompleteCoverage("Record statistics");
+			const prepared = buildPreparedRecordStats(aggregates);
+			let cursor: CatalogFeatureQuery["cursor"] = null;
+			let invalidated = false;
+			do {
+				if (!isCurrent()) return null;
+				const page = await this.query({ limit: 150, cursor });
+				if (page.invalidated) {
+					invalidated = true;
+					break;
+				}
+				if (page.capabilities.stats !== "complete") throw new Error("Record statistics require complete Catalog coverage.");
+				for (const memo of page.items) {
+					if (memo.sourceMemoId === null || memo.observation.explicitReferenceTargets.length > 0) continue;
+					const daily = prepared.daily.get(memo.observation.logicalDate);
+					if (daily !== undefined) daily.referenceMemoCount += 1;
+				}
+				cursor = page.nextCursor;
+				await yieldToUi();
+			} while (cursor !== null);
+			if (!invalidated) return prepared;
+		}
+		return null;
 	}
 
 	async getRandomReunionItems(count: number): Promise<MemoViewItem[]> {
@@ -346,6 +440,7 @@ export class CatalogReadService {
 		return this.rememberPage({
 			items: [],
 			nextCursor: null,
+			catalogRevision: 0,
 			coverage,
 			lifecycle,
 			capabilities: createCatalogCapabilities(coverage),
@@ -354,6 +449,53 @@ export class CatalogReadService {
 			degraded: true,
 			invalidated: false,
 		});
+	}
+
+	private async createCoveragePendingPage(
+		request: Omit<CatalogFeatureQuery, "limit" | "cursor">,
+	): Promise<CatalogMemoPage> {
+		const page = await this.query({ ...request, limit: 1, cursor: null });
+		return this.rememberPage({
+			...page,
+			items: [],
+			nextCursor: null,
+			readState: page.readState === "storage_unavailable" ? page.readState : "history_building",
+			status: { ...page.status, content: page.status.content === "unavailable" ? "unavailable" : "scanning" },
+		});
+	}
+
+	private async queryFiltered(
+		request: CatalogFeatureQuery,
+		predicate: (memo: CatalogMemoItem) => boolean,
+	): Promise<CatalogMemoPage> {
+		const limit = Math.max(1, Math.min(150, Math.trunc(request.limit)));
+		const items: CatalogMemoItem[] = [];
+		let cursor = request.cursor ?? null;
+		let lastPage: CatalogMemoPage | null = null;
+		do {
+			const page = await this.query({ ...request, limit: 150, cursor });
+			lastPage = page;
+			if (page.invalidated) return page;
+			for (let index = 0; index < page.items.length; index += 1) {
+				const memo = page.items[index];
+				if (memo === undefined || !predicate(memo)) continue;
+				items.push(memo);
+				if (items.length === limit) {
+					const hasMore = index < page.items.length - 1 || page.nextCursor !== null;
+					return {
+						...page,
+						items,
+						nextCursor: hasMore ? { catalog: {
+							catalogRevision: page.catalogRevision,
+							createdAtKey: memo.observation.createdAtKey,
+							observationKey: memo.observation.observationKey,
+						} } : null,
+					};
+				}
+			}
+			cursor = page.nextCursor;
+		} while (cursor !== null);
+		return lastPage === null ? this.query(request) : { ...lastPage, items, nextCursor: null };
 	}
 
 	private getReadStatus(
@@ -426,7 +568,7 @@ export class CatalogReadService {
 
 	private async requireCompleteCoverage(feature: string): Promise<CatalogCoverage> {
 		const coverage = await this.options.catalog.getStore().getCoverage();
-		if (coverage.kind !== "complete") throw new Error(`${feature} requires complete Catalog coverage.`);
+		if (!isCompleteCoverage(coverage)) throw new Error(`${feature} requires complete Catalog coverage.`);
 		return coverage;
 	}
 
@@ -532,8 +674,101 @@ function buildTimeBuoyInstance(memo: CatalogMemoItem, targetDate: string) {
 }
 
 function isDateCovered(coverage: CatalogCoverage, logicalDate: string): boolean {
-	return coverage.kind === "complete"
-		|| (coverage.kind === "partial" && coverage.coveredFromDate !== null && logicalDate >= coverage.coveredFromDate);
+	return isRangeCovered(coverage, logicalDate, logicalDate);
+}
+
+function isCompleteCoverage(coverage: CatalogCoverage): boolean {
+	return coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false;
+}
+
+function isRangeCovered(coverage: CatalogCoverage, fromDate: string, toDate: string): boolean {
+	if (fromDate > toDate || coverage.sharedConfigurationComplete === false) return false;
+	return isCompleteCoverage(coverage)
+		|| (coverage.kind === "partial" && coverage.coveredFromDate !== null && fromDate >= coverage.coveredFromDate);
+}
+
+function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): {
+	query: Omit<CatalogFeatureQuery, "limit" | "cursor">;
+	fromDate: string;
+	toDate: string;
+} {
+	if (filter.type === "day") {
+		return { query: { fromDate: filter.date, toDate: filter.date }, fromDate: filter.date, toDate: filter.date };
+	}
+	if (filter.type === "month") {
+		const fromDate = `${filter.month}-01`;
+		const toDate = getMonthEndDate(filter.month);
+		return { query: { fromDate, toDate }, fromDate, toDate };
+	}
+	if (filter.type === "max-daily-notes" || filter.type === "max-daily-words") {
+		const dates = [...new Set(filter.dates)].sort();
+		const fromDate = dates[0] ?? "0000-01-01";
+		const toDate = dates[dates.length - 1] ?? "9999-12-31";
+		return { query: { fromDate, toDate, logicalDates: dates }, fromDate, toDate };
+	}
+	const fromDate = filter.startDate;
+	const toDate = getPreviousDate(filter.endDateExclusive);
+	const query: Omit<CatalogFeatureQuery, "limit" | "cursor"> = { fromDate, toDate };
+	if (filter.type === "with-tag") query.hasTag = true;
+	if (filter.type === "no-tag") query.hasTag = false;
+	if (filter.type === "with-image") query.hasImage = true;
+	if (filter.type === "tag") query.tags = [filter.tagKey];
+	if (filter.type === "hour") query.hour = filter.hour;
+	return { query, fromDate, toDate };
+}
+
+function buildPreparedRecordStats(aggregates: readonly CatalogDailyAggregate[]): PreparedRecordStats {
+	const daily = new Map<string, DailyRecordStats>();
+	const tagDisplayNames = new Map<string, string>();
+	let memoCount = 0;
+	let wordCount = 0;
+	let earliestYear: number | null = null;
+	for (const aggregate of aggregates) {
+		if (aggregate.memoCount <= 0) continue;
+		memoCount += aggregate.memoCount;
+		wordCount += aggregate.wordCount ?? 0;
+		const year = Number.parseInt(aggregate.logicalDate.slice(0, 4), 10);
+		if (Number.isInteger(year)) earliestYear = earliestYear === null ? year : Math.min(earliestYear, year);
+		for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
+			if (!tagDisplayNames.has(key)) tagDisplayNames.set(key, label);
+		}
+		daily.set(aggregate.logicalDate, {
+			memoCount: aggregate.memoCount,
+			wordCount: aggregate.wordCount ?? 0,
+			referenceMemoCount: aggregate.explicitReferenceMemoCount ?? 0,
+			taggedMemoCount: aggregate.taggedMemoCount ?? 0,
+			untaggedMemoCount: aggregate.untaggedMemoCount ?? 0,
+			imageMemoCount: aggregate.imageMemoCount ?? 0,
+			hourCounts: Array.from({ length: 24 }, (_, hour) => aggregate.hourCounts?.[hour] ?? 0),
+			tagMemoCounts: new Map(Object.entries(aggregate.tagMemoCounts ?? {})),
+		});
+	}
+	return {
+		overview: { memoCount, wordCount, recordDayCount: daily.size },
+		daily,
+		earliestYear,
+		tagDisplayNames,
+	};
+}
+
+function getMonthEndDate(month: string): string {
+	const year = Number.parseInt(month.slice(0, 4), 10);
+	const monthNumber = Number.parseInt(month.slice(5, 7), 10);
+	return formatDatePart(new Date(year, monthNumber, 0));
+}
+
+function getPreviousDate(logicalDate: string): string {
+	const year = Number.parseInt(logicalDate.slice(0, 4), 10);
+	const month = Number.parseInt(logicalDate.slice(5, 7), 10);
+	const day = Number.parseInt(logicalDate.slice(8, 10), 10);
+	return formatDatePart(new Date(year, month - 1, day - 1));
+}
+
+function sumAggregates(
+	aggregates: readonly CatalogDailyAggregate[],
+	getValue: (aggregate: CatalogDailyAggregate) => number,
+): number {
+	return aggregates.reduce((total, aggregate) => total + getValue(aggregate), 0);
 }
 
 function sampleDates(dates: readonly string[], count: number, random: () => number): string[] {

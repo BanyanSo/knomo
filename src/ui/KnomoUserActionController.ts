@@ -79,7 +79,7 @@ interface KnomoUserActionControllerOptions {
 	enableTimeBuoyIntro?: () => Promise<void>;
 	dismissTimeBuoyIntro?: () => Promise<void>;
 	renderAllMemosLoadingState: () => void;
-	ensureAllMemosLoaded: () => Promise<void>;
+	reloadCatalogQuery: () => Promise<void>;
 	setRecordStatsView: (view: "week" | "month" | "year") => void;
 	openRecordStatsTrendFilter: (sourceEl: HTMLElement | null) => void;
 	openRecordStatsHourFilter: (sourceEl: HTMLElement | null) => void;
@@ -355,7 +355,7 @@ export class KnomoUserActionController {
 					return;
 				}
 				this.options.renderAllMemosLoadingState();
-				await this.options.ensureAllMemosLoaded();
+				await this.options.reloadCatalogQuery();
 				return;
 			case "record-stats-view-week":
 				this.options.setRecordStatsView("week");

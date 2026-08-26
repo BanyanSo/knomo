@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import type { CatalogRecordStatsFilter } from "../types/catalogView";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
@@ -24,18 +25,7 @@ export type ScopeFilter =
 export type SearchDateFilter = "week" | "month" | "last-7" | "last-30" | "last-week" | "last-month";
 export type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "anniversary";
 
-export type RecordStatsSearchFilter =
-	| { type: "day"; date: string }
-	| { type: "month"; month: string }
-	| { type: "range"; startDate: string; endDateExclusive: string }
-	| { type: "with-tag"; startDate: string; endDateExclusive: string }
-	| { type: "no-tag"; startDate: string; endDateExclusive: string }
-	| { type: "with-image"; startDate: string; endDateExclusive: string }
-	| { type: "tag"; startDate: string; endDateExclusive: string; tagKey: string; tagLabel: string }
-	| { type: "references"; startDate: string; endDateExclusive: string }
-	| { type: "max-daily-notes"; dates: string[] }
-	| { type: "max-daily-words"; dates: string[] }
-	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };
+export type RecordStatsSearchFilter = CatalogRecordStatsFilter;
 
 export type RegularFilterCondition =
 	| { type: "tag"; text: string }
@@ -436,7 +426,7 @@ export function matchesRecordStatsSearchFilter(memo: MemoRecord, filter: RecordS
 		return getMemoImages(memo).length > 0;
 	}
 	if (filter.type === "tag") {
-		return memo.tags.some((tag) => normalizeTagKey(tag) === filter.tagKey);
+		return memo.tags.some((tag) => tagMatchesActiveTagKey(tag, filter.tagKey));
 	}
 	if (filter.type === "references") {
 		return hasMemoReference(memo);

@@ -10,6 +10,8 @@ import type {
 import { extractDailyExplicitReferenceTargets, getIndexableDiaryMemoContent } from "./DiaryMemoParser";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
 import { normalizeCatalogText } from "./MemoCatalogStore";
+import { getMemoContentStatsFromContent } from "../utils/memoContentStats";
+import { normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 
 export interface CatalogPartitionInput {
 	inventory: CatalogInventoryEntry;
@@ -113,7 +115,7 @@ export function buildCatalogObservation(observation: MemoObservation): CatalogOb
 		createdAtKey: `${observation.logicalDate}T${normalizeMemoTime(observation.time)}`,
 		searchText,
 		searchTokens: buildCatalogSearchTokens(searchText),
-		tagKeys: dedupe(observation.tags.map(normalizeCatalogText)),
+		tagKeys: dedupe(observation.tags.map(normalizeTagKey)),
 		linkTargets,
 		imagePaths,
 		explicitReferenceTargets,
@@ -166,10 +168,23 @@ export function selectCatalogSearchToken(query: string): string | null {
 
 function buildFileAggregate(file: CatalogFileRecord, observations: readonly CatalogObservation[]): CatalogFileAggregate {
 	const explicitReferenceTargets: string[] = [];
+	const tagMemoCounts: Record<string, number> = {};
+	const tagDisplayNames: Record<string, string> = {};
+	const hourCounts = Array.from({ length: 24 }, () => 0);
 	for (const observation of observations) {
 		for (const target of observation.explicitReferenceTargets) {
 			pushUnique(explicitReferenceTargets, target);
 		}
+		for (const key of observation.tagKeys) {
+			tagMemoCounts[key] = (tagMemoCounts[key] ?? 0) + 1;
+		}
+		for (const tag of observation.tags) {
+			const key = normalizeTagKey(tag);
+			const display = normalizeTagDisplay(tag);
+			if (key.length > 0 && display.length > 0 && tagDisplayNames[key] === undefined) tagDisplayNames[key] = display;
+		}
+		const hour = Number.parseInt(observation.time.slice(0, 2), 10);
+		if (Number.isInteger(hour) && hour >= 0 && hour < hourCounts.length) hourCounts[hour] += 1;
 	}
 	return {
 		sourcePath: file.sourcePath,
@@ -181,7 +196,18 @@ function buildFileAggregate(file: CatalogFileRecord, observations: readonly Cata
 		taskCount: sum(observations, (item) => item.tasks.length),
 		timeBuoyCount: sum(observations, (item) => item.timeBuoyDates.length),
 		explicitReferenceCount: sum(observations, (item) => item.explicitReferenceTargets.length),
+		explicitReferenceMemoCount: sum(observations, (item) => item.explicitReferenceTargets.length > 0 ? 1 : 0),
 		explicitReferenceTargets,
+		wordCount: sum(observations, (item) => getMemoContentStatsFromContent(
+			item.content,
+			item.explicitReferenceTargets.length > 0,
+		).wordCount),
+		imageMemoCount: sum(observations, (item) => item.images.length > 0 ? 1 : 0),
+		taggedMemoCount: sum(observations, (item) => item.tagKeys.length > 0 ? 1 : 0),
+		untaggedMemoCount: sum(observations, (item) => item.tagKeys.length === 0 ? 1 : 0),
+		hourCounts,
+		tagMemoCounts,
+		tagDisplayNames,
 	};
 }
 

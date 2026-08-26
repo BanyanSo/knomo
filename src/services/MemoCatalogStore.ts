@@ -432,6 +432,9 @@ export function matchesCatalogQuery(
 		&& (request.fromDate === undefined || observation.logicalDate >= request.fromDate)
 		&& (request.toDate === undefined || observation.logicalDate <= request.toDate)
 		&& (request.monthDay === undefined || observation.logicalDate.slice(5) === request.monthDay)
+		&& (request.dayOfMonth === undefined || observation.logicalDate.slice(8) === request.dayOfMonth)
+		&& (request.hour === undefined || Number.parseInt(observation.time.slice(0, 2), 10) === request.hour)
+		&& (request.logicalDates === undefined || request.logicalDates.includes(observation.logicalDate))
 		&& (sourcePaths === null || sourcePaths.has(observation.sourcePath));
 }
 
@@ -485,7 +488,15 @@ export function mergeAggregate(
 		taskCount: 0,
 		timeBuoyCount: 0,
 		explicitReferenceCount: 0,
+		explicitReferenceMemoCount: 0,
 		explicitReferenceTargets: [],
+		wordCount: 0,
+		imageMemoCount: 0,
+		taggedMemoCount: 0,
+		untaggedMemoCount: 0,
+		hourCounts: Array.from({ length: 24 }, () => 0),
+		tagMemoCounts: {},
+		tagDisplayNames: {},
 	};
 	current.memoCount += aggregate.memoCount;
 	current.tagCount += aggregate.tagCount;
@@ -494,6 +505,20 @@ export function mergeAggregate(
 	current.taskCount += aggregate.taskCount;
 	current.timeBuoyCount += aggregate.timeBuoyCount;
 	current.explicitReferenceCount += aggregate.explicitReferenceCount;
+	current.explicitReferenceMemoCount += aggregate.explicitReferenceMemoCount ?? 0;
+	current.wordCount += aggregate.wordCount ?? 0;
+	current.imageMemoCount += aggregate.imageMemoCount ?? 0;
+	current.taggedMemoCount += aggregate.taggedMemoCount ?? 0;
+	current.untaggedMemoCount += aggregate.untaggedMemoCount ?? 0;
+	for (let hour = 0; hour < current.hourCounts.length; hour += 1) {
+		current.hourCounts[hour] += aggregate.hourCounts?.[hour] ?? 0;
+	}
+	for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
+		current.tagMemoCounts[key] = (current.tagMemoCounts[key] ?? 0) + count;
+	}
+	for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
+		if (current.tagDisplayNames[key] === undefined) current.tagDisplayNames[key] = label;
+	}
 	for (const target of aggregate.explicitReferenceTargets) {
 		if (!current.explicitReferenceTargets.includes(target)) {
 			current.explicitReferenceTargets.push(target);

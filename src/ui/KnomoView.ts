@@ -17,8 +17,11 @@ import type { CatalogCoverage } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
 	CatalogFeatureQuery,
+	CatalogLibrarySummary,
+	CatalogMemoPage,
 	CatalogReadState,
 	CatalogReadStatus,
+	CatalogTagFacet,
 	MemoSaveOperation,
 	MemoSaveResult,
 } from "../types/catalogView";
@@ -164,8 +167,7 @@ import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
 import { KnomoViewStateController } from "./KnomoViewStateController";
 import type { KnomoViewStateTransitionEffects } from "./KnomoViewStateController";
 import {
-	collectTags,
-	getMemoStats,
+	collectTagsFromCounts,
 	getRegularFilterCopy,
 	getRecordStatsSearchFilterKey,
 } from "./viewFilters";
@@ -204,6 +206,7 @@ interface FilteredMemosCache {
 interface CatalogMemoLoad {
 	memos: MemoRecord[];
 	nextCursor: CatalogFeatureCursor | null;
+	catalogRevision: number;
 	coverage: CatalogCoverage;
 	readState: CatalogReadState;
 	status: CatalogReadStatus;
@@ -330,6 +333,11 @@ export class KnomoView extends ItemView {
 	};
 	private catalogMobileCursor: CatalogFeatureCursor | null = null;
 	private catalogMobileQueryRun = 0;
+	private catalogRevision = 0;
+	private libraryIndexRevision = -1;
+	private libraryIndexRun = 0;
+	private librarySummary: CatalogLibrarySummary | null = null;
+	private libraryTagFacets: CatalogTagFacet[] | null = null;
 	private trashCursor: string | null = null;
 	private trashIdentityRevision: string | null = null;
 	private cardFlowError: string | null = null;
@@ -742,7 +750,7 @@ export class KnomoView extends ItemView {
 			},
 		});
 		this.randomReunionController = new RandomReunionController({
-			ensureAllMemosLoaded: async () => undefined,
+			prepareCatalogData: async () => undefined,
 			getMemos: () => this.memos,
 			getRandomReunionMemos: (count) => this.catalogReadService.getRandomReunionItems(count),
 			markRandomReunionReviewed: async (memoId) => {
@@ -756,7 +764,7 @@ export class KnomoView extends ItemView {
 			requestRender: () => this.renderUiState(),
 		});
 		this.shuffleDayController = new ShuffleDayController({
-			ensureAllMemosLoaded: async () => undefined,
+			prepareCatalogData: async () => undefined,
 			getMemos: () => this.memos,
 			service: this.shuffleDayService,
 			selectShuffleDay: async () => this.shuffleDayService.selectCatalogShuffleDay(
@@ -890,8 +898,8 @@ export class KnomoView extends ItemView {
 			enableTimeBuoyIntro: () => this.enableTimeBuoyFromIntro(),
 			dismissTimeBuoyIntro: () => this.dismissTimeBuoyIntro(),
 			renderAllMemosLoadingState: () => this.renderAllMemosLoadingState(),
-			ensureAllMemosLoaded: async () => {
-				await this.ensureAllMemosLoaded();
+			reloadCatalogQuery: async () => {
+				await this.reloadCurrentCatalogQuery();
 			},
 			setRecordStatsView: (view) => this.setRecordStatsViewFromAction(view),
 			openRecordStatsTrendFilter: (sourceEl) => this.openRecordStatsTrendFilter(sourceEl),
@@ -1090,6 +1098,9 @@ export class KnomoView extends ItemView {
 			}
 		}
 		this.memos = [];
+		this.librarySummary = null;
+		this.libraryTagFacets = null;
+		this.libraryIndexRevision = -1;
 		this.filteredMemosCache = null;
 		this.tagSuggest?.close();
 		this.tagSuggest = null;
@@ -1161,13 +1172,14 @@ export class KnomoView extends ItemView {
 		}
 		this.renderScopeState();
 		this.syncRootState();
+		void this.refreshCatalogLibraryIndexes();
 		if (Platform.isMobile) {
 			this.renderStats();
 			this.renderTags();
 			this.renderTrashCount();
 			void this.loadInitialMobileMemos();
 		} else {
-			await this.ensureAllMemosLoaded(true);
+			await this.reloadCurrentCatalogQuery(true);
 			void this.trashMemoController.refreshTrashCount(false);
 		}
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
@@ -1520,7 +1532,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadCatalogMemos(loadAll: boolean): Promise<CatalogMemoLoad> {
-		const page = await this.catalogReadService.query({
+		const page = await this.queryCatalogFeature({
 			...this.buildCatalogActiveQuery(loadAll),
 			limit: CATALOG_PAGE_SIZE,
 			cursor: null,
@@ -1532,6 +1544,7 @@ export class KnomoView extends ItemView {
 			coverage: page.coverage,
 			readState: page.readState,
 			status: page.status,
+			catalogRevision: page.catalogRevision,
 		};
 	}
 
@@ -1540,6 +1553,10 @@ export class KnomoView extends ItemView {
 		this.catalogCoverage = load.coverage;
 		this.catalogReadState = load.readState;
 		this.catalogStatus = load.status;
+		this.catalogRevision = load.catalogRevision;
+		if (this.libraryIndexRevision !== load.catalogRevision || this.librarySummary === null || this.libraryTagFacets === null) {
+			void this.refreshCatalogLibraryIndexes();
+		}
 	}
 
 	private async loadNextCatalogPage(): Promise<boolean> {
@@ -1547,7 +1564,7 @@ export class KnomoView extends ItemView {
 		const queryRun = this.catalogDesktopQueryRun;
 		this.catalogLoadingNextPage = true;
 		try {
-			const page = await this.getCatalogReadService().query({
+			const page = await this.queryCatalogFeature({
 				...this.buildCatalogActiveQuery(true),
 				limit: CATALOG_PAGE_SIZE,
 				cursor: this.catalogCursor,
@@ -1561,6 +1578,7 @@ export class KnomoView extends ItemView {
 			this.catalogCoverage = page.coverage;
 			this.catalogReadState = page.readState;
 			this.catalogStatus = page.status;
+			this.catalogRevision = page.catalogRevision;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
 			this.forceRebuildCardFlow();
@@ -1601,11 +1619,17 @@ export class KnomoView extends ItemView {
 			if (recordStatsFilter.type === "no-tag") query.hasTag = false;
 			if (recordStatsFilter.type === "tag") query.tags = [recordStatsFilter.tagKey];
 		}
-		const page = await this.getCatalogReadService().query({
-			...query,
-			limit: CATALOG_PAGE_SIZE,
-			cursor: reset ? null : this.catalogMobileCursor,
-		});
+		const page = recordStatsFilter === null
+			? await this.getCatalogReadService().query({
+				...query,
+				limit: CATALOG_PAGE_SIZE,
+				cursor: reset ? null : this.catalogMobileCursor,
+			})
+			: await this.getCatalogReadService().queryRecordStatsDrilldown(recordStatsFilter, {
+				limit: CATALOG_PAGE_SIZE,
+				cursor: reset ? null : this.catalogMobileCursor,
+				text: text.trim() || undefined,
+			});
 		if (run !== this.catalogMobileQueryRun) return;
 		if (page.invalidated) {
 			if (!reset) await this.loadCatalogMobileSearchResults(text, dateFilter, recordStatsFilter, true);
@@ -1623,6 +1647,7 @@ export class KnomoView extends ItemView {
 		this.catalogCoverage = page.coverage;
 		this.catalogReadState = page.readState;
 		this.catalogStatus = page.status;
+		this.catalogRevision = page.catalogRevision;
 		this.invalidateMemoSearchCache();
 		this.retainMemoCardPreviews();
 	}
@@ -1647,21 +1672,25 @@ export class KnomoView extends ItemView {
 				query.fromDate = formatDatePart(new Date(today.getFullYear(), today.getMonth() - 1, 1));
 			}
 		}
-		const statsFilter = this.recordStatsSearchFilter;
-		if (statsFilter?.type === "day") {
-			query.fromDate = statsFilter.date;
-			query.toDate = statsFilter.date;
-		} else if (statsFilter?.type === "month") {
-			query.fromDate = `${statsFilter.month}-01`;
-			query.toDate = formatDatePart(new Date(Number(statsFilter.month.slice(0, 4)), Number(statsFilter.month.slice(5, 7)), 0));
-		} else if (statsFilter !== null && "startDate" in statsFilter) {
-			query.fromDate = statsFilter.startDate;
-			query.toDate = formatDatePart(addLocalDays(parseLogicalDateForView(statsFilter.endDateExclusive), -1));
-			if (statsFilter.type === "with-image") query.hasImage = true;
-			if (statsFilter.type === "no-tag") query.hasTag = false;
-			if (statsFilter.type === "tag") query.tags = [statsFilter.tagKey];
-		}
 		return query;
+	}
+
+	private queryCatalogFeature(request: CatalogFeatureQuery): Promise<CatalogMemoPage> {
+		if (this.recordStatsSearchFilter !== null) {
+			return this.getCatalogReadService().queryRecordStatsDrilldown(this.recordStatsSearchFilter, {
+				limit: request.limit,
+				cursor: request.cursor,
+				text: request.text,
+			});
+		}
+		if (this.activeNav === "review") {
+			return this.getCatalogReadService().queryReviewItems(new Date(), {
+				limit: request.limit,
+				cursor: request.cursor,
+				text: request.text,
+			});
+		}
+		return this.getCatalogReadService().query(request);
 	}
 
 	private async loadInitialMobileMemos(): Promise<void> {
@@ -2104,16 +2133,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderStats(): void {
-		const stats = getMemoStats(this.memos);
+		const stats = this.librarySummary;
 		for (const statsEl of this.statsEls) {
 			statsEl.empty();
-			statsEl.removeClass("is-loading");
-			renderSidebarStat(statsEl, String(stats.memoCount), t("stats.notes"));
-			renderSidebarStat(statsEl, String(stats.tagCount), t("stats.tags"));
+			statsEl.toggleClass("is-loading", stats === null);
+			if (stats === null) statsEl.setAttr("aria-busy", "true");
+			else statsEl.removeAttribute("aria-busy");
+			renderSidebarStat(statsEl, stats === null ? "—" : String(stats.memoCount), t("stats.notes"));
+			renderSidebarStat(statsEl, stats === null ? "—" : String(stats.tagCount), t("stats.tags"));
 			renderSidebarStat(
 				statsEl,
-				stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount),
-				stats.imageCount > 0 ? t("stats.images") : t("stats.words"),
+				stats === null ? "—" : stats.imageCount > 0 ? String(stats.imageCount) : String(stats.wordCount),
+				stats !== null && stats.imageCount > 0 ? t("stats.images") : t("stats.words"),
 			);
 		}
 	}
@@ -2125,9 +2156,19 @@ export class KnomoView extends ItemView {
 		if (!Platform.isMobile && this.vaultTagIndex.getSnapshot().status === "idle") {
 			void this.vaultTagIndex.ensureReady();
 		}
+		if (this.libraryTagFacets === null) {
+			this.allTagsEl?.setAttr("aria-busy", "true");
+			this.allTagsEl?.empty();
+			this.allTagsEl?.createDiv({ cls: "knomo-muted-text", text: t("empty.loadingAllMemos") });
+			return;
+		}
 		this.allTagsEl?.removeAttribute("aria-busy");
 		const displayTags = new Map(this.vaultTagIndex.getSnapshot().displayByKey);
-		const allTags = collectTags(this.memos, displayTags);
+		const allTags = collectTagsFromCounts(
+			new Map(this.libraryTagFacets.map((facet) => [facet.key, facet.count])),
+			displayTags,
+			new Map(this.libraryTagFacets.map((facet) => [facet.key, facet.label])),
+		);
 		if (this.activeTagKey !== null) {
 			const activeTag = allTags.find((tag) => tag.key === this.activeTagKey);
 			if (activeTag !== undefined) {
@@ -3707,6 +3748,37 @@ export class KnomoView extends ItemView {
 		});
 	}
 
+	private async refreshCatalogLibraryIndexes(): Promise<void> {
+		const run = ++this.libraryIndexRun;
+		const revision = this.catalogRevision;
+		this.renderStats();
+		this.renderTags();
+		try {
+			const [summary, facets] = await Promise.all([
+				this.getCatalogReadService().getLibrarySummary(),
+				this.getCatalogReadService().getTagFacets(),
+			]);
+			if (run !== this.libraryIndexRun || revision !== this.catalogRevision) return;
+			if (summary.complete && facets.complete && summary.value !== null && facets.value !== null) {
+				this.librarySummary = summary.value;
+				this.libraryTagFacets = facets.value;
+				this.libraryIndexRevision = revision;
+			} else {
+				this.librarySummary = null;
+				this.libraryTagFacets = null;
+			}
+		} catch {
+			if (run !== this.libraryIndexRun || revision !== this.catalogRevision) return;
+			this.librarySummary = null;
+			this.libraryTagFacets = null;
+		} finally {
+			if (run === this.libraryIndexRun) {
+				this.renderStats();
+				this.renderTags();
+			}
+		}
+	}
+
 	private setSearchQuery(query: string): void {
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearSearchDebounce();
@@ -3774,7 +3846,7 @@ export class KnomoView extends ItemView {
 		if (result.clearShuffleDay) {
 			this.shuffleDayController.clearSelection();
 		}
-		const shouldDeferReview = result.ensureAllMemosLoaded && this.shouldDeferCardFlowForAllMemos();
+		const shouldDeferReview = result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
 		this.renderUiState({
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
@@ -3782,8 +3854,8 @@ export class KnomoView extends ItemView {
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
 		}
-		if (result.ensureAllMemosLoaded) {
-			void this.ensureAllMemosLoaded();
+		if (result.reloadCatalogQuery) {
+			void this.reloadCurrentCatalogQuery();
 		}
 		if (result.refreshRandomReunion) {
 			void this.randomReunionController.refresh();
@@ -3821,7 +3893,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.applyViewStateTransitionEffects(result);
-		const shouldDeferReview = result.ensureAllMemosLoaded && this.shouldDeferCardFlowForAllMemos();
+		const shouldDeferReview = result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
 		this.renderUiState({
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
@@ -3829,8 +3901,8 @@ export class KnomoView extends ItemView {
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
 		}
-		if (result.ensureAllMemosLoaded) {
-			void this.ensureAllMemosLoaded();
+		if (result.reloadCatalogQuery) {
+			void this.reloadCurrentCatalogQuery();
 		}
 		if (result.refreshRandomReunionIfEmpty && this.randomReunionController.getSnapshot().memos === null) {
 			void this.randomReunionController.refresh();
@@ -3950,7 +4022,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async ensureCurrentMemoDataRequirement(): Promise<boolean> {
-		return this.ensureAllMemosLoaded();
+		return this.reloadCurrentCatalogQuery();
 	}
 
 	private openDesktopSearch(): void {
@@ -5382,7 +5454,7 @@ export class KnomoView extends ItemView {
 		});
 	}
 
-	private async ensureAllMemosLoaded(forceReload = false): Promise<boolean> {
+	private async reloadCurrentCatalogQuery(forceReload = false): Promise<boolean> {
 		if (this.memoLoadingPromise !== null) {
 			return this.memoLoadingPromise;
 		}
@@ -5635,7 +5707,7 @@ export class KnomoView extends ItemView {
 		this.filteredMemosCache = null;
 		this.renderUiState();
 		if (this.activeNav === "review") {
-			void this.ensureAllMemosLoaded();
+			void this.reloadCurrentCatalogQuery();
 		}
 		if (this.activeNav === "time-buoy") {
 			void this.timeBuoyViewController.loadInitial();

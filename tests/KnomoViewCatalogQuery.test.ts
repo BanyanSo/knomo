@@ -21,6 +21,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 		return {
 			memos: await (load?.promise ?? []),
 			nextCursor: null,
+			catalogRevision: 1,
 			coverage: { kind: "complete", coveredFromDate: "2026-08-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 },
 			readState: "ready",
 			status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
@@ -43,6 +44,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 		refresh: async () => undefined,
 	};
 	view.shuffleDayController = { reconcileWithMemos: () => undefined };
+	view.refreshCatalogLibraryIndexes = async () => undefined;
 
 	const firstRun = view.reloadMemos(false, true);
 	const secondRun = view.reloadMemos(false, true);
@@ -100,6 +102,7 @@ interface QueryView {
 		refresh: () => Promise<void>;
 	};
 	shuffleDayController: { reconcileWithMemos: () => void };
+	refreshCatalogLibraryIndexes: () => Promise<void>;
 	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
 }
 

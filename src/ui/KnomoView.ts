@@ -201,9 +201,17 @@ interface FilteredMemosCache {
 	result: MemoRecord[];
 }
 
+interface CatalogMemoLoad {
+	memos: MemoRecord[];
+	nextCursor: CatalogFeatureCursor | null;
+	coverage: CatalogCoverage;
+	readState: CatalogReadState;
+	status: CatalogReadStatus;
+}
+
 const CARD_BATCH_SIZE = 50;
 const CATALOG_PAGE_SIZE = 50;
-const CATALOG_MEMO_WINDOW_LIMIT = 150;
+const TRASH_MEMO_WINDOW_LIMIT = 150;
 const MOBILE_INITIAL_CARD_BATCH_SIZE = 25;
 const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;
 const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;
@@ -327,6 +335,7 @@ export class KnomoView extends ItemView {
 	private cardFlowError: string | null = null;
 	private memoLoadingPromise: Promise<boolean> | null = null;
 	private memoSourceGeneration = 0;
+	private catalogDesktopQueryRun = 0;
 	private expandedTagGroups = new Set<string>();
 	private composerOpen = false;
 	private editingMemo: MemoRecord | null = null;
@@ -1440,16 +1449,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private async reloadMemos(loadAll: boolean, forceRebuild = false): Promise<boolean> {
+		const queryRun = ++this.catalogDesktopQueryRun;
 		const sourceGeneration = this.memoSourceGeneration;
 		const previousCardFlowKey = this.getCardFlowStateKey();
 		const previousMobileSearchKey = this.getMobileSearchStateKey();
 		let loaded = false;
 		try {
-			const memos = await this.loadCatalogMemos(loadAll);
-			if (sourceGeneration !== this.memoSourceGeneration) {
+			const load = await this.loadCatalogMemos(loadAll);
+			if (sourceGeneration !== this.memoSourceGeneration || queryRun !== this.catalogDesktopQueryRun) {
 				return false;
 			}
-			this.memos = memos;
+			this.applyCatalogMemoLoad(load);
+			this.memos = load.memos;
 			this.invalidateRecordStats();
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
@@ -1466,6 +1477,9 @@ export class KnomoView extends ItemView {
 			}
 			loaded = true;
 		} catch (error) {
+			if (sourceGeneration !== this.memoSourceGeneration || queryRun !== this.catalogDesktopQueryRun) {
+				return false;
+			}
 			this.memos = [];
 			this.invalidateRecordStats();
 			this.invalidateMemoSearchCache();
@@ -1505,22 +1519,32 @@ export class KnomoView extends ItemView {
 		await this.onForceRefreshViews();
 	}
 
-	private async loadCatalogMemos(loadAll: boolean): Promise<MemoRecord[]> {
+	private async loadCatalogMemos(loadAll: boolean): Promise<CatalogMemoLoad> {
 		const page = await this.catalogReadService.query({
 			...this.buildCatalogActiveQuery(loadAll),
 			limit: CATALOG_PAGE_SIZE,
 			cursor: null,
 		});
 		if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
-		this.catalogCursor = page.nextCursor;
-		this.catalogCoverage = page.coverage;
-		this.catalogReadState = page.readState;
-		this.catalogStatus = page.status;
-		return page.items.map(toCatalogMemoView);
+		return {
+			memos: page.items.map(toCatalogMemoView),
+			nextCursor: page.nextCursor,
+			coverage: page.coverage,
+			readState: page.readState,
+			status: page.status,
+		};
+	}
+
+	private applyCatalogMemoLoad(load: CatalogMemoLoad): void {
+		this.catalogCursor = load.nextCursor;
+		this.catalogCoverage = load.coverage;
+		this.catalogReadState = load.readState;
+		this.catalogStatus = load.status;
 	}
 
 	private async loadNextCatalogPage(): Promise<boolean> {
 		if (this.catalogCursor === null || this.catalogLoadingNextPage) return false;
+		const queryRun = this.catalogDesktopQueryRun;
 		this.catalogLoadingNextPage = true;
 		try {
 			const page = await this.getCatalogReadService().query({
@@ -1528,10 +1552,11 @@ export class KnomoView extends ItemView {
 				limit: CATALOG_PAGE_SIZE,
 				cursor: this.catalogCursor,
 			});
+			if (queryRun !== this.catalogDesktopQueryRun) return false;
 			if (page.invalidated) return this.reloadMemos(false, true);
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
 			for (const memo of page.items.map(toCatalogMemoView)) byRenderKey.set(getMemoRenderKey(memo), memo);
-			this.memos = retainOlderMemoWindow([...byRenderKey.values()], CATALOG_MEMO_WINDOW_LIMIT);
+			this.memos = mergeCatalogMemoPages([...byRenderKey.values()]);
 			this.catalogCursor = page.nextCursor;
 			this.catalogCoverage = page.coverage;
 			this.catalogReadState = page.readState;
@@ -1592,7 +1617,7 @@ export class KnomoView extends ItemView {
 		} else {
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
 			for (const memo of next) byRenderKey.set(getMemoRenderKey(memo), memo);
-			this.memos = retainOlderMemoWindow([...byRenderKey.values()], CATALOG_MEMO_WINDOW_LIMIT);
+			this.memos = mergeCatalogMemoPages([...byRenderKey.values()]);
 		}
 		this.catalogMobileCursor = page.nextCursor;
 		this.catalogCoverage = page.coverage;
@@ -1642,7 +1667,7 @@ export class KnomoView extends ItemView {
 	private async loadInitialMobileMemos(): Promise<void> {
 		const sourceGeneration = this.memoSourceGeneration;
 		try {
-			const memos = await this.loadCatalogMemos(false);
+			const load = await this.loadCatalogMemos(false);
 			if (
 				sourceGeneration !== this.memoSourceGeneration
 				|| this.cardFlowEl === null
@@ -1650,7 +1675,8 @@ export class KnomoView extends ItemView {
 			) {
 				return;
 			}
-			this.memos = memos;
+			this.applyCatalogMemoLoad(load);
+			this.memos = load.memos;
 			this.invalidateRecordStats();
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
@@ -5728,7 +5754,7 @@ export class KnomoView extends ItemView {
 		}
 		this.trashCursor = page.nextCursor;
 		this.trashIdentityRevision = page.identityRevision;
-		this.trashMemoController.appendTrashMemos(page.items.map(toTrashMemoView), CATALOG_MEMO_WINDOW_LIMIT);
+		this.trashMemoController.appendTrashMemos(page.items.map(toTrashMemoView), TRASH_MEMO_WINDOW_LIMIT);
 		return true;
 	}
 
@@ -5868,10 +5894,9 @@ function toSearchDateFilter(scope: ScopeFilter): SearchDateFilter | null {
 		: null;
 }
 
-export function retainOlderMemoWindow(memos: readonly MemoViewItem[], limit: number): MemoViewItem[] {
-	const sorted = [...new Map(memos.map((memo) => [memo.id, memo])).values()]
+export function mergeCatalogMemoPages(memos: readonly MemoViewItem[]): MemoViewItem[] {
+	return [...new Map(memos.map((memo) => [memo.id, memo])).values()]
 		.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
-	return sorted.slice(Math.max(0, sorted.length - Math.max(1, Math.trunc(limit))));
 }
 
 function getCatalogDateRange(filter: SearchDateFilter | null, today: Date): { fromDate: string; toDate: string } | null {

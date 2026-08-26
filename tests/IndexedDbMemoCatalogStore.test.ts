@@ -86,6 +86,61 @@ test("IndexedDB 使用真实索引完成 recent、搜索、筛选、分页和 ag
 	}
 });
 
+test("CAT-QUERY-001 / CAT-TAG-001：IndexedDB 搜索保持子串语义，父标签包含嵌套标签", async () => {
+	const databaseName = uniqueDatabaseName("substring-parent-tag");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", [
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 1, "09:00", "Notebook 123456", {
+				tags: ["project/knomo/ui"],
+			}),
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 2, "10:00", "unrelated", {
+				tags: ["personal"],
+			}),
+		]));
+
+		assert.deepEqual((await store.query({ limit: 50, text: "book" })).items.map((item) => item.content), ["Notebook 123456"]);
+		assert.deepEqual((await store.query({ limit: 50, text: "123" })).items.map((item) => item.content), ["Notebook 123456"]);
+		assert.deepEqual((await store.query({ limit: 50, tags: ["project"] })).items.map((item) => item.content), ["Notebook 123456"]);
+		assert.deepEqual((await store.query({ limit: 50, tags: ["project/knomo"] })).items.map((item) => item.content), ["Notebook 123456"]);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("CAT-PAGE-001：IndexedDB 连续遍历 1001 条记录不重复、不漏项", async () => {
+	const databaseName = uniqueDatabaseName("large-pagination");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		const observations = Array.from({ length: 1_001 }, (_, index) => makeObservation(
+			"Journal/2026-08-09.md",
+			"2026-08-09",
+			index + 1,
+			"09:00",
+			`memo-${index.toString().padStart(4, "0")}`,
+		));
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", observations));
+
+		const observationKeys: string[] = [];
+		let cursor = null;
+		do {
+			const page = await store.query({ limit: 37, cursor });
+			assert.equal(page.invalidated, false);
+			observationKeys.push(...page.items.map((item) => item.observationKey));
+			cursor = page.nextCursor;
+		} while (cursor !== null);
+
+		assert.equal(observationKeys.length, 1_001);
+		assert.equal(new Set(observationKeys).size, 1_001);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
 test("IDB-DELETE-REBUILD：删除本机 Catalog 后可从 Daily 分区重建", async () => {
 	const databaseName = uniqueDatabaseName("delete-rebuild");
 	let store = createStore(databaseName);

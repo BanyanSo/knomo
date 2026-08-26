@@ -129,11 +129,16 @@ export function buildCatalogSearchTokens(normalizedText: string): string[] {
 	const tokens: string[] = [];
 	for (const word of words) {
 		pushUnique(tokens, word);
-		const han = [...word].filter((character) => /\p{Script=Han}/u.test(character));
-		for (let index = 0; index < han.length; index += 1) {
-			pushUnique(tokens, han[index]);
-			if (index + 1 < han.length) {
-				pushUnique(tokens, `${han[index]}${han[index + 1]}`);
+		const characters = [...word];
+		for (let index = 0; index + 2 < characters.length; index += 1) {
+			pushUnique(tokens, characters.slice(index, index + 3).join(""));
+		}
+		if (characters.every((character) => /\p{Script=Han}/u.test(character))) {
+			for (let index = 0; index < characters.length; index += 1) {
+				pushUnique(tokens, characters[index]);
+				if (index + 1 < characters.length) {
+					pushUnique(tokens, `${characters[index]}${characters[index + 1]}`);
+				}
 			}
 		}
 	}
@@ -146,17 +151,17 @@ export function selectCatalogSearchToken(query: string): string | null {
 	if (words.length === 0) {
 		return null;
 	}
-	const numeric = words.filter((word) => /^\d+$/u.test(word))
-		.sort((left, right) => right.length - left.length);
-	if (numeric[0] !== undefined) {
-		return numeric[0];
+	const candidates = [...words].sort((left, right) => [...right].length - [...left].length);
+	const trigraphCandidate = candidates.find((word) => [...word].length >= 3);
+	if (trigraphCandidate !== undefined) {
+		return [...trigraphCandidate].slice(0, 3).join("");
 	}
-	const first = [...words].sort((left, right) => right.length - left.length)[0] ?? "";
+	const first = candidates[0] ?? "";
 	const chars = [...first];
 	if (chars.every((character) => /\p{Script=Han}/u.test(character))) {
 		return chars.length >= 2 ? `${chars[0]}${chars[1]}` : (chars[0] ?? null);
 	}
-	return first;
+	return null;
 }
 
 function buildFileAggregate(file: CatalogFileRecord, observations: readonly CatalogObservation[]): CatalogFileAggregate {

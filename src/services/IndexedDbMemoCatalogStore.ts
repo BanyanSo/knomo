@@ -677,7 +677,9 @@ function deleteCatalogDatabase(factory: IDBFactory, databaseName: string): Promi
 function buildPostingRecord(observation: CatalogObservation): CatalogPostingRecord {
 	const entries: Array<[CatalogPostingKind, string]> = [];
 	for (const tag of observation.tagKeys) {
-		entries.push(["tag", tag]);
+		for (const lookupTag of buildTagLookupValues(tag)) {
+			entries.push(["tag", lookupTag]);
+		}
 	}
 	for (const token of observation.searchTokens) {
 		entries.push(["search", token]);
@@ -710,6 +712,16 @@ function buildPostingRecord(observation: CatalogObservation): CatalogPostingReco
 		observationKey: observation.observationKey,
 		lookupKeys,
 	};
+}
+
+function buildTagLookupValues(tag: string): string[] {
+	const values = [tag];
+	for (let index = 0; index < tag.length; index += 1) {
+		if (tag[index] === "/" && index > 0) {
+			values.push(tag.slice(0, index));
+		}
+	}
+	return [...new Set(values)];
 }
 
 function sameLookupKeys(left: readonly string[], right: readonly string[]): boolean {

@@ -14,7 +14,7 @@ import {
 } from "../utils/markdown";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 
-export const CATALOG_PARSER_VERSION = 1;
+export const CATALOG_PARSER_VERSION = 2;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;

@@ -413,10 +413,12 @@ export function matchesCatalogQuery(
 	request: CatalogQuery,
 	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
 ): boolean {
-	const tags = request.tags?.map(normalizeCatalogText) ?? [];
+	const tags = request.tags?.map(normalizeCatalogText).filter((tag) => tag.length > 0) ?? [];
 	const normalizedText = request.text === undefined ? "" : normalizeCatalogText(request.text);
 	return (normalizedText.length === 0 || observation.searchText.includes(normalizedText))
-		&& tags.every((tag) => observation.tagKeys.includes(tag))
+		&& tags.every((tag) => observation.tagKeys.some((observationTag) => (
+			observationTag === tag || observationTag.startsWith(`${tag}/`)
+		)))
 		&& (request.linkTarget === undefined || observation.linkTargets.includes(normalizeCatalogText(request.linkTarget)))
 		&& (request.hasLink === undefined || (observation.hasLink === 1) === request.hasLink)
 		&& (request.imagePath === undefined || observation.imagePaths.includes(normalizeCatalogText(request.imagePath)))

@@ -15,7 +15,9 @@
 		"benchmark:catalog:summarize": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/summarize-device-traces.js",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",
-		"test": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js"
+		"test": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js",
+		"test:quiet": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot",
+		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files"
 	},
 	"keywords": [
 		"memo",

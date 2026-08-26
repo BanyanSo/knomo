@@ -6,6 +6,7 @@ import {
 	getCompiledTestFilesForSources,
 	getMissingFiles,
 	getNodeTestArgs,
+	getRunTestSelection,
 } from "../scripts/run-tests";
 
 test("run-tests maps only current test sources to compiled test files", () => {
@@ -55,5 +56,51 @@ test("run-tests forwards extra node test arguments before test files", () => {
 			"alpha.test.js",
 			"zeta.test.js",
 		],
+	);
+});
+
+test("run-tests keeps all test sources when no file selection is provided", () => {
+	assert.deepEqual(
+		getRunTestSelection(
+			["zeta.test.ts", "helper.ts", "alpha.test.ts"],
+			["--test-reporter=dot"],
+		),
+		{
+			sourceFileNames: ["zeta.test.ts", "helper.ts", "alpha.test.ts"],
+			extraNodeTestArgs: ["--test-reporter=dot"],
+		},
+	);
+});
+
+test("run-tests selects requested source files after the files marker", () => {
+	assert.deepEqual(
+		getRunTestSelection(
+			["zeta.test.ts", "helper.ts", "alpha.test.ts"],
+			[
+				"--test-reporter=dot",
+				"--files",
+				"tests\\zeta.test.ts",
+				"tests/alpha.test.ts",
+				"tests/zeta.test.ts",
+			],
+		),
+		{
+			sourceFileNames: ["alpha.test.ts", "zeta.test.ts"],
+			extraNodeTestArgs: ["--test-reporter=dot"],
+		},
+	);
+});
+
+test("run-tests rejects an empty file selection", () => {
+	assert.throws(
+		() => getRunTestSelection(["alpha.test.ts"], ["--files"]),
+		/Pass at least one tests\/.*\.test\.ts file after --files\./u,
+	);
+});
+
+test("run-tests rejects unavailable test source files", () => {
+	assert.throws(
+		() => getRunTestSelection(["alpha.test.ts"], ["--files", "tests/missing.test.ts"]),
+		/Unknown test source files: missing\.test\.ts/u,
 	);
 });

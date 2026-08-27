@@ -90,7 +90,6 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 		const parsed = await parser.parse({
 			sourcePath: file.path,
 			logicalDate: file.logicalDate,
-			headings: [manifest.heading],
 			bytes: before,
 		});
 		pushMetric(metrics, "parser.fileMs", performance.now() - parseStartedAt);
@@ -182,7 +181,7 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 				const updatedText = originalText.replace("benchmark memo", "benchmark incremental memo");
 				if (updatedText === originalText) throw new Error("Incremental benchmark fixture has no mutable memo.");
 				const bytes = new TextEncoder().encode(updatedText);
-				const parsed = await parser.parse({ sourcePath: file.path, logicalDate: file.logicalDate, headings: [manifest.heading], bytes });
+				const parsed = await parser.parse({ sourcePath: file.path, logicalDate: file.logicalDate, bytes });
 				const incrementalStartedAt = performance.now();
 				await catalog.replaceFile({
 					inventory: { sourcePath: file.path, logicalDate: file.logicalDate, mtime: 999_999, size: bytes.byteLength },

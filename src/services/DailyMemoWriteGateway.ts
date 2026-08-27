@@ -9,7 +9,6 @@ export type DailyWriteMode = "active_editor" | "vault_process";
 export interface DailyWritePrepareInput {
 	file: TFile;
 	logicalDate: string;
-	headings: readonly string[];
 	expectedRevision: string | null;
 	update: (content: string, parsed: DiaryMemoParseResult) => string;
 }
@@ -17,7 +16,6 @@ export interface DailyWritePrepareInput {
 export interface PreparedDailyWrite {
 	file: TFile;
 	logicalDate: string;
-	headings: readonly string[];
 	mode: DailyWriteMode;
 	beforeContent: string;
 	afterContent: string;
@@ -50,16 +48,15 @@ export class DailyMemoWriteGateway {
 		const editor = this.getActiveEditor(input.file);
 		const mode: DailyWriteMode = editor === null ? "vault_process" : "active_editor";
 		const beforeContent = editor?.getValue() ?? await this.app.vault.cachedRead(input.file);
-		const before = await this.parse(input.file.path, input.logicalDate, input.headings, beforeContent);
+		const before = await this.parse(input.file.path, input.logicalDate, beforeContent);
 		if (input.expectedRevision !== null && input.expectedRevision !== before.sourceRevision) {
 			throw new StaleDailyWriteError(input.file.path);
 		}
 		const afterContent = input.update(beforeContent, before);
-		const after = await this.parse(input.file.path, input.logicalDate, input.headings, afterContent);
+		const after = await this.parse(input.file.path, input.logicalDate, afterContent);
 		return {
 			file: input.file,
 			logicalDate: input.logicalDate,
-			headings: [...input.headings],
 			mode,
 			beforeContent,
 			afterContent,
@@ -94,7 +91,6 @@ export class DailyMemoWriteGateway {
 		const current = this.parser.parseRevision({
 			sourcePath: normalizePath(prepared.file.path),
 			logicalDate: prepared.logicalDate,
-			headings: prepared.headings,
 			content: currentContent,
 			sourceRevision: prepared.before.sourceRevision,
 		});
@@ -111,14 +107,12 @@ export class DailyMemoWriteGateway {
 	async prepareTransition(input: {
 		file: TFile;
 		logicalDate: string;
-		headings: readonly string[];
 		expectedRevision: string;
 		afterContent: string;
 	}): Promise<PreparedDailyWrite> {
 		return this.prepare({
 			file: input.file,
 			logicalDate: input.logicalDate,
-			headings: input.headings,
 			expectedRevision: input.expectedRevision,
 			update: () => input.afterContent,
 		});
@@ -136,13 +130,11 @@ export class DailyMemoWriteGateway {
 	private parse(
 		sourcePath: string,
 		logicalDate: string,
-		headings: readonly string[],
 		content: string,
 	): Promise<DiaryMemoParseResult> {
 		return this.parser.parse({
 			sourcePath: normalizePath(sourcePath),
 			logicalDate,
-			headings,
 			bytes: new TextEncoder().encode(content),
 		});
 	}

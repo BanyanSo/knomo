@@ -38,7 +38,6 @@ test("PERF-30K generator 使用冻结 seed、路径、20 memos/Daily 和确定�
 	const parsed = await new DiaryMemoParser(async (value) => sha256(value)).parse({
 		sourcePath: file.path,
 		logicalDate: file.logicalDate,
-		headings: [first.heading],
 		bytes,
 	});
 	assert.equal(parsed.observations.length, 20);
@@ -47,8 +46,8 @@ test("PERF-30K generator 使用冻结 seed、路径、20 memos/Daily 和确定�
 	assert.equal(parsed.observations[0].time, parsed.observations[1].time);
 	assert.equal(parsed.observations[0].content, parsed.observations[1].content);
 
-	const secondDay = await parseGeneratedFile(first.files[1], rootDir, first.heading);
-	const thirdDay = await parseGeneratedFile(first.files[2], rootDir, first.heading);
+	const secondDay = await parseGeneratedFile(first.files[1], rootDir);
+	const thirdDay = await parseGeneratedFile(first.files[2], rootDir);
 	assert.equal(secondDay.observations[0].content, thirdDay.observations[0].content);
 	assert.notEqual(secondDay.observations[0].time, thirdDay.observations[0].time);
 });
@@ -114,7 +113,6 @@ function sha256(bytes: Uint8Array): string {
 async function parseGeneratedFile(
 	file: { path: string; logicalDate: string } | undefined,
 	rootDir: string,
-	heading: string,
 ) {
 	if (file === undefined) {
 		throw new Error("Generated benchmark file is missing.");
@@ -123,7 +121,6 @@ async function parseGeneratedFile(
 	return new DiaryMemoParser(async (value) => sha256(value)).parse({
 		sourcePath: file.path,
 		logicalDate: file.logicalDate,
-		headings: [heading],
 		bytes,
 	});
 }

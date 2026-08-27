@@ -129,7 +129,7 @@ export default class KnomoPlugin extends Plugin {
 			const config = knomoSharedConfigService.getEffectiveConfig();
 			return { folder: config.daily.folder, format: config.daily.dateFormat };
 		};
-		const getEffectiveHeadings = () => knomoSharedConfigService.getEffectiveConfig().daily.headings;
+		const getEffectiveWriteHeading = () => knomoSharedConfigService.getEffectiveConfig().daily.headings[0] ?? null;
 		const getEffectiveMonthlySettings = () => {
 			const monthly = knomoSharedConfigService.getEffectiveConfig().monthly;
 			return {
@@ -186,7 +186,6 @@ export default class KnomoPlugin extends Plugin {
 			diaryMemoParser,
 			{
 				getDailyConfig: () => Promise.resolve(getEffectiveDailyConfig()),
-				getHeadings: getEffectiveHeadings,
 				getSettings: getEffectiveMonthlySettings,
 			},
 		);
@@ -211,7 +210,6 @@ export default class KnomoPlugin extends Plugin {
 			this.memoCatalogService,
 			diaryMemoParser,
 			() => Promise.resolve(getEffectiveDailyConfig()),
-			getEffectiveHeadings,
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
 				isConfigurationComplete: () => knomoSharedConfigService.isCoverageComplete(),
@@ -231,7 +229,7 @@ export default class KnomoPlugin extends Plugin {
 		);
 
 		const markdownMutationService = new MarkdownMutationService(this.app, {
-			getHeadings: getEffectiveHeadings,
+			getWriteHeading: getEffectiveWriteHeading,
 			getDailyFileForDate: (logicalDate) => {
 				const date = parseLogicalDate(logicalDate);
 				return dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig());

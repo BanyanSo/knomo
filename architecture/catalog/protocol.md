@@ -19,6 +19,9 @@
 ### 2.1 Daily 是正文真相
 
 - memo 正文只以 Daily 文件中的 Markdown block 为准；
+- 在符合 Daily 路径规则的文件中，根区域及任意 H1～H6 标题下的顶层 `- HH:mm 正文`、`- HH:mm:ss 正文` 都是 memo；最近标题只作为 `section` 保存，不参与识别；
+- 时间 memo 可以包含缩进续行，但 YAML frontmatter、fenced code block、嵌套列表、blockquote、task、非法时间和没有正文的空时间行不识别；相同时间或正文的记录不得去重；
+- `dailyHeading` 只决定新建与无可用原 section 时的写入位置，修改它不得改变历史 memo 的识别范围或触发全库重扫；
 - Catalog、Identity Ledger 或 Monthly 都不能隐藏 Daily 中真实存在的 observation；
 - 普通 create、edit、task、copy、move、remove 和 restore 不得写入内部 ID、HTML comment、frontmatter 或隐藏字符；
 - 只有用户显式创建 Obsidian block reference 时，才允许把 block ID 作为用户正文写入。

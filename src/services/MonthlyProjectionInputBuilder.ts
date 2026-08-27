@@ -23,7 +23,6 @@ export interface MonthlyProjectionBuildResult {
 
 export interface MonthlyProjectionInputBuilderOptions {
 	getDailyConfig: () => DailyNotesConfig | Promise<DailyNotesConfig>;
-	getHeadings: () => readonly string[];
 	getSettings: () => MonthlyProjectionSettings;
 }
 
@@ -51,7 +50,6 @@ export class MonthlyProjectionInputBuilder {
 	async build(period: string): Promise<MonthlyProjectionBuildResult> {
 		assertPeriod(period);
 		const dailyConfig = await this.options.getDailyConfig();
-		const headings = [...new Set(this.options.getHeadings().map((heading) => heading.trim()).filter(Boolean))].sort();
 		const settings = this.getSettings();
 		const dailyFiles = this.app.vault.getMarkdownFiles().flatMap((file) => {
 			const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
@@ -71,7 +69,6 @@ export class MonthlyProjectionInputBuilder {
 			const parsed = await this.parser.parse({
 				sourcePath: file.path,
 				logicalDate,
-				headings,
 				bytes: new Uint8Array(await this.app.vault.readBinary(file)),
 			});
 			parsedFiles.push({
@@ -84,7 +81,7 @@ export class MonthlyProjectionInputBuilder {
 		}
 		const sourceDigest = await sha256Text(canonicalJson({
 			period,
-			daily: { config: dailyConfig, headings, files: parsedFiles },
+			daily: { config: dailyConfig, files: parsedFiles },
 			monthly: settings,
 			targetPath: getMonthlyArchivePath(settings, period),
 		}));

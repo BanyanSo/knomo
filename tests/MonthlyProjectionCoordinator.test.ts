@@ -31,6 +31,20 @@ test("Monthly 的完整输入只来自实际 Daily，空或 partial Catalog 不�
 	assert.equal(fixture.replica.paths().some((path) => path.includes("_knomo-data")), false);
 });
 
+test("Monthly 与 Catalog 共用全区域 Parser 语义，source 输入不包含写入标题", async () => {
+	const daily = {
+		"Daily/2026-08-27.md": "- 12:58 root\n### Ideas\n- 14:26 under ideas\n",
+	};
+	const fixture = createFixture(daily);
+	const built = await fixture.inputBuilder.build("2026-08");
+
+	assert.deepEqual(built.observations.map((item) => [item.time, item.section, item.content]), [
+		["12:58", null, "root"],
+		["14:26", "### Ideas", "under ideas"],
+	]);
+	assert.equal(typeof built.sourceDigest, "string");
+});
+
 test("删除或损坏 Monthly 后可从 Daily 恢复，且绝不反向修改 Daily", async () => {
 	const fixture = createFixture({ "Daily/2026-08-01.md": DAILY_A });
 	const dailyBefore = fixture.replica.read("Daily/2026-08-01.md");
@@ -234,7 +248,6 @@ function createFixture(
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
 	const inputBuilder = new MonthlyProjectionInputBuilder(replica.app, parser, {
 		getDailyConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
-		getHeadings: () => ["## Memos"],
 		getSettings: () => ({
 			monthlyMemoFolder: "Memos",
 			monthlyMemoFileFormat: "YYYY-MM.md",

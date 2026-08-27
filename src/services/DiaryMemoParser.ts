@@ -14,12 +14,11 @@ import {
 } from "../utils/markdown";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 
-export const CATALOG_PARSER_VERSION = 3;
+export const CATALOG_PARSER_VERSION = 4;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;
 	logicalDate: string;
-	headings: readonly string[];
 	bytes: Uint8Array;
 }
 
@@ -38,7 +37,6 @@ export interface DiaryMemoParseRuntime {
 export interface DiaryMemoRevisionParseInput {
 	sourcePath: string;
 	logicalDate: string;
-	headings: readonly string[];
 	content: string;
 	sourceRevision: string;
 }
@@ -69,7 +67,6 @@ export class DiaryMemoParser {
 		const revisionInput = {
 			sourcePath: input.sourcePath,
 			logicalDate: input.logicalDate,
-			headings: input.headings,
 			content,
 			sourceRevision,
 		};
@@ -81,7 +78,6 @@ export class DiaryMemoParser {
 	parseRevision(input: DiaryMemoRevisionParseInput): DiaryMemoParseResult {
 		const { content, sourceRevision } = input;
 		const lines = splitMarkdownLines(content);
-		const allowedHeadings = new Set(input.headings.map((heading) => heading.trim()).filter(Boolean));
 		const observations: MemoObservation[] = [];
 		let currentSection: string | null = null;
 		let fence: CodeFenceMarker | null = null;
@@ -116,10 +112,6 @@ export class DiaryMemoParser {
 			if (!isMemoStartLine(line) || !hasValidMemoTime(line)) {
 				continue;
 			}
-			if (currentSection !== null && !allowedHeadings.has(currentSection.trim())) {
-				continue;
-			}
-
 			const parsed = parseDiaryMemoBlock(lines, lineIndex);
 			if (parsed === null) {
 				continue;
@@ -137,7 +129,6 @@ export class DiaryMemoParser {
 	): Promise<DiaryMemoParseResult> {
 		const { content, sourceRevision } = input;
 		const lines = splitMarkdownLines(content);
-		const allowedHeadings = new Set(input.headings.map((heading) => heading.trim()).filter(Boolean));
 		const observations: MemoObservation[] = [];
 		const yieldController = new ParseYieldController(runtime);
 		let currentSection: string | null = null;
@@ -163,8 +154,6 @@ export class DiaryMemoParser {
 				continue;
 			}
 			if (!isMemoStartLine(line) || !hasValidMemoTime(line)) continue;
-			if (currentSection !== null && !allowedHeadings.has(currentSection.trim())) continue;
-
 			const parsed = await parseDiaryMemoBlockCooperatively(lines, lineIndex, yieldController);
 			if (parsed === null) continue;
 			if (yieldController.shouldYield()) await yieldController.yieldNow();

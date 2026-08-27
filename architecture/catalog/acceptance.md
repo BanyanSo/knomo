@@ -41,6 +41,11 @@
 | CAT-CONTENT-003 | Identity 事件早于 Daily 到达 | 不显示幽灵 memo |
 | CAT-CONTENT-004 | 单 memo 出现多个 identity successor | 只降级相关 memo，其他内容能力不受影响 |
 | CAT-CONTENT-005 | 删除本机 Catalog | 从 Daily 重建，不写共享 Vault 数据 |
+| CAT-PARSE-001 | Daily 根区域或任意 H1～H6 标题下存在顶层 `- HH:mm`、`- HH:mm:ss` 正文 | 全部识别为独立 memo，并把最近标题保存为 `section` |
+| CAT-PARSE-002 | 时间行位于 frontmatter、fenced code block、嵌套列表、blockquote 或 task 中，时间非法或正文为空 | 不识别为 memo |
+| CAT-PARSE-003 | 多条 memo 的时间或正文相同 | 保留全部 observation，不按时间或正文去重 |
+| CAT-PARSE-004 | 修改 `dailyHeading` | 只影响后续默认写入位置，不改变历史识别范围，不触发 Catalog 全库重扫 |
+| CAT-PARSE-005 | Catalog 与 Monthly 读取同一组 Daily | 使用同一 Parser 语义，得到一致的 memo 集合 |
 | CAT-PURITY-001 | 普通正文操作前后检查 Daily | 不新增内部 ID、注释、frontmatter 或隐藏字符 |
 
 ## 4. 写入与故障顺序

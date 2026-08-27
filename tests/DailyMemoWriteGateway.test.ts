@@ -27,7 +27,6 @@ test("active Daily writes through one editor transaction", async () => {
 	const prepared = await gateway.prepare({
 		file,
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		expectedRevision: null,
 		update: (content) => content.replace("before", "after"),
 	});
@@ -60,7 +59,6 @@ test("background Daily writes through Vault.process with a compare-and-swap guar
 	const prepared = await gateway.prepare({
 		file,
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		expectedRevision: null,
 		update: (current) => {
 			updateCalls += 1;
@@ -88,7 +86,6 @@ test("expected revision and late editor changes reject stale Daily writes", asyn
 	await assert.rejects(() => gateway.prepare({
 		file,
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		expectedRevision: "0".repeat(64),
 		update: (content) => content,
 	}), StaleDailyWriteError);
@@ -96,7 +93,6 @@ test("expected revision and late editor changes reject stale Daily writes", asyn
 	const prepared = await gateway.prepare({
 		file,
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		expectedRevision: null,
 		update: (content) => content.replace("before", "after"),
 	});

@@ -18,6 +18,7 @@ import type {
 	MarkdownTaskInput,
 } from "../types/memoOperations";
 import { formatDatePart, formatTimePart } from "../utils/date";
+import { isValidMarkdownHeading } from "../utils/markdown";
 import type { DiaryMemoParseResult } from "./DiaryMemoParser";
 import {
 	DailyMemoWriteGateway,
@@ -34,7 +35,7 @@ export interface MarkdownCatalogCommitInput {
 }
 
 export interface MarkdownMutationServiceOptions {
-	getHeadings: () => readonly string[];
+	getWriteHeading: () => string | null;
 	getDailyFileForDate: (logicalDate: string) => Promise<TFile>;
 	getLogicalDateForPath: (sourcePath: string) => Promise<string>;
 	getMemoTimeFormat: () => "HH:mm" | "HH:mm:ss";
@@ -92,7 +93,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			const prepared = await this.dailyGateway.prepare({
 				file,
 				logicalDate,
-				headings: this.options.getHeadings(),
 				expectedRevision: input.observation.sourceRevision,
 				update: (currentContent, parsed) => {
 					beforeObservation = findObservation(parsed, input.observation, file.path);
@@ -119,7 +119,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			const prepared = await this.dailyGateway.prepare({
 				file,
 				logicalDate,
-				headings: this.options.getHeadings(),
 				expectedRevision: input.observation.sourceRevision,
 				update: (currentContent, parsed) => {
 					beforeObservation = findObservation(parsed, input.observation, file.path);
@@ -149,7 +148,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			await this.dailyGateway.prepare({
 				file: sourceFile,
 				logicalDate: sourceLogicalDate,
-				headings: this.options.getHeadings(),
 				expectedRevision: input.observation.sourceRevision,
 				update: (content, parsed) => {
 					sourceObservation = findObservation(parsed, input.observation, sourceFile.path);
@@ -178,7 +176,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			const sourcePrepared = await this.dailyGateway.prepare({
 				file: sourceFile,
 				logicalDate: sourceLogicalDate,
-				headings: this.options.getHeadings(),
 				expectedRevision: input.observation.sourceRevision,
 				update: (content, parsed) => {
 					sourceObservation = findObservation(parsed, input.observation, sourceFile.path);
@@ -193,6 +190,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				sourceRawBlock,
 				target.created,
 				movedObservation.existingBlockId,
+				movedObservation.section,
 			);
 			try {
 				const sourceCatalogPending = await this.commitAndUpdateCatalog(sourcePrepared);
@@ -235,7 +233,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			const prepared = await this.dailyGateway.prepare({
 				file,
 				logicalDate,
-				headings: this.options.getHeadings(),
 				expectedRevision: input.observation.sourceRevision,
 				update: (content, parsed) => replaceObservation(
 					content,
@@ -257,7 +254,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		const prepared = await this.dailyGateway.prepare({
 			file,
 			logicalDate,
-			headings: this.options.getHeadings(),
 			expectedRevision: input.observation.sourceRevision,
 			update: (content, parsed) => {
 				observation = findObservation(parsed, input.observation, file.path);
@@ -288,7 +284,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			const prepared = await this.dailyGateway.prepare({
 				file,
 				logicalDate,
-				headings: this.options.getHeadings(),
 				expectedRevision: input.observation.sourceRevision,
 				update: (content, parsed) => {
 					beforeObservation = findObservation(parsed, input.observation, file.path);
@@ -324,16 +319,14 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 	): Promise<MarkdownMutationResult> {
 		return this.withStaleRefresh([file.path], async () => {
 			try {
-				const headings = this.options.getHeadings();
 				const position = this.options.getInsertPosition?.() ?? "bottom";
 				const section = preferredSection !== undefined
-					&& (preferredSection === null || headings.includes(preferredSection))
+					&& (preferredSection === null || isValidMarkdownHeading(preferredSection))
 					? preferredSection
-					: headings[0] ?? null;
+					: this.options.getWriteHeading();
 				const prepared = await this.dailyGateway.prepare({
 					file,
 					logicalDate,
-					headings,
 					expectedRevision: null,
 					update: (content, parsed) => {
 						if (existingBlockId !== null && parsed.observations.some((item) => item.existingBlockId === existingBlockId)) {

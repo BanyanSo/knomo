@@ -101,6 +101,21 @@ test("Catalog 扫描进度不触发卡片全量刷新，resolution snapshot 只�
 	assert.equal(readService.includes("await this.options.catalog.listFileRevisionBatches()"), true);
 });
 
+test("Daily 写入标题不参与历史读取、Catalog fingerprint 或 Monthly source digest", () => {
+	const parser = fs.readFileSync("src/services/DiaryMemoParser.ts", "utf8");
+	const coordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
+	const monthly = fs.readFileSync("src/services/MonthlyProjectionInputBuilder.ts", "utf8");
+	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
+	assert.equal(parser.includes("headings"), false);
+	assert.equal(coordinator.includes("headings"), false);
+	assert.equal(monthly.includes("headings"), false);
+	const saveDailyHeading = settingTab.slice(
+		settingTab.indexOf("private async saveDailyHeading"),
+		settingTab.indexOf("private async saveMonthlyDateHeadingFormat"),
+	);
+	assert.equal(saveDailyHeading.includes("rebuildLocalCatalog"), false);
+});
+
 function listFiles(root: string): string[] {
 	return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
 		const fullPath = path.join(root, entry.name);

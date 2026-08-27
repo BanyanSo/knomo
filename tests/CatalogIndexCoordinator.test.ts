@@ -20,7 +20,6 @@ test("Catalog 扫描 off switch 不注册事件、不读取 Daily", async () => 
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ enabled: false },
 	);
 	coordinator.start(fixture.owner);
@@ -46,7 +45,6 @@ test("本机 fallback 扫描完成后内容就绪但共享配置范围仍不完�
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 0, isConfigurationComplete: () => false },
 	);
 	coordinator.start(fixture.owner);
@@ -74,7 +72,6 @@ test("fresh empty Vault 在共享配置缺失时也把 0/0 Daily 视为 complete
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ isConfigurationComplete: () => false },
 	);
 	coordinator.start(fixture.owner);
@@ -93,7 +90,40 @@ test("fresh empty Vault 在共享配置缺失时也把 0/0 Daily 视为 complete
 	fixture.unload();
 });
 
-test("配置晚到触发同一文件分区重扫，不重复 observation", async () => {
+test("Catalog 扫描识别 Daily 根区域及任意标题下的所有时间 memo", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const fixture = await createCoordinatorFixture([{
+		path: "Journal/2026-08-27.md",
+		content: "- 12:58 root\n### Ideas\n- 14:26 under ideas\n",
+		mtime: 10,
+	}]);
+	const store = new InMemoryMemoCatalogStore();
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		{ now: () => 1_000, fullAuditIntervalMs: 10_000 },
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+		const page = await store.query({ limit: 10 });
+		assert.deepEqual(page.items.map((item) => [item.time, item.section, item.content]), [
+			["14:26", "### Ideas", "under ideas"],
+			["12:58", null, "root"],
+		]);
+	} finally {
+		fixture.unload();
+	}
+});
+
+test("共享配置晚到只更新 coverage，不重读历史 Daily", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -109,8 +139,7 @@ test("配置晚到触发同一文件分区重扫，不重复 observation", async
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
-		{ fullAuditIntervalMs: 0, isConfigurationComplete: () => configurationComplete },
+		{ fullAuditIntervalMs: 10_000, now: () => 1_000, isConfigurationComplete: () => configurationComplete },
 	);
 	coordinator.start(fixture.owner);
 	await coordinator.initialize();
@@ -126,6 +155,7 @@ test("配置晚到触发同一文件分区重扫，不重复 observation", async
 			totalFileCount: 1,
 		},
 	);
+	assert.equal(fixture.readCount(), 1);
 
 	configurationComplete = true;
 	await coordinator.refreshLocalCatalog();
@@ -134,6 +164,7 @@ test("配置晚到触发同一文件分区重扫，不重复 observation", async
 	assert.equal(page.coverage.sharedConfigurationComplete, true);
 	assert.equal(page.items.length, 1);
 	assert.equal(new Set(page.items.map((item) => item.observationKey)).size, 1);
+	assert.equal(fixture.readCount(), 1);
 	fixture.unload();
 });
 
@@ -154,7 +185,6 @@ test("DAILY-RENAME / DAILY-MOVE / CATALOG-OFFLINE-CHANGES：启动 inventory dif
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 9).getTime() },
 	);
 	firstCoordinator.start(first.owner);
@@ -172,7 +202,6 @@ test("DAILY-RENAME / DAILY-MOVE / CATALOG-OFFLINE-CHANGES：启动 inventory dif
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 10).getTime() },
 	);
 	secondCoordinator.start(second.owner);
@@ -199,7 +228,6 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ now: () => 1_000, fullAuditIntervalMs: 1_000 },
 	);
 	firstCoordinator.start(first.owner);
@@ -216,7 +244,6 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{
 			now: () => 2_001,
 			fullAuditIntervalMs: 1_000,
@@ -251,7 +278,6 @@ test("warm start 在审计未到期时不读取未变化 Daily 正文", async ()
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ now: () => 1_000, fullAuditIntervalMs: 10_000 },
 	);
 	firstCoordinator.start(first.owner);
@@ -266,7 +292,6 @@ test("warm start 在审计未到期时不读取未变化 Daily 正文", async ()
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ now: () => 2_000, fullAuditIntervalMs: 10_000 },
 	);
 	secondCoordinator.start(second.owner);
@@ -295,7 +320,6 @@ test("Vault 事件只处理受影响的 Daily，Monthly 与其他 Markdown 不�
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ now: () => 1_000, fullAuditIntervalMs: 10_000 },
 	);
 	try {
@@ -363,7 +387,6 @@ test("MOBILE-BACKGROUND-RESUME：隐藏时保存 checkpoint，重启只续跑 pe
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 9).getTime() },
 	);
 	firstCoordinator.start(first.owner);
@@ -383,7 +406,6 @@ test("MOBILE-BACKGROUND-RESUME：隐藏时保存 checkpoint，重启只续跑 pe
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 9).getTime() },
 	);
 	secondCoordinator.start(second.owner);
@@ -422,7 +444,6 @@ test("Catalog 持久层不可用时从 Daily 渐进扫描并展示全部 observa
 		catalog,
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 21).getTime() },
 	);
 	const readService = new CatalogReadService({
@@ -479,7 +500,6 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 		new MemoCatalogService(store),
 		parser,
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{
 			now: () => 20,
 			onRevisionTransition: (transition) => { transitions.push(transition); },
@@ -493,7 +513,6 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 		const parsed = await parser.parse({
 			sourcePath,
 			logicalDate: "2026-08-22",
-			headings: ["## Memos"],
 			bytes: Buffer.from(content, "utf8"),
 		});
 		const file = (fixture.app as unknown as App).vault.getAbstractFileByPath(sourcePath);
@@ -546,7 +565,6 @@ test("普通刷新加入当前扫描且进度持续上报，不清空本机 Cata
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{
 			fullAuditIntervalMs: 0,
 			now: () => new Date(2026, 7, 10).getTime(),
@@ -582,7 +600,6 @@ test("手动刷新按文件 revision 返回真实 added、updated、deleted 和 
 		new MemoCatalogService(new InMemoryMemoCatalogStore()),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 60_000, now: () => new Date(2026, 7, 22).getTime() },
 	);
 	try {
@@ -648,7 +665,6 @@ test("插件 unload 会保存 active checkpoint、清除 timer，并阻止尚未
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 	);
 	coordinator.start(fixture.owner);
 	await coordinator.initialize();
@@ -700,7 +716,6 @@ test("1001 个 Daily 每个只解析一次，checkpoint 按批次持久化", asy
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{
 			now: () => 1_000,
 			fullAuditIntervalMs: 10_000,
@@ -739,7 +754,6 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		() => ["## Memos"],
 		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 10).getTime() },
 	);
 	const sharedBytes = fixture.snapshot();

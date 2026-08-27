@@ -4,16 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "../src/services/DiaryMemoParser";
 
 const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
 
-test("PARSE-CUSTOM-ROOT：识别根层和自定义 heading，排除 frontmatter、其他 heading 与代码块", async () => {
+test("PARSE-CUSTOM-ROOT：识别根层和所有 heading，排除 frontmatter 与代码块", async () => {
 	const result = await parseFixture("PARSE-CUSTOM-ROOT", {
 		sourcePath: "Journal/2026/08/2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Custom Memos"],
 	});
 
 	assert.deepEqual(result.observations.map((item) => ({
@@ -23,9 +22,66 @@ test("PARSE-CUSTOM-ROOT：识别根层和自定义 heading，排除 frontmatter�
 	})), [
 		{ section: null, startLine: 4, content: "root memo #root" },
 		{ section: "## Custom Memos", startLine: 7, content: "heading memo" },
+		{ section: "## Other", startLine: 9, content: "ignored memo" },
 	]);
 	assert.equal(result.observations[0].logicalDate, "2026-08-09");
 	assert.equal(result.observations[0].sourcePath, "Journal/2026/08/2026-08-09.md");
+});
+
+test("所有 H1-H6 与根区域识别合法时间 memo，并排除嵌套、引用、任务、非法时间和空正文", async () => {
+	const content = [
+		"---",
+		"- 01:00 frontmatter fake",
+		"---",
+		"- 12:58 root",
+		"  root continuation",
+		"# H1",
+		"- 14:26 h1",
+		"## H2",
+		"- 14:26:30 h2",
+		"### H3",
+		"- 03:03 h3",
+		"#### H4",
+		"- 04:04 h4",
+		"##### H5",
+		"- 05:05 h5",
+		"###### H6",
+		"- 06:06 h6",
+		"  second line",
+		"```md",
+		"- 07:07 fenced fake",
+		"```",
+		"  - 08:08 nested fake",
+		"> - 09:09 quoted fake",
+		"- [ ] 10:10 task fake",
+		"- 24:00 invalid hour",
+		"- 12:60 invalid minute",
+		"- 11:11",
+		"ordinary text",
+	].join("\n");
+	const result = await parser.parse({
+		sourcePath: "Daily/2026-08-27.md",
+		logicalDate: "2026-08-27",
+		bytes: Buffer.from(content, "utf8"),
+	});
+
+	assert.deepEqual(result.observations.map((item) => ({
+		time: item.time,
+		section: item.section,
+		content: item.content,
+	})), [
+		{ time: "12:58", section: null, content: "root\nroot continuation" },
+		{ time: "14:26", section: "# H1", content: "h1" },
+		{ time: "14:26:30", section: "## H2", content: "h2" },
+		{ time: "03:03", section: "### H3", content: "h3" },
+		{ time: "04:04", section: "#### H4", content: "h4" },
+		{ time: "05:05", section: "##### H5", content: "h5" },
+		{ time: "06:06", section: "###### H6", content: "h6\nsecond line" },
+	]);
+});
+
+test("Catalog Parser 本机缓存标记随全区域识别契约更新", () => {
+	assert.equal(CATALOG_PARSER_VERSION, 4);
 });
 
 test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async () => {
@@ -40,13 +96,11 @@ test("ObservationHandle 的 rawBlockHash 覆盖时间行与完整原始 block", 
 	const first = await parser.parse({
 		sourcePath: "2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		bytes: Buffer.from("## Memos\n- 09:00 same", "utf8"),
 	});
 	const second = await parser.parse({
 		sourcePath: "2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		bytes: Buffer.from("## Memos\n- 10:00 same", "utf8"),
 	});
 
@@ -71,7 +125,6 @@ test("任务列表起始的 memo 使用原始 block 行偏移", async () => {
 	const result = parser.parseRevision({
 		sourcePath: "2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		content: "## Memos\n- 09:00\n\t- [ ] first task\n\t- [x] second task\n",
 		sourceRevision: "revision",
 	});
@@ -111,7 +164,6 @@ test("PARSE-EXISTING-BLOCK-ID：content 剥离 trailing ID，existingBlockId 单
 	const result = await parser.parse({
 		sourcePath: "2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		bytes: before,
 	});
 	const after = fs.readFileSync(filePath);
@@ -132,7 +184,6 @@ test("PARSE-LINE-ENDINGS：原始 SHA 区分 LF/CRLF/BOM，contentHash 保持规
 	const results = await Promise.all([lf, crlf, bom, withFinalLf].map((bytes) => parser.parse({
 		sourcePath: "2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		bytes,
 	})));
 
@@ -152,14 +203,12 @@ test("大 Daily 解析会协作式让出事件循环且结果保持一致", asyn
 	const expected = await parser.parse({
 		sourcePath: "Journal/2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		bytes,
 	});
 	let yieldCount = 0;
 	const actual = await parser.parse({
 		sourcePath: "Journal/2026-08-09.md",
 		logicalDate: "2026-08-09",
-		headings: ["## Memos"],
 		bytes,
 	}, {
 		maxLinesPerSlice: 32,
@@ -172,13 +221,12 @@ test("大 Daily 解析会协作式让出事件循环且结果保持一致", asyn
 
 async function parseFixture(
 	name: string,
-	overrides: Partial<{ sourcePath: string; logicalDate: string; headings: string[] }> = {},
+	overrides: Partial<{ sourcePath: string; logicalDate: string }> = {},
 ) {
 	const bytes = fs.readFileSync(fixturePath(name));
 	return parser.parse({
 		sourcePath: overrides.sourcePath ?? "2026-08-09.md",
 		logicalDate: overrides.logicalDate ?? "2026-08-09",
-		headings: overrides.headings ?? ["## Memos"],
 		bytes,
 	});
 }

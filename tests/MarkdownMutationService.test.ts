@@ -277,6 +277,26 @@ test("move 回滚目标遇到并发修改时保留两份正文并明确报告 co
 	assert.match(fixture.vault.readText(targetPath), /concurrent/u);
 });
 
+test("move 保留任意 H1-H6 section，不受新 memo 写入标题限制", async () => {
+	const sourcePath = "Daily/2026-08-22.md";
+	const targetPath = "Daily/2026-08-23.md";
+	const fixture = createFixture({
+		initialFiles: {
+			[sourcePath]: "### Ideas\n- 14:26 move with section\n",
+			[targetPath]: "## Memos\n",
+		},
+	});
+	const source = await fixture.getOnlyObservation("2026-08-22");
+
+	await fixture.service.move({
+		observation: toHandle(source),
+		targetLogicalDate: "2026-08-23",
+	});
+
+	assert.equal(fixture.vault.readText(sourcePath), "### Ideas\n");
+	assert.equal(fixture.vault.readText(targetPath), "## Memos\n### Ideas\n- 14:26 move with section\n");
+});
+
 test("remove 删除当前 block；显式 reference 只写用户请求的 block ID", async () => {
 	const fixture = createFixture({
 		initialFiles: { "Daily/2026-08-22.md": "## Memos\n- 08:00 referenced\n" },
@@ -335,7 +355,7 @@ function createFixture(options: FixtureOptions = {}) {
 	const committedPartitions: MarkdownCatalogCommitInput[] = [];
 	const refreshedPaths: string[][] = [];
 	const service = new MarkdownMutationService(app, {
-		getHeadings: () => HEADINGS,
+		getWriteHeading: () => HEADINGS[0],
 		getDailyFileForDate: async (logicalDate) => vault.ensureFile(`Daily/${logicalDate}.md`, "## Memos\n"),
 		getLogicalDateForPath: async (sourcePath) => sourcePath.match(/(\d{4}-\d{2}-\d{2})\.md$/u)?.[1]
 			?? Promise.reject(new Error(`Not a Daily path: ${sourcePath}`)),
@@ -357,7 +377,6 @@ function createFixture(options: FixtureOptions = {}) {
 		return (await parser.parse({
 			sourcePath: path,
 			logicalDate,
-			headings: HEADINGS,
 			bytes: Buffer.from(vault.readText(path), "utf8"),
 		})).observations;
 	};

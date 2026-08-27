@@ -81,7 +81,6 @@ export class CatalogIndexCoordinator {
 	private coverageDates: string[] = [];
 	private coveredFileCount = 0;
 	private activePath: string | null = null;
-	private headings: string[] = [];
 	private dailyConfig: DailyNotesConfig | null = null;
 	private settingsFingerprint = "";
 	private checkpointStartedAt = 0;
@@ -108,7 +107,6 @@ export class CatalogIndexCoordinator {
 		private readonly catalogService: MemoCatalogService,
 		private readonly parser: DiaryMemoParser,
 		private readonly getDailyConfig: () => Promise<DailyNotesConfig>,
-		private readonly getHeadings: () => readonly string[],
 		options: CatalogIndexCoordinatorOptions = {},
 	) {
 		this.enabled = options.enabled ?? CATALOG_SCANNER_ENABLED;
@@ -329,8 +327,7 @@ export class CatalogIndexCoordinator {
 		try {
 			this.dailyConfig = await this.getDailyConfig();
 			if (this.stopped) return;
-			this.headings = [...new Set(this.getHeadings().map((heading) => heading.trim()).filter(Boolean))].sort();
-			this.settingsFingerprint = buildSettingsFingerprint(this.dailyConfig, this.headings);
+			this.settingsFingerprint = buildSettingsFingerprint(this.dailyConfig);
 			const inventory = collectDailyInventory(this.app, this.dailyConfig);
 			this.inventoryByPath.clear();
 			for (const entry of inventory) {
@@ -508,7 +505,6 @@ export class CatalogIndexCoordinator {
 			const parsed = await this.parser.parse({
 				sourcePath,
 				logicalDate: inventory.logicalDate,
-				headings: this.headings,
 				bytes,
 			}, {
 				sliceBudgetMs: Math.max(1, Math.min(8, this.sliceBudgetMs)),
@@ -940,13 +936,11 @@ function collectDailyInventory(app: App, config: DailyNotesConfig): CatalogInven
 		right.logicalDate.localeCompare(left.logicalDate) || left.sourcePath.localeCompare(right.sourcePath));
 }
 
-function buildSettingsFingerprint(config: DailyNotesConfig, headings: readonly string[]): string {
+function buildSettingsFingerprint(config: DailyNotesConfig): string {
 	return hashText(JSON.stringify({
 		folder: normalizePath(config.folder ?? ""),
 		format: config.format,
-		headings,
 		parserVersion: CATALOG_PARSER_VERSION,
-		rootMemos: true,
 	}));
 }
 

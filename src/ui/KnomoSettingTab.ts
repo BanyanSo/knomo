@@ -786,7 +786,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
 		await this.syncSharedConfiguration();
-		await this.memoCommandService.rebuildLocalCatalog();
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
 			return true;
 		}

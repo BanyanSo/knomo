@@ -152,6 +152,102 @@ test("回收站忽略过期 resolution snapshot，并按当前 Catalog 显示删
 
 	assert.equal(page.items.length, 1);
 	assert.equal(page.items[0]?.memoId, binding.memoId);
+	assert.equal(page.items[0]?.purgeAllowed, true);
+
+	identity.setState(observation.content, {
+		kind: "conflicted",
+		memoIds: [binding.memoId],
+		bindings: [binding],
+	}, "conflicted", "identity-3");
+	const conflictedPage = await service.listDeleted(20);
+	assert.equal(conflictedPage.items[0]?.purgeAllowed, false);
+});
+
+test("Daily 正文重新出现时保持正文 observation 可见并隐藏对应废纸篓记录", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "externally restored Daily memo");
+	await seedCatalog(catalog, store, [observation]);
+	const identity = createIdentityReader();
+	const binding = makeBinding(observation, "2026082212345601", "identity-1");
+	identity.setState(observation.content, { kind: "identified", binding }, "ready", "identity-1");
+	identity.setActiveDeletes([{
+		memoId: binding.memoId,
+		deleteEventId: "e_22222222222222222222222222222222",
+		deleteCommitEventId: "e_33333333333333333333333333333333",
+		baseBindingId: binding.bindingId,
+		evidence: {
+			deletedAt: "2026-08-22T13:00:00.000Z",
+			sourcePath: observation.sourcePath,
+			deletedSourceRevision: observation.sourceRevision,
+			logicalDate: observation.logicalDate,
+			section: observation.section,
+			rawBlock: "- 12:34 externally restored Daily memo",
+			contentHash: observation.contentHash,
+			sourceMemoId: null,
+		},
+	}], "identity-2");
+	const service = new CatalogReadService({ catalog, identityLedger: identity.reader });
+
+	assert.equal((await service.query({ limit: 20 })).items[0]?.content, observation.content);
+	assert.equal((await service.listDeleted(20)).items.length, 0);
+});
+
+test("随机重逢只返回具有稳定 memoId 和 review 能力的候选", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const identified = makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "identified random candidate");
+	const syncing = makeObservation("Daily/2026-08-21.md", "2026-08-21", 1, "syncing random candidate");
+	await seedCatalogFiles(catalog, store, [identified, syncing]);
+	const identity = createIdentityReader();
+	const binding = makeBinding(identified, "2026082012345601", "identity-1");
+	identity.setState(identified.content, { kind: "identified", binding }, "ready", "identity-1");
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: identity.reader,
+		now: () => new Date(2026, 7, 26, 12, 0, 0),
+		random: () => 0,
+	});
+
+	const items = await service.getRandomReunionItems(5);
+
+	assert.deepEqual(items.map((item) => item.contentSnapshot), ["identified random candidate"]);
+});
+
+test("同步后的 review 状态会降低最近已回顾 memo 的下一次随机权重", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const unreviewed = makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "unreviewed random candidate");
+	const recentlyReviewed = makeObservation("Daily/2026-08-21.md", "2026-08-21", 1, "recently reviewed candidate");
+	await seedCatalogFiles(catalog, store, [unreviewed, recentlyReviewed]);
+	const identity = createIdentityReader();
+	const unreviewedBinding = makeBinding(unreviewed, "2026082012345601", "identity-1");
+	const reviewedBinding = { ...makeBinding(recentlyReviewed, "2026082112345601", "identity-1"), bindingId: "e_22222222222222222222222222222222" };
+	identity.setState(unreviewed.content, { kind: "identified", binding: unreviewedBinding }, "ready", "identity-1");
+	identity.setState(recentlyReviewed.content, { kind: "identified", binding: reviewedBinding }, "ready", "identity-1");
+	identity.setReviewState(reviewedBinding.memoId, 1, "2026-08-25T12:00:00.000Z");
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: identity.reader,
+		now: () => new Date(2026, 7, 26, 12, 0, 0),
+		random: () => 0.5,
+	});
+
+	const items = await service.getRandomReunionItems(1);
+
+	assert.deepEqual(items.map((item) => item.contentSnapshot), ["unreviewed random candidate"]);
 });
 
 test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影响", async () => {
@@ -203,6 +299,16 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	assert.equal((await service.getLibrarySummary()).value, null);
 	assert.equal(await service.getCoverageForRange("2026-08-01", "2026-08-31"), true);
 	assert.equal(await service.getCoverageForRange("2026-07-31", "2026-08-31"), false);
+	await store.setCoverage({
+		kind: "rebuilding",
+		sharedConfigurationComplete: true,
+		coveredFromDate: "2026-08-20",
+		pendingFileCount: 2,
+		coveredFileCount: 1,
+		totalFileCount: 3,
+	});
+	assert.equal(await service.getCoverageForRange("2026-08-20", "2026-08-20"), true);
+	assert.equal(await service.getCoverageForRange("2026-08-19", "2026-08-20"), false);
 	const pending = await service.queryRecordStatsDrilldown({
 		type: "range",
 		startDate: "2026-07-01",
@@ -210,6 +316,42 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	}, { limit: 50 });
 	assert.deepEqual(pending.items, []);
 	assert.equal(pending.readState, "history_building");
+});
+
+test("运行状态快照只读组合 Catalog、Identity、共享配置、Monthly 和旧版迁移", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	await store.setCoverage({
+		kind: "partial",
+		sharedConfigurationComplete: false,
+		coveredFromDate: "2026-08-20",
+		pendingFileCount: 2,
+		coveredFileCount: 1,
+		totalFileCount: 3,
+	});
+	const identity = createIdentityReader();
+	identity.setState("missing", { kind: "unbound" }, "conflicted", "identity-conflict");
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: identity.reader,
+		getSharedConfigurationStatus: () => "conflicted",
+		getProjectionState: () => "failed",
+		getLegacyImportStatus: () => "attention",
+	});
+
+	const snapshot = await service.getRuntimeSnapshot();
+
+	assert.equal(snapshot.catalog.coverage.kind, "partial");
+	assert.equal(snapshot.catalog.lifecycle.persistent, false);
+	assert.equal(snapshot.identity, "conflicted");
+	assert.equal(snapshot.sharedConfiguration, "conflicted");
+	assert.equal(snapshot.monthly, "failed");
+	assert.equal(snapshot.legacyMigration, "attention");
 });
 
 test("往日漫游按同日号查询、排除当天并支持跨页", async () => {
@@ -359,6 +501,7 @@ function createIdentityReader(): {
 	) => void;
 	setActiveDeletes: (records: IdentityLedgerDeleteRecord[], revision: string) => void;
 	setSourceMemoId: (memoId: string, sourceMemoId: string) => void;
+	setReviewState: (memoId: string, reviewCount: number, lastReviewedAt: string | null) => void;
 } {
 	let revision = "identity-absent";
 	let status: IdentityLedgerStatus = "absent";
@@ -366,6 +509,7 @@ function createIdentityReader(): {
 	const memos: Record<string, IdentityLedgerMaterializedMemo> = {};
 	let activeDeletes: IdentityLedgerDeleteRecord[] = [];
 	const sourceMemoIds = new Map<string, string>();
+	const reviews = new Map<string, { reviewCount: number; lastReviewedAt: string | null }>();
 	const reader: IdentityLedgerReader = {
 		getRevision: () => revision,
 		getStatus: () => status,
@@ -382,7 +526,7 @@ function createIdentityReader(): {
 		},
 		resolveObservationState: (observation) => states.get(observation.content) ?? { kind: "unbound" },
 		getSourceMemoId: (memoId) => sourceMemoIds.get(memoId) ?? null,
-		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		getReviewState: (memoId) => reviews.get(memoId) ?? { reviewCount: 0, lastReviewedAt: null },
 		getActiveDeletes: () => activeDeletes,
 	};
 	return {
@@ -391,7 +535,17 @@ function createIdentityReader(): {
 			states.set(content, state);
 			status = nextStatus;
 			revision = nextRevision;
-			if (state.kind === "conflicted") {
+			if (state.kind === "identified") {
+				memos[state.binding.memoId] = {
+					memoId: state.binding.memoId,
+					bindings: [state.binding],
+					conflicted: false,
+					conflictBaseBindingId: null,
+					sourceMemoIds: [],
+					reviewCount: 0,
+					lastReviewedAt: null,
+				};
+			} else if (state.kind === "conflicted") {
 				for (const memoId of state.memoIds) {
 					memos[memoId] = {
 						memoId,
@@ -411,6 +565,9 @@ function createIdentityReader(): {
 		},
 		setSourceMemoId: (memoId, sourceMemoId) => {
 			sourceMemoIds.set(memoId, sourceMemoId);
+		},
+		setReviewState: (memoId, reviewCount, lastReviewedAt) => {
+			reviews.set(memoId, { reviewCount, lastReviewedAt });
 		},
 	};
 }

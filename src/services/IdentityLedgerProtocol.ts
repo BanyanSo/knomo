@@ -242,6 +242,13 @@ export function assertIdentityLedgerEvent(value: unknown): asserts value is Iden
 				throw new Error("Invalid Identity Ledger event.");
 			}
 			return;
+		case "purge":
+			if (!hasExactKeys(evidence, ["deleteEventId"])
+				|| !EVENT_ID_PATTERN.test(readString(value.baseBindingId))
+				|| !EVENT_ID_PATTERN.test(readString(evidence.deleteEventId))) {
+				throw new Error("Invalid Identity Ledger event.");
+			}
+			return;
 		case "repair":
 			if (!hasExactKeys(evidence, ["observation"])
 				|| !EVENT_ID_PATTERN.test(readString(value.baseBindingId))

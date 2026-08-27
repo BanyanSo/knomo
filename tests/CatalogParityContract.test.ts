@@ -133,6 +133,8 @@ test("Catalog 协议和验收矩阵冻结批次 0 的产品决策", () => {
 	assert.equal(protocol.includes("不提供专属手动重建入口"), true);
 	assert.equal(protocol.includes("不自动删除目录或旧 Monthly 文件"), true);
 	assert.equal(protocol.includes("永久清理不得再次修改 Daily"), true);
+	assert.equal(protocol.includes("purge tombstone 不携带正文"), true);
+	assert.equal(protocol.includes("随机卡片不再提供手动“标记已回顾”"), true);
 	assert.deepEqual(fixture.intentionalDifferences, {
 		monthlyLocaleSource: "shared-config",
 		randomReviewTrigger: "successful-card-open",

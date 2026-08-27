@@ -18,6 +18,8 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	getDeletedMemoSummary: () => Promise<{ count: number; ids: string[] }>;
 	listDeletedMemos: () => Promise<TMemo[]>;
 	restoreMemo: (memo: TMemo) => Promise<TMemo | null>;
+	purgeMemo: (memo: TMemo) => Promise<void>;
+	confirmPurge: (memo: TMemo) => Promise<boolean>;
 	handleRestoredMemo: (deletedMemo: TMemo, restoredMemo: TMemo) => void;
 	isTrashActive: () => boolean;
 	showNotice: (message: string) => void;
@@ -107,12 +109,23 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		}
 
 		this.trashBusyMemoActions.set(memo.id, action);
-		this.options.requestRender("card-flow");
+		const renderBusyState = action !== "purge";
+		let trashChanged = false;
+		if (renderBusyState) this.options.requestRender("card-flow");
 		try {
-			const restoredMemo = await this.options.restoreMemo(memo);
-			this.removeTrashMemo(memo.id);
-			if (restoredMemo !== null) this.options.handleRestoredMemo(memo, restoredMemo);
-			this.options.showNotice(t("notice.restored"));
+			if (action === "purge") {
+				if (!await this.options.confirmPurge(memo)) return;
+				await this.options.purgeMemo(memo);
+				this.removeTrashMemo(memo);
+				trashChanged = true;
+				this.options.showNotice(t("notice.purged"));
+			} else {
+				const restoredMemo = await this.options.restoreMemo(memo);
+				this.removeTrashMemo(memo);
+				trashChanged = true;
+				if (restoredMemo !== null) this.options.handleRestoredMemo(memo, restoredMemo);
+				this.options.showNotice(t("notice.restored"));
+			}
 			try {
 				await this.options.forceRefreshViews();
 			} catch {
@@ -120,22 +133,27 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			}
 		} catch (error) {
 			this.options.showNotice(formatTrashActionErrorMessage(action, error));
-			this.options.requestRender("ui-state");
+			if (renderBusyState) this.options.requestRender("ui-state");
 		} finally {
 			this.trashBusyMemoActions.delete(memo.id);
-			this.options.requestRender("card-flow");
+			if (renderBusyState || trashChanged) this.options.requestRender("card-flow");
 		}
 	}
 
-	private removeTrashMemo(memoId: string): void {
-		this.trashMemos = (this.trashMemos ?? []).filter((memo) => memo.id !== memoId);
+	private removeTrashMemo(removedMemo: TMemo): void {
+		this.trashMemos = (this.trashMemos ?? []).filter((memo) => memo.id !== removedMemo.id);
 		this.trashCount = Math.max(0, this.trashCount - 1);
+		const identityMemoId = removedMemo.trashItem?.memoId;
+		if (identityMemoId !== undefined
+			&& !(this.trashMemos ?? []).some((memo) => memo.trashItem?.memoId === identityMemoId)) {
+			this.deletedMemoIds.delete(identityMemoId);
+		}
 	}
 }
 
-export function formatTrashActionErrorMessage(_action: TrashAction, error: unknown): string {
-	const actionLabel = t("error.restoreFailed");
-	const fallbackMessage = t("error.restoreFailedRetry");
+export function formatTrashActionErrorMessage(action: TrashAction, error: unknown): string {
+	const actionLabel = action === "purge" ? t("error.purgeFailed") : t("error.restoreFailed");
+	const fallbackMessage = action === "purge" ? t("error.purgeFailedRetry") : t("error.restoreFailedRetry");
 	const message = formatServiceError(error, fallbackMessage);
 	if (message === fallbackMessage || message.startsWith(actionLabel)) {
 		return message;

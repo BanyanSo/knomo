@@ -69,7 +69,7 @@ test("1.2.9 升级保留16位数字 memoId，新格式生成规则保持不变",
 	}]), /Invalid Identity Ledger event/u);
 });
 
-test("Identity Ledger 只接受冻结的九种基础事件", async () => {
+test("Identity Ledger 只接受当前冻结的十种基础事件", async () => {
 	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
 	const base = {
 		writerId: WRITER_A,
@@ -151,6 +151,13 @@ test("Identity Ledger 只接受冻结的九种基础事件", async () => {
 		{
 			...base,
 			eventId: eventId(9),
+			type: "purge",
+			baseBindingId: eventId(2),
+			evidence: { deleteEventId: eventId(6) },
+		},
+		{
+			...base,
+			eventId: eventId(10),
 			type: "repair",
 			baseBindingId: eventId(2),
 			evidence: { observation },
@@ -173,13 +180,14 @@ test("Identity Ledger 只接受冻结的九种基础事件", async () => {
 		"delete_payload",
 		"delete_commit",
 		"restore",
+		"purge",
 		"repair",
 	]);
-	const invalidContent = `${JSON.stringify({ ...base, eventId: eventId(10), type: "authority", baseBindingId: null, evidence: {} })}\n`;
+	const invalidContent = `${JSON.stringify({ ...base, eventId: eventId(11), type: "authority", baseBindingId: null, evidence: {} })}\n`;
 	const invalidDigest = await sha256IdentityLedgerText(invalidContent);
 	await assert.rejects(() => parseIdentityLedgerSegment(
 		IDENTITY_ROOT_A,
-		`${IDENTITY_ROOT_A}/writers/${WRITER_A}/segments/segment-${eventId(10)}-${invalidDigest}.jsonl`,
+		`${IDENTITY_ROOT_A}/writers/${WRITER_A}/segments/segment-${eventId(11)}-${invalidDigest}.jsonl`,
 		invalidContent,
 	), /Invalid Identity Ledger event/u);
 });
@@ -647,6 +655,123 @@ test("payload 保持 pending，只有 delete_commit 后才进入废纸篓", asyn
 	await restarted.initialize();
 	assert.equal(restarted.resolveObservation(restored)?.memoId, MEMO_A);
 	assert.equal(restarted.getActiveDeletes().length, 0);
+});
+
+test("purge 只追加空 tombstone，持久化后幂等隐藏 payload 且禁止恢复", async () => {
+	const dailyPath = "Daily/2026-08-22.md";
+	const vault = await createLedgerVault({ [dailyPath]: "## Memos\n- 09:00 正文\n" });
+	const service = createService(vault, WRITER_A, [MEMO_A], [
+		eventId(1), eventId(2), eventId(3), eventId(4), eventId(5),
+	]);
+	await service.initialize();
+	const observation = makeObservation(dailyPath, "a".repeat(64), 1, "正文");
+	const binding = await service.finishCreate(await service.beginCreate(createIntentInput(observation)), observation);
+	const deleted = await service.recordDeletePayload(binding, {
+		deletedAt: "2026-08-22T05:00:00.000Z",
+		sourcePath: observation.sourcePath,
+		deletedSourceRevision: "b".repeat(64),
+		logicalDate: observation.logicalDate,
+		section: observation.section,
+		rawBlock: "- 09:00 正文",
+		contentHash: observation.contentHash,
+		sourceMemoId: null,
+	});
+	const committed = await service.recordDeleteCommit(deleted);
+	const eventCountBeforePurge = service.getSnapshot().eventCount;
+	const dailyBefore = vault.read(dailyPath);
+
+	await Promise.all([service.recordPurge(committed), service.recordPurge(committed)]);
+
+	assert.equal(service.getActiveDeletes().length, 0);
+	assert.deepEqual(service.getSnapshot().memos[MEMO_A]?.purgedDeleteEventIds, [committed.deleteEventId]);
+	assert.equal(service.getSnapshot().eventCount, eventCountBeforePurge + 1);
+	assert.equal(service.resolveObservation(observation)?.memoId, MEMO_A);
+	assert.equal(vault.read(dailyPath), dailyBefore);
+	await assert.rejects(() => service.recordRestore(committed, observation), /permanently deleted/u);
+
+	const restarted = createService(vault, WRITER_B, [], []);
+	await restarted.initialize();
+	assert.equal(restarted.getActiveDeletes().length, 0);
+	assert.deepEqual(restarted.getSnapshot().memos[MEMO_A]?.purgedDeleteEventIds, [committed.deleteEventId]);
+	await restarted.recordPurge(committed);
+	assert.equal(restarted.getSnapshot().eventCount, eventCountBeforePurge + 1);
+
+	const purgePaths = vault.paths().filter((path) => vault.read(path)?.includes('"type":"purge"') === true);
+	const delayedReplica = await createLedgerVault();
+	delayedReplica.deliverFrom(vault, purgePaths);
+	const delayedReader = createService(delayedReplica, WRITER_B, [], []);
+	await delayedReader.initialize();
+	delayedReplica.deliverFrom(vault);
+	await delayedReader.initialize();
+	assert.equal(delayedReader.getActiveDeletes().length, 0);
+	assert.deepEqual(delayedReader.getSnapshot().memos[MEMO_A]?.purgedDeleteEventIds, [committed.deleteEventId]);
+});
+
+test("两台设备并发 purge 同一删除记录后按任意同步顺序收敛", async () => {
+	const baseVault = await createLedgerVault();
+	const base = createService(baseVault, WRITER_A, [MEMO_A], [eventId(1), eventId(2), eventId(3), eventId(4)]);
+	await base.initialize();
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
+	const binding = await base.finishCreate(await base.beginCreate(createIntentInput(observation)), observation);
+	const deleted = await base.recordDeletePayload(binding, {
+		deletedAt: "2026-08-22T05:00:00.000Z",
+		sourcePath: observation.sourcePath,
+		deletedSourceRevision: "b".repeat(64),
+		logicalDate: observation.logicalDate,
+		section: observation.section,
+		rawBlock: "- 09:00 正文",
+		contentHash: observation.contentHash,
+		sourceMemoId: null,
+	});
+	const committed = await base.recordDeleteCommit(deleted);
+	const vaultA = cloneVault(baseVault);
+	const vaultB = cloneVault(baseVault);
+	const writerA = createService(vaultA, WRITER_A, [], [eventId(10)]);
+	const writerB = createService(vaultB, WRITER_B, [], [eventId(11)]);
+	await writerA.initialize();
+	await writerB.initialize();
+
+	await Promise.all([writerA.recordPurge(committed), writerB.recordPurge(committed)]);
+	const readerAB = createService(mergeVaults(vaultA, vaultB), WRITER_A, [], []);
+	const readerBA = createService(mergeVaults(vaultB, vaultA), WRITER_B, [], []);
+	await readerAB.initialize();
+	await readerBA.initialize();
+
+	assert.equal(readerAB.getActiveDeletes().length, 0);
+	assert.deepEqual(readerAB.getSnapshot(), readerBA.getSnapshot());
+});
+
+test("identity 冲突期间拒绝 purge 并保留废纸篓记录", async () => {
+	const baseVault = await createLedgerVault();
+	const base = createService(baseVault, WRITER_A, [MEMO_A], [eventId(1), eventId(2), eventId(3), eventId(4)]);
+	await base.initialize();
+	const before = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
+	const binding = await base.finishCreate(await base.beginCreate(createIntentInput(before)), before);
+	const deleted = await base.recordDeletePayload(binding, {
+		deletedAt: "2026-08-22T05:00:00.000Z",
+		sourcePath: before.sourcePath,
+		deletedSourceRevision: "b".repeat(64),
+		logicalDate: before.logicalDate,
+		section: before.section,
+		rawBlock: "- 09:00 正文",
+		contentHash: before.contentHash,
+		sourceMemoId: null,
+	});
+	const committed = await base.recordDeleteCommit(deleted);
+	const forkA = cloneVault(baseVault);
+	const forkB = cloneVault(baseVault);
+	const writerA = createService(forkA, WRITER_A, [], [eventId(10)]);
+	const writerB = createService(forkB, WRITER_B, [], [eventId(11)]);
+	await writerA.initialize();
+	await writerB.initialize();
+	await writerA.rebindObservation(before, makeObservation(before.sourcePath, "c".repeat(64), 1, "候选 A"), "edit");
+	await writerB.rebindObservation(before, makeObservation(before.sourcePath, "d".repeat(64), 2, "候选 B"), "edit");
+	const conflicted = createService(mergeVaults(forkA, forkB), WRITER_A, [], [eventId(12)]);
+	await conflicted.initialize();
+
+	await assert.rejects(() => conflicted.recordPurge(committed), /identity is conflicted/u);
+	assert.equal(conflicted.getActiveDeletes().length, 1);
+	assert.deepEqual(conflicted.getSnapshot().memos[MEMO_A]?.purgedDeleteEventIds, []);
 });
 
 test("重启续跑只在 Daily 精确命中删除后 revision 时 finalize", async () => {

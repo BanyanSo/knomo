@@ -188,6 +188,7 @@ test("renders a retry action for a Time buoy Catalog error", async () => {
 		loading: false,
 		error: new Error("corrupt shard"),
 		todayError: null,
+		complete: false,
 		activeTab: "today",
 		today: [],
 		upcoming: [],
@@ -207,6 +208,7 @@ test("renders accessible Time buoy tabs and the active tab empty state", async (
 		loading: false,
 		error: null,
 		todayError: null,
+		complete: true,
 		activeTab: "upcoming",
 		today: [],
 		upcoming: [],
@@ -220,6 +222,28 @@ test("renders accessible Time buoy tabs and the active tab empty state", async (
 	assert.equal(root.find("[id='time-buoy-test-panel-today']")?.getAttr("hidden"), "");
 	assert.equal(root.getText().includes("No upcoming buoys"), true);
 	assert.equal(root.getText().includes("Memos set for a future date will surface when the day arrives."), true);
+});
+
+test("labels upcoming and past Time buoy tabs as partial without hiding known results", async () => {
+	await obsidianStubReady;
+	const { renderTimeBuoyPage } = await import("../src/ui/TimeBuoyPage");
+	const root = new TestElement("div");
+	const memo = { id: "memo-1" } as never;
+
+	const result = renderTimeBuoyPage(root.asHtml(), {
+		loading: false,
+		error: null,
+		todayError: null,
+		complete: false,
+		activeTab: "past",
+		today: [],
+		upcoming: [],
+		past: [{ memo, primaryTargetDate: "2026-07-10", targetDates: ["2026-07-10"] }],
+	}, { idPrefix: "time-buoy-test" });
+
+	assert.equal(result.items.length, 1);
+	assert.equal(root.find("[data-time-buoy-partial]")?.getAttr("role"), "status");
+	assert.match(root.getText(), /partial results/i);
 });
 
 test("appends Time buoy cards directly without date titles or grouping containers", async () => {

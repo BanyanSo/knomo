@@ -13,6 +13,7 @@ interface RandomReunionControllerOptions<TMemo extends MemoRecord> {
 	prepareCatalogData: () => Promise<void>;
 	getMemos: () => TMemo[];
 	getRandomReunionMemos: (count: number, memos: TMemo[]) => Promise<TMemo[]>;
+	openRandomReunionMemo: (memo: TMemo) => Promise<void>;
 	markRandomReunionReviewed: (memoId: string) => Promise<void>;
 	isRandomActive: () => boolean;
 	showNotice: (message: string) => void;
@@ -22,6 +23,7 @@ interface RandomReunionControllerOptions<TMemo extends MemoRecord> {
 export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	private memos: TMemo[] | null = null;
 	private loading = false;
+	private readonly openingMemoIds = new Set<string>();
 
 	constructor(private readonly options: RandomReunionControllerOptions<TMemo>) {}
 
@@ -65,4 +67,32 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	async markReviewed(memoId: string): Promise<void> {
 		await this.options.markRandomReunionReviewed(memoId);
 	}
+
+	async openMemo(memoId: string): Promise<void> {
+		if (this.openingMemoIds.has(memoId)) return;
+		const memo = this.memos?.find((item) => item.id === memoId);
+		if (memo === undefined) return;
+		this.openingMemoIds.add(memoId);
+		try {
+			try {
+				await this.options.openRandomReunionMemo(memo);
+			} catch (error) {
+				this.options.showNotice(formatRandomReunionActionError(t("error.randomOpenFailed"), error));
+				return;
+			}
+			try {
+				await this.options.markRandomReunionReviewed(memo.id);
+			} catch (error) {
+				this.options.showNotice(formatRandomReunionActionError(t("error.randomReviewSaveFailed"), error));
+			}
+		} finally {
+			this.openingMemoIds.delete(memoId);
+		}
+	}
+}
+
+function formatRandomReunionActionError(actionLabel: string, error: unknown): string {
+	const message = formatServiceError(error, actionLabel);
+	if (message === actionLabel || message.startsWith(actionLabel)) return message;
+	return t("error.actionFailedWithReason", { action: actionLabel, message });
 }

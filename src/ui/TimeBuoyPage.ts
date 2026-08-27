@@ -91,6 +91,17 @@ function renderTabs(
 		}
 	}
 	const items = [...snapshot[snapshot.activeTab]];
+	if (activePanel !== null && snapshot.activeTab !== "today" && !snapshot.complete) {
+		activePanel.createDiv({
+			cls: "knomo-time-buoy-partial",
+			text: t("timeBuoy.partial"),
+			attr: {
+				role: "status",
+				"aria-live": "polite",
+				"data-time-buoy-partial": "",
+			},
+		});
+	}
 	if (activePanel !== null && items.length === 0) {
 		const copy = getEmptyCopy(snapshot.activeTab);
 		renderKnomoEmptyState(activePanel, copy.title, copy.description);

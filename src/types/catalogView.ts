@@ -10,6 +10,9 @@ import type {
 	ObservationHandle,
 	ResolvedMemo,
 } from "./catalog";
+import type { IdentityLedgerStatus } from "./identityLedger";
+import type { KnomoSharedConfigStatus } from "./knomoConfig";
+import type { LegacyIdentityImportStatus } from "./legacyMigration";
 
 export type CatalogReadState = "ready" | "history_building" | "storage_unavailable";
 export type CatalogContentState = "ready" | "scanning" | "unavailable";
@@ -24,6 +27,17 @@ export interface CatalogReadStatus {
 	identity: CatalogIdentityState;
 	projection: MonthlyProjectionState;
 	migration: LegacyMigrationState;
+}
+
+export interface KnomoRuntimeSnapshot {
+	catalog: {
+		coverage: CatalogCoverage;
+		lifecycle: CatalogStoreLifecycle;
+	};
+	identity: IdentityLedgerStatus;
+	sharedConfiguration: KnomoSharedConfigStatus;
+	monthly: MonthlyProjectionState;
+	legacyMigration: LegacyIdentityImportStatus;
 }
 
 export interface CatalogMemoItem {
@@ -144,6 +158,7 @@ export interface TrashMemoItem {
 	content: string;
 	contentHash: string;
 	sourceMemoId: string | null;
+	purgeAllowed: boolean;
 }
 
 export interface TrashMemoPage {

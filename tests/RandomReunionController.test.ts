@@ -28,6 +28,7 @@ test("refreshes random reunion once while loading and preserves render transitio
 			requestedMemos = memos;
 			return randomPromise;
 		},
+		openRandomReunionMemo: async () => {},
 		markRandomReunionReviewed: async () => {},
 		isRandomActive: () => true,
 		showNotice: () => {},
@@ -66,6 +67,7 @@ test("reports random reunion refresh errors and leaves an empty result", async (
 		getRandomReunionMemos: async () => {
 			throw new Error("random source unavailable");
 		},
+		openRandomReunionMemo: async () => {},
 		markRandomReunionReviewed: async () => {},
 		isRandomActive: () => true,
 		showNotice: (message) => notices.push(message),
@@ -95,6 +97,7 @@ test("does not select random memos when full loading fails", async () => {
 			randomCalls += 1;
 			return [];
 		},
+		openRandomReunionMemo: async () => {},
 		markRandomReunionReviewed: async () => {},
 		isRandomActive: () => true,
 		showNotice: (message) => notices.push(message),
@@ -116,6 +119,7 @@ test("clears cached random reunion memos before the next Catalog refresh", async
 		prepareCatalogData: async () => {},
 		getMemos: () => [firstMemo, secondMemo],
 		getRandomReunionMemos: async () => [firstMemo, secondMemo],
+		openRandomReunionMemo: async () => {},
 		markRandomReunionReviewed: async () => {},
 		isRandomActive: () => false,
 		showNotice: () => {},
@@ -128,13 +132,14 @@ test("clears cached random reunion memos before the next Catalog refresh", async
 	assert.equal(controller.getSnapshot().memos, null);
 });
 
-test("marks a random reunion memo reviewed only through the explicit command", async () => {
+test("keeps explicit review available for Time buoy cards", async () => {
 	const { RandomReunionController } = await loadController();
 	const reviewedMemoIds: string[] = [];
 	const controller = new RandomReunionController({
 		prepareCatalogData: async () => {},
 		getMemos: () => [],
 		getRandomReunionMemos: async () => [],
+		openRandomReunionMemo: async () => {},
 		markRandomReunionReviewed: async (memoId) => {
 			reviewedMemoIds.push(memoId);
 		},
@@ -146,6 +151,69 @@ test("marks a random reunion memo reviewed only through the explicit command", a
 	await controller.markReviewed("memo-1");
 
 	assert.deepEqual(reviewedMemoIds, ["memo-1"]);
+});
+
+test("opens a random memo once and records exactly one review after Daily succeeds", async () => {
+	const { RandomReunionController } = await loadController();
+	const memo = makeMemo("memo-1");
+	const events: string[] = [];
+	let resolveOpen!: () => void;
+	const openGate = new Promise<void>((resolve) => { resolveOpen = resolve; });
+	const controller = new RandomReunionController({
+		prepareCatalogData: async () => {},
+		getMemos: () => [memo],
+		getRandomReunionMemos: async () => [memo],
+		openRandomReunionMemo: async () => {
+			events.push("open");
+			await openGate;
+		},
+		markRandomReunionReviewed: async (memoId) => { events.push(`review:${memoId}`); },
+		isRandomActive: () => true,
+		showNotice: () => {},
+		requestRender: () => {},
+	});
+	await controller.refresh();
+
+	const first = controller.openMemo(memo.id);
+	const second = controller.openMemo(memo.id);
+	assert.deepEqual(events, ["open"]);
+	resolveOpen();
+	await Promise.all([first, second]);
+
+	assert.deepEqual(events, ["open", "review:memo-1"]);
+});
+
+test("does not review when Daily opening fails and distinguishes review persistence failure", async () => {
+	const { RandomReunionController } = await loadController();
+	const memo = makeMemo("memo-1");
+	const notices: string[] = [];
+	let reviewCalls = 0;
+	let failOpen = true;
+	const controller = new RandomReunionController({
+		prepareCatalogData: async () => {},
+		getMemos: () => [memo],
+		getRandomReunionMemos: async () => [memo],
+		openRandomReunionMemo: async () => {
+			if (failOpen) throw new Error("Daily unavailable");
+		},
+		markRandomReunionReviewed: async () => {
+			reviewCalls += 1;
+			throw new Error("Identity unavailable");
+		},
+		isRandomActive: () => true,
+		showNotice: (message) => notices.push(message),
+		requestRender: () => {},
+	});
+	await controller.refresh();
+
+	await controller.openMemo(memo.id);
+	assert.equal(reviewCalls, 0);
+	assert.equal(notices[0], "Random revisit failed to open: Daily unavailable");
+
+	failOpen = false;
+	await controller.openMemo(memo.id);
+	assert.equal(reviewCalls, 1);
+	assert.equal(notices[1], "Daily note opened, but review status was not saved: Identity unavailable");
 });
 
 async function loadController(): Promise<typeof import("../src/ui/RandomReunionController")> {

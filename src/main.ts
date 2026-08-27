@@ -43,8 +43,7 @@ import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
-import type { CatalogRefreshResult } from "./ui/KnomoView";
-import type { CatalogFileRevisionBatch } from "./types/catalog";
+import type { CatalogFileRevisionBatch, CatalogRefreshResult } from "./types/catalog";
 import { formatDatePart } from "./utils/date";
 import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
 
@@ -90,7 +89,7 @@ export default class KnomoPlugin extends Plugin {
 		const memoCatalogStore = new FallbackMemoCatalogStore(
 			new IndexedDbMemoCatalogStore(createCatalogDatabaseName(this.app)),
 			new InMemoryMemoCatalogStore(),
-			() => this.catalogIndexCoordinator?.refreshLocalCatalog(),
+			async () => { await this.catalogIndexCoordinator?.refreshLocalCatalog(); },
 		);
 		this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
 		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
@@ -263,11 +262,15 @@ export default class KnomoPlugin extends Plugin {
 					return dailyNoteService.getDailyNotePathForDateWithConfig(date, getEffectiveDailyConfig());
 				},
 				refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
-				refreshLocalCatalog: () => this.catalogIndexCoordinator?.refreshLocalCatalog() ?? Promise.resolve(),
+				refreshLocalCatalog: () => {
+					if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
+					return this.catalogIndexCoordinator.refreshLocalCatalog();
+				},
 				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
 				getMemoTimeFormat: () => this.settingsService.getSettings().memoTimeFormat,
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
+				getSharedConfigurationStatus: () => knomoSharedConfigService.getStatus(),
 			},
 			markdownMutationService,
 			identityLedgerService,
@@ -564,18 +567,15 @@ export default class KnomoPlugin extends Plugin {
 		if (this.manualRefreshPromise !== null) {
 			return this.manualRefreshPromise;
 		}
-		const refresh = (this.memoCommandService?.refreshLocalCatalog() ?? Promise.resolve()).then(async () => {
-				const coverage = await this.memoCatalogService?.getStore().getCoverage();
-				return {
-					scannedFiles: coverage?.totalFileCount ?? 0,
-					created: coverage?.coveredFileCount ?? 0,
-					updated: 0,
-					deleted: 0,
-					skipped: 0,
-					failed: coverage?.pendingFileCount ?? 0,
-					errors: [],
-				};
-			});
+		const refresh = this.memoCommandService?.refreshLocalCatalog() ?? Promise.resolve({
+			scannedFiles: 0,
+			created: 0,
+			updated: 0,
+			deleted: 0,
+			skipped: 0,
+			failed: 0,
+			errors: [],
+		});
 		this.manualRefreshPromise = refresh
 			.then(async (result) => {
 				await this.refreshOpenViews();

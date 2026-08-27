@@ -74,13 +74,20 @@ test("builds card action and trash action metadata", () => {
 		{ action: "delete", className: "knomo-card-action is-danger" },
 	]);
 	assert.equal(getTrashActionClass("restore"), "knomo-inline-button");
+	assert.equal(getTrashActionClass("purge"), "knomo-inline-button is-danger");
 	assert.deepEqual(getTrashActionState("restore", null), { disabled: false, busy: false });
 	assert.deepEqual(getTrashActionState("restore", "restore"), { disabled: true, busy: true });
-	assert.deepEqual(getTrashCardActions("restore"), [
+	assert.deepEqual(getTrashActionState("purge", null, false), { disabled: true, busy: false });
+	assert.deepEqual(getTrashCardActions("restore", true), [
 		{
 			action: "restore",
 			className: "knomo-inline-button",
 			state: { disabled: true, busy: true },
+		},
+		{
+			action: "purge",
+			className: "knomo-inline-button is-danger",
+			state: { disabled: true, busy: false },
 		},
 	]);
 	assert.equal(getTrashMemoCardClass(null), "knomo-card knomo-trash-card");

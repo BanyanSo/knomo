@@ -1,7 +1,7 @@
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
-import type { ResolvedMemo } from "../types/catalog";
+import type { CatalogRefreshResult, ResolvedMemo } from "../types/catalog";
 import type {
 	CatalogFeatureQuery,
 	CatalogMemoItem,
@@ -23,6 +23,7 @@ import type {
 	MarkdownMutationResult,
 	MarkdownMutationService as MarkdownMutationContract,
 } from "../types/memoOperations";
+import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import { formatDatePart, formatTimePart } from "../utils/date";
 import { hashMemoContent } from "../utils/hash";
 import { withCreatedAtAlias } from "../utils/references";
@@ -33,11 +34,12 @@ import type { MemoCatalogService } from "./MemoCatalogService";
 export interface MemoCommandServiceOptions {
 	getDailyPathForDate?: (logicalDate: string) => Promise<string>;
 	refreshCatalogPaths: (paths: readonly string[]) => Promise<void>;
-	refreshLocalCatalog: () => Promise<void>;
+	refreshLocalCatalog: () => Promise<CatalogRefreshResult>;
 	getProjectionState?: () => MonthlyProjectionState;
 	getMemoTimeFormat: () => "HH:mm" | "HH:mm:ss";
 	rebuildLocalCatalog: () => Promise<void>;
 	getLegacyImportStatus?: () => import("../types/legacyMigration").LegacyIdentityImportStatus;
+	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -62,9 +64,10 @@ export class MemoCommandService {
 		this.readService = new CatalogReadService({
 			catalog,
 			identityLedger,
-			requestObservationScan: options.refreshLocalCatalog,
+			requestObservationScan: async () => { await options.refreshLocalCatalog(); },
 			getProjectionState: options.getProjectionState,
 			getLegacyImportStatus: options.getLegacyImportStatus,
+			getSharedConfigurationStatus: options.getSharedConfigurationStatus,
 			now: options.now,
 			random: options.random,
 		});
@@ -79,9 +82,10 @@ export class MemoCommandService {
 		await this.readService.materializeResolutionSnapshot();
 	}
 
-	async refreshLocalCatalog(): Promise<void> {
-		await this.options.refreshLocalCatalog();
+	async refreshLocalCatalog(): Promise<CatalogRefreshResult> {
+		const result = await this.options.refreshLocalCatalog();
 		await this.readService.materializeResolutionSnapshot();
+		return result;
 	}
 
 	getOperationalState(readState: CatalogReadState = this.readService.getLastReadState() ?? "history_building"): CatalogOperationalState {
@@ -280,6 +284,20 @@ export class MemoCommandService {
 			memoId: item.memoId,
 			pending,
 		});
+	}
+
+	async purge(item: TrashMemoItem): Promise<void> {
+		if (this.identityLedger.getActiveDeletes === undefined
+			|| this.identityLedger.recordPurge === undefined) {
+			throw new Error("Identity Ledger permanent delete is unavailable.");
+		}
+		const record = this.identityLedger.getActiveDeletes()
+			.find((candidate) => candidate.deleteEventId === item.deleteEventId
+				&& candidate.memoId === item.memoId);
+		if (record === undefined || record.deleteCommitEventId === null) {
+			throw new Error("Deleted memo payload is no longer active.");
+		}
+		await this.identityLedger.recordPurge(record);
 	}
 
 	async createReferenceText(item: CatalogMemoItem, sourcePath = ""): Promise<MemoReferenceResult> {

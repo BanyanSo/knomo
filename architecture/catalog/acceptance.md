@@ -65,6 +65,9 @@
 | CAT-PURGE-003 | 对同一 `memoId` 重复永久清理 | 结果幂等，不产生新的可见状态或重复修改 Daily |
 | CAT-PURGE-004 | 清理完成后检查 Daily | 不执行第二次正文删除，也不改写其他 Daily 字节 |
 | CAT-PURGE-005 | 永久清理确认文案 | 明确说明 Knomo 不再可恢复，但不承诺清除同步历史和用户备份 |
+| CAT-PURGE-006 | identity 冲突、delete commit 未完成或记录已不在废纸篓 | 拒绝 purge，保留恢复数据和界面记录 |
+| CAT-PURGE-007 | purge 先到、旧 delete payload 后到或两设备并发 purge | 最终均不重新显示删除记录，状态与同步顺序无关 |
+| CAT-PURGE-008 | purge 后旧 Daily 正文通过外部同步重新出现 | 正文 observation 正常显示，purge 不遮蔽 Daily 真相 |
 
 ## 6. 配置、投影与重建
 
@@ -82,6 +85,7 @@
 | CAT-PROJ-001 | 重建 Monthly | 正文只从实际 Daily 读取 |
 | CAT-PROJ-002 | Monthly 写入失败 | 投影独立失败，不改变 Daily 与 identity |
 | CAT-STORE-001 | IndexedDB 丢失或不可用 | 使用内存 fallback 并从 Daily 渐进重建 |
+| CAT-STORE-002 | 内存 fallback 扫描超过 5000 条 observation | 从最旧文件分区淘汰，保留条数不超过上限且 coverage 始终为 partial |
 | CAT-ROOT-001 | 用户显式迁移数据根 | copy、verify 成功后才更新设置，旧根保留 |
 
 ## 7. 查询、筛选与分页
@@ -104,12 +108,21 @@
 | CAT-REVIEW-001 | 打开某日“往日回顾” | 使用完整已覆盖历史范围，排除今天和已删除记录 |
 | CAT-RANDOM-001 | 随机重逢卡片成功打开并展示 | 自动为对应 `memoId` 记一次已回顾，无需手动按钮 |
 | CAT-RANDOM-002 | 同一次打开流程因重渲染或重试重复回调 | review 只记录一次 |
+| CAT-RANDOM-003 | Daily 打开失败 | 不记录 review，并提示打开失败 |
+| CAT-RANDOM-004 | Daily 已打开但 review 持久化失败 | 保持已打开结果，并提示回顾状态未保存 |
+| CAT-RANDOM-005 | identity 同步中或 review 能力不可用 | 不进入随机候选；时光浮标的手动回顾操作不受影响 |
 | CAT-STATS-001 | 从全部记录统计点击有标签、无标签、有图片、任务或引用 | 每个钻取返回完整且口径一致的结果集 |
 | CAT-RANGE-001 | Catalog 尚在渐进扫描时查看全库统计或回顾 | 显示覆盖范围或未完成状态，不把部分数据标成全库 |
 | CAT-TIMEBUOY-001 | 打开时光浮标 | 从统一 Catalog 与 Daily 派生，无专属手动重建入口 |
 | CAT-TIMEBUOY-002 | Catalog 失效后恢复时光浮标 | 通过统一重扫和状态提示恢复，不引入第二套索引 |
+| CAT-TIMEBUOY-003 | 今日 Daily 已扫描但全库仍在 rebuilding | 今日浮标立即可用，不等待历史扫描完成 |
+| CAT-TIMEBUOY-004 | 全库 coverage 尚未完成时查看未来或往日浮标 | 展示已知条目并明确标记“部分结果”，不得显示为完整列表 |
+| CAT-REFRESH-001 | 手动刷新且 Daily 没有 revision 变化 | 提示“已是最新”，新增、更新、删除和失败均为 0 |
+| CAT-REFRESH-002 | 手动刷新期间出现新增、正文 revision 更新、删除和读取失败 | 按刷新前后文件 revision 返回真实分类和失败明细，不使用 coveredFileCount 代替新增数 |
+| CAT-RUNTIME-001 | 打开设置页运行状态 | 只读展示 Catalog、Identity、共享配置、Monthly 和 1.2.9 迁移状态；卡片流不展示正常后台中间态 |
 | CAT-A11Y-001 | 仅使用键盘操作搜索、筛选、翻页、回顾、废纸篓和确认框 | 控件可达、焦点可见、名称可读，关闭弹层后焦点回到触发点 |
 | CAT-LIFECYCLE-001 | 反复打开和关闭视图 | 事件监听、定时器和订阅被释放，不产生重复响应 |
+| CAT-LIFECYCLE-002 | Daily 读取或解析期间卸载插件 | 清除扫描 timer，未进入提交阶段的任务不得在 unload 后写入 Catalog |
 
 ## 9. 1.2.9 行为基线 fixture
 

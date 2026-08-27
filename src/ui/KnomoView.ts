@@ -13,7 +13,7 @@ import { RecordStatsService } from "../services/RecordStatsService";
 import type { RecordStatsView } from "../services/RecordStatsService";
 import type { SettingsService } from "../services/SettingsService";
 import type { ShuffleDayService } from "../services/ShuffleDayService";
-import type { CatalogCoverage } from "../types/catalog";
+import type { CatalogCoverage, CatalogRefreshResult } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
 	CatalogFeatureQuery,
@@ -253,16 +253,6 @@ interface RenderUiStateOptions {
 type CardRenderSurface = "card-flow" | "mobile-search";
 type ImageLoadPauseReason = "image-preview" | "mobile-search";
 type PausableImageLoadSurface = Exclude<CardImageLoadSurface, "image-preview">;
-
-export interface CatalogRefreshResult {
-	scannedFiles: number;
-	created: number;
-	updated: number;
-	deleted: number;
-	skipped: number;
-	failed: number;
-	errors: string[];
-}
 
 type TimeBuoyPickerFocusTarget = "default" | "input";
 
@@ -729,6 +719,19 @@ export class KnomoView extends ItemView {
 				}
 				throw new Error("Deleted memo source is unavailable.");
 			},
+			purgeMemo: async (memo) => {
+				if (isTrashMemoView(memo) && memo.trashItem.purgeAllowed) {
+					await this.memoCommandService.purge(memo.trashItem);
+					return;
+				}
+				throw new Error("Permanent delete is unavailable for this memo.");
+			},
+			confirmPurge: () => showKnomoConfirmModal(this.app, {
+				title: t("trash.purge"),
+				message: t("confirm.purgeMemo"),
+				confirmLabel: t("trash.purge"),
+				danger: true,
+			}),
 			handleRestoredMemo: (deletedMemo, restoredMemo) => this.handleRestoredTrashMemo(deletedMemo, restoredMemo),
 			isTrashActive: () => this.activeNav === "trash",
 			showNotice: (message) => new Notice(message),
@@ -737,7 +740,7 @@ export class KnomoView extends ItemView {
 		});
 		this.timeBuoyViewController = new TimeBuoyViewController({
 			getNow: () => new Date(),
-			isTodayIndexReady: async () => this.catalogStatus.content === "ready",
+			isTodayIndexReady: (targetDate) => this.catalogReadService.getCoverageForRange(targetDate, targetDate),
 			ensureReady: async () => undefined,
 			queryAll: () => this.catalogReadService.queryAllTimeBuoys(),
 			queryDate: (date) => this.catalogReadService.queryTimeBuoysForDate(date),
@@ -753,6 +756,11 @@ export class KnomoView extends ItemView {
 			prepareCatalogData: async () => undefined,
 			getMemos: () => this.memos,
 			getRandomReunionMemos: (count) => this.catalogReadService.getRandomReunionItems(count),
+			openRandomReunionMemo: async (memo) => {
+				const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
+				if (!(file instanceof TFile)) throw new Error(t("error.dailyNoteMissing"));
+				await openMemoDailyNoteInNewTab(this.app.workspace, file, memo.dailyRef.lineNumberHint);
+			},
 			markRandomReunionReviewed: async (memoId) => {
 				const memo = this.findMemoById(memoId);
 				if (memo !== null && isCatalogMemoView(memo)) {
@@ -3544,6 +3552,10 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "open-daily") {
+				if (this.activeNav === "random") {
+					await this.randomReunionController.openMemo(memo.id);
+					return;
+				}
 				const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
 				if (shouldCloseMobileSearch) {
 					this.closeMobileSearchPage();
@@ -5673,6 +5685,10 @@ export class KnomoView extends ItemView {
 			this.closeMobileSearchPage();
 		} else {
 			this.syncCardMenuState();
+		}
+		if (randomReunionCard) {
+			await this.randomReunionController.openMemo(memoId);
+			return;
 		}
 		try {
 			await openMemoDailyNoteDefault(this.app.workspace, memo);

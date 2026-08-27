@@ -13,6 +13,8 @@ test("tracks deleted memo ids once and refreshes the trash snapshot", async () =
 		getDeletedMemoSummary: async () => ({ count: deletedMemos.length, ids: deletedMemos.map((memo) => memo.id) }),
 		listDeletedMemos: async () => deletedMemos,
 		restoreMemo: async () => deletedMemos[0],
+		purgeMemo: async () => {},
+		confirmPurge: async () => true,
 		handleRestoredMemo: () => {},
 		isTrashActive: () => false,
 		showNotice: () => {},
@@ -48,6 +50,8 @@ test("loads trash once while busy and preserves loading render transitions", asy
 			return listPromise;
 		},
 		restoreMemo: async () => makeMemo("memo-1"),
+		purgeMemo: async () => {},
+		confirmPurge: async () => true,
 		handleRestoredMemo: () => {},
 		isTrashActive: () => true,
 		showNotice: () => {},
@@ -93,6 +97,8 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 			await restorePromise;
 			return { ...memo, status: "active" };
 		},
+		purgeMemo: async () => {},
+		confirmPurge: async () => true,
 		handleRestoredMemo: (deletedMemo, memoAfterRestore) => {
 			handledRestoredMemos.push({ deletedMemo, restoredMemo: memoAfterRestore });
 		},
@@ -136,6 +142,8 @@ test("restore 已成功后视图刷新失败不会再显示恢复失败", async 
 		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
 		listDeletedMemos: async () => [memo],
 		restoreMemo: async () => ({ ...memo, status: "active" }),
+		purgeMemo: async () => {},
+		confirmPurge: async () => true,
 		handleRestoredMemo: () => {},
 		isTrashActive: () => false,
 		showNotice: (message) => notices.push(message),
@@ -151,12 +159,79 @@ test("restore 已成功后视图刷新失败不会再显示恢复失败", async 
 	assert.equal(controller.getSnapshot().trashCount, 0);
 });
 
+test("purge waits for confirmation, removes only after durable success, and deduplicates clicks", async () => {
+	const { TrashMemoController } = await loadController();
+	const memo = makeMemo("memo-1");
+	const notices: string[] = [];
+	let purgeCalls = 0;
+	let resolvePurge!: () => void;
+	const purgeGate = new Promise<void>((resolve) => { resolvePurge = resolve; });
+	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
+		listDeletedMemos: async () => [memo],
+		restoreMemo: async () => null,
+		purgeMemo: async () => {
+			purgeCalls += 1;
+			await purgeGate;
+		},
+		confirmPurge: async () => true,
+		handleRestoredMemo: () => {},
+		isTrashActive: () => true,
+		showNotice: (message) => notices.push(message),
+		forceRefreshViews: async () => {},
+		requestRender: () => {},
+	});
+	await controller.loadTrashMemos();
+
+	const first = controller.handleTrashAction("purge", memo);
+	const second = controller.handleTrashAction("purge", memo);
+	await Promise.resolve();
+	assert.equal(purgeCalls, 1);
+	assert.equal(controller.getSnapshot().trashCount, 1);
+	resolvePurge();
+	await Promise.all([first, second]);
+
+	assert.equal(controller.getSnapshot().trashCount, 0);
+	assert.deepEqual(notices, ["Permanently deleted"]);
+});
+
+test("purge cancellation and persistence failure both keep the recoverable record", async () => {
+	const { TrashMemoController } = await loadController();
+	const memo = makeMemo("memo-1");
+	const notices: string[] = [];
+	let confirmed = false;
+	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 1, ids: [memo.id] }),
+		listDeletedMemos: async () => [memo],
+		restoreMemo: async () => null,
+		purgeMemo: async () => { throw new Error("disk unavailable"); },
+		confirmPurge: async () => confirmed,
+		handleRestoredMemo: () => {},
+		isTrashActive: () => true,
+		showNotice: (message) => notices.push(message),
+		forceRefreshViews: async () => {},
+		requestRender: () => {},
+	});
+	await controller.loadTrashMemos();
+
+	await controller.handleTrashAction("purge", memo);
+	assert.equal(controller.getSnapshot().trashCount, 1);
+	assert.deepEqual(notices, []);
+
+	confirmed = true;
+	await controller.handleTrashAction("purge", memo);
+	assert.equal(controller.getSnapshot().trashCount, 1);
+	assert.deepEqual(notices, ["Permanent delete failed: disk unavailable"]);
+});
+
 test("formats trash action errors without duplicating the action label", async () => {
 	const { formatTrashActionErrorMessage } = await loadController();
 
 	assert.equal(formatTrashActionErrorMessage("restore", null), "Restore failed. Please try again later");
 	assert.equal(formatTrashActionErrorMessage("restore", new Error("disk unavailable")), "Restore failed: disk unavailable");
 	assert.equal(formatTrashActionErrorMessage("restore", new Error("Restore failed: conflict")), "Restore failed: conflict");
+	assert.equal(formatTrashActionErrorMessage("purge", null), "Permanent delete failed. Please try again later");
+	assert.equal(formatTrashActionErrorMessage("purge", new Error("disk unavailable")), "Permanent delete failed: disk unavailable");
 });
 
 async function loadController(): Promise<typeof import("../src/ui/TrashMemoController")> {

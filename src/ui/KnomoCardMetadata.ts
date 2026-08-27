@@ -36,7 +36,7 @@ export interface TrashCardActionMeta {
 }
 
 const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"];
-const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore"];
+const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
 const CJK_CONTENT_MIN_HAN_COUNT = 8;
 const CJK_CONTENT_MIN_HAN_RATIO = 0.25;
 const HAN_CHARACTER_PATTERN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
@@ -110,22 +110,26 @@ function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction)
 	return false;
 }
 
-export function getTrashActionClass(_action: TrashAction): string {
-	return "knomo-inline-button";
+export function getTrashActionClass(action: TrashAction): string {
+	return action === "purge" ? "knomo-inline-button is-danger" : "knomo-inline-button";
 }
 
-export function getTrashActionState(action: TrashAction, busyAction: TrashAction | null): TrashActionState {
+export function getTrashActionState(
+	action: TrashAction,
+	busyAction: TrashAction | null,
+	purgeAllowed = true,
+): TrashActionState {
 	return {
-		disabled: busyAction !== null,
+		disabled: busyAction !== null || (action === "purge" && !purgeAllowed),
 		busy: busyAction === action,
 	};
 }
 
-export function getTrashCardActions(busyAction: TrashAction | null): TrashCardActionMeta[] {
+export function getTrashCardActions(busyAction: TrashAction | null, purgeAllowed: boolean): TrashCardActionMeta[] {
 	return TRASH_CARD_ACTIONS.map((action) => ({
 		action,
 		className: getTrashActionClass(action),
-		state: getTrashActionState(action, busyAction),
+		state: getTrashActionState(action, busyAction, purgeAllowed),
 	}));
 }
 

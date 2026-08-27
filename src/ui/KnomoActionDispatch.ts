@@ -1,7 +1,7 @@
 export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-time-buoy" | "insert-list" | "insert-numbered-list";
 export type MemoAction = "edit" | "reference" | "open-daily" | "copy-text" | "copy-link" | "delete"
 	| "confirm-identity" | "mark-reviewed";
-export type TrashAction = "restore";
+export type TrashAction = "restore" | "purge";
 export type KnomoSimpleAction =
 	| "toggle-card-menu"
 	| "refresh-random-reunion"
@@ -161,5 +161,5 @@ export function isMemoAction(action: string): action is MemoAction {
 }
 
 export function isTrashAction(action: string): action is TrashAction {
-	return action === "restore";
+	return action === "restore" || action === "purge";
 }

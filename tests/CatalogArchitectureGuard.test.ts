@@ -40,6 +40,8 @@ test("生产源码只暴露无版本 Catalog 模块和存储名称", async () =>
 	const identitySchema = fs.readFileSync("docs/architecture/catalog/schemas/identity-ledger-event.schema.json", "utf8");
 	assert.equal(identityProtocol.includes("m_[a-f0-9]{32}"), false);
 	assert.equal(identitySchema.includes("m_[a-f0-9]{32}"), false);
+	assert.equal(identitySchema.includes('"const": "purge"'), true);
+	assert.equal(identityProtocol.includes('case "purge"'), true);
 });
 
 test("当前共享协议使用稳定目录且不携带开发期版本字段", async () => {

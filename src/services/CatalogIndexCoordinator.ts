@@ -6,6 +6,7 @@ import type {
 	CatalogCoverage,
 	CatalogFileRecord,
 	CatalogInventoryEntry,
+	CatalogRefreshResult,
 	MemoObservation,
 } from "../types/catalog";
 import { formatDatePart } from "../utils/date";
@@ -126,6 +127,10 @@ export class CatalogIndexCoordinator {
 			return;
 		}
 		await this.catalogService.open();
+		if (this.stopped) {
+			this.catalogService.close();
+			return;
+		}
 		this.opened = true;
 		await this.reconcileInventory();
 	}
@@ -166,6 +171,7 @@ export class CatalogIndexCoordinator {
 			size: new TextEncoder().encode(input.content).byteLength,
 		};
 		await this.reconcileRevisionTransition(sourcePath, input.parsed.sourceRevision, input.parsed.observations);
+		if (this.stopped) throw new Error("Memo Catalog is not available.");
 		await this.catalogService.replaceFile({
 			inventory,
 			sourceRevision: input.parsed.sourceRevision,
@@ -174,6 +180,7 @@ export class CatalogIndexCoordinator {
 			settingsFingerprint: this.settingsFingerprint,
 			auditedAt: this.now(),
 		});
+		if (this.stopped) return;
 		this.inventoryByPath.set(sourcePath, inventory);
 		this.coveredPaths.add(sourcePath);
 		this.failedPaths.delete(sourcePath);
@@ -185,9 +192,11 @@ export class CatalogIndexCoordinator {
 	async rebuildLocalCatalog(): Promise<void> {
 		if (!this.opened || this.stopped) throw new Error("Memo Catalog is not available.");
 		await this.waitForIdle();
+		if (this.stopped) throw new Error("Memo Catalog is not available.");
 		this.rebuilding = true;
 		try {
 			await this.catalogService.getStore().clear();
+			if (this.stopped) return;
 			this.inventoryByPath.clear();
 			this.coveredPaths.clear();
 			this.forcedPaths.clear();
@@ -196,21 +205,29 @@ export class CatalogIndexCoordinator {
 			this.queue = [];
 			this.fullAuditScheduled = false;
 			await this.reconcileInventory();
+			if (this.stopped) return;
 			await this.waitForIdle();
 		} finally {
 			if (this.rebuilding) {
 				this.rebuilding = false;
-				const coverage = this.buildCoverage();
-				await this.catalogService.getStore().setCoverage(coverage).catch(() => undefined);
-				this.notifyProgress(coverage);
+				if (!this.stopped) {
+					const coverage = this.buildCoverage();
+					await this.catalogService.getStore().setCoverage(coverage).catch(() => undefined);
+					this.notifyProgress(coverage);
+				}
 			}
 		}
 	}
 
-	async refreshLocalCatalog(): Promise<void> {
+	async refreshLocalCatalog(): Promise<CatalogRefreshResult> {
 		if (!this.opened || this.stopped) throw new Error("Memo Catalog is not available.");
+		const before = await this.catalogService.listFiles();
+		if (this.stopped) throw new Error("Memo Catalog is not available.");
 		await this.reconcileInventory();
 		await this.waitForIdle();
+		if (this.stopped) throw new Error("Memo Catalog is not available.");
+		const after = await this.catalogService.listFiles();
+		return buildRefreshResult(before, after, [...this.failedPaths.values()]);
 	}
 
 	private handleFileChanged(file: unknown): void {
@@ -271,6 +288,7 @@ export class CatalogIndexCoordinator {
 		this.reconciling = true;
 		try {
 			this.dailyConfig = await this.getDailyConfig();
+			if (this.stopped) return;
 			this.headings = [...new Set(this.getHeadings().map((heading) => heading.trim()).filter(Boolean))].sort();
 			this.settingsFingerprint = buildSettingsFingerprint(this.dailyConfig, this.headings);
 			const inventory = collectDailyInventory(this.app, this.dailyConfig);
@@ -281,24 +299,29 @@ export class CatalogIndexCoordinator {
 
 			const store = this.catalogService.getStore();
 			const storedFiles = await store.listFiles();
+			if (this.stopped) return;
 			if (storedFiles.length === 0 && inventory.length > 0) this.rebuilding = true;
 			const storedByPath = new Map(storedFiles.map((file) => [file.sourcePath, file]));
 			for (const storedFile of storedFiles) {
+				if (this.stopped) return;
 				if (!this.inventoryByPath.has(storedFile.sourcePath)) {
 					await this.catalogService.deleteFile(storedFile.sourcePath);
 				}
 			}
 			for (const deletedPath of this.pendingDeletedPaths) {
+				if (this.stopped) return;
 				await this.catalogService.deleteFile(deletedPath);
 				storedByPath.delete(deletedPath);
 			}
 			this.pendingDeletedPaths.clear();
 
 			const checkpoint = await store.getMeta<CatalogCheckpoint>(CATALOG_CHECKPOINT_META_KEY);
+			if (this.stopped) return;
 			const checkpointCompatible = checkpoint !== null
 				&& checkpoint.settingsFingerprint === this.settingsFingerprint
 				&& checkpoint.parserVersion === CATALOG_PARSER_VERSION;
 			const lastFullAuditAt = await store.getMeta<number>(CATALOG_LAST_FULL_AUDIT_META_KEY);
+			if (this.stopped) return;
 			const resumingFullAudit = checkpointCompatible && checkpoint.fullAudit;
 			const startingFullAudit = !resumingFullAudit && (
 				!this.startupAuditScheduled
@@ -346,12 +369,14 @@ export class CatalogIndexCoordinator {
 			this.checkpointStartedAt = checkpointCompatible ? checkpoint.startedAt : this.now();
 			this.failedPaths.clear();
 			await this.saveProgress();
+			if (this.stopped) return;
 			if (this.queue.length === 0) {
 				await this.finishScan();
 			} else {
 				this.scheduleDrain();
 			}
 		} catch (error) {
+			if (this.stopped) return;
 			this.rebuilding = false;
 			const failure = {
 				sourcePath: "",
@@ -395,9 +420,10 @@ export class CatalogIndexCoordinator {
 					break;
 				}
 				await this.processPath(sourcePath);
+				if (this.stopped) break;
 				await this.saveProgress();
 			} while (!this.paused && this.queue.length > 0 && this.now() - sliceStartedAt < this.sliceBudgetMs);
-			if (this.queue.length === 0) {
+			if (!this.stopped && this.queue.length === 0) {
 				await this.finishScan();
 			}
 		} finally {
@@ -411,6 +437,7 @@ export class CatalogIndexCoordinator {
 	}
 
 	private async processPath(sourcePath: string): Promise<void> {
+		if (this.stopped) return;
 		const inventory = this.inventoryByPath.get(sourcePath);
 		const abstractFile = this.app.vault.getAbstractFileByPath(sourcePath);
 		if (inventory === undefined || !(abstractFile instanceof TFile)) {
@@ -421,6 +448,7 @@ export class CatalogIndexCoordinator {
 		}
 		try {
 			const raw = await this.app.vault.readBinary(abstractFile);
+			if (this.stopped) return;
 			const bytes = new Uint8Array(raw);
 			const parsed = await this.parser.parse({
 				sourcePath,
@@ -428,13 +456,16 @@ export class CatalogIndexCoordinator {
 				headings: this.headings,
 				bytes,
 			});
+			if (this.stopped) return;
 			const stored = await this.catalogService.getStore().getFile(sourcePath);
+			if (this.stopped) return;
 			if (stored?.sourceRevision !== parsed.sourceRevision
 				|| stored.parserVersion !== CATALOG_PARSER_VERSION
 				|| stored.settingsFingerprint !== this.settingsFingerprint
 				|| stored.mtime !== abstractFile.stat.mtime
 				|| stored.size !== abstractFile.stat.size) {
 				await this.reconcileRevisionTransition(sourcePath, parsed.sourceRevision, parsed.observations);
+				if (this.stopped) return;
 				await this.catalogService.replaceFile({
 					inventory: {
 						...inventory,
@@ -466,7 +497,7 @@ export class CatalogIndexCoordinator {
 		if (this.onRevisionTransition === null) return;
 		try {
 			const before = await this.catalogService.getFileRevisionBatch(sourcePath);
-			if (before === null || before.file.sourceRevision === sourceRevision) return;
+			if (this.stopped || before === null || before.file.sourceRevision === sourceRevision) return;
 			await this.onRevisionTransition({
 				sourcePath,
 				before: {
@@ -481,14 +512,16 @@ export class CatalogIndexCoordinator {
 	}
 
 	private notifyCatalogSettled(): void {
-		if (this.onCatalogSettled === null) return;
+		if (this.stopped || this.onCatalogSettled === null) return;
 		void Promise.resolve(this.onCatalogSettled()).catch(() => undefined);
 	}
 
 	private async saveProgress(): Promise<void> {
+		if (this.stopped) return;
 		const store = this.catalogService.getStore();
 		const coverage = this.buildCoverage();
 		await store.setCoverage(coverage);
+		if (this.stopped) return;
 		this.notifyProgress(coverage);
 		const checkpoint: CatalogCheckpoint = {
 			settingsFingerprint: this.settingsFingerprint,
@@ -501,15 +534,17 @@ export class CatalogIndexCoordinator {
 			updatedAt: this.now(),
 		};
 		await store.setMeta(CATALOG_CHECKPOINT_META_KEY, checkpoint);
+		if (this.stopped) return;
 		await store.setMeta(CATALOG_FAILED_PATHS_META_KEY, [...this.failedPaths.values()]);
 	}
 
 	private notifyProgress(coverage: CatalogCoverage): void {
-		if (this.onProgress === null) return;
+		if (this.stopped || this.onProgress === null) return;
 		void Promise.resolve(this.onProgress({ ...coverage })).catch(() => undefined);
 	}
 
 	private async finishScan(): Promise<void> {
+		if (this.stopped) return;
 		const store = this.catalogService.getStore();
 		if (this.failedPaths.size > 0) {
 			this.rebuilding = false;
@@ -524,7 +559,9 @@ export class CatalogIndexCoordinator {
 				startedAt: this.checkpointStartedAt,
 				updatedAt: this.now(),
 			});
+			if (this.stopped) return;
 			await store.setCoverage(coverage);
+			if (this.stopped) return;
 			this.fullAuditScheduled = false;
 			this.scheduleFailedPathRetry();
 			this.notifyCatalogSettled();
@@ -532,16 +569,20 @@ export class CatalogIndexCoordinator {
 		}
 		if (this.fullAuditScheduled) {
 			await store.setMeta(CATALOG_LAST_FULL_AUDIT_META_KEY, this.now());
+			if (this.stopped) return;
 			this.scheduleAuditWake(this.now(), false);
 		}
 		this.rebuilding = false;
 		await store.deleteMeta(CATALOG_CHECKPOINT_META_KEY);
+		if (this.stopped) return;
 		await store.setCoverage(this.buildCoverage());
+		if (this.stopped) return;
 		this.fullAuditScheduled = false;
 		this.notifyCatalogSettled();
 	}
 
 	private scheduleFailedPathRetry(): void {
+		if (this.stopped) return;
 		const win = this.app.workspace.containerEl.win;
 		if (this.auditTimer !== null) {
 			win.clearTimeout(this.auditTimer);
@@ -608,6 +649,10 @@ export class CatalogIndexCoordinator {
 		this.drainTimer = null;
 		this.reconcileTimer = null;
 		this.auditTimer = null;
+		for (const path of this.queue) this.resolvePath(path);
+		this.queue = [];
+		this.forcedPaths.clear();
+		this.pendingDeletedPaths.clear();
 		for (const path of this.pathResolvers.keys()) this.resolvePath(path);
 		if (this.processing || this.reconciling) {
 			this.closeWhenIdle = true;
@@ -713,6 +758,43 @@ function sortPathsNewestFirst(paths: string[], inventoryByPath: ReadonlyMap<stri
 		const rightDate = inventoryByPath.get(right)?.logicalDate ?? "";
 		return rightDate.localeCompare(leftDate) || left.localeCompare(right);
 	});
+}
+
+function buildRefreshResult(
+	before: readonly CatalogFileRecord[],
+	after: readonly CatalogFileRecord[],
+	failures: readonly CatalogFailure[],
+): CatalogRefreshResult {
+	const beforeByPath = new Map(before.map((file) => [file.sourcePath, file]));
+	const afterByPath = new Map(after.map((file) => [file.sourcePath, file]));
+	let created = 0;
+	let updated = 0;
+	let skipped = 0;
+	for (const file of after) {
+		const previous = beforeByPath.get(file.sourcePath);
+		if (previous === undefined) {
+			created += 1;
+		} else if (previous.sourceRevision !== file.sourceRevision) {
+			updated += 1;
+		} else {
+			skipped += 1;
+		}
+	}
+	const deleted = before.filter((file) => !afterByPath.has(file.sourcePath)).length;
+	const errors = failures
+		.map((failure) => failure.sourcePath.length > 0
+			? `${failure.sourcePath}: ${failure.message}`
+			: failure.message)
+		.sort();
+	return {
+		scannedFiles: created + updated + errors.length,
+		created,
+		updated,
+		deleted,
+		skipped,
+		failed: errors.length,
+		errors,
+	};
 }
 
 

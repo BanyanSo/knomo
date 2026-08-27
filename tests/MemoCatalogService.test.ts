@@ -120,6 +120,48 @@ test("有界内存降级超过容量后保持 partial coverage", async () => {
 	assert.equal((await store.query({ limit: 50 })).items.length, 2);
 });
 
+test("移动端大仓库内存 fallback 使用明确上限并保持 coverage 降级", async () => {
+	const { IN_MEMORY_CATALOG_OBSERVATION_LIMIT } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	await store.open();
+	const observationsPerFile = 100;
+	const fileCount = Math.ceil(IN_MEMORY_CATALOG_OBSERVATION_LIMIT / observationsPerFile) + 1;
+	const partitions = Array.from({ length: fileCount }, (_, index) => {
+		const year = 2020 + Math.floor(index / 336);
+		const yearDay = index % 336;
+		const month = Math.floor(yearDay / 28) + 1;
+		const day = (yearDay % 28) + 1;
+		const logicalDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+		const inventory = makeInventory(`Journal/${logicalDate}.md`, logicalDate);
+		return buildCatalogPartition(makePartitionInput(
+			inventory,
+			Array.from({ length: observationsPerFile }, (__, observationIndex) => makeObservation(
+				inventory,
+				observationIndex + 1,
+				"09:00",
+				`${logicalDate}-${observationIndex}`,
+			)),
+			`sha-${index}`,
+		));
+	});
+	await store.replaceFilePartitions(partitions);
+	await store.setCoverage({
+		kind: "complete",
+		coveredFromDate: partitions[0]?.file.logicalDate ?? null,
+		pendingFileCount: 0,
+		coveredFileCount: partitions.length,
+		totalFileCount: partitions.length,
+	});
+
+	const retainedObservationCount = (await store.listFiles())
+		.reduce((count, file) => count + file.observationCount, 0);
+	const coverage = await store.getCoverage();
+	assert.ok(retainedObservationCount <= IN_MEMORY_CATALOG_OBSERVATION_LIMIT);
+	assert.equal(coverage.kind, "partial");
+	assert.equal(coverage.coveredFileCount, (await store.listFiles()).length);
+	assert.ok(coverage.pendingFileCount > 0);
+});
+
 function makeInventory(sourcePath: string, logicalDate: string): CatalogInventoryEntry {
 	return { sourcePath, logicalDate, mtime: 100, size: 200 };
 }

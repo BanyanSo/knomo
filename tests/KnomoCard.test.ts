@@ -180,7 +180,7 @@ test("P1 第 5 步：局部 identity conflict 只为当前 memo 暴露显式 rep
 	);
 });
 
-test("random memo card keeps random review marking on the time opener", async () => {
+test("random memo card marks the time opener without rendering a manual review action", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const root = new TestElement("div");
@@ -188,7 +188,7 @@ test("random memo card keeps random review marking on the time opener", async ()
 	renderKnomoMemoCard(root.asHtml(), makeMemo({ id: "random-1" }), {
 		generation: 7,
 		renderIndex: 0,
-		includeActions: false,
+		includeActions: true,
 		randomCard: true,
 		activeMenuMemoId: null,
 		deletedMemoIds: new Set(),
@@ -205,6 +205,7 @@ test("random memo card keeps random review marking on the time opener", async ()
 	assert.equal(card?.getAttr("data-random-reunion-card"), null);
 	assert.equal(timeButton?.getAttr("data-memo-id"), "random-1");
 	assert.equal(timeButton?.getAttr("data-random-reunion-card"), "true");
+	assert.equal(root.find("[data-memo-action='mark-reviewed']"), null);
 });
 
 test("renders Time buoy card states with the project icon and a today wave", async () => {
@@ -246,12 +247,27 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 	assert.equal(past.find(".knomo-card-time-buoy-wave"), null);
 });
 
-test("trash memo cards do not get daily note card-open attributes", async () => {
+test("trash memo cards expose restore and single-item permanent purge actions", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoTrashMemoCard } = await import("../src/ui/KnomoCard");
 	const root = new TestElement("div");
 
-	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({ status: "deleted" }), {
+	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({
+		status: "deleted",
+		trashItem: {
+			key: "memo-1:delete-1",
+			memoId: "memo-1",
+			deleteEventId: "delete-1",
+			deletedAt: "2026-06-03T00:00:00+08:00",
+			logicalDate: "2026-06-02",
+			sourcePath: "Daily/2026-06-02.md",
+			section: "Memos",
+			content: "memo-1",
+			contentHash: "hash-memo-1",
+			sourceMemoId: null,
+			purgeAllowed: true,
+		},
+	}), {
 		generation: 7,
 		renderIndex: 0,
 		busyAction: null,
@@ -268,7 +284,8 @@ test("trash memo cards do not get daily note card-open attributes", async () => 
 	assert.equal(card?.getAttr("data-random-reunion-card"), null);
 	assert.equal(card?.getAttr("tabindex"), null);
 	assert.equal(root.find("[data-memo-time-open='daily']"), null);
-	assert.equal(root.find("[data-action='purge']"), null);
+	assert.equal(root.find("[data-trash-action='restore']")?.getText(), "Restore");
+	assert.equal(root.find("[data-trash-action='purge']")?.getText(), "Permanently delete");
 });
 
 async function renderMemoCard(

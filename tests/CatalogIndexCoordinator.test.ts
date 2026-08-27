@@ -460,6 +460,98 @@ test("普通刷新加入当前扫描且进度持续上报，不清空本机 Cata
 	}
 });
 
+test("手动刷新按文件 revision 返回真实 added、updated、deleted 和 failed delta", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const fixture = await createCoordinatorFixture([
+		{ path: "Journal/2026-08-20.md", content: "## Memos\n- 09:00 update me", mtime: 10 },
+		{ path: "Journal/2026-08-21.md", content: "## Memos\n- 09:00 delete me", mtime: 10 },
+	]);
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ fullAuditIntervalMs: 60_000, now: () => new Date(2026, 7, 22).getTime() },
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+
+		const unchanged = await coordinator.refreshLocalCatalog();
+		assert.deepEqual(unchanged, {
+			scannedFiles: 0,
+			created: 0,
+			updated: 0,
+			deleted: 0,
+			skipped: 2,
+			failed: 0,
+			errors: [],
+		});
+
+		fixture.setFile("Journal/2026-08-20.md", "## Memos\n- 09:00 updated", 20);
+		fixture.removeFile("Journal/2026-08-21.md");
+		fixture.setFile("Journal/2026-08-22.md", "## Memos\n- 09:00 added", 20);
+		const changed = await coordinator.refreshLocalCatalog();
+
+		assert.equal(changed.created, 1);
+		assert.equal(changed.updated, 1);
+		assert.equal(changed.deleted, 1);
+		assert.equal(changed.failed, 0);
+		assert.equal(changed.scannedFiles, 2);
+
+		fixture.setFile("Journal/2026-08-23.md", "## Memos\n- 09:00 unreadable", 30);
+		fixture.failRead("Journal/2026-08-23.md");
+		const failed = await coordinator.refreshLocalCatalog();
+		assert.equal(failed.failed, 1);
+		assert.equal(failed.errors.length, 1);
+		assert.match(failed.errors[0] ?? "", /read failed/u);
+	} finally {
+		fixture.unload();
+	}
+});
+
+test("插件 unload 会清除扫描 timer，并阻止尚未解析的 Daily 继续写入 Catalog", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const fixture = await createCoordinatorFixture([
+		{ path: "Journal/2026-08-22.md", content: "## Memos\n- 09:00 pending", mtime: 10 },
+	]);
+	const releaseRead = fixture.blockRead("Journal/2026-08-22.md");
+	const store = new InMemoryMemoCatalogStore();
+	let replacementCount = 0;
+	const replace = store.replaceFilePartitions.bind(store);
+	store.replaceFilePartitions = async (partitions) => {
+		replacementCount += partitions.length;
+		return replace(partitions);
+	};
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+	);
+	coordinator.start(fixture.owner);
+	await coordinator.initialize();
+	await waitUntil(async () => fixture.readCount() === 1);
+
+	fixture.unload();
+	releaseRead();
+	await coordinator.waitForIdle();
+
+	assert.equal(replacementCount, 0);
+	assert.equal(fixture.timerCount(), 0);
+});
+
 test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共享数据", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
@@ -504,6 +596,9 @@ async function createCoordinatorFixture(
 	const registeredVaultEvents: string[] = [];
 	const cleanupCallbacks: Array<() => void> = [];
 	const domListeners = new Map<string, () => void>();
+	const failedReads = new Set<string>();
+	const readBlockers = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+	const timers = new Set<NodeJS.Timeout>();
 	const doc = { visibilityState: "visible" };
 	let reads = 0;
 	const files = entries.map((entry) => Object.assign(new TFile(), {
@@ -526,6 +621,8 @@ async function createCoordinatorFixture(
 					doc.visibilityState = "hidden";
 					domListeners.get("visibilitychange")?.();
 				}
+				await readBlockers.get(file.path)?.promise;
+				if (failedReads.has(file.path)) throw new Error(`read failed: ${file.path}`);
 				const bytes = contentByPath.get(file.path) ?? Buffer.alloc(0);
 				return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 			},
@@ -537,8 +634,20 @@ async function createCoordinatorFixture(
 			containerEl: {
 				doc,
 				win: {
-					setTimeout: (callback: () => void, delay: number) => globalThis.setTimeout(callback, delay) as unknown as number,
-					clearTimeout: (timer: number) => globalThis.clearTimeout(timer as unknown as NodeJS.Timeout),
+					setTimeout: (callback: () => void, delay: number) => {
+						let timer: NodeJS.Timeout;
+						timer = globalThis.setTimeout(() => {
+							timers.delete(timer);
+							callback();
+						}, delay);
+						timers.add(timer);
+						return timer as unknown as number;
+					},
+					clearTimeout: (timerId: number) => {
+						const timer = timerId as unknown as NodeJS.Timeout;
+						timers.delete(timer);
+						globalThis.clearTimeout(timer);
+					},
 				},
 			},
 		},
@@ -555,6 +664,31 @@ async function createCoordinatorFixture(
 		owner: owner as never,
 		registeredVaultEvents,
 		readCount: () => reads,
+		timerCount: () => timers.size,
+		setFile: (path: string, content: string, mtime: number) => {
+			let file = files.find((item) => item.path === path);
+			if (file === undefined) {
+				file = Object.assign(new TFile(), { path, extension: "md", stat: { mtime, size: 0 } });
+				files.push(file);
+			}
+			file.stat = { ctime: mtime, mtime, size: Buffer.byteLength(content) };
+			contentByPath.set(path, Buffer.from(content, "utf8"));
+		},
+		removeFile: (path: string) => {
+			const index = files.findIndex((file) => file.path === path);
+			if (index !== -1) files.splice(index, 1);
+			contentByPath.delete(path);
+		},
+		failRead: (path: string) => { failedReads.add(path); },
+		blockRead: (path: string) => {
+			let resolve = (): void => undefined;
+			const promise = new Promise<void>((nextResolve) => { resolve = nextResolve; });
+			readBlockers.set(path, { promise, resolve });
+			return () => {
+				readBlockers.delete(path);
+				resolve();
+			};
+		},
 		snapshot: () => Object.fromEntries(
 			[...contentByPath.entries()].map(([path, content]) => [path, content.toString("utf8")]),
 		),

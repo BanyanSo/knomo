@@ -217,6 +217,16 @@ export interface CatalogCoverage {
 	totalFileCount: number;
 }
 
+export interface CatalogRefreshResult {
+	scannedFiles: number;
+	created: number;
+	updated: number;
+	deleted: number;
+	skipped: number;
+	failed: number;
+	errors: string[];
+}
+
 export interface CatalogStoreLifecycle {
 	state: CatalogStoreLifecycleState;
 	persistent: boolean;

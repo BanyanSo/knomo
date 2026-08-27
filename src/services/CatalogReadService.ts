@@ -19,6 +19,7 @@ import type {
 	CatalogRecordStatsFilter,
 	CatalogReadState,
 	CatalogReadStatus,
+	KnomoRuntimeSnapshot,
 	MonthlyProjectionState,
 	CatalogTagFacet,
 	TrashMemoItem,
@@ -26,6 +27,7 @@ import type {
 } from "../types/catalogView";
 import type { IdentityLedgerBinding, IdentityLedgerReader } from "../types/identityLedger";
 import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
+import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
 import { toCatalogMemoView } from "../types/memoView";
 import type { MemoReviewStateMap } from "../types/review";
@@ -47,6 +49,7 @@ export interface CatalogReadServiceOptions {
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
 	getLegacyImportStatus?: () => LegacyIdentityImportStatus;
+	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -63,6 +66,54 @@ export class CatalogReadService {
 
 	getLastReadState(): CatalogReadState | null {
 		return this.lastReadState;
+	}
+
+	async getRuntimeSnapshot(): Promise<KnomoRuntimeSnapshot> {
+		let coverage: CatalogCoverage = {
+			kind: "partial",
+			coveredFromDate: null,
+			pendingFileCount: 0,
+			coveredFileCount: 0,
+			totalFileCount: 0,
+		};
+		let lifecycle: CatalogStoreLifecycle = {
+			state: "degraded",
+			persistent: false,
+			writable: false,
+			reason: "catalog_status_unavailable",
+		};
+		try {
+			const store = this.options.catalog.getStore();
+			coverage = await store.getCoverage();
+			lifecycle = store.getLifecycle();
+		} catch {
+			// 运行状态本身不可用时返回只读降级快照，不触发修复或扫描。
+		}
+		let identity: KnomoRuntimeSnapshot["identity"] = "unavailable";
+		let sharedConfiguration: KnomoRuntimeSnapshot["sharedConfiguration"] = "unavailable";
+		let legacyMigration: KnomoRuntimeSnapshot["legacyMigration"] = "unavailable";
+		try {
+			identity = this.options.identityLedger.getStatus();
+		} catch {
+			// 保留 unavailable。
+		}
+		try {
+			sharedConfiguration = this.options.getSharedConfigurationStatus?.() ?? "missing";
+		} catch {
+			// 保留 unavailable。
+		}
+		try {
+			legacyMigration = this.options.getLegacyImportStatus?.() ?? "idle";
+		} catch {
+			// 保留 unavailable。
+		}
+		return {
+			catalog: { coverage, lifecycle },
+			identity,
+			sharedConfiguration,
+			monthly: this.getProjectionState(),
+			legacyMigration,
+		};
 	}
 
 	async prime(): Promise<void> {
@@ -198,6 +249,7 @@ export class CatalogReadService {
 
 	async listDeleted(limit: number, cursor: string | null = null): Promise<TrashMemoPage> {
 		const records = await this.listVisibleDeletes();
+		const identitySnapshot = this.options.identityLedger.getSnapshot();
 		const offset = cursor === null ? 0 : Math.max(0, Number.parseInt(cursor, 10) || 0);
 		const selected = records.slice(offset, offset + Math.max(0, limit));
 		const nextOffset = offset + selected.length;
@@ -213,6 +265,7 @@ export class CatalogReadService {
 				content: readDeletedPayloadContent(record.evidence.rawBlock),
 				contentHash: record.evidence.contentHash,
 				sourceMemoId: record.evidence.sourceMemoId,
+				purgeAllowed: identitySnapshot.memos[record.memoId]?.conflicted === false,
 			})),
 			nextCursor: nextOffset < records.length ? String(nextOffset) : null,
 			identityRevision: this.options.identityLedger.getRevision(),
@@ -305,15 +358,18 @@ export class CatalogReadService {
 			candidates.push(...await this.queryAllItems({ fromDate: date, toDate: date, limit: 150 }));
 		}
 		await this.requireCompleteCoverage("Random reunion");
+		const reviewableCandidates = candidates.filter((candidate) => candidate.memoId !== null
+			&& candidate.identityHandle !== null
+			&& candidate.capabilities.identity.review === "ready");
 		const reviews: MemoReviewStateMap = {};
-		for (const candidate of candidates) {
+		for (const candidate of reviewableCandidates) {
 			if (candidate.memoId === null) continue;
 			const review = this.options.identityLedger.getReviewState(candidate.memoId);
 			reviews[candidate.memoId] = review.lastReviewedAt === null
 				? { memoId: candidate.memoId, reviewCount: review.reviewCount }
 				: { memoId: candidate.memoId, reviewCount: review.reviewCount, lastReviewedAt: review.lastReviewedAt };
 		}
-		return getRandomReunionMemos(candidates.map(toCatalogMemoView), reviews, count, {
+		return getRandomReunionMemos(reviewableCandidates.map(toCatalogMemoView), reviews, count, {
 			today: this.now(),
 			random: this.random,
 		});
@@ -684,7 +740,7 @@ function isCompleteCoverage(coverage: CatalogCoverage): boolean {
 function isRangeCovered(coverage: CatalogCoverage, fromDate: string, toDate: string): boolean {
 	if (fromDate > toDate || coverage.sharedConfigurationComplete === false) return false;
 	return isCompleteCoverage(coverage)
-		|| (coverage.kind === "partial" && coverage.coveredFromDate !== null && fromDate >= coverage.coveredFromDate);
+		|| (coverage.coveredFromDate !== null && fromDate >= coverage.coveredFromDate);
 }
 
 function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): {

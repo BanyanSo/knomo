@@ -15,6 +15,7 @@ export interface TimeBuoyViewSnapshot {
 	loading: boolean;
 	error: unknown;
 	todayError: unknown;
+	complete: boolean;
 	activeTab: TimeBuoyTab;
 	today: TimeBuoyTabItem[];
 	upcoming: TimeBuoyTabItem[];
@@ -44,7 +45,7 @@ export function mergeTodayTimeBuoyFeed(
 interface TimeBuoyViewControllerOptions {
 	getNow: () => Date;
 	ensureReady?: () => Promise<void>;
-	isTodayIndexReady?: () => Promise<boolean>;
+	isTodayIndexReady?: (targetDate: string) => Promise<boolean>;
 	queryAll: () => Promise<TimeBuoyAllQueryResult>;
 	queryDate: (date: string) => Promise<TimeBuoyQueryResult>;
 	requestRender: () => void;
@@ -118,13 +119,11 @@ export class TimeBuoyViewController {
 			if (requestId !== this.requestId) {
 				return;
 			}
-			if (!result.complete || result.missingPeriods.length > 0) {
-				throw new Error(`Incomplete time buoy index: ${[...new Set(result.missingPeriods)].join(", ")}`);
-			}
 			const partitioned = partitionItems(result.items, today);
 			const nextSnapshot = {
 				...createInitialSnapshot(this.snapshot.activeTab),
 				...partitioned,
+				complete: result.complete && result.missingPeriods.length === 0,
 			};
 			const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
 			this.snapshot = nextSnapshot;
@@ -150,7 +149,7 @@ export class TimeBuoyViewController {
 		const requestId = ++this.requestId;
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
-			const todayIndexReady = (await this.options.isTodayIndexReady?.()) ?? true;
+			const todayIndexReady = (await this.options.isTodayIndexReady?.(today)) ?? true;
 			if (!todayIndexReady) {
 				if (requestId !== this.requestId) {
 					return;
@@ -215,6 +214,7 @@ function areTimeBuoySnapshotsEqual(
 	return left.loading === right.loading
 		&& left.error === right.error
 		&& left.todayError === right.todayError
+		&& left.complete === right.complete
 		&& left.activeTab === right.activeTab
 		&& areTimeBuoyTabItemsEqual(left.today, right.today)
 		&& areTimeBuoyTabItemsEqual(left.upcoming, right.upcoming)
@@ -240,6 +240,7 @@ function createInitialSnapshot(activeTab: TimeBuoyTab = "today"): TimeBuoyViewSn
 		loading: false,
 		error: null,
 		todayError: null,
+		complete: false,
 		activeTab,
 		today: [],
 		upcoming: [],

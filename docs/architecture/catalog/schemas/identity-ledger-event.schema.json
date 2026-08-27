@@ -32,7 +32,8 @@
         "review",
         "delete_payload",
         "delete_commit",
-        "restore"
+        "restore",
+        "purge"
       ]
     },
     "baseBindingId": {
@@ -144,6 +145,16 @@
             },
             "evidence": {
               "$ref": "#/$defs/restoreEvidence"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "purge"
+            },
+            "evidence": {
+              "$ref": "#/$defs/deleteCommitEvidence"
             }
           }
         }

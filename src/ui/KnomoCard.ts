@@ -101,7 +101,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 					action.candidateMemoId,
 				);
 			}
-			if ((options.randomCard || options.timeBuoy !== undefined)
+			if (options.timeBuoy !== undefined
 				&& (memo.catalog === undefined || memo.catalog.capabilities.identity.review === "ready")) {
 				renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
 			}
@@ -191,7 +191,7 @@ export function renderKnomoTrashMemoCard<TMemo extends MemoRecord>(container: HT
 	const head = card.createDiv({ cls: "knomo-card-head" });
 	head.createDiv({ cls: "knomo-card-time", text: t("trash.createdAt", { time: options.formatDisplayTime(memo.createdAt) }) });
 	const actions = head.createDiv({ cls: "knomo-trash-actions" });
-	for (const action of getTrashCardActions(options.busyAction)) {
+	for (const action of getTrashCardActions(options.busyAction, memo.trashItem?.purgeAllowed === true)) {
 		renderTrashAction(
 			actions,
 			memo.id,
@@ -301,6 +301,7 @@ function getMemoActionLabel(action: MemoAction): string {
 	return t("card.delete");
 }
 
-function getTrashActionLabel(_action: TrashAction, busy: boolean): string {
+function getTrashActionLabel(action: TrashAction, busy: boolean): string {
+	if (action === "purge") return busy ? t("trash.purging") : t("trash.purge");
 	return busy ? t("trash.restoring") : t("trash.restore");
 }

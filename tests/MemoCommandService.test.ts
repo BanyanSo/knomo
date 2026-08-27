@@ -190,6 +190,10 @@ test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再�
 			activeDelete = null;
 			return binding;
 		},
+		recordPurge: async () => {
+			events.push("identity-purge");
+			activeDelete = null;
+		},
 	} as unknown as IdentityLedgerMutationService;
 	const markdownMutations = {
 		captureObservation: async () => {
@@ -236,13 +240,27 @@ test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再�
 	assert.deepEqual(events, ["daily-restore", "identity-restore"]);
 	assert.equal(restored.followUpPending, false);
 	assert.equal(activeDelete, null);
+
+	activeDelete = deleteRecord;
+	events.length = 0;
+	await service.purge(trashItem);
+	assert.deepEqual(events, ["identity-purge"]);
+	assert.equal(activeDelete, null);
 });
 
 function makeCommandOptions(): import("../src/services/MemoCommandService").MemoCommandServiceOptions {
 	return {
 		getDailyPathForDate: async (date) => `Daily/${date}.md`,
 		refreshCatalogPaths: async () => undefined,
-		refreshLocalCatalog: async () => undefined,
+		refreshLocalCatalog: async () => ({
+			scannedFiles: 0,
+			created: 0,
+			updated: 0,
+			deleted: 0,
+			skipped: 0,
+			failed: 0,
+			errors: [],
+		}),
 		getMemoTimeFormat: () => "HH:mm",
 		rebuildLocalCatalog: async () => undefined,
 		now: () => new Date("2026-08-22T12:34:56.000Z"),
@@ -359,6 +377,7 @@ function makeTrashItem(record: IdentityLedgerDeleteRecord): TrashMemoItem {
 		content: "recoverable memo",
 		contentHash: record.evidence.contentHash,
 		sourceMemoId: record.evidence.sourceMemoId,
+		purgeAllowed: true,
 	};
 }
 

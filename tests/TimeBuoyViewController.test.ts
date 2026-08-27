@@ -91,6 +91,26 @@ test("loads every Time buoy once and partitions the complete result into tabs", 
 	assert.equal(snapshot.error, null);
 });
 
+test("keeps partial all-history Time buoy results visible while Catalog continues scanning", async () => {
+	const controller = createController(new Date(2026, 6, 11), async () => ({
+		items: [
+			makeItem("upcoming-known", "2026-07-12", "2026-07-10T10:00:00+08:00"),
+			makeItem("past-known", "2026-07-10", "2026-07-09T10:00:00+08:00"),
+		],
+		stale: [],
+		missingPeriods: ["2026-06"],
+		complete: false,
+	}));
+
+	await controller.loadInitial();
+
+	const snapshot = controller.getSnapshot();
+	assert.equal(snapshot.error, null);
+	assert.equal(snapshot.complete, false);
+	assert.deepEqual(snapshot.upcoming.map((item) => item.memo.id), ["upcoming-known"]);
+	assert.deepEqual(snapshot.past.map((item) => item.memo.id), ["past-known"]);
+});
+
 test("prepares a deferred Time buoy index before the first full query", async () => {
 	const calls: string[] = [];
 	const controller = new TimeBuoyViewController({
@@ -362,7 +382,10 @@ test("today-only refresh preserves visible items while a background rebuild is p
 	let queryDateCalls = 0;
 	const controller = new TimeBuoyViewController({
 		getNow: () => new Date(2026, 6, 11),
-		isTodayIndexReady: async () => todayIndexReady,
+		isTodayIndexReady: async (targetDate) => {
+			assert.equal(targetDate, "2026-07-11");
+			return todayIndexReady;
+		},
 		queryAll: async () => EMPTY_ALL_RESULT,
 		queryDate: async () => {
 			queryDateCalls += 1;

@@ -19,6 +19,8 @@ export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 	totalFileCount: 0,
 };
 
+export const IN_MEMORY_CATALOG_OBSERVATION_LIMIT = 5_000;
+
 export interface MemoCatalogStore {
 	open(): Promise<void>;
 	close(): void;
@@ -50,8 +52,9 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	private readonly metadata = new Map<string, unknown>();
 	private catalogRevision = 0;
 	private coverage: CatalogCoverage = { ...DEFAULT_CATALOG_COVERAGE };
+	private capacityLimited = false;
 
-	constructor(private readonly maxObservations = Number.MAX_SAFE_INTEGER) {}
+	constructor(private readonly maxObservations = IN_MEMORY_CATALOG_OBSERVATION_LIMIT) {}
 
 	async open(): Promise<void> {}
 
@@ -179,7 +182,24 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async setCoverage(coverage: CatalogCoverage): Promise<void> {
-		this.coverage = clone(coverage);
+		if (this.capacityLimited && this.files.size >= coverage.totalFileCount) {
+			this.capacityLimited = false;
+		}
+		if (!this.capacityLimited) {
+			this.coverage = clone(coverage);
+			return;
+		}
+		const coveredFileCount = Math.min(this.files.size, coverage.totalFileCount);
+		const pendingFileCount = Math.max(0, coverage.totalFileCount - coveredFileCount);
+		this.coverage = pendingFileCount === 0
+			? clone(coverage)
+			: {
+				...clone(coverage),
+				kind: coverage.kind === "rebuilding" ? "rebuilding" : "partial",
+				coveredFromDate: getEarliestStoredDate(this.files),
+				coveredFileCount,
+				pendingFileCount,
+			};
 	}
 
 	async getMeta<T>(key: string): Promise<T | null> {
@@ -211,6 +231,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		this.metadata.clear();
 		this.catalogRevision += 1;
 		this.coverage = { ...DEFAULT_CATALOG_COVERAGE };
+		this.capacityLimited = false;
 	}
 
 	private removeFilePartition(sourcePath: string): void {
@@ -234,6 +255,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 			}
 			this.removeFilePartition(file.sourcePath);
 		}
+		this.capacityLimited = true;
 		this.coverage = {
 			...this.coverage,
 			kind: this.coverage.kind === "rebuilding" ? "rebuilding" : "partial",
@@ -330,10 +352,12 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 				await store.setCoverage(coverage);
 				return;
 			}
-			const coveredFileCount = (await store.listFiles()).length;
+			const files = await store.listFiles();
+			const coveredFileCount = Math.min(files.length, coverage.totalFileCount);
 			await store.setCoverage({
 				...coverage,
 				kind: coverage.kind === "rebuilding" ? "rebuilding" : "partial",
+				coveredFromDate: files.map((file) => file.logicalDate).sort()[0] ?? null,
 				coveredFileCount,
 				pendingFileCount: Math.max(0, coverage.totalFileCount - coveredFileCount),
 			});

@@ -9,6 +9,7 @@ export type IdentityLedgerEventType =
 	| "delete_payload"
 	| "delete_commit"
 	| "restore"
+	| "purge"
 	| "repair";
 
 export interface IdentityLedgerObservationEvidence {
@@ -109,6 +110,14 @@ export type IdentityLedgerRestoreEvent = IdentityLedgerEventBase & {
 	};
 };
 
+export type IdentityLedgerPurgeEvent = IdentityLedgerEventBase & {
+	type: "purge";
+	baseBindingId: string;
+	evidence: {
+		deleteEventId: string;
+	};
+};
+
 export type IdentityLedgerRepairEvent = IdentityLedgerEventBase & {
 	type: "repair";
 	baseBindingId: string;
@@ -126,6 +135,7 @@ export type IdentityLedgerEvent =
 	| IdentityLedgerDeletePayloadEvent
 	| IdentityLedgerDeleteCommitEvent
 	| IdentityLedgerRestoreEvent
+	| IdentityLedgerPurgeEvent
 	| IdentityLedgerRepairEvent;
 
 export interface IdentityLedgerEventEnvelope {
@@ -171,6 +181,7 @@ export interface IdentityLedgerMaterializedMemo {
 	lastReviewedAt: string | null;
 	pendingDeletes?: IdentityLedgerDeleteRecord[];
 	activeDeletes?: IdentityLedgerDeleteRecord[];
+	purgedDeleteEventIds?: string[];
 }
 
 export interface IdentityLedgerDeleteRecord {
@@ -244,4 +255,5 @@ export interface IdentityLedgerMutationService extends IdentityLedgerReader {
 	): Promise<IdentityLedgerDeleteRecord>;
 	recordDeleteCommit?(deleteRecord: IdentityLedgerDeleteRecord): Promise<IdentityLedgerDeleteRecord>;
 	recordRestore?(deleteRecord: IdentityLedgerDeleteRecord, observation: MemoObservation): Promise<IdentityLedgerBinding>;
+	recordPurge?(deleteRecord: IdentityLedgerDeleteRecord): Promise<void>;
 }

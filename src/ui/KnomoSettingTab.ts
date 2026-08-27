@@ -41,6 +41,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private dataRootEditing = false;
 	private dataRootDraft: string | null = null;
 	private legacyDiagnosticsExpanded = false;
+	private runtimeStatusRequestId = 0;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -142,6 +143,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 			},
 			{
 				type: "group",
+				heading: t("settings.runtime.heading"),
+				items: [{
+					name: t("settings.runtime.name"),
+					desc: t("settings.runtime.desc"),
+					render: (setting: Setting) => { this.renderRuntimeStatusSetting(setting); },
+				}],
+			},
+			{
+				type: "group",
 				heading: t("settings.maintenance.heading"),
 				items: [
 					{
@@ -220,6 +230,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setDesc(t("settings.dataRoot.desc")));
 
 		new Setting(containerEl)
+			.setName(t("settings.runtime.heading"))
+			.setHeading();
+		this.renderRuntimeStatusSetting(new Setting(containerEl)
+			.setName(t("settings.runtime.name"))
+			.setDesc(t("settings.runtime.desc")));
+
+		new Setting(containerEl)
 			.setName(t("settings.maintenance.heading"))
 			.setHeading();
 		this.renderLocalHistorySetting(new Setting(containerEl)
@@ -236,6 +253,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
+		this.runtimeStatusRequestId += 1;
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
 		this.cancelAllDelayedSettingNotices();
@@ -475,6 +493,43 @@ export class KnomoSettingTab extends PluginSettingTab {
 					this.refreshSettingTab();
 				});
 			});
+	}
+
+	private renderRuntimeStatusSetting(setting: Setting): void {
+		const requestId = ++this.runtimeStatusRequestId;
+		const statusEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
+		statusEl.setAttr("role", "status");
+		statusEl.setAttr("aria-live", "polite");
+		statusEl.setAttr("aria-atomic", "true");
+		statusEl.setText(t("settings.runtime.loading"));
+		void this.catalogReadService.getRuntimeSnapshot().then((snapshot) => {
+			if (requestId !== this.runtimeStatusRequestId) return;
+			statusEl.empty();
+			statusEl.createDiv({
+				cls: "knomo-setting-help",
+				text: t("settings.runtime.catalog", {
+					coverage: snapshot.catalog.coverage.kind,
+					lifecycle: snapshot.catalog.lifecycle.state,
+					covered: snapshot.catalog.coverage.coveredFileCount,
+					total: snapshot.catalog.coverage.totalFileCount,
+					storage: snapshot.catalog.lifecycle.persistent
+						? t("settings.runtime.storage.persistent")
+						: t("settings.runtime.storage.memory"),
+				}),
+			});
+			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.identity", { status: snapshot.identity }) });
+			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.sharedConfig", { status: snapshot.sharedConfiguration }) });
+			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.monthly", { status: snapshot.monthly }) });
+			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.legacy", { status: snapshot.legacyMigration }) });
+			if (snapshot.catalog.lifecycle.reason !== null) {
+				statusEl.createDiv({
+					cls: "knomo-setting-help is-error",
+					text: t("settings.runtime.reason", { reason: formatSettingsText(snapshot.catalog.lifecycle.reason) }),
+				});
+			}
+		}).catch(() => {
+			if (requestId === this.runtimeStatusRequestId) statusEl.setText(t("settings.runtime.unavailable"));
+		});
 	}
 
 	private renderLocalHistorySetting(setting: Setting): void {

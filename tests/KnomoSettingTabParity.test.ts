@@ -8,6 +8,7 @@ const expectedGroupKeys = [
 	"settings.capture.heading",
 	"settings.monthly.heading",
 	"settings.files.heading",
+	"settings.runtime.heading",
 	"settings.maintenance.heading",
 ];
 
@@ -23,6 +24,7 @@ const expectedRenderOrder = [
 	"renderMonthlyLocaleSetting",
 	"renderMonthlyExcludeSetting",
 	"renderDataRootSetting",
+	"renderRuntimeStatusSetting",
 	"renderLocalHistorySetting",
 	"renderMonthlyRebuildSetting",
 	"renderLegacyIdentityImport",

@@ -56,13 +56,19 @@
 - 选择父标签时包含其嵌套子标签；
 - 并发查询只允许最后一次已发起请求更新界面；翻页必须绑定查询条件和 Catalog revision，不得混入其他查询或静默漏项；
 - Catalog 渐进扫描时，依赖全量范围的界面必须展示覆盖范围或未完成状态，不得把部分结果呈现为全库结果。
+- `coveredFromDate` 表示从该日期到最新 Daily 的连续覆盖；即使全库仍处于 rebuilding，只要目标日期已落入连续覆盖范围，按日期功能即可使用；
+- 时光浮标的今日查询按目标日期 coverage 开放，未来与往日列表允许展示已扫描到的部分结果，并明确标记“部分结果”；
 
 ### 2.6 用户交互契约
 
-- 随机重逢卡片成功打开并展示后，自动为对应 `memoId` 追加一次 review；同一次打开流程的重试不得重复计数；
+- 随机重逢候选只允许身份稳定且 review 能力 ready 的 memo；卡片的时间按钮和菜单入口统一执行同一个 Daily 打开操作；
+- 随机重逢卡片成功打开并展示后，自动为对应 `memoId` 追加一次 review；打开失败不写 review，同一次打开流程的重复触发不得重复计数；
+- Daily 已打开但 review 持久化失败时，必须单独提示回顾状态未保存，不得把已成功的打开显示成失败；随机卡片不再提供手动“标记已回顾”，时光浮标保留该操作；
 - 时光浮标是从 Catalog 与 Daily 派生的视图，不提供专属手动重建入口；恢复依赖统一的 Catalog 重扫与状态提示；
 - 日期范围、标签和统计钻取产生的结果必须可返回原上下文，且不得因分页改变结果口径；
 - 交互控件必须支持键盘操作、可见焦点和可读名称；视图卸载时注销事件监听、定时器和订阅。
+- 普通刷新必须比较刷新前后的文件 `sourceRevision`，分别报告新增、更新、删除和失败；`coveredFileCount` 只表示覆盖进度，不得冒充新增数量；
+- 卡片流只提示用户能够处理的故障；Catalog、Identity、共享配置、Monthly 和 1.2.9 迁移的详细只读运行状态统一在设置页查看。
 
 ## 3. 稳定存储路径
 
@@ -143,19 +149,22 @@ payload 未持久化时不得删除 Daily。只有 `delete_commit` 完成后记�
 purge -> trash read model hide -> discard recoverable payload
 ```
 
-- purge 事件持久化成功前，记录仍可恢复；
-- purge 之后该 `memoId` 不再出现在废纸篓或恢复入口，重复清理必须幂等；
+- purge tombstone 不携带正文，只引用一个已经完成 `delete_commit` 的 `deleteEventId`；identity 冲突、未提交删除或已不在废纸篓的记录不得 purge；
+- purge 事件持久化成功前，记录仍可恢复；持久化失败时读模型不得提前移除记录；
+- purge 之后对应删除记录不再出现在废纸篓或恢复入口，旧 payload 后到也不得重新显示，重复或并发清理必须收敛；
 - 永久清理不得再次修改 Daily，也不得复用已清理的 `memoId`；
+- 外部同步使同一正文重新出现在 Daily 时，Catalog 仍按 Daily observation 展示，不得用 purge 隐藏正文；
 - “永久”表示 Knomo 不再保留可恢复 payload，不承诺擦除文件系统历史、同步服务版本或用户备份中的字节。
 
 ## 6. 失败与重建
 
-- IndexedDB 不可用：切换到有界内存 Catalog，并从 Daily 渐进扫描；
+- IndexedDB 不可用：切换到最多保留 5000 条 observation 的有界内存 Catalog，并从 Daily 渐进扫描；超限时从最旧文件分区开始淘汰，coverage 同步保持 partial；
 - Identity Ledger 不可用：正文能力继续，纯身份操作拒绝或 pending；
 - 共享配置缺失：Catalog 可使用本机可用配置扫描并明确范围可能不完整；Monthly 不得基于设备 locale 覆盖已有投影；
 - 共享配置冲突：Daily 与 Catalog 继续，Monthly 暂停覆盖；
 - 数据根迁移：按 `copy -> verify -> update setting` 执行，旧根保留；
 - 任一重建或迁移都不得改变 Daily 字节。
+- 插件卸载后不得遗留 Catalog 定时器、Vault 事件或继续发起后台 Catalog 写入。
 
 ## 7. 机器可读协议
 

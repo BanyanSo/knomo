@@ -17,6 +17,7 @@ import type {
 	IdentityLedgerMutationService,
 	IdentityLedgerObservationEvidence,
 	IdentityLedgerObservationState,
+	IdentityLedgerPurgeEvent,
 	IdentityLedgerRebindEvent,
 	IdentityLedgerRebindReason,
 	IdentityLedgerReconcileResult,
@@ -62,6 +63,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private writeQueue: Promise<void> = Promise.resolve();
 	private writePauseCount = 0;
 	private readonly selfWrittenPaths = new Map<string, number>();
+	private readonly purgeOperations = new Map<string, Promise<void>>();
 
 	constructor(
 		private readonly app: App,
@@ -504,6 +506,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		deleteRecord: IdentityLedgerDeleteRecord,
 		observation: MemoObservation,
 	): Promise<IdentityLedgerBinding> {
+		this.requireActiveDelete(deleteRecord);
 		const eventId = this.createEventId();
 		await this.appendEvent({
 			eventId,
@@ -512,16 +515,69 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			type: "restore",
 			baseBindingId: deleteRecord.baseBindingId,
 			occurredAt: this.now().toISOString(),
-			evidence: {
+				evidence: {
 				observation: toObservationEvidence(observation),
 				deleteEventId: deleteRecord.deleteEventId,
 			},
-		});
+		}, true, () => { this.requireActiveDelete(deleteRecord); });
 		const binding = this.findObservationBindings(observation)
 			.find((item) => item.memoId === deleteRecord.memoId && item.bindingId === eventId)
 			?? this.findObservationBindings(observation).find((item) => item.memoId === deleteRecord.memoId);
 		if (binding === undefined) throw new Error("Identity Ledger restore did not materialize its binding.");
 		return binding;
+	}
+
+	recordPurge(deleteRecord: IdentityLedgerDeleteRecord): Promise<void> {
+		const existing = this.purgeOperations.get(deleteRecord.deleteEventId);
+		if (existing !== undefined) return existing;
+		const operation = this.commitPurge(deleteRecord);
+		this.purgeOperations.set(deleteRecord.deleteEventId, operation);
+		void operation.finally(() => {
+			if (this.purgeOperations.get(deleteRecord.deleteEventId) === operation) {
+				this.purgeOperations.delete(deleteRecord.deleteEventId);
+			}
+		}).catch(() => undefined);
+		return operation;
+	}
+
+	private async commitPurge(deleteRecord: IdentityLedgerDeleteRecord): Promise<void> {
+		const memo = this.snapshot.memos[deleteRecord.memoId];
+		if (memo?.purgedDeleteEventIds?.includes(deleteRecord.deleteEventId) === true) return;
+		if (memo?.conflicted === true) {
+			throw new Error("Permanent delete is unavailable while memo identity is conflicted.");
+		}
+		const active = this.requireActiveDelete(deleteRecord);
+		const event: IdentityLedgerPurgeEvent = {
+			eventId: this.createEventId(),
+			writerId: await this.getWriterId(),
+			memoId: active.memoId,
+			type: "purge",
+			baseBindingId: active.baseBindingId,
+			occurredAt: this.now().toISOString(),
+			evidence: { deleteEventId: active.deleteEventId },
+		};
+		await this.appendEvent(event, true, () => {
+			if (this.snapshot.memos[deleteRecord.memoId]?.conflicted === true) {
+				throw new Error("Permanent delete is unavailable while memo identity is conflicted.");
+			}
+			this.requireActiveDelete(deleteRecord);
+		});
+		if (this.snapshot.memos[active.memoId]?.purgedDeleteEventIds?.includes(active.deleteEventId) !== true) {
+			throw new Error("Identity Ledger permanent delete did not materialize.");
+		}
+	}
+
+	private requireActiveDelete(deleteRecord: IdentityLedgerDeleteRecord): IdentityLedgerDeleteRecord {
+		if (this.snapshot.memos[deleteRecord.memoId]?.purgedDeleteEventIds?.includes(deleteRecord.deleteEventId) === true) {
+			throw new Error("Deleted memo was permanently deleted and cannot be restored.");
+		}
+		const active = this.getActiveDeletes().find((item) => item.deleteEventId === deleteRecord.deleteEventId);
+		if (active === undefined || active.memoId !== deleteRecord.memoId
+			|| active.baseBindingId !== deleteRecord.baseBindingId
+			|| active.deleteCommitEventId === null) {
+			throw new Error("Deleted memo payload is no longer active.");
+		}
+		return active;
 	}
 
 	private findObservationBindings(observation: MemoObservation): IdentityLedgerBinding[] {
@@ -572,11 +628,15 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		};
 	}
 
-	private async appendEvent(event: IdentityLedgerEvent, notify = true): Promise<void> {
-		await this.appendEvents([event], notify);
+	private async appendEvent(event: IdentityLedgerEvent, notify = true, beforeWrite?: () => void): Promise<void> {
+		await this.appendEvents([event], notify, beforeWrite);
 	}
 
-	private async appendEvents(events: readonly IdentityLedgerEvent[], notify = true): Promise<void> {
+	private async appendEvents(
+		events: readonly IdentityLedgerEvent[],
+		notify = true,
+		beforeWrite?: () => void,
+	): Promise<void> {
 		if (events.length === 0) return;
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
 		const first = events[0];
@@ -590,6 +650,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		});
 		await previous;
 		try {
+			beforeWrite?.();
 			const rootPath = this.requireRootPath();
 			const content = serializeIdentityLedgerSegment(events);
 			const digest = await sha256IdentityLedgerText(content);
@@ -830,8 +891,17 @@ export async function materializeIdentityLedger(
 				commitByDeleteId.set(commit.evidence.deleteEventId, commit);
 			}
 		}
+		const purgedDeleteEventIds = [...new Set(memoEvents.flatMap((event) => {
+			if (event.type !== "purge") return [];
+			const payload = deletePayloadById.get(event.evidence.deleteEventId);
+			const commit = commitByDeleteId.get(event.evidence.deleteEventId);
+			return payload !== undefined && commit !== undefined && payload.baseBindingId === event.baseBindingId
+				? [event.evidence.deleteEventId]
+				: [];
+		}))].sort();
+		const purgedDeleteIds = new Set(purgedDeleteEventIds);
 		const deleteRecords = deletePayloads
-			.filter((event) => !restoredDeleteIds.has(event.eventId))
+			.filter((event) => !restoredDeleteIds.has(event.eventId) && !purgedDeleteIds.has(event.eventId))
 			.map((event): IdentityLedgerDeleteRecord => ({
 				memoId,
 				deleteEventId: event.eventId,
@@ -852,6 +922,7 @@ export async function materializeIdentityLedger(
 			lastReviewedAt: reviewedAt[reviewedAt.length - 1] ?? null,
 			pendingDeletes,
 			activeDeletes,
+			purgedDeleteEventIds,
 		};
 	}
 	return {
@@ -1269,6 +1340,7 @@ function cloneSnapshot(snapshot: IdentityLedgerSnapshot): IdentityLedgerSnapshot
 			lastReviewedAt: memo.lastReviewedAt,
 			pendingDeletes: (memo.pendingDeletes ?? []).map(cloneDeleteRecord),
 			activeDeletes: (memo.activeDeletes ?? []).map(cloneDeleteRecord),
+			purgedDeleteEventIds: [...(memo.purgedDeleteEventIds ?? [])],
 		}])),
 		pendingIntents: snapshot.pendingIntents.map((intent) => ({
 			...intent,

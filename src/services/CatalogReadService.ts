@@ -406,9 +406,7 @@ export class CatalogReadService {
 	}
 
 	async materializeResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
-		const files = await this.options.catalog.listFiles();
-		const batches = (await Promise.all(files.map((file) => this.options.catalog.getFileRevisionBatch(file.sourcePath))))
-			.filter((batch): batch is NonNullable<typeof batch> => batch !== null);
+		const batches = await this.options.catalog.listFileRevisionBatches();
 		const catalogRevision = batches[0]?.catalogRevision ?? 0;
 		if (batches.some((batch) => batch.catalogRevision !== catalogRevision)) return null;
 		const results = Object.fromEntries(batches.flatMap((batch) => batch.observations.map((observation) => [

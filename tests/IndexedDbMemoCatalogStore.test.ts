@@ -54,6 +54,23 @@ test("IndexedDB 使用真实索引完成 recent、搜索、筛选、分页和 ag
 		assert.equal(fileBatch.file.observationCount, 2);
 		assert.deepEqual(fileBatch.observations.map((item) => item.content), ["中文索引 alpha", "newest beta"]);
 		assert.equal(fileBatch.catalogRevision, firstPage.catalogRevision);
+		const allBatches = await store.listFileRevisionBatches();
+		assert.deepEqual(allBatches.map((batch) => ({
+			path: batch.file.sourcePath,
+			contents: batch.observations.map((item) => item.content),
+			catalogRevision: batch.catalogRevision,
+		})), [
+			{
+				path: "Journal/2026-08-08.md",
+				contents: ["older plain"],
+				catalogRevision: firstPage.catalogRevision,
+			},
+			{
+				path: "Journal/2026-08-09.md",
+				contents: ["中文索引 alpha", "newest beta"],
+				catalogRevision: firstPage.catalogRevision,
+			},
+		]);
 
 		const search = await store.query({ limit: 50, text: "中文" });
 		assert.deepEqual(search.items.map((item) => item.content), ["中文索引 alpha"]);

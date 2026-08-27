@@ -41,6 +41,29 @@ test("文件 revision 批次始终返回该文件的全部 observations", async 
 	assert.equal(batch.catalogRevision, 1);
 });
 
+test("一次快照读取返回全部文件及 observations，并共享同一 catalogRevision", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	const service = new MemoCatalogService(store);
+	await service.open();
+	const first = makeInventory("Journal/2026-08-09.md", "2026-08-09");
+	const second = makeInventory("Journal/2026-08-10.md", "2026-08-10");
+	await service.replaceFile(makePartitionInput(first, [makeObservation(first, 1, "09:00", "first")], "sha-first"));
+	await service.replaceFile(makePartitionInput(second, [
+		makeObservation(second, 1, "10:00", "second-a"),
+		makeObservation(second, 3, "11:00", "second-b"),
+	], "sha-second"));
+
+	const batches = await service.listFileRevisionBatches();
+	assert.deepEqual(batches.map((batch) => ({
+		path: batch.file.sourcePath,
+		contents: batch.observations.map((item) => item.content),
+		catalogRevision: batch.catalogRevision,
+	})), [
+		{ path: first.sourcePath, contents: ["first"], catalogRevision: 2 },
+		{ path: second.sourcePath, contents: ["second-a", "second-b"], catalogRevision: 2 },
+	]);
+});
+
 test("reference aggregate 只统计 Daily 可重建的显式 block reference", async () => {
 	const inventory = makeInventory("Journal/2026-08-10.md", "2026-08-10");
 	const observation = makeObservation(

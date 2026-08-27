@@ -57,6 +57,10 @@ export class MemoCatalogService {
 		return this.store.getFileRevisionBatch(sourcePath);
 	}
 
+	listFileRevisionBatches() {
+		return this.store.listFileRevisionBatches();
+	}
+
 	listFiles() {
 		return this.store.listFiles();
 	}

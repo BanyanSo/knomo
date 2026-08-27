@@ -28,6 +28,13 @@ export interface DiaryMemoParseResult {
 	observations: MemoObservation[];
 }
 
+export interface DiaryMemoParseRuntime {
+	yieldControl: () => Promise<void>;
+	sliceBudgetMs?: number;
+	maxLinesPerSlice?: number;
+	now?: () => number;
+}
+
 export interface DiaryMemoRevisionParseInput {
 	sourcePath: string;
 	logicalDate: string;
@@ -56,16 +63,19 @@ interface ParsedDiaryMemoBlock {
 export class DiaryMemoParser {
 	constructor(private readonly digestBytes: CatalogDigestBytes = sha256Bytes) {}
 
-	async parse(input: DiaryMemoParseInput): Promise<DiaryMemoParseResult> {
+	async parse(input: DiaryMemoParseInput, runtime?: DiaryMemoParseRuntime): Promise<DiaryMemoParseResult> {
 		const sourceRevision = await this.digestBytes(input.bytes);
 		const content = decodeUtf8(input.bytes);
-		return this.parseRevision({
+		const revisionInput = {
 			sourcePath: input.sourcePath,
 			logicalDate: input.logicalDate,
 			headings: input.headings,
 			content,
 			sourceRevision,
-		});
+		};
+		return runtime === undefined
+			? this.parseRevision(revisionInput)
+			: this.parseRevisionCooperatively(revisionInput, runtime);
 	}
 
 	parseRevision(input: DiaryMemoRevisionParseInput): DiaryMemoParseResult {
@@ -114,35 +124,82 @@ export class DiaryMemoParser {
 			if (parsed === null) {
 				continue;
 			}
-			const metadataContent = maskProtectedMarkdown(parsed.content);
-			const tasks = getMarkdownTaskLines(parsed.content).map((task) => ({
-				taskIndex: task.index,
-				lineOffset: parsed.contentStartLineOffset + task.lineIndex,
-				marker: task.marker,
-				text: task.body,
-			}));
-			observations.push({
-				sourcePath: normalizeVaultPath(input.sourcePath),
-				sourceRevision,
-				rawBlockHash: hashText(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n")),
-				logicalDate: input.logicalDate,
-				section: currentSection,
-				startLine: parsed.startLine,
-				endLine: parsed.endLine,
-				time: parsed.time,
-				content: parsed.content,
-				contentHash: parsed.contentHash,
-				existingBlockId: parsed.blockId,
-				tags: parseMemoTags(metadataContent),
-				links: parseMemoLinksInSourceOrder(metadataContent),
-				images: dedupeStable(parseMemoImages(metadataContent), (image) => `${image.syntax}\0${image.path}\0${image.altText}`),
-				tasks,
-				timeBuoyDates: extractTimeBuoyDates(parsed.content),
-			});
+			observations.push(buildMemoObservation(input, currentSection, lines, parsed));
 			lineIndex = parsed.endLine;
 		}
 
 		return { sourceRevision, observations };
+	}
+
+	private async parseRevisionCooperatively(
+		input: DiaryMemoRevisionParseInput,
+		runtime: DiaryMemoParseRuntime,
+	): Promise<DiaryMemoParseResult> {
+		const { content, sourceRevision } = input;
+		const lines = splitMarkdownLines(content);
+		const allowedHeadings = new Set(input.headings.map((heading) => heading.trim()).filter(Boolean));
+		const observations: MemoObservation[] = [];
+		const yieldController = new ParseYieldController(runtime);
+		let currentSection: string | null = null;
+		let fence: CodeFenceMarker | null = null;
+		let frontmatter = startsWithFrontmatter(lines);
+
+		for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+			if (yieldController.shouldYield()) await yieldController.yieldNow();
+			const line = lines[lineIndex];
+			if (frontmatter) {
+				if (lineIndex > 0 && isFrontmatterEnd(line)) frontmatter = false;
+				continue;
+			}
+			const fenceMarker = getCodeFenceMarker(line);
+			if (fenceMarker !== null) {
+				if (fence === null) fence = fenceMarker;
+				else if (isClosingCodeFence(fence, fenceMarker)) fence = null;
+				continue;
+			}
+			if (fence !== null) continue;
+			if (isMarkdownHeadingLine(line)) {
+				currentSection = line;
+				continue;
+			}
+			if (!isMemoStartLine(line) || !hasValidMemoTime(line)) continue;
+			if (currentSection !== null && !allowedHeadings.has(currentSection.trim())) continue;
+
+			const parsed = await parseDiaryMemoBlockCooperatively(lines, lineIndex, yieldController);
+			if (parsed === null) continue;
+			if (yieldController.shouldYield()) await yieldController.yieldNow();
+			observations.push(buildMemoObservation(input, currentSection, lines, parsed));
+			lineIndex = parsed.endLine;
+		}
+		return { sourceRevision, observations };
+	}
+}
+
+class ParseYieldController {
+	private readonly sliceBudgetMs: number;
+	private readonly maxLinesPerSlice: number;
+	private readonly now: () => number;
+	private linesInSlice = 0;
+	private sliceStartedAt: number;
+
+	constructor(private readonly runtime: DiaryMemoParseRuntime) {
+		this.sliceBudgetMs = runtime.sliceBudgetMs ?? 8;
+		this.maxLinesPerSlice = runtime.maxLinesPerSlice ?? 256;
+		this.now = runtime.now ?? monotonicNow;
+		this.sliceStartedAt = this.now();
+	}
+
+	shouldYield(lineCount = 1): boolean {
+		this.linesInSlice += lineCount;
+		return this.linesInSlice >= this.maxLinesPerSlice
+			|| this.now() - this.sliceStartedAt >= this.sliceBudgetMs;
+	}
+
+	async yieldNow(): Promise<void> {
+		this.linesInSlice = 0;
+		this.sliceStartedAt = this.now();
+		await this.runtime.yieldControl();
+		this.sliceStartedAt = this.now();
 	}
 }
 
@@ -190,6 +247,86 @@ function parseDiaryMemoBlock(lines: readonly string[], startLine: number): Parse
 		contentHash: hashMemoContent(content),
 		blockId,
 	};
+}
+
+async function parseDiaryMemoBlockCooperatively(
+	lines: readonly string[],
+	startLine: number,
+	yieldController: ParseYieldController,
+): Promise<ParsedDiaryMemoBlock | null> {
+	const firstLine = lines[startLine];
+	const match = firstLine?.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
+	if (match === null) return null;
+
+	const contentLines: string[] = [];
+	const firstContent = extractTrailingBlockId(match[2] ?? "");
+	let blockId = firstContent.blockId;
+	if (match[2] !== undefined || blockId !== null) contentLines.push(firstContent.text);
+	let endLine = startLine;
+	for (let lineIndex = startLine + 1; lineIndex < lines.length; lineIndex += 1) {
+		if (yieldController.shouldYield()) await yieldController.yieldNow();
+		const line = lines[lineIndex];
+		if (!isMemoContinuationLine(line)) break;
+		contentLines.push(stripOneContinuationIndent(line));
+		endLine = lineIndex;
+	}
+
+	const lastEffectiveLineIndex = findLastEffectiveLineIndex(contentLines);
+	if (lastEffectiveLineIndex !== -1) {
+		const lastContent = extractTrailingBlockId(contentLines[lastEffectiveLineIndex]);
+		if (lastContent.blockId !== null) {
+			contentLines[lastEffectiveLineIndex] = lastContent.text;
+			blockId = lastContent.blockId;
+		}
+	}
+	const content = contentLines.join("\n");
+	if (content.trim().length === 0) return null;
+	return {
+		startLine,
+		endLine,
+		time: match[1],
+		content,
+		contentStartLineOffset: match[2] === undefined ? 1 : 0,
+		contentHash: hashMemoContent(content),
+		blockId,
+	};
+}
+
+function buildMemoObservation(
+	input: DiaryMemoRevisionParseInput,
+	currentSection: string | null,
+	lines: readonly string[],
+	parsed: ParsedDiaryMemoBlock,
+): MemoObservation {
+	const metadataContent = maskProtectedMarkdown(parsed.content);
+	const tasks = getMarkdownTaskLines(parsed.content).map((task) => ({
+		taskIndex: task.index,
+		lineOffset: parsed.contentStartLineOffset + task.lineIndex,
+		marker: task.marker,
+		text: task.body,
+	}));
+	return {
+		sourcePath: normalizeVaultPath(input.sourcePath),
+		sourceRevision: input.sourceRevision,
+		rawBlockHash: hashText(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n")),
+		logicalDate: input.logicalDate,
+		section: currentSection,
+		startLine: parsed.startLine,
+		endLine: parsed.endLine,
+		time: parsed.time,
+		content: parsed.content,
+		contentHash: parsed.contentHash,
+		existingBlockId: parsed.blockId,
+		tags: parseMemoTags(metadataContent),
+		links: parseMemoLinksInSourceOrder(metadataContent),
+		images: dedupeStable(parseMemoImages(metadataContent), (image) => `${image.syntax}\0${image.path}\0${image.altText}`),
+		tasks,
+		timeBuoyDates: extractTimeBuoyDates(parsed.content),
+	};
+}
+
+function monotonicNow(): number {
+	return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
 function stripOneContinuationIndent(line: string): string {

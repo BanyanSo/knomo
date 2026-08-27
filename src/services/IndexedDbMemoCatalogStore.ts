@@ -311,6 +311,33 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		};
 	}
 
+	async listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]> {
+		await this.open();
+		const transaction = this.getDatabase().transaction([FILES_STORE, OBSERVATIONS_STORE, META_STORE], "readonly");
+		const done = waitForTransaction(transaction);
+		const [files, observations, revisionRecord] = await Promise.all([
+			requestResult(transaction.objectStore(FILES_STORE).getAll()) as Promise<CatalogFileRecord[]>,
+			requestResult(transaction.objectStore(OBSERVATIONS_STORE).getAll()) as Promise<CatalogObservation[]>,
+			requestResult(transaction.objectStore(META_STORE).get(CATALOG_REVISION_META)) as Promise<CatalogMetaRecord<number> | undefined>,
+		]);
+		await done;
+		const observationsByPath = new Map<string, CatalogObservation[]>();
+		for (const observation of observations) {
+			const items = observationsByPath.get(observation.sourcePath) ?? [];
+			items.push(observation);
+			observationsByPath.set(observation.sourcePath, items);
+		}
+		const catalogRevision = revisionRecord?.value ?? 0;
+		return files
+			.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
+			.map((file) => ({
+				file,
+				observations: (observationsByPath.get(file.sourcePath) ?? [])
+					.sort((left, right) => left.observationKey.localeCompare(right.observationKey)),
+				catalogRevision,
+			}));
+	}
+
 	async getObservation(observationKey: string): Promise<CatalogObservation | null> {
 		await this.open();
 		const transaction = this.getDatabase().transaction(OBSERVATIONS_STORE, "readonly");

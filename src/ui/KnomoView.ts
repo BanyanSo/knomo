@@ -1567,6 +1567,10 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	updateCatalogProgress(coverage: CatalogCoverage): void {
+		this.catalogCoverage = { ...coverage };
+	}
+
 	private async loadNextCatalogPage(): Promise<boolean> {
 		if (this.catalogCursor === null || this.catalogLoadingNextPage) return false;
 		const queryRun = this.catalogDesktopQueryRun;

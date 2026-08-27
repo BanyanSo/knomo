@@ -24,7 +24,9 @@ export const CATALOG_FAILED_PATHS_META_KEY = "catalogFailedPaths";
 
 const DEFAULT_FULL_AUDIT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_SLICE_BUDGET_MS = 12;
-const DEFAULT_RECONCILE_DEBOUNCE_MS = 250;
+const DEFAULT_CHECKPOINT_BATCH_SIZE = 25;
+const DEFAULT_CHECKPOINT_INTERVAL_MS = 1_000;
+const DEFAULT_PROGRESS_INTERVAL_MS = 250;
 
 interface CatalogFailure {
 	sourcePath: string;
@@ -46,7 +48,9 @@ export interface CatalogIndexCoordinatorOptions {
 	enabled?: boolean;
 	fullAuditIntervalMs?: number;
 	sliceBudgetMs?: number;
-	reconcileDebounceMs?: number;
+	checkpointBatchSize?: number;
+	checkpointIntervalMs?: number;
+	progressIntervalMs?: number;
 	now?: () => number;
 	onProgress?: (coverage: CatalogCoverage) => void | Promise<void>;
 	onCatalogSettled?: () => void | Promise<void>;
@@ -58,7 +62,9 @@ export class CatalogIndexCoordinator {
 	private readonly enabled: boolean;
 	private readonly fullAuditIntervalMs: number;
 	private readonly sliceBudgetMs: number;
-	private readonly reconcileDebounceMs: number;
+	private readonly checkpointBatchSize: number;
+	private readonly checkpointIntervalMs: number;
+	private readonly progressIntervalMs: number;
 	private readonly now: () => number;
 	private readonly onProgress: ((coverage: CatalogCoverage) => void | Promise<void>) | null;
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
@@ -66,18 +72,23 @@ export class CatalogIndexCoordinator {
 	private readonly isConfigurationComplete: () => boolean;
 	private readonly inventoryByPath = new Map<string, CatalogInventoryEntry>();
 	private readonly coveredPaths = new Set<string>();
-	private readonly forcedPaths = new Set<string>();
+	private readonly coverageByDate = new Map<string, { total: number; covered: number }>();
 	private readonly pendingDeletedPaths = new Set<string>();
 	private readonly failedPaths = new Map<string, CatalogFailure>();
 	private readonly idleResolvers: Array<() => void> = [];
 	private readonly pathResolvers = new Map<string, Array<() => void>>();
 	private queue: string[] = [];
+	private coverageDates: string[] = [];
+	private coveredFileCount = 0;
+	private activePath: string | null = null;
 	private headings: string[] = [];
 	private dailyConfig: DailyNotesConfig | null = null;
 	private settingsFingerprint = "";
 	private checkpointStartedAt = 0;
+	private processedSinceCheckpoint = 0;
+	private lastCheckpointAt = 0;
+	private lastProgressAt = Number.NEGATIVE_INFINITY;
 	private fullAuditScheduled = false;
-	private startupAuditScheduled = false;
 	private opened = false;
 	private stopped = false;
 	private paused = false;
@@ -85,10 +96,12 @@ export class CatalogIndexCoordinator {
 	private reconciling = false;
 	private reconcileAgain = false;
 	private closeWhenIdle = false;
+	private closingSave: Promise<void> | null = null;
 	private rebuilding = false;
 	private drainTimer: number | null = null;
 	private reconcileTimer: number | null = null;
 	private auditTimer: number | null = null;
+	private readonly yieldTimers = new Map<number, () => void>();
 
 	constructor(
 		private readonly app: App,
@@ -101,7 +114,9 @@ export class CatalogIndexCoordinator {
 		this.enabled = options.enabled ?? CATALOG_SCANNER_ENABLED;
 		this.fullAuditIntervalMs = options.fullAuditIntervalMs ?? DEFAULT_FULL_AUDIT_INTERVAL_MS;
 		this.sliceBudgetMs = options.sliceBudgetMs ?? DEFAULT_SLICE_BUDGET_MS;
-		this.reconcileDebounceMs = options.reconcileDebounceMs ?? DEFAULT_RECONCILE_DEBOUNCE_MS;
+		this.checkpointBatchSize = Math.max(1, options.checkpointBatchSize ?? DEFAULT_CHECKPOINT_BATCH_SIZE);
+		this.checkpointIntervalMs = Math.max(1, options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS);
+		this.progressIntervalMs = Math.max(0, options.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS);
 		this.now = options.now ?? Date.now;
 		this.onProgress = options.onProgress ?? null;
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
@@ -151,12 +166,16 @@ export class CatalogIndexCoordinator {
 			this.pathResolvers.set(path, resolvers);
 		}));
 		for (const path of normalizedPaths) {
-			this.forcedPaths.add(path);
-			const queueIndex = this.queue.indexOf(path);
-			if (queueIndex !== -1) this.queue.splice(queueIndex, 1);
-			if (this.inventoryByPath.has(path)) this.queue.unshift(path);
+			const abstractFile = this.app.vault.getAbstractFileByPath(path);
+			const entry = abstractFile instanceof TFile ? this.toInventoryEntry(abstractFile) : null;
+			if (entry === null) {
+				this.enqueueDeletedPath(path);
+			} else {
+				this.upsertInventoryEntry(entry);
+				this.setPathCovered(path, false);
+				this.enqueuePath(path, true);
+			}
 		}
-		this.scheduleReconcile(0);
 		this.scheduleDrain();
 		await Promise.all(refreshed);
 	}
@@ -181,8 +200,8 @@ export class CatalogIndexCoordinator {
 			auditedAt: this.now(),
 		});
 		if (this.stopped) return;
-		this.inventoryByPath.set(sourcePath, inventory);
-		this.coveredPaths.add(sourcePath);
+		this.upsertInventoryEntry(inventory);
+		this.setPathCovered(sourcePath, true);
 		this.failedPaths.delete(sourcePath);
 		const coverage = this.buildCoverage();
 		await this.catalogService.getStore().setCoverage(coverage);
@@ -199,7 +218,6 @@ export class CatalogIndexCoordinator {
 			if (this.stopped) return;
 			this.inventoryByPath.clear();
 			this.coveredPaths.clear();
-			this.forcedPaths.clear();
 			this.pendingDeletedPaths.clear();
 			this.failedPaths.clear();
 			this.queue = [];
@@ -234,36 +252,54 @@ export class CatalogIndexCoordinator {
 		if (!(file instanceof TFile) || file.extension !== "md") {
 			return;
 		}
-		this.forcedPaths.add(normalizePath(file.path));
-		this.scheduleReconcile();
+		const entry = this.toInventoryEntry(file);
+		if (entry === null) return;
+		this.pendingDeletedPaths.delete(entry.sourcePath);
+		this.upsertInventoryEntry(entry);
+		this.setPathCovered(entry.sourcePath, false);
+		this.enqueuePath(entry.sourcePath);
+		this.scheduleDrain();
 	}
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {
 		if (!(file instanceof TFile) || file.extension !== "md") {
 			return;
 		}
-		this.pendingDeletedPaths.add(normalizePath(oldPath));
-		this.forcedPaths.add(normalizePath(file.path));
-		this.scheduleReconcile();
+		const normalizedOldPath = normalizePath(oldPath);
+		if (this.inventoryByPath.has(normalizedOldPath) || this.matchesDailyPath(normalizedOldPath)) {
+			this.enqueueDeletedPath(normalizedOldPath);
+		}
+		const entry = this.toInventoryEntry(file);
+		if (entry !== null) {
+			this.pendingDeletedPaths.delete(entry.sourcePath);
+			this.upsertInventoryEntry(entry);
+			this.setPathCovered(entry.sourcePath, false);
+			this.enqueuePath(entry.sourcePath);
+		}
+		this.scheduleDrain();
 	}
 
 	private handleFileDeleted(file: unknown): void {
 		if (!(file instanceof TFile) || file.extension !== "md") {
 			return;
 		}
-		this.pendingDeletedPaths.add(normalizePath(file.path));
-		this.scheduleReconcile();
+		const sourcePath = normalizePath(file.path);
+		if (!this.inventoryByPath.has(sourcePath) && !this.matchesDailyPath(sourcePath)) return;
+		this.enqueueDeletedPath(sourcePath);
+		this.scheduleDrain();
 	}
 
 	private handleVisibilityChange(): void {
 		this.paused = this.app.workspace.containerEl.doc.visibilityState === "hidden";
-		if (!this.paused) {
+		if (this.paused) {
+			if (this.hasCheckpointWork()) void this.saveProgress(true).catch(() => undefined);
+		} else {
 			this.scheduleReconcile(0);
 			this.scheduleDrain();
 		}
 	}
 
-	private scheduleReconcile(delay = this.reconcileDebounceMs): void {
+	private scheduleReconcile(delay = 0): void {
 		if (!this.enabled || this.stopped || !this.opened) {
 			return;
 		}
@@ -279,6 +315,10 @@ export class CatalogIndexCoordinator {
 
 	private async reconcileInventory(): Promise<void> {
 		if (!this.opened || this.stopped) {
+			return;
+		}
+		if (this.processing) {
+			this.reconcileAgain = true;
 			return;
 		}
 		if (this.reconciling) {
@@ -323,12 +363,9 @@ export class CatalogIndexCoordinator {
 			const lastFullAuditAt = await store.getMeta<number>(CATALOG_LAST_FULL_AUDIT_META_KEY);
 			if (this.stopped) return;
 			const resumingFullAudit = checkpointCompatible && checkpoint.fullAudit;
-			const startingFullAudit = !resumingFullAudit && (
-				!this.startupAuditScheduled
-				|| lastFullAuditAt === null
-				|| this.now() - lastFullAuditAt >= this.fullAuditIntervalMs
-			);
-			if (startingFullAudit) this.startupAuditScheduled = true;
+			const fullAuditDue = lastFullAuditAt === null
+				|| this.now() - lastFullAuditAt >= this.fullAuditIntervalMs;
+			const startingFullAudit = !resumingFullAudit && fullAuditDue;
 			this.scheduleAuditWake(lastFullAuditAt, resumingFullAudit || startingFullAudit);
 			const pending = new Set<string>();
 			this.coveredPaths.clear();
@@ -347,14 +384,6 @@ export class CatalogIndexCoordinator {
 					}
 				}
 			}
-			for (const path of this.forcedPaths) {
-				if (this.inventoryByPath.has(path)) {
-					pending.add(path);
-				} else {
-					this.resolvePath(path);
-				}
-			}
-			this.forcedPaths.clear();
 			if (startingFullAudit) {
 				for (const entry of inventory) {
 					pending.add(entry.sourcePath);
@@ -363,12 +392,15 @@ export class CatalogIndexCoordinator {
 			for (const path of pending) {
 				this.coveredPaths.delete(path);
 			}
+			this.rebuildCoverageCounters();
 
 			this.queue = sortPathsNewestFirst([...pending], this.inventoryByPath);
 			this.fullAuditScheduled = resumingFullAudit || startingFullAudit;
 			this.checkpointStartedAt = checkpointCompatible ? checkpoint.startedAt : this.now();
+			this.processedSinceCheckpoint = 0;
+			this.lastCheckpointAt = this.now();
 			this.failedPaths.clear();
-			await this.saveProgress();
+			await this.saveProgress(true, true);
 			if (this.stopped) return;
 			if (this.queue.length === 0) {
 				await this.finishScan();
@@ -398,7 +430,8 @@ export class CatalogIndexCoordinator {
 	}
 
 	private scheduleDrain(): void {
-		if (this.stopped || this.paused || this.processing || this.drainTimer !== null || this.queue.length === 0) {
+		if (this.stopped || this.paused || this.processing || this.drainTimer !== null
+			|| (this.queue.length === 0 && this.pendingDeletedPaths.size === 0)) {
 			return;
 		}
 		this.drainTimer = this.app.workspace.containerEl.win.setTimeout(() => {
@@ -412,24 +445,47 @@ export class CatalogIndexCoordinator {
 			return;
 		}
 		this.processing = true;
-		const sliceStartedAt = this.now();
+		const sliceStartedAt = monotonicNow();
 		try {
 			do {
+				const deletedPath = this.pendingDeletedPaths.values().next().value as string | undefined;
+				if (deletedPath !== undefined) {
+					this.pendingDeletedPaths.delete(deletedPath);
+					await this.catalogService.deleteFile(deletedPath);
+					this.failedPaths.delete(deletedPath);
+					if (!this.queue.includes(deletedPath)) this.resolvePath(deletedPath);
+					this.processedSinceCheckpoint += 1;
+					if (this.shouldSaveProgress()) await this.saveProgress();
+					continue;
+				}
 				const sourcePath = this.queue.shift();
 				if (sourcePath === undefined) {
 					break;
 				}
+				this.activePath = sourcePath;
 				await this.processPath(sourcePath);
+				this.activePath = null;
+				if (!this.queue.includes(sourcePath) && !this.pendingDeletedPaths.has(sourcePath)) {
+					this.resolvePath(sourcePath);
+				}
 				if (this.stopped) break;
-				await this.saveProgress();
-			} while (!this.paused && this.queue.length > 0 && this.now() - sliceStartedAt < this.sliceBudgetMs);
-			if (!this.stopped && this.queue.length === 0) {
+				this.processedSinceCheckpoint += 1;
+				if (this.shouldSaveProgress()) await this.saveProgress();
+			} while (!this.paused
+				&& (this.queue.length > 0 || this.pendingDeletedPaths.size > 0)
+				&& monotonicNow() - sliceStartedAt < this.sliceBudgetMs);
+			if (!this.stopped) await this.saveProgress(true);
+			if (!this.stopped && this.queue.length === 0 && this.pendingDeletedPaths.size === 0) {
 				await this.finishScan();
 			}
 		} finally {
+			this.activePath = null;
 			this.processing = false;
 			this.closeStoreWhenSafe();
-			if (!this.closeWhenIdle) {
+			if (this.reconcileAgain && !this.stopped) {
+				this.reconcileAgain = false;
+				this.scheduleReconcile(0);
+			} else if (!this.closeWhenIdle) {
 				this.scheduleDrain();
 			}
 			this.resolveIdleIfNeeded();
@@ -442,8 +498,7 @@ export class CatalogIndexCoordinator {
 		const abstractFile = this.app.vault.getAbstractFileByPath(sourcePath);
 		if (inventory === undefined || !(abstractFile instanceof TFile)) {
 			await this.catalogService.deleteFile(sourcePath);
-			this.coveredPaths.delete(sourcePath);
-			this.resolvePath(sourcePath);
+			this.removeInventoryEntry(sourcePath);
 			return;
 		}
 		try {
@@ -455,6 +510,9 @@ export class CatalogIndexCoordinator {
 				logicalDate: inventory.logicalDate,
 				headings: this.headings,
 				bytes,
+			}, {
+				sliceBudgetMs: Math.max(1, Math.min(8, this.sliceBudgetMs)),
+				yieldControl: () => this.yieldToEventLoop(),
 			});
 			if (this.stopped) return;
 			const stored = await this.catalogService.getStore().getFile(sourcePath);
@@ -479,13 +537,11 @@ export class CatalogIndexCoordinator {
 					auditedAt: this.now(),
 				});
 			}
-			this.coveredPaths.add(sourcePath);
+			this.setPathCovered(sourcePath, true);
 			this.failedPaths.delete(sourcePath);
 		} catch (error) {
-			this.coveredPaths.delete(sourcePath);
+			this.setPathCovered(sourcePath, false);
 			this.failedPaths.set(sourcePath, { sourcePath, message: getErrorMessage(error) });
-		} finally {
-			this.resolvePath(sourcePath);
 		}
 	}
 
@@ -516,30 +572,49 @@ export class CatalogIndexCoordinator {
 		void Promise.resolve(this.onCatalogSettled()).catch(() => undefined);
 	}
 
-	private async saveProgress(): Promise<void> {
-		if (this.stopped) return;
+	private shouldSaveProgress(): boolean {
+		return this.processedSinceCheckpoint >= this.checkpointBatchSize
+			|| this.now() - this.lastCheckpointAt >= this.checkpointIntervalMs;
+	}
+
+	private async saveProgress(
+		forceCheckpoint = false,
+		forceProgress = false,
+		allowStopped = false,
+	): Promise<void> {
+		if ((this.stopped && !allowStopped) || (!forceCheckpoint && !this.shouldSaveProgress())) return;
 		const store = this.catalogService.getStore();
 		const coverage = this.buildCoverage();
-		await store.setCoverage(coverage);
-		if (this.stopped) return;
-		this.notifyProgress(coverage);
+		const pendingPaths = [...new Set([
+			...(this.activePath === null ? [] : [this.activePath]),
+			...this.queue,
+		])];
 		const checkpoint: CatalogCheckpoint = {
 			settingsFingerprint: this.settingsFingerprint,
 			parserVersion: CATALOG_PARSER_VERSION,
-			pendingPaths: [...this.queue],
+			pendingPaths,
 			fullAudit: this.fullAuditScheduled,
 			completedFileCount: coverage.coveredFileCount,
 			totalFileCount: coverage.totalFileCount,
 			startedAt: this.checkpointStartedAt,
 			updatedAt: this.now(),
 		};
+		const failures = [...this.failedPaths.values()];
+		this.processedSinceCheckpoint = 0;
+		this.lastCheckpointAt = this.now();
+		await store.setCoverage(coverage);
+		if (this.stopped && !allowStopped) return;
+		this.notifyProgress(coverage, forceProgress);
 		await store.setMeta(CATALOG_CHECKPOINT_META_KEY, checkpoint);
-		if (this.stopped) return;
-		await store.setMeta(CATALOG_FAILED_PATHS_META_KEY, [...this.failedPaths.values()]);
+		if (this.stopped && !allowStopped) return;
+		await store.setMeta(CATALOG_FAILED_PATHS_META_KEY, failures);
 	}
 
-	private notifyProgress(coverage: CatalogCoverage): void {
+	private notifyProgress(coverage: CatalogCoverage, force = false): void {
 		if (this.stopped || this.onProgress === null) return;
+		const currentTime = monotonicNow();
+		if (!force && currentTime - this.lastProgressAt < this.progressIntervalMs) return;
+		this.lastProgressAt = currentTime;
 		void Promise.resolve(this.onProgress({ ...coverage })).catch(() => undefined);
 	}
 
@@ -564,6 +639,7 @@ export class CatalogIndexCoordinator {
 			if (this.stopped) return;
 			this.fullAuditScheduled = false;
 			this.scheduleFailedPathRetry();
+			this.notifyProgress(coverage, true);
 			this.notifyCatalogSettled();
 			return;
 		}
@@ -575,9 +651,11 @@ export class CatalogIndexCoordinator {
 		this.rebuilding = false;
 		await store.deleteMeta(CATALOG_CHECKPOINT_META_KEY);
 		if (this.stopped) return;
-		await store.setCoverage(this.buildCoverage());
+		const coverage = this.buildCoverage();
+		await store.setCoverage(coverage);
 		if (this.stopped) return;
 		this.fullAuditScheduled = false;
+		this.notifyProgress(coverage, true);
 		this.notifyCatalogSettled();
 	}
 
@@ -595,19 +673,14 @@ export class CatalogIndexCoordinator {
 	}
 
 	private buildCoverage(): CatalogCoverage {
-		const entries = [...this.inventoryByPath.values()];
-		const coveredFileCount = entries.filter((entry) => this.coveredPaths.has(entry.sourcePath)).length;
 		const sharedConfigurationComplete = this.isConfigurationComplete();
-		const dates = [...new Set(entries.map((entry) => entry.logicalDate))].sort((left, right) => right.localeCompare(left));
 		let coveredFromDate: string | null = null;
-		for (const date of dates) {
-			const dateEntries = entries.filter((entry) => entry.logicalDate === date);
-			if (!dateEntries.every((entry) => this.coveredPaths.has(entry.sourcePath))) {
-				break;
-			}
+		for (const date of this.coverageDates) {
+			const counts = this.coverageByDate.get(date);
+			if (counts === undefined || counts.covered !== counts.total) break;
 			coveredFromDate = date;
 		}
-		const pendingFileCount = entries.length - coveredFileCount;
+		const pendingFileCount = this.inventoryByPath.size - this.coveredFileCount;
 		return {
 			kind: this.rebuilding
 				? "rebuilding"
@@ -617,9 +690,129 @@ export class CatalogIndexCoordinator {
 			sharedConfigurationComplete,
 			coveredFromDate,
 			pendingFileCount,
-			coveredFileCount,
-			totalFileCount: entries.length,
+			coveredFileCount: this.coveredFileCount,
+			totalFileCount: this.inventoryByPath.size,
 		};
+	}
+
+	private rebuildCoverageCounters(): void {
+		this.coverageByDate.clear();
+		this.coveredFileCount = 0;
+		for (const sourcePath of [...this.coveredPaths]) {
+			if (!this.inventoryByPath.has(sourcePath)) this.coveredPaths.delete(sourcePath);
+		}
+		for (const entry of this.inventoryByPath.values()) {
+			const counts = this.coverageByDate.get(entry.logicalDate) ?? { total: 0, covered: 0 };
+			counts.total += 1;
+			if (this.coveredPaths.has(entry.sourcePath)) {
+				counts.covered += 1;
+				this.coveredFileCount += 1;
+			}
+			this.coverageByDate.set(entry.logicalDate, counts);
+		}
+		this.refreshCoverageDates();
+	}
+
+	private upsertInventoryEntry(entry: CatalogInventoryEntry): void {
+		const existing = this.inventoryByPath.get(entry.sourcePath);
+		if (existing?.logicalDate === entry.logicalDate) {
+			this.inventoryByPath.set(entry.sourcePath, entry);
+			return;
+		}
+		if (existing !== undefined) this.removeCoverageDateEntry(existing, this.coveredPaths.has(entry.sourcePath));
+		this.inventoryByPath.set(entry.sourcePath, entry);
+		const counts = this.coverageByDate.get(entry.logicalDate) ?? { total: 0, covered: 0 };
+		counts.total += 1;
+		if (this.coveredPaths.has(entry.sourcePath)) counts.covered += 1;
+		this.coverageByDate.set(entry.logicalDate, counts);
+		this.refreshCoverageDates();
+	}
+
+	private removeInventoryEntry(sourcePath: string): void {
+		const existing = this.inventoryByPath.get(sourcePath);
+		if (existing === undefined) {
+			this.coveredPaths.delete(sourcePath);
+			return;
+		}
+		const covered = this.coveredPaths.delete(sourcePath);
+		if (covered) this.coveredFileCount -= 1;
+		this.removeCoverageDateEntry(existing, covered);
+		this.inventoryByPath.delete(sourcePath);
+		this.refreshCoverageDates();
+	}
+
+	private removeCoverageDateEntry(entry: CatalogInventoryEntry, covered: boolean): void {
+		const counts = this.coverageByDate.get(entry.logicalDate);
+		if (counts === undefined) return;
+		counts.total -= 1;
+		if (covered) counts.covered -= 1;
+		if (counts.total === 0) this.coverageByDate.delete(entry.logicalDate);
+	}
+
+	private setPathCovered(sourcePath: string, covered: boolean): void {
+		const entry = this.inventoryByPath.get(sourcePath);
+		if (entry === undefined) return;
+		const wasCovered = this.coveredPaths.has(sourcePath);
+		if (wasCovered === covered) return;
+		const counts = this.coverageByDate.get(entry.logicalDate);
+		if (covered) {
+			this.coveredPaths.add(sourcePath);
+			this.coveredFileCount += 1;
+			if (counts !== undefined) counts.covered += 1;
+		} else {
+			this.coveredPaths.delete(sourcePath);
+			this.coveredFileCount -= 1;
+			if (counts !== undefined) counts.covered -= 1;
+		}
+	}
+
+	private refreshCoverageDates(): void {
+		this.coverageDates = [...this.coverageByDate.keys()].sort((left, right) => right.localeCompare(left));
+	}
+
+	private toInventoryEntry(file: TFile): CatalogInventoryEntry | null {
+		if (this.dailyConfig === null) return null;
+		const sourcePath = normalizePath(file.path);
+		const date = parseDailyNoteDateFromPath(sourcePath, this.dailyConfig);
+		return date === null ? null : {
+			sourcePath,
+			logicalDate: formatDatePart(date),
+			mtime: file.stat.mtime,
+			size: file.stat.size,
+		};
+	}
+
+	private matchesDailyPath(sourcePath: string): boolean {
+		return this.dailyConfig !== null
+			&& parseDailyNoteDateFromPath(sourcePath, this.dailyConfig) !== null;
+	}
+
+	private enqueuePath(sourcePath: string, prioritize = false): void {
+		const queueIndex = this.queue.indexOf(sourcePath);
+		if (queueIndex !== -1) this.queue.splice(queueIndex, 1);
+		if (prioritize) this.queue.unshift(sourcePath);
+		else this.queue.push(sourcePath);
+	}
+
+	private enqueueDeletedPath(sourcePath: string): void {
+		const queueIndex = this.queue.indexOf(sourcePath);
+		if (queueIndex !== -1) this.queue.splice(queueIndex, 1);
+		this.pendingDeletedPaths.add(sourcePath);
+		this.removeInventoryEntry(sourcePath);
+	}
+
+	private yieldToEventLoop(): Promise<void> {
+		if (this.stopped) return Promise.resolve();
+		return new Promise<void>((resolve) => {
+			const win = this.app.workspace.containerEl.win;
+			let timer = 0;
+			const finish = () => {
+				this.yieldTimers.delete(timer);
+				resolve();
+			};
+			timer = win.setTimeout(finish, 0);
+			this.yieldTimers.set(timer, finish);
+		});
 	}
 
 	private scheduleAuditWake(lastFullAuditAt: number | null, fullAuditDue: boolean): void {
@@ -639,6 +832,11 @@ export class CatalogIndexCoordinator {
 	}
 
 	private stop(): void {
+		if (this.stopped) return;
+		const closingSave = this.opened && this.hasCheckpointWork()
+			? this.saveProgress(true, false, true).catch(() => undefined)
+			: null;
+		this.closingSave = closingSave;
 		this.stopped = true;
 		const win = this.app.workspace.containerEl.win;
 		for (const timer of [this.drainTimer, this.reconcileTimer, this.auditTimer]) {
@@ -649,27 +847,39 @@ export class CatalogIndexCoordinator {
 		this.drainTimer = null;
 		this.reconcileTimer = null;
 		this.auditTimer = null;
+		for (const [timer, resolve] of this.yieldTimers) {
+			win.clearTimeout(timer);
+			resolve();
+		}
+		this.yieldTimers.clear();
 		for (const path of this.queue) this.resolvePath(path);
 		this.queue = [];
-		this.forcedPaths.clear();
 		this.pendingDeletedPaths.clear();
 		for (const path of this.pathResolvers.keys()) this.resolvePath(path);
-		if (this.processing || this.reconciling) {
-			this.closeWhenIdle = true;
-		} else if (this.opened) {
-			this.catalogService.close();
-			this.opened = false;
+		this.closeWhenIdle = this.opened;
+		if (closingSave !== null) {
+			void closingSave.finally(() => {
+				this.closingSave = null;
+				this.closeStoreWhenSafe();
+				this.resolveIdleIfNeeded();
+			});
 		}
+		this.closeStoreWhenSafe();
 		this.resolveIdleIfNeeded();
 	}
 
+	private hasCheckpointWork(): boolean {
+		return this.activePath !== null || this.queue.length > 0;
+	}
+
 	private isIdle(): boolean {
-		return this.queue.length === 0 && !this.processing && !this.reconciling
+		return this.queue.length === 0 && this.pendingDeletedPaths.size === 0
+			&& !this.processing && !this.reconciling && this.closingSave === null
 			&& this.drainTimer === null && this.reconcileTimer === null;
 	}
 
 	private closeStoreWhenSafe(): void {
-		if (!this.closeWhenIdle || this.processing || this.reconciling) {
+		if (!this.closeWhenIdle || this.processing || this.reconciling || this.closingSave !== null) {
 			return;
 		}
 		this.catalogService.close();
@@ -795,6 +1005,10 @@ function buildRefreshResult(
 		failed: errors.length,
 		errors,
 	};
+}
+
+function monotonicNow(): number {
+	return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
 

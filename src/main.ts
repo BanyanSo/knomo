@@ -44,7 +44,7 @@ import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
-import type { CatalogFileRevisionBatch, CatalogRefreshResult } from "./types/catalog";
+import type { CatalogCoverage, CatalogFileRevisionBatch, CatalogRefreshResult } from "./types/catalog";
 import { formatDatePart } from "./utils/date";
 import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
 
@@ -165,10 +165,7 @@ export default class KnomoPlugin extends Plugin {
 			: null;
 
 		const loadObservationBatches = async (): Promise<CatalogFileRevisionBatch[]> => {
-			const files = await this.memoCatalogService!.listFiles();
-			const batches = await Promise.all(files.map((file) =>
-				this.memoCatalogService!.getFileRevisionBatch(file.sourcePath)));
-			return batches.filter((batch): batch is CatalogFileRevisionBatch => batch !== null);
+			return this.memoCatalogService!.listFileRevisionBatches();
 		};
 		const reconcileIdentityLedger = async () => {
 			const batches = await loadObservationBatches();
@@ -218,7 +215,7 @@ export default class KnomoPlugin extends Plugin {
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
 				isConfigurationComplete: () => knomoSharedConfigService.isCoverageComplete(),
-				onProgress: () => this.queueRefreshOpenViews(),
+				onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage),
 				onRevisionTransition: async (transition) => {
 					await identityLedgerService.reconcileRevision(
 						transition.before?.observations ?? [],
@@ -351,7 +348,6 @@ export default class KnomoPlugin extends Plugin {
 					}
 					await this.legacyIndexMigrationService?.run();
 					await reconcileIdentityLedger();
-					await this.catalogReadService?.materializeResolutionSnapshot();
 				},
 				() => this.openCatalogDataSettings(),
 			),
@@ -412,7 +408,6 @@ export default class KnomoPlugin extends Plugin {
 			await this.catalogIndexCoordinator?.initialize();
 			await this.legacyIndexMigrationService?.run();
 			await reconcileIdentityLedger();
-			await this.catalogReadService?.materializeResolutionSnapshot();
 			await this.catalogReadService?.prime().catch(() => undefined);
 			return true;
 		})().catch(() => {
@@ -481,6 +476,12 @@ export default class KnomoPlugin extends Plugin {
 			}
 		});
 		await Promise.all(refreshes);
+	}
+
+	private updateOpenViewCatalogProgress(coverage: CatalogCoverage): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+			if (leaf.view instanceof KnomoView) leaf.view.updateCatalogProgress(coverage);
+		}
 	}
 
 	private registerAttachmentEvents(): void {
@@ -575,7 +576,6 @@ export default class KnomoPlugin extends Plugin {
 			}
 			await this.catalogIndexCoordinator?.initialize();
 			await this.legacyIndexMigrationService?.run();
-			await this.catalogReadService?.materializeResolutionSnapshot();
 			await this.catalogReadService?.prime();
 			await this.showLegacyMigrationCompletionNotice();
 		} catch {

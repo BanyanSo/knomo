@@ -142,6 +142,34 @@ test("PARSE-LINE-ENDINGS：原始 SHA 区分 LF/CRLF/BOM，contentHash 保持规
 	assert.equal(results[2].sourceRevision, sha256(bom));
 });
 
+test("大 Daily 解析会协作式让出事件循环且结果保持一致", async () => {
+	const content = [
+		"## Memos",
+		"- 09:00 large memo",
+		...Array.from({ length: 2_000 }, (_, index) => `  continuation ${index}`),
+	].join("\n");
+	const bytes = Buffer.from(content, "utf8");
+	const expected = await parser.parse({
+		sourcePath: "Journal/2026-08-09.md",
+		logicalDate: "2026-08-09",
+		headings: ["## Memos"],
+		bytes,
+	});
+	let yieldCount = 0;
+	const actual = await parser.parse({
+		sourcePath: "Journal/2026-08-09.md",
+		logicalDate: "2026-08-09",
+		headings: ["## Memos"],
+		bytes,
+	}, {
+		maxLinesPerSlice: 32,
+		yieldControl: async () => { yieldCount += 1; },
+	});
+
+	assert.ok(yieldCount > 0);
+	assert.deepEqual(actual, expected);
+});
+
 async function parseFixture(
 	name: string,
 	overrides: Partial<{ sourcePath: string; logicalDate: string; headings: string[] }> = {},

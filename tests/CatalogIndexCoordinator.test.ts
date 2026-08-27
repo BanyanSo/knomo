@@ -235,6 +235,113 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 	second.unload();
 });
 
+test("warm start 在审计未到期时不读取未变化 Daily 正文", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const files = [
+		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 unchanged", mtime: 10 },
+	];
+	const first = await createCoordinatorFixture(files);
+	const firstCoordinator = new CatalogIndexCoordinator(
+		first.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ now: () => 1_000, fullAuditIntervalMs: 10_000 },
+	);
+	firstCoordinator.start(first.owner);
+	await firstCoordinator.initialize();
+	await firstCoordinator.waitForIdle();
+	assert.equal(first.readCount(), 1);
+	first.unload();
+
+	const second = await createCoordinatorFixture(files);
+	const secondCoordinator = new CatalogIndexCoordinator(
+		second.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ now: () => 2_000, fullAuditIntervalMs: 10_000 },
+	);
+	secondCoordinator.start(second.owner);
+	await secondCoordinator.initialize();
+	await secondCoordinator.waitForIdle();
+
+	assert.equal(second.readCount(), 0);
+	assert.equal((await store.query({ limit: 50 })).items[0]?.content, "unchanged");
+	second.unload();
+});
+
+test("Vault 事件只处理受影响的 Daily，Monthly 与其他 Markdown 不触发 inventory 重算", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const fixture = await createCoordinatorFixture([
+		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 before", mtime: 10 },
+		{ path: "Memos/2026-08.md", content: "# Monthly", mtime: 10 },
+		{ path: "Notes/other.md", content: "plain note", mtime: 10 },
+	]);
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{ now: () => 1_000, fullAuditIntervalMs: 10_000 },
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+		assert.equal(fixture.inventoryCount(), 1);
+		assert.equal(fixture.readCount(), 1);
+
+		fixture.emitVaultEvent("modify", fixture.file("Memos/2026-08.md"));
+		fixture.emitVaultEvent("modify", fixture.file("Notes/other.md"));
+		await waitTimer(20);
+		assert.equal(fixture.inventoryCount(), 1);
+		assert.equal(fixture.readCount(), 1);
+
+		fixture.setFile("Journal/2026-08-09.md", "## Memos\n- 09:00 after", 20);
+		fixture.emitVaultEvent("modify", fixture.file("Journal/2026-08-09.md"));
+		await waitUntil(async () => (await store.query({ limit: 10 })).items[0]?.content === "after");
+		assert.equal(fixture.inventoryCount(), 1);
+		assert.equal(fixture.readCount(), 2);
+
+		const deletedFile = fixture.file("Journal/2026-08-09.md");
+		fixture.removeFile("Journal/2026-08-09.md");
+		fixture.emitVaultEvent("delete", deletedFile);
+		await waitUntil(async () => (await store.listFiles()).length === 0);
+		assert.equal(fixture.inventoryCount(), 1);
+
+		fixture.setFile("Journal/2026-08-10.md", "## Memos\n- 10:00 moving", 30);
+		fixture.emitVaultEvent("create", fixture.file("Journal/2026-08-10.md"));
+		await waitUntil(async () => (await store.listFiles()).some((file) => file.sourcePath.endsWith("2026-08-10.md")));
+		fixture.renameFile("Journal/2026-08-10.md", "Journal/2026-08-11.md", 40);
+		fixture.emitVaultEvent(
+			"rename",
+			fixture.file("Journal/2026-08-11.md"),
+			"Journal/2026-08-10.md",
+		);
+		await waitUntil(async () => {
+			const paths = (await store.listFiles()).map((file) => file.sourcePath);
+			return paths.length === 1 && paths[0] === "Journal/2026-08-11.md";
+		});
+		assert.equal(fixture.inventoryCount(), 1);
+	} finally {
+		fixture.unload();
+	}
+});
+
 test("MOBILE-BACKGROUND-RESUME：隐藏时保存 checkpoint，重启只续跑 pending paths", async () => {
 	await ensureObsidianStub();
 	const {
@@ -516,9 +623,12 @@ test("手动刷新按文件 revision 返回真实 added、updated、deleted 和 
 	}
 });
 
-test("插件 unload 会清除扫描 timer，并阻止尚未解析的 Daily 继续写入 Catalog", async () => {
+test("插件 unload 会保存 active checkpoint、清除 timer，并阻止尚未解析的 Daily 继续写入 Catalog", async () => {
 	await ensureObsidianStub();
-	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const {
+		CatalogIndexCoordinator,
+		CATALOG_CHECKPOINT_META_KEY,
+	} = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
@@ -550,6 +660,66 @@ test("插件 unload 会清除扫描 timer，并阻止尚未解析的 Daily 继�
 
 	assert.equal(replacementCount, 0);
 	assert.equal(fixture.timerCount(), 0);
+	assert.deepEqual(
+		(await store.getMeta<{ pendingPaths: string[] }>(CATALOG_CHECKPOINT_META_KEY))?.pendingPaths,
+		["Journal/2026-08-22.md"],
+	);
+});
+
+test("1001 个 Daily 每个只解析一次，checkpoint 按批次持久化", async () => {
+	await ensureObsidianStub();
+	const {
+		CatalogIndexCoordinator,
+		CATALOG_CHECKPOINT_META_KEY,
+	} = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const files = Array.from({ length: 1_001 }, (_, index) => {
+		const year = 2020 + Math.floor(index / 336);
+		const yearDay = index % 336;
+		const month = Math.floor(yearDay / 28) + 1;
+		const day = yearDay % 28 + 1;
+		const logicalDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+		return {
+			path: `Journal/${logicalDate}.md`,
+			content: `## Memos\n- 09:00 ${index}`,
+			mtime: 10,
+		};
+	});
+	const fixture = await createCoordinatorFixture(files);
+	const store = new InMemoryMemoCatalogStore();
+	let checkpointWriteCount = 0;
+	const setMeta = store.setMeta.bind(store);
+	store.setMeta = async (key, value) => {
+		if (key === CATALOG_CHECKPOINT_META_KEY) checkpointWriteCount += 1;
+		await setMeta(key, value);
+	};
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		() => ["## Memos"],
+		{
+			now: () => 1_000,
+			fullAuditIntervalMs: 10_000,
+			sliceBudgetMs: 60_000,
+			checkpointBatchSize: 25,
+			checkpointIntervalMs: 60_000,
+		},
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+
+		assert.equal(fixture.readCount(), files.length);
+		assert.ok(checkpointWriteCount < 50, `checkpoint 写入次数过多：${checkpointWriteCount}`);
+		assert.equal((await store.getCoverage()).kind, "complete");
+	} finally {
+		fixture.unload();
+	}
 });
 
 test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共享数据", async () => {
@@ -594,6 +764,7 @@ async function createCoordinatorFixture(
 ) {
 	const { TFile } = await import("obsidian");
 	const registeredVaultEvents: string[] = [];
+	const vaultListeners = new Map<string, Array<(...args: unknown[]) => void>>();
 	const cleanupCallbacks: Array<() => void> = [];
 	const domListeners = new Map<string, () => void>();
 	const failedReads = new Set<string>();
@@ -601,6 +772,7 @@ async function createCoordinatorFixture(
 	const timers = new Set<NodeJS.Timeout>();
 	const doc = { visibilityState: "visible" };
 	let reads = 0;
+	let inventoryReads = 0;
 	const files = entries.map((entry) => Object.assign(new TFile(), {
 		path: entry.path,
 		extension: "md",
@@ -609,11 +781,17 @@ async function createCoordinatorFixture(
 	const contentByPath = new Map(entries.map((entry) => [entry.path, Buffer.from(entry.content, "utf8")]));
 	const app = {
 		vault: {
-			on: (name: string) => {
+			on: (name: string, callback: (...args: unknown[]) => void) => {
 				registeredVaultEvents.push(name);
+				const listeners = vaultListeners.get(name) ?? [];
+				listeners.push(callback);
+				vaultListeners.set(name, listeners);
 				return {};
 			},
-			getMarkdownFiles: () => files,
+			getMarkdownFiles: () => {
+				inventoryReads += 1;
+				return files;
+			},
 			getAbstractFileByPath: (path: string) => files.find((file) => file.path === path) ?? null,
 			readBinary: async (file: { path: string }) => {
 				reads += 1;
@@ -664,7 +842,12 @@ async function createCoordinatorFixture(
 		owner: owner as never,
 		registeredVaultEvents,
 		readCount: () => reads,
+		inventoryCount: () => inventoryReads,
 		timerCount: () => timers.size,
+		file: (path: string) => files.find((file) => file.path === path) ?? null,
+		emitVaultEvent: (name: string, ...args: unknown[]) => {
+			for (const listener of vaultListeners.get(name) ?? []) listener(...args);
+		},
 		setFile: (path: string, content: string, mtime: number) => {
 			let file = files.find((item) => item.path === path);
 			if (file === undefined) {
@@ -678,6 +861,15 @@ async function createCoordinatorFixture(
 			const index = files.findIndex((file) => file.path === path);
 			if (index !== -1) files.splice(index, 1);
 			contentByPath.delete(path);
+		},
+		renameFile: (oldPath: string, newPath: string, mtime: number) => {
+			const file = files.find((item) => item.path === oldPath);
+			if (file === undefined) throw new Error(`missing file: ${oldPath}`);
+			const content = contentByPath.get(oldPath) ?? Buffer.alloc(0);
+			file.path = newPath;
+			file.stat = { ctime: mtime, mtime, size: content.byteLength };
+			contentByPath.delete(oldPath);
+			contentByPath.set(newPath, content);
 		},
 		failRead: (path: string) => { failedReads.add(path); },
 		blockRead: (path: string) => {

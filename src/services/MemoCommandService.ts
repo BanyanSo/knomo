@@ -79,13 +79,10 @@ export class MemoCommandService {
 
 	async rebuildLocalCatalog(): Promise<void> {
 		await this.options.rebuildLocalCatalog();
-		await this.readService.materializeResolutionSnapshot();
 	}
 
 	async refreshLocalCatalog(): Promise<CatalogRefreshResult> {
-		const result = await this.options.refreshLocalCatalog();
-		await this.readService.materializeResolutionSnapshot();
-		return result;
+		return this.options.refreshLocalCatalog();
 	}
 
 	getOperationalState(readState: CatalogReadState = this.readService.getLastReadState() ?? "history_building"): CatalogOperationalState {

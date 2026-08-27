@@ -30,6 +30,7 @@ export interface MemoCatalogStore {
 	deleteFilePartition(sourcePath: string): Promise<number>;
 	getFile(sourcePath: string): Promise<CatalogFileRecord | null>;
 	getFileRevisionBatch(sourcePath: string): Promise<CatalogFileRevisionBatch | null>;
+	listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]>;
 	getObservation(observationKey: string): Promise<CatalogObservation | null>;
 	listFiles(): Promise<CatalogFileRecord[]>;
 	query(request: CatalogQuery): Promise<CatalogQueryPage>;
@@ -112,6 +113,21 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 			})
 			.sort((left, right) => left.observationKey.localeCompare(right.observationKey));
 		return { file: clone(file), observations, catalogRevision: this.catalogRevision };
+	}
+
+	async listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]> {
+		return [...this.files.values()]
+			.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
+			.map((file) => ({
+				file: clone(file),
+				observations: (this.observationsByFile.get(file.sourcePath) ?? [])
+					.flatMap((key) => {
+						const observation = this.observations.get(key);
+						return observation === undefined ? [] : [clone(observation)];
+					})
+					.sort((left, right) => left.observationKey.localeCompare(right.observationKey)),
+				catalogRevision: this.catalogRevision,
+			}));
 	}
 
 	async getObservation(observationKey: string): Promise<CatalogObservation | null> {
@@ -333,6 +349,9 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	}
 	getFileRevisionBatch(sourcePath: string): Promise<CatalogFileRevisionBatch | null> {
 		return this.run((store) => store.getFileRevisionBatch(sourcePath));
+	}
+	listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]> {
+		return this.run((store) => store.listFileRevisionBatches());
 	}
 	getObservation(observationKey: string): Promise<CatalogObservation | null> {
 		return this.run((store) => store.getObservation(observationKey));

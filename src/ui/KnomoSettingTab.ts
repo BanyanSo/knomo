@@ -13,10 +13,16 @@ import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../s
 import type { SettingsService } from "../services/SettingsService";
 import type { KnomoDataRootMigrationService } from "../services/KnomoDataRootMigrationService";
 import type { KnomoSharedConfigService } from "../services/KnomoSharedConfigService";
+import type {
+	KnomoStartupBootstrapService,
+	KnomoStartupBootstrapStage,
+	KnomoStartupBootstrapStatus,
+} from "../services/KnomoStartupBootstrapService";
 import type { CatalogReadService } from "../services/CatalogReadService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
 import type { LegacyIndexMigrationService } from "../services/LegacyIndexMigrationService";
+import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { normalizeVaultPath } from "../utils/path";
 import { formatDatePart } from "../utils/date";
@@ -57,6 +63,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly knomoDataRootMigrationService: KnomoDataRootMigrationService,
 		private readonly knomoSharedConfigService: KnomoSharedConfigService,
 		private readonly legacyIndexMigrationService: LegacyIndexMigrationService,
+		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 	) {
 		super(app, plugin);
 	}
@@ -517,10 +524,31 @@ export class KnomoSettingTab extends PluginSettingTab {
 						: t("settings.runtime.storage.memory"),
 				}),
 			});
+			const initialization = this.startupBootstrapService?.getSnapshot() ?? null;
+			if (initialization !== null) {
+				statusEl.createDiv({
+					cls: "knomo-setting-help",
+					text: t("settings.runtime.initialization", {
+						status: this.getBootstrapStatusLabel(initialization.status),
+					}),
+				});
+				if (initialization.error !== null) {
+					statusEl.createDiv({
+						cls: "knomo-setting-help is-error",
+						text: t("settings.runtime.initializationDetail", {
+							stage: this.getBootstrapStageLabel(initialization.stage),
+							reason: formatSettingsText(initialization.error),
+						}),
+					});
+				}
+			}
 			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.identity", { status: snapshot.identity }) });
 			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.sharedConfig", { status: snapshot.sharedConfiguration }) });
 			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.monthly", { status: snapshot.monthly }) });
-			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.legacy", { status: snapshot.legacyMigration }) });
+			statusEl.createDiv({
+				cls: "knomo-setting-help",
+				text: t("settings.runtime.legacy", { status: this.getLegacyStatusLabel(snapshot.legacyMigration) }),
+			});
 			if (snapshot.catalog.lifecycle.reason !== null) {
 				statusEl.createDiv({
 					cls: "knomo-setting-help is-error",
@@ -1084,6 +1112,18 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private getSharedConfigDescription(): string {
+		const initialization = this.startupBootstrapService?.getSnapshot() ?? null;
+		if (initialization?.status === "initializing") {
+			return t("settings.sharedConfig.initializing", {
+				stage: this.getBootstrapStageLabel(initialization.stage),
+			});
+		}
+		if (initialization?.status === "unavailable" && initialization.error !== null) {
+			return t("settings.sharedConfig.initializationFailed", {
+				stage: this.getBootstrapStageLabel(initialization.stage),
+				reason: formatSettingsText(initialization.error),
+			});
+		}
 		switch (this.knomoSharedConfigService.getStatus()) {
 			case "ready":
 				return t("settings.sharedConfig.ready");
@@ -1097,15 +1137,18 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private shouldShowSharedConfigAttention(): boolean {
-		return this.knomoSharedConfigService.getStatus() !== "ready";
+		return (this.startupBootstrapService !== null
+			&& this.startupBootstrapService.getSnapshot().status !== "ready")
+			|| this.knomoSharedConfigService.getStatus() !== "ready";
 	}
 
 	private renderSharedConfigSetting(setting: Setting): void {
 		const status = this.knomoSharedConfigService.getStatus();
+		const initializationStatus = this.startupBootstrapService?.getSnapshot().status ?? "ready";
 		setting.setDesc(this.getSharedConfigDescription());
-		if (status === "ready") return;
+		if (status === "ready" && initializationStatus === "ready") return;
 		setting.addButton((button) => {
-			button.setButtonText(status === "unavailable"
+			button.setButtonText(status === "unavailable" || initializationStatus === "unavailable"
 				? t("settings.sharedConfig.checkAgain")
 				: status === "conflicted"
 					? t("settings.sharedConfig.resolve")
@@ -1114,26 +1157,60 @@ export class KnomoSettingTab extends PluginSettingTab {
 				void (async () => {
 					button.setDisabled(true);
 					try {
-						if (status === "unavailable") {
-							await this.knomoSharedConfigService.reloadConfiguredRoot();
+						if (this.startupBootstrapService !== null) {
+							await this.startupBootstrapService.useCurrentDeviceSettings();
 						} else {
-							if (status === "conflicted") await this.knomoSharedConfigService.resolveWithLocalConfig();
+							const currentStatus = this.knomoSharedConfigService.getStatus();
+							if (currentStatus === "unavailable") await this.knomoSharedConfigService.reloadConfiguredRoot();
+							else if (currentStatus === "conflicted") await this.knomoSharedConfigService.resolveWithLocalConfig();
 							else await this.knomoSharedConfigService.publishLocalConfig();
-							await this.memoCommandService.rebuildLocalCatalog();
-							await this.monthlyProjectionCoordinator.handleConfigurationChanged();
 						}
-						new Notice(status === "unavailable"
-							? t("settings.sharedConfig.checked")
-							: t("settings.sharedConfig.saved"));
-						this.refreshSettingTab();
-					} catch {
-						new Notice(t("settings.sharedConfig.failed"));
+						if (this.knomoSharedConfigService.getStatus() !== "ready") {
+							throw new Error(this.knomoSharedConfigService.getLastError()
+								?? "Shared configuration did not become ready.");
+						}
+						new Notice(t("settings.sharedConfig.saved"));
+					} catch (error) {
+						new Notice(formatServiceError(error, t("settings.sharedConfig.failed")));
 					} finally {
 						button.setDisabled(false);
+						this.refreshSettingTab();
 					}
 				})();
 			});
 		});
+	}
+
+	private getBootstrapStatusLabel(status: KnomoStartupBootstrapStatus): string {
+		switch (status) {
+			case "unconfigured": return t("settings.runtime.initializationStatus.unconfigured");
+			case "initializing": return t("settings.runtime.initializationStatus.initializing");
+			case "ready": return t("settings.runtime.initializationStatus.ready");
+			case "conflicted": return t("settings.runtime.initializationStatus.conflicted");
+			case "unavailable": return t("settings.runtime.initializationStatus.unavailable");
+		}
+	}
+
+	private getBootstrapStageLabel(stage: KnomoStartupBootstrapStage | null): string {
+		switch (stage) {
+			case "data_root": return t("settings.runtime.initializationStage.dataRoot");
+			case "identity": return t("settings.runtime.initializationStage.identity");
+			case "catalog": return t("settings.runtime.initializationStage.catalog");
+			case "shared_config": return t("settings.runtime.initializationStage.sharedConfig");
+			case "verification": return t("settings.runtime.initializationStage.verification");
+			case null: return t("settings.runtime.initializationStage.none");
+		}
+	}
+
+	private getLegacyStatusLabel(status: LegacyIdentityImportStatus): string {
+		switch (status) {
+			case "idle": return t("settings.runtime.legacy.idle");
+			case "not_applicable": return t("settings.runtime.legacy.notApplicable");
+			case "ready": return t("settings.runtime.legacy.ready");
+			case "partial": return t("settings.runtime.legacy.partial");
+			case "attention": return t("settings.runtime.legacy.attention");
+			case "unavailable": return t("settings.runtime.legacy.unavailable");
+		}
 	}
 
 	private async syncSharedConfiguration(): Promise<void> {

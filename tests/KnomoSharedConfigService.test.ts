@@ -29,6 +29,18 @@ test("共享配置缺失时只使用本机 fallback，初始化不写 Vault", as
 	assert.equal(replica.paths().some((path) => path.includes("/_knomo-data/schema/")), false);
 });
 
+test("共享配置读取失败时保留底层错误", async () => {
+	const replica = new InMemoryVault();
+	const root = getKnomoSharedConfigRootPath("Knomo");
+	await replica.app.vault.create(root, "not-a-folder");
+	const service = createService(replica, WRITER_A, "c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", makeConfig("## Local"));
+
+	await service.initialize();
+
+	assert.equal(service.getStatus(), "unavailable");
+	assert.match(service.getLastError() ?? "", /root is not a folder/u);
+});
+
 test("共享配置事件在设备间同步，并且相同事件字节得到相同有效配置", async () => {
 	const left = new InMemoryVault();
 	await left.app.vault.createFolder("Knomo/_knomo-data");
@@ -71,6 +83,27 @@ test("设备语言变化不会静默改写已持久化的 Monthly locale", async
 
 	assert.equal(service.getEffectiveConfig().monthly.locale, "en");
 	assert.equal(service.getSnapshot().eventCount, before.eventCount);
+});
+
+test("发布与共享配置相同的本机设置不触发变更通知", async () => {
+	const replica = new InMemoryVault();
+	await replica.app.vault.createFolder("Knomo/_knomo-data");
+	const service = createService(
+		replica,
+		WRITER_A,
+		["c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "c_dddddddddddddddddddddddddddddddd"],
+		makeConfig("## Shared"),
+	);
+	await service.initialize();
+	await service.publishLocalConfig();
+	let notifyCount = 0;
+	(service as unknown as { onChanged: () => void }).onChanged = () => {
+		notifyCount += 1;
+	};
+
+	await service.publishLocalConfig();
+
+	assert.equal(notifyCount, 0);
 });
 
 test("显式使用当前 Obsidian 语言后，各设备最终读取同一 Monthly locale", async () => {

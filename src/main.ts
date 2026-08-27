@@ -159,6 +159,7 @@ export default class KnomoPlugin extends Plugin {
 				initializeDataRoot: async (dataRoot) => {
 					await knomoDataRootMigrationService.migrate(dataRoot);
 				},
+				identity: identityLedgerService,
 				sharedConfig: knomoSharedConfigService,
 			})
 			: null;
@@ -385,6 +386,7 @@ export default class KnomoPlugin extends Plugin {
 			knomoDataRootMigrationService,
 			knomoSharedConfigService,
 			this.legacyIndexMigrationService,
+			startupBootstrapService,
 		));
 
 		this.runtimeInitializationPromise = (async () => {
@@ -395,8 +397,10 @@ export default class KnomoPlugin extends Plugin {
 					// 自动初始化失败不阻塞 Daily；下次启用会继续补齐缺失配置。
 				}
 			}
-			await identityLedgerService.initialize();
-			await knomoSharedConfigService.initialize();
+			if (startupBootstrapService === null) {
+				await identityLedgerService.initialize();
+				await knomoSharedConfigService.initialize();
+			}
 			if (settingsLoaded
 				&& this.settingsService.getSettings().knomoDataRootConfigured
 				&& identityLedgerService.getStatus() === "missing") {

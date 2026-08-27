@@ -38,6 +38,7 @@ export class KnomoSharedConfigService {
 	private envelopes: KnomoSharedConfigEventEnvelope[] = [];
 	private snapshot: KnomoSharedConfigSnapshot = createEmptySnapshot();
 	private status: KnomoSharedConfigStatus = "missing";
+	private lastError: string | null = null;
 	private invalidFileCount = 0;
 	private onChanged: (() => void | Promise<void>) | null = null;
 	private refreshQueue: Promise<void> = Promise.resolve();
@@ -72,7 +73,7 @@ export class KnomoSharedConfigService {
 	async initializeLocalConfig(): Promise<void> {
 		let localConfig: KnomoSharedConfig | null = null;
 		try {
-			localConfig = cloneConfig(await this.options.getLocalConfig(this.getPinnedMonthlyLocale()));
+			localConfig = await this.readLocalConfig();
 		} catch {
 			// 共享配置可在本机 Daily Notes 设置不可用时继续提供只读解析配置。
 		}
@@ -84,9 +85,11 @@ export class KnomoSharedConfigService {
 		try {
 			await this.refreshFromVault();
 			if (this.status !== "ready" && this.localConfig === null) this.status = "unavailable";
-		} catch {
+			this.lastError = null;
+		} catch (error) {
 			this.status = "unavailable";
 			this.snapshot = createEmptySnapshot();
+			this.lastError = errorDetail(error);
 		}
 	}
 
@@ -96,12 +99,16 @@ export class KnomoSharedConfigService {
 	}
 
 	async refreshLocalConfig(): Promise<void> {
-		this.localConfig = cloneConfig(await this.options.getLocalConfig(this.getPinnedMonthlyLocale()));
+		this.localConfig = await this.readLocalConfig();
 		await this.notifyChanged();
 	}
 
 	getStatus(): KnomoSharedConfigStatus {
 		return this.status;
+	}
+
+	getLastError(): string | null {
+		return this.lastError;
 	}
 
 	getSnapshot(): KnomoSharedConfigSnapshot {
@@ -131,7 +138,7 @@ export class KnomoSharedConfigService {
 	}
 
 	async publishLocalConfig(): Promise<void> {
-		await this.refreshLocalConfig();
+		this.localConfig = await this.readLocalConfig();
 		if (this.status === "conflicted") {
 			throw new Error("Shared configuration is conflicted; explicit resolution is required.");
 		}
@@ -147,7 +154,7 @@ export class KnomoSharedConfigService {
 	}
 
 	async resolveWithLocalConfig(): Promise<void> {
-		await this.refreshLocalConfig();
+		this.localConfig = await this.readLocalConfig();
 		if (this.status !== "conflicted") {
 			await this.publishLocalConfig();
 			return;
@@ -241,8 +248,10 @@ export class KnomoSharedConfigService {
 			const parsed = await parseKnomoSharedConfigSegment(rootPath, path, content);
 			this.envelopes = mergeEnvelopes(this.envelopes, parsed.events);
 			await this.materialize();
+			this.lastError = null;
 		} catch (error) {
 			this.status = "unavailable";
+			this.lastError = errorDetail(error);
 			throw error;
 		} finally {
 			releaseQueue();
@@ -306,7 +315,10 @@ export class KnomoSharedConfigService {
 			this.refreshRequested = false;
 			await this.refreshFromVault();
 			await this.notifyChanged();
-		}).catch(() => { this.status = "unavailable"; });
+		}).catch((error) => {
+			this.status = "unavailable";
+			this.lastError = errorDetail(error);
+		});
 	}
 
 	private notifyChanged(): Promise<void> {
@@ -333,6 +345,10 @@ export class KnomoSharedConfigService {
 		return cloneConfig(this.localConfig);
 	}
 
+	private async readLocalConfig(): Promise<KnomoSharedConfig> {
+		return cloneConfig(await this.options.getLocalConfig(this.getPinnedMonthlyLocale()));
+	}
+
 	private getPinnedMonthlyLocale(): string {
 		this.monthlyLocale ??= normalizeMonthlyLocaleKey(this.options.getCurrentLocale());
 		return this.monthlyLocale;
@@ -343,6 +359,7 @@ export class KnomoSharedConfigService {
 		this.snapshot = createEmptySnapshot();
 		this.invalidFileCount = 0;
 		this.status = "missing";
+		this.lastError = null;
 	}
 
 	private async ensureFolder(rootPath: string, path: string): Promise<void> {
@@ -512,6 +529,10 @@ function isConfigPath(value: unknown, rootPath: string | null): value is string 
 function parentPath(path: string): string {
 	const separator = path.lastIndexOf("/");
 	return separator < 0 ? "" : path.slice(0, separator);
+}
+
+function errorDetail(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function getDataFolderFromConfigRoot(rootPath: string): string {

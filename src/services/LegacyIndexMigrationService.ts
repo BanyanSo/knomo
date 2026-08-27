@@ -85,7 +85,7 @@ export class LegacyIndexMigrationService {
 	private async runOnce(): Promise<LegacyIdentityImportReport> {
 		try {
 			const source = await this.source.load();
-			if (source.kind === "missing") return this.remember({ ...cloneReport(EMPTY_REPORT), status: "missing" });
+			if (source.kind === "missing") return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
 			if (source.kind === "attention") {
 				return this.remember({
 					...cloneReport(EMPTY_REPORT),

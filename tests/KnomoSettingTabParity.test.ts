@@ -63,7 +63,21 @@ test("only shows device-setting attention when shared settings need action", () 
 	);
 
 	assert.match(attentionSource, /visible:\s*\(\) => this\.shouldShowSharedConfigAttention\(\)/u);
-	assert.match(source, /return this\.knomoSharedConfigService\.getStatus\(\) !== "ready";/u);
+	assert.match(source, /this\.startupBootstrapService\.getSnapshot\(\)\.status !== "ready"/u);
+	assert.match(source, /this\.knomoSharedConfigService\.getStatus\(\) !== "ready"/u);
+});
+
+test("routes the device-setting action through startup initialization and refreshes after failure", () => {
+	const source = readSettingTabSource();
+	const sharedConfigSource = getSourceBetween(
+		source,
+		"\tprivate renderSharedConfigSetting(",
+		"\n\tprivate async syncSharedConfiguration(",
+	);
+
+	assert.match(sharedConfigSource, /this\.startupBootstrapService\.useCurrentDeviceSettings\(\)/u);
+	assert.match(sharedConfigSource, /formatServiceError\(error/u);
+	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
 });
 
 test("keeps monthly filename and date heading visible without a formatting expander", () => {

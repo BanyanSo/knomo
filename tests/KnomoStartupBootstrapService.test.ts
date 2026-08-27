@@ -10,6 +10,7 @@ import {
 } from "../src/services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "../src/services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "../src/services/KnomoStartupBootstrapService";
+import type { KnomoSharedConfigStatus } from "../src/types/knomoConfig";
 import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const WRITER_ID = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -30,6 +31,7 @@ test("首次启用默认创建 Identity 根并发布共享配置", async () => {
 	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
 		getLocation: () => location,
 		initializeDataRoot: async (root) => { await migration.migrate(root); },
+		identity: ledger,
 		sharedConfig: shared,
 	});
 
@@ -40,31 +42,45 @@ test("首次启用默认创建 Identity 根并发布共享配置", async () => {
 	assert.equal(shared.getStatus(), "ready");
 	assert.equal(shared.getEffectiveConfig().daily.headings[0], "## Memos");
 	assert.equal(vault.paths().some((path) => path.startsWith(`${getKnomoSharedConfigRootPath("Knomo")}/`)), true);
+	assert.deepEqual(bootstrap.getSnapshot(), {
+		status: "ready",
+		stage: null,
+		error: null,
+	});
 });
 
-test("已配置但 Identity 根丢失时只补共享配置，不伪造新的 Identity Ledger", async () => {
+test("已配置但 Identity 根丢失时保留真实失败阶段，不伪造新的 Identity Ledger", async () => {
 	const vault = new InMemoryVault();
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
+	const ledger = createLedger(vault, () => location);
 	const shared = createSharedConfig(vault, () => location, "## Memos");
-	await shared.initialize();
 	let initializeCalls = 0;
 	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
 		getLocation: () => location,
 		initializeDataRoot: async () => { initializeCalls += 1; },
+		identity: ledger,
 		sharedConfig: shared,
 	});
 
-	await bootstrap.initialize();
+	await assert.rejects(bootstrap.initialize(), /Identity Ledger root is missing/u);
 
 	assert.equal(initializeCalls, 0);
-	assert.equal(shared.getStatus(), "ready");
+	assert.equal(shared.getStatus(), "missing");
 	assert.equal(vault.app.vault.getAbstractFileByPath(getIdentityLedgerRootPath("Knomo")), null);
+	assert.deepEqual(bootstrap.getSnapshot(), {
+		status: "unavailable",
+		stage: "identity",
+		error: "Configured Identity Ledger root is missing.",
+	});
 });
 
 test("已有共享配置时启动不追加事件也不覆盖其他设备配置", async () => {
 	const vault = new InMemoryVault();
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
 	await vault.app.vault.createFolder("Knomo/_knomo-data");
+	await vault.app.vault.createFolder(getIdentityLedgerRootPath("Knomo"));
+	await vault.app.vault.createFolder(`${getIdentityLedgerRootPath("Knomo")}/writers`);
+	const ledger = createLedger(vault, () => location);
 	const writer = createSharedConfig(vault, () => location, "## Shared");
 	await writer.initialize();
 	await writer.publishLocalConfig();
@@ -74,6 +90,7 @@ test("已有共享配置时启动不追加事件也不覆盖其他设备配置",
 	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
 		getLocation: () => location,
 		initializeDataRoot: async () => { throw new Error("不应初始化已配置根"); },
+		identity: ledger,
 		sharedConfig: reader,
 	});
 
@@ -81,6 +98,79 @@ test("已有共享配置时启动不追加事件也不覆盖其他设备配置",
 
 	assert.deepEqual(vault.paths(), pathsBefore);
 	assert.equal(reader.getEffectiveConfig().daily.headings[0], "## Shared");
+});
+
+test("并发启动复用同一个初始化操作", async () => {
+	const vault = new InMemoryVault();
+	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
+	let releaseInitialization!: () => void;
+	const initializationBlocked = new Promise<void>((resolve) => { releaseInitialization = resolve; });
+	let initializeCalls = 0;
+	let sharedStatus: KnomoSharedConfigStatus = "missing";
+	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => location,
+		initializeDataRoot: async () => {
+			initializeCalls += 1;
+			await initializationBlocked;
+			await vault.app.vault.createFolder(`${getIdentityLedgerRootPath("Knomo")}/writers`);
+			location = { ...location, knomoDataRootConfigured: true };
+		},
+		identity: {
+			initialize: async () => undefined,
+			getStatus: () => "absent",
+		},
+		sharedConfig: {
+			initialize: async () => undefined,
+			getStatus: () => sharedStatus,
+			getLastError: () => null,
+			publishLocalConfig: async () => { sharedStatus = "ready"; },
+			resolveWithLocalConfig: async () => { sharedStatus = "ready"; },
+		},
+	});
+
+	const first = bootstrap.initialize();
+	const second = bootstrap.initialize();
+
+	assert.equal(first, second);
+	assert.equal(bootstrap.getSnapshot().status, "initializing");
+	releaseInitialization();
+	await first;
+	assert.equal(initializeCalls, 1);
+	assert.equal(bootstrap.getSnapshot().status, "ready");
+});
+
+test("采用当前设备设置复用初始化流程并显式收敛共享配置冲突", async () => {
+	const vault = new InMemoryVault();
+	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
+	await vault.app.vault.createFolder(`${getIdentityLedgerRootPath("Knomo")}/writers`);
+	let sharedStatus: KnomoSharedConfigStatus = "conflicted";
+	let resolveCalls = 0;
+	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => location,
+		initializeDataRoot: async () => { throw new Error("不应初始化已配置根"); },
+		identity: {
+			initialize: async () => undefined,
+			getStatus: () => "absent",
+		},
+		sharedConfig: {
+			initialize: async () => undefined,
+			getStatus: () => sharedStatus,
+			getLastError: () => null,
+			publishLocalConfig: async () => undefined,
+			resolveWithLocalConfig: async () => {
+				resolveCalls += 1;
+				sharedStatus = "ready";
+			},
+		},
+	});
+
+	await bootstrap.initialize();
+	assert.equal(bootstrap.getSnapshot().status, "conflicted");
+
+	await bootstrap.useCurrentDeviceSettings();
+
+	assert.equal(resolveCalls, 1);
+	assert.equal(bootstrap.getSnapshot().status, "ready");
 });
 
 function createLedger(

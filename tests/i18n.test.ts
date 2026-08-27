@@ -58,6 +58,14 @@ test("uses distinct local-history, migration, identity, and storage status copy"
 	assert.doesNotMatch(translate("zh-CN", "catalog.stateSettling"), /关联信息仍在同步/u);
 });
 
+test("describes an empty legacy Index source as not applicable instead of missing", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(translate("zh-CN", "settings.runtime.legacy.notApplicable"), "未发现旧版 Index 数据，无需迁移");
+	assert.equal(translate("en", "settings.runtime.legacy.notApplicable"), "No older Index data found; no migration is needed");
+});
+
 test("adds spacing only to record statistics summaries", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");

@@ -1,4 +1,4 @@
-export type LegacyIdentityImportStatus = "idle" | "missing" | "ready" | "partial" | "attention" | "unavailable";
+export type LegacyIdentityImportStatus = "idle" | "not_applicable" | "ready" | "partial" | "attention" | "unavailable";
 
 export interface LegacyIdentityImportDiagnostic {
 	code: string;

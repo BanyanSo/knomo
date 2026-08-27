@@ -126,7 +126,7 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 		restartedTarget,
 		{ getCatalogCoverage: async () => completeCoverage(), getObservationBatches: async () => [] },
 	);
-	assert.equal((await restartedMigration.run()).status, "missing");
+	assert.equal((await restartedMigration.run()).status, "not_applicable");
 	assert.equal(restartedTarget.resolveObservation(observation)?.memoId, LEGACY_MEMO_A);
 	assert.deepEqual(restartedTarget.getReviewState(LEGACY_MEMO_A), {
 		reviewCount: 2,

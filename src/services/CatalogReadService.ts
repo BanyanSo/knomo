@@ -561,7 +561,7 @@ export class CatalogReadService {
 		contentUnavailable: boolean,
 	): CatalogReadStatus {
 		const identityStatus = this.options.identityLedger.getStatus();
-		const legacyStatus = this.options.getLegacyImportStatus?.() ?? "missing";
+		const legacyStatus = this.options.getLegacyImportStatus?.() ?? "not_applicable";
 		const catalogDegraded = contentUnavailable
 			|| lifecycle.state === "degraded"
 			|| lifecycle.state === "retrying"

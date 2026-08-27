@@ -67,6 +67,7 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 	const observation = makeObservation(dailyPath, activeRawBlock, "正文");
 	const source = new LegacyIndexReader(vault.app, "knomo", () => "Knomo");
 	const migration = new LegacyIndexMigrationService(vault.app, source, target, {
+		getCatalogCoverage: async () => completeCoverage(),
 		getObservationBatches: async () => [{
 			file: {
 				sourcePath: dailyPath,
@@ -93,6 +94,10 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 	const second = await migration.run();
 
 	assert.equal(first.status, "ready");
+	assert.deepEqual(first.cleanupCandidate, {
+		legacySystemRoot: "Knomo/_knomo-system",
+		sourceRevision: first.sourceRevision,
+	});
 	assert.equal(first.importedEventCount, 7);
 	assert.equal(second.importedEventCount, 0);
 	assert.deepEqual(first.importedMemoIds, [LEGACY_MEMO_B, LEGACY_MEMO_A].sort());
@@ -109,6 +114,25 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 		index: vault.read(LEGACY_INDEX_PATH),
 		pluginData: vault.read(PLUGIN_DATA_PATH),
 	}, sourceBytesBefore);
+
+	const restartedVault = new InMemoryVault(Object.fromEntries(
+		Object.entries(vault.snapshot()).filter(([path]) => !path.startsWith("Knomo/_knomo-system/")),
+	));
+	const restartedTarget = createIdentityService(restartedVault);
+	await restartedTarget.initialize();
+	const restartedMigration = new LegacyIndexMigrationService(
+		restartedVault.app,
+		new LegacyIndexReader(restartedVault.app, "knomo", () => "Knomo"),
+		restartedTarget,
+		{ getCatalogCoverage: async () => completeCoverage(), getObservationBatches: async () => [] },
+	);
+	assert.equal((await restartedMigration.run()).status, "missing");
+	assert.equal(restartedTarget.resolveObservation(observation)?.memoId, LEGACY_MEMO_A);
+	assert.deepEqual(restartedTarget.getReviewState(LEGACY_MEMO_A), {
+		reviewCount: 2,
+		lastReviewedAt: "2026-08-22T05:00:00.000Z",
+	});
+	assert.equal(restartedTarget.getActiveDeletes()[0]?.memoId, LEGACY_MEMO_B);
 });
 
 test("已有同 memoId binding 与旧 Index 证据不一致时跳过迁移", async () => {
@@ -164,6 +188,7 @@ test("已有同 memoId binding 与旧 Index 证据不一致时跳过迁移", asy
 		new LegacyIndexReader(vault.app, "knomo", () => "Knomo"),
 		target,
 		{
+			getCatalogCoverage: async () => completeCoverage(),
 			getObservationBatches: async () => [{
 				file: {
 					sourcePath: dailyPath,
@@ -185,6 +210,7 @@ test("已有同 memoId binding 与旧 Index 证据不一致时跳过迁移", asy
 	const report = await migration.run();
 
 	assert.equal(report.status, "partial");
+	assert.equal(report.cleanupCandidate, null);
 	assert.deepEqual(report.importedMemoIds, []);
 	assert.deepEqual(report.skippedMemoIds, [LEGACY_MEMO_A]);
 	assert.equal(report.diagnostics.some((item) => item.code === "legacy_binding_mismatch"), true);
@@ -299,7 +325,7 @@ test("旧插件数据存在但读取失败时迁移报告 unavailable", async ()
 		vault.app,
 		new LegacyIndexReader(vault.app, "knomo", () => "Knomo"),
 		target,
-		{ getObservationBatches: async () => [] },
+		{ getCatalogCoverage: async () => completeCoverage(), getObservationBatches: async () => [] },
 	);
 
 	const report = await migration.run();
@@ -361,6 +387,229 @@ test("未知旧 Index schema 进入诊断，不按 1.2.9 格式宽松解释", as
 	assert.equal(result.diagnostics.some((item) => item.code === "legacy_memo_index_invalid"), true);
 });
 
+test("旧数据 sourceRevision 只反映语义内容，普通设置和提示记录不改变 revision", async () => {
+	const reviewState = {
+		[LEGACY_MEMO_A]: {
+			memoId: LEGACY_MEMO_A,
+			reviewCount: 2,
+			lastReviewedAt: "2026-08-22T05:00:00.000Z",
+		},
+	};
+	const vault = new InMemoryVault({
+		[LEGACY_INDEX_PATH]: JSON.stringify({
+			schemaVersion: 2,
+			period: "2026-08",
+			memos: {
+				[LEGACY_MEMO_A]: legacyMemoRecord({
+					memoId: LEGACY_MEMO_A,
+					createdAt: "2026-08-22T09:00:00.000Z",
+					path: "Daily/2026-08-22.md",
+					rawBlock: "- 09:00 正文",
+					content: "正文",
+				}),
+			},
+		}),
+		[PLUGIN_DATA_PATH]: JSON.stringify({ settings: { dailyHeading: "## Memos" }, randomReunionReviewStates: reviewState }),
+	});
+	const reader = new LegacyIndexReader(vault.app, "knomo", () => "Knomo");
+	const before = await reader.load();
+	vault.replace(PLUGIN_DATA_PATH, JSON.stringify({
+		settings: { dailyHeading: "## Notes", mobileCompactMode: "on" },
+		randomReunionReviewStates: reviewState,
+		legacyMigrationNoticeSourceRevision: "already-shown",
+	}));
+	const afterSettingsSave = await reader.load();
+	vault.replace(PLUGIN_DATA_PATH, JSON.stringify({
+		settings: { dailyHeading: "## Notes", mobileCompactMode: "on" },
+		randomReunionReviewStates: {
+			[LEGACY_MEMO_A]: { ...reviewState[LEGACY_MEMO_A], reviewCount: 3 },
+		},
+	}));
+	const afterLegacyChange = await reader.load();
+
+	assert.equal(before.kind, "ready");
+	assert.equal(afterSettingsSave.kind, "ready");
+	assert.equal(afterLegacyChange.kind, "ready");
+	if (before.kind !== "ready" || afterSettingsSave.kind !== "ready" || afterLegacyChange.kind !== "ready") return;
+	assert.equal(afterSettingsSave.snapshot.sourceRevision, before.snapshot.sourceRevision);
+	assert.notEqual(afterLegacyChange.snapshot.sourceRevision, before.snapshot.sourceRevision);
+});
+
+test("旧系统目录存在未知文件时保留诊断且不生成清理提示候选", async () => {
+	const dailyPath = "Daily/2026-08-22.md";
+	const rawBlock = "- 09:00 正文";
+	const vault = new InMemoryVault({
+		[dailyPath]: `## Memos\n${rawBlock}\n`,
+		[LEGACY_INDEX_PATH]: JSON.stringify({
+			schemaVersion: 2,
+			period: "2026-08",
+			memos: {
+				[LEGACY_MEMO_A]: legacyMemoRecord({
+					memoId: LEGACY_MEMO_A,
+					createdAt: "2026-08-22T09:00:00.000Z",
+					path: dailyPath,
+					rawBlock,
+					content: "正文",
+				}),
+			},
+		}),
+		"Knomo/_knomo-system/private-note.txt": "不要删除",
+	});
+	await vault.app.vault.createFolder(IDENTITY_ROOT);
+	await vault.app.vault.createFolder(`${IDENTITY_ROOT}/writers`);
+	const target = createIdentityService(vault);
+	await target.initialize();
+	const observation = makeObservation(dailyPath, rawBlock, "正文");
+	const migration = new LegacyIndexMigrationService(
+		vault.app,
+		new LegacyIndexReader(vault.app, "knomo", () => "Knomo"),
+		target,
+		{
+			getCatalogCoverage: async () => completeCoverage(),
+			getObservationBatches: async () => [{
+				file: {
+					sourcePath: dailyPath,
+					logicalDate: observation.logicalDate,
+					sourceRevision: observation.sourceRevision,
+					mtime: 0,
+					size: rawBlock.length,
+					parserVersion: 3,
+					settingsFingerprint: "test",
+					observationCount: 1,
+					auditedAt: 0,
+				},
+				observations: [observation],
+				catalogRevision: 1,
+			}],
+		},
+	);
+
+	const report = await migration.run();
+
+	assert.equal(report.status, "partial");
+	assert.equal(report.cleanupCandidate, null);
+	assert.equal(report.diagnostics.some((item) => item.code === "legacy_inventory_unknown_file"
+		&& item.sourcePath === "Knomo/_knomo-system/private-note.txt"), true);
+});
+
+test("Catalog 未完整覆盖时迁移可 ready，但不生成清理提示候选", async () => {
+	const dailyPath = "Daily/2026-08-22.md";
+	const rawBlock = "- 09:00 正文";
+	const vault = new InMemoryVault({
+		[dailyPath]: `## Memos\n${rawBlock}\n`,
+		[LEGACY_INDEX_PATH]: JSON.stringify({
+			schemaVersion: 2,
+			period: "2026-08",
+			memos: {
+				[LEGACY_MEMO_A]: legacyMemoRecord({
+					memoId: LEGACY_MEMO_A,
+					createdAt: "2026-08-22T09:00:00.000Z",
+					path: dailyPath,
+					rawBlock,
+					content: "正文",
+				}),
+			},
+		}),
+	});
+	await vault.app.vault.createFolder(IDENTITY_ROOT);
+	await vault.app.vault.createFolder(`${IDENTITY_ROOT}/writers`);
+	const target = createIdentityService(vault);
+	await target.initialize();
+	const observation = makeObservation(dailyPath, rawBlock, "正文");
+	const migration = new LegacyIndexMigrationService(
+		vault.app,
+		new LegacyIndexReader(vault.app, "knomo", () => "Knomo"),
+		target,
+		{
+			getCatalogCoverage: async () => ({ ...completeCoverage(), kind: "partial" }),
+			getObservationBatches: async () => [{
+				file: {
+					sourcePath: dailyPath,
+					logicalDate: observation.logicalDate,
+					sourceRevision: observation.sourceRevision,
+					mtime: 0,
+					size: rawBlock.length,
+					parserVersion: 3,
+					settingsFingerprint: "test",
+					observationCount: 1,
+					auditedAt: 0,
+				},
+				observations: [observation],
+				catalogRevision: 1,
+			}],
+		},
+	);
+
+	const report = await migration.run();
+
+	assert.equal(report.status, "ready");
+	assert.equal(report.cleanupCandidate, null);
+});
+
+test("迁移后二次读取的旧数据 revision 变化时不生成清理提示候选", async () => {
+	const dailyPath = "Daily/2026-08-22.md";
+	const rawBlock = "- 09:00 正文";
+	const vault = new InMemoryVault({
+		[dailyPath]: `## Memos\n${rawBlock}\n`,
+		[LEGACY_INDEX_PATH]: JSON.stringify({
+			schemaVersion: 2,
+			period: "2026-08",
+			memos: {
+				[LEGACY_MEMO_A]: legacyMemoRecord({
+					memoId: LEGACY_MEMO_A,
+					createdAt: "2026-08-22T09:00:00.000Z",
+					path: dailyPath,
+					rawBlock,
+					content: "正文",
+				}),
+			},
+		}),
+	});
+	await vault.app.vault.createFolder(IDENTITY_ROOT);
+	await vault.app.vault.createFolder(`${IDENTITY_ROOT}/writers`);
+	const target = createIdentityService(vault);
+	await target.initialize();
+	const observation = makeObservation(dailyPath, rawBlock, "正文");
+	const reader = new LegacyIndexReader(vault.app, "knomo", () => "Knomo");
+	let loadCount = 0;
+	const changingSource = {
+		isSourcePath: (path: string) => reader.isSourcePath(path),
+		load: async () => {
+			const result = await reader.load();
+			loadCount += 1;
+			if (loadCount !== 2 || result.kind !== "ready") return result;
+			return {
+				kind: "ready" as const,
+				snapshot: { ...result.snapshot, sourceRevision: "f".repeat(64) },
+			};
+		},
+	};
+	const migration = new LegacyIndexMigrationService(vault.app, changingSource, target, {
+		getCatalogCoverage: async () => completeCoverage(),
+		getObservationBatches: async () => [{
+			file: {
+				sourcePath: dailyPath,
+				logicalDate: observation.logicalDate,
+				sourceRevision: observation.sourceRevision,
+				mtime: 0,
+				size: rawBlock.length,
+				parserVersion: 3,
+				settingsFingerprint: "test",
+				observationCount: 1,
+				auditedAt: 0,
+			},
+			observations: [observation],
+			catalogRevision: 1,
+		}],
+	});
+
+	const report = await migration.run();
+
+	assert.equal(report.status, "attention");
+	assert.equal(report.cleanupCandidate, null);
+	assert.equal(report.diagnostics.some((item) => item.code === "legacy_source_changed_during_migration"), true);
+});
+
 function createIdentityService(vault: InMemoryVault): IdentityLedgerService {
 	let eventIndex = 0;
 	return new IdentityLedgerService(vault.app, {
@@ -370,6 +619,17 @@ function createIdentityService(vault: InMemoryVault): IdentityLedgerService {
 		createEventId: () => `e_${(++eventIndex).toString(16).padStart(32, "0")}`,
 		now: () => new Date("2026-08-24T00:00:00.000Z"),
 	});
+}
+
+function completeCoverage() {
+	return {
+		kind: "complete" as const,
+		sharedConfigurationComplete: true,
+		coveredFromDate: null,
+		pendingFileCount: 0,
+		coveredFileCount: 1,
+		totalFileCount: 1,
+	};
 }
 
 function makeObservation(sourcePath: string, rawBlock: string, content: string): MemoObservation {

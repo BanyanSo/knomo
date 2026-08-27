@@ -438,6 +438,7 @@ export const zhCN = {
 	"settings.legacyIdentityImport.hideDetails": "收起详情",
 	"settings.legacyIdentityImport.diagnostic": "{{code}} · {{path}} · {{detail}}",
 	"settings.legacyIdentityImport.unknownPath": "未指定路径",
+	"notice.legacyMigrationCompleted": "旧版 Knomo 数据已迁移完成。请先确认所有设备均已升级并完成同步，然后可手动删除：{{path}}。Knomo 不会自动删除该文件夹。旧 Monthly Markdown 可能包含用户编辑，将继续保留。",
 	"settings.rebuild.start": "重新读取日记",
 	"settings.rebuild.before": "需要时可根据日记重新整理搜索与统计信息。",
 	"settings.rebuild.conflictFiles": "发现 {{count}} 个疑似同步冲突文件。第一个：{{path}}。请等待文件同步完成后再运行修复。",

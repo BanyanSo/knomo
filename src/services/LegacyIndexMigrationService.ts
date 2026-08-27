@@ -1,7 +1,7 @@
 import { TFile, TFolder } from "obsidian";
 import type { App, Component } from "obsidian";
 
-import type { CatalogFileRevisionBatch, MemoObservation } from "../types/catalog";
+import type { CatalogCoverage, CatalogFileRevisionBatch, MemoObservation } from "../types/catalog";
 import type {
 	IdentityLedgerBinding,
 	IdentityLedgerDeletePayloadEvent,
@@ -28,10 +28,13 @@ const EMPTY_REPORT: LegacyIdentityImportReport = {
 	importedMemoIds: [],
 	skippedMemoIds: [],
 	diagnostics: [],
+	cleanupCandidate: null,
 };
 
 export interface LegacyIndexMigrationServiceOptions {
+	getCatalogCoverage: () => Promise<CatalogCoverage>;
 	getObservationBatches: () => Promise<readonly CatalogFileRevisionBatch<MemoObservation>[]>;
+	onReportChanged?: (report: LegacyIdentityImportReport) => void | Promise<void>;
 }
 
 export class LegacyIndexMigrationService {
@@ -69,7 +72,14 @@ export class LegacyIndexMigrationService {
 
 	run(): Promise<LegacyIdentityImportReport> {
 		this.runQueue = this.runQueue.then(() => this.runOnce(), () => this.runOnce());
-		return this.runQueue;
+		return this.runQueue.then(async (report) => {
+			try {
+				await this.options.onReportChanged?.(cloneReport(report));
+			} catch {
+				// 完成提示失败不能改变已经验证过的迁移结果。
+			}
+			return report;
+		});
 	}
 
 	private async runOnce(): Promise<LegacyIdentityImportReport> {
@@ -190,13 +200,61 @@ export class LegacyIndexMigrationService {
 			skippedMemoIds.add(review.memoId);
 		}
 		importedEventCount += await this.target.importVerifiedLegacyEvents(metadataEvents);
-		return this.remember({
+		const report = {
 			status: diagnostics.length > 0 || skippedMemoIds.size > 0 ? "partial" : "ready",
 			sourceRevision: source.sourceRevision,
 			importedEventCount,
 			importedMemoIds: [...importedMemoIds].sort(),
 			skippedMemoIds: [...skippedMemoIds].sort(),
 			diagnostics,
+			cleanupCandidate: null,
+		} satisfies LegacyIdentityImportReport;
+		if (report.status !== "ready"
+			|| source.sourceRevision.trim().length === 0
+			|| !source.legacySystemRootPresent) {
+			return this.remember(report);
+		}
+		const coverage = await this.options.getCatalogCoverage();
+		if (coverage.kind !== "complete" || coverage.sharedConfigurationComplete === false) {
+			return this.remember(report);
+		}
+		const expectedIdentityRevision = this.target.getSnapshot().revision;
+		if (hasIdentityConflict(this.target)) {
+			return this.remember(withAttention(report, diagnostic(
+				"legacy_identity_verification_conflict",
+				null,
+				null,
+				"Identity Ledger contains a conflict after the legacy import.",
+			)));
+		}
+		if (!await this.target.verifyPersistedSnapshot(expectedIdentityRevision) || hasIdentityConflict(this.target)) {
+			return this.remember(withAttention(report, diagnostic(
+				"legacy_identity_persistence_unverified",
+				null,
+				null,
+				"Identity Ledger could not be verified by reading the persisted data again.",
+			)));
+		}
+		const confirmedSource = await this.source.load();
+		if (confirmedSource.kind !== "ready"
+			|| confirmedSource.snapshot.sourceId !== source.sourceId
+			|| confirmedSource.snapshot.legacySystemRoot !== source.legacySystemRoot
+			|| confirmedSource.snapshot.sourceRevision !== source.sourceRevision
+			|| !confirmedSource.snapshot.legacySystemRootPresent
+			|| confirmedSource.snapshot.diagnostics.length > 0) {
+			return this.remember(withAttention(report, diagnostic(
+				"legacy_source_changed_during_migration",
+				source.legacySystemRoot,
+				null,
+				"Legacy source data changed while migration completion was being verified.",
+			)));
+		}
+		return this.remember({
+			...report,
+			cleanupCandidate: {
+				legacySystemRoot: source.legacySystemRoot,
+				sourceRevision: source.sourceRevision,
+			},
 		});
 	}
 
@@ -376,6 +434,26 @@ function cloneReport(report: LegacyIdentityImportReport): LegacyIdentityImportRe
 		importedMemoIds: [...report.importedMemoIds],
 		skippedMemoIds: [...report.skippedMemoIds],
 		diagnostics: report.diagnostics.map((item) => ({ ...item })),
+		cleanupCandidate: report.cleanupCandidate === null ? null : { ...report.cleanupCandidate },
+	};
+}
+
+function hasIdentityConflict(target: IdentityLedgerLegacyImportTarget): boolean {
+	const snapshot = target.getSnapshot();
+	return target.getStatus() !== "ready"
+		|| snapshot.quarantinedEventIds.length > 0
+		|| Object.values(snapshot.memos).some((memo) => memo.conflicted);
+}
+
+function withAttention(
+	report: LegacyIdentityImportReport,
+	detail: LegacyIndexDiagnostic,
+): LegacyIdentityImportReport {
+	return {
+		...report,
+		status: "attention",
+		diagnostics: [...report.diagnostics, detail],
+		cleanupCandidate: null,
 	};
 }
 

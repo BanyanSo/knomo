@@ -22,10 +22,15 @@
 | CAT-MIG-004 | 同一旧 `memoId` 存在不一致同步副本 | 只报告 attention，不猜测绑定 |
 | CAT-MIG-005 | 迁移前后比较源文件 | Daily、`_knomo-system` 和旧插件数据逐字节不变 |
 | CAT-MIG-006 | 旧记录无法唯一匹配当前 Daily | 跳过该记录，其他 observation 继续显示和编辑 |
-| CAT-MIG-007 | 可迁移数据已落盘、重启验证通过且无待处理冲突 | 提示“`_knomo-system` 已迁移，原文件夹可删除” |
+| CAT-MIG-007 | 旧目录存在、Catalog coverage complete、迁移 ready、Identity 重读验证通过、来源修订稳定且无诊断、跳过项、冲突或未知文件 | 在 layout ready 后提示迁移完成，并说明确认所有设备升级同步后可手动删除 `_knomo-system` |
 | CAT-MIG-008 | 迁移未完成、验证失败或仍有冲突 | 不显示可删除提示，保留可诊断状态 |
 | CAT-MIG-009 | 同一迁移来源修订多次启动 | 可删除提示最多显示一次 |
 | CAT-MIG-010 | 完成迁移后继续使用插件 | 不自动删除或修改旧 `_knomo-system` 与旧 Monthly 文件 |
+| CAT-MIG-011 | 只保存当前插件普通设置或提示记录 | 旧来源语义修订不变，不重复提示 |
+| CAT-MIG-012 | `_knomo-system` 含无法识别的额外文件 | 记录 inventory 诊断，不显示可删除提示 |
+| CAT-MIG-013 | 迁移校验期间旧来源语义发生变化 | 本次不提示；后续对稳定的新来源重新验证 |
+| CAT-MIG-014 | 用户手动删除已完成迁移的旧目录后重启并重建 Catalog | Identity、review 与废纸篓状态仍从 Identity Ledger 正常读取 |
+| CAT-MIG-015 | 旧 Monthly Markdown 存在用户编辑 | 不随 `_knomo-system` 提示或任何自动流程清理 |
 
 ## 3. 内容与身份
 

@@ -814,6 +814,8 @@ test("P1 第 7 步：重复导入相同旧事件不产生重复 Identity events"
 	};
 
 	assert.equal(await service.importVerifiedLegacyEvents([claim]), 1);
+	assert.equal(await service.verifyPersistedSnapshot(service.getSnapshot().revision), true);
+	assert.equal(await service.verifyPersistedSnapshot("identity-not-the-persisted-revision"), false);
 	assert.equal(await service.importVerifiedLegacyEvents([claim]), 0);
 	assert.equal(service.getSnapshot().eventCount, 1);
 	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 1);

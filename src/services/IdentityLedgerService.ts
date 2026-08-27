@@ -246,6 +246,17 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		return pendingEvents.length;
 	}
 
+	async verifyPersistedSnapshot(expectedRevision: string): Promise<boolean> {
+		await this.writeQueue;
+		try {
+			await this.refreshFromVault();
+		} catch {
+			this.status = "unavailable";
+			return false;
+		}
+		return this.status === "ready" && this.snapshot.revision === expectedRevision;
+	}
+
 	async beginCreate(input: IdentityLedgerCreateInput): Promise<IdentityLedgerCreatePlan> {
 		const memoId = this.createMemoId();
 		const intent: IdentityLedgerCreateIntentEvent = {

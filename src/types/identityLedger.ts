@@ -230,6 +230,7 @@ export interface IdentityLedgerReader {
 
 export interface IdentityLedgerLegacyImportTarget extends IdentityLedgerReader {
 	importVerifiedLegacyEvents(events: readonly IdentityLedgerEvent[]): Promise<number>;
+	verifyPersistedSnapshot(expectedRevision: string): Promise<boolean>;
 }
 
 export interface IdentityLedgerMutationService extends IdentityLedgerReader {

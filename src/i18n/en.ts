@@ -440,6 +440,7 @@ export const en: Record<TranslationKey, string> = {
 	"settings.legacyIdentityImport.hideDetails": "Hide details",
 	"settings.legacyIdentityImport.diagnostic": "{{code}} · {{path}} · {{detail}}",
 	"settings.legacyIdentityImport.unknownPath": "Unspecified path",
+	"notice.legacyMigrationCompleted": "Data from the older Knomo version has been migrated. Confirm that every device has been upgraded and fully synced before manually deleting {{path}}. Knomo will not delete this folder. Older monthly Markdown files may contain your edits and will be kept separately.",
 	"settings.rebuild.start": "Reread daily notes",
 	"settings.rebuild.before": "Use this when Knomo search or statistics need to be refreshed from daily notes.",
 	"settings.rebuild.conflictFiles": "Possible sync-conflict files found: {{count}}. First: {{path}}. Let file sync finish, then run repair.",

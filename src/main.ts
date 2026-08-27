@@ -27,6 +27,7 @@ import { KnomoSharedConfigService } from "./services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
 import { LegacyIndexMigrationService } from "./services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
+import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MemoCommandService } from "./services/MemoCommandService";
 import { MarkdownMutationService } from "./services/MarkdownMutationService";
@@ -65,6 +66,7 @@ export default class KnomoPlugin extends Plugin {
 	private catalogReadService: CatalogReadService | null = null;
 	private monthlyProjectionCoordinator: MonthlyProjectionCoordinator | null = null;
 	private legacyIndexMigrationService: LegacyIndexMigrationService | null = null;
+	private legacyMigrationCompletionNoticeService: LegacyMigrationCompletionNoticeService | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
 
@@ -285,11 +287,22 @@ export default class KnomoPlugin extends Plugin {
 				return settings.knomoDataRootConfigured ? settings.knomoDataRoot : null;
 			},
 		);
+		this.legacyMigrationCompletionNoticeService = new LegacyMigrationCompletionNoticeService(
+			this.app,
+			pluginDataStore,
+			(legacySystemRoot) => {
+				new Notice(t("notice.legacyMigrationCompleted", { path: legacySystemRoot }));
+			},
+		);
 		this.legacyIndexMigrationService = new LegacyIndexMigrationService(
 			this.app,
 			legacyIndexReader,
 			identityLedgerService,
-			{ getObservationBatches: loadObservationBatches },
+			{
+				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
+				getObservationBatches: loadObservationBatches,
+				onReportChanged: () => this.showLegacyMigrationCompletionNotice(),
+			},
 		);
 
 		identityLedgerService.start(this, async () => {
@@ -404,6 +417,7 @@ export default class KnomoPlugin extends Plugin {
 		});
 
 		this.app.workspace.onLayoutReady(() => {
+			this.legacyMigrationCompletionNoticeService?.markLayoutReady();
 			void this.initializeAfterLayoutWithCatalogSafely();
 		});
 	}
@@ -552,15 +566,23 @@ export default class KnomoPlugin extends Plugin {
 		try {
 			if (this.runtimeInitializationPromise !== null
 				&& await this.runtimeInitializationPromise) {
+				await this.showLegacyMigrationCompletionNotice();
 				return;
 			}
 			await this.catalogIndexCoordinator?.initialize();
 			await this.legacyIndexMigrationService?.run();
 			await this.catalogReadService?.materializeResolutionSnapshot();
 			await this.catalogReadService?.prime();
+			await this.showLegacyMigrationCompletionNotice();
 		} catch {
 			// 本机 Catalog 或兼容导入失败不能影响 Daily 快速记录能力。
 		}
+	}
+
+	private async showLegacyMigrationCompletionNotice(): Promise<void> {
+		await this.legacyMigrationCompletionNoticeService?.showIfNeeded(
+			this.legacyIndexMigrationService?.getReport().cleanupCandidate ?? null,
+		);
 	}
 
 	private runManualRefresh(): Promise<CatalogRefreshResult> {

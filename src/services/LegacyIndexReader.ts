@@ -17,7 +17,6 @@ import { isRecord } from "../utils/object";
 import { getLegacySystemRootPath } from "../utils/path";
 import {
 	canonicalIdentityLedgerJson,
-	sha256IdentityLedgerBytes,
 	sha256IdentityLedgerText,
 } from "./IdentityLedgerProtocol";
 import { classifyLegacyArtifactPath, classifyPluginDataPath } from "./LegacyArtifactInventory";
@@ -33,7 +32,13 @@ interface LegacyArtifact {
 	artifactKind: LegacyArtifactKind;
 	path: string;
 	bytes: Uint8Array;
-	digest: string;
+}
+
+interface LegacyArtifactInventory {
+	artifacts: LegacyArtifact[];
+	legacySystemRoot: string;
+	legacySystemRootPresent: boolean;
+	unknownPaths: string[];
 }
 
 interface ParsedLegacyData {
@@ -65,10 +70,20 @@ export class LegacyIndexReader implements LegacyIndexSource {
 	async load(): Promise<LegacyIndexSourceResult> {
 		const knomoDataRoot = this.getConfiguredRoot();
 		if (knomoDataRoot === null) return { kind: "missing" };
-		const artifacts = await this.collectArtifacts(knomoDataRoot);
-		if (artifacts.length === 0) return { kind: "missing" };
+		const inventory = await this.collectArtifacts(knomoDataRoot);
+		if (!inventory.legacySystemRootPresent) return { kind: "missing" };
+		const { artifacts } = inventory;
+		if (artifacts.length === 0 && inventory.unknownPaths.length === 0) return { kind: "missing" };
 
 		const parsed = createParsedLegacyData();
+		for (const path of inventory.unknownPaths) {
+			parsed.diagnostics.push(diagnostic(
+				"legacy_inventory_unknown_file",
+				path,
+				null,
+				"The legacy system folder contains a file that Knomo 1.2.9 does not recognize.",
+			));
+		}
 		let relevantArtifactCount = 0;
 		for (const artifact of artifacts) {
 			switch (artifact.artifactKind) {
@@ -97,7 +112,11 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			}
 		}
 
-		if (relevantArtifactCount === 0) return { kind: "missing" };
+		if (relevantArtifactCount === 0) {
+			return inventory.unknownPaths.length === 0
+				? { kind: "missing" }
+				: { kind: "attention", diagnostics: parsed.diagnostics.sort(compareDiagnostic) };
+		}
 		const mergedMemos = mergeMemos(parsed.memos, parsed.diagnostics);
 		const memos = recoverLegacySourceMemoIds(mergedMemos, (linkPath, sourcePath) => {
 			if (linkPath.length === 0) return sourcePath;
@@ -110,12 +129,6 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			return { kind: "attention", diagnostics: parsed.diagnostics };
 		}
 		const sourceRevision = await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
-			artifacts: artifacts
-				.filter((artifact) => artifact.artifactKind === "memo_index"
-					|| artifact.artifactKind === "pending_create"
-					|| artifact.artifactKind === "plugin_data")
-				.map((artifact) => ({ artifactKind: artifact.artifactKind, digest: artifact.digest }))
-				.sort(compareArtifact),
 			memos,
 			pendingMemos,
 			reviews,
@@ -123,6 +136,8 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		const snapshot: LegacyIndexSnapshot = {
 			sourceId: `legacy-index:${knomoDataRoot}`,
 			sourceRevision,
+			legacySystemRoot: inventory.legacySystemRoot,
+			legacySystemRootPresent: inventory.legacySystemRootPresent,
 			memos,
 			pendingMemos,
 			reviews,
@@ -194,8 +209,9 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		return true;
 	}
 
-	private async collectArtifacts(knomoDataRoot: string): Promise<LegacyArtifact[]> {
+	private async collectArtifacts(knomoDataRoot: string): Promise<LegacyArtifactInventory> {
 		const artifacts: LegacyArtifact[] = [];
+		const unknownPaths: string[] = [];
 		const legacyRoot = getLegacySystemRootPath(knomoDataRoot);
 		const folder = this.app.vault.getAbstractFileByPath(legacyRoot);
 		if (folder instanceof TFolder) {
@@ -205,19 +221,26 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			});
 			for (const file of files.sort((left, right) => left.path.localeCompare(right.path))) {
 				const classification = classifyLegacyArtifactPath(legacyRoot, file.path);
-				if (classification === null) continue;
+				if (classification === null) {
+					unknownPaths.push(file.path);
+					continue;
+				}
 				const bytes = new Uint8Array(await this.app.vault.readBinary(file));
 				artifacts.push({
 					artifactKind: classification.artifactKind,
 					path: file.path,
 					bytes,
-					digest: await sha256IdentityLedgerBytes(bytes),
 				});
 			}
 		}
 		const pluginData = await this.readPluginData();
 		if (pluginData !== null) artifacts.push(pluginData);
-		return artifacts.sort((left, right) => left.path.localeCompare(right.path));
+		return {
+			artifacts: artifacts.sort((left, right) => left.path.localeCompare(right.path)),
+			legacySystemRoot: legacyRoot,
+			legacySystemRootPresent: folder instanceof TFolder,
+			unknownPaths: unknownPaths.sort((left, right) => left.localeCompare(right)),
+		};
 	}
 
 	private async readPluginData(): Promise<LegacyArtifact | null> {
@@ -229,7 +252,6 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				artifactKind: "plugin_data",
 				path,
 				bytes,
-				digest: await sha256IdentityLedgerBytes(bytes),
 			};
 		} catch (error) {
 			throw new Error(`Failed to read legacy plugin data at ${path}: ${errorMessage(error)}`);
@@ -600,13 +622,6 @@ function createParsedLegacyData(): ParsedLegacyData {
 
 function diagnostic(code: string, sourcePath: string | null, memoId: string | null, detail: string): LegacyIndexDiagnostic {
 	return { code, sourcePath, memoId, detail };
-}
-
-function compareArtifact(
-	left: { artifactKind: LegacyArtifactKind; digest: string },
-	right: { artifactKind: LegacyArtifactKind; digest: string },
-): number {
-	return `${left.artifactKind}\u0000${left.digest}`.localeCompare(`${right.artifactKind}\u0000${right.digest}`);
 }
 
 function compareDiagnostic(left: LegacyIndexDiagnostic, right: LegacyIndexDiagnostic): number {

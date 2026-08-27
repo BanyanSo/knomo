@@ -7,6 +7,11 @@ export interface LegacyIdentityImportDiagnostic {
 	detail: string;
 }
 
+export interface LegacyMigrationCleanupCandidate {
+	legacySystemRoot: string;
+	sourceRevision: string;
+}
+
 export interface LegacyIdentityImportReport {
 	status: LegacyIdentityImportStatus;
 	sourceRevision: string | null;
@@ -14,4 +19,5 @@ export interface LegacyIdentityImportReport {
 	importedMemoIds: string[];
 	skippedMemoIds: string[];
 	diagnostics: LegacyIdentityImportDiagnostic[];
+	cleanupCandidate: LegacyMigrationCleanupCandidate | null;
 }

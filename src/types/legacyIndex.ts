@@ -59,6 +59,8 @@ export interface LegacyIndexDiagnostic {
 export interface LegacyIndexSnapshot {
 	sourceId: string;
 	sourceRevision: string;
+	legacySystemRoot: string;
+	legacySystemRootPresent: boolean;
 	memos: LegacyIndexMemo[];
 	pendingMemos: LegacyPendingMemo[];
 	reviews: LegacyReviewState[];

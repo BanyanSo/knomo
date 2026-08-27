@@ -6,6 +6,7 @@ import { normalizeShuffleDayHistory } from "./shuffleDay";
 const SETTINGS_KEY = "settings";
 const RANDOM_REUNION_REVIEW_STATES_KEY = "randomReunionReviewStates";
 const SHUFFLE_DAY_HISTORY_KEY = "shuffleDayHistory";
+const LEGACY_MIGRATION_NOTICE_SOURCE_REVISION_KEY = "legacyMigrationNoticeSourceRevision";
 
 export function extractSettingsData(savedData: unknown): unknown {
 	if (isRecord(savedData) && isRecord(savedData[SETTINGS_KEY])) {
@@ -52,8 +53,24 @@ function isStructuredPluginData(value: unknown): value is Record<string, unknown
 	return isRecord(value) && (
 		SETTINGS_KEY in value ||
 		RANDOM_REUNION_REVIEW_STATES_KEY in value ||
-		SHUFFLE_DAY_HISTORY_KEY in value
+		SHUFFLE_DAY_HISTORY_KEY in value ||
+		LEGACY_MIGRATION_NOTICE_SOURCE_REVISION_KEY in value
 	);
+}
+
+export function extractLegacyMigrationNoticeSourceRevision(savedData: unknown): string | null {
+	if (!isRecord(savedData)) return null;
+	const value = savedData[LEGACY_MIGRATION_NOTICE_SOURCE_REVISION_KEY];
+	return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function buildPluginDataWithLegacyMigrationNoticeSourceRevision(
+	savedData: unknown,
+	sourceRevision: string,
+): Record<string, unknown> {
+	const nextData = getStructuredPluginData(savedData);
+	nextData[LEGACY_MIGRATION_NOTICE_SOURCE_REVISION_KEY] = sourceRevision;
+	return nextData;
 }
 
 function normalizeShuffleDayHistoryEntry(value: unknown): ShuffleDayHistoryEntry | null {

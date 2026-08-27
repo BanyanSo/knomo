@@ -52,18 +52,20 @@ test("uses distinct local-history, migration, identity, and storage status copy"
 	const { translate } = await import("../src/i18n");
 
 	assert.match(translate("zh-CN", "catalog.coveragePartial", { covered: 1, total: 3 }), /本机历史/u);
-	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧 Index/u);
+	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧版数据升级/u);
 	assert.match(translate("zh-CN", "catalog.identityConflict"), /部分 Memo/u);
 	assert.match(translate("zh-CN", "catalog.storageUnavailable"), /本机缓存/u);
 	assert.doesNotMatch(translate("zh-CN", "catalog.stateSettling"), /关联信息仍在同步/u);
 });
 
-test("describes an empty legacy Index source as not applicable instead of missing", async () => {
+test("旧版数据升级使用统一功能名称并区分等待扫描与无需升级", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");
 
-	assert.equal(translate("zh-CN", "settings.runtime.legacy.notApplicable"), "未发现旧版 Index 数据，无需迁移");
-	assert.equal(translate("en", "settings.runtime.legacy.notApplicable"), "No older Index data found; no migration is needed");
+	assert.equal(translate("zh-CN", "settings.runtime.legacy", { status: "ready" }), "旧版数据升级：ready");
+	assert.equal(translate("zh-CN", "settings.runtime.legacy.notApplicable"), "未发现旧版数据，无需升级");
+	assert.equal(translate("zh-CN", "settings.runtime.legacy.waitingCatalog"), "等待 Daily 扫描完成");
+	assert.equal(translate("en", "settings.runtime.legacy.notApplicable"), "No legacy data found; no upgrade is needed");
 });
 
 test("adds spacing only to record statistics summaries", async () => {

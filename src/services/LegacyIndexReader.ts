@@ -7,6 +7,7 @@ import type {
 	LegacyIndexMemo,
 	LegacyIndexSnapshot,
 	LegacyIndexSource,
+	LegacyIndexSourcePresence,
 	LegacyIndexSourceResult,
 	LegacyPendingMemo,
 	LegacyReviewState,
@@ -31,7 +32,8 @@ const MAX_LEGACY_REVIEW_COUNT = 1000;
 interface LegacyArtifact {
 	artifactKind: LegacyArtifactKind;
 	path: string;
-	bytes: Uint8Array;
+	period: string | null;
+	bytes: Uint8Array | null;
 }
 
 interface LegacyArtifactInventory {
@@ -67,10 +69,19 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		private readonly getKnomoDataRoot: () => string | null,
 	) {}
 
-	async load(): Promise<LegacyIndexSourceResult> {
+	inspect(): LegacyIndexSourcePresence {
 		const knomoDataRoot = this.getConfiguredRoot();
 		if (knomoDataRoot === null) return { kind: "missing" };
-		const inventory = await this.collectArtifacts(knomoDataRoot);
+		const legacySystemRoot = getLegacySystemRootPath(knomoDataRoot);
+		return this.app.vault.getAbstractFileByPath(legacySystemRoot) instanceof TFolder
+			? { kind: "present", legacySystemRoot, sourceId: `legacy-index:${knomoDataRoot}` }
+			: { kind: "missing" };
+	}
+
+	async load(): Promise<LegacyIndexSourceResult> {
+		const presence = this.inspect();
+		if (presence.kind === "missing") return presence;
+		const inventory = await this.collectArtifacts(presence.legacySystemRoot);
 		if (!inventory.legacySystemRootPresent) return { kind: "missing" };
 		const { artifacts } = inventory;
 		if (artifacts.length === 0 && inventory.unknownPaths.length === 0) return { kind: "missing" };
@@ -84,21 +95,22 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				"The legacy system folder contains a file that Knomo 1.2.9 does not recognize.",
 			));
 		}
-		let relevantArtifactCount = 0;
+		let recognizedArtifactCount = 0;
 		for (const artifact of artifacts) {
 			switch (artifact.artifactKind) {
 				case "memo_index":
-				relevantArtifactCount += 1;
+					recognizedArtifactCount += 1;
 					this.parseMemoIndex(artifact, parsed);
 					break;
 				case "pending_create":
-					relevantArtifactCount += 1;
+					recognizedArtifactCount += 1;
 					this.parsePendingCreates(artifact, parsed);
 					break;
 				case "plugin_data":
-					relevantArtifactCount += this.parsePluginData(artifact, parsed) ? 1 : 0;
+					recognizedArtifactCount += this.parsePluginData(artifact, parsed) ? 1 : 0;
 					break;
 				case "repair_candidate":
+					recognizedArtifactCount += 1;
 					parsed.diagnostics.push(diagnostic(
 						"legacy_repair_candidate_ignored",
 						artifact.path,
@@ -106,13 +118,16 @@ export class LegacyIndexReader implements LegacyIndexSource {
 						"Legacy repair candidates cannot establish stable identity.",
 					));
 					break;
+				case "memo_summary":
 				case "time_buoy_index":
 				case "time_buoy_state":
+				case "backup":
+					recognizedArtifactCount += 1;
 					break;
 			}
 		}
 
-		if (relevantArtifactCount === 0) {
+		if (recognizedArtifactCount === 0) {
 			return inventory.unknownPaths.length === 0
 				? { kind: "missing" }
 				: { kind: "attention", diagnostics: parsed.diagnostics.sort(compareDiagnostic) };
@@ -125,7 +140,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		});
 		const pendingMemos = mergePendingMemos(parsed.pendingMemos, new Set(memos.map((memo) => memo.memoId)), parsed.diagnostics);
 		const reviews = mergeReviews(parsed.reviews, parsed.diagnostics);
-		if (memos.length === 0 && pendingMemos.length === 0 && reviews.length === 0) {
+		if (memos.length === 0 && pendingMemos.length === 0 && reviews.length === 0 && parsed.diagnostics.length > 0) {
 			return { kind: "attention", diagnostics: parsed.diagnostics };
 		}
 		const sourceRevision = await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
@@ -134,7 +149,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			reviews,
 		}));
 		const snapshot: LegacyIndexSnapshot = {
-			sourceId: `legacy-index:${knomoDataRoot}`,
+			sourceId: presence.sourceId,
 			sourceRevision,
 			legacySystemRoot: inventory.legacySystemRoot,
 			legacySystemRootPresent: inventory.legacySystemRootPresent,
@@ -156,11 +171,13 @@ export class LegacyIndexReader implements LegacyIndexSource {
 	}
 
 	private parseMemoIndex(artifact: LegacyArtifact, result: ParsedLegacyData): void {
+		if (isEmptyArtifact(artifact)) return;
 		const parsed = parseJson(artifact, result.diagnostics);
 		if (!isRecord(parsed)
 			|| parsed.schemaVersion !== 2
 			|| typeof parsed.period !== "string"
 			|| !PERIOD_PATTERN.test(parsed.period)
+			|| (artifact.period !== null && parsed.period !== artifact.period)
 			|| !isRecord(parsed.memos)) {
 			result.diagnostics.push(diagnostic("legacy_memo_index_invalid", artifact.path, null, "Legacy Memo Index structure is invalid."));
 			return;
@@ -176,6 +193,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 	}
 
 	private parsePendingCreates(artifact: LegacyArtifact, result: ParsedLegacyData): void {
+		if (isEmptyArtifact(artifact)) return;
 		const parsed = parseJson(artifact, result.diagnostics);
 		if (!isRecord(parsed) || parsed.schemaVersion !== 1 || !isRecord(parsed.operations)) {
 			result.diagnostics.push(diagnostic("legacy_pending_create_invalid", artifact.path, null, "Legacy pending-create journal is invalid."));
@@ -209,10 +227,9 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		return true;
 	}
 
-	private async collectArtifacts(knomoDataRoot: string): Promise<LegacyArtifactInventory> {
+	private async collectArtifacts(legacyRoot: string): Promise<LegacyArtifactInventory> {
 		const artifacts: LegacyArtifact[] = [];
 		const unknownPaths: string[] = [];
-		const legacyRoot = getLegacySystemRootPath(knomoDataRoot);
 		const folder = this.app.vault.getAbstractFileByPath(legacyRoot);
 		if (folder instanceof TFolder) {
 			const files: TFile[] = [];
@@ -225,11 +242,13 @@ export class LegacyIndexReader implements LegacyIndexSource {
 					unknownPaths.push(file.path);
 					continue;
 				}
-				const bytes = new Uint8Array(await this.app.vault.readBinary(file));
+				const needsContent = classification.artifactKind === "memo_index"
+					|| classification.artifactKind === "pending_create";
 				artifacts.push({
 					artifactKind: classification.artifactKind,
 					path: file.path,
-					bytes,
+					period: classification.period,
+					bytes: needsContent ? new Uint8Array(await this.app.vault.readBinary(file)) : null,
 				});
 			}
 		}
@@ -251,6 +270,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			return {
 				artifactKind: "plugin_data",
 				path,
+				period: null,
 				bytes,
 			};
 		} catch (error) {
@@ -571,12 +591,18 @@ function dedupeByCanonical<T>(values: readonly T[], select: (value: T) => unknow
 
 function parseJson(artifact: LegacyArtifact, diagnostics: LegacyIndexDiagnostic[]): unknown {
 	try {
+		if (artifact.bytes === null) throw new Error("Legacy artifact content was not loaded.");
 		const text = new TextDecoder("utf-8", { fatal: true }).decode(artifact.bytes).replace(/^\uFEFF/u, "");
 		return JSON.parse(text) as unknown;
 	} catch {
 		diagnostics.push(diagnostic("legacy_json_invalid", artifact.path, null, "Legacy data file is not valid JSON."));
 		return null;
 	}
+}
+
+function isEmptyArtifact(artifact: LegacyArtifact): boolean {
+	if (artifact.bytes === null) return false;
+	return new TextDecoder("utf-8").decode(artifact.bytes).trim().length === 0;
 }
 
 function readLogicalDate(path: string, createdAt: string): string {

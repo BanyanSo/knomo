@@ -31,16 +31,27 @@ const EMPTY_REPORT: LegacyIdentityImportReport = {
 	cleanupCandidate: null,
 };
 
+const LEGACY_MIGRATION_EVENT_BATCH_SIZE = 128;
+
 export interface LegacyIndexMigrationServiceOptions {
 	getCatalogCoverage: () => Promise<CatalogCoverage>;
 	getObservationBatches: () => Promise<readonly CatalogFileRevisionBatch<MemoObservation>[]>;
+	yieldControl?: () => Promise<void>;
 	onReportChanged?: (report: LegacyIdentityImportReport) => void | Promise<void>;
+}
+
+export interface LegacyIndexMigrationRunOptions {
+	sourceChanged?: boolean;
+	verifyCompletion?: boolean;
 }
 
 export class LegacyIndexMigrationService {
 	private report: LegacyIdentityImportReport = cloneReport(EMPTY_REPORT);
 	private runQueue: Promise<LegacyIdentityImportReport> = Promise.resolve(cloneReport(EMPTY_REPORT));
 	private onChanged: (() => void | Promise<void>) | null = null;
+	private sourceChangeRevision = 0;
+	private handledSourceChangeRevision = -1;
+	private completedSourceId: string | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -55,7 +66,7 @@ export class LegacyIndexMigrationService {
 			const paths = [readPath(file), typeof oldPath === "string" ? oldPath : null]
 				.filter((path): path is string => path !== null);
 			if (!paths.some((path) => this.source.isSourcePath(path))) return;
-			void this.run().then(() => this.onChanged?.()).catch(() => undefined);
+			void this.run({ sourceChanged: true }).then(() => this.onChanged?.()).catch(() => undefined);
 		};
 		owner.registerEvent(this.app.vault.on("create", handle));
 		owner.registerEvent(this.app.vault.on("modify", handle));
@@ -70,8 +81,12 @@ export class LegacyIndexMigrationService {
 		return cloneReport(this.report);
 	}
 
-	run(): Promise<LegacyIdentityImportReport> {
-		this.runQueue = this.runQueue.then(() => this.runOnce(), () => this.runOnce());
+	run(options: LegacyIndexMigrationRunOptions = {}): Promise<LegacyIdentityImportReport> {
+		if (options.sourceChanged === true) this.sourceChangeRevision += 1;
+		this.runQueue = this.runQueue.then(
+			() => this.runOnce(options.verifyCompletion === true),
+			() => this.runOnce(options.verifyCompletion === true),
+		);
 		return this.runQueue.then(async (report) => {
 			try {
 				await this.options.onReportChanged?.(cloneReport(report));
@@ -82,10 +97,31 @@ export class LegacyIndexMigrationService {
 		});
 	}
 
-	private async runOnce(): Promise<LegacyIdentityImportReport> {
+	private async runOnce(verifyCompletion: boolean): Promise<LegacyIdentityImportReport> {
 		try {
+			const runSourceChangeRevision = this.sourceChangeRevision;
+			const presence = this.source.inspect();
+			if (presence.kind === "missing") {
+				this.completedSourceId = null;
+				this.handledSourceChangeRevision = runSourceChangeRevision;
+				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
+			}
+			if (this.report.status === "ready"
+				&& this.completedSourceId === presence.sourceId
+				&& this.handledSourceChangeRevision === runSourceChangeRevision
+				&& !verifyCompletion) {
+				return this.remember({ ...cloneReport(this.report), importedEventCount: 0 });
+			}
+			const coverage = await this.options.getCatalogCoverage();
+			if (coverage.kind !== "complete") {
+				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "waiting_catalog" });
+			}
 			const source = await this.source.load();
-			if (source.kind === "missing") return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
+			if (source.kind === "missing") {
+				this.completedSourceId = null;
+				this.handledSourceChangeRevision = runSourceChangeRevision;
+				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
+			}
 			if (source.kind === "attention") {
 				return this.remember({
 					...cloneReport(EMPTY_REPORT),
@@ -93,7 +129,22 @@ export class LegacyIndexMigrationService {
 					diagnostics: source.diagnostics,
 				});
 			}
-			return this.importSnapshot(source.snapshot, await this.options.getObservationBatches());
+			if (this.report.status === "ready"
+				&& this.report.sourceRevision === source.snapshot.sourceRevision
+				&& this.completedSourceId === source.snapshot.sourceId) {
+				this.handledSourceChangeRevision = runSourceChangeRevision;
+				const report = { ...cloneReport(this.report), importedEventCount: 0, cleanupCandidate: null };
+				return verifyCompletion || this.report.cleanupCandidate === null
+					? this.finalizeCleanupCandidate(source.snapshot, report, coverage)
+					: this.remember({ ...report, cleanupCandidate: this.report.cleanupCandidate });
+			}
+			const lookup = buildObservationLookup(await this.options.getObservationBatches());
+			const report = await this.importSnapshot(source.snapshot, lookup, coverage);
+			if (report.status === "ready") {
+				this.completedSourceId = source.snapshot.sourceId;
+				this.handledSourceChangeRevision = runSourceChangeRevision;
+			}
+			return report;
 		} catch (error) {
 			return this.remember({
 				...cloneReport(EMPTY_REPORT),
@@ -105,7 +156,8 @@ export class LegacyIndexMigrationService {
 
 	private async importSnapshot(
 		source: LegacyIndexSnapshot,
-		batches: readonly CatalogFileRevisionBatch<MemoObservation>[],
+		lookup: LegacyObservationLookup,
+		coverage: CatalogCoverage,
 	): Promise<LegacyIdentityImportReport> {
 		const diagnostics = [...source.diagnostics];
 		const writerId = await deterministicWriterId(source.sourceId);
@@ -119,14 +171,17 @@ export class LegacyIndexMigrationService {
 			...source.pendingMemos,
 		].sort((left, right) => left.memoId.localeCompare(right.memoId));
 
-		for (const record of records) {
+		for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
+			if (recordIndex > 0 && recordIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
+			const record = records[recordIndex];
+			if (record === undefined) continue;
 			const existing = initialSnapshot.memos[record.memoId];
 			if (existing?.conflicted === true || (existing !== undefined && existing.bindings.length !== 1)) {
 				skippedMemoIds.add(record.memoId);
 				diagnostics.push(diagnostic("legacy_identity_conflict", null, record.memoId, "Identity Ledger does not contain one unique binding."));
 				continue;
 			}
-			const expectedEvidence = await resolveLegacyObservationEvidence(record, batches);
+			const expectedEvidence = await resolveLegacyObservationEvidence(record, lookup);
 			if (expectedEvidence === null) {
 				skippedMemoIds.add(record.memoId);
 				diagnostics.push(diagnostic(
@@ -169,11 +224,15 @@ export class LegacyIndexMigrationService {
 			plans.set(record.memoId, { record, binding, expectedEvidence });
 		}
 
-		let importedEventCount = await this.target.importVerifiedLegacyEvents(claims);
+		let importedEventCount = await this.target.importVerifiedLegacyEvents(claims, {
+			yieldControl: () => this.yieldControl(),
+		});
 		const claimedSnapshot = this.target.getSnapshot();
 		const metadataEvents: IdentityLedgerEvent[] = [];
 		const reviews = new Map(source.reviews.map((review) => [review.memoId, review] as const));
+		let planIndex = 0;
 		for (const [memoId, plan] of plans) {
+			planIndex += 1;
 			const current = claimedSnapshot.memos[memoId];
 			const binding = current?.conflicted === false && current.bindings.length === 1
 				? current.bindings[0] ?? null
@@ -189,17 +248,31 @@ export class LegacyIndexMigrationService {
 					"Identity Ledger did not preserve the uniquely verified legacy binding.",
 				));
 				reviews.delete(memoId);
+				if (planIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
 				continue;
 			}
-			metadataEvents.push(...await buildMetadataEvents(source, writerId, plan.record, binding, reviews.get(memoId) ?? null));
+			metadataEvents.push(...await buildMetadataEvents(
+				source,
+				writerId,
+				plan.record,
+				binding,
+				reviews.get(memoId) ?? null,
+				() => this.yieldControl(),
+			));
 			importedMemoIds.add(memoId);
 			reviews.delete(memoId);
+			if (planIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
 		}
+		let unmatchedReviewIndex = 0;
 		for (const review of reviews.values()) {
 			diagnostics.push(diagnostic("legacy_review_without_identity", null, review.memoId, "Legacy review state has no confirmed identity."));
 			skippedMemoIds.add(review.memoId);
+			unmatchedReviewIndex += 1;
+			if (unmatchedReviewIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
 		}
-		importedEventCount += await this.target.importVerifiedLegacyEvents(metadataEvents);
+		importedEventCount += await this.target.importVerifiedLegacyEvents(metadataEvents, {
+			yieldControl: () => this.yieldControl(),
+		});
 		const report = {
 			status: diagnostics.length > 0 || skippedMemoIds.size > 0 ? "partial" : "ready",
 			sourceRevision: source.sourceRevision,
@@ -209,12 +282,19 @@ export class LegacyIndexMigrationService {
 			diagnostics,
 			cleanupCandidate: null,
 		} satisfies LegacyIdentityImportReport;
+		return this.finalizeCleanupCandidate(source, report, coverage);
+	}
+
+	private async finalizeCleanupCandidate(
+		source: LegacyIndexSnapshot,
+		report: LegacyIdentityImportReport,
+		coverage: CatalogCoverage,
+	): Promise<LegacyIdentityImportReport> {
 		if (report.status !== "ready"
 			|| source.sourceRevision.trim().length === 0
 			|| !source.legacySystemRootPresent) {
 			return this.remember(report);
 		}
-		const coverage = await this.options.getCatalogCoverage();
 		if (coverage.kind !== "complete" || coverage.sharedConfigurationComplete === false) {
 			return this.remember(report);
 		}
@@ -258,6 +338,13 @@ export class LegacyIndexMigrationService {
 		});
 	}
 
+	private yieldControl(): Promise<void> {
+		if (this.options.yieldControl !== undefined) return this.options.yieldControl();
+		const appWindow = this.app.workspace?.containerEl?.win;
+		if (appWindow === undefined) return Promise.resolve();
+		return new Promise((resolve) => appWindow.setTimeout(resolve, 0));
+	}
+
 	private remember(report: LegacyIdentityImportReport): LegacyIdentityImportReport {
 		this.report = cloneReport(report);
 		return cloneReport(report);
@@ -272,12 +359,18 @@ interface LegacyMemoImportPlan {
 	expectedEvidence: IdentityLedgerObservationEvidence;
 }
 
+interface LegacyObservationLookup {
+	byRawBlock: ReadonlyMap<string, MemoObservation | null>;
+	byTuple: ReadonlyMap<string, MemoObservation | null>;
+}
+
 async function buildMetadataEvents(
 	source: LegacyIndexSnapshot,
 	writerId: string,
 	record: LegacyMemoRecord,
 	binding: IdentityLedgerBinding,
 	review: LegacyIndexSnapshot["reviews"][number] | null,
+	yieldControl: () => Promise<void>,
 ): Promise<IdentityLedgerEvent[]> {
 	const events: IdentityLedgerEvent[] = [];
 	if (record.sourceMemoId !== null) {
@@ -303,6 +396,7 @@ async function buildMetadataEvents(
 				occurredAt: reviewedAt,
 				evidence: { reviewedAt },
 			});
+			if ((index + 1) % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await yieldControl();
 		}
 	}
 	if (isDeletedRecord(record)) {
@@ -342,27 +436,76 @@ async function buildMetadataEvents(
 
 function resolveObservation(
 	evidence: LegacyIndexEvidence,
-	batches: readonly CatalogFileRevisionBatch<MemoObservation>[],
+	lookup: LegacyObservationLookup,
 ): MemoObservation | null {
-	const pathCandidates = batches.flatMap((batch) => batch.observations)
-		.filter((observation) => observation.sourcePath === evidence.sourcePath);
-	const rawBlockMatches = pathCandidates.filter((observation) => observation.rawBlockHash === evidence.lastKnownBlockHash);
-	if (rawBlockMatches.length === 1) return rawBlockMatches[0] ?? null;
-	if (rawBlockMatches.length > 1) return null;
-	const tupleMatches = pathCandidates.filter((observation) => observation.logicalDate === evidence.logicalDate
-		&& observation.section === evidence.section
-		&& observation.time === evidence.time
-		&& observation.contentHash === evidence.contentHash);
-	return tupleMatches.length === 1 ? tupleMatches[0] ?? null : null;
+	const rawKey = buildRawBlockLookupKey(evidence.sourcePath, evidence.lastKnownBlockHash);
+	if (lookup.byRawBlock.has(rawKey)) return lookup.byRawBlock.get(rawKey) ?? null;
+	return lookup.byTuple.get(buildTupleLookupKey(
+		evidence.sourcePath,
+		evidence.logicalDate,
+		evidence.section,
+		evidence.time,
+		evidence.contentHash,
+	)) ?? null;
 }
 
 async function resolveLegacyObservationEvidence(
 	record: LegacyMemoRecord,
-	batches: readonly CatalogFileRevisionBatch<MemoObservation>[],
+	lookup: LegacyObservationLookup,
 ): Promise<IdentityLedgerObservationEvidence | null> {
 	if (isDeletedRecord(record)) return deletedObservationEvidence(record);
-	const observation = resolveObservation(record.evidence, batches);
+	const observation = resolveObservation(record.evidence, lookup);
 	return observation === null ? null : toObservationEvidence(observation);
+}
+
+function buildObservationLookup(
+	batches: readonly CatalogFileRevisionBatch<MemoObservation>[],
+): LegacyObservationLookup {
+	const byRawBlock = new Map<string, MemoObservation | null>();
+	const byTuple = new Map<string, MemoObservation | null>();
+	for (const batch of batches) {
+		for (const observation of batch.observations) {
+			addUniqueObservation(
+				byRawBlock,
+				buildRawBlockLookupKey(observation.sourcePath, observation.rawBlockHash),
+				observation,
+			);
+			addUniqueObservation(
+				byTuple,
+				buildTupleLookupKey(
+					observation.sourcePath,
+					observation.logicalDate,
+					observation.section,
+					observation.time,
+					observation.contentHash,
+				),
+				observation,
+			);
+		}
+	}
+	return { byRawBlock, byTuple };
+}
+
+function addUniqueObservation(
+	lookup: Map<string, MemoObservation | null>,
+	key: string,
+	observation: MemoObservation,
+): void {
+	lookup.set(key, lookup.has(key) ? null : observation);
+}
+
+function buildRawBlockLookupKey(sourcePath: string, rawBlockHash: string): string {
+	return JSON.stringify([sourcePath, rawBlockHash]);
+}
+
+function buildTupleLookupKey(
+	sourcePath: string,
+	logicalDate: string,
+	section: string | null,
+	time: string,
+	contentHash: string,
+): string {
+	return JSON.stringify([sourcePath, logicalDate, section, time, contentHash]);
 }
 
 function bindingMatchesEvidence(

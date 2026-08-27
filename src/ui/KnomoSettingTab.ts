@@ -919,7 +919,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.knomoDataRootMigrationService.migrate(knomoDataRoot);
 			await this.knomoSharedConfigService.reloadConfiguredRoot();
 			await this.syncSharedConfiguration();
-			await this.legacyIndexMigrationService.run();
+			await this.legacyIndexMigrationService.run({ sourceChanged: true, verifyCompletion: true });
 			if (knomoDataRoot !== currentSettings.monthlyMemoFolder) {
 				for (const period of await this.monthlyProjectionCoordinator.listPeriods()) {
 					await this.monthlyProjectionCoordinator.rebuildPeriod(period);
@@ -1204,6 +1204,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private getLegacyStatusLabel(status: LegacyIdentityImportStatus): string {
 		switch (status) {
 			case "idle": return t("settings.runtime.legacy.idle");
+			case "waiting_catalog": return t("settings.runtime.legacy.waitingCatalog");
 			case "not_applicable": return t("settings.runtime.legacy.notApplicable");
 			case "ready": return t("settings.runtime.legacy.ready");
 			case "partial": return t("settings.runtime.legacy.partial");

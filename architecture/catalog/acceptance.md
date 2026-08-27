@@ -12,11 +12,11 @@
 | CAT-NAME-004 | 检查当前共享事件与配置 | 不包含开发期 schema 或 renderer 版本字段；不读取未发布开发快照 |
 | CAT-ENTRY-001 | 检查 `main.ts` | 正式入口只装配 Catalog、Identity Ledger、Monthly 和旧 Index 直接迁移服务 |
 
-## 2. 1.2.9 升级
+## 2. 旧版数据升级
 
 | ID | 场景 | 必须结果 |
 | --- | --- | --- |
-| CAT-MIG-001 | 当前根存在 1.2.9 Memo Index | 直接生成可验证的 Identity Ledger claim、relation、review 和 delete 事件 |
+| CAT-MIG-001 | 升级前 `monthlyMemoFolder` 存在 1.2.9 Memo Index | 直接生成可验证的 Identity Ledger claim、relation、review 和 delete 事件 |
 | CAT-MIG-002 | 旧记录使用 16 位数字 `memoId` | 原值保留；新 memo 仍生成 UUIDv7 |
 | CAT-MIG-003 | 对相同旧数据重复迁移或重启 | 不重复追加语义相同的身份事件 |
 | CAT-MIG-004 | 同一旧 `memoId` 存在不一致同步副本 | 只报告 attention，不猜测绑定 |
@@ -31,6 +31,12 @@
 | CAT-MIG-013 | 迁移校验期间旧来源语义发生变化 | 本次不提示；后续对稳定的新来源重新验证 |
 | CAT-MIG-014 | 用户手动删除已完成迁移的旧目录后重启并重建 Catalog | Identity、review 与废纸篓状态仍从 Identity Ledger 正常读取 |
 | CAT-MIG-015 | 旧 Monthly Markdown 存在用户编辑 | 不随 `_knomo-system` 提示或任何自动流程清理 |
+| CAT-MIG-016 | 新 Vault 不存在 `monthlyMemoFolder/_knomo-system` | 状态为 `not_applicable`，不读取插件数据或运行身份升级 |
+| CAT-MIG-017 | 旧目录存在但 Catalog coverage 未 complete | 只显示“等待 Daily 扫描完成”，不读取旧文件正文或全量 observation |
+| CAT-MIG-018 | Catalog complete 且旧记录需要匹配 Daily | 对 observation 建立一次双键查找索引，每条旧记录按 O(1) 查找且保持唯一性判断 |
+| CAT-MIG-019 | 同一 `sourceRevision` 已升级完成后 Catalog 再次 settle | 不重新读取旧记录、全量 observation 或重复导入事件 |
+| CAT-MIG-020 | 存在合法空 Memo Index、空 Pending Journal、Memo Summary、Time Buoy 派生/冲突文件或旧版生成的 backup | 文件被识别并完成 inventory audit；派生内容不导入 Identity |
+| CAT-MIG-021 | 大量旧 identity、relation、review 或 recoverable delete 事件 | 分批生成和持久化，并在批次之间让出事件循环 |
 
 ## 3. 内容与身份
 
@@ -129,7 +135,7 @@
 | CAT-TIMEBUOY-004 | 全库 coverage 尚未完成时查看未来或往日浮标 | 展示已知条目并明确标记“部分结果”，不得显示为完整列表 |
 | CAT-REFRESH-001 | 手动刷新且 Daily 没有 revision 变化 | 提示“已是最新”，新增、更新、删除和失败均为 0 |
 | CAT-REFRESH-002 | 手动刷新期间出现新增、正文 revision 更新、删除和读取失败 | 按刷新前后文件 revision 返回真实分类和失败明细，不使用 coveredFileCount 代替新增数 |
-| CAT-RUNTIME-001 | 打开设置页运行状态 | 只读展示 Catalog、Identity、共享配置、Monthly 和 1.2.9 迁移状态；卡片流不展示正常后台中间态 |
+| CAT-RUNTIME-001 | 打开设置页运行状态 | 只读展示 Catalog、Identity、共享配置、Monthly 和“旧版数据升级”状态；卡片流不展示正常后台中间态 |
 | CAT-A11Y-001 | 仅使用键盘操作搜索、筛选、翻页、回顾、废纸篓和确认框 | 控件可达、焦点可见、名称可读，关闭弹层后焦点回到触发点 |
 | CAT-LIFECYCLE-001 | 反复打开和关闭视图 | 事件监听、定时器和订阅被释放，不产生重复响应 |
 | CAT-LIFECYCLE-002 | Daily 读取或解析期间卸载插件 | 清除扫描 timer，未进入提交阶段的任务不得在 unload 后写入 Catalog |

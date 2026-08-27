@@ -278,10 +278,7 @@ export default class KnomoPlugin extends Plugin {
 		const legacyIndexReader = new LegacyIndexReader(
 			this.app,
 			this.manifest.id,
-			() => {
-				const settings = this.settingsService.getSettings();
-				return settings.knomoDataRootConfigured ? settings.knomoDataRoot : null;
-			},
+			() => this.settingsService.getSettings().monthlyMemoFolder,
 		);
 		this.legacyMigrationCompletionNoticeService = new LegacyMigrationCompletionNoticeService(
 			this.app,
@@ -308,7 +305,7 @@ export default class KnomoPlugin extends Plugin {
 		knomoSharedConfigService.start(this, async () => {
 			await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 			await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-			await this.legacyIndexMigrationService?.run();
+			await this.legacyIndexMigrationService?.run({ verifyCompletion: true });
 			await this.queueRefreshOpenViews();
 		});
 		this.legacyIndexMigrationService.start(this, async () => {
@@ -344,7 +341,7 @@ export default class KnomoPlugin extends Plugin {
 					if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
 						await this.catalogIndexCoordinator?.refreshLocalCatalog();
 					}
-					await this.legacyIndexMigrationService?.run();
+					await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
 					await reconcileIdentityLedger();
 				},
 				() => this.openCatalogDataSettings(),

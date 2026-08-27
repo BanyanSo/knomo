@@ -176,7 +176,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			.sort((left, right) => left.deleteEventId.localeCompare(right.deleteEventId));
 	}
 
-	async importVerifiedLegacyEvents(events: readonly IdentityLedgerEvent[]): Promise<number> {
+	async importVerifiedLegacyEvents(
+		events: readonly IdentityLedgerEvent[],
+		runtime: { yieldControl?: () => Promise<void> } = {},
+	): Promise<number> {
 		if (events.length === 0) return 0;
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
 		const existingByEventId = new Map<string, IdentityLedgerEventEnvelope[]>();
@@ -186,7 +189,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			existingByEventId.set(envelope.event.eventId, values);
 		}
 		const pendingByEventId = new Map<string, { event: IdentityLedgerEvent; digest: string }>();
-		for (const event of events) {
+		for (let index = 0; index < events.length; index += 1) {
+			if (index > 0 && index % LEGACY_IMPORT_SEGMENT_EVENT_LIMIT === 0) await runtime.yieldControl?.();
+			const event = events[index];
+			if (event === undefined) continue;
 			const content = serializeIdentityLedgerSegment([event]);
 			const digest = await sha256IdentityLedgerText(content.trimEnd());
 			const existing = existingByEventId.get(event.eventId) ?? [];
@@ -232,6 +238,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 					const path = getIdentityLedgerSegmentPath(rootPath, writerId, first.eventId, digest);
 					await this.writeImmutable(path, content);
 					incoming.push(...(await parseIdentityLedgerSegment(rootPath, path, content)).events);
+					await runtime.yieldControl?.();
 				}
 			}
 			this.envelopes = mergeEnvelopes(this.envelopes, incoming);

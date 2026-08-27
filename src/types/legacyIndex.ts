@@ -2,8 +2,10 @@ export type LegacyArtifactKind =
 	| "memo_index"
 	| "pending_create"
 	| "plugin_data"
+	| "memo_summary"
 	| "time_buoy_index"
 	| "time_buoy_state"
+	| "backup"
 	| "repair_candidate";
 
 export interface LegacyIndexEvidence {
@@ -72,7 +74,12 @@ export type LegacyIndexSourceResult =
 	| { kind: "ready"; snapshot: LegacyIndexSnapshot }
 	| { kind: "attention"; diagnostics: LegacyIndexDiagnostic[] };
 
+export type LegacyIndexSourcePresence =
+	| { kind: "missing" }
+	| { kind: "present"; legacySystemRoot: string; sourceId: string };
+
 export interface LegacyIndexSource {
+	inspect(): LegacyIndexSourcePresence;
 	load(): Promise<LegacyIndexSourceResult>;
 	isSourcePath(path: string): boolean;
 }

@@ -71,7 +71,7 @@
 - 日期范围、标签和统计钻取产生的结果必须可返回原上下文，且不得因分页改变结果口径；
 - 交互控件必须支持键盘操作、可见焦点和可读名称；视图卸载时注销事件监听、定时器和订阅。
 - 普通刷新必须比较刷新前后的文件 `sourceRevision`，分别报告新增、更新、删除和失败；`coveredFileCount` 只表示覆盖进度，不得冒充新增数量；
-- 卡片流只提示用户能够处理的故障；Catalog、Identity、共享配置、Monthly 和 1.2.9 迁移的详细只读运行状态统一在设置页查看。
+- 卡片流只提示用户能够处理的故障；Catalog、Identity、共享配置、Monthly 和“旧版数据升级”的详细只读运行状态统一在设置页查看。
 
 ## 3. 稳定存储路径
 
@@ -94,23 +94,28 @@
 
 旧 Monthly 文件同样保留。插件不得自动删除旧 `_knomo-system` 或旧 Monthly 文件，也不得把旧文件当作新协议的持续写入目标。
 
-## 4. 从 1.2.9 直接迁移
+## 4. 旧版数据升级
 
 当前架构唯一的版本兼容边界是读取 Knomo `1.2.9` 的旧 Index 与插件数据；不得为尚未发布的 Catalog、Identity Ledger 或共享配置开发快照增加版本分支。
 
-升级只执行 `Legacy Index -> Identity Ledger`，不存在中间控制面迁移：
+“旧版数据升级”是该能力唯一的用户可见名称。其兼容边界只包含 `1.2.9`，升级只执行 `Legacy Index -> Identity Ledger`，不存在中间控制面迁移：
 
-1. `LegacyIndexReader` 精确读取当前配置根中的 Memo Index 和旧 review 状态；
-2. `LegacyIndexMigrationService` 只接受能够由当前 Daily observation 唯一验证的关系；
-3. 旧的 16 位数字 `memoId` 原样保留，之后新建 memo 继续生成 UUIDv7；
-4. 迁移事件 ID 和内容由来源证据确定，相同输入重复执行不会产生重复事件；
-5. 同一 `memoId` 出现不一致同步副本、摘要失败或无法唯一匹配时，只记录诊断并跳过；
-6. Daily、旧 Index 和旧插件数据全程只读；Time Buoy 与 Monthly 继续从当前数据重建；
-7. 旧来源修订只对规范化后的 memo、pending create 与 review 语义计算；当前插件设置及本地提示记录变化不得改变来源修订；
-8. 迁移前完整审计 `_knomo-system` 文件清单；未知文件进入诊断，不能宣称整个目录可删除；
-9. 只有旧目录实际存在、Catalog 与共享配置覆盖完整、迁移报告为 ready、来源修订非空、无跳过项或诊断、Identity Ledger 无冲突且持久化内容重读一致，并且二次读取旧来源修订未变化时，才形成清理提示凭据；
-10. 清理提示只在 Obsidian 布局就绪后显示，并按来源修订最多记录一次；旧来源语义变化后允许再次提示；
-11. 提示只说明用户可在确认所有设备均已升级并完成同步后自行删除旧目录；插件不自动删除目录或旧 Monthly 文件，不提供删除按钮，也不调用文件删除 API。
+1. `LegacyIndexReader` 从升级前的 `monthlyMemoFolder/_knomo-system` 发现来源，不依赖新 Catalog 数据根已经配置；旧目录不存在时状态为 `not_applicable`；
+2. Catalog coverage 未 complete 时状态只显示“等待 Daily 扫描完成”，不得读取旧文件正文、获取全量 observation 或开始身份匹配；
+3. Catalog complete 后只建立一次 observation 查找索引，分别使用 `sourcePath + rawBlockHash` 与 `sourcePath + logicalDate + section + time + contentHash` 唯一匹配旧记录；
+4. `LegacyIndexMigrationService` 只接受能够由当前 Daily observation 唯一验证的关系；
+5. 旧的 16 位数字 `memoId` 原样保留，之后新建 memo 继续生成 UUIDv7；
+6. 迁移事件 ID 和内容由来源证据确定，相同输入重复执行不会产生重复事件；
+7. 同一 `memoId` 出现不一致同步副本、摘要失败或无法唯一匹配时，只记录诊断并跳过；
+8. 只导入旧 `memoId`、relation、review 与 recoverable delete；Memo Summary、Time Buoy、同步冲突派生文件和旧版生成的 backups 只识别、审计，不导入 Identity；合法空 Memo Index 与 Pending Journal 视为已识别输入；
+9. 迁移事件分批生成、Identity segment 分批持久化，并在批次间主动让出事件循环；
+10. 同一 `sourceRevision` 完成后，普通 Catalog settle 不再读取旧记录或 observation；只有旧源事件、完成条件变化或上次升级未完成时才重试；
+11. Daily、旧 Index 和旧插件数据全程只读；Time Buoy 与 Monthly 继续从当前数据重建；
+12. 旧来源修订只对规范化后的 memo、pending create 与 review 语义计算；当前插件设置、派生文件、备份及本地提示记录变化不得改变来源修订；
+13. 升级前完整审计 `_knomo-system` 文件清单；未知文件进入诊断，不能宣称整个目录可删除；
+14. 只有旧目录实际存在、Catalog 与共享配置覆盖完整、升级报告为 ready、来源修订非空、无跳过项或诊断、Identity Ledger 无冲突且持久化内容重读一致，并且二次读取旧来源修订未变化时，才形成清理提示凭据；
+15. 清理提示只在 Obsidian 布局就绪后显示，并按来源修订最多记录一次；旧来源语义变化后允许再次提示；
+16. 提示只说明用户可在确认所有设备均已升级并完成同步后自行删除旧目录；插件不自动删除目录或旧 Monthly 文件，不提供删除按钮，也不调用文件删除 API。
 
 ## 5. 写入顺序
 

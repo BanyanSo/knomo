@@ -91,7 +91,7 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 		? [header.action.action]
 		: []), ["open-catalog-settings", "open-catalog-settings"]);
 	const text = headers.flatMap((header) => header.type === "summary" ? [header.text] : []).join("\n");
-	assert.match(text, /old Index/u);
+	assert.match(text, /legacy data/u);
 	assert.doesNotMatch(text, /Local history is still building/u);
 	assert.doesNotMatch(text, /Waiting for monthly memo sync/u);
 	assert.doesNotMatch(text, /Creation, adoption, and monthly writes are paused/u);
@@ -142,7 +142,7 @@ test("旧数据暂时不可读取时显示可重试提示，不冒充数据根�
 
 	assert.equal(headers.length, 1);
 	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "refresh-catalog-sync-state");
-	assert.match(headers[0]?.type === "summary" ? headers[0].text : "", /Old Index data is temporarily unavailable/u);
+	assert.match(headers[0]?.type === "summary" ? headers[0].text : "", /legacy data upgrade is temporarily unavailable/u);
 	assert.doesNotMatch(headers[0]?.type === "summary" ? headers[0].text : "", /conflicting data roots/u);
 });
 

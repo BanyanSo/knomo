@@ -116,6 +116,19 @@ test("Daily 写入标题不参与历史读取、Catalog fingerprint 或 Monthly 
 	assert.equal(saveDailyHeading.includes("rebuildLocalCatalog"), false);
 });
 
+test("旧版数据升级从旧 Monthly 目录发现来源，coverage 完成后只建立一次 observation 查找索引", () => {
+	const main = fs.readFileSync("src/main.ts", "utf8");
+	const migration = fs.readFileSync("src/services/LegacyIndexMigrationService.ts", "utf8");
+	const inventory = fs.readFileSync("src/services/LegacyArtifactInventory.ts", "utf8");
+	assert.equal(main.includes("() => this.settingsService.getSettings().monthlyMemoFolder"), true);
+	assert.equal(migration.indexOf("getCatalogCoverage()") < migration.indexOf("this.source.load()"), true);
+	assert.equal(migration.includes("buildObservationLookup"), true);
+	assert.equal(migration.includes("batches.flatMap"), false);
+	for (const artifact of ["memo_summary", "time_buoy_index", "time_buoy_state", "backup"]) {
+		assert.equal(inventory.includes(`artifactKind: \"${artifact}\"`), true, artifact);
+	}
+});
+
 function listFiles(root: string): string[] {
 	return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
 		const fullPath = path.join(root, entry.name);

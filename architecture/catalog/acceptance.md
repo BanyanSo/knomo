@@ -100,6 +100,14 @@
 | CAT-EXCLUDE-002 | 用户已显式关闭 Monthly 排除规则 | 升级不得改回开启 |
 | CAT-PROJ-001 | 重建 Monthly | 正文只从实际 Daily 读取 |
 | CAT-PROJ-002 | Monthly 写入失败 | 投影独立失败，不改变 Daily 与 identity |
+| CAT-PROJ-003 | 插件启动且存在多个历史月份 | 只自动投影当前月，不立即重算全部历史月份 |
+| CAT-PROJ-004 | 连续投影多个不同月份 | 复用按月份分组的 Daily inventory；每个月只读取本月 Daily，不重复遍历 Vault |
+| CAT-PROJ-005 | Catalog 发现离线新增、修改、删除或移动的 Daily | 只把实际受影响月份加入优先队列，当前月优先 |
+| CAT-PROJ-006 | 修改 Monthly locale 或输出渲染设置 | 所有已知月份失效并最终收敛；当前月先完成 |
+| CAT-PROJ-007 | 只修改 `dailyHeading` 等写入位置 | 历史 Monthly 不失效、不重算 |
+| CAT-PROJ-008 | Catalog 扫描、旧版数据升级与 Monthly 同时待执行 | 三者经过同一低优先级串行队列，任意时刻最多运行一项 |
+| CAT-PROJ-009 | 连续处理多个 Monthly | 每完成一个月份让出事件循环后再处理下一月份 |
+| CAT-PROJ-010 | Vault 中保留旧 Monthly 或含用户编辑的 Monthly | 不从中推断 `memoId`，不因启动或升级完成提示删除、移动或覆盖非当前待投影月份 |
 | CAT-STORE-001 | IndexedDB 丢失或不可用 | 使用内存 fallback 并从 Daily 渐进重建 |
 | CAT-STORE-002 | 内存 fallback 扫描超过 5000 条 observation | 从最旧文件分区淘汰，保留条数不超过上限且 coverage 始终为 partial |
 | CAT-ROOT-001 | 用户显式迁移数据根 | copy、verify 成功后才更新设置，旧根保留 |

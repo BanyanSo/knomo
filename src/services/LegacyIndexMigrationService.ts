@@ -20,6 +20,7 @@ import type {
 import type { LegacyIdentityImportReport } from "../types/legacyMigration";
 import { hashText } from "../utils/hash";
 import { canonicalIdentityLedgerJson, sha256IdentityLedgerText } from "./IdentityLedgerProtocol";
+import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
 
 const EMPTY_REPORT: LegacyIdentityImportReport = {
 	status: "idle",
@@ -32,12 +33,14 @@ const EMPTY_REPORT: LegacyIdentityImportReport = {
 };
 
 const LEGACY_MIGRATION_EVENT_BATCH_SIZE = 128;
+const LEGACY_MIGRATION_WORK_PRIORITY = 20;
 
 export interface LegacyIndexMigrationServiceOptions {
 	getCatalogCoverage: () => Promise<CatalogCoverage>;
 	getObservationBatches: () => Promise<readonly CatalogFileRevisionBatch<MemoObservation>[]>;
 	yieldControl?: () => Promise<void>;
 	onReportChanged?: (report: LegacyIdentityImportReport) => void | Promise<void>;
+	workQueue?: LowPriorityWorkRunner;
 }
 
 export interface LegacyIndexMigrationRunOptions {
@@ -84,8 +87,8 @@ export class LegacyIndexMigrationService {
 	run(options: LegacyIndexMigrationRunOptions = {}): Promise<LegacyIdentityImportReport> {
 		if (options.sourceChanged === true) this.sourceChangeRevision += 1;
 		this.runQueue = this.runQueue.then(
-			() => this.runOnce(options.verifyCompletion === true),
-			() => this.runOnce(options.verifyCompletion === true),
+			() => this.runLowPriorityTask(() => this.runOnce(options.verifyCompletion === true)),
+			() => this.runLowPriorityTask(() => this.runOnce(options.verifyCompletion === true)),
 		);
 		return this.runQueue.then(async (report) => {
 			try {
@@ -95,6 +98,10 @@ export class LegacyIndexMigrationService {
 			}
 			return report;
 		});
+	}
+
+	private runLowPriorityTask<T>(action: () => Promise<T>): Promise<T> {
+		return this.options.workQueue?.run(LEGACY_MIGRATION_WORK_PRIORITY, action) ?? action();
 	}
 
 	private async runOnce(verifyCompletion: boolean): Promise<LegacyIdentityImportReport> {

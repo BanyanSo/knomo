@@ -5,6 +5,7 @@ import { TFile } from "obsidian";
 
 import { MonthlyProjectionCoordinator } from "../src/services/MonthlyProjectionCoordinator";
 import { MonthlyProjectionInputBuilder } from "../src/services/MonthlyProjectionInputBuilder";
+import type { MonthlyProjectionSettings } from "../src/services/MonthlyProjection";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { SelfWriteTracker } from "../src/services/SelfWriteTracker";
 import { InMemoryVault } from "./helpers/InMemoryVault";
@@ -43,6 +44,81 @@ test("Monthly 与 Catalog 共用全区域 Parser 语义，source 输入不包含
 		["14:26", "### Ideas", "under ideas"],
 	]);
 	assert.equal(typeof built.sourceDigest, "string");
+});
+
+test("启动只投影当前月，历史 Monthly 保持原字节且各月份复用同一 Daily inventory", async () => {
+	const historicalMonthly = "用户编辑过的旧 Monthly\n";
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+		"Memos/2026-07.md": historicalMonthly,
+	}, () => true, { currentPeriod: () => "2026-08" });
+	const vault = fixture.replica.app.vault as unknown as { getMarkdownFiles(): TFile[] };
+	const getMarkdownFiles = vault.getMarkdownFiles.bind(vault);
+	let inventoryReadCount = 0;
+	vault.getMarkdownFiles = () => {
+		inventoryReadCount += 1;
+		return getMarkdownFiles();
+	};
+
+	await fixture.coordinator.initialize();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.equal(fixture.replica.read("Memos/2026-07.md"), historicalMonthly);
+	assert.match(fixture.replica.read("Memos/2026-08.md") ?? "", /August/u);
+	assert.equal(inventoryReadCount, 1);
+
+	await fixture.coordinator.rebuildPeriod("2026-07");
+	assert.equal(inventoryReadCount, 1);
+});
+
+test("写入标题变化不使 Monthly 全量失效，locale 或渲染设置变化才重投所有月份", async () => {
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+	}, () => true, { currentPeriod: () => "2026-08" });
+	await fixture.coordinator.initialize();
+	await fixture.coordinator.run(true);
+
+	await fixture.coordinator.handleConfigurationChanged();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 0, failed: 0 });
+
+	fixture.settings.monthlyDateHeadingFormat = "## D MMMM YYYY";
+	await fixture.coordinator.handleConfigurationChanged();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 2, failed: 0 });
+});
+
+test("当前月和实际变更月份优先，并在每个月份完成后让出事件循环", async () => {
+	let yieldCount = 0;
+	const priorities: number[] = [];
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		yieldControl: async () => { yieldCount += 1; },
+		workQueue: {
+			run: async <T>(priority: number, action: () => Promise<T>): Promise<T> => {
+				priorities.push(priority);
+				return action();
+			},
+		},
+	});
+	await fixture.coordinator.initialize();
+	await fixture.coordinator.run(true);
+	yieldCount = 0;
+	priorities.length = 0;
+	const projectedOrder: string[] = [];
+	const originalBuild = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	fixture.inputBuilder.build = async (period) => {
+		projectedOrder.push(period);
+		return originalBuild(period);
+	};
+
+	await fixture.coordinator.invalidateChangedPeriods(["2026-07", "2026-08"]);
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 2, failed: 0 });
+	assert.deepEqual(projectedOrder, ["2026-08", "2026-07"]);
+	assert.equal(yieldCount, 2);
+	assert.equal(priorities.length, 2);
 });
 
 test("删除或损坏 Monthly 后可从 Daily 恢复，且绝不反向修改 Daily", async () => {
@@ -238,6 +314,11 @@ test("Monthly 与 Daily 乱序到达和同步突发只造成暂时 stale，最�
 function createFixture(
 	initialFiles: Readonly<Record<string, string>>,
 	isProjectionAllowed: () => boolean = () => true,
+	options: {
+		currentPeriod?: () => string;
+		yieldControl?: () => Promise<void>;
+		workQueue?: { run<T>(priority: number, action: () => Promise<T>): Promise<T> };
+	} = {},
 ) {
 	const replica = new InMemoryVault(initialFiles);
 	(replica.app as unknown as { workspace: unknown }).workspace = {
@@ -246,15 +327,16 @@ function createFixture(
 		},
 	};
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
+	const settings: MonthlyProjectionSettings = {
+		monthlyMemoFolder: "Memos",
+		monthlyMemoFileFormat: "YYYY-MM.md",
+		monthlyDateHeadingFormat: "## YYYY-MM-DD",
+		monthlyDateOrder: "asc",
+		locale: "en",
+	};
 	const inputBuilder = new MonthlyProjectionInputBuilder(replica.app, parser, {
 		getDailyConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
-		getSettings: () => ({
-			monthlyMemoFolder: "Memos",
-			monthlyMemoFileFormat: "YYYY-MM.md",
-			monthlyDateHeadingFormat: "## YYYY-MM-DD",
-			monthlyDateOrder: "asc",
-			locale: "en",
-		}),
+		getSettings: () => settings,
 	});
 	const coordinator = new MonthlyProjectionCoordinator(replica.app, {
 		inputBuilder,
@@ -262,8 +344,11 @@ function createFixture(
 		isProjectionAllowed,
 		debounceMs: 0,
 		cooldownMs: 0,
+		currentPeriod: options.currentPeriod,
+		yieldControl: options.yieldControl ?? (() => Promise.resolve()),
+		workQueue: options.workQueue,
 	});
-	return { replica, inputBuilder, coordinator };
+	return { replica, inputBuilder, coordinator, settings };
 }
 
 async function invokeChanged(coordinator: MonthlyProjectionCoordinator, file: TFile): Promise<void> {

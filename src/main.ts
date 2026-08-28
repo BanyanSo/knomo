@@ -9,6 +9,7 @@ import {
 	createCatalogDatabaseName,
 } from "./services/CatalogIndexCoordinator";
 import { DailyNoteService } from "./services/DailyNoteService";
+import { DailyInventoryIndex } from "./services/DailyInventoryIndex";
 import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { DiaryMemoParser } from "./services/DiaryMemoParser";
 import { DailyMemoWriteGateway } from "./services/DailyMemoWriteGateway";
@@ -28,6 +29,7 @@ import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapSe
 import { LegacyIndexMigrationService } from "./services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
+import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MemoCommandService } from "./services/MemoCommandService";
 import { MarkdownMutationService } from "./services/MarkdownMutationService";
@@ -73,6 +75,9 @@ export default class KnomoPlugin extends Plugin {
 	async onload(): Promise<void> {
 		registerKnomoIcons();
 		const selfWriteTracker = new SelfWriteTracker();
+		const lowPriorityWorkQueue = new LowPriorityWorkQueue(() => this.app.workspace.containerEl.win);
+		lowPriorityWorkQueue.start(this);
+		const dailyInventory = new DailyInventoryIndex();
 		const pluginDataStore = new PluginDataStore(this);
 		this.settingsService = new SettingsService(this, pluginDataStore);
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
@@ -187,6 +192,7 @@ export default class KnomoPlugin extends Plugin {
 			{
 				getDailyConfig: () => Promise.resolve(getEffectiveDailyConfig()),
 				getSettings: getEffectiveMonthlySettings,
+				dailyInventory,
 			},
 		);
 		let monthlyProjectionFailureVisible = false;
@@ -196,6 +202,7 @@ export default class KnomoPlugin extends Plugin {
 				inputBuilder: projectionInputBuilder,
 				selfWriteTracker,
 				isProjectionAllowed: () => knomoSharedConfigService.isMonthlyProjectionAllowed(),
+				workQueue: lowPriorityWorkQueue,
 				onStateChanged: () => {
 					const failureVisible = this.monthlyProjectionCoordinator?.getProjectionState() === "failed";
 					if (failureVisible === monthlyProjectionFailureVisible) return;
@@ -220,11 +227,14 @@ export default class KnomoPlugin extends Plugin {
 						transition.after.observations,
 					);
 				},
+				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				onCatalogSettled: async () => {
 					await this.legacyIndexMigrationService?.run();
 					await reconcileIdentityLedger();
 					await this.queueRefreshOpenViews();
 				},
+				dailyInventory,
+				workQueue: lowPriorityWorkQueue,
 			},
 		);
 
@@ -295,6 +305,7 @@ export default class KnomoPlugin extends Plugin {
 				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
 				getObservationBatches: loadObservationBatches,
 				onReportChanged: () => this.showLegacyMigrationCompletionNotice(),
+				workQueue: lowPriorityWorkQueue,
 			},
 		);
 
@@ -399,8 +410,8 @@ export default class KnomoPlugin extends Plugin {
 					path: this.settingsService.getSettings().knomoDataRoot,
 				}));
 			}
-			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);
 			await this.catalogIndexCoordinator?.initialize();
+			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);
 			await this.legacyIndexMigrationService?.run();
 			await reconcileIdentityLedger();
 			await this.catalogReadService?.prime().catch(() => undefined);

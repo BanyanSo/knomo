@@ -9,12 +9,18 @@ import {
 	getMonthlyArchivePath,
 } from "./MonthlyProjection";
 import type { MonthlyProjectionInputBuilder } from "./MonthlyProjectionInputBuilder";
+import type { MonthlyProjectionConfigurationSnapshot } from "./MonthlyProjectionInputBuilder";
+import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
 import { sha256Bytes } from "./CanonicalJson";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 
 const DEFAULT_DEBOUNCE_MS = 250;
 const DEFAULT_COOLDOWN_MS = 1_000;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
+const MONTHLY_CHANGED_WORK_PRIORITY = 10;
+const MONTHLY_HISTORY_WORK_PRIORITY = 40;
+const MONTHLY_URGENT_PRIORITY = 0;
+const MONTHLY_NORMAL_PRIORITY = 1;
 
 export interface MonthlyProjectionMetadata {
 	sourceDigest: string;
@@ -30,6 +36,9 @@ export interface MonthlyProjectionCoordinatorOptions {
 	now?: () => number;
 	onStateChanged?: () => void;
 	isProjectionAllowed?: () => boolean;
+	currentPeriod?: () => string;
+	yieldControl?: () => Promise<void>;
+	workQueue?: LowPriorityWorkRunner;
 }
 
 // 职责：合并月份失效并更新可重建的 Monthly view；失败不得进入 Daily、Catalog 或 identity 链路。
@@ -40,6 +49,7 @@ export class MonthlyProjectionCoordinator {
 	private readonly now: () => number;
 	private readonly pendingPeriods = new Set<string>();
 	private readonly invalidationVersions = new Map<string, number>();
+	private readonly periodPriorities = new Map<string, number>();
 	private readonly failedPeriods = new Set<string>();
 	private readonly lastProjectedAt = new Map<string, number>();
 	private readonly metadata = new Map<string, MonthlyProjectionMetadata>();
@@ -47,6 +57,7 @@ export class MonthlyProjectionCoordinator {
 	private running: Promise<{ projected: number; failed: number }> | null = null;
 	private timer: number | null = null;
 	private stopped = false;
+	private configuration: MonthlyProjectionConfigurationSnapshot | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -70,20 +81,42 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	async initialize(): Promise<void> {
-		await this.invalidatePeriods(await this.options.inputBuilder.listPeriods());
+		await this.options.inputBuilder.initializeInventory();
+		this.configuration = await this.options.inputBuilder.getConfigurationSnapshot();
+		const currentPeriod = this.getCurrentPeriod();
+		if (this.options.inputBuilder.hasDailyPeriod(currentPeriod)) {
+			await this.invalidatePeriods([currentPeriod], MONTHLY_URGENT_PRIORITY);
+		}
 	}
 
 	async handleConfigurationChanged(): Promise<void> {
-		await this.invalidatePeriods(await this.options.inputBuilder.listPeriods());
+		const previous = this.configuration;
+		const next = await this.options.inputBuilder.getConfigurationSnapshot();
+		this.configuration = next;
+		if (previous === null) {
+			await this.initialize();
+			return;
+		}
+		if (previous.renderFingerprint === next.renderFingerprint
+			&& previous.dailyScopeKey === next.dailyScopeKey) {
+			return;
+		}
+		const periods = previous.dailyScopeKey === next.dailyScopeKey
+			? await this.options.inputBuilder.listPeriods()
+			: [...new Set([...previous.dailyPeriods, ...next.dailyPeriods, ...await this.options.inputBuilder.listPeriods()])];
+		await this.invalidateConfigurationPeriods(periods);
 	}
 
 	listPeriods(): Promise<string[]> {
 		return this.options.inputBuilder.listPeriods();
 	}
 
-	async invalidatePeriods(periods: readonly string[]): Promise<void> {
+	async invalidatePeriods(
+		periods: readonly string[],
+		priority = MONTHLY_URGENT_PRIORITY,
+	): Promise<void> {
 		for (const period of [...new Set(periods)].sort()) {
-			if (/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)) this.markPending(period);
+			if (/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)) this.markPending(period, priority);
 		}
 		if (this.pendingPeriods.size > 0) {
 			this.notifyStateChanged();
@@ -91,9 +124,13 @@ export class MonthlyProjectionCoordinator {
 		}
 	}
 
+	invalidateChangedPeriods(periods: readonly string[]): Promise<void> {
+		return this.invalidatePeriods(periods, MONTHLY_URGENT_PRIORITY);
+	}
+
 	rebuildPeriod(period: string): Promise<{ projected: number; failed: number }> {
 		if (!/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)) throw new Error(`Invalid Monthly period: ${period}`);
-		this.markPending(period);
+		this.markPending(period, MONTHLY_URGENT_PRIORITY);
 		return this.run(true);
 	}
 
@@ -134,14 +171,15 @@ export class MonthlyProjectionCoordinator {
 	private async runOnce(ignoreCooldown: boolean): Promise<{ projected: number; failed: number }> {
 		let projected = 0;
 		let failed = 0;
-		for (const period of [...this.pendingPeriods].sort()) {
+		for (const period of this.getPendingPeriodsInPriorityOrder()) {
 			const invalidationVersion = this.invalidationVersions.get(period) ?? 0;
 			const lastProjected = this.lastProjectedAt.get(period);
 			if (!ignoreCooldown && lastProjected !== undefined && this.now() - lastProjected < this.cooldownMs) continue;
 			try {
-				await this.project(period);
+				await this.runLowPriorityTask(period, () => this.project(period));
 				if ((this.invalidationVersions.get(period) ?? 0) === invalidationVersion) {
 					this.pendingPeriods.delete(period);
+					this.periodPriorities.delete(period);
 				}
 				this.failedPeriods.delete(period);
 				this.lastProjectedAt.set(period, this.now());
@@ -149,6 +187,8 @@ export class MonthlyProjectionCoordinator {
 			} catch {
 				this.failedPeriods.add(period);
 				failed += 1;
+			} finally {
+				await this.yieldControl();
 			}
 		}
 		return { projected, failed };
@@ -216,21 +256,26 @@ export class MonthlyProjectionCoordinator {
 			await this.handleMonthlyFileChanged(file);
 			return;
 		}
-		const period = await this.options.inputBuilder.getDailyPeriod(file.path);
-		if (period !== null) await this.invalidatePeriods([period]);
+		await this.invalidateChangedPeriods(await this.options.inputBuilder.updateDailyFile(file));
 	}
 
 	private async handleFileDeleted(file: unknown): Promise<void> {
 		if (!(file instanceof TFile)) return;
 		const monthlyPeriod = this.options.inputBuilder.getMonthlyPeriod(file.path);
-		const dailyPeriod = await this.options.inputBuilder.getDailyPeriod(file.path);
-		await this.invalidatePeriods([monthlyPeriod, dailyPeriod].filter((period): period is string => period !== null));
+		const dailyPeriods = await this.options.inputBuilder.removeDailyPath(file.path);
+		await this.invalidateChangedPeriods([
+			...(monthlyPeriod === null ? [] : [monthlyPeriod]),
+			...dailyPeriods,
+		]);
 	}
 
 	private async handleFileRenamed(file: unknown, oldPath: string): Promise<void> {
 		const oldMonthlyPeriod = this.options.inputBuilder.getMonthlyPeriod(oldPath);
-		const oldDailyPeriod = await this.options.inputBuilder.getDailyPeriod(oldPath);
-		await this.invalidatePeriods([oldMonthlyPeriod, oldDailyPeriod].filter((period): period is string => period !== null));
+		const oldDailyPeriods = await this.options.inputBuilder.removeDailyPath(oldPath);
+		await this.invalidateChangedPeriods([
+			...(oldMonthlyPeriod === null ? [] : [oldMonthlyPeriod]),
+			...oldDailyPeriods,
+		]);
 		await this.handleFileChanged(file);
 	}
 
@@ -255,9 +300,49 @@ export class MonthlyProjectionCoordinator {
 		return current;
 	}
 
-	private markPending(period: string): void {
+	private markPending(period: string, priority: number): void {
 		this.pendingPeriods.add(period);
+		this.periodPriorities.set(period, Math.min(priority, this.periodPriorities.get(period) ?? priority));
 		this.invalidationVersions.set(period, (this.invalidationVersions.get(period) ?? 0) + 1);
+	}
+
+	private async invalidateConfigurationPeriods(periods: readonly string[]): Promise<void> {
+		const currentPeriod = this.getCurrentPeriod();
+		await this.invalidatePeriods(periods.filter((period) => period !== currentPeriod), MONTHLY_NORMAL_PRIORITY);
+		if (periods.includes(currentPeriod)) await this.invalidatePeriods([currentPeriod], MONTHLY_URGENT_PRIORITY);
+	}
+
+	private getPendingPeriodsInPriorityOrder(): string[] {
+		const currentPeriod = this.getCurrentPeriod();
+		return [...this.pendingPeriods].sort((left, right) => {
+			const priorityDifference = (this.periodPriorities.get(left) ?? MONTHLY_NORMAL_PRIORITY)
+				- (this.periodPriorities.get(right) ?? MONTHLY_NORMAL_PRIORITY);
+			if (priorityDifference !== 0) return priorityDifference;
+			if (left === currentPeriod) return -1;
+			if (right === currentPeriod) return 1;
+			return right.localeCompare(left);
+		});
+	}
+
+	private runLowPriorityTask<T>(period: string, action: () => Promise<T>): Promise<T> {
+		const priority = (this.periodPriorities.get(period) ?? MONTHLY_NORMAL_PRIORITY) === MONTHLY_URGENT_PRIORITY
+			? MONTHLY_CHANGED_WORK_PRIORITY
+			: MONTHLY_HISTORY_WORK_PRIORITY;
+		return this.options.workQueue?.run(priority, action) ?? action();
+	}
+
+	private yieldControl(): Promise<void> {
+		if (this.options.yieldControl !== undefined) return this.options.yieldControl();
+		if (this.stopped) return Promise.resolve();
+		return new Promise<void>((resolve) => {
+			this.app.workspace.containerEl.win.setTimeout(resolve, 0);
+		});
+	}
+
+	private getCurrentPeriod(): string {
+		if (this.options.currentPeriod !== undefined) return this.options.currentPeriod();
+		const today = new Date();
+		return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
 	}
 
 	private scheduleRun(delay = this.debounceMs): void {

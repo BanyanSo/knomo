@@ -12,8 +12,11 @@ import type {
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { hashText } from "../utils/hash";
+import { buildDailyInventoryScopeKey } from "./DailyInventoryIndex";
+import type { DailyInventoryIndex } from "./DailyInventoryIndex";
 import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "./DiaryMemoParser";
 import type { DailyNotesConfig } from "./DailyNoteService";
+import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
 import type { MemoCatalogService } from "./MemoCatalogService";
 import type { MarkdownCatalogCommitInput } from "./MarkdownMutationService";
 
@@ -27,6 +30,7 @@ const DEFAULT_SLICE_BUDGET_MS = 12;
 const DEFAULT_CHECKPOINT_BATCH_SIZE = 25;
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 1_000;
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
+const CATALOG_SCAN_WORK_PRIORITY = 20;
 
 interface CatalogFailure {
 	sourcePath: string;
@@ -55,7 +59,10 @@ export interface CatalogIndexCoordinatorOptions {
 	onProgress?: (coverage: CatalogCoverage) => void | Promise<void>;
 	onCatalogSettled?: () => void | Promise<void>;
 	onRevisionTransition?: (transition: CatalogRevisionTransition) => void | Promise<void>;
+	onDailyPeriodsChanged?: (periods: readonly string[]) => void | Promise<void>;
 	isConfigurationComplete?: () => boolean;
+	dailyInventory?: DailyInventoryIndex;
+	workQueue?: LowPriorityWorkRunner;
 }
 
 export class CatalogIndexCoordinator {
@@ -69,7 +76,10 @@ export class CatalogIndexCoordinator {
 	private readonly onProgress: ((coverage: CatalogCoverage) => void | Promise<void>) | null;
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
 	private readonly onRevisionTransition: ((transition: CatalogRevisionTransition) => void | Promise<void>) | null;
+	private readonly onDailyPeriodsChanged: ((periods: readonly string[]) => void | Promise<void>) | null;
 	private readonly isConfigurationComplete: () => boolean;
+	private readonly dailyInventory: DailyInventoryIndex | null;
+	private readonly workQueue: LowPriorityWorkRunner | null;
 	private readonly inventoryByPath = new Map<string, CatalogInventoryEntry>();
 	private readonly coveredPaths = new Set<string>();
 	private readonly coverageByDate = new Map<string, { total: number; covered: number }>();
@@ -97,7 +107,9 @@ export class CatalogIndexCoordinator {
 	private closeWhenIdle = false;
 	private closingSave: Promise<void> | null = null;
 	private rebuilding = false;
+	private suppressScannedPeriodChanges = true;
 	private drainTimer: number | null = null;
+	private drainQueued = false;
 	private reconcileTimer: number | null = null;
 	private auditTimer: number | null = null;
 	private readonly yieldTimers = new Map<number, () => void>();
@@ -119,7 +131,10 @@ export class CatalogIndexCoordinator {
 		this.onProgress = options.onProgress ?? null;
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
 		this.onRevisionTransition = options.onRevisionTransition ?? null;
+		this.onDailyPeriodsChanged = options.onDailyPeriodsChanged ?? null;
 		this.isConfigurationComplete = options.isConfigurationComplete ?? (() => true);
+		this.dailyInventory = options.dailyInventory ?? null;
+		this.workQueue = options.workQueue ?? null;
 	}
 
 	start(owner: Component): void {
@@ -204,6 +219,7 @@ export class CatalogIndexCoordinator {
 		const coverage = this.buildCoverage();
 		await this.catalogService.getStore().setCoverage(coverage);
 		this.notifyProgress(coverage);
+		this.notifyDailyPeriodsChanged([inventory.logicalDate.slice(0, 7)]);
 	}
 
 	async rebuildLocalCatalog(): Promise<void> {
@@ -333,24 +349,33 @@ export class CatalogIndexCoordinator {
 			for (const entry of inventory) {
 				this.inventoryByPath.set(entry.sourcePath, entry);
 			}
+			this.dailyInventory?.replace(inventory, buildDailyInventoryScopeKey(this.dailyConfig));
 
 			const store = this.catalogService.getStore();
 			const storedFiles = await store.listFiles();
 			if (this.stopped) return;
+			const previousCoverage = await store.getCoverage();
+			if (this.stopped) return;
+			this.suppressScannedPeriodChanges = storedFiles.length === 0 && previousCoverage.kind !== "complete";
 			if (storedFiles.length === 0 && inventory.length > 0) this.rebuilding = true;
 			const storedByPath = new Map(storedFiles.map((file) => [file.sourcePath, file]));
+			const changedPeriods = new Set<string>();
 			for (const storedFile of storedFiles) {
 				if (this.stopped) return;
 				if (!this.inventoryByPath.has(storedFile.sourcePath)) {
 					await this.catalogService.deleteFile(storedFile.sourcePath);
+					changedPeriods.add(storedFile.logicalDate.slice(0, 7));
 				}
 			}
 			for (const deletedPath of this.pendingDeletedPaths) {
 				if (this.stopped) return;
+				const stored = storedByPath.get(deletedPath);
 				await this.catalogService.deleteFile(deletedPath);
+				if (stored !== undefined) changedPeriods.add(stored.logicalDate.slice(0, 7));
 				storedByPath.delete(deletedPath);
 			}
 			this.pendingDeletedPaths.clear();
+			if (!this.suppressScannedPeriodChanges) this.notifyDailyPeriodsChanged([...changedPeriods]);
 
 			const checkpoint = await store.getMeta<CatalogCheckpoint>(CATALOG_CHECKPOINT_META_KEY);
 			if (this.stopped) return;
@@ -427,13 +452,18 @@ export class CatalogIndexCoordinator {
 	}
 
 	private scheduleDrain(): void {
-		if (this.stopped || this.paused || this.processing || this.drainTimer !== null
+		if (this.stopped || this.paused || this.processing || this.drainQueued || this.drainTimer !== null
 			|| (this.queue.length === 0 && this.pendingDeletedPaths.size === 0)) {
 			return;
 		}
 		this.drainTimer = this.app.workspace.containerEl.win.setTimeout(() => {
 			this.drainTimer = null;
-			void this.drainSlice();
+			this.drainQueued = true;
+			void this.runLowPriorityTask(() => this.drainSlice()).catch(() => undefined).finally(() => {
+				this.drainQueued = false;
+				this.scheduleDrain();
+				this.resolveIdleIfNeeded();
+			});
 		}, 0);
 	}
 
@@ -532,6 +562,9 @@ export class CatalogIndexCoordinator {
 					settingsFingerprint: this.settingsFingerprint,
 					auditedAt: this.now(),
 				});
+				if (!this.suppressScannedPeriodChanges) {
+					this.notifyDailyPeriodsChanged([inventory.logicalDate.slice(0, 7)]);
+				}
 			}
 			this.setPathCovered(sourcePath, true);
 			this.failedPaths.delete(sourcePath);
@@ -566,6 +599,15 @@ export class CatalogIndexCoordinator {
 	private notifyCatalogSettled(): void {
 		if (this.stopped || this.onCatalogSettled === null) return;
 		void Promise.resolve(this.onCatalogSettled()).catch(() => undefined);
+	}
+
+	private notifyDailyPeriodsChanged(periods: readonly string[]): void {
+		if (this.stopped || this.onDailyPeriodsChanged === null || periods.length === 0) return;
+		void Promise.resolve(this.onDailyPeriodsChanged([...new Set(periods)])).catch(() => undefined);
+	}
+
+	private runLowPriorityTask<T>(action: () => Promise<T>): Promise<T> {
+		return this.workQueue?.run(CATALOG_SCAN_WORK_PRIORITY, action) ?? action();
 	}
 
 	private shouldSaveProgress(): boolean {
@@ -651,6 +693,7 @@ export class CatalogIndexCoordinator {
 		await store.setCoverage(coverage);
 		if (this.stopped) return;
 		this.fullAuditScheduled = false;
+		this.suppressScannedPeriodChanges = false;
 		this.notifyProgress(coverage, true);
 		this.notifyCatalogSettled();
 	}
@@ -713,10 +756,12 @@ export class CatalogIndexCoordinator {
 		const existing = this.inventoryByPath.get(entry.sourcePath);
 		if (existing?.logicalDate === entry.logicalDate) {
 			this.inventoryByPath.set(entry.sourcePath, entry);
+			this.dailyInventory?.upsert(entry);
 			return;
 		}
 		if (existing !== undefined) this.removeCoverageDateEntry(existing, this.coveredPaths.has(entry.sourcePath));
 		this.inventoryByPath.set(entry.sourcePath, entry);
+		this.dailyInventory?.upsert(entry);
 		const counts = this.coverageByDate.get(entry.logicalDate) ?? { total: 0, covered: 0 };
 		counts.total += 1;
 		if (this.coveredPaths.has(entry.sourcePath)) counts.covered += 1;
@@ -728,12 +773,14 @@ export class CatalogIndexCoordinator {
 		const existing = this.inventoryByPath.get(sourcePath);
 		if (existing === undefined) {
 			this.coveredPaths.delete(sourcePath);
+			this.dailyInventory?.remove(sourcePath);
 			return;
 		}
 		const covered = this.coveredPaths.delete(sourcePath);
 		if (covered) this.coveredFileCount -= 1;
 		this.removeCoverageDateEntry(existing, covered);
 		this.inventoryByPath.delete(sourcePath);
+		this.dailyInventory?.remove(sourcePath);
 		this.refreshCoverageDates();
 	}
 
@@ -871,7 +918,7 @@ export class CatalogIndexCoordinator {
 	private isIdle(): boolean {
 		return this.queue.length === 0 && this.pendingDeletedPaths.size === 0
 			&& !this.processing && !this.reconciling && this.closingSave === null
-			&& this.drainTimer === null && this.reconcileTimer === null;
+			&& !this.drainQueued && this.drainTimer === null && this.reconcileTimer === null;
 	}
 
 	private closeStoreWhenSafe(): void {

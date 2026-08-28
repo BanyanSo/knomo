@@ -220,6 +220,7 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
+	const initialChangedPeriods: string[] = [];
 	const first = await createCoordinatorFixture([
 		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 alpha", mtime: 10 },
 	]);
@@ -228,17 +229,23 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		{ now: () => 1_000, fullAuditIntervalMs: 1_000 },
+		{
+			now: () => 1_000,
+			fullAuditIntervalMs: 1_000,
+			onDailyPeriodsChanged: (periods) => { initialChangedPeriods.push(...periods); },
+		},
 	);
 	firstCoordinator.start(first.owner);
 	await firstCoordinator.initialize();
 	await firstCoordinator.waitForIdle();
+	assert.deepEqual(initialChangedPeriods, []);
 	first.unload();
 
 	const second = await createCoordinatorFixture([
 		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 bravo", mtime: 10 },
 	]);
 	const transitions: CatalogRevisionTransition[] = [];
+	const changedPeriods: string[] = [];
 	const secondCoordinator = new CatalogIndexCoordinator(
 		second.app,
 		new MemoCatalogService(store),
@@ -248,6 +255,7 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 			now: () => 2_001,
 			fullAuditIntervalMs: 1_000,
 			onRevisionTransition: (transition) => { transitions.push(transition); },
+			onDailyPeriodsChanged: (periods) => { changedPeriods.push(...periods); },
 		},
 	);
 	secondCoordinator.start(second.owner);
@@ -259,6 +267,7 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 		before: transition.before?.observations.map((item) => item.content) ?? [],
 		after: transition.after.observations.map((item) => item.content),
 	})), [{ before: ["alpha"], after: ["bravo"] }]);
+	assert.deepEqual(changedPeriods, ["2026-08"]);
 	second.unload();
 });
 

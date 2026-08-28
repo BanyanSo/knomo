@@ -1,7 +1,7 @@
-import { TFile } from "obsidian";
+import { TFile, TFolder, normalizePath } from "obsidian";
 import type { App } from "obsidian";
 
-import type { MemoObservation } from "../types/catalog";
+import type { CatalogInventoryEntry, MemoObservation } from "../types/catalog";
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { canonicalJson, sha256Text } from "./CanonicalJson";
@@ -11,6 +11,7 @@ import {
 } from "./MonthlyProjection";
 import type { MonthlyProjectionSettings } from "./MonthlyProjection";
 import type { DailyNotesConfig } from "./DailyNoteService";
+import { DailyInventoryIndex, buildDailyInventoryScopeKey } from "./DailyInventoryIndex";
 import { DiaryMemoParser } from "./DiaryMemoParser";
 
 export interface MonthlyProjectionBuildResult {
@@ -24,23 +25,32 @@ export interface MonthlyProjectionBuildResult {
 export interface MonthlyProjectionInputBuilderOptions {
 	getDailyConfig: () => DailyNotesConfig | Promise<DailyNotesConfig>;
 	getSettings: () => MonthlyProjectionSettings;
+	dailyInventory?: DailyInventoryIndex;
+}
+
+export interface MonthlyProjectionConfigurationSnapshot {
+	dailyScopeKey: string;
+	renderFingerprint: string;
+	dailyPeriods: string[];
 }
 
 // 职责：从实际 Daily 文件构造完整月份输入；Catalog 和 identity state 不参与正向数据选择。
 export class MonthlyProjectionInputBuilder {
+	private readonly dailyInventory: DailyInventoryIndex;
+
 	constructor(
 		private readonly app: App,
 		private readonly parser: DiaryMemoParser,
 		private readonly options: MonthlyProjectionInputBuilderOptions,
-	) {}
+	) {
+		this.dailyInventory = options.dailyInventory ?? new DailyInventoryIndex();
+	}
 
 	async listPeriods(): Promise<string[]> {
-		const dailyConfig = await this.options.getDailyConfig();
+		await this.ensureDailyInventory();
 		const settings = this.getSettings();
-		const periods = new Set<string>();
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
-			if (date !== null) periods.add(formatDatePart(date).slice(0, 7));
+		const periods = new Set(this.dailyInventory.listPeriods());
+		for (const file of this.listMonthlyFiles(settings)) {
 			const monthlyPeriod = getMonthlyCanonicalPeriod(settings, file.path);
 			if (monthlyPeriod !== null) periods.add(monthlyPeriod);
 		}
@@ -49,14 +59,8 @@ export class MonthlyProjectionInputBuilder {
 
 	async build(period: string): Promise<MonthlyProjectionBuildResult> {
 		assertPeriod(period);
-		const dailyConfig = await this.options.getDailyConfig();
+		const dailyConfig = await this.ensureDailyInventory();
 		const settings = this.getSettings();
-		const dailyFiles = this.app.vault.getMarkdownFiles().flatMap((file) => {
-			const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
-			if (date === null) return [];
-			const logicalDate = formatDatePart(date);
-			return logicalDate.startsWith(`${period}-`) ? [{ file, logicalDate }] : [];
-		}).sort((left, right) => compareText(left.file.path, right.file.path));
 		const parsedFiles: Array<{
 			sourcePath: string;
 			logicalDate: string;
@@ -64,10 +68,11 @@ export class MonthlyProjectionInputBuilder {
 			observationCount: number;
 		}> = [];
 		const observations: MemoObservation[] = [];
-		for (const { file, logicalDate } of dailyFiles) {
+		for (const { sourcePath, logicalDate } of this.dailyInventory.listPeriod(period)) {
+			const file = this.app.vault.getAbstractFileByPath(sourcePath);
 			if (!(file instanceof TFile)) continue;
 			const parsed = await this.parser.parse({
-				sourcePath: file.path,
+				sourcePath,
 				logicalDate,
 				bytes: new Uint8Array(await this.app.vault.readBinary(file)),
 			});
@@ -98,9 +103,72 @@ export class MonthlyProjectionInputBuilder {
 		return getMonthlyCanonicalPeriod(this.getSettings(), path);
 	}
 
+	async initializeInventory(): Promise<void> {
+		await this.ensureDailyInventory();
+	}
+
+	async getConfigurationSnapshot(): Promise<MonthlyProjectionConfigurationSnapshot> {
+		const dailyConfig = await this.ensureDailyInventory();
+		return {
+			dailyScopeKey: buildDailyInventoryScopeKey(dailyConfig),
+			renderFingerprint: JSON.stringify(this.getSettings()),
+			dailyPeriods: this.dailyInventory.listPeriods(),
+		};
+	}
+
+	hasDailyPeriod(period: string): boolean {
+		return this.dailyInventory.hasPeriod(period);
+	}
+
+	async updateDailyFile(file: TFile): Promise<string[]> {
+		const dailyConfig = await this.ensureDailyInventory();
+		const previous = this.dailyInventory.get(file.path);
+		const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
+		if (date === null) {
+			this.dailyInventory.remove(file.path);
+			return previous === null ? [] : [previous.logicalDate.slice(0, 7)];
+		}
+		const logicalDate = formatDatePart(date);
+		this.dailyInventory.upsert(toInventoryEntry(file, logicalDate));
+		return [...new Set([
+			previous?.logicalDate.slice(0, 7),
+			logicalDate.slice(0, 7),
+		].filter((period): period is string => period !== undefined))];
+	}
+
+	async removeDailyPath(path: string): Promise<string[]> {
+		const dailyConfig = await this.ensureDailyInventory();
+		const removed = this.dailyInventory.remove(path);
+		if (removed !== null) return [removed.logicalDate.slice(0, 7)];
+		const date = parseDailyNoteDateFromPath(path, dailyConfig);
+		return date === null ? [] : [formatDatePart(date).slice(0, 7)];
+	}
+
 	async getDailyPeriod(path: string): Promise<string | null> {
 		const date = parseDailyNoteDateFromPath(path, await this.options.getDailyConfig());
 		return date === null ? null : formatDatePart(date).slice(0, 7);
+	}
+
+	private async ensureDailyInventory(): Promise<DailyNotesConfig> {
+		const dailyConfig = await this.options.getDailyConfig();
+		const scopeKey = buildDailyInventoryScopeKey(dailyConfig);
+		if (this.dailyInventory.hasScope(scopeKey)) return dailyConfig;
+		const entries = this.app.vault.getMarkdownFiles().flatMap((file) => {
+			const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
+			return date === null ? [] : [toInventoryEntry(file, formatDatePart(date))];
+		});
+		this.dailyInventory.replace(entries, scopeKey);
+		return dailyConfig;
+	}
+
+	private listMonthlyFiles(settings: MonthlyProjectionSettings): TFile[] {
+		const examplePath = getMonthlyArchivePath(settings, "2000-01");
+		const separatorIndex = examplePath.lastIndexOf("/");
+		const folderPath = separatorIndex === -1 ? "" : examplePath.slice(0, separatorIndex);
+		const folder = this.app.vault.getAbstractFileByPath(normalizePath(folderPath));
+		return folder instanceof TFolder
+			? folder.children.filter((child): child is TFile => child instanceof TFile && child.extension === "md")
+			: [];
 	}
 
 	private getSettings(): MonthlyProjectionSettings {
@@ -115,10 +183,15 @@ export class MonthlyProjectionInputBuilder {
 	}
 }
 
-function assertPeriod(period: string): void {
-	if (!/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)) throw new Error(`Invalid Monthly period: ${period}`);
+function toInventoryEntry(file: TFile, logicalDate: string): CatalogInventoryEntry {
+	return {
+		sourcePath: normalizePath(file.path),
+		logicalDate,
+		mtime: file.stat.mtime,
+		size: file.stat.size,
+	};
 }
 
-function compareText(left: string, right: string): number {
-	return left < right ? -1 : left > right ? 1 : 0;
+function assertPeriod(period: string): void {
+	if (!/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)) throw new Error(`Invalid Monthly period: ${period}`);
 }

@@ -920,11 +920,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.knomoSharedConfigService.reloadConfiguredRoot();
 			await this.syncSharedConfiguration();
 			await this.legacyIndexMigrationService.run({ sourceChanged: true, verifyCompletion: true });
-			if (knomoDataRoot !== currentSettings.monthlyMemoFolder) {
-				for (const period of await this.monthlyProjectionCoordinator.listPeriods()) {
-					await this.monthlyProjectionCoordinator.rebuildPeriod(period);
-				}
-			}
 			new Notice(t("settings.dataRoot.saved"));
 			return true;
 		} catch (error) {

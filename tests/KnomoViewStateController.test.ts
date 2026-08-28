@@ -140,6 +140,7 @@ test("sidebar navigation exposes follow-up side effects for heavy routes", () =>
 	const state = new KnomoViewStateController();
 
 	assert.equal(state.setSidebarNav("review").reloadCatalogQuery, true);
+	assert.equal(state.setSidebarNav("all").reloadCatalogQuery, true);
 	assert.equal(state.setSidebarNav("random").refreshRandomReunion, true);
 	assert.equal(state.setSidebarNav("shuffleDay").refreshShuffleDay, true);
 	assert.equal(state.setSidebarNav("trash").loadTrashMemos, true);
@@ -167,6 +168,7 @@ test("reset to all notes reports whether only chrome sync is needed", () => {
 
 	assert.equal(defaultResult.type, "already-default");
 	assert.equal(defaultResult.clearCardMenu, true);
+	assert.equal(defaultResult.reloadCatalogQuery, false);
 	assert.equal(defaultState.mobileDrawerOpen, false);
 	assert.equal(defaultState.activeNav, "all");
 
@@ -178,6 +180,7 @@ test("reset to all notes reports whether only chrome sync is needed", () => {
 	const changedResult = filteredState.resetToAllNotes();
 
 	assert.equal(changedResult.type, "changed");
+	assert.equal(changedResult.reloadCatalogQuery, true);
 	assert.equal(filteredState.activeNav, "all");
 	assert.equal(filteredState.searchQuery, "");
 	assert.equal(filteredState.scopeFilter, "all");

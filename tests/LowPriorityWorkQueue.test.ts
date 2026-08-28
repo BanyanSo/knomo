@@ -58,3 +58,26 @@ test("停止统一队列后取消尚未开始的后台任务", async () => {
 
 	await assert.rejects(pending, /stopped/u);
 });
+
+test("停止统一队列会向 active task 发出取消信号并废弃其结果", async () => {
+	const queue = new LowPriorityWorkQueue(() => ({
+		setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay) as unknown as number,
+		clearTimeout: (timer) => globalThis.clearTimeout(timer as unknown as NodeJS.Timeout),
+	}));
+	let release = (): void => undefined;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	let markStarted = (): void => undefined;
+	const started = new Promise<void>((resolve) => { markStarted = resolve; });
+	const active = queue.run(10, async () => {
+		markStarted();
+		await gate;
+		assert.equal(queue.signal.aborted, true);
+		return "stale-result";
+	});
+	await started;
+
+	queue.stop();
+	release();
+
+	await assert.rejects(active, /stopped/u);
+});

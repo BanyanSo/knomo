@@ -10,6 +10,8 @@ import { translate } from "../i18n";
 import { normalizeVaultPath } from "../utils/path";
 import { MarkdownBlockService } from "./MarkdownBlockService";
 import { canonicalJson, sha256Bytes, sha256Text } from "./CanonicalJson";
+import { CooperativeYieldController, stableSortCooperatively } from "./CooperativeTask";
+import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 export const MONTHLY_ARCHIVE_MARKER = "knomo:monthly-archive";
 const MONTHLY_ARCHIVE_COMMENT = `<!-- ${MONTHLY_ARCHIVE_MARKER} -->`;
@@ -48,58 +50,80 @@ export interface MonthlyProjectionResult {
 export async function buildMonthlyProjection(
 	input: MonthlyProjectionInput,
 	markdownBlockService = new MarkdownBlockService(),
+	runtime?: CooperativeTaskRuntime,
 ): Promise<MonthlyProjectionResult> {
 	assertMonthlyPeriod(input.period);
 	const monthlyLocale = normalizeMonthlyLocaleKey(input.settings.locale);
-	const observations = [...input.observations]
-		.filter((observation) => observation.logicalDate.startsWith(`${input.period}-`))
-		.sort(compareMonthlyObservations);
+	const yieldController = runtime === undefined ? null : new CooperativeYieldController(runtime);
+	const matchingObservations: MemoObservation[] = [];
+	for (const observation of input.observations) {
+		if (observation.logicalDate.startsWith(`${input.period}-`)) matchingObservations.push(observation);
+		if (yieldController?.shouldYield()) await yieldController.yieldNow();
+	}
+	const observations = await stableSortCooperatively(matchingObservations, compareMonthlyObservations, runtime);
 	const byDate = new Map<string, MemoObservation[]>();
 	for (const observation of observations) {
 		assertLogicalDate(observation.logicalDate);
 		const values = byDate.get(observation.logicalDate) ?? [];
 		values.push(observation);
 		byDate.set(observation.logicalDate, values);
+		if (yieldController?.shouldYield()) await yieldController.yieldNow();
 	}
-	const dates = [...byDate.keys()].sort((left, right) => compareMonthlyDates(left, right, input.settings.monthlyDateOrder));
-	const sections = dates.map((logicalDate) => {
+	const dates = await stableSortCooperatively(
+		[...byDate.keys()],
+		(left, right) => compareMonthlyDates(left, right, input.settings.monthlyDateOrder),
+		runtime,
+	);
+	const sections: string[] = [];
+	for (const logicalDate of dates) {
 		const heading = formatMonthlyDateHeading(input.settings.monthlyDateHeadingFormat, logicalDate, monthlyLocale);
-		const blocks = (byDate.get(logicalDate) ?? []).map((observation) =>
-			markdownBlockService.buildMemoBlockWithBlockId(
+		const blocks: string[] = [];
+		for (const observation of byDate.get(logicalDate) ?? []) {
+			blocks.push(markdownBlockService.buildMemoBlockWithBlockId(
 				observation.content,
 				observation.time,
 				observation.existingBlockId,
 			));
-		return [heading, ...blocks].join("\n\n");
-	});
+			if (yieldController?.shouldYield()) await yieldController.yieldNow();
+		}
+		sections.push([heading, ...blocks].join("\n\n"));
+		if (yieldController?.shouldYield()) await yieldController.yieldNow();
+	}
 	const projectionHeader = input.preservedMarker ?? buildMonthlyProjectionHeader(monthlyLocale);
 	const content = [
 		projectionHeader,
 		`# ${input.period}`,
 		...sections,
 	].join("\n\n") + "\n";
-	const semanticValue = {
-		period: input.period,
-		targetPath: getMonthlyArchivePath(input.settings, input.period),
-		fileFormat: input.settings.monthlyMemoFileFormat,
-		dateHeadingFormat: input.settings.monthlyDateHeadingFormat.trim() || DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
-		dateOrder: input.settings.monthlyDateOrder,
-		locale: monthlyLocale,
-		observations: observations.map((observation) => ({
-			sourcePath: observation.sourcePath,
-			sourceRevision: observation.sourceRevision,
-			startLine: observation.startLine,
-			endLine: observation.endLine,
-			logicalDate: observation.logicalDate,
-			section: observation.section,
-			time: observation.time,
-			content: observation.content,
-			contentHash: observation.contentHash,
-			existingBlockId: observation.existingBlockId,
-		})),
-	};
 	const bytes = new TextEncoder().encode(content);
-	const sourceDigest = input.sourceDigest ?? await sha256Text(canonicalJson(semanticValue));
+	let sourceDigest = input.sourceDigest;
+	if (sourceDigest === undefined) {
+		const semanticObservations: unknown[] = [];
+		for (const observation of observations) {
+			semanticObservations.push({
+				sourcePath: observation.sourcePath,
+				sourceRevision: observation.sourceRevision,
+				startLine: observation.startLine,
+				endLine: observation.endLine,
+				logicalDate: observation.logicalDate,
+				section: observation.section,
+				time: observation.time,
+				content: observation.content,
+				contentHash: observation.contentHash,
+				existingBlockId: observation.existingBlockId,
+			});
+			if (yieldController?.shouldYield()) await yieldController.yieldNow();
+		}
+		sourceDigest = await sha256Text(canonicalJson({
+			period: input.period,
+			targetPath: getMonthlyArchivePath(input.settings, input.period),
+			fileFormat: input.settings.monthlyMemoFileFormat,
+			dateHeadingFormat: input.settings.monthlyDateHeadingFormat.trim() || DEFAULT_MONTHLY_DATE_HEADING_FORMAT,
+			dateOrder: input.settings.monthlyDateOrder,
+			locale: monthlyLocale,
+			observations: semanticObservations,
+		}));
+	}
 	const outputHash = await sha256Bytes(bytes);
 	return {
 		period: input.period,

@@ -44,6 +44,7 @@ export interface IdentityLedgerServiceOptions {
 	createMemoId?: () => string;
 	createEventId?: () => string;
 	now?: () => Date;
+	cancellationSignal?: AbortSignal;
 }
 
 export class IdentityLedgerService implements IdentityLedgerMutationService {
@@ -178,9 +179,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	async importVerifiedLegacyEvents(
 		events: readonly IdentityLedgerEvent[],
-		runtime: { yieldControl?: () => Promise<void> } = {},
+		runtime: { cancellationSignal?: AbortSignal; yieldControl?: () => Promise<void> } = {},
 	): Promise<number> {
 		if (events.length === 0) return 0;
+		this.assertWriteAllowed(runtime.cancellationSignal);
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
 		const existingByEventId = new Map<string, IdentityLedgerEventEnvelope[]>();
 		for (const envelope of this.envelopes) {
@@ -190,7 +192,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		}
 		const pendingByEventId = new Map<string, { event: IdentityLedgerEvent; digest: string }>();
 		for (let index = 0; index < events.length; index += 1) {
-			if (index > 0 && index % LEGACY_IMPORT_SEGMENT_EVENT_LIMIT === 0) await runtime.yieldControl?.();
+			if (index > 0 && index % LEGACY_IMPORT_SEGMENT_EVENT_LIMIT === 0) {
+				await runtime.yieldControl?.();
+				this.assertWriteAllowed(runtime.cancellationSignal);
+			}
 			const event = events[index];
 			if (event === undefined) continue;
 			const content = serializeIdentityLedgerSegment([event]);
@@ -219,6 +224,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		this.writeQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
 		await previous;
 		try {
+			this.assertWriteAllowed(runtime.cancellationSignal);
 			const rootPath = this.requireRootPath();
 			const incoming: IdentityLedgerEventEnvelope[] = [];
 			const byWriter = new Map<string, IdentityLedgerEvent[]>();
@@ -228,7 +234,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				byWriter.set(event.writerId, writerEvents);
 			}
 			for (const [writerId, writerEvents] of byWriter) {
-				await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, writerId));
+				this.assertWriteAllowed(runtime.cancellationSignal);
+				await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, writerId), runtime.cancellationSignal);
 				for (let index = 0; index < writerEvents.length; index += LEGACY_IMPORT_SEGMENT_EVENT_LIMIT) {
 					const batch = writerEvents.slice(index, index + LEGACY_IMPORT_SEGMENT_EVENT_LIMIT);
 					const first = batch[0];
@@ -236,15 +243,19 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 					const content = serializeIdentityLedgerSegment(batch);
 					const digest = await sha256IdentityLedgerText(content);
 					const path = getIdentityLedgerSegmentPath(rootPath, writerId, first.eventId, digest);
-					await this.writeImmutable(path, content);
+					this.assertWriteAllowed(runtime.cancellationSignal);
+					await this.writeImmutable(path, content, runtime.cancellationSignal);
 					incoming.push(...(await parseIdentityLedgerSegment(rootPath, path, content)).events);
 					await runtime.yieldControl?.();
+					this.assertWriteAllowed(runtime.cancellationSignal);
 				}
 			}
 			this.envelopes = mergeEnvelopes(this.envelopes, incoming);
 			await this.materialize();
 		} catch (error) {
-			this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
+			if (!(error instanceof IdentityLedgerWriteCancelledError)) {
+				this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
+			}
 			throw error;
 		} finally {
 			releaseQueue();
@@ -668,12 +679,15 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		});
 		await previous;
 		try {
+			this.assertWriteAllowed();
 			beforeWrite?.();
 			const rootPath = this.requireRootPath();
 			const content = serializeIdentityLedgerSegment(events);
 			const digest = await sha256IdentityLedgerText(content);
 			const path = getIdentityLedgerSegmentPath(rootPath, first.writerId, first.eventId, digest);
+			this.assertWriteAllowed();
 			await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, first.writerId));
+			this.assertWriteAllowed();
 			await this.writeImmutable(path, content);
 			const parsed = await parseIdentityLedgerSegment(rootPath, path, content);
 			const affectedMemoIds = collectAffectedMemoIds(this.envelopes, parsed.events);
@@ -685,7 +699,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			);
 			this.updateStatus();
 		} catch (error) {
-			this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
+			if (!(error instanceof IdentityLedgerWriteCancelledError)) {
+				this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
+			}
 			throw error;
 		} finally {
 			releaseQueue();
@@ -800,7 +816,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		this.status = "missing";
 	}
 
-	private async ensureFolder(rootPath: string, path: string): Promise<void> {
+	private async ensureFolder(rootPath: string, path: string, cancellationSignal?: AbortSignal): Promise<void> {
 		const normalizedRoot = normalizePath(rootPath);
 		const normalizedPath = normalizePath(path);
 		if (!normalizedPath.startsWith(`${normalizedRoot}/`)) {
@@ -812,11 +828,13 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		const segments = normalizedPath.slice(normalizedRoot.length + 1).split("/").filter(Boolean);
 		let current = normalizedRoot;
 		for (const segment of segments) {
+			this.assertWriteAllowed(cancellationSignal);
 			current = `${current}/${segment}`;
 			const existing = this.app.vault.getAbstractFileByPath(current);
 			if (existing instanceof TFolder) continue;
 			if (existing !== null) throw new Error(`Identity Ledger path is not a folder: ${current}`);
 			try {
+				this.assertWriteAllowed(cancellationSignal);
 				await this.app.vault.createFolder(current);
 			} catch (error) {
 				if (!(this.app.vault.getAbstractFileByPath(current) instanceof TFolder)) throw error;
@@ -824,7 +842,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		}
 	}
 
-	private async writeImmutable(path: string, content: string): Promise<void> {
+	private async writeImmutable(path: string, content: string, cancellationSignal?: AbortSignal): Promise<void> {
+		this.assertWriteAllowed(cancellationSignal);
 		const normalizedPath = normalizePath(path);
 		const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
 		if (existing instanceof TFile) {
@@ -834,12 +853,19 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			return;
 		}
 		if (existing !== null) throw new Error(`Identity Ledger path is not a file: ${path}`);
+		this.assertWriteAllowed(cancellationSignal);
 		this.markSelfWrittenPath(normalizedPath);
 		try {
 			await this.app.vault.create(normalizedPath, content);
 		} catch (error) {
 			const raced = this.app.vault.getAbstractFileByPath(normalizedPath);
 			if (!(raced instanceof TFile) || await this.app.vault.cachedRead(raced) !== content) throw error;
+		}
+	}
+
+	private assertWriteAllowed(cancellationSignal?: AbortSignal): void {
+		if (this.options.cancellationSignal?.aborted === true || cancellationSignal?.aborted === true) {
+			throw new IdentityLedgerWriteCancelledError();
 		}
 	}
 
@@ -1323,6 +1349,12 @@ function isIdentityLedgerPath(path: unknown, rootPath: string | null): boolean {
 	const normalizedPath = normalizePath(path);
 	const normalizedRoot = normalizePath(rootPath);
 	return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+}
+
+class IdentityLedgerWriteCancelledError extends Error {
+	constructor() {
+		super("Identity Ledger write was cancelled.");
+	}
 }
 
 class MissingIdentityLedgerRootError extends Error {

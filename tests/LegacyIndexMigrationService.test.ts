@@ -5,6 +5,8 @@ import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
 import { createIdentityLedgerMemoId, getIdentityLedgerRootPath } from "../src/services/IdentityLedgerProtocol";
 import { LegacyIndexMigrationService } from "../src/services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "../src/services/LegacyIndexReader";
+import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
+import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { MemoObservation } from "../src/types/catalog";
 import { hashMemoContent, hashText } from "../src/utils/hash";
 import { InMemoryVault } from "./helpers/InMemoryVault";
@@ -66,6 +68,7 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 	await target.initialize();
 	const observation = makeObservation(dailyPath, activeRawBlock, "正文");
 	const reader = new LegacyIndexReader(vault.app, "knomo", () => "Knomo");
+	const completionStore = new InMemoryMemoCatalogStore();
 	let sourceLoadCount = 0;
 	let observationBatchReadCount = 0;
 	const source = {
@@ -96,6 +99,7 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 			catalogRevision: 1,
 			}];
 		},
+		completionStore,
 	});
 	const sourceBytesBefore = {
 		daily: vault.read(dailyPath),
@@ -132,6 +136,47 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 		pluginData: vault.read(PLUGIN_DATA_PATH),
 	}, sourceBytesBefore);
 
+	const retainedTarget = createIdentityService(vault);
+	await retainedTarget.initialize();
+	let retainedSourceLoadCount = 0;
+	let retainedObservationBatchReadCount = 0;
+	const retainedMigration = new LegacyIndexMigrationService(vault.app, {
+		inspect: () => reader.inspect(),
+		isSourcePath: (path) => reader.isSourcePath(path),
+		load: async () => {
+			retainedSourceLoadCount += 1;
+			return reader.load();
+		},
+	}, retainedTarget, {
+		getCatalogCoverage: async () => completeCoverage(),
+		getObservationBatches: async () => {
+			retainedObservationBatchReadCount += 1;
+			return [];
+		},
+		completionStore,
+	});
+	const retainedReport = await retainedMigration.run();
+	assert.equal(retainedReport.status, "ready");
+	assert.equal(retainedReport.sourceRevision, first.sourceRevision);
+	assert.equal(retainedReport.importedEventCount, 0);
+	assert.deepEqual(retainedReport.importedMemoIds, [LEGACY_MEMO_B, LEGACY_MEMO_A].sort());
+	assert.equal(retainedSourceLoadCount, 1);
+	assert.equal(retainedObservationBatchReadCount, 0);
+	vault.replace(PLUGIN_DATA_PATH, JSON.stringify({
+		settings: {},
+		randomReunionReviewStates: {
+			[LEGACY_MEMO_A]: {
+				memoId: LEGACY_MEMO_A,
+				reviewCount: 3,
+				lastReviewedAt: "2026-08-22T05:00:00.000Z",
+			},
+		},
+	}));
+	const changedReport = await retainedMigration.run({ sourceChanged: true });
+	assert.equal(changedReport.status, "partial");
+	assert.equal(retainedSourceLoadCount, 2);
+	assert.equal(retainedObservationBatchReadCount, 1);
+
 	const restartedVault = new InMemoryVault(Object.fromEntries(
 		Object.entries(vault.snapshot()).filter(([path]) => !path.startsWith("Knomo/_knomo-system/")),
 	));
@@ -150,6 +195,76 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 		lastReviewedAt: "2026-08-22T05:00:00.000Z",
 	});
 	assert.equal(restartedTarget.getActiveDeletes()[0]?.memoId, LEGACY_MEMO_B);
+});
+
+test("停止统一队列会取消 active 旧版升级且不持久化 Identity", async () => {
+	const dailyPath = "Daily/2026-08-22.md";
+	const rawBlock = "- 09:00 正文";
+	const vault = new InMemoryVault({
+		[dailyPath]: `## Memos\n${rawBlock}\n`,
+		[LEGACY_INDEX_PATH]: JSON.stringify({
+			schemaVersion: 2,
+			period: "2026-08",
+			memos: {
+				[LEGACY_MEMO_A]: legacyMemoRecord({
+					memoId: LEGACY_MEMO_A,
+					createdAt: "2026-08-22T09:00:00.000Z",
+					path: dailyPath,
+					rawBlock,
+					content: "正文",
+				}),
+			},
+		}),
+	});
+	await vault.app.vault.createFolder(IDENTITY_ROOT);
+	await vault.app.vault.createFolder(`${IDENTITY_ROOT}/writers`);
+	const target = createIdentityService(vault);
+	await target.initialize();
+	const observation = makeObservation(dailyPath, rawBlock, "正文");
+	const workQueue = new LowPriorityWorkQueue(() => ({
+		setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay) as unknown as number,
+		clearTimeout: (timer) => globalThis.clearTimeout(timer as unknown as NodeJS.Timeout),
+	}));
+	let releaseBatches = (): void => undefined;
+	const batchesGate = new Promise<void>((resolve) => { releaseBatches = resolve; });
+	let markBatchesStarted = (): void => undefined;
+	const batchesStarted = new Promise<void>((resolve) => { markBatchesStarted = resolve; });
+	const migration = new LegacyIndexMigrationService(
+		vault.app,
+		new LegacyIndexReader(vault.app, "knomo", () => "Knomo"),
+		target,
+		{
+			getCatalogCoverage: async () => completeCoverage(),
+			getObservationBatches: async () => {
+				markBatchesStarted();
+				await batchesGate;
+				return [{
+					file: {
+						sourcePath: dailyPath,
+						logicalDate: observation.logicalDate,
+						sourceRevision: observation.sourceRevision,
+						mtime: 0,
+						size: rawBlock.length,
+						parserVersion: 3,
+						settingsFingerprint: "test",
+						observationCount: 1,
+						auditedAt: 0,
+					},
+					observations: [observation],
+					catalogRevision: 1,
+				}];
+			},
+			workQueue,
+		},
+	);
+	const running = migration.run();
+	await batchesStarted;
+
+	workQueue.stop();
+	releaseBatches();
+
+	await assert.rejects(running, /stopped/u);
+	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 0);
 });
 
 test("旧目录存在但 Catalog 未完成时只等待 Daily 扫描，不读取旧文件或 observation", async () => {
@@ -193,6 +308,10 @@ test("从旧 monthlyMemoFolder 发现来源，并只审计合法空文件和派�
 		[`${oldRoot}/_knomo-system/indexes/memo-summary.json`]: "not-read",
 		[`${oldRoot}/_knomo-system/indexes/time-buoy/time-buoy-2026-08 conflict.json`]: "not-read",
 		[`${oldRoot}/_knomo-system/backups/rebuild-index-20260827-120000/indexes/memo-index-2026-08.json`]: "not-read",
+		[`${oldRoot}/_knomo-system/backups/rebuild-monthly-2026-08-20260827-120000/monthly/2026-08.md`]: "not-read",
+		[`${oldRoot}/_knomo-system/backups/time-buoy-rebuild-2026-08-27T12-00-00/time-buoy-2026-08.json`]: "not-read",
+		[`${oldRoot}/_knomo-system/backups/monthly-format-1787891200000/indexes/memo-summary.json`]: "not-read",
+		[`${oldRoot}/_knomo-system/backups/monthly-folder-1787891200000/monthly/nested/2026-08.md`]: "not-read",
 	});
 	const readBinary = vault.app.vault.readBinary.bind(vault.app.vault);
 	const readPaths: string[] = [];
@@ -218,6 +337,34 @@ test("从旧 monthlyMemoFolder 发现来源，并只审计合法空文件和派�
 		`${oldRoot}/_knomo-system/indexes/memo-index-2026-08.json`,
 		`${oldRoot}/_knomo-system/pending-memo-creates.json`,
 	].sort());
+});
+
+test("旧备份目录中的额外文件归类为 unknown", async () => {
+	const extraPath = "Knomo/_knomo-system/backups/rebuild-index-20260827-120000/private-note.txt";
+	const vault = new InMemoryVault({
+		[LEGACY_INDEX_PATH]: JSON.stringify({
+			schemaVersion: 2,
+			period: "2026-08",
+			memos: {
+				[LEGACY_MEMO_A]: legacyMemoRecord({
+					memoId: LEGACY_MEMO_A,
+					createdAt: "2026-08-22T09:00:00.000Z",
+					path: "Daily/2026-08-22.md",
+					rawBlock: "- 09:00 正文",
+					content: "正文",
+				}),
+			},
+		}),
+		"Knomo/_knomo-system/backups/rebuild-index-20260827-120000/indexes/memo-index-2026-08.json": "not-read",
+		[extraPath]: "不要删除",
+	});
+
+	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
+
+	assert.equal(result.kind, "ready");
+	if (result.kind !== "ready") return;
+	assert.equal(result.snapshot.diagnostics.some((item) => item.code === "legacy_inventory_unknown_file"
+		&& item.sourcePath === extraPath), true);
 });
 
 test("旧记录通过一次 observation 查找索引匹配，并在批处理中主动让出事件循环", async () => {
@@ -291,6 +438,63 @@ test("旧记录通过一次 observation 查找索引匹配，并在批处理中�
 	assert.equal(report.importedMemoIds.length, recordCount);
 	assert.equal(sourcePathReadCount < recordCount * 8, true);
 	assert.equal(yieldCount > 0, true);
+});
+
+test("raw block hash 歧义时继续使用包含 section 的 tuple 唯一匹配", async () => {
+	const dailyPath = "Daily/2026-08-22.md";
+	const rawBlock = "- 09:00 相同正文";
+	const vault = new InMemoryVault({
+		[LEGACY_INDEX_PATH]: JSON.stringify({
+			schemaVersion: 2,
+			period: "2026-08",
+			memos: {
+				[LEGACY_MEMO_A]: legacyMemoRecord({
+					memoId: LEGACY_MEMO_A,
+					createdAt: "2026-08-22T09:00:00.000Z",
+					path: dailyPath,
+					rawBlock,
+					content: "相同正文",
+					section: "## 工作",
+				}),
+			},
+		}),
+	});
+	await vault.app.vault.createFolder(IDENTITY_ROOT);
+	await vault.app.vault.createFolder(`${IDENTITY_ROOT}/writers`);
+	const target = createIdentityService(vault);
+	await target.initialize();
+	const workObservation = { ...makeObservation(dailyPath, rawBlock, "相同正文"), section: "## 工作" };
+	const lifeObservation = { ...makeObservation(dailyPath, rawBlock, "相同正文"), section: "## 生活", startLine: 5, endLine: 5 };
+	const migration = new LegacyIndexMigrationService(
+		vault.app,
+		new LegacyIndexReader(vault.app, "knomo", () => "Knomo"),
+		target,
+		{
+			getCatalogCoverage: async () => completeCoverage(),
+			getObservationBatches: async () => [{
+				file: {
+					sourcePath: dailyPath,
+					logicalDate: workObservation.logicalDate,
+					sourceRevision: workObservation.sourceRevision,
+					mtime: 0,
+					size: rawBlock.length * 2,
+					parserVersion: 4,
+					settingsFingerprint: "test",
+					observationCount: 2,
+					auditedAt: 0,
+				},
+				observations: [workObservation, lifeObservation],
+				catalogRevision: 1,
+			}],
+		},
+	);
+
+	const report = await migration.run();
+
+	assert.equal(report.status, "ready");
+	assert.deepEqual(report.importedMemoIds, [LEGACY_MEMO_A]);
+	assert.equal(target.resolveObservation(workObservation)?.memoId, LEGACY_MEMO_A);
+	assert.equal(target.resolveObservation(lifeObservation), null);
 });
 
 test("已有同 memoId binding 与旧 Index 证据不一致时跳过迁移", async () => {
@@ -818,6 +1022,7 @@ function legacyMemoRecord(input: {
 	path: string;
 	rawBlock: string;
 	content: string;
+	section?: string;
 	status?: "active" | "deleted" | "error";
 	deletedAt?: string;
 	sourceMemoId?: string | null;
@@ -843,7 +1048,7 @@ function legacyMemoRecord(input: {
 		lastMarkdownSyncSource: "file_watch",
 		dailyRef: {
 			path: input.path,
-			heading: "## Memos",
+			heading: input.section ?? "## Memos",
 			sectionType: "heading",
 			lastKnownBlock: input.rawBlock,
 			lastKnownHash: hashText(input.rawBlock),

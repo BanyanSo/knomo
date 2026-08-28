@@ -16,10 +16,12 @@ import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
 import { sha256Bytes } from "./CanonicalJson";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
+import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 const DEFAULT_DEBOUNCE_MS = 250;
 const DEFAULT_COOLDOWN_MS = 1_000;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
+const DEFAULT_SLICE_BUDGET_MS = 8;
 const MONTHLY_CHANGED_WORK_PRIORITY = 10;
 const MONTHLY_HISTORY_WORK_PRIORITY = 40;
 const MONTHLY_URGENT_PRIORITY = 0;
@@ -39,6 +41,7 @@ export interface MonthlyProjectionCoordinatorOptions {
 	debounceMs?: number;
 	cooldownMs?: number;
 	retryDelayMs?: number;
+	sliceBudgetMs?: number;
 	now?: () => number;
 	onStateChanged?: () => void;
 	isProjectionAllowed?: () => boolean;
@@ -64,6 +67,7 @@ export class MonthlyProjectionCoordinator {
 	private readonly debounceMs: number;
 	private readonly cooldownMs: number;
 	private readonly retryDelayMs: number;
+	private readonly sliceBudgetMs: number;
 	private readonly now: () => number;
 	private readonly pendingPeriods = new Set<string>();
 	private readonly invalidationVersions = new Map<string, number>();
@@ -87,6 +91,7 @@ export class MonthlyProjectionCoordinator {
 		this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 		this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
 		this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+		this.sliceBudgetMs = options.sliceBudgetMs ?? DEFAULT_SLICE_BUDGET_MS;
 		this.now = options.now ?? Date.now;
 		this.projectionAllowed = this.isProjectionAllowed();
 	}
@@ -103,8 +108,11 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	async initialize(): Promise<void> {
+		this.assertRunning();
 		await this.options.inputBuilder.initializeInventory();
+		this.assertRunning();
 		this.configuration = await this.options.inputBuilder.getConfigurationSnapshot();
+		this.assertRunning();
 		this.projectionAllowed = this.isProjectionAllowed();
 		const checkpoint = await this.loadCheckpoint();
 		const checkpointMatches = checkpoint !== null
@@ -203,7 +211,7 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	run(ignoreCooldown = false): Promise<{ projected: number; failed: number }> {
-		if (this.stopped) return Promise.resolve({ projected: 0, failed: 0 });
+		if (this.isStopped()) return Promise.resolve({ projected: 0, failed: 0 });
 		if (!this.isProjectionAllowed()) {
 			this.notifyStateChanged();
 			return Promise.resolve({ projected: 0, failed: 0 });
@@ -265,7 +273,7 @@ export class MonthlyProjectionCoordinator {
 				this.lastProjectedAt.set(period, this.now());
 				projected += 1;
 			} catch (error) {
-				if (error instanceof MonthlyProjectionStoppedError) break;
+				if (this.isStopped() || error instanceof MonthlyProjectionStoppedError) break;
 				this.failedPeriods.add(period);
 				failed += 1;
 			} finally {
@@ -291,7 +299,9 @@ export class MonthlyProjectionCoordinator {
 					return;
 				}
 			}
-			const built = await this.options.inputBuilder.build(period);
+			const runtime = this.createCooperativeRuntime();
+			const built = await this.options.inputBuilder.build(period, runtime);
+			this.assertRunning();
 			if (existing === null && built.observations.length === 0) {
 				this.metadata.delete(period);
 				return;
@@ -305,7 +315,8 @@ export class MonthlyProjectionCoordinator {
 				observations: built.observations,
 				sourceDigest: built.sourceDigest,
 				preservedMarker,
-			});
+			}, undefined, runtime);
+			this.assertRunning();
 			if (projection.path !== targetPath) throw new Error("Monthly projection settings changed during build.");
 			if (existing instanceof TFile) {
 				const currentHash = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(existing)));
@@ -329,7 +340,9 @@ export class MonthlyProjectionCoordinator {
 				if (existing instanceof TFile) {
 					let skippedUnmarked = false;
 					let changedMarker = false;
+					this.assertRunning();
 					await this.app.vault.process(existing, (currentContent) => {
+						if (this.isStopped()) return currentContent;
 						if (!hasKnomoMonthlyArchiveMarker(currentContent)) {
 							skippedUnmarked = true;
 							return currentContent;
@@ -340,6 +353,7 @@ export class MonthlyProjectionCoordinator {
 						}
 						return currentContent === projection.content ? currentContent : projection.content;
 					});
+					this.assertRunning();
 					if (skippedUnmarked) {
 						this.options.selfWriteTracker.discard(targetPath, opId);
 						this.metadata.delete(period);
@@ -349,6 +363,7 @@ export class MonthlyProjectionCoordinator {
 					file = existing;
 				} else {
 					const parentFolder = getParentFolderPath(targetPath);
+					this.assertRunning();
 					if (parentFolder !== null) await ensureFolder(this.app, parentFolder);
 					this.assertRunning();
 					file = await this.app.vault.create(targetPath, projection.content);
@@ -490,9 +505,9 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private persistCheckpoint(): Promise<void> {
-		if (this.options.checkpointStore === undefined || this.configuration === null) return Promise.resolve();
+		if (this.isStopped() || this.options.checkpointStore === undefined || this.configuration === null) return Promise.resolve();
 		const write = this.checkpointQueue.catch(() => undefined).then(async () => {
-			if (this.configuration === null) return;
+			if (this.isStopped() || this.configuration === null) return;
 			const checkpoint: MonthlyProjectionCheckpoint = {
 				dailyScopeKey: this.configuration.dailyScopeKey,
 				renderFingerprint: this.configuration.renderFingerprint,
@@ -504,6 +519,7 @@ export class MonthlyProjectionCoordinator {
 				})),
 				metadata: Object.fromEntries([...this.metadata.entries()].sort(([left], [right]) => left.localeCompare(right))),
 			};
+			if (this.isStopped()) return;
 			await this.options.checkpointStore?.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, checkpoint);
 		});
 		this.checkpointQueue = write;
@@ -511,7 +527,11 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private assertRunning(): void {
-		if (this.stopped) throw new MonthlyProjectionStoppedError();
+		if (this.isStopped()) throw new MonthlyProjectionStoppedError();
+	}
+
+	private isStopped(): boolean {
+		return this.stopped || this.options.workQueue?.signal.aborted === true;
 	}
 
 	private getPendingPeriodsInPriorityOrder(): string[] {
@@ -533,9 +553,22 @@ export class MonthlyProjectionCoordinator {
 		return this.options.workQueue?.run(priority, action) ?? action();
 	}
 
+	private createCooperativeRuntime(): CooperativeTaskRuntime {
+		return {
+			sliceBudgetMs: this.sliceBudgetMs,
+			yieldControl: () => this.yieldSlice(),
+		};
+	}
+
+	private async yieldSlice(): Promise<void> {
+		this.assertRunning();
+		await this.yieldControl();
+		this.assertRunning();
+	}
+
 	private yieldControl(): Promise<void> {
 		if (this.options.yieldControl !== undefined) return this.options.yieldControl();
-		if (this.stopped) return Promise.resolve();
+		if (this.isStopped()) return Promise.resolve();
 		return new Promise<void>((resolve) => {
 			this.app.workspace.containerEl.win.setTimeout(resolve, 0);
 		});
@@ -548,7 +581,7 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private scheduleRun(delay = this.debounceMs): void {
-		if (this.stopped || !this.isProjectionAllowed()) return;
+		if (this.isStopped() || !this.isProjectionAllowed()) return;
 		const win = this.app.workspace.containerEl.win;
 		if (this.timer !== null) win.clearTimeout(this.timer);
 		this.timer = win.setTimeout(() => {

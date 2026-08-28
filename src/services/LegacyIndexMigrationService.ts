@@ -21,6 +21,7 @@ import type { LegacyIdentityImportReport } from "../types/legacyMigration";
 import { hashText } from "../utils/hash";
 import { canonicalIdentityLedgerJson, sha256IdentityLedgerText } from "./IdentityLedgerProtocol";
 import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
+import type { MemoCatalogStore } from "./MemoCatalogStore";
 
 const EMPTY_REPORT: LegacyIdentityImportReport = {
 	status: "idle",
@@ -34,6 +35,12 @@ const EMPTY_REPORT: LegacyIdentityImportReport = {
 
 const LEGACY_MIGRATION_EVENT_BATCH_SIZE = 128;
 const LEGACY_MIGRATION_WORK_PRIORITY = 20;
+const LEGACY_MIGRATION_COMPLETION_META_KEY = "legacyMigrationCompletion";
+
+interface LegacyMigrationCompletion {
+	sourceId: string;
+	sourceRevision: string;
+}
 
 export interface LegacyIndexMigrationServiceOptions {
 	getCatalogCoverage: () => Promise<CatalogCoverage>;
@@ -41,6 +48,7 @@ export interface LegacyIndexMigrationServiceOptions {
 	yieldControl?: () => Promise<void>;
 	onReportChanged?: (report: LegacyIdentityImportReport) => void | Promise<void>;
 	workQueue?: LowPriorityWorkRunner;
+	completionStore?: Pick<MemoCatalogStore, "deleteMeta" | "getMeta" | "setMeta">;
 }
 
 export interface LegacyIndexMigrationRunOptions {
@@ -55,6 +63,7 @@ export class LegacyIndexMigrationService {
 	private sourceChangeRevision = 0;
 	private handledSourceChangeRevision = -1;
 	private completedSourceId: string | null = null;
+	private stopped = false;
 
 	constructor(
 		private readonly app: App,
@@ -76,6 +85,7 @@ export class LegacyIndexMigrationService {
 		owner.registerEvent(this.app.vault.on("delete", handle));
 		owner.registerEvent(this.app.vault.on("rename", handle));
 		owner.register(() => {
+			this.stopped = true;
 			this.onChanged = null;
 		});
 	}
@@ -106,9 +116,11 @@ export class LegacyIndexMigrationService {
 
 	private async runOnce(verifyCompletion: boolean): Promise<LegacyIdentityImportReport> {
 		try {
+			this.assertRunning();
 			const runSourceChangeRevision = this.sourceChangeRevision;
 			const presence = this.source.inspect();
 			if (presence.kind === "missing") {
+				await this.clearCompletion();
 				this.completedSourceId = null;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
@@ -120,16 +132,20 @@ export class LegacyIndexMigrationService {
 				return this.remember({ ...cloneReport(this.report), importedEventCount: 0 });
 			}
 			const coverage = await this.options.getCatalogCoverage();
+			this.assertRunning();
 			if (coverage.kind !== "complete") {
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "waiting_catalog" });
 			}
 			const source = await this.source.load();
+			this.assertRunning();
 			if (source.kind === "missing") {
+				await this.clearCompletion();
 				this.completedSourceId = null;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
 			}
 			if (source.kind === "attention") {
+				await this.clearCompletion();
 				return this.remember({
 					...cloneReport(EMPTY_REPORT),
 					status: "attention",
@@ -138,21 +154,38 @@ export class LegacyIndexMigrationService {
 			}
 			if (this.report.status === "ready"
 				&& this.report.sourceRevision === source.snapshot.sourceRevision
-				&& this.completedSourceId === source.snapshot.sourceId) {
+				&& this.completedSourceId === source.snapshot.sourceId
+				&& source.snapshot.diagnostics.length === 0) {
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 				const report = { ...cloneReport(this.report), importedEventCount: 0, cleanupCandidate: null };
 				return verifyCompletion || this.report.cleanupCandidate === null
 					? this.finalizeCleanupCandidate(source.snapshot, report, coverage)
 					: this.remember({ ...report, cleanupCandidate: this.report.cleanupCandidate });
 			}
-			const lookup = buildObservationLookup(await this.options.getObservationBatches());
+			const completion = await this.loadCompletion();
+			this.assertRunning();
+			if (completion !== null
+				&& completion.sourceId === source.snapshot.sourceId
+				&& completion.sourceRevision === source.snapshot.sourceRevision
+				&& source.snapshot.diagnostics.length === 0
+				&& !hasIdentityConflict(this.target)) {
+				this.completedSourceId = source.snapshot.sourceId;
+				this.handledSourceChangeRevision = runSourceChangeRevision;
+				return this.remember(completedReport(source.snapshot));
+			}
+			if (completion !== null) await this.clearCompletion();
+			const observationBatches = await this.options.getObservationBatches();
+			this.assertRunning();
+			const lookup = buildObservationLookup(observationBatches);
 			const report = await this.importSnapshot(source.snapshot, lookup, coverage);
+			this.assertRunning();
 			if (report.status === "ready") {
 				this.completedSourceId = source.snapshot.sourceId;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 			}
 			return report;
 		} catch (error) {
+			if (this.isStopped()) throw new Error("Low-priority work queue is stopped.");
 			return this.remember({
 				...cloneReport(EMPTY_REPORT),
 				status: "unavailable",
@@ -166,6 +199,7 @@ export class LegacyIndexMigrationService {
 		lookup: LegacyObservationLookup,
 		coverage: CatalogCoverage,
 	): Promise<LegacyIdentityImportReport> {
+		this.assertRunning();
 		const diagnostics = [...source.diagnostics];
 		const writerId = await deterministicWriterId(source.sourceId);
 		const initialSnapshot = this.target.getSnapshot();
@@ -231,9 +265,12 @@ export class LegacyIndexMigrationService {
 			plans.set(record.memoId, { record, binding, expectedEvidence });
 		}
 
+		this.assertRunning();
 		let importedEventCount = await this.target.importVerifiedLegacyEvents(claims, {
+			cancellationSignal: this.options.workQueue?.signal,
 			yieldControl: () => this.yieldControl(),
 		});
+		this.assertRunning();
 		const claimedSnapshot = this.target.getSnapshot();
 		const metadataEvents: IdentityLedgerEvent[] = [];
 		const reviews = new Map(source.reviews.map((review) => [review.memoId, review] as const));
@@ -277,9 +314,12 @@ export class LegacyIndexMigrationService {
 			unmatchedReviewIndex += 1;
 			if (unmatchedReviewIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
 		}
+		this.assertRunning();
 		importedEventCount += await this.target.importVerifiedLegacyEvents(metadataEvents, {
+			cancellationSignal: this.options.workQueue?.signal,
 			yieldControl: () => this.yieldControl(),
 		});
+		this.assertRunning();
 		const report = {
 			status: diagnostics.length > 0 || skippedMemoIds.size > 0 ? "partial" : "ready",
 			sourceRevision: source.sourceRevision,
@@ -297,6 +337,7 @@ export class LegacyIndexMigrationService {
 		report: LegacyIdentityImportReport,
 		coverage: CatalogCoverage,
 	): Promise<LegacyIdentityImportReport> {
+		this.assertRunning();
 		if (report.status !== "ready"
 			|| source.sourceRevision.trim().length === 0
 			|| !source.legacySystemRootPresent) {
@@ -314,7 +355,9 @@ export class LegacyIndexMigrationService {
 				"Identity Ledger contains a conflict after the legacy import.",
 			)));
 		}
-		if (!await this.target.verifyPersistedSnapshot(expectedIdentityRevision) || hasIdentityConflict(this.target)) {
+		const persisted = await this.target.verifyPersistedSnapshot(expectedIdentityRevision);
+		this.assertRunning();
+		if (!persisted || hasIdentityConflict(this.target)) {
 			return this.remember(withAttention(report, diagnostic(
 				"legacy_identity_persistence_unverified",
 				null,
@@ -323,6 +366,7 @@ export class LegacyIndexMigrationService {
 			)));
 		}
 		const confirmedSource = await this.source.load();
+		this.assertRunning();
 		if (confirmedSource.kind !== "ready"
 			|| confirmedSource.snapshot.sourceId !== source.sourceId
 			|| confirmedSource.snapshot.legacySystemRoot !== source.legacySystemRoot
@@ -336,20 +380,54 @@ export class LegacyIndexMigrationService {
 				"Legacy source data changed while migration completion was being verified.",
 			)));
 		}
-		return this.remember({
+		const completed = {
 			...report,
 			cleanupCandidate: {
 				legacySystemRoot: source.legacySystemRoot,
 				sourceRevision: source.sourceRevision,
 			},
-		});
+		};
+		await this.persistCompletion(source);
+		this.assertRunning();
+		return this.remember(completed);
 	}
 
-	private yieldControl(): Promise<void> {
-		if (this.options.yieldControl !== undefined) return this.options.yieldControl();
+	private async yieldControl(): Promise<void> {
+		this.assertRunning();
+		if (this.options.yieldControl !== undefined) {
+			await this.options.yieldControl();
+			this.assertRunning();
+			return;
+		}
 		const appWindow = this.app.workspace?.containerEl?.win;
-		if (appWindow === undefined) return Promise.resolve();
-		return new Promise((resolve) => appWindow.setTimeout(resolve, 0));
+		if (appWindow !== undefined) await new Promise<void>((resolve) => appWindow.setTimeout(resolve, 0));
+		this.assertRunning();
+	}
+
+	private isStopped(): boolean {
+		return this.stopped || this.options.workQueue?.signal.aborted === true;
+	}
+
+	private assertRunning(): void {
+		if (this.isStopped()) throw new Error("Low-priority work queue is stopped.");
+	}
+
+	private async loadCompletion(): Promise<LegacyMigrationCompletion | null> {
+		const value = await this.options.completionStore?.getMeta<unknown>(LEGACY_MIGRATION_COMPLETION_META_KEY) ?? null;
+		return isLegacyMigrationCompletion(value) ? value : null;
+	}
+
+	private async persistCompletion(source: LegacyIndexSnapshot): Promise<void> {
+		this.assertRunning();
+		await this.options.completionStore?.setMeta(LEGACY_MIGRATION_COMPLETION_META_KEY, {
+			sourceId: source.sourceId,
+			sourceRevision: source.sourceRevision,
+		} satisfies LegacyMigrationCompletion);
+	}
+
+	private async clearCompletion(): Promise<void> {
+		this.assertRunning();
+		await this.options.completionStore?.deleteMeta(LEGACY_MIGRATION_COMPLETION_META_KEY);
 	}
 
 	private remember(report: LegacyIdentityImportReport): LegacyIdentityImportReport {
@@ -446,7 +524,8 @@ function resolveObservation(
 	lookup: LegacyObservationLookup,
 ): MemoObservation | null {
 	const rawKey = buildRawBlockLookupKey(evidence.sourcePath, evidence.lastKnownBlockHash);
-	if (lookup.byRawBlock.has(rawKey)) return lookup.byRawBlock.get(rawKey) ?? null;
+	const rawMatch = lookup.byRawBlock.get(rawKey);
+	if (rawMatch !== undefined && rawMatch !== null) return rawMatch;
 	return lookup.byTuple.get(buildTupleLookupKey(
 		evidence.sourcePath,
 		evidence.logicalDate,
@@ -586,6 +665,34 @@ function cloneReport(report: LegacyIdentityImportReport): LegacyIdentityImportRe
 		diagnostics: report.diagnostics.map((item) => ({ ...item })),
 		cleanupCandidate: report.cleanupCandidate === null ? null : { ...report.cleanupCandidate },
 	};
+}
+
+function completedReport(source: LegacyIndexSnapshot): LegacyIdentityImportReport {
+	return {
+		status: "ready",
+		sourceRevision: source.sourceRevision,
+		importedEventCount: 0,
+		importedMemoIds: [...new Set([
+			...source.memos.map((memo) => memo.memoId),
+			...source.pendingMemos.map((memo) => memo.memoId),
+		])].sort(),
+		skippedMemoIds: [],
+		diagnostics: [],
+		cleanupCandidate: {
+			legacySystemRoot: source.legacySystemRoot,
+			sourceRevision: source.sourceRevision,
+		},
+	};
+}
+
+function isLegacyMigrationCompletion(value: unknown): value is LegacyMigrationCompletion {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	return Object.keys(record).length === 2
+		&& typeof record.sourceId === "string"
+		&& record.sourceId.trim().length > 0
+		&& typeof record.sourceRevision === "string"
+		&& /^[0-9a-f]{64}$/u.test(record.sourceRevision);
 }
 
 function hasIdentityConflict(target: IdentityLedgerLegacyImportTarget): boolean {

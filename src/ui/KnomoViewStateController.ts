@@ -36,6 +36,7 @@ interface ReturnFromRecordStatsResult extends KnomoViewStateTransitionEffects {
 
 interface ResetToAllNotesResult extends KnomoViewStateTransitionEffects {
 	type: "already-default" | "changed";
+	reloadCatalogQuery: boolean;
 }
 
 interface RecordStatsReturnState {
@@ -156,7 +157,7 @@ export class KnomoViewStateController {
 			clearCardMenu: true,
 			clearRandomReunion: nav !== "random" && !(nav === "record-stats" && previousNav === "random"),
 			clearShuffleDay: nav !== "shuffleDay" && !(nav === "record-stats" && previousNav === "shuffleDay"),
-			reloadCatalogQuery: nav === "review",
+			reloadCatalogQuery: nav === "review" || nav === "all",
 			refreshRandomReunion: nav === "random",
 			refreshShuffleDay: nav === "shuffleDay" && previousNav !== "shuffleDay",
 			loadTrashMemos: nav === "trash",
@@ -218,6 +219,7 @@ export class KnomoViewStateController {
 		this.compactSearchOpen = false;
 		return {
 			type: isAlreadyDefault ? "already-default" : "changed",
+			reloadCatalogQuery: !isAlreadyDefault,
 			closeScopeMenu: true,
 			clearCardMenu: true,
 		};

@@ -14,6 +14,8 @@ import type { MonthlyProjectionSettings } from "./MonthlyProjection";
 import type { DailyNotesConfig } from "./DailyNoteService";
 import { DailyInventoryIndex, buildDailyInventoryScopeKey } from "./DailyInventoryIndex";
 import { DiaryMemoParser } from "./DiaryMemoParser";
+import { CooperativeYieldController } from "./CooperativeTask";
+import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 export interface MonthlyProjectionBuildResult {
 	period: string;
@@ -71,10 +73,11 @@ export class MonthlyProjectionInputBuilder {
 		return [...new Set(periods)].sort();
 	}
 
-	async build(period: string): Promise<MonthlyProjectionBuildResult> {
+	async build(period: string, runtime?: CooperativeTaskRuntime): Promise<MonthlyProjectionBuildResult> {
 		assertPeriod(period);
-		const dailyConfig = await this.ensureDailyInventory();
+		const dailyConfig = await this.ensureDailyInventory(runtime);
 		const settings = this.getSettings();
+		const yieldController = runtime === undefined ? null : new CooperativeYieldController(runtime);
 		const parsedFiles: Array<{
 			sourcePath: string;
 			logicalDate: string;
@@ -89,14 +92,18 @@ export class MonthlyProjectionInputBuilder {
 				sourcePath,
 				logicalDate,
 				bytes: new Uint8Array(await this.app.vault.readBinary(file)),
-			});
+			}, runtime);
 			parsedFiles.push({
 				sourcePath: file.path,
 				logicalDate,
 				sourceRevision: parsed.sourceRevision,
 				observationCount: parsed.observations.length,
 			});
-			observations.push(...parsed.observations);
+			for (const observation of parsed.observations) {
+				observations.push(observation);
+				if (yieldController?.shouldYield()) await yieldController.yieldNow();
+			}
+			if (yieldController?.shouldYield()) await yieldController.yieldNow();
 		}
 		const sourceDigest = await sha256Text(canonicalJson({
 			period,
@@ -168,15 +175,19 @@ export class MonthlyProjectionInputBuilder {
 		return date === null ? null : formatDatePart(date).slice(0, 7);
 	}
 
-	private async ensureDailyInventory(): Promise<DailyNotesConfig> {
+	private async ensureDailyInventory(runtime?: CooperativeTaskRuntime): Promise<DailyNotesConfig> {
 		const dailyConfig = await this.options.getDailyConfig();
 		const scopeKey = buildDailyInventoryScopeKey(dailyConfig);
 		if (this.dailyInventory.hasScope(scopeKey)) return dailyConfig;
-		const entries = this.app.vault.getMarkdownFiles().flatMap((file) => {
+		const entries: CatalogInventoryEntry[] = [];
+		const yieldController = runtime === undefined ? null : new CooperativeYieldController(runtime);
+		for (const file of this.app.vault.getMarkdownFiles()) {
 			const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
-			return date === null ? [] : [toInventoryEntry(file, formatDatePart(date))];
-		});
-		this.dailyInventory.replace(entries, scopeKey);
+			if (date !== null) entries.push(toInventoryEntry(file, formatDatePart(date)));
+			if (yieldController?.shouldYield()) await yieldController.yieldNow();
+		}
+		if (runtime === undefined) this.dailyInventory.replace(entries, scopeKey);
+		else await this.dailyInventory.replaceCooperatively(entries, scopeKey, runtime);
 		return dailyConfig;
 	}
 

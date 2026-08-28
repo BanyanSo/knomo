@@ -1,7 +1,7 @@
 import { MarkdownView, normalizePath, TFile } from "obsidian";
 import type { App, Editor } from "obsidian";
 
-import type { DiaryMemoParseResult } from "./DiaryMemoParser";
+import type { DiaryMemoParseResult, DiaryMemoParseRuntime } from "./DiaryMemoParser";
 import { DiaryMemoParser } from "./DiaryMemoParser";
 
 export type DailyWriteMode = "active_editor" | "vault_process";
@@ -31,6 +31,12 @@ export interface DailyWriteResult {
 	after: DiaryMemoParseResult;
 }
 
+export interface DailyMemoWriteGatewayOptions {
+	sliceBudgetMs?: number;
+	maxLinesPerSlice?: number;
+	yieldControl?: () => Promise<void>;
+}
+
 export class StaleDailyWriteError extends Error {
 	constructor(path: string) {
 		super(`Daily changed before the Daily write: ${path}`);
@@ -42,6 +48,7 @@ export class DailyMemoWriteGateway {
 	constructor(
 		private readonly app: App,
 		private readonly parser = new DiaryMemoParser(),
+		private readonly options: DailyMemoWriteGatewayOptions = {},
 	) {}
 
 	async prepare(input: DailyWritePrepareInput): Promise<PreparedDailyWrite> {
@@ -88,16 +95,10 @@ export class DailyMemoWriteGateway {
 	}
 
 	private replayPreparedUpdate(prepared: PreparedDailyWrite, currentContent: string): string {
-		const current = this.parser.parseRevision({
-			sourcePath: normalizePath(prepared.file.path),
-			logicalDate: prepared.logicalDate,
-			content: currentContent,
-			sourceRevision: prepared.before.sourceRevision,
-		});
 		if (currentContent !== prepared.beforeContent) {
 			throw new StaleDailyWriteError(prepared.file.path);
 		}
-		const afterContent = prepared.update(currentContent, current);
+		const afterContent = prepared.update(currentContent, prepared.before);
 		if (afterContent !== prepared.afterContent) {
 			throw new StaleDailyWriteError(prepared.file.path);
 		}
@@ -136,6 +137,16 @@ export class DailyMemoWriteGateway {
 			sourcePath: normalizePath(sourcePath),
 			logicalDate,
 			bytes: new TextEncoder().encode(content),
-		});
+		}, this.getParserRuntime());
+	}
+
+	private getParserRuntime(): DiaryMemoParseRuntime {
+		return {
+			sliceBudgetMs: this.options.sliceBudgetMs ?? 8,
+			maxLinesPerSlice: this.options.maxLinesPerSlice ?? 256,
+			yieldControl: this.options.yieldControl ?? (() => new Promise<void>((resolve) => {
+				this.app.workspace.containerEl.win.setTimeout(resolve, 0);
+			})),
+		};
 	}
 }

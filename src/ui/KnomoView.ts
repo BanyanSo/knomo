@@ -324,14 +324,17 @@ export class KnomoView extends ItemView {
 	private catalogMobileCursor: CatalogFeatureCursor | null = null;
 	private catalogMobileQueryRun = 0;
 	private catalogRevision = 0;
+	private catalogDesktopQueryFingerprint: string | null = null;
 	private libraryIndexRevision = -1;
 	private libraryIndexRun = 0;
+	private libraryIndexesInvalidatedByCoverage = false;
 	private librarySummary: CatalogLibrarySummary | null = null;
 	private libraryTagFacets: CatalogTagFacet[] | null = null;
 	private trashCursor: string | null = null;
 	private trashIdentityRevision: string | null = null;
 	private cardFlowError: string | null = null;
 	private memoLoadingPromise: Promise<boolean> | null = null;
+	private memoLoadingFingerprint: string | null = null;
 	private memoSourceGeneration = 0;
 	private catalogDesktopQueryRun = 0;
 	private expandedTagGroups = new Set<string>();
@@ -1106,6 +1109,9 @@ export class KnomoView extends ItemView {
 			}
 		}
 		this.memos = [];
+		this.catalogCursor = null;
+		this.catalogDesktopQueryFingerprint = null;
+		this.memoLoadingFingerprint = null;
 		this.librarySummary = null;
 		this.libraryTagFacets = null;
 		this.libraryIndexRevision = -1;
@@ -1469,6 +1475,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private async reloadMemos(loadAll: boolean, forceRebuild = false): Promise<boolean> {
+		const queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
+		this.prepareCatalogDesktopQuery(queryFingerprint);
 		const queryRun = ++this.catalogDesktopQueryRun;
 		const sourceGeneration = this.memoSourceGeneration;
 		const previousCardFlowKey = this.getCardFlowStateKey();
@@ -1476,7 +1484,9 @@ export class KnomoView extends ItemView {
 		let loaded = false;
 		try {
 			const load = await this.loadCatalogMemos(loadAll);
-			if (sourceGeneration !== this.memoSourceGeneration || queryRun !== this.catalogDesktopQueryRun) {
+			if (sourceGeneration !== this.memoSourceGeneration
+				|| queryRun !== this.catalogDesktopQueryRun
+				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
 			}
 			this.applyCatalogMemoLoad(load);
@@ -1497,7 +1507,9 @@ export class KnomoView extends ItemView {
 			}
 			loaded = true;
 		} catch (error) {
-			if (sourceGeneration !== this.memoSourceGeneration || queryRun !== this.catalogDesktopQueryRun) {
+			if (sourceGeneration !== this.memoSourceGeneration
+				|| queryRun !== this.catalogDesktopQueryRun
+				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
 			}
 			this.memos = [];
@@ -1569,10 +1581,41 @@ export class KnomoView extends ItemView {
 
 	updateCatalogProgress(coverage: CatalogCoverage): void {
 		this.catalogCoverage = { ...coverage };
+		if (!isCompleteCatalogCoverage(coverage)) {
+			const shouldRender = !this.libraryIndexesInvalidatedByCoverage
+				|| this.librarySummary !== null
+				|| this.libraryTagFacets !== null
+				|| this.libraryIndexRevision !== -1;
+			if (!this.libraryIndexesInvalidatedByCoverage) {
+				this.libraryIndexesInvalidatedByCoverage = true;
+				this.libraryIndexRun += 1;
+			}
+			this.librarySummary = null;
+			this.libraryTagFacets = null;
+			this.libraryIndexRevision = -1;
+			if (shouldRender) {
+				this.renderStats();
+				this.renderTags();
+			}
+			return;
+		}
+		if (!this.libraryIndexesInvalidatedByCoverage) return;
+		this.libraryIndexesInvalidatedByCoverage = false;
+		this.libraryIndexRun += 1;
+		this.librarySummary = null;
+		this.libraryTagFacets = null;
+		this.libraryIndexRevision = -1;
+		this.renderStats();
+		this.renderTags();
+		void this.refreshCatalogLibraryIndexes();
 	}
 
 	private async loadNextCatalogPage(): Promise<boolean> {
 		if (this.catalogCursor === null || this.catalogLoadingNextPage) return false;
+		const queryFingerprint = this.getCatalogQueryFingerprint(true);
+		if (queryFingerprint !== this.catalogDesktopQueryFingerprint) {
+			return this.reloadMemos(true, true);
+		}
 		const queryRun = this.catalogDesktopQueryRun;
 		this.catalogLoadingNextPage = true;
 		try {
@@ -1581,7 +1624,8 @@ export class KnomoView extends ItemView {
 				limit: CATALOG_PAGE_SIZE,
 				cursor: this.catalogCursor,
 			});
-			if (queryRun !== this.catalogDesktopQueryRun) return false;
+			if (queryRun !== this.catalogDesktopQueryRun
+				|| !this.isCatalogQueryCurrent(queryFingerprint, true)) return false;
 			if (page.invalidated) return this.reloadMemos(false, true);
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
 			for (const memo of page.items.map(toCatalogMemoView)) byRenderKey.set(getMemoRenderKey(memo), memo);
@@ -1685,6 +1729,38 @@ export class KnomoView extends ItemView {
 			}
 		}
 		return query;
+	}
+
+	private getCatalogQueryFingerprint(loadAll: boolean): string {
+		const mode = this.recordStatsSearchFilter !== null
+			? "record-stats"
+			: this.activeNav === "review" ? "review" : "catalog";
+		return JSON.stringify([
+			mode,
+			mode === "review" ? formatDatePart(new Date()) : "",
+			getRecordStatsSearchFilterKey(this.recordStatsSearchFilter),
+			this.buildCatalogActiveQuery(loadAll),
+		]);
+	}
+
+	private prepareCatalogDesktopQuery(queryFingerprint: string): void {
+		if (queryFingerprint === this.catalogDesktopQueryFingerprint) return;
+		this.catalogDesktopQueryFingerprint = queryFingerprint;
+		this.catalogDesktopQueryRun += 1;
+		this.catalogCursor = null;
+		this.memos = [];
+		this.cardFlowError = null;
+		this.filteredMemosCache = null;
+		this.invalidateRecordStats();
+		this.invalidateMemoSearchCache();
+		this.retainMemoCardPreviews();
+		this.resetVisibleMemos();
+		this.renderAllMemosLoadingState();
+	}
+
+	private isCatalogQueryCurrent(queryFingerprint: string, loadAll: boolean): boolean {
+		return queryFingerprint === this.catalogDesktopQueryFingerprint
+			&& queryFingerprint === this.getCatalogQueryFingerprint(loadAll);
 	}
 
 	private queryCatalogFeature(request: CatalogFeatureQuery): Promise<CatalogMemoPage> {
@@ -3829,7 +3905,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private refreshCatalogActiveQuery(): void {
-		void this.reloadMemos(false, true);
+		void this.reloadCurrentCatalogQuery(this.isDefaultListState());
 	}
 
 	private clearSearchDebounce(): void {
@@ -3871,7 +3947,7 @@ export class KnomoView extends ItemView {
 			this.renderAllMemosLoadingState();
 		}
 		if (result.reloadCatalogQuery) {
-			void this.reloadCurrentCatalogQuery();
+			void this.reloadCurrentCatalogQuery(nav === "all");
 		}
 		if (result.refreshRandomReunion) {
 			void this.randomReunionController.refresh();
@@ -3958,6 +4034,9 @@ export class KnomoView extends ItemView {
 		this.renderUiState({
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
+		if (result.reloadCatalogQuery) {
+			void this.reloadCurrentCatalogQuery(true);
+		}
 	}
 
 	private renderFilteredListState(
@@ -5471,21 +5550,25 @@ export class KnomoView extends ItemView {
 	}
 
 	private async reloadCurrentCatalogQuery(forceReload = false): Promise<boolean> {
-		if (this.memoLoadingPromise !== null) {
+		const queryFingerprint = this.getCatalogQueryFingerprint(forceReload);
+		this.prepareCatalogDesktopQuery(queryFingerprint);
+		if (this.memoLoadingPromise !== null && this.memoLoadingFingerprint === queryFingerprint) {
 			return this.memoLoadingPromise;
 		}
-		return this.runMemoLoad(() => this.reloadMemos(forceReload));
+		return this.runMemoLoad(queryFingerprint, () => this.reloadMemos(forceReload));
 	}
 
-	private runMemoLoad(load: () => Promise<boolean>): Promise<boolean> {
+	private runMemoLoad(queryFingerprint: string, load: () => Promise<boolean>): Promise<boolean> {
 		const loadPromise = load();
 		let trackedPromise: Promise<boolean>;
 		trackedPromise = loadPromise.finally(() => {
 			if (this.memoLoadingPromise === trackedPromise) {
 				this.memoLoadingPromise = null;
+				this.memoLoadingFingerprint = null;
 			}
 		});
 		this.memoLoadingPromise = trackedPromise;
+		this.memoLoadingFingerprint = queryFingerprint;
 		return trackedPromise;
 	}
 
@@ -5984,6 +6067,10 @@ function toSearchDateFilter(scope: ScopeFilter): SearchDateFilter | null {
 		|| scope === "last-7" || scope === "last-30"
 		? scope
 		: null;
+}
+
+function isCompleteCatalogCoverage(coverage: CatalogCoverage): boolean {
+	return coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false;
 }
 
 export function mergeCatalogMemoPages(memos: readonly MemoViewItem[]): MemoViewItem[] {

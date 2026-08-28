@@ -66,8 +66,7 @@ export function classifyLegacyArtifactPath(
 	}
 
 	const backupPath = getDescendantPath(`${root}/backups`, candidate);
-	const backupFolder = backupPath?.split("/")[0] ?? null;
-	if (backupFolder !== null && isLegacyBackupFolder(backupFolder)) {
+	if (backupPath !== null && isLegacyBackupArtifactPath(backupPath)) {
 		return { artifactKind: "backup", period: null, conflict: false };
 	}
 	return null;
@@ -106,4 +105,61 @@ function isLegacyBackupFolder(name: string): boolean {
 		|| /^rebuild-monthly-\d{4}-\d{2}-\d{8}-\d{6}$/u.test(name)
 		|| /^time-buoy-rebuild-\d{4}-.+$/u.test(name)
 		|| /^monthly-(?:format|folder)-\d+$/u.test(name);
+}
+
+function isLegacyBackupArtifactPath(path: string): boolean {
+	const separator = path.indexOf("/");
+	if (separator === -1) return false;
+	const folder = path.slice(0, separator);
+	const relativePath = path.slice(separator + 1);
+	if (!isLegacyBackupFolder(folder) || relativePath.length === 0) return false;
+	if (/^rebuild-index-\d{8}-\d{6}$/u.test(folder)) {
+		return isLegacyIndexBackupFile(relativePath);
+	}
+	if (/^rebuild-monthly-\d{4}-\d{2}-\d{8}-\d{6}$/u.test(folder)) {
+		return isLegacyIndexBackupFile(relativePath) || isLegacyMonthlyBackupFile(relativePath);
+	}
+	if (/^time-buoy-rebuild-\d{4}-.+$/u.test(folder)) {
+		return !relativePath.includes("/") && isLegacyTimeBuoyArtifactName(relativePath);
+	}
+	return isLegacyIndexBackupFile(relativePath) || isLegacyMonthlyBackupFile(relativePath);
+}
+
+function isLegacyIndexBackupFile(path: string): boolean {
+	if (!path.startsWith("indexes/")) return false;
+	const relativePath = path.slice("indexes/".length);
+	if (!relativePath.includes("/")) {
+		return isLegacyMemoIndexArtifactName(relativePath) || isLegacyMemoSummaryArtifactName(relativePath);
+	}
+	const timeBuoyPath = relativePath.startsWith("time-buoy/")
+		? relativePath.slice("time-buoy/".length)
+		: null;
+	return timeBuoyPath !== null
+		&& timeBuoyPath.length > 0
+		&& !timeBuoyPath.includes("/")
+		&& isLegacyTimeBuoyArtifactName(timeBuoyPath);
+}
+
+function isLegacyMonthlyBackupFile(path: string): boolean {
+	return path.startsWith("monthly/")
+		&& path.length > "monthly/".length
+		&& path.endsWith(".md");
+}
+
+function isLegacyMemoIndexArtifactName(name: string): boolean {
+	if (/^memo-index-\d{4}-(?:0[1-9]|1[0-2])\.json$/u.test(name)) return true;
+	return /^memo-index-\d{4}-(?:0[1-9]|1[0-2]).+\.json$/u.test(name)
+		&& isLikelySyncConflictPath(name);
+}
+
+function isLegacyMemoSummaryArtifactName(name: string): boolean {
+	return name === "memo-summary.json"
+		|| (/^memo-summary.+\.json$/u.test(name) && isLikelySyncConflictPath(name));
+}
+
+function isLegacyTimeBuoyArtifactName(name: string): boolean {
+	if (/^time-buoy-\d{4}-(?:0[1-9]|1[0-2])\.json$/u.test(name) || name === "time-buoy-state.json") return true;
+	return (/^time-buoy-\d{4}-(?:0[1-9]|1[0-2]).+\.json$/u.test(name)
+		|| /^time-buoy-state.+\.json$/u.test(name))
+		&& isLikelySyncConflictPath(name);
 }

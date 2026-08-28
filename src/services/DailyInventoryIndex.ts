@@ -2,17 +2,34 @@ import { normalizePath } from "obsidian";
 
 import type { CatalogInventoryEntry } from "../types/catalog";
 import type { DailyNotesConfig } from "./DailyNoteService";
+import { CooperativeYieldController } from "./CooperativeTask";
+import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 // 职责：共享按月份分组的 Daily 文件清单，避免每个 Monthly 都重新遍历 Vault。
 export class DailyInventoryIndex {
-	private readonly byPath = new Map<string, CatalogInventoryEntry>();
-	private readonly pathsByPeriod = new Map<string, Set<string>>();
+	private byPath = new Map<string, CatalogInventoryEntry>();
+	private pathsByPeriod = new Map<string, Set<string>>();
 	private scopeKey: string | null = null;
 
 	replace(entries: readonly CatalogInventoryEntry[], scopeKey: string): void {
-		this.byPath.clear();
-		this.pathsByPeriod.clear();
+		this.clearEntries();
 		for (const entry of entries) this.upsertEntry(entry);
+		this.scopeKey = scopeKey;
+	}
+
+	async replaceCooperatively(
+		entries: readonly CatalogInventoryEntry[],
+		scopeKey: string,
+		runtime: CooperativeTaskRuntime,
+	): Promise<void> {
+		const next = new DailyInventoryIndex();
+		const yieldController = new CooperativeYieldController(runtime);
+		for (const entry of entries) {
+			next.upsertEntry(entry);
+			if (yieldController.shouldYield()) await yieldController.yieldNow();
+		}
+		this.byPath = next.byPath;
+		this.pathsByPeriod = next.pathsByPeriod;
 		this.scopeKey = scopeKey;
 	}
 
@@ -56,6 +73,11 @@ export class DailyInventoryIndex {
 
 	hasScope(scopeKey: string): boolean {
 		return this.scopeKey === scopeKey;
+	}
+
+	private clearEntries(): void {
+		this.byPath.clear();
+		this.pathsByPeriod.clear();
 	}
 
 	private upsertEntry(entry: CatalogInventoryEntry): void {

@@ -111,6 +111,7 @@ export default class KnomoPlugin extends Plugin {
 					: null;
 			},
 			getWriterId: async () => sessionWriterId,
+			cancellationSignal: lowPriorityWorkQueue.signal,
 		});
 
 		const knomoSharedConfigService = new KnomoSharedConfigService(this.app, {
@@ -310,6 +311,7 @@ export default class KnomoPlugin extends Plugin {
 			{
 				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
 				getObservationBatches: loadObservationBatches,
+				completionStore: this.memoCatalogService.getStore(),
 				onReportChanged: () => this.showLegacyMigrationCompletionNotice(),
 				workQueue: lowPriorityWorkQueue,
 			},

@@ -13,6 +13,8 @@ import {
 	splitMarkdownLines,
 } from "../utils/markdown";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
+import { CooperativeYieldController } from "./CooperativeTask";
+import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 export const CATALOG_PARSER_VERSION = 4;
 
@@ -27,11 +29,8 @@ export interface DiaryMemoParseResult {
 	observations: MemoObservation[];
 }
 
-export interface DiaryMemoParseRuntime {
-	yieldControl: () => Promise<void>;
-	sliceBudgetMs?: number;
+export interface DiaryMemoParseRuntime extends Omit<CooperativeTaskRuntime, "maxOperationsPerSlice"> {
 	maxLinesPerSlice?: number;
-	now?: () => number;
 }
 
 export interface DiaryMemoRevisionParseInput {
@@ -130,7 +129,7 @@ export class DiaryMemoParser {
 		const { content, sourceRevision } = input;
 		const lines = splitMarkdownLines(content);
 		const observations: MemoObservation[] = [];
-		const yieldController = new ParseYieldController(runtime);
+		const yieldController = new CooperativeYieldController(runtime, runtime.maxLinesPerSlice);
 		let currentSection: string | null = null;
 		let fence: CodeFenceMarker | null = null;
 		let frontmatter = startsWithFrontmatter(lines);
@@ -161,34 +160,6 @@ export class DiaryMemoParser {
 			lineIndex = parsed.endLine;
 		}
 		return { sourceRevision, observations };
-	}
-}
-
-class ParseYieldController {
-	private readonly sliceBudgetMs: number;
-	private readonly maxLinesPerSlice: number;
-	private readonly now: () => number;
-	private linesInSlice = 0;
-	private sliceStartedAt: number;
-
-	constructor(private readonly runtime: DiaryMemoParseRuntime) {
-		this.sliceBudgetMs = runtime.sliceBudgetMs ?? 8;
-		this.maxLinesPerSlice = runtime.maxLinesPerSlice ?? 256;
-		this.now = runtime.now ?? monotonicNow;
-		this.sliceStartedAt = this.now();
-	}
-
-	shouldYield(lineCount = 1): boolean {
-		this.linesInSlice += lineCount;
-		return this.linesInSlice >= this.maxLinesPerSlice
-			|| this.now() - this.sliceStartedAt >= this.sliceBudgetMs;
-	}
-
-	async yieldNow(): Promise<void> {
-		this.linesInSlice = 0;
-		this.sliceStartedAt = this.now();
-		await this.runtime.yieldControl();
-		this.sliceStartedAt = this.now();
 	}
 }
 
@@ -241,7 +212,7 @@ function parseDiaryMemoBlock(lines: readonly string[], startLine: number): Parse
 async function parseDiaryMemoBlockCooperatively(
 	lines: readonly string[],
 	startLine: number,
-	yieldController: ParseYieldController,
+	yieldController: CooperativeYieldController,
 ): Promise<ParsedDiaryMemoBlock | null> {
 	const firstLine = lines[startLine];
 	const match = firstLine?.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
@@ -312,10 +283,6 @@ function buildMemoObservation(
 		tasks,
 		timeBuoyDates: extractTimeBuoyDates(parsed.content),
 	};
-}
-
-function monotonicNow(): number {
-	return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
 function stripOneContinuationIndent(line: string): string {

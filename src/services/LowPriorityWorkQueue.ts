@@ -6,6 +6,7 @@ export interface LowPriorityWorkQueueWindow {
 }
 
 export interface LowPriorityWorkRunner {
+	readonly signal: AbortSignal;
 	run<T>(priority: number, action: () => Promise<T>): Promise<T>;
 }
 
@@ -19,12 +20,17 @@ interface QueuedWork {
 // 职责：把可延后的后台工作串行化，并在每项工作之间归还事件循环。
 export class LowPriorityWorkQueue implements LowPriorityWorkRunner {
 	private readonly pending: QueuedWork[] = [];
+	private readonly cancellationController = new AbortController();
 	private sequence = 0;
 	private timer: number | null = null;
 	private active = false;
 	private stopped = false;
 
 	constructor(private readonly getWindow: () => LowPriorityWorkQueueWindow) {}
+
+	get signal(): AbortSignal {
+		return this.cancellationController.signal;
+	}
 
 	start(owner: Component): void {
 		owner.register(() => this.stop());
@@ -39,7 +45,9 @@ export class LowPriorityWorkQueue implements LowPriorityWorkRunner {
 				reject,
 				run: async () => {
 					try {
-						resolve(await action());
+						const result = await action();
+						if (this.stopped) throw stoppedError();
+						resolve(result);
 					} catch (error) {
 						reject(error);
 					}
@@ -54,10 +62,11 @@ export class LowPriorityWorkQueue implements LowPriorityWorkRunner {
 	stop(): void {
 		if (this.stopped) return;
 		this.stopped = true;
+		this.cancellationController.abort();
 		const win = this.getWindow();
 		if (this.timer !== null) win.clearTimeout(this.timer);
 		this.timer = null;
-		const error = new Error("Low-priority work queue is stopped.");
+		const error = stoppedError();
 		for (const task of this.pending.splice(0)) task.reject(error);
 	}
 
@@ -83,4 +92,8 @@ export class LowPriorityWorkQueue implements LowPriorityWorkRunner {
 			this.schedule();
 		}
 	}
+}
+
+function stoppedError(): Error {
+	return new Error("Low-priority work queue is stopped.");
 }

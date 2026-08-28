@@ -821,6 +821,48 @@ test("P1 第 7 步：重复导入相同旧事件不产生重复 Identity events"
 	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 1);
 });
 
+test("旧版事件仍在计算时取消，不得持久化任何 Identity segment", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const events: IdentityLedgerEvent[] = Array.from({ length: 257 }, (_, index) => {
+		const observation = makeObservation(
+			"Daily/2026-08-22.md",
+			(index + 1).toString(16).padStart(64, "0"),
+			index + 1,
+			`memo-${index + 1}`,
+		);
+		return {
+			eventId: eventId(index + 1_000),
+			writerId: WRITER_A,
+			memoId: `01991f40-7c00-7000-8000-${(index + 1).toString(16).padStart(12, "0")}`,
+			type: "claim",
+			baseBindingId: null,
+			occurredAt: "2026-08-22T06:00:00.000Z",
+			evidence: { observation: makeEvidence(observation), createIntentEventId: null },
+		};
+	});
+	const cancellation = new AbortController();
+	let releaseYield = (): void => undefined;
+	const yieldGate = new Promise<void>((resolve) => { releaseYield = resolve; });
+	let markYieldStarted = (): void => undefined;
+	const yieldStarted = new Promise<void>((resolve) => { markYieldStarted = resolve; });
+	const running = service.importVerifiedLegacyEvents(events, {
+		cancellationSignal: cancellation.signal,
+		yieldControl: async () => {
+			markYieldStarted();
+			await yieldGate;
+		},
+	});
+	await yieldStarted;
+
+	cancellation.abort();
+	releaseYield();
+
+	await assert.rejects(running, /cancelled/u);
+	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 0);
+});
+
 test("P0 Identity 性能：legacy events 使用有界批量 segment 且只导入一次", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [], []);

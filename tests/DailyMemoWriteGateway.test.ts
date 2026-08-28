@@ -101,6 +101,37 @@ test("expected revision and late editor changes reject stale Daily writes", asyn
 	assert.equal(editor.transactionCount, 0);
 });
 
+test("Daily 写入网关为大文件解析传入协作式 runtime", async () => {
+	const file = makeFile("Daily/2026-08-09.md");
+	const content = Array.from({ length: 600 }, (_, index) => `- 09:00 memo ${index}`).join("\n");
+	let yieldCount = 0;
+	const app = {
+		workspace: { getActiveViewOfType: () => null },
+		vault: {
+			cachedRead: async () => content,
+			process: async () => content,
+		},
+	} as unknown as App;
+	const gateway = new DailyMemoWriteGateway(
+		app,
+		new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex")),
+		{
+			sliceBudgetMs: 60_000,
+			maxLinesPerSlice: 32,
+			yieldControl: async () => { yieldCount += 1; },
+		},
+	);
+
+	await gateway.prepare({
+		file,
+		logicalDate: "2026-08-09",
+		expectedRevision: null,
+		update: (current) => current,
+	});
+
+	assert.ok(yieldCount > 0);
+});
+
 function makeGateway(app: App): DailyMemoWriteGateway {
 	return new DailyMemoWriteGateway(app, new DiaryMemoParser(async (bytes) => (
 		createHash("sha256").update(bytes).digest("hex")

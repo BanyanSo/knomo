@@ -12,6 +12,8 @@ import type { MonthlyProjectionSettings } from "../src/services/MonthlyProjectio
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { SelfWriteTracker } from "../src/services/SelfWriteTracker";
+import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
+import type { LowPriorityWorkRunner } from "../src/services/LowPriorityWorkQueue";
 import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const MONTHLY_PATH = "Memos/2026-08.md";
@@ -259,6 +261,36 @@ test("停止时不再创建 Monthly，checkpoint 保留未完成月份", async (
 	assert.deepEqual(saved?.pending.map((item) => item.period), ["2026-08"]);
 });
 
+test("统一队列停止后 active Monthly 构建结果不得写入 Vault", async () => {
+	const workQueue = new LowPriorityWorkQueue(() => ({
+		setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay) as unknown as number,
+		clearTimeout: (timer) => globalThis.clearTimeout(timer as unknown as NodeJS.Timeout),
+	}));
+	const fixture = createFixture({ "Daily/2026-08-01.md": DAILY_A }, () => true, {
+		currentPeriod: () => "2026-08",
+		workQueue,
+	});
+	let releaseBuild = (): void => undefined;
+	const buildGate = new Promise<void>((resolve) => { releaseBuild = resolve; });
+	let markBuildStarted = (): void => undefined;
+	const buildStarted = new Promise<void>((resolve) => { markBuildStarted = resolve; });
+	const originalBuild = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	fixture.inputBuilder.build = async (period) => {
+		markBuildStarted();
+		await buildGate;
+		return originalBuild(period);
+	};
+	await fixture.coordinator.initialize();
+	const running = fixture.coordinator.run(true);
+	await buildStarted;
+
+	workQueue.stop();
+	releaseBuild();
+
+	assert.deepEqual(await running, { projected: 0, failed: 0 });
+	assert.equal(fixture.replica.read(MONTHLY_PATH), null);
+});
+
 test("当前月和实际变更月份优先，并在每个月份完成后让出事件循环", async () => {
 	let yieldCount = 0;
 	const priorities: number[] = [];
@@ -269,6 +301,7 @@ test("当前月和实际变更月份优先，并在每个月份完成后让出�
 		currentPeriod: () => "2026-08",
 		yieldControl: async () => { yieldCount += 1; },
 		workQueue: {
+			signal: new AbortController().signal,
 			run: async <T>(priority: number, action: () => Promise<T>): Promise<T> => {
 				priorities.push(priority);
 				return action();
@@ -291,6 +324,27 @@ test("当前月和实际变更月份优先，并在每个月份完成后让出�
 	assert.deepEqual(projectedOrder, ["2026-08", "2026-07"]);
 	assert.equal(yieldCount, 2);
 	assert.equal(priorities.length, 2);
+});
+
+test("大月份在 Daily 解析和投影构建期间按预算多次让出事件循环", async () => {
+	let yieldCount = 0;
+	const dailyContent = Array.from({ length: 600 }, (_, index) => (
+		`- 09:00 memo ${index}`
+	)).join("\n");
+	const fixture = createFixture({
+		"Daily/2026-08-01.md": `${dailyContent}\n`,
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		yieldControl: async () => { yieldCount += 1; },
+		sliceBudgetMs: 60_000,
+	});
+
+	await fixture.coordinator.initialize();
+	yieldCount = 0;
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+
+	assert.ok(yieldCount > 1);
+	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /memo 599/u);
 });
 
 test("删除或损坏 Monthly 后可从 Daily 恢复，且绝不反向修改 Daily", async () => {
@@ -497,8 +551,9 @@ function createFixture(
 	isProjectionAllowed: () => boolean = () => true,
 	options: {
 		currentPeriod?: () => string;
+		sliceBudgetMs?: number;
 		yieldControl?: () => Promise<void>;
-		workQueue?: { run<T>(priority: number, action: () => Promise<T>): Promise<T> };
+		workQueue?: LowPriorityWorkRunner;
 		checkpointStore?: InMemoryMemoCatalogStore;
 		listCatalogPeriods?: () => Promise<string[]>;
 	} = {},
@@ -530,6 +585,7 @@ function createFixture(
 		debounceMs: 0,
 		cooldownMs: 0,
 		currentPeriod: options.currentPeriod,
+		sliceBudgetMs: options.sliceBudgetMs,
 		yieldControl: options.yieldControl ?? (() => Promise.resolve()),
 		workQueue: options.workQueue,
 	});

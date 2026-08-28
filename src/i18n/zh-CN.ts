@@ -507,7 +507,7 @@ export const zhCN = {
 	"sync.monthlyFailed": "月度 Memos 同步失败",
 	"sync.monthlyDeleteFailed": "月度 Memos 删除失败",
 	"archive.readOnlyComment": "Knomo 月度归档文件：此文件根据日记自动生成。请勿直接在此编辑 memo；请在 Knomo 或对应日记中编辑。",
-	"archive.deterministicReadOnlyComment": "Knomo monthly archive / Knomo 月度归档：此文件由 Daily Notes 自动生成，请在 Knomo 或对应日记中编辑 memo。",
+	"archive.deterministicReadOnlyComment": "本文件内容由 Knomo 根据日记自动生成，在此编辑不会同步到 Knomo 或对应日记中。",
 	"term.memoBlock": "Memos 内容块",
 	"term.memoId": "Memos ID",
 	"term.memo": "Memos",

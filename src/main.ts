@@ -201,6 +201,11 @@ export default class KnomoPlugin extends Plugin {
 			{
 				inputBuilder: projectionInputBuilder,
 				selfWriteTracker,
+				checkpointStore: this.memoCatalogService.getStore(),
+				listCatalogPeriods: () => {
+					if (this.catalogReadService === null) throw new Error("Catalog read service is not available.");
+					return this.catalogReadService.listMonthlyProjectionPeriods();
+				},
 				isProjectionAllowed: () => knomoSharedConfigService.isMonthlyProjectionAllowed(),
 				workQueue: lowPriorityWorkQueue,
 				onStateChanged: () => {
@@ -231,6 +236,7 @@ export default class KnomoPlugin extends Plugin {
 				onCatalogSettled: async () => {
 					await this.legacyIndexMigrationService?.run();
 					await reconcileIdentityLedger();
+					await this.monthlyProjectionCoordinator?.handleCatalogSettled();
 					await this.queueRefreshOpenViews();
 				},
 				dailyInventory,

@@ -3,16 +3,25 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { TFile } from "obsidian";
 
-import { MonthlyProjectionCoordinator } from "../src/services/MonthlyProjectionCoordinator";
+import {
+	MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+	MonthlyProjectionCoordinator,
+} from "../src/services/MonthlyProjectionCoordinator";
 import { MonthlyProjectionInputBuilder } from "../src/services/MonthlyProjectionInputBuilder";
 import type { MonthlyProjectionSettings } from "../src/services/MonthlyProjection";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { SelfWriteTracker } from "../src/services/SelfWriteTracker";
 import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const MONTHLY_PATH = "Memos/2026-08.md";
 const DAILY_A = "## Memos\n- 09:00 unresolved memo\n";
 const DAILY_B = "## Memos\n- 10:00 ambiguous memo\n";
+const LEGACY_MONTHLY_MARKER = [
+	"<!-- knomo:monthly-archive",
+	"Knomo 月度归档文件：此文件根据日记自动生成。请勿直接在此编辑 memo；请在 Knomo 或对应日记中编辑。",
+	"-->",
+].join("\n");
 
 test("Monthly 的完整输入只来自实际 Daily，空或 partial Catalog 不能造成子集覆盖", async () => {
 	const fixture = createFixture({
@@ -71,6 +80,71 @@ test("启动只投影当前月，历史 Monthly 保持原字节且各月份复�
 	assert.equal(inventoryReadCount, 1);
 });
 
+test("当前月只有空 Daily 时只检查候选月份，不创建 Monthly 文件", async () => {
+	const fixture = createFixture({
+		"Daily/2026-08-01.md": "# Journal\nordinary note\n",
+	}, () => true, { currentPeriod: () => "2026-08" });
+
+	await fixture.coordinator.initialize();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.equal(fixture.replica.read(MONTHLY_PATH), null);
+	assert.equal(fixture.replica.paths().includes("Memos"), false);
+});
+
+test("历史 Monthly 发现只纳入带 marker 的文件", async () => {
+	const fixture = createFixture({
+		"Memos/2026-06.md": `${LEGACY_MONTHLY_MARKER}\n\n# 2026-06\n`,
+		"Memos/2026-07.md": "# User file\n",
+	});
+
+	assert.deepEqual(await fixture.inputBuilder.listOwnedMonthlyPeriods(), ["2026-06"]);
+});
+
+test("同路径文件没有 marker 时静默保留原字节且不构建 Daily 输入", async () => {
+	const userContent = "# My monthly notes\nkeep this file\n";
+	const fixture = createFixture({
+		"Daily/2026-08-01.md": DAILY_A,
+		[MONTHLY_PATH]: userContent,
+	});
+	let buildCount = 0;
+	const originalBuild = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	fixture.inputBuilder.build = async (period) => {
+		buildCount += 1;
+		return originalBuild(period);
+	};
+
+	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 1, failed: 0 });
+	assert.equal(buildCount, 0);
+	assert.equal(fixture.replica.read(MONTHLY_PATH), userContent);
+	assert.equal(fixture.coordinator.getProjectionState(), "ready");
+});
+
+test("带旧 marker 的 1.2.9 Monthly 原样保留 marker 并继续维护正文", async () => {
+	const fixture = createFixture({
+		"Daily/2026-08-01.md": DAILY_A,
+		[MONTHLY_PATH]: `${LEGACY_MONTHLY_MARKER}\n\n# 2026-08\n\nold body\n`,
+	});
+
+	await fixture.coordinator.rebuildPeriod("2026-08");
+	const monthly = fixture.replica.read(MONTHLY_PATH) ?? "";
+	assert.equal(monthly.startsWith(`${LEGACY_MONTHLY_MARKER}\n\n# 2026-08`), true);
+	assert.match(monthly, /unresolved memo/u);
+	assert.equal(monthly.includes("<small>"), false);
+});
+
+test("已有合法 Monthly 在当月无 memo 时保留文件", async () => {
+	const fixture = createFixture({
+		"Daily/2026-08-01.md": "# Journal\nordinary note\n",
+		[MONTHLY_PATH]: "<!-- knomo:monthly-archive -->\n\n<small>old notice</small>\n\n# 2026-08\n\nold body\n",
+	});
+
+	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 1, failed: 0 });
+	const monthly = fixture.replica.read(MONTHLY_PATH);
+	assert.ok(monthly !== null);
+	assert.equal(monthly.startsWith("<!-- knomo:monthly-archive -->\n\n<small>"), true);
+	assert.equal(monthly.includes("old body"), false);
+});
+
 test("写入标题变化不使 Monthly 全量失效，locale 或渲染设置变化才重投所有月份", async () => {
 	const fixture = createFixture({
 		"Daily/2026-07-01.md": "- 09:00 July\n",
@@ -85,6 +159,104 @@ test("写入标题变化不使 Monthly 全量失效，locale 或渲染设置变�
 	fixture.settings.monthlyDateHeadingFormat = "## D MMMM YYYY";
 	await fixture.coordinator.handleConfigurationChanged();
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 2, failed: 0 });
+});
+
+test("配置全量重投影优先使用 Catalog 中实际有 memo 的月份", async () => {
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "# Journal\nordinary note\n",
+		"Daily/2026-08-01.md": DAILY_A,
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		listCatalogPeriods: async () => ["2026-08"],
+	});
+	await fixture.coordinator.initialize();
+	await fixture.coordinator.run(true);
+	const projectedPeriods: string[] = [];
+	const originalBuild = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	fixture.inputBuilder.build = async (period) => {
+		projectedPeriods.push(period);
+		return originalBuild(period);
+	};
+
+	fixture.settings.monthlyDateHeadingFormat = "## D MMMM YYYY";
+	await fixture.coordinator.handleConfigurationChanged();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.deepEqual(projectedPeriods, ["2026-08"]);
+	assert.equal(fixture.replica.read("Memos/2026-07.md"), null);
+});
+
+test("Catalog 尚未 complete 时保留发现任务，settle 后以 Daily 低优先级兜底并收敛", async () => {
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		listCatalogPeriods: async () => { throw new Error("Catalog coverage is partial"); },
+	});
+	await fixture.coordinator.initialize();
+	await fixture.coordinator.run(true);
+
+	fixture.settings.monthlyDateHeadingFormat = "## D MMMM YYYY";
+	await fixture.coordinator.handleConfigurationChanged();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	await fixture.coordinator.handleCatalogSettled();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 2, failed: 0 });
+	assert.match(fixture.replica.read("Memos/2026-07.md") ?? "", /July/u);
+});
+
+test("未完成的 Monthly 月份写入 Catalog 本地 checkpoint，重启后继续处理", async () => {
+	const checkpointStore = new InMemoryMemoCatalogStore();
+	const first = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+	}, () => true, { currentPeriod: () => "2026-08", checkpointStore });
+	await first.coordinator.initialize();
+	await first.coordinator.run(true);
+	await first.coordinator.invalidatePeriods(["2026-07"]);
+	const saved = await checkpointStore.getMeta<{ pending: Array<{ period: string }> }>(
+		MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+	);
+	assert.deepEqual(saved?.pending.map((item) => item.period), ["2026-07"]);
+
+	const second = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+	}, () => true, { currentPeriod: () => "2026-08", checkpointStore });
+	await second.coordinator.initialize();
+	assert.deepEqual(await second.coordinator.run(true), { projected: 2, failed: 0 });
+	assert.match(second.replica.read("Memos/2026-07.md") ?? "", /July/u);
+	const completed = await checkpointStore.getMeta<{ pending: unknown[] }>(MONTHLY_PROJECTION_CHECKPOINT_META_KEY);
+	assert.deepEqual(completed?.pending, []);
+});
+
+test("停止时不再创建 Monthly，checkpoint 保留未完成月份", async () => {
+	const checkpointStore = new InMemoryMemoCatalogStore();
+	const fixture = createFixture({ "Daily/2026-08-01.md": DAILY_A }, () => true, {
+		currentPeriod: () => "2026-08",
+		checkpointStore,
+	});
+	const buildGate: { release?: () => void } = {};
+	const buildStarted = new Promise<void>((resolveStarted) => {
+		const originalBuild = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+		fixture.inputBuilder.build = async (period) => {
+			resolveStarted();
+			await new Promise<void>((resolve) => { buildGate.release = resolve; });
+			return originalBuild(period);
+		};
+	});
+	await fixture.coordinator.initialize();
+	const running = fixture.coordinator.run(true);
+	await buildStarted;
+	(fixture.coordinator as unknown as { stop(): void }).stop();
+	assert.ok(buildGate.release !== undefined);
+	buildGate.release();
+
+	assert.deepEqual(await running, { projected: 0, failed: 0 });
+	assert.equal(fixture.replica.read(MONTHLY_PATH), null);
+	const saved = await checkpointStore.getMeta<{ pending: Array<{ period: string }> }>(
+		MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+	);
+	assert.deepEqual(saved?.pending.map((item) => item.period), ["2026-08"]);
 });
 
 test("当前月和实际变更月份优先，并在每个月份完成后让出事件循环", async () => {
@@ -134,7 +306,7 @@ test("删除或损坏 Monthly 后可从 Daily 恢复，且绝不反向修改 Dai
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
 	assert.equal(fixture.replica.read(MONTHLY_PATH), expected);
 
-	fixture.replica.replace(MONTHLY_PATH, "broken monthly\n");
+	fixture.replica.replace(MONTHLY_PATH, "<!-- knomo:monthly-archive -->\n\nbroken monthly\n");
 	const corruptedFile = fixture.replica.app.vault.getAbstractFileByPath(MONTHLY_PATH);
 	assert.ok(corruptedFile instanceof TFile);
 	await invokeChanged(fixture.coordinator, corruptedFile);
@@ -146,23 +318,32 @@ test("删除或损坏 Monthly 后可从 Daily 恢复，且绝不反向修改 Dai
 test("相同输出 no-op，Monthly 自写事件不会形成再次投影", async () => {
 	const fixture = createFixture({ "Daily/2026-08-01.md": DAILY_A });
 	let processCount = 0;
+	let createCount = 0;
 	const vault = fixture.replica.app.vault as unknown as {
 		process(file: TFile, update: (content: string) => string): Promise<string>;
+		create(path: string, content: string): Promise<TFile>;
 	};
 	const originalProcess = vault.process.bind(vault);
+	const originalCreate = vault.create.bind(vault);
 	vault.process = async (file, update) => {
 		processCount += 1;
 		return originalProcess(file, update);
 	};
+	vault.create = async (path, content) => {
+		createCount += 1;
+		return originalCreate(path, content);
+	};
 
 	await fixture.coordinator.rebuildPeriod("2026-08");
-	assert.equal(processCount, 1);
+	assert.equal(createCount, 1);
+	assert.equal(processCount, 0);
 	const monthlyFile = fixture.replica.app.vault.getAbstractFileByPath(MONTHLY_PATH);
 	assert.ok(monthlyFile instanceof TFile);
 	await invokeChanged(fixture.coordinator, monthlyFile);
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 0, failed: 0 });
 	await fixture.coordinator.rebuildPeriod("2026-08");
-	assert.equal(processCount, 1);
+	assert.equal(createCount, 1);
+	assert.equal(processCount, 0);
 	assert.deepEqual(fixture.coordinator.getProjectionMetadata("2026-08"), {
 		sourceDigest: assertString(fixture.coordinator.getProjectionMetadata("2026-08")?.sourceDigest),
 		outputHash: assertString(fixture.coordinator.getProjectionMetadata("2026-08")?.outputHash),
@@ -187,13 +368,13 @@ test("Monthly 写入失败只留下 stale projection，Daily 与其他运行时�
 	const fixture = createFixture({ "Daily/2026-08-01.md": DAILY_A });
 	const dailyBefore = fixture.replica.read("Daily/2026-08-01.md");
 	const vault = fixture.replica.app.vault as unknown as {
-		process(file: TFile, update: (content: string) => string): Promise<string>;
+		create(path: string, content: string): Promise<TFile>;
 	};
-	const originalProcess = vault.process.bind(vault);
+	const originalCreate = vault.create.bind(vault);
 	let fail = true;
-	vault.process = async (file, update) => {
+	vault.create = async (path, content) => {
 		if (fail) throw new Error("injected monthly write failure");
-		return originalProcess(file, update);
+		return originalCreate(path, content);
 	};
 
 	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 0, failed: 1 });
@@ -229,17 +410,17 @@ test("配置冲突暂停 Monthly，显式解决后才允许覆盖", async () => 
 test("投影进行中再次失效不会丢失更新", async () => {
 	const fixture = createFixture({ "Daily/2026-08-01.md": DAILY_A });
 	const vault = fixture.replica.app.vault as unknown as {
-		process(file: TFile, update: (content: string) => string): Promise<string>;
+		create(path: string, content: string): Promise<TFile>;
 	};
-	const originalProcess = vault.process.bind(vault);
+	const originalCreate = vault.create.bind(vault);
 	let invalidatedDuringWrite = false;
-	vault.process = async (file, update) => {
+	vault.create = async (path, content) => {
 		if (!invalidatedDuringWrite) {
 			invalidatedDuringWrite = true;
 			fixture.replica.replace("Daily/2026-08-01.md", "## Memos\n- 09:00 updated while projecting\n");
 			await fixture.coordinator.invalidatePeriods(["2026-08"]);
 		}
-		return originalProcess(file, update);
+		return originalCreate(path, content);
 	};
 
 	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 1, failed: 0 });
@@ -318,6 +499,8 @@ function createFixture(
 		currentPeriod?: () => string;
 		yieldControl?: () => Promise<void>;
 		workQueue?: { run<T>(priority: number, action: () => Promise<T>): Promise<T> };
+		checkpointStore?: InMemoryMemoCatalogStore;
+		listCatalogPeriods?: () => Promise<string[]>;
 	} = {},
 ) {
 	const replica = new InMemoryVault(initialFiles);
@@ -341,6 +524,8 @@ function createFixture(
 	const coordinator = new MonthlyProjectionCoordinator(replica.app, {
 		inputBuilder,
 		selfWriteTracker: new SelfWriteTracker(),
+		checkpointStore: options.checkpointStore,
+		listCatalogPeriods: options.listCatalogPeriods,
 		isProjectionAllowed,
 		debounceMs: 0,
 		cooldownMs: 0,

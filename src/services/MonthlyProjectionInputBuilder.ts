@@ -8,6 +8,7 @@ import { canonicalJson, sha256Text } from "./CanonicalJson";
 import {
 	getMonthlyArchivePath,
 	getMonthlyCanonicalPeriod,
+	hasKnomoMonthlyArchiveMarker,
 } from "./MonthlyProjection";
 import type { MonthlyProjectionSettings } from "./MonthlyProjection";
 import type { DailyNotesConfig } from "./DailyNoteService";
@@ -47,14 +48,27 @@ export class MonthlyProjectionInputBuilder {
 	}
 
 	async listPeriods(): Promise<string[]> {
+		return [...new Set([
+			...await this.listDailyPeriods(),
+			...await this.listOwnedMonthlyPeriods(),
+		])].sort();
+	}
+
+	async listDailyPeriods(): Promise<string[]> {
 		await this.ensureDailyInventory();
+		return this.dailyInventory.listPeriods();
+	}
+
+	async listOwnedMonthlyPeriods(): Promise<string[]> {
 		const settings = this.getSettings();
-		const periods = new Set(this.dailyInventory.listPeriods());
+		const periods: string[] = [];
 		for (const file of this.listMonthlyFiles(settings)) {
 			const monthlyPeriod = getMonthlyCanonicalPeriod(settings, file.path);
-			if (monthlyPeriod !== null) periods.add(monthlyPeriod);
+			if (monthlyPeriod === null) continue;
+			const content = await this.app.vault.cachedRead(file);
+			if (hasKnomoMonthlyArchiveMarker(content)) periods.push(monthlyPeriod);
 		}
-		return [...periods].sort();
+		return [...new Set(periods)].sort();
 	}
 
 	async build(period: string): Promise<MonthlyProjectionBuildResult> {
@@ -101,6 +115,11 @@ export class MonthlyProjectionInputBuilder {
 
 	getMonthlyPeriod(path: string): string | null {
 		return getMonthlyCanonicalPeriod(this.getSettings(), path);
+	}
+
+	getTargetPath(period: string): string {
+		assertPeriod(period);
+		return getMonthlyArchivePath(this.getSettings(), period);
 	}
 
 	async initializeInventory(): Promise<void> {
@@ -167,7 +186,7 @@ export class MonthlyProjectionInputBuilder {
 		const folderPath = separatorIndex === -1 ? "" : examplePath.slice(0, separatorIndex);
 		const folder = this.app.vault.getAbstractFileByPath(normalizePath(folderPath));
 		return folder instanceof TFolder
-			? folder.children.filter((child): child is TFile => child instanceof TFile && child.extension === "md")
+			? folder.children.filter((child): child is TFile => child instanceof TFile)
 			: [];
 	}
 

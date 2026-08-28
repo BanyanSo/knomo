@@ -100,14 +100,21 @@
 | CAT-EXCLUDE-002 | 用户已显式关闭 Monthly 排除规则 | 升级不得改回开启 |
 | CAT-PROJ-001 | 重建 Monthly | 正文只从实际 Daily 读取 |
 | CAT-PROJ-002 | Monthly 写入失败 | 投影独立失败，不改变 Daily 与 identity |
-| CAT-PROJ-003 | 插件启动且存在多个历史月份 | 只自动投影当前月，不立即重算全部历史月份 |
+| CAT-PROJ-003 | 插件启动且存在多个历史月份 | 只把当前月加入候选队列，不立即重算全部历史月份；当前月无 memo 时不创建 Monthly |
 | CAT-PROJ-004 | 连续投影多个不同月份 | 复用按月份分组的 Daily inventory；每个月只读取本月 Daily，不重复遍历 Vault |
 | CAT-PROJ-005 | Catalog 发现离线新增、修改、删除或移动的 Daily | 只把实际受影响月份加入优先队列，当前月优先 |
-| CAT-PROJ-006 | 修改 Monthly locale 或输出渲染设置 | 所有已知月份失效并最终收敛；当前月先完成 |
+| CAT-PROJ-006 | 修改 Monthly locale 或输出渲染设置 | 优先使用 Catalog 中实际有 memo 的月份与已有合法 Monthly 构建失效队列；当前月先完成并最终收敛 |
 | CAT-PROJ-007 | 只修改 `dailyHeading` 等写入位置 | 历史 Monthly 不失效、不重算 |
 | CAT-PROJ-008 | Catalog 扫描、旧版数据升级与 Monthly 同时待执行 | 三者经过同一低优先级串行队列，任意时刻最多运行一项 |
 | CAT-PROJ-009 | 连续处理多个 Monthly | 每完成一个月份让出事件循环后再处理下一月份 |
-| CAT-PROJ-010 | Vault 中保留旧 Monthly 或含用户编辑的 Monthly | 不从中推断 `memoId`，不因启动或升级完成提示删除、移动或覆盖非当前待投影月份 |
+| CAT-PROJ-010 | Vault 中保留旧 Monthly 或含用户编辑的 Monthly | 不从中推断 `memoId`，不因启动或升级完成提示删除或移动 |
+| CAT-PROJ-011 | 月份有 Daily 但解析后没有 memo，且目标 Monthly 不存在 | 不创建目录或空 Monthly 文件 |
+| CAT-PROJ-012 | 目标路径存在但文件开头没有 `knomo:monthly-archive` marker | 直接保留原字节并静默跳过，不构建当月 Daily 输入、不失败、不重试 |
+| CAT-PROJ-013 | 合法 Monthly 已存在，但当月 memo 已全部移除 | 可继续维护为空投影，普通后台 reconcile 不删除该文件 |
+| CAT-PROJ-014 | `1.2.9` 多行 marker 的 Monthly 进入重建 | 识别为合法 Knomo Monthly，继续维护正文且原样保留旧 marker |
+| CAT-PROJ-015 | 新建中文或英文 Monthly | 使用单行 marker，并按共享 locale 生成对应的 `<small>` 说明 |
+| CAT-PROJ-016 | 全量投影时 Catalog 尚未 complete | 保留历史月份发现任务；Catalog settle 后重试，仍不完整时以 Daily inventory 作为低优先级候选并由物化门控排除空月 |
+| CAT-PROJ-017 | Monthly 全量队列在处理中被关闭或重启 | 未完成月份已在本地 Catalog checkpoint 中，重启后继续处理且不要求新的 Vault marker 或 ownership ledger |
 | CAT-STORE-001 | IndexedDB 丢失或不可用 | 使用内存 fallback 并从 Daily 渐进重建 |
 | CAT-STORE-002 | 内存 fallback 扫描超过 5000 条 observation | 从最旧文件分区淘汰，保留条数不超过上限且 coverage 始终为 partial |
 | CAT-ROOT-001 | 用户显式迁移数据根 | copy、verify 成功后才更新设置，旧根保留 |

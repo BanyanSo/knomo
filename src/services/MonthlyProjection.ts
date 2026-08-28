@@ -11,11 +11,8 @@ import { normalizeVaultPath } from "../utils/path";
 import { MarkdownBlockService } from "./MarkdownBlockService";
 import { canonicalJson, sha256Bytes, sha256Text } from "./CanonicalJson";
 
-export const MONTHLY_READONLY_COMMENT = [
-	"<!-- knomo:monthly-archive",
-	translate("zh-CN", "archive.deterministicReadOnlyComment"),
-	"-->",
-].join("\n");
+export const MONTHLY_ARCHIVE_MARKER = "knomo:monthly-archive";
+const MONTHLY_ARCHIVE_COMMENT = `<!-- ${MONTHLY_ARCHIVE_MARKER} -->`;
 
 const MONTHLY_PERIOD_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 const LOGICAL_DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
@@ -33,6 +30,7 @@ export interface MonthlyProjectionInput {
 	settings: MonthlyProjectionSettings;
 	observations: readonly MemoObservation[];
 	sourceDigest?: string;
+	preservedMarker?: string;
 }
 
 export interface MonthlyProjectionResult {
@@ -74,8 +72,9 @@ export async function buildMonthlyProjection(
 			));
 		return [heading, ...blocks].join("\n\n");
 	});
+	const projectionHeader = input.preservedMarker ?? buildMonthlyProjectionHeader(monthlyLocale);
 	const content = [
-		MONTHLY_READONLY_COMMENT,
+		projectionHeader,
 		`# ${input.period}`,
 		...sections,
 	].join("\n\n") + "\n";
@@ -113,6 +112,15 @@ export async function buildMonthlyProjection(
 		outputSha256: outputHash,
 		observationCount: observations.length,
 	};
+}
+
+export function hasKnomoMonthlyArchiveMarker(content: string): boolean {
+	return extractLeadingMonthlyArchiveMarker(content) !== null;
+}
+
+export function extractLegacyMonthlyArchiveMarker(content: string): string | null {
+	const marker = extractLeadingMonthlyArchiveMarker(content);
+	return marker !== null && marker.trim() !== MONTHLY_ARCHIVE_COMMENT ? marker : null;
 }
 
 export function getMonthlyArchivePath(
@@ -227,6 +235,23 @@ function compareText(left: string, right: string): number {
 
 function normalizeMemoTime(time: string): string {
 	return time.length === 5 ? `${time}:00` : time;
+}
+
+function buildMonthlyProjectionHeader(locale: string): string {
+	const noticeLocale = locale.startsWith("zh") ? "zh-CN" : "en";
+	return [
+		MONTHLY_ARCHIVE_COMMENT,
+		`<small>${translate(noticeLocale, "archive.deterministicReadOnlyComment")}</small>`,
+	].join("\n\n");
+}
+
+function extractLeadingMonthlyArchiveMarker(content: string): string | null {
+	const leadingLength = content.match(/^\uFEFF?\s*/u)?.[0].length ?? 0;
+	if (!content.startsWith("<!--", leadingLength)) return null;
+	const endIndex = content.indexOf("-->", leadingLength + 4);
+	if (endIndex === -1) return null;
+	const comment = content.slice(leadingLength, endIndex + 3);
+	return /^<!--[ \t]*knomo:monthly-archive(?=\s|-->)/u.test(comment) ? comment : null;
 }
 
 function assertMonthlyPeriod(period: string): void {

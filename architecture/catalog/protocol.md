@@ -51,12 +51,18 @@
 - 共享配置只接受当前唯一结构；开发期间产生的旧结构不做降级读取或后继迁移；
 - locale 首次取自 Obsidian 当前语言并规范化持久化，之后只有用户显式执行“使用当前 Obsidian 语言”才允许改变；
 - Monthly 默认排除规则只在用户从未作出选择时初始化为开启，已有显式设置不得被升级覆盖。
-- 启动只把当前月份加入自动投影，不立即重算全部历史月份；Catalog 确认 Daily 新增、修改、删除或移动后，只失效实际受影响月份；
+- 启动只把当前月份加入候选队列，不立即重算全部历史月份；Daily 文件的存在只表示月份需要扫描，目标文件不存在时，只有实际解析到至少一条 memo 才允许创建 Monthly；
+- 配置变化引发的历史全量投影优先从完整 Catalog 发现实际存在 memo 的月份，并合并已有合法 Monthly；Catalog 尚未完整时保留发现任务，在 Catalog settle 后重试，仍不完整则以 Daily inventory 作为低优先级候选范围；
+- Monthly 待处理月份、发现状态和完成摘要保存在本地 Catalog metadata 中；中断或重启后继续未完成队列，该本地 checkpoint 不是 Vault 共享协议或 ownership ledger；
+- 同路径文件只有在开头带 `knomo:monthly-archive` marker 时才是可维护的 Knomo Monthly；`1.2.9` 多行 marker 与当前单行 marker 均合法，旧 marker 原文必须保留；
+- 同路径文件没有 Monthly marker 时直接保留原文并静默跳过，不解析当月 Daily、不覆盖且不进入失败重试；
+- 合法 Monthly 在当月已无 memo 时仍可更新为空投影，普通后台 reconcile 不得删除文件；
+- 新建 Monthly 使用单行 `<!-- knomo:monthly-archive -->` marker，后跟使用共享 locale 生成的 `<small>` 只读说明；
 - Catalog 与 Monthly 复用同一份按月份分组的 Daily inventory；构建一个月份时只能读取该月份的 Daily，不得重新遍历整个 Vault；
 - 当前月和实际变更月份优先于配置变化产生的历史月份队列；每完成一个月份必须让出事件循环；
 - Catalog 扫描分片、旧版数据升级和 Monthly 单月投影必须经过同一低优先级串行队列，不能并发争抢 Vault、解析器或主线程；
 - 只有 Monthly locale、输出目录、文件名格式、日期标题格式、日期顺序或 Daily 路径范围变化才允许批量失效；`dailyHeading` 等写入位置变化不得使历史 Monthly 失效；
-- 旧 Monthly 是只读保留内容，不参与 `memoId` 推断，也不随旧版数据升级完成提示自动删除。
+- Monthly 不参与 `memoId` 推断，也不随旧版数据升级完成提示自动删除。
 
 ### 2.5 Catalog 读取与全库语义
 
@@ -98,7 +104,7 @@
 
 旧目录是只读迁移源；迁移不得覆盖、追加、移动或删除其中的任何字节。
 
-旧 Monthly 文件同样保留。插件不得自动删除旧 `_knomo-system` 或旧 Monthly 文件，也不得把旧文件当作新协议的持续写入目标。
+旧 Monthly 文件同样保留。插件不得自动删除旧 `_knomo-system` 或旧 Monthly 文件；带 `<!-- knomo:monthly-archive ... -->` marker 的 `1.2.9` Monthly 视为合法派生投影并继续维护，没有 marker 的同路径文件始终原样保留。
 
 ## 4. 旧版数据升级
 

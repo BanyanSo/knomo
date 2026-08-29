@@ -57,13 +57,16 @@ test("Monthly 与 Catalog 共用全区域 Parser 语义，source 输入不包含
 	assert.equal(typeof built.sourceDigest, "string");
 });
 
-test("启动只投影当前月，历史 Monthly 保持原字节且各月份复用同一 Daily inventory", async () => {
+test("启动在 Catalog settle 前只投影当前月且不覆盖无 marker 的历史文件", async () => {
 	const historicalMonthly = "用户编辑过的旧 Monthly\n";
 	const fixture = createFixture({
 		"Daily/2026-07-01.md": "- 09:00 July\n",
 		"Daily/2026-08-01.md": "- 09:00 August\n",
 		"Memos/2026-07.md": historicalMonthly,
-	}, () => true, { currentPeriod: () => "2026-08" });
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		listCatalogPeriods: async () => { throw new Error("Catalog coverage is partial"); },
+	});
 	const vault = fixture.replica.app.vault as unknown as { getMarkdownFiles(): TFile[] };
 	const getMarkdownFiles = vault.getMarkdownFiles.bind(vault);
 	let inventoryReadCount = 0;
@@ -80,6 +83,110 @@ test("启动只投影当前月，历史 Monthly 保持原字节且各月份复�
 
 	await fixture.coordinator.rebuildPeriod("2026-07");
 	assert.equal(inventoryReadCount, 1);
+});
+
+test("新安装在首次 Catalog settle 后自动投影有 memo 的历史月份", async () => {
+	const checkpointStore = new InMemoryMemoCatalogStore();
+	const workPriorities: number[] = [];
+	const workQueue: LowPriorityWorkRunner = {
+		signal: new AbortController().signal,
+		run: async <T>(priority: number, action: () => Promise<T>): Promise<T> => {
+			workPriorities.push(priority);
+			return action();
+		},
+	};
+	let catalogSettled = false;
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		checkpointStore,
+		workQueue,
+		listCatalogPeriods: async () => {
+			if (!catalogSettled) throw new Error("Catalog coverage is partial");
+			return ["2026-07", "2026-08"];
+		},
+	});
+
+	await fixture.coordinator.initialize();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.equal(fixture.replica.read("Memos/2026-07.md"), null);
+
+	catalogSettled = true;
+	await fixture.coordinator.handleCatalogSettled();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.match(fixture.replica.read("Memos/2026-07.md") ?? "", /July/u);
+	const completed = await checkpointStore.getMeta<{ discoveryPending: boolean; pending: unknown[] }>(
+		MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+	);
+	assert.equal(completed?.discoveryPending, false);
+	assert.deepEqual(completed?.pending, []);
+	assert.deepEqual(workPriorities, [10, 40]);
+});
+
+test("上一版遗留的已完成 checkpoint 不得阻止缺失历史月份补投影", async () => {
+	const checkpointStore = new InMemoryMemoCatalogStore();
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		checkpointStore,
+		listCatalogPeriods: async () => ["2026-07", "2026-08"],
+	});
+	const configuration = await fixture.inputBuilder.getConfigurationSnapshot();
+	await checkpointStore.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, {
+		dailyScopeKey: configuration.dailyScopeKey,
+		renderFingerprint: configuration.renderFingerprint,
+		discoveryPending: false,
+		pending: [],
+		metadata: {
+			"2026-08": { sourceDigest: "old-source", outputHash: "old-output" },
+		},
+	});
+
+	// Catalog settle 可能早于 Monthly initialize；该通知不能成为一次性丢失事件。
+	await fixture.coordinator.handleCatalogSettled();
+	await fixture.coordinator.initialize();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 2, failed: 0 });
+	assert.match(fixture.replica.read("Memos/2026-07.md") ?? "", /July/u);
+});
+
+test("Catalog settle 前的启动核对不重复投影 checkpoint 已完成的历史月份", async () => {
+	const checkpointStore = new InMemoryMemoCatalogStore();
+	const managedMonthly = "<!-- knomo:monthly-archive -->\n\n<small>managed</small>\n";
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+		"Memos/2026-07.md": managedMonthly,
+		"Memos/2026-08.md": managedMonthly,
+	}, () => true, {
+		currentPeriod: () => "2026-08",
+		checkpointStore,
+		listCatalogPeriods: async () => { throw new Error("Catalog coverage is partial"); },
+	});
+	const configuration = await fixture.inputBuilder.getConfigurationSnapshot();
+	await checkpointStore.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, {
+		dailyScopeKey: configuration.dailyScopeKey,
+		renderFingerprint: configuration.renderFingerprint,
+		discoveryPending: false,
+		pending: [],
+		metadata: {
+			"2026-07": { sourceDigest: "july-source", outputHash: "july-output" },
+			"2026-08": { sourceDigest: "august-source", outputHash: "august-output" },
+		},
+	});
+	const builtPeriods: string[] = [];
+	const originalBuild = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	fixture.inputBuilder.build = async (period) => {
+		builtPeriods.push(period);
+		return originalBuild(period);
+	};
+
+	await fixture.coordinator.initialize();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+	assert.deepEqual(builtPeriods, ["2026-08"]);
 });
 
 test("当前月只有空 Daily 时只检查候选月份，不创建 Monthly 文件", async () => {
@@ -202,7 +309,7 @@ test("Catalog 尚未 complete 时保留发现任务，settle 后以 Daily 低优
 	await fixture.coordinator.handleConfigurationChanged();
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
 	await fixture.coordinator.handleCatalogSettled();
-	assert.deepEqual(await fixture.coordinator.run(true), { projected: 2, failed: 0 });
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
 	assert.match(fixture.replica.read("Memos/2026-07.md") ?? "", /July/u);
 });
 

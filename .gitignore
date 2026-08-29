@@ -18,3 +18,5 @@ knomo-assets/
 .codex/
 docs/
 /architecture/
+.agents/
+architecture/

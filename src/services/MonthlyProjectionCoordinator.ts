@@ -120,12 +120,14 @@ export class MonthlyProjectionCoordinator {
 			&& checkpoint.renderFingerprint === this.configuration.renderFingerprint;
 		if (checkpointMatches) {
 			this.restoreCheckpoint(checkpoint);
+			// 启动时重新核对实际月份，避免旧 checkpoint 把缺失的 Monthly 误判为已完成。
+			this.discoveryPending = true;
 		} else {
 			this.pendingPeriods.clear();
 			this.invalidationVersions.clear();
 			this.periodPriorities.clear();
 			this.metadata.clear();
-			this.discoveryPending = checkpoint !== null;
+			this.discoveryPending = true;
 		}
 		this.markPending(this.getCurrentPeriod(), MONTHLY_URGENT_PRIORITY);
 		await this.persistCheckpoint();
@@ -471,16 +473,27 @@ export class MonthlyProjectionCoordinator {
 				sourcePeriods = await this.options.listCatalogPeriods();
 			} catch {
 				if (!fallbackToDaily) {
-					await this.invalidatePeriods(ownedPeriods, MONTHLY_NORMAL_PRIORITY);
+					await this.invalidatePeriods(
+						this.getIncompletePeriods(ownedPeriods, ownedPeriods),
+						MONTHLY_NORMAL_PRIORITY,
+					);
 					await this.persistCheckpoint();
 					return;
 				}
 				sourcePeriods = await this.options.inputBuilder.listDailyPeriods();
 			}
 		}
+		const missingPeriods = this.getIncompletePeriods([...sourcePeriods, ...ownedPeriods], ownedPeriods);
 		this.discoveryPending = false;
-		await this.invalidatePeriods([...sourcePeriods, ...ownedPeriods], MONTHLY_NORMAL_PRIORITY);
+		await this.invalidatePeriods(missingPeriods, MONTHLY_NORMAL_PRIORITY);
 		await this.persistCheckpoint();
+	}
+
+	private getIncompletePeriods(periods: readonly string[], ownedPeriods: readonly string[]): string[] {
+		const ownedPeriodSet = new Set(ownedPeriods);
+		return [...new Set(periods)].filter((period) =>
+			!this.pendingPeriods.has(period)
+			&& (!this.metadata.has(period) || !ownedPeriodSet.has(period)));
 	}
 
 	private async loadCheckpoint(): Promise<MonthlyProjectionCheckpoint | null> {

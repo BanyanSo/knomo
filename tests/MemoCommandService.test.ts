@@ -153,6 +153,56 @@ test("阶段化 create 在 Daily 提交后先完成 committed，identity 与读�
 	assert.deepEqual(events, ["intent", "daily", "claim"]);
 });
 
+test("adoptMemo 在 Identity absent 时按需采用并幂等返回 review-ready memo", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "historical random candidate");
+	await seedCatalog(catalog, store, observation);
+	const binding = makeBinding(observation, "2026082012345601", "identity-1");
+	let adopted = false;
+	let adoptionCount = 0;
+	const identityLedger = {
+		getRevision: () => adopted ? "identity-1" : "identity-absent",
+		getStatus: () => adopted ? "ready" : "absent",
+		getSnapshot: () => ({ revision: adopted ? "identity-1" : "identity-absent", eventCount: adoptionCount, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
+		resolveObservation: () => adopted ? binding : null,
+		resolveObservationState: () => adopted
+			? { kind: "identified", binding } as const
+			: { kind: "unbound" } as const,
+		getSourceMemoId: () => null,
+		getCreatedAt: () => null,
+		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		adoptObservation: async () => {
+			adoptionCount += 1;
+			adopted = true;
+			return binding;
+		},
+	} as unknown as IdentityLedgerMutationService;
+	const service = new MemoCommandService(
+		{} as App,
+		catalog,
+		makeCommandOptions(),
+		{} as MarkdownMutationService,
+		identityLedger,
+	);
+	const source = (await service.getReadService().query({ limit: 20 })).items[0];
+	assert.notEqual(source, undefined);
+	if (source === undefined) throw new Error("Catalog memo fixture is missing.");
+
+	const first = await service.adoptMemo(source);
+	const second = await service.adoptMemo(source);
+
+	assert.equal(adoptionCount, 1);
+	assert.equal(first.memoId, binding.memoId);
+	assert.equal(second.memoId, binding.memoId);
+	assert.equal(first.capabilities.identity.review, "ready");
+});
+
 test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再恢复 identity", async () => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");

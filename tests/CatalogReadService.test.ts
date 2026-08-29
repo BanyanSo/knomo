@@ -252,7 +252,44 @@ test("随机重逢只返回具有稳定 memoId 和 review 能力的候选", asyn
 	assert.deepEqual(items.map((item) => item.contentSnapshot), ["identified random candidate"]);
 });
 
-test("同步后的 review 状态会降低最近已回顾 memo 的下一次随机权重", async () => {
+test("Identity absent 时随机重逢只为选中的 observation 建立稳定身份", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const first = makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "first historical random candidate");
+	const second = makeObservation("Daily/2026-08-21.md", "2026-08-21", 1, "second historical random candidate");
+	await seedCatalogFiles(catalog, store, [first, second]);
+	const identity = createIdentityReader();
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: identity.reader,
+		now: () => new Date(2026, 7, 26, 12, 0, 0),
+		random: () => 0,
+	});
+	let adoptionCount = 0;
+	let preparingIdentityCount = 0;
+
+	const items = await service.getRandomReunionItems(1, {
+		prepareIdentity: async (candidate) => {
+			adoptionCount += 1;
+			const binding = makeBinding(candidate.observation, "2026082012345601", "identity-1");
+			identity.setState(candidate.content, { kind: "identified", binding }, "ready", "identity-1");
+			return service.resolveMemoItemInFile(candidate.sourcePath, candidate.observation.startLine);
+		},
+		onPreparingIdentity: () => { preparingIdentityCount += 1; },
+	});
+
+	assert.equal(adoptionCount, 1);
+	assert.equal(preparingIdentityCount, 1);
+	assert.equal(items.length, 1);
+	assert.equal(items[0]?.id, "2026082012345601");
+	assert.equal(items[0]?.catalog?.capabilities.identity.review, "ready");
+});
+
+test("缓存候选池仍会应用同步后的最新 review 权重", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -267,7 +304,6 @@ test("同步后的 review 状态会降低最近已回顾 memo 的下一次随机
 	const reviewedBinding = { ...makeBinding(recentlyReviewed, "2026082112345601", "identity-1"), bindingId: "e_22222222222222222222222222222222" };
 	identity.setState(unreviewed.content, { kind: "identified", binding: unreviewedBinding }, "ready", "identity-1");
 	identity.setState(recentlyReviewed.content, { kind: "identified", binding: reviewedBinding }, "ready", "identity-1");
-	identity.setReviewState(reviewedBinding.memoId, 1, "2026-08-25T12:00:00.000Z");
 	const service = new CatalogReadService({
 		catalog,
 		identityLedger: identity.reader,
@@ -275,9 +311,150 @@ test("同步后的 review 状态会降低最近已回顾 memo 的下一次随机
 		random: () => 0.5,
 	});
 
+	assert.deepEqual(
+		(await service.getRandomReunionItems(1)).map((item) => item.contentSnapshot),
+		["recently reviewed candidate"],
+	);
+	identity.setReviewState(reviewedBinding.memoId, 1, "2026-08-25T12:00:00.000Z");
+	identity.setState(recentlyReviewed.content, { kind: "identified", binding: reviewedBinding }, "ready", "identity-2");
 	const items = await service.getRandomReunionItems(1);
 
 	assert.deepEqual(items.map((item) => item.contentSnapshot), ["unreviewed random candidate"]);
+});
+
+test("随机重逢从完整 Catalog 候选池筛选而不是只抽样 24 个日期", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const observations = Array.from({ length: 25 }, (_, index) => {
+		const day = (index + 1).toString().padStart(2, "0");
+		return makeObservation(
+			`Daily/2026-07-${day}.md`,
+			`2026-07-${day}`,
+			1,
+			index === 0 ? "oldest complete-catalog candidate" : "short",
+		);
+	});
+	await seedCatalogFiles(catalog, store, observations);
+	const identity = createIdentityReader();
+	const binding = makeBinding(observations[0] as MemoObservation, "2026070112345601", "identity-1");
+	identity.setState(observations[0]?.content ?? "", { kind: "identified", binding }, "ready", "identity-1");
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: identity.reader,
+		now: () => new Date(2026, 7, 26, 12, 0, 0),
+		random: () => 0,
+	});
+
+	const items = await service.getRandomReunionItems(5);
+
+	assert.deepEqual(items.map((item) => item.contentSnapshot), ["oldest complete-catalog candidate"]);
+});
+
+test("随机重逢按 Catalog revision 复用多页候选池且不因 Identity revision 重读全库", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const originalQuery = store.query.bind(store);
+	let queryCalls = 0;
+	store.query = async (request) => {
+		queryCalls += 1;
+		return originalQuery(request);
+	};
+	const catalog = new MemoCatalogService(store);
+	const observations = Array.from({ length: 2_000 }, (_, index) => makeObservation(
+		"Daily/2026-07-01.md",
+		"2026-07-01",
+		index + 1,
+		`historical random candidate ${index.toString().padStart(4, "0")}`,
+	));
+	await seedCatalog(catalog, store, observations);
+	const identity = createIdentityReader();
+	const bindings = observations.map((observation, index) => makeBinding(
+		observation,
+		(index + 1).toString().padStart(18, "0"),
+		"identity-1",
+	));
+	for (let index = 0; index < observations.length; index += 1) {
+		identity.setState(
+			observations[index]?.content ?? "",
+			{ kind: "identified", binding: bindings[index] as IdentityLedgerBinding },
+			"ready",
+			"identity-1",
+		);
+	}
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: identity.reader,
+		now: () => new Date(2026, 7, 26, 12, 0, 0),
+		random: () => 0,
+	});
+
+	assert.equal((await service.getRandomReunionItems(5)).length, 5);
+	const firstLoadQueryCalls = queryCalls;
+	identity.setState(
+		observations[0]?.content ?? "",
+		{ kind: "identified", binding: bindings[0] as IdentityLedgerBinding },
+		"ready",
+		"identity-2",
+	);
+	assert.equal((await service.getRandomReunionItems(5)).length, 5);
+
+	assert.ok(firstLoadQueryCalls > 2);
+	assert.equal(queryCalls, firstLoadQueryCalls + 1);
+});
+
+test("Catalog revision 变化后随机重逢重建候选池", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const first = makeObservation("Daily/2026-07-01.md", "2026-07-01", 1, "first revision candidate");
+	await seedCatalogFiles(catalog, store, [first]);
+	const identity = createIdentityReader();
+	identity.setState(first.content, {
+		kind: "identified",
+		binding: makeBinding(first, "2026070112345601", "identity-1"),
+	}, "ready", "identity-1");
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: identity.reader,
+		now: () => new Date(2026, 7, 26, 12, 0, 0),
+		random: () => 0,
+	});
+	assert.deepEqual((await service.getRandomReunionItems(5)).map((item) => item.contentSnapshot), [first.content]);
+	const second = makeObservation("Daily/2026-07-02.md", "2026-07-02", 1, "second revision candidate");
+	await catalog.replaceFile({
+		inventory: { sourcePath: second.sourcePath, logicalDate: second.logicalDate, mtime: 1, size: 1 },
+		sourceRevision: second.sourceRevision,
+		observations: [second],
+		parserVersion: 2,
+		settingsFingerprint: "settings-1",
+		auditedAt: 1,
+	});
+	await store.setCoverage({
+		kind: "complete",
+		sharedConfigurationComplete: true,
+		coveredFromDate: first.logicalDate,
+		pendingFileCount: 0,
+		coveredFileCount: 2,
+		totalFileCount: 2,
+	});
+	identity.setState(second.content, {
+		kind: "identified",
+		binding: makeBinding(second, "2026070212345601", "identity-2"),
+	}, "ready", "identity-2");
+
+	const refreshed = await service.getRandomReunionItems(5);
+
+	assert.deepEqual(new Set(refreshed.map((item) => item.contentSnapshot)), new Set([first.content, second.content]));
 });
 
 test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影响", async () => {

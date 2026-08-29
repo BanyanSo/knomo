@@ -80,6 +80,7 @@ test("presents review and random list headers", async () => {
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "random",
+		randomReunionStatus: "ready",
 		memos,
 	}), {
 		type: "items",
@@ -89,18 +90,75 @@ test("presents review and random list headers", async () => {
 	});
 });
 
-test("presents random loading before random list", async () => {
+test("keeps the current random list visible while the next group loads", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const memos = makeMemos(2);
+
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "loading-candidates",
+		memos,
+	}), {
+		type: "items",
+		memos,
+		mode: "memo",
+		headers: [{ type: "random-toolbar", count: 2 }],
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "preparing-identity",
+		memos,
+	}), {
+		type: "items",
+		memos,
+		mode: "memo",
+		headers: [{ type: "random-toolbar", count: 2 }],
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "loading-candidates",
+		memos: [],
+	}), {
+		type: "empty",
+		title: "Looking for memos to revisit",
+		description: "",
+	});
+});
+
+test("presents random identity preparation, failure and true empty states distinctly", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
 
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "random",
-		randomReunionLoading: true,
-		memos: makeMemos(2),
+		randomReunionStatus: "preparing-identity",
 	}), {
 		type: "empty",
-		title: "Looking for memos to revisit",
+		title: "Preparing memo identities for random revisit",
+		description: "",
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "failed",
+		randomReunionError: "Identity write failed",
+	}), {
+		type: "empty",
+		title: "Random revisit failed to load",
+		description: "Identity write failed",
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "empty",
+	}), {
+		type: "empty",
+		title: "Not enough memos to revisit yet",
 		description: "",
 	});
 });
@@ -197,7 +255,8 @@ function baseOptions() {
 	return {
 		cardFlowError: null,
 		activeNav: "all" as const,
-		randomReunionLoading: false,
+		randomReunionStatus: "idle" as const,
+		randomReunionError: null,
 		shuffleDay: {
 			status: "idle" as const,
 			selectedDate: null,

@@ -94,16 +94,27 @@ export class MemoCommandService {
 		};
 	}
 
-	async adoptMemo(item: CatalogMemoItem): Promise<string> {
+	async adoptMemo(item: CatalogMemoItem): Promise<CatalogMemoItem> {
 		const status = this.identityLedger.getStatus();
 		if (status !== "ready" && status !== "absent") throw new Error("Existing Daily memo adoption is unavailable.");
 		const refreshed = await this.refreshResolvedMemo(item.resolved);
-		if (refreshed.kind !== "observed"
-			|| this.identityLedger.resolveObservationState(refreshed.observation).kind !== "unbound") {
+		let memoId: string;
+		if (refreshed.kind === "identified") {
+			memoId = refreshed.identityHandle.memoId;
+		} else if (refreshed.kind === "observed"
+			&& this.identityLedger.resolveObservationState(refreshed.observation).kind === "unbound") {
+			memoId = (await this.identityLedger.adoptObservation(refreshed.observation)).memoId;
+		} else {
 			throw new Error("Only a current historical observation without identity can be adopted.");
 		}
-		const binding = await this.identityLedger.adoptObservation(refreshed.observation);
-		return binding.memoId;
+		const adopted = await this.readService.resolveMemoItemInFile(
+			refreshed.observation.sourcePath,
+			refreshed.observation.startLine,
+		);
+		if (adopted.memoId !== memoId || adopted.capabilities.identity.review !== "ready") {
+			throw new Error("Historical memo adoption did not produce a reviewable identity.");
+		}
+		return adopted;
 	}
 
 	startCreate(contentInput: string, sourceMemoId: string | null = null): MemoSaveOperation {

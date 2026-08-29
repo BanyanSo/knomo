@@ -44,7 +44,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	view.renderMobileSearchResultsIfChanged = () => undefined;
 	view.renderAllMemosLoadingState = () => undefined;
 	view.randomReunionController = {
-		getSnapshot: () => ({ loading: false, memos: null }),
+		getSnapshot: () => ({ status: "idle", error: null, memos: null }),
 		clearMemos: () => undefined,
 		refresh: async () => undefined,
 	};
@@ -59,6 +59,46 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	first.resolve([makeMemo("old", "2026-08-23T10:00:00")]);
 	assert.equal(await firstRun, false);
 	assert.deepEqual(view.memos.map((memo) => memo.id), ["new"]);
+});
+
+test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	let clearCount = 0;
+	let refreshCount = 0;
+	const randomMemo = makeMemo("random-ready", "2026-08-20T10:00:00");
+	view.memoSourceGeneration = 0;
+	view.catalogDesktopQueryRun = 0;
+	view.catalogDesktopQueryFingerprint = null;
+	view.catalogCursor = null;
+	view.memos = [];
+	view.viewStateController = { activeNav: "random" };
+	view.getCatalogQueryFingerprint = () => "random";
+	view.loadCatalogMemos = async () => makeCatalogLoad(2, "identity-2", completeCoverage());
+	view.getCardFlowStateKey = () => "random-ready";
+	view.getMobileSearchStateKey = () => "mobile-search";
+	view.invalidateMemoSearchCache = () => undefined;
+	view.retainMemoCardPreviews = () => undefined;
+	view.resetVisibleMemos = () => undefined;
+	view.renderUiState = () => undefined;
+	view.forceRebuildCardFlow = () => undefined;
+	view.renderMobileSearchResults = () => undefined;
+	view.renderCardFlowIfChanged = () => undefined;
+	view.renderMobileSearchResultsIfChanged = () => undefined;
+	view.renderAllMemosLoadingState = () => undefined;
+	view.randomReunionController = {
+		getSnapshot: () => ({ status: "ready", error: null, memos: [randomMemo] }),
+		clearMemos: () => { clearCount += 1; },
+		refresh: async () => { refreshCount += 1; },
+	};
+	view.shuffleDayController = { reconcileWithMemos: () => undefined };
+	view.refreshCatalogLibraryIndexes = async () => undefined;
+	view.syncRecordStatsSource = () => undefined;
+
+	assert.equal(await view.reloadMemos(false, true), true);
+	assert.equal(clearCount, 0);
+	assert.equal(refreshCount, 0);
 });
 
 test("查询 fingerprint 变化时清空旧结果和 cursor，并启动新请求而不复用旧 promise", async () => {
@@ -255,7 +295,7 @@ interface QueryView {
 	catalogDesktopQueryFingerprint: string | null;
 	catalogCursor: { catalog: { catalogRevision: number; createdAtKey: string; observationKey: string } } | null;
 	memos: QueryMemo[];
-	viewStateController: { activeNav: "all" };
+	viewStateController: { activeNav: "all" | "random" };
 	memoLoadingPromise: Promise<boolean> | null;
 	memoLoadingFingerprint: string | null;
 	catalogCoverage: TestCoverage | null;
@@ -268,15 +308,7 @@ interface QueryView {
 	libraryTagFacets: Array<{ key: string; label: string; count: number }> | null;
 	cardFlowError?: string | null;
 	filteredMemosCache?: null;
-	loadCatalogMemos: (loadAll: boolean) => Promise<{
-		memos: QueryMemo[];
-		nextCursor: null;
-		catalogRevision: number;
-		identityRevision: string;
-		coverage: { kind: "complete"; coveredFromDate: string; pendingFileCount: number; coveredFileCount: number; totalFileCount: number };
-		readState: "ready";
-		status: { content: "ready"; catalog: "complete"; identity: "ready"; projection: "ready"; migration: "none" };
-	}>;
+	loadCatalogMemos: (loadAll: boolean) => Promise<TestCatalogMemoLoad>;
 	getCardFlowStateKey: () => string;
 	getMobileSearchStateKey: () => string;
 	getCatalogQueryFingerprint: (loadAll: boolean) => string;
@@ -297,7 +329,11 @@ interface QueryView {
 		getTagFacets: () => Promise<AggregateFacets>;
 	};
 	randomReunionController: {
-		getSnapshot: () => { loading: boolean; memos: null };
+		getSnapshot: () => {
+			status: "idle" | "ready";
+			error: null;
+			memos: QueryMemo[] | null;
+		};
 		clearMemos: () => void;
 		refresh: () => Promise<void>;
 	};

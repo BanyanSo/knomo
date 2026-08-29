@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
+import type { RandomReunionStatus } from "./RandomReunionController";
 import type { ShuffleDaySnapshot } from "./ShuffleDayController";
 import { getEmptyStateTitle } from "./viewNavigation";
 import type { SidebarNav } from "./viewNavigation";
@@ -37,7 +38,8 @@ export type CardFlowPresentation =
 export interface CardFlowPresentationOptions {
 	cardFlowError: string | null;
 	activeNav: SidebarNav;
-	randomReunionLoading: boolean;
+	randomReunionStatus: RandomReunionStatus;
+	randomReunionError: string | null;
 	shuffleDay: ShuffleDaySnapshot;
 	memos: MemoRecord[];
 	regularFilterCopy: CardFlowRegularFilterCopy | null;
@@ -61,12 +63,29 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 			trashMemos: options.trashMemos,
 		});
 	}
-	if (options.activeNav === "random" && options.randomReunionLoading) {
-		return {
-			type: "empty",
-			title: t("empty.randomLoading"),
-			description: "",
-		};
+	if (options.activeNav === "random") {
+		if ((options.randomReunionStatus === "idle" || options.randomReunionStatus === "loading-candidates")
+			&& options.memos.length === 0) {
+			return {
+				type: "empty",
+				title: t("empty.randomLoading"),
+				description: "",
+			};
+		}
+		if (options.randomReunionStatus === "preparing-identity" && options.memos.length === 0) {
+			return {
+				type: "empty",
+				title: t("empty.randomPreparingIdentity"),
+				description: "",
+			};
+		}
+		if (options.randomReunionStatus === "failed") {
+			return {
+				type: "empty",
+				title: t("error.randomLoadFailed"),
+				description: options.randomReunionError ?? "",
+			};
+		}
 	}
 	if (options.activeNav === "shuffleDay") {
 		return getShuffleDayCardFlowPresentation(options.shuffleDay);

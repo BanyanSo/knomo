@@ -194,6 +194,7 @@ export const en: Record<TranslationKey, string> = {
 	"empty.allMemosRetry": "Reload",
 	"empty.cardFlowFailed": "Card feed refresh failed",
 	"empty.randomLoading": "Looking for memos to revisit",
+	"empty.randomPreparingIdentity": "Preparing memo identities for random revisit",
 	"empty.trashLoading": "Loading trash",
 	"empty.trashFailed": "Trash failed to load",
 	"empty.trashEmptyTitle": "Trash is empty",

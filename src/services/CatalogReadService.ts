@@ -54,10 +54,22 @@ export interface CatalogReadServiceOptions {
 	random?: () => number;
 }
 
+interface RandomReunionPreparationOptions {
+	prepareIdentity?: (candidate: CatalogMemoItem) => Promise<CatalogMemoItem>;
+	onPreparingIdentity?: () => void;
+}
+
+interface RandomReunionCandidatePool {
+	catalogRevision: number;
+	observations: CatalogObservation[];
+}
+
 export class CatalogReadService {
 	private readonly now: () => Date;
 	private readonly random: () => number;
 	private lastReadState: CatalogReadState | null = null;
+	private randomReunionCandidatePool: RandomReunionCandidatePool | null = null;
+	private randomReunionCandidatePoolLoad: Promise<RandomReunionCandidatePool> | null = null;
 
 	constructor(private readonly options: CatalogReadServiceOptions) {
 		this.now = options.now ?? (() => new Date());
@@ -349,32 +361,58 @@ export class CatalogReadService {
 		return null;
 	}
 
-	async getRandomReunionItems(count: number): Promise<MemoViewItem[]> {
+	async getRandomReunionItems(
+		count: number,
+		preparation: RandomReunionPreparationOptions = {},
+	): Promise<MemoViewItem[]> {
 		await this.requireCompleteCoverage("Random reunion");
-		const today = formatDatePart(this.now());
-		const aggregates = (await this.options.catalog.listDailyAggregates())
-			.filter((item) => item.logicalDate < today && item.memoCount > 0);
-		await this.requireCompleteCoverage("Random reunion");
-		const candidates: CatalogMemoItem[] = [];
-		for (const date of sampleDates(aggregates.map((item) => item.logicalDate), 24, this.random)) {
-			candidates.push(...await this.queryAllItems({ fromDate: date, toDate: date, limit: 150 }));
+		while (true) {
+			const pool = await this.loadRandomReunionCandidatePool();
+			const coverage = await this.requireCompleteCoverage("Random reunion");
+			const today = formatDatePart(this.now());
+			const catalogCapabilities = createCatalogCapabilities(coverage);
+			const candidates = pool.observations
+				.filter((observation) => observation.logicalDate < today)
+				.map((observation) => this.toMemoItem(this.resolveObservation(observation), catalogCapabilities));
+			const eligibleCandidates = candidates.filter((candidate) => isRandomReunionReviewable(candidate)
+				|| (preparation.prepareIdentity !== undefined && isRandomReunionAdoptable(candidate)));
+			const reviews: MemoReviewStateMap = {};
+			for (const candidate of eligibleCandidates) {
+				if (candidate.memoId === null) continue;
+				const review = this.options.identityLedger.getReviewState(candidate.memoId);
+				reviews[candidate.memoId] = review.lastReviewedAt === null
+					? { memoId: candidate.memoId, reviewCount: review.reviewCount }
+					: { memoId: candidate.memoId, reviewCount: review.reviewCount, lastReviewedAt: review.lastReviewedAt };
+			}
+			const candidateItems = new Map(eligibleCandidates.map((candidate) => [candidate.key, candidate]));
+			const selected = getRandomReunionMemos(eligibleCandidates.map(toCatalogMemoView), reviews, count, {
+				today: this.now(),
+				random: this.random,
+			});
+			if (!await this.isRandomReunionCandidatePoolCurrent(pool)) {
+				if (this.randomReunionCandidatePool === pool) this.randomReunionCandidatePool = null;
+				continue;
+			}
+			const needsIdentity = selected.some((memo) => {
+				const candidate = candidateItems.get(memo.id);
+				return candidate !== undefined && !isRandomReunionReviewable(candidate);
+			});
+			if (needsIdentity) preparation.onPreparingIdentity?.();
+			const prepared: MemoViewItem[] = [];
+			for (const memo of selected) {
+				const candidate = candidateItems.get(memo.id);
+				if (candidate === undefined) continue;
+				const ready = isRandomReunionReviewable(candidate)
+					? candidate
+					: await preparation.prepareIdentity?.(candidate);
+				if (ready === undefined || !isRandomReunionReviewable(ready)) {
+					throw new Error("Random reunion identity preparation did not produce a reviewable memo.");
+				}
+				prepared.push(toCatalogMemoView(ready));
+			}
+			await this.requireCompleteCoverage("Random reunion");
+			return prepared;
 		}
-		await this.requireCompleteCoverage("Random reunion");
-		const reviewableCandidates = candidates.filter((candidate) => candidate.memoId !== null
-			&& candidate.identityHandle !== null
-			&& candidate.capabilities.identity.review === "ready");
-		const reviews: MemoReviewStateMap = {};
-		for (const candidate of reviewableCandidates) {
-			if (candidate.memoId === null) continue;
-			const review = this.options.identityLedger.getReviewState(candidate.memoId);
-			reviews[candidate.memoId] = review.lastReviewedAt === null
-				? { memoId: candidate.memoId, reviewCount: review.reviewCount }
-				: { memoId: candidate.memoId, reviewCount: review.reviewCount, lastReviewedAt: review.lastReviewedAt };
-		}
-		return getRandomReunionMemos(reviewableCandidates.map(toCatalogMemoView), reviews, count, {
-			today: this.now(),
-			random: this.random,
-		});
 	}
 
 	async listDailyAggregates() {
@@ -405,6 +443,12 @@ export class CatalogReadService {
 		const observation = await this.options.catalog.getObservation(observationKey);
 		if (observation === null) throw new Error("Memo observation is no longer present in its Daily note.");
 		return this.resolveObservation(observation);
+	}
+
+	async resolveMemoItemInFile(sourcePath: string, startLine: number): Promise<CatalogMemoItem> {
+		const resolved = await this.resolveObservationInFile(sourcePath, startLine);
+		const coverage = await this.options.catalog.getStore().getCoverage();
+		return this.toMemoItem(resolved, createCatalogCapabilities(coverage));
 	}
 
 	async materializeResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
@@ -626,6 +670,68 @@ export class CatalogReadService {
 		return items;
 	}
 
+	private async loadRandomReunionCandidatePool(): Promise<RandomReunionCandidatePool> {
+		if (this.randomReunionCandidatePool !== null) return this.randomReunionCandidatePool;
+		if (this.randomReunionCandidatePoolLoad !== null) return this.randomReunionCandidatePoolLoad;
+		const load = this.buildRandomReunionCandidatePool();
+		this.randomReunionCandidatePoolLoad = load;
+		try {
+			return await load;
+		} finally {
+			if (this.randomReunionCandidatePoolLoad === load) {
+				this.randomReunionCandidatePoolLoad = null;
+			}
+		}
+	}
+
+	private async buildRandomReunionCandidatePool(): Promise<RandomReunionCandidatePool> {
+		while (true) {
+			let page = await this.queryRandomReunionObservations(null, 150);
+			this.requireRandomReunionCoverage(page.coverage);
+			const catalogRevision = page.catalogRevision;
+			const observations = [...page.items];
+			let invalidated = page.invalidated;
+			while (!invalidated && page.nextCursor !== null) {
+				page = await this.queryRandomReunionObservations(page.nextCursor, 150);
+				if (page.invalidated || page.catalogRevision !== catalogRevision) {
+					invalidated = true;
+					break;
+				}
+				this.requireRandomReunionCoverage(page.coverage);
+				observations.push(...page.items);
+			}
+			if (invalidated) continue;
+			const verification = await this.queryRandomReunionObservations(null, 1);
+			this.requireRandomReunionCoverage(verification.coverage);
+			if (verification.catalogRevision !== catalogRevision) continue;
+			const pool = { catalogRevision, observations };
+			this.randomReunionCandidatePool = pool;
+			return pool;
+		}
+	}
+
+	private async isRandomReunionCandidatePoolCurrent(pool: RandomReunionCandidatePool): Promise<boolean> {
+		const page = await this.queryRandomReunionObservations(null, 1);
+		this.requireRandomReunionCoverage(page.coverage);
+		return page.catalogRevision === pool.catalogRevision;
+	}
+
+	private async queryRandomReunionObservations(
+		cursor: CatalogQueryPage["nextCursor"],
+		limit: number,
+	): Promise<CatalogQueryPage> {
+		try {
+			return await this.options.catalog.query({ limit, cursor });
+		} catch (error) {
+			void Promise.resolve().then(() => this.options.requestObservationScan?.()).catch(() => undefined);
+			throw error;
+		}
+	}
+
+	private requireRandomReunionCoverage(coverage: CatalogCoverage): void {
+		if (!isCompleteCoverage(coverage)) throw new Error("Random reunion requires complete Catalog coverage.");
+	}
+
 	private async requireCompleteCoverage(feature: string): Promise<CatalogCoverage> {
 		const coverage = await this.options.catalog.getStore().getCoverage();
 		if (!isCompleteCoverage(coverage)) throw new Error(`${feature} requires complete Catalog coverage.`);
@@ -747,6 +853,16 @@ function isRangeCovered(coverage: CatalogCoverage, fromDate: string, toDate: str
 		|| (coverage.coveredFromDate !== null && fromDate >= coverage.coveredFromDate);
 }
 
+function isRandomReunionReviewable(candidate: CatalogMemoItem): boolean {
+	return candidate.memoId !== null
+		&& candidate.identityHandle !== null
+		&& candidate.capabilities.identity.review === "ready";
+}
+
+function isRandomReunionAdoptable(candidate: CatalogMemoItem): boolean {
+	return candidate.resolved.kind === "observed" && candidate.resolved.adoption === "eligible";
+}
+
 function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): {
 	query: Omit<CatalogFeatureQuery, "limit" | "cursor">;
 	fromDate: string;
@@ -829,15 +945,4 @@ function sumAggregates(
 	getValue: (aggregate: CatalogDailyAggregate) => number,
 ): number {
 	return aggregates.reduce((total, aggregate) => total + getValue(aggregate), 0);
-}
-
-function sampleDates(dates: readonly string[], count: number, random: () => number): string[] {
-	const remaining = [...dates];
-	const result: string[] = [];
-	while (result.length < count && remaining.length > 0) {
-		const index = Math.min(Math.floor(random() * remaining.length), remaining.length - 1);
-		result.push(remaining[index] as string);
-		remaining.splice(index, 1);
-	}
-	return result;
 }

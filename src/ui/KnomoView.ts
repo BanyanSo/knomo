@@ -758,9 +758,10 @@ export class KnomoView extends ItemView {
 			},
 		});
 		this.randomReunionController = new RandomReunionController({
-			prepareCatalogData: async () => undefined,
-			getMemos: () => this.memos,
-			getRandomReunionMemos: (count) => this.catalogReadService.getRandomReunionItems(count),
+			loadRandomReunionMemos: (count, onPreparingIdentity) => this.catalogReadService.getRandomReunionItems(count, {
+				prepareIdentity: (candidate) => this.memoCommandService.adoptMemo(candidate),
+				onPreparingIdentity,
+			}),
 			openRandomReunionMemo: async (memo) => {
 				const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
 				if (!(file instanceof TFile)) throw new Error(t("error.dailyNoteMissing"));
@@ -768,9 +769,8 @@ export class KnomoView extends ItemView {
 			},
 			markRandomReunionReviewed: async (memoId) => {
 				const memo = this.findMemoById(memoId);
-				if (memo !== null && isCatalogMemoView(memo)) {
-					await this.memoCommandService.recordReview(await this.resolveCatalogMemo(memo));
-				}
+				if (memo === null || !isCatalogMemoView(memo)) throw new Error("Random reunion memo identity is unavailable.");
+				await this.memoCommandService.recordReview(await this.resolveCatalogMemo(memo));
 			},
 			isRandomActive: () => this.activeNav === "random",
 			showNotice: (message) => new Notice(message),
@@ -1072,7 +1072,7 @@ export class KnomoView extends ItemView {
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
 			await this.timeBuoyViewController.loadTodayOnly();
 		}
-		if (this.activeNav === "random") {
+		if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
 			await this.randomReunionController.refresh();
 		} else if (this.activeNav === "shuffleDay") {
 			this.shuffleDayController.reconcileWithMemos();
@@ -1500,9 +1500,6 @@ export class KnomoView extends ItemView {
 			if (forceRebuild) {
 				this.resetVisibleMemos();
 			}
-			if (this.activeNav === "random" && !this.randomReunionController.getSnapshot().loading) {
-				this.randomReunionController.clearMemos();
-			}
 			if (this.activeNav === "shuffleDay") {
 				this.shuffleDayController.reconcileWithMemos();
 			}
@@ -1529,10 +1526,6 @@ export class KnomoView extends ItemView {
 		} else {
 			this.renderCardFlowIfChanged(previousCardFlowKey);
 			this.renderMobileSearchResultsIfChanged(previousMobileSearchKey);
-		}
-		const randomSnapshot = this.randomReunionController.getSnapshot();
-		if (this.activeNav === "random" && !randomSnapshot.loading && randomSnapshot.memos === null) {
-			void this.randomReunionController.refresh();
 		}
 		if (loaded && loadAll) {
 			if (this.activeNav === "record-stats") {
@@ -1806,17 +1799,10 @@ export class KnomoView extends ItemView {
 			this.invalidateMemoSearchCache();
 			this.retainMemoCardPreviews();
 			this.resetVisibleMemos();
-			if (this.activeNav === "random" && !this.randomReunionController.getSnapshot().loading) {
-				this.randomReunionController.clearMemos();
-			}
 			if (this.activeNav === "shuffleDay") {
 				this.shuffleDayController.reconcileWithMemos();
 			}
 			this.renderUiState();
-			const randomSnapshot = this.randomReunionController.getSnapshot();
-			if (this.activeNav === "random" && !randomSnapshot.loading && randomSnapshot.memos === null) {
-				void this.randomReunionController.refresh();
-			}
 		} catch (error) {
 			if (
 				sourceGeneration !== this.memoSourceGeneration
@@ -2641,8 +2627,7 @@ export class KnomoView extends ItemView {
 		const trashSnapshot = this.trashMemoController.getSnapshot();
 		const shouldLoadListMemos = this.cardFlowError === null
 			&& this.activeNav !== "trash"
-			&& this.activeNav !== "shuffleDay"
-			&& !(this.activeNav === "random" && randomSnapshot.loading);
+			&& this.activeNav !== "shuffleDay";
 		const todayItems = this.getTodayTimeBuoyItems();
 		const memos = shouldLoadListMemos
 			? mergeTodayTimeBuoyFeed(this.getFilteredMemos(), todayItems)
@@ -2650,7 +2635,8 @@ export class KnomoView extends ItemView {
 		let presentation = getCardFlowPresentation({
 			cardFlowError: this.activeNav === "shuffleDay" ? null : this.cardFlowError,
 			activeNav: this.activeNav,
-			randomReunionLoading: randomSnapshot.loading,
+			randomReunionStatus: randomSnapshot.status,
+			randomReunionError: randomSnapshot.error,
 			shuffleDay: shuffleDaySnapshot,
 			memos,
 			regularFilterCopy: shouldLoadListMemos && this.activeNav === "all" ? getRegularFilterCopy({

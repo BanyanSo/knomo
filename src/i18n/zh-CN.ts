@@ -192,6 +192,7 @@ export const zhCN = {
 	"empty.allMemosRetry": "重新加载",
 	"empty.cardFlowFailed": "卡片流刷新失败",
 	"empty.randomLoading": "正在寻找可以随机重逢的 Memos",
+	"empty.randomPreparingIdentity": "正在为随机重逢准备 Memo 身份",
 	"empty.trashLoading": "正在加载回收站",
 	"empty.trashFailed": "回收站加载失败",
 	"empty.trashEmptyTitle": "回收站为空",

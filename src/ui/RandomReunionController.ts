@@ -4,15 +4,22 @@ import { formatServiceError } from "../utils/serviceText";
 
 const RANDOM_REUNION_DEFAULT_COUNT = 5;
 
+export type RandomReunionStatus =
+	| "idle"
+	| "loading-candidates"
+	| "preparing-identity"
+	| "ready"
+	| "empty"
+	| "failed";
+
 export interface RandomReunionSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	memos: TMemo[] | null;
-	loading: boolean;
+	status: RandomReunionStatus;
+	error: string | null;
 }
 
 interface RandomReunionControllerOptions<TMemo extends MemoRecord> {
-	prepareCatalogData: () => Promise<void>;
-	getMemos: () => TMemo[];
-	getRandomReunionMemos: (count: number, memos: TMemo[]) => Promise<TMemo[]>;
+	loadRandomReunionMemos: (count: number, onPreparingIdentity: () => void) => Promise<TMemo[]>;
 	openRandomReunionMemo: (memo: TMemo) => Promise<void>;
 	markRandomReunionReviewed: (memoId: string) => Promise<void>;
 	isRandomActive: () => boolean;
@@ -22,7 +29,9 @@ interface RandomReunionControllerOptions<TMemo extends MemoRecord> {
 
 export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	private memos: TMemo[] | null = null;
-	private loading = false;
+	private status: RandomReunionStatus = "idle";
+	private error: string | null = null;
+	private runId = 0;
 	private readonly openingMemoIds = new Set<string>();
 
 	constructor(private readonly options: RandomReunionControllerOptions<TMemo>) {}
@@ -30,35 +39,52 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	getSnapshot(): RandomReunionSnapshot<TMemo> {
 		return {
 			memos: this.memos,
-			loading: this.loading,
+			status: this.status,
+			error: this.error,
 		};
 	}
 
 	clearMemos(): void {
+		this.runId += 1;
 		this.memos = null;
+		this.status = "idle";
+		this.error = null;
 	}
 
 	async refresh(): Promise<void> {
-		if (this.loading) {
+		if (this.status === "loading-candidates" || this.status === "preparing-identity") {
 			return;
 		}
-		this.loading = true;
-		this.memos = null;
+		const runId = ++this.runId;
+		const previousMemos = this.memos;
+		this.status = "loading-candidates";
+		this.error = null;
 		if (this.options.isRandomActive()) {
 			this.options.requestRender();
 		}
 		try {
-			await this.options.prepareCatalogData();
-			this.memos = await this.options.getRandomReunionMemos(
+			const memos = await this.options.loadRandomReunionMemos(
 				RANDOM_REUNION_DEFAULT_COUNT,
-				this.options.getMemos(),
+				() => this.setPreparingIdentity(runId),
 			);
+			if (runId !== this.runId) return;
+			this.memos = memos;
+			this.status = this.memos.length === 0 ? "empty" : "ready";
 		} catch (error) {
-			this.memos = [];
-			this.options.showNotice(formatServiceError(error, t("error.randomLoadFailed")));
+			if (runId !== this.runId) return;
+			const message = formatServiceError(error, t("error.randomLoadFailed"));
+			this.options.showNotice(message);
+			if (previousMemos !== null && previousMemos.length > 0) {
+				this.memos = previousMemos;
+				this.status = "ready";
+				this.error = null;
+			} else {
+				this.memos = null;
+				this.status = "failed";
+				this.error = message;
+			}
 		} finally {
-			this.loading = false;
-			if (this.options.isRandomActive()) {
+			if (runId === this.runId && this.options.isRandomActive()) {
 				this.options.requestRender();
 			}
 		}
@@ -87,6 +113,14 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 			}
 		} finally {
 			this.openingMemoIds.delete(memoId);
+		}
+	}
+
+	private setPreparingIdentity(runId: number): void {
+		if (runId !== this.runId || this.status !== "loading-candidates") return;
+		this.status = "preparing-identity";
+		if (this.options.isRandomActive()) {
+			this.options.requestRender();
 		}
 	}
 }

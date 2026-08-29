@@ -103,38 +103,7 @@ test("1.2.9 搜索、父标签、回顾和全库统计期望可从同一 fixture
 	assert.equal(fixture.expectations.randomReview.reviewCountAfterSuccessfulOpen, fixture.expectations.randomReview.reviewCountBeforeOpen + 1);
 });
 
-test("Catalog 协议和验收矩阵冻结批次 0 的产品决策", () => {
-	const protocol = fs.readFileSync("architecture/catalog/protocol.md", "utf8");
-	const acceptance = fs.readFileSync("architecture/catalog/acceptance.md", "utf8");
-	const requiredAcceptanceIds = [
-		"CAT-MIG-007",
-		"CAT-PURGE-001",
-		"CAT-LOCALE-001",
-		"CAT-EXCLUDE-001",
-		"CAT-QUERY-001",
-		"CAT-QUERY-002",
-		"CAT-TAG-001",
-		"CAT-PAGE-001",
-		"CAT-SUMMARY-001",
-		"CAT-REVIEW-001",
-		"CAT-RANDOM-001",
-		"CAT-STATS-001",
-		"CAT-RANGE-001",
-		"CAT-TIMEBUOY-001",
-		"CAT-A11Y-001",
-		"CAT-LIFECYCLE-001",
-	];
-
-	for (const acceptanceId of requiredAcceptanceIds) {
-		assert.equal(acceptance.includes(`| ${acceptanceId} |`), true, `${acceptanceId} must remain in the acceptance matrix.`);
-	}
-	assert.equal(protocol.includes("Monthly 标题及其他 locale 相关输出只使用共享配置中的 `locale`"), true);
-	assert.equal(protocol.includes("自动为对应 `memoId` 追加一次 review"), true);
-	assert.equal(protocol.includes("不提供专属手动重建入口"), true);
-	assert.equal(protocol.includes("不自动删除目录或旧 Monthly 文件"), true);
-	assert.equal(protocol.includes("永久清理不得再次修改 Daily"), true);
-	assert.equal(protocol.includes("purge tombstone 不携带正文"), true);
-	assert.equal(protocol.includes("随机卡片不再提供手动“标记已回顾”"), true);
+test("Catalog 批次 0 的有意行为差异保持稳定", () => {
 	assert.deepEqual(fixture.intentionalDifferences, {
 		monthlyLocaleSource: "shared-config",
 		randomReviewTrigger: "successful-card-open",

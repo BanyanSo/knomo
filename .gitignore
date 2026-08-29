@@ -17,10 +17,4 @@ knomo-assets/
 .claude/
 .codex/
 docs/
-architecure/
-!docs/
-docs/*
-!docs/architecture/
-docs/architecture/*
-!docs/architecture/catalog/
-!docs/architecture/catalog/**
+/architecture/

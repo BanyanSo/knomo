@@ -89,6 +89,7 @@ export interface CatalogMemoPage {
 	items: CatalogMemoItem[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
+	identityRevision: string;
 	coverage: CatalogCoverage;
 	lifecycle: CatalogStoreLifecycle;
 	capabilities: CatalogCapabilities;

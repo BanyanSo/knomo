@@ -25,6 +25,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 			memos: await (load?.promise ?? []),
 			nextCursor: null,
 			catalogRevision: 1,
+			identityRevision: "identity-1",
 			coverage: { kind: "complete", coveredFromDate: "2026-08-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 },
 			readState: "ready",
 			status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
@@ -49,6 +50,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	};
 	view.shuffleDayController = { reconcileWithMemos: () => undefined };
 	view.refreshCatalogLibraryIndexes = async () => undefined;
+	view.syncRecordStatsSource = () => undefined;
 
 	const firstRun = view.reloadMemos(false, true);
 	const secondRun = view.reloadMemos(false, true);
@@ -74,7 +76,8 @@ test("查询 fingerprint 变化时清空旧结果和 cursor，并启动新请求
 	view.catalogCursor = { catalog: { catalogRevision: 1, createdAtKey: "review", observationKey: "review" } };
 	view.memos = [makeMemo("review-subset", "2026-08-24T10:00:00")];
 	view.getCatalogQueryFingerprint = () => fingerprint;
-	view.invalidateRecordStats = () => undefined;
+	let recordStatsInvalidations = 0;
+	view.invalidateRecordStats = () => { recordStatsInvalidations += 1; };
 	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
@@ -94,10 +97,70 @@ test("查询 fingerprint 变化时清空旧结果和 cursor，并启动新请求
 	assert.deepEqual(view.memos, []);
 	assert.equal(view.catalogCursor, null);
 	assert.notEqual(reviewRequest, allRequest);
+	assert.equal(recordStatsInvalidations, 0);
 	second.resolve(true);
 	assert.equal(await allRequest, true);
 	first.resolve(false);
 	assert.equal(await reviewRequest, false);
+});
+
+test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	let currentSource = "catalog:uninitialized";
+	let invalidationCount = 0;
+	view.catalogRevision = 0;
+	view.catalogIdentityRevision = "";
+	view.catalogCoverage = null;
+	view.libraryIndexRevision = 7;
+	view.librarySummary = { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 };
+	view.libraryTagFacets = [];
+	view.recordStatsPreparationController = {
+		setSourceKey: (source) => {
+			if (source === currentSource) return false;
+			currentSource = source;
+			return true;
+		},
+	};
+	view.recordStatsService = { invalidate: () => { invalidationCount += 1; } };
+	view.refreshCatalogLibraryIndexes = async () => undefined;
+
+	const load = makeCatalogLoad(7, "identity-1", completeCoverage());
+	view.applyCatalogMemoLoad(load);
+	assert.equal(invalidationCount, 1);
+	assert.equal(currentSource, "catalog:7:identity:identity-1:coverage:complete");
+
+	view.applyCatalogMemoLoad({ ...load, memos: [makeMemo("same-source", "2026-08-24T10:00:00")] });
+	assert.equal(invalidationCount, 1);
+
+	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8 });
+	assert.equal(invalidationCount, 2);
+	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8, identityRevision: "identity-2" });
+	assert.equal(invalidationCount, 3);
+	view.applyCatalogMemoLoad({
+		...load,
+		catalogRevision: 8,
+		identityRevision: "identity-2",
+		coverage: { ...completeCoverage(), kind: "partial", pendingFileCount: 1 },
+	});
+	assert.equal(invalidationCount, 4);
+	assert.equal(currentSource, "catalog:8:identity:identity-2:coverage:incomplete");
+});
+
+test("空库加载占位即使状态键未变化也会渲染暂无内容终态", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	let renderCount = 0;
+	view.cardFlowCoordinator = { deferredForAllMemos: true };
+	view.cardFlowEl = { childElementCount: 1 };
+	view.getCardFlowStateKey = () => "empty-library";
+	view.renderCardFlow = () => { renderCount += 1; };
+
+	view.renderCardFlowIfChanged("empty-library");
+
+	assert.equal(renderCount, 1);
 });
 
 test("coverage 降级立即废弃旧完整统计，恢复后按当前 revision 重取", async () => {
@@ -119,6 +182,7 @@ test("coverage 降级立即废弃旧完整统计，恢复后按当前 revision �
 	view.libraryTagFacets = [{ key: "old", label: "Old", count: 9 }];
 	view.renderStats = () => undefined;
 	view.renderTags = () => undefined;
+	view.syncRecordStatsSource = () => undefined;
 	view.getCatalogReadService = () => ({
 		getLibrarySummary: () => {
 			const load = summaryLoads.shift();
@@ -194,8 +258,9 @@ interface QueryView {
 	viewStateController: { activeNav: "all" };
 	memoLoadingPromise: Promise<boolean> | null;
 	memoLoadingFingerprint: string | null;
-	catalogCoverage: TestCoverage;
+	catalogCoverage: TestCoverage | null;
 	catalogRevision: number;
+	catalogIdentityRevision: string;
 	libraryIndexRevision: number;
 	libraryIndexRun: number;
 	libraryIndexesInvalidatedByCoverage: boolean;
@@ -206,6 +271,8 @@ interface QueryView {
 	loadCatalogMemos: (loadAll: boolean) => Promise<{
 		memos: QueryMemo[];
 		nextCursor: null;
+		catalogRevision: number;
+		identityRevision: string;
 		coverage: { kind: "complete"; coveredFromDate: string; pendingFileCount: number; coveredFileCount: number; totalFileCount: number };
 		readState: "ready";
 		status: { content: "ready"; catalog: "complete"; identity: "ready"; projection: "ready"; migration: "none" };
@@ -236,6 +303,13 @@ interface QueryView {
 	};
 	shuffleDayController: { reconcileWithMemos: () => void };
 	refreshCatalogLibraryIndexes: () => Promise<void>;
+	syncRecordStatsSource: () => void;
+	applyCatalogMemoLoad: (load: TestCatalogMemoLoad) => void;
+	recordStatsPreparationController: { setSourceKey: (source: string) => boolean };
+	recordStatsService: { invalidate: () => void };
+	cardFlowCoordinator: { deferredForAllMemos: boolean };
+	cardFlowEl: { childElementCount: number } | null;
+	renderCardFlow: () => void;
 	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
 	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
 	updateCatalogProgress: (coverage: TestCoverage) => void;
@@ -259,6 +333,16 @@ type AggregateFacets = {
 	value: Array<{ key: string; label: string; count: number }> | null;
 	complete: boolean;
 	coverage: TestCoverage;
+};
+
+type TestCatalogMemoLoad = {
+	memos: QueryMemo[];
+	nextCursor: null;
+	catalogRevision: number;
+	identityRevision: string;
+	coverage: TestCoverage;
+	readState: "ready";
+	status: { content: "ready"; catalog: "complete"; identity: "ready"; projection: "ready"; migration: "none" };
 };
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -298,6 +382,22 @@ function completeCoverage(): TestCoverage {
 		pendingFileCount: 0,
 		coveredFileCount: 1,
 		totalFileCount: 1,
+	};
+}
+
+function makeCatalogLoad(
+	catalogRevision: number,
+	identityRevision: string,
+	coverage: TestCoverage,
+): TestCatalogMemoLoad {
+	return {
+		memos: [],
+		nextCursor: null,
+		catalogRevision,
+		identityRevision,
+		coverage,
+		readState: "ready",
+		status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
 	};
 }
 

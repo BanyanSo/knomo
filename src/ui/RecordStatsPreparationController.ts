@@ -16,7 +16,7 @@ interface ScheduleRecordStatsOptions {
 }
 
 export class RecordStatsPreparationController {
-	private sourceRevision = 0;
+	private sourceKeyValue = "catalog:uninitialized";
 	private prepareTaskId: number | null = null;
 	private requestPromise: Promise<boolean> | null = null;
 	private requestInvalidated = false;
@@ -27,15 +27,23 @@ export class RecordStatsPreparationController {
 	}
 
 	get sourceKey(): string {
-		return `catalog:${this.sourceRevision}`;
+		return this.sourceKeyValue;
 	}
 
 	hasActiveRequest(): boolean {
 		return this.requestPromise !== null;
 	}
 
+	setSourceKey(sourceKey: string): boolean {
+		if (sourceKey === this.sourceKeyValue) {
+			return false;
+		}
+		this.sourceKeyValue = sourceKey;
+		this.invalidate();
+		return true;
+	}
+
 	invalidate(): void {
-		this.sourceRevision += 1;
 		this.clearScheduledPreparation();
 		if (this.requestPromise !== null) {
 			this.requestInvalidated = true;

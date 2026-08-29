@@ -207,6 +207,7 @@ interface CatalogMemoLoad {
 	memos: MemoRecord[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
+	identityRevision: string;
 	coverage: CatalogCoverage;
 	readState: CatalogReadState;
 	status: CatalogReadStatus;
@@ -324,6 +325,7 @@ export class KnomoView extends ItemView {
 	private catalogMobileCursor: CatalogFeatureCursor | null = null;
 	private catalogMobileQueryRun = 0;
 	private catalogRevision = 0;
+	private catalogIdentityRevision = "";
 	private catalogDesktopQueryFingerprint: string | null = null;
 	private libraryIndexRevision = -1;
 	private libraryIndexRun = 0;
@@ -1491,7 +1493,6 @@ export class KnomoView extends ItemView {
 			}
 			this.applyCatalogMemoLoad(load);
 			this.memos = load.memos;
-			this.invalidateRecordStats();
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
@@ -1513,7 +1514,6 @@ export class KnomoView extends ItemView {
 				return false;
 			}
 			this.memos = [];
-			this.invalidateRecordStats();
 			this.invalidateMemoSearchCache();
 			this.retainMemoCardPreviews();
 			this.cardFlowError = formatServiceError(error, t("empty.cardFlowFailed"));
@@ -1565,6 +1565,7 @@ export class KnomoView extends ItemView {
 			readState: page.readState,
 			status: page.status,
 			catalogRevision: page.catalogRevision,
+			identityRevision: page.identityRevision,
 		};
 	}
 
@@ -1574,6 +1575,8 @@ export class KnomoView extends ItemView {
 		this.catalogReadState = load.readState;
 		this.catalogStatus = load.status;
 		this.catalogRevision = load.catalogRevision;
+		this.catalogIdentityRevision = load.identityRevision;
+		this.syncRecordStatsSource();
 		if (this.libraryIndexRevision !== load.catalogRevision || this.librarySummary === null || this.libraryTagFacets === null) {
 			void this.refreshCatalogLibraryIndexes();
 		}
@@ -1581,6 +1584,7 @@ export class KnomoView extends ItemView {
 
 	updateCatalogProgress(coverage: CatalogCoverage): void {
 		this.catalogCoverage = { ...coverage };
+		this.syncRecordStatsSource();
 		if (!isCompleteCatalogCoverage(coverage)) {
 			const shouldRender = !this.libraryIndexesInvalidatedByCoverage
 				|| this.librarySummary !== null
@@ -1635,6 +1639,8 @@ export class KnomoView extends ItemView {
 			this.catalogReadState = page.readState;
 			this.catalogStatus = page.status;
 			this.catalogRevision = page.catalogRevision;
+			this.catalogIdentityRevision = page.identityRevision;
+			this.syncRecordStatsSource();
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
 			this.forceRebuildCardFlow();
@@ -1704,6 +1710,8 @@ export class KnomoView extends ItemView {
 		this.catalogReadState = page.readState;
 		this.catalogStatus = page.status;
 		this.catalogRevision = page.catalogRevision;
+		this.catalogIdentityRevision = page.identityRevision;
+		this.syncRecordStatsSource();
 		this.invalidateMemoSearchCache();
 		this.retainMemoCardPreviews();
 	}
@@ -1751,7 +1759,6 @@ export class KnomoView extends ItemView {
 		this.memos = [];
 		this.cardFlowError = null;
 		this.filteredMemosCache = null;
-		this.invalidateRecordStats();
 		this.invalidateMemoSearchCache();
 		this.retainMemoCardPreviews();
 		this.resetVisibleMemos();
@@ -1794,7 +1801,6 @@ export class KnomoView extends ItemView {
 			}
 			this.applyCatalogMemoLoad(load);
 			this.memos = load.memos;
-			this.invalidateRecordStats();
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
@@ -5577,6 +5583,16 @@ export class KnomoView extends ItemView {
 		this.recordStatsService.invalidate();
 	}
 
+	private syncRecordStatsSource(): void {
+		const coverage = this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage)
+			? "complete"
+			: "incomplete";
+		const source = `catalog:${this.catalogRevision}:identity:${this.catalogIdentityRevision}:coverage:${coverage}`;
+		if (this.recordStatsPreparationController.setSourceKey(source)) {
+			this.recordStatsService.invalidate();
+		}
+	}
+
 	private clearRecordStatsPreparation(): void {
 		this.recordStatsPreparationController.clearScheduledPreparation();
 	}
@@ -5700,7 +5716,8 @@ export class KnomoView extends ItemView {
 		if (
 			this.cardFlowEl !== null
 			&& (
-				this.cardFlowEl.childElementCount === 0
+				this.cardFlowDeferredForAllMemos
+				|| this.cardFlowEl.childElementCount === 0
 				|| previousKey !== this.getCardFlowStateKey()
 			)
 		) {

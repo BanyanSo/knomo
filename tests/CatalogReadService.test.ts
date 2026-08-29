@@ -29,6 +29,7 @@ test("Catalog observation 在 Identity Ledger 关系到达后原地获得 memoId
 	const before = await service.query({ limit: 50 });
 	assert.equal(before.items[0]?.memoId, null);
 	assert.equal(before.items[0]?.resolved.kind, "observed");
+	assert.equal(before.identityRevision, "identity-absent");
 
 	const binding = makeBinding(observation, "2026082212345601", "identity-1");
 	identity.setState(observation.content, { kind: "identified", binding }, "ready", "identity-1");
@@ -38,6 +39,7 @@ test("Catalog observation 在 Identity Ledger 关系到达后原地获得 memoId
 	assert.equal(after.items[0]?.renderKey, before.items[0]?.renderKey);
 	assert.equal(after.items[0]?.memoId, binding.memoId);
 	assert.equal(after.items[0]?.resolved.kind, "identified");
+	assert.equal(after.identityRevision, "identity-1");
 });
 
 test("已识别 memo 的展示创建时间优先保留 Identity 秒数", async () => {

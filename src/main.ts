@@ -14,7 +14,10 @@ import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { DiaryMemoParser } from "./services/DiaryMemoParser";
 import { DailyMemoWriteGateway } from "./services/DailyMemoWriteGateway";
 import type { CatalogReadService } from "./services/CatalogReadService";
-import { MonthlyProjectionCoordinator } from "./services/MonthlyProjectionCoordinator";
+import {
+	MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+	MonthlyProjectionCoordinator,
+} from "./services/MonthlyProjectionCoordinator";
 import { MonthlyProjectionInputBuilder } from "./services/MonthlyProjectionInputBuilder";
 import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore";
 import { createIdentityLedgerWriterId, getIdentityLedgerRootPath } from "./services/IdentityLedgerProtocol";
@@ -26,7 +29,10 @@ import {
 } from "./services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "./services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
-import { LegacyIndexMigrationService } from "./services/LegacyIndexMigrationService";
+import {
+	LEGACY_MIGRATION_COMPLETION_META_KEY,
+	LegacyIndexMigrationService,
+} from "./services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
@@ -234,6 +240,10 @@ export default class KnomoPlugin extends Plugin {
 					);
 				},
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
+				preserveMetaKeysOnRebuild: [
+					LEGACY_MIGRATION_COMPLETION_META_KEY,
+					MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+				],
 				onCatalogSettled: async () => {
 					await this.legacyIndexMigrationService?.run();
 					await reconcileIdentityLedger();

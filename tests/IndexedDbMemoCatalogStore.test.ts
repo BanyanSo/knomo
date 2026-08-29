@@ -103,6 +103,42 @@ test("IndexedDB 使用真实索引完成 recent、搜索、筛选、分页和 ag
 	}
 });
 
+test("IndexedDB clear 原子保留指定服务元数据且重开后仍可读取", async () => {
+	const databaseName = uniqueDatabaseName("clear-preserved-meta");
+	const store = createStore(databaseName);
+	const legacyCompletion = { sourceId: "legacy-index", sourceRevision: "legacy-revision" };
+	const monthlyCheckpoint = { version: 1, pending: ["2026-08"], updatedAt: 123 };
+	await store.open();
+	try {
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", [
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 1, "09:00", "before rebuild"),
+		]));
+		await store.setMeta("legacyMigrationCompletion", legacyCompletion);
+		await store.setMeta("monthlyProjectionCheckpoint", monthlyCheckpoint);
+		await store.setMeta("catalog-derived-sentinel", { stale: true });
+
+		await store.clear(["legacyMigrationCompletion", "monthlyProjectionCheckpoint"]);
+
+		assert.deepEqual(await store.listFiles(), []);
+		assert.deepEqual(await store.getMeta("legacyMigrationCompletion"), legacyCompletion);
+		assert.deepEqual(await store.getMeta("monthlyProjectionCheckpoint"), monthlyCheckpoint);
+		assert.equal(await store.getMeta("catalog-derived-sentinel"), null);
+		store.close();
+
+		const reopened = createStore(databaseName);
+		await reopened.open();
+		try {
+			assert.deepEqual(await reopened.getMeta("legacyMigrationCompletion"), legacyCompletion);
+			assert.deepEqual(await reopened.getMeta("monthlyProjectionCheckpoint"), monthlyCheckpoint);
+		} finally {
+			reopened.close();
+		}
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
 test("CAT-QUERY-001 / CAT-TAG-001：IndexedDB 搜索保持子串语义，父标签包含嵌套标签", async () => {
 	const databaseName = uniqueDatabaseName("substring-parent-tag");
 	const store = createStore(databaseName);

@@ -42,7 +42,7 @@ export interface MemoCatalogStore {
 	deleteMeta(key: string): Promise<void>;
 	loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null>;
 	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void>;
-	clear(): Promise<void>;
+	clear(preserveMetaKeys?: readonly string[]): Promise<void>;
 }
 
 export class InMemoryMemoCatalogStore implements MemoCatalogStore {
@@ -239,12 +239,17 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		await this.setMeta("catalogResolutionSnapshot", snapshot);
 	}
 
-	async clear(): Promise<void> {
+	async clear(preserveMetaKeys: readonly string[] = []): Promise<void> {
+		const preservedMeta = new Map<string, unknown>();
+		for (const key of new Set(preserveMetaKeys)) {
+			if (this.metadata.has(key)) preservedMeta.set(key, this.metadata.get(key));
+		}
 		this.files.clear();
 		this.observations.clear();
 		this.observationsByFile.clear();
 		this.aggregates.clear();
 		this.metadata.clear();
+		for (const [key, value] of preservedMeta) this.metadata.set(key, value);
 		this.catalogRevision += 1;
 		this.coverage = { ...DEFAULT_CATALOG_COVERAGE };
 		this.capacityLimited = false;
@@ -394,7 +399,9 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void> {
 		return this.run((store) => store.saveResolutionSnapshot(snapshot));
 	}
-	clear(): Promise<void> { return this.run((store) => store.clear()); }
+	clear(preserveMetaKeys?: readonly string[]): Promise<void> {
+		return this.run((store) => store.clear(preserveMetaKeys));
+	}
 
 	private async run<T>(operation: (store: MemoCatalogStore) => Promise<T>): Promise<T> {
 		const active = this.getActive();

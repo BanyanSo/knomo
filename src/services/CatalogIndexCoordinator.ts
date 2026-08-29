@@ -68,6 +68,7 @@ export interface CatalogIndexCoordinatorOptions {
 	onCatalogSettled?: () => void | Promise<void>;
 	onRevisionTransition?: (transition: CatalogRevisionTransition) => void | Promise<void>;
 	onDailyPeriodsChanged?: (periods: readonly string[]) => void | Promise<void>;
+	preserveMetaKeysOnRebuild?: readonly string[];
 	isConfigurationComplete?: () => boolean;
 	dailyInventory?: DailyInventoryIndex;
 	workQueue?: LowPriorityWorkRunner;
@@ -86,6 +87,7 @@ export class CatalogIndexCoordinator {
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
 	private readonly onRevisionTransition: ((transition: CatalogRevisionTransition) => void | Promise<void>) | null;
 	private readonly onDailyPeriodsChanged: ((periods: readonly string[]) => void | Promise<void>) | null;
+	private readonly preserveMetaKeysOnRebuild: readonly string[];
 	private readonly isConfigurationComplete: () => boolean;
 	private readonly dailyInventory: DailyInventoryIndex | null;
 	private readonly workQueue: LowPriorityWorkRunner | null;
@@ -144,6 +146,7 @@ export class CatalogIndexCoordinator {
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
 		this.onRevisionTransition = options.onRevisionTransition ?? null;
 		this.onDailyPeriodsChanged = options.onDailyPeriodsChanged ?? null;
+		this.preserveMetaKeysOnRebuild = [...new Set(options.preserveMetaKeysOnRebuild ?? [])];
 		this.isConfigurationComplete = options.isConfigurationComplete ?? (() => true);
 		this.dailyInventory = options.dailyInventory ?? null;
 		this.workQueue = options.workQueue ?? null;
@@ -219,7 +222,11 @@ export class CatalogIndexCoordinator {
 		if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;
 		await this.runPathSerial(sourcePath, async () => {
 			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
-			await this.reconcileRevisionTransition(sourcePath, input.parsed.sourceRevision, input.parsed.observations);
+			const transition = await this.prepareRevisionTransition(
+				sourcePath,
+				input.parsed.sourceRevision,
+				input.parsed.observations,
+			);
 			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
 			await this.catalogService.replaceFile({
 				inventory,
@@ -229,6 +236,7 @@ export class CatalogIndexCoordinator {
 				settingsFingerprint: this.settingsFingerprint,
 				auditedAt: this.now(),
 			});
+			await this.notifyRevisionTransition(transition);
 			if (this.isStopped()) return;
 			this.upsertInventoryEntry(inventory);
 			this.setPathCovered(sourcePath, true);
@@ -246,7 +254,7 @@ export class CatalogIndexCoordinator {
 		if (this.isStopped()) throw new Error("Memo Catalog is not available.");
 		this.rebuilding = true;
 		try {
-			await this.catalogService.getStore().clear();
+			await this.catalogService.getStore().clear(this.preserveMetaKeysOnRebuild);
 			if (this.isStopped()) return;
 			this.inventoryByPath.clear();
 			this.coveredPaths.clear();
@@ -635,7 +643,7 @@ export class CatalogIndexCoordinator {
 					|| stored.settingsFingerprint !== this.settingsFingerprint
 					|| stored.mtime !== revision.mtime
 					|| stored.size !== revision.size) {
-					await this.reconcileRevisionTransition(
+					const transition = await this.prepareRevisionTransition(
 						sourcePath,
 						parsed.sourceRevision,
 						parsed.observations,
@@ -659,6 +667,7 @@ export class CatalogIndexCoordinator {
 						settingsFingerprint: this.settingsFingerprint,
 						auditedAt: this.now(),
 					});
+					await this.notifyRevisionTransition(transition);
 					if (!this.suppressScannedPeriodChanges) {
 						this.notifyDailyPeriodsChanged([inventory.logicalDate.slice(0, 7)]);
 					}
@@ -673,25 +682,33 @@ export class CatalogIndexCoordinator {
 		}
 	}
 
-	private async reconcileRevisionTransition(
+	private async prepareRevisionTransition(
 		sourcePath: string,
 		sourceRevision: string,
 		observations: readonly MemoObservation[],
 		isCurrent: () => boolean = () => true,
-	): Promise<void> {
-		if (this.onRevisionTransition === null) return;
+	): Promise<CatalogRevisionTransition | null> {
+		if (this.onRevisionTransition === null) return null;
 		try {
 			const before = await this.catalogService.getFileRevisionBatch(sourcePath);
-			if (this.isStopped() || !isCurrent() || before === null || before.file.sourceRevision === sourceRevision) return;
-			if (this.isStopped()) return;
-			await this.onRevisionTransition({
+			if (this.isStopped() || !isCurrent() || before === null || before.file.sourceRevision === sourceRevision) return null;
+			return {
 				sourcePath,
 				before: {
 					sourceRevision: before.file.sourceRevision,
 					observations: before.observations,
 				},
 				after: { sourceRevision, observations },
-			});
+			};
+		} catch {
+			return null;
+		}
+	}
+
+	private async notifyRevisionTransition(transition: CatalogRevisionTransition | null): Promise<void> {
+		if (transition === null || this.onRevisionTransition === null) return;
+		try {
+			await this.onRevisionTransition(transition);
 		} catch {
 			// 身份协调属于 Daily 提交后的 follow-up，失败不能阻止 Catalog 采用真实正文。
 		}

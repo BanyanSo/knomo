@@ -543,23 +543,31 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		return this.setMeta(RESOLUTION_SNAPSHOT_META, snapshot);
 	}
 
-	async clear(): Promise<void> {
+	async clear(preserveMetaKeys: readonly string[] = []): Promise<void> {
 		await this.open();
 		const transaction = this.getDatabase().transaction(
 			[FILES_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, AGGREGATES_STORE, META_STORE],
 			"readwrite",
 		);
 		const done = waitForTransaction(transaction);
-		const revisionRecord = await requestResult(transaction.objectStore(META_STORE).get(CATALOG_REVISION_META)) as
-			CatalogMetaRecord<number> | undefined;
+		const metaStore = transaction.objectStore(META_STORE);
+		const revisionRequest = requestResult(metaStore.get(CATALOG_REVISION_META)) as
+			Promise<CatalogMetaRecord<number> | undefined>;
+		const preservedRequests = [...new Set(preserveMetaKeys)].map((key) =>
+			requestResult(metaStore.get(key)) as Promise<CatalogMetaRecord<unknown> | undefined>);
+		const revisionRecord = await revisionRequest;
+		const preservedRecords = await Promise.all(preservedRequests);
 		for (const storeName of [FILES_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, AGGREGATES_STORE, META_STORE]) {
 			transaction.objectStore(storeName).clear();
 		}
-		transaction.objectStore(META_STORE).put({
+		for (const record of preservedRecords) {
+			if (record !== undefined) metaStore.put(record);
+		}
+		metaStore.put({
 			key: CATALOG_REVISION_META,
 			value: (revisionRecord?.value ?? 0) + 1,
 		} satisfies CatalogMetaRecord<number>);
-		transaction.objectStore(META_STORE).put({ key: COVERAGE_META, value: DEFAULT_CATALOG_COVERAGE } satisfies CatalogMetaRecord<CatalogCoverage>);
+		metaStore.put({ key: COVERAGE_META, value: DEFAULT_CATALOG_COVERAGE } satisfies CatalogMetaRecord<CatalogCoverage>);
 		await done;
 	}
 

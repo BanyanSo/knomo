@@ -35,7 +35,7 @@ const EMPTY_REPORT: LegacyIdentityImportReport = {
 
 const LEGACY_MIGRATION_EVENT_BATCH_SIZE = 128;
 const LEGACY_MIGRATION_WORK_PRIORITY = 20;
-const LEGACY_MIGRATION_COMPLETION_META_KEY = "legacyMigrationCompletion";
+export const LEGACY_MIGRATION_COMPLETION_META_KEY = "legacyMigrationCompletion";
 
 interface LegacyMigrationCompletion {
 	sourceId: string;

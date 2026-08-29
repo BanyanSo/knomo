@@ -748,6 +748,87 @@ test("解析中的旧扫描结果不能覆盖同路径刚完成的 Daily 直接�
 	}
 });
 
+test("Identity 回调执行期间的直接提交保持连续 revision 链", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const sourcePath = "Journal/2026-08-22.md";
+	const beforeContent = "## Memos\n- 09:00 before\n";
+	const scannedContent = "## Memos\n- 09:00 scanned\n";
+	const afterContent = "## Memos\n- 09:00 after\n";
+	const fixture = await createCoordinatorFixture([
+		{ path: sourcePath, content: beforeContent, mtime: 10 },
+	]);
+	let markTransitionStarted = (): void => undefined;
+	const transitionStarted = new Promise<void>((resolve) => { markTransitionStarted = resolve; });
+	let releaseTransition = (): void => undefined;
+	const transitionBlocked = new Promise<void>((resolve) => { releaseTransition = resolve; });
+	const transitions: CatalogRevisionTransition[] = [];
+	const store = new InMemoryMemoCatalogStore();
+	const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(store),
+		parser,
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		{
+			fullAuditIntervalMs: 10_000,
+			onRevisionTransition: async (transition) => {
+				if (transitions.length === 0) {
+					markTransitionStarted();
+					await transitionBlocked;
+				}
+				transitions.push(transition);
+			},
+		},
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+
+		fixture.setFile(sourcePath, scannedContent, 20);
+		const scannedFile = fixture.file(sourcePath);
+		assert.ok(scannedFile instanceof TFile);
+		fixture.emitVaultEvent("modify", scannedFile);
+		await transitionStarted;
+
+		fixture.setFile(sourcePath, afterContent, 30);
+		const committedFile = fixture.file(sourcePath);
+		assert.ok(committedFile instanceof TFile);
+		const parsed = parser.parseRevision({
+			sourcePath,
+			logicalDate: "2026-08-22",
+			content: afterContent,
+			sourceRevision: await sha256(Buffer.from(afterContent, "utf8")),
+		});
+		const committed = coordinator.replaceCommittedFile({
+			file: committedFile,
+			logicalDate: "2026-08-22",
+			content: afterContent,
+			parsed,
+		});
+		releaseTransition();
+		await committed;
+		await coordinator.waitForIdle();
+
+		assert.deepEqual(transitions.map((transition) => ({
+			before: transition.before?.observations.map((item) => item.content) ?? [],
+			after: transition.after.observations.map((item) => item.content),
+		})), [
+			{ before: ["before"], after: ["scanned"] },
+			{ before: ["scanned"], after: ["after"] },
+		]);
+		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["after"]);
+	} finally {
+		releaseTransition();
+		fixture.unload();
+	}
+});
+
 test("普通刷新加入当前扫描且进度持续上报，不清空本机 Catalog", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
@@ -1017,20 +1098,38 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { LEGACY_MIGRATION_COMPLETION_META_KEY } = await import("../src/services/LegacyIndexMigrationService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { MONTHLY_PROJECTION_CHECKPOINT_META_KEY } = await import("../src/services/MonthlyProjectionCoordinator");
 	const fixture = await createCoordinatorFixture([
 		{ path: "Journal/2026-08-10.md", content: "## Memos\n- 09:00 rebuild only\n", mtime: 10 },
 		{ path: "Memos/2026-08.md", content: "monthly bytes\n", mtime: 10 },
 		{ path: "Memos/_knomo-data/sentinel.md", content: "shared bytes\n", mtime: 10 },
 	]);
 	const store = new InMemoryMemoCatalogStore();
+	const legacyCompletion = { sourceId: "legacy-index", sourceRevision: "legacy-revision" };
+	const monthlyCheckpoint = {
+		version: 1,
+		pending: [{ period: "2026-08", reason: "catalog" }],
+		updatedAt: 123,
+	};
+	await store.setMeta(LEGACY_MIGRATION_COMPLETION_META_KEY, legacyCompletion);
+	await store.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, monthlyCheckpoint);
+	await store.setMeta("catalog-derived-sentinel", { stale: true });
 	const coordinator = new CatalogIndexCoordinator(
 		fixture.app,
 		new MemoCatalogService(store),
 		new DiaryMemoParser(async (bytes) => sha256(bytes)),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		{ fullAuditIntervalMs: 0, now: () => new Date(2026, 7, 10).getTime() },
+		{
+			fullAuditIntervalMs: 0,
+			now: () => new Date(2026, 7, 10).getTime(),
+			preserveMetaKeysOnRebuild: [
+				LEGACY_MIGRATION_COMPLETION_META_KEY,
+				MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+			],
+		},
 	);
 	const sharedBytes = fixture.snapshot();
 	try {
@@ -1043,6 +1142,9 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 		assert.deepEqual(page.items.map((item) => item.content), ["rebuild only"]);
 		assert.equal(page.coverage.kind, "complete");
 		assert.deepEqual(fixture.snapshot(), sharedBytes);
+		assert.deepEqual(await store.getMeta(LEGACY_MIGRATION_COMPLETION_META_KEY), legacyCompletion);
+		assert.deepEqual(await store.getMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY), monthlyCheckpoint);
+		assert.equal(await store.getMeta("catalog-derived-sentinel"), null);
 	} finally {
 		fixture.unload();
 	}

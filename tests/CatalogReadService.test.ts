@@ -40,6 +40,34 @@ test("Catalog observation 在 Identity Ledger 关系到达后原地获得 memoId
 	assert.equal(after.items[0]?.resolved.kind, "identified");
 });
 
+test("已识别 memo 的展示创建时间优先保留 Identity 秒数", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { formatCreatedAtAlias } = await import("../src/utils/references");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "second precision");
+	await seedCatalog(catalog, store, [observation]);
+	const identity = createIdentityReader();
+	const binding = makeBinding(observation, "2026082212345601", "identity-1");
+	identity.setState(
+		observation.content,
+		{ kind: "identified", binding },
+		"ready",
+		"identity-1",
+		"2026-08-22T12:34:56",
+	);
+	const service = new CatalogReadService({ catalog, identityLedger: identity.reader });
+
+	const page = await service.query({ limit: 50 });
+
+	assert.equal(observation.time, "12:34");
+	assert.equal(page.items[0]?.createdAt, "2026-08-22T12:34:56");
+	assert.equal(formatCreatedAtAlias(page.items[0]?.createdAt ?? ""), "20260822-123456");
+});
+
 test("Identity 冲突只降级相关 observation，不阻断其他 Catalog 内容", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
@@ -498,6 +526,7 @@ function createIdentityReader(): {
 		state: IdentityLedgerObservationState,
 		status: IdentityLedgerStatus,
 		revision: string,
+		createdAt?: string | null,
 	) => void;
 	setActiveDeletes: (records: IdentityLedgerDeleteRecord[], revision: string) => void;
 	setSourceMemoId: (memoId: string, sourceMemoId: string) => void;
@@ -526,18 +555,20 @@ function createIdentityReader(): {
 		},
 		resolveObservationState: (observation) => states.get(observation.content) ?? { kind: "unbound" },
 		getSourceMemoId: (memoId) => sourceMemoIds.get(memoId) ?? null,
+		getCreatedAt: (memoId) => memos[memoId]?.createdAt ?? null,
 		getReviewState: (memoId) => reviews.get(memoId) ?? { reviewCount: 0, lastReviewedAt: null },
 		getActiveDeletes: () => activeDeletes,
 	};
 	return {
 		reader,
-		setState: (content, state, nextStatus, nextRevision) => {
+		setState: (content, state, nextStatus, nextRevision, createdAt = null) => {
 			states.set(content, state);
 			status = nextStatus;
 			revision = nextRevision;
 			if (state.kind === "identified") {
 				memos[state.binding.memoId] = {
 					memoId: state.binding.memoId,
+					createdAt,
 					bindings: [state.binding],
 					conflicted: false,
 					conflictBaseBindingId: null,
@@ -549,6 +580,7 @@ function createIdentityReader(): {
 				for (const memoId of state.memoIds) {
 					memos[memoId] = {
 						memoId,
+						createdAt: null,
 						bindings: [],
 						conflicted: true,
 						conflictBaseBindingId: null,

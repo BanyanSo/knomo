@@ -402,7 +402,7 @@ export class MemoCommandService {
 			return await this.identityLedger.beginCreate({
 				targetPath,
 				logicalDate,
-				time: formatTimePart(createdAt, this.options.getMemoTimeFormat()),
+				time: formatTimePart(createdAt),
 				contentHash: hashMemoContent(content),
 				sourceMemoId,
 			});

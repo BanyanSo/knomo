@@ -240,7 +240,7 @@ test("重启后从 durable intent 安全续写唯一 claim，不重复 Daily mut
 	await first.beginCreate({
 		targetPath: dailyPath,
 		logicalDate: observation.logicalDate,
-		time: observation.time,
+		time: "09:00:37",
 		contentHash: observation.contentHash,
 		sourceMemoId: null,
 	});
@@ -252,6 +252,7 @@ test("重启后从 durable intent 安全续写唯一 claim，不重复 Daily mut
 
 	assert.equal(vault.read(dailyPath), dailyBefore);
 	assert.equal(restarted.resolveObservation(observation)?.memoId, MEMO_A);
+	assert.equal(restarted.getCreatedAt(MEMO_A), "2026-08-22T09:00:37");
 });
 
 test("P0 第 4 步：两台离线设备生成不同 memoId，事件任意合并后结果一致", async () => {

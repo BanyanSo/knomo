@@ -107,6 +107,32 @@ test("memo card action menu includes open daily in the requested order", async (
 	assert.equal(timeButton?.getAttr("data-random-reunion-card"), null);
 });
 
+test("memo card left time keeps Identity creation seconds", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const { formatMemoDisplayTime } = await import("../src/ui/MemoDisplayFormatters");
+	const root = new TestElement("div");
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo({
+		createdAt: "2026-06-02T12:34:56.789+08:00",
+	}), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: false,
+		randomCard: false,
+		activeMenuMemoId: null,
+		deletedMemoIds: new Set(),
+		formatDisplayTime: formatMemoDisplayTime,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	assert.equal(root.find("[data-memo-time-open='daily']")?.getText(), "2026-06-02 12:34:56");
+});
+
 test("memo card menu keeps Markdown actions available while identity is settling", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");

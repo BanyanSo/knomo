@@ -595,6 +595,7 @@ test("Catalog 持久层不可用时从 Daily 渐进扫描并展示全部 observa
 			resolveObservation: () => null,
 			resolveObservationState: () => ({ kind: "unbound" }),
 			getSourceMemoId: () => null,
+			getCreatedAt: () => null,
 			getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
 		},
 	});

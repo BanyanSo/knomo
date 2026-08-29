@@ -6,6 +6,7 @@ import type { MemoObservation } from "../src/types/catalog";
 import type { TrashMemoItem } from "../src/types/catalogView";
 import type {
 	IdentityLedgerBinding,
+	IdentityLedgerCreateInput,
 	IdentityLedgerCreatePlan,
 	IdentityLedgerDeleteRecord,
 	IdentityLedgerMutationService,
@@ -26,6 +27,7 @@ test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim",
 	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created memo");
 	const binding = makeBinding(observation, "2026082212345601", "identity-1");
 	let claimed = false;
+	let createIntentTime = "";
 	const plan = makeCreatePlan(binding.memoId);
 	const identityLedger = {
 		getRevision: () => claimed ? "identity-1" : "identity-0",
@@ -36,9 +38,11 @@ test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim",
 			? { kind: "identified", binding } as const
 			: { kind: "unbound" } as const,
 		getSourceMemoId: () => null,
+		getCreatedAt: () => plan.intent.evidence.logicalDate + "T" + plan.intent.evidence.time,
 		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		beginCreate: async () => {
+		beginCreate: async (input: IdentityLedgerCreateInput) => {
 			events.push("intent");
+			createIntentTime = input.time;
 			return plan;
 		},
 		finishCreate: async () => {
@@ -68,6 +72,7 @@ test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim",
 	assert.equal(result.memoId, binding.memoId);
 	assert.equal(result.followUpPending, false);
 	assert.equal(result.localRefreshPending, false);
+	assert.match(createIntentTime, /^\d{2}:\d{2}:56$/u);
 
 	events.length = 0;
 	claimed = false;
@@ -108,6 +113,7 @@ test("阶段化 create 在 Daily 提交后先完成 committed，identity 与读�
 		resolveObservation: () => binding,
 		resolveObservationState: () => ({ kind: "identified", binding }) as const,
 		getSourceMemoId: () => null,
+		getCreatedAt: () => "2026-08-22T12:34:56",
 		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
 		beginCreate: async () => {
 			events.push("intent");
@@ -167,6 +173,7 @@ test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再�
 		resolveObservation: () => binding,
 		resolveObservationState: () => ({ kind: "identified", binding }) as const,
 		getSourceMemoId: () => null,
+		getCreatedAt: () => "2026-08-22T12:34:56",
 		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
 		getActiveDeletes: () => activeDelete === null ? [] : [activeDelete],
 		recordDeletePayload: async (_binding: IdentityLedgerBinding, evidence: IdentityLedgerDeleteRecord["evidence"]) => {
@@ -348,7 +355,7 @@ function makeCreatePlan(memoId: string): IdentityLedgerCreatePlan {
 			evidence: {
 				targetPath: "Daily/2026-08-22.md",
 				logicalDate: "2026-08-22",
-				time: "12:34",
+				time: "12:34:56",
 				contentHash: "fnv1a-11111111",
 				sourceMemoId: null,
 			},

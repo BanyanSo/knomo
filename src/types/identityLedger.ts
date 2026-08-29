@@ -173,6 +173,7 @@ export interface IdentityLedgerReconcileResult {
 
 export interface IdentityLedgerMaterializedMemo {
 	memoId: string;
+	createdAt: string | null;
 	bindings: IdentityLedgerBinding[];
 	conflicted: boolean;
 	conflictBaseBindingId: string | null;
@@ -223,6 +224,7 @@ export interface IdentityLedgerReader {
 	resolveObservation(observation: MemoObservation): IdentityLedgerBinding | null;
 	resolveObservationState(observation: MemoObservation): IdentityLedgerObservationState;
 	getSourceMemoId(memoId: string): string | null;
+	getCreatedAt(memoId: string): string | null;
 	getReviewState(memoId: string): { reviewCount: number; lastReviewedAt: string | null };
 	getPendingDeletes?(): IdentityLedgerDeleteRecord[];
 	getActiveDeletes?(): IdentityLedgerDeleteRecord[];

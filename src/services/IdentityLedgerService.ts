@@ -157,6 +157,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		return sourceMemoIds.length === 1 ? sourceMemoIds[0] ?? null : null;
 	}
 
+	getCreatedAt(memoId: string): string | null {
+		return this.snapshot.memos[memoId]?.createdAt ?? null;
+	}
+
 	getReviewState(memoId: string): { reviewCount: number; lastReviewedAt: string | null } {
 		const memo = this.snapshot.memos[memoId];
 		return {
@@ -347,7 +351,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				&& (intent.evidence.targetPath === null
 					|| normalizePath(observation.sourcePath) === normalizePath(intent.evidence.targetPath))
 				&& observation.logicalDate === intent.evidence.logicalDate
-				&& observation.time === intent.evidence.time
+				&& matchesCreateIntentTime(intent.evidence.time, observation.time)
 				&& observation.contentHash === intent.evidence.contentHash);
 			if (candidates.length !== 1) continue;
 			try {
@@ -958,6 +962,7 @@ export async function materializeIdentityLedger(
 		const activeDeletes = deleteRecords.filter((record) => record.deleteCommitEventId !== null);
 		memos[memoId] = {
 			memoId,
+			createdAt: readCreatedAt(memoEvents),
 			bindings: bindingState.bindings,
 			conflicted: bindingState.conflicted,
 			conflictBaseBindingId: bindingState.conflictBaseBindingId,
@@ -1379,6 +1384,7 @@ function cloneSnapshot(snapshot: IdentityLedgerSnapshot): IdentityLedgerSnapshot
 		eventCount: snapshot.eventCount,
 		memos: Object.fromEntries(Object.entries(snapshot.memos).map(([memoId, memo]) => [memoId, {
 			memoId: memo.memoId,
+			createdAt: memo.createdAt,
 			bindings: memo.bindings.map((binding) => ({
 				...binding,
 				evidence: { ...binding.evidence },
@@ -1398,6 +1404,25 @@ function cloneSnapshot(snapshot: IdentityLedgerSnapshot): IdentityLedgerSnapshot
 		})),
 		quarantinedEventIds: [...snapshot.quarantinedEventIds],
 	};
+}
+
+function matchesCreateIntentTime(intentTime: string, observationTime: string): boolean {
+	return intentTime === observationTime
+		|| (intentTime.length === 8 && observationTime.length === 5 && intentTime.startsWith(`${observationTime}:`));
+}
+
+function readCreatedAt(events: readonly IdentityLedgerEvent[]): string | null {
+	const intents = new Map(events.flatMap((event) => event.type === "create_intent"
+		? [[event.eventId, event] as const]
+		: []));
+	const values = new Set(events.flatMap((event) => {
+		if (event.type !== "claim" || event.evidence.createIntentEventId === null) return [];
+		const intent = intents.get(event.evidence.createIntentEventId);
+		if (intent === undefined || intent.memoId !== event.memoId) return [];
+		const time = intent.evidence.time.length === 5 ? `${intent.evidence.time}:00` : intent.evidence.time;
+		return [`${intent.evidence.logicalDate}T${time}`];
+	}));
+	return values.size === 1 ? values.values().next().value ?? null : null;
 }
 
 function cloneDeleteRecord(record: IdentityLedgerDeleteRecord): IdentityLedgerDeleteRecord {

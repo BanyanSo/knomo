@@ -460,7 +460,10 @@ export class CatalogReadService {
 				endLine: observation.endLine,
 				rawBlockHash: observation.rawBlockHash,
 			},
-			createdAt: `${observation.logicalDate}T${normalizeTime(observation.time)}`,
+			createdAt: memoId === null
+				? `${observation.logicalDate}T${normalizeTime(observation.time)}`
+				: this.options.identityLedger.getCreatedAt(memoId)
+					?? `${observation.logicalDate}T${normalizeTime(observation.time)}`,
 			content: observation.content,
 			tags: [...observation.tags],
 			links: [...observation.links],

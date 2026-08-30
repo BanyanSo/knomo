@@ -142,6 +142,25 @@ test("Monthly 复用按月 Daily inventory，并与 Catalog、旧版数据升级
 	assert.equal(legacyMigration.includes("runLowPriorityTask(() => this.runOnce"), true);
 });
 
+test("Identity 与共享配置监听等待 layout ready，启动后续阶段遵守卸载取消信号", () => {
+	const main = fs.readFileSync("src/main.ts", "utf8");
+	const listenerStart = main.slice(
+		main.indexOf("this.app.workspace.onLayoutReady(() => {"),
+		main.indexOf("this.legacyIndexMigrationService.start"),
+	);
+	const afterLayoutInitialization = main.slice(
+		main.indexOf("private async initializeAfterLayoutWithCatalogSafely"),
+		main.indexOf("private async showLegacyMigrationCompletionNotice"),
+	);
+
+	assert.equal(listenerStart.includes("identityLedgerService.start"), true);
+	assert.equal(listenerStart.includes("knomoSharedConfigService.start"), true);
+	assert.equal(listenerStart.includes("lowPriorityWorkQueue.signal.aborted"), true);
+	assert.equal(main.includes("cancellationSignal: lowPriorityWorkQueue.signal"), true);
+	assert.equal(main.includes("settingTab.refreshRuntimeStatusIfVisible()"), true);
+	assert.equal(afterLayoutInitialization.includes("const isCancelled = () => cancellationSignal?.aborted === true"), true);
+});
+
 function listFiles(root: string): string[] {
 	return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
 		const fullPath = path.join(root, entry.name);

@@ -49,6 +49,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private dataRootDraft: string | null = null;
 	private legacyDiagnosticsExpanded = false;
 	private runtimeStatusRequestId = 0;
+	private settingsVisible = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -183,6 +184,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.settingsVisible = true;
 		const { containerEl } = this;
 		this.cancelAllDelayedSettingNotices();
 		this.pendingSettingDrafts.clear();
@@ -261,6 +263,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
+		this.settingsVisible = false;
 		this.runtimeStatusRequestId += 1;
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
@@ -1192,7 +1195,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 					button.setDisabled(true);
 					try {
 						if (this.startupBootstrapService !== null) {
-							await this.startupBootstrapService.useCurrentDeviceSettings();
+							const currentInitializationStatus = this.startupBootstrapService.getSnapshot().status;
+							const currentSharedConfigStatus = this.knomoSharedConfigService.getStatus();
+							if (currentInitializationStatus === "unavailable" || currentSharedConfigStatus === "unavailable") {
+								await this.startupBootstrapService.retryInitialization();
+							} else {
+								await this.startupBootstrapService.useCurrentDeviceSettings();
+							}
 						} else {
 							const currentStatus = this.knomoSharedConfigService.getStatus();
 							if (currentStatus === "unavailable") await this.knomoSharedConfigService.reloadConfiguredRoot();
@@ -1273,6 +1282,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 			}
 		});
 		await Promise.all(refreshes);
+	}
+
+	refreshRuntimeStatusIfVisible(): void {
+		if (this.settingsVisible) this.refreshSettingTab();
 	}
 
 	private refreshSettingTab(): void {

@@ -17,6 +17,7 @@ const WRITER_ID = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 test("首次启用默认创建 Identity 根并发布共享配置", async () => {
 	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
 	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
 	const ledger = createLedger(vault, () => location);
 	const migration = new KnomoDataRootMigrationService(
@@ -49,8 +50,38 @@ test("首次启用默认创建 Identity 根并发布共享配置", async () => {
 	});
 });
 
+test("已配置根在布局就绪前暂不可见时等待 Vault 完成加载后自动恢复", async () => {
+	const vault = new InMemoryVault();
+	const markLayoutReady = installLayoutWorkspace(vault, false);
+	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
+	const ledger = createLedger(vault, () => location);
+	const shared = createSharedConfig(vault, () => location, "## Memos");
+	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => location,
+		initializeDataRoot: async () => { throw new Error("已配置根不应重新初始化"); },
+		identity: ledger,
+		sharedConfig: shared,
+	});
+
+	const initialization = bootstrap.initialize();
+	await Promise.resolve();
+
+	assert.equal(vault.app.vault.getAbstractFileByPath(getIdentityLedgerRootPath("Knomo")), null);
+	assert.equal(bootstrap.getSnapshot().status, "initializing");
+	await vault.app.vault.createFolder("Knomo");
+	await vault.app.vault.createFolder("Knomo/_knomo-data");
+	await vault.app.vault.createFolder(getIdentityLedgerRootPath("Knomo"));
+	await vault.app.vault.createFolder(`${getIdentityLedgerRootPath("Knomo")}/writers`);
+	markLayoutReady();
+	await initialization;
+
+	assert.equal(bootstrap.getSnapshot().status, "ready");
+	assert.equal(shared.getStatus(), "ready");
+});
+
 test("1.2.9 已有 Knomo 目录且 Vault 延迟确认新目录时在本次启动内完成初始化", async () => {
 	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
 	await vault.app.vault.createFolder("Knomo");
 	const createFolder = vault.app.vault.createFolder.bind(vault.app.vault);
 	let injectedFolderRace = false;
@@ -87,6 +118,7 @@ test("1.2.9 已有 Knomo 目录且 Vault 延迟确认新目录时在本次启动
 
 test("已配置但 Identity 根丢失时保留真实失败阶段，不伪造新的 Identity Ledger", async () => {
 	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
 	const ledger = createLedger(vault, () => location);
 	const shared = createSharedConfig(vault, () => location, "## Memos");
@@ -112,6 +144,7 @@ test("已配置但 Identity 根丢失时保留真实失败阶段，不伪造新�
 
 test("已有共享配置时启动不追加事件也不覆盖其他设备配置", async () => {
 	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
 	await vault.app.vault.createFolder("Knomo/_knomo-data");
 	await vault.app.vault.createFolder(getIdentityLedgerRootPath("Knomo"));
@@ -138,6 +171,7 @@ test("已有共享配置时启动不追加事件也不覆盖其他设备配置",
 
 test("并发启动复用同一个初始化操作", async () => {
 	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
 	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
 	let releaseInitialization!: () => void;
 	const initializationBlocked = new Promise<void>((resolve) => { releaseInitialization = resolve; });
@@ -177,6 +211,7 @@ test("并发启动复用同一个初始化操作", async () => {
 
 test("采用当前设备设置复用初始化流程并显式收敛共享配置冲突", async () => {
 	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
 	await vault.app.vault.createFolder(`${getIdentityLedgerRootPath("Knomo")}/writers`);
 	let sharedStatus: KnomoSharedConfigStatus = "conflicted";
@@ -207,6 +242,99 @@ test("采用当前设备设置复用初始化流程并显式收敛共享配置�
 
 	assert.equal(resolveCalls, 1);
 	assert.equal(bootstrap.getSnapshot().status, "ready");
+});
+
+test("重新检查只重读已就绪共享配置，不发布当前设备设置", async () => {
+	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
+	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
+	await vault.app.vault.createFolder(`${getIdentityLedgerRootPath("Knomo")}/writers`);
+	let sharedStatus: KnomoSharedConfigStatus = "unavailable";
+	let publishCalls = 0;
+	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => location,
+		initializeDataRoot: async () => { throw new Error("已配置根不应重新初始化"); },
+		identity: {
+			initialize: async () => undefined,
+			getStatus: () => "absent",
+		},
+		sharedConfig: {
+			initialize: async () => { sharedStatus = "ready"; },
+			getStatus: () => sharedStatus,
+			getLastError: () => null,
+			publishLocalConfig: async () => { publishCalls += 1; },
+			resolveWithLocalConfig: async () => { throw new Error("重新检查不应解决配置"); },
+		},
+	});
+
+	await bootstrap.retryInitialization();
+
+	assert.equal(publishCalls, 0);
+	assert.equal(bootstrap.getSnapshot().status, "ready");
+});
+
+test("重新检查发现共享配置缺失时等待用户明确发布", async () => {
+	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
+	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };
+	await vault.app.vault.createFolder(`${getIdentityLedgerRootPath("Knomo")}/writers`);
+	let publishCalls = 0;
+	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => location,
+		initializeDataRoot: async () => { throw new Error("已配置根不应重新初始化"); },
+		identity: {
+			initialize: async () => undefined,
+			getStatus: () => "absent",
+		},
+		sharedConfig: {
+			initialize: async () => undefined,
+			getStatus: () => "missing",
+			getLastError: () => null,
+			publishLocalConfig: async () => { publishCalls += 1; },
+			resolveWithLocalConfig: async () => { throw new Error("重新检查不应解决配置"); },
+		},
+	});
+
+	await bootstrap.retryInitialization();
+
+	assert.equal(publishCalls, 0);
+	assert.deepEqual(bootstrap.getSnapshot(), {
+		status: "unconfigured",
+		stage: "shared_config",
+		error: null,
+	});
+});
+
+test("布局就绪前卸载会取消初始化且不写入失败状态", async () => {
+	const vault = new InMemoryVault();
+	const markLayoutReady = installLayoutWorkspace(vault, false);
+	const cancellation = new AbortController();
+	let initializeCalls = 0;
+	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => ({ knomoDataRoot: "Knomo", knomoDataRootConfigured: false }),
+		initializeDataRoot: async () => { initializeCalls += 1; },
+		identity: {
+			initialize: async () => undefined,
+			getStatus: () => "absent",
+		},
+		sharedConfig: {
+			initialize: async () => undefined,
+			getStatus: () => "missing",
+			getLastError: () => null,
+			publishLocalConfig: async () => undefined,
+			resolveWithLocalConfig: async () => undefined,
+		},
+		cancellationSignal: cancellation.signal,
+	});
+
+	const initialization = bootstrap.initialize();
+	cancellation.abort();
+	await assert.rejects(initialization, /cancelled/u);
+	markLayoutReady();
+	await Promise.resolve();
+
+	assert.equal(initializeCalls, 0);
+	assert.notEqual(bootstrap.getSnapshot().status, "unavailable");
 });
 
 function createLedger(
@@ -249,4 +377,22 @@ function createSharedConfig(
 		createEventId: () => "c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		now: () => new Date("2026-08-23T00:00:00.000Z"),
 	});
+}
+
+function installLayoutWorkspace(vault: InMemoryVault, layoutReady = true): () => void {
+	let ready = layoutReady;
+	const callbacks: Array<() => void> = [];
+	const workspace = {
+		get layoutReady() { return ready; },
+		onLayoutReady: (callback: () => void) => {
+			if (ready) callback();
+			else callbacks.push(callback);
+		},
+	};
+	(vault.app as unknown as { workspace: typeof workspace }).workspace = workspace;
+	return () => {
+		if (ready) return;
+		ready = true;
+		for (const callback of callbacks.splice(0)) callback();
+	};
 }

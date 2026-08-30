@@ -173,6 +173,7 @@ export default class KnomoPlugin extends Plugin {
 				},
 				identity: identityLedgerService,
 				sharedConfig: knomoSharedConfigService,
+				cancellationSignal: lowPriorityWorkQueue.signal,
 			})
 			: null;
 
@@ -331,15 +332,18 @@ export default class KnomoPlugin extends Plugin {
 			},
 		);
 
-		identityLedgerService.start(this, async () => {
-			await reconcileIdentityLedger();
-			await this.queueRefreshOpenViews();
-		});
-		knomoSharedConfigService.start(this, async () => {
-			await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
-			await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-			await this.legacyIndexMigrationService?.run({ verifyCompletion: true });
-			await this.queueRefreshOpenViews();
+		this.app.workspace.onLayoutReady(() => {
+			if (lowPriorityWorkQueue.signal.aborted) return;
+			identityLedgerService.start(this, async () => {
+				await reconcileIdentityLedger();
+				await this.queueRefreshOpenViews();
+			});
+			knomoSharedConfigService.start(this, async () => {
+				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
+				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
+				await this.legacyIndexMigrationService?.run({ verifyCompletion: true });
+				await this.queueRefreshOpenViews();
+			});
 		});
 		this.legacyIndexMigrationService.start(this, async () => {
 			await this.queueRefreshOpenViews();
@@ -399,7 +403,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 		});
 
-		this.addSettingTab(new KnomoSettingTab(
+		const settingTab = new KnomoSettingTab(
 			this.app,
 			this,
 			this.settingsService,
@@ -411,7 +415,8 @@ export default class KnomoPlugin extends Plugin {
 			knomoSharedConfigService,
 			this.legacyIndexMigrationService,
 			startupBootstrapService,
-		));
+		);
+		this.addSettingTab(settingTab);
 
 		this.runtimeInitializationPromise = (async () => {
 			if (startupBootstrapService !== null) {
@@ -419,12 +424,16 @@ export default class KnomoPlugin extends Plugin {
 					await startupBootstrapService.initialize();
 				} catch {
 					// 自动初始化失败不阻塞 Daily；下次启用会继续补齐缺失配置。
+				} finally {
+					if (!lowPriorityWorkQueue.signal.aborted) settingTab.refreshRuntimeStatusIfVisible();
 				}
 			}
+			if (lowPriorityWorkQueue.signal.aborted) return false;
 			if (startupBootstrapService === null) {
 				await identityLedgerService.initialize();
 				await knomoSharedConfigService.initialize();
 			}
+			if (lowPriorityWorkQueue.signal.aborted) return false;
 			if (settingsLoaded
 				&& this.settingsService.getSettings().knomoDataRootConfigured
 				&& identityLedgerService.getStatus() === "missing") {
@@ -433,9 +442,13 @@ export default class KnomoPlugin extends Plugin {
 				}));
 			}
 			await this.catalogIndexCoordinator?.initialize();
+			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);
+			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await this.legacyIndexMigrationService?.run();
+			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await reconcileIdentityLedger();
+			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await this.catalogReadService?.prime().catch(() => undefined);
 			return true;
 		})().catch(() => {
@@ -444,8 +457,9 @@ export default class KnomoPlugin extends Plugin {
 		});
 
 		this.app.workspace.onLayoutReady(() => {
+			if (lowPriorityWorkQueue.signal.aborted) return;
 			this.legacyMigrationCompletionNoticeService?.markLayoutReady();
-			void this.initializeAfterLayoutWithCatalogSafely();
+			void this.initializeAfterLayoutWithCatalogSafely(lowPriorityWorkQueue.signal);
 		});
 	}
 
@@ -595,16 +609,22 @@ export default class KnomoPlugin extends Plugin {
 		setting.openTabById?.(this.manifest.id);
 	}
 
-	private async initializeAfterLayoutWithCatalogSafely(): Promise<void> {
+	private async initializeAfterLayoutWithCatalogSafely(cancellationSignal?: AbortSignal): Promise<void> {
+		const isCancelled = () => cancellationSignal?.aborted === true;
 		try {
 			if (this.runtimeInitializationPromise !== null
 				&& await this.runtimeInitializationPromise) {
+				if (isCancelled()) return;
 				await this.showLegacyMigrationCompletionNotice();
 				return;
 			}
+			if (isCancelled()) return;
 			await this.catalogIndexCoordinator?.initialize();
+			if (isCancelled()) return;
 			await this.legacyIndexMigrationService?.run();
+			if (isCancelled()) return;
 			await this.catalogReadService?.prime();
+			if (isCancelled()) return;
 			await this.showLegacyMigrationCompletionNotice();
 		} catch {
 			// 本机 Catalog 或兼容导入失败不能影响 Daily 快速记录能力。

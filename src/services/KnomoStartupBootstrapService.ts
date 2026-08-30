@@ -24,6 +24,7 @@ export interface KnomoStartupBootstrapOptions {
 	initializeDataRoot: (dataRoot: string) => Promise<void>;
 	identity: StartupIdentityService;
 	sharedConfig: StartupSharedConfigService;
+	cancellationSignal?: AbortSignal;
 }
 
 export type KnomoStartupBootstrapStatus = "unconfigured" | "initializing" | "ready" | "conflicted" | "unavailable";
@@ -35,7 +36,7 @@ export interface KnomoStartupBootstrapSnapshot {
 	error: string | null;
 }
 
-type BootstrapMode = "initialize" | "use_current_device";
+type BootstrapMode = "initialize" | "retry" | "use_current_device";
 
 /** 启用插件时补齐默认数据根与共享配置；已有共享配置只读取，不覆盖。 */
 export class KnomoStartupBootstrapService {
@@ -59,6 +60,10 @@ export class KnomoStartupBootstrapService {
 
 	initialize(): Promise<void> {
 		return this.activeOperation ?? this.startOperation("initialize");
+	}
+
+	retryInitialization(): Promise<void> {
+		return this.activeOperation ?? this.startOperation("retry");
 	}
 
 	useCurrentDeviceSettings(): Promise<void> {
@@ -94,9 +99,12 @@ export class KnomoStartupBootstrapService {
 		let stage: KnomoStartupBootstrapStage = "data_root";
 		this.setInitializing(stage);
 		try {
+			await this.waitForLayoutReady();
+			this.throwIfCancelled();
 			let location = this.options.getLocation();
 			if (!location.knomoDataRootConfigured) {
 				await this.options.initializeDataRoot(location.knomoDataRoot);
+				this.throwIfCancelled();
 				location = this.options.getLocation();
 				if (!location.knomoDataRootConfigured) {
 					throw new Error("Knomo Data Root initialization did not persist its location.");
@@ -106,6 +114,7 @@ export class KnomoStartupBootstrapService {
 			stage = "identity";
 			this.setInitializing(stage);
 			await this.options.identity.initialize();
+			this.throwIfCancelled();
 			const identityStatus = this.options.identity.getStatus();
 			if (identityStatus === "missing") {
 				throw new Error("Configured Identity Ledger root is missing.");
@@ -117,27 +126,39 @@ export class KnomoStartupBootstrapService {
 			stage = "catalog";
 			this.setInitializing(stage);
 			await ensureFolder(this.app, getCatalogDataRootPath(location.knomoDataRoot));
+			this.throwIfCancelled();
 
 			stage = "shared_config";
 			this.setInitializing(stage);
 			await this.options.sharedConfig.initialize();
+			this.throwIfCancelled();
 			const sharedStatus = this.options.sharedConfig.getStatus();
 			if (sharedStatus === "unavailable") {
 				throw new Error(this.options.sharedConfig.getLastError() ?? "Shared configuration cannot be read.");
 			}
 			if (sharedStatus === "conflicted") {
-				if (mode === "initialize") {
+				if (mode !== "use_current_device") {
 					this.snapshot = { status: "conflicted", stage, error: null };
 					return;
 				}
 				await this.options.sharedConfig.resolveWithLocalConfig();
-			} else if (sharedStatus === "missing" || mode === "use_current_device") {
+				this.throwIfCancelled();
+			} else if (sharedStatus === "missing") {
+				if (mode === "retry") {
+					this.snapshot = { status: "unconfigured", stage, error: null };
+					return;
+				}
 				await this.options.sharedConfig.publishLocalConfig();
+				this.throwIfCancelled();
+			} else if (mode === "use_current_device") {
+				await this.options.sharedConfig.publishLocalConfig();
+				this.throwIfCancelled();
 			}
 
 			stage = "verification";
 			this.setInitializing(stage);
 			await this.options.sharedConfig.initialize();
+			this.throwIfCancelled();
 			const verifiedStatus = this.options.sharedConfig.getStatus();
 			if (verifiedStatus === "conflicted") {
 				throw new Error("Shared configuration remains conflicted after initialization.");
@@ -147,6 +168,9 @@ export class KnomoStartupBootstrapService {
 			}
 			this.snapshot = { status: "ready", stage: null, error: null };
 		} catch (error) {
+			if (error instanceof KnomoStartupCancelledError || this.options.cancellationSignal?.aborted === true) {
+				throw new KnomoStartupCancelledError();
+			}
 			const detail = error instanceof Error ? error.message : String(error);
 			const conflicted = (stage === "shared_config" || stage === "verification")
 				&& this.options.sharedConfig.getStatus() === "conflicted";
@@ -159,6 +183,37 @@ export class KnomoStartupBootstrapService {
 		}
 	}
 
+	private async waitForLayoutReady(): Promise<void> {
+		this.throwIfCancelled();
+		if (this.app.workspace.layoutReady) return;
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const signal = this.options.cancellationSignal;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				signal?.removeEventListener("abort", cancel);
+				resolve();
+			};
+			const cancel = () => {
+				if (settled) return;
+				settled = true;
+				reject(new KnomoStartupCancelledError());
+			};
+			signal?.addEventListener("abort", cancel, { once: true });
+			this.app.workspace.onLayoutReady(finish);
+			if (this.app.workspace.layoutReady) finish();
+			if (signal?.aborted === true) cancel();
+		});
+		this.throwIfCancelled();
+	}
+
+	private throwIfCancelled(): void {
+		if (this.options.cancellationSignal?.aborted === true) {
+			throw new KnomoStartupCancelledError();
+		}
+	}
+
 	private setInitializing(stage: KnomoStartupBootstrapStage): void {
 		this.snapshot = {
 			status: "initializing",
@@ -167,4 +222,10 @@ export class KnomoStartupBootstrapService {
 		};
 	}
 
+}
+
+class KnomoStartupCancelledError extends Error {
+	constructor() {
+		super("Knomo startup initialization was cancelled.");
+	}
 }

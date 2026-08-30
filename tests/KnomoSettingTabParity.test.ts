@@ -75,9 +75,11 @@ test("routes the device-setting action through startup initialization and refres
 		"\n\tprivate async syncSharedConfiguration(",
 	);
 
+	assert.match(sharedConfigSource, /this\.startupBootstrapService\.retryInitialization\(\)/u);
 	assert.match(sharedConfigSource, /this\.startupBootstrapService\.useCurrentDeviceSettings\(\)/u);
 	assert.match(sharedConfigSource, /new Notice\(t\("settings\.sharedConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
+	assert.match(source, /refreshRuntimeStatusIfVisible\(\): void[\s\S]*if \(this\.settingsVisible\) this\.refreshSettingTab\(\)/u);
 });
 
 test("shows a plain-language runtime summary and keeps engineering state in advanced diagnostics", () => {

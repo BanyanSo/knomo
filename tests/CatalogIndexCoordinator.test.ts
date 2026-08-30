@@ -644,7 +644,7 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 		coordinator.start(fixture.owner);
 		await coordinator.initialize();
 		await coordinator.waitForIdle();
-		const content = "## Memos\n- 09:00 after\n";
+		const content = "## Memos\n- 09:00 before\n- 09:00 inserted\n";
 		const parsed = await parser.parse({
 			sourcePath,
 			logicalDate: "2026-08-22",
@@ -658,19 +658,22 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 			logicalDate: "2026-08-22",
 			content,
 			parsed,
+			insertedObservation: parsed.observations[1]!,
 		});
 
-		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["after"]);
+		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["inserted", "before"]);
 		assert.deepEqual(transitions.map((transition) => ({
 			beforeRevision: transition.before?.sourceRevision ?? null,
 			beforeContent: transition.before?.observations.map((item) => item.content) ?? [],
 			afterRevision: transition.after.sourceRevision,
 			afterContent: transition.after.observations.map((item) => item.content),
+			insertedContent: transition.insertedObservation?.content ?? null,
 		})), [{
 			beforeRevision: await sha256(Buffer.from("## Memos\n- 09:00 before\n", "utf8")),
 			beforeContent: ["before"],
 			afterRevision: parsed.sourceRevision,
-			afterContent: ["after"],
+			afterContent: ["before", "inserted"],
+			insertedContent: "inserted",
 		}]);
 		assert.equal(fixture.snapshot()[sourcePath], "## Memos\n- 09:00 before\n");
 	} finally {

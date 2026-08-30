@@ -425,11 +425,76 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		return completed;
 	}
 
+	async repairKnownDuplicateCreateConflicts(observations: readonly MemoObservation[]): Promise<number> {
+		const observationsByEvidence = new Map(observations.map((observation) => [
+			observationEvidenceKey(toObservationEvidence(observation)),
+			observation,
+		]));
+		const { accepted } = selectIdentityLedgerEnvelopes(this.envelopes);
+		const events = accepted.map((item) => item.event);
+		const intentsById = new Map(events.flatMap((event) => event.type === "create_intent"
+			? [[event.eventId, event] as const]
+			: []));
+		const activeBindingIds = new Set(Object.values(this.snapshot.memos).flatMap((memo) =>
+			memo.conflicted ? [] : memo.bindings.map((binding) => binding.bindingId)));
+		const activeCreateClaimsByEvidence = new Map<string, IdentityLedgerClaimEvent[]>();
+		for (const event of events) {
+			if (event.type !== "claim" || event.evidence.createIntentEventId === null
+				|| !activeBindingIds.has(event.eventId)) continue;
+			const intent = intentsById.get(event.evidence.createIntentEventId);
+			const evidence = event.evidence.observation;
+			if (intent === undefined || intent.memoId !== event.memoId
+				|| (intent.evidence.targetPath !== null
+					&& normalizePath(intent.evidence.targetPath) !== normalizePath(evidence.sourcePath))
+				|| intent.evidence.logicalDate !== evidence.logicalDate
+				|| !matchesCreateIntentTime(intent.evidence.time, evidence.time)
+				|| intent.evidence.contentHash !== evidence.contentHash) continue;
+			const key = observationEvidenceKey(evidence);
+			if (!observationsByEvidence.has(key)) continue;
+			const claims = activeCreateClaimsByEvidence.get(key) ?? [];
+			claims.push(event);
+			activeCreateClaimsByEvidence.set(key, claims);
+		}
+		let repaired = 0;
+		const conflictedMemoIds = Object.values(this.snapshot.memos)
+			.filter((memo) => memo.conflicted && memo.conflictBaseBindingId !== null && memo.bindings.length === 2)
+			.map((memo) => memo.memoId)
+			.sort();
+		for (const memoId of conflictedMemoIds) {
+			const memo = this.snapshot.memos[memoId];
+			if (memo?.conflicted !== true || memo.conflictBaseBindingId === null || memo.bindings.length !== 2) continue;
+			const bindings = memo.bindings;
+			const first = bindings[0];
+			const second = bindings[1];
+			if (first === undefined || second === undefined
+				|| first.evidence.sourceRevision !== second.evidence.sourceRevision
+				|| duplicateObservationEvidenceKey(first.evidence) !== duplicateObservationEvidenceKey(second.evidence)) continue;
+			const bindingKeys = bindings.map((binding) => observationEvidenceKey(binding.evidence));
+			if (bindingKeys.some((key) => !observationsByEvidence.has(key))) continue;
+			const occupiedKeys = bindingKeys.filter((key) => {
+				const claims = activeCreateClaimsByEvidence.get(key) ?? [];
+				return claims.length === 1 && claims[0]?.memoId !== memoId;
+			});
+			if (occupiedKeys.length !== 1) continue;
+			const targetKey = bindingKeys.find((key) => key !== occupiedKeys[0]);
+			const target = targetKey === undefined ? undefined : observationsByEvidence.get(targetKey);
+			if (target === undefined) continue;
+			try {
+				await this.repairConflict(memoId, target);
+				repaired += 1;
+			} catch {
+				continue;
+			}
+		}
+		return repaired;
+	}
+
 	async reconcileRevision(
 		before: readonly MemoObservation[],
 		after: readonly MemoObservation[],
+		insertedObservation: MemoObservation | null = null,
 	): Promise<IdentityLedgerReconcileResult> {
-		const plans = buildRevisionSuccessorPlans(before, after).flatMap((plan) => {
+		const plans = buildRevisionSuccessorPlans(before, after, insertedObservation).flatMap((plan) => {
 			const baseBindings = this.findObservationBindings(plan.before);
 			if (baseBindings.length !== 1) return [];
 			return plan.successors.map((successor) => ({
@@ -1324,7 +1389,12 @@ interface RevisionSuccessorPlan {
 function buildRevisionSuccessorPlans(
 	before: readonly MemoObservation[],
 	after: readonly MemoObservation[],
+	insertedObservation: MemoObservation | null = null,
 ): RevisionSuccessorPlan[] {
+	const insertedPlans = insertedObservation === null
+		? null
+		: buildKnownInsertionSuccessorPlans(before, after, insertedObservation);
+	if (insertedPlans !== null) return insertedPlans;
 	if (before.length === 0 || after.length === 0) return [];
 	const beforePaths = new Set(before.map((observation) => normalizePath(observation.sourcePath)));
 	const afterPaths = new Set(after.map((observation) => normalizePath(observation.sourcePath)));
@@ -1370,6 +1440,42 @@ function buildRevisionSuccessorPlans(
 	return plans.sort((left, right) => left.before.startLine - right.before.startLine);
 }
 
+function buildKnownInsertionSuccessorPlans(
+	before: readonly MemoObservation[],
+	after: readonly MemoObservation[],
+	insertedObservation: MemoObservation,
+): RevisionSuccessorPlan[] | null {
+	if (after.length !== before.length + 1) return null;
+	const beforePaths = new Set(before.map((observation) => normalizePath(observation.sourcePath)));
+	const afterPaths = new Set(after.map((observation) => normalizePath(observation.sourcePath)));
+	const beforeRevisions = new Set(before.map((observation) => observation.sourceRevision));
+	const afterRevisions = new Set(after.map((observation) => observation.sourceRevision));
+	const afterPath = [...afterPaths][0];
+	const afterRevision = [...afterRevisions][0];
+	if (afterPaths.size !== 1 || afterRevisions.size !== 1
+		|| normalizePath(insertedObservation.sourcePath) !== afterPath
+		|| insertedObservation.sourceRevision !== afterRevision
+		|| (before.length > 0 && (beforePaths.size !== 1
+			|| [...beforePaths][0] !== afterPath
+			|| beforeRevisions.size !== 1
+			|| [...beforeRevisions][0] === afterRevision))) return null;
+	const insertedKey = observationEvidenceKey(toObservationEvidence(insertedObservation));
+	const insertedIndexes = after.flatMap((observation, index) =>
+		observationEvidenceKey(toObservationEvidence(observation)) === insertedKey ? [index] : []);
+	if (insertedIndexes.length !== 1) return null;
+	const insertedIndex = insertedIndexes[0] as number;
+	const remaining = after.filter((_observation, index) => index !== insertedIndex);
+	if (!before.every((observation, index) =>
+		observation.logicalDate === remaining[index]?.logicalDate
+		&& observationContinuationKey(observation) === observationContinuationKey(remaining[index] as MemoObservation))) {
+		return null;
+	}
+	return before.map((observation, index) => ({
+		before: observation,
+		successors: [remaining[index] as MemoObservation],
+	}));
+}
+
 function selectOrderedRevisionAnchors(
 	anchors: readonly { beforeIndex: number; afterIndex: number }[],
 ): Array<{ beforeIndex: number; afterIndex: number }> {
@@ -1387,24 +1493,39 @@ function selectOrderedRevisionAnchors(
 function groupObservationIndexes(observations: readonly MemoObservation[]): Map<string, number[]> {
 	const groups = new Map<string, number[]>();
 	for (const [index, observation] of observations.entries()) {
-		const signature = canonicalIdentityLedgerJson({
-			rawBlockHash: observation.rawBlockHash,
-			section: observation.section,
-			time: observation.time,
-			content: observation.content,
-			contentHash: observation.contentHash,
-			existingBlockId: observation.existingBlockId,
-			tags: observation.tags,
-			links: observation.links,
-			images: observation.images,
-			tasks: observation.tasks,
-			timeBuoyDates: observation.timeBuoyDates,
-		});
+		const signature = observationContinuationKey(observation);
 		const indexes = groups.get(signature) ?? [];
 		indexes.push(index);
 		groups.set(signature, indexes);
 	}
 	return groups;
+}
+
+function observationContinuationKey(observation: MemoObservation): string {
+	return canonicalIdentityLedgerJson({
+		rawBlockHash: observation.rawBlockHash,
+		section: observation.section,
+		time: observation.time,
+		content: observation.content,
+		contentHash: observation.contentHash,
+		existingBlockId: observation.existingBlockId,
+		tags: observation.tags,
+		links: observation.links,
+		images: observation.images,
+		tasks: observation.tasks,
+		timeBuoyDates: observation.timeBuoyDates,
+	});
+}
+
+function duplicateObservationEvidenceKey(evidence: IdentityLedgerObservationEvidence): string {
+	return canonicalIdentityLedgerJson({
+		sourcePath: normalizePath(evidence.sourcePath),
+		rawBlockHash: evidence.rawBlockHash,
+		logicalDate: evidence.logicalDate,
+		section: evidence.section,
+		time: evidence.time,
+		contentHash: evidence.contentHash,
+	});
 }
 
 function toObservationEvidence(observation: MemoObservation): IdentityLedgerObservationEvidence {

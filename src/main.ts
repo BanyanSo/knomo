@@ -184,12 +184,16 @@ export default class KnomoPlugin extends Plugin {
 		const reconcileIdentityLedger = async () => {
 			const hasPendingCreates = identityLedgerService.hasPendingCreates();
 			const hasPendingDeletes = identityLedgerService.hasPendingDeletes();
-			if (!hasPendingCreates && !hasPendingDeletes) return;
+			const hasConflicts = Object.values(identityLedgerService.getSnapshot().memos)
+				.some((memo) => memo.conflicted);
+			if (!hasPendingCreates && !hasPendingDeletes && !hasConflicts) return;
 			const batches = await loadObservationBatches();
+			const observations = batches.flatMap((batch) => batch.observations);
+			if (hasConflicts) {
+				await identityLedgerService.repairKnownDuplicateCreateConflicts(observations);
+			}
 			if (hasPendingCreates) {
-				await identityLedgerService.reconcilePendingCreates(
-					batches.flatMap((batch) => batch.observations),
-				);
+				await identityLedgerService.reconcilePendingCreates(observations);
 			}
 			const coverage = hasPendingDeletes
 				? await this.memoCatalogService!.getStore().getCoverage()
@@ -246,6 +250,7 @@ export default class KnomoPlugin extends Plugin {
 					await identityLedgerService.reconcileRevision(
 						transition.before?.observations ?? [],
 						transition.after.observations,
+						transition.insertedObservation,
 					);
 				},
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),

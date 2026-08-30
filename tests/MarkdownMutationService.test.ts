@@ -158,6 +158,10 @@ test("同一分钟相同正文创建两条 observation，Daily 不含内部身�
 	assert.equal(parsed[1]?.content, "same");
 	assert.notEqual(parsed[0]?.startLine, parsed[1]?.startLine);
 	assert.equal(
+		fixture.committedPartitions[1]?.insertedObservation?.startLine,
+		parsed[1]?.startLine,
+	);
+	assert.equal(
 		fixture.vault.readText(fixture.getPath("2026-08-22")),
 		"## Memos\n- 09:00 same\n- 09:00 same\n",
 	);

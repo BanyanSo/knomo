@@ -22,7 +22,9 @@ export function getCatalogReadStatusHeaders(
 	}
 
 	if (options.status.identity === "conflicted") {
-		headers.push(summary(t("catalog.identityConflict"), t("catalog.openDiagnostics"), "open-catalog-settings"));
+		headers.push(options.status.identityConflict === "ledger"
+			? summary(t("catalog.identityConflict"), t("catalog.openDiagnostics"), "open-catalog-settings")
+			: summary(t("catalog.identityConflict")));
 	}
 
 	if (options.status.projection === "failed") {

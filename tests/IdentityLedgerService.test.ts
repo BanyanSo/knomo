@@ -485,6 +485,81 @@ test("P1 第 5 步：完整 before/after revision 的唯一 successor 自动续�
 	assert.equal(restarted.resolveObservation(after)?.memoId, MEMO_A);
 });
 
+test("同一秒创建相同正文时，已知插入项不参与旧身份 successor 匹配", async () => {
+	for (const position of ["top", "bottom"] as const) {
+		const vault = await createLedgerVault();
+		const service = createService(
+			vault,
+			WRITER_A,
+			[MEMO_A, MEMO_C],
+			[eventId(1), eventId(2), eventId(3), eventId(4), eventId(5)],
+		);
+		await service.initialize();
+		const before = makeDuplicateObservation("a".repeat(64), 1);
+		const existing = makeDuplicateObservation("b".repeat(64), position === "top" ? 2 : 1);
+		const inserted = makeDuplicateObservation("b".repeat(64), position === "top" ? 1 : 2);
+		const firstPlan = await service.beginCreate(createIntentInput(before, "09:00:37"));
+		await service.finishCreate(firstPlan, before);
+		const secondPlan = await service.beginCreate(createIntentInput(inserted, "09:00:37"));
+
+		const result = await service.reconcileRevision(
+			[before],
+			position === "top" ? [inserted, existing] : [existing, inserted],
+			inserted,
+		);
+		await service.finishCreate(secondPlan, inserted);
+
+		assert.deepEqual(result, { appendedEventCount: 1, conflictedMemoIds: [] });
+		assert.equal(service.resolveObservation(existing)?.memoId, MEMO_A);
+		assert.equal(service.resolveObservation(inserted)?.memoId, MEMO_C);
+		assert.notEqual(firstPlan.memoId, secondPlan.memoId);
+		assert.equal(service.getCreatedAt(MEMO_A), "2026-08-22T09:00:37");
+		assert.equal(service.getCreatedAt(MEMO_C), "2026-08-22T09:00:37");
+	}
+});
+
+test("重启后只修复 create claim 已唯一占用一个 successor 的重复插入分叉", async () => {
+	const vault = await createLedgerVault();
+	const first = createService(
+		vault,
+		WRITER_A,
+		[MEMO_A, MEMO_C],
+		[eventId(1), eventId(2), eventId(3), eventId(4), eventId(5), eventId(6)],
+	);
+	await first.initialize();
+	const before = makeDuplicateObservation("a".repeat(64), 1);
+	const existing = makeDuplicateObservation("b".repeat(64), 1);
+	const inserted = makeDuplicateObservation("b".repeat(64), 2);
+	await first.finishCreate(
+		await first.beginCreate(createIntentInput(before, "09:00:12")),
+		before,
+	);
+	const secondPlan = await first.beginCreate(createIntentInput(inserted, "09:00:37"));
+	assert.deepEqual(
+		await first.reconcileRevision([before], [existing, inserted]),
+		{ appendedEventCount: 2, conflictedMemoIds: [MEMO_A] },
+	);
+	await assert.rejects(
+		() => first.finishCreate(secondPlan, inserted),
+		/claim did not resolve/u,
+	);
+
+	const restarted = createService(vault, WRITER_B, [], [eventId(7)]);
+	await restarted.initialize();
+
+	assert.equal(await restarted.repairKnownDuplicateCreateConflicts([existing, inserted]), 1);
+	assert.equal(restarted.resolveObservation(existing)?.memoId, MEMO_A);
+	assert.equal(restarted.resolveObservation(inserted)?.memoId, MEMO_C);
+	assert.equal(restarted.getSnapshot().memos[MEMO_A]?.conflicted, false);
+	assert.equal(restarted.getCreatedAt(MEMO_A), "2026-08-22T09:00:12");
+	assert.equal(restarted.getCreatedAt(MEMO_C), "2026-08-22T09:00:37");
+
+	const verified = createService(vault, WRITER_A, [], []);
+	await verified.initialize();
+	assert.equal(verified.resolveObservation(existing)?.memoId, MEMO_A);
+	assert.equal(verified.resolveObservation(inserted)?.memoId, MEMO_C);
+});
+
 test("P1 第 5 步：唯一内容锚点分隔出的多个一对一区间可以分别续接", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(
@@ -1072,13 +1147,22 @@ async function createLedgerVault(
 	return vault;
 }
 
-function createIntentInput(observation: MemoObservation) {
+function createIntentInput(observation: MemoObservation, time = observation.time) {
 	return {
 		targetPath: observation.sourcePath,
 		logicalDate: observation.logicalDate,
-		time: observation.time,
+		time,
 		contentHash: observation.contentHash,
 		sourceMemoId: null,
+	};
+}
+
+function makeDuplicateObservation(sourceRevision: string, startLine: number): MemoObservation {
+	return {
+		...makeObservation("Daily/2026-08-22.md", sourceRevision, startLine, "相同正文"),
+		rawBlockHash: "fnv1a-87654321",
+		contentHash: "fnv1a-12345678",
+		time: "09:00",
 	};
 }
 

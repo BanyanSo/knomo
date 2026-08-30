@@ -54,6 +54,7 @@ export interface CatalogRevisionTransition {
 	sourcePath: string;
 	before: CatalogRevisionTransitionSide | null;
 	after: CatalogRevisionTransitionSide;
+	insertedObservation: MemoObservation | null;
 }
 
 export interface CatalogIndexCoordinatorOptions {
@@ -226,6 +227,8 @@ export class CatalogIndexCoordinator {
 				sourcePath,
 				input.parsed.sourceRevision,
 				input.parsed.observations,
+				() => true,
+				input.insertedObservation ?? null,
 			);
 			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
 			await this.catalogService.replaceFile({
@@ -687,6 +690,7 @@ export class CatalogIndexCoordinator {
 		sourceRevision: string,
 		observations: readonly MemoObservation[],
 		isCurrent: () => boolean = () => true,
+		insertedObservation: MemoObservation | null = null,
 	): Promise<CatalogRevisionTransition | null> {
 		if (this.onRevisionTransition === null) return null;
 		try {
@@ -699,6 +703,7 @@ export class CatalogIndexCoordinator {
 					observations: before.observations,
 				},
 				after: { sourceRevision, observations },
+				insertedObservation,
 			};
 		} catch {
 			return null;

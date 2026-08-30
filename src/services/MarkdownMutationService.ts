@@ -32,6 +32,7 @@ export interface MarkdownCatalogCommitInput {
 	logicalDate: string;
 	content: string;
 	parsed: DiaryMemoParseResult;
+	insertedObservation?: MemoObservation;
 }
 
 export interface MarkdownMutationServiceOptions {
@@ -336,7 +337,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					},
 				});
 				const created = findAppendedObservation(prepared, rawBlock, section, position);
-				const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, onDailyCommitted);
+				const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, onDailyCommitted, created);
 				return committedResult(created, [file.path], catalogUpdatePending);
 			} catch (error) {
 				if (createdFile) await this.options.removeEmptyCreatedDailyFile?.(file).catch(() => undefined);
@@ -348,6 +349,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 	private async commitAndUpdateCatalog(
 		prepared: PreparedDailyWrite,
 		onDailyCommitted?: () => void,
+		insertedObservation?: MemoObservation,
 	): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
 		const catalogUpdate = this.enqueueCatalogUpdate({
@@ -355,6 +357,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			logicalDate: prepared.logicalDate,
 			content: prepared.afterContent,
 			parsed: prepared.after,
+			...(insertedObservation === undefined ? {} : { insertedObservation }),
 		});
 		try {
 			onDailyCommitted?.();

@@ -614,8 +614,11 @@ export class CatalogReadService {
 			|| lifecycle.state === "degraded"
 			|| lifecycle.state === "retrying"
 			|| lifecycle.state === "read-only";
-		const identityConflicted = identityStatus === "conflicted"
-			|| resolved.some((memo) => memo.kind === "ambiguous");
+		const observationConflicted = resolved.some((memo) => memo.kind === "ambiguous");
+		const identityConflicted = identityStatus === "conflicted" || observationConflicted;
+		const identityConflict = identityStatus === "conflicted"
+			? "ledger" as const
+			: observationConflicted ? "observation" as const : null;
 		return {
 			content: contentUnavailable
 				? "unavailable"
@@ -629,6 +632,7 @@ export class CatalogReadService {
 				? "conflicted"
 				: identityStatus === "ready" ? "ready"
 					: identityStatus === "missing" || identityStatus === "absent" ? "absent" : "syncing",
+			identityConflict,
 			projection: this.getProjectionState(),
 			migration: legacyStatus === "attention"
 				? "attention"

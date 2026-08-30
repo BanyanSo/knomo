@@ -251,6 +251,7 @@ export interface IdentityLedgerMutationService extends IdentityLedgerReader {
 	reconcileRevision(
 		before: readonly MemoObservation[],
 		after: readonly MemoObservation[],
+		insertedObservation?: MemoObservation | null,
 	): Promise<IdentityLedgerReconcileResult>;
 	rebindObservation(
 		before: MemoObservation,

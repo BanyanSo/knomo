@@ -85,7 +85,7 @@ test("Identity 冲突只降级相关 observation，不阻断其他 Catalog 内�
 		kind: "conflicted",
 		memoIds: ["2026082212345601", "2026082212345602"],
 		bindings: [],
-	}, "conflicted", "identity-conflict");
+	}, "ready", "identity-conflict");
 	const service = new CatalogReadService({ catalog, identityLedger: identity.reader });
 
 	const page = await service.query({ limit: 50 });
@@ -94,6 +94,7 @@ test("Identity 冲突只降级相关 observation，不阻断其他 Catalog 内�
 
 	assert.equal(page.items.length, 2);
 	assert.equal(page.status.identity, "conflicted");
+	assert.equal(page.status.identityConflict, "observation");
 	assert.equal(conflictedItem?.resolved.kind, "ambiguous");
 	assert.equal(conflictedItem?.capabilities.identity.repair, "conflicted");
 	assert.equal(unaffectedItem?.resolved.kind, "observed");

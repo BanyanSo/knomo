@@ -49,6 +49,42 @@ test("首次启用默认创建 Identity 根并发布共享配置", async () => {
 	});
 });
 
+test("1.2.9 已有 Knomo 目录且 Vault 延迟确认新目录时在本次启动内完成初始化", async () => {
+	const vault = new InMemoryVault();
+	await vault.app.vault.createFolder("Knomo");
+	const createFolder = vault.app.vault.createFolder.bind(vault.app.vault);
+	let injectedFolderRace = false;
+	vault.app.vault.createFolder = async (path) => {
+		if (!injectedFolderRace && path === "Knomo/_knomo-data") {
+			injectedFolderRace = true;
+			setTimeout(() => { void createFolder(path); }, 0);
+			throw new Error("Folder already exists.");
+		}
+		return createFolder(path);
+	};
+	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
+	const ledger = createLedger(vault, () => location);
+	const migration = new KnomoDataRootMigrationService(
+		vault.app,
+		ledger,
+		() => location,
+		async (root) => { location = { knomoDataRoot: root, knomoDataRootConfigured: true }; },
+	);
+	const shared = createSharedConfig(vault, () => location, "## Memos");
+	const bootstrap = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => location,
+		initializeDataRoot: async (root) => { await migration.migrate(root); },
+		identity: ledger,
+		sharedConfig: shared,
+	});
+
+	await bootstrap.initialize();
+
+	assert.equal(injectedFolderRace, true);
+	assert.equal(location.knomoDataRootConfigured, true);
+	assert.equal(bootstrap.getSnapshot().status, "ready");
+});
+
 test("已配置但 Identity 根丢失时保留真实失败阶段，不伪造新的 Identity Ledger", async () => {
 	const vault = new InMemoryVault();
 	const location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: true };

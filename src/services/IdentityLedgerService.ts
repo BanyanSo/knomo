@@ -2,6 +2,7 @@ import { normalizePath, TFile, TFolder } from "obsidian";
 import type { App, Component, TAbstractFile } from "obsidian";
 
 import type { MemoObservation } from "../types/catalog";
+import { ensureFolder as ensureVaultFolder } from "../utils/vault";
 import type {
 	IdentityLedgerBinding,
 	IdentityLedgerClaimEvent,
@@ -63,6 +64,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private refreshRequested = false;
 	private writeQueue: Promise<void> = Promise.resolve();
 	private writePauseCount = 0;
+	private legacyImportWriteCount = 0;
 	private readonly selfWrittenPaths = new Map<string, number>();
 	private readonly purgeOperations = new Map<string, Promise<void>>();
 
@@ -223,11 +225,12 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		const pendingEvents = [...pendingByEventId.values()].map((item) => item.event);
 		if (pendingEvents.length === 0) return 0;
 
+		this.legacyImportWriteCount += 1;
 		const previous = this.writeQueue;
 		let releaseQueue: () => void = () => undefined;
 		this.writeQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
-		await previous;
 		try {
+			await previous;
 			this.assertWriteAllowed(runtime.cancellationSignal);
 			const rootPath = this.requireRootPath();
 			const incoming: IdentityLedgerEventEnvelope[] = [];
@@ -263,6 +266,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			throw error;
 		} finally {
 			releaseQueue();
+			this.legacyImportWriteCount -= 1;
 		}
 		this.scheduleNotification();
 		return pendingEvents.length;
@@ -280,6 +284,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	async beginCreate(input: IdentityLedgerCreateInput): Promise<IdentityLedgerCreatePlan> {
+		if (this.legacyImportWriteCount > 0) {
+			throw new Error("Identity Ledger is importing legacy events.");
+		}
 		const memoId = this.createMemoId();
 		const intent: IdentityLedgerCreateIntentEvent = {
 			eventId: this.createEventId(),
@@ -829,21 +836,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		if (!(this.app.vault.getAbstractFileByPath(normalizedRoot) instanceof TFolder)) {
 			throw new MissingIdentityLedgerRootError();
 		}
-		const segments = normalizedPath.slice(normalizedRoot.length + 1).split("/").filter(Boolean);
-		let current = normalizedRoot;
-		for (const segment of segments) {
-			this.assertWriteAllowed(cancellationSignal);
-			current = `${current}/${segment}`;
-			const existing = this.app.vault.getAbstractFileByPath(current);
-			if (existing instanceof TFolder) continue;
-			if (existing !== null) throw new Error(`Identity Ledger path is not a folder: ${current}`);
-			try {
-				this.assertWriteAllowed(cancellationSignal);
-				await this.app.vault.createFolder(current);
-			} catch (error) {
-				if (!(this.app.vault.getAbstractFileByPath(current) instanceof TFolder)) throw error;
-			}
-		}
+		this.assertWriteAllowed(cancellationSignal);
+		await ensureVaultFolder(this.app, normalizedPath);
+		this.assertWriteAllowed(cancellationSignal);
 	}
 
 	private async writeImmutable(path: string, content: string, cancellationSignal?: AbortSignal): Promise<void> {

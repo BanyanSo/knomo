@@ -76,8 +76,21 @@ test("routes the device-setting action through startup initialization and refres
 	);
 
 	assert.match(sharedConfigSource, /this\.startupBootstrapService\.useCurrentDeviceSettings\(\)/u);
-	assert.match(sharedConfigSource, /formatServiceError\(error/u);
+	assert.match(sharedConfigSource, /new Notice\(t\("settings\.sharedConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
+});
+
+test("shows a plain-language runtime summary and keeps engineering state in advanced diagnostics", () => {
+	const source = readSettingTabSource();
+	const runtimeSource = getSourceBetween(
+		source,
+		"\tprivate renderRuntimeStatusSetting(",
+		"\n\tprivate renderLocalHistorySetting(",
+	);
+
+	assert.match(runtimeSource, /settings\.runtime\.summary\./u);
+	assert.match(runtimeSource, /createEl\("details"/u);
+	assert.match(runtimeSource, /settings\.runtime\.diagnostics/u);
 });
 
 test("keeps monthly filename and date heading visible without a formatting expander", () => {

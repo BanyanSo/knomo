@@ -46,7 +46,7 @@ test("fresh empty Vault 的 identity absent 不显示初始化 gate", () => {
 	assert.deepEqual(headers, []);
 });
 
-test("本地扫描完成但共享配置缺失时提示配置范围，不再显示历史构建或重建动作", () => {
+test("本地扫描完成但共享配置仍在初始化时不把工程状态放进卡片流", () => {
 	const headers = getCatalogReadStatusHeaders({
 		status: {
 			content: "ready",
@@ -61,10 +61,7 @@ test("本地扫描完成但共享配置缺失时提示配置范围，不再显�
 		},
 	});
 
-	assert.equal(headers.length, 1);
-	assert.equal(headers[0]?.type, "summary");
-	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "open-catalog-settings");
-	assert.doesNotMatch(headers[0]?.type === "summary" ? headers[0].text : "", /历史仍在构建/u);
+	assert.deepEqual(headers, []);
 });
 
 test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {

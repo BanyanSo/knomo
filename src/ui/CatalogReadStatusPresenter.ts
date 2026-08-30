@@ -19,8 +19,6 @@ export function getCatalogReadStatusHeaders(
 	}
 	if (options.status.catalog === "degraded") {
 		headers.push(summary(t("catalog.storageUnavailable"), t("catalog.retryLocalStorage"), "refresh-catalog-sync-state"));
-	} else if (options.status.catalog === "partial" && options.coverage?.sharedConfigurationComplete === false) {
-		headers.push(summary(t("catalog.sharedConfigurationPartial"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	}
 
 	if (options.status.identity === "conflicted") {

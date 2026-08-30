@@ -94,6 +94,46 @@ test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim",
 	assert.deepEqual(events, ["intent", "daily"]);
 });
 
+test("迁移期间 intent 快速降级时仍立即提交 Daily，并标记 identity pending", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const events: string[] = [];
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created during migration");
+	const identityLedger = {
+		beginCreate: async () => {
+			events.push("intent");
+			throw new Error("Legacy import is using the Identity writer.");
+		},
+		finishCreate: async () => {
+			assert.fail("没有 durable intent 时不应写 claim");
+		},
+	} as unknown as IdentityLedgerMutationService;
+	const markdownMutations = {
+		create: async () => {
+			events.push("daily");
+			return mutationResult(observation);
+		},
+	} as unknown as MarkdownMutationService;
+	const service = new MemoCommandService(
+		{} as App,
+		catalog,
+		makeCommandOptions(),
+		markdownMutations,
+		identityLedger,
+	);
+
+	const result = await service.create(observation.content);
+
+	assert.deepEqual(events, ["intent", "daily"]);
+	assert.equal(result.memoId, null);
+	assert.equal(result.followUpPending, true);
+});
+
 test("阶段化 create 在 Daily 提交后先完成 committed，identity 与读模型继续结算", async () => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");

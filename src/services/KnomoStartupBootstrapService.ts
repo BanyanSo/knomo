@@ -1,9 +1,9 @@
-import { normalizePath, TFolder } from "obsidian";
 import type { App } from "obsidian";
 
 import type { IdentityLedgerStatus } from "../types/identityLedger";
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import { getCatalogDataRootPath } from "../utils/path";
+import { ensureFolder } from "../utils/vault";
 import type { KnomoDataRootLocation } from "./KnomoDataRootMigrationService";
 
 interface StartupIdentityService {
@@ -116,7 +116,7 @@ export class KnomoStartupBootstrapService {
 
 			stage = "catalog";
 			this.setInitializing(stage);
-			await this.ensureFolder(getCatalogDataRootPath(location.knomoDataRoot));
+			await ensureFolder(this.app, getCatalogDataRootPath(location.knomoDataRoot));
 
 			stage = "shared_config";
 			this.setInitializing(stage);
@@ -167,19 +167,4 @@ export class KnomoStartupBootstrapService {
 		};
 	}
 
-	private async ensureFolder(path: string): Promise<void> {
-		const segments = normalizePath(path).split("/").filter(Boolean);
-		let current = "";
-		for (const segment of segments) {
-			current = current.length === 0 ? segment : `${current}/${segment}`;
-			const existing = this.app.vault.getAbstractFileByPath(current);
-			if (existing instanceof TFolder) continue;
-			if (existing !== null) throw new Error(`Knomo data path is not a folder: ${current}`);
-			try {
-				await this.app.vault.createFolder(current);
-			} catch (error) {
-				if (!(this.app.vault.getAbstractFileByPath(current) instanceof TFolder)) throw error;
-			}
-		}
-	}
 }

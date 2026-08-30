@@ -822,6 +822,42 @@ test("P1 第 7 步：重复导入相同旧事件不产生重复 Identity events"
 	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 1);
 });
 
+test("旧版 Identity 批量写入进行中时新建 intent 快速降级，不排在迁移队列后", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [MEMO_B], [eventId(30)]);
+	await service.initialize();
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "旧版正文");
+	const claim: IdentityLedgerEvent = {
+		eventId: eventId(29),
+		writerId: WRITER_A,
+		memoId: MEMO_A,
+		type: "claim",
+		baseBindingId: null,
+		occurredAt: "2026-08-22T00:00:00.000Z",
+		evidence: { observation: makeEvidence(observation), createIntentEventId: null },
+	};
+	let releaseImport!: () => void;
+	const importBlocked = new Promise<void>((resolve) => { releaseImport = resolve; });
+	let markImportBlocked!: () => void;
+	const importReachedYield = new Promise<void>((resolve) => { markImportBlocked = resolve; });
+	const importing = service.importVerifiedLegacyEvents([claim], {
+		yieldControl: async () => {
+			markImportBlocked();
+			await importBlocked;
+		},
+	});
+	await importReachedYield;
+
+	const beginResult = await Promise.race([
+		service.beginCreate(createIntentInput(observation)).then(() => "resolved", () => "rejected"),
+		new Promise<"timeout">((resolve) => { setTimeout(() => resolve("timeout"), 100); }),
+	]);
+	releaseImport();
+	await importing;
+
+	assert.equal(beginResult, "rejected");
+});
+
 test("旧版事件仍在计算时取消，不得持久化任何 Identity segment", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [], []);

@@ -3,6 +3,7 @@ import type { App, TAbstractFile } from "obsidian";
 
 import type { IdentityLedgerEventEnvelope, IdentityLedgerSnapshot } from "../types/identityLedger";
 import { normalizeVaultPath } from "../utils/path";
+import { ensureFolder } from "../utils/vault";
 import {
 	canonicalIdentityLedgerJson,
 	getIdentityLedgerRootPath,
@@ -111,7 +112,7 @@ export class KnomoDataRootMigrationService {
 			const plan = await this.plan(nextDataRoot);
 			switch (plan.action) {
 				case "initialize":
-					await this.ensureFolder(`${plan.newIdentityRoot}/writers`);
+					await ensureFolder(this.app, `${plan.newIdentityRoot}/writers`);
 					await this.requireImage(plan.newIdentityRoot);
 					await this.commitLocation(plan.newDataRoot);
 					result = { status: "initialized", plan };
@@ -143,10 +144,10 @@ export class KnomoDataRootMigrationService {
 		const source = await this.requireImage(sourceRoot);
 		const target = await this.readTargetImage(targetRoot);
 		if (target !== null) this.assertTargetIsSourceSubset(source, target);
-		await this.ensureFolder(`${targetRoot}/writers`);
+		await ensureFolder(this.app, `${targetRoot}/writers`);
 		for (const [relativePath, content] of source.files) {
 			const targetPath = normalizePath(`${targetRoot}/${relativePath}`);
-			await this.ensureFolder(parentPath(targetPath));
+			await ensureFolder(this.app, parentPath(targetPath));
 			await this.writeImmutable(targetPath, content);
 		}
 		const stableSource = await this.requireImage(sourceRoot);
@@ -225,22 +226,6 @@ export class KnomoDataRootMigrationService {
 		if (sourceRoot === targetRoot) return;
 		if (sourceRoot.startsWith(`${targetRoot}/`) || targetRoot.startsWith(`${sourceRoot}/`)) {
 			throw new Error("Knomo data root migration cannot use nested source and target roots.");
-		}
-	}
-
-	private async ensureFolder(path: string): Promise<void> {
-		const segments = normalizePath(path).split("/").filter(Boolean);
-		let current = "";
-		for (const segment of segments) {
-			current = current.length === 0 ? segment : `${current}/${segment}`;
-			const existing = this.app.vault.getAbstractFileByPath(current);
-			if (existing instanceof TFolder) continue;
-			if (existing !== null) throw new Error(`Knomo data path is not a folder: ${current}`);
-			try {
-				await this.app.vault.createFolder(current);
-			} catch (error) {
-				if (!(this.app.vault.getAbstractFileByPath(current) instanceof TFolder)) throw error;
-			}
 		}
 	}
 

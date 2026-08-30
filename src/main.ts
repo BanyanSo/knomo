@@ -319,6 +319,10 @@ export default class KnomoPlugin extends Plugin {
 			legacyIndexReader,
 			identityLedgerService,
 			{
+				isTargetReady: () => startupBootstrapService !== null
+					? startupBootstrapService.getSnapshot().status === "ready"
+					: (identityLedgerService.getStatus() === "ready" || identityLedgerService.getStatus() === "absent")
+						&& knomoSharedConfigService.getStatus() === "ready",
 				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
 				getObservationBatches: loadObservationBatches,
 				completionStore: this.memoCatalogService.getStore(),

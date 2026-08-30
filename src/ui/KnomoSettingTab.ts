@@ -22,6 +22,7 @@ import type { CatalogReadService } from "../services/CatalogReadService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
 import type { LegacyIndexMigrationService } from "../services/LegacyIndexMigrationService";
+import type { KnomoRuntimeSnapshot } from "../types/catalogView";
 import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { normalizeVaultPath } from "../utils/path";
@@ -509,10 +510,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 		statusEl.setAttr("aria-live", "polite");
 		statusEl.setAttr("aria-atomic", "true");
 		statusEl.setText(t("settings.runtime.loading"));
+		const diagnosticsHostEl = setting.infoEl.createDiv();
 		void this.catalogReadService.getRuntimeSnapshot().then((snapshot) => {
 			if (requestId !== this.runtimeStatusRequestId) return;
 			statusEl.empty();
+			const initialization = this.startupBootstrapService?.getSnapshot() ?? null;
 			statusEl.createDiv({
+				cls: "knomo-setting-help",
+				text: this.getRuntimeSummaryLabel(snapshot, initialization),
+			});
+			diagnosticsHostEl.empty();
+			const diagnosticsEl = diagnosticsHostEl.createEl("details", { cls: "knomo-runtime-diagnostics" });
+			diagnosticsEl.createEl("summary", { text: t("settings.runtime.diagnostics") });
+			const diagnosticsBodyEl = diagnosticsEl.createDiv();
+			diagnosticsBodyEl.createDiv({
 				cls: "knomo-setting-help",
 				text: t("settings.runtime.catalog", {
 					coverage: snapshot.catalog.coverage.kind,
@@ -524,16 +535,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 						: t("settings.runtime.storage.memory"),
 				}),
 			});
-			const initialization = this.startupBootstrapService?.getSnapshot() ?? null;
 			if (initialization !== null) {
-				statusEl.createDiv({
+				diagnosticsBodyEl.createDiv({
 					cls: "knomo-setting-help",
 					text: t("settings.runtime.initialization", {
 						status: this.getBootstrapStatusLabel(initialization.status),
 					}),
 				});
 				if (initialization.error !== null) {
-					statusEl.createDiv({
+					diagnosticsBodyEl.createDiv({
 						cls: "knomo-setting-help is-error",
 						text: t("settings.runtime.initializationDetail", {
 							stage: this.getBootstrapStageLabel(initialization.stage),
@@ -542,15 +552,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 					});
 				}
 			}
-			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.identity", { status: snapshot.identity }) });
-			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.sharedConfig", { status: snapshot.sharedConfiguration }) });
-			statusEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.monthly", { status: snapshot.monthly }) });
-			statusEl.createDiv({
+			diagnosticsBodyEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.identity", { status: snapshot.identity }) });
+			diagnosticsBodyEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.sharedConfig", { status: snapshot.sharedConfiguration }) });
+			diagnosticsBodyEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.monthly", { status: snapshot.monthly }) });
+			diagnosticsBodyEl.createDiv({
 				cls: "knomo-setting-help",
 				text: t("settings.runtime.legacy", { status: this.getLegacyStatusLabel(snapshot.legacyMigration) }),
 			});
 			if (snapshot.catalog.lifecycle.reason !== null) {
-				statusEl.createDiv({
+				diagnosticsBodyEl.createDiv({
 					cls: "knomo-setting-help is-error",
 					text: t("settings.runtime.reason", { reason: formatSettingsText(snapshot.catalog.lifecycle.reason) }),
 				});
@@ -558,6 +568,41 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}).catch(() => {
 			if (requestId === this.runtimeStatusRequestId) statusEl.setText(t("settings.runtime.unavailable"));
 		});
+	}
+
+	private getRuntimeSummaryLabel(
+		snapshot: KnomoRuntimeSnapshot,
+		initialization: ReturnType<KnomoStartupBootstrapService["getSnapshot"]> | null,
+	): string {
+		if (initialization?.status === "unavailable"
+			|| snapshot.catalog.lifecycle.state === "degraded"
+			|| snapshot.catalog.lifecycle.state === "retrying"
+			|| snapshot.catalog.lifecycle.state === "read-only"
+			|| snapshot.identity === "unavailable"
+			|| snapshot.sharedConfiguration === "unavailable"
+			|| snapshot.monthly === "failed"
+			|| snapshot.legacyMigration === "unavailable") {
+			return t("settings.runtime.summary.unavailable");
+		}
+		if (initialization?.status === "conflicted"
+			|| snapshot.identity === "conflicted"
+			|| snapshot.sharedConfiguration === "conflicted"
+			|| snapshot.legacyMigration === "attention"
+			|| snapshot.legacyMigration === "partial") {
+			return t("settings.runtime.summary.attention");
+		}
+		const initializationReady = initialization === null || initialization.status === "ready";
+		const legacyReady = snapshot.legacyMigration === "ready" || snapshot.legacyMigration === "not_applicable";
+		if (initializationReady
+			&& snapshot.catalog.coverage.kind === "complete"
+			&& snapshot.catalog.lifecycle.state === "ready"
+			&& snapshot.identity === "ready"
+			&& snapshot.sharedConfiguration === "ready"
+			&& snapshot.monthly === "ready"
+			&& legacyReady) {
+			return t("settings.runtime.summary.ready");
+		}
+		return t("settings.runtime.summary.preparing");
 	}
 
 	private renderLocalHistorySetting(setting: Setting): void {
@@ -1108,15 +1153,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private getSharedConfigDescription(): string {
 		const initialization = this.startupBootstrapService?.getSnapshot() ?? null;
 		if (initialization?.status === "initializing") {
-			return t("settings.sharedConfig.initializing", {
-				stage: this.getBootstrapStageLabel(initialization.stage),
-			});
+			return t("settings.sharedConfig.initializing");
 		}
 		if (initialization?.status === "unavailable" && initialization.error !== null) {
-			return t("settings.sharedConfig.initializationFailed", {
-				stage: this.getBootstrapStageLabel(initialization.stage),
-				reason: formatSettingsText(initialization.error),
-			});
+			return t("settings.sharedConfig.initializationFailed");
 		}
 		switch (this.knomoSharedConfigService.getStatus()) {
 			case "ready":
@@ -1164,8 +1204,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 								?? "Shared configuration did not become ready.");
 						}
 						new Notice(t("settings.sharedConfig.saved"));
-					} catch (error) {
-						new Notice(formatServiceError(error, t("settings.sharedConfig.failed")));
+					} catch {
+						new Notice(t("settings.sharedConfig.failed"));
 					} finally {
 						button.setDisabled(false);
 						this.refreshSettingTab();
@@ -1199,6 +1239,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private getLegacyStatusLabel(status: LegacyIdentityImportStatus): string {
 		switch (status) {
 			case "idle": return t("settings.runtime.legacy.idle");
+			case "waiting_initialization": return t("settings.runtime.legacy.waitingInitialization");
 			case "waiting_catalog": return t("settings.runtime.legacy.waitingCatalog");
 			case "not_applicable": return t("settings.runtime.legacy.notApplicable");
 			case "ready": return t("settings.runtime.legacy.ready");

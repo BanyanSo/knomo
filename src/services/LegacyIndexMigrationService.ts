@@ -43,6 +43,7 @@ interface LegacyMigrationCompletion {
 }
 
 export interface LegacyIndexMigrationServiceOptions {
+	isTargetReady?: () => boolean;
 	getCatalogCoverage: () => Promise<CatalogCoverage>;
 	getObservationBatches: () => Promise<readonly CatalogFileRevisionBatch<MemoObservation>[]>;
 	yieldControl?: () => Promise<void>;
@@ -124,6 +125,9 @@ export class LegacyIndexMigrationService {
 				this.completedSourceId = null;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
+			}
+			if (this.options.isTargetReady?.() === false) {
+				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "waiting_initialization" });
 			}
 			if (this.report.status === "ready"
 				&& this.completedSourceId === presence.sourceId

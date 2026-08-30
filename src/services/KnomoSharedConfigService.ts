@@ -8,6 +8,7 @@ import type {
 	KnomoSharedConfigSnapshot,
 	KnomoSharedConfigStatus,
 } from "../types/knomoConfig";
+import { ensureFolder as ensureVaultFolder } from "../utils/vault";
 import {
 	canonicalKnomoSharedConfigJson,
 	createKnomoSharedConfigEventId,
@@ -41,6 +42,7 @@ export class KnomoSharedConfigService {
 	private lastError: string | null = null;
 	private invalidFileCount = 0;
 	private onChanged: (() => void | Promise<void>) | null = null;
+	private changeNotificationQueue: Promise<void> = Promise.resolve();
 	private refreshQueue: Promise<void> = Promise.resolve();
 	private refreshRequested = false;
 	private writeQueue: Promise<void> = Promise.resolve();
@@ -95,12 +97,12 @@ export class KnomoSharedConfigService {
 
 	async reloadConfiguredRoot(): Promise<void> {
 		await this.initialize();
-		await this.notifyChanged();
+		this.notifyChanged();
 	}
 
 	async refreshLocalConfig(): Promise<void> {
 		this.localConfig = await this.readLocalConfig();
-		await this.notifyChanged();
+		this.notifyChanged();
 	}
 
 	getStatus(): KnomoSharedConfigStatus {
@@ -256,7 +258,7 @@ export class KnomoSharedConfigService {
 		} finally {
 			releaseQueue();
 		}
-		await this.notifyChanged();
+		this.notifyChanged();
 	}
 
 	private async refreshFromVault(): Promise<void> {
@@ -314,15 +316,18 @@ export class KnomoSharedConfigService {
 			if (!this.refreshRequested) return;
 			this.refreshRequested = false;
 			await this.refreshFromVault();
-			await this.notifyChanged();
+			this.notifyChanged();
 		}).catch((error) => {
 			this.status = "unavailable";
 			this.lastError = errorDetail(error);
 		});
 	}
 
-	private notifyChanged(): Promise<void> {
-		return Promise.resolve(this.onChanged?.());
+	private notifyChanged(): void {
+		this.changeNotificationQueue = this.changeNotificationQueue.then(
+			async () => { await this.onChanged?.(); },
+			async () => { await this.onChanged?.(); },
+		).catch(() => undefined);
 	}
 
 	private getRootPath(): string | null {
@@ -366,19 +371,7 @@ export class KnomoSharedConfigService {
 		const dataFolder = getDataFolderFromConfigRoot(rootPath);
 		const normalizedPath = normalizePath(path);
 		if (!normalizedPath.startsWith(`${dataFolder}/`)) throw new Error("Configuration child path escaped Knomo Data Root.");
-		const segments = normalizedPath.slice(dataFolder.length + 1).split("/").filter(Boolean);
-		let current = dataFolder;
-		for (const segment of segments) {
-			current = `${current}/${segment}`;
-			const existing = this.app.vault.getAbstractFileByPath(current);
-			if (existing instanceof TFolder) continue;
-			if (existing !== null) throw new Error(`Knomo configuration path is not a folder: ${current}`);
-			try {
-				await this.app.vault.createFolder(current);
-			} catch (error) {
-				if (!(this.app.vault.getAbstractFileByPath(current) instanceof TFolder)) throw error;
-			}
-		}
+		await ensureVaultFolder(this.app, normalizedPath);
 	}
 
 	private async writeImmutable(path: string, content: string): Promise<void> {

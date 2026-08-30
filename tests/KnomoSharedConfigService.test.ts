@@ -106,6 +106,41 @@ test("发布与共享配置相同的本机设置不触发变更通知", async ()
 	assert.equal(notifyCount, 0);
 });
 
+test("发布共享配置不等待后台派生刷新完成", async () => {
+	const replica = new InMemoryVault();
+	await replica.app.vault.createFolder("Knomo/_knomo-data");
+	const service = createService(
+		replica,
+		WRITER_A,
+		"c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		makeConfig("## Shared"),
+	);
+	await service.initialize();
+	let releaseRefresh!: () => void;
+	let refreshStarted = false;
+	let refreshFinished = false;
+	const refreshBlocked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+	(service as unknown as { onChanged: () => Promise<void> }).onChanged = async () => {
+		refreshStarted = true;
+		await refreshBlocked;
+		refreshFinished = true;
+	};
+
+	const publication = service.publishLocalConfig();
+	const returnedBeforeRefresh = await Promise.race([
+		publication.then(() => true),
+		new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), 100); }),
+	]);
+	releaseRefresh();
+	await publication;
+	await (service as unknown as { changeNotificationQueue: Promise<void> }).changeNotificationQueue;
+
+	assert.equal(returnedBeforeRefresh, true);
+	assert.equal(refreshStarted, true);
+	assert.equal(refreshFinished, true);
+	assert.equal(service.getStatus(), "ready");
+});
+
 test("显式使用当前 Obsidian 语言后，各设备最终读取同一 Monthly locale", async () => {
 	const left = new InMemoryVault();
 	await left.app.vault.createFolder("Knomo/_knomo-data");

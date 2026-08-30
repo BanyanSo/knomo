@@ -300,6 +300,43 @@ test("旧目录存在但 Catalog 未完成时只等待 Daily 扫描，不读取�
 	assert.equal(observationBatchReadCount, 0);
 });
 
+test("Knomo 初始化未完成时等待初始化，不读取 Catalog、旧文件或 observation", async () => {
+	const vault = new InMemoryVault({
+		[LEGACY_INDEX_PATH]: JSON.stringify({ schemaVersion: 2, period: "2026-08", memos: {} }),
+	});
+	const reader = new LegacyIndexReader(vault.app, "knomo", () => "Knomo");
+	const target = createIdentityService(vault);
+	await target.initialize();
+	let coverageReadCount = 0;
+	let sourceLoadCount = 0;
+	let observationBatchReadCount = 0;
+	const migration = new LegacyIndexMigrationService(vault.app, {
+		inspect: () => reader.inspect(),
+		isSourcePath: (path) => reader.isSourcePath(path),
+		load: async () => {
+			sourceLoadCount += 1;
+			return reader.load();
+		},
+	}, target, {
+		isTargetReady: () => false,
+		getCatalogCoverage: async () => {
+			coverageReadCount += 1;
+			return completeCoverage();
+		},
+		getObservationBatches: async () => {
+			observationBatchReadCount += 1;
+			return [];
+		},
+	});
+
+	const report = await migration.run();
+
+	assert.equal(report.status, "waiting_initialization");
+	assert.equal(coverageReadCount, 0);
+	assert.equal(sourceLoadCount, 0);
+	assert.equal(observationBatchReadCount, 0);
+});
+
 test("从旧 monthlyMemoFolder 发现来源，并只审计合法空文件和派生产物", async () => {
 	const oldRoot = "Old Memos";
 	const vault = new InMemoryVault({

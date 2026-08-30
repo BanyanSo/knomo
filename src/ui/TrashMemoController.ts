@@ -34,6 +34,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	private trashCount = 0;
 	private deletedMemoIds = new Set<string>();
 	private trashBusyMemoActions = new Map<string, TrashAction>();
+	private trashMutationRevision = 0;
 
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
@@ -72,9 +73,9 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		if (this.trashLoading) {
 			return;
 		}
+		const mutationRevision = this.trashMutationRevision;
 		this.trashLoading = true;
 		this.trashError = null;
-		this.trashMemos = null;
 		if (this.options.isTrashActive()) {
 			this.options.requestRender("ui-state");
 		}
@@ -83,11 +84,13 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 				this.options.listDeletedMemos(),
 				this.options.getDeletedMemoSummary(),
 			]);
+			if (mutationRevision !== this.trashMutationRevision) return;
 			this.trashMemos = deletedMemos;
 			this.trashCount = Math.max(summary.count, deletedMemos.length);
 			this.deletedMemoIds = new Set([...summary.ids, ...deletedMemos.map((memo) => memo.id)]);
 		} catch (error) {
-			this.trashMemos = [];
+			if (mutationRevision !== this.trashMutationRevision) return;
+			if (this.trashMemos === null) this.trashMemos = [];
 			this.trashError = formatServiceError(error, t("error.trashLoadFailed"));
 			this.options.showNotice(this.trashError);
 		} finally {
@@ -141,6 +144,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	}
 
 	private removeTrashMemo(removedMemo: TMemo): void {
+		this.trashMutationRevision += 1;
 		this.trashMemos = (this.trashMemos ?? []).filter((memo) => memo.id !== removedMemo.id);
 		this.trashCount = Math.max(0, this.trashCount - 1);
 		const identityMemoId = removedMemo.trashItem?.memoId;

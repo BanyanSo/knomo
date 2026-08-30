@@ -107,6 +107,18 @@ body {
 	gap: var(--size-4-2);
 }
 
+.knomo-plugin .knomo-time-buoy-refresh-error {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	margin-bottom: var(--size-4-3);
+	padding: var(--size-4-2) var(--size-4-3);
+	border: var(--border-width) solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	color: var(--text-error);
+}
+
 .knomo-plugin .knomo-time-buoy-action {
 	min-height: 44px;
 }
@@ -655,6 +667,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 
 .knomo-plugin .knomo-sidebar-stats.is-loading .knomo-stat-value {
 	animation: knomo-stat-loading 900ms linear infinite;
+}
+
+.knomo-plugin .knomo-sidebar-updating {
+	grid-column: 1 / -1;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
 }
 
 @keyframes knomo-stat-loading {
@@ -3862,6 +3880,12 @@ body .knomo-mobile-create-fab.is-hidden {
 	gap: var(--size-4-5);
 	width: 100%;
 	min-width: 0;
+}
+
+.knomo-plugin .knomo-record-stats-updating {
+	align-self: flex-end;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
 }
 
 .knomo-plugin .knomo-record-stats-subtitle {

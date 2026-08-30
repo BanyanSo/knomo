@@ -75,6 +75,66 @@ test("loads trash once while busy and preserves loading render transitions", asy
 	assert.deepEqual(renderTargets, ["ui-state", "ui-state"]);
 });
 
+test("refresh keeps committed trash memos visible until the new list commits", async () => {
+	const { TrashMemoController } = await loadController();
+	const oldMemo = makeMemo("old");
+	const nextList = createDeferred<MemoRecord[]>();
+	let firstLoad = true;
+	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 1, ids: [oldMemo.id] }),
+		listDeletedMemos: async () => firstLoad ? [oldMemo] : nextList.promise,
+		restoreMemo: async (memo) => memo,
+		purgeMemo: async () => {},
+		confirmPurge: async () => true,
+		handleRestoredMemo: () => {},
+		isTrashActive: () => true,
+		showNotice: () => {},
+		forceRefreshViews: async () => {},
+		requestRender: () => {},
+	});
+
+	await controller.loadTrashMemos();
+	firstLoad = false;
+	const refreshing = controller.loadTrashMemos();
+	assert.equal(controller.getSnapshot().trashLoading, true);
+	assert.deepEqual(controller.getSnapshot().trashMemos?.map((memo) => memo.id), ["old"]);
+
+	nextList.resolve([makeMemo("new")]);
+	await refreshing;
+	assert.deepEqual(controller.getSnapshot().trashMemos?.map((memo) => memo.id), ["new"]);
+});
+
+test("an in-flight trash refresh cannot restore a memo removed by a newer action", async () => {
+	const { TrashMemoController } = await loadController();
+	const restored = makeMemo("restore-me");
+	const kept = makeMemo("keep-me");
+	const staleList = createDeferred<MemoRecord[]>();
+	let loadCount = 0;
+	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => ({ count: 2, ids: [restored.id, kept.id] }),
+		listDeletedMemos: async () => {
+			loadCount += 1;
+			return loadCount === 1 ? [restored, kept] : staleList.promise;
+		},
+		restoreMemo: async (memo) => ({ ...memo, status: "active" }),
+		purgeMemo: async () => {},
+		confirmPurge: async () => true,
+		handleRestoredMemo: () => {},
+		isTrashActive: () => true,
+		showNotice: () => {},
+		forceRefreshViews: async () => {},
+		requestRender: () => {},
+	});
+
+	await controller.loadTrashMemos();
+	const refreshing = controller.loadTrashMemos();
+	await controller.handleTrashAction("restore", restored);
+	staleList.resolve([restored, kept]);
+	await refreshing;
+
+	assert.deepEqual(controller.getSnapshot().trashMemos?.map((memo) => memo.id), ["keep-me"]);
+});
+
 test("restore keeps one busy action and force refreshes every view", async () => {
 	const { TrashMemoController } = await loadController();
 	const memo = makeMemo("memo-1");
@@ -276,4 +336,12 @@ function makeMemo(id: string): MemoRecord {
 			lastSyncedAt: null,
 		},
 	};
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolvePromise: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
 }

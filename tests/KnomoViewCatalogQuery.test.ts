@@ -14,6 +14,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	view.memoSourceGeneration = 0;
 	view.catalogDesktopQueryRun = 0;
 	view.catalogDesktopQueryFingerprint = null;
+	view.hasCommittedCatalogDesktopQuery = false;
 	view.catalogCursor = { catalog: { catalogRevision: 1, createdAtKey: "old", observationKey: "old" } };
 	view.memos = [];
 	view.viewStateController = { activeNav: "all" };
@@ -42,13 +43,14 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	view.renderMobileSearchResults = () => undefined;
 	view.renderCardFlowIfChanged = () => undefined;
 	view.renderMobileSearchResultsIfChanged = () => undefined;
-	view.renderAllMemosLoadingState = () => undefined;
+	let loadingRenderCount = 0;
+	view.renderAllMemosLoadingState = () => { loadingRenderCount += 1; };
 	view.randomReunionController = {
 		getSnapshot: () => ({ status: "idle", error: null, memos: null }),
 		clearMemos: () => undefined,
 		refresh: async () => undefined,
 	};
-	view.shuffleDayController = { reconcileWithMemos: () => undefined };
+	view.shuffleDayController = { reloadSelectedDate: async () => true };
 	view.refreshCatalogLibraryIndexes = async () => undefined;
 	view.syncRecordStatsSource = () => undefined;
 
@@ -59,6 +61,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	first.resolve([makeMemo("old", "2026-08-23T10:00:00")]);
 	assert.equal(await firstRun, false);
 	assert.deepEqual(view.memos.map((memo) => memo.id), ["new"]);
+	assert.equal(loadingRenderCount, 1);
 });
 
 test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次", async () => {
@@ -92,7 +95,7 @@ test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次",
 		clearMemos: () => { clearCount += 1; },
 		refresh: async () => { refreshCount += 1; },
 	};
-	view.shuffleDayController = { reconcileWithMemos: () => undefined };
+	view.shuffleDayController = { reloadSelectedDate: async () => true };
 	view.refreshCatalogLibraryIndexes = async () => undefined;
 	view.syncRecordStatsSource = () => undefined;
 
@@ -101,7 +104,110 @@ test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次",
 	assert.equal(refreshCount, 0);
 });
 
-test("查询 fingerprint 变化时清空旧结果和 cursor，并启动新请求而不复用旧 promise", async () => {
+test("返回随机重逢或漫游往日时复用已提交结果", async () => {
+	await ensureObsidianStub();
+	const [{ KnomoView }, { KnomoViewStateController }] = await Promise.all([
+		import("../src/ui/KnomoView"),
+		import("../src/ui/KnomoViewStateController"),
+	]);
+	const view = Object.create(KnomoView.prototype) as NavigationView;
+	let randomRefreshCount = 0;
+	let randomClearCount = 0;
+	let shuffleRefreshCount = 0;
+	let shuffleClearCount = 0;
+	view.viewStateController = new KnomoViewStateController();
+	view.clearSearchDebounce = () => undefined;
+	view.getCardFlowViewStateKey = () => "view";
+	view.getCardFlowChangeIntent = () => "view-scope-change";
+	view.applyViewStateTransitionEffects = () => undefined;
+	view.renderUiState = () => undefined;
+	view.shouldDeferCardFlowForAllMemos = () => false;
+	view.reloadCurrentCatalogQuery = async () => true;
+	view.randomReunionController = {
+		getSnapshot: () => ({ status: "ready", error: null, memos: [makeMemo("random", "2026-08-20T10:00:00")] }),
+		clearMemos: () => { randomClearCount += 1; },
+		refresh: async () => { randomRefreshCount += 1; },
+	};
+	view.shuffleDayController = {
+		getSnapshot: () => ({ status: "ready" }),
+		clearSelection: () => { shuffleClearCount += 1; },
+		refresh: async () => { shuffleRefreshCount += 1; },
+	};
+	view.trashMemoController = { loadTrashMemos: async () => undefined };
+	view.timeBuoyViewController = { loadInitial: async () => undefined };
+	view.prepareRecordStats = async () => true;
+
+	view.setSidebarNav("random");
+	view.setSidebarNav("all");
+	view.setSidebarNav("random");
+	view.setSidebarNav("shuffleDay");
+	view.setSidebarNav("all");
+	view.setSidebarNav("shuffleDay");
+
+	assert.equal(randomRefreshCount, 0);
+	assert.equal(randomClearCount, 0);
+	assert.equal(shuffleRefreshCount, 0);
+	assert.equal(shuffleClearCount, 0);
+});
+
+test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快照", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const pending = createDeferred<QueryMemo[]>();
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	let selectedDateReloadCount = 0;
+	view.memoSourceGeneration = 0;
+	view.catalogDesktopQueryRun = 0;
+	view.catalogDesktopQueryFingerprint = "catalog";
+	view.hasCommittedCatalogDesktopQuery = true;
+	view.catalogCursor = null;
+	view.memos = [makeMemo("selected-day", "2026-05-01T09:00:00")];
+	view.viewStateController = { activeNav: "all" };
+	view.getCatalogQueryFingerprint = () => "catalog";
+	view.loadCatalogMemos = async () => ({
+		memos: await pending.promise,
+		nextCursor: null,
+		catalogRevision: 2,
+		identityRevision: "identity-2",
+		coverage: completeCoverage(),
+		readState: "ready",
+		status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
+	});
+	view.getCardFlowStateKey = () => "card-flow";
+	view.getMobileSearchStateKey = () => "mobile-search";
+	view.invalidateRecordStats = () => undefined;
+	view.invalidateMemoSearchCache = () => undefined;
+	view.retainMemoCardPreviews = () => undefined;
+	view.resetVisibleMemos = () => undefined;
+	view.renderUiState = () => undefined;
+	view.forceRebuildCardFlow = () => undefined;
+	view.renderMobileSearchResults = () => undefined;
+	view.renderCardFlowIfChanged = () => undefined;
+	view.renderMobileSearchResultsIfChanged = () => undefined;
+	view.renderAllMemosLoadingState = () => undefined;
+	view.randomReunionController = {
+		getSnapshot: () => ({ status: "idle", error: null, memos: null }),
+		clearMemos: () => undefined,
+		refresh: async () => undefined,
+	};
+	view.shuffleDayController = {
+		reloadSelectedDate: async () => {
+			selectedDateReloadCount += 1;
+			return true;
+		},
+	};
+	view.refreshCatalogLibraryIndexes = async () => undefined;
+	view.syncRecordStatsSource = () => undefined;
+
+	const loading = view.reloadMemos(true);
+	view.viewStateController.activeNav = "shuffleDay";
+	pending.resolve([makeMemo("recent-first-page", "2026-08-24T10:00:00")]);
+
+	assert.equal(await loading, true);
+	assert.equal(selectedDateReloadCount, 0);
+});
+
+test("查询 fingerprint 变化时保留旧结果、清空 cursor，并启动新请求而不复用旧 promise", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const first = createDeferred<boolean>();
@@ -110,9 +216,11 @@ test("查询 fingerprint 变化时清空旧结果和 cursor，并启动新请求
 	const view = Object.create(KnomoView.prototype) as QueryView;
 	let fingerprint = "review";
 	let loadCount = 0;
+	let loadingRenderCount = 0;
 	view.memoLoadingPromise = null;
 	view.memoLoadingFingerprint = null;
 	view.catalogDesktopQueryFingerprint = "review";
+	view.hasCommittedCatalogDesktopQuery = true;
 	view.catalogCursor = { catalog: { catalogRevision: 1, createdAtKey: "review", observationKey: "review" } };
 	view.memos = [makeMemo("review-subset", "2026-08-24T10:00:00")];
 	view.getCatalogQueryFingerprint = () => fingerprint;
@@ -121,7 +229,7 @@ test("查询 fingerprint 变化时清空旧结果和 cursor，并启动新请求
 	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
-	view.renderAllMemosLoadingState = () => undefined;
+	view.renderAllMemosLoadingState = () => { loadingRenderCount += 1; };
 	view.reloadMemos = async () => {
 		loadCount += 1;
 		const load = loads.shift();
@@ -134,10 +242,11 @@ test("查询 fingerprint 变化时清空旧结果和 cursor，并启动新请求
 	const allRequest = view.reloadCurrentCatalogQuery(true);
 
 	assert.equal(loadCount, 2);
-	assert.deepEqual(view.memos, []);
+	assert.deepEqual(view.memos.map((memo) => memo.id), ["review-subset"]);
 	assert.equal(view.catalogCursor, null);
 	assert.notEqual(reviewRequest, allRequest);
 	assert.equal(recordStatsInvalidations, 0);
+	assert.equal(loadingRenderCount, 0);
 	second.resolve(true);
 	assert.equal(await allRequest, true);
 	first.resolve(false);
@@ -203,7 +312,7 @@ test("空库加载占位即使状态键未变化也会渲染暂无内容终态",
 	assert.equal(renderCount, 1);
 });
 
-test("coverage 降级立即废弃旧完整统计，恢复后按当前 revision 重取", async () => {
+test("coverage 降级保留旧完整统计并标记更新中，恢复后按当前 revision 原子替换", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const oldSummary = createDeferred<AggregateSummary>();
@@ -218,6 +327,7 @@ test("coverage 降级立即废弃旧完整统计，恢复后按当前 revision �
 	view.libraryIndexRevision = 4;
 	view.libraryIndexRun = 0;
 	view.libraryIndexesInvalidatedByCoverage = false;
+	view.libraryIndexesUpdating = false;
 	view.librarySummary = { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 };
 	view.libraryTagFacets = [{ key: "old", label: "Old", count: 9 }];
 	view.renderStats = () => undefined;
@@ -238,9 +348,10 @@ test("coverage 降级立即废弃旧完整统计，恢复后按当前 revision �
 
 	const staleRefresh = view.refreshCatalogLibraryIndexes();
 	view.updateCatalogProgress({ ...completeCoverage(), kind: "partial", pendingFileCount: 1 });
-	assert.equal(view.librarySummary, null);
-	assert.equal(view.libraryTagFacets, null);
+	assert.deepEqual(view.librarySummary, { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 });
+	assert.deepEqual(view.libraryTagFacets, [{ key: "old", label: "Old", count: 9 }]);
 	assert.equal(view.libraryIndexRevision, -1);
+	assert.equal(view.libraryIndexesUpdating, true);
 
 	oldSummary.resolve({
 		value: { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 },
@@ -253,7 +364,7 @@ test("coverage 降级立即废弃旧完整统计，恢复后按当前 revision �
 		coverage: completeCoverage(),
 	});
 	await staleRefresh;
-	assert.equal(view.librarySummary, null);
+	assert.deepEqual(view.librarySummary, { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 });
 
 	view.catalogRevision = 5;
 	view.updateCatalogProgress(completeCoverage());
@@ -271,6 +382,7 @@ test("coverage 降级立即废弃旧完整统计，恢复后按当前 revision �
 
 	assert.deepEqual(view.librarySummary, { memoCount: 12, tagCount: 4, imageCount: 2, wordCount: 30 });
 	assert.deepEqual(view.libraryTagFacets, [{ key: "new", label: "New", count: 12 }]);
+	assert.equal(view.libraryIndexesUpdating, false);
 });
 
 test("CAT-PAGE-001：分页合并超过旧窗口阈值时不丢失已显示的新记录", async () => {
@@ -293,9 +405,10 @@ interface QueryView {
 	memoSourceGeneration: number;
 	catalogDesktopQueryRun: number;
 	catalogDesktopQueryFingerprint: string | null;
+	hasCommittedCatalogDesktopQuery: boolean;
 	catalogCursor: { catalog: { catalogRevision: number; createdAtKey: string; observationKey: string } } | null;
 	memos: QueryMemo[];
-	viewStateController: { activeNav: "all" | "random" };
+	viewStateController: { activeNav: "all" | "random" | "shuffleDay" };
 	memoLoadingPromise: Promise<boolean> | null;
 	memoLoadingFingerprint: string | null;
 	catalogCoverage: TestCoverage | null;
@@ -304,6 +417,7 @@ interface QueryView {
 	libraryIndexRevision: number;
 	libraryIndexRun: number;
 	libraryIndexesInvalidatedByCoverage: boolean;
+	libraryIndexesUpdating: boolean;
 	librarySummary: { memoCount: number; tagCount: number; imageCount: number; wordCount: number } | null;
 	libraryTagFacets: Array<{ key: string; label: string; count: number }> | null;
 	cardFlowError?: string | null;
@@ -337,7 +451,7 @@ interface QueryView {
 		clearMemos: () => void;
 		refresh: () => Promise<void>;
 	};
-	shuffleDayController: { reconcileWithMemos: () => void };
+	shuffleDayController: { reloadSelectedDate: () => Promise<boolean> };
 	refreshCatalogLibraryIndexes: () => Promise<void>;
 	syncRecordStatsSource: () => void;
 	applyCatalogMemoLoad: (load: TestCatalogMemoLoad) => void;
@@ -349,6 +463,31 @@ interface QueryView {
 	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
 	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
 	updateCatalogProgress: (coverage: TestCoverage) => void;
+}
+
+interface NavigationView {
+	viewStateController: import("../src/ui/KnomoViewStateController").KnomoViewStateController;
+	clearSearchDebounce: () => void;
+	getCardFlowViewStateKey: () => string;
+	getCardFlowChangeIntent: (key: string) => "view-scope-change";
+	applyViewStateTransitionEffects: (effects: object) => void;
+	renderUiState: (options?: object) => void;
+	shouldDeferCardFlowForAllMemos: () => boolean;
+	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
+	randomReunionController: {
+		getSnapshot: () => { status: "ready"; error: null; memos: QueryMemo[] };
+		clearMemos: () => void;
+		refresh: () => Promise<void>;
+	};
+	shuffleDayController: {
+		getSnapshot: () => { status: "ready" };
+		clearSelection: () => void;
+		refresh: () => Promise<void>;
+	};
+	trashMemoController: { loadTrashMemos: () => Promise<void> };
+	timeBuoyViewController: { loadInitial: () => Promise<void> };
+	prepareRecordStats: () => Promise<boolean>;
+	setSidebarNav: (nav: "all" | "random" | "shuffleDay") => void;
 }
 
 type TestCoverage = {

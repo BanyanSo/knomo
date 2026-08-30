@@ -9,7 +9,7 @@ test("record statistics renders loading state with reserved skeleton sections", 
 	const root = new TestElement("div");
 
 	renderKnomoRecordStatsPage(root.asHtml(), {
-		snapshot: { state: "loading", error: null },
+		snapshot: { state: "loading", error: null, updating: false },
 		selected: null,
 		view: "month",
 		canAdvance: false,
@@ -28,7 +28,7 @@ test("record statistics renders actionable range metrics, charts, hours, and com
 	const root = new TestElement("div");
 
 	renderKnomoRecordStatsPage(root.asHtml(), {
-		snapshot: { state: "ready", error: null } satisfies RecordStatsSnapshot,
+		snapshot: { state: "ready", error: null, updating: false } satisfies RecordStatsSnapshot,
 		selected: makeSelectedStats(),
 		view: "month",
 		canAdvance: false,
@@ -47,6 +47,24 @@ test("record statistics renders actionable range metrics, charts, hours, and com
 	assert.equal(tagButton?.getAttr("data-action"), "record-stats-filter-tag");
 	assert.equal(tagButton?.getText(), "#Work3");
 	assert.equal(tagButton?.find(".knomo-record-stats-tag-bar")?.getCssProp("--knomo-record-stats-tag-ratio"), "1");
+});
+
+test("record statistics keeps the committed page visible with an updating marker", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
+	const root = new TestElement("div");
+
+	renderKnomoRecordStatsPage(root.asHtml(), {
+		snapshot: { state: "ready", error: null, updating: true },
+		selected: makeSelectedStats(),
+		view: "month",
+		canAdvance: false,
+		canRetreat: true,
+		createHiddenText,
+	});
+
+	assert.equal(root.find(".knomo-record-stats-updating")?.getText(), "Updating");
+	assert.equal(root.find("[data-action='reset-list-state']")?.getText(), "13All notes");
 });
 
 function createHiddenText(container: HTMLElement, id: string, text: string): string {

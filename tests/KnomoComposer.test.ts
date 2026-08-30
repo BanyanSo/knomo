@@ -187,6 +187,7 @@ test("renders a retry action for a Time buoy Catalog error", async () => {
 	renderTimeBuoyPage(root.asHtml(), {
 		loading: false,
 		error: new Error("corrupt shard"),
+		refreshError: null,
 		todayError: null,
 		complete: false,
 		activeTab: "today",
@@ -207,6 +208,7 @@ test("renders accessible Time buoy tabs and the active tab empty state", async (
 	const result = renderTimeBuoyPage(root.asHtml(), {
 		loading: false,
 		error: null,
+		refreshError: null,
 		todayError: null,
 		complete: true,
 		activeTab: "upcoming",
@@ -233,6 +235,7 @@ test("labels upcoming and past Time buoy tabs as partial without hiding known re
 	const result = renderTimeBuoyPage(root.asHtml(), {
 		loading: false,
 		error: null,
+		refreshError: null,
 		todayError: null,
 		complete: false,
 		activeTab: "past",
@@ -244,6 +247,30 @@ test("labels upcoming and past Time buoy tabs as partial without hiding known re
 	assert.equal(result.items.length, 1);
 	assert.equal(root.find("[data-time-buoy-partial]")?.getAttr("role"), "status");
 	assert.match(root.getText(), /partial results/i);
+});
+
+test("keeps Time buoy tabs visible with a retry action after a warm refresh failure", async () => {
+	await obsidianStubReady;
+	const { renderTimeBuoyPage } = await import("../src/ui/TimeBuoyPage");
+	const root = new TestElement("div");
+	const memo = { id: "memo-1" } as never;
+
+	const result = renderTimeBuoyPage(root.asHtml(), {
+		loading: false,
+		error: null,
+		refreshError: new Error("temporary failure"),
+		todayError: null,
+		complete: true,
+		activeTab: "today",
+		today: [{ memo, primaryTargetDate: "2026-07-11", targetDates: ["2026-07-11"] }],
+		upcoming: [],
+		past: [],
+	}, { idPrefix: "time-buoy-test" });
+
+	assert.equal(result.items.length, 1);
+	assert.notEqual(root.find(".knomo-time-buoy-refresh-error"), null);
+	assert.notEqual(root.find("[data-action='retry-time-buoy']"), null);
+	assert.notEqual(root.find("[role='tablist']"), null);
 });
 
 test("appends Time buoy cards directly without date titles or grouping containers", async () => {

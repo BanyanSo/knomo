@@ -14,6 +14,7 @@ export interface TimeBuoyTabItem {
 export interface TimeBuoyViewSnapshot {
 	loading: boolean;
 	error: unknown;
+	refreshError: unknown;
 	todayError: unknown;
 	complete: boolean;
 	activeTab: TimeBuoyTab;
@@ -108,6 +109,9 @@ export class TimeBuoyViewController {
 		if (!this.hasLoadedAll) {
 			this.snapshot = { ...createInitialSnapshot(activeTab), loading: true };
 			this.options.requestRender();
+		} else if (this.snapshot.refreshError !== null) {
+			this.snapshot = { ...this.snapshot, refreshError: null };
+			this.options.requestRender();
 		}
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
@@ -133,6 +137,11 @@ export class TimeBuoyViewController {
 			}
 		} catch (error) {
 			if (requestId !== this.requestId) {
+				return;
+			}
+			if (this.hasLoadedAll) {
+				this.snapshot = { ...this.snapshot, refreshError: error };
+				this.options.requestRender();
 				return;
 			}
 			const nextSnapshot = { ...createInitialSnapshot(this.snapshot.activeTab), error };
@@ -213,6 +222,7 @@ function areTimeBuoySnapshotsEqual(
 ): boolean {
 	return left.loading === right.loading
 		&& left.error === right.error
+		&& left.refreshError === right.refreshError
 		&& left.todayError === right.todayError
 		&& left.complete === right.complete
 		&& left.activeTab === right.activeTab
@@ -239,6 +249,7 @@ function createInitialSnapshot(activeTab: TimeBuoyTab = "today"): TimeBuoyViewSn
 	return {
 		loading: false,
 		error: null,
+		refreshError: null,
 		todayError: null,
 		complete: false,
 		activeTab,

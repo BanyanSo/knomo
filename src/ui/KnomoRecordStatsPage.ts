@@ -40,6 +40,13 @@ export function renderKnomoRecordStatsPage(
 		renderLoadingState(page);
 		return page;
 	}
+	if (options.snapshot.updating) {
+		page.createDiv({
+			cls: "knomo-record-stats-updating",
+			text: t("recordStats.updating"),
+			attr: { role: "status", "aria-live": "polite" },
+		});
+	}
 	if (options.snapshot.state === "error" || options.selected === null) {
 		renderErrorState(page, options.snapshot.error);
 		return page;

@@ -142,7 +142,11 @@ test("sidebar navigation exposes follow-up side effects for heavy routes", () =>
 	assert.equal(state.setSidebarNav("review").reloadCatalogQuery, true);
 	assert.equal(state.setSidebarNav("all").reloadCatalogQuery, true);
 	assert.equal(state.setSidebarNav("random").refreshRandomReunion, true);
+	const leaveRandom = state.setSidebarNav("all");
+	assert.equal(leaveRandom.clearRandomReunion, false);
 	assert.equal(state.setSidebarNav("shuffleDay").refreshShuffleDay, true);
+	const leaveShuffleDay = state.setSidebarNav("all");
+	assert.equal(leaveShuffleDay.clearShuffleDay, false);
 	assert.equal(state.setSidebarNav("trash").loadTrashMemos, true);
 });
 

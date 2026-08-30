@@ -206,6 +206,32 @@ test("presents shuffle day headers without a random toolbar", async () => {
 	});
 });
 
+test("presents the previous shuffle day while its replacement is loading", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const memos = makeMemos(2);
+	const stats = {
+		memoCount: 2,
+		wordCount: 4,
+		tagCount: 1,
+		imageCount: 0,
+		linkCount: 1,
+		firstMemoTime: "09:00",
+		lastMemoTime: "10:00",
+	};
+
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "shuffleDay",
+		shuffleDay: { status: "loading", selectedDate: "2026-06-02", memos, stats, error: null },
+	}), {
+		type: "items",
+		memos,
+		mode: "memo",
+		headers: [{ type: "shuffle-day", selectedDate: "2026-06-02", stats }],
+	});
+});
+
 test("presents trash states and trash items", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
@@ -238,6 +264,28 @@ test("presents trash states and trash items", async () => {
 		type: "empty",
 		title: "Trash is empty",
 		description: "Deleted memos are kept here temporarily",
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "trash",
+		trashLoading: true,
+		trashMemos,
+	}), {
+		type: "items",
+		memos: trashMemos,
+		mode: "trash",
+		headers: [],
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "trash",
+		trashError: "Refresh failed",
+		trashMemos,
+	}), {
+		type: "items",
+		memos: trashMemos,
+		mode: "trash",
+		headers: [],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),

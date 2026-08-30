@@ -91,6 +91,11 @@ function renderTabs(
 		}
 	}
 	const items = [...snapshot[snapshot.activeTab]];
+	if (activePanel !== null && snapshot.refreshError !== null) {
+		const error = activePanel.createDiv({ cls: "knomo-time-buoy-refresh-error", attr: { role: "alert" } });
+		error.createSpan({ text: t("timeBuoy.loadFailed") });
+		renderActionButton(error, t("timeBuoy.retry"), "retry-time-buoy");
+	}
 	if (activePanel !== null && snapshot.activeTab !== "today" && !snapshot.complete) {
 		activePanel.createDiv({
 			cls: "knomo-time-buoy-partial",

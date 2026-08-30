@@ -215,12 +215,12 @@ test("returns an empty common-tag list when the selected range has no tags", asy
 });
 
 test("reports empty and error states without exposing partial statistics", async () => {
-	const service = new RecordStatsService();
-	assert.equal(await service.prepare([], async () => {}), true);
-	assert.equal(service.getSnapshot().state, "empty");
-	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 0);
+	const emptyService = new RecordStatsService();
+	assert.equal(await emptyService.prepare([], async () => {}), true);
+	assert.equal(emptyService.getSnapshot().state, "empty");
+	assert.equal(emptyService.select("week", new Date(2026, 5, 8))?.range.memoCount, 0);
 
-	service.invalidate();
+	const service = new RecordStatsService();
 	assert.equal(await service.prepare([
 		makeMemo("invalid", "not-a-date", "text"),
 	], async () => {}), false);
@@ -264,6 +264,31 @@ test("prepares statistics from a scanned source key", async () => {
 
 	assert.equal(loadCalls, 1);
 	assert.equal(service.getSnapshot().state, "ready");
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
+});
+
+test("source refresh keeps committed statistics visible until the replacement is ready", async () => {
+	const service = new RecordStatsService();
+	const oldBuilder = new RecordStatsBuilder();
+	oldBuilder.addMemos([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
+	assert.equal(await service.prepareFromSource("catalog:1", async () => oldBuilder.build()), true);
+
+	const nextPrepared = createDeferred<ReturnType<RecordStatsBuilder["build"]>>();
+	service.invalidate();
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
+	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise);
+
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
+
+	const newBuilder = new RecordStatsBuilder();
+	newBuilder.addMemos([
+		makeMemo("new-1", "2026-06-08T10:00:00+08:00", "new one"),
+		makeMemo("new-2", "2026-06-09T10:00:00+08:00", "new two"),
+	]);
+	nextPrepared.resolve(newBuilder.build());
+	assert.equal(await refreshing, true);
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
 });
 
@@ -330,6 +355,14 @@ function makeMemo(
 			lastSyncedAt: null,
 		},
 	};
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolvePromise: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
 }
 
 function toDateParts(date: Date): [number, number, number] {

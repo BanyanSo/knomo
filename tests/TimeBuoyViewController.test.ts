@@ -213,15 +213,16 @@ test("keeps a tab selected while a warm Time buoy refresh is pending", async () 
 	assert.equal(controller.getSnapshot().activeTab, "upcoming");
 });
 
-test("restores the blocking loading state when retrying after a warm refresh failure", async () => {
+test("keeps committed content visible when a warm refresh fails and retries in place", async () => {
 	const retryQuery = createDeferred<TimeBuoyAllQueryResult>();
+	const original = makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00");
 	let queryCount = 0;
 	const controller = new TimeBuoyViewController({
 		getNow: () => new Date(2026, 6, 11),
 		queryAll: () => {
 			queryCount += 1;
 			if (queryCount === 1) {
-				return Promise.resolve(EMPTY_ALL_RESULT);
+				return Promise.resolve({ items: [original], stale: [], missingPeriods: [], complete: true });
 			}
 			if (queryCount === 2) {
 				return Promise.reject(new Error("transient refresh failure"));
@@ -233,11 +234,14 @@ test("restores the blocking loading state when retrying after a warm refresh fai
 	});
 	await controller.loadInitial();
 	await controller.loadInitial();
-	assert.notEqual(controller.getSnapshot().error, null);
+	assert.equal(controller.getSnapshot().error, null);
+	assert.notEqual(controller.getSnapshot().refreshError, null);
+	assert.deepEqual(controller.getSnapshot().today.map((item) => item.memo.id), ["today"]);
 
 	const retrying = controller.retry();
-	assert.equal(controller.getSnapshot().loading, true);
-	assert.equal(controller.getSnapshot().error, null);
+	assert.equal(controller.getSnapshot().loading, false);
+	assert.equal(controller.getSnapshot().refreshError, null);
+	assert.deepEqual(controller.getSnapshot().today.map((item) => item.memo.id), ["today"]);
 
 	retryQuery.resolve(EMPTY_ALL_RESULT);
 	await retrying;

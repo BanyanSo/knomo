@@ -56,11 +56,21 @@ test("keys record stats idle state as loading", async () => {
 	assert.equal(
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "idle", error: null },
+			recordStatsSnapshot: { state: "idle", error: null, updating: false },
 		}),
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "loading", error: null },
+			recordStatsSnapshot: { state: "loading", error: null, updating: false },
+		}),
+	);
+	assert.notEqual(
+		getCardFlowStateKey({
+			...base,
+			recordStatsSnapshot: { state: "ready", error: null, updating: false },
+		}),
+		getCardFlowStateKey({
+			...base,
+			recordStatsSnapshot: { state: "ready", error: null, updating: true },
 		}),
 	);
 });

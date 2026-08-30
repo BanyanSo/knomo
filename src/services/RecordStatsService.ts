@@ -58,6 +58,7 @@ export interface SelectedRecordStats {
 export interface RecordStatsSnapshot {
 	state: RecordStatsLoadState;
 	error: string | null;
+	updating: boolean;
 }
 
 export interface DailyRecordStats {
@@ -91,11 +92,13 @@ export class RecordStatsService {
 	private source: unknown = null;
 	private prepared: PreparedRecordStats | null = null;
 	private runId = 0;
+	private updating = false;
 
 	getSnapshot(): RecordStatsSnapshot {
 		return {
 			state: this.state,
 			error: this.error,
+			updating: this.updating,
 		};
 	}
 
@@ -109,17 +112,23 @@ export class RecordStatsService {
 
 	invalidate(): void {
 		this.runId += 1;
-		this.state = "idle";
 		this.error = null;
 		this.source = null;
-		this.prepared = null;
+		this.updating = this.prepared !== null;
+		if (this.prepared === null) {
+			this.state = "idle";
+		}
 	}
 
 	fail(message: string): void {
 		this.runId += 1;
-		this.state = "error";
 		this.error = message;
 		this.source = null;
+		this.updating = false;
+		if (this.prepared !== null && (this.state === "ready" || this.state === "empty")) {
+			return;
+		}
+		this.state = "error";
 		this.prepared = null;
 	}
 
@@ -132,25 +141,38 @@ export class RecordStatsService {
 		}
 		const runId = this.runId + 1;
 		this.runId = runId;
-		this.state = "loading";
+		const hasCommittedStats = this.prepared !== null
+			&& (this.state === "ready" || this.state === "empty");
+		if (!hasCommittedStats) {
+			this.state = "loading";
+		}
 		this.error = null;
-		this.source = source;
-		this.prepared = null;
+		this.updating = hasCommittedStats;
 
 		try {
 			const prepared = await loadPrepared(() => this.runId === runId);
-			if (prepared === null || this.runId !== runId) {
+			if (this.runId !== runId) {
+				return false;
+			}
+			if (prepared === null) {
+				this.updating = false;
+				if (!hasCommittedStats) this.state = "idle";
 				return false;
 			}
 			this.prepared = prepared;
+			this.source = source;
 			this.state = prepared.overview.memoCount === 0 ? "empty" : "ready";
+			this.updating = false;
 			return true;
 		} catch (error) {
 			if (this.runId !== runId) {
 				return false;
 			}
-			this.prepared = null;
-			this.state = "error";
+			this.updating = false;
+			if (!hasCommittedStats) {
+				this.prepared = null;
+				this.state = "error";
+			}
 			this.error = error instanceof Error ? error.message : "Unable to prepare record statistics.";
 			return false;
 		}

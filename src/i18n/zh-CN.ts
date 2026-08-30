@@ -128,6 +128,8 @@ export const zhCN = {
 	"recordStats.commonTags.empty": "这一范围内还没有标签",
 	"recordStats.loading.title": "正在准备历史记录",
 	"recordStats.loading.desc": "Knomo 正在后台整理已有 Memos，期间仍可继续记录；完成后显示完整统计。",
+	"recordStats.updating": "更新中",
+	"status.updating": "更新中",
 	"recordStats.error.title": "记录统计加载失败",
 	"recordStats.error.desc": "无法读取完整的 Memos 数据，请重新加载。",
 	"recordStats.error.retry": "重新加载",

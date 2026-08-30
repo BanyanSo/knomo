@@ -117,7 +117,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 }
 
 function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFlowPresentation {
-	if (snapshot.status === "idle" || snapshot.status === "loading") {
+	if (snapshot.status === "idle" || (snapshot.status === "loading"
+		&& (snapshot.selectedDate === null || snapshot.stats === null || snapshot.memos.length === 0))) {
 		return {
 			type: "empty",
 			title: t("shuffleDay.loadingTitle"),
@@ -174,11 +175,19 @@ interface TrashCardFlowPresentationOptions {
 }
 
 function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions): CardFlowPresentation {
-	if (options.trashLoading || options.trashMemos === null) {
+	if (options.trashMemos === null) {
 		return {
 			type: "empty",
 			title: t("empty.trashLoading"),
 			description: "",
+		};
+	}
+	if (options.trashMemos.length > 0) {
+		return {
+			type: "items",
+			memos: options.trashMemos,
+			mode: "trash",
+			headers: [],
 		};
 	}
 	if (options.trashError !== null) {
@@ -188,17 +197,9 @@ function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions)
 			description: options.trashError,
 		};
 	}
-	if (options.trashMemos.length === 0) {
-		return {
-			type: "empty",
-			title: t("empty.trashEmptyTitle"),
-			description: t("empty.trashEmptyDesc"),
-		};
-	}
 	return {
-		type: "items",
-		memos: options.trashMemos,
-		mode: "trash",
-		headers: [],
+		type: "empty",
+		title: t("empty.trashEmptyTitle"),
+		description: t("empty.trashEmptyDesc"),
 	};
 }

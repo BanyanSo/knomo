@@ -130,6 +130,8 @@ export const en: Record<TranslationKey, string> = {
 	"recordStats.commonTags.empty": "No tags in this period",
 	"recordStats.loading.title": "Preparing your history",
 	"recordStats.loading.desc": "Knomo is organizing existing memos in the background. You can keep recording while complete statistics are prepared.",
+	"recordStats.updating": "Updating",
+	"status.updating": "Updating",
 	"recordStats.error.title": "Record statistics failed to load",
 	"recordStats.error.desc": "Complete Memos data could not be read. Try loading it again.",
 	"recordStats.error.retry": "Reload",

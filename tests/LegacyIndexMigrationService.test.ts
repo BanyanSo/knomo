@@ -160,7 +160,7 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 	assert.equal(retainedReport.sourceRevision, first.sourceRevision);
 	assert.equal(retainedReport.importedEventCount, 0);
 	assert.deepEqual(retainedReport.importedMemoIds, [LEGACY_MEMO_B, LEGACY_MEMO_A].sort());
-	assert.equal(retainedSourceLoadCount, 1);
+	assert.equal(retainedSourceLoadCount, 0);
 	assert.equal(retainedObservationBatchReadCount, 0);
 	vault.replace(PLUGIN_DATA_PATH, JSON.stringify({
 		settings: {},
@@ -174,7 +174,7 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 	}));
 	const changedReport = await retainedMigration.run({ sourceChanged: true });
 	assert.equal(changedReport.status, "partial");
-	assert.equal(retainedSourceLoadCount, 2);
+	assert.equal(retainedSourceLoadCount, 1);
 	assert.equal(retainedObservationBatchReadCount, 1);
 
 	const restartedVault = new InMemoryVault(Object.fromEntries(
@@ -404,8 +404,8 @@ test("旧备份目录中的额外文件归类为 unknown", async () => {
 		&& item.sourcePath === extraPath), true);
 });
 
-test("旧记录通过一次 observation 查找索引匹配，并在批处理中主动让出事件循环", async () => {
-	const recordCount = 130;
+test("旧记录通过一次 observation 查找索引匹配，并按时间预算主动让出事件循环", async () => {
+	const recordCount = 20;
 	const dailyPath = "Daily/2026-08-22.md";
 	const memos: Record<string, unknown> = {};
 	const observations: MemoObservation[] = [];
@@ -444,6 +444,7 @@ test("旧记录通过一次 observation 查找索引匹配，并在批处理中�
 	const target = createIdentityService(vault);
 	await target.initialize();
 	let yieldCount = 0;
+	let elapsedMs = 0;
 	const migration = new LegacyIndexMigrationService(
 		vault.app,
 		new LegacyIndexReader(vault.app, "knomo", () => "Knomo"),
@@ -466,6 +467,11 @@ test("旧记录通过一次 observation 查找索引匹配，并在批处理中�
 				catalogRevision: 1,
 			}],
 			yieldControl: async () => { yieldCount += 1; },
+			sliceBudgetMs: 8,
+			now: () => {
+				elapsedMs += 3;
+				return elapsedMs;
+			},
 		},
 	);
 
@@ -474,7 +480,7 @@ test("旧记录通过一次 observation 查找索引匹配，并在批处理中�
 	assert.equal(report.status, "ready");
 	assert.equal(report.importedMemoIds.length, recordCount);
 	assert.equal(sourcePathReadCount < recordCount * 8, true);
-	assert.equal(yieldCount > 0, true);
+	assert.equal(yieldCount > 2, true);
 });
 
 test("raw block hash 歧义时继续使用包含 section 的 tuple 唯一匹配", async () => {

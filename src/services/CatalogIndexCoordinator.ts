@@ -582,7 +582,7 @@ export class CatalogIndexCoordinator {
 			} while (!this.paused
 				&& (this.queue.length > 0 || this.pendingDeletedPaths.size > 0)
 				&& monotonicNow() - sliceStartedAt < this.sliceBudgetMs);
-			if (!this.isStopped()) await this.saveProgress(true);
+			if (!this.isStopped()) await this.saveProgress(this.paused);
 			if (!this.isStopped() && this.queue.length === 0 && this.pendingDeletedPaths.size === 0) {
 				await this.finishScan();
 			}
@@ -765,12 +765,12 @@ export class CatalogIndexCoordinator {
 		this.processedSinceCheckpoint = 0;
 		this.lastCheckpointAt = this.now();
 		if (this.isStopped()) return;
-		await store.setCoverage(coverage);
+		await store.saveScanProgress(coverage, [
+			{ key: CATALOG_CHECKPOINT_META_KEY, value: checkpoint },
+			{ key: CATALOG_FAILED_PATHS_META_KEY, value: failures },
+		]);
 		if (this.isStopped()) return;
 		this.notifyProgress(coverage, forceProgress);
-		await store.setMeta(CATALOG_CHECKPOINT_META_KEY, checkpoint);
-		if (this.isStopped()) return;
-		await store.setMeta(CATALOG_FAILED_PATHS_META_KEY, failures);
 	}
 
 	private notifyProgress(coverage: CatalogCoverage, force = false): void {

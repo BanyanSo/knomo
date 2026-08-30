@@ -29,6 +29,7 @@ export interface KnomoSharedConfigServiceOptions {
 	getLocalConfig: (monthlyLocale: string) => Promise<KnomoSharedConfig>;
 	createEventId?: () => string;
 	now?: () => Date;
+	cancellationSignal?: AbortSignal;
 }
 
 export class KnomoSharedConfigService {
@@ -43,8 +44,11 @@ export class KnomoSharedConfigService {
 	private invalidFileCount = 0;
 	private onChanged: (() => void | Promise<void>) | null = null;
 	private changeNotificationQueue: Promise<void> = Promise.resolve();
-	private refreshQueue: Promise<void> = Promise.resolve();
+	private refreshOperation: Promise<void> | null = null;
 	private refreshRequested = false;
+	private refreshNotificationRequested = false;
+	private refreshGeneration = 0;
+	private stopped = false;
 	private writeQueue: Promise<void> = Promise.resolve();
 	private writePauseCount = 0;
 
@@ -67,9 +71,15 @@ export class KnomoSharedConfigService {
 		owner.registerEvent(this.app.vault.on("modify", handle));
 		owner.registerEvent(this.app.vault.on("delete", handle));
 		owner.registerEvent(this.app.vault.on("rename", handle));
-		owner.register(() => { this.onChanged = null; });
+		owner.register(() => {
+			this.stopped = true;
+			this.refreshGeneration += 1;
+			this.refreshRequested = false;
+			this.refreshNotificationRequested = false;
+			this.onChanged = null;
+		});
 		// 监听建立后补扫一次，覆盖初始化扫描与事件注册之间的变更窗口。
-		this.scheduleRefresh();
+		this.scheduleRefresh(true, false);
 	}
 
 	async initializeLocalConfig(): Promise<void> {
@@ -85,10 +95,11 @@ export class KnomoSharedConfigService {
 	async initialize(): Promise<void> {
 		await this.initializeLocalConfig();
 		try {
-			await this.refreshFromVault();
+			await this.requestRefresh(false);
 			if (this.status !== "ready" && this.localConfig === null) this.status = "unavailable";
 			this.lastError = null;
 		} catch (error) {
+			if (error instanceof KnomoSharedConfigRefreshCancelledError) return;
 			this.status = "unavailable";
 			this.snapshot = createEmptySnapshot();
 			this.lastError = errorDetail(error);
@@ -261,14 +272,17 @@ export class KnomoSharedConfigService {
 		this.notifyChanged();
 	}
 
-	private async refreshFromVault(): Promise<void> {
+	private async refreshFromVault(generation = this.refreshGeneration): Promise<void> {
+		this.assertRefreshCurrent(generation);
 		const rootPath = this.getRootPath();
 		if (rootPath === null) {
+			this.assertRefreshCurrent(generation);
 			this.setMissing();
 			return;
 		}
 		const root = this.app.vault.getAbstractFileByPath(rootPath);
 		if (root === null) {
+			this.assertRefreshCurrent(generation);
 			this.setMissing();
 			return;
 		}
@@ -277,15 +291,26 @@ export class KnomoSharedConfigService {
 		let invalidFiles = 0;
 		for (const file of listFiles(root).sort((left, right) => left.path.localeCompare(right.path))) {
 			try {
-				const parsed = await parseKnomoSharedConfigSegment(rootPath, file.path, await this.app.vault.cachedRead(file));
+				const content = await this.app.vault.cachedRead(file);
+				this.assertRefreshCurrent(generation);
+				const parsed = await parseKnomoSharedConfigSegment(rootPath, file.path, content);
 				envelopes.push(...parsed.events);
-			} catch {
+			} catch (error) {
+				if (error instanceof KnomoSharedConfigRefreshCancelledError) throw error;
 				invalidFiles += 1;
 			}
 		}
+		const snapshot = await materializeKnomoSharedConfig(envelopes);
+		this.assertRefreshCurrent(generation);
 		this.envelopes = envelopes;
 		this.invalidFileCount = invalidFiles;
-		await this.materialize();
+		this.snapshot = snapshot;
+		this.status = invalidFiles > 0 || snapshot.status === "conflicted"
+			? "conflicted"
+			: snapshot.status;
+		if (this.status === "ready" && snapshot.config !== null) {
+			this.monthlyLocale = snapshot.config.monthly.locale;
+		}
 	}
 
 	private async readImage(rootPath: string): Promise<Map<string, string> | null> {
@@ -310,24 +335,68 @@ export class KnomoSharedConfigService {
 		}
 	}
 
-	private scheduleRefresh(): void {
-		this.refreshRequested = true;
-		this.refreshQueue = this.refreshQueue.then(async () => {
-			if (!this.refreshRequested) return;
-			this.refreshRequested = false;
-			await this.refreshFromVault();
-			this.notifyChanged();
-		}).catch((error) => {
-			this.status = "unavailable";
-			this.lastError = errorDetail(error);
+	private scheduleRefresh(notify = true, supersede = true): void {
+		void this.requestRefresh(notify, supersede).catch((error) => {
+			if (!this.isRefreshStopped()) {
+				this.status = "unavailable";
+				this.lastError = errorDetail(error);
+			}
 		});
 	}
 
+	private requestRefresh(notify: boolean, supersede = false): Promise<void> {
+		if (this.isRefreshStopped()) return Promise.reject(new KnomoSharedConfigRefreshCancelledError());
+		this.refreshNotificationRequested ||= notify;
+		if (this.refreshOperation !== null && !supersede) return this.refreshOperation;
+		this.refreshRequested = true;
+		this.refreshGeneration += 1;
+		if (this.refreshOperation !== null) return this.refreshOperation;
+		let operation: Promise<void>;
+		operation = Promise.resolve().then(async () => {
+			while (this.refreshRequested) {
+				this.refreshRequested = false;
+				const generation = this.refreshGeneration;
+				try {
+					await this.refreshFromVault(generation);
+				} catch (error) {
+					if (error instanceof KnomoSharedConfigRefreshCancelledError && !this.isRefreshStopped()) continue;
+					throw error;
+				}
+				const notifyAfterRefresh = this.refreshNotificationRequested;
+				this.refreshNotificationRequested = false;
+				if (notifyAfterRefresh) this.notifyChanged();
+			}
+		}).finally(() => {
+			if (this.refreshOperation === operation) this.refreshOperation = null;
+			if (this.refreshRequested && !this.isRefreshStopped()) {
+				void this.requestRefresh(false).catch((error) => {
+					if (!this.isRefreshStopped()) {
+						this.status = "unavailable";
+						this.lastError = errorDetail(error);
+					}
+				});
+			}
+		});
+		this.refreshOperation = operation;
+		return operation;
+	}
+
 	private notifyChanged(): void {
+		if (this.isRefreshStopped()) return;
 		this.changeNotificationQueue = this.changeNotificationQueue.then(
-			async () => { await this.onChanged?.(); },
-			async () => { await this.onChanged?.(); },
+			async () => { if (!this.isRefreshStopped()) await this.onChanged?.(); },
+			async () => { if (!this.isRefreshStopped()) await this.onChanged?.(); },
 		).catch(() => undefined);
+	}
+
+	private isRefreshStopped(): boolean {
+		return this.stopped || this.options.cancellationSignal?.aborted === true;
+	}
+
+	private assertRefreshCurrent(generation: number): void {
+		if (this.isRefreshStopped() || generation !== this.refreshGeneration) {
+			throw new KnomoSharedConfigRefreshCancelledError();
+		}
 	}
 
 	private getRootPath(): string | null {
@@ -555,4 +624,10 @@ function imagesEqual(left: ReadonlyMap<string, string>, right: ReadonlyMap<strin
 		if (right.get(path) !== content) return false;
 	}
 	return true;
+}
+
+class KnomoSharedConfigRefreshCancelledError extends Error {
+	constructor() {
+		super("Knomo shared configuration refresh was cancelled.");
+	}
 }

@@ -233,7 +233,12 @@ export interface IdentityLedgerReader {
 export interface IdentityLedgerLegacyImportTarget extends IdentityLedgerReader {
 	importVerifiedLegacyEvents(
 		events: readonly IdentityLedgerEvent[],
-		runtime?: { cancellationSignal?: AbortSignal; yieldControl?: () => Promise<void> },
+		runtime?: {
+			cancellationSignal?: AbortSignal;
+			yieldControl?: () => Promise<void>;
+			sliceBudgetMs?: number;
+			now?: () => number;
+		},
 	): Promise<number>;
 	verifyPersistedSnapshot(expectedRevision: string): Promise<boolean>;
 }

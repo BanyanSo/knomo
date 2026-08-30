@@ -139,6 +139,36 @@ test("IndexedDB clear 原子保留指定服务元数据且重开后仍可读取"
 	}
 });
 
+test("IndexedDB 在一次扫描进度提交中保存 coverage、checkpoint 与失败路径", async () => {
+	const databaseName = uniqueDatabaseName("scan-progress");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		const coverage = {
+			kind: "rebuilding" as const,
+			coveredFromDate: "2026-08-09",
+			pendingFileCount: 1,
+			coveredFileCount: 1,
+			totalFileCount: 2,
+		};
+		const checkpoint = { pendingPaths: ["Journal/2026-08-08.md"], updatedAt: 123 };
+		const failures = [{ sourcePath: "Journal/2026-08-07.md", message: "read failed" }];
+
+		await store.saveScanProgress(coverage, [
+			{ key: "catalogCheckpoint", value: checkpoint },
+			{ key: "catalogFailedPaths", value: failures },
+		]);
+
+		assert.deepEqual(await store.getCoverage(), coverage);
+		assert.deepEqual(await store.getMeta("catalogCheckpoint"), checkpoint);
+		assert.deepEqual(await store.getMeta("catalogFailedPaths"), failures);
+		assert.equal(store.getLifecycle().state, "rebuilding");
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
 test("CAT-QUERY-001 / CAT-TAG-001：IndexedDB 搜索保持子串语义，父标签包含嵌套标签", async () => {
 	const databaseName = uniqueDatabaseName("substring-parent-tag");
 	const store = createStore(databaseName);

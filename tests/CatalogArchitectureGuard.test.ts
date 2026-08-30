@@ -161,6 +161,28 @@ test("Identity 与共享配置监听等待 layout ready，启动后续阶段遵�
 	assert.equal(afterLayoutInitialization.includes("const isCancelled = () => cancellationSignal?.aborted === true"), true);
 });
 
+test("启动后续工作只由 Catalog settle 调度，且无 pending Identity 时不读取全量 observation", () => {
+	const main = fs.readFileSync("src/main.ts", "utf8");
+	const reconcile = main.slice(
+		main.indexOf("const reconcileIdentityLedger = async () =>"),
+		main.indexOf("const projectionInputBuilder"),
+	);
+	const runtimeInitialization = main.slice(
+		main.indexOf("this.runtimeInitializationPromise ="),
+		main.indexOf("this.app.workspace.onLayoutReady(() =>", main.indexOf("this.runtimeInitializationPromise =")),
+	);
+	const catalogSettled = main.slice(
+		main.indexOf("onCatalogSettled: async () =>"),
+		main.indexOf("dailyInventory,", main.indexOf("onCatalogSettled: async () =>")),
+	);
+
+	assert.ok(reconcile.indexOf("hasPendingCreates()") < reconcile.indexOf("loadObservationBatches()"));
+	assert.ok(reconcile.indexOf("hasPendingDeletes()") < reconcile.indexOf("loadObservationBatches()"));
+	assert.doesNotMatch(runtimeInitialization, /legacyIndexMigrationService\?\.run|reconcileIdentityLedger/u);
+	assert.match(catalogSettled, /legacyIndexMigrationService\?\.run/u);
+	assert.match(catalogSettled, /reconcileIdentityLedger/u);
+});
+
 function listFiles(root: string): string[] {
 	return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
 		const fullPath = path.join(root, entry.name);

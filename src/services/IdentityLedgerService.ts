@@ -36,6 +36,8 @@ import {
 	serializeIdentityLedgerSegment,
 	sha256IdentityLedgerText,
 } from "./IdentityLedgerProtocol";
+import { CooperativeYieldController } from "./CooperativeTask";
+import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 const LEGACY_IMPORT_SEGMENT_EVENT_LIMIT = 256;
 
@@ -46,6 +48,9 @@ export interface IdentityLedgerServiceOptions {
 	createEventId?: () => string;
 	now?: () => Date;
 	cancellationSignal?: AbortSignal;
+	yieldControl?: () => Promise<void>;
+	sliceBudgetMs?: number;
+	monotonicNow?: () => number;
 }
 
 export class IdentityLedgerService implements IdentityLedgerMutationService {
@@ -60,8 +65,11 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private onChanged: (() => void | Promise<void>) | null = null;
 	private notificationRequested = false;
 	private notificationRunning = false;
-	private refreshQueue: Promise<void> = Promise.resolve();
+	private refreshOperation: Promise<void> | null = null;
 	private refreshRequested = false;
+	private refreshNotificationRequested = false;
+	private refreshGeneration = 0;
+	private stopped = false;
 	private writeQueue: Promise<void> = Promise.resolve();
 	private writePauseCount = 0;
 	private legacyImportWriteCount = 0;
@@ -90,17 +98,22 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		owner.registerEvent(this.app.vault.on("delete", handle));
 		owner.registerEvent(this.app.vault.on("rename", handle));
 		owner.register(() => {
+			this.stopped = true;
+			this.refreshGeneration += 1;
+			this.refreshRequested = false;
+			this.refreshNotificationRequested = false;
 			this.onChanged = null;
 			this.notificationRequested = false;
 		});
 		// 监听建立后补扫一次，覆盖初始化扫描与事件注册之间的变更窗口。
-		this.scheduleRefresh();
+		this.scheduleRefresh(true, false);
 	}
 
 	async initialize(): Promise<void> {
 		try {
-			await this.refreshFromVault();
-		} catch {
+			await this.requestRefresh(false);
+		} catch (error) {
+			if (error instanceof IdentityLedgerRefreshCancelledError) return;
 			this.envelopes = [];
 			this.snapshot = createEmptySnapshot();
 			this.status = "unavailable";
@@ -183,23 +196,46 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			.sort((left, right) => left.deleteEventId.localeCompare(right.deleteEventId));
 	}
 
+	hasPendingCreates(): boolean {
+		return this.snapshot.pendingIntents.length > 0;
+	}
+
+	hasPendingDeletes(): boolean {
+		return Object.values(this.snapshot.memos).some((memo) => (memo.pendingDeletes?.length ?? 0) > 0);
+	}
+
 	async importVerifiedLegacyEvents(
 		events: readonly IdentityLedgerEvent[],
-		runtime: { cancellationSignal?: AbortSignal; yieldControl?: () => Promise<void> } = {},
+		runtime: {
+			cancellationSignal?: AbortSignal;
+			yieldControl?: () => Promise<void>;
+			sliceBudgetMs?: number;
+			now?: () => number;
+		} = {},
 	): Promise<number> {
 		if (events.length === 0) return 0;
 		this.assertWriteAllowed(runtime.cancellationSignal);
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
 		const existingByEventId = new Map<string, IdentityLedgerEventEnvelope[]>();
+		const yieldController = runtime.yieldControl === undefined ? null : new CooperativeYieldController({
+			yieldControl: runtime.yieldControl,
+			sliceBudgetMs: runtime.sliceBudgetMs,
+			maxOperationsPerSlice: LEGACY_IMPORT_SEGMENT_EVENT_LIMIT,
+			now: runtime.now,
+		});
 		for (const envelope of this.envelopes) {
 			const values = existingByEventId.get(envelope.event.eventId) ?? [];
 			values.push(envelope);
 			existingByEventId.set(envelope.event.eventId, values);
+			if (yieldController?.shouldYield()) {
+				await yieldController.yieldNow();
+				this.assertWriteAllowed(runtime.cancellationSignal);
+			}
 		}
 		const pendingByEventId = new Map<string, { event: IdentityLedgerEvent; digest: string }>();
 		for (let index = 0; index < events.length; index += 1) {
-			if (index > 0 && index % LEGACY_IMPORT_SEGMENT_EVENT_LIMIT === 0) {
-				await runtime.yieldControl?.();
+			if (index > 0 && yieldController?.shouldYield()) {
+				await yieldController.yieldNow();
 				this.assertWriteAllowed(runtime.cancellationSignal);
 			}
 			const event = events[index];
@@ -275,9 +311,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	async verifyPersistedSnapshot(expectedRevision: string): Promise<boolean> {
 		await this.writeQueue;
 		try {
-			await this.refreshFromVault();
-		} catch {
-			this.status = "unavailable";
+			await this.requestRefresh(false, true);
+		} catch (error) {
+			if (!(error instanceof IdentityLedgerRefreshCancelledError)) this.status = "unavailable";
 			return false;
 		}
 		return this.status === "ready" && this.snapshot.revision === expectedRevision;
@@ -720,14 +756,17 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		if (notify) this.scheduleNotification();
 	}
 
-	private async refreshFromVault(): Promise<void> {
+	private async refreshFromVault(generation = this.refreshGeneration): Promise<void> {
+		this.assertRefreshCurrent(generation);
 		const rootPath = this.getRootPath();
 		if (rootPath === null) {
+			this.assertRefreshCurrent(generation);
 			this.setMissing();
 			return;
 		}
 		const root = this.app.vault.getAbstractFileByPath(rootPath);
 		if (root === null) {
+			this.assertRefreshCurrent(generation);
 			this.setMissing();
 			return;
 		}
@@ -737,19 +776,29 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		let errors = 0;
 		for (const file of files) {
 			try {
-				const parsed = await parseIdentityLedgerSegment(rootPath, file.path, await this.app.vault.cachedRead(file));
+				const content = await this.app.vault.cachedRead(file);
+				this.assertRefreshCurrent(generation);
+				const parsed = await parseIdentityLedgerSegment(rootPath, file.path, content);
 				envelopes.push(...parsed.events);
-			} catch {
+			} catch (error) {
+				if (error instanceof IdentityLedgerRefreshCancelledError) throw error;
 				errors += 1;
 			}
 		}
+		const snapshot = await materializeIdentityLedger(envelopes, this.createCooperativeRuntime(
+			() => this.assertRefreshCurrent(generation),
+		));
+		this.assertRefreshCurrent(generation);
 		this.envelopes = envelopes;
 		this.scanErrorCount = errors;
-		await this.materialize();
+		this.snapshot = snapshot;
+		this.updateStatus();
 	}
 
 	private async materialize(): Promise<void> {
-		this.snapshot = await materializeIdentityLedger(this.envelopes);
+		this.snapshot = await materializeIdentityLedger(this.envelopes, this.createCooperativeRuntime(
+			() => this.assertWriteAllowed(),
+		));
 		this.updateStatus();
 	}
 
@@ -759,19 +808,48 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			: this.snapshot.eventCount === 0 ? "absent" : "ready";
 	}
 
-	private scheduleRefresh(): void {
-		this.refreshRequested = true;
-		this.refreshQueue = this.refreshQueue.then(async () => {
-			if (!this.refreshRequested) return;
-			this.refreshRequested = false;
-			await this.refreshFromVault();
-			this.scheduleNotification();
-		}).catch(() => {
-			this.status = "unavailable";
+	private scheduleRefresh(notify = true, supersede = true): void {
+		void this.requestRefresh(notify, supersede).catch(() => {
+			if (!this.isRefreshStopped()) this.status = "unavailable";
 		});
 	}
 
+	private requestRefresh(notify: boolean, supersede = false): Promise<void> {
+		if (this.isRefreshStopped()) return Promise.reject(new IdentityLedgerRefreshCancelledError());
+		this.refreshNotificationRequested ||= notify;
+		if (this.refreshOperation !== null && !supersede) return this.refreshOperation;
+		this.refreshRequested = true;
+		this.refreshGeneration += 1;
+		if (this.refreshOperation !== null) return this.refreshOperation;
+		let operation: Promise<void>;
+		operation = Promise.resolve().then(async () => {
+			while (this.refreshRequested) {
+				this.refreshRequested = false;
+				const generation = this.refreshGeneration;
+				try {
+					await this.refreshFromVault(generation);
+				} catch (error) {
+					if (error instanceof IdentityLedgerRefreshCancelledError && !this.isRefreshStopped()) continue;
+					throw error;
+				}
+				const notifyAfterRefresh = this.refreshNotificationRequested;
+				this.refreshNotificationRequested = false;
+				if (notifyAfterRefresh) this.scheduleNotification();
+			}
+		}).finally(() => {
+			if (this.refreshOperation === operation) this.refreshOperation = null;
+			if (this.refreshRequested && !this.isRefreshStopped()) {
+				void this.requestRefresh(false).catch(() => {
+					if (!this.isRefreshStopped()) this.status = "unavailable";
+				});
+			}
+		});
+		this.refreshOperation = operation;
+		return operation;
+	}
+
 	private scheduleNotification(): void {
+		if (this.isRefreshStopped()) return;
 		this.notificationRequested = true;
 		if (this.notificationRunning) return;
 		this.notificationRunning = true;
@@ -780,7 +858,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	private async flushNotifications(): Promise<void> {
 		try {
-			while (this.notificationRequested) {
+			while (this.notificationRequested && !this.isRefreshStopped()) {
 				this.notificationRequested = false;
 				await this.notifyChanged();
 			}
@@ -788,12 +866,39 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			// 观察者失败不能改变已持久化 Identity 事件的结果。
 		} finally {
 			this.notificationRunning = false;
-			if (this.notificationRequested) this.scheduleNotification();
+			if (this.notificationRequested && !this.isRefreshStopped()) this.scheduleNotification();
 		}
 	}
 
 	private async notifyChanged(): Promise<void> {
+		if (this.isRefreshStopped()) return;
 		await this.onChanged?.();
+	}
+
+	private createCooperativeRuntime(assertAllowed: () => void): CooperativeTaskRuntime {
+		return {
+			yieldControl: async () => {
+				if (this.options.yieldControl !== undefined) {
+					await this.options.yieldControl();
+				} else {
+					const appWindow = this.app.workspace?.containerEl?.win;
+					if (appWindow !== undefined) await new Promise<void>((resolve) => appWindow.setTimeout(resolve, 0));
+				}
+				assertAllowed();
+			},
+			sliceBudgetMs: this.options.sliceBudgetMs,
+			now: this.options.monotonicNow,
+		};
+	}
+
+	private isRefreshStopped(): boolean {
+		return this.stopped || this.options.cancellationSignal?.aborted === true;
+	}
+
+	private assertRefreshCurrent(generation: number): void {
+		if (this.isRefreshStopped() || generation !== this.refreshGeneration) {
+			throw new IdentityLedgerRefreshCancelledError();
+		}
 	}
 
 	private async getWriterId(): Promise<string> {
@@ -887,7 +992,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 export async function materializeIdentityLedger(
 	envelopes: readonly IdentityLedgerEventEnvelope[],
+	runtime?: CooperativeTaskRuntime,
 ): Promise<IdentityLedgerSnapshot> {
+	const yieldController = runtime === undefined ? null : new CooperativeYieldController(runtime);
 	const { accepted, quarantinedEventIds } = selectIdentityLedgerEnvelopes(envelopes);
 	const revision = await buildIdentityLedgerRevision(accepted);
 	const acceptedEvents = accepted.map((item) => item.event);
@@ -896,6 +1003,7 @@ export async function materializeIdentityLedger(
 		const values = eventsByMemoId.get(event.memoId) ?? [];
 		values.push(event);
 		eventsByMemoId.set(event.memoId, values);
+		if (yieldController?.shouldYield()) await yieldController.yieldNow();
 	}
 	const claims = accepted.filter((item): item is IdentityLedgerEventEnvelope & { event: IdentityLedgerClaimEvent } =>
 		item.event.type === "claim");
@@ -968,6 +1076,7 @@ export async function materializeIdentityLedger(
 			activeDeletes,
 			purgedDeleteEventIds,
 		};
+		if (yieldController?.shouldYield(memoEvents.length)) await yieldController.yieldNow();
 	}
 	return {
 		revision,
@@ -1354,6 +1463,12 @@ function isIdentityLedgerPath(path: unknown, rootPath: string | null): boolean {
 class IdentityLedgerWriteCancelledError extends Error {
 	constructor() {
 		super("Identity Ledger write was cancelled.");
+	}
+}
+
+class IdentityLedgerRefreshCancelledError extends Error {
+	constructor() {
+		super("Identity Ledger refresh was cancelled.");
 	}
 }
 

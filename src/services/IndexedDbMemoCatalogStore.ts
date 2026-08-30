@@ -20,7 +20,7 @@ import {
 	mergeAggregate,
 	normalizeCatalogText,
 } from "./MemoCatalogStore";
-import type { MemoCatalogStore } from "./MemoCatalogStore";
+import type { CatalogMetaEntry, MemoCatalogStore } from "./MemoCatalogStore";
 import { selectCatalogSearchToken } from "./MemoCatalogService";
 
 const CATALOG_DATABASE_VERSION = 2;
@@ -500,11 +500,23 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		return (await this.getMeta<CatalogCoverage>(COVERAGE_META)) ?? { ...DEFAULT_CATALOG_COVERAGE };
 	}
 
-	async setCoverage(coverage: CatalogCoverage): Promise<void> {
+	setCoverage(coverage: CatalogCoverage): Promise<void> {
+		return this.saveScanProgress(coverage, []);
+	}
+
+	async saveScanProgress(coverage: CatalogCoverage, metadata: readonly CatalogMetaEntry[]): Promise<void> {
 		if (coverage.kind === "rebuilding") {
 			this.lifecycle = { state: "rebuilding", persistent: true, writable: true, reason: null };
 		}
-		await this.setMeta(COVERAGE_META, coverage);
+		await this.open();
+		const transaction = this.getDatabase().transaction(META_STORE, "readwrite");
+		const done = waitForTransaction(transaction);
+		const store = transaction.objectStore(META_STORE);
+		store.put({ key: COVERAGE_META, value: coverage } satisfies CatalogMetaRecord<CatalogCoverage>);
+		for (const entry of metadata) {
+			store.put({ key: entry.key, value: entry.value } satisfies CatalogMetaRecord);
+		}
+		await done;
 		if (coverage.kind !== "rebuilding") {
 			this.lifecycle = { state: "ready", persistent: true, writable: true, reason: null };
 		}

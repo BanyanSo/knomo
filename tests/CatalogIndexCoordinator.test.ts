@@ -960,6 +960,11 @@ test("插件 unload 会取消 active 扫描，且不再发起 Catalog 持久化"
 		if (unloaded) postUnloadPersistenceCount += 1;
 		return setMeta(key, value);
 	};
+	const saveScanProgress = store.saveScanProgress.bind(store);
+	store.saveScanProgress = async (coverage, metadata) => {
+		if (unloaded) postUnloadPersistenceCount += 1;
+		return saveScanProgress(coverage, metadata);
+	};
 	const workQueue = new LowPriorityWorkQueue(() => ({
 		setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay) as unknown as number,
 		clearTimeout: (timer) => globalThis.clearTimeout(timer as unknown as NodeJS.Timeout),
@@ -1040,7 +1045,7 @@ test("Catalog inventory reconcile 进入统一低优先级队列并按预算让�
 	}
 });
 
-test("1001 个 Daily 每个只解析一次，checkpoint 按批次持久化", async () => {
+test("101 个 Daily 在短 slice 下每个只解析一次，checkpoint 仍按批次持久化", async () => {
 	await ensureObsidianStub();
 	const {
 		CatalogIndexCoordinator,
@@ -1049,7 +1054,7 @@ test("1001 个 Daily 每个只解析一次，checkpoint 按批次持久化", asy
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const files = Array.from({ length: 1_001 }, (_, index) => {
+	const files = Array.from({ length: 101 }, (_, index) => {
 		const year = 2020 + Math.floor(index / 336);
 		const yearDay = index % 336;
 		const month = Math.floor(yearDay / 28) + 1;
@@ -1064,10 +1069,10 @@ test("1001 个 Daily 每个只解析一次，checkpoint 按批次持久化", asy
 	const fixture = await createCoordinatorFixture(files);
 	const store = new InMemoryMemoCatalogStore();
 	let checkpointWriteCount = 0;
-	const setMeta = store.setMeta.bind(store);
-	store.setMeta = async (key, value) => {
-		if (key === CATALOG_CHECKPOINT_META_KEY) checkpointWriteCount += 1;
-		await setMeta(key, value);
+	const saveScanProgress = store.saveScanProgress.bind(store);
+	store.saveScanProgress = async (coverage, metadata) => {
+		if (metadata.some((entry) => entry.key === CATALOG_CHECKPOINT_META_KEY)) checkpointWriteCount += 1;
+		await saveScanProgress(coverage, metadata);
 	};
 	const coordinator = new CatalogIndexCoordinator(
 		fixture.app,
@@ -1077,9 +1082,10 @@ test("1001 个 Daily 每个只解析一次，checkpoint 按批次持久化", asy
 		{
 			now: () => 1_000,
 			fullAuditIntervalMs: 10_000,
-			sliceBudgetMs: 60_000,
+			sliceBudgetMs: 0,
 			checkpointBatchSize: 25,
 			checkpointIntervalMs: 60_000,
+			yieldControl: async () => undefined,
 		},
 	);
 	try {
@@ -1088,7 +1094,7 @@ test("1001 个 Daily 每个只解析一次，checkpoint 按批次持久化", asy
 		await coordinator.waitForIdle();
 
 		assert.equal(fixture.readCount(), files.length);
-		assert.ok(checkpointWriteCount < 50, `checkpoint 写入次数过多：${checkpointWriteCount}`);
+		assert.ok(checkpointWriteCount <= 6, `checkpoint 写入次数过多：${checkpointWriteCount}`);
 		assert.equal((await store.getCoverage()).kind, "complete");
 	} finally {
 		fixture.unload();

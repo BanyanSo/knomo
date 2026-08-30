@@ -22,6 +22,7 @@ import { hashText } from "../utils/hash";
 import { canonicalIdentityLedgerJson, sha256IdentityLedgerText } from "./IdentityLedgerProtocol";
 import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
+import { CooperativeYieldController } from "./CooperativeTask";
 
 const EMPTY_REPORT: LegacyIdentityImportReport = {
 	status: "idle",
@@ -40,6 +41,8 @@ export const LEGACY_MIGRATION_COMPLETION_META_KEY = "legacyMigrationCompletion";
 interface LegacyMigrationCompletion {
 	sourceId: string;
 	sourceRevision: string;
+	legacySystemRoot: string;
+	importedMemoIds: string[];
 }
 
 export interface LegacyIndexMigrationServiceOptions {
@@ -47,6 +50,8 @@ export interface LegacyIndexMigrationServiceOptions {
 	getCatalogCoverage: () => Promise<CatalogCoverage>;
 	getObservationBatches: () => Promise<readonly CatalogFileRevisionBatch<MemoObservation>[]>;
 	yieldControl?: () => Promise<void>;
+	sliceBudgetMs?: number;
+	now?: () => number;
 	onReportChanged?: (report: LegacyIdentityImportReport) => void | Promise<void>;
 	workQueue?: LowPriorityWorkRunner;
 	completionStore?: Pick<MemoCatalogStore, "deleteMeta" | "getMeta" | "setMeta">;
@@ -140,6 +145,17 @@ export class LegacyIndexMigrationService {
 			if (coverage.kind !== "complete") {
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "waiting_catalog" });
 			}
+			const completion = await this.loadCompletion();
+			this.assertRunning();
+			if (!verifyCompletion
+				&& runSourceChangeRevision === 0
+				&& completion !== null
+				&& completion.sourceId === presence.sourceId
+				&& !hasIdentityConflict(this.target)) {
+				this.completedSourceId = completion.sourceId;
+				this.handledSourceChangeRevision = runSourceChangeRevision;
+				return this.remember(completedReport(completion));
+			}
 			const source = await this.source.load();
 			this.assertRunning();
 			if (source.kind === "missing") {
@@ -166,8 +182,6 @@ export class LegacyIndexMigrationService {
 					? this.finalizeCleanupCandidate(source.snapshot, report, coverage)
 					: this.remember({ ...report, cleanupCandidate: this.report.cleanupCandidate });
 			}
-			const completion = await this.loadCompletion();
-			this.assertRunning();
 			if (completion !== null
 				&& completion.sourceId === source.snapshot.sourceId
 				&& completion.sourceRevision === source.snapshot.sourceRevision
@@ -175,12 +189,12 @@ export class LegacyIndexMigrationService {
 				&& !hasIdentityConflict(this.target)) {
 				this.completedSourceId = source.snapshot.sourceId;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
-				return this.remember(completedReport(source.snapshot));
+				return this.remember(completedReport(completion));
 			}
 			if (completion !== null) await this.clearCompletion();
 			const observationBatches = await this.options.getObservationBatches();
 			this.assertRunning();
-			const lookup = buildObservationLookup(observationBatches);
+			const lookup = await buildObservationLookup(observationBatches, this.createYieldController());
 			const report = await this.importSnapshot(source.snapshot, lookup, coverage);
 			this.assertRunning();
 			if (report.status === "ready") {
@@ -215,9 +229,10 @@ export class LegacyIndexMigrationService {
 			...source.memos,
 			...source.pendingMemos,
 		].sort((left, right) => left.memoId.localeCompare(right.memoId));
+		const yieldController = this.createYieldController();
 
 		for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
-			if (recordIndex > 0 && recordIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
+			if (recordIndex > 0 && yieldController.shouldYield()) await yieldController.yieldNow();
 			const record = records[recordIndex];
 			if (record === undefined) continue;
 			const existing = initialSnapshot.memos[record.memoId];
@@ -273,14 +288,14 @@ export class LegacyIndexMigrationService {
 		let importedEventCount = await this.target.importVerifiedLegacyEvents(claims, {
 			cancellationSignal: this.options.workQueue?.signal,
 			yieldControl: () => this.yieldControl(),
+			sliceBudgetMs: this.options.sliceBudgetMs,
+			now: this.options.now,
 		});
 		this.assertRunning();
 		const claimedSnapshot = this.target.getSnapshot();
 		const metadataEvents: IdentityLedgerEvent[] = [];
 		const reviews = new Map(source.reviews.map((review) => [review.memoId, review] as const));
-		let planIndex = 0;
 		for (const [memoId, plan] of plans) {
-			planIndex += 1;
 			const current = claimedSnapshot.memos[memoId];
 			const binding = current?.conflicted === false && current.bindings.length === 1
 				? current.bindings[0] ?? null
@@ -296,7 +311,7 @@ export class LegacyIndexMigrationService {
 					"Identity Ledger did not preserve the uniquely verified legacy binding.",
 				));
 				reviews.delete(memoId);
-				if (planIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
+				if (yieldController.shouldYield()) await yieldController.yieldNow();
 				continue;
 			}
 			metadataEvents.push(...await buildMetadataEvents(
@@ -305,23 +320,23 @@ export class LegacyIndexMigrationService {
 				plan.record,
 				binding,
 				reviews.get(memoId) ?? null,
-				() => this.yieldControl(),
+				yieldController,
 			));
 			importedMemoIds.add(memoId);
 			reviews.delete(memoId);
-			if (planIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
+			if (yieldController.shouldYield()) await yieldController.yieldNow();
 		}
-		let unmatchedReviewIndex = 0;
 		for (const review of reviews.values()) {
 			diagnostics.push(diagnostic("legacy_review_without_identity", null, review.memoId, "Legacy review state has no confirmed identity."));
 			skippedMemoIds.add(review.memoId);
-			unmatchedReviewIndex += 1;
-			if (unmatchedReviewIndex % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await this.yieldControl();
+			if (yieldController.shouldYield()) await yieldController.yieldNow();
 		}
 		this.assertRunning();
 		importedEventCount += await this.target.importVerifiedLegacyEvents(metadataEvents, {
 			cancellationSignal: this.options.workQueue?.signal,
 			yieldControl: () => this.yieldControl(),
+			sliceBudgetMs: this.options.sliceBudgetMs,
+			now: this.options.now,
 		});
 		this.assertRunning();
 		const report = {
@@ -391,7 +406,7 @@ export class LegacyIndexMigrationService {
 				sourceRevision: source.sourceRevision,
 			},
 		};
-		await this.persistCompletion(source);
+		await this.persistCompletion(source, completed);
 		this.assertRunning();
 		return this.remember(completed);
 	}
@@ -408,6 +423,15 @@ export class LegacyIndexMigrationService {
 		this.assertRunning();
 	}
 
+	private createYieldController(): CooperativeYieldController {
+		return new CooperativeYieldController({
+			yieldControl: () => this.yieldControl(),
+			sliceBudgetMs: this.options.sliceBudgetMs,
+			maxOperationsPerSlice: LEGACY_MIGRATION_EVENT_BATCH_SIZE,
+			now: this.options.now,
+		});
+	}
+
 	private isStopped(): boolean {
 		return this.stopped || this.options.workQueue?.signal.aborted === true;
 	}
@@ -421,11 +445,13 @@ export class LegacyIndexMigrationService {
 		return isLegacyMigrationCompletion(value) ? value : null;
 	}
 
-	private async persistCompletion(source: LegacyIndexSnapshot): Promise<void> {
+	private async persistCompletion(source: LegacyIndexSnapshot, report: LegacyIdentityImportReport): Promise<void> {
 		this.assertRunning();
 		await this.options.completionStore?.setMeta(LEGACY_MIGRATION_COMPLETION_META_KEY, {
 			sourceId: source.sourceId,
 			sourceRevision: source.sourceRevision,
+			legacySystemRoot: source.legacySystemRoot,
+			importedMemoIds: [...report.importedMemoIds],
 		} satisfies LegacyMigrationCompletion);
 	}
 
@@ -459,7 +485,7 @@ async function buildMetadataEvents(
 	record: LegacyMemoRecord,
 	binding: IdentityLedgerBinding,
 	review: LegacyIndexSnapshot["reviews"][number] | null,
-	yieldControl: () => Promise<void>,
+	yieldController: CooperativeYieldController,
 ): Promise<IdentityLedgerEvent[]> {
 	const events: IdentityLedgerEvent[] = [];
 	if (record.sourceMemoId !== null) {
@@ -485,7 +511,7 @@ async function buildMetadataEvents(
 				occurredAt: reviewedAt,
 				evidence: { reviewedAt },
 			});
-			if ((index + 1) % LEGACY_MIGRATION_EVENT_BATCH_SIZE === 0) await yieldControl();
+			if (yieldController.shouldYield()) await yieldController.yieldNow();
 		}
 	}
 	if (isDeletedRecord(record)) {
@@ -548,9 +574,10 @@ async function resolveLegacyObservationEvidence(
 	return observation === null ? null : toObservationEvidence(observation);
 }
 
-function buildObservationLookup(
+async function buildObservationLookup(
 	batches: readonly CatalogFileRevisionBatch<MemoObservation>[],
-): LegacyObservationLookup {
+	yieldController: CooperativeYieldController,
+): Promise<LegacyObservationLookup> {
 	const byRawBlock = new Map<string, MemoObservation | null>();
 	const byTuple = new Map<string, MemoObservation | null>();
 	for (const batch of batches) {
@@ -571,6 +598,7 @@ function buildObservationLookup(
 				),
 				observation,
 			);
+			if (yieldController.shouldYield()) await yieldController.yieldNow();
 		}
 	}
 	return { byRawBlock, byTuple };
@@ -671,20 +699,17 @@ function cloneReport(report: LegacyIdentityImportReport): LegacyIdentityImportRe
 	};
 }
 
-function completedReport(source: LegacyIndexSnapshot): LegacyIdentityImportReport {
+function completedReport(completion: LegacyMigrationCompletion): LegacyIdentityImportReport {
 	return {
 		status: "ready",
-		sourceRevision: source.sourceRevision,
+		sourceRevision: completion.sourceRevision,
 		importedEventCount: 0,
-		importedMemoIds: [...new Set([
-			...source.memos.map((memo) => memo.memoId),
-			...source.pendingMemos.map((memo) => memo.memoId),
-		])].sort(),
+		importedMemoIds: [...completion.importedMemoIds],
 		skippedMemoIds: [],
 		diagnostics: [],
 		cleanupCandidate: {
-			legacySystemRoot: source.legacySystemRoot,
-			sourceRevision: source.sourceRevision,
+			legacySystemRoot: completion.legacySystemRoot,
+			sourceRevision: completion.sourceRevision,
 		},
 	};
 }
@@ -692,11 +717,15 @@ function completedReport(source: LegacyIndexSnapshot): LegacyIdentityImportRepor
 function isLegacyMigrationCompletion(value: unknown): value is LegacyMigrationCompletion {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
-	return Object.keys(record).length === 2
+	return Object.keys(record).length === 4
 		&& typeof record.sourceId === "string"
 		&& record.sourceId.trim().length > 0
 		&& typeof record.sourceRevision === "string"
-		&& /^[0-9a-f]{64}$/u.test(record.sourceRevision);
+		&& /^[0-9a-f]{64}$/u.test(record.sourceRevision)
+		&& typeof record.legacySystemRoot === "string"
+		&& record.legacySystemRoot.trim().length > 0
+		&& Array.isArray(record.importedMemoIds)
+		&& record.importedMemoIds.every((memoId) => typeof memoId === "string" && memoId.length > 0);
 }
 
 function hasIdentityConflict(target: IdentityLedgerLegacyImportTarget): boolean {

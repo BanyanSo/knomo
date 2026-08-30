@@ -134,6 +134,7 @@ export default class KnomoPlugin extends Plugin {
 				this.settingsService.getSettings(),
 				monthlyLocale,
 			),
+			cancellationSignal: lowPriorityWorkQueue.signal,
 		});
 		await knomoSharedConfigService.initializeLocalConfig();
 
@@ -181,12 +182,19 @@ export default class KnomoPlugin extends Plugin {
 			return this.memoCatalogService!.listFileRevisionBatches();
 		};
 		const reconcileIdentityLedger = async () => {
+			const hasPendingCreates = identityLedgerService.hasPendingCreates();
+			const hasPendingDeletes = identityLedgerService.hasPendingDeletes();
+			if (!hasPendingCreates && !hasPendingDeletes) return;
 			const batches = await loadObservationBatches();
-			await identityLedgerService.reconcilePendingCreates(
-				batches.flatMap((batch) => batch.observations),
-			);
-			const coverage = await this.memoCatalogService!.getStore().getCoverage();
-			if (coverage.kind === "complete") {
+			if (hasPendingCreates) {
+				await identityLedgerService.reconcilePendingCreates(
+					batches.flatMap((batch) => batch.observations),
+				);
+			}
+			const coverage = hasPendingDeletes
+				? await this.memoCatalogService!.getStore().getCoverage()
+				: null;
+			if (coverage?.kind === "complete") {
 				await identityLedgerService.reconcilePendingDeletes(Object.fromEntries(batches.map((batch) => [
 					normalizePath(batch.file.sourcePath),
 					batch.file.sourceRevision,
@@ -341,7 +349,7 @@ export default class KnomoPlugin extends Plugin {
 			knomoSharedConfigService.start(this, async () => {
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-				await this.legacyIndexMigrationService?.run({ verifyCompletion: true });
+				await this.legacyIndexMigrationService?.run();
 				await this.queueRefreshOpenViews();
 			});
 		});
@@ -444,10 +452,6 @@ export default class KnomoPlugin extends Plugin {
 			await this.catalogIndexCoordinator?.initialize();
 			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);
-			if (lowPriorityWorkQueue.signal.aborted) return false;
-			await this.legacyIndexMigrationService?.run();
-			if (lowPriorityWorkQueue.signal.aborted) return false;
-			await reconcileIdentityLedger();
 			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await this.catalogReadService?.prime().catch(() => undefined);
 			return true;
@@ -620,8 +624,6 @@ export default class KnomoPlugin extends Plugin {
 			}
 			if (isCancelled()) return;
 			await this.catalogIndexCoordinator?.initialize();
-			if (isCancelled()) return;
-			await this.legacyIndexMigrationService?.run();
 			if (isCancelled()) return;
 			await this.catalogReadService?.prime();
 			if (isCancelled()) return;

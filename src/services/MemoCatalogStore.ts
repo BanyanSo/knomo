@@ -21,6 +21,11 @@ export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 
 export const IN_MEMORY_CATALOG_OBSERVATION_LIMIT = 5_000;
 
+export interface CatalogMetaEntry {
+	key: string;
+	value: unknown;
+}
+
 export interface MemoCatalogStore {
 	open(): Promise<void>;
 	close(): void;
@@ -37,6 +42,7 @@ export interface MemoCatalogStore {
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]>;
 	getCoverage(): Promise<CatalogCoverage>;
 	setCoverage(coverage: CatalogCoverage): Promise<void>;
+	saveScanProgress(coverage: CatalogCoverage, metadata: readonly CatalogMetaEntry[]): Promise<void>;
 	getMeta<T>(key: string): Promise<T | null>;
 	setMeta<T>(key: string, value: T): Promise<void>;
 	deleteMeta(key: string): Promise<void>;
@@ -198,6 +204,15 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async setCoverage(coverage: CatalogCoverage): Promise<void> {
+		this.applyCoverage(coverage);
+	}
+
+	async saveScanProgress(coverage: CatalogCoverage, metadata: readonly CatalogMetaEntry[]): Promise<void> {
+		this.applyCoverage(coverage);
+		for (const entry of metadata) this.metadata.set(entry.key, clone(entry.value));
+	}
+
+	private applyCoverage(coverage: CatalogCoverage): void {
 		if (this.capacityLimited && this.files.size >= coverage.totalFileCount) {
 			this.capacityLimited = false;
 		}
@@ -370,21 +385,25 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		return this.run((store) => store.listDailyAggregates(fromDate, toDate));
 	}
 	getCoverage(): Promise<CatalogCoverage> { return this.run((store) => store.getCoverage()); }
-	async setCoverage(coverage: CatalogCoverage): Promise<void> {
+	setCoverage(coverage: CatalogCoverage): Promise<void> {
+		return this.saveScanProgress(coverage, []);
+	}
+
+	async saveScanProgress(coverage: CatalogCoverage, metadata: readonly CatalogMetaEntry[]): Promise<void> {
 		await this.run(async (store) => {
 			if (store !== this.fallback) {
-				await store.setCoverage(coverage);
+				await store.saveScanProgress(coverage, metadata);
 				return;
 			}
 			const files = await store.listFiles();
 			const coveredFileCount = Math.min(files.length, coverage.totalFileCount);
-			await store.setCoverage({
+			await store.saveScanProgress({
 				...coverage,
 				kind: coverage.kind === "rebuilding" ? "rebuilding" : "partial",
 				coveredFromDate: files.map((file) => file.logicalDate).sort()[0] ?? null,
 				coveredFileCount,
 				pendingFileCount: Math.max(0, coverage.totalFileCount - coveredFileCount),
-			});
+			}, metadata);
 		});
 		this.lifecycle = coverage.kind === "rebuilding"
 			? { state: "rebuilding", persistent: !this.fallbackActive, writable: true, reason: null }

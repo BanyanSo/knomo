@@ -27,6 +27,63 @@ const MEMO_C = "01991f40-7c00-7333-b333-333333333333";
 const IDENTITY_ROOT_A = getIdentityLedgerRootPath("Knomo-A");
 const IDENTITY_ROOT_B = getIdentityLedgerRootPath("Knomo-B");
 
+test("启动监听与显式初始化复用一次 Identity 全量刷新", async () => {
+	const vault = await createLedgerVault();
+	installVaultListenerSupport(vault);
+	const service = createService(vault, WRITER_A, [], []);
+	const refreshTarget = service as unknown as { refreshFromVault(): Promise<void> };
+	const refreshFromVault = refreshTarget.refreshFromVault.bind(service);
+	let refreshCount = 0;
+	let releaseRefresh!: () => void;
+	const refreshBlocked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+	let notificationCount = 0;
+	refreshTarget.refreshFromVault = async () => {
+		refreshCount += 1;
+		await refreshBlocked;
+		await refreshFromVault();
+	};
+
+	service.start(createOwner(), async () => { notificationCount += 1; });
+	const initialization = service.initialize();
+	await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+
+	assert.equal(refreshCount, 1);
+	releaseRefresh();
+	await initialization;
+	await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+	assert.equal(notificationCount, 1);
+});
+
+test("插件卸载会取消 active Identity 刷新，旧结果不得提交或通知", async () => {
+	const vault = await createLedgerVault();
+	installVaultListenerSupport(vault);
+	const service = createService(vault, WRITER_A, [], []);
+	const refreshTarget = service as unknown as { refreshFromVault(): Promise<void> };
+	const refreshFromVault = refreshTarget.refreshFromVault.bind(service);
+	let releaseRefresh!: () => void;
+	const refreshBlocked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+	let markRefreshStarted!: () => void;
+	const refreshStarted = new Promise<void>((resolve) => { markRefreshStarted = resolve; });
+	refreshTarget.refreshFromVault = async () => {
+		markRefreshStarted();
+		await refreshBlocked;
+		await refreshFromVault();
+	};
+	let notificationCount = 0;
+	const owner = createUnloadableOwner();
+
+	service.start(owner.component, async () => { notificationCount += 1; });
+	const initialization = service.initialize();
+	await refreshStarted;
+	owner.unload();
+	releaseRefresh();
+	await initialization;
+
+	assert.equal(service.getStatus(), "unavailable");
+	assert.equal(service.getSnapshot().eventCount, 0);
+	assert.equal(notificationCount, 0);
+});
+
 test("P0 第 4 步：memoId 使用 UUIDv7 且不依赖 Vault、正文或 observation evidence", () => {
 	const first = createIdentityLedgerMemoId(
 		new Date("2026-08-22T00:00:00.000Z"),
@@ -858,6 +915,42 @@ test("旧版 Identity 批量写入进行中时新建 intent 快速降级，不�
 	assert.equal(beginResult, "rejected");
 });
 
+test("旧版 Identity 事件校验按时间预算让步，不等待 256 条固定批次", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const events: IdentityLedgerEvent[] = Array.from({ length: 10 }, (_, index) => {
+		const observation = makeObservation(
+			"Daily/2026-08-22.md",
+			(index + 1).toString(16).padStart(64, "0"),
+			index + 1,
+			`memo-${index + 1}`,
+		);
+		return {
+			eventId: eventId(index + 2_000),
+			writerId: WRITER_A,
+			memoId: `01991f40-7c00-7000-8000-${(index + 1).toString(16).padStart(12, "0")}`,
+			type: "claim",
+			baseBindingId: null,
+			occurredAt: "2026-08-22T06:00:00.000Z",
+			evidence: { observation: makeEvidence(observation), createIntentEventId: null },
+		};
+	});
+	let elapsedMs = 0;
+	let yieldCount = 0;
+
+	await service.importVerifiedLegacyEvents(events, {
+		yieldControl: async () => { yieldCount += 1; },
+		sliceBudgetMs: 8,
+		now: () => {
+			elapsedMs += 3;
+			return elapsedMs;
+		},
+	});
+
+	assert.equal(yieldCount > 1, true);
+});
+
 test("旧版事件仍在计算时取消，不得持久化任何 Identity segment", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [], []);
@@ -945,6 +1038,28 @@ function createService(
 		createEventId: () => eventIds[eventIndex++] ?? eventId(100 + eventIndex),
 		now: () => new Date("2026-08-22T00:00:00.000Z"),
 	});
+}
+
+function installVaultListenerSupport(vault: InMemoryVault): void {
+	(vault.app.vault as App["vault"] & { on: () => object }).on = () => ({});
+}
+
+function createOwner(): Component {
+	return {
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as unknown as Component;
+}
+
+function createUnloadableOwner(): { component: Component; unload: () => void } {
+	const cleanups: Array<() => void> = [];
+	return {
+		component: {
+			registerEvent: () => undefined,
+			register: (cleanup: () => void) => { cleanups.push(cleanup); },
+		} as unknown as Component,
+		unload: () => { cleanups.forEach((cleanup) => cleanup()); },
+	};
 }
 
 async function createLedgerVault(

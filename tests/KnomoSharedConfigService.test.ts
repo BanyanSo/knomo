@@ -6,6 +6,8 @@ import {
 	getKnomoSharedConfigRootPath,
 } from "../src/services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "../src/services/KnomoSharedConfigService";
+import type { App, Component } from "obsidian";
+
 import type { KnomoSharedConfig } from "../src/types/knomoConfig";
 import type { KnomoSettings } from "../src/types/settings";
 import { InMemoryVault } from "./helpers/InMemoryVault";
@@ -13,6 +15,63 @@ import { InMemoryVault } from "./helpers/InMemoryVault";
 const WRITER_A = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const WRITER_B = "w_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const WRITER_C = "w_cccccccccccccccccccccccccccccccc";
+
+test("启动监听与显式初始化复用一次共享配置全量刷新", async () => {
+	const replica = new InMemoryVault();
+	installVaultListenerSupport(replica);
+	const service = createService(replica, WRITER_A, "c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", makeConfig("## Local"));
+	const refreshTarget = service as unknown as { refreshFromVault(): Promise<void> };
+	const refreshFromVault = refreshTarget.refreshFromVault.bind(service);
+	let refreshCount = 0;
+	let releaseRefresh!: () => void;
+	const refreshBlocked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+	let notificationCount = 0;
+	refreshTarget.refreshFromVault = async () => {
+		refreshCount += 1;
+		await refreshBlocked;
+		await refreshFromVault();
+	};
+
+	service.start(createOwner(), async () => { notificationCount += 1; });
+	const initialization = service.initialize();
+	await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+
+	assert.equal(refreshCount, 1);
+	releaseRefresh();
+	await initialization;
+	await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+	assert.equal(notificationCount, 1);
+});
+
+test("插件卸载会取消 active 共享配置刷新，旧结果不得提交或通知", async () => {
+	const replica = new InMemoryVault();
+	installVaultListenerSupport(replica);
+	const service = createService(replica, WRITER_A, "c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", makeConfig("## Local"));
+	const refreshTarget = service as unknown as { refreshFromVault(): Promise<void> };
+	const refreshFromVault = refreshTarget.refreshFromVault.bind(service);
+	let releaseRefresh!: () => void;
+	const refreshBlocked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+	let markRefreshStarted!: () => void;
+	const refreshStarted = new Promise<void>((resolve) => { markRefreshStarted = resolve; });
+	refreshTarget.refreshFromVault = async () => {
+		markRefreshStarted();
+		await refreshBlocked;
+		await refreshFromVault();
+	};
+	let notificationCount = 0;
+	const owner = createUnloadableOwner();
+
+	service.start(owner.component, async () => { notificationCount += 1; });
+	const initialization = service.initialize();
+	await refreshStarted;
+	owner.unload();
+	releaseRefresh();
+	await initialization;
+
+	assert.equal(service.getStatus(), "missing");
+	assert.equal(service.getSnapshot().revision, "");
+	assert.equal(notificationCount, 0);
+});
 
 test("共享配置缺失时只使用本机 fallback，初始化不写 Vault", async () => {
 	const replica = new InMemoryVault({
@@ -334,6 +393,28 @@ function createService(
 		createEventId: () => eventIds[Math.min(eventIndex++, eventIds.length - 1)] ?? eventIds[0] ?? "",
 		now: () => new Date("2026-08-22T00:00:00.000Z"),
 	});
+}
+
+function installVaultListenerSupport(vault: InMemoryVault): void {
+	(vault.app.vault as App["vault"] & { on: () => object }).on = () => ({});
+}
+
+function createOwner(): Component {
+	return {
+		registerEvent: () => undefined,
+		register: () => undefined,
+	} as unknown as Component;
+}
+
+function createUnloadableOwner(): { component: Component; unload: () => void } {
+	const cleanups: Array<() => void> = [];
+	return {
+		component: {
+			registerEvent: () => undefined,
+			register: (cleanup: () => void) => { cleanups.push(cleanup); },
+		} as unknown as Component,
+		unload: () => { cleanups.forEach((cleanup) => cleanup()); },
+	};
 }
 
 function makeConfig(heading: string, locale = "en"): KnomoSharedConfig {

@@ -3,10 +3,9 @@ import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CatalogRecordStatsFilter } from "../types/catalogView";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
-import { getMemoContentStats } from "../utils/memoContentStats";
 import { hasMemoReference } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
-import { normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
+import { normalizeTagKey } from "../utils/tags";
 import { formatMemoDisplayTime } from "./MemoDisplayFormatters";
 import type { SidebarNav } from "./viewNavigation";
 
@@ -52,49 +51,6 @@ export interface DailyDateConfig {
 	enabled: boolean;
 	folder: string | null;
 	format: string | null;
-}
-
-export interface MemoStats {
-	memoCount: number;
-	tagCount: number;
-	imageCount: number;
-	wordCount: number;
-}
-
-export function getMemoStats(memos: MemoRecord[]): MemoStats {
-	const tagKeys = new Set<string>();
-	for (const memo of memos) {
-		for (const tag of memo.tags) {
-			const tagKey = normalizeTagKey(tag);
-			if (tagKey.length > 0) {
-				tagKeys.add(tagKey);
-			}
-		}
-	}
-	return {
-		memoCount: memos.length,
-		tagCount: tagKeys.size,
-		imageCount: memos.reduce((count, memo) => count + getMemoImages(memo).length, 0),
-		wordCount: memos.reduce((count, memo) => count + getMemoContentStats(memo).wordCount, 0),
-	};
-}
-
-export function collectTags(memos: MemoRecord[], displayTags: Map<string, string>): TagSummary[] {
-	const counts = new Map<string, number>();
-	const fallbackNames = new Map<string, string>();
-	for (const memo of memos) {
-		for (const tag of memo.tags) {
-			const key = normalizeTagKey(tag);
-			if (key.length === 0) {
-				continue;
-			}
-			counts.set(key, (counts.get(key) ?? 0) + 1);
-			if (!fallbackNames.has(key)) {
-				fallbackNames.set(key, normalizeTagDisplay(tag));
-			}
-		}
-	}
-	return collectTagsFromCounts(counts, displayTags, fallbackNames);
 }
 
 export type MemoDataRequirement =
@@ -493,16 +449,6 @@ export function parseLocalDateText(value: string): Date | null {
 		return null;
 	}
 	return date;
-}
-
-export function applyMemoBlockTime(date: Date, block: string): Date {
-	const timeMatch = block.match(/(?:^|\n)- (\d{2}):(\d{2})(?::(\d{2}))?\b/);
-	if (timeMatch === null) {
-		return date;
-	}
-	const nextDate = new Date(date);
-	nextDate.setHours(Number(timeMatch[1]), Number(timeMatch[2]), timeMatch[3] === undefined ? 0 : Number(timeMatch[3]), 0);
-	return nextDate;
 }
 
 export function matchesScope(memo: MemoRecord, filter: ScopeFilter, todayDate = new Date()): boolean {

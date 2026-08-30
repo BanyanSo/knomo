@@ -56,16 +56,6 @@ export function findLastEffectiveLineIndex(lines: string[]): number {
 	return -1;
 }
 
-export function findLineNumber(content: string, block: string, preferLast = false): number | null {
-	const normalizedContent = normalizeMarkdownLineEndings(content);
-	const normalizedBlock = normalizeMarkdownLineEndings(block);
-	const index = preferLast ? normalizedContent.lastIndexOf(normalizedBlock) : normalizedContent.indexOf(normalizedBlock);
-	if (index === -1) {
-		return null;
-	}
-	return normalizedContent.slice(0, index).split("\n").length;
-}
-
 export function isMemoContinuationLine(value: string): boolean {
 	return MEMO_CONTINUATION_INDENT_REGEX.test(value);
 }

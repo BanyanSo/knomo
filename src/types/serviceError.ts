@@ -25,10 +25,6 @@ export const KNOMO_ERROR_DEFINITIONS = {
 
 export type KnomoErrorCode = keyof typeof KNOMO_ERROR_DEFINITIONS;
 
-export function isKnomoErrorCode(value: unknown): value is KnomoErrorCode {
-	return typeof value === "string" && Object.prototype.hasOwnProperty.call(KNOMO_ERROR_DEFINITIONS, value);
-}
-
 export class KnomoError extends Error {
 	readonly code: KnomoErrorCode;
 	readonly params: ServiceErrorParams;

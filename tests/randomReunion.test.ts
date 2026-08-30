@@ -5,7 +5,6 @@ import type { MemoRecord } from "./helpers/memoViewFixture";
 import {
 	calculateRandomReunionWeight,
 	filterRandomReunionCandidates,
-	markMemoReviewed,
 	selectDiverseRandomReunionMemos,
 	weightedSampleWithoutReplacement,
 } from "../src/utils/randomReunion";
@@ -79,18 +78,6 @@ test("applies diversity and then degrades to fill results", () => {
 
 	const onlySameSource = sameSource.slice(0, 3);
 	assert.deepEqual(selectDiverseRandomReunionMemos(onlySameSource, 3).map((memo) => memo.id), ["a", "b", "c"]);
-});
-
-test("updates memo review state without touching markdown", () => {
-	const nextState = markMemoReviewed({
-		a: { memoId: "a", lastReviewedAt: "2026-05-20", reviewCount: 2 },
-	}, "a", new Date(2026, 4, 21));
-
-	assert.deepEqual(nextState.a, {
-		memoId: "a",
-		lastReviewedAt: "2026-05-21",
-		reviewCount: 3,
-	});
 });
 
 function makeMemo(

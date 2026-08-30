@@ -1,5 +1,4 @@
 import type { TimeBuoyMatch } from "../types/timeBuoy";
-import { hashText } from "./hash";
 import { isValidTimeBuoyDate } from "./timeBuoyDate";
 
 const DATE_TOKEN_LENGTH = 11;
@@ -59,10 +58,6 @@ export function parseTimeBuoyMatches(content: string): TimeBuoyMatch[] {
 
 export function extractTimeBuoyDates(content: string): string[] {
 	return [...new Set(parseTimeBuoyMatches(content).map((match) => match.targetDate))];
-}
-
-export function getTimeBuoyRevision(content: string): string {
-	return hashText([...extractTimeBuoyDates(content)].sort().join("\n"));
 }
 
 export function hasTimeBuoyDate(content: string, targetDate: string): boolean {

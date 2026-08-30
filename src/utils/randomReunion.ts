@@ -170,23 +170,6 @@ export function getRandomReunionMemos(
 	return selectDiverseRandomReunionMemos(ordered, count, options);
 }
 
-export function markMemoReviewed(
-	reviewStates: MemoReviewStateMap,
-	memoId: string,
-	today = new Date(),
-): MemoReviewStateMap {
-	const currentState = reviewStates[memoId];
-	const reviewCount = currentState === undefined ? 0 : currentState.reviewCount;
-	return {
-		...reviewStates,
-		[memoId]: {
-			memoId,
-			lastReviewedAt: formatDatePart(today),
-			reviewCount: reviewCount + 1,
-		},
-	};
-}
-
 function hasBlacklistedTag(tags: string[], blacklistTags: Set<string>): boolean {
 	return tags.some((tag) => {
 		const normalizedTag = tag.replace(/^#/, "").toLowerCase();

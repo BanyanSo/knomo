@@ -710,8 +710,8 @@ async function invokeVaultChanged(coordinator: MonthlyProjectionCoordinator, fil
 }
 
 async function invokeDeleted(coordinator: MonthlyProjectionCoordinator, file: TFile): Promise<void> {
-	(coordinator as unknown as { handleMonthlyFileDeleted(value: unknown): void })
-		.handleMonthlyFileDeleted(file);
+	await (coordinator as unknown as { handleFileDeleted(value: unknown): Promise<void> })
+		.handleFileDeleted(file);
 }
 
 function assertString(value: string | undefined): string {

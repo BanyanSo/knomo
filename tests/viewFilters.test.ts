@@ -4,9 +4,7 @@ import assert from "node:assert/strict";
 import type { MemoRecord } from "./helpers/memoViewFixture";
 import {
 	buildMemoSearchText,
-	collectTags,
 	getMemoImages,
-	getMemoStats,
 	getRegularFilterConditions,
 	getRegularFilterCopy,
 	getRecordStatsSearchFilterKey,
@@ -21,53 +19,20 @@ import {
 	tagMatchesActiveTagKey,
 } from "../src/ui/viewFilters";
 
-test("computes memo stats from normalized tags and supported images", () => {
-	const memos = [
-		makeMemo("a", {
-			contentSnapshot: "abc 空 白",
-			tags: ["#Project/Knomo", "project/knomo"],
-			images: [
-				{ path: "image.png", altText: "", syntax: "obsidian_embed" },
-				{ path: "doc.pdf", altText: "", syntax: "obsidian_embed" },
-			],
-		}),
-		makeMemo("b", {
-			contentSnapshot: "two words",
-			tags: ["life"],
-			images: [
-				{ path: "https://example.com/a", altText: "a", syntax: "markdown_image" },
-			],
-		}),
-	];
-
-	assert.deepEqual(getMemoStats(memos), {
-		memoCount: 2,
-		tagCount: 2,
-		imageCount: 2,
-		wordCount: 5,
+test("filters supported memo images", () => {
+	const memo = makeMemo("a", {
+		images: [
+			{ path: "image.png", altText: "", syntax: "obsidian_embed" },
+			{ path: "doc.pdf", altText: "", syntax: "obsidian_embed" },
+		],
 	});
-	assert.deepEqual(getMemoImages(memos[0]).map((image) => image.path), ["image.png"]);
+
+	assert.deepEqual(getMemoImages(memo).map((image) => image.path), ["image.png"]);
 });
 
-test("collects display tags and matches nested active tag keys", () => {
-	const tags = collectTags([
-		makeMemo("a", { tags: ["#project/knomo"] }),
-		makeMemo("b", { tags: ["Project/Knomo"] }),
-		makeMemo("c", { tags: ["life"] }),
-	], new Map([
-		["project", "Project"],
-		["project/knomo", "Project/Knomo"],
-		["vault-only", "Vault only"],
-	]));
-
-	assert.deepEqual(tags, [
-		{ key: "project/knomo", name: "Project/Knomo", count: 2 },
-		{ key: "life", name: "life", count: 1 },
-		{ key: "project", name: "Project", count: 0 },
-	]);
+test("matches nested active tag keys", () => {
 	assert.equal(tagMatchesActiveTagKey("project/knomo/ui", "project/knomo"), true);
 	assert.equal(tagMatchesActiveTagKey("project/other", "project/knomo"), false);
-	assert.equal(tags.some((tag) => tag.key === "vault-only"), false);
 });
 
 test("builds regular filter copy from active filters", () => {

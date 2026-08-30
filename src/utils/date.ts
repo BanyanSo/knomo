@@ -11,12 +11,6 @@ export function formatDatePart(date: Date): string {
 	return `${year}-${month}-${day}`;
 }
 
-export function formatMonthPeriod(date: Date): string {
-	const year = date.getFullYear();
-	const month = padNumber(date.getMonth() + 1, 2);
-	return `${year}-${month}`;
-}
-
 export function formatTimePart(date: Date, format: MemoTimeFormat = "HH:mm:ss"): string {
 	const hours = padNumber(date.getHours(), 2);
 	const minutes = padNumber(date.getMinutes(), 2);
@@ -35,10 +29,4 @@ export function formatLocalIsoString(date: Date): string {
 	const offsetRemainder = padNumber(absoluteOffset % 60, 2);
 	const milliseconds = padNumber(date.getMilliseconds(), 3);
 	return `${formatDatePart(date)}T${formatTimePart(date)}.${milliseconds}${sign}${offsetHours}:${offsetRemainder}`;
-}
-
-export function formatMemoIdPrefix(date: Date): string {
-	const datePart = formatDatePart(date).replace(/-/g, "");
-	const timePart = formatTimePart(date).replace(/:/g, "");
-	return `${datePart}${timePart}`;
 }

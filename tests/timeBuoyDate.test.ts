@@ -6,9 +6,7 @@ import {
 	formatTimeBuoyDate,
 	getTimeBuoyCardStatus,
 	getTimeBuoyDateStatus,
-	getTimeBuoyTargetPeriod,
 	isValidTimeBuoyDate,
-	listTimeBuoyTargetPeriods,
 } from "../src/utils/timeBuoyDate";
 
 test("validates real Gregorian date keys", () => {
@@ -26,7 +24,6 @@ test("uses local calendar dates without UTC conversion", () => {
 	assert.equal(getTimeBuoyDateStatus("2026-07-20", today), "today");
 	assert.equal(getTimeBuoyDateStatus("2026-07-21", today), "upcoming");
 	assert.equal(getTimeBuoyDateStatus("2026-07-19", today), "past");
-	assert.equal(getTimeBuoyTargetPeriod("2026-07-20"), "2026-07");
 });
 
 test("prioritizes today, then upcoming, for multi-date card states", () => {
@@ -40,9 +37,4 @@ test("prioritizes today, then upcoming, for multi-date card states", () => {
 test("adds natural local calendar days", () => {
 	assert.equal(formatTimeBuoyDate(addTimeBuoyCalendarDays(new Date(2026, 0, 31, 18), 1)), "2026-02-01");
 	assert.equal(formatTimeBuoyDate(addTimeBuoyCalendarDays(new Date(2024, 1, 28, 18), 1)), "2024-02-29");
-});
-
-test("lists only target months covered by a date range", () => {
-	assert.deepEqual(listTimeBuoyTargetPeriods("2026-07-20", "2026-09-01"), ["2026-07", "2026-08", "2026-09"]);
-	assert.deepEqual(listTimeBuoyTargetPeriods("2026-09-01", "2026-07-20"), []);
 });

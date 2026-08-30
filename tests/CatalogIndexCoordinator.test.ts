@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { setImmediate as waitImmediate, setTimeout as waitTimer } from "node:timers/promises";
+import { setTimeout as waitTimer } from "node:timers/promises";
 import test from "node:test";
 import type { App } from "obsidian";
 

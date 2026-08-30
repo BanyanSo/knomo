@@ -2,9 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
-import type { MemoRecord } from "./helpers/memoViewFixture";
-import { matchesDailyNotePath, parseDailyNoteDateFromPath } from "../src/utils/dailyNotes";
-import { hashMemoContent, hashText } from "../src/utils/hash";
+import { parseDailyNoteDateFromPath } from "../src/utils/dailyNotes";
+import { hashMemoContent } from "../src/utils/hash";
 import { isSupportedMemoImage } from "../src/utils/markdown";
 import {
 	buildQuoteCreatedMemoContent,
@@ -610,8 +609,6 @@ test("parses daily note dates from custom formats and folders", () => {
 	assert.equal(date.getFullYear(), 2026);
 	assert.equal(date.getMonth(), 4);
 	assert.equal(date.getDate(), 17);
-	assert.equal(matchesDailyNotePath("Daily/2026/05/17.md", { folder: "Daily", format: "YYYY/MM/DD" }), true);
-	assert.equal(matchesDailyNotePath("Memos/Memos-2026-05.md", { folder: "Daily", format: "YYYY/MM/DD" }), false);
 });
 
 test("parses daily note dates from common Moment format tokens", () => {

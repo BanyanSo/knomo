@@ -5742,10 +5742,6 @@ export class KnomoView extends ItemView {
 		return this.mobileSearchController.getStateKey();
 	}
 
-	private getMobileSearchIdsKey(): string {
-		return this.mobileSearchController.getIdsKey();
-	}
-
 	private renderMobileSearchResultsIfChanged(previousKey: string): void {
 		if (previousKey !== this.getMobileSearchStateKey()) {
 			this.renderMobileSearchResults();

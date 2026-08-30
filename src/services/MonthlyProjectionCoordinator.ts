@@ -430,18 +430,6 @@ export class MonthlyProjectionCoordinator {
 		await this.handleFileChanged(file);
 	}
 
-	private handleMonthlyFileDeleted(file: unknown): void {
-		if (!(file instanceof TFile)) return;
-		const period = this.options.inputBuilder.getMonthlyPeriod(file.path);
-		if (period !== null) void this.invalidatePeriods([period]);
-	}
-
-	private handleMonthlyFileRenamed(file: unknown, oldPath: string): void {
-		const oldPeriod = this.options.inputBuilder.getMonthlyPeriod(oldPath);
-		if (oldPeriod !== null) void this.invalidatePeriods([oldPeriod]);
-		if (file instanceof TFile) void this.handleMonthlyFileChanged(file);
-	}
-
 	private enqueuePath(path: string, action: () => Promise<void>): Promise<void> {
 		const previous = this.pathQueues.get(path) ?? Promise.resolve();
 		const current = previous.catch(() => undefined).then(action).finally(() => {

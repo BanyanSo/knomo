@@ -5973,7 +5973,6 @@ export class KnomoView extends ItemView {
 					updatedMemo,
 				);
 			}
-			await this.reloadMemos(false).catch(() => false);
 		} catch {
 			if (dailySaved) {
 				new Notice(t("catalog.savedRefreshPending"));

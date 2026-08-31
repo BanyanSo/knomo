@@ -97,7 +97,7 @@ test("Daily 提交前继续输入的新草稿不会被旧保存清空", async ()
 	assert.equal(view.composerOpen, true);
 });
 
-test("task checkbox refreshes only changed cards without forcing a full rebuild", async () => {
+test("task checkbox applies the saved card without waiting for a second page reload", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const reloadCalls: Array<{ loadAll: boolean; forceRebuild: boolean | undefined }> = [];
@@ -130,8 +130,8 @@ test("task checkbox refreshes only changed cards without forcing a full rebuild"
 
 	await view.handleCatalogTaskToggle({ id: "memo-1" }, 0, true);
 
-	assert.deepEqual(reloadCalls, [{ loadAll: false, forceRebuild: undefined }]);
-	assert.deepEqual(events, ["apply", "sync", "reload"]);
+	assert.deepEqual(reloadCalls, []);
+	assert.deepEqual(events, ["apply", "sync"]);
 });
 
 interface SaveInputView {

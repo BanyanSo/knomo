@@ -156,7 +156,7 @@ export class LegacyIndexMigrationService {
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 				return this.remember(completedReport(completion));
 			}
-			const source = await this.source.load();
+			const source = await this.loadSource();
 			this.assertRunning();
 			if (source.kind === "missing") {
 				await this.clearCompletion();
@@ -384,7 +384,7 @@ export class LegacyIndexMigrationService {
 				"Identity Ledger could not be verified by reading the persisted data again.",
 			)));
 		}
-		const confirmedSource = await this.source.load();
+		const confirmedSource = await this.loadSource();
 		this.assertRunning();
 		if (confirmedSource.kind !== "ready"
 			|| confirmedSource.snapshot.sourceId !== source.sourceId
@@ -421,6 +421,15 @@ export class LegacyIndexMigrationService {
 		const appWindow = this.app.workspace?.containerEl?.win;
 		if (appWindow !== undefined) await new Promise<void>((resolve) => appWindow.setTimeout(resolve, 0));
 		this.assertRunning();
+	}
+
+	private loadSource(): ReturnType<LegacyIndexSource["load"]> {
+		return this.source.load({
+			cancellationSignal: this.options.workQueue?.signal,
+			yieldControl: () => this.yieldControl(),
+			sliceBudgetMs: this.options.sliceBudgetMs,
+			now: this.options.now,
+		});
 	}
 
 	private createYieldController(): CooperativeYieldController {

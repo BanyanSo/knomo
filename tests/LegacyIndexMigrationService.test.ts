@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
-import { createIdentityLedgerMemoId, getIdentityLedgerRootPath } from "../src/services/IdentityLedgerProtocol";
+import {
+	canonicalIdentityLedgerJson,
+	createIdentityLedgerMemoId,
+	getIdentityLedgerRootPath,
+	sha256IdentityLedgerText,
+} from "../src/services/IdentityLedgerProtocol";
 import { LegacyIndexMigrationService } from "../src/services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "../src/services/LegacyIndexReader";
 import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
@@ -836,8 +841,59 @@ test("旧数据 sourceRevision 只反映语义内容，普通设置和提示记�
 	assert.equal(afterSettingsSave.kind, "ready");
 	assert.equal(afterLegacyChange.kind, "ready");
 	if (before.kind !== "ready" || afterSettingsSave.kind !== "ready" || afterLegacyChange.kind !== "ready") return;
+	assert.equal(before.snapshot.sourceRevision, await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
+		memos: before.snapshot.memos,
+		pendingMemos: before.snapshot.pendingMemos,
+		reviews: before.snapshot.reviews,
+	})));
 	assert.equal(afterSettingsSave.snapshot.sourceRevision, before.snapshot.sourceRevision);
 	assert.notEqual(afterLegacyChange.snapshot.sourceRevision, before.snapshot.sourceRevision);
+});
+
+test("LegacyIndexReader 解析和合并按时间预算让出主线程", async () => {
+	const memos = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
+		const memoId = `202608220900${index.toString().padStart(4, "0")}`;
+		return [memoId, legacyMemoRecord({
+			memoId,
+			createdAt: "2026-08-22T09:00:00.000Z",
+			path: "Daily/2026-08-22.md",
+			rawBlock: `- 09:00 memo-${index}`,
+			content: `memo-${index}`,
+		})];
+	}));
+	const vault = new InMemoryVault({
+		[LEGACY_INDEX_PATH]: JSON.stringify({ schemaVersion: 2, period: "2026-08", memos }),
+	});
+	let elapsedMs = 0;
+	let yieldCount = 0;
+
+	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load({
+		yieldControl: async () => { yieldCount += 1; },
+		sliceBudgetMs: 8,
+		now: () => {
+			elapsedMs += 3;
+			return elapsedMs;
+		},
+	});
+
+	assert.equal(result.kind, "ready");
+	assert.equal(yieldCount > 1, true);
+});
+
+test("LegacyIndexReader 在读取前响应取消信号", async () => {
+	const vault = new InMemoryVault({
+		[LEGACY_INDEX_PATH]: JSON.stringify({ schemaVersion: 2, period: "2026-08", memos: {} }),
+	});
+	const cancellation = new AbortController();
+	cancellation.abort();
+
+	await assert.rejects(
+		() => new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load({
+			cancellationSignal: cancellation.signal,
+			yieldControl: async () => {},
+		}),
+		/Legacy index load was cancelled/u,
+	);
 });
 
 test("旧系统目录存在未知文件时保留诊断且不生成清理提示候选", async () => {

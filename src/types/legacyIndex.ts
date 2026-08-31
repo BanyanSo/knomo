@@ -78,8 +78,15 @@ export type LegacyIndexSourcePresence =
 	| { kind: "missing" }
 	| { kind: "present"; legacySystemRoot: string; sourceId: string };
 
+export interface LegacyIndexLoadRuntime {
+	cancellationSignal?: AbortSignal;
+	yieldControl?: () => Promise<void>;
+	sliceBudgetMs?: number;
+	now?: () => number;
+}
+
 export interface LegacyIndexSource {
 	inspect(): LegacyIndexSourcePresence;
-	load(): Promise<LegacyIndexSourceResult>;
+	load(runtime?: LegacyIndexLoadRuntime): Promise<LegacyIndexSourceResult>;
 	isSourcePath(path: string): boolean;
 }

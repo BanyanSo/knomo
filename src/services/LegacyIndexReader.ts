@@ -5,6 +5,7 @@ import type {
 	LegacyArtifactKind,
 	LegacyIndexDiagnostic,
 	LegacyIndexMemo,
+	LegacyIndexLoadRuntime,
 	LegacyIndexSnapshot,
 	LegacyIndexSource,
 	LegacyIndexSourcePresence,
@@ -21,6 +22,7 @@ import {
 	sha256IdentityLedgerText,
 } from "./IdentityLedgerProtocol";
 import { classifyLegacyArtifactPath, classifyPluginDataPath } from "./LegacyArtifactInventory";
+import { CooperativeYieldController } from "./CooperativeTask";
 
 const LEGACY_MEMO_ID_PATTERN = /^\d{16}$/u;
 const HASH_PATTERN = /^fnv1a-[a-f0-9]{8}$/u;
@@ -62,6 +64,11 @@ interface LegacyBlockReferenceCandidate {
 	sourceMemoIdAlias: string | null;
 }
 
+interface LegacyIndexLoadContext {
+	assertActive(): void;
+	yieldController: CooperativeYieldController | null;
+}
+
 export class LegacyIndexReader implements LegacyIndexSource {
 	constructor(
 		private readonly app: App,
@@ -78,10 +85,12 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			: { kind: "missing" };
 	}
 
-	async load(): Promise<LegacyIndexSourceResult> {
+	async load(runtime: LegacyIndexLoadRuntime = {}): Promise<LegacyIndexSourceResult> {
+		const context = createLoadContext(runtime);
+		context.assertActive();
 		const presence = this.inspect();
 		if (presence.kind === "missing") return presence;
-		const inventory = await this.collectArtifacts(presence.legacySystemRoot);
+		const inventory = await this.collectArtifacts(presence.legacySystemRoot, context);
 		if (!inventory.legacySystemRootPresent) return { kind: "missing" };
 		const { artifacts } = inventory;
 		if (artifacts.length === 0 && inventory.unknownPaths.length === 0) return { kind: "missing" };
@@ -94,20 +103,22 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				null,
 				"The legacy system folder contains a file that Knomo 1.2.9 does not recognize.",
 			));
+			await checkpoint(context);
 		}
 		let recognizedArtifactCount = 0;
 		for (const artifact of artifacts) {
+			await checkpoint(context);
 			switch (artifact.artifactKind) {
 				case "memo_index":
 					recognizedArtifactCount += 1;
-					this.parseMemoIndex(artifact, parsed);
+					await this.parseMemoIndex(artifact, parsed, context);
 					break;
 				case "pending_create":
 					recognizedArtifactCount += 1;
-					this.parsePendingCreates(artifact, parsed);
+					await this.parsePendingCreates(artifact, parsed, context);
 					break;
 				case "plugin_data":
-					recognizedArtifactCount += this.parsePluginData(artifact, parsed) ? 1 : 0;
+					recognizedArtifactCount += await this.parsePluginData(artifact, parsed, context) ? 1 : 0;
 					break;
 				case "repair_candidate":
 					recognizedArtifactCount += 1;
@@ -132,22 +143,22 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				? { kind: "missing" }
 				: { kind: "attention", diagnostics: parsed.diagnostics.sort(compareDiagnostic) };
 		}
-		const mergedMemos = mergeMemos(parsed.memos, parsed.diagnostics);
-		const memos = recoverLegacySourceMemoIds(mergedMemos, (linkPath, sourcePath) => {
+		const mergedMemos = await mergeMemos(parsed.memos, parsed.diagnostics, context);
+		const memos = await recoverLegacySourceMemoIds(mergedMemos, (linkPath, sourcePath) => {
 			if (linkPath.length === 0) return sourcePath;
 			const file = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
 			return file instanceof TFile ? file.path : null;
-		});
-		const pendingMemos = mergePendingMemos(parsed.pendingMemos, new Set(memos.map((memo) => memo.memoId)), parsed.diagnostics);
-		const reviews = mergeReviews(parsed.reviews, parsed.diagnostics);
+		}, context);
+		const indexedMemoIds = await buildMemoIdSet(memos, context);
+		const pendingMemos = await mergePendingMemos(parsed.pendingMemos, indexedMemoIds, parsed.diagnostics, context);
+		const reviews = await mergeReviews(parsed.reviews, parsed.diagnostics, context);
 		if (memos.length === 0 && pendingMemos.length === 0 && reviews.length === 0 && parsed.diagnostics.length > 0) {
 			return { kind: "attention", diagnostics: parsed.diagnostics };
 		}
-		const sourceRevision = await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
-			memos,
-			pendingMemos,
-			reviews,
-		}));
+		const revisionJson = await serializeLegacyRevision(memos, pendingMemos, reviews, context);
+		context.assertActive();
+		const sourceRevision = await sha256IdentityLedgerText(revisionJson);
+		context.assertActive();
 		const snapshot: LegacyIndexSnapshot = {
 			sourceId: presence.sourceId,
 			sourceRevision,
@@ -170,7 +181,11 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		return classifyPluginDataPath(this.getConfigDir(), this.pluginId, normalized) !== null;
 	}
 
-	private parseMemoIndex(artifact: LegacyArtifact, result: ParsedLegacyData): void {
+	private async parseMemoIndex(
+		artifact: LegacyArtifact,
+		result: ParsedLegacyData,
+		context: LegacyIndexLoadContext,
+	): Promise<void> {
 		if (isEmptyArtifact(artifact)) return;
 		const parsed = parseJson(artifact, result.diagnostics);
 		if (!isRecord(parsed)
@@ -183,6 +198,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			return;
 		}
 		for (const [memoId, value] of Object.entries(parsed.memos)) {
+			await checkpoint(context);
 			const memo = parseMemoRecord(memoId, value);
 			if (memo === null) {
 				result.diagnostics.push(diagnostic("legacy_memo_record_invalid", artifact.path, memoId, "Legacy memo record or memoId is invalid."));
@@ -192,7 +208,11 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		}
 	}
 
-	private parsePendingCreates(artifact: LegacyArtifact, result: ParsedLegacyData): void {
+	private async parsePendingCreates(
+		artifact: LegacyArtifact,
+		result: ParsedLegacyData,
+		context: LegacyIndexLoadContext,
+	): Promise<void> {
 		if (isEmptyArtifact(artifact)) return;
 		const parsed = parseJson(artifact, result.diagnostics);
 		if (!isRecord(parsed) || parsed.schemaVersion !== 1 || !isRecord(parsed.operations)) {
@@ -200,6 +220,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			return;
 		}
 		for (const [memoId, value] of Object.entries(parsed.operations)) {
+			await checkpoint(context);
 			const pendingMemo = parsePendingMemo(memoId, value);
 			if (pendingMemo === null) {
 				result.diagnostics.push(diagnostic("legacy_pending_record_invalid", artifact.path, memoId, "Legacy pending-create record is invalid."));
@@ -209,7 +230,11 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		}
 	}
 
-	private parsePluginData(artifact: LegacyArtifact, result: ParsedLegacyData): boolean {
+	private async parsePluginData(
+		artifact: LegacyArtifact,
+		result: ParsedLegacyData,
+		context: LegacyIndexLoadContext,
+	): Promise<boolean> {
 		const parsed = parseJson(artifact, result.diagnostics);
 		if (!isRecord(parsed) || !("randomReunionReviewStates" in parsed)) return false;
 		if (!isRecord(parsed.randomReunionReviewStates)) {
@@ -217,6 +242,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			return true;
 		}
 		for (const [memoId, value] of Object.entries(parsed.randomReunionReviewStates)) {
+			await checkpoint(context);
 			const review = parseReviewState(memoId, value);
 			if (review === null) {
 				result.diagnostics.push(diagnostic("legacy_review_record_invalid", artifact.path, memoId, "Legacy review record is invalid."));
@@ -227,7 +253,10 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		return true;
 	}
 
-	private async collectArtifacts(legacyRoot: string): Promise<LegacyArtifactInventory> {
+	private async collectArtifacts(
+		legacyRoot: string,
+		context: LegacyIndexLoadContext,
+	): Promise<LegacyArtifactInventory> {
 		const artifacts: LegacyArtifact[] = [];
 		const unknownPaths: string[] = [];
 		const folder = this.app.vault.getAbstractFileByPath(legacyRoot);
@@ -237,6 +266,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				if (child instanceof TFile) files.push(child);
 			});
 			for (const file of files.sort((left, right) => left.path.localeCompare(right.path))) {
+				await checkpoint(context);
 				const classification = classifyLegacyArtifactPath(legacyRoot, file.path);
 				if (classification === null) {
 					unknownPaths.push(file.path);
@@ -252,7 +282,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				});
 			}
 		}
-		const pluginData = await this.readPluginData();
+		const pluginData = await this.readPluginData(context);
 		if (pluginData !== null) artifacts.push(pluginData);
 		return {
 			artifacts: artifacts.sort((left, right) => left.path.localeCompare(right.path)),
@@ -262,11 +292,13 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		};
 	}
 
-	private async readPluginData(): Promise<LegacyArtifact | null> {
+	private async readPluginData(context: LegacyIndexLoadContext): Promise<LegacyArtifact | null> {
 		const path = normalizePath(`${this.getConfigDir()}/plugins/${this.pluginId}/data.json`);
+		context.assertActive();
 		if (!await this.app.vault.adapter.exists(path)) return null;
 		try {
 			const bytes = new Uint8Array(await this.app.vault.adapter.readBinary(path));
+			await checkpoint(context);
 			return {
 				artifactKind: "plugin_data",
 				path,
@@ -389,10 +421,15 @@ function parseReviewState(memoId: string, value: unknown): LegacyReviewState | n
 	};
 }
 
-function mergeMemos(values: readonly ParsedLegacyMemo[], diagnostics: LegacyIndexDiagnostic[]): ParsedLegacyMemo[] {
-	const byMemoId = groupByMemoId(values);
+async function mergeMemos(
+	values: readonly ParsedLegacyMemo[],
+	diagnostics: LegacyIndexDiagnostic[],
+	context: LegacyIndexLoadContext,
+): Promise<ParsedLegacyMemo[]> {
+	const byMemoId = await groupByMemoId(values, context);
 	const result: ParsedLegacyMemo[] = [];
 	for (const [memoId, candidates] of [...byMemoId.entries()].sort(compareEntry)) {
+		await checkpoint(context);
 		const unique = dedupeByCanonical(candidates, memoIdentityKey);
 		if (unique.length !== 1) {
 			diagnostics.push(diagnostic("legacy_identity_conflict", null, memoId, "Legacy index contains conflicting records for one memoId."));
@@ -403,29 +440,37 @@ function mergeMemos(values: readonly ParsedLegacyMemo[], diagnostics: LegacyInde
 	return result;
 }
 
-function mergePendingMemos(
+async function mergePendingMemos(
 	values: readonly LegacyPendingMemo[],
 	indexedMemoIds: ReadonlySet<string>,
 	diagnostics: LegacyIndexDiagnostic[],
-): LegacyPendingMemo[] {
-	const byMemoId = groupByMemoId(values);
+	context: LegacyIndexLoadContext,
+): Promise<LegacyPendingMemo[]> {
+	const byMemoId = await groupByMemoId(values, context);
 	const result: LegacyPendingMemo[] = [];
 	for (const [memoId, candidates] of [...byMemoId.entries()].sort(compareEntry)) {
-		if (indexedMemoIds.has(memoId)) continue;
-		const unique = dedupeByCanonical(candidates, (value) => value);
-		if (unique.length !== 1) {
-			diagnostics.push(diagnostic("legacy_pending_conflict", null, memoId, "Legacy pending-create data conflicts for one memoId."));
-			continue;
+		if (!indexedMemoIds.has(memoId)) {
+			const unique = dedupeByCanonical(candidates, (value) => value);
+			if (unique.length !== 1) {
+				diagnostics.push(diagnostic("legacy_pending_conflict", null, memoId, "Legacy pending-create data conflicts for one memoId."));
+			} else {
+				result.push(unique[0] as LegacyPendingMemo);
+			}
 		}
-		result.push(unique[0] as LegacyPendingMemo);
+		await checkpoint(context);
 	}
 	return result;
 }
 
-function mergeReviews(values: readonly LegacyReviewState[], diagnostics: LegacyIndexDiagnostic[]): LegacyReviewState[] {
-	const byMemoId = groupByMemoId(values);
+async function mergeReviews(
+	values: readonly LegacyReviewState[],
+	diagnostics: LegacyIndexDiagnostic[],
+	context: LegacyIndexLoadContext,
+): Promise<LegacyReviewState[]> {
+	const byMemoId = await groupByMemoId(values, context);
 	const result: LegacyReviewState[] = [];
 	for (const [memoId, candidates] of [...byMemoId.entries()].sort(compareEntry)) {
+		await checkpoint(context);
 		const unique = dedupeByCanonical(candidates, (value) => value);
 		if (unique.length !== 1) {
 			diagnostics.push(diagnostic("legacy_review_conflict", null, memoId, "Legacy review state conflicts for one memoId."));
@@ -450,17 +495,19 @@ function memoIdentityKey(value: ParsedLegacyMemo): unknown {
 	};
 }
 
-function recoverLegacySourceMemoIds(
+async function recoverLegacySourceMemoIds(
 	values: readonly ParsedLegacyMemo[],
 	resolveLinkPath: (linkPath: string, sourcePath: string) => string | null,
-): LegacyIndexMemo[] {
-	const sourceMemoIdsByTarget = buildLegacySourceMemoIdsByTarget(values);
-	const sourceMemoIdsByTimestamp = buildLegacySourceMemoIdsByTimestamp(values);
-	return values.map((value) => {
+	context: LegacyIndexLoadContext,
+): Promise<LegacyIndexMemo[]> {
+	const sourceMemoIdsByTarget = await buildLegacySourceMemoIdsByTarget(values, context);
+	const sourceMemoIdsByTimestamp = await buildLegacySourceMemoIdsByTimestamp(values, context);
+	const result: LegacyIndexMemo[] = [];
+	for (const value of values) {
 		const recoveredSourceMemoId = value.sourceMemoId
 			?? value.referenceMemoId
 			?? resolveLegacyReferenceCandidate(value, sourceMemoIdsByTarget, sourceMemoIdsByTimestamp, resolveLinkPath);
-		return {
+		result.push({
 			memoId: value.memoId,
 			status: value.status,
 			createdAt: value.createdAt,
@@ -471,8 +518,10 @@ function recoverLegacySourceMemoIds(
 				...value.deletedPayload,
 				sourceMemoId: value.deletedPayload.sourceMemoId ?? recoveredSourceMemoId,
 			},
-		};
-	});
+		});
+		await checkpoint(context);
+	}
+	return result;
 }
 
 function resolveLegacyReferenceCandidate(
@@ -495,28 +544,37 @@ function resolveLegacyReferenceCandidate(
 	return resolved.size === 1 ? [...resolved][0] ?? null : null;
 }
 
-function buildLegacySourceMemoIdsByTarget(values: readonly ParsedLegacyMemo[]): Map<string, Set<string>> {
+async function buildLegacySourceMemoIdsByTarget(
+	values: readonly ParsedLegacyMemo[],
+	context: LegacyIndexLoadContext,
+): Promise<Map<string, Set<string>>> {
 	const result = new Map<string, Set<string>>();
 	for (const value of values) {
 		const lines = splitMarkdownLines(value.rawBlock);
 		const lastLineIndex = findLastEffectiveLineIndex(lines);
 		const blockId = lastLineIndex === -1 ? null : extractTrailingBlockId(lines[lastLineIndex] ?? "").blockId;
-		if (blockId === null) continue;
-		const key = `${value.evidence.sourcePath}#^${blockId}`;
-		const memoIds = result.get(key) ?? new Set<string>();
-		memoIds.add(value.memoId);
-		result.set(key, memoIds);
+		if (blockId !== null) {
+			const key = `${value.evidence.sourcePath}#^${blockId}`;
+			const memoIds = result.get(key) ?? new Set<string>();
+			memoIds.add(value.memoId);
+			result.set(key, memoIds);
+		}
+		await checkpoint(context);
 	}
 	return result;
 }
 
-function buildLegacySourceMemoIdsByTimestamp(values: readonly ParsedLegacyMemo[]): Map<string, Set<string>> {
+async function buildLegacySourceMemoIdsByTimestamp(
+	values: readonly ParsedLegacyMemo[],
+	context: LegacyIndexLoadContext,
+): Promise<Map<string, Set<string>>> {
 	const result = new Map<string, Set<string>>();
 	for (const value of values) {
 		const timestamp = value.memoId.slice(0, 14);
 		const memoIds = result.get(timestamp) ?? new Set<string>();
 		memoIds.add(value.memoId);
 		result.set(timestamp, memoIds);
+		await checkpoint(context);
 	}
 	return result;
 }
@@ -573,14 +631,82 @@ function readLegacyReferenceMemoId(value: unknown): string | null {
 	return parseLegacyMemoIdOrNull(value[0].memoId);
 }
 
-function groupByMemoId<T extends { memoId: string }>(values: readonly T[]): Map<string, T[]> {
+async function groupByMemoId<T extends { memoId: string }>(
+	values: readonly T[],
+	context: LegacyIndexLoadContext,
+): Promise<Map<string, T[]>> {
 	const result = new Map<string, T[]>();
 	for (const value of values) {
 		const candidates = result.get(value.memoId) ?? [];
 		candidates.push(value);
 		result.set(value.memoId, candidates);
+		await checkpoint(context);
 	}
 	return result;
+}
+
+async function buildMemoIdSet(
+	values: readonly LegacyIndexMemo[],
+	context: LegacyIndexLoadContext,
+): Promise<Set<string>> {
+	const result = new Set<string>();
+	for (const value of values) {
+		result.add(value.memoId);
+		await checkpoint(context);
+	}
+	return result;
+}
+
+async function serializeLegacyRevision(
+	memos: readonly LegacyIndexMemo[],
+	pendingMemos: readonly LegacyPendingMemo[],
+	reviews: readonly LegacyReviewState[],
+	context: LegacyIndexLoadContext,
+): Promise<string> {
+	const serializedMemos = await serializeCanonicalArray(memos, context);
+	const serializedPendingMemos = await serializeCanonicalArray(pendingMemos, context);
+	const serializedReviews = await serializeCanonicalArray(reviews, context);
+	return `{"memos":${serializedMemos},"pendingMemos":${serializedPendingMemos},"reviews":${serializedReviews}}`;
+}
+
+async function serializeCanonicalArray(
+	values: readonly unknown[],
+	context: LegacyIndexLoadContext,
+): Promise<string> {
+	const serialized: string[] = [];
+	for (const value of values) {
+		serialized.push(canonicalIdentityLedgerJson(value));
+		await checkpoint(context);
+	}
+	return `[${serialized.join(",")}]`;
+}
+
+function createLoadContext(runtime: LegacyIndexLoadRuntime): LegacyIndexLoadContext {
+	const assertActive = () => {
+		if (runtime.cancellationSignal?.aborted === true) {
+			throw new Error("Legacy index load was cancelled.");
+		}
+	};
+	return {
+		assertActive,
+		yieldController: runtime.yieldControl === undefined ? null : new CooperativeYieldController({
+			yieldControl: async () => {
+				assertActive();
+				await runtime.yieldControl?.();
+				assertActive();
+			},
+			sliceBudgetMs: runtime.sliceBudgetMs,
+			maxOperationsPerSlice: 128,
+			now: runtime.now,
+		}),
+	};
+}
+
+async function checkpoint(context: LegacyIndexLoadContext): Promise<void> {
+	context.assertActive();
+	if (context.yieldController?.shouldYield() === true) {
+		await context.yieldController.yieldNow();
+	}
 }
 
 function dedupeByCanonical<T>(values: readonly T[], select: (value: T) => unknown): T[] {

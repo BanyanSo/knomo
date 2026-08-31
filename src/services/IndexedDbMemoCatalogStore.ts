@@ -9,7 +9,6 @@ import type {
 	CatalogPostingKind,
 	CatalogQuery,
 	CatalogQueryPage,
-	CatalogResolutionSnapshot,
 	CatalogStoreLifecycle,
 } from "../types/catalog";
 import {
@@ -35,7 +34,6 @@ const BY_LOOKUP = "byLookup";
 const BY_LOGICAL_DATE = "byLogicalDate";
 const CATALOG_REVISION_META = "catalogRevision";
 const COVERAGE_META = "coverage";
-const RESOLUTION_SNAPSHOT_META = "catalogResolutionSnapshot";
 
 interface CatalogPostingRecord {
 	postingKey: string;
@@ -545,14 +543,6 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		const done = waitForTransaction(transaction);
 		transaction.objectStore(META_STORE).delete(key);
 		await done;
-	}
-
-	loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
-		return this.getMeta<CatalogResolutionSnapshot>(RESOLUTION_SNAPSHOT_META);
-	}
-
-	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void> {
-		return this.setMeta(RESOLUTION_SNAPSHOT_META, snapshot);
 	}
 
 	async clear(preserveMetaKeys: readonly string[] = []): Promise<void> {

@@ -147,7 +147,7 @@ test("旧 Index 仅有安全跳过项时保留设置诊断，不占用主视图�
 	assert.equal(page.status.migration, "none");
 });
 
-test("回收站忽略过期 resolution snapshot，并按当前 Catalog 显示删除记录", async () => {
+test("回收站按当前 Catalog 显示删除记录", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -166,7 +166,6 @@ test("回收站忽略过期 resolution snapshot，并按当前 Catalog 显示删
 		"2026-08-22T12:34:56",
 	);
 	const service = new CatalogReadService({ catalog, identityLedger: identity.reader });
-	await service.materializeResolutionSnapshot();
 	await catalog.deleteFile(observation.sourcePath);
 	identity.setActiveDeletes([{
 		memoId: binding.memoId,
@@ -200,6 +199,30 @@ test("回收站忽略过期 resolution snapshot，并按当前 Catalog 显示删
 	}, "conflicted", "identity-3");
 	const conflictedPage = await service.listDeleted(20);
 	assert.equal(conflictedPage.items[0]?.purgeAllowed, false);
+});
+
+test("回收站无删除记录时不读取任何 Catalog observation", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	let catalogReadCount = 0;
+	store.listFileRevisionBatches = async () => {
+		catalogReadCount += 1;
+		return [];
+	};
+	store.getObservation = async () => {
+		catalogReadCount += 1;
+		return null;
+	};
+	const service = new CatalogReadService({
+		catalog: new MemoCatalogService(store),
+		identityLedger: createIdentityReader().reader,
+	});
+
+	assert.deepEqual(await service.getDeletedSummary(), { count: 0, ids: [] });
+	assert.equal(catalogReadCount, 0);
 });
 
 test("Daily 正文重新出现时保持正文 observation 可见并隐藏对应废纸篓记录", async () => {

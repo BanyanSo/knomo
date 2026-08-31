@@ -3,7 +3,6 @@ import test from "node:test";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
-import { createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
@@ -320,31 +319,6 @@ test("本机 Catalog 降级后可显式重连持久化存储", async () => {
 	assert.deepEqual(await store.listFiles(), []);
 	store.close();
 	await deleteDatabase(databaseName);
-});
-
-test("resolution snapshot atomically persists every observation result without a memory cap", async () => {
-	const store = new InMemoryMemoCatalogStore();
-	await store.open();
-	const results = Object.fromEntries(Array.from({ length: 500 }, (_, index) => {
-		const observation = makeObservation("Daily/2026-08-09.md", "2026-08-09", index, "09:00", `memo-${index}`);
-		return [observation.sourcePath + "\0" + index.toString().padStart(10, "0"), {
-			kind: "observed" as const,
-			identityHandle: null,
-			observation,
-			adoption: "settling" as const,
-			capabilities: createResolvedMemoCapabilities("syncing"),
-			identityRevision: "identity-1",
-		}];
-	}));
-	await store.saveResolutionSnapshot({
-		catalogRevision: 7,
-		identityRevision: "identity-1",
-		results,
-	});
-
-	const restored = await store.loadResolutionSnapshot();
-	assert.equal(Object.keys(restored?.results ?? {}).length, 500);
-	assert.equal(restored?.catalogRevision, 7);
 });
 
 test("IDB-VERSIONCHANGE：运行期连接失效后自动重开，无法重开时安全切换为 partial 内存缓存", async () => {

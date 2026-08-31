@@ -7,7 +7,6 @@ import type {
 	CatalogObservation,
 	CatalogQuery,
 	CatalogQueryPage,
-	CatalogResolutionSnapshot,
 	CatalogStoreLifecycle,
 } from "../types/catalog";
 
@@ -46,8 +45,6 @@ export interface MemoCatalogStore {
 	getMeta<T>(key: string): Promise<T | null>;
 	setMeta<T>(key: string, value: T): Promise<void>;
 	deleteMeta(key: string): Promise<void>;
-	loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null>;
-	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void>;
 	clear(preserveMetaKeys?: readonly string[]): Promise<void>;
 }
 
@@ -246,14 +243,6 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		this.metadata.delete(key);
 	}
 
-	async loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
-		return this.getMeta<CatalogResolutionSnapshot>("catalogResolutionSnapshot");
-	}
-
-	async saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void> {
-		await this.setMeta("catalogResolutionSnapshot", snapshot);
-	}
-
 	async clear(preserveMetaKeys: readonly string[] = []): Promise<void> {
 		const preservedMeta = new Map<string, unknown>();
 		for (const key of new Set(preserveMetaKeys)) {
@@ -412,12 +401,6 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	getMeta<T>(key: string): Promise<T | null> { return this.run((store) => store.getMeta<T>(key)); }
 	setMeta<T>(key: string, value: T): Promise<void> { return this.run((store) => store.setMeta(key, value)); }
 	deleteMeta(key: string): Promise<void> { return this.run((store) => store.deleteMeta(key)); }
-	loadResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
-		return this.run((store) => store.loadResolutionSnapshot());
-	}
-	saveResolutionSnapshot(snapshot: CatalogResolutionSnapshot): Promise<void> {
-		return this.run((store) => store.saveResolutionSnapshot(snapshot));
-	}
 	clear(preserveMetaKeys?: readonly string[]): Promise<void> {
 		return this.run((store) => store.clear(preserveMetaKeys));
 	}

@@ -65,14 +65,6 @@ export class MemoCatalogService {
 		return this.store.listFiles();
 	}
 
-	loadResolutionSnapshot() {
-		return this.store.loadResolutionSnapshot();
-	}
-
-	saveResolutionSnapshot(snapshot: import("../types/catalog").CatalogResolutionSnapshot) {
-		return this.store.saveResolutionSnapshot(snapshot);
-	}
-
 	listDailyAggregates(fromDate?: string, toDate?: string) {
 		return this.store.listDailyAggregates(fromDate, toDate);
 	}

@@ -303,12 +303,6 @@ export interface CatalogFileRevisionBatch<TObservation extends MemoObservation =
 	catalogRevision: number;
 }
 
-export interface CatalogResolutionSnapshot {
-	catalogRevision: number;
-	identityRevision: string;
-	results: Record<string, ResolvedMemo>;
-}
-
 export interface CatalogInventoryEntry {
 	sourcePath: string;
 	logicalDate: string;

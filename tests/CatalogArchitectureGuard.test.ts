@@ -81,15 +81,18 @@ test("全库统计和功能查询只从 Catalog Read Service 获取", () => {
 	}
 });
 
-test("Catalog 扫描进度不触发卡片全量刷新，resolution snapshot 只在功能首次需要时构建", () => {
+test("Catalog 扫描进度不触发卡片全量刷新，交互路径不构建全库 resolution snapshot", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	const readService = fs.readFileSync("src/services/CatalogReadService.ts", "utf8");
 	const commandService = fs.readFileSync("src/services/MemoCommandService.ts", "utf8");
+	const catalogStore = fs.readFileSync("src/services/MemoCatalogStore.ts", "utf8");
 	assert.equal(main.includes("onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage)"), true);
 	assert.equal(main.includes("onProgress: () => this.queueRefreshOpenViews()"), false);
 	assert.equal(main.includes("materializeResolutionSnapshot()"), false);
 	assert.equal(commandService.includes("materializeResolutionSnapshot()"), false);
-	assert.equal(readService.includes("await this.options.catalog.listFileRevisionBatches()"), true);
+	assert.equal(readService.includes("materializeResolutionSnapshot"), false);
+	assert.equal(readService.includes("loadResolutionSnapshot"), false);
+	assert.equal(catalogStore.includes("saveResolutionSnapshot"), false);
 });
 
 test("Daily 写入标题不参与历史读取、Catalog fingerprint 或 Monthly source digest", () => {

@@ -4,7 +4,6 @@ import type {
 	CatalogObservation,
 	CatalogCapabilities,
 	CatalogQueryPage,
-	CatalogResolutionSnapshot,
 	CatalogStoreLifecycle,
 	ResolvedMemo,
 	ResolvedIdentityEvidence,
@@ -160,13 +159,7 @@ export class CatalogReadService {
 				invalidated: true,
 			});
 		}
-		const snapshot = await this.options.catalog.loadResolutionSnapshot().catch(() => null);
-		const snapshotCurrent = snapshot !== null
-			&& snapshot.catalogRevision === page.catalogRevision
-			&& snapshot.identityRevision === this.options.identityLedger.getRevision();
-		const resolved = page.items.map((observation) => snapshotCurrent
-			? snapshot.results[observation.observationKey] ?? this.resolveObservation(observation)
-			: this.resolveObservation(observation));
+		const resolved = page.items.map((observation) => this.resolveObservation(observation));
 		const status = this.getReadStatus(page.coverage, page.lifecycle, resolved, false);
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
 		return this.rememberPage({
@@ -458,23 +451,6 @@ export class CatalogReadService {
 		return this.toMemoItem(resolved, createCatalogCapabilities(coverage));
 	}
 
-	async materializeResolutionSnapshot(): Promise<CatalogResolutionSnapshot | null> {
-		const batches = await this.options.catalog.listFileRevisionBatches();
-		const catalogRevision = batches[0]?.catalogRevision ?? 0;
-		if (batches.some((batch) => batch.catalogRevision !== catalogRevision)) return null;
-		const results = Object.fromEntries(batches.flatMap((batch) => batch.observations.map((observation) => [
-			observation.observationKey,
-			this.resolveObservation(observation),
-		] as const)));
-		const snapshot: CatalogResolutionSnapshot = {
-			catalogRevision,
-			identityRevision: this.options.identityLedger.getRevision(),
-			results,
-		};
-		await this.options.catalog.saveResolutionSnapshot(snapshot);
-		return snapshot;
-	}
-
 	private resolveObservation(observation: CatalogObservation): ResolvedMemo {
 		const state = this.options.identityLedger.resolveObservationState(observation);
 		if (state.kind === "identified") return createResolvedMemo(observation, state.binding);
@@ -750,37 +726,30 @@ export class CatalogReadService {
 	}
 
 	private async listVisibleDeletes() {
-		const resolution = await this.loadCurrentResolutionSnapshot();
-		const visibleMemoIds = new Set(Object.values(resolution.results).flatMap((memo) =>
-			memo.kind === "identified" ? [memo.identityHandle.memoId] : []));
-		return (this.options.identityLedger.getActiveDeletes?.() ?? [])
+		const activeDeletes = this.options.identityLedger.getActiveDeletes?.() ?? [];
+		if (activeDeletes.length === 0) return [];
+		const identitySnapshot = this.options.identityLedger.getSnapshot();
+		const memoIds = [...new Set(activeDeletes.map((record) => record.memoId))];
+		const visibleMemoIds = new Set((await Promise.all(memoIds.map(async (memoId) =>
+			await this.hasCurrentObservation(memoId, identitySnapshot) ? memoId : null)))
+			.filter((memoId): memoId is string => memoId !== null));
+		return activeDeletes
 			.filter((record) => !visibleMemoIds.has(record.memoId))
 			.sort((left, right) => right.evidence.deletedAt.localeCompare(left.evidence.deletedAt)
 				|| left.deleteEventId.localeCompare(right.deleteEventId));
 	}
 
-	private async loadCurrentResolutionSnapshot(): Promise<CatalogResolutionSnapshot> {
-		const existing = await this.options.catalog.loadResolutionSnapshot().catch(() => null);
-		if (existing !== null
-			&& existing.identityRevision === this.options.identityLedger.getRevision()
-			&& await this.isResolutionSnapshotCatalogCurrent(existing)) {
-			return existing;
+	private async hasCurrentObservation(memoId: string, snapshot: IdentityLedgerSnapshot): Promise<boolean> {
+		const memo = snapshot.memos[memoId];
+		if (memo === undefined) return false;
+		for (const binding of memo.bindings) {
+			const observationKey = `${binding.evidence.sourcePath}\0${binding.evidence.startLine.toString().padStart(10, "0")}`;
+			const observation = await this.options.catalog.getObservation(observationKey);
+			if (observation === null) continue;
+			const state = this.options.identityLedger.resolveObservationState(observation);
+			if (state.kind === "identified" && state.binding.memoId === memoId) return true;
 		}
-		const refreshed = await this.materializeResolutionSnapshot();
-		if (refreshed === null
-			|| refreshed.identityRevision !== this.options.identityLedger.getRevision()
-			|| !await this.isResolutionSnapshotCatalogCurrent(refreshed)) {
-			throw new Error("Trash requires a current Catalog and Identity resolution snapshot.");
-		}
-		return refreshed;
-	}
-
-	private async isResolutionSnapshotCatalogCurrent(snapshot: CatalogResolutionSnapshot): Promise<boolean> {
-		const files = await this.options.catalog.listFiles();
-		const firstFile = files[0];
-		if (firstFile === undefined) return Object.keys(snapshot.results).length === 0;
-		const batch = await this.options.catalog.getFileRevisionBatch(firstFile.sourcePath);
-		return batch !== null && batch.catalogRevision === snapshot.catalogRevision;
+		return false;
 	}
 
 	private rememberPage(page: CatalogMemoPage): CatalogMemoPage {

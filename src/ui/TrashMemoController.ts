@@ -35,6 +35,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	private deletedMemoIds = new Set<string>();
 	private trashBusyMemoActions = new Map<string, TrashAction>();
 	private trashMutationRevision = 0;
+	private trashSummaryOperation: Promise<{ count: number; ids: string[] }> | null = null;
 
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
@@ -53,13 +54,16 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		if (this.deletedMemoIds.has(memoId)) {
 			return;
 		}
+		this.trashMutationRevision += 1;
 		this.deletedMemoIds.add(memoId);
 		this.trashCount += 1;
 	}
 
 	async refreshTrashCount(render = true): Promise<void> {
+		const mutationRevision = this.trashMutationRevision;
 		try {
-			const summary = await this.options.getDeletedMemoSummary();
+			const summary = await this.getDeletedMemoSummary();
+			if (mutationRevision !== this.trashMutationRevision) return;
 			this.trashCount = summary.count;
 			this.deletedMemoIds = new Set(summary.ids);
 			this.trashError = null;
@@ -82,7 +86,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		try {
 			const [deletedMemos, summary] = await Promise.all([
 				this.options.listDeletedMemos(),
-				this.options.getDeletedMemoSummary(),
+				this.getDeletedMemoSummary(),
 			]);
 			if (mutationRevision !== this.trashMutationRevision) return;
 			this.trashMemos = deletedMemos;
@@ -152,6 +156,16 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			&& !(this.trashMemos ?? []).some((memo) => memo.trashItem?.memoId === identityMemoId)) {
 			this.deletedMemoIds.delete(identityMemoId);
 		}
+	}
+
+	private getDeletedMemoSummary(): Promise<{ count: number; ids: string[] }> {
+		if (this.trashSummaryOperation !== null) return this.trashSummaryOperation;
+		let operation: Promise<{ count: number; ids: string[] }>;
+		operation = this.options.getDeletedMemoSummary().finally(() => {
+			if (this.trashSummaryOperation === operation) this.trashSummaryOperation = null;
+		});
+		this.trashSummaryOperation = operation;
+		return operation;
 	}
 }
 

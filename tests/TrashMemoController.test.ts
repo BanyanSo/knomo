@@ -35,6 +35,33 @@ test("tracks deleted memo ids once and refreshes the trash snapshot", async () =
 	assert.deepEqual(renderTargets, ["trash-count-and-scope"]);
 });
 
+test("concurrent trash count refreshes share one summary request", async () => {
+	const { TrashMemoController } = await loadController();
+	const summary = createDeferred<{ count: number; ids: string[] }>();
+	let summaryCalls = 0;
+	const controller = new TrashMemoController({
+		getDeletedMemoSummary: () => {
+			summaryCalls += 1;
+			return summary.promise;
+		},
+		listDeletedMemos: async () => [],
+		restoreMemo: async () => null,
+		purgeMemo: async () => {},
+		confirmPurge: async () => true,
+		handleRestoredMemo: () => {},
+		isTrashActive: () => false,
+		showNotice: () => {},
+		forceRefreshViews: async () => {},
+		requestRender: () => {},
+	});
+
+	const first = controller.refreshTrashCount(false);
+	const second = controller.refreshTrashCount(false);
+	assert.equal(summaryCalls, 1);
+	summary.resolve({ count: 0, ids: [] });
+	await Promise.all([first, second]);
+});
+
 test("loads trash once while busy and preserves loading render transitions", async () => {
 	const { TrashMemoController } = await loadController();
 	const renderTargets: TrashMemoRenderTarget[] = [];

@@ -35,6 +35,7 @@ import {
 } from "./services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
+import { LegacyMigrationAcknowledgementService } from "./services/LegacyMigrationAcknowledgementService";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MemoCommandService } from "./services/MemoCommandService";
@@ -85,6 +86,8 @@ export default class KnomoPlugin extends Plugin {
 		lowPriorityWorkQueue.start(this);
 		const dailyInventory = new DailyInventoryIndex();
 		const pluginDataStore = new PluginDataStore(this);
+		const legacyMigrationAcknowledgementService = new LegacyMigrationAcknowledgementService(pluginDataStore);
+		await legacyMigrationAcknowledgementService.initialize().catch(() => undefined);
 		this.settingsService = new SettingsService(this, pluginDataStore);
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
 		const settingsLoaded = await this.loadSettingsSafely();
@@ -166,8 +169,7 @@ export default class KnomoPlugin extends Plugin {
 					knomoSharedConfigService.copyAndVerifyDataRoot(sourceDataRoot, targetDataRoot),
 			},
 		);
-		const startupBootstrapService = settingsLoaded
-			? new KnomoStartupBootstrapService(this.app, {
+		const startupBootstrapService = new KnomoStartupBootstrapService(this.app, {
 				getLocation: () => this.settingsService.getSettings(),
 				initializeDataRoot: async (dataRoot) => {
 					await knomoDataRootMigrationService.migrate(dataRoot);
@@ -175,8 +177,7 @@ export default class KnomoPlugin extends Plugin {
 				identity: identityLedgerService,
 				sharedConfig: knomoSharedConfigService,
 				cancellationSignal: lowPriorityWorkQueue.signal,
-			})
-			: null;
+			});
 
 		const loadObservationBatches = async (): Promise<CatalogFileRevisionBatch[]> => {
 			return this.memoCatalogService!.listFileRevisionBatches();
@@ -310,6 +311,7 @@ export default class KnomoPlugin extends Plugin {
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
 				getSharedConfigurationStatus: () => knomoSharedConfigService.getStatus(),
+				getSettingsStatus: () => this.settingsService.getLoadStatus(),
 			},
 			markdownMutationService,
 			identityLedgerService,
@@ -372,7 +374,14 @@ export default class KnomoPlugin extends Plugin {
 		const shuffleDayService = new ShuffleDayService(pluginDataStore);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
 		const retryRuntimeState = async (): Promise<void> => {
-			if (startupBootstrapService?.getSnapshot().status === "unavailable") {
+			let settingsRecovered = false;
+			if (this.settingsService.getLoadStatus() === "unavailable") {
+				await this.settingsService.loadSettings();
+				await this.settingsService.initializeTimeBuoyDefault().catch(() => undefined);
+				await this.settingsService.initializeMonthlyExcludeDefault();
+				await startupBootstrapService.initialize();
+				settingsRecovered = true;
+			} else if (startupBootstrapService.getSnapshot().status === "unavailable") {
 				await startupBootstrapService.retryInitialization();
 			} else if (knomoSharedConfigService.getStatus() === "unavailable") {
 				await knomoSharedConfigService.reloadConfiguredRoot();
@@ -382,6 +391,7 @@ export default class KnomoPlugin extends Plugin {
 			if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
 				await this.catalogIndexCoordinator?.refreshLocalCatalog();
 			}
+			if (settingsRecovered) await this.catalogIndexCoordinator?.refreshLocalCatalog();
 			await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
 			await reconcileIdentityLedger();
 		};
@@ -433,13 +443,14 @@ export default class KnomoPlugin extends Plugin {
 			knomoDataRootMigrationService,
 			knomoSharedConfigService,
 			this.legacyIndexMigrationService,
+			legacyMigrationAcknowledgementService,
 			startupBootstrapService,
 			retryRuntimeState,
 		);
 		this.addSettingTab(settingTab);
 
 		this.runtimeInitializationPromise = (async () => {
-			if (startupBootstrapService !== null) {
+			if (settingsLoaded) {
 				try {
 					await startupBootstrapService.initialize();
 				} catch {
@@ -449,7 +460,7 @@ export default class KnomoPlugin extends Plugin {
 				}
 			}
 			if (lowPriorityWorkQueue.signal.aborted) return false;
-			if (startupBootstrapService === null) {
+			if (!settingsLoaded) {
 				await identityLedgerService.initialize();
 				await knomoSharedConfigService.initialize();
 			}

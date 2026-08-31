@@ -24,6 +24,7 @@ import type {
 	MarkdownMutationService as MarkdownMutationContract,
 } from "../types/memoOperations";
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
+import type { KnomoSettingsLoadStatus } from "../types/settings";
 import { formatDatePart, formatTimePart } from "../utils/date";
 import { hashMemoContent } from "../utils/hash";
 import { withCreatedAtAlias } from "../utils/references";
@@ -40,6 +41,7 @@ export interface MemoCommandServiceOptions {
 	rebuildLocalCatalog: () => Promise<void>;
 	getLegacyImportStatus?: () => import("../types/legacyMigration").LegacyIdentityImportStatus;
 	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
+	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -68,6 +70,7 @@ export class MemoCommandService {
 			getProjectionState: options.getProjectionState,
 			getLegacyImportStatus: options.getLegacyImportStatus,
 			getSharedConfigurationStatus: options.getSharedConfigurationStatus,
+			getSettingsStatus: options.getSettingsStatus,
 			now: options.now,
 			random: options.random,
 		});

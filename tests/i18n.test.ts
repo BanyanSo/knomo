@@ -52,7 +52,7 @@ test("uses distinct local-history, migration, identity, and storage status copy"
 	const { translate } = await import("../src/i18n");
 
 	assert.match(translate("zh-CN", "catalog.coveragePartial", { covered: 1, total: 3 }), /本机历史/u);
-	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧版数据升级/u);
+	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧版数据/u);
 	assert.match(translate("zh-CN", "catalog.identityConflict"), /部分 Memo/u);
 	assert.match(translate("zh-CN", "catalog.storageUnavailable"), /本机缓存/u);
 	assert.doesNotMatch(translate("zh-CN", "catalog.stateSettling"), /关联信息仍在同步/u);
@@ -66,6 +66,16 @@ test("需要处理文案只描述用户影响和对应操作", async () => {
 	assert.doesNotMatch(translate("zh-CN", "settings.attention.catalog.desc"), /Catalog|IndexedDB/u);
 	assert.equal(translate("zh-CN", "settings.attention.retry"), "立即重试");
 	assert.equal(translate("en", "settings.attention.checkAgain"), "Check again");
+});
+
+test("旧版数据升级完成通知只保留用户可执行的清理提示", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+
+	assert.equal(
+		translate("zh-CN", "notice.legacyMigrationCompleted", { path: "Knomo/_knomo-system" }),
+		"新版 Knomo 数据已完成升级，原旧数据文件夹（Knomo/_knomo-system）可手动删除。",
+	);
 });
 
 test("adds spacing only to record statistics summaries", async () => {

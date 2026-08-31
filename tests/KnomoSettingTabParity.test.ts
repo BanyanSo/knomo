@@ -81,6 +81,25 @@ test("does not expose permanent runtime, maintenance, or monthly locale rows", (
 	assert.doesNotMatch(source, /renderRuntimeStatusSetting|renderMonthlyRebuildSetting|renderMonthlyLocaleSetting/u);
 });
 
+test("legacy attention exposes user actions without rendering raw diagnostics", () => {
+	const source = readSettingTabSource();
+	const legacySource = getSourceBetween(
+		source,
+		"\tprivate renderLegacyIdentityImport(",
+		"\n\tprivate rememberSettingNoticeValue(",
+	);
+
+	assert.doesNotMatch(legacySource, /diagnostics|sourcePath|memoId|item\.code|item\.detail/u);
+	assert.match(legacySource, /acknowledgeLegacyMigration/u);
+	assert.match(legacySource, /runRuntimeRetry/u);
+});
+
+test("settings load failure is routed through the shared retry action", () => {
+	const source = readSettingTabSource();
+	assert.match(source, /case "settings": this\.renderSettingsAttentionSetting\(setting\)/u);
+	assert.match(source, /renderSettingsAttentionSetting[\s\S]*runRuntimeRetry/u);
+});
+
 test("keeps monthly filename and date heading visible without a formatting expander", () => {
 	const source = readSettingTabSource();
 	assert.doesNotMatch(source, /monthlyFormattingExpanded|renderMonthlyFormattingSetting|settings\.monthlyFormatting/u);

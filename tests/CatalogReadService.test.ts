@@ -557,7 +557,7 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	assert.equal(pending.readState, "history_building");
 });
 
-test("运行状态快照只读组合 Catalog、Identity、共享配置、Monthly 和旧版迁移", async () => {
+test("运行状态快照只读组合设置、Catalog、Identity、共享配置、Monthly 和旧版迁移", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -581,11 +581,13 @@ test("运行状态快照只读组合 Catalog、Identity、共享配置、Monthly
 		getSharedConfigurationStatus: () => "conflicted",
 		getProjectionState: () => "failed",
 		getLegacyImportStatus: () => "attention",
+		getSettingsStatus: () => "unavailable",
 	});
 
 	const snapshot = await service.getRuntimeSnapshot();
 
 	assert.equal(snapshot.catalog.coverage.kind, "partial");
+	assert.equal(snapshot.settings, "unavailable");
 	assert.equal(snapshot.catalog.lifecycle.persistent, false);
 	assert.equal(snapshot.identity, "conflicted");
 	assert.equal(snapshot.sharedConfiguration, "conflicted");

@@ -9,7 +9,7 @@ import type {
 	MonthlyMemoFileFormatMigrationResult,
 } from "../settings/MonthlyFolderMigrationService";
 import { cloneSettings, isValidMonthlyMemoFileFormat, normalizeSettings } from "../settings/normalizeSettings";
-import type { KnomoSettings } from "../types/settings";
+import type { KnomoSettings, KnomoSettingsLoadStatus } from "../types/settings";
 import { isValidMarkdownHeading } from "../utils/markdown";
 import { isRecord } from "../utils/object";
 import { normalizeVaultPath } from "../utils/path";
@@ -33,6 +33,8 @@ export class SettingsService {
 	private timeBuoySettingPersisted = false;
 	private monthlyExcludeSettingPersisted = false;
 	private initialTimeBuoyBuildPending = false;
+	private loadStatus: KnomoSettingsLoadStatus = "not_loaded";
+	private monthlyExcludeInitializationFailed = false;
 	private settingsWriteQueue: Promise<void> = Promise.resolve();
 	private readonly monthlyFolderMigrationService: MonthlyFolderMigrationService;
 
@@ -98,21 +100,31 @@ export class SettingsService {
 	}
 
 	async loadSettings(): Promise<KnomoSettings> {
-		const savedData = await this.pluginDataStore.read();
-		const settingsData = extractSettingsData(savedData);
-		this.timeBuoySettingPersisted = isRecord(settingsData)
-			&& typeof settingsData.timeBuoyEnabled === "boolean";
-		this.monthlyExcludeSettingPersisted = isRecord(settingsData)
-			&& typeof settingsData.excludeMonthlyMemosFromObsidian === "boolean";
-		this.settings = this.migrateSettings(settingsData);
-		if (
-			this.timeBuoySettingPersisted
-			&& isRecord(settingsData)
-			&& typeof settingsData.timeBuoyIntroDismissed !== "boolean"
-		) {
-			this.settings.timeBuoyIntroDismissed = true;
+		try {
+			const savedData = await this.pluginDataStore.read();
+			const settingsData = extractSettingsData(savedData);
+			this.timeBuoySettingPersisted = isRecord(settingsData)
+				&& typeof settingsData.timeBuoyEnabled === "boolean";
+			this.monthlyExcludeSettingPersisted = isRecord(settingsData)
+				&& typeof settingsData.excludeMonthlyMemosFromObsidian === "boolean";
+			this.settings = this.migrateSettings(settingsData);
+			if (
+				this.timeBuoySettingPersisted
+				&& isRecord(settingsData)
+				&& typeof settingsData.timeBuoyIntroDismissed !== "boolean"
+			) {
+				this.settings.timeBuoyIntroDismissed = true;
+			}
+			this.loadStatus = "ready";
+			return this.getSettings();
+		} catch (error) {
+			this.loadStatus = "unavailable";
+			throw error;
 		}
-		return this.getSettings();
+	}
+
+	getLoadStatus(): KnomoSettingsLoadStatus {
+		return this.loadStatus;
 	}
 
 	async initializeTimeBuoyDefault(): Promise<KnomoSettings> {
@@ -151,13 +163,8 @@ export class SettingsService {
 		try {
 			({ addedByKnomo } = await new ObsidianExcludeService(this.plugin.app).ensureRule(rule));
 		} catch {
-			const settings = await this.updateSettings({
-				excludeMonthlyMemosFromObsidian: false,
-				managedObsidianExcludeRule: undefined,
-				managedObsidianExcludeRuleOwned: false,
-			});
-			this.monthlyExcludeSettingPersisted = true;
-			return settings;
+			this.monthlyExcludeInitializationFailed = true;
+			return currentSettings;
 		}
 
 		const managedRuleOwned = addedByKnomo || (
@@ -177,7 +184,12 @@ export class SettingsService {
 			managedObsidianExcludeRuleOwned: managedRuleOwned,
 		});
 		this.monthlyExcludeSettingPersisted = true;
+		this.monthlyExcludeInitializationFailed = false;
 		return settings;
+	}
+
+	hasMonthlyExcludeInitializationFailure(): boolean {
+		return this.monthlyExcludeInitializationFailed;
 	}
 
 	consumeInitialTimeBuoyBuildPending(): boolean {
@@ -195,9 +207,18 @@ export class SettingsService {
 	}
 
 	async updateSettings(patch: Partial<KnomoSettings>): Promise<KnomoSettings> {
-		return this.runSettingsWriteExclusive(() => this.persistSettings(
+		const updatesMonthlyExclude = Object.prototype.hasOwnProperty.call(
+			patch,
+			"excludeMonthlyMemosFromObsidian",
+		);
+		const settings = await this.runSettingsWriteExclusive(() => this.persistSettings(
 			Object.assign({}, this.settings, patch),
 		));
+		if (updatesMonthlyExclude) {
+			this.monthlyExcludeSettingPersisted = true;
+			this.monthlyExcludeInitializationFailed = false;
+		}
+		return settings;
 	}
 
 	async commitKnomoDataRoot(nextDataRoot: string): Promise<KnomoSettings> {

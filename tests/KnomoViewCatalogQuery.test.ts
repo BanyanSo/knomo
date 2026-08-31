@@ -64,6 +64,79 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	assert.equal(loadingRenderCount, 1);
 });
 
+test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	view.memoSourceGeneration = 0;
+	view.catalogDesktopQueryRun = 0;
+	view.catalogDesktopQueryFingerprint = null;
+	view.hasCommittedCatalogDesktopQuery = false;
+	view.catalogCursor = null;
+	view.memos = [];
+	view.viewStateController = { activeNav: "all" };
+	view.getCatalogQueryFingerprint = () => "all";
+	let complete = false;
+	view.loadCatalogMemos = async () => complete
+		? {
+			...makeCatalogLoad(2, "identity-2", completeCoverage()),
+			memos: [makeMemo("complete", "2026-08-24T10:00:00")],
+		}
+		: {
+			memos: [makeMemo("known-subset", "2026-08-24T10:00:00")],
+			nextCursor: null,
+			catalogRevision: 1,
+			identityRevision: "identity-1",
+			coverage: {
+				kind: "partial",
+				coveredFromDate: "2026-08-20",
+				pendingFileCount: 2,
+				coveredFileCount: 1,
+				totalFileCount: 3,
+			},
+			readState: "history_building",
+			status: {
+				content: "scanning",
+				catalog: "partial",
+				identity: "ready",
+				projection: "ready",
+				migration: "none",
+			},
+		};
+	view.getCardFlowStateKey = () => "card-flow";
+	view.getMobileSearchStateKey = () => "mobile-search";
+	view.invalidateRecordStats = () => undefined;
+	view.invalidateMemoSearchCache = () => undefined;
+	view.retainMemoCardPreviews = () => undefined;
+	view.resetVisibleMemos = () => undefined;
+	view.renderUiState = () => undefined;
+	view.forceRebuildCardFlow = () => undefined;
+	view.renderMobileSearchResults = () => undefined;
+	view.renderCardFlowIfChanged = () => undefined;
+	view.renderMobileSearchResultsIfChanged = () => undefined;
+	let loadingRenderCount = 0;
+	view.renderAllMemosLoadingState = () => { loadingRenderCount += 1; };
+	view.randomReunionController = {
+		getSnapshot: () => ({ status: "idle", error: null, memos: null }),
+		clearMemos: () => undefined,
+		refresh: async () => undefined,
+	};
+	view.shuffleDayController = { reloadSelectedDate: async () => true };
+	view.refreshCatalogLibraryIndexes = async () => undefined;
+	view.syncRecordStatsSource = () => undefined;
+
+	assert.equal(await view.reloadMemos(false), true);
+	assert.deepEqual(view.memos, []);
+	assert.equal(view.hasCommittedCatalogDesktopQuery, false);
+	assert.equal(view.catalogReadState, "history_building");
+	assert.equal(loadingRenderCount, 1);
+
+	complete = true;
+	assert.equal(await view.reloadMemos(false), true);
+	assert.deepEqual((view.memos as QueryMemo[]).map((memo) => memo.id), ["complete"]);
+	assert.equal(view.hasCommittedCatalogDesktopQuery, true);
+});
+
 test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
@@ -495,6 +568,7 @@ interface QueryView {
 	memoLoadingPromise: Promise<boolean> | null;
 	memoLoadingFingerprint: string | null;
 	catalogCoverage: TestCoverage | null;
+	catalogReadState: "ready" | "history_building";
 	catalogRevision: number;
 	catalogIdentityRevision: string;
 	libraryIndexRevision: number;
@@ -603,8 +677,14 @@ type TestCatalogMemoLoad = {
 	catalogRevision: number;
 	identityRevision: string;
 	coverage: TestCoverage;
-	readState: "ready";
-	status: { content: "ready"; catalog: "complete"; identity: "ready"; projection: "ready"; migration: "none" };
+	readState: "ready" | "history_building";
+	status: {
+		content: "ready" | "scanning";
+		catalog: "complete" | "partial";
+		identity: "ready";
+		projection: "ready";
+		migration: "none";
+	};
 };
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

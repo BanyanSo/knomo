@@ -81,6 +81,43 @@ test("repairs a missing Obsidian rule when monthly archive exclusion is already 
 	assert.equal(service.getSettings().managedObsidianExcludeRuleOwned, true);
 });
 
+test("默认排除规则写入失败时保留开启意图并允许后续重试", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
+	delete legacySettings.excludeMonthlyMemosFromObsidian;
+	const plugin = await createPlugin({}, { settings: legacySettings });
+	const setConfig = plugin.vault.setConfig.bind(plugin.vault);
+	plugin.vault.setConfig = async () => { throw new Error("Obsidian config unavailable"); };
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+
+	await service.initializeMonthlyExcludeDefault();
+
+	assert.equal(service.getSettings().excludeMonthlyMemosFromObsidian, true);
+	assert.equal(service.hasMonthlyExcludeInitializationFailure(), true);
+	assert.equal(plugin.saveCalls, 0);
+
+	plugin.vault.setConfig = setConfig;
+	await service.initializeMonthlyExcludeDefault();
+	assert.equal(service.hasMonthlyExcludeInitializationFailure(), false);
+	assert.deepEqual(plugin.vault.config.userIgnoreFilters, ["Memos/"]);
+});
+
+test("设置读取失败可被识别并在重新读取后恢复", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: createSettings() });
+	const loadData = plugin.loadData;
+	plugin.loadData = async () => { throw new Error("settings unavailable"); };
+	const service = new SettingsService(plugin as never);
+
+	await assert.rejects(service.loadSettings());
+	assert.equal(service.getLoadStatus(), "unavailable");
+
+	plugin.loadData = loadData;
+	await service.loadSettings();
+	assert.equal(service.getLoadStatus(), "ready");
+});
+
 test("Monthly folder migration only changes projection configuration", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const plugin = await createPlugin({

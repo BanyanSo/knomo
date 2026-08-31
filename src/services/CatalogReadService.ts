@@ -34,6 +34,7 @@ import type {
 import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
+import type { KnomoSettingsLoadStatus } from "../types/settings";
 import { toCatalogMemoView } from "../types/memoView";
 import type { MemoReviewStateMap } from "../types/review";
 import type { TimeBuoyAllQueryResult, TimeBuoyQueryResult } from "../types/timeBuoy";
@@ -55,6 +56,7 @@ export interface CatalogReadServiceOptions {
 	getProjectionState?: () => MonthlyProjectionState;
 	getLegacyImportStatus?: () => LegacyIdentityImportStatus;
 	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
+	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -100,6 +102,7 @@ export class CatalogReadService {
 		let identity: KnomoRuntimeAttentionSnapshot["identity"] = "unavailable";
 		let sharedConfiguration: KnomoRuntimeAttentionSnapshot["sharedConfiguration"] = "unavailable";
 		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "unavailable";
+		let settings: KnomoSettingsLoadStatus = "ready";
 		try {
 			identity = this.options.identityLedger.getStatus();
 		} catch {
@@ -115,7 +118,13 @@ export class CatalogReadService {
 		} catch {
 			// 保留 unavailable。
 		}
+		try {
+			settings = this.options.getSettingsStatus?.() ?? "ready";
+		} catch {
+			settings = "unavailable";
+		}
 		return {
+			settings,
 			catalogLifecycle,
 			identity,
 			sharedConfiguration,
@@ -142,6 +151,7 @@ export class CatalogReadService {
 			// 运行状态本身不可用时返回只读降级快照，不触发修复或扫描。
 		}
 		return {
+			settings: attention.settings,
 			catalog: { coverage, lifecycle },
 			identity: attention.identity,
 			sharedConfiguration: attention.sharedConfiguration,
@@ -621,6 +631,7 @@ export class CatalogReadService {
 			? "ledger" as const
 			: observationConflicted ? "observation" as const : null;
 		return {
+			settings: this.getSettingsStatus(),
 			content: contentUnavailable
 				? "unavailable"
 				: coverage.kind === "complete" && lifecycle.state !== "opening" && lifecycle.state !== "rebuilding"
@@ -640,6 +651,14 @@ export class CatalogReadService {
 				? "attention"
 				: legacyStatus === "unavailable" ? "unavailable" : "none",
 		};
+	}
+
+	private getSettingsStatus(): KnomoSettingsLoadStatus {
+		try {
+			return this.options.getSettingsStatus?.() ?? "ready";
+		} catch {
+			return "unavailable";
+		}
 	}
 
 	private getSharedConfigurationStatus(): KnomoSharedConfigStatus {

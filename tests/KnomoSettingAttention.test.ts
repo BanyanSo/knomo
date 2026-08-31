@@ -38,3 +38,21 @@ test("准备完成后按可执行动作展示故障", () => {
 		legacyMigration: "attention",
 	}, "ready"), ["shared-config", "catalog", "identity", "monthly", "legacy"]);
 });
+
+test("最终无法完整恢复的旧版状态只在尚未确认时显示", () => {
+	const partial = { ...ready, legacyMigration: "partial" as const };
+
+	assert.deepEqual(getKnomoSettingAttentionKinds(partial, "ready"), ["legacy"]);
+	assert.deepEqual(getKnomoSettingAttentionKinds(partial, "ready", {
+		legacyMigrationAcknowledged: true,
+	}), []);
+});
+
+test("设置读取失败时只显示设置恢复入口", () => {
+	assert.deepEqual(getKnomoSettingAttentionKinds({
+		...ready,
+		settings: "unavailable",
+		catalogLifecycle: { state: "degraded", persistent: false, writable: false, reason: "failed" },
+		identity: "unavailable",
+	}, "unavailable"), ["settings"]);
+});

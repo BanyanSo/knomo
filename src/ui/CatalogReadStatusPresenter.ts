@@ -13,6 +13,9 @@ export function getCatalogReadStatusHeaders(
 	options: CatalogReadStatusPresentationOptions,
 ): CardFlowHeader[] {
 	const headers: CardFlowHeader[] = [];
+	if (options.status.settings === "unavailable") {
+		return [summary(t("catalog.settingsUnavailable"), t("catalog.openDiagnostics"), "open-catalog-settings")];
+	}
 
 	if (options.status.content === "unavailable") {
 		headers.push(summary(t("catalog.storageUnavailable"), t("catalog.retryLocalStorage"), "refresh-catalog-sync-state"));

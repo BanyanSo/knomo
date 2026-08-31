@@ -89,7 +89,7 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 		? [header.action.action]
 		: []), ["open-catalog-settings"]);
 	const text = headers.flatMap((header) => header.type === "summary" ? [header.text] : []).join("\n");
-	assert.match(text, /legacy data/u);
+	assert.match(text, /Older data/u);
 	assert.doesNotMatch(text, /Local history is still building/u);
 	assert.doesNotMatch(text, /Waiting for monthly memo sync/u);
 	assert.doesNotMatch(text, /Creation, adoption, and monthly writes are paused/u);
@@ -209,4 +209,22 @@ test("跨设备设置冲突或不可读取时在前台给出对应操作", () =>
 		status: { ...base, sharedConfiguration: "missing" },
 		coverage: completeCoverage,
 	}), []);
+});
+
+test("原有设置无法读取时只显示设置恢复入口", () => {
+	const headers = getCatalogReadStatusHeaders({
+		status: {
+			content: "unavailable",
+			catalog: "degraded",
+			identity: "conflicted",
+			settings: "unavailable",
+			projection: "failed",
+			migration: "unavailable",
+		},
+		coverage: completeCoverage,
+	});
+
+	assert.equal(headers.length, 1);
+	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "open-catalog-settings");
+	assert.doesNotMatch(headers[0]?.type === "summary" ? headers[0].text : "", /data\.json|Catalog|Identity/u);
 });

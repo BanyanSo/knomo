@@ -13,6 +13,7 @@ import type {
 import type { IdentityLedgerStatus } from "./identityLedger";
 import type { KnomoSharedConfigStatus } from "./knomoConfig";
 import type { LegacyIdentityImportStatus } from "./legacyMigration";
+import type { KnomoSettingsLoadStatus } from "./settings";
 
 export type CatalogReadState = "ready" | "history_building" | "storage_unavailable";
 export type CatalogContentState = "ready" | "scanning" | "unavailable";
@@ -23,6 +24,7 @@ export type MonthlyProjectionState = "ready" | "stale" | "failed";
 export type LegacyMigrationState = "none" | "attention" | "unavailable";
 
 export interface CatalogReadStatus {
+	settings?: KnomoSettingsLoadStatus;
 	content: CatalogContentState;
 	catalog: CatalogState;
 	identity: CatalogIdentityState;
@@ -33,6 +35,7 @@ export interface CatalogReadStatus {
 }
 
 export interface KnomoRuntimeAttentionSnapshot {
+	settings?: KnomoSettingsLoadStatus;
 	catalogLifecycle: CatalogStoreLifecycle;
 	identity: IdentityLedgerStatus;
 	sharedConfiguration: KnomoSharedConfigStatus;
@@ -41,6 +44,7 @@ export interface KnomoRuntimeAttentionSnapshot {
 }
 
 export interface KnomoRuntimeSnapshot {
+	settings?: KnomoSettingsLoadStatus;
 	catalog: {
 		coverage: CatalogCoverage;
 		lifecycle: CatalogStoreLifecycle;

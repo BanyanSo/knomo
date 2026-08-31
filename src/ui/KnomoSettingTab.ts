@@ -20,6 +20,7 @@ import type { CatalogReadService } from "../services/CatalogReadService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
 import type { LegacyIndexMigrationService } from "../services/LegacyIndexMigrationService";
+import type { LegacyMigrationAcknowledgementService } from "../services/LegacyMigrationAcknowledgementService";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart } from "../utils/date";
 import { normalizeVaultPath } from "../utils/path";
@@ -46,7 +47,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private timeBuoyToggleRunning = false;
 	private dataRootEditing = false;
 	private dataRootDraft: string | null = null;
-	private legacyDiagnosticsExpanded = false;
 	private settingsVisible = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
@@ -63,6 +63,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly knomoDataRootMigrationService: KnomoDataRootMigrationService,
 		private readonly knomoSharedConfigService: KnomoSharedConfigService,
 		private readonly legacyIndexMigrationService: LegacyIndexMigrationService,
+		private readonly legacyMigrationAcknowledgementService: LegacyMigrationAcknowledgementService,
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 		private readonly retryRuntimeState: () => Promise<void>,
 	) {
@@ -293,6 +294,25 @@ export class KnomoSettingTab extends PluginSettingTab {
 				void this.toggleMonthlyMemosExcludeRule(value, toggle, statusEl);
 			});
 		});
+		if (this.settingsService.hasMonthlyExcludeInitializationFailure()) {
+			this.setExcludeStatus(statusEl, t("settings.excludeMonthly.autoFailed"), true);
+			setting.addButton((button) => {
+				button.setButtonText(t("settings.excludeMonthly.retry"));
+				button.onClick(() => { void this.retryMonthlyExcludeInitialization(button); });
+			});
+		}
+	}
+
+	private async retryMonthlyExcludeInitialization(
+		button: { setDisabled(disabled: boolean): void },
+	): Promise<void> {
+		button.setDisabled(true);
+		try {
+			await this.settingsService.initializeMonthlyExcludeDefault();
+		} finally {
+			button.setDisabled(false);
+			this.refreshSettingTab();
+		}
 	}
 
 	private renderMonthlyFileFormatSetting(setting: Setting): void {
@@ -454,58 +474,62 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 	}
 
+	private renderSettingsAttentionSetting(setting: Setting): void {
+		setting
+			.setName(t("settings.attention.settings.name"))
+			.setDesc(t("settings.attention.settings.desc"))
+			.addButton((button) => {
+				button.setButtonText(t("settings.attention.settings.retry"));
+				button.onClick(() => {
+					void this.runRuntimeRetry(button, t("settings.attention.settings.retry"));
+				});
+			});
+	}
+
 	private renderLegacyIdentityImport(setting: Setting): void {
 		const report = this.legacyIndexMigrationService.getReport();
 		setting
 			.setName(t("settings.legacyIdentityImport.name"))
-			.setDesc(t("settings.legacyIdentityImport.desc"));
-		const statusEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-		statusEl.setAttr("role", "status");
-		statusEl.setAttr("aria-live", "polite");
-		statusEl.setAttr("aria-atomic", "true");
-		statusEl.setAttr("tabindex", "-1");
-		if (report.diagnostics.length > 0) {
+			.setDesc(this.getLegacyIdentityImportDescription());
+		if (report.status === "partial") {
 			setting.addButton((button) => {
-				button.setButtonText(this.legacyDiagnosticsExpanded
-					? t("settings.legacyIdentityImport.hideDetails")
-					: t("settings.legacyIdentityImport.showDetails"));
+				button.setButtonText(t("settings.legacyIdentityImport.acknowledge"));
 				button.onClick(() => {
-					this.legacyDiagnosticsExpanded = !this.legacyDiagnosticsExpanded;
-					this.refreshSettingTab();
+					void this.acknowledgeLegacyMigration(button);
 				});
 			});
-		}
-		if (report.status === "unavailable") {
+		} else {
 			setting.addButton((button) => {
 				button.setButtonText(t("settings.attention.checkAgain"));
 				button.onClick(() => { void this.runRuntimeRetry(button); });
 			});
 		}
-		this.refreshLegacyIdentityImport(statusEl, this.legacyDiagnosticsExpanded);
 	}
 
-	private refreshLegacyIdentityImport(statusEl: HTMLElement, showDiagnostics: boolean): void {
-		statusEl.empty();
+	private getLegacyIdentityImportDescription(): string {
 		const report = this.legacyIndexMigrationService.getReport();
 		const messageKey = report.status === "partial"
 			? "settings.legacyIdentityImport.partial"
 			: report.status === "attention"
 				? "settings.legacyIdentityImport.attention"
 				: "settings.legacyIdentityImport.unavailable";
-		statusEl.setText(t(messageKey, {
-			imported: report.importedMemoIds.length,
-			skipped: report.skippedMemoIds.length,
-		}));
-		if (!showDiagnostics) return;
-		for (const item of report.diagnostics) {
-			statusEl.createDiv({
-				cls: "knomo-setting-help",
-				text: t("settings.legacyIdentityImport.diagnostic", {
-					code: item.code,
-					path: item.sourcePath ?? t("settings.legacyIdentityImport.unknownPath"),
-					detail: item.detail,
-				}),
-			});
+		return t(messageKey);
+	}
+
+	private async acknowledgeLegacyMigration(
+		button: { setDisabled(disabled: boolean): void },
+	): Promise<void> {
+		button.setDisabled(true);
+		try {
+			const acknowledged = await this.legacyMigrationAcknowledgementService.acknowledge(
+				this.legacyIndexMigrationService.getReport(),
+			);
+			if (!acknowledged) throw new Error("Legacy migration report is not acknowledgeable.");
+		} catch {
+			new Notice(t("settings.legacyIdentityImport.acknowledgeFailed"));
+		} finally {
+			button.setDisabled(false);
+			this.refreshSettingTab();
 		}
 	}
 
@@ -917,6 +941,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private async runRuntimeRetry(
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
+		idleButtonText = t("settings.attention.checkAgain"),
 	): Promise<void> {
 		button.setDisabled(true);
 		button.setButtonText(t("settings.attention.checking"));
@@ -927,7 +952,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			new Notice(t("settings.attention.retryFailed"));
 		} finally {
 			button.setDisabled(false);
-			button.setButtonText(t("settings.attention.checkAgain"));
+			button.setButtonText(idleButtonText);
 			this.refreshSettingTab();
 		}
 	}
@@ -962,14 +987,19 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private getAttentionKinds(): KnomoSettingAttentionKind[] {
+		const legacyReport = this.legacyIndexMigrationService.getReport();
 		return getKnomoSettingAttentionKinds(
 			this.catalogReadService.getRuntimeAttentionSnapshot(),
 			this.startupBootstrapService?.getSnapshot().status ?? null,
+			{
+				legacyMigrationAcknowledged: this.legacyMigrationAcknowledgementService.isAcknowledged(legacyReport),
+			},
 		);
 	}
 
 	private getAttentionName(kind: KnomoSettingAttentionKind): string {
 		switch (kind) {
+			case "settings": return t("settings.attention.settings.name");
 			case "shared-config": return t("settings.sharedConfig.name");
 			case "catalog": return t("settings.attention.catalog.name");
 			case "identity": return t("settings.attention.identity.name");
@@ -980,6 +1010,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private getAttentionDescription(kind: KnomoSettingAttentionKind): string {
 		switch (kind) {
+			case "settings": return t("settings.attention.settings.desc");
 			case "shared-config": return this.getSharedConfigDescription();
 			case "catalog": return t("settings.attention.catalog.desc");
 			case "identity": return t(this.catalogReadService.getRuntimeAttentionSnapshot().identity === "conflicted"
@@ -988,12 +1019,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 			case "monthly": return t("settings.attention.monthly.desc", {
 				periods: this.monthlyProjectionCoordinator.getFailedPeriods().join(", ") || "—",
 			});
-			case "legacy": return t("settings.legacyIdentityImport.desc");
+			case "legacy": return this.getLegacyIdentityImportDescription();
 		}
 	}
 
 	private renderAttentionSetting(kind: KnomoSettingAttentionKind, setting: Setting): void {
 		switch (kind) {
+			case "settings": this.renderSettingsAttentionSetting(setting); break;
 			case "shared-config": this.renderSharedConfigSetting(setting); break;
 			case "catalog": this.renderCatalogAttentionSetting(setting); break;
 			case "identity": this.renderIdentityAttentionSetting(setting); break;

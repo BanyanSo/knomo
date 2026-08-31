@@ -1497,6 +1497,15 @@ export class KnomoView extends ItemView {
 				return false;
 			}
 			this.applyCatalogMemoLoad(load);
+			if (!this.hasCommittedCatalogDesktopQuery
+				&& load.readState === "history_building"
+				&& getCatalogReadStatusHeaders({ status: load.status, coverage: load.coverage }).length === 0) {
+				this.memos = [];
+				this.cardFlowError = null;
+				this.filteredMemosCache = null;
+				this.invalidateMemoSearchCache();
+				return true;
+			}
 			this.memos = load.memos;
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
@@ -4136,7 +4145,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private shouldDeferCardFlowForAllMemos(): boolean {
-		return false;
+		return !this.hasCommittedCatalogDesktopQuery && this.catalogReadState === "history_building";
 	}
 
 	private async ensureCurrentMemoDataRequirement(): Promise<boolean> {

@@ -42,6 +42,33 @@ test("Catalog observation 在 Identity Ledger 关系到达后原地获得 memoId
 	assert.equal(after.identityRevision, "identity-1");
 });
 
+test("首次安装身份导入期间保留浏览编辑但暂停无身份直删", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "existing memo");
+	await seedCatalog(catalog, store, [observation]);
+	let bootstrapStatus: "running" | "completed" = "running";
+	const service = new CatalogReadService({
+		catalog,
+		identityLedger: createIdentityReader().reader,
+		getHistoricalIdentityBootstrapStatus: () => bootstrapStatus,
+	});
+
+	const during = await service.query({ limit: 50 });
+	assert.equal(during.items[0]?.capabilities.markdown.edit, true);
+	assert.equal(during.items[0]?.capabilities.identity.recoverableDelete, "syncing");
+	assert.equal(during.items[0]?.resolved.kind === "observed" && during.items[0].resolved.adoption, "settling");
+
+	bootstrapStatus = "completed";
+	const after = await service.query({ limit: 50 });
+	assert.equal(after.items[0]?.capabilities.identity.recoverableDelete, "absent");
+	assert.equal(after.items[0]?.resolved.kind === "observed" && after.items[0].resolved.adoption, "eligible");
+});
+
 test("已识别 memo 的展示创建时间优先保留 Identity 秒数", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");

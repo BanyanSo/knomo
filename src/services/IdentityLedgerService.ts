@@ -63,6 +63,12 @@ export interface IdentityLedgerServiceOptions {
 	monotonicNow?: () => number;
 }
 
+export interface HistoricalIdentityAdoptionResult {
+	importedEventCount: number;
+	identityRevision: string;
+	memoIds: string[];
+}
+
 export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private readonly sessionWriterId = createIdentityLedgerWriterId();
 	private readonly now: () => Date;
@@ -573,6 +579,67 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			throw new Error("Identity Ledger adoption did not produce a unique binding.");
 		}
 		return resolved.binding;
+	}
+
+	async adoptHistoricalObservations(
+		observations: readonly MemoObservation[],
+		runtime: {
+			cancellationSignal?: AbortSignal;
+			yieldControl?: () => Promise<void>;
+			sliceBudgetMs?: number;
+			now?: () => number;
+		} = {},
+	): Promise<HistoricalIdentityAdoptionResult> {
+		if (this.status !== "ready" && this.status !== "absent") {
+			throw new Error("Historical Identity adoption requires an available Identity Ledger.");
+		}
+		const ordered = [...observations].sort(compareHistoricalObservations);
+		const writerId = await deterministicHistoricalWriterId();
+		const claims: IdentityLedgerClaimEvent[] = [];
+		const expectedMemoIds = new Map<string, string>();
+		for (const observation of ordered) {
+			this.assertWriteAllowed(runtime.cancellationSignal);
+			const state = this.resolveObservationState(observation);
+			if (state.kind === "identified") {
+				expectedMemoIds.set(observationEvidenceKey(toObservationEvidence(observation)), state.binding.memoId);
+				continue;
+			}
+			if (state.kind === "conflicted") {
+				throw new Error("Historical Identity adoption does not resolve conflicted observations.");
+			}
+			const evidence = toObservationEvidence(observation);
+			const evidenceKey = observationEvidenceKey(evidence);
+			const memoId = await deterministicHistoricalMemoId(evidence);
+			const eventId = await deterministicHistoricalEventId(memoId, evidence);
+			expectedMemoIds.set(evidenceKey, memoId);
+			claims.push({
+				eventId,
+				writerId,
+				memoId,
+				type: "claim",
+				baseBindingId: null,
+				occurredAt: historicalObservationSortingTime(evidence),
+				evidence: { observation: evidence, createIntentEventId: null },
+			});
+		}
+		const importedEventCount = await this.importVerifiedLegacyEvents(claims, runtime);
+		for (const observation of ordered) {
+			const evidenceKey = observationEvidenceKey(toObservationEvidence(observation));
+			const expectedMemoId = expectedMemoIds.get(evidenceKey);
+			const resolved = this.resolveObservationState(observation);
+			if (expectedMemoId === undefined || resolved.kind !== "identified" || resolved.binding.memoId !== expectedMemoId) {
+				throw new Error("Historical Identity adoption did not produce one stable identity per observation.");
+			}
+		}
+		const identityRevision = this.snapshot.revision;
+		if (claims.length > 0 && !await this.verifyPersistedSnapshot(identityRevision)) {
+			throw new Error("Historical Identity adoption could not verify persisted events.");
+		}
+		return {
+			importedEventCount,
+			identityRevision: this.snapshot.revision,
+			memoIds: [...new Set(expectedMemoIds.values())].sort(),
+		};
 	}
 
 	async repairConflict(memoId: string, observation: MemoObservation): Promise<IdentityLedgerBinding> {
@@ -1647,6 +1714,46 @@ function cloneBinding(binding: IdentityLedgerBinding): IdentityLedgerBinding {
 
 function observationEvidenceKey(evidence: IdentityLedgerObservationEvidence): string {
 	return canonicalIdentityLedgerJson(evidence);
+}
+
+function compareHistoricalObservations(left: MemoObservation, right: MemoObservation): number {
+	return normalizePath(left.sourcePath).localeCompare(normalizePath(right.sourcePath))
+		|| left.startLine - right.startLine
+		|| left.endLine - right.endLine
+		|| left.rawBlockHash.localeCompare(right.rawBlockHash);
+}
+
+async function deterministicHistoricalWriterId(): Promise<string> {
+	return `w_${(await sha256IdentityLedgerText("historical-daily-bootstrap-writer")).slice(0, 32)}`;
+}
+
+async function deterministicHistoricalMemoId(evidence: IdentityLedgerObservationEvidence): Promise<string> {
+	const digest = await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
+		domain: "historical-daily-bootstrap-memo",
+		evidence,
+	}));
+	return createIdentityLedgerMemoId(new Date(historicalObservationSortingTime(evidence)), (target) => {
+		for (let index = 0; index < target.length; index += 1) {
+			target[index] = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
+		}
+	});
+}
+
+async function deterministicHistoricalEventId(
+	memoId: string,
+	evidence: IdentityLedgerObservationEvidence,
+): Promise<string> {
+	return `e_${(await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
+		domain: "historical-daily-bootstrap-claim",
+		memoId,
+		evidence,
+	}))).slice(0, 32)}`;
+}
+
+// 历史 Daily 不含时区；该值仅用于跨设备一致的排序和 UUIDv7 前缀，不能表示真实发生时刻。
+function historicalObservationSortingTime(evidence: IdentityLedgerObservationEvidence): string {
+	const time = evidence.time.length === 5 ? `${evidence.time}:00` : evidence.time;
+	return `${evidence.logicalDate}T${time}.000Z`;
 }
 
 function mergeEnvelopes(

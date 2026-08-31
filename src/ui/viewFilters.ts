@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CatalogRecordStatsFilter } from "../types/catalogView";
+import { parseMemoCalendarDate } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { hasMemoReference } from "../utils/references";
@@ -427,28 +428,8 @@ export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfi
 }
 
 export function parseLocalDateText(value: string): Date | null {
-	const match = value.match(/(?:^|[^\d])(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
-	if (match === null) {
-		return null;
-	}
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	const hours = match[4] === undefined ? 0 : Number(match[4]);
-	const minutes = match[5] === undefined ? 0 : Number(match[5]);
-	const seconds = match[6] === undefined ? 0 : Number(match[6]);
-	const date = new Date(year, month - 1, day, hours, minutes, seconds, 0);
-	if (
-		date.getFullYear() !== year ||
-		date.getMonth() !== month - 1 ||
-		date.getDate() !== day ||
-		date.getHours() !== hours ||
-		date.getMinutes() !== minutes ||
-		date.getSeconds() !== seconds
-	) {
-		return null;
-	}
-	return date;
+	const match = value.match(/(?:^|[^\d])(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?)/u);
+	return match === null ? null : parseMemoCalendarDate(match[1]);
 }
 
 export function matchesScope(memo: MemoRecord, filter: ScopeFilter, todayDate = new Date()): boolean {

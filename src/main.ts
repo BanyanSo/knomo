@@ -22,6 +22,10 @@ import { MonthlyProjectionInputBuilder } from "./services/MonthlyProjectionInput
 import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore";
 import { createIdentityLedgerWriterId, getIdentityLedgerRootPath } from "./services/IdentityLedgerProtocol";
 import { IdentityLedgerService } from "./services/IdentityLedgerService";
+import {
+	HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
+	HistoricalIdentityBootstrapService,
+} from "./services/HistoricalIdentityBootstrapService";
 import { KnomoDataRootMigrationService } from "./services/KnomoDataRootMigrationService";
 import {
 	buildKnomoSharedConfig,
@@ -206,6 +210,7 @@ export default class KnomoPlugin extends Plugin {
 				])));
 			}
 		};
+		let historicalIdentityBootstrapService: HistoricalIdentityBootstrapService | null = null;
 
 		const projectionInputBuilder = new MonthlyProjectionInputBuilder(
 			this.app,
@@ -257,10 +262,14 @@ export default class KnomoPlugin extends Plugin {
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [
 					LEGACY_MIGRATION_COMPLETION_META_KEY,
+					HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
 					MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
 				],
 				onCatalogSettled: async () => {
-					await this.legacyIndexMigrationService?.run();
+					const legacyReport = await this.legacyIndexMigrationService?.run();
+					if (legacyReport !== undefined) {
+						await historicalIdentityBootstrapService?.run(legacyReport.status);
+					}
 					await reconcileIdentityLedger();
 					await this.monthlyProjectionCoordinator?.handleCatalogSettled();
 					await this.queueRefreshOpenViews();
@@ -310,6 +319,7 @@ export default class KnomoPlugin extends Plugin {
 				getMemoTimeFormat: () => this.settingsService.getSettings().memoTimeFormat,
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
+				getHistoricalIdentityBootstrapStatus: () => historicalIdentityBootstrapService?.getStatus() ?? "idle",
 				getSharedConfigurationStatus: () => knomoSharedConfigService.getStatus(),
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
 			},
@@ -346,6 +356,17 @@ export default class KnomoPlugin extends Plugin {
 				workQueue: lowPriorityWorkQueue,
 			},
 		);
+		historicalIdentityBootstrapService = new HistoricalIdentityBootstrapService(
+			identityLedgerService,
+			{
+				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
+				getCatalogLifecycle: () => this.memoCatalogService!.getStore().getLifecycle(),
+				getObservationBatches: loadObservationBatches,
+				checkpointStore: this.memoCatalogService.getStore(),
+				workQueue: lowPriorityWorkQueue,
+				onStateChanged: () => this.queueRefreshOpenViews(),
+			},
+		);
 
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
@@ -356,7 +377,10 @@ export default class KnomoPlugin extends Plugin {
 			knomoSharedConfigService.start(this, async () => {
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-				await this.legacyIndexMigrationService?.run();
+				const legacyReport = await this.legacyIndexMigrationService?.run();
+				if (legacyReport !== undefined) {
+					await historicalIdentityBootstrapService?.run(legacyReport.status);
+				}
 				await this.queueRefreshOpenViews();
 			});
 		});
@@ -392,7 +416,11 @@ export default class KnomoPlugin extends Plugin {
 				await this.catalogIndexCoordinator?.refreshLocalCatalog();
 			}
 			if (settingsRecovered) await this.catalogIndexCoordinator?.refreshLocalCatalog();
-			await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
+			await historicalIdentityBootstrapService?.initializeEligibility();
+			const legacyReport = await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
+			if (legacyReport !== undefined) {
+				await historicalIdentityBootstrapService?.run(legacyReport.status);
+			}
 			await reconcileIdentityLedger();
 		};
 		this.registerView(
@@ -472,6 +500,7 @@ export default class KnomoPlugin extends Plugin {
 					path: this.settingsService.getSettings().knomoDataRoot,
 				}));
 			}
+			await historicalIdentityBootstrapService?.initializeEligibility();
 			await this.catalogIndexCoordinator?.initialize();
 			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);

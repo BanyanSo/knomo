@@ -103,25 +103,25 @@ test("matches search date filters against a fixed day", () => {
 });
 
 test("matches record statistics drill-down filters with local date and hour semantics", () => {
-	const morning = makeMemo("morning", { createdAt: "2026-06-08T09:15:00+08:00" });
-	const late = makeMemo("late", { createdAt: "2026-06-30T23:45:00+09:00" });
-	const nextMonth = makeMemo("next-month", { createdAt: "2026-07-01T09:00:00+08:00" });
-	const inactive = makeMemo("inactive", { createdAt: "2026-06-09T09:00:00+08:00" });
+	const morning = makeMemo("morning", { createdAt: "2026-06-08T09:15:00" });
+	const late = makeMemo("late", { createdAt: "2026-06-30T23:45:00" });
+	const nextMonth = makeMemo("next-month", { createdAt: "2026-07-01T09:00:00" });
+	const inactive = makeMemo("inactive", { createdAt: "2026-06-09T09:00:00" });
 	inactive.status = "deleted";
 	const referenced = makeMemo("referenced", {
-		createdAt: "2026-06-09T09:00:00+08:00",
+		createdAt: "2026-06-09T09:00:00",
 		sourceMemoId: "source",
 	});
 	const tagged = makeMemo("tagged", {
-		createdAt: "2026-06-10T09:00:00+08:00",
+		createdAt: "2026-06-10T09:00:00",
 		tags: ["Work"],
 	});
 	const childTagged = makeMemo("child-tagged", {
-		createdAt: "2026-06-10T10:00:00+08:00",
+		createdAt: "2026-06-10T10:00:00",
 		tags: ["work/project"],
 	});
 	const imaged = makeMemo("imaged", {
-		createdAt: "2026-06-11T09:00:00+08:00",
+		createdAt: "2026-06-11T09:00:00",
 		images: [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }],
 	});
 
@@ -247,6 +247,31 @@ test("parses memo local date from createdAt and falls back to the Daily path dat
 	assert.equal(dailyDate?.getHours(), 0);
 	assert.equal(dailyDate?.getMinutes(), 0);
 	assert.equal(dailyDate?.getSeconds(), 0);
+});
+
+test("converts zoned creation time to the current device calendar semantics", () => {
+	const originalTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const memo = makeMemo("zoned", { createdAt: "2026-08-31T22:04:15.986Z" });
+		const date = parseMemoLocalDate(memo, disabledDailyStatus());
+
+		assert.equal(date?.getFullYear(), 2026);
+		assert.equal(date?.getMonth(), 8);
+		assert.equal(date?.getDate(), 1);
+		assert.equal(date?.getHours(), 6);
+		assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-09-01" }), true);
+		assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-08-31" }), false);
+		assert.equal(matchesRecordStatsSearchFilter(memo, {
+			type: "hour",
+			startDate: "2026-09-01",
+			endDateExclusive: "2026-09-02",
+			hour: 6,
+		}), true);
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
 });
 
 test("builds memo search text and all-memo loading flags", () => {

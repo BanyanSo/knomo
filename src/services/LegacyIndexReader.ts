@@ -13,6 +13,7 @@ import type {
 	LegacyPendingMemo,
 	LegacyReviewState,
 } from "../types/legacyIndex";
+import { formatDatePart, formatTimePart, parseMemoCalendarDate } from "../utils/date";
 import { hashMemoContent, hashText } from "../utils/hash";
 import { extractTrailingBlockId, findLastEffectiveLineIndex, splitMarkdownLines } from "../utils/markdown";
 import { isRecord } from "../utils/object";
@@ -28,7 +29,6 @@ const LEGACY_MEMO_ID_PATTERN = /^\d{16}$/u;
 const HASH_PATTERN = /^fnv1a-[a-f0-9]{8}$/u;
 const DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/u;
 const PERIOD_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])$/u;
-const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/u;
 const MAX_LEGACY_REVIEW_COUNT = 1000;
 
 interface LegacyArtifact {
@@ -734,13 +734,15 @@ function isEmptyArtifact(artifact: LegacyArtifact): boolean {
 function readLogicalDate(path: string, createdAt: string): string {
 	const fromPath = /(?:^|\/)(\d{4}-\d{2}-\d{2})(?:\.[^/]*)?$/u.exec(path)?.[1];
 	if (fromPath !== undefined && DATE_PATTERN.test(fromPath)) return fromPath;
-	return createdAt.slice(0, 10);
+	const date = parseMemoCalendarDate(createdAt);
+	return date === null ? createdAt.slice(0, 10) : formatDatePart(date);
 }
 
 function readMemoTime(rawBlock: string, createdAt: string): string {
-	const value = /^\s*-\s+((?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)(?:\s|$)/u.exec(rawBlock)?.[1]
-		?? createdAt.slice(11, 19);
-	return TIME_PATTERN.test(value) ? value : "00:00:00";
+	const value = /^\s*-\s+((?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)(?:\s|$)/u.exec(rawBlock)?.[1];
+	if (value !== undefined) return value;
+	const date = parseMemoCalendarDate(createdAt);
+	return date === null ? "00:00:00" : formatTimePart(date);
 }
 
 function parseLegacyMemoIdOrNull(value: unknown): string | null {

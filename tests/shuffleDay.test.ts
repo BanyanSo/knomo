@@ -96,6 +96,27 @@ test("sorts shuffle day memos by valid created time and builds visible stats", (
 	assert.equal(stats.lastMemoTime, "11:00");
 });
 
+test("groups zoned memos in the current device calendar day", () => {
+	const originalTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const memo = makeMemo("utc", "2026-06-24T22:30:00.000Z");
+		const result = selectShuffleDay([memo], {
+			today: new Date(2026, 6, 2),
+			now: new Date(2026, 6, 2, 10),
+			random: makeRandom([0, 0]),
+		});
+
+		assert.equal(result.status, "ready");
+		if (result.status !== "ready") return;
+		assert.equal(result.selectedDate, "2026-06-25");
+		assert.equal(result.stats.firstMemoTime, "06:30");
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
+});
+
 test("weightedPick ignores invalid weights", () => {
 	assert.equal(weightedPick([
 		{ item: "ignored", weight: Number.NaN },

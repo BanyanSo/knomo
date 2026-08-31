@@ -293,7 +293,7 @@ export const zhCN = {
 	"notice.refreshFailedCount": "刷新失败：{{count}} 个文件未同步",
 	"notice.refreshComplete": "刷新完成：新增 {{created}} 条，更新 {{updated}} 条，删除 {{deleted}} 条",
 	"notice.upToDate": "已是最新",
-	"confirm.deleteMemoPermanently": "当前共享身份数据不可用。继续后将直接删除 Daily 中的这条 Memo，且无法从 Knomo 回收站恢复。确认继续吗？",
+	"confirm.deleteMemoPermanently": "这条 Memo 来自已有 Daily，尚未建立 Knomo 身份。继续删除会直接从 Daily 移除，且不会进入 Knomo 回收站。确定继续吗？",
 	"confirm.purgeMemo": "永久清理后，将无法再从 Knomo 恢复这条 Memo。同步服务的历史版本和你的备份中仍可能保留副本。确认继续吗？",
 	"error.operationFailed": "操作失败",
 	"error.saveFailed": "保存失败",

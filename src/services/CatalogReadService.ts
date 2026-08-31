@@ -35,6 +35,7 @@ import type {
 	IdentityLedgerSnapshot,
 } from "../types/identityLedger";
 import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
+import type { HistoricalIdentityBootstrapStatus } from "./HistoricalIdentityBootstrapService";
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
@@ -58,6 +59,7 @@ export interface CatalogReadServiceOptions {
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
 	getLegacyImportStatus?: () => LegacyIdentityImportStatus;
+	getHistoricalIdentityBootstrapStatus?: () => HistoricalIdentityBootstrapStatus;
 	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	now?: () => Date;
@@ -522,7 +524,12 @@ export class CatalogReadService {
 			return createConflictedMemo(observation, state.memoIds, this.options.identityLedger.getRevision(), repairable);
 		}
 		const status = this.options.identityLedger.getStatus();
-		const adoption = status === "ready" || status === "absent" ? "eligible" : "settling";
+		const bootstrapStatus = this.options.getHistoricalIdentityBootstrapStatus?.() ?? "completed";
+		const bootstrapPending = bootstrapStatus === "pending" || bootstrapStatus === "running"
+			|| (bootstrapStatus === "idle" && status === "absent");
+		const adoption = !bootstrapPending && (status === "ready" || status === "absent")
+			? "eligible"
+			: "settling";
 		return {
 			kind: "observed",
 			identityHandle: null,

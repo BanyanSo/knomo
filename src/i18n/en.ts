@@ -295,7 +295,7 @@ export const en: Record<TranslationKey, string> = {
 	"notice.refreshFailedCount": "Refresh failed: {{count}} files did not sync",
 	"notice.refreshComplete": "Refresh complete: {{created}} added, {{updated}} updated, {{deleted}} deleted",
 	"notice.upToDate": "Already up to date",
-	"confirm.deleteMemoPermanently": "Shared identity data is unavailable. Continuing removes this memo directly from its Daily note, and it cannot be restored from Knomo trash. Continue?",
+	"confirm.deleteMemoPermanently": "This memo came from an existing Daily note and does not yet have a Knomo identity. Continuing removes it directly from Daily, so it will not appear in Knomo trash. Continue?",
 	"confirm.purgeMemo": "After permanent deletion, you cannot restore this memo from Knomo. Sync history and your backups may still retain copies. Continue?",
 	"error.operationFailed": "Operation failed",
 	"error.saveFailed": "Save failed",

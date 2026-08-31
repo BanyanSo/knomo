@@ -30,6 +30,7 @@ test("生产源码只暴露无版本 Catalog 模块和存储名称", async () =>
 		"MemoCommandService",
 		"LegacyIndexReader",
 		"LegacyIndexMigrationService",
+		"HistoricalIdentityBootstrapService",
 	]) {
 		assert.equal(main.includes(serviceName), true, `main.ts should wire ${serviceName}.`);
 	}
@@ -129,8 +130,9 @@ test("Monthly 复用按月 Daily inventory，并与 Catalog、旧版数据升级
 	const monthlyCoordinator = fs.readFileSync("src/services/MonthlyProjectionCoordinator.ts", "utf8");
 	const catalogCoordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
 	const legacyMigration = fs.readFileSync("src/services/LegacyIndexMigrationService.ts", "utf8");
+	const historicalIdentityBootstrap = fs.readFileSync("src/services/HistoricalIdentityBootstrapService.ts", "utf8");
 	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
-	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 3);
+	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 4);
 	assert.equal(main.indexOf("catalogIndexCoordinator?.initialize()")
 		< main.indexOf("monthlyProjectionCoordinator?.initialize()"), true);
 	assert.equal(monthlyInput.includes("dailyInventory.listPeriod(period)"), true);
@@ -143,6 +145,7 @@ test("Monthly 复用按月 Daily inventory，并与 Catalog、旧版数据升级
 	assert.equal(saveDataRoot.includes("rebuildPeriod"), false);
 	assert.equal(catalogCoordinator.includes("runLowPriorityTask(() => this.drainSlice())"), true);
 	assert.equal(legacyMigration.includes("runLowPriorityTask(() => this.runOnce"), true);
+	assert.equal(historicalIdentityBootstrap.includes("runLowPriorityTask(() => this.runOnce"), true);
 });
 
 test("Identity 与共享配置监听等待 layout ready，启动后续阶段遵守卸载取消信号", () => {

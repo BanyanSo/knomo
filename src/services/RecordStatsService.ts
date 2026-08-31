@@ -1,4 +1,5 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import { parseMemoCalendarDate } from "../utils/date";
 import { isSupportedMemoImage } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import { hasMemoReference } from "../utils/references";
@@ -455,44 +456,14 @@ function listDateKeys(start: Date, endExclusive: Date): string[] {
 }
 
 function parseLocalMemoTimestamp(value: string): LocalMemoTimestamp | null {
-	const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?$/);
-	if (match === null) {
-		return null;
-	}
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	const hour = Number(match[4]);
-	const minute = Number(match[5]);
-	const second = match[6] === undefined ? 0 : Number(match[6]);
-	const maxDay = getDaysInMonth(year, month);
-	const timestamp = parseMemoInstant(value);
-	if (
-		month < 1 || month > 12 ||
-		day < 1 || day > maxDay ||
-		hour < 0 || hour > 23 ||
-		minute < 0 || minute > 59 ||
-		second < 0 || second > 59 ||
-		!Number.isFinite(timestamp)
-	) {
-		return null;
-	}
-	return { year, month, day, hour };
-}
-
-function parseMemoInstant(value: string): number {
-	return Date.parse(value);
-}
-
-function getDaysInMonth(year: number, month: number): number {
-	if (month === 2) {
-		return isLeapYear(year) ? 29 : 28;
-	}
-	return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
-}
-
-function isLeapYear(year: number): boolean {
-	return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+	const date = parseMemoCalendarDate(value);
+	if (date === null) return null;
+	return {
+		year: date.getFullYear(),
+		month: date.getMonth() + 1,
+		day: date.getDate(),
+		hour: date.getHours(),
+	};
 }
 
 function formatDateKey(year: number, month: number, day: number): string {

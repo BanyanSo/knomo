@@ -110,18 +110,27 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	})).length, selected?.activeHours[23].count);
 });
 
-test("uses createdAt wall-clock date and hour", async () => {
-	const service = new RecordStatsService();
-	const memos = [
-		makeMemo("later-instant", "2026-06-08T01:00:00.000+08:00", "a"),
-		makeMemo("earlier-instant", "2026-06-08T00:30:00.000+09:00", "b"),
-	];
+test("converts zoned createdAt to the current device calendar date and hour", async () => {
+	const originalTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const service = new RecordStatsService();
+		const memos = [
+			makeMemo("same-zone", "2026-06-08T01:00:00.000+08:00", "a"),
+			makeMemo("previous-day", "2026-06-08T00:30:00.000+09:00", "b"),
+		];
 
-	await service.prepare(memos, async () => {});
-	const selected = service.select("week", new Date(2026, 5, 8));
-	assert.equal(selected?.range.memoCount, 2);
-	assert.equal(selected?.activeHours[0].count, 1);
-	assert.equal(selected?.activeHours[1].count, 1);
+		await service.prepare(memos, async () => {});
+		const currentWeek = service.select("week", new Date(2026, 5, 8));
+		const previousWeek = service.select("week", new Date(2026, 5, 1));
+		assert.equal(currentWeek?.range.memoCount, 1);
+		assert.equal(currentWeek?.activeHours[1].count, 1);
+		assert.equal(previousWeek?.range.memoCount, 1);
+		assert.equal(previousWeek?.activeHours[23].count, 1);
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
 });
 
 test("counts historical references recoverable from a Knomo memoId alias", async () => {

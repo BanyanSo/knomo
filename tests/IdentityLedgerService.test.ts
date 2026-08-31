@@ -84,6 +84,86 @@ test("插件卸载会取消 active Identity 刷新，旧结果不得提交或通
 	assert.equal(notificationCount, 0);
 });
 
+test("首次安装会为已有 Daily observations 生成确定且互不合并的 memoId", async () => {
+	const dailyPath = "Daily/2026-08-22.md";
+	const dailyContent = "## Memos\n- 09:00 相同正文\n- 09:00 相同正文\n";
+	const observations = [
+		makeDuplicateObservation("a".repeat(64), 1),
+		makeDuplicateObservation("a".repeat(64), 2),
+	];
+	const firstVault = await createLedgerVault({ [dailyPath]: dailyContent });
+	const secondVault = await createLedgerVault({ [dailyPath]: dailyContent });
+	const first = createService(firstVault, WRITER_A, [], []);
+	const second = createService(secondVault, WRITER_B, [], []);
+	await first.initialize();
+	await second.initialize();
+
+	const firstResult = await first.adoptHistoricalObservations(observations);
+	const secondResult = await second.adoptHistoricalObservations(observations);
+
+	assert.equal(firstResult.importedEventCount, 2);
+	assert.deepEqual(firstResult.memoIds, secondResult.memoIds);
+	assert.equal(new Set(firstResult.memoIds).size, 2);
+	assert.equal(firstResult.memoIds.every((memoId) => /^[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(memoId)), true);
+	assert.equal(firstVault.read(dailyPath), dailyContent);
+	assert.equal(secondVault.read(dailyPath), dailyContent);
+});
+
+test("历史 Daily 使用固定推导排序时间，不受运行设备时区影响", async () => {
+	const observation = {
+		...makeObservation("Daily/2026-09-01.md", "a".repeat(64), 1, "正文"),
+		logicalDate: "2026-09-01",
+		time: "06:04:11",
+	};
+	const originalTimeZone = process.env.TZ;
+	try {
+		process.env.TZ = "Asia/Shanghai";
+		const firstVault = await createLedgerVault();
+		const first = createService(firstVault, WRITER_A, [], []);
+		await first.initialize();
+		const firstResult = await first.adoptHistoricalObservations([observation]);
+
+		process.env.TZ = "America/Los_Angeles";
+		const secondVault = await createLedgerVault();
+		const second = createService(secondVault, WRITER_B, [], []);
+		await second.initialize();
+		const secondResult = await second.adoptHistoricalObservations([observation]);
+
+		const firstClaim = firstVault.paths()
+			.filter((path) => path.endsWith(".jsonl"))
+			.flatMap((path) => (firstVault.read(path) ?? "").trim().split("\n"))
+			.map((line) => JSON.parse(line) as { type: string; occurredAt: string })
+			.find((event) => event.type === "claim");
+		const secondClaim = secondVault.paths()
+			.filter((path) => path.endsWith(".jsonl"))
+			.flatMap((path) => (secondVault.read(path) ?? "").trim().split("\n"))
+			.map((line) => JSON.parse(line) as { type: string; occurredAt: string })
+			.find((event) => event.type === "claim");
+
+		assert.deepEqual(firstResult.memoIds, secondResult.memoIds);
+		assert.equal(firstClaim?.occurredAt, "2026-09-01T06:04:11.000Z");
+		assert.equal(secondClaim?.occurredAt, firstClaim?.occurredAt);
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
+});
+
+test("已有 Daily identity 首装导入可重复执行且不追加事件", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
+	await service.initialize();
+
+	const first = await service.adoptHistoricalObservations([observation]);
+	const second = await service.adoptHistoricalObservations([observation]);
+
+	assert.equal(first.importedEventCount, 1);
+	assert.equal(second.importedEventCount, 0);
+	assert.deepEqual(second.memoIds, first.memoIds);
+	assert.equal(service.getSnapshot().eventCount, 1);
+});
+
 test("P0 第 4 步：memoId 使用 UUIDv7 且不依赖 Vault、正文或 observation evidence", () => {
 	const first = createIdentityLedgerMemoId(
 		new Date("2026-08-22T00:00:00.000Z"),

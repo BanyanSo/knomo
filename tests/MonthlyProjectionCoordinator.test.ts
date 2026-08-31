@@ -691,7 +691,7 @@ function createFixture(
 		isProjectionAllowed,
 		debounceMs: 0,
 		cooldownMs: 0,
-		currentPeriod: options.currentPeriod,
+		currentPeriod: options.currentPeriod ?? (() => "2026-08"),
 		sliceBudgetMs: options.sliceBudgetMs,
 		yieldControl: options.yieldControl ?? (() => Promise.resolve()),
 		workQueue: options.workQueue,

@@ -381,6 +381,38 @@ test("从旧 monthlyMemoFolder 发现来源，并只审计合法空文件和派�
 	].sort());
 });
 
+test("Legacy Index 的 createdAt 兜底按当前设备日历时区读取", async () => {
+	const originalTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const vault = new InMemoryVault({
+			[LEGACY_INDEX_PATH]: JSON.stringify({
+				schemaVersion: 2,
+				period: "2026-08",
+				memos: {
+					[LEGACY_MEMO_A]: legacyMemoRecord({
+						memoId: LEGACY_MEMO_A,
+						createdAt: "2026-08-31T22:04:15.000Z",
+						path: "Daily/legacy-memo.md",
+						rawBlock: "- 正文",
+						content: "正文",
+					}),
+				},
+			}),
+		});
+
+		const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
+		assert.equal(result.kind, "ready");
+		if (result.kind !== "ready") return;
+		const memo = result.snapshot.memos.find((item) => item.memoId === LEGACY_MEMO_A);
+		assert.equal(memo?.evidence.logicalDate, "2026-09-01");
+		assert.equal(memo?.evidence.time, "06:04:15");
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
+});
+
 test("旧备份目录中的额外文件归类为 unknown", async () => {
 	const extraPath = "Knomo/_knomo-system/backups/rebuild-index-20260827-120000/private-note.txt";
 	const vault = new InMemoryVault({

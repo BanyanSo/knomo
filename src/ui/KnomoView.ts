@@ -2226,7 +2226,8 @@ export class KnomoView extends ItemView {
 		for (const statsEl of this.statsEls) {
 			statsEl.empty();
 			statsEl.toggleClass("is-loading", stats === null);
-			statsEl.toggleClass("is-updating", stats !== null && this.libraryIndexesUpdating);
+			statsEl.removeClass("is-updating");
+			statsEl.toggleClass("knomo-sidebar-stats-updating", stats !== null && this.libraryIndexesUpdating);
 			if (stats === null || this.libraryIndexesUpdating) statsEl.setAttr("aria-busy", "true");
 			else statsEl.removeAttribute("aria-busy");
 			renderSidebarStat(statsEl, stats === null ? "—" : String(stats.memoCount), t("stats.notes"));
@@ -3854,9 +3855,11 @@ export class KnomoView extends ItemView {
 	private async refreshCatalogLibraryIndexes(): Promise<void> {
 		const run = ++this.libraryIndexRun;
 		const revision = this.catalogRevision;
-		this.libraryIndexesUpdating = true;
-		this.renderStats();
-		this.renderTags();
+		let committed = false;
+		if (this.librarySummary === null || this.libraryTagFacets === null) {
+			this.renderStats();
+			this.renderTags();
+		}
 		try {
 			const [summary, facets] = await Promise.all([
 				this.getCatalogReadService().getLibrarySummary(),
@@ -3867,6 +3870,7 @@ export class KnomoView extends ItemView {
 				this.librarySummary = summary.value;
 				this.libraryTagFacets = facets.value;
 				this.libraryIndexRevision = revision;
+				committed = true;
 			} else {
 				this.libraryIndexRevision = -1;
 			}
@@ -3875,8 +3879,9 @@ export class KnomoView extends ItemView {
 			this.libraryIndexRevision = -1;
 		} finally {
 			if (run === this.libraryIndexRun) {
-				this.libraryIndexesUpdating = this.catalogCoverage !== null
-					&& !isCompleteCatalogCoverage(this.catalogCoverage);
+				if (committed || (this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage))) {
+					this.libraryIndexesUpdating = false;
+				}
 				this.renderStats();
 				this.renderTags();
 			}
@@ -5601,7 +5606,9 @@ export class KnomoView extends ItemView {
 			: "incomplete";
 		const source = `catalog:${this.catalogRevision}:identity:${this.catalogIdentityRevision}:coverage:${coverage}`;
 		if (this.recordStatsPreparationController.setSourceKey(source)) {
-			this.recordStatsService.invalidate();
+			this.recordStatsService.invalidate(
+				coverage === "incomplete" || this.recordStatsService.getSnapshot().updating,
+			);
 			return true;
 		}
 		return false;
@@ -5629,9 +5636,13 @@ export class KnomoView extends ItemView {
 				this.containerEl.win.setTimeout(resolve, 0);
 			});
 		};
-		const preparation = this.recordStatsService.prepareFromSource(source, (isCurrent) => {
-			return this.catalogReadService.buildRecordStats(yieldToUi, isCurrent);
-		});
+		const showUpdating = (this.catalogCoverage !== null && !isCompleteCatalogCoverage(this.catalogCoverage))
+			|| this.recordStatsService.getSnapshot().updating;
+		const preparation = this.recordStatsService.prepareFromSource(
+			source,
+			(isCurrent) => this.catalogReadService.buildRecordStats(yieldToUi, isCurrent),
+			showUpdating,
+		);
 		if (this.activeNav === "record-stats") {
 			this.renderCardFlow();
 		}

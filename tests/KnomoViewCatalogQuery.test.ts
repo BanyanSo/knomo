@@ -259,6 +259,8 @@ test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效
 	const view = Object.create(KnomoView.prototype) as QueryView;
 	let currentSource = "catalog:uninitialized";
 	let invalidationCount = 0;
+	let recordStatsUpdating = false;
+	const updatingFlags: boolean[] = [];
 	view.catalogRevision = 0;
 	view.catalogIdentityRevision = "";
 	view.catalogCoverage = null;
@@ -272,21 +274,31 @@ test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效
 			return true;
 		},
 	};
-	view.recordStatsService = { invalidate: () => { invalidationCount += 1; } };
+	view.recordStatsService = {
+		invalidate: (showUpdating = true) => {
+			invalidationCount += 1;
+			recordStatsUpdating = showUpdating;
+			updatingFlags.push(showUpdating);
+		},
+		getSnapshot: () => ({ state: "ready", error: null, updating: recordStatsUpdating }),
+	};
 	view.refreshCatalogLibraryIndexes = async () => undefined;
 
 	const load = makeCatalogLoad(7, "identity-1", completeCoverage());
 	view.applyCatalogMemoLoad(load);
 	assert.equal(invalidationCount, 1);
 	assert.equal(currentSource, "catalog:7:identity:identity-1:coverage:complete");
+	assert.deepEqual(updatingFlags, [false]);
 
 	view.applyCatalogMemoLoad({ ...load, memos: [makeMemo("same-source", "2026-08-24T10:00:00")] });
 	assert.equal(invalidationCount, 1);
 
 	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8 });
 	assert.equal(invalidationCount, 2);
+	assert.deepEqual(updatingFlags, [false, false]);
 	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8, identityRevision: "identity-2" });
 	assert.equal(invalidationCount, 3);
+	assert.deepEqual(updatingFlags, [false, false, false]);
 	view.applyCatalogMemoLoad({
 		...load,
 		catalogRevision: 8,
@@ -295,6 +307,12 @@ test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效
 	});
 	assert.equal(invalidationCount, 4);
 	assert.equal(currentSource, "catalog:8:identity:identity-2:coverage:incomplete");
+	assert.deepEqual(updatingFlags, [false, false, false, true]);
+
+	view.applyCatalogMemoLoad({ ...load, catalogRevision: 9, identityRevision: "identity-2" });
+	assert.equal(invalidationCount, 5);
+	assert.equal(currentSource, "catalog:9:identity:identity-2:coverage:complete");
+	assert.deepEqual(updatingFlags, [false, false, false, true, true]);
 });
 
 test("空库加载占位即使状态键未变化也会渲染暂无内容终态", async () => {
@@ -310,6 +328,70 @@ test("空库加载占位即使状态键未变化也会渲染暂无内容终态",
 	view.renderCardFlowIfChanged("empty-library");
 
 	assert.equal(renderCount, 1);
+});
+
+test("完整 Catalog 的普通 revision 更新静默保留旧侧栏统计直到原子替换", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const nextSummary = createDeferred<AggregateSummary>();
+	const nextFacets = createDeferred<AggregateFacets>();
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	let statsRenderCount = 0;
+	let tagsRenderCount = 0;
+	view.catalogCoverage = completeCoverage();
+	view.catalogRevision = 5;
+	view.libraryIndexRevision = 4;
+	view.libraryIndexRun = 0;
+	view.libraryIndexesUpdating = false;
+	view.librarySummary = { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 };
+	view.libraryTagFacets = [{ key: "old", label: "Old", count: 9 }];
+	view.renderStats = () => { statsRenderCount += 1; };
+	view.renderTags = () => { tagsRenderCount += 1; };
+	view.getCatalogReadService = () => ({
+		getLibrarySummary: () => nextSummary.promise,
+		getTagFacets: () => nextFacets.promise,
+	});
+
+	const refreshing = view.refreshCatalogLibraryIndexes();
+	assert.equal(view.libraryIndexesUpdating, false);
+	assert.equal(statsRenderCount, 0);
+	assert.equal(tagsRenderCount, 0);
+	assert.deepEqual(view.librarySummary, { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 });
+
+	nextSummary.resolve({
+		value: { memoCount: 10, tagCount: 4, imageCount: 1, wordCount: 24 },
+		complete: true,
+		coverage: completeCoverage(),
+	});
+	nextFacets.resolve({
+		value: [{ key: "new", label: "New", count: 10 }],
+		complete: true,
+		coverage: completeCoverage(),
+	});
+	await refreshing;
+
+	assert.deepEqual(view.librarySummary, { memoCount: 10, tagCount: 4, imageCount: 1, wordCount: 24 });
+	assert.deepEqual(view.libraryTagFacets, [{ key: "new", label: "New", count: 10 }]);
+	assert.equal(view.libraryIndexRevision, 5);
+	assert.equal(view.libraryIndexesUpdating, false);
+	assert.equal(statsRenderCount, 1);
+	assert.equal(tagsRenderCount, 1);
+});
+
+test("侧栏统计使用 Knomo 作用域更新类，避免触发 Obsidian 通用进度样式", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const statsEl = new TestStatsElement();
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	view.statsEls = [statsEl.asHtml()];
+	view.librarySummary = { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 };
+	view.libraryIndexesUpdating = true;
+
+	view.renderStats();
+
+	assert.equal(statsEl.hasClass("is-updating"), false);
+	assert.equal(statsEl.hasClass("knomo-sidebar-stats-updating"), true);
+	assert.equal(statsEl.getAttr("aria-busy"), "true");
 });
 
 test("coverage 降级保留旧完整统计并标记更新中，恢复后按当前 revision 原子替换", async () => {
@@ -368,6 +450,7 @@ test("coverage 降级保留旧完整统计并标记更新中，恢复后按当�
 
 	view.catalogRevision = 5;
 	view.updateCatalogProgress(completeCoverage());
+	assert.equal(view.libraryIndexesUpdating, true);
 	newSummary.resolve({
 		value: { memoCount: 12, tagCount: 4, imageCount: 2, wordCount: 30 },
 		complete: true,
@@ -420,6 +503,7 @@ interface QueryView {
 	libraryIndexesUpdating: boolean;
 	librarySummary: { memoCount: number; tagCount: number; imageCount: number; wordCount: number } | null;
 	libraryTagFacets: Array<{ key: string; label: string; count: number }> | null;
+	statsEls: HTMLElement[];
 	cardFlowError?: string | null;
 	filteredMemosCache?: null;
 	loadCatalogMemos: (loadAll: boolean) => Promise<TestCatalogMemoLoad>;
@@ -456,7 +540,10 @@ interface QueryView {
 	syncRecordStatsSource: () => void;
 	applyCatalogMemoLoad: (load: TestCatalogMemoLoad) => void;
 	recordStatsPreparationController: { setSourceKey: (source: string) => boolean };
-	recordStatsService: { invalidate: () => void };
+	recordStatsService: {
+		invalidate: (showUpdating?: boolean) => void;
+		getSnapshot: () => { state: "ready"; error: null; updating: boolean };
+	};
 	cardFlowCoordinator: { deferredForAllMemos: boolean };
 	cardFlowEl: { childElementCount: number } | null;
 	renderCardFlow: () => void;
@@ -582,4 +669,44 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 		await new Promise<void>((resolve) => setTimeout(resolve, 0));
 	}
 	throw new Error("Timed out waiting for view state.");
+}
+
+class TestStatsElement {
+	private readonly classes = new Set<string>();
+	private readonly attrs = new Map<string, string>();
+
+	asHtml(): HTMLElement {
+		return this as unknown as HTMLElement;
+	}
+
+	empty(): void {}
+
+	toggleClass(name: string, active: boolean): void {
+		if (active) this.classes.add(name);
+		else this.classes.delete(name);
+	}
+
+	removeClass(name: string): void {
+		this.classes.delete(name);
+	}
+
+	hasClass(name: string): boolean {
+		return this.classes.has(name);
+	}
+
+	setAttr(name: string, value: string): void {
+		this.attrs.set(name, value);
+	}
+
+	getAttr(name: string): string | null {
+		return this.attrs.get(name) ?? null;
+	}
+
+	removeAttribute(name: string): void {
+		this.attrs.delete(name);
+	}
+
+	createDiv(): HTMLElement {
+		return new TestStatsElement().asHtml();
+	}
 }

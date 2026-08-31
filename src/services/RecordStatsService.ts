@@ -110,11 +110,11 @@ export class RecordStatsService {
 		return this.source === source && (this.state === "ready" || this.state === "empty");
 	}
 
-	invalidate(): void {
+	invalidate(showUpdating = true): void {
 		this.runId += 1;
 		this.error = null;
 		this.source = null;
-		this.updating = this.prepared !== null;
+		this.updating = showUpdating && this.prepared !== null;
 		if (this.prepared === null) {
 			this.state = "idle";
 		}
@@ -135,6 +135,7 @@ export class RecordStatsService {
 	async prepareFromSource(
 		source: unknown,
 		loadPrepared: (isCurrent: () => boolean) => Promise<PreparedRecordStats | null>,
+		showUpdating = true,
 	): Promise<boolean> {
 		if (this.isPreparedForSource(source)) {
 			return true;
@@ -147,7 +148,7 @@ export class RecordStatsService {
 			this.state = "loading";
 		}
 		this.error = null;
-		this.updating = hasCommittedStats;
+		this.updating = showUpdating && hasCommittedStats;
 
 		try {
 			const prepared = await loadPrepared(() => this.runId === runId);

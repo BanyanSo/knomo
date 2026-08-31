@@ -292,6 +292,31 @@ test("source refresh keeps committed statistics visible until the replacement is
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
 });
 
+test("routine complete-revision refresh keeps committed statistics visible without an updating marker", async () => {
+	const service = new RecordStatsService();
+	const oldBuilder = new RecordStatsBuilder();
+	oldBuilder.addMemos([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
+	assert.equal(await service.prepareFromSource("catalog:1", async () => oldBuilder.build()), true);
+
+	const nextPrepared = createDeferred<ReturnType<RecordStatsBuilder["build"]>>();
+	service.invalidate(false);
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise, false);
+
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
+
+	const newBuilder = new RecordStatsBuilder();
+	newBuilder.addMemos([
+		makeMemo("new-1", "2026-06-08T10:00:00+08:00", "new one"),
+		makeMemo("new-2", "2026-06-09T10:00:00+08:00", "new two"),
+	]);
+	nextPrepared.resolve(newBuilder.build());
+	assert.equal(await refreshing, true);
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
+});
+
 test("calculates Monday ranges and bounded calendar navigation", () => {
 	const week = getRecordStatsRange("week", new Date(2026, 5, 14));
 	assert.deepEqual(toDateParts(week.start), [2026, 6, 8]);

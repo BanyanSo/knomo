@@ -1097,6 +1097,70 @@ test("P0 Identity 性能：legacy events 使用有界批量 segment 且只导入
 	assert.equal(vault.paths().filter((path) => path.endsWith(".jsonl")).length, 3);
 });
 
+test("observation 解析使用运行时索引而不枚举全部 memo", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "indexed memo");
+	const claim: IdentityLedgerEvent = {
+		eventId: eventId(3_000),
+		writerId: WRITER_A,
+		memoId: MEMO_A,
+		type: "claim",
+		baseBindingId: null,
+		occurredAt: "2026-08-22T06:00:00.000Z",
+		evidence: { observation: makeEvidence(observation), createIntentEventId: null },
+	};
+	await service.importVerifiedLegacyEvents([claim]);
+	const internals = service as unknown as {
+		snapshot: { memos: Record<string, unknown> };
+	};
+	internals.snapshot.memos = new Proxy(internals.snapshot.memos, {
+		ownKeys: () => { throw new Error("full memo enumeration is forbidden"); },
+	});
+
+	const resolved = service.resolveObservationState(observation);
+	assert.equal(resolved.kind, "identified");
+	assert.equal(resolved.kind === "identified" ? resolved.binding.memoId : null, MEMO_A);
+});
+
+test("增量 Identity materialization 按时间预算让出主线程", async () => {
+	const vault = await createLedgerVault();
+	let elapsedMs = 0;
+	let yieldCount = 0;
+	const service = new IdentityLedgerService(vault.app, {
+		getRootPath: () => IDENTITY_ROOT_A,
+		getWriterId: async () => WRITER_A,
+		createEventId: () => eventId(3_101),
+		now: () => new Date("2026-08-22T06:00:00.000Z"),
+		yieldControl: async () => { yieldCount += 1; },
+		sliceBudgetMs: 8,
+		monotonicNow: () => {
+			elapsedMs += 9;
+			return elapsedMs;
+		},
+	});
+	await service.initialize();
+	const observation = makeObservation("Daily/2026-08-22.md", "b".repeat(64), 1, "reviewed memo");
+	await service.importVerifiedLegacyEvents([{
+		eventId: eventId(3_100),
+		writerId: WRITER_A,
+		memoId: MEMO_A,
+		type: "claim",
+		baseBindingId: null,
+		occurredAt: "2026-08-22T06:00:00.000Z",
+		evidence: { observation: makeEvidence(observation), createIntentEventId: null },
+	}]);
+	const binding = service.resolveObservation(observation);
+	assert.notEqual(binding, null);
+	yieldCount = 0;
+	elapsedMs = 0;
+
+	await service.recordReview(binding!, "2026-08-22T07:00:00.000Z");
+
+	assert.equal(yieldCount > 0, true);
+});
+
 function createService(
 	vault: InMemoryVault,
 	writerId: string,

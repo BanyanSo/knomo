@@ -41,6 +41,16 @@ import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 const LEGACY_IMPORT_SEGMENT_EVENT_LIMIT = 256;
 
+interface ObservationBindingReference {
+	memoId: string;
+	bindingId: string;
+}
+
+interface ObservationBindingIndex {
+	byEvidence: Map<string, ObservationBindingReference[]>;
+	evidenceKeysByMemoId: Map<string, Set<string>>;
+}
+
 export interface IdentityLedgerServiceOptions {
 	getRootPath: () => string | null;
 	getWriterId?: () => Promise<string>;
@@ -75,6 +85,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private legacyImportWriteCount = 0;
 	private readonly selfWrittenPaths = new Map<string, number>();
 	private readonly purgeOperations = new Map<string, Promise<void>>();
+	private observationBindingsByEvidence = new Map<string, ObservationBindingReference[]>();
+	private observationEvidenceKeysByMemoId = new Map<string, Set<string>>();
 
 	constructor(
 		private readonly app: App,
@@ -115,7 +127,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		} catch (error) {
 			if (error instanceof IdentityLedgerRefreshCancelledError) return;
 			this.envelopes = [];
-			this.snapshot = createEmptySnapshot();
+			this.resetSnapshot(createEmptySnapshot());
 			this.status = "unavailable";
 		}
 	}
@@ -723,9 +735,50 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	private findObservationBindings(observation: MemoObservation): IdentityLedgerBinding[] {
 		const expected = observationEvidenceKey(toObservationEvidence(observation));
-		return Object.values(this.snapshot.memos).flatMap((memo) => memo.bindings
-			.filter((binding) => observationEvidenceKey(binding.evidence) === expected)
-			.map(cloneBinding));
+		return (this.observationBindingsByEvidence.get(expected) ?? []).flatMap((reference) => {
+			const binding = this.snapshot.memos[reference.memoId]?.bindings
+				.find((candidate) => candidate.bindingId === reference.bindingId
+					&& observationEvidenceKey(candidate.evidence) === expected);
+			return binding === undefined ? [] : [cloneBinding(binding)];
+		}).sort((left, right) => left.memoId.localeCompare(right.memoId)
+			|| left.bindingId.localeCompare(right.bindingId));
+	}
+
+	private commitSnapshot(snapshot: IdentityLedgerSnapshot, index: ObservationBindingIndex): void {
+		this.snapshot = snapshot;
+		this.observationBindingsByEvidence = index.byEvidence;
+		this.observationEvidenceKeysByMemoId = index.evidenceKeysByMemoId;
+	}
+
+	private resetSnapshot(snapshot: IdentityLedgerSnapshot): void {
+		this.snapshot = snapshot;
+		this.observationBindingsByEvidence = new Map();
+		this.observationEvidenceKeysByMemoId = new Map();
+	}
+
+	private updateObservationBindingIndex(
+		snapshot: IdentityLedgerSnapshot,
+		affectedMemoIds: ReadonlySet<string>,
+	): void {
+		for (const memoId of [...affectedMemoIds].sort()) {
+			for (const evidenceKey of this.observationEvidenceKeysByMemoId.get(memoId) ?? []) {
+				const remaining = (this.observationBindingsByEvidence.get(evidenceKey) ?? [])
+					.filter((reference) => reference.memoId !== memoId);
+				if (remaining.length === 0) {
+					this.observationBindingsByEvidence.delete(evidenceKey);
+				} else {
+					this.observationBindingsByEvidence.set(evidenceKey, remaining);
+				}
+			}
+			this.observationEvidenceKeysByMemoId.delete(memoId);
+			const memo = snapshot.memos[memoId];
+			if (memo !== undefined) addMemoBindingsToIndex(
+				this.observationBindingsByEvidence,
+				this.observationEvidenceKeysByMemoId,
+				memoId,
+				memo,
+			);
+		}
 	}
 
 	private hasActiveSuccessor(memoId: string, baseBindingId: string, observation: MemoObservation): boolean {
@@ -804,11 +857,14 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			const parsed = await parseIdentityLedgerSegment(rootPath, path, content);
 			const affectedMemoIds = collectAffectedMemoIds(this.envelopes, parsed.events);
 			this.envelopes = mergeEnvelopes(this.envelopes, parsed.events);
-			this.snapshot = await materializeIdentityLedgerIncrementally(
+			const nextSnapshot = await materializeIdentityLedgerIncrementally(
 				this.snapshot,
 				this.envelopes,
 				affectedMemoIds,
+				this.createCooperativeRuntime(() => this.assertWriteAllowed()),
 			);
+			this.updateObservationBindingIndex(nextSnapshot, affectedMemoIds);
+			this.snapshot = nextSnapshot;
 			this.updateStatus();
 		} catch (error) {
 			if (!(error instanceof IdentityLedgerWriteCancelledError)) {
@@ -850,20 +906,21 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				errors += 1;
 			}
 		}
-		const snapshot = await materializeIdentityLedger(envelopes, this.createCooperativeRuntime(
-			() => this.assertRefreshCurrent(generation),
-		));
+		const runtime = this.createCooperativeRuntime(() => this.assertRefreshCurrent(generation));
+		const snapshot = await materializeIdentityLedger(envelopes, runtime);
+		const bindingIndex = await buildObservationBindingIndex(snapshot, runtime);
 		this.assertRefreshCurrent(generation);
 		this.envelopes = envelopes;
 		this.scanErrorCount = errors;
-		this.snapshot = snapshot;
+		this.commitSnapshot(snapshot, bindingIndex);
 		this.updateStatus();
 	}
 
 	private async materialize(): Promise<void> {
-		this.snapshot = await materializeIdentityLedger(this.envelopes, this.createCooperativeRuntime(
-			() => this.assertWriteAllowed(),
-		));
+		const runtime = this.createCooperativeRuntime(() => this.assertWriteAllowed());
+		const snapshot = await materializeIdentityLedger(this.envelopes, runtime);
+		const bindingIndex = await buildObservationBindingIndex(snapshot, runtime);
+		this.commitSnapshot(snapshot, bindingIndex);
 		this.updateStatus();
 	}
 
@@ -992,7 +1049,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	private setMissing(): void {
 		this.envelopes = [];
-		this.snapshot = createEmptySnapshot();
+		this.resetSnapshot(createEmptySnapshot());
 		this.scanErrorCount = 0;
 		this.status = "missing";
 	}
@@ -1053,6 +1110,37 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		this.selfWrittenPaths.delete(normalizedPath);
 		return expiresAt > Date.now();
 	}
+}
+
+async function buildObservationBindingIndex(
+	snapshot: IdentityLedgerSnapshot,
+	runtime?: CooperativeTaskRuntime,
+): Promise<ObservationBindingIndex> {
+	const byEvidence = new Map<string, ObservationBindingReference[]>();
+	const evidenceKeysByMemoId = new Map<string, Set<string>>();
+	const yieldController = runtime === undefined ? null : new CooperativeYieldController(runtime);
+	for (const [memoId, memo] of Object.entries(snapshot.memos).sort(([left], [right]) => left.localeCompare(right))) {
+		addMemoBindingsToIndex(byEvidence, evidenceKeysByMemoId, memoId, memo);
+		if (yieldController?.shouldYield(Math.max(1, memo.bindings.length))) await yieldController.yieldNow();
+	}
+	return { byEvidence, evidenceKeysByMemoId };
+}
+
+function addMemoBindingsToIndex(
+	byEvidence: Map<string, ObservationBindingReference[]>,
+	evidenceKeysByMemoId: Map<string, Set<string>>,
+	memoId: string,
+	memo: IdentityLedgerMaterializedMemo,
+): void {
+	const memoEvidenceKeys = new Set<string>();
+	for (const binding of memo.bindings) {
+		const evidenceKey = observationEvidenceKey(binding.evidence);
+		const references = byEvidence.get(evidenceKey) ?? [];
+		references.push({ memoId, bindingId: binding.bindingId });
+		byEvidence.set(evidenceKey, references);
+		memoEvidenceKeys.add(evidenceKey);
+	}
+	if (memoEvidenceKeys.size > 0) evidenceKeysByMemoId.set(memoId, memoEvidenceKeys);
 }
 
 export async function materializeIdentityLedger(
@@ -1192,8 +1280,11 @@ async function materializeIdentityLedgerIncrementally(
 	previous: IdentityLedgerSnapshot,
 	envelopes: readonly IdentityLedgerEventEnvelope[],
 	affectedMemoIds: ReadonlySet<string>,
+	runtime?: CooperativeTaskRuntime,
 ): Promise<IdentityLedgerSnapshot> {
+	const yieldController = runtime === undefined ? null : new CooperativeYieldController(runtime);
 	const { accepted, quarantinedEventIds } = selectIdentityLedgerEnvelopes(envelopes);
+	if (yieldController?.shouldYield(accepted.length)) await yieldController.yieldNow();
 	const revision = await buildIdentityLedgerRevision(accepted);
 	const memos: Record<string, IdentityLedgerMaterializedMemo> = {};
 	for (const [memoId, memo] of Object.entries(previous.memos)) {
@@ -1202,10 +1293,12 @@ async function materializeIdentityLedgerIncrementally(
 			...memo,
 			bindings: memo.bindings.map((binding) => ({ ...binding, identityRevision: revision })),
 		};
+		if (yieldController?.shouldYield(Math.max(1, memo.bindings.length))) await yieldController.yieldNow();
 	}
 	for (const memoId of [...affectedMemoIds].sort()) {
 		const memoSnapshot = await materializeIdentityLedger(
 			accepted.filter((item) => item.event.memoId === memoId),
+			runtime,
 		);
 		const memo = memoSnapshot.memos[memoId];
 		if (memo === undefined) continue;
@@ -1213,17 +1306,23 @@ async function materializeIdentityLedgerIncrementally(
 			...memo,
 			bindings: memo.bindings.map((binding) => ({ ...binding, identityRevision: revision })),
 		};
+		if (yieldController?.shouldYield(Math.max(1, memo.bindings.length))) await yieldController.yieldNow();
 	}
-	const claimedIntentIds = new Set(accepted.flatMap((item) =>
-		item.event.type === "claim" && item.event.evidence.createIntentEventId !== null
-			? [item.event.evidence.createIntentEventId]
-			: []));
+	const claimedIntentIds = new Set<string>();
+	const pendingIntents: IdentityLedgerCreateIntentEvent[] = [];
+	for (const item of accepted) {
+		if (item.event.type === "claim" && item.event.evidence.createIntentEventId !== null) {
+			claimedIntentIds.add(item.event.evidence.createIntentEventId);
+		} else if (item.event.type === "create_intent") {
+			pendingIntents.push(item.event);
+		}
+		if (yieldController?.shouldYield()) await yieldController.yieldNow();
+	}
 	return {
 		revision,
 		eventCount: accepted.length,
 		memos,
-		pendingIntents: accepted.map((item) => item.event)
-			.filter((event): event is IdentityLedgerCreateIntentEvent => event.type === "create_intent")
+		pendingIntents: pendingIntents
 			.filter((intent) => !claimedIntentIds.has(intent.eventId))
 			.sort((left, right) => left.eventId.localeCompare(right.eventId)),
 		quarantinedEventIds,

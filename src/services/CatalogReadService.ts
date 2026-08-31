@@ -18,6 +18,7 @@ import type {
 	CatalogRecordStatsFilter,
 	CatalogReadState,
 	CatalogReadStatus,
+	KnomoRuntimeAttentionSnapshot,
 	KnomoRuntimeSnapshot,
 	MonthlyProjectionState,
 	CatalogTagFacet,
@@ -84,30 +85,21 @@ export class CatalogReadService {
 		return this.lastReadState;
 	}
 
-	async getRuntimeSnapshot(): Promise<KnomoRuntimeSnapshot> {
-		let coverage: CatalogCoverage = {
-			kind: "partial",
-			coveredFromDate: null,
-			pendingFileCount: 0,
-			coveredFileCount: 0,
-			totalFileCount: 0,
-		};
-		let lifecycle: CatalogStoreLifecycle = {
+	getRuntimeAttentionSnapshot(): KnomoRuntimeAttentionSnapshot {
+		let catalogLifecycle: CatalogStoreLifecycle = {
 			state: "degraded",
 			persistent: false,
 			writable: false,
 			reason: "catalog_status_unavailable",
 		};
 		try {
-			const store = this.options.catalog.getStore();
-			coverage = await store.getCoverage();
-			lifecycle = store.getLifecycle();
+			catalogLifecycle = this.options.catalog.getStore().getLifecycle();
 		} catch {
-			// 运行状态本身不可用时返回只读降级快照，不触发修复或扫描。
+			// 故障提示无法读取 Catalog 状态时，按可恢复的降级状态处理。
 		}
-		let identity: KnomoRuntimeSnapshot["identity"] = "unavailable";
-		let sharedConfiguration: KnomoRuntimeSnapshot["sharedConfiguration"] = "unavailable";
-		let legacyMigration: KnomoRuntimeSnapshot["legacyMigration"] = "unavailable";
+		let identity: KnomoRuntimeAttentionSnapshot["identity"] = "unavailable";
+		let sharedConfiguration: KnomoRuntimeAttentionSnapshot["sharedConfiguration"] = "unavailable";
+		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "unavailable";
 		try {
 			identity = this.options.identityLedger.getStatus();
 		} catch {
@@ -124,11 +116,37 @@ export class CatalogReadService {
 			// 保留 unavailable。
 		}
 		return {
-			catalog: { coverage, lifecycle },
+			catalogLifecycle,
 			identity,
 			sharedConfiguration,
 			monthly: this.getProjectionState(),
 			legacyMigration,
+		};
+	}
+
+	async getRuntimeSnapshot(): Promise<KnomoRuntimeSnapshot> {
+		const attention = this.getRuntimeAttentionSnapshot();
+		let coverage: CatalogCoverage = {
+			kind: "partial",
+			coveredFromDate: null,
+			pendingFileCount: 0,
+			coveredFileCount: 0,
+			totalFileCount: 0,
+		};
+		let lifecycle = attention.catalogLifecycle;
+		try {
+			const store = this.options.catalog.getStore();
+			coverage = await store.getCoverage();
+			lifecycle = store.getLifecycle();
+		} catch {
+			// 运行状态本身不可用时返回只读降级快照，不触发修复或扫描。
+		}
+		return {
+			catalog: { coverage, lifecycle },
+			identity: attention.identity,
+			sharedConfiguration: attention.sharedConfiguration,
+			monthly: attention.monthly,
+			legacyMigration: attention.legacyMigration,
 		};
 	}
 
@@ -616,11 +634,20 @@ export class CatalogReadService {
 				: identityStatus === "ready" ? "ready"
 					: identityStatus === "missing" || identityStatus === "absent" ? "absent" : "syncing",
 			identityConflict,
+			sharedConfiguration: this.getSharedConfigurationStatus(),
 			projection: this.getProjectionState(),
 			migration: legacyStatus === "attention"
 				? "attention"
 				: legacyStatus === "unavailable" ? "unavailable" : "none",
 		};
+	}
+
+	private getSharedConfigurationStatus(): KnomoSharedConfigStatus {
+		try {
+			return this.options.getSharedConfigurationStatus?.() ?? "missing";
+		} catch {
+			return "unavailable";
+		}
 	}
 
 	private getProjectionState(): MonthlyProjectionState {

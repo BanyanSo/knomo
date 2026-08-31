@@ -160,7 +160,7 @@ test("Identity 与共享配置监听等待 layout ready，启动后续阶段遵�
 	assert.equal(listenerStart.includes("knomoSharedConfigService.start"), true);
 	assert.equal(listenerStart.includes("lowPriorityWorkQueue.signal.aborted"), true);
 	assert.equal(main.includes("cancellationSignal: lowPriorityWorkQueue.signal"), true);
-	assert.equal(main.includes("settingTab.refreshRuntimeStatusIfVisible()"), true);
+	assert.equal(main.includes("settingTab.refreshAttentionIfVisible()"), true);
 	assert.equal(afterLayoutInitialization.includes("const isCancelled = () => cancellationSignal?.aborted === true"), true);
 });
 

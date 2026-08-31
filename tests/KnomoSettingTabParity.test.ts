@@ -8,12 +8,10 @@ const expectedGroupKeys = [
 	"settings.capture.heading",
 	"settings.monthly.heading",
 	"settings.files.heading",
-	"settings.runtime.heading",
-	"settings.maintenance.heading",
 ];
 
 const expectedRenderOrder = [
-	"renderSharedConfigSetting",
+	"renderAttentionSetting",
 	"renderDailyHeadingSetting",
 	"renderInsertPositionSetting",
 	"renderTimeFormatSetting",
@@ -21,13 +19,8 @@ const expectedRenderOrder = [
 	"renderDateOrderSetting",
 	"renderMonthlyFileFormatSetting",
 	"renderDateHeadingFormatSetting",
-	"renderMonthlyLocaleSetting",
 	"renderMonthlyExcludeSetting",
 	"renderDataRootSetting",
-	"renderRuntimeStatusSetting",
-	"renderLocalHistorySetting",
-	"renderMonthlyRebuildSetting",
-	"renderLegacyIdentityImport",
 ];
 
 test("keeps declarative and legacy setting groups in task order", () => {
@@ -54,7 +47,7 @@ test("keeps declarative and legacy setting rows in parity", () => {
 	assert.deepEqual(extractRenderCalls(legacySource), expectedRenderOrder);
 });
 
-test("only shows device-setting attention when shared settings need action", () => {
+test("only shows the attention group when actionable rows exist", () => {
 	const source = readSettingTabSource();
 	const attentionSource = getSourceBetween(
 		source,
@@ -62,9 +55,8 @@ test("only shows device-setting attention when shared settings need action", () 
 		"\n\t\t\t{\n\t\t\t\ttype: \"group\",\n\t\t\t\theading: t(\"settings.capture.heading\")",
 	);
 
-	assert.match(attentionSource, /visible:\s*\(\) => this\.shouldShowSharedConfigAttention\(\)/u);
-	assert.match(source, /this\.startupBootstrapService\.getSnapshot\(\)\.status !== "ready"/u);
-	assert.match(source, /this\.knomoSharedConfigService\.getStatus\(\) !== "ready"/u);
+	assert.match(attentionSource, /visible:\s*attentionItems\.length > 0/u);
+	assert.match(source, /getKnomoSettingAttentionKinds/u);
 });
 
 test("routes the device-setting action through startup initialization and refreshes after failure", () => {
@@ -79,20 +71,14 @@ test("routes the device-setting action through startup initialization and refres
 	assert.match(sharedConfigSource, /this\.startupBootstrapService\.useCurrentDeviceSettings\(\)/u);
 	assert.match(sharedConfigSource, /new Notice\(t\("settings\.sharedConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
-	assert.match(source, /refreshRuntimeStatusIfVisible\(\): void[\s\S]*if \(this\.settingsVisible\) this\.refreshSettingTab\(\)/u);
+	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*if \(this\.settingsVisible\) this\.refreshSettingTab\(\)/u);
 });
 
-test("shows a plain-language runtime summary and keeps engineering state in advanced diagnostics", () => {
+test("does not expose permanent runtime, maintenance, or monthly locale rows", () => {
 	const source = readSettingTabSource();
-	const runtimeSource = getSourceBetween(
-		source,
-		"\tprivate renderRuntimeStatusSetting(",
-		"\n\tprivate renderLocalHistorySetting(",
-	);
-
-	assert.match(runtimeSource, /settings\.runtime\.summary\./u);
-	assert.match(runtimeSource, /createEl\("details"/u);
-	assert.match(runtimeSource, /settings\.runtime\.diagnostics/u);
+	const definitions = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
+	assert.doesNotMatch(definitions, /settings\.runtime|settings\.maintenance|settings\.monthlyLocale/u);
+	assert.doesNotMatch(source, /renderRuntimeStatusSetting|renderMonthlyRebuildSetting|renderMonthlyLocaleSetting/u);
 });
 
 test("keeps monthly filename and date heading visible without a formatting expander", () => {
@@ -117,11 +103,12 @@ test("refreshes search and statistics without a confirmation step", () => {
 	const rebuildSource = getSourceBetween(
 		source,
 		"\tprivate async runRebuildIndex(",
-		"\n\tprivate async runMonthlyArchiveRebuild(",
+		"\n\tprivate async runRuntimeRetry(",
 	);
 
 	assert.doesNotMatch(rebuildSource, /showKnomoConfirmModal/u);
 	assert.match(rebuildSource, /rebuildLocalCatalog\(\)/u);
+	assert.match(source, /renderCatalogAttentionSetting[\s\S]*runRebuildIndex/u);
 });
 
 function readSettingTabSource(): string {
@@ -141,5 +128,5 @@ function extractMatches(source: string, pattern: RegExp): string[] {
 }
 
 function extractRenderCalls(source: string): string[] {
-	return extractMatches(source, /this\.(render[A-Z][A-Za-z]+Setting|renderLegacyIdentityImport)\(/g);
+	return extractMatches(source, /this\.(render[A-Z][A-Za-z]+Setting)\(/g);
 }

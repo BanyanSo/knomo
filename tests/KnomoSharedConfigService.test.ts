@@ -200,37 +200,6 @@ test("发布共享配置不等待后台派生刷新完成", async () => {
 	assert.equal(service.getStatus(), "ready");
 });
 
-test("显式使用当前 Obsidian 语言后，各设备最终读取同一 Monthly locale", async () => {
-	const left = new InMemoryVault();
-	await left.app.vault.createFolder("Knomo/_knomo-data");
-	let currentLocale = "en";
-	const writer = createService(
-		left,
-		WRITER_A,
-		["c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "c_dddddddddddddddddddddddddddddddd"],
-		makeConfig("## Shared"),
-		() => currentLocale,
-	);
-	await writer.initialize();
-	await writer.publishLocalConfig();
-
-	currentLocale = "fr_FR";
-	assert.equal(await writer.useCurrentObsidianLocale(), true);
-	assert.equal(writer.getEffectiveConfig().monthly.locale, "fr-fr");
-
-	const right = new InMemoryVault();
-	right.deliverFrom(left);
-	const reader = createService(
-		right,
-		WRITER_B,
-		"c_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		makeConfig("## Other"),
-		() => "de",
-	);
-	await reader.initialize();
-	assert.equal(reader.getEffectiveConfig().monthly.locale, "fr-fr");
-});
-
 test("两设备离线选择不同 locale 时保留冲突并暂停 Monthly", async () => {
 	const leftVault = new InMemoryVault();
 	const rightVault = new InMemoryVault();

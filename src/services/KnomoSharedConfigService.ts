@@ -128,13 +128,6 @@ export class KnomoSharedConfigService {
 		return cloneSnapshot(this.snapshot);
 	}
 
-	getMonthlyLocale(): string | null {
-		if (this.status === "ready" && this.snapshot.config !== null) {
-			return this.snapshot.config.monthly.locale;
-		}
-		return this.localConfig?.monthly.locale ?? this.monthlyLocale;
-	}
-
 	getEffectiveConfig(): KnomoSharedConfig {
 		const sharedConfig = this.status === "ready" ? this.snapshot.config : null;
 		const config = sharedConfig ?? this.localConfig;
@@ -173,28 +166,6 @@ export class KnomoSharedConfigService {
 			return;
 		}
 		await this.appendConfig(this.requireLocalConfig(), this.snapshot.headEventIds);
-	}
-
-	async useCurrentObsidianLocale(): Promise<boolean> {
-		if (this.status === "conflicted") {
-			throw new Error("Shared configuration is conflicted; explicit resolution is required.");
-		}
-		if (this.status === "unavailable") {
-			throw new Error("Shared configuration cannot be safely updated.");
-		}
-		const locale = normalizeMonthlyLocaleKey(this.options.getCurrentLocale());
-		const source = this.status === "ready" && this.snapshot.config !== null
-			? this.snapshot.config
-			: this.requireLocalConfig();
-		const nextConfig = withMonthlyLocale(source, locale);
-		this.monthlyLocale = locale;
-		if (this.localConfig !== null) this.localConfig = withMonthlyLocale(this.localConfig, locale);
-		if (this.status === "ready" && this.snapshot.config !== null
-			&& canonicalKnomoSharedConfigJson(this.snapshot.config) === canonicalKnomoSharedConfigJson(nextConfig)) {
-			return false;
-		}
-		await this.appendConfig(nextConfig, this.status === "ready" ? this.snapshot.headEventIds : []);
-		return true;
 	}
 
 	async runWithWritesPaused<T>(operation: () => Promise<T>): Promise<T> {
@@ -533,16 +504,6 @@ function cloneConfig(config: KnomoSharedConfig): KnomoSharedConfig {
 	return {
 		daily: { ...config.daily, headings: [...config.daily.headings] },
 		monthly: { ...config.monthly },
-	};
-}
-
-function withMonthlyLocale(config: KnomoSharedConfig, locale: string): KnomoSharedConfig {
-	return {
-		daily: { ...config.daily, headings: [...config.daily.headings] },
-		monthly: {
-			...config.monthly,
-			locale: normalizeMonthlyLocaleKey(locale),
-		},
 	};
 }
 

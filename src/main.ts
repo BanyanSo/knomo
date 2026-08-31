@@ -371,6 +371,20 @@ export default class KnomoPlugin extends Plugin {
 		);
 		const shuffleDayService = new ShuffleDayService(pluginDataStore);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
+		const retryRuntimeState = async (): Promise<void> => {
+			if (startupBootstrapService?.getSnapshot().status === "unavailable") {
+				await startupBootstrapService.retryInitialization();
+			} else if (knomoSharedConfigService.getStatus() === "unavailable") {
+				await knomoSharedConfigService.reloadConfiguredRoot();
+			}
+			const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
+			await this.memoCatalogService?.open();
+			if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
+				await this.catalogIndexCoordinator?.refreshLocalCatalog();
+			}
+			await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
+			await reconcileIdentityLedger();
+		};
 		this.registerView(
 			KNOMO_VIEW_TYPE,
 			(leaf: WorkspaceLeaf) => new KnomoView(
@@ -385,15 +399,7 @@ export default class KnomoPlugin extends Plugin {
 				this.catalogReadService!,
 				() => dailyNoteService.getStatus(),
 				() => dailyNoteService.getTodayDailyNotePath(),
-				async () => {
-					const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
-					await this.memoCatalogService?.open();
-					if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
-						await this.catalogIndexCoordinator?.refreshLocalCatalog();
-					}
-					await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
-					await reconcileIdentityLedger();
-				},
+				retryRuntimeState,
 				() => this.openCatalogDataSettings(),
 			),
 		);
@@ -428,6 +434,7 @@ export default class KnomoPlugin extends Plugin {
 			knomoSharedConfigService,
 			this.legacyIndexMigrationService,
 			startupBootstrapService,
+			retryRuntimeState,
 		);
 		this.addSettingTab(settingTab);
 
@@ -438,7 +445,7 @@ export default class KnomoPlugin extends Plugin {
 				} catch {
 					// 自动初始化失败不阻塞 Daily；下次启用会继续补齐缺失配置。
 				} finally {
-					if (!lowPriorityWorkQueue.signal.aborted) settingTab.refreshRuntimeStatusIfVisible();
+					if (!lowPriorityWorkQueue.signal.aborted) settingTab.refreshAttentionIfVisible();
 				}
 			}
 			if (lowPriorityWorkQueue.signal.aborted) return false;

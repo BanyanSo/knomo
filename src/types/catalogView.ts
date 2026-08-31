@@ -27,8 +27,17 @@ export interface CatalogReadStatus {
 	catalog: CatalogState;
 	identity: CatalogIdentityState;
 	identityConflict?: CatalogIdentityConflictSource | null;
+	sharedConfiguration?: KnomoSharedConfigStatus;
 	projection: MonthlyProjectionState;
 	migration: LegacyMigrationState;
+}
+
+export interface KnomoRuntimeAttentionSnapshot {
+	catalogLifecycle: CatalogStoreLifecycle;
+	identity: IdentityLedgerStatus;
+	sharedConfiguration: KnomoSharedConfigStatus;
+	monthly: MonthlyProjectionState;
+	legacyMigration: LegacyIdentityImportStatus;
 }
 
 export interface KnomoRuntimeSnapshot {

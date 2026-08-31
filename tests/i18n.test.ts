@@ -58,14 +58,14 @@ test("uses distinct local-history, migration, identity, and storage status copy"
 	assert.doesNotMatch(translate("zh-CN", "catalog.stateSettling"), /关联信息仍在同步/u);
 });
 
-test("旧版数据升级使用统一功能名称并区分等待扫描与无需升级", async () => {
+test("需要处理文案只描述用户影响和对应操作", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");
 
-	assert.equal(translate("zh-CN", "settings.runtime.legacy", { status: "ready" }), "旧版数据升级：ready");
-	assert.equal(translate("zh-CN", "settings.runtime.legacy.notApplicable"), "未发现旧版数据，无需升级");
-	assert.equal(translate("zh-CN", "settings.runtime.legacy.waitingCatalog"), "等待 Daily 扫描完成");
-	assert.equal(translate("en", "settings.runtime.legacy.notApplicable"), "No legacy data found; no upgrade is needed");
+	assert.match(translate("zh-CN", "settings.attention.catalog.desc"), /搜索与统计/u);
+	assert.doesNotMatch(translate("zh-CN", "settings.attention.catalog.desc"), /Catalog|IndexedDB/u);
+	assert.equal(translate("zh-CN", "settings.attention.retry"), "立即重试");
+	assert.equal(translate("en", "settings.attention.checkAgain"), "Check again");
 });
 
 test("adds spacing only to record statistics summaries", async () => {

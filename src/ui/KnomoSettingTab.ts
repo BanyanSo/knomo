@@ -15,20 +15,19 @@ import type { KnomoDataRootMigrationService } from "../services/KnomoDataRootMig
 import type { KnomoSharedConfigService } from "../services/KnomoSharedConfigService";
 import type {
 	KnomoStartupBootstrapService,
-	KnomoStartupBootstrapStage,
-	KnomoStartupBootstrapStatus,
 } from "../services/KnomoStartupBootstrapService";
 import type { CatalogReadService } from "../services/CatalogReadService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
 import type { LegacyIndexMigrationService } from "../services/LegacyIndexMigrationService";
-import type { KnomoRuntimeSnapshot } from "../types/catalogView";
-import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
-import { normalizeVaultPath } from "../utils/path";
 import { formatDatePart } from "../utils/date";
-import { formatServiceError, formatSettingsText } from "../utils/serviceText";
+import { normalizeVaultPath } from "../utils/path";
+import { formatServiceError } from "../utils/serviceText";
 import { showKnomoConfirmModal } from "./KnomoConfirmModal";
+import { KnomoFolderSuggest } from "./KnomoFolderSuggest";
+import { getKnomoSettingAttentionKinds } from "./KnomoSettingAttention";
+import type { KnomoSettingAttentionKind } from "./KnomoSettingAttention";
 import { KnomoView } from "./KnomoView";
 
 const SETTING_NOTICE_DELAY_MS = 800;
@@ -42,13 +41,12 @@ interface DelayedSettingNotice {
 
 export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildRunning = false;
-	private monthlyRebuildRunning = false;
+	private monthlyRetryRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
 	private timeBuoyToggleRunning = false;
 	private dataRootEditing = false;
 	private dataRootDraft: string | null = null;
 	private legacyDiagnosticsExpanded = false;
-	private runtimeStatusRequestId = 0;
 	private settingsVisible = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
@@ -66,21 +64,23 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly knomoSharedConfigService: KnomoSharedConfigService,
 		private readonly legacyIndexMigrationService: LegacyIndexMigrationService,
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
+		private readonly retryRuntimeState: () => Promise<void>,
 	) {
 		super(app, plugin);
 	}
 
 	getSettingDefinitions(): SettingDefinitionItem[] {
+		const attentionItems = this.getAttentionKinds().map((kind) => ({
+			name: this.getAttentionName(kind),
+			desc: this.getAttentionDescription(kind),
+			render: (setting: Setting) => { this.renderAttentionSetting(kind, setting); },
+		}));
 		return [
 			{
 				type: "group",
 				heading: t("settings.attention.heading"),
-				visible: () => this.shouldShowSharedConfigAttention(),
-				items: [{
-					name: t("settings.sharedConfig.name"),
-					desc: this.getSharedConfigDescription(),
-					render: (setting: Setting) => { this.renderSharedConfigSetting(setting); },
-				}],
+				visible: attentionItems.length > 0,
+				items: attentionItems,
 			},
 			{
 				type: "group",
@@ -128,13 +128,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 						render: (setting: Setting) => { this.renderDateHeadingFormatSetting(setting); },
 					},
 					{
-						name: t("settings.monthlyLocale.name"),
-						desc: t("settings.monthlyLocale.desc", {
-							locale: this.knomoSharedConfigService.getMonthlyLocale() ?? "—",
-						}),
-						render: (setting: Setting) => { this.renderMonthlyLocaleSetting(setting); },
-					},
-					{
 						name: t("settings.excludeMonthly.name"),
 						desc: t("settings.excludeMonthly.desc"),
 						render: (setting: Setting) => { this.renderMonthlyExcludeSetting(setting); },
@@ -150,36 +143,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 					render: (setting: Setting) => { this.renderDataRootSetting(setting); },
 				}],
 			},
-			{
-				type: "group",
-				heading: t("settings.runtime.heading"),
-				items: [{
-					name: t("settings.runtime.name"),
-					desc: t("settings.runtime.desc"),
-					render: (setting: Setting) => { this.renderRuntimeStatusSetting(setting); },
-				}],
-			},
-			{
-				type: "group",
-				heading: t("settings.maintenance.heading"),
-				items: [
-					{
-						name: t("settings.localHistory.name"),
-						desc: t("settings.localHistory.desc"),
-						render: (setting: Setting) => { this.renderLocalHistorySetting(setting); },
-					},
-					{
-						name: t("settings.monthlyRebuild.name"),
-						desc: t("settings.monthlyRebuild.desc"),
-						render: (setting: Setting) => { this.renderMonthlyRebuildSetting(setting); },
-					},
-					...(this.shouldShowLegacyIdentityImport() ? [{
-						name: t("settings.legacyIdentityImport.name"),
-						desc: t("settings.legacyIdentityImport.desc"),
-						render: (setting: Setting) => { this.renderLegacyIdentityImport(setting); },
-					}] : []),
-				],
-			},
 		];
 	}
 
@@ -190,12 +153,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.pendingSettingDrafts.clear();
 		containerEl.empty();
 
-		if (this.shouldShowSharedConfigAttention()) {
+		const attentionKinds = this.getAttentionKinds();
+		if (attentionKinds.length > 0) {
 			new Setting(containerEl)
 				.setName(t("settings.attention.heading"))
 				.setHeading();
-			this.renderSharedConfigSetting(new Setting(containerEl)
-				.setName(t("settings.sharedConfig.name")));
+			for (const kind of attentionKinds) {
+				this.renderAttentionSetting(kind, new Setting(containerEl));
+			}
 		}
 
 		new Setting(containerEl)
@@ -226,8 +191,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.renderDateHeadingFormatSetting(new Setting(containerEl)
 			.setName(t("settings.dateHeadingFormat.name"))
 			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT })));
-		this.renderMonthlyLocaleSetting(new Setting(containerEl)
-			.setName(t("settings.monthlyLocale.name")));
 		this.renderMonthlyExcludeSetting(new Setting(containerEl)
 			.setName(t("settings.excludeMonthly.name"))
 			.setDesc(t("settings.excludeMonthly.desc")));
@@ -238,33 +201,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.renderDataRootSetting(new Setting(containerEl)
 			.setName(t("settings.dataRoot.name"))
 			.setDesc(t("settings.dataRoot.desc")));
-
-		new Setting(containerEl)
-			.setName(t("settings.runtime.heading"))
-			.setHeading();
-		this.renderRuntimeStatusSetting(new Setting(containerEl)
-			.setName(t("settings.runtime.name"))
-			.setDesc(t("settings.runtime.desc")));
-
-		new Setting(containerEl)
-			.setName(t("settings.maintenance.heading"))
-			.setHeading();
-		this.renderLocalHistorySetting(new Setting(containerEl)
-			.setName(t("settings.localHistory.name"))
-			.setDesc(t("settings.localHistory.desc")));
-		this.renderMonthlyRebuildSetting(new Setting(containerEl)
-			.setName(t("settings.monthlyRebuild.name"))
-			.setDesc(t("settings.monthlyRebuild.desc")));
-		if (this.shouldShowLegacyIdentityImport()) {
-			this.renderLegacyIdentityImport(new Setting(containerEl)
-				.setName(t("settings.legacyIdentityImport.name"))
-				.setDesc(t("settings.legacyIdentityImport.desc")));
-		}
 	}
 
 	hide(): void {
 		this.settingsVisible = false;
-		this.runtimeStatusRequestId += 1;
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
 		this.cancelAllDelayedSettingNotices();
@@ -422,40 +362,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private renderMonthlyLocaleSetting(setting: Setting): void {
-		const locale = this.knomoSharedConfigService.getMonthlyLocale() ?? "—";
-		setting.setDesc(t("settings.monthlyLocale.desc", { locale }));
-		setting.addButton((button) => {
-			button.setButtonText(t("settings.monthlyLocale.useCurrent"));
-			button.setDisabled(
-				this.knomoSharedConfigService.getStatus() !== "ready"
-				&& this.knomoSharedConfigService.getStatus() !== "missing",
-			);
-			button.onClick(() => {
-				void (async () => {
-					button.setDisabled(true);
-					button.setButtonText(t("settings.monthlyLocale.applying"));
-					try {
-						const changed = await this.knomoSharedConfigService.useCurrentObsidianLocale();
-						if (changed) {
-							await this.monthlyProjectionCoordinator.handleConfigurationChanged();
-							await this.refreshOpenKnomoViews();
-						}
-						new Notice(t(changed
-							? "settings.monthlyLocale.saved"
-							: "settings.monthlyLocale.unchanged"));
-						this.refreshSettingTab();
-					} catch {
-						new Notice(t("settings.monthlyLocale.failed"));
-					} finally {
-						button.setButtonText(t("settings.monthlyLocale.useCurrent"));
-						button.setDisabled(false);
-					}
-				})();
-			});
-		});
-	}
-
 	private renderDataRootSetting(setting: Setting): void {
 		const settings = this.settingsService.getSettings();
 		if (!this.dataRootEditing) {
@@ -483,6 +389,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
 				text.setValue(this.dataRootDraft ?? settings.knomoDataRoot);
 				text.onChange((value) => { this.dataRootDraft = value; });
+				new KnomoFolderSuggest(this.app, text.inputEl, (value) => { this.dataRootDraft = value; });
 			})
 			.addButton((button) => {
 				button.setButtonText(t("settings.dataRoot.apply"));
@@ -506,121 +413,52 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 	}
 
-	private renderRuntimeStatusSetting(setting: Setting): void {
-		const requestId = ++this.runtimeStatusRequestId;
-		const statusEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-		statusEl.setAttr("role", "status");
-		statusEl.setAttr("aria-live", "polite");
-		statusEl.setAttr("aria-atomic", "true");
-		statusEl.setText(t("settings.runtime.loading"));
-		const diagnosticsHostEl = setting.infoEl.createDiv();
-		void this.catalogReadService.getRuntimeSnapshot().then((snapshot) => {
-			if (requestId !== this.runtimeStatusRequestId) return;
-			statusEl.empty();
-			const initialization = this.startupBootstrapService?.getSnapshot() ?? null;
-			statusEl.createDiv({
-				cls: "knomo-setting-help",
-				text: this.getRuntimeSummaryLabel(snapshot, initialization),
-			});
-			diagnosticsHostEl.empty();
-			const diagnosticsEl = diagnosticsHostEl.createEl("details", { cls: "knomo-runtime-diagnostics" });
-			diagnosticsEl.createEl("summary", { text: t("settings.runtime.diagnostics") });
-			const diagnosticsBodyEl = diagnosticsEl.createDiv();
-			diagnosticsBodyEl.createDiv({
-				cls: "knomo-setting-help",
-				text: t("settings.runtime.catalog", {
-					coverage: snapshot.catalog.coverage.kind,
-					lifecycle: snapshot.catalog.lifecycle.state,
-					covered: snapshot.catalog.coverage.coveredFileCount,
-					total: snapshot.catalog.coverage.totalFileCount,
-					storage: snapshot.catalog.lifecycle.persistent
-						? t("settings.runtime.storage.persistent")
-						: t("settings.runtime.storage.memory"),
-				}),
-			});
-			if (initialization !== null) {
-				diagnosticsBodyEl.createDiv({
-					cls: "knomo-setting-help",
-					text: t("settings.runtime.initialization", {
-						status: this.getBootstrapStatusLabel(initialization.status),
-					}),
-				});
-				if (initialization.error !== null) {
-					diagnosticsBodyEl.createDiv({
-						cls: "knomo-setting-help is-error",
-						text: t("settings.runtime.initializationDetail", {
-							stage: this.getBootstrapStageLabel(initialization.stage),
-							reason: formatSettingsText(initialization.error),
-						}),
-					});
-				}
-			}
-			diagnosticsBodyEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.identity", { status: snapshot.identity }) });
-			diagnosticsBodyEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.sharedConfig", { status: snapshot.sharedConfiguration }) });
-			diagnosticsBodyEl.createDiv({ cls: "knomo-setting-help", text: t("settings.runtime.monthly", { status: snapshot.monthly }) });
-			diagnosticsBodyEl.createDiv({
-				cls: "knomo-setting-help",
-				text: t("settings.runtime.legacy", { status: this.getLegacyStatusLabel(snapshot.legacyMigration) }),
-			});
-			if (snapshot.catalog.lifecycle.reason !== null) {
-				diagnosticsBodyEl.createDiv({
-					cls: "knomo-setting-help is-error",
-					text: t("settings.runtime.reason", { reason: formatSettingsText(snapshot.catalog.lifecycle.reason) }),
-				});
-			}
-		}).catch(() => {
-			if (requestId === this.runtimeStatusRequestId) statusEl.setText(t("settings.runtime.unavailable"));
-		});
-	}
-
-	private getRuntimeSummaryLabel(
-		snapshot: KnomoRuntimeSnapshot,
-		initialization: ReturnType<KnomoStartupBootstrapService["getSnapshot"]> | null,
-	): string {
-		if (initialization?.status === "unavailable"
-			|| snapshot.catalog.lifecycle.state === "degraded"
-			|| snapshot.catalog.lifecycle.state === "retrying"
-			|| snapshot.catalog.lifecycle.state === "read-only"
-			|| snapshot.identity === "unavailable"
-			|| snapshot.sharedConfiguration === "unavailable"
-			|| snapshot.monthly === "failed"
-			|| snapshot.legacyMigration === "unavailable") {
-			return t("settings.runtime.summary.unavailable");
-		}
-		if (initialization?.status === "conflicted"
-			|| snapshot.identity === "conflicted"
-			|| snapshot.sharedConfiguration === "conflicted"
-			|| snapshot.legacyMigration === "attention"
-			|| snapshot.legacyMigration === "partial") {
-			return t("settings.runtime.summary.attention");
-		}
-		const initializationReady = initialization === null || initialization.status === "ready";
-		const legacyReady = snapshot.legacyMigration === "ready" || snapshot.legacyMigration === "not_applicable";
-		if (initializationReady
-			&& snapshot.catalog.coverage.kind === "complete"
-			&& snapshot.catalog.lifecycle.state === "ready"
-			&& snapshot.identity === "ready"
-			&& snapshot.sharedConfiguration === "ready"
-			&& snapshot.monthly === "ready"
-			&& legacyReady) {
-			return t("settings.runtime.summary.ready");
-		}
-		return t("settings.runtime.summary.preparing");
-	}
-
-	private renderLocalHistorySetting(setting: Setting): void {
+	private renderCatalogAttentionSetting(setting: Setting): void {
 		const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-		setting.setClass("knomo-maintenance-setting").addButton((button) => {
-			button.setButtonText(t("settings.rebuild.start"));
-			button.onClick(() => {
-				void this.runRebuildIndex(button, resultEl);
+		setting
+			.setName(t("settings.attention.catalog.name"))
+			.setDesc(t("settings.attention.catalog.desc"))
+			.addButton((button) => {
+				button.setButtonText(t("settings.attention.checkAgain"));
+				button.onClick(() => { void this.runRuntimeRetry(button); });
+			})
+			.addButton((button) => {
+				button.setButtonText(t("settings.rebuild.start"));
+				button.onClick(() => {
+					void this.runRebuildIndex(button, resultEl);
+				});
 			});
-		});
-		void this.renderInitialRebuildResult(resultEl);
+	}
+
+	private renderIdentityAttentionSetting(setting: Setting): void {
+		const status = this.catalogReadService.getRuntimeAttentionSnapshot().identity;
+		setting
+			.setName(t("settings.attention.identity.name"))
+			.setDesc(t(status === "conflicted"
+				? "settings.attention.identity.conflicted"
+				: "settings.attention.identity.unavailable"))
+			.addButton((button) => {
+				button.setButtonText(t("settings.attention.checkAgain"));
+				button.onClick(() => { void this.runRuntimeRetry(button); });
+			});
+	}
+
+	private renderMonthlyAttentionSetting(setting: Setting): void {
+		const periods = this.monthlyProjectionCoordinator.getFailedPeriods();
+		setting
+			.setName(t("settings.attention.monthly.name"))
+			.setDesc(t("settings.attention.monthly.desc", { periods: periods.join(", ") || "—" }))
+			.addButton((button) => {
+				button.setButtonText(t("settings.attention.retry"));
+				button.onClick(() => { void this.runMonthlyRetry(button); });
+			});
 	}
 
 	private renderLegacyIdentityImport(setting: Setting): void {
 		const report = this.legacyIndexMigrationService.getReport();
+		setting
+			.setName(t("settings.legacyIdentityImport.name"))
+			.setDesc(t("settings.legacyIdentityImport.desc"));
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
 		statusEl.setAttr("role", "status");
 		statusEl.setAttr("aria-live", "polite");
@@ -637,43 +475,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 			});
 		}
-		this.refreshLegacyIdentityImport(statusEl, this.legacyDiagnosticsExpanded);
-	}
-
-	private shouldShowLegacyIdentityImport(): boolean {
-		const status = this.legacyIndexMigrationService.getReport().status;
-		return status === "partial" || status === "attention" || status === "unavailable";
-	}
-
-	private renderMonthlyRebuildSetting(setting: Setting): void {
-		let monthlyRebuildPeriod = formatDatePart(new Date()).slice(0, 7);
-		const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-		setting
-			.setClass("knomo-maintenance-setting")
-			.setName(t("settings.monthlyRebuild.name"))
-			.setDesc(t("settings.monthlyRebuild.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption(monthlyRebuildPeriod, monthlyRebuildPeriod);
-				dropdown.setValue(monthlyRebuildPeriod);
-				dropdown.onChange((value) => { monthlyRebuildPeriod = value; });
-				void this.monthlyProjectionCoordinator.listPeriods().then((periods) => {
-					for (const period of periods) {
-						if (period !== monthlyRebuildPeriod) dropdown.addOption(period, period);
-					}
-					const firstPeriod = periods[0];
-					if (firstPeriod !== undefined) {
-						monthlyRebuildPeriod = firstPeriod;
-						dropdown.setValue(firstPeriod);
-					}
-				}).catch(() => undefined);
-			})
-			.addButton((button) => {
-				button.setButtonText(t("settings.monthlyRebuild.start"));
-				button.onClick(() => {
-					void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, resultEl);
-				});
+		if (report.status === "unavailable") {
+			setting.addButton((button) => {
+				button.setButtonText(t("settings.attention.checkAgain"));
+				button.onClick(() => { void this.runRuntimeRetry(button); });
 			});
-		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), resultEl);
+		}
+		this.refreshLegacyIdentityImport(statusEl, this.legacyDiagnosticsExpanded);
 	}
 
 	private refreshLegacyIdentityImport(statusEl: HTMLElement, showDiagnostics: boolean): void {
@@ -1107,40 +915,44 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async runMonthlyArchiveRebuild(
-		period: string,
+	private async runRuntimeRetry(
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
-		resultEl: HTMLElement,
 	): Promise<void> {
-		if (this.monthlyRebuildRunning || period.length === 0) {
-			return;
-		}
-		const confirmed = await showKnomoConfirmModal(this.app, {
-			message: t("settings.monthlyRebuild.confirm", { period }),
-		});
-		if (!confirmed) {
-			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.cancelled"), resultEl);
-			return;
-		}
-
-		this.monthlyRebuildRunning = true;
 		button.setDisabled(true);
-		button.setButtonText(t("settings.monthlyRebuild.running"));
-		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.status", { period }), resultEl);
+		button.setButtonText(t("settings.attention.checking"));
 		try {
-			const projection = await this.monthlyProjectionCoordinator.rebuildPeriod(period);
-			if (projection.failed > 0) throw new Error(t("settings.monthlyRebuild.failed"));
-			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.complete", { period }), resultEl);
+			await this.retryRuntimeState();
 			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.monthlyRebuild.completedNotice", { period }));
-		} catch (error) {
-			const message = formatServiceError(error, t("settings.monthlyRebuild.failed"));
-			this.renderMonthlyRebuildResult(message, resultEl);
-			new Notice(message);
+		} catch {
+			new Notice(t("settings.attention.retryFailed"));
 		} finally {
-			this.monthlyRebuildRunning = false;
 			button.setDisabled(false);
-			button.setButtonText(t("settings.monthlyRebuild.start"));
+			button.setButtonText(t("settings.attention.checkAgain"));
+			this.refreshSettingTab();
+		}
+	}
+
+	private async runMonthlyRetry(
+		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
+	): Promise<void> {
+		if (this.monthlyRetryRunning) return;
+		this.monthlyRetryRunning = true;
+		button.setDisabled(true);
+		button.setButtonText(t("settings.attention.retrying"));
+		try {
+			const result = await this.monthlyProjectionCoordinator.run(true);
+			if (result.failed > 0 || this.monthlyProjectionCoordinator.getProjectionState() === "failed") {
+				throw new Error(t("settings.attention.monthly.retryFailed"));
+			}
+			await this.refreshOpenKnomoViews();
+			new Notice(t("settings.attention.monthly.retried"));
+		} catch (error) {
+			new Notice(formatServiceError(error, t("settings.attention.monthly.retryFailed")));
+		} finally {
+			this.monthlyRetryRunning = false;
+			button.setDisabled(false);
+			button.setButtonText(t("settings.attention.retry"));
+			this.refreshSettingTab();
 		}
 	}
 
@@ -1149,8 +961,45 @@ export class KnomoSettingTab extends PluginSettingTab {
 		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
 	}
 
-	private async renderInitialRebuildResult(resultEl: HTMLElement): Promise<void> {
-		this.renderRebuildResult(t("settings.rebuild.before"), resultEl);
+	private getAttentionKinds(): KnomoSettingAttentionKind[] {
+		return getKnomoSettingAttentionKinds(
+			this.catalogReadService.getRuntimeAttentionSnapshot(),
+			this.startupBootstrapService?.getSnapshot().status ?? null,
+		);
+	}
+
+	private getAttentionName(kind: KnomoSettingAttentionKind): string {
+		switch (kind) {
+			case "shared-config": return t("settings.sharedConfig.name");
+			case "catalog": return t("settings.attention.catalog.name");
+			case "identity": return t("settings.attention.identity.name");
+			case "monthly": return t("settings.attention.monthly.name");
+			case "legacy": return t("settings.legacyIdentityImport.name");
+		}
+	}
+
+	private getAttentionDescription(kind: KnomoSettingAttentionKind): string {
+		switch (kind) {
+			case "shared-config": return this.getSharedConfigDescription();
+			case "catalog": return t("settings.attention.catalog.desc");
+			case "identity": return t(this.catalogReadService.getRuntimeAttentionSnapshot().identity === "conflicted"
+				? "settings.attention.identity.conflicted"
+				: "settings.attention.identity.unavailable");
+			case "monthly": return t("settings.attention.monthly.desc", {
+				periods: this.monthlyProjectionCoordinator.getFailedPeriods().join(", ") || "—",
+			});
+			case "legacy": return t("settings.legacyIdentityImport.desc");
+		}
+	}
+
+	private renderAttentionSetting(kind: KnomoSettingAttentionKind, setting: Setting): void {
+		switch (kind) {
+			case "shared-config": this.renderSharedConfigSetting(setting); break;
+			case "catalog": this.renderCatalogAttentionSetting(setting); break;
+			case "identity": this.renderIdentityAttentionSetting(setting); break;
+			case "monthly": this.renderMonthlyAttentionSetting(setting); break;
+			case "legacy": this.renderLegacyIdentityImport(setting); break;
+		}
 	}
 
 	private getSharedConfigDescription(): string {
@@ -1173,16 +1022,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private shouldShowSharedConfigAttention(): boolean {
-		return (this.startupBootstrapService !== null
-			&& this.startupBootstrapService.getSnapshot().status !== "ready")
-			|| this.knomoSharedConfigService.getStatus() !== "ready";
-	}
-
 	private renderSharedConfigSetting(setting: Setting): void {
 		const status = this.knomoSharedConfigService.getStatus();
 		const initializationStatus = this.startupBootstrapService?.getSnapshot().status ?? "ready";
-		setting.setDesc(this.getSharedConfigDescription());
+		setting
+			.setName(t("settings.sharedConfig.name"))
+			.setDesc(this.getSharedConfigDescription());
 		if (status === "ready" && initializationStatus === "ready") return;
 		setting.addButton((button) => {
 			button.setButtonText(status === "unavailable" || initializationStatus === "unavailable"
@@ -1224,40 +1069,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private getBootstrapStatusLabel(status: KnomoStartupBootstrapStatus): string {
-		switch (status) {
-			case "unconfigured": return t("settings.runtime.initializationStatus.unconfigured");
-			case "initializing": return t("settings.runtime.initializationStatus.initializing");
-			case "ready": return t("settings.runtime.initializationStatus.ready");
-			case "conflicted": return t("settings.runtime.initializationStatus.conflicted");
-			case "unavailable": return t("settings.runtime.initializationStatus.unavailable");
-		}
-	}
-
-	private getBootstrapStageLabel(stage: KnomoStartupBootstrapStage | null): string {
-		switch (stage) {
-			case "data_root": return t("settings.runtime.initializationStage.dataRoot");
-			case "identity": return t("settings.runtime.initializationStage.identity");
-			case "catalog": return t("settings.runtime.initializationStage.catalog");
-			case "shared_config": return t("settings.runtime.initializationStage.sharedConfig");
-			case "verification": return t("settings.runtime.initializationStage.verification");
-			case null: return t("settings.runtime.initializationStage.none");
-		}
-	}
-
-	private getLegacyStatusLabel(status: LegacyIdentityImportStatus): string {
-		switch (status) {
-			case "idle": return t("settings.runtime.legacy.idle");
-			case "waiting_initialization": return t("settings.runtime.legacy.waitingInitialization");
-			case "waiting_catalog": return t("settings.runtime.legacy.waitingCatalog");
-			case "not_applicable": return t("settings.runtime.legacy.notApplicable");
-			case "ready": return t("settings.runtime.legacy.ready");
-			case "partial": return t("settings.runtime.legacy.partial");
-			case "attention": return t("settings.runtime.legacy.attention");
-			case "unavailable": return t("settings.runtime.legacy.unavailable");
-		}
-	}
-
 	private async syncSharedConfiguration(): Promise<void> {
 		try {
 			await this.knomoSharedConfigService.refreshLocalConfig();
@@ -1270,11 +1081,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderMonthlyRebuildResult(message: string, resultEl: HTMLElement): void {
-		resultEl.empty();
-		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
-	}
-
 	private async refreshOpenKnomoViews(): Promise<void> {
 		const refreshes = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
 			if (leaf.view instanceof KnomoView) {
@@ -1284,7 +1090,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		await Promise.all(refreshes);
 	}
 
-	refreshRuntimeStatusIfVisible(): void {
+	refreshAttentionIfVisible(): void {
 		if (this.settingsVisible) this.refreshSettingTab();
 	}
 

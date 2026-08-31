@@ -185,3 +185,28 @@ test("降级 Catalog 扫描时只显示可操作的存储故障", () => {
 		"refresh-catalog-sync-state",
 	]);
 });
+
+test("跨设备设置冲突或不可读取时在前台给出对应操作", () => {
+	const base = {
+		content: "ready" as const,
+		catalog: "complete" as const,
+		identity: "ready" as const,
+		projection: "ready" as const,
+		migration: "none" as const,
+	};
+	const conflicted = getCatalogReadStatusHeaders({
+		status: { ...base, sharedConfiguration: "conflicted" },
+		coverage: completeCoverage,
+	});
+	const unavailable = getCatalogReadStatusHeaders({
+		status: { ...base, sharedConfiguration: "unavailable" },
+		coverage: completeCoverage,
+	});
+
+	assert.equal(conflicted[0]?.type === "summary" ? conflicted[0].action?.action : null, "open-catalog-settings");
+	assert.equal(unavailable[0]?.type === "summary" ? unavailable[0].action?.action : null, "refresh-catalog-sync-state");
+	assert.deepEqual(getCatalogReadStatusHeaders({
+		status: { ...base, sharedConfiguration: "missing" },
+		coverage: completeCoverage,
+	}), []);
+});

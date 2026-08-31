@@ -8,6 +8,8 @@ import type {
 	CatalogObservation,
 	CatalogPostingKind,
 	CatalogQuery,
+	CatalogQueryCountResult,
+	CatalogQueryFilter,
 	CatalogQueryPage,
 	CatalogStoreLifecycle,
 } from "../types/catalog";
@@ -468,6 +470,78 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		});
 	}
 
+	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
+		await this.open();
+		const database = this.getDatabase();
+		const keyRange = this.getKeyRange();
+		return new Promise<CatalogQueryCountResult>((resolve, reject) => {
+			const transaction = database.transaction([OBSERVATIONS_STORE, POSTINGS_STORE, META_STORE], "readonly");
+			const observations = transaction.objectStore(OBSERVATIONS_STORE);
+			const metadata = transaction.objectStore(META_STORE);
+			const revisionRequest = metadata.get(CATALOG_REVISION_META);
+			const coverageRequest = metadata.get(COVERAGE_META);
+			const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+			let count = 0;
+			let catalogRevision = 0;
+			let coverage: CatalogCoverage = { ...DEFAULT_CATALOG_COVERAGE };
+			let started = false;
+
+			const startCursor = () => {
+				if (started || revisionRequest.readyState !== "done" || coverageRequest.readyState !== "done") {
+					return;
+				}
+				started = true;
+				catalogRevision = (revisionRequest.result as CatalogMetaRecord<number> | undefined)?.value ?? 0;
+				coverage = (coverageRequest.result as CatalogMetaRecord<CatalogCoverage> | undefined)?.value
+					?? { ...DEFAULT_CATALOG_COVERAGE };
+				const selection = selectCatalogIndex(request);
+				try {
+					if (selection === null) {
+						const range = buildObservationCountRange(keyRange, request);
+						const cursorRequest = observations.index(BY_CREATED_AT).openCursor(range, "prev");
+						cursorRequest.onsuccess = () => {
+							const cursor = cursorRequest.result;
+							if (cursor === null) return;
+							const observation = cursor.value as CatalogObservation;
+							if (matchesCatalogQuery(observation, request, sourcePaths)) count += 1;
+							cursor.continue();
+						};
+					} else {
+						const range = buildPostingCountRange(keyRange, request, selection);
+						const cursorRequest = transaction.objectStore(POSTINGS_STORE).index(BY_LOOKUP).openCursor(range, "prev");
+						cursorRequest.onsuccess = () => {
+							const cursor = cursorRequest.result;
+							if (cursor === null) return;
+							const posting = cursor.value as CatalogPostingRecord;
+							const observationRequest = observations.get(posting.observationKey);
+							observationRequest.onsuccess = () => {
+								const observation = observationRequest.result as CatalogObservation | undefined;
+								if (observation !== undefined && matchesCatalogQuery(observation, request, sourcePaths)) {
+									count += 1;
+								}
+								cursor.continue();
+							};
+						};
+					}
+				} catch (error) {
+					transaction.abort();
+					reject(error);
+				}
+			};
+
+			revisionRequest.onsuccess = startCursor;
+			coverageRequest.onsuccess = startCursor;
+			transaction.oncomplete = () => resolve({
+				count,
+				catalogRevision,
+				coverage,
+				lifecycle: this.getLifecycle(),
+			});
+			transaction.onerror = () => reject(transaction.error ?? new Error("Memo Catalog count failed."));
+			transaction.onabort = () => reject(transaction.error ?? new Error("Memo Catalog count aborted."));
+		});
+	}
+
 	async listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]> {
 		await this.open();
 		const database = this.getDatabase();
@@ -765,7 +839,7 @@ function sameLookupKeys(left: readonly string[], right: readonly string[]): bool
 	return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function selectCatalogIndex(request: CatalogQuery): CatalogIndexSelection | null {
+function selectCatalogIndex(request: CatalogQueryFilter): CatalogIndexSelection | null {
 	const tag = request.tags?.map(normalizeCatalogText).find(Boolean);
 	if (tag !== undefined) {
 		return { kind: "tag", value: tag };
@@ -801,6 +875,28 @@ function selectCatalogIndex(request: CatalogQuery): CatalogIndexSelection | null
 		return { kind: "reference", value: `target:${request.explicitReferenceTarget}` };
 	}
 	return null;
+}
+
+function buildObservationCountRange(
+	keyRange: typeof IDBKeyRange,
+	request: CatalogQueryFilter,
+): IDBKeyRange {
+	return keyRange.bound(
+		[request.fromDate === undefined ? "" : `${request.fromDate}T`, ""],
+		[`${request.toDate ?? "\uffff"}T\uffff`, "\uffff"],
+	);
+}
+
+function buildPostingCountRange(
+	keyRange: typeof IDBKeyRange,
+	request: CatalogQueryFilter,
+	selection: CatalogIndexSelection,
+): IDBKeyRange {
+	const prefix = buildLookupPrefix(selection.kind, selection.value);
+	return keyRange.bound(
+		`${prefix}${request.fromDate === undefined ? "" : `${request.fromDate}T`}\0`,
+		`${prefix}${request.toDate ?? "\uffff"}T\uffff\0\uffff`,
+	);
 }
 
 function buildObservationRange(keyRange: typeof IDBKeyRange, request: CatalogQuery): IDBKeyRange {

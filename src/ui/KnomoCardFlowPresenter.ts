@@ -42,6 +42,7 @@ export interface CardFlowPresentationOptions {
 	randomReunionError: string | null;
 	shuffleDay: ShuffleDaySnapshot;
 	memos: MemoRecord[];
+	matchedTotalCount: number | null;
 	regularFilterCopy: CardFlowRegularFilterCopy | null;
 	trashLoading: boolean;
 	trashError: string | null;
@@ -99,8 +100,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 	}
 
 	const headers: CardFlowHeader[] = [];
-	if (options.activeNav === "review") {
-		headers.push({ type: "summary", text: t("list.reviewSummary", { count: options.memos.length }) });
+	if (options.activeNav === "review" && options.matchedTotalCount !== null) {
+		headers.push({ type: "summary", text: t("list.reviewSummary", { count: options.matchedTotalCount }) });
 	}
 	if (options.activeNav === "random") {
 		headers.push({ type: "random-toolbar", count: options.memos.length });

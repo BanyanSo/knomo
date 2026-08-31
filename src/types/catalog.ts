@@ -274,6 +274,15 @@ export interface CatalogQuery {
 	cursor?: CatalogCursor | null;
 }
 
+export type CatalogQueryFilter = Omit<CatalogQuery, "limit" | "cursor">;
+
+export interface CatalogQueryCountResult {
+	count: number;
+	catalogRevision: number;
+	coverage: CatalogCoverage;
+	lifecycle: CatalogStoreLifecycle;
+}
+
 export interface CatalogQueryMetrics {
 	cursorReads: number;
 	observationsRead: number;

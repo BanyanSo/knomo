@@ -23,6 +23,18 @@ test("mobile search controller keys only the visible matched memos", async () =>
 	assert.equal(controller.getIdsKey(), "memo-1\nmemo-2");
 });
 
+test("mobile search summary uses the complete remote match count before later pages load", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = Array.from({ length: 50 }, (_, index) => makeMemo(`memo-${index + 1}`, "project memo"));
+	const { controller, root } = createControllerHarness(MobileSearchController, memos, () => 90);
+
+	controller.searchQuery = "project";
+	controller.openPage({ focusInput: false });
+
+	assert.equal(root.find(".knomo-list-summary")?.getText(), "Found 90 Memos for “project”");
+});
+
 test("mobile search opens, syncs the page, and closes from Escape", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -143,6 +155,7 @@ function contentBlock(content: string): string {
 function createControllerHarness(
 	Controller: MobileSearchControllerConstructor,
 	memos: MemoRecord[],
+	getMatchedTotalCount?: () => number | null,
 ): {
 	controller: MobileSearchControllerInstance;
 	root: TestElement;
@@ -171,6 +184,7 @@ function createControllerHarness(
 		getRootEl: () => root.asHtml(),
 		isMobileLayout: () => true,
 		getMemos: () => memos,
+		getMatchedTotalCount,
 		registerDomEvent: (target, type, listener) => {
 			events.push({
 				target: target as unknown as TestElement,

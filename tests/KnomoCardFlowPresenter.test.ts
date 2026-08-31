@@ -71,11 +71,12 @@ test("presents review and random list headers", async () => {
 		...baseOptions(),
 		activeNav: "review",
 		memos,
+		matchedTotalCount: 90,
 	}), {
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "summary", text: "3 memos were written on this day" }],
+		headers: [{ type: "summary", text: "90 memos were written on this day" }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -313,6 +314,7 @@ function baseOptions() {
 			error: null,
 		},
 		memos: [],
+		matchedTotalCount: null,
 		regularFilterCopy: null,
 		trashLoading: false,
 		trashError: null,

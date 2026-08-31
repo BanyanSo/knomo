@@ -9,11 +9,14 @@ import type {
 	ResolvedIdentityEvidence,
 } from "../types/catalog";
 import type {
+	CatalogFeatureCursor,
+	CatalogFeatureFilter,
 	CatalogFeatureQuery,
 	CatalogFunctionPageRequest,
 	CatalogAggregateResult,
 	CatalogLibrarySummary,
 	CatalogMemoItem,
+	CatalogMemoCountResult,
 	CatalogMemoPage,
 	CatalogRecordStatsFilter,
 	CatalogReadState,
@@ -205,6 +208,22 @@ export class CatalogReadService {
 		});
 	}
 
+	async count(request: CatalogFeatureFilter): Promise<CatalogMemoCountResult> {
+		try {
+			const result = await this.options.catalog.count(request);
+			const complete = isQueryCovered(result.coverage, request);
+			return {
+				count: complete ? result.count : null,
+				complete,
+				catalogRevision: result.catalogRevision,
+				identityRevision: this.options.identityLedger.getRevision(),
+				coverage: result.coverage,
+			};
+		} catch {
+			return this.createUnavailableCount();
+		}
+	}
+
 	async getLibrarySummary(): Promise<CatalogAggregateResult<CatalogLibrarySummary>> {
 		const coverage = await this.options.catalog.getStore().getCoverage();
 		if (!isCompleteCoverage(coverage)) return { value: null, complete: false, coverage };
@@ -256,16 +275,13 @@ export class CatalogReadService {
 
 	async queryReviewItems(date: Date, page: CatalogFunctionPageRequest): Promise<CatalogMemoPage> {
 		const coverage = await this.options.catalog.getStore().getCoverage();
-		const logicalDate = formatDatePart(date);
-		const query: Omit<CatalogFeatureQuery, "limit" | "cursor"> = {
-			toDate: formatDatePart(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)),
-			...(date.getMonth() === 1 && date.getDate() === 29
-				? { monthDay: "02-29" }
-				: { dayOfMonth: logicalDate.slice(8) }),
-		};
-		if (page.text?.trim()) query.text = page.text.trim();
+		const query = buildReviewCatalogQuery(date, page.text);
 		if (!isCompleteCoverage(coverage)) return this.createCoveragePendingPage(query);
 		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
+	}
+
+	async countReviewItems(date: Date, text?: string): Promise<CatalogMemoCountResult> {
+		return this.count(buildReviewCatalogQuery(date, text));
 	}
 
 	async queryRecordStatsDrilldown(
@@ -278,6 +294,21 @@ export class CatalogReadService {
 		const request = { ...query, limit: page.limit, cursor: page.cursor ?? null };
 		if (filter.type !== "references") return this.query(request);
 		return this.queryFiltered(request, (memo) => (
+			memo.sourceMemoId !== null || memo.observation.explicitReferenceTargets.length > 0
+		));
+	}
+
+	async countRecordStatsDrilldown(
+		filter: CatalogRecordStatsFilter,
+		text?: string,
+	): Promise<CatalogMemoCountResult> {
+		const { query, fromDate, toDate } = buildRecordStatsCatalogQuery(filter);
+		if (text?.trim()) query.text = text.trim();
+		if (!await this.getCoverageForRange(fromDate, toDate)) {
+			return this.createUnavailableCount(await this.options.catalog.getStore().getCoverage());
+		}
+		if (filter.type !== "references") return this.count(query);
+		return this.countFiltered(query, (memo) => (
 			memo.sourceMemoId !== null || memo.observation.explicitReferenceTargets.length > 0
 		));
 	}
@@ -566,6 +597,25 @@ export class CatalogReadService {
 		});
 	}
 
+	private async createUnavailableCount(
+		knownCoverage?: CatalogCoverage,
+	): Promise<CatalogMemoCountResult> {
+		const coverage = knownCoverage ?? await this.options.catalog.getStore().getCoverage().catch((): CatalogCoverage => ({
+			kind: "partial",
+			coveredFromDate: null,
+			pendingFileCount: 0,
+			coveredFileCount: 0,
+			totalFileCount: 0,
+		}));
+		return {
+			count: null,
+			complete: false,
+			catalogRevision: 0,
+			identityRevision: this.options.identityLedger.getRevision(),
+			coverage,
+		};
+	}
+
 	private async createCoveragePendingPage(
 		request: Omit<CatalogFeatureQuery, "limit" | "cursor">,
 	): Promise<CatalogMemoPage> {
@@ -611,6 +661,47 @@ export class CatalogReadService {
 			cursor = page.nextCursor;
 		} while (cursor !== null);
 		return lastPage === null ? this.query(request) : { ...lastPage, items, nextCursor: null };
+	}
+
+	private async countFiltered(
+		request: CatalogFeatureFilter,
+		predicate: (memo: CatalogMemoItem) => boolean,
+	): Promise<CatalogMemoCountResult> {
+		let cursor: CatalogFeatureCursor | null = null;
+		let count = 0;
+		let catalogRevision: number | null = null;
+		let identityRevision: string | null = null;
+		let coverage: CatalogCoverage | null = null;
+		do {
+			const page = await this.query({ ...request, limit: 150, cursor });
+			if (page.invalidated
+				|| (catalogRevision !== null && catalogRevision !== page.catalogRevision)
+				|| (identityRevision !== null && identityRevision !== page.identityRevision)) {
+				return {
+					count: null,
+					complete: false,
+					catalogRevision: page.catalogRevision,
+					identityRevision: page.identityRevision,
+					coverage: page.coverage,
+				};
+			}
+			catalogRevision = page.catalogRevision;
+			identityRevision = page.identityRevision;
+			coverage = page.coverage;
+			count += page.items.filter(predicate).length;
+			cursor = page.nextCursor;
+		} while (cursor !== null);
+		if (catalogRevision === null || identityRevision === null || coverage === null) {
+			return this.createUnavailableCount();
+		}
+		const complete = isQueryCovered(coverage, request);
+		return {
+			count: complete ? count : null,
+			complete,
+			catalogRevision,
+			identityRevision,
+			coverage,
+		};
 	}
 
 	private getReadStatus(
@@ -874,12 +965,32 @@ function buildTimeBuoyInstance(memo: CatalogMemoItem, targetDate: string) {
 	return { memoId: memo.memoId ?? memo.key, targetDate };
 }
 
+function buildReviewCatalogQuery(date: Date, text?: string): CatalogFeatureFilter {
+	const logicalDate = formatDatePart(date);
+	const query: CatalogFeatureFilter = {
+		toDate: formatDatePart(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)),
+		...(date.getMonth() === 1 && date.getDate() === 29
+			? { monthDay: "02-29" }
+			: { dayOfMonth: logicalDate.slice(8) }),
+	};
+	if (text?.trim()) query.text = text.trim();
+	return query;
+}
+
 function isDateCovered(coverage: CatalogCoverage, logicalDate: string): boolean {
 	return isRangeCovered(coverage, logicalDate, logicalDate);
 }
 
 function isCompleteCoverage(coverage: CatalogCoverage): boolean {
 	return coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false;
+}
+
+function isQueryCovered(coverage: CatalogCoverage, request: CatalogFeatureFilter): boolean {
+	if (isCompleteCoverage(coverage)) return true;
+	return request.fromDate !== undefined
+		&& coverage.coveredFromDate !== null
+		&& request.fromDate >= coverage.coveredFromDate
+		&& coverage.sharedConfigurationComplete !== false;
 }
 
 function isRangeCovered(coverage: CatalogCoverage, fromDate: string, toDate: string): boolean {

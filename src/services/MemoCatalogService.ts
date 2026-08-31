@@ -49,6 +49,10 @@ export class MemoCatalogService {
 		return this.store.query(request);
 	}
 
+	count(request: Omit<CatalogQuery, "limit" | "cursor">) {
+		return this.store.count(request);
+	}
+
 	getObservation(observationKey: string) {
 		return this.store.getObservation(observationKey);
 	}

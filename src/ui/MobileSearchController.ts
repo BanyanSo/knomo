@@ -31,6 +31,7 @@ interface MobileSearchControllerOptions {
 	getRootEl: () => HTMLElement | null;
 	isMobileLayout: () => boolean;
 	getMemos: () => MemoRecord[];
+	getMatchedTotalCount?: () => number | null;
 	registerDomEvent: <K extends keyof HTMLElementEventMap>(
 		target: HTMLElement,
 		type: K,
@@ -353,9 +354,14 @@ export class MobileSearchController {
 			this.options.restoreElementScrollTop(resultsEl, scrollTop);
 			return;
 		}
-		const summary = formatMobileSearchSummary(query, this.dateFilter, memos.length, this.recordStatsFilter);
-		if (summary !== null) {
-			renderKnomoListSummary(resultsEl, summary);
+		const matchedTotalCount = this.options.getMatchedTotalCount === undefined
+			? memos.length
+			: this.options.getMatchedTotalCount();
+		if (matchedTotalCount !== null) {
+			const summary = formatMobileSearchSummary(query, this.dateFilter, matchedTotalCount, this.recordStatsFilter);
+			if (summary !== null) {
+				renderKnomoListSummary(resultsEl, summary);
+			}
 		}
 		const visibleMemos = memos.slice(0, this.visibleCount);
 		for (const [index, memo] of visibleMemos.entries()) {
@@ -363,7 +369,7 @@ export class MobileSearchController {
 		}
 		if (visibleMemos.length < memos.length || this.options.hasRemoteNextPage?.() === true) {
 			renderKnomoLoadMoreButton(resultsEl, {
-				remainingCount: Math.max(1, memos.length - visibleMemos.length),
+				remainingCount: Math.max(1, (matchedTotalCount ?? memos.length) - visibleMemos.length),
 				action: "load-more-mobile-search",
 				extraClass: "knomo-mobile-search-more",
 			});

@@ -16,8 +16,10 @@ import type { ShuffleDayService } from "../services/ShuffleDayService";
 import type { CatalogCoverage, CatalogRefreshResult } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
+	CatalogFeatureFilter,
 	CatalogFeatureQuery,
 	CatalogLibrarySummary,
+	CatalogMemoCountResult,
 	CatalogMemoPage,
 	CatalogReadState,
 	CatalogReadStatus,
@@ -313,6 +315,8 @@ export class KnomoView extends ItemView {
 	private memos: MemoRecord[] = [];
 	private catalogCursor: CatalogFeatureCursor | null = null;
 	private catalogLoadingNextPage = false;
+	private catalogDesktopTotalCount: number | null = null;
+	private catalogDesktopCountRun = 0;
 	private catalogCoverage: CatalogCoverage | null = null;
 	private catalogReadState: CatalogReadState = "ready";
 	private catalogStatus: CatalogReadStatus = {
@@ -324,6 +328,7 @@ export class KnomoView extends ItemView {
 	};
 	private catalogMobileCursor: CatalogFeatureCursor | null = null;
 	private catalogMobileQueryRun = 0;
+	private catalogMobileTotalCount: number | null = null;
 	private catalogRevision = 0;
 	private catalogIdentityRevision = "";
 	private catalogDesktopQueryFingerprint: string | null = null;
@@ -617,6 +622,7 @@ export class KnomoView extends ItemView {
 			getRootEl: () => this.rootEl,
 			isMobileLayout: () => this.currentLayout === "mobile",
 			getMemos: () => this.memos,
+			getMatchedTotalCount: () => this.catalogMobileTotalCount,
 			registerDomEvent: (target, type, listener) => {
 				this.getRenderScope().registerDomEvent(target, type, listener);
 			},
@@ -666,6 +672,7 @@ export class KnomoView extends ItemView {
 			restoreRemoteResults: async () => {
 					this.catalogMobileQueryRun += 1;
 					this.catalogMobileCursor = null;
+					this.catalogMobileTotalCount = null;
 					await this.reloadMemos(false, true);
 			},
 		});
@@ -1115,6 +1122,9 @@ export class KnomoView extends ItemView {
 		}
 		this.memos = [];
 		this.catalogCursor = null;
+		this.catalogDesktopTotalCount = null;
+		this.catalogDesktopCountRun += 1;
+		this.catalogMobileTotalCount = null;
 		this.catalogDesktopQueryFingerprint = null;
 		this.hasCommittedCatalogDesktopQuery = false;
 		this.memoLoadingFingerprint = null;
@@ -1507,6 +1517,7 @@ export class KnomoView extends ItemView {
 				return true;
 			}
 			this.memos = load.memos;
+			this.catalogDesktopTotalCount = this.getImmediateCatalogTotalCount(load);
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
 			this.filteredMemosCache = null;
@@ -1514,6 +1525,16 @@ export class KnomoView extends ItemView {
 			this.retainMemoCardPreviews();
 			if (forceRebuild) {
 				this.resetVisibleMemos();
+			}
+			if (this.catalogDesktopTotalCount === null && this.shouldCountCatalogQuery()) {
+				void this.refreshCatalogDesktopTotalCount({
+					loadAll,
+					queryFingerprint,
+					queryRun,
+					sourceGeneration,
+					catalogRevision: load.catalogRevision,
+					identityRevision: load.identityRevision,
+				});
 			}
 			loaded = true;
 		} catch (error) {
@@ -1589,6 +1610,60 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private getImmediateCatalogTotalCount(load: CatalogMemoLoad): number | null {
+		return load.nextCursor === null && isCompleteCatalogCoverage(load.coverage)
+			? load.memos.length
+			: null;
+	}
+
+	private async refreshCatalogDesktopTotalCount(options: {
+		loadAll: boolean;
+		queryFingerprint: string;
+		queryRun: number;
+		sourceGeneration: number;
+		catalogRevision: number;
+		identityRevision: string;
+	}): Promise<void> {
+		const countRun = ++this.catalogDesktopCountRun;
+		const result = await this.countCatalogFeature(options.loadAll);
+		if (options.sourceGeneration !== this.memoSourceGeneration
+			|| options.queryRun !== this.catalogDesktopQueryRun
+			|| countRun !== this.catalogDesktopCountRun
+			|| !this.isCatalogQueryCurrent(options.queryFingerprint, options.loadAll)
+			|| result.catalogRevision !== options.catalogRevision
+			|| result.identityRevision !== options.identityRevision
+			|| !result.complete
+			|| result.count === null) {
+			return;
+		}
+		const previousCardFlowKey = this.getCardFlowStateKey();
+		this.catalogDesktopTotalCount = result.count;
+		this.renderCardFlowIfChanged(previousCardFlowKey);
+	}
+
+	private countCatalogFeature(loadAll: boolean): Promise<CatalogMemoCountResult> {
+		const query = this.buildCatalogActiveQuery(loadAll);
+		if (this.recordStatsSearchFilter !== null) {
+			return this.getCatalogReadService().countRecordStatsDrilldown(
+				this.recordStatsSearchFilter,
+				query.text,
+			);
+		}
+		if (this.activeNav === "review") {
+			return this.getCatalogReadService().countReviewItems(new Date(), query.text);
+		}
+		return this.getCatalogReadService().count(query);
+	}
+
+	private shouldCountCatalogQuery(): boolean {
+		return this.activeNav === "review"
+			|| (this.recordStatsSearchFilter !== null && this.recordStatsSearchFilter !== undefined)
+			|| (this.activeTagKey !== null && this.activeTagKey !== undefined)
+			|| (typeof this.searchQuery === "string" && this.searchQuery.trim().length > 0)
+			|| (this.searchDateFilter !== null && this.searchDateFilter !== undefined)
+			|| (this.scopeFilter !== undefined && this.scopeFilter !== "all");
+	}
+
 	updateCatalogProgress(coverage: CatalogCoverage): void {
 		this.catalogCoverage = { ...coverage };
 		const recordStatsSourceChanged = this.syncRecordStatsSource();
@@ -1602,6 +1677,13 @@ export class KnomoView extends ItemView {
 			}
 		}
 		if (!isCompleteCatalogCoverage(coverage)) {
+			const hadDesktopTotalCount = typeof this.catalogDesktopTotalCount === "number";
+			const hadMobileTotalCount = typeof this.catalogMobileTotalCount === "number";
+			this.catalogDesktopTotalCount = null;
+			this.catalogDesktopCountRun += 1;
+			this.catalogMobileTotalCount = null;
+			if (hadDesktopTotalCount) this.renderCardFlow();
+			if (hadMobileTotalCount) this.renderMobileSearchResults();
 			const shouldRender = !this.libraryIndexesInvalidatedByCoverage || !this.libraryIndexesUpdating;
 			if (!this.libraryIndexesInvalidatedByCoverage) {
 				this.libraryIndexesInvalidatedByCoverage = true;
@@ -1668,7 +1750,8 @@ export class KnomoView extends ItemView {
 		reset: boolean,
 	): Promise<void> {
 		const run = reset ? ++this.catalogMobileQueryRun : this.catalogMobileQueryRun;
-		const query: Omit<CatalogFeatureQuery, "limit" | "cursor"> = {};
+		if (reset) this.catalogMobileTotalCount = null;
+		const query: CatalogFeatureFilter = {};
 		if (text.trim().length > 0) query.text = text.trim();
 		const dateRange = getCatalogDateRange(dateFilter, new Date());
 		if (dateRange !== null) {
@@ -1725,6 +1808,44 @@ export class KnomoView extends ItemView {
 		this.syncRecordStatsSource();
 		this.invalidateMemoSearchCache();
 		this.retainMemoCardPreviews();
+		if (reset) {
+			this.catalogMobileTotalCount = page.nextCursor === null && isCompleteCatalogCoverage(page.coverage)
+				? next.length
+				: null;
+			if (this.catalogMobileTotalCount === null) {
+				void this.refreshCatalogMobileTotalCount({
+					run,
+					query,
+					recordStatsFilter,
+					catalogRevision: page.catalogRevision,
+					identityRevision: page.identityRevision,
+				});
+			}
+		}
+	}
+
+	private async refreshCatalogMobileTotalCount(options: {
+		run: number;
+		query: CatalogFeatureFilter;
+		recordStatsFilter: RecordStatsSearchFilter | null;
+		catalogRevision: number;
+		identityRevision: string;
+	}): Promise<void> {
+		const result = options.recordStatsFilter === null
+			? await this.getCatalogReadService().count(options.query)
+			: await this.getCatalogReadService().countRecordStatsDrilldown(
+				options.recordStatsFilter,
+				options.query.text,
+			);
+		if (options.run !== this.catalogMobileQueryRun
+			|| result.catalogRevision !== options.catalogRevision
+			|| result.identityRevision !== options.identityRevision
+			|| !result.complete
+			|| result.count === null) {
+			return;
+		}
+		this.catalogMobileTotalCount = result.count;
+		this.renderMobileSearchResults();
 	}
 
 	private buildCatalogActiveQuery(loadAll: boolean): Omit<CatalogFeatureQuery, "limit" | "cursor"> {
@@ -1766,7 +1887,9 @@ export class KnomoView extends ItemView {
 		if (queryFingerprint === this.catalogDesktopQueryFingerprint) return;
 		this.catalogDesktopQueryFingerprint = queryFingerprint;
 		this.catalogDesktopQueryRun += 1;
+		this.catalogDesktopCountRun += 1;
 		this.catalogCursor = null;
+		this.catalogDesktopTotalCount = null;
 		this.cardFlowError = null;
 		this.filteredMemosCache = null;
 		this.invalidateMemoSearchCache();
@@ -2666,14 +2789,17 @@ export class KnomoView extends ItemView {
 			randomReunionError: randomSnapshot.error,
 			shuffleDay: shuffleDaySnapshot,
 			memos,
-			regularFilterCopy: shouldLoadListMemos && this.activeNav === "all" ? getRegularFilterCopy({
+			matchedTotalCount: this.catalogDesktopTotalCount,
+			regularFilterCopy: shouldLoadListMemos
+				&& this.activeNav === "all"
+				&& this.catalogDesktopTotalCount !== null ? getRegularFilterCopy({
 				activeTag: this.activeTag,
 				activeTagKey: this.activeTagKey,
 				searchQuery: this.searchQuery,
 				searchDateFilter: this.searchDateFilter,
 				recordStatsSearchFilter: this.recordStatsSearchFilter,
 				scopeFilter: this.scopeFilter,
-			}, memos.length) : null,
+			}, this.catalogDesktopTotalCount) : null,
 			trashLoading: trashSnapshot.trashLoading,
 			trashError: trashSnapshot.trashError,
 			trashMemos: trashSnapshot.trashMemos,

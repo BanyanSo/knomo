@@ -6,6 +6,8 @@ import type {
 	CatalogFileRevisionBatch,
 	CatalogObservation,
 	CatalogQuery,
+	CatalogQueryCountResult,
+	CatalogQueryFilter,
 	CatalogQueryPage,
 	CatalogStoreLifecycle,
 } from "../types/catalog";
@@ -37,6 +39,7 @@ export interface MemoCatalogStore {
 	listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]>;
 	getObservation(observationKey: string): Promise<CatalogObservation | null>;
 	listFiles(): Promise<CatalogFileRecord[]>;
+	count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult>;
 	query(request: CatalogQuery): Promise<CatalogQueryPage>;
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]>;
 	getCoverage(): Promise<CatalogCoverage>;
@@ -140,6 +143,22 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 
 	async listFiles(): Promise<CatalogFileRecord[]> {
 		return [...this.files.values()].map(clone).sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+	}
+
+	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
+		const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+		let count = 0;
+		for (const observation of this.observations.values()) {
+			if (matchesCatalogQuery(observation, request, sourcePaths)) {
+				count += 1;
+			}
+		}
+		return {
+			count,
+			catalogRevision: this.catalogRevision,
+			coverage: clone(this.coverage),
+			lifecycle: this.getLifecycle(),
+		};
 	}
 
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
@@ -366,6 +385,10 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		return this.run((store) => store.getObservation(observationKey));
 	}
 	listFiles(): Promise<CatalogFileRecord[]> { return this.run((store) => store.listFiles()); }
+	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
+		const result = await this.run((store) => store.count(request));
+		return { ...result, lifecycle: this.getLifecycle() };
+	}
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
 		const page = await this.run((store) => store.query(request));
 		return { ...page, lifecycle: this.getLifecycle() };
@@ -462,7 +485,7 @@ export function normalizeCatalogText(value: string): string {
 
 export function matchesCatalogQuery(
 	observation: CatalogObservation,
-	request: CatalogQuery,
+	request: CatalogQueryFilter,
 	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
 ): boolean {
 	const tags = request.tags?.map(normalizeCatalogText).filter((tag) => tag.length > 0) ?? [];

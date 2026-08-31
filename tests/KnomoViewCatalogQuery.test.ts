@@ -326,6 +326,87 @@ test("查询 fingerprint 变化时保留旧结果、清空 cursor，并启动新
 	assert.equal(await reviewRequest, false);
 });
 
+test("桌面精确计数只提交当前查询与 Catalog、Identity revision", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const current = createDeferred<TestCatalogMemoCount>();
+	const stale = createDeferred<TestCatalogMemoCount>();
+	const counts = [current, stale];
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	view.memoSourceGeneration = 0;
+	view.catalogDesktopQueryRun = 1;
+	view.catalogDesktopCountRun = 0;
+	view.catalogDesktopTotalCount = null;
+	view.countCatalogFeature = async () => {
+		const count = counts.shift();
+		assert.notEqual(count, undefined);
+		return count?.promise ?? Promise.reject(new Error("missing count request"));
+	};
+	view.isCatalogQueryCurrent = () => true;
+	view.getCardFlowStateKey = () => `count:${view.catalogDesktopTotalCount ?? "pending"}`;
+	let renderCount = 0;
+	view.renderCardFlowIfChanged = () => { renderCount += 1; };
+
+	const committed = view.refreshCatalogDesktopTotalCount({
+		loadAll: true,
+		queryFingerprint: "tag:project",
+		queryRun: 1,
+		sourceGeneration: 0,
+		catalogRevision: 7,
+		identityRevision: "identity-7",
+	});
+	current.resolve(makeCatalogCount(90, 7, "identity-7"));
+	await committed;
+	assert.equal(view.catalogDesktopTotalCount, 90);
+	assert.equal(renderCount, 1);
+
+	const ignored = view.refreshCatalogDesktopTotalCount({
+		loadAll: true,
+		queryFingerprint: "tag:project",
+		queryRun: 1,
+		sourceGeneration: 0,
+		catalogRevision: 7,
+		identityRevision: "identity-7",
+	});
+	view.catalogDesktopQueryRun = 2;
+	stale.resolve(makeCatalogCount(120, 7, "identity-7"));
+	await ignored;
+	assert.equal(view.catalogDesktopTotalCount, 90);
+	assert.equal(renderCount, 1);
+});
+
+test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const memos = Array.from({ length: 50 }, (_, index) => makeMemo(`memo-${index + 1}`, "2026-08-24T10:00:00"));
+	const view = Object.create(KnomoView.prototype) as PresentationView;
+	view.catalogDesktopTotalCount = 90;
+	view.cardFlowError = null;
+	view.catalogCoverage = completeCoverage();
+	view.catalogStatus = { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" };
+	view.viewStateController = {
+		activeNav: "all",
+		activeTag: "Project",
+		activeTagKey: "project",
+		scopeFilter: "all",
+		searchQuery: "",
+		searchDateFilter: null,
+		recordStatsSearchFilter: null,
+	};
+	view.getFilteredMemos = () => memos;
+	view.getTodayTimeBuoyItems = () => [];
+	view.randomReunionController = { getSnapshot: () => ({ status: "idle", error: null, memos: null }) };
+	view.shuffleDayController = { getSnapshot: () => ({ status: "idle", selectedDate: null, memos: [], stats: null, error: null }) };
+	view.trashMemoController = { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [] }) };
+
+	const presentation = view.getCurrentCardFlowPresentation();
+
+	assert.equal(presentation.type, "items");
+	if (presentation.type !== "items") return;
+	assert.equal(presentation.memos.length, 50);
+	assert.deepEqual(presentation.headers, [{ type: "summary", text: "#Project: 90 Memos" }]);
+});
+
 test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
@@ -560,6 +641,8 @@ type QueryMemo = MemoViewItem;
 interface QueryView {
 	memoSourceGeneration: number;
 	catalogDesktopQueryRun: number;
+	catalogDesktopCountRun: number;
+	catalogDesktopTotalCount: number | null;
 	catalogDesktopQueryFingerprint: string | null;
 	hasCommittedCatalogDesktopQuery: boolean;
 	catalogCursor: { catalog: { catalogRevision: number; createdAtKey: string; observationKey: string } } | null;
@@ -622,6 +705,16 @@ interface QueryView {
 	cardFlowEl: { childElementCount: number } | null;
 	renderCardFlow: () => void;
 	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
+	countCatalogFeature: (loadAll: boolean) => Promise<TestCatalogMemoCount>;
+	isCatalogQueryCurrent: (queryFingerprint: string, loadAll: boolean) => boolean;
+	refreshCatalogDesktopTotalCount: (options: {
+		loadAll: boolean;
+		queryFingerprint: string;
+		queryRun: number;
+		sourceGeneration: number;
+		catalogRevision: number;
+		identityRevision: string;
+	}) => Promise<void>;
 	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
 	updateCatalogProgress: (coverage: TestCoverage) => void;
 }
@@ -649,6 +742,34 @@ interface NavigationView {
 	timeBuoyViewController: { loadInitial: () => Promise<void> };
 	prepareRecordStats: () => Promise<boolean>;
 	setSidebarNav: (nav: "all" | "random" | "shuffleDay") => void;
+}
+
+interface PresentationView {
+	catalogDesktopTotalCount: number | null;
+	cardFlowError: string | null;
+	catalogCoverage: TestCoverage;
+	catalogStatus: {
+		content: "ready";
+		catalog: "complete";
+		identity: "ready";
+		projection: "ready";
+		migration: "none";
+	};
+	viewStateController: {
+		activeNav: "all";
+		activeTag: string;
+		activeTagKey: string;
+		scopeFilter: "all";
+		searchQuery: string;
+		searchDateFilter: null;
+		recordStatsSearchFilter: null;
+	};
+	getFilteredMemos: () => QueryMemo[];
+	getTodayTimeBuoyItems: () => [];
+	randomReunionController: { getSnapshot: () => { status: "idle"; error: null; memos: null } };
+	shuffleDayController: { getSnapshot: () => { status: "idle"; selectedDate: null; memos: []; stats: null; error: null } };
+	trashMemoController: { getSnapshot: () => { trashLoading: false; trashError: null; trashMemos: [] } };
+	getCurrentCardFlowPresentation: () => import("../src/ui/KnomoCardFlowPresenter").CardFlowPresentation;
 }
 
 type TestCoverage = {
@@ -685,6 +806,14 @@ type TestCatalogMemoLoad = {
 		projection: "ready";
 		migration: "none";
 	};
+};
+
+type TestCatalogMemoCount = {
+	count: number | null;
+	complete: boolean;
+	catalogRevision: number;
+	identityRevision: string;
+	coverage: TestCoverage;
 };
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -740,6 +869,20 @@ function makeCatalogLoad(
 		coverage,
 		readState: "ready",
 		status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
+	};
+}
+
+function makeCatalogCount(
+	count: number,
+	catalogRevision: number,
+	identityRevision: string,
+): TestCatalogMemoCount {
+	return {
+		count,
+		complete: true,
+		catalogRevision,
+		identityRevision,
+		coverage: completeCoverage(),
 	};
 }
 

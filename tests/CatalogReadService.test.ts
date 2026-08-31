@@ -538,6 +538,8 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	assert.equal((await service.getLibrarySummary()).value, null);
 	assert.equal(await service.getCoverageForRange("2026-08-01", "2026-08-31"), true);
 	assert.equal(await service.getCoverageForRange("2026-07-31", "2026-08-31"), false);
+	assert.equal((await service.count({ fromDate: "2026-08-01", toDate: "2026-08-31" })).count, 1);
+	assert.equal((await service.count({})).count, null);
 	await store.setCoverage({
 		kind: "rebuilding",
 		sharedConfigurationComplete: true,
@@ -555,6 +557,11 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	}, { limit: 50 });
 	assert.deepEqual(pending.items, []);
 	assert.equal(pending.readState, "history_building");
+	assert.equal((await service.countRecordStatsDrilldown({
+		type: "range",
+		startDate: "2026-07-01",
+		endDateExclusive: "2026-09-01",
+	})).count, null);
 });
 
 test("运行状态快照只读组合设置、Catalog、Identity、共享配置、Monthly 和旧版迁移", async () => {
@@ -612,10 +619,14 @@ test("往日漫游按同日号查询、排除当天并支持跨页", async () =>
 
 	const first = await service.queryReviewItems(new Date(2026, 2, 15), { limit: 1 });
 	const second = await service.queryReviewItems(new Date(2026, 2, 15), { limit: 1, cursor: first.nextCursor });
+	const count = await service.countReviewItems(new Date(2026, 2, 15));
 
 	assert.deepEqual(first.items.map((item) => item.content), ["february"]);
 	assert.deepEqual(second.items.map((item) => item.content), ["november"]);
 	assert.equal(second.nextCursor, null);
+	assert.equal(count.count, 2);
+	assert.equal(count.complete, true);
+	assert.equal(count.catalogRevision, first.catalogRevision);
 });
 
 test("2 月 29 日往日漫游只返回历史闰日", async () => {
@@ -671,7 +682,10 @@ test("记录统计钻取在分页前处理标签、引用、小时和并列日�
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "hour", ...range, hour: 9 }, { limit: 50 })).items.map((item) => item.content), ["explicit [[Daily#^abc]]", "parent"]);
 	const references = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1 });
 	const moreReferences = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1, cursor: references.nextCursor });
+	const referenceCount = await service.countRecordStatsDrilldown({ type: "references", ...range });
 	assert.deepEqual([...references.items, ...moreReferences.items].map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
+	assert.equal(referenceCount.count, 2);
+	assert.equal(referenceCount.complete, true);
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-notes", dates: ["2026-08-01", "2026-08-04"] }, { limit: 50 })).items.map((item) => item.content), ["image", "parent"]);
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-words", dates: ["2026-08-02", "2026-08-03"] }, { limit: 50 })).items.map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
 });

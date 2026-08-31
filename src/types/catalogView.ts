@@ -114,6 +114,14 @@ export interface CatalogMemoPage {
 	invalidated: boolean;
 }
 
+export interface CatalogMemoCountResult {
+	count: number | null;
+	complete: boolean;
+	catalogRevision: number;
+	identityRevision: string;
+	coverage: CatalogCoverage;
+}
+
 export interface CatalogLibrarySummary {
 	memoCount: number;
 	tagCount: number;
@@ -162,6 +170,8 @@ export interface CatalogOperationalState {
 export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 	cursor?: CatalogFeatureCursor | null;
 };
+
+export type CatalogFeatureFilter = Omit<CatalogFeatureQuery, "limit" | "cursor">;
 
 export type TrashDeleteSource = "knomo_ui" | "unknown";
 

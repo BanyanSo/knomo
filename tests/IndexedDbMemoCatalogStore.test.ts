@@ -102,6 +102,45 @@ test("IndexedDB 使用真实索引完成 recent、搜索、筛选、分页和 ag
 	}
 });
 
+test("IndexedDB 独立计数返回完整筛选结果而不受分页限制", async () => {
+	const databaseName = uniqueDatabaseName("query-count");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", Array.from(
+			{ length: 90 },
+			(_, index) => makeObservation(
+				"Journal/2026-08-09.md",
+				"2026-08-09",
+				index + 1,
+				`${String(8 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}`,
+				`project memo ${index + 1}`,
+				{ tags: [index % 2 === 0 ? "project" : "project/knomo"] },
+			),
+		)));
+		await store.setCoverage({
+			kind: "complete",
+			coveredFromDate: "2026-08-09",
+			pendingFileCount: 0,
+			coveredFileCount: 1,
+			totalFileCount: 1,
+		});
+
+		const page = await store.query({ limit: 50, tags: ["project"] });
+		const count = await store.count({ tags: ["project"] });
+
+		assert.equal(page.items.length, 50);
+		assert.notEqual(page.nextCursor, null);
+		assert.equal(count.count, 90);
+		assert.equal(count.catalogRevision, page.catalogRevision);
+		assert.equal(count.coverage.kind, "complete");
+		assert.equal((await store.count({ text: "project memo" })).count, 90);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
 test("IndexedDB clear 原子保留指定服务元数据且重开后仍可读取", async () => {
 	const databaseName = uniqueDatabaseName("clear-preserved-meta");
 	const store = createStore(databaseName);

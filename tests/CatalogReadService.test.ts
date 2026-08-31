@@ -158,7 +158,13 @@ test("回收站忽略过期 resolution snapshot，并按当前 Catalog 显示删
 	await seedCatalog(catalog, store, [observation]);
 	const identity = createIdentityReader();
 	const binding = makeBinding(observation, "2026082212345601", "identity-1");
-	identity.setState(observation.content, { kind: "identified", binding }, "ready", "identity-1");
+	identity.setState(
+		observation.content,
+		{ kind: "identified", binding },
+		"ready",
+		"identity-1",
+		"2026-08-22T12:34:56",
+	);
 	const service = new CatalogReadService({ catalog, identityLedger: identity.reader });
 	await service.materializeResolutionSnapshot();
 	await catalog.deleteFile(observation.sourcePath);
@@ -183,6 +189,8 @@ test("回收站忽略过期 resolution snapshot，并按当前 Catalog 显示删
 
 	assert.equal(page.items.length, 1);
 	assert.equal(page.items[0]?.memoId, binding.memoId);
+	assert.equal(page.items[0]?.createdAt, "2026-08-22T12:34:56");
+	assert.equal(page.items[0]?.deleteSource, "knomo_ui");
 	assert.equal(page.items[0]?.purgeAllowed, true);
 
 	identity.setState(observation.content, {

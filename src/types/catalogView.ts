@@ -150,11 +150,15 @@ export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 	cursor?: CatalogFeatureCursor | null;
 };
 
+export type TrashDeleteSource = "knomo_ui" | "unknown";
+
 export interface TrashMemoItem {
 	key: string;
 	memoId: string;
 	deleteEventId: string;
+	createdAt: string;
 	deletedAt: string;
+	deleteSource: TrashDeleteSource;
 	logicalDate: string;
 	sourcePath: string;
 	section: string | null;

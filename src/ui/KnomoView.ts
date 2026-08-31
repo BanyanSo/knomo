@@ -113,7 +113,7 @@ import { KnomoWikiLinkSuggest } from "./KnomoWikiLinkSuggest";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { MemoMarkdownRenderer } from "./MemoMarkdownRenderer";
 import { getMarkdownInternalLinkInfo } from "./MarkdownInternalLink";
-import { formatMemoDisplayTime, formatOptionalMemoTime } from "./MemoDisplayFormatters";
+import { formatDeleteSource, formatMemoDisplayTime, formatOptionalMemoTime } from "./MemoDisplayFormatters";
 import { parseMemoCardPreviewLite, resolveMemoPreviewImages } from "./MemoCardPreview";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 import { MemoCardPreviewCache } from "./MemoCardPreviewCache";
@@ -3104,6 +3104,7 @@ export class KnomoView extends ItemView {
 			busyAction: trashBusyMemoActions.get(memo.id) ?? null,
 			formatDisplayTime: formatMemoDisplayTime,
 			formatOptionalTime: formatOptionalMemoTime,
+			formatDeleteSource,
 			getMarkdownPriority: getMarkdownRenderPriority,
 			getMemoCardPreview: (memoRecord) => this.getMemoCardPreview(memoRecord),
 			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority, previewText) => {

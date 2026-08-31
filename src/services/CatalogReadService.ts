@@ -25,7 +25,12 @@ import type {
 	TrashMemoItem,
 	TrashMemoPage,
 } from "../types/catalogView";
-import type { IdentityLedgerBinding, IdentityLedgerReader } from "../types/identityLedger";
+import type {
+	IdentityLedgerBinding,
+	IdentityLedgerDeleteRecord,
+	IdentityLedgerReader,
+	IdentityLedgerSnapshot,
+} from "../types/identityLedger";
 import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
@@ -272,7 +277,9 @@ export class CatalogReadService {
 				key: `${record.memoId}:${record.deleteEventId}`,
 				memoId: record.memoId,
 				deleteEventId: record.deleteEventId,
+				createdAt: readTrashCreatedAt(record, identitySnapshot),
 				deletedAt: record.evidence.deletedAt,
+				deleteSource: record.evidence.deletedSourceRevision === null ? "unknown" : "knomo_ui",
 				logicalDate: record.evidence.logicalDate,
 				sourcePath: record.evidence.sourcePath,
 				section: record.evidence.section,
@@ -830,6 +837,15 @@ function observationEvidence(observation: CatalogObservation): ResolvedIdentityE
 
 function normalizeTime(time: string): string {
 	return time.length === 5 ? `${time}:00` : time;
+}
+
+function readTrashCreatedAt(record: IdentityLedgerDeleteRecord, snapshot: IdentityLedgerSnapshot): string {
+	const memo = snapshot.memos[record.memoId];
+	if (memo?.createdAt !== null && memo?.createdAt !== undefined) return memo.createdAt;
+	const bindingTime = memo?.bindings.find((binding) => binding.bindingId === record.baseBindingId)?.evidence.time;
+	const payloadTime = /^- ((?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)(?:\s|$)/u
+		.exec(record.evidence.rawBlock.split(/\r?\n/u, 1)[0] ?? "")?.[1];
+	return `${record.evidence.logicalDate}T${normalizeTime(bindingTime ?? payloadTime ?? "00:00")}`;
 }
 
 function readDeletedPayloadContent(rawBlock: string): string {

@@ -276,15 +276,20 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 test("trash memo cards expose restore and single-item permanent purge actions", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoTrashMemoCard } = await import("../src/ui/KnomoCard");
+	const { formatDeleteSource, formatMemoDisplayTime, formatOptionalMemoTime } = await import("../src/ui/MemoDisplayFormatters");
 	const root = new TestElement("div");
 
 	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({
 		status: "deleted",
+		createdAt: "2026-06-02T12:34:56.789+08:00",
+		deletedAt: "2026-06-03T00:00:00.123Z",
 		trashItem: {
 			key: "memo-1:delete-1",
 			memoId: "memo-1",
 			deleteEventId: "delete-1",
+			createdAt: "2026-06-02T12:34:56.789+08:00",
 			deletedAt: "2026-06-03T00:00:00+08:00",
+			deleteSource: "knomo_ui",
 			logicalDate: "2026-06-02",
 			sourcePath: "Daily/2026-06-02.md",
 			section: "Memos",
@@ -297,8 +302,9 @@ test("trash memo cards expose restore and single-item permanent purge actions", 
 		generation: 7,
 		renderIndex: 0,
 		busyAction: null,
-		formatDisplayTime: (value) => value,
-		formatOptionalTime: (value) => value ?? "",
+		formatDisplayTime: formatMemoDisplayTime,
+		formatOptionalTime: formatOptionalMemoTime,
+		formatDeleteSource,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -312,6 +318,8 @@ test("trash memo cards expose restore and single-item permanent purge actions", 
 	assert.equal(root.find("[data-memo-time-open='daily']"), null);
 	assert.equal(root.find("[data-trash-action='restore']")?.getText(), "Restore");
 	assert.equal(root.find("[data-trash-action='purge']")?.getText(), "Permanently delete");
+	assert.equal(root.find(".knomo-card-time")?.getText(), "Created: 2026-06-02 12:34:56");
+	assert.equal(root.find(".knomo-trash-meta")?.getText(), "Deleted: 2026-06-03 00:00:00Delete source: Knomo");
 });
 
 async function renderMemoCard(

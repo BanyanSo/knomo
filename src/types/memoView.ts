@@ -54,7 +54,7 @@ export function isTrashMemoView(item: MemoViewItem): item is MemoViewItem & { tr
 export function toTrashMemoView(item: TrashMemoItem): MemoViewItem {
 	return {
 		id: item.key,
-		createdAt: `${item.logicalDate}T00:00:00`,
+		createdAt: item.createdAt,
 		updatedAt: item.deletedAt,
 		contentSnapshot: item.content,
 		contentHash: item.contentHash,

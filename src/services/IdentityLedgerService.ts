@@ -30,7 +30,6 @@ import {
 	canonicalIdentityLedgerJson,
 	createIdentityLedgerEventId,
 	createIdentityLedgerMemoId,
-	createIdentityLedgerWriterId,
 	getIdentityLedgerSegmentPath,
 	getIdentityLedgerWriterSegmentsPath,
 	parseIdentityLedgerSegment,
@@ -54,7 +53,7 @@ interface ObservationBindingIndex {
 
 export interface IdentityLedgerServiceOptions {
 	getRootPath: () => string | null;
-	getWriterId?: () => Promise<string>;
+	getWriterId: () => Promise<string>;
 	createMemoId?: () => string;
 	createEventId?: () => string;
 	now?: () => Date;
@@ -71,7 +70,6 @@ export interface HistoricalIdentityAdoptionResult {
 }
 
 export class IdentityLedgerService implements IdentityLedgerMutationService {
-	private readonly sessionWriterId = createIdentityLedgerWriterId();
 	private readonly now: () => Date;
 	private readonly createMemoId: () => string;
 	private readonly createEventId: () => string;
@@ -89,8 +87,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private stopped = false;
 	private writeQueue: Promise<void> = Promise.resolve();
 	private writePauseCount = 0;
-	private legacyImportWriteCount = 0;
-	private automaticRepairWriteCount = 0;
+	private deterministicImportWriteCount = 0;
+	private automaticMaintenanceWriteCount = 0;
 	private readonly selfWrittenPaths = new Map<string, number>();
 	private readonly purgeOperations = new Map<string, Promise<void>>();
 	private observationBindingsByEvidence = new Map<string, ObservationBindingReference[]>();
@@ -286,7 +284,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		const pendingEvents = [...pendingByEventId.values()].map((item) => item.event);
 		if (pendingEvents.length === 0) return 0;
 
-		this.legacyImportWriteCount += 1;
+		this.deterministicImportWriteCount += 1;
 		const previous = this.writeQueue;
 		let releaseQueue: () => void = () => undefined;
 		this.writeQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
@@ -327,7 +325,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			throw error;
 		} finally {
 			releaseQueue();
-			this.legacyImportWriteCount -= 1;
+			this.deterministicImportWriteCount -= 1;
 		}
 		this.scheduleNotification();
 		return pendingEvents.length;
@@ -345,8 +343,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	async beginCreate(input: IdentityLedgerCreateInput): Promise<IdentityLedgerCreatePlan> {
-		if (this.legacyImportWriteCount > 0) {
-			throw new Error("Identity Ledger is importing legacy events.");
+		if (this.deterministicImportWriteCount > 0) {
+			throw new Error("Identity Ledger is importing deterministic events.");
 		}
 		const memoId = this.createMemoId();
 		const intent: IdentityLedgerCreateIntentEvent = {
@@ -364,7 +362,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				sourceMemoId: input.sourceMemoId,
 			},
 		};
-		if (this.automaticRepairWriteCount > 0) {
+		if (this.automaticMaintenanceWriteCount > 0) {
 			return { memoId, intent, intentDurable: false };
 		}
 		try {
@@ -419,11 +417,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		for (const intent of [...this.snapshot.pendingIntents]) {
 			const candidates = observations.filter((observation) =>
 				this.resolveObservation(observation) === null
-				&& (intent.evidence.targetPath === null
-					|| normalizePath(observation.sourcePath) === normalizePath(intent.evidence.targetPath))
-				&& observation.logicalDate === intent.evidence.logicalDate
-				&& matchesCreateIntentTime(intent.evidence.time, observation.time)
-				&& observation.contentHash === intent.evidence.contentHash);
+					&& matchesCreateIntentObservation(intent, observation));
 			if (candidates.length !== 1) continue;
 			try {
 				await this.finishCreate({ memoId: intent.memoId, intent, intentDurable: true }, candidates[0] as MemoObservation);
@@ -454,11 +448,11 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	async repairKnownDuplicateCreateConflicts(observations: readonly MemoObservation[]): Promise<number> {
-		this.automaticRepairWriteCount += 1;
+		this.automaticMaintenanceWriteCount += 1;
 		try {
 			return await this.repairKnownDuplicateCreateConflictsInternal(observations);
 		} finally {
-			this.automaticRepairWriteCount -= 1;
+			this.automaticMaintenanceWriteCount -= 1;
 		}
 	}
 
@@ -530,8 +524,24 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		before: readonly MemoObservation[],
 		after: readonly MemoObservation[],
 		insertedObservation: MemoObservation | null = null,
+		allowIdentityAdoption = false,
 	): Promise<IdentityLedgerReconcileResult> {
-		const plans = buildRevisionSuccessorPlans(before, after, insertedObservation).flatMap((plan) => {
+		this.automaticMaintenanceWriteCount += 1;
+		try {
+			return await this.reconcileRevisionInternal(before, after, insertedObservation, allowIdentityAdoption);
+		} finally {
+			this.automaticMaintenanceWriteCount -= 1;
+		}
+	}
+
+	private async reconcileRevisionInternal(
+		before: readonly MemoObservation[],
+		after: readonly MemoObservation[],
+		insertedObservation: MemoObservation | null,
+		allowIdentityAdoption: boolean,
+	): Promise<IdentityLedgerReconcileResult> {
+		const reconciliation = buildRevisionReconciliationPlan(before, after, insertedObservation);
+		const plans = reconciliation.successors.flatMap((plan) => {
 			const baseBindings = this.findObservationBindings(plan.before);
 			if (baseBindings.length !== 1) return [];
 			return plan.successors.map((successor) => ({
@@ -539,20 +549,42 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				successor,
 			}));
 		});
-		const writerId = await this.getWriterId();
+		const adoptionCandidates = allowIdentityAdoption
+			? reconciliation.safeAdditions.filter((observation) =>
+				this.resolveObservationState(observation).kind === "unbound")
+			: [];
+		const claimObservations = this.status === "ready" || this.status === "absent"
+			? adoptionCandidates.filter((observation) => !this.snapshot.pendingIntents.some((intent) =>
+				matchesCreateIntentObservation(intent, observation)))
+			: [];
+		const writerId = plans.length === 0 && claimObservations.length === 0
+			? null
+			: await this.getWriterId();
 		const events: IdentityLedgerRebindEvent[] = [];
 		const affectedMemoIds = new Set<string>();
 		for (const plan of plans) {
 			if (this.hasActiveSuccessor(plan.base.memoId, plan.base.bindingId, plan.successor)) continue;
-			events.push(this.createRebindEvent(plan.base, plan.successor, "edit", writerId));
+			if (writerId !== null) events.push(this.createRebindEvent(plan.base, plan.successor, "edit", writerId));
 			affectedMemoIds.add(plan.base.memoId);
 		}
 		await this.appendEvents(events);
+		const claims: IdentityLedgerClaimEvent[] = [];
+		if (writerId !== null) {
+			for (const observation of claimObservations) {
+				if (this.resolveObservationState(observation).kind !== "unbound") continue;
+				const claim = await buildLocalObservationClaim(observation, writerId);
+				claims.push(claim);
+				affectedMemoIds.add(claim.memoId);
+			}
+		}
+		const importedClaimCount = await this.importVerifiedLegacyEvents(claims);
 		return {
-			appendedEventCount: events.length,
+			appendedEventCount: events.length + importedClaimCount,
 			conflictedMemoIds: [...affectedMemoIds]
 				.filter((memoId) => this.snapshot.memos[memoId]?.conflicted === true)
 				.sort(),
+			deferredObservationCount: adoptionCandidates.filter((observation) =>
+				this.resolveObservationState(observation).kind === "unbound").length,
 		};
 	}
 
@@ -579,19 +611,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		if (current.kind === "conflicted") {
 			throw new Error("Identity Ledger observation is conflicted and cannot be adopted.");
 		}
-		const memoId = this.createMemoId();
-		const claim: IdentityLedgerClaimEvent = {
-			eventId: this.createEventId(),
-			writerId: await this.getWriterId(),
-			memoId,
-			type: "claim",
-			baseBindingId: null,
-			occurredAt: this.now().toISOString(),
-			evidence: {
-				observation: toObservationEvidence(observation),
-				createIntentEventId: null,
-			},
-		};
+		const claim = await buildLocalObservationClaim(observation, await this.getWriterId());
+		const memoId = claim.memoId;
 		await this.appendEvent(claim);
 		const resolved = this.resolveObservationState(observation);
 		if (resolved.kind !== "identified" || resolved.binding.memoId !== memoId) {
@@ -613,9 +634,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			throw new Error("Historical Identity adoption requires an available Identity Ledger.");
 		}
 		const ordered = [...observations].sort(compareHistoricalObservations);
-		const writerId = await deterministicHistoricalWriterId();
 		const claims: IdentityLedgerClaimEvent[] = [];
 		const expectedMemoIds = new Map<string, string>();
+		let writerId: string | null = null;
 		for (const observation of ordered) {
 			this.assertWriteAllowed(runtime.cancellationSignal);
 			const state = this.resolveObservationState(observation);
@@ -626,20 +647,12 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			if (state.kind === "conflicted") {
 				throw new Error("Historical Identity adoption does not resolve conflicted observations.");
 			}
-			const evidence = toObservationEvidence(observation);
+			writerId ??= await this.getWriterId();
+			const claim = await buildLocalObservationClaim(observation, writerId);
+			const evidence = claim.evidence.observation;
 			const evidenceKey = observationEvidenceKey(evidence);
-			const memoId = await deterministicHistoricalMemoId(evidence);
-			const eventId = await deterministicHistoricalEventId(memoId, evidence);
-			expectedMemoIds.set(evidenceKey, memoId);
-			claims.push({
-				eventId,
-				writerId,
-				memoId,
-				type: "claim",
-				baseBindingId: null,
-				occurredAt: historicalObservationSortingTime(evidence),
-				evidence: { observation: evidence, createIntentEventId: null },
-			});
+			expectedMemoIds.set(evidenceKey, claim.memoId);
+			claims.push(claim);
 		}
 		const importedEventCount = await this.importVerifiedLegacyEvents(claims, runtime);
 		for (const observation of ordered) {
@@ -1117,11 +1130,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	private async getWriterId(): Promise<string> {
-		try {
-			return await this.options.getWriterId?.() ?? this.sessionWriterId;
-		} catch {
-			return this.sessionWriterId;
-		}
+		return this.options.getWriterId();
 	}
 
 	private getRootPath(): string | null {
@@ -1578,30 +1587,45 @@ interface RevisionSuccessorPlan {
 	successors: MemoObservation[];
 }
 
-function buildRevisionSuccessorPlans(
+interface RevisionReconciliationPlan {
+	successors: RevisionSuccessorPlan[];
+	safeAdditions: MemoObservation[];
+}
+
+function buildRevisionReconciliationPlan(
 	before: readonly MemoObservation[],
 	after: readonly MemoObservation[],
 	insertedObservation: MemoObservation | null = null,
-): RevisionSuccessorPlan[] {
+): RevisionReconciliationPlan {
 	const insertedPlans = insertedObservation === null
 		? null
 		: buildKnownInsertionSuccessorPlans(before, after, insertedObservation);
-	if (insertedPlans !== null) return insertedPlans;
-	if (before.length === 0 || after.length === 0) return [];
-	const beforePaths = new Set(before.map((observation) => normalizePath(observation.sourcePath)));
+	if (insertedPlans !== null) return { successors: insertedPlans, safeAdditions: [] };
+	if (after.length === 0) return { successors: [], safeAdditions: [] };
 	const afterPaths = new Set(after.map((observation) => normalizePath(observation.sourcePath)));
-	const beforeRevisions = new Set(before.map((observation) => observation.sourceRevision));
 	const afterRevisions = new Set(after.map((observation) => observation.sourceRevision));
-	if (beforePaths.size !== 1 || afterPaths.size !== 1
-		|| [...beforePaths][0] !== [...afterPaths][0]
-		|| beforeRevisions.size !== 1 || afterRevisions.size !== 1
-		|| [...beforeRevisions][0] === [...afterRevisions][0]) return [];
+	if (afterPaths.size !== 1 || afterRevisions.size !== 1) {
+		return { successors: [], safeAdditions: [] };
+	}
+	if (before.length === 0) {
+		return {
+			successors: [],
+			safeAdditions: insertedObservation === null ? [...after] : [],
+		};
+	}
+	const beforePaths = new Set(before.map((observation) => normalizePath(observation.sourcePath)));
+	const beforeRevisions = new Set(before.map((observation) => observation.sourceRevision));
+	if (beforePaths.size !== 1 || [...beforePaths][0] !== [...afterPaths][0]
+		|| beforeRevisions.size !== 1 || [...beforeRevisions][0] === [...afterRevisions][0]) {
+		return { successors: [], safeAdditions: [] };
+	}
 	const beforeBySignature = groupObservationIndexes(before);
 	const afterBySignature = groupObservationIndexes(after);
 	const matchedBefore = new Set<number>();
 	const matchedAfter = new Set<number>();
 	const anchors: Array<{ beforeIndex: number; afterIndex: number }> = [];
 	const plans: RevisionSuccessorPlan[] = [];
+	const safeAdditions: MemoObservation[] = [];
 	for (const [signature, beforeIndexes] of beforeBySignature) {
 		const afterIndexes = afterBySignature.get(signature) ?? [];
 		if (beforeIndexes.length !== 1 || afterIndexes.length !== 1) continue;
@@ -1625,11 +1649,18 @@ function buildRevisionSuccessorPlans(
 			beforeIndex > left.beforeIndex && beforeIndex < right.beforeIndex && !matchedBefore.has(beforeIndex));
 		const unmatchedAfter = after.filter((_observation, afterIndex) =>
 			afterIndex > left.afterIndex && afterIndex < right.afterIndex && !matchedAfter.has(afterIndex));
-		if (unmatchedBefore.length === 1 && unmatchedAfter.length > 0) {
+		if (unmatchedBefore.length === 0) {
+			safeAdditions.push(...unmatchedAfter);
+		} else if (unmatchedBefore.length === 1 && unmatchedAfter.length > 0) {
 			plans.push({ before: unmatchedBefore[0] as MemoObservation, successors: [...unmatchedAfter] });
 		}
 	}
-	return plans.sort((left, right) => left.before.startLine - right.before.startLine);
+	return {
+		successors: plans.sort((left, right) => left.before.startLine - right.before.startLine),
+		safeAdditions: insertedObservation === null
+			? safeAdditions.sort((left, right) => left.startLine - right.startLine)
+			: [],
+	};
 }
 
 function buildKnownInsertionSuccessorPlans(
@@ -1749,8 +1780,21 @@ function compareHistoricalObservations(left: MemoObservation, right: MemoObserva
 		|| left.rawBlockHash.localeCompare(right.rawBlockHash);
 }
 
-async function deterministicHistoricalWriterId(): Promise<string> {
-	return `w_${(await sha256IdentityLedgerText("historical-daily-bootstrap-writer")).slice(0, 32)}`;
+async function buildLocalObservationClaim(
+	observation: MemoObservation,
+	writerId: string,
+): Promise<IdentityLedgerClaimEvent> {
+	const evidence = toObservationEvidence(observation);
+	const memoId = await deterministicHistoricalMemoId(evidence);
+	return {
+		eventId: await deterministicObservationClaimEventId(writerId, memoId, evidence),
+		writerId,
+		memoId,
+		type: "claim",
+		baseBindingId: null,
+		occurredAt: historicalObservationSortingTime(evidence),
+		evidence: { observation: evidence, createIntentEventId: null },
+	};
 }
 
 async function deterministicHistoricalMemoId(evidence: IdentityLedgerObservationEvidence): Promise<string> {
@@ -1765,12 +1809,14 @@ async function deterministicHistoricalMemoId(evidence: IdentityLedgerObservation
 	});
 }
 
-async function deterministicHistoricalEventId(
+async function deterministicObservationClaimEventId(
+	writerId: string,
 	memoId: string,
 	evidence: IdentityLedgerObservationEvidence,
 ): Promise<string> {
 	return `e_${(await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
-		domain: "historical-daily-bootstrap-claim",
+		domain: "local-observation-claim",
+		writerId,
 		memoId,
 		evidence,
 	}))).slice(0, 32)}`;
@@ -1867,6 +1913,17 @@ function cloneSnapshot(snapshot: IdentityLedgerSnapshot): IdentityLedgerSnapshot
 		})),
 		quarantinedEventIds: [...snapshot.quarantinedEventIds],
 	};
+}
+
+function matchesCreateIntentObservation(
+	intent: IdentityLedgerCreateIntentEvent,
+	observation: MemoObservation,
+): boolean {
+	return (intent.evidence.targetPath === null
+			|| normalizePath(observation.sourcePath) === normalizePath(intent.evidence.targetPath))
+		&& observation.logicalDate === intent.evidence.logicalDate
+		&& matchesCreateIntentTime(intent.evidence.time, observation.time)
+		&& observation.contentHash === intent.evidence.contentHash;
 }
 
 function matchesCreateIntentTime(intentTime: string, observationTime: string): boolean {

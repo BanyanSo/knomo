@@ -20,9 +20,14 @@ import {
 } from "./services/MonthlyProjectionCoordinator";
 import { MonthlyProjectionInputBuilder } from "./services/MonthlyProjectionInputBuilder";
 import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore";
-import { createIdentityLedgerWriterId, getIdentityLedgerRootPath } from "./services/IdentityLedgerProtocol";
+import { getIdentityLedgerRootPath } from "./services/IdentityLedgerProtocol";
 import { IdentityLedgerService } from "./services/IdentityLedgerService";
 import { IdentityRecoveryCoordinator } from "./services/IdentityRecoveryCoordinator";
+import {
+	IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY,
+	IdentityRevisionTransitionQueue,
+} from "./services/IdentityRevisionTransitionQueue";
+import { LocalWriterIdentityService } from "./services/LocalWriterIdentityService";
 import {
 	HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
 	HistoricalIdentityBootstrapService,
@@ -117,7 +122,7 @@ export default class KnomoPlugin extends Plugin {
 		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
 		await this.memoCatalogService.open();
 
-		const sessionWriterId = createIdentityLedgerWriterId();
+		const localWriterIdentityService = new LocalWriterIdentityService(this.app);
 		const identityLedgerService = new IdentityLedgerService(this.app, {
 			getRootPath: () => {
 				const settings = this.settingsService.getSettings();
@@ -125,7 +130,7 @@ export default class KnomoPlugin extends Plugin {
 					? getIdentityLedgerRootPath(settings.knomoDataRoot)
 					: null;
 			},
-			getWriterId: async () => sessionWriterId,
+			getWriterId: () => localWriterIdentityService.getWriterId(),
 			cancellationSignal: lowPriorityWorkQueue.signal,
 		});
 
@@ -136,7 +141,7 @@ export default class KnomoPlugin extends Plugin {
 					? getKnomoSharedConfigRootPath(settings.knomoDataRoot)
 					: null;
 			},
-			getWriterId: async () => sessionWriterId,
+			getWriterId: () => localWriterIdentityService.getWriterId(),
 			getCurrentLocale: () => getLanguage(),
 			getLocalConfig: async (monthlyLocale) => buildKnomoSharedConfig(
 				await dailyNoteService.getDailyNotesConfig(),
@@ -188,24 +193,36 @@ export default class KnomoPlugin extends Plugin {
 		const loadObservationBatches = async (): Promise<CatalogFileRevisionBatch[]> => {
 			return this.memoCatalogService!.listFileRevisionBatches();
 		};
+		const identityRevisionTransitionQueue = new IdentityRevisionTransitionQueue({
+			store: this.memoCatalogService.getStore(),
+			getCurrentSourceRevision: async (sourcePath) =>
+				(await this.memoCatalogService!.getFileRevisionBatch(sourcePath))?.file.sourceRevision ?? null,
+		});
 		const reconcileIdentityLedger = async () => {
 			const hasPendingCreates = identityLedgerService.hasPendingCreates();
 			const hasPendingDeletes = identityLedgerService.hasPendingDeletes();
 			const hasConflicts = Object.values(identityLedgerService.getSnapshot().memos)
 				.some((memo) => memo.conflicted);
-			if (!hasPendingCreates && !hasPendingDeletes && !hasConflicts) return;
-			const batches = await loadObservationBatches();
-			const observations = batches.flatMap((batch) => batch.observations);
+			const batches = hasPendingCreates || hasPendingDeletes || hasConflicts
+				? await loadObservationBatches()
+				: null;
+			const observations = batches?.flatMap((batch) => batch.observations) ?? [];
 			if (hasConflicts) {
 				await identityLedgerService.repairKnownDuplicateCreateConflicts(observations);
 			}
 			if (hasPendingCreates) {
 				await identityLedgerService.reconcilePendingCreates(observations);
 			}
+			await identityRevisionTransitionQueue.drain((transition) => identityLedgerService.reconcileRevision(
+				transition.before?.observations ?? [],
+				transition.after.observations,
+				transition.insertedObservation,
+				transition.allowIdentityAdoption,
+			));
 			const coverage = hasPendingDeletes
 				? await this.memoCatalogService!.getStore().getCoverage()
 				: null;
-			if (coverage?.kind === "complete") {
+			if (coverage?.kind === "complete" && batches !== null) {
 				await identityLedgerService.reconcilePendingDeletes(Object.fromEntries(batches.map((batch) => [
 					normalizePath(batch.file.sourcePath),
 					batch.file.sourceRevision,
@@ -264,17 +281,15 @@ export default class KnomoPlugin extends Plugin {
 				isConfigurationComplete: () => knomoSharedConfigService.isCoverageComplete(),
 				onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage),
 				onRevisionTransition: async (transition) => {
-					await identityLedgerService.reconcileRevision(
-						transition.before?.observations ?? [],
-						transition.after.observations,
-						transition.insertedObservation,
-					);
+					await identityRevisionTransitionQueue.enqueue(transition);
+					await this.identityRecoveryCoordinator?.request();
 				},
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [
 					LEGACY_MIGRATION_COMPLETION_META_KEY,
 					HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
 					MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+					IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY,
 				],
 				onCatalogSettled: async () => {
 					const legacyReport = await this.legacyIndexMigrationService?.run();

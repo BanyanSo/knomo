@@ -313,6 +313,110 @@ test("warm start 在审计未到期时不读取未变化 Daily 正文", async ()
 	second.unload();
 });
 
+test("已有空 Daily 的运行期手写新增会产生 transition，Catalog rebuild 与首次路径不会冒充新增", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const sourcePath = "Journal/2026-08-22.md";
+	const fixture = await createCoordinatorFixture([
+		{ path: sourcePath, content: "## Memos\n", mtime: 10 },
+	]);
+	const transitions: CatalogRevisionTransition[] = [];
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		{
+			fullAuditIntervalMs: 10_000,
+			onRevisionTransition: (transition) => { transitions.push(transition); },
+		},
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+		assert.equal(transitions.length, 0);
+
+		const newSourcePath = "Journal/2026-08-23.md";
+		fixture.setFile(newSourcePath, "## Memos\n- 09:00 同步或本机新路径\n", 15);
+		const newFile = fixture.file(newSourcePath);
+		assert.ok(newFile instanceof TFile);
+		fixture.emitVaultEvent("create", newFile);
+		await coordinator.waitForIdle();
+		assert.equal(transitions.length, 0);
+
+		const localContent = "## Memos\n- 09:00 手写新增\n";
+		fixture.setFile(sourcePath, localContent, 20);
+		const file = fixture.file(sourcePath);
+		assert.ok(file instanceof TFile);
+		fixture.emitTrustedEditorInput(file, localContent);
+		fixture.emitVaultEvent("modify", file);
+		await waitUntil(async () => transitions.length === 1);
+		await coordinator.waitForIdle();
+
+		const transition = [...transitions][0] as CatalogRevisionTransition | undefined;
+		assert.ok(transition !== undefined);
+		assert.notEqual(transition.before, null);
+		assert.deepEqual(transition.before?.observations, []);
+		assert.deepEqual(transition.after.observations.map((item) => item.content), ["手写新增"]);
+		assert.equal((transition as CatalogRevisionTransition & { allowIdentityAdoption?: boolean }).allowIdentityAdoption, true);
+
+		transitions.length = 0;
+		await coordinator.rebuildLocalCatalog();
+		await coordinator.waitForIdle();
+		assert.deepEqual(transitions, []);
+	} finally {
+		fixture.unload();
+	}
+});
+
+test("远端或程序化 Daily revision 没有可信用户输入时不允许自动 adoption", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const sourcePath = "Journal/2026-08-22.md";
+	const fixture = await createCoordinatorFixture([
+		{ path: sourcePath, content: "## Memos\n- 09:00 已有\n", mtime: 10 },
+	]);
+	const transitions: CatalogRevisionTransition[] = [];
+	const coordinator = new CatalogIndexCoordinator(
+		fixture.app,
+		new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		{
+			fullAuditIntervalMs: 10_000,
+			onRevisionTransition: (transition) => { transitions.push(transition); },
+		},
+	);
+	try {
+		coordinator.start(fixture.owner);
+		await coordinator.initialize();
+		await coordinator.waitForIdle();
+
+		const remoteContent = "## Memos\n- 09:00 已有\n- 10:00 远端新增\n";
+		fixture.setFile(sourcePath, remoteContent, 20);
+		const file = fixture.file(sourcePath);
+		assert.ok(file instanceof TFile);
+		fixture.emitTrustedEditorInput(file, remoteContent, false);
+		fixture.emitVaultEvent("modify", file);
+		await waitUntil(async () => transitions.length === 1);
+		await coordinator.waitForIdle();
+
+		const transition = transitions[0] as CatalogRevisionTransition & { allowIdentityAdoption?: boolean };
+		assert.equal(transition.allowIdentityAdoption, false);
+	} finally {
+		fixture.unload();
+	}
+});
+
 test("Vault 事件只处理受影响的 Daily，Monthly 与其他 Markdown 不触发 inventory 重算", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
@@ -1167,8 +1271,9 @@ async function createCoordinatorFixture(
 	const { TFile } = await import("obsidian");
 	const registeredVaultEvents: string[] = [];
 	const vaultListeners = new Map<string, Array<(...args: unknown[]) => void>>();
+	const workspaceListeners = new Map<string, Array<(...args: unknown[]) => void>>();
 	const cleanupCallbacks: Array<() => void> = [];
-	const domListeners = new Map<string, () => void>();
+	const domListeners = new Map<string, (...args: unknown[]) => void>();
 	const failedReads = new Set<string>();
 	const readBlockers = new Map<string, { promise: Promise<void>; resolve: () => void }>();
 	const timers = new Set<NodeJS.Timeout>();
@@ -1181,6 +1286,12 @@ async function createCoordinatorFixture(
 		stat: { mtime: entry.mtime, size: Buffer.byteLength(entry.content) },
 	}));
 	const contentByPath = new Map(entries.map((entry) => [entry.path, Buffer.from(entry.content, "utf8")]));
+	let activeView: {
+		file: InstanceType<typeof TFile>;
+		editor: { getValue: () => string };
+		getViewType: () => string;
+		containerEl: { contains: (target: unknown) => boolean };
+	} | null = null;
 	const app = {
 		vault: {
 			on: (name: string, callback: (...args: unknown[]) => void) => {
@@ -1211,6 +1322,15 @@ async function createCoordinatorFixture(
 			configDir: ".obsidian",
 		},
 		workspace: {
+			get activeLeaf() {
+				return activeView === null ? null : { view: activeView };
+			},
+			on: (name: string, callback: (...args: unknown[]) => void) => {
+				const listeners = workspaceListeners.get(name) ?? [];
+				listeners.push(callback);
+				workspaceListeners.set(name, listeners);
+				return {};
+			},
 			containerEl: {
 				doc,
 				win: {
@@ -1234,7 +1354,7 @@ async function createCoordinatorFixture(
 	};
 	const owner = {
 		registerEvent: () => undefined,
-		registerDomEvent: (_target: unknown, type: string, listener: () => void) => {
+		registerDomEvent: (_target: unknown, type: string, listener: (...args: unknown[]) => void) => {
 			domListeners.set(type, listener);
 		},
 		register: (callback: () => void) => cleanupCallbacks.push(callback),
@@ -1249,6 +1369,16 @@ async function createCoordinatorFixture(
 		file: (path: string) => files.find((file) => file.path === path) ?? null,
 		emitVaultEvent: (name: string, ...args: unknown[]) => {
 			for (const listener of vaultListeners.get(name) ?? []) listener(...args);
+		},
+		emitTrustedEditorInput: (file: InstanceType<typeof TFile>, content: string, isTrusted = true) => {
+			const target = {};
+			activeView = {
+				file,
+				editor: { getValue: () => content },
+				getViewType: () => "markdown",
+				containerEl: { contains: (candidate) => candidate === target },
+			};
+			domListeners.get("input")?.({ isTrusted, target });
 		},
 		setFile: (path: string, content: string, mtime: number) => {
 			let file = files.find((item) => item.path === path);

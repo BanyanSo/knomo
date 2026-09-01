@@ -241,6 +241,38 @@ export class MemoCommandService {
 		return pickDailyMutationResult(saved);
 	}
 
+	async prepareRecoverableDelete(item: CatalogMemoItem): Promise<CatalogMemoItem | null> {
+		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		const currentState = this.identityLedger.resolveObservationState(refreshed.observation);
+		if (currentState.kind === "identified") {
+			return this.requireRecoverableDeleteItem(refreshed, currentState.binding.memoId);
+		}
+		if (currentState.kind !== "unbound") {
+			throw new Error("Recoverable delete requires one confirmed memo identity.");
+		}
+		const status = this.identityLedger.getStatus();
+		if (status !== "ready" && status !== "absent") {
+			throw new Error("Recoverable delete identity preparation is unavailable.");
+		}
+
+		let memoId: string;
+		try {
+			memoId = (await this.identityLedger.adoptObservation(refreshed.observation)).memoId;
+		} catch (error) {
+			const latest = await this.refreshResolvedMemo(refreshed);
+			const latestState = this.identityLedger.resolveObservationState(latest.observation);
+			if (latestState.kind === "identified") {
+				return this.requireRecoverableDeleteItem(latest, latestState.binding.memoId);
+			}
+			const latestStatus = this.identityLedger.getStatus();
+			if (latestState.kind === "unbound" && (latestStatus === "ready" || latestStatus === "absent")) {
+				return null;
+			}
+			throw error;
+		}
+		return this.requireRecoverableDeleteItem(refreshed, memoId);
+	}
+
 	async delete(item: CatalogMemoItem): Promise<DailyMutationResult> {
 		if (this.identityLedger.recordDeletePayload === undefined
 			|| this.identityLedger.recordDeleteCommit === undefined
@@ -346,6 +378,17 @@ export class MemoCommandService {
 	private async refreshResolvedMemo(memo: ResolvedMemo): Promise<ResolvedMemo> {
 		await this.options.refreshCatalogPaths([memo.observation.sourcePath]);
 		return this.readService.resolveObservationInFile(memo.observation.sourcePath, memo.observation.startLine);
+	}
+
+	private async requireRecoverableDeleteItem(memo: ResolvedMemo, memoId: string): Promise<CatalogMemoItem> {
+		const prepared = await this.readService.resolveMemoItemInFile(
+			memo.observation.sourcePath,
+			memo.observation.startLine,
+		);
+		if (prepared.memoId !== memoId || prepared.capabilities.identity.recoverableDelete !== "ready") {
+			throw new Error("Identity preparation did not produce a recoverable memo.");
+		}
+		return prepared;
 	}
 
 	private async finishMarkdownSavedMemo(

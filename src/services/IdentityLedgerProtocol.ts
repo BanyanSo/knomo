@@ -46,6 +46,10 @@ export function createIdentityLedgerWriterId(
 	return `w_${createRandomHex(fillRandomBytes)}`;
 }
 
+export function isIdentityLedgerWriterId(value: unknown): value is string {
+	return typeof value === "string" && WRITER_ID_PATTERN.test(value);
+}
+
 export function createIdentityLedgerEventId(
 	fillRandomBytes: FillIdentityLedgerRandomBytes = fillCryptoRandom,
 ): string {

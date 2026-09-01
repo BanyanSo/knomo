@@ -243,6 +243,139 @@ test("adoptMemo 在 Identity absent 时按需采用并幂等返回 review-ready 
 	assert.equal(first.capabilities.identity.review, "ready");
 });
 
+test("手写 memo 删除前先确定性补身份，再进入可恢复删除", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const events: string[] = [];
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "handwritten memo");
+	await seedCatalog(catalog, store, observation);
+	const binding = makeBinding(observation, "2026082212345601", "identity-1");
+	let adopted = false;
+	const identityLedger = {
+		getRevision: () => adopted ? "identity-1" : "identity-absent",
+		getStatus: () => adopted ? "ready" : "absent",
+		getSnapshot: () => ({ revision: adopted ? "identity-1" : "identity-absent", eventCount: adopted ? 1 : 0, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
+		resolveObservation: () => adopted ? binding : null,
+		resolveObservationState: () => adopted
+			? { kind: "identified", binding } as const
+			: { kind: "unbound" } as const,
+		getSourceMemoId: () => null,
+		getCreatedAt: () => null,
+		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		adoptObservation: async () => {
+			events.push("adopt");
+			adopted = true;
+			return binding;
+		},
+		recordDeletePayload: async (_binding: IdentityLedgerBinding, evidence: IdentityLedgerDeleteRecord["evidence"]) => {
+			events.push("payload");
+			return {
+				memoId: binding.memoId,
+				deleteEventId: "e_22222222222222222222222222222222",
+				deleteCommitEventId: null,
+				baseBindingId: binding.bindingId,
+				evidence,
+			};
+		},
+		recordDeleteCommit: async (record: IdentityLedgerDeleteRecord) => {
+			events.push("commit");
+			return { ...record, deleteCommitEventId: "e_33333333333333333333333333333333" };
+		},
+	} as unknown as IdentityLedgerMutationService;
+	const markdownMutations = {
+		captureObservation: async () => {
+			events.push("capture");
+			return {
+				observation,
+				rawBlock: "- 12:34 handwritten memo",
+				deletedSourceRevision: observation.sourceRevision,
+			};
+		},
+		remove: async () => {
+			events.push("daily-remove");
+			await catalog.deleteFile(observation.sourcePath);
+			return mutationResult(null);
+		},
+	} as unknown as MarkdownMutationService;
+	const service = new MemoCommandService(
+		{} as App,
+		catalog,
+		makeCommandOptions(),
+		markdownMutations,
+		identityLedger,
+	);
+	const source = (await service.getReadService().query({ limit: 20 })).items[0];
+	assert.notEqual(source, undefined);
+	if (source === undefined) throw new Error("Catalog memo fixture is missing.");
+
+	const prepared = await service.prepareRecoverableDelete(source);
+	assert.notEqual(prepared, null);
+	if (prepared === null) throw new Error("Recoverable delete preparation unexpectedly failed.");
+	assert.equal(prepared.memoId, binding.memoId);
+	assert.equal(prepared.capabilities.identity.recoverableDelete, "ready");
+	await service.delete(prepared);
+
+	assert.deepEqual(events, ["adopt", "capture", "payload", "daily-remove", "commit"]);
+});
+
+test("删除前补身份失败仅在仍为 unbound 时允许永久删除兜底，冲突保持 fail-closed", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "handwritten fallback");
+	await seedCatalog(catalog, store, observation);
+	let conflictOnFailure = false;
+	let conflicted = false;
+	const identityLedger = {
+		getRevision: () => conflicted ? "identity-conflicted" : "identity-1",
+		getStatus: () => "ready",
+		getSnapshot: () => ({
+			revision: conflicted ? "identity-conflicted" : "identity-1",
+			eventCount: 0,
+			memos: conflicted ? { "memo-conflict": { conflicted: true, conflictBaseBindingId: null } } : {},
+			pendingIntents: [],
+			quarantinedEventIds: [],
+		}),
+		resolveObservation: () => null,
+		resolveObservationState: () => conflicted
+			? { kind: "conflicted", memoIds: ["memo-conflict"] } as const
+			: { kind: "unbound" } as const,
+		getSourceMemoId: () => null,
+		getCreatedAt: () => null,
+		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		adoptObservation: async () => {
+			if (conflictOnFailure) conflicted = true;
+			throw new Error("Ledger write failed");
+		},
+	} as unknown as IdentityLedgerMutationService;
+	const service = new MemoCommandService(
+		{} as App,
+		catalog,
+		makeCommandOptions(),
+		{} as MarkdownMutationService,
+		identityLedger,
+	);
+	const source = (await service.getReadService().query({ limit: 20 })).items[0];
+	assert.notEqual(source, undefined);
+	if (source === undefined) throw new Error("Catalog memo fixture is missing.");
+
+	assert.equal(await service.prepareRecoverableDelete(source), null);
+	conflictOnFailure = true;
+	await assert.rejects(
+		() => service.prepareRecoverableDelete(source),
+		/Ledger write failed/u,
+	);
+});
+
 test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再恢复 identity", async () => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");

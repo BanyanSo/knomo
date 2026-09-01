@@ -3813,11 +3813,16 @@ export class KnomoView extends ItemView {
 			} else if (action === "delete") {
 				const deleteMode = getMemoDeleteMode(memo);
 				const resolvedMemo = await this.resolveCatalogMemo(memo);
-				if (deleteMode === "permanent") {
-					if (!await this.confirmPermanentDelete()) return;
-					await this.memoCommandService.removePermanently(resolvedMemo);
-				} else if (deleteMode === "recoverable") {
+				if (deleteMode === "recoverable") {
 					await this.memoCommandService.delete(resolvedMemo);
+				} else if (deleteMode === "prepare") {
+					const prepared = await this.memoCommandService.prepareRecoverableDelete(resolvedMemo);
+					if (prepared !== null) {
+						await this.memoCommandService.delete(prepared);
+					} else {
+						if (!await this.confirmPermanentDelete()) return;
+						await this.memoCommandService.removePermanently(resolvedMemo);
+					}
 				} else {
 					throw new Error("Memo delete is unavailable.");
 				}

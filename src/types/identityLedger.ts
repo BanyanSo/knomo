@@ -169,6 +169,7 @@ export type IdentityLedgerObservationState =
 export interface IdentityLedgerReconcileResult {
 	appendedEventCount: number;
 	conflictedMemoIds: string[];
+	deferredObservationCount: number;
 }
 
 export interface IdentityLedgerMaterializedMemo {
@@ -254,6 +255,7 @@ export interface IdentityLedgerMutationService extends IdentityLedgerReader {
 		before: readonly MemoObservation[],
 		after: readonly MemoObservation[],
 		insertedObservation?: MemoObservation | null,
+		allowIdentityAdoption?: boolean,
 	): Promise<IdentityLedgerReconcileResult>;
 	rebindObservation(
 		before: MemoObservation,

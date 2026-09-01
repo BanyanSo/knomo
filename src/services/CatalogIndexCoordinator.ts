@@ -1,5 +1,5 @@
 import { normalizePath, TFile, TFolder } from "obsidian";
-import type { App, Component } from "obsidian";
+import type { App, Component, MarkdownView } from "obsidian";
 
 import type {
 	CatalogCheckpoint,
@@ -55,6 +55,7 @@ export interface CatalogRevisionTransition {
 	before: CatalogRevisionTransitionSide | null;
 	after: CatalogRevisionTransitionSide;
 	insertedObservation: MemoObservation | null;
+	allowIdentityAdoption: boolean;
 }
 
 export interface CatalogIndexCoordinatorOptions {
@@ -102,6 +103,7 @@ export class CatalogIndexCoordinator {
 	private readonly pathResolvers = new Map<string, Array<() => void>>();
 	private readonly pathGenerations = new Map<string, number>();
 	private readonly pathSerialTails = new Map<string, Promise<void>>();
+	private readonly trustedInputContentByPath = new Map<string, string>();
 	private queue: string[] = [];
 	private coverageDates: string[] = [];
 	private coveredFileCount = 0;
@@ -162,6 +164,10 @@ export class CatalogIndexCoordinator {
 		owner.registerEvent(this.app.vault.on("create", (file) => this.handleFileChanged(file)));
 		owner.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.handleFileRenamed(file, oldPath)));
 		owner.registerEvent(this.app.vault.on("delete", (file) => this.handleFileDeleted(file)));
+		this.registerTrustedInputDocument(owner, this.app.workspace.containerEl.doc);
+		owner.registerEvent(this.app.workspace.on("window-open", (_workspaceWindow, win) => {
+			this.registerTrustedInputDocument(owner, win.document);
+		}));
 		owner.registerDomEvent(this.app.workspace.containerEl.doc, "visibilitychange", () => this.handleVisibilityChange());
 		owner.register(() => this.stop());
 		this.paused = this.app.workspace.containerEl.doc.visibilityState === "hidden";
@@ -241,6 +247,7 @@ export class CatalogIndexCoordinator {
 			});
 			await this.notifyRevisionTransition(transition);
 			if (this.isStopped()) return;
+			this.clearLocalEditorContent(sourcePath, input.content);
 			this.upsertInventoryEntry(inventory);
 			this.setPathCovered(sourcePath, true);
 			this.failedPaths.delete(sourcePath);
@@ -303,6 +310,22 @@ export class CatalogIndexCoordinator {
 		this.setPathCovered(entry.sourcePath, false);
 		this.enqueuePath(entry.sourcePath);
 		this.scheduleDrain();
+	}
+
+	private registerTrustedInputDocument(owner: Component, doc: Document): void {
+		owner.registerDomEvent(doc, "input", (event) => this.handleTrustedEditorInput(event));
+	}
+
+	private handleTrustedEditorInput(event: Event): void {
+		if (!event.isTrusted || event.target === null) return;
+		const view = this.app.workspace.activeLeaf?.view;
+		if (view?.getViewType() !== "markdown" || !view.containerEl.contains(event.target as Node)) return;
+		const markdownView = view as MarkdownView;
+		const file = markdownView.file;
+		if (!(file instanceof TFile) || file.extension !== "md") return;
+		const entry = this.toInventoryEntry(file);
+		if (entry === null) return;
+		this.trustedInputContentByPath.set(entry.sourcePath, markdownView.editor.getValue());
 	}
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {
@@ -621,6 +644,8 @@ export class CatalogIndexCoordinator {
 			const raw = await this.app.vault.readBinary(abstractFile);
 			if (this.isStopped()) return;
 			const bytes = new Uint8Array(raw);
+			const content = new TextDecoder().decode(bytes);
+			const allowIdentityAdoption = this.trustedInputContentByPath.get(sourcePath) === content;
 			const parsed = await this.parser.parse({
 				sourcePath,
 				logicalDate: inventory.logicalDate,
@@ -651,6 +676,8 @@ export class CatalogIndexCoordinator {
 						parsed.sourceRevision,
 						parsed.observations,
 						() => this.isPathRevisionCurrent(sourcePath, revision),
+						null,
+						allowIdentityAdoption,
 					);
 					if (this.isStopped()) return;
 					if (!this.isPathRevisionCurrent(sourcePath, revision)) {
@@ -675,6 +702,7 @@ export class CatalogIndexCoordinator {
 						this.notifyDailyPeriodsChanged([inventory.logicalDate.slice(0, 7)]);
 					}
 				}
+				this.clearLocalEditorContent(sourcePath, content);
 				this.setPathCovered(sourcePath, true);
 				this.failedPaths.delete(sourcePath);
 			});
@@ -691,6 +719,7 @@ export class CatalogIndexCoordinator {
 		observations: readonly MemoObservation[],
 		isCurrent: () => boolean = () => true,
 		insertedObservation: MemoObservation | null = null,
+		allowIdentityAdoption = false,
 	): Promise<CatalogRevisionTransition | null> {
 		if (this.onRevisionTransition === null) return null;
 		try {
@@ -704,6 +733,7 @@ export class CatalogIndexCoordinator {
 				},
 				after: { sourceRevision, observations },
 				insertedObservation,
+				allowIdentityAdoption: insertedObservation === null && allowIdentityAdoption,
 			};
 		} catch {
 			return null;
@@ -1121,10 +1151,17 @@ export class CatalogIndexCoordinator {
 		for (const path of this.queue) this.resolvePath(path);
 		this.queue = [];
 		this.pendingDeletedPaths.clear();
+		this.trustedInputContentByPath.clear();
 		for (const path of this.pathResolvers.keys()) this.resolvePath(path);
 		this.closeWhenIdle = this.opened;
 		this.closeStoreWhenSafe();
 		this.resolveIdleIfNeeded();
+	}
+
+	private clearLocalEditorContent(sourcePath: string, content: string): void {
+		if (this.trustedInputContentByPath.get(sourcePath) === content) {
+			this.trustedInputContentByPath.delete(sourcePath);
+		}
 	}
 
 	private hasCheckpointWork(): boolean {

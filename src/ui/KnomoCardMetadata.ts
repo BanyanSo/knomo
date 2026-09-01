@@ -98,7 +98,7 @@ export function getMemoCardActionExplanation(memo: MemoRecord): MemoCardActionEx
 		: null;
 }
 
-export type MemoDeleteMode = "recoverable" | "permanent" | "unavailable";
+export type MemoDeleteMode = "recoverable" | "prepare" | "unavailable";
 
 export function isMemoCardMenuReady(memo: MemoRecord): boolean {
 	const capabilities = memo.catalog?.capabilities;
@@ -175,7 +175,7 @@ export function getMemoDeleteMode(memo: MemoRecord): MemoDeleteMode {
 		return "recoverable";
 	}
 	return capabilities.identity.recoverableDelete === "absent" && capabilities.markdown.remove
-		? "permanent"
+		? "prepare"
 		: "unavailable";
 }
 

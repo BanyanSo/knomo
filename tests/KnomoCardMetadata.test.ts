@@ -95,7 +95,7 @@ test("builds card action and trash action metadata", () => {
 	assert.equal(getTrashMemoCardClass("restore"), "knomo-card knomo-trash-card is-busy");
 });
 
-test("只有明确无身份的 memo 才显示永久删除，identity 同步或冲突时暂停删除", () => {
+test("明确无身份的 memo 先准备可恢复删除，identity 同步或冲突时暂停删除", () => {
 	const memo = makeMemo({});
 	assert.deepEqual(getMemoCardActions(memo), getMemoCardActions());
 	assert.deepEqual(getMemoCardActions({
@@ -127,7 +127,7 @@ test("只有明确无身份的 memo 才显示永久删除，identity 同步或�
 		catalog: {
 			capabilities: makeCapabilities("absent"),
 		} as never,
-	}), "permanent");
+	}), "prepare");
 	assert.equal(getMemoDeleteMode({
 		...memo,
 		catalog: {

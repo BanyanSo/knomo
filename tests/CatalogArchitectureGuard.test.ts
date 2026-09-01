@@ -28,12 +28,20 @@ test("生产源码只暴露无版本 Catalog 模块和存储名称", async () =>
 	for (const serviceName of [
 		"CatalogReadService",
 		"MemoCommandService",
+		"LocalWriterIdentityService",
 		"LegacyIndexReader",
 		"LegacyIndexMigrationService",
 		"HistoricalIdentityBootstrapService",
 	]) {
 		assert.equal(main.includes(serviceName), true, `main.ts should wire ${serviceName}.`);
 	}
+	assert.equal(main.includes("sessionWriterId"), false);
+	assert.equal(main.includes("getWriterId: () => localWriterIdentityService.getWriterId()"), true);
+	const localWriterIdentity = fs.readFileSync("src/services/LocalWriterIdentityService.ts", "utf8");
+	assert.equal(localWriterIdentity.includes("loadLocalStorage"), true);
+	assert.equal(localWriterIdentity.includes("saveLocalStorage"), true);
+	assert.equal(localWriterIdentity.includes("PluginDataStore"), false);
+	assert.equal(localWriterIdentity.includes("getAbstractFileByPath"), false);
 	const coordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
 	assert.equal(coordinator.includes("knomo-catalog-${"), true);
 	assert.equal(coordinator.includes("knomo-catalog-v"), false);
@@ -184,6 +192,10 @@ test("Identity 恢复统一进入协调器，且无 pending/conflict 时不读�
 
 	assert.ok(reconcile.indexOf("hasPendingCreates()") < reconcile.indexOf("loadObservationBatches()"));
 	assert.ok(reconcile.indexOf("hasPendingDeletes()") < reconcile.indexOf("loadObservationBatches()"));
+	assert.ok(reconcile.indexOf("reconcilePendingCreates(observations)")
+		< reconcile.indexOf("identityRevisionTransitionQueue.drain"));
+	assert.match(main, /onRevisionTransition: async \(transition\) => \{[\s\S]*?identityRevisionTransitionQueue\.enqueue\(transition\);[\s\S]*?identityRecoveryCoordinator\?\.request/u);
+	assert.match(main, /IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY/u);
 	assert.doesNotMatch(runtimeInitialization, /legacyIndexMigrationService\?\.run|reconcileIdentityLedger/u);
 	assert.match(catalogSettled, /legacyIndexMigrationService\?\.run/u);
 	assert.match(reconcile, /reconcile: reconcileIdentityLedger/u);

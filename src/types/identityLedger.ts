@@ -216,10 +216,12 @@ export interface IdentityLedgerCreatePlan {
 }
 
 export type IdentityLedgerStatus = "missing" | "absent" | "ready" | "conflicted" | "unavailable";
+export type IdentityLedgerAttentionRoute = "settings_retry" | "quarantine" | null;
 
 export interface IdentityLedgerReader {
 	getRevision(): string;
 	getStatus(): IdentityLedgerStatus;
+	getAttentionRoute?(): IdentityLedgerAttentionRoute;
 	getSnapshot(): IdentityLedgerSnapshot;
 	resolveObservation(observation: MemoObservation): IdentityLedgerBinding | null;
 	resolveObservationState(observation: MemoObservation): IdentityLedgerObservationState;

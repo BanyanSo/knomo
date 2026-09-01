@@ -206,6 +206,46 @@ test("1.2.9 升级保留16位数字 memoId，新格式生成规则保持不变",
 	}]), /Invalid Identity Ledger event/u);
 });
 
+test("隔离的 eventId 碰撞保持运行时不健康，但不路由到设置", async () => {
+	const vault = await createLedgerVault();
+	await vault.app.vault.createFolder(`${IDENTITY_ROOT_A}/writers/${WRITER_A}`);
+	await vault.app.vault.createFolder(`${IDENTITY_ROOT_A}/writers/${WRITER_A}/segments`);
+	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
+	const baseEvent: IdentityLedgerEvent = {
+		eventId: eventId(98),
+		writerId: WRITER_A,
+		memoId: MEMO_A,
+		type: "claim",
+		baseBindingId: null,
+		occurredAt: "2026-08-22T12:34:56.000Z",
+		evidence: { observation, createIntentEventId: null },
+	};
+	for (const event of [baseEvent, { ...baseEvent, memoId: MEMO_B }]) {
+		const content = serializeIdentityLedgerSegment([event]);
+		const digest = await sha256IdentityLedgerText(content);
+		await vault.app.vault.create(
+			getIdentityLedgerSegmentPath(IDENTITY_ROOT_A, WRITER_A, event.eventId, digest),
+			content,
+		);
+	}
+	const service = createService(vault, WRITER_A, [], []);
+
+	await service.initialize();
+
+	assert.equal(service.getStatus(), "conflicted");
+	assert.deepEqual(service.getSnapshot().quarantinedEventIds, [eventId(98)]);
+	assert.equal(service.getAttentionRoute(), "quarantine");
+});
+
+test("Ledger 还未完成首次读取时保留可重试路由", async () => {
+	const service = createService(await createLedgerVault(), WRITER_A, [], []);
+
+	assert.equal(service.getStatus(), "unavailable");
+	assert.equal(service.getAttentionRoute(), "settings_retry");
+	await service.initialize();
+	assert.equal(service.getAttentionRoute(), null);
+});
+
 test("Identity Ledger 只接受当前冻结的十种基础事件", async () => {
 	const observation = makeEvidence(makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文"));
 	const base = {
@@ -627,7 +667,29 @@ test("重启后只修复 create claim 已唯一占用一个 successor 的重复�
 	const restarted = createService(vault, WRITER_B, [], [eventId(7)]);
 	await restarted.initialize();
 
-	assert.equal(await restarted.repairKnownDuplicateCreateConflicts([existing, inserted]), 1);
+	const repairTarget = restarted as IdentityLedgerService & {
+		repairConflict(memoId: string, observation: MemoObservation): ReturnType<IdentityLedgerService["repairConflict"]>;
+	};
+	const repairConflict = repairTarget.repairConflict.bind(restarted);
+	let releaseRepair!: () => void;
+	const repairBlocked = new Promise<void>((resolve) => { releaseRepair = resolve; });
+	let markRepairStarted!: () => void;
+	const repairStarted = new Promise<void>((resolve) => { markRepairStarted = resolve; });
+	repairTarget.repairConflict = async (memoId, observation) => {
+		markRepairStarted();
+		await repairBlocked;
+		return repairConflict(memoId, observation);
+	};
+	const automaticRepair = restarted.repairKnownDuplicateCreateConflicts([existing, inserted]);
+	await repairStarted;
+	const foregroundPlan = await Promise.race([
+		restarted.beginCreate(createIntentInput(inserted)),
+		new Promise<"timeout">((resolve) => { setTimeout(() => resolve("timeout"), 100); }),
+	]);
+	assert.notEqual(foregroundPlan, "timeout");
+	assert.equal(typeof foregroundPlan === "string" ? null : foregroundPlan.intentDurable, false);
+	releaseRepair();
+	assert.equal(await automaticRepair, 1);
 	assert.equal(restarted.resolveObservation(existing)?.memoId, MEMO_A);
 	assert.equal(restarted.resolveObservation(inserted)?.memoId, MEMO_C);
 	assert.equal(restarted.getSnapshot().memos[MEMO_A]?.conflicted, false);
@@ -767,7 +829,10 @@ test("P1 第 5 步：显式 repair 只写 Ledger，并让各设备收敛到同�
 	await repairer.initialize();
 	const dailyBefore = merged.read(dailyPath);
 
-	const repaired = await repairer.repairConflict(MEMO_A, successorA);
+	const repair = repairer.repairConflict(MEMO_A, successorA);
+	const staleRepair = repairer.repairConflict(MEMO_A, successorB);
+	const repaired = await repair;
+	await assert.rejects(() => staleRepair, /repair target is no longer current/u);
 
 	assert.equal(repaired.memoId, MEMO_A);
 	assert.equal(repairer.resolveObservation(successorA)?.bindingId, repaired.bindingId);

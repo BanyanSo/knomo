@@ -163,11 +163,11 @@ test("Identity 与共享配置监听等待 layout ready，启动后续阶段遵�
 	assert.equal(listenerStart.includes("knomoSharedConfigService.start"), true);
 	assert.equal(listenerStart.includes("lowPriorityWorkQueue.signal.aborted"), true);
 	assert.equal(main.includes("cancellationSignal: lowPriorityWorkQueue.signal"), true);
-	assert.equal(main.includes("settingTab.refreshAttentionIfVisible()"), true);
+	assert.match(main, /settingTab\?\.refreshAttentionIfVisible\(\)/u);
 	assert.equal(afterLayoutInitialization.includes("const isCancelled = () => cancellationSignal?.aborted === true"), true);
 });
 
-test("启动后续工作只由 Catalog settle 调度，且无 pending Identity 时不读取全量 observation", () => {
+test("Identity 恢复统一进入协调器，且无 pending/conflict 时不读取全量 observation", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	const reconcile = main.slice(
 		main.indexOf("const reconcileIdentityLedger = async () =>"),
@@ -186,7 +186,10 @@ test("启动后续工作只由 Catalog settle 调度，且无 pending Identity �
 	assert.ok(reconcile.indexOf("hasPendingDeletes()") < reconcile.indexOf("loadObservationBatches()"));
 	assert.doesNotMatch(runtimeInitialization, /legacyIndexMigrationService\?\.run|reconcileIdentityLedger/u);
 	assert.match(catalogSettled, /legacyIndexMigrationService\?\.run/u);
-	assert.match(catalogSettled, /reconcileIdentityLedger/u);
+	assert.match(reconcile, /reconcile: reconcileIdentityLedger/u);
+	assert.match(catalogSettled, /identityRecoveryCoordinator\?\.request/u);
+	assert.match(main, /identityLedgerService\.start\(this, async \(\) => \{[\s\S]*?identityRecoveryCoordinator\?\.request/u);
+	assert.match(main, /runManualRefresh[\s\S]*?identityRecoveryCoordinator\?\.request\(\{ reload: "if_needed" \}\)/u);
 });
 
 function listFiles(root: string): string[] {

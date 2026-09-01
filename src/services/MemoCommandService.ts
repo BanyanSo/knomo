@@ -25,6 +25,7 @@ import type {
 } from "../types/memoOperations";
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
+import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
 import { formatDatePart, formatTimePart } from "../utils/date";
 import { hashMemoContent } from "../utils/hash";
 import { withCreatedAtAlias } from "../utils/references";
@@ -43,6 +44,7 @@ export interface MemoCommandServiceOptions {
 	getHistoricalIdentityBootstrapStatus?: () => import("./HistoricalIdentityBootstrapService").HistoricalIdentityBootstrapStatus;
 	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
+	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -73,6 +75,7 @@ export class MemoCommandService {
 			getHistoricalIdentityBootstrapStatus: options.getHistoricalIdentityBootstrapStatus,
 			getSharedConfigurationStatus: options.getSharedConfigurationStatus,
 			getSettingsStatus: options.getSettingsStatus,
+			getStartupBootstrapSnapshot: options.getStartupBootstrapSnapshot,
 			now: options.now,
 			random: options.random,
 		});

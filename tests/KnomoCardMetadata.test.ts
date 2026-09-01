@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import {
 	getMemoActionClass,
+	getMemoCardActionExplanation,
 	getMemoCardActions,
 	getMemoCardShell,
 	getMemoDeleteMode,
@@ -133,6 +134,14 @@ test("只有明确无身份的 memo 才显示永久删除，identity 同步或�
 			capabilities: makeCapabilities("ready"),
 		} as never,
 	}), "recoverable");
+	assert.equal(getMemoCardActionExplanation({
+		...memo,
+		catalog: { capabilities: makeCapabilities("conflicted") } as never,
+	}), "identity-actions-paused");
+	assert.equal(getMemoCardActionExplanation({
+		...memo,
+		catalog: { capabilities: makeCapabilities("syncing") } as never,
+	}), null);
 });
 
 test("keeps the card menu available while identity actions are settling", () => {

@@ -8,6 +8,7 @@ import type { TimeBuoyDateStatus } from "../types/timeBuoy";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
+	getMemoCardActionExplanation,
 	getMemoCardActions,
 	getMemoCardShell,
 	getMemoSourceReferenceMeta,
@@ -92,7 +93,11 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 		setIcon(menu, "more-horizontal");
 
 		if (cardMenuReady) {
-			const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
+			const actionExplanation = getMemoCardActionExplanation(memo);
+			const actions = head.createDiv({
+				cls: actionExplanation === null ? "knomo-card-actions" : "knomo-card-actions has-explanation",
+				attr: { role: "menu" },
+			});
 			for (const action of getMemoCardActions(memo)) {
 				renderCardAction(
 					actions,
@@ -106,6 +111,12 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 			if (options.timeBuoy !== undefined
 				&& (memo.catalog === undefined || memo.catalog.capabilities.identity.review === "ready")) {
 				renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
+			}
+			if (actionExplanation === "identity-actions-paused") {
+				actions.createDiv({
+					cls: "knomo-card-action-explanation",
+					text: t("card.identityActionsPaused"),
+				});
 			}
 			actions.createDiv({
 				cls: "knomo-card-word-count",

@@ -2613,6 +2613,18 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	pointer-events: auto;
 }
 
+.knomo-plugin .knomo-card-actions.has-explanation {
+	width: 220px;
+}
+
+.knomo-plugin .knomo-card-action-explanation {
+	padding: 8px 10px 2px;
+	border-top: var(--border-width) solid var(--knomo-soft-border);
+	color: var(--text-muted);
+	font-size: var(--knomo-card-time-font-size);
+	line-height: 1.4;
+}
+
 .knomo-plugin .knomo-card-action {
 	display: flex;
 	align-items: center;

@@ -120,8 +120,8 @@ test("Identity 冲突只降级相关 observation，不阻断其他 Catalog 内�
 	const unaffectedItem = page.items.find((item) => item.content === unaffected.content);
 
 	assert.equal(page.items.length, 2);
-	assert.equal(page.status.identity, "conflicted");
-	assert.equal(page.status.identityConflict, "observation");
+	assert.equal(page.status.identity, "ready");
+	assert.equal(page.status.identityAttention, null);
 	assert.equal(conflictedItem?.resolved.kind, "ambiguous");
 	assert.equal(conflictedItem?.capabilities.identity.repair, "conflicted");
 	assert.equal(unaffectedItem?.resolved.kind, "observed");

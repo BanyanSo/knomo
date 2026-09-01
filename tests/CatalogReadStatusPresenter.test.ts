@@ -69,8 +69,7 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 		status: {
 			content: "scanning",
 			catalog: "partial",
-			identity: "conflicted",
-			identityConflict: "observation",
+			identity: "ready",
 			projection: "stale",
 			migration: "attention",
 		},
@@ -83,7 +82,7 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 		},
 	});
 
-	assert.equal(headers.length, 2);
+	assert.equal(headers.length, 1);
 	assert.equal(headers.every((header) => header.type === "summary"), true);
 	assert.deepEqual(headers.flatMap((header) => header.type === "summary" && header.action !== undefined
 		? [header.action.action]
@@ -95,24 +94,24 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 	assert.doesNotMatch(text, /Creation, adoption, and monthly writes are paused/u);
 });
 
-test("局部 observation 冲突不跳空设置页，全局 Ledger 冲突保留诊断入口", () => {
+test("局部 observation 冲突无顶部提示，只有可重试 Ledger 故障进入设置", () => {
 	const status = {
 		content: "ready" as const,
 		catalog: "complete" as const,
-		identity: "conflicted" as const,
+		identity: "ready" as const,
 		projection: "ready" as const,
 		migration: "none" as const,
 	};
 	const local = getCatalogReadStatusHeaders({
-		status: { ...status, identityConflict: "observation" },
+		status,
 		coverage: completeCoverage,
 	});
 	const ledger = getCatalogReadStatusHeaders({
-		status: { ...status, identityConflict: "ledger" },
+		status: { ...status, identity: "conflicted", identityAttention: "settings_retry" },
 		coverage: completeCoverage,
 	});
 
-	assert.equal(local[0]?.type === "summary" ? local[0].action : undefined, undefined);
+	assert.deepEqual(local, []);
 	assert.equal(
 		ledger[0]?.type === "summary" ? ledger[0].action?.action : undefined,
 		"open-catalog-settings",
@@ -142,6 +141,7 @@ test("正常中间态始终不显示，但不隐藏可操作故障", () => {
 			content: "unavailable",
 			catalog: "degraded",
 			identity: "conflicted",
+			identityAttention: "settings_retry",
 			projection: "failed",
 			migration: "attention",
 		},

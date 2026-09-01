@@ -29,6 +29,8 @@ export interface MemoCardActionMeta {
 	candidateMemoId?: string;
 }
 
+export type MemoCardActionExplanation = "identity-actions-paused" | null;
+
 export interface TrashCardActionMeta {
 	action: TrashAction;
 	className: string;
@@ -87,6 +89,13 @@ export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
 		candidateMemoId,
 	}));
 	return [...actions, ...repairs];
+}
+
+export function getMemoCardActionExplanation(memo: MemoRecord): MemoCardActionExplanation {
+	const identity = memo.catalog?.capabilities.identity;
+	return identity?.recoverableDelete === "conflicted" && identity.repair !== "ready"
+		? "identity-actions-paused"
+		: null;
 }
 
 export type MemoDeleteMode = "recoverable" | "permanent" | "unavailable";

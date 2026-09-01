@@ -256,6 +256,7 @@ export const zhCN = {
 	"list.loadOlder": "加载更多 Memos",
 	"card.moreActions": "更多操作",
 	"card.actionsPreparing": "卡片操作正在准备",
+	"card.identityActionsPaused": "这条 Memo 的身份尚未确定，暂时不能移入 Knomo 回收站。",
 	"card.edit": "编辑",
 	"card.reference": "引用",
 	"card.openDaily": "打开日记",

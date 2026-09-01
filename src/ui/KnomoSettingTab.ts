@@ -65,7 +65,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly legacyIndexMigrationService: LegacyIndexMigrationService,
 		private readonly legacyMigrationAcknowledgementService: LegacyMigrationAcknowledgementService,
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
-		private readonly retryRuntimeState: () => Promise<void>,
+		private readonly retryRuntimeState: (forceIdentityReload?: boolean) => Promise<void>,
 	) {
 		super(app, plugin);
 	}
@@ -459,7 +459,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				: "settings.attention.identity.unavailable"))
 			.addButton((button) => {
 				button.setButtonText(t("settings.attention.checkAgain"));
-				button.onClick(() => { void this.runRuntimeRetry(button); });
+				button.onClick(() => { void this.runRuntimeRetry(button, t("settings.attention.checkAgain"), true); });
 			});
 	}
 
@@ -942,11 +942,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private async runRuntimeRetry(
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
 		idleButtonText = t("settings.attention.checkAgain"),
+		forceIdentityReload = false,
 	): Promise<void> {
 		button.setDisabled(true);
 		button.setButtonText(t("settings.attention.checking"));
 		try {
-			await this.retryRuntimeState();
+			await this.retryRuntimeState(forceIdentityReload);
 			await this.refreshOpenKnomoViews();
 		} catch {
 			new Notice(t("settings.attention.retryFailed"));
@@ -990,7 +991,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const legacyReport = this.legacyIndexMigrationService.getReport();
 		return getKnomoSettingAttentionKinds(
 			this.catalogReadService.getRuntimeAttentionSnapshot(),
-			this.startupBootstrapService?.getSnapshot().status ?? null,
+			this.startupBootstrapService?.getSnapshot() ?? null,
 			{
 				legacyMigrationAcknowledged: this.legacyMigrationAcknowledgementService.isAcknowledged(legacyReport),
 			},

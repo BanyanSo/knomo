@@ -22,6 +22,7 @@ import { MonthlyProjectionInputBuilder } from "./services/MonthlyProjectionInput
 import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore";
 import { createIdentityLedgerWriterId, getIdentityLedgerRootPath } from "./services/IdentityLedgerProtocol";
 import { IdentityLedgerService } from "./services/IdentityLedgerService";
+import { IdentityRecoveryCoordinator } from "./services/IdentityRecoveryCoordinator";
 import {
 	HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
 	HistoricalIdentityBootstrapService,
@@ -81,6 +82,7 @@ export default class KnomoPlugin extends Plugin {
 	private legacyIndexMigrationService: LegacyIndexMigrationService | null = null;
 	private legacyMigrationCompletionNoticeService: LegacyMigrationCompletionNoticeService | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
+	private identityRecoveryCoordinator: IdentityRecoveryCoordinator | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
 
 	async onload(): Promise<void> {
@@ -210,6 +212,15 @@ export default class KnomoPlugin extends Plugin {
 				])));
 			}
 		};
+		let settingTab: KnomoSettingTab | null = null;
+		this.identityRecoveryCoordinator = new IdentityRecoveryCoordinator({
+			getStatus: () => identityLedgerService.getStatus(),
+			getAttentionRoute: () => identityLedgerService.getAttentionRoute(),
+			reload: () => identityLedgerService.reloadConfiguredRoot(false),
+			reconcile: reconcileIdentityLedger,
+			cancellationSignal: lowPriorityWorkQueue.signal,
+		});
+		this.register(() => this.identityRecoveryCoordinator?.stop());
 		let historicalIdentityBootstrapService: HistoricalIdentityBootstrapService | null = null;
 
 		const projectionInputBuilder = new MonthlyProjectionInputBuilder(
@@ -270,9 +281,10 @@ export default class KnomoPlugin extends Plugin {
 					if (legacyReport !== undefined) {
 						await historicalIdentityBootstrapService?.run(legacyReport.status);
 					}
-					await reconcileIdentityLedger();
+					await this.identityRecoveryCoordinator?.request();
 					await this.monthlyProjectionCoordinator?.handleCatalogSettled();
 					await this.queueRefreshOpenViews();
+					settingTab?.refreshAttentionIfVisible();
 				},
 				dailyInventory,
 				workQueue: lowPriorityWorkQueue,
@@ -322,6 +334,7 @@ export default class KnomoPlugin extends Plugin {
 				getHistoricalIdentityBootstrapStatus: () => historicalIdentityBootstrapService?.getStatus() ?? "idle",
 				getSharedConfigurationStatus: () => knomoSharedConfigService.getStatus(),
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
+				getStartupBootstrapSnapshot: () => startupBootstrapService.getSnapshot(),
 			},
 			markdownMutationService,
 			identityLedgerService,
@@ -371,8 +384,9 @@ export default class KnomoPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
 			identityLedgerService.start(this, async () => {
-				await reconcileIdentityLedger();
+				await this.identityRecoveryCoordinator?.request();
 				await this.queueRefreshOpenViews();
+				settingTab?.refreshAttentionIfVisible();
 			});
 			knomoSharedConfigService.start(this, async () => {
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
@@ -397,7 +411,7 @@ export default class KnomoPlugin extends Plugin {
 		);
 		const shuffleDayService = new ShuffleDayService(pluginDataStore);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
-		const retryRuntimeState = async (): Promise<void> => {
+		const retryRuntimeState = async (forceIdentityReload = false): Promise<void> => {
 			let settingsRecovered = false;
 			if (this.settingsService.getLoadStatus() === "unavailable") {
 				await this.settingsService.loadSettings();
@@ -421,7 +435,9 @@ export default class KnomoPlugin extends Plugin {
 			if (legacyReport !== undefined) {
 				await historicalIdentityBootstrapService?.run(legacyReport.status);
 			}
-			await reconcileIdentityLedger();
+			await this.identityRecoveryCoordinator?.request({
+				reload: forceIdentityReload ? "force" : "if_needed",
+			});
 		};
 		this.registerView(
 			KNOMO_VIEW_TYPE,
@@ -437,7 +453,7 @@ export default class KnomoPlugin extends Plugin {
 				this.catalogReadService!,
 				() => dailyNoteService.getStatus(),
 				() => dailyNoteService.getTodayDailyNotePath(),
-				retryRuntimeState,
+				() => retryRuntimeState(false),
 				() => this.openCatalogDataSettings(),
 			),
 		);
@@ -460,7 +476,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 		});
 
-		const settingTab = new KnomoSettingTab(
+		settingTab = new KnomoSettingTab(
 			this.app,
 			this,
 			this.settingsService,
@@ -484,7 +500,7 @@ export default class KnomoPlugin extends Plugin {
 				} catch {
 					// 自动初始化失败不阻塞 Daily；下次启用会继续补齐缺失配置。
 				} finally {
-					if (!lowPriorityWorkQueue.signal.aborted) settingTab.refreshAttentionIfVisible();
+					if (!lowPriorityWorkQueue.signal.aborted) settingTab?.refreshAttentionIfVisible();
 				}
 			}
 			if (lowPriorityWorkQueue.signal.aborted) return false;
@@ -706,6 +722,7 @@ export default class KnomoPlugin extends Plugin {
 		});
 		this.manualRefreshPromise = refresh
 			.then(async (result) => {
+				await this.identityRecoveryCoordinator?.request({ reload: "if_needed" });
 				await this.refreshOpenViews();
 				return result;
 			})

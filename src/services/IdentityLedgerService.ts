@@ -24,6 +24,7 @@ import type {
 	IdentityLedgerReconcileResult,
 	IdentityLedgerSnapshot,
 	IdentityLedgerStatus,
+	IdentityLedgerAttentionRoute,
 } from "../types/identityLedger";
 import {
 	canonicalIdentityLedgerJson,
@@ -89,6 +90,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private writeQueue: Promise<void> = Promise.resolve();
 	private writePauseCount = 0;
 	private legacyImportWriteCount = 0;
+	private automaticRepairWriteCount = 0;
 	private readonly selfWrittenPaths = new Map<string, number>();
 	private readonly purgeOperations = new Map<string, Promise<void>>();
 	private observationBindingsByEvidence = new Map<string, ObservationBindingReference[]>();
@@ -138,9 +140,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		}
 	}
 
-	async reloadConfiguredRoot(): Promise<void> {
+	async reloadConfiguredRoot(notify = true): Promise<void> {
 		await this.initialize();
-		await this.notifyChanged();
+		if (notify) await this.notifyChanged();
 	}
 
 	async runWithWritesPaused<T>(operation: () => Promise<T>): Promise<T> {
@@ -159,6 +161,11 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	getStatus(): IdentityLedgerStatus {
 		return this.status;
+	}
+
+	getAttentionRoute(): IdentityLedgerAttentionRoute {
+		if (this.status === "unavailable" || this.scanErrorCount > 0) return "settings_retry";
+		return this.snapshot.quarantinedEventIds.length > 0 ? "quarantine" : null;
 	}
 
 	getSnapshot(): IdentityLedgerSnapshot {
@@ -357,6 +364,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				sourceMemoId: input.sourceMemoId,
 			},
 		};
+		if (this.automaticRepairWriteCount > 0) {
+			return { memoId, intent, intentDurable: false };
+		}
 		try {
 			await this.appendEvent(intent, false);
 			return { memoId, intent, intentDurable: true };
@@ -444,6 +454,15 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	async repairKnownDuplicateCreateConflicts(observations: readonly MemoObservation[]): Promise<number> {
+		this.automaticRepairWriteCount += 1;
+		try {
+			return await this.repairKnownDuplicateCreateConflictsInternal(observations);
+		} finally {
+			this.automaticRepairWriteCount -= 1;
+		}
+	}
+
+	private async repairKnownDuplicateCreateConflictsInternal(observations: readonly MemoObservation[]): Promise<number> {
 		const observationsByEvidence = new Map(observations.map((observation) => [
 			observationEvidenceKey(toObservationEvidence(observation)),
 			observation,
@@ -651,15 +670,22 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		if (!memo.bindings.some((binding) => observationEvidenceKey(binding.evidence) === evidenceKey)) {
 			throw new Error("Identity Ledger repair target is not an active successor.");
 		}
+		const conflictBaseBindingId = memo.conflictBaseBindingId;
 		const eventId = this.createEventId();
 		await this.appendEvent({
 			eventId,
 			writerId: await this.getWriterId(),
 			memoId,
 			type: "repair",
-			baseBindingId: memo.conflictBaseBindingId,
+			baseBindingId: conflictBaseBindingId,
 			occurredAt: this.now().toISOString(),
 			evidence: { observation: toObservationEvidence(observation) },
+		}, true, () => {
+			const current = this.snapshot.memos[memoId];
+			if (current?.conflicted !== true || current.conflictBaseBindingId !== conflictBaseBindingId
+				|| !current.bindings.some((binding) => observationEvidenceKey(binding.evidence) === evidenceKey)) {
+				throw new Error("Identity Ledger repair target is no longer current.");
+			}
 		});
 		const resolved = this.resolveObservationState(observation);
 		if (resolved.kind !== "identified" || resolved.binding.memoId !== memoId) {

@@ -19,7 +19,7 @@ export type CatalogReadState = "ready" | "history_building" | "storage_unavailab
 export type CatalogContentState = "ready" | "scanning" | "unavailable";
 export type CatalogState = "partial" | "complete" | "degraded";
 export type CatalogIdentityState = "absent" | "syncing" | "ready" | "conflicted";
-export type CatalogIdentityConflictSource = "ledger" | "observation";
+export type CatalogIdentityAttention = "settings_retry";
 export type MonthlyProjectionState = "ready" | "stale" | "failed";
 export type LegacyMigrationState = "none" | "attention" | "unavailable";
 
@@ -28,7 +28,7 @@ export interface CatalogReadStatus {
 	content: CatalogContentState;
 	catalog: CatalogState;
 	identity: CatalogIdentityState;
-	identityConflict?: CatalogIdentityConflictSource | null;
+	identityAttention?: CatalogIdentityAttention | null;
 	sharedConfiguration?: KnomoSharedConfigStatus;
 	projection: MonthlyProjectionState;
 	migration: LegacyMigrationState;
@@ -38,6 +38,7 @@ export interface KnomoRuntimeAttentionSnapshot {
 	settings?: KnomoSettingsLoadStatus;
 	catalogLifecycle: CatalogStoreLifecycle;
 	identity: IdentityLedgerStatus;
+	identityAttention: CatalogIdentityAttention | null;
 	sharedConfiguration: KnomoSharedConfigStatus;
 	monthly: MonthlyProjectionState;
 	legacyMigration: LegacyIdentityImportStatus;

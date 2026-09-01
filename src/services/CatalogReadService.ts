@@ -36,6 +36,7 @@ import type {
 } from "../types/identityLedger";
 import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
 import type { HistoricalIdentityBootstrapStatus } from "./HistoricalIdentityBootstrapService";
+import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
@@ -62,6 +63,7 @@ export interface CatalogReadServiceOptions {
 	getHistoricalIdentityBootstrapStatus?: () => HistoricalIdentityBootstrapStatus;
 	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
+	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -105,6 +107,7 @@ export class CatalogReadService {
 			// 故障提示无法读取 Catalog 状态时，按可恢复的降级状态处理。
 		}
 		let identity: KnomoRuntimeAttentionSnapshot["identity"] = "unavailable";
+		let identityAttention: KnomoRuntimeAttentionSnapshot["identityAttention"] = null;
 		let sharedConfiguration: KnomoRuntimeAttentionSnapshot["sharedConfiguration"] = "unavailable";
 		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "unavailable";
 		let settings: KnomoSettingsLoadStatus = "ready";
@@ -113,6 +116,7 @@ export class CatalogReadService {
 		} catch {
 			// 保留 unavailable。
 		}
+		identityAttention = this.getIdentityAttention(identity);
 		try {
 			sharedConfiguration = this.options.getSharedConfigurationStatus?.() ?? "missing";
 		} catch {
@@ -132,6 +136,7 @@ export class CatalogReadService {
 			settings,
 			catalogLifecycle,
 			identity,
+			identityAttention,
 			sharedConfiguration,
 			monthly: this.getProjectionState(),
 			legacyMigration,
@@ -186,14 +191,14 @@ export class CatalogReadService {
 				coverage: page.coverage,
 				lifecycle: page.lifecycle,
 				capabilities: createCatalogCapabilities(page.coverage),
-				status: this.getReadStatus(page.coverage, page.lifecycle, [], false),
+				status: this.getReadStatus(page.coverage, page.lifecycle, false),
 				readState: this.getReadState(page.coverage, page.lifecycle),
 				degraded: true,
 				invalidated: true,
 			});
 		}
 		const resolved = page.items.map((observation) => this.resolveObservation(observation));
-		const status = this.getReadStatus(page.coverage, page.lifecycle, resolved, false);
+		const status = this.getReadStatus(page.coverage, page.lifecycle, false);
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
 		return this.rememberPage({
 			items: resolved.map((memo) => this.toMemoItem(memo, catalogCapabilities)),
@@ -597,7 +602,7 @@ export class CatalogReadService {
 			coverage,
 			lifecycle,
 			capabilities: createCatalogCapabilities(coverage),
-			status: this.getReadStatus(coverage, lifecycle, [], true),
+			status: this.getReadStatus(coverage, lifecycle, true),
 			readState: "storage_unavailable",
 			degraded: true,
 			invalidated: false,
@@ -714,7 +719,6 @@ export class CatalogReadService {
 	private getReadStatus(
 		coverage: CatalogCoverage,
 		lifecycle: CatalogStoreLifecycle,
-		resolved: readonly ResolvedMemo[],
 		contentUnavailable: boolean,
 	): CatalogReadStatus {
 		const identityStatus = this.options.identityLedger.getStatus();
@@ -723,11 +727,6 @@ export class CatalogReadService {
 			|| lifecycle.state === "degraded"
 			|| lifecycle.state === "retrying"
 			|| lifecycle.state === "read-only";
-		const observationConflicted = resolved.some((memo) => memo.kind === "ambiguous");
-		const identityConflicted = identityStatus === "conflicted" || observationConflicted;
-		const identityConflict = identityStatus === "conflicted"
-			? "ledger" as const
-			: observationConflicted ? "observation" as const : null;
 		return {
 			settings: this.getSettingsStatus(),
 			content: contentUnavailable
@@ -738,17 +737,34 @@ export class CatalogReadService {
 			catalog: catalogDegraded
 				? "degraded"
 				: coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false ? "complete" : "partial",
-			identity: identityConflicted
+			identity: identityStatus === "conflicted"
 				? "conflicted"
 				: identityStatus === "ready" ? "ready"
 					: identityStatus === "missing" || identityStatus === "absent" ? "absent" : "syncing",
-			identityConflict,
+			identityAttention: this.getIdentityAttention(identityStatus),
 			sharedConfiguration: this.getSharedConfigurationStatus(),
 			projection: this.getProjectionState(),
 			migration: legacyStatus === "attention"
 				? "attention"
 				: legacyStatus === "unavailable" ? "unavailable" : "none",
 		};
+	}
+
+	private getIdentityAttention(identityStatus: import("../types/identityLedger").IdentityLedgerStatus): "settings_retry" | null {
+		const initialization = this.options.getStartupBootstrapSnapshot?.() ?? null;
+		if (initialization?.status === "unconfigured" || initialization?.status === "initializing"
+			|| initialization?.status === "conflicted") return null;
+		if (initialization?.status === "unavailable") {
+			return initialization.stage === "identity" ? "settings_retry" : null;
+		}
+		let route: import("../types/identityLedger").IdentityLedgerAttentionRoute | undefined;
+		try {
+			route = this.options.identityLedger.getAttentionRoute?.();
+		} catch {
+			// 路由本身无法读取时，回退到 Ledger 全局状态。
+		}
+		if (route !== undefined) return route === "settings_retry" ? route : null;
+		return identityStatus === "conflicted" || identityStatus === "unavailable" ? "settings_retry" : null;
 	}
 
 	private getSettingsStatus(): KnomoSettingsLoadStatus {

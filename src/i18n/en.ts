@@ -258,6 +258,7 @@ export const en: Record<TranslationKey, string> = {
 	"list.loadOlder": "Load more memos",
 	"card.moreActions": "More actions",
 	"card.actionsPreparing": "Card actions are preparing",
+	"card.identityActionsPaused": "This memo's identity is not settled yet, so it cannot be moved to Knomo Trash.",
 	"card.edit": "Edit",
 	"card.reference": "Reference",
 	"card.openDaily": "Open daily note",

@@ -165,6 +165,32 @@ test("memo card menu keeps Markdown actions available while identity is settling
 	assert.equal(root.find("article")?.hasClass("is-menu-open"), true);
 });
 
+test("局部身份冲突无修复入口时，在卡片菜单说明暂停的操作", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo({
+		catalog: { capabilities: makeCapabilities("conflicted") } as never,
+	}), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: true,
+		randomCard: false,
+		activeMenuMemoId: "memo-1",
+		deletedMemoIds: new Set(),
+		formatDisplayTime: (value) => value,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	assert.match(root.find(".knomo-card-action-explanation")?.getText() ?? "", /identity is not settled/u);
+	assert.equal(root.find(".knomo-card-actions")?.hasClass("has-explanation"), true);
+});
+
 test("P1 第 5 步：局部 identity conflict 只为当前 memo 暴露显式 repair 操作", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");

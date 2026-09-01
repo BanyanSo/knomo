@@ -29,10 +29,8 @@ export function getCatalogReadStatusHeaders(
 		headers.push(summary(t("catalog.sharedConfigUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
 	}
 
-	if (options.status.identity === "conflicted") {
-		headers.push(options.status.identityConflict === "ledger"
-			? summary(t("catalog.identityConflict"), t("catalog.openDiagnostics"), "open-catalog-settings")
-			: summary(t("catalog.identityConflict")));
+	if (options.status.identityAttention === "settings_retry") {
+		headers.push(summary(t("catalog.identityConflict"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	}
 
 	if (options.status.projection === "failed") {

@@ -2246,6 +2246,7 @@ export class KnomoView extends ItemView {
 	private openMobileSearchPage(options: {
 		focusInput?: boolean;
 		changeIntent?: CardFlowChangeIntent;
+		refreshRemoteResults?: boolean;
 	} = {}): void {
 		this.mobileSearchController.openPage(options);
 	}
@@ -3672,6 +3673,7 @@ export class KnomoView extends ItemView {
 			this.openMobileSearchPage({
 				focusInput: false,
 				changeIntent: "view-scope-change",
+				refreshRemoteResults: true,
 			});
 			return;
 		}

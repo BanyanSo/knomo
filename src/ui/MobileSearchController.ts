@@ -21,6 +21,7 @@ type MobileSearchSurface = "mobile-search";
 interface OpenMobileSearchOptions {
 	focusInput?: boolean;
 	changeIntent?: CardFlowChangeIntent;
+	refreshRemoteResults?: boolean;
 }
 
 interface MobileSearchControllerOptions {
@@ -159,6 +160,9 @@ export class MobileSearchController {
 		this.options.syncRootState();
 		if (options.focusInput !== false) {
 			this.focusInputNow();
+		}
+		if (options.refreshRemoteResults) {
+			void this.refreshRemoteResults(true, options.changeIntent ?? "content-change");
 		}
 	}
 

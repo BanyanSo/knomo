@@ -137,6 +137,60 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 	assert.equal(view.hasCommittedCatalogDesktopQuery, true);
 });
 
+test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展开能力", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as InitialMobileView;
+	view.memoSourceGeneration = 0;
+	view.catalogHistoryExpansionPending = false;
+	view.cardFlowEl = { isConnected: true } as HTMLElement;
+	view.loadCatalogMemos = async (loadAll) => {
+		assert.equal(loadAll, false);
+		return makeCatalogLoad(1, "identity-1", completeCoverage());
+	};
+	view.applyCatalogMemoLoad = () => undefined;
+	view.isDefaultListState = () => true;
+	view.memos = [];
+	view.hasCommittedCatalogDesktopQuery = false;
+	view.cardFlowError = null;
+	view.filteredMemosCache = null;
+	view.invalidateMemoSearchCache = () => undefined;
+	view.retainMemoCardPreviews = () => undefined;
+	view.resetVisibleMemos = () => undefined;
+	view.renderUiState = () => undefined;
+
+	await view.loadInitialMobileMemos();
+
+	assert.equal(view.catalogHistoryExpansionPending, true);
+});
+
+test("MOBILE-CAT-PAGE-002：近月窗口结束后触底改为全历史查询", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as HistoryExpansionView;
+	view.catalogCursor = null;
+	view.catalogHistoryExpansionPending = true;
+	view.catalogLoadingNextPage = false;
+	view.viewStateController = { activeNav: "all" };
+	view.isDefaultListState = () => true;
+	const reloads: Array<[boolean, boolean | undefined]> = [];
+	view.reloadMemos = async (loadAll, forceRebuild) => {
+		reloads.push([loadAll, forceRebuild]);
+		return true;
+	};
+
+	assert.equal(view.canLoadOlderMemoPeriods(), true);
+	assert.equal(await view.loadNextCatalogPage(), true);
+	assert.deepEqual(reloads, [[true, true]]);
+	assert.equal(view.catalogHistoryExpansionPending, false);
+
+	view.catalogHistoryExpansionPending = true;
+	view.reloadMemos = async () => false;
+	assert.equal(await view.loadNextCatalogPage(), false);
+	assert.equal(view.catalogHistoryExpansionPending, true);
+	assert.equal(view.catalogLoadingNextPage, false);
+});
+
 test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
@@ -717,6 +771,35 @@ interface QueryView {
 	}) => Promise<void>;
 	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
 	updateCatalogProgress: (coverage: TestCoverage) => void;
+}
+
+interface InitialMobileView {
+	memoSourceGeneration: number;
+	catalogHistoryExpansionPending: boolean;
+	cardFlowEl: HTMLElement | null;
+	loadCatalogMemos: (loadAll: boolean) => Promise<TestCatalogMemoLoad>;
+	applyCatalogMemoLoad: (load: TestCatalogMemoLoad) => void;
+	isDefaultListState: () => boolean;
+	memos: QueryMemo[];
+	hasCommittedCatalogDesktopQuery: boolean;
+	cardFlowError: string | null;
+	filteredMemosCache: null;
+	invalidateMemoSearchCache: () => void;
+	retainMemoCardPreviews: () => void;
+	resetVisibleMemos: () => void;
+	renderUiState: () => void;
+	loadInitialMobileMemos: () => Promise<void>;
+}
+
+interface HistoryExpansionView {
+	catalogCursor: null;
+	catalogHistoryExpansionPending: boolean;
+	catalogLoadingNextPage: boolean;
+	viewStateController: { activeNav: "all" };
+	isDefaultListState: () => boolean;
+	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
+	canLoadOlderMemoPeriods: () => boolean;
+	loadNextCatalogPage: () => Promise<boolean>;
 }
 
 interface NavigationView {

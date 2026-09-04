@@ -314,6 +314,7 @@ export class KnomoView extends ItemView {
 	private sidebarResizerEl: HTMLElement | null = null;
 	private memos: MemoRecord[] = [];
 	private catalogCursor: CatalogFeatureCursor | null = null;
+	private catalogHistoryExpansionPending = false;
 	private catalogLoadingNextPage = false;
 	private catalogDesktopTotalCount: number | null = null;
 	private catalogDesktopCountRun = 0;
@@ -1122,6 +1123,7 @@ export class KnomoView extends ItemView {
 		}
 		this.memos = [];
 		this.catalogCursor = null;
+		this.catalogHistoryExpansionPending = false;
 		this.catalogDesktopTotalCount = null;
 		this.catalogDesktopCountRun += 1;
 		this.catalogMobileTotalCount = null;
@@ -1517,6 +1519,7 @@ export class KnomoView extends ItemView {
 				return true;
 			}
 			this.memos = load.memos;
+			this.catalogHistoryExpansionPending = !loadAll && Platform.isMobile && this.isDefaultListState();
 			this.catalogDesktopTotalCount = this.getImmediateCatalogTotalCount(load);
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
@@ -1708,7 +1711,21 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadNextCatalogPage(): Promise<boolean> {
-		if (this.catalogCursor === null || this.catalogLoadingNextPage) return false;
+		if (this.catalogLoadingNextPage) return false;
+		if (this.catalogHistoryExpansionPending) {
+			this.catalogHistoryExpansionPending = false;
+			this.catalogLoadingNextPage = true;
+			try {
+				const loaded = await this.reloadMemos(true, true);
+				if (!loaded && this.isDefaultListState()) {
+					this.catalogHistoryExpansionPending = true;
+				}
+				return loaded;
+			} finally {
+				this.catalogLoadingNextPage = false;
+			}
+		}
+		if (this.catalogCursor === null) return false;
 		const queryFingerprint = this.getCatalogQueryFingerprint(true);
 		if (queryFingerprint !== this.catalogDesktopQueryFingerprint) {
 			return this.reloadMemos(true, true);
@@ -1889,6 +1906,7 @@ export class KnomoView extends ItemView {
 		this.catalogDesktopQueryRun += 1;
 		this.catalogDesktopCountRun += 1;
 		this.catalogCursor = null;
+		this.catalogHistoryExpansionPending = false;
 		this.catalogDesktopTotalCount = null;
 		this.cardFlowError = null;
 		this.filteredMemosCache = null;
@@ -1936,6 +1954,7 @@ export class KnomoView extends ItemView {
 				return;
 			}
 			this.applyCatalogMemoLoad(load);
+			this.catalogHistoryExpansionPending = this.isDefaultListState();
 			this.memos = load.memos;
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
@@ -5821,7 +5840,7 @@ export class KnomoView extends ItemView {
 
 	private canLoadOlderMemoPeriods(): boolean {
 		if (this.activeNav === "trash") return this.trashCursor !== null;
-		return this.catalogCursor !== null
+		return (this.catalogCursor !== null || this.catalogHistoryExpansionPending)
 			&& this.activeNav !== "random"
 			&& this.activeNav !== "shuffleDay"
 			&& this.activeNav !== "time-buoy"

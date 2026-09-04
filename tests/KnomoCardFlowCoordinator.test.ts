@@ -90,8 +90,10 @@ test("renders mobile card batches in bounded continuations", () => {
 	assert.equal(coordinator.hasMoreItems, false);
 });
 
-test("scroll bottom requests next batch before hydration", () => {
-	const coordinator = new KnomoCardFlowCoordinator({ sentinel: new FakeSentinel() });
+test("scroll bottom keeps next-batch and hydration fallback when observer is active", () => {
+	const sentinel = new FakeSentinel();
+	sentinel.isObserving = true;
+	const coordinator = new KnomoCardFlowCoordinator({ sentinel });
 	const generation = advanceGeneration(coordinator);
 	coordinator.syncBatch(makeMemos(3), "memo", 1);
 	const nextBatchGenerations: number[] = [];

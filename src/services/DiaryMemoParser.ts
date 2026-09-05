@@ -15,8 +15,9 @@ import {
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
+import { assignObservationOccurrences } from "./MemoObservationIdentity";
 
-export const CATALOG_PARSER_VERSION = 4;
+export const CATALOG_PARSER_VERSION = 5;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;
@@ -119,6 +120,7 @@ export class DiaryMemoParser {
 			lineIndex = parsed.endLine;
 		}
 
+		assignObservationOccurrences(observations);
 		return { sourceRevision, observations };
 	}
 
@@ -159,6 +161,7 @@ export class DiaryMemoParser {
 			observations.push(buildMemoObservation(input, currentSection, lines, parsed));
 			lineIndex = parsed.endLine;
 		}
+		assignObservationOccurrences(observations);
 		return { sourceRevision, observations };
 	}
 }
@@ -276,6 +279,8 @@ function buildMemoObservation(
 		time: parsed.time,
 		content: parsed.content,
 		contentHash: parsed.contentHash,
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		existingBlockId: parsed.blockId,
 		tags: parseMemoTags(metadataContent),
 		links: parseMemoLinksInSourceOrder(metadataContent),

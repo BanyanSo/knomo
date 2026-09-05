@@ -23,6 +23,7 @@ import { canonicalIdentityLedgerJson, sha256IdentityLedgerText } from "./Identit
 import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
 import { CooperativeYieldController } from "./CooperativeTask";
+import { initialIdentityOrder, observationIdentityEvidence as toObservationEvidence } from "./MemoObservationIdentity";
 
 const EMPTY_REPORT: LegacyIdentityImportReport = {
 	status: "idle",
@@ -640,7 +641,7 @@ function bindingMatchesEvidence(
 	evidence: IdentityLedgerObservationEvidence,
 ): boolean {
 	return binding.evidence.sourcePath === evidence.sourcePath
-		&& binding.evidence.rawBlockHash === evidence.rawBlockHash
+		&& binding.evidence.order === evidence.order
 		&& binding.evidence.logicalDate === evidence.logicalDate
 		&& binding.evidence.section === evidence.section
 		&& binding.evidence.time === evidence.time
@@ -649,32 +650,14 @@ function bindingMatchesEvidence(
 
 async function deletedObservationEvidence(record: LegacyIndexMemo): Promise<IdentityLedgerObservationEvidence | null> {
 	if (record.deletedPayload === null) return null;
-	const rawBlock = normalizeNewlines(record.deletedPayload.rawBlock);
 	const startLine = Math.max(0, (record.evidence.lineNumberHint ?? 1) - 1);
 	return {
 		sourcePath: record.deletedPayload.sourcePath,
-		sourceRevision: await sha256IdentityLedgerText(rawBlock),
-		rawBlockHash: hashText(rawBlock),
 		logicalDate: record.deletedPayload.logicalDate,
 		section: record.deletedPayload.section,
-		startLine,
-		endLine: startLine + Math.max(0, rawBlock.split("\n").length - 1),
+		order: initialIdentityOrder(startLine),
 		time: record.evidence.time,
 		contentHash: record.deletedPayload.contentHash,
-	};
-}
-
-function toObservationEvidence(observation: MemoObservation): IdentityLedgerObservationEvidence {
-	return {
-		sourcePath: observation.sourcePath,
-		sourceRevision: observation.sourceRevision,
-		rawBlockHash: observation.rawBlockHash,
-		logicalDate: observation.logicalDate,
-		section: observation.section,
-		startLine: observation.startLine,
-		endLine: observation.endLine,
-		time: observation.time,
-		contentHash: observation.contentHash,
 	};
 }
 

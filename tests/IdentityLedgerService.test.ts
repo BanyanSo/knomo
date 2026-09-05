@@ -1,3 +1,6 @@
+import { hashMemoContent } from "../src/utils/hash";
+import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { assignObservationOccurrences, observationIdentityEvidence } from "../src/services/MemoObservationIdentity";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -92,6 +95,7 @@ test("首次安装会为已有 Daily observations 生成确定且互不合并的
 		makeDuplicateObservation("a".repeat(64), 1),
 		makeDuplicateObservation("a".repeat(64), 2),
 	];
+	assignObservationOccurrences(observations);
 	const firstVault = await createLedgerVault({ [dailyPath]: dailyContent });
 	const secondVault = await createLedgerVault({ [dailyPath]: dailyContent });
 	const first = createService(firstVault, WRITER_A, [], []);
@@ -742,8 +746,8 @@ test("运行期手写新增只采用可证明的新 observation，且相同 revi
 	const firstAdded = first.resolveObservation(added);
 	const secondAdded = second.resolveObservation(added);
 
-	assert.equal(firstResult.appendedEventCount, 2);
-	assert.equal(secondResult.appendedEventCount, 2);
+	assert.equal(firstResult.appendedEventCount, 1);
+	assert.equal(secondResult.appendedEventCount, 1);
 	assert.equal(first.resolveObservation(existing)?.memoId, MEMO_A);
 	assert.equal(second.resolveObservation(existing)?.memoId, MEMO_A);
 	assert.notEqual(firstAdded, null);
@@ -774,7 +778,7 @@ test("没有可信本机编辑来源的远端 revision 不自动采用 unbound o
 
 	const result = await service.reconcileRevision([before], [existing, remoteAdded]);
 
-	assert.equal(result.appendedEventCount, 1);
+	assert.equal(result.appendedEventCount, 0);
 	assert.equal(service.resolveObservation(existing)?.memoId, MEMO_A);
 	assert.equal(service.resolveObservation(remoteAdded), null);
 });
@@ -819,12 +823,13 @@ test("仍可能匹配 pending create 的本机新增保持 deferred，不抢建�
 	await service.finishCreate(await service.beginCreate(createIntentInput(before)), before);
 	const existing = makeObservation("Daily/2026-08-22.md", "b".repeat(64), 1, "相同证据");
 	const added = makeObservation("Daily/2026-08-22.md", "b".repeat(64), 2, "相同证据");
+	assignObservationOccurrences([existing, added]);
 	await service.beginCreate(createIntentInput(added));
 
 	assert.equal(await service.reconcilePendingCreates([existing, added]), 0);
 	const result = await service.reconcileRevision([before], [existing, added], null, true);
 
-	assert.equal(result.deferredObservationCount, 1);
+	assert.equal(result.deferredObservationCount, 2);
 	assert.equal(service.resolveObservation(added), null);
 	assert.deepEqual(Object.keys(service.getSnapshot().memos), [MEMO_A]);
 });
@@ -852,9 +857,10 @@ test("运行期新增与已有 observation 完全相同时保持局部歧义，�
 	const second = makeDuplicateObservation("b".repeat(64), 2);
 	await service.finishCreate(await service.beginCreate(createIntentInput(before)), before);
 
+	assignObservationOccurrences([first, second]);
 	const result = await service.reconcileRevision([before], [first, second]);
 
-	assert.deepEqual(result, { appendedEventCount: 2, conflictedMemoIds: [MEMO_A], deferredObservationCount: 0 });
+	assert.deepEqual(result, { appendedEventCount: 0, conflictedMemoIds: [MEMO_A], deferredObservationCount: 0 });
 	assert.deepEqual(Object.keys(service.getSnapshot().memos), [MEMO_A]);
 	assert.equal(service.resolveObservationState(first).kind, "conflicted");
 	assert.equal(service.resolveObservationState(second).kind, "conflicted");
@@ -875,6 +881,7 @@ test("同一秒创建相同正文时，已知插入项不参与旧身份 success
 		const inserted = makeDuplicateObservation("b".repeat(64), position === "top" ? 1 : 2);
 		const firstPlan = await service.beginCreate(createIntentInput(before, "09:00:37"));
 		await service.finishCreate(firstPlan, before);
+		assignObservationOccurrences(position === "top" ? [inserted, existing] : [existing, inserted]);
 		const secondPlan = await service.beginCreate(createIntentInput(inserted, "09:00:37"));
 
 		const result = await service.reconcileRevision(
@@ -891,70 +898,6 @@ test("同一秒创建相同正文时，已知插入项不参与旧身份 success
 		assert.equal(service.getCreatedAt(MEMO_A), "2026-08-22T09:00:37");
 		assert.equal(service.getCreatedAt(MEMO_C), "2026-08-22T09:00:37");
 	}
-});
-
-test("重启后只修复 create claim 已唯一占用一个 successor 的重复插入分叉", async () => {
-	const vault = await createLedgerVault();
-	const first = createService(
-		vault,
-		WRITER_A,
-		[MEMO_A, MEMO_C],
-		[eventId(1), eventId(2), eventId(3), eventId(4), eventId(5), eventId(6)],
-	);
-	await first.initialize();
-	const before = makeDuplicateObservation("a".repeat(64), 1);
-	const existing = makeDuplicateObservation("b".repeat(64), 1);
-	const inserted = makeDuplicateObservation("b".repeat(64), 2);
-	await first.finishCreate(
-		await first.beginCreate(createIntentInput(before, "09:00:12")),
-		before,
-	);
-	const secondPlan = await first.beginCreate(createIntentInput(inserted, "09:00:37"));
-	assert.deepEqual(
-		await first.reconcileRevision([before], [existing, inserted]),
-		{ appendedEventCount: 2, conflictedMemoIds: [MEMO_A], deferredObservationCount: 0 },
-	);
-	await assert.rejects(
-		() => first.finishCreate(secondPlan, inserted),
-		/claim did not resolve/u,
-	);
-
-	const restarted = createService(vault, WRITER_B, [], [eventId(7)]);
-	await restarted.initialize();
-
-	const repairTarget = restarted as IdentityLedgerService & {
-		repairConflict(memoId: string, observation: MemoObservation): ReturnType<IdentityLedgerService["repairConflict"]>;
-	};
-	const repairConflict = repairTarget.repairConflict.bind(restarted);
-	let releaseRepair!: () => void;
-	const repairBlocked = new Promise<void>((resolve) => { releaseRepair = resolve; });
-	let markRepairStarted!: () => void;
-	const repairStarted = new Promise<void>((resolve) => { markRepairStarted = resolve; });
-	repairTarget.repairConflict = async (memoId, observation) => {
-		markRepairStarted();
-		await repairBlocked;
-		return repairConflict(memoId, observation);
-	};
-	const automaticRepair = restarted.repairKnownDuplicateCreateConflicts([existing, inserted]);
-	await repairStarted;
-	const foregroundPlan = await Promise.race([
-		restarted.beginCreate(createIntentInput(inserted)),
-		new Promise<"timeout">((resolve) => { setTimeout(() => resolve("timeout"), 100); }),
-	]);
-	assert.notEqual(foregroundPlan, "timeout");
-	assert.equal(typeof foregroundPlan === "string" ? null : foregroundPlan.intentDurable, false);
-	releaseRepair();
-	assert.equal(await automaticRepair, 1);
-	assert.equal(restarted.resolveObservation(existing)?.memoId, MEMO_A);
-	assert.equal(restarted.resolveObservation(inserted)?.memoId, MEMO_C);
-	assert.equal(restarted.getSnapshot().memos[MEMO_A]?.conflicted, false);
-	assert.equal(restarted.getCreatedAt(MEMO_A), "2026-08-22T09:00:12");
-	assert.equal(restarted.getCreatedAt(MEMO_C), "2026-08-22T09:00:37");
-
-	const verified = createService(vault, WRITER_A, [], []);
-	await verified.initialize();
-	assert.equal(verified.resolveObservation(existing)?.memoId, MEMO_A);
-	assert.equal(verified.resolveObservation(inserted)?.memoId, MEMO_C);
 });
 
 test("P1 第 5 步：唯一内容锚点分隔出的多个一对一区间可以分别续接", async () => {
@@ -1244,7 +1187,7 @@ test("purge 只追加空 tombstone，持久化后幂等隐藏 payload 且禁止�
 	assert.equal(service.getActiveDeletes().length, 0);
 	assert.deepEqual(service.getSnapshot().memos[MEMO_A]?.purgedDeleteEventIds, [committed.deleteEventId]);
 	assert.equal(service.getSnapshot().eventCount, eventCountBeforePurge + 1);
-	assert.equal(service.resolveObservation(observation)?.memoId, MEMO_A);
+	assert.equal(service.resolveObservation(observation), null);
 	assert.equal(vault.read(dailyPath), dailyBefore);
 	await assert.rejects(() => service.recordRestore(committed, observation), /permanently deleted/u);
 
@@ -1306,6 +1249,7 @@ test("identity 冲突期间拒绝 purge 并保留废纸篓记录", async () => {
 	await base.initialize();
 	const before = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
 	const binding = await base.finishCreate(await base.beginCreate(createIntentInput(before)), before);
+	const offlineVault = cloneVault(baseVault);
 	const deleted = await base.recordDeletePayload(binding, {
 		deletedAt: "2026-08-22T05:00:00.000Z",
 		sourcePath: before.sourcePath,
@@ -1317,15 +1261,15 @@ test("identity 冲突期间拒绝 purge 并保留废纸篓记录", async () => {
 		sourceMemoId: null,
 	});
 	const committed = await base.recordDeleteCommit(deleted);
-	const forkA = cloneVault(baseVault);
-	const forkB = cloneVault(baseVault);
+	const forkA = cloneVault(offlineVault);
+	const forkB = cloneVault(offlineVault);
 	const writerA = createService(forkA, WRITER_A, [], [eventId(10)]);
 	const writerB = createService(forkB, WRITER_B, [], [eventId(11)]);
 	await writerA.initialize();
 	await writerB.initialize();
 	await writerA.rebindObservation(before, makeObservation(before.sourcePath, "c".repeat(64), 1, "候选 A"), "edit");
 	await writerB.rebindObservation(before, makeObservation(before.sourcePath, "d".repeat(64), 2, "候选 B"), "edit");
-	const conflicted = createService(mergeVaults(forkA, forkB), WRITER_A, [], [eventId(12)]);
+	const conflicted = createService(mergeVaults(baseVault, mergeVaults(forkA, forkB)), WRITER_A, [], [eventId(12)]);
 	await conflicted.initialize();
 
 	await assert.rejects(() => conflicted.recordPurge(committed), /identity is conflicted/u);
@@ -1587,6 +1531,250 @@ test("增量 Identity materialization 按时间预算让出主线程", async () 
 	assert.equal(yieldCount > 0, true);
 });
 
+test("扫描位置更新不写身份历史：连续新增 100 条后清空本机状态仍可重建", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	let text = "## Memos\n";
+	let before = await parseIdentityDaily(text);
+	const bindings = new Map<string, { memoId: string; bindingId: string }>();
+	for (let index = 0; index < 100; index += 1) {
+		text = `## Memos\n- 09:00 memo ${index}\n` + text.slice("## Memos\n".length);
+		const after = await parseIdentityDaily(text);
+		const inserted = after[0]!;
+		const plan = await service.beginCreate(createIntentInput(inserted));
+		await service.reconcileRevision(before, after, inserted);
+		const binding = await service.finishCreate(plan, inserted);
+		bindings.set(inserted.content, { memoId: binding.memoId, bindingId: binding.bindingId });
+		for (const observation of after) {
+			const current = service.resolveObservation(observation)!;
+			assert.deepEqual({ memoId: current.memoId, bindingId: current.bindingId }, bindings.get(observation.content));
+		}
+		before = after;
+	}
+	const events = readLedgerEvents(vault);
+	assert.equal(events.filter((event) => event.type === "rebind").length, 0);
+	assert.equal(events.filter((event) => event.type === "claim").length, 100);
+	assert.equal(events.filter((event) => event.type === "create_intent").length, 100);
+	for (const event of events) {
+		if (event.type !== "claim") continue;
+		assert.deepEqual(Object.keys(event.evidence.observation).sort(), ["contentHash", "logicalDate", "order", "section", "sourcePath", "time"]);
+	}
+	const restarted = createService(vault, WRITER_B, [], []);
+	await restarted.initialize();
+	const rescanned = await parseIdentityDaily("普通 Daily 文字\n\n" + text);
+	const revision = restarted.getRevision();
+	assert.equal((await restarted.reconcileRevision(before, rescanned)).appendedEventCount, 0);
+	assert.equal(restarted.getRevision(), revision);
+	for (const observation of rescanned) assert.equal(restarted.resolveObservation(observation)?.memoId, bindings.get(observation.content)?.memoId);
+});
+
+test("重复 Memo 顶部、底部及中间插入只写新增身份，并可在另一设备重建", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const expected: string[] = [];
+	let before: MemoObservation[] = [];
+	for (const insertionIndex of [0, 0, 2, 1, 0, 5, 3]) {
+		const after = await parseIdentityDaily("## Memos\n" + "- 09:00 相同正文\n".repeat(expected.length + 1));
+		const inserted = after[insertionIndex]!;
+		const plan = await service.beginCreate(createIntentInput(inserted));
+		await service.reconcileRevision(before, after, inserted);
+		await service.finishCreate(plan, inserted);
+		expected.splice(insertionIndex, 0, plan.memoId);
+		const restarted = createService(vault, WRITER_B, [], []);
+		await restarted.initialize();
+		assert.deepEqual(after.map((observation) => restarted.resolveObservation(observation)?.memoId), expected);
+		before = after;
+	}
+	assert.equal(new Set(expected).size, expected.length);
+	assert.equal(readLedgerEvents(vault).filter((event) => event.type === "rebind").length, 0);
+});
+
+test("编辑和删除重复项只改变目标身份，恢复不重编号其余 Memo", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const before = await parseIdentityDaily("## Memos\n- 09:00 相同正文\n- 09:00 相同正文\n- 09:00 相同正文\n");
+	await service.adoptHistoricalObservations(before);
+	const original = before.map((observation) => service.resolveObservation(observation)!);
+	const edited = await parseIdentityDaily("## Memos\n- 09:00 相同正文\n- 09:00 修改正文\n- 09:00 相同正文\n");
+	await service.rebindObservation(before[1]!, edited[1]!, "edit");
+	assert.deepEqual(edited.map((observation) => service.resolveObservation(observation)?.memoId), original.map((binding) => binding.memoId));
+	const deleted = await service.recordDeletePayload(original[0]!, {
+		deletedAt: "2026-08-22T05:00:00.000Z", sourcePath: before[0]!.sourcePath,
+		deletedSourceRevision: null, logicalDate: before[0]!.logicalDate, section: before[0]!.section,
+		rawBlock: "- 09:00 相同正文", contentHash: before[0]!.contentHash, sourceMemoId: null,
+	});
+	const committed = await service.recordDeleteCommit(deleted);
+	const remaining = await parseIdentityDaily("## Memos\n- 09:00 修改正文\n- 09:00 相同正文\n");
+	assert.equal(service.resolveObservation(remaining[1]!)?.bindingId, original[2]!.bindingId);
+	await service.recordRestore(committed, edited[0]!);
+	const restarted = createService(vault, WRITER_B, [], []);
+	await restarted.initialize();
+	assert.deepEqual(edited.map((observation) => restarted.resolveObservation(observation)?.memoId), original.map((binding) => binding.memoId));
+	assert.equal(restarted.resolveObservation(edited[2]!)?.bindingId, original[2]!.bindingId);
+	assert.equal(readLedgerEvents(vault).filter((event) => event.type === "rebind").length, 1);
+});
+
+test("同文件不同 Memo 的跨设备编辑不因扫描 revision 不同而分叉", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const before = await parseIdentityDaily("- 09:00 A\n- 09:00 B\n");
+	await service.adoptHistoricalObservations(before);
+	const ids = before.map((observation) => service.resolveObservation(observation)!.memoId);
+	const firstVault = cloneVault(vault), secondVault = cloneVault(vault);
+	const first = createService(firstVault, WRITER_A, [], [eventId(800)]);
+	const second = createService(secondVault, WRITER_B, [], [eventId(801)]);
+	await first.initialize();
+	await second.initialize();
+	await first.reconcileRevision(before, await parseIdentityDaily("- 09:00 A edited\n- 09:00 B\n"));
+	await second.reconcileRevision(before, await parseIdentityDaily("- 09:00 A\n- 09:00 B edited\n"));
+	const reader = createService(mergeVaults(firstVault, secondVault), WRITER_A, [], []);
+	await reader.initialize();
+	const merged = await parseIdentityDaily("Daily 普通文字\n- 09:00 A edited\n- 09:00 B edited\n");
+	assert.deepEqual(merged.map((observation) => reader.resolveObservation(observation)?.memoId), ids);
+	assert.equal(Object.values(reader.getSnapshot().memos).some((memo) => memo.conflicted), false);
+});
+
+test("并发相同位置插入不按 writer 或时间猜测重复 Memo 顺序", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const before = await parseIdentityDaily("- 09:00 相同正文\n- 10:00 无关正文\n");
+	await service.adoptHistoricalObservations(before);
+	const unaffectedId = service.resolveObservation(before[1]!)!.memoId;
+	const firstVault = cloneVault(vault), secondVault = cloneVault(vault);
+	for (const [replica, writer, id] of [[firstVault, WRITER_A, 900], [secondVault, WRITER_B, 910]] as const) {
+		const device = createService(replica, writer, [], [eventId(id), eventId(id + 1)]);
+		await device.initialize();
+		const after = await parseIdentityDaily("- 09:00 相同正文\n- 09:00 相同正文\n- 10:00 无关正文\n");
+		await device.finishCreate(await device.beginCreate(createIntentInput(after[1]!)), after[1]!);
+	}
+	const reader = createService(mergeVaults(firstVault, secondVault), WRITER_A, [], []);
+	await reader.initialize();
+	const merged = await parseIdentityDaily("- 09:00 相同正文\n- 09:00 相同正文\n- 09:00 相同正文\n- 10:00 无关正文\n");
+	assert.equal(reader.resolveObservationState(merged[0]!).kind, "conflicted");
+	assert.equal(reader.resolveObservationState(merged[1]!).kind, "conflicted");
+	assert.equal(reader.resolveObservationState(merged[2]!).kind, "conflicted");
+	assert.equal(reader.resolveObservation(merged[3]!)?.memoId, unaffectedId);
+});
+
+test("重复组初始化分批中断后只补齐确定性 claim，不产生额外身份", async () => {
+	const vault = await createLedgerVault();
+	const complete = createService(vault, WRITER_A, [], []);
+	await complete.initialize();
+	const observations = await parseIdentityDaily("- 09:00 相同正文\n".repeat(3));
+	await complete.adoptHistoricalObservations(observations);
+	const partialVault = await createLedgerVault();
+	const partial = createService(partialVault, WRITER_A, [], []);
+	await partial.initialize();
+	await partial.importVerifiedLegacyEvents(readLedgerEvents(vault).slice(0, 1));
+	const restarted = createService(partialVault, WRITER_A, [], []);
+	await restarted.initialize();
+	await restarted.adoptHistoricalObservations(observations);
+	assert.equal(restarted.getSnapshot().eventCount, 3);
+	assert.deepEqual(observations.map((observation) => restarted.resolveObservation(observation)?.memoId),
+		observations.map((observation) => complete.resolveObservation(observation)?.memoId));
+});
+
+test("排队期间过期的 reconciliation 不写共享 Identity，也不标记 Ledger 故障", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const before = await parseIdentityDaily("- 09:00 原文\n");
+	await service.adoptHistoricalObservations(before);
+	const count = service.getSnapshot().eventCount;
+	let checks = 0;
+	await assert.rejects(() => service.reconcileRevision(before, [] , null, false, async () => false));
+	await assert.rejects(() => service.reconcileRevision(before, awaitAfter(), null, false, async () => ++checks < 3));
+	assert.equal(service.getSnapshot().eventCount, count);
+	assert.equal(service.getStatus(), "ready");
+	function awaitAfter(): MemoObservation[] {
+		return [{ ...before[0]!, sourceRevision: "b".repeat(64), content: "新文", contentHash: hashMemoContent("新文") }];
+	}
+});
+
+test("旧编辑句柄不能在正文改回相同内容后续接新的绑定", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const first = (await parseIdentityDaily("- 09:00 原文\n"))[0]!;
+	const edited = (await parseIdentityDaily("- 09:00 新文\n"))[0]!;
+	const restored = (await parseIdentityDaily("普通文字\n- 09:00 原文\n"))[0]!;
+	const initial = await service.finishCreate(await service.beginCreate(createIntentInput(first)), first);
+	await service.rebindObservation(first, edited, "edit");
+	await service.rebindObservation(edited, restored, "edit");
+	const count = service.getSnapshot().eventCount;
+	const stale = await service.rebindObservation(first, edited, "edit", {
+		memoId: initial.memoId, activeBindingId: initial.bindingId, identityRevision: initial.identityRevision,
+	});
+	assert.equal(stale, null);
+	assert.equal(service.getSnapshot().eventCount, count);
+	assert.equal(service.resolveObservation(restored)?.memoId, initial.memoId);
+});
+
+test("另一设备等价 claim 改变 canonical binding 后，删除的身份不会重新认领正文", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [MEMO_A], [eventId(20), eventId(21), eventId(22), eventId(23)]);
+	await service.initialize();
+	const observation = (await parseIdentityDaily("- 09:00 正文\n"))[0]!;
+	const binding = await service.finishCreate(await service.beginCreate(createIntentInput(observation)), observation);
+	const payload = await service.recordDeletePayload(binding, {
+		deletedAt: "2026-08-22T05:00:00.000Z", sourcePath: observation.sourcePath,
+		deletedSourceRevision: null, logicalDate: observation.logicalDate, section: observation.section,
+		rawBlock: "- 09:00 正文", contentHash: observation.contentHash, sourceMemoId: null,
+	});
+	await service.recordDeleteCommit(payload);
+	const claim = readLedgerEvents(vault).find((event) => event.type === "claim")!;
+	await service.importVerifiedLegacyEvents([{ ...claim, eventId: eventId(1), writerId: WRITER_B }]);
+	const restarted = createService(vault, WRITER_B, [], []);
+	await restarted.initialize();
+	assert.equal(restarted.resolveObservation(observation), null);
+	assert.equal(restarted.getActiveDeletes().length, 1);
+});
+
+test("删除后逐字重建相同 Daily 的新 Memo 不复用已删除身份", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const observation = (await parseIdentityDaily("- 09:00 正文\n"))[0]!;
+	const old = await service.adoptObservation(observation);
+	const payload = await service.recordDeletePayload(old, {
+		deletedAt: "2026-08-22T05:00:00.000Z", sourcePath: observation.sourcePath,
+		deletedSourceRevision: null, logicalDate: observation.logicalDate, section: observation.section,
+		rawBlock: "- 09:00 正文", contentHash: observation.contentHash, sourceMemoId: null,
+	});
+	await service.recordDeleteCommit(payload);
+	const created = await service.adoptObservation(observation);
+	assert.notEqual(created.memoId, old.memoId);
+	assert.equal(service.getActiveDeletes()[0]?.memoId, old.memoId);
+	const restarted = createService(vault, WRITER_B, [], []);
+	await restarted.initialize();
+	assert.equal(restarted.resolveObservation(observation)?.memoId, created.memoId);
+});
+
+test("同组重复 Memo 的显式移动只更新被移动项的顺序", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const observations = await parseIdentityDaily("- 09:00 相同正文\n".repeat(3));
+	await service.adoptHistoricalObservations(observations);
+	const original = observations.map((observation) => service.resolveObservation(observation)!);
+	await service.rebindObservation(observations[0]!, observations[2]!, "move");
+	assert.deepEqual(observations.map((observation) => service.resolveObservation(observation)?.memoId),
+		[original[1]!.memoId, original[2]!.memoId, original[0]!.memoId]);
+	assert.equal(service.resolveObservation(observations[0]!)?.bindingId, original[1]!.bindingId);
+	assert.equal(readLedgerEvents(vault).filter((event) => event.type === "rebind").length, 1);
+});
+
+async function parseIdentityDaily(content: string): Promise<MemoObservation[]> {
+	return (await new DiaryMemoParser().parse({
+		sourcePath: "Daily/2026-08-22.md", logicalDate: "2026-08-22", bytes: new TextEncoder().encode(content),
+	})).observations;
+}
+
 function readLedgerEvents(vault: InMemoryVault): IdentityLedgerEvent[] {
 	return vault.paths()
 		.filter((path) => path.endsWith(".jsonl"))
@@ -1671,6 +1859,8 @@ function makeObservation(
 	content: string,
 ): MemoObservation {
 	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		sourcePath,
 		sourceRevision,
 		rawBlockHash: `fnv1a-${startLine.toString(16).padStart(8, "0")}`,
@@ -1680,7 +1870,7 @@ function makeObservation(
 		endLine: startLine,
 		time: "09:00",
 		content,
-		contentHash: "fnv1a-12345678",
+		contentHash: hashMemoContent(content),
 		existingBlockId: null,
 		tags: [],
 		links: [],
@@ -1691,17 +1881,7 @@ function makeObservation(
 }
 
 function makeEvidence(observation: MemoObservation): IdentityLedgerObservationEvidence {
-	return {
-		sourcePath: observation.sourcePath,
-		sourceRevision: observation.sourceRevision,
-		rawBlockHash: observation.rawBlockHash,
-		logicalDate: observation.logicalDate,
-		section: observation.section,
-		startLine: observation.startLine,
-		endLine: observation.endLine,
-		time: observation.time,
-		contentHash: observation.contentHash,
-	};
+	return observationIdentityEvidence(observation);
 }
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

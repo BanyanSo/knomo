@@ -165,6 +165,8 @@ function makeSettings(locale = "en"): KnomoSettings & { locale: string } {
 
 function makeObservation(overrides: Partial<CatalogObservation>): CatalogObservation {
 	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		observationKey: "Daily/2026-08-09.md\u00000000000001",
 		createdAtKey: "2026-08-09T09:00:00",
 		sourcePath: "Daily/2026-08-09.md",

@@ -631,15 +631,17 @@ Knomo 更聚焦：
 
 ## 开发验证
 
-交付改动前，请运行：
+按修改范围和风险选择验证。纯文档只核对内容、引用和 diff；低风险局部修改运行相关测试，可一次传入多个文件：
 
 ```bash
-npm run verify
+npm run test:file -- tests/<Name>.test.ts
 ```
 
-该命令会运行类型检查、测试、生产构建、i18n 检查、diff 空白检查、Obsidian 禁用源码模式扫描和尾随空白扫描。涉及移动端行为的改动，还需要完成 [docs/mobile-qa-checklist.md](./docs/mobile-qa-checklist.md) 中的手测场景。
+persistence、migration、identity、数据安全及跨服务语义修改须先补有效回归，再运行 `npm run test:quiet` 和 `npm run typecheck`。需要验证构建产物时运行 `npm run build`。仅因新增修改、失败或未解决风险扩大或重复检查；未执行的检查单独说明。
 
-局部开发时，可以通过 `npm test` 透传 Node test runner 参数，例如 `npm test -- --test-name-pattern=WikiLink`。交付改动前仍应运行 `npm run verify`。
+`npm run verify` 是综合检查入口，不是每次交付的默认要求：它包含类型检查、全量测试、生产构建、i18n、diff 空白、禁用源码模式及尾随空白扫描，仅在需要这些完整检查时运行。未经要求不运行 lint。同一工作树的测试命令共用编译目录，应串行协调。
+
+当前任务包含设备验证时，选择受影响的场景；完整设备矩阵属于对应 Stage/Beta/Release 范围。本地可选的[移动 QA 清单](./docs/mobile-qa-checklist.md)仅作辅助，不是 test/build 前提。
 
 ---
 

@@ -151,14 +151,11 @@ export function toIdentityLedgerObservationEvidence(
 ): IdentityLedgerObservationEvidence {
 	return {
 		sourcePath: normalizePath(observation.sourcePath),
-		sourceRevision: observation.sourceRevision,
-		rawBlockHash: observation.rawBlockHash,
 		logicalDate: observation.logicalDate,
 		section: observation.section,
-		startLine: observation.startLine,
-		endLine: observation.endLine,
 		time: observation.time,
 		contentHash: observation.contentHash,
+		order: observation.order,
 	};
 }
 
@@ -282,14 +279,11 @@ function readSegmentIdentityFromPath(rootPath: string, path: string): { writerId
 
 function isObservationEvidence(value: unknown): value is IdentityLedgerObservationEvidence {
 	return isRecord(value)
-		&& hasExactKeys(value, ["sourcePath", "sourceRevision", "rawBlockHash", "logicalDate", "section", "startLine", "endLine", "time", "contentHash"])
+		&& hasExactKeys(value, ["sourcePath", "logicalDate", "section", "time", "contentHash", "order"])
 		&& isVaultPath(value.sourcePath)
-		&& SHA256_PATTERN.test(readString(value.sourceRevision))
-		&& CONTENT_HASH_PATTERN.test(readString(value.rawBlockHash))
 		&& isLogicalDate(value.logicalDate)
 		&& (value.section === null || typeof value.section === "string")
-		&& Number.isInteger(value.startLine) && Number(value.startLine) >= 0
-		&& Number.isInteger(value.endLine) && Number(value.endLine) >= Number(value.startLine)
+		&& /^[0-9A-Za-z]*[1-9A-Za-z]$/u.test(readString(value.order))
 		&& MEMO_TIME_PATTERN.test(readString(value.time))
 		&& CONTENT_HASH_PATTERN.test(readString(value.contentHash));
 }

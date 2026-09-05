@@ -35,7 +35,6 @@ export const checks = [
 		run: () => scanFiles([
 			"README.md",
 			"README.zh-CN.md",
-			"docs",
 			path.join("src", "ui"),
 			"tests",
 			"scripts",

@@ -631,15 +631,17 @@ Yes. Knomo is designed to keep content readable in Markdown. If you edit files m
 
 ## Development Verification
 
-Before handing off a change, run:
+Choose verification by the change's scope and risk. Documentation-only work needs content, reference and diff checks. For a low-risk local change, run the relevant tests (multiple files may be passed together):
 
 ```bash
-npm run verify
+npm run test:file -- tests/<Name>.test.ts
 ```
 
-This runs type checking, tests, the production build, i18n checks, diff whitespace checks, Obsidian forbidden source pattern scans, and trailing whitespace scans. For mobile-facing changes, also complete the manual scenarios in [docs/mobile-qa-checklist.md](./docs/mobile-qa-checklist.md).
+Persistence, migration, identity, data-safety and cross-service semantic changes require focused regression coverage followed by `npm run test:quiet` and `npm run typecheck`. Run `npm run build` when build artifacts need verification. Expand or repeat checks only for new changes, failures or unresolved risks; report unrun checks separately.
 
-For focused test loops, pass Node test runner arguments through `npm test`, for example `npm test -- --test-name-pattern=WikiLink`. Run `npm run verify` before handing off the change.
+`npm run verify` is a comprehensive check, not a default handoff requirement: it includes type checking, all tests, the production build, i18n, diff whitespace, forbidden source patterns and trailing whitespace scans. Use it only when that full scope is required. Do not run lint unless requested. Coordinate test commands serially within one working tree because they share compiled output.
+
+When device verification is in the current task, select the affected scenarios; the full device matrix belongs to the corresponding Stage/Beta/Release scope. The optional local [mobile QA checklist](./docs/mobile-qa-checklist.md) is supporting guidance, not a test/build dependency.
 
 ---
 

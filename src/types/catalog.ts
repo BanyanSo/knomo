@@ -39,6 +39,8 @@ export interface ResolvedIdentityEvidence {
 
 // Observation 只描述当前 Daily 字节，不承担身份职责。
 export interface MemoObservation extends ObservationHandle {
+	occurrenceIndex: number;
+	occurrenceCount: number;
 	logicalDate: string;
 	section: string | null;
 	time: string;

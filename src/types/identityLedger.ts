@@ -1,4 +1,4 @@
-import type { MemoObservation } from "./catalog";
+import type { IdentityHandle, MemoObservation } from "./catalog";
 
 export type IdentityLedgerEventType =
 	| "create_intent"
@@ -14,14 +14,11 @@ export type IdentityLedgerEventType =
 
 export interface IdentityLedgerObservationEvidence {
 	sourcePath: string;
-	sourceRevision: string;
-	rawBlockHash: string;
 	logicalDate: string;
 	section: string | null;
-	startLine: number;
-	endLine: number;
 	time: string;
 	contentHash: string;
+	order: string;
 }
 
 interface IdentityLedgerEventBase {
@@ -256,11 +253,13 @@ export interface IdentityLedgerMutationService extends IdentityLedgerReader {
 		after: readonly MemoObservation[],
 		insertedObservation?: MemoObservation | null,
 		allowIdentityAdoption?: boolean,
+		isCurrent?: () => Promise<boolean>,
 	): Promise<IdentityLedgerReconcileResult>;
 	rebindObservation(
 		before: MemoObservation,
 		after: MemoObservation,
 		reason: IdentityLedgerRebindReason,
+		expectedIdentity?: IdentityHandle | null,
 	): Promise<IdentityLedgerBinding | null>;
 	adoptObservation(observation: MemoObservation): Promise<IdentityLedgerBinding>;
 	repairConflict(memoId: string, observation: MemoObservation): Promise<IdentityLedgerBinding>;

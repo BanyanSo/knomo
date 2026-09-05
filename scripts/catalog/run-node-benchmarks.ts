@@ -271,12 +271,9 @@ export async function runIdentityLedgerReducerBenchmark(
 			evidence: {
 				observation: {
 					sourcePath: `Daily/${String(ordinal).padStart(5, "0")}.md`,
-					sourceRevision: ordinal.toString(16).padStart(64, "0"),
-					rawBlockHash: `fnv1a-${hashSuffix}`,
+					order: "00000000000001V",
 					logicalDate: "2026-08-22",
 					section: "## Memos",
-					startLine: 1,
-					endLine: 1,
 					time: "09:00",
 					contentHash: `fnv1a-${hashSuffix}`,
 				},

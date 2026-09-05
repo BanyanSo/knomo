@@ -493,7 +493,7 @@ export class MemoCommandService {
 	): Promise<{ memoId: string | null; pending: boolean }> {
 		if (observation === null) return { memoId: item.memoId, pending: true };
 		try {
-			const binding = await this.identityLedger.rebindObservation(item.observation, observation, reason);
+			const binding = await this.identityLedger.rebindObservation(item.observation, observation, reason, item.resolved.identityHandle);
 			return binding === null
 				? { memoId: item.memoId, pending: true }
 				: { memoId: binding.memoId, pending: false };

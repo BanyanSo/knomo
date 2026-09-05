@@ -11,6 +11,7 @@ interface VerifyCheck {
 }
 
 interface VerifyCore {
+	checks: readonly VerifyCheck[];
 	FORBIDDEN_SOURCE_PATTERN: RegExp;
 	runChecks: (checks: readonly VerifyCheck[]) => number;
 	scanFiles: (pathsToScan: readonly string[], pattern: RegExp) => number;
@@ -147,4 +148,29 @@ test("verify core stops checks after the first failure", async () => {
 
 	assert.deepEqual(visited, ["first", "second"]);
 	assert.deepEqual(messages, ["\n==> first", "\n==> second"]);
+});
+
+test("verify whitespace check is independent of local docs and still checks README", async () => {
+	const verifyCore = await loadVerifyCore();
+	const check = verifyCore.checks.find((entry) => entry.name === "trailing whitespace");
+	assert.ok(check);
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-verify-"));
+	const previousCwd = process.cwd();
+	try {
+		fs.writeFileSync(path.join(tempDir, "README.md"), "clean\n", "utf8");
+		process.chdir(tempDir);
+		assert.equal(check.run(), 0);
+		fs.mkdirSync("docs/architecture", { recursive: true });
+		fs.writeFileSync("docs/notes.md", "local notes   \n", "utf8");
+		fs.writeFileSync("docs/architecture/design.md", "local design   \n", "utf8");
+		assert.equal(check.run(), 0);
+		fs.writeFileSync("README.md", "tracked documentation   \n", "utf8");
+		const messages = withCapturedConsoleError(() => {
+			assert.equal(check.run(), 1);
+		});
+		assert.deepEqual(messages, ["README.md:1: tracked documentation   "]);
+	} finally {
+		process.chdir(previousCwd);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	}
 });

@@ -476,6 +476,8 @@ function makeObservation(
 	overrides: Partial<MemoObservation> = {},
 ): MemoObservation {
 	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		sourcePath,
 		sourceRevision: "sha",
 		rawBlockHash: `raw-${startLine}`,

@@ -211,6 +211,8 @@ function makeObservation(
 	content: string,
 ): MemoObservation {
 	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		sourcePath: inventory.sourcePath,
 		sourceRevision: "sha",
 		rawBlockHash: `raw-${startLine}`,

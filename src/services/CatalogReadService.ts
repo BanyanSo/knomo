@@ -902,12 +902,12 @@ export class CatalogReadService {
 	private async hasCurrentObservation(memoId: string, snapshot: IdentityLedgerSnapshot): Promise<boolean> {
 		const memo = snapshot.memos[memoId];
 		if (memo === undefined) return false;
-		for (const binding of memo.bindings) {
-			const observationKey = `${binding.evidence.sourcePath}\0${binding.evidence.startLine.toString().padStart(10, "0")}`;
-			const observation = await this.options.catalog.getObservation(observationKey);
-			if (observation === null) continue;
-			const state = this.options.identityLedger.resolveObservationState(observation);
-			if (state.kind === "identified" && state.binding.memoId === memoId) return true;
+		for (const sourcePath of new Set(memo.bindings.map((binding) => binding.evidence.sourcePath))) {
+			const batch = await this.options.catalog.getFileRevisionBatch(sourcePath);
+			for (const observation of batch?.observations ?? []) {
+				const state = this.options.identityLedger.resolveObservationState(observation);
+				if (state.kind === "identified" && state.binding.memoId === memoId) return true;
+			}
 		}
 		return false;
 	}

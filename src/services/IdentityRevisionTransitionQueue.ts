@@ -3,6 +3,7 @@ import { normalizePath } from "obsidian";
 import type { IdentityLedgerReconcileResult } from "../types/identityLedger";
 import type { CatalogRevisionTransition } from "./CatalogIndexCoordinator";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
+import { memoObservationSignature } from "./MemoObservationIdentity";
 
 export const IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY = "identityRevisionTransitions";
 
@@ -23,6 +24,21 @@ export class IdentityRevisionTransitionQueue {
 		const sourcePath = normalizePath(transition.sourcePath);
 		const pending = this.pendingByPath.get(sourcePath) ?? [];
 		const latest = pending[pending.length - 1];
+		const before = transition.before?.observations;
+		const positionOnly = before !== undefined && before.length === transition.after.observations.length
+			&& before.every((observation, index) => memoObservationSignature(observation) === memoObservationSignature(transition.after.observations[index]!));
+		if (positionOnly && latest === undefined) return;
+		if (positionOnly && latest?.after.sourceRevision === transition.before?.sourceRevision) {
+			// 只把待完成身份工作的目标推进到当前扫描，不保存中间位置历史。
+			const insertedIndex = latest.insertedObservation === null ? -1 : latest.after.observations.findIndex((observation) =>
+				observation.startLine === latest.insertedObservation!.startLine);
+			pending[pending.length - 1] = cloneTransition({
+				...latest, after: transition.after,
+				insertedObservation: insertedIndex < 0 ? null : transition.after.observations[insertedIndex]!,
+			});
+			await this.persist();
+			return;
+		}
 		if (latest?.after.sourceRevision === transition.after.sourceRevision) {
 			const preferred = preferTransition(latest, transition);
 			if (preferred === latest) return;
@@ -35,7 +51,7 @@ export class IdentityRevisionTransitionQueue {
 	}
 
 	async drain(
-		reconcile: (transition: CatalogRevisionTransition) => Promise<IdentityLedgerReconcileResult>,
+		reconcile: (transition: CatalogRevisionTransition, isCurrent: () => Promise<boolean>) => Promise<IdentityLedgerReconcileResult>,
 	): Promise<void> {
 		await this.initialize();
 		for (const sourcePath of [...this.pendingByPath.keys()].sort()) {
@@ -51,7 +67,10 @@ export class IdentityRevisionTransitionQueue {
 			while (pending.length > 0) {
 				const transition = pending[0];
 				if (transition === undefined) break;
-				const result = await reconcile(cloneTransition(transition));
+				const isCurrent = async () => pending[pending.length - 1] === latest
+					&& await this.options.getCurrentSourceRevision(sourcePath) === latest.after.sourceRevision;
+				if (!await isCurrent()) break;
+				const result = await reconcile(cloneTransition(transition), isCurrent);
 				if (result.deferredObservationCount > 0) return;
 				pending.shift();
 				if (pending.length === 0) this.pendingByPath.delete(sourcePath);

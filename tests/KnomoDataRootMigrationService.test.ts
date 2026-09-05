@@ -262,6 +262,8 @@ function createLedger(
 
 function makeObservation(sourcePath: string): MemoObservation {
 	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		sourcePath,
 		sourceRevision: "a".repeat(64),
 		rawBlockHash: "fnv1a-00000001",
@@ -292,14 +294,11 @@ function makeClaim(observation: MemoObservation, claimEventId = eventId(1)): Ide
 		evidence: {
 			observation: {
 				sourcePath: observation.sourcePath,
-				sourceRevision: observation.sourceRevision,
-				rawBlockHash: observation.rawBlockHash,
 				logicalDate: observation.logicalDate,
 				section: observation.section,
-				startLine: observation.startLine,
-				endLine: observation.endLine,
 				time: observation.time,
 				contentHash: observation.contentHash,
+				order: "00000000000001V",
 			},
 			createIntentEventId: null,
 		},

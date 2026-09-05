@@ -612,12 +612,9 @@ test("已有同 memoId binding 与旧 Index 证据不一致时跳过迁移", asy
 		evidence: {
 			observation: {
 				sourcePath: unrelated.sourcePath,
-				sourceRevision: unrelated.sourceRevision,
-				rawBlockHash: unrelated.rawBlockHash,
+				order: "00000000000001V",
 				logicalDate: unrelated.logicalDate,
 				section: unrelated.section,
-				startLine: unrelated.startLine,
-				endLine: unrelated.endLine,
 				time: unrelated.time,
 				contentHash: unrelated.contentHash,
 			},
@@ -1128,13 +1125,15 @@ function completeCoverage() {
 
 function makeObservation(sourcePath: string, rawBlock: string, content: string): MemoObservation {
 	return {
+		startLine: 1,
+		endLine: 1,
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		sourcePath,
 		sourceRevision: "a".repeat(64),
 		rawBlockHash: hashText(rawBlock),
 		logicalDate: "2026-08-22",
 		section: "## Memos",
-		startLine: 1,
-		endLine: 1,
 		time: "09:00",
 		content,
 		contentHash: hashMemoContent(content),

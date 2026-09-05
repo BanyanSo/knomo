@@ -215,20 +215,19 @@ function makeBinding(observation: MemoObservation, identityRevision: string): Id
 		identityRevision,
 		evidence: {
 			sourcePath: observation.sourcePath,
-			sourceRevision: observation.sourceRevision,
-			rawBlockHash: observation.rawBlockHash,
 			logicalDate: observation.logicalDate,
 			section: observation.section,
-			startLine: observation.startLine,
-			endLine: observation.endLine,
 			time: observation.time,
 			contentHash: observation.contentHash,
+			order: "00000000000001V",
 		},
 	};
 }
 
 function makeObservation(startLine: number): MemoObservation {
 	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		sourcePath: "Daily/2026-08-22.md",
 		sourceRevision: "revision-1",
 		startLine,

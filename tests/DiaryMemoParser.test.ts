@@ -80,8 +80,8 @@ test("所有 H1-H6 与根区域识别合法时间 memo，并排除嵌套、引�
 	]);
 });
 
-test("Catalog Parser 本机缓存标记随全区域识别契约更新", () => {
-	assert.equal(CATALOG_PARSER_VERSION, 4);
+test("Catalog Parser 本机缓存标记随重复项扫描元数据更新", () => {
+	assert.equal(CATALOG_PARSER_VERSION, 5);
 });
 
 test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async () => {
@@ -90,6 +90,7 @@ test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async 
 	assert.equal(result.observations[0].contentHash, result.observations[1].contentHash);
 	assert.notEqual(result.observations[1].startLine, result.observations[0].startLine);
 	assert.notEqual(result.observations[1].contentHash, result.observations[2].contentHash);
+	assert.deepEqual(result.observations.map((observation) => [observation.occurrenceIndex, observation.occurrenceCount]), [[0, 2], [1, 2], [0, 1]]);
 });
 
 test("ObservationHandle 的 rawBlockHash 覆盖时间行与完整原始 block", async () => {

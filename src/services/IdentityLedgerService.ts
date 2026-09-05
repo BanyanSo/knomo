@@ -1,7 +1,7 @@
 import { normalizePath, TFile, TFolder } from "obsidian";
 import type { App, Component, TAbstractFile } from "obsidian";
 
-import type { MemoObservation } from "../types/catalog";
+import type { IdentityHandle, MemoObservation } from "../types/catalog";
 import { ensureFolder as ensureVaultFolder } from "../utils/vault";
 import type {
 	IdentityLedgerBinding,
@@ -38,6 +38,7 @@ import {
 } from "./IdentityLedgerProtocol";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
+import { identityOrderBetween, memoObservationSignature, observationIdentityEvidence as toObservationEvidence } from "./MemoObservationIdentity";
 
 const LEGACY_IMPORT_SEGMENT_EVENT_LIMIT = 256;
 
@@ -177,7 +178,12 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 
 	resolveObservationState(observation: MemoObservation): IdentityLedgerObservationState {
 		const candidates = this.findObservationBindings(observation);
-		if (candidates.length === 0) return { kind: "unbound" };
+		if (candidates.length === 0) {
+			const unresolved = this.findSignatureBindings(observation);
+			return unresolved.length === 0 ? { kind: "unbound" } : {
+				kind: "conflicted", memoIds: [...new Set(unresolved.map((binding) => binding.memoId))].sort(), bindings: unresolved,
+			};
+		}
 		const memoIds = [...new Set(candidates.map((binding) => binding.memoId))].sort();
 		const locallyConflicted = memoIds.some((memoId) => this.snapshot.memos[memoId]?.conflicted === true);
 		if (candidates.length === 1 && memoIds.length === 1 && !locallyConflicted) {
@@ -234,6 +240,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			yieldControl?: () => Promise<void>;
 			sliceBudgetMs?: number;
 			now?: () => number;
+			isCurrent?: () => Promise<boolean>;
 		} = {},
 	): Promise<number> {
 		if (events.length === 0) return 0;
@@ -310,6 +317,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 					const digest = await sha256IdentityLedgerText(content);
 					const path = getIdentityLedgerSegmentPath(rootPath, writerId, first.eventId, digest);
 					this.assertWriteAllowed(runtime.cancellationSignal);
+					if (runtime.isCurrent !== undefined && !await runtime.isCurrent()) throw new IdentityLedgerWriteCancelledError();
 					await this.writeImmutable(path, content, runtime.cancellationSignal);
 					incoming.push(...(await parseIdentityLedgerSegment(rootPath, path, content)).events);
 					await runtime.yieldControl?.();
@@ -373,7 +381,13 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		}
 	}
 
-	async finishCreate(plan: IdentityLedgerCreatePlan, observation: MemoObservation): Promise<IdentityLedgerBinding> {
+	async finishCreate(plan: IdentityLedgerCreatePlan, observation: MemoObservation, isCurrent?: () => Promise<boolean>): Promise<IdentityLedgerBinding> {
+		const existing = this.resolveObservation(observation);
+		if (existing?.memoId === plan.memoId) return existing;
+		if (this.envelopes.some(({ event }) => event.type === "claim"
+			&& event.evidence.createIntentEventId === plan.intent.eventId)) {
+			throw new Error("Identity create intent is already claimed.");
+		}
 		let intentDurable = plan.intentDurable;
 		if (!intentDurable) {
 			await this.appendEvent(plan.intent, false);
@@ -388,7 +402,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			baseBindingId: null,
 			occurredAt: this.now().toISOString(),
 			evidence: {
-				observation: toObservationEvidence(observation),
+				observation: this.evidenceForInsertion(observation),
 				createIntentEventId: intentDurable ? plan.intent.eventId : null,
 			},
 		};
@@ -404,7 +418,12 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				evidence: { sourceMemoId: plan.intent.evidence.sourceMemoId },
 			});
 		}
-		await this.appendEvents(events);
+		await this.appendEvents(events, true, async () => {
+			if (isCurrent !== undefined && !await isCurrent()) throw new IdentityLedgerWriteCancelledError();
+			if (observationEvidenceKey(this.evidenceForInsertion(observation)) !== observationEvidenceKey(claim.evidence.observation)) {
+				throw new IdentityLedgerWriteCancelledError();
+			}
+		});
 		const binding = this.resolveObservation(observation);
 		if (binding === null || binding.memoId !== plan.memoId) {
 			throw new Error("Identity Ledger claim did not resolve the committed observation.");
@@ -447,88 +466,16 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		return completed;
 	}
 
-	async repairKnownDuplicateCreateConflicts(observations: readonly MemoObservation[]): Promise<number> {
-		this.automaticMaintenanceWriteCount += 1;
-		try {
-			return await this.repairKnownDuplicateCreateConflictsInternal(observations);
-		} finally {
-			this.automaticMaintenanceWriteCount -= 1;
-		}
-	}
-
-	private async repairKnownDuplicateCreateConflictsInternal(observations: readonly MemoObservation[]): Promise<number> {
-		const observationsByEvidence = new Map(observations.map((observation) => [
-			observationEvidenceKey(toObservationEvidence(observation)),
-			observation,
-		]));
-		const { accepted } = selectIdentityLedgerEnvelopes(this.envelopes);
-		const events = accepted.map((item) => item.event);
-		const intentsById = new Map(events.flatMap((event) => event.type === "create_intent"
-			? [[event.eventId, event] as const]
-			: []));
-		const activeBindingIds = new Set(Object.values(this.snapshot.memos).flatMap((memo) =>
-			memo.conflicted ? [] : memo.bindings.map((binding) => binding.bindingId)));
-		const activeCreateClaimsByEvidence = new Map<string, IdentityLedgerClaimEvent[]>();
-		for (const event of events) {
-			if (event.type !== "claim" || event.evidence.createIntentEventId === null
-				|| !activeBindingIds.has(event.eventId)) continue;
-			const intent = intentsById.get(event.evidence.createIntentEventId);
-			const evidence = event.evidence.observation;
-			if (intent === undefined || intent.memoId !== event.memoId
-				|| (intent.evidence.targetPath !== null
-					&& normalizePath(intent.evidence.targetPath) !== normalizePath(evidence.sourcePath))
-				|| intent.evidence.logicalDate !== evidence.logicalDate
-				|| !matchesCreateIntentTime(intent.evidence.time, evidence.time)
-				|| intent.evidence.contentHash !== evidence.contentHash) continue;
-			const key = observationEvidenceKey(evidence);
-			if (!observationsByEvidence.has(key)) continue;
-			const claims = activeCreateClaimsByEvidence.get(key) ?? [];
-			claims.push(event);
-			activeCreateClaimsByEvidence.set(key, claims);
-		}
-		let repaired = 0;
-		const conflictedMemoIds = Object.values(this.snapshot.memos)
-			.filter((memo) => memo.conflicted && memo.conflictBaseBindingId !== null && memo.bindings.length === 2)
-			.map((memo) => memo.memoId)
-			.sort();
-		for (const memoId of conflictedMemoIds) {
-			const memo = this.snapshot.memos[memoId];
-			if (memo?.conflicted !== true || memo.conflictBaseBindingId === null || memo.bindings.length !== 2) continue;
-			const bindings = memo.bindings;
-			const first = bindings[0];
-			const second = bindings[1];
-			if (first === undefined || second === undefined
-				|| first.evidence.sourceRevision !== second.evidence.sourceRevision
-				|| duplicateObservationEvidenceKey(first.evidence) !== duplicateObservationEvidenceKey(second.evidence)) continue;
-			const bindingKeys = bindings.map((binding) => observationEvidenceKey(binding.evidence));
-			if (bindingKeys.some((key) => !observationsByEvidence.has(key))) continue;
-			const occupiedKeys = bindingKeys.filter((key) => {
-				const claims = activeCreateClaimsByEvidence.get(key) ?? [];
-				return claims.length === 1 && claims[0]?.memoId !== memoId;
-			});
-			if (occupiedKeys.length !== 1) continue;
-			const targetKey = bindingKeys.find((key) => key !== occupiedKeys[0]);
-			const target = targetKey === undefined ? undefined : observationsByEvidence.get(targetKey);
-			if (target === undefined) continue;
-			try {
-				await this.repairConflict(memoId, target);
-				repaired += 1;
-			} catch {
-				continue;
-			}
-		}
-		return repaired;
-	}
-
 	async reconcileRevision(
 		before: readonly MemoObservation[],
 		after: readonly MemoObservation[],
 		insertedObservation: MemoObservation | null = null,
 		allowIdentityAdoption = false,
+		isCurrent?: () => Promise<boolean>,
 	): Promise<IdentityLedgerReconcileResult> {
 		this.automaticMaintenanceWriteCount += 1;
 		try {
-			return await this.reconcileRevisionInternal(before, after, insertedObservation, allowIdentityAdoption);
+			return await this.reconcileRevisionInternal(before, after, insertedObservation, allowIdentityAdoption, isCurrent);
 		} finally {
 			this.automaticMaintenanceWriteCount -= 1;
 		}
@@ -539,12 +486,14 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		after: readonly MemoObservation[],
 		insertedObservation: MemoObservation | null,
 		allowIdentityAdoption: boolean,
+		isCurrent?: () => Promise<boolean>,
 	): Promise<IdentityLedgerReconcileResult> {
+		if (isCurrent !== undefined && !await isCurrent()) throw new IdentityLedgerWriteCancelledError();
 		const reconciliation = buildRevisionReconciliationPlan(before, after, insertedObservation);
 		const plans = reconciliation.successors.flatMap((plan) => {
 			const baseBindings = this.findObservationBindings(plan.before);
 			if (baseBindings.length !== 1) return [];
-			return plan.successors.map((successor) => ({
+			return plan.successors.filter((successor) => memoObservationSignature(plan.before) !== memoObservationSignature(successor)).map((successor) => ({
 				base: baseBindings[0] as IdentityLedgerBinding,
 				successor,
 			}));
@@ -561,30 +510,42 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			? null
 			: await this.getWriterId();
 		const events: IdentityLedgerRebindEvent[] = [];
-		const affectedMemoIds = new Set<string>();
 		for (const plan of plans) {
 			if (this.hasActiveSuccessor(plan.base.memoId, plan.base.bindingId, plan.successor)) continue;
 			if (writerId !== null) events.push(this.createRebindEvent(plan.base, plan.successor, "edit", writerId));
-			affectedMemoIds.add(plan.base.memoId);
 		}
-		await this.appendEvents(events);
+		await this.appendEvents(events, true, async () => {
+			if (isCurrent !== undefined && !await isCurrent()) throw new IdentityLedgerWriteCancelledError();
+			for (const plan of plans) this.requireCurrentBinding(plan.base);
+		});
 		const claims: IdentityLedgerClaimEvent[] = [];
 		if (writerId !== null) {
 			for (const observation of claimObservations) {
 				if (this.resolveObservationState(observation).kind !== "unbound") continue;
-				const claim = await buildLocalObservationClaim(observation, writerId);
+				const claim = await this.buildNewObservationClaim(observation, writerId);
 				claims.push(claim);
-				affectedMemoIds.add(claim.memoId);
 			}
 		}
-		const importedClaimCount = await this.importVerifiedLegacyEvents(claims);
+		const importedClaimCount = await this.importVerifiedLegacyEvents(claims, { isCurrent });
+		let completedCreateCount = 0;
+		if (insertedObservation !== null) {
+			const intents = this.snapshot.pendingIntents.filter((intent) => matchesCreateIntentObservation(intent, insertedObservation));
+			if (intents.length === 1) {
+				const intent = intents[0]!;
+				await this.finishCreate({ memoId: intent.memoId, intent, intentDurable: true }, insertedObservation, isCurrent);
+				completedCreateCount = 1 + (intent.evidence.sourceMemoId === null ? 0 : 1);
+			}
+		}
+		const unresolved = after.map((observation) => ({ observation, state: this.resolveObservationState(observation) }));
 		return {
-			appendedEventCount: events.length + importedClaimCount,
-			conflictedMemoIds: [...affectedMemoIds]
-				.filter((memoId) => this.snapshot.memos[memoId]?.conflicted === true)
-				.sort(),
-			deferredObservationCount: adoptionCandidates.filter((observation) =>
-				this.resolveObservationState(observation).kind === "unbound").length,
+			appendedEventCount: events.length + importedClaimCount + completedCreateCount,
+			conflictedMemoIds: [...new Set(unresolved.flatMap(({ state }) => state.kind === "conflicted" ? state.memoIds : []))].sort(),
+			deferredObservationCount: new Set([
+				...adoptionCandidates.filter((observation) => this.resolveObservationState(observation).kind === "unbound"),
+				...unresolved.filter(({ observation, state }) => state.kind !== "identified"
+					&& this.snapshot.pendingIntents.some((intent) => matchesCreateIntentObservation(intent, observation)))
+					.map(({ observation }) => observation),
+			]).size,
 		};
 	}
 
@@ -592,13 +553,21 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		before: MemoObservation,
 		after: MemoObservation,
 		reason: IdentityLedgerRebindReason,
+		expectedIdentity?: IdentityHandle | null,
 	): Promise<IdentityLedgerBinding | null> {
 		const bases = this.findObservationBindings(before);
+		if (expectedIdentity !== undefined && (expectedIdentity === null || bases[0]?.memoId !== expectedIdentity.memoId
+			|| bases[0]?.bindingId !== expectedIdentity.activeBindingId)) {
+			const current = this.resolveObservation(after);
+			return current?.memoId === expectedIdentity?.memoId ? current : null;
+		}
 		if (bases.length !== 1) {
 			const current = this.resolveObservationState(after);
 			return current.kind === "identified" ? current.binding : null;
 		}
 		const base = bases[0] as IdentityLedgerBinding;
+		if (memoObservationSignature(before) === memoObservationSignature(after)
+			&& (reason !== "move" || before.occurrenceIndex === after.occurrenceIndex)) return base;
 		if (this.hasActiveSuccessor(base.memoId, base.bindingId, after)) {
 			return this.findObservationBindings(after).find((binding) => binding.memoId === base.memoId) ?? null;
 		}
@@ -611,7 +580,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		if (current.kind === "conflicted") {
 			throw new Error("Identity Ledger observation is conflicted and cannot be adopted.");
 		}
-		const claim = await buildLocalObservationClaim(observation, await this.getWriterId());
+		const claim = await this.buildNewObservationClaim(observation, await this.getWriterId());
 		const memoId = claim.memoId;
 		await this.appendEvent(claim);
 		const resolved = this.resolveObservationState(observation);
@@ -619,6 +588,15 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			throw new Error("Identity Ledger adoption did not produce a unique binding.");
 		}
 		return resolved.binding;
+	}
+
+	private async buildNewObservationClaim(observation: MemoObservation, writerId: string): Promise<IdentityLedgerClaimEvent> {
+		let claim = await buildLocalObservationClaim(observation, writerId);
+		// 当前正文即使逐字恢复，也不能复用已删除或已移走的历史身份。
+		while (this.snapshot.memos[claim.memoId] !== undefined) {
+			claim = await buildLocalObservationClaim(observation, writerId, claim.memoId);
+		}
+		return claim;
 	}
 
 	async adoptHistoricalObservations(
@@ -636,6 +614,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		const ordered = [...observations].sort(compareHistoricalObservations);
 		const claims: IdentityLedgerClaimEvent[] = [];
 		const expectedMemoIds = new Map<string, string>();
+		const resumableGroups = new Set<string>();
 		let writerId: string | null = null;
 		for (const observation of ordered) {
 			this.assertWriteAllowed(runtime.cancellationSignal);
@@ -644,8 +623,19 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 				expectedMemoIds.set(observationEvidenceKey(toObservationEvidence(observation)), state.binding.memoId);
 				continue;
 			}
-			if (state.kind === "conflicted") {
-				throw new Error("Historical Identity adoption does not resolve conflicted observations.");
+			const signature = memoObservationSignature(observation);
+			if (state.kind === "conflicted" && !resumableGroups.has(signature)) {
+				const candidates = this.findSignatureBindings(observation);
+				// 初始化分批中断时，只补齐当前完整组中可验证的确定性 claim。
+				const expected = new Map(ordered.filter((item) => memoObservationSignature(item) === signature)
+					.map((item) => [observationEvidenceKey(toObservationEvidence(item)), item]));
+				if (candidates.length >= observation.occurrenceCount || candidates.some((binding) =>
+					this.snapshot.memos[binding.memoId]?.conflicted || !expected.has(observationEvidenceKey(binding.evidence)))
+					|| (await Promise.all(candidates.map(async (binding) =>
+						await deterministicHistoricalMemoId(binding.evidence, expected.get(observationEvidenceKey(binding.evidence))!) === binding.memoId))).some((matches) => !matches)) {
+					throw new Error("Historical Identity adoption does not resolve conflicted observations.");
+				}
+				resumableGroups.add(signature);
 			}
 			writerId ??= await this.getWriterId();
 			const claim = await buildLocalObservationClaim(observation, writerId);
@@ -679,10 +669,11 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		if (memo?.conflicted !== true || memo.conflictBaseBindingId === null) {
 			throw new Error("Identity Ledger memo has no repairable binding fork.");
 		}
-		const evidenceKey = observationEvidenceKey(toObservationEvidence(observation));
-		if (!memo.bindings.some((binding) => observationEvidenceKey(binding.evidence) === evidenceKey)) {
+		const target = this.findObservationBindings(observation).find((binding) => binding.memoId === memoId);
+		if (target === undefined) {
 			throw new Error("Identity Ledger repair target is not an active successor.");
 		}
+		const evidenceKey = observationEvidenceKey(target.evidence);
 		const conflictBaseBindingId = memo.conflictBaseBindingId;
 		const eventId = this.createEventId();
 		await this.appendEvent({
@@ -692,7 +683,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			type: "repair",
 			baseBindingId: conflictBaseBindingId,
 			occurredAt: this.now().toISOString(),
-			evidence: { observation: toObservationEvidence(observation) },
+			evidence: { observation: target.evidence },
 		}, true, () => {
 			const current = this.snapshot.memos[memoId];
 			if (current?.conflicted !== true || current.conflictBaseBindingId !== conflictBaseBindingId
@@ -775,7 +766,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			baseBindingId: deleteRecord.baseBindingId,
 			occurredAt: this.now().toISOString(),
 				evidence: {
-				observation: toObservationEvidence(observation),
+				observation: this.evidenceForInsertion(observation),
 				deleteEventId: deleteRecord.deleteEventId,
 			},
 		}, true, () => { this.requireActiveDelete(deleteRecord); });
@@ -840,14 +831,35 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	private findObservationBindings(observation: MemoObservation): IdentityLedgerBinding[] {
-		const expected = observationEvidenceKey(toObservationEvidence(observation));
+		const candidates = this.findSignatureBindings(observation);
+		if (candidates.length !== observation.occurrenceCount
+			|| new Set(candidates.map((binding) => binding.evidence.order)).size !== candidates.length) return [];
+		const binding = candidates[observation.occurrenceIndex];
+		return binding === undefined ? [] : [binding];
+	}
+
+	private findSignatureBindings(observation: MemoObservation): IdentityLedgerBinding[] {
+		const expected = memoObservationSignature(observation);
 		return (this.observationBindingsByEvidence.get(expected) ?? []).flatMap((reference) => {
 			const binding = this.snapshot.memos[reference.memoId]?.bindings
 				.find((candidate) => candidate.bindingId === reference.bindingId
-					&& observationEvidenceKey(candidate.evidence) === expected);
+					&& memoObservationSignature(candidate.evidence) === expected);
 			return binding === undefined ? [] : [cloneBinding(binding)];
-		}).sort((left, right) => left.memoId.localeCompare(right.memoId)
-			|| left.bindingId.localeCompare(right.bindingId));
+		}).sort((left, right) => left.evidence.order < right.evidence.order ? -1 : left.evidence.order > right.evidence.order ? 1 : 0);
+	}
+
+	private evidenceForInsertion(observation: MemoObservation, excludeMemoId?: string): IdentityLedgerObservationEvidence {
+		const candidates = this.findSignatureBindings(observation).filter((binding) => binding.memoId !== excludeMemoId);
+		if (candidates.length === 0) return toObservationEvidence(observation);
+		if (candidates.length !== observation.occurrenceCount - 1
+			|| candidates.some((binding) => this.snapshot.memos[binding.memoId]?.conflicted)
+			|| new Set(candidates.map((binding) => binding.evidence.order)).size !== candidates.length) {
+			throw new Error("Identity insertion requires an unambiguous current occurrence group.");
+		}
+		return toObservationEvidence(observation, identityOrderBetween(
+			candidates[observation.occurrenceIndex - 1]?.evidence.order ?? null,
+			candidates[observation.occurrenceIndex]?.evidence.order ?? null,
+		));
 	}
 
 	private commitSnapshot(snapshot: IdentityLedgerSnapshot, index: ObservationBindingIndex): void {
@@ -888,11 +900,12 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	private hasActiveSuccessor(memoId: string, baseBindingId: string, observation: MemoObservation): boolean {
-		const expected = observationEvidenceKey(toObservationEvidence(observation));
+		const expected = new Set(this.findObservationBindings(observation)
+			.filter((binding) => binding.memoId === memoId).map((binding) => observationEvidenceKey(binding.evidence)));
 		return this.envelopes.some(({ event }) => event.memoId === memoId
 			&& (event.type === "rebind" || event.type === "restore" || event.type === "repair")
 			&& event.baseBindingId === baseBindingId
-			&& observationEvidenceKey(event.evidence.observation) === expected);
+			&& expected.has(observationEvidenceKey(event.evidence.observation)));
 	}
 
 	private async appendRebind(
@@ -901,7 +914,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		reason: IdentityLedgerRebindReason,
 	): Promise<IdentityLedgerBinding> {
 		const event = this.createRebindEvent(base, observation, reason, await this.getWriterId());
-		await this.appendEvent(event);
+		await this.appendEvent(event, true, () => this.requireCurrentBinding(base));
 		const bindings = this.findObservationBindings(observation).filter((binding) => binding.memoId === base.memoId);
 		const binding = bindings.find((candidate) => candidate.bindingId === event.eventId) ?? bindings[0];
 		if (binding === undefined) throw new Error("Identity Ledger rebind did not materialize its successor.");
@@ -922,20 +935,27 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			baseBindingId: base.bindingId,
 			occurredAt: this.now().toISOString(),
 			evidence: {
-				observation: toObservationEvidence(observation),
+				observation: this.evidenceForInsertion(observation, base.memoId),
 				reason,
 			},
 		};
 	}
 
-	private async appendEvent(event: IdentityLedgerEvent, notify = true, beforeWrite?: () => void): Promise<void> {
+	private requireCurrentBinding(binding: IdentityLedgerBinding): void {
+		const memo = this.snapshot.memos[binding.memoId];
+		if (memo?.conflicted || !memo?.bindings.some((candidate) => candidate.bindingId === binding.bindingId)) {
+			throw new IdentityLedgerWriteCancelledError();
+		}
+	}
+
+	private async appendEvent(event: IdentityLedgerEvent, notify = true, beforeWrite?: () => void | Promise<void>): Promise<void> {
 		await this.appendEvents([event], notify, beforeWrite);
 	}
 
 	private async appendEvents(
 		events: readonly IdentityLedgerEvent[],
 		notify = true,
-		beforeWrite?: () => void,
+		beforeWrite?: () => void | Promise<void>,
 	): Promise<void> {
 		if (events.length === 0) return;
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
@@ -951,7 +971,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		await previous;
 		try {
 			this.assertWriteAllowed();
-			beforeWrite?.();
+			await beforeWrite?.();
 			const rootPath = this.requireRootPath();
 			const content = serializeIdentityLedgerSegment(events);
 			const digest = await sha256IdentityLedgerText(content);
@@ -959,6 +979,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			this.assertWriteAllowed();
 			await this.ensureFolder(rootPath, getIdentityLedgerWriterSegmentsPath(rootPath, first.writerId));
 			this.assertWriteAllowed();
+			await beforeWrite?.();
 			await this.writeImmutable(path, content);
 			const parsed = await parseIdentityLedgerSegment(rootPath, path, content);
 			const affectedMemoIds = collectAffectedMemoIds(this.envelopes, parsed.events);
@@ -1236,7 +1257,7 @@ function addMemoBindingsToIndex(
 ): void {
 	const memoEvidenceKeys = new Set<string>();
 	for (const binding of memo.bindings) {
-		const evidenceKey = observationEvidenceKey(binding.evidence);
+		const evidenceKey = memoObservationSignature(binding.evidence);
 		const references = byEvidence.get(evidenceKey) ?? [];
 		references.push({ memoId, bindingId: binding.bindingId });
 		byEvidence.set(evidenceKey, references);
@@ -1321,7 +1342,8 @@ export async function materializeIdentityLedger(
 		memos[memoId] = {
 			memoId,
 			createdAt: readCreatedAt(memoEvents),
-			bindings: bindingState.bindings,
+			bindings: bindingState.bindings.filter((binding) => !deleteCommits.some((event) =>
+				bindingState.aliases.get(event.baseBindingId) === binding.bindingId)),
 			conflicted: bindingState.conflicted,
 			conflictBaseBindingId: bindingState.conflictBaseBindingId,
 			sourceMemoIds,
@@ -1457,7 +1479,7 @@ function materializeMemoBindingGraph(
 	memoId: string,
 	events: readonly IdentityLedgerEvent[],
 	identityRevision: string,
-): Pick<IdentityLedgerMaterializedMemo, "bindings" | "conflicted" | "conflictBaseBindingId"> {
+): Pick<IdentityLedgerMaterializedMemo, "bindings" | "conflicted" | "conflictBaseBindingId"> & { aliases: ReadonlyMap<string, string> } {
 	const bindingEvents = events.filter((event): event is IdentityLedgerBindingEvent =>
 		event.type === "claim" || event.type === "rebind" || event.type === "restore" || event.type === "repair");
 	const aliases = new Map<string, string>();
@@ -1499,6 +1521,7 @@ function materializeMemoBindingGraph(
 		.sort((left, right) => left.bindingId.localeCompare(right.bindingId));
 	const conflicted = heads.length > 1;
 	return {
+		aliases,
 		bindings: heads.map((node) => ({
 			memoId,
 			bindingId: node.bindingId,
@@ -1740,31 +1763,6 @@ function observationContinuationKey(observation: MemoObservation): string {
 	});
 }
 
-function duplicateObservationEvidenceKey(evidence: IdentityLedgerObservationEvidence): string {
-	return canonicalIdentityLedgerJson({
-		sourcePath: normalizePath(evidence.sourcePath),
-		rawBlockHash: evidence.rawBlockHash,
-		logicalDate: evidence.logicalDate,
-		section: evidence.section,
-		time: evidence.time,
-		contentHash: evidence.contentHash,
-	});
-}
-
-function toObservationEvidence(observation: MemoObservation): IdentityLedgerObservationEvidence {
-	return {
-		sourcePath: normalizePath(observation.sourcePath),
-		sourceRevision: observation.sourceRevision,
-		rawBlockHash: observation.rawBlockHash,
-		logicalDate: observation.logicalDate,
-		section: observation.section,
-		startLine: observation.startLine,
-		endLine: observation.endLine,
-		time: observation.time,
-		contentHash: observation.contentHash,
-	};
-}
-
 function cloneBinding(binding: IdentityLedgerBinding): IdentityLedgerBinding {
 	return { ...binding, evidence: { ...binding.evidence } };
 }
@@ -1783,9 +1781,10 @@ function compareHistoricalObservations(left: MemoObservation, right: MemoObserva
 async function buildLocalObservationClaim(
 	observation: MemoObservation,
 	writerId: string,
+	previousMemoId: string | null = null,
 ): Promise<IdentityLedgerClaimEvent> {
 	const evidence = toObservationEvidence(observation);
-	const memoId = await deterministicHistoricalMemoId(evidence);
+	const memoId = await deterministicHistoricalMemoId(evidence, observation, previousMemoId);
 	return {
 		eventId: await deterministicObservationClaimEventId(writerId, memoId, evidence),
 		writerId,
@@ -1797,10 +1796,16 @@ async function buildLocalObservationClaim(
 	};
 }
 
-async function deterministicHistoricalMemoId(evidence: IdentityLedgerObservationEvidence): Promise<string> {
+async function deterministicHistoricalMemoId(
+	evidence: IdentityLedgerObservationEvidence,
+	observation: MemoObservation,
+	previousMemoId: string | null = null,
+): Promise<string> {
 	const digest = await sha256IdentityLedgerText(canonicalIdentityLedgerJson({
 		domain: "historical-daily-bootstrap-memo",
 		evidence,
+		// 创建现场只用于一次性 ID 派生；后续扫描既不重新生成 ID，也不持久保存这些字段。
+		creation: { sourceRevision: observation.sourceRevision, startLine: observation.startLine, previousMemoId },
 	}));
 	return createIdentityLedgerMemoId(new Date(historicalObservationSortingTime(evidence)), (target) => {
 		for (let index = 0; index < target.length; index += 1) {

@@ -201,23 +201,19 @@ export default class KnomoPlugin extends Plugin {
 		const reconcileIdentityLedger = async () => {
 			const hasPendingCreates = identityLedgerService.hasPendingCreates();
 			const hasPendingDeletes = identityLedgerService.hasPendingDeletes();
-			const hasConflicts = Object.values(identityLedgerService.getSnapshot().memos)
-				.some((memo) => memo.conflicted);
-			const batches = hasPendingCreates || hasPendingDeletes || hasConflicts
+			const batches = hasPendingCreates || hasPendingDeletes
 				? await loadObservationBatches()
 				: null;
 			const observations = batches?.flatMap((batch) => batch.observations) ?? [];
-			if (hasConflicts) {
-				await identityLedgerService.repairKnownDuplicateCreateConflicts(observations);
-			}
 			if (hasPendingCreates) {
 				await identityLedgerService.reconcilePendingCreates(observations);
 			}
-			await identityRevisionTransitionQueue.drain((transition) => identityLedgerService.reconcileRevision(
+			await identityRevisionTransitionQueue.drain((transition, isCurrent) => identityLedgerService.reconcileRevision(
 				transition.before?.observations ?? [],
 				transition.after.observations,
 				transition.insertedObservation,
 				transition.allowIdentityAdoption,
+				isCurrent,
 			));
 			const coverage = hasPendingDeletes
 				? await this.memoCatalogService!.getStore().getCoverage()

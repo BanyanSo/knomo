@@ -891,6 +891,8 @@ async function seedCatalogFiles(
 
 function makeObservation(sourcePath: string, logicalDate: string, startLine: number, content: string): MemoObservation {
 	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
 		sourcePath,
 		sourceRevision: "a".repeat(64),
 		rawBlockHash: `raw-${startLine}`,
@@ -921,14 +923,11 @@ function makeBinding(
 		identityRevision,
 		evidence: {
 			sourcePath: observation.sourcePath,
-			sourceRevision: observation.sourceRevision,
-			rawBlockHash: observation.rawBlockHash,
 			logicalDate: observation.logicalDate,
 			section: observation.section,
-			startLine: observation.startLine,
-			endLine: observation.endLine,
 			time: observation.time,
 			contentHash: observation.contentHash,
+			order: "00000000000001V",
 		},
 	};
 }

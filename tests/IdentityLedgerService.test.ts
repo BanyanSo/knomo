@@ -1569,6 +1569,23 @@ test("扫描位置更新不写身份历史：连续新增 100 条后清空本机
 	for (const observation of rescanned) assert.equal(restarted.resolveObservation(observation)?.memoId, bindings.get(observation.content)?.memoId);
 });
 
+test("续行缩进格式变化仍作为稳定锚点，只续接相邻真正编辑的 Memo", async () => {
+	const vault = await createLedgerVault();
+	const service = createService(vault, WRITER_A, [], []);
+	await service.initialize();
+	const before = await parseIdentityDaily("## Memos\n- 09:00 A\n\t续行\n- 10:00 B\n");
+	await service.adoptHistoricalObservations(before);
+	const original = before.map((observation) => service.resolveObservation(observation)!);
+	const after = await parseIdentityDaily("普通文字\n\n## Memos\n- 09:00 A\n  续行\n- 10:00 B edited\n");
+	assert.equal(before[0]!.contentHash, after[0]!.contentHash);
+	assert.notEqual(before[0]!.rawBlockHash, after[0]!.rawBlockHash);
+	const result = await service.reconcileRevision(before, after);
+	assert.equal(result.appendedEventCount, 1);
+	assert.equal(service.resolveObservation(after[0]!)?.bindingId, original[0]!.bindingId);
+	assert.equal(service.resolveObservation(after[1]!)?.memoId, original[1]!.memoId);
+	assert.equal(readLedgerEvents(vault).filter((event) => event.type === "rebind").length, 1);
+});
+
 test("重复 Memo 顶部、底部及中间插入只写新增身份，并可在另一设备重建", async () => {
 	const vault = await createLedgerVault();
 	const service = createService(vault, WRITER_A, [], []);

@@ -1748,19 +1748,8 @@ function groupObservationIndexes(observations: readonly MemoObservation[]): Map<
 }
 
 function observationContinuationKey(observation: MemoObservation): string {
-	return canonicalIdentityLedgerJson({
-		rawBlockHash: observation.rawBlockHash,
-		section: observation.section,
-		time: observation.time,
-		content: observation.content,
-		contentHash: observation.contentHash,
-		existingBlockId: observation.existingBlockId,
-		tags: observation.tags,
-		links: observation.links,
-		images: observation.images,
-		tasks: observation.tasks,
-		timeBuoyDates: observation.timeBuoyDates,
-	});
+	// 扫描锚点与稳定身份采用同一语义，原始缩进等格式变化不打断相邻编辑的续接。
+	return memoObservationSignature(observation);
 }
 
 function cloneBinding(binding: IdentityLedgerBinding): IdentityLedgerBinding {

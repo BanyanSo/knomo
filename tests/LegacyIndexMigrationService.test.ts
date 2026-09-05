@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
 import {
 	canonicalIdentityLedgerJson,
@@ -23,7 +24,7 @@ const IDENTITY_ROOT = getIdentityLedgerRootPath("Knomo");
 const LEGACY_INDEX_PATH = "Knomo/_knomo-system/indexes/memo-index-2026-08.json";
 const PLUGIN_DATA_PATH = ".obsidian/plugins/knomo/data.json";
 
-test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Daily 字节保持不变", async () => {
+test("1.2.9 幂等迁移不改源文件，后续新增不续接旧身份且重启保留迁移状态", async () => {
 	const activeRawBlock = "- 09:00 正文";
 	const deletedRawBlock = "- 08:00 已删除正文";
 	const dailyPath = "Daily/2026-08-22.md";
@@ -141,6 +142,47 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 		pluginData: vault.read(PLUGIN_DATA_PATH),
 	}, sourceBytesBefore);
 
+	const parser = new DiaryMemoParser();
+	const parseDaily = (content: string) => parser.parse({
+		sourcePath: dailyPath,
+		logicalDate: observation.logicalDate,
+		bytes: new TextEncoder().encode(content),
+	});
+	const beforeCreate = await parseDaily(dailyContent);
+	const migratedBinding = target.resolveObservation(beforeCreate.observations[0]!)!;
+	assert.equal(migratedBinding.memoId, LEGACY_MEMO_A);
+	const eventCountBeforeCreate = target.getSnapshot().eventCount;
+	const dailyAfterCreate = `## Memos\n- 10:00 迁移后新增\n${activeRawBlock}\n`;
+	const afterCreate = await parseDaily(dailyAfterCreate);
+	const inserted = afterCreate.observations[0]!;
+	const plan = await target.beginCreate({
+		targetPath: dailyPath,
+		logicalDate: inserted.logicalDate,
+		time: inserted.time,
+		contentHash: inserted.contentHash,
+		sourceMemoId: null,
+	});
+	vault.replace(dailyPath, dailyAfterCreate);
+	await target.reconcileRevision(beforeCreate.observations, afterCreate.observations, inserted);
+	await target.finishCreate(plan, inserted);
+	assert.notEqual(afterCreate.sourceRevision, beforeCreate.sourceRevision);
+	assert.notEqual(afterCreate.observations[1]!.startLine, beforeCreate.observations[0]!.startLine);
+	assert.equal(target.resolveObservation(afterCreate.observations[1]!)?.bindingId, migratedBinding.bindingId);
+	assert.equal(target.resolveObservation(inserted)?.memoId, plan.memoId);
+	assert.equal(target.getSnapshot().eventCount, eventCountBeforeCreate + 2);
+	const storedEvents = vault.paths()
+		.filter((path) => path.startsWith(`${IDENTITY_ROOT}/`) && path.endsWith(".jsonl"))
+		.flatMap((path) => (vault.read(path) ?? "").trim().split("\n"))
+		.filter(Boolean)
+		.map((line) => JSON.parse(line));
+	assert.equal(storedEvents.filter((event) => event.type === "rebind").length, 0);
+	for (const event of storedEvents.filter((event) => event.type === "claim")) {
+		assert.deepEqual(Object.keys(event.evidence.observation).sort(),
+			["contentHash", "logicalDate", "order", "section", "sourcePath", "time"]);
+	}
+	assert.equal(vault.read(LEGACY_INDEX_PATH), sourceBytesBefore.index);
+	assert.equal(vault.read(PLUGIN_DATA_PATH), sourceBytesBefore.pluginData);
+
 	const retainedTarget = createIdentityService(vault);
 	await retainedTarget.initialize();
 	let retainedSourceLoadCount = 0;
@@ -167,6 +209,15 @@ test("1.2.9 Memo Index 直接、幂等迁移到 Identity Ledger，旧源与 Dail
 	assert.deepEqual(retainedReport.importedMemoIds, [LEGACY_MEMO_B, LEGACY_MEMO_A].sort());
 	assert.equal(retainedSourceLoadCount, 0);
 	assert.equal(retainedObservationBatchReadCount, 0);
+	assert.equal(retainedTarget.getSnapshot().eventCount, eventCountBeforeCreate + 2);
+	assert.equal(retainedTarget.resolveObservation(afterCreate.observations[1]!)?.bindingId, migratedBinding.bindingId);
+	assert.equal(retainedTarget.resolveObservation(inserted)?.memoId, plan.memoId);
+	assert.equal(retainedTarget.getSourceMemoId(LEGACY_MEMO_A), LEGACY_MEMO_B);
+	assert.deepEqual(retainedTarget.getReviewState(LEGACY_MEMO_A), {
+		reviewCount: 2,
+		lastReviewedAt: "2026-08-22T05:00:00.000Z",
+	});
+	assert.equal(retainedTarget.getActiveDeletes()[0]?.evidence.rawBlock, deletedRawBlock);
 	vault.replace(PLUGIN_DATA_PATH, JSON.stringify({
 		settings: {},
 		randomReunionReviewStates: {

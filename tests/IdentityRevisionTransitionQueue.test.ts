@@ -132,6 +132,78 @@ test("协调等待期间扫描推进后，写入守卫拒绝旧目标", async ()
 	});
 });
 
+test("协调返回期间合并的新扫描目标不会被旧回调出队，重启仍可恢复", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	await store.open();
+	const initial = makeTransition(false);
+	initial.insertedObservation = initial.after.observations[1]!;
+	const shifted = positionTransition(initial);
+	let revision = initial.after.sourceRevision;
+	const queue = new IdentityRevisionTransitionQueue({ store, getCurrentSourceRevision: async () => revision });
+	await queue.enqueue(initial);
+	await queue.drain(async () => {
+		revision = shifted.after.sourceRevision;
+		await queue.enqueue(shifted);
+		return reconcileResult(0);
+	});
+	const stored = await store.getMeta<CatalogRevisionTransition[]>(IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY);
+	assert.equal(stored?.length, 1);
+	const restarted = new IdentityRevisionTransitionQueue({ store, getCurrentSourceRevision: async () => revision });
+	let recovered = 0;
+	await restarted.drain(async (transition) => {
+		recovered += 1;
+		assert.equal(transition.after.sourceRevision, revision);
+		assert.deepEqual(transition.insertedObservation, shifted.after.observations[1]);
+		return reconcileResult(0);
+	});
+	assert.equal(recovered, 1);
+	assert.equal(await store.getMeta(IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY), null);
+});
+
+test("读取当前 revision 期间合并目标时，不按旧队尾清除新工作", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	await store.open();
+	const initial = makeTransition(false);
+	const shifted = positionTransition(initial);
+	let advanceOnRead = true;
+	const queue = new IdentityRevisionTransitionQueue({ store, getCurrentSourceRevision: async () => {
+		if (advanceOnRead) {
+			advanceOnRead = false;
+			await queue.enqueue(shifted);
+		}
+		return shifted.after.sourceRevision;
+	} });
+	await queue.enqueue(initial);
+	await queue.drain(async () => { throw new Error("old target must not reconcile"); });
+	const stored = await store.getMeta<CatalogRevisionTransition[]>(IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY);
+	assert.equal(stored?.[0]?.after.sourceRevision, shifted.after.sourceRevision);
+	await queue.drain(async () => reconcileResult(0));
+	assert.equal(await store.getMeta(IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY), null);
+});
+
+test("写入守卫读取期间目标替换，即使返回旧 revision 也拒绝旧工作", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	await store.open();
+	const initial = makeTransition(false);
+	const shifted = positionTransition(initial);
+	let advanceOnRead = false;
+	const queue = new IdentityRevisionTransitionQueue({ store, getCurrentSourceRevision: async () => {
+		if (advanceOnRead) {
+			advanceOnRead = false;
+			await queue.enqueue(shifted);
+		}
+		return initial.after.sourceRevision;
+	} });
+	await queue.enqueue(initial);
+	await queue.drain(async (_transition, isCurrent) => {
+		advanceOnRead = true;
+		assert.equal(await isCurrent(), false);
+		return reconcileResult(0);
+	});
+	const stored = await store.getMeta<CatalogRevisionTransition[]>(IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY);
+	assert.equal(stored?.[0]?.after.sourceRevision, shifted.after.sourceRevision);
+});
+
 function positionTransition(initial: CatalogRevisionTransition): CatalogRevisionTransition {
 	return {
 		...initial, before: initial.after, insertedObservation: null,

@@ -59,6 +59,8 @@ export class IdentityRevisionTransitionQueue {
 			if (pending === undefined || pending.length === 0) continue;
 			const latest = pending[pending.length - 1];
 			const currentRevision = await this.options.getCurrentSourceRevision(sourcePath);
+			// 读取期间可能合并了更新的扫描目标，旧读数不能清除新工作。
+			if (this.pendingByPath.get(sourcePath) !== pending || pending[pending.length - 1] !== latest) continue;
 			if (latest === undefined || currentRevision !== latest.after.sourceRevision) {
 				this.pendingByPath.delete(sourcePath);
 				await this.persist();
@@ -67,11 +69,18 @@ export class IdentityRevisionTransitionQueue {
 			while (pending.length > 0) {
 				const transition = pending[0];
 				if (transition === undefined) break;
-				const isCurrent = async () => pending[pending.length - 1] === latest
-					&& await this.options.getCurrentSourceRevision(sourcePath) === latest.after.sourceRevision;
+				const isCurrent = async () => {
+					const matches = () => this.pendingByPath.get(sourcePath) === pending
+						&& pending[pending.length - 1] === latest;
+					if (!matches()) return false;
+					const revision = await this.options.getCurrentSourceRevision(sourcePath);
+					return matches() && revision === latest.after.sourceRevision;
+				};
 				if (!await isCurrent()) break;
 				const result = await reconcile(cloneTransition(transition), isCurrent);
 				if (result.deferredObservationCount > 0) return;
+				// 回调成功只确认它接收的目标，不能替已被合并替换的工作出队。
+				if (!await isCurrent()) break;
 				pending.shift();
 				if (pending.length === 0) this.pendingByPath.delete(sourcePath);
 				await this.persist();

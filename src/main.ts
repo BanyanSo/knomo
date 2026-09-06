@@ -28,19 +28,12 @@ import {
 	IdentityRevisionTransitionQueue,
 } from "./services/IdentityRevisionTransitionQueue";
 import { LocalWriterIdentityService } from "./services/LocalWriterIdentityService";
-import {
-	HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
-	HistoricalIdentityBootstrapService,
-} from "./services/HistoricalIdentityBootstrapService";
+import { HistoricalIdentityBootstrapService } from "./services/HistoricalIdentityBootstrapService";
 import { KnomoDataRootMigrationService } from "./services/KnomoDataRootMigrationService";
-import {
-	buildKnomoSharedConfig,
-	getKnomoSharedConfigRootPath,
-} from "./services/KnomoSharedConfigProtocol";
+import { buildKnomoSharedConfig, getKnomoSharedConfigRootPath } from "./services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "./services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
 import {
-	LEGACY_MIGRATION_COMPLETION_META_KEY,
 	LegacyIndexMigrationService,
 } from "./services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
@@ -55,6 +48,7 @@ import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
 import { PluginDataStore } from "./services/PluginDataStore";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SharedReplicaCache, SHARED_REPLICA_CACHE_META_KEYS } from "./services/SharedReplicaCache";
+import { IdentityReceiptStore } from "./services/IdentityReceiptStore";
 import { SettingsService } from "./services/SettingsService";
 import { ShuffleDayService } from "./services/ShuffleDayService";
 import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
@@ -135,6 +129,16 @@ export default class KnomoPlugin extends Plugin {
 			getWriterId: () => localWriterIdentityService.getWriterId(),
 			cancellationSignal: lowPriorityWorkQueue.signal,
 			replicaCache: sharedReplicaCache,
+		});
+		const identityReceiptStore = new IdentityReceiptStore(this.app, {
+			getRootPath: () => {
+				const settings = this.settingsService.getSettings();
+				return settings.knomoDataRootConfigured ? settings.knomoDataRoot : null;
+			},
+			getWriterId: () => localWriterIdentityService.getWriterId(),
+			getKnownIdentityEventIds: () => identityLedgerService.getKnownIdentityEventIds(),
+			getIdentitySnapshot: () => identityLedgerService.getSnapshot(),
+			legacyReceiptStore: this.memoCatalogService.getStore(),
 		});
 
 		const knomoSharedConfigService = new KnomoSharedConfigService(this.app, {
@@ -297,8 +301,6 @@ export default class KnomoPlugin extends Plugin {
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [
 					...SHARED_REPLICA_CACHE_META_KEYS,
-					LEGACY_MIGRATION_COMPLETION_META_KEY,
-					HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
 					MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
 					IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY,
 				],
@@ -390,7 +392,7 @@ export default class KnomoPlugin extends Plugin {
 						&& knomoSharedConfigService.getStatus() === "ready",
 				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
 				getObservationBatches: loadObservationBatches,
-				completionStore: this.memoCatalogService.getStore(),
+				completionStore: identityReceiptStore,
 				onReportChanged: () => this.showLegacyMigrationCompletionNotice(),
 				workQueue: lowPriorityWorkQueue,
 			},
@@ -401,7 +403,7 @@ export default class KnomoPlugin extends Plugin {
 				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
 				getCatalogLifecycle: () => this.memoCatalogService!.getStore().getLifecycle(),
 				getObservationBatches: loadObservationBatches,
-				checkpointStore: this.memoCatalogService.getStore(),
+				checkpointStore: identityReceiptStore,
 				workQueue: lowPriorityWorkQueue,
 				onStateChanged: () => this.queueRefreshOpenViews(),
 			},

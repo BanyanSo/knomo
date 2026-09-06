@@ -44,6 +44,7 @@ interface LegacyMigrationCompletion {
 	sourceRevision: string;
 	legacySystemRoot: string;
 	importedMemoIds: string[];
+	requiredIdentityEventIds?: string[];
 }
 
 export interface LegacyIndexMigrationServiceOptions {
@@ -55,7 +56,9 @@ export interface LegacyIndexMigrationServiceOptions {
 	now?: () => number;
 	onReportChanged?: (report: LegacyIdentityImportReport) => void | Promise<void>;
 	workQueue?: LowPriorityWorkRunner;
-	completionStore?: Pick<MemoCatalogStore, "deleteMeta" | "getMeta" | "setMeta">;
+	completionStore?: Pick<MemoCatalogStore, "deleteMeta" | "getMeta" | "setMeta"> & {
+		getMetaValues?<T>(key: string): Promise<T[]>;
+	};
 }
 
 export interface LegacyIndexMigrationRunOptions {
@@ -144,16 +147,13 @@ export class LegacyIndexMigrationService {
 			if (coverage.kind !== "complete") {
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "waiting_catalog" });
 			}
-			const completion = await this.loadCompletion();
+			const cachedCompletion = await this.loadSingleCompletion();
 			this.assertRunning();
-			if (!verifyCompletion
-				&& runSourceChangeRevision === 0
-				&& completion !== null
-				&& completion.sourceId === presence.sourceId
+			if (!verifyCompletion && runSourceChangeRevision === 0 && cachedCompletion?.sourceId === presence.sourceId
 				&& !hasIdentityConflict(this.target)) {
-				this.completedSourceId = completion.sourceId;
+				this.completedSourceId = cachedCompletion.sourceId;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
-				return this.remember(completedReport(completion));
+				return this.remember(completedReport(cachedCompletion));
 			}
 			const source = await this.loadSource();
 			this.assertRunning();
@@ -168,6 +168,8 @@ export class LegacyIndexMigrationService {
 					diagnostics: source.diagnostics,
 				});
 			}
+			const completion = await this.loadCompletion(source.snapshot.sourceId, source.snapshot.sourceRevision);
+			this.assertRunning();
 			if (this.report.status === "ready"
 				&& this.report.sourceRevision === source.snapshot.sourceRevision
 				&& this.completedSourceId === source.snapshot.sourceId
@@ -344,13 +346,15 @@ export class LegacyIndexMigrationService {
 			diagnostics,
 			cleanupCandidate: null,
 		} satisfies LegacyIdentityImportReport;
-		return this.finalizeCleanupCandidate(source, report, coverage);
+		return this.finalizeCleanupCandidate(source, report, coverage,
+			[...claims, ...metadataEvents].map((event) => event.eventId));
 	}
 
 	private async finalizeCleanupCandidate(
 		source: LegacyIndexSnapshot,
 		report: LegacyIdentityImportReport,
 		coverage: CatalogCoverage,
+		requiredIdentityEventIds?: readonly string[],
 	): Promise<LegacyIdentityImportReport> {
 		this.assertRunning();
 		if (report.status !== "ready"
@@ -402,7 +406,7 @@ export class LegacyIndexMigrationService {
 				sourceRevision: source.sourceRevision,
 			},
 		};
-		await this.persistCompletion(source, completed);
+		await this.persistCompletion(source, completed, requiredIdentityEventIds);
 		this.assertRunning();
 		return this.remember(completed);
 	}
@@ -445,18 +449,37 @@ export class LegacyIndexMigrationService {
 		if (this.isStopped()) throw new Error("Low-priority work queue is stopped.");
 	}
 
-	private async loadCompletion(): Promise<LegacyMigrationCompletion | null> {
-		const value = await this.options.completionStore?.getMeta<unknown>(LEGACY_MIGRATION_COMPLETION_META_KEY) ?? null;
+	private async loadCompletion(sourceId: string, sourceRevision: string): Promise<LegacyMigrationCompletion | null> {
+		const store = this.options.completionStore;
+		if (store === undefined) return null;
+		const values = store.getMetaValues === undefined
+			? [await store.getMeta<unknown>(LEGACY_MIGRATION_COMPLETION_META_KEY)]
+			: await store.getMetaValues<unknown>(LEGACY_MIGRATION_COMPLETION_META_KEY);
+		return values.filter(isLegacyMigrationCompletion).find((value) =>
+			value.sourceId === sourceId && value.sourceRevision === sourceRevision) ?? null;
+	}
+
+	private async loadSingleCompletion(): Promise<LegacyMigrationCompletion | null> {
+		const store = this.options.completionStore;
+		if (store === undefined || store.getMetaValues !== undefined) return null;
+		const value = await store.getMeta<unknown>(LEGACY_MIGRATION_COMPLETION_META_KEY);
 		return isLegacyMigrationCompletion(value) ? value : null;
 	}
 
-	private async persistCompletion(source: LegacyIndexSnapshot, report: LegacyIdentityImportReport): Promise<void> {
+	private async persistCompletion(
+		source: LegacyIndexSnapshot,
+		report: LegacyIdentityImportReport,
+		requiredIdentityEventIds?: readonly string[],
+	): Promise<void> {
 		this.assertRunning();
 		await this.options.completionStore?.setMeta(LEGACY_MIGRATION_COMPLETION_META_KEY, {
 			sourceId: source.sourceId,
 			sourceRevision: source.sourceRevision,
 			legacySystemRoot: source.legacySystemRoot,
 			importedMemoIds: [...report.importedMemoIds],
+			...(requiredIdentityEventIds === undefined ? {} : {
+				requiredIdentityEventIds: [...new Set(requiredIdentityEventIds)].sort(),
+			}),
 		} satisfies LegacyMigrationCompletion);
 	}
 
@@ -704,7 +727,7 @@ function completedReport(completion: LegacyMigrationCompletion): LegacyIdentityI
 function isLegacyMigrationCompletion(value: unknown): value is LegacyMigrationCompletion {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
-	return Object.keys(record).length === 4
+	return (Object.keys(record).length === 4 || Object.keys(record).length === 5)
 		&& typeof record.sourceId === "string"
 		&& record.sourceId.trim().length > 0
 		&& typeof record.sourceRevision === "string"
@@ -712,7 +735,9 @@ function isLegacyMigrationCompletion(value: unknown): value is LegacyMigrationCo
 		&& typeof record.legacySystemRoot === "string"
 		&& record.legacySystemRoot.trim().length > 0
 		&& Array.isArray(record.importedMemoIds)
-		&& record.importedMemoIds.every((memoId) => typeof memoId === "string" && memoId.length > 0);
+		&& record.importedMemoIds.every((memoId) => typeof memoId === "string" && memoId.length > 0)
+		&& (record.requiredIdentityEventIds === undefined || (Array.isArray(record.requiredIdentityEventIds)
+			&& record.requiredIdentityEventIds.every((eventId) => typeof eventId === "string" && /^e_[a-f0-9]{32}$/u.test(eventId))));
 }
 
 function hasIdentityConflict(target: IdentityLedgerLegacyImportTarget): boolean {

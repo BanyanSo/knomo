@@ -186,6 +186,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		return cloneSnapshot(this.snapshot);
 	}
 
+	getKnownIdentityEventIds(): string[] {
+		return [...new Set(this.envelopes.map(({ event }) => event.eventId))].sort();
+	}
+
 	resolveObservation(observation: MemoObservation): IdentityLedgerBinding | null {
 		const state = this.resolveObservationState(observation);
 		return state.kind === "identified" ? state.binding : null;

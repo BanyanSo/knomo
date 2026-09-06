@@ -25,6 +25,7 @@ interface HistoricalIdentityBootstrapCheckpoint {
 	identityRevision: string | null;
 	identityEventCount: number | null;
 	authorizationRoot?: string | null;
+	requiredIdentityEventIds?: string[];
 }
 
 interface HistoricalIdentityBootstrapTarget {
@@ -127,6 +128,7 @@ export class HistoricalIdentityBootstrapService {
 			if (this.status !== "pending") return this.status;
 			this.assertRunning();
 			if (legacyStatus === "ready" || legacyStatus === "partial" || legacyStatus === "attention") {
+				const requiredIdentityEventIds = collectBindingIds(this.target.getSnapshot());
 				await this.persistCheckpoint({
 					state: "completed",
 					reason: "legacy_source",
@@ -134,6 +136,7 @@ export class HistoricalIdentityBootstrapService {
 					identityRevision: this.target.getSnapshot().revision,
 					identityEventCount: this.target.getSnapshot().eventCount,
 					authorizationRoot: null,
+					...(requiredIdentityEventIds.length === 0 ? {} : { requiredIdentityEventIds }),
 				});
 				this.setStatus("completed");
 				return this.status;
@@ -179,6 +182,7 @@ export class HistoricalIdentityBootstrapService {
 				this.setStatus("pending");
 				return this.status;
 			}
+			const requiredIdentityEventIds = collectBindingIds(this.target.getSnapshot(), new Set(result.memoIds));
 			await this.persistCheckpoint({
 				state: "completed",
 				reason: "initial_import",
@@ -186,6 +190,7 @@ export class HistoricalIdentityBootstrapService {
 				identityRevision: result.identityRevision,
 				identityEventCount: this.target.getSnapshot().eventCount,
 				authorizationRoot: this.checkpoint?.authorizationRoot ?? null,
+				...(requiredIdentityEventIds.length === 0 ? {} : { requiredIdentityEventIds }),
 			});
 			this.setStatus("completed");
 			return this.status;
@@ -247,8 +252,16 @@ function isHistoricalIdentityBootstrapCheckpoint(value: unknown): value is Histo
 			|| (Number.isInteger(checkpoint.identityEventCount) && checkpoint.identityEventCount >= 0))
 		&& (checkpoint.authorizationRoot === undefined || checkpoint.authorizationRoot === null
 			|| (typeof checkpoint.authorizationRoot === "string"
-				&& normalizeVaultPath(checkpoint.authorizationRoot) === checkpoint.authorizationRoot));
+				&& normalizeVaultPath(checkpoint.authorizationRoot) === checkpoint.authorizationRoot))
+		&& (checkpoint.requiredIdentityEventIds === undefined || (Array.isArray(checkpoint.requiredIdentityEventIds)
+			&& checkpoint.requiredIdentityEventIds.every((eventId) => typeof eventId === "string"
+				&& /^e_[a-f0-9]{32}$/u.test(eventId))));
 	if (!valid) return false;
 	if (checkpoint.identityEventCount === undefined) checkpoint.identityEventCount = null;
 	return true;
+}
+
+function collectBindingIds(snapshot: IdentityLedgerSnapshot, memoIds?: ReadonlySet<string>): string[] {
+	return Object.values(snapshot.memos).filter((memo) => !memo.conflicted && (memoIds?.has(memo.memoId) ?? true))
+		.flatMap((memo) => memo.bindings.map((binding) => binding.bindingId)).sort();
 }

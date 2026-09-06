@@ -73,6 +73,34 @@ test("当前共享协议使用稳定目录且不携带开发期版本字段", as
 	assert.equal(fs.readFileSync("src/services/LegacyIndexReader.ts", "utf8").includes("schemaVersion"), true);
 });
 
+test("生产装配不依赖固定双槽 publisher，tracked contract 不读取本地 architecture", () => {
+	const main = fs.readFileSync("src/main.ts", "utf8");
+	for (const retired of [
+		"IdentityPublicationStore",
+		"KnomoSharedReplicaStore",
+		"KnomoSharedStorageService",
+		"KnomoSharedStorageCoordinator",
+		"SharedReviewService",
+		"CausalSharedConfigService",
+		"SharedStorageDataRootService",
+	]) {
+		assert.equal(main.includes(retired), false, `main.ts must not wire retired ${retired}.`);
+	}
+	assert.equal(main.includes("new IdentityReceiptStore(this.app"), true);
+	assert.equal(main.includes("getIdentityLedgerRootPath(settings.knomoDataRoot)"), true);
+	assert.equal(main.includes("getKnomoSharedConfigRootPath(settings.knomoDataRoot)"), true);
+
+	const trackedContractFiles = [
+		...listFiles("src"),
+		...listFiles("scripts"),
+		...listFiles("tests"),
+	].filter((file) => /\.(?:ts|mts|cts|js|mjs|cjs)$/u.test(file));
+	const executableDependency = /(?:from|import\s*\()[^\n]*(?:\.\.\/)+(?:architecture|docs\/architecture)(?:\/|["'])/u;
+	assert.deepEqual(trackedContractFiles.filter((file) => executableDependency.test(
+		fs.readFileSync(file, "utf8").replace(/\\/gu, "/"),
+	)), []);
+});
+
 test("全库统计和功能查询只从 Catalog Read Service 获取", () => {
 	const view = fs.readFileSync("src/ui/KnomoView.ts", "utf8");
 	const readService = fs.readFileSync("src/services/CatalogReadService.ts", "utf8");

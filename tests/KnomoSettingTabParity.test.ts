@@ -74,6 +74,18 @@ test("routes the device-setting action through startup initialization and refres
 	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*if \(this\.settingsVisible\) this\.refreshSettingTab\(\)/u);
 });
 
+test("routes a new data root through explicit initialization instead of ordinary migration", () => {
+	const source = readSettingTabSource();
+	const saveSource = getSourceBetween(
+		source,
+		"\tprivate async saveKnomoDataRoot(",
+		"\n\tprivate async toggleMonthlyMemosExcludeRule(",
+	);
+
+	assert.match(saveSource, /plan\.action === "initialize"[\s\S]*initializeNewDataRoot\(knomoDataRoot\)/u);
+	assert.match(source, /settings\.dataRoot\.initialize/u);
+});
+
 test("does not expose permanent runtime, maintenance, or monthly locale rows", () => {
 	const source = readSettingTabSource();
 	const definitions = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");

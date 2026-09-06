@@ -54,6 +54,7 @@ import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "./services/M
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
 import { PluginDataStore } from "./services/PluginDataStore";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
+import { SharedReplicaCache, SHARED_REPLICA_CACHE_META_KEYS } from "./services/SharedReplicaCache";
 import { SettingsService } from "./services/SettingsService";
 import { ShuffleDayService } from "./services/ShuffleDayService";
 import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
@@ -121,6 +122,7 @@ export default class KnomoPlugin extends Plugin {
 		this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
 		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
 		await this.memoCatalogService.open();
+		const sharedReplicaCache = new SharedReplicaCache(memoCatalogStore);
 
 		const localWriterIdentityService = new LocalWriterIdentityService(this.app);
 		const identityLedgerService = new IdentityLedgerService(this.app, {
@@ -132,6 +134,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 			getWriterId: () => localWriterIdentityService.getWriterId(),
 			cancellationSignal: lowPriorityWorkQueue.signal,
+			replicaCache: sharedReplicaCache,
 		});
 
 		const knomoSharedConfigService = new KnomoSharedConfigService(this.app, {
@@ -149,6 +152,7 @@ export default class KnomoPlugin extends Plugin {
 				monthlyLocale,
 			),
 			cancellationSignal: lowPriorityWorkQueue.signal,
+			replicaCache: sharedReplicaCache,
 		});
 		await knomoSharedConfigService.initializeLocalConfig();
 
@@ -168,6 +172,7 @@ export default class KnomoPlugin extends Plugin {
 			};
 		};
 
+		let historicalIdentityBootstrapService: HistoricalIdentityBootstrapService | null = null;
 		const knomoDataRootMigrationService = new KnomoDataRootMigrationService(
 			this.app,
 			identityLedgerService,
@@ -187,6 +192,17 @@ export default class KnomoPlugin extends Plugin {
 				},
 				identity: identityLedgerService,
 				sharedConfig: knomoSharedConfigService,
+				authorizeInitialImport: async (dataRoot) => {
+					if (historicalIdentityBootstrapService === null) {
+						throw new Error("Historical Identity bootstrap is not initialized.");
+					}
+					await historicalIdentityBootstrapService.authorizeInitialImport(dataRoot);
+				},
+				onNewDataRootReady: async () => {
+					const legacyReport = await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
+					await historicalIdentityBootstrapService?.initializeEligibility();
+					if (legacyReport !== undefined) await historicalIdentityBootstrapService?.run(legacyReport.status);
+				},
 				cancellationSignal: lowPriorityWorkQueue.signal,
 			});
 
@@ -234,8 +250,6 @@ export default class KnomoPlugin extends Plugin {
 			cancellationSignal: lowPriorityWorkQueue.signal,
 		});
 		this.register(() => this.identityRecoveryCoordinator?.stop());
-		let historicalIdentityBootstrapService: HistoricalIdentityBootstrapService | null = null;
-
 		const projectionInputBuilder = new MonthlyProjectionInputBuilder(
 			this.app,
 			diaryMemoParser,
@@ -282,6 +296,7 @@ export default class KnomoPlugin extends Plugin {
 				},
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [
+					...SHARED_REPLICA_CACHE_META_KEYS,
 					LEGACY_MIGRATION_COMPLETION_META_KEY,
 					HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY,
 					MONTHLY_PROJECTION_CHECKPOINT_META_KEY,

@@ -6,6 +6,8 @@ import {
 	getKnomoSharedConfigRootPath,
 } from "../src/services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "../src/services/KnomoSharedConfigService";
+import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { SharedReplicaCache } from "../src/services/SharedReplicaCache";
 import type { App, Component } from "obsidian";
 
 import type { KnomoSharedConfig } from "../src/types/knomoConfig";
@@ -15,6 +17,12 @@ import { InMemoryVault } from "./helpers/InMemoryVault";
 const WRITER_A = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const WRITER_B = "w_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const WRITER_C = "w_cccccccccccccccccccccccccccccccc";
+
+class DurableConfigMetaStore extends InMemoryMemoCatalogStore {
+	override getLifecycle() {
+		return { state: "ready" as const, persistent: true, writable: true, reason: null };
+	}
+}
 
 test("启动监听与显式初始化复用一次共享配置全量刷新", async () => {
 	const replica = new InMemoryVault();
@@ -119,6 +127,52 @@ test("共享配置事件在设备间同步，并且相同事件字节得到相�
 	assert.equal("rendererVersion" in reader.getEffectiveConfig().monthly, false);
 	assert.equal(left.paths().some((path) => left.read(path)?.includes("schemaVersion")), false);
 	assert.deepEqual(reader.getSnapshot(), writer.getSnapshot());
+});
+
+test("已知配置祖先暂缺时保留共享后继但暂停 Monthly 和增强发布", async () => {
+	const source = new InMemoryVault();
+	await source.app.vault.createFolder("Knomo/_knomo-data");
+	const cache = new SharedReplicaCache(new DurableConfigMetaStore());
+	const base = new KnomoSharedConfigService(source.app, {
+		getRootPath: () => getKnomoSharedConfigRootPath("Knomo"),
+		getWriterId: async () => WRITER_A,
+		getCurrentLocale: () => "en",
+		getLocalConfig: async () => makeConfig("## Shared base"),
+		createEventId: () => "c_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		replicaCache: cache,
+	});
+	await base.initialize();
+	await base.publishLocalConfig();
+
+	const successor = new KnomoSharedConfigService(source.app, {
+		getRootPath: () => getKnomoSharedConfigRootPath("Knomo"),
+		getWriterId: async () => WRITER_A,
+		getCurrentLocale: () => "en",
+		getLocalConfig: async () => makeConfig("## Shared successor"),
+		createEventId: () => "c_dddddddddddddddddddddddddddddddd",
+	});
+	await successor.initialize();
+	await successor.publishLocalConfig();
+	const successorPath = source.paths().find((path) => path.includes("c_dddddddddddddddddddddddddddddddd"));
+	if (successorPath === undefined) throw new Error("Successor segment was not created.");
+	const partial = new InMemoryVault();
+	partial.deliverFrom(source, [successorPath]);
+	const reader = new KnomoSharedConfigService(partial.app, {
+		getRootPath: () => getKnomoSharedConfigRootPath("Knomo"),
+		getWriterId: async () => WRITER_B,
+		getCurrentLocale: () => "en",
+		getLocalConfig: async () => makeConfig("## Local"),
+		createEventId: () => "c_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		replicaCache: cache,
+	});
+
+	await reader.initialize();
+
+	assert.equal(reader.getReadHealth(), "waiting");
+	assert.equal(reader.getEffectiveConfig().daily.headings[0], "## Shared successor");
+	assert.equal(reader.isCoverageComplete(), false);
+	assert.equal(reader.isMonthlyProjectionAllowed(), false);
+	await assert.rejects(() => reader.publishLocalConfig(), /cannot be safely updated/u);
 });
 
 test("设备语言变化不会静默改写已持久化的 Monthly locale", async () => {

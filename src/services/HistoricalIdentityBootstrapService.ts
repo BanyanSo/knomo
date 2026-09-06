@@ -10,6 +10,7 @@ import { canonicalIdentityLedgerJson, sha256IdentityLedgerText } from "./Identit
 import type { HistoricalIdentityAdoptionResult } from "./IdentityLedgerService";
 import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
+import { normalizeVaultPath } from "../utils/path";
 
 export const HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY = "historicalIdentityBootstrap";
 
@@ -23,6 +24,7 @@ interface HistoricalIdentityBootstrapCheckpoint {
 	catalogFingerprint: string | null;
 	identityRevision: string | null;
 	identityEventCount: number | null;
+	authorizationRoot?: string | null;
 }
 
 interface HistoricalIdentityBootstrapTarget {
@@ -65,16 +67,32 @@ export class HistoricalIdentityBootstrapService {
 		return this.status;
 	}
 
+	async authorizeInitialImport(dataRoot: string): Promise<HistoricalIdentityBootstrapStatus> {
+		const authorizationRoot = normalizeVaultPath(dataRoot);
+		const checkpoint = await this.loadCheckpoint();
+		if (checkpoint?.reason === "initial_import" && checkpoint.authorizationRoot === authorizationRoot) {
+			this.setStatus(checkpoint.state === "completed" ? "completed" : "pending");
+			return this.status;
+		}
+		await this.persistCheckpoint({
+			state: "pending",
+			reason: "initial_import",
+			catalogFingerprint: null,
+			identityRevision: null,
+			identityEventCount: null,
+			authorizationRoot,
+		});
+		this.setStatus("pending");
+		return this.status;
+	}
+
 	async initializeEligibility(): Promise<HistoricalIdentityBootstrapStatus> {
 		const checkpoint = await this.loadCheckpoint();
 		if (checkpoint !== null) {
-			if (checkpoint.state === "completed"
-				&& checkpoint.reason === "initial_import"
-				&& (this.isIdentityEmpty() || checkpoint.identityEventCount === null)) {
-				await this.restartInitialImport();
-				return this.status;
-			}
-			this.setStatus(checkpoint.state === "completed" ? "completed" : "pending");
+			const authorized = checkpoint.reason !== "initial_import"
+				|| checkpoint.state === "completed"
+				|| typeof checkpoint.authorizationRoot === "string";
+			this.setStatus(authorized ? (checkpoint.state === "completed" ? "completed" : "pending") : "idle");
 			return this.status;
 		}
 		const snapshot = this.target.getSnapshot();
@@ -85,14 +103,6 @@ export class HistoricalIdentityBootstrapService {
 		}
 		if (identityStatus !== "absent" || snapshot.eventCount !== 0
 			|| snapshot.quarantinedEventIds.length > 0) return this.status;
-		await this.persistCheckpoint({
-			state: "pending",
-			reason: "initial_import",
-			catalogFingerprint: null,
-			identityRevision: null,
-			identityEventCount: null,
-		});
-		this.setStatus("pending");
 		return this.status;
 	}
 
@@ -112,9 +122,7 @@ export class HistoricalIdentityBootstrapService {
 		try {
 			if (this.status === "idle" || this.status === "failed") await this.initializeEligibility();
 			if (this.status === "completed") {
-				if (legacyStatus !== "not_applicable") return this.status;
-				await this.recoverMissingCompletedInitialImport();
-				if (this.status === "completed") return this.status;
+				return this.status;
 			}
 			if (this.status !== "pending") return this.status;
 			this.assertRunning();
@@ -125,6 +133,7 @@ export class HistoricalIdentityBootstrapService {
 					catalogFingerprint: null,
 					identityRevision: this.target.getSnapshot().revision,
 					identityEventCount: this.target.getSnapshot().eventCount,
+					authorizationRoot: null,
 				});
 				this.setStatus("completed");
 				return this.status;
@@ -165,6 +174,7 @@ export class HistoricalIdentityBootstrapService {
 					catalogFingerprint: null,
 					identityRevision: result.identityRevision,
 					identityEventCount: null,
+					authorizationRoot: this.checkpoint?.authorizationRoot ?? null,
 				});
 				this.setStatus("pending");
 				return this.status;
@@ -175,6 +185,7 @@ export class HistoricalIdentityBootstrapService {
 				catalogFingerprint,
 				identityRevision: result.identityRevision,
 				identityEventCount: this.target.getSnapshot().eventCount,
+				authorizationRoot: this.checkpoint?.authorizationRoot ?? null,
 			});
 			this.setStatus("completed");
 			return this.status;
@@ -194,36 +205,6 @@ export class HistoricalIdentityBootstrapService {
 	private persistCheckpoint(checkpoint: HistoricalIdentityBootstrapCheckpoint): Promise<void> {
 		this.checkpoint = checkpoint;
 		return this.options.checkpointStore.setMeta(HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY, checkpoint);
-	}
-
-	private isIdentityEmpty(): boolean {
-		const snapshot = this.target.getSnapshot();
-		return this.target.getStatus() === "absent"
-			&& snapshot.eventCount === 0
-			&& snapshot.quarantinedEventIds.length === 0;
-	}
-
-	private async recoverMissingCompletedInitialImport(): Promise<void> {
-		const checkpoint = this.checkpoint;
-		if (checkpoint?.state !== "completed" || checkpoint.reason !== "initial_import") return;
-		const snapshot = this.target.getSnapshot();
-		if (checkpoint.identityEventCount !== null
-			&& snapshot.eventCount > checkpoint.identityEventCount) return;
-		if (checkpoint.identityEventCount !== null
-			&& snapshot.eventCount === checkpoint.identityEventCount
-			&& snapshot.revision === checkpoint.identityRevision) return;
-		await this.restartInitialImport();
-	}
-
-	private async restartInitialImport(): Promise<void> {
-		await this.persistCheckpoint({
-			state: "pending",
-			reason: "initial_import",
-			catalogFingerprint: null,
-			identityRevision: null,
-			identityEventCount: null,
-		});
-		this.setStatus("pending");
 	}
 
 	private async yieldControl(): Promise<void> {
@@ -263,7 +244,10 @@ function isHistoricalIdentityBootstrapCheckpoint(value: unknown): value is Histo
 		&& (checkpoint.catalogFingerprint === null || typeof checkpoint.catalogFingerprint === "string")
 		&& (checkpoint.identityRevision === null || typeof checkpoint.identityRevision === "string")
 		&& (checkpoint.identityEventCount === undefined || checkpoint.identityEventCount === null
-			|| (Number.isInteger(checkpoint.identityEventCount) && checkpoint.identityEventCount >= 0));
+			|| (Number.isInteger(checkpoint.identityEventCount) && checkpoint.identityEventCount >= 0))
+		&& (checkpoint.authorizationRoot === undefined || checkpoint.authorizationRoot === null
+			|| (typeof checkpoint.authorizationRoot === "string"
+				&& normalizeVaultPath(checkpoint.authorizationRoot) === checkpoint.authorizationRoot));
 	if (!valid) return false;
 	if (checkpoint.identityEventCount === undefined) checkpoint.identityEventCount = null;
 	return true;

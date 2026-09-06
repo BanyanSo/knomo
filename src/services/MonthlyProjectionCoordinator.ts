@@ -73,6 +73,7 @@ export class MonthlyProjectionCoordinator {
 	private readonly invalidationVersions = new Map<string, number>();
 	private readonly periodPriorities = new Map<string, number>();
 	private readonly failedPeriods = new Set<string>();
+	private readonly incompleteVersions = new Map<string, number>();
 	private readonly lastProjectedAt = new Map<string, number>();
 	private readonly metadata = new Map<string, MonthlyProjectionMetadata>();
 	private readonly pathQueues = new Map<string, Promise<void>>();
@@ -220,7 +221,7 @@ export class MonthlyProjectionCoordinator {
 		}
 		if (this.running !== null) return this.running;
 		this.running = this.runOnce(ignoreCooldown).then((result) => {
-			if (this.pendingPeriods.size > 0) {
+			if (this.hasRunnablePending()) {
 				this.scheduleRun(result.failed > 0 ? this.retryDelayMs : this.getNextDelay());
 			}
 			return result;
@@ -251,11 +252,20 @@ export class MonthlyProjectionCoordinator {
 		let failed = 0;
 		for (const period of this.getPendingPeriodsInPriorityOrder()) {
 			const invalidationVersion = this.invalidationVersions.get(period) ?? 0;
+			if (!ignoreCooldown && this.incompleteVersions.get(period) === invalidationVersion) continue;
 			const priority = this.periodPriorities.get(period) ?? MONTHLY_NORMAL_PRIORITY;
 			const lastProjected = this.lastProjectedAt.get(period);
 			if (!ignoreCooldown && lastProjected !== undefined && this.now() - lastProjected < this.cooldownMs) continue;
 			try {
-				await this.runLowPriorityTask(period, () => this.project(period));
+				const outcome = await this.runLowPriorityTask(period, () => this.project(period));
+				if (outcome === "incomplete") {
+					if ((this.invalidationVersions.get(period) ?? 0) === invalidationVersion) {
+						this.incompleteVersions.set(period, invalidationVersion);
+					}
+					this.failedPeriods.delete(period);
+					await this.persistCheckpoint();
+					continue;
+				}
 				let completed = false;
 				if ((this.invalidationVersions.get(period) ?? 0) === invalidationVersion) {
 					this.pendingPeriods.delete(period);
@@ -272,6 +282,7 @@ export class MonthlyProjectionCoordinator {
 					throw error;
 				}
 				this.failedPeriods.delete(period);
+				this.incompleteVersions.delete(period);
 				this.lastProjectedAt.set(period, this.now());
 				projected += 1;
 			} catch (error) {
@@ -285,8 +296,9 @@ export class MonthlyProjectionCoordinator {
 		return { projected, failed };
 	}
 
-	private async project(period: string): Promise<void> {
+	private async project(period: string): Promise<"complete" | "incomplete"> {
 		const targetPath = this.options.inputBuilder.getTargetPath(period);
+		let outcome: "complete" | "incomplete" = "complete";
 		await this.enqueuePath(targetPath, async () => {
 			this.assertRunning();
 			const existing = this.app.vault.getAbstractFileByPath(targetPath);
@@ -304,6 +316,10 @@ export class MonthlyProjectionCoordinator {
 			const runtime = this.createCooperativeRuntime();
 			const built = await this.options.inputBuilder.build(period, runtime);
 			this.assertRunning();
+			if (built.status === "incomplete") {
+				outcome = "incomplete";
+				return;
+			}
 			if (existing === null && built.observations.length === 0) {
 				this.metadata.delete(period);
 				return;
@@ -386,6 +402,7 @@ export class MonthlyProjectionCoordinator {
 				throw error;
 			}
 		});
+		return outcome;
 	}
 
 	private async handleMonthlyFileChanged(file: unknown): Promise<void> {
@@ -440,6 +457,7 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private markPending(period: string, priority: number): void {
+		this.incompleteVersions.delete(period);
 		this.pendingPeriods.add(period);
 		this.periodPriorities.set(period, Math.min(priority, this.periodPriorities.get(period) ?? priority));
 		this.invalidationVersions.set(period, (this.invalidationVersions.get(period) ?? 0) + 1);
@@ -494,6 +512,7 @@ export class MonthlyProjectionCoordinator {
 		this.invalidationVersions.clear();
 		this.periodPriorities.clear();
 		this.metadata.clear();
+		this.incompleteVersions.clear();
 		for (const item of checkpoint.pending) {
 			this.pendingPeriods.add(item.period);
 			this.periodPriorities.set(item.period, item.priority);
@@ -545,6 +564,11 @@ export class MonthlyProjectionCoordinator {
 			if (right === currentPeriod) return 1;
 			return right.localeCompare(left);
 		});
+	}
+
+	private hasRunnablePending(): boolean {
+		return [...this.pendingPeriods].some((period) =>
+			this.incompleteVersions.get(period) !== (this.invalidationVersions.get(period) ?? 0));
 	}
 
 	private runLowPriorityTask<T>(period: string, action: () => Promise<T>): Promise<T> {

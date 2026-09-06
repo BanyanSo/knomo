@@ -7,6 +7,8 @@ import test from "node:test";
 import type { App, Component } from "obsidian";
 
 import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
+import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { SharedReplicaCache } from "../src/services/SharedReplicaCache";
 import { LocalWriterIdentityService } from "../src/services/LocalWriterIdentityService";
 import {
 	createIdentityLedgerMemoId,
@@ -30,6 +32,12 @@ const MEMO_B = "01991f40-7c00-7222-a222-222222222222";
 const MEMO_C = "01991f40-7c00-7333-b333-333333333333";
 const IDENTITY_ROOT_A = getIdentityLedgerRootPath("Knomo-A");
 const IDENTITY_ROOT_B = getIdentityLedgerRootPath("Knomo-B");
+
+class DurableIdentityMetaStore extends InMemoryMemoCatalogStore {
+	override getLifecycle() {
+		return { state: "ready" as const, persistent: true, writable: true, reason: null };
+	}
+}
 
 test("启动监听与显式初始化复用一次 Identity 全量刷新", async () => {
 	const vault = await createLedgerVault();
@@ -180,6 +188,39 @@ test("已有 Daily identity 首装导入可重复执行且不追加事件", asyn
 	assert.equal(second.importedEventCount, 0);
 	assert.deepEqual(second.memoIds, first.memoIds);
 	assert.equal(service.getSnapshot().eventCount, 1);
+});
+
+test("Identity root 暂缺和重启保留已验证事件图且不写 Vault", async () => {
+	const vault = await createLedgerVault();
+	const cache = new SharedReplicaCache(new DurableIdentityMetaStore());
+	const observation = makeObservation("Daily/2026-08-22.md", "a".repeat(64), 1, "正文");
+	const first = new IdentityLedgerService(vault.app, {
+		getRootPath: () => IDENTITY_ROOT_A,
+		getWriterId: async () => WRITER_A,
+		createEventId: () => eventId(1),
+		now: () => new Date("2026-08-22T00:00:00.000Z"),
+		replicaCache: cache,
+	});
+	await first.initialize();
+	const adopted = await first.adoptHistoricalObservations([observation]);
+	const pathsBefore = vault.paths();
+	vault.remove(IDENTITY_ROOT_A);
+
+	const restarted = new IdentityLedgerService(vault.app, {
+		getRootPath: () => IDENTITY_ROOT_A,
+		getWriterId: async () => WRITER_B,
+		replicaCache: cache,
+	});
+	await restarted.initialize();
+
+	assert.equal(restarted.getReadHealth(), "waiting");
+	assert.equal(restarted.getStatus(), "unavailable");
+	assert.equal(restarted.resolveObservation(observation)?.memoId, adopted.memoIds[0]);
+	assert.deepEqual(vault.paths(), pathsBefore.filter((path) => path !== IDENTITY_ROOT_A));
+	await assert.rejects(
+		() => restarted.recordReview(restarted.resolveObservation(observation)!, "2026-08-23T00:00:00.000Z"),
+		/input is incomplete/u,
+	);
 });
 
 test("自动导入 observation 与后续可恢复删除复用本机 durable writer", async () => {

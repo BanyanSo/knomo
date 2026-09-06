@@ -1,6 +1,7 @@
 import type { MonthlyDateOrder } from "./settings";
 
 export type KnomoSharedConfigStatus = "missing" | "ready" | "conflicted" | "unavailable";
+export type KnomoSharedConfigReadHealth = "usable" | "waiting" | "unavailable" | "conflicted";
 
 interface KnomoSharedDailyConfig {
 	folder: string | null;

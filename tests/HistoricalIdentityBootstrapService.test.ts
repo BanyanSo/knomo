@@ -8,8 +8,9 @@ import {
 import type { CatalogFileRevisionBatch, MemoObservation } from "../src/types/catalog";
 import type { IdentityLedgerBinding, IdentityLedgerSnapshot } from "../src/types/identityLedger";
 
-test("首次安装在完整 Catalog 且无 1.2.9 数据时自动建立全部身份并完成 checkpoint", async () => {
+test("明确初始化 receipt 在完整 Catalog 且无 1.2.9 数据时建立全部身份", async () => {
 	const fixture = createFixture();
+	await fixture.service.authorizeInitialImport("Knomo");
 	assert.equal(await fixture.service.initializeEligibility(), "pending");
 
 	assert.equal(await fixture.service.run("not_applicable"), "completed");
@@ -21,11 +22,22 @@ test("首次安装在完整 Catalog 且无 1.2.9 数据时自动建立全部身�
 		catalogFingerprint: fixture.meta.get(HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY)?.catalogFingerprint,
 		identityRevision: "identity-1",
 		identityEventCount: 2,
+		authorizationRoot: "Knomo",
 	});
+});
+
+test("空 Identity 没有明确 receipt 时保持 idle", async () => {
+	const fixture = createFixture();
+
+	assert.equal(await fixture.service.initializeEligibility(), "idle");
+	assert.equal(await fixture.service.run("not_applicable"), "idle");
+	assert.equal(fixture.adopted.length, 0);
+	assert.equal(fixture.meta.has(HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY), false);
 });
 
 test("首装身份导入只在完整且可持久写入的 Catalog 上运行", async () => {
 	const fixture = createFixture({ coverageKind: "partial" });
+	await fixture.service.authorizeInitialImport("Knomo");
 	await fixture.service.initializeEligibility();
 
 	assert.equal(await fixture.service.run("not_applicable"), "pending");
@@ -35,6 +47,7 @@ test("首装身份导入只在完整且可持久写入的 Catalog 上运行", as
 
 test("存在 1.2.9 数据时由 legacy migration 负责身份，不再全库导入", async () => {
 	const fixture = createFixture();
+	await fixture.service.authorizeInitialImport("Knomo");
 	await fixture.service.initializeEligibility();
 
 	assert.equal(await fixture.service.run("ready"), "completed");
@@ -51,8 +64,9 @@ test("已有 Identity 数据且无 checkpoint 时不进入首次安装导入", a
 	assert.equal(fixture.meta.has(HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY), false);
 });
 
-test("完成 checkpoint 对应的 Catalog 仍有未绑定 Memo 时自动恢复首次导入", async () => {
+test("完成 checkpoint 后 Identity revision 变化不重新执行全库导入", async () => {
 	const fixture = createFixture();
+	await fixture.service.authorizeInitialImport("Knomo");
 	await fixture.service.initializeEligibility();
 	await fixture.service.run("not_applicable");
 	fixture.resetIdentity("ready", 1, "identity-new-memo");
@@ -60,40 +74,43 @@ test("完成 checkpoint 对应的 Catalog 仍有未绑定 Memo 时自动恢复�
 
 	assert.equal(await restarted.initializeEligibility(), "completed");
 	assert.equal(await restarted.run("not_applicable"), "completed");
-	assert.deepEqual(fixture.adopted, [...fixture.observations, ...fixture.observations]);
+	assert.deepEqual(fixture.adopted, fixture.observations);
 	assert.equal(
 		(fixture.meta.get(HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY) as { identityRevision: string }).identityRevision,
 		"identity-1",
 	);
 });
 
-test("完成 checkpoint 但 Identity 已空时初始化立即回到 pending", async () => {
+test("完成 checkpoint 后 Identity 暂时为空仍保留完成事实", async () => {
 	const fixture = createFixture();
+	await fixture.service.authorizeInitialImport("Knomo");
 	await fixture.service.initializeEligibility();
 	await fixture.service.run("not_applicable");
 	fixture.resetIdentity("absent", 0, "identity-empty");
 	const restarted = fixture.createService();
 
-	assert.equal(await restarted.initializeEligibility(), "pending");
+	assert.equal(await restarted.initializeEligibility(), "completed");
 	assert.equal(await restarted.run("not_applicable"), "completed");
-	assert.deepEqual(fixture.adopted, [...fixture.observations, ...fixture.observations]);
+	assert.deepEqual(fixture.adopted, fixture.observations);
 });
 
-test("旧完成 checkpoint 缺少事件数时会恢复未绑定历史 Memo", async () => {
+test("旧完成 checkpoint 缺少事件数时也不重新授权历史导入", async () => {
 	const fixture = createFixture();
+	await fixture.service.authorizeInitialImport("Knomo");
 	await fixture.service.initializeEligibility();
 	await fixture.service.run("not_applicable");
 	delete (fixture.meta.get(HISTORICAL_IDENTITY_BOOTSTRAP_META_KEY) as { identityEventCount?: number }).identityEventCount;
 	fixture.resetIdentity("ready", 1, "identity-new-memo");
 	const restarted = fixture.createService();
 
-	assert.equal(await restarted.initializeEligibility(), "pending");
+	assert.equal(await restarted.initializeEligibility(), "completed");
 	assert.equal(await restarted.run("not_applicable"), "completed");
-	assert.deepEqual(fixture.adopted, [...fixture.observations, ...fixture.observations]);
+	assert.deepEqual(fixture.adopted, fixture.observations);
 });
 
 test("完成 checkpoint 后 Catalog 已变化时不批量采用后来新增的 Daily Memo", async () => {
 	const fixture = createFixture();
+	await fixture.service.authorizeInitialImport("Knomo");
 	await fixture.service.initializeEligibility();
 	await fixture.service.run("not_applicable");
 	fixture.addObservation(makeObservation(3));
@@ -106,6 +123,7 @@ test("完成 checkpoint 后 Catalog 已变化时不批量采用后来新增的 D
 
 test("完成 checkpoint 后有正常新增 Identity 事件时不触发历史全库导入", async () => {
 	const fixture = createFixture();
+	await fixture.service.authorizeInitialImport("Knomo");
 	await fixture.service.initializeEligibility();
 	await fixture.service.run("not_applicable");
 	fixture.addObservation(makeObservation(3));

@@ -214,6 +214,7 @@ export interface IdentityLedgerCreatePlan {
 }
 
 export type IdentityLedgerStatus = "missing" | "absent" | "ready" | "conflicted" | "unavailable";
+export type IdentityLedgerReadHealth = "usable" | "waiting" | "unavailable" | "conflicted";
 export type IdentityLedgerAttentionRoute = "settings_retry" | "quarantine" | null;
 
 export interface IdentityLedgerReader {

@@ -32,6 +32,8 @@ test("Monthly 的完整输入只来自实际 Daily，空或 partial Catalog 不�
 	});
 
 	const built = await fixture.inputBuilder.build("2026-08");
+	assert.equal(built.status, "complete");
+	if (built.status !== "complete") throw new Error("Expected complete Monthly input.");
 	assert.deepEqual(built.sourcePaths, ["Daily/2026-08-01.md", "Daily/2026-08-02.md"]);
 	assert.deepEqual(built.observations.map((item) => item.content), ["unresolved memo", "ambiguous memo"]);
 	assert.equal(built.observations.length, 2);
@@ -49,6 +51,8 @@ test("Monthly 与 Catalog 共用全区域 Parser 语义，source 输入不包含
 	};
 	const fixture = createFixture(daily);
 	const built = await fixture.inputBuilder.build("2026-08");
+	assert.equal(built.status, "complete");
+	if (built.status !== "complete") throw new Error("Expected complete Monthly input.");
 
 	assert.deepEqual(built.observations.map((item) => [item.time, item.section, item.content]), [
 		["12:58", null, "root"],
@@ -523,6 +527,51 @@ test("Daily 事件直接失效 Monthly，不经过 Catalog 扫描或 coverage", 
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
 	assert.equal(fixture.coordinator.getProjectionState(), "ready");
 	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /changed directly/u);
+});
+
+test("Daily inventory 中的源暂不可读时保留旧 Monthly，文件事件后再收敛", async () => {
+	const missingPath = "Daily/2026-08-02.md";
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "## Memos\n- 09:00 July original\n",
+		"Daily/2026-08-01.md": DAILY_A,
+		[missingPath]: DAILY_B,
+	});
+	await fixture.coordinator.rebuildPeriod("2026-07");
+	await fixture.coordinator.rebuildPeriod("2026-08");
+	const monthlyBefore = fixture.replica.read(MONTHLY_PATH);
+	const metadataBefore = fixture.coordinator.getProjectionMetadata("2026-08");
+	assert.ok(monthlyBefore !== null);
+	assert.ok(metadataBefore !== null);
+
+	fixture.replica.replace("Daily/2026-07-01.md", "## Memos\n- 09:00 July changed\n");
+	fixture.replica.replace("Daily/2026-08-01.md", "## Memos\n- 09:00 August changed\n");
+	fixture.replica.remove(missingPath);
+	await fixture.coordinator.invalidatePeriods(["2026-07", "2026-08"]);
+	let augustBuildCount = 0;
+	const originalBuild = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	fixture.inputBuilder.build = async (period, runtime) => {
+		if (period === "2026-08") augustBuildCount += 1;
+		return originalBuild(period, runtime);
+	};
+
+	assert.deepEqual(await fixture.coordinator.run(false), { projected: 1, failed: 0 });
+	assert.equal(augustBuildCount, 1);
+	assert.match(fixture.replica.read("Memos/2026-07.md") ?? "", /July changed/u);
+	assert.equal(fixture.replica.read(MONTHLY_PATH), monthlyBefore);
+	assert.deepEqual(fixture.coordinator.getProjectionMetadata("2026-08"), metadataBefore);
+	assert.deepEqual(fixture.coordinator.getFailedPeriods(), []);
+	assert.equal(fixture.coordinator.getProjectionState(), "stale");
+
+	assert.deepEqual(await fixture.coordinator.run(false), { projected: 0, failed: 0 });
+	assert.equal(augustBuildCount, 1);
+
+	const restoredFile = await fixture.replica.app.vault.create(missingPath, DAILY_B);
+	await invokeVaultChanged(fixture.coordinator, restoredFile);
+	assert.deepEqual(await fixture.coordinator.run(false), { projected: 1, failed: 0 });
+	assert.equal(augustBuildCount, 2);
+	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /August changed/u);
+	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /ambiguous memo/u);
+	assert.equal(fixture.coordinator.getProjectionState(), "ready");
 });
 
 test("Monthly 写入失败只留下 stale projection，Daily 与其他运行时不受影响", async () => {

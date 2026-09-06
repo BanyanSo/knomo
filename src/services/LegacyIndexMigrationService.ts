@@ -127,8 +127,6 @@ export class LegacyIndexMigrationService {
 			const runSourceChangeRevision = this.sourceChangeRevision;
 			const presence = this.source.inspect();
 			if (presence.kind === "missing") {
-				await this.clearCompletion();
-				this.completedSourceId = null;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
 			}
@@ -160,13 +158,10 @@ export class LegacyIndexMigrationService {
 			const source = await this.loadSource();
 			this.assertRunning();
 			if (source.kind === "missing") {
-				await this.clearCompletion();
-				this.completedSourceId = null;
 				this.handledSourceChangeRevision = runSourceChangeRevision;
 				return this.remember({ ...cloneReport(EMPTY_REPORT), status: "not_applicable" });
 			}
 			if (source.kind === "attention") {
-				await this.clearCompletion();
 				return this.remember({
 					...cloneReport(EMPTY_REPORT),
 					status: "attention",

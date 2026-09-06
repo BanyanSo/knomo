@@ -22,6 +22,8 @@ interface StartupSharedConfigService {
 export interface KnomoStartupBootstrapOptions {
 	getLocation: () => KnomoDataRootLocation;
 	initializeDataRoot: (dataRoot: string) => Promise<void>;
+	authorizeInitialImport?: (dataRoot: string) => Promise<void>;
+	onNewDataRootReady?: () => Promise<void>;
 	identity: StartupIdentityService;
 	sharedConfig: StartupSharedConfigService;
 	cancellationSignal?: AbortSignal;
@@ -36,7 +38,7 @@ export interface KnomoStartupBootstrapSnapshot {
 	error: string | null;
 }
 
-type BootstrapMode = "initialize" | "retry" | "use_current_device";
+type BootstrapMode = "initialize" | "retry" | "initialize_new" | "use_current_device";
 
 /** 启用插件时补齐默认数据根与共享配置；已有共享配置只读取，不覆盖。 */
 export class KnomoStartupBootstrapService {
@@ -48,6 +50,8 @@ export class KnomoStartupBootstrapService {
 	private activeOperation: Promise<void> | null = null;
 	private activeMode: BootstrapMode | null = null;
 	private queuedUseCurrentOperation: Promise<void> | null = null;
+	private queuedNewOperation: Promise<void> | null = null;
+	private activeDataRoot: string | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -82,20 +86,38 @@ export class KnomoStartupBootstrapService {
 		return queuedOperation;
 	}
 
-	private startOperation(mode: BootstrapMode): Promise<void> {
+	initializeNewDataRoot(dataRoot: string): Promise<void> {
+		if (this.activeOperation === null) return this.startOperation("initialize_new", dataRoot);
+		if (this.activeMode === "initialize_new" && this.activeDataRoot === dataRoot) return this.activeOperation;
+		if (this.queuedNewOperation !== null) return this.queuedNewOperation;
+
+		let queuedOperation: Promise<void>;
+		queuedOperation = this.activeOperation.then(
+			() => this.startOperation("initialize_new", dataRoot),
+			() => this.startOperation("initialize_new", dataRoot),
+		).finally(() => {
+			if (this.queuedNewOperation === queuedOperation) this.queuedNewOperation = null;
+		});
+		this.queuedNewOperation = queuedOperation;
+		return queuedOperation;
+	}
+
+	private startOperation(mode: BootstrapMode, dataRoot: string | null = null): Promise<void> {
 		let operation: Promise<void>;
-		operation = this.runOnce(mode).finally(() => {
+		operation = this.runOnce(mode, dataRoot).finally(() => {
 			if (this.activeOperation === operation) {
 				this.activeOperation = null;
 				this.activeMode = null;
+				this.activeDataRoot = null;
 			}
 		});
 		this.activeMode = mode;
+		this.activeDataRoot = dataRoot;
 		this.activeOperation = operation;
 		return operation;
 	}
 
-	private async runOnce(mode: BootstrapMode): Promise<void> {
+	private async runOnce(mode: BootstrapMode, requestedDataRoot: string | null): Promise<void> {
 		let stage: KnomoStartupBootstrapStage = "data_root";
 		this.setInitializing(stage);
 		try {
@@ -103,7 +125,14 @@ export class KnomoStartupBootstrapService {
 			this.throwIfCancelled();
 			let location = this.options.getLocation();
 			if (!location.knomoDataRootConfigured) {
-				await this.options.initializeDataRoot(location.knomoDataRoot);
+				if (mode !== "initialize_new") {
+					this.snapshot = { status: "unconfigured", stage, error: null };
+					return;
+				}
+				const dataRoot = requestedDataRoot ?? location.knomoDataRoot;
+				await this.options.authorizeInitialImport?.(dataRoot);
+				this.throwIfCancelled();
+				await this.options.initializeDataRoot(dataRoot);
 				this.throwIfCancelled();
 				location = this.options.getLocation();
 				if (!location.knomoDataRootConfigured) {
@@ -144,7 +173,7 @@ export class KnomoStartupBootstrapService {
 				await this.options.sharedConfig.resolveWithLocalConfig();
 				this.throwIfCancelled();
 			} else if (sharedStatus === "missing") {
-				if (mode === "retry") {
+				if (mode !== "initialize_new" && mode !== "use_current_device") {
 					this.snapshot = { status: "unconfigured", stage, error: null };
 					return;
 				}
@@ -167,6 +196,7 @@ export class KnomoStartupBootstrapService {
 				throw new Error(this.options.sharedConfig.getLastError() ?? "Shared configuration verification failed.");
 			}
 			this.snapshot = { status: "ready", stage: null, error: null };
+			if (mode === "initialize_new") await this.options.onNewDataRootReady?.();
 		} catch (error) {
 			if (error instanceof KnomoStartupCancelledError || this.options.cancellationSignal?.aborted === true) {
 				throw new KnomoStartupCancelledError();

@@ -5,12 +5,14 @@ import type {
 	KnomoSharedConfig,
 	KnomoSharedConfigEvent,
 	KnomoSharedConfigEventEnvelope,
+	KnomoSharedConfigReadHealth,
 	KnomoSharedConfigSnapshot,
 	KnomoSharedConfigStatus,
 } from "../types/knomoConfig";
 import { ensureFolder as ensureVaultFolder } from "../utils/vault";
 import {
 	canonicalKnomoSharedConfigJson,
+	assertKnomoSharedConfigEvent,
 	createKnomoSharedConfigEventId,
 	getKnomoSharedConfigSegmentPath,
 	getKnomoSharedConfigWriterSegmentsPath,
@@ -21,6 +23,8 @@ import {
 	KNOMO_SHARED_CONFIG_RELATIVE_ROOT,
 } from "./KnomoSharedConfigProtocol";
 import { normalizeMonthlyLocaleKey } from "./MonthlyProjection";
+import type { SharedReplicaCache } from "./SharedReplicaCache";
+import { isRecord } from "../utils/object";
 
 export interface KnomoSharedConfigServiceOptions {
 	getRootPath: () => string | null;
@@ -30,6 +34,7 @@ export interface KnomoSharedConfigServiceOptions {
 	createEventId?: () => string;
 	now?: () => Date;
 	cancellationSignal?: AbortSignal;
+	replicaCache?: SharedReplicaCache;
 }
 
 export class KnomoSharedConfigService {
@@ -40,8 +45,12 @@ export class KnomoSharedConfigService {
 	private envelopes: KnomoSharedConfigEventEnvelope[] = [];
 	private snapshot: KnomoSharedConfigSnapshot = createEmptySnapshot();
 	private status: KnomoSharedConfigStatus = "missing";
+	private readHealth: KnomoSharedConfigReadHealth = "unavailable";
 	private lastError: string | null = null;
 	private invalidFileCount = 0;
+	private hasKnownInputGap = false;
+	private replicaCacheError = false;
+	private activeRootPath: string | null = null;
 	private onChanged: (() => void | Promise<void>) | null = null;
 	private changeNotificationQueue: Promise<void> = Promise.resolve();
 	private refreshOperation: Promise<void> | null = null;
@@ -97,11 +106,11 @@ export class KnomoSharedConfigService {
 		try {
 			await this.requestRefresh(false);
 			if (this.status !== "ready" && this.localConfig === null) this.status = "unavailable";
-			this.lastError = null;
+			if (!this.replicaCacheError) this.lastError = null;
 		} catch (error) {
 			if (error instanceof KnomoSharedConfigRefreshCancelledError) return;
+			this.readHealth = "unavailable";
 			this.status = "unavailable";
-			this.snapshot = createEmptySnapshot();
 			this.lastError = errorDetail(error);
 		}
 	}
@@ -120,6 +129,14 @@ export class KnomoSharedConfigService {
 		return this.status;
 	}
 
+	getReadHealth(): KnomoSharedConfigReadHealth {
+		return this.readHealth;
+	}
+
+	isReplicaCacheDurable(): boolean {
+		return this.options.replicaCache?.isDurable() ?? false;
+	}
+
 	getLastError(): string | null {
 		return this.lastError;
 	}
@@ -129,18 +146,18 @@ export class KnomoSharedConfigService {
 	}
 
 	getEffectiveConfig(): KnomoSharedConfig {
-		const sharedConfig = this.status === "ready" ? this.snapshot.config : null;
+		const sharedConfig = this.snapshot.config;
 		const config = sharedConfig ?? this.localConfig;
 		if (config === null) throw new Error("Knomo shared configuration is not initialized.");
 		return cloneConfig(config);
 	}
 
 	isCoverageComplete(): boolean {
-		return this.status === "ready";
+		return this.readHealth === "usable" && this.status === "ready";
 	}
 
 	isMonthlyProjectionAllowed(): boolean {
-		return this.status === "ready" && this.snapshot.config !== null;
+		return this.readHealth === "usable" && this.status === "ready" && this.snapshot.config !== null;
 	}
 
 	async publishLocalConfig(): Promise<void> {
@@ -148,7 +165,8 @@ export class KnomoSharedConfigService {
 		if (this.status === "conflicted") {
 			throw new Error("Shared configuration is conflicted; explicit resolution is required.");
 		}
-		if (this.status === "unavailable") {
+		if ((this.status === "unavailable" && this.snapshot.eventCount === 0)
+			|| (this.readHealth !== "usable" && this.snapshot.eventCount > 0)) {
 			throw new Error("Shared configuration cannot be safely updated.");
 		}
 		const localConfig = this.requireLocalConfig();
@@ -161,6 +179,9 @@ export class KnomoSharedConfigService {
 
 	async resolveWithLocalConfig(): Promise<void> {
 		this.localConfig = await this.readLocalConfig();
+		if (this.readHealth === "waiting" || this.readHealth === "unavailable") {
+			throw new Error("Shared configuration cannot be safely resolved while input is incomplete.");
+		}
 		if (this.status !== "conflicted") {
 			await this.publishLocalConfig();
 			return;
@@ -231,8 +252,12 @@ export class KnomoSharedConfigService {
 			await this.writeImmutable(path, content);
 			const parsed = await parseKnomoSharedConfigSegment(rootPath, path, content);
 			this.envelopes = mergeEnvelopes(this.envelopes, parsed.events);
+			this.hasKnownInputGap = this.envelopes.some((envelope) =>
+				!(this.app.vault.getAbstractFileByPath(envelope.sourcePath) instanceof TFile));
 			await this.materialize();
-			this.lastError = null;
+			this.activeRootPath = rootPath;
+			await this.saveKnownEnvelopesAfterWrite(rootPath);
+			if (!this.replicaCacheError) this.lastError = null;
 		} catch (error) {
 			this.status = "unavailable";
 			this.lastError = errorDetail(error);
@@ -248,13 +273,14 @@ export class KnomoSharedConfigService {
 		const rootPath = this.getRootPath();
 		if (rootPath === null) {
 			this.assertRefreshCurrent(generation);
-			this.setMissing();
+			this.setMissing(null);
 			return;
 		}
+		const knownEnvelopes = await this.loadKnownEnvelopes(rootPath, generation);
 		const root = this.app.vault.getAbstractFileByPath(rootPath);
 		if (root === null) {
 			this.assertRefreshCurrent(generation);
-			this.setMissing();
+			await this.commitRefreshedEnvelopes(rootPath, knownEnvelopes, 0, true, "waiting", generation);
 			return;
 		}
 		if (!(root instanceof TFolder)) throw new Error("Knomo shared configuration root is not a folder.");
@@ -271,17 +297,24 @@ export class KnomoSharedConfigService {
 				invalidFiles += 1;
 			}
 		}
-		const snapshot = await materializeKnomoSharedConfig(envelopes);
+		const mergedEnvelopes = mergeEnvelopes(knownEnvelopes, envelopes);
+		const currentPaths = new Set(envelopes.map((envelope) => envelope.sourcePath));
+		const hasKnownGap = knownEnvelopes.some((envelope) => !currentPaths.has(envelope.sourcePath));
+		const snapshot = await materializeKnomoSharedConfig(mergedEnvelopes);
 		this.assertRefreshCurrent(generation);
-		this.envelopes = envelopes;
+		this.activeRootPath = rootPath;
+		this.envelopes = mergedEnvelopes;
 		this.invalidFileCount = invalidFiles;
 		this.snapshot = snapshot;
-		this.status = invalidFiles > 0 || snapshot.status === "conflicted"
+		this.hasKnownInputGap = hasKnownGap || snapshot.pendingEventIds.length > 0;
+		this.readHealth = invalidFiles > 0 || snapshot.status === "conflicted"
 			? "conflicted"
-			: snapshot.status;
+			: this.hasKnownInputGap ? "waiting" : "usable";
+		this.updateStatus();
 		if (this.status === "ready" && snapshot.config !== null) {
 			this.monthlyLocale = snapshot.config.monthly.locale;
 		}
+		await this.saveKnownEnvelopes(rootPath, mergedEnvelopes, generation);
 	}
 
 	private async readImage(rootPath: string): Promise<Map<string, string> | null> {
@@ -298,9 +331,11 @@ export class KnomoSharedConfigService {
 
 	private async materialize(): Promise<void> {
 		this.snapshot = await materializeKnomoSharedConfig(this.envelopes);
-		this.status = this.invalidFileCount > 0 || this.snapshot.status === "conflicted"
+		this.hasKnownInputGap ||= this.snapshot.pendingEventIds.length > 0;
+		this.readHealth = this.invalidFileCount > 0 || this.snapshot.status === "conflicted"
 			? "conflicted"
-			: this.snapshot.status;
+			: this.hasKnownInputGap ? "waiting" : "usable";
+		this.updateStatus();
 		if (this.status === "ready" && this.snapshot.config !== null) {
 			this.monthlyLocale = this.snapshot.config.monthly.locale;
 		}
@@ -399,12 +434,94 @@ export class KnomoSharedConfigService {
 		return this.monthlyLocale;
 	}
 
-	private setMissing(): void {
-		this.envelopes = [];
-		this.snapshot = createEmptySnapshot();
+	private setMissing(rootPath: string | null): void {
+		if (rootPath !== null && this.activeRootPath !== rootPath) {
+			this.envelopes = [];
+			this.snapshot = createEmptySnapshot();
+			this.activeRootPath = rootPath;
+		}
 		this.invalidFileCount = 0;
-		this.status = "missing";
+		this.hasKnownInputGap = true;
+		this.readHealth = "waiting";
+		this.updateStatus();
 		this.lastError = null;
+	}
+
+	private updateStatus(): void {
+		this.status = this.readHealth === "conflicted" || this.snapshot.status === "conflicted"
+			? "conflicted"
+			: this.readHealth === "unavailable"
+				? "unavailable"
+				: this.readHealth === "waiting"
+					? this.snapshot.config === null ? "missing" : "unavailable"
+					: this.snapshot.status;
+	}
+
+	private async loadKnownEnvelopes(
+		rootPath: string,
+		generation: number,
+	): Promise<KnomoSharedConfigEventEnvelope[]> {
+		let known = this.activeRootPath === rootPath ? this.envelopes : [];
+		if (this.options.replicaCache === undefined) return [...known];
+		try {
+			const cached = await this.options.replicaCache.load("config", rootPath);
+			this.assertRefreshCurrent(generation);
+			if (cached !== null) known = mergeEnvelopes(known, await validateCachedConfigEnvelopes(rootPath, cached));
+			this.replicaCacheError = false;
+		} catch (error) {
+			this.assertRefreshCurrent(generation);
+			this.replicaCacheError = true;
+			this.lastError = errorDetail(error);
+		}
+		return [...known];
+	}
+
+	private async commitRefreshedEnvelopes(
+		rootPath: string,
+		envelopes: readonly KnomoSharedConfigEventEnvelope[],
+		invalidFileCount: number,
+		hasKnownInputGap: boolean,
+		readHealth: KnomoSharedConfigReadHealth,
+		generation: number,
+	): Promise<void> {
+		const snapshot = await materializeKnomoSharedConfig(envelopes);
+		this.assertRefreshCurrent(generation);
+		this.activeRootPath = rootPath;
+		this.envelopes = [...envelopes];
+		this.invalidFileCount = invalidFileCount;
+		this.hasKnownInputGap = hasKnownInputGap;
+		this.snapshot = snapshot;
+		this.readHealth = snapshot.status === "conflicted" ? "conflicted" : readHealth;
+		this.updateStatus();
+		if (snapshot.config !== null) this.monthlyLocale = snapshot.config.monthly.locale;
+	}
+
+	private async saveKnownEnvelopes(
+		rootPath: string,
+		envelopes: readonly KnomoSharedConfigEventEnvelope[],
+		generation: number,
+	): Promise<void> {
+		if (this.options.replicaCache === undefined) return;
+		try {
+			await this.options.replicaCache.save("config", rootPath, envelopes);
+			this.assertRefreshCurrent(generation);
+			this.replicaCacheError = false;
+		} catch (error) {
+			this.assertRefreshCurrent(generation);
+			this.replicaCacheError = true;
+			this.lastError = errorDetail(error);
+		}
+	}
+
+	private async saveKnownEnvelopesAfterWrite(rootPath: string): Promise<void> {
+		if (this.options.replicaCache === undefined) return;
+		try {
+			await this.options.replicaCache.save("config", rootPath, this.envelopes);
+			this.replicaCacheError = false;
+		} catch (error) {
+			this.replicaCacheError = true;
+			this.lastError = errorDetail(error);
+		}
 	}
 
 	private async ensureFolder(rootPath: string, path: string): Promise<void> {
@@ -523,9 +640,35 @@ function mergeEnvelopes(
 ): KnomoSharedConfigEventEnvelope[] {
 	const byPathAndId = new Map<string, KnomoSharedConfigEventEnvelope>();
 	for (const envelope of [...current, ...next]) {
-		byPathAndId.set(`${envelope.sourcePath}\u0000${envelope.event.eventId}`, envelope);
+		byPathAndId.set(`${envelope.sourcePath}\u0000${envelope.event.eventId}\u0000${envelope.digest}`, envelope);
 	}
 	return [...byPathAndId.values()];
+}
+
+async function validateCachedConfigEnvelopes(
+	rootPath: string,
+	values: readonly unknown[],
+): Promise<KnomoSharedConfigEventEnvelope[]> {
+	const normalizedRoot = normalizePath(rootPath);
+	const envelopes: KnomoSharedConfigEventEnvelope[] = [];
+	for (const value of values) {
+		if (!isRecord(value)
+			|| !isRecord(value.event)
+			|| typeof value.digest !== "string"
+			|| typeof value.sourcePath !== "string") {
+			throw new Error("Cached shared configuration envelope is invalid.");
+		}
+		assertKnomoSharedConfigEvent(value.event);
+		const sourcePath = normalizePath(value.sourcePath);
+		if (sourcePath !== value.sourcePath
+			|| !sourcePath.startsWith(`${normalizedRoot}/writers/${value.event.writerId}/segments/`)) {
+			throw new Error("Cached shared configuration source path is invalid.");
+		}
+		const digest = await sha256KnomoSharedConfigText(canonicalKnomoSharedConfigJson(value.event));
+		if (digest !== value.digest) throw new Error("Cached shared configuration digest is invalid.");
+		envelopes.push({ event: value.event, digest, sourcePath });
+	}
+	return envelopes;
 }
 
 function listFiles(root: TFolder): TFile[] {

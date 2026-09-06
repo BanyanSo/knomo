@@ -359,6 +359,7 @@ export const en: Record<TranslationKey, string> = {
 	"settings.dataRoot.choose": "Choose folder",
 	"settings.dataRoot.change": "Change folder",
 	"settings.dataRoot.apply": "Use this folder",
+	"settings.dataRoot.initialize": "Initialize Knomo data",
 	"settings.dataRoot.cancel": "Cancel",
 	"settings.dataRoot.saving": "Applying...",
 	"settings.dataRoot.saved": "Knomo folder updated",

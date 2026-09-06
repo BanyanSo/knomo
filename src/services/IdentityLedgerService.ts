@@ -22,12 +22,14 @@ import type {
 	IdentityLedgerRebindEvent,
 	IdentityLedgerRebindReason,
 	IdentityLedgerReconcileResult,
+	IdentityLedgerReadHealth,
 	IdentityLedgerSnapshot,
 	IdentityLedgerStatus,
 	IdentityLedgerAttentionRoute,
 } from "../types/identityLedger";
 import {
 	canonicalIdentityLedgerJson,
+	assertIdentityLedgerEvent,
 	createIdentityLedgerEventId,
 	createIdentityLedgerMemoId,
 	getIdentityLedgerSegmentPath,
@@ -39,6 +41,8 @@ import {
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { identityOrderBetween, memoObservationSignature, observationIdentityEvidence as toObservationEvidence } from "./MemoObservationIdentity";
+import type { SharedReplicaCache } from "./SharedReplicaCache";
+import { isRecord } from "../utils/object";
 
 const LEGACY_IMPORT_SEGMENT_EVENT_LIMIT = 256;
 
@@ -62,6 +66,7 @@ export interface IdentityLedgerServiceOptions {
 	yieldControl?: () => Promise<void>;
 	sliceBudgetMs?: number;
 	monotonicNow?: () => number;
+	replicaCache?: SharedReplicaCache;
 }
 
 export interface HistoricalIdentityAdoptionResult {
@@ -77,7 +82,10 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private envelopes: IdentityLedgerEventEnvelope[] = [];
 	private snapshot: IdentityLedgerSnapshot = createEmptySnapshot();
 	private status: IdentityLedgerStatus = "unavailable";
+	private readHealth: IdentityLedgerReadHealth = "unavailable";
 	private scanErrorCount = 0;
+	private replicaCacheError = false;
+	private activeRootPath: string | null = null;
 	private onChanged: (() => void | Promise<void>) | null = null;
 	private notificationRequested = false;
 	private notificationRunning = false;
@@ -133,8 +141,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			await this.requestRefresh(false);
 		} catch (error) {
 			if (error instanceof IdentityLedgerRefreshCancelledError) return;
-			this.envelopes = [];
-			this.resetSnapshot(createEmptySnapshot());
+			this.readHealth = "unavailable";
 			this.status = "unavailable";
 		}
 	}
@@ -162,8 +169,16 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		return this.status;
 	}
 
+	getReadHealth(): IdentityLedgerReadHealth {
+		return this.readHealth;
+	}
+
+	isReplicaCacheDurable(): boolean {
+		return this.options.replicaCache?.isDurable() ?? false;
+	}
+
 	getAttentionRoute(): IdentityLedgerAttentionRoute {
-		if (this.status === "unavailable" || this.scanErrorCount > 0) return "settings_retry";
+		if (this.status === "unavailable" || this.scanErrorCount > 0 || this.replicaCacheError) return "settings_retry";
 		return this.snapshot.quarantinedEventIds.length > 0 ? "quarantine" : null;
 	}
 
@@ -244,6 +259,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		} = {},
 	): Promise<number> {
 		if (events.length === 0) return 0;
+		this.assertSharedWriteAllowed();
 		this.assertWriteAllowed(runtime.cancellationSignal);
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
 		const existingByEventId = new Map<string, IdentityLedgerEventEnvelope[]>();
@@ -326,6 +342,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			}
 			this.envelopes = mergeEnvelopes(this.envelopes, incoming);
 			await this.materialize();
+			this.activeRootPath = rootPath;
+			await this.saveKnownEnvelopesAfterWrite(rootPath);
 		} catch (error) {
 			if (!(error instanceof IdentityLedgerWriteCancelledError)) {
 				this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
@@ -958,6 +976,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		beforeWrite?: () => void | Promise<void>,
 	): Promise<void> {
 		if (events.length === 0) return;
+		this.assertSharedWriteAllowed();
 		if (this.writePauseCount > 0) throw new Error("Identity Ledger writes are paused for data root migration.");
 		const first = events[0];
 		if (first === undefined || events.some((event) => event.writerId !== first.writerId)) {
@@ -993,6 +1012,8 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			this.updateObservationBindingIndex(nextSnapshot, affectedMemoIds);
 			this.snapshot = nextSnapshot;
 			this.updateStatus();
+			this.activeRootPath = rootPath;
+			await this.saveKnownEnvelopesAfterWrite(rootPath);
 		} catch (error) {
 			if (!(error instanceof IdentityLedgerWriteCancelledError)) {
 				this.status = error instanceof MissingIdentityLedgerRootError ? "missing" : "unavailable";
@@ -1009,13 +1030,14 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		const rootPath = this.getRootPath();
 		if (rootPath === null) {
 			this.assertRefreshCurrent(generation);
-			this.setMissing();
+			this.setMissing(null);
 			return;
 		}
+		const knownEnvelopes = await this.loadKnownEnvelopes(rootPath, generation);
 		const root = this.app.vault.getAbstractFileByPath(rootPath);
 		if (root === null) {
 			this.assertRefreshCurrent(generation);
-			this.setMissing();
+			await this.commitRefreshedEnvelopes(rootPath, knownEnvelopes, 0, "waiting", generation);
 			return;
 		}
 		if (!(root instanceof TFolder)) throw new Error("Identity Ledger root is not a folder.");
@@ -1034,13 +1056,21 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			}
 		}
 		const runtime = this.createCooperativeRuntime(() => this.assertRefreshCurrent(generation));
-		const snapshot = await materializeIdentityLedger(envelopes, runtime);
+		const mergedEnvelopes = mergeEnvelopes(knownEnvelopes, envelopes);
+		const currentPaths = new Set(envelopes.map((envelope) => envelope.sourcePath));
+		const hasKnownGap = knownEnvelopes.some((envelope) => !currentPaths.has(envelope.sourcePath));
+		const snapshot = await materializeIdentityLedger(mergedEnvelopes, runtime);
 		const bindingIndex = await buildObservationBindingIndex(snapshot, runtime);
 		this.assertRefreshCurrent(generation);
-		this.envelopes = envelopes;
+		this.activeRootPath = rootPath;
+		this.envelopes = mergedEnvelopes;
 		this.scanErrorCount = errors;
 		this.commitSnapshot(snapshot, bindingIndex);
+		this.readHealth = errors > 0 || snapshot.quarantinedEventIds.length > 0
+			? "conflicted"
+			: hasKnownGap ? "waiting" : "usable";
 		this.updateStatus();
+		await this.saveKnownEnvelopes(rootPath, mergedEnvelopes, generation);
 	}
 
 	private async materialize(): Promise<void> {
@@ -1052,9 +1082,11 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	}
 
 	private updateStatus(): void {
-		this.status = this.scanErrorCount > 0 || this.snapshot.quarantinedEventIds.length > 0
+		this.status = this.readHealth === "conflicted" || this.snapshot.quarantinedEventIds.length > 0
 			? "conflicted"
-			: this.snapshot.eventCount === 0 ? "absent" : "ready";
+			: this.readHealth !== "usable"
+				? this.snapshot.eventCount === 0 ? "missing" : "unavailable"
+				: this.snapshot.eventCount === 0 ? "absent" : "ready";
 	}
 
 	private scheduleRefresh(notify = true, supersede = true): void {
@@ -1170,11 +1202,78 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		return rootPath;
 	}
 
-	private setMissing(): void {
-		this.envelopes = [];
-		this.resetSnapshot(createEmptySnapshot());
+	private setMissing(rootPath: string | null): void {
+		if (rootPath !== null && this.activeRootPath !== rootPath) {
+			this.envelopes = [];
+			this.resetSnapshot(createEmptySnapshot());
+			this.activeRootPath = rootPath;
+		}
 		this.scanErrorCount = 0;
-		this.status = "missing";
+		this.readHealth = "waiting";
+		this.updateStatus();
+	}
+
+	private async loadKnownEnvelopes(
+		rootPath: string,
+		generation: number,
+	): Promise<IdentityLedgerEventEnvelope[]> {
+		let known = this.activeRootPath === rootPath ? this.envelopes : [];
+		if (this.options.replicaCache === undefined) return [...known];
+		try {
+			const cached = await this.options.replicaCache.load("identity", rootPath);
+			this.assertRefreshCurrent(generation);
+			if (cached !== null) known = mergeEnvelopes(known, await validateCachedIdentityEnvelopes(rootPath, cached));
+			this.replicaCacheError = false;
+		} catch {
+			this.assertRefreshCurrent(generation);
+			this.replicaCacheError = true;
+		}
+		return [...known];
+	}
+
+	private async commitRefreshedEnvelopes(
+		rootPath: string,
+		envelopes: readonly IdentityLedgerEventEnvelope[],
+		scanErrorCount: number,
+		readHealth: IdentityLedgerReadHealth,
+		generation: number,
+	): Promise<void> {
+		const runtime = this.createCooperativeRuntime(() => this.assertRefreshCurrent(generation));
+		const snapshot = await materializeIdentityLedger(envelopes, runtime);
+		const bindingIndex = await buildObservationBindingIndex(snapshot, runtime);
+		this.assertRefreshCurrent(generation);
+		this.activeRootPath = rootPath;
+		this.envelopes = [...envelopes];
+		this.scanErrorCount = scanErrorCount;
+		this.commitSnapshot(snapshot, bindingIndex);
+		this.readHealth = snapshot.quarantinedEventIds.length > 0 ? "conflicted" : readHealth;
+		this.updateStatus();
+	}
+
+	private async saveKnownEnvelopes(
+		rootPath: string,
+		envelopes: readonly IdentityLedgerEventEnvelope[],
+		generation: number,
+	): Promise<void> {
+		if (this.options.replicaCache === undefined) return;
+		try {
+			await this.options.replicaCache.save("identity", rootPath, envelopes);
+			this.assertRefreshCurrent(generation);
+			this.replicaCacheError = false;
+		} catch {
+			this.assertRefreshCurrent(generation);
+			this.replicaCacheError = true;
+		}
+	}
+
+	private async saveKnownEnvelopesAfterWrite(rootPath: string): Promise<void> {
+		if (this.options.replicaCache === undefined) return;
+		try {
+			await this.options.replicaCache.save("identity", rootPath, this.envelopes);
+			this.replicaCacheError = false;
+		} catch {
+			this.replicaCacheError = true;
+		}
 	}
 
 	private async ensureFolder(rootPath: string, path: string, cancellationSignal?: AbortSignal): Promise<void> {
@@ -1215,6 +1314,12 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private assertWriteAllowed(cancellationSignal?: AbortSignal): void {
 		if (this.options.cancellationSignal?.aborted === true || cancellationSignal?.aborted === true) {
 			throw new IdentityLedgerWriteCancelledError();
+		}
+	}
+
+	private assertSharedWriteAllowed(): void {
+		if (this.readHealth !== "usable") {
+			throw new Error("Identity Ledger shared input is incomplete.");
 		}
 	}
 
@@ -1830,6 +1935,32 @@ function mergeEnvelopes(
 		`${item.sourcePath}\u0000${item.event.eventId}\u0000${item.digest}`,
 		item,
 	])).values()];
+}
+
+async function validateCachedIdentityEnvelopes(
+	rootPath: string,
+	values: readonly unknown[],
+): Promise<IdentityLedgerEventEnvelope[]> {
+	const normalizedRoot = normalizePath(rootPath);
+	const envelopes: IdentityLedgerEventEnvelope[] = [];
+	for (const value of values) {
+		if (!isRecord(value)
+			|| !isRecord(value.event)
+			|| typeof value.digest !== "string"
+			|| typeof value.sourcePath !== "string") {
+			throw new Error("Cached Identity Ledger envelope is invalid.");
+		}
+		assertIdentityLedgerEvent(value.event);
+		const sourcePath = normalizePath(value.sourcePath);
+		if (sourcePath !== value.sourcePath
+			|| !sourcePath.startsWith(`${normalizedRoot}/writers/${value.event.writerId}/segments/`)) {
+			throw new Error("Cached Identity Ledger source path is invalid.");
+		}
+		const digest = await sha256IdentityLedgerText(canonicalIdentityLedgerJson(value.event));
+		if (digest !== value.digest) throw new Error("Cached Identity Ledger digest is invalid.");
+		envelopes.push({ event: value.event, digest, sourcePath });
+	}
+	return envelopes;
 }
 
 function listSegmentFiles(root: TFolder): TFile[] {

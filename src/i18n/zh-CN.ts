@@ -357,6 +357,7 @@ export const zhCN = {
 	"settings.dataRoot.choose": "选择位置",
 	"settings.dataRoot.change": "更改位置",
 	"settings.dataRoot.apply": "应用此位置",
+	"settings.dataRoot.initialize": "初始化 Knomo 数据",
 	"settings.dataRoot.cancel": "取消",
 	"settings.dataRoot.saving": "正在处理...",
 	"settings.dataRoot.saved": "Knomo 文件位置已更新",

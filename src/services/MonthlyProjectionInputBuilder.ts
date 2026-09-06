@@ -17,13 +17,22 @@ import { DiaryMemoParser } from "./DiaryMemoParser";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
-export interface MonthlyProjectionBuildResult {
+export interface CompleteMonthlyProjectionBuildResult {
+	status: "complete";
 	period: string;
 	observations: MemoObservation[];
 	settings: MonthlyProjectionSettings;
 	sourceDigest: string;
 	sourcePaths: string[];
 }
+
+export interface IncompleteMonthlyProjectionBuildResult {
+	status: "incomplete";
+	period: string;
+	unavailableSourcePaths: string[];
+}
+
+export type MonthlyProjectionBuildResult = CompleteMonthlyProjectionBuildResult | IncompleteMonthlyProjectionBuildResult;
 
 export interface MonthlyProjectionInputBuilderOptions {
 	getDailyConfig: () => DailyNotesConfig | Promise<DailyNotesConfig>;
@@ -85,13 +94,22 @@ export class MonthlyProjectionInputBuilder {
 			observationCount: number;
 		}> = [];
 		const observations: MemoObservation[] = [];
-		for (const { sourcePath, logicalDate } of this.dailyInventory.listPeriod(period)) {
+		const inventory = this.dailyInventory.listPeriod(period);
+		for (const { sourcePath, logicalDate } of inventory) {
 			const file = this.app.vault.getAbstractFileByPath(sourcePath);
-			if (!(file instanceof TFile)) continue;
+			if (!(file instanceof TFile)) {
+				return { status: "incomplete", period, unavailableSourcePaths: [sourcePath] };
+			}
+			let bytes: ArrayBuffer;
+			try {
+				bytes = await this.app.vault.readBinary(file);
+			} catch {
+				return { status: "incomplete", period, unavailableSourcePaths: [sourcePath] };
+			}
 			const parsed = await this.parser.parse({
 				sourcePath,
 				logicalDate,
-				bytes: new Uint8Array(await this.app.vault.readBinary(file)),
+				bytes: new Uint8Array(bytes),
 			}, runtime);
 			parsedFiles.push({
 				sourcePath: file.path,
@@ -112,6 +130,7 @@ export class MonthlyProjectionInputBuilder {
 			targetPath: getMonthlyArchivePath(settings, period),
 		}));
 		return {
+			status: "complete",
 			period,
 			observations,
 			settings,

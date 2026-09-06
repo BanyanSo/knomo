@@ -412,7 +412,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 				new KnomoFolderSuggest(this.app, text.inputEl, (value) => { this.dataRootDraft = value; });
 			})
 			.addButton((button) => {
-				button.setButtonText(t("settings.dataRoot.apply"));
+				button.setButtonText(settings.knomoDataRootConfigured
+					? t("settings.dataRoot.apply")
+					: t("settings.dataRoot.initialize"));
 				button.onClick(() => {
 					void (async () => {
 						const saved = await this.saveKnomoDataRoot(this.dataRootDraft ?? settings.knomoDataRoot, button);
@@ -796,6 +798,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 					return false;
 				}
 			}
+			if (plan.action === "initialize" && !currentSettings.knomoDataRootConfigured
+				&& this.startupBootstrapService !== null) {
+				await this.startupBootstrapService.initializeNewDataRoot(knomoDataRoot);
+				new Notice(t("settings.dataRoot.saved"));
+				return true;
+			}
 			await this.knomoDataRootMigrationService.migrate(knomoDataRoot);
 			await this.knomoSharedConfigService.reloadConfiguredRoot();
 			await this.syncSharedConfiguration();
@@ -808,7 +816,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return false;
 		} finally {
 			button.setDisabled(false);
-			button.setButtonText(t("settings.dataRoot.apply"));
+			button.setButtonText(this.settingsService.getSettings().knomoDataRootConfigured
+				? t("settings.dataRoot.apply")
+				: t("settings.dataRoot.initialize"));
 		}
 	}
 

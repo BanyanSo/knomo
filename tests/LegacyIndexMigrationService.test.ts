@@ -10,6 +10,7 @@ import {
 	sha256IdentityLedgerText,
 } from "../src/services/IdentityLedgerProtocol";
 import { LegacyIndexMigrationService } from "../src/services/LegacyIndexMigrationService";
+import { LEGACY_MIGRATION_COMPLETION_META_KEY } from "../src/services/LegacyIndexMigrationService";
 import { LegacyIndexReader } from "../src/services/LegacyIndexReader";
 import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
@@ -77,12 +78,13 @@ test("1.2.9 幂等迁移不改源文件，后续新增不续接旧身份且重�
 	const completionStore = new InMemoryMemoCatalogStore();
 	let sourceLoadCount = 0;
 	let observationBatchReadCount = 0;
+	let sourceMissing = false;
 	const source = {
-		inspect: () => reader.inspect(),
+		inspect: () => sourceMissing ? ({ kind: "missing" as const }) : reader.inspect(),
 		isSourcePath: (path: string) => reader.isSourcePath(path),
 		load: async () => {
 			sourceLoadCount += 1;
-			return reader.load();
+			return sourceMissing ? ({ kind: "missing" as const }) : reader.load();
 		},
 	};
 	const migration = new LegacyIndexMigrationService(vault.app, source, target, {
@@ -188,11 +190,11 @@ test("1.2.9 幂等迁移不改源文件，后续新增不续接旧身份且重�
 	let retainedSourceLoadCount = 0;
 	let retainedObservationBatchReadCount = 0;
 	const retainedMigration = new LegacyIndexMigrationService(vault.app, {
-		inspect: () => reader.inspect(),
+		inspect: () => sourceMissing ? ({ kind: "missing" as const }) : reader.inspect(),
 		isSourcePath: (path) => reader.isSourcePath(path),
 		load: async () => {
 			retainedSourceLoadCount += 1;
-			return reader.load();
+			return sourceMissing ? ({ kind: "missing" as const }) : reader.load();
 		},
 	}, retainedTarget, {
 		getCatalogCoverage: async () => completeCoverage(),
@@ -218,6 +220,15 @@ test("1.2.9 幂等迁移不改源文件，后续新增不续接旧身份且重�
 		lastReviewedAt: "2026-08-22T05:00:00.000Z",
 	});
 	assert.equal(retainedTarget.getActiveDeletes()[0]?.evidence.rawBlock, deletedRawBlock);
+	sourceMissing = true;
+	assert.equal((await retainedMigration.run({ sourceChanged: true })).status, "not_applicable");
+	assert.notEqual(await completionStore.getMeta(LEGACY_MIGRATION_COMPLETION_META_KEY), null);
+	sourceMissing = false;
+	const restoredSameRevision = await retainedMigration.run({ sourceChanged: true });
+	assert.equal(restoredSameRevision.status, "ready");
+	assert.equal(restoredSameRevision.importedEventCount, 0);
+	assert.equal(retainedSourceLoadCount, 1);
+	assert.equal(retainedObservationBatchReadCount, 0);
 	vault.replace(PLUGIN_DATA_PATH, JSON.stringify({
 		settings: {},
 		randomReunionReviewStates: {
@@ -230,7 +241,7 @@ test("1.2.9 幂等迁移不改源文件，后续新增不续接旧身份且重�
 	}));
 	const changedReport = await retainedMigration.run({ sourceChanged: true });
 	assert.equal(changedReport.status, "partial");
-	assert.equal(retainedSourceLoadCount, 1);
+	assert.equal(retainedSourceLoadCount, 2);
 	assert.equal(retainedObservationBatchReadCount, 1);
 
 	const restartedVault = new InMemoryVault(Object.fromEntries(

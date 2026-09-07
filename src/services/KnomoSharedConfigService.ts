@@ -120,6 +120,27 @@ export class KnomoSharedConfigService {
 		this.notifyChanged();
 	}
 
+	/** 重读当前共享文件，不把已缺失文件的本机副本重新混入。 */
+	async rebuildReplicaFromVault(): Promise<void> {
+		await this.runWithWritesPaused(async () => {
+			this.refreshGeneration += 1;
+			await this.refreshOperation?.catch((error: unknown) => {
+				if (!(error instanceof KnomoSharedConfigRefreshCancelledError)) throw error;
+			});
+			const rootPath = this.getRootPath();
+			if (rootPath === null) throw new Error("Shared configuration root is not configured.");
+			await ensureVaultFolder(this.app, rootPath);
+			await this.options.replicaCache?.save("config", rootPath, []);
+			this.envelopes = [];
+			this.snapshot = createEmptySnapshot();
+			this.activeRootPath = rootPath;
+			await this.initialize();
+			if (this.getStatus() === "unavailable" || this.getStatus() === "conflicted") {
+				throw new Error(this.getLastError() ?? "Shared configuration cannot be rebuilt.");
+			}
+		});
+	}
+
 	async refreshLocalConfig(): Promise<void> {
 		this.localConfig = await this.readLocalConfig();
 		this.notifyChanged();

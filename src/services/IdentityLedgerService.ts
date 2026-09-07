@@ -43,6 +43,9 @@ import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { identityOrderBetween, memoObservationSignature, observationIdentityEvidence as toObservationEvidence } from "./MemoObservationIdentity";
 import type { SharedReplicaCache } from "./SharedReplicaCache";
 import { isRecord } from "../utils/object";
+import { assertIdentityCurrentState, compactIdentityState, currentIdentityEnvelopes, normalizeCurrentIdentitySnapshot } from "./IdentityCurrentState";
+import type { IdentityCurrentState } from "./IdentityCurrentState";
+import type { KnomoCurrentStateStore } from "./KnomoCurrentStateStore";
 
 const LEGACY_IMPORT_SEGMENT_EVENT_LIMIT = 256;
 
@@ -67,6 +70,7 @@ export interface IdentityLedgerServiceOptions {
 	sliceBudgetMs?: number;
 	monotonicNow?: () => number;
 	replicaCache?: SharedReplicaCache;
+	currentStateStore?: KnomoCurrentStateStore;
 }
 
 export interface HistoricalIdentityAdoptionResult {
@@ -80,6 +84,7 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	private readonly createMemoId: () => string;
 	private readonly createEventId: () => string;
 	private envelopes: IdentityLedgerEventEnvelope[] = [];
+	private currentReviews: IdentityCurrentState["reviews"] = {};
 	private snapshot: IdentityLedgerSnapshot = createEmptySnapshot();
 	private status: IdentityLedgerStatus = "unavailable";
 	private readHealth: IdentityLedgerReadHealth = "unavailable";
@@ -149,6 +154,25 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 	async reloadConfiguredRoot(notify = true): Promise<void> {
 		await this.initialize();
 		if (notify) await this.notifyChanged();
+	}
+
+	/** 仅在用户确认重建后丢弃本机副本；磁盘上可读取的身份及回收站继续保留。 */
+	async rebuildReplicaFromVault(): Promise<void> {
+		await this.runWithWritesPaused(async () => {
+			this.refreshGeneration += 1;
+			await this.refreshOperation?.catch((error: unknown) => {
+				if (!(error instanceof IdentityLedgerRefreshCancelledError)) throw error;
+			});
+			const rootPath = this.getRootPath();
+			if (rootPath === null) throw new MissingIdentityLedgerRootError();
+			await ensureVaultFolder(this.app, rootPath);
+			await this.options.replicaCache?.save("identity", rootPath, []);
+			this.envelopes = [];
+			this.resetSnapshot(createEmptySnapshot());
+			this.activeRootPath = rootPath;
+			await this.initialize();
+			if (this.getReadHealth() !== "usable") throw new Error("Identity data cannot be rebuilt while files are unreadable or conflicted.");
+		});
 	}
 
 	async runWithWritesPaused<T>(operation: () => Promise<T>): Promise<T> {
@@ -320,6 +344,11 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			this.assertWriteAllowed(runtime.cancellationSignal);
 			const rootPath = this.requireRootPath();
 			const incoming: IdentityLedgerEventEnvelope[] = [];
+			if (this.options.currentStateStore !== undefined) {
+				if (runtime.isCurrent !== undefined && !await runtime.isCurrent()) throw new IdentityLedgerWriteCancelledError();
+				await this.persistCurrentEvents(pendingEvents, rootPath);
+				return pendingEvents.length;
+			}
 			const byWriter = new Map<string, IdentityLedgerEvent[]>();
 			for (const event of pendingEvents) {
 				const writerEvents = byWriter.get(event.writerId) ?? [];
@@ -834,7 +863,9 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			}
 			this.requireActiveDelete(deleteRecord);
 		});
-		if (this.snapshot.memos[active.memoId]?.purgedDeleteEventIds?.includes(active.deleteEventId) !== true) {
+		if (this.options.currentStateStore !== undefined
+			? this.getActiveDeletes().some((record) => record.deleteEventId === active.deleteEventId)
+			: this.snapshot.memos[active.memoId]?.purgedDeleteEventIds?.includes(active.deleteEventId) !== true) {
 			throw new Error("Identity Ledger permanent delete did not materialize.");
 		}
 	}
@@ -997,6 +1028,11 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 			await beforeWrite?.();
 			const rootPath = this.requireRootPath();
 			const content = serializeIdentityLedgerSegment(events);
+			if (this.options.currentStateStore !== undefined) {
+				await this.persistCurrentEvents(events, rootPath);
+				if (notify) this.scheduleNotification();
+				return;
+			}
 			const digest = await sha256IdentityLedgerText(content);
 			const path = getIdentityLedgerSegmentPath(rootPath, first.writerId, first.eventId, digest);
 			this.assertWriteAllowed();
@@ -1029,12 +1065,51 @@ export class IdentityLedgerService implements IdentityLedgerMutationService {
 		if (notify) this.scheduleNotification();
 	}
 
+	private async persistCurrentEvents(events: readonly IdentityLedgerEvent[], rootPath: string): Promise<void> {
+		this.refreshGeneration += 1;
+		const incoming = await currentIdentityEnvelopes(events, rootPath);
+		const merged = mergeEnvelopes(this.envelopes, incoming);
+		const snapshot = await normalizeCurrentIdentitySnapshot(await materializeIdentityLedger(merged), this.currentReviews);
+		const state = compactIdentityState(snapshot, merged);
+		this.assertWriteAllowed();
+		await this.options.currentStateStore!.setMeta("identity", state);
+		this.assertWriteAllowed();
+		this.currentReviews = state.reviews;
+		this.envelopes = await currentIdentityEnvelopes(state.bindings, rootPath);
+		const compacted = await normalizeCurrentIdentitySnapshot(await materializeIdentityLedger(this.envelopes), this.currentReviews);
+		this.commitSnapshot(compacted, await buildObservationBindingIndex(compacted));
+		this.activeRootPath = rootPath;
+		this.readHealth = "usable";
+		this.updateStatus();
+	}
+
 	private async refreshFromVault(generation = this.refreshGeneration): Promise<void> {
 		this.assertRefreshCurrent(generation);
 		const rootPath = this.getRootPath();
 		if (rootPath === null) {
 			this.assertRefreshCurrent(generation);
 			this.setMissing(null);
+			return;
+		}
+		if (this.options.currentStateStore !== undefined) {
+			await this.writeQueue;
+			const state = await this.options.currentStateStore.getMeta<unknown>("identity");
+			this.assertRefreshCurrent(generation);
+			if (state !== null) assertIdentityCurrentState(state);
+			const current = state as IdentityCurrentState | null;
+			const envelopes = await currentIdentityEnvelopes(current?.bindings ?? [], rootPath);
+			const reviews = current?.reviews ?? {};
+			const snapshot = await normalizeCurrentIdentitySnapshot(await materializeIdentityLedger(envelopes), reviews);
+			const index = await buildObservationBindingIndex(snapshot);
+			this.assertRefreshCurrent(generation);
+			this.envelopes = envelopes;
+			this.currentReviews = reviews;
+			this.commitSnapshot(snapshot, index);
+			this.activeRootPath = rootPath;
+			this.readHealth = this.app.vault.getAbstractFileByPath(rootPath) === null ? "waiting" : "usable";
+			this.scanErrorCount = 0;
+			this.replicaCacheError = false;
+			this.updateStatus();
 			return;
 		}
 		const knownEnvelopes = await this.loadKnownEnvelopes(rootPath, generation);

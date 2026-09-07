@@ -19,6 +19,12 @@ export class IdentityRevisionTransitionQueue {
 
 	constructor(private readonly options: IdentityRevisionTransitionQueueOptions) {}
 
+	async clearForRebuild(): Promise<void> {
+		this.pendingByPath.clear();
+		this.initialized = true;
+		await this.options.store.deleteMeta(IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY);
+	}
+
 	async enqueue(transition: CatalogRevisionTransition): Promise<void> {
 		await this.initialize();
 		const sourcePath = normalizePath(transition.sourcePath);

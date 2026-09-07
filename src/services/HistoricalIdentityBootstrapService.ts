@@ -44,6 +44,7 @@ interface HistoricalIdentityBootstrapTarget {
 }
 
 export interface HistoricalIdentityBootstrapServiceOptions {
+	autoAdoptCurrentDaily?: () => boolean;
 	getCatalogCoverage: () => Promise<CatalogCoverage>;
 	getCatalogLifecycle: () => CatalogStoreLifecycle;
 	getObservationBatches: () => Promise<readonly CatalogFileRevisionBatch<MemoObservation>[]>;
@@ -68,10 +69,12 @@ export class HistoricalIdentityBootstrapService {
 		return this.status;
 	}
 
-	async authorizeInitialImport(dataRoot: string): Promise<HistoricalIdentityBootstrapStatus> {
+	async waitForIdle(): Promise<void> { await this.runQueue; }
+
+	async authorizeInitialImport(dataRoot: string, rebuild = false): Promise<HistoricalIdentityBootstrapStatus> {
 		const authorizationRoot = normalizeVaultPath(dataRoot);
 		const checkpoint = await this.loadCheckpoint();
-		if (checkpoint?.reason === "initial_import" && checkpoint.authorizationRoot === authorizationRoot) {
+		if (!rebuild && checkpoint?.reason === "initial_import" && checkpoint.authorizationRoot === authorizationRoot) {
 			this.setStatus(checkpoint.state === "completed" ? "completed" : "pending");
 			return this.status;
 		}
@@ -121,6 +124,10 @@ export class HistoricalIdentityBootstrapService {
 
 	private async runOnce(legacyStatus: LegacyIdentityImportStatus): Promise<HistoricalIdentityBootstrapStatus> {
 		try {
+			if (this.options.autoAdoptCurrentDaily?.() && (legacyStatus === "not_applicable" || legacyStatus === "ready")) {
+				this.setStatus("pending");
+				legacyStatus = "not_applicable";
+			}
 			if (this.status === "idle" || this.status === "failed") await this.initializeEligibility();
 			if (this.status === "completed") {
 				return this.status;

@@ -114,8 +114,23 @@ test("局部 observation 冲突无顶部提示，只有可重试 Ledger 故障�
 	assert.deepEqual(local, []);
 	assert.equal(
 		ledger[0]?.type === "summary" ? ledger[0].action?.action : undefined,
-		"open-catalog-settings",
+		"refresh-catalog-sync-state",
 	);
+});
+
+test("Identity 输入缺失的可重试提示不冒充身份冲突", () => {
+	const headers = getCatalogReadStatusHeaders({
+		status: { content: "ready", catalog: "partial", identity: "syncing", identityAttention: "settings_retry", projection: "ready", migration: "none" },
+		coverage: completeCoverage,
+	});
+	assert.equal(headers.length, 2);
+	assert.equal(headers[1]?.type === "summary" ? headers[1].action?.action : null, "rebuild-knomo-basic-data");
+	const header = headers[0];
+	assert.equal(header?.type, "summary");
+	if (header?.type !== "summary") return;
+	assert.match(header.text, /cannot be fully read/u);
+	assert.doesNotMatch(header.text, /conflict/u);
+	assert.equal(header.action?.action, "refresh-catalog-sync-state");
 });
 
 test("正常中间态始终不显示，但不隐藏可操作故障", () => {

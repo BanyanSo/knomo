@@ -104,6 +104,8 @@ export class LegacyIndexMigrationService {
 		return cloneReport(this.report);
 	}
 
+	async waitForIdle(): Promise<void> { await this.runQueue; }
+
 	run(options: LegacyIndexMigrationRunOptions = {}): Promise<LegacyIdentityImportReport> {
 		if (options.sourceChanged === true) this.sourceChangeRevision += 1;
 		this.runQueue = this.runQueue.then(

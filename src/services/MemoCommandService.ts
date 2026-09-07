@@ -1,5 +1,6 @@
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
+import { KnomoMutationBarrier } from "./KnomoMutationBarrier";
 
 import type { CatalogRefreshResult, ResolvedMemo } from "../types/catalog";
 import type {
@@ -55,6 +56,7 @@ export interface MemoReferenceResult extends MutationFollowUpState {
 }
 
 export class MemoCommandService {
+	private readonly mutationBarrier = new KnomoMutationBarrier();
 	private readonly now: () => Date;
 	private readonly readService: CatalogReadService;
 
@@ -66,6 +68,20 @@ export class MemoCommandService {
 		private readonly identityLedger: IdentityLedgerMutationService,
 	) {
 		this.now = options.now ?? (() => new Date());
+		this.adoptMemo = this.mutationBarrier.wrap(this.adoptMemo.bind(this));
+		this.createInternal = this.mutationBarrier.wrap(this.createInternal.bind(this));
+		this.copy = this.mutationBarrier.wrap(this.copy.bind(this));
+		this.move = this.mutationBarrier.wrap(this.move.bind(this));
+		this.repairIdentity = this.mutationBarrier.wrap(this.repairIdentity.bind(this));
+		this.editInternal = this.mutationBarrier.wrap(this.editInternal.bind(this));
+		this.toggleTask = this.mutationBarrier.wrap(this.toggleTask.bind(this));
+		this.removePermanently = this.mutationBarrier.wrap(this.removePermanently.bind(this));
+		this.prepareRecoverableDelete = this.mutationBarrier.wrap(this.prepareRecoverableDelete.bind(this));
+		this.delete = this.mutationBarrier.wrap(this.delete.bind(this));
+		this.restore = this.mutationBarrier.wrap(this.restore.bind(this));
+		this.purge = this.mutationBarrier.wrap(this.purge.bind(this));
+		this.createReferenceText = this.mutationBarrier.wrap(this.createReferenceText.bind(this));
+		this.recordReview = this.mutationBarrier.wrap(this.recordReview.bind(this));
 		this.readService = new CatalogReadService({
 			catalog,
 			identityLedger,
@@ -83,6 +99,10 @@ export class MemoCommandService {
 
 	getReadService(): CatalogReadService {
 		return this.readService;
+	}
+
+	runWithMutationsPaused<T>(action: () => Promise<T>): Promise<T> {
+		return this.mutationBarrier.runPaused(action);
 	}
 
 	async rebuildLocalCatalog(): Promise<void> {

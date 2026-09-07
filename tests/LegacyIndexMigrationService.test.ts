@@ -3,6 +3,11 @@ import test from "node:test";
 
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
+import { KnomoStartupBootstrapService } from "../src/services/KnomoStartupBootstrapService";
+import { KnomoDataRootMigrationService } from "../src/services/KnomoDataRootMigrationService";
+import { KnomoCurrentStateStore } from "../src/services/KnomoCurrentStateStore";
+import { KnomoBootstrapStateStore } from "../src/services/KnomoBootstrapStateStore";
+import { normalizeSettings } from "../src/settings/normalizeSettings";
 import {
 	canonicalIdentityLedgerJson,
 	createIdentityLedgerMemoId,
@@ -24,6 +29,36 @@ const LEGACY_MEMO_C = "2026082209000003";
 const IDENTITY_ROOT = getIdentityLedgerRootPath("Knomo");
 const LEGACY_INDEX_PATH = "Knomo/_knomo-system/indexes/memo-index-2026-08.json";
 const PLUGIN_DATA_PATH = ".obsidian/plugins/knomo/data.json";
+
+test("1.2.9 迁入当前身份状态后删除缓存重启不重复导入", async () => {
+	const path = "Daily/2026-08-22.md";
+	const raw = "- 09:00 正文";
+	const vault = new InMemoryVault({
+		[path]: raw,
+		[LEGACY_INDEX_PATH]: JSON.stringify({ schemaVersion: 2, period: "2026-08", updatedAt: "2026-08-22T10:00:00.000Z",
+			memos: { [LEGACY_MEMO_A]: legacyMemoRecord({ memoId: LEGACY_MEMO_A, createdAt: "2026-08-22T09:00:00.000Z", path, rawBlock: raw, content: "正文" }) } }),
+	});
+	await vault.app.vault.createFolder(IDENTITY_ROOT);
+	const observation = makeObservation(path, raw, "正文");
+	for (let run = 0; run < 2; run++) {
+		const target = new IdentityLedgerService(vault.app, { getRootPath: () => IDENTITY_ROOT,
+			getWriterId: async () => "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			currentStateStore: new KnomoCurrentStateStore(vault.app, () => IDENTITY_ROOT, "current") });
+		await target.initialize();
+		const completionStore = new KnomoBootstrapStateStore(new KnomoCurrentStateStore(vault.app, () => "Knomo"));
+		const migration = new LegacyIndexMigrationService(vault.app, new LegacyIndexReader(vault.app, "knomo", () => "Knomo"), target, {
+			getCatalogCoverage: async () => completeCoverage(),
+			getObservationBatches: async () => [{ file: { sourcePath: path, sourceRevision: observation.sourceRevision, logicalDate: observation.logicalDate,
+				mtime: 0, size: raw.length, parserVersion: 3, settingsFingerprint: "test", observationCount: 1, auditedAt: 0 }, observations: [observation], catalogRevision: 1 }],
+			completionStore,
+		});
+		const report = await migration.run();
+		assert.equal(report.status, "ready", JSON.stringify(report));
+		assert.equal(target.resolveObservation(observation)?.memoId, LEGACY_MEMO_A);
+		if (run === 1) assert.equal(report.importedEventCount, 0);
+	}
+	assert.equal(vault.paths().some((path) => path.endsWith(".jsonl") || path.includes("receipts")), false);
+});
 
 test("1.2.9 幂等迁移不改源文件，后续新增不续接旧身份且重启保留迁移状态", async () => {
 	const activeRawBlock = "- 09:00 正文";
@@ -69,10 +104,27 @@ test("1.2.9 幂等迁移不改源文件，后续新增不续接旧身份且重�
 		[LEGACY_INDEX_PATH]: legacyIndex,
 		[PLUGIN_DATA_PATH]: pluginData,
 	});
-	await vault.app.vault.createFolder(IDENTITY_ROOT);
-	await vault.app.vault.createFolder(`${IDENTITY_ROOT}/writers`);
 	const target = createIdentityService(vault);
-	await target.initialize();
+	let settings = normalizeSettings({ monthlyMemoFolder: "Knomo" });
+	const rootMigration = new KnomoDataRootMigrationService(vault.app, target, () => settings,
+		async (root) => { settings = { ...settings, knomoDataRoot: root, knomoDataRootConfigured: true }; });
+	(vault.app as unknown as { workspace: unknown }).workspace = { layoutReady: true };
+	let configReady = false;
+	const startup = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => settings,
+		initializeDataRoot: async (root) => { await rootMigration.migrate(root); },
+		identity: target,
+		sharedConfig: {
+			initialize: async () => undefined,
+			getStatus: () => configReady ? "ready" : "missing",
+			getLastError: () => null,
+			publishLocalConfig: async () => { configReady = true; },
+			resolveWithLocalConfig: async () => { throw new Error("升级不应解决冲突"); },
+		},
+	});
+	await startup.initialize();
+	assert.equal(startup.getSnapshot().status, "ready");
+	assert.equal(settings.knomoDataRootConfigured, true);
 	const observation = makeObservation(dailyPath, activeRawBlock, "正文");
 	const reader = new LegacyIndexReader(vault.app, "knomo", () => "Knomo");
 	const completionStore = new InMemoryMemoCatalogStore();

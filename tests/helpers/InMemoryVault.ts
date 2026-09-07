@@ -65,6 +65,8 @@ export class InMemoryVault {
 	}
 
 	remove(path: string): void {
+		const parent = this.files.get(path.slice(0, path.lastIndexOf("/")));
+		if (parent instanceof TFolder) parent.children = parent.children.filter((child) => child.path !== path);
 		this.files.delete(path);
 		this.contents.delete(path);
 	}

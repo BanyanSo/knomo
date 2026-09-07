@@ -23,6 +23,7 @@ export interface KnomoStartupBootstrapOptions {
 	getLocation: () => KnomoDataRootLocation;
 	initializeDataRoot: (dataRoot: string) => Promise<void>;
 	authorizeInitialImport?: (dataRoot: string) => Promise<void>;
+	hasPendingInitialImport?: () => Promise<boolean>;
 	onNewDataRootReady?: () => Promise<void>;
 	identity: StartupIdentityService;
 	sharedConfig: StartupSharedConfigService;
@@ -119,17 +120,19 @@ export class KnomoStartupBootstrapService {
 
 	private async runOnce(mode: BootstrapMode, requestedDataRoot: string | null): Promise<void> {
 		let stage: KnomoStartupBootstrapStage = "data_root";
+		let initializingRoot = mode === "initialize_new";
 		this.setInitializing(stage);
 		try {
 			await this.waitForLayoutReady();
 			this.throwIfCancelled();
 			let location = this.options.getLocation();
 			if (!location.knomoDataRootConfigured) {
-				if (mode !== "initialize_new") {
+				if (mode !== "initialize_new" && mode !== "initialize") {
 					this.snapshot = { status: "unconfigured", stage, error: null };
 					return;
 				}
 				const dataRoot = requestedDataRoot ?? location.knomoDataRoot;
+				initializingRoot = true;
 				await this.options.authorizeInitialImport?.(dataRoot);
 				this.throwIfCancelled();
 				await this.options.initializeDataRoot(dataRoot);
@@ -173,7 +176,11 @@ export class KnomoStartupBootstrapService {
 				await this.options.sharedConfig.resolveWithLocalConfig();
 				this.throwIfCancelled();
 			} else if (sharedStatus === "missing") {
-				if (mode !== "initialize_new" && mode !== "use_current_device") {
+				if (mode === "initialize" && !initializingRoot) {
+					initializingRoot = await this.options.hasPendingInitialImport?.() ?? false;
+					this.throwIfCancelled();
+				}
+				if (!initializingRoot && mode !== "use_current_device") {
 					this.snapshot = { status: "unconfigured", stage, error: null };
 					return;
 				}
@@ -196,7 +203,7 @@ export class KnomoStartupBootstrapService {
 				throw new Error(this.options.sharedConfig.getLastError() ?? "Shared configuration verification failed.");
 			}
 			this.snapshot = { status: "ready", stage: null, error: null };
-			if (mode === "initialize_new") await this.options.onNewDataRootReady?.();
+			if (initializingRoot) await this.options.onNewDataRootReady?.();
 		} catch (error) {
 			if (error instanceof KnomoStartupCancelledError || this.options.cancellationSignal?.aborted === true) {
 				throw new KnomoStartupCancelledError();

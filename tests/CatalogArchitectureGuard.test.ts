@@ -73,7 +73,7 @@ test("当前共享协议使用稳定目录且不携带开发期版本字段", as
 	assert.equal(fs.readFileSync("src/services/LegacyIndexReader.ts", "utf8").includes("schemaVersion"), true);
 });
 
-test("生产装配不依赖固定双槽 publisher，tracked contract 不读取本地 architecture", () => {
+test("生产装配使用当前状态而非永久回执，tracked contract 不读取本地 architecture", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	for (const retired of [
 		"IdentityPublicationStore",
@@ -86,7 +86,9 @@ test("生产装配不依赖固定双槽 publisher，tracked contract 不读取�
 	]) {
 		assert.equal(main.includes(retired), false, `main.ts must not wire retired ${retired}.`);
 	}
-	assert.equal(main.includes("new IdentityReceiptStore(this.app"), true);
+	assert.equal(main.includes("new IdentityReceiptStore(this.app"), false);
+	assert.equal(main.includes("new KnomoBootstrapStateStore("), true);
+	assert.equal(main.includes("currentStateStore: new KnomoCurrentStateStore("), true);
 	assert.equal(main.includes("getIdentityLedgerRootPath(settings.knomoDataRoot)"), true);
 	assert.equal(main.includes("getKnomoSharedConfigRootPath(settings.knomoDataRoot)"), true);
 

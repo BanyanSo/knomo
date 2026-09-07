@@ -33,6 +33,9 @@ import { KnomoDataRootMigrationService } from "./services/KnomoDataRootMigration
 import { buildKnomoSharedConfig, getKnomoSharedConfigRootPath } from "./services/KnomoSharedConfigProtocol";
 import { KnomoSharedConfigService } from "./services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
+import { KnomoAutomaticRecovery } from "./services/KnomoAutomaticRecovery";
+import { KnomoBasicDataRecovery } from "./services/KnomoBasicDataRecovery";
+import { KnomoCurrentStateStore } from "./services/KnomoCurrentStateStore";
 import {
 	LegacyIndexMigrationService,
 } from "./services/LegacyIndexMigrationService";
@@ -48,7 +51,7 @@ import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
 import { PluginDataStore } from "./services/PluginDataStore";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SharedReplicaCache, SHARED_REPLICA_CACHE_META_KEYS } from "./services/SharedReplicaCache";
-import { IdentityReceiptStore } from "./services/IdentityReceiptStore";
+import { KnomoBootstrapStateStore } from "./services/KnomoBootstrapStateStore";
 import { SettingsService } from "./services/SettingsService";
 import { ShuffleDayService } from "./services/ShuffleDayService";
 import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
@@ -129,17 +132,16 @@ export default class KnomoPlugin extends Plugin {
 			getWriterId: () => localWriterIdentityService.getWriterId(),
 			cancellationSignal: lowPriorityWorkQueue.signal,
 			replicaCache: sharedReplicaCache,
-		});
-		const identityReceiptStore = new IdentityReceiptStore(this.app, {
-			getRootPath: () => {
+			currentStateStore: new KnomoCurrentStateStore(this.app, () => {
 				const settings = this.settingsService.getSettings();
-				return settings.knomoDataRootConfigured ? settings.knomoDataRoot : null;
-			},
-			getWriterId: () => localWriterIdentityService.getWriterId(),
-			getKnownIdentityEventIds: () => identityLedgerService.getKnownIdentityEventIds(),
-			getIdentitySnapshot: () => identityLedgerService.getSnapshot(),
-			legacyReceiptStore: this.memoCatalogService.getStore(),
+				return getIdentityLedgerRootPath(settings.knomoDataRoot);
+			}, "current", lowPriorityWorkQueue.signal),
 		});
+		let initializingReceiptRoot: string | null = null;
+		const identityReceiptStore = new KnomoBootstrapStateStore(new KnomoCurrentStateStore(this.app, () => {
+				const settings = this.settingsService.getSettings();
+				return initializingReceiptRoot ?? settings.knomoDataRoot;
+		}, "_knomo-data/state", lowPriorityWorkQueue.signal));
 
 		const knomoSharedConfigService = new KnomoSharedConfigService(this.app, {
 			getRootPath: () => {
@@ -177,6 +179,8 @@ export default class KnomoPlugin extends Plugin {
 		};
 
 		let historicalIdentityBootstrapService: HistoricalIdentityBootstrapService | null = null;
+		let basicDataRecovery: KnomoBasicDataRecovery | null = null;
+		const recoveryStateStore = new KnomoCurrentStateStore(this.app, () => this.settingsService.getSettings().knomoDataRoot, "_knomo-data/state", lowPriorityWorkQueue.signal);
 		const knomoDataRootMigrationService = new KnomoDataRootMigrationService(
 			this.app,
 			identityLedgerService,
@@ -185,8 +189,18 @@ export default class KnomoPlugin extends Plugin {
 				await this.settingsService.commitKnomoDataRoot(nextDataRoot);
 			},
 			{
-				migrateSharedConfiguration: (sourceDataRoot, targetDataRoot) =>
-					knomoSharedConfigService.copyAndVerifyDataRoot(sourceDataRoot, targetDataRoot),
+				currentIdentityState: true,
+				migrateSharedConfiguration: async (sourceDataRoot, targetDataRoot) => {
+					await knomoSharedConfigService.copyAndVerifyDataRoot(sourceDataRoot, targetDataRoot);
+					const source = new KnomoCurrentStateStore(this.app, () => sourceDataRoot);
+					const target = new KnomoCurrentStateStore(this.app, () => targetDataRoot);
+					for (const key of ["legacyMigrationCompletion", "historicalIdentityBootstrap", "basicDataRecovery"]) {
+						const value = await source.getMeta<unknown>(key);
+						const existing = await target.getMeta<unknown>(key);
+						if (existing !== null && JSON.stringify(existing) !== JSON.stringify(value)) throw new Error("Target Knomo state conflicts with source.");
+						if (value !== null) await target.setMeta(key, value);
+					}
+				},
 			},
 		);
 		const startupBootstrapService = new KnomoStartupBootstrapService(this.app, {
@@ -196,11 +210,22 @@ export default class KnomoPlugin extends Plugin {
 				},
 				identity: identityLedgerService,
 				sharedConfig: knomoSharedConfigService,
+				hasPendingInitialImport: async () => {
+					const receipt = await identityReceiptStore.getMeta<{ state?: string; authorizationRoot?: string }>("historicalIdentityBootstrap");
+					return receipt?.state === "pending"
+						&& receipt.authorizationRoot === this.settingsService.getSettings().knomoDataRoot;
+				},
 				authorizeInitialImport: async (dataRoot) => {
 					if (historicalIdentityBootstrapService === null) {
 						throw new Error("Historical Identity bootstrap is not initialized.");
 					}
-					await historicalIdentityBootstrapService.authorizeInitialImport(dataRoot);
+					// 首次配置提交前，授权回执必须先持久化到本次明确选定的数据根。
+					initializingReceiptRoot = dataRoot;
+					try {
+						await historicalIdentityBootstrapService.authorizeInitialImport(dataRoot);
+					} finally {
+						initializingReceiptRoot = null;
+					}
 				},
 				onNewDataRootReady: async () => {
 					const legacyReport = await this.legacyIndexMigrationService?.run({ sourceChanged: true, verifyCompletion: true });
@@ -209,6 +234,16 @@ export default class KnomoPlugin extends Plugin {
 				},
 				cancellationSignal: lowPriorityWorkQueue.signal,
 			});
+
+		const automaticStartupRecovery = new KnomoAutomaticRecovery({
+			signal: lowPriorityWorkQueue.signal,
+			recover: () => startupBootstrapService.initialize(),
+			isRecovered: () => startupBootstrapService.getSnapshot().status === "ready"
+				|| startupBootstrapService.getSnapshot().status === "conflicted",
+		});
+		const getStartupSnapshot = () => automaticStartupRecovery.isRunning() || basicDataRecovery?.isRunning()
+			? { ...startupBootstrapService.getSnapshot(), status: "initializing" as const }
+			: startupBootstrapService.getSnapshot();
 
 		const loadObservationBatches = async (): Promise<CatalogFileRevisionBatch[]> => {
 			return this.memoCatalogService!.listFileRevisionBatches();
@@ -219,6 +254,7 @@ export default class KnomoPlugin extends Plugin {
 				(await this.memoCatalogService!.getFileRevisionBatch(sourcePath))?.file.sourceRevision ?? null,
 		});
 		const reconcileIdentityLedger = async () => {
+			if (basicDataRecovery?.isRunning()) return;
 			const hasPendingCreates = identityLedgerService.hasPendingCreates();
 			const hasPendingDeletes = identityLedgerService.hasPendingDeletes();
 			const batches = hasPendingCreates || hasPendingDeletes
@@ -274,7 +310,7 @@ export default class KnomoPlugin extends Plugin {
 					if (this.catalogReadService === null) throw new Error("Catalog read service is not available.");
 					return this.catalogReadService.listMonthlyProjectionPeriods();
 				},
-				isProjectionAllowed: () => knomoSharedConfigService.isMonthlyProjectionAllowed(),
+				isProjectionAllowed: () => !basicDataRecovery?.isRunning() && knomoSharedConfigService.isMonthlyProjectionAllowed(),
 				workQueue: lowPriorityWorkQueue,
 				onStateChanged: () => {
 					const failureVisible = this.monthlyProjectionCoordinator?.getProjectionState() === "failed";
@@ -295,6 +331,7 @@ export default class KnomoPlugin extends Plugin {
 				isConfigurationComplete: () => knomoSharedConfigService.isCoverageComplete(),
 				onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage),
 				onRevisionTransition: async (transition) => {
+					if (basicDataRecovery?.isRunning()) return;
 					await identityRevisionTransitionQueue.enqueue(transition);
 					await this.identityRecoveryCoordinator?.request();
 				},
@@ -305,6 +342,7 @@ export default class KnomoPlugin extends Plugin {
 					IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY,
 				],
 				onCatalogSettled: async () => {
+					if (basicDataRecovery?.isRunning()) return;
 					const legacyReport = await this.legacyIndexMigrationService?.run();
 					if (legacyReport !== undefined) {
 						await historicalIdentityBootstrapService?.run(legacyReport.status);
@@ -360,9 +398,12 @@ export default class KnomoPlugin extends Plugin {
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
 				getHistoricalIdentityBootstrapStatus: () => historicalIdentityBootstrapService?.getStatus() ?? "idle",
-				getSharedConfigurationStatus: () => knomoSharedConfigService.getStatus(),
+				getSharedConfigurationStatus: () => {
+					if (automaticStartupRecovery.isRunning() || basicDataRecovery?.isRunning()) return "missing";
+					return startupBootstrapService.getSnapshot().status === "unconfigured" ? "unavailable" : knomoSharedConfigService.getStatus();
+				},
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
-				getStartupBootstrapSnapshot: () => startupBootstrapService.getSnapshot(),
+				getStartupBootstrapSnapshot: getStartupSnapshot,
 			},
 			markdownMutationService,
 			identityLedgerService,
@@ -400,6 +441,7 @@ export default class KnomoPlugin extends Plugin {
 		historicalIdentityBootstrapService = new HistoricalIdentityBootstrapService(
 			identityLedgerService,
 			{
+				autoAdoptCurrentDaily: () => startupBootstrapService.getSnapshot().status === "ready",
 				getCatalogCoverage: () => this.memoCatalogService!.getStore().getCoverage(),
 				getCatalogLifecycle: () => this.memoCatalogService!.getStore().getLifecycle(),
 				getObservationBatches: loadObservationBatches,
@@ -412,11 +454,21 @@ export default class KnomoPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
 			identityLedgerService.start(this, async () => {
+				if (basicDataRecovery?.isRunning()) return;
+				if (identityLedgerService.getStatus() === "unavailable" || identityLedgerService.getStatus() === "missing") {
+					void automaticStartupRecovery.run().catch(() => undefined).finally(() => this.queueRefreshOpenViews());
+					return;
+				}
 				await this.identityRecoveryCoordinator?.request();
 				await this.queueRefreshOpenViews();
 				settingTab?.refreshAttentionIfVisible();
 			});
 			knomoSharedConfigService.start(this, async () => {
+				if (basicDataRecovery?.isRunning()) return;
+				if (knomoSharedConfigService.getStatus() === "unavailable" || knomoSharedConfigService.getStatus() === "missing") {
+					void automaticStartupRecovery.run().catch(() => undefined).finally(() => this.queueRefreshOpenViews());
+					return;
+				}
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
 				const legacyReport = await this.legacyIndexMigrationService?.run();
@@ -448,7 +500,7 @@ export default class KnomoPlugin extends Plugin {
 				await startupBootstrapService.initialize();
 				settingsRecovered = true;
 			} else if (startupBootstrapService.getSnapshot().status === "unavailable") {
-				await startupBootstrapService.retryInitialization();
+				await automaticStartupRecovery.run();
 			} else if (knomoSharedConfigService.getStatus() === "unavailable") {
 				await knomoSharedConfigService.reloadConfiguredRoot();
 			}
@@ -467,6 +519,33 @@ export default class KnomoPlugin extends Plugin {
 				reload: forceIdentityReload ? "force" : "if_needed",
 			});
 		};
+		basicDataRecovery = new KnomoBasicDataRecovery({
+			signal: lowPriorityWorkQueue.signal,
+			runExclusive: (action) => this.memoCommandService!.runWithMutationsPaused(action),
+			prepare: async () => {
+				await recoveryStateStore.setMeta("basicDataRecovery", { pending: true });
+				await this.catalogIndexCoordinator!.waitForIdle();
+				await this.identityRecoveryCoordinator!.waitForIdle();
+				await this.legacyIndexMigrationService!.waitForIdle();
+				await historicalIdentityBootstrapService!.waitForIdle();
+				await identityRevisionTransitionQueue.clearForRebuild();
+			},
+			rebuildReplicas: async () => {
+				await identityLedgerService.rebuildReplicaFromVault();
+				await knomoSharedConfigService.rebuildReplicaFromVault();
+			},
+			initialize: async () => {
+				await historicalIdentityBootstrapService!.authorizeInitialImport(this.settingsService.getSettings().knomoDataRoot, true);
+				await startupBootstrapService.initializeNewDataRoot(this.settingsService.getSettings().knomoDataRoot);
+			},
+			rebuildCatalog: () => this.catalogIndexCoordinator!.rebuildLocalCatalog(),
+			importIdentities: async () => {
+				const legacy = await this.legacyIndexMigrationService!.run({ sourceChanged: true, verifyCompletion: true });
+				const status = await historicalIdentityBootstrapService!.run(legacy.status);
+				if (status !== "completed") throw new Error("Knomo identity rebuild is not complete.");
+			},
+			complete: () => recoveryStateStore.deleteMeta("basicDataRecovery"),
+		});
 		this.registerView(
 			KNOMO_VIEW_TYPE,
 			(leaf: WorkspaceLeaf) => new KnomoView(
@@ -483,6 +562,10 @@ export default class KnomoPlugin extends Plugin {
 				() => dailyNoteService.getTodayDailyNotePath(),
 				() => retryRuntimeState(false),
 				() => this.openCatalogDataSettings(),
+				async () => {
+					await basicDataRecovery!.run();
+					await retryRuntimeState();
+				},
 			),
 		);
 		this.registerAttachmentEvents();
@@ -524,7 +607,7 @@ export default class KnomoPlugin extends Plugin {
 		this.runtimeInitializationPromise = (async () => {
 			if (settingsLoaded) {
 				try {
-					await startupBootstrapService.initialize();
+					await automaticStartupRecovery.run();
 				} catch {
 					// 自动初始化失败不阻塞 Daily；下次启用会继续补齐缺失配置。
 				} finally {
@@ -546,6 +629,9 @@ export default class KnomoPlugin extends Plugin {
 			}
 			await historicalIdentityBootstrapService?.initializeEligibility();
 			await this.catalogIndexCoordinator?.initialize();
+			if ((await recoveryStateStore.getMeta<{ pending: boolean }>("basicDataRecovery"))?.pending) {
+				await basicDataRecovery!.run();
+			}
 			if (lowPriorityWorkQueue.signal.aborted) return false;
 			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);
 			if (lowPriorityWorkQueue.signal.aborted) return false;

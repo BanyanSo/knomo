@@ -3,6 +3,11 @@ import test from "node:test";
 
 import { getIdentityLedgerRootPath } from "../src/services/IdentityLedgerProtocol";
 import { IdentityLedgerService } from "../src/services/IdentityLedgerService";
+import { IdentityReceiptStore } from "../src/services/IdentityReceiptStore";
+import { KnomoCurrentStateStore } from "../src/services/KnomoCurrentStateStore";
+import { KnomoBootstrapStateStore } from "../src/services/KnomoBootstrapStateStore";
+import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { HistoricalIdentityBootstrapService } from "../src/services/HistoricalIdentityBootstrapService";
 import { KnomoDataRootMigrationService } from "../src/services/KnomoDataRootMigrationService";
 import {
 	buildKnomoSharedConfig,
@@ -15,7 +20,112 @@ import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const WRITER_ID = "w_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-test("普通启动不从空状态推断初始化，明确新建只执行一次", async () => {
+test("已有 Daily 的首次启动发布配置并导入历史身份，同时间同正文保持独立", async () => {
+	const sourcePath = "Daily/2026-08-22.md";
+	const content = "## Memos\n- 09:00 已有正文\n- 09:00 重复正文\n- 09:00 重复正文\n";
+	const vault = new InMemoryVault({ [sourcePath]: content });
+	installLayoutWorkspace(vault);
+	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
+	let initializingRoot: string | null = null;
+	const ledger = new IdentityLedgerService(vault.app, {
+		getRootPath: () => location.knomoDataRootConfigured ? getIdentityLedgerRootPath(location.knomoDataRoot) : null,
+		getWriterId: async () => WRITER_ID,
+		currentStateStore: new KnomoCurrentStateStore(vault.app, () => getIdentityLedgerRootPath(location.knomoDataRoot), "current"),
+	});
+	const shared = createSharedConfig(vault, () => location, "## Memos");
+	const receipts = new KnomoBootstrapStateStore(new KnomoCurrentStateStore(vault.app, () => initializingRoot ?? location.knomoDataRoot));
+	const parsed = await new DiaryMemoParser().parse({ sourcePath, logicalDate: "2026-08-22", bytes: new TextEncoder().encode(content) });
+	const historical = new HistoricalIdentityBootstrapService(ledger, {
+		checkpointStore: receipts,
+		getCatalogCoverage: async () => ({ kind: "complete", coveredFromDate: "2026-08-22", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1, sharedConfigurationComplete: shared.isCoverageComplete() }),
+		getCatalogLifecycle: () => ({ state: "ready", persistent: true, writable: true, reason: null }),
+		getObservationBatches: async () => [{ file: { sourcePath, sourceRevision: parsed.sourceRevision, logicalDate: "2026-08-22", mtime: 1, size: content.length, parserVersion: 5, settingsFingerprint: "test", observationCount: parsed.observations.length, auditedAt: 1 }, observations: parsed.observations, catalogRevision: 1 }],
+	});
+	const migration = new KnomoDataRootMigrationService(vault.app, ledger, () => location,
+		async (root) => { location = { knomoDataRoot: root, knomoDataRootConfigured: true }; });
+	const startup = new KnomoStartupBootstrapService(vault.app, {
+		getLocation: () => location,
+		initializeDataRoot: async (root) => { await migration.migrate(root); },
+		authorizeInitialImport: async (root) => {
+			initializingRoot = root;
+			try { await historical.authorizeInitialImport(root); }
+			finally { initializingRoot = null; }
+		},
+		onNewDataRootReady: async () => { await historical.run("not_applicable"); },
+		identity: ledger,
+		sharedConfig: shared,
+	});
+	await startup.initialize();
+	assert.equal(startup.getSnapshot().status, "ready");
+	assert.equal(shared.getStatus(), "ready");
+	assert.equal(historical.getStatus(), "completed");
+	const bindings = parsed.observations.map((observation) => ledger.resolveObservation(observation));
+	assert.equal(bindings.every((binding) => binding !== null), true);
+	assert.equal(new Set(bindings.map((binding) => binding!.memoId)).size, 3);
+	assert.equal(vault.read(sourcePath), content);
+	assert.equal(vault.paths().some((path) => path.includes("receipts") || path.endsWith(".jsonl") && path.includes("/identity/")), false);
+	// 模拟用户删除 Knomo 文件、保留原有本机配置和服务缓存。
+	for (const path of vault.paths().filter((path) => path.startsWith("Knomo/"))) vault.remove(path);
+	await shared.initialize();
+	assert.notEqual(shared.getStatus(), "ready");
+	await ledger.rebuildReplicaFromVault();
+	await shared.rebuildReplicaFromVault();
+	await historical.authorizeInitialImport(location.knomoDataRoot, true);
+	await startup.initializeNewDataRoot(location.knomoDataRoot);
+	assert.equal(shared.getStatus(), "ready");
+	assert.equal(historical.getStatus(), "completed");
+	assert.equal(parsed.observations.every((observation) => ledger.resolveObservation(observation) !== null), true);
+	assert.equal(vault.read(sourcePath), content);
+});
+
+test("首次启动持久化授权后配置发布失败，重启自动续建且不重复授权", async () => {
+	const vault = new InMemoryVault();
+	installLayoutWorkspace(vault);
+	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
+	let initializingRoot: string | null = null;
+	const ledger = createLedger(vault, () => location);
+	const receipts = new IdentityReceiptStore(vault.app, {
+		getRootPath: () => initializingRoot ?? (location.knomoDataRootConfigured ? location.knomoDataRoot : null),
+		getWriterId: async () => WRITER_ID,
+		getKnownIdentityEventIds: () => ledger.getKnownIdentityEventIds(),
+	});
+	const migration = new KnomoDataRootMigrationService(vault.app, ledger, () => location,
+		async (root) => { location = { knomoDataRoot: root, knomoDataRootConfigured: true }; });
+	const shared = createSharedConfig(vault, () => location, "## Memos");
+	const publish = shared.publishLocalConfig.bind(shared);
+	let fail = true;
+	shared.publishLocalConfig = async () => {
+		if (fail) throw new Error("publication interrupted");
+		await publish();
+	};
+	let authorizations = 0;
+	const options = {
+		getLocation: () => location,
+		initializeDataRoot: async (root: string) => { await migration.migrate(root); },
+		authorizeInitialImport: async (root: string) => {
+			authorizations += 1;
+			initializingRoot = root;
+			try {
+				await receipts.setMeta("historicalIdentityBootstrap", {
+					state: "pending", reason: "initial_import", authorizationRoot: root,
+				});
+			} finally { initializingRoot = null; }
+		},
+		hasPendingInitialImport: async () => (await receipts.getMeta<{ state: string }>("historicalIdentityBootstrap"))?.state === "pending",
+		identity: ledger,
+		sharedConfig: shared,
+	};
+	await assert.rejects(new KnomoStartupBootstrapService(vault.app, options).initialize(), /publication interrupted/u);
+	assert.equal(location.knomoDataRootConfigured, true);
+	fail = false;
+	const restarted = new KnomoStartupBootstrapService(vault.app, options);
+	await restarted.initialize();
+	assert.equal(restarted.getSnapshot().status, "ready");
+	assert.equal(authorizations, 1);
+	assert.equal(shared.getStatus(), "ready");
+});
+
+test("首次启动自动创建数据根并发布配置，重启不重复授权", async () => {
 	const vault = new InMemoryVault();
 	installLayoutWorkspace(vault);
 	let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
@@ -39,12 +149,7 @@ test("普通启动不从空状态推断初始化，明确新建只执行一次",
 	});
 
 	await bootstrap.initialize();
-	assert.equal(location.knomoDataRootConfigured, false);
-	assert.equal(vault.paths().some((path) => path.includes("/_knomo-data/")), false);
-	assert.equal(shared.getStatus(), "missing");
-	assert.equal(bootstrap.getSnapshot().status, "unconfigured");
-
-	await bootstrap.initializeNewDataRoot("Knomo");
+	await bootstrap.initialize();
 
 	assert.equal(location.knomoDataRootConfigured, true);
 	assert.equal(authorizationCount, 1);
@@ -90,7 +195,7 @@ test("已配置根在布局就绪前暂不可见时等待 Vault 完成加载后�
 	assert.equal(shared.getStatus(), "ready");
 });
 
-test("明确初始化在 Vault 延迟确认新目录时于本次操作内完成", async () => {
+test("1.2.9 已有目录在 Vault 延迟确认新目录时自动初始化", async () => {
 	const vault = new InMemoryVault();
 	installLayoutWorkspace(vault);
 	await vault.app.vault.createFolder("Knomo");
@@ -120,7 +225,7 @@ test("明确初始化在 Vault 延迟确认新目录时于本次操作内完成"
 		sharedConfig: shared,
 	});
 
-	await bootstrap.initializeNewDataRoot("Knomo");
+	await bootstrap.initialize();
 
 	assert.equal(injectedFolderRace, true);
 	assert.equal(location.knomoDataRootConfigured, true);

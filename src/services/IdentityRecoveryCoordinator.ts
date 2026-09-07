@@ -57,6 +57,10 @@ export class IdentityRecoveryCoordinator {
 		this.rerunRequested = false;
 	}
 
+	async waitForIdle(): Promise<void> {
+		await this.activeOperation;
+	}
+
 	private async drain(): Promise<void> {
 		do {
 			const reload = this.pendingReload;

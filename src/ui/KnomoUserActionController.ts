@@ -99,6 +99,7 @@ interface KnomoUserActionControllerOptions {
 	cancelComposerFromEscape: () => void;
 	closeOpenChromeFromEscape: () => void;
 	refreshCatalogSyncState?: () => Promise<void>;
+	rebuildBasicData?: () => Promise<void>;
 	openCatalogSettings?: () => void;
 }
 
@@ -200,6 +201,10 @@ export class KnomoUserActionController {
 		}
 
 		if (route.type === "action") {
+			if (route.action === "rebuild-knomo-basic-data") {
+				await this.options.rebuildBasicData?.();
+				return;
+			}
 			if (route.action === "refresh-catalog-sync-state") {
 				await this.options.refreshCatalogSyncState?.();
 				return;

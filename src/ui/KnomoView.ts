@@ -561,6 +561,7 @@ export class KnomoView extends ItemView {
 		getTodayDailyNotePath: () => string | null,
 		private readonly onRefreshCatalogProtocolState: (() => Promise<void>) | null = null,
 		private readonly onOpenCatalogSettings: (() => void) | null = null,
+		private readonly onRebuildBasicData: (() => Promise<void>) | null = null,
 	) {
 		super(leaf);
 		this.getDailyNotesStatus = getDailyNotesStatus;
@@ -942,6 +943,16 @@ export class KnomoView extends ItemView {
 			cancelComposerFromEscape: () => this.cancelComposerFromEscape(),
 			closeOpenChromeFromEscape: () => this.closeOpenChromeFromEscape(),
 			refreshCatalogSyncState: () => this.refreshCatalogSyncState(),
+			rebuildBasicData: async () => {
+				if (this.onRebuildBasicData === null) return;
+				if (!await showKnomoConfirmModal(this.app, {
+					message: t("catalog.rebuildBasicDataConfirm"),
+					confirmLabel: t("catalog.rebuildBasicData"),
+					danger: true,
+				})) return;
+				await this.onRebuildBasicData();
+				await this.onForceRefreshViews();
+			},
 			openCatalogSettings: () => this.onOpenCatalogSettings?.(),
 		});
 	}

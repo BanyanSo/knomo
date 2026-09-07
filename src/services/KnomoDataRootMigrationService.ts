@@ -10,6 +10,8 @@ import {
 	parseIdentityLedgerSegment,
 } from "./IdentityLedgerProtocol";
 import { IdentityLedgerService, materializeIdentityLedger } from "./IdentityLedgerService";
+import { KnomoCurrentStateStore } from "./KnomoCurrentStateStore";
+import { assertIdentityCurrentState, currentIdentityEnvelopes, normalizeCurrentIdentitySnapshot } from "./IdentityCurrentState";
 
 export interface KnomoDataRootLocation {
 	knomoDataRoot: string;
@@ -33,6 +35,7 @@ type GetLocation = () => KnomoDataRootLocation;
 type CommitLocation = (nextDataRoot: string) => Promise<void>;
 
 export interface KnomoDataRootMigrationOptions {
+	currentIdentityState?: boolean;
 	migrateSharedConfiguration?: (sourceDataRoot: string, targetDataRoot: string) => Promise<void>;
 }
 
@@ -165,6 +168,18 @@ export class KnomoDataRootMigrationService {
 		const files = listFiles(root).sort((left, right) => left.path.localeCompare(right.path));
 		const contents = new Map<string, string>();
 		const envelopes: IdentityLedgerEventEnvelope[] = [];
+		if (this.options.currentIdentityState) {
+			const state = await new KnomoCurrentStateStore(this.app, () => rootPath, "current").getMeta<unknown>("identity");
+			if (state !== null) assertIdentityCurrentState(state);
+			for (const file of files) {
+				const relative = file.path.slice(normalizePath(rootPath).length + 1);
+				if (relative !== "current/identity.a.json" && relative !== "current/identity.b.json") throw new Error(`Unexpected current Identity file: ${file.path}`);
+				contents.set(relative, await this.app.vault.read(file));
+			}
+			return { files: contents, snapshot: await normalizeCurrentIdentitySnapshot(
+				await materializeIdentityLedger(await currentIdentityEnvelopes(state?.bindings ?? [], rootPath)), state?.reviews ?? {},
+			) };
+		}
 		for (const file of files) {
 			if (file.extension !== "jsonl") {
 				throw new Error(`Identity Ledger contains an unexpected file: ${file.path}`);

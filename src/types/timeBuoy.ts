@@ -3,6 +3,7 @@ import type { MemoViewItem } from "./memoView";
 export type TimeBuoyDateStatus = "today" | "upcoming" | "past";
 
 export interface TimeBuoyInstance {
+	// 仅用于当前视图关联的本地 observation key，不是永久 Memo ID。
 	memoId: string;
 	targetDate: string;
 }

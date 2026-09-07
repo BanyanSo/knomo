@@ -1,3 +1,4 @@
+import { parseMarkdownReferences } from "../utils/markdownReferences";
 import type { MemoObservation } from "../types/catalog";
 import type { MemoLinkRef } from "../types/memo";
 import { hashMemoContent, hashText } from "../utils/hash";
@@ -306,21 +307,9 @@ export async function sha256Bytes(bytes: Uint8Array): Promise<string> {
 }
 
 export function extractDailyExplicitReferenceTargets(content: string): string[] {
-	const searchable = maskProtectedMarkdown(content);
-	const matches: Array<{ index: number; target: string }> = [];
-	const patterns = [
-		/!?\[\[([^\]]*#\^[A-Za-z0-9_-]+)(?:\|[^\]]*)?\]\]/gu,
-		/\[[^\]]*\]\(([^)\s]*#\^[A-Za-z0-9_-]+)\)/gu,
-	];
-	for (const pattern of patterns) {
-		let match = pattern.exec(searchable);
-		while (match !== null) {
-			matches.push({ index: match.index, target: match[1] });
-			match = pattern.exec(searchable);
-		}
-	}
-	matches.sort((left, right) => left.index - right.index);
-	return dedupeStable(matches.map((match) => match.target), (target) => target);
+	return dedupeStable(parseMarkdownReferences(content)
+		.filter((link) => link.valid && /#(?:\^|%5[eE])/u.test(link.target))
+		.map((link) => link.target), (target) => target);
 }
 
 export function getIndexableDiaryMemoContent(content: string): string {
@@ -407,7 +396,7 @@ function parseMemoLinksInSourceOrder(content: string): MemoLinkRef[] {
 	let wikiMatch = wikiRegex.exec(content);
 	while (wikiMatch !== null) {
 		wrappedRanges.push([wikiMatch.index, wikiMatch.index + wikiMatch[0].length]);
-		if (content.charAt(wikiMatch.index - 1) !== "!") {
+		if (content.charAt(wikiMatch.index - 1) !== "!" || /#(?:\^|%5[eE])/u.test(wikiMatch[1])) {
 			const separatorIndex = wikiMatch[1].indexOf("|");
 			matches.push({
 				index: wikiMatch.index,
@@ -420,21 +409,15 @@ function parseMemoLinksInSourceOrder(content: string): MemoLinkRef[] {
 		}
 		wikiMatch = wikiRegex.exec(content);
 	}
-	const markdownRegex = /\[([^\]]+)\]\(([^)]+)\)/gu;
-	let markdownMatch = markdownRegex.exec(content);
-	while (markdownMatch !== null) {
-		wrappedRanges.push([markdownMatch.index, markdownMatch.index + markdownMatch[0].length]);
-		if (content.charAt(markdownMatch.index - 1) !== "!") {
-			matches.push({
-				index: markdownMatch.index,
-				link: {
-					target: markdownMatch[2],
-					displayText: markdownMatch[1],
-					syntax: "markdown_link",
-				},
-			});
-		}
-		markdownMatch = markdownRegex.exec(content);
+	for (const reference of parseMarkdownReferences(content).filter((link) => link.syntax === "markdown_link")) {
+		const index = reference.startOffset!;
+		wrappedRanges.push([index, index + reference.raw.length]);
+		matches.push({ index, link: { target: reference.target, displayText: reference.displayText, syntax: "markdown_link" } });
+	}
+	const imagePattern = /!\[[^\]]*\]\([^\n]*?\)/gu;
+	let image: RegExpExecArray | null;
+	while ((image = imagePattern.exec(content)) !== null) {
+		wrappedRanges.push([image.index, image.index + image[0].length]);
 	}
 	const webRegex = /\bhttps?:\/\/[^\s<>"'，。！？；：、（）【】《》]+/giu;
 	let webMatch = webRegex.exec(content);

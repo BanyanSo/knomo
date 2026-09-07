@@ -767,10 +767,7 @@ export class KnomoView extends ItemView {
 			},
 		});
 		this.randomReunionController = new RandomReunionController({
-			loadRandomReunionMemos: (count, onPreparingIdentity) => this.catalogReadService.getRandomReunionItems(count, {
-				prepareIdentity: (candidate) => this.memoCommandService.adoptMemo(candidate),
-				onPreparingIdentity,
-			}),
+			loadRandomReunionMemos: (count) => this.catalogReadService.getRandomReunionItems(count),
 			openRandomReunionMemo: async (memo) => {
 				const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
 				if (!(file instanceof TFile)) throw new Error(t("error.dailyNoteMissing"));
@@ -3921,7 +3918,7 @@ export class KnomoView extends ItemView {
 					preparedInput.content,
 				);
 			} else {
-				operation = this.memoCommandService.startCreate(preparedInput.content, preparedInput.sourceMemoId);
+				operation = this.memoCommandService.startCreate(preparedInput.content);
 			}
 			await operation.dailyCommitted;
 			clearSavedComposer();

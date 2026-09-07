@@ -229,14 +229,6 @@ export class CatalogIndexCoordinator {
 		if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;
 		await this.runPathSerial(sourcePath, async () => {
 			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
-			const transition = await this.prepareRevisionTransition(
-				sourcePath,
-				input.parsed.sourceRevision,
-				input.parsed.observations,
-				() => true,
-				input.insertedObservation ?? null,
-			);
-			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
 			await this.catalogService.replaceFile({
 				inventory,
 				sourceRevision: input.parsed.sourceRevision,
@@ -245,7 +237,6 @@ export class CatalogIndexCoordinator {
 				settingsFingerprint: this.settingsFingerprint,
 				auditedAt: this.now(),
 			});
-			await this.notifyRevisionTransition(transition);
 			if (this.isStopped()) return;
 			this.clearLocalEditorContent(sourcePath, input.content);
 			this.upsertInventoryEntry(inventory);
@@ -697,7 +688,8 @@ export class CatalogIndexCoordinator {
 						settingsFingerprint: this.settingsFingerprint,
 						auditedAt: this.now(),
 					});
-					await this.notifyRevisionTransition(transition);
+					// 旧身份协调不占用正文/Catalog 的路径串行队列。
+					void this.notifyRevisionTransition(transition);
 					if (!this.suppressScannedPeriodChanges) {
 						this.notifyDailyPeriodsChanged([inventory.logicalDate.slice(0, 7)]);
 					}

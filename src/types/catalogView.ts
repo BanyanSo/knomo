@@ -57,6 +57,7 @@ export interface KnomoRuntimeSnapshot {
 }
 
 export interface CatalogMemoItem {
+	derivedReferences?: import("../services/CatalogReferenceService").CatalogReference[];
 	key: string;
 	renderKey: string;
 	// 临时旧命令/重逢适配字段；普通 observation 卡片均为 null。

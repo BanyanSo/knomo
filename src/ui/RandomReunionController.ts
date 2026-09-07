@@ -7,7 +7,6 @@ const RANDOM_REUNION_DEFAULT_COUNT = 5;
 export type RandomReunionStatus =
 	| "idle"
 	| "loading-candidates"
-	| "preparing-identity"
 	| "ready"
 	| "empty"
 	| "failed";
@@ -19,7 +18,7 @@ export interface RandomReunionSnapshot<TMemo extends MemoRecord = MemoRecord> {
 }
 
 interface RandomReunionControllerOptions<TMemo extends MemoRecord> {
-	loadRandomReunionMemos: (count: number, onPreparingIdentity: () => void) => Promise<TMemo[]>;
+	loadRandomReunionMemos: (count: number) => Promise<TMemo[]>;
 	openRandomReunionMemo: (memo: TMemo) => Promise<void>;
 	markRandomReunionReviewed: (memoId: string) => Promise<void>;
 	isRandomActive: () => boolean;
@@ -52,7 +51,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	}
 
 	async refresh(): Promise<void> {
-		if (this.status === "loading-candidates" || this.status === "preparing-identity") {
+		if (this.status === "loading-candidates") {
 			return;
 		}
 		const runId = ++this.runId;
@@ -65,7 +64,6 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		try {
 			const memos = await this.options.loadRandomReunionMemos(
 				RANDOM_REUNION_DEFAULT_COUNT,
-				() => this.setPreparingIdentity(runId),
 			);
 			if (runId !== this.runId) return;
 			this.memos = memos;
@@ -116,13 +114,6 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		}
 	}
 
-	private setPreparingIdentity(runId: number): void {
-		if (runId !== this.runId || this.status !== "loading-candidates") return;
-		this.status = "preparing-identity";
-		if (this.options.isRandomActive()) {
-			this.options.requestRender();
-		}
-	}
 }
 
 function formatRandomReunionActionError(actionLabel: string, error: unknown): string {

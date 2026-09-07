@@ -110,7 +110,7 @@ test("keeps the current random list visible while the next group loads", async (
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "random",
-		randomReunionStatus: "preparing-identity",
+		randomReunionStatus: "loading-candidates",
 		memos,
 	}), {
 		type: "items",
@@ -130,17 +130,17 @@ test("keeps the current random list visible while the next group loads", async (
 	});
 });
 
-test("presents random identity preparation, failure and true empty states distinctly", async () => {
+test("presents random loading, failure and true empty states distinctly", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
 
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "random",
-		randomReunionStatus: "preparing-identity",
+		randomReunionStatus: "loading-candidates",
 	}), {
 		type: "empty",
-		title: "Preparing memo identities for random revisit",
+		title: "Looking for memos to revisit",
 		description: "",
 	});
 	assert.deepEqual(getCardFlowPresentation({

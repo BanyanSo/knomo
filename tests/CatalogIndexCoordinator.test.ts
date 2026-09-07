@@ -766,19 +766,7 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 		});
 
 		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["inserted", "before"]);
-		assert.deepEqual(transitions.map((transition) => ({
-			beforeRevision: transition.before?.sourceRevision ?? null,
-			beforeContent: transition.before?.observations.map((item) => item.content) ?? [],
-			afterRevision: transition.after.sourceRevision,
-			afterContent: transition.after.observations.map((item) => item.content),
-			insertedContent: transition.insertedObservation?.content ?? null,
-		})), [{
-			beforeRevision: await sha256(Buffer.from("## Memos\n- 09:00 before\n", "utf8")),
-			beforeContent: ["before"],
-			afterRevision: parsed.sourceRevision,
-			afterContent: ["before", "inserted"],
-			insertedContent: "inserted",
-		}]);
+		assert.deepEqual(transitions, []);
 		assert.equal(fixture.snapshot()[sourcePath], "## Memos\n- 09:00 before\n");
 	} finally {
 		fixture.unload();
@@ -856,7 +844,7 @@ test("解析中的旧扫描结果不能覆盖同路径刚完成的 Daily 直接�
 	}
 });
 
-test("Identity 回调执行期间的直接提交保持连续 revision 链", async () => {
+test("后台 Identity 回调不阻塞直接提交，也不为其补写身份链", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
@@ -919,8 +907,8 @@ test("Identity 回调执行期间的直接提交保持连续 revision 链", asyn
 			content: afterContent,
 			parsed,
 		});
-		releaseTransition();
 		await committed;
+		releaseTransition();
 		await coordinator.waitForIdle();
 
 		assert.deepEqual(transitions.map((transition) => ({
@@ -928,7 +916,6 @@ test("Identity 回调执行期间的直接提交保持连续 revision 链", asyn
 			after: transition.after.observations.map((item) => item.content),
 		})), [
 			{ before: ["before"], after: ["scanned"] },
-			{ before: ["scanned"], after: ["after"] },
 		]);
 		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["after"]);
 	} finally {

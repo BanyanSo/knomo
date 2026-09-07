@@ -73,13 +73,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 				description: "",
 			};
 		}
-		if (options.randomReunionStatus === "preparing-identity" && options.memos.length === 0) {
-			return {
-				type: "empty",
-				title: t("empty.randomPreparingIdentity"),
-				description: "",
-			};
-		}
+
 		if (options.randomReunionStatus === "failed") {
 			return {
 				type: "empty",

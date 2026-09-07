@@ -283,7 +283,7 @@ test("Daily 正文重新出现时保持正文 observation 可见并隐藏对应�
 	assert.equal((await service.listDeleted(20)).items.length, 0);
 });
 
-test("随机重逢只返回具有稳定 memoId 和 review 能力的候选", async () => {
+test("随机重逢不以 Identity 状态限制候选", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -305,10 +305,10 @@ test("随机重逢只返回具有稳定 memoId 和 review 能力的候选", asyn
 
 	const items = await service.getRandomReunionItems(5);
 
-	assert.deepEqual(items.map((item) => item.contentSnapshot), ["identified random candidate"]);
+	assert.deepEqual(items.map((item) => item.contentSnapshot), ["syncing random candidate", "identified random candidate"]);
 });
 
-test("Identity absent 时随机重逢只为选中的 observation 建立稳定身份", async () => {
+test("Identity absent 时随机重逢直接返回 observation，不执行 adoption", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -325,27 +325,13 @@ test("Identity absent 时随机重逢只为选中的 observation 建立稳定身
 		now: () => new Date(2026, 7, 26, 12, 0, 0),
 		random: () => 0,
 	});
-	let adoptionCount = 0;
-	let preparingIdentityCount = 0;
-
-	const items = await service.getRandomReunionItems(1, {
-		prepareIdentity: async (candidate) => {
-			adoptionCount += 1;
-			const binding = makeBinding(candidate.observation, "2026082012345601", "identity-1");
-			identity.setState(candidate.content, { kind: "identified", binding }, "ready", "identity-1");
-			return service.resolveMemoItemInFile(candidate.sourcePath, candidate.observation.startLine);
-		},
-		onPreparingIdentity: () => { preparingIdentityCount += 1; },
-	});
-
-	assert.equal(adoptionCount, 1);
-	assert.equal(preparingIdentityCount, 1);
+	const items = await service.getRandomReunionItems(1);
 	assert.equal(items.length, 1);
-	assert.equal(items[0]?.id, "2026082012345601");
-	assert.equal(items[0]?.catalog?.capabilities.identity.review, "ready");
+	assert.equal(items[0]?.catalog?.memoId, null);
+	assert.equal(items[0]?.catalog?.resolved.kind, "observation");
 });
 
-test("缓存候选池仍会应用同步后的最新 review 权重", async () => {
+test("缓存候选池应用设备本地的最新 review 权重", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -371,7 +357,7 @@ test("缓存候选池仍会应用同步后的最新 review 权重", async () => 
 		(await service.getRandomReunionItems(1)).map((item) => item.contentSnapshot),
 		["recently reviewed candidate"],
 	);
-	identity.setReviewState(reviewedBinding.memoId, 1, "2026-08-25T12:00:00.000Z");
+	await service.recordReview((await service.query({ limit: 10 })).items.find((item) => item.content === recentlyReviewed.content)!);
 	identity.setState(recentlyReviewed.content, { kind: "identified", binding: reviewedBinding }, "ready", "identity-2");
 	const items = await service.getRandomReunionItems(1);
 

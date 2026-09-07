@@ -569,6 +569,7 @@ export default class KnomoPlugin extends Plugin {
 			),
 		);
 		this.registerAttachmentEvents();
+		this.registerReferenceEvents();
 
 		this.registerHoverLinkSource(KNOMO_VIEW_TYPE, {
 			display: "Knomo",
@@ -737,6 +738,22 @@ export default class KnomoPlugin extends Plugin {
 				this.broadcastAttachmentChanges(paths);
 			}
 		}));
+	}
+
+	private registerReferenceEvents(): void {
+		// 只重查已打开视图的 Catalog 页面；目标变化不触发全库 Daily 重读。
+		const scheduler = new ViewRefreshScheduler(
+			() => this.app.workspace.containerEl.win,
+			() => this.runRefreshOpenViews(true),
+			OPEN_VIEWS_REFRESH_DEBOUNCE_MS,
+		);
+		this.register(() => scheduler.clear());
+		const refresh = (): void => {
+			void scheduler.queue().catch((error: unknown) => console.error("Knomo reference refresh failed", error));
+		};
+		this.registerEvent(this.app.metadataCache.on("changed", refresh));
+		this.registerEvent(this.app.vault.on("rename", refresh));
+		this.registerEvent(this.app.vault.on("delete", refresh));
 	}
 
 	private broadcastAttachmentChanges(paths: readonly string[]): void {

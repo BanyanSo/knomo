@@ -16,9 +16,7 @@ import type {
 	TrashMemoItem,
 } from "../types/catalogView";
 import type {
-	IdentityLedgerCreatePlan,
 	IdentityLedgerMutationService,
-	IdentityLedgerRebindReason,
 } from "../types/identityLedger";
 import type {
 	MarkdownMutationResult,
@@ -27,13 +25,14 @@ import type {
 import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
 import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
-import { formatDatePart, formatTimePart } from "../utils/date";
-import { hashMemoContent } from "../utils/hash";
+import { formatDatePart } from "../utils/date";
 import { withCreatedAtAlias } from "../utils/references";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CatalogReadService } from "./CatalogReadService";
 import type { MemoCatalogService } from "./MemoCatalogService";
 import { MarkdownMutationStaleError } from "./MarkdownMutationService";
+import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
+import { CatalogReferenceService } from "./CatalogReferenceService";
 
 export interface MemoCommandServiceOptions {
 	getDailyPathForDate?: (logicalDate: string) => Promise<string>;
@@ -69,7 +68,6 @@ export class MemoCommandService {
 		private readonly identityLedger: IdentityLedgerMutationService,
 	) {
 		this.now = options.now ?? (() => new Date());
-		this.adoptMemo = this.mutationBarrier.wrap(this.adoptMemo.bind(this));
 		this.createInternal = this.mutationBarrier.wrap(this.createInternal.bind(this));
 		this.copy = this.mutationBarrier.wrap(this.copy.bind(this));
 		this.move = this.mutationBarrier.wrap(this.move.bind(this));
@@ -84,6 +82,8 @@ export class MemoCommandService {
 		this.createReferenceText = this.mutationBarrier.wrap(this.createReferenceText.bind(this));
 		this.recordReview = this.mutationBarrier.wrap(this.recordReview.bind(this));
 		this.readService = new CatalogReadService({
+			references: new CatalogReferenceService(app, catalog),
+			reviews: new LocalMemoReviewStore(app),
 			catalog,
 			identityLedger,
 			requestObservationScan: async () => { await options.refreshLocalCatalog(); },
@@ -123,78 +123,42 @@ export class MemoCommandService {
 		};
 	}
 
-	async adoptMemo(item: CatalogMemoItem): Promise<CatalogMemoItem> {
-		const status = this.identityLedger.getStatus();
-		if (status !== "ready" && status !== "absent") throw new Error("Existing Daily memo adoption is unavailable.");
-		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
-		let memoId: string;
-		if (refreshed.kind === "identified") {
-			memoId = refreshed.identityHandle.memoId;
-		} else if (refreshed.kind === "observed"
-			&& this.identityLedger.resolveObservationState(refreshed.observation).kind === "unbound") {
-			memoId = (await this.identityLedger.adoptObservation(refreshed.observation)).memoId;
-		} else {
-			throw new Error("Only a current historical observation without identity can be adopted.");
-		}
-		const adopted = await this.readService.resolveMemoItemInFile(
-			refreshed.observation.sourcePath,
-			refreshed.observation.startLine,
-		);
-		assertSameObservation(item.observationHandle, adopted.observationHandle);
-		if (adopted.memoId !== memoId || adopted.capabilities.identity.review !== "ready") {
-			throw new Error("Historical memo adoption did not produce a reviewable identity.");
-		}
-		return { ...adopted, observationHandle: item.observationHandle };
-	}
-
-	startCreate(contentInput: string, sourceMemoId: string | null = null): MemoSaveOperation {
+	startCreate(contentInput: string): MemoSaveOperation {
 		return this.startSaveOperation((onDailyCommitted) => this.createInternal(
 			contentInput,
-			sourceMemoId,
 			onDailyCommitted,
 		));
 	}
 
-	async create(contentInput: string, sourceMemoId: string | null = null): Promise<MemoSaveResult> {
-		return this.createInternal(contentInput, sourceMemoId);
+	async create(contentInput: string): Promise<MemoSaveResult> {
+		return this.createInternal(contentInput);
 	}
 
 	private async createInternal(
 		contentInput: string,
-		sourceMemoId: string | null,
 		onDailyCommitted?: () => void,
 	): Promise<MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
 		const createdAt = this.now();
 		const logicalDate = formatDatePart(createdAt);
-		const plan = await this.beginIdentityCreate(content, logicalDate, createdAt, sourceMemoId);
 		const result = await this.markdownMutations.create({
 			content,
 			targetLogicalDate: logicalDate,
 			createdAt,
 			onDailyCommitted,
 		});
-		const identityPending = await this.finishIdentityCreate(plan, result.observation);
-		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? [], {
-			memoId: plan?.memoId ?? null,
-			pending: identityPending,
-		});
+		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? []);
 	}
 
 	async copy(item: CatalogMemoItem, logicalDate = formatDatePart(this.now())): Promise<MemoSaveResult> {
 		const createdAt = this.now();
-		const plan = await this.beginIdentityCreate(item.content, logicalDate, createdAt, item.memoId);
 		const result = await this.markdownMutations.copy({
 			observation: item.observationHandle,
 			targetLogicalDate: logicalDate,
 			createdAt,
 		});
-		const identityPending = await this.finishIdentityCreate(plan, result.observation);
-		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates, {
-			memoId: plan?.memoId ?? null,
-			pending: identityPending,
-		});
+		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
 	}
 
 	async move(item: CatalogMemoItem, targetLogicalDate: string): Promise<MemoSaveResult> {
@@ -202,10 +166,7 @@ export class MemoCommandService {
 			observation: item.observationHandle,
 			targetLogicalDate,
 		});
-		const identity = result.status === "committed_content_pending"
-			? { memoId: item.memoId, pending: true }
-			: await this.finishIdentityRebind(item, result.observation, "move");
-		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates, identity);
+		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
 	}
 
 	async repairIdentity(target: CatalogMemoItem, candidateMemoId: string): Promise<void> {
@@ -239,8 +200,7 @@ export class MemoCommandService {
 			content,
 			onDailyCommitted,
 		});
-		const identity = await this.finishIdentityRebind(item, result.observation, "edit");
-		return this.finishMarkdownSavedMemo(result, extractTimeBuoyDates(content), identity);
+		return this.finishMarkdownSavedMemo(result, extractTimeBuoyDates(content));
 	}
 
 	async toggleTask(item: CatalogMemoItem, taskIndex: number, checked: boolean): Promise<MemoSaveResult> {
@@ -249,8 +209,7 @@ export class MemoCommandService {
 			taskIndex,
 			checked,
 		});
-		const identity = await this.finishIdentityRebind(item, result.observation, "edit");
-		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates, identity);
+		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
 	}
 
 	async removePermanently(item: CatalogMemoItem): Promise<DailyMutationResult> {
@@ -376,25 +335,21 @@ export class MemoCommandService {
 			observation: item.observationHandle,
 			sourcePath,
 		});
-		const identity = await this.finishIdentityRebind(item, anchored.observation, "edit");
 		const saved = await this.finishMarkdownSavedMemo(
 			anchored,
 			anchored.observation?.timeBuoyDates ?? item.timeBuoyDates,
-			identity,
 		);
 		const link = this.app.fileManager.generateMarkdownLink(file, sourcePath, `#^${anchored.blockId}`);
 		return {
-			text: withCreatedAtAlias(link, item.createdAt),
-			memoId: item.memoId,
+			text: withCreatedAtAlias(link, `${item.observation.logicalDate}T${item.observation.time}`),
+			memoId: null,
 			followUpPending: saved.followUpPending,
 			localRefreshPending: saved.localRefreshPending,
 		};
 	}
 
 	async recordReview(item: CatalogMemoItem): Promise<void> {
-		const state = this.identityLedger.resolveObservationState(item.observation);
-		if (state.kind !== "identified") throw new Error("Review requires one confirmed memo identity.");
-		await this.identityLedger.recordReview(state.binding, this.now().toISOString());
+		await this.readService.recordReview(item);
 	}
 
 	private async refreshResolvedMemo(handle: ObservationHandle): Promise<ResolvedMemo> {
@@ -437,7 +392,7 @@ export class MemoCommandService {
 			memoId: memo?.memoId ?? identity?.memoId ?? null,
 			memo,
 			timeBuoyDates: [...(memo?.timeBuoyDates ?? timeBuoyDates)],
-			followUpPending: identity?.pending ?? true,
+			followUpPending: identity?.pending ?? input.status === "committed_content_pending",
 			localRefreshPending,
 		};
 	}
@@ -472,60 +427,6 @@ export class MemoCommandService {
 		void dailyCommitted.catch(() => undefined);
 		void settled.catch(() => undefined);
 		return { dailyCommitted, settled };
-	}
-
-	private async beginIdentityCreate(
-		content: string,
-		logicalDate: string,
-		createdAt: Date,
-		sourceMemoId: string | null,
-	): Promise<IdentityLedgerCreatePlan | null> {
-		let targetPath: string | null = null;
-		try {
-			targetPath = await this.options.getDailyPathForDate?.(logicalDate) ?? null;
-		} catch {
-			targetPath = null;
-		}
-		try {
-			return await this.identityLedger.beginCreate({
-				targetPath,
-				logicalDate,
-				time: formatTimePart(createdAt),
-				contentHash: hashMemoContent(content),
-				sourceMemoId,
-			});
-		} catch {
-			return null;
-		}
-	}
-
-	private async finishIdentityCreate(
-		plan: IdentityLedgerCreatePlan | null,
-		observation: ResolvedMemo["observation"] | null,
-	): Promise<boolean> {
-		if (plan === null || observation === null) return true;
-		try {
-			await this.identityLedger.finishCreate(plan, observation);
-			return false;
-		} catch {
-			return true;
-		}
-	}
-
-	private async finishIdentityRebind(
-		item: CatalogMemoItem,
-		observation: ResolvedMemo["observation"] | null,
-		reason: IdentityLedgerRebindReason,
-	): Promise<{ memoId: string | null; pending: boolean }> {
-		if (observation === null) return { memoId: item.memoId, pending: true };
-		try {
-			const binding = await this.identityLedger.rebindObservation(item.observation, observation, reason, item.resolved.identityHandle);
-			return binding === null
-				? { memoId: item.memoId, pending: true }
-				: { memoId: binding.memoId, pending: false };
-		} catch {
-			return { memoId: item.memoId, pending: true };
-		}
 	}
 
 	private async findMemoByObservation(observation: ResolvedMemo["observation"]): Promise<CatalogMemoItem | null> {

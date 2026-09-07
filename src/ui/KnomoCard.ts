@@ -109,8 +109,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 					action.candidateMemoId,
 				);
 			}
-			if (options.timeBuoy !== undefined
-				&& (memo.catalog === undefined || memo.catalog.capabilities.identity.review === "ready")) {
+			if (options.timeBuoy !== undefined) {
 				renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
 			}
 			if (actionExplanation === "identity-actions-paused") {

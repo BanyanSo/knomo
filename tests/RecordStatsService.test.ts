@@ -61,7 +61,7 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 		memoCount: 3,
 		wordCount: 7,
 		recordDayCount: 2,
-		referenceMemoCount: 1,
+		referenceMemoCount: 0,
 		taggedMemoCount: 2,
 		untaggedMemoCount: 1,
 		imageMemoCount: 1,

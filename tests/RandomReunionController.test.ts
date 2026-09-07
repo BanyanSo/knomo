@@ -54,11 +54,9 @@ test("keeps the current random reunion batch visible while loading the next grou
 	const nextMemos = [makeMemo("memo-2")];
 	const deferred = createDeferred<MemoRecord[]>();
 	let loadCalls = 0;
-	let prepareNext: () => void = () => undefined;
 	const controller = new RandomReunionController({
-		loadRandomReunionMemos: async (_count, onPreparingIdentity) => {
+		loadRandomReunionMemos: async () => {
 			loadCalls += 1;
-			if (loadCalls > 1) prepareNext = onPreparingIdentity;
 			return loadCalls === 1 ? firstMemos : deferred.promise;
 		},
 		openRandomReunionMemo: async () => {},
@@ -74,8 +72,7 @@ test("keeps the current random reunion batch visible while loading the next grou
 
 	assert.equal(controller.getSnapshot().status, "loading-candidates");
 	assert.deepEqual(controller.getSnapshot().memos, firstMemos);
-	prepareNext();
-	assert.equal(controller.getSnapshot().status, "preparing-identity");
+	assert.equal(controller.getSnapshot().status, "loading-candidates");
 	assert.deepEqual(controller.getSnapshot().memos, firstMemos);
 
 	deferred.resolve(nextMemos);
@@ -137,14 +134,13 @@ test("reports random reunion refresh errors without presenting a false empty res
 	assert.equal(renderCalls, 2);
 });
 
-test("reports identity preparation separately before a preparation failure", async () => {
+test("reports candidate loading failure without an identity phase", async () => {
 	const { RandomReunionController } = await loadController();
 	const notices: string[] = [];
 	const states: string[] = [];
 	const controller = new RandomReunionController({
-		loadRandomReunionMemos: async (_count, onPreparingIdentity) => {
-			onPreparingIdentity();
-			throw new Error("identity preparation failed");
+		loadRandomReunionMemos: async () => {
+			throw new Error("candidate loading failed");
 		},
 		openRandomReunionMemo: async () => {},
 		markRandomReunionReviewed: async () => {},
@@ -155,7 +151,7 @@ test("reports identity preparation separately before a preparation failure", asy
 
 	await controller.refresh();
 
-	assert.deepEqual(states, ["loading-candidates", "preparing-identity", "failed"]);
+	assert.deepEqual(states, ["loading-candidates", "failed"]);
 	assert.equal(controller.getSnapshot().status, "failed");
 	assert.equal(controller.getSnapshot().memos, null);
 	assert.equal(notices.length, 1);

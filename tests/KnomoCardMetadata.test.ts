@@ -166,11 +166,7 @@ test("builds memo source reference metadata", () => {
 			memoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
 			referenceText: "[[Daily/2026-06-02#^abc|20260602-083000]]",
 		}],
-	}), deletedMemoIds), {
-		type: "markdown",
-		text: "[[Daily/2026-06-02#^abc|20260602-083000]]",
-		sourcePath: "Daily/2026-06-02.md",
-	});
+	}), deletedMemoIds), { type: "none" });
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({
 		contentSnapshot: "引用 [[Daily/2026-06-01#^block-a|20260601-083000]]\n> 原文",
 		sourceMemoId: null,

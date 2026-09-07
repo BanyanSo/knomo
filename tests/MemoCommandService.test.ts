@@ -15,7 +15,43 @@ import type { MarkdownMutationService } from "../src/types/memoOperations";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim", async () => {
+test("普通命令不访问 Identity，并将最初 observation handle 原样交给写入网关", async () => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "same memo");
+	await seedCatalog(catalog, store, observation);
+	const file = Object.assign(new TFile(), { path: observation.sourcePath });
+	const app = { vault: { getAbstractFileByPath: () => file }, fileManager: {
+		generateMarkdownLink: () => "[[Daily/2026-08-22#^block]]",
+	}, loadLocalStorage: () => null, saveLocalStorage: () => undefined } as unknown as App;
+	const handles: unknown[] = [];
+	const mutate = async (input: { observation: unknown }) => { handles.push(input.observation); return mutationResult(observation); };
+	const mutations = { create: async () => mutationResult(observation), edit: mutate, copy: mutate, move: mutate,
+		toggleTask: mutate, createBlockReference: async (input: { observation: unknown }) => ({ ...await mutate(input), blockId: "block" }),
+	} as unknown as MarkdownMutationService;
+	const identity = new Proxy({} as IdentityLedgerMutationService, { get: () => { throw new Error("Identity accessed"); } });
+	const service = new MemoCommandService(app, catalog, { ...makeCommandOptions(), now: () => new Date("2026-09-08T12:00:00Z") }, mutations, identity);
+	const item = (await service.getReadService().query({ limit: 10 })).items[0]!;
+	assert.equal((await service.create("created")).followUpPending, false);
+	for (const result of [await service.edit(item, "edited"), await service.copy(item),
+		await service.move(item, "2026-08-23"), await service.toggleTask(item, 0, true)]) {
+		assert.equal(result.followUpPending, false);
+		assert.equal(result.memoId, null);
+	}
+	assert.equal((await service.createReferenceText(item)).text, "[[Daily/2026-08-22#^block|2026-08-22 12:34]]");
+	assert.equal(handles.length, 5);
+	for (const handle of handles) assert.strictEqual(handle, item.observationHandle);
+	await service.recordReview(item);
+	assert.equal((await service.getReadService().getRandomReunionItems(1)).length, 1);
+});
+
+test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async () => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -68,11 +104,11 @@ test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim",
 
 	const result = await service.create(observation.content);
 
-	assert.deepEqual(events, ["intent", "daily", "claim"]);
-	assert.equal(result.memoId, binding.memoId);
+	assert.deepEqual(events, ["daily"]);
+	assert.equal(result.memoId, null);
 	assert.equal(result.followUpPending, false);
 	assert.equal(result.localRefreshPending, false);
-	assert.match(createIntentTime, /^\d{2}:\d{2}:56$/u);
+	assert.equal(createIntentTime, "");
 
 	events.length = 0;
 	claimed = false;
@@ -91,10 +127,10 @@ test("create 固定执行 intent、Daily、claim；Daily 失败时不写 claim",
 	);
 
 	await assert.rejects(() => failingService.create("will fail"), /Daily write failed/u);
-	assert.deepEqual(events, ["intent", "daily"]);
+	assert.deepEqual(events, ["daily"]);
 });
 
-test("迁移期间 intent 快速降级时仍立即提交 Daily，并标记 identity pending", async () => {
+test("Identity 不可用时 create 仍提交 Daily，不产生 identity pending", async () => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -129,12 +165,12 @@ test("迁移期间 intent 快速降级时仍立即提交 Daily，并标记 ident
 
 	const result = await service.create(observation.content);
 
-	assert.deepEqual(events, ["intent", "daily"]);
+	assert.deepEqual(events, ["daily"]);
 	assert.equal(result.memoId, null);
-	assert.equal(result.followUpPending, true);
+	assert.equal(result.followUpPending, false);
 });
 
-test("阶段化 create 在 Daily 提交后先完成 committed，identity 与读模型继续结算", async () => {
+test("阶段化 create 在 Daily 提交后先完成 committed，只等待 Catalog", async () => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -186,61 +222,11 @@ test("阶段化 create 在 Daily 提交后先完成 committed，identity 与读�
 	void operation.settled.then(() => { settled = true; });
 	await operation.dailyCommitted;
 
-	assert.deepEqual(events, ["intent", "daily"]);
+	assert.deepEqual(events, ["daily"]);
 	assert.equal(settled, false);
 	catalogGate.resolve(undefined);
 	await operation.settled;
-	assert.deepEqual(events, ["intent", "daily", "claim"]);
-});
-
-test("adoptMemo 在 Identity absent 时按需采用并幂等返回 review-ready memo", async () => {
-	await ensureObsidianStub();
-	const { MemoCommandService } = await import("../src/services/MemoCommandService");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const store = new InMemoryMemoCatalogStore();
-	const catalog = new MemoCatalogService(store);
-	await catalog.open();
-	const observation = makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "historical random candidate");
-	await seedCatalog(catalog, store, observation);
-	const binding = makeBinding(observation, "2026082012345601", "identity-1");
-	let adopted = false;
-	let adoptionCount = 0;
-	const identityLedger = {
-		getRevision: () => adopted ? "identity-1" : "identity-absent",
-		getStatus: () => adopted ? "ready" : "absent",
-		getSnapshot: () => ({ revision: adopted ? "identity-1" : "identity-absent", eventCount: adoptionCount, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
-		resolveObservation: () => adopted ? binding : null,
-		resolveObservationState: () => adopted
-			? { kind: "identified", binding } as const
-			: { kind: "unbound" } as const,
-		getSourceMemoId: () => null,
-		getCreatedAt: () => null,
-		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		adoptObservation: async () => {
-			adoptionCount += 1;
-			adopted = true;
-			return binding;
-		},
-	} as unknown as IdentityLedgerMutationService;
-	const service = new MemoCommandService(
-		{} as App,
-		catalog,
-		makeCommandOptions(),
-		{} as MarkdownMutationService,
-		identityLedger,
-	);
-	const source = (await service.getReadService().query({ limit: 20 })).items[0];
-	assert.notEqual(source, undefined);
-	if (source === undefined) throw new Error("Catalog memo fixture is missing.");
-
-	const first = await service.adoptMemo(source);
-	const second = await service.adoptMemo(source);
-
-	assert.equal(adoptionCount, 1);
-	assert.equal(first.memoId, binding.memoId);
-	assert.equal(second.memoId, binding.memoId);
-	assert.equal(first.capabilities.identity.review, "ready");
+	assert.deepEqual(events, ["daily"]);
 });
 
 test("手写 memo 删除前先确定性补身份，再进入可恢复删除", async () => {

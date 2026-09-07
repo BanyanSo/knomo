@@ -757,14 +757,16 @@ test("formats new reference aliases from createdAt without exposing internal mem
 		"2026-06-05T14:30:12.987+08:00",
 	);
 
-	assert.equal(referenceText, "[[Daily/2026-06-05#^abc123|20260605-143012]]");
+	assert.equal(referenceText, "[[Daily/2026-06-05#^abc123|2026-06-05 14:30:12]]");
 	assert.equal(referenceText.includes(memoId), false);
-	assert.match(formatCreatedAtAlias("2026-06-05T14:30:12"), /^\d{8}-\d{6}$/u);
+	assert.equal(formatCreatedAtAlias("2026-06-05T14:30:12"), "2026-06-05 14:30:12");
+	assert.equal(withCreatedAtAlias("[target](../Daily/Note.md#%5Eblock)", "2026-06-05T14:30"),
+		"[2026-06-05 14:30](../Daily/Note.md#%5Eblock)");
 });
 
 test("formats createdAt aliases consistently across device timezones", () => {
-	assert.equal(formatCreatedAtAlias("2026-06-05T14:30:12.987+08:00"), "20260605-143012");
-	assert.equal(formatCreatedAtAlias("2026-06-05T14:30:12.987-07:00"), "20260605-143012");
+	assert.equal(formatCreatedAtAlias("2026-06-05T14:30:12.987+08:00"), "2026-06-05 14:30:12");
+	assert.equal(formatCreatedAtAlias("2026-06-05T14:30:12.987-07:00"), "2026-06-05 14:30:12");
 });
 
 function createDailyNotesApp(options: {

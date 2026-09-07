@@ -142,10 +142,7 @@ export function getTrashCardActions(busyAction: TrashAction | null, purgeAllowed
 	}));
 }
 
-export function getMemoSourceReferenceMeta(memo: MemoRecord, deletedMemoIds: ReadonlySet<string>): MemoSourceReferenceMeta {
-	if (memo.sourceMemoId !== null && deletedMemoIds.has(memo.sourceMemoId)) {
-		return { type: "none" };
-	}
+export function getMemoSourceReferenceMeta(memo: MemoRecord, _deletedMemoIds: ReadonlySet<string>): MemoSourceReferenceMeta {
 	const sourceReferenceText = getSourceReferenceText(memo);
 	if (sourceReferenceText !== null) {
 		return {
@@ -158,8 +155,7 @@ export function getMemoSourceReferenceMeta(memo: MemoRecord, deletedMemoIds: Rea
 }
 
 function getSourceReferenceText(memo: MemoRecord): string | null {
-	const referenceText = memo.references[0]?.referenceText
-		?? getPreferredMemoBlockReferenceText(memo.contentSnapshot);
+	const referenceText = getPreferredMemoBlockReferenceText(memo.contentSnapshot);
 	return referenceText;
 }
 

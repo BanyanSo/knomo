@@ -7,6 +7,8 @@ import { DiaryMemoParser } from "./DiaryMemoParser";
 export type DailyWriteMode = "active_editor" | "vault_process";
 
 export interface DailyWritePrepareInput {
+	// Trash 在编辑器路径中也必须确认磁盘基线；普通命令保持原行为。
+	requireDiskMatch?: boolean;
 	file: TFile;
 	logicalDate: string;
 	expectedRevision: string | null;
@@ -14,6 +16,7 @@ export interface DailyWritePrepareInput {
 }
 
 export interface PreparedDailyWrite {
+	requireDiskMatch?: boolean;
 	file: TFile;
 	logicalDate: string;
 	mode: DailyWriteMode;
@@ -55,6 +58,9 @@ export class DailyMemoWriteGateway {
 		const editor = this.getActiveEditor(input.file);
 		const mode: DailyWriteMode = editor === null ? "vault_process" : "active_editor";
 		const beforeContent = editor?.getValue() ?? await this.app.vault.cachedRead(input.file);
+		if (input.requireDiskMatch && await this.app.vault.read(input.file) !== beforeContent) {
+			throw new StaleDailyWriteError(input.file.path);
+		}
 		const before = await this.parse(input.file.path, input.logicalDate, beforeContent);
 		if (input.expectedRevision !== null && input.expectedRevision !== before.sourceRevision) {
 			throw new StaleDailyWriteError(input.file.path);
@@ -62,6 +68,7 @@ export class DailyMemoWriteGateway {
 		const afterContent = input.update(beforeContent, before);
 		const after = await this.parse(input.file.path, input.logicalDate, afterContent);
 		return {
+			requireDiskMatch: input.requireDiskMatch,
 			file: input.file,
 			logicalDate: input.logicalDate,
 			mode,
@@ -76,6 +83,9 @@ export class DailyMemoWriteGateway {
 
 	async commit(prepared: PreparedDailyWrite): Promise<DailyWriteResult> {
 		if (prepared.mode === "active_editor") {
+			if (prepared.requireDiskMatch && await this.app.vault.read(prepared.file) !== prepared.beforeContent) {
+				throw new StaleDailyWriteError(prepared.file.path);
+			}
 			const editor = prepared.editor;
 			if (editor === null || this.getActiveEditor(prepared.file) !== editor) {
 				throw new StaleDailyWriteError(prepared.file.path);

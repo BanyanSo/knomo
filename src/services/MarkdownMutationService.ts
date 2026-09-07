@@ -445,7 +445,7 @@ function committedResult(
 	};
 }
 
-function findObservation(
+export function findObservation(
 	parsed: DiaryMemoParseResult,
 	handle: ObservationHandle,
 	actualPath: string,
@@ -480,7 +480,7 @@ function findReplacementObservation(
 	return matches[0] as MemoObservation;
 }
 
-function findAppendedObservation(
+export function findAppendedObservation(
 	prepared: PreparedDailyWrite,
 	rawBlock: string,
 	section: string | null,
@@ -506,12 +506,12 @@ function normalizeRawBlock(value: string): string {
 	return value.replace(/\r\n|\r/gu, "\n").replace(/\n$/u, "");
 }
 
-function getRawBlock(content: string, observation: MemoObservation): string {
+export function getRawBlock(content: string, observation: MemoObservation): string {
 	const range = getObservationRange(content, observation);
 	return content.slice(range.start, range.end);
 }
 
-function replaceObservation(
+export function replaceObservation(
 	content: string,
 	observation: MemoObservation,
 	replacement: string,
@@ -544,7 +544,7 @@ function getLineStarts(content: string): number[] {
 	return starts;
 }
 
-function insertRawBlock(
+export function insertRawBlock(
 	content: string,
 	rawBlock: string,
 	section: string | null,
@@ -676,7 +676,7 @@ function appendReferenceBlockId(rawBlock: string, blockId: string): string {
 	throw new Error("Reference target has no effective content line.");
 }
 
-function hasBlockId(content: string, blockId: string): boolean {
+export function hasBlockId(content: string, blockId: string): boolean {
 	const escaped = blockId.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 	return new RegExp(`(?:^|[^A-Za-z0-9_-])\\^${escaped}\\b`, "u").test(content);
 }

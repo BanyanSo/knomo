@@ -59,9 +59,11 @@ export interface KnomoRuntimeSnapshot {
 export interface CatalogMemoItem {
 	key: string;
 	renderKey: string;
+	// 临时旧命令/重逢适配字段；普通 observation 卡片均为 null。
 	memoId: string | null;
 	identityHandle: IdentityHandle | null;
 	observationHandle: ObservationHandle;
+	// 当前 Daily 日期与原样 parsed time，非永久创建时间或带时区 instant。
 	createdAt: string;
 	content: string;
 	tags: string[];
@@ -105,7 +107,6 @@ export interface CatalogMemoPage {
 	items: CatalogMemoItem[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
-	identityRevision: string;
 	coverage: CatalogCoverage;
 	lifecycle: CatalogStoreLifecycle;
 	capabilities: CatalogCapabilities;
@@ -119,7 +120,6 @@ export interface CatalogMemoCountResult {
 	count: number | null;
 	complete: boolean;
 	catalogRevision: number;
-	identityRevision: string;
 	coverage: CatalogCoverage;
 }
 

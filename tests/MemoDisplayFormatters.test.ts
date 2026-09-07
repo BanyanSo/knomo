@@ -16,10 +16,25 @@ test("memo display formatter converts zoned ISO timestamps to local time at seco
 	}
 });
 
-test("memo display formatter keeps timezone-less Identity creation time as local wall time", async () => {
+test("memo display formatter keeps timezone-less Daily time as local wall time", async () => {
 	const { formatMemoDisplayTime } = await loadModule();
 
 	assert.equal(formatMemoDisplayTime("2026-09-01T06:04:11"), "2026-09-01 06:04:11");
+});
+
+test("当前 observation 显示保留分钟或秒精度，不随设备时区变化", async () => {
+	const { formatObservationDisplayTime } = await loadModule();
+	const originalTimeZone = process.env.TZ;
+	try {
+		for (const zone of ["Asia/Shanghai", "America/Los_Angeles"]) {
+			process.env.TZ = zone;
+			assert.equal(formatObservationDisplayTime({ logicalDate: "2026-09-01", time: "00:04" }), "2026-09-01 00:04");
+			assert.equal(formatObservationDisplayTime({ logicalDate: "2026-09-01", time: "00:04:00" }), "2026-09-01 00:04:00");
+		}
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
 });
 
 test("memo display formatter uses unknown text for empty optional times", async () => {

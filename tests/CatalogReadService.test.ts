@@ -14,7 +14,7 @@ import type {
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("Catalog observation 在 Identity Ledger 关系到达后原地获得 memoId", async () => {
+test("普通 Catalog observation 不因 Identity 到达而获得永久身份或改变本地 key", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -28,8 +28,7 @@ test("Catalog observation 在 Identity Ledger 关系到达后原地获得 memoId
 
 	const before = await service.query({ limit: 50 });
 	assert.equal(before.items[0]?.memoId, null);
-	assert.equal(before.items[0]?.resolved.kind, "observed");
-	assert.equal(before.identityRevision, "identity-absent");
+	assert.equal(before.items[0]?.resolved.kind, "observation");
 
 	const binding = makeBinding(observation, "2026082212345601", "identity-1");
 	identity.setState(observation.content, { kind: "identified", binding }, "ready", "identity-1");
@@ -37,12 +36,12 @@ test("Catalog observation 在 Identity Ledger 关系到达后原地获得 memoId
 
 	assert.equal(after.invalidated, false);
 	assert.equal(after.items[0]?.renderKey, before.items[0]?.renderKey);
-	assert.equal(after.items[0]?.memoId, binding.memoId);
-	assert.equal(after.items[0]?.resolved.kind, "identified");
-	assert.equal(after.identityRevision, "identity-1");
+	assert.equal(after.items[0]?.memoId, null);
+	assert.equal(after.items[0]?.resolved.kind, "observation");
+	assert.deepEqual(after, before);
 });
 
-test("首次安装身份导入期间保留浏览编辑但暂停无身份直删", async () => {
+test("首次安装身份导入不改变普通卡片，删除仍进入旧命令准备入口", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -60,21 +59,20 @@ test("首次安装身份导入期间保留浏览编辑但暂停无身份直删",
 
 	const during = await service.query({ limit: 50 });
 	assert.equal(during.items[0]?.capabilities.markdown.edit, true);
-	assert.equal(during.items[0]?.capabilities.identity.recoverableDelete, "syncing");
-	assert.equal(during.items[0]?.resolved.kind === "observed" && during.items[0].resolved.adoption, "settling");
+	assert.equal(during.items[0]?.capabilities.identity.recoverableDelete, "absent");
+	assert.equal(during.items[0]?.resolved.kind, "observation");
 
 	bootstrapStatus = "completed";
 	const after = await service.query({ limit: 50 });
 	assert.equal(after.items[0]?.capabilities.identity.recoverableDelete, "absent");
-	assert.equal(after.items[0]?.resolved.kind === "observed" && after.items[0].resolved.adoption, "eligible");
+	assert.deepEqual(after, during);
 });
 
-test("已识别 memo 的展示创建时间优先保留 Identity 秒数", async () => {
+test("普通 memo 时间取当前 Daily，不能用 Identity 创建时间补秒", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const { formatCreatedAtAlias } = await import("../src/utils/references");
 	const store = new InMemoryMemoCatalogStore();
 	const catalog = new MemoCatalogService(store);
 	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "second precision");
@@ -93,11 +91,10 @@ test("已识别 memo 的展示创建时间优先保留 Identity 秒数", async (
 	const page = await service.query({ limit: 50 });
 
 	assert.equal(observation.time, "12:34");
-	assert.equal(page.items[0]?.createdAt, "2026-08-22T12:34:56");
-	assert.equal(formatCreatedAtAlias(page.items[0]?.createdAt ?? ""), "20260822-123456");
+	assert.equal(page.items[0]?.createdAt, "2026-08-22T12:34");
 });
 
-test("Identity 冲突只降级相关 observation，不阻断其他 Catalog 内容", async () => {
+test("Identity 冲突不覆盖普通 observation 的卡片状态", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -120,11 +117,11 @@ test("Identity 冲突只降级相关 observation，不阻断其他 Catalog 内�
 	const unaffectedItem = page.items.find((item) => item.content === unaffected.content);
 
 	assert.equal(page.items.length, 2);
-	assert.equal(page.status.identity, "ready");
+	assert.equal(page.status.identity, "absent");
 	assert.equal(page.status.identityAttention, null);
-	assert.equal(conflictedItem?.resolved.kind, "ambiguous");
-	assert.equal(conflictedItem?.capabilities.identity.repair, "conflicted");
-	assert.equal(unaffectedItem?.resolved.kind, "observed");
+	assert.equal(conflictedItem?.resolved.kind, "observation");
+	assert.equal(conflictedItem?.capabilities.identity.repair, "absent");
+	assert.equal(unaffectedItem?.resolved.kind, "observation");
 	assert.equal(unaffectedItem?.capabilities.markdown.edit, true);
 });
 
@@ -709,15 +706,17 @@ test("记录统计钻取在分页前处理标签、引用、小时和并列日�
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "hour", ...range, hour: 9 }, { limit: 50 })).items.map((item) => item.content), ["explicit [[Daily#^abc]]", "parent"]);
 	const references = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1 });
 	const moreReferences = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1, cursor: references.nextCursor });
+	assert.deepEqual(moreReferences.items, []);
+	assert.equal(moreReferences.nextCursor, null);
 	const referenceCount = await service.countRecordStatsDrilldown({ type: "references", ...range });
-	assert.deepEqual([...references.items, ...moreReferences.items].map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
-	assert.equal(referenceCount.count, 2);
+	assert.deepEqual(references.items.map((item) => item.content), ["explicit [[Daily#^abc]]"]);
+	assert.equal(referenceCount.count, 1);
 	assert.equal(referenceCount.complete, true);
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-notes", dates: ["2026-08-01", "2026-08-04"] }, { limit: 50 })).items.map((item) => item.content), ["image", "parent"]);
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-words", dates: ["2026-08-02", "2026-08-03"] }, { limit: 50 })).items.map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
 });
 
-test("记录统计从 Daily aggregate 构建，并补齐 Identity relation 引用", async () => {
+test("记录统计只从 Daily aggregate 构建，不补造 Identity relation 引用", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -739,10 +738,51 @@ test("记录统计从 Daily aggregate 构建，并补齐 Identity relation 引�
 	const prepared = await service.buildRecordStats(async () => undefined, () => true);
 
 	assert.deepEqual(prepared?.overview, { memoCount: 2, wordCount: 5, recordDayCount: 2 });
-	assert.equal(prepared?.daily.get("2026-08-02")?.referenceMemoCount, 1);
+	assert.equal(prepared?.daily.get("2026-08-02")?.referenceMemoCount, 0);
 	assert.equal(prepared?.daily.get("2026-08-01")?.hourCounts[8], 1);
 	assert.equal(prepared?.daily.get("2026-08-01")?.tagMemoCounts.get("work/project"), 1);
 	assert.equal(prepared?.tagDisplayNames.get("work/project"), "Work/Project");
+});
+
+test("普通查询、计数和统计不访问 Identity；混合精度分页、重复项与 revision key 均来自 Daily", async () => {
+	await ensureObsidianStub();
+	const { createHash } = await import("node:crypto");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
+	const text = "## Memos\n- 10:30 same\n- 10:30:00 same\n- 10:30:27 later\n- 10:30 same\n";
+	const parse = (content: string) => parser.parse({
+		sourcePath: "Daily/2026-08-22.md", logicalDate: "2026-08-22", bytes: Buffer.from(content),
+	});
+	await seedCatalog(catalog, store, (await parse(text)).observations);
+	const identity = new Proxy({} as IdentityLedgerReader, {
+		get: (_target, property) => { throw new Error(`Ordinary read accessed Identity: ${String(property)}`); },
+	});
+	const service = new CatalogReadService({ catalog, identityLedger: identity });
+	const first = await service.query({ limit: 2 });
+	const second = await service.query({ limit: 2, cursor: first.nextCursor });
+	const items = [...first.items, ...second.items];
+	assert.deepEqual(items.map((item) => item.createdAt), [
+		"2026-08-22T10:30:27", "2026-08-22T10:30", "2026-08-22T10:30:00", "2026-08-22T10:30",
+	]);
+	assert.deepEqual(items.map((item) => item.observation.startLine), [3, 4, 2, 1]);
+	assert.equal(new Set(items.map((item) => item.key)).size, 4);
+	assert.ok(items.every((item) => item.memoId === null && item.sourceMemoId === null && item.resolved.kind === "observation"));
+	assert.equal("identityRevision" in first, false);
+	assert.equal((await service.count({})).count, 4);
+	assert.equal((await service.countRecordStatsDrilldown({ type: "hour", startDate: "2026-08-22", endDateExclusive: "2026-08-23", hour: 10 })).count, 4);
+	assert.equal((await service.buildRecordStats(async () => {}, () => true))?.daily.get("2026-08-22")?.hourCounts[10], 4);
+	assert.deepEqual((await service.query({ limit: 4 })).items.map((item) => item.key), items.map((item) => item.key));
+	await seedCatalog(catalog, store, (await parse(`${text}\n`)).observations);
+	assert.equal((await service.query({ limit: 2, cursor: first.nextCursor })).invalidated, true);
+	const refreshed = await service.query({ limit: 4 });
+	assert.ok(refreshed.items.every((item) => !items.some((old) => old.key === item.key)));
+	assert.deepEqual(refreshed.items.map((item) => item.createdAt), items.map((item) => item.createdAt));
+	assert.equal(items[0]?.observationHandle.sourceRevision, (await parse(text)).sourceRevision);
 });
 
 async function seedCatalog(

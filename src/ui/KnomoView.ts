@@ -209,7 +209,6 @@ interface CatalogMemoLoad {
 	memos: MemoRecord[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
-	identityRevision: string;
 	coverage: CatalogCoverage;
 	readState: CatalogReadState;
 	status: CatalogReadStatus;
@@ -331,7 +330,6 @@ export class KnomoView extends ItemView {
 	private catalogMobileQueryRun = 0;
 	private catalogMobileTotalCount: number | null = null;
 	private catalogRevision = 0;
-	private catalogIdentityRevision = "";
 	private catalogDesktopQueryFingerprint: string | null = null;
 	private hasCommittedCatalogDesktopQuery = false;
 	private libraryIndexRevision = -1;
@@ -1547,7 +1545,6 @@ export class KnomoView extends ItemView {
 					queryRun,
 					sourceGeneration,
 					catalogRevision: load.catalogRevision,
-					identityRevision: load.identityRevision,
 				});
 			}
 			loaded = true;
@@ -1607,7 +1604,6 @@ export class KnomoView extends ItemView {
 			readState: page.readState,
 			status: page.status,
 			catalogRevision: page.catalogRevision,
-			identityRevision: page.identityRevision,
 		};
 	}
 
@@ -1617,7 +1613,6 @@ export class KnomoView extends ItemView {
 		this.catalogReadState = load.readState;
 		this.catalogStatus = load.status;
 		this.catalogRevision = load.catalogRevision;
-		this.catalogIdentityRevision = load.identityRevision;
 		this.syncRecordStatsSource();
 		if (this.libraryIndexRevision !== load.catalogRevision || this.librarySummary === null || this.libraryTagFacets === null) {
 			void this.refreshCatalogLibraryIndexes();
@@ -1636,7 +1631,6 @@ export class KnomoView extends ItemView {
 		queryRun: number;
 		sourceGeneration: number;
 		catalogRevision: number;
-		identityRevision: string;
 	}): Promise<void> {
 		const countRun = ++this.catalogDesktopCountRun;
 		const result = await this.countCatalogFeature(options.loadAll);
@@ -1645,7 +1639,6 @@ export class KnomoView extends ItemView {
 			|| countRun !== this.catalogDesktopCountRun
 			|| !this.isCatalogQueryCurrent(options.queryFingerprint, options.loadAll)
 			|| result.catalogRevision !== options.catalogRevision
-			|| result.identityRevision !== options.identityRevision
 			|| !result.complete
 			|| result.count === null) {
 			return;
@@ -1760,7 +1753,6 @@ export class KnomoView extends ItemView {
 			this.catalogReadState = page.readState;
 			this.catalogStatus = page.status;
 			this.catalogRevision = page.catalogRevision;
-			this.catalogIdentityRevision = page.identityRevision;
 			this.syncRecordStatsSource();
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
@@ -1832,7 +1824,6 @@ export class KnomoView extends ItemView {
 		this.catalogReadState = page.readState;
 		this.catalogStatus = page.status;
 		this.catalogRevision = page.catalogRevision;
-		this.catalogIdentityRevision = page.identityRevision;
 		this.syncRecordStatsSource();
 		this.invalidateMemoSearchCache();
 		this.retainMemoCardPreviews();
@@ -1846,7 +1837,6 @@ export class KnomoView extends ItemView {
 					query,
 					recordStatsFilter,
 					catalogRevision: page.catalogRevision,
-					identityRevision: page.identityRevision,
 				});
 			}
 		}
@@ -1857,7 +1847,6 @@ export class KnomoView extends ItemView {
 		query: CatalogFeatureFilter;
 		recordStatsFilter: RecordStatsSearchFilter | null;
 		catalogRevision: number;
-		identityRevision: string;
 	}): Promise<void> {
 		const result = options.recordStatsFilter === null
 			? await this.getCatalogReadService().count(options.query)
@@ -1867,7 +1856,6 @@ export class KnomoView extends ItemView {
 			);
 		if (options.run !== this.catalogMobileQueryRun
 			|| result.catalogRevision !== options.catalogRevision
-			|| result.identityRevision !== options.identityRevision
 			|| !result.complete
 			|| result.count === null) {
 			return;
@@ -5776,7 +5764,7 @@ export class KnomoView extends ItemView {
 		const coverage = this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage)
 			? "complete"
 			: "incomplete";
-		const source = `catalog:${this.catalogRevision}:identity:${this.catalogIdentityRevision}:coverage:${coverage}`;
+		const source = `catalog:${this.catalogRevision}:coverage:${coverage}`;
 		if (this.recordStatsPreparationController.setSourceKey(source)) {
 			this.recordStatsService.invalidate(
 				coverage === "incomplete" || this.recordStatsService.getSnapshot().updating,
@@ -6149,6 +6137,11 @@ export class KnomoView extends ItemView {
 		try {
 			const result = await this.memoCommandService.toggleTask(await this.resolveCatalogMemo(memo), taskIndex, checked);
 			dailySaved = result.status === "saved";
+			if (result.memo !== null && result.memo.key !== memo.id) {
+				// 文件 revision 改变后旧卡片句柄已失效，重新加载当前 occurrence。
+				if (!await this.reloadMemos(false)) new Notice(t("catalog.savedRefreshPending"));
+				return;
+			}
 			if (result.memo !== null) {
 				const updatedMemo = this.applySavedMemo(result.memo);
 				this.memoMarkdownRenderer.syncTaskCheckboxesForMemo(

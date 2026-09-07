@@ -11,6 +11,7 @@ export interface MemoTaskRef {
 	text: string;
 }
 
+// 句柄只授权指定 Daily revision 内的 occurrence；revision 变化后必须重新选择，不能按行号或 hash 换目标。
 export interface ObservationHandle {
 	sourcePath: string;
 	sourceRevision: string;
@@ -114,6 +115,13 @@ export interface IdentityCandidate {
 }
 
 export type ResolvedMemo =
+	| {
+		// 普通 Catalog 读模型；旧写入和 Trash 的身份适配暂时保留在独立入口。
+		kind: "observation";
+		identityHandle: null;
+		observation: MemoObservation;
+		capabilities: ResolvedMemoCapabilities;
+	}
 	| {
 		kind: "identified";
 		bindingEvidence: ResolvedIdentityEvidence;

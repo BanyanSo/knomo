@@ -134,6 +134,19 @@ test("task checkbox applies the saved card without waiting for a second page rel
 	assert.deepEqual(events, ["apply", "sync"]);
 });
 
+test("任务保存使 observation key 失效时重新加载，不按旧卡片位置替换句柄", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as TaskToggleView;
+	const events: string[] = [];
+	view.resolveCatalogMemo = async () => ({ observationHandle: {} });
+	view.memoCommandService = { toggleTask: async () => ({ status: "saved", memo: { key: "memo-1" } }) };
+	view.applySavedMemo = () => { throw new Error("Must reload the file revision"); };
+	view.reloadMemos = async () => { events.push("reload"); return true; };
+	await view.handleCatalogTaskToggle({ id: "old-revision-key" }, 0, true);
+	assert.deepEqual(events, ["reload"]);
+});
+
 interface SaveInputView {
 	inputEl: { value: string } | null;
 	isSaving: boolean;

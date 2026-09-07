@@ -107,7 +107,7 @@ test("memo card action menu includes open daily in the requested order", async (
 	assert.equal(timeButton?.getAttr("data-random-reunion-card"), null);
 });
 
-test("memo card left time keeps Identity creation seconds", async () => {
+test("普通卡片时间使用 observation 分钟精度，不读取旧创建时间或 instant formatter", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const { formatMemoDisplayTime } = await import("../src/ui/MemoDisplayFormatters");
@@ -115,6 +115,7 @@ test("memo card left time keeps Identity creation seconds", async () => {
 
 	renderKnomoMemoCard(root.asHtml(), makeMemo({
 		createdAt: "2026-06-02T12:34:56.789+08:00",
+		catalog: { observation: { logicalDate: "2026-06-03", time: "12:34" } } as never,
 	}), {
 		generation: 7,
 		renderIndex: 0,
@@ -130,7 +131,7 @@ test("memo card left time keeps Identity creation seconds", async () => {
 		queueSourceReferenceMarkdown: () => undefined,
 	});
 
-	assert.equal(root.find("[data-memo-time-open='daily']")?.getText(), "2026-06-02 12:34:56");
+	assert.equal(root.find("[data-memo-time-open='daily']")?.getText(), "2026-06-03 12:34");
 });
 
 test("memo card menu keeps Markdown actions available while identity is settling", async () => {
@@ -140,7 +141,7 @@ test("memo card menu keeps Markdown actions available while identity is settling
 	const capabilities = makeCapabilities("syncing");
 
 	renderKnomoMemoCard(root.asHtml(), makeMemo({
-		catalog: { capabilities } as never,
+		catalog: { capabilities, observation: { logicalDate: "2026-06-02", time: "12:34" } } as never,
 	}), {
 		generation: 7,
 		renderIndex: 0,
@@ -171,7 +172,7 @@ test("局部身份冲突无修复入口时，在卡片菜单说明暂停的操�
 	const root = new TestElement("div");
 
 	renderKnomoMemoCard(root.asHtml(), makeMemo({
-		catalog: { capabilities: makeCapabilities("conflicted") } as never,
+		catalog: { capabilities: makeCapabilities("conflicted"), observation: { logicalDate: "2026-06-02", time: "12:34" } } as never,
 	}), {
 		generation: 7,
 		renderIndex: 0,
@@ -200,6 +201,7 @@ test("P1 第 5 步：局部 identity conflict 只为当前 memo 暴露显式 rep
 
 	renderKnomoMemoCard(root.asHtml(), makeMemo({
 		catalog: {
+			observation: { logicalDate: "2026-06-02", time: "12:34" },
 			capabilities: blockedCapabilities,
 			resolved: {
 				kind: "ambiguous",

@@ -2,7 +2,7 @@ import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import { KnomoMutationBarrier } from "./KnomoMutationBarrier";
 
-import type { CatalogRefreshResult, ResolvedMemo } from "../types/catalog";
+import type { CatalogRefreshResult, ObservationHandle, ResolvedMemo } from "../types/catalog";
 import type {
 	CatalogFeatureQuery,
 	CatalogMemoItem,
@@ -33,6 +33,7 @@ import { withCreatedAtAlias } from "../utils/references";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CatalogReadService } from "./CatalogReadService";
 import type { MemoCatalogService } from "./MemoCatalogService";
+import { MarkdownMutationStaleError } from "./MarkdownMutationService";
 
 export interface MemoCommandServiceOptions {
 	getDailyPathForDate?: (logicalDate: string) => Promise<string>;
@@ -125,7 +126,7 @@ export class MemoCommandService {
 	async adoptMemo(item: CatalogMemoItem): Promise<CatalogMemoItem> {
 		const status = this.identityLedger.getStatus();
 		if (status !== "ready" && status !== "absent") throw new Error("Existing Daily memo adoption is unavailable.");
-		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
 		let memoId: string;
 		if (refreshed.kind === "identified") {
 			memoId = refreshed.identityHandle.memoId;
@@ -139,10 +140,11 @@ export class MemoCommandService {
 			refreshed.observation.sourcePath,
 			refreshed.observation.startLine,
 		);
+		assertSameObservation(item.observationHandle, adopted.observationHandle);
 		if (adopted.memoId !== memoId || adopted.capabilities.identity.review !== "ready") {
 			throw new Error("Historical memo adoption did not produce a reviewable identity.");
 		}
-		return adopted;
+		return { ...adopted, observationHandle: item.observationHandle };
 	}
 
 	startCreate(contentInput: string, sourceMemoId: string | null = null): MemoSaveOperation {
@@ -209,7 +211,7 @@ export class MemoCommandService {
 	async repairIdentity(target: CatalogMemoItem, candidateMemoId: string): Promise<void> {
 		const memo = this.identityLedger.getSnapshot().memos[candidateMemoId];
 		if (memo?.conflicted !== true) throw new Error("The selected identity conflict is no longer current.");
-		const refreshed = await this.refreshResolvedMemo(target.resolved);
+		const refreshed = await this.refreshResolvedMemo(target.observationHandle);
 		if (refreshed.kind !== "ambiguous"
 			|| !refreshed.candidates.some((candidate) => candidate.memoId === candidateMemoId)) {
 			throw new Error("The selected identity conflict is no longer current.");
@@ -252,20 +254,20 @@ export class MemoCommandService {
 	}
 
 	async removePermanently(item: CatalogMemoItem): Promise<DailyMutationResult> {
-		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
 		if (refreshed.capabilities.identity.recoverableDelete !== "absent") {
 			throw new Error("Permanent delete requires a current memo without recoverable identity.");
 		}
-		const result = await this.markdownMutations.remove({ observation: refreshed.observation });
+		const result = await this.markdownMutations.remove({ observation: item.observationHandle });
 		const saved = await this.finishMarkdownSavedMemo(result, []);
 		return pickDailyMutationResult(saved);
 	}
 
 	async prepareRecoverableDelete(item: CatalogMemoItem): Promise<CatalogMemoItem | null> {
-		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
 		const currentState = this.identityLedger.resolveObservationState(refreshed.observation);
 		if (currentState.kind === "identified") {
-			return this.requireRecoverableDeleteItem(refreshed, currentState.binding.memoId);
+			return this.requireRecoverableDeleteItem(item.observationHandle, currentState.binding.memoId);
 		}
 		if (currentState.kind !== "unbound") {
 			throw new Error("Recoverable delete requires one confirmed memo identity.");
@@ -279,10 +281,10 @@ export class MemoCommandService {
 		try {
 			memoId = (await this.identityLedger.adoptObservation(refreshed.observation)).memoId;
 		} catch (error) {
-			const latest = await this.refreshResolvedMemo(refreshed);
+			const latest = await this.refreshResolvedMemo(item.observationHandle);
 			const latestState = this.identityLedger.resolveObservationState(latest.observation);
 			if (latestState.kind === "identified") {
-				return this.requireRecoverableDeleteItem(latest, latestState.binding.memoId);
+				return this.requireRecoverableDeleteItem(item.observationHandle, latestState.binding.memoId);
 			}
 			const latestStatus = this.identityLedger.getStatus();
 			if (latestState.kind === "unbound" && (latestStatus === "ready" || latestStatus === "absent")) {
@@ -290,7 +292,7 @@ export class MemoCommandService {
 			}
 			throw error;
 		}
-		return this.requireRecoverableDeleteItem(refreshed, memoId);
+		return this.requireRecoverableDeleteItem(item.observationHandle, memoId);
 	}
 
 	async delete(item: CatalogMemoItem): Promise<DailyMutationResult> {
@@ -299,10 +301,10 @@ export class MemoCommandService {
 			|| this.markdownMutations.captureObservation === undefined) {
 			throw new Error("Recoverable delete requires an available Identity Ledger.");
 		}
-		const refreshed = await this.refreshResolvedMemo(item.resolved);
+		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
 		const state = this.identityLedger.resolveObservationState(refreshed.observation);
 		if (state.kind !== "identified") throw new Error("Recoverable delete requires one confirmed memo identity.");
-		const captured = await this.markdownMutations.captureObservation({ observation: refreshed.observation });
+		const captured = await this.markdownMutations.captureObservation({ observation: item.observationHandle });
 		const deleteRecord = await this.identityLedger.recordDeletePayload(state.binding, {
 			deletedAt: this.now().toISOString(),
 			sourcePath: captured.observation.sourcePath,
@@ -313,7 +315,7 @@ export class MemoCommandService {
 			contentHash: captured.observation.contentHash,
 			sourceMemoId: item.sourceMemoId,
 		});
-		const result = await this.markdownMutations.remove({ observation: captured.observation });
+		const result = await this.markdownMutations.remove({ observation: item.observationHandle });
 		let pending = true;
 		try {
 			await this.identityLedger.recordDeleteCommit(deleteRecord);
@@ -395,20 +397,24 @@ export class MemoCommandService {
 		await this.identityLedger.recordReview(state.binding, this.now().toISOString());
 	}
 
-	private async refreshResolvedMemo(memo: ResolvedMemo): Promise<ResolvedMemo> {
-		await this.options.refreshCatalogPaths([memo.observation.sourcePath]);
-		return this.readService.resolveObservationInFile(memo.observation.sourcePath, memo.observation.startLine);
+	private async refreshResolvedMemo(handle: ObservationHandle): Promise<ResolvedMemo> {
+		await this.options.refreshCatalogPaths([handle.sourcePath]);
+		const refreshed = await this.readService.resolveObservationInFile(handle.sourcePath, handle.startLine);
+		// 行索引只用于查询；刷新不能为旧操作重新授权另一个 occurrence。
+		assertSameObservation(handle, refreshed.observation);
+		return refreshed;
 	}
 
-	private async requireRecoverableDeleteItem(memo: ResolvedMemo, memoId: string): Promise<CatalogMemoItem> {
+	private async requireRecoverableDeleteItem(handle: ObservationHandle, memoId: string): Promise<CatalogMemoItem> {
 		const prepared = await this.readService.resolveMemoItemInFile(
-			memo.observation.sourcePath,
-			memo.observation.startLine,
+			handle.sourcePath,
+			handle.startLine,
 		);
+		assertSameObservation(handle, prepared.observationHandle);
 		if (prepared.memoId !== memoId || prepared.capabilities.identity.recoverableDelete !== "ready") {
 			throw new Error("Identity preparation did not produce a recoverable memo.");
 		}
-		return prepared;
+		return { ...prepared, observationHandle: handle };
 	}
 
 	private async finishMarkdownSavedMemo(
@@ -541,6 +547,16 @@ export class MemoCommandService {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) throw new Error(`Daily file is unavailable: ${path}`);
 		return file;
+	}
+}
+
+function assertSameObservation(expected: ObservationHandle, actual: ObservationHandle): void {
+	if (actual.sourcePath !== expected.sourcePath
+		|| actual.sourceRevision !== expected.sourceRevision
+		|| actual.startLine !== expected.startLine
+		|| actual.endLine !== expected.endLine
+		|| actual.rawBlockHash !== expected.rawBlockHash) {
+		throw new MarkdownMutationStaleError(expected.sourcePath);
 	}
 }
 

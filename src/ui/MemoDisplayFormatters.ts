@@ -1,5 +1,10 @@
 import { t } from "../i18n";
 import type { TrashDeleteSource } from "../types/catalogView";
+import type { MemoObservation } from "../types/catalog";
+
+export function formatObservationDisplayTime(observation: Pick<MemoObservation, "logicalDate" | "time">): string {
+	return `${observation.logicalDate} ${observation.time}`;
+}
 
 export function formatMemoDisplayTime(value: string): string {
 	if (/(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) {

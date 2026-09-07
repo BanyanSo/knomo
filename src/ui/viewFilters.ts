@@ -7,7 +7,7 @@ import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { hasMemoReference } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
 import { normalizeTagKey } from "../utils/tags";
-import { formatMemoDisplayTime } from "./MemoDisplayFormatters";
+import { formatMemoDisplayTime, formatObservationDisplayTime } from "./MemoDisplayFormatters";
 import type { SidebarNav } from "./viewNavigation";
 
 export type ScopeFilter =
@@ -357,7 +357,7 @@ export function matchesRecordStatsSearchFilter(memo: MemoRecord, filter: RecordS
 	if (memo.status !== "active") {
 		return false;
 	}
-	const date = parseLocalDateText(memo.createdAt);
+	const date = parseLocalDateText(getMemoCalendarValue(memo));
 	if (date === null) {
 		return false;
 	}
@@ -402,8 +402,8 @@ export function isSummaryScopeFilter(filter: ScopeFilter): filter is SummaryScop
 export function buildMemoSearchText(memo: MemoRecord): string {
 	return [
 		memo.contentSnapshot,
-		formatMemoDisplayTime(memo.createdAt),
-		memo.createdAt,
+		memo.catalog === undefined ? formatMemoDisplayTime(memo.createdAt) : formatObservationDisplayTime(memo.catalog.observation),
+		getMemoCalendarValue(memo),
 		memo.tags.join(" "),
 		memo.links.map((link) => link.target).join(" "),
 		getMemoImages(memo).map((image) => image.path).join(" "),
@@ -411,7 +411,7 @@ export function buildMemoSearchText(memo: MemoRecord): string {
 }
 
 export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfig): Date | null {
-	const createdAtDate = parseLocalDateText(memo.createdAt);
+	const createdAtDate = parseLocalDateText(getMemoCalendarValue(memo));
 	if (createdAtDate !== null) {
 		return createdAtDate;
 	}
@@ -427,13 +427,18 @@ export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfi
 	return null;
 }
 
+function getMemoCalendarValue(memo: MemoRecord): string {
+	const observation = memo.catalog?.observation;
+	return observation === undefined ? memo.createdAt : `${observation.logicalDate}T${observation.time}`;
+}
+
 export function parseLocalDateText(value: string): Date | null {
 	const match = value.match(/(?:^|[^\d])(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?)/u);
 	return match === null ? null : parseMemoCalendarDate(match[1]);
 }
 
 export function matchesScope(memo: MemoRecord, filter: ScopeFilter, todayDate = new Date()): boolean {
-	const date = new Date(memo.createdAt);
+	const date = new Date(getMemoCalendarValue(memo));
 	const today = startOfDay(todayDate);
 	if (filter === "all") return true;
 	if (filter === "no-tag") return memo.tags.length === 0;

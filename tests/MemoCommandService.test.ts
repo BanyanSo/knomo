@@ -317,6 +317,7 @@ test("手写 memo 删除前先确定性补身份，再进入可恢复删除", as
 	assert.notEqual(prepared, null);
 	if (prepared === null) throw new Error("Recoverable delete preparation unexpectedly failed.");
 	assert.equal(prepared.memoId, binding.memoId);
+	assert.equal(prepared.observationHandle, source.observationHandle);
 	assert.equal(prepared.capabilities.identity.recoverableDelete, "ready");
 	await service.delete(prepared);
 
@@ -476,6 +477,59 @@ test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再�
 	await service.purge(trashItem);
 	assert.deepEqual(events, ["identity-purge"]);
 	assert.equal(activeDelete, null);
+});
+
+test("操作刷新不得将旧句柄替换为同一行的新 occurrence", async (context) => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	for (const operation of ["delete", "removePermanently", "prepareRecoverableDelete"] as const) {
+		for (const changed of ["sourceRevision", "endLine", "rawBlockHash", "missing"] as const) {
+			await context.test(`${operation}: ${changed}`, async () => {
+				const store = new InMemoryMemoCatalogStore();
+				const catalog = new MemoCatalogService(store);
+				await catalog.open();
+				const original = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "same memo");
+				await seedCatalog(catalog, store, original);
+				const binding = makeBinding(original, "2026082212345601", "identity-1");
+				const effects: string[] = [];
+				const identityLedger = {
+					getRevision: () => "identity-1",
+					getStatus: () => "ready",
+					getSnapshot: () => ({ memos: {} }),
+					resolveObservationState: () => operation === "delete"
+						? { kind: "identified", binding } : { kind: "unbound" },
+					getSourceMemoId: () => null,
+					getCreatedAt: () => null,
+					getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+					adoptObservation: async () => { effects.push("adopt"); throw new Error("unexpected adoption"); },
+					recordDeletePayload: async () => { effects.push("payload"); throw new Error("unexpected payload"); },
+					recordDeleteCommit: async () => { effects.push("commit"); },
+				} as unknown as IdentityLedgerMutationService;
+				const service = new MemoCommandService({} as App, catalog, {
+					...makeCommandOptions(),
+					refreshCatalogPaths: async () => {
+						if (changed === "missing") {
+							await catalog.deleteFile(original.sourcePath);
+							return;
+						}
+						await seedCatalog(catalog, store, {
+							...original,
+							[changed]: changed === "endLine" ? 2 : "b".repeat(64),
+						});
+					},
+				}, {
+					captureObservation: async () => { effects.push("capture"); throw new Error("unexpected capture"); },
+					remove: async () => { effects.push("remove"); return mutationResult(null); },
+				} as unknown as MarkdownMutationService, identityLedger);
+				const item = await service.getReadService().resolveMemoItemInFile(original.sourcePath, original.startLine);
+				await assert.rejects(() => service[operation](item), /stale|no longer present/u);
+				assert.deepEqual(effects, []);
+				assert.equal(item.observationHandle.sourceRevision, original.sourceRevision);
+			});
+		}
+	}
 });
 
 function makeCommandOptions(): import("../src/services/MemoCommandService").MemoCommandServiceOptions {

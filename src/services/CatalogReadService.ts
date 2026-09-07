@@ -187,7 +187,6 @@ export class CatalogReadService {
 				items: [],
 				nextCursor: null,
 				catalogRevision: page.catalogRevision,
-				identityRevision: this.options.identityLedger.getRevision(),
 				coverage: page.coverage,
 				lifecycle: page.lifecycle,
 				capabilities: createCatalogCapabilities(page.coverage),
@@ -197,14 +196,18 @@ export class CatalogReadService {
 				invalidated: true,
 			});
 		}
-		const resolved = page.items.map((observation) => this.resolveObservation(observation));
+		const resolved = page.items.map((observation): ResolvedMemo => ({
+			kind: "observation",
+			identityHandle: null,
+			observation,
+			capabilities: createResolvedMemoCapabilities("absent"),
+		}));
 		const status = this.getReadStatus(page.coverage, page.lifecycle, false);
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
 		return this.rememberPage({
 			items: resolved.map((memo) => this.toMemoItem(memo, catalogCapabilities)),
 			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
 			catalogRevision: page.catalogRevision,
-			identityRevision: this.options.identityLedger.getRevision(),
 			coverage: page.coverage,
 			lifecycle: page.lifecycle,
 			capabilities: catalogCapabilities,
@@ -223,7 +226,6 @@ export class CatalogReadService {
 				count: complete ? result.count : null,
 				complete,
 				catalogRevision: result.catalogRevision,
-				identityRevision: this.options.identityLedger.getRevision(),
 				coverage: result.coverage,
 			};
 		} catch {
@@ -301,7 +303,7 @@ export class CatalogReadService {
 		const request = { ...query, limit: page.limit, cursor: page.cursor ?? null };
 		if (filter.type !== "references") return this.query(request);
 		return this.queryFiltered(request, (memo) => (
-			memo.sourceMemoId !== null || memo.observation.explicitReferenceTargets.length > 0
+			memo.observation.explicitReferenceTargets.length > 0
 		));
 	}
 
@@ -316,7 +318,7 @@ export class CatalogReadService {
 		}
 		if (filter.type !== "references") return this.count(query);
 		return this.countFiltered(query, (memo) => (
-			memo.sourceMemoId !== null || memo.observation.explicitReferenceTargets.length > 0
+			memo.observation.explicitReferenceTargets.length > 0
 		));
 	}
 
@@ -399,32 +401,12 @@ export class CatalogReadService {
 		yieldToUi: () => Promise<void>,
 		isCurrent: () => boolean,
 	): Promise<PreparedRecordStats | null> {
-		while (isCurrent()) {
-			await this.requireCompleteCoverage("Record statistics");
-			const aggregates = await this.options.catalog.listDailyAggregates();
-			await this.requireCompleteCoverage("Record statistics");
-			const prepared = buildPreparedRecordStats(aggregates);
-			let cursor: CatalogFeatureQuery["cursor"] = null;
-			let invalidated = false;
-			do {
-				if (!isCurrent()) return null;
-				const page = await this.query({ limit: 150, cursor });
-				if (page.invalidated) {
-					invalidated = true;
-					break;
-				}
-				if (page.capabilities.stats !== "complete") throw new Error("Record statistics require complete Catalog coverage.");
-				for (const memo of page.items) {
-					if (memo.sourceMemoId === null || memo.observation.explicitReferenceTargets.length > 0) continue;
-					const daily = prepared.daily.get(memo.observation.logicalDate);
-					if (daily !== undefined) daily.referenceMemoCount += 1;
-				}
-				cursor = page.nextCursor;
-				await yieldToUi();
-			} while (cursor !== null);
-			if (!invalidated) return prepared;
-		}
-		return null;
+		if (!isCurrent()) return null;
+		await this.requireCompleteCoverage("Record statistics");
+		const aggregates = await this.options.catalog.listDailyAggregates();
+		await this.requireCompleteCoverage("Record statistics");
+		await yieldToUi();
+		return isCurrent() ? buildPreparedRecordStats(aggregates) : null;
 	}
 
 	async getRandomReunionItems(
@@ -505,6 +487,7 @@ export class CatalogReadService {
 	}
 
 	async resolveObservationInFile(sourcePath: string, startLine: number): Promise<ResolvedMemo> {
+		// 仅供旧命令的身份准备使用；普通查询不经过 Identity overlay。
 		const observationKey = `${sourcePath}\u0000${startLine.toString().padStart(10, "0")}`;
 		const observation = await this.options.catalog.getObservation(observationKey);
 		if (observation === null) throw new Error("Memo observation is no longer present in its Daily note.");
@@ -549,8 +532,8 @@ export class CatalogReadService {
 		const observation = resolved.observation as CatalogObservation;
 		const memoId = resolved.identityHandle?.memoId ?? null;
 		return {
-			key: memoId ?? observation.observationKey,
-			renderKey: observation.observationKey,
+			key: resolved.kind === "observation" ? observationLocalKey(observation) : memoId ?? observation.observationKey,
+			renderKey: resolved.kind === "observation" ? observationLocalKey(observation) : observation.observationKey,
 			memoId,
 			identityHandle: resolved.identityHandle,
 			observationHandle: {
@@ -560,10 +543,7 @@ export class CatalogReadService {
 				endLine: observation.endLine,
 				rawBlockHash: observation.rawBlockHash,
 			},
-			createdAt: memoId === null
-				? `${observation.logicalDate}T${normalizeTime(observation.time)}`
-				: this.options.identityLedger.getCreatedAt(memoId)
-					?? `${observation.logicalDate}T${normalizeTime(observation.time)}`,
+			createdAt: `${observation.logicalDate}T${observation.time}`,
 			content: observation.content,
 			tags: [...observation.tags],
 			links: [...observation.links],
@@ -598,7 +578,6 @@ export class CatalogReadService {
 			items: [],
 			nextCursor: null,
 			catalogRevision: 0,
-			identityRevision: this.options.identityLedger.getRevision(),
 			coverage,
 			lifecycle,
 			capabilities: createCatalogCapabilities(coverage),
@@ -623,7 +602,6 @@ export class CatalogReadService {
 			count: null,
 			complete: false,
 			catalogRevision: 0,
-			identityRevision: this.options.identityLedger.getRevision(),
 			coverage,
 		};
 	}
@@ -682,28 +660,24 @@ export class CatalogReadService {
 		let cursor: CatalogFeatureCursor | null = null;
 		let count = 0;
 		let catalogRevision: number | null = null;
-		let identityRevision: string | null = null;
 		let coverage: CatalogCoverage | null = null;
 		do {
 			const page = await this.query({ ...request, limit: 150, cursor });
 			if (page.invalidated
-				|| (catalogRevision !== null && catalogRevision !== page.catalogRevision)
-				|| (identityRevision !== null && identityRevision !== page.identityRevision)) {
+				|| (catalogRevision !== null && catalogRevision !== page.catalogRevision)) {
 				return {
 					count: null,
 					complete: false,
 					catalogRevision: page.catalogRevision,
-					identityRevision: page.identityRevision,
 					coverage: page.coverage,
 				};
 			}
 			catalogRevision = page.catalogRevision;
-			identityRevision = page.identityRevision;
 			coverage = page.coverage;
 			count += page.items.filter(predicate).length;
 			cursor = page.nextCursor;
 		} while (cursor !== null);
-		if (catalogRevision === null || identityRevision === null || coverage === null) {
+		if (catalogRevision === null || coverage === null) {
 			return this.createUnavailableCount();
 		}
 		const complete = isQueryCovered(coverage, request);
@@ -711,7 +685,6 @@ export class CatalogReadService {
 			count: complete ? count : null,
 			complete,
 			catalogRevision,
-			identityRevision,
 			coverage,
 		};
 	}
@@ -721,7 +694,6 @@ export class CatalogReadService {
 		lifecycle: CatalogStoreLifecycle,
 		contentUnavailable: boolean,
 	): CatalogReadStatus {
-		const identityStatus = this.options.identityLedger.getStatus();
 		const legacyStatus = this.options.getLegacyImportStatus?.() ?? "not_applicable";
 		const catalogDegraded = contentUnavailable
 			|| lifecycle.state === "degraded"
@@ -737,11 +709,9 @@ export class CatalogReadService {
 			catalog: catalogDegraded
 				? "degraded"
 				: coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false ? "complete" : "partial",
-			identity: identityStatus === "conflicted"
-				? "conflicted"
-				: identityStatus === "ready" ? "ready"
-					: identityStatus === "missing" || identityStatus === "absent" ? "absent" : "syncing",
-			identityAttention: this.getIdentityAttention(identityStatus),
+			// 普通内容状态不依赖 Identity；运行期诊断仍由 attention snapshot 提供。
+			identity: "absent",
+			identityAttention: null,
 			sharedConfiguration: this.getSharedConfigurationStatus(),
 			projection: this.getProjectionState(),
 			migration: legacyStatus === "attention"
@@ -916,6 +886,11 @@ export class CatalogReadService {
 		this.lastReadState = page.readState;
 		return page;
 	}
+}
+
+function observationLocalKey(observation: CatalogObservation): string {
+	// 文件 revision 变化即失效，避免同一行的新 occurrence 继承旧卡片状态。
+	return `${observation.observationKey}\u0000${observation.sourceRevision}`;
 }
 
 function createResolvedMemo(observation: CatalogObservation, binding: IdentityLedgerBinding): ResolvedMemo {

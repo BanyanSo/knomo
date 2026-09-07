@@ -20,6 +20,7 @@ import {
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 import { getMemoRenderKey } from "./MemoRenderRevision";
+import { formatObservationDisplayTime } from "./MemoDisplayFormatters";
 
 export interface MemoCardTimeBuoy {
 	status: TimeBuoyDateStatus;
@@ -154,7 +155,9 @@ function renderMemoCardTime<TMemo extends MemoRecord>(container: HTMLElement, me
 	}
 	container.createEl("button", {
 		cls: "knomo-card-time",
-		text: options.formatDisplayTime(memo.createdAt),
+		text: memo.catalog === undefined
+			? options.formatDisplayTime(memo.createdAt)
+			: formatObservationDisplayTime(memo.catalog.observation),
 		attr: attrs,
 	});
 }

@@ -461,7 +461,7 @@ test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
 	assert.deepEqual(presentation.headers, [{ type: "summary", text: "#Project: 90 Memos" }]);
 });
 
-test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效", async () => {
+test("统计缓存只随 Catalog 和完整覆盖版本变化而失效，不跟随 Identity", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
@@ -495,7 +495,7 @@ test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效
 	const load = makeCatalogLoad(7, "identity-1", completeCoverage());
 	view.applyCatalogMemoLoad(load);
 	assert.equal(invalidationCount, 1);
-	assert.equal(currentSource, "catalog:7:identity:identity-1:coverage:complete");
+	assert.equal(currentSource, "catalog:7:coverage:complete");
 	assert.deepEqual(updatingFlags, [false]);
 
 	view.applyCatalogMemoLoad({ ...load, memos: [makeMemo("same-source", "2026-08-24T10:00:00")] });
@@ -505,22 +505,22 @@ test("统计缓存只随 Catalog、Identity 和完整覆盖版本变化而失效
 	assert.equal(invalidationCount, 2);
 	assert.deepEqual(updatingFlags, [false, false]);
 	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8, identityRevision: "identity-2" });
-	assert.equal(invalidationCount, 3);
-	assert.deepEqual(updatingFlags, [false, false, false]);
+	assert.equal(invalidationCount, 2);
+	assert.deepEqual(updatingFlags, [false, false]);
 	view.applyCatalogMemoLoad({
 		...load,
 		catalogRevision: 8,
 		identityRevision: "identity-2",
 		coverage: { ...completeCoverage(), kind: "partial", pendingFileCount: 1 },
 	});
-	assert.equal(invalidationCount, 4);
-	assert.equal(currentSource, "catalog:8:identity:identity-2:coverage:incomplete");
-	assert.deepEqual(updatingFlags, [false, false, false, true]);
+	assert.equal(invalidationCount, 3);
+	assert.equal(currentSource, "catalog:8:coverage:incomplete");
+	assert.deepEqual(updatingFlags, [false, false, true]);
 
 	view.applyCatalogMemoLoad({ ...load, catalogRevision: 9, identityRevision: "identity-2" });
-	assert.equal(invalidationCount, 5);
-	assert.equal(currentSource, "catalog:9:identity:identity-2:coverage:complete");
-	assert.deepEqual(updatingFlags, [false, false, false, true, true]);
+	assert.equal(invalidationCount, 4);
+	assert.equal(currentSource, "catalog:9:coverage:complete");
+	assert.deepEqual(updatingFlags, [false, false, true, true]);
 });
 
 test("空库加载占位即使状态键未变化也会渲染暂无内容终态", async () => {

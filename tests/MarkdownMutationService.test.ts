@@ -12,6 +12,10 @@ import {
 	type MarkdownCatalogCommitInput,
 } from "../src/services/MarkdownMutationService";
 import type { MemoObservation, ObservationHandle } from "../src/types/catalog";
+import { MemoCommandService } from "../src/services/MemoCommandService";
+import { MemoCatalogService } from "../src/services/MemoCatalogService";
+import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import type { IdentityLedgerBinding, IdentityLedgerDeleteRecord, IdentityLedgerMutationService } from "../src/types/identityLedger";
 
 const HEADINGS = ["## Memos"] as const;
 
@@ -339,10 +343,165 @@ test("P1 第 7 步：可恢复删除先只读捕获精确 block，restore 原样
 	assert.doesNotMatch(fixture.vault.readText(sourcePath), /<!--|memoId|knomo-id/u);
 });
 
+test("命令到 Daily：刷新前后旧句柄遇到前插、删除、换行和同步修改均拒绝", async (context) => {
+	for (const operation of ["edit", "delete", "removePermanently", "prepareRecoverableDelete"] as const) {
+		for (const content of [
+			"## Memos\n- 08:00 inserted\n- 09:00 same\n- 09:00 same\n",
+			"## Memos\n- 09:00 same\n",
+			"## Memos\n\n- 09:00 same\n- 09:00 same\n",
+			"## Memos\n- 09:00 synchronized\n- 09:00 same\n",
+		]) {
+			await context.test(`${operation}: ${JSON.stringify(content)}`, async () => {
+				const fixture = await createCommandFixture(operation === "delete");
+				const old = await fixture.itemAt(1);
+				fixture.vault.writeText(fixture.path, content);
+				await fixture.refresh();
+				await assert.rejects(() => operation === "edit"
+					? fixture.commands.startEdit(old, "must not be written").settled
+					: fixture.commands[operation](old), /stale|no longer present/u);
+				assert.equal(fixture.vault.readText(fixture.path), content);
+				assert.deepEqual(fixture.payloads, []);
+			});
+		}
+	}
+});
+
+test("命令到 Daily：同文双项分别编辑和删除，另一项保持原样", async (context) => {
+	for (const operation of ["edit", "delete", "removePermanently"] as const) {
+		for (const line of [1, 2]) {
+			await context.test(`${operation}: occurrence ${line}`, async () => {
+				const fixture = await createCommandFixture(operation === "delete");
+				const selected = await fixture.itemAt(line);
+				if (operation === "edit") {
+					await fixture.commands.edit(selected, "edited");
+					assert.equal(fixture.vault.readText(fixture.path), line === 1
+						? "## Memos\n- 09:00 edited\n- 09:00 same\n"
+						: "## Memos\n- 09:00 same\n- 09:00 edited\n");
+				} else {
+					await fixture.commands[operation](selected);
+					assert.equal(fixture.vault.readText(fixture.path), "## Memos\n- 09:00 same\n");
+					if (operation === "delete") {
+						assert.equal(fixture.payloads.length, 1);
+						assert.equal(fixture.payloads[0]?.memoId, selected.memoId);
+					}
+				}
+			});
+		}
+	}
+});
+
+test("删除 payload 保存期间 Daily 变化后拒绝原操作，不补删另一条同文 Memo", async () => {
+	const fixture = await createCommandFixture(true);
+	const selected = await fixture.itemAt(1);
+	const concurrent = "## Memos\n- 09:00 same\n";
+	fixture.onPayload = () => fixture.vault.writeText(fixture.path, concurrent);
+	await assert.rejects(() => fixture.commands.delete(selected), /stale/u);
+	assert.equal(fixture.vault.readText(fixture.path), concurrent);
+	assert.equal(fixture.payloads.length, 1);
+	assert.equal(fixture.commits.length, 0);
+});
+
+test("删除准备的 adoption 完成或失败期间 Catalog 换行目标均拒绝", async (context) => {
+	for (const fail of [false, true]) {
+		await context.test(`adoption failure: ${fail}`, async () => {
+			const fixture = await createCommandFixture(false);
+			const selected = await fixture.itemAt(1);
+			fixture.onAdopt = async () => {
+				fixture.vault.writeText(fixture.path, "## Memos\n- 09:00 same\n");
+				await fixture.refresh();
+				if (fail) throw new Error("adoption failed");
+			};
+			await assert.rejects(() => fixture.commands.prepareRecoverableDelete(selected), /stale/u);
+			assert.deepEqual(fixture.payloads, []);
+		});
+	}
+});
+
+async function createCommandFixture(identified: boolean) {
+	const path = "Daily/2026-08-22.md";
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const replace = async (observations: MemoObservation[]) => {
+		await catalog.replaceFile({
+			inventory: { sourcePath: path, logicalDate: "2026-08-22", mtime: 1, size: 1 },
+			sourceRevision: observations[0]?.sourceRevision ?? "empty",
+			observations, parserVersion: 1, settingsFingerprint: "settings", auditedAt: 1,
+		});
+	};
+	const markdown = createFixture({
+		initialFiles: { [path]: "## Memos\n- 09:00 same\n- 09:00 same\n" },
+		updateCatalogPartition: async (input) => replace(input.parsed.observations),
+	});
+	const refresh = async () => replace(await markdown.parse("2026-08-22"));
+	await refresh();
+	await store.setCoverage({ kind: "complete", coveredFromDate: "2026-08-22", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+	const payloads: IdentityLedgerDeleteRecord[] = [];
+	const commits: IdentityLedgerDeleteRecord[] = [];
+	const hooks = { onPayload: () => {}, onAdopt: async () => {} };
+	const bindingFor = (observation: MemoObservation): IdentityLedgerBinding => ({
+		memoId: `memo-${observation.startLine}`, bindingId: `binding-${observation.startLine}`, identityRevision: "identity-1",
+		evidence: { sourcePath: path, logicalDate: observation.logicalDate, section: observation.section,
+			time: observation.time, contentHash: observation.contentHash, order: String(observation.startLine) },
+	});
+	const identity = {
+		getRevision: () => "identity-1", getStatus: () => "ready", getSnapshot: () => ({ memos: {} }),
+		resolveObservationState: (observation: MemoObservation) => identified
+			? { kind: "identified", binding: bindingFor(observation) } : { kind: "unbound" },
+		getCreatedAt: () => null, getSourceMemoId: () => null,
+		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
+		adoptObservation: async (observation: MemoObservation) => {
+			await hooks.onAdopt();
+			identified = true;
+			return bindingFor(observation);
+		},
+		recordDeletePayload: async (binding: IdentityLedgerBinding, evidence: IdentityLedgerDeleteRecord["evidence"]) => {
+			const record = { memoId: binding.memoId, baseBindingId: binding.bindingId,
+				deleteEventId: "delete-1", deleteCommitEventId: null, evidence };
+			payloads.push(record);
+			hooks.onPayload();
+			return record;
+		},
+		recordDeleteCommit: async (record: IdentityLedgerDeleteRecord) => { commits.push(record); return record; },
+	} as unknown as IdentityLedgerMutationService;
+	const commands = new MemoCommandService(markdown.app, catalog, {
+		refreshCatalogPaths: refresh, refreshLocalCatalog: async () => { throw new Error("Unexpected full refresh"); },
+		getMemoTimeFormat: () => "HH:mm", rebuildLocalCatalog: async () => {},
+	}, markdown.service, identity);
+	return Object.assign(hooks, markdown, { path, commands, refresh, payloads, commits,
+		itemAt: (line: number) => commands.getReadService().resolveMemoItemInFile(path, line) });
+}
+
+test("切换新建时间格式不改写已有 Memo 的精度：编辑、任务、移动、恢复", async (context) => {
+	for (const time of ["10:30", "10:30:00", "10:30:27"]) {
+		await context.test(time, async () => {
+			let format: "HH:mm" | "HH:mm:ss" = "HH:mm";
+			const fixture = createFixture({
+				initialFiles: { "Daily/2026-08-22.md": `## Memos\n- ${time} original\n` },
+				getMemoTimeFormat: () => format,
+			});
+			format = "HH:mm:ss";
+			const source = await fixture.getOnlyObservation("2026-08-22");
+			await fixture.service.edit({ observation: source, content: "edited\n- [ ] task" });
+			await fixture.service.toggleTask({ observation: await fixture.getOnlyObservation("2026-08-22"), taskIndex: 0, checked: true });
+			await fixture.service.move({ observation: await fixture.getOnlyObservation("2026-08-22"), targetLogicalDate: "2026-08-23" });
+			const moved = await fixture.getOnlyObservation("2026-08-23");
+			assert.equal(moved.time, time);
+			const captured = await fixture.service.captureObservation({ observation: moved });
+			await fixture.service.remove({ observation: moved });
+			await fixture.service.restore({ targetLogicalDate: "2026-08-23", rawBlock: captured.rawBlock, section: captured.observation.section });
+			assert.equal((await fixture.getOnlyObservation("2026-08-23")).time, time);
+			await fixture.service.create({ content: "new" });
+			assert.equal((await fixture.getOnlyObservation("2026-08-22")).time, "09:00:00");
+		});
+	}
+});
+
 interface FixtureOptions {
 	catalogDegraded?: boolean;
 	initialFiles?: Readonly<Record<string, string>>;
 	insertPosition?: "top" | "bottom";
+	getMemoTimeFormat?: () => "HH:mm" | "HH:mm:ss";
 	updateCatalogPartition?: (input: MarkdownCatalogCommitInput) => Promise<void>;
 }
 
@@ -363,7 +522,7 @@ function createFixture(options: FixtureOptions = {}) {
 		getDailyFileForDate: async (logicalDate) => vault.ensureFile(`Daily/${logicalDate}.md`, "## Memos\n"),
 		getLogicalDateForPath: async (sourcePath) => sourcePath.match(/(\d{4}-\d{2}-\d{2})\.md$/u)?.[1]
 			?? Promise.reject(new Error(`Not a Daily path: ${sourcePath}`)),
-		getMemoTimeFormat: () => "HH:mm",
+		getMemoTimeFormat: options.getMemoTimeFormat ?? (() => "HH:mm"),
 		getInsertPosition: () => options.insertPosition ?? "bottom",
 		updateCatalogPartition: async (input) => {
 			committedPartitions.push(input);
@@ -385,6 +544,7 @@ function createFixture(options: FixtureOptions = {}) {
 		})).observations;
 	};
 	return {
+		app,
 		service,
 		vault,
 		committedPartitions,

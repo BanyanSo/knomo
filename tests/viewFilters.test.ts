@@ -19,6 +19,20 @@ import {
 	tagMatchesActiveTagKey,
 } from "../src/ui/viewFilters";
 
+test("普通 Catalog 筛选和搜索时间取当前 observation，不取旧创建时间", () => {
+	const memo = makeMemo("current", {
+		createdAt: "2020-01-01T23:59:59Z",
+	});
+	memo.catalog = { observation: { logicalDate: "2026-09-01", time: "06:04" } } as never;
+	assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-09-01" }), true);
+	assert.equal(matchesRecordStatsSearchFilter(memo, {
+		type: "hour", startDate: "2026-09-01", endDateExclusive: "2026-09-02", hour: 6,
+	}), true);
+	const search = buildMemoSearchText(memo);
+	assert.match(search, /2026-09-01 06:04/u);
+	assert.doesNotMatch(search, /2020-01-01|06:04:00/u);
+});
+
 test("filters supported memo images", () => {
 	const memo = makeMemo("a", {
 		images: [

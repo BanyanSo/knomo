@@ -17,6 +17,26 @@ import type { LowPriorityWorkRunner } from "../src/services/LowPriorityWorkQueue
 import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const MONTHLY_PATH = "Memos/2026-08.md";
+
+test("配置在 Monthly 构建中变化即拒绝旧任务提交，包括同目录顺序变化", async () => {
+	const fixture = createFixture({ "Daily/2026-08-01.md": "- 09:00 old input\n" });
+	await fixture.coordinator.initialize();
+	const build = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	let changed = false;
+	fixture.inputBuilder.build = async (...args) => {
+		const result = await build(...args);
+		if (!changed) {
+			changed = true;
+			fixture.settings.monthlyDateOrder = "desc";
+			await fixture.coordinator.handleConfigurationChanged();
+		}
+		return result;
+	};
+	const result = await fixture.coordinator.rebuildPeriod("2026-08");
+	assert.equal(result.failed, 1);
+	assert.equal(fixture.replica.read(MONTHLY_PATH), null);
+	assert.equal((await fixture.coordinator.rebuildPeriod("2026-08")).projected, 1);
+});
 const DAILY_A = "## Memos\n- 09:00 unresolved memo\n";
 const DAILY_B = "## Memos\n- 10:00 ambiguous memo\n";
 const LEGACY_MONTHLY_MARKER = [

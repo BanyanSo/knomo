@@ -61,7 +61,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly catalogReadService: CatalogReadService,
 		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
 		private readonly knomoDataRootMigrationService: KnomoDataRootMigrationService,
-		private readonly knomoSharedConfigService: KnomoSharedConfigService,
+		private readonly knomoSharedConfigService: Pick<KnomoSharedConfigService, "getStatus" | "getLastError" | "reloadConfiguredRoot" | "refreshLocalConfig" | "publishLocalConfig" | "resolveWithLocalConfig">,
 		private readonly legacyIndexMigrationService: LegacyIndexMigrationService,
 		private readonly legacyMigrationAcknowledgementService: LegacyMigrationAcknowledgementService,
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
@@ -1046,13 +1046,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private getSharedConfigDescription(): string {
-		const initialization = this.startupBootstrapService?.getSnapshot() ?? null;
-		if (initialization?.status === "initializing") {
-			return t("settings.sharedConfig.initializing");
-		}
-		if (initialization?.status === "unavailable" && initialization.error !== null) {
-			return t("settings.sharedConfig.initializationFailed");
-		}
 		switch (this.knomoSharedConfigService.getStatus()) {
 			case "ready":
 				return t("settings.sharedConfig.ready");
@@ -1067,13 +1060,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderSharedConfigSetting(setting: Setting): void {
 		const status = this.knomoSharedConfigService.getStatus();
-		const initializationStatus = this.startupBootstrapService?.getSnapshot().status ?? "ready";
+
 		setting
 			.setName(t("settings.sharedConfig.name"))
 			.setDesc(this.getSharedConfigDescription());
-		if (status === "ready" && initializationStatus === "ready") return;
+		if (status === "ready") return;
 		setting.addButton((button) => {
-			button.setButtonText(status === "unavailable" || initializationStatus === "unavailable"
+			button.setButtonText(status === "unavailable"
 				? t("settings.sharedConfig.checkAgain")
 				: status === "conflicted"
 					? t("settings.sharedConfig.resolve")
@@ -1082,20 +1075,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				void (async () => {
 					button.setDisabled(true);
 					try {
-						if (this.startupBootstrapService !== null) {
-							const currentInitializationStatus = this.startupBootstrapService.getSnapshot().status;
-							const currentSharedConfigStatus = this.knomoSharedConfigService.getStatus();
-							if (currentInitializationStatus === "unavailable" || currentSharedConfigStatus === "unavailable") {
-								await this.startupBootstrapService.retryInitialization();
-							} else {
-								await this.startupBootstrapService.useCurrentDeviceSettings();
-							}
-						} else {
-							const currentStatus = this.knomoSharedConfigService.getStatus();
-							if (currentStatus === "unavailable") await this.knomoSharedConfigService.reloadConfiguredRoot();
-							else if (currentStatus === "conflicted") await this.knomoSharedConfigService.resolveWithLocalConfig();
-							else await this.knomoSharedConfigService.publishLocalConfig();
-						}
+						await this.knomoSharedConfigService.reloadConfiguredRoot();
 						if (this.knomoSharedConfigService.getStatus() !== "ready") {
 							throw new Error(this.knomoSharedConfigService.getLastError()
 								?? "Shared configuration did not become ready.");
@@ -1115,12 +1095,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private async syncSharedConfiguration(): Promise<void> {
 		try {
 			await this.knomoSharedConfigService.refreshLocalConfig();
-			const status = this.knomoSharedConfigService.getStatus();
-			if (status === "ready" || status === "missing") {
-				await this.knomoSharedConfigService.publishLocalConfig();
-			}
 		} catch {
-			// 本机设置保存成功后，共享配置写入失败只保留待处理状态。
+			// 当前值已保存；重新加载失败由配置状态提示，不回滚已提交设置。
 		}
 	}
 

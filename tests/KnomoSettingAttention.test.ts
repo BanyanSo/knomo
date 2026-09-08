@@ -13,13 +13,13 @@ const ready: KnomoRuntimeAttentionSnapshot = {
 	legacyMigration: "ready",
 };
 
-test("健康状态和正常初始化过程不显示需要处理", () => {
+test("当前配置提示不受旧 Identity 初始化状态隐藏", () => {
 	assert.deepEqual(getKnomoSettingAttentionKinds(ready, snapshot("ready")), []);
-	assert.deepEqual(getKnomoSettingAttentionKinds({ ...ready, sharedConfiguration: "missing" }, snapshot("unconfigured")), []);
-	assert.deepEqual(getKnomoSettingAttentionKinds({ ...ready, sharedConfiguration: "missing" }, snapshot("initializing", "identity")), []);
+	assert.deepEqual(getKnomoSettingAttentionKinds({ ...ready, sharedConfiguration: "missing" }, snapshot("unconfigured")), ["shared-config"]);
+	assert.deepEqual(getKnomoSettingAttentionKinds({ ...ready, sharedConfiguration: "missing" }, snapshot("initializing", "identity")), ["shared-config"]);
 });
 
-test("启动失败只显示一个用户可处理入口，避免重复工程状态", () => {
+test("独立能力分别报告故障，不以旧启动状态覆盖", () => {
 	assert.deepEqual(getKnomoSettingAttentionKinds({
 		...ready,
 		catalogLifecycle: { state: "degraded", persistent: false, writable: false, reason: "failed" },
@@ -28,7 +28,7 @@ test("启动失败只显示一个用户可处理入口，避免重复工程状�
 		sharedConfiguration: "unavailable",
 		monthly: "failed",
 		legacyMigration: "unavailable",
-	}, snapshot("unavailable", "shared_config")), ["shared-config"]);
+	}, snapshot("unavailable", "shared_config")), ["shared-config", "catalog", "monthly", "legacy"]);
 });
 
 test("准备完成后按可执行动作展示故障", () => {

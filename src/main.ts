@@ -1,3 +1,4 @@
+import { initializeCatalogRuntime } from "./services/CatalogStartup";
 import { getLanguage, normalizePath, Notice, Platform, Plugin, TFile } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
@@ -31,6 +32,7 @@ import { LocalWriterIdentityService } from "./services/LocalWriterIdentityServic
 import { HistoricalIdentityBootstrapService } from "./services/HistoricalIdentityBootstrapService";
 import { KnomoDataRootMigrationService } from "./services/KnomoDataRootMigrationService";
 import { buildKnomoSharedConfig, getKnomoSharedConfigRootPath } from "./services/KnomoSharedConfigProtocol";
+import { KnomoCurrentConfigService } from "./services/KnomoCurrentConfigService";
 import { KnomoSharedConfigService } from "./services/KnomoSharedConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
 import { KnomoAutomaticRecovery } from "./services/KnomoAutomaticRecovery";
@@ -102,7 +104,6 @@ export default class KnomoPlugin extends Plugin {
 		const settingsLoaded = await this.loadSettingsSafely();
 		if (settingsLoaded) {
 			await this.initializeTimeBuoyDefaultSafely();
-			await this.initializeMonthlyExcludeDefaultSafely();
 		}
 
 		const diaryMemoParser = new DiaryMemoParser();
@@ -143,7 +144,7 @@ export default class KnomoPlugin extends Plugin {
 				return initializingReceiptRoot ?? settings.knomoDataRoot;
 		}, "_knomo-data/state", lowPriorityWorkQueue.signal));
 
-		const knomoSharedConfigService = new KnomoSharedConfigService(this.app, {
+		const previousConfigService = new KnomoSharedConfigService(this.app, {
 			getRootPath: () => {
 				const settings = this.settingsService.getSettings();
 				return settings.knomoDataRootConfigured
@@ -158,13 +159,21 @@ export default class KnomoPlugin extends Plugin {
 				monthlyLocale,
 			),
 			cancellationSignal: lowPriorityWorkQueue.signal,
-			replicaCache: sharedReplicaCache,
+		});
+		const knomoSharedConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage(), async () => {
+			const settings = this.settingsService.getSettings();
+			if (!settings.knomoDataRootConfigured || !await this.app.vault.adapter.exists(getKnomoSharedConfigRootPath(settings.knomoDataRoot))) return null;
+			await previousConfigService.initialize();
+			const status = previousConfigService.getStatus();
+			if (status === "conflicted" || status === "unavailable") throw new Error(previousConfigService.getLastError() ?? "Previous configuration is unreadable or conflicted.");
+			return previousConfigService.getSnapshot().config;
 		});
 		await knomoSharedConfigService.initializeLocalConfig();
 
 		const getEffectiveDailyConfig = () => {
-			const config = knomoSharedConfigService.getEffectiveConfig();
-			return { folder: config.daily.folder, format: config.daily.dateFormat };
+			const config = dailyNotesProvider.getConfig();
+			if (config === null) throw new Error("Obsidian Daily configuration is unknown.");
+			return config;
 		};
 		const getEffectiveWriteHeading = () => knomoSharedConfigService.getEffectiveConfig().daily.headings[0] ?? null;
 		const getEffectiveMonthlySettings = () => {
@@ -191,7 +200,7 @@ export default class KnomoPlugin extends Plugin {
 			{
 				currentIdentityState: true,
 				migrateSharedConfiguration: async (sourceDataRoot, targetDataRoot) => {
-					await knomoSharedConfigService.copyAndVerifyDataRoot(sourceDataRoot, targetDataRoot);
+					// 当前配置已保存在插件设置中，不复制旧 config segments。
 					const source = new KnomoCurrentStateStore(this.app, () => sourceDataRoot);
 					const target = new KnomoCurrentStateStore(this.app, () => targetDataRoot);
 					for (const key of ["legacyMigrationCompletion", "historicalIdentityBootstrap", "basicDataRecovery"]) {
@@ -328,12 +337,14 @@ export default class KnomoPlugin extends Plugin {
 			() => Promise.resolve(getEffectiveDailyConfig()),
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
-				isConfigurationComplete: () => knomoSharedConfigService.isCoverageComplete(),
+				isConfigurationComplete: () => dailyNotesProvider.getConfig() !== null,
 				onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage),
 				onRevisionTransition: async (transition) => {
 					if (basicDataRecovery?.isRunning()) return;
-					await identityRevisionTransitionQueue.enqueue(transition);
-					await this.identityRecoveryCoordinator?.request();
+					void (async () => {
+						await identityRevisionTransitionQueue.enqueue(transition);
+						await this.identityRecoveryCoordinator?.request();
+					})().catch(() => settingTab?.refreshAttentionIfVisible());
 				},
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [
@@ -342,12 +353,12 @@ export default class KnomoPlugin extends Plugin {
 					IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY,
 				],
 				onCatalogSettled: async () => {
-					if (basicDataRecovery?.isRunning()) return;
-					const legacyReport = await this.legacyIndexMigrationService?.run();
-					if (legacyReport !== undefined) {
-						await historicalIdentityBootstrapService?.run(legacyReport.status);
-					}
-					await this.identityRecoveryCoordinator?.request();
+					// 旧恢复后台独立处理，不占用 Catalog settled 链。
+					if (!basicDataRecovery?.isRunning()) void (async () => {
+						const legacyReport = await this.legacyIndexMigrationService?.run();
+						if (legacyReport !== undefined) await historicalIdentityBootstrapService?.run(legacyReport.status);
+						await this.identityRecoveryCoordinator?.request();
+					})().catch(() => settingTab?.refreshAttentionIfVisible());
 					await this.monthlyProjectionCoordinator?.handleCatalogSettled();
 					await this.queueRefreshOpenViews();
 					settingTab?.refreshAttentionIfVisible();
@@ -368,7 +379,7 @@ export default class KnomoPlugin extends Plugin {
 				if (date === null) throw new Error("Daily path does not match the active configuration: " + sourcePath);
 				return formatDatePart(date);
 			},
-			getMemoTimeFormat: () => this.settingsService.getSettings().memoTimeFormat,
+			getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 			getInsertPosition: () => this.settingsService.getSettings().dailyInsertPosition,
 			updateCatalogPartition: async (input) => {
 				if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
@@ -394,14 +405,11 @@ export default class KnomoPlugin extends Plugin {
 					return this.catalogIndexCoordinator.refreshLocalCatalog();
 				},
 				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
-				getMemoTimeFormat: () => this.settingsService.getSettings().memoTimeFormat,
+				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
 				getHistoricalIdentityBootstrapStatus: () => historicalIdentityBootstrapService?.getStatus() ?? "idle",
-				getSharedConfigurationStatus: () => {
-					if (automaticStartupRecovery.isRunning() || basicDataRecovery?.isRunning()) return "missing";
-					return startupBootstrapService.getSnapshot().status === "unconfigured" ? "unavailable" : knomoSharedConfigService.getStatus();
-				},
+				getSharedConfigurationStatus: () => knomoSharedConfigService.getStatus(),
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
 				getStartupBootstrapSnapshot: getStartupSnapshot,
 			},
@@ -464,18 +472,12 @@ export default class KnomoPlugin extends Plugin {
 				settingTab?.refreshAttentionIfVisible();
 			});
 			knomoSharedConfigService.start(this, async () => {
-				if (basicDataRecovery?.isRunning()) return;
-				if (knomoSharedConfigService.getStatus() === "unavailable" || knomoSharedConfigService.getStatus() === "missing") {
-					void automaticStartupRecovery.run().catch(() => undefined).finally(() => this.queueRefreshOpenViews());
-					return;
-				}
-				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-				const legacyReport = await this.legacyIndexMigrationService?.run();
-				if (legacyReport !== undefined) {
-					await historicalIdentityBootstrapService?.run(legacyReport.status);
-				}
+				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.queueRefreshOpenViews();
+			});
+			this.registerDomEvent(this.app.workspace.containerEl.win, "focus", () => {
+				if (!lowPriorityWorkQueue.signal.aborted) void dailyNotesProvider.loadConfig().catch(() => settingTab?.refreshAttentionIfVisible());
 			});
 		});
 		this.legacyIndexMigrationService.start(this, async () => {
@@ -605,40 +607,24 @@ export default class KnomoPlugin extends Plugin {
 		);
 		this.addSettingTab(settingTab);
 
-		this.runtimeInitializationPromise = (async () => {
-			if (settingsLoaded) {
-				try {
-					await automaticStartupRecovery.run();
-				} catch {
-					// 自动初始化失败不阻塞 Daily；下次启用会继续补齐缺失配置。
-				} finally {
-					if (!lowPriorityWorkQueue.signal.aborted) settingTab?.refreshAttentionIfVisible();
-				}
-			}
-			if (lowPriorityWorkQueue.signal.aborted) return false;
-			if (!settingsLoaded) {
-				await identityLedgerService.initialize();
+		this.runtimeInitializationPromise = initializeCatalogRuntime({
+			initializeCatalog: () => this.catalogIndexCoordinator!.initialize(),
+			primeCatalog: async () => { await this.catalogReadService?.prime(); },
+			initializeConfiguration: async () => {
 				await knomoSharedConfigService.initialize();
-			}
-			if (lowPriorityWorkQueue.signal.aborted) return false;
-			if (settingsLoaded
-				&& this.settingsService.getSettings().knomoDataRootConfigured
-				&& identityLedgerService.getStatus() === "missing") {
-				new Notice(t("settings.dataRoot.missing", {
-					path: this.settingsService.getSettings().knomoDataRoot,
-				}));
-			}
-			await historicalIdentityBootstrapService?.initializeEligibility();
-			await this.catalogIndexCoordinator?.initialize();
-			if ((await recoveryStateStore.getMeta<{ pending: boolean }>("basicDataRecovery"))?.pending) {
-				await basicDataRecovery!.run();
-			}
-			if (lowPriorityWorkQueue.signal.aborted) return false;
-			await this.monthlyProjectionCoordinator?.initialize().catch(() => undefined);
-			if (lowPriorityWorkQueue.signal.aborted) return false;
-			await this.catalogReadService?.prime().catch(() => undefined);
-			return true;
-		})().catch(() => {
+				if (!lowPriorityWorkQueue.signal.aborted) await this.initializeMonthlyExcludeDefaultSafely();
+			},
+			initializeMonthly: async () => { await this.monthlyProjectionCoordinator?.initialize(); },
+			initializeRecovery: async () => {
+				await knomoSharedConfigService.initialize();
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				if (settingsLoaded) await automaticStartupRecovery.run();
+				else await identityLedgerService.initialize();
+				if (!lowPriorityWorkQueue.signal.aborted) await historicalIdentityBootstrapService?.initializeEligibility();
+			},
+			isCancelled: () => lowPriorityWorkQueue.signal.aborted,
+			onAuxiliaryError: () => settingTab?.refreshAttentionIfVisible(),
+		}).catch(() => {
 			// 后台初始化失败不阻塞视图注册与 Daily 快速记录。
 			return false;
 		});
@@ -653,6 +639,10 @@ export default class KnomoPlugin extends Plugin {
 	onunload(): void {
 		this.viewRefreshScheduler?.clear();
 		MobileNavbarCompactController.cleanupDocument(this.app.workspace.containerEl.doc);
+	}
+
+	async onExternalSettingsChange(): Promise<void> {
+		await this.settingsService.loadSettings().catch(() => undefined);
 	}
 
 	async activateView(): Promise<void> {

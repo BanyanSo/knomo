@@ -6,6 +6,8 @@ export type ReferenceMode = "embed" | "link";
 export type MobileCompactMode = "auto" | "on" | "off";
 
 export interface KnomoSettings {
+	monthlyLocale?: string;
+	currentConfigAdopted?: boolean;
 	settingsVersion: number;
 	dailyHeading: string;
 	dailyInsertPosition: DailyInsertPosition;

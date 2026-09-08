@@ -9,19 +9,10 @@ export interface KnomoSettingAttentionOptions {
 
 export function getKnomoSettingAttentionKinds(
 	runtime: KnomoRuntimeAttentionSnapshot,
-	initialization: KnomoStartupBootstrapSnapshot | null,
+	_initialization: KnomoStartupBootstrapSnapshot | null,
 	options: KnomoSettingAttentionOptions = {},
 ): KnomoSettingAttentionKind[] {
 	if (runtime.settings === "unavailable") return ["settings"];
-	if (initialization?.status === "unconfigured" || initialization?.status === "initializing") return [];
-	if (initialization?.status === "conflicted") return ["shared-config"];
-	if (initialization?.status === "unavailable") {
-		if (initialization.stage === "identity") {
-			return runtime.identityAttention === "settings_retry" ? ["identity"] : [];
-		}
-		if (initialization.stage === "catalog") return ["catalog"];
-		return ["shared-config"];
-	}
 
 	const kinds: KnomoSettingAttentionKind[] = [];
 	if (runtime.sharedConfiguration !== "ready") kinds.push("shared-config");

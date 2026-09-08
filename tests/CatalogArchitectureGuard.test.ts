@@ -171,8 +171,10 @@ test("Monthly 复用按月 Daily inventory，并与 Catalog、旧版数据升级
 	const historicalIdentityBootstrap = fs.readFileSync("src/services/HistoricalIdentityBootstrapService.ts", "utf8");
 	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
 	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 4);
-	assert.equal(main.indexOf("catalogIndexCoordinator?.initialize()")
-		< main.indexOf("monthlyProjectionCoordinator?.initialize()"), true);
+	assert.match(main, /initializeCatalogRuntime\(\{/u);
+	assert.match(main, /initializeCatalog: \(\) => this\.catalogIndexCoordinator!\.initialize\(\)/u);
+	const startup = fs.readFileSync("src/services/CatalogStartup.ts", "utf8");
+	assert.ok(startup.indexOf("await options.initializeCatalog()") < startup.indexOf("await options.initializeMonthly()"));
 	assert.equal(monthlyInput.includes("dailyInventory.listPeriod(period)"), true);
 	assert.equal(monthlyCoordinator.includes("invalidatePeriods(await this.options.inputBuilder.listPeriods())"), false);
 	assert.equal(monthlyCoordinator.includes("await this.yieldControl()"), true);

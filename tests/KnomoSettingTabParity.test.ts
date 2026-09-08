@@ -59,7 +59,7 @@ test("only shows the attention group when actionable rows exist", () => {
 	assert.match(source, /getKnomoSettingAttentionKinds/u);
 });
 
-test("routes the device-setting action through startup initialization and refreshes after failure", () => {
+test("retries current configuration independently of Identity startup and refreshes after failure", () => {
 	const source = readSettingTabSource();
 	const sharedConfigSource = getSourceBetween(
 		source,
@@ -67,8 +67,8 @@ test("routes the device-setting action through startup initialization and refres
 		"\n\tprivate async syncSharedConfiguration(",
 	);
 
-	assert.match(sharedConfigSource, /this\.startupBootstrapService\.retryInitialization\(\)/u);
-	assert.match(sharedConfigSource, /this\.startupBootstrapService\.useCurrentDeviceSettings\(\)/u);
+	assert.match(sharedConfigSource, /this\.knomoSharedConfigService\.reloadConfiguredRoot\(\)/u);
+	assert.doesNotMatch(sharedConfigSource, /this\.startupBootstrapService/u);
 	assert.match(sharedConfigSource, /new Notice\(t\("settings\.sharedConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
 	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*if \(this\.settingsVisible\) this\.refreshSettingTab\(\)/u);

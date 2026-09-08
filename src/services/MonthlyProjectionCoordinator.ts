@@ -83,6 +83,7 @@ export class MonthlyProjectionCoordinator {
 	private stopped = false;
 	private discoveryPending = false;
 	private projectionAllowed: boolean;
+	private configurationGeneration = 0;
 	private configuration: MonthlyProjectionConfigurationSnapshot | null = null;
 
 	constructor(
@@ -138,8 +139,10 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	async handleConfigurationChanged(): Promise<void> {
+		const generation = ++this.configurationGeneration;
 		const previous = this.configuration;
 		const next = await this.options.inputBuilder.getConfigurationSnapshot();
+		if (generation !== this.configurationGeneration || this.isStopped()) return;
 		const wasProjectionAllowed = this.projectionAllowed;
 		this.projectionAllowed = this.isProjectionAllowed();
 		this.configuration = next;
@@ -297,10 +300,15 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private async project(period: string): Promise<"complete" | "incomplete"> {
+		const generation = this.configurationGeneration;
+		const assertCurrent = () => {
+			this.assertRunning();
+			if (generation !== this.configurationGeneration || !this.isProjectionAllowed()) throw new Error("Monthly configuration changed during projection.");
+		};
 		const targetPath = this.options.inputBuilder.getTargetPath(period);
 		let outcome: "complete" | "incomplete" = "complete";
 		await this.enqueuePath(targetPath, async () => {
-			this.assertRunning();
+			assertCurrent();
 			const existing = this.app.vault.getAbstractFileByPath(targetPath);
 			if (existing !== null && !(existing instanceof TFile)) {
 				throw new Error(`Monthly projection target is not a file: ${targetPath}`);
@@ -315,7 +323,7 @@ export class MonthlyProjectionCoordinator {
 			}
 			const runtime = this.createCooperativeRuntime();
 			const built = await this.options.inputBuilder.build(period, runtime);
-			this.assertRunning();
+			assertCurrent();
 			if (built.status === "incomplete") {
 				outcome = "incomplete";
 				return;
@@ -334,7 +342,7 @@ export class MonthlyProjectionCoordinator {
 				sourceDigest: built.sourceDigest,
 				preservedMarker,
 			}, undefined, runtime);
-			this.assertRunning();
+			assertCurrent();
 			if (projection.path !== targetPath) throw new Error("Monthly projection settings changed during build.");
 			if (existing instanceof TFile) {
 				const currentHash = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(existing)));
@@ -343,7 +351,7 @@ export class MonthlyProjectionCoordinator {
 					return;
 				}
 			}
-			this.assertRunning();
+			assertCurrent();
 			const opId = `monthly-projection:${period}:${projection.outputHash}`;
 			this.options.selfWriteTracker.mark(targetPath, {
 				opId,
@@ -358,9 +366,9 @@ export class MonthlyProjectionCoordinator {
 				if (existing instanceof TFile) {
 					let skippedUnmarked = false;
 					let changedMarker = false;
-					this.assertRunning();
+					assertCurrent();
 					await this.app.vault.process(existing, (currentContent) => {
-						if (this.isStopped()) return currentContent;
+						assertCurrent();
 						if (!hasKnomoMonthlyArchiveMarker(currentContent)) {
 							skippedUnmarked = true;
 							return currentContent;
@@ -371,7 +379,7 @@ export class MonthlyProjectionCoordinator {
 						}
 						return currentContent === projection.content ? currentContent : projection.content;
 					});
-					this.assertRunning();
+					assertCurrent();
 					if (skippedUnmarked) {
 						this.options.selfWriteTracker.discard(targetPath, opId);
 						this.metadata.delete(period);
@@ -381,9 +389,9 @@ export class MonthlyProjectionCoordinator {
 					file = existing;
 				} else {
 					const parentFolder = getParentFolderPath(targetPath);
-					this.assertRunning();
+					assertCurrent();
 					if (parentFolder !== null) await ensureFolder(this.app, parentFolder);
-					this.assertRunning();
+					assertCurrent();
 					file = await this.app.vault.create(targetPath, projection.content);
 				}
 				const outputHash = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(file)));

@@ -135,7 +135,7 @@ test("Daily 写入网关为大文件解析传入协作式 runtime", async () => 
 function makeGateway(app: App): DailyMemoWriteGateway {
 	return new DailyMemoWriteGateway(app, new DiaryMemoParser(async (bytes) => (
 		createHash("sha256").update(bytes).digest("hex")
-	)));
+	)), { yieldControl: () => new Promise<void>((resolve) => setTimeout(resolve, 0)) });
 }
 
 function makeFile(path: string): TFile {

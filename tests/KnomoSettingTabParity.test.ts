@@ -103,7 +103,7 @@ test("legacy attention exposes user actions without rendering raw diagnostics", 
 
 	assert.doesNotMatch(legacySource, /diagnostics|sourcePath|memoId|item\.code|item\.detail/u);
 	assert.match(legacySource, /acknowledgeLegacyMigration/u);
-	assert.match(legacySource, /runRuntimeRetry/u);
+	assert.match(legacySource, /legacyIndexMigrationService\.run\(\{ explicit: true \}\)/u);
 });
 
 test("settings load failure is routed through the shared retry action", () => {

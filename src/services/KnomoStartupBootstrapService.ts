@@ -25,7 +25,7 @@ export interface KnomoStartupBootstrapOptions {
 	authorizeInitialImport?: (dataRoot: string) => Promise<void>;
 	hasPendingInitialImport?: () => Promise<boolean>;
 	onNewDataRootReady?: () => Promise<void>;
-	identity: StartupIdentityService;
+	identity?: StartupIdentityService;
 	sharedConfig: StartupSharedConfigService;
 	cancellationSignal?: AbortSignal;
 }
@@ -145,9 +145,9 @@ export class KnomoStartupBootstrapService {
 
 			stage = "identity";
 			this.setInitializing(stage);
-			await this.options.identity.initialize();
+			await this.options.identity?.initialize();
 			this.throwIfCancelled();
-			const identityStatus = this.options.identity.getStatus();
+			const identityStatus = this.options.identity?.getStatus();
 			if (identityStatus === "missing") {
 				throw new Error("Configured Identity Ledger root is missing.");
 			}

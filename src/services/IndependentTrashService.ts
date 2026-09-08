@@ -8,6 +8,7 @@ import { findObservation, findAppendedObservation, getRawBlock, replaceObservati
 import { TrashSnapshotStore, assertVaultPath } from "./TrashSnapshotStore";
 
 export interface IndependentTrashOptions {
+	assertActive?: () => void;
 	getLogicalDateForPath: (path: string) => Promise<string>;
 	// 返回 null 表示原路径已不适用；配置不可读必须抛错，不能猜测。
 	getOriginalDailyFile: (path: string, date: string) => Promise<TFile | null>;
@@ -25,7 +26,7 @@ export class TrashDailyWriteError extends Error {
 	}
 }
 
-// P4 独立能力；生产装配留给 P6。队列与清理重试仅存在于当前会话。
+// 队列与清理重试仅存在于当前会话，不建立持久事务历史。
 export class IndependentTrashService {
 	private queue: Promise<unknown> = Promise.resolve();
 	private readonly cleanupOnly = new Map<string, { snapshot: TrashSnapshot; prepared: PreparedDailyWrite; observation: MemoObservation; confirmed?: boolean; catalogUpdatePending?: boolean }>();
@@ -48,6 +49,7 @@ export class IndependentTrashService {
 			const snapshot: TrashSnapshot = { snapshotId: this.options.newSnapshotId?.() ?? randomSnapshotId(),
 				deletedAt: (this.options.now?.() ?? new Date()).toISOString(), sourcePath: original.sourcePath,
 				logicalDate, section: observation.section, rawBlock: getRawBlock(prepared.beforeContent, observation) };
+			this.options.assertActive?.();
 			await this.store.save(snapshot);
 			await this.commit(prepared, snapshot);
 			return { snapshotId: snapshot.snapshotId, state: "deleted", observation: null,
@@ -87,7 +89,9 @@ export class IndependentTrashService {
 
 	purge(snapshotId: string): Promise<void> {
 		return this.serial(async () => {
-			await this.store.remove(await this.store.read(snapshotId));
+			const snapshot = await this.store.read(snapshotId);
+			this.options.assertActive?.();
+			await this.store.remove(snapshot);
 			this.cleanupOnly.delete(snapshotId);
 		});
 	}
@@ -102,6 +106,7 @@ export class IndependentTrashService {
 		}
 		const catalogUpdatePending = pending.catalogUpdatePending ?? false;
 		try {
+			this.options.assertActive?.();
 			await this.store.remove(snapshot, true);
 			this.cleanupOnly.delete(snapshot.snapshotId);
 			return { snapshotId: snapshot.snapshotId, state: "restored", observation, catalogUpdatePending };
@@ -114,6 +119,7 @@ export class IndependentTrashService {
 	private async commit(prepared: PreparedDailyWrite, snapshot: TrashSnapshot): Promise<void> {
 		try {
 			await this.store.assertUnchanged(snapshot);
+			this.options.assertActive?.();
 			if (prepared.file.path !== (prepared.before.observations[0]?.sourcePath ?? prepared.after.observations[0]?.sourcePath)) {
 				throw new Error("Daily target path changed.");
 			}
@@ -132,6 +138,7 @@ export class IndependentTrashService {
 
 	private async updateCatalog(prepared: PreparedDailyWrite, observation?: MemoObservation): Promise<boolean> {
 		try {
+			this.options.assertActive?.();
 			await this.options.updateCatalogPartition({ file: prepared.file, logicalDate: prepared.logicalDate,
 				content: prepared.afterContent, parsed: prepared.after, insertedObservation: observation });
 			return false;
@@ -142,7 +149,7 @@ export class IndependentTrashService {
 	}
 
 	private serial<T>(action: () => Promise<T>): Promise<T> {
-		const pending = this.queue.catch(() => undefined).then(action);
+		const pending = this.queue.catch(() => undefined).then(() => { this.options.assertActive?.(); return action(); });
 		this.queue = pending;
 		return pending;
 	}

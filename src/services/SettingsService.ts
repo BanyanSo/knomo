@@ -154,6 +154,15 @@ export class SettingsService {
 		}
 	}
 
+	async persistLegacyConfiguration(): Promise<void> {
+		await this.runSettingsWriteExclusive(async () => {
+			await this.persistSettings(this.getSettings());
+			const expected = { ...this.getSettings() };
+			for (const key of PREFERENCE_KEYS) delete (expected as unknown as Record<string, unknown>)[key];
+			await this.verifyCurrentSettings(expected);
+		});
+	}
+
 	async initializeTimeBuoyDefault(): Promise<KnomoSettings> {
 		if (this.timeBuoySettingPersisted) {
 			return this.getSettings();

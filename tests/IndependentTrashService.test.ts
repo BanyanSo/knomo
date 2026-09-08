@@ -7,6 +7,22 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 const PATH = "Daily/2026-09-08.md";
 const BODY = "## Memos\n- 10:30 same memo\n- 10:30 same memo\n";
 
+test("生产 runtime 取消后拒绝提交已准备的删除，保留快照且不改 Daily", async () => {
+	const f = await fixture();
+	let active = true;
+	f.options.assertActive = () => { if (!active) throw new Error("runtime cancelled"); };
+	const create = f.vault.app.vault.create.bind(f.vault.app.vault);
+	f.vault.app.vault.create = async (path, content) => {
+		const file = await create(path, content);
+		if (path.endsWith(".json")) active = false;
+		return file;
+	};
+	await assert.rejects(() => f.service.delete(f.initial[0]!), /runtime cancelled/u);
+	assert.equal(f.vault.read(PATH), BODY);
+	assert.equal((await f.store.query()).items.length, 1);
+	assert.equal(f.events.includes("daily-process"), false);
+});
+
 test("snapshot-first 删除同文 occurrence，独立 ID、独立 restore/purge，时间与 raw block 保留", async () => {
 	const f = await fixture();
 	const original = await f.observations();

@@ -722,6 +722,7 @@ export class KnomoView extends ItemView {
 			getDeletedMemoSummary: () => this.catalogReadService.getDeletedSummary(),
 			listDeletedMemos: async () => {
 				const page = await this.catalogReadService.listDeleted(CATALOG_PAGE_SIZE);
+				if (page.errors?.length) new Notice(page.errors.map((item) => `${item.snapshotId}: ${item.message}`).join("\n"));
 				this.trashCursor = page.nextCursor;
 				this.trashIdentityRevision = page.identityRevision;
 				return page.items.map(toTrashMemoView);

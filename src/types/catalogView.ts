@@ -178,6 +178,7 @@ export type CatalogFeatureFilter = Omit<CatalogFeatureQuery, "limit" | "cursor">
 export type TrashDeleteSource = "knomo_ui" | "unknown";
 
 export interface TrashMemoItem {
+	snapshotId?: string;
 	key: string;
 	memoId: string;
 	deleteEventId: string;
@@ -194,6 +195,7 @@ export interface TrashMemoItem {
 }
 
 export interface TrashMemoPage {
+	errors?: Array<{ snapshotId: string; message: string }>;
 	items: TrashMemoItem[];
 	nextCursor: string | null;
 	identityRevision: string;

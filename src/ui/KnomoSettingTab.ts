@@ -11,7 +11,6 @@ import {
 import { t } from "../i18n";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
-import type { KnomoDataRootMigrationService } from "../services/KnomoDataRootMigrationService";
 import type { KnomoSharedConfigService } from "../services/KnomoSharedConfigService";
 import type {
 	KnomoStartupBootstrapService,
@@ -60,9 +59,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly memoCommandService: MemoCommandService,
 		private readonly catalogReadService: CatalogReadService,
 		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
-		private readonly knomoDataRootMigrationService: KnomoDataRootMigrationService,
+		private readonly knomoDataRootMigrationService: { plan(root: string): Promise<{ action: string }>; migrate(root: string): Promise<unknown> },
 		private readonly knomoSharedConfigService: Pick<KnomoSharedConfigService, "getStatus" | "getLastError" | "reloadConfiguredRoot" | "refreshLocalConfig" | "publishLocalConfig" | "resolveWithLocalConfig">,
-		private readonly legacyIndexMigrationService: LegacyIndexMigrationService,
+		private readonly legacyIndexMigrationService: Pick<LegacyIndexMigrationService, "getReport"> & { run(options?: { explicit?: boolean }): Promise<unknown> },
 		private readonly legacyMigrationAcknowledgementService: LegacyMigrationAcknowledgementService,
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 		private readonly retryRuntimeState: (forceIdentityReload?: boolean) => Promise<void>,
@@ -502,8 +501,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 		} else {
 			setting.addButton((button) => {
-				button.setButtonText(t("settings.attention.checkAgain"));
-				button.onClick(() => { void this.runRuntimeRetry(button); });
+				button.setButtonText(t("settings.legacyIdentityImport.migrate"));
+				button.onClick(() => {
+					button.setDisabled(true);
+					void this.legacyIndexMigrationService.run({ explicit: true })
+						.catch((error: unknown) => { new Notice(formatServiceError(error, t("settings.legacyIdentityImport.unavailable"))); })
+						.finally(() => { button.setDisabled(false); this.refreshSettingTab(); });
+				});
 			});
 		}
 	}
@@ -807,7 +811,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			await this.knomoDataRootMigrationService.migrate(knomoDataRoot);
 			await this.knomoSharedConfigService.reloadConfiguredRoot();
 			await this.syncSharedConfiguration();
-			await this.legacyIndexMigrationService.run({ sourceChanged: true, verifyCompletion: true });
+			await this.legacyIndexMigrationService.run();
 			new Notice(t("settings.dataRoot.saved"));
 			return true;
 		} catch (error) {

@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+test("恢复数据根仅搬运 Trash 和完成 marker，开发期目录不读写；冲突不提交位置", async () => {
+	await ensureObsidianStub();
+	const { InMemoryVault } = await import("./helpers/InMemoryVault");
+	const { RecoveryDataRootService } = await import("../src/services/RecoveryDataRootService");
+	const { LegacyMigrationMarkerStore } = await import("../src/services/LegacyTrashMigrationService");
+	const { TrashSnapshotStore } = await import("../src/services/TrashSnapshotStore");
+	const forbidden = "Old/_knomo-data/identity/current/state.json";
+	const vault = new InMemoryVault({ [forbidden]: "unpublished" });
+	const store = new TrashSnapshotStore(vault.app, "Old/_knomo-data/trash");
+	const snapshot = { snapshotId: "s1", deletedAt: "2026-08-22T12:00:00Z", logicalDate: "2026-08-22", sourcePath: "Daily/2026-08-22.md", section: null, rawBlock: "- 12:34 same" };
+	await store.save(snapshot);
+	const completion = { sourceId: "legacy-index:Old", sourceRevision: "a".repeat(64), legacySystemRoot: "Old/_knomo-system" };
+	await new LegacyMigrationMarkerStore(vault.app, "Old/_knomo-data").save(completion);
+	let location = { knomoDataRoot: "Old", knomoDataRootConfigured: true };
+	const read = vault.app.vault.read.bind(vault.app.vault);
+	vault.app.vault.read = async (file) => { assert.notEqual(file.path, forbidden); return read(file); };
+	const service = new RecoveryDataRootService(vault.app, () => location, async (root) => { location = { knomoDataRoot: root, knomoDataRootConfigured: true }; }, (action) => action());
+	await service.migrate("New");
+	assert.equal(location.knomoDataRoot, "New");
+	assert.deepEqual(await new TrashSnapshotStore(vault.app, "New/_knomo-data/trash").read("s1"), snapshot);
+	assert.deepEqual(await new LegacyMigrationMarkerStore(vault.app, "New/_knomo-data").read(), completion);
+	assert.equal(vault.read("New/_knomo-data/identity/current/state.json"), null);
+	await new TrashSnapshotStore(vault.app, "Conflict/_knomo-data/trash").save({ ...snapshot, rawBlock: "- 12:34 different" });
+	await assert.rejects(() => service.migrate("Conflict"), /changed/u);
+	assert.equal(location.knomoDataRoot, "New");
+	await assert.rejects(() => service.migrate("New/Child"), /separate/u);
+});

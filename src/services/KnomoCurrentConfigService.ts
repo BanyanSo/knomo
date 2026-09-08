@@ -13,7 +13,7 @@ export class KnomoCurrentConfigService {
 	private onChanged: (() => void | Promise<void>) | null = null;
 
 	constructor(private readonly settings: SettingsService, private readonly daily: DailyNotesProvider,
-		private readonly locale: () => string, private readonly readPrevious: () => Promise<KnomoSharedConfig | null>) {}
+		private readonly locale: () => string, private readonly readPrevious: () => Promise<KnomoSharedConfig | null> = async () => null) {}
 
 	initializeLocalConfig(): Promise<void> { return this.daily.loadConfig().then(() => undefined); }
 

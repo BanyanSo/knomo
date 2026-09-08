@@ -15,6 +15,43 @@ import type { MarkdownMutationService } from "../src/types/memoOperations";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失败不误报成功", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "same memo");
+	await seedCatalog(catalog, store, observation);
+	const calls: unknown[] = [];
+	let pending = true;
+	const trash = {
+		query: async () => ({ items: ["s1", "s2"].map((snapshotId) => ({ snapshotId, deletedAt: "2026-08-22T12:00:00Z", sourcePath: observation.sourcePath,
+			logicalDate: "2026-08-22", section: "## Memos", rawBlock: "- 12:34 same memo" })), errors: [] }),
+		delete: async (handle: unknown) => { calls.push(handle); return { state: "deleted", catalogUpdatePending: false }; },
+		restore: async (id: string) => { calls.push(id); return { state: pending ? "restored_cleanup_pending" : "restored", observation, catalogUpdatePending: false }; },
+		purge: async (id: string) => { calls.push(id); },
+	} as unknown as import("../src/services/IndependentTrashService").IndependentTrashService;
+	const command = new MemoCommandService({} as App, catalog, { ...makeCommandOptions(), getTrashService: () => trash }, {} as MarkdownMutationService);
+	const read = command.getReadService();
+	const item = (await read.query({ limit: 10 })).items[0]!;
+	assert.strictEqual(await command.prepareRecoverableDelete(item), item);
+	await command.delete(item);
+	assert.strictEqual(calls[0], item.observationHandle);
+	const deleted = await read.listDeleted(10);
+	assert.deepEqual(deleted.items.map((memo) => memo.snapshotId), ["s1", "s2"]);
+	assert.equal(deleted.items[0]!.createdAt, "2026-08-22T12:34");
+	assert.deepEqual(await read.getDeletedSummary(), { count: 2, ids: [] });
+	await assert.rejects(() => command.restore(deleted.items[0]!), /正文已恢复/u);
+	pending = false;
+	assert.equal((await command.restore(deleted.items[0]!)).status, "saved");
+	await command.purge(deleted.items[1]!);
+	assert.deepEqual(calls.slice(1), ["s1", "s1", "s2"]);
+	assert.equal(read.getRuntimeAttentionSnapshot().identity, "absent");
+});
+
 test("普通命令不访问 Identity，并将最初 observation handle 原样交给写入网关", async () => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");

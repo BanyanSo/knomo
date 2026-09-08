@@ -1,3 +1,5 @@
+import type { IndependentTrashService } from "./IndependentTrashService";
+import { hashText } from "../utils/hash";
 import type {
 	CatalogCoverage,
 	CatalogDailyAggregate,
@@ -59,7 +61,8 @@ export interface CatalogReadServiceOptions {
 	references?: CatalogReferenceService;
 	reviews?: LocalMemoReviewStore;
 	catalog: MemoCatalogService;
-	identityLedger: IdentityLedgerReader;
+	identityLedger?: IdentityLedgerReader;
+	getTrashService?: () => IndependentTrashService;
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
 	getLegacyImportStatus?: () => LegacyIdentityImportStatus;
@@ -112,7 +115,7 @@ export class CatalogReadService {
 		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "unavailable";
 		let settings: KnomoSettingsLoadStatus = "ready";
 		try {
-			identity = this.options.identityLedger.getStatus();
+			identity = this.options.identityLedger?.getStatus() ?? "absent";
 		} catch {
 			// 保留 unavailable。
 		}
@@ -332,13 +335,32 @@ export class CatalogReadService {
 	}
 
 	async getDeletedSummary(): Promise<{ count: number; ids: string[] }> {
+		if (this.options.getTrashService) return { count: (await this.readSnapshots()).items.length, ids: [] };
 		const records = await this.listVisibleDeletes();
 		return { count: records.length, ids: [...new Set(records.map((item) => item.memoId))].sort() };
 	}
 
+	private async readSnapshots() {
+		return this.options.getTrashService!().query();
+	}
+
 	async listDeleted(limit: number, cursor: string | null = null): Promise<TrashMemoPage> {
+		if (this.options.getTrashService) {
+			const result = await this.readSnapshots();
+			const snapshots = result.items;
+			const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
+			const selected = snapshots.slice(offset, offset + Math.max(0, limit));
+			return { items: selected.map((item) => ({ snapshotId: item.snapshotId, key: item.snapshotId,
+				memoId: item.snapshotId, deleteEventId: item.snapshotId,
+				createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
+				deletedAt: item.deletedAt, deleteSource: "unknown" as const, logicalDate: item.logicalDate,
+				sourcePath: item.sourcePath, section: item.section, content: readDeletedPayloadContent(item.rawBlock),
+				contentHash: hashText(item.rawBlock), sourceMemoId: null, purgeAllowed: true })),
+				nextCursor: offset + selected.length < snapshots.length ? String(offset + selected.length) : null,
+				identityRevision: hashText(JSON.stringify(snapshots)), errors: result.errors };
+		}
 		const records = await this.listVisibleDeletes();
-		const identitySnapshot = this.options.identityLedger.getSnapshot();
+		const identitySnapshot = this.options.identityLedger!.getSnapshot();
 		const offset = cursor === null ? 0 : Math.max(0, Number.parseInt(cursor, 10) || 0);
 		const selected = records.slice(offset, offset + Math.max(0, limit));
 		const nextOffset = offset + selected.length;
@@ -359,7 +381,7 @@ export class CatalogReadService {
 				purgeAllowed: identitySnapshot.memos[record.memoId]?.conflicted === false,
 			})),
 			nextCursor: nextOffset < records.length ? String(nextOffset) : null,
-			identityRevision: this.options.identityLedger.getRevision(),
+			identityRevision: this.options.identityLedger!.getRevision(),
 		};
 	}
 
@@ -486,17 +508,18 @@ export class CatalogReadService {
 	}
 
 	private resolveObservation(observation: CatalogObservation): ResolvedMemo {
-		const state = this.options.identityLedger.resolveObservationState(observation);
+		if (!this.options.identityLedger) return { kind: "observation", identityHandle: null, observation, capabilities: createResolvedMemoCapabilities("absent") };
+		const state = this.options.identityLedger!.resolveObservationState(observation);
 		if (state.kind === "identified") return createResolvedMemo(observation, state.binding);
 		if (state.kind === "conflicted") {
-			const snapshot = this.options.identityLedger.getSnapshot();
+			const snapshot = this.options.identityLedger!.getSnapshot();
 			const repairable = state.memoIds.some((memoId) => {
 				const memo = snapshot.memos[memoId];
 				return memo?.conflicted === true && memo.conflictBaseBindingId !== null;
 			});
-			return createConflictedMemo(observation, state.memoIds, this.options.identityLedger.getRevision(), repairable);
+			return createConflictedMemo(observation, state.memoIds, this.options.identityLedger!.getRevision(), repairable);
 		}
-		const status = this.options.identityLedger.getStatus();
+		const status = this.options.identityLedger!.getStatus();
 		const bootstrapStatus = this.options.getHistoricalIdentityBootstrapStatus?.() ?? "completed";
 		const bootstrapPending = bootstrapStatus === "pending" || bootstrapStatus === "running"
 			|| (bootstrapStatus === "idle" && status === "absent");
@@ -509,7 +532,7 @@ export class CatalogReadService {
 			observation,
 			adoption,
 			capabilities: createResolvedMemoCapabilities(adoption === "eligible" ? "absent" : "syncing"),
-			identityRevision: this.options.identityLedger.getRevision(),
+			identityRevision: this.options.identityLedger!.getRevision(),
 		};
 	}
 
@@ -537,7 +560,7 @@ export class CatalogReadService {
 			timeBuoyDates: [...observation.timeBuoyDates],
 			sourcePath: observation.sourcePath,
 			lineNumberHint: observation.startLine + 1,
-			sourceMemoId: memoId === null ? null : this.options.identityLedger.getSourceMemoId(memoId),
+			sourceMemoId: memoId === null ? null : this.options.identityLedger!.getSourceMemoId(memoId),
 			capabilities: { ...resolved.capabilities, catalog: catalogCapabilities },
 			resolved,
 			observation,
@@ -714,7 +737,7 @@ export class CatalogReadService {
 		}
 		let route: import("../types/identityLedger").IdentityLedgerAttentionRoute | undefined;
 		try {
-			route = this.options.identityLedger.getAttentionRoute?.();
+			route = this.options.identityLedger?.getAttentionRoute?.();
 		} catch {
 			// 路由本身无法读取时，回退到 Ledger 全局状态。
 		}
@@ -841,9 +864,9 @@ export class CatalogReadService {
 	}
 
 	private async listVisibleDeletes() {
-		const activeDeletes = this.options.identityLedger.getActiveDeletes?.() ?? [];
+		const activeDeletes = this.options.identityLedger!.getActiveDeletes?.() ?? [];
 		if (activeDeletes.length === 0) return [];
-		const identitySnapshot = this.options.identityLedger.getSnapshot();
+		const identitySnapshot = this.options.identityLedger!.getSnapshot();
 		const memoIds = [...new Set(activeDeletes.map((record) => record.memoId))];
 		const visibleMemoIds = new Set((await Promise.all(memoIds.map(async (memoId) =>
 			await this.hasCurrentObservation(memoId, identitySnapshot) ? memoId : null)))
@@ -860,7 +883,7 @@ export class CatalogReadService {
 		for (const sourcePath of new Set(memo.bindings.map((binding) => binding.evidence.sourcePath))) {
 			const batch = await this.options.catalog.getFileRevisionBatch(sourcePath);
 			for (const observation of batch?.observations ?? []) {
-				const state = this.options.identityLedger.resolveObservationState(observation);
+				const state = this.options.identityLedger!.resolveObservationState(observation);
 				if (state.kind === "identified" && state.binding.memoId === memoId) return true;
 			}
 		}

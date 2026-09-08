@@ -1,3 +1,4 @@
+import type { IndependentTrashService } from "./IndependentTrashService";
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import { KnomoMutationBarrier } from "./KnomoMutationBarrier";
@@ -35,6 +36,7 @@ import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
 import { CatalogReferenceService } from "./CatalogReferenceService";
 
 export interface MemoCommandServiceOptions {
+	getTrashService?: () => IndependentTrashService;
 	getDailyPathForDate?: (logicalDate: string) => Promise<string>;
 	refreshCatalogPaths: (paths: readonly string[]) => Promise<void>;
 	refreshLocalCatalog: () => Promise<CatalogRefreshResult>;
@@ -65,7 +67,7 @@ export class MemoCommandService {
 		catalog: MemoCatalogService,
 		private readonly options: MemoCommandServiceOptions,
 		private readonly markdownMutations: MarkdownMutationContract,
-		private readonly identityLedger: IdentityLedgerMutationService,
+		private readonly identityLedger?: IdentityLedgerMutationService,
 	) {
 		this.now = options.now ?? (() => new Date());
 		this.createInternal = this.mutationBarrier.wrap(this.createInternal.bind(this));
@@ -86,6 +88,7 @@ export class MemoCommandService {
 			reviews: new LocalMemoReviewStore(app),
 			catalog,
 			identityLedger,
+			getTrashService: options.getTrashService,
 			requestObservationScan: async () => { await options.refreshLocalCatalog(); },
 			getProjectionState: options.getProjectionState,
 			getLegacyImportStatus: options.getLegacyImportStatus,
@@ -170,14 +173,15 @@ export class MemoCommandService {
 	}
 
 	async repairIdentity(target: CatalogMemoItem, candidateMemoId: string): Promise<void> {
-		const memo = this.identityLedger.getSnapshot().memos[candidateMemoId];
+		if (!this.identityLedger) throw new Error("Identity repair is no longer available.");
+		const memo = this.identityLedger!.getSnapshot().memos[candidateMemoId];
 		if (memo?.conflicted !== true) throw new Error("The selected identity conflict is no longer current.");
 		const refreshed = await this.refreshResolvedMemo(target.observationHandle);
 		if (refreshed.kind !== "ambiguous"
 			|| !refreshed.candidates.some((candidate) => candidate.memoId === candidateMemoId)) {
 			throw new Error("The selected identity conflict is no longer current.");
 		}
-		await this.identityLedger.repairConflict(candidateMemoId, refreshed.observation);
+		await this.identityLedger!.repairConflict(candidateMemoId, refreshed.observation);
 	}
 
 	startEdit(item: CatalogMemoItem, contentInput: string): MemoSaveOperation {
@@ -213,6 +217,7 @@ export class MemoCommandService {
 	}
 
 	async removePermanently(item: CatalogMemoItem): Promise<DailyMutationResult> {
+		if (this.options.getTrashService) return this.delete(item);
 		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
 		if (refreshed.capabilities.identity.recoverableDelete !== "absent") {
 			throw new Error("Permanent delete requires a current memo without recoverable identity.");
@@ -223,29 +228,30 @@ export class MemoCommandService {
 	}
 
 	async prepareRecoverableDelete(item: CatalogMemoItem): Promise<CatalogMemoItem | null> {
+		if (this.options.getTrashService) return item;
 		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
-		const currentState = this.identityLedger.resolveObservationState(refreshed.observation);
+		const currentState = this.identityLedger!.resolveObservationState(refreshed.observation);
 		if (currentState.kind === "identified") {
 			return this.requireRecoverableDeleteItem(item.observationHandle, currentState.binding.memoId);
 		}
 		if (currentState.kind !== "unbound") {
 			throw new Error("Recoverable delete requires one confirmed memo identity.");
 		}
-		const status = this.identityLedger.getStatus();
+		const status = this.identityLedger!.getStatus();
 		if (status !== "ready" && status !== "absent") {
 			throw new Error("Recoverable delete identity preparation is unavailable.");
 		}
 
 		let memoId: string;
 		try {
-			memoId = (await this.identityLedger.adoptObservation(refreshed.observation)).memoId;
+			memoId = (await this.identityLedger!.adoptObservation(refreshed.observation)).memoId;
 		} catch (error) {
 			const latest = await this.refreshResolvedMemo(item.observationHandle);
-			const latestState = this.identityLedger.resolveObservationState(latest.observation);
+			const latestState = this.identityLedger!.resolveObservationState(latest.observation);
 			if (latestState.kind === "identified") {
 				return this.requireRecoverableDeleteItem(item.observationHandle, latestState.binding.memoId);
 			}
-			const latestStatus = this.identityLedger.getStatus();
+			const latestStatus = this.identityLedger!.getStatus();
 			if (latestState.kind === "unbound" && (latestStatus === "ready" || latestStatus === "absent")) {
 				return null;
 			}
@@ -255,16 +261,20 @@ export class MemoCommandService {
 	}
 
 	async delete(item: CatalogMemoItem): Promise<DailyMutationResult> {
-		if (this.identityLedger.recordDeletePayload === undefined
-			|| this.identityLedger.recordDeleteCommit === undefined
+		if (this.options.getTrashService) {
+			const result = await this.options.getTrashService().delete(item.observationHandle);
+			return { status: "saved", memoId: null, followUpPending: false, localRefreshPending: result.catalogUpdatePending };
+		}
+		if (this.identityLedger!.recordDeletePayload === undefined
+			|| this.identityLedger!.recordDeleteCommit === undefined
 			|| this.markdownMutations.captureObservation === undefined) {
 			throw new Error("Recoverable delete requires an available Identity Ledger.");
 		}
 		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
-		const state = this.identityLedger.resolveObservationState(refreshed.observation);
+		const state = this.identityLedger!.resolveObservationState(refreshed.observation);
 		if (state.kind !== "identified") throw new Error("Recoverable delete requires one confirmed memo identity.");
 		const captured = await this.markdownMutations.captureObservation({ observation: item.observationHandle });
-		const deleteRecord = await this.identityLedger.recordDeletePayload(state.binding, {
+		const deleteRecord = await this.identityLedger!.recordDeletePayload(state.binding, {
 			deletedAt: this.now().toISOString(),
 			sourcePath: captured.observation.sourcePath,
 			deletedSourceRevision: captured.deletedSourceRevision,
@@ -277,7 +287,7 @@ export class MemoCommandService {
 		const result = await this.markdownMutations.remove({ observation: item.observationHandle });
 		let pending = true;
 		try {
-			await this.identityLedger.recordDeleteCommit(deleteRecord);
+			await this.identityLedger!.recordDeleteCommit(deleteRecord);
 			pending = false;
 		} catch {
 			pending = true;
@@ -287,12 +297,20 @@ export class MemoCommandService {
 	}
 
 	async restore(item: TrashMemoItem): Promise<MemoSaveResult> {
-		if (this.identityLedger.getActiveDeletes === undefined
-			|| this.identityLedger.recordRestore === undefined
+		if (this.options.getTrashService) {
+			if (!item.snapshotId) throw new Error("Trash snapshot ID required.");
+			const result = await this.options.getTrashService().restore(item.snapshotId);
+			if (result.state === "restored_cleanup_pending") throw new Error(result.message ?? "正文已恢复，恢复副本未清理；重试仅清理副本。");
+			const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(() => null);
+			return { status: "saved", memoId: null, memo, timeBuoyDates: memo?.timeBuoyDates ?? [], followUpPending: false,
+				localRefreshPending: result.catalogUpdatePending || memo === null };
+		}
+		if (this.identityLedger!.getActiveDeletes === undefined
+			|| this.identityLedger!.recordRestore === undefined
 			|| this.markdownMutations.restore === undefined) {
 			throw new Error("Identity Ledger restore is unavailable.");
 		}
-		const record = this.identityLedger.getActiveDeletes()
+		const record = this.identityLedger!.getActiveDeletes()
 			.find((candidate) => candidate.deleteEventId === item.deleteEventId);
 		if (record === undefined) throw new Error("Deleted memo payload is no longer active.");
 		const result = await this.markdownMutations.restore({
@@ -303,7 +321,7 @@ export class MemoCommandService {
 		let pending = true;
 		if (result.observation !== null) {
 			try {
-				await this.identityLedger.recordRestore(record, result.observation);
+				await this.identityLedger!.recordRestore(record, result.observation);
 				pending = false;
 			} catch {
 				pending = true;
@@ -316,17 +334,21 @@ export class MemoCommandService {
 	}
 
 	async purge(item: TrashMemoItem): Promise<void> {
-		if (this.identityLedger.getActiveDeletes === undefined
-			|| this.identityLedger.recordPurge === undefined) {
+		if (this.options.getTrashService) {
+			if (!item.snapshotId) throw new Error("Trash snapshot ID required.");
+			return this.options.getTrashService().purge(item.snapshotId);
+		}
+		if (this.identityLedger!.getActiveDeletes === undefined
+			|| this.identityLedger!.recordPurge === undefined) {
 			throw new Error("Identity Ledger permanent delete is unavailable.");
 		}
-		const record = this.identityLedger.getActiveDeletes()
+		const record = this.identityLedger!.getActiveDeletes()
 			.find((candidate) => candidate.deleteEventId === item.deleteEventId
 				&& candidate.memoId === item.memoId);
 		if (record === undefined || record.deleteCommitEventId === null) {
 			throw new Error("Deleted memo payload is no longer active.");
 		}
-		await this.identityLedger.recordPurge(record);
+		await this.identityLedger!.recordPurge(record);
 	}
 
 	async createReferenceText(item: CatalogMemoItem, sourcePath = ""): Promise<MemoReferenceResult> {

@@ -3,6 +3,21 @@ import test from "node:test";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { initializeCatalogRuntime } from "../src/services/CatalogStartup";
 
+test("正式旧插件设置直接保存为当前值并校验，设备偏好不成为迁移完成条件", async () => {
+	const f = await fixture();
+	f.setSaved({ monthlyMemoFolder: "Legacy", dailyHeading: "## Old", memoTimeFormat: "HH:mm", desktopSidebarWidth: 333 });
+	await f.settings.loadSettings();
+	await f.settings.persistLegacyConfiguration();
+	const saved = f.saved() as { settings: Record<string, unknown> };
+	assert.equal(saved.settings.monthlyMemoFolder, "Legacy");
+	assert.equal(saved.settings.dailyHeading, "## Old");
+	assert.equal(saved.settings.memoTimeFormat, "HH:mm");
+	assert.equal(saved.settings.desktopSidebarWidth, undefined);
+	assert.equal(f.local().desktopSidebarWidth, 333);
+	f.setSaved({ monthlyMemoFolder: "External" });
+	await assert.rejects(() => f.settings.persistLegacyConfiguration(), /externally/u);
+});
+
 test("Catalog 启动不等待配置、Identity/Trash/迁移；自身失败与取消仍生效", async () => {
 	const calls: string[] = [];
 	const options = {

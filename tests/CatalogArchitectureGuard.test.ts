@@ -28,15 +28,14 @@ test("生产源码只暴露无版本 Catalog 模块和存储名称", async () =>
 	for (const serviceName of [
 		"CatalogReadService",
 		"MemoCommandService",
-		"LocalWriterIdentityService",
 		"LegacyIndexReader",
-		"LegacyIndexMigrationService",
-		"HistoricalIdentityBootstrapService",
+		"LegacyTrashMigrationService",
+		"IndependentTrashService",
 	]) {
 		assert.equal(main.includes(serviceName), true, `main.ts should wire ${serviceName}.`);
 	}
 	assert.equal(main.includes("sessionWriterId"), false);
-	assert.equal(main.includes("getWriterId: () => localWriterIdentityService.getWriterId()"), true);
+	assert.equal(main.includes("getWriterId: () => localWriterIdentityService.getWriterId()"), false);
 	const localWriterIdentity = fs.readFileSync("src/services/LocalWriterIdentityService.ts", "utf8");
 	assert.equal(localWriterIdentity.includes("loadLocalStorage"), true);
 	assert.equal(localWriterIdentity.includes("saveLocalStorage"), true);
@@ -73,7 +72,7 @@ test("当前共享协议使用稳定目录且不携带开发期版本字段", as
 	assert.equal(fs.readFileSync("src/services/LegacyIndexReader.ts", "utf8").includes("schemaVersion"), true);
 });
 
-test("生产装配使用当前状态而非永久回执，tracked contract 不读取本地 architecture", () => {
+test("生产装配停用开发期持久化，tracked contract 不读取本地 architecture", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	for (const retired of [
 		"IdentityPublicationStore",
@@ -87,10 +86,10 @@ test("生产装配使用当前状态而非永久回执，tracked contract 不读
 		assert.equal(main.includes(retired), false, `main.ts must not wire retired ${retired}.`);
 	}
 	assert.equal(main.includes("new IdentityReceiptStore(this.app"), false);
-	assert.equal(main.includes("new KnomoBootstrapStateStore("), true);
-	assert.equal(main.includes("currentStateStore: new KnomoCurrentStateStore("), true);
-	assert.equal(main.includes("getIdentityLedgerRootPath(settings.knomoDataRoot)"), true);
-	assert.equal(main.includes("getKnomoSharedConfigRootPath(settings.knomoDataRoot)"), true);
+	assert.equal(main.includes("new KnomoBootstrapStateStore("), false);
+	assert.equal(main.includes("currentStateStore: new KnomoCurrentStateStore("), false);
+	assert.equal(main.includes("getIdentityLedgerRootPath(settings.knomoDataRoot)"), false);
+	assert.equal(main.includes("getKnomoSharedConfigRootPath(settings.knomoDataRoot)"), false);
 
 	const trackedContractFiles = [
 		...listFiles("src"),
@@ -162,7 +161,7 @@ test("旧版数据升级从旧 Monthly 目录发现来源，coverage 完成后�
 	}
 });
 
-test("Monthly 复用按月 Daily inventory，并与 Catalog、旧版数据升级共享低优先级队列", () => {
+test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分片", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	const monthlyInput = fs.readFileSync("src/services/MonthlyProjectionInputBuilder.ts", "utf8");
 	const monthlyCoordinator = fs.readFileSync("src/services/MonthlyProjectionCoordinator.ts", "utf8");
@@ -170,7 +169,7 @@ test("Monthly 复用按月 Daily inventory，并与 Catalog、旧版数据升级
 	const legacyMigration = fs.readFileSync("src/services/LegacyIndexMigrationService.ts", "utf8");
 	const historicalIdentityBootstrap = fs.readFileSync("src/services/HistoricalIdentityBootstrapService.ts", "utf8");
 	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
-	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 4);
+	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 2);
 	assert.match(main, /initializeCatalogRuntime\(\{/u);
 	assert.match(main, /initializeCatalog: \(\) => this\.catalogIndexCoordinator!\.initialize\(\)/u);
 	const startup = fs.readFileSync("src/services/CatalogStartup.ts", "utf8");
@@ -188,18 +187,18 @@ test("Monthly 复用按月 Daily inventory，并与 Catalog、旧版数据升级
 	assert.equal(historicalIdentityBootstrap.includes("runLowPriorityTask(() => this.runOnce"), true);
 });
 
-test("Identity 与共享配置监听等待 layout ready，启动后续阶段遵守卸载取消信号", () => {
+test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取消信号", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	const listenerStart = main.slice(
 		main.indexOf("this.app.workspace.onLayoutReady(() => {"),
-		main.indexOf("this.legacyIndexMigrationService.start"),
+		main.indexOf("this.monthlyProjectionCoordinator.start"),
 	);
 	const afterLayoutInitialization = main.slice(
 		main.indexOf("private async initializeAfterLayoutWithCatalogSafely"),
 		main.indexOf("private async showLegacyMigrationCompletionNotice"),
 	);
 
-	assert.equal(listenerStart.includes("identityLedgerService.start"), true);
+	assert.equal(listenerStart.includes("identityLedgerService.start"), false);
 	assert.equal(listenerStart.includes("knomoSharedConfigService.start"), true);
 	assert.equal(listenerStart.includes("lowPriorityWorkQueue.signal.aborted"), true);
 	assert.equal(main.includes("cancellationSignal: lowPriorityWorkQueue.signal"), true);
@@ -207,33 +206,16 @@ test("Identity 与共享配置监听等待 layout ready，启动后续阶段遵�
 	assert.equal(afterLayoutInitialization.includes("const isCancelled = () => cancellationSignal?.aborted === true"), true);
 });
 
-test("Identity 恢复统一进入协调器，且无 pending/conflict 时不读取全量 observation", () => {
+test("普通事件和手动刷新不触发旧源导入，生产 runtime 无身份恢复队列", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
-	const reconcile = main.slice(
-		main.indexOf("const reconcileIdentityLedger = async () =>"),
-		main.indexOf("const projectionInputBuilder"),
-	);
-	const runtimeInitialization = main.slice(
-		main.indexOf("this.runtimeInitializationPromise ="),
-		main.indexOf("this.app.workspace.onLayoutReady(() =>", main.indexOf("this.runtimeInitializationPromise =")),
-	);
-	const catalogSettled = main.slice(
-		main.indexOf("onCatalogSettled: async () =>"),
-		main.indexOf("dailyInventory,", main.indexOf("onCatalogSettled: async () =>")),
-	);
-
-	assert.ok(reconcile.indexOf("hasPendingCreates()") < reconcile.indexOf("loadObservationBatches()"));
-	assert.ok(reconcile.indexOf("hasPendingDeletes()") < reconcile.indexOf("loadObservationBatches()"));
-	assert.ok(reconcile.indexOf("reconcilePendingCreates(observations)")
-		< reconcile.indexOf("identityRevisionTransitionQueue.drain"));
-	assert.match(main, /onRevisionTransition: async \(transition\) => \{[\s\S]*?identityRevisionTransitionQueue\.enqueue\(transition\);[\s\S]*?identityRecoveryCoordinator\?\.request/u);
-	assert.match(main, /IDENTITY_REVISION_TRANSITION_QUEUE_META_KEY/u);
-	assert.doesNotMatch(runtimeInitialization, /legacyIndexMigrationService\?\.run|reconcileIdentityLedger/u);
-	assert.match(catalogSettled, /legacyIndexMigrationService\?\.run/u);
-	assert.match(reconcile, /reconcile: reconcileIdentityLedger/u);
-	assert.match(catalogSettled, /identityRecoveryCoordinator\?\.request/u);
-	assert.match(main, /identityLedgerService\.start\(this, async \(\) => \{[\s\S]*?identityRecoveryCoordinator\?\.request/u);
-	assert.match(main, /runManualRefresh[\s\S]*?identityRecoveryCoordinator\?\.request\(\{ reload: "if_needed" \}\)/u);
+	assert.doesNotMatch(main, /identityRecoveryCoordinator|identityRevisionTransitionQueue|reconcileIdentityLedger/u);
+	const settled = main.slice(main.indexOf("onCatalogSettled: async () =>"), main.indexOf("const markdownMutationService"));
+	assert.doesNotMatch(settled, /legacyIndexMigrationService/u);
+	const refresh = main.slice(main.indexOf("private runManualRefresh()"));
+	assert.doesNotMatch(refresh, /legacyIndexMigrationService/u);
+	assert.doesNotMatch(main, /legacyIndexMigrationService\.start/u);
+	const migration = fs.readFileSync("src/services/LegacyTrashMigrationService.ts", "utf8");
+	assert.doesNotMatch(migration, /vault\.on\(|getCatalogCoverage|getObservationBatches|completionStore/u);
 });
 
 function listFiles(root: string): string[] {

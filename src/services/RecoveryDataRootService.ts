@@ -3,9 +3,8 @@ import type { App } from "obsidian";
 import { getCatalogDataRootPath, normalizeVaultPath } from "../utils/path";
 import { ensureFolder } from "../utils/vault";
 import { assertVaultPath, TrashSnapshotStore } from "./TrashSnapshotStore";
-import { LegacyMigrationMarkerStore } from "./LegacyTrashMigrationService";
 
-// 数据根只承担恢复副本和迁移完成事实；不枚举或复制开发期协议文件。
+// 数据根只承担恢复副本；不枚举或复制开发期协议文件。
 export class RecoveryDataRootService {
 	constructor(private readonly app: App, private readonly getLocation: () => KnomoDataRootLocation,
 		private readonly commit: (root: string) => Promise<void>,
@@ -28,15 +27,11 @@ export class RecoveryDataRootService {
 				const target = new TrashSnapshotStore(this.app, `${targetRoot}/trash`);
 				const snapshots = await source.query();
 				if (snapshots.errors.length) throw new Error("Cannot relocate damaged Trash snapshots.");
-				const marker = await new LegacyMigrationMarkerStore(this.app, sourceRoot).read();
-				const targetMarker = await new LegacyMigrationMarkerStore(this.app, targetRoot).read();
-				if (targetMarker !== null && JSON.stringify(targetMarker) !== JSON.stringify(marker)) throw new Error("Target migration marker conflicts.");
 				for (const snapshot of snapshots.items) {
 					const path = `${targetRoot}/trash/${snapshot.snapshotId}.json`;
 					if (this.app.vault.getAbstractFileByPath(path) instanceof TFile || await this.app.vault.adapter.exists(path)) await target.assertUnchanged(snapshot);
 					else await target.save(snapshot);
 				}
-				if (marker !== null) await new LegacyMigrationMarkerStore(this.app, targetRoot).save(marker);
 			}
 			await ensureFolder(this.app, targetRoot);
 			await this.commit(plan.newDataRoot);

@@ -385,7 +385,7 @@ export const zhCN = {
 	"settings.legacyMigration.migrate": "迁移或重试",
 	"settings.legacyMigration.attention": "旧版数据尚未完成迁移。请确认同步完成后点击“迁移或重试”，导入旧回收站记录；不会修改日记。",
 	"settings.legacyMigration.unavailable": "旧版数据迁移失败。请确认旧数据可读取且同步完成后点击“迁移或重试”。日记和新建 Memo 不受影响。",
-	"notice.legacyMigrationCompleted": "新版 Knomo 数据已完成升级，原旧数据文件夹（{{path}}）可手动删除。",
+	"notice.legacyMigrationCompleted": "新版 Knomo 数据已完成升级，但旧数据文件夹（{{path}}）自动清理失败；下次启动或点击迁移或重试时将重试清理。",
 	"settings.rebuild.start": "重新读取日记",
 	"settings.rebuild.catalogStatus": "正在重新读取日记…",
 	"settings.rebuild.catalogComplete": "搜索与统计信息已更新。",

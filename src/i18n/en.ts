@@ -387,7 +387,7 @@ export const en: Record<TranslationKey, string> = {
 	"settings.legacyMigration.migrate": "Migrate or retry",
 	"settings.legacyMigration.attention": "Legacy data migration is not complete. After sync finishes, click “Migrate or retry” to import old Trash records. Daily notes will not be changed.",
 	"settings.legacyMigration.unavailable": "Legacy data migration failed. Check that old data is readable and sync has finished, then click “Migrate or retry”. Daily notes and new memos are unaffected.",
-	"notice.legacyMigrationCompleted": "The Knomo data upgrade is complete. You can manually delete the old data folder ({{path}}).",
+	"notice.legacyMigrationCompleted": "The Knomo data upgrade is complete, but cleanup of the old data folder ({{path}}) failed. Cleanup will retry on next startup or when you select Migrate or retry.",
 	"settings.rebuild.start": "Reread daily notes",
 	"settings.rebuild.catalogStatus": "Rereading daily notes…",
 	"settings.rebuild.catalogComplete": "Search and statistics are up to date.",

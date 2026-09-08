@@ -71,7 +71,7 @@ test("旧版数据升级完成通知只保留用户可执行的清理提示", as
 
 	assert.equal(
 		translate("zh-CN", "notice.legacyMigrationCompleted", { path: "Knomo/_knomo-system" }),
-		"新版 Knomo 数据已完成升级，原旧数据文件夹（Knomo/_knomo-system）可手动删除。",
+		"新版 Knomo 数据已完成升级，但旧数据文件夹（Knomo/_knomo-system）自动清理失败；下次启动或点击迁移或重试时将重试清理。",
 	);
 });
 

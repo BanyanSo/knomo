@@ -8,11 +8,11 @@ const ROOT = "Knomo/_knomo-data";
 const DAILY = "Daily/2026-08-22.md";
 const RAW = "- 09:00 同文恢复副本";
 
-async function fixture() {
+async function fixture(monthly = "Knomo") {
 	await ensureObsidianStub();
 	const { InMemoryVault } = await import("./helpers/InMemoryVault");
 	const { LegacyIndexReader } = await import("../src/services/LegacyIndexReader");
-	const { LegacyTrashMigrationService, LegacyMigrationMarkerStore } = await import("../src/services/LegacyTrashMigrationService");
+	const { LegacyTrashMigrationService } = await import("../src/services/LegacyTrashMigrationService");
 	const { TrashSnapshotStore } = await import("../src/services/TrashSnapshotStore");
 	const record = (id: string, status = "deleted") => ({ id, status, createdAt: "2026-08-22T09:00:00.000Z", updatedAt: "2026-08-22T10:00:00.000Z",
 		contentHash: hashMemoContent("同文恢复副本"), contentSnapshot: "同文恢复副本", sourceMemoId: null,
@@ -21,17 +21,25 @@ async function fixture() {
 	const index = JSON.stringify({ schemaVersion: 2, period: "2026-08", memos: {
 		"2026082209000001": record("2026082209000001"), "2026082209000002": record("2026082209000002"),
 		"2026082209000003": record("2026082209000003", "active") } });
-	const vault = new InMemoryVault({ [INDEX]: index, [DAILY]: "## Memos\n- 10:30 当前 Daily\n" });
+	const vault = new InMemoryVault({ [`${monthly}/_knomo-system/indexes/memo-index-2026-08.json`]: index, [DAILY]: "## Memos\n- 10:30 当前 Daily\n" });
 	Object.assign(vault.app, { metadataCache: { getFirstLinkpathDest: () => null } });
-	Object.assign(vault.app.vault, { delete: async (file: { path: string }) => vault.remove(file.path) });
-	const reader = new LegacyIndexReader(vault.app, () => "Knomo");
+	Object.assign(vault.app.vault, { delete: async (file: { path: string }) => {
+		for (const path of vault.paths()) if (path.startsWith(`${file.path}/`)) vault.remove(path);
+		vault.remove(file.path);
+	} });
+	const reader = new LegacyIndexReader(vault.app, () => monthly);
 	let sourceReads = 0;
 	let settingsWrites = 0;
 	const load = reader.load.bind(reader);
 	reader.load = async (runtime) => { sourceReads++; return load(runtime); };
-	const options = { getDataRoot: () => ROOT, migrateSettings: async () => { settingsWrites++; } };
+	const { PluginDataStore } = await import("../src/services/PluginDataStore");
+	const { extractLegacyMigration } = await import("../src/utils/pluginData");
+	let data: unknown = { settings: { monthlyMemoFolder: monthly, custom: "keep" }, other: 42 };
+	const plugin = { loadData: async () => structuredClone(data), saveData: async (next: unknown) => { data = structuredClone(next); } };
+	const pluginDataStore = new PluginDataStore(plugin as import("obsidian").Plugin);
+	const options = { pluginDataStore, getDataRoot: () => ROOT, migrateSettings: async () => { settingsWrites++; } };
 	return { vault, reader, options, make: () => new LegacyTrashMigrationService(vault.app, reader, options),
-		store: new TrashSnapshotStore(vault.app, `${ROOT}/trash`), marker: new LegacyMigrationMarkerStore(vault.app, ROOT),
+		store: new TrashSnapshotStore(vault.app, `${ROOT}/trash`), marker: { read: async () => extractLegacyMigration(await pluginDataStore.read()) }, plugin, data: () => data,
 		sourceReads: () => sourceReads, settingsWrites: () => settingsWrites, index };
 }
 
@@ -45,7 +53,7 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 	assert.notEqual(snapshots[0]!.snapshotId, snapshots[1]!.snapshotId);
 	assert.equal(snapshots[0]!.rawBlock, snapshots[1]!.rawBlock);
 	assert.equal(f.vault.read(DAILY), "## Memos\n- 10:30 当前 Daily\n");
-	assert.equal(f.vault.read(INDEX), f.index);
+	assert.equal(f.vault.read(INDEX), null);
 	assert.equal(f.settingsWrites(), 1);
 	const { IndependentTrashService } = await import("../src/services/IndependentTrashService");
 	const { TFile } = await import("obsidian");
@@ -72,7 +80,7 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 	await local.open();
 	assert.equal(await local.getMeta("legacyMigrationCompletion"), null);
 	await local.close();
-	// 新 runtime 只读取共享完成事实；restore/purge 后不检查已消费目标。
+	// 新 runtime 只读取插件完成事实；restore/purge 后不检查已消费目标。
 	f.reader.inspect = () => { throw new Error("Completed source must be inert."); };
 	f.reader.load = async () => { throw new Error("Completed source must not be loaded."); };
 	assert.equal((await f.make().run({ explicit: true })).status, "ready");
@@ -80,7 +88,7 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 });
 
 test("中断后确定性重试，已有同 ID 副本不覆盖，marker 写入/读回故障不报告成功", async (context) => {
-	for (const failure of ["second-snapshot", "settings", "marker-write", "marker-read"] as const) {
+	for (const failure of ["second-snapshot", "settings", "data-save", "data-read"] as const) {
 		await context.test(failure, async () => {
 			const f = await fixture();
 			let enabled = true;
@@ -88,13 +96,15 @@ test("中断后确定性重试，已有同 ID 副本不覆盖，marker 写入/�
 			const create = f.vault.app.vault.create.bind(f.vault.app.vault);
 			f.vault.app.vault.create = async (path, content) => {
 				if (path.includes("/trash/")) { creates++; if (enabled && failure === "second-snapshot" && creates === 2) throw new Error("interrupt"); }
-				if (enabled && failure === "marker-write" && path.endsWith("completion.json")) throw new Error("marker write");
 				return create(path, content);
 			};
-			const read = f.vault.app.vault.read.bind(f.vault.app.vault);
-			f.vault.app.vault.read = async (file) => { if (enabled && failure === "marker-read" && file.path.endsWith("completion.json")) throw new Error("marker read"); return read(file); };
+			const save = f.plugin.saveData;
+			f.plugin.saveData = async (data) => { if (enabled && failure === "data-save") throw new Error("save failed"); await save(data); };
+			const read = f.plugin.loadData;
+			f.plugin.loadData = async () => { if (enabled && failure === "data-read") throw new Error("read failed"); return read(); };
 			f.options.migrateSettings = async () => { if (enabled && failure === "settings") throw new Error("settings"); };
 			assert.equal((await f.make().run({ explicit: true })).status, "unavailable");
+			assert.equal(f.vault.read(INDEX), f.index);
 			const before = (await f.store.query()).items;
 			enabled = false;
 			assert.equal((await f.make().run({ explicit: true })).status, "ready");
@@ -165,4 +175,90 @@ test("旧 review、pending 和历史 relation 损坏不阻断有效 Trash 的正
 	assert.equal((await f.store.query()).items.length, 2);
 	assert.notEqual(await f.marker.read(), null);
 	assert.equal(f.vault.read(DAILY), "## Memos\n- 10:30 当前 Daily\n");
+});
+
+test("completion 持久化是清理提交点；保留设置，自定义目录与设置改变后重启只清理原目录", async () => {
+	const f = await fixture("Archive/Custom");
+	await f.vault.app.vault.create("Archive/Custom/2026-08.md", "Monthly");
+	await f.vault.app.vault.create("Changed/_knomo-system/keep.json", "keep");
+	const remove = f.vault.app.vault.delete;
+	let fail = true;
+	f.vault.app.vault.delete = async (file, force) => {
+		assert.equal((await f.marker.read())?.completed, true);
+		if (fail) throw new Error("cleanup failed");
+		return remove(file, force);
+	};
+	assert.equal((await f.make().run({ explicit: true })).diagnostics[0]?.code, "legacy_cleanup_failed");
+	assert.equal((await f.marker.read())?.legacySystemRoot, "Archive/Custom/_knomo-system");
+	assert.deepEqual((f.data() as Record<string, unknown>).settings, { monthlyMemoFolder: "Archive/Custom", custom: "keep" });
+	assert.equal((f.data() as Record<string, unknown>).other, 42);
+	f.reader.inspect = () => { throw new Error("must not rediscover current Monthly"); };
+	fail = false;
+	assert.equal((await f.make().run()).status, "ready");
+	assert.equal(await f.vault.app.vault.adapter.exists("Archive/Custom/_knomo-system"), false);
+	assert.equal(f.vault.read("Archive/Custom/2026-08.md"), "Monthly");
+	assert.equal(f.vault.read("Changed/_knomo-system/keep.json"), "keep");
+	assert.equal((await f.make().run()).status, "ready");
+	assert.equal(f.vault.read(`${ROOT}/legacy-index-completion.json`), null);
+});
+
+test("有效旧 marker 先吸收 data.json 再退出；保存失败不删除，不重复迁移", async () => {
+	const f = await fixture();
+	const path = `${ROOT}/legacy-index-completion.json`;
+	const old = { sourceId: "legacy-index:Knomo", sourceRevision: "a".repeat(64), legacySystemRoot: "Knomo/_knomo-system" };
+	await f.vault.app.vault.create(path, JSON.stringify(old));
+	f.reader.inspect = () => { throw new Error("no migration"); };
+	const save = f.plugin.saveData;
+	f.plugin.saveData = async () => { throw new Error("save failed"); };
+	assert.equal((await f.make().run()).status, "unavailable");
+	assert.ok(f.vault.read(path));
+	assert.equal(f.vault.read(INDEX), f.index);
+	f.plugin.saveData = save;
+	assert.equal((await f.make().run()).status, "ready");
+	assert.deepEqual(await f.marker.read(), { completed: true, legacySystemRoot: old.legacySystemRoot, sourceRevision: old.sourceRevision });
+	assert.equal(f.vault.read(path), null);
+	assert.equal(f.vault.read(INDEX), null);
+	assert.equal(f.settingsWrites(), 0);
+	assert.equal((await f.make().run()).status, "ready");
+});
+
+test("异常 cleanup 路径及普通文件安全失败，保留完成事实", async () => {
+	for (const path of ["", "_knomo-system", "Knomo", "../Knomo/_knomo-system", "/Knomo/_knomo-system", "C:/Knomo/_knomo-system", "Knomo/../_knomo-system", ".obsidian/_knomo-system", "Knomo/_knomo-system/nested/_knomo-system", "Plain/_knomo-system"]) {
+		const f = await fixture();
+		await f.vault.app.vault.create("Plain/_knomo-system", "ordinary file");
+		await f.plugin.saveData({ legacyMigration: { completed: true, legacySystemRoot: path, sourceRevision: "a".repeat(64) } });
+		assert.equal((await f.make().run()).diagnostics[0]?.code, "legacy_cleanup_failed", path);
+		assert.equal((await f.marker.read())?.completed, true);
+		assert.equal(f.vault.read(INDEX), f.index);
+		assert.equal(f.vault.read("Plain/_knomo-system"), "ordinary file");
+	}
+});
+
+test("无字段与旧式普通设置均可写 completion；之后设置保存保留 completion", async () => {
+	const { buildPluginDataWithSettings } = await import("../src/utils/pluginData");
+	for (const initial of [null, { monthlyMemoFolder: "Custom", custom: "keep" }]) {
+		const f = await fixture();
+		await f.plugin.saveData(initial);
+		assert.equal((await f.make().run({ explicit: true })).status, "ready");
+		assert.deepEqual((f.data() as Record<string, unknown>).settings, initial);
+		const completion = await f.marker.read();
+		await f.options.pluginDataStore.mutate(data => ({ nextData: buildPluginDataWithSettings(data, { monthlyMemoFolder: "Changed" } as import("../src/types/settings").KnomoSettings), result: undefined }));
+		assert.deepEqual(await f.marker.read(), completion);
+	}
+});
+
+test("旧 marker 退出失败可重试；data.json 已完成后不再读取损坏旧 marker", async () => {
+	const f = await fixture();
+	const path = `${ROOT}/legacy-index-completion.json`;
+	await f.vault.app.vault.create(path, JSON.stringify({ sourceId: "legacy-index:Knomo", sourceRevision: "a".repeat(64), legacySystemRoot: "Knomo/_knomo-system" }));
+	const remove = f.vault.app.vault.delete;
+	f.vault.app.vault.delete = async () => { throw new Error("marker deletion failed"); };
+	assert.equal((await f.make().run()).diagnostics[0]?.code, "legacy_cleanup_failed");
+	assert.equal((await f.marker.read())?.completed, true);
+	assert.equal(f.vault.read(INDEX), f.index);
+	f.vault.replace(path, "invalid marker after absorption");
+	f.vault.app.vault.delete = remove;
+	assert.equal((await f.make().run()).status, "ready");
+	assert.equal(f.vault.read(path), null);
+	assert.equal(f.sourceReads(), 0);
 });

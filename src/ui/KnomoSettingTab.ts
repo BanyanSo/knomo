@@ -489,6 +489,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private getLegacyMigrationDescription(): string {
 		const report = this.legacyTrashMigrationService.getReport();
+		if (report.cleanupCandidate) return t("notice.legacyMigrationCompleted", { path: report.cleanupCandidate.legacySystemRoot });
 		const messageKey = report.status === "attention"
 				? "settings.legacyMigration.attention"
 				: "settings.legacyMigration.unavailable";

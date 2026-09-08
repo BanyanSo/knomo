@@ -279,6 +279,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 		);
 		this.legacyTrashMigrationService = new LegacyTrashMigrationService(this.app, legacyIndexReader, {
+			pluginDataStore,
 			runExclusive: (action) => this.memoCommandService!.runWithMutationsPaused(action),
 			onReportChanged: async () => {
 				if (lowPriorityWorkQueue.signal.aborted) return;

@@ -54,6 +54,7 @@ function isStructuredPluginData(value: unknown): value is Record<string, unknown
 		SETTINGS_KEY in value ||
 		RANDOM_REUNION_REVIEW_STATES_KEY in value ||
 		SHUFFLE_DAY_HISTORY_KEY in value ||
+		"legacyMigration" in value ||
 		LEGACY_MIGRATION_NOTICE_SOURCE_REVISION_KEY in value
 	);
 }
@@ -81,4 +82,22 @@ function normalizeShuffleDayHistoryEntry(value: unknown): ShuffleDayHistoryEntry
 		date: value.date,
 		shownAt: value.shownAt,
 	};
+}
+
+export interface LegacyMigrationCompletion {
+	completed: true;
+	legacySystemRoot: string;
+	sourceRevision: string;
+}
+
+export function extractLegacyMigration(savedData: unknown): LegacyMigrationCompletion | null {
+	if (!isRecord(savedData) || savedData.legacyMigration === undefined) return null;
+	const value = savedData.legacyMigration;
+	if (!isRecord(value) || value.completed !== true || typeof value.legacySystemRoot !== "string"
+		|| typeof value.sourceRevision !== "string" || !/^[a-f0-9]{64}$/u.test(value.sourceRevision)) throw new Error("Invalid legacy migration completion.");
+	return { completed: true, legacySystemRoot: value.legacySystemRoot, sourceRevision: value.sourceRevision };
+}
+
+export function buildPluginDataWithLegacyMigration(savedData: unknown, completion: LegacyMigrationCompletion): Record<string, unknown> {
+	return { ...getStructuredPluginData(savedData), legacyMigration: completion };
 }

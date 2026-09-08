@@ -71,7 +71,7 @@ test("retries current configuration independently of Identity startup and refres
 	assert.doesNotMatch(sharedConfigSource, /this\.startupBootstrapService/u);
 	assert.match(sharedConfigSource, /new Notice\(t\("settings\.currentConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
-	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*if \(this\.settingsVisible\) this\.refreshSettingTab\(\)/u);
+	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*else if \(this\.settingsVisible\) this\.display\(\)/u);
 });
 
 test("routes a new data root through explicit initialization instead of ordinary migration", () => {

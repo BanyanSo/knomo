@@ -37,7 +37,7 @@ export function getCatalogReadStatusHeaders(
 	if (options.status.migration === "attention") {
 		headers.push(summary(t("catalog.legacyMigrationAttention"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	} else if (options.status.migration === "unavailable") {
-		headers.push(summary(t("catalog.legacyMigrationUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
+		headers.push(summary(t("catalog.legacyMigrationUnavailable"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	}
 
 	return dedupeHeaders(headers);

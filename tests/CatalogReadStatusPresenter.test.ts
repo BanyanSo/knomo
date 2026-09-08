@@ -131,8 +131,8 @@ test("旧数据暂时不可读取时显示可重试提示，不冒充数据根�
 	});
 
 	assert.equal(headers.length, 1);
-	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "refresh-catalog-sync-state");
-	assert.match(headers[0]?.type === "summary" ? headers[0].text : "", /legacy data upgrade is temporarily unavailable/u);
+	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "open-catalog-settings");
+	assert.match(headers[0]?.type === "summary" ? headers[0].text : "", /Legacy data migration failed/u);
 	assert.doesNotMatch(headers[0]?.type === "summary" ? headers[0].text : "", /conflicting data roots/u);
 });
 

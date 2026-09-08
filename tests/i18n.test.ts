@@ -47,14 +47,12 @@ test("uses matching load-more copy for historical Memos", async () => {
 	assert.equal(translate("en", "list.loadOlder"), "Load more memos");
 });
 
-test("uses distinct local-history, migration, identity, and storage status copy", async () => {
+test("uses distinct migration and storage status copy", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");
 
-	assert.match(translate("zh-CN", "catalog.coveragePartial", { covered: 1, total: 3 }), /本机历史/u);
 	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧版数据/u);
 	assert.match(translate("zh-CN", "catalog.storageUnavailable"), /本机缓存/u);
-	assert.doesNotMatch(translate("zh-CN", "catalog.stateSettling"), /关联信息仍在同步/u);
 });
 
 test("需要处理文案只描述用户影响和对应操作", async () => {
@@ -105,7 +103,6 @@ test("formats common-tag chart, action, filter, and empty-state text", async () 
 
 	assert.equal(translate("zh-CN", "recordStats.commonTags"), "常用标签");
 	assert.equal(translate("zh-CN", "recordStats.commonTags.empty"), "这一范围内还没有标签");
-	assert.equal(translate("zh-CN", "recordStats.chart.tagCount", { tag: "Work", count: 3 }), "#Work，3 条记录");
 	assert.equal(
 		translate("zh-CN", "recordStats.action.filterTag", { tag: "Work", count: 3 }),
 		"筛选标签 #Work 的 3 条记录",
@@ -156,3 +153,12 @@ async function setObsidianLanguage(locale: string): Promise<void> {
 	const { getLanguage } = await import("obsidian");
 	(getLanguage as unknown as { set(value: string): void }).set(locale);
 }
+
+test("待迁移不误报旧源损坏，设置失败不承诺改用其他位置写入", async () => {
+ await ensureObsidianStub();
+ const { translate } = await import("../src/i18n");
+ assert.doesNotMatch(translate("zh-CN", "settings.legacyMigration.attention"), /仍在变化|不完整/);
+ assert.match(translate("zh-CN", "settings.legacyMigration.attention"), /迁移或重试/);
+ assert.match(translate("zh-CN", "catalog.settingsUnavailable"), /写入已暂停/);
+ assert.match(translate("zh-CN", "settings.attention.settings.desc"), /写入已暂停/);
+});

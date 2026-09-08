@@ -115,7 +115,7 @@ import { KnomoWikiLinkSuggest } from "./KnomoWikiLinkSuggest";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { MemoMarkdownRenderer } from "./MemoMarkdownRenderer";
 import { getMarkdownInternalLinkInfo } from "./MarkdownInternalLink";
-import { formatDeleteSource, formatMemoDisplayTime, formatOptionalMemoTime } from "./MemoDisplayFormatters";
+import { formatMemoDisplayTime, formatOptionalMemoTime } from "./MemoDisplayFormatters";
 import { parseMemoCardPreviewLite, resolveMemoPreviewImages } from "./MemoCardPreview";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 import { MemoCardPreviewCache } from "./MemoCardPreviewCache";
@@ -3253,7 +3253,6 @@ export class KnomoView extends ItemView {
 			busyAction: trashBusyMemoActions.get(memo.id) ?? null,
 			formatDisplayTime: formatMemoDisplayTime,
 			formatOptionalTime: formatOptionalMemoTime,
-			formatDeleteSource,
 			getMarkdownPriority: getMarkdownRenderPriority,
 			getMemoCardPreview: (memoRecord) => this.getMemoCardPreview(memoRecord),
 			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority, previewText) => {
@@ -4226,7 +4225,10 @@ export class KnomoView extends ItemView {
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
 		this.renderedCardMemos.clear();
 		cardFlow.empty();
-		const loadingState = renderKnomoEmptyState(cardFlow, t("empty.loadingAllMemos"));
+		// 日记不可用时历史索引无法完成，应显示启用指引而不是无限等待。
+		const loadingState = renderKnomoEmptyState(cardFlow, this.getDailyNotesStatus().enabled
+			? t("empty.loadingAllMemos")
+			: t("service.dailyNotesDisabled"));
 		loadingState.setAttrs({
 			role: "status",
 			"aria-live": "polite",

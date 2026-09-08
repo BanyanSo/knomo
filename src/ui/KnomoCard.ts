@@ -2,7 +2,6 @@ import { setIcon } from "obsidian";
 
 import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
-import type { TrashDeleteSource } from "../types/catalogView";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { TimeBuoyDateStatus } from "../types/timeBuoy";
 import { getMemoContentStats } from "../utils/memoContentStats";
@@ -49,7 +48,6 @@ export interface RenderTrashMemoCardOptions<TMemo extends MemoRecord = MemoRecor
 	busyAction: TrashAction | null;
 	formatDisplayTime: (value: string) => string;
 	formatOptionalTime: (value: string | undefined) => string;
-	formatDeleteSource: (value: TrashDeleteSource) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
 	getMemoCardPreview: (memo: TMemo) => MemoCardPreview;
 	queueMemoMarkdown: (memo: TMemo, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
@@ -215,13 +213,8 @@ export function renderKnomoTrashMemoCard<TMemo extends MemoRecord>(container: HT
 		renderMemoCardImages: options.renderMemoCardImages,
 	});
 
-	const meta = card.createDiv({ cls: "knomo-card-meta knomo-trash-meta" });
+	const meta = card.createDiv({ cls: "knomo-card-meta" });
 	meta.createDiv({ text: t("trash.deletedAt", { time: options.formatOptionalTime(memo.deletedAt) }) });
-	meta.createDiv({
-		text: t("trash.deleteSource", {
-			source: options.formatDeleteSource(memo.trashItem?.deleteSource ?? "unknown"),
-		}),
-	});
 	return card;
 }
 

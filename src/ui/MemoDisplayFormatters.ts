@@ -1,5 +1,4 @@
 import { t } from "../i18n";
-import type { TrashDeleteSource } from "../types/catalogView";
 import type { MemoObservation } from "../types/catalog";
 
 export function formatObservationDisplayTime(observation: Pick<MemoObservation, "logicalDate" | "time">): string {
@@ -24,10 +23,6 @@ export function formatMemoDisplayTime(value: string): string {
 
 export function formatOptionalMemoTime(value: string | undefined): string {
 	return value === undefined || value.trim().length === 0 ? t("trash.unknownTime") : formatMemoDisplayTime(value);
-}
-
-export function formatDeleteSource(value: TrashDeleteSource): string {
-	return value === "knomo_ui" ? "Knomo" : t("deleteSource.unknown");
 }
 
 function padTwoDigits(value: number): string {

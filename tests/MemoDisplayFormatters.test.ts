@@ -45,13 +45,6 @@ test("memo display formatter uses unknown text for empty optional times", async 
 	assert.equal(formatOptionalMemoTime("2026-06-30T12:34:56.789"), "2026-06-30 12:34:56");
 });
 
-test("memo display formatter maps proven trash delete sources", async () => {
-	const { formatDeleteSource } = await loadModule();
-
-	assert.equal(formatDeleteSource("knomo_ui"), "Knomo");
-	assert.equal(formatDeleteSource("unknown"), "Unknown");
-});
-
 async function loadModule(): Promise<typeof import("../src/ui/MemoDisplayFormatters")> {
 	await ensureObsidianStub();
 	return import("../src/ui/MemoDisplayFormatters");

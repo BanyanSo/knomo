@@ -333,7 +333,7 @@ export class CatalogReadService {
 		const selected = snapshots.slice(offset, offset + Math.max(0, limit));
 		return { items: selected.map((item) => ({ snapshotId: item.snapshotId, key: item.snapshotId,
 			createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
-			deletedAt: item.deletedAt, deleteSource: "unknown" as const, logicalDate: item.logicalDate,
+			deletedAt: item.deletedAt, logicalDate: item.logicalDate,
 			sourcePath: item.sourcePath, section: item.section, content: readDeletedPayloadContent(item.rawBlock),
 			contentHash: hashText(item.rawBlock), purgeAllowed: true })),
 			nextCursor: offset + selected.length < snapshots.length ? String(offset + selected.length) : null,

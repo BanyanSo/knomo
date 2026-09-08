@@ -44,8 +44,10 @@ export function getPreferredMemoBlockReferenceText(content: string): string | nu
 }
 
 export function formatCreatedAtAlias(createdAt: string): string {
-	const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/u.exec(createdAt);
-	return match === null ? createdAt : `${match[1]} ${match[2]}`;
+	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/u.exec(createdAt);
+	return match === null
+		? createdAt
+		: `${match[1]}${match[2]}${match[3]}-${match[4]}${match[5]}${match[6] ?? ""}`;
 }
 
 function withReferenceAlias(referenceText: string, alias: string): string {

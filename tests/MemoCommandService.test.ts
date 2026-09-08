@@ -70,8 +70,14 @@ test("普通命令不访问 Identity，并将最初 observation handle 原样交
 		await service.move(item, "2026-08-23"), await service.toggleTask(item, 0, true)]) {
 		assert.equal(result.followUpPending, false);
 	}
-	assert.equal((await service.createReferenceText(item)).text, "[[Daily/2026-08-22#^block|2026-08-22 12:34]]");
-	assert.equal(handles.length, 5);
+	assert.equal((await service.createReferenceText(item)).text, "[[Daily/2026-08-22#^block|20260822-1234]]");
+	const secondPrecisionItem = {
+		...item,
+		observation: { ...item.observation, time: "12:34:56" },
+	};
+	assert.equal((await service.createReferenceText(secondPrecisionItem)).text,
+		"[[Daily/2026-08-22#^block|20260822-123456]]");
+	assert.equal(handles.length, 6);
 	for (const handle of handles) assert.strictEqual(handle, item.observationHandle);
 	await service.recordReview(item);
 	assert.equal((await service.getReadService().getRandomReunionItems(1)).length, 1);

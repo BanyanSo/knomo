@@ -2885,12 +2885,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	font-size: 12px;
 }
 
-.knomo-plugin .knomo-trash-meta {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 4px 12px;
-}
-
 .knomo-plugin .knomo-source-reference p {
 	margin: 0;
 }

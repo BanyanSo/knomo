@@ -1060,7 +1060,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	refreshAttentionIfVisible(): void {
-		if (this.settingsVisible) this.refreshSettingTab();
+		// 声明式设置在注册时缓存定义，且不会调用 display()；隐藏时也须更新入口。
+		const settingTab = this as PluginSettingTab & { update?: () => void };
+		if (typeof settingTab.update === "function") settingTab.update();
+		else if (this.settingsVisible) this.display();
 	}
 
 	private refreshSettingTab(): void {

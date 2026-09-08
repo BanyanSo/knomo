@@ -5,6 +5,11 @@ import path from "node:path";
 const TESTS_DIR = "tests";
 const COMPILED_TESTS_DIR = path.join(".tmp", "knomo-tests", "tests");
 const TEST_FILES_MARKER = "--files";
+const TOOLING_TEST_FILES = new Set([
+	"runTests.test.ts",
+	"VerifyCore.test.ts",
+	"CatalogBenchmarkTooling.test.ts",
+]);
 
 export interface RunTestSelection {
 	sourceFileNames: string[];
@@ -33,10 +38,20 @@ export function getNodeTestArgs(compiledTestFiles: readonly string[], extraNodeT
 
 export function getRunTestSelection(sourceFileNames: readonly string[], args: readonly string[]): RunTestSelection {
 	const markerIndex = args.indexOf(TEST_FILES_MARKER);
+	const runnerArgs = markerIndex === -1 ? args : args.slice(0, markerIndex);
+	const suiteArgs = runnerArgs.filter((arg) => arg.startsWith("--suite="));
+	const suite = suiteArgs[0]?.slice("--suite=".length) ?? "product";
+	if (suiteArgs.length > 1 || !["product", "tooling", "all"].includes(suite)) {
+		throw new Error("Pass one --suite=product, --suite=tooling or --suite=all.");
+	}
+	if (markerIndex !== -1 && suiteArgs.length > 0) {
+		throw new Error("Use either --suite or --files, not both.");
+	}
 	if (markerIndex === -1) {
 		return {
-			sourceFileNames: [...sourceFileNames],
-			extraNodeTestArgs: [...args],
+			sourceFileNames: sourceFileNames.filter((fileName) => suite === "all"
+				|| TOOLING_TEST_FILES.has(fileName) === (suite === "tooling")),
+			extraNodeTestArgs: runnerArgs.filter((arg) => !arg.startsWith("--suite=")),
 		};
 	}
 

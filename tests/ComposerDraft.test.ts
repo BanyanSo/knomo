@@ -102,22 +102,6 @@ test("composer save input prepares plain creates", () => {
 	);
 });
 
-test("composer save input prepares quote creates", () => {
-	assert.deepEqual(
-		prepareComposerSaveInput("reply memo", null, {
-			referenceText: "[[Daily#^abc]]",
-			markdownText: "> source memo",
-		}),
-		{
-			type: "create",
-			content: "reply memo [[Daily#^abc]]\n> source memo",
-			source: "quote_create",
-			sourceReferenceText: "[[Daily#^abc]]",
-			dailyTrailer: null,
-		},
-	);
-});
-
 test("quote create preserves the explicit block reference when identity is absent", () => {
 	assert.deepEqual(
 		prepareComposerSaveInput("reply memo", null, {

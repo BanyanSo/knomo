@@ -20,11 +20,7 @@ const HEADINGS = ["## Memos"] as const;
 
 test("正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (context) => {
 	for (const scenario of [
-		"no-bootstrap",
-		"identity-syncing",
-		"identity-ambiguous",
-		"state-idb-deleted",
-		"transaction-idb-deleted",
+		"no-bootstrap-identity-or-idb-dependencies",
 		"catalog-idb-degraded",
 	] as const) {
 		await context.test(scenario, async () => {

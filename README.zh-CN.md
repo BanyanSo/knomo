@@ -637,6 +637,8 @@ Knomo 更聚焦：
 npm run test:file -- tests/<Name>.test.ts
 ```
 
+`npm test` / `npm run test:quiet` 运行产品行为、数据安全、同步 acceptance 及架构/产品契约测试。`npm run test:tooling` 运行测试 runner、验证工具和 benchmark trace validator 测试。`npm run test:all` 运行两者的完整集合；CI、发布检查和 `npm run verify` 使用全量集合。测试目录不变，新文件默认进入产品集合，`test:file` 可选择任一集合的文件。合成 trace 测试不替代真实设备性能验收。
+
 persistence、migration、identity、数据安全及跨服务语义修改须先补有效回归，再运行 `npm run test:quiet` 和 `npm run typecheck`。需要验证构建产物时运行 `npm run build`。仅因新增修改、失败或未解决风险扩大或重复检查；未执行的检查单独说明。
 
 `npm run verify` 是综合检查入口，不是每次交付的默认要求：它包含类型检查、全量测试、生产构建、i18n、diff 空白、禁用源码模式及尾随空白扫描，仅在需要这些完整检查时运行。未经要求不运行 lint。同一工作树的测试命令共用编译目录，应串行协调。

@@ -11,8 +11,8 @@ export const checks = [
 		run: () => runCommand("npm", ["run", "typecheck"]),
 	},
 	{
-		name: "test",
-		run: () => runCommand("npm", ["test"]),
+		name: "test:all",
+		run: () => runCommand("npm", ["run", "test:all"]),
 	},
 	{
 		name: "build",

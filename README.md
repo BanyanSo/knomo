@@ -637,6 +637,8 @@ Choose verification by the change's scope and risk. Documentation-only work need
 npm run test:file -- tests/<Name>.test.ts
 ```
 
+`npm test` / `npm run test:quiet` run product behavior, data safety, sync acceptance and architecture/product contracts. `npm run test:tooling` runs the test runner, verification utilities and benchmark trace validator tests. `npm run test:all` runs both sets; CI, release checks and `npm run verify` use this full set. Tests remain in the same directory, new files default to the product set, and `test:file` can select files from either set. Synthetic trace tests do not replace real-device performance acceptance.
+
 Persistence, migration, identity, data-safety and cross-service semantic changes require focused regression coverage followed by `npm run test:quiet` and `npm run typecheck`. Run `npm run build` when build artifacts need verification. Expand or repeat checks only for new changes, failures or unresolved risks; report unrun checks separately.
 
 `npm run verify` is a comprehensive check, not a default handoff requirement: it includes type checking, all tests, the production build, i18n, diff whitespace, forbidden source patterns and trailing whitespace scans. Use it only when that full scope is required. Do not run lint unless requested. Coordinate test commands serially within one working tree because they share compiled output.

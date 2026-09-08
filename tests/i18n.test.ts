@@ -53,7 +53,6 @@ test("uses distinct local-history, migration, identity, and storage status copy"
 
 	assert.match(translate("zh-CN", "catalog.coveragePartial", { covered: 1, total: 3 }), /本机历史/u);
 	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧版数据/u);
-	assert.match(translate("zh-CN", "catalog.identityConflict"), /部分 Memo/u);
 	assert.match(translate("zh-CN", "catalog.storageUnavailable"), /本机缓存/u);
 	assert.doesNotMatch(translate("zh-CN", "catalog.stateSettling"), /关联信息仍在同步/u);
 });
@@ -66,17 +65,6 @@ test("需要处理文案只描述用户影响和对应操作", async () => {
 	assert.doesNotMatch(translate("zh-CN", "settings.attention.catalog.desc"), /Catalog|IndexedDB/u);
 	assert.equal(translate("zh-CN", "settings.attention.retry"), "立即重试");
 	assert.equal(translate("en", "settings.attention.checkAgain"), "Check again");
-});
-
-test("无身份 Memo 删除确认说明来源和回收站结果", async () => {
-	await ensureObsidianStub();
-	const { translate } = await import("../src/i18n");
-
-	assert.equal(
-		translate("zh-CN", "confirm.deleteMemoPermanently"),
-		"这条 Memo 来自已有 Daily，尚未建立 Knomo 身份。继续删除会直接从 Daily 移除，且不会进入 Knomo 回收站。确定继续吗？",
-	);
-	assert.match(translate("en", "confirm.deleteMemoPermanently"), /existing Daily note|Knomo identity|Knomo trash/u);
 });
 
 test("旧版数据升级完成通知只保留用户可执行的清理提示", async () => {

@@ -257,3 +257,18 @@ async function fixture(body = BODY) {
 	const service = new IndependentTrashService(vault.app, store, options, new DailyMemoWriteGateway(vault.app, parser));
 	return { vault, store, service, options, observations, initial: await observations(), events, catalog, refreshes };
 }
+
+
+test("独立 Trash 恢复保留完整 raw block 与分钟或秒精度", async (context) => {
+ for (const time of ["10:30", "10:30:00", "10:30:27"]) {
+  await context.test(time, async () => {
+   const f = await fixture();
+   const original = '## Memos\n- ' + time + ' first line\n  continuation\n';
+   f.vault.replace(PATH, original);
+   const deleted = await f.service.delete((await f.observations())[0]!);
+   await f.service.restore(deleted.snapshotId);
+   assert.equal(f.vault.read(PATH), original);
+   assert.equal((await f.observations())[0]!.time, time);
+  });
+ }
+});

@@ -105,8 +105,6 @@ function makeMemo(
 		tags: overrides.tags ?? [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,

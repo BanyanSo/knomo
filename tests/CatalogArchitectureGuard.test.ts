@@ -36,40 +36,9 @@ test("生产源码只暴露无版本 Catalog 模块和存储名称", async () =>
 	}
 	assert.equal(main.includes("sessionWriterId"), false);
 	assert.equal(main.includes("getWriterId: () => localWriterIdentityService.getWriterId()"), false);
-	const localWriterIdentity = fs.readFileSync("src/services/LocalWriterIdentityService.ts", "utf8");
-	assert.equal(localWriterIdentity.includes("loadLocalStorage"), true);
-	assert.equal(localWriterIdentity.includes("saveLocalStorage"), true);
-	assert.equal(localWriterIdentity.includes("PluginDataStore"), false);
-	assert.equal(localWriterIdentity.includes("getAbstractFileByPath"), false);
 	const coordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
 	assert.equal(coordinator.includes("knomo-catalog-${"), true);
 	assert.equal(coordinator.includes("knomo-catalog-v"), false);
-	const identityProtocol = fs.readFileSync("src/services/IdentityLedgerProtocol.ts", "utf8");
-	assert.equal(identityProtocol.includes("m_[a-f0-9]{32}"), false);
-	assert.equal(identityProtocol.includes('case "purge"'), true);
-});
-
-test("当前共享协议使用稳定目录且不携带开发期版本字段", async () => {
-	await ensureObsidianStub();
-	const { IDENTITY_LEDGER_RELATIVE_ROOT } = await import("../src/services/IdentityLedgerProtocol");
-	const { KNOMO_SHARED_CONFIG_RELATIVE_ROOT } = await import("../src/services/KnomoSharedConfigProtocol");
-
-	assert.equal(IDENTITY_LEDGER_RELATIVE_ROOT, "_knomo-data/identity");
-	assert.equal(KNOMO_SHARED_CONFIG_RELATIVE_ROOT, "_knomo-data/config");
-	for (const protocolPath of [
-		"src/services/IdentityLedgerProtocol.ts",
-		"src/services/IdentityLedgerService.ts",
-		"src/services/LegacyIndexMigrationService.ts",
-		"src/services/KnomoSharedConfigProtocol.ts",
-		"src/services/KnomoSharedConfigService.ts",
-		"src/types/identityLedger.ts",
-		"src/types/knomoConfig.ts",
-	]) {
-		const content = fs.readFileSync(protocolPath, "utf8");
-		assert.equal(content.includes("schemaVersion"), false, protocolPath);
-		assert.equal(content.includes("rendererVersion"), false, protocolPath);
-	}
-	assert.equal(fs.readFileSync("src/services/LegacyIndexReader.ts", "utf8").includes("schemaVersion"), true);
 });
 
 test("生产装配停用开发期持久化，tracked contract 不读取本地 architecture", () => {
@@ -89,7 +58,7 @@ test("生产装配停用开发期持久化，tracked contract 不读取本地 ar
 	assert.equal(main.includes("new KnomoBootstrapStateStore("), false);
 	assert.equal(main.includes("currentStateStore: new KnomoCurrentStateStore("), false);
 	assert.equal(main.includes("getIdentityLedgerRootPath(settings.knomoDataRoot)"), false);
-	assert.equal(main.includes("getKnomoSharedConfigRootPath(settings.knomoDataRoot)"), false);
+	assert.equal(main.includes("getKnomoCurrentConfigRootPath(settings.knomoDataRoot)"), false);
 
 	const trackedContractFiles = [
 		...listFiles("src"),
@@ -148,26 +117,11 @@ test("Daily 写入标题不参与历史读取、Catalog fingerprint 或 Monthly 
 	assert.equal(saveDailyHeading.includes("rebuildLocalCatalog"), false);
 });
 
-test("旧版数据升级从旧 Monthly 目录发现来源，coverage 完成后只建立一次 observation 查找索引", () => {
-	const main = fs.readFileSync("src/main.ts", "utf8");
-	const migration = fs.readFileSync("src/services/LegacyIndexMigrationService.ts", "utf8");
-	const inventory = fs.readFileSync("src/services/LegacyArtifactInventory.ts", "utf8");
-	assert.equal(main.includes("() => this.settingsService.getSettings().monthlyMemoFolder"), true);
-	assert.equal(migration.indexOf("getCatalogCoverage()") < migration.indexOf("this.loadSource()"), true);
-	assert.equal(migration.includes("buildObservationLookup"), true);
-	assert.equal(migration.includes("batches.flatMap"), false);
-	for (const artifact of ["memo_summary", "time_buoy_index", "time_buoy_state", "backup"]) {
-		assert.equal(inventory.includes(`artifactKind: \"${artifact}\"`), true, artifact);
-	}
-});
-
 test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分片", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	const monthlyInput = fs.readFileSync("src/services/MonthlyProjectionInputBuilder.ts", "utf8");
 	const monthlyCoordinator = fs.readFileSync("src/services/MonthlyProjectionCoordinator.ts", "utf8");
 	const catalogCoordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
-	const legacyMigration = fs.readFileSync("src/services/LegacyIndexMigrationService.ts", "utf8");
-	const historicalIdentityBootstrap = fs.readFileSync("src/services/HistoricalIdentityBootstrapService.ts", "utf8");
 	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
 	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 2);
 	assert.match(main, /initializeCatalogRuntime\(\{/u);
@@ -183,8 +137,6 @@ test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分
 	);
 	assert.equal(saveDataRoot.includes("rebuildPeriod"), false);
 	assert.equal(catalogCoordinator.includes("runLowPriorityTask(() => this.drainSlice())"), true);
-	assert.equal(legacyMigration.includes("runLowPriorityTask(() => this.runOnce"), true);
-	assert.equal(historicalIdentityBootstrap.includes("runLowPriorityTask(() => this.runOnce"), true);
 });
 
 test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取消信号", () => {
@@ -199,7 +151,7 @@ test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取�
 	);
 
 	assert.equal(listenerStart.includes("identityLedgerService.start"), false);
-	assert.equal(listenerStart.includes("knomoSharedConfigService.start"), true);
+	assert.equal(listenerStart.includes("knomoCurrentConfigService.start"), true);
 	assert.equal(listenerStart.includes("lowPriorityWorkQueue.signal.aborted"), true);
 	assert.equal(main.includes("cancellationSignal: lowPriorityWorkQueue.signal"), true);
 	assert.match(main, /settingTab\?\.refreshAttentionIfVisible\(\)/u);
@@ -208,7 +160,7 @@ test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取�
 
 test("普通事件和手动刷新不触发旧源导入，生产 runtime 无身份恢复队列", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
-	assert.doesNotMatch(main, /identityRecoveryCoordinator|identityRevisionTransitionQueue|reconcileIdentityLedger/u);
+	assert.doesNotMatch(main, /identityRecoveryCoordinator|snapshotRevisionTransitionQueue|reconcileIdentityLedger/u);
 	const settled = main.slice(main.indexOf("onCatalogSettled: async () =>"), main.indexOf("const markdownMutationService"));
 	assert.doesNotMatch(settled, /legacyIndexMigrationService/u);
 	const refresh = main.slice(main.indexOf("private runManualRefresh()"));
@@ -224,3 +176,17 @@ function listFiles(root: string): string[] {
 		return entry.isDirectory() ? listFiles(fullPath) : [fullPath];
 	});
 }
+
+
+test("P7 删除身份协议与临时适配器，真实正文和恢复服务仍保留", () => {
+ const retired = ["IdentityLedgerService","IdentityLedgerProtocol","IdentityCurrentState","LocalWriterIdentityService","IdentityReceiptStore","IdentityRevisionTransitionQueue","IdentityRecoveryCoordinator","HistoricalIdentityBootstrapService","KnomoCurrentStateStore","KnomoBootstrapStateStore","KnomoSharedConfigService","KnomoSharedConfigProtocol","SharedReplicaCache","KnomoDataRootMigrationService","LegacyIndexMigrationService","MemoObservationIdentity","KnomoBasicDataRecovery","KnomoAutomaticRecovery","LegacyMigrationAcknowledgementService"];
+ for (const name of retired) assert.equal(fs.existsSync('src/services/' + name + '.ts'), false, name);
+ assert.equal(fs.existsSync('src/types/identityLedger.ts'), false);
+ for (const name of ['DailyMemoWriteGateway', 'MarkdownMutationService', 'CatalogIndexCoordinator', 'MonthlyProjectionCoordinator', 'IndependentTrashService', 'TrashSnapshotStore', 'LegacyTrashMigrationService']) {
+  assert.equal(fs.existsSync('src/services/' + name + '.ts'), true, name);
+ }
+ for (const file of listFiles('src').filter(file => file.endsWith('.ts'))) {
+  const source = fs.readFileSync(file, 'utf8');
+  assert.doesNotMatch(source, /IdentityHandle|IdentityLedger|bindingId|writerId|prepareRecoverableDelete|removePermanently|confirm-identity/, file);
+ }
+});

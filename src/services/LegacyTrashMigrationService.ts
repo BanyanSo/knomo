@@ -1,7 +1,7 @@
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import type { LegacyIndexSource } from "../types/legacyIndex";
-import type { LegacyIdentityImportReport } from "../types/legacyMigration";
+import type { LegacyMigrationReport } from "../types/legacyMigration";
 import type { TrashSnapshot } from "../types/trash";
 import { ensureFolder } from "../utils/vault";
 import { assertVaultPath, TrashSnapshotStore } from "./TrashSnapshotStore";
@@ -50,13 +50,13 @@ interface Options {
 }
 
 export class LegacyTrashMigrationService {
-	private report: LegacyIdentityImportReport = emptyReport();
+	private report: LegacyMigrationReport = emptyReport();
 	private queue: Promise<unknown> = Promise.resolve();
 	constructor(private readonly app: App, private readonly source: LegacyIndexSource, private readonly options: Options) {}
-	getReport(): LegacyIdentityImportReport { return structuredClone(this.report); }
+	getReport(): LegacyMigrationReport { return structuredClone(this.report); }
 	async waitForIdle(): Promise<void> { await this.queue; }
 	// 普通启动只检查完成事实；缺失 marker 必须由迁移按钮显式重试。
-	run(options: { explicit?: boolean } = {}): Promise<LegacyIdentityImportReport> {
+	run(options: { explicit?: boolean } = {}): Promise<LegacyMigrationReport> {
 		const operation = this.queue.then(() => options.explicit === true && this.options.runExclusive
 			? this.options.runExclusive(() => this.runOnce(true)) : this.runOnce(options.explicit === true));
 		this.queue = operation.catch(() => undefined);
@@ -66,7 +66,7 @@ export class LegacyTrashMigrationService {
 			return report;
 		});
 	}
-	private async runOnce(explicit: boolean): Promise<LegacyIdentityImportReport> {
+	private async runOnce(explicit: boolean): Promise<LegacyMigrationReport> {
 		try {
 			const root = this.options.getDataRoot();
 			const assertActive = () => {
@@ -118,6 +118,6 @@ export class LegacyTrashMigrationService {
 	}
 }
 
-function emptyReport(): LegacyIdentityImportReport {
-	return { status: "idle", sourceRevision: null, importedEventCount: 0, importedMemoIds: [], skippedMemoIds: [], diagnostics: [], cleanupCandidate: null };
+function emptyReport(): LegacyMigrationReport {
+	return { status: "idle", sourceRevision: null, diagnostics: [], cleanupCandidate: null };
 }

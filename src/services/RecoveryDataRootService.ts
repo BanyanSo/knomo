@@ -4,7 +4,6 @@ import { getCatalogDataRootPath, normalizeVaultPath } from "../utils/path";
 import { ensureFolder } from "../utils/vault";
 import { assertVaultPath, TrashSnapshotStore } from "./TrashSnapshotStore";
 import { LegacyMigrationMarkerStore } from "./LegacyTrashMigrationService";
-import type { KnomoDataRootLocation } from "./KnomoDataRootMigrationService";
 
 // 数据根只承担恢复副本和迁移完成事实；不枚举或复制开发期协议文件。
 export class RecoveryDataRootService {
@@ -44,3 +43,5 @@ export class RecoveryDataRootService {
 		});
 	}
 }
+
+export interface KnomoDataRootLocation { knomoDataRoot: string; knomoDataRootConfigured: boolean; }

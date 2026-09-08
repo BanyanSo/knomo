@@ -5,7 +5,6 @@ export function getMemoRenderKey(memo: MemoRecord): string {
 }
 
 export function getMemoRenderRevision(memo: MemoRecord): string {
-	const reference = memo.references[0];
 	return encodeParts([
 		getMemoRenderKey(memo),
 		memo.id,
@@ -14,9 +13,6 @@ export function getMemoRenderRevision(memo: MemoRecord): string {
 		memo.updatedAt,
 		memo.contentHash,
 		memo.status,
-		memo.sourceMemoId,
-		reference?.memoId,
-		reference?.referenceText,
 		memo.dailyRef.path,
 		memo.deletedAt,
 	]);

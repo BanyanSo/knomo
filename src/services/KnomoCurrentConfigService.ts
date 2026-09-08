@@ -1,11 +1,11 @@
 import type { Component } from "obsidian";
-import type { KnomoSharedConfig, KnomoSharedConfigStatus } from "../types/knomoConfig";
+import type { KnomoCurrentConfig, KnomoCurrentConfigStatus } from "../types/knomoConfig";
 import type { SettingsService } from "./SettingsService";
 import type { DailyNotesProvider } from "./DailyNotesProvider";
-import { buildKnomoSharedConfig } from "./KnomoSharedConfigProtocol";
+import { buildKnomoCurrentConfig } from "./KnomoCurrentConfig";
 import { normalizeMonthlyLocaleKey } from "./MonthlyProjection";
 
-// 当前值适配器。旧方法名仅供尚未退出的设置/恢复入口调用，不发布配置事件。
+// 读取、验证并通知当前配置，不保存配置事件。
 export class KnomoCurrentConfigService {
 	private error: string | null = null;
 	private verified = false;
@@ -13,7 +13,7 @@ export class KnomoCurrentConfigService {
 	private onChanged: (() => void | Promise<void>) | null = null;
 
 	constructor(private readonly settings: SettingsService, private readonly daily: DailyNotesProvider,
-		private readonly locale: () => string, private readonly readPrevious: () => Promise<KnomoSharedConfig | null> = async () => null) {}
+		private readonly locale: () => string) {}
 
 	initializeLocalConfig(): Promise<void> { return this.daily.loadConfig().then(() => undefined); }
 
@@ -37,14 +37,8 @@ export class KnomoCurrentConfigService {
 			this.verified = true;
 			return;
 		}
-		const previous = await this.readPrevious();
-		if (JSON.stringify(settings) !== JSON.stringify(this.settings.getSettings())) throw new Error("Configuration changed while reading previous settings; retry loading.");
 		const patch = {
-			...(previous === null ? {} : { dailyHeading: previous.daily.headings[0] ?? settings.dailyHeading,
-				legacyDailyHeadings: previous.daily.headings.slice(1), monthlyMemoFolder: previous.monthly.folder,
-				monthlyMemoFileFormat: previous.monthly.fileFormat, monthlyDateHeadingFormat: previous.monthly.dateHeadingFormat,
-				monthlyDateOrder: previous.monthly.dateOrder }),
-			monthlyLocale: previous?.monthly.locale ?? settings.monthlyLocale ?? normalizeMonthlyLocaleKey(this.locale()),
+			monthlyLocale: settings.monthlyLocale ?? normalizeMonthlyLocaleKey(this.locale()),
 			currentConfigAdopted: true,
 		};
 		await this.settings.updateSettings(patch);
@@ -53,17 +47,17 @@ export class KnomoCurrentConfigService {
 		this.verified = true;
 	}
 
-	getStatus(): KnomoSharedConfigStatus {
+	getStatus(): KnomoCurrentConfigStatus {
 		return this.error !== null || this.settings.getLoadStatus() !== "ready" ? "unavailable"
 			: this.verified && this.settings.getSettings().currentConfigAdopted && this.settings.getSettings().monthlyLocale ? "ready" : "missing";
 	}
 	getLastError(): string | null { return this.error; }
-	getEffectiveConfig(): KnomoSharedConfig {
+	getEffectiveConfig(): KnomoCurrentConfig {
 		const daily = this.daily.getConfig();
 		if (daily === null) throw new Error("Obsidian Daily configuration is unknown.");
 		if (this.getStatus() !== "ready") throw new Error(this.error ?? "Current configuration is not ready.");
 		const settings = this.settings.getSettings();
-		return buildKnomoSharedConfig(daily, settings, settings.monthlyLocale!);
+		return buildKnomoCurrentConfig(daily, settings, settings.monthlyLocale!);
 	}
 	isCoverageComplete(): boolean { return this.daily.getConfig() !== null; }
 	isMonthlyProjectionAllowed(): boolean {
@@ -91,7 +85,4 @@ export class KnomoCurrentConfigService {
 	}
 	async refreshLocalConfig(): Promise<void> { await this.daily.loadConfig(); await this.initialize(); await this.onChanged?.(); }
 	async reloadConfiguredRoot(): Promise<void> { await this.settings.loadSettings(); await this.refreshLocalConfig(); }
-	async publishLocalConfig(): Promise<void> { await this.refreshLocalConfig(); }
-	async resolveWithLocalConfig(): Promise<void> { await this.refreshLocalConfig(); }
-	async rebuildReplicaFromVault(): Promise<void> { await this.reloadConfiguredRoot(); }
 }

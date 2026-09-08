@@ -10,7 +10,6 @@ import {
 	generateCatalogBenchmarkVault,
 } from "../scripts/catalog/generate-benchmark-vault";
 import { summarizeDeviceTraces, validateDeviceTraces } from "../scripts/catalog/summarize-device-traces";
-import { runIdentityLedgerReducerBenchmark } from "../scripts/catalog/run-node-benchmarks";
 
 test("PERF-30K generator 使用冻结 seed、路径、20 memos/Daily 和确定性 SHA", async () => {
 	const rootDir = path.join(".tmp", "catalog-benchmark-test");
@@ -97,13 +96,6 @@ test("phase 6 device trace gate enforces frozen samples, fixture and platform th
 	assert.equal(validation.commit, "worktree-catalog-rebuild");
 	assert.equal(validation.fixtureSeed, CATALOG_BENCHMARK_SEED);
 	assert.equal(validation.summary.android?.pageMs?.samples, 30);
-});
-
-test("Identity Ledger reducer materializes 30k immutable events without quadratic memo scans", async () => {
-	const result = await runIdentityLedgerReducerBenchmark(30_000);
-	assert.equal(result.memoCount, 30_000);
-	assert.equal(result.eventCount, 30_000);
-	assert.equal(result.materializeMs < 10_000, true);
 });
 
 function sha256(bytes: Uint8Array): string {

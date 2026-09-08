@@ -5,21 +5,17 @@ import type {
 	CatalogObservation,
 	CatalogQuery,
 	CatalogStoreLifecycle,
-	IdentityHandle,
 	MemoCapabilities,
 	ObservationHandle,
 	ResolvedMemo,
 } from "./catalog";
-import type { IdentityLedgerStatus } from "./identityLedger";
-import type { KnomoSharedConfigStatus } from "./knomoConfig";
-import type { LegacyIdentityImportStatus } from "./legacyMigration";
+import type { KnomoCurrentConfigStatus } from "./knomoConfig";
+import type { LegacyMigrationStatus } from "./legacyMigration";
 import type { KnomoSettingsLoadStatus } from "./settings";
 
 export type CatalogReadState = "ready" | "history_building" | "storage_unavailable";
 export type CatalogContentState = "ready" | "scanning" | "unavailable";
 export type CatalogState = "partial" | "complete" | "degraded";
-export type CatalogIdentityState = "absent" | "syncing" | "ready" | "conflicted";
-export type CatalogIdentityAttention = "settings_retry";
 export type MonthlyProjectionState = "ready" | "stale" | "failed";
 export type LegacyMigrationState = "none" | "attention" | "unavailable";
 
@@ -27,9 +23,7 @@ export interface CatalogReadStatus {
 	settings?: KnomoSettingsLoadStatus;
 	content: CatalogContentState;
 	catalog: CatalogState;
-	identity: CatalogIdentityState;
-	identityAttention?: CatalogIdentityAttention | null;
-	sharedConfiguration?: KnomoSharedConfigStatus;
+	sharedConfiguration?: KnomoCurrentConfigStatus;
 	projection: MonthlyProjectionState;
 	migration: LegacyMigrationState;
 }
@@ -37,11 +31,9 @@ export interface CatalogReadStatus {
 export interface KnomoRuntimeAttentionSnapshot {
 	settings?: KnomoSettingsLoadStatus;
 	catalogLifecycle: CatalogStoreLifecycle;
-	identity: IdentityLedgerStatus;
-	identityAttention: CatalogIdentityAttention | null;
-	sharedConfiguration: KnomoSharedConfigStatus;
+	sharedConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
-	legacyMigration: LegacyIdentityImportStatus;
+	legacyMigration: LegacyMigrationStatus;
 }
 
 export interface KnomoRuntimeSnapshot {
@@ -50,19 +42,15 @@ export interface KnomoRuntimeSnapshot {
 		coverage: CatalogCoverage;
 		lifecycle: CatalogStoreLifecycle;
 	};
-	identity: IdentityLedgerStatus;
-	sharedConfiguration: KnomoSharedConfigStatus;
+	sharedConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
-	legacyMigration: LegacyIdentityImportStatus;
+	legacyMigration: LegacyMigrationStatus;
 }
 
 export interface CatalogMemoItem {
 	derivedReferences?: import("../services/CatalogReferenceService").CatalogReference[];
 	key: string;
 	renderKey: string;
-	// 临时旧命令/重逢适配字段；普通 observation 卡片均为 null。
-	memoId: string | null;
-	identityHandle: IdentityHandle | null;
 	observationHandle: ObservationHandle;
 	// 当前 Daily 日期与原样 parsed time，非永久创建时间或带时区 instant。
 	createdAt: string;
@@ -74,7 +62,6 @@ export interface CatalogMemoItem {
 	timeBuoyDates: string[];
 	sourcePath: string;
 	lineNumberHint: number;
-	sourceMemoId: string | null;
 	capabilities: MemoCapabilities;
 	resolved: ResolvedMemo;
 	observation: CatalogObservation;
@@ -87,7 +74,6 @@ export interface MutationFollowUpState {
 
 export interface DailyMutationResult extends MutationFollowUpState {
 	status: "saved" | "content_pending";
-	memoId: string | null;
 }
 
 export interface MemoSaveResult extends DailyMutationResult {
@@ -178,10 +164,8 @@ export type CatalogFeatureFilter = Omit<CatalogFeatureQuery, "limit" | "cursor">
 export type TrashDeleteSource = "knomo_ui" | "unknown";
 
 export interface TrashMemoItem {
-	snapshotId?: string;
+	snapshotId: string;
 	key: string;
-	memoId: string;
-	deleteEventId: string;
 	createdAt: string;
 	deletedAt: string;
 	deleteSource: TrashDeleteSource;
@@ -190,7 +174,6 @@ export interface TrashMemoItem {
 	section: string | null;
 	content: string;
 	contentHash: string;
-	sourceMemoId: string | null;
 	purgeAllowed: boolean;
 }
 
@@ -198,5 +181,5 @@ export interface TrashMemoPage {
 	errors?: Array<{ snapshotId: string; message: string }>;
 	items: TrashMemoItem[];
 	nextCursor: string | null;
-	identityRevision: string;
+	snapshotRevision: string;
 }

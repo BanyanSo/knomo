@@ -3,13 +3,13 @@ import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import { KnomoMutationBarrier } from "./KnomoMutationBarrier";
 
-import type { CatalogRefreshResult, ObservationHandle, ResolvedMemo } from "../types/catalog";
+import type { CatalogRefreshResult, ResolvedMemo } from "../types/catalog";
 import type {
+	DailyMutationResult,
 	CatalogFeatureQuery,
 	CatalogMemoItem,
 	CatalogOperationalState,
 	CatalogReadState,
-	DailyMutationResult,
 	MemoSaveOperation,
 	MemoSaveResult,
 	MonthlyProjectionState,
@@ -17,13 +17,10 @@ import type {
 	TrashMemoItem,
 } from "../types/catalogView";
 import type {
-	IdentityLedgerMutationService,
-} from "../types/identityLedger";
-import type {
 	MarkdownMutationResult,
 	MarkdownMutationService as MarkdownMutationContract,
 } from "../types/memoOperations";
-import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
+import type { KnomoCurrentConfigStatus } from "../types/knomoConfig";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
 import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
 import { formatDatePart } from "../utils/date";
@@ -31,7 +28,6 @@ import { withCreatedAtAlias } from "../utils/references";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CatalogReadService } from "./CatalogReadService";
 import type { MemoCatalogService } from "./MemoCatalogService";
-import { MarkdownMutationStaleError } from "./MarkdownMutationService";
 import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
 import { CatalogReferenceService } from "./CatalogReferenceService";
 
@@ -43,9 +39,8 @@ export interface MemoCommandServiceOptions {
 	getProjectionState?: () => MonthlyProjectionState;
 	getMemoTimeFormat: () => "HH:mm" | "HH:mm:ss";
 	rebuildLocalCatalog: () => Promise<void>;
-	getLegacyImportStatus?: () => import("../types/legacyMigration").LegacyIdentityImportStatus;
-	getHistoricalIdentityBootstrapStatus?: () => import("./HistoricalIdentityBootstrapService").HistoricalIdentityBootstrapStatus;
-	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
+	getLegacyImportStatus?: () => import("../types/legacyMigration").LegacyMigrationStatus;
+	getSharedConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
@@ -54,7 +49,6 @@ export interface MemoCommandServiceOptions {
 
 export interface MemoReferenceResult extends MutationFollowUpState {
 	text: string;
-	memoId: string | null;
 }
 
 export class MemoCommandService {
@@ -67,17 +61,13 @@ export class MemoCommandService {
 		catalog: MemoCatalogService,
 		private readonly options: MemoCommandServiceOptions,
 		private readonly markdownMutations: MarkdownMutationContract,
-		private readonly identityLedger?: IdentityLedgerMutationService,
 	) {
 		this.now = options.now ?? (() => new Date());
 		this.createInternal = this.mutationBarrier.wrap(this.createInternal.bind(this));
 		this.copy = this.mutationBarrier.wrap(this.copy.bind(this));
 		this.move = this.mutationBarrier.wrap(this.move.bind(this));
-		this.repairIdentity = this.mutationBarrier.wrap(this.repairIdentity.bind(this));
 		this.editInternal = this.mutationBarrier.wrap(this.editInternal.bind(this));
 		this.toggleTask = this.mutationBarrier.wrap(this.toggleTask.bind(this));
-		this.removePermanently = this.mutationBarrier.wrap(this.removePermanently.bind(this));
-		this.prepareRecoverableDelete = this.mutationBarrier.wrap(this.prepareRecoverableDelete.bind(this));
 		this.delete = this.mutationBarrier.wrap(this.delete.bind(this));
 		this.restore = this.mutationBarrier.wrap(this.restore.bind(this));
 		this.purge = this.mutationBarrier.wrap(this.purge.bind(this));
@@ -87,12 +77,10 @@ export class MemoCommandService {
 			references: new CatalogReferenceService(app, catalog),
 			reviews: new LocalMemoReviewStore(app),
 			catalog,
-			identityLedger,
 			getTrashService: options.getTrashService,
 			requestObservationScan: async () => { await options.refreshLocalCatalog(); },
 			getProjectionState: options.getProjectionState,
 			getLegacyImportStatus: options.getLegacyImportStatus,
-			getHistoricalIdentityBootstrapStatus: options.getHistoricalIdentityBootstrapStatus,
 			getSharedConfigurationStatus: options.getSharedConfigurationStatus,
 			getSettingsStatus: options.getSettingsStatus,
 			getStartupBootstrapSnapshot: options.getStartupBootstrapSnapshot,
@@ -172,18 +160,6 @@ export class MemoCommandService {
 		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
 	}
 
-	async repairIdentity(target: CatalogMemoItem, candidateMemoId: string): Promise<void> {
-		if (!this.identityLedger) throw new Error("Identity repair is no longer available.");
-		const memo = this.identityLedger!.getSnapshot().memos[candidateMemoId];
-		if (memo?.conflicted !== true) throw new Error("The selected identity conflict is no longer current.");
-		const refreshed = await this.refreshResolvedMemo(target.observationHandle);
-		if (refreshed.kind !== "ambiguous"
-			|| !refreshed.candidates.some((candidate) => candidate.memoId === candidateMemoId)) {
-			throw new Error("The selected identity conflict is no longer current.");
-		}
-		await this.identityLedger!.repairConflict(candidateMemoId, refreshed.observation);
-	}
-
 	startEdit(item: CatalogMemoItem, contentInput: string): MemoSaveOperation {
 		return this.startSaveOperation((onDailyCommitted) => this.editInternal(item, contentInput, onDailyCommitted));
 	}
@@ -216,139 +192,26 @@ export class MemoCommandService {
 		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
 	}
 
-	async removePermanently(item: CatalogMemoItem): Promise<DailyMutationResult> {
-		if (this.options.getTrashService) return this.delete(item);
-		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
-		if (refreshed.capabilities.identity.recoverableDelete !== "absent") {
-			throw new Error("Permanent delete requires a current memo without recoverable identity.");
-		}
-		const result = await this.markdownMutations.remove({ observation: item.observationHandle });
-		const saved = await this.finishMarkdownSavedMemo(result, []);
-		return pickDailyMutationResult(saved);
-	}
-
-	async prepareRecoverableDelete(item: CatalogMemoItem): Promise<CatalogMemoItem | null> {
-		if (this.options.getTrashService) return item;
-		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
-		const currentState = this.identityLedger!.resolveObservationState(refreshed.observation);
-		if (currentState.kind === "identified") {
-			return this.requireRecoverableDeleteItem(item.observationHandle, currentState.binding.memoId);
-		}
-		if (currentState.kind !== "unbound") {
-			throw new Error("Recoverable delete requires one confirmed memo identity.");
-		}
-		const status = this.identityLedger!.getStatus();
-		if (status !== "ready" && status !== "absent") {
-			throw new Error("Recoverable delete identity preparation is unavailable.");
-		}
-
-		let memoId: string;
-		try {
-			memoId = (await this.identityLedger!.adoptObservation(refreshed.observation)).memoId;
-		} catch (error) {
-			const latest = await this.refreshResolvedMemo(item.observationHandle);
-			const latestState = this.identityLedger!.resolveObservationState(latest.observation);
-			if (latestState.kind === "identified") {
-				return this.requireRecoverableDeleteItem(item.observationHandle, latestState.binding.memoId);
-			}
-			const latestStatus = this.identityLedger!.getStatus();
-			if (latestState.kind === "unbound" && (latestStatus === "ready" || latestStatus === "absent")) {
-				return null;
-			}
-			throw error;
-		}
-		return this.requireRecoverableDeleteItem(item.observationHandle, memoId);
-	}
-
 	async delete(item: CatalogMemoItem): Promise<DailyMutationResult> {
-		if (this.options.getTrashService) {
-			const result = await this.options.getTrashService().delete(item.observationHandle);
-			return { status: "saved", memoId: null, followUpPending: false, localRefreshPending: result.catalogUpdatePending };
-		}
-		if (this.identityLedger!.recordDeletePayload === undefined
-			|| this.identityLedger!.recordDeleteCommit === undefined
-			|| this.markdownMutations.captureObservation === undefined) {
-			throw new Error("Recoverable delete requires an available Identity Ledger.");
-		}
-		const refreshed = await this.refreshResolvedMemo(item.observationHandle);
-		const state = this.identityLedger!.resolveObservationState(refreshed.observation);
-		if (state.kind !== "identified") throw new Error("Recoverable delete requires one confirmed memo identity.");
-		const captured = await this.markdownMutations.captureObservation({ observation: item.observationHandle });
-		const deleteRecord = await this.identityLedger!.recordDeletePayload(state.binding, {
-			deletedAt: this.now().toISOString(),
-			sourcePath: captured.observation.sourcePath,
-			deletedSourceRevision: captured.deletedSourceRevision,
-			logicalDate: captured.observation.logicalDate,
-			section: captured.observation.section,
-			rawBlock: captured.rawBlock,
-			contentHash: captured.observation.contentHash,
-			sourceMemoId: item.sourceMemoId,
-		});
-		const result = await this.markdownMutations.remove({ observation: item.observationHandle });
-		let pending = true;
-		try {
-			await this.identityLedger!.recordDeleteCommit(deleteRecord);
-			pending = false;
-		} catch {
-			pending = true;
-		}
-		const saved = await this.finishMarkdownSavedMemo(result, [], { memoId: state.binding.memoId, pending });
-		return pickDailyMutationResult(saved);
+		const result = await this.requireTrashService().delete(item.observationHandle);
+		return { status: "saved", followUpPending: false, localRefreshPending: result.catalogUpdatePending };
 	}
 
 	async restore(item: TrashMemoItem): Promise<MemoSaveResult> {
-		if (this.options.getTrashService) {
-			if (!item.snapshotId) throw new Error("Trash snapshot ID required.");
-			const result = await this.options.getTrashService().restore(item.snapshotId);
-			if (result.state === "restored_cleanup_pending") throw new Error(result.message ?? "正文已恢复，恢复副本未清理；重试仅清理副本。");
-			const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(() => null);
-			return { status: "saved", memoId: null, memo, timeBuoyDates: memo?.timeBuoyDates ?? [], followUpPending: false,
-				localRefreshPending: result.catalogUpdatePending || memo === null };
-		}
-		if (this.identityLedger!.getActiveDeletes === undefined
-			|| this.identityLedger!.recordRestore === undefined
-			|| this.markdownMutations.restore === undefined) {
-			throw new Error("Identity Ledger restore is unavailable.");
-		}
-		const record = this.identityLedger!.getActiveDeletes()
-			.find((candidate) => candidate.deleteEventId === item.deleteEventId);
-		if (record === undefined) throw new Error("Deleted memo payload is no longer active.");
-		const result = await this.markdownMutations.restore({
-			targetLogicalDate: record.evidence.logicalDate,
-			rawBlock: record.evidence.rawBlock,
-			section: record.evidence.section,
-		});
-		let pending = true;
-		if (result.observation !== null) {
-			try {
-				await this.identityLedger!.recordRestore(record, result.observation);
-				pending = false;
-			} catch {
-				pending = true;
-			}
-		}
-		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? [], {
-			memoId: item.memoId,
-			pending,
-		});
+		const result = await this.requireTrashService().restore(item.snapshotId);
+		if (result.state === "restored_cleanup_pending") throw new Error(result.message ?? "正文已恢复，恢复副本未清理；重试仅清理副本。");
+		const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(() => null);
+		return { status: "saved", memo, timeBuoyDates: memo?.timeBuoyDates ?? [], followUpPending: false,
+			localRefreshPending: result.catalogUpdatePending || memo === null };
 	}
 
 	async purge(item: TrashMemoItem): Promise<void> {
-		if (this.options.getTrashService) {
-			if (!item.snapshotId) throw new Error("Trash snapshot ID required.");
-			return this.options.getTrashService().purge(item.snapshotId);
-		}
-		if (this.identityLedger!.getActiveDeletes === undefined
-			|| this.identityLedger!.recordPurge === undefined) {
-			throw new Error("Identity Ledger permanent delete is unavailable.");
-		}
-		const record = this.identityLedger!.getActiveDeletes()
-			.find((candidate) => candidate.deleteEventId === item.deleteEventId
-				&& candidate.memoId === item.memoId);
-		if (record === undefined || record.deleteCommitEventId === null) {
-			throw new Error("Deleted memo payload is no longer active.");
-		}
-		await this.identityLedger!.recordPurge(record);
+		return this.requireTrashService().purge(item.snapshotId);
+	}
+
+	private requireTrashService(): IndependentTrashService {
+		if (!this.options.getTrashService) throw new Error("Trash unavailable.");
+		return this.options.getTrashService();
 	}
 
 	async createReferenceText(item: CatalogMemoItem, sourcePath = ""): Promise<MemoReferenceResult> {
@@ -364,7 +227,6 @@ export class MemoCommandService {
 		const link = this.app.fileManager.generateMarkdownLink(file, sourcePath, `#^${anchored.blockId}`);
 		return {
 			text: withCreatedAtAlias(link, `${item.observation.logicalDate}T${item.observation.time}`),
-			memoId: null,
 			followUpPending: saved.followUpPending,
 			localRefreshPending: saved.localRefreshPending,
 		};
@@ -374,30 +236,9 @@ export class MemoCommandService {
 		await this.readService.recordReview(item);
 	}
 
-	private async refreshResolvedMemo(handle: ObservationHandle): Promise<ResolvedMemo> {
-		await this.options.refreshCatalogPaths([handle.sourcePath]);
-		const refreshed = await this.readService.resolveObservationInFile(handle.sourcePath, handle.startLine);
-		// 行索引只用于查询；刷新不能为旧操作重新授权另一个 occurrence。
-		assertSameObservation(handle, refreshed.observation);
-		return refreshed;
-	}
-
-	private async requireRecoverableDeleteItem(handle: ObservationHandle, memoId: string): Promise<CatalogMemoItem> {
-		const prepared = await this.readService.resolveMemoItemInFile(
-			handle.sourcePath,
-			handle.startLine,
-		);
-		assertSameObservation(handle, prepared.observationHandle);
-		if (prepared.memoId !== memoId || prepared.capabilities.identity.recoverableDelete !== "ready") {
-			throw new Error("Identity preparation did not produce a recoverable memo.");
-		}
-		return { ...prepared, observationHandle: handle };
-	}
-
 	private async finishMarkdownSavedMemo(
 		input: MarkdownMutationResult,
 		timeBuoyDates: readonly string[],
-		identity?: { memoId: string | null; pending: boolean },
 	): Promise<MemoSaveResult> {
 		let localRefreshPending = input.catalogUpdatePending;
 		let memo: CatalogMemoItem | null = null;
@@ -411,10 +252,9 @@ export class MemoCommandService {
 		if (input.observation !== null && memo === null) localRefreshPending = true;
 		return {
 			status: input.status === "committed_content_pending" ? "content_pending" : "saved",
-			memoId: memo?.memoId ?? identity?.memoId ?? null,
 			memo,
 			timeBuoyDates: [...(memo?.timeBuoyDates ?? timeBuoyDates)],
-			followUpPending: identity?.pending ?? input.status === "committed_content_pending",
+			followUpPending: input.status === "committed_content_pending",
 			localRefreshPending,
 		};
 	}
@@ -473,25 +313,6 @@ export class MemoCommandService {
 	}
 }
 
-function assertSameObservation(expected: ObservationHandle, actual: ObservationHandle): void {
-	if (actual.sourcePath !== expected.sourcePath
-		|| actual.sourceRevision !== expected.sourceRevision
-		|| actual.startLine !== expected.startLine
-		|| actual.endLine !== expected.endLine
-		|| actual.rawBlockHash !== expected.rawBlockHash) {
-		throw new MarkdownMutationStaleError(expected.sourcePath);
-	}
-}
-
 function normalizeMemoInput(input: string): string {
 	return input.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
-}
-
-function pickDailyMutationResult(result: MemoSaveResult): DailyMutationResult {
-	return {
-		status: result.status,
-		memoId: result.memoId,
-		followUpPending: result.followUpPending,
-		localRefreshPending: result.localRefreshPending,
-	};
 }

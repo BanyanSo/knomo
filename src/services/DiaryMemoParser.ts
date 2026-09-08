@@ -16,7 +16,7 @@ import {
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
-import { assignObservationOccurrences } from "./MemoObservationIdentity";
+import { assignObservationOccurrences } from "./ObservationOccurrences";
 
 export const CATALOG_PARSER_VERSION = 5;
 

@@ -15,11 +15,6 @@ export interface MemoLinkRef {
 	syntax: MemoLinkSyntax;
 }
 
-export interface MemoReference {
-	memoId: string;
-	referenceText: string;
-}
-
 export interface DailyRef {
 	path: string;
 	heading: string | null;

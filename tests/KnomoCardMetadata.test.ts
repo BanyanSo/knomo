@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import {
 	getMemoActionClass,
-	getMemoCardActionExplanation,
 	getMemoCardActions,
 	getMemoCardShell,
 	getMemoDeleteMode,
@@ -95,55 +94,6 @@ test("builds card action and trash action metadata", () => {
 	assert.equal(getTrashMemoCardClass("restore"), "knomo-card knomo-trash-card is-busy");
 });
 
-test("明确无身份的 memo 先准备可恢复删除，identity 同步或冲突时暂停删除", () => {
-	const memo = makeMemo({});
-	assert.deepEqual(getMemoCardActions(memo), getMemoCardActions());
-	assert.deepEqual(getMemoCardActions({
-		...memo,
-		catalog: {
-			capabilities: makeCapabilities("conflicted"),
-		} as never,
-	}), [
-		{ action: "edit", className: "knomo-card-action" },
-		{ action: "reference", className: "knomo-card-action" },
-		{ action: "open-daily", className: "knomo-card-action" },
-		{ action: "copy-text", className: "knomo-card-action" },
-		{ action: "copy-link", className: "knomo-card-action" },
-	]);
-	assert.equal(getMemoDeleteMode({
-		...memo,
-		catalog: {
-			capabilities: makeCapabilities("conflicted"),
-		} as never,
-	}), "unavailable");
-	assert.equal(getMemoDeleteMode({
-		...memo,
-		catalog: {
-			capabilities: makeCapabilities("syncing"),
-		} as never,
-	}), "unavailable");
-	assert.equal(getMemoDeleteMode({
-		...memo,
-		catalog: {
-			capabilities: makeCapabilities("absent"),
-		} as never,
-	}), "prepare");
-	assert.equal(getMemoDeleteMode({
-		...memo,
-		catalog: {
-			capabilities: makeCapabilities("ready"),
-		} as never,
-	}), "recoverable");
-	assert.equal(getMemoCardActionExplanation({
-		...memo,
-		catalog: { capabilities: makeCapabilities("conflicted") } as never,
-	}), "identity-actions-paused");
-	assert.equal(getMemoCardActionExplanation({
-		...memo,
-		catalog: { capabilities: makeCapabilities("syncing") } as never,
-	}), null);
-});
-
 test("keeps the card menu available while identity actions are settling", () => {
 	const memo = makeMemo({});
 	assert.equal(isMemoCardMenuReady(memo), true);
@@ -157,20 +107,14 @@ test("keeps the card menu available while identity actions are settling", () => 
 
 test("builds memo source reference metadata", () => {
 	const deletedMemoIds = new Set<string>();
-	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: null }), deletedMemoIds), { type: "none" });
-	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: "source-1" }), new Set(["source-1"])), { type: "none" });
-	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ sourceMemoId: "source-1" }), deletedMemoIds), { type: "none" });
+	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ })), { type: "none" });
+	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ })), { type: "none" });
+	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ })), { type: "none" });
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({
-		sourceMemoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
-		references: [{
-			memoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
-			referenceText: "[[Daily/2026-06-02#^abc|20260602-083000]]",
-		}],
-	}), deletedMemoIds), { type: "none" });
+	})), { type: "none" });
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({
 		contentSnapshot: "引用 [[Daily/2026-06-01#^block-a|20260601-083000]]\n> 原文",
-		sourceMemoId: null,
-	}), deletedMemoIds), {
+	})), {
 		type: "markdown",
 		text: "[[Daily/2026-06-01#^block-a|20260601-083000]]",
 		sourcePath: "Daily/2026-06-02.md",
@@ -180,7 +124,6 @@ test("builds memo source reference metadata", () => {
 test("hides the source block link from referenced card content", () => {
 	assert.equal(getMemoDisplayContent(makeMemo({
 		contentSnapshot: "引用 [[Daily/2026-06-01#^block-a|20260601-083000]]\n> 原文",
-		sourceMemoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
 	})), "引用\n> 原文");
 	assert.equal(getMemoDisplayContent(makeMemo({
 		contentSnapshot: "普通链接 [[Daily/2026-06-01]]",
@@ -201,8 +144,6 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,
@@ -228,7 +169,7 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 
 function makeCapabilities(identityState: "ready" | "absent" | "syncing" | "conflicted") {
 	return {
-		...createResolvedMemoCapabilities(identityState),
+		...createResolvedMemoCapabilities(),
 		catalog: createCatalogCapabilities({
 			kind: "complete",
 			coveredFromDate: "2026-06-02",

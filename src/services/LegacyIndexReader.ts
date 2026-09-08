@@ -19,9 +19,9 @@ import { extractTrailingBlockId, findLastEffectiveLineIndex, splitMarkdownLines 
 import { isRecord } from "../utils/object";
 import { getLegacySystemRootPath } from "../utils/path";
 import {
-	canonicalIdentityLedgerJson,
-	sha256IdentityLedgerText,
-} from "./IdentityLedgerProtocol";
+	canonicalJson,
+	sha256Text,
+} from "../utils/canonicalJson";
 import { classifyLegacyArtifactPath, classifyPluginDataPath } from "./LegacyArtifactInventory";
 import { CooperativeYieldController } from "./CooperativeTask";
 
@@ -157,7 +157,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		}
 		const revisionJson = await serializeLegacyRevision(memos, pendingMemos, reviews, context);
 		context.assertActive();
-		const sourceRevision = await sha256IdentityLedgerText(revisionJson);
+		const sourceRevision = await sha256Text(revisionJson);
 		context.assertActive();
 		const snapshot: LegacyIndexSnapshot = {
 			sourceId: presence.sourceId,
@@ -675,7 +675,7 @@ async function serializeCanonicalArray(
 ): Promise<string> {
 	const serialized: string[] = [];
 	for (const value of values) {
-		serialized.push(canonicalIdentityLedgerJson(value));
+		serialized.push(canonicalJson(value));
 		await checkpoint(context);
 	}
 	return `[${serialized.join(",")}]`;
@@ -711,7 +711,7 @@ async function checkpoint(context: LegacyIndexLoadContext): Promise<void> {
 
 function dedupeByCanonical<T>(values: readonly T[], select: (value: T) => unknown): T[] {
 	const unique = new Map<string, T>();
-	for (const value of values) unique.set(canonicalIdentityLedgerJson(select(value)), value);
+	for (const value of values) unique.set(canonicalJson(select(value)), value);
 	return [...unique.values()];
 }
 

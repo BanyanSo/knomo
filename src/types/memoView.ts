@@ -1,5 +1,5 @@
 import type { CatalogMemoItem, TrashMemoItem } from "./catalogView";
-import type { DailyRef, MemoImageRef, MemoLinkRef, MemoReference, MemoStatus } from "./memo";
+import type { DailyRef, MemoImageRef, MemoLinkRef, MemoStatus } from "./memo";
 
 // 仅供界面渲染与定位，不承担同步身份或 Monthly 快照职责。
 export interface MemoViewItem {
@@ -12,8 +12,6 @@ export interface MemoViewItem {
 	tags: string[];
 	links: MemoLinkRef[];
 	images: MemoImageRef[];
-	references: MemoReference[];
-	sourceMemoId: string | null;
 	dailyRef: DailyRef;
 	deletedAt?: string;
 	catalog?: CatalogMemoItem;
@@ -35,8 +33,6 @@ export function toCatalogMemoView(item: CatalogMemoItem): MemoViewItem {
 		tags: [...item.tags],
 		links: [...item.links],
 		images: [...item.images],
-		references: [],
-		sourceMemoId: item.sourceMemoId,
 		dailyRef: {
 			path: item.sourcePath,
 			heading: item.observation.section,
@@ -62,8 +58,6 @@ export function toTrashMemoView(item: TrashMemoItem): MemoViewItem {
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: item.sourceMemoId,
 		dailyRef: {
 			path: item.sourcePath,
 			heading: item.section,

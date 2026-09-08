@@ -8,7 +8,6 @@ import type {
 	CatalogQueryPage,
 	CatalogStoreLifecycle,
 	ResolvedMemo,
-	ResolvedIdentityEvidence,
 } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
@@ -30,16 +29,9 @@ import type {
 	TrashMemoItem,
 	TrashMemoPage,
 } from "../types/catalogView";
-import type {
-	IdentityLedgerBinding,
-	IdentityLedgerDeleteRecord,
-	IdentityLedgerReader,
-	IdentityLedgerSnapshot,
-} from "../types/identityLedger";
-import type { LegacyIdentityImportStatus } from "../types/legacyMigration";
-import type { HistoricalIdentityBootstrapStatus } from "./HistoricalIdentityBootstrapService";
+import type { LegacyMigrationStatus } from "../types/legacyMigration";
 import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
-import type { KnomoSharedConfigStatus } from "../types/knomoConfig";
+import type { KnomoCurrentConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
 import { toCatalogMemoView } from "../types/memoView";
@@ -50,8 +42,6 @@ import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
 import type { CatalogReferenceService } from "./CatalogReferenceService";
 import {
 	createCatalogCapabilities,
-	createIdentityLedgerConflictCapabilities,
-	createIdentityLedgerMemoCapabilities,
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
 import type { MemoCatalogService } from "./MemoCatalogService";
@@ -61,13 +51,11 @@ export interface CatalogReadServiceOptions {
 	references?: CatalogReferenceService;
 	reviews?: LocalMemoReviewStore;
 	catalog: MemoCatalogService;
-	identityLedger?: IdentityLedgerReader;
 	getTrashService?: () => IndependentTrashService;
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
-	getLegacyImportStatus?: () => LegacyIdentityImportStatus;
-	getHistoricalIdentityBootstrapStatus?: () => HistoricalIdentityBootstrapStatus;
-	getSharedConfigurationStatus?: () => KnomoSharedConfigStatus;
+	getLegacyImportStatus?: () => LegacyMigrationStatus;
+	getSharedConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
@@ -109,17 +97,9 @@ export class CatalogReadService {
 		} catch {
 			// 故障提示无法读取 Catalog 状态时，按可恢复的降级状态处理。
 		}
-		let identity: KnomoRuntimeAttentionSnapshot["identity"] = "unavailable";
-		let identityAttention: KnomoRuntimeAttentionSnapshot["identityAttention"] = null;
 		let sharedConfiguration: KnomoRuntimeAttentionSnapshot["sharedConfiguration"] = "unavailable";
 		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "unavailable";
 		let settings: KnomoSettingsLoadStatus = "ready";
-		try {
-			identity = this.options.identityLedger?.getStatus() ?? "absent";
-		} catch {
-			// 保留 unavailable。
-		}
-		identityAttention = this.getIdentityAttention(identity);
 		try {
 			sharedConfiguration = this.options.getSharedConfigurationStatus?.() ?? "missing";
 		} catch {
@@ -138,8 +118,6 @@ export class CatalogReadService {
 		return {
 			settings,
 			catalogLifecycle,
-			identity,
-			identityAttention,
 			sharedConfiguration,
 			monthly: this.getProjectionState(),
 			legacyMigration,
@@ -166,7 +144,6 @@ export class CatalogReadService {
 		return {
 			settings: attention.settings,
 			catalog: { coverage, lifecycle },
-			identity: attention.identity,
 			sharedConfiguration: attention.sharedConfiguration,
 			monthly: attention.monthly,
 			legacyMigration: attention.legacyMigration,
@@ -201,9 +178,8 @@ export class CatalogReadService {
 		}
 		const resolved = page.items.map((observation): ResolvedMemo => ({
 			kind: "observation",
-			identityHandle: null,
 			observation,
-			capabilities: createResolvedMemoCapabilities("absent"),
+			capabilities: createResolvedMemoCapabilities(),
 		}));
 		const status = this.getReadStatus(page.coverage, page.lifecycle, false);
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
@@ -334,55 +310,27 @@ export class CatalogReadService {
 		));
 	}
 
-	async getDeletedSummary(): Promise<{ count: number; ids: string[] }> {
-		if (this.options.getTrashService) return { count: (await this.readSnapshots()).items.length, ids: [] };
-		const records = await this.listVisibleDeletes();
-		return { count: records.length, ids: [...new Set(records.map((item) => item.memoId))].sort() };
+	async getDeletedSummary(): Promise<{ count: number }> {
+		return { count: (await this.readSnapshots()).items.length };
 	}
 
 	private async readSnapshots() {
-		return this.options.getTrashService!().query();
+		if (!this.options.getTrashService) throw new Error("Trash unavailable.");
+		return this.options.getTrashService().query();
 	}
 
 	async listDeleted(limit: number, cursor: string | null = null): Promise<TrashMemoPage> {
-		if (this.options.getTrashService) {
-			const result = await this.readSnapshots();
-			const snapshots = result.items;
-			const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
-			const selected = snapshots.slice(offset, offset + Math.max(0, limit));
-			return { items: selected.map((item) => ({ snapshotId: item.snapshotId, key: item.snapshotId,
-				memoId: item.snapshotId, deleteEventId: item.snapshotId,
-				createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
-				deletedAt: item.deletedAt, deleteSource: "unknown" as const, logicalDate: item.logicalDate,
-				sourcePath: item.sourcePath, section: item.section, content: readDeletedPayloadContent(item.rawBlock),
-				contentHash: hashText(item.rawBlock), sourceMemoId: null, purgeAllowed: true })),
-				nextCursor: offset + selected.length < snapshots.length ? String(offset + selected.length) : null,
-				identityRevision: hashText(JSON.stringify(snapshots)), errors: result.errors };
-		}
-		const records = await this.listVisibleDeletes();
-		const identitySnapshot = this.options.identityLedger!.getSnapshot();
-		const offset = cursor === null ? 0 : Math.max(0, Number.parseInt(cursor, 10) || 0);
-		const selected = records.slice(offset, offset + Math.max(0, limit));
-		const nextOffset = offset + selected.length;
-		return {
-			items: selected.map((record): TrashMemoItem => ({
-				key: `${record.memoId}:${record.deleteEventId}`,
-				memoId: record.memoId,
-				deleteEventId: record.deleteEventId,
-				createdAt: readTrashCreatedAt(record, identitySnapshot),
-				deletedAt: record.evidence.deletedAt,
-				deleteSource: record.evidence.deletedSourceRevision === null ? "unknown" : "knomo_ui",
-				logicalDate: record.evidence.logicalDate,
-				sourcePath: record.evidence.sourcePath,
-				section: record.evidence.section,
-				content: readDeletedPayloadContent(record.evidence.rawBlock),
-				contentHash: record.evidence.contentHash,
-				sourceMemoId: record.evidence.sourceMemoId,
-				purgeAllowed: identitySnapshot.memos[record.memoId]?.conflicted === false,
-			})),
-			nextCursor: nextOffset < records.length ? String(nextOffset) : null,
-			identityRevision: this.options.identityLedger!.getRevision(),
-		};
+		const result = await this.readSnapshots();
+		const snapshots = result.items;
+		const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
+		const selected = snapshots.slice(offset, offset + Math.max(0, limit));
+		return { items: selected.map((item) => ({ snapshotId: item.snapshotId, key: item.snapshotId,
+			createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
+			deletedAt: item.deletedAt, deleteSource: "unknown" as const, logicalDate: item.logicalDate,
+			sourcePath: item.sourcePath, section: item.section, content: readDeletedPayloadContent(item.rawBlock),
+			contentHash: hashText(item.rawBlock), purgeAllowed: true })),
+			nextCursor: offset + selected.length < snapshots.length ? String(offset + selected.length) : null,
+			snapshotRevision: hashText(JSON.stringify(snapshots)), errors: result.errors };
 	}
 
 	async listAllDeleted(): Promise<TrashMemoItem[]> {
@@ -391,13 +339,13 @@ export class CatalogReadService {
 		let revision: string | null = null;
 		do {
 			const page = await this.listDeleted(150, cursor);
-			if (revision !== null && page.identityRevision !== revision) {
+			if (revision !== null && page.snapshotRevision !== revision) {
 				items.length = 0;
 				cursor = null;
 				revision = null;
 				continue;
 			}
-			revision = page.identityRevision;
+			revision = page.snapshotRevision;
 			items.push(...page.items);
 			cursor = page.nextCursor;
 		} while (cursor !== null);
@@ -448,8 +396,8 @@ export class CatalogReadService {
 			const capabilities = createCatalogCapabilities(coverage);
 			const candidates = pool.observations
 				.filter((observation) => observation.logicalDate < formatDatePart(this.now()))
-				.map((observation) => this.toMemoItem({ kind: "observation", identityHandle: null, observation,
-					capabilities: createResolvedMemoCapabilities("absent") }, capabilities));
+				.map((observation) => this.toMemoItem({ kind: "observation", observation,
+					capabilities: createResolvedMemoCapabilities() }, capabilities));
 			const selected = getRandomReunionMemos(candidates.map(toCatalogMemoView), this.reviews.read(), count, {
 				today: this.now(), random: this.random,
 			});
@@ -494,7 +442,7 @@ export class CatalogReadService {
 	}
 
 	async resolveObservationInFile(sourcePath: string, startLine: number): Promise<ResolvedMemo> {
-		// 仅供旧命令的身份准备使用；普通查询不经过 Identity overlay。
+		// 按文件位置获取当前查询结果；写入仍须保留用户原始 observation 句柄。
 		const observationKey = `${sourcePath}\u0000${startLine.toString().padStart(10, "0")}`;
 		const observation = await this.options.catalog.getObservation(observationKey);
 		if (observation === null) throw new Error("Memo observation is no longer present in its Daily note.");
@@ -508,42 +456,14 @@ export class CatalogReadService {
 	}
 
 	private resolveObservation(observation: CatalogObservation): ResolvedMemo {
-		if (!this.options.identityLedger) return { kind: "observation", identityHandle: null, observation, capabilities: createResolvedMemoCapabilities("absent") };
-		const state = this.options.identityLedger!.resolveObservationState(observation);
-		if (state.kind === "identified") return createResolvedMemo(observation, state.binding);
-		if (state.kind === "conflicted") {
-			const snapshot = this.options.identityLedger!.getSnapshot();
-			const repairable = state.memoIds.some((memoId) => {
-				const memo = snapshot.memos[memoId];
-				return memo?.conflicted === true && memo.conflictBaseBindingId !== null;
-			});
-			return createConflictedMemo(observation, state.memoIds, this.options.identityLedger!.getRevision(), repairable);
-		}
-		const status = this.options.identityLedger!.getStatus();
-		const bootstrapStatus = this.options.getHistoricalIdentityBootstrapStatus?.() ?? "completed";
-		const bootstrapPending = bootstrapStatus === "pending" || bootstrapStatus === "running"
-			|| (bootstrapStatus === "idle" && status === "absent");
-		const adoption = !bootstrapPending && (status === "ready" || status === "absent")
-			? "eligible"
-			: "settling";
-		return {
-			kind: "observed",
-			identityHandle: null,
-			observation,
-			adoption,
-			capabilities: createResolvedMemoCapabilities(adoption === "eligible" ? "absent" : "syncing"),
-			identityRevision: this.options.identityLedger!.getRevision(),
-		};
+		return { kind: "observation", observation, capabilities: createResolvedMemoCapabilities() };
 	}
 
 	private toMemoItem(resolved: ResolvedMemo, catalogCapabilities: CatalogCapabilities): CatalogMemoItem {
 		const observation = resolved.observation as CatalogObservation;
-		const memoId = resolved.identityHandle?.memoId ?? null;
 		return {
-			key: resolved.kind === "observation" ? observationLocalKey(observation) : memoId ?? observation.observationKey,
-			renderKey: resolved.kind === "observation" ? observationLocalKey(observation) : observation.observationKey,
-			memoId,
-			identityHandle: resolved.identityHandle,
+			key: observationLocalKey(observation),
+			renderKey: observationLocalKey(observation),
 			observationHandle: {
 				sourcePath: observation.sourcePath,
 				sourceRevision: observation.sourceRevision,
@@ -560,7 +480,6 @@ export class CatalogReadService {
 			timeBuoyDates: [...observation.timeBuoyDates],
 			sourcePath: observation.sourcePath,
 			lineNumberHint: observation.startLine + 1,
-			sourceMemoId: memoId === null ? null : this.options.identityLedger!.getSourceMemoId(memoId),
 			capabilities: { ...resolved.capabilities, catalog: catalogCapabilities },
 			resolved,
 			observation,
@@ -717,32 +636,13 @@ export class CatalogReadService {
 			catalog: catalogDegraded
 				? "degraded"
 				: coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false ? "complete" : "partial",
-			// 普通内容状态不依赖 Identity；运行期诊断仍由 attention snapshot 提供。
-			identity: "absent",
-			identityAttention: null,
+			// 内容状态与辅助服务诊断分别提供。
 			sharedConfiguration: this.getSharedConfigurationStatus(),
 			projection: this.getProjectionState(),
 			migration: legacyStatus === "attention"
 				? "attention"
 				: legacyStatus === "unavailable" ? "unavailable" : "none",
 		};
-	}
-
-	private getIdentityAttention(identityStatus: import("../types/identityLedger").IdentityLedgerStatus): "settings_retry" | null {
-		const initialization = this.options.getStartupBootstrapSnapshot?.() ?? null;
-		if (initialization?.status === "unconfigured" || initialization?.status === "initializing"
-			|| initialization?.status === "conflicted") return null;
-		if (initialization?.status === "unavailable") {
-			return initialization.stage === "identity" ? "settings_retry" : null;
-		}
-		let route: import("../types/identityLedger").IdentityLedgerAttentionRoute | undefined;
-		try {
-			route = this.options.identityLedger?.getAttentionRoute?.();
-		} catch {
-			// 路由本身无法读取时，回退到 Ledger 全局状态。
-		}
-		if (route !== undefined) return route === "settings_retry" ? route : null;
-		return identityStatus === "conflicted" || identityStatus === "unavailable" ? "settings_retry" : null;
 	}
 
 	private getSettingsStatus(): KnomoSettingsLoadStatus {
@@ -753,7 +653,7 @@ export class CatalogReadService {
 		}
 	}
 
-	private getSharedConfigurationStatus(): KnomoSharedConfigStatus {
+	private getSharedConfigurationStatus(): KnomoCurrentConfigStatus {
 		try {
 			return this.options.getSharedConfigurationStatus?.() ?? "missing";
 		} catch {
@@ -863,33 +763,6 @@ export class CatalogReadService {
 		return coverage;
 	}
 
-	private async listVisibleDeletes() {
-		const activeDeletes = this.options.identityLedger!.getActiveDeletes?.() ?? [];
-		if (activeDeletes.length === 0) return [];
-		const identitySnapshot = this.options.identityLedger!.getSnapshot();
-		const memoIds = [...new Set(activeDeletes.map((record) => record.memoId))];
-		const visibleMemoIds = new Set((await Promise.all(memoIds.map(async (memoId) =>
-			await this.hasCurrentObservation(memoId, identitySnapshot) ? memoId : null)))
-			.filter((memoId): memoId is string => memoId !== null));
-		return activeDeletes
-			.filter((record) => !visibleMemoIds.has(record.memoId))
-			.sort((left, right) => right.evidence.deletedAt.localeCompare(left.evidence.deletedAt)
-				|| left.deleteEventId.localeCompare(right.deleteEventId));
-	}
-
-	private async hasCurrentObservation(memoId: string, snapshot: IdentityLedgerSnapshot): Promise<boolean> {
-		const memo = snapshot.memos[memoId];
-		if (memo === undefined) return false;
-		for (const sourcePath of new Set(memo.bindings.map((binding) => binding.evidence.sourcePath))) {
-			const batch = await this.options.catalog.getFileRevisionBatch(sourcePath);
-			for (const observation of batch?.observations ?? []) {
-				const state = this.options.identityLedger!.resolveObservationState(observation);
-				if (state.kind === "identified" && state.binding.memoId === memoId) return true;
-			}
-		}
-		return false;
-	}
-
 	private rememberPage(page: CatalogMemoPage): CatalogMemoPage {
 		this.lastReadState = page.readState;
 		return page;
@@ -899,65 +772,6 @@ export class CatalogReadService {
 function observationLocalKey(observation: CatalogObservation): string {
 	// 文件 revision 变化即失效，避免同一行的新 occurrence 继承旧卡片状态。
 	return `${observation.observationKey}\u0000${observation.sourceRevision}`;
-}
-
-function createResolvedMemo(observation: CatalogObservation, binding: IdentityLedgerBinding): ResolvedMemo {
-	return {
-		kind: "identified",
-		identityHandle: {
-			memoId: binding.memoId,
-			activeBindingId: binding.bindingId,
-			identityRevision: binding.identityRevision,
-		},
-		observation,
-		bindingEvidence: observationEvidence(observation),
-		capabilities: createIdentityLedgerMemoCapabilities(),
-		identityRevision: binding.identityRevision,
-	};
-}
-
-function createConflictedMemo(
-	observation: CatalogObservation,
-	memoIds: readonly string[],
-	identityRevision: string,
-	repairable: boolean,
-): ResolvedMemo {
-	return {
-		kind: "ambiguous",
-		identityHandle: null,
-		observation,
-		candidates: [...new Set(memoIds)].sort().map((memoId) => ({ memoId, source: "manual_successor" as const })),
-		reason: "manual_successor",
-		capabilities: repairable ? createIdentityLedgerConflictCapabilities() : createResolvedMemoCapabilities("conflicted"),
-		identityRevision,
-	};
-}
-
-function observationEvidence(observation: CatalogObservation): ResolvedIdentityEvidence {
-	return {
-		sourcePath: observation.sourcePath,
-		sourceRevision: observation.sourceRevision,
-		logicalDate: observation.logicalDate,
-		section: observation.section,
-		startLine: observation.startLine,
-		endLine: observation.endLine,
-		time: observation.time,
-		contentHash: observation.contentHash,
-		existingBlockId: observation.existingBlockId,
-	};
-}
-
-function normalizeTime(time: string): string {
-	return time.length === 5 ? `${time}:00` : time;
-}
-
-function readTrashCreatedAt(record: IdentityLedgerDeleteRecord, snapshot: IdentityLedgerSnapshot): string {
-	const memo = snapshot.memos[record.memoId];
-	if (memo?.createdAt !== null && memo?.createdAt !== undefined) return memo.createdAt;
-	const bindingTime = memo?.bindings.find((binding) => binding.bindingId === record.baseBindingId)?.evidence.time;
-	const payloadTime = /^- ((?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)(?:\s|$)/u
-		.exec(record.evidence.rawBlock.split(/\r?\n/u, 1)[0] ?? "")?.[1];
-	return `${record.evidence.logicalDate}T${normalizeTime(bindingTime ?? payloadTime ?? "00:00")}`;
 }
 
 function readDeletedPayloadContent(rawBlock: string): string {

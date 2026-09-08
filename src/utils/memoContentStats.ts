@@ -1,6 +1,6 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { parseMarkdownImages } from "./markdownImages";
-import { stripTrailingWikiLink } from "./references";
+import { stripTrailingWikiLink, getPreferredMemoBlockReferenceText } from "./references";
 
 export interface MemoContentStats {
 	chineseCharacterCount: number;
@@ -9,7 +9,7 @@ export interface MemoContentStats {
 	wordCount: number;
 }
 
-type MemoContentStatsSource = Pick<MemoRecord, "contentSnapshot" | "references">;
+type MemoContentStatsSource = Pick<MemoRecord, "contentSnapshot">;
 
 interface MemoContentStatsCacheEntry {
 	contentSnapshot: string;
@@ -28,7 +28,7 @@ const BLOCK_ID_PATTERN = /\^[A-Za-z0-9_-]+\b/g;
 const statsCache = new WeakMap<MemoContentStatsSource, MemoContentStatsCacheEntry>();
 
 export function getMemoContentStats(memo: MemoContentStatsSource): MemoContentStats {
-	const hasReference = memo.references.length > 0;
+	const hasReference = getPreferredMemoBlockReferenceText(memo.contentSnapshot) !== null;
 	const cached = statsCache.get(memo);
 	if (
 		cached !== undefined &&

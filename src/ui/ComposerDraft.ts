@@ -3,14 +3,12 @@ import { buildQuoteCreatedMemoContent } from "../utils/references";
 export type ComposerMode = "create" | "edit" | "quote";
 
 export interface ComposerQuoteContext {
-	sourceMemoId: string | null;
 	referenceText: string | null;
 	markdownText: string | null;
 }
 
 export interface PreparedComposerCreateInput {
 	content: string;
-	sourceMemoId: string | null;
 	sourceReferenceText: string | null;
 	quoteTrailer: string | null;
 }
@@ -26,7 +24,6 @@ export type PreparedComposerSaveInput<TEditingMemo> =
 		type: "create";
 		content: string;
 		source: "plugin_input" | "quote_create";
-		sourceMemoId: string | null;
 		sourceReferenceText: string | null;
 		dailyTrailer: string | null;
 	};
@@ -74,7 +71,6 @@ export function prepareComposerCreateInput(
 	) {
 		return {
 			content: input,
-			sourceMemoId: null,
 			sourceReferenceText: null,
 			quoteTrailer: null,
 		};
@@ -85,7 +81,6 @@ export function prepareComposerCreateInput(
 			quoteContext.markdownText,
 			quoteContext.referenceText,
 		),
-		sourceMemoId: quoteContext.sourceMemoId,
 		sourceReferenceText: quoteContext.referenceText,
 		quoteTrailer: null,
 	};
@@ -111,7 +106,6 @@ export function prepareComposerSaveInput<TEditingMemo>(
 		type: "create",
 		content: createInput.content,
 		source: createInput.sourceReferenceText === null ? "plugin_input" : "quote_create",
-		sourceMemoId: createInput.sourceMemoId,
 		sourceReferenceText: createInput.sourceReferenceText,
 		dailyTrailer: createInput.quoteTrailer,
 	};

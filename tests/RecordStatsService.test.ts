@@ -39,7 +39,6 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 		}),
 		makeMemo("monday-late", "2026-06-08T23:59:59.999+08:00", "two words"),
 		makeMemo("sunday", "2026-06-14T23:30:00.000+08:00", "三", {
-			sourceMemoId: "source",
 			tags: ["journal"],
 			images: [{ path: "document.pdf", altText: "", syntax: "obsidian_embed" }],
 		}),
@@ -367,8 +366,6 @@ function makeMemo(
 		tags: overrides.tags ?? [],
 		links: [],
 		images: overrides.images ?? [],
-		references: overrides.sourceMemoId === undefined ? [] : [{ memoId: overrides.sourceMemoId ?? "source", referenceText: "[[Daily#^abc]]" }],
-		sourceMemoId: overrides.sourceMemoId ?? null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,

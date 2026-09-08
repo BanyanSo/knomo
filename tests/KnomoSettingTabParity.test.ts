@@ -67,7 +67,7 @@ test("retries current configuration independently of Identity startup and refres
 		"\n\tprivate async syncSharedConfiguration(",
 	);
 
-	assert.match(sharedConfigSource, /this\.knomoSharedConfigService\.reloadConfiguredRoot\(\)/u);
+	assert.match(sharedConfigSource, /this\.knomoCurrentConfigService\.reloadConfiguredRoot\(\)/u);
 	assert.doesNotMatch(sharedConfigSource, /this\.startupBootstrapService/u);
 	assert.match(sharedConfigSource, /new Notice\(t\("settings\.sharedConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
@@ -97,12 +97,12 @@ test("legacy attention exposes user actions without rendering raw diagnostics", 
 	const source = readSettingTabSource();
 	const legacySource = getSourceBetween(
 		source,
-		"\tprivate renderLegacyIdentityImport(",
+		"\tprivate renderLegacyMigration(",
 		"\n\tprivate rememberSettingNoticeValue(",
 	);
 
 	assert.doesNotMatch(legacySource, /diagnostics|sourcePath|memoId|item\.code|item\.detail/u);
-	assert.match(legacySource, /acknowledgeLegacyMigration/u);
+	assert.match(legacySource, /run\(\{ explicit: true \}\)/u);
 	assert.match(legacySource, /legacyIndexMigrationService\.run\(\{ explicit: true \}\)/u);
 });
 

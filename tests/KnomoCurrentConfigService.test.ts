@@ -39,10 +39,8 @@ test("无 config segments 时当前值可用，locale 固定，设备偏好只�
 	await f.current.initialize();
 	assert.equal(f.current.getStatus(), "ready");
 	assert.equal(f.current.getEffectiveConfig().monthly.locale, "en");
-	assert.equal(f.reads(), 1);
 	await f.settings.updateSettings({ monthlyMemoFolder: "Archive" });
 	await f.current.refreshLocalConfig();
-	assert.equal(f.reads(), 1);
 	assert.equal(f.current.getEffectiveConfig().monthly.folder, "Archive");
 	const before = JSON.stringify(f.saved());
 	await f.settings.updateSettings({ desktopSidebarWidth: 321, pinnedTags: ["local"] });
@@ -50,19 +48,6 @@ test("无 config segments 时当前值可用，locale 固定，设备偏好只�
 	assert.equal(f.local()["desktopSidebarWidth"], 321);
 	await f.settings.loadSettings();
 	assert.equal(f.settings.getSettings().desktopSidebarWidth, 321);
-});
-
-test("一次接收旧有效 Knomo 配置，但 Daily 范围始终由 Obsidian 决定", async () => {
-	const f = await fixture();
-	f.previous.value = { daily: { folder: "OldDaily", dateFormat: "YYYY/MM/DD", headings: ["## Old"] },
-		monthly: { folder: "OldMonthly", fileFormat: "YYYY-MM.md", dateHeadingFormat: "## YYYY-MM-DD", dateOrder: "desc", locale: "zh-cn" } };
-	await f.current.initialize();
-	assert.equal(f.current.getEffectiveConfig().daily.folder, "Daily");
-	assert.equal(f.current.getEffectiveConfig().monthly.folder, "OldMonthly");
-	assert.equal(f.settings.getSettings().dailyHeading, "## Old");
-	f.previous.value = null;
-	await f.current.initialize();
-	assert.equal(f.reads(), 1);
 });
 
 test("配置读取失败不覆盖已有值且不阻断 Daily 范围，写入和 Monthly 暂停", async () => {
@@ -91,11 +76,9 @@ async function fixture() {
 		loadData: async () => { if (failure) throw new Error("read failed"); return saved; }, saveData: async (value: unknown) => { if (!discardSave) saved = value; } };
 	const settings = new SettingsService(plugin as never);
 	await settings.loadSettings();
-	let reads = 0;
-	const previous: { value: import("../src/types/knomoConfig").KnomoSharedConfig | null } = { value: null };
 	const daily = { onChanged: () => () => undefined, getConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }), loadConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }) };
-	const current = new KnomoCurrentConfigService(settings, daily as never, () => "en", async () => { reads++; return previous.value; });
-	return { settings, current, previous, saved: () => saved, local: () => local, reads: () => reads,
+	const current = new KnomoCurrentConfigService(settings, daily as never, () => "en");
+	return { settings, current, saved: () => saved, local: () => local,
 		setSaved: (value: unknown) => { saved = value; }, discardSaves: () => { discardSave = true; }, setReadFailure: (value: boolean) => { failure = value; } };
 }
 

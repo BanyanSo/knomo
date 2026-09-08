@@ -20,24 +20,6 @@ export interface ObservationHandle {
 	rawBlockHash: string;
 }
 
-export interface IdentityHandle {
-	memoId: string;
-	activeBindingId: string;
-	identityRevision: string;
-}
-
-export interface ResolvedIdentityEvidence {
-	sourcePath: string;
-	sourceRevision: string;
-	logicalDate: string;
-	section: string | null;
-	startLine: number;
-	endLine: number;
-	time: string;
-	contentHash: string;
-	existingBlockId: string | null;
-}
-
 // Observation 只描述当前 Daily 字节，不承担身份职责。
 export interface MemoObservation extends ObservationHandle {
 	occurrenceIndex: number;
@@ -81,72 +63,14 @@ export interface CatalogCapabilities {
 	fullHistory: CatalogCapabilityCoverage;
 }
 
-export type IdentityCapabilityState = "ready" | "absent" | "syncing" | "conflicted";
-
-export interface IdentityCapabilities {
-	relation: IdentityCapabilityState;
-	review: IdentityCapabilityState;
-	recoverableDelete: IdentityCapabilityState;
-	restore: IdentityCapabilityState;
-	merge: IdentityCapabilityState;
-	repair: IdentityCapabilityState;
-	crossDeviceIdentity: IdentityCapabilityState;
-}
-
 export interface ResolvedMemoCapabilities {
 	markdown: MarkdownCapabilities;
-	identity: IdentityCapabilities;
 }
 
 export interface MemoCapabilities {
 	markdown: MarkdownCapabilities;
 	catalog: CatalogCapabilities;
-	identity: IdentityCapabilities;
 }
-
-export interface IdentityCandidate {
-	memoId: string;
-	source: "manual_successor";
-	origin?: {
-		sourcePath: string;
-		logicalDate: string;
-		time: string;
-	};
-}
-
-export type ResolvedMemo =
-	| {
-		// 普通 Catalog 读模型；旧写入和 Trash 的身份适配暂时保留在独立入口。
-		kind: "observation";
-		identityHandle: null;
-		observation: MemoObservation;
-		capabilities: ResolvedMemoCapabilities;
-	}
-	| {
-		kind: "identified";
-		bindingEvidence: ResolvedIdentityEvidence;
-		identityHandle: IdentityHandle;
-		observation: MemoObservation;
-		capabilities: ResolvedMemoCapabilities;
-		identityRevision: string;
-	}
-	| {
-		kind: "observed";
-		identityHandle: null;
-		observation: MemoObservation;
-		adoption: "eligible" | "settling";
-		capabilities: ResolvedMemoCapabilities;
-		identityRevision: string;
-	}
-	| {
-		kind: "ambiguous";
-		identityHandle: null;
-		observation: MemoObservation;
-		candidates: IdentityCandidate[];
-		reason?: "manual_successor";
-		capabilities: ResolvedMemoCapabilities;
-		identityRevision: string;
-	};
 
 export interface CatalogObservation extends MemoObservation {
 	observationKey: string;
@@ -327,4 +251,10 @@ export interface CatalogInventoryEntry {
 	logicalDate: string;
 	mtime: number;
 	size: number;
+}
+
+export interface ResolvedMemo {
+	kind: "observation";
+	observation: MemoObservation;
+	capabilities: ResolvedMemoCapabilities;
 }

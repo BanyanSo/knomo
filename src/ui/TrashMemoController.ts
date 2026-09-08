@@ -10,12 +10,11 @@ export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	trashLoading: boolean;
 	trashError: string | null;
 	trashCount: number;
-	deletedMemoIds: ReadonlySet<string>;
 	trashBusyMemoActions: ReadonlyMap<string, TrashAction>;
 }
 
 interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
-	getDeletedMemoSummary: () => Promise<{ count: number; ids: string[] }>;
+	getDeletedMemoSummary: () => Promise<{ count: number }>;
 	listDeletedMemos: () => Promise<TMemo[]>;
 	restoreMemo: (memo: TMemo) => Promise<TMemo | null>;
 	purgeMemo: (memo: TMemo) => Promise<void>;
@@ -32,10 +31,9 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	private trashLoading = false;
 	private trashError: string | null = null;
 	private trashCount = 0;
-	private deletedMemoIds = new Set<string>();
 	private trashBusyMemoActions = new Map<string, TrashAction>();
 	private trashMutationRevision = 0;
-	private trashSummaryOperation: Promise<{ count: number; ids: string[] }> | null = null;
+	private trashSummaryOperation: Promise<{ count: number }> | null = null;
 
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
@@ -45,18 +43,8 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			trashLoading: this.trashLoading,
 			trashError: this.trashError,
 			trashCount: this.trashCount,
-			deletedMemoIds: this.deletedMemoIds,
 			trashBusyMemoActions: this.trashBusyMemoActions,
 		};
-	}
-
-	recordDeletedMemo(memoId: string): void {
-		if (this.deletedMemoIds.has(memoId)) {
-			return;
-		}
-		this.trashMutationRevision += 1;
-		this.deletedMemoIds.add(memoId);
-		this.trashCount += 1;
 	}
 
 	async refreshTrashCount(render = true): Promise<void> {
@@ -65,7 +53,6 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			const summary = await this.getDeletedMemoSummary();
 			if (mutationRevision !== this.trashMutationRevision) return;
 			this.trashCount = summary.count;
-			this.deletedMemoIds = new Set(summary.ids);
 			this.trashError = null;
 		} catch (error) {
 			this.trashError = formatServiceError(error, t("error.trashCountFailed"));
@@ -91,7 +78,6 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			if (mutationRevision !== this.trashMutationRevision) return;
 			this.trashMemos = deletedMemos;
 			this.trashCount = Math.max(summary.count, deletedMemos.length);
-			this.deletedMemoIds = new Set([...summary.ids, ...deletedMemos.map((memo) => memo.id)]);
 		} catch (error) {
 			if (mutationRevision !== this.trashMutationRevision) return;
 			if (this.trashMemos === null) this.trashMemos = [];
@@ -151,16 +137,12 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		this.trashMutationRevision += 1;
 		this.trashMemos = (this.trashMemos ?? []).filter((memo) => memo.id !== removedMemo.id);
 		this.trashCount = Math.max(0, this.trashCount - 1);
-		const identityMemoId = removedMemo.trashItem?.memoId;
-		if (identityMemoId !== undefined
-			&& !(this.trashMemos ?? []).some((memo) => memo.trashItem?.memoId === identityMemoId)) {
-			this.deletedMemoIds.delete(identityMemoId);
-		}
+
 	}
 
-	private getDeletedMemoSummary(): Promise<{ count: number; ids: string[] }> {
+	private getDeletedMemoSummary(): Promise<{ count: number }> {
 		if (this.trashSummaryOperation !== null) return this.trashSummaryOperation;
-		let operation: Promise<{ count: number; ids: string[] }>;
+		let operation: Promise<{ count: number }>;
 		operation = this.options.getDeletedMemoSummary().finally(() => {
 			if (this.trashSummaryOperation === operation) this.trashSummaryOperation = null;
 		});

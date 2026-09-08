@@ -22,15 +22,11 @@ test("tracks deleted memo ids once and refreshes the trash snapshot", async () =
 		requestRender: (target) => renderTargets.push(target),
 	});
 
-	controller.recordDeletedMemo("memo-1");
-	controller.recordDeletedMemo("memo-1");
-	assert.equal(controller.getSnapshot().trashCount, 1);
 
 	await controller.refreshTrashCount(false);
 
 	const snapshot = controller.getSnapshot();
 	assert.equal(snapshot.trashCount, 2);
-	assert.deepEqual(Array.from(snapshot.deletedMemoIds), ["memo-1", "memo-2"]);
 	assert.equal(snapshot.trashMemos, null);
 	assert.deepEqual(renderTargets, ["trash-count-and-scope"]);
 });
@@ -274,7 +270,6 @@ test("purge waits for confirmation, removes only after durable success, and dedu
 	const second = controller.handleTrashAction("purge", memo);
 	await Promise.resolve();
 	assert.equal(purgeCalls, 1);
-	assert.equal(controller.getSnapshot().trashCount, 1);
 	resolvePurge();
 	await Promise.all([first, second]);
 
@@ -302,12 +297,10 @@ test("purge cancellation and persistence failure both keep the recoverable recor
 	await controller.loadTrashMemos();
 
 	await controller.handleTrashAction("purge", memo);
-	assert.equal(controller.getSnapshot().trashCount, 1);
 	assert.deepEqual(notices, []);
 
 	confirmed = true;
 	await controller.handleTrashAction("purge", memo);
-	assert.equal(controller.getSnapshot().trashCount, 1);
 	assert.deepEqual(notices, ["Permanent delete failed: disk unavailable"]);
 });
 
@@ -340,8 +333,6 @@ function makeMemo(id: string): MemoRecord {
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,

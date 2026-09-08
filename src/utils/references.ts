@@ -1,7 +1,7 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { parseMarkdownReferences } from "./markdownReferences";
 
-type MemoReferenceView = Pick<MemoRecord, "sourceMemoId" | "references" | "contentSnapshot">;
+type MemoReferenceView = Pick<MemoRecord, "contentSnapshot">;
 
 interface BlockReferenceCandidate {
 	startOffset: number;
@@ -48,10 +48,6 @@ export function formatCreatedAtAlias(createdAt: string): string {
 	return match === null ? createdAt : `${match[1]} ${match[2]}`;
 }
 
-export function withMemoIdAlias(referenceText: string, memoId: string): string {
-	return withReferenceAlias(referenceText, formatMemoIdAlias(memoId));
-}
-
 function withReferenceAlias(referenceText: string, alias: string): string {
 	const normalizedText = referenceText.startsWith("![[") ? referenceText.slice(1) : referenceText;
 	if (!normalizedText.startsWith("[[") || !normalizedText.endsWith("]]")) {
@@ -63,13 +59,6 @@ function withReferenceAlias(referenceText: string, alias: string): string {
 	}
 	const target = normalizedText.slice(2, -2).split("|")[0];
 	return `[[${target}|${alias}]]`;
-}
-
-export function formatMemoIdAlias(memoId: string): string {
-	if (!/^\d{16}$/.test(memoId)) {
-		return memoId;
-	}
-	return `${memoId.slice(0, 8)}-${memoId.slice(8, 14)}`;
 }
 
 function getPreferredReferenceCandidates(content: string): BlockReferenceCandidate[] {

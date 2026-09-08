@@ -66,7 +66,7 @@ test("classifies memo and trash actions", () => {
 	assert.deepEqual(getMemoActionDispatch("copy-link"), { type: "memo-action", action: "copy-link" });
 	assert.deepEqual(getMemoActionDispatch("delete"), { type: "memo-action", action: "delete" });
 	assert.deepEqual(getMemoActionDispatch("mark-reviewed"), { type: "memo-action", action: "mark-reviewed" });
-	assert.deepEqual(getMemoActionDispatch("confirm-identity"), { type: "memo-action", action: "confirm-identity" });
+	assert.deepEqual(getMemoActionDispatch("confirm-identity"), { type: "unknown", action: "confirm-identity" });
 	assert.deepEqual(getMemoActionDispatch("restore"), { type: "unknown", action: "restore" });
 	assert.equal(isMemoAction("edit"), true);
 	assert.equal(isMemoAction("purge"), false);

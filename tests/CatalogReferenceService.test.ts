@@ -61,7 +61,6 @@ async function makeFixture() {
 	} } as unknown as App;
 	const references = new CatalogReferenceService(app, catalog);
 	const read = new CatalogReadService({ catalog, references, now: () => new Date("2026-09-08T12:00:00Z"),
-		identityLedger: new Proxy({} as import("../src/types/identityLedger").IdentityLedgerReader, { get: () => { throw new Error("Identity must not be read"); } }),
 	});
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
 	const seed = async (path: string, date: string, content: string) => {

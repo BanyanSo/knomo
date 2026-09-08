@@ -5,7 +5,6 @@ import { performance } from "node:perf_hooks";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
 import type { CatalogCursor, CatalogQuery } from "../../src/types/catalog";
-import type { IdentityLedgerClaimEvent, IdentityLedgerEventEnvelope } from "../../src/types/identityLedger";
 import type { CatalogPartitionInput } from "../../src/services/MemoCatalogService";
 import {
 	DEFAULT_BENCHMARK_ROOT,
@@ -38,12 +37,6 @@ interface CatalogNodeBenchmarkResult {
 		identityReducerMemoCount: number;
 		identityReducerEventCount: number;
 	};
-}
-
-export interface IdentityLedgerReducerBenchmarkResult {
-	memoCount: number;
-	eventCount: number;
-	materializeMs: number;
 }
 
 const SEARCH_QUERIES = [
@@ -219,7 +212,6 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 	await store.setMeta("benchmarkCheckpoint", checkpoint);
 	const restoredCheckpoint = await store.getMeta<typeof checkpoint>("benchmarkCheckpoint");
 	pushMetric(metrics, "checkpoint.roundTripMs", performance.now() - checkpointStartedAt);
-	const identityReducer = await runIdentityLedgerReducerBenchmark(30_000);
 	pushMetric(metrics, "identity.reducerMaterializeMs", identityReducer.materializeMs);
 
 	const result: CatalogNodeBenchmarkResult = {
@@ -248,52 +240,6 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 	fs.writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
 	console.error(JSON.stringify({ phase: "result-written", resultPath }));
 	return result;
-}
-
-export async function runIdentityLedgerReducerBenchmark(
-	memoCount: number,
-): Promise<IdentityLedgerReducerBenchmarkResult> {
-	await ensureBenchmarkObsidianStub();
-	const { materializeIdentityLedger } = await import("../../src/services/IdentityLedgerService");
-	const envelopes: IdentityLedgerEventEnvelope[] = [];
-	for (let index = 0; index < memoCount; index += 1) {
-		const ordinal = index + 1;
-		const eventId = `e_${ordinal.toString(16).padStart(32, "0")}`;
-		const memoId = `01991f40-7c00-7000-8000-${ordinal.toString(16).padStart(12, "0")}`;
-		const hashSuffix = ordinal.toString(16).padStart(8, "0").slice(-8);
-		const event: IdentityLedgerClaimEvent = {
-			eventId,
-			writerId: "w_11111111111111111111111111111111",
-			memoId,
-			type: "claim",
-			baseBindingId: null,
-			occurredAt: "2026-08-22T00:00:00.000Z",
-			evidence: {
-				observation: {
-					sourcePath: `Daily/${String(ordinal).padStart(5, "0")}.md`,
-					order: "00000000000001V",
-					logicalDate: "2026-08-22",
-					section: "## Memos",
-					time: "09:00",
-					contentHash: `fnv1a-${hashSuffix}`,
-				},
-				createIntentEventId: null,
-			},
-		};
-		envelopes.push({
-			event,
-			digest: ordinal.toString(16).padStart(64, "0"),
-			sourcePath: `identity/segment-${eventId}.jsonl`,
-		});
-	}
-	const startedAt = performance.now();
-	const snapshot = await materializeIdentityLedger(envelopes);
-	const materializeMs = performance.now() - startedAt;
-	return {
-		memoCount: Object.keys(snapshot.memos).length,
-		eventCount: snapshot.eventCount,
-		materializeMs,
-	};
 }
 
 function readManifest(manifestPath: string): CatalogBenchmarkManifest {

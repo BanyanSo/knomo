@@ -220,8 +220,6 @@ function makeMemo(id: string, createdAt: string): MemoRecord {
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,

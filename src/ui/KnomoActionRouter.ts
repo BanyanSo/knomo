@@ -1,11 +1,11 @@
 export type RootClickRoute =
+	| { type: "memo-action"; element: HTMLElement; memoId: string | null; action: string | null }
 	| { type: "tag-toggle"; element: HTMLElement; tag: string | null }
 	| { type: "tag"; element: HTMLElement; tag: string | null; tagKey: string | null }
 	| { type: "nav"; element: HTMLElement; nav: string | null }
 	| { type: "title-mode"; element: HTMLElement; mode: string | null }
 	| { type: "search-date"; element: HTMLElement; filter: string | null }
 	| { type: "trash-action"; element: HTMLElement; memoId: string | null; action: string | null }
-	| { type: "memo-action"; element: HTMLElement; memoId: string | null; candidateMemoId: string | null; action: string | null }
 	| { type: "action"; element: HTMLElement; memoId: string | null; action: string | null; mobileToolButtonEl: HTMLElement | null }
 	| { type: "memo-card-open"; element: HTMLElement; memoId: string | null; randomReunion: boolean }
 	| {
@@ -63,7 +63,6 @@ export function getRootClickRoute(target: Element, mobile: boolean): RootClickRo
 			type: "memo-action",
 			element: memoActionEl,
 			memoId: memoActionEl.getAttr("data-memo-id"),
-			candidateMemoId: memoActionEl.getAttr("data-candidate-memo-id"),
 			action: memoActionEl.getAttr("data-memo-action"),
 		};
 	}

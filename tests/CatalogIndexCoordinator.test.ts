@@ -3,8 +3,6 @@ import { createHash } from "node:crypto";
 import { setTimeout as waitTimer } from "node:timers/promises";
 import test from "node:test";
 import type { App } from "obsidian";
-
-import type { CatalogRevisionTransition } from "../src/services/CatalogIndexCoordinator";
 import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
@@ -245,7 +243,6 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 	const second = await createCoordinatorFixture([
 		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 bravo", mtime: 10 },
 	]);
-	const transitions: CatalogRevisionTransition[] = [];
 	const changedPeriods: string[] = [];
 	const secondCoordinator = new CatalogIndexCoordinator(
 		second.app,
@@ -255,7 +252,6 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 		{
 			now: () => 2_001,
 			fullAuditIntervalMs: 1_000,
-			onRevisionTransition: (transition) => { transitions.push(transition); },
 			onDailyPeriodsChanged: (periods) => { changedPeriods.push(...periods); },
 		},
 	);
@@ -264,10 +260,6 @@ test("同 size、同 mtime 的离线修改不做启动全读，由到期后台 S
 	assert.equal(second.readCount(), 0);
 	await secondCoordinator.waitForIdle();
 	assert.deepEqual((await store.query({ limit: 50 })).items.map((item) => item.content), ["bravo"]);
-	assert.deepEqual(transitions.map((transition) => ({
-		before: transition.before?.observations.map((item) => item.content) ?? [],
-		after: transition.after.observations.map((item) => item.content),
-	})), [{ before: ["alpha"], after: ["bravo"] }]);
 	assert.deepEqual(changedPeriods, ["2026-08"]);
 	second.unload();
 });
@@ -311,110 +303,6 @@ test("warm start 在审计未到期时不读取未变化 Daily 正文", async ()
 	assert.equal(second.readCount(), 0);
 	assert.equal((await store.query({ limit: 50 })).items[0]?.content, "unchanged");
 	second.unload();
-});
-
-test("已有空 Daily 的运行期手写新增会产生 transition，Catalog rebuild 与首次路径不会冒充新增", async () => {
-	await ensureObsidianStub();
-	const { TFile } = await import("obsidian");
-	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
-	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const sourcePath = "Journal/2026-08-22.md";
-	const fixture = await createCoordinatorFixture([
-		{ path: sourcePath, content: "## Memos\n", mtime: 10 },
-	]);
-	const transitions: CatalogRevisionTransition[] = [];
-	const coordinator = new CatalogIndexCoordinator(
-		fixture.app,
-		new MemoCatalogService(new InMemoryMemoCatalogStore()),
-		new DiaryMemoParser(async (bytes) => sha256(bytes)),
-		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		{
-			fullAuditIntervalMs: 10_000,
-			onRevisionTransition: (transition) => { transitions.push(transition); },
-		},
-	);
-	try {
-		coordinator.start(fixture.owner);
-		await coordinator.initialize();
-		await coordinator.waitForIdle();
-		assert.equal(transitions.length, 0);
-
-		const newSourcePath = "Journal/2026-08-23.md";
-		fixture.setFile(newSourcePath, "## Memos\n- 09:00 同步或本机新路径\n", 15);
-		const newFile = fixture.file(newSourcePath);
-		assert.ok(newFile instanceof TFile);
-		fixture.emitVaultEvent("create", newFile);
-		await coordinator.waitForIdle();
-		assert.equal(transitions.length, 0);
-
-		const localContent = "## Memos\n- 09:00 手写新增\n";
-		fixture.setFile(sourcePath, localContent, 20);
-		const file = fixture.file(sourcePath);
-		assert.ok(file instanceof TFile);
-		fixture.emitTrustedEditorInput(file, localContent);
-		fixture.emitVaultEvent("modify", file);
-		await waitUntil(async () => transitions.length === 1);
-		await coordinator.waitForIdle();
-
-		const transition = [...transitions][0] as CatalogRevisionTransition | undefined;
-		assert.ok(transition !== undefined);
-		assert.notEqual(transition.before, null);
-		assert.deepEqual(transition.before?.observations, []);
-		assert.deepEqual(transition.after.observations.map((item) => item.content), ["手写新增"]);
-		assert.equal((transition as CatalogRevisionTransition & { allowIdentityAdoption?: boolean }).allowIdentityAdoption, true);
-
-		transitions.length = 0;
-		await coordinator.rebuildLocalCatalog();
-		await coordinator.waitForIdle();
-		assert.deepEqual(transitions, []);
-	} finally {
-		fixture.unload();
-	}
-});
-
-test("远端或程序化 Daily revision 没有可信用户输入时不允许自动 adoption", async () => {
-	await ensureObsidianStub();
-	const { TFile } = await import("obsidian");
-	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
-	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const sourcePath = "Journal/2026-08-22.md";
-	const fixture = await createCoordinatorFixture([
-		{ path: sourcePath, content: "## Memos\n- 09:00 已有\n", mtime: 10 },
-	]);
-	const transitions: CatalogRevisionTransition[] = [];
-	const coordinator = new CatalogIndexCoordinator(
-		fixture.app,
-		new MemoCatalogService(new InMemoryMemoCatalogStore()),
-		new DiaryMemoParser(async (bytes) => sha256(bytes)),
-		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		{
-			fullAuditIntervalMs: 10_000,
-			onRevisionTransition: (transition) => { transitions.push(transition); },
-		},
-	);
-	try {
-		coordinator.start(fixture.owner);
-		await coordinator.initialize();
-		await coordinator.waitForIdle();
-
-		const remoteContent = "## Memos\n- 09:00 已有\n- 10:00 远端新增\n";
-		fixture.setFile(sourcePath, remoteContent, 20);
-		const file = fixture.file(sourcePath);
-		assert.ok(file instanceof TFile);
-		fixture.emitTrustedEditorInput(file, remoteContent, false);
-		fixture.emitVaultEvent("modify", file);
-		await waitUntil(async () => transitions.length === 1);
-		await coordinator.waitForIdle();
-
-		const transition = transitions[0] as CatalogRevisionTransition & { allowIdentityAdoption?: boolean };
-		assert.equal(transition.allowIdentityAdoption, false);
-	} finally {
-		fixture.unload();
-	}
 });
 
 test("Vault 事件只处理受影响的 Daily，Monthly 与其他 Markdown 不触发 inventory 重算", async () => {
@@ -686,22 +574,6 @@ test("Catalog 持久层不可用时从 Daily 渐进扫描并展示全部 observa
 	);
 	const readService = new CatalogReadService({
 		catalog,
-		identityLedger: {
-			getRevision: () => "identity-absent",
-			getStatus: () => "absent",
-			getSnapshot: () => ({
-				revision: "identity-absent",
-				eventCount: 0,
-				memos: {},
-				pendingIntents: [],
-				quarantinedEventIds: [],
-			}),
-			resolveObservation: () => null,
-			resolveObservationState: () => ({ kind: "unbound" }),
-			getSourceMemoId: () => null,
-			getCreatedAt: () => null,
-			getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		},
 	});
 	try {
 		coordinator.start(fixture.owner);
@@ -712,7 +584,6 @@ test("Catalog 持久层不可用时从 Daily 渐进扫描并展示全部 observa
 		assert.equal(store.isUsingFallback, true);
 		assert.deepEqual(page.items.map((item) => item.content), ["second observation", "first observation"]);
 		assert.equal(page.status.catalog, "degraded");
-		assert.equal(page.status.identity, "absent");
 		assert.equal(page.capabilities.stats, "partial");
 		assert.deepEqual(fixture.snapshot(), dailyBefore);
 	} finally {
@@ -733,7 +604,6 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 	]);
 	const store = new InMemoryMemoCatalogStore();
 	const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
-	const transitions: CatalogRevisionTransition[] = [];
 	const coordinator = new CatalogIndexCoordinator(
 		fixture.app,
 		new MemoCatalogService(store),
@@ -741,7 +611,6 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
 		{
 			now: () => 20,
-			onRevisionTransition: (transition) => { transitions.push(transition); },
 		},
 	);
 	try {
@@ -766,7 +635,6 @@ test("P0 第 3 步 Daily commit 后直接替换当前 Catalog partition", async 
 		});
 
 		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["inserted", "before"]);
-		assert.deepEqual(transitions, []);
 		assert.equal(fixture.snapshot()[sourcePath], "## Memos\n- 09:00 before\n");
 	} finally {
 		fixture.unload();
@@ -800,7 +668,6 @@ test("解析中的旧扫描结果不能覆盖同路径刚完成的 Daily 直接�
 		return sha256(bytes);
 	});
 	const store = new InMemoryMemoCatalogStore();
-	const transitions: CatalogRevisionTransition[] = [];
 	const coordinator = new CatalogIndexCoordinator(
 		fixture.app,
 		new MemoCatalogService(store),
@@ -808,7 +675,6 @@ test("解析中的旧扫描结果不能覆盖同路径刚完成的 Daily 直接�
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
 		{
 			fullAuditIntervalMs: 10_000,
-			onRevisionTransition: (transition) => { transitions.push(transition); },
 		},
 	);
 	try {
@@ -836,90 +702,8 @@ test("解析中的旧扫描结果不能覆盖同路径刚完成的 Daily 直接�
 		await coordinator.waitForIdle();
 
 		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["after"]);
-		assert.equal(transitions.some((transition) =>
-			transition.after.observations.some((observation) => observation.content === "before")), false);
 	} finally {
 		releaseFirstDigest();
-		fixture.unload();
-	}
-});
-
-test("后台 Identity 回调不阻塞直接提交，也不为其补写身份链", async () => {
-	await ensureObsidianStub();
-	const { TFile } = await import("obsidian");
-	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
-	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const sourcePath = "Journal/2026-08-22.md";
-	const beforeContent = "## Memos\n- 09:00 before\n";
-	const scannedContent = "## Memos\n- 09:00 scanned\n";
-	const afterContent = "## Memos\n- 09:00 after\n";
-	const fixture = await createCoordinatorFixture([
-		{ path: sourcePath, content: beforeContent, mtime: 10 },
-	]);
-	let markTransitionStarted = (): void => undefined;
-	const transitionStarted = new Promise<void>((resolve) => { markTransitionStarted = resolve; });
-	let releaseTransition = (): void => undefined;
-	const transitionBlocked = new Promise<void>((resolve) => { releaseTransition = resolve; });
-	const transitions: CatalogRevisionTransition[] = [];
-	const store = new InMemoryMemoCatalogStore();
-	const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
-	const coordinator = new CatalogIndexCoordinator(
-		fixture.app,
-		new MemoCatalogService(store),
-		parser,
-		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
-		{
-			fullAuditIntervalMs: 10_000,
-			onRevisionTransition: async (transition) => {
-				if (transitions.length === 0) {
-					markTransitionStarted();
-					await transitionBlocked;
-				}
-				transitions.push(transition);
-			},
-		},
-	);
-	try {
-		coordinator.start(fixture.owner);
-		await coordinator.initialize();
-		await coordinator.waitForIdle();
-
-		fixture.setFile(sourcePath, scannedContent, 20);
-		const scannedFile = fixture.file(sourcePath);
-		assert.ok(scannedFile instanceof TFile);
-		fixture.emitVaultEvent("modify", scannedFile);
-		await transitionStarted;
-
-		fixture.setFile(sourcePath, afterContent, 30);
-		const committedFile = fixture.file(sourcePath);
-		assert.ok(committedFile instanceof TFile);
-		const parsed = parser.parseRevision({
-			sourcePath,
-			logicalDate: "2026-08-22",
-			content: afterContent,
-			sourceRevision: await sha256(Buffer.from(afterContent, "utf8")),
-		});
-		const committed = coordinator.replaceCommittedFile({
-			file: committedFile,
-			logicalDate: "2026-08-22",
-			content: afterContent,
-			parsed,
-		});
-		await committed;
-		releaseTransition();
-		await coordinator.waitForIdle();
-
-		assert.deepEqual(transitions.map((transition) => ({
-			before: transition.before?.observations.map((item) => item.content) ?? [],
-			after: transition.after.observations.map((item) => item.content),
-		})), [
-			{ before: ["before"], after: ["scanned"] },
-		]);
-		assert.deepEqual((await store.query({ limit: 10 })).items.map((item) => item.content), ["after"]);
-	} finally {
-		releaseTransition();
 		fixture.unload();
 	}
 });
@@ -1199,7 +983,6 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const { LEGACY_MIGRATION_COMPLETION_META_KEY } = await import("../src/services/LegacyIndexMigrationService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const { MONTHLY_PROJECTION_CHECKPOINT_META_KEY } = await import("../src/services/MonthlyProjectionCoordinator");
@@ -1209,13 +992,11 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 		{ path: "Memos/_knomo-data/sentinel.md", content: "shared bytes\n", mtime: 10 },
 	]);
 	const store = new InMemoryMemoCatalogStore();
-	const legacyCompletion = { sourceId: "legacy-index", sourceRevision: "legacy-revision" };
 	const monthlyCheckpoint = {
 		version: 1,
 		pending: [{ period: "2026-08", reason: "catalog" }],
 		updatedAt: 123,
 	};
-	await store.setMeta(LEGACY_MIGRATION_COMPLETION_META_KEY, legacyCompletion);
 	await store.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, monthlyCheckpoint);
 	await store.setMeta("catalog-derived-sentinel", { stale: true });
 	const coordinator = new CatalogIndexCoordinator(
@@ -1227,7 +1008,6 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 			fullAuditIntervalMs: 0,
 			now: () => new Date(2026, 7, 10).getTime(),
 			preserveMetaKeysOnRebuild: [
-				LEGACY_MIGRATION_COMPLETION_META_KEY,
 				MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
 			],
 		},
@@ -1243,7 +1023,6 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 		assert.deepEqual(page.items.map((item) => item.content), ["rebuild only"]);
 		assert.equal(page.coverage.kind, "complete");
 		assert.deepEqual(fixture.snapshot(), sharedBytes);
-		assert.deepEqual(await store.getMeta(LEGACY_MIGRATION_COMPLETION_META_KEY), legacyCompletion);
 		assert.deepEqual(await store.getMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY), monthlyCheckpoint);
 		assert.equal(await store.getMeta("catalog-derived-sentinel"), null);
 	} finally {

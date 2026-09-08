@@ -26,10 +26,7 @@ export interface TrashActionState {
 export interface MemoCardActionMeta {
 	action: MemoAction;
 	className: string;
-	candidateMemoId?: string;
 }
-
-export type MemoCardActionExplanation = "identity-actions-paused" | null;
 
 export interface TrashCardActionMeta {
 	action: TrashAction;
@@ -79,26 +76,10 @@ export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
 		action,
 		className: getMemoActionClass(action),
 	}));
-	const resolved = memo?.catalog?.resolved;
-	if (memo?.catalog?.capabilities.identity.repair !== "ready" || resolved?.kind !== "ambiguous") {
-		return actions;
-	}
-	const repairs = [...new Set(resolved.candidates.map((candidate) => candidate.memoId))].sort().map((candidateMemoId) => ({
-		action: "confirm-identity" as const,
-		className: getMemoActionClass("confirm-identity"),
-		candidateMemoId,
-	}));
-	return [...actions, ...repairs];
+	return actions;
 }
 
-export function getMemoCardActionExplanation(memo: MemoRecord): MemoCardActionExplanation {
-	const identity = memo.catalog?.capabilities.identity;
-	return identity?.recoverableDelete === "conflicted" && identity.repair !== "ready"
-		? "identity-actions-paused"
-		: null;
-}
-
-export type MemoDeleteMode = "recoverable" | "prepare" | "unavailable";
+export type MemoDeleteMode = "recoverable" | "unavailable";
 
 export function isMemoCardMenuReady(memo: MemoRecord): boolean {
 	const capabilities = memo.catalog?.capabilities;
@@ -142,7 +123,7 @@ export function getTrashCardActions(busyAction: TrashAction | null, purgeAllowed
 	}));
 }
 
-export function getMemoSourceReferenceMeta(memo: MemoRecord, _deletedMemoIds: ReadonlySet<string>): MemoSourceReferenceMeta {
+export function getMemoSourceReferenceMeta(memo: MemoRecord): MemoSourceReferenceMeta {
 	const sourceReferenceText = getSourceReferenceText(memo);
 	if (sourceReferenceText !== null) {
 		return {
@@ -167,12 +148,7 @@ export function getMemoDisplayContent(memo: MemoRecord): string {
 
 export function getMemoDeleteMode(memo: MemoRecord): MemoDeleteMode {
 	const capabilities = memo.catalog?.capabilities;
-	if (capabilities === undefined || capabilities.identity.recoverableDelete === "ready") {
-		return "recoverable";
-	}
-	return capabilities.identity.recoverableDelete === "absent" && capabilities.markdown.remove
-		? "prepare"
-		: "unavailable";
+	return capabilities === undefined || capabilities.markdown.remove ? "recoverable" : "unavailable";
 }
 
 function getVisibleMemoText(content: string): string {

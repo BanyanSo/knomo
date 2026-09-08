@@ -1,6 +1,6 @@
-export type LegacyIdentityImportStatus = "idle" | "waiting_initialization" | "waiting_catalog" | "not_applicable" | "ready" | "partial" | "attention" | "unavailable";
+export type LegacyMigrationStatus = "idle" | "not_applicable" | "ready" | "attention" | "unavailable";
 
-export interface LegacyIdentityImportDiagnostic {
+export interface LegacyMigrationDiagnostic {
 	code: string;
 	sourcePath: string | null;
 	memoId: string | null;
@@ -12,12 +12,9 @@ export interface LegacyMigrationCleanupCandidate {
 	sourceRevision: string;
 }
 
-export interface LegacyIdentityImportReport {
-	status: LegacyIdentityImportStatus;
+export interface LegacyMigrationReport {
+	status: LegacyMigrationStatus;
 	sourceRevision: string | null;
-	importedEventCount: number;
-	importedMemoIds: string[];
-	skippedMemoIds: string[];
-	diagnostics: LegacyIdentityImportDiagnostic[];
+	diagnostics: LegacyMigrationDiagnostic[];
 	cleanupCandidate: LegacyMigrationCleanupCandidate | null;
 }

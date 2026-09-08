@@ -62,13 +62,11 @@ export class MemoCardPreviewCache {
 }
 
 export function getMemoCardPreviewKey(memo: MemoPreviewCacheItem): string {
-	const displayVariant = memo.references.length > 0 ? "reference" : "plain";
 	return [
 		memo.updatedAt,
 		memo.contentHash,
 		memo.updatedAt,
 		memo.dailyRef.path,
-		displayVariant,
 	].join(":");
 }
 

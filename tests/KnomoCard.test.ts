@@ -76,7 +76,6 @@ test("memo card action menu includes open daily in the requested order", async (
 		includeActions: true,
 		randomCard: false,
 		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
@@ -122,7 +121,6 @@ test("普通卡片时间使用 observation 分钟精度，不读取旧创建时�
 		includeActions: false,
 		randomCard: false,
 		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
 		formatDisplayTime: formatMemoDisplayTime,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
@@ -148,7 +146,6 @@ test("memo card menu keeps Markdown actions available while identity is settling
 		includeActions: true,
 		randomCard: false,
 		activeMenuMemoId: "memo-1",
-		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
@@ -166,74 +163,6 @@ test("memo card menu keeps Markdown actions available while identity is settling
 	assert.equal(root.find("article")?.hasClass("is-menu-open"), true);
 });
 
-test("局部身份冲突无修复入口时，在卡片菜单说明暂停的操作", async () => {
-	await ensureObsidianStub();
-	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
-	const root = new TestElement("div");
-
-	renderKnomoMemoCard(root.asHtml(), makeMemo({
-		catalog: { capabilities: makeCapabilities("conflicted"), observation: { logicalDate: "2026-06-02", time: "12:34" } } as never,
-	}), {
-		generation: 7,
-		renderIndex: 0,
-		includeActions: true,
-		randomCard: false,
-		activeMenuMemoId: "memo-1",
-		deletedMemoIds: new Set(),
-		formatDisplayTime: (value) => value,
-		getMarkdownPriority: () => "normal" as const,
-		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
-		queueMemoMarkdown: () => undefined,
-		renderMemoCardImages: () => undefined,
-		queueSourceReferenceMarkdown: () => undefined,
-	});
-
-	assert.match(root.find(".knomo-card-action-explanation")?.getText() ?? "", /identity is not settled/u);
-	assert.equal(root.find(".knomo-card-actions")?.hasClass("has-explanation"), true);
-});
-
-test("P1 第 5 步：局部 identity conflict 只为当前 memo 暴露显式 repair 操作", async () => {
-	await ensureObsidianStub();
-	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
-	const root = new TestElement("div");
-	const blockedCapabilities = makeCapabilities("conflicted");
-	blockedCapabilities.identity.repair = "ready";
-
-	renderKnomoMemoCard(root.asHtml(), makeMemo({
-		catalog: {
-			observation: { logicalDate: "2026-06-02", time: "12:34" },
-			capabilities: blockedCapabilities,
-			resolved: {
-				kind: "ambiguous",
-				reason: "competing_match",
-				candidates: [{ memoId: "memo-original" }],
-			},
-		} as never,
-	}), {
-		generation: 7,
-		renderIndex: 0,
-		includeActions: true,
-		randomCard: false,
-		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
-		formatDisplayTime: (value) => value,
-		getMarkdownPriority: () => "normal" as const,
-		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
-		queueMemoMarkdown: () => undefined,
-		renderMemoCardImages: () => undefined,
-		queueSourceReferenceMarkdown: () => undefined,
-	});
-
-	assert.deepEqual(
-		root.findAll("[data-memo-action]").map((action) => action.getAttr("data-memo-action")),
-		["edit", "reference", "open-daily", "copy-text", "copy-link", "confirm-identity"],
-	);
-	assert.equal(
-		root.find("[data-memo-action='confirm-identity']")?.getAttr("data-candidate-memo-id"),
-		"memo-original",
-	);
-});
-
 test("random memo card marks the time opener without rendering a manual review action", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
@@ -245,7 +174,6 @@ test("random memo card marks the time opener without rendering a manual review a
 		includeActions: true,
 		randomCard: true,
 		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
@@ -275,7 +203,6 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 			randomCard: false,
 			timeBuoy: { status, label: `Time buoy ${status}` },
 			activeMenuMemoId: null,
-			deletedMemoIds: new Set(),
 			formatDisplayTime: (value) => value,
 			getMarkdownPriority: () => "normal" as const,
 			getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
@@ -313,8 +240,7 @@ test("trash memo cards expose restore and single-item permanent purge actions", 
 		deletedAt: "2026-06-03T00:00:00.123",
 		trashItem: {
 			key: "memo-1:delete-1",
-			memoId: "memo-1",
-			deleteEventId: "delete-1",
+			snapshotId: "memo-1",
 			createdAt: "2026-06-02T12:34:56.789+08:00",
 			deletedAt: "2026-06-03T00:00:00+08:00",
 			deleteSource: "knomo_ui",
@@ -323,7 +249,6 @@ test("trash memo cards expose restore and single-item permanent purge actions", 
 			section: "Memos",
 			content: "memo-1",
 			contentHash: "hash-memo-1",
-			sourceMemoId: null,
 			purgeAllowed: true,
 		},
 	}), {
@@ -372,7 +297,6 @@ async function renderMemoCard(
 		includeActions: false,
 		randomCard: false,
 		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (queuedMemo) => preview ?? { text: queuedMemo.contentSnapshot, images: [] },
@@ -523,8 +447,6 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,
@@ -550,7 +472,7 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 
 function makeCapabilities(identityState: "ready" | "absent" | "syncing" | "conflicted") {
 	return {
-		...createResolvedMemoCapabilities(identityState),
+		...createResolvedMemoCapabilities(),
 		catalog: createCatalogCapabilities({
 			kind: "complete",
 			coveredFromDate: "2026-06-02",

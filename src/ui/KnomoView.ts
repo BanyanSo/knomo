@@ -62,7 +62,7 @@ import {
 } from "./KnomoCardImages";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import { KnomoCardFlowCoordinator } from "./KnomoCardFlowCoordinator";
-import { getMemoDeleteMode, getMemoDisplayContent } from "./KnomoCardMetadata";
+import { getMemoDisplayContent } from "./KnomoCardMetadata";
 import { renderComposerReferencePreview, renderKnomoComposer } from "./KnomoComposer";
 import {
 	getTimeBuoyPickerLeft,
@@ -82,7 +82,7 @@ import { ComposerSaveShortcutController } from "./ComposerSaveShortcutController
 import { getTextareaCharacterRect } from "./composerSuggestPosition";
 import { ImagePreviewScrollLock } from "./ImagePreviewScrollLock";
 import { ImageResourceCache } from "./ImageResourceCache";
-import { getDestructiveConfirmReturnFocus, showKnomoConfirmModal } from "./KnomoConfirmModal";
+import { showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
 import { filterVisibleMemos, memoMatchesSearch } from "./KnomoMemoFilter";
 import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
@@ -322,7 +322,6 @@ export class KnomoView extends ItemView {
 	private catalogStatus: CatalogReadStatus = {
 		content: "ready",
 		catalog: "complete",
-		identity: "ready",
 		projection: "ready",
 		migration: "none",
 	};
@@ -339,7 +338,7 @@ export class KnomoView extends ItemView {
 	private libraryTagFacets: CatalogTagFacet[] | null = null;
 	private libraryIndexesUpdating = false;
 	private trashCursor: string | null = null;
-	private trashIdentityRevision: string | null = null;
+	private trashSnapshotRevision: string | null = null;
 	private cardFlowError: string | null = null;
 	private memoLoadingPromise: Promise<boolean> | null = null;
 	private memoLoadingFingerprint: string | null = null;
@@ -348,7 +347,6 @@ export class KnomoView extends ItemView {
 	private expandedTagGroups = new Set<string>();
 	private composerOpen = false;
 	private editingMemo: MemoRecord | null = null;
-	private quoteSourceMemoId: string | null = null;
 	private quoteReferenceText: string | null = null;
 	private quoteMarkdownText: string | null = null;
 	private draftContent = "";
@@ -724,7 +722,7 @@ export class KnomoView extends ItemView {
 				const page = await this.catalogReadService.listDeleted(CATALOG_PAGE_SIZE);
 				if (page.errors?.length) new Notice(page.errors.map((item) => `${item.snapshotId}: ${item.message}`).join("\n"));
 				this.trashCursor = page.nextCursor;
-				this.trashIdentityRevision = page.identityRevision;
+				this.trashSnapshotRevision = page.snapshotRevision;
 				return page.items.map(toTrashMemoView);
 			},
 			restoreMemo: async (memo) => {
@@ -776,7 +774,7 @@ export class KnomoView extends ItemView {
 			},
 			markRandomReunionReviewed: async (memoId) => {
 				const memo = this.findMemoById(memoId);
-				if (memo === null || !isCatalogMemoView(memo)) throw new Error("Random reunion memo identity is unavailable.");
+				if (memo === null || !isCatalogMemoView(memo)) throw new Error("Random reunion observation is unavailable.");
 				await this.memoCommandService.recordReview(await this.resolveCatalogMemo(memo));
 			},
 			isRandomActive: () => this.activeNav === "random",
@@ -866,7 +864,7 @@ export class KnomoView extends ItemView {
 			setSearchDateFilter: (filter, sourceEl) => this.setSearchDateFilter(filter, sourceEl),
 			setMobileSearchDateFilter: (filter) => this.setMobileSearchDateFilter(filter),
 			runTrashAction: (action, memoId) => this.runTrashActionById(action, memoId),
-			runMemoAction: (action, memoId, candidateMemoId) => this.runMemoActionById(action, memoId, candidateMemoId),
+			runMemoAction: (action, memoId) => this.runMemoActionById(action, memoId),
 			shouldIgnoreHandledMobileToolClick: (element, action) => this.shouldIgnoreHandledMobileToolClick(element, action),
 			openMemoCardDailyNote: (memoId, randomReunion) => this.openMemoCardDailyNote(memoId, randomReunion),
 			closeCardMenu: () => this.closeCardMenu(),
@@ -3194,7 +3192,6 @@ export class KnomoView extends ItemView {
 		reusedImagesEl: HTMLElement | null = null,
 		timeBuoy?: MemoCardTimeBuoy,
 	): HTMLElement {
-		const { deletedMemoIds } = this.trashMemoController.getSnapshot();
 		const effectiveTimeBuoy = timeBuoy ?? this.getVisibleMemoTimeBuoy(memo);
 		return renderKnomoMemoCard(container, memo, {
 			generation,
@@ -3203,7 +3200,6 @@ export class KnomoView extends ItemView {
 			randomCard,
 			timeBuoy: effectiveTimeBuoy,
 			activeMenuMemoId: this.activeMenuMemoId,
-			deletedMemoIds,
 			formatDisplayTime: formatMemoDisplayTime,
 			getMarkdownPriority: getMarkdownRenderPriority,
 			getMemoCardPreview: (memoRecord) => this.getMemoCardPreview(memoRecord),
@@ -3535,11 +3531,10 @@ export class KnomoView extends ItemView {
 	private async runMemoActionById(
 		action: MemoAction,
 		memoId: string | null,
-		candidateMemoId: string | null,
 	): Promise<void> {
 		const memo = memoId === null ? null : this.findMemoById(memoId);
 		if (memo !== null) {
-			await this.handleMemoAction(action, memo, candidateMemoId);
+			await this.handleMemoAction(action, memo);
 		}
 	}
 
@@ -3767,19 +3762,11 @@ export class KnomoView extends ItemView {
 		throw new Error("The current memo source changed; refresh and retry.");
 	}
 
-	private async handleMemoAction(action: MemoAction, memo: MemoRecord, candidateMemoId: string | null): Promise<void> {
+	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
 		this.closeCardMenu();
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		try {
-			if (action === "confirm-identity") {
-				if (!isCatalogMemoView(memo) || candidateMemoId === null) {
-					throw new Error("Identity confirmation is unavailable for this memo.");
-				}
-				await this.memoCommandService.repairIdentity(memo.catalog, candidateMemoId);
-				await this.reloadMemos(false);
-				new Notice(t("notice.identityConfirmed"));
-				return;
-			} else if (action === "mark-reviewed") {
+			if (action === "mark-reviewed") {
 				await this.randomReunionController.markReviewed(memo.id);
 				new Notice(t("notice.markedReviewed"));
 				this.syncCardMenuState();
@@ -3792,7 +3779,7 @@ export class KnomoView extends ItemView {
 				const reference = await this.memoCommandService.createReferenceText(
 					await this.resolveCatalogMemo(memo),
 				);
-				this.startReferenceMemo(memo, reference.text, reference.memoId);
+				this.startReferenceMemo(memo, reference.text);
 				this.syncCardMenuState();
 				return;
 			} else if (action === "open-daily") {
@@ -3829,21 +3816,7 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "delete") {
-				const deleteMode = getMemoDeleteMode(memo);
-				const resolvedMemo = await this.resolveCatalogMemo(memo);
-				if (deleteMode === "recoverable") {
-					await this.memoCommandService.delete(resolvedMemo);
-				} else if (deleteMode === "prepare") {
-					const prepared = await this.memoCommandService.prepareRecoverableDelete(resolvedMemo);
-					if (prepared !== null) {
-						await this.memoCommandService.delete(prepared);
-					} else {
-						if (!await this.confirmPermanentDelete()) return;
-						await this.memoCommandService.removePermanently(resolvedMemo);
-					}
-				} else {
-					throw new Error("Memo delete is unavailable.");
-				}
+				await this.memoCommandService.delete(await this.resolveCatalogMemo(memo));
 				this.shuffleDayController.removeMemo(memo.id);
 				await this.reloadMemos(false).catch(() => false);
 				new Notice(t("notice.deleted"));
@@ -3867,7 +3840,6 @@ export class KnomoView extends ItemView {
 
 		const input = this.inputEl.value;
 		const preparedInput = prepareComposerSaveInput(input, this.editingMemo, {
-			sourceMemoId: this.quoteSourceMemoId,
 			referenceText: this.quoteReferenceText,
 			markdownText: this.quoteMarkdownText,
 		});
@@ -3879,7 +3851,6 @@ export class KnomoView extends ItemView {
 		const isMobileSave = this.currentLayout === "mobile";
 		const mobileScrollTop = isMobileSave ? this.mobileComposerController.getOpenScrollTop() ?? this.getCardFlowScrollTop() : null;
 		const submittedEditingMemo = this.editingMemo;
-		const submittedQuoteSourceMemoId = this.quoteSourceMemoId;
 		const submittedQuoteReferenceText = this.quoteReferenceText;
 		const submittedQuoteMarkdownText = this.quoteMarkdownText;
 		let composerCleared = false;
@@ -3887,7 +3858,6 @@ export class KnomoView extends ItemView {
 			if (composerCleared) return;
 			if (this.inputEl !== null && this.inputEl.value !== input) return;
 			if (this.editingMemo !== submittedEditingMemo
-				|| this.quoteSourceMemoId !== submittedQuoteSourceMemoId
 				|| this.quoteReferenceText !== submittedQuoteReferenceText
 				|| this.quoteMarkdownText !== submittedQuoteMarkdownText) return;
 			composerCleared = true;
@@ -3999,15 +3969,6 @@ export class KnomoView extends ItemView {
 		}
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
-	}
-
-	private confirmPermanentDelete(): Promise<boolean> {
-		return showKnomoConfirmModal(this.app, {
-			title: t("card.delete"),
-			message: t("confirm.deleteMemoPermanently"),
-			danger: true,
-			getReturnFocus: getDestructiveConfirmReturnFocus,
-		});
 	}
 
 	private async refreshCatalogLibraryIndexes(): Promise<void> {
@@ -4479,7 +4440,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private clearReference(): void {
-		this.quoteSourceMemoId = null;
 		this.quoteReferenceText = null;
 		this.quoteMarkdownText = null;
 		this.updateStatus("", false);
@@ -4501,14 +4461,12 @@ export class KnomoView extends ItemView {
 	private clearComposerContext(): void {
 		this.closeTimeBuoyPicker(false);
 		this.editingMemo = null;
-		this.quoteSourceMemoId = null;
 		this.quoteReferenceText = null;
 		this.quoteMarkdownText = null;
 	}
 
 	private startEditing(memo: MemoRecord): void {
 		this.editingMemo = memo;
-		this.quoteSourceMemoId = null;
 		this.quoteReferenceText = null;
 		this.quoteMarkdownText = null;
 		this.draftContent = memo.contentSnapshot;
@@ -4523,9 +4481,8 @@ export class KnomoView extends ItemView {
 		this.updateCancelEditButtonState();
 	}
 
-	private startReferenceMemo(memo: MemoRecord, referenceText: string, sourceMemoId: string | null = null): void {
+	private startReferenceMemo(memo: MemoRecord, referenceText: string): void {
 		this.editingMemo = null;
-		this.quoteSourceMemoId = sourceMemoId;
 		this.quoteReferenceText = referenceText;
 		this.quoteMarkdownText = formatMarkdownQuoteDraft(memo.contentSnapshot);
 		this.openComposer();
@@ -6120,12 +6077,12 @@ export class KnomoView extends ItemView {
 	private async loadNextTrashPage(): Promise<boolean> {
 		if (this.trashCursor === null) return false;
 		const page = await this.getCatalogReadService().listDeleted(CATALOG_PAGE_SIZE, this.trashCursor);
-		if (this.trashIdentityRevision !== null && page.identityRevision !== this.trashIdentityRevision) {
+		if (this.trashSnapshotRevision !== null && page.snapshotRevision !== this.trashSnapshotRevision) {
 			await this.trashMemoController.loadTrashMemos();
 			return false;
 		}
 		this.trashCursor = page.nextCursor;
-		this.trashIdentityRevision = page.identityRevision;
+		this.trashSnapshotRevision = page.snapshotRevision;
 		this.trashMemoController.appendTrashMemos(page.items.map(toTrashMemoView), TRASH_MEMO_WINDOW_LIMIT);
 		return true;
 	}

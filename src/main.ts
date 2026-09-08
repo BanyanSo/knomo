@@ -30,7 +30,6 @@ import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
 import { getCatalogDataRootPath } from "./utils/path";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
-import { LegacyMigrationAcknowledgementService } from "./services/LegacyMigrationAcknowledgementService";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MemoCommandService } from "./services/MemoCommandService";
@@ -81,8 +80,6 @@ export default class KnomoPlugin extends Plugin {
 		lowPriorityWorkQueue.start(this);
 		const dailyInventory = new DailyInventoryIndex();
 		const pluginDataStore = new PluginDataStore(this);
-		const legacyMigrationAcknowledgementService = new LegacyMigrationAcknowledgementService(pluginDataStore);
-		await legacyMigrationAcknowledgementService.initialize().catch(() => undefined);
 		this.settingsService = new SettingsService(this, pluginDataStore);
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
 		const settingsLoaded = await this.loadSettingsSafely();
@@ -104,17 +101,17 @@ export default class KnomoPlugin extends Plugin {
 		this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
 		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
 		await this.memoCatalogService.open();
-		const knomoSharedConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage());
-		await knomoSharedConfigService.initializeLocalConfig();
+		const knomoCurrentConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage());
+		await knomoCurrentConfigService.initializeLocalConfig();
 
 		const getEffectiveDailyConfig = () => {
 			const config = dailyNotesProvider.getConfig();
 			if (config === null) throw new Error("Obsidian Daily configuration is unknown.");
 			return config;
 		};
-		const getEffectiveWriteHeading = () => knomoSharedConfigService.getEffectiveConfig().daily.headings[0] ?? null;
+		const getEffectiveWriteHeading = () => knomoCurrentConfigService.getEffectiveConfig().daily.headings[0] ?? null;
 		const getEffectiveMonthlySettings = () => {
-			const monthly = knomoSharedConfigService.getEffectiveConfig().monthly;
+			const monthly = knomoCurrentConfigService.getEffectiveConfig().monthly;
 			return {
 				monthlyMemoFolder: monthly.folder,
 				monthlyMemoFileFormat: monthly.fileFormat,
@@ -134,7 +131,7 @@ export default class KnomoPlugin extends Plugin {
 		const startupBootstrapService = new KnomoStartupBootstrapService(this.app, {
 			getLocation: () => this.settingsService.getSettings(),
 			initializeDataRoot: (root) => knomoDataRootMigrationService.migrate(root),
-			sharedConfig: knomoSharedConfigService,
+			currentConfig: knomoCurrentConfigService,
 			cancellationSignal: lowPriorityWorkQueue.signal,
 		});
 		const getStartupSnapshot = () => startupBootstrapService.getSnapshot();
@@ -159,7 +156,7 @@ export default class KnomoPlugin extends Plugin {
 					if (this.catalogReadService === null) throw new Error("Catalog read service is not available.");
 					return this.catalogReadService.listMonthlyProjectionPeriods();
 				},
-				isProjectionAllowed: () => knomoSharedConfigService.isMonthlyProjectionAllowed(),
+				isProjectionAllowed: () => knomoCurrentConfigService.isMonthlyProjectionAllowed(),
 				workQueue: lowPriorityWorkQueue,
 				onStateChanged: () => {
 					const failureVisible = this.monthlyProjectionCoordinator?.getProjectionState() === "failed";
@@ -261,7 +258,7 @@ export default class KnomoPlugin extends Plugin {
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
-				getSharedConfigurationStatus: () => knomoSharedConfigService.getStatus(),
+				getSharedConfigurationStatus: () => knomoCurrentConfigService.getStatus(),
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
 				getStartupBootstrapSnapshot: getStartupSnapshot,
 				getTrashService,
@@ -292,7 +289,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 			getDataRoot: () => getCatalogDataRootPath(this.settingsService.getSettings().knomoDataRoot),
 			migrateSettings: async () => {
-				await knomoSharedConfigService.initialize();
+				await knomoCurrentConfigService.initialize();
 				await this.settingsService.persistLegacyConfiguration();
 			},
 			signal: lowPriorityWorkQueue.signal,
@@ -301,7 +298,7 @@ export default class KnomoPlugin extends Plugin {
 
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
-			knomoSharedConfigService.start(this, async () => {
+			knomoCurrentConfigService.start(this, async () => {
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.queueRefreshOpenViews();
@@ -330,8 +327,8 @@ export default class KnomoPlugin extends Plugin {
 				settingsRecovered = true;
 			} else if (startupBootstrapService.getSnapshot().status === "unavailable") {
 				await startupBootstrapService.initialize();
-			} else if (knomoSharedConfigService.getStatus() === "unavailable") {
-				await knomoSharedConfigService.reloadConfiguredRoot();
+			} else if (knomoCurrentConfigService.getStatus() === "unavailable") {
+				await knomoCurrentConfigService.reloadConfiguredRoot();
 			}
 			const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
 			await this.memoCatalogService?.open();
@@ -392,9 +389,8 @@ export default class KnomoPlugin extends Plugin {
 			this.catalogReadService,
 			this.monthlyProjectionCoordinator,
 			knomoDataRootMigrationService,
-			knomoSharedConfigService,
+			knomoCurrentConfigService,
 			this.legacyIndexMigrationService,
-			legacyMigrationAcknowledgementService,
 			startupBootstrapService,
 			retryRuntimeState,
 		);
@@ -404,7 +400,7 @@ export default class KnomoPlugin extends Plugin {
 			initializeCatalog: () => this.catalogIndexCoordinator!.initialize(),
 			primeCatalog: async () => { await this.catalogReadService?.prime(); },
 			initializeConfiguration: async () => {
-				await knomoSharedConfigService.initialize();
+				await knomoCurrentConfigService.initialize();
 				if (!lowPriorityWorkQueue.signal.aborted) await this.initializeMonthlyExcludeDefaultSafely();
 			},
 			initializeMonthly: async () => { await this.monthlyProjectionCoordinator?.initialize(); },

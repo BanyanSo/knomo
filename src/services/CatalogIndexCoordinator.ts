@@ -7,7 +7,6 @@ import type {
 	CatalogFileRecord,
 	CatalogInventoryEntry,
 	CatalogRefreshResult,
-	MemoObservation,
 } from "../types/catalog";
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
@@ -45,19 +44,6 @@ interface CatalogPathRevision {
 	size: number;
 }
 
-export interface CatalogRevisionTransitionSide {
-	sourceRevision: string;
-	observations: readonly MemoObservation[];
-}
-
-export interface CatalogRevisionTransition {
-	sourcePath: string;
-	before: CatalogRevisionTransitionSide | null;
-	after: CatalogRevisionTransitionSide;
-	insertedObservation: MemoObservation | null;
-	allowIdentityAdoption: boolean;
-}
-
 export interface CatalogIndexCoordinatorOptions {
 	enabled?: boolean;
 	fullAuditIntervalMs?: number;
@@ -68,7 +54,6 @@ export interface CatalogIndexCoordinatorOptions {
 	now?: () => number;
 	onProgress?: (coverage: CatalogCoverage) => void | Promise<void>;
 	onCatalogSettled?: () => void | Promise<void>;
-	onRevisionTransition?: (transition: CatalogRevisionTransition) => void | Promise<void>;
 	onDailyPeriodsChanged?: (periods: readonly string[]) => void | Promise<void>;
 	preserveMetaKeysOnRebuild?: readonly string[];
 	isConfigurationComplete?: () => boolean;
@@ -87,7 +72,6 @@ export class CatalogIndexCoordinator {
 	private readonly now: () => number;
 	private readonly onProgress: ((coverage: CatalogCoverage) => void | Promise<void>) | null;
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
-	private readonly onRevisionTransition: ((transition: CatalogRevisionTransition) => void | Promise<void>) | null;
 	private readonly onDailyPeriodsChanged: ((periods: readonly string[]) => void | Promise<void>) | null;
 	private readonly preserveMetaKeysOnRebuild: readonly string[];
 	private readonly isConfigurationComplete: () => boolean;
@@ -103,7 +87,6 @@ export class CatalogIndexCoordinator {
 	private readonly pathResolvers = new Map<string, Array<() => void>>();
 	private readonly pathGenerations = new Map<string, number>();
 	private readonly pathSerialTails = new Map<string, Promise<void>>();
-	private readonly trustedInputContentByPath = new Map<string, string>();
 	private queue: string[] = [];
 	private coverageDates: string[] = [];
 	private coveredFileCount = 0;
@@ -147,7 +130,6 @@ export class CatalogIndexCoordinator {
 		this.now = options.now ?? Date.now;
 		this.onProgress = options.onProgress ?? null;
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
-		this.onRevisionTransition = options.onRevisionTransition ?? null;
 		this.onDailyPeriodsChanged = options.onDailyPeriodsChanged ?? null;
 		this.preserveMetaKeysOnRebuild = [...new Set(options.preserveMetaKeysOnRebuild ?? [])];
 		this.isConfigurationComplete = options.isConfigurationComplete ?? (() => true);
@@ -238,7 +220,6 @@ export class CatalogIndexCoordinator {
 				auditedAt: this.now(),
 			});
 			if (this.isStopped()) return;
-			this.clearLocalEditorContent(sourcePath, input.content);
 			this.upsertInventoryEntry(inventory);
 			this.setPathCovered(sourcePath, true);
 			this.failedPaths.delete(sourcePath);
@@ -316,7 +297,6 @@ export class CatalogIndexCoordinator {
 		if (!(file instanceof TFile) || file.extension !== "md") return;
 		const entry = this.toInventoryEntry(file);
 		if (entry === null) return;
-		this.trustedInputContentByPath.set(entry.sourcePath, markdownView.editor.getValue());
 	}
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {
@@ -635,8 +615,6 @@ export class CatalogIndexCoordinator {
 			const raw = await this.app.vault.readBinary(abstractFile);
 			if (this.isStopped()) return;
 			const bytes = new Uint8Array(raw);
-			const content = new TextDecoder().decode(bytes);
-			const allowIdentityAdoption = this.trustedInputContentByPath.get(sourcePath) === content;
 			const parsed = await this.parser.parse({
 				sourcePath,
 				logicalDate: inventory.logicalDate,
@@ -662,14 +640,6 @@ export class CatalogIndexCoordinator {
 					|| stored.settingsFingerprint !== this.settingsFingerprint
 					|| stored.mtime !== revision.mtime
 					|| stored.size !== revision.size) {
-					const transition = await this.prepareRevisionTransition(
-						sourcePath,
-						parsed.sourceRevision,
-						parsed.observations,
-						() => this.isPathRevisionCurrent(sourcePath, revision),
-						null,
-						allowIdentityAdoption,
-					);
 					if (this.isStopped()) return;
 					if (!this.isPathRevisionCurrent(sourcePath, revision)) {
 						this.requeueCurrentPath(sourcePath);
@@ -688,13 +658,10 @@ export class CatalogIndexCoordinator {
 						settingsFingerprint: this.settingsFingerprint,
 						auditedAt: this.now(),
 					});
-					// 旧身份协调不占用正文/Catalog 的路径串行队列。
-					void this.notifyRevisionTransition(transition);
 					if (!this.suppressScannedPeriodChanges) {
 						this.notifyDailyPeriodsChanged([inventory.logicalDate.slice(0, 7)]);
 					}
 				}
-				this.clearLocalEditorContent(sourcePath, content);
 				this.setPathCovered(sourcePath, true);
 				this.failedPaths.delete(sourcePath);
 			});
@@ -702,42 +669,6 @@ export class CatalogIndexCoordinator {
 			if (this.isStopped()) return;
 			this.setPathCovered(sourcePath, false);
 			this.failedPaths.set(sourcePath, { sourcePath, message: getErrorMessage(error) });
-		}
-	}
-
-	private async prepareRevisionTransition(
-		sourcePath: string,
-		sourceRevision: string,
-		observations: readonly MemoObservation[],
-		isCurrent: () => boolean = () => true,
-		insertedObservation: MemoObservation | null = null,
-		allowIdentityAdoption = false,
-	): Promise<CatalogRevisionTransition | null> {
-		if (this.onRevisionTransition === null) return null;
-		try {
-			const before = await this.catalogService.getFileRevisionBatch(sourcePath);
-			if (this.isStopped() || !isCurrent() || before === null || before.file.sourceRevision === sourceRevision) return null;
-			return {
-				sourcePath,
-				before: {
-					sourceRevision: before.file.sourceRevision,
-					observations: before.observations,
-				},
-				after: { sourceRevision, observations },
-				insertedObservation,
-				allowIdentityAdoption: insertedObservation === null && allowIdentityAdoption,
-			};
-		} catch {
-			return null;
-		}
-	}
-
-	private async notifyRevisionTransition(transition: CatalogRevisionTransition | null): Promise<void> {
-		if (transition === null || this.onRevisionTransition === null) return;
-		try {
-			await this.onRevisionTransition(transition);
-		} catch {
-			// 身份协调属于 Daily 提交后的 follow-up，失败不能阻止 Catalog 采用真实正文。
 		}
 	}
 
@@ -1143,17 +1074,10 @@ export class CatalogIndexCoordinator {
 		for (const path of this.queue) this.resolvePath(path);
 		this.queue = [];
 		this.pendingDeletedPaths.clear();
-		this.trustedInputContentByPath.clear();
 		for (const path of this.pathResolvers.keys()) this.resolvePath(path);
 		this.closeWhenIdle = this.opened;
 		this.closeStoreWhenSafe();
 		this.resolveIdleIfNeeded();
-	}
-
-	private clearLocalEditorContent(sourcePath: string, content: string): void {
-		if (this.trustedInputContentByPath.get(sourcePath) === content) {
-			this.trustedInputContentByPath.delete(sourcePath);
-		}
 	}
 
 	private hasCheckpointWork(): boolean {

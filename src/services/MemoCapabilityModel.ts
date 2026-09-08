@@ -1,11 +1,10 @@
 import type {
 	CatalogCapabilities,
 	CatalogCoverage,
-	IdentityCapabilityState,
 	ResolvedMemoCapabilities,
 } from "../types/catalog";
 
-export function createResolvedMemoCapabilities(identityState: IdentityCapabilityState): ResolvedMemoCapabilities {
+export function createResolvedMemoCapabilities(): ResolvedMemoCapabilities {
 	return {
 		markdown: {
 			view: true,
@@ -20,42 +19,7 @@ export function createResolvedMemoCapabilities(identityState: IdentityCapability
 			openImages: true,
 			explicitBlockReference: true,
 		},
-		identity: {
-			relation: identityState,
-			review: identityState,
-			recoverableDelete: identityState,
-			restore: identityState,
-			merge: identityState,
-			repair: identityState,
-			crossDeviceIdentity: identityState,
-		},
-	};
-}
 
-export function createIdentityLedgerMemoCapabilities(): ResolvedMemoCapabilities {
-	const capabilities = createResolvedMemoCapabilities("syncing");
-	return {
-		markdown: capabilities.markdown,
-		identity: {
-			...capabilities.identity,
-			relation: "ready",
-			review: "ready",
-			recoverableDelete: "ready",
-			restore: "ready",
-			repair: "ready",
-			crossDeviceIdentity: "ready",
-		},
-	};
-}
-
-export function createIdentityLedgerConflictCapabilities(): ResolvedMemoCapabilities {
-	const capabilities = createResolvedMemoCapabilities("conflicted");
-	return {
-		markdown: capabilities.markdown,
-		identity: {
-			...capabilities.identity,
-			repair: "ready",
-		},
 	};
 }
 

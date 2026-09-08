@@ -26,10 +26,10 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 			memos: await (load?.promise ?? []),
 			nextCursor: null,
 			catalogRevision: 1,
-			identityRevision: "identity-1",
+			snapshotRevision: "identity-1",
 			coverage: { kind: "complete", coveredFromDate: "2026-08-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 },
 			readState: "ready",
-			status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
+			status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
 		};
 	};
 	view.getCardFlowStateKey = () => "card-flow";
@@ -86,7 +86,7 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 			memos: [makeMemo("known-subset", "2026-08-24T10:00:00")],
 			nextCursor: null,
 			catalogRevision: 1,
-			identityRevision: "identity-1",
+			snapshotRevision: "identity-1",
 			coverage: {
 				kind: "partial",
 				coveredFromDate: "2026-08-20",
@@ -98,7 +98,6 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 			status: {
 				content: "scanning",
 				catalog: "partial",
-				identity: "ready",
 				projection: "ready",
 				migration: "none",
 			},
@@ -295,10 +294,10 @@ test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快�
 		memos: await pending.promise,
 		nextCursor: null,
 		catalogRevision: 2,
-		identityRevision: "identity-2",
+		snapshotRevision: "identity-2",
 		coverage: completeCoverage(),
 		readState: "ready",
-		status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
+		status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
 	});
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
@@ -407,7 +406,7 @@ test("桌面精确计数只提交当前查询与 Catalog、Identity revision", a
 		queryRun: 1,
 		sourceGeneration: 0,
 		catalogRevision: 7,
-		identityRevision: "identity-7",
+		snapshotRevision: "identity-7",
 	});
 	current.resolve(makeCatalogCount(90, 7, "identity-7"));
 	await committed;
@@ -420,7 +419,7 @@ test("桌面精确计数只提交当前查询与 Catalog、Identity revision", a
 		queryRun: 1,
 		sourceGeneration: 0,
 		catalogRevision: 7,
-		identityRevision: "identity-7",
+		snapshotRevision: "identity-7",
 	});
 	view.catalogDesktopQueryRun = 2;
 	stale.resolve(makeCatalogCount(120, 7, "identity-7"));
@@ -437,7 +436,7 @@ test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
 	view.catalogDesktopTotalCount = 90;
 	view.cardFlowError = null;
 	view.catalogCoverage = completeCoverage();
-	view.catalogStatus = { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" };
+	view.catalogStatus = { content: "ready", catalog: "complete", projection: "ready", migration: "none" };
 	view.viewStateController = {
 		activeNav: "all",
 		activeTag: "Project",
@@ -504,20 +503,20 @@ test("统计缓存只随 Catalog 和完整覆盖版本变化而失效，不跟�
 	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8 });
 	assert.equal(invalidationCount, 2);
 	assert.deepEqual(updatingFlags, [false, false]);
-	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8, identityRevision: "identity-2" });
+	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8, snapshotRevision: "identity-2" });
 	assert.equal(invalidationCount, 2);
 	assert.deepEqual(updatingFlags, [false, false]);
 	view.applyCatalogMemoLoad({
 		...load,
 		catalogRevision: 8,
-		identityRevision: "identity-2",
+		snapshotRevision: "identity-2",
 		coverage: { ...completeCoverage(), kind: "partial", pendingFileCount: 1 },
 	});
 	assert.equal(invalidationCount, 3);
 	assert.equal(currentSource, "catalog:8:coverage:incomplete");
 	assert.deepEqual(updatingFlags, [false, false, true]);
 
-	view.applyCatalogMemoLoad({ ...load, catalogRevision: 9, identityRevision: "identity-2" });
+	view.applyCatalogMemoLoad({ ...load, catalogRevision: 9, snapshotRevision: "identity-2" });
 	assert.equal(invalidationCount, 4);
 	assert.equal(currentSource, "catalog:9:coverage:complete");
 	assert.deepEqual(updatingFlags, [false, false, true, true]);
@@ -767,7 +766,7 @@ interface QueryView {
 		queryRun: number;
 		sourceGeneration: number;
 		catalogRevision: number;
-		identityRevision: string;
+		snapshotRevision: string;
 	}) => Promise<void>;
 	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
 	updateCatalogProgress: (coverage: TestCoverage) => void;
@@ -834,7 +833,6 @@ interface PresentationView {
 	catalogStatus: {
 		content: "ready";
 		catalog: "complete";
-		identity: "ready";
 		projection: "ready";
 		migration: "none";
 	};
@@ -879,13 +877,12 @@ type TestCatalogMemoLoad = {
 	memos: QueryMemo[];
 	nextCursor: null;
 	catalogRevision: number;
-	identityRevision: string;
+	snapshotRevision: string;
 	coverage: TestCoverage;
 	readState: "ready" | "history_building";
 	status: {
 		content: "ready" | "scanning";
 		catalog: "complete" | "partial";
-		identity: "ready";
 		projection: "ready";
 		migration: "none";
 	};
@@ -895,7 +892,7 @@ type TestCatalogMemoCount = {
 	count: number | null;
 	complete: boolean;
 	catalogRevision: number;
-	identityRevision: string;
+	snapshotRevision: string;
 	coverage: TestCoverage;
 };
 
@@ -918,8 +915,6 @@ function makeMemo(id: string, createdAt: string): MemoViewItem {
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
@@ -941,30 +936,30 @@ function completeCoverage(): TestCoverage {
 
 function makeCatalogLoad(
 	catalogRevision: number,
-	identityRevision: string,
+	snapshotRevision: string,
 	coverage: TestCoverage,
 ): TestCatalogMemoLoad {
 	return {
 		memos: [],
 		nextCursor: null,
 		catalogRevision,
-		identityRevision,
+		snapshotRevision,
 		coverage,
 		readState: "ready",
-		status: { content: "ready", catalog: "complete", identity: "ready", projection: "ready", migration: "none" },
+		status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
 	};
 }
 
 function makeCatalogCount(
 	count: number,
 	catalogRevision: number,
-	identityRevision: string,
+	snapshotRevision: string,
 ): TestCatalogMemoCount {
 	return {
 		count,
 		complete: true,
 		catalogRevision,
-		identityRevision,
+		snapshotRevision,
 		coverage: completeCoverage(),
 	};
 }

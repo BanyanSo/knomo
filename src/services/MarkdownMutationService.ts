@@ -8,13 +8,11 @@ import type {
 	MarkdownBlockReferenceResult,
 	MarkdownCopyInput,
 	MarkdownCreateInput,
-	MarkdownCapturedObservation,
 	MarkdownEditInput,
 	MarkdownMoveInput,
 	MarkdownMutationResult,
 	MarkdownMutationService as MarkdownMutationContract,
 	MarkdownRemoveInput,
-	MarkdownRestoreInput,
 	MarkdownTaskInput,
 } from "../types/memoOperations";
 import { formatDatePart, formatTimePart } from "../utils/date";
@@ -247,34 +245,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		});
 	}
 
-	async captureObservation(input: MarkdownRemoveInput): Promise<MarkdownCapturedObservation> {
-		const file = this.getSourceFile(input.observation.sourcePath);
-		const logicalDate = await this.options.getLogicalDateForPath(file.path);
-		let observation: MemoObservation | null = null;
-		let rawBlock = "";
-		const prepared = await this.dailyGateway.prepare({
-			file,
-			logicalDate,
-			expectedRevision: input.observation.sourceRevision,
-			update: (content, parsed) => {
-				observation = findObservation(parsed, input.observation, file.path);
-				rawBlock = getRawBlock(content, observation);
-				return replaceObservation(content, observation, "", true);
-			},
-		});
-		return {
-			observation: requireObservation(observation),
-			rawBlock,
-			deletedSourceRevision: prepared.after.sourceRevision,
-		};
-	}
-
-	async restore(input: MarkdownRestoreInput): Promise<MarkdownMutationResult> {
-		if (input.rawBlock.length === 0) throw new Error("Deleted memo payload is empty.");
-		const target = await this.getTargetFile(input.targetLogicalDate);
-		return this.appendRawBlock(target.file, input.targetLogicalDate, input.rawBlock, target.created, null, input.section);
-	}
-
 	async createBlockReference(input: MarkdownBlockReferenceInput): Promise<MarkdownBlockReferenceResult> {
 		const file = this.getSourceFile(input.observation.sourcePath);
 		const logicalDate = await this.options.getLogicalDateForPath(file.path);
@@ -438,7 +408,7 @@ function committedResult(
 	catalogUpdatePending: boolean,
 ): MarkdownMutationResult {
 	return {
-		status: "committed_identity_pending",
+		status: "committed",
 		observation,
 		sourcePaths: [...new Set(sourcePaths.map(normalizePath))],
 		catalogUpdatePending,

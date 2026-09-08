@@ -26,6 +26,7 @@ export interface EscapeState {
 }
 
 interface KnomoUserActionControllerOptions {
+	runMemoAction: (action: MemoAction, memoId: string | null) => Promise<void>;
 	isMobileLayout: () => boolean;
 	isMobileSearchPageOpen: () => boolean;
 	isComposerOpen: () => boolean;
@@ -45,7 +46,6 @@ interface KnomoUserActionControllerOptions {
 	setSearchDateFilter: (filter: SearchDateFilter, sourceEl: HTMLElement | null) => void;
 	setMobileSearchDateFilter: (filter: SearchDateFilter) => void;
 	runTrashAction: (action: TrashAction, memoId: string | null) => Promise<void>;
-	runMemoAction: (action: MemoAction, memoId: string | null, candidateMemoId: string | null) => Promise<void>;
 	shouldIgnoreHandledMobileToolClick: (element: HTMLElement, action: string | null) => boolean;
 	openMemoCardDailyNote: (memoId: string, randomReunion: boolean) => Promise<void>;
 	closeCardMenu: () => void;
@@ -195,7 +195,7 @@ export class KnomoUserActionController {
 		if (route.type === "memo-action") {
 			const dispatch = getMemoActionDispatch(route.action);
 			if (dispatch.type === "memo-action") {
-				await this.options.runMemoAction(dispatch.action, route.memoId, route.candidateMemoId);
+				await this.options.runMemoAction(dispatch.action, route.memoId);
 			}
 			return;
 		}

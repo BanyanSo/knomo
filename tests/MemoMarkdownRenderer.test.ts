@@ -379,8 +379,6 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,

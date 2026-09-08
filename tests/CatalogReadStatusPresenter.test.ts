@@ -17,7 +17,6 @@ test("Observation-first 全部就绪时不添加状态提示", () => {
 		status: {
 			content: "ready",
 			catalog: "complete",
-			identity: "ready",
 			projection: "ready",
 			migration: "none",
 		},
@@ -30,7 +29,6 @@ test("fresh empty Vault 的 identity absent 不显示初始化 gate", () => {
 		status: {
 			content: "ready",
 			catalog: "complete",
-			identity: "absent",
 			projection: "ready",
 			migration: "none",
 		},
@@ -51,7 +49,6 @@ test("本地扫描完成但共享配置仍在初始化时不把工程状态放�
 		status: {
 			content: "ready",
 			catalog: "partial",
-			identity: "absent",
 			projection: "ready",
 			migration: "none",
 		},
@@ -69,7 +66,6 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 		status: {
 			content: "scanning",
 			catalog: "partial",
-			identity: "ready",
 			projection: "stale",
 			migration: "attention",
 		},
@@ -94,51 +90,11 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 	assert.doesNotMatch(text, /Creation, adoption, and monthly writes are paused/u);
 });
 
-test("局部 observation 冲突无顶部提示，只有可重试 Ledger 故障进入设置", () => {
-	const status = {
-		content: "ready" as const,
-		catalog: "complete" as const,
-		identity: "ready" as const,
-		projection: "ready" as const,
-		migration: "none" as const,
-	};
-	const local = getCatalogReadStatusHeaders({
-		status,
-		coverage: completeCoverage,
-	});
-	const ledger = getCatalogReadStatusHeaders({
-		status: { ...status, identity: "conflicted", identityAttention: "settings_retry" },
-		coverage: completeCoverage,
-	});
-
-	assert.deepEqual(local, []);
-	assert.equal(
-		ledger[0]?.type === "summary" ? ledger[0].action?.action : undefined,
-		"refresh-catalog-sync-state",
-	);
-});
-
-test("Identity 输入缺失的可重试提示不冒充身份冲突", () => {
-	const headers = getCatalogReadStatusHeaders({
-		status: { content: "ready", catalog: "partial", identity: "syncing", identityAttention: "settings_retry", projection: "ready", migration: "none" },
-		coverage: completeCoverage,
-	});
-	assert.equal(headers.length, 2);
-	assert.equal(headers[1]?.type === "summary" ? headers[1].action?.action : null, "rebuild-knomo-basic-data");
-	const header = headers[0];
-	assert.equal(header?.type, "summary");
-	if (header?.type !== "summary") return;
-	assert.match(header.text, /cannot be fully read/u);
-	assert.doesNotMatch(header.text, /conflict/u);
-	assert.equal(header.action?.action, "refresh-catalog-sync-state");
-});
-
 test("正常中间态始终不显示，但不隐藏可操作故障", () => {
 	assert.deepEqual(getCatalogReadStatusHeaders({
 		status: {
 			content: "scanning",
 			catalog: "partial",
-			identity: "syncing",
 			projection: "stale",
 			migration: "none",
 		},
@@ -155,14 +111,12 @@ test("正常中间态始终不显示，但不隐藏可操作故障", () => {
 		status: {
 			content: "unavailable",
 			catalog: "degraded",
-			identity: "conflicted",
-			identityAttention: "settings_retry",
 			projection: "failed",
 			migration: "attention",
 		},
 		coverage: completeCoverage,
 	});
-	assert.equal(headers.length, 4);
+	assert.equal(headers.length, 3);
 });
 
 test("旧数据暂时不可读取时显示可重试提示，不冒充数据根冲突", () => {
@@ -170,7 +124,6 @@ test("旧数据暂时不可读取时显示可重试提示，不冒充数据根�
 		status: {
 			content: "ready",
 			catalog: "complete",
-			identity: "ready",
 			projection: "ready",
 			migration: "unavailable",
 		},
@@ -188,7 +141,6 @@ test("降级 Catalog 扫描时只显示可操作的存储故障", () => {
 		status: {
 			content: "scanning",
 			catalog: "degraded",
-			identity: "ready",
 			projection: "ready",
 			migration: "none",
 		},
@@ -205,7 +157,6 @@ test("跨设备设置冲突或不可读取时在前台给出对应操作", () =>
 	const base = {
 		content: "ready" as const,
 		catalog: "complete" as const,
-		identity: "ready" as const,
 		projection: "ready" as const,
 		migration: "none" as const,
 	};
@@ -231,7 +182,6 @@ test("原有设置无法读取时只显示设置恢复入口", () => {
 		status: {
 			content: "unavailable",
 			catalog: "degraded",
-			identity: "conflicted",
 			settings: "unavailable",
 			projection: "failed",
 			migration: "unavailable",

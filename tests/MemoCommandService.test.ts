@@ -4,13 +4,6 @@ import type { App } from "obsidian";
 
 import type { MemoObservation } from "../src/types/catalog";
 import type { TrashMemoItem } from "../src/types/catalogView";
-import type {
-	IdentityLedgerBinding,
-	IdentityLedgerCreateInput,
-	IdentityLedgerCreatePlan,
-	IdentityLedgerDeleteRecord,
-	IdentityLedgerMutationService,
-} from "../src/types/identityLedger";
 import type { MarkdownMutationService } from "../src/types/memoOperations";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
@@ -37,19 +30,17 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	const command = new MemoCommandService({} as App, catalog, { ...makeCommandOptions(), getTrashService: () => trash }, {} as MarkdownMutationService);
 	const read = command.getReadService();
 	const item = (await read.query({ limit: 10 })).items[0]!;
-	assert.strictEqual(await command.prepareRecoverableDelete(item), item);
 	await command.delete(item);
 	assert.strictEqual(calls[0], item.observationHandle);
 	const deleted = await read.listDeleted(10);
 	assert.deepEqual(deleted.items.map((memo) => memo.snapshotId), ["s1", "s2"]);
 	assert.equal(deleted.items[0]!.createdAt, "2026-08-22T12:34");
-	assert.deepEqual(await read.getDeletedSummary(), { count: 2, ids: [] });
+	assert.deepEqual(await read.getDeletedSummary(), { count: 2 });
 	await assert.rejects(() => command.restore(deleted.items[0]!), /正文已恢复/u);
 	pending = false;
 	assert.equal((await command.restore(deleted.items[0]!)).status, "saved");
 	await command.purge(deleted.items[1]!);
 	assert.deepEqual(calls.slice(1), ["s1", "s1", "s2"]);
-	assert.equal(read.getRuntimeAttentionSnapshot().identity, "absent");
 });
 
 test("普通命令不访问 Identity，并将最初 observation handle 原样交给写入网关", async () => {
@@ -72,14 +63,12 @@ test("普通命令不访问 Identity，并将最初 observation handle 原样交
 	const mutations = { create: async () => mutationResult(observation), edit: mutate, copy: mutate, move: mutate,
 		toggleTask: mutate, createBlockReference: async (input: { observation: unknown }) => ({ ...await mutate(input), blockId: "block" }),
 	} as unknown as MarkdownMutationService;
-	const identity = new Proxy({} as IdentityLedgerMutationService, { get: () => { throw new Error("Identity accessed"); } });
-	const service = new MemoCommandService(app, catalog, { ...makeCommandOptions(), now: () => new Date("2026-09-08T12:00:00Z") }, mutations, identity);
+	const service = new MemoCommandService(app, catalog, { ...makeCommandOptions(), now: () => new Date("2026-09-08T12:00:00Z") }, mutations);
 	const item = (await service.getReadService().query({ limit: 10 })).items[0]!;
 	assert.equal((await service.create("created")).followUpPending, false);
 	for (const result of [await service.edit(item, "edited"), await service.copy(item),
 		await service.move(item, "2026-08-23"), await service.toggleTask(item, 0, true)]) {
 		assert.equal(result.followUpPending, false);
-		assert.equal(result.memoId, null);
 	}
 	assert.equal((await service.createReferenceText(item)).text, "[[Daily/2026-08-22#^block|2026-08-22 12:34]]");
 	assert.equal(handles.length, 5);
@@ -98,32 +87,6 @@ test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async ()
 	const catalog = new MemoCatalogService(store);
 	await catalog.open();
 	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created memo");
-	const binding = makeBinding(observation, "2026082212345601", "identity-1");
-	let claimed = false;
-	let createIntentTime = "";
-	const plan = makeCreatePlan(binding.memoId);
-	const identityLedger = {
-		getRevision: () => claimed ? "identity-1" : "identity-0",
-		getStatus: () => "ready",
-		getSnapshot: () => ({ revision: claimed ? "identity-1" : "identity-0", eventCount: claimed ? 2 : 1, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
-		resolveObservation: () => claimed ? binding : null,
-		resolveObservationState: () => claimed
-			? { kind: "identified", binding } as const
-			: { kind: "unbound" } as const,
-		getSourceMemoId: () => null,
-		getCreatedAt: () => plan.intent.evidence.logicalDate + "T" + plan.intent.evidence.time,
-		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		beginCreate: async (input: IdentityLedgerCreateInput) => {
-			events.push("intent");
-			createIntentTime = input.time;
-			return plan;
-		},
-		finishCreate: async () => {
-			events.push("claim");
-			claimed = true;
-			return binding;
-		},
-	} as unknown as IdentityLedgerMutationService;
 	const markdownMutations = {
 		create: async () => {
 			events.push("daily");
@@ -136,19 +99,15 @@ test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async ()
 		catalog,
 		makeCommandOptions(),
 		markdownMutations,
-		identityLedger,
 	);
 
 	const result = await service.create(observation.content);
 
 	assert.deepEqual(events, ["daily"]);
-	assert.equal(result.memoId, null);
 	assert.equal(result.followUpPending, false);
 	assert.equal(result.localRefreshPending, false);
-	assert.equal(createIntentTime, "");
 
 	events.length = 0;
-	claimed = false;
 	const failingMarkdown = {
 		create: async () => {
 			events.push("daily");
@@ -160,51 +119,10 @@ test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async ()
 		catalog,
 		makeCommandOptions(),
 		failingMarkdown,
-		identityLedger,
 	);
 
 	await assert.rejects(() => failingService.create("will fail"), /Daily write failed/u);
 	assert.deepEqual(events, ["daily"]);
-});
-
-test("Identity 不可用时 create 仍提交 Daily，不产生 identity pending", async () => {
-	await ensureObsidianStub();
-	const { MemoCommandService } = await import("../src/services/MemoCommandService");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const events: string[] = [];
-	const store = new InMemoryMemoCatalogStore();
-	const catalog = new MemoCatalogService(store);
-	await catalog.open();
-	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created during migration");
-	const identityLedger = {
-		beginCreate: async () => {
-			events.push("intent");
-			throw new Error("Legacy import is using the Identity writer.");
-		},
-		finishCreate: async () => {
-			assert.fail("没有 durable intent 时不应写 claim");
-		},
-	} as unknown as IdentityLedgerMutationService;
-	const markdownMutations = {
-		create: async () => {
-			events.push("daily");
-			return mutationResult(observation);
-		},
-	} as unknown as MarkdownMutationService;
-	const service = new MemoCommandService(
-		{} as App,
-		catalog,
-		makeCommandOptions(),
-		markdownMutations,
-		identityLedger,
-	);
-
-	const result = await service.create(observation.content);
-
-	assert.deepEqual(events, ["daily"]);
-	assert.equal(result.memoId, null);
-	assert.equal(result.followUpPending, false);
 });
 
 test("阶段化 create 在 Daily 提交后先完成 committed，只等待 Catalog", async () => {
@@ -218,25 +136,6 @@ test("阶段化 create 在 Daily 提交后先完成 committed，只等待 Catalo
 	const catalog = new MemoCatalogService(store);
 	await catalog.open();
 	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created memo");
-	const binding = makeBinding(observation, "2026082212345601", "identity-1");
-	const identityLedger = {
-		getRevision: () => "identity-1",
-		getStatus: () => "ready",
-		getSnapshot: () => ({ revision: "identity-1", eventCount: 2, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
-		resolveObservation: () => binding,
-		resolveObservationState: () => ({ kind: "identified", binding }) as const,
-		getSourceMemoId: () => null,
-		getCreatedAt: () => "2026-08-22T12:34:56",
-		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		beginCreate: async () => {
-			events.push("intent");
-			return makeCreatePlan(binding.memoId);
-		},
-		finishCreate: async () => {
-			events.push("claim");
-			return binding;
-		},
-	} as unknown as IdentityLedgerMutationService;
 	const markdownMutations = {
 		create: async (input: { onDailyCommitted?: () => void }) => {
 			events.push("daily");
@@ -251,7 +150,6 @@ test("阶段化 create 在 Daily 提交后先完成 committed，只等待 Catalo
 		catalog,
 		makeCommandOptions(),
 		markdownMutations,
-		identityLedger,
 	);
 
 	const operation = service.startCreate(observation.content);
@@ -264,295 +162,6 @@ test("阶段化 create 在 Daily 提交后先完成 committed，只等待 Catalo
 	catalogGate.resolve(undefined);
 	await operation.settled;
 	assert.deepEqual(events, ["daily"]);
-});
-
-test("手写 memo 删除前先确定性补身份，再进入可恢复删除", async () => {
-	await ensureObsidianStub();
-	const { MemoCommandService } = await import("../src/services/MemoCommandService");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const events: string[] = [];
-	const store = new InMemoryMemoCatalogStore();
-	const catalog = new MemoCatalogService(store);
-	await catalog.open();
-	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "handwritten memo");
-	await seedCatalog(catalog, store, observation);
-	const binding = makeBinding(observation, "2026082212345601", "identity-1");
-	let adopted = false;
-	const identityLedger = {
-		getRevision: () => adopted ? "identity-1" : "identity-absent",
-		getStatus: () => adopted ? "ready" : "absent",
-		getSnapshot: () => ({ revision: adopted ? "identity-1" : "identity-absent", eventCount: adopted ? 1 : 0, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
-		resolveObservation: () => adopted ? binding : null,
-		resolveObservationState: () => adopted
-			? { kind: "identified", binding } as const
-			: { kind: "unbound" } as const,
-		getSourceMemoId: () => null,
-		getCreatedAt: () => null,
-		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		adoptObservation: async () => {
-			events.push("adopt");
-			adopted = true;
-			return binding;
-		},
-		recordDeletePayload: async (_binding: IdentityLedgerBinding, evidence: IdentityLedgerDeleteRecord["evidence"]) => {
-			events.push("payload");
-			return {
-				memoId: binding.memoId,
-				deleteEventId: "e_22222222222222222222222222222222",
-				deleteCommitEventId: null,
-				baseBindingId: binding.bindingId,
-				evidence,
-			};
-		},
-		recordDeleteCommit: async (record: IdentityLedgerDeleteRecord) => {
-			events.push("commit");
-			return { ...record, deleteCommitEventId: "e_33333333333333333333333333333333" };
-		},
-	} as unknown as IdentityLedgerMutationService;
-	const markdownMutations = {
-		captureObservation: async () => {
-			events.push("capture");
-			return {
-				observation,
-				rawBlock: "- 12:34 handwritten memo",
-				deletedSourceRevision: observation.sourceRevision,
-			};
-		},
-		remove: async () => {
-			events.push("daily-remove");
-			await catalog.deleteFile(observation.sourcePath);
-			return mutationResult(null);
-		},
-	} as unknown as MarkdownMutationService;
-	const service = new MemoCommandService(
-		{} as App,
-		catalog,
-		makeCommandOptions(),
-		markdownMutations,
-		identityLedger,
-	);
-	const source = (await service.getReadService().query({ limit: 20 })).items[0];
-	assert.notEqual(source, undefined);
-	if (source === undefined) throw new Error("Catalog memo fixture is missing.");
-
-	const prepared = await service.prepareRecoverableDelete(source);
-	assert.notEqual(prepared, null);
-	if (prepared === null) throw new Error("Recoverable delete preparation unexpectedly failed.");
-	assert.equal(prepared.memoId, binding.memoId);
-	assert.equal(prepared.observationHandle, source.observationHandle);
-	assert.equal(prepared.capabilities.identity.recoverableDelete, "ready");
-	await service.delete(prepared);
-
-	assert.deepEqual(events, ["adopt", "capture", "payload", "daily-remove", "commit"]);
-});
-
-test("删除前补身份失败仅在仍为 unbound 时允许永久删除兜底，冲突保持 fail-closed", async () => {
-	await ensureObsidianStub();
-	const { MemoCommandService } = await import("../src/services/MemoCommandService");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const store = new InMemoryMemoCatalogStore();
-	const catalog = new MemoCatalogService(store);
-	await catalog.open();
-	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "handwritten fallback");
-	await seedCatalog(catalog, store, observation);
-	let conflictOnFailure = false;
-	let conflicted = false;
-	const identityLedger = {
-		getRevision: () => conflicted ? "identity-conflicted" : "identity-1",
-		getStatus: () => "ready",
-		getSnapshot: () => ({
-			revision: conflicted ? "identity-conflicted" : "identity-1",
-			eventCount: 0,
-			memos: conflicted ? { "memo-conflict": { conflicted: true, conflictBaseBindingId: null } } : {},
-			pendingIntents: [],
-			quarantinedEventIds: [],
-		}),
-		resolveObservation: () => null,
-		resolveObservationState: () => conflicted
-			? { kind: "conflicted", memoIds: ["memo-conflict"] } as const
-			: { kind: "unbound" } as const,
-		getSourceMemoId: () => null,
-		getCreatedAt: () => null,
-		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		adoptObservation: async () => {
-			if (conflictOnFailure) conflicted = true;
-			throw new Error("Ledger write failed");
-		},
-	} as unknown as IdentityLedgerMutationService;
-	const service = new MemoCommandService(
-		{} as App,
-		catalog,
-		makeCommandOptions(),
-		{} as MarkdownMutationService,
-		identityLedger,
-	);
-	const source = (await service.getReadService().query({ limit: 20 })).items[0];
-	assert.notEqual(source, undefined);
-	if (source === undefined) throw new Error("Catalog memo fixture is missing.");
-
-	assert.equal(await service.prepareRecoverableDelete(source), null);
-	conflictOnFailure = true;
-	await assert.rejects(
-		() => service.prepareRecoverableDelete(source),
-		/Ledger write failed/u,
-	);
-});
-
-test("可恢复删除先持久化 payload 再改 Daily；恢复先写 Daily 再恢复 identity", async () => {
-	await ensureObsidianStub();
-	const { MemoCommandService } = await import("../src/services/MemoCommandService");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const events: string[] = [];
-	const store = new InMemoryMemoCatalogStore();
-	const catalog = new MemoCatalogService(store);
-	await catalog.open();
-	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "recoverable memo");
-	await seedCatalog(catalog, store, observation);
-	const binding = makeBinding(observation, "2026082212345601", "identity-1");
-	let activeDelete: IdentityLedgerDeleteRecord | null = null;
-	const identityLedger = {
-		getRevision: () => activeDelete === null ? "identity-1" : "identity-2",
-		getStatus: () => "ready",
-		getSnapshot: () => ({ revision: "identity-1", eventCount: 1, memos: {}, pendingIntents: [], quarantinedEventIds: [] }),
-		resolveObservation: () => binding,
-		resolveObservationState: () => ({ kind: "identified", binding }) as const,
-		getSourceMemoId: () => null,
-		getCreatedAt: () => "2026-08-22T12:34:56",
-		getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-		getActiveDeletes: () => activeDelete === null ? [] : [activeDelete],
-		recordDeletePayload: async (_binding: IdentityLedgerBinding, evidence: IdentityLedgerDeleteRecord["evidence"]) => {
-			events.push("payload");
-			activeDelete = {
-				memoId: binding.memoId,
-				deleteEventId: "e_22222222222222222222222222222222",
-				deleteCommitEventId: null,
-				baseBindingId: binding.bindingId,
-				evidence,
-			};
-			return activeDelete;
-		},
-		recordDeleteCommit: async (record: IdentityLedgerDeleteRecord) => {
-			events.push("commit");
-			activeDelete = { ...record, deleteCommitEventId: "e_33333333333333333333333333333333" };
-			return activeDelete;
-		},
-		recordRestore: async () => {
-			events.push("identity-restore");
-			activeDelete = null;
-			return binding;
-		},
-		recordPurge: async () => {
-			events.push("identity-purge");
-			activeDelete = null;
-		},
-	} as unknown as IdentityLedgerMutationService;
-	const markdownMutations = {
-		captureObservation: async () => {
-			events.push("capture");
-			return {
-				observation,
-				rawBlock: "- 12:34 recoverable memo",
-				deletedSourceRevision: observation.sourceRevision,
-			};
-		},
-		remove: async () => {
-			events.push("daily-remove");
-			await catalog.deleteFile(observation.sourcePath);
-			return mutationResult(null);
-		},
-		restore: async () => {
-			events.push("daily-restore");
-			await seedCatalog(catalog, store, observation);
-			return mutationResult(observation);
-		},
-	} as unknown as MarkdownMutationService;
-	const service = new MemoCommandService(
-		{} as App,
-		catalog,
-		makeCommandOptions(),
-		markdownMutations,
-		identityLedger,
-	);
-	const page = await service.getReadService().query({ limit: 50 });
-	const memo = page.items[0];
-	assert.notEqual(memo, undefined);
-	if (memo === undefined) throw new Error("Catalog memo fixture is missing.");
-
-	const deleted = await service.delete(memo);
-	assert.deepEqual(events, ["capture", "payload", "daily-remove", "commit"]);
-	assert.equal(deleted.followUpPending, false);
-	const deleteRecord = identityLedger.getActiveDeletes?.()[0];
-	assert.notEqual(deleteRecord, undefined);
-	if (deleteRecord === undefined) throw new Error("Recoverable delete fixture is missing.");
-	const trashItem = makeTrashItem(deleteRecord);
-
-	events.length = 0;
-	const restored = await service.restore(trashItem);
-	assert.deepEqual(events, ["daily-restore", "identity-restore"]);
-	assert.equal(restored.followUpPending, false);
-	assert.equal(activeDelete, null);
-
-	activeDelete = deleteRecord;
-	events.length = 0;
-	await service.purge(trashItem);
-	assert.deepEqual(events, ["identity-purge"]);
-	assert.equal(activeDelete, null);
-});
-
-test("操作刷新不得将旧句柄替换为同一行的新 occurrence", async (context) => {
-	await ensureObsidianStub();
-	const { MemoCommandService } = await import("../src/services/MemoCommandService");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	for (const operation of ["delete", "removePermanently", "prepareRecoverableDelete"] as const) {
-		for (const changed of ["sourceRevision", "endLine", "rawBlockHash", "missing"] as const) {
-			await context.test(`${operation}: ${changed}`, async () => {
-				const store = new InMemoryMemoCatalogStore();
-				const catalog = new MemoCatalogService(store);
-				await catalog.open();
-				const original = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "same memo");
-				await seedCatalog(catalog, store, original);
-				const binding = makeBinding(original, "2026082212345601", "identity-1");
-				const effects: string[] = [];
-				const identityLedger = {
-					getRevision: () => "identity-1",
-					getStatus: () => "ready",
-					getSnapshot: () => ({ memos: {} }),
-					resolveObservationState: () => operation === "delete"
-						? { kind: "identified", binding } : { kind: "unbound" },
-					getSourceMemoId: () => null,
-					getCreatedAt: () => null,
-					getReviewState: () => ({ reviewCount: 0, lastReviewedAt: null }),
-					adoptObservation: async () => { effects.push("adopt"); throw new Error("unexpected adoption"); },
-					recordDeletePayload: async () => { effects.push("payload"); throw new Error("unexpected payload"); },
-					recordDeleteCommit: async () => { effects.push("commit"); },
-				} as unknown as IdentityLedgerMutationService;
-				const service = new MemoCommandService({} as App, catalog, {
-					...makeCommandOptions(),
-					refreshCatalogPaths: async () => {
-						if (changed === "missing") {
-							await catalog.deleteFile(original.sourcePath);
-							return;
-						}
-						await seedCatalog(catalog, store, {
-							...original,
-							[changed]: changed === "endLine" ? 2 : "b".repeat(64),
-						});
-					},
-				}, {
-					captureObservation: async () => { effects.push("capture"); throw new Error("unexpected capture"); },
-					remove: async () => { effects.push("remove"); return mutationResult(null); },
-				} as unknown as MarkdownMutationService, identityLedger);
-				const item = await service.getReadService().resolveMemoItemInFile(original.sourcePath, original.startLine);
-				await assert.rejects(() => service[operation](item), /stale|no longer present/u);
-				assert.deepEqual(effects, []);
-				assert.equal(item.observationHandle.sourceRevision, original.sourceRevision);
-			});
-		}
-	}
 });
 
 function makeCommandOptions(): import("../src/services/MemoCommandService").MemoCommandServiceOptions {
@@ -624,68 +233,12 @@ function makeObservation(sourcePath: string, logicalDate: string, startLine: num
 	};
 }
 
-function makeBinding(observation: MemoObservation, memoId: string, identityRevision: string): IdentityLedgerBinding {
-	return {
-		memoId,
-		bindingId: "e_11111111111111111111111111111111",
-		identityRevision,
-		evidence: {
-			sourcePath: observation.sourcePath,
-			logicalDate: observation.logicalDate,
-			section: observation.section,
-			time: observation.time,
-			contentHash: observation.contentHash,
-			order: "00000000000001V",
-		},
-	};
-}
-
-function makeCreatePlan(memoId: string): IdentityLedgerCreatePlan {
-	return {
-		memoId,
-		intentDurable: true,
-		intent: {
-			eventId: "e_00000000000000000000000000000001",
-			writerId: "w_00000000000000000000000000000001",
-			memoId,
-			type: "create_intent",
-			baseBindingId: null,
-			occurredAt: "2026-08-22T12:34:56.000Z",
-			evidence: {
-				targetPath: "Daily/2026-08-22.md",
-				logicalDate: "2026-08-22",
-				time: "12:34:56",
-				contentHash: "fnv1a-11111111",
-				sourceMemoId: null,
-			},
-		},
-	};
-}
-
 function mutationResult(observation: MemoObservation | null) {
 	return {
-		status: "committed_identity_pending" as const,
+		status: "committed" as const,
 		observation,
 		sourcePaths: observation === null ? [] : [observation.sourcePath],
 		catalogUpdatePending: false,
-	};
-}
-
-function makeTrashItem(record: IdentityLedgerDeleteRecord): TrashMemoItem {
-	return {
-		key: `${record.memoId}:${record.deleteEventId}`,
-		memoId: record.memoId,
-		deleteEventId: record.deleteEventId,
-		createdAt: `${record.evidence.logicalDate}T12:34:56`,
-		deletedAt: record.evidence.deletedAt,
-		deleteSource: record.evidence.deletedSourceRevision === null ? "unknown" : "knomo_ui",
-		logicalDate: record.evidence.logicalDate,
-		sourcePath: record.evidence.sourcePath,
-		section: record.evidence.section,
-		content: "recoverable memo",
-		contentHash: record.evidence.contentHash,
-		sourceMemoId: record.evidence.sourceMemoId,
-		purgeAllowed: true,
 	};
 }
 

@@ -125,7 +125,6 @@ test("matches record statistics drill-down filters with local date and hour sema
 	const referenced = makeMemo("referenced", {
 		createdAt: "2026-06-09T09:00:00",
 		contentSnapshot: "current [[Daily#^source|custom alias]]",
-		sourceMemoId: "source",
 	});
 	const tagged = makeMemo("tagged", {
 		createdAt: "2026-06-10T09:00:00",
@@ -387,8 +386,6 @@ function makeMemo(
 		tags: overrides.tags ?? [],
 		links: overrides.links ?? [],
 		images: overrides.images ?? [],
-		references: [],
-		sourceMemoId: overrides.sourceMemoId ?? null,
 		issue: null,
 		lastMarkdownSyncAt: null,
 		lastMarkdownSyncSource: null,

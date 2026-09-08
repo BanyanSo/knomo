@@ -8,7 +8,6 @@ import type { TimeBuoyDateStatus } from "../types/timeBuoy";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
-	getMemoCardActionExplanation,
 	getMemoCardActions,
 	getMemoCardShell,
 	getMemoSourceReferenceMeta,
@@ -34,7 +33,6 @@ export interface RenderMemoCardOptions<TMemo extends MemoRecord = MemoRecord> {
 	randomCard: boolean;
 	timeBuoy?: MemoCardTimeBuoy;
 	activeMenuMemoId: string | null;
-	deletedMemoIds: ReadonlySet<string>;
 	formatDisplayTime: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
 	getMemoCardPreview: (memo: TMemo) => MemoCardPreview;
@@ -94,9 +92,8 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 		setIcon(menu, "more-horizontal");
 
 		if (cardMenuReady) {
-			const actionExplanation = getMemoCardActionExplanation(memo);
 			const actions = head.createDiv({
-				cls: actionExplanation === null ? "knomo-card-actions" : "knomo-card-actions has-explanation",
+				cls: "knomo-card-actions",
 				attr: { role: "menu" },
 			});
 			for (const action of getMemoCardActions(memo)) {
@@ -106,17 +103,10 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 					action.action,
 					getMemoActionLabel(action.action),
 					action.className,
-					action.candidateMemoId,
 				);
 			}
 			if (options.timeBuoy !== undefined) {
 				renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
-			}
-			if (actionExplanation === "identity-actions-paused") {
-				actions.createDiv({
-					cls: "knomo-card-action-explanation",
-					text: t("card.identityActionsPaused"),
-				});
 			}
 			actions.createDiv({
 				cls: "knomo-card-word-count",
@@ -256,7 +246,7 @@ export function renderMemoCardBody<TMemo extends MemoRecord>(card: HTMLElement, 
 }
 
 function renderCardMeta<TMemo extends MemoRecord>(card: HTMLElement, memo: TMemo, options: RenderMemoCardOptions<TMemo>): void {
-	const sourceReference = getMemoSourceReferenceMeta(memo, options.deletedMemoIds);
+	const sourceReference = getMemoSourceReferenceMeta(memo);
 	if (sourceReference.type !== "none") {
 		const meta = card.createDiv({ cls: "knomo-card-meta knomo-source-reference markdown-rendered" });
 		const referenceText = `${t("reference.fromPrefix")}${sourceReference.text}`;
@@ -275,7 +265,6 @@ function renderCardAction(
 	action: MemoAction,
 	label: string,
 	className: string,
-	candidateMemoId?: string,
 ): void {
 	container.createEl("button", {
 		cls: className,
@@ -286,7 +275,6 @@ function renderCardAction(
 			"aria-label": label,
 			"data-memo-action": action,
 			"data-memo-id": memoId,
-			...(candidateMemoId === undefined ? {} : { "data-candidate-memo-id": candidateMemoId }),
 		},
 	});
 }
@@ -316,7 +304,6 @@ function getMemoActionLabel(action: MemoAction): string {
 	if (action === "open-daily") return t("card.openDaily");
 	if (action === "copy-text") return t("card.copyText");
 	if (action === "copy-link") return t("card.copyLink");
-	if (action === "confirm-identity") return t("card.confirmIdentity");
 	if (action === "mark-reviewed") return t("card.markReviewed");
 	return t("card.delete");
 }

@@ -8,10 +8,8 @@ import { isSupportedMemoImage } from "../src/utils/markdown";
 import {
 	buildQuoteCreatedMemoContent,
 	formatCreatedAtAlias,
-	formatMemoIdAlias,
 	stripTrailingWikiLink,
 	withCreatedAtAlias,
-	withMemoIdAlias,
 } from "../src/utils/references";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -734,19 +732,6 @@ test("strips inline wiki link from content for card display", () => {
 	assert.equal(
 		stripTrailingWikiLink("内容中间的 [[普通链接]] 不动"),
 		"内容中间的 [[普通链接]] 不动",
-	);
-});
-
-test("formats numeric memoId alias for Obsidian block links", () => {
-	assert.equal(formatMemoIdAlias("2026060514301207"), "20260605-143012");
-	assert.equal(formatMemoIdAlias("memo-1"), "memo-1");
-	assert.equal(
-		withMemoIdAlias("[[Daily/2026-05-17#^abc123]]", "2026060514301207"),
-		"[[Daily/2026-05-17#^abc123|20260605-143012]]",
-	);
-	assert.equal(
-		withMemoIdAlias("![[Daily/2026-05-17#^abc123]]", "memo-1"),
-		"[[Daily/2026-05-17#^abc123|memo-1]]",
 	);
 });
 

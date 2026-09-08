@@ -1,15 +1,14 @@
 import type { MonthlyDateOrder } from "./settings";
 
-export type KnomoSharedConfigStatus = "missing" | "ready" | "conflicted" | "unavailable";
-export type KnomoSharedConfigReadHealth = "usable" | "waiting" | "unavailable" | "conflicted";
+export type KnomoCurrentConfigStatus = "missing" | "ready" | "conflicted" | "unavailable";
 
-interface KnomoSharedDailyConfig {
+interface KnomoCurrentDailyConfig {
 	folder: string | null;
 	dateFormat: string;
 	headings: string[];
 }
 
-interface KnomoSharedMonthlyConfig {
+interface KnomoCurrentMonthlyConfig {
 	folder: string;
 	fileFormat: string;
 	dateHeadingFormat: string;
@@ -17,39 +16,7 @@ interface KnomoSharedMonthlyConfig {
 	locale: string;
 }
 
-export interface KnomoSharedConfig {
-	daily: KnomoSharedDailyConfig;
-	monthly: KnomoSharedMonthlyConfig;
-}
-
-export interface KnomoSharedConfigEvent {
-	eventId: string;
-	writerId: string;
-	type: "set_config";
-	baseEventIds: string[];
-	occurredAt: string;
-	config: KnomoSharedConfig;
-}
-
-export interface KnomoSharedConfigEventEnvelope {
-	event: KnomoSharedConfigEvent;
-	digest: string;
-	sourcePath: string;
-}
-
-export interface ParsedKnomoSharedConfigSegment {
-	path: string;
-	writerId: string;
-	digest: string;
-	events: KnomoSharedConfigEventEnvelope[];
-}
-
-export interface KnomoSharedConfigSnapshot {
-	status: Exclude<KnomoSharedConfigStatus, "unavailable">;
-	revision: string;
-	config: KnomoSharedConfig | null;
-	headEventIds: string[];
-	pendingEventIds: string[];
-	quarantinedEventIds: string[];
-	eventCount: number;
+export interface KnomoCurrentConfig {
+	daily: KnomoCurrentDailyConfig;
+	monthly: KnomoCurrentMonthlyConfig;
 }

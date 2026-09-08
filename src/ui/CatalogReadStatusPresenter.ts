@@ -29,11 +29,6 @@ export function getCatalogReadStatusHeaders(
 		headers.push(summary(t("catalog.sharedConfigUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
 	}
 
-	if (options.status.identityAttention === "settings_retry") {
-		headers.push(summary(t(options.status.identity === "conflicted"
-			? "catalog.identityConflict"
-			: "catalog.identityUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
-	}
 
 	if (options.status.projection === "failed") {
 		headers.push(summary(t("sync.monthlyFailed"), t("catalog.openDiagnostics"), "open-catalog-settings"));
@@ -45,10 +40,6 @@ export function getCatalogReadStatusHeaders(
 		headers.push(summary(t("catalog.legacyMigrationUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
 	}
 
-	if (options.status.identityAttention === "settings_retry" && options.status.identity !== "conflicted"
-		|| options.status.sharedConfiguration === "unavailable") {
-		headers.push(summary(t("catalog.rebuildBasicDataHint"), t("catalog.rebuildBasicData"), "rebuild-knomo-basic-data"));
-	}
 	return dedupeHeaders(headers);
 }
 

@@ -58,9 +58,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly memoCommandService: MemoCommandService,
 		private readonly catalogReadService: CatalogReadService,
 		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
-		private readonly knomoDataRootMigrationService: { plan(root: string): Promise<{ action: string }>; migrate(root: string): Promise<unknown> },
+		private readonly recoveryDataRootService: { plan(root: string): Promise<{ action: string }>; migrate(root: string): Promise<unknown> },
 		private readonly knomoCurrentConfigService: Pick<KnomoCurrentConfigService, "getStatus" | "getLastError" | "reloadConfiguredRoot" | "refreshLocalConfig">,
-		private readonly legacyIndexMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(options?: { explicit?: boolean }): Promise<unknown> },
+		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(options?: { explicit?: boolean }): Promise<unknown> },
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 		private readonly retryRuntimeState: () => Promise<void>,
 	) {
@@ -276,7 +276,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 					await this.settingsService.updateSettings({
 						monthlyDateOrder: value as MonthlyDateOrder,
 					});
-					await this.syncSharedConfiguration();
+					await this.refreshCurrentConfiguration();
 				})();
 			});
 		});
@@ -480,7 +480,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			button.setButtonText(t("settings.legacyMigration.migrate"));
 			button.onClick(() => {
 				button.setDisabled(true);
-				void this.legacyIndexMigrationService.run({ explicit: true })
+				void this.legacyTrashMigrationService.run({ explicit: true })
 					.catch((error: unknown) => { new Notice(formatServiceError(error, t("settings.legacyMigration.unavailable"))); })
 					.finally(() => { button.setDisabled(false); this.refreshSettingTab(); });
 			});
@@ -488,7 +488,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private getLegacyMigrationDescription(): string {
-		const report = this.legacyIndexMigrationService.getReport();
+		const report = this.legacyTrashMigrationService.getReport();
 		const messageKey = report.status === "attention"
 				? "settings.legacyMigration.attention"
 				: "settings.legacyMigration.unavailable";
@@ -627,7 +627,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return true;
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
-		await this.syncSharedConfiguration();
+		await this.refreshCurrentConfiguration();
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
 			return true;
 		}
@@ -660,7 +660,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return true;
 		}
 		await this.settingsService.updateSettings({ monthlyDateHeadingFormat: nextFormat });
-		await this.syncSharedConfiguration();
+		await this.refreshCurrentConfiguration();
 		return true;
 	}
 
@@ -704,7 +704,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				return false;
 			}
 			await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
-			await this.syncSharedConfiguration();
+			await this.refreshCurrentConfiguration();
 			for (const period of plan.periods) {
 				await this.monthlyProjectionCoordinator.rebuildPeriod(period);
 			}
@@ -746,8 +746,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button.setDisabled(true);
 		button.setButtonText(t("settings.dataRoot.saving"));
 		try {
-			const plan = await this.knomoDataRootMigrationService.plan(knomoDataRoot);
-			if (plan.action === "migrate" || plan.action === "adopt") {
+			const plan = await this.recoveryDataRootService.plan(knomoDataRoot);
+			if (plan.action === "migrate") {
 				const confirmed = await showKnomoConfirmModal(this.app, {
 					message: t("settings.dataRoot.confirm", {
 						current: currentSettings.knomoDataRoot,
@@ -764,10 +764,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 				new Notice(t("settings.dataRoot.saved"));
 				return true;
 			}
-			await this.knomoDataRootMigrationService.migrate(knomoDataRoot);
+			await this.recoveryDataRootService.migrate(knomoDataRoot);
 			await this.knomoCurrentConfigService.reloadConfiguredRoot();
-			await this.syncSharedConfiguration();
-			await this.legacyIndexMigrationService.run();
+			await this.refreshCurrentConfiguration();
+			await this.legacyTrashMigrationService.run();
 			new Notice(t("settings.dataRoot.saved"));
 			return true;
 		} catch (error) {
@@ -966,7 +966,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private getAttentionName(kind: KnomoSettingAttentionKind): string {
 		switch (kind) {
 			case "settings": return t("settings.attention.settings.name");
-			case "shared-config": return t("settings.sharedConfig.name");
+			case "current-config": return t("settings.currentConfig.name");
 			case "catalog": return t("settings.attention.catalog.name");
 			case "monthly": return t("settings.attention.monthly.name");
 			case "legacy": return t("settings.legacyMigration.name");
@@ -976,7 +976,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private getAttentionDescription(kind: KnomoSettingAttentionKind): string {
 		switch (kind) {
 			case "settings": return t("settings.attention.settings.desc");
-			case "shared-config": return this.getSharedConfigDescription();
+			case "current-config": return this.getCurrentConfigDescription();
 			case "catalog": return t("settings.attention.catalog.desc");
 			case "monthly": return t("settings.attention.monthly.desc", {
 				periods: this.monthlyProjectionCoordinator.getFailedPeriods().join(", ") || "—",
@@ -988,39 +988,39 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private renderAttentionSetting(kind: KnomoSettingAttentionKind, setting: Setting): void {
 		switch (kind) {
 			case "settings": this.renderSettingsAttentionSetting(setting); break;
-			case "shared-config": this.renderSharedConfigSetting(setting); break;
+			case "current-config": this.renderCurrentConfigSetting(setting); break;
 			case "catalog": this.renderCatalogAttentionSetting(setting); break;
 			case "monthly": this.renderMonthlyAttentionSetting(setting); break;
 			case "legacy": this.renderLegacyMigration(setting); break;
 		}
 	}
 
-	private getSharedConfigDescription(): string {
+	private getCurrentConfigDescription(): string {
 		switch (this.knomoCurrentConfigService.getStatus()) {
 			case "ready":
-				return t("settings.sharedConfig.ready");
+				return t("settings.currentConfig.ready");
 			case "conflicted":
-				return t("settings.sharedConfig.conflicted");
+				return t("settings.currentConfig.conflicted");
 			case "unavailable":
-				return t("settings.sharedConfig.unavailable");
+				return t("settings.currentConfig.unavailable");
 			case "missing":
-				return t("settings.sharedConfig.missing");
+				return t("settings.currentConfig.missing");
 		}
 	}
 
-	private renderSharedConfigSetting(setting: Setting): void {
+	private renderCurrentConfigSetting(setting: Setting): void {
 		const status = this.knomoCurrentConfigService.getStatus();
 
 		setting
-			.setName(t("settings.sharedConfig.name"))
-			.setDesc(this.getSharedConfigDescription());
+			.setName(t("settings.currentConfig.name"))
+			.setDesc(this.getCurrentConfigDescription());
 		if (status === "ready") return;
 		setting.addButton((button) => {
 			button.setButtonText(status === "unavailable"
-				? t("settings.sharedConfig.checkAgain")
+				? t("settings.currentConfig.checkAgain")
 				: status === "conflicted"
-					? t("settings.sharedConfig.resolve")
-					: t("settings.sharedConfig.publish"));
+					? t("settings.currentConfig.resolve")
+					: t("settings.currentConfig.publish"));
 			button.onClick(() => {
 				void (async () => {
 					button.setDisabled(true);
@@ -1028,11 +1028,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 						await this.knomoCurrentConfigService.reloadConfiguredRoot();
 						if (this.knomoCurrentConfigService.getStatus() !== "ready") {
 							throw new Error(this.knomoCurrentConfigService.getLastError()
-								?? "Shared configuration did not become ready.");
+								?? "Current configuration did not become ready.");
 						}
-						new Notice(t("settings.sharedConfig.saved"));
+						new Notice(t("settings.currentConfig.saved"));
 					} catch {
-						new Notice(t("settings.sharedConfig.failed"));
+						new Notice(t("settings.currentConfig.failed"));
 					} finally {
 						button.setDisabled(false);
 						this.refreshSettingTab();
@@ -1042,7 +1042,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private async syncSharedConfiguration(): Promise<void> {
+	private async refreshCurrentConfiguration(): Promise<void> {
 		try {
 			await this.knomoCurrentConfigService.refreshLocalConfig();
 		} catch {

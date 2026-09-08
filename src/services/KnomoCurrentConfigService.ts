@@ -19,7 +19,7 @@ export class KnomoCurrentConfigService {
 
 	initialize(): Promise<void> {
 		if (this.initializing !== null) return this.initializing;
-		this.initializing = this.adoptCurrent().catch((error: unknown) => {
+		this.initializing = this.initializeCurrent().catch((error: unknown) => {
 			this.verified = false;
 			this.error = String(error);
 			throw error;
@@ -27,19 +27,19 @@ export class KnomoCurrentConfigService {
 		return this.initializing;
 	}
 
-	private async adoptCurrent(): Promise<void> {
+	private async initializeCurrent(): Promise<void> {
 		if (this.settings.getLoadStatus() !== "ready") throw new Error("Knomo current settings unavailable.");
 		const settings = this.settings.getSettings();
-		if (settings.currentConfigAdopted) {
+		if (settings.currentConfigInitialized) {
 			if (!settings.monthlyLocale) throw new Error("Current Monthly locale is unavailable.");
-			await this.settings.verifyCurrentSettings({ currentConfigAdopted: true, monthlyLocale: settings.monthlyLocale });
+			await this.settings.verifyCurrentSettings({ currentConfigInitialized: true, monthlyLocale: settings.monthlyLocale });
 			this.error = null;
 			this.verified = true;
 			return;
 		}
 		const patch = {
 			monthlyLocale: settings.monthlyLocale ?? normalizeMonthlyLocaleKey(this.locale()),
-			currentConfigAdopted: true,
+			currentConfigInitialized: true,
 		};
 		await this.settings.updateSettings(patch);
 		await this.settings.verifyCurrentSettings(patch);
@@ -49,7 +49,7 @@ export class KnomoCurrentConfigService {
 
 	getStatus(): KnomoCurrentConfigStatus {
 		return this.error !== null || this.settings.getLoadStatus() !== "ready" ? "unavailable"
-			: this.verified && this.settings.getSettings().currentConfigAdopted && this.settings.getSettings().monthlyLocale ? "ready" : "missing";
+			: this.verified && this.settings.getSettings().currentConfigInitialized && this.settings.getSettings().monthlyLocale ? "ready" : "missing";
 	}
 	getLastError(): string | null { return this.error; }
 	getEffectiveConfig(): KnomoCurrentConfig {
@@ -79,7 +79,7 @@ export class KnomoCurrentConfigService {
 	}
 	private configurationKey(): string {
 		const settings = this.settings.getSettings();
-		return JSON.stringify([this.settings.getLoadStatus(), settings.currentConfigAdopted, settings.dailyHeading,
+		return JSON.stringify([this.settings.getLoadStatus(), settings.currentConfigInitialized, settings.dailyHeading,
 			settings.legacyDailyHeadings, settings.monthlyMemoFolder, settings.monthlyMemoFileFormat,
 			settings.monthlyDateHeadingFormat, settings.monthlyDateOrder, settings.monthlyLocale]);
 	}

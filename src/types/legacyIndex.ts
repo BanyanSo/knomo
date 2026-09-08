@@ -1,22 +1,11 @@
 export type LegacyArtifactKind =
 	| "memo_index"
 	| "pending_create"
-	| "plugin_data"
 	| "memo_summary"
 	| "time_buoy_index"
 	| "time_buoy_state"
 	| "backup"
 	| "repair_candidate";
-
-export interface LegacyIndexEvidence {
-	sourcePath: string;
-	logicalDate: string;
-	section: string | null;
-	time: string;
-	contentHash: string;
-	lastKnownBlockHash: string;
-	lineNumberHint: number | null;
-}
 
 export interface LegacyDeletedMemoPayload {
 	deletedAt: string;
@@ -24,31 +13,12 @@ export interface LegacyDeletedMemoPayload {
 	logicalDate: string;
 	section: string | null;
 	rawBlock: string;
-	contentHash: string;
-	sourceMemoId: string | null;
 }
 
 export interface LegacyIndexMemo {
 	memoId: string;
 	status: "active" | "deleted" | "error";
-	createdAt: string;
-	updatedAt: string;
-	evidence: LegacyIndexEvidence;
-	sourceMemoId: string | null;
 	deletedPayload: LegacyDeletedMemoPayload | null;
-}
-
-export interface LegacyPendingMemo {
-	memoId: string;
-	createdAt: string;
-	evidence: LegacyIndexEvidence;
-	sourceMemoId: string | null;
-}
-
-export interface LegacyReviewState {
-	memoId: string;
-	reviewCount: number;
-	lastReviewedAt: string | null;
 }
 
 export interface LegacyIndexDiagnostic {
@@ -64,8 +34,6 @@ export interface LegacyIndexSnapshot {
 	legacySystemRoot: string;
 	legacySystemRootPresent: boolean;
 	memos: LegacyIndexMemo[];
-	pendingMemos: LegacyPendingMemo[];
-	reviews: LegacyReviewState[];
 	diagnostics: LegacyIndexDiagnostic[];
 }
 
@@ -88,5 +56,4 @@ export interface LegacyIndexLoadRuntime {
 export interface LegacyIndexSource {
 	inspect(): LegacyIndexSourcePresence;
 	load(runtime?: LegacyIndexLoadRuntime): Promise<LegacyIndexSourceResult>;
-	isSourcePath(path: string): boolean;
 }

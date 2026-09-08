@@ -162,10 +162,10 @@ test("普通事件和手动刷新不触发旧源导入，生产 runtime 无身�
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	assert.doesNotMatch(main, /identityRecoveryCoordinator|snapshotRevisionTransitionQueue|reconcileIdentityLedger/u);
 	const settled = main.slice(main.indexOf("onCatalogSettled: async () =>"), main.indexOf("const markdownMutationService"));
-	assert.doesNotMatch(settled, /legacyIndexMigrationService/u);
+	assert.doesNotMatch(settled, /legacyTrashMigrationService/u);
 	const refresh = main.slice(main.indexOf("private runManualRefresh()"));
-	assert.doesNotMatch(refresh, /legacyIndexMigrationService/u);
-	assert.doesNotMatch(main, /legacyIndexMigrationService\.start/u);
+	assert.doesNotMatch(refresh, /legacyTrashMigrationService/u);
+	assert.doesNotMatch(main, /legacyTrashMigrationService\.start/u);
 	const migration = fs.readFileSync("src/services/LegacyTrashMigrationService.ts", "utf8");
 	assert.doesNotMatch(migration, /vault\.on\(|getCatalogCoverage|getObservationBatches|completionStore/u);
 });

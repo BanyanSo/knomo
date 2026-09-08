@@ -272,7 +272,7 @@ test("Catalog revision 变化后随机重逢重建候选池", async () => {
 	});
 	await store.setCoverage({
 		kind: "complete",
-		sharedConfigurationComplete: true,
+		configurationComplete: true,
 		coveredFromDate: first.logicalDate,
 		pendingFileCount: 0,
 		coveredFileCount: 2,
@@ -322,7 +322,7 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	await seedCatalogFiles(catalog, store, [makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "known")]);
 	await store.setCoverage({
 		kind: "partial",
-		sharedConfigurationComplete: true,
+		configurationComplete: true,
 		coveredFromDate: "2026-08-01",
 		pendingFileCount: 2,
 		coveredFileCount: 1,
@@ -337,7 +337,7 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	assert.equal((await service.count({})).count, null);
 	await store.setCoverage({
 		kind: "rebuilding",
-		sharedConfigurationComplete: true,
+		configurationComplete: true,
 		coveredFromDate: "2026-08-20",
 		pendingFileCount: 2,
 		coveredFileCount: 1,
@@ -557,7 +557,7 @@ async function seedCatalogFiles(
 	}
 	await store.setCoverage({
 		kind: "complete",
-		sharedConfigurationComplete: true,
+		configurationComplete: true,
 		coveredFromDate: observations.map((item) => item.logicalDate).sort()[0] ?? null,
 		pendingFileCount: 0,
 		coveredFileCount: observations.length,

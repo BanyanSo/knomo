@@ -15,7 +15,6 @@ test("composer 在 Daily 提交后立即清空，不等待卡片刷新", async (
 	view.inputEl = { value: "memo" };
 	view.isSaving = false;
 	view.editingMemo = null;
-	view.quoteSourceMemoId = null;
 	view.quoteReferenceText = null;
 	view.quoteMarkdownText = null;
 	view.currentLayout = "desktop";
@@ -67,7 +66,6 @@ test("Daily 提交前继续输入的新草稿不会被旧保存清空", async ()
 	view.inputEl = { value: "old memo" };
 	view.isSaving = false;
 	view.editingMemo = null;
-	view.quoteSourceMemoId = null;
 	view.quoteReferenceText = null;
 	view.quoteMarkdownText = null;
 	view.currentLayout = "desktop";
@@ -151,7 +149,6 @@ interface SaveInputView {
 	inputEl: { value: string } | null;
 	isSaving: boolean;
 	editingMemo: null;
-	quoteSourceMemoId: string | null;
 	quoteReferenceText: string | null;
 	quoteMarkdownText: string | null;
 	currentLayout: "desktop";
@@ -167,7 +164,7 @@ interface SaveInputView {
 	showTimeBuoySaveFeedback: (dates: readonly string[]) => void;
 	syncRootState: () => void;
 	memoCommandService: {
-		startCreate: (content: string, sourceMemoId: string | null) => {
+		startCreate: (content: string) => {
 			dailyCommitted: Promise<void>;
 			settled: Promise<SaveResult>;
 		};

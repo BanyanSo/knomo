@@ -63,13 +63,13 @@ test("retries current configuration independently of Identity startup and refres
 	const source = readSettingTabSource();
 	const sharedConfigSource = getSourceBetween(
 		source,
-		"\tprivate renderSharedConfigSetting(",
-		"\n\tprivate async syncSharedConfiguration(",
+		"\tprivate renderCurrentConfigSetting(",
+		"\n\tprivate async refreshCurrentConfiguration(",
 	);
 
 	assert.match(sharedConfigSource, /this\.knomoCurrentConfigService\.reloadConfiguredRoot\(\)/u);
 	assert.doesNotMatch(sharedConfigSource, /this\.startupBootstrapService/u);
-	assert.match(sharedConfigSource, /new Notice\(t\("settings\.sharedConfig\.failed"\)\)/u);
+	assert.match(sharedConfigSource, /new Notice\(t\("settings\.currentConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
 	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*if \(this\.settingsVisible\) this\.refreshSettingTab\(\)/u);
 });
@@ -103,7 +103,7 @@ test("legacy attention exposes user actions without rendering raw diagnostics", 
 
 	assert.doesNotMatch(legacySource, /diagnostics|sourcePath|memoId|item\.code|item\.detail/u);
 	assert.match(legacySource, /run\(\{ explicit: true \}\)/u);
-	assert.match(legacySource, /legacyIndexMigrationService\.run\(\{ explicit: true \}\)/u);
+	assert.match(legacySource, /legacyTrashMigrationService\.run\(\{ explicit: true \}\)/u);
 });
 
 test("settings load failure is routed through the shared retry action", () => {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import type { RecordStatsSearchFilter } from "../src/ui/viewFilters";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -142,7 +142,7 @@ test("mobile search date filters reset visible results and clear record stats fi
 	assert.equal(weekButton?.getAttr("aria-pressed"), "true");
 });
 
-function makeMemo(id: string, content: string): MemoRecord {
+function makeMemo(id: string, content: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -150,30 +150,13 @@ function makeMemo(id: string, content: string): MemoRecord {
 		contentSnapshot: content,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Journal/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: contentBlock(content),
-			lastKnownHash: id,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: contentBlock(content),
-			lastKnownHash: id,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }
@@ -184,7 +167,7 @@ function contentBlock(content: string): string {
 
 function createControllerHarness(
 	Controller: MobileSearchControllerConstructor,
-	memos: MemoRecord[],
+	memos: MemoViewItem[],
 	getMatchedTotalCount?: () => number | null,
 	loadRemoteResults?: LoadRemoteResults,
 ): {

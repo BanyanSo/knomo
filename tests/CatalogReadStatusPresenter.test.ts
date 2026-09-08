@@ -54,7 +54,7 @@ test("本地扫描完成但共享配置仍在初始化时不把工程状态放�
 		},
 		coverage: {
 			...completeCoverage,
-			sharedConfigurationComplete: false,
+			configurationComplete: false,
 		},
 	});
 
@@ -161,18 +161,18 @@ test("跨设备设置冲突或不可读取时在前台给出对应操作", () =>
 		migration: "none" as const,
 	};
 	const conflicted = getCatalogReadStatusHeaders({
-		status: { ...base, sharedConfiguration: "conflicted" },
+		status: { ...base, currentConfiguration: "conflicted" },
 		coverage: completeCoverage,
 	});
 	const unavailable = getCatalogReadStatusHeaders({
-		status: { ...base, sharedConfiguration: "unavailable" },
+		status: { ...base, currentConfiguration: "unavailable" },
 		coverage: completeCoverage,
 	});
 
 	assert.equal(conflicted[0]?.type === "summary" ? conflicted[0].action?.action : null, "open-catalog-settings");
 	assert.equal(unavailable[0]?.type === "summary" ? unavailable[0].action?.action : null, "refresh-catalog-sync-state");
 	assert.deepEqual(getCatalogReadStatusHeaders({
-		status: { ...base, sharedConfiguration: "missing" },
+		status: { ...base, currentConfiguration: "missing" },
 		coverage: completeCoverage,
 	}), []);
 });

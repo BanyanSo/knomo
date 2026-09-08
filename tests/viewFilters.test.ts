@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import {
 	buildMemoSearchText,
 	getMemoImages,
@@ -361,18 +361,15 @@ function makeMemo(
 	overrides: {
 		createdAt?: string;
 		contentSnapshot?: string;
-		tags?: MemoRecord["tags"];
-		links?: MemoRecord["links"];
-		images?: MemoRecord["images"];
+		tags?: MemoViewItem["tags"];
+		links?: MemoViewItem["links"];
+		images?: MemoViewItem["images"];
 		dailyPath?: string;
-		dailyBlock?: string;
 		monthlyDateHeading?: string;
-		sourceMemoId?: string | null;
 	} = {},
-): MemoRecord {
+): MemoViewItem {
 	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
 	const dailyPath = overrides.dailyPath ?? `Daily/${createdAt.slice(0, 10)}.md`;
-	const dailyBlock = overrides.dailyBlock ?? "- 09:00:00 memo";
 	return {
 		id,
 		createdAt,
@@ -380,30 +377,13 @@ function makeMemo(
 		contentSnapshot: overrides.contentSnapshot ?? "memo",
 		contentHash: `hash-${id}`,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: overrides.tags ?? [],
 		links: overrides.links ?? [],
 		images: overrides.images ?? [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: dailyPath,
 			heading: "## Memos",
-			lastKnownBlock: dailyBlock,
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/Memos-2026-05.md",
-			dateHeading: overrides.monthlyDateHeading ?? "## [[2026-05-20]]",
-			lastKnownBlock: dailyBlock,
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

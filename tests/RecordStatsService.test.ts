@@ -9,11 +9,11 @@ import {
 	RecordStatsService as ProductionRecordStatsService,
 	shiftRecordStatsDate,
 } from "../src/services/RecordStatsService";
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
 
 class RecordStatsService extends ProductionRecordStatsService {
-	async prepare(memos: readonly MemoRecord[], yieldToUi: () => Promise<void>): Promise<boolean> {
+	async prepare(memos: readonly MemoViewItem[], yieldToUi: () => Promise<void>): Promise<boolean> {
 		return this.prepareFromSource(memos, async (isCurrent) => {
 			const builder = new RecordStatsBuilder();
 			for (let index = 0; index < memos.length; index += 1) {
@@ -347,12 +347,11 @@ function makeMemo(
 	createdAt: string,
 	contentSnapshot: string,
 	overrides: {
-		status?: MemoRecord["status"];
-		sourceMemoId?: string | null;
-		tags?: MemoRecord["tags"];
-		images?: MemoRecord["images"];
+		status?: MemoViewItem["status"];
+		tags?: MemoViewItem["tags"];
+		images?: MemoViewItem["images"];
 	} = {},
-): MemoRecord {
+): MemoViewItem {
 	return {
 		id,
 		createdAt,
@@ -360,30 +359,13 @@ function makeMemo(
 		contentSnapshot,
 		contentHash: `${id}-hash`,
 		status: overrides.status ?? "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: overrides.tags ?? [],
 		links: [],
 		images: overrides.images ?? [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
-			lastKnownBlock: `- 12:00 ${contentSnapshot}`,
-			lastKnownHash: "hash",
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/2026-06.md",
-			dateHeading: "## 2026-06-08",
-			lastKnownBlock: `- 12:00 ${contentSnapshot}`,
-			lastKnownHash: "hash",
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

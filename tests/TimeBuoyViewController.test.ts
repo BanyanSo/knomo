@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../src/types/timeBuoy";
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { mergeTodayTimeBuoyFeed, TimeBuoyViewController } from "../src/ui/TimeBuoyViewController";
 
 const EMPTY_RESULT: TimeBuoyQueryResult = { items: [], stale: [], missingPeriods: [] };
@@ -12,7 +12,7 @@ test("promotes every today card in creation-time order without duplicating ordin
 	const memos = Array.from({ length: 8 }, (_, index) => ({
 		id: `memo-${index}`,
 		createdAt: `2026-07-${String(8 - index).padStart(2, "0")}T08:00:00+08:00`,
-	}) as MemoRecord);
+	}) as MemoViewItem);
 	const todayItems = memos.slice(0, 7).reverse().map((memo) => ({
 		memo,
 		targetDates: ["2026-07-11"],
@@ -454,7 +454,7 @@ test("switches tabs without querying again and preserves the tab through reload"
 });
 
 test("removes a deleted memo after the next Catalog query", async () => {
-	const memo = { id: "memo-1", contentSnapshot: "回看 @2026-07-11", status: "active" } as MemoRecord;
+	const memo = { id: "memo-1", contentSnapshot: "回看 @2026-07-11", status: "active" } as MemoViewItem;
 	let result: TimeBuoyAllQueryResult = {
 		items: [{
 			memo,
@@ -521,7 +521,7 @@ function makeItem(memoId: string, targetDate: string, createdAt: string): TimeBu
 	};
 }
 
-function makeQueryItem(memo: MemoRecord, targetDate: string): TimeBuoyQueryItem {
+function makeQueryItem(memo: MemoViewItem, targetDate: string): TimeBuoyQueryItem {
 	return {
 		memo,
 		instance: {
@@ -542,7 +542,7 @@ function makeItemsForMemo(memoId: string, targetDates: string[], createdAt: stri
 	}));
 }
 
-function makeMemo(id: string, contentSnapshot: string, createdAt: string): MemoRecord {
+function makeMemo(id: string, contentSnapshot: string, createdAt: string): MemoViewItem {
 	const contentHash = `hash:${id}:${contentSnapshot}`;
 	const block = `- 08:00:00 ${contentSnapshot}`;
 	return {
@@ -552,31 +552,14 @@ function makeMemo(id: string, contentSnapshot: string, createdAt: string): MemoR
 		contentSnapshot,
 		contentHash,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
 			sectionType: "heading",
-			lastKnownBlock: block,
-			lastKnownHash: contentHash,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: `Memos/Memos-${createdAt.slice(0, 7)}.md`,
-			dateHeading: createdAt.slice(0, 10),
-			lastKnownBlock: block,
-			lastKnownHash: contentHash,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

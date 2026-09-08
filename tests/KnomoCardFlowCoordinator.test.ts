@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { KnomoCardFlowCoordinator } from "../src/ui/KnomoCardFlowCoordinator";
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import type { CardFlowSentinelRenderOptions } from "../src/ui/KnomoCardFlowSentinel";
 
 test("tracks pending scroll restore by generation and consumes it once", () => {
@@ -151,11 +151,11 @@ function advanceGeneration(coordinator: KnomoCardFlowCoordinator): number {
 	return coordinator.generation;
 }
 
-function makeMemos(count: number, prefix = "memo"): MemoRecord[] {
+function makeMemos(count: number, prefix = "memo"): MemoViewItem[] {
 	return Array.from({ length: count }, (_, index) => makeMemo(`${prefix}-${index}`));
 }
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -163,30 +163,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 	};
 }

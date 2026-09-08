@@ -72,14 +72,6 @@ export function classifyLegacyArtifactPath(
 	return null;
 }
 
-export function classifyPluginDataPath(configDir: string, pluginId: string, path: string): LegacyArtifactPathClassification | null {
-	const expected = normalizeStrictPath(`${configDir}/plugins/${pluginId}/data.json`);
-	const candidate = normalizeStrictPath(path);
-	return expected !== null && candidate === expected
-		? { artifactKind: "plugin_data", period: null, conflict: false }
-		: null;
-}
-
 function normalizeStrictPath(path: string): string | null {
 	const trimmed = path.trim();
 	if (trimmed.length === 0 || trimmed.startsWith("/") || trimmed.includes("\\") || /(^|\/)\.{1,2}(\/|$)/.test(trimmed) || /[\u0000-\u001f]/.test(trimmed)) {

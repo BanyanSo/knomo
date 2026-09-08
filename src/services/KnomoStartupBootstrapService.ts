@@ -18,7 +18,7 @@ export interface KnomoStartupBootstrapOptions {
 }
 
 export type KnomoStartupBootstrapStatus = "unconfigured" | "initializing" | "ready" | "conflicted" | "unavailable";
-export type KnomoStartupBootstrapStage = "data_root" | "catalog" | "shared_config" | "verification";
+export type KnomoStartupBootstrapStage = "data_root" | "catalog" | "current_config" | "verification";
 
 export interface KnomoStartupBootstrapSnapshot {
 	status: KnomoStartupBootstrapStatus;
@@ -115,16 +115,16 @@ export class KnomoStartupBootstrapService {
 			await ensureFolder(this.app, getCatalogDataRootPath(location.knomoDataRoot));
 			this.throwIfCancelled();
 
-			stage = "shared_config";
+			stage = "current_config";
 			this.setInitializing(stage);
 			await this.options.currentConfig.initialize();
 			this.throwIfCancelled();
-			const sharedStatus = this.options.currentConfig.getStatus();
-			if (sharedStatus === "unavailable") {
-				throw new Error(this.options.currentConfig.getLastError() ?? "Shared configuration cannot be read.");
+			const currentStatus = this.options.currentConfig.getStatus();
+			if (currentStatus === "unavailable") {
+				throw new Error(this.options.currentConfig.getLastError() ?? "Current configuration cannot be read.");
 			}
-			if (sharedStatus !== "ready") {
-				this.snapshot = { status: sharedStatus === "conflicted" ? "conflicted" : "unconfigured", stage, error: null };
+			if (currentStatus !== "ready") {
+				this.snapshot = { status: currentStatus === "conflicted" ? "conflicted" : "unconfigured", stage, error: null };
 				return;
 			}
 
@@ -134,10 +134,10 @@ export class KnomoStartupBootstrapService {
 			this.throwIfCancelled();
 			const verifiedStatus = this.options.currentConfig.getStatus();
 			if (verifiedStatus === "conflicted") {
-				throw new Error("Shared configuration remains conflicted after initialization.");
+				throw new Error("Current configuration remains conflicted after initialization.");
 			}
 			if (verifiedStatus !== "ready") {
-				throw new Error(this.options.currentConfig.getLastError() ?? "Shared configuration verification failed.");
+				throw new Error(this.options.currentConfig.getLastError() ?? "Current configuration verification failed.");
 			}
 			this.snapshot = { status: "ready", stage: null, error: null };
 		} catch (error) {
@@ -145,7 +145,7 @@ export class KnomoStartupBootstrapService {
 				throw new KnomoStartupCancelledError();
 			}
 			const detail = error instanceof Error ? error.message : String(error);
-			const conflicted = (stage === "shared_config" || stage === "verification")
+			const conflicted = (stage === "current_config" || stage === "verification")
 				&& this.options.currentConfig.getStatus() === "conflicted";
 			this.snapshot = {
 				status: conflicted ? "conflicted" : "unavailable",

@@ -91,7 +91,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 
 	return {
 		monthlyLocale: optionalString(savedSettings.monthlyLocale),
-		currentConfigAdopted: savedSettings.currentConfigAdopted === true,
+		currentConfigInitialized: savedSettings.currentConfigInitialized === true,
 		settingsVersion: SETTINGS_VERSION,
 		dailyHeading: stringOrDefault(merged.dailyHeading, DEFAULT_KNOMO_SETTINGS.dailyHeading),
 		dailyInsertPosition,

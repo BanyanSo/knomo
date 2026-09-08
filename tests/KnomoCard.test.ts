@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoCardPreview } from "../src/ui/MemoCardPreview";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -132,11 +132,11 @@ test("普通卡片时间使用 observation 分钟精度，不读取旧创建时�
 	assert.equal(root.find("[data-memo-time-open='daily']")?.getText(), "2026-06-03 12:34");
 });
 
-test("memo card menu keeps Markdown actions available while identity is settling", async () => {
+test("memo card menu keeps Markdown actions available with Catalog capabilities", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const root = new TestElement("div");
-	const capabilities = makeCapabilities("syncing");
+	const capabilities = makeCapabilities();
 
 	renderKnomoMemoCard(root.asHtml(), makeMemo({
 		catalog: { capabilities, observation: { logicalDate: "2026-06-02", time: "12:34" } } as never,
@@ -283,13 +283,13 @@ async function renderMemoCard(
 	body: TestElement | null;
 	content: TestElement | null;
 	images: TestElement | null;
-	queued: { container: HTMLElement; memo: MemoRecord; previewText: string } | null;
+	queued: { container: HTMLElement; memo: MemoViewItem; previewText: string } | null;
 }> {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const root = new TestElement("div");
 	const memo = makeMemo({ contentSnapshot });
-	let queued: { container: HTMLElement; memo: MemoRecord; previewText: string } | null = null;
+	let queued: { container: HTMLElement; memo: MemoViewItem; previewText: string } | null = null;
 
 	renderKnomoMemoCard(root.asHtml(), memo, {
 		generation: 7,
@@ -433,7 +433,7 @@ class TestElement {
 	}
 }
 
-function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
+function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
 	return {
 		id: "memo-1",
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -441,36 +441,19 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 		contentSnapshot: "memo",
 		contentHash: "hash",
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 		...overrides,
 	};
 }
 
-function makeCapabilities(identityState: "ready" | "absent" | "syncing" | "conflicted") {
+function makeCapabilities() {
 	return {
 		...createResolvedMemoCapabilities(),
 		catalog: createCatalogCapabilities({

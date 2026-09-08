@@ -23,7 +23,7 @@ export interface CatalogReadStatus {
 	settings?: KnomoSettingsLoadStatus;
 	content: CatalogContentState;
 	catalog: CatalogState;
-	sharedConfiguration?: KnomoCurrentConfigStatus;
+	currentConfiguration?: KnomoCurrentConfigStatus;
 	projection: MonthlyProjectionState;
 	migration: LegacyMigrationState;
 }
@@ -31,7 +31,7 @@ export interface CatalogReadStatus {
 export interface KnomoRuntimeAttentionSnapshot {
 	settings?: KnomoSettingsLoadStatus;
 	catalogLifecycle: CatalogStoreLifecycle;
-	sharedConfiguration: KnomoCurrentConfigStatus;
+	currentConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
 	legacyMigration: LegacyMigrationStatus;
 }
@@ -42,7 +42,7 @@ export interface KnomoRuntimeSnapshot {
 		coverage: CatalogCoverage;
 		lifecycle: CatalogStoreLifecycle;
 	};
-	sharedConfiguration: KnomoCurrentConfigStatus;
+	currentConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
 	legacyMigration: LegacyMigrationStatus;
 }

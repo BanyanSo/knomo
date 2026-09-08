@@ -795,7 +795,7 @@ export class CatalogIndexCoordinator {
 	}
 
 	private buildCoverage(): CatalogCoverage {
-		const sharedConfigurationComplete = this.isConfigurationComplete();
+		const configurationComplete = this.isConfigurationComplete();
 		let coveredFromDate: string | null = null;
 		for (const date of this.coverageDates) {
 			const counts = this.coverageByDate.get(date);
@@ -809,7 +809,7 @@ export class CatalogIndexCoordinator {
 				: pendingFileCount === 0 && this.failedPaths.size === 0
 					? "complete"
 					: "partial",
-			sharedConfigurationComplete,
+			configurationComplete,
 			coveredFromDate,
 			pendingFileCount,
 			coveredFileCount: this.coveredFileCount,

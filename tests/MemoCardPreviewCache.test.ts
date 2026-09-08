@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { MemoCardPreviewCache } from "../src/ui/MemoCardPreviewCache";
 
 test("reuses a memo preview while its fixed cache key is unchanged", () => {
@@ -52,7 +52,7 @@ test("finds local image previews affected by changed path or basename without dr
 	assert.equal(calls, 1);
 });
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-15T09:00:00",
@@ -60,30 +60,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: "memo",
 		contentHash: `hash-${id}`,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-15.md",
 			heading: "## Memos",
-			lastKnownBlock: "- 09:00:00 memo",
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/Memos-2026-06.md",
-			dateHeading: "## [[2026-06-15]]",
-			lastKnownBlock: "- 09:00:00 memo",
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

@@ -68,7 +68,7 @@ export default class KnomoPlugin extends Plugin {
 	private memoCommandService: MemoCommandService | null = null;
 	private catalogReadService: CatalogReadService | null = null;
 	private monthlyProjectionCoordinator: MonthlyProjectionCoordinator | null = null;
-	private legacyIndexMigrationService: LegacyTrashMigrationService | null = null;
+	private legacyTrashMigrationService: LegacyTrashMigrationService | null = null;
 	private legacyMigrationCompletionNoticeService: LegacyMigrationCompletionNoticeService | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
@@ -121,16 +121,16 @@ export default class KnomoPlugin extends Plugin {
 			};
 		};
 
-		const knomoDataRootMigrationService = new RecoveryDataRootService(this.app,
+		const recoveryDataRootService = new RecoveryDataRootService(this.app,
 			() => this.settingsService.getSettings(),
 			async (root) => { await this.settingsService.commitKnomoDataRoot(root); },
 			async (action) => {
-				await this.legacyIndexMigrationService?.waitForIdle();
+				await this.legacyTrashMigrationService?.waitForIdle();
 				return this.memoCommandService === null ? action() : this.memoCommandService.runWithMutationsPaused(action);
 			});
 		const startupBootstrapService = new KnomoStartupBootstrapService(this.app, {
 			getLocation: () => this.settingsService.getSettings(),
-			initializeDataRoot: (root) => knomoDataRootMigrationService.migrate(root),
+			initializeDataRoot: (root) => recoveryDataRootService.migrate(root),
 			currentConfig: knomoCurrentConfigService,
 			cancellationSignal: lowPriorityWorkQueue.signal,
 		});
@@ -257,8 +257,8 @@ export default class KnomoPlugin extends Plugin {
 				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
-				getLegacyImportStatus: () => this.legacyIndexMigrationService?.getReport().status ?? "idle",
-				getSharedConfigurationStatus: () => knomoCurrentConfigService.getStatus(),
+				getLegacyImportStatus: () => this.legacyTrashMigrationService?.getReport().status ?? "idle",
+				getCurrentConfigurationStatus: () => knomoCurrentConfigService.getStatus(),
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
 				getStartupBootstrapSnapshot: getStartupSnapshot,
 				getTrashService,
@@ -269,7 +269,6 @@ export default class KnomoPlugin extends Plugin {
 
 		const legacyIndexReader = new LegacyIndexReader(
 			this.app,
-			this.manifest.id,
 			() => this.settingsService.getSettings().monthlyMemoFolder,
 		);
 		this.legacyMigrationCompletionNoticeService = new LegacyMigrationCompletionNoticeService(
@@ -279,7 +278,7 @@ export default class KnomoPlugin extends Plugin {
 				new Notice(t("notice.legacyMigrationCompleted", { path: legacySystemRoot }));
 			},
 		);
-		this.legacyIndexMigrationService = new LegacyTrashMigrationService(this.app, legacyIndexReader, {
+		this.legacyTrashMigrationService = new LegacyTrashMigrationService(this.app, legacyIndexReader, {
 			runExclusive: (action) => this.memoCommandService!.runWithMutationsPaused(action),
 			onReportChanged: async () => {
 				if (lowPriorityWorkQueue.signal.aborted) return;
@@ -336,7 +335,7 @@ export default class KnomoPlugin extends Plugin {
 				await this.catalogIndexCoordinator?.refreshLocalCatalog();
 			}
 			if (settingsRecovered) await this.catalogIndexCoordinator?.refreshLocalCatalog();
-			await this.legacyIndexMigrationService?.run();
+			await this.legacyTrashMigrationService?.run();
 		};
 		this.registerView(
 			KNOMO_VIEW_TYPE,
@@ -388,9 +387,9 @@ export default class KnomoPlugin extends Plugin {
 			this.memoCommandService,
 			this.catalogReadService,
 			this.monthlyProjectionCoordinator,
-			knomoDataRootMigrationService,
+			recoveryDataRootService,
 			knomoCurrentConfigService,
-			this.legacyIndexMigrationService,
+			this.legacyTrashMigrationService,
 			startupBootstrapService,
 			retryRuntimeState,
 		);
@@ -406,7 +405,7 @@ export default class KnomoPlugin extends Plugin {
 			initializeMonthly: async () => { await this.monthlyProjectionCoordinator?.initialize(); },
 			initializeRecovery: async () => {
 				if (settingsLoaded) await startupBootstrapService.initialize();
-				if (!lowPriorityWorkQueue.signal.aborted) await this.legacyIndexMigrationService?.run();
+				if (!lowPriorityWorkQueue.signal.aborted) await this.legacyTrashMigrationService?.run();
 			},
 			isCancelled: () => lowPriorityWorkQueue.signal.aborted,
 			onAuxiliaryError: () => settingTab?.refreshAttentionIfVisible(),
@@ -610,7 +609,7 @@ export default class KnomoPlugin extends Plugin {
 
 	private async showLegacyMigrationCompletionNotice(): Promise<void> {
 		await this.legacyMigrationCompletionNoticeService?.showIfNeeded(
-			this.legacyIndexMigrationService?.getReport().cleanupCandidate ?? null,
+			this.legacyTrashMigrationService?.getReport().cleanupCandidate ?? null,
 		);
 	}
 

@@ -96,13 +96,13 @@ test("record stats preparation controller retries invalidated requests with the 
 	});
 
 	const preparing = controller.prepare(options);
-	assert.equal(controller.setSourceKey("catalog:2:identity:identity-1:coverage:complete"), true);
+	assert.equal(controller.setSourceKey("catalog:2:coverage:complete"), true);
 	first.resolve(true);
 	await preparing;
 
 	assert.deepEqual(runSources, [
 		"catalog:uninitialized",
-		"catalog:2:identity:identity-1:coverage:complete",
+		"catalog:2:coverage:complete",
 	]);
 	assert.equal(controller.hasActiveRequest(), true);
 	second.resolve(true);
@@ -113,7 +113,7 @@ test("record stats preparation controller retries invalidated requests with the 
 test("record stats preparation controller keeps the same source key across query-only navigation", () => {
 	const scheduler = new FakeScheduler();
 	const controller = createController(scheduler);
-	const source = "catalog:2:identity:identity-1:coverage:complete";
+	const source = "catalog:2:coverage:complete";
 
 	assert.equal(controller.setSourceKey(source), true);
 	assert.equal(controller.sourceKey, source);

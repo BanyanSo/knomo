@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("post-processes memo markdown DOM metadata", async () => {
@@ -365,7 +365,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 	assert.fail("Timed out waiting for asynchronous render");
 }
 
-function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
+function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
 	return {
 		id: "memo-1",
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -373,31 +373,14 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 		contentSnapshot: "memo",
 		contentHash: "hash",
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: "Memos",
 			sectionType: "heading",
-			lastKnownBlock: "- [ ] task",
-			lastKnownHash: "hash",
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "- [ ] task",
-			lastKnownHash: "hash",
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 		...overrides,
 	};

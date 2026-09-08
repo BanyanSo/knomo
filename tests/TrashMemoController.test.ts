@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import type { TrashMemoRenderTarget } from "../src/ui/TrashMemoController";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -62,8 +62,8 @@ test("loads trash once while busy and preserves loading render transitions", asy
 	const { TrashMemoController } = await loadController();
 	const renderTargets: TrashMemoRenderTarget[] = [];
 	let listCalls = 0;
-	let resolveList!: (memos: MemoRecord[]) => void;
-	const listPromise = new Promise<MemoRecord[]>((resolve) => {
+	let resolveList!: (memos: MemoViewItem[]) => void;
+	const listPromise = new Promise<MemoViewItem[]>((resolve) => {
 		resolveList = resolve;
 	});
 	const controller = new TrashMemoController({
@@ -101,7 +101,7 @@ test("loads trash once while busy and preserves loading render transitions", asy
 test("refresh keeps committed trash memos visible until the new list commits", async () => {
 	const { TrashMemoController } = await loadController();
 	const oldMemo = makeMemo("old");
-	const nextList = createDeferred<MemoRecord[]>();
+	const nextList = createDeferred<MemoViewItem[]>();
 	let firstLoad = true;
 	const controller = new TrashMemoController({
 		getDeletedMemoSummary: async () => ({ count: 1, ids: [oldMemo.id] }),
@@ -131,7 +131,7 @@ test("an in-flight trash refresh cannot restore a memo removed by a newer action
 	const { TrashMemoController } = await loadController();
 	const restored = makeMemo("restore-me");
 	const kept = makeMemo("keep-me");
-	const staleList = createDeferred<MemoRecord[]>();
+	const staleList = createDeferred<MemoViewItem[]>();
 	let loadCount = 0;
 	const controller = new TrashMemoController({
 		getDeletedMemoSummary: async () => ({ count: 2, ids: [restored.id, kept.id] }),
@@ -164,8 +164,8 @@ test("restore keeps one busy action and force refreshes every view", async () =>
 	const renderTargets: TrashMemoRenderTarget[] = [];
 	const notices: string[] = [];
 	let restoreCalls = 0;
-	let restoredMemo: MemoRecord | null = null;
-	const handledRestoredMemos: Array<{ deletedMemo: MemoRecord; restoredMemo: MemoRecord }> = [];
+	let restoredMemo: MemoViewItem | null = null;
+	const handledRestoredMemos: Array<{ deletedMemo: MemoViewItem; restoredMemo: MemoViewItem }> = [];
 	let forceRefreshCalls = 0;
 	let resolveRestore!: () => void;
 	const restorePromise = new Promise<void>((resolve) => {
@@ -319,7 +319,7 @@ async function loadController(): Promise<typeof import("../src/ui/TrashMemoContr
 	return import("../src/ui/TrashMemoController");
 }
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -327,31 +327,14 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: `hash-${id}`,
 		status: "deleted",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: "Memos",
 			sectionType: "heading",
-			lastKnownBlock: id,
-			lastKnownHash: `hash-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: id,
-			lastKnownHash: `hash-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

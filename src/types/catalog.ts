@@ -143,8 +143,8 @@ export interface CatalogDailyAggregate {
 
 export interface CatalogCoverage {
 	kind: CatalogCoverageKind;
-	/** false 表示本地扫描已可用，但共享配置尚不能证明扫描范围完整。 */
-	sharedConfigurationComplete?: boolean;
+	/** false 表示本地扫描已可用，但当前配置尚不能证明扫描范围完整。 */
+	configurationComplete?: boolean;
 	coveredFromDate: string | null;
 	pendingFileCount: number;
 	coveredFileCount: number;

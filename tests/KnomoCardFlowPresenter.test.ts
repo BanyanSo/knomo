@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("presents card flow error before other states", async () => {
@@ -147,11 +147,11 @@ test("presents random loading, failure and true empty states distinctly", async 
 		...baseOptions(),
 		activeNav: "random",
 		randomReunionStatus: "failed",
-		randomReunionError: "Identity write failed",
+		randomReunionError: "Candidate query failed",
 	}), {
 		type: "empty",
 		title: "Random revisit failed to load",
-		description: "Identity write failed",
+		description: "Candidate query failed",
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -322,11 +322,11 @@ function baseOptions() {
 	};
 }
 
-function makeMemos(count: number, prefix = "memo"): MemoRecord[] {
+function makeMemos(count: number, prefix = "memo"): MemoViewItem[] {
 	return Array.from({ length: count }, (_, index) => makeMemo(`${prefix}-${index}`));
 }
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -334,30 +334,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 	};
 }

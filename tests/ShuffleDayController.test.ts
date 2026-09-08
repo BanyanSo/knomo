@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { ShuffleDayService } from "../src/services/ShuffleDayService";
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { buildShuffleDayStats } from "../src/utils/shuffleDay";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -101,7 +101,7 @@ test("selected-date reload keeps the committed day visible until its complete re
 	const { ShuffleDayController } = await loadController();
 	const oldMemo = makeMemo("old", "2026-05-01T09:00:00");
 	const updatedMemo = { ...oldMemo, contentSnapshot: "updated" };
-	const dateLoad = createDeferred<MemoRecord[]>();
+	const dateLoad = createDeferred<MemoViewItem[]>();
 	const controller = new ShuffleDayController({
 		prepareCatalogData: async () => {},
 		getMemos: () => [oldMemo],
@@ -153,7 +153,7 @@ test("targeted memo updates preserve unaffected shuffle-day memos and clear only
 test("a late selected-date reload cannot overwrite a newer targeted update", async () => {
 	const { ShuffleDayController } = await loadController();
 	const oldMemo = makeMemo("memo", "2026-05-01T09:00:00");
-	const dateLoad = createDeferred<MemoRecord[]>();
+	const dateLoad = createDeferred<MemoViewItem[]>();
 	const controller = new ShuffleDayController({
 		prepareCatalogData: async () => {},
 		getMemos: () => [oldMemo],
@@ -183,11 +183,11 @@ function makeService(selectShuffleDay: ShuffleDayService["selectShuffleDay"]): S
 	return { selectShuffleDay } as ShuffleDayService;
 }
 
-function makeSelection(selectedDate: string, memo: MemoRecord) {
+function makeSelection(selectedDate: string, memo: MemoViewItem) {
 	return makeSelectionWithMemos(selectedDate, [memo]);
 }
 
-function makeSelectionWithMemos(selectedDate: string, memos: MemoRecord[]) {
+function makeSelectionWithMemos(selectedDate: string, memos: MemoViewItem[]) {
 	return {
 		status: "ready" as const,
 		selectedDate,
@@ -206,7 +206,7 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 	return { promise, resolve: resolvePromise };
 }
 
-function makeMemo(id: string, createdAt: string): MemoRecord {
+function makeMemo(id: string, createdAt: string): MemoViewItem {
 	return {
 		id,
 		createdAt,
@@ -214,30 +214,13 @@ function makeMemo(id: string, createdAt: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: `hash-${id}`,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
-			lastKnownBlock: id,
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-05.md",
-			dateHeading: createdAt.slice(0, 10),
-			lastKnownBlock: id,
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

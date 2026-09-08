@@ -28,11 +28,11 @@ export type PreparedComposerSaveInput<TEditingMemo> =
 		dailyTrailer: string | null;
 	};
 
-export function getComposerMode(editingMemo: object | null, quoteSourceMemoId: string | null): ComposerMode {
+export function getComposerMode(editingMemo: object | null, quoteSourceKey: string | null): ComposerMode {
 	if (editingMemo !== null) {
 		return "edit";
 	}
-	if (quoteSourceMemoId !== null) {
+	if (quoteSourceKey !== null) {
 		return "quote";
 	}
 	return "create";

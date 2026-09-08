@@ -57,7 +57,7 @@ export interface CatalogReadServiceOptions {
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
 	getLegacyImportStatus?: () => LegacyMigrationStatus;
-	getSharedConfigurationStatus?: () => KnomoCurrentConfigStatus;
+	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
@@ -104,11 +104,11 @@ export class CatalogReadService {
 		} catch {
 			// 故障提示无法读取 Catalog 状态时，按可恢复的降级状态处理。
 		}
-		let sharedConfiguration: KnomoRuntimeAttentionSnapshot["sharedConfiguration"] = "unavailable";
+		let currentConfiguration: KnomoRuntimeAttentionSnapshot["currentConfiguration"] = "unavailable";
 		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "unavailable";
 		let settings: KnomoSettingsLoadStatus = "ready";
 		try {
-			sharedConfiguration = this.options.getSharedConfigurationStatus?.() ?? "missing";
+			currentConfiguration = this.options.getCurrentConfigurationStatus?.() ?? "missing";
 		} catch {
 			// 保留 unavailable。
 		}
@@ -125,7 +125,7 @@ export class CatalogReadService {
 		return {
 			settings,
 			catalogLifecycle,
-			sharedConfiguration,
+			currentConfiguration,
 			monthly: this.getProjectionState(),
 			legacyMigration,
 		};
@@ -151,7 +151,7 @@ export class CatalogReadService {
 		return {
 			settings: attention.settings,
 			catalog: { coverage, lifecycle },
-			sharedConfiguration: attention.sharedConfiguration,
+			currentConfiguration: attention.currentConfiguration,
 			monthly: attention.monthly,
 			legacyMigration: attention.legacyMigration,
 		};
@@ -645,9 +645,9 @@ export class CatalogReadService {
 					: "scanning",
 			catalog: catalogDegraded
 				? "degraded"
-				: coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false ? "complete" : "partial",
+				: coverage.kind === "complete" && coverage.configurationComplete !== false ? "complete" : "partial",
 			// 内容状态与辅助服务诊断分别提供。
-			sharedConfiguration: this.getSharedConfigurationStatus(),
+			currentConfiguration: this.getCurrentConfigurationStatus(),
 			projection: this.getProjectionState(),
 			migration: legacyStatus === "attention"
 				? "attention"
@@ -663,9 +663,9 @@ export class CatalogReadService {
 		}
 	}
 
-	private getSharedConfigurationStatus(): KnomoCurrentConfigStatus {
+	private getCurrentConfigurationStatus(): KnomoCurrentConfigStatus {
 		try {
-			return this.options.getSharedConfigurationStatus?.() ?? "missing";
+			return this.options.getCurrentConfigurationStatus?.() ?? "missing";
 		} catch {
 			return "unavailable";
 		}
@@ -830,7 +830,7 @@ function isDateCovered(coverage: CatalogCoverage, logicalDate: string): boolean 
 }
 
 function isCompleteCoverage(coverage: CatalogCoverage): boolean {
-	return coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false;
+	return coverage.kind === "complete" && coverage.configurationComplete !== false;
 }
 
 function isQueryCovered(coverage: CatalogCoverage, request: CatalogFeatureFilter): boolean {
@@ -838,11 +838,11 @@ function isQueryCovered(coverage: CatalogCoverage, request: CatalogFeatureFilter
 	return request.fromDate !== undefined
 		&& coverage.coveredFromDate !== null
 		&& request.fromDate >= coverage.coveredFromDate
-		&& coverage.sharedConfigurationComplete !== false;
+		&& coverage.configurationComplete !== false;
 }
 
 function isRangeCovered(coverage: CatalogCoverage, fromDate: string, toDate: string): boolean {
-	if (fromDate > toDate || coverage.sharedConfigurationComplete === false) return false;
+	if (fromDate > toDate || coverage.configurationComplete === false) return false;
 	return isCompleteCoverage(coverage)
 		|| (coverage.coveredFromDate !== null && fromDate >= coverage.coveredFromDate);
 }

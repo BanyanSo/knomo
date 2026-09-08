@@ -6,7 +6,7 @@ import {
 	KnomoCardFlowBatcher,
 	runCardFlowBatch,
 } from "../src/ui/KnomoCardFlow";
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 
 test("starts card flow with the default batch size", () => {
 	const batcher = new KnomoCardFlowBatcher();
@@ -340,11 +340,11 @@ test("cancels stale card flow batches before completion", () => {
 	assert.deepEqual(rendered, ["memo-0"]);
 });
 
-function makeMemos(count: number, prefix = "memo"): MemoRecord[] {
+function makeMemos(count: number, prefix = "memo"): MemoViewItem[] {
 	return Array.from({ length: count }, (_, index) => makeMemo(`${prefix}-${index}`));
 }
 
-function makeItemsBatch(memos: MemoRecord[], mode: "memo" | "trash" = "memo") {
+function makeItemsBatch(memos: MemoViewItem[], mode: "memo" | "trash" = "memo") {
 	return {
 		type: "items" as const,
 		items: memos.map((memo, renderIndex) => ({ memo, mode, renderIndex })),
@@ -353,7 +353,7 @@ function makeItemsBatch(memos: MemoRecord[], mode: "memo" | "trash" = "memo") {
 	};
 }
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -361,30 +361,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 	};
 }

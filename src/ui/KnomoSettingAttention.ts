@@ -1,7 +1,7 @@
 import type { KnomoStartupBootstrapSnapshot } from "../services/KnomoStartupBootstrapService";
 import type { KnomoRuntimeAttentionSnapshot } from "../types/catalogView";
 
-export type KnomoSettingAttentionKind = "settings" | "shared-config" | "catalog" | "monthly" | "legacy";
+export type KnomoSettingAttentionKind = "settings" | "current-config" | "catalog" | "monthly" | "legacy";
 
 export function getKnomoSettingAttentionKinds(
 	runtime: KnomoRuntimeAttentionSnapshot,
@@ -10,7 +10,7 @@ export function getKnomoSettingAttentionKinds(
 	if (runtime.settings === "unavailable") return ["settings"];
 
 	const kinds: KnomoSettingAttentionKind[] = [];
-	if (runtime.sharedConfiguration !== "ready") kinds.push("shared-config");
+	if (runtime.currentConfiguration !== "ready") kinds.push("current-config");
 	if (runtime.catalogLifecycle.state === "degraded"
 		|| runtime.catalogLifecycle.state === "retrying"
 		|| runtime.catalogLifecycle.state === "read-only") kinds.push("catalog");

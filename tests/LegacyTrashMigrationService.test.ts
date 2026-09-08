@@ -24,7 +24,7 @@ async function fixture() {
 	const vault = new InMemoryVault({ [INDEX]: index, [DAILY]: "## Memos\n- 10:30 当前 Daily\n" });
 	Object.assign(vault.app, { metadataCache: { getFirstLinkpathDest: () => null } });
 	Object.assign(vault.app.vault, { delete: async (file: { path: string }) => vault.remove(file.path) });
-	const reader = new LegacyIndexReader(vault.app, "knomo", () => "Knomo");
+	const reader = new LegacyIndexReader(vault.app, () => "Knomo");
 	let sourceReads = 0;
 	let settingsWrites = 0;
 	const load = reader.load.bind(reader);
@@ -149,4 +149,20 @@ test("生产入口依赖图不包含旧 Identity/current-state/writer/receipts/c
 	}
 	assert.ok(modules.some((path) => path.endsWith("/IndependentTrashService.ts")));
 	assert.ok(modules.some((path) => path.endsWith("/LegacyTrashMigrationService.ts")));
+});
+
+test("旧 review、pending 和历史 relation 损坏不阻断有效 Trash 的正式迁移", async () => {
+	const f = await fixture();
+	await f.vault.app.vault.create("Knomo/_knomo-system/pending-memo-creates.json", "invalid journal");
+	const index = JSON.parse(f.index);
+	for (const record of Object.values(index.memos) as Record<string, unknown>[]) {
+		record.sourceMemoId = "invalid retired relation";
+	}
+	f.vault.replace(INDEX, JSON.stringify(index));
+	f.vault.app.vault.adapter.readBinary = async () => { throw new Error("Retired review must not be read"); };
+	Object.assign(f.vault.app, { metadataCache: { getFirstLinkpathDest: () => { throw new Error("Retired relation must not resolve"); } } });
+	assert.equal((await f.make().run({ explicit: true })).status, "ready");
+	assert.equal((await f.store.query()).items.length, 2);
+	assert.notEqual(await f.marker.read(), null);
+	assert.equal(f.vault.read(DAILY), "## Memos\n- 10:30 当前 Daily\n");
 });

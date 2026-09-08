@@ -2,7 +2,7 @@ import test from "node:test";
 import { sampleRandomReunionCandidates } from "../src/utils/randomReunion";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import {
 	calculateRandomReunionWeight,
 	filterRandomReunionCandidates,
@@ -106,9 +106,9 @@ function makeMemo(
 		contentSnapshot?: string;
 		tags?: string[];
 		sourcePath?: string;
-		status?: MemoRecord["status"];
+		status?: MemoViewItem["status"];
 	} = {},
-): MemoRecord {
+): MemoViewItem {
 	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
 	const sourcePath = overrides.sourcePath ?? `Daily/${createdAt.slice(0, 10)}.md`;
 	return {
@@ -118,30 +118,13 @@ function makeMemo(
 		contentSnapshot: overrides.contentSnapshot ?? "这是一条足够长的 memo",
 		contentHash: `hash-${id}`,
 		status: overrides.status ?? "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 2,
 		tags: overrides.tags ?? [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: sourcePath,
 			heading: "## Knomo",
-			lastKnownBlock: "- 09:00:00 这是一条足够长的 memo",
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 3,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-05.md",
-			dateHeading: `## ${createdAt.slice(0, 10)}`,
-			lastKnownBlock: "- 09:00:00 这是一条足够长的 memo",
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 3,
-			lastSyncedAt: null,
 		},
 	};
 }

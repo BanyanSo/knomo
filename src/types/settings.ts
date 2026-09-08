@@ -7,7 +7,7 @@ export type MobileCompactMode = "auto" | "on" | "off";
 
 export interface KnomoSettings {
 	monthlyLocale?: string;
-	currentConfigAdopted?: boolean;
+	currentConfigInitialized?: boolean;
 	settingsVersion: number;
 	dailyHeading: string;
 	dailyInsertPosition: DailyInsertPosition;

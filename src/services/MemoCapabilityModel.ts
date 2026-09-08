@@ -24,7 +24,7 @@ export function createResolvedMemoCapabilities(): ResolvedMemoCapabilities {
 }
 
 export function createCatalogCapabilities(coverage: CatalogCoverage): CatalogCapabilities {
-	const state = coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false
+	const state = coverage.kind === "complete" && coverage.configurationComplete !== false
 		? "complete"
 		: "partial";
 	return {

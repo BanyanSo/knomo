@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("builds card flow view keys from normalized filters", async () => {
@@ -94,7 +94,7 @@ test("keys closed mobile search independently from visible memos", async () => {
 	assert.equal(getMobileSearchIdsKey(true, [memo]), "memo-1");
 });
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -102,30 +102,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Journal/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: contentBlock(id),
-			lastKnownHash: id,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: contentBlock(id),
-			lastKnownHash: id,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

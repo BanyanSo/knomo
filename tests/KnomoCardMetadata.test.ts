@@ -15,7 +15,7 @@ import {
 	getTrashMemoCardClass,
 	isMemoCardMenuReady,
 } from "../src/ui/KnomoCardMetadata";
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 
 test("builds memo card shell metadata without daily-open card attributes", () => {
 	assert.deepEqual(getMemoCardShell({
@@ -94,19 +94,18 @@ test("builds card action and trash action metadata", () => {
 	assert.equal(getTrashMemoCardClass("restore"), "knomo-card knomo-trash-card is-busy");
 });
 
-test("keeps the card menu available while identity actions are settling", () => {
+test("keeps the card menu available with Catalog capabilities", () => {
 	const memo = makeMemo({});
 	assert.equal(isMemoCardMenuReady(memo), true);
 	assert.equal(isMemoCardMenuReady({
 		...memo,
 		catalog: {
-			capabilities: makeCapabilities("syncing"),
+			capabilities: makeCapabilities(),
 		} as never,
 	}), true);
 });
 
 test("builds memo source reference metadata", () => {
-	const deletedMemoIds = new Set<string>();
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ })), { type: "none" });
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ })), { type: "none" });
 	assert.deepEqual(getMemoSourceReferenceMeta(makeMemo({ })), { type: "none" });
@@ -130,7 +129,7 @@ test("hides the source block link from referenced card content", () => {
 	})), "普通链接 [[Daily/2026-06-01]]");
 });
 
-function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
+function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
 	return {
 		id: "memo-1",
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -138,36 +137,19 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 		contentSnapshot: "memo",
 		contentHash: "hash",
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 		...overrides,
 	};
 }
 
-function makeCapabilities(identityState: "ready" | "absent" | "syncing" | "conflicted") {
+function makeCapabilities() {
 	return {
 		...createResolvedMemoCapabilities(),
 		catalog: createCatalogCapabilities({

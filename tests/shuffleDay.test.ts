@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import {
 	buildShuffleDayStats,
 	selectShuffleDay,
@@ -128,8 +128,8 @@ test("weightedPick ignores invalid weights", () => {
 function makeMemo(
 	id: string,
 	createdAt: string,
-	overrides: Partial<Pick<MemoRecord, "contentSnapshot" | "tags" | "links" | "images" | "status">> = {},
-): MemoRecord {
+	overrides: Partial<Pick<MemoViewItem, "contentSnapshot" | "tags" | "links" | "images" | "status">> = {},
+): MemoViewItem {
 	return {
 		id,
 		createdAt,
@@ -137,30 +137,13 @@ function makeMemo(
 		contentSnapshot: overrides.contentSnapshot ?? "memo content",
 		contentHash: `hash-${id}`,
 		status: overrides.status ?? "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: overrides.tags ?? [],
 		links: overrides.links ?? [],
 		images: overrides.images ?? [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
-			lastKnownBlock: id,
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-05.md",
-			dateHeading: createdAt.slice(0, 10),
-			lastKnownBlock: id,
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

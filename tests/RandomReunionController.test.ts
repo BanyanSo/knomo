@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "./helpers/memoViewFixture";
+import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("refreshes random reunion once while loading and preserves render transitions", async () => {
@@ -11,8 +11,8 @@ test("refreshes random reunion once while loading and preserves render transitio
 	let randomCalls = 0;
 	let requestedCount = 0;
 	let renderCalls = 0;
-	let resolveRandom!: (memos: MemoRecord[]) => void;
-	const randomPromise = new Promise<MemoRecord[]>((resolve) => {
+	let resolveRandom!: (memos: MemoViewItem[]) => void;
+	const randomPromise = new Promise<MemoViewItem[]>((resolve) => {
 		resolveRandom = resolve;
 	});
 	const controller = new RandomReunionController({
@@ -52,7 +52,7 @@ test("keeps the current random reunion batch visible while loading the next grou
 	const { RandomReunionController } = await loadController();
 	const firstMemos = [makeMemo("memo-1")];
 	const nextMemos = [makeMemo("memo-2")];
-	const deferred = createDeferred<MemoRecord[]>();
+	const deferred = createDeferred<MemoViewItem[]>();
 	let loadCalls = 0;
 	const controller = new RandomReunionController({
 		loadRandomReunionMemos: async () => {
@@ -179,7 +179,7 @@ test("clears cached random reunion memos before the next Catalog refresh", async
 
 test("clearing random reunion invalidates an in-flight result", async () => {
 	const { RandomReunionController } = await loadController();
-	const deferred = createDeferred<MemoRecord[]>();
+	const deferred = createDeferred<MemoViewItem[]>();
 	const controller = new RandomReunionController({
 		loadRandomReunionMemos: async () => deferred.promise,
 		openRandomReunionMemo: async () => {},
@@ -258,7 +258,7 @@ test("does not review when Daily opening fails and distinguishes review persiste
 		},
 		markRandomReunionReviewed: async () => {
 			reviewCalls += 1;
-			throw new Error("Identity unavailable");
+			throw new Error("Local review storage unavailable");
 		},
 		isRandomActive: () => true,
 		showNotice: (message) => notices.push(message),
@@ -273,7 +273,7 @@ test("does not review when Daily opening fails and distinguishes review persiste
 	failOpen = false;
 	await controller.openMemo(memo.id);
 	assert.equal(reviewCalls, 1);
-	assert.equal(notices[1], "Daily note opened, but review status was not saved: Identity unavailable");
+	assert.equal(notices[1], "Daily note opened, but review status was not saved: Local review storage unavailable");
 });
 
 async function loadController(): Promise<typeof import("../src/ui/RandomReunionController")> {
@@ -281,7 +281,7 @@ async function loadController(): Promise<typeof import("../src/ui/RandomReunionC
 	return import("../src/ui/RandomReunionController");
 }
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -289,31 +289,14 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: `hash-${id}`,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: "Memos",
 			sectionType: "heading",
-			lastKnownBlock: id,
-			lastKnownHash: `hash-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: id,
-			lastKnownHash: `hash-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

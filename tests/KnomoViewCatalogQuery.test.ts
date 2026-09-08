@@ -26,7 +26,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 			memos: await (load?.promise ?? []),
 			nextCursor: null,
 			catalogRevision: 1,
-			snapshotRevision: "identity-1",
+
 			coverage: { kind: "complete", coveredFromDate: "2026-08-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 },
 			readState: "ready",
 			status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
@@ -79,14 +79,14 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 	let complete = false;
 	view.loadCatalogMemos = async () => complete
 		? {
-			...makeCatalogLoad(2, "identity-2", completeCoverage()),
+			...makeCatalogLoad(2, completeCoverage()),
 			memos: [makeMemo("complete", "2026-08-24T10:00:00")],
 		}
 		: {
 			memos: [makeMemo("known-subset", "2026-08-24T10:00:00")],
 			nextCursor: null,
 			catalogRevision: 1,
-			snapshotRevision: "identity-1",
+
 			coverage: {
 				kind: "partial",
 				coveredFromDate: "2026-08-20",
@@ -145,7 +145,7 @@ test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展�
 	view.cardFlowEl = { isConnected: true } as HTMLElement;
 	view.loadCatalogMemos = async (loadAll) => {
 		assert.equal(loadAll, false);
-		return makeCatalogLoad(1, "identity-1", completeCoverage());
+		return makeCatalogLoad(1, completeCoverage());
 	};
 	view.applyCatalogMemoLoad = () => undefined;
 	view.isDefaultListState = () => true;
@@ -190,7 +190,7 @@ test("MOBILE-CAT-PAGE-002：近月窗口结束后触底改为全历史查询", a
 	assert.equal(view.catalogLoadingNextPage, false);
 });
 
-test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次", async () => {
+test("Catalog revision 变化触发刷新时保留当前随机重逢批次", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
@@ -204,7 +204,7 @@ test("Identity adoption 触发 Catalog 刷新时保留当前随机重逢批次",
 	view.memos = [];
 	view.viewStateController = { activeNav: "random" };
 	view.getCatalogQueryFingerprint = () => "random";
-	view.loadCatalogMemos = async () => makeCatalogLoad(2, "identity-2", completeCoverage());
+	view.loadCatalogMemos = async () => makeCatalogLoad(2, completeCoverage());
 	view.getCardFlowStateKey = () => "random-ready";
 	view.getMobileSearchStateKey = () => "mobile-search";
 	view.invalidateMemoSearchCache = () => undefined;
@@ -294,7 +294,7 @@ test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快�
 		memos: await pending.promise,
 		nextCursor: null,
 		catalogRevision: 2,
-		snapshotRevision: "identity-2",
+
 		coverage: completeCoverage(),
 		readState: "ready",
 		status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
@@ -379,7 +379,7 @@ test("查询 fingerprint 变化时保留旧结果、清空 cursor，并启动新
 	assert.equal(await reviewRequest, false);
 });
 
-test("桌面精确计数只提交当前查询与 Catalog、Identity revision", async () => {
+test("桌面精确计数只提交当前查询与 Catalog revision", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const current = createDeferred<TestCatalogMemoCount>();
@@ -406,9 +406,9 @@ test("桌面精确计数只提交当前查询与 Catalog、Identity revision", a
 		queryRun: 1,
 		sourceGeneration: 0,
 		catalogRevision: 7,
-		snapshotRevision: "identity-7",
+
 	});
-	current.resolve(makeCatalogCount(90, 7, "identity-7"));
+	current.resolve(makeCatalogCount(90, 7));
 	await committed;
 	assert.equal(view.catalogDesktopTotalCount, 90);
 	assert.equal(renderCount, 1);
@@ -419,10 +419,10 @@ test("桌面精确计数只提交当前查询与 Catalog、Identity revision", a
 		queryRun: 1,
 		sourceGeneration: 0,
 		catalogRevision: 7,
-		snapshotRevision: "identity-7",
+
 	});
 	view.catalogDesktopQueryRun = 2;
-	stale.resolve(makeCatalogCount(120, 7, "identity-7"));
+	stale.resolve(makeCatalogCount(120, 7));
 	await ignored;
 	assert.equal(view.catalogDesktopTotalCount, 90);
 	assert.equal(renderCount, 1);
@@ -460,7 +460,7 @@ test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
 	assert.deepEqual(presentation.headers, [{ type: "summary", text: "#Project: 90 Memos" }]);
 });
 
-test("统计缓存只随 Catalog 和完整覆盖版本变化而失效，不跟随 Identity", async () => {
+test("统计缓存只随 Catalog 和完整覆盖版本变化而失效", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
@@ -469,7 +469,6 @@ test("统计缓存只随 Catalog 和完整覆盖版本变化而失效，不跟�
 	let recordStatsUpdating = false;
 	const updatingFlags: boolean[] = [];
 	view.catalogRevision = 0;
-	view.catalogIdentityRevision = "";
 	view.catalogCoverage = null;
 	view.libraryIndexRevision = 7;
 	view.librarySummary = { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 };
@@ -491,7 +490,7 @@ test("统计缓存只随 Catalog 和完整覆盖版本变化而失效，不跟�
 	};
 	view.refreshCatalogLibraryIndexes = async () => undefined;
 
-	const load = makeCatalogLoad(7, "identity-1", completeCoverage());
+	const load = makeCatalogLoad(7, completeCoverage());
 	view.applyCatalogMemoLoad(load);
 	assert.equal(invalidationCount, 1);
 	assert.equal(currentSource, "catalog:7:coverage:complete");
@@ -503,20 +502,20 @@ test("统计缓存只随 Catalog 和完整覆盖版本变化而失效，不跟�
 	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8 });
 	assert.equal(invalidationCount, 2);
 	assert.deepEqual(updatingFlags, [false, false]);
-	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8, snapshotRevision: "identity-2" });
+	view.applyCatalogMemoLoad({ ...load, catalogRevision: 8 });
 	assert.equal(invalidationCount, 2);
 	assert.deepEqual(updatingFlags, [false, false]);
 	view.applyCatalogMemoLoad({
 		...load,
 		catalogRevision: 8,
-		snapshotRevision: "identity-2",
+
 		coverage: { ...completeCoverage(), kind: "partial", pendingFileCount: 1 },
 	});
 	assert.equal(invalidationCount, 3);
 	assert.equal(currentSource, "catalog:8:coverage:incomplete");
 	assert.deepEqual(updatingFlags, [false, false, true]);
 
-	view.applyCatalogMemoLoad({ ...load, catalogRevision: 9, snapshotRevision: "identity-2" });
+	view.applyCatalogMemoLoad({ ...load, catalogRevision: 9 });
 	assert.equal(invalidationCount, 4);
 	assert.equal(currentSource, "catalog:9:coverage:complete");
 	assert.deepEqual(updatingFlags, [false, false, true, true]);
@@ -706,7 +705,6 @@ interface QueryView {
 	catalogCoverage: TestCoverage | null;
 	catalogReadState: "ready" | "history_building";
 	catalogRevision: number;
-	catalogIdentityRevision: string;
 	libraryIndexRevision: number;
 	libraryIndexRun: number;
 	libraryIndexesInvalidatedByCoverage: boolean;
@@ -766,7 +764,6 @@ interface QueryView {
 		queryRun: number;
 		sourceGeneration: number;
 		catalogRevision: number;
-		snapshotRevision: string;
 	}) => Promise<void>;
 	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
 	updateCatalogProgress: (coverage: TestCoverage) => void;
@@ -877,7 +874,6 @@ type TestCatalogMemoLoad = {
 	memos: QueryMemo[];
 	nextCursor: null;
 	catalogRevision: number;
-	snapshotRevision: string;
 	coverage: TestCoverage;
 	readState: "ready" | "history_building";
 	status: {
@@ -892,7 +888,6 @@ type TestCatalogMemoCount = {
 	count: number | null;
 	complete: boolean;
 	catalogRevision: number;
-	snapshotRevision: string;
 	coverage: TestCoverage;
 };
 
@@ -936,14 +931,12 @@ function completeCoverage(): TestCoverage {
 
 function makeCatalogLoad(
 	catalogRevision: number,
-	snapshotRevision: string,
 	coverage: TestCoverage,
 ): TestCatalogMemoLoad {
 	return {
 		memos: [],
 		nextCursor: null,
 		catalogRevision,
-		snapshotRevision,
 		coverage,
 		readState: "ready",
 		status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
@@ -953,13 +946,11 @@ function makeCatalogLoad(
 function makeCatalogCount(
 	count: number,
 	catalogRevision: number,
-	snapshotRevision: string,
 ): TestCatalogMemoCount {
 	return {
 		count,
 		complete: true,
 		catalogRevision,
-		snapshotRevision,
 		coverage: completeCoverage(),
 	};
 }

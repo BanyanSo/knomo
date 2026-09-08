@@ -53,7 +53,7 @@ test("本机 fallback 扫描完成后内容就绪但共享配置范围仍不完�
 	const page = await store.query({ limit: 50 });
 	assert.deepEqual(page.items.map((item) => item.content), ["fallback memo"]);
 	assert.equal(page.coverage.kind, "complete");
-	assert.equal(page.coverage.sharedConfigurationComplete, false);
+	assert.equal(page.coverage.configurationComplete, false);
 	assert.equal(page.coverage.pendingFileCount, 0);
 	fixture.unload();
 });
@@ -79,7 +79,7 @@ test("fresh empty Vault 在共享配置缺失时也把 0/0 Daily 视为 complete
 
 	assert.deepEqual((await store.query({ limit: 50 })).coverage, {
 		kind: "complete",
-		sharedConfigurationComplete: false,
+		configurationComplete: false,
 		coveredFromDate: null,
 		pendingFileCount: 0,
 		coveredFileCount: 0,
@@ -147,7 +147,7 @@ test("共享配置晚到只更新 coverage，不重读历史 Daily", async () =>
 		((await store.query({ limit: 50 })).coverage),
 		{
 			kind: "complete",
-			sharedConfigurationComplete: false,
+			configurationComplete: false,
 			coveredFromDate: "2026-08-22",
 			pendingFileCount: 0,
 			coveredFileCount: 1,
@@ -160,7 +160,7 @@ test("共享配置晚到只更新 coverage，不重读历史 Daily", async () =>
 	await coordinator.refreshLocalCatalog();
 	const page = await store.query({ limit: 50 });
 	assert.equal(page.coverage.kind, "complete");
-	assert.equal(page.coverage.sharedConfigurationComplete, true);
+	assert.equal(page.coverage.configurationComplete, true);
 	assert.equal(page.items.length, 1);
 	assert.equal(new Set(page.items.map((item) => item.observationKey)).size, 1);
 	assert.equal(fixture.readCount(), 1);

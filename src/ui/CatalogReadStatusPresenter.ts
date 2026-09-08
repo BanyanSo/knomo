@@ -23,10 +23,10 @@ export function getCatalogReadStatusHeaders(
 	if (options.status.catalog === "degraded") {
 		headers.push(summary(t("catalog.storageUnavailable"), t("catalog.retryLocalStorage"), "refresh-catalog-sync-state"));
 	}
-	if (options.status.sharedConfiguration === "conflicted") {
-		headers.push(summary(t("catalog.sharedConfigConflict"), t("catalog.openDiagnostics"), "open-catalog-settings"));
-	} else if (options.status.sharedConfiguration === "unavailable") {
-		headers.push(summary(t("catalog.sharedConfigUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
+	if (options.status.currentConfiguration === "conflicted") {
+		headers.push(summary(t("catalog.currentConfigConflict"), t("catalog.openDiagnostics"), "open-catalog-settings"));
+	} else if (options.status.currentConfiguration === "unavailable") {
+		headers.push(summary(t("catalog.currentConfigUnavailable"), t("catalog.retrySyncState"), "refresh-catalog-sync-state"));
 	}
 
 

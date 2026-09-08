@@ -4,8 +4,6 @@ import { LegacyIndexReader } from "../src/services/LegacyIndexReader";
 import { hashMemoContent, hashText } from "../src/utils/hash";
 import { InMemoryVault } from "./helpers/InMemoryVault";
 const LEGACY_MEMO_A = "2026082209000001";
-const LEGACY_MEMO_B = "2026082108000002";
-const LEGACY_MEMO_C = "2026082209000003";
 const LEGACY_INDEX_PATH = "Knomo/_knomo-system/indexes/memo-index-2026-08.json";
 const PLUGIN_DATA_PATH = ".obsidian/plugins/knomo/data.json";
 
@@ -28,7 +26,7 @@ test("从旧 monthlyMemoFolder 发现来源，并只审计合法空文件和派�
 		readPaths.push(file.path);
 		return readBinary(file);
 	};
-	const reader = new LegacyIndexReader(vault.app, "knomo", () => oldRoot);
+	const reader = new LegacyIndexReader(vault.app, () => oldRoot);
 
 	assert.deepEqual(reader.inspect(), {
 		kind: "present",
@@ -39,12 +37,9 @@ test("从旧 monthlyMemoFolder 发现来源，并只审计合法空文件和派�
 	assert.equal(result.kind, "ready");
 	if (result.kind !== "ready") return;
 	assert.deepEqual(result.snapshot.memos, []);
-	assert.deepEqual(result.snapshot.pendingMemos, []);
-	assert.deepEqual(result.snapshot.reviews, []);
 	assert.deepEqual(result.snapshot.diagnostics, []);
 	assert.deepEqual(readPaths.sort(), [
 		`${oldRoot}/_knomo-system/indexes/memo-index-2026-08.json`,
-		`${oldRoot}/_knomo-system/pending-memo-creates.json`,
 	].sort());
 });
 
@@ -62,18 +57,17 @@ test("Legacy Index 的 createdAt 兜底按当前设备日历时区读取", async
 						createdAt: "2026-08-31T22:04:15.000Z",
 						path: "Daily/legacy-memo.md",
 						rawBlock: "- 正文",
-						content: "正文",
+						content: "正文", status: "deleted",
 					}),
 				},
 			}),
 		});
 
-		const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
+		const result = await new LegacyIndexReader(vault.app, () => "Knomo").load();
 		assert.equal(result.kind, "ready");
 		if (result.kind !== "ready") return;
 		const memo = result.snapshot.memos.find((item) => item.memoId === LEGACY_MEMO_A);
-		assert.equal(memo?.evidence.logicalDate, "2026-09-01");
-		assert.equal(memo?.evidence.time, "06:04:15");
+		assert.equal(memo?.deletedPayload?.logicalDate, "2026-09-01");
 	} finally {
 		if (originalTimeZone === undefined) delete process.env.TZ;
 		else process.env.TZ = originalTimeZone;
@@ -100,7 +94,7 @@ test("旧备份目录中的额外文件归类为 unknown", async () => {
 		[extraPath]: "不要删除",
 	});
 
-	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
+	const result = await new LegacyIndexReader(vault.app, () => "Knomo").load();
 
 	assert.equal(result.kind, "ready");
 	if (result.kind !== "ready") return;
@@ -108,94 +102,7 @@ test("旧备份目录中的额外文件归类为 unknown", async () => {
 		&& item.sourcePath === extraPath), true);
 });
 
-test("1.2.9 sourceMemoId 为空时从 references 和正文 block reference 恢复关系", async () => {
-	const sourcePath = "Daily/2026-08-21.md";
-	const sourceRawBlock = "- 08:00 来源正文 ^source-block";
-	const referencedContent = "通过 references 引用";
-	const linkedContent = "通过正文引用 [[Daily/2026-08-21#^source-block]]";
-	const vault = new InMemoryVault({
-		[sourcePath]: `## Memos\n${sourceRawBlock}\n`,
-		[LEGACY_INDEX_PATH]: JSON.stringify({
-			schemaVersion: 2,
-			period: "2026-08",
-			memos: {
-				[LEGACY_MEMO_B]: legacyMemoRecord({
-					memoId: LEGACY_MEMO_B,
-					createdAt: "2026-08-21T08:00:00.000Z",
-					path: sourcePath,
-					rawBlock: sourceRawBlock,
-					content: "来源正文",
-				}),
-				[LEGACY_MEMO_A]: legacyMemoRecord({
-					memoId: LEGACY_MEMO_A,
-					createdAt: "2026-08-22T09:00:00.000Z",
-					path: "Daily/2026-08-22.md",
-					rawBlock: `- 09:00 ${referencedContent}`,
-					content: referencedContent,
-					references: [{ memoId: LEGACY_MEMO_B, referenceText: "[[Daily/2026-08-21#^source-block]]" }],
-				}),
-				[LEGACY_MEMO_C]: legacyMemoRecord({
-					memoId: LEGACY_MEMO_C,
-					createdAt: "2026-08-22T09:10:00.000Z",
-					path: "Daily/2026-08-22.md",
-					rawBlock: `- 09:10 ${linkedContent}`,
-					content: linkedContent,
-				}),
-			},
-		}),
-	});
-	Object.assign(vault.app, {
-		metadataCache: {
-			getFirstLinkpathDest: (linkPath: string) => linkPath === "Daily/2026-08-21"
-				? vault.app.vault.getAbstractFileByPath(sourcePath)
-				: null,
-		},
-	});
-
-	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
-
-	assert.equal(result.kind, "ready");
-	if (result.kind !== "ready") return;
-	const byMemoId = new Map(result.snapshot.memos.map((memo) => [memo.memoId, memo]));
-	assert.equal(byMemoId.get(LEGACY_MEMO_A)?.sourceMemoId, LEGACY_MEMO_B);
-	assert.equal(byMemoId.get(LEGACY_MEMO_C)?.sourceMemoId, LEGACY_MEMO_B);
-});
-
-test("旧 reviewCount 超出安全上限时只记录诊断，不展开 Ledger 事件", async () => {
-	const vault = new InMemoryVault({
-		[LEGACY_INDEX_PATH]: JSON.stringify({
-			schemaVersion: 2,
-			period: "2026-08",
-			memos: {
-				[LEGACY_MEMO_A]: legacyMemoRecord({
-					memoId: LEGACY_MEMO_A,
-					createdAt: "2026-08-22T09:00:00.000Z",
-					path: "Daily/2026-08-22.md",
-					rawBlock: "- 09:00 正文",
-					content: "正文",
-				}),
-			},
-		}),
-		[PLUGIN_DATA_PATH]: JSON.stringify({
-			randomReunionReviewStates: {
-				[LEGACY_MEMO_A]: {
-					memoId: LEGACY_MEMO_A,
-					reviewCount: 1001,
-					lastReviewedAt: "2026-08-22T05:00:00.000Z",
-				},
-			},
-		}),
-	});
-
-	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
-
-	assert.equal(result.kind, "ready");
-	if (result.kind !== "ready") return;
-	assert.deepEqual(result.snapshot.reviews, []);
-	assert.equal(result.snapshot.diagnostics.some((item) => item.code === "legacy_review_record_invalid"), true);
-});
-
-test("同一旧 memoId 的不一致同步副本进入诊断，不猜测性绑定", async () => {
+test("同一旧 memoId 的不一致同步副本进入诊断，不覆盖恢复副本", async () => {
 	const canonical = JSON.stringify({
 		schemaVersion: 2,
 		period: "2026-08",
@@ -205,7 +112,7 @@ test("同一旧 memoId 的不一致同步副本进入诊断，不猜测性绑定
 				createdAt: "2026-08-22T09:00:00.000Z",
 				path: "Daily/2026-08-22.md",
 				rawBlock: "- 09:00 正文 A",
-				content: "正文 A",
+				content: "正文 A", status: "deleted",
 			}),
 		},
 	});
@@ -218,7 +125,7 @@ test("同一旧 memoId 的不一致同步副本进入诊断，不猜测性绑定
 				createdAt: "2026-08-22T09:00:00.000Z",
 				path: "Daily/2026-08-22.md",
 				rawBlock: "- 09:00 正文 B",
-				content: "正文 B",
+				content: "正文 B", status: "deleted",
 			}),
 		},
 	});
@@ -226,11 +133,11 @@ test("同一旧 memoId 的不一致同步副本进入诊断，不猜测性绑定
 		[LEGACY_INDEX_PATH]: canonical,
 		"Knomo/_knomo-system/indexes/memo-index-2026-08 conflict.json": conflict,
 	});
-	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
+	const result = await new LegacyIndexReader(vault.app, () => "Knomo").load();
 
 	assert.equal(result.kind, "attention");
 	if (result.kind !== "attention") return;
-	assert.equal(result.diagnostics.some((item) => item.code === "legacy_identity_conflict" && item.memoId === LEGACY_MEMO_A), true);
+	assert.equal(result.diagnostics.some((item) => item.code === "legacy_record_conflict" && item.memoId === LEGACY_MEMO_A), true);
 });
 
 test("未知旧 Index schema 进入诊断，不按 1.2.9 格式宽松解释", async () => {
@@ -241,7 +148,7 @@ test("未知旧 Index schema 进入诊断，不按 1.2.9 格式宽松解释", as
 			memos: {},
 		}),
 	});
-	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load();
+	const result = await new LegacyIndexReader(vault.app, () => "Knomo").load();
 
 	assert.equal(result.kind, "attention");
 	if (result.kind !== "attention") return;
@@ -265,7 +172,7 @@ test("LegacyIndexReader 解析和合并按时间预算让出主线程", async ()
 	let elapsedMs = 0;
 	let yieldCount = 0;
 
-	const result = await new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load({
+	const result = await new LegacyIndexReader(vault.app, () => "Knomo").load({
 		yieldControl: async () => { yieldCount += 1; },
 		sliceBudgetMs: 8,
 		now: () => {
@@ -286,7 +193,7 @@ test("LegacyIndexReader 在读取前响应取消信号", async () => {
 	cancellation.abort();
 
 	await assert.rejects(
-		() => new LegacyIndexReader(vault.app, "knomo", () => "Knomo").load({
+		() => new LegacyIndexReader(vault.app, () => "Knomo").load({
 			cancellationSignal: cancellation.signal,
 			yieldControl: async () => {},
 		}),
@@ -348,3 +255,26 @@ function legacyMemoRecord(input: {
 		}),
 	};
 }
+
+test("迁移 reader 忽略历史关系、review 和 pending，不访问 metadata 或插件数据", async () => {
+	const record = legacyMemoRecord({ memoId: LEGACY_MEMO_A, createdAt: "2026-08-22T09:00:00Z",
+		path: "Daily/2026-08-22.md", rawBlock: "- 09:00 引用 [[missing#^block]]", content: "引用", status: "deleted" });
+	const vault = new InMemoryVault({
+		[LEGACY_INDEX_PATH]: JSON.stringify({ schemaVersion: 2, period: "2026-08", memos: { [LEGACY_MEMO_A]: record } }),
+		[PLUGIN_DATA_PATH]: "invalid old review data",
+		"Knomo/_knomo-system/pending-memo-creates.json": "invalid old journal",
+	});
+	Object.assign(vault.app, { metadataCache: { getFirstLinkpathDest: () => { throw new Error("No historical relation lookup"); } } });
+	vault.app.vault.adapter.readBinary = async () => { throw new Error("No plugin data read"); };
+	const reader = new LegacyIndexReader(vault.app, () => "Knomo");
+	const first = await reader.load();
+	assert.equal(first.kind, "ready");
+	if (first.kind !== "ready") return;
+	assert.deepEqual(first.snapshot.diagnostics, []);
+	assert.deepEqual(Object.keys(first.snapshot.memos[0]!).sort(), ["deletedPayload", "memoId", "status"]);
+	vault.replace(LEGACY_INDEX_PATH, JSON.stringify({ schemaVersion: 2, period: "2026-08",
+		memos: { [LEGACY_MEMO_A]: { ...record, sourceMemoId: "invalid retired relation", references: [{ memoId: "other" }] } } }));
+	const second = await reader.load();
+	assert.equal(second.kind, "ready");
+	if (second.kind === "ready") assert.deepEqual(second.snapshot, first.snapshot);
+});

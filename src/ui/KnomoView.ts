@@ -6228,7 +6228,7 @@ function toSearchDateFilter(scope: ScopeFilter): SearchDateFilter | null {
 }
 
 function isCompleteCatalogCoverage(coverage: CatalogCoverage): boolean {
-	return coverage.kind === "complete" && coverage.sharedConfigurationComplete !== false;
+	return coverage.kind === "complete" && coverage.configurationComplete !== false;
 }
 
 export function mergeCatalogMemoPages(memos: readonly MemoViewItem[]): MemoViewItem[] {

@@ -10,26 +10,21 @@ import type {
 	LegacyIndexSource,
 	LegacyIndexSourcePresence,
 	LegacyIndexSourceResult,
-	LegacyPendingMemo,
-	LegacyReviewState,
 } from "../types/legacyIndex";
-import { formatDatePart, formatTimePart, parseMemoCalendarDate } from "../utils/date";
-import { hashMemoContent, hashText } from "../utils/hash";
-import { extractTrailingBlockId, findLastEffectiveLineIndex, splitMarkdownLines } from "../utils/markdown";
+import { formatDatePart, parseMemoCalendarDate } from "../utils/date";
 import { isRecord } from "../utils/object";
 import { getLegacySystemRootPath } from "../utils/path";
 import {
 	canonicalJson,
 	sha256Text,
 } from "../utils/canonicalJson";
-import { classifyLegacyArtifactPath, classifyPluginDataPath } from "./LegacyArtifactInventory";
+import { classifyLegacyArtifactPath } from "./LegacyArtifactInventory";
 import { CooperativeYieldController } from "./CooperativeTask";
 
 const LEGACY_MEMO_ID_PATTERN = /^\d{16}$/u;
 const HASH_PATTERN = /^fnv1a-[a-f0-9]{8}$/u;
 const DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/u;
 const PERIOD_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])$/u;
-const MAX_LEGACY_REVIEW_COUNT = 1000;
 
 interface LegacyArtifact {
 	artifactKind: LegacyArtifactKind;
@@ -46,22 +41,8 @@ interface LegacyArtifactInventory {
 }
 
 interface ParsedLegacyData {
-	memos: ParsedLegacyMemo[];
-	pendingMemos: LegacyPendingMemo[];
-	reviews: LegacyReviewState[];
+	memos: LegacyIndexMemo[];
 	diagnostics: LegacyIndexDiagnostic[];
-}
-
-interface ParsedLegacyMemo extends LegacyIndexMemo {
-	contentSnapshot: string;
-	referenceMemoId: string | null;
-	rawBlock: string;
-}
-
-interface LegacyBlockReferenceCandidate {
-	linkPath: string;
-	blockId: string;
-	sourceMemoIdAlias: string | null;
 }
 
 interface LegacyIndexLoadContext {
@@ -72,7 +53,6 @@ interface LegacyIndexLoadContext {
 export class LegacyIndexReader implements LegacyIndexSource {
 	constructor(
 		private readonly app: App,
-		private readonly pluginId: string,
 		private readonly getKnomoDataRoot: () => string | null,
 	) {}
 
@@ -113,22 +93,16 @@ export class LegacyIndexReader implements LegacyIndexSource {
 					recognizedArtifactCount += 1;
 					await this.parseMemoIndex(artifact, parsed, context);
 					break;
-				case "pending_create":
-					recognizedArtifactCount += 1;
-					await this.parsePendingCreates(artifact, parsed, context);
-					break;
-				case "plugin_data":
-					recognizedArtifactCount += await this.parsePluginData(artifact, parsed, context) ? 1 : 0;
-					break;
 				case "repair_candidate":
 					recognizedArtifactCount += 1;
 					parsed.diagnostics.push(diagnostic(
 						"legacy_repair_candidate_ignored",
 						artifact.path,
 						null,
-						"Legacy repair candidates cannot establish stable identity.",
+						"Legacy repair candidates are not supported Trash records.",
 					));
 					break;
+				case "pending_create":
 				case "memo_summary":
 				case "time_buoy_index":
 				case "time_buoy_state":
@@ -143,19 +117,11 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				? { kind: "missing" }
 				: { kind: "attention", diagnostics: parsed.diagnostics.sort(compareDiagnostic) };
 		}
-		const mergedMemos = await mergeMemos(parsed.memos, parsed.diagnostics, context);
-		const memos = await recoverLegacySourceMemoIds(mergedMemos, (linkPath, sourcePath) => {
-			if (linkPath.length === 0) return sourcePath;
-			const file = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
-			return file instanceof TFile ? file.path : null;
-		}, context);
-		const indexedMemoIds = await buildMemoIdSet(memos, context);
-		const pendingMemos = await mergePendingMemos(parsed.pendingMemos, indexedMemoIds, parsed.diagnostics, context);
-		const reviews = await mergeReviews(parsed.reviews, parsed.diagnostics, context);
-		if (memos.length === 0 && pendingMemos.length === 0 && reviews.length === 0 && parsed.diagnostics.length > 0) {
+		const memos = await mergeMemos(parsed.memos, parsed.diagnostics, context);
+		if (memos.length === 0 && parsed.diagnostics.length > 0) {
 			return { kind: "attention", diagnostics: parsed.diagnostics };
 		}
-		const revisionJson = await serializeLegacyRevision(memos, pendingMemos, reviews, context);
+		const revisionJson = await serializeCanonicalArray(memos, context);
 		context.assertActive();
 		const sourceRevision = await sha256Text(revisionJson);
 		context.assertActive();
@@ -165,20 +131,9 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			legacySystemRoot: inventory.legacySystemRoot,
 			legacySystemRootPresent: inventory.legacySystemRootPresent,
 			memos,
-			pendingMemos,
-			reviews,
 			diagnostics: parsed.diagnostics.sort(compareDiagnostic),
 		};
 		return { kind: "ready", snapshot };
-	}
-
-	isSourcePath(path: string): boolean {
-		const knomoDataRoot = this.getConfiguredRoot();
-		if (knomoDataRoot === null) return false;
-		const normalized = normalizePath(path);
-		const legacyRoot = getLegacySystemRootPath(knomoDataRoot);
-		if (normalized.startsWith(`${legacyRoot}/`)) return true;
-		return classifyPluginDataPath(this.getConfigDir(), this.pluginId, normalized) !== null;
 	}
 
 	private async parseMemoIndex(
@@ -208,51 +163,6 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		}
 	}
 
-	private async parsePendingCreates(
-		artifact: LegacyArtifact,
-		result: ParsedLegacyData,
-		context: LegacyIndexLoadContext,
-	): Promise<void> {
-		if (isEmptyArtifact(artifact)) return;
-		const parsed = parseJson(artifact, result.diagnostics);
-		if (!isRecord(parsed) || parsed.schemaVersion !== 1 || !isRecord(parsed.operations)) {
-			result.diagnostics.push(diagnostic("legacy_pending_create_invalid", artifact.path, null, "Legacy pending-create journal is invalid."));
-			return;
-		}
-		for (const [memoId, value] of Object.entries(parsed.operations)) {
-			await checkpoint(context);
-			const pendingMemo = parsePendingMemo(memoId, value);
-			if (pendingMemo === null) {
-				result.diagnostics.push(diagnostic("legacy_pending_record_invalid", artifact.path, memoId, "Legacy pending-create record is invalid."));
-				continue;
-			}
-			result.pendingMemos.push(pendingMemo);
-		}
-	}
-
-	private async parsePluginData(
-		artifact: LegacyArtifact,
-		result: ParsedLegacyData,
-		context: LegacyIndexLoadContext,
-	): Promise<boolean> {
-		const parsed = parseJson(artifact, result.diagnostics);
-		if (!isRecord(parsed) || !("randomReunionReviewStates" in parsed)) return false;
-		if (!isRecord(parsed.randomReunionReviewStates)) {
-			result.diagnostics.push(diagnostic("legacy_review_state_invalid", artifact.path, null, "Legacy random-reunion review state is invalid."));
-			return true;
-		}
-		for (const [memoId, value] of Object.entries(parsed.randomReunionReviewStates)) {
-			await checkpoint(context);
-			const review = parseReviewState(memoId, value);
-			if (review === null) {
-				result.diagnostics.push(diagnostic("legacy_review_record_invalid", artifact.path, memoId, "Legacy review record is invalid."));
-				continue;
-			}
-			result.reviews.push(review);
-		}
-		return true;
-	}
-
 	private async collectArtifacts(
 		legacyRoot: string,
 		context: LegacyIndexLoadContext,
@@ -272,8 +182,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 					unknownPaths.push(file.path);
 					continue;
 				}
-				const needsContent = classification.artifactKind === "memo_index"
-					|| classification.artifactKind === "pending_create";
+				const needsContent = classification.artifactKind === "memo_index";
 				artifacts.push({
 					artifactKind: classification.artifactKind,
 					path: file.path,
@@ -282,8 +191,6 @@ export class LegacyIndexReader implements LegacyIndexSource {
 				});
 			}
 		}
-		const pluginData = await this.readPluginData(context);
-		if (pluginData !== null) artifacts.push(pluginData);
 		return {
 			artifacts: artifacts.sort((left, right) => left.path.localeCompare(right.path)),
 			legacySystemRoot: legacyRoot,
@@ -292,35 +199,13 @@ export class LegacyIndexReader implements LegacyIndexSource {
 		};
 	}
 
-	private async readPluginData(context: LegacyIndexLoadContext): Promise<LegacyArtifact | null> {
-		const path = normalizePath(`${this.getConfigDir()}/plugins/${this.pluginId}/data.json`);
-		context.assertActive();
-		if (!await this.app.vault.adapter.exists(path)) return null;
-		try {
-			const bytes = new Uint8Array(await this.app.vault.adapter.readBinary(path));
-			await checkpoint(context);
-			return {
-				artifactKind: "plugin_data",
-				path,
-				period: null,
-				bytes,
-			};
-		} catch (error) {
-			throw new Error(`Failed to read legacy plugin data at ${path}: ${errorMessage(error)}`);
-		}
-	}
-
 	private getConfiguredRoot(): string | null {
 		const value = this.getKnomoDataRoot();
 		return value === null ? null : normalizePath(value);
 	}
-
-	private getConfigDir(): string {
-		return (this.app.vault as App["vault"] & { configDir?: string }).configDir ?? ".obsidian";
-	}
 }
 
-function parseMemoRecord(memoId: string, value: unknown): ParsedLegacyMemo | null {
+function parseMemoRecord(memoId: string, value: unknown): LegacyIndexMemo | null {
 	if (!LEGACY_MEMO_ID_PATTERN.test(memoId)
 		|| !isRecord(value)
 		|| value.id !== memoId
@@ -339,296 +224,43 @@ function parseMemoRecord(memoId: string, value: unknown): ParsedLegacyMemo | nul
 		|| (dailyRef.heading !== null && typeof dailyRef.heading !== "string")
 		|| (dailyRef.sectionType !== undefined && dailyRef.sectionType !== "heading" && dailyRef.sectionType !== "root")
 		|| (dailyRef.lineNumberHint !== null && !isPositiveInteger(dailyRef.lineNumberHint))) return null;
-	const sourceMemoId = parseLegacyMemoIdOrNull(value.sourceMemoId);
-	if (value.sourceMemoId !== null && sourceMemoId === null) return null;
-	const evidence = {
-		sourcePath: normalizePath(dailyRef.path),
-		logicalDate: readLogicalDate(dailyRef.path, value.createdAt),
-		section: dailyRef.sectionType === "root" ? null : dailyRef.heading as string | null,
-		time: readMemoTime(dailyRef.lastKnownBlock, value.createdAt),
-		contentHash: value.contentHash,
-		lastKnownBlockHash: dailyRef.lastKnownHash,
-		lineNumberHint: dailyRef.lineNumberHint === null ? null : dailyRef.lineNumberHint,
-	};
 	const deletedRawBlock = typeof value.deletedDailyBlock === "string" && value.deletedDailyBlock.length > 0
 		? value.deletedDailyBlock
 		: dailyRef.lastKnownBlock;
 	return {
 		memoId,
 		status: value.status,
-		createdAt: value.createdAt,
-		updatedAt: value.updatedAt,
-		evidence,
-		sourceMemoId,
 		deletedPayload: value.status === "deleted" ? {
 			deletedAt: isDateTime(value.deletedAt) ? value.deletedAt : value.updatedAt,
-			sourcePath: evidence.sourcePath,
-			logicalDate: evidence.logicalDate,
-			section: evidence.section,
+			sourcePath: normalizePath(dailyRef.path),
+			logicalDate: readLogicalDate(dailyRef.path, value.createdAt),
+			section: dailyRef.sectionType === "root" ? null : dailyRef.heading as string | null,
 			rawBlock: deletedRawBlock,
-			contentHash: value.contentHash,
-			sourceMemoId,
 		} : null,
-		contentSnapshot: typeof value.contentSnapshot === "string" ? value.contentSnapshot : "",
-		referenceMemoId: readLegacyReferenceMemoId(value.references),
-		rawBlock: dailyRef.lastKnownBlock,
-	};
-}
-
-function parsePendingMemo(memoId: string, value: unknown): LegacyPendingMemo | null {
-	if (!LEGACY_MEMO_ID_PATTERN.test(memoId)
-		|| !isRecord(value)
-		|| value.memoId !== memoId
-		|| !isDateTime(value.createdAt)
-		|| typeof value.content !== "string"
-		|| typeof value.block !== "string"
-		|| value.block.length === 0
-		|| !isRecord(value.dailyWrite)
-		|| !isVaultPath(value.dailyWrite.path)) return null;
-	const sourceMemoId = parseLegacyMemoIdOrNull(value.sourceMemoId);
-	if (value.sourceMemoId !== null && sourceMemoId === null) return null;
-	const ref = isRecord(value.dailyWrite.ref) ? value.dailyWrite.ref : null;
-	const heading = ref !== null && (ref.heading === null || typeof ref.heading === "string") ? ref.heading : null;
-	const section = ref?.sectionType === "root" ? null : heading;
-	const lineNumberHint = ref !== null && isPositiveInteger(ref.lineNumberHint) ? ref.lineNumberHint : null;
-	return {
-		memoId,
-		createdAt: value.createdAt,
-		evidence: {
-			sourcePath: normalizePath(value.dailyWrite.path),
-			logicalDate: readLogicalDate(value.dailyWrite.path, value.createdAt),
-			section,
-			time: readMemoTime(value.block, value.createdAt),
-			contentHash: hashMemoContent(value.content),
-			lastKnownBlockHash: hashText(normalizeNewlines(value.block)),
-			lineNumberHint,
-		},
-		sourceMemoId,
-	};
-}
-
-function parseReviewState(memoId: string, value: unknown): LegacyReviewState | null {
-	if (!LEGACY_MEMO_ID_PATTERN.test(memoId)
-		|| !isRecord(value)
-		|| value.memoId !== memoId
-		|| !isNonNegativeInteger(value.reviewCount)
-		|| value.reviewCount > MAX_LEGACY_REVIEW_COUNT
-		|| (value.lastReviewedAt !== null && value.lastReviewedAt !== undefined && !isDateTime(value.lastReviewedAt))) return null;
-	return {
-		memoId,
-		reviewCount: value.reviewCount,
-		lastReviewedAt: value.lastReviewedAt === undefined ? null : value.lastReviewedAt,
 	};
 }
 
 async function mergeMemos(
-	values: readonly ParsedLegacyMemo[],
+	values: readonly LegacyIndexMemo[],
 	diagnostics: LegacyIndexDiagnostic[],
-	context: LegacyIndexLoadContext,
-): Promise<ParsedLegacyMemo[]> {
-	const byMemoId = await groupByMemoId(values, context);
-	const result: ParsedLegacyMemo[] = [];
-	for (const [memoId, candidates] of [...byMemoId.entries()].sort(compareEntry)) {
-		await checkpoint(context);
-		const unique = dedupeByCanonical(candidates, memoIdentityKey);
-		if (unique.length !== 1) {
-			diagnostics.push(diagnostic("legacy_identity_conflict", null, memoId, "Legacy index contains conflicting records for one memoId."));
-			continue;
-		}
-		result.push(unique[0] as ParsedLegacyMemo);
-	}
-	return result;
-}
-
-async function mergePendingMemos(
-	values: readonly LegacyPendingMemo[],
-	indexedMemoIds: ReadonlySet<string>,
-	diagnostics: LegacyIndexDiagnostic[],
-	context: LegacyIndexLoadContext,
-): Promise<LegacyPendingMemo[]> {
-	const byMemoId = await groupByMemoId(values, context);
-	const result: LegacyPendingMemo[] = [];
-	for (const [memoId, candidates] of [...byMemoId.entries()].sort(compareEntry)) {
-		if (!indexedMemoIds.has(memoId)) {
-			const unique = dedupeByCanonical(candidates, (value) => value);
-			if (unique.length !== 1) {
-				diagnostics.push(diagnostic("legacy_pending_conflict", null, memoId, "Legacy pending-create data conflicts for one memoId."));
-			} else {
-				result.push(unique[0] as LegacyPendingMemo);
-			}
-		}
-		await checkpoint(context);
-	}
-	return result;
-}
-
-async function mergeReviews(
-	values: readonly LegacyReviewState[],
-	diagnostics: LegacyIndexDiagnostic[],
-	context: LegacyIndexLoadContext,
-): Promise<LegacyReviewState[]> {
-	const byMemoId = await groupByMemoId(values, context);
-	const result: LegacyReviewState[] = [];
-	for (const [memoId, candidates] of [...byMemoId.entries()].sort(compareEntry)) {
-		await checkpoint(context);
-		const unique = dedupeByCanonical(candidates, (value) => value);
-		if (unique.length !== 1) {
-			diagnostics.push(diagnostic("legacy_review_conflict", null, memoId, "Legacy review state conflicts for one memoId."));
-			continue;
-		}
-		result.push(unique[0] as LegacyReviewState);
-	}
-	return result;
-}
-
-function memoIdentityKey(value: ParsedLegacyMemo): unknown {
-	return {
-		memoId: value.memoId,
-		status: value.status,
-		createdAt: value.createdAt,
-		evidence: value.evidence,
-		sourceMemoId: value.sourceMemoId,
-		deletedPayload: value.deletedPayload,
-		contentSnapshot: value.contentSnapshot,
-		referenceMemoId: value.referenceMemoId,
-		rawBlock: value.rawBlock,
-	};
-}
-
-async function recoverLegacySourceMemoIds(
-	values: readonly ParsedLegacyMemo[],
-	resolveLinkPath: (linkPath: string, sourcePath: string) => string | null,
 	context: LegacyIndexLoadContext,
 ): Promise<LegacyIndexMemo[]> {
-	const sourceMemoIdsByTarget = await buildLegacySourceMemoIdsByTarget(values, context);
-	const sourceMemoIdsByTimestamp = await buildLegacySourceMemoIdsByTimestamp(values, context);
+	const byMemoId = await groupByMemoId(values, context);
 	const result: LegacyIndexMemo[] = [];
-	for (const value of values) {
-		const recoveredSourceMemoId = value.sourceMemoId
-			?? value.referenceMemoId
-			?? resolveLegacyReferenceCandidate(value, sourceMemoIdsByTarget, sourceMemoIdsByTimestamp, resolveLinkPath);
-		result.push({
-			memoId: value.memoId,
-			status: value.status,
-			createdAt: value.createdAt,
-			updatedAt: value.updatedAt,
-			evidence: value.evidence,
-			sourceMemoId: recoveredSourceMemoId,
-			deletedPayload: value.deletedPayload === null ? null : {
-				...value.deletedPayload,
-				sourceMemoId: value.deletedPayload.sourceMemoId ?? recoveredSourceMemoId,
-			},
-		});
+	for (const [memoId, candidates] of [...byMemoId.entries()].sort(compareEntry)) {
 		await checkpoint(context);
-	}
-	return result;
-}
-
-function resolveLegacyReferenceCandidate(
-	memo: ParsedLegacyMemo,
-	sourceMemoIdsByTarget: ReadonlyMap<string, ReadonlySet<string>>,
-	sourceMemoIdsByTimestamp: ReadonlyMap<string, ReadonlySet<string>>,
-	resolveLinkPath: (linkPath: string, sourcePath: string) => string | null,
-): string | null {
-	const resolved = new Set<string>();
-	for (const candidate of parseLegacyBlockReferenceCandidates(memo.contentSnapshot)) {
-		const resolvedPath = resolveLinkPath(candidate.linkPath, memo.evidence.sourcePath);
-		const targetMemoIds = resolvedPath === null
-			? undefined
-			: sourceMemoIdsByTarget.get(`${resolvedPath}#^${candidate.blockId}`);
-		const targetMemoId = targetMemoIds?.size === 1 ? [...targetMemoIds][0] ?? null : null;
-		const sourceMemoId = targetMemoId
-			?? resolveLegacyMemoIdAlias(candidate.sourceMemoIdAlias, sourceMemoIdsByTimestamp);
-		if (sourceMemoId !== null) resolved.add(sourceMemoId);
-	}
-	return resolved.size === 1 ? [...resolved][0] ?? null : null;
-}
-
-async function buildLegacySourceMemoIdsByTarget(
-	values: readonly ParsedLegacyMemo[],
-	context: LegacyIndexLoadContext,
-): Promise<Map<string, Set<string>>> {
-	const result = new Map<string, Set<string>>();
-	for (const value of values) {
-		const lines = splitMarkdownLines(value.rawBlock);
-		const lastLineIndex = findLastEffectiveLineIndex(lines);
-		const blockId = lastLineIndex === -1 ? null : extractTrailingBlockId(lines[lastLineIndex] ?? "").blockId;
-		if (blockId !== null) {
-			const key = `${value.evidence.sourcePath}#^${blockId}`;
-			const memoIds = result.get(key) ?? new Set<string>();
-			memoIds.add(value.memoId);
-			result.set(key, memoIds);
-		}
-		await checkpoint(context);
-	}
-	return result;
-}
-
-async function buildLegacySourceMemoIdsByTimestamp(
-	values: readonly ParsedLegacyMemo[],
-	context: LegacyIndexLoadContext,
-): Promise<Map<string, Set<string>>> {
-	const result = new Map<string, Set<string>>();
-	for (const value of values) {
-		const timestamp = value.memoId.slice(0, 14);
-		const memoIds = result.get(timestamp) ?? new Set<string>();
-		memoIds.add(value.memoId);
-		result.set(timestamp, memoIds);
-		await checkpoint(context);
-	}
-	return result;
-}
-
-function parseLegacyBlockReferenceCandidates(content: string): LegacyBlockReferenceCandidate[] {
-	const candidates: LegacyBlockReferenceCandidate[] = [];
-	let codeFence: "`" | "~" | null = null;
-	for (const line of splitMarkdownLines(content)) {
-		const fence = line.trim().match(/^(`{3,}|~{3,})/u)?.[1]?.charAt(0) as "`" | "~" | undefined;
-		if (fence !== undefined) {
-			codeFence = codeFence === null ? fence : codeFence === fence ? null : codeFence;
+		const unique = dedupeByCanonical(candidates, memoRecoveryKey);
+		if (unique.length !== 1) {
+			diagnostics.push(diagnostic("legacy_record_conflict", null, memoId, "Legacy index contains conflicting records for one memoId."));
 			continue;
 		}
-		if (codeFence !== null || /^\s*>/u.test(line)) continue;
-		const pattern = /!?\[\[([^\]]+#\^[^\]]+)\]\]/gu;
-		let match = pattern.exec(line);
-		while (match !== null) {
-			const value = match[1] ?? "";
-			const separatorIndex = value.indexOf("|");
-			const target = separatorIndex === -1 ? value : value.slice(0, separatorIndex);
-			const alias = separatorIndex === -1 ? null : value.slice(separatorIndex + 1);
-			const fragmentIndex = target.lastIndexOf("#^");
-			if (fragmentIndex !== -1 && fragmentIndex + 2 < target.length) {
-				candidates.push({
-					linkPath: target.slice(0, fragmentIndex),
-					blockId: target.slice(fragmentIndex + 2),
-					sourceMemoIdAlias: parseLegacyMemoIdAlias(alias),
-				});
-			}
-			match = pattern.exec(line);
-		}
+		result.push(unique[0] as LegacyIndexMemo);
 	}
-	return candidates;
+	return result;
 }
 
-function parseLegacyMemoIdAlias(alias: string | null): string | null {
-	if (alias === null) return null;
-	if (/^\d{14}(?:\d{2})?$/u.test(alias)) return alias;
-	const formatted = /^(\d{8})-(\d{6})(?:-(\d{2}))?$/u.exec(alias);
-	return formatted === null ? null : `${formatted[1]}${formatted[2]}${formatted[3] ?? ""}`;
-}
-
-function resolveLegacyMemoIdAlias(
-	alias: string | null,
-	sourceMemoIdsByTimestamp: ReadonlyMap<string, ReadonlySet<string>>,
-): string | null {
-	if (alias === null || LEGACY_MEMO_ID_PATTERN.test(alias)) return alias;
-	const memoIds = sourceMemoIdsByTimestamp.get(alias);
-	return memoIds?.size === 1 ? [...memoIds][0] ?? null : null;
-}
-
-function readLegacyReferenceMemoId(value: unknown): string | null {
-	if (!Array.isArray(value) || !isRecord(value[0])) return null;
-	return parseLegacyMemoIdOrNull(value[0].memoId);
+function memoRecoveryKey(value: LegacyIndexMemo): unknown {
+	return { memoId: value.memoId, status: value.status, deletedPayload: value.deletedPayload };
 }
 
 async function groupByMemoId<T extends { memoId: string }>(
@@ -643,30 +275,6 @@ async function groupByMemoId<T extends { memoId: string }>(
 		await checkpoint(context);
 	}
 	return result;
-}
-
-async function buildMemoIdSet(
-	values: readonly LegacyIndexMemo[],
-	context: LegacyIndexLoadContext,
-): Promise<Set<string>> {
-	const result = new Set<string>();
-	for (const value of values) {
-		result.add(value.memoId);
-		await checkpoint(context);
-	}
-	return result;
-}
-
-async function serializeLegacyRevision(
-	memos: readonly LegacyIndexMemo[],
-	pendingMemos: readonly LegacyPendingMemo[],
-	reviews: readonly LegacyReviewState[],
-	context: LegacyIndexLoadContext,
-): Promise<string> {
-	const serializedMemos = await serializeCanonicalArray(memos, context);
-	const serializedPendingMemos = await serializeCanonicalArray(pendingMemos, context);
-	const serializedReviews = await serializeCanonicalArray(reviews, context);
-	return `{"memos":${serializedMemos},"pendingMemos":${serializedPendingMemos},"reviews":${serializedReviews}}`;
 }
 
 async function serializeCanonicalArray(
@@ -738,23 +346,8 @@ function readLogicalDate(path: string, createdAt: string): string {
 	return date === null ? createdAt.slice(0, 10) : formatDatePart(date);
 }
 
-function readMemoTime(rawBlock: string, createdAt: string): string {
-	const value = /^\s*-\s+((?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)(?:\s|$)/u.exec(rawBlock)?.[1];
-	if (value !== undefined) return value;
-	const date = parseMemoCalendarDate(createdAt);
-	return date === null ? "00:00:00" : formatTimePart(date);
-}
-
-function parseLegacyMemoIdOrNull(value: unknown): string | null {
-	return typeof value === "string" && LEGACY_MEMO_ID_PATTERN.test(value) ? value : null;
-}
-
 function isDateTime(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-	return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isPositiveInteger(value: unknown): value is number {
@@ -766,12 +359,8 @@ function isVaultPath(value: unknown): value is string {
 		&& !/(^|\/)\.{1,2}(\/|$)/u.test(value) && !/[\u0000-\u001f]/u.test(value);
 }
 
-function normalizeNewlines(value: string): string {
-	return value.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
-}
-
 function createParsedLegacyData(): ParsedLegacyData {
-	return { memos: [], pendingMemos: [], reviews: [], diagnostics: [] };
+	return { memos: [], diagnostics: [] };
 }
 
 function diagnostic(code: string, sourcePath: string | null, memoId: string | null, detail: string): LegacyIndexDiagnostic {
@@ -785,8 +374,4 @@ function compareDiagnostic(left: LegacyIndexDiagnostic, right: LegacyIndexDiagno
 
 function compareEntry<T>(left: readonly [string, T], right: readonly [string, T]): number {
 	return left[0].localeCompare(right[0]);
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

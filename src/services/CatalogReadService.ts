@@ -37,7 +37,9 @@ import type { KnomoSettingsLoadStatus } from "../types/settings";
 import { toCatalogMemoView } from "../types/memoView";
 import type { TimeBuoyAllQueryResult, TimeBuoyQueryResult } from "../types/timeBuoy";
 import { formatDatePart } from "../utils/date";
-import { getRandomReunionMemos } from "../utils/randomReunion";
+import { filterRandomReunionCandidates, sampleRandomReunionCandidates } from "../utils/randomReunion";
+import type { RandomReunionCandidate } from "../utils/randomReunion";
+import { CooperativeYieldController } from "./CooperativeTask";
 import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
 import type { CatalogReferenceService } from "./CatalogReferenceService";
 import {
@@ -64,7 +66,12 @@ export interface CatalogReadServiceOptions {
 
 interface RandomReunionCandidatePool {
 	catalogRevision: number;
-	observations: CatalogObservation[];
+	day: string;
+	candidates: Array<RandomReunionCandidate & { observationKey: string }>;
+}
+
+function yieldToUi(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 export class CatalogReadService {
@@ -394,18 +401,21 @@ export class CatalogReadService {
 			const pool = await this.loadRandomReunionCandidatePool();
 			const coverage = await this.requireCompleteCoverage("Random reunion");
 			const capabilities = createCatalogCapabilities(coverage);
-			const candidates = pool.observations
-				.filter((observation) => observation.logicalDate < formatDatePart(this.now()))
-				.map((observation) => this.toMemoItem({ kind: "observation", observation,
-					capabilities: createResolvedMemoCapabilities() }, capabilities));
-			const selected = getRandomReunionMemos(candidates.map(toCatalogMemoView), this.reviews.read(), count, {
+			const selected = await sampleRandomReunionCandidates(pool.candidates, this.reviews.read(), count, {
 				today: this.now(), random: this.random,
-			});
+			}, { yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
+			const items: MemoViewItem[] = [];
+			for (const candidate of selected) {
+				const observation = await this.options.catalog.getObservation(candidate.observationKey);
+				if (observation !== null && observationLocalKey(observation) === candidate.id) {
+					items.push(toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities)));
+				}
+			}
 			if (!await this.isRandomReunionCandidatePoolCurrent(pool)) {
 				if (this.randomReunionCandidatePool === pool) this.randomReunionCandidatePool = null;
 				continue;
 			}
-			return selected;
+			return items;
 		}
 	}
 
@@ -696,6 +706,7 @@ export class CatalogReadService {
 	}
 
 	private async loadRandomReunionCandidatePool(): Promise<RandomReunionCandidatePool> {
+		if (this.randomReunionCandidatePool?.day !== formatDatePart(this.now())) this.randomReunionCandidatePool = null;
 		if (this.randomReunionCandidatePool !== null) return this.randomReunionCandidatePool;
 		if (this.randomReunionCandidatePoolLoad !== null) return this.randomReunionCandidatePoolLoad;
 		const load = this.buildRandomReunionCandidatePool();
@@ -710,11 +721,26 @@ export class CatalogReadService {
 	}
 
 	private async buildRandomReunionCandidatePool(): Promise<RandomReunionCandidatePool> {
+		const control = new CooperativeYieldController({ yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
 		while (true) {
+			const today = this.now();
+			const day = formatDatePart(today);
 			let page = await this.queryRandomReunionObservations(null, 150);
 			this.requireRandomReunionCoverage(page.coverage);
 			const catalogRevision = page.catalogRevision;
-			const observations = [...page.items];
+			const candidates: RandomReunionCandidatePool["candidates"] = [];
+			const append = (items: CatalogObservation[]) => {
+				const capabilities = createCatalogCapabilities(page.coverage);
+				for (const observation of items) {
+					if (observation.logicalDate >= day) continue;
+					const view = toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities));
+					if (filterRandomReunionCandidates([view], { today }).length === 0) continue;
+					// 候选缓存不保留正文、卡片或 observation；选中后按本地 key 读取并校验 revision。
+					candidates.push({ id: view.id, createdAt: view.createdAt, tags: view.tags,
+						dailyRef: view.dailyRef, observationKey: observation.observationKey });
+				}
+			};
+			append(page.items);
 			let invalidated = page.invalidated;
 			while (!invalidated && page.nextCursor !== null) {
 				page = await this.queryRandomReunionObservations(page.nextCursor, 150);
@@ -723,13 +749,15 @@ export class CatalogReadService {
 					break;
 				}
 				this.requireRandomReunionCoverage(page.coverage);
-				observations.push(...page.items);
+				append(page.items);
+				if (control.shouldYield(page.items.length)) await control.yieldNow();
 			}
 			if (invalidated) continue;
 			const verification = await this.queryRandomReunionObservations(null, 1);
 			this.requireRandomReunionCoverage(verification.coverage);
 			if (verification.catalogRevision !== catalogRevision) continue;
-			const pool = { catalogRevision, observations };
+			if (day !== formatDatePart(this.now())) continue;
+			const pool = { catalogRevision, day, candidates };
 			this.randomReunionCandidatePool = pool;
 			return pool;
 		}
@@ -738,7 +766,7 @@ export class CatalogReadService {
 	private async isRandomReunionCandidatePoolCurrent(pool: RandomReunionCandidatePool): Promise<boolean> {
 		const page = await this.queryRandomReunionObservations(null, 1);
 		this.requireRandomReunionCoverage(page.coverage);
-		return page.catalogRevision === pool.catalogRevision;
+		return page.catalogRevision === pool.catalogRevision && pool.day === formatDatePart(this.now());
 	}
 
 	private async queryRandomReunionObservations(

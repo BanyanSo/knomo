@@ -36,7 +36,7 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	assert.deepEqual(deleted.items.map((memo) => memo.snapshotId), ["s1", "s2"]);
 	assert.equal(deleted.items[0]!.createdAt, "2026-08-22T12:34");
 	assert.deepEqual(await read.getDeletedSummary(), { count: 2 });
-	await assert.rejects(() => command.restore(deleted.items[0]!), /正文已恢复/u);
+	await assert.rejects(() => command.restore(deleted.items[0]!), /正文已恢复|Content restored/u);
 	pending = false;
 	assert.equal((await command.restore(deleted.items[0]!)).status, "saved");
 	await command.purge(deleted.items[1]!);

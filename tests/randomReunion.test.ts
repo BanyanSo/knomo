@@ -1,4 +1,5 @@
 import test from "node:test";
+import { sampleRandomReunionCandidates } from "../src/utils/randomReunion";
 import assert from "node:assert/strict";
 
 import type { MemoRecord } from "./helpers/memoViewFixture";
@@ -78,6 +79,24 @@ test("applies diversity and then degrades to fill results", () => {
 
 	const onlySameSource = sameSource.slice(0, 3);
 	assert.deepEqual(selectDiverseRandomReunionMemos(onlySameSource, 3).map((memo) => memo.id), ["a", "b", "c"]);
+});
+
+test("P8 全量加权排列只读取一次权重，并对零随机值保持独立无重复候选", () => {
+	const values = Array.from({ length: 10000 }, (_, index) => index);
+	let reads = 0;
+	const selected = weightedSampleWithoutReplacement(values, () => { reads++; return 1; }, values.length, () => 0);
+	assert.deepEqual(selected, values);
+	assert.equal(reads, values.length);
+});
+
+test("P8 分片抽样在长候选集内让出执行，保留权重和多样性不足时的补齐", async () => {
+	const candidates = Array.from({ length: 10000 }, (_, index) => makeMemo(String(index)));
+	let yields = 0;
+	const selected = await sampleRandomReunionCandidates(candidates, {}, 10, { random: () => 0 }, {
+		maxOperationsPerSlice: 256, yieldControl: async () => { yields++; },
+	});
+	assert.deepEqual(selected.map((memo) => memo.id), candidates.slice(0, 10).map((memo) => memo.id));
+	assert.ok(yields > 10);
 });
 
 function makeMemo(

@@ -1,4 +1,5 @@
 import { TFile } from "obsidian";
+import { t } from "../i18n";
 import type { App } from "obsidian";
 import type { LegacyIndexSource } from "../types/legacyIndex";
 import type { LegacyMigrationReport } from "../types/legacyMigration";
@@ -78,7 +79,7 @@ export class LegacyTrashMigrationService {
 			assertActive();
 			if (completion !== null) return this.report = { ...emptyReport(), status: "ready", sourceRevision: completion.sourceRevision };
 			if (this.source.inspect().kind === "missing") return this.report = { ...emptyReport(), status: "not_applicable" };
-			if (!explicit) return this.report = { ...emptyReport(), status: "attention", diagnostics: [{ code: "legacy_migration_explicit_retry", sourcePath: null, memoId: null, detail: "旧 Index 尚未确认迁移，请显式迁移或重试。" }] };
+			if (!explicit) return this.report = { ...emptyReport(), status: "attention", diagnostics: [{ code: "legacy_migration_explicit_retry", sourcePath: null, memoId: null, detail: t("migration.explicitRetry") }] };
 			const loaded = await this.source.load({ cancellationSignal: this.options.signal, yieldControl: this.options.yieldControl });
 			assertActive();
 			if (loaded.kind === "missing") return this.report = { ...emptyReport(), status: "not_applicable" };

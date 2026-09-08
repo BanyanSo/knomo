@@ -142,7 +142,7 @@ test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追
 	f.vault.app.vault.delete = async () => { throw new Error("cleanup failed"); };
 	const restored = await f.service.restore(deleted.snapshotId);
 	assert.equal(restored.state, "restored_cleanup_pending");
-	assert.match(restored.message!, /正文已恢复/u);
+	assert.match(restored.message!, /正文已恢复|Content restored/u);
 	const calls = f.catalog.length;
 	f.vault.replace(PATH, `later edit\n${f.vault.read(PATH)}`);
 	const content = f.vault.read(PATH);

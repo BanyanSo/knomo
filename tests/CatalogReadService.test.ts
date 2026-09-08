@@ -220,6 +220,32 @@ test("随机重逢按 Catalog revision 复用多页候选池且不因 Identity r
 	assert.equal(queryCalls, firstLoadQueryCalls + 1);
 });
 
+test("P8 重逢热缓存只读取选中正文，跨日重新纳入昨天的候选", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const observations = Array.from({ length: 300 }, (_, index) => makeObservation("Daily/2026-07-01.md",
+		"2026-07-01", index + 1, `long enough candidate ${index}`));
+	const todayMemo = makeObservation("Daily/2026-08-26.md", "2026-08-26", 1, "new yesterday candidate");
+	await seedCatalog(catalog, store, observations);
+	await seedCatalogFiles(catalog, store, [todayMemo]);
+	let today = new Date(2026, 7, 26);
+	const service = new CatalogReadService({ catalog, now: () => today, random: () => 0 });
+	await service.getRandomReunionItems(5);
+	let bodyReads = 0;
+	const getObservation = catalog.getObservation.bind(catalog);
+	catalog.getObservation = async (key) => { bodyReads++; return getObservation(key); };
+	const items = await service.getRandomReunionItems(5);
+	assert.equal(bodyReads, 5);
+	assert.equal(items.length, 5);
+	assert.ok(items.every((item) => item.createdAt.startsWith("2026-07-01")));
+	today = new Date(2026, 7, 27);
+	assert.equal((await service.getRandomReunionItems(1))[0]?.contentSnapshot, todayMemo.content);
+});
+
 test("Catalog revision 变化后随机重逢重建候选池", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");

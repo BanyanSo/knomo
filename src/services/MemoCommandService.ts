@@ -1,4 +1,5 @@
 import type { IndependentTrashService } from "./IndependentTrashService";
+import { t } from "../i18n";
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import { KnomoMutationBarrier } from "./KnomoMutationBarrier";
@@ -199,7 +200,7 @@ export class MemoCommandService {
 
 	async restore(item: TrashMemoItem): Promise<MemoSaveResult> {
 		const result = await this.requireTrashService().restore(item.snapshotId);
-		if (result.state === "restored_cleanup_pending") throw new Error(result.message ?? "正文已恢复，恢复副本未清理；重试仅清理副本。");
+		if (result.state === "restored_cleanup_pending") throw new Error(result.message ?? t("trash.restoredCleanupPending"));
 		const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(() => null);
 		return { status: "saved", memo, timeBuoyDates: memo?.timeBuoyDates ?? [], followUpPending: false,
 			localRefreshPending: result.catalogUpdatePending || memo === null };

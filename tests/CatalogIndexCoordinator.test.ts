@@ -1030,6 +1030,45 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 	}
 });
 
+test("P8 Daily 先到 B，后到 Trash、marker 和旧开发文件的事件不改变 observations", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const body = "## Memos\n- 09:00 independent duplicate #project\n- 09:00 independent duplicate #project\n";
+	const fixture = await createCoordinatorFixture([{ path: "Journal/2026-08-22.md", content: body, mtime: 1 }]);
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }));
+	const read = new CatalogReadService({ catalog, now: () => new Date(2026, 8, 8),
+		getTrashService: () => { throw new Error("Trash not arrived"); },
+		getLegacyImportStatus: () => "idle" });
+	try {
+		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+		const before = await store.query({ limit: 10 });
+		assert.equal((await read.query({ limit: 10, text: "duplicate", tags: ["project"] })).items.length, 2);
+		assert.equal((await read.getRandomReunionItems(10)).length, 2);
+		assert.equal(new Set(before.items.map((item) => item.observationKey)).size, 2);
+		for (const auxiliary of ["_knomo-data/trash/snapshot.json", "_knomo-data/migration-complete.json",
+			"_knomo-data/current-state.json", "_knomo-data/config/old.json", "_knomo-data/receipts/old.json",
+			"_knomo-system/indexes/memo-index-2026-08.json"]) {
+			fixture.setFile(auxiliary, body, 2);
+			const file = fixture.file(auxiliary)!;
+			file.extension = "json";
+			fixture.emitVaultEvent("create", file); fixture.emitVaultEvent("modify", file);
+			fixture.emitVaultEvent("rename", file, `${auxiliary}.old`);
+			fixture.emitVaultEvent("delete", file);
+		}
+		await waitTimer(25); await coordinator.waitForIdle();
+		assert.deepEqual(await store.query({ limit: 10 }), before);
+		assert.equal(fixture.readCount(), 1);
+		assert.equal(fixture.snapshot()["Journal/2026-08-22.md"], body);
+	} finally { fixture.unload(); }
+});
+
 async function createCoordinatorFixture(
 	entries: Array<{ path: string; content: string; mtime: number }>,
 	hideAfterFirstRead = false,

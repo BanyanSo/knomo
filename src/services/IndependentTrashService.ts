@@ -1,4 +1,5 @@
 import { TFile } from "obsidian";
+import { t } from "../i18n";
 import type { App } from "obsidian";
 import type { MemoObservation, ObservationHandle } from "../types/catalog";
 import type { TrashSnapshot, TrashWriteResult } from "../types/trash";
@@ -112,7 +113,7 @@ export class IndependentTrashService {
 			return { snapshotId: snapshot.snapshotId, state: "restored", observation, catalogUpdatePending };
 		} catch (error) {
 			return { snapshotId: snapshot.snapshotId, state: "restored_cleanup_pending", observation, catalogUpdatePending,
-				message: `正文已恢复，恢复副本未清理：${String(error)}` };
+				message: t("trash.restoredCleanupError", { error: String(error) }) };
 		}
 	}
 

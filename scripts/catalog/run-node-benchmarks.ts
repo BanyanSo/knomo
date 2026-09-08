@@ -34,8 +34,6 @@ interface CatalogNodeBenchmarkResult {
 		incrementalUpdatedObservationCount: number;
 		aggregateMemoCount: number;
 		checkpointRoundTrip: boolean;
-		identityReducerMemoCount: number;
-		identityReducerEventCount: number;
 	};
 }
 
@@ -212,7 +210,6 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 	await store.setMeta("benchmarkCheckpoint", checkpoint);
 	const restoredCheckpoint = await store.getMeta<typeof checkpoint>("benchmarkCheckpoint");
 	pushMetric(metrics, "checkpoint.roundTripMs", performance.now() - checkpointStartedAt);
-	pushMetric(metrics, "identity.reducerMaterializeMs", identityReducer.materializeMs);
 
 	const result: CatalogNodeBenchmarkResult = {
 		schemaVersion: 1,
@@ -230,8 +227,6 @@ export async function runCatalogNodeBenchmarks(): Promise<CatalogNodeBenchmarkRe
 			incrementalUpdatedObservationCount,
 			aggregateMemoCount,
 			checkpointRoundTrip: JSON.stringify(restoredCheckpoint) === JSON.stringify(checkpoint),
-			identityReducerMemoCount: identityReducer.memoCount,
-			identityReducerEventCount: identityReducer.eventCount,
 		},
 	};
 	const resultsDir = path.join(rootDir, "results");

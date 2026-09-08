@@ -143,7 +143,7 @@ test("refreshes search and statistics without a confirmation step", () => {
 });
 
 function readSettingTabSource(): string {
-	return fs.readFileSync(path.resolve("src/ui/KnomoSettingTab.ts"), "utf8");
+	return fs.readFileSync(path.resolve("src/ui/KnomoSettingTab.ts"), "utf8").replace(/\r\n/gu, "\n");
 }
 
 function getSourceBetween(source: string, startMarker: string, endMarker: string): string {

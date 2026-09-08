@@ -49,7 +49,7 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 	assert.equal(f.settingsWrites(), 1);
 	const { IndependentTrashService } = await import("../src/services/IndependentTrashService");
 	const { TFile } = await import("obsidian");
-	Object.assign(f.vault.app, { workspace: { getActiveViewOfType: () => null } });
+	Object.assign(f.vault.app, { workspace: { getActiveViewOfType: () => null, containerEl: { win: { setTimeout } } } });
 	const trash = new IndependentTrashService(f.vault.app, f.store, {
 		getLogicalDateForPath: async () => "2026-08-22",
 		getOriginalDailyFile: async () => f.vault.app.vault.getAbstractFileByPath(DAILY) as InstanceType<typeof TFile>,

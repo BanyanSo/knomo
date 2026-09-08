@@ -206,6 +206,30 @@ test("stale ObservationHandle 拒绝写入并刷新 Catalog，不按旧行号猜
 	assert.deepEqual(fixture.refreshedPaths, [[fixture.getPath("2026-08-22")]]);
 });
 
+test("P8 同文旧句柄遇到前插、删除、换行、外部编辑和同步替换均 fail closed", async (context) => {
+	const original = "## Memos\n- 08:00 same duplicate\n- 08:00 same duplicate\n";
+	const revisions = {
+		insert: original.replace("## Memos\n", "## Memos\n- 07:59 inserted\n"),
+		delete: "## Memos\n- 08:00 same duplicate\n",
+		lineEnding: original.replace(/\n/gu, "\r\n"),
+		external: original.replace("same duplicate", "external changed"),
+		sync: "## Memos\n- 08:00 replaced occurrence\n- 08:00 same duplicate\n",
+	};
+	for (const [name, content] of Object.entries(revisions)) {
+		await context.test(name, async () => {
+			const path = "Daily/2026-08-22.md";
+			const fixture = createFixture({ initialFiles: { [path]: original } });
+			const handles = (await fixture.parse("2026-08-22")).map(toHandle);
+			fixture.vault.writeText(path, content);
+			for (const observation of handles) {
+				await assert.rejects(() => fixture.service.edit({ observation, content: "wrong target" }), MarkdownMutationStaleError);
+				await assert.rejects(() => fixture.service.remove({ observation }), MarkdownMutationStaleError);
+			}
+			assert.equal(fixture.vault.readText(path), content);
+		});
+	}
+});
+
 test("copy 保留 multiline、列表、任务和代码块结构，但不复制显式 block ID", async (context) => {
 	for (const [name, content] of [
 		["multiline", "first\nsecond"],
@@ -358,7 +382,7 @@ function createFixture(options: FixtureOptions = {}) {
 		"Daily/2026-08-23.md": "## Memos\n",
 	});
 	const app = {
-		workspace: { getActiveViewOfType: () => null },
+		workspace: { getActiveViewOfType: () => null, containerEl: { win: { setTimeout } } },
 		vault,
 	} as unknown as App;
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));

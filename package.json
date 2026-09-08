@@ -12,6 +12,7 @@
 		"benchmark:catalog:build": "tsc -p tsconfig.benchmark.json",
 		"benchmark:catalog:generate": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/generate-benchmark-vault.js",
 		"benchmark:catalog:node": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/run-node-benchmarks.js",
+		"benchmark:p8": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/run-p8-benchmarks.js",
 		"benchmark:catalog:summarize": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/summarize-device-traces.js",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",

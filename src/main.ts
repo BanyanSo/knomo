@@ -266,6 +266,7 @@ export default class KnomoPlugin extends Plugin {
 			markdownMutationService,
 		);
 		this.catalogReadService = this.memoCommandService.getReadService();
+		this.registerTrashEvents();
 
 		const legacyIndexReader = new LegacyIndexReader(
 			this.app,
@@ -299,6 +300,7 @@ export default class KnomoPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
 			knomoCurrentConfigService.start(this, async () => {
+				this.catalogReadService?.invalidateTrash();
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.queueRefreshOpenViews();
@@ -487,6 +489,18 @@ export default class KnomoPlugin extends Plugin {
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 			if (leaf.view instanceof KnomoView) leaf.view.updateCatalogProgress(coverage);
 		}
+	}
+
+	private registerTrashEvents(): void {
+		const changed = (path: string, oldPath?: string) => {
+			if (this.settingsService.getLoadStatus() !== "ready") return;
+			const root = getCatalogDataRootPath(this.settingsService.getSettings().knomoDataRoot) + "/trash";
+			this.catalogReadService?.handleTrashFileChange(root, path, oldPath);
+		};
+		this.registerEvent(this.app.vault.on("create", (file) => changed(file.path)));
+		this.registerEvent(this.app.vault.on("modify", (file) => changed(file.path)));
+		this.registerEvent(this.app.vault.on("delete", (file) => changed(file.path)));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => changed(file.path, oldPath)));
 	}
 
 	private registerAttachmentEvents(): void {

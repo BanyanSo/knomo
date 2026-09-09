@@ -1,4 +1,6 @@
 import type { IndependentTrashService } from "./IndependentTrashService";
+import type { TrashQueryResult } from "../types/trash";
+import { t } from "../i18n";
 import { hashText } from "../utils/hash";
 import type {
 	CatalogCoverage,
@@ -81,6 +83,11 @@ export class CatalogReadService {
 	private lastReadState: CatalogReadState | null = null;
 	private randomReunionCandidatePool: RandomReunionCandidatePool | null = null;
 	private randomReunionCandidatePoolLoad: Promise<RandomReunionCandidatePool> | null = null;
+	private trashRevision = 0;
+	private trashSource: IndependentTrashService | null = null;
+	private trashSummary: { count: number; errorCount?: number } | null = null;
+	private trashRead: Promise<TrashQueryResult> | null = null;
+	private readonly trashListeners = new Set<() => void>();
 
 	constructor(private readonly options: CatalogReadServiceOptions) {
 		this.reviews = options.reviews ?? new LocalMemoReviewStore();
@@ -317,13 +324,68 @@ export class CatalogReadService {
 		));
 	}
 
-	async getDeletedSummary(): Promise<{ count: number }> {
-		return { count: (await this.readSnapshots()).items.length };
+	subscribeTrashChanges(listener: () => void): () => void {
+		this.trashListeners.add(listener);
+		return () => this.trashListeners.delete(listener);
 	}
 
-	private async readSnapshots() {
+	invalidateTrash(): void {
+		this.trashRevision += 1;
+		this.trashSummary = null;
+		for (const listener of this.trashListeners) listener();
+	}
+
+	handleTrashFileChange(root: string, path: string, oldPath?: string): void {
+		const affectsTrash = (candidate: string) => candidate === root || root.startsWith(`${candidate}/`)
+			|| candidate.startsWith(`${root}/`) && candidate.endsWith(".json")
+				&& !candidate.slice(root.length + 1).includes("/");
+		if (affectsTrash(path) || oldPath !== undefined && affectsTrash(oldPath)) this.invalidateTrash();
+	}
+
+	async getDeletedSummary(): Promise<{ count: number; errorCount?: number }> {
+		this.getTrashSource();
+		if (this.trashSummary !== null) return this.trashSummary;
+		const result = await this.readSnapshots();
+		return this.summarizeTrash(result);
+	}
+
+	private getTrashSource(): IndependentTrashService {
 		if (!this.options.getTrashService) throw new Error("Trash unavailable.");
-		return this.options.getTrashService().query();
+		const source = this.options.getTrashService();
+		if (source !== this.trashSource) {
+			this.trashSource = source;
+			this.trashRevision += 1;
+			this.trashSummary = null;
+		}
+		return source;
+	}
+
+	private summarizeTrash(result: TrashQueryResult): { count: number; errorCount?: number } {
+		return { count: result.items.length, ...(result.errors.length ? { errorCount: result.errors.length } : {}) };
+	}
+
+	private readSnapshots(): Promise<TrashQueryResult> {
+		if (this.trashRead !== null) return this.trashRead;
+		// 只共享正在执行的读取；完成后仅保留数量，不长期持有快照正文。
+		const readCurrent = async (): Promise<TrashQueryResult> => {
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const source = this.getTrashSource();
+				const revision = this.trashRevision;
+				let result: TrashQueryResult;
+				try { result = await source.query(); }
+				catch (error) {
+					if (source !== this.getTrashSource() || revision !== this.trashRevision) continue;
+					throw error;
+				}
+				if (source !== this.getTrashSource() || revision !== this.trashRevision) continue;
+				this.trashSummary = result.errors.length ? null : this.summarizeTrash(result);
+				return result;
+			}
+			// 同步持续变化时暂停本次读取，交给后续事件或用户重试，避免后台无界重扫。
+			throw new Error(t("error.trashLoadFailed"));
+		};
+		this.trashRead = readCurrent().finally(() => { this.trashRead = null; });
+		return this.trashRead;
 	}
 
 	async listDeleted(limit: number, cursor: string | null = null): Promise<TrashMemoPage> {

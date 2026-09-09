@@ -9,17 +9,25 @@ const BODY = "## Memos\n- 10:30 same memo\n- 10:30 same memo\n";
 
 test("生产 runtime 取消后拒绝提交已准备的删除，保留快照且不改 Daily", async () => {
 	const f = await fixture();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const read = new CatalogReadService({ catalog: {} as import("../src/services/MemoCatalogService").MemoCatalogService,
+		getTrashService: () => f.service });
+	assert.deepEqual(await read.getDeletedSummary(), { count: 0 });
 	let active = true;
 	f.options.assertActive = () => { if (!active) throw new Error("runtime cancelled"); };
 	const create = f.vault.app.vault.create.bind(f.vault.app.vault);
 	f.vault.app.vault.create = async (path, content) => {
 		const file = await create(path, content);
-		if (path.endsWith(".json")) active = false;
+		if (path.endsWith(".json")) {
+			read.handleTrashFileChange("_knomo-data/trash", path);
+			active = false;
+		}
 		return file;
 	};
 	await assert.rejects(() => f.service.delete(f.initial[0]!), /runtime cancelled/u);
 	assert.equal(f.vault.read(PATH), BODY);
 	assert.equal((await f.store.query()).items.length, 1);
+	assert.deepEqual(await read.getDeletedSummary(), { count: 1 });
 	assert.equal(f.events.includes("daily-process"), false);
 });
 

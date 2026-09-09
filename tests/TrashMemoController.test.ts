@@ -28,7 +28,7 @@ test("tracks deleted memo ids once and refreshes the trash snapshot", async () =
 	const snapshot = controller.getSnapshot();
 	assert.equal(snapshot.trashCount, 2);
 	assert.equal(snapshot.trashMemos, null);
-	assert.deepEqual(renderTargets, ["trash-count-and-scope"]);
+	assert.deepEqual(renderTargets, ["trash-count", "trash-count-and-scope"]);
 });
 
 test("concurrent trash count refreshes share one summary request", async () => {
@@ -318,6 +318,105 @@ async function loadController(): Promise<typeof import("../src/ui/TrashMemoContr
 	await ensureObsidianStub();
 	return import("../src/ui/TrashMemoController");
 }
+
+test("首次计数未知，打开侧边栏只取数量且不加载列表", async () => {
+	const gate = createDeferred<{ count: number }>();
+	const controller = await countController(() => gate.promise);
+	assert.equal(controller.getSnapshot().trashCount, null);
+	const loading = controller.refreshTrashCount(false);
+	assert.equal(controller.getSnapshot().trashCountLoading, true);
+	gate.resolve({ count: 3 });
+	await loading;
+	assert.equal(controller.getSnapshot().trashCount, 3);
+	assert.equal(controller.getSnapshot().trashMemos, null);
+	assert.equal(controller.getSnapshot().trashCountLoading, false);
+});
+
+test("旧计数成功或失败均不能覆盖 Trash 变化后的数量和错误状态", async () => {
+	for (const fail of [false, true]) {
+		let resolve!: (value: { count: number }) => void;
+		let reject!: (error: Error) => void;
+		const old = new Promise<{ count: number }>((res, rej) => { resolve = res; reject = rej; });
+		let calls = 0;
+		const controller = await countController(() => ++calls === 1 ? old : Promise.resolve({ count: 2 }));
+		const pending = controller.refreshTrashCount(false);
+		controller.invalidateTrashCount();
+		await controller.refreshTrashCount(false);
+		if (fail) reject(new Error("old error"));
+		else resolve({ count: 0 });
+		await pending;
+		assert.equal(controller.getSnapshot().trashCount, 2);
+		assert.equal(controller.getSnapshot().trashCountError, null);
+	}
+});
+
+test("快照清理事件期间暂缓计数读取，操作完成后按真实数量刷新且不重复减数", async () => {
+	const { TrashMemoController } = await loadController();
+	let count = 2;
+	let reads = 0;
+	const controller = new TrashMemoController({
+		getDeletedMemoSummary: async () => { reads++; return { count }; },
+		listDeletedMemos: async () => [makeMemo("s1"), makeMemo("s2")],
+		restoreMemo: async () => null,
+		purgeMemo: async () => {
+			count = 1;
+			controller.invalidateTrashCount();
+			await controller.refreshTrashCount(false);
+			assert.equal(reads, 1);
+		},
+		confirmPurge: async () => true,
+		handleRestoredMemo: () => {}, isTrashActive: () => false,
+		showNotice: () => {}, forceRefreshViews: async () => {}, requestRender: () => {},
+	});
+	await controller.loadTrashMemos();
+	await controller.handleTrashAction("purge", makeMemo("s1"));
+	await controller.refreshTrashCount(false);
+	assert.equal(controller.getSnapshot().trashCount, 1);
+	assert.deepEqual(controller.getSnapshot().trashMemos?.map((memo) => memo.id), ["s2"]);
+});
+
+async function countController(getDeletedMemoSummary: () => Promise<{ count: number }>) {
+	const { TrashMemoController } = await loadController();
+	return new TrashMemoController({
+		getDeletedMemoSummary,
+		listDeletedMemos: async () => { throw new Error("count must not load list"); },
+		restoreMemo: async () => null, purgeMemo: async () => {}, confirmPurge: async () => true,
+		handleRestoredMemo: () => {}, isTrashActive: () => false,
+		showNotice: () => {}, forceRefreshViews: async () => {}, requestRender: () => {},
+	});
+}
+
+test("首次列表读取被外部事件作废后自动续读，关闭后不续读或渲染", async () => {
+	for (const close of [false, true]) {
+		const { TrashMemoController } = await loadController();
+		const old = createDeferred<MemoViewItem[]>();
+		const finished = createDeferred<void>();
+		let lists = 0;
+		let renders = 0;
+		const controller = new TrashMemoController({
+			getDeletedMemoSummary: async () => ({ count: 1 }),
+			listDeletedMemos: () => ++lists === 1 ? old.promise : Promise.resolve([makeMemo("new")]),
+			restoreMemo: async () => null, purgeMemo: async () => {}, confirmPurge: async () => true,
+			handleRestoredMemo: () => {}, isTrashActive: () => true,
+			showNotice: () => {}, forceRefreshViews: async () => {},
+			requestRender: () => { renders++; if (controller.getSnapshot().trashMemos?.[0]?.id === "new") finished.resolve(); },
+		});
+		const pending = controller.loadTrashMemos();
+		controller.invalidateTrashCount();
+		if (close) controller.dispose();
+		const before = renders;
+		old.resolve([makeMemo("old")]);
+		await pending;
+		if (close) {
+			assert.equal(lists, 1);
+			assert.equal(renders, before);
+		} else {
+			await finished.promise;
+			assert.equal(lists, 2);
+			assert.equal(controller.getSnapshot().trashMemos?.[0]?.id, "new");
+		}
+	}
+});
 
 function makeMemo(id: string): MemoViewItem {
 	return {

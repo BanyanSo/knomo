@@ -283,6 +283,8 @@ export class KnomoView extends ItemView {
 	private allTagsEl: HTMLElement | null = null;
 	private cardFlowEl: HTMLElement | null = null;
 	private trashCountEls: HTMLElement[] = [];
+	private trashCountRefreshTimer: number | null = null;
+	private trashViewClosed = false;
 	private inputEl: HTMLTextAreaElement | null = null;
 	private timeBuoyButtonEl: HTMLButtonElement | null = null;
 	private timeBuoyMonthStatusEl: HTMLElement | null = null;
@@ -749,7 +751,9 @@ export class KnomoView extends ItemView {
 			isTrashActive: () => this.activeNav === "trash",
 			showNotice: (message) => new Notice(message),
 			forceRefreshViews: () => this.onForceRefreshViews(),
-			requestRender: (target) => this.handleTrashRenderRequest(target),
+			requestRender: (target) => {
+				if (!this.trashViewClosed) this.handleTrashRenderRequest(target);
+			},
 		});
 		this.timeBuoyViewController = new TimeBuoyViewController({
 			getNow: () => new Date(),
@@ -968,6 +972,12 @@ export class KnomoView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.trashViewClosed = false;
+		this.register(this.catalogReadService.subscribeTrashChanges(() => {
+			if (this.trashViewClosed) return;
+			this.trashMemoController.invalidateTrashCount();
+			this.scheduleTrashCountRefresh();
+		}));
 		this.lastKnownLocalDate = formatTimeBuoyDate(new Date());
 		this.contentEl.addClass("knomo-view-host");
 		this.register(this.vaultTagIndex.subscribe(() => {
@@ -1017,6 +1027,12 @@ export class KnomoView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.trashViewClosed = true;
+		this.trashMemoController.dispose();
+		if (this.trashCountRefreshTimer !== null) {
+			this.containerEl.win.clearTimeout(this.trashCountRefreshTimer);
+			this.trashCountRefreshTimer = null;
+		}
 		this.mobileNavbarCompactController?.stop();
 		this.mobileNavbarCompactController = null;
 		this.tagSuggest?.close();
@@ -1082,7 +1098,7 @@ export class KnomoView extends ItemView {
 		}
 		await this.waitForAllMemosLoading();
 		await this.reloadMemos(false, forceRebuild);
-		if (!Platform.isMobile) {
+		if (!Platform.isMobile || this.mobileDrawerOpen) {
 			void this.trashMemoController.refreshTrashCount(false);
 		}
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
@@ -2431,8 +2447,12 @@ export class KnomoView extends ItemView {
 		const trashSnapshot = this.trashMemoController.getSnapshot();
 		const trashCount = trashSnapshot.trashCount;
 		for (const countEl of this.trashCountEls) {
-			countEl.setText(trashCount > 0 ? String(trashCount) : "");
-			countEl.toggleAttribute("hidden", trashCount === 0);
+			countEl.setText(trashSnapshot.trashCountError ? "!" : trashCount === null ? "—" : trashCount > 0 ? String(trashCount) : "");
+			countEl.toggleAttribute("hidden", trashCount === 0 && !trashSnapshot.trashCountError);
+			if (trashSnapshot.trashCountLoading) countEl.setAttr("aria-busy", "true");
+			else countEl.removeAttribute("aria-busy");
+			if (trashSnapshot.trashCountError) countEl.setAttr("aria-label", trashSnapshot.trashCountError);
+			else countEl.removeAttribute("aria-label");
 		}
 	}
 
@@ -5620,10 +5640,23 @@ export class KnomoView extends ItemView {
 	}
 
 	private async ensureSidebarIndexes(): Promise<void> {
+		void this.trashMemoController.refreshTrashCount(false);
 		const yieldToUi = () => new Promise<void>((resolve) => {
 			this.containerEl.win.setTimeout(resolve, 0);
 		});
 		await this.vaultTagIndex.ensureReady(yieldToUi);
+	}
+
+	private scheduleTrashCountRefresh(): void {
+		if (this.trashViewClosed || Platform.isMobile && !this.mobileDrawerOpen && this.activeNav !== "trash") return;
+		if (this.trashCountRefreshTimer !== null) this.containerEl.win.clearTimeout(this.trashCountRefreshTimer);
+		this.trashCountRefreshTimer = this.containerEl.win.setTimeout(() => {
+			this.trashCountRefreshTimer = null;
+			if (!this.trashViewClosed && (!Platform.isMobile || this.mobileDrawerOpen || this.activeNav === "trash")) {
+				if (this.activeNav === "trash") void this.trashMemoController.loadTrashMemos();
+				else void this.trashMemoController.refreshTrashCount(false);
+			}
+		}, 100);
 	}
 
 	private toggleSidebarCollapsed(): void {

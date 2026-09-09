@@ -1,3 +1,4 @@
+import type { TrashMemoItem } from "../types/trash";
 import type { IndependentTrashService } from "./IndependentTrashService";
 import { t } from "../i18n";
 import { TFile } from "obsidian";
@@ -15,7 +16,6 @@ import type {
 	MemoSaveResult,
 	MonthlyProjectionState,
 	MutationFollowUpState,
-	TrashMemoItem,
 } from "../types/catalogView";
 import type {
 	MarkdownMutationResult,
@@ -79,7 +79,6 @@ export class MemoCommandService {
 			references: new CatalogReferenceService(app, catalog),
 			reviews: new LocalMemoReviewStore(app),
 			catalog,
-			getTrashService: options.getTrashService,
 			requestObservationScan: async () => { await options.refreshLocalCatalog(); },
 			getProjectionState: options.getProjectionState,
 			getLegacyImportStatus: options.getLegacyImportStatus,

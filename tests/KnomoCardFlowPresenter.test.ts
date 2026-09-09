@@ -250,12 +250,12 @@ test("presents trash states and trash items", async () => {
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "trash",
-		trashError: "Trash index failed",
-		trashMemos: [],
+		trashError: "Trash file failed",
+		trashMemos: null,
 	}), {
 		type: "empty",
 		title: "Trash failed to load",
-		description: "Trash index failed",
+		description: "Trash file failed",
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -283,10 +283,9 @@ test("presents trash states and trash items", async () => {
 		trashError: "Refresh failed",
 		trashMemos,
 	}), {
-		type: "items",
-		memos: trashMemos,
-		mode: "trash",
-		headers: [],
+		type: "empty",
+		title: "Trash failed to load",
+		description: "Refresh failed",
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),

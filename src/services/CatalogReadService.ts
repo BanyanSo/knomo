@@ -1,7 +1,4 @@
-import type { IndependentTrashService } from "./IndependentTrashService";
-import type { TrashQueryResult } from "../types/trash";
 import { t } from "../i18n";
-import { hashText } from "../utils/hash";
 import type {
 	CatalogCoverage,
 	CatalogDailyAggregate,
@@ -28,8 +25,6 @@ import type {
 	KnomoRuntimeSnapshot,
 	MonthlyProjectionState,
 	CatalogTagFacet,
-	TrashMemoItem,
-	TrashMemoPage,
 } from "../types/catalogView";
 import type { LegacyMigrationStatus } from "../types/legacyMigration";
 import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
@@ -55,7 +50,6 @@ export interface CatalogReadServiceOptions {
 	references?: CatalogReferenceService;
 	reviews?: LocalMemoReviewStore;
 	catalog: MemoCatalogService;
-	getTrashService?: () => IndependentTrashService;
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
 	getLegacyImportStatus?: () => LegacyMigrationStatus;
@@ -83,12 +77,6 @@ export class CatalogReadService {
 	private lastReadState: CatalogReadState | null = null;
 	private randomReunionCandidatePool: RandomReunionCandidatePool | null = null;
 	private randomReunionCandidatePoolLoad: Promise<RandomReunionCandidatePool> | null = null;
-	private trashRevision = 0;
-	private trashSource: IndependentTrashService | null = null;
-	private trashSourcePath: string | null = null;
-	private trashSummary: { count: number; errorCount?: number } | null = null;
-	private trashRead: Promise<TrashQueryResult> | null = null;
-	private readonly trashListeners = new Set<() => void>();
 
 	constructor(private readonly options: CatalogReadServiceOptions) {
 		this.reviews = options.reviews ?? new LocalMemoReviewStore();
@@ -323,107 +311,6 @@ export class CatalogReadService {
 		return this.countFiltered(query, (memo) => (
 			memo.observation.explicitReferenceTargets.length > 0
 		));
-	}
-
-	subscribeTrashChanges(listener: () => void): () => void {
-		this.trashListeners.add(listener);
-		return () => this.trashListeners.delete(listener);
-	}
-
-	invalidateTrash(): void {
-		this.trashSource?.store.invalidate();
-		this.trashRevision += 1;
-		this.trashSummary = null;
-		for (const listener of this.trashListeners) listener();
-	}
-
-	handleTrashFileChange(root: string, path: string, oldPath?: string): void {
-		const affectsTrash = (candidate: string) => candidate === root || root.startsWith(`${candidate}/`);
-		if (affectsTrash(path) || oldPath !== undefined && affectsTrash(oldPath)) this.invalidateTrash();
-	}
-
-	async getDeletedSummary(): Promise<{ count: number; errorCount?: number }> {
-		this.getTrashSource();
-		if (this.trashSummary !== null) return this.trashSummary;
-		const result = await this.readSnapshots();
-		return this.summarizeTrash(result);
-	}
-
-	private getTrashSource(): IndependentTrashService {
-		if (!this.options.getTrashService) throw new Error("Trash unavailable.");
-		const source = this.options.getTrashService();
-		const path = source.store.path;
-		if (source !== this.trashSource || path !== this.trashSourcePath) {
-			this.trashSource = source;
-			this.trashSourcePath = path;
-			this.trashRevision += 1;
-			this.trashSummary = null;
-		}
-		return source;
-	}
-
-	private summarizeTrash(result: TrashQueryResult): { count: number; errorCount?: number } {
-		if (result.errors.length) throw new Error(result.errors.map((error) => error.message).join("; "));
-		return { count: result.items.length, ...(result.errors.length ? { errorCount: result.errors.length } : {}) };
-	}
-
-	private readSnapshots(): Promise<TrashQueryResult> {
-		if (this.trashRead !== null) return this.trashRead;
-		// 只共享正在执行的读取；完成后仅保留数量，不长期持有快照正文。
-		const readCurrent = async (): Promise<TrashQueryResult> => {
-			for (let attempt = 0; attempt < 2; attempt++) {
-				const source = this.getTrashSource();
-				const revision = this.trashRevision;
-				let result: TrashQueryResult;
-				try { result = await source.query(); }
-				catch (error) {
-					if (source !== this.getTrashSource() || revision !== this.trashRevision) continue;
-					throw error;
-				}
-				if (source !== this.getTrashSource() || revision !== this.trashRevision) continue;
-				this.trashSummary = result.errors.length ? null : this.summarizeTrash(result);
-				return result;
-			}
-			// 同步持续变化时暂停本次读取，交给后续事件或用户重试，避免后台无界重扫。
-			throw new Error(t("error.trashLoadFailed"));
-		};
-		this.trashRead = readCurrent().finally(() => { this.trashRead = null; });
-		return this.trashRead;
-	}
-
-	async listDeleted(limit: number, cursor: string | null = null): Promise<TrashMemoPage> {
-		const result = await this.readSnapshots();
-		if (result.errors.length) throw new Error(result.errors.map((error) => error.message).join("; "));
-		const snapshots = result.items;
-		const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
-		const selected = snapshots.slice(offset, offset + Math.max(0, limit));
-		return { items: selected.map((item) => ({ snapshotId: item.snapshotId, key: item.snapshotId,
-			rawBlock: item.rawBlock,
-			createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
-			deletedAt: item.deletedAt, logicalDate: item.logicalDate,
-			sourcePath: item.sourcePath, section: item.section, content: readDeletedPayloadContent(item.rawBlock),
-			contentHash: hashText(item.rawBlock), purgeAllowed: true })),
-			nextCursor: offset + selected.length < snapshots.length ? String(offset + selected.length) : null,
-			snapshotRevision: hashText(JSON.stringify(snapshots)), errors: result.errors };
-	}
-
-	async listAllDeleted(): Promise<TrashMemoItem[]> {
-		const items: TrashMemoItem[] = [];
-		let cursor: string | null = null;
-		let revision: string | null = null;
-		do {
-			const page = await this.listDeleted(150, cursor);
-			if (revision !== null && page.snapshotRevision !== revision) {
-				items.length = 0;
-				cursor = null;
-				revision = null;
-				continue;
-			}
-			revision = page.snapshotRevision;
-			items.push(...page.items);
-			cursor = page.nextCursor;
-		} while (cursor !== null);
-		return items;
 	}
 
 	async queryTimeBuoysForDate(targetDate: string): Promise<TimeBuoyQueryResult> {
@@ -867,13 +754,6 @@ export class CatalogReadService {
 function observationLocalKey(observation: CatalogObservation): string {
 	// 文件 revision 变化即失效，避免同一行的新 occurrence 继承旧卡片状态。
 	return `${observation.observationKey}\u0000${observation.sourceRevision}`;
-}
-
-function readDeletedPayloadContent(rawBlock: string): string {
-	const lines = rawBlock.split(/\r?\n/u);
-	const first = /^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s(.*))?$/u.exec(lines[0] ?? "")?.[1] ?? "";
-	const continuation = lines.slice(1).map((line) => line.replace(/^ {2}/u, ""));
-	return [first, ...continuation].join("\n").replace(/\s+\^[A-Za-z0-9-]+\s*$/u, "").trim();
 }
 
 function buildTimeBuoyInstance(memo: CatalogMemoItem, targetDate: string) {

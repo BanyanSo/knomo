@@ -1,3 +1,4 @@
+import type { TrashSnapshotStore } from "../services/TrashSnapshotStore";
 import { Component, ItemView, Keymap, Notice, Platform, Scope, setIcon, TFile } from "obsidian";
 import type { HoverPopover, WorkspaceLeaf } from "obsidian";
 
@@ -32,6 +33,7 @@ import {
 	isTrashMemoView,
 	isCatalogMemoView,
 	toTrashMemoView,
+	toTrashMemoItem,
 	toCatalogMemoView,
 } from "../types/memoView";
 import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchForNativeInput } from "../utils/composerInput";
@@ -339,8 +341,6 @@ export class KnomoView extends ItemView {
 	private librarySummary: CatalogLibrarySummary | null = null;
 	private libraryTagFacets: CatalogTagFacet[] | null = null;
 	private libraryIndexesUpdating = false;
-	private trashCursor: string | null = null;
-	private trashSnapshotRevision: string | null = null;
 	private cardFlowError: string | null = null;
 	private memoLoadingPromise: Promise<boolean> | null = null;
 	private memoLoadingFingerprint: string | null = null;
@@ -555,6 +555,7 @@ export class KnomoView extends ItemView {
 		private readonly onManualRefresh: () => Promise<CatalogRefreshResult>,
 		private readonly memoCommandService: MemoCommandService,
 		private readonly catalogReadService: CatalogReadService,
+		trashStore: TrashSnapshotStore,
 		getDailyNotesStatus: () => DailyNotesStatus,
 		getTodayDailyNotePath: () => string | null,
 		private readonly onRefreshCatalogProtocolState: (() => Promise<void>) | null = null,
@@ -719,14 +720,11 @@ export class KnomoView extends ItemView {
 				: MARKDOWN_RENDER_CONCURRENCY,
 		});
 		this.trashMemoController = new TrashMemoController<MemoRecord>({
-			getDeletedMemoSummary: () => this.catalogReadService.getDeletedSummary(),
-			listDeletedMemos: async () => {
-				const page = await this.catalogReadService.listDeleted(CATALOG_PAGE_SIZE);
-				if (page.errors?.length) new Notice(page.errors.map((item) => `${item.snapshotId}: ${item.message}`).join("\n"));
-				this.trashCursor = page.nextCursor;
-				this.trashSnapshotRevision = page.snapshotRevision;
-				return page.items.map(toTrashMemoView);
-			},
+			store: trashStore,
+			toMemo: (snapshot) => toTrashMemoView(toTrashMemoItem(snapshot)),
+			pageSize: CATALOG_PAGE_SIZE,
+			windowLimit: TRASH_MEMO_WINDOW_LIMIT,
+			onInvalidated: () => this.scheduleTrashCountRefresh(),
 			restoreMemo: async (memo) => {
 				if (isTrashMemoView(memo)) {
 					const result = await this.memoCommandService.restore(memo.trashItem);
@@ -973,11 +971,7 @@ export class KnomoView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		this.trashViewClosed = false;
-		this.register(this.catalogReadService.subscribeTrashChanges(() => {
-			if (this.trashViewClosed) return;
-			this.trashMemoController.invalidateTrashCount();
-			this.scheduleTrashCountRefresh();
-		}));
+		this.trashMemoController.start();
 		this.lastKnownLocalDate = formatTimeBuoyDate(new Date());
 		this.contentEl.addClass("knomo-view-host");
 		this.register(this.vaultTagIndex.subscribe(() => {
@@ -1093,14 +1087,11 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (this.activeNav === "trash") {
-			await this.trashMemoController.loadTrashMemos();
+			this.handleTrashRenderRequest("ui-state");
 			return;
 		}
 		await this.waitForAllMemosLoading();
 		await this.reloadMemos(false, forceRebuild);
-		if (!Platform.isMobile || this.mobileDrawerOpen) {
-			void this.trashMemoController.refreshTrashCount(false);
-		}
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
 			await this.timeBuoyViewController.loadTodayOnly();
 		}
@@ -1233,8 +1224,8 @@ export class KnomoView extends ItemView {
 			this.renderTrashCount();
 			void this.loadInitialMobileMemos();
 		} else {
+			void this.trashMemoController.ensureLoaded();
 			await this.reloadCurrentCatalogQuery(true);
-			void this.trashMemoController.refreshTrashCount(false);
 		}
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
 			if (this.activeNav === "time-buoy") {
@@ -3946,7 +3937,7 @@ export class KnomoView extends ItemView {
 		this.syncManualRefreshButtonState();
 		try {
 			if (this.activeNav === "trash") {
-				await this.trashMemoController.loadTrashMemos();
+				await this.trashMemoController.loadTrashMemos(true);
 				if (this.trashMemoController.getSnapshot().trashError === null) {
 					new Notice(t("notice.trashRefreshed"));
 				}
@@ -5640,7 +5631,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async ensureSidebarIndexes(): Promise<void> {
-		void this.trashMemoController.refreshTrashCount(false);
+		void this.trashMemoController.ensureLoaded();
 		const yieldToUi = () => new Promise<void>((resolve) => {
 			this.containerEl.win.setTimeout(resolve, 0);
 		});
@@ -5654,7 +5645,7 @@ export class KnomoView extends ItemView {
 			this.trashCountRefreshTimer = null;
 			if (!this.trashViewClosed && (!Platform.isMobile || this.mobileDrawerOpen || this.activeNav === "trash")) {
 				if (this.activeNav === "trash") void this.trashMemoController.loadTrashMemos();
-				else void this.trashMemoController.refreshTrashCount(false);
+				else void this.trashMemoController.ensureLoaded();
 			}
 		}, 100);
 	}
@@ -5828,7 +5819,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private canLoadOlderMemoPeriods(): boolean {
-		if (this.activeNav === "trash") return this.trashCursor !== null;
+		if (this.activeNav === "trash") return this.trashMemoController.hasMore();
 		return (this.catalogCursor !== null || this.catalogHistoryExpansionPending)
 			&& this.activeNav !== "random"
 			&& this.activeNav !== "shuffleDay"
@@ -5838,7 +5829,7 @@ export class KnomoView extends ItemView {
 
 	private async loadOlderMemoPeriods(): Promise<boolean> {
 		return this.activeNav === "trash"
-			? this.loadNextTrashPage()
+			? this.trashMemoController.loadNextPage()
 			: this.loadNextCatalogPage();
 	}
 
@@ -5936,10 +5927,6 @@ export class KnomoView extends ItemView {
 	private handleTrashRenderRequest(target: TrashMemoRenderTarget): void {
 		if (target === "ui-state") {
 			this.renderUiState();
-			return;
-		}
-		if (target === "trash-count") {
-			this.renderTrashCount();
 			return;
 		}
 		if (target === "trash-count-and-scope") {
@@ -6109,18 +6096,6 @@ export class KnomoView extends ItemView {
 		void settled;
 	}
 
-	private async loadNextTrashPage(): Promise<boolean> {
-		if (this.trashCursor === null) return false;
-		const page = await this.getCatalogReadService().listDeleted(CATALOG_PAGE_SIZE, this.trashCursor);
-		if (this.trashSnapshotRevision !== null && page.snapshotRevision !== this.trashSnapshotRevision) {
-			await this.trashMemoController.loadTrashMemos();
-			return false;
-		}
-		this.trashCursor = page.nextCursor;
-		this.trashSnapshotRevision = page.snapshotRevision;
-		this.trashMemoController.appendTrashMemos(page.items.map(toTrashMemoView), TRASH_MEMO_WINDOW_LIMIT);
-		return true;
-	}
 
 	private async handleCatalogTaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): Promise<void> {
 		let dailySaved = false;

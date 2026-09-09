@@ -345,7 +345,6 @@ function createSettings(): KnomoSettings {
 		desktopSidebarCollapsed: false,
 		excludeMonthlyMemosFromObsidian: false,
 		managedObsidianExcludeRuleOwned: false,
-		managedSystemFolderExcludeRuleOwned: false,
 		pinnedTags: [],
 	};
 }
@@ -364,3 +363,20 @@ function getName(path: string): string {
 	const normalized = normalizeTestPath(path);
 	return normalized.slice(normalized.lastIndexOf("/") + 1);
 }
+
+
+test("忽略旧根专属设置但不删除用户自己的 exclude 配置及开发残留", async () => {
+ const { SettingsService } = await loadSettingsService();
+ const legacy = { ...createSettings(), knomoDataRoot: "Old/_knomo-data", knomoDataRootConfigured: true,
+  managedSystemFolderExcludeRule: "Old/_knomo-data/", managedSystemFolderExcludeRuleOwned: true,
+  managedLegacySystemFolderExcludeRule: "Old/_knomo-system/", managedLegacySystemFolderExcludeRuleOwned: true };
+ const plugin = await createPlugin({ "Old/_knomo-data/keep.json": "untouched" }, { settings: legacy });
+ const rules = ["Personal/", "Old/_knomo-data/", "Old/_knomo-system/"];
+ plugin.vault.config.userIgnoreFilters = [...rules];
+ const service = new SettingsService(plugin as never); await service.loadSettings();
+ await service.updateSettings({ syncDebounceMs: 2000 });
+ assert.deepEqual(plugin.vault.config.userIgnoreFilters, rules);
+ assert.equal(plugin.vault.exists("Old/_knomo-data/keep.json"), true);
+ for (const key of ["knomoDataRoot", "knomoDataRootConfigured", "managedSystemFolderExcludeRule", "managedSystemFolderExcludeRuleOwned",
+  "managedLegacySystemFolderExcludeRule", "managedLegacySystemFolderExcludeRuleOwned"]) assert.equal(key in service.getSettings(), false);
+});

@@ -289,7 +289,6 @@ export const zhCN = {
 	"error.operationFailed": "操作失败",
 	"error.saveFailed": "保存失败",
 	"error.refreshFailed": "刷新失败。",
-	"error.trashCountFailed": "回收站数量刷新失败",
 	"error.trashLoadFailed": "回收站加载失败",
 	"error.randomLoadFailed": "随机重逢加载失败",
 	"error.randomOpenFailed": "随机重逢打开失败",

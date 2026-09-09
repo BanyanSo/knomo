@@ -26,9 +26,5 @@ export interface KnomoSettings {
 	excludeMonthlyMemosFromObsidian: boolean;
 	managedObsidianExcludeRule?: string;
 	managedObsidianExcludeRuleOwned?: boolean;
-	managedSystemFolderExcludeRule?: string;
-	managedSystemFolderExcludeRuleOwned?: boolean;
-	managedLegacySystemFolderExcludeRule?: string;
-	managedLegacySystemFolderExcludeRuleOwned?: boolean;
 	pinnedTags: string[];
 }

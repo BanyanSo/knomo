@@ -4,7 +4,7 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { hashMemoContent, hashText } from "../src/utils/hash";
 
 const INDEX = "Knomo/_knomo-system/indexes/memo-index-2026-08.json";
-const ROOT = "Knomo/_knomo-data";
+const ROOT = "Knomo";
 const DAILY = "Daily/2026-08-22.md";
 const RAW = "- 09:00 同文恢复副本";
 

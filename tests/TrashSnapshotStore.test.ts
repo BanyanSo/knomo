@@ -208,3 +208,91 @@ function deferred<T>() {
 	const promise = new Promise<T>((res) => { resolve = res; });
 	return { promise, resolve };
 }
+
+
+test("文件及父目录事件失效；Daily、Monthly、开发残留不触发 Trash 读取", async () => {
+ const f = await fixture({ [PATH]: encode([snapshot()]) });
+ let reads = 0; const read = f.vault.app.vault.read.bind(f.vault.app.vault);
+ f.vault.app.vault.read = async (file) => { reads++; return read(file); };
+ await f.store.query(); let notifications = 0;
+ const unsubscribe = f.store.subscribe(() => { notifications++; });
+ for (const path of ["Daily/2026-09-09.md", "Monthly/Memos-2026-09.md", "_knomo-data/trash/s1.json", "Monthly/knomo-trash.json.bak"]) f.store.handleFileChange(path);
+ await f.store.query(); assert.equal(reads, 1); assert.equal(notifications, 0);
+ for (const [path, oldPath] of [[PATH], [PATH], [PATH], ["Moved.json", PATH], [PATH, "Moved.json"], ["Moved", "Monthly"], ["Monthly"]]) {
+  f.store.handleFileChange(path!, oldPath);
+  assert.equal(f.store.getState().count, null);
+ }
+ assert.equal(reads, 1); assert.equal(notifications, 7);
+ await f.store.query(); assert.equal(reads, 2);
+ unsubscribe(); const before = notifications; f.store.invalidate(); assert.equal(notifications, before);
+});
+
+test("外部删除和迁入精确目标后重读；订阅实例共享本地发布而无需再读", async () => {
+ const f = await fixture({ [PATH]: encode([snapshot()]) }); const another = f.another();
+ await f.store.query(); assert.equal(another.getState().count, 1);
+ f.vault.remove(PATH); f.store.handleFileChange(PATH); await f.store.query();
+ assert.deepEqual(another.getState().items, []);
+ await f.vault.app.vault.create(PATH, encode([snapshot("incoming")]));
+ f.store.handleFileChange(PATH, "Other/file.json"); await f.store.query();
+ assert.equal(another.getState().items?.[0]?.snapshotId, "incoming");
+ await another.save(snapshot("s2")); assert.equal(f.store.getState().count, 2);
+});
+
+test("旧读取失败及持续外部变化均不发布旧 count 或伪空；重试有界", async () => {
+ const f = await fixture({ [PATH]: encode([snapshot()]), "New/knomo-trash.json": encode([snapshot("new")]) });
+ const read = f.vault.app.vault.read.bind(f.vault.app.vault); const gate = deferred<void>(); let first = true;
+ f.vault.app.vault.read = async (file) => { if (first) { first = false; await gate.promise; throw new Error("old read failed"); } return read(file); };
+ const pending = f.store.query(); await Promise.resolve(); f.setFolder("New"); f.store.invalidateConfiguration(); gate.resolve();
+ assert.equal((await pending).items[0]?.snapshotId, "new");
+ let reads = 0;
+ f.vault.app.vault.read = async (file) => { reads++; const text = await read(file); f.store.handleFileChange(file.path); return text; };
+ f.store.invalidate(); const result = await f.store.query();
+ assert.equal(reads, 3); assert.equal(result.errors.length, 1);
+ assert.equal(f.store.getState().status, "error"); assert.equal(f.store.getState().count, null);
+});
+
+test("Daily 配置变化取消旧操作但不丢弃同一路径 Trash state", async () => {
+ const f = await fixture({ [PATH]: encode([snapshot()]) }); await f.store.query();
+ const gate = deferred<void>(); const entered = deferred<void>();
+ const pending = f.store.runExclusive(async (store) => { entered.resolve(); await gate.promise; store.assertActive(); });
+ await entered.promise; f.store.invalidateConfiguration(false); gate.resolve();
+ await assert.rejects(pending, /configuration changed/);
+ assert.equal(f.store.getState().count, 1);
+});
+
+test("写后校验期间同步覆盖不发布成功，保留外部内容并报告结果不确定", async () => {
+ const f = await fixture({ [PATH]: encode([snapshot()]) });
+ const read = f.vault.app.vault.read.bind(f.vault.app.vault); let changed = false;
+ f.vault.app.vault.read = async (file) => { const text = await read(file); if (!changed) { changed = true;
+  f.vault.replace(PATH, encode([snapshot("external")])); f.store.handleFileChange(PATH);
+ } return text; };
+ await assert.rejects(f.store.save(snapshot("s2")), /changed during write verification/);
+ assert.equal(f.store.getState().status, "error"); assert.equal(f.store.getState().count, null);
+ assert.equal(f.vault.read(PATH), encode([snapshot("external")]));
+});
+
+
+test("卸载释放共享缓存及订阅，旧请求晚返回不覆盖重启实例的新状态", async () => {
+ const f = await fixture({ [PATH]: encode([snapshot()]) });
+ const gate = deferred<void>(); const read = f.vault.app.vault.read.bind(f.vault.app.vault); let first = true; let notifications = 0;
+ f.vault.app.vault.read = async (file) => { const text = await read(file); if (first) { first = false; await gate.promise; } return text; };
+ f.store.subscribe(() => { notifications++; });
+ const old = f.store.query(); await Promise.resolve(); f.store.dispose();
+ const before = notifications; f.vault.replace(PATH, encode([snapshot("new")]));
+ const next = f.another(); await next.query(); gate.resolve(); await old;
+ assert.equal(next.getState().items?.[0]?.snapshotId, "new");
+ assert.equal(notifications, before);
+ assert.equal(f.store.getState().status, "error");
+ await assert.rejects(f.store.clear(), /disposed/);
+});
+
+
+test("订阅 loading 时重入查询仍共享同一次读取", async () => {
+ const f = await fixture({ [PATH]: encode([snapshot()]) });
+ let reads = 0; const read = f.vault.app.vault.read.bind(f.vault.app.vault);
+ f.vault.app.vault.read = async (file) => { reads++; return read(file); };
+ let nested: Promise<import("../src/types/trash").TrashQueryResult> | undefined;
+ f.store.subscribe(() => { if (f.store.getState().status === "loading") nested = f.store.query(); });
+ const result = await f.store.query(); await nested;
+ assert.equal(reads, 1); assert.equal(result.items.length, 1);
+});

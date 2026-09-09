@@ -62,19 +62,6 @@ export class SettingsService {
 		);
 	}
 
-	async retireLegacySystemExcludeRule(): Promise<void> {
-		const settings = this.getSettings();
-		const rule = settings.managedLegacySystemFolderExcludeRule;
-		if (rule !== undefined && settings.managedLegacySystemFolderExcludeRuleOwned === true) {
-			await new ObsidianExcludeService(this.plugin.app).removeRule(rule);
-		}
-		await this.saveSettings({
-			...settings,
-			managedLegacySystemFolderExcludeRule: undefined,
-			managedLegacySystemFolderExcludeRuleOwned: false,
-		});
-	}
-
 	async loadSettings(): Promise<KnomoSettings> {
 		try {
 			const savedData = await this.pluginDataStore.read();

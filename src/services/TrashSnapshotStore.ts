@@ -3,7 +3,14 @@ import type { App } from "obsidian";
 import type { TrashQueryResult, TrashSnapshot, TrashStoreState } from "../types/trash";
 
 // 所有实例共享当前 Vault 的本地操作队列；不形成磁盘协议。
-const coordinators = new WeakMap<App, { queue: Promise<unknown>; revision: number }>();
+interface TrashCoordinator {
+	queue: Promise<unknown>;
+	revision: number;
+	pending: number;
+	publication: { path: string; revision: number; state: TrashStoreState } | null;
+	listeners: Set<() => void>;
+}
+const coordinators = new WeakMap<App, TrashCoordinator>();
 
 export type TrashOperationStore = Pick<TrashSnapshotStore, "read" | "save" | "saveAll" | "assertUnchanged" | "remove" | "clear"> & { assertActive(): void };
 
@@ -14,39 +21,67 @@ export function getTrashFilePath(monthlyFolder: string): string {
 
 export class TrashSnapshotStore {
 	private readonly coordinator;
-	private state: TrashStoreState = { status: "idle", items: null, count: null, error: null };
-	private statePath = "";
-	private stateRevision = -1;
 	private reading: Promise<TrashQueryResult> | null = null;
 	private configurationRevision = 0;
+	private disposed = false;
+	private readonly subscriptions = new Set<() => void>();
 
 	constructor(private readonly app: App, private readonly monthlyFolder: string | (() => string), private readonly assertActive: () => void = () => undefined) {
-		this.coordinator = coordinators.get(app) ?? { queue: Promise.resolve(), revision: 0 };
+		this.coordinator = coordinators.get(app) ?? { queue: Promise.resolve(), revision: 0, pending: 0, publication: null, listeners: new Set<() => void>() };
 		coordinators.set(app, this.coordinator);
 	}
 
 	get path(): string { return getTrashFilePath(typeof this.monthlyFolder === "string" ? this.monthlyFolder : this.monthlyFolder()); }
 
 	getState(): TrashStoreState {
-		if (this.statePath !== this.path || this.stateRevision !== this.coordinator.revision) return { status: "idle", items: null, count: null, error: null };
-		return structuredClone(this.state);
+		try {
+			if (this.disposed) throw new Error("Trash runtime disposed.");
+			this.assertActive();
+			const current = this.coordinator.publication;
+			if (current?.path === this.path && current.revision === this.coordinator.revision) return structuredClone(current.state);
+			return { status: "idle", items: null, count: null, error: null };
+		} catch (error) { return { status: "error", items: null, count: null, error: String(error) }; }
+	}
+
+	subscribe(listener: () => void): () => void {
+		if (this.disposed) return () => undefined;
+		this.subscriptions.add(listener);
+		this.coordinator.listeners.add(listener);
+		return () => { this.subscriptions.delete(listener); this.coordinator.listeners.delete(listener); };
+	}
+
+	dispose(): void {
+		this.disposed = true;
+		for (const listener of this.subscriptions) this.coordinator.listeners.delete(listener);
+		this.subscriptions.clear();
+		this.invalidateConfiguration();
+	}
+
+	handleFileChange(path: string, oldPath?: string): void {
+		let target: string;
+		try { target = this.path; } catch { return; }
+		const affects = (candidate: string) => target === candidate || target.startsWith(`${candidate}/`);
+		if (affects(path) || oldPath !== undefined && affects(oldPath)) this.invalidate();
 	}
 
 	invalidate(): void {
 		this.coordinator.revision++;
-		this.state = { status: "idle", items: null, count: null, error: null };
+		this.coordinator.publication = null;
+		this.notify();
 	}
 
-	invalidateConfiguration(): void { this.configurationRevision++; this.invalidate(); }
+	invalidateConfiguration(invalidateState = true): void { this.configurationRevision++; if (invalidateState) this.invalidate(); }
 
 	// 回调内使用绑定的操作对象，避免队列重入；锁覆盖整个 Daily 删除/恢复提交窗口。
 	runExclusive<T>(action: (store: TrashOperationStore) => Promise<T>): Promise<T> {
 		const path = this.path;
 		const revision = this.configurationRevision;
 		const guard = () => {
+			if (this.disposed) throw new Error("Trash runtime disposed.");
 			this.assertActive();
 			if (this.path !== path || revision !== this.configurationRevision) throw new Error("Trash configuration changed.");
 		};
+		this.coordinator.pending++;
 		const pending = this.coordinator.queue.catch(() => undefined).then(async () => {
 			guard();
 			let active = true;
@@ -104,7 +139,7 @@ export class TrashSnapshotStore {
 					clear: () => this.modify(path, check, () => []),
 				});
 			} finally { active = false; }
-		});
+		}).finally(() => { this.coordinator.pending--; });
 		this.coordinator.queue = pending;
 		return pending;
 	}
@@ -130,31 +165,50 @@ export class TrashSnapshotStore {
 	}
 
 	query(): Promise<TrashQueryResult> {
-		if (!this.reading) this.reading = this.load().finally(() => { this.reading = null; });
+		if (!this.reading) {
+			let resolve!: (result: TrashQueryResult) => void;
+			let reject!: (error: unknown) => void;
+			const pending = new Promise<TrashQueryResult>((res, rej) => { resolve = res; reject = rej; });
+			// 先登记共享请求，再发布 loading，避免订阅回调重入创建第二次读取。
+			this.reading = pending.finally(() => { this.reading = null; });
+			void this.load().then(resolve, reject);
+		}
 		return this.reading.then((result) => structuredClone(result));
 	}
 
 	private async load(): Promise<TrashQueryResult> {
 		for (let attempt = 0; attempt < 3; attempt++) {
-			const path = this.path;
+			if (this.coordinator.pending > 0) {
+				await this.coordinator.queue.catch(() => undefined);
+				const current = this.getState();
+				if (current.status === "error") return { items: [], errors: [{ snapshotId: "", message: current.error ?? "Trash unavailable." }] };
+			}
+			let path = "";
 			const revision = this.coordinator.revision;
 			try {
+				if (this.disposed) throw new Error("Trash runtime disposed.");
+				path = this.path;
 				this.assertActive();
 				const state = this.getState();
 				if (state.status === "ready") return { items: state.items, errors: [] };
+				if (attempt > 0 && state.status === "error") return { items: [], errors: [{ snapshotId: "", message: state.error ?? "Trash unavailable." }] };
 				this.publish(path, { status: "loading", items: null, count: null, error: null });
 				const items = await this.readDisk(path);
 				this.assertActive();
 				if (path !== this.path || revision !== this.coordinator.revision) continue;
-				this.publishReady(path, items);
-				return { items: structuredClone(this.state.status === "ready" ? this.state.items : items), errors: [] };
-			} catch (error) {
+				const sorted = this.publishReady(path, items);
 				if (path !== this.path || revision !== this.coordinator.revision) continue;
+				return { items: structuredClone(sorted), errors: [] };
+			} catch (error) {
+				if (revision !== this.coordinator.revision) continue;
+				try { if (path && path !== this.path) continue; } catch { /* 配置错误由下面的失败 state 报告。 */ }
 				this.publish(path, { status: "error", items: null, count: null, error: String(error) });
 				return { items: [], errors: [{ snapshotId: "", message: String(error) }] };
 			}
 		}
-		throw new Error("Trash changed while reading; retry.");
+		const message = "Trash changed while reading; retry.";
+		this.publish(this.path, { status: "error", items: null, count: null, error: message });
+		return { items: [], errors: [{ snapshotId: "", message }] };
 	}
 
 	private async readDisk(path: string): Promise<TrashSnapshot[]> {
@@ -194,8 +248,10 @@ export class TrashSnapshotStore {
 				});
 			}
 			guard();
+			const verificationRevision = this.coordinator.revision;
 			const actual = await this.readDisk(path);
 			guard();
+			if (verificationRevision !== this.coordinator.revision) throw new Error("Trash changed during write verification.");
 			if (!sameItems(actual, expected)) throw new Error("Trash write verification failed.");
 			this.coordinator.revision++;
 			this.publishReady(path, actual);
@@ -226,10 +282,21 @@ export class TrashSnapshotStore {
 		}
 	}
 
-	private publish(path: string, state: TrashStoreState): void { this.statePath = path; this.stateRevision = this.coordinator.revision; this.state = state; }
-	private publishReady(path: string, items: TrashSnapshot[]): void {
+	private notify(): void {
+		for (const listener of this.coordinator.listeners) {
+			// 展示失败不能改变已确认的磁盘操作结果。
+			try { listener(); } catch (error) { console.error("Trash state listener failed", error); }
+		}
+	}
+	private publish(path: string, state: TrashStoreState): void {
+		if (this.disposed) return;
+		this.coordinator.publication = { path, revision: this.coordinator.revision, state };
+		this.notify();
+	}
+	private publishReady(path: string, items: TrashSnapshot[]): TrashSnapshot[] {
 		const sorted = structuredClone(items).sort((a, b) => b.deletedAt.localeCompare(a.deletedAt) || a.snapshotId.localeCompare(b.snapshotId));
 		this.publish(path, { status: "ready", items: sorted, count: sorted.length, error: null });
+		return sorted;
 	}
 }
 

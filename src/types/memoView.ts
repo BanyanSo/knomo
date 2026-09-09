@@ -1,4 +1,6 @@
-import type { CatalogMemoItem, TrashMemoItem } from "./catalogView";
+import type { TrashMemoItem, TrashSnapshot } from "./trash";
+import { hashText } from "../utils/hash";
+import type { CatalogMemoItem } from "./catalogView";
 import type { DailyRef, MemoImageRef, MemoLinkRef, MemoStatus } from "./memo";
 
 // 仅供界面渲染与定位，不承担同步身份或 Monthly 快照职责。
@@ -67,4 +69,17 @@ export function toTrashMemoView(item: TrashMemoItem): MemoViewItem {
 		deletedAt: item.deletedAt,
 		trashItem: item,
 	};
+}
+
+export function toTrashMemoItem(item: TrashSnapshot): TrashMemoItem {
+	return { ...item, key: item.snapshotId,
+		createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
+		content: readDeletedPayloadContent(item.rawBlock), contentHash: hashText(item.rawBlock), purgeAllowed: true };
+}
+
+function readDeletedPayloadContent(rawBlock: string): string {
+	const lines = rawBlock.split(/\r?\n/u);
+	const first = /^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s(.*))?$/u.exec(lines[0] ?? "")?.[1] ?? "";
+	const continuation = lines.slice(1).map((line) => line.replace(/^ {2}/u, ""));
+	return [first, ...continuation].join("\n").replace(/\s+\^[A-Za-z0-9-]+\s*$/u, "").trim();
 }

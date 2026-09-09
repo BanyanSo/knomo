@@ -291,7 +291,6 @@ export const en: Record<TranslationKey, string> = {
 	"error.operationFailed": "Operation failed",
 	"error.saveFailed": "Save failed",
 	"error.refreshFailed": "Refresh failed.",
-	"error.trashCountFailed": "Trash count refresh failed",
 	"error.trashLoadFailed": "Trash failed to load",
 	"error.randomLoadFailed": "Random revisit failed to load",
 	"error.randomOpenFailed": "Random revisit failed to open",

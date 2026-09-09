@@ -160,24 +160,3 @@ export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 };
 
 export type CatalogFeatureFilter = Omit<CatalogFeatureQuery, "limit" | "cursor">;
-
-export interface TrashMemoItem {
-	rawBlock: string;
-	snapshotId: string;
-	key: string;
-	createdAt: string;
-	deletedAt: string;
-	logicalDate: string;
-	sourcePath: string;
-	section: string | null;
-	content: string;
-	contentHash: string;
-	purgeAllowed: boolean;
-}
-
-export interface TrashMemoPage {
-	errors?: Array<{ snapshotId: string; message: string }>;
-	items: TrashMemoItem[];
-	nextCursor: string | null;
-	snapshotRevision: string;
-}

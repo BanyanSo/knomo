@@ -190,3 +190,16 @@ test("P7 删除身份协议与临时适配器，真实正文和恢复服务仍�
   assert.doesNotMatch(source, /IdentityHandle|IdentityLedger|bindingId|writerId|prepareRecoverableDelete|removePermanently|confirm-identity/, file);
  }
 });
+
+
+test("Trash 唯一集合 Store；生产依赖图没有旧根、开发 marker 或 Catalog Trash 查询", () => {
+ const forbidden = /RecoveryDataRootService|knomoDataRoot|knomoDataRootConfigured|getDataRoot\(|_knomo-data|legacy-index-completion|LegacyMigrationMarkerStore|getTrashSnapshotPath|managed(?:Legacy)?SystemFolderExcludeRule/u;
+ const production = listFiles("src").filter((file) => file.endsWith(".ts"));
+ assert.deepEqual(production.filter((file) => forbidden.test(file) || forbidden.test(fs.readFileSync(file, "utf8"))), []);
+ const catalog = fs.readFileSync("src/services/CatalogReadService.ts", "utf8");
+ assert.equal(/Trash|trash|getDeletedSummary|listDeleted|readSnapshots/u.test(catalog), false);
+ const controller = fs.readFileSync("src/ui/TrashMemoController.ts", "utf8");
+ assert.equal(/getDeletedMemoSummary|listDeletedMemos|trashSummaryOperation|trashCountDirty|removeTrashMemo/u.test(controller), false);
+ const store = fs.readFileSync("src/services/TrashSnapshotStore.ts", "utf8");
+ assert.equal(/getFiles\(|getMarkdownFiles\(|adapter\.list\(|snapshotId.*\.json/u.test(store), false);
+});

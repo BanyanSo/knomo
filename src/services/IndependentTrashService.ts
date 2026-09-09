@@ -34,7 +34,6 @@ export class IndependentTrashService {
 	constructor(private readonly app: App, readonly store: TrashSnapshotStore, private readonly options: IndependentTrashOptions,
 		private readonly gateway = new DailyMemoWriteGateway(app)) {}
 
-	query() { return this.store.query(); }
 
 	delete(handle: ObservationHandle): Promise<TrashWriteResult> {
 		const original = { ...handle };

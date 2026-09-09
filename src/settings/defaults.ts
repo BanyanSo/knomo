@@ -30,9 +30,5 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	excludeMonthlyMemosFromObsidian: true,
 	managedObsidianExcludeRule: undefined,
 	managedObsidianExcludeRuleOwned: false,
-	managedSystemFolderExcludeRule: undefined,
-	managedSystemFolderExcludeRuleOwned: false,
-	managedLegacySystemFolderExcludeRule: undefined,
-	managedLegacySystemFolderExcludeRuleOwned: false,
 	pinnedTags: [],
 };

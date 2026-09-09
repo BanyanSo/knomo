@@ -26,3 +26,17 @@ export interface TrashWriteResult {
 	catalogUpdatePending: boolean;
 	message?: string;
 }
+
+export interface TrashMemoItem {
+	rawBlock: string;
+	snapshotId: string;
+	key: string;
+	createdAt: string;
+	deletedAt: string;
+	logicalDate: string;
+	sourcePath: string;
+	section: string | null;
+	content: string;
+	contentHash: string;
+	purgeAllowed: boolean;
+}

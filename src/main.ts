@@ -25,7 +25,7 @@ import { KnomoCurrentConfigService } from "./services/KnomoCurrentConfigService"
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
 import { LegacyTrashMigrationService } from "./services/LegacyTrashMigrationService";
 import { IndependentTrashService } from "./services/IndependentTrashService";
-import { TrashSnapshotStore, getTrashFilePath } from "./services/TrashSnapshotStore";
+import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
 import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
@@ -214,6 +214,8 @@ export default class KnomoPlugin extends Plugin {
 		const trashStore = new TrashSnapshotStore(this.app, getTrashFolder, () => {
 			if (lowPriorityWorkQueue.signal.aborted) throw new Error("Trash runtime cancelled.");
 		});
+		this.register(() => trashStore.dispose());
+		let trashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
 		const trashService = new IndependentTrashService(this.app, trashStore, {
 			assertActive: () => {
 				if (lowPriorityWorkQueue.signal.aborted
@@ -263,7 +265,7 @@ export default class KnomoPlugin extends Plugin {
 			markdownMutationService,
 		);
 		this.catalogReadService = this.memoCommandService.getReadService();
-		this.registerTrashEvents();
+		this.registerTrashEvents(trashStore);
 
 		const legacyIndexReader = new LegacyIndexReader(
 			this.app,
@@ -297,8 +299,9 @@ export default class KnomoPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
 			knomoCurrentConfigService.start(this, async () => {
-				trashStore.invalidateConfiguration();
-				this.catalogReadService?.invalidateTrash();
+				const nextTrashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
+				trashStore.invalidateConfiguration(nextTrashConfiguration !== trashConfiguration);
+				trashConfiguration = nextTrashConfiguration;
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.queueRefreshOpenViews();
@@ -350,6 +353,7 @@ export default class KnomoPlugin extends Plugin {
 				() => this.runManualRefresh(),
 				this.memoCommandService!,
 				this.catalogReadService!,
+				trashStore,
 				() => dailyNoteService.getStatus(),
 				() => dailyNoteService.getTodayDailyNotePath(),
 				() => retryRuntimeState(),
@@ -391,7 +395,6 @@ export default class KnomoPlugin extends Plugin {
 					await this.memoCommandService!.clearTrash();
 					new Notice(t("notice.trashCleared"));
 				} catch (error) { new Notice(t("error.clearTrashFailed", { error: String(error) })); }
-				finally { this.catalogReadService?.invalidateTrash(); }
 			},
 		});
 
@@ -503,12 +506,8 @@ export default class KnomoPlugin extends Plugin {
 		}
 	}
 
-	private registerTrashEvents(): void {
-		const changed = (path: string, oldPath?: string) => {
-			if (this.settingsService.getLoadStatus() !== "ready") return;
-			const root = getTrashFilePath(this.settingsService.getSettings().monthlyMemoFolder);
-			this.catalogReadService?.handleTrashFileChange(root, path, oldPath);
-		};
+	private registerTrashEvents(store: TrashSnapshotStore): void {
+		const changed = (path: string, oldPath?: string) => store.handleFileChange(path, oldPath);
 		this.registerEvent(this.app.vault.on("create", (file) => changed(file.path)));
 		this.registerEvent(this.app.vault.on("modify", (file) => changed(file.path)));
 		this.registerEvent(this.app.vault.on("delete", (file) => changed(file.path)));

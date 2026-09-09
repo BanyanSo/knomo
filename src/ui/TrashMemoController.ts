@@ -1,9 +1,11 @@
+import type { TrashSnapshotStore } from "../services/TrashSnapshotStore";
+import type { TrashSnapshot } from "../types/trash";
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import type { TrashAction } from "./KnomoActionDispatch";
 
-export type TrashMemoRenderTarget = "ui-state" | "trash-count" | "trash-count-and-scope" | "card-flow";
+export type TrashMemoRenderTarget = "ui-state" | "trash-count-and-scope" | "card-flow";
 
 export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	trashMemos: TMemo[] | null;
@@ -16,8 +18,11 @@ export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 }
 
 interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
-	getDeletedMemoSummary: () => Promise<{ count: number; errorCount?: number }>;
-	listDeletedMemos: () => Promise<TMemo[]>;
+	store: TrashSnapshotStore;
+	toMemo: (snapshot: TrashSnapshot) => TMemo;
+	pageSize: number;
+	windowLimit: number;
+	onInvalidated: () => void;
 	restoreMemo: (memo: TMemo) => Promise<TMemo | null>;
 	purgeMemo: (memo: TMemo) => Promise<void>;
 	confirmPurge: (memo: TMemo) => Promise<boolean>;
@@ -29,131 +34,90 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 }
 
 export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
-	private trashMemos: TMemo[] | null = null;
-	private trashLoading = false;
-	private trashError: string | null = null;
-	private trashCount: number | null = null;
-	private trashCountLoading = false;
-	private trashCountError: string | null = null;
-	private trashCountDirty = true;
-	private trashListDirty = false;
 	private disposed = false;
+	private unsubscribe: (() => void) | null = null;
+	private windowEnd = 0;
 	private trashBusyMemoActions = new Map<string, TrashAction>();
-	private trashMutationRevision = 0;
-	private trashSummaryOperation: Promise<{ count: number; errorCount?: number }> | null = null;
 
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
+	start(): void {
+		this.disposed = false;
+		this.unsubscribe?.();
+		this.unsubscribe = this.options.store.subscribe(() => {
+			if (this.disposed) return;
+			const state = this.options.store.getState();
+			if (state.status === "idle") { this.windowEnd = this.options.pageSize; this.options.onInvalidated(); }
+			this.render(this.options.isTrashActive() ? "ui-state" : "trash-count-and-scope");
+		});
+	}
+
 	getSnapshot(): TrashMemoSnapshot<TMemo> {
+		const state = this.options.store.getState();
+		const end = Math.max(this.options.pageSize, this.windowEnd);
+		const error = state.error === null ? null : formatServiceError(new Error(state.error), t("error.trashLoadFailed"));
+		const memos = state.status === "ready"
+			? state.items.slice(Math.max(0, Math.min(end, state.count) - this.options.windowLimit), end).map(this.options.toMemo) : null;
 		return {
-			trashMemos: this.trashMemos,
-			trashLoading: this.trashLoading,
-			trashError: this.trashError,
-			trashCount: this.trashCount,
-			trashCountLoading: this.trashCountLoading,
-			trashCountError: this.trashCountError,
+			trashMemos: memos,
+			trashLoading: state.status === "idle" || state.status === "loading",
+			trashError: error,
+			trashCount: state.count,
+			trashCountLoading: state.status === "loading",
+			trashCountError: error,
 			trashBusyMemoActions: this.trashBusyMemoActions,
 		};
 	}
 
-	invalidateTrashCount(): void {
-		this.trashMutationRevision += 1;
-		this.trashCountDirty = true;
-		this.trashListDirty = true;
-		this.trashSummaryOperation = null;
-		this.trashCountLoading = false;
+	private render(target: TrashMemoRenderTarget): void { if (!this.disposed) this.options.requestRender(target); }
+
+	dispose(): void { this.disposed = true; this.unsubscribe?.(); this.unsubscribe = null; }
+
+	async ensureLoaded(): Promise<void> {
+		if (this.disposed) return;
+		const status = this.options.store.getState().status;
+		if (status === "idle" || status === "loading") await this.options.store.query();
 	}
 
-	dispose(): void {
-		this.disposed = true;
-		this.invalidateTrashCount();
+	async loadTrashMemos(retry = false): Promise<void> {
+		if (this.disposed) return;
+		this.windowEnd = this.options.pageSize;
+		if (retry) this.options.store.invalidate();
+		this.render("ui-state");
+		await this.ensureLoaded();
 	}
 
-	async refreshTrashCount(render = true): Promise<void> {
-		if (this.disposed || this.trashBusyMemoActions.size > 0) return;
-		const mutationRevision = this.trashMutationRevision;
-		this.trashCountLoading = true;
-		this.options.requestRender("trash-count");
-		try {
-			const summary = await this.getDeletedMemoSummary();
-			if (mutationRevision !== this.trashMutationRevision || this.trashBusyMemoActions.size > 0) return;
-			this.trashCount = summary.count;
-			this.trashCountDirty = false;
-			this.trashCountError = summary.errorCount ? t("error.trashLoadFailed") : null;
-		} catch (error) {
-			if (mutationRevision !== this.trashMutationRevision) return;
-			this.trashCountError = formatServiceError(error, t("error.trashCountFailed"));
-		} finally {
-			if (mutationRevision === this.trashMutationRevision) {
-				this.trashCountLoading = false;
-				this.options.requestRender(render ? "ui-state" : "trash-count-and-scope");
-			}
-		}
+	hasMore(): boolean {
+		const state = this.options.store.getState();
+		return state.status === "ready" && Math.max(this.windowEnd, this.options.pageSize) < state.count;
 	}
 
-	async loadTrashMemos(): Promise<void> {
-		if (this.disposed || this.trashLoading || this.trashBusyMemoActions.size > 0) {
-			return;
-		}
-		const mutationRevision = this.trashMutationRevision;
-		this.trashListDirty = false;
-		this.trashLoading = true;
-		this.trashError = null;
-		if (this.options.isTrashActive()) {
-			this.options.requestRender("ui-state");
-		}
-		try {
-			const [deletedMemos, summary] = await Promise.all([
-				this.options.listDeletedMemos(),
-				this.getDeletedMemoSummary(),
-			]);
-			if (mutationRevision !== this.trashMutationRevision) return;
-			this.trashMemos = deletedMemos;
-			this.trashCount = Math.max(summary.count, deletedMemos.length);
-			this.trashCountDirty = false;
-			this.trashCountError = summary.errorCount ? t("error.trashLoadFailed") : null;
-		} catch (error) {
-			if (mutationRevision !== this.trashMutationRevision) return;
-			if (this.trashMemos === null) this.trashMemos = [];
-			this.trashError = formatServiceError(error, t("error.trashLoadFailed"));
-			this.options.showNotice(this.trashError);
-		} finally {
-			this.trashLoading = false;
-			if (!this.disposed) {
-				this.options.requestRender(this.options.isTrashActive() ? "ui-state" : "trash-count");
-				if (this.trashListDirty && this.options.isTrashActive()) void this.loadTrashMemos();
-			}
-		}
-	}
-
-	appendTrashMemos(memos: readonly TMemo[], limit = Number.MAX_SAFE_INTEGER): void {
-		const byId = new Map((this.trashMemos ?? []).map((memo) => [memo.id, memo]));
-		for (const memo of memos) byId.set(memo.id, memo);
-		this.trashMemos = [...byId.values()].slice(-Math.max(1, Math.trunc(limit)));
-		this.options.requestRender("card-flow");
+	async loadNextPage(): Promise<boolean> {
+		if (this.disposed || !this.hasMore()) return false;
+		this.windowEnd = Math.max(this.windowEnd, this.options.pageSize) + this.options.pageSize;
+		this.render("card-flow");
+		return true;
 	}
 
 	async handleTrashAction(action: TrashAction, memo: TMemo): Promise<void> {
-		if (this.trashBusyMemoActions.has(memo.id)) {
+		if (this.disposed || this.trashBusyMemoActions.has(memo.id)) {
 			return;
 		}
 
 		this.trashBusyMemoActions.set(memo.id, action);
 		const renderBusyState = action !== "purge";
 		let trashChanged = false;
-		if (renderBusyState) this.options.requestRender("card-flow");
+		if (renderBusyState) this.render("card-flow");
 		try {
 			if (action === "purge") {
-				if (!await this.options.confirmPurge(memo)) return;
+				if (!await this.options.confirmPurge(memo) || this.disposed) return;
 				await this.options.purgeMemo(memo);
-				this.removeTrashMemo(memo);
 				trashChanged = true;
 				this.options.showNotice(t("notice.purged"));
 			} else {
 				const restoredMemo = await this.options.restoreMemo(memo);
-				this.removeTrashMemo(memo);
 				trashChanged = true;
-				if (restoredMemo !== null) this.options.handleRestoredMemo(memo, restoredMemo);
+				if (restoredMemo !== null && !this.disposed) this.options.handleRestoredMemo(memo, restoredMemo);
 				this.options.showNotice(t("notice.restored"));
 			}
 			try {
@@ -163,33 +127,13 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			}
 		} catch (error) {
 			this.options.showNotice(formatTrashActionErrorMessage(action, error));
-			if (renderBusyState) this.options.requestRender("ui-state");
+			if (renderBusyState) this.render("ui-state");
 		} finally {
 			this.trashBusyMemoActions.delete(memo.id);
-			if (this.trashListDirty && this.options.isTrashActive()) void this.loadTrashMemos();
-			else if (this.trashCountDirty) void this.refreshTrashCount(false);
-			if (renderBusyState || trashChanged) this.options.requestRender("card-flow");
+			if (renderBusyState || trashChanged) this.render("card-flow");
 		}
 	}
 
-	private removeTrashMemo(removedMemo: TMemo): void {
-		this.trashMutationRevision += 1;
-		this.trashSummaryOperation = null;
-		this.trashCountLoading = false;
-		this.trashMemos = (this.trashMemos ?? []).filter((memo) => memo.id !== removedMemo.id);
-		if (this.trashCount !== null) this.trashCount = Math.max(0, this.trashCount - 1);
-
-	}
-
-	private getDeletedMemoSummary(): Promise<{ count: number; errorCount?: number }> {
-		if (this.trashSummaryOperation !== null) return this.trashSummaryOperation;
-		let operation: Promise<{ count: number; errorCount?: number }>;
-		operation = this.options.getDeletedMemoSummary().finally(() => {
-			if (this.trashSummaryOperation === operation) this.trashSummaryOperation = null;
-		});
-		this.trashSummaryOperation = operation;
-		return operation;
-	}
 }
 
 export function formatTrashActionErrorMessage(action: TrashAction, error: unknown): string {

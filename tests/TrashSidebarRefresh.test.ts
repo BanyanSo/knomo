@@ -6,7 +6,7 @@ test("手机打开侧边栏立即请求数量，不等待标签索引，也不�
 	const view = await fixture();
 	let counts = 0;
 	let release!: () => void;
-	view.trashMemoController = { refreshTrashCount: async () => { counts++; } };
+	view.trashMemoController = { ensureLoaded: async () => { counts++; } };
 	view.vaultTagIndex = { ensureReady: () => new Promise<void>((resolve) => { release = resolve; }) };
 	const opened = view.ensureSidebarIndexes();
 	assert.equal(counts, 1);
@@ -18,7 +18,7 @@ test("手机打开侧边栏立即请求数量，不等待标签索引，也不�
 test("手机侧边栏隐藏时不读 Trash，可见时合并变化，关闭视图后不刷新", async () => {
 	const view = await fixture();
 	let reads = 0;
-	view.trashMemoController = { refreshTrashCount: async () => { reads++; } };
+	view.trashMemoController = { ensureLoaded: async () => { reads++; } };
 	view.scheduleTrashCountRefresh();
 	assert.equal(view.timers.size, 0);
 	view.viewStateController.mobileDrawerOpen = true;
@@ -100,18 +100,18 @@ test("生产 Vault 监听覆盖本地操作及同步事件，并注册生命周�
 	let registered = 0;
 	const plugin = Object.create(KnomoPlugin.prototype) as {
 		app: object; settingsService: object; catalogReadService: object;
-		registerEvent(ref: unknown): void; registerTrashEvents(): void;
+		registerEvent(ref: unknown): void; registerTrashEvents(store: object): void;
 	};
 	plugin.app = { vault: { on: (event: string, callback: (file: { path: string }, oldPath?: string) => void) => {
 		listeners.set(event, callback); return event;
 	} } };
 	plugin.settingsService = { getLoadStatus: () => "ready", getSettings: () => ({ monthlyMemoFolder: "Recovery" }) };
-	plugin.catalogReadService = { handleTrashFileChange: (...args: unknown[]) => { calls.push(args); } };
+	const store = { handleFileChange: (...args: unknown[]) => { calls.push(args); } };
 	plugin.registerEvent = () => { registered++; };
-	plugin.registerTrashEvents();
+	plugin.registerTrashEvents(store);
 	for (const event of ["create", "modify", "delete"]) listeners.get(event)!({ path: "Recovery/knomo-trash.json" });
 	listeners.get("rename")!({ path: "Other/s1.json" }, "Recovery/knomo-trash.json");
 	assert.equal(registered, 4);
 	assert.equal(calls.length, 4);
-	assert.deepEqual(calls[3], ["Recovery/knomo-trash.json", "Other/s1.json", "Recovery/knomo-trash.json"]);
+	assert.deepEqual(calls[3], ["Other/s1.json", "Recovery/knomo-trash.json"]);
 });

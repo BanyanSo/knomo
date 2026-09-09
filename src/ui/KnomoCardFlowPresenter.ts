@@ -170,6 +170,13 @@ interface TrashCardFlowPresentationOptions {
 }
 
 function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions): CardFlowPresentation {
+	if (options.trashError !== null) {
+		return {
+			type: "empty",
+			title: t("empty.trashFailed"),
+			description: options.trashError,
+		};
+	}
 	if (options.trashMemos === null) {
 		return {
 			type: "empty",
@@ -185,13 +192,7 @@ function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions)
 			headers: [],
 		};
 	}
-	if (options.trashError !== null) {
-		return {
-			type: "empty",
-			title: t("empty.trashFailed"),
-			description: options.trashError,
-		};
-	}
+
 	return {
 		type: "empty",
 		title: t("empty.trashEmptyTitle"),

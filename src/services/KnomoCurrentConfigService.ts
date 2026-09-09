@@ -84,5 +84,5 @@ export class KnomoCurrentConfigService {
 			settings.monthlyDateHeadingFormat, settings.monthlyDateOrder, settings.monthlyLocale]);
 	}
 	async refreshLocalConfig(): Promise<void> { await this.daily.loadConfig(); await this.initialize(); await this.onChanged?.(); }
-	async reloadConfiguredRoot(): Promise<void> { await this.settings.loadSettings(); await this.refreshLocalConfig(); }
+	async reloadConfiguration(): Promise<void> { await this.settings.loadSettings(); await this.refreshLocalConfig(); }
 }

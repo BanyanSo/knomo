@@ -56,6 +56,7 @@ export class LegacyTrashMigrationService {
 			const snapshot = loaded.snapshot;
 			if (snapshot.diagnostics.length) return this.report = { ...emptyReport(), status: "attention", diagnostics: snapshot.diagnostics };
 			const store = new TrashSnapshotStore(this.app, root, assertActive);
+			const targets: TrashSnapshot[] = [];
 			for (const memo of snapshot.memos) {
 				assertActive();
 				if (memo.status !== "deleted") continue;
@@ -66,10 +67,11 @@ export class LegacyTrashMigrationService {
 				const target: TrashSnapshot = { snapshotId, deletedAt: payload.deletedAt, sourcePath: payload.sourcePath,
 					logicalDate: payload.logicalDate, section: payload.section, rawBlock: payload.rawBlock };
 				assertActive();
-				await store.save(target);
+				targets.push(target);
 				assertActive();
 				await this.options.yieldControl?.();
 			}
+			await store.saveAll(targets);
 			await this.options.migrateSettings();
 			assertActive();
 			// 迁移期间旧源若同步变化，不能把未读取的新数据标为完成。
@@ -77,6 +79,8 @@ export class LegacyTrashMigrationService {
 			assertActive();
 			if (latest.kind !== "ready" || latest.snapshot.sourceId !== snapshot.sourceId
 				|| latest.snapshot.sourceRevision !== snapshot.sourceRevision || latest.snapshot.diagnostics.length) throw new Error("Legacy source changed during migration; retry explicitly.");
+			await store.assertContainsAll(targets);
+			assertActive();
 			completion = { completed: true, legacySystemRoot: snapshot.legacySystemRoot, sourceRevision: snapshot.sourceRevision };
 			await this.persistCompletion(completion);
 			return this.report = await this.cleanup(completion, assertActive);

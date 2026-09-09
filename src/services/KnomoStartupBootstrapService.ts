@@ -1,8 +1,5 @@
 import type { App } from "obsidian";
 import type { KnomoCurrentConfigStatus } from "../types/knomoConfig";
-import { getCatalogDataRootPath } from "../utils/path";
-import { ensureFolder } from "../utils/vault";
-import type { KnomoDataRootLocation } from "./RecoveryDataRootService";
 
 interface StartupCurrentConfigService {
 	initialize(): Promise<void>;
@@ -11,14 +8,12 @@ interface StartupCurrentConfigService {
 }
 
 export interface KnomoStartupBootstrapOptions {
-	getLocation: () => KnomoDataRootLocation;
-	initializeDataRoot: (dataRoot: string) => Promise<void>;
 	currentConfig: StartupCurrentConfigService;
 	cancellationSignal?: AbortSignal;
 }
 
 export type KnomoStartupBootstrapStatus = "unconfigured" | "initializing" | "ready" | "conflicted" | "unavailable";
-export type KnomoStartupBootstrapStage = "data_root" | "catalog" | "current_config" | "verification";
+export type KnomoStartupBootstrapStage = "current_config" | "verification";
 
 export interface KnomoStartupBootstrapSnapshot {
 	status: KnomoStartupBootstrapStatus;
@@ -26,9 +21,7 @@ export interface KnomoStartupBootstrapSnapshot {
 	error: string | null;
 }
 
-type BootstrapMode = "initialize" | "retry" | "initialize_new";
-
-/** 启用插件时补齐默认数据根与当前配置；已有配置不可读时不覆盖。 */
+/** 启用插件时初始化并确认当前配置；已有配置不可读时不覆盖。 */
 export class KnomoStartupBootstrapService {
 	private snapshot: KnomoStartupBootstrapSnapshot = {
 		status: "unconfigured",
@@ -36,9 +29,6 @@ export class KnomoStartupBootstrapService {
 		error: null,
 	};
 	private activeOperation: Promise<void> | null = null;
-	private activeMode: BootstrapMode | null = null;
-	private queuedNewOperation: Promise<void> | null = null;
-	private activeDataRoot: string | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -50,71 +40,30 @@ export class KnomoStartupBootstrapService {
 	}
 
 	initialize(): Promise<void> {
-		return this.activeOperation ?? this.startOperation("initialize");
+		return this.activeOperation ?? this.startOperation();
 	}
 
 	retryInitialization(): Promise<void> {
-		return this.activeOperation ?? this.startOperation("retry");
+		return this.activeOperation ?? this.startOperation();
 	}
 
-	initializeNewDataRoot(dataRoot: string): Promise<void> {
-		if (this.activeOperation === null) return this.startOperation("initialize_new", dataRoot);
-		if (this.activeMode === "initialize_new" && this.activeDataRoot === dataRoot) return this.activeOperation;
-		if (this.queuedNewOperation !== null) return this.queuedNewOperation;
-
-		let queuedOperation: Promise<void>;
-		queuedOperation = this.activeOperation.then(
-			() => this.startOperation("initialize_new", dataRoot),
-			() => this.startOperation("initialize_new", dataRoot),
-		).finally(() => {
-			if (this.queuedNewOperation === queuedOperation) this.queuedNewOperation = null;
-		});
-		this.queuedNewOperation = queuedOperation;
-		return queuedOperation;
-	}
-
-	private startOperation(mode: BootstrapMode, dataRoot: string | null = null): Promise<void> {
+	private startOperation(): Promise<void> {
 		let operation: Promise<void>;
-		operation = this.runOnce(mode, dataRoot).finally(() => {
+		operation = this.runOnce().finally(() => {
 			if (this.activeOperation === operation) {
 				this.activeOperation = null;
-				this.activeMode = null;
-				this.activeDataRoot = null;
 			}
 		});
-		this.activeMode = mode;
-		this.activeDataRoot = dataRoot;
 		this.activeOperation = operation;
 		return operation;
 	}
 
-	private async runOnce(mode: BootstrapMode, requestedDataRoot: string | null): Promise<void> {
-		let stage: KnomoStartupBootstrapStage = "data_root";
+	private async runOnce(): Promise<void> {
+		let stage: KnomoStartupBootstrapStage = "current_config";
 		this.setInitializing(stage);
 		try {
 			await this.waitForLayoutReady();
 			this.throwIfCancelled();
-			let location = this.options.getLocation();
-			if (!location.knomoDataRootConfigured) {
-				if (mode !== "initialize_new" && mode !== "initialize") {
-					this.snapshot = { status: "unconfigured", stage, error: null };
-					return;
-				}
-				const dataRoot = requestedDataRoot ?? location.knomoDataRoot;
-				this.throwIfCancelled();
-				await this.options.initializeDataRoot(dataRoot);
-				this.throwIfCancelled();
-				location = this.options.getLocation();
-				if (!location.knomoDataRootConfigured) {
-					throw new Error("Knomo Data Root initialization did not persist its location.");
-				}
-			}
-
-			stage = "catalog";
-			this.setInitializing(stage);
-			await ensureFolder(this.app, getCatalogDataRootPath(location.knomoDataRoot));
-			this.throwIfCancelled();
-
 			stage = "current_config";
 			this.setInitializing(stage);
 			await this.options.currentConfig.initialize();

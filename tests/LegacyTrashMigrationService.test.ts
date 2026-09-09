@@ -45,9 +45,15 @@ async function fixture(monthly = "Knomo") {
 
 test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Daily，completion 后不读源或快照", async () => {
 	const f = await fixture();
+	let writes = 0;
+	const create = f.vault.app.vault.create.bind(f.vault.app.vault);
+	f.vault.app.vault.create = async (path, content) => { if (path.endsWith("knomo-trash.json")) writes++; return create(path, content); };
+	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+	f.vault.app.vault.process = async (file, update) => { if (file.path.endsWith("knomo-trash.json")) writes++; return process(file, update); };
 	assert.equal((await f.make().run()).status, "attention");
 	assert.equal(f.sourceReads(), 0);
 	assert.equal((await f.make().run({ explicit: true })).status, "ready");
+	assert.equal(writes, 1);
 	const snapshots = (await f.store.query()).items;
 	assert.equal(snapshots.length, 2);
 	assert.notEqual(snapshots[0]!.snapshotId, snapshots[1]!.snapshotId);
@@ -88,14 +94,14 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 });
 
 test("中断后确定性重试，已有同 ID 副本不覆盖，completion 保存/读取故障不报告成功", async (context) => {
-	for (const failure of ["second-snapshot", "settings", "data-save", "data-read"] as const) {
+	for (const failure of ["batch-save", "settings", "data-save", "data-read"] as const) {
 		await context.test(failure, async () => {
 			const f = await fixture();
 			let enabled = true;
-			const process = f.vault.app.vault.process.bind(f.vault.app.vault);
-			f.vault.app.vault.process = async (file, update) => {
-				if (file.path.endsWith("knomo-trash.json") && enabled && failure === "second-snapshot") throw new Error("interrupt");
-				return process(file, update);
+			const create = f.vault.app.vault.create.bind(f.vault.app.vault);
+			f.vault.app.vault.create = async (path, content) => {
+				if (path.endsWith("knomo-trash.json") && enabled && failure === "batch-save") throw new Error("interrupt");
+				return create(path, content);
 			};
 			const save = f.plugin.saveData;
 			f.plugin.saveData = async (data) => { if (enabled && failure === "data-save") throw new Error("save failed"); await save(data); };
@@ -222,6 +228,35 @@ test("无字段与旧式普通设置均可写 completion；之后设置保存保
 		await f.options.pluginDataStore.mutate(data => ({ nextData: buildPluginDataWithSettings(data, { monthlyMemoFolder: "Changed" } as import("../src/types/settings").KnomoSettings), result: undefined }));
 		assert.deepEqual(await f.completion.read(), completion);
 	}
+});
+
+test("批量转换后全部必要 item 必须仍在目标中；目标变化/读回失败或目录切换不保存 completion、不清理源", async (context) => {
+	for (const failure of ["target", "readback", "folder"] as const) {
+		await context.test(failure, async () => {
+			const f = await fixture();
+			const read = f.vault.app.vault.read.bind(f.vault.app.vault);
+			f.options.migrateSettings = async () => {
+				if (failure === "target") f.vault.replace(f.store.path, JSON.stringify({ kind: "knomo-trash", items: [] }));
+				if (failure === "readback") f.vault.app.vault.read = async (file) => { if (file.path === f.store.path) throw new Error("unreadable target"); return read(file); };
+				if (failure === "folder") f.options.getTrashFolder = () => "New";
+			};
+			assert.equal((await f.make().run({ explicit: true })).status, "unavailable");
+			assert.equal(await f.completion.read(), null);
+			assert.equal(f.vault.read(INDEX), f.index);
+		});
+	}
+});
+
+test("Legacy cleanup 保护实际 Trash 文件和插件配置，完成状态不依赖旧恢复目录", async () => {
+	const f = await fixture();
+	f.options.getTrashFolder = () => "Knomo/_knomo-system/Trash";
+	await f.plugin.saveData({ legacyMigration: { completed: true, legacySystemRoot: "Knomo/_knomo-system", sourceRevision: "a".repeat(64) } });
+	assert.equal((await f.make().run()).diagnostics[0]?.code, "legacy_cleanup_failed");
+	assert.equal(f.vault.read(INDEX), f.index);
+	f.options.getTrashFolder = () => "Elsewhere";
+	assert.equal((await f.make().run()).status, "ready");
+	assert.equal(f.vault.read(INDEX), null);
+	assert.equal(f.vault.paths().some((path) => path.includes("_knomo-data")), false);
 });
 
 test("开发期 marker 不读取、不吸收、不清理，正式迁移仍须显式执行", async (context) => {

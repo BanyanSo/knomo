@@ -145,8 +145,6 @@ function makeSettings(locale = "en"): KnomoSettings & { locale: string } {
 		dailyHeading: "## Memos",
 		dailyInsertPosition: "bottom",
 		memoTimeFormat: "HH:mm:ss",
-		knomoDataRoot: "Knomo",
-		knomoDataRootConfigured: true,
 		monthlyMemoFolder: "Knomo",
 		monthlyMemoFileFormat: "Memos-YYYY-MM.md",
 		monthlyDateHeadingFormat: "## [[YYYY-MM-DD]]",

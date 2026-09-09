@@ -8,10 +8,6 @@ export function normalizeVaultPath(path: string): string {
 	return normalizedPath.replace(/^\/+/, "");
 }
 
-export function getCatalogDataRootPath(monthlyMemoFolder: string): string {
-	return normalizePath(`${normalizeVaultPath(monthlyMemoFolder)}/_knomo-data`);
-}
-
 export function getLegacySystemRootPath(monthlyMemoFolder: string): string {
 	return normalizePath(`${normalizeVaultPath(monthlyMemoFolder)}/_knomo-system`);
 }

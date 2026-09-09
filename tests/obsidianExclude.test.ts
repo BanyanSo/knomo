@@ -4,7 +4,6 @@ import type { App } from "obsidian";
 
 import {
 	buildMonthlyFolderExcludeRule,
-	buildCatalogDataExcludeRule,
 	buildLegacySystemExcludeRule,
 	ObsidianExcludeService,
 } from "../src/services/ObsidianExcludeService";
@@ -16,9 +15,7 @@ test("builds monthly folder exclude rules from vault paths", () => {
 	assert.equal(buildMonthlyFolderExcludeRule("   "), null);
 });
 
-test("builds catalog and legacy system folder exclude rules under the monthly folder", () => {
-	assert.equal(buildCatalogDataExcludeRule("Knomo"), "Knomo/_knomo-data/");
-	assert.equal(buildCatalogDataExcludeRule("/Archive//Memos/"), "Archive/Memos/_knomo-data/");
+test("builds legacy system folder exclude rules under the monthly folder", () => {
 	assert.equal(buildLegacySystemExcludeRule("Knomo"), "Knomo/_knomo-system/");
 });
 

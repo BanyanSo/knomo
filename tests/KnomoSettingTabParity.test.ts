@@ -20,7 +20,7 @@ const expectedRenderOrder = [
 	"renderMonthlyFileFormatSetting",
 	"renderDateHeadingFormatSetting",
 	"renderMonthlyExcludeSetting",
-	"renderDataRootSetting",
+	"renderMonthlyFolderSetting",
 ];
 
 test("keeps declarative and legacy setting groups in task order", () => {
@@ -67,23 +67,11 @@ test("retries current configuration independently of Identity startup and refres
 		"\n\tprivate async refreshCurrentConfiguration(",
 	);
 
-	assert.match(sharedConfigSource, /this\.knomoCurrentConfigService\.reloadConfiguredRoot\(\)/u);
+	assert.match(sharedConfigSource, /this\.knomoCurrentConfigService\.reloadConfiguration\(\)/u);
 	assert.doesNotMatch(sharedConfigSource, /this\.startupBootstrapService/u);
 	assert.match(sharedConfigSource, /new Notice\(t\("settings\.currentConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
 	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*else if \(this\.settingsVisible\) this\.display\(\)/u);
-});
-
-test("routes a new data root through explicit initialization instead of ordinary migration", () => {
-	const source = readSettingTabSource();
-	const saveSource = getSourceBetween(
-		source,
-		"\tprivate async saveKnomoDataRoot(",
-		"\n\tprivate async toggleMonthlyMemosExcludeRule(",
-	);
-
-	assert.match(saveSource, /plan\.action === "initialize"[\s\S]*initializeNewDataRoot\(knomoDataRoot\)/u);
-	assert.match(source, /settings\.dataRoot\.initialize/u);
 });
 
 test("does not expose permanent runtime, maintenance, or monthly locale rows", () => {

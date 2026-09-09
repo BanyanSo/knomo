@@ -9,13 +9,10 @@ function fixture(layoutReady = true) {
  let readyCallback = () => {};
  const workspace = { layoutReady, onLayoutReady: (callback: () => void) => { readyCallback = callback; } };
  Object.assign(vault.app, { workspace });
- let location = { knomoDataRoot: "Knomo", knomoDataRootConfigured: false };
  let status: KnomoCurrentConfigStatus = "ready";
  const calls: string[] = [];
  const cancellation = new AbortController();
  const options = {
-  getLocation: () => location,
-  initializeDataRoot: async (root: string) => { calls.push("root"); location = { knomoDataRoot: root, knomoDataRootConfigured: true }; },
   currentConfig: { initialize: async () => { calls.push("config"); }, getStatus: () => status, getLastError: () => "config unreadable" },
   cancellationSignal: cancellation.signal,
  };
@@ -24,14 +21,14 @@ function fixture(layoutReady = true) {
   layoutReady: () => { workspace.layoutReady = true; readyCallback(); } };
 }
 
-test("启动等待布局并合并并发请求，只准备当前数据根和配置", async () => {
- const f = fixture(false);
+test("启动等待布局并合并并发请求，只初始化配置且不访问 Trash", async () => {
+	const f = fixture(false);
  const first = f.service.initialize();
  assert.strictEqual(f.service.initialize(), first);
  assert.deepEqual(f.calls, []);
  f.layoutReady(); await first;
  assert.equal(f.service.getSnapshot().status, "ready");
- assert.deepEqual(f.calls, ["root", "config", "config"]);
+ assert.deepEqual(f.calls, ["config", "config"]);
  assert.equal(f.vault.read("Daily/2026-08-22.md"), "- 09:00 memo\n");
  assert.equal(f.vault.paths().some(p => /identity|receipts|writer|current-state|segments/.test(p)), false);
 });
@@ -42,20 +39,26 @@ test("布局就绪前卸载取消，后到回调不再创建文件", async () =>
  f.layoutReady(); await Promise.resolve(); assert.deepEqual(f.calls, []);
 });
 
-test("当前配置不可读时显式失败，重试成功不会再次初始化根", async () => {
+test("当前配置不可读时显式失败，重试成功且不创建目录", async () => {
  const f = fixture(); f.setStatus("unavailable");
  await assert.rejects(f.service.initialize(), /unreadable/);
  assert.equal(f.service.getSnapshot().status, "unavailable");
  f.setStatus("ready"); await f.service.retryInitialization();
  assert.equal(f.service.getSnapshot().status, "ready");
- assert.equal(f.calls.filter(c => c === "root").length, 1);
+ assert.deepEqual(f.vault.paths(), ["Daily/2026-08-22.md"]);
 });
 
-test("数据根位置未保存不能继续配置，配置阶段取消也不能标记就绪", async () => {
- const f = fixture(); f.options.initializeDataRoot = async () => {};
- await assert.rejects(f.service.initialize(), /persist/);
- assert.deepEqual(f.calls, []);
- const g = fixture(); g.options.currentConfig.initialize = async () => { g.cancellation.abort(); };
+test("配置阶段取消不能标记就绪", async () => { const g = fixture(); g.options.currentConfig.initialize = async () => { g.cancellation.abort(); };
  await assert.rejects(g.service.initialize(), /cancelled/);
  assert.notEqual(g.service.getSnapshot().status, "ready");
+});
+
+test("损坏 Trash 不参与启动初始化，启动不创建恢复目录或单文件", async () => {
+ const f = fixture();
+ await f.vault.app.vault.create("Knomo/knomo-trash.json", "broken");
+ f.vault.app.vault.read = async () => { throw new Error("Trash must not be read during startup"); };
+ f.vault.app.vault.createFolder = async () => { throw new Error("No startup folders"); };
+ await f.service.initialize();
+ assert.equal(f.service.getSnapshot().status, "ready");
+ assert.equal(f.vault.read("Knomo/knomo-trash.json"), "broken");
 });

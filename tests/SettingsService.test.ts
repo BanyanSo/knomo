@@ -137,31 +137,28 @@ test("Monthly folder migration only changes projection configuration", async () 
 	assert.equal(plugin.vault.exists("Archive/Memos/Memos-2026-05.md"), false);
 });
 
-test("legacy settings inherit the Knomo data root without silently initializing recovery storage", async () => {
+test("unpublished recovery root settings are ignored without initializing recovery storage", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
-	delete legacySettings.knomoDataRoot;
-	delete legacySettings.knomoDataRootConfigured;
+	Object.assign(legacySettings, { knomoDataRoot: "Ignored", knomoDataRootConfigured: true });
 	const plugin = await createPlugin({}, { settings: legacySettings });
 	const service = new SettingsService(plugin as never);
 
 	await service.loadSettings();
 
-	assert.equal(service.getSettings().knomoDataRoot, "Memos");
-	assert.equal(service.getSettings().knomoDataRootConfigured, false);
+	assert.equal("knomoDataRoot" in service.getSettings(), false);
+	assert.equal("knomoDataRootConfigured" in service.getSettings(), false);
 	assert.equal(service.getSettings().settingsVersion, 4);
 });
 
-test("committing a Knomo data root updates recovery location and Monthly projection together", async () => {
+test("Monthly folder settings use the final migration entry", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const plugin = await createPlugin({}, { settings: createSettings() });
 	const service = new SettingsService(plugin as never);
 	await service.loadSettings();
 
-	await service.commitKnomoDataRoot("Archive/Knomo");
+	await service.migrateMonthlyMemoFolder("Archive/Knomo");
 
-	assert.equal(service.getSettings().knomoDataRoot, "Archive/Knomo");
-	assert.equal(service.getSettings().knomoDataRootConfigured, true);
 	assert.equal(service.getSettings().monthlyMemoFolder, "Archive/Knomo");
 });
 
@@ -204,30 +201,6 @@ test("restores staged Monthly settings when projection rebuild fails", async () 
 
 	assert.equal(service.getSettings().monthlyMemoFileFormat, "Memos-YYYY-MM.md");
 	assert.equal(plugin.saveCalls, 0);
-});
-
-test("Catalog exclusion state is independent from the Monthly folder", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const plugin = await createPlugin({}, { settings: createSettings() });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await service.ensureCatalogDataExcludeRules(
-		"Shared/_knomo-data",
-		"Memos/_knomo-system",
-		true,
-	);
-
-	assert.deepEqual(plugin.vault.config.userIgnoreFilters, [
-		"Shared/_knomo-data/",
-		"Memos/_knomo-system/",
-	]);
-	assert.equal(service.getSettings().managedSystemFolderExcludeRule, "Shared/_knomo-data/");
-	assert.equal(service.getSettings().managedLegacySystemFolderExcludeRule, "Memos/_knomo-system/");
-
-	await service.retireLegacySystemExcludeRule();
-	assert.deepEqual(plugin.vault.config.userIgnoreFilters, ["Shared/_knomo-data/"]);
-	assert.equal(service.getSettings().managedLegacySystemFolderExcludeRule, undefined);
 });
 
 test("keeps runtime settings unchanged when persistence fails", async () => {
@@ -360,8 +333,6 @@ function createSettings(): KnomoSettings {
 		dailyHeading: "## Knomo",
 		dailyInsertPosition: "bottom",
 		memoTimeFormat: "HH:mm:ss",
-		knomoDataRoot: "Memos",
-		knomoDataRootConfigured: true,
 		monthlyMemoFolder: "Memos",
 		monthlyMemoFileFormat: "Memos-YYYY-MM.md",
 		monthlyDateHeadingFormat: "## YYYY-MM-DD",

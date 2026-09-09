@@ -60,7 +60,7 @@ test("配置读取失败不覆盖已有值且不阻断 Daily 范围，写入和 
 	await assert.rejects(() => f.settings.updateSettings({ dailyHeading: "## changed" }), /unreadable/u);
 	await f.settings.updateSettings({ desktopSidebarCollapsed: true });
 	f.setReadFailure(false);
-	await f.current.reloadConfiguredRoot();
+	await f.current.reloadConfiguration();
 	assert.equal(f.current.getStatus(), "ready");
 });
 
@@ -68,11 +68,14 @@ async function fixture() {
 	await ensureObsidianStub();
 	const { SettingsService } = await import("../src/services/SettingsService");
 	const { KnomoCurrentConfigService } = await import("../src/services/KnomoCurrentConfigService");
+	const { InMemoryVault } = await import("./helpers/InMemoryVault");
+	const vault = new InMemoryVault();
+	Object.assign(vault.app.vault, { getConfig: () => [], setConfig: async () => undefined });
 	let saved: unknown = null;
 	let local: Record<string, unknown> = {};
 	let failure = false;
 	let discardSave = false;
-	const plugin = { app: { loadLocalStorage: () => local, saveLocalStorage: (_key: string, value: Record<string, unknown>) => { local = value; } },
+	const plugin = { app: { ...vault.app, loadLocalStorage: () => local, saveLocalStorage: (_key: string, value: Record<string, unknown>) => { local = value; } },
 		loadData: async () => { if (failure) throw new Error("read failed"); return saved; }, saveData: async (value: unknown) => { if (!discardSave) saved = value; } };
 	const settings = new SettingsService(plugin as never);
 	await settings.loadSettings();
@@ -110,7 +113,7 @@ test("外部配置先到时拒绝用旧内存值覆盖；重读后才可保存",
 	await assert.rejects(() => f.settings.updateSettings({ monthlyDateOrder: "desc" }), /changed externally/u);
 	assert.equal(f.current.isMonthlyProjectionAllowed(), false);
 	assert.equal((f.saved() as typeof saved).settings.monthlyMemoFolder, "Remote");
-	await f.current.reloadConfiguredRoot();
+	await f.current.reloadConfiguration();
 	assert.equal(f.current.getEffectiveConfig().monthly.folder, "Remote");
 });
 

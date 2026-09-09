@@ -53,15 +53,15 @@ interface LegacyIndexLoadContext {
 export class LegacyIndexReader implements LegacyIndexSource {
 	constructor(
 		private readonly app: App,
-		private readonly getKnomoDataRoot: () => string | null,
+		private readonly getMonthlyFolder: () => string | null,
 	) {}
 
 	inspect(): LegacyIndexSourcePresence {
-		const knomoDataRoot = this.getConfiguredRoot();
-		if (knomoDataRoot === null) return { kind: "missing" };
-		const legacySystemRoot = getLegacySystemRootPath(knomoDataRoot);
+		const monthlyFolder = this.getConfiguredRoot();
+		if (monthlyFolder === null) return { kind: "missing" };
+		const legacySystemRoot = getLegacySystemRootPath(monthlyFolder);
 		return this.app.vault.getAbstractFileByPath(legacySystemRoot) instanceof TFolder
-			? { kind: "present", legacySystemRoot, sourceId: `legacy-index:${knomoDataRoot}` }
+			? { kind: "present", legacySystemRoot, sourceId: `legacy-index:${monthlyFolder}` }
 			: { kind: "missing" };
 	}
 
@@ -200,7 +200,7 @@ export class LegacyIndexReader implements LegacyIndexSource {
 	}
 
 	private getConfiguredRoot(): string | null {
-		const value = this.getKnomoDataRoot();
+		const value = this.getMonthlyFolder();
 		return value === null ? null : normalizePath(value);
 	}
 }

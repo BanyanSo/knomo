@@ -21,7 +21,6 @@ import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjection
 import type { LegacyTrashMigrationService } from "../services/LegacyTrashMigrationService";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart } from "../utils/date";
-import { normalizeVaultPath } from "../utils/path";
 import { formatServiceError } from "../utils/serviceText";
 import { showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoFolderSuggest } from "./KnomoFolderSuggest";
@@ -43,8 +42,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private monthlyRetryRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
 	private timeBuoyToggleRunning = false;
-	private dataRootEditing = false;
-	private dataRootDraft: string | null = null;
+	private monthlyFolderEditing = false;
+	private monthlyFolderDraft: string | null = null;
 	private settingsVisible = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
@@ -58,8 +57,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly memoCommandService: MemoCommandService,
 		private readonly catalogReadService: CatalogReadService,
 		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
-		private readonly recoveryDataRootService: { plan(root: string): Promise<{ action: string }>; migrate(root: string): Promise<unknown> },
-		private readonly knomoCurrentConfigService: Pick<KnomoCurrentConfigService, "getStatus" | "getLastError" | "reloadConfiguredRoot" | "refreshLocalConfig">,
+		private readonly knomoCurrentConfigService: Pick<KnomoCurrentConfigService, "getStatus" | "getLastError" | "reloadConfiguration" | "refreshLocalConfig">,
 		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(options?: { explicit?: boolean }): Promise<unknown> },
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 		private readonly retryRuntimeState: () => Promise<void>,
@@ -136,9 +134,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 				type: "group",
 				heading: t("settings.files.heading"),
 				items: [{
-					name: t("settings.dataRoot.name"),
-					desc: t("settings.dataRoot.desc"),
-					render: (setting: Setting) => { this.renderDataRootSetting(setting); },
+					name: t("settings.monthlyFolder.name"),
+					desc: t("settings.monthlyFolder.desc"),
+					render: (setting: Setting) => { this.renderMonthlyFolderSetting(setting); },
 				}],
 			},
 		];
@@ -196,9 +194,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName(t("settings.files.heading"))
 			.setHeading();
-		this.renderDataRootSetting(new Setting(containerEl)
-			.setName(t("settings.dataRoot.name"))
-			.setDesc(t("settings.dataRoot.desc")));
+		this.renderMonthlyFolderSetting(new Setting(containerEl)
+			.setName(t("settings.monthlyFolder.name"))
+			.setDesc(t("settings.monthlyFolder.desc")));
 	}
 
 	hide(): void {
@@ -379,54 +377,50 @@ export class KnomoSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private renderDataRootSetting(setting: Setting): void {
+	private renderMonthlyFolderSetting(setting: Setting): void {
 		const settings = this.settingsService.getSettings();
-		if (!this.dataRootEditing) {
+		if (!this.monthlyFolderEditing) {
 			setting
 				.addText((text) => {
-					text.setValue(settings.knomoDataRoot);
+					text.setValue(settings.monthlyMemoFolder);
 					text.inputEl.readOnly = true;
 				})
 				.addButton((button) => {
-					button.setButtonText(settings.knomoDataRootConfigured
-						? t("settings.dataRoot.change")
-						: t("settings.dataRoot.choose"));
+					button.setButtonText(t("settings.monthlyFolder.change"));
 					button.onClick(() => {
-						this.dataRootEditing = true;
-						this.dataRootDraft = settings.knomoDataRoot;
+						this.monthlyFolderEditing = true;
+						this.monthlyFolderDraft = settings.monthlyMemoFolder;
 						this.refreshSettingTab();
 					});
 				});
 			return;
 		}
 
-		this.dataRootDraft ??= settings.knomoDataRoot;
+		this.monthlyFolderDraft ??= settings.monthlyMemoFolder;
 		setting
 			.addText((text) => {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
-				text.setValue(this.dataRootDraft ?? settings.knomoDataRoot);
-				text.onChange((value) => { this.dataRootDraft = value; });
-				new KnomoFolderSuggest(this.app, text.inputEl, (value) => { this.dataRootDraft = value; });
+				text.setValue(this.monthlyFolderDraft ?? settings.monthlyMemoFolder);
+				text.onChange((value) => { this.monthlyFolderDraft = value; });
+				new KnomoFolderSuggest(this.app, text.inputEl, (value) => { this.monthlyFolderDraft = value; });
 			})
 			.addButton((button) => {
-				button.setButtonText(settings.knomoDataRootConfigured
-					? t("settings.dataRoot.apply")
-					: t("settings.dataRoot.initialize"));
+				button.setButtonText(t("settings.monthlyFolder.apply"));
 				button.onClick(() => {
 					void (async () => {
-						const saved = await this.saveKnomoDataRoot(this.dataRootDraft ?? settings.knomoDataRoot, button);
+						const saved = await this.saveMonthlyFolder(this.monthlyFolderDraft ?? settings.monthlyMemoFolder, button);
 						if (!saved) return;
-						this.dataRootEditing = false;
-						this.dataRootDraft = null;
+						this.monthlyFolderEditing = false;
+						this.monthlyFolderDraft = null;
 						this.refreshSettingTab();
 					})();
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText(t("settings.dataRoot.cancel"));
+				button.setButtonText(t("settings.monthlyFolder.cancel"));
 				button.onClick(() => {
-					this.dataRootEditing = false;
-					this.dataRootDraft = null;
+					this.monthlyFolderEditing = false;
+					this.monthlyFolderDraft = null;
 					this.refreshSettingTab();
 				});
 			});
@@ -741,45 +735,24 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.updateMonthlyFileFormatStatus(statusEl);
 	}
 
-	private async saveKnomoDataRoot(value: string, button: ButtonComponent): Promise<boolean> {
-		const knomoDataRoot = normalizeVaultPath(value);
-		const currentSettings = this.settingsService.getSettings();
+	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<boolean> {
 		button.setDisabled(true);
-		button.setButtonText(t("settings.dataRoot.saving"));
+		button.setButtonText(t("settings.monthlyFolder.saving"));
 		try {
-			const plan = await this.recoveryDataRootService.plan(knomoDataRoot);
-			if (plan.action === "migrate") {
-				const confirmed = await showKnomoConfirmModal(this.app, {
-					message: t("settings.dataRoot.confirm", {
-						current: currentSettings.knomoDataRoot,
-						next: knomoDataRoot,
-					}),
-				});
-				if (!confirmed) {
-					return false;
-				}
-			}
-			if (plan.action === "initialize" && !currentSettings.knomoDataRootConfigured
-				&& this.startupBootstrapService !== null) {
-				await this.startupBootstrapService.initializeNewDataRoot(knomoDataRoot);
-				new Notice(t("settings.dataRoot.saved"));
-				return true;
-			}
-			await this.recoveryDataRootService.migrate(knomoDataRoot);
-			await this.knomoCurrentConfigService.reloadConfiguredRoot();
+			const plan = await this.settingsService.planMonthlyMemoFolderMigration(value);
+			if (plan.status !== "unchanged" && !await showKnomoConfirmModal(this.app, {
+				message: t("settings.monthlyFolder.confirm", { current: plan.oldMonthlyMemoFolder, next: plan.newMonthlyMemoFolder }),
+			})) return false;
+			const result = await this.settingsService.migrateMonthlyMemoFolder(value);
+			new Notice(result.trashError ? t("settings.monthlyFolder.trashFailed", { error: result.trashError }) : t("settings.monthlyFolder.saved"));
 			await this.refreshCurrentConfiguration();
-			await this.legacyTrashMigrationService.run();
-			new Notice(t("settings.dataRoot.saved"));
 			return true;
 		} catch (error) {
-			const message = formatServiceError(error, t("settings.dataRoot.saveFailed"));
-			new Notice(message);
+			new Notice(formatServiceError(error, t("settings.monthlyFolder.saveFailed")));
 			return false;
 		} finally {
 			button.setDisabled(false);
-			button.setButtonText(this.settingsService.getSettings().knomoDataRootConfigured
-				? t("settings.dataRoot.apply")
-				: t("settings.dataRoot.initialize"));
+			button.setButtonText(t("settings.monthlyFolder.apply"));
 		}
 	}
 
@@ -1026,7 +999,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				void (async () => {
 					button.setDisabled(true);
 					try {
-						await this.knomoCurrentConfigService.reloadConfiguredRoot();
+						await this.knomoCurrentConfigService.reloadConfiguration();
 						if (this.knomoCurrentConfigService.getStatus() !== "ready") {
 							throw new Error(this.knomoCurrentConfigService.getLastError()
 								?? "Current configuration did not become ready.");

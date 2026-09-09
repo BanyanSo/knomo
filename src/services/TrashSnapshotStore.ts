@@ -116,6 +116,19 @@ export class TrashSnapshotStore {
 	remove(snapshot: TrashSnapshot, allowMissing = false): Promise<void> { const copy = structuredClone(snapshot); return this.runExclusive((store) => store.remove(copy, allowMissing)); }
 	clear(): Promise<void> { return this.runExclusive((store) => store.clear()); }
 
+	async assertContainsAll(snapshots: readonly TrashSnapshot[]): Promise<void> {
+		const expected = structuredClone(snapshots);
+		validateItems(expected);
+		const path = this.path;
+		await this.runExclusive(async (store) => {
+			const current = new Map((await this.readDisk(path)).map((item) => [item.snapshotId, item]));
+			store.assertActive();
+			if (!expected.every((item) => { const found = current.get(item.snapshotId); return found !== undefined && sameSnapshot(found, item); })) {
+				throw new Error("Trash target verification failed.");
+			}
+		});
+	}
+
 	query(): Promise<TrashQueryResult> {
 		if (!this.reading) this.reading = this.load().finally(() => { this.reading = null; });
 		return this.reading.then((result) => structuredClone(result));

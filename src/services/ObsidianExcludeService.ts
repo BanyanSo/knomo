@@ -1,7 +1,7 @@
 import type { App } from "obsidian";
 
 import { KnomoError } from "../types/serviceError";
-import { getCatalogDataRootPath, getLegacySystemRootPath } from "../utils/path";
+import { getLegacySystemRootPath } from "../utils/path";
 
 interface VaultConfigAccess {
 	getConfig?: (key: string) => unknown;
@@ -60,10 +60,6 @@ export class ObsidianExcludeService {
 
 export function buildMonthlyFolderExcludeRule(monthlyMemoFolder: string): string | null {
 	return buildFolderExcludeRule(monthlyMemoFolder);
-}
-
-export function buildCatalogDataExcludeRule(monthlyMemoFolder: string): string {
-	return `${getCatalogDataRootPath(monthlyMemoFolder)}/`;
 }
 
 export function buildLegacySystemExcludeRule(monthlyMemoFolder: string): string {

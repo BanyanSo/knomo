@@ -24,7 +24,6 @@ import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore"
 import { KnomoCurrentConfigService } from "./services/KnomoCurrentConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
 import { LegacyTrashMigrationService } from "./services/LegacyTrashMigrationService";
-import { RecoveryDataRootService } from "./services/RecoveryDataRootService";
 import { IndependentTrashService } from "./services/IndependentTrashService";
 import { TrashSnapshotStore, getTrashFilePath } from "./services/TrashSnapshotStore";
 import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
@@ -80,7 +79,13 @@ export default class KnomoPlugin extends Plugin {
 		lowPriorityWorkQueue.start(this);
 		const dailyInventory = new DailyInventoryIndex();
 		const pluginDataStore = new PluginDataStore(this);
-		this.settingsService = new SettingsService(this, pluginDataStore);
+		this.settingsService = new SettingsService(this, pluginDataStore, {
+			runExclusive: async (action) => {
+				await this.legacyTrashMigrationService?.waitForIdle();
+				return this.memoCommandService === null ? action() : this.memoCommandService.runWithMutationsPaused(action);
+			},
+			assertActive: () => { if (lowPriorityWorkQueue.signal.aborted) throw new Error("Monthly relocation cancelled."); },
+		});
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
 		const settingsLoaded = await this.loadSettingsSafely();
 		if (settingsLoaded) {
@@ -121,16 +126,7 @@ export default class KnomoPlugin extends Plugin {
 			};
 		};
 
-		const recoveryDataRootService = new RecoveryDataRootService(this.app,
-			() => this.settingsService.getSettings(),
-			async (root) => { await this.settingsService.commitKnomoDataRoot(root); },
-			async (action) => {
-				await this.legacyTrashMigrationService?.waitForIdle();
-				return this.memoCommandService === null ? action() : this.memoCommandService.runWithMutationsPaused(action);
-			});
 		const startupBootstrapService = new KnomoStartupBootstrapService(this.app, {
-			getLocation: () => this.settingsService.getSettings(),
-			initializeDataRoot: (root) => recoveryDataRootService.migrate(root),
 			currentConfig: knomoCurrentConfigService,
 			cancellationSignal: lowPriorityWorkQueue.signal,
 		});
@@ -332,7 +328,7 @@ export default class KnomoPlugin extends Plugin {
 			} else if (startupBootstrapService.getSnapshot().status === "unavailable") {
 				await startupBootstrapService.initialize();
 			} else if (knomoCurrentConfigService.getStatus() === "unavailable") {
-				await knomoCurrentConfigService.reloadConfiguredRoot();
+				await knomoCurrentConfigService.reloadConfiguration();
 			}
 			const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
 			await this.memoCatalogService?.open();
@@ -407,7 +403,6 @@ export default class KnomoPlugin extends Plugin {
 			this.memoCommandService,
 			this.catalogReadService,
 			this.monthlyProjectionCoordinator,
-			recoveryDataRootService,
 			knomoCurrentConfigService,
 			this.legacyTrashMigrationService,
 			startupBootstrapService,

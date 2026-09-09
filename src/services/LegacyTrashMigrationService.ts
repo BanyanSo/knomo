@@ -1,4 +1,4 @@
-import { TFile, TFolder } from "obsidian";
+import { TFolder } from "obsidian";
 import { t } from "../i18n";
 import type { App } from "obsidian";
 import type { LegacyIndexSource } from "../types/legacyIndex";
@@ -8,40 +8,9 @@ import { PluginDataStore } from "./PluginDataStore";
 import { buildPluginDataWithLegacyMigration, extractLegacyMigration, type LegacyMigrationCompletion } from "../utils/pluginData";
 import { assertVaultPath, TrashSnapshotStore } from "./TrashSnapshotStore";
 
-export const LEGACY_COMPLETION_FILE = "legacy-index-completion.json";
-interface Completion { sourceId: string; sourceRevision: string; legacySystemRoot: string; }
-
-// 仅吸收旧 marker；不再创建或复制该文件。
-export class LegacyMigrationMarkerStore {
-	constructor(private readonly app: App, readonly root: string) { assertVaultPath(root); }
-	async read(): Promise<Completion | null> {
-		const path = `${this.root}/${LEGACY_COMPLETION_FILE}`;
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (file === null && !await this.app.vault.adapter.exists(path)) return null;
-		if (!(file instanceof TFile)) throw new Error("Migration marker unavailable.");
-		const value: unknown = JSON.parse(await this.app.vault.read(file));
-		if (value === null || typeof value !== "object") throw new Error("Invalid migration marker.");
-		const item = value as Partial<Completion>;
-		if (typeof item.sourceId !== "string" || !item.sourceId.startsWith("legacy-index:")
-			|| typeof item.sourceRevision !== "string" || !/^[a-f0-9]{64}$/u.test(item.sourceRevision)
-			|| typeof item.legacySystemRoot !== "string") throw new Error("Invalid migration marker.");
-		assertVaultPath(item.legacySystemRoot);
-		if (!item.legacySystemRoot.endsWith("/_knomo-system")
-			|| item.sourceId !== `legacy-index:${item.legacySystemRoot.slice(0, -"/_knomo-system".length)}`) throw new Error("Invalid migration source.");
-		return item as Completion;
-	}
-	async remove(): Promise<void> {
-		const path = `${this.root}/${LEGACY_COMPLETION_FILE}`;
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (file === null && !await this.app.vault.adapter.exists(path)) return;
-		if (!(file instanceof TFile)) throw new Error("Migration marker unavailable.");
-		await this.app.vault.delete(file);
-		if (await this.app.vault.adapter.exists(path)) throw new Error("Migration marker cleanup not confirmed.");
-	}
-}
-
 interface Options {
 	pluginDataStore: PluginDataStore;
+	// 当前 Trash 恢复数据根：用于写入副本、取消旧任务及清理路径保护。
 	getDataRoot: () => string;
 	// SettingsService 沿用正式插件设置 reader，保存并校验当前值后才允许完成。
 	migrateSettings: () => Promise<void>;
@@ -57,7 +26,7 @@ export class LegacyTrashMigrationService {
 	constructor(private readonly app: App, private readonly source: LegacyIndexSource, private readonly options: Options) {}
 	getReport(): LegacyMigrationReport { return structuredClone(this.report); }
 	async waitForIdle(): Promise<void> { await this.queue; }
-	// 普通启动只检查完成事实；缺失 marker 必须由迁移按钮显式重试。
+	// 普通启动只检查完成事实；缺失 completion 必须由迁移按钮显式重试。
 	run(options: { explicit?: boolean } = {}): Promise<LegacyMigrationReport> {
 		const operation = this.queue.then(() => options.explicit === true && this.options.runExclusive
 			? this.options.runExclusive(() => this.runOnce(true)) : this.runOnce(options.explicit === true));
@@ -75,18 +44,9 @@ export class LegacyTrashMigrationService {
 				if (this.options.signal?.aborted || root !== this.options.getDataRoot()) throw new Error("Migration cancelled or data root changed.");
 			};
 			assertActive();
-			const marker = new LegacyMigrationMarkerStore(this.app, root);
 			let completion = extractLegacyMigration(await this.options.pluginDataStore.read());
-			if (completion === null) {
-				const old = await marker.read();
-				if (old !== null) {
-					assertActive();
-					completion = { completed: true, legacySystemRoot: old.legacySystemRoot, sourceRevision: old.sourceRevision };
-					await this.persistCompletion(completion);
-				}
-			}
 			assertActive();
-			if (completion !== null) return this.report = await this.cleanup(completion, marker, assertActive);
+			if (completion !== null) return this.report = await this.cleanup(completion, assertActive);
 			if (this.source.inspect().kind === "missing") return this.report = { ...emptyReport(), status: "not_applicable" };
 			if (!explicit) return this.report = { ...emptyReport(), status: "attention", diagnostics: [{ code: "legacy_migration_explicit_retry", sourcePath: null, memoId: null, detail: t("migration.explicitRetry") }] };
 			const loaded = await this.source.load({ cancellationSignal: this.options.signal, yieldControl: this.options.yieldControl });
@@ -120,7 +80,7 @@ export class LegacyTrashMigrationService {
 				|| latest.snapshot.sourceRevision !== snapshot.sourceRevision || latest.snapshot.diagnostics.length) throw new Error("Legacy source changed during migration; retry explicitly.");
 			completion = { completed: true, legacySystemRoot: snapshot.legacySystemRoot, sourceRevision: snapshot.sourceRevision };
 			await this.persistCompletion(completion);
-			return this.report = await this.cleanup(completion, marker, assertActive);
+			return this.report = await this.cleanup(completion, assertActive);
 		} catch (error) {
 			return this.report = { ...emptyReport(), status: "unavailable", diagnostics: [{ code: "legacy_trash_migration_failed", sourcePath: null, memoId: null, detail: String(error) }] };
 		}
@@ -132,7 +92,7 @@ export class LegacyTrashMigrationService {
 		}));
 	}
 
-	private async cleanup(completion: LegacyMigrationCompletion, marker: LegacyMigrationMarkerStore, assertActive: () => void): Promise<LegacyMigrationReport> {
+	private async cleanup(completion: LegacyMigrationCompletion, assertActive: () => void): Promise<LegacyMigrationReport> {
 		const report: LegacyMigrationReport = { ...emptyReport(), status: "ready", sourceRevision: completion.sourceRevision };
 		try {
 			assertActive();
@@ -142,8 +102,6 @@ export class LegacyTrashMigrationService {
 			for (const protectedPath of [this.options.getDataRoot(), this.app.vault.configDir]) {
 				if (protectedPath === path || protectedPath.startsWith(`${path}/`) || path.startsWith(`${protectedPath}/`)) throw new Error("Unsafe legacy cleanup overlap.");
 			}
-			await marker.remove();
-			assertActive();
 			const folder = this.app.vault.getAbstractFileByPath(path);
 			if (folder === null && !await this.app.vault.adapter.exists(path)) return report;
 			if (!(folder instanceof TFolder)) throw new Error("Legacy cleanup target is not an available folder.");

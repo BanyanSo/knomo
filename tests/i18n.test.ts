@@ -51,7 +51,7 @@ test("uses distinct migration and storage status copy", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");
 
-	assert.match(translate("zh-CN", "catalog.legacyMigrationAttention"), /旧版数据/u);
+	assert.match(translate("zh-CN", "settings.legacyMigration.description"), /旧版已删除记录/u);
 	assert.match(translate("zh-CN", "catalog.storageUnavailable"), /本机缓存/u);
 });
 
@@ -65,15 +65,7 @@ test("需要处理文案只描述用户影响和对应操作", async () => {
 	assert.equal(translate("en", "settings.attention.checkAgain"), "Check again");
 });
 
-test("旧版数据升级完成通知只保留用户可执行的清理提示", async () => {
-	await ensureObsidianStub();
-	const { translate } = await import("../src/i18n");
 
-	assert.equal(
-		translate("zh-CN", "notice.legacyMigrationCompleted", { path: "Knomo/_knomo-system" }),
-		"新版 Knomo 数据已完成升级，但旧数据文件夹（Knomo/_knomo-system）自动清理失败；下次启动或点击迁移或重试时将重试清理。",
-	);
-});
 
 test("adds spacing only to record statistics summaries", async () => {
 	await ensureObsidianStub();
@@ -157,8 +149,8 @@ async function setObsidianLanguage(locale: string): Promise<void> {
 test("待迁移不误报旧源损坏，设置失败不承诺改用其他位置写入", async () => {
  await ensureObsidianStub();
  const { translate } = await import("../src/i18n");
- assert.doesNotMatch(translate("zh-CN", "settings.legacyMigration.attention"), /仍在变化|不完整/);
- assert.match(translate("zh-CN", "settings.legacyMigration.attention"), /迁移或重试/);
+ assert.doesNotMatch(translate("zh-CN", "settings.legacyMigration.description"), /仍在变化|不完整/);
+ assert.equal(translate("zh-CN", "settings.legacyMigration.retry"), "重试恢复");
  assert.match(translate("zh-CN", "catalog.settingsUnavailable"), /写入已暂停/);
  assert.match(translate("zh-CN", "settings.attention.settings.desc"), /写入已暂停/);
 });

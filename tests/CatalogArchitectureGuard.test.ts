@@ -147,7 +147,7 @@ test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取�
 	);
 	const afterLayoutInitialization = main.slice(
 		main.indexOf("private async initializeAfterLayoutWithCatalogSafely"),
-		main.indexOf("private async showLegacyMigrationCompletionNotice"),
+		main.indexOf("private runManualRefresh"),
 	);
 
 	assert.equal(listenerStart.includes("identityLedgerService.start"), false);

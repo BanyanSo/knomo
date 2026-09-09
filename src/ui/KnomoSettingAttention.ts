@@ -15,7 +15,6 @@ export function getKnomoSettingAttentionKinds(
 		|| runtime.catalogLifecycle.state === "retrying"
 		|| runtime.catalogLifecycle.state === "read-only") kinds.push("catalog");
 	if (runtime.monthly === "failed") kinds.push("monthly");
-	if (runtime.legacyMigration === "attention"
-		|| runtime.legacyMigration === "unavailable") kinds.push("legacy");
+	if (runtime.legacyMigration === "recovery_required") kinds.push("legacy");
 	return kinds;
 }

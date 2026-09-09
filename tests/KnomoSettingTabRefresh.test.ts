@@ -22,7 +22,7 @@ test("声明式设置未调用 display 时也更新迁移入口，并清除已�
  tab.refreshAttentionIfVisible();
  assert.deepEqual(attention().items.map(item => item.name), [t("settings.currentConfig.name")]);
  currentConfiguration = "ready";
- legacyMigration = "attention";
+ legacyMigration = "recovery_required";
  tab.refreshAttentionIfVisible();
  assert.deepEqual(attention().items.map(item => item.name), [t("settings.legacyMigration.name")]);
  legacyMigration = "ready";

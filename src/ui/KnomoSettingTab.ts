@@ -58,7 +58,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly catalogReadService: CatalogReadService,
 		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
 		private readonly knomoCurrentConfigService: Pick<KnomoCurrentConfigService, "getStatus" | "getLastError" | "reloadConfiguration" | "refreshLocalConfig">,
-		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(options?: { explicit?: boolean }): Promise<unknown> },
+		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(): Promise<unknown> },
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 		private readonly retryRuntimeState: () => Promise<void>,
 	) {
@@ -471,23 +471,17 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setName(t("settings.legacyMigration.name"))
 			.setDesc(this.getLegacyMigrationDescription());
 		setting.addButton((button) => {
-			button.setButtonText(t("settings.legacyMigration.migrate"));
+			button.setButtonText(t("settings.legacyMigration.retry"));
 			button.onClick(() => {
 				button.setDisabled(true);
-				void this.legacyTrashMigrationService.run({ explicit: true })
-					.catch((error: unknown) => { new Notice(formatServiceError(error, t("settings.legacyMigration.unavailable"))); })
+				void this.legacyTrashMigrationService.run()
 					.finally(() => { button.setDisabled(false); this.refreshSettingTab(); });
 			});
 		});
 	}
 
 	private getLegacyMigrationDescription(): string {
-		const report = this.legacyTrashMigrationService.getReport();
-		if (report.cleanupCandidate) return t("notice.legacyMigrationCompleted", { path: report.cleanupCandidate.legacySystemRoot });
-		const messageKey = report.status === "attention"
-				? "settings.legacyMigration.attention"
-				: "settings.legacyMigration.unavailable";
-		return t(messageKey);
+		return t("settings.legacyMigration.description");
 	}
 
 	private rememberSettingNoticeValue(key: SettingNoticeKey, value: string): void {

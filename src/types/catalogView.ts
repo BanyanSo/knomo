@@ -17,7 +17,7 @@ export type CatalogReadState = "ready" | "history_building" | "storage_unavailab
 export type CatalogContentState = "ready" | "scanning" | "unavailable";
 export type CatalogState = "partial" | "complete" | "degraded";
 export type MonthlyProjectionState = "ready" | "stale" | "failed";
-export type LegacyMigrationState = "none" | "attention" | "unavailable";
+
 
 export interface CatalogReadStatus {
 	settings?: KnomoSettingsLoadStatus;
@@ -25,7 +25,7 @@ export interface CatalogReadStatus {
 	catalog: CatalogState;
 	currentConfiguration?: KnomoCurrentConfigStatus;
 	projection: MonthlyProjectionState;
-	migration: LegacyMigrationState;
+
 }
 
 export interface KnomoRuntimeAttentionSnapshot {

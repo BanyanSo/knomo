@@ -18,7 +18,6 @@ test("Observation-first 全部就绪时不添加状态提示", () => {
 			content: "ready",
 			catalog: "complete",
 			projection: "ready",
-			migration: "none",
 		},
 		coverage: completeCoverage,
 	}), []);
@@ -30,7 +29,6 @@ test("fresh empty Vault 的 identity absent 不显示初始化 gate", () => {
 			content: "ready",
 			catalog: "complete",
 			projection: "ready",
-			migration: "none",
 		},
 		coverage: {
 			kind: "complete",
@@ -50,7 +48,6 @@ test("本地扫描完成但共享配置仍在初始化时不把工程状态放�
 			content: "ready",
 			catalog: "partial",
 			projection: "ready",
-			migration: "none",
 		},
 		coverage: {
 			...completeCoverage,
@@ -67,7 +64,6 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 			content: "scanning",
 			catalog: "partial",
 			projection: "stale",
-			migration: "attention",
 		},
 		coverage: {
 			kind: "partial",
@@ -78,16 +74,7 @@ test("正常后台过渡不进入卡片流，只呈现可操作故障", () => {
 		},
 	});
 
-	assert.equal(headers.length, 1);
-	assert.equal(headers.every((header) => header.type === "summary"), true);
-	assert.deepEqual(headers.flatMap((header) => header.type === "summary" && header.action !== undefined
-		? [header.action.action]
-		: []), ["open-catalog-settings"]);
-	const text = headers.flatMap((header) => header.type === "summary" ? [header.text] : []).join("\n");
-	assert.match(text, /Older data/u);
-	assert.doesNotMatch(text, /Local history is still building/u);
-	assert.doesNotMatch(text, /Waiting for monthly memo sync/u);
-	assert.doesNotMatch(text, /Creation, adoption, and monthly writes are paused/u);
+	assert.deepEqual(headers, []);
 });
 
 test("正常中间态始终不显示，但不隐藏可操作故障", () => {
@@ -96,7 +83,6 @@ test("正常中间态始终不显示，但不隐藏可操作故障", () => {
 			content: "scanning",
 			catalog: "partial",
 			projection: "stale",
-			migration: "none",
 		},
 		coverage: {
 			kind: "partial",
@@ -112,28 +98,23 @@ test("正常中间态始终不显示，但不隐藏可操作故障", () => {
 			content: "unavailable",
 			catalog: "degraded",
 			projection: "failed",
-			migration: "attention",
 		},
 		coverage: completeCoverage,
 	});
-	assert.equal(headers.length, 3);
+	assert.equal(headers.length, 2);
 });
 
-test("旧数据暂时不可读取时显示可重试提示，不冒充数据根冲突", () => {
+test("旧版恢复入口不放入卡片流", () => {
 	const headers = getCatalogReadStatusHeaders({
 		status: {
 			content: "ready",
 			catalog: "complete",
 			projection: "ready",
-			migration: "unavailable",
 		},
 		coverage: completeCoverage,
 	});
 
-	assert.equal(headers.length, 1);
-	assert.equal(headers[0]?.type === "summary" ? headers[0].action?.action : null, "open-catalog-settings");
-	assert.match(headers[0]?.type === "summary" ? headers[0].text : "", /Legacy data migration failed/u);
-	assert.doesNotMatch(headers[0]?.type === "summary" ? headers[0].text : "", /conflicting data roots/u);
+	assert.deepEqual(headers, []);
 });
 
 test("降级 Catalog 扫描时只显示可操作的存储故障", () => {
@@ -142,7 +123,6 @@ test("降级 Catalog 扫描时只显示可操作的存储故障", () => {
 			content: "scanning",
 			catalog: "degraded",
 			projection: "ready",
-			migration: "none",
 		},
 		coverage: { ...completeCoverage, kind: "partial", pendingFileCount: 1 },
 	});
@@ -158,7 +138,6 @@ test("跨设备设置冲突或不可读取时在前台给出对应操作", () =>
 		content: "ready" as const,
 		catalog: "complete" as const,
 		projection: "ready" as const,
-		migration: "none" as const,
 	};
 	const conflicted = getCatalogReadStatusHeaders({
 		status: { ...base, currentConfiguration: "conflicted" },
@@ -184,7 +163,6 @@ test("原有设置无法读取时只显示设置恢复入口", () => {
 			catalog: "degraded",
 			settings: "unavailable",
 			projection: "failed",
-			migration: "unavailable",
 		},
 		coverage: completeCoverage,
 	});

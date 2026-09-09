@@ -28,7 +28,6 @@ import { IndependentTrashService } from "./services/IndependentTrashService";
 import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
 import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
-import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MemoCommandService } from "./services/MemoCommandService";
@@ -68,7 +67,6 @@ export default class KnomoPlugin extends Plugin {
 	private catalogReadService: CatalogReadService | null = null;
 	private monthlyProjectionCoordinator: MonthlyProjectionCoordinator | null = null;
 	private legacyTrashMigrationService: LegacyTrashMigrationService | null = null;
-	private legacyMigrationCompletionNoticeService: LegacyMigrationCompletionNoticeService | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
 
@@ -271,23 +269,21 @@ export default class KnomoPlugin extends Plugin {
 			this.app,
 			() => this.settingsService.getSettings().monthlyMemoFolder,
 		);
-		this.legacyMigrationCompletionNoticeService = new LegacyMigrationCompletionNoticeService(
-			this.app,
-			pluginDataStore,
-			(legacySystemRoot) => {
-				new Notice(t("notice.legacyMigrationCompleted", { path: legacySystemRoot }));
-			},
-		);
 		this.legacyTrashMigrationService = new LegacyTrashMigrationService(this.app, legacyIndexReader, {
 			pluginDataStore,
 			runExclusive: (action) => this.memoCommandService!.runWithMutationsPaused(action),
 			onReportChanged: async () => {
 				if (lowPriorityWorkQueue.signal.aborted) return;
 				await this.queueRefreshOpenViews();
-				await this.showLegacyMigrationCompletionNotice();
 				settingTab?.refreshAttentionIfVisible();
 			},
 			getTrashFolder,
+			isReady: () => this.settingsService.getLoadStatus() === "ready",
+			scheduleRetry: (action, delayMs) => {
+				const win = this.app.workspace.containerEl.win;
+				const timer = win.setTimeout(action, delayMs);
+				return () => win.clearTimeout(timer);
+			},
 			migrateSettings: async () => {
 				await knomoCurrentConfigService.initialize();
 				await this.settingsService.persistLegacyConfiguration();
@@ -422,7 +418,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 			initializeMonthly: async () => { await this.monthlyProjectionCoordinator?.initialize(); },
 			initializeRecovery: async () => {
-				if (settingsLoaded) await startupBootstrapService.initialize();
+				if (settingsLoaded) await startupBootstrapService.initialize().catch(() => undefined);
 				if (!lowPriorityWorkQueue.signal.aborted) await this.legacyTrashMigrationService?.run();
 			},
 			isCancelled: () => lowPriorityWorkQueue.signal.aborted,
@@ -434,7 +430,6 @@ export default class KnomoPlugin extends Plugin {
 
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
-			this.legacyMigrationCompletionNoticeService?.markLayoutReady();
 			void this.initializeAfterLayoutWithCatalogSafely(lowPriorityWorkQueue.signal);
 		});
 	}
@@ -619,7 +614,6 @@ export default class KnomoPlugin extends Plugin {
 			if (this.runtimeInitializationPromise !== null
 				&& await this.runtimeInitializationPromise) {
 				if (isCancelled()) return;
-				await this.showLegacyMigrationCompletionNotice();
 				return;
 			}
 			if (isCancelled()) return;
@@ -627,17 +621,11 @@ export default class KnomoPlugin extends Plugin {
 			if (isCancelled()) return;
 			await this.catalogReadService?.prime();
 			if (isCancelled()) return;
-			await this.showLegacyMigrationCompletionNotice();
 		} catch {
 			// 本机 Catalog 或兼容导入失败不能影响 Daily 快速记录能力。
 		}
 	}
 
-	private async showLegacyMigrationCompletionNotice(): Promise<void> {
-		await this.legacyMigrationCompletionNoticeService?.showIfNeeded(
-			this.legacyTrashMigrationService?.getReport().cleanupCandidate ?? null,
-		);
-	}
 
 	private runManualRefresh(): Promise<CatalogRefreshResult> {
 		if (this.manualRefreshPromise !== null) {

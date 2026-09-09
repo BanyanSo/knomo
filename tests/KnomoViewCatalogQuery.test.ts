@@ -29,7 +29,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 
 			coverage: { kind: "complete", coveredFromDate: "2026-08-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 },
 			readState: "ready",
-			status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
+			status: { content: "ready", catalog: "complete", projection: "ready" },
 		};
 	};
 	view.getCardFlowStateKey = () => "card-flow";
@@ -99,7 +99,6 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 				content: "scanning",
 				catalog: "partial",
 				projection: "ready",
-				migration: "none",
 			},
 		};
 	view.getCardFlowStateKey = () => "card-flow";
@@ -340,7 +339,7 @@ test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快�
 
 		coverage: completeCoverage(),
 		readState: "ready",
-		status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
+		status: { content: "ready", catalog: "complete", projection: "ready" },
 	});
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
@@ -479,7 +478,7 @@ test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
 	view.catalogDesktopTotalCount = 90;
 	view.cardFlowError = null;
 	view.catalogCoverage = completeCoverage();
-	view.catalogStatus = { content: "ready", catalog: "complete", projection: "ready", migration: "none" };
+	view.catalogStatus = { content: "ready", catalog: "complete", projection: "ready" };
 	view.viewStateController = {
 		activeNav: "all",
 		activeTag: "Project",
@@ -874,7 +873,6 @@ interface PresentationView {
 		content: "ready";
 		catalog: "complete";
 		projection: "ready";
-		migration: "none";
 	};
 	viewStateController: {
 		activeNav: "all";
@@ -924,7 +922,6 @@ type TestCatalogMemoLoad = {
 		content: "ready" | "scanning";
 		catalog: "complete" | "partial";
 		projection: "ready";
-		migration: "none";
 	};
 };
 
@@ -983,7 +980,7 @@ function makeCatalogLoad(
 		catalogRevision,
 		coverage,
 		readState: "ready",
-		status: { content: "ready", catalog: "complete", projection: "ready", migration: "none" },
+		status: { content: "ready", catalog: "complete", projection: "ready" },
 	};
 }
 

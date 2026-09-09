@@ -328,7 +328,6 @@ export class KnomoView extends ItemView {
 		content: "ready",
 		catalog: "complete",
 		projection: "ready",
-		migration: "none",
 	};
 	private catalogMobileCursor: CatalogFeatureCursor | null = null;
 	private catalogMobileQueryRun = 0;

@@ -1,4 +1,4 @@
-export type LegacyMigrationStatus = "idle" | "not_applicable" | "ready" | "attention" | "unavailable";
+export type LegacyMigrationStatus = "idle" | "not_applicable" | "ready" | "pending" | "recovery_required";
 
 export interface LegacyMigrationDiagnostic {
 	code: string;

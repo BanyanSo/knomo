@@ -156,6 +156,8 @@ export class LegacyIndexReader implements LegacyIndexSource {
 			await checkpoint(context);
 			const memo = parseMemoRecord(memoId, value);
 			if (memo === null) {
+				// 明确属于活动记录或派生错误状态时，不以旧索引损坏阻塞 Trash。
+				if (isRecord(value) && (value.status === "active" || value.status === "error")) continue;
 				result.diagnostics.push(diagnostic("legacy_memo_record_invalid", artifact.path, memoId, "Legacy memo record or memoId is invalid."));
 				continue;
 			}

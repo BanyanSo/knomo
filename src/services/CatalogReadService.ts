@@ -101,7 +101,7 @@ export class CatalogReadService {
 			// 故障提示无法读取 Catalog 状态时，按可恢复的降级状态处理。
 		}
 		let currentConfiguration: KnomoRuntimeAttentionSnapshot["currentConfiguration"] = "unavailable";
-		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "unavailable";
+		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "pending";
 		let settings: KnomoSettingsLoadStatus = "ready";
 		try {
 			currentConfiguration = this.options.getCurrentConfigurationStatus?.() ?? "missing";
@@ -585,7 +585,6 @@ export class CatalogReadService {
 		lifecycle: CatalogStoreLifecycle,
 		contentUnavailable: boolean,
 	): CatalogReadStatus {
-		const legacyStatus = this.options.getLegacyImportStatus?.() ?? "not_applicable";
 		const catalogDegraded = contentUnavailable
 			|| lifecycle.state === "degraded"
 			|| lifecycle.state === "retrying"
@@ -603,9 +602,6 @@ export class CatalogReadService {
 			// 内容状态与辅助服务诊断分别提供。
 			currentConfiguration: this.getCurrentConfigurationStatus(),
 			projection: this.getProjectionState(),
-			migration: legacyStatus === "attention"
-				? "attention"
-				: legacyStatus === "unavailable" ? "unavailable" : "none",
 		};
 	}
 

@@ -23,7 +23,7 @@ test("独立能力分别报告故障，不以旧启动状态覆盖", () => {
 		catalogLifecycle: { state: "degraded", persistent: false, writable: false, reason: "failed" },
 		currentConfiguration: "unavailable",
 		monthly: "failed",
-		legacyMigration: "unavailable",
+		legacyMigration: "recovery_required",
 	}, snapshot("unavailable", "current_config")), ["current-config", "catalog", "monthly", "legacy"]);
 });
 
@@ -32,7 +32,7 @@ test("准备完成后按可执行动作展示故障", () => {
 		catalogLifecycle: { state: "read-only", persistent: true, writable: false, reason: "failed" },
 		currentConfiguration: "conflicted",
 		monthly: "failed",
-		legacyMigration: "attention",
+		legacyMigration: "recovery_required",
 	}, snapshot("ready")), ["current-config", "catalog", "monthly", "legacy"]);
 });
 

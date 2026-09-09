@@ -16,7 +16,7 @@ import type {
 	MarkdownTaskInput,
 } from "../types/memoOperations";
 import { formatDatePart, formatTimePart } from "../utils/date";
-import { isValidMarkdownHeading } from "../utils/markdown";
+import { isMemoContinuationLine, isValidMarkdownHeading } from "../utils/markdown";
 import type { DiaryMemoParseResult } from "./DiaryMemoParser";
 import {
 	DailyMemoWriteGateway,
@@ -600,7 +600,9 @@ function findBottomInsertOffset(content: string, start: number, end: number): nu
 		const lineIndex = boundary - 1;
 		const lineStart = starts[lineIndex] ?? 0;
 		if (lineStart < start) break;
-		if (content.slice(lineStart, getLineEnd(content, starts, lineIndex)).trim().length > 0) break;
+		const line = content.slice(lineStart, getLineEnd(content, starts, lineIndex));
+		// 缩进空行可能属于上一条 memo，不能越过它插入并转移给新 memo。
+		if (line.trim().length > 0 || isMemoContinuationLine(line)) break;
 		boundary -= 1;
 	}
 	return starts[boundary] ?? end;

@@ -364,6 +364,26 @@ test("切换新建时间格式不改写已有 Memo 的精度：编辑、任务�
 	}
 });
 
+test("末尾缩进空行属于原 memo，连续创建不转移正文或解析失败", async (context) => {
+	for (const eol of ["\n", "\r\n"]) {
+		for (const indent of ["\t", "    "]) {
+			await context.test(JSON.stringify({ eol, indent }), async () => {
+				const path = "Daily/2026-08-22.md";
+				const initial = ["## Memos", "- 20:14:06 第一奥", indent, ""].join(eol);
+				const fixture = createFixture({ initialFiles: { [path]: initial } });
+				const original = await fixture.getOnlyObservation("2026-08-22");
+				await fixture.service.create({ content: "second" });
+				await fixture.service.create({ content: "third\n" });
+				await fixture.service.create({ content: "fourth" });
+				const parsed = await fixture.parse("2026-08-22");
+				assert.deepEqual(parsed.map((item) => item.content), [original.content, "second", "third\n", "fourth"]);
+				assert.equal(parsed[0]?.rawBlockHash, original.rawBlockHash);
+				assert.ok(fixture.vault.readText(path).startsWith(initial));
+			});
+		}
+	}
+});
+
 interface FixtureOptions {
 	catalogDegraded?: boolean;
 	initialFiles?: Readonly<Record<string, string>>;

@@ -34,11 +34,6 @@ export function getCatalogReadStatusHeaders(
 		headers.push(summary(t("sync.monthlyFailed"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	}
 
-	if (options.status.migration === "attention") {
-		headers.push(summary(t("catalog.legacyMigrationAttention"), t("catalog.openDiagnostics"), "open-catalog-settings"));
-	} else if (options.status.migration === "unavailable") {
-		headers.push(summary(t("catalog.legacyMigrationUnavailable"), t("catalog.openDiagnostics"), "open-catalog-settings"));
-	}
 
 	return dedupeHeaders(headers);
 }

@@ -161,6 +161,49 @@ test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展�
 	await view.loadInitialMobileMemos();
 
 	assert.equal(view.catalogHistoryExpansionPending, true);
+	view.loadCatalogMemos = async () => ({
+		...makeCatalogLoad(1, completeCoverage()),
+		memos: [makeMemo("only-memo", "2026-09-08T21:49:01")],
+		fullHistoryLoaded: true,
+	});
+	await view.loadInitialMobileMemos();
+	assert.equal(view.catalogHistoryExpansionPending, false);
+	await view.loadInitialMobileMemos();
+	assert.equal(view.catalogHistoryExpansionPending, false);
+});
+
+test("移动端近月无下一页时确认全历史，保留真实历史 cursor 且限制查询大小", async () => {
+	await ensureObsidianStub();
+	const { Platform } = await import("obsidian");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as {
+		buildCatalogActiveQuery: (all: boolean) => object;
+		isDefaultListState: () => boolean;
+		queryCatalogFeature: (request: { limit: number; cursor: unknown; fromDate?: string }) => Promise<object>;
+		loadCatalogMemos: (all: boolean) => Promise<{ fullHistoryLoaded: boolean; nextCursor: unknown }>;
+	};
+	view.buildCatalogActiveQuery = (all) => all ? {} : { fromDate: "2026-08-01" };
+	view.isDefaultListState = () => true;
+	const previousMobile = Platform.isMobile;
+	Platform.isMobile = true;
+	try {
+		for (const nextCursor of [null, { catalog: { catalogRevision: 1, createdAtKey: "old", observationKey: "old" } }]) {
+			const requests: Array<{ limit: number; cursor: unknown; fromDate?: string }> = [];
+			view.queryCatalogFeature = async (request) => {
+				requests.push(request);
+				return { ...makeCatalogLoad(1, completeCoverage()), items: [], nextCursor: requests.length === 1 ? null : nextCursor };
+			};
+			const load = await view.loadCatalogMemos(false);
+			assert.equal(load.fullHistoryLoaded, true);
+			assert.equal(load.nextCursor, nextCursor);
+			assert.deepEqual(requests, [
+				{ fromDate: "2026-08-01", limit: 50, cursor: null },
+				{ limit: 50, cursor: null },
+			]);
+		}
+	} finally {
+		Platform.isMobile = previousMobile;
+	}
 });
 
 test("MOBILE-CAT-PAGE-002：近月窗口结束后触底改为全历史查询", async () => {
@@ -871,6 +914,7 @@ type AggregateFacets = {
 };
 
 type TestCatalogMemoLoad = {
+	fullHistoryLoaded?: boolean;
 	memos: QueryMemo[];
 	nextCursor: null;
 	catalogRevision: number;

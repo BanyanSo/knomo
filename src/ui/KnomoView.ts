@@ -208,6 +208,7 @@ interface FilteredMemosCache {
 }
 
 interface CatalogMemoLoad {
+	fullHistoryLoaded?: boolean;
 	memos: MemoRecord[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
@@ -1531,7 +1532,7 @@ export class KnomoView extends ItemView {
 				return true;
 			}
 			this.memos = load.memos;
-			this.catalogHistoryExpansionPending = !loadAll && Platform.isMobile && this.isDefaultListState();
+			this.catalogHistoryExpansionPending = !loadAll && !load.fullHistoryLoaded && Platform.isMobile && this.isDefaultListState();
 			this.catalogDesktopTotalCount = this.getImmediateCatalogTotalCount(load);
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
@@ -1594,13 +1595,25 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadCatalogMemos(loadAll: boolean): Promise<CatalogMemoLoad> {
-		const page = await this.queryCatalogFeature({
+		let page = await this.queryCatalogFeature({
 			...this.buildCatalogActiveQuery(loadAll),
 			limit: CATALOG_PAGE_SIZE,
 			cursor: null,
 		});
 		if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
+		let fullHistoryLoaded = loadAll;
+		if (!loadAll && Platform.isMobile && this.isDefaultListState() && page.nextCursor === null) {
+			// 近月窗口已读完时直接确认全历史，避免小库反复显示无效的加载入口。
+			page = await this.queryCatalogFeature({
+				...this.buildCatalogActiveQuery(true),
+				limit: CATALOG_PAGE_SIZE,
+				cursor: null,
+			});
+			if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
+			fullHistoryLoaded = true;
+		}
 		return {
+			fullHistoryLoaded,
 			memos: page.items.map(toCatalogMemoView),
 			nextCursor: page.nextCursor,
 			coverage: page.coverage,
@@ -1956,7 +1969,7 @@ export class KnomoView extends ItemView {
 				return;
 			}
 			this.applyCatalogMemoLoad(load);
-			this.catalogHistoryExpansionPending = this.isDefaultListState();
+			this.catalogHistoryExpansionPending = !load.fullHistoryLoaded && this.isDefaultListState();
 			this.memos = load.memos;
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;

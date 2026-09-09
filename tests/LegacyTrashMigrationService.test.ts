@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { hashMemoContent, hashText } from "../src/utils/hash";
 
@@ -56,6 +57,9 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 	assert.equal(writes, 1);
 	const snapshots = (await f.store.query()).items;
 	assert.equal(snapshots.length, 2);
+	assert.deepEqual(snapshots.map((snapshot) => snapshot.snapshotId).sort(),
+		["2026082209000001", "2026082209000002"].map((memoId) =>
+			`legacy_${createHash("sha256").update(JSON.stringify(["legacy-index:Knomo", memoId])).digest("hex")}`).sort());
 	assert.notEqual(snapshots[0]!.snapshotId, snapshots[1]!.snapshotId);
 	assert.equal(snapshots[0]!.rawBlock, snapshots[1]!.rawBlock);
 	assert.equal(f.vault.read(DAILY), "## Memos\n- 10:30 当前 Daily\n");

@@ -114,6 +114,45 @@ test("verify core covers project-specific Obsidian source constraints", async ()
 	}
 });
 
+test("verify 仅豁免两个迁移文件中的单次精确清理语句", async () => {
+	const core = await loadVerifyCore();
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-verify-"));
+	const previousCwd = process.cwd();
+	try {
+		process.chdir(tempDir);
+		for (const [file, statement] of [
+			["src/services/LegacyTrashMigrationService.ts", "await this.app.vault.delete(folder, true);"],
+			["src/settings/MonthlyFolderMigrationService.ts", "await this.plugin.app.vault.delete(sourceFile);"],
+		] as const) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			const scan = () => core.scanFiles([file], core.FORBIDDEN_SOURCE_PATTERN);
+			fs.writeFileSync(file, `\t${statement}\n`);
+			assert.equal(scan(), 0);
+			assert.equal(core.scanFiles([path.resolve(file)], core.FORBIDDEN_SOURCE_PATTERN), 0);
+			for (const source of [
+				statement.replace(/folder|sourceFile/u, "otherFile"),
+				statement.replace("delete(", "trash("),
+				statement.replace(");", ", true);"),
+				`${statement}\n${statement}`,
+				`${statement} globalThis.crypto;`,
+				`${statement}\nawait this.app.vault.delete(otherFile);`,
+				`${statement}\nglobalThis.crypto;`,
+			]) {
+				fs.writeFileSync(file, source);
+				assert.ok(withCapturedConsoleError(() => assert.equal(scan(), 1, source)).length);
+			}
+			const otherFile = `${file}.copy.ts`;
+			fs.writeFileSync(otherFile, statement);
+			withCapturedConsoleError(() => assert.equal(core.scanFiles([otherFile], core.FORBIDDEN_SOURCE_PATTERN), 1));
+			fs.writeFileSync(file, `${statement}   `);
+			withCapturedConsoleError(() => assert.equal(core.scanFiles([file], /[ \t]+$/u), 1));
+		}
+	} finally {
+		process.chdir(previousCwd);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
 test("verify core stops checks after the first failure", async () => {
 	const verifyCore = await loadVerifyCore();
 	const visited: string[] = [];

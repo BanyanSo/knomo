@@ -5,6 +5,7 @@ import type { LegacyIndexSource } from "../types/legacyIndex";
 import type { LegacyMigrationReport } from "../types/legacyMigration";
 import type { TrashSnapshot } from "../types/trash";
 import { PluginDataStore } from "./PluginDataStore";
+import { sha256Text } from "./CanonicalJson";
 import { buildPluginDataWithLegacyMigration, extractLegacyMigration, type LegacyMigrationCompletion } from "../utils/pluginData";
 import { assertVaultPath, getTrashFilePath, TrashSnapshotStore } from "./TrashSnapshotStore";
 
@@ -62,8 +63,7 @@ export class LegacyTrashMigrationService {
 				if (memo.status !== "deleted") continue;
 				if (memo.deletedPayload === null) throw new Error(`Legacy Trash payload missing: ${memo.memoId}`);
 				const payload = memo.deletedPayload;
-				const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([snapshot.sourceId, memo.memoId])));
-				const snapshotId = `legacy_${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+				const snapshotId = `legacy_${await sha256Text(JSON.stringify([snapshot.sourceId, memo.memoId]))}`;
 				const target: TrashSnapshot = { snapshotId, deletedAt: payload.deletedAt, sourcePath: payload.sourcePath,
 					logicalDate: payload.logicalDate, section: payload.section, rawBlock: payload.rawBlock };
 				assertActive();

@@ -26,8 +26,8 @@ import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapSe
 import { LegacyTrashMigrationService } from "./services/LegacyTrashMigrationService";
 import { RecoveryDataRootService } from "./services/RecoveryDataRootService";
 import { IndependentTrashService } from "./services/IndependentTrashService";
-import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
-import { getCatalogDataRootPath } from "./utils/path";
+import { TrashSnapshotStore, getTrashFilePath } from "./services/TrashSnapshotStore";
+import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LegacyMigrationCompletionNoticeService } from "./services/LegacyMigrationCompletionNoticeService";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
@@ -211,33 +211,34 @@ export default class KnomoPlugin extends Plugin {
 			},
 		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
 
-		let trashRoot: string | null = null;
-		let trashService: IndependentTrashService;
-		const getTrashService = () => {
+		const getTrashFolder = () => {
 			if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable.");
-			const root = getCatalogDataRootPath(this.settingsService.getSettings().knomoDataRoot);
-			if (trashRoot !== root) {
-				trashRoot = root;
-				trashService = new IndependentTrashService(this.app, new TrashSnapshotStore(this.app, root + "/trash"), {
-					assertActive: () => {
-						if (lowPriorityWorkQueue.signal.aborted || root !== getCatalogDataRootPath(this.settingsService.getSettings().knomoDataRoot)
-							|| this.settingsService.getLoadStatus() !== "ready") throw new Error("Trash operation cancelled or configuration changed.");
-					},
-					getLogicalDateForPath: async (path) => {
-						const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
-						if (date === null) throw new Error("Daily path does not match current configuration.");
-						return formatDatePart(date);
-					},
-					getOriginalDailyFile: async (path, logicalDate) => {
-						const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
-						const file = this.app.vault.getAbstractFileByPath(path);
-						return date !== null && formatDatePart(date) === logicalDate && file instanceof TFile ? file : null;
-					},
-					getDailyFileForDate: (date) => dailyNoteService.getOrCreateDailyNoteForDateWithConfig(parseLogicalDate(date), getEffectiveDailyConfig()),
-					updateCatalogPartition: (input) => this.catalogIndexCoordinator!.replaceCommittedFile(input),
-					refreshCatalogPaths: (paths) => this.catalogIndexCoordinator!.refreshPaths(paths),
-				}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
-			}
+			return this.settingsService.getSettings().monthlyMemoFolder;
+		};
+		const trashStore = new TrashSnapshotStore(this.app, getTrashFolder, () => {
+			if (lowPriorityWorkQueue.signal.aborted) throw new Error("Trash runtime cancelled.");
+		});
+		const trashService = new IndependentTrashService(this.app, trashStore, {
+			assertActive: () => {
+				if (lowPriorityWorkQueue.signal.aborted
+					|| this.settingsService.getLoadStatus() !== "ready") throw new Error("Trash operation cancelled or configuration changed.");
+			},
+			getLogicalDateForPath: async (path) => {
+				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
+				if (date === null) throw new Error("Daily path does not match current configuration.");
+				return formatDatePart(date);
+			},
+			getOriginalDailyFile: async (path, logicalDate) => {
+				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
+				const file = this.app.vault.getAbstractFileByPath(path);
+				return date !== null && formatDatePart(date) === logicalDate && file instanceof TFile ? file : null;
+			},
+			getDailyFileForDate: (date) => dailyNoteService.getOrCreateDailyNoteForDateWithConfig(parseLogicalDate(date), getEffectiveDailyConfig()),
+			updateCatalogPartition: (input) => this.catalogIndexCoordinator!.replaceCommittedFile(input),
+			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator!.refreshPaths(paths),
+		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
+		const getTrashService = () => {
+			getTrashFolder();
 			return trashService;
 		};
 
@@ -288,7 +289,7 @@ export default class KnomoPlugin extends Plugin {
 				await this.showLegacyMigrationCompletionNotice();
 				settingTab?.refreshAttentionIfVisible();
 			},
-			getDataRoot: () => getCatalogDataRootPath(this.settingsService.getSettings().knomoDataRoot),
+			getTrashFolder,
 			migrateSettings: async () => {
 				await knomoCurrentConfigService.initialize();
 				await this.settingsService.persistLegacyConfiguration();
@@ -300,6 +301,7 @@ export default class KnomoPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
 			knomoCurrentConfigService.start(this, async () => {
+				trashStore.invalidateConfiguration();
 				this.catalogReadService?.invalidateTrash();
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
@@ -379,6 +381,21 @@ export default class KnomoPlugin extends Plugin {
 			name: t("app.openKnomo"),
 			callback: () => {
 				void this.activateView();
+			},
+		});
+		this.addCommand({
+			id: "clear-trash",
+			name: t("trash.clear"),
+			callback: async () => {
+				try {
+					const selectedPath = trashStore.path;
+					if (!await showKnomoConfirmModal(this.app, { title: t("trash.clear"), message: t("confirm.clearTrash"),
+						confirmLabel: t("trash.clear"), danger: true })) return;
+					if (trashStore.path !== selectedPath) throw new Error("Trash configuration changed.");
+					await this.memoCommandService!.clearTrash();
+					new Notice(t("notice.trashCleared"));
+				} catch (error) { new Notice(t("error.clearTrashFailed", { error: String(error) })); }
+				finally { this.catalogReadService?.invalidateTrash(); }
 			},
 		});
 
@@ -494,7 +511,7 @@ export default class KnomoPlugin extends Plugin {
 	private registerTrashEvents(): void {
 		const changed = (path: string, oldPath?: string) => {
 			if (this.settingsService.getLoadStatus() !== "ready") return;
-			const root = getCatalogDataRootPath(this.settingsService.getSettings().knomoDataRoot) + "/trash";
+			const root = getTrashFilePath(this.settingsService.getSettings().monthlyMemoFolder);
 			this.catalogReadService?.handleTrashFileChange(root, path, oldPath);
 		};
 		this.registerEvent(this.app.vault.on("create", (file) => changed(file.path)));

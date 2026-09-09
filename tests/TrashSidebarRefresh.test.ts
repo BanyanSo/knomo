@@ -105,13 +105,13 @@ test("生产 Vault 监听覆盖本地操作及同步事件，并注册生命周�
 	plugin.app = { vault: { on: (event: string, callback: (file: { path: string }, oldPath?: string) => void) => {
 		listeners.set(event, callback); return event;
 	} } };
-	plugin.settingsService = { getLoadStatus: () => "ready", getSettings: () => ({ knomoDataRoot: "Recovery" }) };
+	plugin.settingsService = { getLoadStatus: () => "ready", getSettings: () => ({ monthlyMemoFolder: "Recovery" }) };
 	plugin.catalogReadService = { handleTrashFileChange: (...args: unknown[]) => { calls.push(args); } };
 	plugin.registerEvent = () => { registered++; };
 	plugin.registerTrashEvents();
-	for (const event of ["create", "modify", "delete"]) listeners.get(event)!({ path: "Recovery/_knomo-data/trash/s1.json" });
-	listeners.get("rename")!({ path: "Other/s1.json" }, "Recovery/_knomo-data/trash/s1.json");
+	for (const event of ["create", "modify", "delete"]) listeners.get(event)!({ path: "Recovery/knomo-trash.json" });
+	listeners.get("rename")!({ path: "Other/s1.json" }, "Recovery/knomo-trash.json");
 	assert.equal(registered, 4);
 	assert.equal(calls.length, 4);
-	assert.deepEqual(calls[3], ["Recovery/_knomo-data/trash", "Other/s1.json", "Recovery/_knomo-data/trash/s1.json"]);
+	assert.deepEqual(calls[3], ["Recovery/knomo-trash.json", "Other/s1.json", "Recovery/knomo-trash.json"]);
 });

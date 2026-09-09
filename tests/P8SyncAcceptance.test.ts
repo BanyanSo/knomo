@@ -44,7 +44,7 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 			getDailyFileForDate: async () => vault.app.vault.getAbstractFileByPath(daily) as TFile,
 			updateCatalogPartition: (input: import("../src/services/MarkdownMutationService").MarkdownCatalogCommitInput) => coordinator.replaceCommittedFile(input),
 			refreshCatalogPaths: (paths: readonly string[]) => coordinator.refreshPaths(paths) };
-		const trashStore = new TrashSnapshotStore(vault.app);
+		const trashStore = new TrashSnapshotStore(vault.app, "Knomo");
 		const trash = new IndependentTrashService(vault.app, trashStore, { ...options,
 			getOriginalDailyFile: async (path) => vault.app.vault.getAbstractFileByPath(path) as TFile | null });
 		const mutations = new MarkdownMutationService(vault.app, { ...options, getWriteHeading: () => "## Memos", getMemoTimeFormat: () => "HH:mm:ss" });
@@ -82,7 +82,7 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 		const aMemo = (await da.read.query({ limit: 10, text: "duplicate" })).items[0]!;
 		const deleted = await da.trash.delete(aMemo.observationHandle);
 		const before = b.read(daily);
-		b.deliverFrom(a, a.paths().filter((path) => path.startsWith("_knomo-data/")));
+		b.deliverFrom(a, ["Knomo/knomo-trash.json"]);
 		assert.equal(b.read(daily), before);
 		assert.equal((await db.read.query({ limit: 10 })).items.length, 3);
 		await db.reset();

@@ -72,6 +72,7 @@ export class MemoCommandService {
 		this.delete = this.mutationBarrier.wrap(this.delete.bind(this));
 		this.restore = this.mutationBarrier.wrap(this.restore.bind(this));
 		this.purge = this.mutationBarrier.wrap(this.purge.bind(this));
+		this.clearTrash = this.mutationBarrier.wrap(this.clearTrash.bind(this));
 		this.createReferenceText = this.mutationBarrier.wrap(this.createReferenceText.bind(this));
 		this.recordReview = this.mutationBarrier.wrap(this.recordReview.bind(this));
 		this.readService = new CatalogReadService({
@@ -207,8 +208,11 @@ export class MemoCommandService {
 	}
 
 	async purge(item: TrashMemoItem): Promise<void> {
-		return this.requireTrashService().purge(item.snapshotId);
+		return this.requireTrashService().purge({ snapshotId: item.snapshotId, deletedAt: item.deletedAt,
+			sourcePath: item.sourcePath, logicalDate: item.logicalDate, section: item.section, rawBlock: item.rawBlock });
 	}
+
+	async clearTrash(): Promise<void> { await this.requireTrashService().clear(); }
 
 	private requireTrashService(): IndependentTrashService {
 		if (!this.options.getTrashService) throw new Error("Trash unavailable.");

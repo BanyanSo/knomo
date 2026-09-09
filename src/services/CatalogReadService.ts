@@ -85,6 +85,7 @@ export class CatalogReadService {
 	private randomReunionCandidatePoolLoad: Promise<RandomReunionCandidatePool> | null = null;
 	private trashRevision = 0;
 	private trashSource: IndependentTrashService | null = null;
+	private trashSourcePath: string | null = null;
 	private trashSummary: { count: number; errorCount?: number } | null = null;
 	private trashRead: Promise<TrashQueryResult> | null = null;
 	private readonly trashListeners = new Set<() => void>();
@@ -330,15 +331,14 @@ export class CatalogReadService {
 	}
 
 	invalidateTrash(): void {
+		this.trashSource?.store.invalidate();
 		this.trashRevision += 1;
 		this.trashSummary = null;
 		for (const listener of this.trashListeners) listener();
 	}
 
 	handleTrashFileChange(root: string, path: string, oldPath?: string): void {
-		const affectsTrash = (candidate: string) => candidate === root || root.startsWith(`${candidate}/`)
-			|| candidate.startsWith(`${root}/`) && candidate.endsWith(".json")
-				&& !candidate.slice(root.length + 1).includes("/");
+		const affectsTrash = (candidate: string) => candidate === root || root.startsWith(`${candidate}/`);
 		if (affectsTrash(path) || oldPath !== undefined && affectsTrash(oldPath)) this.invalidateTrash();
 	}
 
@@ -352,8 +352,10 @@ export class CatalogReadService {
 	private getTrashSource(): IndependentTrashService {
 		if (!this.options.getTrashService) throw new Error("Trash unavailable.");
 		const source = this.options.getTrashService();
-		if (source !== this.trashSource) {
+		const path = source.store.path;
+		if (source !== this.trashSource || path !== this.trashSourcePath) {
 			this.trashSource = source;
+			this.trashSourcePath = path;
 			this.trashRevision += 1;
 			this.trashSummary = null;
 		}
@@ -361,6 +363,7 @@ export class CatalogReadService {
 	}
 
 	private summarizeTrash(result: TrashQueryResult): { count: number; errorCount?: number } {
+		if (result.errors.length) throw new Error(result.errors.map((error) => error.message).join("; "));
 		return { count: result.items.length, ...(result.errors.length ? { errorCount: result.errors.length } : {}) };
 	}
 
@@ -390,10 +393,12 @@ export class CatalogReadService {
 
 	async listDeleted(limit: number, cursor: string | null = null): Promise<TrashMemoPage> {
 		const result = await this.readSnapshots();
+		if (result.errors.length) throw new Error(result.errors.map((error) => error.message).join("; "));
 		const snapshots = result.items;
 		const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
 		const selected = snapshots.slice(offset, offset + Math.max(0, limit));
 		return { items: selected.map((item) => ({ snapshotId: item.snapshotId, key: item.snapshotId,
+			rawBlock: item.rawBlock,
 			createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
 			deletedAt: item.deletedAt, logicalDate: item.logicalDate,
 			sourcePath: item.sourcePath, section: item.section, content: readDeletedPayloadContent(item.rawBlock),

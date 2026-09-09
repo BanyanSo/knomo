@@ -39,10 +39,10 @@ test("目录切换丢弃旧读取，旧读取失败也不能覆盖新目录结�
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const old = deferred<TrashQueryResult>();
-	let source = { query: () => old.promise } as IndependentTrashService;
+	let source = mockSource(() => old.promise);
 	const read = new CatalogReadService({ catalog: {} as MemoCatalogService, getTrashService: () => source });
 	const pending = read.getDeletedSummary();
-	source = { query: async () => result(1) } as IndependentTrashService;
+	source = mockSource(async () => result(1));
 	old.reject(new Error("old root unavailable"));
 	assert.deepEqual(await pending, { count: 1 });
 });
@@ -56,7 +56,7 @@ test("损坏或暂不可读快照不冒充完整空回收站，失败可以重�
 		return result(1);
 	});
 	await assert.rejects(read.getDeletedSummary(), /unavailable/u);
-	assert.deepEqual(await read.getDeletedSummary(), { count: 0, errorCount: 1 });
+	await assert.rejects(read.getDeletedSummary(), /read failed/u);
 	assert.deepEqual(await read.getDeletedSummary(), { count: 1 });
 });
 
@@ -67,19 +67,19 @@ test("Trash 新增、修改、删除、迁入迁出及父目录搬迁使缓存�
 	const unsubscribe = read.subscribeTrashChanges(() => notifications++);
 	await read.getDeletedSummary();
 	for (const path of ["Daily/2026-09-09.md", "_knomo-data/trash-other/s1.json", "_knomo-data/trash/nested/s1.json"]) {
-		read.handleTrashFileChange("_knomo-data/trash", path);
+		read.handleTrashFileChange("Knomo/knomo-trash.json", path);
 	}
 	assert.deepEqual(await read.getDeletedSummary(), { count: 1 });
 	assert.equal(notifications, 0);
 	for (const [path, oldPath] of [
-		["_knomo-data/trash/s1.json"],
-		["_knomo-data/trash/s1.json"],
-		["_knomo-data/trash/s1.json"],
-		["Other/s1.json", "_knomo-data/trash/s1.json"],
-		["_knomo-data/trash/s1.json", "Other/s1.json"],
-		["Other", "_knomo-data"],
+		["Knomo/knomo-trash.json"],
+		["Knomo/knomo-trash.json"],
+		["Knomo/knomo-trash.json"],
+		["Other/s1.json", "Knomo/knomo-trash.json"],
+		["Knomo/knomo-trash.json", "Other/s1.json"],
+		["Other", "Knomo"],
 	]) {
-		read.handleTrashFileChange("_knomo-data/trash", path!, oldPath);
+		read.handleTrashFileChange("Knomo/knomo-trash.json", path!, oldPath);
 	}
 	assert.equal(notifications, 6);
 	assert.equal(reads, 1);
@@ -92,9 +92,25 @@ test("Trash 新增、修改、删除、迁入迁出及父目录搬迁使缓存�
 async function fixture(query: () => Promise<TrashQueryResult>) {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
-	const source = { query } as IndependentTrashService;
+	const source = mockSource(query);
 	return new CatalogReadService({ catalog: {} as MemoCatalogService, getTrashService: () => source });
 }
+
+function mockSource(query: () => Promise<TrashQueryResult>): IndependentTrashService {
+	return { query, store: { path: "Knomo/knomo-trash.json", invalidate: () => undefined } } as unknown as IndependentTrashService;
+}
+
+test("同一 Trash service 切换文件路径后不复用旧数量，保留会话实例", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	let path = "Old/knomo-trash.json";
+	const source = { query: async () => result(path.startsWith("Old/") ? 1 : 2),
+		store: { get path() { return path; }, invalidate: () => undefined } } as unknown as IndependentTrashService;
+	const read = new CatalogReadService({ catalog: {} as MemoCatalogService, getTrashService: () => source });
+	assert.equal((await read.getDeletedSummary()).count, 1);
+	path = "New/knomo-trash.json";
+	assert.equal((await read.getDeletedSummary()).count, 2);
+});
 
 function result(count: number): TrashQueryResult {
 	return { items: Array.from({ length: count }, (_, index) => ({ snapshotId: `s${index}`,

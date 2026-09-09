@@ -15,6 +15,10 @@ export interface TrashQueryResult {
 	errors: Array<{ snapshotId: string; message: string }>;
 }
 
+export type TrashStoreState =
+	| { status: "idle" | "loading" | "error"; items: null; count: null; error: string | null }
+	| { status: "ready"; items: TrashSnapshot[]; count: number; error: null };
+
 export interface TrashWriteResult {
 	snapshotId: string;
 	state: "deleted" | "restored" | "restored_cleanup_pending";

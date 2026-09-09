@@ -37,9 +37,9 @@ async function fixture(monthly = "Knomo") {
 	let data: unknown = { settings: { monthlyMemoFolder: monthly, custom: "keep" }, other: 42 };
 	const plugin = { loadData: async () => structuredClone(data), saveData: async (next: unknown) => { data = structuredClone(next); } };
 	const pluginDataStore = new PluginDataStore(plugin as import("obsidian").Plugin);
-	const options = { pluginDataStore, getDataRoot: () => ROOT, migrateSettings: async () => { settingsWrites++; } };
+	const options = { pluginDataStore, getTrashFolder: () => monthly, migrateSettings: async () => { settingsWrites++; } };
 	return { vault, reader, options, make: () => new LegacyTrashMigrationService(vault.app, reader, options),
-		store: new TrashSnapshotStore(vault.app, `${ROOT}/trash`), completion: { read: async () => extractLegacyMigration(await pluginDataStore.read()) }, plugin, data: () => data,
+		store: new TrashSnapshotStore(vault.app, monthly), completion: { read: async () => extractLegacyMigration(await pluginDataStore.read()) }, plugin, data: () => data,
 		sourceReads: () => sourceReads, settingsWrites: () => settingsWrites, index };
 }
 
@@ -92,11 +92,10 @@ test("中断后确定性重试，已有同 ID 副本不覆盖，completion 保�
 		await context.test(failure, async () => {
 			const f = await fixture();
 			let enabled = true;
-			let creates = 0;
-			const create = f.vault.app.vault.create.bind(f.vault.app.vault);
-			f.vault.app.vault.create = async (path, content) => {
-				if (path.includes("/trash/")) { creates++; if (enabled && failure === "second-snapshot" && creates === 2) throw new Error("interrupt"); }
-				return create(path, content);
+			const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+			f.vault.app.vault.process = async (file, update) => {
+				if (file.path.endsWith("knomo-trash.json") && enabled && failure === "second-snapshot") throw new Error("interrupt");
+				return process(file, update);
 			};
 			const save = f.plugin.saveData;
 			f.plugin.saveData = async (data) => { if (enabled && failure === "data-save") throw new Error("save failed"); await save(data); };
@@ -121,8 +120,9 @@ test("同 ID 内容不符拒绝覆盖；缺失 completion 不自动重导入", a
 	f.options.migrateSettings = async () => { throw new Error("interrupt before completion"); };
 	await f.make().run({ explicit: true });
 	const snapshot = (await f.store.query()).items[0]!;
-	const path = `${ROOT}/trash/${snapshot.snapshotId}.json`;
-	const changed = JSON.stringify({ ...snapshot, rawBlock: "- 09:00 different" });
+	const path = f.store.path;
+	const changed = JSON.stringify({ kind: "knomo-trash", items: JSON.parse(f.vault.read(path)!).items.map((item: typeof snapshot) =>
+		item.snapshotId === snapshot.snapshotId ? { ...item, rawBlock: "- 09:00 different" } : item) });
 	f.vault.replace(path, changed);
 	f.options.migrateSettings = async () => undefined;
 	assert.equal((await f.make().run({ explicit: true })).status, "unavailable");

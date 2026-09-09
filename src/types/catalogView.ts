@@ -162,6 +162,7 @@ export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 export type CatalogFeatureFilter = Omit<CatalogFeatureQuery, "limit" | "cursor">;
 
 export interface TrashMemoItem {
+	rawBlock: string;
 	snapshotId: string;
 	key: string;
 	createdAt: string;

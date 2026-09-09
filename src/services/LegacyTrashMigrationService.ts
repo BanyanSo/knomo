@@ -6,12 +6,12 @@ import type { LegacyMigrationReport } from "../types/legacyMigration";
 import type { TrashSnapshot } from "../types/trash";
 import { PluginDataStore } from "./PluginDataStore";
 import { buildPluginDataWithLegacyMigration, extractLegacyMigration, type LegacyMigrationCompletion } from "../utils/pluginData";
-import { assertVaultPath, TrashSnapshotStore } from "./TrashSnapshotStore";
+import { assertVaultPath, getTrashFilePath, TrashSnapshotStore } from "./TrashSnapshotStore";
 
 interface Options {
 	pluginDataStore: PluginDataStore;
-	// 当前 Trash 恢复数据根：用于写入副本、取消旧任务及清理路径保护。
-	getDataRoot: () => string;
+	// 使用实际 Monthly 位置，完成事实与旧源定位不变。
+	getTrashFolder: () => string;
 	// SettingsService 沿用正式插件设置 reader，保存并校验当前值后才允许完成。
 	migrateSettings: () => Promise<void>;
 	signal?: AbortSignal;
@@ -39,9 +39,9 @@ export class LegacyTrashMigrationService {
 	}
 	private async runOnce(explicit: boolean): Promise<LegacyMigrationReport> {
 		try {
-			const root = this.options.getDataRoot();
+			const root = this.options.getTrashFolder();
 			const assertActive = () => {
-				if (this.options.signal?.aborted || root !== this.options.getDataRoot()) throw new Error("Migration cancelled or data root changed.");
+				if (this.options.signal?.aborted || root !== this.options.getTrashFolder()) throw new Error("Migration cancelled or Trash folder changed.");
 			};
 			assertActive();
 			let completion = extractLegacyMigration(await this.options.pluginDataStore.read());
@@ -55,7 +55,7 @@ export class LegacyTrashMigrationService {
 			if (loaded.kind === "attention") return this.report = { ...emptyReport(), status: "attention", diagnostics: loaded.diagnostics };
 			const snapshot = loaded.snapshot;
 			if (snapshot.diagnostics.length) return this.report = { ...emptyReport(), status: "attention", diagnostics: snapshot.diagnostics };
-			const store = new TrashSnapshotStore(this.app, `${root}/trash`);
+			const store = new TrashSnapshotStore(this.app, root, assertActive);
 			for (const memo of snapshot.memos) {
 				assertActive();
 				if (memo.status !== "deleted") continue;
@@ -66,8 +66,7 @@ export class LegacyTrashMigrationService {
 				const target: TrashSnapshot = { snapshotId, deletedAt: payload.deletedAt, sourcePath: payload.sourcePath,
 					logicalDate: payload.logicalDate, section: payload.section, rawBlock: payload.rawBlock };
 				assertActive();
-				if (await this.app.vault.adapter.exists(`${root}/trash/${snapshotId}.json`)) await store.assertUnchanged(target);
-				else await store.save(target);
+				await store.save(target);
 				assertActive();
 				await this.options.yieldControl?.();
 			}
@@ -99,7 +98,7 @@ export class LegacyTrashMigrationService {
 			const path = completion.legacySystemRoot;
 			assertLegacySystemRoot(path);
 			// 恢复副本或配置目录不得与待删除目录重叠。
-			for (const protectedPath of [this.options.getDataRoot(), this.app.vault.configDir]) {
+			for (const protectedPath of [getTrashFilePath(this.options.getTrashFolder()), this.app.vault.configDir]) {
 				if (protectedPath === path || protectedPath.startsWith(`${path}/`) || path.startsWith(`${protectedPath}/`)) throw new Error("Unsafe legacy cleanup overlap.");
 			}
 			const folder = this.app.vault.getAbstractFileByPath(path);

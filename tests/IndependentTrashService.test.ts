@@ -19,7 +19,7 @@ test("生产 runtime 取消后拒绝提交已准备的删除，保留快照且�
 	f.vault.app.vault.create = async (path, content) => {
 		const file = await create(path, content);
 		if (path.endsWith(".json")) {
-			read.handleTrashFileChange("_knomo-data/trash", path);
+			read.handleTrashFileChange("Knomo/knomo-trash.json", path);
 			active = false;
 		}
 		return file;
@@ -54,7 +54,7 @@ test("snapshot-first 删除同文 occurrence，独立 ID、独立 restore/purge�
 	const third = await f.service.delete((await f.observations())[0]!);
 	const fourth = await f.service.delete((await f.observations())[0]!);
 	const beforePurge = f.vault.read(PATH);
-	await f.service.purge(third.snapshotId);
+	await f.service.purge(await f.store.read(third.snapshotId));
 	assert.equal(f.vault.read(PATH), beforePurge);
 	assert.deepEqual((await f.store.query()).items.map((item) => item.snapshotId), [fourth.snapshotId]);
 });
@@ -136,25 +136,29 @@ test("restore blockId 冲突检查覆盖 Memo 外锚点，损坏 snapshot 不被
 	f.vault.replace(PATH, "ordinary ^anchor\n## Memos\n");
 	await assert.rejects(() => f.service.restore(deleted.snapshotId), /block ID/u);
 	assert.ok(await f.store.read(deleted.snapshotId));
-	f.vault.replace(`_knomo-data/trash/${deleted.snapshotId}.json`, "broken");
+	const snapshot = await f.store.read(deleted.snapshotId);
+	f.vault.replace("Knomo/knomo-trash.json", "broken");
 	await assert.rejects(() => f.service.restore(deleted.snapshotId));
-	await assert.rejects(() => f.service.purge(deleted.snapshotId));
+	await assert.rejects(() => f.service.purge(snapshot));
 	assert.equal((await f.store.query()).errors.length, 1);
-	assert.equal(f.vault.read(`_knomo-data/trash/${deleted.snapshotId}.json`), "broken");
+	assert.equal(f.vault.read("Knomo/knomo-trash.json"), "broken");
 });
 
 test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追加或旧 Catalog 覆盖", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete(f.initial[0]!);
-	const remove = f.vault.app.vault.delete.bind(f.vault.app.vault);
-	f.vault.app.vault.delete = async () => { throw new Error("cleanup failed"); };
+	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+	f.vault.app.vault.process = async (file, update) => {
+		if (file.path.endsWith(".json")) throw new Error("cleanup failed");
+		return process(file, update);
+	};
 	const restored = await f.service.restore(deleted.snapshotId);
 	assert.equal(restored.state, "restored_cleanup_pending");
 	assert.match(restored.message!, /正文已恢复|Content restored/u);
 	const calls = f.catalog.length;
 	f.vault.replace(PATH, `later edit\n${f.vault.read(PATH)}`);
 	const content = f.vault.read(PATH);
-	f.vault.app.vault.delete = remove;
+	f.vault.app.vault.process = process;
 	assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
 	assert.equal(f.vault.read(PATH), content);
 	assert.equal(f.catalog.length, calls);
@@ -187,11 +191,15 @@ test("snapshot ID 冲突不覆盖；可读但内容被改的读回也拒绝删�
 	await assert.rejects(() => f.store.save({ ...snapshot, rawBlock: "- 10:30 replacement" }));
 	assert.equal((await f.store.read(deleted.snapshotId)).rawBlock, snapshot.rawBlock);
 	await assert.rejects(() => f.store.read("../escape"));
-	const create = f.vault.app.vault.create.bind(f.vault.app.vault);
-	f.vault.app.vault.create = async (path, content) => {
-		const file = await create(path, content);
-		if (path.endsWith(".json")) f.vault.replace(path, JSON.stringify({ ...JSON.parse(content), rawBlock: "- 10:30 changed snapshot" }));
-		return file;
+	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+	f.vault.app.vault.process = async (file, update) => {
+		const result = await process(file, update);
+		if (file.path.endsWith(".json")) {
+			const collection = JSON.parse(result);
+			collection.items.at(-1).rawBlock = "- 10:30 changed snapshot";
+			f.vault.replace(file.path, JSON.stringify(collection));
+		}
+		return result;
 	};
 	const before = f.vault.read(PATH);
 	await assert.rejects(() => f.service.delete((f.initial[0]!)));
@@ -204,7 +212,10 @@ test("restore I/O 已落盘却返回失败时保留副本，当前会话重试�
 	const deleted = await f.service.delete(f.initial[0]!);
 	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
 	let calls = 0;
-	f.vault.app.vault.process = async (file, update) => { calls++; await process(file, update); throw new Error("uncertain restore"); };
+	f.vault.app.vault.process = async (file, update) => {
+		if (file.path.endsWith(".json")) return process(file, update);
+		calls++; await process(file, update); throw new Error("uncertain restore");
+	};
 	await assert.rejects(() => f.service.restore(deleted.snapshotId), /after/u);
 	assert.equal((await f.store.query()).items.length, 1);
 	assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
@@ -248,7 +259,7 @@ async function fixture(body = BODY) {
 	const read = vault.app.vault.read.bind(vault.app.vault);
 	vault.app.vault.read = async (file) => { if (file.path.endsWith(".json")) events.push("snapshot-read"); return read(file); };
 	const process = vault.app.vault.process.bind(vault.app.vault);
-	vault.app.vault.process = async (file, update) => { events.push("daily-process"); return process(file, update); };
+	vault.app.vault.process = async (file, update) => { events.push(file.path.endsWith(".json") ? "snapshot-process" : "daily-process"); return process(file, update); };
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
 	const observations = async () => (await parser.parse({ sourcePath: PATH, logicalDate: "2026-09-08", bytes: Buffer.from(vault.read(PATH)!) })).observations;
 	const catalog: unknown[] = [];
@@ -261,11 +272,137 @@ async function fixture(body = BODY) {
 		updateCatalogPartition: async (input) => { catalog.push(input); }, refreshCatalogPaths: async (paths) => { refreshes.push(paths); },
 		newSnapshotId: () => `s_${++id}`, now: () => new Date("2026-09-08T12:00:00Z"),
 	};
-	const store = new TrashSnapshotStore(vault.app);
+	let folder = "Knomo";
+	const store = new TrashSnapshotStore(vault.app, () => folder);
 	const service = new IndependentTrashService(vault.app, store, options, new DailyMemoWriteGateway(vault.app, parser));
-	return { vault, store, service, options, observations, initial: await observations(), events, catalog, refreshes };
+	return { vault, store, service, options, observations, initial: await observations(), events, catalog, refreshes,
+		setFolder: (value: string) => { folder = value; } };
 }
 
+
+test("Trash 创建已落盘后抛错仍禁止 Daily 删除，保留快照并明确报告", async () => {
+	const f = await fixture();
+	const create = f.vault.app.vault.create.bind(f.vault.app.vault);
+	f.vault.app.vault.create = async (path, content) => { await create(path, content); throw new Error("write uncertain"); };
+	await assert.rejects(f.service.delete(f.initial[0]!), /write uncertain/u);
+	assert.equal(f.vault.read(PATH), BODY);
+	assert.equal((await f.store.query()).items.length, 1);
+	assert.equal(f.events.includes("daily-process"), false);
+});
+
+test("Purge 验证选择时完整内容，Clear 只清空合法集合，不修改 Daily 或 Monthly", async () => {
+	const f = await fixture();
+	const result = await f.service.delete(f.initial[0]!);
+	const selected = await f.store.read(result.snapshotId);
+	const changed = { ...selected, rawBlock: "- 10:30 external replacement" };
+	f.vault.replace(f.store.path, JSON.stringify({ kind: "knomo-trash", items: [changed] }));
+	await assert.rejects(f.service.purge(selected), /changed/u);
+	assert.deepEqual(await f.store.read(result.snapshotId), changed);
+	await f.vault.app.vault.create("Knomo/Memos-2026-09.md", "monthly projection");
+	const daily = f.vault.read(PATH);
+	await f.service.clear();
+	assert.equal((await f.store.query()).items.length, 0);
+	assert.equal(f.vault.read(PATH), daily);
+	assert.equal(f.vault.read("Knomo/Memos-2026-09.md"), "monthly projection");
+	f.vault.replace(f.store.path, "broken");
+	await assert.rejects(f.service.clear());
+	assert.equal(f.vault.read(f.store.path), "broken");
+});
+
+test("Clear 与正在进行的 Delete 共用 Store 锁，必须等待 Daily 提交后再清空", async () => {
+	const f = await fixture();
+	const gate = promiseGate();
+	const entered = promiseGate();
+	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+	f.vault.app.vault.process = async (file, update) => {
+		if (file.path === PATH) { entered.resolve(); await gate.promise; }
+		return process(file, update);
+	};
+	const deletion = f.service.delete(f.initial[0]!);
+	await entered.promise;
+	let cleared = false;
+	const clear = f.store.clear().then(() => { cleared = true; });
+	await Promise.resolve();
+	assert.equal(cleared, false);
+	assert.equal(JSON.parse(f.vault.read(f.store.path)!).items.length, 1);
+	gate.resolve();
+	assert.equal((await deletion).state, "deleted");
+	await clear;
+	assert.equal((await f.observations()).length, 1);
+});
+
+test("Restore 清理写后抛错和读回失败只重试清理，目录切换与 Clear 不丢失防重状态", async (context) => {
+	for (const failure of ["after-write", "readback", "folder-clear"] as const) {
+		await context.test(failure, async () => {
+			const f = await fixture();
+			const deleted = await f.service.delete(f.initial[0]!);
+			const selected = await f.store.read(deleted.snapshotId);
+			const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+			const read = f.vault.app.vault.read.bind(f.vault.app.vault);
+			let cleanup = false;
+			f.vault.app.vault.process = async (file, update) => {
+				if (file.path.endsWith(".json")) {
+					cleanup = true;
+					if (failure === "folder-clear") throw new Error("cleanup failed");
+					const result = await process(file, update);
+					if (failure === "after-write") throw new Error("cleanup uncertain");
+					return result;
+				}
+				return process(file, update);
+			};
+			f.vault.app.vault.read = async (file) => {
+				if (cleanup && failure === "readback" && file.path.endsWith(".json")) throw new Error("readback failed");
+				return read(file);
+			};
+			assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored_cleanup_pending");
+			f.vault.app.vault.process = process;
+			f.vault.app.vault.read = read;
+			const daily = f.vault.read(PATH);
+			if (failure === "folder-clear") {
+				f.setFolder("New");
+				await f.store.save(selected);
+				await f.service.clear();
+			}
+			assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+			assert.equal(f.vault.read(PATH), daily);
+		});
+	}
+});
+
+test("快照保存期间路径配置切换拒绝删除；原位置保留快照", async () => {
+	const f = await fixture();
+	const create = f.vault.app.vault.create.bind(f.vault.app.vault);
+	f.vault.app.vault.create = async (path, content) => { const result = await create(path, content); f.setFolder("New"); return result; };
+	await assert.rejects(f.service.delete(f.initial[0]!), /configuration changed/u);
+	assert.equal(f.vault.read(PATH), BODY);
+	assert.equal(JSON.parse(f.vault.read("Knomo/knomo-trash.json")!).items.length, 1);
+	assert.equal(f.vault.read("New/knomo-trash.json"), null);
+});
+
+function promiseGate() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((res) => { resolve = res; });
+	return { promise, resolve };
+}
+
+test("Daily gateway 最终回调期间发生配置变化或 Trash 外部事件，拒绝旧删除", async (context) => {
+	for (const change of ["configuration", "trash"] as const) {
+		await context.test(change, async () => {
+			const f = await fixture();
+			const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+			f.vault.app.vault.process = async (file, update) => {
+				if (file.path === PATH) {
+					if (change === "configuration") f.store.invalidateConfiguration();
+					else f.store.invalidate();
+				}
+				return process(file, update);
+			};
+			await assert.rejects(f.service.delete(f.initial[0]!), /Trash.*changed/u);
+			assert.equal(f.vault.read(PATH), BODY);
+			assert.equal((await f.store.query()).items.length, 1);
+		});
+	}
+});
 
 test("独立 Trash 恢复保留完整 raw block 与分钟或秒精度", async (context) => {
  for (const time of ["10:30", "10:30:00", "10:30:27"]) {

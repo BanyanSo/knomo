@@ -21,11 +21,13 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	const calls: unknown[] = [];
 	let pending = true;
 	const trash = {
+		store: { path: "Knomo/knomo-trash.json", invalidate: () => undefined },
 		query: async () => ({ items: ["s1", "s2"].map((snapshotId) => ({ snapshotId, deletedAt: "2026-08-22T12:00:00Z", sourcePath: observation.sourcePath,
 			logicalDate: "2026-08-22", section: "## Memos", rawBlock: "- 12:34 same memo" })), errors: [] }),
 		delete: async (handle: unknown) => { calls.push(handle); return { state: "deleted", catalogUpdatePending: false }; },
 		restore: async (id: string) => { calls.push(id); return { state: pending ? "restored_cleanup_pending" : "restored", observation, catalogUpdatePending: false }; },
-		purge: async (id: string) => { calls.push(id); },
+		purge: async (snapshot: unknown) => { calls.push(snapshot); },
+		clear: async () => { calls.push("clear"); },
 	} as unknown as import("../src/services/IndependentTrashService").IndependentTrashService;
 	const command = new MemoCommandService({} as App, catalog, { ...makeCommandOptions(), getTrashService: () => trash }, {} as MarkdownMutationService);
 	const read = command.getReadService();
@@ -40,7 +42,8 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	pending = false;
 	assert.equal((await command.restore(deleted.items[0]!)).status, "saved");
 	await command.purge(deleted.items[1]!);
-	assert.deepEqual(calls.slice(1), ["s1", "s1", "s2"]);
+	await command.clearTrash();
+	assert.deepEqual(calls.slice(1), ["s1", "s1", (await trash.query()).items[1], "clear"]);
 });
 
 test("普通命令不访问 Identity，并将最初 observation handle 原样交给写入网关", async () => {

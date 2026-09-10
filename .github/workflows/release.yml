@@ -39,6 +39,9 @@ jobs:
       - name: Build plugin
         run: npm run build
 
+      - name: Run all product and tooling tests
+        run: npm run test:all
+
       - name: Prepare release assets
         shell: bash
         run: |

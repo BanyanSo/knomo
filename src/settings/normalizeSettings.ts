@@ -86,6 +86,8 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 	);
 
 	return {
+		monthlyLocale: optionalString(savedSettings.monthlyLocale),
+		currentConfigInitialized: savedSettings.currentConfigInitialized === true,
 		settingsVersion: SETTINGS_VERSION,
 		dailyHeading: stringOrDefault(merged.dailyHeading, DEFAULT_KNOMO_SETTINGS.dailyHeading),
 		dailyInsertPosition,
@@ -131,11 +133,6 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 		managedObsidianExcludeRuleOwned: booleanOrDefault(
 			merged.managedObsidianExcludeRuleOwned,
 			DEFAULT_KNOMO_SETTINGS.managedObsidianExcludeRuleOwned ?? false,
-		),
-		managedSystemFolderExcludeRule: optionalString(merged.managedSystemFolderExcludeRule),
-		managedSystemFolderExcludeRuleOwned: booleanOrDefault(
-			merged.managedSystemFolderExcludeRuleOwned,
-			DEFAULT_KNOMO_SETTINGS.managedSystemFolderExcludeRuleOwned ?? false,
 		),
 		pinnedTags: stringArrayOrDefault(merged.pinnedTags, DEFAULT_KNOMO_SETTINGS.pinnedTags),
 	};

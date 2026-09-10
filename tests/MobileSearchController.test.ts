@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import type { RecordStatsSearchFilter } from "../src/ui/viewFilters";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 type MobileSearchControllerConstructor = typeof import("../src/ui/MobileSearchController").MobileSearchController;
 type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstructor>;
+type MobileSearchControllerOptions = ConstructorParameters<MobileSearchControllerConstructor>[0];
+type LoadRemoteResults = NonNullable<MobileSearchControllerOptions["loadRemoteResults"]>;
 
 test("mobile search controller keys only the visible matched memos", async () => {
 	await ensureObsidianStub();
@@ -21,6 +23,48 @@ test("mobile search controller keys only the visible matched memos", async () =>
 
 	controller.loadMore();
 	assert.equal(controller.getIdsKey(), "memo-1\nmemo-2");
+});
+
+test("mobile search summary uses the complete remote match count before later pages load", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = Array.from({ length: 50 }, (_, index) => makeMemo(`memo-${index + 1}`, "project memo"));
+	const { controller, root } = createControllerHarness(MobileSearchController, memos, () => 90);
+
+	controller.searchQuery = "project";
+	controller.openPage({ focusInput: false });
+
+	assert.equal(root.find(".knomo-list-summary")?.getText(), "Found 90 Memos for “project”");
+});
+
+test("mobile record stats filter refreshes remote results and renders its summary", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const recordStatsFilter: RecordStatsSearchFilter = {
+		type: "range",
+		startDate: "2026-06-01",
+		endDateExclusive: "2026-07-01",
+	};
+	const remoteCalls: unknown[][] = [];
+	const { controller, root } = createControllerHarness(
+		MobileSearchController,
+		[makeMemo("memo-1", "project memo")],
+		() => 13,
+		async (...args) => {
+			remoteCalls.push(args);
+		},
+	);
+
+	controller.searchRecordStatsFilter = recordStatsFilter;
+	controller.openPage({
+		focusInput: false,
+		changeIntent: "view-scope-change",
+		refreshRemoteResults: true,
+	});
+	await Promise.resolve();
+
+	assert.deepEqual(remoteCalls, [["", null, recordStatsFilter, true]]);
+	assert.equal(root.find(".knomo-list-summary")?.getText(), "2026-06-01 to 2026-06-30: 13 Memos");
 });
 
 test("mobile search opens, syncs the page, and closes from Escape", async () => {
@@ -98,7 +142,7 @@ test("mobile search date filters reset visible results and clear record stats fi
 	assert.equal(weekButton?.getAttr("aria-pressed"), "true");
 });
 
-function makeMemo(id: string, content: string): MemoRecord {
+function makeMemo(id: string, content: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -106,32 +150,13 @@ function makeMemo(id: string, content: string): MemoRecord {
 		contentSnapshot: content,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Journal/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: contentBlock(content),
-			lastKnownHash: id,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: contentBlock(content),
-			lastKnownHash: id,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }
@@ -142,7 +167,9 @@ function contentBlock(content: string): string {
 
 function createControllerHarness(
 	Controller: MobileSearchControllerConstructor,
-	memos: MemoRecord[],
+	memos: MemoViewItem[],
+	getMatchedTotalCount?: () => number | null,
+	loadRemoteResults?: LoadRemoteResults,
 ): {
 	controller: MobileSearchControllerInstance;
 	root: TestElement;
@@ -171,6 +198,8 @@ function createControllerHarness(
 		getRootEl: () => root.asHtml(),
 		isMobileLayout: () => true,
 		getMemos: () => memos,
+		getMatchedTotalCount,
+		loadRemoteResults,
 		registerDomEvent: (target, type, listener) => {
 			events.push({
 				target: target as unknown as TestElement,

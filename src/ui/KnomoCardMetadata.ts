@@ -1,9 +1,10 @@
-import type { MemoRecord } from "../types/memo";
-import { withMemoIdAlias } from "../utils/references";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import { getPreferredMemoBlockReferenceText, stripTrailingWikiLink } from "../utils/references";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 
 export interface MemoCardShellOptions {
 	memoId: string;
+	renderKey?: string;
 	includeActions: boolean;
 	activeMenuMemoId: string | null;
 }
@@ -15,7 +16,6 @@ export interface MemoCardShell {
 
 export type MemoSourceReferenceMeta =
 	| { type: "none" }
-	| { type: "plain"; sourceMemoId: string }
 	| { type: "markdown"; text: string; sourcePath: string };
 
 export interface TrashActionState {
@@ -52,6 +52,7 @@ export function isCjkMemoContent(content: string): boolean {
 export function getMemoCardShell(options: MemoCardShellOptions): MemoCardShell {
 	const attrs: Record<string, string> = {
 		"data-memo-id": options.memoId,
+		"data-memo-render-key": options.renderKey ?? options.memoId,
 	};
 	const className = options.includeActions ? "knomo-card has-card-actions" : "knomo-card";
 	return {
@@ -70,65 +71,84 @@ export function getMemoActionClass(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-action is-danger" : "knomo-card-action";
 }
 
-export function getMemoCardActions(): MemoCardActionMeta[] {
-	return MEMO_CARD_ACTIONS.map((action) => ({
+export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
+	const actions = MEMO_CARD_ACTIONS.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
 		action,
 		className: getMemoActionClass(action),
 	}));
+	return actions;
+}
+
+export type MemoDeleteMode = "recoverable" | "unavailable";
+
+export function isMemoCardMenuReady(memo: MemoRecord): boolean {
+	const capabilities = memo.catalog?.capabilities;
+	if (capabilities === undefined) return true;
+	return capabilities.markdown.view
+		&& capabilities.markdown.copy
+		&& capabilities.markdown.openDaily;
+}
+
+function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction): boolean {
+	const capabilities = memo?.catalog?.capabilities;
+	if (capabilities === undefined) return true;
+	if (action === "open-daily") return capabilities.markdown.openDaily;
+	if (action === "copy-text") return capabilities.markdown.copy;
+	if (action === "edit") return capabilities.markdown.edit;
+	if (action === "delete") return memo === undefined || getMemoDeleteMode(memo) !== "unavailable";
+	if (action === "reference" || action === "copy-link") return capabilities.markdown.explicitBlockReference;
+	return false;
 }
 
 export function getTrashActionClass(action: TrashAction): string {
 	return action === "purge" ? "knomo-inline-button is-danger" : "knomo-inline-button";
 }
 
-export function getTrashActionState(action: TrashAction, busyAction: TrashAction | null): TrashActionState {
+export function getTrashActionState(
+	action: TrashAction,
+	busyAction: TrashAction | null,
+	purgeAllowed = true,
+): TrashActionState {
 	return {
-		disabled: busyAction !== null,
+		disabled: busyAction !== null || (action === "purge" && !purgeAllowed),
 		busy: busyAction === action,
 	};
 }
 
-export function getTrashCardActions(busyAction: TrashAction | null): TrashCardActionMeta[] {
+export function getTrashCardActions(busyAction: TrashAction | null, purgeAllowed: boolean): TrashCardActionMeta[] {
 	return TRASH_CARD_ACTIONS.map((action) => ({
 		action,
 		className: getTrashActionClass(action),
-		state: getTrashActionState(action, busyAction),
+		state: getTrashActionState(action, busyAction, purgeAllowed),
 	}));
 }
 
-export function getMemoSourceReferenceMeta(memo: MemoRecord, deletedMemoIds: ReadonlySet<string>): MemoSourceReferenceMeta {
-	if (memo.sourceMemoId === null || deletedMemoIds.has(memo.sourceMemoId)) {
-		return { type: "none" };
-	}
+export function getMemoSourceReferenceMeta(memo: MemoRecord): MemoSourceReferenceMeta {
 	const sourceReferenceText = getSourceReferenceText(memo);
-	if (sourceReferenceText === null) {
-		return { type: "plain", sourceMemoId: memo.sourceMemoId };
+	if (sourceReferenceText !== null) {
+		return {
+			type: "markdown",
+			text: sourceReferenceText,
+			sourcePath: memo.dailyRef.path,
+		};
 	}
-	return {
-		type: "markdown",
-		text: sourceReferenceText,
-		sourcePath: memo.dailyRef.path,
-	};
-}
-
-export function getMemoWarningText(memo: MemoRecord): string | null {
-	if (memo.syncStatus !== "synced") {
-		return memo.issue?.message ?? memo.syncStatus;
-	}
-	return memo.issue?.message ?? null;
-}
-
-export function getTrashMemoWarningText(memo: MemoRecord): string | null {
-	return memo.issue?.message ?? null;
+	return { type: "none" };
 }
 
 function getSourceReferenceText(memo: MemoRecord): string | null {
-	const sourceMemoId = memo.sourceMemoId ?? memo.references[0]?.memoId ?? null;
-	const referenceText = memo.references[0]?.referenceText ?? null;
-	if (sourceMemoId === null || referenceText === null) {
-		return null;
-	}
-	return withMemoIdAlias(referenceText, sourceMemoId);
+	const referenceText = getPreferredMemoBlockReferenceText(memo.contentSnapshot);
+	return referenceText;
+}
+
+export function getMemoDisplayContent(memo: MemoRecord): string {
+	return getSourceReferenceText(memo) === null
+		? memo.contentSnapshot
+		: stripTrailingWikiLink(memo.contentSnapshot);
+}
+
+export function getMemoDeleteMode(memo: MemoRecord): MemoDeleteMode {
+	const capabilities = memo.catalog?.capabilities;
+	return capabilities === undefined || capabilities.markdown.remove ? "recoverable" : "unavailable";
 }
 
 function getVisibleMemoText(content: string): string {

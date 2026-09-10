@@ -51,7 +51,6 @@ test("counts link labels while ignoring images, URLs, code, and block IDs", () =
 test("ignores the internal trailing block reference for referenced memos", () => {
 	const stats = getMemoContentStats({
 		contentSnapshot: "正文 text [[Daily/2026-06-19#^abc123|memo-1]]",
-		references: [{ memoId: "memo-1", referenceText: "[[Daily/2026-06-19#^abc123]]" }],
 	});
 
 	assert.deepEqual(stats, {
@@ -77,6 +76,6 @@ test("reuses cached statistics until countable memo content changes", () => {
 	assert.equal(updated.wordCount, 3);
 });
 
-function makeSource(contentSnapshot: string): { contentSnapshot: string; references: [] } {
-	return { contentSnapshot, references: [] };
+function makeSource(contentSnapshot: string): { contentSnapshot: string } {
+	return { contentSnapshot, };
 }

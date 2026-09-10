@@ -28,6 +28,9 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: isProduction,
+	define: {
+		__KNOMO_DIAGNOSTIC_BUILD__: JSON.stringify(!isProduction),
+	},
 });
 
 if (isProduction) {

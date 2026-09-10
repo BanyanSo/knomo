@@ -2,16 +2,8 @@ import { createDailyNote } from "obsidian-daily-notes-interface";
 import { moment as obsidianMoment, normalizePath, TFile } from "obsidian";
 import type { App } from "obsidian";
 
-import type { DailyRef } from "../types/memo";
-import type { PreparedDailyMemoWrite } from "../types/pending";
-import { PendingMemoWriteConflictError } from "../types/pending";
-import type { KnomoSettings } from "../types/settings";
 import { KnomoError } from "../types/serviceError";
-import { findLineNumber } from "../utils/markdown";
-import { hashText } from "../utils/hash";
-import { buildDailyRef } from "../utils/memoRefs";
 import { ensureTextFile } from "../utils/vault";
-import { MarkdownBlockService } from "./MarkdownBlockService";
 
 // 职责：检查日记核心插件状态，并在后续定位或创建当天日记文件。
 export interface DailyNotesStatus {
@@ -19,16 +11,6 @@ export interface DailyNotesStatus {
 	folder: string | null;
 	format: string | null;
 	message: string;
-}
-
-export interface DailyNoteWriteResult {
-	file: TFile;
-	ref: DailyRef;
-	content: string;
-}
-
-export interface DailyNotePreparedWriteResult extends DailyNoteWriteResult {
-	changed: boolean;
 }
 
 export interface DailyNotesConfig {
@@ -50,7 +32,6 @@ type MomentFactory = (input?: Date) => MomentFormatter;
 export class DailyNoteService {
 	constructor(
 		private readonly app: App,
-		private readonly markdownBlockService = new MarkdownBlockService(),
 		private readonly dailyNotesConfigProvider: DailyNotesConfigProvider | null = null,
 	) {}
 
@@ -93,6 +74,12 @@ export class DailyNoteService {
 		return ensureTextFile(this.app, path);
 	}
 
+	async getOrCreateDailyNoteForDateWithConfig(date: Date, config: DailyNotesConfig): Promise<TFile> {
+		const path = this.getDailyNotePathForDateWithConfig(date, config);
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		return existing instanceof TFile ? existing : ensureTextFile(this.app, path);
+	}
+
 	getDailyNotePathForDate(date: Date, status = this.getStatus()): string {
 		if (!status.enabled || status.format === null) {
 			throw new KnomoError("daily_notes_unavailable");
@@ -103,6 +90,14 @@ export class DailyNoteService {
 			return normalizePath(fileName);
 		}
 		return normalizePath(`${status.folder}/${fileName}`);
+	}
+
+	getDailyNotePathForDateWithConfig(date: Date, config: DailyNotesConfig): string {
+		const momentFactory = obsidianMoment as unknown as MomentFactory;
+		const fileName = ensureMarkdownExtension(momentFactory(date).format(config.format));
+		return config.folder === null || config.folder.trim().length === 0
+			? normalizePath(fileName)
+			: normalizePath(`${config.folder}/${fileName}`);
 	}
 
 	async getDailyNotesConfig(): Promise<DailyNotesConfig> {
@@ -118,88 +113,6 @@ export class DailyNoteService {
 
 	getTodayDailyNotePath(status = this.getStatus()): string {
 		return this.getDailyNotePathForDate(new Date(), status);
-	}
-
-	async prepareMemoBlockInsert(
-		settings: KnomoSettings,
-		createdAt: Date,
-		block: string,
-		trailer?: string,
-	): Promise<PreparedDailyMemoWrite> {
-		const file = await this.getOrCreateDailyNoteForDate(createdAt);
-		const beforeContent = await this.app.vault.cachedRead(file);
-		const afterContent = this.buildInsertedMemoContent(beforeContent, settings, block, trailer);
-		return {
-			path: file.path,
-			beforeHash: hashText(beforeContent),
-			afterHash: hashText(afterContent),
-			blockOccurrencesBefore: this.countMemoBlockOccurrences(beforeContent, block),
-			ref: buildDailyRef(
-				file.path,
-				settings.dailyHeading,
-				block,
-				findLineNumber(afterContent, block, settings.dailyInsertPosition === "bottom"),
-			),
-		};
-	}
-
-	async commitPreparedMemoBlock(
-		settings: KnomoSettings,
-		block: string,
-		prepared: PreparedDailyMemoWrite,
-		trailer?: string,
-	): Promise<DailyNotePreparedWriteResult> {
-		const file = this.app.vault.getAbstractFileByPath(prepared.path);
-		if (!(file instanceof TFile)) {
-			throw new PendingMemoWriteConflictError(`Prepared daily note does not exist: ${prepared.path}`);
-		}
-		let changed = false;
-		const content = await this.app.vault.process(file, (currentContent) => {
-			const currentHash = hashText(currentContent);
-			if (currentHash === prepared.afterHash) {
-				return currentContent;
-			}
-			if (currentHash !== prepared.beforeHash) {
-				const occurrenceCount = this.countMemoBlockOccurrences(currentContent, block);
-				if (occurrenceCount === prepared.blockOccurrencesBefore + 1) {
-					return currentContent;
-				}
-				throw new PendingMemoWriteConflictError(`Daily note changed during pending memo create: ${prepared.path}`);
-			}
-			const nextContent = this.buildInsertedMemoContent(currentContent, settings, block, trailer);
-			if (hashText(nextContent) !== prepared.afterHash) {
-				throw new PendingMemoWriteConflictError(`Prepared daily note content no longer matches: ${prepared.path}`);
-			}
-			changed = true;
-			return nextContent;
-		});
-		return {
-			file,
-			content,
-			ref: prepared.ref,
-			changed,
-		};
-	}
-
-	private buildInsertedMemoContent(
-		currentContent: string,
-		settings: KnomoSettings,
-		block: string,
-		trailer?: string,
-	): string {
-		const combinedBlock = trailer ? block + "\n" + trailer : block;
-		return this.markdownBlockService.insertMemoBlock(currentContent, {
-			heading: settings.dailyHeading,
-			block: combinedBlock,
-			position: settings.dailyInsertPosition,
-			createHeadingIfMissing: true,
-		});
-	}
-
-	private countMemoBlockOccurrences(content: string, block: string): number {
-		return this.markdownBlockService.parseMemoBlocks(content)
-			.filter((candidate) => candidate.rawBlock === block)
-			.length;
 	}
 
 }

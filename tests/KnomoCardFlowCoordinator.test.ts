@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { KnomoCardFlowCoordinator } from "../src/ui/KnomoCardFlowCoordinator";
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import type { CardFlowSentinelRenderOptions } from "../src/ui/KnomoCardFlowSentinel";
 
 test("tracks pending scroll restore by generation and consumes it once", () => {
@@ -90,8 +90,10 @@ test("renders mobile card batches in bounded continuations", () => {
 	assert.equal(coordinator.hasMoreItems, false);
 });
 
-test("scroll bottom requests next batch before hydration", () => {
-	const coordinator = new KnomoCardFlowCoordinator({ sentinel: new FakeSentinel() });
+test("scroll bottom keeps next-batch and hydration fallback when observer is active", () => {
+	const sentinel = new FakeSentinel();
+	sentinel.isObserving = true;
+	const coordinator = new KnomoCardFlowCoordinator({ sentinel });
 	const generation = advanceGeneration(coordinator);
 	coordinator.syncBatch(makeMemos(3), "memo", 1);
 	const nextBatchGenerations: number[] = [];
@@ -149,11 +151,11 @@ function advanceGeneration(coordinator: KnomoCardFlowCoordinator): number {
 	return coordinator.generation;
 }
 
-function makeMemos(count: number, prefix = "memo"): MemoRecord[] {
+function makeMemos(count: number, prefix = "memo"): MemoViewItem[] {
 	return Array.from({ length: count }, (_, index) => makeMemo(`${prefix}-${index}`));
 }
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -161,32 +163,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 	};
 }

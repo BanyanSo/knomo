@@ -27,10 +27,8 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	syncDebounceMs: DEFAULT_SYNC_DEBOUNCE_MS,
 	desktopSidebarWidth: DEFAULT_DESKTOP_SIDEBAR_WIDTH,
 	desktopSidebarCollapsed: false,
-	excludeMonthlyMemosFromObsidian: false,
+	excludeMonthlyMemosFromObsidian: true,
 	managedObsidianExcludeRule: undefined,
 	managedObsidianExcludeRuleOwned: false,
-	managedSystemFolderExcludeRule: undefined,
-	managedSystemFolderExcludeRuleOwned: false,
 	pinnedTags: [],
 };

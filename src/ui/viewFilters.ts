@@ -1,12 +1,13 @@
 import { t } from "../i18n";
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import type { CatalogRecordStatsFilter } from "../types/catalogView";
+import { parseMemoCalendarDate } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
-import { getMemoContentStats } from "../utils/memoContentStats";
 import { hasMemoReference } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
-import { normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
-import { formatMemoDisplayTime } from "./MemoDisplayFormatters";
+import { normalizeTagKey } from "../utils/tags";
+import { formatMemoDisplayTime, formatObservationDisplayTime } from "./MemoDisplayFormatters";
 import type { SidebarNav } from "./viewNavigation";
 
 export type ScopeFilter =
@@ -24,18 +25,7 @@ export type ScopeFilter =
 export type SearchDateFilter = "week" | "month" | "last-7" | "last-30" | "last-week" | "last-month";
 export type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "anniversary";
 
-export type RecordStatsSearchFilter =
-	| { type: "day"; date: string }
-	| { type: "month"; month: string }
-	| { type: "range"; startDate: string; endDateExclusive: string }
-	| { type: "with-tag"; startDate: string; endDateExclusive: string }
-	| { type: "no-tag"; startDate: string; endDateExclusive: string }
-	| { type: "with-image"; startDate: string; endDateExclusive: string }
-	| { type: "tag"; startDate: string; endDateExclusive: string; tagKey: string; tagLabel: string }
-	| { type: "references"; startDate: string; endDateExclusive: string }
-	| { type: "max-daily-notes"; dates: string[] }
-	| { type: "max-daily-words"; dates: string[] }
-	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };
+export type RecordStatsSearchFilter = CatalogRecordStatsFilter;
 
 export type RegularFilterCondition =
 	| { type: "tag"; text: string }
@@ -62,49 +52,6 @@ export interface DailyDateConfig {
 	enabled: boolean;
 	folder: string | null;
 	format: string | null;
-}
-
-export interface MemoStats {
-	memoCount: number;
-	tagCount: number;
-	imageCount: number;
-	wordCount: number;
-}
-
-export function getMemoStats(memos: MemoRecord[]): MemoStats {
-	const tagKeys = new Set<string>();
-	for (const memo of memos) {
-		for (const tag of memo.tags) {
-			const tagKey = normalizeTagKey(tag);
-			if (tagKey.length > 0) {
-				tagKeys.add(tagKey);
-			}
-		}
-	}
-	return {
-		memoCount: memos.length,
-		tagCount: tagKeys.size,
-		imageCount: memos.reduce((count, memo) => count + getMemoImages(memo).length, 0),
-		wordCount: memos.reduce((count, memo) => count + getMemoContentStats(memo).wordCount, 0),
-	};
-}
-
-export function collectTags(memos: MemoRecord[], displayTags: Map<string, string>): TagSummary[] {
-	const counts = new Map<string, number>();
-	const fallbackNames = new Map<string, string>();
-	for (const memo of memos) {
-		for (const tag of memo.tags) {
-			const key = normalizeTagKey(tag);
-			if (key.length === 0) {
-				continue;
-			}
-			counts.set(key, (counts.get(key) ?? 0) + 1);
-			if (!fallbackNames.has(key)) {
-				fallbackNames.set(key, normalizeTagDisplay(tag));
-			}
-		}
-	}
-	return collectTagsFromCounts(counts, displayTags, fallbackNames);
 }
 
 export type MemoDataRequirement =
@@ -410,7 +357,7 @@ export function matchesRecordStatsSearchFilter(memo: MemoRecord, filter: RecordS
 	if (memo.status !== "active") {
 		return false;
 	}
-	const date = parseLocalDateText(memo.createdAt);
+	const date = parseLocalDateText(getMemoCalendarValue(memo));
 	if (date === null) {
 		return false;
 	}
@@ -436,7 +383,7 @@ export function matchesRecordStatsSearchFilter(memo: MemoRecord, filter: RecordS
 		return getMemoImages(memo).length > 0;
 	}
 	if (filter.type === "tag") {
-		return memo.tags.some((tag) => normalizeTagKey(tag) === filter.tagKey);
+		return memo.tags.some((tag) => tagMatchesActiveTagKey(tag, filter.tagKey));
 	}
 	if (filter.type === "references") {
 		return hasMemoReference(memo);
@@ -455,8 +402,8 @@ export function isSummaryScopeFilter(filter: ScopeFilter): filter is SummaryScop
 export function buildMemoSearchText(memo: MemoRecord): string {
 	return [
 		memo.contentSnapshot,
-		formatMemoDisplayTime(memo.createdAt),
-		memo.createdAt,
+		memo.catalog === undefined ? formatMemoDisplayTime(memo.createdAt) : formatObservationDisplayTime(memo.catalog.observation),
+		getMemoCalendarValue(memo),
 		memo.tags.join(" "),
 		memo.links.map((link) => link.target).join(" "),
 		getMemoImages(memo).map((image) => image.path).join(" "),
@@ -464,7 +411,7 @@ export function buildMemoSearchText(memo: MemoRecord): string {
 }
 
 export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfig): Date | null {
-	const createdAtDate = parseLocalDateText(memo.createdAt);
+	const createdAtDate = parseLocalDateText(getMemoCalendarValue(memo));
 	if (createdAtDate !== null) {
 		return createdAtDate;
 	}
@@ -474,49 +421,24 @@ export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfi
 			format: dailyStatus.format,
 		});
 		if (dailyDate !== null) {
-			return applyMemoBlockTime(dailyDate, memo.dailyRef.lastKnownBlock);
+			return dailyDate;
 		}
 	}
-	return parseLocalDateText(memo.monthlyRef.dateHeading) ?? parseLocalDateText(memo.monthlyRef.path);
+	return null;
+}
+
+function getMemoCalendarValue(memo: MemoRecord): string {
+	const observation = memo.catalog?.observation;
+	return observation === undefined ? memo.createdAt : `${observation.logicalDate}T${observation.time}`;
 }
 
 export function parseLocalDateText(value: string): Date | null {
-	const match = value.match(/(?:^|[^\d])(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
-	if (match === null) {
-		return null;
-	}
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	const hours = match[4] === undefined ? 0 : Number(match[4]);
-	const minutes = match[5] === undefined ? 0 : Number(match[5]);
-	const seconds = match[6] === undefined ? 0 : Number(match[6]);
-	const date = new Date(year, month - 1, day, hours, minutes, seconds, 0);
-	if (
-		date.getFullYear() !== year ||
-		date.getMonth() !== month - 1 ||
-		date.getDate() !== day ||
-		date.getHours() !== hours ||
-		date.getMinutes() !== minutes ||
-		date.getSeconds() !== seconds
-	) {
-		return null;
-	}
-	return date;
-}
-
-export function applyMemoBlockTime(date: Date, block: string): Date {
-	const timeMatch = block.match(/(?:^|\n)- (\d{2}):(\d{2})(?::(\d{2}))?\b/);
-	if (timeMatch === null) {
-		return date;
-	}
-	const nextDate = new Date(date);
-	nextDate.setHours(Number(timeMatch[1]), Number(timeMatch[2]), timeMatch[3] === undefined ? 0 : Number(timeMatch[3]), 0);
-	return nextDate;
+	const match = value.match(/(?:^|[^\d])(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?)/u);
+	return match === null ? null : parseMemoCalendarDate(match[1]);
 }
 
 export function matchesScope(memo: MemoRecord, filter: ScopeFilter, todayDate = new Date()): boolean {
-	const date = new Date(memo.createdAt);
+	const date = new Date(getMemoCalendarValue(memo));
 	const today = startOfDay(todayDate);
 	if (filter === "all") return true;
 	if (filter === "no-tag") return memo.tags.length === 0;

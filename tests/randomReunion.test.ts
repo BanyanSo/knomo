@@ -1,11 +1,11 @@
 import test from "node:test";
+import { sampleRandomReunionCandidates } from "../src/utils/randomReunion";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import {
 	calculateRandomReunionWeight,
 	filterRandomReunionCandidates,
-	markMemoReviewed,
 	selectDiverseRandomReunionMemos,
 	weightedSampleWithoutReplacement,
 } from "../src/utils/randomReunion";
@@ -81,16 +81,22 @@ test("applies diversity and then degrades to fill results", () => {
 	assert.deepEqual(selectDiverseRandomReunionMemos(onlySameSource, 3).map((memo) => memo.id), ["a", "b", "c"]);
 });
 
-test("updates memo review state without touching markdown", () => {
-	const nextState = markMemoReviewed({
-		a: { memoId: "a", lastReviewedAt: "2026-05-20", reviewCount: 2 },
-	}, "a", new Date(2026, 4, 21));
+test("P8 全量加权排列只读取一次权重，并对零随机值保持独立无重复候选", () => {
+	const values = Array.from({ length: 10000 }, (_, index) => index);
+	let reads = 0;
+	const selected = weightedSampleWithoutReplacement(values, () => { reads++; return 1; }, values.length, () => 0);
+	assert.deepEqual(selected, values);
+	assert.equal(reads, values.length);
+});
 
-	assert.deepEqual(nextState.a, {
-		memoId: "a",
-		lastReviewedAt: "2026-05-21",
-		reviewCount: 3,
+test("P8 分片抽样在长候选集内让出执行，保留权重和多样性不足时的补齐", async () => {
+	const candidates = Array.from({ length: 10000 }, (_, index) => makeMemo(String(index)));
+	let yields = 0;
+	const selected = await sampleRandomReunionCandidates(candidates, {}, 10, { random: () => 0 }, {
+		maxOperationsPerSlice: 256, yieldControl: async () => { yields++; },
 	});
+	assert.deepEqual(selected.map((memo) => memo.id), candidates.slice(0, 10).map((memo) => memo.id));
+	assert.ok(yields > 10);
 });
 
 function makeMemo(
@@ -100,9 +106,9 @@ function makeMemo(
 		contentSnapshot?: string;
 		tags?: string[];
 		sourcePath?: string;
-		status?: MemoRecord["status"];
+		status?: MemoViewItem["status"];
 	} = {},
-): MemoRecord {
+): MemoViewItem {
 	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
 	const sourcePath = overrides.sourcePath ?? `Daily/${createdAt.slice(0, 10)}.md`;
 	return {
@@ -112,32 +118,13 @@ function makeMemo(
 		contentSnapshot: overrides.contentSnapshot ?? "这是一条足够长的 memo",
 		contentHash: `hash-${id}`,
 		status: overrides.status ?? "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 2,
 		tags: overrides.tags ?? [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: sourcePath,
 			heading: "## Knomo",
-			lastKnownBlock: "- 09:00:00 这是一条足够长的 memo",
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 3,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-05.md",
-			dateHeading: `## ${createdAt.slice(0, 10)}`,
-			lastKnownBlock: "- 09:00:00 这是一条足够长的 memo",
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 3,
-			lastSyncedAt: null,
 		},
 	};
 }

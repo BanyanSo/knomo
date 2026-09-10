@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import {
 	buildShuffleDayStats,
 	selectShuffleDay,
@@ -96,6 +96,27 @@ test("sorts shuffle day memos by valid created time and builds visible stats", (
 	assert.equal(stats.lastMemoTime, "11:00");
 });
 
+test("groups zoned memos in the current device calendar day", () => {
+	const originalTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const memo = makeMemo("utc", "2026-06-24T22:30:00.000Z");
+		const result = selectShuffleDay([memo], {
+			today: new Date(2026, 6, 2),
+			now: new Date(2026, 6, 2, 10),
+			random: makeRandom([0, 0]),
+		});
+
+		assert.equal(result.status, "ready");
+		if (result.status !== "ready") return;
+		assert.equal(result.selectedDate, "2026-06-25");
+		assert.equal(result.stats.firstMemoTime, "06:30");
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
+});
+
 test("weightedPick ignores invalid weights", () => {
 	assert.equal(weightedPick([
 		{ item: "ignored", weight: Number.NaN },
@@ -107,8 +128,8 @@ test("weightedPick ignores invalid weights", () => {
 function makeMemo(
 	id: string,
 	createdAt: string,
-	overrides: Partial<Pick<MemoRecord, "contentSnapshot" | "tags" | "links" | "images" | "status">> = {},
-): MemoRecord {
+	overrides: Partial<Pick<MemoViewItem, "contentSnapshot" | "tags" | "links" | "images" | "status">> = {},
+): MemoViewItem {
 	return {
 		id,
 		createdAt,
@@ -116,32 +137,13 @@ function makeMemo(
 		contentSnapshot: overrides.contentSnapshot ?? "memo content",
 		contentHash: `hash-${id}`,
 		status: overrides.status ?? "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: overrides.tags ?? [],
 		links: overrides.links ?? [],
 		images: overrides.images ?? [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
-			lastKnownBlock: id,
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/Memos-2026-05.md",
-			dateHeading: createdAt.slice(0, 10),
-			lastKnownBlock: id,
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

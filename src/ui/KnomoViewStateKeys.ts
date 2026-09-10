@@ -1,7 +1,7 @@
 import type { RecordStatsSnapshot, RecordStatsView } from "../services/RecordStatsService";
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatDatePart } from "../utils/date";
-import { getMemoListStateKey } from "./MemoRenderRevision";
+import { getMemoListStateKey, getMemoRenderKey } from "./MemoRenderRevision";
 import type { CardFlowHeader, CardFlowPresentation } from "./KnomoCardFlowPresenter";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 import { getRecordStatsSearchFilterKey } from "./viewFilters";
@@ -78,6 +78,7 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 			"record-stats",
 			renderState,
 			options.recordStatsSnapshot.error ?? "",
+			options.recordStatsSnapshot.updating ? "updating" : "settled",
 			options.recordStatsView,
 			formatDatePart(options.recordStatsSelectedDate),
 			formatDatePart(options.today),
@@ -85,6 +86,14 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 	}
 	if (options.presentation.type === "empty") {
 		return getStateKey(["empty", options.presentation.title, options.presentation.description]);
+	}
+	if (options.presentation.type === "onboarding") {
+		return getStateKey([
+			"onboarding",
+			options.presentation.title,
+			options.presentation.description,
+			...options.presentation.actions.flatMap((action) => [action.label, action.action]),
+		]);
 	}
 	return getStateKey([
 		"items",
@@ -100,6 +109,9 @@ export function getVisibleCardFlowStateKey(options: VisibleCardFlowStateKeyOptio
 	}
 	if (options.presentation.type === "empty") {
 		return getStateKey(["empty", options.presentation.title, options.presentation.description]);
+	}
+	if (options.presentation.type === "onboarding") {
+		return getCardFlowStateKey(options);
 	}
 	return `${options.presentation.mode}:${getVisibleCardFlowMemoStateKey(
 		options.presentation.memos,
@@ -139,7 +151,7 @@ export function getMobileSearchIdsKey(open: boolean, visibleMemos: readonly Memo
 	if (!open) {
 		return "closed";
 	}
-	return visibleMemos.map((memo) => memo.id).join("\n");
+	return visibleMemos.map(getMemoRenderKey).join("\n");
 }
 
 function getChangeIntent(previousViewStateKey: string, currentViewStateKey: string): CardFlowChangeIntent {
@@ -151,7 +163,7 @@ function getChangeIntent(previousViewStateKey: string, currentViewStateKey: stri
 function getCardFlowHeadersStateKey(headers: readonly CardFlowHeader[]): string {
 	return headers.map((header) => {
 		if (header.type === "summary") {
-			return getStateKey([header.type, header.text]);
+			return getStateKey([header.type, header.text, header.action?.label ?? "", header.action?.action ?? ""]);
 		}
 		if (header.type === "random-toolbar") {
 			return getStateKey([header.type, header.count]);

@@ -18,6 +18,21 @@ export function renderKnomoListSummary(container: HTMLElement, text: string): HT
 	});
 }
 
+export function renderKnomoActionableListSummary(
+	container: HTMLElement,
+	text: string,
+	action: { label: string; action: string },
+): HTMLElement {
+	const summary = container.createDiv({ cls: "knomo-list-summary knomo-catalog-status" });
+	summary.createEl("span", { text });
+	summary.createEl("button", {
+		cls: "knomo-inline-button",
+		text: action.label,
+		attr: { type: "button", "data-action": action.action },
+	});
+	return summary;
+}
+
 export function renderKnomoRandomReunionToolbar(container: HTMLElement, count: number): HTMLElement {
 	const toolbar = container.createDiv({ cls: "knomo-list-toolbar" });
 	renderKnomoListSummary(toolbar, t("list.randomSummary", { count }));
@@ -54,6 +69,7 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 		if (header.type === "shuffle-day") {
 			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats);
 		}
+		if (header.action !== undefined) return renderKnomoActionableListSummary(container, header.text, header.action);
 		return renderKnomoListSummary(container, header.text);
 	});
 }

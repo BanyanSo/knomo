@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
+import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoCardPreview } from "../src/ui/MemoCardPreview";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -75,9 +76,7 @@ test("memo card action menu includes open daily in the requested order", async (
 		includeActions: true,
 		randomCard: false,
 		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
-		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -107,7 +106,64 @@ test("memo card action menu includes open daily in the requested order", async (
 	assert.equal(timeButton?.getAttr("data-random-reunion-card"), null);
 });
 
-test("random memo card keeps random review marking on the time opener", async () => {
+test("普通卡片时间使用 observation 分钟精度，不读取旧创建时间或 instant formatter", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const { formatMemoDisplayTime } = await import("../src/ui/MemoDisplayFormatters");
+	const root = new TestElement("div");
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo({
+		createdAt: "2026-06-02T12:34:56.789+08:00",
+		catalog: { observation: { logicalDate: "2026-06-03", time: "12:34" } } as never,
+	}), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: false,
+		randomCard: false,
+		activeMenuMemoId: null,
+		formatDisplayTime: formatMemoDisplayTime,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	assert.equal(root.find("[data-memo-time-open='daily']")?.getText(), "2026-06-03 12:34");
+});
+
+test("memo card menu keeps Markdown actions available with Catalog capabilities", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+	const capabilities = makeCapabilities();
+
+	renderKnomoMemoCard(root.asHtml(), makeMemo({
+		catalog: { capabilities, observation: { logicalDate: "2026-06-02", time: "12:34" } } as never,
+	}), {
+		generation: 7,
+		renderIndex: 0,
+		includeActions: true,
+		randomCard: false,
+		activeMenuMemoId: "memo-1",
+		formatDisplayTime: (value) => value,
+		getMarkdownPriority: () => "normal" as const,
+		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined,
+		renderMemoCardImages: () => undefined,
+		queueSourceReferenceMarkdown: () => undefined,
+	});
+
+	const menu = root.find(".knomo-card-menu");
+	assert.equal(menu?.getAttr("aria-label"), "More actions");
+	assert.equal(menu?.getAttr("aria-disabled"), null);
+	assert.equal(menu?.getAttr("title"), null);
+	assert.equal(menu?.getAttr("data-action"), "toggle-card-menu");
+	assert.notEqual(root.find(".knomo-card-actions"), null);
+	assert.equal(root.find("article")?.hasClass("is-menu-open"), true);
+});
+
+test("random memo card marks the time opener without rendering a manual review action", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const root = new TestElement("div");
@@ -115,12 +171,10 @@ test("random memo card keeps random review marking on the time opener", async ()
 	renderKnomoMemoCard(root.asHtml(), makeMemo({ id: "random-1" }), {
 		generation: 7,
 		renderIndex: 0,
-		includeActions: false,
+		includeActions: true,
 		randomCard: true,
 		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
-		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -133,6 +187,7 @@ test("random memo card keeps random review marking on the time opener", async ()
 	assert.equal(card?.getAttr("data-random-reunion-card"), null);
 	assert.equal(timeButton?.getAttr("data-memo-id"), "random-1");
 	assert.equal(timeButton?.getAttr("data-random-reunion-card"), "true");
+	assert.equal(root.find("[data-memo-action='mark-reviewed']"), null);
 });
 
 test("renders Time buoy card states with the project icon and a today wave", async () => {
@@ -148,9 +203,7 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 			randomCard: false,
 			timeBuoy: { status, label: `Time buoy ${status}` },
 			activeMenuMemoId: null,
-			deletedMemoIds: new Set(),
 			formatDisplayTime: (value) => value,
-			formatSettingsText: (value) => value,
 			getMarkdownPriority: () => "normal" as const,
 			getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 			queueMemoMarkdown: () => undefined,
@@ -175,19 +228,35 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 	assert.equal(past.find(".knomo-card-time-buoy-wave"), null);
 });
 
-test("trash memo cards do not get daily note card-open attributes", async () => {
+test("trash memo cards expose restore and single-item permanent purge actions", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoTrashMemoCard } = await import("../src/ui/KnomoCard");
+	const { formatMemoDisplayTime, formatOptionalMemoTime } = await import("../src/ui/MemoDisplayFormatters");
 	const root = new TestElement("div");
 
-	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({ status: "deleted" }), {
+	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({
+		status: "deleted",
+		createdAt: "2026-06-02T12:34:56.789+08:00",
+		deletedAt: "2026-06-03T00:00:00.123",
+		trashItem: {
+			rawBlock: "- 12:34:56 memo",
+			key: "memo-1:delete-1",
+			snapshotId: "memo-1",
+			createdAt: "2026-06-02T12:34:56.789+08:00",
+			deletedAt: "2026-06-03T00:00:00+08:00",
+			logicalDate: "2026-06-02",
+			sourcePath: "Daily/2026-06-02.md",
+			section: "Memos",
+			content: "memo-1",
+			contentHash: "hash-memo-1",
+			purgeAllowed: true,
+		},
+	}), {
 		generation: 7,
 		renderIndex: 0,
 		busyAction: null,
-		formatDisplayTime: (value) => value,
-		formatOptionalTime: (value) => value ?? "",
-		formatDeleteSource: (value) => value,
-		formatSettingsText: (value) => value,
+		formatDisplayTime: formatMemoDisplayTime,
+		formatOptionalTime: formatOptionalMemoTime,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (memo) => ({ text: memo.contentSnapshot, images: [] }),
 		queueMemoMarkdown: () => undefined,
@@ -199,6 +268,10 @@ test("trash memo cards do not get daily note card-open attributes", async () => 
 	assert.equal(card?.getAttr("data-random-reunion-card"), null);
 	assert.equal(card?.getAttr("tabindex"), null);
 	assert.equal(root.find("[data-memo-time-open='daily']"), null);
+	assert.equal(root.find("[data-trash-action='restore']")?.getText(), "Restore");
+	assert.equal(root.find("[data-trash-action='purge']")?.getText(), "Permanently delete");
+	assert.equal(root.find(".knomo-card-time")?.getText(), "Created: 2026-06-02 12:34:56");
+	assert.equal(root.find(".knomo-card-meta")?.getText(), "Deleted: 2026-06-03 00:00:00");
 });
 
 async function renderMemoCard(
@@ -209,13 +282,13 @@ async function renderMemoCard(
 	body: TestElement | null;
 	content: TestElement | null;
 	images: TestElement | null;
-	queued: { container: HTMLElement; memo: MemoRecord; previewText: string } | null;
+	queued: { container: HTMLElement; memo: MemoViewItem; previewText: string } | null;
 }> {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const root = new TestElement("div");
 	const memo = makeMemo({ contentSnapshot });
-	let queued: { container: HTMLElement; memo: MemoRecord; previewText: string } | null = null;
+	let queued: { container: HTMLElement; memo: MemoViewItem; previewText: string } | null = null;
 
 	renderKnomoMemoCard(root.asHtml(), memo, {
 		generation: 7,
@@ -223,9 +296,7 @@ async function renderMemoCard(
 		includeActions: false,
 		randomCard: false,
 		activeMenuMemoId: null,
-		deletedMemoIds: new Set(),
 		formatDisplayTime: (value) => value,
-		formatSettingsText: (value) => value,
 		getMarkdownPriority: () => "normal" as const,
 		getMemoCardPreview: (queuedMemo) => preview ?? { text: queuedMemo.contentSnapshot, images: [] },
 		queueMemoMarkdown: (queuedMemo, container, _generation, _priority, previewText) => {
@@ -361,7 +432,7 @@ class TestElement {
 	}
 }
 
-function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
+function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
 	return {
 		id: "memo-1",
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -369,33 +440,27 @@ function makeMemo(overrides: Partial<MemoRecord> = {}): MemoRecord {
 		contentSnapshot: "memo",
 		contentHash: "hash",
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 		...overrides,
+	};
+}
+
+function makeCapabilities() {
+	return {
+		...createResolvedMemoCapabilities(),
+		catalog: createCatalogCapabilities({
+			kind: "complete",
+			coveredFromDate: "2026-06-02",
+			pendingFileCount: 0,
+			coveredFileCount: 1,
+			totalFileCount: 1,
+		}),
 	};
 }

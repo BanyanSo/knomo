@@ -1,10 +1,13 @@
 export type DailyInsertPosition = "top" | "bottom";
 export type MemoTimeFormat = "HH:mm:ss" | "HH:mm";
+export type KnomoSettingsLoadStatus = "not_loaded" | "ready" | "unavailable";
 export type MonthlyDateOrder = "asc" | "desc";
 export type ReferenceMode = "embed" | "link";
 export type MobileCompactMode = "auto" | "on" | "off";
 
 export interface KnomoSettings {
+	monthlyLocale?: string;
+	currentConfigInitialized?: boolean;
 	settingsVersion: number;
 	dailyHeading: string;
 	dailyInsertPosition: DailyInsertPosition;
@@ -23,7 +26,5 @@ export interface KnomoSettings {
 	excludeMonthlyMemosFromObsidian: boolean;
 	managedObsidianExcludeRule?: string;
 	managedObsidianExcludeRuleOwned?: boolean;
-	managedSystemFolderExcludeRule?: string;
-	managedSystemFolderExcludeRuleOwned?: boolean;
 	pinnedTags: string[];
 }

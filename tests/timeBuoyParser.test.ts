@@ -3,21 +3,9 @@ import assert from "node:assert/strict";
 
 import {
 	extractTimeBuoyDates,
-	getTimeBuoyRevision,
 	isTimeBuoyTriggerAt,
 	parseTimeBuoyMatches,
 } from "../src/utils/timeBuoyParser";
-
-test("revision changes only when the normalized buoy date set changes", () => {
-	assert.equal(
-		getTimeBuoyRevision("- [ ] 回看 @2026-07-20 @2026-08-15"),
-		getTimeBuoyRevision("- [x] 正文变化 @2026-08-15 @2026-07-20 @2026-07-20"),
-	);
-	assert.notEqual(
-		getTimeBuoyRevision("回看 @2026-07-20"),
-		getTimeBuoyRevision("回看 @2026-07-21"),
-	);
-});
 
 test("parses half-width and full-width date tokens and dedupes dates", () => {
 	assert.deepEqual(

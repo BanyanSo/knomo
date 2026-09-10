@@ -17,7 +17,7 @@ interface SearchStateResult extends KnomoViewStateTransitionEffects {
 interface SidebarNavResult extends KnomoViewStateTransitionEffects {
 	type: "already-default" | "changed";
 	clearRandomReunion: boolean;
-	ensureAllMemosLoaded: boolean;
+	reloadCatalogQuery: boolean;
 	refreshRandomReunion: boolean;
 	loadTrashMemos: boolean;
 	prepareRecordStats: boolean;
@@ -28,7 +28,7 @@ interface SidebarNavResult extends KnomoViewStateTransitionEffects {
 interface ReturnFromRecordStatsResult extends KnomoViewStateTransitionEffects {
 	type: "inactive" | "returned";
 	returnedNav: Exclude<SidebarNav, "record-stats"> | null;
-	ensureAllMemosLoaded: boolean;
+	reloadCatalogQuery: boolean;
 	refreshRandomReunionIfEmpty: boolean;
 	loadTrashMemos: boolean;
 	refreshShuffleDayIfEmpty: boolean;
@@ -36,6 +36,7 @@ interface ReturnFromRecordStatsResult extends KnomoViewStateTransitionEffects {
 
 interface ResetToAllNotesResult extends KnomoViewStateTransitionEffects {
 	type: "already-default" | "changed";
+	reloadCatalogQuery: boolean;
 }
 
 interface RecordStatsReturnState {
@@ -123,7 +124,7 @@ export class KnomoViewStateController {
 				closeScopeMenu: true,
 				clearCardMenu: true,
 				clearRandomReunion: false,
-				ensureAllMemosLoaded: false,
+				reloadCatalogQuery: false,
 				refreshRandomReunion: false,
 				loadTrashMemos: false,
 				prepareRecordStats: false,
@@ -154,9 +155,9 @@ export class KnomoViewStateController {
 			type: "changed",
 			closeScopeMenu: true,
 			clearCardMenu: true,
-			clearRandomReunion: nav !== "random" && !(nav === "record-stats" && previousNav === "random"),
-			clearShuffleDay: nav !== "shuffleDay" && !(nav === "record-stats" && previousNav === "shuffleDay"),
-			ensureAllMemosLoaded: nav === "review",
+			clearRandomReunion: false,
+			clearShuffleDay: false,
+			reloadCatalogQuery: nav === "review" || nav === "all",
 			refreshRandomReunion: nav === "random",
 			refreshShuffleDay: nav === "shuffleDay" && previousNav !== "shuffleDay",
 			loadTrashMemos: nav === "trash",
@@ -169,7 +170,7 @@ export class KnomoViewStateController {
 			return {
 				type: "inactive",
 				returnedNav: null,
-				ensureAllMemosLoaded: false,
+				reloadCatalogQuery: false,
 				refreshRandomReunionIfEmpty: false,
 				loadTrashMemos: false,
 				refreshShuffleDayIfEmpty: false,
@@ -200,7 +201,7 @@ export class KnomoViewStateController {
 			returnedNav: returnState.activeNav,
 			closeScopeMenu: true,
 			clearCardMenu: true,
-			ensureAllMemosLoaded: returnState.activeNav === "review",
+			reloadCatalogQuery: returnState.activeNav === "review",
 			refreshRandomReunionIfEmpty: returnState.activeNav === "random",
 			loadTrashMemos: returnState.activeNav === "trash",
 			refreshShuffleDayIfEmpty: returnState.activeNav === "shuffleDay",
@@ -218,6 +219,7 @@ export class KnomoViewStateController {
 		this.compactSearchOpen = false;
 		return {
 			type: isAlreadyDefault ? "already-default" : "changed",
+			reloadCatalogQuery: !isAlreadyDefault,
 			closeScopeMenu: true,
 			clearCardMenu: true,
 		};

@@ -123,10 +123,7 @@ function makeMemoDailyNoteRef(lineNumberHint: number | null): MemoDailyNoteRef {
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint,
-			lastSyncedAt: null,
 		},
 	};
 }

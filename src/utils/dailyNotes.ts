@@ -107,10 +107,6 @@ const MONTH_NAMES = new Map<string, number>([
 	["十二月", 12],
 ]);
 
-export function matchesDailyNotePath(path: string, config: DailyNotesPathConfig): boolean {
-	return parseDailyNoteDateFromPath(path, config) !== null;
-}
-
 export function parseDailyNoteDateFromPath(path: string, config: DailyNotesPathConfig): Date | null {
 	const relativePath = getRelativeDailyStem(path, config.folder);
 	if (relativePath === null) {

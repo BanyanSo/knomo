@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
 	KnomoCardFlowBatcher,
 	runCardFlowBatch,
@@ -204,7 +204,6 @@ export class KnomoCardFlowCoordinator {
 		if (
 			cardFlow === null ||
 			options.isRecordStatsActive ||
-			this.sentinel.isObserving ||
 			cardFlow.scrollTop + cardFlow.clientHeight < cardFlow.scrollHeight - 160
 		) {
 			return;

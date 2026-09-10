@@ -3,14 +3,12 @@ import { buildQuoteCreatedMemoContent } from "../utils/references";
 export type ComposerMode = "create" | "edit" | "quote";
 
 export interface ComposerQuoteContext {
-	sourceMemoId: string | null;
 	referenceText: string | null;
 	markdownText: string | null;
 }
 
 export interface PreparedComposerCreateInput {
 	content: string;
-	sourceMemoId: string | null;
 	sourceReferenceText: string | null;
 	quoteTrailer: string | null;
 }
@@ -26,16 +24,15 @@ export type PreparedComposerSaveInput<TEditingMemo> =
 		type: "create";
 		content: string;
 		source: "plugin_input" | "quote_create";
-		sourceMemoId: string | null;
 		sourceReferenceText: string | null;
 		dailyTrailer: string | null;
 	};
 
-export function getComposerMode(editingMemo: object | null, quoteSourceMemoId: string | null): ComposerMode {
+export function getComposerMode(editingMemo: object | null, quoteSourceKey: string | null): ComposerMode {
 	if (editingMemo !== null) {
 		return "edit";
 	}
-	if (quoteSourceMemoId !== null) {
+	if (quoteSourceKey !== null) {
 		return "quote";
 	}
 	return "create";
@@ -69,13 +66,11 @@ export function prepareComposerCreateInput(
 	quoteContext: ComposerQuoteContext,
 ): PreparedComposerCreateInput {
 	if (
-		quoteContext.sourceMemoId === null ||
 		quoteContext.referenceText === null ||
 		quoteContext.markdownText === null
 	) {
 		return {
 			content: input,
-			sourceMemoId: null,
 			sourceReferenceText: null,
 			quoteTrailer: null,
 		};
@@ -86,7 +81,6 @@ export function prepareComposerCreateInput(
 			quoteContext.markdownText,
 			quoteContext.referenceText,
 		),
-		sourceMemoId: quoteContext.sourceMemoId,
 		sourceReferenceText: quoteContext.referenceText,
 		quoteTrailer: null,
 	};
@@ -111,8 +105,7 @@ export function prepareComposerSaveInput<TEditingMemo>(
 	return {
 		type: "create",
 		content: createInput.content,
-		source: createInput.sourceMemoId === null ? "plugin_input" : "quote_create",
-		sourceMemoId: createInput.sourceMemoId,
+		source: createInput.sourceReferenceText === null ? "plugin_input" : "quote_create",
 		sourceReferenceText: createInput.sourceReferenceText,
 		dailyTrailer: createInput.quoteTrailer,
 	};

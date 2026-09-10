@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatDatePart } from "../utils/date";
 import type { SidebarNav } from "./viewNavigation";
 import {

@@ -1,6 +1,6 @@
 {
 	"name": "knomo",
-	"version": "1.2.9",
+	"version": "1.9.0",
 	"description": "Capture local-first memos into daily notes and monthly archives.",
 	"main": "main.js",
 	"scripts": {
@@ -9,9 +9,18 @@
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"check:i18n": "node scripts/check-i18n.mjs",
 		"verify": "node scripts/verify.mjs",
+		"benchmark:catalog:build": "tsc -p tsconfig.benchmark.json",
+		"benchmark:catalog:generate": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/generate-benchmark-vault.js",
+		"benchmark:catalog:node": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/run-node-benchmarks.js",
+		"benchmark:p8": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/run-p8-benchmarks.js",
+		"benchmark:catalog:summarize": "npm run benchmark:catalog:build --silent && node .tmp/knomo-catalog-benchmark/scripts/catalog/summarize-device-traces.js",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",
-		"test": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js"
+		"test": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js",
+		"test:quiet": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot",
+		"test:tooling": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=tooling",
+		"test:all": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=all",
+		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files"
 	},
 	"keywords": [
 		"memo",
@@ -26,6 +35,7 @@
 		"@typescript-eslint/parser": "^8.61.0",
 		"esbuild": "^0.25.0",
 		"eslint": "^9.39.4",
+		"fake-indexeddb": "^6.2.5",
 		"obsidian": "1.13.1",
 		"typescript": "^5.8.0"
 	},

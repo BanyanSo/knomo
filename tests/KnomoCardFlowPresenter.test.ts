@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("presents card flow error before other states", async () => {
@@ -71,15 +71,17 @@ test("presents review and random list headers", async () => {
 		...baseOptions(),
 		activeNav: "review",
 		memos,
+		matchedTotalCount: 90,
 	}), {
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "summary", text: "3 memos were written on this day" }],
+		headers: [{ type: "summary", text: "90 memos were written on this day" }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "random",
+		randomReunionStatus: "ready",
 		memos,
 	}), {
 		type: "items",
@@ -89,18 +91,75 @@ test("presents review and random list headers", async () => {
 	});
 });
 
-test("presents random loading before random list", async () => {
+test("keeps the current random list visible while the next group loads", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const memos = makeMemos(2);
+
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "loading-candidates",
+		memos,
+	}), {
+		type: "items",
+		memos,
+		mode: "memo",
+		headers: [{ type: "random-toolbar", count: 2 }],
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "loading-candidates",
+		memos,
+	}), {
+		type: "items",
+		memos,
+		mode: "memo",
+		headers: [{ type: "random-toolbar", count: 2 }],
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "loading-candidates",
+		memos: [],
+	}), {
+		type: "empty",
+		title: "Looking for memos to revisit",
+		description: "",
+	});
+});
+
+test("presents random loading, failure and true empty states distinctly", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
 
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "random",
-		randomReunionLoading: true,
-		memos: makeMemos(2),
+		randomReunionStatus: "loading-candidates",
 	}), {
 		type: "empty",
 		title: "Looking for memos to revisit",
+		description: "",
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "failed",
+		randomReunionError: "Candidate query failed",
+	}), {
+		type: "empty",
+		title: "Random revisit failed to load",
+		description: "Candidate query failed",
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "random",
+		randomReunionStatus: "empty",
+	}), {
+		type: "empty",
+		title: "Not enough memos to revisit yet",
 		description: "",
 	});
 });
@@ -148,6 +207,32 @@ test("presents shuffle day headers without a random toolbar", async () => {
 	});
 });
 
+test("presents the previous shuffle day while its replacement is loading", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const memos = makeMemos(2);
+	const stats = {
+		memoCount: 2,
+		wordCount: 4,
+		tagCount: 1,
+		imageCount: 0,
+		linkCount: 1,
+		firstMemoTime: "09:00",
+		lastMemoTime: "10:00",
+	};
+
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "shuffleDay",
+		shuffleDay: { status: "loading", selectedDate: "2026-06-02", memos, stats, error: null },
+	}), {
+		type: "items",
+		memos,
+		mode: "memo",
+		headers: [{ type: "shuffle-day", selectedDate: "2026-06-02", stats }],
+	});
+});
+
 test("presents trash states and trash items", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
@@ -165,12 +250,12 @@ test("presents trash states and trash items", async () => {
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		activeNav: "trash",
-		trashError: "Trash index failed",
-		trashMemos: [],
+		trashError: "Trash file failed",
+		trashMemos: null,
 	}), {
 		type: "empty",
 		title: "Trash failed to load",
-		description: "Trash index failed",
+		description: "Trash file failed",
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -180,6 +265,27 @@ test("presents trash states and trash items", async () => {
 		type: "empty",
 		title: "Trash is empty",
 		description: "Deleted memos are kept here temporarily",
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "trash",
+		trashLoading: true,
+		trashMemos,
+	}), {
+		type: "items",
+		memos: trashMemos,
+		mode: "trash",
+		headers: [],
+	});
+	assert.deepEqual(getCardFlowPresentation({
+		...baseOptions(),
+		activeNav: "trash",
+		trashError: "Refresh failed",
+		trashMemos,
+	}), {
+		type: "empty",
+		title: "Trash failed to load",
+		description: "Refresh failed",
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -197,7 +303,8 @@ function baseOptions() {
 	return {
 		cardFlowError: null,
 		activeNav: "all" as const,
-		randomReunionLoading: false,
+		randomReunionStatus: "idle" as const,
+		randomReunionError: null,
 		shuffleDay: {
 			status: "idle" as const,
 			selectedDate: null,
@@ -206,6 +313,7 @@ function baseOptions() {
 			error: null,
 		},
 		memos: [],
+		matchedTotalCount: null,
 		regularFilterCopy: null,
 		trashLoading: false,
 		trashError: null,
@@ -213,11 +321,11 @@ function baseOptions() {
 	};
 }
 
-function makeMemos(count: number, prefix = "memo"): MemoRecord[] {
+function makeMemos(count: number, prefix = "memo"): MemoViewItem[] {
 	return Array.from({ length: count }, (_, index) => makeMemo(`${prefix}-${index}`));
 }
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -225,32 +333,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: "",
-			lastKnownHash: "",
 			lineNumberHint: null,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: "",
-			lastKnownHash: "",
-			lineNumberHint: null,
-			lastSyncedAt: null,
 		},
 	};
 }

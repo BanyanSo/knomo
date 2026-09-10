@@ -1,4 +1,5 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import { parseMemoCalendarDate } from "../utils/date";
 import { isSupportedMemoImage } from "../utils/markdown";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import { hasMemoReference } from "../utils/references";
@@ -58,6 +59,7 @@ export interface SelectedRecordStats {
 export interface RecordStatsSnapshot {
 	state: RecordStatsLoadState;
 	error: string | null;
+	updating: boolean;
 }
 
 export interface DailyRecordStats {
@@ -91,11 +93,13 @@ export class RecordStatsService {
 	private source: unknown = null;
 	private prepared: PreparedRecordStats | null = null;
 	private runId = 0;
+	private updating = false;
 
 	getSnapshot(): RecordStatsSnapshot {
 		return {
 			state: this.state,
 			error: this.error,
+			updating: this.updating,
 		};
 	}
 
@@ -107,50 +111,70 @@ export class RecordStatsService {
 		return this.source === source && (this.state === "ready" || this.state === "empty");
 	}
 
-	invalidate(): void {
+	invalidate(showUpdating = true): void {
 		this.runId += 1;
-		this.state = "idle";
 		this.error = null;
 		this.source = null;
-		this.prepared = null;
+		this.updating = showUpdating && this.prepared !== null;
+		if (this.prepared === null) {
+			this.state = "idle";
+		}
 	}
 
 	fail(message: string): void {
 		this.runId += 1;
-		this.state = "error";
 		this.error = message;
 		this.source = null;
+		this.updating = false;
+		if (this.prepared !== null && (this.state === "ready" || this.state === "empty")) {
+			return;
+		}
+		this.state = "error";
 		this.prepared = null;
 	}
 
 	async prepareFromSource(
 		source: unknown,
 		loadPrepared: (isCurrent: () => boolean) => Promise<PreparedRecordStats | null>,
+		showUpdating = true,
 	): Promise<boolean> {
 		if (this.isPreparedForSource(source)) {
 			return true;
 		}
 		const runId = this.runId + 1;
 		this.runId = runId;
-		this.state = "loading";
+		const hasCommittedStats = this.prepared !== null
+			&& (this.state === "ready" || this.state === "empty");
+		if (!hasCommittedStats) {
+			this.state = "loading";
+		}
 		this.error = null;
-		this.source = source;
-		this.prepared = null;
+		this.updating = showUpdating && hasCommittedStats;
 
 		try {
 			const prepared = await loadPrepared(() => this.runId === runId);
-			if (prepared === null || this.runId !== runId) {
+			if (this.runId !== runId) {
+				return false;
+			}
+			if (prepared === null) {
+				this.updating = false;
+				if (!hasCommittedStats) this.state = "idle";
 				return false;
 			}
 			this.prepared = prepared;
+			this.source = source;
 			this.state = prepared.overview.memoCount === 0 ? "empty" : "ready";
+			this.updating = false;
 			return true;
 		} catch (error) {
 			if (this.runId !== runId) {
 				return false;
 			}
-			this.prepared = null;
-			this.state = "error";
+			this.updating = false;
+			if (!hasCommittedStats) {
+				this.prepared = null;
+				this.state = "error";
+			}
 			this.error = error instanceof Error ? error.message : "Unable to prepare record statistics.";
 			return false;
 		}
@@ -432,44 +456,14 @@ function listDateKeys(start: Date, endExclusive: Date): string[] {
 }
 
 function parseLocalMemoTimestamp(value: string): LocalMemoTimestamp | null {
-	const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?$/);
-	if (match === null) {
-		return null;
-	}
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	const hour = Number(match[4]);
-	const minute = Number(match[5]);
-	const second = match[6] === undefined ? 0 : Number(match[6]);
-	const maxDay = getDaysInMonth(year, month);
-	const timestamp = parseMemoInstant(value);
-	if (
-		month < 1 || month > 12 ||
-		day < 1 || day > maxDay ||
-		hour < 0 || hour > 23 ||
-		minute < 0 || minute > 59 ||
-		second < 0 || second > 59 ||
-		!Number.isFinite(timestamp)
-	) {
-		return null;
-	}
-	return { year, month, day, hour };
-}
-
-function parseMemoInstant(value: string): number {
-	return Date.parse(value);
-}
-
-function getDaysInMonth(year: number, month: number): number {
-	if (month === 2) {
-		return isLeapYear(year) ? 29 : 28;
-	}
-	return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
-}
-
-function isLeapYear(year: number): boolean {
-	return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+	const date = parseMemoCalendarDate(value);
+	if (date === null) return null;
+	return {
+		year: date.getFullYear(),
+		month: date.getMonth() + 1,
+		day: date.getDate(),
+		hour: date.getHours(),
+	};
 }
 
 function formatDateKey(year: number, month: number, day: number): string {

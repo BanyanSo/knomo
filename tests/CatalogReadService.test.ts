@@ -6,6 +6,20 @@ import type { CatalogObservation, MemoObservation } from "../src/types/catalog";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("清理待处理状态独立于已完成迁移传递，成功后可清除", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	let pending = true;
+	const service = new CatalogReadService({ catalog: new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		getLegacyImportStatus: () => "ready", getLegacyCleanupPending: () => pending });
+	assert.equal(service.getRuntimeAttentionSnapshot().legacyMigration, "ready");
+	assert.equal(service.getRuntimeAttentionSnapshot().legacyCleanupPending, true);
+	pending = false;
+	assert.equal(service.getRuntimeAttentionSnapshot().legacyCleanupPending, false);
+});
+
 test("普通 Catalog observation 不因 Identity 到达而获得永久身份或改变本地 key", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");

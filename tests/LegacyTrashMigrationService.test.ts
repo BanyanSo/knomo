@@ -9,6 +9,44 @@ const ROOT = "Knomo";
 const DAILY = "Daily/2026-08-22.md";
 const RAW = "- 09:00 同文恢复副本";
 
+test("非默认旧目录的合法 Monthly 备份可清理，保留当前正文和 Trash", async () => {
+	const f = await fixture("转移的");
+	const root = "转移的/_knomo-system";
+	await f.vault.app.vault.create(`${root}/backups/monthly-folder-1789027342894/monthly/Memos-2024-06.md`, "旧版备份");
+	await f.vault.app.vault.create("转移的/Memos-2024-06.md", "当前 Monthly");
+	const report = await f.make().run();
+	assert.equal(report.status, "ready");
+	assert.equal(report.cleanupCandidate, null);
+	assert.equal(await f.vault.app.vault.adapter.exists(root), false);
+	assert.equal(f.vault.read("转移的/Memos-2024-06.md"), "当前 Monthly");
+	assert.equal(f.vault.read(DAILY), "## Memos\n- 10:30 当前 Daily\n");
+	assert.equal((await f.store.query()).items.length, 2);
+	assert.equal((await f.completion.read())?.legacySystemRoot, root);
+});
+
+test("完成后未知文件阻挡清理并报告路径，重试不重新导入", async () => {
+	for (const name of ["note.md", "private.txt"]) {
+		const f = await fixture();
+		const remove = f.vault.app.vault.delete;
+		f.vault.app.vault.delete = async () => { throw new Error("busy"); };
+		await f.make().run();
+		const path = `Knomo/_knomo-system/${name}`;
+		await f.vault.app.vault.create(path, "keep");
+		f.vault.app.vault.delete = remove;
+		const reads = f.sourceReads();
+		const report = await f.make().run();
+		assert.equal(report.status, "ready");
+		assert.equal(report.diagnostics[0]?.sourcePath, path);
+		assert.equal(report.diagnostics[0]?.code, "legacy_cleanup_unknown_file");
+		assert.ok(report.cleanupCandidate);
+		assert.equal(f.vault.read(path), "keep");
+		f.vault.remove(path);
+		assert.equal((await f.make().run()).cleanupCandidate, null);
+		assert.equal(f.sourceReads(), reads);
+		assert.equal((await f.store.query()).items.length, 2);
+	}
+});
+
 async function fixture(monthly = "Knomo") {
 	await ensureObsidianStub();
 	const { InMemoryVault } = await import("./helpers/InMemoryVault");

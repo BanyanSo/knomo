@@ -471,7 +471,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setName(t("settings.legacyMigration.name"))
 			.setDesc(this.getLegacyMigrationDescription());
 		setting.addButton((button) => {
-			button.setButtonText(t("settings.legacyMigration.retry"));
+			button.setButtonText(t(this.legacyTrashMigrationService.getReport().cleanupCandidate
+				? "settings.legacyMigration.retryCleanup" : "settings.legacyMigration.retry"));
 			button.onClick(() => {
 				button.setDisabled(true);
 				void this.legacyTrashMigrationService.run()
@@ -481,6 +482,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private getLegacyMigrationDescription(): string {
+		const report = this.legacyTrashMigrationService.getReport();
+		if (report.cleanupCandidate) {
+			const diagnostic = report.diagnostics[0];
+			return t("settings.legacyMigration.cleanupDescription", {
+				path: diagnostic?.sourcePath ?? report.cleanupCandidate.legacySystemRoot,
+				reason: diagnostic?.code === "legacy_cleanup_unknown_file"
+					? t("settings.legacyMigration.unknownFile") : diagnostic?.detail ?? "",
+			});
+		}
 		return t("settings.legacyMigration.description");
 	}
 

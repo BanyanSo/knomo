@@ -81,7 +81,7 @@ test("does not expose permanent runtime, maintenance, or monthly locale rows", (
 	assert.doesNotMatch(source, /renderRuntimeStatusSetting|renderMonthlyRebuildSetting|renderMonthlyLocaleSetting/u);
 });
 
-test("legacy attention exposes user actions without rendering raw diagnostics", () => {
+test("legacy attention exposes retry actions and scoped cleanup details", () => {
 	const source = readSettingTabSource();
 	const legacySource = getSourceBetween(
 		source,
@@ -89,7 +89,8 @@ test("legacy attention exposes user actions without rendering raw diagnostics", 
 		"\n\tprivate rememberSettingNoticeValue(",
 	);
 
-	assert.doesNotMatch(legacySource, /diagnostics|sourcePath|memoId|item\.code|item\.detail/u);
+	assert.doesNotMatch(legacySource, /memoId|item\.code|item\.detail/u);
+	assert.match(legacySource, /if \(report\.cleanupCandidate\)/u);
 	assert.match(legacySource, /run\(\)/u);
 	assert.match(legacySource, /legacyTrashMigrationService\.run\(\)/u);
 	assert.doesNotMatch(legacySource, /new Notice|explicit/);

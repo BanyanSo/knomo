@@ -34,6 +34,7 @@ export interface KnomoRuntimeAttentionSnapshot {
 	currentConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
 	legacyMigration: LegacyMigrationStatus;
+	legacyCleanupPending?: boolean;
 }
 
 export interface KnomoRuntimeSnapshot {
@@ -45,6 +46,7 @@ export interface KnomoRuntimeSnapshot {
 	currentConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
 	legacyMigration: LegacyMigrationStatus;
+	legacyCleanupPending?: boolean;
 }
 
 export interface CatalogMemoItem {

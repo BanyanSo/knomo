@@ -255,6 +255,7 @@ export default class KnomoPlugin extends Plugin {
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyTrashMigrationService?.getReport().status ?? "idle",
+				getLegacyCleanupPending: () => Boolean(this.legacyTrashMigrationService?.getReport().cleanupCandidate),
 				getCurrentConfigurationStatus: () => knomoCurrentConfigService.getStatus(),
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
 				getStartupBootstrapSnapshot: getStartupSnapshot,

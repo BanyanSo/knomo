@@ -53,6 +53,7 @@ export interface CatalogReadServiceOptions {
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
 	getLegacyImportStatus?: () => LegacyMigrationStatus;
+	getLegacyCleanupPending?: () => boolean;
 	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
@@ -102,6 +103,7 @@ export class CatalogReadService {
 		}
 		let currentConfiguration: KnomoRuntimeAttentionSnapshot["currentConfiguration"] = "unavailable";
 		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "pending";
+		let legacyCleanupPending = false;
 		let settings: KnomoSettingsLoadStatus = "ready";
 		try {
 			currentConfiguration = this.options.getCurrentConfigurationStatus?.() ?? "missing";
@@ -110,6 +112,7 @@ export class CatalogReadService {
 		}
 		try {
 			legacyMigration = this.options.getLegacyImportStatus?.() ?? "idle";
+			legacyCleanupPending = this.options.getLegacyCleanupPending?.() ?? false;
 		} catch {
 			// 保留 unavailable。
 		}
@@ -124,6 +127,7 @@ export class CatalogReadService {
 			currentConfiguration,
 			monthly: this.getProjectionState(),
 			legacyMigration,
+			legacyCleanupPending,
 		};
 	}
 
@@ -150,6 +154,7 @@ export class CatalogReadService {
 			currentConfiguration: attention.currentConfiguration,
 			monthly: attention.monthly,
 			legacyMigration: attention.legacyMigration,
+			legacyCleanupPending: attention.legacyCleanupPending,
 		};
 	}
 

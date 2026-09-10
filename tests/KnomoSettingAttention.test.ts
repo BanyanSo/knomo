@@ -11,6 +11,11 @@ const ready: KnomoRuntimeAttentionSnapshot = {
 	legacyMigration: "ready",
 };
 
+test("迁移完成但清理失败仍显示独立处理入口，清理成功后消失", () => {
+	assert.deepEqual(getKnomoSettingAttentionKinds({ ...ready, legacyCleanupPending: true }, null), ["legacy"]);
+	assert.deepEqual(getKnomoSettingAttentionKinds({ ...ready, legacyCleanupPending: false }, null), []);
+});
+
 test("当前配置提示不受旧 Identity 初始化状态隐藏", () => {
 	assert.deepEqual(getKnomoSettingAttentionKinds(ready, snapshot("ready")), []);
 	assert.deepEqual(getKnomoSettingAttentionKinds({ ...ready, currentConfiguration: "missing" }, snapshot("unconfigured")), ["current-config"]);

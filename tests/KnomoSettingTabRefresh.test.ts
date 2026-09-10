@@ -9,16 +9,19 @@ test("声明式设置未调用 display 时也更新迁移入口，并清除已�
  const tab = Object.create(KnomoSettingTab.prototype) as InstanceType<typeof KnomoSettingTab>;
  let currentConfiguration = "missing";
  let legacyMigration = "idle";
+ let legacyCleanupPending = false;
  let definitions: ReturnType<InstanceType<typeof KnomoSettingTab>["getSettingDefinitions"]> = [];
  Object.assign(tab, {
   settingsVisible: false,
-  catalogReadService: { getRuntimeAttentionSnapshot: () => ({ currentConfiguration, legacyMigration, monthly: "ready", catalogLifecycle: { state: "ready" } }) },
+  catalogReadService: { getRuntimeAttentionSnapshot: () => ({ currentConfiguration, legacyMigration, legacyCleanupPending, monthly: "ready", catalogLifecycle: { state: "ready" } }) },
   knomoCurrentConfigService: { getStatus: () => currentConfiguration },
-  legacyTrashMigrationService: { getReport: () => ({ status: legacyMigration }) },
+  legacyTrashMigrationService: { getReport: () => ({ status: legacyMigration,
+   cleanupCandidate: legacyCleanupPending ? { legacySystemRoot: "转移的/_knomo-system" } : null,
+   diagnostics: [{ code: "legacy_cleanup_unknown_file", sourcePath: "转移的/_knomo-system/note.md", detail: "internal" }] }) },
   update: () => { definitions = tab.getSettingDefinitions(); },
   display: () => { throw new Error("Declarative settings must not use display"); },
  });
- const attention = () => definitions[0] as { visible: boolean; items: { name: string }[] };
+ const attention = () => definitions[0] as { visible: boolean; items: { name: string; desc: string }[] };
  tab.refreshAttentionIfVisible();
  assert.deepEqual(attention().items.map(item => item.name), [t("settings.currentConfig.name")]);
  currentConfiguration = "ready";
@@ -26,6 +29,12 @@ test("声明式设置未调用 display 时也更新迁移入口，并清除已�
  tab.refreshAttentionIfVisible();
  assert.deepEqual(attention().items.map(item => item.name), [t("settings.legacyMigration.name")]);
  legacyMigration = "ready";
+ legacyCleanupPending = true;
+ tab.refreshAttentionIfVisible();
+ assert.equal(attention().items[0]?.desc, t("settings.legacyMigration.cleanupDescription", {
+  path: "转移的/_knomo-system/note.md", reason: t("settings.legacyMigration.unknownFile"),
+ }));
+ legacyCleanupPending = false;
  tab.refreshAttentionIfVisible();
  assert.equal(attention().visible, false);
  assert.deepEqual(attention().items, []);

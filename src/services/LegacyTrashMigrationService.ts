@@ -4,6 +4,7 @@ import type { LegacyIndexSource } from "../types/legacyIndex";
 import type { LegacyMigrationReport } from "../types/legacyMigration";
 import type { TrashSnapshot } from "../types/trash";
 import { PluginDataStore } from "./PluginDataStore";
+import { classifyLegacyArtifactPath } from "./LegacyArtifactInventory";
 import { sha256Text } from "./CanonicalJson";
 import { buildPluginDataWithLegacyMigration, extractLegacyMigration, type LegacyMigrationCompletion } from "../utils/pluginData";
 import { assertVaultPath, getTrashFilePath, TrashSnapshotStore } from "./TrashSnapshotStore";
@@ -130,15 +131,16 @@ export class LegacyTrashMigrationService {
 			const folder = this.app.vault.getAbstractFileByPath(path);
 			if (folder === null && !await this.app.vault.adapter.exists(path)) return report;
 			if (!(folder instanceof TFolder)) throw new Error("Legacy cleanup target is not an available folder.");
-			// 即使已完成，旧目录后来出现的 Markdown 也不属于清理授权。
+			// 合法 Monthly 备份沿用旧版分类；未知文件不属于清理授权。
 			Vault.recurseChildren(folder, (child) => {
-				if (child instanceof TFile && child.extension.toLowerCase() === "md") throw new Error("Legacy cleanup contains Markdown.");
+				if (child instanceof TFile && classifyLegacyArtifactPath(path, child.path) === null) throw new LegacyCleanupUnknownFileError(child.path);
 			});
 			assertActive();
 			await this.app.vault.delete(folder, true);
 			if (await this.app.vault.adapter.exists(path)) throw new Error("Legacy cleanup not confirmed.");
 		} catch (error) {
-			report.diagnostics = [{ code: "legacy_cleanup_failed", sourcePath: completion.legacySystemRoot, memoId: null, detail: String(error) }];
+			report.diagnostics = [{ code: error instanceof LegacyCleanupUnknownFileError ? "legacy_cleanup_unknown_file" : "legacy_cleanup_failed",
+				sourcePath: error instanceof LegacyCleanupUnknownFileError ? error.path : completion.legacySystemRoot, memoId: null, detail: String(error) }];
 			report.cleanupCandidate = { legacySystemRoot: completion.legacySystemRoot, sourceRevision: completion.sourceRevision };
 		}
 		return report;
@@ -147,6 +149,10 @@ export class LegacyTrashMigrationService {
 }
 
 class RetryableMigrationError extends Error {}
+
+class LegacyCleanupUnknownFileError extends Error {
+	constructor(readonly path: string) { super(`Unrecognized file in legacy cleanup: ${path}`); }
+}
 
 function emptyReport(): LegacyMigrationReport {
 	return { status: "idle", sourceRevision: null, diagnostics: [], cleanupCandidate: null };

@@ -73,6 +73,7 @@ export class SettingsService {
 			this.monthlyExcludeSettingPersisted = isRecord(settingsData)
 				&& typeof settingsData.excludeMonthlyMemosFromObsidian === "boolean";
 			this.settings = this.migrateSettings(settingsData);
+			this.settings.recentTimeFlowEnabled = DEFAULT_KNOMO_SETTINGS.recentTimeFlowEnabled;
 			this.loadedConfiguration = configurationFingerprint(settingsData);
 			try {
 				const local = this.plugin.app.loadLocalStorage?.("knomo.preferences");
@@ -328,7 +329,7 @@ export class SettingsService {
 	}
 }
 
-const PREFERENCE_KEYS = ["mobileCompactMode", "desktopSidebarWidth", "desktopSidebarCollapsed", "pinnedTags", "timeBuoyIntroDismissed"];
+const PREFERENCE_KEYS = ["recentTimeFlowEnabled", "mobileCompactMode", "desktopSidebarWidth", "desktopSidebarCollapsed", "pinnedTags", "timeBuoyIntroDismissed"];
 
 function pickPreferences(value: object): Record<string, unknown> {
 	return Object.fromEntries(Object.entries(value).filter(([key]) => PREFERENCE_KEYS.includes(key)));

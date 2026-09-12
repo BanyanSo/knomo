@@ -1,4 +1,5 @@
 import type { MemoViewItem } from "./memoView";
+import type { CatalogCoverage } from "./catalog";
 
 export type TimeBuoyDateStatus = "today" | "upcoming" | "past";
 
@@ -14,6 +15,9 @@ export interface TimeBuoyQueryItem {
 }
 
 export interface TimeBuoyQueryResult {
+	catalogRevision?: number;
+	coverage?: CatalogCoverage;
+	invalidated?: boolean;
 	items: TimeBuoyQueryItem[];
 	stale: TimeBuoyInstance[];
 	missingPeriods: string[];

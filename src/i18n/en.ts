@@ -1,6 +1,13 @@
 import type { TranslationKey } from "./zh-CN";
 
 export const en: Record<TranslationKey, string> = {
+	"settings.presentation.heading": "Display preferences",
+	"settings.recentTimeFlow.name": "Recent 3-day time flow",
+	"settings.recentTimeFlow.desc": "Group ordinary notes from today and the previous two days by date in the default All Notes view, and highlight their times. Turn this off to restore the original card layout.",
+	"recentTimeFlow.today": "Today",
+	"recentTimeFlow.yesterday": "Yesterday",
+	"recentTimeFlow.twoDaysAgo": "2 days ago",
+	"recentTimeFlow.history": "More Ripples in Time",
 	"app.openKnomo": "Open Knomo",
 	"nav.allNotes": "All notes",
 	"nav.review": "Beyond today",

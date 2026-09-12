@@ -1,4 +1,11 @@
 export const zhCN = {
+	"settings.presentation.heading": "展示偏好",
+	"settings.recentTimeFlow.name": "近三天时间流",
+	"settings.recentTimeFlow.desc": "在“全部笔记”默认视图中，将近三天的普通笔记按日期分组，并突出显示时间。关闭后恢复原有卡片样式。",
+	"recentTimeFlow.today": "今天",
+	"recentTimeFlow.yesterday": "昨天",
+	"recentTimeFlow.twoDaysAgo": "前天",
+	"recentTimeFlow.history": "更多时光涟漪",
 	"app.openKnomo": "打开 Knomo",
 	"nav.allNotes": "全部笔记",
 	"nav.review": "今日之外",

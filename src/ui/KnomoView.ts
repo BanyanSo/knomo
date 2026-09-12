@@ -4,7 +4,7 @@ import type { HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
 import { KNOMO_LOGO_ICON, KNOMO_SEARCH_ICON } from "../icons";
-import { t } from "../i18n";
+import { t, getKnomoLocale } from "../i18n";
 import type { AttachmentService } from "../services/AttachmentService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { CatalogReadService } from "../services/CatalogReadService";
@@ -40,6 +40,7 @@ import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getList
 import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
 import { formatTimeBuoyDate, getTimeBuoyCardStatus } from "../utils/timeBuoyDate";
+import { createRecentTimeFlowContext, formatRecentCalendarDate, getRecentMemoPresentation, RecentTimeFlowDecorations, type RecentDecoration } from "./RecentTimeFlowPresentation";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import {
 	alreadyHasTimeBuoyDate,
@@ -356,6 +357,10 @@ export class KnomoView extends ItemView {
 	private composerSaveRefreshQueue: Promise<void> = Promise.resolve();
 	private isManualRefreshing = false;
 	private lastKnownLocalDate = formatTimeBuoyDate(new Date());
+	private recentTimeFlowContext = createRecentTimeFlowContext(new Date(), false, new Set());
+	private recentDecorations = new RecentTimeFlowDecorations(this.recentTimeFlowContext);
+	private recentLifecycleKey = "";
+	private recentPreferenceUnsubscribe: (() => void) | null = null;
 	private currentLayout: LayoutMode = "desktop-wide";
 	private renderedTimeBuoyEnabled: boolean | null = null;
 	private layoutObserver: ResizeObserver | null = null;
@@ -973,6 +978,16 @@ export class KnomoView extends ItemView {
 		this.trashViewClosed = false;
 		this.trashMemoController.start();
 		this.lastKnownLocalDate = formatTimeBuoyDate(new Date());
+		let recentEnabled = this.settingsService.getSettings().recentTimeFlowEnabled;
+		this.recentPreferenceUnsubscribe = this.settingsService.onChanged(() => {
+			const next = this.settingsService.getSettings().recentTimeFlowEnabled;
+			if (recentEnabled === next || this.trashViewClosed) return;
+			recentEnabled = next;
+			this.renderCardFlow();
+		});
+		this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
+			if (!this.trashViewClosed && this.containerEl.isShown()) this.handleLocalDateChange();
+		}));
 		this.contentEl.addClass("knomo-view-host");
 		this.register(this.vaultTagIndex.subscribe(() => {
 			if (this.rootEl !== null) {
@@ -1022,6 +1037,8 @@ export class KnomoView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.trashViewClosed = true;
+		this.recentPreferenceUnsubscribe?.();
+		this.recentPreferenceUnsubscribe = null;
 		this.trashMemoController.dispose();
 		if (this.trashCountRefreshTimer !== null) {
 			this.containerEl.win.clearTimeout(this.trashCountRefreshTimer);
@@ -1531,7 +1548,8 @@ export class KnomoView extends ItemView {
 				return true;
 			}
 			this.memos = load.memos;
-			this.catalogHistoryExpansionPending = !loadAll && !load.fullHistoryLoaded && Platform.isMobile && this.isDefaultListState();
+			// 近月窗口结束不代表全历史结束，桌面与移动端都保留展开入口。
+			this.catalogHistoryExpansionPending = !loadAll && !load.fullHistoryLoaded && this.isDefaultListState();
 			this.catalogDesktopTotalCount = this.getImmediateCatalogTotalCount(load);
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
@@ -1735,7 +1753,10 @@ export class KnomoView extends ItemView {
 			this.catalogHistoryExpansionPending = false;
 			this.catalogLoadingNextPage = true;
 			try {
-				const loaded = await this.reloadMemos(true, true);
+				const loaded = await this.reloadMemos(true);
+				if (loaded && !(Platform.isMobile && this.composerOpen)) {
+					this.renderNextCardBatch(this.renderGeneration);
+				}
 				if (!loaded && this.isDefaultListState()) {
 					this.catalogHistoryExpansionPending = true;
 				}
@@ -1771,7 +1792,11 @@ export class KnomoView extends ItemView {
 			this.syncRecordStatsSource();
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
-			this.forceRebuildCardFlow();
+			// 分页保留已渲染正文的高度，避免异步 Markdown 重建使滚动位置被压回顶部。
+			this.renderCardFlow();
+			if (!(Platform.isMobile && this.composerOpen)) {
+				this.renderNextCardBatch(this.renderGeneration);
+			}
 			return true;
 		} finally {
 			this.catalogLoadingNextPage = false;
@@ -2554,6 +2579,16 @@ export class KnomoView extends ItemView {
 		preserveCardMemoId: string | null = null,
 		changeIntent: CardFlowChangeIntent = "content-change",
 	): void {
+		const context = this.getRecentTimeFlowContext();
+		const lifecycleKey = JSON.stringify([context.enabled, context.dates]);
+		const presentationChanged = this.recentLifecycleKey !== "" && this.recentLifecycleKey !== lifecycleKey;
+		this.recentLifecycleKey = lifecycleKey;
+		if (presentationChanged) {
+			this.clearMobileCardBatchContinuation();
+			this.renderGeneration += 1;
+			this.forceRebuildCardFlow(changeIntent);
+			return;
+		}
 		if (changeIntent === "view-scope-change") {
 			this.forceRebuildCardFlow(changeIntent);
 			return;
@@ -2766,6 +2801,11 @@ export class KnomoView extends ItemView {
 		const scrollTop = changeIntent === "view-scope-change"
 			? 0
 			: this.getCardFlowScrollTop() ?? 0;
+		const flowTop = this.cardFlowEl.getBoundingClientRect().top;
+		const anchorCard = changeIntent === "content-change"
+			? this.getDirectCardElements(this.cardFlowEl).find((card) => card.getBoundingClientRect().bottom > flowTop) : undefined;
+		const anchorKey = anchorCard?.getAttr("data-memo-render-key");
+		const anchor = anchorCard && anchorKey ? { renderKey: anchorKey, offset: anchorCard.getBoundingClientRect().top - flowTop } : undefined;
 		const initialBatchSize = changeIntent === "view-scope-change"
 			? this.getInitialCardBatchSize()
 			: Math.max(this.getInitialCardBatchSize(), this.getRenderedCardCount());
@@ -2791,7 +2831,7 @@ export class KnomoView extends ItemView {
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
 		this.cardFlowEl.empty();
 		this.renderedCardMemos.clear();
-		this.cardFlowCoordinator.setPendingScrollRestore({ generation, scrollTop, visibleCount: initialBatchSize });
+		this.cardFlowCoordinator.setPendingScrollRestore({ generation, scrollTop, visibleCount: initialBatchSize, anchor });
 		this.renderCardFlowPresentation(this.getCurrentCardFlowPresentation(), generation, initialBatchSize);
 	}
 
@@ -2858,11 +2898,37 @@ export class KnomoView extends ItemView {
 		return presentation;
 	}
 
+	private getRecentTimeFlowContext() {
+		return createRecentTimeFlowContext(new Date(),
+			this.settingsService.getSettings().recentTimeFlowEnabled && this.isDefaultListState(),
+			new Set(this.getTodayTimeBuoyItems().map((item) => getMemoRenderKey(item.memo))));
+	}
+
+	private prepareRecentTimeFlow(): void {
+		this.recentTimeFlowContext = this.getRecentTimeFlowContext();
+		this.recentLifecycleKey = JSON.stringify([this.recentTimeFlowContext.enabled, this.recentTimeFlowContext.dates]);
+		this.recentDecorations = new RecentTimeFlowDecorations(this.recentTimeFlowContext);
+	}
+
+	private renderRecentDecoration(container: HTMLElement, decoration: RecentDecoration): HTMLElement {
+		if (decoration.kind === "history") {
+			return container.createDiv({ cls: "knomo-recent-flow-decoration knomo-recent-flow-history", text: t("recentTimeFlow.history") });
+		}
+		const labels = [t("recentTimeFlow.today"), t("recentTimeFlow.yesterday"), t("recentTimeFlow.twoDaysAgo")];
+		const header = container.createDiv({ cls: "knomo-recent-flow-decoration knomo-recent-flow-date" });
+		header.createSpan({ cls: "knomo-recent-flow-relative", text: labels[decoration.day] });
+		header.createSpan({ cls: "knomo-recent-flow-calendar", text: ` ${formatRecentCalendarDate(decoration.date, getKnomoLocale())}` });
+		return header;
+	}
+
 	private getTodayTimeBuoyItems() {
 		if (!this.shouldShowTodayTimeBuoys()) {
 			return [];
 		}
-		return this.timeBuoyViewController.getSnapshot().today;
+		const snapshot = this.timeBuoyViewController.getSnapshot();
+		return snapshot.todayValid
+			&& snapshot.todayDate === formatTimeBuoyDate(new Date())
+			&& snapshot.todayRevision === this.catalogRevision ? snapshot.today : [];
 	}
 
 	private shouldShowTodayTimeBuoys(): boolean {
@@ -2893,6 +2959,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.cardFlowCoordinator.clearMobileBatchContinuation(this.containerEl.win);
+		this.prepareRecentTimeFlow();
 		this.cardFlowCoordinator.removeSentinel();
 		for (const child of Array.from(cardFlow.children)) {
 			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card")) {
@@ -2924,6 +2991,7 @@ export class KnomoView extends ItemView {
 			let card: HTMLElement;
 			if (
 				existingCard !== null
+				&& (presentation.mode !== "memo" || existingCard.getAttr("data-time-presentation") === JSON.stringify(getRecentMemoPresentation(memo, this.recentTimeFlowContext).time))
 				&& (
 					preserveCardMemoId === memo.id
 					|| this.canReuseRenderedMemo(previousMemo, memo)
@@ -2954,10 +3022,15 @@ export class KnomoView extends ItemView {
 			currentCard = card.nextElementSibling;
 		}
 		const firstCard = renderedCards[0] ?? null;
+		for (const [index, card] of renderedCards.entries()) {
+			const decoration = this.recentDecorations.next(visibleMemos[index]);
+			if (decoration !== null) cardFlow.insertBefore(this.renderRecentDecoration(cardFlow, decoration), card);
+		}
 		const headers = renderKnomoCardFlowHeaders(cardFlow, presentation.headers);
 		if (firstCard !== null) {
+			const firstContent = cardFlow.firstElementChild;
 			for (const header of headers) {
-				cardFlow.insertBefore(header, firstCard);
+				cardFlow.insertBefore(header, firstContent);
 			}
 		}
 		const intro = this.renderTimeBuoyIntro(cardFlow);
@@ -3124,6 +3197,7 @@ export class KnomoView extends ItemView {
 		initialBatchSize = this.getInitialCardBatchSize(),
 	): void {
 		this.cardFlowCoordinator.clearMobileBatchContinuation(this.containerEl.win);
+		this.prepareRecentTimeFlow();
 		const batch = this.cardFlowCoordinator.startBatch(memos, mode, initialBatchSize);
 		this.renderCardBatch(batch, generation);
 	}
@@ -3191,6 +3265,8 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
+		const decoration = this.recentDecorations.next(memo);
+		if (decoration !== null) this.renderRecentDecoration(this.cardFlowEl, decoration);
 		this.renderMemoCardInContainer(
 			this.cardFlowEl,
 			memo,
@@ -3222,6 +3298,8 @@ export class KnomoView extends ItemView {
 			includeActions,
 			randomCard,
 			timeBuoy: effectiveTimeBuoy,
+			timePresentation: surface === "card-flow" && this.isDefaultListState()
+				? getRecentMemoPresentation(memo, this.recentTimeFlowContext).time : { mode: "full" },
 			activeMenuMemoId: this.activeMenuMemoId,
 			formatDisplayTime: formatMemoDisplayTime,
 			getMarkdownPriority: getMarkdownRenderPriority,
@@ -4310,8 +4388,9 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		element.scrollTop = scrollTop;
+		const generation = this.renderGeneration;
 		this.containerEl.win.requestAnimationFrame(() => {
-			if (element.isConnected) {
+			if (element.isConnected && !this.trashViewClosed && (element !== this.cardFlowEl || generation === this.renderGeneration)) {
 				element.scrollTop = scrollTop;
 			}
 		});
@@ -4320,7 +4399,7 @@ export class KnomoView extends ItemView {
 	private restorePendingCardFlowScrollTop(generation: number): void {
 		this.cardFlowCoordinator.restorePendingScrollTop(generation, (scrollTop) => {
 			this.restoreCardFlowScrollTop(scrollTop);
-		});
+		}, this.cardFlowEl);
 	}
 
 	private openComposer(): void {
@@ -5867,6 +5946,7 @@ export class KnomoView extends ItemView {
 	private getCardFlowStateKey(): string {
 		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
 		return getCardFlowStateKeyValue({
+			presentationContextKey: this.getRecentPresentationStateKey(),
 			activeNav: this.activeNav,
 			recordStatsSnapshot: this.recordStatsService.getSnapshot(),
 			recordStatsView: recordStatsState.view,
@@ -5879,6 +5959,7 @@ export class KnomoView extends ItemView {
 	private getVisibleCardFlowStateKey(renderedCardCount: number): string {
 		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
 		return getVisibleCardFlowStateKeyValue({
+			presentationContextKey: this.getRecentPresentationStateKey(),
 			activeNav: this.activeNav,
 			recordStatsSnapshot: this.recordStatsService.getSnapshot(),
 			recordStatsView: recordStatsState.view,
@@ -5988,9 +6069,18 @@ export class KnomoView extends ItemView {
 		});
 	}
 
+	private getRecentPresentationStateKey(): string {
+		const context = this.getRecentTimeFlowContext();
+		return JSON.stringify([context.enabled, context.dates, [...context.pinnedKeys]]);
+	}
+
 	private handleLocalDateChange(): void {
+		if (this.trashViewClosed) return;
+		this.stopDateChangeWatcher();
+		this.startDateChangeWatcher();
 		const nextDate = formatTimeBuoyDate(new Date());
 		if (nextDate === this.lastKnownLocalDate) {
+			this.renderCardFlow();
 			return;
 		}
 		this.lastKnownLocalDate = nextDate;

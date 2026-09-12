@@ -6,6 +6,30 @@ import type { CatalogObservation, MemoObservation } from "../src/types/catalog";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("浮标保留实际页 revision，跨页失效不是成功空结果", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, [makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "same")]);
+	const service = new CatalogReadService({ catalog });
+	const page = await service.query({ limit: 1 });
+	service.query = async () => page;
+	const result = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.equal(result.catalogRevision, page.catalogRevision);
+	assert.deepEqual(result.coverage, page.coverage);
+	let calls = 0;
+	service.query = async () => ++calls === 1
+		? { ...page, nextCursor: {} as NonNullable<typeof page.nextCursor> }
+		: { ...page, invalidated: true, catalogRevision: page.catalogRevision + 1 };
+	const invalid = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.equal(invalid.invalidated, true);
+	assert.deepEqual(invalid.items, []);
+	assert.equal(calls, 2);
+});
+
 test("清理待处理状态独立于已完成迁移传递，成功后可清除", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");

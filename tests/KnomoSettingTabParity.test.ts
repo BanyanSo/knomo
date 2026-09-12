@@ -7,6 +7,7 @@ const expectedGroupKeys = [
 	"settings.attention.heading",
 	"settings.capture.heading",
 	"settings.monthly.heading",
+	"settings.presentation.heading",
 	"settings.files.heading",
 ];
 
@@ -20,6 +21,7 @@ const expectedRenderOrder = [
 	"renderMonthlyFileFormatSetting",
 	"renderDateHeadingFormatSetting",
 	"renderMonthlyExcludeSetting",
+	"renderRecentTimeFlowSetting",
 	"renderMonthlyFolderSetting",
 ];
 

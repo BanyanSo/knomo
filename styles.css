@@ -4499,3 +4499,45 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 		scroll-behavior: var(--knomo-scroll-behavior);
 	}
 }
+
+/* 近三天时间流只装饰默认卡片流。 */
+.knomo-plugin .knomo-recent-flow-decoration {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-normal);
+	padding: 10px var(--size-4-2) 8px;
+}
+.knomo-plugin .knomo-recent-flow-date {
+	font-size: 15px;
+	display: flex;
+	align-items: baseline;
+	gap: var(--size-4-2);
+	white-space: nowrap;
+}
+.knomo-plugin .knomo-recent-flow-relative {
+	color: var(--text-accent);
+	font-weight: var(--font-semibold);
+}
+.knomo-plugin .knomo-recent-flow-calendar {
+	color: var(--text-normal);
+}
+.knomo-plugin .knomo-recent-flow-history {
+	text-align: start;
+}
+.knomo-plugin .knomo-card-time.knomo-recent-time {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	color: var(--text-accent);
+	font-weight: var(--font-medium);
+}
+.knomo-plugin .knomo-card-time.knomo-recent-time:focus {
+	color: var(--text-accent);
+}
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-time.knomo-recent-time[data-memo-time-open="daily"]:hover,
+.knomo-plugin .knomo-card-time.knomo-recent-time[data-memo-time-open="daily"]:focus-visible,
+.knomo-plugin .knomo-card-time.knomo-recent-time[data-memo-time-open="daily"]:active {
+	color: var(--text-accent-hover);
+}
+.knomo-plugin .knomo-recent-time-icon { display: inline-flex; }
+.knomo-plugin .knomo-recent-time-icon svg { width: 16px; height: 16px; }

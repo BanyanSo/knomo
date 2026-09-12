@@ -319,9 +319,10 @@ export class CatalogReadService {
 	}
 
 	async queryTimeBuoysForDate(targetDate: string): Promise<TimeBuoyQueryResult> {
-		const memos = await this.queryAllItems({ timeBuoyDate: targetDate, limit: 150 });
-		const coverage = await this.options.catalog.getStore().getCoverage();
+		const page = await this.queryTimeBuoyItems({ timeBuoyDate: targetDate, limit: 150 });
+		const { items: memos, coverage, catalogRevision, invalidated } = page;
 		return {
+			catalogRevision, coverage, invalidated,
 			items: memos.map((memo) => ({ memo: toCatalogMemoView(memo), instance: buildTimeBuoyInstance(memo, targetDate) })),
 			stale: [],
 			missingPeriods: isDateCovered(coverage, targetDate) ? [] : [targetDate.slice(0, 7)],
@@ -329,8 +330,9 @@ export class CatalogReadService {
 	}
 
 	async queryAllTimeBuoys(): Promise<TimeBuoyAllQueryResult> {
-		const memos = await this.queryAllItems({ hasTimeBuoy: true, limit: 150 });
+		const { items: memos, coverage, catalogRevision, invalidated } = await this.queryTimeBuoyItems({ hasTimeBuoy: true, limit: 150 });
 		return {
+			catalogRevision, coverage, invalidated,
 			items: memos.flatMap((memo) => memo.timeBuoyDates.map((targetDate) => ({
 				memo: toCatalogMemoView(memo),
 				instance: buildTimeBuoyInstance(memo, targetDate),
@@ -338,7 +340,7 @@ export class CatalogReadService {
 				|| right.memo.createdAt.localeCompare(left.memo.createdAt)),
 			stale: [],
 			missingPeriods: [],
-			complete: isCompleteCoverage(await this.options.catalog.getStore().getCoverage()),
+			complete: !invalidated && isCompleteCoverage(coverage),
 		};
 	}
 
@@ -639,6 +641,22 @@ export class CatalogReadService {
 			return "storage_unavailable";
 		}
 		return coverage.kind === "complete" ? "ready" : "history_building";
+	}
+
+	private async queryTimeBuoyItems(request: Omit<CatalogFeatureQuery, "cursor">): Promise<CatalogMemoPage> {
+		let page = await this.query(request);
+		if (page.readState === "storage_unavailable") return { ...page, items: [], nextCursor: null, invalidated: true };
+		const first = page;
+		const items = [...page.items];
+		while (!page.invalidated && page.nextCursor !== null) {
+			page = await this.query({ ...request, cursor: page.nextCursor });
+			if (page.readState === "storage_unavailable" || page.catalogRevision !== first.catalogRevision
+				|| JSON.stringify(page.coverage) !== JSON.stringify(first.coverage)) {
+				return { ...first, items: [], nextCursor: null, invalidated: true };
+			}
+			items.push(...page.items);
+		}
+		return { ...first, items: page.invalidated ? [] : items, nextCursor: null, invalidated: page.invalidated };
 	}
 
 	private async queryAllItems(

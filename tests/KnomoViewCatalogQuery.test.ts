@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -17,7 +18,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	view.hasCommittedCatalogDesktopQuery = false;
 	view.catalogCursor = { catalog: { catalogRevision: 1, createdAtKey: "old", observationKey: "old" } };
 	view.memos = [];
-	view.viewStateController = { activeNav: "all" };
+	view.viewStateController = Object.assign(new KnomoViewStateController(), { activeNav: "all" as const });
 	view.getCatalogQueryFingerprint = () => "all";
 	view.loadCatalogMemos = async () => {
 		const load = loads.shift();
@@ -74,7 +75,7 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 	view.hasCommittedCatalogDesktopQuery = false;
 	view.catalogCursor = null;
 	view.memos = [];
-	view.viewStateController = { activeNav: "all" };
+	view.viewStateController = Object.assign(new KnomoViewStateController(), { activeNav: "all" as const });
 	view.getCatalogQueryFingerprint = () => "all";
 	let complete = false;
 	view.loadCatalogMemos = async () => complete
@@ -209,10 +210,12 @@ test("MOBILE-CAT-PAGE-002：近月窗口结束后触底改为全历史查询", a
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as HistoryExpansionView;
+	let appended = 0;
+	Object.assign(view, { cardFlowCoordinator: { generation: 1 }, renderNextCardBatch: () => { appended += 1; } });
 	view.catalogCursor = null;
 	view.catalogHistoryExpansionPending = true;
 	view.catalogLoadingNextPage = false;
-	view.viewStateController = { activeNav: "all" };
+	view.viewStateController = Object.assign(new KnomoViewStateController(), { activeNav: "all" as const });
 	view.isDefaultListState = () => true;
 	const reloads: Array<[boolean, boolean | undefined]> = [];
 	view.reloadMemos = async (loadAll, forceRebuild) => {
@@ -222,12 +225,14 @@ test("MOBILE-CAT-PAGE-002：近月窗口结束后触底改为全历史查询", a
 
 	assert.equal(view.canLoadOlderMemoPeriods(), true);
 	assert.equal(await view.loadNextCatalogPage(), true);
-	assert.deepEqual(reloads, [[true, true]]);
+	assert.deepEqual(reloads, [[true, undefined]]);
+	assert.equal(appended, 1);
 	assert.equal(view.catalogHistoryExpansionPending, false);
 
 	view.catalogHistoryExpansionPending = true;
 	view.reloadMemos = async () => false;
 	assert.equal(await view.loadNextCatalogPage(), false);
+	assert.equal(appended, 1);
 	assert.equal(view.catalogHistoryExpansionPending, true);
 	assert.equal(view.catalogLoadingNextPage, false);
 });
@@ -244,7 +249,7 @@ test("Catalog revision 变化触发刷新时保留当前随机重逢批次", asy
 	view.catalogDesktopQueryFingerprint = null;
 	view.catalogCursor = null;
 	view.memos = [];
-	view.viewStateController = { activeNav: "random" };
+	view.viewStateController = Object.assign(new KnomoViewStateController(), { activeNav: "random" as const });
 	view.getCatalogQueryFingerprint = () => "random";
 	view.loadCatalogMemos = async () => makeCatalogLoad(2, completeCoverage());
 	view.getCardFlowStateKey = () => "random-ready";
@@ -330,7 +335,7 @@ test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快�
 	view.hasCommittedCatalogDesktopQuery = true;
 	view.catalogCursor = null;
 	view.memos = [makeMemo("selected-day", "2026-05-01T09:00:00")];
-	view.viewStateController = { activeNav: "all" };
+	view.viewStateController = Object.assign(new KnomoViewStateController(), { activeNav: "all" as const });
 	view.getCatalogQueryFingerprint = () => "catalog";
 	view.loadCatalogMemos = async () => ({
 		memos: await pending.promise,

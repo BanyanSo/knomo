@@ -4,6 +4,32 @@ import test from "node:test";
 import type { KnomoSettings } from "../src/types/settings";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("时间流仅本地保存，关闭重载保留且失败不发布新值", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: createSettings() });
+	let local: unknown = null;
+	Object.assign(plugin.app, {
+		loadLocalStorage: () => local,
+		saveLocalStorage: (_key: string, value: unknown) => { local = value; },
+	});
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+	assert.equal(service.getSettings().recentTimeFlowEnabled, true);
+	await service.updateSettings({ recentTimeFlowEnabled: false });
+	assert.equal(plugin.saveCalls, 0);
+	await service.loadSettings();
+	assert.equal(service.getSettings().recentTimeFlowEnabled, false);
+	Object.assign(plugin.app, { saveLocalStorage: () => { throw new Error("local write failed"); } });
+	await assert.rejects(service.updateSettings({ recentTimeFlowEnabled: true }));
+	assert.equal(service.getSettings().recentTimeFlowEnabled, false);
+	local = { recentTimeFlowEnabled: "false" };
+	await service.loadSettings();
+	assert.equal(service.getSettings().recentTimeFlowEnabled, true);
+	Object.assign(plugin.app, { loadLocalStorage: () => { throw new Error("local read failed"); } });
+	await service.loadSettings();
+	assert.equal(service.getSettings().recentTimeFlowEnabled, true);
+});
+
 test("enables Time Buoy by default when no setting was persisted", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
@@ -339,6 +365,7 @@ function createSettings(): KnomoSettings {
 		monthlyDateOrder: "asc",
 		legacyDailyHeadings: [],
 		timeBuoyEnabled: false,
+		recentTimeFlowEnabled: true,
 		mobileCompactMode: "auto",
 		syncDebounceMs: 1000,
 		desktopSidebarWidth: 248,

@@ -107,6 +107,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 			merged.legacyDailyHeadings,
 			DEFAULT_KNOMO_SETTINGS.legacyDailyHeadings,
 		).filter((heading) => isValidMarkdownHeading(heading)),
+		recentTimeFlowEnabled: booleanOrDefault(merged.recentTimeFlowEnabled, DEFAULT_KNOMO_SETTINGS.recentTimeFlowEnabled),
 		timeBuoyEnabled: booleanOrDefault(
 			merged.timeBuoyEnabled,
 			DEFAULT_KNOMO_SETTINGS.timeBuoyEnabled,

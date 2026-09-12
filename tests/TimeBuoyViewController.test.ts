@@ -8,6 +8,34 @@ import { mergeTodayTimeBuoyFeed, TimeBuoyViewController } from "../src/ui/TimeBu
 const EMPTY_RESULT: TimeBuoyQueryResult = { items: [], stale: [], missingPeriods: [] };
 const EMPTY_ALL_RESULT: TimeBuoyAllQueryResult = { ...EMPTY_RESULT, complete: true };
 
+test("今日浮标保留空结果 revision 并拒绝跨午夜旧请求", async () => {
+	let now = new Date(2026, 8, 10);
+	let resolve!: (result: TimeBuoyQueryResult) => void;
+	const controller = new TimeBuoyViewController({
+		getNow: () => now, queryAll: async () => EMPTY_ALL_RESULT,
+		queryDate: () => new Promise((done) => { resolve = done; }), requestRender: () => {},
+	});
+	const first = controller.loadTodayOnly();
+	await Promise.resolve();
+	resolve({ ...EMPTY_RESULT, catalogRevision: 4 });
+	await first;
+	assert.equal(controller.getSnapshot().todayRevision, 4);
+	assert.equal(controller.getSnapshot().todayValid, true);
+	const old = controller.loadTodayOnly();
+	await Promise.resolve();
+	now = new Date(2026, 8, 11);
+	resolve({ ...EMPTY_RESULT, catalogRevision: 5 });
+	await old;
+	assert.equal(controller.getSnapshot().todayDate, "2026-09-10");
+	assert.equal(controller.getSnapshot().todayRevision, 4);
+	const closed = controller.loadTodayOnly();
+	await Promise.resolve();
+	controller.clear();
+	resolve({ ...EMPTY_RESULT, catalogRevision: 6 });
+	await closed;
+	assert.equal(controller.getSnapshot().todayValid, false);
+});
+
 test("promotes every today card in creation-time order without duplicating ordinary feed memos", () => {
 	const memos = Array.from({ length: 8 }, (_, index) => ({
 		id: `memo-${index}`,

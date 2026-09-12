@@ -22,6 +22,7 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	monthlyDateOrder: DEFAULT_MONTHLY_DATE_ORDER,
 	legacyDailyHeadings: [],
 	timeBuoyEnabled: false,
+	recentTimeFlowEnabled: true,
 	timeBuoyIntroDismissed: false,
 	mobileCompactMode: "auto",
 	syncDebounceMs: DEFAULT_SYNC_DEBOUNCE_MS,

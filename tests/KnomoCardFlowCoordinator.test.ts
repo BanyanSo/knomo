@@ -5,6 +5,23 @@ import { KnomoCardFlowCoordinator } from "../src/ui/KnomoCardFlowCoordinator";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { CardFlowSentinelRenderOptions } from "../src/ui/KnomoCardFlowSentinel";
 
+test("展示重排恢复同一 render key 相对位置，revision 改变只回退 scrollTop", () => {
+	const coordinator = new KnomoCardFlowCoordinator();
+	coordinator.generation = 4;
+	let key = "daily:rev-a:2";
+	const root = { scrollTop: 100, getBoundingClientRect: () => ({ top: 10 }), children: [{
+		getAttribute: () => key, getBoundingClientRect: () => ({ top: 60 }),
+	}] } as unknown as HTMLElement;
+	const pending = { generation: 4, scrollTop: 90, visibleCount: 50, anchor: { renderKey: key, offset: 20 } };
+	const values: number[] = [];
+	coordinator.setPendingScrollRestore(pending);
+	coordinator.restorePendingScrollTop(4, (value) => values.push(value), root);
+	key = "daily:rev-b:2";
+	coordinator.setPendingScrollRestore(pending);
+	coordinator.restorePendingScrollTop(4, (value) => values.push(value), root);
+	assert.deepEqual(values, [130, 90]);
+});
+
 test("tracks pending scroll restore by generation and consumes it once", () => {
 	const coordinator = new KnomoCardFlowCoordinator();
 	const generation = advanceGeneration(coordinator);

@@ -18,6 +18,7 @@ export interface KnomoSettings {
 	monthlyDateOrder: MonthlyDateOrder;
 	legacyDailyHeadings: string[];
 	timeBuoyEnabled: boolean;
+	recentTimeFlowEnabled: boolean;
 	timeBuoyIntroDismissed?: boolean;
 	mobileCompactMode: MobileCompactMode;
 	syncDebounceMs: number;

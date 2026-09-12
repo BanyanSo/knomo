@@ -132,6 +132,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 			},
 			{
 				type: "group",
+				heading: t("settings.presentation.heading"),
+				items: [{
+					name: t("settings.recentTimeFlow.name"),
+					desc: t("settings.recentTimeFlow.desc"),
+					render: (setting: Setting) => { this.renderRecentTimeFlowSetting(setting); },
+				}],
+			},
+			{
+				type: "group",
 				heading: t("settings.files.heading"),
 				items: [{
 					name: t("settings.monthlyFolder.name"),
@@ -192,6 +201,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setDesc(t("settings.excludeMonthly.desc")));
 
 		new Setting(containerEl)
+			.setName(t("settings.presentation.heading")).setHeading();
+		this.renderRecentTimeFlowSetting(new Setting(containerEl)
+			.setName(t("settings.recentTimeFlow.name"))
+			.setDesc(t("settings.recentTimeFlow.desc")));
+
+		new Setting(containerEl)
 			.setName(t("settings.files.heading"))
 			.setHeading();
 		this.renderMonthlyFolderSetting(new Setting(containerEl)
@@ -249,6 +264,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 				void this.settingsService.updateSettings({
 					memoTimeFormat: value as MemoTimeFormat,
 				});
+			});
+		});
+	}
+
+	private renderRecentTimeFlowSetting(setting: Setting): void {
+		setting.addToggle((toggle) => {
+			toggle.setValue(this.settingsService.getSettings().recentTimeFlowEnabled);
+			toggle.onChange(async (value) => {
+				try {
+					await this.settingsService.updateSettings({ recentTimeFlowEnabled: value });
+				} catch {
+					toggle.setValue(this.settingsService.getSettings().recentTimeFlowEnabled);
+					new Notice(t("error.saveFailed"));
+				}
 			});
 		});
 	}

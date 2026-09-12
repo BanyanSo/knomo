@@ -20,6 +20,7 @@ interface CardFlowViewStateKeyOptions {
 }
 
 interface CardFlowStateKeyOptions {
+	presentationContextKey?: string;
 	activeNav: SidebarNav;
 	recordStatsSnapshot: RecordStatsSnapshot;
 	recordStatsView: RecordStatsView;
@@ -97,6 +98,7 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 	}
 	return getStateKey([
 		"items",
+		options.presentationContextKey ?? "",
 		options.presentation.mode,
 		getCardFlowHeadersStateKey(options.presentation.headers),
 		getMemoListStateKey(options.presentation.memos),
@@ -113,7 +115,7 @@ export function getVisibleCardFlowStateKey(options: VisibleCardFlowStateKeyOptio
 	if (options.presentation.type === "onboarding") {
 		return getCardFlowStateKey(options);
 	}
-	return `${options.presentation.mode}:${getVisibleCardFlowMemoStateKey(
+	return `${options.presentationContextKey ?? ""}:${options.presentation.mode}:${getVisibleCardFlowMemoStateKey(
 		options.presentation.memos,
 		options.renderedCardCount,
 		options.initialBatchSize,

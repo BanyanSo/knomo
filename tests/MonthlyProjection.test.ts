@@ -151,6 +151,7 @@ function makeSettings(locale = "en"): KnomoSettings & { locale: string } {
 		monthlyDateOrder: "asc",
 		legacyDailyHeadings: [],
 		timeBuoyEnabled: true,
+		recentTimeFlowEnabled: true,
 		mobileCompactMode: "auto",
 		syncDebounceMs: 1000,
 		desktopSidebarWidth: 248,

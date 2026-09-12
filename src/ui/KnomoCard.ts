@@ -19,6 +19,7 @@ import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
 import { getMemoRenderKey } from "./MemoRenderRevision";
 import { formatObservationDisplayTime } from "./MemoDisplayFormatters";
+import type { MemoTimePresentation } from "./RecentTimeFlowPresentation";
 
 export interface MemoCardTimeBuoy {
 	status: TimeBuoyDateStatus;
@@ -31,6 +32,7 @@ export interface RenderMemoCardOptions<TMemo extends MemoRecord = MemoRecord> {
 	includeActions: boolean;
 	randomCard: boolean;
 	timeBuoy?: MemoCardTimeBuoy;
+	timePresentation?: MemoTimePresentation;
 	activeMenuMemoId: string | null;
 	formatDisplayTime: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
@@ -73,6 +75,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 		attr: shell.attrs,
 	});
 	const head = card.createDiv({ cls: "knomo-card-head" });
+	card.setAttr("data-time-presentation", JSON.stringify(options.timePresentation ?? { mode: "full" }));
 	renderMemoCardTime(head, memo, options);
 	if (options.includeActions) {
 		const menu = head.createEl("button", {
@@ -140,13 +143,20 @@ function renderMemoCardTime<TMemo extends MemoRecord>(container: HTMLElement, me
 	if (options.randomCard) {
 		attrs["data-random-reunion-card"] = "true";
 	}
-	container.createEl("button", {
+	const recent = options.timePresentation?.mode === "recent" ? options.timePresentation : null;
+	const button = container.createEl("button", {
 		cls: "knomo-card-time",
-		text: memo.catalog === undefined
+		text: recent !== null ? undefined : memo.catalog === undefined
 			? options.formatDisplayTime(memo.createdAt)
 			: formatObservationDisplayTime(memo.catalog.observation),
 		attr: attrs,
 	});
+	if (recent !== null) {
+		button.addClass("knomo-recent-time");
+		const icon = button.createSpan({ cls: "knomo-recent-time-icon", attr: { "aria-hidden": "true" } });
+		setIcon(icon, recent.icon);
+		button.createSpan({ text: recent.time });
+	}
 }
 
 function renderMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBuoy | undefined): void {

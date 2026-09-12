@@ -12,6 +12,9 @@ export interface TimeBuoyTabItem {
 }
 
 export interface TimeBuoyViewSnapshot {
+	todayDate: string | null;
+	todayRevision: number | null;
+	todayValid: boolean;
 	loading: boolean;
 	error: unknown;
 	refreshError: unknown;
@@ -120,13 +123,17 @@ export class TimeBuoyViewController {
 				return;
 			}
 			const result = await this.options.queryAll();
-			if (requestId !== this.requestId) {
+			if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) {
 				return;
 			}
+			if (result.invalidated) throw new Error("Time buoy query invalidated");
 			const partitioned = partitionItems(result.items, today);
 			const nextSnapshot = {
 				...createInitialSnapshot(this.snapshot.activeTab),
 				...partitioned,
+				todayDate: today,
+				todayRevision: result.catalogRevision ?? null,
+				todayValid: result.complete && result.missingPeriods.length === 0,
 				complete: result.complete && result.missingPeriods.length === 0,
 			};
 			const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
@@ -163,18 +170,22 @@ export class TimeBuoyViewController {
 				if (requestId !== this.requestId) {
 					return;
 				}
-				// 后台重建期间保留最后一次成功结果，避免已显示的今日浮标短暂消失。
+				// 独立页保留最后结果，默认列表暂停提升未经确认的浮标。
 				this.hasLoadedAll = false;
+				this.snapshot = { ...this.snapshot, todayValid: false };
+				this.options.requestRender();
 				return;
 			}
 			const result = await this.options.queryDate(today);
-			if (requestId !== this.requestId) {
+			if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) {
 				return;
 			}
+			if (result.invalidated) throw new Error("Time buoy query invalidated");
 			if (result.missingPeriods.length > 0) {
 				const changed = this.snapshot.todayError === null;
 				this.snapshot = {
 					...this.snapshot,
+					todayValid: false,
 					todayError: new Error(`Incomplete time buoy index: ${result.missingPeriods.join(", ")}`),
 				};
 				if (changed) {
@@ -184,10 +195,15 @@ export class TimeBuoyViewController {
 			}
 			const nextToday = groupTabItems(result.items, "today");
 			const changed = this.snapshot.todayError !== null
+				|| !this.snapshot.todayValid || this.snapshot.todayDate !== today
+				|| this.snapshot.todayRevision !== (result.catalogRevision ?? null)
 				|| !areTimeBuoyTabItemsEqual(this.snapshot.today, nextToday);
 			this.snapshot = {
 				...this.snapshot,
 				today: nextToday,
+				todayDate: today,
+				todayRevision: result.catalogRevision ?? null,
+				todayValid: true,
 				todayError: null,
 			};
 			if (changed) {
@@ -198,7 +214,7 @@ export class TimeBuoyViewController {
 				return;
 			}
 			const changed = this.snapshot.todayError === null;
-			this.snapshot = { ...this.snapshot, todayError: error };
+			this.snapshot = { ...this.snapshot, todayError: error, todayValid: false };
 			if (changed) {
 				this.options.requestRender();
 			}
@@ -221,6 +237,9 @@ function areTimeBuoySnapshotsEqual(
 	right: TimeBuoyViewSnapshot,
 ): boolean {
 	return left.loading === right.loading
+		&& left.todayDate === right.todayDate
+		&& left.todayRevision === right.todayRevision
+		&& left.todayValid === right.todayValid
 		&& left.error === right.error
 		&& left.refreshError === right.refreshError
 		&& left.todayError === right.todayError
@@ -247,6 +266,9 @@ function areTimeBuoyTabItemsEqual(
 
 function createInitialSnapshot(activeTab: TimeBuoyTab = "today"): TimeBuoyViewSnapshot {
 	return {
+		todayDate: null,
+		todayRevision: null,
+		todayValid: false,
 		loading: false,
 		error: null,
 		refreshError: null,

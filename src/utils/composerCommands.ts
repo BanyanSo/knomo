@@ -48,6 +48,11 @@ export function runComposerCommand(value: string, anchor: number, head: number, 
 					while (finish > start && /\s/u.test(value[finish - 1])) finish--;
 				}
 				if (start < finish) {
+					// 允许完整包裹或位于另一格式正文内，但不能穿过它的标记边界。
+					if (syntax.ranges.some(r => (r.kind === "bold" || r.kind === "highlight") && r.kind !== command
+						&& start < r.to && finish > r.from
+						&& !(start <= r.from && finish >= r.to)
+						&& !(start >= r.contentFrom && finish <= r.contentTo))) return { type: "unavailable" };
 					const matching = syntax.ranges.filter(r => r.kind === command && start < r.to && finish > r.from);
 					const exact = matching.find(r => start === r.from && finish === r.to || start === r.contentFrom && finish === r.contentTo);
 					if (matching.length && !exact) return { type: "unavailable" };

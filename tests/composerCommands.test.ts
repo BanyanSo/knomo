@@ -29,6 +29,20 @@ test("empty insertion and repeated or partial formatting do not create additiona
 	assert.equal(runComposerCommand("**hello** world", 3, 15, "bold").type, "unavailable");
 });
 
+test("bold and highlight reject crossing each other's boundaries but retain legal nesting", () => {
+	for (const [marker, command] of [["**", "highlight"], ["==", "bold"]] as const) {
+		const value = `${marker}ab${marker} cd`;
+		for (const [from, to] of [[2, 9], [9, 2], [1, 4], [2, 5]]) {
+			assert.equal(runComposerCommand(value, from, to, command).type, "unavailable");
+		}
+		assert.equal(runComposerCommand(`cd ${marker}ab${marker}`, 0, 7, command).type, "unavailable");
+		const inserted = command === "bold" ? "**" : "==";
+		assert.equal(apply(value, 2, 4, command).value, `${marker}${inserted}ab${inserted}${marker} cd`);
+		assert.equal(apply(value, 0, 9, command).value, `${inserted}${value}${inserted}`);
+		assert.equal(runComposerCommand(`plain\n${value}`, 0, 11, command).type, "unavailable");
+	}
+});
+
 test("multiline formatting preserves list structure, indentation, empty lines and whitespace", () => {
 	const value = "  - [x] one  \n\n  2) **two**\nplain";
 	const result = apply(value, 0, value.indexOf("plain"), "bold");

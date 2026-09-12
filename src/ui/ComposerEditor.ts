@@ -193,11 +193,15 @@ export class ComposerEditor {
 		return true;
 	}
 
-	invalidateContext(): void { this.session++; }
+	invalidateContext(): void {
+		this.session++;
+		this.input.dispatchEvent(new this.input.ownerDocument.defaultView!.Event("composer-reset"));
+	}
 	reset(doc: string): void {
 		this.session++;
 		this.revision++;
 		this.view.setState(this.createState(doc, this.label, this.hint));
+		this.input.dispatchEvent(new this.input.ownerDocument.defaultView!.Event("composer-reset"));
 	}
 	get composing(): boolean { return this.view.composing || this.view.state.field(composingField); }
 	capture(): { valid: () => boolean; sameSession: () => boolean; anchor: number; head: number } {

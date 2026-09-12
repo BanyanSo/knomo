@@ -23,6 +23,7 @@ export class KnomoTagSuggest {
 	private selectedIndex = 0;
 	private requestGeneration = 0;
 	private readonly popoverId: string;
+	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
 
 	constructor(
 		app: App,
@@ -34,8 +35,12 @@ export class KnomoTagSuggest {
 		this.popoverId = `${inputEl.getAttribute("aria-labelledby") ?? "knomo-composer"}-tag-suggestions`;
 	}
 
-	open(): void { this.refresh(); }
+	open(): void { this.dismissed = null; this.refresh(); }
 	close(): void {
+		this.dismissed = this.inputEl.composer.capture();
+		this.clear();
+	}
+	private clear(): void {
 		this.requestGeneration++;
 		this.clearPopoverReposition();
 		this.popoverEl?.remove();
@@ -47,6 +52,7 @@ export class KnomoTagSuggest {
 		}
 	}
 	openForCurrentTrigger(): void {
+		this.dismissed = null;
 		this.refresh();
 		const generation = ++this.requestGeneration;
 		const context = this.inputEl.composer.capture();
@@ -56,9 +62,13 @@ export class KnomoTagSuggest {
 	}
 	refresh(): void {
 		if (this.inputEl.composer.composing) return;
+		if (!this.inputEl.contains(this.inputEl.ownerDocument.activeElement)) { this.close(); return; }
+		const current = this.inputEl.composer.capture();
+		if (this.dismissed?.valid() && this.dismissed.anchor === current.anchor && this.dismissed.head === current.head) return;
+		this.dismissed = null;
 		const selected = this.suggestions[this.selectedIndex]?.tag;
 		const suggestions = this.getSuggestions();
-		this.close();
+		this.clear();
 		if (!suggestions.length) return;
 		this.suggestions = suggestions;
 		this.selectedIndex = Math.max(0, suggestions.findIndex(suggestion => suggestion.tag === selected));
@@ -81,6 +91,22 @@ export class KnomoTagSuggest {
 		}
 		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${this.selectedIndex}`);
 		this.queuePopoverReposition();
+	}
+	registerLifecycle(): () => void {
+		const keydown = (event: KeyboardEvent) => { this.handleKeydown(event); };
+		const keyup = (event: KeyboardEvent) => { if (!(event.ctrlKey || event.metaKey)) this.refresh(); };
+		const close = () => this.close();
+		this.inputEl.addEventListener("keydown", keydown, true);
+		this.inputEl.addEventListener("keyup", keyup);
+		this.inputEl.addEventListener("blur", close);
+		this.inputEl.addEventListener("composer-reset", close);
+		return () => {
+			this.inputEl.removeEventListener("keydown", keydown, true);
+			this.inputEl.removeEventListener("keyup", keyup);
+			this.inputEl.removeEventListener("blur", close);
+			this.inputEl.removeEventListener("composer-reset", close);
+			this.close();
+		};
 	}
 	handleKeydown(event: KeyboardEvent): boolean {
 		const controlNavigation = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["n", "p"].includes(event.key.toLowerCase());

@@ -206,6 +206,7 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		return child;
 	};
 	prototype.setText = function(this: HTMLElement, text: string) { this.textContent = text; };
+	prototype.empty = function(this: HTMLElement) { this.replaceChildren(); };
 	prototype.addClass = function(this: HTMLElement, name: string) { this.classList.add(name); };
 	prototype.removeClass = function(this: HTMLElement, name: string) { this.classList.remove(name); };
 	prototype.toggleClass = function(this: HTMLElement, name: string, enabled: boolean) { this.classList.toggle(name, enabled); };
@@ -213,9 +214,33 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => undefined, {
 		getSnapshot: () => ({ suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
 	} as never);
+	const unregister = suggest.registerLifecycle();
 	try {
+		editor.view.focus();
 		suggest.refresh();
 		assert.equal(win.document.querySelectorAll(".suggestion-item").length, 2);
+		const key = (type: string, key: string) => editor.input.dispatchEvent(new win.KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
+		assert.equal(key("keydown", "Escape"), false);
+		key("keyup", "Escape");
+		assert.equal(win.document.querySelector(".suggestion-container"), null);
+		assert.equal(key("keydown", "Escape"), true);
+		editor.apply({ value: "#a", anchor: 2, head: 2 });
+		key("keyup", "a");
+		assert.notEqual(win.document.querySelector(".suggestion-container"), null);
+		editor.input.blur();
+		key("keyup", "a");
+		assert.equal(win.document.querySelector(".suggestion-container"), null);
+		editor.view.focus();
+		suggest.open();
+		editor.reset("#");
+		key("keyup", "Escape");
+		assert.equal(win.document.querySelector(".suggestion-container"), null);
+		editor.view.focus();
+		suggest.open();
+		editor.invalidateContext();
+		key("keyup", "Escape");
+		assert.equal(win.document.querySelector(".suggestion-container"), null);
+		suggest.open();
 		assert.equal(suggest.handleKeydown(new win.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true })), false);
 		assert.equal(suggest.handleKeydown(new win.KeyboardEvent("keydown", { key: "Enter", isComposing: true })), false);
 		assert.equal(editor.input.value, "#");
@@ -226,5 +251,5 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		assert.equal(win.document.querySelector(".suggestion-container"), null);
 		undo(editor.view);
 		assert.equal(editor.input.value, "#");
-	} finally { suggest.close(); close(); }
+	} finally { unregister(); close(); }
 });

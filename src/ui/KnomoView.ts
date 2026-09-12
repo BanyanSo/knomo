@@ -1388,17 +1388,18 @@ export class KnomoView extends ItemView {
 			if (this.handleComposerSaveShortcut(event)) {
 				return;
 			}
-			if (this.wikiLinkSuggest?.handleKeydown(event) || this.tagSuggest?.handleKeydown(event)) {
+			if (this.wikiLinkSuggest?.handleKeydown(event)) {
 				return;
 			}
-			this.handleListEnterKeydown(event);
 		}, { capture: true });
+		this.getRenderScope().register(this.tagSuggest.registerLifecycle());
+		this.getRenderScope().registerDomEvent(this.inputEl, "keydown", event => this.handleListEnterKeydown(event), { capture: true });
 		this.getRenderScope().registerDomEvent(this.inputEl, "keydown", (event) => {
 			this.handleComposerKeydown(event);
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "keyup", (event) => {
 			this.handleComposerKeyup(event);
-			if (!(event.ctrlKey || event.metaKey)) { this.wikiLinkSuggest?.refreshForCursor(); this.tagSuggest?.refresh(); }
+			if (!(event.ctrlKey || event.metaKey)) this.wikiLinkSuggest?.refreshForCursor();
 			this.closeTimeBuoyPickerIfTriggerMoved();
 		});
 		this.getRenderScope().register(registerComposerToolGesture(composer.toolsEl, action => { this.runComposerToolAction(action); }));

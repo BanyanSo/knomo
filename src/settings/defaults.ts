@@ -1,3 +1,4 @@
+import { normalizeComposerToolbar } from "./composerToolbar";
 import {
 	DEFAULT_DAILY_HEADING,
 	DEFAULT_DESKTOP_SIDEBAR_WIDTH,
@@ -12,6 +13,7 @@ import {
 import type { KnomoSettings } from "../types/settings";
 
 export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
+	composerToolbar: normalizeComposerToolbar(undefined),
 	settingsVersion: SETTINGS_VERSION,
 	dailyHeading: DEFAULT_DAILY_HEADING,
 	dailyInsertPosition: "bottom",

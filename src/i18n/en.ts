@@ -1,6 +1,18 @@
 import type { TranslationKey } from "./zh-CN";
 
 export const en: Record<TranslationKey, string> = {
+	"composer.actionUnavailable": "This action is unavailable for the current selection.",
+	"composer.finishComposition": "Finish composing text before using this action.",
+	"composer.asyncChanged": "The editing content or session changed. The result was not inserted; created attachments were retained.",
+	"composer.insertTask": "Convert to task",
+	"composer.insertBold": "Bold",
+	"composer.insertHighlight": "Highlight",
+	"composer.insertLink": "Internal link",
+	"settings.toolbar.name": "Composer toolbar",
+	"settings.toolbar.desc": "Hide tools, change their order, or restore defaults. Saved with your synced plugin settings.",
+	"settings.toolbar.reset": "Restore defaults",
+	"settings.toolbar.up": "Move up",
+	"settings.toolbar.down": "Move down",
 	"settings.presentation.heading": "Display preferences",
 	"settings.recentTimeFlow.name": "Recent 3-day time flow",
 	"settings.recentTimeFlow.desc": "Group ordinary notes from today and the previous two days by date in the default All Notes view, and highlight their times. Turn this off to restore the original card layout.",

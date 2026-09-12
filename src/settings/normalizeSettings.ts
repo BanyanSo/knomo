@@ -1,3 +1,4 @@
+import { normalizeComposerToolbar } from "./composerToolbar";
 import { SETTINGS_VERSION } from "../constants";
 import type {
 	DailyInsertPosition,
@@ -86,6 +87,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 	);
 
 	return {
+		composerToolbar: normalizeComposerToolbar(savedSettings.composerToolbar),
 		monthlyLocale: optionalString(savedSettings.monthlyLocale),
 		currentConfigInitialized: savedSettings.currentConfigInitialized === true,
 		settingsVersion: SETTINGS_VERSION,
@@ -142,6 +144,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 export function cloneSettings(settings: KnomoSettings): KnomoSettings {
 	return {
 		...settings,
+		composerToolbar: normalizeComposerToolbar(settings.composerToolbar),
 		legacyDailyHeadings: [...settings.legacyDailyHeadings],
 		pinnedTags: [...settings.pinnedTags],
 	};

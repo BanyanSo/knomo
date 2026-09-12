@@ -3,6 +3,48 @@ import assert from "node:assert/strict";
 
 import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
 
+test("image picker captures context before selection and never substitutes a later context", async () => {
+	const input = new FakeInput(new FakeScheduler());
+	input.files = { length: 1 } as FileList;
+	const original = { memo: "original" };
+	let current = original;
+	const received: unknown[] = [];
+	const controller = new NativeImagePickerController({
+		createInput: () => input.asNativeInput(),
+		beginFocusGuard: () => false,
+		finishFocusGuard: () => undefined,
+		captureContext: () => current,
+		insertImageFiles: async (_files, context) => { received.push(context); },
+	});
+	controller.open();
+	current = { memo: "another" };
+	input.emit("change");
+	await Promise.resolve();
+	assert.deepEqual(received, [original]);
+	controller.dispose();
+});
+
+test("late image result does not restore focus into a replaced session", async () => {
+	const input = new FakeInput(new FakeScheduler());
+	input.files = { length: 1 } as FileList;
+	let current = true;
+	let finish: () => void = () => undefined;
+	const focus: boolean[] = [];
+	const controller = new NativeImagePickerController({
+		createInput: () => input.asNativeInput(), beginFocusGuard: () => true,
+		finishFocusGuard: restore => focus.push(restore),
+		isContextCurrent: () => current,
+		insertImageFiles: () => new Promise<void>(resolve => { finish = resolve; }),
+	});
+	controller.open();
+	input.emit("change");
+	current = false;
+	finish();
+	await Promise.resolve();
+	assert.deepEqual(focus, [false]);
+	controller.dispose();
+});
+
 test("native image picker restores focus and cleans up when cancelled", () => {
 	const scheduler = new FakeScheduler();
 	const input = new FakeInput(scheduler);

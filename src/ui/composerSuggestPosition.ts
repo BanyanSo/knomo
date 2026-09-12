@@ -1,39 +1,14 @@
+import type { ComposerInput } from "./ComposerEditor";
 export interface SuggestContentWidthOptions {
 	includeScrollbarWidth?: boolean;
 	extraWidth?: number;
 }
 
-export function getTextareaCharacterRect(inputEl: HTMLTextAreaElement, index: number): DOMRect | null {
-	const doc = inputEl.ownerDocument;
-	const win = doc.defaultView;
-	if (win === null) {
-		return null;
-	}
-	const inputRect = inputEl.getBoundingClientRect();
-	const computed = win.getComputedStyle(inputEl);
-	const mirror = doc.body.createDiv({ cls: "knomo-textarea-mirror" });
-	mirror.setCssProps({
-		"--knomo-textarea-mirror-word-break": computed.wordBreak,
-		"--knomo-textarea-mirror-box-sizing": computed.boxSizing,
-		"--knomo-textarea-mirror-width": `${inputRect.width}px`,
-		"--knomo-textarea-mirror-min-height": computed.minHeight,
-		"--knomo-textarea-mirror-padding": computed.padding,
-		"--knomo-textarea-mirror-border": computed.border,
-		"--knomo-textarea-mirror-font": computed.font,
-		"--knomo-textarea-mirror-line-height": computed.lineHeight,
-		"--knomo-textarea-mirror-letter-spacing": computed.letterSpacing,
-		"--knomo-textarea-mirror-text-transform": computed.textTransform,
-		"--knomo-textarea-mirror-left": `${inputRect.left - inputEl.scrollLeft}px`,
-		"--knomo-textarea-mirror-top": `${inputRect.top - inputEl.scrollTop}px`,
-	});
-	mirror.setText(inputEl.value.slice(0, index));
-	const marker = mirror.createSpan({ text: inputEl.value.charAt(index) || "\u200b" });
-	const rect = marker.getBoundingClientRect();
-	mirror.detach();
-	return rect;
+export function getTextareaCharacterRect(inputEl: HTMLElement, index: number): DOMRect | null {
+	return (inputEl as ComposerInput).composer.coordsAtPos(index);
 }
 
-export function measureSuggestionContentHeight(inputEl: HTMLTextAreaElement, container: HTMLElement, itemSelector: string): number {
+export function measureSuggestionContentHeight(inputEl: HTMLElement, container: HTMLElement, itemSelector: string): number {
 	const win = inputEl.ownerDocument.defaultView;
 	if (win === null) {
 		return Math.ceil(container.scrollHeight || container.getBoundingClientRect().height);
@@ -53,7 +28,7 @@ export function measureSuggestionContentHeight(inputEl: HTMLTextAreaElement, con
 }
 
 export function measureSuggestionContentWidth(
-	inputEl: HTMLTextAreaElement,
+	inputEl: HTMLElement,
 	container: HTMLElement,
 	itemSelector: string,
 	options: SuggestContentWidthOptions = {},

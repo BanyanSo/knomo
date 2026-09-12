@@ -1,18 +1,21 @@
-interface NativeImagePickerControllerOptions {
+interface NativeImagePickerControllerOptions<T> {
+	captureContext?(): T | undefined;
+	isContextCurrent?(context: T | undefined): boolean;
 	createInput(): HTMLInputElement;
 	beginFocusGuard(): boolean;
 	finishFocusGuard(shouldRestoreFocus: boolean): void;
-	insertImageFiles(files: FileList): Promise<void>;
+	insertImageFiles(files: FileList, context?: T): Promise<void>;
 }
 
-export class NativeImagePickerController {
+export class NativeImagePickerController<T = undefined> {
 	private cleanupActivePicker: (() => void) | null = null;
 
-	constructor(private readonly options: NativeImagePickerControllerOptions) {}
+	constructor(private readonly options: NativeImagePickerControllerOptions<T>) {}
 
 	open(): void {
 		this.dispose();
 		const shouldRestoreMobileFocus = this.options.beginFocusGuard();
+		const context = this.options.captureContext?.();
 		const input = this.options.createInput();
 		let handledChange = false;
 		let cleanedUp = false;
@@ -37,7 +40,7 @@ export class NativeImagePickerController {
 			}
 			handledChange = true;
 			cleanup();
-			finishFocusGuard(shouldRestoreMobileFocus);
+			finishFocusGuard(shouldRestoreMobileFocus && (this.options.isContextCurrent?.(context) ?? true));
 		};
 
 		const finishFocusGuard = (shouldRestoreFocus: boolean) => {
@@ -60,10 +63,10 @@ export class NativeImagePickerController {
 				return;
 			}
 			handledChange = true;
-			void this.options.insertImageFiles(files)
+			void this.options.insertImageFiles(files, context)
 				.then(
-					() => finishFocusGuard(shouldRestoreMobileFocus),
-					() => finishFocusGuard(shouldRestoreMobileFocus),
+					() => { if (!cleanedUp) finishFocusGuard(shouldRestoreMobileFocus && (this.options.isContextCurrent?.(context) ?? true)); },
+					() => { if (!cleanedUp) finishFocusGuard(shouldRestoreMobileFocus && (this.options.isContextCurrent?.(context) ?? true)); },
 				)
 				.finally(cleanup);
 		};

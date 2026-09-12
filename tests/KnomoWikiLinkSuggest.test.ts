@@ -1,10 +1,11 @@
+import type { ComposerInput } from "../src/ui/ComposerEditor";
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { App, EventRef, TFile } from "obsidian";
 
 import { KnomoWikiLinkSuggest } from "../src/ui/KnomoWikiLinkSuggest";
 
-test("does not modify textarea while composing and completes after compositionend", () => {
+test("does not modify Composer input while composing and completes after compositionend", () => {
 	const harness = createHarness([makeFile("Notes/Alpha.md")]);
 	harness.input.value = "【【";
 	harness.input.setSelectionRange(2, 2);
@@ -153,7 +154,7 @@ test("handles Ctrl-N and Ctrl-P navigation without consuming unrelated modifiers
 	assert.equal(emptyEvent.prevented, false);
 });
 
-test("connects the textarea to the active WikiLink listbox option", () => {
+test("connects the Composer input to the active WikiLink listbox option", () => {
 	const harness = createHarness([
 		makeFile("Projects/Alpha.md"),
 		makeFile("Projects/Beta.md"),
@@ -258,7 +259,7 @@ test("touch scrolling WikiLink candidates does not select an item", () => {
 	assert.equal(harness.input.value, "[[]]");
 });
 
-test("positions WikiLink popover at the current textarea cursor", () => {
+test("positions WikiLink popover at the current Composer input cursor", () => {
 	const harness = createHarness([makeFile("Projects/Alpha.md")]);
 	harness.win.innerWidth = 800;
 	harness.win.visualViewport.width = 800;
@@ -652,17 +653,21 @@ class FakeElement {
 }
 
 class FakeTextArea extends FakeElement {
+	composer = {
+		apply: (edit: { value: string; anchor: number; head: number }) => { this.value = edit.value; this.setSelectionRange(edit.anchor, edit.head); return true; },
+		coordsAtPos: (index: number) => ({ left: 24 + index * 7, top: 300, right: 25 + index * 7, bottom: 318, width: 1, height: 18 }),
+	};
 	value = "";
 	selectionStart = 0;
 	selectionEnd = 0;
 	scrollLeft = 0;
 
 	constructor(doc: FakeDocument) {
-		super("textarea", doc);
+		super("Composer input", doc);
 	}
 
-	asTextArea(): HTMLTextAreaElement {
-		return this as unknown as HTMLTextAreaElement;
+	asTextArea(): ComposerInput {
+		return this as unknown as ComposerInput;
 	}
 
 	setSelectionRange(start: number, end: number): void {

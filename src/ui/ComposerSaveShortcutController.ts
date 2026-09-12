@@ -1,5 +1,5 @@
 interface ComposerSaveShortcutRequest {
-	inputEl: HTMLTextAreaElement | null;
+	inputEl: HTMLElement | null;
 	activeElement: Element | null;
 	isSaving: boolean;
 	saveInput: () => void;

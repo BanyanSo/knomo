@@ -4541,3 +4541,29 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 }
 .knomo-plugin .knomo-recent-time-icon { display: inline-flex; }
 .knomo-plugin .knomo-recent-time-icon svg { width: 16px; height: 16px; }
+
+/* Composer 原文与装饰共享编辑面，滚动由 CodeMirror scroller 负责。 */
+.knomo-plugin .knomo-composer-editor { min-width: 0; width: 100%; font-family: var(--font-text); }
+.knomo-plugin .knomo-composer-editor.cm-focused { outline: none; }
+.knomo-plugin .knomo-composer-editor .cm-scroller { font-family: inherit; line-height: 1.7; overflow: auto; max-height: 480px; overscroll-behavior: contain; }
+.knomo-plugin .knomo-composer-editor .knomo-composer-input { height: auto; max-height: none; overflow: visible; padding: 0; transition: none; font-family: inherit; font-size: 15px; line-height: 1.7; }
+.knomo-plugin .knomo-composer-editor .cm-line { padding: 0; }
+.knomo-plugin.is-layout-mobile .knomo-composer-editor .knomo-composer-input { font-size: 16px; }
+.knomo-plugin .knomo-composer-editor .cm-placeholder { color: var(--text-faint); }
+.knomo-plugin .knomo-composer-bold { font-weight: var(--bold-weight, var(--font-bold, 700)); color: var(--bold-color, inherit); }
+.knomo-plugin .knomo-composer-highlight { background: var(--text-highlight-bg); color: inherit; }
+.knomo-plugin .knomo-composer-link { color: var(--link-color); font-weight: var(--link-weight, inherit); text-decoration: var(--link-decoration, underline); cursor: text; }
+.knomo-plugin .knomo-composer-link:hover { color: var(--link-color-hover, var(--link-color)); text-decoration: var(--link-decoration-hover, underline); }
+.knomo-plugin .knomo-composer-marker { display: inline-block; width: max(1.5em, var(--knomo-composer-marker-width, 0px)); text-indent: 0; color: var(--list-marker-color, var(--text-muted)); cursor: text; }
+.knomo-plugin .knomo-composer-marker :is(ul, ol) { margin: 0; padding: 0; list-style-position: inside; }
+.knomo-plugin .knomo-composer-marker li { margin: 0; padding: 0; }
+.knomo-plugin .knomo-composer-bullet-marker ul { list-style-type: disc; }
+.knomo-plugin .knomo-composer-ordered-marker ol { list-style-type: decimal; }
+.knomo-plugin .knomo-composer-editor .cm-line.knomo-composer-list-line { padding-inline-start: max(1.5em, var(--knomo-composer-marker-width, 0px)); text-indent: calc(-1 * max(1.5em, var(--knomo-composer-marker-width, 0px))); }
+.knomo-plugin .knomo-composer-task-marker .task-list-item-checkbox { margin: 0; vertical-align: middle; cursor: text; }
+.knomo-plugin .knomo-composer-task-line.is-checked { color: var(--checklist-done-color, var(--text-muted)); text-decoration: var(--checklist-done-decoration, line-through); }
+.knomo-plugin .knomo-tool-group { min-width: 0; overflow-x: auto; flex-wrap: nowrap; touch-action: pan-x; }
+.knomo-plugin .knomo-tool-group[hidden], .knomo-plugin .knomo-tool-button[hidden] { display: none; }
+.knomo-plugin .knomo-tool-button, .knomo-plugin .knomo-composer-actions { flex-shrink: 0; }
+.knomo-toolbar-settings { width: 100%; }
+.knomo-toolbar-setting-row { flex-wrap: wrap; }

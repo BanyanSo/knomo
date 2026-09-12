@@ -1,3 +1,4 @@
+import { normalizeComposerToolbar } from "../src/settings/composerToolbar";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -141,6 +142,7 @@ test("Monthly conflict copy 只识别 canonical 同目录的 side copy", () => {
 
 function makeSettings(locale = "en"): KnomoSettings & { locale: string } {
 	return {
+		composerToolbar: normalizeComposerToolbar(undefined),
 		settingsVersion: 4,
 		dailyHeading: "## Memos",
 		dailyInsertPosition: "bottom",

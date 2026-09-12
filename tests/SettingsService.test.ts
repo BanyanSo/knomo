@@ -1,8 +1,38 @@
+import { normalizeComposerToolbar } from "../src/settings/composerToolbar";
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { KnomoSettings } from "../src/types/settings";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+test("toolbar settings persist in plugin data, ignore device overrides and fail writes without publishing", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: createSettings() });
+	let local: unknown = null;
+	Object.assign(plugin.app, {
+		loadLocalStorage: () => local,
+		saveLocalStorage: (_key: string, value: unknown) => { local = value; },
+	});
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+	const preferences = normalizeComposerToolbar({ order: ["bold", "tag"], hidden: ["bold", "tag"] });
+	await service.updateSettings({ composerToolbar: preferences });
+	assert.equal(plugin.saveCalls, 1);
+	assert.deepEqual((plugin.savedData.settings as KnomoSettings).composerToolbar, preferences);
+	assert.equal(Object.prototype.hasOwnProperty.call(local, "composerToolbar"), false);
+	local = { composerToolbar: normalizeComposerToolbar(undefined) };
+	await service.loadSettings();
+	assert.deepEqual(service.getSettings().composerToolbar, preferences);
+	const copy = service.getSettings();
+	copy.composerToolbar.order.reverse();
+	assert.deepEqual(service.getSettings().composerToolbar, preferences);
+	const secondDevice = new SettingsService((await createPlugin({}, plugin.savedData)) as never);
+	await secondDevice.loadSettings();
+	assert.deepEqual(secondDevice.getSettings().composerToolbar, preferences);
+	plugin.saveData = async () => { throw new Error("plugin data failure"); };
+	await assert.rejects(service.updateSettings({ composerToolbar: normalizeComposerToolbar(undefined) }));
+	assert.deepEqual(service.getSettings().composerToolbar, preferences);
+});
 
 test("时间流仅本地保存，关闭重载保留且失败不发布新值", async () => {
 	const { SettingsService } = await loadSettingsService();
@@ -355,6 +385,7 @@ async function createPlugin(
 
 function createSettings(): KnomoSettings {
 	return {
+		composerToolbar: normalizeComposerToolbar(undefined),
 		settingsVersion: 4,
 		dailyHeading: "## Knomo",
 		dailyInsertPosition: "bottom",

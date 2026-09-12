@@ -1,11 +1,13 @@
+import { normalizeComposerToolbar, type ComposerToolbarPreferences } from "../settings/composerToolbar";
 import { setIcon } from "obsidian";
 
 import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
+import { ComposerEditor, type ComposerInput } from "./ComposerEditor";
 
 export interface KnomoComposerElements {
 	composerEl: HTMLElement;
-	inputEl: HTMLTextAreaElement;
+	inputEl: ComposerInput;
 	referencePreviewEl: HTMLElement;
 	composerBarEl: HTMLElement;
 	toolsEl: HTMLElement;
@@ -17,7 +19,9 @@ export interface KnomoComposerElements {
 }
 
 interface RenderKnomoComposerOptions {
+	createEditor?: (parent: HTMLElement, doc: string, label: string, hint: string) => ComposerInput;
 	dailyEnabled: boolean;
+	toolbar?: ComposerToolbarPreferences;
 	timeBuoyEnabled?: boolean;
 	timeBuoyPickerId?: string;
 	draftContent: string;
@@ -40,15 +44,9 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 	const composerEl = container.createDiv({ cls: "knomo-composer" });
 	const inputArea = composerEl.createDiv({ cls: "knomo-composer-input-area" });
 	const composerInputLabelId = options.createHiddenText(inputArea, "composer-input-label", t("composer.inputLabel"));
-	const inputEl = inputArea.createEl("textarea", {
-		cls: "knomo-composer-input",
-		attr: {
-			placeholder: t("composer.placeholder"),
-			"aria-labelledby": composerInputLabelId,
-		},
-	});
+	const inputEl = options.createEditor?.(inputArea, options.draftContent, composerInputLabelId, t("composer.placeholder"))
+		?? new ComposerEditor(inputArea, options.draftContent, composerInputLabelId, t("composer.placeholder")).input;
 	inputEl.disabled = !options.dailyEnabled;
-	inputEl.value = options.draftContent;
 
 	const referencePreviewEl = inputArea.createDiv({ cls: "knomo-reference-preview" });
 	const composerBarEl = inputArea.createDiv({ cls: "knomo-composer-bar" });
@@ -76,9 +74,14 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 			},
 		})
 		: null;
+	options.createIconButton(toolsEl, "list-todo", t("composer.insertTask"), "knomo-tool-button", "insert-task", false);
+	options.createIconButton(toolsEl, "bold", t("composer.insertBold"), "knomo-tool-button", "insert-bold", false);
+	options.createIconButton(toolsEl, "highlighter", t("composer.insertHighlight"), "knomo-tool-button", "insert-highlight", false);
+	options.createIconButton(toolsEl, "brackets", t("composer.insertLink"), "knomo-tool-button", "insert-link", false);
 	options.createIconButton(toolsEl, "list", t("composer.insertList"), "knomo-tool-button", "insert-list", false);
 	options.createIconButton(toolsEl, "list-ordered", t("composer.insertNumberedList"), "knomo-tool-button", "insert-numbered-list", false);
 
+	updateComposerToolbar(toolsEl, normalizeComposerToolbar(options.toolbar));
 	const actions = composerBarEl.createDiv({ cls: "knomo-composer-actions" });
 	const cancelEditButtonEl = actions.createEl("button", {
 		cls: "knomo-cancel-edit-button",
@@ -146,4 +149,20 @@ export function renderComposerReferencePreview(
 	options.setTooltipIfDesktopOnly(clearButton);
 	setIcon(clearButton, "x");
 	container.addClass("is-visible");
+}
+
+export const composerActionLabels = {
+	tag: "composer.insertTag", image: "composer.insertImage", "time-buoy": "composer.addTimeBuoy",
+	task: "composer.insertTask", list: "composer.insertList", bold: "composer.insertBold",
+	highlight: "composer.insertHighlight", link: "composer.insertLink", "numbered-list": "composer.insertNumberedList",
+} as const;
+
+export function updateComposerToolbar(tools: HTMLElement, preferences: ComposerToolbarPreferences): void {
+	for (const action of preferences.order) {
+		const button = tools.querySelector<HTMLElement>('[data-action="insert-' + action + '"]');
+		if (!button) continue;
+		button.hidden = preferences.hidden.includes(action);
+		tools.appendChild(button);
+	}
+	tools.hidden = !Array.from(tools.children).some(button => !(button as HTMLElement).hidden);
 }

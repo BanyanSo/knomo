@@ -12,7 +12,7 @@ test("composer 在 Daily 提交后立即清空，不等待卡片刷新", async (
 	const reloadStarted = createDeferred<void>();
 	const reloadFinished = createDeferred<boolean>();
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
-	view.inputEl = { value: "memo" };
+	view.inputEl = createComposerInput("memo");
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -63,7 +63,7 @@ test("Daily 提交前继续输入的新草稿不会被旧保存清空", async ()
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const dailyCommitted = createDeferred<void>();
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
-	view.inputEl = { value: "old memo" };
+	view.inputEl = createComposerInput("old memo");
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -93,6 +93,35 @@ test("Daily 提交前继续输入的新草稿不会被旧保存清空", async ()
 
 	assert.equal(view.inputEl.value, "new draft");
 	assert.equal(view.composerOpen, true);
+});
+
+test("保存期间切换到同文新会话不会被旧提交清空，失败保留草稿", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const fail of [false, true]) {
+		const daily = createDeferred<void>();
+		const view = Object.create(KnomoView.prototype) as SaveInputView;
+		Object.assign(view, {
+			inputEl: createComposerInput("same text"), isSaving: false, editingMemo: null,
+			quoteReferenceText: null, quoteMarkdownText: null, currentLayout: "desktop",
+			draftContent: "same text", composerOpen: true,
+			closeTimeBuoyPicker: () => undefined, updateStatus: () => undefined,
+			updateSendButtonState: () => undefined, syncRootState: () => undefined,
+			clearComposerContext: () => { throw new Error("Must retain context"); },
+			memoCommandService: { startCreate: () => {
+				if (fail) throw new Error("Daily unavailable");
+				return { dailyCommitted: daily.promise, settled: Promise.resolve(makeSaveResult()) };
+			} },
+			reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
+		});
+		const saving = view.saveInput();
+		if (!fail) view.inputEl = createComposerInput("same text");
+		daily.resolve(undefined);
+		await saving;
+		assert.equal(view.inputEl?.value, "same text");
+		assert.equal(view.composerOpen, true);
+		assert.equal(view.isSaving, false);
+	}
 });
 
 test("task checkbox applies the saved card without waiting for a second page reload", async () => {
@@ -146,7 +175,7 @@ test("任务保存使 observation key 失效时重新加载，不按旧卡片位
 });
 
 interface SaveInputView {
-	inputEl: { value: string } | null;
+	inputEl: ReturnType<typeof createComposerInput> | null;
 	isSaving: boolean;
 	editingMemo: null;
 	quoteReferenceText: string | null;
@@ -218,4 +247,13 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 		resolvePromise = resolve;
 	});
 	return { promise, resolve: resolvePromise };
+}
+
+function createComposerInput(initial: string) {
+	let value = initial, revision = 0;
+	return {
+		get value() { return value; },
+		set value(next: string) { value = next; revision++; },
+		composer: { capture: () => { const current = revision; return { valid: () => current === revision }; } },
+	};
 }

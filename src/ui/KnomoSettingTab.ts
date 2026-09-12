@@ -1,3 +1,5 @@
+import { normalizeComposerToolbar } from "../settings/composerToolbar";
+import { composerActionLabels } from "./KnomoComposer";
 import { Notice, PluginSettingTab, Setting } from "obsidian";
 import type { App, ButtonComponent, Plugin, SettingDefinitionItem, ToggleComponent } from "obsidian";
 
@@ -82,6 +84,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 				type: "group",
 				heading: t("settings.capture.heading"),
 				items: [
+					{
+						name: t("settings.toolbar.name"),
+						desc: t("settings.toolbar.desc"),
+						render: (setting: Setting) => this.renderToolbarSetting(setting),
+					},
 					{
 						name: t("settings.dailyHeading.name"),
 						desc: t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING }),
@@ -171,6 +178,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName(t("settings.capture.heading"))
 			.setHeading();
+		this.renderToolbarSetting(new Setting(containerEl).setName(t("settings.toolbar.name")).setDesc(t("settings.toolbar.desc")));
 		this.renderDailyHeadingSetting(new Setting(containerEl)
 			.setName(t("settings.dailyHeading.name"))
 			.setDesc(t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING })));
@@ -219,6 +227,37 @@ export class KnomoSettingTab extends PluginSettingTab {
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
 		this.cancelAllDelayedSettingNotices();
+	}
+
+	private renderToolbarSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-toolbar-setting-row");
+		// 声明式设置会复用行节点，多次刷新时替换本组件拥有的内容。
+		setting.settingEl.querySelectorAll(":scope > .knomo-toolbar-settings").forEach(container => container.remove());
+		const container = setting.settingEl.createDiv({ cls: "knomo-toolbar-settings" });
+		const render = () => {
+			container.empty();
+			const preferences = this.settingsService.getSettings().composerToolbar;
+			const save = async (next: typeof preferences) => {
+				try { await this.settingsService.updateSettings({ composerToolbar: next }); render(); }
+				catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
+			};
+			preferences.order.forEach((action, index) => {
+				new Setting(container).setName(t(composerActionLabels[action]))
+					.addToggle(toggle => toggle.setValue(!preferences.hidden.includes(action)).onChange(visible => {
+						void save({ order: [...preferences.order], hidden: visible ? preferences.hidden.filter(item => item !== action) : [...preferences.hidden, action] });
+					}))
+					.addButton(button => button.setIcon("arrow-up").setTooltip(t("settings.toolbar.up")).setDisabled(index === 0).onClick(() => {
+						const order = [...preferences.order]; [order[index - 1], order[index]] = [order[index], order[index - 1]];
+						void save({ ...preferences, order });
+					}))
+					.addButton(button => button.setIcon("arrow-down").setTooltip(t("settings.toolbar.down")).setDisabled(index === preferences.order.length - 1).onClick(() => {
+						const order = [...preferences.order]; [order[index + 1], order[index]] = [order[index], order[index + 1]];
+						void save({ ...preferences, order });
+					}));
+			});
+			new Setting(container).addButton(button => button.setButtonText(t("settings.toolbar.reset")).onClick(() => { void save(normalizeComposerToolbar(undefined)); }));
+		};
+		render();
 	}
 
 	private renderDailyHeadingSetting(setting: Setting): void {

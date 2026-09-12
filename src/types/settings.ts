@@ -1,3 +1,4 @@
+import type { ComposerToolbarPreferences } from "../settings/composerToolbar";
 export type DailyInsertPosition = "top" | "bottom";
 export type MemoTimeFormat = "HH:mm:ss" | "HH:mm";
 export type KnomoSettingsLoadStatus = "not_loaded" | "ready" | "unavailable";
@@ -6,6 +7,7 @@ export type ReferenceMode = "embed" | "link";
 export type MobileCompactMode = "auto" | "on" | "off";
 
 export interface KnomoSettings {
+	composerToolbar: ComposerToolbarPreferences;
 	monthlyLocale?: string;
 	currentConfigInitialized?: boolean;
 	settingsVersion: number;

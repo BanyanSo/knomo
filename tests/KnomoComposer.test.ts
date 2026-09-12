@@ -1,3 +1,4 @@
+import type { ComposerInput } from "../src/ui/ComposerEditor";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
@@ -11,6 +12,11 @@ test("renders composer input, tools, actions, and reference preview", async () =
 	const root = new TestElement("div");
 
 	const elements = renderKnomoComposer(root.asHtml(), {
+		createEditor: (parent, doc, label) => {
+			const input = parent.createDiv({ attr: { "aria-labelledby": label } }) as unknown as ComposerInput;
+			input.value = doc;
+			return input;
+		},
 		dailyEnabled: false,
 		timeBuoyEnabled: true,
 		timeBuoyPickerId: "time-buoy-picker",
@@ -40,10 +46,17 @@ test("renders composer input, tools, actions, and reference preview", async () =
 		"insert-tag",
 		"insert-image",
 		"insert-time-buoy",
+		"insert-task",
 		"insert-list",
+		"insert-bold",
+		"insert-highlight",
+		"insert-link",
 		"insert-numbered-list",
 	]);
 	assert.equal(elements.timeBuoyButtonEl?.disabled, true);
+	for (const [action, icon] of [["bold", "bold"], ["highlight", "highlighter"], ["link", "brackets"]]) {
+		assert.equal((elements.toolsEl as unknown as TestElement).findAll("[data-action]").find(item => item.getAttr("data-action") === `insert-${action}`)?.getAttr("data-icon"), icon);
+	}
 	assert.equal(elements.timeBuoyButtonEl?.getAttr("data-icon"), KNOMO_TIME_BUOY_ICON);
 	assert.equal(elements.timeBuoyButtonEl?.getAttr("aria-haspopup"), "dialog");
 	assert.equal(elements.timeBuoyButtonEl?.getAttr("aria-expanded"), "false");
@@ -306,7 +319,10 @@ interface CreateElementOptions {
 }
 
 class TestElement {
-	private readonly children: TestElement[] = [];
+	readonly children: TestElement[] = [];
+	hidden = false;
+	querySelector(selector: string): TestElement | null { return this.find(selector.replace(/"/g, "'")); }
+	appendChild(child: TestElement): TestElement { const index = this.children.indexOf(child); if (index >= 0) this.children.splice(index, 1); this.children.push(child); return child; }
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
 	readonly style: { display?: string } = {};

@@ -20,7 +20,8 @@
 		"test:quiet": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot",
 		"test:tooling": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=tooling",
 		"test:all": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=all",
-		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files"
+		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files",
+		"composer:probe": "tsc -p tsconfig.composer-probe.json --noEmit && node scripts/composer/build-probe.mjs"
 	},
 	"keywords": [
 		"memo",
@@ -31,11 +32,17 @@
 	"license": "MIT",
 	"private": true,
 	"devDependencies": {
+		"@codemirror/commands": "6.8.1",
+		"@codemirror/state": "6.5.0",
+		"@codemirror/view": "6.38.6",
+		"@lezer/markdown": "1.4.3",
+		"@types/jsdom": "21.1.7",
 		"@types/node": "^22.15.0",
 		"@typescript-eslint/parser": "^8.61.0",
 		"esbuild": "^0.25.0",
 		"eslint": "^9.39.4",
 		"fake-indexeddb": "^6.2.5",
+		"jsdom": "26.1.0",
 		"obsidian": "1.13.1",
 		"typescript": "^5.8.0"
 	},

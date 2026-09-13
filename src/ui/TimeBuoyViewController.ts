@@ -161,7 +161,7 @@ export class TimeBuoyViewController {
 		}
 	}
 
-	async loadTodayOnly(): Promise<void> {
+	async loadTodayOnly(render = true): Promise<void> {
 		const requestId = ++this.requestId;
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
@@ -173,7 +173,7 @@ export class TimeBuoyViewController {
 				// 独立页保留最后结果，默认列表暂停提升未经确认的浮标。
 				this.hasLoadedAll = false;
 				this.snapshot = { ...this.snapshot, todayValid: false };
-				this.options.requestRender();
+				if (render) this.options.requestRender();
 				return;
 			}
 			const result = await this.options.queryDate(today);
@@ -188,7 +188,7 @@ export class TimeBuoyViewController {
 					todayValid: false,
 					todayError: new Error(`Incomplete time buoy index: ${result.missingPeriods.join(", ")}`),
 				};
-				if (changed) {
+				if (changed && render) {
 					this.options.requestRender();
 				}
 				return;
@@ -206,7 +206,7 @@ export class TimeBuoyViewController {
 				todayValid: true,
 				todayError: null,
 			};
-			if (changed) {
+			if (changed && render) {
 				this.options.requestRender();
 			}
 		} catch (error) {
@@ -215,7 +215,7 @@ export class TimeBuoyViewController {
 			}
 			const changed = this.snapshot.todayError === null;
 			this.snapshot = { ...this.snapshot, todayError: error, todayValid: false };
-			if (changed) {
+			if (changed && render) {
 				this.options.requestRender();
 			}
 		}

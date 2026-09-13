@@ -21,6 +21,7 @@ export class KnomoTagSuggest {
 	private popoverEl: HTMLElement | null = null;
 	private suggestions: TagSuggestion[] = [];
 	private selectedIndex = 0;
+	private renderedQuery: string | null = null;
 	private requestGeneration = 0;
 	private readonly popoverId: string;
 	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
@@ -68,8 +69,16 @@ export class KnomoTagSuggest {
 		this.dismissed = null;
 		const selected = this.suggestions[this.selectedIndex]?.tag;
 		const suggestions = this.getSuggestions();
+		const query = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart)?.query ?? null;
+		// 导航和松键不重建候选 DOM，保留滚动位置与鼠标目标。
+		if (this.popoverEl && query === this.renderedQuery && suggestions.length === this.suggestions.length
+			&& suggestions.every((suggestion, index) => suggestion.tag === this.suggestions[index].tag)) {
+			this.queuePopoverReposition();
+			return;
+		}
 		this.clear();
 		if (!suggestions.length) return;
+		this.renderedQuery = query;
 		this.suggestions = suggestions;
 		this.selectedIndex = Math.max(0, suggestions.findIndex(suggestion => suggestion.tag === selected));
 		const container = this.inputEl.ownerDocument.body.createDiv({ cls: "suggestion-container knomo-tag-suggest-popover" });
@@ -87,6 +96,7 @@ export class KnomoTagSuggest {
 			item.toggleClass("is-selected", index === this.selectedIndex);
 			this.renderSuggestion(suggestion, item);
 			item.addEventListener("pointerdown", event => event.preventDefault());
+			item.addEventListener("pointermove", () => this.setSelectedIndex(index, false));
 			item.addEventListener("click", event => this.selectSuggestion(suggestion, event));
 		}
 		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${this.selectedIndex}`);
@@ -116,15 +126,19 @@ export class KnomoTagSuggest {
 		if (event.key === "Escape") this.close();
 		else if (event.key === "Enter" || event.key === "Tab") this.selectSuggestion(this.suggestions[this.selectedIndex], event);
 		else {
-			this.selectedIndex = (this.selectedIndex + (event.key === "ArrowDown" || event.key === "n" ? 1 : -1) + this.suggestions.length) % this.suggestions.length;
-			Array.from(this.popoverEl.children).forEach((child, index) => {
-				child.classList.toggle("is-selected", index === this.selectedIndex);
-				child.setAttribute("aria-selected", String(index === this.selectedIndex));
-			});
-			this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${this.selectedIndex}`);
-			this.popoverEl.children[this.selectedIndex]?.scrollIntoView({ block: "nearest" });
+			this.setSelectedIndex((this.selectedIndex + (event.key === "ArrowDown" || event.key.toLowerCase() === "n" ? 1 : -1) + this.suggestions.length) % this.suggestions.length, true);
 		}
 		return true;
+	}
+	private setSelectedIndex(index: number, scroll: boolean): void {
+		if (!this.popoverEl) return;
+		this.selectedIndex = index;
+		Array.from(this.popoverEl.children).forEach((child, childIndex) => {
+			child.classList.toggle("is-selected", childIndex === index);
+			child.setAttribute("aria-selected", String(childIndex === index));
+		});
+		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${index}`);
+		if (scroll) this.popoverEl.children[index]?.scrollIntoView({ block: "nearest" });
 	}
 	private getSuggestions(): TagSuggestion[] {
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);

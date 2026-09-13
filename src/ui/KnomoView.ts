@@ -1,4 +1,6 @@
 import { registerComposerToolGesture } from "./ComposerToolGesture";
+import { getMemoSourceReferenceMeta } from "./KnomoCardMetadata";
+import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 import { updateComposerToolbar } from "./KnomoComposer";
 import { runComposerCommand, type ComposerCommand } from "../utils/composerCommands";
 import { applyComposerEdit, type ComposerInput } from "./ComposerEditor";
@@ -1088,6 +1090,31 @@ export class KnomoView extends ItemView {
 		this.contentEl.removeClass("knomo-view-host");
 	}
 
+	async refreshReferences(): Promise<void> {
+		// 正文变化先走原有增量查询；引用更新不清空列表或重置置顶布局。
+		await this.refresh();
+		if (this.trashViewClosed) return;
+		for (const [container, surface, generation] of [
+			[this.cardFlowEl, "card-flow", this.renderGeneration],
+			[this.mobileSearchResultsEl, "mobile-search", this.mobileSearchRenderGeneration],
+		] as const) {
+			for (const card of Array.from(container?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? [])) {
+				const memo = this.findMemoById(card.getAttribute("data-memo-id")!);
+				if (!memo) continue;
+				const content = card.querySelector<HTMLElement>(".knomo-card-content");
+				if (content) {
+					// 渲染器在离屏完成后原子替换正文，等待期间保留已有内容。
+					this.memoMarkdownRenderer.queueMemoMarkdown(memo, content, generation, "normal", this.getMemoCardPreview(memo).text, surface);
+				}
+				const meta = card.querySelector<HTMLElement>(".knomo-source-reference");
+				const reference = getMemoSourceReferenceMeta(memo);
+				if (meta && reference.type !== "none") this.memoMarkdownRenderer.queueSourceReferenceMarkdown(
+					meta, `${t("reference.fromPrefix")}${reference.text}`, reference.sourcePath, generation, surface,
+				);
+			}
+		}
+	}
+
 	async refresh(forceRebuild = false): Promise<void> {
 		const timeBuoyEnabled = this.settingsService.getSettings().timeBuoyEnabled;
 		if (this.renderedTimeBuoyEnabled !== timeBuoyEnabled) {
@@ -1107,7 +1134,7 @@ export class KnomoView extends ItemView {
 		}
 		await this.waitForAllMemosLoading();
 		await this.reloadMemos(false, forceRebuild);
-		if (this.settingsService.getSettings().timeBuoyEnabled) {
+		if (this.settingsService.getSettings().timeBuoyEnabled && !this.shouldShowTodayTimeBuoys()) {
 			await this.timeBuoyViewController.loadTodayOnly();
 		}
 		if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
@@ -1634,6 +1661,14 @@ export class KnomoView extends ItemView {
 			});
 			if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
 			fullHistoryLoaded = true;
+		}
+		if (this.shouldShowTodayTimeBuoys()) {
+			// 先准备同版本的置顶结果，再提交列表，避免先撤下置顶又重新提升。
+			await this.timeBuoyViewController.loadTodayOnly(false);
+			const today = this.timeBuoyViewController.getSnapshot();
+			if (today.todayValid && today.todayRevision !== page.catalogRevision) {
+				throw new Error("Catalog changed while loading today's time buoys.");
+			}
 		}
 		return {
 			fullHistoryLoaded,
@@ -2982,6 +3017,10 @@ export class KnomoView extends ItemView {
 				.filter((entry): entry is [string, HTMLElement] => entry[0] !== null),
 		);
 		const pendingVisibleCount = this.cardFlowCoordinator.getPendingVisibleCount(this.renderGeneration);
+		const seedPlaceholder = createMemoRenderPlaceholders([...existingCards.entries()].flatMap(([key, card]) => {
+			const memo = this.renderedCardMemos.get(key);
+			return memo ? [{ memo, card }] : [];
+		}));
 		const visibleCount = Math.min(
 			presentation.memos.length,
 			Math.max(this.getInitialCardBatchSize(), existingCards.size, pendingVisibleCount ?? 0),
@@ -3008,6 +3047,7 @@ export class KnomoView extends ItemView {
 				card = this.replaceMemoCard(existingCard, previousMemo, memo, index, presentation.mode);
 			} else {
 				card = this.renderCardForMode(cardFlow, memo, this.renderGeneration, index, presentation.mode);
+				if (presentation.mode === "memo") seedPlaceholder(memo, card);
 			}
 			this.renderedCardMemos.set(renderKey, memo);
 			renderedCards.push(card);
@@ -4500,11 +4540,8 @@ export class KnomoView extends ItemView {
 		if (this.inputEl === null) {
 			return;
 		}
-		try {
-			this.inputEl.focus({ preventScroll: true });
-		} catch {
-			this.inputEl.focus();
-		}
+		// 由编辑器恢复源码选区，避免原生 focus 将旧 DOM 光标写回状态。
+		this.inputEl.composer.view.focus();
 		if (shouldResize) {
 			this.resizeInput();
 		}

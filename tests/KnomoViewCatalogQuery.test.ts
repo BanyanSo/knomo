@@ -183,6 +183,7 @@ test("移动端近月无下一页时确认全历史，保留真实历史 cursor 
 		loadCatalogMemos: (all: boolean) => Promise<{ fullHistoryLoaded: boolean; nextCursor: unknown }>;
 	};
 	view.buildCatalogActiveQuery = (all) => all ? {} : { fromDate: "2026-08-01" };
+	Object.assign(view, { shouldShowTodayTimeBuoys: () => false });
 	view.isDefaultListState = () => true;
 	const previousMobile = Platform.isMobile;
 	Platform.isMobile = true;

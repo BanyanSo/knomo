@@ -8,6 +8,26 @@ import { mergeTodayTimeBuoyFeed, TimeBuoyViewController } from "../src/ui/TimeBu
 const EMPTY_RESULT: TimeBuoyQueryResult = { items: [], stale: [], missingPeriods: [] };
 const EMPTY_ALL_RESULT: TimeBuoyAllQueryResult = { ...EMPTY_RESULT, complete: true };
 
+test("准备列表置顶结果时不发出中间重绘，失败仍使结果失效", async () => {
+	let renders = 0, fail = false;
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 8, 13), queryAll: async () => EMPTY_ALL_RESULT,
+		queryDate: async () => { if (fail) throw new Error("unavailable"); return { ...EMPTY_RESULT, catalogRevision: 5 }; },
+		requestRender: () => { renders++; },
+	});
+	await controller.loadTodayOnly(false);
+	assert.equal(controller.getSnapshot().todayRevision, 5);
+	assert.equal(controller.getSnapshot().todayValid, true);
+	assert.equal(renders, 0);
+	fail = true;
+	await controller.loadTodayOnly(false);
+	assert.equal(controller.getSnapshot().todayValid, false);
+	assert.equal(renders, 0);
+	fail = false;
+	await controller.loadTodayOnly();
+	assert.equal(renders, 1);
+});
+
 test("今日浮标保留空结果 revision 并拒绝跨午夜旧请求", async () => {
 	let now = new Date(2026, 8, 10);
 	let resolve!: (result: TimeBuoyQueryResult) => void;

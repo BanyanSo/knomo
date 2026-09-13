@@ -523,6 +523,8 @@ class TestElement {
 		return this.classes.has(cls);
 	}
 
+	querySelector(selector: string): TestElement | null { return this.find(selector); }
+
 	find(selector: string): TestElement | null {
 		return this.findAll(selector)[0] ?? null;
 	}

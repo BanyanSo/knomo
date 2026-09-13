@@ -541,7 +541,11 @@ export default class KnomoPlugin extends Plugin {
 		// 只重查已打开视图的 Catalog 页面；目标变化不触发全库 Daily 重读。
 		const scheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
-			() => this.runRefreshOpenViews(true),
+			async () => {
+				await Promise.all(this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async leaf => {
+					if (leaf.view instanceof KnomoView) await leaf.view.refreshReferences();
+				}));
+			},
 			OPEN_VIEWS_REFRESH_DEBOUNCE_MS,
 		);
 		this.register(() => scheduler.clear());

@@ -27,6 +27,27 @@ function environment(value: string) {
 	} };
 }
 
+test("浮标返回焦点时恢复编辑状态选区而非旧 DOM 光标", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const value of ["plain", "**bold** ==highlight==", "[[Note]] tail"]) {
+		const { editor, win, close } = environment(value);
+		try {
+			editor.view.focus();
+			editor.input.blur();
+			const next = value + " @2026-09-13 ";
+			editor.apply({ value: next, anchor: next.length, head: next.length });
+			win.document.getSelection()!.collapse(editor.input, 0);
+			(KnomoView.prototype as unknown as { focusComposerInputNow(this: unknown, resize: boolean, viewport: boolean): void })
+				.focusComposerInputNow.call({ inputEl: editor.input }, false, false);
+			const selection = win.document.getSelection()!;
+			assert.equal(editor.view.posAtDOM(selection.anchorNode!, selection.anchorOffset), next.length);
+			assert.equal(editor.input.selectionStart, next.length);
+			assert.equal(editor.input.value, next);
+		} finally { close(); }
+	}
+});
+
 test("real EditorView keeps one Markdown state, atomic toolbar history and session invalidation", async () => {
 	const { editor, close } = environment("中文 memo");
 	try {
@@ -220,6 +241,17 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		suggest.refresh();
 		assert.equal(win.document.querySelectorAll(".suggestion-item").length, 2);
 		const key = (type: string, key: string) => editor.input.dispatchEvent(new win.KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
+		const popover = win.document.querySelector<HTMLElement>(".suggestion-container")!;
+		const second = popover.children[1] as HTMLElement;
+		second.dispatchEvent(new win.MouseEvent("pointermove", { bubbles: true }));
+		assert.equal(second.getAttribute("aria-selected"), "true");
+		let scrolled = 0;
+		(popover.children[0] as HTMLElement).scrollIntoView = () => { scrolled++; popover.scrollTop = 80; };
+		key("keydown", "ArrowDown"); key("keyup", "ArrowDown");
+		assert.equal(scrolled, 1);
+		assert.equal(win.document.querySelector(".suggestion-container"), popover);
+		assert.equal(popover.scrollTop, 80);
+		assert.equal(popover.children[0].getAttribute("aria-selected"), "true");
 		assert.equal(key("keydown", "Escape"), false);
 		key("keyup", "Escape");
 		assert.equal(win.document.querySelector(".suggestion-container"), null);

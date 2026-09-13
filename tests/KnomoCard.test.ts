@@ -346,16 +346,17 @@ test("trash memo cards expose restore and single-item permanent purge actions", 
 	const { formatMemoDisplayTime, formatOptionalMemoTime } = await import("../src/ui/MemoDisplayFormatters");
 	const root = new TestElement("div");
 
+	// 本测试使用本地日历时间，避免依赖运行机器的时区。
 	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({
 		status: "deleted",
-		createdAt: "2026-06-02T12:34:56.789+08:00",
+		createdAt: "2026-06-02T12:34:56.789",
 		deletedAt: "2026-06-03T00:00:00.123",
 		trashItem: {
 			rawBlock: "- 12:34:56 memo",
 			key: "memo-1:delete-1",
 			snapshotId: "memo-1",
-			createdAt: "2026-06-02T12:34:56.789+08:00",
-			deletedAt: "2026-06-03T00:00:00+08:00",
+			createdAt: "2026-06-02T12:34:56.789",
+			deletedAt: "2026-06-03T00:00:00",
 			logicalDate: "2026-06-02",
 			sourcePath: "Daily/2026-06-02.md",
 			section: "Memos",

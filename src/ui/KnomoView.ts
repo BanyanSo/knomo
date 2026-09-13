@@ -1956,6 +1956,7 @@ export class KnomoView extends ItemView {
 		const today = new Date();
 		if (this.scopeFilter === "anniversary") {
 			query.monthDay = formatDatePart(today).slice(5);
+			query.excludeDate = formatDatePart(today);
 		} else {
 			const range = getCatalogDateRange(this.searchDateFilter ?? toSearchDateFilter(this.scopeFilter), today);
 			if (range !== null) {

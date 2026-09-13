@@ -1,4 +1,5 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import { matchesCatalogQuery, normalizeCatalogText } from "../services/MemoCatalogStore";
 import { formatDatePart } from "../utils/date";
 import type { SidebarNav } from "./viewNavigation";
 import {
@@ -66,7 +67,7 @@ export function filterVisibleMemos(options: FilterVisibleMemosOptions): MemoReco
 		if (activeTagKey !== null && !memo.tags.some((tag) => tagMatchesActiveTagKey(tag, activeTagKey))) {
 			return false;
 		}
-		if (normalizedQuery.length > 0 && !getMemoSearchText(memo).includes(normalizedQuery)) {
+		if (!matchesMemoSearchText(memo, normalizedQuery, getMemoSearchText)) {
 			return false;
 		}
 		return matchesScope(memo, scopeFilter, today);
@@ -82,7 +83,7 @@ export function memoMatchesSearch(
 	getMemoSearchText: (memo: MemoRecord) => string,
 	today = new Date(),
 ): boolean {
-	if (normalizedQuery.length > 0 && !getMemoSearchText(memo).includes(normalizedQuery)) {
+	if (!matchesMemoSearchText(memo, normalizedQuery, getMemoSearchText)) {
 		return false;
 	}
 	if (dateFilter !== null && !memoMatchesSearchDate(memo, dateFilter, dailyStatus, today)) {
@@ -92,6 +93,17 @@ export function memoMatchesSearch(
 		return false;
 	}
 	return true;
+}
+
+function matchesMemoSearchText(
+	memo: MemoRecord,
+	query: string,
+	getMemoSearchText: (memo: MemoRecord) => string,
+): boolean {
+	if (query.length === 0) return true;
+	// Catalog 卡片复用计数的匹配规则，避免二次过滤丢掉已命中的结果。
+	if (memo.catalog !== undefined) return matchesCatalogQuery(memo.catalog.observation, { text: query });
+	return normalizeCatalogText(getMemoSearchText(memo)).includes(normalizeCatalogText(query));
 }
 
 function hasActiveMemoSearch(

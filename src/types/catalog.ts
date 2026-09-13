@@ -200,6 +200,7 @@ export interface CatalogQuery {
 	fromDate?: string;
 	toDate?: string;
 	monthDay?: string;
+	excludeDate?: string;
 	dayOfMonth?: string;
 	hour?: number;
 	logicalDates?: readonly string[];

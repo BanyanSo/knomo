@@ -6,6 +6,86 @@ import type { CatalogObservation, MemoObservation } from "../src/types/catalog";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白归一化后保持一致", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { filterVisibleMemos, memoMatchesSearch } = await import("../src/ui/KnomoMemoFilter");
+	const { buildMemoSearchText } = await import("../src/ui/viewFilters");
+	const { toCatalogMemoView } = await import("../src/types/memoView");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const contents = ["ＡＢＣ", "alpha   beta", "alpha\n\tbeta", "unrelated"];
+	await seedCatalog(catalog, store, contents.map((content, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, content)));
+	const service = new CatalogReadService({ catalog });
+	const dailyStatus = { enabled: false, folder: null, format: null } as const;
+	for (const [text, expected] of [["abc", 1], ["ＡＢＣ", 1], ["alpha beta", 2], ["ALPHA\t  BETA", 2], ["missing", 0]] as const) {
+		const page = await service.query({ text, limit: 50 });
+		const memos = page.items.map(toCatalogMemoView);
+		assert.equal((await service.count({ text })).count, expected);
+		assert.equal(memos.length, expected);
+		assert.equal(filterVisibleMemos({
+			memos, randomMemos: [], shuffleDayMemos: [], activeNav: "all", activeTagKey: null,
+			scopeFilter: "all", normalizedQuery: text.trim().toLowerCase(), searchDateFilter: null,
+			recordStatsFilter: null, dailyStatus, getMemoSearchText: buildMemoSearchText,
+		}).length, expected, `桌面：${text}`);
+		assert.equal(memos.filter((memo) => memoMatchesSearch(memo, text.trim().toLowerCase(), null, null, dailyStatus, buildMemoSearchText)).length, expected, `移动端：${text}`);
+	}
+	await store.close();
+});
+
+test("那年今日的实际视图查询、分页和统计均排除今天的三条 Memo", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { KnomoViewStateController } = await import("../src/ui/KnomoViewStateController");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
+	const { formatDatePart } = await import("../src/utils/date");
+	const { matchesScope } = await import("../src/ui/viewFilters");
+	const { toCatalogMemoView } = await import("../src/types/memoView");
+	const today = new Date();
+	const todayKey = formatDatePart(today);
+	const oldKey = `${today.getFullYear() - 4}${todayKey.slice(4)}`;
+	const view = Object.create(KnomoView.prototype) as {
+		viewStateController: InstanceType<typeof KnomoViewStateController>;
+		buildCatalogActiveQuery(loadAll: boolean): import("../src/types/catalogView").CatalogFeatureFilter;
+	};
+	view.viewStateController = Object.assign(new KnomoViewStateController(), { scopeFilter: "anniversary" });
+	const query = view.buildCatalogActiveQuery(true);
+	for (const store of [
+		new InMemoryMemoCatalogStore(),
+		new IndexedDbMemoCatalogStore(`anniversary-${Date.now()}`, { factory: indexedDB, keyRange: IDBKeyRange }),
+	]) {
+		const catalog = new MemoCatalogService(store);
+		try {
+			await seedCatalogFiles(catalog, store, [makeObservation(`Daily/${oldKey}.md`, oldKey, 1, "old")]);
+			await catalog.replaceFile({
+				inventory: { sourcePath: `Daily/${todayKey}.md`, logicalDate: todayKey, mtime: 1, size: 1 },
+				sourceRevision: "a".repeat(64), parserVersion: 2, settingsFingerprint: "settings-1", auditedAt: 1,
+				observations: [1, 2, 3].map((line) => makeObservation(`Daily/${todayKey}.md`, todayKey, line, `today-${line}`)),
+			});
+			const service = new CatalogReadService({ catalog });
+			assert.equal((await service.count({})).count, 4);
+			const all = await service.query({ ...query, limit: 50 });
+			assert.deepEqual(all.items.map((item) => item.content), ["old"]);
+			assert.equal((await service.count(query)).count, 1);
+			const page = await service.query({ ...query, limit: 1 });
+			assert.deepEqual(page.items.map((item) => item.content), ["old"]);
+			if (page.nextCursor !== null) {
+				assert.deepEqual((await service.query({ ...query, limit: 1, cursor: page.nextCursor })).items, []);
+			}
+			const unfiltered = await service.query({ limit: 50 });
+			assert.deepEqual(unfiltered.items.filter((item) => matchesScope(toCatalogMemoView(item), "anniversary", today)).map((item) => item.content), ["old"]);
+		} finally {
+			await store.close();
+		}
+	}
+});
+
 test("浮标保留实际页 revision，跨页失效不是成功空结果", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");

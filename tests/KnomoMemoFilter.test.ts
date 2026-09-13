@@ -5,6 +5,14 @@ import type { MemoViewItem } from "../src/types/memoView";
 import { filterVisibleMemos, memoMatchesSearch } from "../src/ui/KnomoMemoFilter";
 import { buildMemoSearchText } from "../src/ui/viewFilters";
 
+test("非 Catalog Memo 搜索也统一全角字符、大小写和跨行空白", () => {
+	const memo = makeMemo("normalized", { contentSnapshot: "ＡＬＰＨＡ\n\t beta" });
+	for (const query of ["alpha beta", "ＡＬＰＨＡ   BETA"]) {
+		assert.equal(memoMatchesSearch(memo, query, null, null, disabledDailyStatus(), buildMemoSearchText), true);
+	}
+	assert.equal(memoMatchesSearch(memo, "alpha gamma", null, null, disabledDailyStatus(), buildMemoSearchText), false);
+});
+
 test("filterVisibleMemos returns random, trash, and record stats branches directly", () => {
 	const memos = [makeMemo("regular")];
 	const randomMemos = [makeMemo("random")];

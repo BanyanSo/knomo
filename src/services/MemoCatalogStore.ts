@@ -507,6 +507,7 @@ export function matchesCatalogQuery(
 		&& (request.fromDate === undefined || observation.logicalDate >= request.fromDate)
 		&& (request.toDate === undefined || observation.logicalDate <= request.toDate)
 		&& (request.monthDay === undefined || observation.logicalDate.slice(5) === request.monthDay)
+		&& (request.excludeDate === undefined || observation.logicalDate !== request.excludeDate)
 		&& (request.dayOfMonth === undefined || observation.logicalDate.slice(8) === request.dayOfMonth)
 		&& (request.hour === undefined || Number.parseInt(observation.time.slice(0, 2), 10) === request.hour)
 		&& (request.logicalDates === undefined || request.logicalDates.includes(observation.logicalDate))

@@ -1,4 +1,5 @@
-import { AbstractInputSuggest, prepareFuzzySearch, renderResults } from "obsidian";
+import { applyComposerEdit, type ComposerInput } from "./ComposerEditor";
+import { prepareFuzzySearch, renderResults } from "obsidian";
 import type { App, SearchResult } from "obsidian";
 
 import type { VaultTagIndex } from "../services/VaultTagIndex";
@@ -15,47 +16,131 @@ interface TagSuggestion {
 	result: SearchResult | null;
 }
 
-export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
+export class KnomoTagSuggest {
 	private popoverRepositionFrameId: number | null = null;
+	private popoverEl: HTMLElement | null = null;
+	private suggestions: TagSuggestion[] = [];
+	private selectedIndex = 0;
+	private renderedQuery: string | null = null;
+	private requestGeneration = 0;
+	private readonly popoverId: string;
+	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
 
 	constructor(
 		app: App,
-		private readonly inputEl: HTMLTextAreaElement,
+		private readonly inputEl: ComposerInput,
 		private readonly onInputChanged: () => void,
 		private readonly vaultTagIndex: VaultTagIndex,
 	) {
-		super(app, inputEl as unknown as HTMLInputElement);
-		this.limit = 0;
+		void app;
+		this.popoverId = `${inputEl.getAttribute("aria-labelledby") ?? "knomo-composer"}-tag-suggestions`;
 	}
 
-	open(): void {
-		super.open();
-		this.hidePopoverUntilPositioned();
-		this.queuePopoverReposition();
-	}
-
+	open(): void { this.dismissed = null; this.refresh(); }
 	close(): void {
-		this.clearPopoverReposition();
-		this.showPositionedPopover();
-		super.close();
+		this.dismissed = this.inputEl.composer.capture();
+		this.clear();
 	}
-
-	openForCurrentTrigger(): void {
-		void this.vaultTagIndex.ensureReady().then(() => {
-			const win = this.inputEl.ownerDocument.defaultView;
-			if (win !== null && getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart) !== null) {
-				this.inputEl.dispatchEvent(new win.Event("input", { bubbles: true }));
-			}
-		});
-		this.open();
-		this.queuePopoverReposition();
-		const container = this.getSuggestionContainer();
-		if (container !== null) {
-			container.addClass("knomo-tag-suggest-popover");
+	private clear(): void {
+		this.requestGeneration++;
+		this.clearPopoverReposition();
+		this.popoverEl?.remove();
+		this.popoverEl = null;
+		this.suggestions = [];
+		if (this.inputEl.getAttribute("aria-controls") === this.popoverId) {
+			this.inputEl.setAttribute("aria-expanded", "false");
+			this.inputEl.removeAttribute("aria-activedescendant");
 		}
 	}
-
-	protected getSuggestions(): TagSuggestion[] {
+	openForCurrentTrigger(): void {
+		this.dismissed = null;
+		this.refresh();
+		const generation = ++this.requestGeneration;
+		const context = this.inputEl.composer.capture();
+		void this.vaultTagIndex.ensureReady().then(() => {
+			if (generation === this.requestGeneration && context.valid()) this.refresh();
+		});
+	}
+	refresh(): void {
+		if (this.inputEl.composer.composing) return;
+		if (!this.inputEl.contains(this.inputEl.ownerDocument.activeElement)) { this.close(); return; }
+		const current = this.inputEl.composer.capture();
+		if (this.dismissed?.valid() && this.dismissed.anchor === current.anchor && this.dismissed.head === current.head) return;
+		this.dismissed = null;
+		const selected = this.suggestions[this.selectedIndex]?.tag;
+		const suggestions = this.getSuggestions();
+		const query = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart)?.query ?? null;
+		// 导航和松键不重建候选 DOM，保留滚动位置与鼠标目标。
+		if (this.popoverEl && query === this.renderedQuery && suggestions.length === this.suggestions.length
+			&& suggestions.every((suggestion, index) => suggestion.tag === this.suggestions[index].tag)) {
+			this.queuePopoverReposition();
+			return;
+		}
+		this.clear();
+		if (!suggestions.length) return;
+		this.renderedQuery = query;
+		this.suggestions = suggestions;
+		this.selectedIndex = Math.max(0, suggestions.findIndex(suggestion => suggestion.tag === selected));
+		const container = this.inputEl.ownerDocument.body.createDiv({ cls: "suggestion-container knomo-tag-suggest-popover" });
+		this.popoverEl = container;
+		container.id = this.popoverId;
+		this.hidePopoverUntilPositioned();
+		this.inputEl.setAttribute("aria-controls", this.popoverId);
+		this.inputEl.setAttribute("aria-expanded", "true");
+		container.setAttribute("role", "listbox");
+		for (const [index, suggestion] of suggestions.entries()) {
+			const item = container.createDiv({ cls: "suggestion-item" });
+			item.setAttribute("role", "option");
+			item.id = `${this.popoverId}-${index}`;
+			item.setAttribute("aria-selected", String(index === this.selectedIndex));
+			item.toggleClass("is-selected", index === this.selectedIndex);
+			this.renderSuggestion(suggestion, item);
+			item.addEventListener("pointerdown", event => event.preventDefault());
+			item.addEventListener("pointermove", () => this.setSelectedIndex(index, false));
+			item.addEventListener("click", event => this.selectSuggestion(suggestion, event));
+		}
+		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${this.selectedIndex}`);
+		this.queuePopoverReposition();
+	}
+	registerLifecycle(): () => void {
+		const keydown = (event: KeyboardEvent) => { this.handleKeydown(event); };
+		const keyup = (event: KeyboardEvent) => { if (!(event.ctrlKey || event.metaKey)) this.refresh(); };
+		const close = () => this.close();
+		this.inputEl.addEventListener("keydown", keydown, true);
+		this.inputEl.addEventListener("keyup", keyup);
+		this.inputEl.addEventListener("blur", close);
+		this.inputEl.addEventListener("composer-reset", close);
+		return () => {
+			this.inputEl.removeEventListener("keydown", keydown, true);
+			this.inputEl.removeEventListener("keyup", keyup);
+			this.inputEl.removeEventListener("blur", close);
+			this.inputEl.removeEventListener("composer-reset", close);
+			this.close();
+		};
+	}
+	handleKeydown(event: KeyboardEvent): boolean {
+		const controlNavigation = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["n", "p"].includes(event.key.toLowerCase());
+		if (!this.popoverEl || event.isComposing || this.inputEl.composer.composing || (event.ctrlKey || event.metaKey) && !controlNavigation) return false;
+		if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key) && !controlNavigation) return false;
+		event.preventDefault(); event.stopImmediatePropagation();
+		if (event.key === "Escape") this.close();
+		else if (event.key === "Enter" || event.key === "Tab") this.selectSuggestion(this.suggestions[this.selectedIndex], event);
+		else {
+			this.setSelectedIndex((this.selectedIndex + (event.key === "ArrowDown" || event.key.toLowerCase() === "n" ? 1 : -1) + this.suggestions.length) % this.suggestions.length, true);
+		}
+		return true;
+	}
+	private setSelectedIndex(index: number, scroll: boolean): void {
+		if (!this.popoverEl) return;
+		this.selectedIndex = index;
+		Array.from(this.popoverEl.children).forEach((child, childIndex) => {
+			child.classList.toggle("is-selected", childIndex === index);
+			child.setAttribute("aria-selected", String(childIndex === index));
+		});
+		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${index}`);
+		if (scroll) this.popoverEl.children[index]?.scrollIntoView({ block: "nearest" });
+	}
+	private getSuggestions(): TagSuggestion[] {
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			return [];
@@ -88,8 +173,7 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 			return;
 		}
 		const next = replaceTagQueryWithSuggestion(this.inputEl.value, range, value.tag);
-		this.inputEl.value = next.value;
-		this.inputEl.setSelectionRange(next.cursor, next.cursor);
+		applyComposerEdit(this.inputEl, next.value, next.cursor);
 		this.onInputChanged();
 		this.close();
 	}
@@ -226,30 +310,5 @@ export class KnomoTagSuggest extends AbstractInputSuggest<TagSuggestion> {
 		this.popoverRepositionFrameId = null;
 	}
 
-	private getSuggestionContainer(): HTMLElement | null {
-		const internal = this as unknown as { suggestEl?: unknown; popover?: unknown };
-		const directContainer = this.asHTMLElement(internal.suggestEl) ?? this.getContainerElement(internal.suggestEl) ?? this.getContainerElement(internal.popover);
-		if (directContainer !== null) {
-			return directContainer;
-		}
-		const containers = Array.from(this.inputEl.ownerDocument.querySelectorAll<HTMLElement>(".suggestion-container"));
-		return containers.length > 0 ? containers[containers.length - 1] : null;
-	}
-
-	private getContainerElement(value: unknown): HTMLElement | null {
-		if (value === null || typeof value !== "object") {
-			return null;
-		}
-		const candidate = value as { containerEl?: unknown; el?: unknown };
-		return this.asHTMLElement(candidate.containerEl) ?? this.asHTMLElement(candidate.el);
-	}
-
-	private asHTMLElement(value: unknown): HTMLElement | null {
-		const win = this.inputEl.ownerDocument.defaultView;
-		if (win === null || value === null || typeof value !== "object") {
-			return null;
-		}
-		const candidate = value as { instanceOf?: (constructor: typeof HTMLElement) => boolean };
-		return typeof candidate.instanceOf === "function" && candidate.instanceOf(win.HTMLElement) ? value as HTMLElement : null;
-	}
+	private getSuggestionContainer(): HTMLElement | null { return this.popoverEl; }
 }

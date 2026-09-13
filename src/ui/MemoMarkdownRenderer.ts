@@ -1,7 +1,7 @@
 import { MarkdownRenderer } from "obsidian";
 import type { App, Component } from "obsidian";
 
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
 	getMarkdownTaskLines,
 	type MarkdownTaskMarker,
@@ -350,6 +350,7 @@ export function prepareRenderedTaskCheckboxes(container: HTMLElement, memo: Memo
 			return;
 		}
 		const input = checkboxEl as HTMLInputElement;
+		input.disabled = false;
 		input.addClass("knomo-task-checkbox");
 		input.setAttr("data-knomo-memo-id", memo.id);
 		input.setAttr("data-knomo-task-index", String(taskIndex));

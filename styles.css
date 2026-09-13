@@ -107,6 +107,18 @@ body {
 	gap: var(--size-4-2);
 }
 
+.knomo-plugin .knomo-time-buoy-refresh-error {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	margin-bottom: var(--size-4-3);
+	padding: var(--size-4-2) var(--size-4-3);
+	border: var(--border-width) solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	color: var(--text-error);
+}
+
 .knomo-plugin .knomo-time-buoy-action {
 	min-height: 44px;
 }
@@ -159,7 +171,6 @@ body {
 	--knomo-accent: var(--interactive-accent);
 	--knomo-accent-hover: var(--interactive-accent-hover, var(--interactive-accent));
 	--knomo-accent-soft: color-mix(in srgb, var(--interactive-accent) 15%, transparent);
-	--knomo-accent-text: var(--text-accent);
 
 	/* Shadows */
 	--knomo-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
@@ -656,6 +667,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 
 .knomo-plugin .knomo-sidebar-stats.is-loading .knomo-stat-value {
 	animation: knomo-stat-loading 900ms linear infinite;
+}
+
+.knomo-plugin .knomo-sidebar-updating {
+	grid-column: 1 / -1;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
 }
 
 @keyframes knomo-stat-loading {
@@ -2541,6 +2558,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	cursor: pointer;
 }
 
+.knomo-plugin .knomo-card-menu:disabled {
+	opacity: 0.55;
+	cursor: wait;
+}
+
 .knomo-plugin .knomo-card-menu:hover,
 .knomo-plugin .knomo-card-menu:focus,
 .knomo-plugin .knomo-card-menu:focus-visible,
@@ -2589,6 +2611,18 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	transform: translateY(0) scale(1);
 	visibility: visible;
 	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-card-actions.has-explanation {
+	width: 220px;
+}
+
+.knomo-plugin .knomo-card-action-explanation {
+	padding: 8px 10px 2px;
+	border-top: var(--border-width) solid var(--knomo-soft-border);
+	color: var(--text-muted);
+	font-size: var(--knomo-card-time-font-size);
+	line-height: 1.4;
 }
 
 .knomo-plugin .knomo-card-action {
@@ -2851,18 +2885,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	font-size: 12px;
 }
 
-.knomo-plugin .knomo-trash-meta {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 4px 12px;
-}
-
-.knomo-plugin .knomo-card-warning {
-	margin-top: 6px;
-	color: var(--text-error);
-	font-size: 12px;
-}
-
 .knomo-plugin .knomo-source-reference p {
 	margin: 0;
 }
@@ -2890,6 +2912,41 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	font-size: var(--font-ui-small);
 }
 
+.knomo-plugin .knomo-catalog-onboarding {
+	max-width: 560px;
+	margin-inline: auto;
+}
+
+.knomo-plugin .knomo-catalog-onboarding-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-4);
+}
+
+.knomo-plugin .knomo-catalog-onboarding-actions button {
+	min-height: 44px;
+	padding-inline: var(--size-4-4);
+}
+
+.knomo-plugin .knomo-catalog-onboarding-actions button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.knomo-plugin .knomo-catalog-status {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-3);
+}
+
+.knomo-plugin .knomo-catalog-status button {
+	min-height: 44px;
+	flex: 0 0 auto;
+}
+
 /* --------------------------------------------------------------------------
    11. Settings Tab
    -------------------------------------------------------------------------- */
@@ -2903,9 +2960,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-error);
 }
 
-.knomo-scan-result,
-.knomo-issue-list,
-.knomo-legacy-import-groups {
+.knomo-scan-result {
 	margin: var(--size-4-2) 0 var(--size-4-4);
 }
 
@@ -2932,39 +2987,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	.knomo-maintenance-setting .setting-item-control button {
 		flex: 0 1 auto;
 	}
-}
-
-.knomo-legacy-import-group {
-	padding: var(--size-4-2) 0;
-	border-bottom: var(--border-width) solid var(--background-modifier-border);
-}
-
-.knomo-legacy-import-label {
-	display: flex;
-	gap: var(--size-2-2);
-	align-items: center;
-	margin-bottom: var(--size-2-2);
-	color: var(--text-normal);
-}
-
-.knomo-legacy-import-samples {
-	padding-left: var(--size-4-6);
-}
-
-.knomo-issue-item {
-	padding: var(--size-4-2) 0;
-	border-bottom: var(--border-width) solid var(--background-modifier-border);
-}
-
-.knomo-issue-item:last-child {
-	border-bottom: 0;
-}
-
-.knomo-setting-code {
-	margin-bottom: var(--size-2-2);
-	font-family: var(--font-monospace);
-	color: var(--text-normal);
-	overflow-wrap: anywhere;
 }
 
 .knomo-plugin .knomo-muted-text {
@@ -3866,6 +3888,12 @@ body .knomo-mobile-create-fab.is-hidden {
 	min-width: 0;
 }
 
+.knomo-plugin .knomo-record-stats-updating {
+	align-self: flex-end;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
 .knomo-plugin .knomo-record-stats-subtitle {
 	margin: 0;
 	color: var(--text-normal);
@@ -4412,7 +4440,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 @media (max-width: 420px) {
 	.knomo-plugin.is-layout-mobile .knomo-content-column {
 		min-width: 232px;
-		padding: 0 12px 0;
 	}
 
 	.knomo-plugin .knomo-topbar {
@@ -4424,18 +4451,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 		margin-bottom: 18px;
 	}
 
-	.knomo-plugin .knomo-scope-wrap {
-		min-width: 0;
-	}
-
 	.knomo-plugin .knomo-search-wrap {
 		order: 3;
 		flex: 0 0 100%;
 		width: 100%;
-	}
-
-	.knomo-plugin .knomo-search-menu {
-		top: 44px;
 	}
 
 	.knomo-plugin .knomo-card-images--single {
@@ -4447,16 +4466,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	.knomo-plugin .knomo-card-images--single .knomo-card-image-button img {
 		width: 100%;
 		max-height: 180px;
-	}
-
-	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button {
-		aspect-ratio: 4 / 3;
-		height: auto;
-	}
-
-	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img {
-		height: 100%;
-		max-height: none;
 	}
 
 	.knomo-plugin .knomo-card-images--grid {
@@ -4490,3 +4499,78 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 		scroll-behavior: var(--knomo-scroll-behavior);
 	}
 }
+
+/* 近三天时间流只装饰默认卡片流。 */
+.knomo-plugin .knomo-recent-flow-decoration {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-normal);
+	padding: 10px var(--size-4-2) 8px;
+}
+.knomo-plugin .knomo-recent-flow-date {
+	font-size: 15px;
+	display: flex;
+	align-items: baseline;
+	gap: var(--size-4-2);
+	white-space: nowrap;
+}
+.knomo-plugin .knomo-recent-flow-relative {
+	color: var(--text-accent);
+	font-weight: var(--font-semibold);
+}
+.knomo-plugin .knomo-recent-flow-calendar {
+	color: var(--text-normal);
+}
+.knomo-plugin .knomo-recent-flow-history {
+	text-align: start;
+}
+.knomo-plugin .knomo-card-time.knomo-recent-time {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	color: var(--text-accent);
+	font-weight: var(--font-medium);
+}
+.knomo-plugin .knomo-card-time.knomo-recent-time:focus {
+	color: var(--text-accent);
+}
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-time.knomo-recent-time[data-memo-time-open="daily"]:hover,
+.knomo-plugin .knomo-card-time.knomo-recent-time[data-memo-time-open="daily"]:focus-visible,
+.knomo-plugin .knomo-card-time.knomo-recent-time[data-memo-time-open="daily"]:active {
+	color: var(--text-accent-hover);
+}
+.knomo-plugin .knomo-recent-time-icon { display: inline-flex; }
+.knomo-plugin .knomo-recent-time-icon svg { width: 16px; height: 16px; }
+
+/* Composer 原文与装饰共享编辑面，滚动由 CodeMirror scroller 负责。 */
+.knomo-plugin .knomo-composer-editor { min-width: 0; width: 100%; font-family: var(--font-text); }
+.knomo-plugin .knomo-composer-editor.cm-focused { outline: none; }
+.knomo-plugin .knomo-composer-editor .cm-scroller { font-family: inherit; line-height: 1.7; overflow: auto; max-height: 480px; overscroll-behavior: contain; }
+.knomo-plugin .knomo-composer-editor .knomo-composer-input { height: auto; max-height: none; overflow: visible; padding: 0; transition: none; font-family: inherit; font-size: 15px; line-height: 1.7; }
+.knomo-plugin .knomo-composer-editor .cm-line { padding: 0; }
+.knomo-plugin.is-layout-mobile .knomo-composer-editor .knomo-composer-input { font-size: 16px; }
+.knomo-plugin .knomo-composer-editor .cm-placeholder { color: var(--text-faint); }
+.knomo-plugin .knomo-composer-bold { font-weight: var(--bold-weight, var(--font-bold, 700)); color: var(--bold-color, inherit); }
+.knomo-plugin .knomo-composer-highlight { background: var(--text-highlight-bg); color: inherit; }
+.knomo-plugin .knomo-composer-link { color: var(--link-color); font-weight: var(--link-weight, inherit); text-decoration: var(--link-decoration, underline); cursor: text; }
+.knomo-plugin .knomo-composer-link:hover { color: var(--link-color-hover, var(--link-color)); text-decoration: var(--link-decoration-hover, underline); }
+.knomo-plugin .knomo-composer-marker { display: inline-block; width: max(1.5em, var(--knomo-composer-marker-width, 0px)); text-indent: 0; color: var(--list-marker-color, var(--text-muted)); cursor: text; }
+/* 原生列表标记靠正文侧排列，短编号与圆点、任务共享正文起点。 */
+.knomo-plugin .knomo-composer-marker :is(ul, ol) { margin: 0; padding: 0; list-style-position: inside; }
+.knomo-plugin .knomo-composer-marker li { margin: 0; padding: 0; text-align: end; }
+.knomo-plugin .knomo-composer-bullet-marker ul { list-style-type: disc; }
+.knomo-plugin .knomo-composer-ordered-marker ol { list-style-type: decimal; }
+.knomo-plugin .knomo-composer-editor .cm-line.knomo-composer-list-line { padding-inline-start: max(1.5em, var(--knomo-composer-marker-width, 0px)); text-indent: calc(-1 * max(1.5em, var(--knomo-composer-marker-width, 0px))); }
+.knomo-plugin .knomo-composer-task-marker .task-list-item-checkbox { margin: 0; vertical-align: middle; cursor: text; }
+.knomo-plugin .knomo-composer-task-line.is-checked { color: var(--checklist-done-color, var(--text-muted)); text-decoration: var(--checklist-done-decoration, line-through); }
+.knomo-plugin .knomo-tool-group { min-width: 0; overflow-x: auto; flex-wrap: nowrap; touch-action: pan-x; }
+.knomo-plugin .knomo-tool-group[hidden], .knomo-plugin .knomo-tool-button[hidden] { display: none; }
+.knomo-plugin .knomo-tool-button, .knomo-plugin .knomo-composer-actions { flex-shrink: 0; }
+.knomo-toolbar-settings { width: 100%; }
+.knomo-toolbar-setting-row { flex-wrap: wrap; }
+.knomo-toolbar-details { width: 100%; }
+.knomo-toolbar-details > summary { cursor: pointer; }
+.knomo-toolbar-details > summary > .setting-item-info { display: inline-block; vertical-align: middle; }
+.knomo-toolbar-details > summary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 4px; }
+.knomo-toolbar-details[open] > .knomo-toolbar-settings { margin-top: var(--size-4-3); }
+.knomo-toolbar-setting-row > .setting-item-control:empty { display: none; }

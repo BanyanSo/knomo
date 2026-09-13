@@ -9,11 +9,11 @@ import {
 	RecordStatsService as ProductionRecordStatsService,
 	shiftRecordStatsDate,
 } from "../src/services/RecordStatsService";
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
 
 class RecordStatsService extends ProductionRecordStatsService {
-	async prepare(memos: readonly MemoRecord[], yieldToUi: () => Promise<void>): Promise<boolean> {
+	async prepare(memos: readonly MemoViewItem[], yieldToUi: () => Promise<void>): Promise<boolean> {
 		return this.prepareFromSource(memos, async (isCurrent) => {
 			const builder = new RecordStatsBuilder();
 			for (let index = 0; index < memos.length; index += 1) {
@@ -39,7 +39,6 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 		}),
 		makeMemo("monday-late", "2026-06-08T23:59:59.999+08:00", "two words"),
 		makeMemo("sunday", "2026-06-14T23:30:00.000+08:00", "三", {
-			sourceMemoId: "source",
 			tags: ["journal"],
 			images: [{ path: "document.pdf", altText: "", syntax: "obsidian_embed" }],
 		}),
@@ -61,7 +60,7 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 		memoCount: 3,
 		wordCount: 7,
 		recordDayCount: 2,
-		referenceMemoCount: 1,
+		referenceMemoCount: 0,
 		taggedMemoCount: 2,
 		untaggedMemoCount: 1,
 		imageMemoCount: 1,
@@ -110,18 +109,27 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	})).length, selected?.activeHours[23].count);
 });
 
-test("uses createdAt wall-clock date and hour", async () => {
-	const service = new RecordStatsService();
-	const memos = [
-		makeMemo("later-instant", "2026-06-08T01:00:00.000+08:00", "a"),
-		makeMemo("earlier-instant", "2026-06-08T00:30:00.000+09:00", "b"),
-	];
+test("converts zoned createdAt to the current device calendar date and hour", async () => {
+	const originalTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const service = new RecordStatsService();
+		const memos = [
+			makeMemo("same-zone", "2026-06-08T01:00:00.000+08:00", "a"),
+			makeMemo("previous-day", "2026-06-08T00:30:00.000+09:00", "b"),
+		];
 
-	await service.prepare(memos, async () => {});
-	const selected = service.select("week", new Date(2026, 5, 8));
-	assert.equal(selected?.range.memoCount, 2);
-	assert.equal(selected?.activeHours[0].count, 1);
-	assert.equal(selected?.activeHours[1].count, 1);
+		await service.prepare(memos, async () => {});
+		const currentWeek = service.select("week", new Date(2026, 5, 8));
+		const previousWeek = service.select("week", new Date(2026, 5, 1));
+		assert.equal(currentWeek?.range.memoCount, 1);
+		assert.equal(currentWeek?.activeHours[1].count, 1);
+		assert.equal(previousWeek?.range.memoCount, 1);
+		assert.equal(previousWeek?.activeHours[23].count, 1);
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
 });
 
 test("counts historical references recoverable from a Knomo memoId alias", async () => {
@@ -215,12 +223,12 @@ test("returns an empty common-tag list when the selected range has no tags", asy
 });
 
 test("reports empty and error states without exposing partial statistics", async () => {
-	const service = new RecordStatsService();
-	assert.equal(await service.prepare([], async () => {}), true);
-	assert.equal(service.getSnapshot().state, "empty");
-	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 0);
+	const emptyService = new RecordStatsService();
+	assert.equal(await emptyService.prepare([], async () => {}), true);
+	assert.equal(emptyService.getSnapshot().state, "empty");
+	assert.equal(emptyService.select("week", new Date(2026, 5, 8))?.range.memoCount, 0);
 
-	service.invalidate();
+	const service = new RecordStatsService();
 	assert.equal(await service.prepare([
 		makeMemo("invalid", "not-a-date", "text"),
 	], async () => {}), false);
@@ -253,17 +261,67 @@ test("prepares statistics from a scanned source key", async () => {
 	]);
 	let loadCalls = 0;
 
-	assert.equal(await service.prepareFromSource("memo-index:1", async () => {
+	assert.equal(await service.prepareFromSource("catalog:1", async () => {
 		loadCalls += 1;
 		return builder.build();
 	}), true);
-	assert.equal(await service.prepareFromSource("memo-index:1", async () => {
+	assert.equal(await service.prepareFromSource("catalog:1", async () => {
 		loadCalls += 1;
 		return null;
 	}), true);
 
 	assert.equal(loadCalls, 1);
 	assert.equal(service.getSnapshot().state, "ready");
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
+});
+
+test("source refresh keeps committed statistics visible until the replacement is ready", async () => {
+	const service = new RecordStatsService();
+	const oldBuilder = new RecordStatsBuilder();
+	oldBuilder.addMemos([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
+	assert.equal(await service.prepareFromSource("catalog:1", async () => oldBuilder.build()), true);
+
+	const nextPrepared = createDeferred<ReturnType<RecordStatsBuilder["build"]>>();
+	service.invalidate();
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
+	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise);
+
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
+
+	const newBuilder = new RecordStatsBuilder();
+	newBuilder.addMemos([
+		makeMemo("new-1", "2026-06-08T10:00:00+08:00", "new one"),
+		makeMemo("new-2", "2026-06-09T10:00:00+08:00", "new two"),
+	]);
+	nextPrepared.resolve(newBuilder.build());
+	assert.equal(await refreshing, true);
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
+});
+
+test("routine complete-revision refresh keeps committed statistics visible without an updating marker", async () => {
+	const service = new RecordStatsService();
+	const oldBuilder = new RecordStatsBuilder();
+	oldBuilder.addMemos([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
+	assert.equal(await service.prepareFromSource("catalog:1", async () => oldBuilder.build()), true);
+
+	const nextPrepared = createDeferred<ReturnType<RecordStatsBuilder["build"]>>();
+	service.invalidate(false);
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise, false);
+
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
+
+	const newBuilder = new RecordStatsBuilder();
+	newBuilder.addMemos([
+		makeMemo("new-1", "2026-06-08T10:00:00+08:00", "new one"),
+		makeMemo("new-2", "2026-06-09T10:00:00+08:00", "new two"),
+	]);
+	nextPrepared.resolve(newBuilder.build());
+	assert.equal(await refreshing, true);
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
 });
 
@@ -289,12 +347,11 @@ function makeMemo(
 	createdAt: string,
 	contentSnapshot: string,
 	overrides: {
-		status?: MemoRecord["status"];
-		sourceMemoId?: string | null;
-		tags?: MemoRecord["tags"];
-		images?: MemoRecord["images"];
+		status?: MemoViewItem["status"];
+		tags?: MemoViewItem["tags"];
+		images?: MemoViewItem["images"];
 	} = {},
-): MemoRecord {
+): MemoViewItem {
 	return {
 		id,
 		createdAt,
@@ -302,34 +359,23 @@ function makeMemo(
 		contentSnapshot,
 		contentHash: `${id}-hash`,
 		status: overrides.status ?? "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: overrides.tags ?? [],
 		links: [],
 		images: overrides.images ?? [],
-		references: overrides.sourceMemoId === undefined ? [] : [{ memoId: overrides.sourceMemoId ?? "source", referenceText: "[[Daily#^abc]]" }],
-		sourceMemoId: overrides.sourceMemoId ?? null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
-			lastKnownBlock: `- 12:00 ${contentSnapshot}`,
-			lastKnownHash: "hash",
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Memos/2026-06.md",
-			dateHeading: "## 2026-06-08",
-			lastKnownBlock: `- 12:00 ${contentSnapshot}`,
-			lastKnownHash: "hash",
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolvePromise: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
 }
 
 function toDateParts(date: Date): [number, number, number] {

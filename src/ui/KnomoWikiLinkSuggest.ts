@@ -1,3 +1,4 @@
+import { applyComposerEdit, type ComposerInput } from "./ComposerEditor";
 import type { App, EventRef, TFile } from "obsidian";
 
 import {
@@ -41,7 +42,7 @@ export class KnomoWikiLinkSuggest {
 
 	constructor(
 		private readonly app: App,
-		private readonly inputEl: HTMLTextAreaElement,
+		private readonly inputEl: ComposerInput,
 		private readonly options: KnomoWikiLinkSuggestOptions,
 	) {
 		this.inputEl.setAttr("aria-autocomplete", "list");
@@ -114,6 +115,12 @@ export class KnomoWikiLinkSuggest {
 
 	handleCompositionStart(): void {
 		this.composing = true;
+		this.close();
+	}
+
+	handleCompositionReset(): void {
+		this.composing = false;
+		this.close();
 	}
 
 	handleCompositionEnd(): boolean {
@@ -129,7 +136,7 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	handleKeydown(event: KeyboardEvent): boolean {
-		if (this.popoverEl === null) {
+		if (this.popoverEl === null || event.isComposing || this.composing || ((event.ctrlKey || event.metaKey) && (event.key === "Enter" || event.key === "Tab"))) {
 			return false;
 		}
 		if (event.key === "Escape") {
@@ -333,10 +340,8 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	private applyPatch(patch: TextReplacement): void {
-		this.inputEl.value = patch.value;
+		applyComposerEdit(this.inputEl, patch.value, patch.cursor);
 		this.focusInput();
-		this.inputEl.setSelectionRange(patch.cursor, patch.cursor);
-		this.dispatchInputEvent();
 		this.options.onInputChanged();
 	}
 
@@ -346,11 +351,6 @@ export class KnomoWikiLinkSuggest {
 		} catch {
 			this.inputEl.focus();
 		}
-	}
-
-	private dispatchInputEvent(): void {
-		const EventConstructor = (this.inputEl.win as Window & { Event: typeof Event }).Event;
-		this.inputEl.dispatchEvent(new EventConstructor("input", { bubbles: true, cancelable: false }));
 	}
 
 	private getFilesSnapshot(): TFile[] {
@@ -369,6 +369,7 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	private ensurePopover(): void {
+		this.inputEl.setAttr("aria-controls", this.options.listboxId);
 		if (this.popoverEl !== null) {
 			return;
 		}

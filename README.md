@@ -631,15 +631,19 @@ Yes. Knomo is designed to keep content readable in Markdown. If you edit files m
 
 ## Development Verification
 
-Before handing off a change, run:
+Choose verification by the change's scope and risk. Documentation-only work needs content, reference and diff checks. For a low-risk local change, run the relevant tests (multiple files may be passed together):
 
 ```bash
-npm run verify
+npm run test:file -- tests/<Name>.test.ts
 ```
 
-This runs type checking, tests, the production build, i18n checks, diff whitespace checks, Obsidian forbidden source pattern scans, and trailing whitespace scans. For mobile-facing changes, also complete the manual scenarios in [docs/mobile-qa-checklist.md](./docs/mobile-qa-checklist.md).
+`npm test` / `npm run test:quiet` run product behavior, data safety, sync acceptance and architecture/product contracts. `npm run test:tooling` runs the test runner, verification utilities and benchmark trace validator tests. `npm run test:all` runs both sets; CI, release checks and `npm run verify` use this full set. Tests remain in the same directory, new files default to the product set, and `test:file` can select files from either set. Synthetic trace tests do not replace real-device performance acceptance.
 
-For focused test loops, pass Node test runner arguments through `npm test`, for example `npm test -- --test-name-pattern=WikiLink`. Run `npm run verify` before handing off the change.
+Persistence, migration, identity, data-safety and cross-service semantic changes require focused regression coverage followed by `npm run test:quiet` and `npm run typecheck`. Run `npm run build` when build artifacts need verification. Expand or repeat checks only for new changes, failures or unresolved risks; report unrun checks separately.
+
+`npm run verify` is a comprehensive check, not a default handoff requirement: it includes type checking, all tests, the production build, i18n, diff whitespace, forbidden source patterns and trailing whitespace scans. Use it only when that full scope is required. Do not run lint unless requested. Coordinate test commands serially within one working tree because they share compiled output.
+
+When device verification is in the current task, select the affected scenarios; the full device matrix belongs to the corresponding Stage/Beta/Release scope. The optional local [mobile QA checklist](./docs/mobile-qa-checklist.md) is supporting guidance, not a test/build dependency.
 
 ---
 
@@ -663,12 +667,12 @@ When reporting mobile issues, please include device model, OS version, Obsidian 
 
 ### Knomo for Obsidian Desktop and Mobile
 
-Knomo is licensed under the MIT License. You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of this software, as long as you preserve the copyright and license notice in any substantial portion of the code.
+Starting with the Knomo 1.10.0 licensing change, Knomo's original material is licensed under **GNU GPL version 3 only (GPL-3.0-only), with the Knomo Obsidian Host Additional Permission**. Read [LICENSING.md](./LICENSING.md), the standard [GPLv3 text](./LICENSE), and the [host additional permission](./OBSIDIAN-EXCEPTION.txt) together.
 
-This includes any standalone snippets, styles, components, or utility functions you may extract from Knomo.
+You may use, modify, and commercially distribute Knomo under these terms. Distribution of covered forks or extracted code, styles, components, and utilities must comply with applicable GPL obligations, including Corresponding Source and required notices. The host permission permits the necessary combination with independently obtained Obsidian; it does not waive GPL obligations for Knomo or authorize distribution of Obsidian. The software is provided without warranty to the extent permitted by law.
 
-If you distribute a fork of Knomo or reuse part of its code, it would be appreciated if you keep a link back to the original project in your README and keep my [Buy me a coffee](https://www.buymeacoffee.com/banyanso) link.
+Historical MIT grants remain valid: you may continue to use material previously supplied under MIT on those terms. The [historical MIT notice](./LICENSES/Knomo-historical-MIT.txt) is preserved; it does not grant MIT permission for new contributions. Third-party material retains its own licenses and [required notices](./THIRD-PARTY-NOTICES.txt). Your notes do not become GPL-covered merely by using Knomo.
 
-Knomo is designed for Obsidian and may continue to be updated to stay compatible with new versions of Obsidian, including improvements for desktop, mobile, and community themes such as Minimal.
+The [brand policy](./BRANDING.md) separates code licensing from official identity. Forks and commercial use are allowed under the software license; do not imply official endorsement. A project link or [Buy me a coffee](https://www.buymeacoffee.com/banyanso) link is appreciated, not required. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the license of new contributions.
 
-See the [LICENSE](./LICENSE) file for details.
+Development source is available in [this repository](https://github.com/BanyanSo/knomo). Each GPL binary distribution must provide a clearly identified way to obtain its complete Corresponding Source. The current licensing change does not yet implement release packaging or source delivery; see the [remaining release requirements](./LICENSING.md#source-and-distribution-release-work-still-required).

@@ -1,6 +1,7 @@
 import { t } from "../i18n";
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
+import type { RandomReunionStatus } from "./RandomReunionController";
 import type { ShuffleDaySnapshot } from "./ShuffleDayController";
 import { getEmptyStateTitle } from "./viewNavigation";
 import type { SidebarNav } from "./viewNavigation";
@@ -11,7 +12,7 @@ export interface CardFlowRegularFilterCopy {
 }
 
 export type CardFlowHeader =
-	| { type: "summary"; text: string }
+	| { type: "summary"; text: string; action?: { label: string; action: string } }
 	| { type: "random-toolbar"; count: number }
 	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
 
@@ -20,6 +21,12 @@ export type CardFlowPresentation =
 		type: "empty";
 		title: string;
 		description: string;
+	}
+	| {
+		type: "onboarding";
+		title: string;
+		description: string;
+		actions: Array<{ label: string; action: string; modCta?: boolean }>;
 	}
 	| {
 		type: "items";
@@ -31,9 +38,11 @@ export type CardFlowPresentation =
 export interface CardFlowPresentationOptions {
 	cardFlowError: string | null;
 	activeNav: SidebarNav;
-	randomReunionLoading: boolean;
+	randomReunionStatus: RandomReunionStatus;
+	randomReunionError: string | null;
 	shuffleDay: ShuffleDaySnapshot;
 	memos: MemoRecord[];
+	matchedTotalCount: number | null;
 	regularFilterCopy: CardFlowRegularFilterCopy | null;
 	trashLoading: boolean;
 	trashError: string | null;
@@ -55,12 +64,23 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 			trashMemos: options.trashMemos,
 		});
 	}
-	if (options.activeNav === "random" && options.randomReunionLoading) {
-		return {
-			type: "empty",
-			title: t("empty.randomLoading"),
-			description: "",
-		};
+	if (options.activeNav === "random") {
+		if ((options.randomReunionStatus === "idle" || options.randomReunionStatus === "loading-candidates")
+			&& options.memos.length === 0) {
+			return {
+				type: "empty",
+				title: t("empty.randomLoading"),
+				description: "",
+			};
+		}
+
+		if (options.randomReunionStatus === "failed") {
+			return {
+				type: "empty",
+				title: t("error.randomLoadFailed"),
+				description: options.randomReunionError ?? "",
+			};
+		}
 	}
 	if (options.activeNav === "shuffleDay") {
 		return getShuffleDayCardFlowPresentation(options.shuffleDay);
@@ -74,8 +94,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 	}
 
 	const headers: CardFlowHeader[] = [];
-	if (options.activeNav === "review") {
-		headers.push({ type: "summary", text: t("list.reviewSummary", { count: options.memos.length }) });
+	if (options.activeNav === "review" && options.matchedTotalCount !== null) {
+		headers.push({ type: "summary", text: t("list.reviewSummary", { count: options.matchedTotalCount }) });
 	}
 	if (options.activeNav === "random") {
 		headers.push({ type: "random-toolbar", count: options.memos.length });
@@ -92,7 +112,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 }
 
 function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFlowPresentation {
-	if (snapshot.status === "idle" || snapshot.status === "loading") {
+	if (snapshot.status === "idle" || (snapshot.status === "loading"
+		&& (snapshot.selectedDate === null || snapshot.stats === null || snapshot.memos.length === 0))) {
 		return {
 			type: "empty",
 			title: t("shuffleDay.loadingTitle"),
@@ -149,13 +170,6 @@ interface TrashCardFlowPresentationOptions {
 }
 
 function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions): CardFlowPresentation {
-	if (options.trashLoading || options.trashMemos === null) {
-		return {
-			type: "empty",
-			title: t("empty.trashLoading"),
-			description: "",
-		};
-	}
 	if (options.trashError !== null) {
 		return {
 			type: "empty",
@@ -163,17 +177,25 @@ function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions)
 			description: options.trashError,
 		};
 	}
-	if (options.trashMemos.length === 0) {
+	if (options.trashMemos === null) {
 		return {
 			type: "empty",
-			title: t("empty.trashEmptyTitle"),
-			description: t("empty.trashEmptyDesc"),
+			title: t("empty.trashLoading"),
+			description: "",
 		};
 	}
+	if (options.trashMemos.length > 0) {
+		return {
+			type: "items",
+			memos: options.trashMemos,
+			mode: "trash",
+			headers: [],
+		};
+	}
+
 	return {
-		type: "items",
-		memos: options.trashMemos,
-		mode: "trash",
-		headers: [],
+		type: "empty",
+		title: t("empty.trashEmptyTitle"),
+		description: t("empty.trashEmptyDesc"),
 	};
 }

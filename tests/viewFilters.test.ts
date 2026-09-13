@@ -1,12 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import {
 	buildMemoSearchText,
-	collectTags,
 	getMemoImages,
-	getMemoStats,
 	getRegularFilterConditions,
 	getRegularFilterCopy,
 	getRecordStatsSearchFilterKey,
@@ -21,53 +19,34 @@ import {
 	tagMatchesActiveTagKey,
 } from "../src/ui/viewFilters";
 
-test("computes memo stats from normalized tags and supported images", () => {
-	const memos = [
-		makeMemo("a", {
-			contentSnapshot: "abc 空 白",
-			tags: ["#Project/Knomo", "project/knomo"],
-			images: [
-				{ path: "image.png", altText: "", syntax: "obsidian_embed" },
-				{ path: "doc.pdf", altText: "", syntax: "obsidian_embed" },
-			],
-		}),
-		makeMemo("b", {
-			contentSnapshot: "two words",
-			tags: ["life"],
-			images: [
-				{ path: "https://example.com/a", altText: "a", syntax: "markdown_image" },
-			],
-		}),
-	];
-
-	assert.deepEqual(getMemoStats(memos), {
-		memoCount: 2,
-		tagCount: 2,
-		imageCount: 2,
-		wordCount: 5,
+test("普通 Catalog 筛选和搜索时间取当前 observation，不取旧创建时间", () => {
+	const memo = makeMemo("current", {
+		createdAt: "2020-01-01T23:59:59Z",
 	});
-	assert.deepEqual(getMemoImages(memos[0]).map((image) => image.path), ["image.png"]);
+	memo.catalog = { observation: { logicalDate: "2026-09-01", time: "06:04" } } as never;
+	assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-09-01" }), true);
+	assert.equal(matchesRecordStatsSearchFilter(memo, {
+		type: "hour", startDate: "2026-09-01", endDateExclusive: "2026-09-02", hour: 6,
+	}), true);
+	const search = buildMemoSearchText(memo);
+	assert.match(search, /2026-09-01 06:04/u);
+	assert.doesNotMatch(search, /2020-01-01|06:04:00/u);
 });
 
-test("collects display tags and matches nested active tag keys", () => {
-	const tags = collectTags([
-		makeMemo("a", { tags: ["#project/knomo"] }),
-		makeMemo("b", { tags: ["Project/Knomo"] }),
-		makeMemo("c", { tags: ["life"] }),
-	], new Map([
-		["project", "Project"],
-		["project/knomo", "Project/Knomo"],
-		["vault-only", "Vault only"],
-	]));
+test("filters supported memo images", () => {
+	const memo = makeMemo("a", {
+		images: [
+			{ path: "image.png", altText: "", syntax: "obsidian_embed" },
+			{ path: "doc.pdf", altText: "", syntax: "obsidian_embed" },
+		],
+	});
 
-	assert.deepEqual(tags, [
-		{ key: "project/knomo", name: "Project/Knomo", count: 2 },
-		{ key: "life", name: "life", count: 1 },
-		{ key: "project", name: "Project", count: 0 },
-	]);
+	assert.deepEqual(getMemoImages(memo).map((image) => image.path), ["image.png"]);
+});
+
+test("matches nested active tag keys", () => {
 	assert.equal(tagMatchesActiveTagKey("project/knomo/ui", "project/knomo"), true);
 	assert.equal(tagMatchesActiveTagKey("project/other", "project/knomo"), false);
-	assert.equal(tags.some((tag) => tag.key === "vault-only"), false);
 });
 
 test("builds regular filter copy from active filters", () => {
@@ -138,25 +117,25 @@ test("matches search date filters against a fixed day", () => {
 });
 
 test("matches record statistics drill-down filters with local date and hour semantics", () => {
-	const morning = makeMemo("morning", { createdAt: "2026-06-08T09:15:00+08:00" });
-	const late = makeMemo("late", { createdAt: "2026-06-30T23:45:00+09:00" });
-	const nextMonth = makeMemo("next-month", { createdAt: "2026-07-01T09:00:00+08:00" });
-	const inactive = makeMemo("inactive", { createdAt: "2026-06-09T09:00:00+08:00" });
+	const morning = makeMemo("morning", { createdAt: "2026-06-08T09:15:00" });
+	const late = makeMemo("late", { createdAt: "2026-06-30T23:45:00" });
+	const nextMonth = makeMemo("next-month", { createdAt: "2026-07-01T09:00:00" });
+	const inactive = makeMemo("inactive", { createdAt: "2026-06-09T09:00:00" });
 	inactive.status = "deleted";
 	const referenced = makeMemo("referenced", {
-		createdAt: "2026-06-09T09:00:00+08:00",
-		sourceMemoId: "source",
+		createdAt: "2026-06-09T09:00:00",
+		contentSnapshot: "current [[Daily#^source|custom alias]]",
 	});
 	const tagged = makeMemo("tagged", {
-		createdAt: "2026-06-10T09:00:00+08:00",
+		createdAt: "2026-06-10T09:00:00",
 		tags: ["Work"],
 	});
 	const childTagged = makeMemo("child-tagged", {
-		createdAt: "2026-06-10T10:00:00+08:00",
+		createdAt: "2026-06-10T10:00:00",
 		tags: ["work/project"],
 	});
 	const imaged = makeMemo("imaged", {
-		createdAt: "2026-06-11T09:00:00+08:00",
+		createdAt: "2026-06-11T09:00:00",
 		images: [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }],
 	});
 
@@ -221,7 +200,7 @@ test("matches record statistics drill-down filters with local date and hour sema
 		tagLabel: "Work",
 	};
 	assert.equal(matchesRecordStatsSearchFilter(tagged, tagFilter), true);
-	assert.equal(matchesRecordStatsSearchFilter(childTagged, tagFilter), false);
+	assert.equal(matchesRecordStatsSearchFilter(childTagged, tagFilter), true);
 	assert.equal(matchesRecordStatsSearchFilter(nextMonth, tagFilter), false);
 	assert.equal(matchesRecordStatsSearchFilter(morning, {
 		type: "max-daily-notes",
@@ -267,28 +246,46 @@ test("matches record statistics drill-down filters with local date and hour sema
 	assert.equal(getRecordStatsSearchFilterLabel(tagFilter), "2026-06-01 to 2026-06-30 · #Work");
 });
 
-test("parses memo local date from createdAt, daily path, and monthly refs", () => {
+test("parses memo local date from createdAt and falls back to the Daily path date", () => {
 	const createdAtMemo = makeMemo("created", { createdAt: "2026-05-20T08:09:10" });
 	assert.equal(parseMemoLocalDate(createdAtMemo, disabledDailyStatus())?.getHours(), 8);
 
 	const dailyMemo = makeMemo("daily", {
 		createdAt: "invalid",
 		dailyPath: "Daily/2026-05-20.md",
-		dailyBlock: "- 18:30:45 daily memo",
 	});
 	const dailyDate = parseMemoLocalDate(dailyMemo, { enabled: true, folder: "Daily", format: "YYYY-MM-DD" });
 	assert.equal(dailyDate?.getFullYear(), 2026);
 	assert.equal(dailyDate?.getMonth(), 4);
 	assert.equal(dailyDate?.getDate(), 20);
-	assert.equal(dailyDate?.getHours(), 18);
-	assert.equal(dailyDate?.getMinutes(), 30);
-	assert.equal(dailyDate?.getSeconds(), 45);
+	assert.equal(dailyDate?.getHours(), 0);
+	assert.equal(dailyDate?.getMinutes(), 0);
+	assert.equal(dailyDate?.getSeconds(), 0);
+});
 
-	const monthlyMemo = makeMemo("monthly", {
-		createdAt: "invalid",
-		monthlyDateHeading: "## [[2026-05-19]]",
-	});
-	assert.equal(parseMemoLocalDate(monthlyMemo, disabledDailyStatus())?.getDate(), 19);
+test("converts zoned creation time to the current device calendar semantics", () => {
+	const originalTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const memo = makeMemo("zoned", { createdAt: "2026-08-31T22:04:15.986Z" });
+		const date = parseMemoLocalDate(memo, disabledDailyStatus());
+
+		assert.equal(date?.getFullYear(), 2026);
+		assert.equal(date?.getMonth(), 8);
+		assert.equal(date?.getDate(), 1);
+		assert.equal(date?.getHours(), 6);
+		assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-09-01" }), true);
+		assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-08-31" }), false);
+		assert.equal(matchesRecordStatsSearchFilter(memo, {
+			type: "hour",
+			startDate: "2026-09-01",
+			endDateExclusive: "2026-09-02",
+			hour: 6,
+		}), true);
+	} finally {
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	}
 });
 
 test("builds memo search text and all-memo loading flags", () => {
@@ -364,18 +361,15 @@ function makeMemo(
 	overrides: {
 		createdAt?: string;
 		contentSnapshot?: string;
-		tags?: MemoRecord["tags"];
-		links?: MemoRecord["links"];
-		images?: MemoRecord["images"];
+		tags?: MemoViewItem["tags"];
+		links?: MemoViewItem["links"];
+		images?: MemoViewItem["images"];
 		dailyPath?: string;
-		dailyBlock?: string;
 		monthlyDateHeading?: string;
-		sourceMemoId?: string | null;
 	} = {},
-): MemoRecord {
+): MemoViewItem {
 	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
 	const dailyPath = overrides.dailyPath ?? `Daily/${createdAt.slice(0, 10)}.md`;
-	const dailyBlock = overrides.dailyBlock ?? "- 09:00:00 memo";
 	return {
 		id,
 		createdAt,
@@ -383,32 +377,13 @@ function makeMemo(
 		contentSnapshot: overrides.contentSnapshot ?? "memo",
 		contentHash: `hash-${id}`,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: overrides.tags ?? [],
 		links: overrides.links ?? [],
 		images: overrides.images ?? [],
-		references: [],
-		sourceMemoId: overrides.sourceMemoId ?? null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: dailyPath,
 			heading: "## Memos",
-			lastKnownBlock: dailyBlock,
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/Memos-2026-05.md",
-			dateHeading: overrides.monthlyDateHeading ?? "## [[2026-05-20]]",
-			lastKnownBlock: dailyBlock,
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

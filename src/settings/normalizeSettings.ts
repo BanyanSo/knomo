@@ -1,3 +1,4 @@
+import { normalizeComposerToolbar } from "./composerToolbar";
 import { SETTINGS_VERSION } from "../constants";
 import type {
 	DailyInsertPosition,
@@ -86,6 +87,9 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 	);
 
 	return {
+		composerToolbar: normalizeComposerToolbar(savedSettings.composerToolbar),
+		monthlyLocale: optionalString(savedSettings.monthlyLocale),
+		currentConfigInitialized: savedSettings.currentConfigInitialized === true,
 		settingsVersion: SETTINGS_VERSION,
 		dailyHeading: stringOrDefault(merged.dailyHeading, DEFAULT_KNOMO_SETTINGS.dailyHeading),
 		dailyInsertPosition,
@@ -105,6 +109,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 			merged.legacyDailyHeadings,
 			DEFAULT_KNOMO_SETTINGS.legacyDailyHeadings,
 		).filter((heading) => isValidMarkdownHeading(heading)),
+		recentTimeFlowEnabled: booleanOrDefault(merged.recentTimeFlowEnabled, DEFAULT_KNOMO_SETTINGS.recentTimeFlowEnabled),
 		timeBuoyEnabled: booleanOrDefault(
 			merged.timeBuoyEnabled,
 			DEFAULT_KNOMO_SETTINGS.timeBuoyEnabled,
@@ -132,11 +137,6 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 			merged.managedObsidianExcludeRuleOwned,
 			DEFAULT_KNOMO_SETTINGS.managedObsidianExcludeRuleOwned ?? false,
 		),
-		managedSystemFolderExcludeRule: optionalString(merged.managedSystemFolderExcludeRule),
-		managedSystemFolderExcludeRuleOwned: booleanOrDefault(
-			merged.managedSystemFolderExcludeRuleOwned,
-			DEFAULT_KNOMO_SETTINGS.managedSystemFolderExcludeRuleOwned ?? false,
-		),
 		pinnedTags: stringArrayOrDefault(merged.pinnedTags, DEFAULT_KNOMO_SETTINGS.pinnedTags),
 	};
 }
@@ -144,6 +144,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 export function cloneSettings(settings: KnomoSettings): KnomoSettings {
 	return {
 		...settings,
+		composerToolbar: normalizeComposerToolbar(settings.composerToolbar),
 		legacyDailyHeadings: [...settings.legacyDailyHeadings],
 		pinnedTags: [...settings.pinnedTags],
 	};

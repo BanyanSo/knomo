@@ -1,0 +1,44 @@
+Knomo Obsidian Host Additional Permission
+Version 1.0
+
+Additional permission under GNU GPL version 3 section 7
+
+For purposes of this permission, "Covered Knomo Material" means material
+whose copyright holders have authorized its use under GNU GPL version 3
+with this additional permission. "Obsidian Host" means the Obsidian
+application independently and lawfully obtained under its own terms,
+including its built-in components and the interfaces and runtime facilities
+it supplies for plugins.
+
+The copyright holders of Covered Knomo Material grant you additional
+permission to link or combine that material, including modifications covered
+by this permission, with the Obsidian Host solely as necessary for Knomo or
+a modified version of Knomo to operate as an Obsidian plugin, and to convey
+the resulting covered plugin for that use. Such linking or combination does
+not, by itself, require you to license the Obsidian Host under the GNU GPL
+or include the Obsidian Host's proprietary source code in the Corresponding
+Source for the covered plugin.
+
+This permission covers the host API calls, callbacks, shared runtime objects,
+and access to built-in Daily Notes facilities necessary for that plugin
+operation. It does not exempt other independently distributed plugins or
+proprietary modules from otherwise applicable license obligations merely
+because they also operate in Obsidian.
+
+All GNU GPL version 3 requirements continue to apply to Covered Knomo
+Material and its covered modifications except as expressly permitted above.
+In particular, this permission does not waive Corresponding Source or notice
+obligations for Knomo or third-party code bundled in the plugin. It does not
+change any third-party license or grant permission on behalf of a third-party
+copyright holder.
+
+This permission grants no rights to copy, modify, sublicense, or redistribute
+the Obsidian Host, no trademark rights, and no official endorsement. You must
+obtain any necessary rights to the Obsidian Host separately and comply with
+its applicable terms. This permission does not require or authorize conveying
+the Obsidian Host with Knomo.
+
+You may remove this additional permission from a copy or part of a copy as
+provided in GNU GPL version 3 section 7. If you do so, remove or update the
+associated statements that this permission applies to that copy or part.
+Removal does not revoke this permission for copies already received with it.

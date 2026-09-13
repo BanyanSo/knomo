@@ -1,36 +1,53 @@
-import { Notice, Platform, Plugin, TFile } from "obsidian";
+import { initializeCatalogRuntime } from "./services/CatalogStartup";
+import { getLanguage, normalizePath, Notice, Platform, Plugin, TFile } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
 import { AttachmentService } from "./services/AttachmentService";
+import {
+	CATALOG_SCANNER_ENABLED,
+	CatalogIndexCoordinator,
+	createCatalogDatabaseName,
+} from "./services/CatalogIndexCoordinator";
 import { DailyNoteService } from "./services/DailyNoteService";
+import { DailyInventoryIndex } from "./services/DailyInventoryIndex";
 import { DailyNotesProvider } from "./services/DailyNotesProvider";
-import { FileWatchService } from "./services/FileWatchService";
-import { MarkdownBlockService } from "./services/MarkdownBlockService";
-import { MemoIndexStore } from "./services/MemoIndexStore";
-import { MemoSummaryService } from "./services/MemoSummaryService";
-import { MonthlyArchiveService } from "./services/MonthlyArchiveService";
+import { DiaryMemoParser } from "./services/DiaryMemoParser";
+import { DailyMemoWriteGateway } from "./services/DailyMemoWriteGateway";
+import type { CatalogReadService } from "./services/CatalogReadService";
+import {
+	MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
+	MonthlyProjectionCoordinator,
+} from "./services/MonthlyProjectionCoordinator";
+import { MonthlyProjectionInputBuilder } from "./services/MonthlyProjectionInputBuilder";
+import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore";
+import { KnomoCurrentConfigService } from "./services/KnomoCurrentConfigService";
+import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
+import { LegacyTrashMigrationService } from "./services/LegacyTrashMigrationService";
+import { IndependentTrashService } from "./services/IndependentTrashService";
+import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
+import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
+import { LegacyIndexReader } from "./services/LegacyIndexReader";
+import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
+import { MemoCatalogService } from "./services/MemoCatalogService";
+import { MemoCommandService } from "./services/MemoCommandService";
+import { MarkdownMutationService } from "./services/MarkdownMutationService";
+import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "./services/MemoCatalogStore";
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
-import { PendingMemoCreateStore } from "./services/PendingMemoCreateStore";
 import { PluginDataStore } from "./services/PluginDataStore";
-import { RandomReunionService } from "./services/RandomReunionService";
-import { ReferenceService } from "./services/ReferenceService";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SettingsService } from "./services/SettingsService";
 import { ShuffleDayService } from "./services/ShuffleDayService";
-import { SyncOrchestrator } from "./services/SyncOrchestrator";
 import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
 import { VaultTagIndex } from "./services/VaultTagIndex";
-import type { ScanDailyMemosResult } from "./services/MemoScanService";
 import { KNOMO_LOGO_ICON, registerKnomoIcons } from "./icons";
 import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
-import type { MemoMutation } from "./types/memo";
-import { formatServiceError } from "./utils/serviceText";
-import { formatMonthPeriod } from "./utils/date";
-import type { MaintenanceDiagnostic } from "./utils/pluginData";
+import type { CatalogCoverage, CatalogRefreshResult } from "./types/catalog";
+import { formatDatePart } from "./utils/date";
+import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
 const DESKTOP_STARTUP_DAILY_SCAN_DAYS = 30;
@@ -42,113 +59,310 @@ export function getStartupDailyScanDays(isMobile: boolean): number {
 
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
-	syncOrchestrator!: SyncOrchestrator;
-	manualRefreshPromise: Promise<ScanDailyMemosResult> | null = null;
+	manualRefreshPromise: Promise<CatalogRefreshResult> | null = null;
 	private viewRefreshScheduler: ViewRefreshScheduler | null = null;
-	private syncConflictNoticeShown = false;
-	private memoSummaryService!: MemoSummaryService;
 	private vaultTagIndex!: VaultTagIndex;
+	private catalogIndexCoordinator: CatalogIndexCoordinator | null = null;
+	private memoCommandService: MemoCommandService | null = null;
+	private catalogReadService: CatalogReadService | null = null;
+	private monthlyProjectionCoordinator: MonthlyProjectionCoordinator | null = null;
+	private legacyTrashMigrationService: LegacyTrashMigrationService | null = null;
+	private memoCatalogService: MemoCatalogService | null = null;
+	private runtimeInitializationPromise: Promise<boolean> | null = null;
 
 	async onload(): Promise<void> {
 		registerKnomoIcons();
 		const selfWriteTracker = new SelfWriteTracker();
+		const lowPriorityWorkQueue = new LowPriorityWorkQueue(() => this.app.workspace.containerEl.win);
+		lowPriorityWorkQueue.start(this);
+		const dailyInventory = new DailyInventoryIndex();
 		const pluginDataStore = new PluginDataStore(this);
-		this.settingsService = new SettingsService(this, (oldPath, newPath) => {
-			const now = Date.now();
-			const opId = `archive-move-${now}-${newPath}`;
-			selfWriteTracker.mark(oldPath, {
-				opId,
-				path: oldPath,
-				reason: "archive_move",
-				writtenAt: now,
-				expiresAt: now + 10000,
-				expectedHash: null,
-				targetPath: newPath,
-			});
-			return () => selfWriteTracker.discard(oldPath, opId);
-		}, pluginDataStore);
-		const memoIndexStore = new MemoIndexStore(this.app);
-		this.memoSummaryService = this.addChild(new MemoSummaryService(
-			this.app,
-			() => this.settingsService.getSettings(),
-			memoIndexStore,
-		));
+		this.settingsService = new SettingsService(this, pluginDataStore, {
+			runExclusive: async (action) => {
+				await this.legacyTrashMigrationService?.waitForIdle();
+				return this.memoCommandService === null ? action() : this.memoCommandService.runWithMutationsPaused(action);
+			},
+			assertActive: () => { if (lowPriorityWorkQueue.signal.aborted) throw new Error("Monthly relocation cancelled."); },
+		});
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
 		const settingsLoaded = await this.loadSettingsSafely();
 		if (settingsLoaded) {
-			await this.initializeTimeBuoyDefaultSafely(memoIndexStore);
+			await this.initializeTimeBuoyDefaultSafely();
 		}
-		const markdownBlockService = new MarkdownBlockService();
+
+		const diaryMemoParser = new DiaryMemoParser();
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
-		const dailyNoteService = new DailyNoteService(this.app, markdownBlockService, dailyNotesProvider);
+		const dailyNoteService = new DailyNoteService(this.app, dailyNotesProvider);
 		await this.refreshDailyStatusSafely(dailyNoteService);
-		const monthlyArchiveService = new MonthlyArchiveService(this.app, markdownBlockService, (path) => {
-			const now = Date.now();
-			selfWriteTracker.mark(path, {
-				opId: `archive-delete-${now}`,
-				path,
-				reason: "archive_delete",
-				writtenAt: now,
-				expiresAt: now + 10000,
-				expectedHash: null,
+		const attachmentService = new AttachmentService(this.app);
+
+		const memoCatalogStore = new FallbackMemoCatalogStore(
+			new IndexedDbMemoCatalogStore(createCatalogDatabaseName(this.app)),
+			new InMemoryMemoCatalogStore(),
+			async () => { await this.catalogIndexCoordinator?.refreshLocalCatalog(); },
+		);
+		this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
+		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
+		await this.memoCatalogService.open();
+		const knomoCurrentConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage());
+		await knomoCurrentConfigService.initializeLocalConfig();
+
+		const getEffectiveDailyConfig = () => {
+			const config = dailyNotesProvider.getConfig();
+			if (config === null) throw new Error("Obsidian Daily configuration is unknown.");
+			return config;
+		};
+		const getEffectiveWriteHeading = () => knomoCurrentConfigService.getEffectiveConfig().daily.headings[0] ?? null;
+		const getEffectiveMonthlySettings = () => {
+			const monthly = knomoCurrentConfigService.getEffectiveConfig().monthly;
+			return {
+				monthlyMemoFolder: monthly.folder,
+				monthlyMemoFileFormat: monthly.fileFormat,
+				monthlyDateHeadingFormat: monthly.dateHeadingFormat,
+				monthlyDateOrder: monthly.dateOrder,
+				locale: monthly.locale,
+			};
+		};
+
+		const startupBootstrapService = new KnomoStartupBootstrapService(this.app, {
+			currentConfig: knomoCurrentConfigService,
+			cancellationSignal: lowPriorityWorkQueue.signal,
+		});
+		const getStartupSnapshot = () => startupBootstrapService.getSnapshot();
+		let settingTab: KnomoSettingTab | null = null;
+		const projectionInputBuilder = new MonthlyProjectionInputBuilder(
+			this.app,
+			diaryMemoParser,
+			{
+				getDailyConfig: () => Promise.resolve(getEffectiveDailyConfig()),
+				getSettings: getEffectiveMonthlySettings,
+				dailyInventory,
+			},
+		);
+		let monthlyProjectionFailureVisible = false;
+		this.monthlyProjectionCoordinator = new MonthlyProjectionCoordinator(
+			this.app,
+			{
+				inputBuilder: projectionInputBuilder,
+				selfWriteTracker,
+				checkpointStore: this.memoCatalogService.getStore(),
+				listCatalogPeriods: () => {
+					if (this.catalogReadService === null) throw new Error("Catalog read service is not available.");
+					return this.catalogReadService.listMonthlyProjectionPeriods();
+				},
+				isProjectionAllowed: () => knomoCurrentConfigService.isMonthlyProjectionAllowed(),
+				workQueue: lowPriorityWorkQueue,
+				onStateChanged: () => {
+					const failureVisible = this.monthlyProjectionCoordinator?.getProjectionState() === "failed";
+					if (failureVisible === monthlyProjectionFailureVisible) return;
+					monthlyProjectionFailureVisible = failureVisible;
+					void this.queueRefreshOpenViews();
+				},
+			},
+		);
+
+		this.catalogIndexCoordinator = new CatalogIndexCoordinator(
+			this.app,
+			this.memoCatalogService,
+			diaryMemoParser,
+			() => Promise.resolve(getEffectiveDailyConfig()),
+			{
+				enabled: CATALOG_SCANNER_ENABLED,
+				isConfigurationComplete: () => dailyNotesProvider.getConfig() !== null,
+				onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage),
+				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
+				preserveMetaKeysOnRebuild: [MONTHLY_PROJECTION_CHECKPOINT_META_KEY],
+				onCatalogSettled: async () => {
+					await this.monthlyProjectionCoordinator?.handleCatalogSettled();
+					await this.queueRefreshOpenViews();
+					settingTab?.refreshAttentionIfVisible();
+				},
+				dailyInventory,
+				workQueue: lowPriorityWorkQueue,
+			},
+		);
+
+		const markdownMutationService = new MarkdownMutationService(this.app, {
+			getWriteHeading: getEffectiveWriteHeading,
+			getDailyFileForDate: (logicalDate) => {
+				const date = parseLogicalDate(logicalDate);
+				return dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig());
+			},
+			getLogicalDateForPath: async (sourcePath) => {
+				const date = parseDailyNoteDateFromPath(sourcePath, getEffectiveDailyConfig());
+				if (date === null) throw new Error("Daily path does not match the active configuration: " + sourcePath);
+				return formatDatePart(date);
+			},
+			getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
+			getInsertPosition: () => this.settingsService.getSettings().dailyInsertPosition,
+			updateCatalogPartition: async (input) => {
+				if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
+				await this.catalogIndexCoordinator.replaceCommittedFile(input);
+			},
+			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
+			removeEmptyCreatedDailyFile: async (file) => {
+				if ((await this.app.vault.cachedRead(file)).length === 0) await this.app.fileManager.trashFile(file);
+			},
+		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
+
+		const getTrashFolder = () => {
+			if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable.");
+			return this.settingsService.getSettings().monthlyMemoFolder;
+		};
+		const trashStore = new TrashSnapshotStore(this.app, getTrashFolder, () => {
+			if (lowPriorityWorkQueue.signal.aborted) throw new Error("Trash runtime cancelled.");
+		});
+		this.register(() => trashStore.dispose());
+		let trashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
+		const trashService = new IndependentTrashService(this.app, trashStore, {
+			assertActive: () => {
+				if (lowPriorityWorkQueue.signal.aborted
+					|| this.settingsService.getLoadStatus() !== "ready") throw new Error("Trash operation cancelled or configuration changed.");
+			},
+			getLogicalDateForPath: async (path) => {
+				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
+				if (date === null) throw new Error("Daily path does not match current configuration.");
+				return formatDatePart(date);
+			},
+			getOriginalDailyFile: async (path, logicalDate) => {
+				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
+				const file = this.app.vault.getAbstractFileByPath(path);
+				return date !== null && formatDatePart(date) === logicalDate && file instanceof TFile ? file : null;
+			},
+			getDailyFileForDate: (date) => dailyNoteService.getOrCreateDailyNoteForDateWithConfig(parseLogicalDate(date), getEffectiveDailyConfig()),
+			updateCatalogPartition: (input) => this.catalogIndexCoordinator!.replaceCommittedFile(input),
+			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator!.refreshPaths(paths),
+		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
+		const getTrashService = () => {
+			getTrashFolder();
+			return trashService;
+		};
+
+		this.memoCommandService = new MemoCommandService(
+			this.app,
+			this.memoCatalogService,
+			{
+				getDailyPathForDate: async (logicalDate) => {
+					const date = parseLogicalDate(logicalDate);
+					return dailyNoteService.getDailyNotePathForDateWithConfig(date, getEffectiveDailyConfig());
+				},
+				refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
+				refreshLocalCatalog: () => {
+					if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
+					return this.catalogIndexCoordinator.refreshLocalCatalog();
+				},
+				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
+				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
+				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
+				getLegacyImportStatus: () => this.legacyTrashMigrationService?.getReport().status ?? "idle",
+				getLegacyCleanupPending: () => Boolean(this.legacyTrashMigrationService?.getReport().cleanupCandidate),
+				getCurrentConfigurationStatus: () => knomoCurrentConfigService.getStatus(),
+				getSettingsStatus: () => this.settingsService.getLoadStatus(),
+				getStartupBootstrapSnapshot: getStartupSnapshot,
+				getTrashService,
+			},
+			markdownMutationService,
+		);
+		this.catalogReadService = this.memoCommandService.getReadService();
+		this.registerTrashEvents(trashStore);
+
+		const legacyIndexReader = new LegacyIndexReader(
+			this.app,
+			() => this.settingsService.getSettings().monthlyMemoFolder,
+		);
+		this.legacyTrashMigrationService = new LegacyTrashMigrationService(this.app, legacyIndexReader, {
+			pluginDataStore,
+			runExclusive: (action) => this.memoCommandService!.runWithMutationsPaused(action),
+			onReportChanged: async () => {
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				await this.queueRefreshOpenViews();
+				settingTab?.refreshAttentionIfVisible();
+			},
+			getTrashFolder,
+			isReady: () => this.settingsService.getLoadStatus() === "ready",
+			scheduleRetry: (action, delayMs) => {
+				const win = this.app.workspace.containerEl.win;
+				const timer = win.setTimeout(action, delayMs);
+				return () => win.clearTimeout(timer);
+			},
+			migrateSettings: async () => {
+				await knomoCurrentConfigService.initialize();
+				await this.settingsService.persistLegacyConfiguration();
+			},
+			signal: lowPriorityWorkQueue.signal,
+			yieldControl: () => new Promise((resolve) => this.app.workspace.containerEl.win.setTimeout(resolve, 0)),
+		});
+
+		this.app.workspace.onLayoutReady(() => {
+			if (lowPriorityWorkQueue.signal.aborted) return;
+			knomoCurrentConfigService.start(this, async () => {
+				const nextTrashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
+				trashStore.invalidateConfiguration(nextTrashConfiguration !== trashConfiguration);
+				trashConfiguration = nextTrashConfiguration;
+				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
+				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
+				await this.queueRefreshOpenViews();
+			});
+			this.registerDomEvent(this.app.workspace.containerEl.win, "focus", () => {
+				if (!lowPriorityWorkQueue.signal.aborted) void dailyNotesProvider.loadConfig().catch(() => settingTab?.refreshAttentionIfVisible());
 			});
 		});
-		const pendingMemoCreateStore = new PendingMemoCreateStore(
-			this.app,
-			() => this.settingsService.getSettings(),
-		);
-		const attachmentService = new AttachmentService(this.app);
-		this.syncOrchestrator = new SyncOrchestrator(
-			this.app,
-			() => this.settingsService.getSettings(),
-			dailyNoteService,
-			monthlyArchiveService,
-			memoIndexStore,
-			selfWriteTracker,
-			markdownBlockService,
-			pendingMemoCreateStore,
-		);
+		this.monthlyProjectionCoordinator.start(this);
+		this.catalogIndexCoordinator.start(this);
+
 		this.viewRefreshScheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
 			() => this.runRefreshOpenViews(),
 			OPEN_VIEWS_REFRESH_DEBOUNCE_MS,
 		);
-		const referenceService = new ReferenceService(
-			this.app,
-			markdownBlockService,
-			(memo) => this.syncOrchestrator.ensureReferenceBlockId(memo),
-		);
-		const randomReunionService = new RandomReunionService(pluginDataStore);
 		const shuffleDayService = new ShuffleDayService(pluginDataStore);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
-		const fileWatchService = new FileWatchService(
-			this.app,
-			selfWriteTracker,
-			this.syncOrchestrator,
-			() => this.queueRefreshOpenViews(),
-			(path, error) => this.notifyWatchSyncError(path, error),
-			{ memoIndexRecoveryScanDays: getStartupDailyScanDays(Platform.isMobile) },
-		);
-		fileWatchService.start(this);
-
+		const retryRuntimeState = async (): Promise<void> => {
+			let settingsRecovered = false;
+			if (this.settingsService.getLoadStatus() === "unavailable") {
+				await this.settingsService.loadSettings();
+				await this.settingsService.initializeTimeBuoyDefault().catch(() => undefined);
+				await this.settingsService.initializeMonthlyExcludeDefault();
+				await startupBootstrapService.initialize();
+				settingsRecovered = true;
+			} else if (startupBootstrapService.getSnapshot().status === "unavailable") {
+				await startupBootstrapService.initialize();
+			} else if (knomoCurrentConfigService.getStatus() === "unavailable") {
+				await knomoCurrentConfigService.reloadConfiguration();
+			}
+			const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
+			await this.memoCatalogService?.open();
+			if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
+				await this.catalogIndexCoordinator?.refreshLocalCatalog();
+			}
+			if (settingsRecovered) await this.catalogIndexCoordinator?.refreshLocalCatalog();
+			await this.legacyTrashMigrationService?.run();
+		};
 		this.registerView(
 			KNOMO_VIEW_TYPE,
 			(leaf: WorkspaceLeaf) => new KnomoView(
 				leaf,
 				this.settingsService,
-				this.syncOrchestrator,
-				referenceService,
-				randomReunionService,
 				shuffleDayService,
 				attachmentService,
-				this.memoSummaryService,
 				this.vaultTagIndex,
-				(mutation, sourceView) => this.broadcastMemoMutation(mutation, sourceView),
 				() => this.runRefreshOpenViews(true),
 				() => this.runManualRefresh(),
+				this.memoCommandService!,
+				this.catalogReadService!,
+				trashStore,
+				() => dailyNoteService.getStatus(),
+				() => dailyNoteService.getTodayDailyNotePath(),
+				() => retryRuntimeState(),
+				() => this.openCatalogDataSettings(),
+				async () => {
+					await this.memoCommandService!.runWithMutationsPaused(() => this.catalogIndexCoordinator!.rebuildLocalCatalog());
+					await retryRuntimeState();
+				},
 			),
 		);
 		this.registerAttachmentEvents();
+		this.registerReferenceEvents();
 
 		this.registerHoverLinkSource(KNOMO_VIEW_TYPE, {
 			display: "Knomo",
@@ -166,17 +380,68 @@ export default class KnomoPlugin extends Plugin {
 				void this.activateView();
 			},
 		});
+		this.addCommand({
+			id: "clear-trash",
+			name: t("trash.clear"),
+			callback: async () => {
+				try {
+					const selectedPath = trashStore.path;
+					if (!await showKnomoConfirmModal(this.app, { title: t("trash.clear"), message: t("confirm.clearTrash"),
+						confirmLabel: t("trash.clear"), danger: true })) return;
+					if (trashStore.path !== selectedPath) throw new Error("Trash configuration changed.");
+					await this.memoCommandService!.clearTrash();
+					new Notice(t("notice.trashCleared"));
+				} catch (error) { new Notice(t("error.clearTrashFailed", { error: String(error) })); }
+			},
+		});
 
-		this.addSettingTab(new KnomoSettingTab(this.app, this, this.settingsService, this.syncOrchestrator, obsidianExcludeService));
+		settingTab = new KnomoSettingTab(
+			this.app,
+			this,
+			this.settingsService,
+			obsidianExcludeService,
+			this.memoCommandService,
+			this.catalogReadService,
+			this.monthlyProjectionCoordinator,
+			knomoCurrentConfigService,
+			this.legacyTrashMigrationService,
+			startupBootstrapService,
+			retryRuntimeState,
+		);
+		this.addSettingTab(settingTab);
+
+		this.runtimeInitializationPromise = initializeCatalogRuntime({
+			initializeCatalog: () => this.catalogIndexCoordinator!.initialize(),
+			primeCatalog: async () => { await this.catalogReadService?.prime(); },
+			initializeConfiguration: async () => {
+				await knomoCurrentConfigService.initialize();
+				if (!lowPriorityWorkQueue.signal.aborted) await this.initializeMonthlyExcludeDefaultSafely();
+			},
+			initializeMonthly: async () => { await this.monthlyProjectionCoordinator?.initialize(); },
+			initializeRecovery: async () => {
+				if (settingsLoaded) await startupBootstrapService.initialize().catch(() => undefined);
+				if (!lowPriorityWorkQueue.signal.aborted) await this.legacyTrashMigrationService?.run();
+			},
+			isCancelled: () => lowPriorityWorkQueue.signal.aborted,
+			onAuxiliaryError: () => settingTab?.refreshAttentionIfVisible(),
+		}).catch(() => {
+			// 后台初始化失败不阻塞视图注册与 Daily 快速记录。
+			return false;
+		});
 
 		this.app.workspace.onLayoutReady(() => {
-			void this.initializeAfterLayoutSafely();
+			if (lowPriorityWorkQueue.signal.aborted) return;
+			void this.initializeAfterLayoutWithCatalogSafely(lowPriorityWorkQueue.signal);
 		});
 	}
 
 	onunload(): void {
 		this.viewRefreshScheduler?.clear();
 		MobileNavbarCompactController.cleanupDocument(this.app.workspace.containerEl.doc);
+	}
+
+	async onExternalSettingsChange(): Promise<void> {
+		await this.settingsService.loadSettings().catch(() => undefined);
 	}
 
 	async activateView(): Promise<void> {
@@ -231,13 +496,18 @@ export default class KnomoPlugin extends Plugin {
 		await Promise.all(refreshes);
 	}
 
-	private broadcastMemoMutation(mutation: MemoMutation, sourceView: KnomoView): void {
-		this.memoSummaryService.invalidatePeriod(formatMonthPeriod(new Date(mutation.memo.createdAt)));
+	private updateOpenViewCatalogProgress(coverage: CatalogCoverage): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
-			if (leaf.view instanceof KnomoView && leaf.view !== sourceView) {
-				leaf.view.applyMemoMutation(mutation);
-			}
+			if (leaf.view instanceof KnomoView) leaf.view.updateCatalogProgress(coverage);
 		}
+	}
+
+	private registerTrashEvents(store: TrashSnapshotStore): void {
+		const changed = (path: string, oldPath?: string) => store.handleFileChange(path, oldPath);
+		this.registerEvent(this.app.vault.on("create", (file) => changed(file.path)));
+		this.registerEvent(this.app.vault.on("modify", (file) => changed(file.path)));
+		this.registerEvent(this.app.vault.on("delete", (file) => changed(file.path)));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => changed(file.path, oldPath)));
 	}
 
 	private registerAttachmentEvents(): void {
@@ -267,30 +537,32 @@ export default class KnomoPlugin extends Plugin {
 		}));
 	}
 
+	private registerReferenceEvents(): void {
+		// 只重查已打开视图的 Catalog 页面；目标变化不触发全库 Daily 重读。
+		const scheduler = new ViewRefreshScheduler(
+			() => this.app.workspace.containerEl.win,
+			async () => {
+				await Promise.all(this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async leaf => {
+					if (leaf.view instanceof KnomoView) await leaf.view.refreshReferences();
+				}));
+			},
+			OPEN_VIEWS_REFRESH_DEBOUNCE_MS,
+		);
+		this.register(() => scheduler.clear());
+		const refresh = (): void => {
+			void scheduler.queue().catch((error: unknown) => console.error("Knomo reference refresh failed", error));
+		};
+		this.registerEvent(this.app.metadataCache.on("changed", refresh));
+		this.registerEvent(this.app.vault.on("rename", refresh));
+		this.registerEvent(this.app.vault.on("delete", refresh));
+	}
+
 	private broadcastAttachmentChanges(paths: readonly string[]): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 			if (leaf.view instanceof KnomoView) {
 				leaf.view.handleAttachmentFilesChanged(paths);
 			}
 		}
-	}
-
-	private notifyWatchSyncError(path: string, error: unknown): void {
-		const message = formatServiceError(error);
-		void this.recordMaintenanceDiagnosticSafely({
-			task: "file_watch",
-			status: "failed",
-			occurredAt: new Date().toISOString(),
-			scope: null,
-			mode: null,
-			message: `${path}: ${message}`,
-			scannedFiles: null,
-			created: null,
-			updated: null,
-			deleted: null,
-			failed: null,
-		});
-		new Notice(t("service.watchSyncFailed", { path, message }));
 	}
 
 	private async loadSettingsSafely(): Promise<boolean> {
@@ -303,14 +575,19 @@ export default class KnomoPlugin extends Plugin {
 		}
 	}
 
-	private async initializeTimeBuoyDefaultSafely(memoIndexStore: MemoIndexStore): Promise<void> {
+	private async initializeTimeBuoyDefaultSafely(): Promise<void> {
 		try {
-			const settings = this.settingsService.getSettings();
-			const hasExistingMemoIndex = memoIndexStore.listStoredPeriods(settings.monthlyMemoFolder).length > 0
-				|| memoIndexStore.listPotentialSyncConflictFiles(settings.monthlyMemoFolder).length > 0;
-			await this.settingsService.initializeTimeBuoyDefault(hasExistingMemoIndex);
+			await this.settingsService.initializeTimeBuoyDefault();
 		} catch {
 			// 默认策略初始化失败时保持关闭，避免升级用户被意外扫描。
+		}
+	}
+
+	private async initializeMonthlyExcludeDefaultSafely(): Promise<void> {
+		try {
+			await this.settingsService.initializeMonthlyExcludeDefault();
+		} catch {
+			// 默认排除初始化失败时保持当前状态，用户仍可在设置页重试。
 		}
 	}
 
@@ -322,131 +599,53 @@ export default class KnomoPlugin extends Plugin {
 		}
 	}
 
-	private async initializeAfterLayoutSafely(): Promise<void> {
-		await this.initializeSystemFoldersSafely();
-		if (!await this.recoverPendingMemoCreatesSafely()) {
-			return;
-		}
-		this.notifyPotentialSyncConflictsSafely();
-		const needsTimeBuoyStartupRebuild = await this.syncOrchestrator.needsTimeBuoyStartupRebuild();
-		await this.scanRecentDailyMemosSafely(getStartupDailyScanDays(Platform.isMobile));
-		const initialTimeBuoyBuildPending = this.settingsService.consumeInitialTimeBuoyBuildPending();
-		if (Platform.isMobile && (initialTimeBuoyBuildPending || needsTimeBuoyStartupRebuild)) {
-			// 移动端仅记录待重建状态，首次进入浮标页时再执行全量工作。
-			this.syncOrchestrator.deferTimeBuoyStartupRebuild();
-			return;
-		}
-		if (initialTimeBuoyBuildPending || needsTimeBuoyStartupRebuild) {
-			try {
-				await this.syncOrchestrator.rebuildTimeBuoyIndex({
-					yieldToUi: () => new Promise<void>((resolve) => this.app.workspace.containerEl.win.setTimeout(resolve, 0)),
-				});
-				await this.queueRefreshOpenViews();
-			} catch {
-				// 新安装的派生索引失败不影响普通 memo；用户可在设置或浮标页重试。
-			}
-		}
+	private openCatalogDataSettings(): void {
+		const setting = (this.app as typeof this.app & {
+			setting: {
+				open: () => void;
+				openTabById?: (id: string) => void;
+			};
+		}).setting as {
+			open: () => void;
+			openTabById?: (id: string) => void;
+		};
+		setting.open();
+		setting.openTabById?.(this.manifest.id);
 	}
 
-	private async initializeSystemFoldersSafely(): Promise<void> {
+	private async initializeAfterLayoutWithCatalogSafely(cancellationSignal?: AbortSignal): Promise<void> {
+		const isCancelled = () => cancellationSignal?.aborted === true;
 		try {
-			await this.settingsService.initializeSystemFolders();
-		} catch {
-			// 系统目录也会在具体读写路径按需创建；启动阶段不弹提示。
-		}
-	}
-
-	private async scanRecentDailyMemosSafely(days: number): Promise<void> {
-		try {
-			const result = await this.syncOrchestrator.scanRecentDailyMemos(days);
-			if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
-				await this.queueRefreshOpenViews();
-			}
-			if (result.failed > 0) {
-				await this.recordMaintenanceDiagnosticSafely({
-					task: "startup_scan",
-					status: "failed",
-					occurredAt: new Date().toISOString(),
-					scope: `${days}d`,
-					mode: null,
-					message: result.errors[0] ?? t("service.rebuildIndexFailedGeneric"),
-					scannedFiles: result.scannedFiles,
-					created: result.created,
-					updated: result.updated,
-					deleted: result.deleted,
-					failed: result.failed,
-				});
-			}
-		} catch (error) {
-			await this.recordMaintenanceDiagnosticSafely({
-				task: "startup_scan",
-				status: "failed",
-				occurredAt: new Date().toISOString(),
-				scope: `${days}d`,
-				mode: null,
-				message: formatServiceError(error),
-				scannedFiles: null,
-				created: null,
-				updated: null,
-				deleted: null,
-				failed: null,
-			});
-			// 启动扫描只做轻量修复，不打断用户。
-		}
-	}
-
-	private async recordMaintenanceDiagnosticSafely(diagnostic: MaintenanceDiagnostic): Promise<void> {
-		try {
-			await this.settingsService.saveMaintenanceDiagnostic(diagnostic);
-		} catch {
-			// 诊断只辅助排查，不应影响 memo 读写。
-		}
-	}
-
-	private notifyPotentialSyncConflictsSafely(): void {
-		if (this.syncConflictNoticeShown) {
-			return;
-		}
-		try {
-			const conflicts = this.syncOrchestrator.listPotentialSyncConflictFiles();
-			const firstConflict = conflicts[0];
-			if (firstConflict === undefined) {
+			if (this.runtimeInitializationPromise !== null
+				&& await this.runtimeInitializationPromise) {
+				if (isCancelled()) return;
 				return;
 			}
-			const indexCount = conflicts.filter((conflict) => conflict.kind === "memo-index").length;
-			const monthlyCount = conflicts.length - indexCount;
-			const messageKey = indexCount > 0 && monthlyCount > 0
-				? "notice.syncConflictMixedFiles"
-				: indexCount > 0
-					? "notice.syncConflictIndexFiles"
-					: "notice.syncConflictMonthlyFiles";
-			this.syncConflictNoticeShown = true;
-			new Notice(t(messageKey, {
-				count: conflicts.length,
-				indexCount,
-				monthlyCount,
-				path: firstConflict.path,
-			}));
+			if (isCancelled()) return;
+			await this.catalogIndexCoordinator?.initialize();
+			if (isCancelled()) return;
+			await this.catalogReadService?.prime();
+			if (isCancelled()) return;
 		} catch {
-			// 同步冲突提示只是辅助信息，检测失败不阻断启动。
+			// 本机 Catalog 或兼容导入失败不能影响 Daily 快速记录能力。
 		}
 	}
 
-	private async recoverPendingMemoCreatesSafely(): Promise<boolean> {
-		try {
-			await this.syncOrchestrator.recoverPendingMemoCreates();
-			return true;
-		} catch {
-			// 未完成创建必须先保留现场，避免启动扫描生成重复 memo。
-			return false;
-		}
-	}
 
-	private runManualRefresh(): Promise<ScanDailyMemosResult> {
+	private runManualRefresh(): Promise<CatalogRefreshResult> {
 		if (this.manualRefreshPromise !== null) {
 			return this.manualRefreshPromise;
 		}
-		this.manualRefreshPromise = this.syncOrchestrator.scanRecentDailyMemos(30, "manual_refresh")
+		const refresh = this.memoCommandService?.refreshLocalCatalog() ?? Promise.resolve({
+			scannedFiles: 0,
+			created: 0,
+			updated: 0,
+			deleted: 0,
+			skipped: 0,
+			failed: 0,
+			errors: [],
+		});
+		this.manualRefreshPromise = refresh
 			.then(async (result) => {
 				await this.refreshOpenViews();
 				return result;
@@ -456,6 +655,14 @@ export default class KnomoPlugin extends Plugin {
 			});
 		return this.manualRefreshPromise;
 	}
+}
+
+function parseLogicalDate(value: string): Date {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+	if (match === null) throw new Error(`Invalid logical date: ${value}`);
+	const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+	if (formatDatePart(date) !== value) throw new Error(`Invalid logical date: ${value}`);
+	return date;
 }
 
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);

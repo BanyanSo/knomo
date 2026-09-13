@@ -1,10 +1,15 @@
+import type { ComposerToolbarPreferences } from "../settings/composerToolbar";
 export type DailyInsertPosition = "top" | "bottom";
 export type MemoTimeFormat = "HH:mm:ss" | "HH:mm";
+export type KnomoSettingsLoadStatus = "not_loaded" | "ready" | "unavailable";
 export type MonthlyDateOrder = "asc" | "desc";
 export type ReferenceMode = "embed" | "link";
 export type MobileCompactMode = "auto" | "on" | "off";
 
 export interface KnomoSettings {
+	composerToolbar: ComposerToolbarPreferences;
+	monthlyLocale?: string;
+	currentConfigInitialized?: boolean;
 	settingsVersion: number;
 	dailyHeading: string;
 	dailyInsertPosition: DailyInsertPosition;
@@ -15,6 +20,7 @@ export interface KnomoSettings {
 	monthlyDateOrder: MonthlyDateOrder;
 	legacyDailyHeadings: string[];
 	timeBuoyEnabled: boolean;
+	recentTimeFlowEnabled: boolean;
 	timeBuoyIntroDismissed?: boolean;
 	mobileCompactMode: MobileCompactMode;
 	syncDebounceMs: number;
@@ -23,7 +29,5 @@ export interface KnomoSettings {
 	excludeMonthlyMemosFromObsidian: boolean;
 	managedObsidianExcludeRule?: string;
 	managedObsidianExcludeRuleOwned?: boolean;
-	managedSystemFolderExcludeRule?: string;
-	managedSystemFolderExcludeRuleOwned?: boolean;
 	pinnedTags: string[];
 }

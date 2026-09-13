@@ -1,6 +1,6 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { parseMarkdownImages } from "./markdownImages";
-import { stripTrailingWikiLink } from "./references";
+import { stripTrailingWikiLink, getPreferredMemoBlockReferenceText } from "./references";
 
 export interface MemoContentStats {
 	chineseCharacterCount: number;
@@ -9,7 +9,7 @@ export interface MemoContentStats {
 	wordCount: number;
 }
 
-type MemoContentStatsSource = Pick<MemoRecord, "contentSnapshot" | "references">;
+type MemoContentStatsSource = Pick<MemoRecord, "contentSnapshot">;
 
 interface MemoContentStatsCacheEntry {
 	contentSnapshot: string;
@@ -28,7 +28,7 @@ const BLOCK_ID_PATTERN = /\^[A-Za-z0-9_-]+\b/g;
 const statsCache = new WeakMap<MemoContentStatsSource, MemoContentStatsCacheEntry>();
 
 export function getMemoContentStats(memo: MemoContentStatsSource): MemoContentStats {
-	const hasReference = memo.references.length > 0;
+	const hasReference = getPreferredMemoBlockReferenceText(memo.contentSnapshot) !== null;
 	const cached = statsCache.get(memo);
 	if (
 		cached !== undefined &&
@@ -37,25 +37,29 @@ export function getMemoContentStats(memo: MemoContentStatsSource): MemoContentSt
 	) {
 		return cached.stats;
 	}
-	const content = hasReference
-		? stripTrailingWikiLink(memo.contentSnapshot)
-		: memo.contentSnapshot;
-	const countableText = getCountableMemoText(content);
-	const chineseCharacterCount = (countableText.match(CHINESE_CHARACTER_PATTERN) ?? []).length;
-	const englishWordCount = (countableText.match(ENGLISH_WORD_PATTERN) ?? []).length;
-	const numberCount = (countableText.match(NUMBER_PATTERN) ?? []).length;
-	const stats = {
-		chineseCharacterCount,
-		englishWordCount,
-		numberCount,
-		wordCount: chineseCharacterCount + englishWordCount + numberCount,
-	};
+	const stats = getMemoContentStatsFromContent(memo.contentSnapshot, hasReference);
 	statsCache.set(memo, {
 		contentSnapshot: memo.contentSnapshot,
 		hasReference,
 		stats,
 	});
 	return stats;
+}
+
+export function getMemoContentStatsFromContent(contentSnapshot: string, hasReference = false): MemoContentStats {
+	const content = hasReference
+		? stripTrailingWikiLink(contentSnapshot)
+		: contentSnapshot;
+	const countableText = getCountableMemoText(content);
+	const chineseCharacterCount = (countableText.match(CHINESE_CHARACTER_PATTERN) ?? []).length;
+	const englishWordCount = (countableText.match(ENGLISH_WORD_PATTERN) ?? []).length;
+	const numberCount = (countableText.match(NUMBER_PATTERN) ?? []).length;
+	return {
+		chineseCharacterCount,
+		englishWordCount,
+		numberCount,
+		wordCount: chineseCharacterCount + englishWordCount + numberCount,
+	};
 }
 
 function getCountableMemoText(content: string): string {

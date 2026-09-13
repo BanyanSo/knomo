@@ -1,3 +1,4 @@
+import type { ComposerInput } from "../src/ui/ComposerEditor";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
@@ -11,6 +12,11 @@ test("renders composer input, tools, actions, and reference preview", async () =
 	const root = new TestElement("div");
 
 	const elements = renderKnomoComposer(root.asHtml(), {
+		createEditor: (parent, doc, label) => {
+			const input = parent.createDiv({ attr: { "aria-labelledby": label } }) as unknown as ComposerInput;
+			input.value = doc;
+			return input;
+		},
 		dailyEnabled: false,
 		timeBuoyEnabled: true,
 		timeBuoyPickerId: "time-buoy-picker",
@@ -40,10 +46,17 @@ test("renders composer input, tools, actions, and reference preview", async () =
 		"insert-tag",
 		"insert-image",
 		"insert-time-buoy",
+		"insert-task",
 		"insert-list",
+		"insert-bold",
+		"insert-highlight",
+		"insert-link",
 		"insert-numbered-list",
 	]);
 	assert.equal(elements.timeBuoyButtonEl?.disabled, true);
+	for (const [action, icon] of [["bold", "bold"], ["highlight", "highlighter"], ["link", "brackets"]]) {
+		assert.equal((elements.toolsEl as unknown as TestElement).findAll("[data-action]").find(item => item.getAttr("data-action") === `insert-${action}`)?.getAttr("data-icon"), icon);
+	}
 	assert.equal(elements.timeBuoyButtonEl?.getAttr("data-icon"), KNOMO_TIME_BUOY_ICON);
 	assert.equal(elements.timeBuoyButtonEl?.getAttr("aria-haspopup"), "dialog");
 	assert.equal(elements.timeBuoyButtonEl?.getAttr("aria-expanded"), "false");
@@ -179,7 +192,7 @@ test("narrows Time buoy input events with the composer window constructor", asyn
 	assert.equal(opened.length, 1);
 });
 
-test("renders retry and rebuild actions for a Time buoy index error", async () => {
+test("renders a retry action for a Time buoy Catalog error", async () => {
 	await obsidianStubReady;
 	const { renderTimeBuoyPage } = await import("../src/ui/TimeBuoyPage");
 	const root = new TestElement("div");
@@ -187,17 +200,18 @@ test("renders retry and rebuild actions for a Time buoy index error", async () =
 	renderTimeBuoyPage(root.asHtml(), {
 		loading: false,
 		error: new Error("corrupt shard"),
+		refreshError: null,
 		todayError: null,
+		todayDate: null, todayRevision: null, todayValid: false,
+		complete: false,
 		activeTab: "today",
 		today: [],
 		upcoming: [],
 		past: [],
-		rebuilding: false,
-		rebuildProgress: null,
 	}, { idPrefix: "time-buoy-test" });
 
 	assert.notEqual(root.find("[data-action='retry-time-buoy']"), null);
-	assert.notEqual(root.find("[data-action='rebuild-time-buoy']"), null);
+	assert.equal(root.find("[data-action='rebuild-time-buoy']"), null);
 });
 
 test("renders accessible Time buoy tabs and the active tab empty state", async () => {
@@ -208,13 +222,14 @@ test("renders accessible Time buoy tabs and the active tab empty state", async (
 	const result = renderTimeBuoyPage(root.asHtml(), {
 		loading: false,
 		error: null,
+		refreshError: null,
 		todayError: null,
+		todayDate: null, todayRevision: null, todayValid: false,
+		complete: true,
 		activeTab: "upcoming",
 		today: [],
 		upcoming: [],
 		past: [],
-		rebuilding: false,
-		rebuildProgress: null,
 	}, { idPrefix: "time-buoy-test" });
 
 	assert.equal(result.panelEl, null);
@@ -224,6 +239,55 @@ test("renders accessible Time buoy tabs and the active tab empty state", async (
 	assert.equal(root.find("[id='time-buoy-test-panel-today']")?.getAttr("hidden"), "");
 	assert.equal(root.getText().includes("No upcoming buoys"), true);
 	assert.equal(root.getText().includes("Memos set for a future date will surface when the day arrives."), true);
+});
+
+test("labels upcoming and past Time buoy tabs as partial without hiding known results", async () => {
+	await obsidianStubReady;
+	const { renderTimeBuoyPage } = await import("../src/ui/TimeBuoyPage");
+	const root = new TestElement("div");
+	const memo = { id: "memo-1" } as never;
+
+	const result = renderTimeBuoyPage(root.asHtml(), {
+		loading: false,
+		error: null,
+		refreshError: null,
+		todayError: null,
+		todayDate: null, todayRevision: null, todayValid: false,
+		complete: false,
+		activeTab: "past",
+		today: [],
+		upcoming: [],
+		past: [{ memo, primaryTargetDate: "2026-07-10", targetDates: ["2026-07-10"] }],
+	}, { idPrefix: "time-buoy-test" });
+
+	assert.equal(result.items.length, 1);
+	assert.equal(root.find("[data-time-buoy-partial]")?.getAttr("role"), "status");
+	assert.match(root.getText(), /partial results/i);
+});
+
+test("keeps Time buoy tabs visible with a retry action after a warm refresh failure", async () => {
+	await obsidianStubReady;
+	const { renderTimeBuoyPage } = await import("../src/ui/TimeBuoyPage");
+	const root = new TestElement("div");
+	const memo = { id: "memo-1" } as never;
+
+	const result = renderTimeBuoyPage(root.asHtml(), {
+		loading: false,
+		error: null,
+		refreshError: new Error("temporary failure"),
+		todayError: null,
+		todayDate: null, todayRevision: null, todayValid: false,
+		complete: true,
+		activeTab: "today",
+		today: [{ memo, primaryTargetDate: "2026-07-11", targetDates: ["2026-07-11"] }],
+		upcoming: [],
+		past: [],
+	}, { idPrefix: "time-buoy-test" });
+
+	assert.equal(result.items.length, 1);
+	assert.notEqual(root.find(".knomo-time-buoy-refresh-error"), null);
+	assert.notEqual(root.find("[data-action='retry-time-buoy']"), null);
+	assert.notEqual(root.find("[role='tablist']"), null);
 });
 
 test("appends Time buoy cards directly without date titles or grouping containers", async () => {
@@ -255,7 +319,10 @@ interface CreateElementOptions {
 }
 
 class TestElement {
-	private readonly children: TestElement[] = [];
+	readonly children: TestElement[] = [];
+	hidden = false;
+	querySelector(selector: string): TestElement | null { return this.find(selector.replace(/"/g, "'")); }
+	appendChild(child: TestElement): TestElement { const index = this.children.indexOf(child); if (index >= 0) this.children.splice(index, 1); this.children.push(child); return child; }
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
 	readonly style: { display?: string } = {};

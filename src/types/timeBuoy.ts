@@ -1,30 +1,30 @@
+import type { MemoViewItem } from "./memoView";
+import type { CatalogCoverage } from "./catalog";
+
 export type TimeBuoyDateStatus = "today" | "upcoming" | "past";
 
 export interface TimeBuoyInstance {
+	// 仅用于当前视图关联的本地 observation key，不是永久 Memo ID。
 	memoId: string;
 	targetDate: string;
-	sourcePeriod: string;
-	buoyRevision: string;
 }
 
-export interface TimeBuoyIndexEntry {
-	sourcePeriod: string;
-	buoyRevision: string;
+export interface TimeBuoyQueryItem {
+	instance: TimeBuoyInstance;
+	memo: MemoViewItem;
 }
 
-export interface TimeBuoyIndexShard {
-	schemaVersion: 2;
-	targetPeriod: string;
-	updatedAt: string;
-	dates: Record<string, Record<string, TimeBuoyIndexEntry>>;
+export interface TimeBuoyQueryResult {
+	catalogRevision?: number;
+	coverage?: CatalogCoverage;
+	invalidated?: boolean;
+	items: TimeBuoyQueryItem[];
+	stale: TimeBuoyInstance[];
+	missingPeriods: string[];
 }
 
-export interface TimeBuoyIndexState {
-	schemaVersion: 1;
-	updatedAt: string;
-	dirty: boolean;
-	affectedMemoIds: string[];
-	expectedPeriods: string[];
+export interface TimeBuoyAllQueryResult extends TimeBuoyQueryResult {
+	complete: boolean;
 }
 
 export interface TimeBuoyMatch {

@@ -26,6 +26,7 @@ export interface EscapeState {
 }
 
 interface KnomoUserActionControllerOptions {
+	runMemoAction: (action: MemoAction, memoId: string | null) => Promise<void>;
 	isMobileLayout: () => boolean;
 	isMobileSearchPageOpen: () => boolean;
 	isComposerOpen: () => boolean;
@@ -45,7 +46,6 @@ interface KnomoUserActionControllerOptions {
 	setSearchDateFilter: (filter: SearchDateFilter, sourceEl: HTMLElement | null) => void;
 	setMobileSearchDateFilter: (filter: SearchDateFilter) => void;
 	runTrashAction: (action: TrashAction, memoId: string | null) => Promise<void>;
-	runMemoAction: (action: MemoAction, memoId: string | null) => Promise<void>;
 	shouldIgnoreHandledMobileToolClick: (element: HTMLElement, action: string | null) => boolean;
 	openMemoCardDailyNote: (memoId: string, randomReunion: boolean) => Promise<void>;
 	closeCardMenu: () => void;
@@ -73,15 +73,13 @@ interface KnomoUserActionControllerOptions {
 	goToNextRecordStatsPeriod: () => void;
 	retryRecordStats: () => Promise<void>;
 	retryTimeBuoy?: () => Promise<void>;
-	rebuildTimeBuoy?: () => Promise<void>;
-	cancelTimeBuoyRebuild?: () => void;
 	setTimeBuoyTab?: (tab: TimeBuoyTab) => void;
 	loadMoreTimeBuoyCards?: () => void;
 	openTimeBuoy?: () => void;
 	enableTimeBuoyIntro?: () => Promise<void>;
 	dismissTimeBuoyIntro?: () => Promise<void>;
 	renderAllMemosLoadingState: () => void;
-	ensureAllMemosLoaded: () => Promise<void>;
+	reloadCatalogQuery: () => Promise<void>;
 	setRecordStatsView: (view: "week" | "month" | "year") => void;
 	openRecordStatsTrendFilter: (sourceEl: HTMLElement | null) => void;
 	openRecordStatsHourFilter: (sourceEl: HTMLElement | null) => void;
@@ -100,6 +98,9 @@ interface KnomoUserActionControllerOptions {
 	syncCardMenuState: () => void;
 	cancelComposerFromEscape: () => void;
 	closeOpenChromeFromEscape: () => void;
+	refreshCatalogSyncState?: () => Promise<void>;
+	rebuildBasicData?: () => Promise<void>;
+	openCatalogSettings?: () => void;
 }
 
 export class KnomoUserActionController {
@@ -200,6 +201,18 @@ export class KnomoUserActionController {
 		}
 
 		if (route.type === "action") {
+			if (route.action === "rebuild-knomo-basic-data") {
+				await this.options.rebuildBasicData?.();
+				return;
+			}
+			if (route.action === "refresh-catalog-sync-state") {
+				await this.options.refreshCatalogSyncState?.();
+				return;
+			}
+			if (route.action === "open-catalog-settings") {
+				this.options.openCatalogSettings?.();
+				return;
+			}
 			if (this.options.shouldIgnoreHandledMobileToolClick(route.element, route.action)) {
 				return;
 			}
@@ -321,12 +334,6 @@ export class KnomoUserActionController {
 			case "retry-time-buoy":
 				await this.options.retryTimeBuoy?.();
 				return;
-			case "rebuild-time-buoy":
-				await this.options.rebuildTimeBuoy?.();
-				return;
-			case "cancel-time-buoy-rebuild":
-				this.options.cancelTimeBuoyRebuild?.();
-				return;
 			case "time-buoy-tab-today":
 				this.options.setTimeBuoyTab?.("today");
 				return;
@@ -353,7 +360,7 @@ export class KnomoUserActionController {
 					return;
 				}
 				this.options.renderAllMemosLoadingState();
-				await this.options.ensureAllMemosLoaded();
+				await this.options.reloadCatalogQuery();
 				return;
 			case "record-stats-view-week":
 				this.options.setRecordStatsView("week");

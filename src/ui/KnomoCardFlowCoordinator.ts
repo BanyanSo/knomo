@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
 	KnomoCardFlowBatcher,
 	runCardFlowBatch,
@@ -13,6 +13,7 @@ import {
 import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
 
 interface PendingCardFlowScrollRestore {
+	anchor?: { renderKey: string; offset: number };
 	generation: number;
 	scrollTop: number;
 	visibleCount: number;
@@ -129,13 +130,18 @@ export class KnomoCardFlowCoordinator {
 			: null;
 	}
 
-	restorePendingScrollTop(generation: number, restoreScrollTop: (scrollTop: number) => void): void {
+	restorePendingScrollTop(generation: number, restoreScrollTop: (scrollTop: number) => void, cardFlow?: HTMLElement | null): void {
 		const pending = this.pendingScrollRestore;
 		if (pending === null || pending.generation !== generation || generation !== this.generation) {
 			return;
 		}
 		this.pendingScrollRestore = null;
-		restoreScrollTop(pending.scrollTop);
+		const anchor = pending.anchor;
+		const card = anchor && cardFlow ? Array.from(cardFlow.children).find((child) => child.getAttribute("data-memo-render-key") === anchor.renderKey) : null;
+		const scrollTop = card && cardFlow && anchor
+			? cardFlow.scrollTop + card.getBoundingClientRect().top - cardFlow.getBoundingClientRect().top - anchor.offset
+			: pending.scrollTop;
+		restoreScrollTop(scrollTop);
 	}
 
 	deferMobileRender(options: {
@@ -204,7 +210,6 @@ export class KnomoCardFlowCoordinator {
 		if (
 			cardFlow === null ||
 			options.isRecordStatsActive ||
-			this.sentinel.isObserving ||
 			cardFlow.scrollTop + cardFlow.clientHeight < cardFlow.scrollHeight - 160
 		) {
 			return;
@@ -294,7 +299,7 @@ export class KnomoCardFlowCoordinator {
 		if (result.type === "completed" && !result.completion.hasMoreItems) {
 			options.onExhausted?.();
 		}
-		this.restorePendingScrollTop(options.generation, options.restorePendingScrollTop);
+		this.restorePendingScrollTop(options.generation, options.restorePendingScrollTop, root);
 	}
 
 	private renderSentinel(options: {

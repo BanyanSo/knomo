@@ -122,7 +122,7 @@ test("sidebar navigation stores and restores record statistics return state", ()
 	assert.equal(returned.type, "returned");
 	assert.equal(returned.returnedNav, "random");
 	assert.equal(returned.refreshRandomReunionIfEmpty, true);
-	assert.equal(returned.ensureAllMemosLoaded, false);
+	assert.equal(returned.reloadCatalogQuery, false);
 	assert.equal(state.activeNav, "random");
 	assert.equal(state.scopeFilter, "with-image");
 	assert.equal(state.searchQuery, "memo");
@@ -139,9 +139,14 @@ test("sidebar navigation stores and restores record statistics return state", ()
 test("sidebar navigation exposes follow-up side effects for heavy routes", () => {
 	const state = new KnomoViewStateController();
 
-	assert.equal(state.setSidebarNav("review").ensureAllMemosLoaded, true);
+	assert.equal(state.setSidebarNav("review").reloadCatalogQuery, true);
+	assert.equal(state.setSidebarNav("all").reloadCatalogQuery, true);
 	assert.equal(state.setSidebarNav("random").refreshRandomReunion, true);
+	const leaveRandom = state.setSidebarNav("all");
+	assert.equal(leaveRandom.clearRandomReunion, false);
 	assert.equal(state.setSidebarNav("shuffleDay").refreshShuffleDay, true);
+	const leaveShuffleDay = state.setSidebarNav("all");
+	assert.equal(leaveShuffleDay.clearShuffleDay, false);
 	assert.equal(state.setSidebarNav("trash").loadTrashMemos, true);
 });
 
@@ -167,6 +172,7 @@ test("reset to all notes reports whether only chrome sync is needed", () => {
 
 	assert.equal(defaultResult.type, "already-default");
 	assert.equal(defaultResult.clearCardMenu, true);
+	assert.equal(defaultResult.reloadCatalogQuery, false);
 	assert.equal(defaultState.mobileDrawerOpen, false);
 	assert.equal(defaultState.activeNav, "all");
 
@@ -178,6 +184,7 @@ test("reset to all notes reports whether only chrome sync is needed", () => {
 	const changedResult = filteredState.resetToAllNotes();
 
 	assert.equal(changedResult.type, "changed");
+	assert.equal(changedResult.reloadCatalogQuery, true);
 	assert.equal(filteredState.activeNav, "all");
 	assert.equal(filteredState.searchQuery, "");
 	assert.equal(filteredState.scopeFilter, "all");

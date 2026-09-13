@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("builds card flow view keys from normalized filters", async () => {
@@ -56,11 +56,21 @@ test("keys record stats idle state as loading", async () => {
 	assert.equal(
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "idle", error: null },
+			recordStatsSnapshot: { state: "idle", error: null, updating: false },
 		}),
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "loading", error: null },
+			recordStatsSnapshot: { state: "loading", error: null, updating: false },
+		}),
+	);
+	assert.notEqual(
+		getCardFlowStateKey({
+			...base,
+			recordStatsSnapshot: { state: "ready", error: null, updating: false },
+		}),
+		getCardFlowStateKey({
+			...base,
+			recordStatsSnapshot: { state: "ready", error: null, updating: true },
 		}),
 	);
 });
@@ -84,7 +94,7 @@ test("keys closed mobile search independently from visible memos", async () => {
 	assert.equal(getMobileSearchIdsKey(true, [memo]), "memo-1");
 });
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-06-02T00:00:00+08:00",
@@ -92,32 +102,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: id,
 		contentHash: id,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Journal/2026-06-02.md",
 			heading: null,
-			lastKnownBlock: contentBlock(id),
-			lastKnownHash: id,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/2026-06.md",
-			dateHeading: "2026-06-02",
-			lastKnownBlock: contentBlock(id),
-			lastKnownHash: id,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

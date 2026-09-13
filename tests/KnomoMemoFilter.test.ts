@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import { filterVisibleMemos, memoMatchesSearch } from "../src/ui/KnomoMemoFilter";
 import { buildMemoSearchText } from "../src/ui/viewFilters";
+
+test("非 Catalog Memo 搜索也统一全角字符、大小写和跨行空白", () => {
+	const memo = makeMemo("normalized", { contentSnapshot: "ＡＬＰＨＡ\n\t beta" });
+	for (const query of ["alpha beta", "ＡＬＰＨＡ   BETA"]) {
+		assert.equal(memoMatchesSearch(memo, query, null, null, disabledDailyStatus(), buildMemoSearchText), true);
+	}
+	assert.equal(memoMatchesSearch(memo, "alpha gamma", null, null, disabledDailyStatus(), buildMemoSearchText), false);
+});
 
 test("filterVisibleMemos returns random, trash, and record stats branches directly", () => {
 	const memos = [makeMemo("regular")];
@@ -99,7 +107,7 @@ test("memoMatchesSearch uses query, date, and record stats filters together", ()
 	), false);
 });
 
-function baseOptions(memos: MemoRecord[]) {
+function baseOptions(memos: MemoViewItem[]) {
 	return {
 		memos,
 		randomMemos: [],
@@ -125,11 +133,11 @@ function makeMemo(
 	overrides: {
 		createdAt?: string;
 		contentSnapshot?: string;
-		tags?: MemoRecord["tags"];
-		links?: MemoRecord["links"];
-		images?: MemoRecord["images"];
+		tags?: MemoViewItem["tags"];
+		links?: MemoViewItem["links"];
+		images?: MemoViewItem["images"];
 	} = {},
-): MemoRecord {
+): MemoViewItem {
 	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
 	const dailyBlock = "- 09:00:00 memo";
 	return {
@@ -139,32 +147,13 @@ function makeMemo(
 		contentSnapshot: overrides.contentSnapshot ?? "memo",
 		contentHash: `hash-${id}`,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: overrides.tags ?? [],
 		links: overrides.links ?? [],
 		images: overrides.images ?? [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: `Daily/${createdAt.slice(0, 10)}.md`,
 			heading: "## Memos",
-			lastKnownBlock: dailyBlock,
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/Memos-2026-05.md",
-			dateHeading: `## [[${createdAt.slice(0, 10)}]]`,
-			lastKnownBlock: dailyBlock,
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

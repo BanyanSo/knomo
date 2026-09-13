@@ -631,15 +631,19 @@ Knomo 更聚焦：
 
 ## 开发验证
 
-交付改动前，请运行：
+按修改范围和风险选择验证。纯文档只核对内容、引用和 diff；低风险局部修改运行相关测试，可一次传入多个文件：
 
 ```bash
-npm run verify
+npm run test:file -- tests/<Name>.test.ts
 ```
 
-该命令会运行类型检查、测试、生产构建、i18n 检查、diff 空白检查、Obsidian 禁用源码模式扫描和尾随空白扫描。涉及移动端行为的改动，还需要完成 [docs/mobile-qa-checklist.md](./docs/mobile-qa-checklist.md) 中的手测场景。
+`npm test` / `npm run test:quiet` 运行产品行为、数据安全、同步 acceptance 及架构/产品契约测试。`npm run test:tooling` 运行测试 runner、验证工具和 benchmark trace validator 测试。`npm run test:all` 运行两者的完整集合；CI、发布检查和 `npm run verify` 使用全量集合。测试目录不变，新文件默认进入产品集合，`test:file` 可选择任一集合的文件。合成 trace 测试不替代真实设备性能验收。
 
-局部开发时，可以通过 `npm test` 透传 Node test runner 参数，例如 `npm test -- --test-name-pattern=WikiLink`。交付改动前仍应运行 `npm run verify`。
+persistence、migration、identity、数据安全及跨服务语义修改须先补有效回归，再运行 `npm run test:quiet` 和 `npm run typecheck`。需要验证构建产物时运行 `npm run build`。仅因新增修改、失败或未解决风险扩大或重复检查；未执行的检查单独说明。
+
+`npm run verify` 是综合检查入口，不是每次交付的默认要求：它包含类型检查、全量测试、生产构建、i18n、diff 空白、禁用源码模式及尾随空白扫描，仅在需要这些完整检查时运行。未经要求不运行 lint。同一工作树的测试命令共用编译目录，应串行协调。
+
+当前任务包含设备验证时，选择受影响的场景；完整设备矩阵属于对应 Stage/Beta/Release 范围。本地可选的[移动 QA 清单](./docs/mobile-qa-checklist.md)仅作辅助，不是 test/build 前提。
 
 ---
 
@@ -663,12 +667,12 @@ npm run verify
 
 ### Knomo 适用于 Obsidian 桌面端和移动端
 
-Knomo 采用 MIT 许可证。你可以自由使用、复制、修改、合并、发布、分发、再授权或出售本软件的副本，但需要在代码的重要部分中保留版权声明和许可证声明。
+从 Knomo 1.10.0 的本次许可变更起，Knomo 原创内容采用 **GNU GPL 第 3 版且仅限该版（GPL-3.0-only），附 Knomo Obsidian 宿主附加许可**。请一起阅读 [许可说明](./LICENSING.md)、[GPLv3 标准全文](./LICENSE)和[宿主附加许可](./OBSIDIAN-EXCEPTION.txt)。
 
-这也包括你可能从 Knomo 中提取出来的独立代码片段、样式、组件或工具函数。
+你可以依照这些条款使用、修改和商业分发 Knomo。分发受覆盖的 fork，或抽取的代码、样式、组件和工具函数时，应履行适用的 GPL 义务，包括对应源码及必要声明。宿主附加许可允许与独立取得的 Obsidian 进行必要结合，不免除 Knomo 的 GPL 义务，也不授权分发 Obsidian。在法律允许的范围内，本软件不提供担保。
 
-如果你分发 Knomo 的分支版本，或复用其中一部分代码，欢迎在你的 README 中保留指向原项目的链接和保留我的 [Buy me a coffee](https://www.buymeacoffee.com/banyanso) 链接。
+历史 MIT 授权继续有效，之前按 MIT 提供的内容仍可按原条款使用。[历史 MIT 声明](./LICENSES/Knomo-historical-MIT.txt)完整保留，但不为新贡献授予 MIT 许可。第三方内容保留各自许可和[必要声明](./THIRD-PARTY-NOTICES.txt)。你的笔记不会仅因使用 Knomo 而变为 GPL 内容。
 
-Knomo 是为 Obsidian 设计的，并可能持续更新，以适配新版 Obsidian，包括桌面端、移动端以及 Minimal 等社区主题的体验改进。
+[品牌政策](./BRANDING.md)将代码许可与官方身份分开。软件许可允许 fork 和商业使用，但不得造成官方背书的误解。欢迎保留原项目或 [Buy me a coffee](https://www.buymeacoffee.com/banyanso) 链接，这不是许可条件。新贡献的许可见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-详情请查看 [LICENSE](./LICENSE) 文件。
+开发源码位于[本仓库](https://github.com/BanyanSo/knomo)。每次 GPL 二进制分发都必须明确提供取得完整对应源码的方式。本次许可文件修改尚未实现发行打包与源码交付，正式发布前仍需完成[发行要求](./LICENSING.md#source-and-distribution-release-work-still-required)。

@@ -17,8 +17,8 @@ const context = await esbuild.context({
 	external: [
 		"obsidian",
 		"electron",
-		"@codemirror/*",
-		"@lezer/*",
+		"@codemirror/state",
+		"@codemirror/view",
 		...nodeExternals,
 	],
 	format: "cjs",
@@ -28,6 +28,9 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: isProduction,
+	define: {
+		__KNOMO_DIAGNOSTIC_BUILD__: JSON.stringify(!isProduction),
+	},
 });
 
 if (isProduction) {

@@ -1,10 +1,7 @@
-import type { MemoMutation, MemoRecord } from "../types/memo";
-import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../services/TimeBuoyQueryService";
-import type { TimeBuoyRebuildResult } from "../services/TimeBuoyRebuildService";
-import type { TimeBuoyRebuildOptions, TimeBuoyRebuildProgress } from "../services/TimeBuoyRebuildService";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../types/timeBuoy";
 import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
-import { hasTimeBuoyDate } from "../utils/timeBuoyParser";
-import { getMemoRenderRevision } from "./MemoRenderRevision";
+import { getMemoRenderKey, getMemoRenderRevision } from "./MemoRenderRevision";
 
 export type TimeBuoyTab = "today" | "upcoming" | "past";
 
@@ -15,44 +12,52 @@ export interface TimeBuoyTabItem {
 }
 
 export interface TimeBuoyViewSnapshot {
+	todayDate: string | null;
+	todayRevision: number | null;
+	todayValid: boolean;
 	loading: boolean;
 	error: unknown;
+	refreshError: unknown;
 	todayError: unknown;
+	complete: boolean;
 	activeTab: TimeBuoyTab;
 	today: TimeBuoyTabItem[];
 	upcoming: TimeBuoyTabItem[];
 	past: TimeBuoyTabItem[];
-	rebuilding: boolean;
-	rebuildProgress: TimeBuoyRebuildProgress | null;
 }
 
 export function mergeTodayTimeBuoyFeed(
 	memos: readonly MemoRecord[],
 	todayItems: readonly TimeBuoyTabItem[],
 ): MemoRecord[] {
-	const promotedByMemoId = new Map(todayItems.map((item) => [item.memo.id, item.memo]));
+	const latestByMemoId = new Map(memos.map((memo) => [memo.id, memo]));
+	const latestByRenderKey = new Map(memos.map((memo) => [getMemoRenderKey(memo), memo]));
+	const promotedByMemoId = new Map(todayItems.map((item) => [
+		item.memo.id,
+		latestByMemoId.get(item.memo.id) ?? latestByRenderKey.get(getMemoRenderKey(item.memo)) ?? item.memo,
+	]));
 	const promoted = [...promotedByMemoId.values()]
 		.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+	const promotedMemoIds = new Set(promoted.map((memo) => memo.id));
+	const promotedRenderKeys = new Set(promoted.map(getMemoRenderKey));
 	return [
 		...promoted,
-		...memos.filter((memo) => !promotedByMemoId.has(memo.id)),
+		...memos.filter((memo) => !promotedMemoIds.has(memo.id) && !promotedRenderKeys.has(getMemoRenderKey(memo))),
 	];
 }
 
 interface TimeBuoyViewControllerOptions {
 	getNow: () => Date;
 	ensureReady?: () => Promise<void>;
-	isTodayIndexReady?: () => Promise<boolean>;
+	isTodayIndexReady?: (targetDate: string) => Promise<boolean>;
 	queryAll: () => Promise<TimeBuoyAllQueryResult>;
 	queryDate: (date: string) => Promise<TimeBuoyQueryResult>;
-	rebuild: (options?: TimeBuoyRebuildOptions) => Promise<TimeBuoyRebuildResult>;
 	requestRender: () => void;
 }
 
 export class TimeBuoyViewController {
 	private snapshot: TimeBuoyViewSnapshot;
 	private requestId = 0;
-	private rebuildCancelled = false;
 	private hasLoadedAll = false;
 
 	constructor(private readonly options: TimeBuoyViewControllerOptions) {
@@ -83,39 +88,22 @@ export class TimeBuoyViewController {
 		return true;
 	}
 
-	applyMemoMutation(mutation: MemoMutation): void {
-		if (mutation.type === "create") {
-			return;
-		}
-		const previousSnapshot = this.snapshot;
-		const reconcile = (items: TimeBuoyTabItem[], tab: TimeBuoyTab): TimeBuoyTabItem[] => items.flatMap((item) => {
-			if (item.memo.id !== mutation.memo.id) {
-				return [item];
-			}
-			if (mutation.type === "delete") {
-				return [];
-			}
-			const targetDates = item.targetDates.filter((targetDate) => (
-				hasTimeBuoyDate(mutation.memo.contentSnapshot, targetDate)
-			));
-			if (targetDates.length === 0) {
-				return [];
-			}
-			return [{
-				memo: mutation.memo,
-				targetDates,
-				primaryTargetDate: getPrimaryTargetDate(tab, targetDates),
-			}];
+	replaceMemo(memo: MemoRecord): boolean {
+		let changed = false;
+		const renderKey = getMemoRenderKey(memo);
+		const replace = (items: readonly TimeBuoyTabItem[]): TimeBuoyTabItem[] => items.map((item) => {
+			if (item.memo.id !== memo.id && getMemoRenderKey(item.memo) !== renderKey) return item;
+			if (getMemoRenderRevision(item.memo) === getMemoRenderRevision(memo)) return item;
+			changed = true;
+			return { ...item, memo };
 		});
-		this.snapshot = {
-			...this.snapshot,
-			today: sortTabItems(reconcile(this.snapshot.today, "today"), "today"),
-			upcoming: sortTabItems(reconcile(this.snapshot.upcoming, "upcoming"), "upcoming"),
-			past: sortTabItems(reconcile(this.snapshot.past, "past"), "past"),
-		};
-		if (mutation.type === "delete" && !areTimeBuoySnapshotsEqual(previousSnapshot, this.snapshot)) {
-			this.options.requestRender();
-		}
+		const today = replace(this.snapshot.today);
+		const upcoming = replace(this.snapshot.upcoming);
+		const past = replace(this.snapshot.past);
+		if (!changed) return false;
+		this.snapshot = { ...this.snapshot, today, upcoming, past };
+		this.options.requestRender();
+		return true;
 	}
 
 	async loadInitial(): Promise<void> {
@@ -123,6 +111,9 @@ export class TimeBuoyViewController {
 		const activeTab = this.snapshot.activeTab;
 		if (!this.hasLoadedAll) {
 			this.snapshot = { ...createInitialSnapshot(activeTab), loading: true };
+			this.options.requestRender();
+		} else if (this.snapshot.refreshError !== null) {
+			this.snapshot = { ...this.snapshot, refreshError: null };
 			this.options.requestRender();
 		}
 		const today = formatTimeBuoyDate(this.options.getNow());
@@ -132,16 +123,18 @@ export class TimeBuoyViewController {
 				return;
 			}
 			const result = await this.options.queryAll();
-			if (requestId !== this.requestId) {
+			if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) {
 				return;
 			}
-			if (!result.complete || result.missingPeriods.length > 0) {
-				throw new Error(`Incomplete time buoy index: ${[...new Set(result.missingPeriods)].join(", ")}`);
-			}
+			if (result.invalidated) throw new Error("Time buoy query invalidated");
 			const partitioned = partitionItems(result.items, today);
 			const nextSnapshot = {
 				...createInitialSnapshot(this.snapshot.activeTab),
 				...partitioned,
+				todayDate: today,
+				todayRevision: result.catalogRevision ?? null,
+				todayValid: result.complete && result.missingPeriods.length === 0,
+				complete: result.complete && result.missingPeriods.length === 0,
 			};
 			const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
 			this.snapshot = nextSnapshot;
@@ -151,6 +144,11 @@ export class TimeBuoyViewController {
 			}
 		} catch (error) {
 			if (requestId !== this.requestId) {
+				return;
+			}
+			if (this.hasLoadedAll) {
+				this.snapshot = { ...this.snapshot, refreshError: error };
+				this.options.requestRender();
 				return;
 			}
 			const nextSnapshot = { ...createInitialSnapshot(this.snapshot.activeTab), error };
@@ -163,48 +161,52 @@ export class TimeBuoyViewController {
 		}
 	}
 
-	async loadTodayOnly(): Promise<void> {
+	async loadTodayOnly(render = true): Promise<void> {
 		const requestId = ++this.requestId;
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
-			const todayIndexReady = (await this.options.isTodayIndexReady?.()) ?? true;
+			const todayIndexReady = (await this.options.isTodayIndexReady?.(today)) ?? true;
 			if (!todayIndexReady) {
 				if (requestId !== this.requestId) {
 					return;
 				}
-				const nextSnapshot = { ...this.snapshot, today: [], todayError: null };
-				const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
-				this.snapshot = nextSnapshot;
+				// 独立页保留最后结果，默认列表暂停提升未经确认的浮标。
 				this.hasLoadedAll = false;
-				if (changed) {
-					this.options.requestRender();
-				}
+				this.snapshot = { ...this.snapshot, todayValid: false };
+				if (render) this.options.requestRender();
 				return;
 			}
 			const result = await this.options.queryDate(today);
-			if (requestId !== this.requestId) {
+			if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) {
 				return;
 			}
+			if (result.invalidated) throw new Error("Time buoy query invalidated");
 			if (result.missingPeriods.length > 0) {
 				const changed = this.snapshot.todayError === null;
 				this.snapshot = {
 					...this.snapshot,
+					todayValid: false,
 					todayError: new Error(`Incomplete time buoy index: ${result.missingPeriods.join(", ")}`),
 				};
-				if (changed) {
+				if (changed && render) {
 					this.options.requestRender();
 				}
 				return;
 			}
 			const nextToday = groupTabItems(result.items, "today");
 			const changed = this.snapshot.todayError !== null
+				|| !this.snapshot.todayValid || this.snapshot.todayDate !== today
+				|| this.snapshot.todayRevision !== (result.catalogRevision ?? null)
 				|| !areTimeBuoyTabItemsEqual(this.snapshot.today, nextToday);
 			this.snapshot = {
 				...this.snapshot,
 				today: nextToday,
+				todayDate: today,
+				todayRevision: result.catalogRevision ?? null,
+				todayValid: true,
 				todayError: null,
 			};
-			if (changed) {
+			if (changed && render) {
 				this.options.requestRender();
 			}
 		} catch (error) {
@@ -212,8 +214,8 @@ export class TimeBuoyViewController {
 				return;
 			}
 			const changed = this.snapshot.todayError === null;
-			this.snapshot = { ...this.snapshot, todayError: error };
-			if (changed) {
+			this.snapshot = { ...this.snapshot, todayError: error, todayValid: false };
+			if (changed && render) {
 				this.options.requestRender();
 			}
 		}
@@ -223,38 +225,7 @@ export class TimeBuoyViewController {
 		await this.loadInitial();
 	}
 
-	async rebuild(): Promise<void> {
-		if (this.snapshot.rebuilding) {
-			return;
-		}
-		this.rebuildCancelled = false;
-		this.snapshot = { ...this.snapshot, rebuilding: true, rebuildProgress: null, error: null };
-		this.options.requestRender();
-		try {
-			const result = await this.options.rebuild({
-				isCancelled: () => this.rebuildCancelled,
-				onProgress: (progress) => {
-					this.snapshot = { ...this.snapshot, rebuildProgress: progress };
-					this.options.requestRender();
-				},
-			});
-			if (result.status === "completed") {
-				await this.loadInitial();
-				return;
-			}
-			this.snapshot = { ...this.snapshot, rebuilding: false, rebuildProgress: null };
-		} catch (error) {
-			this.snapshot = { ...this.snapshot, rebuilding: false, rebuildProgress: null, error };
-		}
-		this.options.requestRender();
-	}
-
-	cancelRebuild(): void {
-		this.rebuildCancelled = true;
-	}
-
 	clear(): void {
-		this.rebuildCancelled = true;
 		this.requestId += 1;
 		this.hasLoadedAll = false;
 		this.snapshot = createInitialSnapshot();
@@ -266,14 +237,17 @@ function areTimeBuoySnapshotsEqual(
 	right: TimeBuoyViewSnapshot,
 ): boolean {
 	return left.loading === right.loading
+		&& left.todayDate === right.todayDate
+		&& left.todayRevision === right.todayRevision
+		&& left.todayValid === right.todayValid
 		&& left.error === right.error
+		&& left.refreshError === right.refreshError
 		&& left.todayError === right.todayError
+		&& left.complete === right.complete
 		&& left.activeTab === right.activeTab
 		&& areTimeBuoyTabItemsEqual(left.today, right.today)
 		&& areTimeBuoyTabItemsEqual(left.upcoming, right.upcoming)
-		&& areTimeBuoyTabItemsEqual(left.past, right.past)
-		&& left.rebuilding === right.rebuilding
-		&& left.rebuildProgress === right.rebuildProgress;
+		&& areTimeBuoyTabItemsEqual(left.past, right.past);
 }
 
 function areTimeBuoyTabItemsEqual(
@@ -292,15 +266,18 @@ function areTimeBuoyTabItemsEqual(
 
 function createInitialSnapshot(activeTab: TimeBuoyTab = "today"): TimeBuoyViewSnapshot {
 	return {
+		todayDate: null,
+		todayRevision: null,
+		todayValid: false,
 		loading: false,
 		error: null,
+		refreshError: null,
 		todayError: null,
+		complete: false,
 		activeTab,
 		today: [],
 		upcoming: [],
 		past: [],
-		rebuilding: false,
-		rebuildProgress: null,
 	};
 }
 

@@ -34,10 +34,6 @@ export function formatTimeBuoyDate(date: Date): string {
 	].join("-");
 }
 
-export function getTimeBuoyTargetPeriod(targetDate: string): string | null {
-	return isValidTimeBuoyDate(targetDate) ? targetDate.slice(0, 7) : null;
-}
-
 export function addTimeBuoyCalendarDays(date: Date, days: number): Date {
 	const nextDate = new Date(date.getTime());
 	nextDate.setHours(0, 0, 0, 0);
@@ -70,21 +66,4 @@ export function getTimeBuoyCardStatus(targetDates: readonly string[], today = ne
 		}
 	}
 	return fallback;
-}
-
-export function listTimeBuoyTargetPeriods(startDate: string, endDate: string): string[] {
-	const start = parseTimeBuoyDate(startDate);
-	const end = parseTimeBuoyDate(endDate);
-	if (start === null || end === null || startDate > endDate) {
-		return [];
-	}
-	const periods: string[] = [];
-	const cursor = new Date(0);
-	cursor.setHours(0, 0, 0, 0);
-	cursor.setFullYear(start.getFullYear(), start.getMonth(), 1);
-	while (cursor <= end) {
-		periods.push(formatTimeBuoyDate(cursor).slice(0, 7));
-		cursor.setMonth(cursor.getMonth() + 1, 1);
-	}
-	return periods;
 }

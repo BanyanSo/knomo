@@ -1,26 +1,20 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
+
+export function getMemoRenderKey(memo: MemoRecord): string {
+	return memo.catalog?.renderKey ?? memo.id;
+}
 
 export function getMemoRenderRevision(memo: MemoRecord): string {
-	const reference = memo.references[0];
 	return encodeParts([
+		getMemoRenderKey(memo),
 		memo.id,
-		memo.version,
+		memo.updatedAt,
 		memo.createdAt,
 		memo.updatedAt,
 		memo.contentHash,
 		memo.status,
-		memo.syncStatus,
-		memo.sourceMemoId,
-		memo.issue?.type,
-		memo.issue?.code,
-		memo.issue?.detectedAt,
-		memo.issue?.message,
-		memo.issue?.context === undefined ? undefined : JSON.stringify(memo.issue.context),
-		reference?.memoId,
-		reference?.referenceText,
 		memo.dailyRef.path,
 		memo.deletedAt,
-		memo.deleteSource,
 	]);
 }
 

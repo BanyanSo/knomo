@@ -4,6 +4,17 @@ import path from "node:path";
 
 const TESTS_DIR = "tests";
 const COMPILED_TESTS_DIR = path.join(".tmp", "knomo-tests", "tests");
+const TEST_FILES_MARKER = "--files";
+const TOOLING_TEST_FILES = new Set([
+	"runTests.test.ts",
+	"VerifyCore.test.ts",
+	"CatalogBenchmarkTooling.test.ts",
+]);
+
+export interface RunTestSelection {
+	sourceFileNames: string[];
+	extraNodeTestArgs: string[];
+}
 
 export function getCompiledTestFilesForSources(sourceFileNames: readonly string[], compiledTestsDir = COMPILED_TESTS_DIR): string[] {
 	return sourceFileNames
@@ -25,8 +36,54 @@ export function getNodeTestArgs(compiledTestFiles: readonly string[], extraNodeT
 	];
 }
 
-export function runTests(extraNodeTestArgs: readonly string[] = []): number {
-	const compiledTestFiles = getCompiledTestFilesForSources(fs.readdirSync(TESTS_DIR));
+export function getRunTestSelection(sourceFileNames: readonly string[], args: readonly string[]): RunTestSelection {
+	const markerIndex = args.indexOf(TEST_FILES_MARKER);
+	const runnerArgs = markerIndex === -1 ? args : args.slice(0, markerIndex);
+	const suiteArgs = runnerArgs.filter((arg) => arg.startsWith("--suite="));
+	const suite = suiteArgs[0]?.slice("--suite=".length) ?? "product";
+	if (suiteArgs.length > 1 || !["product", "tooling", "all"].includes(suite)) {
+		throw new Error("Pass one --suite=product, --suite=tooling or --suite=all.");
+	}
+	if (markerIndex !== -1 && suiteArgs.length > 0) {
+		throw new Error("Use either --suite or --files, not both.");
+	}
+	if (markerIndex === -1) {
+		return {
+			sourceFileNames: sourceFileNames.filter((fileName) => suite === "all"
+				|| TOOLING_TEST_FILES.has(fileName) === (suite === "tooling")),
+			extraNodeTestArgs: runnerArgs.filter((arg) => !arg.startsWith("--suite=")),
+		};
+	}
+
+	const requestedSourceFileNames = args.slice(markerIndex + 1)
+		.map((fileName) => path.posix.basename(fileName.replace(/\\/gu, "/")));
+	if (requestedSourceFileNames.length === 0) {
+		throw new Error("Pass at least one tests/*.test.ts file after --files.");
+	}
+
+	const availableSourceFileNames = new Set(sourceFileNames.filter((fileName) => fileName.endsWith(".test.ts")));
+	const unknownSourceFileNames = [...new Set(requestedSourceFileNames
+		.filter((fileName) => !availableSourceFileNames.has(fileName)))].sort();
+	if (unknownSourceFileNames.length > 0) {
+		throw new Error(`Unknown test source files: ${unknownSourceFileNames.join(", ")}`);
+	}
+
+	return {
+		sourceFileNames: [...new Set(requestedSourceFileNames)].sort(),
+		extraNodeTestArgs: args.slice(0, markerIndex),
+	};
+}
+
+export function runTests(args: readonly string[] = []): number {
+	let selection: RunTestSelection;
+	try {
+		selection = getRunTestSelection(fs.readdirSync(TESTS_DIR), args);
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		return 1;
+	}
+
+	const compiledTestFiles = getCompiledTestFilesForSources(selection.sourceFileNames);
 
 	if (compiledTestFiles.length === 0) {
 		console.error("No test source files found.");
@@ -43,7 +100,7 @@ export function runTests(extraNodeTestArgs: readonly string[] = []): number {
 		return 1;
 	}
 
-	const result = spawnSync(process.execPath, getNodeTestArgs(compiledTestFiles, extraNodeTestArgs), {
+	const result = spawnSync(process.execPath, getNodeTestArgs(compiledTestFiles, selection.extraNodeTestArgs), {
 		stdio: "inherit",
 	});
 

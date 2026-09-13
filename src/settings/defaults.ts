@@ -1,3 +1,4 @@
+import { normalizeComposerToolbar } from "./composerToolbar";
 import {
 	DEFAULT_DAILY_HEADING,
 	DEFAULT_DESKTOP_SIDEBAR_WIDTH,
@@ -12,6 +13,7 @@ import {
 import type { KnomoSettings } from "../types/settings";
 
 export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
+	composerToolbar: normalizeComposerToolbar(undefined),
 	settingsVersion: SETTINGS_VERSION,
 	dailyHeading: DEFAULT_DAILY_HEADING,
 	dailyInsertPosition: "bottom",
@@ -22,15 +24,14 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	monthlyDateOrder: DEFAULT_MONTHLY_DATE_ORDER,
 	legacyDailyHeadings: [],
 	timeBuoyEnabled: false,
+	recentTimeFlowEnabled: true,
 	timeBuoyIntroDismissed: false,
 	mobileCompactMode: "auto",
 	syncDebounceMs: DEFAULT_SYNC_DEBOUNCE_MS,
 	desktopSidebarWidth: DEFAULT_DESKTOP_SIDEBAR_WIDTH,
 	desktopSidebarCollapsed: false,
-	excludeMonthlyMemosFromObsidian: false,
+	excludeMonthlyMemosFromObsidian: true,
 	managedObsidianExcludeRule: undefined,
 	managedObsidianExcludeRuleOwned: false,
-	managedSystemFolderExcludeRule: undefined,
-	managedSystemFolderExcludeRuleOwned: false,
 	pinnedTags: [],
 };

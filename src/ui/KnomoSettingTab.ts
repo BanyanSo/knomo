@@ -1,3 +1,5 @@
+import { normalizeComposerToolbar } from "../settings/composerToolbar";
+import { composerActionLabels } from "./KnomoComposer";
 import { Notice, PluginSettingTab, Setting } from "obsidian";
 import type { App, ButtonComponent, Plugin, SettingDefinitionItem, ToggleComponent } from "obsidian";
 
@@ -11,15 +13,21 @@ import {
 import { t } from "../i18n";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
-import type { RebuildIndexMode, RebuildIndexScope, SyncOrchestrator } from "../services/SyncOrchestrator";
-import type { LegacyDailyMemosGroupPreview, LegacyDailyMemosImportScope, LegacyDailyMemosPreview } from "../services/MemoScanService";
-import type { MemoRecord } from "../types/memo";
+import type { KnomoCurrentConfigService } from "../services/KnomoCurrentConfigService";
+import type {
+	KnomoStartupBootstrapService,
+} from "../services/KnomoStartupBootstrapService";
+import type { CatalogReadService } from "../services/CatalogReadService";
+import type { MemoCommandService } from "../services/MemoCommandService";
+import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
+import type { LegacyTrashMigrationService } from "../services/LegacyTrashMigrationService";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
-import type { SyncConflictFile } from "../types/syncConflict";
-import type { MaintenanceDiagnostic } from "../utils/pluginData";
-import { normalizeVaultPath } from "../utils/path";
-import { formatMemoIssue, formatServiceError, formatSettingsText } from "../utils/serviceText";
+import { formatDatePart } from "../utils/date";
+import { formatServiceError } from "../utils/serviceText";
 import { showKnomoConfirmModal } from "./KnomoConfirmModal";
+import { KnomoFolderSuggest } from "./KnomoFolderSuggest";
+import { getKnomoSettingAttentionKinds } from "./KnomoSettingAttention";
+import type { KnomoSettingAttentionKind } from "./KnomoSettingAttention";
 import { KnomoView } from "./KnomoView";
 
 const SETTING_NOTICE_DELAY_MS = 800;
@@ -32,14 +40,13 @@ interface DelayedSettingNotice {
 }
 
 export class KnomoSettingTab extends PluginSettingTab {
-	private legacyImportPreview: LegacyDailyMemosPreview | null = null;
-	private legacyImportScope: LegacyDailyMemosImportScope = "90d";
-	private legacyImportRunning = false;
 	private rebuildRunning = false;
-	private monthlyRebuildRunning = false;
+	private monthlyRetryRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
 	private timeBuoyToggleRunning = false;
-	private readonly issueListEls = new Set<HTMLElement>();
+	private monthlyFolderEditing = false;
+	private monthlyFolderDraft: string | null = null;
+	private settingsVisible = false;
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
@@ -48,530 +55,528 @@ export class KnomoSettingTab extends PluginSettingTab {
 		app: App,
 		plugin: Plugin,
 		private readonly settingsService: SettingsService,
-		private readonly syncOrchestrator: SyncOrchestrator,
 		private readonly obsidianExcludeService: ObsidianExcludeService,
+		private readonly memoCommandService: MemoCommandService,
+		private readonly catalogReadService: CatalogReadService,
+		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
+		private readonly knomoCurrentConfigService: Pick<KnomoCurrentConfigService, "getStatus" | "getLastError" | "reloadConfiguration" | "refreshLocalConfig">,
+		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(): Promise<unknown> },
+		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
+		private readonly retryRuntimeState: () => Promise<void>,
 	) {
 		super(app, plugin);
 	}
 
 	getSettingDefinitions(): SettingDefinitionItem[] {
+		const attentionItems = this.getAttentionKinds().map((kind) => ({
+			name: this.getAttentionName(kind),
+			desc: this.getAttentionDescription(kind),
+			render: (setting: Setting) => { this.renderAttentionSetting(kind, setting); },
+		}));
 		return [
 			{
 				type: "group",
-				heading: t("settings.title"),
+				heading: t("settings.attention.heading"),
+				visible: attentionItems.length > 0,
+				items: attentionItems,
+			},
+			{
+				type: "group",
+				heading: t("settings.capture.heading"),
 				items: [
 					{
 						name: t("settings.dailyHeading.name"),
 						desc: t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING }),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							setting.addText((text) => {
-								text.setPlaceholder(DEFAULT_DAILY_HEADING);
-								text.setValue(settings.dailyHeading);
-								text.onChange((value) => {
-									this.updateTextSettingDraft(
-										"dailyHeading",
-										value,
-										(nextValue) => this.settingsService.validateDailyHeading(nextValue),
-										t("settings.dailyHeading.invalid"),
-									);
-								});
-								text.inputEl.addEventListener("blur", () => {
-									void this.commitDailyHeadingDraft();
-								});
-							});
-						},
+						render: (setting: Setting) => { this.renderDailyHeadingSetting(setting); },
 					},
 					{
 						name: t("settings.insertPosition.name"),
 						desc: t("settings.insertPosition.desc"),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							setting.addDropdown((dropdown) => {
-								dropdown.addOption("bottom", t("settings.insertPosition.bottom"));
-								dropdown.addOption("top", t("settings.insertPosition.top"));
-								dropdown.setValue(settings.dailyInsertPosition);
-								dropdown.onChange((value) => {
-									void this.settingsService.updateSettings({
-										dailyInsertPosition: value as DailyInsertPosition,
-									});
-								});
-							});
-						},
+						render: (setting: Setting) => { this.renderInsertPositionSetting(setting); },
 					},
 					{
 						name: t("settings.timeFormat.name"),
 						desc: t("settings.timeFormat.desc"),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							setting.addDropdown((dropdown) => {
-								dropdown.addOption("HH:mm:ss", "HH:mm:ss");
-								dropdown.addOption("HH:mm", "HH:mm");
-								dropdown.setValue(settings.memoTimeFormat);
-								dropdown.onChange((value) => {
-									void this.settingsService.updateSettings({
-										memoTimeFormat: value as MemoTimeFormat,
-									});
-								});
-							});
-						},
+						render: (setting: Setting) => { this.renderTimeFormatSetting(setting); },
 					},
 					{
 						name: t("settings.timeBuoy.name"),
 						desc: t("settings.timeBuoy.desc"),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							setting.addToggle((toggle) => {
-								toggle.setValue(settings.timeBuoyEnabled);
-								toggle.onChange((value) => {
-									void this.toggleTimeBuoy(value, toggle);
-								});
-							});
-						},
+						render: (setting: Setting) => { this.renderTimeBuoySetting(setting); },
 					},
 					{
-						name: t("settings.monthlyFolder.name"),
-						desc: t("settings.monthlyFolder.desc"),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							let monthlyFolderDraft = settings.monthlyMemoFolder;
-							setting
-								.addText((text) => {
-									text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
-									text.setValue(settings.monthlyMemoFolder);
-									text.onChange((value) => {
-										monthlyFolderDraft = value;
-									});
-								})
-								.addButton((button) => {
-									button.setButtonText(t("settings.monthlyFolder.save"));
-									button.onClick(() => {
-										void this.saveMonthlyFolder(monthlyFolderDraft, button);
-									});
-								});
-						},
-					},
-					{
-						name: t("settings.excludeMonthly.name"),
-						desc: t("settings.excludeMonthly.desc"),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
-							setting.addToggle((toggle) => {
-								toggle.setValue(settings.excludeMonthlyMemosFromObsidian);
-								toggle.onChange((value) => {
-									void this.toggleMonthlyMemosExcludeRule(value, toggle, statusEl);
-								});
-							});
-						},
-					},
-					{
-						name: t("settings.monthlyFileFormat.name"),
-						desc: t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
-							setting.addText((text) => {
-								text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
-								text.setValue(settings.monthlyMemoFileFormat);
-								text.onChange((value) => {
-									this.updateTextSettingDraft(
-										"monthlyMemoFileFormat",
-										value,
-										(nextValue) => this.settingsService.validateMonthlyMemoFileFormat(nextValue),
-										t("settings.monthlyFileFormat.invalid"),
-									);
-								});
-								text.inputEl.addEventListener("blur", () => {
-									void this.commitMonthlyMemoFileFormatDraft(undefined, statusEl);
-								});
-							});
-							this.updateMonthlyFileFormatStatus(statusEl);
-						},
-					},
-					{
-						name: t("settings.dateHeadingFormat.name"),
-						desc: t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							setting.addText((text) => {
-								text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
-								text.setValue(settings.monthlyDateHeadingFormat);
-								text.onChange((value) => {
-									this.updateTextSettingDraft(
-										"monthlyDateHeadingFormat",
-										value,
-										(nextValue) => this.settingsService.validateMarkdownHeading(nextValue),
-										t("settings.dateHeadingFormat.invalid"),
-									);
-								});
-								text.inputEl.addEventListener("blur", () => {
-									void this.commitMonthlyDateHeadingFormatDraft();
-								});
-							});
-						},
-					},
-					{
-						name: t("settings.dateOrder.name"),
-						desc: t("settings.dateOrder.desc"),
-						render: (setting) => {
-							const settings = this.settingsService.getSettings();
-							setting.addDropdown((dropdown) => {
-								dropdown.addOption("asc", t("settings.dateOrder.asc"));
-								dropdown.addOption("desc", t("settings.dateOrder.descOption"));
-								dropdown.setValue(settings.monthlyDateOrder);
-								dropdown.onChange((value) => {
-									void this.settingsService.updateSettings({
-										monthlyDateOrder: value as MonthlyDateOrder,
-									});
-								});
-							});
-						},
+						name: t("settings.toolbar.name"),
+						desc: t("settings.toolbar.desc"),
+						render: (setting: Setting) => this.renderToolbarSetting(setting),
 					},
 				],
 			},
 			{
 				type: "group",
-				heading: t("settings.maintenance.heading"),
+				heading: t("settings.monthly.heading"),
 				items: [
 					{
-						name: t("settings.legacyImport.name"),
-						desc: t("settings.legacyImport.desc"),
-						render: (setting) => {
-							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-							const groupsEl = setting.infoEl.createDiv({ cls: "knomo-legacy-import-groups" });
-							setting
-								.addDropdown((dropdown) => {
-									dropdown.addOption("30d", t("settings.scope30d"));
-									dropdown.addOption("90d", t("settings.scope90d"));
-									dropdown.addOption("all", t("settings.scopeAll"));
-									dropdown.setValue(this.legacyImportScope);
-									dropdown.onChange((value) => {
-										this.legacyImportScope = value as LegacyDailyMemosImportScope;
-										this.legacyImportPreview = null;
-										this.renderLegacyImportPreview(resultEl, groupsEl);
-									});
-								})
-								.addButton((button) => {
-									button.setButtonText(t("settings.preview.start"));
-									button.onClick(() => {
-										void this.runLegacyImportPreview(button, resultEl, groupsEl);
-									});
-								});
-							this.renderLegacyImportPreview(resultEl, groupsEl);
-						},
+						name: t("settings.dateOrder.name"),
+						desc: t("settings.dateOrder.desc"),
+						render: (setting: Setting) => { this.renderDateOrderSetting(setting); },
 					},
 					{
-						name: t("settings.rebuild.name"),
-						desc: t("settings.rebuild.desc"),
-						render: (setting) => {
-							let rebuildScope: RebuildIndexScope = "30d";
-							let rebuildMode: RebuildIndexMode = "index-only";
-							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-							setting
-								.setClass("knomo-maintenance-setting")
-								.addDropdown((dropdown) => {
-									dropdown.addOption("30d", t("settings.scope30d"));
-									dropdown.addOption("90d", t("settings.scope90d"));
-									dropdown.addOption("all", t("settings.scopeAll"));
-									dropdown.setValue(rebuildScope);
-									dropdown.onChange((value) => {
-										rebuildScope = value as RebuildIndexScope;
-									});
-								})
-								.addDropdown((dropdown) => {
-									dropdown.addOption("index-only", t("settings.rebuild.indexOnly"));
-									dropdown.addOption("index-and-monthly", t("settings.rebuild.indexAndMonthly"));
-									dropdown.setValue(rebuildMode);
-									dropdown.onChange((value) => {
-										rebuildMode = value as RebuildIndexMode;
-									});
-								})
-								.addButton((button) => {
-									button.setButtonText(t("settings.rebuild.start"));
-									button.onClick(() => {
-										void this.runRebuildIndex(rebuildScope, rebuildMode, button, resultEl);
-									});
-								});
-							void this.renderInitialRebuildResult(resultEl);
-						},
+						name: t("settings.monthlyFileFormat.name"),
+						desc: t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }),
+						render: (setting: Setting) => { this.renderMonthlyFileFormatSetting(setting); },
 					},
 					{
-						name: t("settings.monthlyRebuild.name"),
-						desc: t("settings.monthlyRebuild.desc"),
-						render: (setting) => {
-							const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
-							let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
-							const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-							const issueListEl = setting.infoEl.createDiv({ cls: "knomo-issue-list" });
-							this.issueListEls.add(issueListEl);
-							setting
-								.setClass("knomo-maintenance-setting")
-								.addDropdown((dropdown) => {
-									for (const period of monthlyPeriods) {
-										dropdown.addOption(period, period);
-									}
-									dropdown.setValue(monthlyRebuildPeriod);
-									dropdown.onChange((value) => {
-										monthlyRebuildPeriod = value;
-									});
-								})
-								.addButton((button) => {
-									button.setButtonText(t("settings.monthlyRebuild.start"));
-									button.onClick(() => {
-										void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, resultEl);
-									});
-								});
-							this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), resultEl);
-							void this.renderIssueList(issueListEl);
-							return () => {
-								this.issueListEls.delete(issueListEl);
-							};
-						},
+						name: t("settings.dateHeadingFormat.name"),
+						desc: t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }),
+						render: (setting: Setting) => { this.renderDateHeadingFormatSetting(setting); },
+					},
+					{
+						name: t("settings.excludeMonthly.name"),
+						desc: t("settings.excludeMonthly.desc"),
+						render: (setting: Setting) => { this.renderMonthlyExcludeSetting(setting); },
 					},
 				],
+			},
+			{
+				type: "group",
+				heading: t("settings.presentation.heading"),
+				items: [{
+					name: t("settings.recentTimeFlow.name"),
+					desc: t("settings.recentTimeFlow.desc"),
+					render: (setting: Setting) => { this.renderRecentTimeFlowSetting(setting); },
+				}],
+			},
+			{
+				type: "group",
+				heading: t("settings.files.heading"),
+				items: [{
+					name: t("settings.monthlyFolder.name"),
+					desc: t("settings.monthlyFolder.desc"),
+					render: (setting: Setting) => { this.renderMonthlyFolderSetting(setting); },
+				}],
 			},
 		];
 	}
 
 	display(): void {
+		this.settingsVisible = true;
 		const { containerEl } = this;
 		this.cancelAllDelayedSettingNotices();
 		this.pendingSettingDrafts.clear();
-		this.issueListEls.clear();
 		containerEl.empty();
 
-		const settings = this.settingsService.getSettings();
+		const attentionKinds = this.getAttentionKinds();
+		if (attentionKinds.length > 0) {
+			new Setting(containerEl)
+				.setName(t("settings.attention.heading"))
+				.setHeading();
+			for (const kind of attentionKinds) {
+				this.renderAttentionSetting(kind, new Setting(containerEl));
+			}
+		}
 
 		new Setting(containerEl)
-			.setName(t("settings.title"))
+			.setName(t("settings.capture.heading"))
 			.setHeading();
-
-		new Setting(containerEl)
+		this.renderDailyHeadingSetting(new Setting(containerEl)
 			.setName(t("settings.dailyHeading.name"))
-			.setDesc(t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING }))
-			.addText((text) => {
-				text.setPlaceholder(DEFAULT_DAILY_HEADING);
-				text.setValue(settings.dailyHeading);
-				text.onChange((value) => {
-					this.updateTextSettingDraft(
-						"dailyHeading",
-						value,
-						(nextValue) => this.settingsService.validateDailyHeading(nextValue),
-						t("settings.dailyHeading.invalid"),
-					);
-				});
-				text.inputEl.addEventListener("blur", () => {
-					void this.commitDailyHeadingDraft();
-				});
-			});
-		new Setting(containerEl)
+			.setDesc(t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING })));
+		this.renderInsertPositionSetting(new Setting(containerEl)
 			.setName(t("settings.insertPosition.name"))
-			.setDesc(t("settings.insertPosition.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("bottom", t("settings.insertPosition.bottom"));
-				dropdown.addOption("top", t("settings.insertPosition.top"));
-				dropdown.setValue(settings.dailyInsertPosition);
-				dropdown.onChange((value) => {
-					void this.settingsService.updateSettings({
-						dailyInsertPosition: value as DailyInsertPosition,
-					});
-				});
-			});
-		new Setting(containerEl)
+			.setDesc(t("settings.insertPosition.desc")));
+		this.renderTimeFormatSetting(new Setting(containerEl)
 			.setName(t("settings.timeFormat.name"))
-			.setDesc(t("settings.timeFormat.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("HH:mm:ss", "HH:mm:ss");
-				dropdown.addOption("HH:mm", "HH:mm");
-				dropdown.setValue(settings.memoTimeFormat);
-				dropdown.onChange((value) => {
-					void this.settingsService.updateSettings({
-						memoTimeFormat: value as MemoTimeFormat,
-					});
-				});
-			});
-		new Setting(containerEl)
+			.setDesc(t("settings.timeFormat.desc")));
+		this.renderTimeBuoySetting(new Setting(containerEl)
 			.setName(t("settings.timeBuoy.name"))
-			.setDesc(t("settings.timeBuoy.desc"))
-			.addToggle((toggle) => {
-				toggle.setValue(settings.timeBuoyEnabled);
-				toggle.onChange((value) => {
-					void this.toggleTimeBuoy(value, toggle);
-				});
-			});
+			.setDesc(t("settings.timeBuoy.desc")));
+		this.renderToolbarSetting(new Setting(containerEl).setName(t("settings.toolbar.name")).setDesc(t("settings.toolbar.desc")));
 
-		let monthlyFolderDraft = settings.monthlyMemoFolder;
 		new Setting(containerEl)
-			.setName(t("settings.monthlyFolder.name"))
-			.setDesc(t("settings.monthlyFolder.desc"))
-			.addText((text) => {
-				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
-				text.setValue(settings.monthlyMemoFolder);
-				text.onChange((value) => {
-					monthlyFolderDraft = value;
-				});
-			})
-			.addButton((button) => {
-				button.setButtonText(t("settings.monthlyFolder.save"));
-				button.onClick(() => {
-					void this.saveMonthlyFolder(monthlyFolderDraft, button);
-				});
-			});
-		new Setting(containerEl)
-			.setName(t("settings.excludeMonthly.name"))
-			.setDesc(t("settings.excludeMonthly.desc"))
-			.addToggle((toggle) => {
-				toggle.setValue(settings.excludeMonthlyMemosFromObsidian);
-				toggle.onChange((value) => {
-					void this.toggleMonthlyMemosExcludeRule(value, toggle, monthlyExcludeStatusEl);
-				});
-			});
-		const monthlyExcludeStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
-		new Setting(containerEl)
+			.setName(t("settings.monthly.heading"))
+			.setHeading();
+		this.renderDateOrderSetting(new Setting(containerEl)
+			.setName(t("settings.dateOrder.name"))
+			.setDesc(t("settings.dateOrder.desc")));
+		this.renderMonthlyFileFormatSetting(new Setting(containerEl)
 			.setName(t("settings.monthlyFileFormat.name"))
-			.setDesc(t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }))
+			.setDesc(t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT })));
+		this.renderDateHeadingFormatSetting(new Setting(containerEl)
+			.setName(t("settings.dateHeadingFormat.name"))
+			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT })));
+		this.renderMonthlyExcludeSetting(new Setting(containerEl)
+			.setName(t("settings.excludeMonthly.name"))
+			.setDesc(t("settings.excludeMonthly.desc")));
+
+		new Setting(containerEl)
+			.setName(t("settings.presentation.heading")).setHeading();
+		this.renderRecentTimeFlowSetting(new Setting(containerEl)
+			.setName(t("settings.recentTimeFlow.name"))
+			.setDesc(t("settings.recentTimeFlow.desc")));
+
+		new Setting(containerEl)
+			.setName(t("settings.files.heading"))
+			.setHeading();
+		this.renderMonthlyFolderSetting(new Setting(containerEl)
+			.setName(t("settings.monthlyFolder.name"))
+			.setDesc(t("settings.monthlyFolder.desc")));
+	}
+
+	hide(): void {
+		this.settingsVisible = false;
+		void this.commitAllPendingSettingDrafts(false);
+		super.hide();
+		this.cancelAllDelayedSettingNotices();
+	}
+
+	private renderToolbarSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-toolbar-setting-row");
+		// 复用折叠节点，行刷新与保存结果重绘均保留用户当前的展开状态。
+		let details = setting.settingEl.querySelector<HTMLDetailsElement>(":scope > .knomo-toolbar-details");
+		if (!details) {
+			details = setting.settingEl.ownerDocument.createElement("details");
+			details.className = "knomo-toolbar-details";
+			const summary = setting.settingEl.ownerDocument.createElement("summary");
+			const info = setting.settingEl.querySelector(":scope > .setting-item-info");
+			if (info) summary.appendChild(info);
+			else summary.textContent = t("settings.toolbar.name");
+			details.appendChild(summary);
+			setting.settingEl.appendChild(details);
+		}
+		details.querySelectorAll(":scope > .knomo-toolbar-settings").forEach(container => container.remove());
+		const container = details.createDiv({ cls: "knomo-toolbar-settings" });
+		let saving = false;
+		const render = () => {
+			container.empty();
+			const controls: { setDisabled(disabled: boolean): unknown }[] = [];
+			const preferences = this.settingsService.getSettings().composerToolbar;
+			const save = async (next: typeof preferences) => {
+				if (saving) return;
+				saving = true;
+				controls.forEach(control => control.setDisabled(true));
+				try { await this.settingsService.updateSettings({ composerToolbar: next }); }
+				catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
+				finally { saving = false; render(); }
+			};
+			preferences.order.forEach((action, index) => {
+				new Setting(container).setName(t(composerActionLabels[action]))
+					.addToggle(toggle => { controls.push(toggle); toggle.setValue(!preferences.hidden.includes(action)).onChange(visible => {
+						void save({ order: [...preferences.order], hidden: visible ? preferences.hidden.filter(item => item !== action) : [...preferences.hidden, action] });
+					}); })
+					.addButton(button => { controls.push(button); button.setIcon("arrow-up").setTooltip(t("settings.toolbar.up")).setDisabled(index === 0).onClick(() => {
+						const order = [...preferences.order]; [order[index - 1], order[index]] = [order[index], order[index - 1]];
+						void save({ ...preferences, order });
+					}); })
+					.addButton(button => { controls.push(button); button.setIcon("arrow-down").setTooltip(t("settings.toolbar.down")).setDisabled(index === preferences.order.length - 1).onClick(() => {
+						const order = [...preferences.order]; [order[index + 1], order[index]] = [order[index], order[index + 1]];
+						void save({ ...preferences, order });
+					}); });
+			});
+			new Setting(container).addButton(button => { controls.push(button); button.setButtonText(t("settings.toolbar.reset")).onClick(() => { void save(normalizeComposerToolbar(undefined)); }); });
+		};
+		render();
+	}
+
+	private renderDailyHeadingSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		setting.addText((text) => {
+			text.setPlaceholder(DEFAULT_DAILY_HEADING);
+			text.setValue(settings.dailyHeading);
+			text.onChange((value) => {
+				this.updateTextSettingDraft(
+					"dailyHeading",
+					value,
+					(nextValue) => this.settingsService.validateDailyHeading(nextValue),
+					t("settings.dailyHeading.invalid"),
+				);
+			});
+			text.inputEl.addEventListener("blur", () => {
+				void this.commitDailyHeadingDraft();
+			});
+		});
+	}
+
+	private renderInsertPositionSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		setting.addDropdown((dropdown) => {
+			dropdown.addOption("bottom", t("settings.insertPosition.bottom"));
+			dropdown.addOption("top", t("settings.insertPosition.top"));
+			dropdown.setValue(settings.dailyInsertPosition);
+			dropdown.onChange((value) => {
+				void this.settingsService.updateSettings({
+					dailyInsertPosition: value as DailyInsertPosition,
+				});
+			});
+		});
+	}
+
+	private renderTimeFormatSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		setting.addDropdown((dropdown) => {
+			dropdown.addOption("HH:mm:ss", "HH:mm:ss");
+			dropdown.addOption("HH:mm", "HH:mm");
+			dropdown.setValue(settings.memoTimeFormat);
+			dropdown.onChange((value) => {
+				void this.settingsService.updateSettings({
+					memoTimeFormat: value as MemoTimeFormat,
+				});
+			});
+		});
+	}
+
+	private renderRecentTimeFlowSetting(setting: Setting): void {
+		setting.addToggle((toggle) => {
+			toggle.setValue(this.settingsService.getSettings().recentTimeFlowEnabled);
+			toggle.onChange(async (value) => {
+				try {
+					await this.settingsService.updateSettings({ recentTimeFlowEnabled: value });
+				} catch {
+					toggle.setValue(this.settingsService.getSettings().recentTimeFlowEnabled);
+					new Notice(t("error.saveFailed"));
+				}
+			});
+		});
+	}
+
+	private renderTimeBuoySetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		setting.addToggle((toggle) => {
+			toggle.setValue(settings.timeBuoyEnabled);
+			toggle.onChange((value) => {
+				void this.toggleTimeBuoy(value, toggle);
+			});
+		});
+	}
+
+	private renderDateOrderSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		setting.addDropdown((dropdown) => {
+			dropdown.addOption("asc", t("settings.dateOrder.asc"));
+			dropdown.addOption("desc", t("settings.dateOrder.descOption"));
+			dropdown.setValue(settings.monthlyDateOrder);
+			dropdown.onChange((value) => {
+				void (async () => {
+					await this.settingsService.updateSettings({
+						monthlyDateOrder: value as MonthlyDateOrder,
+					});
+					await this.refreshCurrentConfiguration();
+				})();
+			});
+		});
+	}
+
+	private renderMonthlyExcludeSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
+		setting.addToggle((toggle) => {
+			toggle.setValue(settings.excludeMonthlyMemosFromObsidian);
+			toggle.onChange((value) => {
+				void this.toggleMonthlyMemosExcludeRule(value, toggle, statusEl);
+			});
+		});
+		if (this.settingsService.hasMonthlyExcludeInitializationFailure()) {
+			this.setExcludeStatus(statusEl, t("settings.excludeMonthly.autoFailed"), true);
+			setting.addButton((button) => {
+				button.setButtonText(t("settings.excludeMonthly.retry"));
+				button.onClick(() => { void this.retryMonthlyExcludeInitialization(button); });
+			});
+		}
+	}
+
+	private async retryMonthlyExcludeInitialization(
+		button: { setDisabled(disabled: boolean): void },
+	): Promise<void> {
+		button.setDisabled(true);
+		try {
+			await this.settingsService.initializeMonthlyExcludeDefault();
+		} finally {
+			button.setDisabled(false);
+			this.refreshSettingTab();
+		}
+	}
+
+	private renderMonthlyFileFormatSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
+		let draft = settings.monthlyMemoFileFormat;
+		let applyButton: ButtonComponent | null = null;
+		const updateApplyState = (): void => {
+			const nextValue = draft.trim();
+			applyButton?.setDisabled(
+				!this.settingsService.validateMonthlyMemoFileFormat(nextValue)
+				|| nextValue === this.settingsService.getSettings().monthlyMemoFileFormat,
+			);
+		};
+		setting
 			.addText((text) => {
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
 				text.setValue(settings.monthlyMemoFileFormat);
 				text.onChange((value) => {
+					draft = value;
 					this.updateTextSettingDraft(
 						"monthlyMemoFileFormat",
 						value,
 						(nextValue) => this.settingsService.validateMonthlyMemoFileFormat(nextValue),
 						t("settings.monthlyFileFormat.invalid"),
 					);
-				});
-				text.inputEl.addEventListener("blur", () => {
-					void this.commitMonthlyMemoFileFormatDraft(undefined, monthlyFileFormatStatusEl);
-				});
-			});
-		const monthlyFileFormatStatusEl = containerEl.createDiv({ cls: "knomo-setting-help" });
-		this.updateMonthlyFileFormatStatus(monthlyFileFormatStatusEl);
-		new Setting(containerEl)
-			.setName(t("settings.dateHeadingFormat.name"))
-			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }))
-			.addText((text) => {
-				text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
-				text.setValue(settings.monthlyDateHeadingFormat);
-				text.onChange((value) => {
-					this.updateTextSettingDraft(
-						"monthlyDateHeadingFormat",
-						value,
-						(nextValue) => this.settingsService.validateMarkdownHeading(nextValue),
-						t("settings.dateHeadingFormat.invalid"),
-					);
-				});
-				text.inputEl.addEventListener("blur", () => {
-					void this.commitMonthlyDateHeadingFormatDraft();
-				});
-			});
-		new Setting(containerEl)
-			.setName(t("settings.dateOrder.name"))
-			.setDesc(t("settings.dateOrder.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("asc", t("settings.dateOrder.asc"));
-				dropdown.addOption("desc", t("settings.dateOrder.descOption"));
-				dropdown.setValue(settings.monthlyDateOrder);
-				dropdown.onChange((value) => {
-					void this.settingsService.updateSettings({
-						monthlyDateOrder: value as MonthlyDateOrder,
-					});
-				});
-			});
-
-		new Setting(containerEl)
-			.setName(t("settings.maintenance.heading"))
-			.setHeading();
-		new Setting(containerEl)
-			.setName(t("settings.legacyImport.name"))
-			.setDesc(t("settings.legacyImport.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("30d", t("settings.scope30d"));
-				dropdown.addOption("90d", t("settings.scope90d"));
-				dropdown.addOption("all", t("settings.scopeAll"));
-				dropdown.setValue(this.legacyImportScope);
-				dropdown.onChange((value) => {
-					this.legacyImportScope = value as LegacyDailyMemosImportScope;
-					this.legacyImportPreview = null;
-					this.renderLegacyImportPreview(legacyImportResultEl, legacyImportGroupsEl);
+					this.updateMonthlyFileFormatDraftStatus(statusEl, value);
+					updateApplyState();
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText(t("settings.preview.start"));
+				applyButton = button;
+				button.setButtonText(t("settings.monthlyFileFormat.apply"));
 				button.onClick(() => {
-					void this.runLegacyImportPreview(button, legacyImportResultEl, legacyImportGroupsEl);
+					void (async () => {
+						button.setDisabled(true);
+						button.setButtonText(t("settings.monthlyFileFormat.applying"));
+						try {
+							await this.commitMonthlyMemoFileFormatDraft(draft, statusEl);
+						} finally {
+							button.setButtonText(t("settings.monthlyFileFormat.apply"));
+							updateApplyState();
+						}
+					})();
 				});
+				updateApplyState();
 			});
-		const legacyImportResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		const legacyImportGroupsEl = containerEl.createDiv({ cls: "knomo-legacy-import-groups" });
-		this.renderLegacyImportPreview(legacyImportResultEl, legacyImportGroupsEl);
+		this.updateMonthlyFileFormatStatus(statusEl);
+	}
 
-		let rebuildScope: RebuildIndexScope = "30d";
-		let rebuildMode: RebuildIndexMode = "index-only";
-		new Setting(containerEl)
-			.setClass("knomo-maintenance-setting")
-			.setName(t("settings.rebuild.name"))
-			.setDesc(t("settings.rebuild.desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("30d", t("settings.scope30d"));
-				dropdown.addOption("90d", t("settings.scope90d"));
-				dropdown.addOption("all", t("settings.scopeAll"));
-				dropdown.setValue(rebuildScope);
-				dropdown.onChange((value) => {
-					rebuildScope = value as RebuildIndexScope;
+	private renderDateHeadingFormatSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		setting.addText((text) => {
+			text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
+			text.setValue(settings.monthlyDateHeadingFormat);
+			text.onChange((value) => {
+				this.updateTextSettingDraft(
+					"monthlyDateHeadingFormat",
+					value,
+					(nextValue) => this.settingsService.validateMarkdownHeading(nextValue),
+					t("settings.dateHeadingFormat.invalid"),
+				);
+			});
+			text.inputEl.addEventListener("blur", () => {
+				void this.commitMonthlyDateHeadingFormatDraft();
+			});
+		});
+	}
+
+	private renderMonthlyFolderSetting(setting: Setting): void {
+		const settings = this.settingsService.getSettings();
+		if (!this.monthlyFolderEditing) {
+			setting
+				.addText((text) => {
+					text.setValue(settings.monthlyMemoFolder);
+					text.inputEl.readOnly = true;
+				})
+				.addButton((button) => {
+					button.setButtonText(t("settings.monthlyFolder.change"));
+					button.onClick(() => {
+						this.monthlyFolderEditing = true;
+						this.monthlyFolderDraft = settings.monthlyMemoFolder;
+						this.refreshSettingTab();
+					});
+				});
+			return;
+		}
+
+		this.monthlyFolderDraft ??= settings.monthlyMemoFolder;
+		setting
+			.addText((text) => {
+				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
+				text.setValue(this.monthlyFolderDraft ?? settings.monthlyMemoFolder);
+				text.onChange((value) => { this.monthlyFolderDraft = value; });
+				new KnomoFolderSuggest(this.app, text.inputEl, (value) => { this.monthlyFolderDraft = value; });
+			})
+			.addButton((button) => {
+				button.setButtonText(t("settings.monthlyFolder.apply"));
+				button.onClick(() => {
+					void (async () => {
+						const saved = await this.saveMonthlyFolder(this.monthlyFolderDraft ?? settings.monthlyMemoFolder, button);
+						if (!saved) return;
+						this.monthlyFolderEditing = false;
+						this.monthlyFolderDraft = null;
+						this.refreshSettingTab();
+					})();
 				});
 			})
-			.addDropdown((dropdown) => {
-				dropdown.addOption("index-only", t("settings.rebuild.indexOnly"));
-				dropdown.addOption("index-and-monthly", t("settings.rebuild.indexAndMonthly"));
-				dropdown.setValue(rebuildMode);
-				dropdown.onChange((value) => {
-					rebuildMode = value as RebuildIndexMode;
+			.addButton((button) => {
+				button.setButtonText(t("settings.monthlyFolder.cancel"));
+				button.onClick(() => {
+					this.monthlyFolderEditing = false;
+					this.monthlyFolderDraft = null;
+					this.refreshSettingTab();
 				});
+			});
+	}
+
+	private renderCatalogAttentionSetting(setting: Setting): void {
+		const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
+		setting
+			.setName(t("settings.attention.catalog.name"))
+			.setDesc(t("settings.attention.catalog.desc"))
+			.addButton((button) => {
+				button.setButtonText(t("settings.attention.checkAgain"));
+				button.onClick(() => { void this.runRuntimeRetry(button); });
 			})
 			.addButton((button) => {
 				button.setButtonText(t("settings.rebuild.start"));
 				button.onClick(() => {
-					void this.runRebuildIndex(rebuildScope, rebuildMode, button, rebuildResultEl);
+					void this.runRebuildIndex(button, resultEl);
 				});
 			});
-		const rebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		void this.renderInitialRebuildResult(rebuildResultEl);
-
-		const monthlyPeriods = this.syncOrchestrator.listMemoIndexPeriods();
-		let monthlyRebuildPeriod = monthlyPeriods[0] ?? "";
-		new Setting(containerEl)
-			.setClass("knomo-maintenance-setting")
-			.setName(t("settings.monthlyRebuild.name"))
-			.setDesc(t("settings.monthlyRebuild.desc"))
-			.addDropdown((dropdown) => {
-				for (const period of monthlyPeriods) {
-					dropdown.addOption(period, period);
-				}
-				dropdown.setValue(monthlyRebuildPeriod);
-				dropdown.onChange((value) => {
-					monthlyRebuildPeriod = value;
-				});
-			})
-			.addButton((button) => {
-				button.setButtonText(t("settings.monthlyRebuild.start"));
-				button.onClick(() => {
-					void this.runMonthlyArchiveRebuild(monthlyRebuildPeriod, button, monthlyRebuildResultEl);
-				});
-			});
-		const monthlyRebuildResultEl = containerEl.createDiv({ cls: "knomo-scan-result" });
-		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.before"), monthlyRebuildResultEl);
-		const issueListEl = containerEl.createDiv({ cls: "knomo-issue-list" });
-		this.issueListEls.add(issueListEl);
-		void this.renderIssueList(issueListEl);
 	}
 
-	hide(): void {
-		void this.commitAllPendingSettingDrafts(false);
-		super.hide();
-		this.cancelAllDelayedSettingNotices();
-		this.issueListEls.clear();
+	private renderMonthlyAttentionSetting(setting: Setting): void {
+		const periods = this.monthlyProjectionCoordinator.getFailedPeriods();
+		setting
+			.setName(t("settings.attention.monthly.name"))
+			.setDesc(t("settings.attention.monthly.desc", { periods: periods.join(", ") || "—" }))
+			.addButton((button) => {
+				button.setButtonText(t("settings.attention.retry"));
+				button.onClick(() => { void this.runMonthlyRetry(button); });
+			});
+	}
+
+	private renderSettingsAttentionSetting(setting: Setting): void {
+		setting
+			.setName(t("settings.attention.settings.name"))
+			.setDesc(t("settings.attention.settings.desc"))
+			.addButton((button) => {
+				button.setButtonText(t("settings.attention.settings.retry"));
+				button.onClick(() => {
+					void this.runRuntimeRetry(button, t("settings.attention.settings.retry"));
+				});
+			});
+	}
+
+	private renderLegacyMigration(setting: Setting): void {
+		setting
+			.setName(t("settings.legacyMigration.name"))
+			.setDesc(this.getLegacyMigrationDescription());
+		setting.addButton((button) => {
+			button.setButtonText(t(this.legacyTrashMigrationService.getReport().cleanupCandidate
+				? "settings.legacyMigration.retryCleanup" : "settings.legacyMigration.retry"));
+			button.onClick(() => {
+				button.setDisabled(true);
+				void this.legacyTrashMigrationService.run()
+					.finally(() => { button.setDisabled(false); this.refreshSettingTab(); });
+			});
+		});
+	}
+
+	private getLegacyMigrationDescription(): string {
+		const report = this.legacyTrashMigrationService.getReport();
+		if (report.cleanupCandidate) {
+			const diagnostic = report.diagnostics[0];
+			return t("settings.legacyMigration.cleanupDescription", {
+				path: diagnostic?.sourcePath ?? report.cleanupCandidate.legacySystemRoot,
+				reason: diagnostic?.code === "legacy_cleanup_unknown_file"
+					? t("settings.legacyMigration.unknownFile") : diagnostic?.detail ?? "",
+			});
+		}
+		return t("settings.legacyMigration.description");
 	}
 
 	private rememberSettingNoticeValue(key: SettingNoticeKey, value: string): void {
@@ -640,13 +645,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private async commitAllPendingSettingDrafts(showChangedNotice: boolean): Promise<void> {
 		const dailyHeading = this.pendingSettingDrafts.get("dailyHeading");
-		const monthlyMemoFileFormat = this.pendingSettingDrafts.get("monthlyMemoFileFormat");
 		const monthlyDateHeadingFormat = this.pendingSettingDrafts.get("monthlyDateHeadingFormat");
 		if (dailyHeading !== undefined) {
 			await this.commitDailyHeadingDraft(showChangedNotice, dailyHeading);
-		}
-		if (monthlyMemoFileFormat !== undefined) {
-			await this.commitMonthlyMemoFileFormatDraft(monthlyMemoFileFormat);
 		}
 		if (monthlyDateHeadingFormat !== undefined) {
 			await this.commitMonthlyDateHeadingFormatDraft(monthlyDateHeadingFormat);
@@ -710,6 +711,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return true;
 		}
 		await this.settingsService.updateSettings({ dailyHeading: nextHeading });
+		await this.refreshCurrentConfiguration();
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
 			return true;
 		}
@@ -742,6 +744,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return true;
 		}
 		await this.settingsService.updateSettings({ monthlyDateHeadingFormat: nextFormat });
+		await this.refreshCurrentConfiguration();
 		return true;
 	}
 
@@ -767,9 +770,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.monthlyFileFormatMigrationRunning = true;
 		try {
-			const plan = await this.settingsService.planMonthlyMemoFileFormatMigration(nextFormat);
+			const sourcePeriods = await this.monthlyProjectionCoordinator.listPeriods();
+			const plan = await this.settingsService.planMonthlyMemoFileFormatMigration(nextFormat, sourcePeriods);
 			if (plan.conflicts.length > 0) {
-				throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
+				throw new Error(t("settings.monthlyFileFormat.conflict", {
+					paths: plan.conflicts.join("; "),
+				}));
 			}
 			const confirmed = await showKnomoConfirmModal(this.app, {
 				message: t("settings.monthlyFileFormat.confirm", {
@@ -781,11 +787,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 			if (!confirmed) {
 				return false;
 			}
-			await this.syncOrchestrator.runMonthlyMemoFileFormatMigration(() => (
-				this.settingsService.migrateMonthlyMemoFileFormat(nextFormat, (periods, trackGeneratedPath) => (
-					this.syncOrchestrator.rebuildMonthlyArchivesForFileFormatMigration(periods, trackGeneratedPath)
-				))
-			));
+			await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
+			await this.refreshCurrentConfiguration();
+			for (const period of plan.periods) {
+				await this.monthlyProjectionCoordinator.rebuildPeriod(period);
+			}
 			if (statusEl !== undefined) {
 				this.updateMonthlyFileFormatStatus(statusEl);
 			}
@@ -808,40 +814,34 @@ export class KnomoSettingTab extends PluginSettingTab {
 		statusEl.toggleClass("is-error", isLegacyFormat);
 	}
 
-	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<void> {
-		const monthlyMemoFolder = normalizeVaultPath(value);
-		const currentSettings = this.settingsService.getSettings();
+	private updateMonthlyFileFormatDraftStatus(statusEl: HTMLElement, value: string): void {
+		const nextFormat = value.trim();
+		if (!this.settingsService.validateMonthlyMemoFileFormat(nextFormat)) {
+			statusEl.setText(t("settings.monthlyFileFormat.invalid"));
+			statusEl.toggleClass("is-error", true);
+			return;
+		}
+		this.updateMonthlyFileFormatStatus(statusEl);
+	}
+
+	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<boolean> {
 		button.setDisabled(true);
 		button.setButtonText(t("settings.monthlyFolder.saving"));
 		try {
-			if (monthlyMemoFolder !== currentSettings.monthlyMemoFolder) {
-				const plan = await this.settingsService.planMonthlyMemoFolderMigration(monthlyMemoFolder);
-				if (plan.conflicts.length > 0) {
-					throw new Error(`Target path has conflicts; migration stopped: ${plan.conflicts.join("; ")}`);
-				}
-				const confirmed = await showKnomoConfirmModal(this.app, {
-					message: t("settings.monthlyFolder.confirm", {
-						current: currentSettings.monthlyMemoFolder,
-						next: monthlyMemoFolder,
-						count: plan.monthlyFileMoves.length,
-						systemAction: plan.moveSystemFolder ? t("settings.monthlyFolder.moveSystem") : t("settings.monthlyFolder.createSystem"),
-						rewritten: plan.rewrittenMonthlyRefs,
-					}),
-				});
-				if (!confirmed) {
-					return;
-				}
-			}
-			await this.syncOrchestrator.runMonthlyMemoFolderMigration(() => (
-				this.settingsService.migrateMonthlyMemoFolder(monthlyMemoFolder)
-			));
-			new Notice(t("settings.monthlyFolder.saved"));
+			const plan = await this.settingsService.planMonthlyMemoFolderMigration(value);
+			if (plan.status !== "unchanged" && !await showKnomoConfirmModal(this.app, {
+				message: t("settings.monthlyFolder.confirm", { current: plan.oldMonthlyMemoFolder, next: plan.newMonthlyMemoFolder }),
+			})) return false;
+			const result = await this.settingsService.migrateMonthlyMemoFolder(value);
+			new Notice(result.trashError ? t("settings.monthlyFolder.trashFailed", { error: result.trashError }) : t("settings.monthlyFolder.saved"));
+			await this.refreshCurrentConfiguration();
+			return true;
 		} catch (error) {
-			const message = formatServiceError(error, t("settings.monthlyFolder.saveFailed"));
-			new Notice(message);
+			new Notice(formatServiceError(error, t("settings.monthlyFolder.saveFailed")));
+			return false;
 		} finally {
 			button.setDisabled(false);
-			button.setButtonText(t("settings.monthlyFolder.save"));
+			button.setButtonText(t("settings.monthlyFolder.apply"));
 		}
 	}
 
@@ -873,20 +873,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 				return;
 			}
 			new Notice(t("settings.timeBuoy.building"));
-			const result = await this.syncOrchestrator.rebuildTimeBuoyIndex({
-				yieldToUi: () => new Promise<void>((resolve) => {
-					this.containerEl.win.setTimeout(resolve, 0);
-				}),
-			});
-			if (result.status === "completed") {
-				new Notice(t("settings.timeBuoy.buildComplete", {
-					total: result.total,
-					indexed: result.indexed,
-					skipped: result.skipped,
-				}));
-			} else {
-				new Notice(t("settings.timeBuoy.enabled"));
-			}
+			await this.catalogReadService.queryTimeBuoysForDate(formatDatePart(new Date()));
+			new Notice(t("settings.timeBuoy.enabled"));
 			await this.refreshOpenKnomoViews();
 		} catch (error) {
 			new Notice(formatServiceError(error, t("settings.timeBuoy.buildFailed")));
@@ -957,163 +945,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			: t("settings.excludeMonthly.keepExisting"));
 	}
 
-	private async runLegacyImportPreview(
-		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
-		resultEl: HTMLElement,
-		groupsEl: HTMLElement,
-	): Promise<void> {
-		if (this.legacyImportRunning) {
-			return;
-		}
-		this.legacyImportRunning = true;
-		button.setDisabled(true);
-		button.setButtonText(t("settings.preview.running"));
-		this.legacyImportPreview = null;
-		groupsEl.empty();
-		this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.previewing"));
-		try {
-			this.legacyImportPreview = await this.syncOrchestrator.previewLegacyDailyMemos(this.legacyImportScope);
-			this.renderLegacyImportPreview(resultEl, groupsEl);
-		} catch (error) {
-			const message = formatServiceError(error, t("settings.legacyImport.previewFailed"));
-			this.renderLegacyImportStatus(resultEl, message, true);
-			new Notice(message);
-		} finally {
-			this.legacyImportRunning = false;
-			button.setDisabled(false);
-			button.setButtonText(t("settings.preview.start"));
-		}
-	}
-
-	private renderLegacyImportPreview(resultEl: HTMLElement, groupsEl: HTMLElement): void {
-		groupsEl.empty();
-		const preview = this.legacyImportPreview;
-		if (preview === null) {
-			this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.notPreviewed"));
-			return;
-		}
-		const summary = [
-			t("settings.legacyImport.summary", { count: preview.candidateCount }),
-			...preview.groups.map((group) => t("settings.legacyImport.groupCount", {
-				label: formatSettingsText(group.label),
-				count: group.count,
-			})),
-		].join("\n");
-		this.renderLegacyImportStatus(resultEl, summary);
-		if (preview.groups.length === 0) {
-			return;
-		}
-		for (const group of preview.groups) {
-			this.renderLegacyImportGroup(group, groupsEl);
-		}
-		const button = groupsEl.createEl("button", {
-			cls: "mod-cta",
-			text: t("settings.legacyImport.importSelected"),
-			attr: { type: "button" },
-		});
-		button.addEventListener("click", () => {
-			void this.runLegacyImport(button, resultEl, groupsEl);
-		});
-	}
-
-	private renderLegacyImportGroup(group: LegacyDailyMemosGroupPreview, groupsEl: HTMLElement): void {
-		const item = groupsEl.createDiv({ cls: "knomo-legacy-import-group" });
-		const label = item.createEl("label", { cls: "knomo-legacy-import-label" });
-		const checkbox = label.createEl("input", {
-			attr: {
-				type: "checkbox",
-				"data-legacy-import-group": group.key,
-			},
-		});
-		checkbox.checked = group.selectedByDefault;
-		label.createSpan({ text: t("settings.legacyImport.groupCount", { label: formatSettingsText(group.label), count: group.count }) });
-		const samples = item.createDiv({ cls: "knomo-legacy-import-samples" });
-		for (const sample of group.samples) {
-			samples.createDiv({
-				cls: "knomo-setting-code",
-				text: `${sample.path}:${sample.lineNumber} ${sample.time} ${formatLegacyImportSample(sample.content)}`,
-			});
-		}
-	}
-
-	private async runLegacyImport(button: HTMLButtonElement, resultEl: HTMLElement, groupsEl: HTMLElement): Promise<void> {
-		const preview = this.legacyImportPreview;
-		if (preview === null || this.legacyImportRunning) {
-			return;
-		}
-		const selectedGroupKeys = this.getSelectedLegacyImportGroupKeys(groupsEl);
-		if (selectedGroupKeys.length === 0) {
-			new Notice(t("settings.legacyImport.chooseGroup"));
-			return;
-		}
-		let importCompleted = false;
-		this.legacyImportRunning = true;
-		button.disabled = true;
-		button.setText(t("settings.legacyImport.importing"));
-		this.renderLegacyImportStatus(resultEl, t("settings.legacyImport.importingStatus"));
-		try {
-			const result = await this.syncOrchestrator.importLegacyDailyMemos({
-				scope: this.legacyImportScope,
-				selectedGroupKeys,
-			});
-			await this.addLegacyDailyHeadings(result.importedHeadings);
-			await this.refreshIssueLists();
-			const message = t("settings.legacyImport.complete", {
-				imported: result.imported,
-				failed: result.failed,
-				skipped: result.skipped,
-			});
-			const errors = result.errors.map(formatSettingsText);
-			this.legacyImportPreview = null;
-			groupsEl.empty();
-			this.renderLegacyImportStatus(resultEl, errors.length > 0 ? `${message}\n${errors.join("\n")}` : message, result.failed > 0);
-			importCompleted = true;
-			void this.reloadAllMemosInOpenKnomoViewsAfterImport();
-			if (result.failed > 0) {
-				new Notice(t("settings.legacyImport.failedCount", { count: result.failed }));
-			}
-		} catch (error) {
-			const message = formatServiceError(error, t("settings.legacyImport.failed"));
-			this.renderLegacyImportStatus(resultEl, message, true);
-			new Notice(message);
-		} finally {
-			this.legacyImportRunning = false;
-			if (!importCompleted) {
-				button.disabled = false;
-				button.setText(t("settings.legacyImport.importSelected"));
-			}
-		}
-	}
-
-	private getSelectedLegacyImportGroupKeys(groupsEl: HTMLElement): string[] {
-		return groupsEl.findAll("input[data-legacy-import-group]")
-			.filter((input): input is HTMLInputElement => input.instanceOf(HTMLInputElement) && input.checked)
-			.map((input) => input.getAttr("data-legacy-import-group"))
-			.filter((key): key is string => key !== null);
-	}
-
-	private async addLegacyDailyHeadings(headings: string[]): Promise<void> {
-		if (headings.length === 0) {
-			return;
-		}
-		const settings = this.settingsService.getSettings();
-		const nextHeadings = [...settings.legacyDailyHeadings];
-		for (const heading of headings) {
-			if (!nextHeadings.includes(heading)) {
-				nextHeadings.push(heading);
-			}
-		}
-		await this.settingsService.updateSettings({ legacyDailyHeadings: nextHeadings });
-	}
-
-	private renderLegacyImportStatus(resultEl: HTMLElement, message: string, isError = false): void {
-		resultEl.empty();
-		resultEl.createDiv({ cls: isError ? "knomo-setting-help is-error" : "knomo-setting-help", text: message });
-	}
-
 	private async runRebuildIndex(
-		scope: RebuildIndexScope,
-		mode: RebuildIndexMode,
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
 		resultEl: HTMLElement,
 	): Promise<void> {
@@ -1122,102 +954,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 		this.rebuildRunning = true;
 		button.setDisabled(true);
-		button.setButtonText(t("settings.rebuild.checking"));
+		button.setButtonText(t("settings.rebuild.running"));
 		try {
-			const estimate = await this.syncOrchestrator.estimateRebuildIndex(scope);
-			const monthlyModeText = mode === "index-and-monthly" ? t("settings.rebuild.monthlySync") : t("settings.rebuild.monthlyMissingOnly");
-			const confirmed = await showKnomoConfirmModal(this.app, {
-				message: t("settings.rebuild.confirm", {
-					scanned: estimate.scannedFiles,
-					created: estimate.estimatedNew,
-					updated: estimate.estimatedUpdated,
-					missing: estimate.estimatedMissing,
-					monthlyMode: monthlyModeText,
-				}),
-			});
-			if (!confirmed) {
-				this.renderRebuildResult(t("settings.rebuild.cancelled"), resultEl);
-				return;
-			}
-			button.setButtonText(t("settings.rebuild.running"));
-			this.renderRebuildResult(t("settings.rebuild.status", { monthlyMode: monthlyModeText }), resultEl);
-			const result = await this.syncOrchestrator.rebuildIndex(scope, mode, (progress) => {
-				this.renderRebuildResult(
-					t("settings.rebuild.progress", {
-						completed: progress.completedFiles,
-						scanned: progress.scannedFiles,
-						created: progress.created,
-						updated: progress.updated,
-						deleted: progress.deleted,
-						skipped: progress.skipped,
-						failed: progress.failed,
-						currentFile: progress.currentFile === null ? "" : t("settings.rebuild.currentFile", { file: progress.currentFile }),
-					}),
-					resultEl,
-				);
-			});
-			const message = t("settings.rebuild.complete", {
-				scanned: result.scannedFiles,
-				created: result.created,
-				updated: result.updated,
-				deleted: result.deleted,
-				skipped: result.skipped,
-			});
-			const backup = result.backupPath === null ? t("settings.rebuild.noBackup") : t("settings.rebuild.backup", { path: result.backupPath });
-			const resultLines = [message, backup];
-			if (result.duplicateIndexRecordsRemoved > 0) {
-				resultLines.push(t("settings.rebuild.cleanedDuplicateIndexRecords", { count: result.duplicateIndexRecordsRemoved }));
-			}
-			if (result.syncConflictIndexFilesDeleted > 0) {
-				resultLines.push(t("settings.rebuild.cleanedIndexConflicts", { count: result.syncConflictIndexFilesDeleted }));
-			}
-			if (result.syncConflictIndexFileDeleteFailed > 0) {
-				resultLines.push(t("settings.rebuild.indexConflictCleanupFailed", {
-					count: result.syncConflictIndexFileDeleteFailed,
-					path: result.firstFailedSyncConflictIndexPath ?? "",
-				}));
-			}
-			const remainingMonthlyConflicts = this.syncOrchestrator.listPotentialSyncConflictFiles()
-				.filter((conflict) => conflict.kind === "monthly-archive");
-			const firstMonthlyConflict = remainingMonthlyConflicts[0];
-			if (firstMonthlyConflict !== undefined) {
-				resultLines.push(t("settings.rebuild.monthlyConflictsRemain", {
-					count: remainingMonthlyConflicts.length,
-					path: firstMonthlyConflict.path,
-				}));
-			}
-			await this.saveMaintenanceDiagnosticSafely({
-				task: "repair",
-				status: "completed",
-				occurredAt: new Date().toISOString(),
-				scope,
-				mode,
-				message,
-				scannedFiles: result.scannedFiles,
-				created: result.created,
-				updated: result.updated,
-				deleted: result.deleted,
-				failed: result.failed,
-			});
-			this.renderRebuildResult(resultLines.join("\n"), resultEl);
-			await this.refreshIssueLists();
+			this.renderRebuildResult(t("settings.rebuild.catalogStatus"), resultEl);
+			await this.memoCommandService.rebuildLocalCatalog();
+			this.renderRebuildResult(t("settings.rebuild.catalogComplete"), resultEl);
 			await this.refreshOpenKnomoViews();
 			new Notice(t("settings.rebuild.completedNotice"));
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.rebuild.failed"));
-			await this.saveMaintenanceDiagnosticSafely({
-				task: "repair",
-				status: "failed",
-				occurredAt: new Date().toISOString(),
-				scope,
-				mode,
-				message,
-				scannedFiles: null,
-				created: null,
-				updated: null,
-				deleted: null,
-				failed: null,
-			});
 			this.renderRebuildResult(message, resultEl);
 			new Notice(message);
 		} finally {
@@ -1227,47 +972,45 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async runMonthlyArchiveRebuild(
-		period: string,
+	private async runRuntimeRetry(
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
-		resultEl: HTMLElement,
+		idleButtonText = t("settings.attention.checkAgain"),
 	): Promise<void> {
-		if (this.monthlyRebuildRunning || period.length === 0) {
-			return;
-		}
-		const confirmed = await showKnomoConfirmModal(this.app, {
-			message: t("settings.monthlyRebuild.confirm", { period }),
-		});
-		if (!confirmed) {
-			this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.cancelled"), resultEl);
-			return;
-		}
-
-		this.monthlyRebuildRunning = true;
 		button.setDisabled(true);
-		button.setButtonText(t("settings.monthlyRebuild.running"));
-		this.renderMonthlyRebuildResult(t("settings.monthlyRebuild.status", { period }), resultEl);
+		button.setButtonText(t("settings.attention.checking"));
 		try {
-			const result = await this.syncOrchestrator.rebuildMonthlyArchive(period);
-			const backup = result.backupPath === null
-				? t("settings.monthlyRebuild.noBackup")
-				: t("settings.rebuild.backup", { path: result.backupPath });
-			this.renderMonthlyRebuildResult(`${t("settings.monthlyRebuild.complete", {
-				period: result.period,
-				rebuilt: result.rebuilt,
-				issues: result.issues,
-			})}\n${backup}`, resultEl);
-			await this.refreshIssueLists();
+			await this.retryRuntimeState();
 			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.monthlyRebuild.completedNotice", { period: result.period }));
-		} catch (error) {
-			const message = formatServiceError(error, t("settings.monthlyRebuild.failed"));
-			this.renderMonthlyRebuildResult(message, resultEl);
-			new Notice(message);
+		} catch {
+			new Notice(t("settings.attention.retryFailed"));
 		} finally {
-			this.monthlyRebuildRunning = false;
 			button.setDisabled(false);
-			button.setButtonText(t("settings.monthlyRebuild.start"));
+			button.setButtonText(idleButtonText);
+			this.refreshSettingTab();
+		}
+	}
+
+	private async runMonthlyRetry(
+		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
+	): Promise<void> {
+		if (this.monthlyRetryRunning) return;
+		this.monthlyRetryRunning = true;
+		button.setDisabled(true);
+		button.setButtonText(t("settings.attention.retrying"));
+		try {
+			const result = await this.monthlyProjectionCoordinator.run(true);
+			if (result.failed > 0 || this.monthlyProjectionCoordinator.getProjectionState() === "failed") {
+				throw new Error(t("settings.attention.monthly.retryFailed"));
+			}
+			await this.refreshOpenKnomoViews();
+			new Notice(t("settings.attention.monthly.retried"));
+		} catch (error) {
+			new Notice(formatServiceError(error, t("settings.attention.monthly.retryFailed")));
+		} finally {
+			this.monthlyRetryRunning = false;
+			button.setDisabled(false);
+			button.setButtonText(t("settings.attention.retry"));
+			this.refreshSettingTab();
 		}
 	}
 
@@ -1276,89 +1019,98 @@ export class KnomoSettingTab extends PluginSettingTab {
 		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
 	}
 
-	private async saveMaintenanceDiagnosticSafely(diagnostic: MaintenanceDiagnostic): Promise<void> {
-		try {
-			await this.settingsService.saveMaintenanceDiagnostic(diagnostic);
-		} catch {
-			// 维护诊断写入失败不应覆盖用户正在执行的维护结果。
+	private getAttentionKinds(): KnomoSettingAttentionKind[] {
+		return getKnomoSettingAttentionKinds(
+			this.catalogReadService.getRuntimeAttentionSnapshot(),
+			this.startupBootstrapService?.getSnapshot() ?? null,
+		);
+	}
+
+	private getAttentionName(kind: KnomoSettingAttentionKind): string {
+		switch (kind) {
+			case "settings": return t("settings.attention.settings.name");
+			case "current-config": return t("settings.currentConfig.name");
+			case "catalog": return t("settings.attention.catalog.name");
+			case "monthly": return t("settings.attention.monthly.name");
+			case "legacy": return t("settings.legacyMigration.name");
 		}
 	}
 
-	private async renderInitialRebuildResult(resultEl: HTMLElement): Promise<void> {
-		let message = this.getRebuildBeforeMessage();
-		try {
-			const diagnostic = await this.settingsService.loadMaintenanceDiagnostic();
-			if (diagnostic !== null) {
-				message = `${message}\n${this.formatMaintenanceDiagnostic(diagnostic)}`;
-			}
-		} catch {
-			// 诊断只辅助维护说明，读取失败时保留基础提示。
-		}
-		this.renderRebuildResult(message, resultEl);
-	}
-
-	private getRebuildBeforeMessage(): string {
-		const conflicts = this.syncOrchestrator.listPotentialSyncConflictFiles();
-		if (conflicts.length === 0) {
-			return t("settings.rebuild.before");
-		}
-		return `${t("settings.rebuild.before")}\n${this.formatSyncConflictMessage(conflicts)}`;
-	}
-
-	private formatSyncConflictMessage(conflicts: readonly SyncConflictFile[]): string {
-		const firstConflict = conflicts[0];
-		if (firstConflict === undefined) {
-			return "";
-		}
-		const indexCount = conflicts.filter((conflict) => conflict.kind === "memo-index").length;
-		const monthlyCount = conflicts.length - indexCount;
-		const messageKey = indexCount > 0 && monthlyCount > 0
-			? "settings.rebuild.conflictMixedFiles"
-			: indexCount > 0
-				? "settings.rebuild.conflictIndexFiles"
-				: "settings.rebuild.conflictMonthlyFiles";
-		return t(messageKey, {
-			count: conflicts.length,
-			indexCount,
-			monthlyCount,
-			path: firstConflict.path,
-		});
-	}
-
-	private formatMaintenanceDiagnostic(diagnostic: MaintenanceDiagnostic): string {
-		const task = diagnostic.task === "startup_scan"
-			? t("settings.maintenanceDiagnostic.startupScan")
-			: diagnostic.task === "file_watch"
-				? t("settings.maintenanceDiagnostic.fileWatch")
-				: t("settings.maintenanceDiagnostic.repair");
-		const status = diagnostic.status === "completed"
-			? t("settings.maintenanceDiagnostic.completed")
-			: t("settings.maintenanceDiagnostic.failed");
-		const scope = diagnostic.scope === null ? "" : t("settings.maintenanceDiagnostic.scope", { scope: diagnostic.scope });
-		const mode = diagnostic.mode === null ? "" : t("settings.maintenanceDiagnostic.mode", { mode: diagnostic.mode });
-		const stats = diagnostic.scannedFiles === null
-			? ""
-			: t("settings.maintenanceDiagnostic.stats", {
-				scanned: diagnostic.scannedFiles,
-				created: diagnostic.created ?? 0,
-				updated: diagnostic.updated ?? 0,
-				deleted: diagnostic.deleted ?? 0,
-				failed: diagnostic.failed ?? 0,
+	private getAttentionDescription(kind: KnomoSettingAttentionKind): string {
+		switch (kind) {
+			case "settings": return t("settings.attention.settings.desc");
+			case "current-config": return this.getCurrentConfigDescription();
+			case "catalog": return t("settings.attention.catalog.desc");
+			case "monthly": return t("settings.attention.monthly.desc", {
+				periods: this.monthlyProjectionCoordinator.getFailedPeriods().join(", ") || "—",
 			});
-		return t("settings.maintenanceDiagnostic.latest", {
-			task,
-			status,
-			time: diagnostic.occurredAt,
-			scope,
-			mode,
-			stats,
-			message: diagnostic.message,
+			case "legacy": return this.getLegacyMigrationDescription();
+		}
+	}
+
+	private renderAttentionSetting(kind: KnomoSettingAttentionKind, setting: Setting): void {
+		switch (kind) {
+			case "settings": this.renderSettingsAttentionSetting(setting); break;
+			case "current-config": this.renderCurrentConfigSetting(setting); break;
+			case "catalog": this.renderCatalogAttentionSetting(setting); break;
+			case "monthly": this.renderMonthlyAttentionSetting(setting); break;
+			case "legacy": this.renderLegacyMigration(setting); break;
+		}
+	}
+
+	private getCurrentConfigDescription(): string {
+		switch (this.knomoCurrentConfigService.getStatus()) {
+			case "ready":
+				return t("settings.currentConfig.ready");
+			case "conflicted":
+				return t("settings.currentConfig.conflicted");
+			case "unavailable":
+				return t("settings.currentConfig.unavailable");
+			case "missing":
+				return t("settings.currentConfig.missing");
+		}
+	}
+
+	private renderCurrentConfigSetting(setting: Setting): void {
+		const status = this.knomoCurrentConfigService.getStatus();
+
+		setting
+			.setName(t("settings.currentConfig.name"))
+			.setDesc(this.getCurrentConfigDescription());
+		if (status === "ready") return;
+		setting.addButton((button) => {
+			button.setButtonText(status === "unavailable"
+				? t("settings.currentConfig.checkAgain")
+				: status === "conflicted"
+					? t("settings.currentConfig.resolve")
+					: t("settings.currentConfig.publish"));
+			button.onClick(() => {
+				void (async () => {
+					button.setDisabled(true);
+					try {
+						await this.knomoCurrentConfigService.reloadConfiguration();
+						if (this.knomoCurrentConfigService.getStatus() !== "ready") {
+							throw new Error(this.knomoCurrentConfigService.getLastError()
+								?? "Current configuration did not become ready.");
+						}
+						new Notice(t("settings.currentConfig.saved"));
+					} catch {
+						new Notice(t("settings.currentConfig.failed"));
+					} finally {
+						button.setDisabled(false);
+						this.refreshSettingTab();
+					}
+				})();
+			});
 		});
 	}
 
-	private renderMonthlyRebuildResult(message: string, resultEl: HTMLElement): void {
-		resultEl.empty();
-		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
+	private async refreshCurrentConfiguration(): Promise<void> {
+		try {
+			await this.knomoCurrentConfigService.refreshLocalConfig();
+		} catch {
+			// 当前值已保存；重新加载失败由配置状态提示，不回滚已提交设置。
+		}
 	}
 
 	private async refreshOpenKnomoViews(): Promise<void> {
@@ -1370,141 +1122,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 		await Promise.all(refreshes);
 	}
 
-	private async reloadAllMemosInOpenKnomoViewsAfterImport(): Promise<void> {
-		let failed = false;
-		try {
-			const preloads = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
-				if (!(leaf.view instanceof KnomoView)) {
-					return true;
-				}
-				try {
-					return await leaf.view.reloadAllMemosAfterImport();
-				} catch {
-					return false;
-				}
-			});
-			const results = await Promise.all(preloads);
-			failed = results.some((loaded) => !loaded);
-			if (results.length > 0 && !failed) {
-				new Notice(t("settings.legacyImport.loadedAll"));
-			}
-		} catch {
-			failed = true;
+	refreshAttentionIfVisible(): void {
+		// 声明式设置在注册时缓存定义，且不会调用 display()；隐藏时也须更新入口。
+		const settingTab = this as PluginSettingTab & { update?: () => void };
+		if (typeof settingTab.update === "function") settingTab.update();
+		else if (this.settingsVisible) this.display();
+	}
+
+	private refreshSettingTab(): void {
+		const settingTab = this as PluginSettingTab & { update?: () => void };
+		if (typeof settingTab.update === "function") {
+			settingTab.update();
+			return;
 		}
-		if (failed) {
-			new Notice(t("settings.legacyImport.loadAllFailed"));
-		}
+		this.display();
 	}
 
-	private async refreshIssueLists(): Promise<void> {
-		await Promise.all(Array.from(this.issueListEls, (issueListEl) => this.renderIssueList(issueListEl)));
-	}
-
-	private async renderIssueList(issueListEl: HTMLElement): Promise<void> {
-		issueListEl.empty();
-		try {
-			const memos = await this.syncOrchestrator.listIssueMemos();
-			if (memos.length === 0) {
-				issueListEl.createDiv({ cls: "knomo-setting-help", text: t("settings.issues.none") });
-				return;
-			}
-			for (const memo of memos) {
-				this.renderIssueItem(memo, issueListEl);
-			}
-		} catch (error) {
-			issueListEl.createDiv({
-				cls: "knomo-setting-help is-error",
-				text: formatServiceError(error, t("settings.issues.loadFailed")),
-			});
-		}
-	}
-
-	private renderIssueItem(memo: MemoRecord, issueListEl: HTMLElement): void {
-		const item = issueListEl.createDiv({ cls: "knomo-issue-item" });
-		item.createDiv({
-			cls: "knomo-setting-code",
-			text: `${memo.id} · ${getSyncStatusLabel(memo.syncStatus)}`,
-		});
-		item.createDiv({
-			cls: memo.issue === null ? "knomo-setting-help" : "knomo-setting-help is-error",
-			text: memo.issue === null ? t("settings.issues.needsHandling") : formatMemoIssue(memo.issue),
-		});
-		if (memo.syncStatus === "monthly_delete_failed") {
-			const button = item.createEl("button", {
-				cls: "mod-cta",
-				text: t("settings.issues.retryMonthlyDelete"),
-				attr: { type: "button" },
-			});
-			button.addEventListener("click", () => {
-				void this.retryMonthlyDelete(memo, button);
-			});
-		} else if (
-			memo.syncStatus === "monthly_failed"
-			|| memo.issue?.type === "monthly_block_missing"
-			|| memo.issue?.type === "monthly_block_ambiguous"
-			|| memo.issue?.type === "monthly_sync_failed"
-		) {
-			const button = item.createEl("button", {
-				cls: "mod-cta",
-				text: t("settings.issues.retryMonthlySync"),
-				attr: { type: "button" },
-			});
-			button.addEventListener("click", () => {
-				void this.retryMonthlySync(memo, button);
-			});
-		}
-	}
-
-	private async retryMonthlyDelete(memo: MemoRecord, button: HTMLButtonElement): Promise<void> {
-		button.disabled = true;
-		button.setText(t("settings.issues.retrying"));
-		try {
-			await this.syncOrchestrator.retryMonthlyDelete(memo);
-			await this.refreshIssueLists();
-			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.issues.monthlyDeleteComplete"));
-		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.issues.monthlyDeleteFailed")));
-		} finally {
-			button.disabled = false;
-			button.setText(t("settings.issues.retryMonthlyDelete"));
-		}
-	}
-
-	private async retryMonthlySync(memo: MemoRecord, button: HTMLButtonElement): Promise<void> {
-		button.disabled = true;
-		button.setText(t("settings.issues.retrying"));
-		try {
-			await this.syncOrchestrator.retryMonthlySync(memo);
-			await this.refreshIssueLists();
-			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.issues.monthlySyncComplete"));
-		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.issues.monthlySyncFailed")));
-		} finally {
-			button.disabled = false;
-			button.setText(t("settings.issues.retryMonthlySync"));
-		}
-	}
-}
-
-function getSyncStatusLabel(status: MemoRecord["syncStatus"]): string {
-	if (status === "synced") {
-		return t("sync.synced");
-	}
-	if (status === "pending_monthly") {
-		return t("sync.pendingMonthly");
-	}
-	if (status === "monthly_failed") {
-		return t("sync.monthlyFailed");
-	}
-	return t("sync.monthlyDeleteFailed");
-}
-
-function formatLegacyImportSample(content: string): string {
-	const normalizedContent = content.replace(/\s+/g, " ").trim();
-	if (normalizedContent.length <= 80) {
-		return normalizedContent;
-	}
-	return `${normalizedContent.slice(0, 77)}...`;
 }

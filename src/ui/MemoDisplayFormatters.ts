@@ -1,25 +1,30 @@
 import { t } from "../i18n";
+import type { MemoObservation } from "../types/catalog";
+
+export function formatObservationDisplayTime(observation: Pick<MemoObservation, "logicalDate" | "time">): string {
+	return `${observation.logicalDate} ${observation.time}`;
+}
 
 export function formatMemoDisplayTime(value: string): string {
-	return value.replace("T", " ").replace(/\.\d{3}[+-]\d{2}:\d{2}$/, "");
+	if (/(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) {
+		const instant = new Date(value);
+		if (!Number.isNaN(instant.getTime())) {
+			return [
+				`${instant.getFullYear()}-${padTwoDigits(instant.getMonth() + 1)}-${padTwoDigits(instant.getDate())}`,
+				`${padTwoDigits(instant.getHours())}:${padTwoDigits(instant.getMinutes())}:${padTwoDigits(instant.getSeconds())}`,
+			].join(" ");
+		}
+	}
+	return value
+		.replace("T", " ")
+		.replace(/\.\d+(?=Z$|[+-]\d{2}:\d{2}$|$)/u, "")
+		.replace(/(?:Z|[+-]\d{2}:\d{2})$/u, "");
 }
 
 export function formatOptionalMemoTime(value: string | undefined): string {
 	return value === undefined || value.trim().length === 0 ? t("trash.unknownTime") : formatMemoDisplayTime(value);
 }
 
-export function formatDeleteSource(value: string): string {
-	if (value === "knomo_ui") {
-		return "Knomo";
-	}
-	if (value === "file_watch") {
-		return t("deleteSource.fileWatch");
-	}
-	if (value === "manual_scan") {
-		return t("deleteSource.manualScan");
-	}
-	if (value === "startup_scan") {
-		return t("deleteSource.startupScan");
-	}
-	return value;
+function padTwoDigits(value: number): string {
+	return String(value).padStart(2, "0");
 }

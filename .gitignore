@@ -4,6 +4,7 @@
 
 node_modules/
 .tmp/
+main.js
 .npm-cache/
 .pnpm-store/
 .corepack/
@@ -16,3 +17,6 @@ knomo-assets/
 .claude/
 .codex/
 docs/
+/architecture/
+.agents/
+architecture/

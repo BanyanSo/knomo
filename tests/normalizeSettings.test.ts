@@ -25,7 +25,6 @@ test("normalizes invalid settings to safe defaults", async () => {
 		desktopSidebarCollapsed: "false",
 		excludeMonthlyMemosFromObsidian: "yes",
 		managedObsidianExcludeRule: "Memos/",
-		managedSystemFolderExcludeRule: " ",
 		pinnedTags: ["project", 1, "knomo"],
 	});
 
@@ -42,8 +41,8 @@ test("normalizes invalid settings to safe defaults", async () => {
 	assert.equal(settings.desktopSidebarWidth, DEFAULT_KNOMO_SETTINGS.desktopSidebarWidth);
 	assert.equal(settings.desktopSidebarCollapsed, DEFAULT_KNOMO_SETTINGS.desktopSidebarCollapsed);
 	assert.equal(settings.excludeMonthlyMemosFromObsidian, DEFAULT_KNOMO_SETTINGS.excludeMonthlyMemosFromObsidian);
+	assert.equal(DEFAULT_KNOMO_SETTINGS.excludeMonthlyMemosFromObsidian, true);
 	assert.equal(settings.managedObsidianExcludeRule, "Memos/");
-	assert.equal(settings.managedSystemFolderExcludeRule, undefined);
 	assert.deepEqual(settings.pinnedTags, ["project", "knomo"]);
 	assert.equal(isValidMonthlyMemoFileFormat("Memos-YYYY-MM.md"), true);
 	assert.equal(isValidMonthlyMemoFileFormat("Memos-YYYY-MM"), true);

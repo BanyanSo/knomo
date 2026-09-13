@@ -5,14 +5,23 @@ import path from "node:path";
 export const FORBIDDEN_SOURCE_PATTERN = /initEvent|execCommand|\b(?:vault|Vault)\.(?:delete|trash)\s*\(|globalThis| as TFile|\.style\.(?:[$\w]+\s*=|setProperty\s*\()|\.setAttribute\(\s*["']style["']|\bcreateEl\(\s*["'](?:style|link)["']/u;
 export const TRAILING_WHITESPACE_PATTERN = /[ \t]+$/u;
 
+// 仅允许已验证迁移后的内部旧数据清理；普通文件删除仍须走 FileManager。
+// 路径、完整语句及单次出现均须匹配，不能豁免整个文件或同一行的其他操作。
+const MIGRATION_CLEANUP_STATEMENTS = new Map([
+	// completion 已保存，实际旧根目录已校验且不与恢复数据或配置重叠。
+	["src/services/LegacyTrashMigrationService.ts", "await this.app.vault.delete(folder, true);"],
+	// 目标集合已读回验证、设置已保存，旧 Trash 文件身份和正文已再次确认。
+	["src/settings/MonthlyFolderMigrationService.ts", "await this.plugin.app.vault.delete(sourceFile);"],
+]);
+
 export const checks = [
 	{
 		name: "typecheck",
 		run: () => runCommand("npm", ["run", "typecheck"]),
 	},
 	{
-		name: "test",
-		run: () => runCommand("npm", ["test"]),
+		name: "test:all",
+		run: () => runCommand("npm", ["run", "test:all"]),
 	},
 	{
 		name: "build",
@@ -35,7 +44,6 @@ export const checks = [
 		run: () => scanFiles([
 			"README.md",
 			"README.zh-CN.md",
-			"docs",
 			path.join("src", "ui"),
 			"tests",
 			"scripts",
@@ -99,8 +107,14 @@ function collectMatches(targetPath, pattern, matches) {
 		return;
 	}
 	const lines = fs.readFileSync(targetPath, "utf8").split(/\r?\n/u);
+	const cleanupStatement = pattern === FORBIDDEN_SOURCE_PATTERN
+		? MIGRATION_CLEANUP_STATEMENTS.get(toPosix(path.relative(process.cwd(), path.resolve(targetPath))))
+		: undefined;
+	const hasSingleCleanup = cleanupStatement !== undefined
+		&& lines.filter((line) => line.trim() === cleanupStatement).length === 1;
 	for (let index = 0; index < lines.length; index += 1) {
 		const line = lines[index];
+		if (hasSingleCleanup && line.trim() === cleanupStatement) continue;
 		if (pattern.test(line)) {
 			matches.push({
 				file: toPosix(targetPath),

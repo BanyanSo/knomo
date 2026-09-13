@@ -1,6 +1,10 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { MemoReviewState, MemoReviewStateMap } from "../types/review";
 import { formatDatePart } from "./date";
+import { CooperativeYieldController } from "../services/CooperativeTask";
+import type { CooperativeTaskRuntime } from "../services/CooperativeTask";
+
+export type RandomReunionCandidate = Pick<MemoRecord, "id" | "createdAt" | "tags" | "dailyRef">;
 
 export interface RandomReunionOptions {
 	today?: Date;
@@ -53,7 +57,7 @@ export function filterRandomReunionCandidates(
 }
 
 export function calculateRandomReunionWeight(
-	memo: MemoRecord,
+	memo: RandomReunionCandidate,
 	reviewState: MemoReviewState | undefined,
 	today = new Date(),
 ): number {
@@ -90,27 +94,80 @@ export function weightedSampleWithoutReplacement<T>(
 	count: number,
 	random: () => number = Math.random,
 ): T[] {
-	const remaining = [...items];
+	const work = sampleWeighted(items, getWeight, count, random);
+	let step = work.next();
+	while (!step.done) step = work.next();
+	return step.value;
+}
+
+// 权重树避免每次抽取重扫剩余候选，保持按原顺序累计权重的无放回抽样。
+function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: number,
+	random: () => number): Generator<void, T[]> {
+	let size = 1;
+	while (size < items.length) size *= 2;
+	const tree = new Float64Array(size * 2);
+	for (let index = 0; index < items.length; index++) {
+		tree[size + index] = clampWeight(getWeight(items[index]!));
+		yield;
+	}
+	for (let index = size - 1; index > 0; index--) {
+		tree[index] = tree[index * 2]! + tree[index * 2 + 1]!;
+		yield;
+	}
 	const picked: T[] = [];
-	const targetCount = Math.min(Math.max(0, Math.floor(count)), remaining.length);
-	while (picked.length < targetCount && remaining.length > 0) {
-		const weights = remaining.map((item) => clampWeight(getWeight(item)));
-		const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-		let pickedIndex = 0;
-		if (totalWeight > 0) {
-			let cursor = clampRandom(random()) * totalWeight;
-			for (let index = 0; index < weights.length; index += 1) {
-				cursor -= weights[index];
-				if (cursor <= 0) {
-					pickedIndex = index;
-					break;
-				}
-			}
+	const targetCount = Math.min(Math.max(0, Math.floor(count)), items.length);
+	while (picked.length < targetCount) {
+		let cursor = clampRandom(random()) * tree[1]!;
+		let index = 1;
+		while (index < size) {
+			const left = tree[index * 2]!;
+			if (left > 0 && cursor <= left) index *= 2;
+			else { cursor -= left; index = index * 2 + 1; }
 		}
-		picked.push(remaining[pickedIndex]);
-		remaining.splice(pickedIndex, 1);
+		picked.push(items[index - size]!);
+		tree[index] = 0;
+		while (index > 1) {
+			index = Math.floor(index / 2);
+			tree[index] = tree[index * 2]! + tree[index * 2 + 1]!;
+		}
+		yield;
 	}
 	return picked;
+}
+
+export async function sampleRandomReunionCandidates<T extends RandomReunionCandidate>(
+	candidates: T[], reviews: MemoReviewStateMap, count: number, options: RandomReunionOptions,
+	runtime: CooperativeTaskRuntime,
+): Promise<T[]> {
+	const control = new CooperativeYieldController(runtime);
+	const work = sampleWeighted(candidates, (memo) => calculateRandomReunionWeight(memo, reviews[memo.id], options.today),
+		candidates.length, options.random ?? Math.random);
+	let step = work.next();
+	while (!step.done) {
+		if (control.shouldYield()) await control.yieldNow();
+		step = work.next();
+	}
+	const ordered = step.value;
+	const selected: T[] = [];
+	const ids = new Set<string>();
+	const sources = new Map<string, number>();
+	const dates = new Map<string, number>();
+	const tags = new Map<string, number>();
+	const limit = Math.min(Math.max(0, Math.floor(count)), candidates.length);
+	for (const memo of ordered) {
+		if (selected.length >= limit) break;
+		if (canUseDiverseMemo(memo, sources, dates, tags, options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT,
+			options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT, options.maxPerPrimaryTag ?? DEFAULT_DIVERSITY_LIMIT)) {
+			selected.push(memo); ids.add(memo.id); incrementDiversityCounts(memo, sources, dates, tags);
+		}
+		if (control.shouldYield()) await control.yieldNow();
+	}
+	for (const memo of ordered) {
+		if (selected.length >= limit) break;
+		if (!ids.has(memo.id)) { selected.push(memo); ids.add(memo.id); }
+		if (control.shouldYield()) await control.yieldNow();
+	}
+	return selected;
 }
 
 export function selectDiverseRandomReunionMemos(
@@ -170,23 +227,6 @@ export function getRandomReunionMemos(
 	return selectDiverseRandomReunionMemos(ordered, count, options);
 }
 
-export function markMemoReviewed(
-	reviewStates: MemoReviewStateMap,
-	memoId: string,
-	today = new Date(),
-): MemoReviewStateMap {
-	const currentState = reviewStates[memoId];
-	const reviewCount = currentState === undefined ? 0 : currentState.reviewCount;
-	return {
-		...reviewStates,
-		[memoId]: {
-			memoId,
-			lastReviewedAt: formatDatePart(today),
-			reviewCount: reviewCount + 1,
-		},
-	};
-}
-
 function hasBlacklistedTag(tags: string[], blacklistTags: Set<string>): boolean {
 	return tags.some((tag) => {
 		const normalizedTag = tag.replace(/^#/, "").toLowerCase();
@@ -215,7 +255,7 @@ function stripMarkdownForLength(content: string): string {
 }
 
 function canUseDiverseMemo(
-	memo: MemoRecord,
+	memo: RandomReunionCandidate,
 	sourceCounts: Map<string, number>,
 	dateCounts: Map<string, number>,
 	tagCounts: Map<string, number>,
@@ -234,7 +274,7 @@ function canUseDiverseMemo(
 }
 
 function incrementDiversityCounts(
-	memo: MemoRecord,
+	memo: RandomReunionCandidate,
 	sourceCounts: Map<string, number>,
 	dateCounts: Map<string, number>,
 	tagCounts: Map<string, number>,
@@ -251,7 +291,7 @@ function incrementDiversityCounts(
 	}
 }
 
-function getMemoDateKey(memo: MemoRecord): string | null {
+function getMemoDateKey(memo: RandomReunionCandidate): string | null {
 	const date = parseMemoDate(memo.createdAt);
 	return date === null ? null : formatDatePart(date);
 }

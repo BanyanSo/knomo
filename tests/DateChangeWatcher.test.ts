@@ -6,6 +6,27 @@ import {
 	getNextDateChangeDelayMs,
 } from "../src/ui/DateChangeWatcher";
 
+test("夏令时日历日为 23 或 25 小时，恢复后按当前时区重新安排午夜", () => {
+	const previous = process.env.TZ;
+	try {
+		process.env.TZ = "America/New_York";
+		assert.equal(getNextDateChangeDelayMs(new Date(2026, 2, 8)), 23 * 3600000 + 1000);
+		assert.equal(getNextDateChangeDelayMs(new Date(2026, 10, 1)), 25 * 3600000 + 1000);
+		const delays: number[] = [];
+		const now = new Date("2026-09-10T12:00:00Z");
+		const watcher = new DateChangeWatcher({ getNow: () => now,
+			scheduleTask: (_callback, delay) => { delays.push(delay); return delays.length; }, cancelTask: () => {},
+		});
+		watcher.start(() => {});
+		process.env.TZ = "Asia/Shanghai";
+		watcher.stop(); watcher.start(() => {});
+		assert.notEqual(delays[0], delays[1]);
+		assert.equal(delays[1], 4 * 3600000 + 1000);
+	} finally {
+		if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+	}
+});
+
 test("date change watcher calculates the delay to the next local day", () => {
 	const now = new Date(2026, 0, 1, 12, 0, 0);
 

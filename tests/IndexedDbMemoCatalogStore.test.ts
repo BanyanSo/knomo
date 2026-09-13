@@ -1,0 +1,525 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { IDBKeyRange, indexedDB } from "fake-indexeddb";
+
+import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
+import { buildCatalogPartition } from "../src/services/MemoCatalogService";
+import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
+
+test("IndexedDB 使用真实索引完成 recent、搜索、筛选、分页和 aggregate", async () => {
+	const databaseName = uniqueDatabaseName("query");
+	const store = createStore(databaseName);
+	assert.equal(store.getLifecycle().state, "opening");
+	await store.open();
+	try {
+		assert.deepEqual(store.getLifecycle(), { state: "ready", persistent: true, writable: true, reason: null });
+		await store.replaceFilePartition(makePartition("Journal/2026-08-08.md", "2026-08-08", [
+			makeObservation("Journal/2026-08-08.md", "2026-08-08", 1, "09:00", "older plain"),
+		]));
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", [
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 1, "10:00", "中文索引 alpha", {
+				tags: ["project"],
+				tasks: [{ taskIndex: 0, lineOffset: 1, marker: " ", text: "task" }],
+			}),
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 2, "11:00", "newest beta", {
+				images: [{ path: "assets/p.png", altText: "p", syntax: "markdown_image" }],
+			}),
+		]));
+		await store.setCoverage({
+			kind: "rebuilding",
+			coveredFromDate: "2026-08-09",
+			pendingFileCount: 1,
+			coveredFileCount: 1,
+			totalFileCount: 2,
+		});
+		assert.equal(store.getLifecycle().state, "rebuilding");
+		await store.setCoverage({
+			kind: "complete",
+			coveredFromDate: "2026-08-08",
+			pendingFileCount: 0,
+			coveredFileCount: 2,
+			totalFileCount: 2,
+		});
+		assert.equal(store.getLifecycle().state, "ready");
+
+		const firstPage = await store.query({ limit: 2 });
+		assert.deepEqual(firstPage.items.map((item) => item.content), ["newest beta", "中文索引 alpha"]);
+		assert.notEqual(firstPage.nextCursor, null);
+		const secondPage = await store.query({ limit: 2, cursor: firstPage.nextCursor });
+		assert.deepEqual(secondPage.items.map((item) => item.content), ["older plain"]);
+		const fileBatch = await store.getFileRevisionBatch("Journal/2026-08-09.md");
+		assert.ok(fileBatch);
+		assert.equal(fileBatch.file.observationCount, 2);
+		assert.deepEqual(fileBatch.observations.map((item) => item.content), ["中文索引 alpha", "newest beta"]);
+		assert.equal(fileBatch.catalogRevision, firstPage.catalogRevision);
+		const allBatches = await store.listFileRevisionBatches();
+		assert.deepEqual(allBatches.map((batch) => ({
+			path: batch.file.sourcePath,
+			contents: batch.observations.map((item) => item.content),
+			catalogRevision: batch.catalogRevision,
+		})), [
+			{
+				path: "Journal/2026-08-08.md",
+				contents: ["older plain"],
+				catalogRevision: firstPage.catalogRevision,
+			},
+			{
+				path: "Journal/2026-08-09.md",
+				contents: ["中文索引 alpha", "newest beta"],
+				catalogRevision: firstPage.catalogRevision,
+			},
+		]);
+
+		const search = await store.query({ limit: 50, text: "中文" });
+		assert.deepEqual(search.items.map((item) => item.content), ["中文索引 alpha"]);
+		assert.ok(search.metrics.cursorReads < 3);
+		assert.deepEqual((await store.query({ limit: 50, tags: ["project"] })).items.map((item) => item.content), ["中文索引 alpha"]);
+		assert.deepEqual((await store.query({ limit: 50, hasImage: true })).items.map((item) => item.content), ["newest beta"]);
+		assert.deepEqual((await store.query({ limit: 50, hasTask: false })).items.map((item) => item.content), ["newest beta", "older plain"]);
+
+		const aggregates = await store.listDailyAggregates();
+		assert.deepEqual(aggregates.map((item) => [item.logicalDate, item.memoCount, item.taskCount]), [
+			["2026-08-09", 2, 1],
+			["2026-08-08", 1, 0],
+		]);
+
+		await store.replaceFilePartition(makePartition("Journal/2026-08-08.md", "2026-08-08", [
+			makeObservation("Journal/2026-08-08.md", "2026-08-08", 3, "12:00", "changed"),
+		]));
+		const invalidated = await store.query({ limit: 2, cursor: firstPage.nextCursor });
+		assert.equal(invalidated.invalidated, true);
+		assert.deepEqual(invalidated.items, []);
+		const cursorBeforeClear = (await store.query({ limit: 1 })).nextCursor;
+		assert.notEqual(cursorBeforeClear, null);
+		await store.clear();
+		const cleared = await store.query({ limit: 1, cursor: cursorBeforeClear });
+		assert.equal(cleared.invalidated, true);
+		assert.deepEqual(cleared.items, []);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("IndexedDB 独立计数返回完整筛选结果而不受分页限制", async () => {
+	const databaseName = uniqueDatabaseName("query-count");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", Array.from(
+			{ length: 90 },
+			(_, index) => makeObservation(
+				"Journal/2026-08-09.md",
+				"2026-08-09",
+				index + 1,
+				`${String(8 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}`,
+				`project memo ${index + 1}`,
+				{ tags: [index % 2 === 0 ? "project" : "project/knomo"] },
+			),
+		)));
+		await store.setCoverage({
+			kind: "complete",
+			coveredFromDate: "2026-08-09",
+			pendingFileCount: 0,
+			coveredFileCount: 1,
+			totalFileCount: 1,
+		});
+
+		const page = await store.query({ limit: 50, tags: ["project"] });
+		const count = await store.count({ tags: ["project"] });
+
+		assert.equal(page.items.length, 50);
+		assert.notEqual(page.nextCursor, null);
+		assert.equal(count.count, 90);
+		assert.equal(count.catalogRevision, page.catalogRevision);
+		assert.equal(count.coverage.kind, "complete");
+		assert.equal((await store.count({ text: "project memo" })).count, 90);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("IndexedDB clear 原子保留指定服务元数据且重开后仍可读取", async () => {
+	const databaseName = uniqueDatabaseName("clear-preserved-meta");
+	const store = createStore(databaseName);
+	const legacyCompletion = { sourceId: "legacy-index", sourceRevision: "legacy-revision" };
+	const monthlyCheckpoint = { version: 1, pending: ["2026-08"], updatedAt: 123 };
+	await store.open();
+	try {
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", [
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 1, "09:00", "before rebuild"),
+		]));
+		await store.setMeta("legacyMigrationCompletion", legacyCompletion);
+		await store.setMeta("monthlyProjectionCheckpoint", monthlyCheckpoint);
+		await store.setMeta("catalog-derived-sentinel", { stale: true });
+
+		await store.clear(["legacyMigrationCompletion", "monthlyProjectionCheckpoint"]);
+
+		assert.deepEqual(await store.listFiles(), []);
+		assert.deepEqual(await store.getMeta("legacyMigrationCompletion"), legacyCompletion);
+		assert.deepEqual(await store.getMeta("monthlyProjectionCheckpoint"), monthlyCheckpoint);
+		assert.equal(await store.getMeta("catalog-derived-sentinel"), null);
+		store.close();
+
+		const reopened = createStore(databaseName);
+		await reopened.open();
+		try {
+			assert.deepEqual(await reopened.getMeta("legacyMigrationCompletion"), legacyCompletion);
+			assert.deepEqual(await reopened.getMeta("monthlyProjectionCheckpoint"), monthlyCheckpoint);
+		} finally {
+			reopened.close();
+		}
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("IndexedDB 在一次扫描进度提交中保存 coverage、checkpoint 与失败路径", async () => {
+	const databaseName = uniqueDatabaseName("scan-progress");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		const coverage = {
+			kind: "rebuilding" as const,
+			coveredFromDate: "2026-08-09",
+			pendingFileCount: 1,
+			coveredFileCount: 1,
+			totalFileCount: 2,
+		};
+		const checkpoint = { pendingPaths: ["Journal/2026-08-08.md"], updatedAt: 123 };
+		const failures = [{ sourcePath: "Journal/2026-08-07.md", message: "read failed" }];
+
+		await store.saveScanProgress(coverage, [
+			{ key: "catalogCheckpoint", value: checkpoint },
+			{ key: "catalogFailedPaths", value: failures },
+		]);
+
+		assert.deepEqual(await store.getCoverage(), coverage);
+		assert.deepEqual(await store.getMeta("catalogCheckpoint"), checkpoint);
+		assert.deepEqual(await store.getMeta("catalogFailedPaths"), failures);
+		assert.equal(store.getLifecycle().state, "rebuilding");
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("CAT-QUERY-001 / CAT-TAG-001：IndexedDB 搜索保持子串语义，父标签包含嵌套标签", async () => {
+	const databaseName = uniqueDatabaseName("substring-parent-tag");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", [
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 1, "09:00", "Notebook 123456", {
+				tags: ["project/knomo/ui"],
+			}),
+			makeObservation("Journal/2026-08-09.md", "2026-08-09", 2, "10:00", "unrelated", {
+				tags: ["personal"],
+			}),
+		]));
+
+		assert.deepEqual((await store.query({ limit: 50, text: "book" })).items.map((item) => item.content), ["Notebook 123456"]);
+		assert.deepEqual((await store.query({ limit: 50, text: "123" })).items.map((item) => item.content), ["Notebook 123456"]);
+		assert.deepEqual((await store.query({ limit: 50, tags: ["project"] })).items.map((item) => item.content), ["Notebook 123456"]);
+		assert.deepEqual((await store.query({ limit: 50, tags: ["project/knomo"] })).items.map((item) => item.content), ["Notebook 123456"]);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("CAT-PAGE-001：IndexedDB 连续遍历 1001 条记录不重复、不漏项", async () => {
+	const databaseName = uniqueDatabaseName("large-pagination");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		const observations = Array.from({ length: 1_001 }, (_, index) => makeObservation(
+			"Journal/2026-08-09.md",
+			"2026-08-09",
+			index + 1,
+			"09:00",
+			`memo-${index.toString().padStart(4, "0")}`,
+		));
+		await store.replaceFilePartition(makePartition("Journal/2026-08-09.md", "2026-08-09", observations));
+
+		const observationKeys: string[] = [];
+		let cursor = null;
+		do {
+			const page = await store.query({ limit: 37, cursor });
+			assert.equal(page.invalidated, false);
+			observationKeys.push(...page.items.map((item) => item.observationKey));
+			cursor = page.nextCursor;
+		} while (cursor !== null);
+
+		assert.equal(observationKeys.length, 1_001);
+		assert.equal(new Set(observationKeys).size, 1_001);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("IDB-DELETE-REBUILD：删除本机 Catalog 后可从 Daily 分区重建", async () => {
+	const databaseName = uniqueDatabaseName("delete-rebuild");
+	let store = createStore(databaseName);
+	await store.open();
+	await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", [
+		makeObservation("2026-08-09.md", "2026-08-09", 1, "09:00", "before delete"),
+	]));
+	store.close();
+	await deleteDatabase(databaseName);
+
+	store = createStore(databaseName);
+	await store.open();
+	try {
+		assert.deepEqual(await store.listFiles(), []);
+		await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", [
+			makeObservation("2026-08-09.md", "2026-08-09", 1, "09:00", "rebuilt"),
+		]));
+		assert.deepEqual((await store.query({ limit: 50 })).items.map((item) => item.content), ["rebuilt"]);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("损坏 schema 被识别并重建为可用的空 Catalog", async () => {
+	const databaseName = uniqueDatabaseName("corrupt");
+	const corrupt = await openRawDatabase(databaseName, 1, (database) => database.createObjectStore("wrong"));
+	corrupt.close();
+
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		assert.deepEqual(await store.listFiles(), []);
+		await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", []));
+		assert.equal((await store.listFiles()).length, 1);
+	} finally {
+		store.close();
+		await deleteDatabase(databaseName);
+	}
+});
+
+test("IDB-BLOCKED：升级被旧连接阻塞时立即降级到有界内存 Store", async () => {
+	const databaseName = uniqueDatabaseName("blocked");
+	const blocker = await openRawDatabase(databaseName, 1, (database) => database.createObjectStore("legacy"));
+	const primary = createStore(databaseName, { version: 2 });
+	const fallback = new InMemoryMemoCatalogStore(150);
+	const store = new FallbackMemoCatalogStore(primary, fallback);
+	await store.open();
+	assert.equal(store.isUsingFallback, true);
+	assert.equal(store.getLifecycle().state, "degraded");
+	assert.equal(store.getLifecycle().persistent, false);
+	await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", []));
+	assert.equal((await store.listFiles()).length, 1);
+	store.close();
+	blocker.close();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await deleteDatabase(databaseName);
+});
+
+test("IDB-UPGRADE-ABORT：schema 升级中止时旧功能可用且 Catalog 降级", async () => {
+	const databaseName = uniqueDatabaseName("upgrade-abort");
+	const primary = createStore(databaseName, {
+		beforeUpgrade: () => {
+			throw new Error("test upgrade abort");
+		},
+	});
+	const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore(150));
+	await store.open();
+	assert.equal(store.isUsingFallback, true);
+	assert.equal(store.getLifecycle().state, "degraded");
+	await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", []));
+	assert.equal((await store.listFiles()).length, 1);
+	store.close();
+	await deleteDatabase(databaseName);
+});
+
+test("本机 Catalog 降级后可显式重连持久化存储", async () => {
+	const databaseName = uniqueDatabaseName("retry-fallback");
+	const blocker = await openRawDatabase(databaseName, 1, (database) => database.createObjectStore("legacy"));
+	const store = new FallbackMemoCatalogStore(
+		createStore(databaseName, { version: 2 }),
+		new InMemoryMemoCatalogStore(),
+	);
+	await store.open();
+	assert.equal(store.isUsingFallback, true);
+	await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", []));
+
+	blocker.close();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await store.open();
+
+	assert.equal(store.isUsingFallback, false);
+	assert.equal(store.getLifecycle().state, "ready");
+	assert.deepEqual(await store.listFiles(), []);
+	store.close();
+	await deleteDatabase(databaseName);
+});
+
+test("IDB-VERSIONCHANGE：运行期连接失效后自动重开，无法重开时安全切换为 partial 内存缓存", async () => {
+	const databaseName = uniqueDatabaseName("versionchange");
+	const primary = createStore(databaseName);
+	let recoveryCount = 0;
+	const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore(), () => {
+		recoveryCount += 1;
+	});
+	await store.open();
+	await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", []));
+	primary.close();
+	assert.equal((await store.listFiles()).length, 1, "同版本连接关闭后应自动重开");
+	assert.equal(recoveryCount, 1);
+
+	const newer = await openRawDatabase(databaseName, 3, () => undefined);
+	assert.equal(primary.getLifecycle().state, "read-only");
+	assert.deepEqual(await store.listFiles(), []);
+	assert.equal(store.isUsingFallback, true);
+	assert.equal(store.getLifecycle().state, "degraded");
+	assert.equal(recoveryCount, 2);
+	await store.setCoverage({
+		kind: "complete",
+		coveredFromDate: "2026-08-09",
+		pendingFileCount: 0,
+		coveredFileCount: 1,
+		totalFileCount: 1,
+	});
+	assert.equal((await store.getCoverage()).kind, "partial");
+	store.close();
+	newer.close();
+	await deleteDatabase(databaseName);
+});
+
+test("IDB-EVICTION：运行期数据库被删除后重开为 partial，并请求从 Daily 重建", async () => {
+	const databaseName = uniqueDatabaseName("eviction");
+	const primary = createStore(databaseName);
+	let recoveryCount = 0;
+	const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore(), () => {
+		recoveryCount += 1;
+	});
+	await store.open();
+	await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", [
+		makeObservation("2026-08-09.md", "2026-08-09", 1, "09:00", "evicted"),
+	]));
+	await store.setCoverage({
+		kind: "complete",
+		coveredFromDate: "2026-08-09",
+		pendingFileCount: 0,
+		coveredFileCount: 1,
+		totalFileCount: 1,
+	});
+
+	await deleteDatabase(databaseName);
+	assert.equal(primary.getLifecycle().state, "read-only");
+	assert.deepEqual(await store.listFiles(), []);
+	assert.equal(recoveryCount, 1);
+	assert.equal((await store.getCoverage()).kind, "partial");
+	assert.equal(store.getLifecycle().state, "ready");
+	store.close();
+	await deleteDatabase(databaseName);
+});
+
+test("IDB-TRANSACTION-ABORT：运行期事务失败降级为 partial 内存 Catalog", async () => {
+	const databaseName = uniqueDatabaseName("transaction-abort");
+	const primary = createStore(databaseName);
+	const originalReplace = primary.replaceFilePartition.bind(primary);
+	let failOnce = true;
+	primary.replaceFilePartition = async (partition) => {
+		if (failOnce) {
+			failOnce = false;
+			throw new Error("Memo Catalog IndexedDB transaction aborted.");
+		}
+		return originalReplace(partition);
+	};
+	const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+	await store.open();
+
+	await store.replaceFilePartition(makePartition("2026-08-09.md", "2026-08-09", []));
+	assert.equal(store.isUsingFallback, true);
+	assert.equal(store.getLifecycle().state, "degraded");
+	assert.equal((await store.getCoverage()).kind, "partial");
+	assert.equal((await store.listFiles()).length, 1);
+	store.close();
+	await deleteDatabase(databaseName);
+});
+
+function createStore(
+	databaseName: string,
+	overrides: Partial<{ version: number; beforeUpgrade: () => void }> = {},
+): IndexedDbMemoCatalogStore {
+	return new IndexedDbMemoCatalogStore(databaseName, {
+		factory: indexedDB,
+		keyRange: IDBKeyRange,
+		...overrides,
+	});
+}
+
+function makePartition(sourcePath: string, logicalDate: string, observations: MemoObservation[]): CatalogFilePartition {
+	return buildCatalogPartition({
+		inventory: { sourcePath, logicalDate, mtime: 100, size: 200 },
+		sourceRevision: `sha-${sourcePath}-${observations.length}`,
+		observations,
+		parserVersion: 1,
+		settingsFingerprint: "settings-v1",
+		auditedAt: 123,
+	});
+}
+
+function makeObservation(
+	sourcePath: string,
+	logicalDate: string,
+	startLine: number,
+	time: string,
+	content: string,
+	overrides: Partial<MemoObservation> = {},
+): MemoObservation {
+	return {
+		occurrenceIndex: 0,
+		occurrenceCount: 1,
+		sourcePath,
+		sourceRevision: "sha",
+		rawBlockHash: `raw-${startLine}`,
+		logicalDate,
+		section: "## Memos",
+		startLine,
+		endLine: startLine,
+		time,
+		content,
+		contentHash: `hash-${startLine}`,
+		existingBlockId: null,
+		tags: [],
+		links: [],
+		images: [],
+		tasks: [],
+		timeBuoyDates: [],
+		...overrides,
+	};
+}
+
+function uniqueDatabaseName(suffix: string): string {
+	return `knomo-catalog-test-${suffix}-${Date.now()}-${Math.random()}`;
+}
+
+function openRawDatabase(
+	databaseName: string,
+	version: number,
+	onUpgrade: (database: IDBDatabase) => void,
+): Promise<IDBDatabase> {
+	return new Promise<IDBDatabase>((resolve, reject) => {
+		const request = indexedDB.open(databaseName, version);
+		request.onupgradeneeded = () => onUpgrade(request.result);
+		request.onsuccess = () => resolve(request.result);
+		request.onerror = () => reject(request.error);
+	});
+}
+
+function deleteDatabase(databaseName: string): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const request = indexedDB.deleteDatabase(databaseName);
+		request.onsuccess = () => resolve();
+		request.onerror = () => reject(request.error);
+		request.onblocked = () => reject(new Error(`Blocked while deleting ${databaseName}.`));
+	});
+}

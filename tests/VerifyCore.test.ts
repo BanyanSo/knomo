@@ -11,6 +11,7 @@ interface VerifyCheck {
 }
 
 interface VerifyCore {
+	checks: readonly VerifyCheck[];
 	FORBIDDEN_SOURCE_PATTERN: RegExp;
 	runChecks: (checks: readonly VerifyCheck[]) => number;
 	scanFiles: (pathsToScan: readonly string[], pattern: RegExp) => number;
@@ -113,6 +114,45 @@ test("verify core covers project-specific Obsidian source constraints", async ()
 	}
 });
 
+test("verify 仅豁免两个迁移文件中的单次精确清理语句", async () => {
+	const core = await loadVerifyCore();
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-verify-"));
+	const previousCwd = process.cwd();
+	try {
+		process.chdir(tempDir);
+		for (const [file, statement] of [
+			["src/services/LegacyTrashMigrationService.ts", "await this.app.vault.delete(folder, true);"],
+			["src/settings/MonthlyFolderMigrationService.ts", "await this.plugin.app.vault.delete(sourceFile);"],
+		] as const) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			const scan = () => core.scanFiles([file], core.FORBIDDEN_SOURCE_PATTERN);
+			fs.writeFileSync(file, `\t${statement}\n`);
+			assert.equal(scan(), 0);
+			assert.equal(core.scanFiles([path.resolve(file)], core.FORBIDDEN_SOURCE_PATTERN), 0);
+			for (const source of [
+				statement.replace(/folder|sourceFile/u, "otherFile"),
+				statement.replace("delete(", "trash("),
+				statement.replace(");", ", true);"),
+				`${statement}\n${statement}`,
+				`${statement} globalThis.crypto;`,
+				`${statement}\nawait this.app.vault.delete(otherFile);`,
+				`${statement}\nglobalThis.crypto;`,
+			]) {
+				fs.writeFileSync(file, source);
+				assert.ok(withCapturedConsoleError(() => assert.equal(scan(), 1, source)).length);
+			}
+			const otherFile = `${file}.copy.ts`;
+			fs.writeFileSync(otherFile, statement);
+			withCapturedConsoleError(() => assert.equal(core.scanFiles([otherFile], core.FORBIDDEN_SOURCE_PATTERN), 1));
+			fs.writeFileSync(file, `${statement}   `);
+			withCapturedConsoleError(() => assert.equal(core.scanFiles([file], /[ \t]+$/u), 1));
+		}
+	} finally {
+		process.chdir(previousCwd);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
 test("verify core stops checks after the first failure", async () => {
 	const verifyCore = await loadVerifyCore();
 	const visited: string[] = [];
@@ -147,4 +187,29 @@ test("verify core stops checks after the first failure", async () => {
 
 	assert.deepEqual(visited, ["first", "second"]);
 	assert.deepEqual(messages, ["\n==> first", "\n==> second"]);
+});
+
+test("verify whitespace check is independent of local docs and still checks README", async () => {
+	const verifyCore = await loadVerifyCore();
+	const check = verifyCore.checks.find((entry) => entry.name === "trailing whitespace");
+	assert.ok(check);
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-verify-"));
+	const previousCwd = process.cwd();
+	try {
+		fs.writeFileSync(path.join(tempDir, "README.md"), "clean\n", "utf8");
+		process.chdir(tempDir);
+		assert.equal(check.run(), 0);
+		fs.mkdirSync("docs/architecture", { recursive: true });
+		fs.writeFileSync("docs/notes.md", "local notes   \n", "utf8");
+		fs.writeFileSync("docs/architecture/design.md", "local design   \n", "utf8");
+		assert.equal(check.run(), 0);
+		fs.writeFileSync("README.md", "tracked documentation   \n", "utf8");
+		const messages = withCapturedConsoleError(() => {
+			assert.equal(check.run(), 1);
+		});
+		assert.deepEqual(messages, ["README.md:1: tracked documentation   "]);
+	} finally {
+		process.chdir(previousCwd);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	}
 });

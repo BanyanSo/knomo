@@ -1,4 +1,4 @@
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
 import {
 	formatMobileSearchEmptyTitle,
@@ -21,6 +21,7 @@ type MobileSearchSurface = "mobile-search";
 interface OpenMobileSearchOptions {
 	focusInput?: boolean;
 	changeIntent?: CardFlowChangeIntent;
+	refreshRemoteResults?: boolean;
 }
 
 interface MobileSearchControllerOptions {
@@ -31,6 +32,7 @@ interface MobileSearchControllerOptions {
 	getRootEl: () => HTMLElement | null;
 	isMobileLayout: () => boolean;
 	getMemos: () => MemoRecord[];
+	getMatchedTotalCount?: () => number | null;
 	registerDomEvent: <K extends keyof HTMLElementEventMap>(
 		target: HTMLElement,
 		type: K,
@@ -56,6 +58,14 @@ interface MobileSearchControllerOptions {
 	handleMarkdownInternalLinkClick: (event: MouseEvent) => void;
 	handleTaskCheckboxClick: (event: MouseEvent) => void;
 	handleTaskCheckboxChange: (event: Event) => void;
+	loadRemoteResults?: (
+		query: string,
+		dateFilter: SearchDateFilter | null,
+		recordStatsFilter: RecordStatsSearchFilter | null,
+		reset: boolean,
+	) => Promise<void>;
+	hasRemoteNextPage?: () => boolean;
+	restoreRemoteResults?: () => Promise<void>;
 }
 
 export class MobileSearchController {
@@ -151,6 +161,9 @@ export class MobileSearchController {
 		if (options.focusInput !== false) {
 			this.focusInputNow();
 		}
+		if (options.refreshRemoteResults) {
+			void this.refreshRemoteResults(true, options.changeIntent ?? "content-change");
+		}
 	}
 
 	ensurePage(): void {
@@ -216,6 +229,7 @@ export class MobileSearchController {
 		this.options.setCardFlowPaused(false);
 		this.options.syncRootState();
 		this.options.restoreCardFlowScrollTop(scrollTop);
+		void this.options.restoreRemoteResults?.();
 	}
 
 	removePage(): void {
@@ -248,7 +262,7 @@ export class MobileSearchController {
 			if (changeIntent === "view-scope-change") {
 				this.visibleCount = this.options.batchSize;
 			}
-			this.renderResults(changeIntent);
+			void this.refreshRemoteResults(true, changeIntent);
 		}, this.options.debounceMs);
 	}
 
@@ -266,7 +280,7 @@ export class MobileSearchController {
 		this.dateFilter = this.dateFilter === filter ? null : filter;
 		this.recordStatsFilter = null;
 		this.visibleCount = this.options.batchSize;
-		this.renderResults(this.getChangeIntent(previousViewStateKey));
+		void this.refreshRemoteResults(true, this.getChangeIntent(previousViewStateKey));
 	}
 
 	resetState(): void {
@@ -292,7 +306,24 @@ export class MobileSearchController {
 
 	loadMore(): void {
 		this.visibleCount += this.options.batchSize;
+		const matchedCount = this.getMatchedMemos(this.query.trim().toLowerCase()).length;
+		if (this.visibleCount >= matchedCount && this.options.hasRemoteNextPage?.() === true) {
+			void this.refreshRemoteResults(false);
+			return;
+		}
 		this.renderResults();
+	}
+
+	private async refreshRemoteResults(reset: boolean, changeIntent: CardFlowChangeIntent = "content-change"): Promise<void> {
+		if (this.options.loadRemoteResults === undefined) {
+			this.renderResults(changeIntent);
+			return;
+		}
+		try {
+			await this.options.loadRemoteResults(this.query, this.dateFilter, this.recordStatsFilter, reset);
+		} finally {
+			this.renderResults(changeIntent);
+		}
 	}
 
 	renderResults(changeIntent: CardFlowChangeIntent = "content-change"): void {
@@ -327,17 +358,22 @@ export class MobileSearchController {
 			this.options.restoreElementScrollTop(resultsEl, scrollTop);
 			return;
 		}
-		const summary = formatMobileSearchSummary(query, this.dateFilter, memos.length, this.recordStatsFilter);
-		if (summary !== null) {
-			renderKnomoListSummary(resultsEl, summary);
+		const matchedTotalCount = this.options.getMatchedTotalCount === undefined
+			? memos.length
+			: this.options.getMatchedTotalCount();
+		if (matchedTotalCount !== null) {
+			const summary = formatMobileSearchSummary(query, this.dateFilter, matchedTotalCount, this.recordStatsFilter);
+			if (summary !== null) {
+				renderKnomoListSummary(resultsEl, summary);
+			}
 		}
 		const visibleMemos = memos.slice(0, this.visibleCount);
 		for (const [index, memo] of visibleMemos.entries()) {
 			this.options.renderMemoCard(resultsEl, memo, generation, index);
 		}
-		if (visibleMemos.length < memos.length) {
+		if (visibleMemos.length < memos.length || this.options.hasRemoteNextPage?.() === true) {
 			renderKnomoLoadMoreButton(resultsEl, {
-				remainingCount: memos.length - visibleMemos.length,
+				remainingCount: Math.max(1, (matchedTotalCount ?? memos.length) - visibleMemos.length),
 				action: "load-more-mobile-search",
 				extraClass: "knomo-mobile-search-more",
 			});

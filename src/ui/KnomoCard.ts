@@ -2,68 +2,68 @@ import { setIcon } from "obsidian";
 
 import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
-import type { MemoRecord } from "../types/memo";
+import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { TimeBuoyDateStatus } from "../types/timeBuoy";
 import { getMemoContentStats } from "../utils/memoContentStats";
-import { formatMemoIssue } from "../utils/serviceText";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
 	getMemoCardActions,
 	getMemoCardShell,
 	getMemoSourceReferenceMeta,
-	getMemoWarningText,
 	getTrashCardActions,
 	getTrashMemoCardClass,
-	getTrashMemoWarningText,
 	isCjkMemoContent,
+	isMemoCardMenuReady,
 } from "./KnomoCardMetadata";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
+import { getMemoRenderKey } from "./MemoRenderRevision";
+import { formatObservationDisplayTime } from "./MemoDisplayFormatters";
+import type { MemoTimePresentation } from "./RecentTimeFlowPresentation";
 
 export interface MemoCardTimeBuoy {
 	status: TimeBuoyDateStatus;
 	label: string;
 }
 
-export interface RenderMemoCardOptions {
+export interface RenderMemoCardOptions<TMemo extends MemoRecord = MemoRecord> {
 	generation: number;
 	renderIndex: number;
 	includeActions: boolean;
 	randomCard: boolean;
 	timeBuoy?: MemoCardTimeBuoy;
+	timePresentation?: MemoTimePresentation;
 	activeMenuMemoId: string | null;
-	deletedMemoIds: ReadonlySet<string>;
 	formatDisplayTime: (value: string) => string;
-	formatSettingsText: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
-	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
-	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
-	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
+	getMemoCardPreview: (memo: TMemo) => MemoCardPreview;
+	queueMemoMarkdown: (memo: TMemo, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: TMemo, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
 	queueSourceReferenceMarkdown: (container: HTMLElement, text: string, sourcePath: string, generation: number) => void;
 	reusedBodyEl?: HTMLElement | null;
 	reusedImagesEl?: HTMLElement | null;
 }
 
-export interface RenderTrashMemoCardOptions {
+export interface RenderTrashMemoCardOptions<TMemo extends MemoRecord = MemoRecord> {
 	generation: number;
 	renderIndex: number;
 	busyAction: TrashAction | null;
 	formatDisplayTime: (value: string) => string;
 	formatOptionalTime: (value: string | undefined) => string;
-	formatDeleteSource: (value: string) => string;
-	formatSettingsText: (value: string) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
-	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
-	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
-	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
+	getMemoCardPreview: (memo: TMemo) => MemoCardPreview;
+	queueMemoMarkdown: (memo: TMemo, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: TMemo, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
 }
 
-export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): HTMLElement {
+export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLElement, memo: TMemo, options: RenderMemoCardOptions<TMemo>): HTMLElement {
 	const markdownPriority = options.getMarkdownPriority(options.renderIndex);
+	const cardMenuReady = isMemoCardMenuReady(memo);
 	const shell = getMemoCardShell({
 		memoId: memo.id,
+		renderKey: getMemoRenderKey(memo),
 		includeActions: options.includeActions,
-		activeMenuMemoId: options.activeMenuMemoId,
+		activeMenuMemoId: cardMenuReady ? options.activeMenuMemoId : null,
 	});
 	const timeBuoyClass = options.timeBuoy === undefined
 		? ""
@@ -75,28 +75,42 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 		attr: shell.attrs,
 	});
 	const head = card.createDiv({ cls: "knomo-card-head" });
+	card.setAttr("data-time-presentation", JSON.stringify(options.timePresentation ?? { mode: "full" }));
 	renderMemoCardTime(head, memo, options);
 	if (options.includeActions) {
 		const menu = head.createEl("button", {
 			cls: "knomo-card-menu",
 			attr: {
 				type: "button",
-				"aria-label": t("card.moreActions"),
-				"aria-expanded": options.activeMenuMemoId === memo.id ? "true" : "false",
-				"data-action": "toggle-card-menu",
-				"data-memo-id": memo.id,
+				"aria-label": cardMenuReady ? t("card.moreActions") : t("card.actionsPreparing"),
+				"aria-expanded": cardMenuReady && options.activeMenuMemoId === memo.id ? "true" : "false",
+				...(cardMenuReady
+					? { "data-action": "toggle-card-menu", "data-memo-id": memo.id }
+					: { "aria-disabled": "true", title: t("card.actionsPreparing") }),
 			},
 		});
+		menu.disabled = !cardMenuReady;
 		setIcon(menu, "more-horizontal");
 
-		const actions = head.createDiv({ cls: "knomo-card-actions", attr: { role: "menu" } });
-		for (const action of getMemoCardActions()) {
-			renderCardAction(actions, memo.id, action.action, getMemoActionLabel(action.action), action.className);
+		if (cardMenuReady) {
+			const actions = head.createDiv({
+				cls: "knomo-card-actions",
+				attr: { role: "menu" },
+			});
+			for (const action of getMemoCardActions(memo)) {
+				renderCardAction(
+					actions,
+					memo.id,
+					action.action,
+					getMemoActionLabel(action.action),
+					action.className,
+				);
+			}
+			actions.createDiv({
+				cls: "knomo-card-word-count",
+				text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }),
+			});
 		}
-		actions.createDiv({
-			cls: "knomo-card-word-count",
-			text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }),
-		});
 	}
 
 	if (options.reusedBodyEl !== undefined && options.reusedBodyEl !== null) {
@@ -116,7 +130,7 @@ export function renderKnomoMemoCard(container: HTMLElement, memo: MemoRecord, op
 	return card;
 }
 
-function renderMemoCardTime(container: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): void {
+function renderMemoCardTime<TMemo extends MemoRecord>(container: HTMLElement, memo: TMemo, options: RenderMemoCardOptions<TMemo>): void {
 	const attrs: Record<string, string> = {
 		type: "button",
 		"aria-label": t("card.openDaily"),
@@ -126,11 +140,20 @@ function renderMemoCardTime(container: HTMLElement, memo: MemoRecord, options: R
 	if (options.randomCard) {
 		attrs["data-random-reunion-card"] = "true";
 	}
-	container.createEl("button", {
+	const recent = options.timePresentation?.mode === "recent" ? options.timePresentation : null;
+	const button = container.createEl("button", {
 		cls: "knomo-card-time",
-		text: options.formatDisplayTime(memo.createdAt),
+		text: recent !== null ? undefined : memo.catalog === undefined
+			? options.formatDisplayTime(memo.createdAt)
+			: formatObservationDisplayTime(memo.catalog.observation),
 		attr: attrs,
 	});
+	if (recent !== null) {
+		button.addClass("knomo-recent-time");
+		const icon = button.createSpan({ cls: "knomo-recent-time-icon", attr: { "aria-hidden": "true" } });
+		setIcon(icon, recent.icon);
+		button.createSpan({ text: recent.time });
+	}
 }
 
 function renderMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBuoy | undefined): void {
@@ -169,7 +192,7 @@ function renderMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBuoy | 
 	setIcon(indicator, KNOMO_TIME_BUOY_ICON);
 }
 
-export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecord, options: RenderTrashMemoCardOptions): HTMLElement {
+export function renderKnomoTrashMemoCard<TMemo extends MemoRecord>(container: HTMLElement, memo: TMemo, options: RenderTrashMemoCardOptions<TMemo>): HTMLElement {
 	const markdownPriority = options.getMarkdownPriority(options.renderIndex);
 	const card = container.createEl("article", {
 		cls: getTrashMemoCardClass(options.busyAction),
@@ -178,7 +201,7 @@ export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecor
 	const head = card.createDiv({ cls: "knomo-card-head" });
 	head.createDiv({ cls: "knomo-card-time", text: t("trash.createdAt", { time: options.formatDisplayTime(memo.createdAt) }) });
 	const actions = head.createDiv({ cls: "knomo-trash-actions" });
-	for (const action of getTrashCardActions(options.busyAction)) {
+	for (const action of getTrashCardActions(options.busyAction, memo.trashItem?.purgeAllowed === true)) {
 		renderTrashAction(
 			actions,
 			memo.id,
@@ -197,31 +220,21 @@ export function renderKnomoTrashMemoCard(container: HTMLElement, memo: MemoRecor
 		renderMemoCardImages: options.renderMemoCardImages,
 	});
 
-	const meta = card.createDiv({ cls: "knomo-card-meta knomo-trash-meta" });
+	const meta = card.createDiv({ cls: "knomo-card-meta" });
 	meta.createDiv({ text: t("trash.deletedAt", { time: options.formatOptionalTime(memo.deletedAt) }) });
-	if (memo.deleteSource !== undefined && memo.deleteSource.trim().length > 0) {
-		meta.createDiv({ text: t("trash.deleteSource", { source: options.formatDeleteSource(memo.deleteSource) }) });
-	}
-	const warningText = getTrashMemoWarningText(memo);
-	if (warningText !== null) {
-		card.createDiv({
-			cls: "knomo-card-warning",
-			text: memo.issue === null ? options.formatSettingsText(warningText) : formatMemoIssue(memo.issue),
-		});
-	}
 	return card;
 }
 
-interface RenderMemoCardBodyOptions {
+interface RenderMemoCardBodyOptions<TMemo extends MemoRecord = MemoRecord> {
 	generation: number;
 	markdownPriority: MarkdownRenderPriority;
-	getMemoCardPreview: (memo: MemoRecord) => MemoCardPreview;
-	queueMemoMarkdown: (memo: MemoRecord, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
-	renderMemoCardImages: (container: HTMLElement, memo: MemoRecord, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
+	getMemoCardPreview: (memo: TMemo) => MemoCardPreview;
+	queueMemoMarkdown: (memo: TMemo, container: HTMLElement, generation: number, priority: MarkdownRenderPriority, previewText: string) => void;
+	renderMemoCardImages: (container: HTMLElement, memo: TMemo, images: MemoPreviewImage[], generation: number, reusedImagesEl?: HTMLElement | null) => void;
 	reusedImagesEl?: HTMLElement | null;
 }
 
-export function renderMemoCardBody(card: HTMLElement, memo: MemoRecord, options: RenderMemoCardBodyOptions): HTMLElement {
+export function renderMemoCardBody<TMemo extends MemoRecord>(card: HTMLElement, memo: TMemo, options: RenderMemoCardBodyOptions<TMemo>): HTMLElement {
 	const preview = options.getMemoCardPreview(memo);
 	const body = card.createDiv({ cls: "knomo-card-body" });
 	if (preview.text.trim().length > 0) {
@@ -232,38 +245,34 @@ export function renderMemoCardBody(card: HTMLElement, memo: MemoRecord, options:
 	return body;
 }
 
-function renderCardMeta(card: HTMLElement, memo: MemoRecord, options: RenderMemoCardOptions): void {
-	const sourceReference = getMemoSourceReferenceMeta(memo, options.deletedMemoIds);
+function renderCardMeta<TMemo extends MemoRecord>(card: HTMLElement, memo: TMemo, options: RenderMemoCardOptions<TMemo>): void {
+	const sourceReference = getMemoSourceReferenceMeta(memo);
 	if (sourceReference.type !== "none") {
 		const meta = card.createDiv({ cls: "knomo-card-meta knomo-source-reference markdown-rendered" });
-		if (sourceReference.type === "plain") {
-			meta.setText(`${t("reference.fromPrefix")}${sourceReference.sourceMemoId}`);
-		} else {
-			const referenceText = `${t("reference.fromPrefix")}${sourceReference.text}`;
-			options.queueSourceReferenceMarkdown(
-				meta,
-				referenceText,
-				sourceReference.sourcePath,
-				options.generation,
-			);
-		}
-	}
-	const warningText = getMemoWarningText(memo);
-	if (warningText !== null) {
-		card.createDiv({
-			cls: "knomo-card-warning",
-			text: memo.issue === null ? options.formatSettingsText(warningText) : formatMemoIssue(memo.issue),
-		});
+		const referenceText = `${t("reference.fromPrefix")}${sourceReference.text}`;
+		options.queueSourceReferenceMarkdown(
+			meta,
+			referenceText,
+			sourceReference.sourcePath,
+			options.generation,
+		);
 	}
 }
 
-function renderCardAction(container: HTMLElement, memoId: string, action: MemoAction, label: string, className: string): void {
+function renderCardAction(
+	container: HTMLElement,
+	memoId: string,
+	action: MemoAction,
+	label: string,
+	className: string,
+): void {
 	container.createEl("button", {
 		cls: className,
 		text: label,
 		attr: {
 			type: "button",
 			role: "menuitem",
+			"aria-label": label,
 			"data-memo-action": action,
 			"data-memo-id": memoId,
 		},
@@ -295,12 +304,11 @@ function getMemoActionLabel(action: MemoAction): string {
 	if (action === "open-daily") return t("card.openDaily");
 	if (action === "copy-text") return t("card.copyText");
 	if (action === "copy-link") return t("card.copyLink");
+	if (action === "mark-reviewed") return t("card.markReviewed");
 	return t("card.delete");
 }
 
 function getTrashActionLabel(action: TrashAction, busy: boolean): string {
-	if (action === "restore") {
-		return busy ? t("trash.restoring") : t("trash.restore");
-	}
-	return busy ? t("trash.purging") : t("trash.purge");
+	if (action === "purge") return busy ? t("trash.purging") : t("trash.purge");
+	return busy ? t("trash.restoring") : t("trash.restore");
 }

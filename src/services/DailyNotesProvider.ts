@@ -23,17 +23,29 @@ const DEFAULT_DAILY_NOTES_FORMAT = "YYYY-MM-DD";
 // 职责：只读取日记核心插件配置，不猜测用户的日记路径。
 export class DailyNotesProvider {
 	private cachedConfig: DailyNotesConfig | null = null;
+	private readonly listeners = new Set<() => void>();
 
 	constructor(private readonly app: App) {}
+
+	onChanged(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => { this.listeners.delete(listener); };
+	}
+
+	private setConfig(config: DailyNotesConfig | null): void {
+		const changed = JSON.stringify(config) !== JSON.stringify(this.cachedConfig);
+		this.cachedConfig = config;
+		if (changed) for (const listener of this.listeners) listener();
+	}
 
 	getConfig(): DailyNotesConfig | null {
 		const runtimeConfig = this.readRuntimeConfig();
 		if (runtimeConfig.type === "config") {
-			this.cachedConfig = runtimeConfig.config;
+			this.setConfig(runtimeConfig.config);
 			return runtimeConfig.config;
 		}
 		if (runtimeConfig.type === "disabled") {
-			this.cachedConfig = null;
+			this.setConfig(null);
 			return null;
 		}
 		return this.cachedConfig;
@@ -42,17 +54,17 @@ export class DailyNotesProvider {
 	async loadConfig(): Promise<DailyNotesConfig | null> {
 		const runtimeConfig = this.readRuntimeConfig();
 		if (runtimeConfig.type === "config") {
-			this.cachedConfig = runtimeConfig.config;
+			this.setConfig(runtimeConfig.config);
 			return runtimeConfig.config;
 		}
 		if (runtimeConfig.type === "disabled") {
-			this.cachedConfig = null;
+			this.setConfig(null);
 			return null;
 		}
 
 		const fileConfig = await this.readConfigFile();
-		this.cachedConfig = fileConfig;
-		return fileConfig;
+		if (fileConfig !== null) this.setConfig(fileConfig);
+		return this.cachedConfig;
 	}
 
 	private readRuntimeConfig(): RuntimeConfigResult {

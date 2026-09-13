@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoRecord } from "../src/types/memo";
+import type { MemoViewItem } from "../src/types/memoView";
 import { MemoSearchCache } from "../src/ui/MemoSearchCache";
 
 test("caches memo search text while the memo content key is unchanged", () => {
@@ -30,7 +30,7 @@ test("invalidates one memo search text when its content key changes", () => {
 	assert.equal(calls, 2);
 });
 
-function makeMemo(id: string): MemoRecord {
+function makeMemo(id: string): MemoViewItem {
 	return {
 		id,
 		createdAt: "2026-05-20T09:00:00",
@@ -38,32 +38,13 @@ function makeMemo(id: string): MemoRecord {
 		contentSnapshot: "memo",
 		contentHash: `hash-${id}`,
 		status: "active",
-		syncStatus: "synced",
-		source: "plugin_input",
-		version: 1,
 		tags: [],
 		links: [],
 		images: [],
-		references: [],
-		sourceMemoId: null,
-		issue: null,
-		lastMarkdownSyncAt: null,
-		lastMarkdownSyncSource: null,
 		dailyRef: {
 			path: "Daily/2026-05-20.md",
 			heading: "## Memos",
-			lastKnownBlock: "- 09:00:00 memo",
-			lastKnownHash: `daily-${id}`,
 			lineNumberHint: 1,
-			lastSyncedAt: null,
-		},
-		monthlyRef: {
-			path: "Knomo/Memos-2026-05.md",
-			dateHeading: "## [[2026-05-20]]",
-			lastKnownBlock: "- 09:00:00 memo",
-			lastKnownHash: `monthly-${id}`,
-			lineNumberHint: 1,
-			lastSyncedAt: null,
 		},
 	};
 }

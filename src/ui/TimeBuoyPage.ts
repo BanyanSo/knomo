@@ -17,16 +17,6 @@ export function renderTimeBuoyPage(
 	options: RenderTimeBuoyPageOptions,
 ): TimeBuoyPageRenderResult {
 	container.empty();
-	if (snapshot.rebuilding) {
-		const progress = snapshot.rebuildProgress;
-		const description = progress === null
-			? t("timeBuoy.rebuild.preparing")
-			: t("timeBuoy.rebuild.progress", { completed: progress.completed, total: progress.total });
-		const state = renderKnomoEmptyState(container, t("timeBuoy.rebuild.running"), description);
-		const actions = state.createDiv({ cls: "knomo-time-buoy-error-actions" });
-		renderActionButton(actions, t("timeBuoy.rebuild.cancel"), "cancel-time-buoy-rebuild");
-		return { panelEl: null, items: [] };
-	}
 	if (snapshot.loading) {
 		renderKnomoEmptyState(container, t("timeBuoy.loading"));
 		return { panelEl: null, items: [] };
@@ -35,7 +25,6 @@ export function renderTimeBuoyPage(
 		const state = renderKnomoEmptyState(container, t("timeBuoy.loadFailed"));
 		const actions = state.createDiv({ cls: "knomo-time-buoy-error-actions" });
 		renderActionButton(actions, t("timeBuoy.retry"), "retry-time-buoy");
-		renderActionButton(actions, t("timeBuoy.rebuild"), "rebuild-time-buoy");
 		return { panelEl: null, items: [] };
 	}
 	return renderTabs(container, snapshot, options.idPrefix);
@@ -102,6 +91,22 @@ function renderTabs(
 		}
 	}
 	const items = [...snapshot[snapshot.activeTab]];
+	if (activePanel !== null && snapshot.refreshError !== null) {
+		const error = activePanel.createDiv({ cls: "knomo-time-buoy-refresh-error", attr: { role: "alert" } });
+		error.createSpan({ text: t("timeBuoy.loadFailed") });
+		renderActionButton(error, t("timeBuoy.retry"), "retry-time-buoy");
+	}
+	if (activePanel !== null && snapshot.activeTab !== "today" && !snapshot.complete) {
+		activePanel.createDiv({
+			cls: "knomo-time-buoy-partial",
+			text: t("timeBuoy.partial"),
+			attr: {
+				role: "status",
+				"aria-live": "polite",
+				"data-time-buoy-partial": "",
+			},
+		});
+	}
 	if (activePanel !== null && items.length === 0) {
 		const copy = getEmptyCopy(snapshot.activeTab);
 		renderKnomoEmptyState(activePanel, copy.title, copy.description);

@@ -70,7 +70,7 @@ export interface MobileComposerControllerOptions {
 	getContainerEl: () => HTMLElement;
 	getRootEl: () => HTMLElement | null;
 	getComposerEl: () => HTMLElement | null;
-	getInputEl: () => HTMLTextAreaElement | null;
+	getInputEl: () => HTMLElement | null;
 	getComposerBarEl: () => HTMLElement | null;
 	getReferencePreviewEl: () => HTMLElement | null;
 	getLayout: () => MobileComposerLayoutMode;

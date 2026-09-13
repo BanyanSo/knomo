@@ -27,12 +27,12 @@ test("非默认旧目录的合法 Monthly 备份可清理，保留当前正文�
 test("完成后未知文件阻挡清理并报告路径，重试不重新导入", async () => {
 	for (const name of ["note.md", "private.txt"]) {
 		const f = await fixture();
-		const remove = f.vault.app.vault.delete;
-		f.vault.app.vault.delete = async () => { throw new Error("busy"); };
+		const remove = f.vault.app.fileManager.trashFile;
+		f.vault.app.fileManager.trashFile = async () => { throw new Error("busy"); };
 		await f.make().run();
 		const path = `Knomo/_knomo-system/${name}`;
 		await f.vault.app.vault.create(path, "keep");
-		f.vault.app.vault.delete = remove;
+		f.vault.app.fileManager.trashFile = remove;
 		const reads = f.sourceReads();
 		const report = await f.make().run();
 		assert.equal(report.status, "ready");
@@ -62,10 +62,10 @@ async function fixture(monthly = "Knomo") {
 		"2026082209000003": record("2026082209000003", "active") } });
 	const vault = new InMemoryVault({ [`${monthly}/_knomo-system/indexes/memo-index-2026-08.json`]: index, [DAILY]: "## Memos\n- 10:30 当前 Daily\n" });
 	Object.assign(vault.app, { metadataCache: { getFirstLinkpathDest: () => null } });
-	Object.assign(vault.app.vault, { delete: async (file: { path: string }) => {
+	Object.assign(vault.app, { fileManager: { trashFile: async (file: { path: string }) => {
 		for (const path of vault.paths()) if (path.startsWith(`${file.path}/`)) vault.remove(path);
 		vault.remove(file.path);
-	} });
+	} } });
 	const reader = new LegacyIndexReader(vault.app, () => monthly);
 	let sourceReads = 0;
 	let settingsWrites = 0;
@@ -224,12 +224,12 @@ test("completion 持久化是清理提交点；保留设置，自定义目录与
 	const f = await fixture("Archive/Custom");
 	await f.vault.app.vault.create("Archive/Custom/2026-08.md", "Monthly");
 	await f.vault.app.vault.create("Changed/_knomo-system/keep.json", "keep");
-	const remove = f.vault.app.vault.delete;
+	const remove = f.vault.app.fileManager.trashFile;
 	let fail = true;
-	f.vault.app.vault.delete = async (file, force) => {
+	f.vault.app.fileManager.trashFile = async (file) => {
 		assert.equal((await f.completion.read())?.completed, true);
 		if (fail) throw new Error("cleanup failed");
-		return remove(file, force);
+		return remove(file);
 	};
 	assert.equal((await f.make().run()).diagnostics[0]?.code, "legacy_cleanup_failed");
 	assert.equal((await f.completion.read())?.legacySystemRoot, "Archive/Custom/_knomo-system");
@@ -309,8 +309,8 @@ test("开发期 marker 不读取、不吸收、不清理，正式迁移自动执
 			f.vault.app.vault.read = async (file) => { assert.notEqual(file.path, path); return read(file); };
 			const exists = f.vault.app.vault.adapter.exists.bind(f.vault.app.vault.adapter);
 			f.vault.app.vault.adapter.exists = async (candidate) => { assert.notEqual(candidate, path); return exists(candidate); };
-			const remove = f.vault.app.vault.delete;
-			f.vault.app.vault.delete = async (file, force) => { assert.notEqual(file.path, path); return remove(file, force); };
+			const remove = f.vault.app.fileManager.trashFile;
+			f.vault.app.fileManager.trashFile = async (file) => { assert.notEqual(file.path, path); return remove(file); };
 			assert.equal((await f.make().run()).status, "ready");
 			assert.equal((await f.store.query()).items.length, 2);
 			assert.equal(f.settingsWrites(), 1);
@@ -363,7 +363,7 @@ test("自动迁移保留无关新版 Trash，部分结果与中断重试按确�
 
 test("completed 后迟到 Index 不重读、不新增 Trash，cleanup 故障保持 ready", async () => {
  const f = await fixture();
- f.vault.app.vault.delete = async () => { throw new Error("busy"); };
+ f.vault.app.fileManager.trashFile = async () => { throw new Error("busy"); };
  assert.equal((await f.make().run()).status, "ready");
  const before = (await f.store.query()).items;
  await f.vault.app.vault.create("Knomo/_knomo-system/indexes/memo-index-2026-09.json", "late bytes");
@@ -431,11 +431,11 @@ test("cleanup 不删除旧目录内 Markdown，活动旧索引损坏不阻塞 Tr
  // 先完成当前可识别源，再验证迟到 Markdown 的 housekeeping 边界。
  f.vault.remove("Knomo/_knomo-system/note.md");
  f.options.migrateSettings = async () => undefined;
- const remove = f.vault.app.vault.delete;
- f.vault.app.vault.delete = async () => { throw new Error("busy"); };
+ const remove = f.vault.app.fileManager.trashFile;
+ f.vault.app.fileManager.trashFile = async () => { throw new Error("busy"); };
  assert.equal((await f.make().run()).status, "ready");
  await f.vault.app.vault.create("Knomo/_knomo-system/note.md", "keep Daily");
- f.vault.app.vault.delete = remove;
+ f.vault.app.fileManager.trashFile = remove;
  assert.equal((await f.make().run()).status, "ready");
  assert.equal(f.vault.read("Knomo/_knomo-system/note.md"), "keep Daily");
 });

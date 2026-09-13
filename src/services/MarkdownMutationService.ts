@@ -429,7 +429,7 @@ export function findObservation(
 		&& item.endLine === handle.endLine
 		&& item.rawBlockHash === handle.rawBlockHash);
 	if (matches.length !== 1) throw new MarkdownMutationStaleError(actualPath);
-	return matches[0] as MemoObservation;
+	return matches[0];
 }
 
 function requireObservation(observation: MemoObservation | null): MemoObservation {
@@ -447,7 +447,7 @@ function findReplacementObservation(
 		&& item.existingBlockId === existingBlockId
 		&& normalizeRawBlock(getRawBlock(prepared.afterContent, item)) === normalizeRawBlock(afterRawBlock));
 	if (matches.length !== 1) throw new Error("Changed Daily observation is not unique.");
-	return matches[0] as MemoObservation;
+	return matches[0];
 }
 
 export function findAppendedObservation(
@@ -465,7 +465,7 @@ export function findAppendedObservation(
 			? left.startLine - right.startLine
 			: right.startLine - left.startLine);
 	if (matches.length === 0) throw new Error("Created Daily observation was not parsed.");
-	return matches[0] as MemoObservation;
+	return matches[0];
 }
 
 function isStaleError(error: unknown): boolean {

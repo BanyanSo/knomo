@@ -1,5 +1,5 @@
 import { initializeCatalogRuntime } from "./services/CatalogStartup";
-import { getLanguage, normalizePath, Notice, Platform, Plugin, TFile } from "obsidian";
+import { getLanguage, Notice, Platform, Plugin, TFile } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
@@ -605,10 +605,7 @@ export default class KnomoPlugin extends Plugin {
 				open: () => void;
 				openTabById?: (id: string) => void;
 			};
-		}).setting as {
-			open: () => void;
-			openTabById?: (id: string) => void;
-		};
+		}).setting;
 		setting.open();
 		setting.openTabById?.(this.manifest.id);
 	}

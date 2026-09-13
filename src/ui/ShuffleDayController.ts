@@ -173,10 +173,11 @@ export class ShuffleDayController {
 			this.error = formatServiceError(error, t("shuffleDay.failedDesc"));
 			this.options.showNotice(this.error);
 		} finally {
-			if (runId !== this.runId) return;
-			this.loading = false;
-			if (this.options.isShuffleDayActive()) {
-				this.options.requestRender();
+			if (runId === this.runId) {
+				this.loading = false;
+				if (this.options.isShuffleDayActive()) {
+					this.options.requestRender();
+				}
 			}
 		}
 	}

@@ -81,3 +81,15 @@ test("停止统一队列会向 active task 发出取消信号并废弃其结果"
 
 	await assert.rejects(active, /stopped/u);
 });
+
+test("后台任务将非 Error 拒绝规范化，并保留原 Error 和后续执行", async () => {
+	const queue = new LowPriorityWorkQueue(() => ({
+		setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay) as unknown as number,
+		clearTimeout: timer => globalThis.clearTimeout(timer as unknown as NodeJS.Timeout),
+	}));
+	const original = new Error("original");
+	await assert.rejects(queue.run(1, () => Promise.reject("failure")), error => error instanceof Error && error.message === "failure");
+	await assert.rejects(queue.run(1, () => Promise.reject(original)), error => error === original);
+	assert.equal(await queue.run(1, async () => 42), 42);
+	queue.stop();
+});

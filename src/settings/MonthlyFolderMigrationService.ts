@@ -101,7 +101,7 @@ export class MonthlyFolderMigrationService {
 					|| await this.plugin.app.vault.read(sourceFile) !== sourceText) throw new Error("Trash source changed; old file retained.");
 				assertTargetActive();
 				if (sourceFile.path !== sourcePath || this.plugin.app.vault.getAbstractFileByPath(sourcePath) !== sourceFile) throw new Error("Trash source moved before cleanup.");
-				await this.plugin.app.vault.delete(sourceFile);
+				await this.plugin.app.fileManager.trashFile(sourceFile);
 				if (await this.plugin.app.vault.adapter.exists(sourcePath)) throw new Error("Trash old file cleanup not confirmed.");
 			} catch (error) { trashError = String(error); }
 		}

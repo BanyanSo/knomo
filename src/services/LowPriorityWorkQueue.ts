@@ -49,7 +49,7 @@ export class LowPriorityWorkQueue implements LowPriorityWorkRunner {
 						if (this.stopped) throw stoppedError();
 						resolve(result);
 					} catch (error) {
-						reject(error);
+						reject(error instanceof Error ? error : new Error(String(error)));
 					}
 				},
 			};

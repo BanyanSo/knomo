@@ -437,7 +437,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 					}
 				} catch (error) {
 					transaction.abort();
-					reject(error);
+					reject(error instanceof Error ? error : new Error(String(error)));
 				}
 			};
 
@@ -525,7 +525,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 					}
 				} catch (error) {
 					transaction.abort();
-					reject(error);
+					reject(error instanceof Error ? error : new Error(String(error)));
 				}
 			};
 
@@ -675,13 +675,13 @@ function openCatalogDatabase(
 	return new Promise<IDBDatabase>((resolve, reject) => {
 		const request = factory.open(databaseName, version);
 		let settled = false;
-		let upgradeError: unknown = null;
+		let upgradeError: Error | null = null;
 		request.onupgradeneeded = (event) => {
 			try {
 				createCatalogSchema(request.result, request.transaction, event.oldVersion);
 				beforeUpgrade?.();
 			} catch (error) {
-				upgradeError = error;
+				upgradeError = error instanceof Error ? error : new Error(String(error));
 				request.transaction?.abort();
 			}
 		};
@@ -709,7 +709,7 @@ function openCatalogDatabase(
 			} catch (error) {
 				request.result.close();
 				settled = true;
-				reject(error);
+				reject(error instanceof Error ? error : new Error(String(error)));
 			}
 		};
 	});

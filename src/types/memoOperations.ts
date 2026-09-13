@@ -38,7 +38,7 @@ export interface MarkdownCopyInput {
 	createdAt?: Date;
 }
 
-export interface MarkdownMoveInput extends MarkdownCopyInput {}
+export type MarkdownMoveInput = MarkdownCopyInput;
 
 export interface MarkdownRemoveInput {
 	observation: ObservationHandle;

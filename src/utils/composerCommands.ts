@@ -20,7 +20,7 @@ export function runComposerCommand(value: string, anchor: number, head: number, 
 			selection = { from: from + 2, to: from + 2 };
 		} else {
 			const selected = value.slice(from, to);
-			if (/[\n\r\[\]|#^\\!*=`<>]/u.test(selected) || !selected.trim()) return { type: "unavailable" };
+			if (/[\n\r[\]|#^\\!*=`<>]/u.test(selected) || !selected.trim()) return { type: "unavailable" };
 			const start = from + selected.length - selected.trimStart().length;
 			const end = to - selected.length + selected.trimEnd().length;
 			edits.push({ from: start, to: start, insert: "[[" }, { from: end, to: end, insert: "]]" });

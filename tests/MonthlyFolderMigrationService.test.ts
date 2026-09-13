@@ -15,7 +15,7 @@ async function fixture(files: Record<string, string> = { [OLD]: collection() }) 
 	const { SettingsService, DEFAULT_KNOMO_SETTINGS } = await import("../src/services/SettingsService");
 	const { PluginDataStore } = await import("../src/services/PluginDataStore");
 	const vault = new InMemoryVault(files);
-	Object.assign(vault.app.vault, { delete: async (file: TFile) => vault.remove(file.path) });
+	Object.assign(vault.app, { fileManager: { trashFile: async (file: TFile) => vault.remove(file.path) } });
 	let data: unknown = { settings: { ...DEFAULT_KNOMO_SETTINGS, monthlyMemoFolder: "Old", excludeMonthlyMemosFromObsidian: false } };
 	let failSave = false;
 	let active = true;
@@ -38,11 +38,11 @@ test("Monthly 切换复制/合并完整集合，保存设置后才清理旧文�
 	const f = await fixture({ [OLD]: collection(), [NEW]: collection([item("s2")]), [marker]: "ignored", [development]: "ignored", "Old/Memos.md": "monthly", "Daily.md": "daily" });
 	const read = f.vault.app.vault.read.bind(f.vault.app.vault);
 	f.vault.app.vault.read = async (file) => { assert.notEqual(file.path, marker); assert.notEqual(file.path, development); return read(file); };
-	const remove = f.vault.app.vault.delete;
-	f.vault.app.vault.delete = async (file, force) => {
+	const remove = f.vault.app.fileManager.trashFile;
+	f.vault.app.fileManager.trashFile = async (file) => {
 		assert.equal(f.service.getSettings().monthlyMemoFolder, "New");
 		assert.equal((f.data() as { settings: { monthlyMemoFolder: string } }).settings.monthlyMemoFolder, "New");
-		return remove(file, force);
+		return remove(file);
 	};
 	assert.equal((await f.service.migrateMonthlyMemoFolder("New")).trashError, undefined);
 	assert.deepEqual(JSON.parse(f.vault.read(NEW)!).items.map((i: { snapshotId: string }) => i.snapshotId).sort(), ["s1", "s2"]);
@@ -91,7 +91,7 @@ test("目标写后抛错、验证失败、源变化、旧文件清理失败保�
 			};
 			const read = f.vault.app.vault.read.bind(f.vault.app.vault);
 			f.vault.app.vault.read = async (file) => { if (file.path === NEW && failure === "verify") throw new Error("read failed"); return read(file); };
-			if (failure === "cleanup") f.vault.app.vault.delete = async () => { throw new Error("cleanup failed"); };
+			if (failure === "cleanup") f.vault.app.fileManager.trashFile = async () => { throw new Error("cleanup failed"); };
 			const save = f.plugin.saveData.bind(f.plugin);
 			f.plugin.saveData = async (data) => { await save(data); if (failure === "target-late") f.vault.replace(NEW, collection([])); };
 			assert.ok((await f.service.migrateMonthlyMemoFolder("New")).trashError);

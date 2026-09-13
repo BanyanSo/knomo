@@ -1,5 +1,5 @@
-import { normalizePath, TFile, TFolder } from "obsidian";
-import type { App, Component, MarkdownView } from "obsidian";
+import { MarkdownView, normalizePath, TFile, TFolder } from "obsidian";
+import type { App, Component } from "obsidian";
 
 import type {
 	CatalogCheckpoint,
@@ -290,10 +290,9 @@ export class CatalogIndexCoordinator {
 
 	private handleTrustedEditorInput(event: Event): void {
 		if (!event.isTrusted || event.target === null) return;
-		const view = this.app.workspace.activeLeaf?.view;
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (view?.getViewType() !== "markdown" || !view.containerEl.contains(event.target as Node)) return;
-		const markdownView = view as MarkdownView;
-		const file = markdownView.file;
+		const file = view.file;
 		if (!(file instanceof TFile) || file.extension !== "md") return;
 		const entry = this.toInventoryEntry(file);
 		if (entry === null) return;
@@ -553,7 +552,7 @@ export class CatalogIndexCoordinator {
 		const sliceStartedAt = monotonicNow();
 		try {
 			do {
-				const deletedPath = this.pendingDeletedPaths.values().next().value as string | undefined;
+				const deletedPath = this.pendingDeletedPaths.values().next().value;
 				if (deletedPath !== undefined) {
 					this.pendingDeletedPaths.delete(deletedPath);
 					await this.deleteCatalogPathIfAbsent(deletedPath);
@@ -1130,7 +1129,7 @@ export function createCatalogDatabaseName(app: App): string {
 		getFullPath?: (path: string) => string;
 		getBasePath?: () => string;
 	}) | undefined;
-	let deviceLocalVaultKey = `${adapter?.getName?.() ?? "vault"}\0${vault.getName?.() ?? "unknown"}\0${vault.configDir ?? ".obsidian"}`;
+	let deviceLocalVaultKey = `${adapter?.getName?.() ?? "vault"}\0${vault.getName?.() ?? "unknown"}\0${vault.configDir ?? ""}`;
 	try {
 		deviceLocalVaultKey = adapter?.getBasePath?.() ?? adapter?.getFullPath?.("") ?? deviceLocalVaultKey;
 	} catch {

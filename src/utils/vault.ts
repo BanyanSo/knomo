@@ -52,7 +52,7 @@ async function waitForFolderVisibility(app: App, folderPath: string): Promise<bo
 
 function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => {
-		setTimeout(resolve, milliseconds);
+		window.setTimeout(resolve, milliseconds);
 	});
 }
 

@@ -50,7 +50,7 @@ export class LegacyTrashMigrationService {
 			this.flight = null;
 			if (!this.options.signal?.aborted && this.options.scheduleRetry && this.retryCount < 2
 				&& (this.report.status === "pending" || this.report.status === "recovery_required" || this.report.cleanupCandidate)) {
-				const delay = [5000, 30000][this.retryCount++]!;
+				const delay = [5000, 30000][this.retryCount++];
 				this.cancelRetry = this.options.scheduleRetry(() => { this.cancelRetry = null; void this.run(); }, delay);
 			}
 		});
@@ -136,7 +136,7 @@ export class LegacyTrashMigrationService {
 				if (child instanceof TFile && classifyLegacyArtifactPath(path, child.path) === null) throw new LegacyCleanupUnknownFileError(child.path);
 			});
 			assertActive();
-			await this.app.vault.delete(folder, true);
+			await this.app.fileManager.trashFile(folder);
 			if (await this.app.vault.adapter.exists(path)) throw new Error("Legacy cleanup not confirmed.");
 		} catch (error) {
 			report.diagnostics = [{ code: error instanceof LegacyCleanupUnknownFileError ? "legacy_cleanup_unknown_file" : "legacy_cleanup_failed",

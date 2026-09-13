@@ -1126,9 +1126,7 @@ async function createCoordinatorFixture(
 			configDir: ".obsidian",
 		},
 		workspace: {
-			get activeLeaf() {
-				return activeView === null ? null : { view: activeView };
-			},
+			getActiveViewOfType: () => activeView,
 			on: (name: string, callback: (...args: unknown[]) => void) => {
 				const listeners = workspaceListeners.get(name) ?? [];
 				listeners.push(callback);
@@ -1241,3 +1239,11 @@ async function waitUntil(predicate: () => Promise<boolean>): Promise<void> {
 function sha256(bytes: Uint8Array): string {
 	return createHash("sha256").update(bytes).digest("hex");
 }
+
+test("移动端 Catalog 数据库名称使用实际自定义配置目录", async () => {
+	await ensureObsidianStub();
+	const { createCatalogDatabaseName } = await import("../src/services/CatalogIndexCoordinator");
+	const makeApp = (configDir: string) => ({ vault: { configDir, adapter: { getName: () => "mobile" }, getName: () => "same-vault" } }) as unknown as import("obsidian").App;
+	assert.equal(createCatalogDatabaseName(makeApp("custom-config")), createCatalogDatabaseName(makeApp("custom-config")));
+	assert.notEqual(createCatalogDatabaseName(makeApp("custom-config")), createCatalogDatabaseName(makeApp(".obsidian")));
+});

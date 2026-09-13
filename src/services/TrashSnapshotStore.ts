@@ -324,7 +324,7 @@ function sameItems(a: TrashSnapshot[], b: TrashSnapshot[]): boolean {
 }
 
 export function assertVaultPath(path: string): void {
-	if (!path || /[\\:\u0000-\u001f]/u.test(path) || path.split("/").some((part) => !part || part === "." || part === "..")) {
+	if (!path || (/[\\:]/u.test(path) || Array.from(path).some(character => character.charCodeAt(0) < 32)) || path.split("/").some((part) => !part || part === "." || part === "..")) {
 		throw new Error("Invalid Vault path.");
 	}
 }

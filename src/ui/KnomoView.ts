@@ -150,6 +150,7 @@ import {
 	TimeBuoyViewController,
 	type TimeBuoyTab,
 	type TimeBuoyTabItem,
+	type TodayTimeBuoySnapshot,
 } from "./TimeBuoyViewController";
 import {
 	getRecordStatsHourSearchFilter,
@@ -213,6 +214,7 @@ interface FilteredMemosCache {
 
 interface CatalogMemoLoad {
 	fullHistoryLoaded?: boolean;
+	todayTimeBuoys?: TodayTimeBuoySnapshot;
 	memos: MemoRecord[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
@@ -386,6 +388,7 @@ export class KnomoView extends ItemView {
 	private readonly shuffleDayController: ShuffleDayController;
 	private readonly trashMemoController: TrashMemoController;
 	private readonly timeBuoyViewController: TimeBuoyViewController;
+	private catalogTodayTimeBuoys: TodayTimeBuoySnapshot | null = null;
 	private timeBuoyPanelEl: HTMLElement | null = null;
 	private timeBuoyRenderItems: TimeBuoyTabItem[] = [];
 	private timeBuoyRenderedCount = 0;
@@ -1176,6 +1179,7 @@ export class KnomoView extends ItemView {
 			}
 		}
 		this.memos = [];
+		this.catalogTodayTimeBuoys = null;
 		this.catalogCursor = null;
 		this.catalogHistoryExpansionPending = false;
 		this.catalogDesktopTotalCount = null;
@@ -1272,7 +1276,7 @@ export class KnomoView extends ItemView {
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
 			if (this.activeNav === "time-buoy") {
 				void this.timeBuoyViewController.loadInitial();
-			} else {
+			} else if (!this.shouldShowTodayTimeBuoys()) {
 				void this.timeBuoyViewController.loadTodayOnly();
 			}
 		}
@@ -1665,15 +1669,20 @@ export class KnomoView extends ItemView {
 			if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
 			fullHistoryLoaded = true;
 		}
+		let todayTimeBuoys: TodayTimeBuoySnapshot | undefined;
 		if (this.shouldShowTodayTimeBuoys()) {
 			// 先准备同版本的置顶结果，再提交列表，避免先撤下置顶又重新提升。
-			await this.timeBuoyViewController.loadTodayOnly(false);
-			const today = this.timeBuoyViewController.getSnapshot();
+			const today = await this.timeBuoyViewController.prepareTodayOnly();
+			if (!today.todayValid && this.hasCommittedCatalogDesktopQuery) {
+				throw today.todayError ?? new Error("Today's time buoy index is not ready.");
+			}
 			if (today.todayValid && today.todayRevision !== page.catalogRevision) {
 				throw new Error("Catalog changed while loading today's time buoys.");
 			}
+			todayTimeBuoys = today;
 		}
 		return {
+			todayTimeBuoys,
 			fullHistoryLoaded,
 			memos: page.items.map(toCatalogMemoView),
 			nextCursor: page.nextCursor,
@@ -1685,6 +1694,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private applyCatalogMemoLoad(load: CatalogMemoLoad): void {
+		this.catalogTodayTimeBuoys = load.todayTimeBuoys ?? null;
 		this.catalogCursor = load.nextCursor;
 		this.catalogCoverage = load.coverage;
 		this.catalogReadState = load.readState;
@@ -2027,11 +2037,16 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadInitialMobileMemos(): Promise<void> {
+		const queryFingerprint = this.getCatalogQueryFingerprint(false);
+		this.prepareCatalogDesktopQuery(queryFingerprint);
+		const queryRun = ++this.catalogDesktopQueryRun;
 		const sourceGeneration = this.memoSourceGeneration;
 		try {
 			const load = await this.loadCatalogMemos(false);
 			if (
 				sourceGeneration !== this.memoSourceGeneration
+				|| queryRun !== this.catalogDesktopQueryRun
+				|| !this.isCatalogQueryCurrent(queryFingerprint, false)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
 			) {
@@ -2050,6 +2065,8 @@ export class KnomoView extends ItemView {
 		} catch (error) {
 			if (
 				sourceGeneration !== this.memoSourceGeneration
+				|| queryRun !== this.catalogDesktopQueryRun
+				|| !this.isCatalogQueryCurrent(queryFingerprint, false)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
 			) {
@@ -2970,8 +2987,8 @@ export class KnomoView extends ItemView {
 		if (!this.shouldShowTodayTimeBuoys()) {
 			return [];
 		}
-		const snapshot = this.timeBuoyViewController.getSnapshot();
-		return snapshot.todayValid
+		const snapshot = this.catalogTodayTimeBuoys;
+		return snapshot?.todayValid
 			&& snapshot.todayDate === formatTimeBuoyDate(new Date())
 			&& snapshot.todayRevision === this.catalogRevision ? snapshot.today : [];
 	}
@@ -3231,7 +3248,6 @@ export class KnomoView extends ItemView {
 	private async enableTimeBuoyFromIntro(): Promise<void> {
 		await this.settingsService.updateSettings({ timeBuoyEnabled: true, timeBuoyIntroDismissed: true });
 		await this.render();
-		await this.timeBuoyViewController.loadTodayOnly();
 		new Notice(t("settings.timeBuoy.enabled"));
 	}
 
@@ -5965,6 +5981,7 @@ export class KnomoView extends ItemView {
 
 	private findMemoById(memoId: string): MemoRecord | null {
 		return this.memos.find((memo) => memo.id === memoId)
+			?? this.catalogTodayTimeBuoys?.today.find((item) => item.memo.id === memoId)?.memo
 			?? this.randomReunionController.getSnapshot().memos?.find((memo) => memo.id === memoId)
 			?? this.shuffleDayController.getSnapshot().memos.find((memo) => memo.id === memoId)
 			?? this.timeBuoyViewController.getMemos().find((memo) => memo.id === memoId)
@@ -6001,6 +6018,8 @@ export class KnomoView extends ItemView {
 		}
 		if (this.activeNav === "time-buoy") {
 			void this.timeBuoyViewController.loadInitial();
+		} else if (this.shouldShowTodayTimeBuoys()) {
+			void this.refresh();
 		} else if (this.settingsService.getSettings().timeBuoyEnabled) {
 			void this.timeBuoyViewController.loadTodayOnly();
 		}
@@ -6149,6 +6168,19 @@ export class KnomoView extends ItemView {
 			this.memos = memos;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
+		}
+		if (this.catalogTodayTimeBuoys?.today.some((item) => (
+			(item.memo.id === updatedMemo.id || getMemoRenderKey(item.memo) === renderKey)
+			&& !this.canReuseRenderedMemo(item.memo, updatedMemo)
+		))) {
+			this.catalogTodayTimeBuoys = {
+				...this.catalogTodayTimeBuoys,
+				today: this.catalogTodayTimeBuoys.today.map((item) => (
+					item.memo.id === updatedMemo.id || getMemoRenderKey(item.memo) === renderKey
+						? { ...item, memo: updatedMemo } : item
+				)),
+			};
+			this.renderCardFlow();
 		}
 		this.timeBuoyViewController.replaceMemo(updatedMemo);
 		this.shuffleDayController.applyMemoUpdate(updatedMemo);

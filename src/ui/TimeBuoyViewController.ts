@@ -26,6 +26,9 @@ export interface TimeBuoyViewSnapshot {
 	past: TimeBuoyTabItem[];
 }
 
+export type TodayTimeBuoySnapshot = Pick<TimeBuoyViewSnapshot,
+	"todayDate" | "todayRevision" | "todayValid" | "today" | "todayError">;
+
 export function mergeTodayTimeBuoyFeed(
 	memos: readonly MemoRecord[],
 	todayItems: readonly TimeBuoyTabItem[],
@@ -161,64 +164,41 @@ export class TimeBuoyViewController {
 		}
 	}
 
+	// 列表先准备独立结果，校验查询仍有效后再与普通 Memo 一起提交。
+	async prepareTodayOnly(): Promise<TodayTimeBuoySnapshot> {
+		const today = formatTimeBuoyDate(this.options.getNow());
+		const result: TodayTimeBuoySnapshot = {
+			todayDate: today, todayRevision: null, todayValid: false, today: [], todayError: null,
+		};
+		try {
+			if (!((await this.options.isTodayIndexReady?.(today)) ?? true)) return result;
+			const query = await this.options.queryDate(today);
+			if (today !== formatTimeBuoyDate(this.options.getNow())) throw new Error("Time buoy date changed while loading");
+			if (query.invalidated) throw new Error("Time buoy query invalidated");
+			if (query.missingPeriods.length > 0) throw new Error(`Incomplete time buoy index: ${query.missingPeriods.join(", ")}`);
+			return { ...result, todayRevision: query.catalogRevision ?? null, todayValid: true, today: groupTabItems(query.items, "today") };
+		} catch (todayError) {
+			return { ...result, todayError };
+		}
+	}
+
 	async loadTodayOnly(render = true): Promise<void> {
 		const requestId = ++this.requestId;
 		const today = formatTimeBuoyDate(this.options.getNow());
-		try {
-			const todayIndexReady = (await this.options.isTodayIndexReady?.(today)) ?? true;
-			if (!todayIndexReady) {
-				if (requestId !== this.requestId) {
-					return;
-				}
-				// 独立页保留最后结果，默认列表暂停提升未经确认的浮标。
-				this.hasLoadedAll = false;
-				this.snapshot = { ...this.snapshot, todayValid: false };
-				if (render) this.options.requestRender();
-				return;
-			}
-			const result = await this.options.queryDate(today);
-			if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) {
-				return;
-			}
-			if (result.invalidated) throw new Error("Time buoy query invalidated");
-			if (result.missingPeriods.length > 0) {
-				const changed = this.snapshot.todayError === null;
-				this.snapshot = {
-					...this.snapshot,
-					todayValid: false,
-					todayError: new Error(`Incomplete time buoy index: ${result.missingPeriods.join(", ")}`),
-				};
-				if (changed && render) {
-					this.options.requestRender();
-				}
-				return;
-			}
-			const nextToday = groupTabItems(result.items, "today");
-			const changed = this.snapshot.todayError !== null
-				|| !this.snapshot.todayValid || this.snapshot.todayDate !== today
-				|| this.snapshot.todayRevision !== (result.catalogRevision ?? null)
-				|| !areTimeBuoyTabItemsEqual(this.snapshot.today, nextToday);
-			this.snapshot = {
-				...this.snapshot,
-				today: nextToday,
-				todayDate: today,
-				todayRevision: result.catalogRevision ?? null,
-				todayValid: true,
-				todayError: null,
-			};
-			if (changed && render) {
-				this.options.requestRender();
-			}
-		} catch (error) {
-			if (requestId !== this.requestId) {
-				return;
-			}
-			const changed = this.snapshot.todayError === null;
-			this.snapshot = { ...this.snapshot, todayError: error, todayValid: false };
-			if (changed && render) {
-				this.options.requestRender();
-			}
+		const prepared = await this.prepareTodayOnly();
+		if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) return;
+		if (!prepared.todayValid) {
+			// 独立页保留最后结果；列表使用自己已提交的同版本快照。
+			if (prepared.todayError === null) this.hasLoadedAll = false;
+			const changed = this.snapshot.todayValid || (this.snapshot.todayError === null && prepared.todayError !== null);
+			this.snapshot = { ...this.snapshot, todayValid: false, todayError: prepared.todayError };
+			if (changed && render) this.options.requestRender();
+			return;
 		}
+		const nextSnapshot = { ...this.snapshot, ...prepared };
+		const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
+		this.snapshot = nextSnapshot;
+		if (changed && render) this.options.requestRender();
 	}
 
 	async retry(): Promise<void> {

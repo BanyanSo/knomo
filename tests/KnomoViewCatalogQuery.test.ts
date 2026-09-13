@@ -140,6 +140,10 @@ test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展�
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as InitialMobileView;
+	Object.assign(view, {
+		catalogDesktopQueryRun: 0, getCatalogQueryFingerprint: () => "all",
+		prepareCatalogDesktopQuery: () => undefined, isCatalogQueryCurrent: () => true,
+	});
 	view.memoSourceGeneration = 0;
 	view.catalogHistoryExpansionPending = false;
 	view.cardFlowEl = { isConnected: true } as HTMLElement;

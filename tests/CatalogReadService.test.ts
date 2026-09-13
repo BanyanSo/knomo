@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { setImmediate as waitImmediate } from "node:timers/promises";
-import test from "node:test";
+import test, { before, after } from "node:test";
+
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 import type { CatalogObservation, MemoObservation } from "../src/types/catalog";
 

@@ -53,11 +53,11 @@ export async function stableSortCooperatively<T>(
 			let left = start;
 			let right = middle;
 			for (let output = start; output < end; output += 1) {
-				if (right >= end || (left < middle && compare(source[left] as T, source[right] as T) <= 0)) {
-					target[output] = source[left] as T;
+				if (right >= end || (left < middle && compare(source[left], source[right]) <= 0)) {
+					target[output] = source[left];
 					left += 1;
 				} else {
-					target[output] = source[right] as T;
+					target[output] = source[right];
 					right += 1;
 				}
 				if (yieldController.shouldYield()) await yieldController.yieldNow();

@@ -107,28 +107,28 @@ function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: n
 	while (size < items.length) size *= 2;
 	const tree = new Float64Array(size * 2);
 	for (let index = 0; index < items.length; index++) {
-		tree[size + index] = clampWeight(getWeight(items[index]!));
+		tree[size + index] = clampWeight(getWeight(items[index]));
 		yield;
 	}
 	for (let index = size - 1; index > 0; index--) {
-		tree[index] = tree[index * 2]! + tree[index * 2 + 1]!;
+		tree[index] = tree[index * 2] + tree[index * 2 + 1];
 		yield;
 	}
 	const picked: T[] = [];
 	const targetCount = Math.min(Math.max(0, Math.floor(count)), items.length);
 	while (picked.length < targetCount) {
-		let cursor = clampRandom(random()) * tree[1]!;
+		let cursor = clampRandom(random()) * tree[1];
 		let index = 1;
 		while (index < size) {
-			const left = tree[index * 2]!;
+			const left = tree[index * 2];
 			if (left > 0 && cursor <= left) index *= 2;
 			else { cursor -= left; index = index * 2 + 1; }
 		}
-		picked.push(items[index - size]!);
+		picked.push(items[index - size]);
 		tree[index] = 0;
 		while (index > 1) {
 			index = Math.floor(index / 2);
-			tree[index] = tree[index * 2]! + tree[index * 2 + 1]!;
+			tree[index] = tree[index * 2] + tree[index * 2 + 1];
 		}
 		yield;
 	}

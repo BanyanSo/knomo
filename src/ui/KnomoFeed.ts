@@ -24,7 +24,7 @@ export function renderKnomoActionableListSummary(
 	action: { label: string; action: string },
 ): HTMLElement {
 	const summary = container.createDiv({ cls: "knomo-list-summary knomo-catalog-status" });
-	summary.createEl("span", { text });
+	summary.createSpan({ text });
 	summary.createEl("button", {
 		cls: "knomo-inline-button",
 		text: action.label,

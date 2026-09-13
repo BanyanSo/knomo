@@ -12,13 +12,14 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 function environment(value: string) {
 	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true });
 	const win = dom.window;
+	Object.assign(win.Node.prototype, { createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); } });
 	// jsdom 没有原生布局 API；让 CodeMirror 的测量临时节点能正常完成清理。
 	win.Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 	win.Range.prototype.getBoundingClientRect = () => new win.DOMRect();
 	const previous = new Map<string, PropertyDescriptor | undefined>();
-	for (const name of ["window", "document", "MutationObserver", "Node", "HTMLElement", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
+	for (const name of ["createSpan", "window", "document", "MutationObserver", "Node", "HTMLElement", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
 		previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-		const source = name === "window" ? win : (win as unknown as Record<string, unknown>)[name];
+		const source = name === "createSpan" ? () => win.document.createElement("span") : name === "window" ? win : (win as unknown as Record<string, unknown>)[name];
 		Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: typeof source === "function" && name !== "Node" && name !== "HTMLElement" && name !== "MutationObserver" ? source.bind(win) : source });
 	}
 	const editor = new ComposerEditor(win.document.getElementById("host")!, value, "label", "Write here");
@@ -411,4 +412,17 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		undo(editor.view);
 		assert.equal(editor.input.value, "#");
 	} finally { unregister(); close(); }
+});
+
+test("IME 的 229 确认键即使没有 isComposing 也不进入快捷键", () => {
+	const { editor, win, close } = environment("draft");
+	try {
+		let shortcuts = 0;
+		editor.input.addEventListener("keydown", () => { shortcuts++; });
+		editor.input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", keyCode: 229, ctrlKey: true, bubbles: true }));
+		assert.equal(shortcuts, 0);
+		assert.equal(editor.input.value, "draft");
+		editor.input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "a", bubbles: true }));
+		assert.equal(shortcuts, 1);
+	} finally { close(); }
 });

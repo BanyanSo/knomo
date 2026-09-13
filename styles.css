@@ -4554,13 +4554,13 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-plugin .knomo-composer-highlight { background: var(--text-highlight-bg); color: inherit; }
 .knomo-plugin .knomo-composer-link { color: var(--link-color); font-weight: var(--link-weight, inherit); text-decoration: var(--link-decoration, underline); cursor: text; }
 .knomo-plugin .knomo-composer-link:hover { color: var(--link-color-hover, var(--link-color)); text-decoration: var(--link-decoration-hover, underline); }
-.knomo-plugin .knomo-composer-marker { display: inline-block; width: max(1.5em, var(--knomo-composer-marker-width, 0px)); text-indent: 0; color: var(--list-marker-color, var(--text-muted)); cursor: text; }
+.knomo-plugin .knomo-composer-marker { display: inline-block; width: max(1.5em, var(--knomo-composer-marker-width, 0px)); margin-inline-start: calc(-1 * max(1.5em, var(--knomo-composer-marker-width, 0px))); color: var(--list-marker-color, var(--text-muted)); cursor: text; }
 /* 原生列表标记靠正文侧排列，短编号与圆点、任务共享正文起点。 */
 .knomo-plugin .knomo-composer-marker :is(ul, ol) { margin: 0; padding: 0; list-style-position: inside; }
 .knomo-plugin .knomo-composer-marker li { margin: 0; padding: 0; text-align: end; }
 .knomo-plugin .knomo-composer-bullet-marker ul { list-style-type: disc; }
 .knomo-plugin .knomo-composer-ordered-marker ol { list-style-type: decimal; }
-.knomo-plugin .knomo-composer-editor .cm-line.knomo-composer-list-line { padding-inline-start: max(1.5em, var(--knomo-composer-marker-width, 0px)); text-indent: calc(-1 * max(1.5em, var(--knomo-composer-marker-width, 0px))); }
+.knomo-plugin .knomo-composer-editor .cm-line.knomo-composer-list-line { padding-inline-start: max(1.5em, var(--knomo-composer-marker-width, 0px)); }
 .knomo-plugin .knomo-composer-task-marker .task-list-item-checkbox { margin: 0; vertical-align: middle; cursor: text; }
 .knomo-plugin .knomo-composer-task-line.is-checked { color: var(--checklist-done-color, var(--text-muted)); text-decoration: var(--checklist-done-decoration, line-through); }
 .knomo-plugin .knomo-tool-group { min-width: 0; overflow-x: auto; flex-wrap: nowrap; touch-action: pan-x; }

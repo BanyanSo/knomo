@@ -42,22 +42,20 @@ class ComposerMarker extends WidgetType {
 	constructor(private readonly kind: string, private readonly label: string, private readonly from: number) { super(); }
 	eq(other: ComposerMarker): boolean { return this.kind === other.kind && this.label === other.label && this.from === other.from; }
 	toDOM(view: EditorView): HTMLElement {
-		const element = view.dom.ownerDocument.createElement("span");
+		const element = view.dom.ownerDocument.adoptNode(createSpan());
 		element.className = `knomo-composer-marker knomo-composer-${this.kind}-marker`;
 		if (this.kind === "task") {
-			const checkbox = view.dom.ownerDocument.createElement("input");
+			const checkbox = element.createEl("input");
 			checkbox.type = "checkbox";
 			checkbox.className = "task-list-item-checkbox";
 			checkbox.checked = this.label === "x";
 			checkbox.setAttribute("data-task", this.label);
 			checkbox.tabIndex = -1;
-			element.appendChild(checkbox);
 		} else {
 			// 与卡片一样由浏览器生成 ::marker，不用字体字符模拟圆点或编号。
-			const list = view.dom.ownerDocument.createElement(this.kind === "ordered" ? "ol" : "ul");
+			const list = element.createEl(this.kind === "ordered" ? "ol" : "ul");
 			if (list instanceof view.dom.ownerDocument.defaultView!.HTMLOListElement) list.start = parseInt(this.label, 10);
-			list.appendChild(view.dom.ownerDocument.createElement("li"));
-			element.appendChild(list);
+			list.createEl("li");
 		}
 		element.setAttribute("aria-hidden", "true");
 		element.addEventListener("pointerdown", event => {
@@ -154,7 +152,7 @@ export class ComposerEditor {
 		this.input.setSelectionRange = (start, end, direction) => this.view.dispatch({ selection: {
 			anchor: direction === "backward" ? end : start, head: direction === "backward" ? start : end,
 		} });
-		this.input.addEventListener("beforeinput", event => { this.beforeInput = event as InputEvent; }, { capture: true });
+		this.input.addEventListener("beforeinput", event => { this.beforeInput = event; }, { capture: true });
 		const startComposition = () => {
 			// 不在原生事件中 dispatch：此时 DOM 可能已有尚未读入的拼音/中文。
 			this.compositionActive = true;
@@ -167,6 +165,7 @@ export class ComposerEditor {
 			this.finishComposition(event);
 		});
 		this.input.addEventListener("keydown", event => {
+			// 保留 229：部分 IME 的确认键未携带 isComposing，不能落入编辑/提交快捷键。
 			if (event.isComposing || event.keyCode === 229 || this.view.composing || event.timeStamp - this.lastCompositionEnd < 50) {
 				event.stopImmediatePropagation();
 			}

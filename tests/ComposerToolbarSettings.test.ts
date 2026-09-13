@@ -11,6 +11,7 @@ test("repeated declarative toolbar renders replace owned content and preserve th
 	const dom = new JSDOM("<div id='row'><div class='setting-item-info'>Toolbar</div></div>");
 	const proto = dom.window.HTMLElement.prototype;
 	Object.assign(proto, {
+		createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); },
 		addClass(this: HTMLElement, cls: string) { this.classList.add(cls); },
 		empty(this: HTMLElement) { this.replaceChildren(); },
 		createDiv(this: HTMLElement, options: { cls: string }) {
@@ -49,6 +50,7 @@ test("toolbar locks visibility, ordering and reset until save settles and recove
 	const { Setting } = await import("obsidian");
 	const dom = new JSDOM("<div id='row'></div>");
 	Object.assign(dom.window.HTMLElement.prototype, {
+		createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); },
 		addClass(this: HTMLElement, cls: string) { this.classList.add(cls); },
 		empty(this: HTMLElement) { this.replaceChildren(); controls = []; },
 		createDiv(this: HTMLElement, options: { cls: string }) {

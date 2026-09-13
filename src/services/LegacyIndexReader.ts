@@ -236,7 +236,7 @@ function parseMemoRecord(memoId: string, value: unknown): LegacyIndexMemo | null
 			deletedAt: isDateTime(value.deletedAt) ? value.deletedAt : value.updatedAt,
 			sourcePath: normalizePath(dailyRef.path),
 			logicalDate: readLogicalDate(dailyRef.path, value.createdAt),
-			section: dailyRef.sectionType === "root" ? null : dailyRef.heading as string | null,
+			section: dailyRef.sectionType === "root" ? null : dailyRef.heading,
 			rawBlock: deletedRawBlock,
 		} : null,
 	};
@@ -256,7 +256,7 @@ async function mergeMemos(
 			diagnostics.push(diagnostic("legacy_record_conflict", null, memoId, "Legacy index contains conflicting records for one memoId."));
 			continue;
 		}
-		result.push(unique[0] as LegacyIndexMemo);
+		result.push(unique[0]);
 	}
 	return result;
 }
@@ -358,7 +358,7 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isVaultPath(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && !value.startsWith("/") && !value.includes("\\")
-		&& !/(^|\/)\.{1,2}(\/|$)/u.test(value) && !/[\u0000-\u001f]/u.test(value);
+		&& !/(^|\/)\.{1,2}(\/|$)/u.test(value) && !Array.from(value).some(character => character.charCodeAt(0) < 32);
 }
 
 function createParsedLegacyData(): ParsedLegacyData {

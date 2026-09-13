@@ -76,7 +76,7 @@ export class SettingsService {
 			this.settings.recentTimeFlowEnabled = DEFAULT_KNOMO_SETTINGS.recentTimeFlowEnabled;
 			this.loadedConfiguration = configurationFingerprint(settingsData);
 			try {
-				const local = this.plugin.app.loadLocalStorage?.("knomo.preferences");
+				const local: unknown = this.plugin.app.loadLocalStorage?.("knomo.preferences");
 				if (isRecord(local)) this.settings = this.migrateSettings({ ...this.settings, ...pickPreferences(local) });
 			} catch {
 				// 设备偏好丢失可使用默认 UI，不降低当前 Vault 配置可读性。

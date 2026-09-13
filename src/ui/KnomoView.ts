@@ -1377,7 +1377,7 @@ export class KnomoView extends ItemView {
 		this.getRenderScope().registerDomEvent(this.inputEl, "beforeinput", (event: InputEvent) => {
 			this.handleComposerBeforeInput(event);
 		}, { capture: true });
-		this.getRenderScope().registerDomEvent(this.inputEl, "composer-change", (event: CustomEvent) => {
+		this.getRenderScope().registerDomEvent(this.inputEl, "composer-change", (event) => {
 			this.syncInputState();
 			if (this.composerIsComposing || this.inputEl?.composer.composing) return;
 			if (event.detail.history) { this.tagSuggest?.close(); this.wikiLinkSuggest?.close(); return; }
@@ -6131,7 +6131,7 @@ export class KnomoView extends ItemView {
 				new Notice(t("catalog.savedRefreshPending"));
 				return;
 			}
-			this.memoMarkdownRenderer.syncTaskCheckboxesForMemo([this.cardFlowEl, this.mobileSearchResultsEl], memo as never);
+			this.memoMarkdownRenderer.syncTaskCheckboxesForMemo([this.cardFlowEl, this.mobileSearchResultsEl], memo);
 			new Notice(t("task.updateFailed"));
 		}
 	}

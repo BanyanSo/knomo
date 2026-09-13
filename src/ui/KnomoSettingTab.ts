@@ -1,6 +1,6 @@
 import { normalizeComposerToolbar } from "../settings/composerToolbar";
 import { composerActionLabels } from "./KnomoComposer";
-import { Notice, PluginSettingTab, Setting } from "obsidian";
+import { Notice, requireApiVersion, PluginSettingTab, Setting } from "obsidian";
 import type { App, ButtonComponent, Plugin, SettingDefinitionItem, ToggleComponent } from "obsidian";
 
 import {
@@ -234,14 +234,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		// 复用折叠节点，行刷新与保存结果重绘均保留用户当前的展开状态。
 		let details = setting.settingEl.querySelector<HTMLDetailsElement>(":scope > .knomo-toolbar-details");
 		if (!details) {
-			details = setting.settingEl.ownerDocument.createElement("details");
+			details = setting.settingEl.createEl("details");
 			details.className = "knomo-toolbar-details";
-			const summary = setting.settingEl.ownerDocument.createElement("summary");
+			const summary = details.createEl("summary");
 			const info = setting.settingEl.querySelector(":scope > .setting-item-info");
 			if (info) summary.appendChild(info);
 			else summary.textContent = t("settings.toolbar.name");
-			details.appendChild(summary);
-			setting.settingEl.appendChild(details);
 		}
 		details.querySelectorAll(":scope > .knomo-toolbar-settings").forEach(container => container.remove());
 		const container = details.createDiv({ cls: "knomo-toolbar-settings" });
@@ -1124,15 +1122,15 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	refreshAttentionIfVisible(): void {
 		// 声明式设置在注册时缓存定义，且不会调用 display()；隐藏时也须更新入口。
-		const settingTab = this as PluginSettingTab & { update?: () => void };
-		if (typeof settingTab.update === "function") settingTab.update();
+		// 1.11/1.12 使用 display；声明式刷新仅在 1.13 起可用。
+		if (requireApiVersion("1.13.0")) this.update();
 		else if (this.settingsVisible) this.display();
 	}
 
 	private refreshSettingTab(): void {
-		const settingTab = this as PluginSettingTab & { update?: () => void };
-		if (typeof settingTab.update === "function") {
-			settingTab.update();
+		// 1.11/1.12 使用 display；声明式刷新仅在 1.13 起可用。
+		if (requireApiVersion("1.13.0")) {
+			this.update();
 			return;
 		}
 		this.display();

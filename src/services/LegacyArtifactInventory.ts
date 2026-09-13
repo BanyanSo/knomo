@@ -74,7 +74,7 @@ export function classifyLegacyArtifactPath(
 
 function normalizeStrictPath(path: string): string | null {
 	const trimmed = path.trim();
-	if (trimmed.length === 0 || trimmed.startsWith("/") || trimmed.includes("\\") || /(^|\/)\.{1,2}(\/|$)/.test(trimmed) || /[\u0000-\u001f]/.test(trimmed)) {
+	if (trimmed.length === 0 || trimmed.startsWith("/") || trimmed.includes("\\") || /(^|\/)\.{1,2}(\/|$)/.test(trimmed) || Array.from(trimmed).some(character => character.charCodeAt(0) < 32)) {
 		return null;
 	}
 	return normalizePath(trimmed).replace(/^\/+|\/+$/g, "");

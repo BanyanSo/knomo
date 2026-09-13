@@ -32,22 +32,22 @@ export function scanComposerSyntax(text: string): { ranges: ComposerSyntaxRange[
 	};
 	// 高级链接与 Embed 也作为命令屏障保留，不能被普通链接按钮拆改。
 	for (const match of matches(text, /!?\[\[[^\n]*?\]\]/gu)) {
-		const from = match.index!;
+		const from = match.index;
 		const to = from + match[0].length;
 		if (escaped(from) || blocked(from, to)) continue;
 		const raw = match[0];
-		if (!raw.startsWith("!") && /^\[\[[^\[\]|#^\\]+\]\]$/u.test(raw) && raw.slice(2, -2).trim()) {
+		if (!raw.startsWith("!") && /^\[\[[^[\]|#^\\]+\]\]$/u.test(raw) && raw.slice(2, -2).trim()) {
 			ranges.push({ kind: "link", from, to, contentFrom: from + 2, contentTo: to - 2 });
 		} else protectedRanges.push({ from, to });
 	}
 	for (const match of matches(text, /==([^=\n]+)==/gu)) {
-		const from = match.index!;
+		const from = match.index;
 		const to = from + match[0].length;
 		if (escaped(from) || escaped(to - 2) || blocked(from, to) || !match[1].trim() || text[from - 1] === "=" || text[to] === "=") continue;
 		ranges.push({ kind: "highlight", from, to, contentFrom: from + 2, contentTo: to - 2 });
 	}
 	for (const match of matches(text, /^[\t ]*(?:[-*+] |\d+[.)] )/gmu)) {
-		const from = match.index! + (match[0].match(/^[\t ]*/u)?.[0].length ?? 0);
+		const from = match.index + (match[0].match(/^[\t ]*/u)?.[0].length ?? 0);
 		if (!listMarkers.has(from)) continue;
 		if (blocked(from, from + match[0].trimStart().length)) continue;
 		const tail = text.slice(from);

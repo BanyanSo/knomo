@@ -76,9 +76,9 @@ function weightedPickAggregate(items: readonly CatalogDailyAggregate[], today: D
 	let cursor = Math.min(0.999999999, Math.max(0, random())) * weights.reduce((sum, value) => sum + value, 0);
 	for (let index = 0; index < items.length; index += 1) {
 		cursor -= weights[index] ?? 0;
-		if (cursor <= 0) return items[index] as CatalogDailyAggregate;
+		if (cursor <= 0) return items[index];
 	}
-	return items[items.length - 1] as CatalogDailyAggregate;
+	return items[items.length - 1];
 }
 
 function parseDateKey(value: string): Date | null {

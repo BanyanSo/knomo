@@ -523,3 +523,11 @@ function deleteDatabase(databaseName: string): Promise<void> {
 		request.onblocked = () => reject(new Error(`Blocked while deleting ${databaseName}.`));
 	});
 }
+
+test("升级回调抛出非 Error 时保留原因并拒绝打开", async () => {
+	const databaseName = uniqueDatabaseName("upgrade-non-error");
+	const store = createStore(databaseName, { beforeUpgrade: () => { throw "upgrade failure"; } });
+	try {
+		await assert.rejects(store.open(), error => error instanceof Error && error.message === "upgrade failure");
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});

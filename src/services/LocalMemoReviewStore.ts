@@ -18,7 +18,7 @@ export class LocalMemoReviewStore {
 			if (!Array.isArray(saved)) return this.states;
 			for (const item of saved.slice(-MAX_REVIEWS)) {
 				if (Array.isArray(item) && typeof item[0] === "string" && Number.isSafeInteger(item[1])
-					&& item[1] > 0 && typeof item[2] === "string" && Number.isFinite(Date.parse(item[2]))) {
+					&& typeof item[1] === "number" && item[1] > 0 && typeof item[2] === "string" && Number.isFinite(Date.parse(item[2]))) {
 					this.states[item[0]] = { memoId: item[0], reviewCount: item[1], lastReviewedAt: item[2] };
 				}
 			}

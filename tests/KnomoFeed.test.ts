@@ -108,6 +108,10 @@ class TestElement {
 		return this.createEl("div", options);
 	}
 
+	createSpan(options: CreateElementOptions = {}): TestElement {
+		return this.createEl("span", options);
+	}
+
 	createEl(tagName: string, options: CreateElementOptions = {}): TestElement {
 		const child = new TestElement(tagName);
 		if (options.cls !== undefined) {

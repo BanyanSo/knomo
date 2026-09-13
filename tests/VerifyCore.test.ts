@@ -101,6 +101,9 @@ test("verify core covers project-specific Obsidian source constraints", async ()
 		"myvault.deleteCache();",
 		"previousVault.trashState;",
 		"const color = input.style.color;",
+		"if (input.style.maxHeight === height) return;",
+		"if (input.style.maxHeight == height) return;",
+		"if (input.style.maxHeight !== height) return;",
 		"input.setCssProps({ '--knomo-color': value });",
 		"file instanceof TFile;",
 		"event instanceof win.InputEvent;",
@@ -114,15 +117,14 @@ test("verify core covers project-specific Obsidian source constraints", async ()
 	}
 });
 
-test("verify 仅豁免两个迁移文件中的单次精确清理语句", async () => {
+test("verify 仅豁免编辑器的单次精确动态高度写入", async () => {
 	const core = await loadVerifyCore();
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-verify-"));
 	const previousCwd = process.cwd();
 	try {
 		process.chdir(tempDir);
 		for (const [file, statement] of [
-			["src/services/LegacyTrashMigrationService.ts", "await this.app.vault.delete(folder, true);"],
-			["src/settings/MonthlyFolderMigrationService.ts", "await this.plugin.app.vault.delete(sourceFile);"],
+			["src/ui/KnomoView.ts", "this.inputEl.composer.view.scrollDOM.style.maxHeight = height;"],
 		] as const) {
 			fs.mkdirSync(path.dirname(file), { recursive: true });
 			const scan = () => core.scanFiles([file], core.FORBIDDEN_SOURCE_PATTERN);
@@ -130,9 +132,9 @@ test("verify 仅豁免两个迁移文件中的单次精确清理语句", async (
 			assert.equal(scan(), 0);
 			assert.equal(core.scanFiles([path.resolve(file)], core.FORBIDDEN_SOURCE_PATTERN), 0);
 			for (const source of [
-				statement.replace(/folder|sourceFile/u, "otherFile"),
-				statement.replace("delete(", "trash("),
-				statement.replace(");", ", true);"),
+				statement.replace("maxHeight", "height"),
+				statement.replace("= height", "= otherHeight"),
+				statement.replace("= height", "= '480px'"),
 				`${statement}\n${statement}`,
 				`${statement} globalThis.crypto;`,
 				`${statement}\nawait this.app.vault.delete(otherFile);`,
@@ -146,6 +148,27 @@ test("verify 仅豁免两个迁移文件中的单次精确清理语句", async (
 			withCapturedConsoleError(() => assert.equal(core.scanFiles([otherFile], core.FORBIDDEN_SOURCE_PATTERN), 1));
 			fs.writeFileSync(file, `${statement}   `);
 			withCapturedConsoleError(() => assert.equal(core.scanFiles([file], /[ \t]+$/u), 1));
+		}
+	} finally {
+		process.chdir(previousCwd);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+
+test("已移除的迁移删除语句不再享有检查豁免", async () => {
+	const core = await loadVerifyCore();
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-verify-"));
+	const previousCwd = process.cwd();
+	try {
+		process.chdir(tempDir);
+		for (const [file, statement] of [
+			["src/services/LegacyTrashMigrationService.ts", "await this.app.vault.delete(folder, true);"],
+			["src/settings/MonthlyFolderMigrationService.ts", "await this.plugin.app.vault.delete(sourceFile);"],
+		]) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, statement);
+			withCapturedConsoleError(() => assert.equal(core.scanFiles([file], core.FORBIDDEN_SOURCE_PATTERN), 1));
 		}
 	} finally {
 		process.chdir(previousCwd);

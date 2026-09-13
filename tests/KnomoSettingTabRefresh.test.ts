@@ -4,6 +4,8 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("声明式设置未调用 display 时也更新迁移入口，并清除已就绪的处理行", async () => {
  await ensureObsidianStub();
+ const { requireApiVersion } = await import("obsidian");
+ (requireApiVersion as typeof requireApiVersion & { set(version: string): void }).set("1.13.0");
  const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
  const { t } = await import("../src/i18n");
  const tab = Object.create(KnomoSettingTab.prototype) as InstanceType<typeof KnomoSettingTab>;
@@ -42,13 +44,34 @@ test("声明式设置未调用 display 时也更新迁移入口，并清除已�
 
 test("旧版设置隐藏时不绘制，打开时刷新", async () => {
  await ensureObsidianStub();
+ const { requireApiVersion } = await import("obsidian");
+ (requireApiVersion as typeof requireApiVersion & { set(version: string): void }).set("1.13.0");
  const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
  const tab = Object.create(KnomoSettingTab.prototype) as InstanceType<typeof KnomoSettingTab>;
  let displays = 0;
+ (requireApiVersion as typeof requireApiVersion & { set(version: string): void }).set("1.11.0");
  Object.assign(tab, { settingsVisible: false, update: undefined, display: () => { displays++; } });
  tab.refreshAttentionIfVisible();
  assert.equal(displays, 0);
  Object.assign(tab, { settingsVisible: true });
  tab.refreshAttentionIfVisible();
  assert.equal(displays, 1);
+});
+
+
+test("1.11/1.12 普通刷新使用旧入口，1.13 使用声明式入口", async () => {
+ await ensureObsidianStub();
+ const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
+ const { requireApiVersion } = await import("obsidian");
+ const version = requireApiVersion as typeof requireApiVersion & { set(version: string): void };
+ const tab = Object.create(KnomoSettingTab.prototype) as InstanceType<typeof KnomoSettingTab>;
+ const calls: string[] = [];
+ Object.assign(tab, { display: () => calls.push("display"), update: () => calls.push("update") });
+ const refresh = tab as unknown as { refreshSettingTab(): void };
+ try {
+  for (const current of ["1.11.0", "1.11.7", "1.12.0", "1.12.4", "1.13.0"]) {
+   version.set(current); refresh.refreshSettingTab();
+  }
+  assert.deepEqual(calls, ["display", "display", "display", "display", "update"]);
+ } finally { version.set("1.11.0"); }
 });

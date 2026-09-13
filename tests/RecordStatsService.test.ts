@@ -32,18 +32,19 @@ class RecordStatsService extends ProductionRecordStatsService {
 
 test("prepares overview and selects weekly statistics with natural-day boundaries", async () => {
 	const service = new RecordStatsService();
+	// 本测试使用本地日历时间，避免依赖运行机器的时区。
 	const memos = [
-		makeMemo("monday-early", "2026-06-08T00:00:00.000+08:00", "中文 one 1", {
+		makeMemo("monday-early", "2026-06-08T00:00:00.000", "中文 one 1", {
 			tags: ["work"],
 			images: [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }],
 		}),
-		makeMemo("monday-late", "2026-06-08T23:59:59.999+08:00", "two words"),
-		makeMemo("sunday", "2026-06-14T23:30:00.000+08:00", "三", {
+		makeMemo("monday-late", "2026-06-08T23:59:59.999", "two words"),
+		makeMemo("sunday", "2026-06-14T23:30:00.000", "三", {
 			tags: ["journal"],
 			images: [{ path: "document.pdf", altText: "", syntax: "obsidian_embed" }],
 		}),
-		makeMemo("next-week", "2026-06-15T00:00:00.000+08:00", "next"),
-		makeMemo("deleted", "2020-06-09T12:00:00.000+08:00", "deleted", { status: "deleted" }),
+		makeMemo("next-week", "2026-06-15T00:00:00.000", "next"),
+		makeMemo("deleted", "2020-06-09T12:00:00.000", "deleted", { status: "deleted" }),
 	];
 
 	assert.equal(await service.prepare(memos, async () => {}), true);

@@ -298,7 +298,7 @@ test("random memo card marks the time opener without rendering a manual review a
 	assert.equal(root.find("[data-memo-action='mark-reviewed']"), null);
 });
 
-test("renders Time buoy card states with the project icon and a today wave", async () => {
+test("renders Time buoy card states with the project icon and a today wave without a manual review action", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const { KNOMO_TIME_BUOY_ICON } = await import("../src/icons");
@@ -307,7 +307,7 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 		renderKnomoMemoCard(root.asHtml(), makeMemo(), {
 			generation: 7,
 			renderIndex: 0,
-			includeActions: false,
+			includeActions: true,
 			randomCard: false,
 			timeBuoy: { status, label: `Time buoy ${status}` },
 			activeMenuMemoId: null,
@@ -324,6 +324,10 @@ test("renders Time buoy card states with the project icon and a today wave", asy
 	const today = renderState("today");
 	const upcoming = renderState("upcoming");
 	const past = renderState("past");
+	for (const root of [today, upcoming, past]) {
+		assert.notEqual(root.find("[data-memo-action='edit']"), null);
+		assert.equal(root.find("[data-memo-action='mark-reviewed']"), null);
+	}
 	const indicator = today.find("[data-time-buoy-card='true']");
 	assert.equal(indicator?.getAttr("data-icon"), KNOMO_TIME_BUOY_ICON);
 	assert.equal(indicator?.getAttr("role"), "img");

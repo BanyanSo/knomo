@@ -7,7 +7,9 @@ import type { ComposerEdit } from "../utils/composerCommands";
 
 declare global {
 	interface HTMLElementEventMap {
+		"composer-reset": Event;
 		"composer-change": CustomEvent<{ event: InputEvent | null; userInput: boolean; history: boolean }>;
+		"composer-compositionend": CustomEvent<CompositionEvent>;
 	}
 }
 
@@ -28,8 +30,12 @@ const composingField = StateField.define({
 	update: (value: boolean, tr) => tr.effects.reduce((next, effect) => effect.is(composingEffect) ? effect.value : next, value),
 });
 const syntaxField = StateField.define({
-	create: state => scanComposerSyntax(state.doc.toString()),
-	update: (value, tr) => tr.docChanged ? scanComposerSyntax(tr.newDoc.toString()) : value,
+	create: state => ({ syntax: scanComposerSyntax(state.doc.toString()), dirty: false }),
+	update: (value, tr) => {
+		// 候选拼音只更新正文；提交后再解析一次，避免每个按键扫描整篇草稿。
+		if (tr.state.field(composingField)) return tr.docChanged && !value.dirty ? { ...value, dirty: true } : value;
+		return tr.docChanged || value.dirty ? { syntax: scanComposerSyntax(tr.newDoc.toString()), dirty: false } : value;
+	},
 });
 
 class ComposerMarker extends WidgetType {
@@ -69,14 +75,14 @@ class ComposerMarker extends WidgetType {
 function decorations(state: EditorState): DecorationSet {
 	const result = [];
 	const selection = state.selection.ranges;
-	for (const range of state.field(syntaxField).ranges) {
+	for (const range of state.field(syntaxField).syntax.ranges) {
 		if (revealComposerRange(range, selection)) continue;
 		if (["task", "bullet", "ordered"].includes(range.kind)) {
 			const raw = state.sliceDoc(range.from, range.to);
 			const label = range.kind === "task" ? raw.includes("[x]") ? "x" : " " : range.kind === "bullet" ? "" : `${parseInt(raw, 10)}.`;
 			result.push(Decoration.line({ attributes: {
 				class: `knomo-composer-list-line${range.kind === "task" ? " knomo-composer-task-line" : ""}${range.kind === "task" && label === "x" ? " is-checked" : ""}`,
-				style: `--knomo-composer-marker-width: ${range.kind === "ordered" ? label.length + 1 : 0}ch`,
+				style: `--knomo-composer-marker-width: ${range.kind === "ordered" ? label.length : 0}ch`,
 			} }).range(state.doc.lineAt(range.from).from));
 			result.push(Decoration.replace({ widget: new ComposerMarker(range.kind, label, range.from) }).range(range.from, range.to));
 		} else {
@@ -111,6 +117,8 @@ export class ComposerEditor {
 	private session = 0;
 	private revision = 0;
 	private lastCompositionEnd = -Infinity;
+	private compositionActive = false;
+	private compositionGeneration = 0;
 	private beforeInput: InputEvent | null = null;
 
 	constructor(parent: HTMLElement, doc: string, private readonly label: string, private readonly hint: string) {
@@ -138,6 +146,7 @@ export class ComposerEditor {
 			selectionEnd: { get: () => this.view.state.selection.main.to },
 			selectionDirection: { get: () => this.view.state.selection.main.anchor > this.view.state.selection.main.head ? "backward" : "forward" },
 			disabled: { get: () => !this.enabled, set: (disabled: boolean) => {
+				if (this.enabled === !disabled) return;
 				this.enabled = !disabled;
 				this.view.dispatch({ effects: this.editable.reconfigure(EditorView.editable.of(!disabled)) });
 			} },
@@ -146,11 +155,16 @@ export class ComposerEditor {
 			anchor: direction === "backward" ? end : start, head: direction === "backward" ? start : end,
 		} });
 		this.input.addEventListener("beforeinput", event => { this.beforeInput = event as InputEvent; }, { capture: true });
-		this.input.addEventListener("compositionstart", () => this.view.dispatch({ effects: composingEffect.of(true) }));
+		const startComposition = () => {
+			// 不在原生事件中 dispatch：此时 DOM 可能已有尚未读入的拼音/中文。
+			this.compositionActive = true;
+			this.compositionGeneration++;
+		};
+		this.input.addEventListener("compositionstart", startComposition, { capture: true });
+		this.input.addEventListener("compositionupdate", startComposition, { capture: true });
 		this.input.addEventListener("compositionend", event => {
 			this.lastCompositionEnd = event.timeStamp;
-			// 让原生 composition 的最后一次输入先完成，再更新显示。
-			queueMicrotask(() => { if (!this.disposed) this.view.dispatch({ effects: composingEffect.of(false) }); });
+			this.finishComposition(event);
 		});
 		this.input.addEventListener("keydown", event => {
 			if (event.isComposing || event.keyCode === 229 || this.view.composing || event.timeStamp - this.lastCompositionEnd < 50) {
@@ -159,18 +173,43 @@ export class ComposerEditor {
 		}, { capture: true });
 	}
 
+	private finishComposition(event: CompositionEvent): void {
+		const generation = ++this.compositionGeneration;
+		// CodeMirror 在测量前接收待处理的原生输入；write 之后才可提交显示事务。
+		// 单独的 compositionend 微任务会抢在手机延迟的 DOM 读取之前。
+		this.view.requestMeasure({
+			key: this,
+			read: () => undefined,
+			write: () => queueMicrotask(() => {
+				if (this.disposed || generation !== this.compositionGeneration || this.view.compositionStarted) return;
+				this.compositionActive = false;
+				if (this.view.state.field(composingField)) this.view.dispatch({ effects: composingEffect.of(false) });
+				this.input.dispatchEvent(new this.input.ownerDocument.defaultView!.CustomEvent("composer-compositionend", { detail: event }));
+			}),
+		});
+	}
+
 	private createState(doc: string, label: string, hint: string): EditorState {
 		return EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [
 			history(), this.editable.of(EditorView.editable.of(this.enabled)),
 			// 通过 facet 保留宿主类名，避免焦点切换时被 CodeMirror 重写。
 			EditorView.editorAttributes.of({ class: "knomo-composer-editor" }),
-			EditorView.contentAttributes.of({ "aria-labelledby": label, "aria-multiline": "true", role: "textbox", class: "knomo-composer-input" }),
+			// Memo 是自然语言输入，覆盖代码编辑器默认关闭的系统纠错和联想能力。
+			EditorView.contentAttributes.of({ "aria-labelledby": label, "aria-multiline": "true", role: "textbox", class: "knomo-composer-input",
+				inputmode: "text", spellcheck: "true", autocorrect: "on", autocapitalize: "sentences", writingsuggestions: "true" }),
 			EditorView.lineWrapping, placeholder(hint),
 			keymap.of([...historyKeymap, ...standardKeymap.filter(binding => binding.key !== "Enter"), { key: "Enter", run: insertNewline, shift: insertNewline }]),
 			composingField, syntaxField,
 			decorationsField,
+			EditorState.transactionExtender.of(tr => {
+				const composing = this.compositionActive;
+				return composing !== tr.startState.field(composingField) ? { effects: composingEffect.of(composing) } : null;
+			}),
 			EditorState.transactionFilter.of(tr => {
-				if (!tr.docChanged || !tr.isUserEvent("input.type") || tr.isUserEvent("input.type.compose")) return tr;
+				if (!tr.docChanged || this.composing || !tr.isUserEvent("input.type") || tr.isUserEvent("input.type.compose")) return tr;
+				let insertedNewline = false;
+				tr.changes.iterChanges((_from, _to, _nextFrom, _nextTo, inserted) => { if (inserted.lines > 1) insertedNewline = true; });
+				if (!insertedNewline) return tr;
 				const selection = tr.newSelection.main;
 				const patch = getListEnterPatchForNativeInput(tr.startState.doc.toString(), tr.newDoc.toString(), selection.from, selection.to,
 					{ allowTextChangeWithNewline: true, allowInsertedMarkerCorrection: true });
@@ -181,7 +220,7 @@ export class ComposerEditor {
 	}
 
 	apply(edit: ComposerEdit): boolean {
-		if (this.disposed || !this.enabled || this.view.composing || this.view.state.field(composingField)) return false;
+		if (this.disposed || !this.enabled || this.composing) return false;
 		const value = this.input.value;
 		if (value === edit.value) return false;
 		// 最小差异保留选区映射和输入法附近的 DOM，文本与选区只提交一次。
@@ -200,10 +239,13 @@ export class ComposerEditor {
 	reset(doc: string): void {
 		this.session++;
 		this.revision++;
+		this.compositionGeneration++;
+		this.compositionActive = false;
+		this.beforeInput = null;
 		this.view.setState(this.createState(doc, this.label, this.hint));
 		this.input.dispatchEvent(new this.input.ownerDocument.defaultView!.Event("composer-reset"));
 	}
-	get composing(): boolean { return this.view.composing || this.view.state.field(composingField); }
+	get composing(): boolean { return this.compositionActive || this.view.compositionStarted || this.view.state.field(composingField); }
 	capture(): { valid: () => boolean; sameSession: () => boolean; anchor: number; head: number } {
 		const session = this.session, revision = this.revision;
 		return { valid: () => !this.disposed && session === this.session && revision === this.revision,

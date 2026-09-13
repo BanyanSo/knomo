@@ -17,6 +17,22 @@ test("does not modify Composer input while composing and completes after composi
 	assert.equal(harness.input.selectionStart, 2);
 });
 
+test("composition closes candidates and a new draft resets the composition guard", () => {
+	const harness = createHarness([makeFile("Notes/Alpha.md")]);
+	harness.input.value = "[[Al]]";
+	harness.input.setSelectionRange(4, 4);
+	harness.suggest.openForCurrentRange();
+	assert.equal(harness.suggest.isOpen(), true);
+	harness.suggest.handleCompositionStart();
+	assert.equal(harness.suggest.isOpen(), false);
+	harness.input.value = "【【";
+	harness.input.setSelectionRange(2, 2);
+	harness.suggest.handleCompositionReset();
+	assert.equal(harness.input.value, "【【");
+	assert.equal(harness.suggest.handleInput(), true);
+	assert.equal(harness.input.value, "[[]]");
+});
+
 test("selects a candidate with fileToLinktext", () => {
 	const file = makeFile("Projects/Alpha.md");
 	const harness = createHarness([file], {

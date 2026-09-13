@@ -1340,6 +1340,7 @@ export class KnomoView extends ItemView {
 		});
 		this.composerEl = composer.composerEl;
 		this.inputEl = composer.inputEl;
+		this.composerIsComposing = false;
 		this.getRenderScope().register(() => composer.inputEl.composer.destroy());
 		this.timeBuoyButtonEl = composer.timeBuoyButtonEl;
 		this.timeBuoyMonthStatusEl = composer.timeBuoyMonthStatusEl;
@@ -1393,20 +1394,21 @@ export class KnomoView extends ItemView {
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "compositionstart", () => {
 			this.composerIsComposing = true;
+			this.tagSuggest?.close();
 			this.wikiLinkSuggest?.handleCompositionStart();
 		});
-		this.getRenderScope().registerDomEvent(this.inputEl, "compositionend", (event: CompositionEvent) => {
+		this.getRenderScope().registerDomEvent(this.inputEl, "composer-compositionend", (event) => {
 			this.composerIsComposing = false;
-			const input = this.inputEl;
-			const context = input?.composer.capture();
-			queueMicrotask(() => {
-				if (input !== this.inputEl || !context?.sameSession()) return;
-				this.wikiLinkSuggest?.handleCompositionEnd();
-				this.tagSuggest?.refresh();
-				this.handleTimeBuoyCompositionEnd(event);
-			});
+			this.wikiLinkSuggest?.handleCompositionEnd();
+			this.tagSuggest?.refresh();
+			this.handleTimeBuoyCompositionEnd(event.detail);
+		});
+		this.getRenderScope().registerDomEvent(this.inputEl, "composer-reset", () => {
+			this.composerIsComposing = this.inputEl?.composer.composing ?? false;
+			if (!this.composerIsComposing) this.wikiLinkSuggest?.handleCompositionReset();
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "click", () => {
+			if (this.inputEl?.composer.composing) return;
 			this.wikiLinkSuggest?.refreshForCursor();
 			this.tagSuggest?.refresh();
 			this.closeTimeBuoyPickerIfTriggerMoved();
@@ -1426,6 +1428,7 @@ export class KnomoView extends ItemView {
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "keyup", (event) => {
 			this.handleComposerKeyup(event);
+			if (event.isComposing || this.inputEl?.composer.composing) return;
 			if (!(event.ctrlKey || event.metaKey)) this.wikiLinkSuggest?.refreshForCursor();
 			this.closeTimeBuoyPickerIfTriggerMoved();
 		});
@@ -5420,7 +5423,10 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const maxHeight = this.currentLayout === "mobile" ? this.getMobileMaxInputHeight() : 480;
-		this.inputEl.composer.view.scrollDOM.style.maxHeight = `${maxHeight}px`;
+		const height = `${maxHeight}px`;
+		// 正文变化由 CodeMirror 自行测量，仅高度约束变化时额外请求布局。
+		if (this.inputEl.composer.view.scrollDOM.style.maxHeight === height) return;
+		this.inputEl.composer.view.scrollDOM.style.maxHeight = height;
 		this.inputEl.composer.view.requestMeasure();
 	}
 

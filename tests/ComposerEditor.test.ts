@@ -6,11 +6,15 @@ import { redo, undo, undoDepth } from "@codemirror/commands";
 import { ComposerEditor } from "../src/ui/ComposerEditor";
 import { runComposerCommand } from "../src/utils/composerCommands";
 import { registerComposerToolGesture } from "../src/ui/ComposerToolGesture";
+import { parser } from "@lezer/markdown";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 function environment(value: string) {
 	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true });
 	const win = dom.window;
+	// jsdom 没有原生布局 API；让 CodeMirror 的测量临时节点能正常完成清理。
+	win.Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+	win.Range.prototype.getBoundingClientRect = () => new win.DOMRect();
 	const previous = new Map<string, PropertyDescriptor | undefined>();
 	for (const name of ["window", "document", "MutationObserver", "Node", "HTMLElement", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
 		previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
@@ -76,6 +80,25 @@ test("real EditorView keeps one Markdown state, atomic toolbar history and sessi
 		assert.equal(undo(editor.view), false);
 		assert.equal(editor.input.value, "another Memo");
 		assert.equal(editor.view.dom.querySelector("textarea"), null);
+	} finally { close(); }
+});
+
+test("natural-language keyboard hints survive focus, editing and draft reset", async () => {
+	const { editor, close } = environment("hello");
+	try {
+		const check = () => {
+			for (const [name, value] of Object.entries({ inputmode: "text", spellcheck: "true", autocorrect: "on", autocapitalize: "sentences", writingsuggestions: "true" })) {
+				assert.equal(editor.input.getAttribute(name), value);
+			}
+		};
+		check();
+		editor.view.focus();
+		await new Promise(resolve => setTimeout(resolve, 30));
+		check();
+		editor.apply({ value: "hello world", anchor: 11, head: 11 });
+		check();
+		editor.reset("new draft");
+		check();
 	} finally { close(); }
 });
 
@@ -168,6 +191,110 @@ test("editor only installs ordinary text keys and Shift-Enter remains a literal 
 		assert.equal(editor.input.value, "- item");
 		editor.input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }));
 		assert.equal(editor.input.value, "- item\n");
+	} finally { close(); }
+});
+
+test("composition events leave pending native DOM and editor state untouched", async () => {
+	const { editor, win, close } = environment("ni");
+	try {
+		editor.view.focus();
+		await new Promise(resolve => setTimeout(resolve, 30));
+		const state = editor.view.state;
+		const text = editor.input.querySelector(".cm-line")!.firstChild!;
+		text.nodeValue = "你";
+		win.document.getSelection()!.collapse(text, 1);
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart", { bubbles: true }));
+		assert.equal(editor.view.state, state, "compositionstart must not dispatch over pending DOM input");
+		assert.equal(editor.input.textContent, "你");
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { data: "你", bubbles: true }));
+		await new Promise(resolve => setTimeout(resolve, 80));
+		assert.equal(editor.input.value, "你");
+		assert.equal(editor.input.textContent, "你");
+		assert.equal(editor.input.selectionStart, 1);
+		assert.equal(editor.composing, false);
+		undo(editor.view);
+		assert.equal(editor.input.value, "ni");
+	} finally { close(); }
+});
+
+test("composition defers Markdown parsing until native input settles", async t => {
+	const { editor, win, close } = environment("**bold**\n");
+	const parse = t.mock.method(parser, "parse");
+	try {
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		for (const text of ["n", "ni", "你"]) {
+			editor.view.dispatch({ changes: { from: 9, to: editor.view.state.doc.length, insert: text },
+				selection: { anchor: 9 + text.length }, annotations: Transaction.userEvent.of("input.type.compose") });
+		}
+		assert.equal(parse.mock.callCount(), 0, "preedit changes must not parse the full draft");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "bold");
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { data: "你" }));
+		await new Promise(resolve => setTimeout(resolve, 80));
+		assert.equal(parse.mock.callCount(), 1);
+		assert.equal(editor.input.value, "**bold**\n你");
+		assert.equal(editor.composing, false);
+	} finally { parse.mock.restore(); close(); }
+});
+
+test("composition completion reads the last native replacement before notifying consumers", async () => {
+	const { editor, win, close } = environment("ni");
+	try {
+		editor.view.focus();
+		await new Promise(resolve => setTimeout(resolve, 30));
+		const committed: string[] = [];
+		editor.input.addEventListener("composer-compositionend", () => {
+			assert.equal(editor.composing, false);
+			committed.push(editor.input.value);
+		});
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { data: "你" }));
+		await Promise.resolve();
+		assert.equal(editor.composing, true);
+		assert.deepEqual(committed, []);
+		const text = editor.input.querySelector(".cm-line")!.firstChild!;
+		text.nodeValue = "你";
+		win.document.getSelection()!.collapse(text, 1);
+		editor.input.dispatchEvent(new win.InputEvent("input", { inputType: "insertText", data: "你" }));
+		await new Promise(resolve => setTimeout(resolve, 80));
+		assert.deepEqual(committed, ["你"]);
+		assert.equal(editor.input.value, "你");
+	} finally { close(); }
+});
+
+test("rapid compositions and reset invalidate older completion callbacks", async () => {
+	const { editor, win, close } = environment("draft");
+	try {
+		let completed = 0;
+		editor.input.addEventListener("composer-compositionend", () => completed++);
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		await new Promise(resolve => setTimeout(resolve, 60));
+		assert.equal(completed, 0);
+		assert.equal(editor.composing, true);
+		assert.equal(editor.apply({ value: "wrong", anchor: 5, head: 5 }), false);
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+		await new Promise(resolve => setTimeout(resolve, 60));
+		assert.equal(completed, 1);
+		assert.equal(editor.composing, false);
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+		editor.reset("new draft");
+		await new Promise(resolve => setTimeout(resolve, 60));
+		assert.equal(completed, 1);
+		assert.equal(editor.input.value, "new draft");
+		assert.equal(editor.composing, false);
+	} finally { close(); }
+});
+
+test("unchanged editability does not dispatch during native composition", () => {
+	const { editor, win, close } = environment("draft");
+	try {
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		const state = editor.view.state;
+		editor.input.disabled = false;
+		assert.equal(editor.view.state, state);
+		assert.equal(editor.composing, true);
 	} finally { close(); }
 });
 

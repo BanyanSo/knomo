@@ -115,6 +115,12 @@ export class KnomoWikiLinkSuggest {
 
 	handleCompositionStart(): void {
 		this.composing = true;
+		this.close();
+	}
+
+	handleCompositionReset(): void {
+		this.composing = false;
+		this.close();
 	}
 
 	handleCompositionEnd(): boolean {

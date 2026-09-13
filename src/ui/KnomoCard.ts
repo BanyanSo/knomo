@@ -106,9 +106,6 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 					action.className,
 				);
 			}
-			if (options.timeBuoy !== undefined) {
-				renderCardAction(actions, memo.id, "mark-reviewed", getMemoActionLabel("mark-reviewed"), "knomo-card-action");
-			}
 			actions.createDiv({
 				cls: "knomo-card-word-count",
 				text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }),

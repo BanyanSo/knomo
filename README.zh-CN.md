@@ -667,12 +667,12 @@ persistence、migration、identity、数据安全及跨服务语义修改须先�
 
 ### Knomo 适用于 Obsidian 桌面端和移动端
 
-Knomo 采用 MIT 许可证。你可以自由使用、复制、修改、合并、发布、分发、再授权或出售本软件的副本，但需要在代码的重要部分中保留版权声明和许可证声明。
+从 Knomo 1.10.0 的本次许可变更起，Knomo 原创内容采用 **GNU GPL 第 3 版且仅限该版（GPL-3.0-only），附 Knomo Obsidian 宿主附加许可**。请一起阅读 [许可说明](./LICENSING.md)、[GPLv3 标准全文](./LICENSE)和[宿主附加许可](./OBSIDIAN-EXCEPTION.txt)。
 
-这也包括你可能从 Knomo 中提取出来的独立代码片段、样式、组件或工具函数。
+你可以依照这些条款使用、修改和商业分发 Knomo。分发受覆盖的 fork，或抽取的代码、样式、组件和工具函数时，应履行适用的 GPL 义务，包括对应源码及必要声明。宿主附加许可允许与独立取得的 Obsidian 进行必要结合，不免除 Knomo 的 GPL 义务，也不授权分发 Obsidian。在法律允许的范围内，本软件不提供担保。
 
-如果你分发 Knomo 的分支版本，或复用其中一部分代码，欢迎在你的 README 中保留指向原项目的链接和保留我的 [Buy me a coffee](https://www.buymeacoffee.com/banyanso) 链接。
+历史 MIT 授权继续有效，之前按 MIT 提供的内容仍可按原条款使用。[历史 MIT 声明](./LICENSES/Knomo-historical-MIT.txt)完整保留，但不为新贡献授予 MIT 许可。第三方内容保留各自许可和[必要声明](./THIRD-PARTY-NOTICES.txt)。你的笔记不会仅因使用 Knomo 而变为 GPL 内容。
 
-Knomo 是为 Obsidian 设计的，并可能持续更新，以适配新版 Obsidian，包括桌面端、移动端以及 Minimal 等社区主题的体验改进。
+[品牌政策](./BRANDING.md)将代码许可与官方身份分开。软件许可允许 fork 和商业使用，但不得造成官方背书的误解。欢迎保留原项目或 [Buy me a coffee](https://www.buymeacoffee.com/banyanso) 链接，这不是许可条件。新贡献的许可见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-详情请查看 [LICENSE](./LICENSE) 文件。
+开发源码位于[本仓库](https://github.com/BanyanSo/knomo)。每次 GPL 二进制分发都必须明确提供取得完整对应源码的方式。本次许可文件修改尚未实现发行打包与源码交付，正式发布前仍需完成[发行要求](./LICENSING.md#source-and-distribution-release-work-still-required)。

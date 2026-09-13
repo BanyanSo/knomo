@@ -4568,3 +4568,9 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-plugin .knomo-tool-button, .knomo-plugin .knomo-composer-actions { flex-shrink: 0; }
 .knomo-toolbar-settings { width: 100%; }
 .knomo-toolbar-setting-row { flex-wrap: wrap; }
+.knomo-toolbar-details { width: 100%; }
+.knomo-toolbar-details > summary { cursor: pointer; }
+.knomo-toolbar-details > summary > .setting-item-info { display: inline-block; vertical-align: middle; }
+.knomo-toolbar-details > summary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 4px; }
+.knomo-toolbar-details[open] > .knomo-toolbar-settings { margin-top: var(--size-4-3); }
+.knomo-toolbar-setting-row > .setting-item-control:empty { display: none; }

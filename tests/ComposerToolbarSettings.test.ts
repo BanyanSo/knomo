@@ -29,7 +29,17 @@ test("repeated declarative toolbar renders replace owned content and preserve th
 			renderer.renderToolbarSetting.call({ settingsService: { getSettings: () => ({ composerToolbar: normalizeComposerToolbar(undefined) }) } }, { settingEl: row });
 			assert.equal(row.querySelectorAll(".knomo-toolbar-settings").length, 1);
 			assert.equal(row.querySelector(".setting-item-info")?.textContent, "Toolbar");
+			const details = row.querySelector("details")!;
+			assert.equal(row.querySelectorAll("details").length, 1);
+			assert.ok(details.querySelector("summary > .setting-item-info"));
+			assert.equal(details.open, i > 0);
+			if (i === 0) {
+				details.querySelector("summary")!.click();
+				assert.equal(details.open, true);
+			}
 		}
+		row.querySelector("summary")!.click();
+		assert.equal(row.querySelector("details")!.open, false);
 	} finally { Setting.prototype.addButton = original; dom.window.close(); }
 });
 
@@ -82,6 +92,9 @@ test("toolbar locks visibility, ordering and reset until save settles and recove
 	try {
 		(KnomoSettingTab.prototype as unknown as { renderToolbarSetting(this: unknown, setting: unknown): void })
 			.renderToolbarSetting.call({ settingsService: service }, { settingEl: dom.window.document.getElementById("row") });
+		const details = dom.window.document.querySelector("details")!;
+		assert.equal(details.open, false);
+		details.querySelector("summary")!.click();
 		const bold = preferences.order.indexOf("bold") * 3, highlight = preferences.order.indexOf("highlight") * 3;
 		controls[bold].click(true);
 		assert.ok(controls.every(control => control.disabled));
@@ -90,6 +103,7 @@ test("toolbar locks visibility, ordering and reset until save settles and recove
 		controls.at(-1)!.click();
 		assert.equal(saves, 1);
 		resolveSave(); await flush();
+		assert.equal(details.open, true);
 		assert.equal(controls[bold].value, true);
 		assert.equal(controls[highlight].value, false);
 		controls[highlight].click(true);
@@ -104,7 +118,9 @@ test("toolbar locks visibility, ordering and reset until save settles and recove
 		assert.deepEqual(preferences.order.slice(0, 2), [order[1], order[0]]);
 		const visible = controls.findIndex((control, index) => index % 3 === 0 && control.value);
 		controls[visible].click(false);
+		details.querySelector("summary")!.click();
 		rejectSave(new Error("save failed")); await flush();
+		assert.equal(details.open, false);
 		assert.equal(controls[visible].disabled, false);
 		assert.equal(controls[visible].value, true);
 		assert.equal(controls[1].disabled, true);

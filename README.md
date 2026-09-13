@@ -667,12 +667,12 @@ When reporting mobile issues, please include device model, OS version, Obsidian 
 
 ### Knomo for Obsidian Desktop and Mobile
 
-Knomo is licensed under the MIT License. You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of this software, as long as you preserve the copyright and license notice in any substantial portion of the code.
+Starting with the Knomo 1.10.0 licensing change, Knomo's original material is licensed under **GNU GPL version 3 only (GPL-3.0-only), with the Knomo Obsidian Host Additional Permission**. Read [LICENSING.md](./LICENSING.md), the standard [GPLv3 text](./LICENSE), and the [host additional permission](./OBSIDIAN-EXCEPTION.txt) together.
 
-This includes any standalone snippets, styles, components, or utility functions you may extract from Knomo.
+You may use, modify, and commercially distribute Knomo under these terms. Distribution of covered forks or extracted code, styles, components, and utilities must comply with applicable GPL obligations, including Corresponding Source and required notices. The host permission permits the necessary combination with independently obtained Obsidian; it does not waive GPL obligations for Knomo or authorize distribution of Obsidian. The software is provided without warranty to the extent permitted by law.
 
-If you distribute a fork of Knomo or reuse part of its code, it would be appreciated if you keep a link back to the original project in your README and keep my [Buy me a coffee](https://www.buymeacoffee.com/banyanso) link.
+Historical MIT grants remain valid: you may continue to use material previously supplied under MIT on those terms. The [historical MIT notice](./LICENSES/Knomo-historical-MIT.txt) is preserved; it does not grant MIT permission for new contributions. Third-party material retains its own licenses and [required notices](./THIRD-PARTY-NOTICES.txt). Your notes do not become GPL-covered merely by using Knomo.
 
-Knomo is designed for Obsidian and may continue to be updated to stay compatible with new versions of Obsidian, including improvements for desktop, mobile, and community themes such as Minimal.
+The [brand policy](./BRANDING.md) separates code licensing from official identity. Forks and commercial use are allowed under the software license; do not imply official endorsement. A project link or [Buy me a coffee](https://www.buymeacoffee.com/banyanso) link is appreciated, not required. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the license of new contributions.
 
-See the [LICENSE](./LICENSE) file for details.
+Development source is available in [this repository](https://github.com/BanyanSo/knomo). Each GPL binary distribution must provide a clearly identified way to obtain its complete Corresponding Source. The current licensing change does not yet implement release packaging or source delivery; see the [remaining release requirements](./LICENSING.md#source-and-distribution-release-work-still-required).

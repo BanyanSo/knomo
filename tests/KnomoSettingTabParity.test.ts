@@ -13,11 +13,11 @@ const expectedGroupKeys = [
 
 const expectedRenderOrder = [
 	"renderAttentionSetting",
-	"renderToolbarSetting",
 	"renderDailyHeadingSetting",
 	"renderInsertPositionSetting",
 	"renderTimeFormatSetting",
 	"renderTimeBuoySetting",
+	"renderToolbarSetting",
 	"renderDateOrderSetting",
 	"renderMonthlyFileFormatSetting",
 	"renderDateHeadingFormatSetting",

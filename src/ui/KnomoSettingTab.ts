@@ -85,11 +85,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 				heading: t("settings.capture.heading"),
 				items: [
 					{
-						name: t("settings.toolbar.name"),
-						desc: t("settings.toolbar.desc"),
-						render: (setting: Setting) => this.renderToolbarSetting(setting),
-					},
-					{
 						name: t("settings.dailyHeading.name"),
 						desc: t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING }),
 						render: (setting: Setting) => { this.renderDailyHeadingSetting(setting); },
@@ -108,6 +103,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 						name: t("settings.timeBuoy.name"),
 						desc: t("settings.timeBuoy.desc"),
 						render: (setting: Setting) => { this.renderTimeBuoySetting(setting); },
+					},
+					{
+						name: t("settings.toolbar.name"),
+						desc: t("settings.toolbar.desc"),
+						render: (setting: Setting) => this.renderToolbarSetting(setting),
 					},
 				],
 			},
@@ -178,7 +178,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName(t("settings.capture.heading"))
 			.setHeading();
-		this.renderToolbarSetting(new Setting(containerEl).setName(t("settings.toolbar.name")).setDesc(t("settings.toolbar.desc")));
 		this.renderDailyHeadingSetting(new Setting(containerEl)
 			.setName(t("settings.dailyHeading.name"))
 			.setDesc(t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING })));
@@ -191,6 +190,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.renderTimeBuoySetting(new Setting(containerEl)
 			.setName(t("settings.timeBuoy.name"))
 			.setDesc(t("settings.timeBuoy.desc")));
+		this.renderToolbarSetting(new Setting(containerEl).setName(t("settings.toolbar.name")).setDesc(t("settings.toolbar.desc")));
 
 		new Setting(containerEl)
 			.setName(t("settings.monthly.heading"))
@@ -231,9 +231,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderToolbarSetting(setting: Setting): void {
 		setting.settingEl.addClass("knomo-toolbar-setting-row");
-		// 声明式设置会复用行节点，多次刷新时替换本组件拥有的内容。
-		setting.settingEl.querySelectorAll(":scope > .knomo-toolbar-settings").forEach(container => container.remove());
-		const container = setting.settingEl.createDiv({ cls: "knomo-toolbar-settings" });
+		// 复用折叠节点，行刷新与保存结果重绘均保留用户当前的展开状态。
+		let details = setting.settingEl.querySelector<HTMLDetailsElement>(":scope > .knomo-toolbar-details");
+		if (!details) {
+			details = setting.settingEl.ownerDocument.createElement("details");
+			details.className = "knomo-toolbar-details";
+			const summary = setting.settingEl.ownerDocument.createElement("summary");
+			const info = setting.settingEl.querySelector(":scope > .setting-item-info");
+			if (info) summary.appendChild(info);
+			else summary.textContent = t("settings.toolbar.name");
+			details.appendChild(summary);
+			setting.settingEl.appendChild(details);
+		}
+		details.querySelectorAll(":scope > .knomo-toolbar-settings").forEach(container => container.remove());
+		const container = details.createDiv({ cls: "knomo-toolbar-settings" });
 		let saving = false;
 		const render = () => {
 			container.empty();

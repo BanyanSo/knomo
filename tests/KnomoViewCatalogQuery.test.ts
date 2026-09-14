@@ -1,9 +1,45 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+test("全历史查询结果不变时立即移除旧加载按钮，保留已渲染卡片", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const dom = new JSDOM("<div><article>first memo</article><button class='knomo-history-load-more'>加载更多 memo</button></div>");
+	try {
+		const root = dom.window.document.querySelector("div")!;
+		const card = root.querySelector("article");
+		const view = Object.create(KnomoView.prototype) as {
+			catalogHistoryExpansionPending: boolean;
+			loadNextCatalogPage(): Promise<boolean>;
+			renderCardFlowIfChanged(key: string): void;
+		};
+		Object.assign(view, {
+			cardFlowEl: root, catalogCursor: null, catalogHistoryExpansionPending: true,
+			catalogLoadingNextPage: false,
+			cardFlowCoordinator: { remainingCount: 0, deferredForAllMemos: false },
+			viewStateController: Object.assign(new KnomoViewStateController(), { activeNav: "all" }),
+			getCardFlowStateKey: () => "same-memos", isDefaultListState: () => true,
+			renderCardFlow: () => assert.fail("分页状态变化不应重建卡片"),
+			renderNextCardBatch: () => undefined,
+			reloadMemos: async () => {
+				view.catalogHistoryExpansionPending = false;
+				view.renderCardFlowIfChanged("same-memos");
+				return true;
+			},
+		});
+		assert.equal(await view.loadNextCatalogPage(), true);
+		assert.equal(root.querySelector(".knomo-history-load-more"), null);
+		assert.equal(root.querySelector("article"), card);
+		assert.equal(await view.loadNextCatalogPage(), false);
+	} finally {
+		dom.window.close();
+	}
+});
 
 test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", async () => {
 	await ensureObsidianStub();
@@ -19,12 +55,13 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	view.catalogCursor = { catalog: { catalogRevision: 1, createdAtKey: "old", observationKey: "old" } };
 	view.memos = [];
 	view.viewStateController = Object.assign(new KnomoViewStateController(), { activeNav: "all" as const });
-	view.getCatalogQueryFingerprint = () => "all";
+	view.getCatalogQueryFingerprint = (all) => all ? "all" : "recent";
 	view.loadCatalogMemos = async () => {
 		const load = loads.shift();
 		assert.notEqual(load, undefined);
 		return {
 			memos: await (load?.promise ?? []),
+			fullHistoryLoaded: true,
 			nextCursor: null,
 			catalogRevision: 1,
 
@@ -59,6 +96,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	const secondRun = view.reloadMemos(false, true);
 	second.resolve([makeMemo("new", "2026-08-24T10:00:00")]);
 	assert.equal(await secondRun, true);
+	assert.equal(view.catalogDesktopQueryFingerprint, "all", "全历史 cursor 必须使用全历史查询标识");
 	first.resolve([makeMemo("old", "2026-08-23T10:00:00")]);
 	assert.equal(await firstRun, false);
 	assert.deepEqual(view.memos.map((memo) => memo.id), ["new"]);
@@ -140,6 +178,10 @@ test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展�
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as InitialMobileView;
+	Object.assign(view, {
+		catalogDesktopQueryRun: 0, getCatalogQueryFingerprint: () => "all",
+		prepareCatalogDesktopQuery: () => undefined, isCatalogQueryCurrent: () => true,
+	});
 	view.memoSourceGeneration = 0;
 	view.catalogHistoryExpansionPending = false;
 	view.cardFlowEl = { isConnected: true } as HTMLElement;
@@ -172,7 +214,7 @@ test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展�
 	assert.equal(view.catalogHistoryExpansionPending, false);
 });
 
-test("移动端近月无下一页时确认全历史，保留真实历史 cursor 且限制查询大小", async () => {
+test("桌面和移动端近月无下一页时确认全历史，保留真实历史 cursor 且限制查询大小", async () => {
 	await ensureObsidianStub();
 	const { Platform } = await import("obsidian");
 	const { KnomoView } = await import("../src/ui/KnomoView");
@@ -186,21 +228,23 @@ test("移动端近月无下一页时确认全历史，保留真实历史 cursor 
 	Object.assign(view, { shouldShowTodayTimeBuoys: () => false });
 	view.isDefaultListState = () => true;
 	const previousMobile = Platform.isMobile;
-	Platform.isMobile = true;
 	try {
-		for (const nextCursor of [null, { catalog: { catalogRevision: 1, createdAtKey: "old", observationKey: "old" } }]) {
-			const requests: Array<{ limit: number; cursor: unknown; fromDate?: string }> = [];
-			view.queryCatalogFeature = async (request) => {
-				requests.push(request);
-				return { ...makeCatalogLoad(1, completeCoverage()), items: [], nextCursor: requests.length === 1 ? null : nextCursor };
-			};
-			const load = await view.loadCatalogMemos(false);
-			assert.equal(load.fullHistoryLoaded, true);
-			assert.equal(load.nextCursor, nextCursor);
-			assert.deepEqual(requests, [
-				{ fromDate: "2026-08-01", limit: 50, cursor: null },
-				{ limit: 50, cursor: null },
-			]);
+		for (const mobile of [false, true]) {
+			Platform.isMobile = mobile;
+			for (const nextCursor of [null, { catalog: { catalogRevision: 1, createdAtKey: "old", observationKey: "old" } }]) {
+				const requests: Array<{ limit: number; cursor: unknown; fromDate?: string }> = [];
+				view.queryCatalogFeature = async (request) => {
+					requests.push(request);
+					return { ...makeCatalogLoad(1, completeCoverage()), items: [], nextCursor: requests.length === 1 ? null : nextCursor };
+				};
+				const load = await view.loadCatalogMemos(false);
+				assert.equal(load.fullHistoryLoaded, true);
+				assert.equal(load.nextCursor, nextCursor);
+				assert.deepEqual(requests, [
+					{ fromDate: "2026-08-01", limit: 50, cursor: null },
+					{ limit: 50, cursor: null },
+				]);
+			}
 		}
 	} finally {
 		Platform.isMobile = previousMobile;

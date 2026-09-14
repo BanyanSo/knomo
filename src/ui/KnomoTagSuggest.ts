@@ -1,4 +1,5 @@
 import { applyComposerEdit, type ComposerInput } from "./ComposerEditor";
+import { registerComposerToolGesture } from "./ComposerToolGesture";
 import { prepareFuzzySearch, renderResults } from "obsidian";
 import type { App, SearchResult } from "obsidian";
 
@@ -25,6 +26,7 @@ export class KnomoTagSuggest {
 	private requestGeneration = 0;
 	private readonly popoverId: string;
 	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
+	private clearTouchClickGuard: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -88,16 +90,27 @@ export class KnomoTagSuggest {
 		this.inputEl.setAttribute("aria-controls", this.popoverId);
 		this.inputEl.setAttribute("aria-expanded", "true");
 		container.setAttribute("role", "listbox");
+		// 与工具栏共用触摸手势：松手点选、滑动/取消不选，阻止兼容鼠标事件夺走焦点。
+		registerComposerToolGesture(container, (action, event) => {
+			const suggestion = this.suggestions[Number(action)];
+			if (this.popoverEl !== container || !suggestion) return;
+			if (event.type === "pointerup") {
+				event.stopImmediatePropagation();
+				this.guardTouchClickThrough(event);
+			}
+			this.selectSuggestion(suggestion);
+		});
 		for (const [index, suggestion] of suggestions.entries()) {
 			const item = container.createDiv({ cls: "suggestion-item" });
 			item.setAttribute("role", "option");
+			item.setAttribute("data-action", String(index));
 			item.id = `${this.popoverId}-${index}`;
 			item.setAttribute("aria-selected", String(index === this.selectedIndex));
 			item.toggleClass("is-selected", index === this.selectedIndex);
 			this.renderSuggestion(suggestion, item);
-			item.addEventListener("pointerdown", event => event.preventDefault());
-			item.addEventListener("pointermove", () => this.setSelectedIndex(index, false));
-			item.addEventListener("click", event => this.selectSuggestion(suggestion, event));
+			item.addEventListener("pointermove", event => {
+				if (event.pointerType === "mouse") this.setSelectedIndex(index, false);
+			});
 		}
 		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${this.selectedIndex}`);
 		this.queuePopoverReposition();
@@ -106,17 +119,46 @@ export class KnomoTagSuggest {
 		const keydown = (event: KeyboardEvent) => { this.handleKeydown(event); };
 		const keyup = (event: KeyboardEvent) => { if (!(event.ctrlKey || event.metaKey)) this.refresh(); };
 		const close = () => this.close();
+		const reset = () => { this.clearTouchClickGuard?.(); this.close(); };
 		this.inputEl.addEventListener("keydown", keydown, true);
 		this.inputEl.addEventListener("keyup", keyup);
 		this.inputEl.addEventListener("blur", close);
-		this.inputEl.addEventListener("composer-reset", close);
+		this.inputEl.addEventListener("composer-reset", reset);
 		return () => {
 			this.inputEl.removeEventListener("keydown", keydown, true);
 			this.inputEl.removeEventListener("keyup", keyup);
 			this.inputEl.removeEventListener("blur", close);
-			this.inputEl.removeEventListener("composer-reset", close);
+			this.inputEl.removeEventListener("composer-reset", reset);
+			this.clearTouchClickGuard?.();
 			this.close();
 		};
+	}
+	private guardTouchClickThrough(origin: MouseEvent): void {
+		this.clearTouchClickGuard?.();
+		const win = this.inputEl.ownerDocument.defaultView;
+		if (win === null) return;
+		// 松手后候选 DOM 会消失；在窗口捕获同一次触摸的尾部事件，防止重新命中编辑器/蒙层。
+		const types = ["touchend", "mousedown", "mouseup", "click"] as const;
+		const guard = (event: Event) => {
+			if (event.type === "click" && (event as MouseEvent).detail === 0) return;
+			const point = event.type === "touchend"
+				? (event as TouchEvent).changedTouches[0] : event as MouseEvent;
+			if (!point || Math.hypot(point.clientX - origin.clientX, point.clientY - origin.clientY) > 12) return;
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			if (event.type === "click") clear();
+		};
+		const clear = () => {
+			for (const type of types) win.removeEventListener(type, guard, true);
+			win.removeEventListener("pointerdown", clear, true);
+			win.clearTimeout(timer);
+			this.clearTouchClickGuard = null;
+		};
+		const timer = win.setTimeout(clear, 600);
+		this.clearTouchClickGuard = clear;
+		for (const type of types) win.addEventListener(type, guard, { capture: true, passive: false });
+		// 新的真实手势立即放行，不依赖固定延时封锁后续点击。
+		win.addEventListener("pointerdown", clear, true);
 	}
 	handleKeydown(event: KeyboardEvent): boolean {
 		const controlNavigation = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["n", "p"].includes(event.key.toLowerCase());
@@ -166,14 +208,15 @@ export class KnomoTagSuggest {
 		this.queuePopoverReposition();
 	}
 
-	selectSuggestion(value: TagSuggestion, _evt: MouseEvent | KeyboardEvent): void {
+	selectSuggestion(value: TagSuggestion, _evt?: MouseEvent | KeyboardEvent): void {
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			this.close();
 			return;
 		}
 		const next = replaceTagQueryWithSuggestion(this.inputEl.value, range, value.tag);
-		applyComposerEdit(this.inputEl, next.value, next.cursor);
+		if (!applyComposerEdit(this.inputEl, next.value, next.cursor)) return;
+		this.inputEl.composer.view.focus();
 		this.onInputChanged();
 		this.close();
 	}

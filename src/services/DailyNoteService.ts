@@ -1,4 +1,3 @@
-import { createDailyNote } from "obsidian-daily-notes-interface";
 import { moment as obsidianMoment, normalizePath, TFile } from "obsidian";
 import type { App } from "obsidian";
 
@@ -16,6 +15,7 @@ export interface DailyNotesStatus {
 export interface DailyNotesConfig {
 	folder: string | null;
 	format: string;
+	template?: string;
 }
 
 export interface DailyNotesConfigProvider {
@@ -51,33 +51,36 @@ export class DailyNoteService {
 	}
 
 	async getOrCreateDailyNoteForDate(date: Date): Promise<TFile> {
-		const status = await this.getFreshStatus();
-		if (!status.enabled) {
-			throw new KnomoError("daily_notes_disabled");
-		}
-		const path = this.getDailyNotePathForDate(date, status);
-		const existing = this.app.vault.getAbstractFileByPath(path);
-		if (existing instanceof TFile) {
-			return existing;
-		}
-
-		try {
-			const momentFactory = obsidianMoment as unknown as MomentFactory;
-			const createdFile = await createDailyNote(momentFactory(date) as Parameters<typeof createDailyNote>[0]);
-			if (createdFile instanceof TFile) {
-				return createdFile;
-			}
-		} catch {
-			// Daily Notes 可能在移动端或异常配置下失败；继续走本地兜底创建。
-		}
-
-		return ensureTextFile(this.app, path);
+		return this.getOrCreateDailyNoteForDateWithConfig(date, await this.getDailyNotesConfig());
 	}
 
 	async getOrCreateDailyNoteForDateWithConfig(date: Date, config: DailyNotesConfig): Promise<TFile> {
 		const path = this.getDailyNotePathForDateWithConfig(date, config);
 		const existing = this.app.vault.getAbstractFileByPath(path);
-		return existing instanceof TFile ? existing : ensureTextFile(this.app, path);
+		if (existing instanceof TFile) return existing;
+		if (existing !== null) throw new Error(`Path exists and is not a file: ${path}`);
+		const templatePath = config.template?.trim();
+		let content = "";
+		if (templatePath) {
+			const template = this.app.vault.getAbstractFileByPath(normalizePath(ensureMarkdownExtension(templatePath)));
+			if (!(template instanceof TFile)) throw new Error(`Daily note template is unavailable: ${templatePath}`);
+			const text = await this.app.vault.read(template);
+			const momentFactory = obsidianMoment as unknown as MomentFactory;
+			const now = new Date();
+			const templateDate = new Date(date);
+			templateDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+			const title = path.slice(path.lastIndexOf("/") + 1, -3);
+			// 日期使用目标日记的日期，时间使用创建时刻；只替换核心模板变量。
+			content = text.replace(/{{\s*(date|time|title)\s*(?::([^}]+))?}}/gi,
+				(match: string, variable: string, format: string | undefined) => {
+					const kind = variable.toLowerCase();
+					if (kind === "title") return format === undefined ? title : match;
+					const pattern = format?.trim() || (kind === "date" ? config.format : "HH:mm");
+					return momentFactory(templateDate).format(pattern);
+				});
+		}
+		// ensureTextFile 会重新确认目标，保留读取模板期间由其他操作创建的正文。
+		return ensureTextFile(this.app, path, content);
 	}
 
 	getDailyNotePathForDate(date: Date, status = this.getStatus()): string {
@@ -101,14 +104,9 @@ export class DailyNoteService {
 	}
 
 	async getDailyNotesConfig(): Promise<DailyNotesConfig> {
-		const status = await this.getFreshStatus();
-		if (!status.enabled || status.format === null) {
-			throw new KnomoError("daily_notes_disabled");
-		}
-		return {
-			folder: status.folder,
-			format: status.format,
-		};
+		const config = (await this.dailyNotesConfigProvider?.loadConfig()) ?? null;
+		if (config === null) throw new KnomoError("daily_notes_disabled");
+		return config;
 	}
 
 	getTodayDailyNotePath(status = this.getStatus()): string {

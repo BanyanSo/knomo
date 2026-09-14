@@ -1,3 +1,4 @@
+import { MemoCardImageCache } from "./KnomoCardImages";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
 import {
@@ -45,9 +46,10 @@ interface MobileSearchControllerOptions {
 		dateFilter: SearchDateFilter | null,
 		recordStatsFilter: RecordStatsSearchFilter | null,
 	) => boolean;
-	renderMemoCard: (container: HTMLElement, memo: MemoRecord, generation: number, index: number) => void;
+	renderMemoCard: (container: HTMLElement, memo: MemoRecord, generation: number, index: number, reusedImagesEl?: HTMLElement | null) => void;
 	clearMarkdown: (surface?: MobileSearchSurface) => void;
 	clearImages: (surface: MobileSearchSurface) => void;
+	bindImageRoot?: (root: HTMLElement | null) => void;
 	setCardFlowPaused: (paused: boolean) => void;
 	closeSurroundingChrome: () => void;
 	closeCardMenu: () => void;
@@ -69,6 +71,7 @@ interface MobileSearchControllerOptions {
 }
 
 export class MobileSearchController {
+	private readonly imageCache = new MemoCardImageCache();
 	private pageEl: HTMLElement | null = null;
 	private inputEl: HTMLInputElement | null = null;
 	private resultsEl: HTMLElement | null = null;
@@ -156,6 +159,7 @@ export class MobileSearchController {
 		if (this.inputEl !== null && this.inputEl.value !== this.query) {
 			this.inputEl.value = this.query;
 		}
+		this.options.bindImageRoot?.(this.resultsEl);
 		this.renderResults(options.changeIntent ?? "content-change");
 		this.options.syncRootState();
 		if (options.focusInput !== false) {
@@ -180,6 +184,7 @@ export class MobileSearchController {
 		this.pageEl = page.pageEl;
 		this.inputEl = page.inputEl;
 		this.resultsEl = page.resultsEl;
+		this.options.bindImageRoot?.(this.resultsEl);
 		this.options.registerDomEvent(this.inputEl, "input", () => {
 			this.queueQuery(this.inputEl?.value ?? "");
 		});
@@ -205,7 +210,9 @@ export class MobileSearchController {
 		const shouldOpen = this.options.isMobileLayout() && this.open;
 		this.options.getDocument().body.toggleClass("knomo-mobile-search-active", shouldOpen);
 		if (!this.options.isMobileLayout()) {
+			this.clearImageCache();
 			this.open = false;
+			this.options.bindImageRoot?.(null);
 			this.recordStatsFilter = null;
 			this.options.clearImages("mobile-search");
 			this.options.setCardFlowPaused(false);
@@ -226,13 +233,20 @@ export class MobileSearchController {
 		this.open = false;
 		this.options.closeCardMenu();
 		this.resetState();
+		this.options.bindImageRoot?.(null);
 		this.options.setCardFlowPaused(false);
 		this.options.syncRootState();
 		this.options.restoreCardFlowScrollTop(scrollTop);
 		void this.options.restoreRemoteResults?.();
 	}
 
+	clearImageCache(): void {
+		this.imageCache.clear();
+	}
+
 	removePage(): void {
+		this.clearImageCache();
+		this.options.bindImageRoot?.(null);
 		this.clearDebounce();
 		this.pageEl?.detach();
 		this.pageEl = null;
@@ -284,6 +298,7 @@ export class MobileSearchController {
 	}
 
 	resetState(): void {
+		this.clearImageCache();
 		this.clearDebounce();
 		this.query = "";
 		this.dateFilter = null;
@@ -332,14 +347,17 @@ export class MobileSearchController {
 			return;
 		}
 		const scrollTop = changeIntent === "view-scope-change" ? 0 : resultsEl.scrollTop;
+		const query = this.query.trim();
+		const normalizedQuery = query.toLowerCase();
+		const memos = this.getMatchedMemos(normalizedQuery);
+		const visibleMemos = memos.slice(0, this.visibleCount);
+		this.imageCache.capture(resultsEl);
 		const generation = this.renderGeneration + 1;
 		this.renderGeneration = generation;
 		this.options.clearMarkdown("mobile-search");
 		this.options.clearImages("mobile-search");
 		resultsEl.empty();
 		this.syncDateButtons();
-		const query = this.query.trim();
-		const normalizedQuery = query.toLowerCase();
 		if (
 			normalizedQuery.length === 0
 			&& this.dateFilter === null
@@ -349,7 +367,6 @@ export class MobileSearchController {
 			this.options.restoreElementScrollTop(resultsEl, scrollTop);
 			return;
 		}
-		const memos = this.getMatchedMemos(normalizedQuery);
 		if (memos.length === 0) {
 			resultsEl.createDiv({
 				cls: "knomo-mobile-search-empty",
@@ -367,9 +384,8 @@ export class MobileSearchController {
 				renderKnomoListSummary(resultsEl, summary);
 			}
 		}
-		const visibleMemos = memos.slice(0, this.visibleCount);
 		for (const [index, memo] of visibleMemos.entries()) {
-			this.options.renderMemoCard(resultsEl, memo, generation, index);
+			this.options.renderMemoCard(resultsEl, memo, generation, index, this.imageCache.take(memo));
 		}
 		if (visibleMemos.length < memos.length || this.options.hasRemoteNextPage?.() === true) {
 			renderKnomoLoadMoreButton(resultsEl, {

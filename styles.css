@@ -3479,6 +3479,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	max-width: var(--knomo-suggest-width, calc(100vw - 24px));
 	max-height: var(--knomo-suggest-max-height, 240px);
 	overflow-y: auto;
+	overscroll-behavior: contain;
+	touch-action: pan-y;
 }
 
 .knomo-tag-suggest-positioning {

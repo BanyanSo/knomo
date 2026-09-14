@@ -56,7 +56,7 @@ function delay(milliseconds: number): Promise<void> {
 	});
 }
 
-export async function ensureTextFile(app: App, filePath: string): Promise<TFile> {
+export async function ensureTextFile(app: App, filePath: string, initialContent = ""): Promise<TFile> {
 	const normalizedPath = normalizePath(filePath);
 	const existing = app.vault.getAbstractFileByPath(normalizedPath);
 	if (existing instanceof TFile) {
@@ -72,7 +72,7 @@ export async function ensureTextFile(app: App, filePath: string): Promise<TFile>
 	}
 
 	try {
-		return await app.vault.create(normalizedPath, "");
+		return await app.vault.create(normalizedPath, initialContent);
 	} catch (error) {
 		const nextExisting = app.vault.getAbstractFileByPath(normalizedPath);
 		if (nextExisting instanceof TFile) {

@@ -28,7 +28,7 @@ interface CardImageLoadQueueOptions {
 	scheduleStartTask?: (callback: () => void) => number;
 	cancelStartTask?: (taskId: number) => void;
 	watchdogMs: number;
-	releaseSlotOnLoad?: (surface: CardImageLoadSurface) => boolean;
+	maxInFlight?: number;
 	Observer?: typeof IntersectionObserver;
 	rootMargin?: string;
 }
@@ -45,51 +45,77 @@ interface CardImageLoadTask {
 	handleLoad: () => void;
 	handleError: () => void;
 	listening: boolean;
+	decoding: boolean;
+	attempt: number;
 }
 
 export class CardImageLoadQueue {
-	private observer: IntersectionObserver | null = null;
+	private readonly surfaces = new Map<CardImageLoadSurface, {
+		root: HTMLElement;
+		nearby: IntersectionObserver;
+		visible: IntersectionObserver;
+	}>();
+	private readonly ranges = new Map<Element, { surface: CardImageLoadSurface; nearby: boolean; visible: boolean }>();
 	private readonly observedRequests = new Map<Element, CardImageLoadRequest>();
 	private pendingTasks: CardImageLoadTask[] = [];
 	private readonly activeTasks = new Set<CardImageLoadTask>();
 	private readonly activeSources = new Set<string>();
 	private readonly activeTargets = new Set<HTMLElement>();
-	private readonly decodedSources = new Set<string>();
-	private readonly decodedSourcePaths = new Map<string, string>();
-	private readonly resourceInvalidationVersions = new Map<string, number>();
 	private readonly pausedSurfaces = new Set<CardImageLoadSurface>();
 	private nextSequence = 0;
 	private paused = false;
+	private updateTaskId: number | null = null;
 
-	constructor(private readonly options: CardImageLoadQueueOptions) {
-		const Observer = options.Observer;
-		if (Observer !== undefined) {
-			this.observer = new Observer((entries) => this.handleIntersections(entries), {
-				root: null,
-				rootMargin: options.rootMargin ?? "160px 0px",
-				threshold: 0.01,
-			});
-		}
+	constructor(private readonly options: CardImageLoadQueueOptions) {}
+
+	bindSurface(surface: CardImageLoadSurface, root: HTMLElement | null): void {
+		const previous = this.surfaces.get(surface);
+		if (previous?.root === root) return;
+		this.surfaces.delete(surface);
+		previous?.nearby.disconnect();
+		previous?.visible.disconnect();
+		this.clear(surface);
+		const Observer = this.options.Observer;
+		if (root === null || Observer === undefined) return;
+		const nearby = new Observer((entries) => {
+			if (this.surfaces.get(surface)?.nearby !== nearby) return;
+			this.handleIntersections(entries, false);
+		}, { root, rootMargin: this.options.rootMargin ?? "160px 0px", threshold: 0 });
+		const visible = new Observer((entries) => {
+			if (this.surfaces.get(surface)?.visible !== visible) return;
+			this.handleIntersections(entries, true);
+		}, { root, rootMargin: "0px", threshold: 0 });
+		this.surfaces.set(surface, { root, nearby, visible });
+	}
+
+	private unobserve(target: Element): void {
+		const range = this.ranges.get(target);
+		const observers = range && this.surfaces.get(range.surface);
+		observers?.nearby.unobserve(target);
+		observers?.visible.unobserve(target);
+		this.ranges.delete(target);
 	}
 
 	observe(request: CardImageLoadRequest): void {
 		if (request.images.length === 0) {
 			return;
 		}
-		if (this.observer === null || request.observe === false) {
+		if (!this.surfaces.has(request.surface) || request.observe === false) {
 			this.enqueueRequest(request);
 			return;
 		}
 		this.forget(request.targetEl);
 		this.observedRequests.set(request.targetEl, request);
-		this.observer.observe(request.targetEl);
+		this.ranges.set(request.targetEl, { surface: request.surface, nearby: false, visible: false });
+		this.surfaces.get(request.surface)?.nearby.observe(request.targetEl);
+		this.surfaces.get(request.surface)?.visible.observe(request.targetEl);
 	}
 
 	forget(targetEl: HTMLElement, clearSources = false): void {
+		this.unobserve(targetEl);
 		const observedRequest = this.observedRequests.get(targetEl);
 		if (observedRequest !== undefined) {
 			this.observedRequests.delete(targetEl);
-			this.observer?.unobserve(targetEl);
 			if (clearSources) {
 				for (const item of observedRequest.images) {
 					item.imageEl.removeAttribute("src");
@@ -118,7 +144,7 @@ export class CardImageLoadQueue {
 				continue;
 			}
 			this.observedRequests.delete(target);
-			this.observer?.unobserve(target);
+			this.unobserve(target);
 			for (const item of request.images) {
 				item.imageEl.removeAttribute("src");
 			}
@@ -135,16 +161,18 @@ export class CardImageLoadQueue {
 				this.cancelActiveTask(task, true);
 			}
 		}
-		if (surface === undefined) {
-			this.observer?.disconnect();
-			this.decodedSources.clear();
-			this.decodedSourcePaths.clear();
+		for (const [target, range] of this.ranges) {
+			if (surface === undefined || range.surface === surface) this.unobserve(target);
 		}
 	}
 
 	dispose(): void {
+		if (this.updateTaskId !== null) {
+			(this.options.cancelStartTask ?? this.options.cancelTask)(this.updateTaskId);
+			this.updateTaskId = null;
+		}
 		this.clear();
-		this.observer = null;
+		for (const surface of [...this.surfaces.keys()]) this.bindSurface(surface, null);
 	}
 
 	setPaused(paused: boolean): void {
@@ -177,15 +205,6 @@ export class CardImageLoadQueue {
 
 	invalidateResourcePaths(paths: readonly string[]): void {
 		const normalizedPaths = new Set(paths.map(normalizeResourcePath));
-		for (const path of normalizedPaths) {
-			this.resourceInvalidationVersions.set(path, (this.resourceInvalidationVersions.get(path) ?? 0) + 1);
-		}
-		for (const [source, resourcePath] of this.decodedSourcePaths) {
-			if (normalizedPaths.has(normalizeResourcePath(resourcePath))) {
-				this.decodedSourcePaths.delete(source);
-				this.decodedSources.delete(source);
-			}
-		}
 		for (const [target, request] of this.observedRequests) {
 			const images = request.images.filter((item) => !matchesResourcePath(item, normalizedPaths));
 			if (images.length === request.images.length) {
@@ -198,7 +217,7 @@ export class CardImageLoadQueue {
 			}
 			if (images.length === 0) {
 				this.observedRequests.delete(target);
-				this.observer?.unobserve(target);
+				this.unobserve(target);
 			} else {
 				this.observedRequests.set(target, { ...request, images });
 			}
@@ -217,22 +236,22 @@ export class CardImageLoadQueue {
 		}
 	}
 
-	private handleIntersections(entries: IntersectionObserverEntry[]): void {
-		for (const observerEntry of entries) {
-			if (!observerEntry.isIntersecting) {
-				continue;
-			}
-			const request = this.observedRequests.get(observerEntry.target);
-			if (request === undefined) {
-				continue;
-			}
-			this.observedRequests.delete(observerEntry.target);
-			this.observer?.unobserve(observerEntry.target);
-			this.enqueueRequest(request);
+	private handleIntersections(entries: IntersectionObserverEntry[], visible: boolean): void {
+		for (const entry of entries) {
+			const range = this.ranges.get(entry.target);
+			if (!range) continue;
+			if (visible) range.visible = entry.isIntersecting;
+			else range.nearby = entry.isIntersecting;
+			if (!range.nearby && !range.visible) continue;
+			const request = this.observedRequests.get(entry.target);
+			if (request === undefined) continue;
+			this.observedRequests.delete(entry.target);
+			this.enqueueRequest(request, false);
 		}
+		this.scheduleUpdate();
 	}
 
-	private enqueueRequest(request: CardImageLoadRequest): void {
+	private enqueueRequest(request: CardImageLoadRequest, pump = true): void {
 		for (const item of request.images) {
 			let task: CardImageLoadTask;
 			task = {
@@ -247,18 +266,50 @@ export class CardImageLoadQueue {
 				handleLoad: () => this.handleImageLoad(task),
 				handleError: () => this.handleImageError(task),
 				listening: false,
+				decoding: false,
+				attempt: 0,
 			};
 			this.nextSequence += 1;
 			this.pendingTasks.push(task);
 		}
-		this.pump();
+		if (pump) this.pump();
 	}
 
-	private pump(): void {
+	private scheduleUpdate(): void {
+		if (this.updateTaskId !== null) return;
+		const update = () => { this.updateTaskId = null; this.pump(true); };
+		this.updateTaskId = this.options.scheduleStartTask?.(update) ?? this.options.scheduleTask(update, 16);
+	}
+
+	private regionRank(task: CardImageLoadTask): number {
+		if (task.surface === "image-preview") return 0;
+		const range = this.ranges.get(task.targetEl);
+		if (!range || range.visible) return 1;
+		return range.nearby ? 2 : 3;
+	}
+
+	private canStartInRange(task: CardImageLoadTask): boolean {
+		const rank = this.regionRank(task);
+		if (rank === 3) return false;
+		if (rank !== 2) return true;
+		for (const active of this.activeTasks) {
+			if (active !== task && !active.decoding && this.regionRank(active) === 2) return false;
+		}
+		return true;
+	}
+
+	private get loadingCount(): number {
+		let count = 0;
+		for (const task of this.activeTasks) if (!task.decoding) count++;
+		return count;
+	}
+
+	private pump(startInCurrentFrame = false): void {
 		if (this.paused) {
 			return;
 		}
-		while (this.activeTasks.size < this.options.concurrency) {
+		while (this.loadingCount < this.options.concurrency
+			&& this.activeTasks.size < (this.options.maxInFlight ?? 4)) {
 			const task = this.takeNextPendingTask();
 			if (task === null) {
 				return;
@@ -266,6 +317,10 @@ export class CardImageLoadQueue {
 			this.activeTasks.add(task);
 			this.activeSources.add(task.item.src);
 			this.activeTargets.add(task.targetEl);
+			if (startInCurrentFrame) {
+				this.startTask(task);
+				continue;
+			}
 			const start = () => {
 				task.startTaskId = null;
 				this.startTask(task);
@@ -285,13 +340,8 @@ export class CardImageLoadQueue {
 					selectedIndex = -2;
 					break;
 				}
-				if (this.decodedSources.has(task.item.src)) {
-					this.pendingTasks.splice(index, 1);
-					this.applyDecodedSource(task);
-					selectedIndex = -2;
-					break;
-				}
 				if (
+					!this.canStartInRange(task) ||
 					this.pausedSurfaces.has(task.surface) ||
 					this.activeSources.has(task.item.src) ||
 					this.activeTargets.has(task.targetEl)
@@ -300,7 +350,8 @@ export class CardImageLoadQueue {
 				}
 				if (
 					selectedIndex === -1
-					|| compareTaskPriority(task, this.pendingTasks[selectedIndex]) < 0
+					|| (this.regionRank(task) - this.regionRank(this.pendingTasks[selectedIndex])
+						|| compareTaskPriority(task, this.pendingTasks[selectedIndex])) < 0
 				) {
 					selectedIndex = index;
 				}
@@ -319,14 +370,17 @@ export class CardImageLoadQueue {
 		if (!this.activeTasks.has(task)) {
 			return;
 		}
-		if (this.paused || this.pausedSurfaces.has(task.surface)) {
-			this.releaseActiveTask(task);
+		if (this.paused || this.pausedSurfaces.has(task.surface) || !this.canStartInRange(task)) {
 			this.pendingTasks.push(task);
+			this.releaseActiveTask(task);
 			return;
 		}
 		if (!this.isCurrentTask(task)) {
 			this.cancelActiveTask(task, true);
 			return;
+		}
+		if (/^https?:/i.test(task.item.src)) {
+			task.item.imageEl.setAttr("fetchpriority", this.regionRank(task) <= 1 ? "high" : "low");
 		}
 		task.listening = true;
 		task.item.imageEl.addEventListener("load", task.handleLoad);
@@ -338,45 +392,37 @@ export class CardImageLoadQueue {
 				return;
 			}
 			const shouldNotify = this.isCurrentTask(task);
-			this.finishTask(task, false, true, shouldNotify, false);
+			this.finishTask(task, false, true, shouldNotify);
 		}, this.options.watchdogMs);
 	}
 
 	private handleImageLoad(task: CardImageLoadTask): void {
-		if (!this.activeTasks.has(task)) {
+		if (!this.activeTasks.has(task) || task.decoding) return;
+		if (!this.isCurrentTask(task)) {
+			this.cancelActiveTask(task, true);
 			return;
 		}
 		this.removeTaskListeners(task);
-		const decodePromise = this.decodeImage(task);
-		if (this.options.releaseSlotOnLoad?.(task.surface) === true) {
+		// 只释放加载预算；解码仍保留目标、URL 锁、超时和本次尝试编号。
+		task.decoding = true;
+		const attempt = task.attempt;
+		const settle = (loaded: boolean) => {
+			if (!this.activeTasks.has(task) || task.attempt !== attempt) return;
 			if (!this.isCurrentTask(task)) {
 				this.cancelActiveTask(task, true);
 				return;
 			}
-			const resourceInvalidationVersion = this.getResourceInvalidationVersion(task.item.resourcePath);
-			this.finishTask(task, true, false, true, false);
-			this.rememberDecodedSourceAfterDecode(task, decodePromise, resourceInvalidationVersion);
-			return;
-		}
-		void decodePromise
-			.catch(() => undefined)
-			.then(() => {
-				if (!this.activeTasks.has(task)) {
-					return;
-				}
-				if (!this.isCurrentTask(task)) {
-					this.cancelActiveTask(task, true);
-					return;
-				}
-				this.finishTask(task, true, false, true, true);
-			});
+			this.finishTask(task, loaded, !loaded, true);
+		};
+		void this.decodeImage(task).then(() => settle(true), () => settle(false));
+		this.pump();
 	}
 
 	private handleImageError(task: CardImageLoadTask): void {
 		if (!this.activeTasks.has(task)) {
 			return;
 		}
-		this.finishTask(task, false, false, this.isCurrentTask(task), false);
+		this.finishTask(task, false, true, this.isCurrentTask(task));
 	}
 
 	private finishTask(
@@ -384,16 +430,13 @@ export class CardImageLoadQueue {
 		loaded: boolean,
 		clearSource: boolean,
 		notify: boolean,
-		cacheDecoded: boolean,
 	): void {
 		this.cancelTaskTimers(task);
 		this.removeTaskListeners(task);
 		if (clearSource) {
 			task.item.imageEl.removeAttribute("src");
 		}
-		if (cacheDecoded) {
-			this.rememberDecodedSource(task.item.src, task.item.resourcePath);
-		}
+		this.releaseActiveTask(task);
 		if (notify) {
 			if (loaded) {
 				task.item.onLoad?.();
@@ -401,46 +444,18 @@ export class CardImageLoadQueue {
 				task.item.onError?.();
 			}
 		}
-		this.releaseActiveTask(task);
 	}
 
 	private decodeImage(task: CardImageLoadTask): Promise<void> {
 		try {
 			return typeof task.item.imageEl.decode === "function"
 				? task.item.imageEl.decode()
-				: Promise.resolve();
+				: task.item.imageEl.naturalWidth > 0
+					? Promise.resolve()
+					: Promise.reject(new Error("Image has no decoded pixels."));
 		} catch {
 			return Promise.reject(new Error("Failed to decode card image."));
 		}
-	}
-
-	private rememberDecodedSourceAfterDecode(
-		task: CardImageLoadTask,
-		decodePromise: Promise<void>,
-		resourceInvalidationVersion: number,
-	): void {
-		void decodePromise.then(() => {
-			if (!this.isCurrentTask(task)) {
-				return;
-			}
-			if (resourceInvalidationVersion !== this.getResourceInvalidationVersion(task.item.resourcePath)) {
-				return;
-			}
-			this.rememberDecodedSource(task.item.src, task.item.resourcePath);
-		}, () => undefined);
-	}
-
-	private rememberDecodedSource(source: string, resourcePath?: string): void {
-		this.decodedSources.add(source);
-		if (resourcePath !== undefined) {
-			this.decodedSourcePaths.set(source, resourcePath);
-		}
-	}
-
-	private getResourceInvalidationVersion(resourcePath: string | undefined): number {
-		return resourcePath === undefined
-			? 0
-			: this.resourceInvalidationVersions.get(normalizeResourcePath(resourcePath)) ?? 0;
 	}
 
 	private cancelActiveTask(task: CardImageLoadTask, clearSource: boolean): void {
@@ -462,12 +477,14 @@ export class CardImageLoadQueue {
 			this.activeTargets.delete(task.targetEl);
 		}
 		if (shouldResume) {
+			task.decoding = false;
 			this.pendingTasks.push(task);
 		}
 		this.pump();
 	}
 
 	private cancelTaskTimers(task: CardImageLoadTask): void {
+		task.attempt += 1;
 		if (task.startTaskId !== null) {
 			const cancelStartTask = this.options.cancelStartTask ?? this.options.cancelTask;
 			cancelStartTask(task.startTaskId);
@@ -494,21 +511,8 @@ export class CardImageLoadQueue {
 		}
 		this.activeSources.delete(task.item.src);
 		this.activeTargets.delete(task.targetEl);
+		if (!this.pendingTasks.some((pending) => pending.targetEl === task.targetEl)) this.unobserve(task.targetEl);
 		this.pump();
-	}
-
-	private applyDecodedSource(task: CardImageLoadTask): void {
-		if (!this.isCurrentTask(task)) {
-			return;
-		}
-		task.item.imageEl.setAttr("src", task.item.src);
-		if (task.item.onLoad !== undefined) {
-			void Promise.resolve().then(() => {
-				if (this.isCurrentTask(task) && this.decodedSources.has(task.item.src)) {
-					task.item.onLoad?.();
-				}
-			});
-		}
 	}
 
 	private isCurrentTask(task: CardImageLoadTask): boolean {

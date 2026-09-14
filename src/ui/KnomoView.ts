@@ -65,8 +65,8 @@ import { renderKnomoMemoCard, renderKnomoTrashMemoCard } from "./KnomoCard";
 import type { MemoCardTimeBuoy } from "./KnomoCard";
 import {
 	parseCardImageIndex,
-	planMemoCardImageLoads,
 	renderMemoCardImages,
+	MemoCardImageCache,
 } from "./KnomoCardImages";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import { KnomoCardFlowCoordinator } from "./KnomoCardFlowCoordinator";
@@ -150,6 +150,7 @@ import {
 	TimeBuoyViewController,
 	type TimeBuoyTab,
 	type TimeBuoyTabItem,
+	type TodayTimeBuoySnapshot,
 } from "./TimeBuoyViewController";
 import {
 	getRecordStatsHourSearchFilter,
@@ -213,6 +214,7 @@ interface FilteredMemosCache {
 
 interface CatalogMemoLoad {
 	fullHistoryLoaded?: boolean;
+	todayTimeBuoys?: TodayTimeBuoySnapshot;
 	memos: MemoRecord[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
@@ -229,7 +231,6 @@ const MOBILE_INITIAL_SYNC_CARD_COUNT = 8;
 const MOBILE_CARD_FRAME_CHUNK_SIZE = 6;
 const MOBILE_SEARCH_BATCH_SIZE = 30;
 const INITIAL_VISIBLE_RENDER_COUNT = 16;
-const MOBILE_EAGER_CARD_IMAGE_RENDER_COUNT = 6;
 const MARKDOWN_RENDER_CONCURRENCY = 8;
 const MOBILE_MARKDOWN_RENDER_CONCURRENCY = 4;
 const MOBILE_CARD_IMAGE_LOAD_CONCURRENCY = 2;
@@ -380,12 +381,14 @@ export class KnomoView extends ItemView {
 	private readonly mobileSendPointerGuard = new MobileSendPointerGuard({ getNow: () => Date.now() });
 	private readonly nativeImagePickerController: NativeImagePickerController<ReturnType<ComposerInput["composer"]["capture"]>>;
 	private readonly cardImageLoadQueue: CardImageLoadQueue;
+	private readonly cardImageCache = new MemoCardImageCache();
 	private readonly imageLoadPauseReasons = new Map<PausableImageLoadSurface, Set<ImageLoadPauseReason>>();
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly randomReunionController: RandomReunionController;
 	private readonly shuffleDayController: ShuffleDayController;
 	private readonly trashMemoController: TrashMemoController;
 	private readonly timeBuoyViewController: TimeBuoyViewController;
+	private catalogTodayTimeBuoys: TodayTimeBuoySnapshot | null = null;
 	private timeBuoyPanelEl: HTMLElement | null = null;
 	private timeBuoyRenderItems: TimeBuoyTabItem[] = [];
 	private timeBuoyRenderedCount = 0;
@@ -642,11 +645,12 @@ export class KnomoView extends ItemView {
 					(searchMemo) => this.getMemoSearchText(searchMemo),
 				);
 			},
-			renderMemoCard: (container, memo, generation, index) => {
-				this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search");
+			renderMemoCard: (container, memo, generation, index, reusedImagesEl) => {
+				this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, reusedImagesEl);
 			},
 			clearMarkdown: (surface) => this.memoMarkdownRenderer.clear(surface),
 			clearImages: (surface) => this.cardImageLoadQueue.clear(surface),
+			bindImageRoot: (root) => this.cardImageLoadQueue.bindSurface("mobile-search", root),
 			setCardFlowPaused: (paused) => this.setImageLoadSurfacePaused("card-flow", "mobile-search", paused),
 			closeSurroundingChrome: () => {
 				this.mobileDrawerOpen = false;
@@ -705,8 +709,7 @@ export class KnomoView extends ItemView {
 				? (taskId) => imageQueueWindow.cancelAnimationFrame(taskId)
 				: undefined,
 			watchdogMs: CARD_IMAGE_LOAD_WATCHDOG_MS,
-			releaseSlotOnLoad: (surface) => Platform.isMobile
-				&& (surface === "card-flow" || surface === "mobile-search"),
+			maxInFlight: 4,
 			Observer: (this.containerEl.win as WindowWithIntersectionObserver).IntersectionObserver,
 			rootMargin: Platform.isMobile ? "280px 0px" : undefined,
 		});
@@ -1067,6 +1070,7 @@ export class KnomoView extends ItemView {
 		this.cardFlowCoordinator.setPendingScrollRestore(null);
 		this.mobileComposerController.dispose();
 		this.cardImageLoadQueue.dispose();
+		this.cardImageCache.clear();
 		this.memoCardPreviewCache.clear();
 		this.imageResourceCache.clear();
 		this.clearHandledMobileToolPointer();
@@ -1150,6 +1154,8 @@ export class KnomoView extends ItemView {
 	}
 
 	handleAttachmentFilesChanged(paths: readonly string[]): void {
+		this.cardImageCache.clear();
+		this.mobileSearchController.clearImageCache();
 		this.cardImageLoadQueue.invalidateResourcePaths(paths);
 		this.imageResourceCache.invalidateImagePaths(paths);
 		const affectedMemoIds = this.memoCardPreviewCache.findImagePathMemoIds(paths);
@@ -1166,6 +1172,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async render(): Promise<void> {
+		this.cardImageCache.clear();
 		this.closeTimeBuoyPicker(false);
 		const pendingMemoLoad = this.memoLoadingPromise;
 		this.memoSourceGeneration += 1;
@@ -1176,6 +1183,7 @@ export class KnomoView extends ItemView {
 			}
 		}
 		this.memos = [];
+		this.catalogTodayTimeBuoys = null;
 		this.catalogCursor = null;
 		this.catalogHistoryExpansionPending = false;
 		this.catalogDesktopTotalCount = null;
@@ -1230,6 +1238,7 @@ export class KnomoView extends ItemView {
 		this.cardFlowEl = contentColumn.createDiv({
 			cls: "knomo-card-flow",
 		});
+		this.cardImageLoadQueue.bindSurface("card-flow", this.cardFlowEl);
 		this.getRenderScope().registerDomEvent(this.cardFlowEl, "scroll", () => this.handleCardFlowScroll());
 		this.getRenderScope().registerDomEvent(this.cardFlowEl, "mouseover", (event) => {
 			this.handleMarkdownInternalLinkHover(event);
@@ -1272,7 +1281,7 @@ export class KnomoView extends ItemView {
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
 			if (this.activeNav === "time-buoy") {
 				void this.timeBuoyViewController.loadInitial();
-			} else {
+			} else if (!this.shouldShowTodayTimeBuoys()) {
 				void this.timeBuoyViewController.loadTodayOnly();
 			}
 		}
@@ -1559,7 +1568,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async reloadMemos(loadAll: boolean, forceRebuild = false): Promise<boolean> {
-		const queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
+		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
 		this.prepareCatalogDesktopQuery(queryFingerprint);
 		const queryRun = ++this.catalogDesktopQueryRun;
 		const sourceGeneration = this.memoSourceGeneration;
@@ -1572,6 +1581,11 @@ export class KnomoView extends ItemView {
 				|| queryRun !== this.catalogDesktopQueryRun
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
+			}
+			if (load.fullHistoryLoaded) {
+				loadAll = true;
+				queryFingerprint = this.getCatalogQueryFingerprint(true);
+				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
 			this.applyCatalogMemoLoad(load);
 			if (!this.hasCommittedCatalogDesktopQuery
@@ -1655,7 +1669,7 @@ export class KnomoView extends ItemView {
 		});
 		if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
 		let fullHistoryLoaded = loadAll;
-		if (!loadAll && Platform.isMobile && this.isDefaultListState() && page.nextCursor === null) {
+		if (!loadAll && this.isDefaultListState() && page.nextCursor === null) {
 			// 近月窗口已读完时直接确认全历史，避免小库反复显示无效的加载入口。
 			page = await this.queryCatalogFeature({
 				...this.buildCatalogActiveQuery(true),
@@ -1665,15 +1679,20 @@ export class KnomoView extends ItemView {
 			if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
 			fullHistoryLoaded = true;
 		}
+		let todayTimeBuoys: TodayTimeBuoySnapshot | undefined;
 		if (this.shouldShowTodayTimeBuoys()) {
 			// 先准备同版本的置顶结果，再提交列表，避免先撤下置顶又重新提升。
-			await this.timeBuoyViewController.loadTodayOnly(false);
-			const today = this.timeBuoyViewController.getSnapshot();
+			const today = await this.timeBuoyViewController.prepareTodayOnly();
+			if (!today.todayValid && this.hasCommittedCatalogDesktopQuery) {
+				throw today.todayError ?? new Error("Today's time buoy index is not ready.");
+			}
 			if (today.todayValid && today.todayRevision !== page.catalogRevision) {
 				throw new Error("Catalog changed while loading today's time buoys.");
 			}
+			todayTimeBuoys = today;
 		}
 		return {
+			todayTimeBuoys,
 			fullHistoryLoaded,
 			memos: page.items.map(toCatalogMemoView),
 			nextCursor: page.nextCursor,
@@ -1685,6 +1704,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private applyCatalogMemoLoad(load: CatalogMemoLoad): void {
+		this.catalogTodayTimeBuoys = load.todayTimeBuoys ?? null;
 		this.catalogCursor = load.nextCursor;
 		this.catalogCoverage = load.coverage;
 		this.catalogReadState = load.readState;
@@ -1807,6 +1827,7 @@ export class KnomoView extends ItemView {
 				return loaded;
 			} finally {
 				this.catalogLoadingNextPage = false;
+				if (this.cardFlowEl != null) this.renderHistoryLoadMore();
 			}
 		}
 		if (this.catalogCursor === null) return false;
@@ -2027,15 +2048,26 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadInitialMobileMemos(): Promise<void> {
+		let loadAll = false;
+		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
+		this.prepareCatalogDesktopQuery(queryFingerprint);
+		const queryRun = ++this.catalogDesktopQueryRun;
 		const sourceGeneration = this.memoSourceGeneration;
 		try {
-			const load = await this.loadCatalogMemos(false);
+			const load = await this.loadCatalogMemos(loadAll);
 			if (
 				sourceGeneration !== this.memoSourceGeneration
+				|| queryRun !== this.catalogDesktopQueryRun
+				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
 			) {
 				return;
+			}
+			if (load.fullHistoryLoaded) {
+				loadAll = true;
+				queryFingerprint = this.getCatalogQueryFingerprint(true);
+				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
 			this.applyCatalogMemoLoad(load);
 			this.catalogHistoryExpansionPending = !load.fullHistoryLoaded && this.isDefaultListState();
@@ -2050,6 +2082,8 @@ export class KnomoView extends ItemView {
 		} catch (error) {
 			if (
 				sourceGeneration !== this.memoSourceGeneration
+				|| queryRun !== this.catalogDesktopQueryRun
+				|| !this.isCatalogQueryCurrent(queryFingerprint, false)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
 			) {
@@ -2679,6 +2713,7 @@ export class KnomoView extends ItemView {
 		}
 		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
 		this.renderGeneration += 1;
+		this.cardImageCache.capture(cardFlow);
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
@@ -2704,6 +2739,7 @@ export class KnomoView extends ItemView {
 		this.resetTimeBuoyCardFlow();
 		this.renderGeneration += 1;
 		const generation = this.renderGeneration;
+		this.cardImageCache.capture(cardFlow);
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
@@ -2869,15 +2905,17 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.recordStatsViewStateController.clearRendered();
+		const presentation = this.getCurrentCardFlowPresentation();
 		const generation = this.renderGeneration + 1;
 		this.renderGeneration = generation;
+		this.cardImageCache.capture(this.cardFlowEl);
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
 		this.cardFlowEl.empty();
 		this.renderedCardMemos.clear();
 		this.cardFlowCoordinator.setPendingScrollRestore({ generation, scrollTop, visibleCount: initialBatchSize, anchor });
-		this.renderCardFlowPresentation(this.getCurrentCardFlowPresentation(), generation, initialBatchSize);
+		this.renderCardFlowPresentation(presentation, generation, initialBatchSize);
 	}
 
 	private deferMobileCardFlowRender(
@@ -2970,8 +3008,8 @@ export class KnomoView extends ItemView {
 		if (!this.shouldShowTodayTimeBuoys()) {
 			return [];
 		}
-		const snapshot = this.timeBuoyViewController.getSnapshot();
-		return snapshot.todayValid
+		const snapshot = this.catalogTodayTimeBuoys;
+		return snapshot?.todayValid
 			&& snapshot.todayDate === formatTimeBuoyDate(new Date())
 			&& snapshot.todayRevision === this.catalogRevision ? snapshot.today : [];
 	}
@@ -3167,6 +3205,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private removeCardElement(card: HTMLElement): void {
+		this.cardImageCache.capture(card);
 		this.removeCardImageTargets(card);
 		card.remove();
 	}
@@ -3231,7 +3270,6 @@ export class KnomoView extends ItemView {
 	private async enableTimeBuoyFromIntro(): Promise<void> {
 		await this.settingsService.updateSettings({ timeBuoyEnabled: true, timeBuoyIntroDismissed: true });
 		await this.render();
-		await this.timeBuoyViewController.loadTodayOnly();
 		new Notice(t("settings.timeBuoy.enabled"));
 	}
 
@@ -3358,7 +3396,7 @@ export class KnomoView extends ItemView {
 				this.memoMarkdownRenderer.queueMemoMarkdown(memoRecord, content, renderGeneration, priority, previewText, surface);
 			},
 			renderMemoCardImages: (content, memoRecord, images, renderGeneration, reusedImagesEl) => {
-				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, surface, renderIndex, reusedImagesEl ?? null);
+				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, surface, reusedImagesEl ?? null);
 			},
 			queueSourceReferenceMarkdown: (content, text, sourcePath, renderGeneration) => {
 				this.memoMarkdownRenderer.queueSourceReferenceMarkdown(content, text, sourcePath, renderGeneration, surface);
@@ -3410,7 +3448,7 @@ export class KnomoView extends ItemView {
 				this.memoMarkdownRenderer.queueMemoMarkdown(memoRecord, content, renderGeneration, priority, previewText, "card-flow");
 			},
 			renderMemoCardImages: (content, memoRecord, images, renderGeneration, reusedImagesEl) => {
-				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, "card-flow", renderIndex, reusedImagesEl ?? null);
+				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, "card-flow", reusedImagesEl ?? null);
 			},
 		});
 	}
@@ -3441,13 +3479,12 @@ export class KnomoView extends ItemView {
 		images: MemoPreviewImage[],
 		generation: number,
 		surface: CardRenderSurface,
-		renderIndex = Number.POSITIVE_INFINITY,
 		reusedImagesEl: HTMLElement | null = null,
 	): void {
 		const rendered = renderMemoCardImages(container, memo, images, {
 			previewLabel: t("image.previewLabel"),
 			unavailableLabel: t("image.unavailable"),
-		}, reusedImagesEl);
+		}, reusedImagesEl ?? (surface === "card-flow" ? this.cardImageCache.take(memo) : null));
 		if (rendered === null) {
 			return;
 		}
@@ -3455,25 +3492,12 @@ export class KnomoView extends ItemView {
 			this.cardImageLoadQueue.forget(rendered.imagesEl, true);
 		}
 		this.renderedPreviewImages.set(rendered.imagesEl, images);
-		const eagerFirstImage = surface === "card-flow"
-			&& Platform.isMobile
-			&& renderIndex < MOBILE_EAGER_CARD_IMAGE_RENDER_COUNT;
-		const { observedLoadItems, eagerLoadItems } = planMemoCardImageLoads(rendered.loadItems, eagerFirstImage);
-		if (observedLoadItems.length > 0) {
+		if (rendered.loadItems.length > 0) {
 			this.cardImageLoadQueue.observe({
 				targetEl: rendered.imagesEl,
-				images: observedLoadItems,
+				images: rendered.loadItems,
 				generation,
 				surface,
-			});
-		}
-		if (eagerLoadItems.length > 0) {
-			this.cardImageLoadQueue.observe({
-				targetEl: rendered.imagesEl,
-				images: eagerLoadItems,
-				generation,
-				surface,
-				observe: false,
 			});
 		}
 	}
@@ -3654,6 +3678,7 @@ export class KnomoView extends ItemView {
 
 	private renderCatalogOnboarding(presentation: Extract<CardFlowPresentation, { type: "onboarding" }>): void {
 		if (this.cardFlowEl === null) return;
+		this.cardImageCache.capture(this.cardFlowEl);
 		this.cardFlowCoordinator.setPendingScrollRestore(null);
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
 		this.cardFlowEl.empty();
@@ -4374,6 +4399,7 @@ export class KnomoView extends ItemView {
 		}
 		this.cardFlowDeferredForAllMemos = true;
 		this.renderGeneration += 1;
+		this.cardImageCache.capture(cardFlow);
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
@@ -5891,6 +5917,9 @@ export class KnomoView extends ItemView {
 			)
 		) {
 			this.renderCardFlow();
+		} else if (this.cardFlowEl !== null) {
+			// 列表正文不变时，分页状态仍可能变化，单独同步底部入口。
+			this.renderHistoryLoadMore();
 		}
 	}
 
@@ -5965,6 +5994,7 @@ export class KnomoView extends ItemView {
 
 	private findMemoById(memoId: string): MemoRecord | null {
 		return this.memos.find((memo) => memo.id === memoId)
+			?? this.catalogTodayTimeBuoys?.today.find((item) => item.memo.id === memoId)?.memo
 			?? this.randomReunionController.getSnapshot().memos?.find((memo) => memo.id === memoId)
 			?? this.shuffleDayController.getSnapshot().memos.find((memo) => memo.id === memoId)
 			?? this.timeBuoyViewController.getMemos().find((memo) => memo.id === memoId)
@@ -6001,6 +6031,8 @@ export class KnomoView extends ItemView {
 		}
 		if (this.activeNav === "time-buoy") {
 			void this.timeBuoyViewController.loadInitial();
+		} else if (this.shouldShowTodayTimeBuoys()) {
+			void this.refresh();
 		} else if (this.settingsService.getSettings().timeBuoyEnabled) {
 			void this.timeBuoyViewController.loadTodayOnly();
 		}
@@ -6149,6 +6181,19 @@ export class KnomoView extends ItemView {
 			this.memos = memos;
 			this.filteredMemosCache = null;
 			this.invalidateMemoSearchCache();
+		}
+		if (this.catalogTodayTimeBuoys?.today.some((item) => (
+			(item.memo.id === updatedMemo.id || getMemoRenderKey(item.memo) === renderKey)
+			&& !this.canReuseRenderedMemo(item.memo, updatedMemo)
+		))) {
+			this.catalogTodayTimeBuoys = {
+				...this.catalogTodayTimeBuoys,
+				today: this.catalogTodayTimeBuoys.today.map((item) => (
+					item.memo.id === updatedMemo.id || getMemoRenderKey(item.memo) === renderKey
+						? { ...item, memo: updatedMemo } : item
+				)),
+			};
+			this.renderCardFlow();
 		}
 		this.timeBuoyViewController.replaceMemo(updatedMemo);
 		this.shuffleDayController.applyMemoUpdate(updatedMemo);

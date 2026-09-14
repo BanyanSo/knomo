@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
 import { Transaction } from "@codemirror/state";
 import { redo, undo, undoDepth } from "@codemirror/commands";
 import { ComposerEditor } from "../src/ui/ComposerEditor";
@@ -343,6 +343,27 @@ test("toolbar Tap executes once, Swipe never executes and configuration does not
 	} finally { close(); }
 });
 
+test("toolbar gesture ignores a hover move without an active pointer", () => {
+	const errors: Error[] = [];
+	const virtualConsole = new VirtualConsole();
+	virtualConsole.on("jsdomError", error => errors.push(error));
+	const dom = new JSDOM("<!doctype html><body></body>", { virtualConsole });
+	const tools = dom.window.document.createElement("div");
+	const button = tools.appendChild(dom.window.document.createElement("button"));
+	button.dataset.action = "insert-bold";
+	dom.window.document.body.appendChild(tools);
+	const cleanup = registerComposerToolGesture(tools, () => assert.fail("hover move must not run an action"));
+	try {
+		const hover = new dom.window.MouseEvent("pointermove", { bubbles: true });
+		Object.defineProperty(hover, "pointerType", { value: "mouse" });
+		button.dispatchEvent(hover);
+		assert.deepEqual(errors, []);
+	} finally {
+		cleanup();
+		dom.window.close();
+	}
+});
+
 test("Tag Suggest uses the same editor transaction and preserves IME and save shortcut priority", async () => {
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
@@ -360,7 +381,8 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 	prototype.removeClass = function(this: HTMLElement, name: string) { this.classList.remove(name); };
 	prototype.toggleClass = function(this: HTMLElement, name: string, enabled: boolean) { this.classList.toggle(name, enabled); };
 	prototype.scrollIntoView = () => undefined;
-	const suggest = new KnomoTagSuggest({} as never, editor.input, () => undefined, {
+	let selections = 0;
+	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
 		getSnapshot: () => ({ suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
 	} as never);
 	const unregister = suggest.registerLifecycle();
@@ -371,7 +393,9 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		const key = (type: string, key: string) => editor.input.dispatchEvent(new win.KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
 		const popover = win.document.querySelector<HTMLElement>(".suggestion-container")!;
 		const second = popover.children[1] as HTMLElement;
-		second.dispatchEvent(new win.MouseEvent("pointermove", { bubbles: true }));
+		const hover = new win.MouseEvent("pointermove", { bubbles: true });
+		Object.defineProperty(hover, "pointerType", { value: "mouse" });
+		second.dispatchEvent(hover);
 		assert.equal(second.getAttribute("aria-selected"), "true");
 		let scrolled = 0;
 		(popover.children[0] as HTMLElement).scrollIntoView = () => { scrolled++; popover.scrollTop = 80; };
@@ -411,6 +435,75 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		assert.equal(win.document.querySelector(".suggestion-container"), null);
 		undo(editor.view);
 		assert.equal(editor.input.value, "#");
+		for (const gesture of ["tap", "scroll", "cancel", "reset", "mouse"] as const) {
+			editor.reset("#"); editor.view.focus(); suggest.open();
+			const target = win.document.querySelectorAll<HTMLElement>(".suggestion-item")[1];
+			const before = selections;
+			const pointer = (type: string, y = 0) => {
+				const event = new win.MouseEvent(type, { bubbles: true, cancelable: true, clientY: y });
+				Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: gesture === "mouse" ? "mouse" : "touch" } });
+				target.dispatchEvent(event);
+			};
+			pointer("pointerdown");
+			assert.equal(editor.input.value, "#", "按下不能选中，必须允许滚动");
+			if (gesture === "scroll") pointer("pointermove", 30);
+			if (gesture === "cancel") pointer("pointercancel");
+			if (gesture === "reset") editor.reset("#new-session");
+			pointer("pointerup", gesture === "scroll" ? 30 : 0);
+			if (gesture === "tap") assert.equal(editor.input.value, "#beta ", "触摸松手应先于兼容鼠标事件填入标签");
+			if (gesture === "tap") {
+				// 候选项已经移除：后续事件会重新命中编辑器或蒙层，而非旧候选 DOM。
+				const backdrop = win.document.body.appendChild(win.document.createElement("div"));
+				let closed = 0;
+				backdrop.addEventListener("click", () => { closed++; editor.input.blur(); });
+				const end = new win.Event("touchend", { bubbles: true, cancelable: true });
+				Object.defineProperty(end, "changedTouches", { value: [{ clientX: 0, clientY: 0 }] });
+				assert.equal(editor.input.dispatchEvent(end), false);
+				if (editor.input.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true, cancelable: true }))) {
+					editor.input.setSelectionRange(0, 0);
+				}
+				backdrop.dispatchEvent(new win.MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+				backdrop.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+				assert.equal(closed, 0);
+				assert.equal(editor.input.selectionStart, 6);
+				assert.equal(win.document.activeElement, editor.input);
+				// 下一次主动点击仍应正常到达下层。
+				backdrop.dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true }));
+				backdrop.dispatchEvent(new win.MouseEvent("click", { bubbles: true, detail: 1 }));
+				assert.equal(closed, 1);
+				editor.view.focus(); backdrop.remove();
+			}
+			// 模拟 WebView 的默认失焦；mousedown 被阻止时编辑器应保持焦点。
+			if (target.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true, cancelable: true }))) editor.input.blur();
+			target.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+			const chosen = gesture === "tap" || gesture === "mouse";
+			assert.equal(selections, before + (chosen ? 1 : 0), gesture);
+			assert.equal(editor.input.value, chosen ? "#beta " : gesture === "reset" ? "#new-session" : "#", gesture);
+			if (chosen) {
+				assert.equal(win.document.activeElement, editor.input);
+				assert.equal(undoDepth(editor.view.state), 1);
+				undo(editor.view); assert.equal(editor.input.value, "#");
+			}
+		}
+		for (const release of ["next-pointer", "reset", "timeout", "unregister"] as const) {
+			editor.reset("#"); editor.view.focus(); suggest.open();
+			const target = win.document.querySelectorAll<HTMLElement>(".suggestion-item")[1];
+			for (const type of ["pointerdown", "pointerup"]) {
+				const event = new win.MouseEvent(type, { bubbles: true, cancelable: true, clientX: 40, clientY: 80 });
+				Object.defineProperties(event, { pointerId: { value: 2 }, pointerType: { value: "touch" } });
+				target.dispatchEvent(event);
+			}
+			const click = (x = 40, detail = 1) => editor.input.dispatchEvent(new win.MouseEvent("click", {
+				bubbles: true, cancelable: true, clientX: x, clientY: 80, detail,
+			}));
+			assert.equal(click(200), true, "不同位置的点击不能被吞掉");
+			assert.equal(click(40, 0), true, "键盘/辅助功能激活不能被吞掉");
+			if (release === "next-pointer") editor.input.dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true }));
+			if (release === "reset") editor.reset("new session");
+			if (release === "timeout") await new Promise(resolve => win.setTimeout(resolve, 650));
+			if (release === "unregister") unregister();
+			assert.equal(click(), true, release);
+		}
 	} finally { unregister(); close(); }
 });
 

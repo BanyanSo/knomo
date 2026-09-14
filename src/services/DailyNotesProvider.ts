@@ -165,9 +165,11 @@ function parseDailyNotesConfig(value: unknown, fallbackFormat: string | null): D
 		return null;
 	}
 
+	const template = normalizeFolder(stringOrNull(record.template));
 	return {
 		folder: normalizeFolder(stringOrNull(record.folder)),
 		format: format.trim(),
+		...(template === null ? {} : { template }),
 	};
 }
 

@@ -4,6 +4,7 @@ import test from "node:test";
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
+import { DailyNoteService } from "../src/services/DailyNoteService";
 import { DailyMemoWriteGateway } from "../src/services/DailyMemoWriteGateway";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import {
@@ -17,6 +18,25 @@ import { MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 
 const HEADINGS = ["## Memos"] as const;
+
+test("缺失日记先应用模板再追加 Memo，复制和移动到新日期也保留模板", async () => {
+	const fixture = createFixture({ template: "Templates/Daily", initialFiles: {
+		"Templates/Daily.md": "---\ndate: {{date}}\n---\n# {{title}}\n\n## Memos\n\n## Review\nkeep\n",
+	} });
+	await fixture.service.create({ content: "first" });
+	await fixture.service.create({ content: "second" });
+	const original = (await fixture.parse("2026-08-22"))[0]!;
+	await fixture.service.copy({ observation: toHandle(original), targetLogicalDate: "2026-08-23" });
+	const source = (await fixture.parse("2026-08-22"))[0]!;
+	await fixture.service.move({ observation: toHandle(source), targetLogicalDate: "2026-08-24" });
+	for (const day of ["2026-08-22", "2026-08-23", "2026-08-24"]) {
+		const text = fixture.vault.readText(fixture.getPath(day));
+		assert.ok(text.startsWith(`---\ndate: ${day}\n---\n# ${day}\n`));
+		assert.ok(text.endsWith("## Review\nkeep\n"));
+		assert.equal(text.split("## Memos").length - 1, 1);
+		assert.equal((await fixture.parse(day)).length, 1);
+	}
+});
 
 test("正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (context) => {
 	for (const scenario of [
@@ -385,6 +405,7 @@ test("末尾缩进空行属于原 memo，连续创建不转移正文或解析失
 });
 
 interface FixtureOptions {
+	template?: string;
 	catalogDegraded?: boolean;
 	initialFiles?: Readonly<Record<string, string>>;
 	insertPosition?: "top" | "bottom";
@@ -406,7 +427,11 @@ function createFixture(options: FixtureOptions = {}) {
 	const refreshedPaths: string[][] = [];
 	const service = new MarkdownMutationService(app, {
 		getWriteHeading: () => HEADINGS[0],
-		getDailyFileForDate: async (logicalDate) => vault.ensureFile(`Daily/${logicalDate}.md`, "## Memos\n"),
+		getDailyFileForDate: async (logicalDate) => options.template === undefined
+			? vault.ensureFile(`Daily/${logicalDate}.md`, "## Memos\n")
+			: new DailyNoteService(app).getOrCreateDailyNoteForDateWithConfig(new Date(`${logicalDate}T00:00:00`), {
+				folder: "Daily", format: "YYYY-MM-DD", template: options.template,
+			}),
 		getLogicalDateForPath: async (sourcePath) => sourcePath.match(/(\d{4}-\d{2}-\d{2})\.md$/u)?.[1]
 			?? Promise.reject(new Error(`Not a Daily path: ${sourcePath}`)),
 		getMemoTimeFormat: options.getMemoTimeFormat ?? (() => "HH:mm"),
@@ -471,6 +496,17 @@ class MemoryVault {
 
 	getAbstractFileByPath(path: string): TFile | null {
 		return this.files.get(path) ?? null;
+	}
+
+	async createFolder(): Promise<void> {}
+
+	async create(path: string, content: string): Promise<TFile> {
+		if (this.files.has(path)) throw new Error("Already exists");
+		return this.ensureFile(path, content);
+	}
+
+	async read(file: TFile): Promise<string> {
+		return this.readText(file.path);
 	}
 
 	async cachedRead(file: TFile): Promise<string> {

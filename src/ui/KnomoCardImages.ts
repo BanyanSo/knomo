@@ -14,9 +14,57 @@ export interface RenderedMemoCardImages {
 	loadItems: CardImageLoadItem[];
 }
 
-export interface MemoCardImageLoadPlan {
-	observedLoadItems: CardImageLoadItem[];
-	eagerLoadItems: CardImageLoadItem[];
+// 仅缓存当前视图移除的已就绪节点；取出即转移所有权，按最近使用顺序限制图片数量。
+export class MemoCardImageCache {
+	private readonly images = new Map<string, { holder: HTMLElement; count: number }>();
+	private imageCount = 0;
+
+	constructor(private readonly maxImages = 24) {}
+
+	capture(root: HTMLElement): void {
+		for (const imagesEl of root.findAll(".knomo-card-images")) {
+			const key = imagesEl.getAttr("data-knomo-image-occurrence");
+			if (!key) continue;
+			const ready = imagesEl.findAll(".knomo-card-image-item").filter((item) =>
+				!item.hasClass("is-loading") && !item.hasClass("is-error") && item.find("img")?.getAttr("src"));
+			if (ready.length === 0 || ready.length > this.maxImages) continue;
+			this.remove(key);
+			const holder = root.createDiv();
+			holder.remove();
+			for (const item of ready) holder.appendChild(item);
+			this.images.set(key, { holder, count: ready.length });
+			this.imageCount += ready.length;
+			while (this.imageCount > this.maxImages) {
+				const oldest = this.images.keys().next().value;
+				if (oldest === undefined) break;
+				this.remove(oldest);
+			}
+		}
+	}
+
+	take(memo: MemoRecord): HTMLElement | null {
+		const key = getMemoImageOccurrenceKey(memo);
+		return key === null ? null : this.remove(key);
+	}
+
+	clear(): void {
+		this.images.clear();
+		this.imageCount = 0;
+	}
+
+	private remove(key: string): HTMLElement | null {
+		const entry = this.images.get(key);
+		if (entry === undefined) return null;
+		this.images.delete(key);
+		this.imageCount -= entry.count;
+		return entry.holder;
+	}
+}
+
+function getMemoImageOccurrenceKey(memo: MemoRecord): string | null {
+	const handle = memo.catalog?.observationHandle;
+	if (handle === undefined) return null;
+	return encodeImageKeyParts([handle.sourcePath, handle.sourceRevision, String(handle.startLine), String(handle.endLine), handle.rawBlockHash]);
 }
 
 export function renderMemoCardImages(
@@ -31,6 +79,8 @@ export function renderMemoCardImages(
 	}
 	const visibleImages = images.slice(0, MAX_CARD_PREVIEW_IMAGES);
 	const imagesEl = prepareImagesElement(container, images.length, reusedImagesEl);
+	const occurrenceKey = getMemoImageOccurrenceKey(memo);
+	imagesEl.setAttr("data-knomo-image-occurrence", occurrenceKey ?? "");
 	const reusableItems = collectReusableImageItems(imagesEl);
 	if (reusedImagesEl !== null) {
 		imagesEl.empty();
@@ -38,7 +88,7 @@ export function renderMemoCardImages(
 	const loadItems: CardImageLoadItem[] = [];
 	visibleImages.forEach((image, index) => {
 		const hiddenCount = index === MAX_CARD_PREVIEW_IMAGES - 1 ? images.length - MAX_CARD_PREVIEW_IMAGES : 0;
-		const imageKey = getMemoPreviewImageKey(memo.id, image, index);
+		const imageKey = getMemoPreviewImageKey(occurrenceKey ?? memo.id, image, index);
 		const reusedItem = reusableItems.get(imageKey);
 		const loadItem = reusedItem !== undefined && reuseMemoCardImage(imagesEl, reusedItem, memo, image, index, hiddenCount, imageKey, labels)
 			? null
@@ -48,29 +98,6 @@ export function renderMemoCardImages(
 		}
 	});
 	return { imagesEl, loadItems };
-}
-
-export function planMemoCardImageLoads(
-	loadItems: readonly CardImageLoadItem[],
-	eagerFirstImage: boolean,
-): MemoCardImageLoadPlan {
-	if (!eagerFirstImage || loadItems.length === 0) {
-		return {
-			observedLoadItems: [...loadItems],
-			eagerLoadItems: [],
-		};
-	}
-	const firstLoadItem = loadItems[0];
-	if (firstLoadItem === undefined) {
-		return {
-			observedLoadItems: [],
-			eagerLoadItems: [],
-		};
-	}
-	return {
-		observedLoadItems: loadItems.slice(1),
-		eagerLoadItems: [firstLoadItem],
-	};
 }
 
 export function parseCardImageIndex(value: string | null): number {

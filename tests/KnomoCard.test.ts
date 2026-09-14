@@ -7,6 +7,7 @@ import type { MemoCardPreview } from "../src/ui/MemoCardPreview";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { createRecentTimeFlowContext, getRecentMemoPresentation } from "../src/ui/RecentTimeFlowPresentation";
 import { KnomoCardFlowBatcher, runCardFlowBatch } from "../src/ui/KnomoCardFlow";
+import { MemoCardImageCache } from "../src/ui/KnomoCardImages";
 
 test("真实卡片时间按钮保留 Daily 操作，近三天只显示墙上分钟与装饰图标", async () => {
 	await ensureObsidianStub();
@@ -92,6 +93,7 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 			return card;
 		};
 		Object.assign(view, { cardFlowEl: root.asHtml(), containerEl: { win: {} }, renderedCardMemos: new Map(),
+			cardImageCache: new MemoCardImageCache(),
 			cardFlowCoordinator: { generation: 1, clearMobileBatchContinuation: () => {}, removeSentinel: () => {}, getPendingVisibleCount: () => null, syncBatch: () => {} },
 			prepareRecentTimeFlow: () => { view.recentTimeFlowContext = context; view.recentDecorations = new RecentTimeFlowDecorations(context); },
 			getInitialCardBatchSize: () => 10, renderCardForMode: render,

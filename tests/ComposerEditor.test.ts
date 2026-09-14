@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
 import { Transaction } from "@codemirror/state";
 import { redo, undo, undoDepth } from "@codemirror/commands";
 import { ComposerEditor } from "../src/ui/ComposerEditor";
@@ -341,6 +341,27 @@ test("toolbar Tap executes once, Swipe never executes and configuration does not
 		assert.equal(context.valid(), true);
 		cleanup();
 	} finally { close(); }
+});
+
+test("toolbar gesture ignores a hover move without an active pointer", () => {
+	const errors: Error[] = [];
+	const virtualConsole = new VirtualConsole();
+	virtualConsole.on("jsdomError", error => errors.push(error));
+	const dom = new JSDOM("<!doctype html><body></body>", { virtualConsole });
+	const tools = dom.window.document.createElement("div");
+	const button = tools.appendChild(dom.window.document.createElement("button"));
+	button.dataset.action = "insert-bold";
+	dom.window.document.body.appendChild(tools);
+	const cleanup = registerComposerToolGesture(tools, () => assert.fail("hover move must not run an action"));
+	try {
+		const hover = new dom.window.MouseEvent("pointermove", { bubbles: true });
+		Object.defineProperty(hover, "pointerType", { value: "mouse" });
+		button.dispatchEvent(hover);
+		assert.deepEqual(errors, []);
+	} finally {
+		cleanup();
+		dom.window.close();
+	}
 });
 
 test("Tag Suggest uses the same editor transaction and preserves IME and save shortcut priority", async () => {

@@ -10,7 +10,9 @@ export function registerComposerToolGesture(tools: HTMLElement, run: (action: st
 		if (!pointer.touch) event.preventDefault();
 	};
 	const move = (event: PointerEvent) => {
-		if (pointer?.id === event.pointerId && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 8) pointer.moved = true;
+		const current = pointer;
+		if (!current || current.id !== event.pointerId) return;
+		if (Math.hypot(event.clientX - current.x, event.clientY - current.y) > 8) current.moved = true;
 	};
 	const up = (event: PointerEvent) => {
 		if (!pointer || pointer.id !== event.pointerId) return;

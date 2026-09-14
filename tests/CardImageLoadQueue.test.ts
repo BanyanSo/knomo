@@ -39,44 +39,31 @@ test("loads one image per card at a time and waits for decode", async () => {
 	assert.equal(second.getAttr("src"), "app://second.png");
 });
 
-test("release-on-load frees the queue slot before decode finishes", () => {
+test("load releases a loading position but retains decode management and placeholder", async () => {
 	const scheduler = new FakeScheduler();
 	const first = new FakeImage();
 	const second = new FakeImage();
-	let firstLoadCount = 0;
-	const queue = createQueue(scheduler, {
-		releaseSlotOnLoad: (surface) => surface === "card-flow",
-	});
-
-	queue.observe(createRequest("card-flow", new FakeCard(), [
-		{
-			...createLoadItem(first, "app://first.png"),
-			onLoad: () => {
-				firstLoadCount += 1;
-			},
-		},
-		createLoadItem(second, "app://second.png"),
-	]));
+	let loaded = 0;
+	const queue = createQueue(scheduler);
+	queue.observe(createRequest("card-flow", new FakeCard(), [{ ...createLoadItem(first, "app://first"), onLoad: () => loaded++ }]));
+	queue.observe(createRequest("card-flow", new FakeCard(), [createLoadItem(second, "app://second")]));
 	scheduler.flushDelay(0);
-
 	first.dispatch("load");
-
-	assert.equal(first.decodeCalls, 1);
-	assert.equal(firstLoadCount, 1);
-	assert.equal(second.getAttr("src"), null);
-	assert.equal(scheduler.delays.includes(10_000), false);
-	assert.deepEqual(scheduler.delays, [0]);
+	assert.equal(loaded, 0);
+	assert.ok(scheduler.delays.includes(10_000));
 	scheduler.flushDelay(0);
-	assert.equal(second.getAttr("src"), "app://second.png");
+	assert.equal(second.getAttr("src"), "app://second");
+	first.resolveDecode();
+	await flushMicrotasks();
+	assert.equal(loaded, 1);
 });
 
-test("release-on-load reuses a source only after async decode succeeds", async () => {
+test("each new element waits for its own decode even for an already loaded URL", async () => {
 	const scheduler = new FakeScheduler();
 	const first = new FakeImage();
 	const second = new FakeImage();
 	let reusedLoadCount = 0;
 	const queue = createQueue(scheduler, {
-		releaseSlotOnLoad: (surface) => surface === "card-flow",
 	});
 
 	queue.observe(createRequest("card-flow", new FakeCard(), [
@@ -96,9 +83,12 @@ test("release-on-load reuses a source only after async decode succeeds", async (
 		},
 	]));
 
-	assert.equal(second.getAttr("src"), "app://decoded-after-load.png");
-	assert.equal(second.decodeCalls, 0);
-	assert.equal(scheduler.size, 0);
+	assert.equal(second.getAttr("src"), null);
+	scheduler.flushDelay(0);
+	second.dispatch("load");
+	assert.equal(second.decodeCalls, 1);
+	assert.equal(reusedLoadCount, 0);
+	second.resolveDecode();
 	await flushMicrotasks();
 	assert.equal(reusedLoadCount, 1);
 });
@@ -114,7 +104,6 @@ test("release-on-load skips async decode caching after generation changes", asyn
 	]);
 	const queue = createQueue(scheduler, {
 		generations,
-		releaseSlotOnLoad: (surface) => surface === "card-flow",
 	});
 
 	queue.observe(createRequest("card-flow", new FakeCard(), [
@@ -142,7 +131,6 @@ test("release-on-load skips async decode caching after resource invalidation", a
 	const first = new FakeImage();
 	const second = new FakeImage();
 	const queue = createQueue(scheduler, {
-		releaseSlotOnLoad: (surface) => surface === "card-flow",
 	});
 
 	queue.observe(createRequest("card-flow", new FakeCard(), [
@@ -231,12 +219,13 @@ test("shares in-flight and decoded sources across surfaces", async () => {
 	cardImage.resolveDecode();
 	await flushMicrotasks();
 
+	scheduler.flushDelay(0);
 	assert.equal(searchImage.getAttr("src"), "app://shared.png");
 	assert.equal(searchImage.decodeCalls, 0);
-	assert.equal(scheduler.size, 0);
+	assert.ok(scheduler.delays.includes(10_000));
 });
 
-test("reuses a decoded source without another scheduled decode", async () => {
+test("already loaded URLs still respect surface pauses", async () => {
 	const scheduler = new FakeScheduler();
 	const first = new FakeImage();
 	const second = new FakeImage();
@@ -251,6 +240,7 @@ test("reuses a decoded source without another scheduled decode", async () => {
 	first.resolveDecode();
 	await flushMicrotasks();
 
+	queue.setSurfacePaused("mobile-search", true);
 	queue.observe(createRequest("mobile-search", new FakeCard(), [
 		{
 			...createLoadItem(second, "app://decoded.png"),
@@ -260,10 +250,14 @@ test("reuses a decoded source without another scheduled decode", async () => {
 		},
 	]));
 
-	assert.equal(second.getAttr("src"), "app://decoded.png");
+	assert.equal(second.getAttr("src"), null);
 	assert.equal(second.decodeCalls, 0);
 	assert.equal(reusedLoadCount, 0);
 	assert.equal(scheduler.size, 0);
+	queue.setSurfacePaused("mobile-search", false);
+	scheduler.flushDelay(0);
+	second.dispatch("load");
+	second.resolveDecode();
 	await flushMicrotasks();
 	assert.equal(reusedLoadCount, 1);
 });
@@ -534,6 +528,7 @@ test("defers observed work until the target intersects", () => {
 	const image = new FakeImage();
 	const queue = createQueue(scheduler, { observe: true });
 
+	queue.bindSurface("card-flow", new FakeCard().asElement());
 	queue.observe({
 		...createRequest("card-flow", card, [
 			createLoadItem(image, "app://lazy.png"),
@@ -543,15 +538,142 @@ test("defers observed work until the target intersects", () => {
 	assert.equal(scheduler.size, 0);
 
 	FakeIntersectionObserver.instances[0].trigger([card]);
-	scheduler.flushDelay(0);
+	scheduler.flushDelay(16);
 	assert.equal(image.getAttr("src"), "app://lazy.png");
+});
+
+test("observation roots are surface scoped and old callbacks cannot start work", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true });
+	const root = new FakeCard();
+	queue.bindSurface("card-flow", root.asElement());
+	const oldObserver = FakeIntersectionObserver.instances[0];
+	assert.equal(oldObserver.options?.root, root.asElement());
+	assert.equal(FakeIntersectionObserver.instances[1].options?.rootMargin, "0px");
+	const card = new FakeCard();
+	const image = new FakeImage();
+	queue.observe({ ...createRequest("card-flow", card, [createLoadItem(image, "app://old.png")]), observe: true });
+	queue.bindSurface("card-flow", new FakeCard().asElement());
+	oldObserver.trigger([card], true, true);
+	assert.equal(scheduler.size, 0);
+	queue.bindSurface("mobile-search", root.asElement());
+	assert.equal(FakeIntersectionObserver.instances[4].options?.root, root.asElement());
+	queue.dispose();
+});
+
+test("limits loading plus decode work to four and decode timeout releases budget", async () => {
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { concurrency: 2, maxInFlight: 4 });
+	const images = Array.from({length: 6}, () => new FakeImage());
+	let errors = 0;
+	let loaded = 0;
+	images.forEach((image, index) => queue.observe(createRequest("card-flow", new FakeCard(), [{ ...createLoadItem(image, "app://" + index, undefined, () => errors++), onLoad: () => loaded++ }])));
+	for (let i=0; i<4; i++) { scheduler.flushDelay(0); images[i].dispatch("load"); }
+	assert.equal(images[4].getAttr("src"), null);
+	assert.equal(scheduler.delays.filter(delay => delay === 0).length, 0);
+	scheduler.flushDelay(10_000);
+	assert.equal(errors, 1);
+	scheduler.flushDelay(0);
+	assert.equal(images[4].getAttr("src"), "app://4");
+	images[0].resolveDecode();
+	await flushMicrotasks();
+	assert.equal(loaded, 0);
+	queue.clear();
+	images[1].resolveDecode();
+	await flushMicrotasks();
+	assert.equal(loaded, 0);
+});
+
+test("decode rejection settles once and a preempted decode cannot settle its retry", async () => {
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler);
+	const image = new FakeImage();
+	let errors = 0;
+	let loaded = 0;
+	queue.observe(createRequest("card-flow", new FakeCard(), [{ ...createLoadItem(image, "app://retry", undefined, () => errors++), onLoad: () => loaded++ }]));
+	scheduler.flushDelay(0);
+	image.dispatch("load");
+	queue.setSurfacePaused("card-flow", true);
+	queue.preemptActiveSurface("card-flow");
+	image.resolveDecode();
+	await flushMicrotasks();
+	assert.equal(loaded, 0);
+	queue.setSurfacePaused("card-flow", false);
+	scheduler.flushDelay(0);
+	image.decode = () => Promise.reject(new Error("decode failed"));
+	image.dispatch("load");
+	await flushMicrotasks();
+	assert.equal(errors, 1);
+	assert.equal(loaded, 0);
+	assert.equal(scheduler.size, 0);
+});
+
+test("visible secondary beats nearby primary; leaving range holds waiting tasks without clearing loaded images", async () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true, concurrency: 2 });
+	queue.bindSurface("card-flow", new FakeCard().asElement());
+	const [nearby, visible] = FakeIntersectionObserver.instances;
+	const nearCard = new FakeCard(), farCard = new FakeCard(), screenCard = new FakeCard();
+	const near = new FakeImage(), far = new FakeImage(), screen = new FakeImage();
+	queue.observe({ ...createRequest("card-flow", nearCard, [{...createLoadItem(near, "https://near"), priority: "high"}]), observe: true });
+	queue.observe({ ...createRequest("card-flow", farCard, [createLoadItem(far, "https://far")]), observe: true });
+	queue.observe({ ...createRequest("card-flow", screenCard, [{...createLoadItem(screen, "https://visible"), priority: "low"}]), observe: true });
+	nearby.trigger([nearCard, farCard, screenCard]);
+	visible.trigger([screenCard]);
+	scheduler.flushDelay(16);
+	assert.equal(screen.getAttr("src"), "https://visible");
+	assert.equal(screen.getAttr("fetchpriority"), "high");
+	assert.equal(near.getAttr("src"), "https://near");
+	assert.equal(far.getAttr("src"), null);
+	nearby.trigger([farCard], false);
+	visible.trigger([screenCard], false);
+	nearby.trigger([screenCard], false);
+	screen.dispatch("load"); screen.resolveDecode();
+	await flushMicrotasks();
+	assert.equal(screen.getAttr("src"), "https://visible");
+	assert.equal(far.getAttr("src"), null);
+	nearby.trigger([farCard]);
+	visible.trigger([farCard]);
+	scheduler.flushDelay(16);
+	assert.equal(far.getAttr("src"), "https://far");
+});
+
+test("without decode the load result must contain pixels", async () => {
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler);
+	let loaded = 0, errors = 0;
+	for (const naturalWidth of [32, 0]) {
+		const image = new FakeImage();
+		Object.defineProperties(image, { decode: { value: undefined }, naturalWidth: { value: naturalWidth } });
+		queue.observe(createRequest("card-flow", new FakeCard(), [{ ...createLoadItem(image, "app://" + naturalWidth), onLoad: () => loaded++, onError: () => errors++ }]));
+		scheduler.flushDelay(0); image.dispatch("load"); await flushMicrotasks();
+	}
+	assert.equal(loaded, 1); assert.equal(errors, 1); assert.equal(scheduler.size, 0);
+});
+
+test("leaving range before the scheduled start defers until reentry", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true });
+	queue.bindSurface("card-flow", new FakeCard().asElement());
+	const card = new FakeCard(), image = new FakeImage();
+	const nearby = FakeIntersectionObserver.instances[0];
+	queue.observe({ ...createRequest("card-flow", card, [createLoadItem(image, "app://near")]), observe: true });
+	nearby.trigger([card]);
+	nearby.trigger([card], false); scheduler.flushDelay(16);
+	assert.equal(image.getAttr("src"), null);
+	nearby.trigger([card]); scheduler.flushDelay(16);
+	assert.equal(image.getAttr("src"), "app://near");
+	queue.dispose(); assert.equal(scheduler.size, 0);
 });
 
 interface CreateQueueOptions {
 	concurrency?: number;
 	generations?: Map<CardImageLoadSurface, number>;
 	observe?: boolean;
-	releaseSlotOnLoad?: (surface: CardImageLoadSurface) => boolean;
+	maxInFlight?: number;
 }
 
 function createQueue(scheduler: FakeScheduler, options: CreateQueueOptions = {}): CardImageLoadQueue {
@@ -566,7 +688,7 @@ function createQueue(scheduler: FakeScheduler, options: CreateQueueOptions = {})
 		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
 		cancelTask: (taskId) => scheduler.cancel(taskId),
 		watchdogMs: 10_000,
-		releaseSlotOnLoad: options.releaseSlotOnLoad,
+		maxInFlight: options.maxInFlight,
 		Observer: options.observe
 			? FakeIntersectionObserver as unknown as typeof IntersectionObserver
 			: undefined,
@@ -676,12 +798,12 @@ class FakeIntersectionObserver {
 		return [];
 	}
 
-	trigger(cards: FakeCard[]): void {
+	trigger(cards: FakeCard[], isIntersecting = true, stale = false): void {
 		const entries = cards
 			.map((card) => card.asElement())
-			.filter((card) => this.observed.has(card))
+			.filter((card) => stale || this.observed.has(card))
 			.map((card) => ({
-				isIntersecting: true,
+				isIntersecting,
 				target: card,
 			} as unknown as IntersectionObserverEntry));
 		this.callback(entries, this as unknown as IntersectionObserver);

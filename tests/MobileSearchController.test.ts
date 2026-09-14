@@ -165,11 +165,49 @@ function contentBlock(content: string): string {
 	return `- 00:00 ${content}`;
 }
 
+test("mobile search hands off ready images through repeated rebuilds and unbinds closed roots", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const { renderMemoCardImages } = await import("../src/ui/KnomoCardImages");
+	const observed = makeMemo("memo", "image memo");
+	observed.catalog = { observationHandle: { sourcePath: "Daily.md", sourceRevision: "1", startLine: 1, endLine: 2, rawBlockHash: "same" } } as NonNullable<MemoViewItem["catalog"]>;
+	let loads = 0;
+	const roots: (HTMLElement | null)[] = [];
+	const { controller, root } = createControllerHarness(MobileSearchController, [observed], undefined, undefined, {
+		bindImageRoot: (el) => roots.push(el),
+		renderMemoCard: (container, memo, _generation, _index, reuse) => {
+			const rendered = renderMemoCardImages(container.createDiv({cls:"knomo-card"}), memo,
+				[{raw:"![[image.png]]", path:"image.png", url:"app://image.png", isRemote:false}], {previewLabel:"Preview", unavailableLabel:"Unavailable"}, reuse);
+			for (const item of rendered?.loadItems ?? []) { loads++; item.imageEl.setAttr("src", item.src); item.onLoad?.(); }
+		},
+	});
+	controller.searchQuery = "image"; controller.openPage({focusInput:false});
+	const original = root.find("img");
+	for (let i=0; i<3; i++) controller.renderResults("view-scope-change");
+	assert.equal(root.find("img"), original); assert.equal(loads, 1);
+	controller.searchQuery = "no matches"; controller.renderResults("view-scope-change");
+	assert.equal(root.find("img"), null);
+	controller.searchQuery = "image"; controller.renderResults("view-scope-change");
+	assert.equal(root.find("img"), original); assert.equal(loads, 1);
+	controller.searchQuery = "no matches"; controller.renderResults("view-scope-change");
+	controller.clearImageCache();
+	controller.searchQuery = "image"; controller.renderResults("view-scope-change");
+	assert.equal(loads, 2); assert.notEqual(root.find("img"), original);
+	controller.searchQuery = "no matches"; controller.renderResults("view-scope-change");
+	controller.closePage(); assert.equal(roots[roots.length - 1], null);
+	controller.searchQuery = "image"; controller.openPage({focusInput:false});
+	assert.equal(roots[roots.length - 1], controller.results);
+	assert.equal(loads, 3);
+	assert.notEqual(root.find("img"), original);
+	controller.removePage(); assert.equal(roots[roots.length - 1], null);
+});
+
 function createControllerHarness(
 	Controller: MobileSearchControllerConstructor,
 	memos: MemoViewItem[],
 	getMatchedTotalCount?: () => number | null,
 	loadRemoteResults?: LoadRemoteResults,
+	overrides: Partial<MobileSearchControllerOptions> = {},
 ): {
 	controller: MobileSearchControllerInstance;
 	root: TestElement;
@@ -244,6 +282,7 @@ function createControllerHarness(
 		handleMarkdownInternalLinkClick: () => undefined,
 		handleTaskCheckboxClick: () => undefined,
 		handleTaskCheckboxChange: () => undefined,
+		...overrides,
 	});
 	body.toggleClass = (cls: string, active: boolean) => {
 		state.bodyToggleCalls.push({ cls, active });
@@ -289,6 +328,7 @@ class TestElement {
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
 	private text = "";
+	private parent: TestElement | null = null;
 	isConnected = true;
 	scrollTop = 0;
 	value = "";
@@ -314,6 +354,7 @@ class TestElement {
 
 	createEl(tagName: string, options: CreateElementOptions = {}): TestElement {
 		const child = new TestElement(tagName);
+		child.parent = this;
 		if (options.cls !== undefined) {
 			for (const cls of options.cls.split(/\s+/)) {
 				if (cls.length > 0) {
@@ -376,8 +417,20 @@ class TestElement {
 	}
 
 	empty(): void {
+		for (const child of this.children) child.parent = null;
 		this.children.length = 0;
 		this.text = "";
+	}
+
+	appendChild(child: TestElement): TestElement {
+		child.remove(); child.parent = this; this.children.push(child); return child;
+	}
+
+	remove(): void {
+		if (this.parent === null) return;
+		const index = this.parent.children.indexOf(this);
+		if (index >= 0) this.parent.children.splice(index, 1);
+		this.parent = null;
 	}
 
 	detach(): void {

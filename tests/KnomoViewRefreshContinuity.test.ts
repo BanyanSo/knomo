@@ -26,7 +26,7 @@ async function refreshHarness() {
 	});
 	Object.assign(view, {
 		memoSourceGeneration: 0, catalogDesktopQueryRun: 0, memos: [], catalogTodayTimeBuoys: null,
-		catalogRevision: 0, hasCommittedCatalogDesktopQuery: false, cardFlowEl: { isConnected: true, childElementCount: 1 },
+		catalogRevision: 0, hasCommittedCatalogDesktopQuery: false, cardFlowEl: { isConnected: true, childElementCount: 1, querySelector: () => null },
 		cardFlowCoordinator: { deferredForAllMemos: false },
 		timeBuoyViewController: controller, shouldShowTodayTimeBuoys: () => true, isDefaultListState: () => true,
 		viewStateController: { activeNav: "all" }, getCatalogQueryFingerprint: () => "all",

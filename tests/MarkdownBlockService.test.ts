@@ -428,51 +428,6 @@ test("throws when heading is missing and creation is disabled", () => {
 	}, /Heading not found/);
 });
 
-test("daily note creation uses Daily Notes interface template when missing", async () => {
-	const { DailyNoteService } = await loadDailyNoteService();
-	const { TFile } = await import("obsidian");
-	const files = new Map<string, InstanceType<typeof TFile>>();
-	const contents = new Map<string, string>();
-	const app = {
-		vault: {
-			getAbstractFileByPath: (path: string) => files.get(path) ?? null,
-		},
-	};
-	let interfaceCalls = 0;
-	const restoreWindow = setTestWindow({
-		__knomoCreateDailyNote: async (date: { format: (format: string) => string }) => {
-			interfaceCalls += 1;
-			const filename = date.format("YYYY-MM-DD");
-			const path = `Daily/${filename}.md`;
-			const file = files.get(path) ?? Object.assign(new TFile(), {
-				path,
-				basename: filename,
-				extension: "md",
-			});
-			files.set(path, file);
-			contents.set(path, `# ${filename}\n${filename}`);
-			return file;
-		},
-	});
-	try {
-		const dailyNoteService = new DailyNoteService(
-			app as never,
-			{
-				getConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
-				loadConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
-			},
-		);
-
-		const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
-
-		assert.equal(file.path, "Daily/2026-05-14.md");
-		assert.equal(interfaceCalls, 1);
-		assert.equal(contents.get("Daily/2026-05-14.md"), "# 2026-05-14\n2026-05-14");
-	} finally {
-		restoreWindow();
-	}
-});
-
 test("daily note creation returns existing file without applying template", async () => {
 	const { DailyNoteService } = await loadDailyNoteService();
 	const { TFile } = await import("obsidian");
@@ -504,7 +459,7 @@ test("daily note creation returns existing file without applying template", asyn
 	assert.equal(createCalls, 0);
 });
 
-test("daily note creation falls back when Daily Notes interface fails", async () => {
+test("daily note creation without a template creates an empty file", async () => {
 	const { DailyNoteService } = await loadDailyNoteService();
 	const { TFile } = await import("obsidian");
 	const files = new Map<string, InstanceType<typeof TFile>>();

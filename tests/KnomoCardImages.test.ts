@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 import type { MemoViewItem } from "../src/types/memoView";
 import {
+	MemoCardImageCache,
 	parseCardImageIndex,
-	planMemoCardImageLoads,
 	renderMemoCardImages,
 	type RenderedMemoCardImages,
 } from "../src/ui/KnomoCardImages";
@@ -104,30 +104,6 @@ test("renderMemoCardImages limits visible images and shows the hidden count", ()
 	assert.equal(root.find("img")?.getAttr("fetchpriority"), "low");
 });
 
-test("planMemoCardImageLoads splits only the first load item for eager loading", () => {
-	const root = new TestElement("div");
-	const rendered = renderMemoCardImages(root.asHtml(), makeMemo(), [
-		makeImage({ url: "app://first.png" }),
-		makeImage({ url: "app://second.png" }),
-		makeImage({ url: "app://third.png" }),
-	], labels);
-
-	assertRendered(rendered);
-	const regularPlan = planMemoCardImageLoads(rendered.loadItems, false);
-	assert.deepEqual(regularPlan.eagerLoadItems.map((item) => item.src), []);
-	assert.deepEqual(regularPlan.observedLoadItems.map((item) => item.src), [
-		"app://first.png",
-		"app://second.png",
-		"app://third.png",
-	]);
-
-	const eagerPlan = planMemoCardImageLoads(rendered.loadItems, true);
-	assert.deepEqual(eagerPlan.eagerLoadItems.map((item) => item.src), ["app://first.png"]);
-	assert.deepEqual(eagerPlan.observedLoadItems.map((item) => item.src), [
-		"app://second.png",
-		"app://third.png",
-	]);
-});
 
 test("renderMemoCardImages renders placeholders for unresolved images", () => {
 	const root = new TestElement("div");
@@ -167,6 +143,105 @@ test("parseCardImageIndex falls back to the first image for invalid values", () 
 	assert.equal(parseCardImageIndex("1.5"), 0);
 	assert.equal(parseCardImageIndex("bad"), 0);
 });
+
+test("filter handoff preserves only ready nodes of the same observed occurrence", () => {
+	const root = new TestElement("div");
+	const memo = makeObservedMemo(1);
+	const other = makeObservedMemo(4);
+	const image = makeImage({ resourcePath: "image.png", mtime: 100 });
+	const first = renderMemoCardImages(root.asHtml(), memo, [image, image], labels);
+	const second = renderMemoCardImages(root.asHtml(), other, [image], labels);
+	assertRendered(first); assertRendered(second);
+	first.loadItems[0].imageEl.setAttr("src", image.url!);
+	first.loadItems[0].onLoad?.();
+	const node = first.loadItems[0].imageEl;
+	const handoff = new MemoCardImageCache();
+	handoff.capture(root.asHtml());
+	root.empty();
+	assert.equal(handoff.take(makeObservedMemo(1, "new-revision")), null);
+	assert.equal(handoff.take(other), null);
+	const reused = renderMemoCardImages(root.asHtml(), memo, [image, image], labels, handoff.take(memo));
+	assertRendered(reused);
+	assert.equal(root.find("img")?.asHtml(), node);
+	assert.equal(reused.loadItems.length, 1);
+	assert.equal(handoff.take(memo), null);
+});
+
+test("handoff rejects unknown occurrences and changed resource versions", () => {
+	const root = new TestElement("div");
+	const memo = makeObservedMemo(1);
+	const image = makeImage({mtime: 100});
+	const first = renderMemoCardImages(root.asHtml(), memo, [image], labels);
+	assertRendered(first);
+	first.loadItems[0].imageEl.setAttr("src", image.url!);
+	first.loadItems[0].onLoad?.();
+	const handoff = new MemoCardImageCache();
+	handoff.capture(root.asHtml());
+	root.empty();
+	const next = renderMemoCardImages(root.asHtml(), memo, [{...image, mtime: 200}], labels, handoff.take(memo));
+	assertRendered(next);
+	assert.equal(next.loadItems.length, 1);
+	assert.notEqual(next.loadItems[0].imageEl, first.loadItems[0].imageEl);
+});
+
+test("image cache does not retain ready images without an observation handle", () => {
+	const root = new TestElement("div");
+	const cache = new MemoCardImageCache();
+	const memo = makeMemo();
+	const rendered = renderMemoCardImages(root.asHtml(), memo, [makeImage()], labels);
+	assertRendered(rendered);
+	rendered.loadItems[0].imageEl.setAttr("src", rendered.loadItems[0].src);
+	rendered.loadItems[0].onLoad?.();
+	cache.capture(root.asHtml()); root.empty();
+	assert.equal(cache.take(memo), null);
+});
+
+test("image cache survives an empty intermediate view and releases on clear", () => {
+	const root = new TestElement("div");
+	const cache = new MemoCardImageCache();
+	const memo = makeObservedMemo(1);
+	const image = makeImage();
+	const first = renderMemoCardImages(root.asHtml(), memo, [image], labels);
+	assertRendered(first);
+	first.loadItems[0].imageEl.setAttr("src", first.loadItems[0].src);
+	first.loadItems[0].onLoad?.();
+	const node = first.loadItems[0].imageEl;
+	cache.capture(root.asHtml()); root.empty();
+	cache.capture(root.asHtml()); root.empty();
+	const returned = renderMemoCardImages(root.asHtml(), memo, [image], labels, cache.take(memo));
+	assertRendered(returned);
+	assert.equal(returned.loadItems.length, 0);
+	assert.equal(root.find("img")?.asHtml(), node);
+	cache.capture(root.asHtml()); root.empty(); cache.clear();
+	assert.equal(cache.take(memo), null);
+});
+
+test("image cache counts individual images and evicts the least recently retained occurrence", () => {
+	const root = new TestElement("div");
+	const cache = new MemoCardImageCache(3);
+	const first = makeObservedMemo(1), second = makeObservedMemo(4), third = makeObservedMemo(7);
+	const retain = (memo: MemoViewItem, count: number) => {
+		const rendered = renderMemoCardImages(root.asHtml(), memo, Array.from({length: count}, () => makeImage()), labels);
+		assertRendered(rendered);
+		for (const item of rendered.loadItems) { item.imageEl.setAttr("src", item.src); item.onLoad?.(); }
+		cache.capture(root.asHtml()); root.empty();
+	};
+	retain(first, 2); retain(second, 1);
+	const reused = cache.take(first);
+	assert.notEqual(reused, null);
+	renderMemoCardImages(root.asHtml(), first, [makeImage(), makeImage()], labels, reused);
+	cache.capture(root.asHtml()); root.empty();
+	retain(third, 1);
+	assert.equal(cache.take(second), null);
+	assert.notEqual(cache.take(first), null);
+	assert.notEqual(cache.take(third), null);
+});
+
+function makeObservedMemo(startLine: number, sourceRevision = "revision"): MemoViewItem {
+	return makeMemo({catalog: {
+		observationHandle: { sourcePath: "Daily/2026-06-02.md", sourceRevision, startLine, endLine: startLine + 1, rawBlockHash: "same-content" },
+	} as MemoViewItem["catalog"]});
+}
 
 interface CreateElementOptions {
 	cls?: string;

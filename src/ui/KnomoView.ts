@@ -1684,7 +1684,8 @@ export class KnomoView extends ItemView {
 			// 先准备同版本的置顶结果，再提交列表，避免先撤下置顶又重新提升。
 			const today = await this.timeBuoyViewController.prepareTodayOnly();
 			if (!today.todayValid && this.hasCommittedCatalogDesktopQuery) {
-				throw today.todayError ?? new Error("Today's time buoy index is not ready.");
+				if (today.todayError instanceof Error) throw today.todayError;
+				throw new Error(formatServiceError(today.todayError, "Today's time buoy index is not ready."));
 			}
 			if (today.todayValid && today.todayRevision !== page.catalogRevision) {
 				throw new Error("Catalog changed while loading today's time buoys.");

@@ -127,6 +127,22 @@ test("首次浮标读取失败仍可显示普通列表，不将故障当作已�
 	assert.deepEqual(view.getTodayTimeBuoyItems(), []);
 });
 
+test("已提交列表遇到非 Error 的浮标失败时规范化为 Error", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype);
+	Object.assign(view, {
+		hasCommittedCatalogDesktopQuery: true,
+		buildCatalogActiveQuery: () => ({}), isDefaultListState: () => false,
+		queryCatalogFeature: async () => ({ items: [], catalogRevision: 2, nextCursor: null }),
+		shouldShowTodayTimeBuoys: () => true,
+		timeBuoyViewController: {
+			prepareTodayOnly: async () => ({ todayValid: false, todayRevision: null, todayError: "time buoy unavailable" }),
+		},
+	});
+	await assert.rejects(view.loadCatalogMemos(false), error => error instanceof Error && error.message === "time buoy unavailable");
+});
+
 test("列表查询等待置顶数据后才返回，拒绝混合不同 Catalog revision", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");

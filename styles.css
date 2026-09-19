@@ -129,6 +129,9 @@ body {
 }
 
 .knomo-plugin {
+	--knomo-content-font: var(--font-text);
+	--knomo-content-size: 15px;
+	--knomo-content-line-height: 1.7;
 	--knomo-sidebar-width: 248px;
 	--knomo-sidebar-content-gap: 10px;
 	--knomo-content-max-width: 720px;
@@ -1811,58 +1814,24 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-composer-input {
 	display: block;
-	flex: 1;
 	width: 100%;
-	height: var(--knomo-composer-input-height, auto);
-	min-height: 44px;
-	max-height: 480px;
-	padding: 0;
-	resize: none;
+	min-height: 48px;
 	border: 0;
 	background: transparent;
 	color: var(--text-normal);
-	font-size: 16px;
-	line-height: 1.55;
-	overflow-y: var(--knomo-composer-input-overflow-y, hidden);
-	scrollbar-width: none;
 	box-shadow: none;
-	appearance: none;
 }
 
-.knomo-plugin .knomo-composer-input::-webkit-scrollbar {
-	display: none;
-	width: 0;
-	height: 0;
-}
-
-.knomo-plugin:not(.is-layout-mobile) .knomo-composer-input {
-	flex: 0 0 auto;
-	height: var(--knomo-composer-input-height, 48px);
-	min-height: 48px;
-	transition: height var(--knomo-transition-fast);
-}
-
-.knomo-plugin .knomo-composer-input:focus,
-.knomo-plugin .knomo-composer-input:focus-visible {
+.knomo-plugin .knomo-composer-input:focus {
 	outline: 0;
-	box-shadow: none;
 }
 
-.knomo-plugin .knomo-composer-input:disabled {
+.knomo-plugin .knomo-composer-input[aria-disabled="true"] {
 	color: var(--text-muted);
-	background: transparent;
 }
 
-/* 移动端长内容只在输入框内部滚动 */
 .knomo-plugin.is-layout-mobile .knomo-composer-input {
-	flex: 0 1 auto;
 	min-height: 150px;
-	max-height: var(--knomo-composer-input-max-height, 40vh);
-	border-radius: 0;
-	font-size: 16px;
-	line-height: 1.55;
-	overflow-y: var(--knomo-composer-input-overflow-y, auto);
-	overscroll-behavior: contain;
 }
 
 /* ---- Composer — desktop-narrow: compact height ---- */
@@ -1874,10 +1843,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin:not(.is-layout-mobile) .knomo-composer {
 	padding-bottom: 8px;
-}
-
-.knomo-plugin .knomo-composer-input::placeholder {
-	color: var(--text-faint);
 }
 
 /* Reference preview in composer */
@@ -1902,13 +1867,24 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-muted);
 	font-size: 13px;
 	line-height: 1.5;
-	overflow: hidden;
+}
+
+.knomo-plugin .knomo-reference-content {
 	display: -webkit-box;
 	-webkit-line-clamp: 3;
 	-webkit-box-orient: vertical;
+	overflow: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.knomo-plugin .knomo-reference-preview.is-cjk-content .knomo-reference-content {
+	text-align: justify;
+	text-align-last: start;
 }
 
 .knomo-plugin .knomo-reference-label {
+	display: block;
 	color: var(--text-faint);
 	font-weight: var(--font-medium);
 }
@@ -2683,8 +2659,9 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin: 0;
 	overflow-wrap: anywhere;
 	color: var(--text-normal);
-	font-size: 15px;
-	line-height: 1.7;
+	font-family: var(--knomo-content-font);
+	font-size: var(--knomo-content-size);
+	line-height: var(--knomo-content-line-height);
 	text-align: start;
 	white-space: normal;
 }
@@ -3415,9 +3392,6 @@ body .knomo-mobile-create-fab.is-hidden {
 
 .knomo-mobile-composer-layer .knomo-composer-input {
 	min-height: 150px;
-	max-height: var(--knomo-composer-input-max-height, 40vh);
-	overflow-y: auto;
-	resize: none;
 }
 
 .knomo-mobile-composer-layer .knomo-tool-group {
@@ -4545,17 +4519,17 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-plugin .knomo-recent-time-icon svg { width: 16px; height: 16px; }
 
 /* Composer 原文与装饰共享编辑面，滚动由 CodeMirror scroller 负责。 */
-.knomo-plugin .knomo-composer-editor { min-width: 0; width: 100%; font-family: var(--font-text); }
+.knomo-plugin .knomo-composer-editor { min-width: 0; width: 100%; font-family: var(--knomo-content-font); }
 .knomo-plugin .knomo-composer-editor.cm-focused { outline: none; }
-.knomo-plugin .knomo-composer-editor .cm-scroller { font-family: inherit; line-height: 1.7; overflow: auto; max-height: 480px; overscroll-behavior: contain; }
-.knomo-plugin .knomo-composer-editor .knomo-composer-input { height: auto; max-height: none; overflow: visible; padding: 0; transition: none; font-family: inherit; font-size: 15px; line-height: 1.7; }
+.knomo-plugin .knomo-composer-editor .cm-scroller { font-family: inherit; line-height: var(--knomo-content-line-height); overflow: auto; max-height: 480px; overscroll-behavior: contain; }
+.knomo-plugin .knomo-composer-editor .knomo-composer-input { height: auto; max-height: none; overflow: visible; padding: 0; transition: none; font-family: inherit; font-size: var(--knomo-content-size); line-height: var(--knomo-content-line-height); }
 .knomo-plugin .knomo-composer-editor .cm-line { padding: 0; }
 .knomo-plugin.is-layout-mobile .knomo-composer-editor .knomo-composer-input { font-size: 16px; }
 .knomo-plugin .knomo-composer-editor .cm-placeholder { color: var(--text-faint); }
 .knomo-plugin .knomo-composer-bold { font-weight: var(--bold-weight, var(--font-bold, 700)); color: var(--bold-color, inherit); }
 .knomo-plugin .knomo-composer-highlight { background: var(--text-highlight-bg); color: inherit; }
 .knomo-plugin .knomo-composer-link { color: var(--link-color); font-weight: var(--link-weight, inherit); text-decoration: var(--link-decoration, underline); cursor: text; }
-.knomo-plugin .knomo-composer-link:hover { color: var(--link-color-hover, var(--link-color)); text-decoration: var(--link-decoration-hover, underline); }
+.knomo-plugin .knomo-composer-link:hover { color: var(--link-color); text-decoration: var(--link-decoration, underline); cursor: text; }
 .knomo-plugin .knomo-composer-marker { display: inline-block; width: max(1.5em, var(--knomo-composer-marker-width, 0px)); margin-inline-start: calc(-1 * max(1.5em, var(--knomo-composer-marker-width, 0px))); color: var(--list-marker-color, var(--text-muted)); cursor: text; }
 /* 原生列表标记靠正文侧排列，短编号与圆点、任务共享正文起点。 */
 .knomo-plugin .knomo-composer-marker :is(ul, ol) { margin: 0; padding: 0; list-style-position: inside; }
@@ -4576,3 +4550,27 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-toolbar-details > summary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 4px; }
 .knomo-toolbar-details[open] > .knomo-toolbar-settings { margin-top: var(--size-4-3); }
 .knomo-toolbar-setting-row > .setting-item-control:empty { display: none; }
+
+/* 原生选区和光标，不创建独立绘制层。 */
+.knomo-plugin .knomo-composer-editor .cm-content { caret-color: var(--caret-color, var(--text-normal)); }
+.knomo-plugin .knomo-composer-editor .cm-content ::selection { background: var(--text-selection); }
+.knomo-plugin .knomo-composer-editor .cm-content::selection { background: var(--text-selection); }
+/* 现有语法信息无法穷举标题和表格；CJK 源码保守保持起始对齐。 */
+.knomo-plugin .knomo-composer-input[data-cjk="true"] { text-align: start; word-break: normal; }
+.knomo-plugin .knomo-tool-button:focus-visible,
+.knomo-plugin .knomo-reference-clear:focus-visible,
+.knomo-plugin .knomo-cancel-edit-button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+.knomo-plugin .knomo-tool-button:disabled,
+.knomo-plugin .knomo-reference-clear:disabled,
+.knomo-plugin .knomo-cancel-edit-button:disabled { opacity: 0.5; }
+.knomo-plugin .knomo-send-button.is-saving { opacity: 1; color: var(--text-on-accent); cursor: progress; }
+.knomo-plugin:not(.is-layout-mobile) .knomo-send-button.is-saving { background: var(--knomo-accent); }
+.knomo-plugin.is-layout-mobile .knomo-send-button.is-saving::before { background: var(--knomo-accent); }
+.knomo-plugin .knomo-send-button.is-saving svg { animation: knomo-composer-saving 1s linear infinite; }
+@keyframes knomo-composer-saving { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+	.knomo-plugin .knomo-send-button.is-saving svg { animation: none; }
+}

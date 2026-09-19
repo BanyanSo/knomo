@@ -63,6 +63,8 @@ export const en: Record<TranslationKey, string> = {
 	"composer.insertNumberedList": "Insert numbered list",
 	"composer.cancelEdit": "Cancel edit",
 	"composer.send": "Send",
+	"composer.save": "Save",
+	"composer.finishEdit": "Save or cancel the current edit first.",
 	"composer.saving": "Saving",
 	"composer.emptyContent": "Content cannot be empty.",
 	"composer.enableDailyOrOpenMarkdown": "Enable the Daily Notes core plugin, or open a Markdown file before inserting an image",

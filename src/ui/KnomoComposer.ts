@@ -1,4 +1,5 @@
 import { normalizeComposerToolbar, type ComposerToolbarPreferences } from "../settings/composerToolbar";
+import { isCjkMemoContent } from "./KnomoCardMetadata";
 import { setIcon } from "obsidian";
 
 import { KNOMO_TIME_BUOY_ICON } from "../icons";
@@ -149,6 +150,7 @@ export function renderComposerReferencePreview(
 	options.setTooltipIfDesktopOnly(clearButton);
 	setIcon(clearButton, "x");
 	container.addClass("is-visible");
+	container.toggleClass("is-cjk-content", isCjkMemoContent(quoteMarkdownText));
 }
 
 export const composerActionLabels = {

@@ -78,9 +78,8 @@ import {
 	type TimeBuoyPickerSource,
 } from "./TimeBuoyDatePicker";
 import {
+	type ComposerDraftSnapshot,
 	formatMarkdownQuoteDraft,
-	getComposerMode,
-	getDraftForComposerClose,
 	prepareComposerSaveInput,
 } from "./ComposerDraft";
 import { getPreferredComposerSourcePath } from "./ComposerSourcePath";
@@ -356,6 +355,8 @@ export class KnomoView extends ItemView {
 	private quoteReferenceText: string | null = null;
 	private quoteMarkdownText: string | null = null;
 	private draftContent = "";
+	private suspendedCreate: ComposerDraftSnapshot | null = null;
+	private composerRenderPending = false;
 	private isSaving = false;
 	private composerSaveRefreshQueue: Promise<void> = Promise.resolve();
 	private isManualRefreshing = false;
@@ -619,7 +620,7 @@ export class KnomoView extends ItemView {
 			beginFocusGuard: () => this.beginMobileImagePickerFocusGuard(),
 			finishFocusGuard: (shouldRestoreFocus) => this.finishMobileImagePickerFocusGuard(shouldRestoreFocus),
 			captureContext: () => this.inputEl?.composer.capture(),
-			isContextCurrent: (context) => context?.sameSession() ?? false,
+			isContextCurrent: (context) => !this.trashViewClosed && !this.isSaving && this.composerOpen && (context?.sameSession() ?? false),
 			insertImageFiles: (files, context) => this.insertImageFiles(files, context),
 		});
 		this.mobileSearchController = new MobileSearchController({
@@ -810,6 +811,10 @@ export class KnomoView extends ItemView {
 			getRootEl: () => this.rootEl,
 			getComposerEl: () => this.composerEl,
 			getInputEl: () => this.inputEl,
+			captureFocusContext: () => {
+				const context = this.inputEl?.composer.capture();
+				return () => !this.trashViewClosed && this.composerOpen && !!context?.sameSession();
+			},
 			getComposerBarEl: () => this.composerBarEl,
 			getReferencePreviewEl: () => this.referencePreviewEl,
 			getLayout: () => this.currentLayout,
@@ -1041,6 +1046,11 @@ export class KnomoView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.trashViewClosed = true;
+		this.suspendedCreate = null;
+		this.draftContent = "";
+		this.editingMemo = null;
+		this.quoteReferenceText = null;
+		this.quoteMarkdownText = null;
 		this.recentPreferenceUnsubscribe?.();
 		this.recentPreferenceUnsubscribe = null;
 		this.trashMemoController.dispose();
@@ -1172,6 +1182,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private async render(): Promise<void> {
+		if (this.trashViewClosed) return;
+		// 保存中的 DOM 重建延至提交归属已消费，避免留下可重复发送的副本。
+		if (this.isSaving) { this.composerRenderPending = true; return; }
 		this.cardImageCache.clear();
 		this.closeTimeBuoyPicker(false);
 		const pendingMemoLoad = this.memoLoadingPromise;
@@ -1182,6 +1195,11 @@ export class KnomoView extends ItemView {
 				this.memoLoadingPromise = null;
 			}
 		}
+		if (this.trashViewClosed) return;
+		if (this.isSaving) { this.composerRenderPending = true; return; }
+		this.draftContent = this.inputEl?.value ?? this.draftContent;
+		const selection = this.inputEl?.composer.view.state.selection.main;
+		const scrollTop = this.inputEl?.composer.view.scrollDOM.scrollTop ?? 0;
 		this.memos = [];
 		this.catalogTodayTimeBuoys = null;
 		this.catalogCursor = null;
@@ -1235,6 +1253,10 @@ export class KnomoView extends ItemView {
 		this.renderDesktopTopbar(contentColumn);
 		this.renderScopePopover(contentColumn);
 		this.renderComposer(contentColumn);
+		if (selection && this.inputEl) {
+			this.inputEl.setSelectionRange(selection.from, selection.to, selection.anchor > selection.head ? "backward" : "forward");
+			this.inputEl.composer.view.scrollDOM.scrollTop = scrollTop;
+		}
 		this.cardFlowEl = contentColumn.createDiv({
 			cls: "knomo-card-flow",
 		});
@@ -3883,6 +3905,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
+		if (event.defaultPrevented) return;
 		if (event.key === "Escape" && this.timeBuoyPickerState !== null) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -3941,6 +3964,7 @@ export class KnomoView extends ItemView {
 	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
 		this.closeCardMenu();
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
+		let referenceIsCurrent: (() => boolean) | null = null;
 		try {
 			if (action === "mark-reviewed") {
 				await this.randomReunionController.markReviewed(memo.id);
@@ -3952,9 +3976,14 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "reference") {
-				const reference = await this.memoCommandService.createReferenceText(
-					await this.resolveCatalogMemo(memo),
-				);
+				if (!this.canChangeComposerContext()) return;
+				const editor = this.inputEl;
+				const context = editor?.composer.capture();
+				referenceIsCurrent = () => !this.trashViewClosed && this.inputEl === editor && !!context?.sameSession();
+				const target = await this.resolveCatalogMemo(memo);
+				if (this.trashViewClosed || this.inputEl !== editor || !context?.sameSession() || this.isSaving || this.editingMemo !== null) return;
+				const reference = await this.memoCommandService.createReferenceText(target);
+				if (this.trashViewClosed || this.inputEl !== editor || !context?.sameSession() || this.isSaving || this.editingMemo !== null) return;
 				this.startReferenceMemo(memo, reference.text);
 				this.syncCardMenuState();
 				return;
@@ -4001,6 +4030,7 @@ export class KnomoView extends ItemView {
 			this.syncUiChrome();
 			this.syncCardMenuState();
 		} catch (error) {
+			if (referenceIsCurrent !== null && !referenceIsCurrent()) return;
 			const message = formatServiceError(error, t("error.operationFailed"));
 			new Notice(message);
 			this.syncUiChrome();
@@ -4009,7 +4039,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async saveInput(): Promise<void> {
-		if (this.inputEl === null || this.isSaving) {
+		if (this.trashViewClosed || this.inputEl === null || this.inputEl.disabled || this.isSaving) {
 			return;
 		}
 		if (this.composerIsComposing || this.inputEl.composer.composing) { new Notice(t("composer.finishComposition")); return; }
@@ -4026,23 +4056,25 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const isMobileSave = this.currentLayout === "mobile";
-		const mobileScrollTop = isMobileSave ? this.mobileComposerController.getOpenScrollTop() ?? this.getCardFlowScrollTop() : null;
 		const submittedEditor = this.inputEl;
+		this.inputEl.composer.setSaving(true);
 		const submittedContext = this.inputEl.composer.capture();
 		const submittedEditingMemo = this.editingMemo;
 		const submittedQuoteReferenceText = this.quoteReferenceText;
 		const submittedQuoteMarkdownText = this.quoteMarkdownText;
 		let composerCleared = false;
 		const clearSavedComposer = (): void => {
-			if (composerCleared || this.inputEl !== submittedEditor || !submittedContext.valid()) return;
+			if (this.trashViewClosed || composerCleared || this.inputEl !== submittedEditor || !submittedContext.valid()) return;
 			if (this.inputEl !== null && this.inputEl.value !== input) return;
 			if (this.editingMemo !== submittedEditingMemo
 				|| this.quoteReferenceText !== submittedQuoteReferenceText
 				|| this.quoteMarkdownText !== submittedQuoteMarkdownText) return;
 			composerCleared = true;
-			this.draftContent = "";
-			this.clearComposerContext();
-			if (this.inputEl !== null) {
+			if (submittedEditingMemo !== null) {
+				this.restoreCreateDraft();
+			} else {
+				this.draftContent = "";
+				this.clearComposerContext();
 				this.inputEl.value = "";
 			}
 			if (isMobileSave) {
@@ -4070,22 +4102,29 @@ export class KnomoView extends ItemView {
 			} else {
 				operation = this.memoCommandService.startCreate(preparedInput.content);
 			}
+			// 两阶段可以同时拒绝；立即监听后续阶段，避免等待 Daily 时出现未处理拒绝。
+			void operation.settled.catch(() => undefined);
 			await operation.dailyCommitted;
 			clearSavedComposer();
 			this.queueComposerSaveFinish(
 				operation.settled,
 				extractTimeBuoyDates(preparedInput.content),
-				isMobileSave,
-				mobileScrollTop,
 			);
 		} catch (error) {
 			const message = formatServiceError(error, t("error.saveFailed"));
-			this.updateStatus(message, true);
-			new Notice(message);
+			if (!this.trashViewClosed && this.inputEl === submittedEditor && submittedContext.sameSession()) {
+				this.updateStatus(message, true);
+				new Notice(message);
+			}
 		} finally {
 			this.isSaving = false;
-			this.updateSendButtonState();
-			this.syncRootState();
+			submittedEditor.composer.setSaving(false);
+			if (!this.trashViewClosed) {
+				if (this.inputEl !== null) this.inputEl.disabled = !this.getDailyNotesStatus().enabled || !this.isComposerCreationAvailable();
+				this.updateSendButtonState();
+				this.syncRootState();
+				if (this.composerRenderPending) { this.composerRenderPending = false; await this.render(); }
+			}
 		}
 	}
 
@@ -4534,14 +4573,8 @@ export class KnomoView extends ItemView {
 			this.closeMobileComposerKeepingDraft();
 			return;
 		}
-		if (this.inputEl !== null) {
-			this.draftContent = getDraftForComposerClose(
-				this.inputEl.value,
-				getComposerMode(this.editingMemo, this.quoteReferenceText),
-				this.quoteMarkdownText,
-			);
-			this.inputEl.value = this.draftContent;
-		}
+		this.tagSuggest?.close();
+		this.wikiLinkSuggest?.close();
 		this.composerOpen = false;
 		this.mobileComposerController.resetInactiveState();
 		this.syncRootState();
@@ -4552,14 +4585,8 @@ export class KnomoView extends ItemView {
 
 	private closeMobileComposerKeepingDraft(): void {
 		this.closeTimeBuoyPicker(false);
-		if (this.inputEl !== null) {
-			this.draftContent = getDraftForComposerClose(
-				this.inputEl.value,
-				getComposerMode(this.editingMemo, this.quoteReferenceText),
-				this.quoteMarkdownText,
-			);
-			this.inputEl.value = this.draftContent;
-		}
+		this.tagSuggest?.close();
+		this.wikiLinkSuggest?.close();
 		this.mobileComposerController.closeKeepingDraft();
 	}
 
@@ -4601,26 +4628,23 @@ export class KnomoView extends ItemView {
 	}
 
 	private cancelComposerFromEscape(): void {
-		if (this.currentLayout === "mobile") {
-			this.closeComposerKeepingDraft();
-			return;
-		}
-		if (this.editingMemo !== null || this.quoteReferenceText !== null) {
-			this.clearComposerMode();
-		}
+		if (this.composerOpen) this.closeComposerKeepingDraft();
 	}
 
 	private cancelEditing(): void {
-		if (this.editingMemo === null) {
+		if (this.editingMemo === null || this.isSaving) {
 			return;
 		}
-		this.clearComposerMode();
+		this.restoreCreateDraft();
+		this.updateStatus("", false);
+		this.syncUiChrome();
 		if (this.currentLayout === "mobile") {
 			this.closeMobileComposerKeepingDraft();
 		}
 	}
 
 	private clearReference(): void {
+		if (this.isSaving || this.editingMemo !== null) return;
 		this.inputEl?.composer.invalidateContext();
 		this.quoteReferenceText = null;
 		this.quoteMarkdownText = null;
@@ -4630,14 +4654,27 @@ export class KnomoView extends ItemView {
 		this.focusComposerInputNow();
 	}
 
-	private clearComposerMode(): void {
+	private restoreCreateDraft(): void {
+		const draft = this.suspendedCreate;
+		this.suspendedCreate = null;
 		this.clearComposerContext();
-		this.draftContent = "";
+		this.quoteReferenceText = draft?.referenceText ?? null;
+		this.quoteMarkdownText = draft?.markdownText ?? null;
+		this.draftContent = draft?.content ?? "";
 		if (this.inputEl !== null) {
-			this.inputEl.value = "";
+			this.inputEl.value = this.draftContent;
+			if (draft) {
+				this.inputEl.setSelectionRange(Math.min(draft.anchor, draft.head), Math.max(draft.anchor, draft.head), draft.anchor > draft.head ? "backward" : "forward");
+				this.inputEl.composer.view.scrollDOM.scrollTop = draft.scrollTop;
+			}
 		}
-		this.updateStatus("", false);
-		this.syncUiChrome();
+	}
+
+	private canChangeComposerContext(): boolean {
+		if (this.isSaving) return false;
+		if (this.editingMemo !== null) { new Notice(t("composer.finishEdit")); return false; }
+		if (this.composerIsComposing || this.inputEl?.composer.composing) { new Notice(t("composer.finishComposition")); return false; }
+		return !this.trashViewClosed;
 	}
 
 	private clearComposerContext(): void {
@@ -4648,6 +4685,15 @@ export class KnomoView extends ItemView {
 	}
 
 	private startEditing(memo: MemoRecord): void {
+		if (this.editingMemo !== null && this.editingMemo.id === memo.id) { this.openComposer(); return; }
+		if (!this.canChangeComposerContext()) return;
+		const selection = this.inputEl?.composer.view.state.selection.main;
+		this.suspendedCreate = {
+			content: this.inputEl?.value ?? this.draftContent,
+			referenceText: this.quoteReferenceText, markdownText: this.quoteMarkdownText,
+			anchor: selection?.anchor ?? 0, head: selection?.head ?? 0,
+			scrollTop: this.inputEl?.composer.view.scrollDOM.scrollTop ?? 0,
+		};
 		this.editingMemo = memo;
 		this.quoteReferenceText = null;
 		this.quoteMarkdownText = null;
@@ -4664,7 +4710,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private startReferenceMemo(memo: MemoRecord, referenceText: string): void {
-		if (this.inputEl) this.inputEl.composer.reset(this.inputEl.value);
+		if (!this.canChangeComposerContext()) return;
+		this.inputEl?.composer.invalidateContext();
 		this.editingMemo = null;
 		this.quoteReferenceText = referenceText;
 		this.quoteMarkdownText = formatMarkdownQuoteDraft(memo.contentSnapshot);
@@ -4767,7 +4814,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private runComposerToolAction(action: string | null): boolean {
-		if (!this.inputEl || this.inputEl.disabled) return true;
+		if (this.isSaving || !this.inputEl || this.inputEl.disabled) return true;
 		if (this.inputEl?.composer.composing || this.composerIsComposing) { new Notice(t("composer.finishComposition")); return true; }
 		this.tagSuggest?.close();
 		this.wikiLinkSuggest?.close();
@@ -5425,7 +5472,10 @@ export class KnomoView extends ItemView {
 		}
 		this.wikiLinkSuggest?.close();
 		const win = this.containerEl.win;
+		const input = this.inputEl;
+		const context = input.composer.capture();
 		win.requestAnimationFrame(() => {
+			if (this.trashViewClosed || this.isSaving || !this.composerOpen || this.inputEl !== input || !context.valid()) return;
 			try {
 				this.inputEl?.focus({ preventScroll: true });
 			} catch {
@@ -5436,7 +5486,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncInputState(): void {
-		this.draftContent = this.inputEl?.value ?? "";
 		this.updateSendButtonState();
 		if (this.currentLayout === "mobile") {
 			this.scheduleMobileComposerResize();
@@ -5475,8 +5524,14 @@ export class KnomoView extends ItemView {
 		}
 		this.sendButtonEl.disabled =
 			this.isSaving || this.inputEl.disabled || this.inputEl.value.trim().length === 0;
-		const label = this.isSaving ? t("composer.saving") : t("composer.send");
+		const label = this.isSaving ? t("composer.saving") : this.editingMemo !== null ? t("composer.save") : t("composer.send");
 		this.sendButtonEl.setAttr("aria-label", label);
+		this.sendButtonEl.setAttr("aria-busy", String(this.isSaving));
+		this.sendButtonEl.toggleClass("is-saving", this.isSaving);
+		setIcon(this.sendButtonEl, this.isSaving ? "loader-circle" : this.editingMemo !== null ? "check" : "send");
+		for (const button of Array.from(this.composerEl?.querySelectorAll<HTMLButtonElement>(".knomo-tool-button, .knomo-reference-clear, .knomo-cancel-edit-button") ?? [])) {
+			button.disabled = this.isSaving || (button.classList.contains("knomo-tool-button") && this.inputEl.disabled);
+		}
 		if (this.timeBuoyButtonEl !== null) {
 			this.timeBuoyButtonEl.disabled = this.isSaving || this.inputEl.disabled;
 		}
@@ -6086,8 +6141,6 @@ export class KnomoView extends ItemView {
 	private queueComposerSaveFinish(
 		settled: Promise<MemoSaveResult>,
 		fallbackTimeBuoyDates: readonly string[],
-		isMobileSave: boolean,
-		mobileScrollTop: number | null,
 	): void {
 		const previous = this.composerSaveRefreshQueue ?? Promise.resolve();
 		this.composerSaveRefreshQueue = previous
@@ -6095,8 +6148,6 @@ export class KnomoView extends ItemView {
 			.then(() => this.finishComposerSave(
 				settled,
 				fallbackTimeBuoyDates,
-				isMobileSave,
-				mobileScrollTop,
 			));
 		void this.composerSaveRefreshQueue.catch(() => undefined);
 	}
@@ -6104,24 +6155,19 @@ export class KnomoView extends ItemView {
 	private async finishComposerSave(
 		settled: Promise<MemoSaveResult>,
 		fallbackTimeBuoyDates: readonly string[],
-		isMobileSave: boolean,
-		mobileScrollTop: number | null,
 	): Promise<void> {
 		let timeBuoyDates = fallbackTimeBuoyDates;
 		try {
 			const result = await settled;
+			if (this.trashViewClosed) return;
 			timeBuoyDates = result.timeBuoyDates;
 			if (result.memo !== null) this.applySavedMemo(result.memo);
 			const reloaded = await this.reloadMemos(false);
-			if (reloaded) this.updateStatus("", false);
+			if (!reloaded && !this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
 		} catch {
-			new Notice(t("catalog.savedRefreshPending"));
+			if (!this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
 		} finally {
-			this.showTimeBuoySaveFeedback(timeBuoyDates);
-			if (isMobileSave) {
-				this.restoreCardFlowScrollTop(mobileScrollTop);
-				this.mobileComposerController.clearOpenScrollTop();
-			}
+			if (!this.trashViewClosed) this.showTimeBuoySaveFeedback(timeBuoyDates);
 		}
 	}
 
@@ -6241,6 +6287,7 @@ export class KnomoView extends ItemView {
 
 	private async insertImageFiles(files: FileList | null, context = this.inputEl?.composer.capture()): Promise<void> {
 		const input = this.inputEl;
+		if (this.isSaving || input?.disabled || this.trashViewClosed) return;
 		if (files === null || files.length === 0) {
 			return;
 		}
@@ -6251,13 +6298,13 @@ export class KnomoView extends ItemView {
 			}
 			if (!input || !context?.valid()) { new Notice(t("composer.asyncChanged")); return; }
 			const links = await this.attachmentService.createImageEmbedLinks(sourcePath, Array.from(files));
-			if (this.inputEl !== input || !context.valid() || input.composer.composing) { new Notice(t("composer.asyncChanged")); return; }
+			if (this.isSaving || this.inputEl !== input || !context.valid() || input.composer.composing) { new Notice(t("composer.asyncChanged")); return; }
 			const from = Math.min(context.anchor, context.head), to = Math.max(context.anchor, context.head);
 			const text = links.join("\n");
 			applyComposerEdit(input, input.value.slice(0, from) + text + input.value.slice(to), from + text.length);
 		} catch (error) {
 			const message = formatServiceError(error, t("error.imageInsertFailed"));
-			this.updateStatus(message, true);
+			if (!this.trashViewClosed && this.inputEl === input && context?.sameSession()) this.updateStatus(message, true);
 			new Notice(message);
 		}
 	}

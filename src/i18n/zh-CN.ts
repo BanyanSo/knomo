@@ -61,6 +61,8 @@ export const zhCN = {
 	"composer.insertNumberedList": "插入编号列表",
 	"composer.cancelEdit": "取消编辑",
 	"composer.send": "发送",
+	"composer.save": "保存",
+	"composer.finishEdit": "请先保存或取消当前编辑。",
 	"composer.saving": "保存中",
 	"composer.emptyContent": "内容不能为空。",
 	"composer.enableDailyOrOpenMarkdown": "请先启用 Obsidian 日记核心插件，或打开一个 Markdown 文件后再插入图片",

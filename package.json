@@ -20,8 +20,7 @@
 		"test:quiet": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot",
 		"test:tooling": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=tooling",
 		"test:all": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=all",
-		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files",
-		"composer:probe": "tsc -p tsconfig.composer-probe.json --noEmit && node scripts/composer/build-probe.mjs"
+		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files"
 	},
 	"keywords": [
 		"memo",

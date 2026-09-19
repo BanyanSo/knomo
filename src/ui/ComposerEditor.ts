@@ -4,6 +4,7 @@ import { standardKeymap, history, historyKeymap, insertNewline, isolateHistory }
 import { getListEnterPatchForNativeInput } from "../utils/composerInput";
 import { revealComposerRange, scanComposerSyntax } from "../utils/composerSyntax";
 import type { ComposerEdit } from "../utils/composerCommands";
+import { isCjkMemoContent } from "./KnomoCardMetadata";
 
 declare global {
 	interface HTMLElementEventMap {
@@ -30,11 +31,11 @@ const composingField = StateField.define({
 	update: (value: boolean, tr) => tr.effects.reduce((next, effect) => effect.is(composingEffect) ? effect.value : next, value),
 });
 const syntaxField = StateField.define({
-	create: state => ({ syntax: scanComposerSyntax(state.doc.toString()), dirty: false }),
+	create: state => ({ syntax: scanComposerSyntax(state.doc.toString()), cjk: isCjkMemoContent(state.doc.toString()), dirty: false }),
 	update: (value, tr) => {
 		// 候选拼音只更新正文；提交后再解析一次，避免每个按键扫描整篇草稿。
 		if (tr.state.field(composingField)) return tr.docChanged && !value.dirty ? { ...value, dirty: true } : value;
-		return tr.docChanged || value.dirty ? { syntax: scanComposerSyntax(tr.newDoc.toString()), dirty: false } : value;
+		return tr.docChanged || value.dirty ? { syntax: scanComposerSyntax(tr.newDoc.toString()), cjk: isCjkMemoContent(tr.newDoc.toString()), dirty: false } : value;
 	},
 });
 
@@ -111,6 +112,7 @@ export class ComposerEditor {
 	readonly view: EditorView;
 	private readonly editable = new Compartment();
 	private enabled = true;
+	private saving = false;
 	private disposed = false;
 	private session = 0;
 	private revision = 0;
@@ -122,6 +124,8 @@ export class ComposerEditor {
 	constructor(parent: HTMLElement, doc: string, private readonly label: string, private readonly hint: string) {
 		this.view = new EditorView({ parent, state: this.createState(doc, label, hint),
 			dispatchTransactions: (transactions, view) => {
+				// 即使调用方绕过 transactionFilter，保存期间也不能修改正文。
+				if ((!this.enabled || this.saving) && transactions.some(tr => tr.docChanged)) return;
 				view.update(transactions);
 				if (transactions.some(tr => tr.docChanged)) {
 					this.revision++;
@@ -146,7 +150,7 @@ export class ComposerEditor {
 			disabled: { get: () => !this.enabled, set: (disabled: boolean) => {
 				if (this.enabled === !disabled) return;
 				this.enabled = !disabled;
-				this.view.dispatch({ effects: this.editable.reconfigure(EditorView.editable.of(!disabled)) });
+				this.syncAvailability();
 			} },
 		});
 		this.input.setSelectionRange = (start, end, direction) => this.view.dispatch({ selection: {
@@ -190,7 +194,7 @@ export class ComposerEditor {
 
 	private createState(doc: string, label: string, hint: string): EditorState {
 		return EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [
-			history(), this.editable.of(EditorView.editable.of(this.enabled)),
+			history(), this.editable.of(this.availabilityExtensions()),
 			// 通过 facet 保留宿主类名，避免焦点切换时被 CodeMirror 重写。
 			EditorView.editorAttributes.of({ class: "knomo-composer-editor" }),
 			// Memo 是自然语言输入，覆盖代码编辑器默认关闭的系统纠错和联想能力。
@@ -199,6 +203,9 @@ export class ComposerEditor {
 			EditorView.lineWrapping, placeholder(hint),
 			keymap.of([...historyKeymap, ...standardKeymap.filter(binding => binding.key !== "Enter"), { key: "Enter", run: insertNewline, shift: insertNewline }]),
 			composingField, syntaxField,
+			EditorView.contentAttributes.of(state => ({
+				"data-cjk": String(state.state.field(syntaxField).cjk),
+			})),
 			decorationsField,
 			EditorState.transactionExtender.of(tr => {
 				const composing = this.compositionActive;
@@ -219,7 +226,7 @@ export class ComposerEditor {
 	}
 
 	apply(edit: ComposerEdit): boolean {
-		if (this.disposed || !this.enabled || this.composing) return false;
+		if (this.disposed || !this.enabled || this.saving || this.composing) return false;
 		const value = this.input.value;
 		if (value === edit.value) return false;
 		// 最小差异保留选区映射和输入法附近的 DOM，文本与选区只提交一次。
@@ -229,6 +236,20 @@ export class ComposerEditor {
 		this.view.dispatch({ changes: { from, to: end, insert: edit.value.slice(from, nextEnd) },
 			selection: { anchor: edit.anchor, head: edit.head }, annotations: [Transaction.userEvent.of("input.toolbar"), isolateHistory.of("full")] });
 		return true;
+	}
+
+	private availabilityExtensions() {
+		return [EditorView.editable.of(this.enabled), EditorState.readOnly.of(!this.enabled || this.saving),
+			EditorView.contentAttributes.of({ "aria-readonly": String(this.saving || !this.enabled), "aria-disabled": String(!this.enabled) })];
+	}
+	private syncAvailability(): void {
+		this.view.dispatch({ effects: this.editable.reconfigure(this.availabilityExtensions()) });
+	}
+	setSaving(saving: boolean): void {
+		if (this.saving === saving || this.disposed) return;
+		this.saving = saving;
+		if (saving) this.invalidateContext();
+		this.syncAvailability();
 	}
 
 	invalidateContext(): void {
@@ -244,6 +265,7 @@ export class ComposerEditor {
 		this.view.setState(this.createState(doc, this.label, this.hint));
 		this.input.dispatchEvent(new this.input.ownerDocument.defaultView!.Event("composer-reset"));
 	}
+	get readOnly(): boolean { return this.saving || !this.enabled || this.disposed; }
 	get composing(): boolean { return this.compositionActive || this.view.compositionStarted || this.view.state.field(composingField); }
 	capture(): { valid: () => boolean; sameSession: () => boolean; anchor: number; head: number } {
 		const session = this.session, revision = this.revision;

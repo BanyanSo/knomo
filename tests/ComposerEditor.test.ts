@@ -519,3 +519,219 @@ test("IME 的 229 确认键即使没有 isComposing 也不进入快捷键", () =
 		assert.equal(shortcuts, 1);
 	} finally { close(); }
 });
+
+test("saving freezes native and programmatic changes while retaining selection and history", () => {
+	const { editor, close } = environment("draft");
+	try {
+		editor.apply({ value: "draft!", anchor: 6, head: 6 });
+		const pending = editor.capture();
+		editor.setSaving(true);
+		assert.equal(pending.sameSession(), false);
+		assert.equal(editor.input.disabled, false);
+		assert.equal(editor.input.getAttribute("aria-readonly"), "true");
+		for (const event of ["input.type", "input.paste", "input.drop", "input.toolbar"]) {
+			editor.view.dispatch({ changes: { from: 0, insert: "bad" }, annotations: Transaction.userEvent.of(event) });
+			assert.equal(editor.input.value, "draft!");
+		}
+		editor.view.dispatch({ changes: { from: 0, insert: "bad" }, filter: false });
+		undo(editor.view); redo(editor.view);
+		assert.equal(editor.apply({ value: "bad", anchor: 0, head: 0 }), false);
+		assert.equal(editor.input.value, "draft!");
+		editor.input.setSelectionRange(0, 5);
+		assert.equal(editor.view.state.sliceDoc(editor.input.selectionStart, editor.input.selectionEnd), "draft");
+		editor.setSaving(false);
+		undo(editor.view);
+		assert.equal(editor.input.value, "draft");
+		editor.input.disabled = true;
+		editor.setSaving(true); editor.setSaving(false);
+		assert.equal(editor.input.disabled, true);
+		assert.equal(editor.apply({ value: "bad", anchor: 0, head: 0 }), false);
+	} finally { close(); }
+});
+
+test("CJK threshold changes with body and waits until composition settles", async () => {
+	const { editor, win, close } = environment("中文");
+	try {
+		assert.equal(editor.input.getAttribute("data-cjk"), "false");
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.view.dispatch({ changes: { from: 2, insert: "这是中文测试文本" }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.equal(editor.input.getAttribute("data-cjk"), "false");
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+		await new Promise(resolve => setTimeout(resolve, 80));
+		assert.equal(editor.input.getAttribute("data-cjk"), "true");
+		editor.input.setSelectionRange(0, 2);
+		assert.equal(editor.input.getAttribute("data-cjk"), "true");
+	} finally { close(); }
+});
+
+async function sessionView(editor: ComposerEditor) {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const fields = {
+		inputEl: editor.input, draftContent: "", suspendedCreate: null as unknown,
+		editingMemo: null as import("../src/types/memoView").MemoViewItem | null,
+		quoteReferenceText: null as string | null, quoteMarkdownText: null as string | null,
+		composerOpen: true, isSaving: false, trashViewClosed: false, composerRenderPending: false,
+		currentLayout: "desktop", composerIsComposing: false,
+		focusComposerInputNow: () => undefined,
+		closeTimeBuoyPicker: () => undefined, syncRootState: () => undefined,
+		updateStatus: (_message: string, _error: boolean) => undefined,
+		updateSendButtonState: () => undefined, updateCancelEditButtonState: () => undefined,
+		syncComposerMode: () => undefined, syncUiChrome: () => undefined, resizeInput: () => undefined,
+		openComposer() { this.composerOpen = true; },
+		mobileComposerController: { resetInactiveState: () => undefined },
+		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+		resolveCatalogMemo: async (memo: import("../src/types/memoView").MemoViewItem) => memo.catalog!,
+		memoCommandService: {
+			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
+			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
+			createReferenceText: async (_memo: unknown) => ({ text: "[[reference]]" }),
+		},
+		reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
+		closeCardMenu: () => undefined, syncCardMenuState: () => undefined,
+	};
+	return Object.assign(Object.create(KnomoView.prototype), fields) as typeof fields & {
+		startEditing(memo: import("../src/types/memoView").MemoViewItem): void;
+		cancelEditing(): void; clearReference(): void; saveInput(): Promise<void>;
+		closeComposerKeepingDraft(): void; cancelComposerFromEscape(): void;
+		handleMemoAction(action: "reference", memo: import("../src/types/memoView").MemoViewItem): Promise<void>;
+		render(): Promise<void>;
+	};
+}
+
+function sessionMemo(id: string) {
+	// 只提供会话测试使用的目标字段；原 observation 对象必须原样到达服务。
+	return { id, contentSnapshot: "original " + id, dailyRef: { path: "Daily/2026-09-19.md" }, catalog: { observationHandle: { sourcePath: "Daily/2026-09-19.md", sourceRevision: id } } } as unknown as import("../src/types/memoView").MemoViewItem;
+}
+
+test("S01-S05 Create and Reference survive Edit, close, reopen, refusal and Cancel", async () => {
+	const { editor, close } = environment("comment");
+	try {
+		const view = await sessionView(editor);
+		view.quoteReferenceText = "[[source]]"; view.quoteMarkdownText = "> source";
+		editor.apply({ value: "comment!", anchor: 2, head: 5 });
+		const pending = editor.capture(); const memo = sessionMemo("a");
+		view.startEditing(memo);
+		assert.equal(pending.sameSession(), false);
+		editor.apply({ value: "edited A", anchor: 8, head: 8 });
+		const editing = editor.capture();
+		view.closeComposerKeepingDraft(); view.cancelComposerFromEscape();
+		assert.equal(editing.valid(), true);
+		view.openComposer();
+		view.startEditing({ ...memo });
+		assert.equal(editing.valid(), true);
+		view.startEditing(sessionMemo("b"));
+		assert.equal(view.editingMemo, memo);
+		let references = 0;
+		view.memoCommandService.createReferenceText = async () => { references++; return { text: "[[bad]]" }; };
+		await view.handleMemoAction("reference", sessionMemo("b"));
+		assert.equal(references, 0);
+		view.cancelEditing();
+		assert.equal(editor.input.value, "comment!");
+		assert.equal(view.quoteReferenceText, "[[source]]");
+		assert.equal(view.quoteMarkdownText, "> source");
+		assert.equal(editor.input.selectionStart, 2);
+		assert.equal(editor.input.selectionEnd, 5);
+		assert.equal(undo(editor.view), false); assert.equal(redo(editor.view), false);
+		assert.equal(editing.sameSession(), false);
+		view.clearReference();
+		assert.equal(editor.input.value, "comment!");
+		assert.equal(view.quoteReferenceText, null);
+	} finally { close(); }
+});
+
+test("W01-W05 edit saves the original handle once while frozen and restores Create", async () => {
+	const { editor, close } = environment("create draft");
+	try {
+		const view = await sessionView(editor); const memo = sessionMemo("a");
+		view.quoteReferenceText = "[[source]]"; view.quoteMarkdownText = "> source";
+		view.startEditing(memo); editor.apply({ value: "edited", anchor: 6, head: 6 });
+		let complete!: () => void; const daily = new Promise<void>(resolve => { complete = resolve; });
+		let calls = 0;
+		view.memoCommandService.startEdit = (target, content) => {
+			calls++; assert.equal(target, memo.catalog); assert.equal(content, "edited");
+			return { dailyCommitted: daily, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) };
+		};
+		const saving = view.saveInput(); await Promise.resolve();
+		view.cancelEditing(); view.clearReference(); view.startEditing(sessionMemo("b"));
+		view.closeComposerKeepingDraft(); view.openComposer();
+		assert.equal(editor.apply({ value: "bad", anchor: 0, head: 0 }), false);
+		await view.saveInput(); assert.equal(calls, 1);
+		assert.equal(view.editingMemo, memo);
+		complete(); await saving;
+		assert.equal(editor.input.value, "create draft"); assert.equal(view.quoteReferenceText, "[[source]]");
+		assert.equal(view.editingMemo, null); assert.equal(view.isSaving, false);
+		assert.equal(editor.input.getAttribute("aria-readonly"), "false");
+	} finally { close(); }
+});
+
+test("W03 stale retains edits and original target, failure restores current availability", async () => {
+	const { editor, close } = environment("draft");
+	try {
+		const view = await sessionView(editor); const memo = sessionMemo("a");
+		view.startEditing(memo); editor.apply({ value: "unsaved", anchor: 7, head: 7 });
+		let status = ""; view.updateStatus = message => { status = message; };
+		view.memoCommandService.startEdit = () => { view.getDailyNotesStatus = () => ({ enabled: false }); throw new Error("stale: refresh and reselect"); };
+		await view.saveInput();
+		assert.equal(editor.input.value, "unsaved"); assert.equal(view.editingMemo, memo);
+		assert.equal(editor.input.disabled, true); assert.equal(view.isSaving, false);
+		assert.match(status, /stale/);
+	} finally { close(); }
+});
+
+test("S08 late Reference result cannot attach to a switched or restored session", async () => {
+	const { editor, close } = environment("comment");
+	try {
+		const view = await sessionView(editor); let finish!: (value: { text: string }) => void;
+		view.memoCommandService.createReferenceText = () => new Promise(resolve => { finish = resolve; });
+		const pending = view.handleMemoAction("reference", sessionMemo("source"));
+		await Promise.resolve();
+		view.startEditing(sessionMemo("edit")); view.cancelEditing();
+		finish({ text: "[[late]]" }); await pending;
+		assert.equal(view.quoteReferenceText, null); assert.equal(editor.input.value, "comment");
+	} finally { close(); }
+});
+
+test("W06-W07 late settled refresh preserves new errors, sheet and scroll ownership", async () => {
+	const { editor, close } = environment("first");
+	try {
+		const view = await sessionView(editor);
+		let finish!: (result: Awaited<ReturnType<typeof view.memoCommandService.startCreate>["settled"]>) => void;
+		const settled: ReturnType<typeof view.memoCommandService.startCreate>["settled"] = new Promise(resolve => { finish = resolve; });
+		view.memoCommandService.startCreate = () => ({ dailyCommitted: Promise.resolve(), settled });
+		let status = ""; view.updateStatus = message => { status = message; };
+		let refreshed!: () => void; const refreshedPromise = new Promise<void>(resolve => { refreshed = resolve; });
+		view.reloadMemos = async () => { refreshed(); return true; };
+		await view.saveInput();
+		editor.reset("new draft"); view.openComposer(); status = "new error";
+		finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+		await refreshedPromise; await Promise.resolve();
+		assert.equal(editor.input.value, "new draft"); assert.equal(view.composerOpen, true); assert.equal(status, "new error");
+	} finally { close(); }
+});
+
+test("W10 rebuild waits for consumption and close does not cancel the committed write or update DOM", async () => {
+	for (const closing of [false, true]) {
+		const { editor, close } = environment("submitted");
+		try {
+			const view = await sessionView(editor);
+			let commit!: () => void; const dailyCommitted = new Promise<void>(resolve => { commit = resolve; });
+			let finish!: (result: Awaited<ReturnType<typeof view.memoCommandService.startCreate>["settled"]>) => void;
+			const settled: ReturnType<typeof view.memoCommandService.startCreate>["settled"] = new Promise(resolve => { finish = resolve; });
+			view.memoCommandService.startCreate = () => ({ dailyCommitted, settled });
+			const saving = view.saveInput();
+			await view.render(); assert.equal(view.composerRenderPending, true);
+			let renders = 0;
+			view.render = async () => { renders++; assert.equal(editor.input.value, ""); assert.equal(view.draftContent, ""); };
+			if (closing) {
+				view.trashViewClosed = true; editor.destroy();
+				view.updateStatus = view.updateSendButtonState = view.syncRootState = () => { throw new Error("closed DOM"); };
+				view.reloadMemos = async () => { throw new Error("closed reload"); };
+			}
+			commit(); await saving;
+			finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+			await Promise.resolve(); await Promise.resolve();
+			assert.equal(renders, closing ? 0 : 1); assert.equal(view.isSaving, false);
+		} finally { close(); }
+	}
+});

@@ -3,29 +3,9 @@ import assert from "node:assert/strict";
 
 import {
 	formatMarkdownQuoteDraft,
-	getComposerMode,
-	getDraftForComposerClose,
 	prepareComposerCreateInput,
 	prepareComposerSaveInput,
 } from "../src/ui/ComposerDraft";
-
-test("composer draft resolves mode from editing and quote state", () => {
-	assert.equal(getComposerMode(null, null), "create");
-	assert.equal(getComposerMode({ id: "memo-1" }, null), "edit");
-	assert.equal(getComposerMode(null, "memo-1"), "quote");
-	assert.equal(getComposerMode({ id: "memo-1" }, "memo-2"), "edit");
-});
-
-test("composer draft keeps non-quote drafts when closing", () => {
-	assert.equal(getDraftForComposerClose("draft memo", "create", "> source"), "draft memo");
-	assert.equal(getDraftForComposerClose("draft memo", "edit", "> source"), "draft memo");
-	assert.equal(getDraftForComposerClose("draft memo", "quote", null), "draft memo");
-});
-
-test("composer draft drops an unchanged quote-only draft when closing", () => {
-	assert.equal(getDraftForComposerClose("> source memo\n", "quote", "> source memo"), "");
-	assert.equal(getDraftForComposerClose("> source memo\n\nreply", "quote", "> source memo"), "> source memo\n\nreply");
-});
 
 test("formats referenced memo content as a Markdown quote draft", () => {
 	assert.equal(formatMarkdownQuoteDraft("source memo"), "> source memo");

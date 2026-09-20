@@ -10,6 +10,28 @@ type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstru
 type MobileSearchControllerOptions = ConstructorParameters<MobileSearchControllerConstructor>[0];
 type LoadRemoteResults = NonNullable<MobileSearchControllerOptions["loadRemoteResults"]>;
 
+test("Things 移动搜索显示组合摘要，关闭保留搜索与日期，标签改变使状态键失效", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let tag = "project";
+	let saved: unknown;
+	const { controller, root } = createControllerHarness(MobileSearchController, [makeMemo("one", "release")], () => 1, undefined, {
+		getThingsContext: () => ({ activeNav: "things", activeTag: tag, activeTagKey: tag }),
+		syncThingsSearch: (query, date) => { saved = [query, date]; },
+	});
+	controller.searchQuery = "release";
+	controller.searchDateFilter = "week";
+	controller.openPage({ focusInput: false });
+	assert.match(root.find(".knomo-list-summary")!.getText(), /Things.*project.*release/);
+	const previous = controller.getViewStateKey();
+	tag = "other";
+	assert.notEqual(controller.getViewStateKey(), previous);
+	controller.closePage();
+	assert.deepEqual(saved, ["release", "week"]);
+	assert.equal(controller.searchQuery, "release");
+	assert.equal(controller.searchDateFilter, "week");
+});
+
 test("mobile search controller keys only the visible matched memos", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

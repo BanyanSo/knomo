@@ -1,5 +1,7 @@
 import { MarkdownRenderer } from "obsidian";
+import { parser } from "@lezer/markdown";
 import type { App, Component } from "obsidian";
+import { t } from "../i18n";
 
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
@@ -340,16 +342,41 @@ export function prepareInternalLinks(container: HTMLElement, sourcePath: string)
 
 export function prepareRenderedTaskCheckboxes(container: HTMLElement, memo: MemoRecord): void {
 	const tasks = getMarkdownTaskLines(memo.contentSnapshot);
-	if (tasks.length === 0) {
-		return;
+	const inputs = container.findAll("input[type='checkbox']") as HTMLInputElement[];
+	for (const input of inputs) {
+		input.disabled = true;
+		input.setAttr("title", t("task.refreshRequired"));
 	}
-	let taskIndex = 0;
-	for (const checkboxEl of container.findAll("input[type='checkbox']")) {
-		if (taskIndex >= tasks.length) {
-			return;
-		}
-		const input = checkboxEl as HTMLInputElement;
+	if (tasks.length === 0) return;
+	// 对齐完整列表结构，不能用第 N 个 input 猜测第 N 个源码任务。
+	const sourceLines: number[] = [];
+	let rawTaskHtml = false;
+	parser.parse(memo.contentSnapshot).iterate({
+		enter(node) {
+			if (node.name === "ListItem") sourceLines.push(memo.contentSnapshot.slice(0, node.from).split("\n").length - 1);
+			if ((node.name === "HTMLBlock" || node.name === "HTMLTag")
+				&& /<(?:li|input)\b/iu.test(memo.contentSnapshot.slice(node.from, node.to))) rawTaskHtml = true;
+		},
+	});
+	if (rawTaskHtml) return;
+	const items = container.findAll("li");
+	if (items.length !== sourceLines.length) return;
+	const bindings: Array<{ input: HTMLInputElement; taskIndex: number }> = [];
+	for (const task of tasks) {
+		const positions = sourceLines.flatMap((line, index) => line === task.lineIndex ? [index] : []);
+		if (positions.length !== 1) return;
+		const item = items[positions[0]];
+		const candidates = inputs.filter(input => input.closest("li") === item);
+		if (candidates.length !== 1 || !item.hasClass("task-list-item")) return;
+		const marker = item.getAttr("data-task");
+		// 宿主可用空字符串表示未完成，源码则固定使用单个空格；缺失属性仍拒绝绑定。
+		const renderedMarker = marker === "" ? " " : marker?.toLowerCase();
+		if (renderedMarker !== task.marker.toLowerCase()) return;
+		bindings.push({ input: candidates[0], taskIndex: task.index });
+	}
+	for (const { input, taskIndex } of bindings) {
 		input.disabled = false;
+		input.setAttr("title", "");
 		input.addClass("knomo-task-checkbox");
 		input.setAttr("data-knomo-memo-id", memo.id);
 		input.setAttr("data-knomo-task-index", String(taskIndex));
@@ -357,7 +384,6 @@ export function prepareRenderedTaskCheckboxes(container: HTMLElement, memo: Memo
 		if (taskItem?.instanceOf(HTMLElement)) {
 			taskItem.setAttr("data-knomo-task-index", String(taskIndex));
 		}
-		taskIndex += 1;
 	}
 }
 

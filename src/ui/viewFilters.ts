@@ -28,6 +28,7 @@ export type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "annive
 export type RecordStatsSearchFilter = CatalogRecordStatsFilter;
 
 export type RegularFilterCondition =
+	| { type: "things"; text: string }
 	| { type: "tag"; text: string }
 	| { type: "search"; text: string; query: string }
 	| { type: "date"; text: string; filter: SearchDateFilter }
@@ -35,6 +36,7 @@ export type RegularFilterCondition =
 	| { type: "scope"; text: string; filter: SummaryScopeFilter };
 
 export interface RegularFilterState {
+	activeNav?: SidebarNav;
 	activeTag: string | null;
 	activeTagKey: string | null;
 	searchQuery: string;
@@ -71,7 +73,7 @@ export interface MemoDataRequirementState {
 }
 
 export function getMemoDataRequirement(state: MemoDataRequirementState): MemoDataRequirement {
-	if (state.activeNav === "review" || state.query.trim().length > 0 || isSummaryScopeFilter(state.scope)) {
+	if (state.activeNav === "things" || state.activeNav === "review" || state.query.trim().length > 0 || isSummaryScopeFilter(state.scope)) {
 		return { kind: "all-active" };
 	}
 	if (state.activeTagKey !== null) {
@@ -160,6 +162,7 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 		return summary;
 	}
 	const condition = conditions[0];
+	if (condition.type === "things") return t("empty.generic");
 	if (condition.type === "tag") {
 		return t("filterEmpty.tag", { tag: condition.text });
 	}
@@ -189,6 +192,7 @@ export function getRegularFilterCopy(state: RegularFilterState, count: number): 
 
 export function getRegularFilterConditions(state: RegularFilterState): RegularFilterCondition[] {
 	const conditions: RegularFilterCondition[] = [];
+	if (state.activeNav === "things") conditions.push({ type: "things", text: t("nav.things") });
 	const tag = state.activeTag?.trim() || state.activeTagKey || "";
 	if (state.activeTagKey !== null && tag.length > 0) {
 		conditions.push({ type: "tag", text: formatTagFilterText(tag) });

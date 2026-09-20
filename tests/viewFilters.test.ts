@@ -19,6 +19,14 @@ import {
 	tagMatchesActiveTagKey,
 } from "../src/ui/viewFilters";
 
+test("Things 摘要包含所有 AND 条件，数据需求不退回近期窗口", () => {
+	const state = { activeNav: "things" as const, activeTag: "project", activeTagKey: "project", searchQuery: "release", searchDateFilter: "week" as const, recordStatsSearchFilter: null, scopeFilter: "all" as const };
+	assert.deepEqual(getRegularFilterConditions(state).map(item => item.type), ["things", "tag", "search", "date"]);
+	assert.match(getRegularFilterCopy(state, 3)!.summary, /Things/);
+	assert.match(getRegularFilterCopy(state, 0)!.emptyTitle, /Things/);
+	assert.deepEqual(getMemoDataRequirement({ activeNav: "things", scope: "all", query: "", searchDateFilter: null, recordStatsFilter: null, activeTagKey: null, tagPeriods: null }), { kind: "all-active" });
+});
+
 test("普通 Catalog 筛选和搜索时间取当前 observation，不取旧创建时间", () => {
 	const memo = makeMemo("current", {
 		createdAt: "2020-01-01T23:59:59Z",

@@ -88,6 +88,17 @@ test("正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (cont
 	}
 });
 
+test("Things 混合代码、HTML 与引用任务只修改对应 marker，旧句柄拒绝写入", async () => {
+	const fixture = createFixture();
+	const content = "intro\n\n<!--\n- [ ] fake\n-->\n\n> - [ ] quoted\n\n```md\n- [ ] example\n```\n\n- [X] last";
+	await fixture.service.create({ content });
+	const observation = await fixture.getOnlyObservation("2026-08-22");
+	assert.equal(observation.tasks.length, 2);
+	const result = await fixture.service.toggleTask({ observation: toHandle(observation), taskIndex: 0, checked: true });
+	assert.equal(result.observation?.content, content.replace("> - [ ] quoted", "> - [x] quoted"));
+	await assert.rejects(fixture.service.toggleTask({ observation: toHandle(observation), taskIndex: 1, checked: false }));
+});
+
 test("任务列表起始的 memo 按原始 Daily 行切换 checkbox，不失败也不跳行", async () => {
 	const fixture = createFixture();
 	await fixture.service.create({ content: "- [ ] first\n- [ ] second" });

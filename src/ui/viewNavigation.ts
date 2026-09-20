@@ -7,8 +7,8 @@ import {
 } from "./viewFilters";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 
-export type SidebarNav = "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "time-buoy" | "record-stats" | "trash";
-export type TitleMode = "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random" | "shuffleDay";
+export type SidebarNav = "things" | "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "time-buoy" | "record-stats" | "trash";
+export type TitleMode = "things" | "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random" | "shuffleDay";
 
 export interface SearchDateOption {
 	filter: SearchDateFilter;
@@ -43,6 +43,7 @@ export interface ViewTitleState {
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
+	{ nav: "things", label: t("nav.things"), icon: "list-todo" },
 	{ nav: "review", label: t("nav.review"), icon: "calendar-check" },
 	{ nav: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON },
 	{ nav: "shuffleDay", label: t("nav.shuffleDay"), icon: "calendar-days" },
@@ -54,6 +55,7 @@ export const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: t("nav.tras
 
 export const TITLE_MODE_OPTIONS: TitleModeOption[] = [
 	{ mode: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
+	{ mode: "things", label: t("nav.things"), icon: "list-todo", nav: "things" },
 	{ mode: "no-tag", label: t("filter.noTag"), icon: "tag", scope: "no-tag" },
 	{ mode: "with-link", label: t("filter.withLink"), icon: "link", scope: "with-link" },
 	{ mode: "with-image", label: t("filter.withImage"), icon: "image", scope: "with-image" },
@@ -99,6 +101,7 @@ export function getSidebarNavLabel(value: SidebarNav): string {
 }
 
 export function getDesktopTitleLabel(state: ViewTitleState): string {
+	if (state.activeNav === "things") return t("nav.things");
 	const query = state.searchQuery.trim();
 	if (query.length > 0) {
 		return t("search.label");
@@ -117,6 +120,7 @@ export function getMobileTitleLabel(state: ViewTitleState): string {
 }
 
 export function getListTitleLabel(state: ViewTitleState): string {
+	if (state.activeNav === "things") return t("nav.things");
 	if (state.activeTag !== null) {
 		return `#${state.activeTag}`;
 	}
@@ -127,7 +131,7 @@ export function getListTitleLabel(state: ViewTitleState): string {
 }
 
 export function getCurrentTitleMode(state: ViewTitleState): string {
-	if (state.activeNav === "review" || state.activeNav === "random" || state.activeNav === "shuffleDay") {
+	if (state.activeNav === "things" || state.activeNav === "review" || state.activeNav === "random" || state.activeNav === "shuffleDay") {
 		return state.activeNav;
 	}
 	if (state.activeTagKey !== null || state.activeNav !== "all") {

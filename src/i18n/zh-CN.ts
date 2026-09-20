@@ -20,6 +20,8 @@ export const zhCN = {
 	"recentTimeFlow.twoDaysAgo": "前天",
 	"recentTimeFlow.history": "更多时光涟漪",
 	"app.openKnomo": "打开 Knomo",
+	"nav.things": "勾事记",
+	"task.refreshRequired": "无法确认勾选项位置，请刷新视图后再操作。",
 	"nav.allNotes": "全部笔记",
 	"nav.review": "今日之外",
 	"nav.random": "随机重逢",

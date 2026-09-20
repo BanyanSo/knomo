@@ -32,6 +32,7 @@ test("card flow owns one shared content-end marker", () => {
 test("all registered main pages inherit the shared content-end marker", () => {
 	assert.deepEqual(getAllSidebarNavItems().map((item) => item.nav), [
 		"all",
+		"things",
 		"review",
 		"random",
 		"shuffleDay",

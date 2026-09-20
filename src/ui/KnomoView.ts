@@ -177,6 +177,7 @@ import type { KnomoViewStateTransitionEffects } from "./KnomoViewStateController
 import {
 	collectTagsFromCounts,
 	getRegularFilterCopy,
+	tagMatchesActiveTagKey,
 	getRecordStatsSearchFilterKey,
 } from "./viewFilters";
 import type {
@@ -334,6 +335,7 @@ export class KnomoView extends ItemView {
 	};
 	private catalogMobileCursor: CatalogFeatureCursor | null = null;
 	private catalogMobileQueryRun = 0;
+	private catalogMobileQueryFingerprint: string | null = null;
 	private catalogMobileTotalCount: number | null = null;
 	private catalogRevision = 0;
 	private catalogDesktopQueryFingerprint: string | null = null;
@@ -624,6 +626,20 @@ export class KnomoView extends ItemView {
 			insertImageFiles: (files, context) => this.insertImageFiles(files, context),
 		});
 		this.mobileSearchController = new MobileSearchController({
+			getThingsStatus: () => {
+				if (this.activeNav !== "things") return null;
+				const headers = getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage });
+				return headers.find(header => header.type === "summary")?.text
+					?? (this.catalogCoverage === null || !isCompleteCatalogCoverage(this.catalogCoverage) ? t("empty.loadingAllMemos") : null);
+			},
+			getThingsContext: () => this.activeNav === "things"
+				? { activeNav: "things", activeTag: this.activeTag, activeTagKey: this.activeTagKey }
+				: undefined,
+			syncThingsSearch: (query, date) => {
+				if (this.activeNav !== "things") return;
+				this.searchQuery = query;
+				this.searchDateFilter = date;
+			},
 			batchSize: MOBILE_SEARCH_BATCH_SIZE,
 			debounceMs: SEARCH_DEBOUNCE_MS,
 			getWindow: () => this.containerEl.win,
@@ -637,6 +653,11 @@ export class KnomoView extends ItemView {
 			},
 			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
 			memoMatchesSearch: (memo, normalizedQuery, dateFilter, recordStatsFilter) => {
+				if (this.activeNav === "things") {
+					const tagKey = this.activeTagKey;
+					if (!memo.catalog?.observation.tasks.length) return false;
+					if (tagKey !== null && !memo.tags.some(tag => tagMatchesActiveTagKey(tag, tagKey))) return false;
+				}
 				return memoMatchesSearch(
 					memo,
 					normalizedQuery,
@@ -1897,9 +1918,8 @@ export class KnomoView extends ItemView {
 		recordStatsFilter: RecordStatsSearchFilter | null,
 		reset: boolean,
 	): Promise<void> {
-		const run = reset ? ++this.catalogMobileQueryRun : this.catalogMobileQueryRun;
-		if (reset) this.catalogMobileTotalCount = null;
-		const query: CatalogFeatureFilter = {};
+		const contextKey = JSON.stringify([this.activeNav, this.activeTagKey]);
+		const query: CatalogFeatureFilter = this.activeNav === "things" ? this.buildCatalogActiveQuery(true, text, dateFilter) : {};
 		if (text.trim().length > 0) query.text = text.trim();
 		const dateRange = getCatalogDateRange(dateFilter, new Date());
 		if (dateRange !== null) {
@@ -1923,6 +1943,14 @@ export class KnomoView extends ItemView {
 			if (recordStatsFilter.type === "no-tag") query.hasTag = false;
 			if (recordStatsFilter.type === "tag") query.tags = [recordStatsFilter.tagKey];
 		}
+		const fingerprint = JSON.stringify([query, recordStatsFilter]);
+		if (fingerprint !== this.catalogMobileQueryFingerprint) reset = true;
+		this.catalogMobileQueryFingerprint = fingerprint;
+		const run = reset ? ++this.catalogMobileQueryRun : this.catalogMobileQueryRun;
+		if (reset) {
+			this.catalogMobileTotalCount = null;
+			this.catalogMobileCursor = null;
+		}
 		const page = recordStatsFilter === null
 			? await this.getCatalogReadService().query({
 				...query,
@@ -1934,7 +1962,7 @@ export class KnomoView extends ItemView {
 				cursor: reset ? null : this.catalogMobileCursor,
 				text: text.trim() || undefined,
 			});
-		if (run !== this.catalogMobileQueryRun) return;
+		if (run !== this.catalogMobileQueryRun || contextKey !== JSON.stringify([this.activeNav, this.activeTagKey])) return;
 		if (page.invalidated) {
 			if (!reset) await this.loadCatalogMobileSearchResults(text, dateFilter, recordStatsFilter, true);
 			return;
@@ -1965,6 +1993,7 @@ export class KnomoView extends ItemView {
 					query,
 					recordStatsFilter,
 					catalogRevision: page.catalogRevision,
+					contextKey,
 				});
 			}
 		}
@@ -1975,6 +2004,7 @@ export class KnomoView extends ItemView {
 		query: CatalogFeatureFilter;
 		recordStatsFilter: RecordStatsSearchFilter | null;
 		catalogRevision: number;
+		contextKey: string;
 	}): Promise<void> {
 		const result = options.recordStatsFilter === null
 			? await this.getCatalogReadService().count(options.query)
@@ -1983,6 +2013,7 @@ export class KnomoView extends ItemView {
 				options.query.text,
 			);
 		if (options.run !== this.catalogMobileQueryRun
+			|| options.contextKey !== JSON.stringify([this.activeNav, this.activeTagKey])
 			|| result.catalogRevision !== options.catalogRevision
 			|| !result.complete
 			|| result.count === null) {
@@ -1992,9 +2023,10 @@ export class KnomoView extends ItemView {
 		this.renderMobileSearchResults();
 	}
 
-	private buildCatalogActiveQuery(loadAll: boolean): Omit<CatalogFeatureQuery, "limit" | "cursor"> {
+	private buildCatalogActiveQuery(loadAll: boolean, searchText = this.searchQuery, dateFilter = this.searchDateFilter): Omit<CatalogFeatureQuery, "limit" | "cursor"> {
 		const query: Omit<CatalogFeatureQuery, "limit" | "cursor"> = {};
-		const text = this.searchQuery.trim();
+		if (this.activeNav === "things") query.hasTask = true;
+		const text = searchText.trim();
 		if (text.length > 0) query.text = text;
 		if (this.activeTagKey !== null) query.tags = [this.activeTagKey];
 		if (this.scopeFilter === "with-link") query.hasLink = true;
@@ -2005,7 +2037,7 @@ export class KnomoView extends ItemView {
 			query.monthDay = formatDatePart(today).slice(5);
 			query.excludeDate = formatDatePart(today);
 		} else {
-			const range = getCatalogDateRange(this.searchDateFilter ?? toSearchDateFilter(this.scopeFilter), today);
+			const range = getCatalogDateRange(dateFilter ?? toSearchDateFilter(this.scopeFilter), today);
 			if (range !== null) {
 				query.fromDate = range.fromDate;
 				query.toDate = range.toDate;
@@ -2408,6 +2440,12 @@ export class KnomoView extends ItemView {
 		changeIntent?: CardFlowChangeIntent;
 		refreshRemoteResults?: boolean;
 	} = {}): void {
+		if (this.activeNav === "things") {
+			this.mobileSearchController.searchQuery = this.searchQuery;
+			this.mobileSearchController.searchDateFilter = this.searchDateFilter;
+			this.mobileSearchController.searchRecordStatsFilter = null;
+			options.refreshRemoteResults = true;
+		}
 		this.mobileSearchController.openPage(options);
 	}
 
@@ -2975,8 +3013,9 @@ export class KnomoView extends ItemView {
 			memos,
 			matchedTotalCount: this.catalogDesktopTotalCount,
 			regularFilterCopy: shouldLoadListMemos
-				&& this.activeNav === "all"
+				&& (this.activeNav === "all" || this.activeNav === "things")
 				&& this.catalogDesktopTotalCount !== null ? getRegularFilterCopy({
+				activeNav: this.activeNav,
 				activeTag: this.activeTag,
 				activeTagKey: this.activeTagKey,
 				searchQuery: this.searchQuery,
@@ -2996,6 +3035,9 @@ export class KnomoView extends ItemView {
 				status: this.catalogStatus,
 				coverage: this.catalogCoverage,
 			});
+			if (this.activeNav === "things" && (this.catalogCoverage === null || !isCompleteCatalogCoverage(this.catalogCoverage))) {
+				headers.push({ type: "summary", text: t("empty.loadingAllMemos") });
+			}
 			if (headers.length === 0) return presentation;
 			return presentation.type === "items"
 				? { ...presentation, headers: [...headers, ...presentation.headers] }
@@ -3681,7 +3723,7 @@ export class KnomoView extends ItemView {
 	private applySidebarTagFilter(tag: string, tagKey: string): void {
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearSearchDebounce();
-		this.viewStateController.clearDesktopSearchState();
+		if (this.activeNav !== "things") this.viewStateController.clearDesktopSearchState();
 		if (this.activeTagKey === tagKey) {
 			this.viewStateController.clearActiveTag();
 		} else {
@@ -3689,7 +3731,7 @@ export class KnomoView extends ItemView {
 			this.activeTagKey = tagKey;
 		}
 		this.scopeFilter = "all";
-		this.activeNav = "all";
+		if (this.activeNav !== "things") this.activeNav = "all";
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = null;
@@ -4278,6 +4320,9 @@ export class KnomoView extends ItemView {
 	private setSidebarNav(nav: SidebarNav): void {
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
+		this.catalogMobileQueryRun += 1;
+		this.catalogMobileCursor = null;
+		this.catalogMobileTotalCount = null;
 		const result = this.viewStateController.setSidebarNav(nav);
 		this.applyViewStateTransitionEffects(result);
 		if (result.type === "already-default") {

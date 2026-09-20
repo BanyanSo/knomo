@@ -22,6 +22,8 @@ export const en: Record<TranslationKey, string> = {
 	"recentTimeFlow.twoDaysAgo": "2 days ago",
 	"recentTimeFlow.history": "More Ripples in Time",
 	"app.openKnomo": "Open Knomo",
+	"nav.things": "Things",
+	"task.refreshRequired": "Task position could not be confirmed. Refresh the view before changing it.",
 	"nav.allNotes": "All notes",
 	"nav.review": "Beyond today",
 	"nav.random": "Random revisit",

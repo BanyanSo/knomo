@@ -40,7 +40,7 @@ test("post-processes memo markdown DOM metadata", async () => {
 	});
 	const tag = container.createSpan({ cls: "tag", text: "#Project/Knomo" });
 	const image = container.createEl("img");
-	const taskItem = container.createEl("li");
+	const taskItem = container.createEl("li", { cls: "task-list-item", attr: { "data-task": " " } });
 	const checkbox = taskItem.createEl("input", { attr: { type: "checkbox" } });
 	checkbox.disabled = true;
 
@@ -62,6 +62,23 @@ test("post-processes memo markdown DOM metadata", async () => {
 	assert.equal(checkbox.indeterminate, true);
 	assert.equal(checkbox.getAttr("data-task"), "-");
 	assert.equal(taskItem.getAttr("data-task"), "-");
+});
+
+test("未完成任务兼容宿主空 data-task，并保留缺失和不匹配标记的保护", async () => {
+	await ensureObsidianStub();
+	const { prepareRenderedTaskCheckboxes } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	for (const [source, marker, enabled] of [
+		[" ", "", true], [" ", " ", true], ["x", "x", true], ["X", "x", true],
+		["-", "-", true], [" ", null, false], ["x", "", false], [" ", "x", false],
+	] as const) {
+		const container = new TestElement("div");
+		const item = container.createEl("li", { cls: "task-list-item", attr: marker === null ? {} : { "data-task": marker } });
+		const input = item.createEl("input", { attr: { type: "checkbox" } });
+		prepareRenderedTaskCheckboxes(container.asHtml(), makeMemo({ contentSnapshot: `- [${source}] task` }));
+		assert.equal(input.disabled, !enabled, JSON.stringify([source, marker]));
+		assert.equal(input.getAttr("data-knomo-task-index"), enabled ? "0" : null);
+	}
 });
 
 test("recognizes delegated task checkbox inputs", async () => {
@@ -93,6 +110,26 @@ test("recognizes delegated task checkbox inputs", async () => {
 	assert.equal(renderer.getTaskCheckboxInput(input.asHtml()), input.asInput());
 	assert.equal(renderer.getTaskCheckboxIndex(input.asInput()), 2);
 	assert.equal(renderer.getTaskCheckboxInput(outside.asHtml()), null);
+});
+
+test("共享任务映射跳过普通列表并在 DOM 结构不一致时禁止写入", async () => {
+	await ensureObsidianStub();
+	const { prepareRenderedTaskCheckboxes } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const container = new TestElement("div");
+	container.createEl("li");
+	const item = container.createEl("li", { cls: "task-list-item", attr: { "data-task": "x" } });
+	const input = item.createEl("input", { attr: { type: "checkbox" } });
+	prepareRenderedTaskCheckboxes(container.asHtml(), makeMemo({ contentSnapshot: "- plain\n- [x] task\n\n```\n- [ ] fake\n```" }));
+	assert.equal(input.disabled, false);
+	assert.equal(input.getAttr("data-knomo-task-index"), "0");
+	const mismatched = new TestElement("div");
+	const raw = mismatched.createEl("li").createEl("input", { attr: { type: "checkbox" } });
+	const valid = mismatched.createEl("li", { cls: "task-list-item", attr: { "data-task": " " } }).createEl("input", { attr: { type: "checkbox" } });
+	prepareRenderedTaskCheckboxes(mismatched.asHtml(), makeMemo({ contentSnapshot: "- [ ] task" }));
+	assert.equal(raw.disabled, true);
+	assert.equal(valid.disabled, true);
+	assert.equal(valid.getAttr("data-knomo-task-index"), null);
 });
 
 test("owns one render component per container and unloads it when replaced or cleared", async () => {

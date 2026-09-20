@@ -1,3 +1,4 @@
+import { parser } from "@lezer/markdown";
 import { splitMarkdownLines } from "./markdown";
 
 export type MarkdownTaskMarker = " " | "x" | "X" | "-";
@@ -29,7 +30,7 @@ const TASK_LINE_REGEX = /^([ \t]*)([-*+]|\d+[.)])([ \t]+)\[([ xX-])\]([ \t]*)(.*
 
 export function parseMarkdownTaskLine(line: string): ParsedMarkdownTaskLine | null {
 	const match = line.match(TASK_LINE_REGEX);
-	if (match === null || !isMarkdownTaskMarker(match[4])) {
+	if (match === null || !isMarkdownTaskMarker(match[4]) || (match[6].length > 0 && match[5].length === 0)) {
 		return null;
 	}
 	const indent = match[1];
@@ -50,33 +51,35 @@ export function parseMarkdownTaskLine(line: string): ParsedMarkdownTaskLine | nu
 
 export function getMarkdownTaskLines(content: string): IndexedMarkdownTaskLine[] {
 	const lines = splitMarkdownLines(content);
+	const markdown = lines.join("\n");
 	const tasks: IndexedMarkdownTaskLine[] = [];
-	let fence: CodeFenceMarker | null = null;
-	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-		const line = lines[lineIndex];
-		const fenceMarker = getCodeFenceMarker(line);
-		if (fenceMarker !== null) {
-			if (fence === null) {
-				fence = fenceMarker;
-			} else if (isClosingCodeFence(fence, fenceMarker)) {
-				fence = null;
+	let lineIndex = 0;
+	let lineStart = 0;
+	// 语法树负责容器和代码边界；逐行匹配只校验本期支持的 marker。
+	parser.parse(markdown).iterate({
+		enter(node) {
+			if (node.name !== "ListItem") return;
+			const listMark = node.node.getChild("ListMark");
+			if (listMark === null) return;
+			while (lineIndex < lines.length - 1 && lineStart + lines[lineIndex].length < listMark.from) {
+				lineStart += lines[lineIndex].length + 1;
+				lineIndex += 1;
 			}
-			continue;
-		}
-		if (fence !== null) {
-			continue;
-		}
-		const task = parseMarkdownTaskLine(line);
-		if (task === null) {
-			continue;
-		}
-		tasks.push({
-			...task,
-			index: tasks.length,
-			lineIndex,
-			line,
-		});
-	}
+			const line = lines[lineIndex];
+			const prefix = listMark.from - lineStart;
+			const task = parseMarkdownTaskLine(line.slice(prefix));
+			if (task === null) return;
+			tasks.push({
+				...task,
+				indent: line.slice(0, prefix),
+				markerStart: task.markerStart + prefix,
+				markerEnd: task.markerEnd + prefix,
+				index: tasks.length,
+				lineIndex,
+				line,
+			});
+		},
+	});
 	return tasks;
 }
 

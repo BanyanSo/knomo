@@ -2,6 +2,7 @@ import { MemoCardImageCache } from "./KnomoCardImages";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
 import {
+	getRegularFilterCopy,
 	formatMobileSearchEmptyTitle,
 	formatMobileSearchSummary,
 	type RecordStatsSearchFilter,
@@ -26,6 +27,9 @@ interface OpenMobileSearchOptions {
 }
 
 interface MobileSearchControllerOptions {
+	getThingsStatus?: () => string | null;
+	getThingsContext?: () => { activeNav: "things"; activeTag: string | null; activeTagKey: string | null } | undefined;
+	syncThingsSearch?: (query: string, date: SearchDateFilter | null) => void;
 	batchSize: number;
 	debounceMs: number;
 	getWindow: () => Window;
@@ -76,6 +80,8 @@ export class MobileSearchController {
 	private inputEl: HTMLInputElement | null = null;
 	private resultsEl: HTMLElement | null = null;
 	private query = "";
+	private queryError: string | null = null;
+	private queryRun = 0;
 	private dateFilter: SearchDateFilter | null = null;
 	private recordStatsFilter: RecordStatsSearchFilter | null = null;
 	private visibleCount: number;
@@ -229,10 +235,16 @@ export class MobileSearchController {
 	}
 
 	closePage(): void {
+		this.queryRun += 1;
 		const scrollTop = this.options.getCardFlowScrollTop();
 		this.open = false;
 		this.options.closeCardMenu();
-		this.resetState();
+		if (this.options.getThingsContext?.()) {
+			this.flushQuery();
+			this.options.syncThingsSearch?.(this.query, this.dateFilter);
+		} else {
+			this.resetState();
+		}
 		this.options.bindImageRoot?.(null);
 		this.options.setCardFlowPaused(false);
 		this.options.syncRootState();
@@ -298,6 +310,8 @@ export class MobileSearchController {
 	}
 
 	resetState(): void {
+		this.queryRun += 1;
+		this.queryError = null;
 		this.clearImageCache();
 		this.clearDebounce();
 		this.query = "";
@@ -334,10 +348,15 @@ export class MobileSearchController {
 			this.renderResults(changeIntent);
 			return;
 		}
+		const run = ++this.queryRun;
 		try {
+			this.queryError = null;
+			this.options.syncThingsSearch?.(this.query, this.dateFilter);
 			await this.options.loadRemoteResults(this.query, this.dateFilter, this.recordStatsFilter, reset);
+		} catch (error) {
+			if (run === this.queryRun) this.queryError = error instanceof Error ? error.message : t("empty.cardFlowFailed");
 		} finally {
-			this.renderResults(changeIntent);
+			if (run === this.queryRun) this.renderResults(changeIntent);
 		}
 	}
 
@@ -359,7 +378,8 @@ export class MobileSearchController {
 		resultsEl.empty();
 		this.syncDateButtons();
 		if (
-			normalizedQuery.length === 0
+			!this.options.getThingsContext?.()
+			&& normalizedQuery.length === 0
 			&& this.dateFilter === null
 			&& this.recordStatsFilter === null
 		) {
@@ -367,10 +387,23 @@ export class MobileSearchController {
 			this.options.restoreElementScrollTop(resultsEl, scrollTop);
 			return;
 		}
+		const status = this.queryError ?? this.options.getThingsStatus?.();
+		if (status) renderKnomoListSummary(resultsEl, status);
+		if (memos.length === 0 && status) return;
+		const context = this.options.getThingsContext?.();
+		const regularState = context === undefined ? null : {
+			...context,
+			searchQuery: query,
+			searchDateFilter: this.dateFilter,
+			recordStatsSearchFilter: null,
+			scopeFilter: "all" as const,
+		};
 		if (memos.length === 0) {
 			resultsEl.createDiv({
 				cls: "knomo-mobile-search-empty",
-				text: formatMobileSearchEmptyTitle(query, this.dateFilter, this.recordStatsFilter),
+				text: regularState === null
+					? formatMobileSearchEmptyTitle(query, this.dateFilter, this.recordStatsFilter)
+					: getRegularFilterCopy(regularState, 0)?.emptyTitle,
 			});
 			this.options.restoreElementScrollTop(resultsEl, scrollTop);
 			return;
@@ -379,8 +412,10 @@ export class MobileSearchController {
 			? memos.length
 			: this.options.getMatchedTotalCount();
 		if (matchedTotalCount !== null) {
-			const summary = formatMobileSearchSummary(query, this.dateFilter, matchedTotalCount, this.recordStatsFilter);
-			if (summary !== null) {
+			const summary = regularState === null
+				? formatMobileSearchSummary(query, this.dateFilter, matchedTotalCount, this.recordStatsFilter)
+				: getRegularFilterCopy(regularState, matchedTotalCount)?.summary;
+			if (summary != null) {
 				renderKnomoListSummary(resultsEl, summary);
 			}
 		}
@@ -408,6 +443,7 @@ export class MobileSearchController {
 	getStateKey(): string {
 		return getMobileSearchStateKey({
 			open: this.open,
+			...this.options.getThingsContext?.(),
 			query: this.query,
 			dateFilter: this.dateFilter,
 			recordStatsFilter: this.recordStatsFilter,
@@ -417,6 +453,7 @@ export class MobileSearchController {
 
 	getViewStateKey(): string {
 		return getMobileSearchViewStateKey({
+			...this.options.getThingsContext?.(),
 			query: this.query,
 			dateFilter: this.dateFilter,
 			recordStatsFilter: this.recordStatsFilter,
@@ -425,6 +462,7 @@ export class MobileSearchController {
 
 	getChangeIntent(previousViewStateKey: string): CardFlowChangeIntent {
 		return getMobileSearchChangeIntent(previousViewStateKey, {
+			...this.options.getThingsContext?.(),
 			query: this.query,
 			dateFilter: this.dateFilter,
 			recordStatsFilter: this.recordStatsFilter,

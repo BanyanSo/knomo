@@ -4,6 +4,21 @@ import test from "node:test";
 import { buildCatalogPartition, MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogInventoryEntry, MemoObservation } from "../src/types/catalog";
+import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+
+test("Things 随真实 Daily 的首个任务、完成状态及最后任务删除增量收敛", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	const service = new MemoCatalogService(store);
+	await service.open();
+	const inventory = makeInventory("Journal/2020-01-01.md", "2020-01-01");
+	const parser = new DiaryMemoParser(async () => "unused");
+	for (const [content, expected] of [["ordinary", 0], ["- [ ] release", 1], ["- [x] release", 1], ["- [-] release", 1], ["released", 0]] as const) {
+		const parsed = parser.parseRevision({ sourcePath: inventory.sourcePath, logicalDate: inventory.logicalDate, sourceRevision: content, content: `- 09:00\n  ${content}\n` });
+		await service.replaceFile(makePartitionInput(inventory, parsed.observations, content));
+		assert.equal((await service.query({ hasTask: true, limit: 2 })).items.length, expected);
+		assert.equal((await service.query({ limit: 2 })).items.length, 1, "普通 Memo 仍正常保存");
+	}
+});
 
 test("文件分区替换和删除不会留下旧 observation", async () => {
 	const store = new InMemoryMemoCatalogStore();

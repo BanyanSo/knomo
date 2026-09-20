@@ -35,6 +35,8 @@ interface VisibleCardFlowStateKeyOptions extends CardFlowStateKeyOptions {
 }
 
 interface MobileSearchViewStateKeyOptions {
+	activeNav?: SidebarNav;
+	activeTagKey?: string | null;
 	query: string;
 	dateFilter: SearchDateFilter | null;
 	recordStatsFilter: RecordStatsSearchFilter | null;
@@ -124,6 +126,8 @@ export function getVisibleCardFlowStateKey(options: VisibleCardFlowStateKeyOptio
 
 export function getMobileSearchViewStateKey(options: MobileSearchViewStateKeyOptions): string {
 	return getStateKey([
+		options.activeNav ?? "all",
+		options.activeTagKey ?? "",
 		options.query.trim().toLowerCase(),
 		options.dateFilter ?? "",
 		getRecordStatsSearchFilterKey(options.recordStatsFilter),
@@ -142,6 +146,8 @@ export function getMobileSearchStateKey(options: MobileSearchStateKeyOptions): s
 		return "closed";
 	}
 	return getStateKey([
+		options.activeNav ?? "all",
+		options.activeTagKey ?? "",
 		options.query.trim().toLowerCase(),
 		options.dateFilter ?? "",
 		getRecordStatsSearchFilterKey(options.recordStatsFilter),

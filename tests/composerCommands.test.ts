@@ -68,14 +68,14 @@ test("line conversions preserve task status or remove checkbox intentionally and
 	assert.equal(runComposerCommand(task.value, 0, task.value.indexOf("last"), "task").type, "unchanged");
 	assert.equal(apply("- [x] done", 6, 10, "bullet").value, "- done");
 	assert.deepEqual(apply("- [x] done", 10, 10, "ordered"), { value: "1. done", anchor: 7, head: 7 });
-	assert.equal(runComposerCommand("- [/] pending", 0, 13, "task").type, "unchanged");
+	assert.equal(runComposerCommand("- [/] pending", 0, 13, "task").type, "unavailable");
 	assert.equal(apply("a\nb", 0, 2, "bullet").value, "- a\nb");
 	assert.equal(apply("", 0, 0, "task").value, "- [ ] ");
 });
 
-test("syntax scope excludes code, escapes, embeds, unsupported task and italic syntax", () => {
+test("syntax scope isolates code, embeds and custom tasks while allowing parser-confirmed emphasis", () => {
 	const value = "- [x] **yes** ==hi== [[Note]]\n- [/] other\n`**code** ==no== [[no]]`\n```md\n- [ ] no\n**no**\n```\n\\**escape** ![[image]] *italic*";
-	assert.deepEqual(scanComposerSyntax(value).ranges.map(range => range.kind).sort(), ["bold", "highlight", "link", "task"].sort());
+	assert.deepEqual(scanComposerSyntax(value).ranges.map(range => range.kind).sort(), ["bold", "highlight", "link", "task", "italic", "italic"].sort());
 	assert.equal(runComposerCommand("`code`", 1, 5, "bold").type, "unavailable");
 	assert.deepEqual(scanComposerSyntax("* * *\n===ambiguous===\n1234567890. not a list").ranges, []);
 });
@@ -99,4 +99,49 @@ test("toolbar normalization keeps hidden positions and fills missing actions wit
 	const hidden = normalizeComposerToolbar({ ...saved, hidden: ["bold"] });
 	assert.deepEqual(hidden.order, saved.order);
 	assert.deepEqual(normalizeComposerToolbar({ ...hidden, hidden: [] }), saved);
+});
+
+test("Bold toggles original underscore delimiters without rewriting other formatted parts", () => {
+	assert.deepEqual(apply("__bold__", 2, 6, "bold"), { value: "bold", anchor: 0, head: 4 });
+	assert.deepEqual(apply("__bold__", 8, 0, "bold"), { value: "bold", anchor: 4, head: 0 });
+	assert.equal(runComposerCommand("__bold__", 4, 4, "bold").type, "unchanged");
+	assert.equal(apply("__one__\ntwo", 0, 11, "bold").value, "__one__\n**two**");
+});
+
+test("format commands protect new inline boundaries, link targets and source-first parents", () => {
+	for (const text of ["*italic* tail", "_italic_ tail", "~~strike~~ tail"]) {
+		for (const command of ["bold", "highlight"] as const) {
+			assert.equal(runComposerCommand(text, 3, text.length, command).type, "unavailable");
+			assert.equal(runComposerCommand(text, text.length, 3, command).type, "unavailable");
+			assert.equal(runComposerCommand(text, 3, 5, command).type, "changed");
+		}
+	}
+	for (const text of ["[[Note]]", "[[Note|Alias]]", "[[Note#Heading]]", "[text](url)", "`code`", "# **heading**", "> ==quote==", "- [-] **custom**", "$$x$$", "https://x/#tag"]) {
+		for (const command of ["bold", "highlight"] as const) assert.equal(runComposerCommand(text, 0, text.length, command).type, "unavailable", text);
+	}
+});
+
+test("link command rejects crossing newly supported inline markers in either direction", () => {
+	for (const value of ["_italic_ tail", "__bold__ tail", "~~strike~~ tail"]) {
+		assert.equal(runComposerCommand(value, 3, value.length, "link").type, "unavailable");
+		assert.equal(runComposerCommand(value, value.length, 3, "link").type, "unavailable");
+		assert.equal(runComposerCommand(value, 3, 5, "link").type, "changed");
+	}
+	assert.equal(runComposerCommand("__bold__", 1, 1, "link").type, "unavailable");
+});
+
+test("empty list conversions replace the parsed marker and remain idempotent", () => {
+	for (const value of ["-", "+", "*", "1.", "3)", "  12.", "- [ ]", "+ [X]"]) {
+		const syntax = scanComposerSyntax(value).ranges.find(r => r.list);
+		assert.ok(syntax);
+		const indent = value.slice(0, syntax.from);
+		for (const [command, marker] of [["task", "- [ ] "], ["bullet", "- "], ["ordered", "1. "]] as const) {
+			const result = runComposerCommand(value, value.length, value.length, command);
+			if (command === "task" && syntax.task) { assert.equal(result.type, "unchanged"); continue; }
+			assert.equal(result.type, "changed");
+			if (result.type !== "changed") continue;
+			assert.equal(result.edit.value, indent + marker);
+			assert.equal(runComposerCommand(result.edit.value, result.edit.head, result.edit.head, command).type, "unchanged");
+		}
+	}
 });

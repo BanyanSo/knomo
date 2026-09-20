@@ -3,6 +3,7 @@ export const zhCN = {
 	"composer.finishComposition": "请先完成输入法输入",
 	"composer.asyncChanged": "编辑内容或会话已变化，未插入异步结果；已生成的附件予以保留。",
 	"composer.insertTask": "转换为任务",
+	"composer.toggleTask": "切换任务：{{text}}",
 	"composer.insertBold": "粗体",
 	"composer.insertHighlight": "高亮",
 	"composer.insertLink": "内部链接",

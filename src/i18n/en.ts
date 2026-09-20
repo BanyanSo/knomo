@@ -5,6 +5,7 @@ export const en: Record<TranslationKey, string> = {
 	"composer.finishComposition": "Finish composing text before using this action.",
 	"composer.asyncChanged": "The editing content or session changed. The result was not inserted; created attachments were retained.",
 	"composer.insertTask": "Convert to task",
+	"composer.toggleTask": "Toggle task: {{text}}",
 	"composer.insertBold": "Bold",
 	"composer.insertHighlight": "Highlight",
 	"composer.insertLink": "Internal link",

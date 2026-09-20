@@ -16,8 +16,20 @@ import type { MemoObservation, ObservationHandle } from "../src/types/catalog";
 import { MemoCommandService } from "../src/services/MemoCommandService";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
 
 const HEADINGS = ["## Memos"] as const;
+
+test("Composer Markdown fixtures preserve semantic source through Daily create, parse and edit", async () => {
+	for (const content of [...composerMarkdownFixtures.map(f => f.text.replace(/\r\n/g, "\n")), "first  \nsecond\\\nthird"]) {
+		const fixture = createFixture();
+		await fixture.service.create({ content });
+		const saved = await fixture.getOnlyObservation("2026-08-22");
+		assert.equal(saved.content, content);
+		await fixture.service.edit({ observation: toHandle(saved), content: content + "\nchanged" });
+		assert.equal((await fixture.getOnlyObservation("2026-08-22")).content, content + "\nchanged");
+	}
+});
 
 test("缺失日记先应用模板再追加 Memo，复制和移动到新日期也保留模板", async () => {
 	const fixture = createFixture({ template: "Templates/Daily", initialFiles: {

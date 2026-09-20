@@ -34,6 +34,7 @@
 		"@codemirror/commands": "6.8.1",
 		"@codemirror/state": "6.5.0",
 		"@codemirror/view": "6.38.6",
+		"@lezer/common": "1.5.2",
 		"@lezer/markdown": "1.4.3",
 		"@types/jsdom": "21.1.7",
 		"@types/node": "^22.15.0",

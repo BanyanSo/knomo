@@ -10,7 +10,6 @@ import {
 import { normalizeTagKey } from "../utils/tags";
 import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
-import { prepareMemoCardMarkdown } from "./MemoCardMarkdown";
 
 export type MemoMarkdownSurface = "card-flow" | "mobile-search";
 
@@ -173,7 +172,7 @@ export class MemoMarkdownRenderer {
 		try {
 			await MarkdownRenderer.render(
 				this.options.app,
-				prepareMemoCardMarkdown(previewText),
+				previewText,
 				renderTarget,
 				memo.dailyRef.path,
 				component,

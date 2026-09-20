@@ -1,16 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM, VirtualConsole } from "jsdom";
-import { Transaction } from "@codemirror/state";
-import { redo, undo, undoDepth } from "@codemirror/commands";
+import { EditorSelection, EditorState, StateEffect, Transaction } from "@codemirror/state";
+import { cursorCharLeft, cursorCharRight, cursorLineStart, cursorLineEnd, deleteCharBackward, deleteCharForward, redo, undo, undoDepth } from "@codemirror/commands";
 import { ComposerEditor } from "../src/ui/ComposerEditor";
 import { runComposerCommand } from "../src/utils/composerCommands";
 import { registerComposerToolGesture } from "../src/ui/ComposerToolGesture";
-import { parser } from "@lezer/markdown";
+import { composerParser as parser } from "../src/utils/composerSyntax";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
 
 function environment(value: string) {
-	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true });
+	const errors: Error[] = [];
+	const virtualConsole = new VirtualConsole();
+	virtualConsole.on("jsdomError", error => errors.push(error));
+	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true, virtualConsole });
 	const win = dom.window;
 	Object.assign(win.Node.prototype, { createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); } });
 	// jsdom 没有原生布局 API；让 CodeMirror 的测量临时节点能正常完成清理。
@@ -29,6 +33,7 @@ function environment(value: string) {
 			if (descriptor) Object.defineProperty(globalThis, name, descriptor);
 			else Reflect.deleteProperty(globalThis, name);
 		}
+		assert.deepEqual(errors, [], "DOM 事件异常必须使测试失败");
 	} };
 }
 
@@ -111,7 +116,7 @@ test("rendered elements use semantic Markdown and native checkbox styling withou
 		assert.equal(checkboxes.length, 2);
 		assert.equal(checkboxes[0].checked, false);
 		assert.equal(checkboxes[1].checked, true);
-		assert.equal(checkboxes[0].tabIndex, -1);
+		assert.equal(checkboxes[0].tabIndex, 0);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-list-line").length, 4);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-task-line.is-checked").length, 1);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-bullet-marker ul > li").length, 1);
@@ -122,11 +127,9 @@ test("rendered elements use semantic Markdown and native checkbox styling withou
 		assert.equal(editor.input.querySelector("mark")?.textContent, "高亮");
 		assert.equal(editor.input.querySelector("a.internal-link")?.textContent, "链接");
 		assert.equal(editor.input.querySelector("a.internal-link")?.hasAttribute("href"), false);
-		checkboxes[0].click();
-		assert.equal(checkboxes[0].checked, false);
 		checkboxes[0].dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
-		assert.equal(editor.input.selectionStart, 0);
-		assert.equal(editor.input.querySelectorAll("input.task-list-item-checkbox").length, 1);
+		assert.equal(editor.input.selectionStart, value.length);
+		assert.equal(editor.input.querySelectorAll("input.task-list-item-checkbox").length, 2);
 		assert.equal(editor.input.value, value);
 		assert.equal(undoDepth(editor.view.state), 0);
 		editor.input.setSelectionRange(value.length, value.length);
@@ -163,7 +166,7 @@ test("real decorations reveal locally without editing Markdown or selection or u
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-bold").length, 1);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-marker").length, 1);
 		editor.input.setSelectionRange(6, 6);
-		assert.equal(editor.input.querySelectorAll(".knomo-composer-marker").length, 0);
+		assert.equal(editor.input.querySelectorAll(".knomo-composer-marker").length, 1);
 		assert.equal(editor.input.value, value);
 		assert.equal(editor.input.selectionStart, 6);
 		assert.equal(undoDepth(editor.view.state), 0);
@@ -228,11 +231,12 @@ test("composition defers Markdown parsing until native input settles", async t =
 				selection: { anchor: 9 + text.length }, annotations: Transaction.userEvent.of("input.type.compose") });
 		}
 		assert.equal(parse.mock.callCount(), 0, "preedit changes must not parse the full draft");
-		assert.equal(editor.input.querySelector("strong")?.textContent, "bold");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "bold", "普通候选文字不能撤销前文装饰");
 		editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { data: "你" }));
 		await new Promise(resolve => setTimeout(resolve, 80));
 		assert.equal(parse.mock.callCount(), 1);
 		assert.equal(editor.input.value, "**bold**\n你");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "bold");
 		assert.equal(editor.composing, false);
 	} finally { parse.mock.restore(); close(); }
 });
@@ -561,6 +565,255 @@ test("CJK threshold changes with body and waits until composition settles", asyn
 		assert.equal(editor.input.getAttribute("data-cjk"), "true");
 		editor.input.setSelectionRange(0, 2);
 		assert.equal(editor.input.getAttribute("data-cjk"), "true");
+	} finally { close(); }
+});
+
+test("every supported fixture keeps source through decoration, selection, paste and undo", () => {
+	for (const fixture of composerMarkdownFixtures) {
+		const value = fixture.text.replace(/\r\n/g, "\n");
+		const { editor, close } = environment(value + "\n\nend");
+		try {
+			for (let pos = 0; pos <= value.length; pos++) {
+				editor.input.setSelectionRange(pos, pos);
+				assert.equal(editor.input.selectionStart, pos, fixture.name);
+				assert.equal(editor.input.value, value + "\n\nend");
+			}
+			assert.equal(undoDepth(editor.view.state), 0);
+			editor.input.setSelectionRange(0, value.length, "backward");
+			assert.equal(editor.view.state.sliceDoc(editor.input.selectionStart, editor.input.selectionEnd), value);
+			editor.view.dispatch({ changes: { from: 0, to: value.length, insert: "replacement" }, annotations: Transaction.userEvent.of("input.paste") });
+			undo(editor.view);
+			assert.equal(editor.input.value, value + "\n\nend");
+			assert.equal(editor.input.selectionDirection, "backward");
+		} finally { close(); }
+	}
+});
+
+test("marker click, character keys, Home/End and reversed marker deletion address actual source", () => {
+	const value = "1. first\n1. second\nend";
+	const { editor, win, close } = environment(value);
+	try {
+		assert.deepEqual(Array.from(editor.input.querySelectorAll("ol"), n => n.start), [1, 2]);
+		const marker = editor.input.querySelectorAll<HTMLElement>(".knomo-composer-marker")[1];
+		marker.dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+		assert.equal(editor.input.selectionStart, 11);
+		assert.equal(editor.input.querySelectorAll("ol").length, 1);
+		cursorCharRight(editor.view);
+		assert.equal(editor.input.selectionStart, 12);
+		assert.deepEqual(Array.from(editor.input.querySelectorAll("ol"), n => n.start), [1, 2]);
+		cursorCharLeft(editor.view);
+		assert.equal(editor.input.selectionStart, 11);
+		cursorLineStart(editor.view); assert.equal(editor.input.selectionStart, 9);
+		cursorLineEnd(editor.view); assert.equal(editor.input.selectionStart, 18);
+		editor.input.setSelectionRange(9, 11, "backward");
+		assert.equal(editor.view.state.sliceDoc(9, 11), "1.");
+		deleteCharBackward(editor.view);
+		assert.equal(editor.input.value, "1. first\n second\nend");
+		undo(editor.view); assert.equal(editor.input.value, value);
+		assert.equal(editor.input.selectionDirection, "backward");
+		deleteCharForward(editor.view); assert.equal(editor.input.value, "1. first\n second\nend");
+	} finally { close(); }
+});
+
+test("checkbox pointer/click and Space change one draft character with exact X undo", () => {
+	const { editor, win, close } = environment("+ [X] task\nend");
+	try {
+		const checkbox = () => editor.input.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+		assert.equal(checkbox().checked, true);
+		assert.ok(checkbox().getAttribute("aria-label")?.includes("task"));
+		assert.equal(checkbox().closest('[aria-hidden="true"]'), null);
+		checkbox().dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+		assert.equal(editor.input.value, "+ [X] task\nend");
+		checkbox().click();
+		assert.equal(editor.input.value, "+ [ ] task\nend");
+		assert.equal(checkbox().checked, false);
+		assert.equal(undoDepth(editor.view.state), 1);
+		undo(editor.view); assert.equal(editor.input.value, "+ [X] task\nend");
+		redo(editor.view); assert.equal(editor.input.value, "+ [ ] task\nend");
+		checkbox().focus();
+		checkbox().dispatchEvent(new win.KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+		assert.equal(editor.input.value, "+ [x] task\nend");
+		assert.equal(win.document.activeElement, checkbox());
+		assert.equal(undoDepth(editor.view.state), 2);
+		checkbox().dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
+		assert.equal(editor.input.selectionStart, 5);
+		assert.equal(editor.input.querySelector("input[type=checkbox]"), null);
+	} finally { close(); }
+});
+
+test("checkbox refuses stale widgets, changed contexts, saving, readonly and composition", async () => {
+	const value = "- [ ] task\nend";
+	const { editor, win, close } = environment(value);
+	try {
+		const checkbox = () => editor.input.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+		for (const boundary of ["reset", "context", "changed", "saving", "readonly", "composition"]) {
+			editor.reset(value);
+			const old = checkbox();
+			if (boundary === "reset") editor.reset(value);
+			if (boundary === "context") editor.invalidateContext();
+			if (boundary === "changed") editor.view.dispatch({ changes: { from: 6, to: 10, insert: "new" } });
+			if (boundary === "saving") editor.setSaving(true);
+			if (boundary === "readonly") editor.input.disabled = true;
+			if (boundary === "composition") editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			const before = editor.input.value;
+			old.click(); assert.equal(editor.input.value, before, boundary);
+			if (["saving", "readonly", "composition"].includes(boundary)) {
+				checkbox().click(); assert.equal(editor.input.value, before, boundary);
+			}
+			if (boundary === "saving") editor.setSaving(false);
+			if (boundary === "readonly") editor.input.disabled = false;
+			if (boundary === "composition") {
+				editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+				await new Promise(resolve => setTimeout(resolve, 80));
+			}
+		}
+	} finally { close(); }
+});
+
+test("focused checkbox handles history keyboard events without leaving the draft", () => {
+	const { editor, win, close } = environment("- [X] task\n\nend");
+	const checkbox = () => editor.input.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+	const key = (name: string, modifiers: KeyboardEventInit = {}) => {
+		const event = new win.KeyboardEvent("keydown", { key: name, keyCode: name.toUpperCase().charCodeAt(0), bubbles: true, cancelable: true, ...modifiers });
+		checkbox().dispatchEvent(event);
+		return event;
+	};
+	try {
+		checkbox().focus(); key(" ");
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+		assert.equal(key("z", { ctrlKey: true }).defaultPrevented, true);
+		assert.equal(editor.input.value, "- [X] task\n\nend");
+		assert.equal(win.document.activeElement, checkbox());
+		assert.equal(key("y", { ctrlKey: true }).defaultPrevented, true);
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+		key(" ", { repeat: true });
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+		editor.setSaving(true);
+		key("z", { ctrlKey: true });
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+	} finally { close(); }
+});
+
+test("ordinary IME text preserves list widgets and unrelated inline decoration through preedit", async () => {
+	for (const initial of ["- [ ] 正文", "1. 正文", "- ", "普通正文"]) {
+		const value = initial + "\n\n**后文**";
+		const { editor, win, close } = environment(value);
+		try {
+			editor.input.setSelectionRange(initial.length, initial.length);
+			const marker = editor.input.querySelector(".knomo-composer-marker");
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			let end = initial.length;
+			for (const text of ["n", "ni hao", "你好，世界😀"]) {
+				editor.view.dispatch({ changes: { from: initial.length, to: end, insert: text }, selection: { anchor: initial.length + text.length }, annotations: Transaction.userEvent.of("input.type.compose") });
+				end = initial.length + text.length;
+				assert.equal(editor.input.querySelector(".knomo-composer-marker"), marker, initial);
+				assert.equal(editor.input.querySelector("strong")?.textContent, "后文");
+				assert.equal(editor.input.value, initial + text + "\n\n**后文**");
+			}
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+			await new Promise(resolve => setTimeout(resolve, 80));
+			assert.equal(editor.input.querySelector("strong")?.textContent, "后文");
+			undo(editor.view); assert.equal(editor.input.value, value);
+		} finally { close(); }
+	}
+});
+
+test("IME boundary edits remain unsafe after earlier mapped prose changes", () => {
+	const { editor, win, close } = environment("- 正文\n\n**后文**\nend");
+	try {
+		editor.input.setSelectionRange(4, 4);
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.view.dispatch({ changes: { from: 4, insert: "你好" }, selection: { anchor: 6 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.ok(editor.input.querySelector("strong"));
+		editor.view.dispatch({ changes: { from: 0, to: 2, insert: "```\n" }, selection: { anchor: 4 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.equal(editor.input.querySelector("strong, .knomo-composer-marker"), null);
+		assert.equal(editor.composing, true);
+	} finally { close(); }
+});
+
+test("selection-only changes reuse parsing and safe CJK lines lose justify on source reveal", t => {
+	const value = "普通中文正文测试内容\n**中文加粗正文测试**\n\n- 中文列表测试\n\n混合 `code` 中文正文\nhttps://x\n\nend";
+	const { editor, close } = environment(value);
+	const parse = t.mock.method(parser, "parse");
+	try {
+		assert.equal(editor.input.querySelectorAll(".knomo-composer-prose").length, 3);
+		editor.input.setSelectionRange(value.indexOf("加粗"), value.indexOf("加粗"));
+		assert.equal(editor.input.querySelectorAll(".knomo-composer-prose").length, 2);
+		for (let pos = 0; pos < value.length; pos++) editor.input.setSelectionRange(pos, pos);
+		assert.equal(parse.mock.callCount(), 0);
+	} finally { parse.mock.restore(); close(); }
+});
+
+test("IME boundary changes remove invalid hiding before parsing without changing composition or history", async t => {
+	for (const initial of ["**bold**\nend", "[[Note|Alias]]\nend", "- [ ] task\nend"]) {
+		const { editor, win, close } = environment(initial);
+		const parse = t.mock.method(parser, "parse");
+		try {
+			editor.view.focus();
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			editor.view.dispatch({ changes: { from: 0, to: 1, insert: "你" }, selection: { anchor: 1 }, annotations: Transaction.userEvent.of("input.type.compose") });
+			assert.equal(parse.mock.callCount(), 0);
+			assert.equal(editor.input.querySelector(".knomo-composer-marker, strong, a.internal-link"), null);
+			assert.equal(editor.input.textContent, "你" + initial.slice(1).replace(/\n/g, ""));
+			assert.equal(editor.input.selectionStart, 1);
+			assert.equal(editor.composing, true);
+			assert.equal(undoDepth(editor.view.state), 1);
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+			await new Promise(resolve => setTimeout(resolve, 80));
+			assert.equal(parse.mock.callCount(), 1);
+			undo(editor.view); assert.equal(editor.input.value, initial);
+		} finally { parse.mock.restore(); close(); }
+	}
+});
+
+test("delimiter deletion, cross-boundary paste and fence changes never reuse stale hiding", () => {
+	const { editor, close } = environment("**bold**\nend");
+	try {
+		editor.view.dispatch({ changes: { from: 0, to: 2, insert: "" }, annotations: Transaction.userEvent.of("delete.backward") });
+		assert.equal(editor.input.textContent, "bold**end");
+		undo(editor.view); assert.equal(editor.input.value, "**bold**\nend");
+		editor.view.dispatch({ changes: { from: 3, to: 9, insert: "`code`" }, annotations: Transaction.userEvent.of("input.paste") });
+		assert.equal(editor.input.querySelector("strong"), null);
+		editor.reset("```\n**bold**\n```\n\n**outside**\nend");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "outside");
+		editor.view.dispatch({ changes: { from: 13, to: 16, insert: "" } });
+		assert.equal(editor.input.querySelector("strong"), null);
+		undo(editor.view); assert.equal(editor.input.querySelector("strong")?.textContent, "outside");
+	} finally { close(); }
+});
+
+test("IME in a blank boundary withdraws decoration from the preceding potential Setext paragraph", () => {
+	const { editor, win, close } = environment("**bold**\n\nend");
+	try {
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.view.dispatch({ changes: { from: 9, to: 9, insert: "===" }, selection: { anchor: 12 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.equal(editor.input.querySelector("strong"), null);
+		assert.equal(editor.input.value, "**bold**\n===\nend");
+		assert.equal(editor.composing, true);
+	} finally { close(); }
+});
+
+test("all selection ranges reveal source without creating undo entries", () => {
+	const { editor, close } = environment("**one** **two**\nend");
+	try {
+		editor.view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.allowMultipleSelections.of(true)) });
+		editor.view.dispatch({ selection: EditorSelection.create([EditorSelection.range(0, 2), EditorSelection.range(9, 10)]) });
+		assert.equal(editor.view.state.selection.ranges.length, 2);
+		assert.equal(editor.input.querySelector("strong"), null);
+		assert.equal(editor.input.value, "**one** **two**\nend");
+		assert.equal(undoDepth(editor.view.state), 0);
+	} finally { close(); }
+});
+
+test("Markdown link escaped labels display literal text and expand to the original source", () => {
+	const value = "[te\\]xt](https://x/a\\(b\\))\nend";
+	const { editor, close } = environment(value);
+	try {
+		assert.equal(editor.input.querySelector(".knomo-composer-markdown-link")?.textContent, "te]xt");
+		editor.input.setSelectionRange(4, 4);
+		assert.equal(editor.input.querySelector(".knomo-composer-markdown-link"), null);
+		assert.equal(editor.input.textContent, value.replace(/\n/g, ""));
+		assert.equal(editor.input.value, value);
 	} finally { close(); }
 });
 

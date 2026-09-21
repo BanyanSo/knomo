@@ -63,6 +63,12 @@ export class DesktopSidebarStateController {
 		return true;
 	}
 
+	cancelResize(): number | null {
+		const pointerId = this.drag?.pointerId ?? null;
+		this.drag = null;
+		return pointerId;
+	}
+
 	stopResize(pointerId: number): boolean {
 		if (this.drag === null || this.drag.pointerId !== pointerId) {
 			return false;

@@ -1,3 +1,4 @@
+import type { LayoutMode } from "./KnomoLayout";
 import {
 	attachMobileComposerLayer,
 	clearMobileComposerLayerState,
@@ -62,7 +63,7 @@ interface MobileKeyboardDismissRequest {
 }
 
 export type MobileComposerPhase = "closed" | "opening" | "focusing" | "open" | "closing";
-export type MobileComposerLayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
+export type MobileComposerLayoutMode = LayoutMode;
 
 export interface MobileComposerControllerOptions {
 	getWindow: () => Window;

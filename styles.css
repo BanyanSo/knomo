@@ -304,7 +304,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	--knomo-card-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
-.knomo-plugin.is-layout-desktop-medium,
 .knomo-plugin.is-layout-desktop-narrow {
 	--knomo-menu-surface: color-mix(in srgb, var(--background-primary) 96%, var(--text-normal) 4%);
 	--knomo-subtle-surface: color-mix(in srgb, var(--background-primary) 92%, var(--text-normal) 8%);
@@ -373,14 +372,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 /* ---- Layout: desktop-wide (default) ---- */
 /* topbar visible, compact-header hidden, composer inline, no FAB */
 
-/* ---- Layout: desktop-medium ---- */
-.knomo-plugin.is-layout-desktop-medium .knomo-compact-header {
-	display: flex;
-}
-.knomo-plugin.is-layout-desktop-medium .knomo-topbar {
-	display: none;
-}
-
 /* ---- Layout: desktop-narrow ---- */
 .knomo-plugin.is-layout-desktop-narrow .knomo-compact-header {
 	display: flex;
@@ -405,24 +396,22 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	overflow: visible;
 }
 
-.knomo-plugin.is-layout-desktop-medium .knomo-compact-search-btn,
 .knomo-plugin.is-layout-desktop-narrow .knomo-compact-search-btn {
 	display: none;
 }
 
-/* ---- Layout: desktop-medium / desktop-narrow sidebar drawer ---- */
-.knomo-plugin.is-layout-desktop-medium .knomo-sidebar,
+/* ---- Layout: desktop-narrow sidebar drawer ---- */
 .knomo-plugin.is-layout-desktop-narrow .knomo-sidebar {
 	position: absolute;
 	top: 0;
 	left: 0;
 	bottom: 0;
 	z-index: 120;
-	flex-basis: var(--knomo-sidebar-width);
-	width: var(--knomo-sidebar-width);
-	min-width: var(--knomo-sidebar-width);
-	max-width: calc(100vw - 48px);
-	padding: 8px 14px 16px 20px;
+	flex-basis: var(--knomo-drawer-width);
+	width: var(--knomo-drawer-width);
+	min-width: 0;
+	max-width: 100%;
+	padding: 8px min(14px, 5%) 16px min(20px, 6%);
 	border-radius: 0 var(--knomo-radius) var(--knomo-radius) 0;
 	background-color: var(--knomo-page-background);
 	box-shadow: var(--shadow-l);
@@ -436,8 +425,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 		visibility var(--knomo-transition-drawer-fade);
 }
 
-.knomo-plugin.is-layout-desktop-medium.is-drawer-open .knomo-sidebar,
-.knomo-plugin.is-layout-desktop-medium.is-sidebar-collapsed.is-drawer-open .knomo-sidebar,
 .knomo-plugin.is-layout-desktop-narrow.is-drawer-open .knomo-sidebar,
 .knomo-plugin.is-layout-desktop-narrow.is-sidebar-collapsed.is-drawer-open .knomo-sidebar {
 	opacity: 1;
@@ -446,12 +433,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	pointer-events: auto;
 }
 
-.knomo-plugin.is-layout-desktop-medium .knomo-sidebar-resizer,
 .knomo-plugin.is-layout-desktop-narrow .knomo-sidebar-resizer {
 	display: none;
 }
 
-.knomo-plugin.is-layout-desktop-medium .knomo-drawer-backdrop,
 .knomo-plugin.is-layout-desktop-narrow .knomo-drawer-backdrop {
 	position: absolute;
 	inset: 0;
@@ -465,7 +450,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 		visibility var(--knomo-transition-backdrop);
 }
 
-.knomo-plugin.is-layout-desktop-medium.is-drawer-open .knomo-drawer-backdrop,
 .knomo-plugin.is-layout-desktop-narrow.is-drawer-open .knomo-drawer-backdrop {
 	opacity: 1;
 	visibility: visible;
@@ -542,12 +526,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	padding: 0;
 }
 
-.knomo-plugin.is-layout-desktop-medium.is-sidebar-collapsed .knomo-sidebar,
 .knomo-plugin.is-layout-desktop-narrow.is-sidebar-collapsed .knomo-sidebar {
-	flex-basis: var(--knomo-sidebar-width);
-	width: var(--knomo-sidebar-width);
-	min-width: var(--knomo-sidebar-width);
-	padding: 8px 14px 16px 20px;
+	flex-basis: var(--knomo-drawer-width);
+	width: var(--knomo-drawer-width);
+	min-width: 0;
+	padding: 8px min(14px, 5%) 16px min(20px, 6%);
 }
 
 /* Sidebar header / brand */
@@ -1046,8 +1029,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	padding: 0 16px 0 0;
 }
 
-/* Content column — desktop-medium / desktop-narrow: full-width, tighter padding */
-.knomo-plugin.is-layout-desktop-medium .knomo-content-column,
+/* Content column — desktop-narrow: full-width, tighter padding */
 .knomo-plugin.is-layout-desktop-narrow .knomo-content-column {
 	max-width: none;
 	padding: 0 var(--knomo-desktop-compact-edge-padding) 0;
@@ -1363,7 +1345,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	pointer-events: auto;
 }
 
-.knomo-plugin.is-layout-desktop-medium.is-scope-open .knomo-mobile-scope-popover,
 .knomo-plugin.is-layout-desktop-narrow.is-scope-open .knomo-mobile-scope-popover {
 	opacity: 1;
 	transform: translateY(0) scale(1);
@@ -1371,7 +1352,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	pointer-events: auto;
 }
 
-.knomo-plugin.is-layout-desktop-medium .knomo-mobile-scope-popover,
 .knomo-plugin.is-layout-desktop-narrow .knomo-mobile-scope-popover {
 	position: absolute;
 	top: var(--knomo-title-popover-top);
@@ -1434,7 +1414,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 /* --------------------------------------------------------------------------
-   7b. Compact Header (desktop-medium / desktop-narrow / mobile)
+   7b. Compact Header (desktop-narrow / mobile)
    -------------------------------------------------------------------------- */
 .knomo-plugin .knomo-compact-header {
 	align-items: center;
@@ -1445,7 +1425,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	transform: translateY(var(--knomo-header-offset-y));
 }
 
-.knomo-plugin.is-layout-desktop-medium .knomo-compact-header,
 .knomo-plugin.is-layout-desktop-narrow .knomo-compact-header {
 	height: calc(40px + var(--knomo-desktop-header-composer-gap) + var(--knomo-header-offset-y));
 	min-height: calc(40px + var(--knomo-desktop-header-composer-gap) + var(--knomo-header-offset-y));
@@ -1567,7 +1546,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: none;
 }
 
-.knomo-plugin.is-layout-desktop-medium .knomo-compact-inline-search,
 .knomo-plugin.is-layout-desktop-narrow .knomo-compact-inline-search {
 	display: flex;
 	flex: 0 1 180px;
@@ -3156,19 +3134,19 @@ body .knomo-mobile-create-fab.is-hidden {
    -------------------------------------------------------------------------- */
 @media (max-width: 768px) {
 	/* Mobile compact mode */
-	.knomo-plugin.is-mobile-compact .knomo-card {
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card {
 		padding: var(--size-4-2) var(--size-4-3);
 	}
 
-	.knomo-plugin.is-mobile-compact .knomo-card.has-time-buoy {
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card.has-time-buoy {
 		padding-block-end: 18px;
 	}
 
-	.knomo-plugin.is-mobile-compact .knomo-card-content {
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card-content {
 		font-size: 15px;
 	}
 
-	.knomo-plugin.is-mobile-compact .knomo-card-images--single,
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card-images--single,
 	.knomo-plugin.is-layout-mobile .knomo-card-images--single {
 		width: min(62%, 340px);
 		min-width: min(200px, 100%);
@@ -3192,7 +3170,7 @@ body .knomo-mobile-create-fab.is-hidden {
 		object-position: left center;
 	}
 
-	.knomo-plugin.is-mobile-compact .knomo-card-images--grid,
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card-images--grid,
 	.knomo-plugin.is-layout-mobile .knomo-card-images--grid {
 		height: 112px;
 	}
@@ -3850,7 +3828,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	margin-bottom: var(--knomo-desktop-header-composer-gap);
 }
 
-.knomo-plugin.is-record-stats.is-layout-desktop-medium .knomo-record-stats-back,
 .knomo-plugin.is-record-stats.is-layout-desktop-narrow .knomo-record-stats-back,
 .knomo-plugin.is-record-stats.is-layout-desktop-wide.is-sidebar-collapsed .knomo-record-stats-back {
 	display: inline-flex;
@@ -4419,33 +4396,18 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 		min-width: 232px;
 	}
 
-	.knomo-plugin .knomo-topbar {
-		height: auto;
-		min-height: 36px;
-		flex-wrap: wrap;
-		gap: 8px;
-		row-gap: 10px;
-		margin-bottom: 18px;
-	}
-
-	.knomo-plugin .knomo-search-wrap {
-		order: 3;
-		flex: 0 0 100%;
-		width: 100%;
-	}
-
-	.knomo-plugin .knomo-card-images--single {
+	.knomo-plugin.is-layout-mobile .knomo-card-images--single {
 		width: min(68%, 320px);
 		min-width: min(180px, 100%);
 	}
 
-	.knomo-plugin .knomo-card-images--single .knomo-card-image-button,
-	.knomo-plugin .knomo-card-images--single .knomo-card-image-button img {
+	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button,
+	.knomo-plugin.is-layout-mobile .knomo-card-images--single .knomo-card-image-button img {
 		width: 100%;
 		max-height: 180px;
 	}
 
-	.knomo-plugin .knomo-card-images--grid {
+	.knomo-plugin.is-layout-mobile .knomo-card-images--grid {
 		height: 108px;
 		gap: 4px;
 	}
@@ -4580,4 +4542,54 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 @keyframes knomo-composer-saving { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
 	.knomo-plugin .knomo-send-button.is-saving svg { animation: none; }
+}
+
+/* 桌面局部排版按 Main 空间响应，不参与核心布局判定。 */
+.knomo-plugin:not(.is-layout-mobile) .knomo-main {
+	container-type: inline-size;
+	container-name: knomo-main;
+}
+.knomo-plugin .knomo-drawer-close { display: none; }
+.knomo-plugin.is-layout-desktop-narrow .knomo-drawer-close { display: inline-flex; }
+.knomo-plugin.is-layout-desktop-narrow [data-action="collapse-sidebar"] { display: none; }
+.knomo-plugin.is-layout-desktop-narrow .knomo-sidebar {
+	overscroll-behavior: contain;
+}
+.knomo-plugin.is-layout-desktop-narrow.is-sidebar-collapsed .knomo-sidebar {
+	overflow: hidden auto;
+}
+.knomo-plugin.is-layout-desktop-narrow .knomo-sidebar-header {
+	flex-wrap: wrap;
+}
+.knomo-plugin:not(.is-layout-mobile) .knomo-composer-bar,
+.knomo-plugin:not(.is-layout-mobile) .knomo-tool-group,
+.knomo-plugin:not(.is-layout-mobile) .knomo-composer-actions {
+	flex-wrap: wrap;
+	min-width: 0;
+}
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-content {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-content pre,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-content table {
+	max-width: 100%;
+	overflow-x: auto;
+}
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-content table { display: block; }
+@container knomo-main (max-width: 480px) {
+	.knomo-plugin .knomo-topbar { flex-wrap: wrap; height: auto; flex-shrink: 0; }
+	.knomo-plugin .knomo-topbar .knomo-search-wrap { flex: 1 1 140px; min-width: 0; max-width: 100%; }
+	.knomo-plugin .knomo-record-stats-overview-grid,
+	.knomo-plugin .knomo-record-stats-range-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr)); }
+	.knomo-plugin .knomo-card-images--single { width: min(68%, 320px); min-width: min(180px, 100%); }
+	.knomo-plugin .knomo-card-images--single .knomo-card-image-button,
+	.knomo-plugin .knomo-card-images--single .knomo-card-image-button img { width: 100%; max-height: 180px; }
+}
+@container knomo-main (max-width: 320px) {
+	.knomo-plugin.is-layout-desktop-narrow .knomo-compact-header { flex-wrap: wrap; height: auto; min-height: 40px; flex-shrink: 0; }
+	.knomo-plugin .knomo-compact-title { flex: 1 1 calc(100% - 72px); }
+	.knomo-plugin.is-layout-desktop-narrow .knomo-compact-inline-search { flex: 1 1 100%; max-width: none; min-width: 0; }
+	.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-tag-button { grid-template-columns: minmax(0, 1fr) auto; }
+	.knomo-plugin .knomo-card-images--grid { height: 108px; gap: 4px; }
 }

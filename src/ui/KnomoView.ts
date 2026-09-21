@@ -1,3 +1,4 @@
+import { DesktopDrawerFocus, getDrawerWidth, resolveLayout, type LayoutMode } from "./KnomoLayout";
 import { registerComposerToolGesture } from "./ComposerToolGesture";
 import type { KnomoQuickCommand } from "./KnomoQuickCommands";
 import { getMemoSourceReferenceMeta } from "./KnomoCardMetadata";
@@ -247,7 +248,6 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 const TITLE_POPOVER_LEFT_DEFAULT = "max(16px, env(safe-area-inset-left))";
 const TITLE_POPOVER_TOP_DEFAULT = MOBILE_DRAWER_TOP_DEFAULT;
 
-type LayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
 type WindowWithIntersectionObserver = Window & {
 	IntersectionObserver?: typeof IntersectionObserver;
 };
@@ -371,7 +371,11 @@ export class KnomoView extends ItemView {
 	private recentDecorations = new RecentTimeFlowDecorations(this.recentTimeFlowContext);
 	private recentLifecycleKey = "";
 	private recentPreferenceUnsubscribe: (() => void) | null = null;
-	private currentLayout: LayoutMode = "desktop-wide";
+	private currentLayout: LayoutMode = "desktop-narrow";
+	private readonly desktopDrawerFocus = new DesktopDrawerFocus();
+	private layoutWindow: Window | null = null;
+	private layoutWindowCleanup: (() => void) | null = null;
+	private layoutSearchComposing = false;
 	private renderedTimeBuoyEnabled: boolean | null = null;
 	private layoutObserver: ResizeObserver | null = null;
 	private filteredMemosCache: FilteredMemosCache | null = null;
@@ -932,6 +936,7 @@ export class KnomoView extends ItemView {
 			closeMobileSearchPage: () => this.closeMobileSearchPage(),
 			closeComposerKeepingDraft: () => this.closeComposerKeepingDraft(),
 			openDrawer: () => {
+				if (!this.prepareDesktopDrawer()) return;
 				this.mobileDrawerOpen = true;
 			},
 			closeDrawer: () => {
@@ -1112,6 +1117,11 @@ export class KnomoView extends ItemView {
 			}
 		});
 		this.startLayoutObserver();
+		this.registerEvent(this.app.workspace.on("layout-change", () => {
+			if (this.trashViewClosed) return;
+			this.startLayoutObserver();
+			this.syncLayoutMeasurements();
+		}));
 		this.startDateChangeWatcher();
 	}
 
@@ -1302,6 +1312,8 @@ export class KnomoView extends ItemView {
 		}
 		this.renderScope = this.addChild(new Component());
 		const container = this.contentEl;
+		this.finishSidebarResize();
+		if (this.rootEl) this.layoutObserver?.unobserve(this.rootEl);
 		container.empty();
 		this.titleHosts = [];
 		this.statsEls = [];
@@ -1313,6 +1325,7 @@ export class KnomoView extends ItemView {
 
 		const root = container.createDiv({ cls: "knomo-plugin knomo-view" });
 		this.rootEl = root;
+		this.layoutObserver?.observe(root);
 
 		const drawerBackdrop = root.createDiv({
 			cls: "knomo-drawer-backdrop",
@@ -1411,6 +1424,7 @@ export class KnomoView extends ItemView {
 		this.getRenderScope().registerDomEvent(this.sidebarResizerEl, "pointerup", (event) => this.stopSidebarResize(event));
 		this.getRenderScope().registerDomEvent(this.sidebarResizerEl, "pointercancel", (event) => this.stopSidebarResize(event));
 		this.getRenderScope().registerDomEvent(this.sidebarResizerEl, "keydown", (event) => {
+			if (this.currentLayout !== "desktop-wide") return;
 			if (event.key === "ArrowLeft") {
 				event.preventDefault();
 				this.setSidebarWidth(this.desktopSidebarStateController.getSnapshot().width - 8, true);
@@ -1641,6 +1655,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private registerDesktopSearchInput(searchInput: HTMLInputElement): void {
+		this.registerSearchComposition(searchInput);
 		this.getRenderScope().registerDomEvent(searchInput, "focus", () => this.openDesktopSearch());
 		this.getRenderScope().registerDomEvent(searchInput, "click", () => this.openDesktopSearch());
 		this.getRenderScope().registerDomEvent(searchInput, "input", () => {
@@ -1656,6 +1671,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private registerCompactSearchInput(searchInput: HTMLInputElement): void {
+		this.registerSearchComposition(searchInput);
 		this.getRenderScope().registerDomEvent(searchInput, "focus", () => this.openDesktopSearch());
 		this.getRenderScope().registerDomEvent(searchInput, "click", () => this.openDesktopSearch());
 		this.getRenderScope().registerDomEvent(searchInput, "input", () => {
@@ -1669,6 +1685,14 @@ export class KnomoView extends ItemView {
 				this.setSearchQuery("");
 				this.syncRootState();
 			}
+		});
+	}
+
+	private registerSearchComposition(searchInput: HTMLInputElement): void {
+		this.getRenderScope().registerDomEvent(searchInput, "compositionstart", () => { this.layoutSearchComposing = true; });
+		this.getRenderScope().registerDomEvent(searchInput, "compositionend", () => {
+			this.layoutSearchComposing = false;
+			this.syncLayoutMeasurements();
 		});
 	}
 
@@ -2276,8 +2300,12 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const sidebarState = this.desktopSidebarStateController.getSnapshot();
+		if (this.currentLayout === "desktop-narrow") {
+			const width = getDrawerWidth(this.getRootInnerWidth(), sidebarState.width);
+			root.setCssProps({ "--knomo-drawer-width": `${width}px` });
+			if (width <= 0) this.mobileDrawerOpen = false;
+		}
 		root.toggleClass("is-layout-desktop-wide", this.currentLayout === "desktop-wide");
-		root.toggleClass("is-layout-desktop-medium", this.currentLayout === "desktop-medium");
 		root.toggleClass("is-layout-desktop-narrow", this.currentLayout === "desktop-narrow");
 		root.toggleClass("is-layout-mobile", this.currentLayout === "mobile");
 		root.toggleClass("is-sidebar-collapsed", sidebarState.collapsed);
@@ -2292,6 +2320,7 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-time-buoy", this.activeNav === "time-buoy");
 		root.toggleClass("is-shuffle-day", this.activeNav === "shuffleDay");
 		root.setCssProps({ "--knomo-sidebar-width": `${sidebarState.width}px` });
+		if (this.currentLayout !== "mobile") this.desktopDrawerFocus.sync(root, this.currentLayout === "desktop-narrow", this.mobileDrawerOpen, sidebarState.collapsed);
 		this.syncTooltipState(root);
 		this.syncManualRefreshButtonState();
 		this.syncMobileHeaderActions();
@@ -2445,7 +2474,7 @@ export class KnomoView extends ItemView {
 		if (this.currentLayout === "mobile") {
 			return this.mobileHeaderTitleController.getAnchor();
 		}
-		if (this.currentLayout === "desktop-medium" || this.currentLayout === "desktop-narrow") {
+		if (this.currentLayout === "desktop-narrow") {
 			for (const titleHost of this.titleHosts) {
 				if (titleHost.el.isConnected && titleHost.el.closest(".knomo-compact-header") !== null) {
 					const labelEl = titleHost.el.find(".knomo-title-label");
@@ -2548,22 +2577,36 @@ export class KnomoView extends ItemView {
 	}
 
 	private startLayoutObserver(): void {
-		if (this.layoutObserver !== null) {
-			return;
-		}
 		const win: WindowWithResizeObserver = this.containerEl.win;
+		if (this.layoutWindow === win) return;
+		this.stopLayoutObserver();
+		this.layoutWindow = win;
+		const measure = () => {
+			if (!this.trashViewClosed && this.layoutWindow === win) this.syncLayoutMeasurements();
+		};
+		win.addEventListener("resize", measure);
+		win.addEventListener("focus", measure);
+		win.document.addEventListener("visibilitychange", measure);
+		this.layoutWindowCleanup = () => {
+			win.removeEventListener("resize", measure);
+			win.removeEventListener("focus", measure);
+			win.document.removeEventListener("visibilitychange", measure);
+		};
 		const ResizeObserverConstructor = win.ResizeObserver;
 		if (ResizeObserverConstructor !== undefined) {
-			const observer = new ResizeObserverConstructor(() => {
-				this.syncLayoutMeasurements();
-			});
+			const observer = new ResizeObserverConstructor(measure);
 			observer.observe(this.containerEl);
+			if (this.rootEl) observer.observe(this.rootEl);
 			this.layoutObserver = observer;
 		}
 		this.syncLayoutMeasurements();
 	}
 
 	private stopLayoutObserver(): void {
+		this.layoutWindowCleanup?.();
+		this.layoutWindowCleanup = null;
+		this.layoutWindow = null;
+		this.finishSidebarResize();
 		if (this.layoutObserver !== null) {
 			this.layoutObserver.disconnect();
 			this.layoutObserver = null;
@@ -2593,24 +2636,30 @@ export class KnomoView extends ItemView {
 	}
 
 	private updateCurrentLayout(): void {
+		// 搜索控件需要换位时，先让原输入框完成组合，避免隐藏焦点中断 IME。
+		if (this.layoutSearchComposing) return;
 		const previousLayout = this.currentLayout;
-		if (Platform.isMobile) {
-			this.currentLayout = "mobile";
-			if (previousLayout !== this.currentLayout) {
-				this.closeTimeBuoyPicker(false);
-			}
-			return;
-		}
-		const width = this.containerEl.getBoundingClientRect().width;
-		if (width >= 960) {
-			this.currentLayout = "desktop-wide";
-		} else if (width >= 640) {
-			this.currentLayout = "desktop-medium";
-		} else {
-			this.currentLayout = "desktop-narrow";
-		}
-		if (previousLayout !== this.currentLayout) {
-			this.closeTimeBuoyPicker(false);
+		this.currentLayout = resolveLayout(Platform.isMobile, this.containerEl.getBoundingClientRect().width, previousLayout);
+		if (previousLayout === this.currentLayout) return;
+		const active = this.containerEl.ownerDocument.activeElement;
+		const searchFocused = active === this.desktopSearchInputEl || active === this.compactInlineSearchInputEl || active === this.compactSearchInputEl;
+		const headerFocused = active && this.rootEl?.contains(active) && active.closest(".knomo-topbar, .knomo-compact-header");
+		const sidebarFocused = active && this.sidebarEl?.contains(active);
+		this.finishSidebarResize();
+		this.mobileDrawerOpen = false;
+		this.scopeMenuOpen = false;
+		this.compactSearchOpen = false;
+		this.closeTimeBuoyPicker(false);
+		this.closeCardMenu();
+		this.syncRootState();
+		if (searchFocused && active) {
+			const input = this.currentLayout === "desktop-wide" ? this.desktopSearchInputEl : this.compactInlineSearchInputEl;
+			// 保留尚未经过查询 debounce 的输入，不触发新的 Catalog 查询。
+			if (input) input.value = (active as HTMLInputElement).value;
+			input?.focus({ preventScroll: true });
+		} else if (headerFocused || sidebarFocused && this.currentLayout === "desktop-narrow") {
+			const selector = this.currentLayout === "desktop-wide" ? '.knomo-topbar button' : '.knomo-compact-menu-btn';
+			Array.from(this.rootEl?.querySelectorAll<HTMLElement>(selector) ?? []).find(el => el.getClientRects().length)?.focus({ preventScroll: true });
 		}
 	}
 
@@ -3687,6 +3736,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private openImagePreviewModal(images: readonly MemoPreviewImage[], initialIndex: number): void {
+		this.mobileDrawerOpen = false;
+		this.syncRootState();
 		if (images.length === 0) {
 			return;
 		}
@@ -4011,13 +4062,17 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
-		if (event.defaultPrevented) return;
+		if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
 		if (event.key === "Escape" && this.timeBuoyPickerState !== null) {
 			event.preventDefault();
 			event.stopPropagation();
 			this.closeTimeBuoyPicker(true);
 			return;
 		}
+		if (this.sidebarEl && this.desktopDrawerFocus.handleKeydown(event, this.sidebarEl, () => {
+			this.mobileDrawerOpen = false;
+			this.syncRootState();
+		})) return;
 		if (this.handleTimeBuoyTabKeydown(event)) {
 			return;
 		}
@@ -4595,6 +4650,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private openDesktopSearch(): void {
+		this.mobileDrawerOpen = false;
 		this.desktopSearchOpen = true;
 		this.scopeMenuOpen = false;
 		if (this.currentLayout !== "mobile") {
@@ -5807,13 +5863,33 @@ export class KnomoView extends ItemView {
 		card.toggleClass("is-menu-above", menuHeight > spaceBelow && spaceAbove > spaceBelow);
 	}
 
+	private prepareDesktopDrawer(): boolean {
+		if (this.currentLayout !== "desktop-narrow") return true;
+		if (this.getRootInnerWidth() <= 0) return false;
+		this.closeTimeBuoyPicker(false);
+		this.scopeMenuOpen = false;
+		this.desktopSearchOpen = false;
+		this.compactSearchOpen = false;
+		this.closeCardMenu();
+		this.tagSuggest?.close();
+		this.wikiLinkSuggest?.close();
+		return true;
+	}
+
+	private getRootInnerWidth(): number {
+		if (!this.rootEl) return 0;
+		const style = this.containerEl.win.getComputedStyle(this.rootEl);
+		return Math.max(0, this.rootEl.getBoundingClientRect().width - parseFloat(style.borderLeftWidth || "0") - parseFloat(style.borderRightWidth || "0"));
+	}
+
 	private toggleSidebar(): void {
 		if (this.isDrawerLayout()) {
+			if (!this.mobileDrawerOpen && !this.prepareDesktopDrawer()) return;
 			this.mobileDrawerOpen = !this.mobileDrawerOpen;
-			if (this.mobileDrawerOpen && this.composerOpen) {
+			if (this.currentLayout === "mobile" && this.mobileDrawerOpen && this.composerOpen) {
 				this.closeComposerKeepingDraft();
 			}
-			this.desktopSidebarStateController.expandWithoutPersisting();
+			if (this.currentLayout === "mobile") this.desktopSidebarStateController.expandWithoutPersisting();
 			this.syncRootState();
 			if (this.mobileDrawerOpen) {
 				void this.ensureSidebarIndexes();
@@ -5856,7 +5932,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private startSidebarResize(event: PointerEvent): void {
-		if (this.sidebarResizerEl === null || !this.desktopSidebarStateController.startResize(event.pointerId, event.clientX)) {
+		if (this.currentLayout !== "desktop-wide" || this.sidebarResizerEl === null || !this.desktopSidebarStateController.startResize(event.pointerId, event.clientX)) {
 			return;
 		}
 		this.sidebarResizerEl.setPointerCapture(event.pointerId);
@@ -5869,6 +5945,14 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.syncRootState();
+	}
+
+	private finishSidebarResize(): void {
+		const pointerId = this.desktopSidebarStateController.cancelResize();
+		if (pointerId === null) return;
+		if (this.sidebarResizerEl?.hasPointerCapture(pointerId)) this.sidebarResizerEl.releasePointerCapture(pointerId);
+		this.rootEl?.removeClass("is-resizing-sidebar");
+		void this.persistSidebarPreferences();
 	}
 
 	private stopSidebarResize(event: PointerEvent): void {
@@ -5892,7 +5976,6 @@ export class KnomoView extends ItemView {
 
 	private isDrawerLayout(): boolean {
 		return (
-			this.currentLayout === "desktop-medium" ||
 			this.currentLayout === "desktop-narrow" ||
 			this.currentLayout === "mobile"
 		);

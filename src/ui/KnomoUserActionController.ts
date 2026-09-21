@@ -295,7 +295,7 @@ export class KnomoUserActionController {
 				this.options.closeMobileSearchPage();
 				return;
 			case "open-drawer":
-				if (this.options.isComposerOpen()) {
+				if (this.options.isMobileLayout() && this.options.isComposerOpen()) {
 					this.options.closeComposerKeepingDraft();
 				}
 				this.options.openDrawer();

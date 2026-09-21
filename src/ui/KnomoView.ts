@@ -1,4 +1,5 @@
 import { registerComposerToolGesture } from "./ComposerToolGesture";
+import type { KnomoQuickCommand } from "./KnomoQuickCommands";
 import { getMemoSourceReferenceMeta } from "./KnomoCardMetadata";
 import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 import { updateComposerToolbar } from "./KnomoComposer";
@@ -353,6 +354,9 @@ export class KnomoView extends ItemView {
 	private catalogDesktopQueryRun = 0;
 	private expandedTagGroups = new Set<string>();
 	private composerOpen = false;
+	private settleQuickCommandReady!: (ready: boolean) => void;
+	private readonly quickCommandReady = new Promise<boolean>((resolve) => { this.settleQuickCommandReady = resolve; });
+	private executingQuickCommand = false;
 	private editingMemo: MemoRecord | null = null;
 	private quoteReferenceText: string | null = null;
 	private quoteMarkdownText: string | null = null;
@@ -573,6 +577,7 @@ export class KnomoView extends ItemView {
 		private readonly onRefreshCatalogProtocolState: (() => Promise<void>) | null = null,
 		private readonly onOpenCatalogSettings: (() => void) | null = null,
 		private readonly onRebuildBasicData: (() => Promise<void>) | null = null,
+		private readonly onQuickCommandInteraction: (() => void) | null = null,
 	) {
 		super(leaf);
 		this.getDailyNotesStatus = getDailyNotesStatus;
@@ -834,7 +839,8 @@ export class KnomoView extends ItemView {
 			getInputEl: () => this.inputEl,
 			captureFocusContext: () => {
 				const context = this.inputEl?.composer.capture();
-				return () => !this.trashViewClosed && this.composerOpen && !!context?.sameSession();
+				return () => !this.trashViewClosed && this.composerOpen && !!context?.sameSession()
+					&& this.app.workspace.getActiveViewOfType(KnomoView) === this;
 			},
 			getComposerBarEl: () => this.composerBarEl,
 			getReferencePreviewEl: () => this.referencePreviewEl,
@@ -1003,6 +1009,53 @@ export class KnomoView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		try {
+			await this.initializeView();
+			this.settleQuickCommandReady(!this.trashViewClosed);
+		} catch (error) {
+			this.settleQuickCommandReady(false);
+			throw error;
+		}
+	}
+
+	waitForQuickCommands(): Promise<boolean> {
+		return this.trashViewClosed ? Promise.resolve(false) : this.quickCommandReady;
+	}
+
+	executeQuickCommand(command: KnomoQuickCommand): void {
+		if (this.trashViewClosed) return;
+		if (command === "time-buoy" && !this.settingsService.getSettings().timeBuoyEnabled) {
+			new Notice(t("command.timeBuoyDisabled"));
+			return;
+		}
+		this.executingQuickCommand = true;
+		try {
+			if (command === "new-memo") {
+				// 沿用当前会话；保存或组合输入期间不移动编辑器、不结束输入法组合。
+				if (this.isSaving || this.composerIsComposing || this.inputEl?.composer.composing) return;
+				if (this.mobileSearchPageOpen) this.closeMobileSearchPage();
+				if (this.activeNav === "record-stats") this.returnFromRecordStats();
+				if (this.composerOpen) this.focusComposerInputNow();
+				else this.openComposer();
+				return;
+			}
+			if (this.mobileSearchPageOpen) this.closeMobileSearchPage();
+			this.mobileComposerController.clearFocus();
+			if (this.composerOpen && !this.isSaving && !this.composerIsComposing && !this.inputEl?.composer.composing) {
+				this.closeComposerKeepingDraft();
+			}
+			if (command === "on-this-day") this.setTitleMode("anniversary");
+			else this.setSidebarNav(command === "random-revisit" ? "random" : command === "shuffle-day" ? "shuffleDay" : command);
+		} finally {
+			this.executingQuickCommand = false;
+		}
+	}
+
+	private cancelPendingQuickCommand(): void {
+		if (!this.executingQuickCommand) this.onQuickCommandInteraction?.();
+	}
+
+	private async initializeView(): Promise<void> {
 		this.trashViewClosed = false;
 		this.trashMemoController.start();
 		this.lastKnownLocalDate = formatTimeBuoyDate(new Date());
@@ -1016,6 +1069,7 @@ export class KnomoView extends ItemView {
 			this.renderCardFlow();
 		});
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
+			if (this.app.workspace.getActiveViewOfType(KnomoView) !== this) this.mobileComposerController.clearFocus();
 			if (!this.trashViewClosed && this.containerEl.isShown()) this.handleLocalDateChange();
 		}));
 		this.contentEl.addClass("knomo-view-host");
@@ -1027,7 +1081,8 @@ export class KnomoView extends ItemView {
 		if (Platform.isMobile) {
 			this.updateCurrentLayout();
 		}
-		await this.render();
+		await this.render(false);
+		if (this.trashViewClosed) return;
 		if (Platform.isMobile) {
 			this.mobileComposerController.prepare();
 		}
@@ -1067,6 +1122,8 @@ export class KnomoView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.trashViewClosed = true;
+		this.settleQuickCommandReady?.(false);
+		this.cancelPendingQuickCommand();
 		this.suspendedCreate = null;
 		this.draftContent = "";
 		this.editingMemo = null;
@@ -1202,7 +1259,7 @@ export class KnomoView extends ItemView {
 		return this.renderScope ?? this;
 	}
 
-	private async render(): Promise<void> {
+	private async render(waitForCatalog = true): Promise<void> {
 		if (this.trashViewClosed) return;
 		// 保存中的 DOM 重建延至提交归属已消费，避免留下可重复发送的副本。
 		if (this.isSaving) { this.composerRenderPending = true; return; }
@@ -1319,7 +1376,12 @@ export class KnomoView extends ItemView {
 			void this.loadInitialMobileMemos();
 		} else {
 			void this.trashMemoController.ensureLoaded();
-			await this.reloadCurrentCatalogQuery(true);
+			const initialQuery = this.reloadCurrentCatalogQuery(true);
+			// 首次打开只等待可交互界面；数据继续使用原查询加载与错误状态。
+			if (waitForCatalog) await initialQuery;
+			else void initialQuery.catch((error: unknown) => {
+				if (!this.trashViewClosed) this.updateStatus(formatServiceError(error, t("empty.cardFlowFailed")), true);
+			});
 		}
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
 			if (this.activeNav === "time-buoy") {
@@ -3834,6 +3896,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleRootPointerDown(event: PointerEvent): void {
+		this.cancelPendingQuickCommand();
 		const target = event.target as Node | null;
 		if (
 			this.timeBuoyPickerState !== null
@@ -3848,6 +3911,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleRootClick(event: MouseEvent): Promise<void> {
+		this.cancelPendingQuickCommand();
 		await this.userActionController.handleRootClick(event);
 	}
 
@@ -4309,6 +4373,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private applyViewStateTransitionEffects(effects: KnomoViewStateTransitionEffects): void {
+		this.cancelPendingQuickCommand();
 		if (effects.closeScopeMenu === true) {
 			this.scopeMenuOpen = false;
 		}

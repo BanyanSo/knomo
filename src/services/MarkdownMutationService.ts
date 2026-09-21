@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 
 import type { MemoObservation, ObservationHandle } from "../types/catalog";
 import type { DailyInsertPosition } from "../types/settings";
+import { KnomoError } from "../types/serviceError";
 import type {
 	MarkdownBlockReferenceInput,
 	MarkdownBlockReferenceResult,
@@ -50,6 +51,20 @@ export class MarkdownMutationStaleError extends Error {
 	constructor(path: string) {
 		super(`Daily observation is stale or ambiguous: ${path}`);
 		this.name = "MarkdownMutationStaleError";
+	}
+}
+
+export class UnsafeDailyInsertError extends KnomoError {
+	constructor(readonly diagnostics: {
+		reason: string;
+		sourcePath?: string;
+		section: string | null;
+		insertPosition: DailyInsertPosition;
+		beforeCount: number;
+		afterCount?: number;
+	}) {
+		super("daily_insert_unsafe");
+		this.name = "UnsafeDailyInsertError";
 	}
 }
 
@@ -303,7 +318,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 						if (existingBlockId !== null && parsed.observations.some((item) => item.existingBlockId === existingBlockId)) {
 							throw new Error("Moved Obsidian block ID already exists in the target Daily file.");
 						}
-						return insertRawBlock(content, rawBlock, section, position);
+						return insertRawBlock(content, rawBlock, section, position, parsed.observations, file.path);
 					},
 				});
 				const created = findAppendedObservation(prepared, rawBlock, section, position);
@@ -456,15 +471,20 @@ export function findAppendedObservation(
 	section: string | null,
 	position: DailyInsertPosition,
 ): MemoObservation {
+	const reject = (reason: string): never => {
+		throw new UnsafeDailyInsertError({ reason, sourcePath: prepared.file.path, section,
+			insertPosition: position, beforeCount: prepared.before.observations.length,
+			afterCount: prepared.after.observations.length });
+	};
 	if (prepared.after.observations.length !== prepared.before.observations.length + 1) {
-		throw new Error("Create must add exactly one parsed memo observation.");
+		reject("Create must add exactly one parsed memo observation.");
 	}
 	const matches = prepared.after.observations.filter((item) => item.section === section
 		&& normalizeRawBlock(getRawBlock(prepared.afterContent, item)) === normalizeRawBlock(rawBlock))
 		.sort((left, right) => position === "top"
 			? left.startLine - right.startLine
 			: right.startLine - left.startLine);
-	if (matches.length === 0) throw new Error("Created Daily observation was not parsed.");
+	if (matches.length === 0) reject("Created Daily observation was not parsed.");
 	return matches[0];
 }
 
@@ -519,6 +539,8 @@ export function insertRawBlock(
 	rawBlock: string,
 	section: string | null,
 	position: DailyInsertPosition,
+	observations: readonly MemoObservation[],
+	sourcePath: string,
 ): string {
 	const firstLine = rawBlock.split(/\r\n|\r|\n/u, 1)[0] ?? "";
 	if (!/^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?: |$)/u.test(firstLine)) {
@@ -526,19 +548,26 @@ export function insertRawBlock(
 	}
 	const eol = content.includes("\r\n") ? "\r\n" : "\n";
 	const normalizedBlock = rawBlock.replace(/\r\n|\r|\n/gu, eol).replace(/(?:\r\n|\n)$/u, "");
-	const headings = findHeadingOffsets(content);
+	const { headings, unsafeFrom } = findHeadingOffsets(content, observations);
+	const insert = (offset: number, block = normalizedBlock): string => {
+		if (unsafeFrom !== null && offset > unsafeFrom) {
+			throw new UnsafeDailyInsertError({ reason: "Unclosed outer frontmatter or code fence.",
+				sourcePath, section, insertPosition: position, beforeCount: observations.length });
+		}
+		return insertAtOffset(content, offset, block, eol);
+	};
 	if (section === null) {
 		const rootStart = findRootContentStart(content);
 		const rootEnd = headings[0]?.start ?? content.length;
 		const offset = position === "top"
 			? rootStart
 			: findBottomInsertOffset(content, rootStart, rootEnd);
-		return insertAtOffset(content, offset, normalizedBlock, eol);
+		return insert(offset);
 	}
 	const headingIndex = headings.findIndex((heading) => heading.text.trim() === section.trim());
 	if (headingIndex === -1) {
 		const sectionBlock = `${section.replace(/\r\n|\r|\n/gu, "").trim()}${eol}${normalizedBlock}`;
-		return insertAtOffset(content, content.length, sectionBlock, eol);
+		return insert(content.length, sectionBlock);
 	}
 	const offset = position === "top"
 		? headings[headingIndex]?.contentStart ?? content.length
@@ -547,7 +576,7 @@ export function insertRawBlock(
 			headings[headingIndex]?.contentStart ?? content.length,
 			headings[headingIndex + 1]?.start ?? content.length,
 		);
-	return insertAtOffset(content, offset, normalizedBlock, eol);
+	return insert(offset);
 }
 
 function insertAtOffset(content: string, offset: number, block: string, eol: string): string {
@@ -557,29 +586,49 @@ function insertAtOffset(content: string, offset: number, block: string, eol: str
 	return `${prefix}${block}${eol}${suffix}`;
 }
 
-function findHeadingOffsets(content: string): Array<{ start: number; contentStart: number; text: string }> {
+function findHeadingOffsets(content: string, observations: readonly MemoObservation[]): {
+	headings: Array<{ start: number; contentStart: number; text: string }>;
+	unsafeFrom: number | null;
+} {
 	const starts = getLineStarts(content);
 	const result: Array<{ start: number; contentStart: number; text: string }> = [];
 	let fence: { char: string; length: number } | null = null;
 	let frontmatter = content.slice(0, getLineEnd(content, starts, 0)).trim() === "---";
+	let unsafeFrom: number | null = frontmatter ? 0 : null;
+	let observationIndex = 0;
 	for (let lineIndex = 0; lineIndex < starts.length; lineIndex += 1) {
+		// Parser 是 Memo 行归属的唯一事实来源；有序区间只前进一次。
+		while (observationIndex < observations.length && observations[observationIndex]!.endLine < lineIndex) observationIndex += 1;
+		const observation = observations[observationIndex];
+		if (observation !== undefined && observation.startLine <= lineIndex) {
+			lineIndex = observation.endLine;
+			continue;
+		}
 		const start = starts[lineIndex] ?? 0;
 		const line = content.slice(start, getLineEnd(content, starts, lineIndex));
 		if (frontmatter) {
-			if (lineIndex > 0 && (line.trim() === "---" || line.trim() === "...")) frontmatter = false;
+			if (lineIndex > 0 && (line.trim() === "---" || line.trim() === "...")) {
+				frontmatter = false;
+				unsafeFrom = null;
+			}
 			continue;
 		}
 		const marker = /^ {0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
 		if (marker !== undefined) {
-			if (fence === null) fence = { char: marker.charAt(0), length: marker.length };
-			else if (fence.char === marker.charAt(0) && marker.length >= fence.length) fence = null;
+			if (fence === null) {
+				fence = { char: marker.charAt(0), length: marker.length };
+				unsafeFrom = start;
+			} else if (fence.char === marker.charAt(0) && marker.length >= fence.length) {
+				fence = null;
+				unsafeFrom = null;
+			}
 			continue;
 		}
 		if (fence === null && /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) {
 			result.push({ start, contentStart: starts[lineIndex + 1] ?? content.length, text: line });
 		}
 	}
-	return result;
+	return { headings: result, unsafeFrom };
 }
 
 function findRootContentStart(content: string): number {

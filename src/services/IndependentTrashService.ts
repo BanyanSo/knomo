@@ -71,13 +71,13 @@ export class IndependentTrashService {
 			assertVaultPath(file.path);
 			if (!(file instanceof TFile) || !file.path.endsWith(".md")) throw new Error("Restore Daily target unavailable.");
 			const prepared = await this.gateway.prepare({ file, logicalDate: snapshot.logicalDate, expectedRevision: null, requireDiskMatch: true,
-				update: (content) => {
+				update: (content, parsed) => {
 					store.assertActive();
 					this.options.assertActive?.();
 					// 包括 Memo 外部锚点；不能制造同文件 blockId 冲突。
 					const ids = snapshot.rawBlock.match(/\^[A-Za-z0-9_-]+(?=\s|$)/gu) ?? [];
 					if (ids.some((id) => hasBlockId(content, id.slice(1)))) throw new Error("Restore block ID already exists in target Daily.");
-					return insertRawBlock(content, snapshot.rawBlock, snapshot.section, "bottom");
+					return insertRawBlock(content, snapshot.rawBlock, snapshot.section, "bottom", parsed.observations, file.path);
 				} });
 			const observation = findAppendedObservation(prepared, snapshot.rawBlock, snapshot.section, "bottom");
 			await store.assertUnchanged(snapshot);

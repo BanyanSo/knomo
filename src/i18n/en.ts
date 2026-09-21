@@ -431,6 +431,7 @@ export const en: Record<TranslationKey, string> = {
 	"term.block": "block",
 	"term.systemFolder": "Knomo system data folder",
 	"service.unknownError": "Unknown error",
+	"service.dailyInsertUnsafe": "Cannot save: the current Daily Markdown structure does not provide a safe insertion position. Daily was not modified; your input has been preserved.",
 	"service.dailyNotesUnavailable": "Daily Notes core plugin is unavailable; Knomo cannot resolve the daily note.",
 	"service.dailyNotesDisabled": "Enable the Daily Notes core plugin in Obsidian settings. Knomo will read the Daily Notes settings automatically; you do not need to configure the daily note path in Knomo.",
 	"service.dailyNotesEnabled": "Daily Notes core plugin is enabled.",

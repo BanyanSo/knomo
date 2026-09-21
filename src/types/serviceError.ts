@@ -9,6 +9,10 @@ interface KnomoErrorDefinition {
 }
 
 export const KNOMO_ERROR_DEFINITIONS = {
+	daily_insert_unsafe: {
+		messageKey: "service.dailyInsertUnsafe",
+		fallbackMessage: "Cannot save: the current Daily Markdown structure does not provide a safe insertion position. Daily was not modified; your input has been preserved.",
+	},
 	daily_notes_unavailable: {
 		messageKey: "service.dailyNotesUnavailable",
 		fallbackMessage: "Daily Notes core plugin is unavailable; Knomo cannot resolve the daily note.",

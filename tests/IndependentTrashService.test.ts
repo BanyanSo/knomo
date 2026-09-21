@@ -57,6 +57,23 @@ test("snapshot-first 删除同文 occurrence，独立 ID、独立 restore/purge�
 	assert.deepEqual((await f.store.query()).items.map((item) => item.snapshotId), [fourth.snapshotId]);
 });
 
+test("restore 使用目标 Parser 区间，拒绝不安全结构时保留快照", async () => {
+	const f = await fixture();
+	const deleted = await f.service.delete((await f.observations())[0]!);
+	const unsafe = "## Memos\n```md\nunfinished\n";
+	f.vault.replace(PATH, unsafe);
+	f.events.length = 0;
+	await assert.rejects(() => f.service.restore(deleted.snapshotId), /Daily was not modified/u);
+	assert.equal(f.vault.read(PATH), unsafe);
+	assert.equal(f.events.includes("daily-process"), false);
+	assert.equal((await f.store.query()).items.length, 1);
+	const safe = "## Memos\n- 08:00 ```js\n  code\n  ```\n  ## Fake\n## Other\n```md\n# Example\n```\n";
+	f.vault.replace(PATH, safe);
+	await f.service.restore(deleted.snapshotId);
+	assert.equal(f.vault.read(PATH), safe.replace("## Other\n", "- 10:30 same memo\n## Other\n"));
+	assert.equal((await f.store.query()).items.length, 0);
+});
+
 test("初始 stale 不保存快照；快照创建/读回失败、损坏和保存期间 Daily 变化均不删除", async (context) => {
 	for (const failure of ["initial-stale", "create", "read", "corrupt", "daily-change"] as const) {
 		await context.test(failure, async () => {

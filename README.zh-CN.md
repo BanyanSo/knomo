@@ -104,6 +104,22 @@ Knomo 不把 Obsidian 移动端当作桌面端的缩小窗口。输入框、键�
 
 ---
 
+### 快捷命令
+
+在 Obsidian 命令面板中搜索 Knomo，即可执行 **新建 Memo**、**随机重逢**、**往日漫游**、**时光浮标**、**记录统计** 和 **那年今日**。你也可以在 Obsidian 的 **快捷键** 设置中为它们绑定按键。
+
+命令会复用已打开的 Knomo 视图，必要时自动打开视图。**新建 Memo** 会保留当前草稿；使用 **时光浮标** 前需要先在 Knomo 设置中启用该功能。
+
+---
+
+### Markdown 编辑与草稿
+
+Composer 会展示 Markdown 格式，并在编辑时展开相关源码。你可以编写列表、链接、引用和代码，也可以直接切换草稿中受支持的勾选项，并使用撤销与重做。
+
+在同一个打开的 Knomo 视图内，关闭并重新打开 Composer 会保留草稿。编辑已有 memo 时，会暂存新建草稿；保存或取消编辑后，恢复草稿正文、引用、选区和滚动位置。保存失败时也会保留编辑内容。草稿不保证在关闭视图或重启 Obsidian 后保留。
+
+---
+
 ### 写入 Daily Note
 
 Knomo 依赖 Obsidian 核心插件 **Daily Notes（日记）**。
@@ -171,6 +187,7 @@ Knomo 用卡片流展示 memo，而不是要求你一直阅读原始 Markdown �
 Knomo 支持多种方式缩小 memo 范围：
 
 - 全部笔记；
+- **勾事记**：包含 Markdown 勾选项的 memo；
 - 无标签 memo；
 - 有链接 memo；
 - 有图片 memo；
@@ -180,7 +197,7 @@ Knomo 支持多种方式缩小 memo 范围：
 - 关键词搜索；
 - 统计页联动筛选。
 
-对于较大的 Vault，Knomo 可以先加载最近内容，再在后台加载全量 memo，用于需要完整数据的筛选和统计。
+Knomo 使用可重建的本地 Catalog 完成历史查询、筛选和统计，并分页加载 memo 卡片。每台设备根据 Daily Notes 建立自己的 Catalog，无需同步索引本身。
 
 ---
 
@@ -213,7 +230,11 @@ Knomo 会保留原始 Markdown，而不是替换成插件私有格式。
 
 ---
 
-### 图片预览
+### 图片插入与预览
+
+可以直接向 Composer 粘贴截图、剪贴板图片，也可以通过图片选择器插入。图片粘贴支持 PNG、JPEG、GIF 和 WebP，适用于剪贴板提供图片数据且不附带文本或 HTML 的情况。移动端剪贴板支持取决于系统和输入方式，仍可使用图片选择器。
+
+图片会按 Obsidian 的附件位置与链接格式设置保存到 Vault，并以 Markdown 嵌入链接插入草稿。Knomo 会保留可用的原始文件名、调整不安全名称，并避免覆盖已有附件。处理图片期间可以继续输入，处理完成后再发送 memo。取消插入或撤销嵌入链接不会删除已经保存到 Vault 的附件。
 
 Knomo 支持在 memo 卡片中显示轻量图片预览。
 
@@ -242,6 +263,8 @@ Knomo 支持 memo 中的 Markdown 任务列表。
 ```
 
 你可以在卡片视图中更新任务状态，并同步回源 Markdown 内容。
+
+从侧边栏或视图切换菜单打开 **勾事记**，可以集中查看包含受支持勾选项的 memo，涵盖已完成与未完成项目。它支持组合标签、关键词和日期筛选，移动端搜索也会保留勾事记范围。结果展示完整 memo，全部勾选完成后仍会保留在勾事记中；代码示例中的勾选项文本不计入筛选。
 
 ---
 
@@ -300,9 +323,17 @@ Knomo 提供更安全的日常维护流程：
 - 能恢复的 memo 可以尝试恢复；
 - 永久删除需要单独操作；
 - 可以从 Markdown 来源修复 / 重建 memo 索引；
-- 可以预览并导入历史 Daily Note 中类似 memo 的内容。
+- 配置范围内 Daily Notes 中已有的 `- HH:mm` 和 `- HH:mm:ss` memo 会自动识别，无需单独手动导入。
 
 Markdown 始终是长期可信来源。插件索引用于提升浏览、筛选、统计和同步体验。
+
+---
+
+### 桌面端响应式布局
+
+Knomo 根据自身分栏宽度适配布局，方便与其他笔记并排使用。宽度达到 780px 时使用桌面侧边栏布局，更窄时切换为紧凑标题栏与侧边栏抽屉，抽屉限制在所属分栏内。可以通过关闭按钮或 Escape 收起抽屉。
+
+调整分栏宽度时，会保留草稿、搜索状态以及侧边栏宽度和折叠偏好。
 
 ---
 
@@ -407,6 +438,38 @@ Knomo 需要 Obsidian 核心插件 **Daily Notes（日记）**。
 
 ---
 
+## Obsidian URL 快捷指令
+
+可通过 Obsidian 原生 URL 从 iOS「快捷指令」或其他应用打开 Knomo。请先在目标 Vault 中启用 Knomo，并将下列示例 Vault ID 替换为自己的 ID：
+
+```text
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=open-view
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=new-memo
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=random-revisit
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=shuffle-day
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=time-buoy
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=record-stats
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=on-this-day
+```
+
+| command | 行为 |
+| --- | --- |
+| `open-view` | 仅打开或切换到 Knomo，复用已有视图 |
+| `new-memo` | 打开新建 Memo 输入界面，保留已有草稿 |
+| `random-revisit` | 随机重逢 |
+| `shuffle-day` | 往日漫游 |
+| `time-buoy` | 时光浮标，需先启用该功能 |
+| `record-stats` | 记录统计 |
+| `on-this-day` | 那年今日 |
+
+在 iOS「快捷指令」中添加「URL」操作，填入所需链接，再添加「打开 URL」操作。`new-memo` 只打开输入界面，不会自动保存 Memo；所有命令均不支持通过 URL 传入 Memo 正文。缺失、空值或未知的 `command` 不执行功能，也不创建 Knomo 视图。
+
+Obsidian 先选择目标 Vault，再分发自定义 action。`vault` 支持 Vault 名称或 ID；优先使用 ID，避免重命名或同名 Vault 带来的问题。在 Vault 切换器中打开目标 Vault 的上下文菜单，选择「复制 Vault ID」。ID 属于设备本地的 Vault 注册信息：不同设备应分别获取，移除并重新添加 Vault 后也应重新核对。参见 [Obsidian URI 官方说明](https://help.obsidian.md/uri)。
+
+名称含空格、中文时，请将参数值 URL 编码一次。例如 `工作 笔记` 对应 `obsidian://knomo?vault=%E5%B7%A5%E4%BD%9C%20%E7%AC%94%E8%AE%B0&command=open-view`。不传 `vault` 时，例如 `obsidian://knomo?command=new-memo`，在 Obsidian 实际打开的 Vault 中执行。Knomo 不另行选择 Vault、不跨 Vault 转发，也不会在目标插件不可用时回退到另一实例。请仅使用这里列出的参数；Obsidian 会在 Knomo 收到请求之前处理其自身的路由参数。
+
+实现使用官方 `registerObsidianProtocolHandler` API（自 Obsidian 0.11.0 提供），因此 `minAppVersion` 保持 1.11.0。公开回调 API 不承诺保留 `vault` 参数；本机 Obsidian Desktop 1.13.7 的实现检查确认，宿主先按名称或 ID 选库，再移除 `vault` 后分发。Knomo 因此复用原生路由，不将 ID 与 Vault 名称比较，也不读取私有 Vault 注册表。命令等待工作区布局恢复后，进入已有视图打开逻辑或 Quick Command Controller。
+
 ## Markdown 格式
 
 Knomo 使用简单、可读、离开插件也能理解的 Markdown 格式。
@@ -481,7 +544,6 @@ Knomo 设置包括：
 - 月度日期排序方式；
 - 可选：将月度 Memos 文件从 Obsidian 搜索 / 图谱 / 统计中排除；
 - 固定标签；
-- 历史 Daily Note memo 导入；
 - 数据修复与重建工具。
 
 ---
@@ -494,7 +556,7 @@ Knomo 的核心原则是：**数据属于你**。
 - Daily Notes 和月度 Memos 文件都是普通 Markdown 文件；
 - Markdown 文件可以直接阅读、备份、同步和迁移；
 - 插件索引用于提升浏览、筛选、统计和同步体验；
-- 插件索引不是唯一数据来源；
+- Daily Notes 是活动 memo 的事实来源，本地 Catalog 与月度文件可从中重建；
 - Knomo 不要求注册账号；
 - Knomo 不依赖外部服务器；
 - Knomo 不会主动上传你的笔记。
@@ -507,7 +569,7 @@ Knomo 会写入 Markdown 文件。为了降低风险：
 
 - 首次使用前请备份 Vault；
 - 确认 Obsidian Sync、Git 或其他同步工具状态正常；
-- 导入历史 Daily Note 内容前请先备份；
+- 迁移旧版 Knomo 数据前请先备份；
 - 如果卡片流与 Markdown 看起来不一致，优先检查原始 Markdown；
 - 如果索引过期，可以使用修复 / 重建工具；
 - 长期可信来源始终是 Markdown 文件。

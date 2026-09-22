@@ -104,6 +104,22 @@ Good for:
 
 ---
 
+### Quick commands
+
+Search for Knomo in Obsidian's command palette to run **New memo**, **Random revisit**, **Shuffle day**, **Time buoy**, **Record statistics**, or **On this day**. You can assign your own shortcuts in Obsidian's **Hotkeys** settings.
+
+Commands reuse an open Knomo view or open one when needed. **New memo** keeps the current draft; **Time buoy** requires the feature to be enabled in Knomo settings.
+
+---
+
+### Markdown editing and drafts
+
+The Composer displays Markdown formatting while revealing the relevant source as you edit. Use it to write lists, links, quotes, and code, or toggle supported checkboxes in the draft with undo and redo support.
+
+Within the same open Knomo view, closing and reopening the Composer keeps your draft. Editing an existing memo temporarily sets aside the new-memo draft and restores its text, references, selection, and scroll position after you save or cancel the edit. A failed save keeps your editing content available. Drafts are not guaranteed to survive closing the view or restarting Obsidian.
+
+---
+
 ### Daily Note writing
 
 Knomo depends on Obsidian's core **Daily Notes** plugin.
@@ -171,6 +187,7 @@ Cards are useful for:
 Knomo supports multiple ways to narrow down your memo stream:
 
 - all notes;
+- **Things** — memos containing Markdown checkboxes;
 - untagged memos;
 - memos with links;
 - memos with images;
@@ -180,7 +197,7 @@ Knomo supports multiple ways to narrow down your memo stream:
 - keyword search;
 - statistics-driven filters.
 
-For large Vaults, Knomo can load recent content first and then hydrate the full memo set for filters and statistics that require all data.
+Knomo uses a rebuildable local Catalog for historical queries, filters, and statistics, and loads memo cards in pages. Each device builds its own Catalog from Daily Notes; the index itself does not need to be synced.
 
 ---
 
@@ -213,7 +230,11 @@ References use Obsidian-friendly links or block references so the connection rem
 
 ---
 
-### Image preview
+### Image capture and preview
+
+Paste screenshots or clipboard images directly into the Composer, or use the image picker. Image paste supports PNG, JPEG, GIF, and WebP when the clipboard supplies image data without accompanying text or HTML. Mobile clipboard support depends on the system and input method; the image picker remains available.
+
+Images are saved to your Vault using Obsidian's attachment location and link-format settings, then inserted as Markdown embeds. Knomo keeps usable original filenames, adjusts unsafe names, and avoids overwriting existing attachments. You can keep typing while images are processed; wait for processing to finish before sending the memo. Cancelling an insertion or undoing an embed does not delete an attachment already saved to the Vault.
 
 Knomo supports lightweight image previews in memo cards.
 
@@ -242,6 +263,8 @@ Example:
 ```
 
 Task status can be updated from the card view and synced back to the source Markdown content.
+
+Open **Things** from the sidebar or view selector to see memos with supported checkboxes, including both checked and unchecked items. Combine it with tags, keyword search, and date filters; mobile search keeps the Things scope. Results show complete memos, and checking every item does not remove a memo from Things. Checkbox-like text inside code examples is excluded.
 
 ---
 
@@ -300,9 +323,17 @@ Knomo includes safer maintenance flows for day-to-day use:
 - memos can be restored when possible;
 - permanent deletion requires a separate action;
 - the memo index can be repaired from Markdown sources;
-- legacy Daily Note memo-shaped content can be previewed and imported.
+- existing `- HH:mm` and `- HH:mm:ss` memo entries in configured Daily Notes are recognized automatically, without a separate manual import.
 
 Markdown remains the long-term trusted source. The plugin index is used to improve browsing, filtering, and synchronization.
+
+---
+
+### Responsive desktop layout
+
+Knomo adapts to the width of its own pane, making it suitable for side-by-side notes. At 780px and above, it uses the desktop sidebar layout; narrower panes use a compact header and a sidebar drawer contained within that pane. Close the drawer with its close button or Escape.
+
+Resizing the pane preserves your draft, search state, and sidebar width and collapse preferences.
 
 ---
 
@@ -407,6 +438,38 @@ After writing for a while, try:
 
 ---
 
+## Obsidian URL shortcuts
+
+Open Knomo from iOS Shortcuts or another app using Obsidian's native URL handler. Enable Knomo in the target vault first. Replace the example Vault ID below with your own:
+
+```text
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=open-view
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=new-memo
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=random-revisit
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=shuffle-day
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=time-buoy
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=record-stats
+obsidian://knomo?vault=ef6ca3e3b524d22f&command=on-this-day
+```
+
+| Command | Behavior |
+| --- | --- |
+| `open-view` | Only open or focus Knomo, reusing the existing view |
+| `new-memo` | Open the new Memo composer; keep the existing draft |
+| `random-revisit` | Random revisit |
+| `shuffle-day` | Shuffle day |
+| `time-buoy` | Time buoy; requires the feature to be enabled |
+| `record-stats` | Record statistics |
+| `on-this-day` | On this day |
+
+In iOS Shortcuts, add a **URL** action with the desired URL, followed by **Open URLs**. `new-memo` opens the writing interface; it does not save a Memo automatically. No command accepts Memo content through the URL. Missing, empty, or unknown `command` values do nothing and do not create a Knomo view.
+
+Obsidian selects the vault before dispatching the custom action. `vault` accepts a vault name or ID; prefer the ID to avoid name changes or duplicate names. In the vault switcher, use **Copy vault ID** from the vault's context menu. IDs are local to the device's vault registration: obtain the ID separately on each device, and check it after removing/re-adding a vault. See [Obsidian URI documentation](https://help.obsidian.md/uri).
+
+For a name containing spaces or Chinese characters, encode the parameter value once, for example `obsidian://knomo?vault=%E5%B7%A5%E4%BD%9C%20%E7%AC%94%E8%AE%B0&command=open-view` for `工作 笔记`. To use the vault actually opened by Obsidian, omit `vault`: `obsidian://knomo?command=new-memo`. Knomo does not choose another vault, forward requests between vaults, or fall back to another Knomo instance when the target plugin is unavailable. Use only the documented parameters; Obsidian handles its own routing parameters before Knomo receives the request.
+
+The plugin uses the official `registerObsidianProtocolHandler` API (available since Obsidian 0.11.0), so `minAppVersion` remains 1.11.0. The public callback API does not promise that `vault` will be retained: local inspection of Obsidian Desktop 1.13.7 confirms that the host selects a vault by name/ID and removes `vault` before dispatch. Knomo therefore relies on native routing and does not attempt to compare an ID with a vault name or read a private vault registry. Commands wait for workspace layout restoration, then use the existing view-opening and Quick Command controller paths.
+
 ## Markdown Format
 
 Knomo uses simple Markdown that stays readable outside the plugin.
@@ -481,7 +544,6 @@ Knomo settings include:
 - monthly date sort order;
 - optional exclusion of monthly memo files from Obsidian search / graph / statistics;
 - pinned tags;
-- legacy Daily Note memo import;
 - data repair and rebuild tools.
 
 ---
@@ -494,7 +556,7 @@ Knomo's core principle is: **your data belongs to you**.
 - Daily Notes and monthly Memos files are regular Markdown files;
 - Markdown files can be read, backed up, synced, and migrated directly;
 - the plugin index improves browsing, filtering, statistics, and sync behavior;
-- the plugin index is not the only source of truth;
+- Daily Notes are the source of truth for active memos; the local Catalog and monthly files can be rebuilt from them;
 - Knomo does not require an account;
 - Knomo does not rely on an external server;
 - Knomo does not actively upload your notes.
@@ -507,7 +569,7 @@ Knomo writes to Markdown files. To reduce risk:
 
 - back up your Vault before first use;
 - make sure Obsidian Sync, Git, or other sync tools are working normally;
-- back up before importing legacy Daily Note content;
+- back up before migrating legacy Knomo data;
 - check the original Markdown if the card flow looks inconsistent;
 - use repair / rebuild tools if the index becomes outdated;
 - treat Markdown files as the long-term trusted source.

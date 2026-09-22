@@ -18,12 +18,14 @@ export interface MarkdownCreateInput {
 	targetLogicalDate?: string;
 	createdAt?: Date;
 	onDailyCommitted?: () => void;
+	validateImageSource?: (sourcePath: string) => void;
 }
 
 export interface MarkdownEditInput {
 	observation: ObservationHandle;
 	content: string;
 	onDailyCommitted?: () => void;
+	validateImageSource?: (sourcePath: string) => void;
 }
 
 export interface MarkdownTaskInput {

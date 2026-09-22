@@ -9,6 +9,10 @@ import { registerComposerToolGesture } from "../src/ui/ComposerToolGesture";
 import { composerParser as parser } from "../src/utils/composerSyntax";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
+import { ComposerImageController, type ComposerImageCapture } from "../src/ui/ComposerImageController";
+import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
+import { composerImageLinks } from "../src/ui/ComposerImageState";
+import { AttachmentService, type ImageAttachment } from "../src/services/AttachmentService";
 
 function environment(value: string) {
 	const errors: Error[] = [];
@@ -987,4 +991,414 @@ test("W10 rebuild waits for consumption and close does not cancel the committed 
 			assert.equal(renders, closing ? 0 : 1); assert.equal(view.isSaving, false);
 		} finally { close(); }
 	}
+});
+
+function imageSession(value = "甲乙") {
+	const env = environment(value);
+	const errors: string[] = [];
+	let source: string | null = "Daily/2026-09-21.md";
+	const writes: Array<{ files: readonly { name: string }[]; resolve(value: ImageAttachment[]): void; reject(error: Error): void }> = [];
+	const controller = new ComposerImageController(env.editor, {
+		attachments: { createImageEmbedLinks: (_source, files) => new Promise((resolve, reject) => writes.push({ files, resolve, reject })) },
+		getSourcePath: () => source, canInsert: () => true, onPendingChanged: () => undefined,
+		onError: message => errors.push(message),
+	});
+	const file = { name: "image.png", size: 1, arrayBuffer: async () => new ArrayBuffer(1) };
+	return { ...env, controller, errors, writes, file, setSource: (path: string | null) => { source = path; },
+		close: () => { controller.dispose(); env.close(); } };
+}
+
+const imageResult = (name = "image") => [{ path: `Attachments/${name}.png`, link: `![[Attachments/${name}.png]]` }];
+
+async function flushImages() { for (let i = 0; i < 6; i++) await Promise.resolve(); }
+
+test("view image wiring accepts desktop paste and picker without opening the mobile composer", async () => {
+	for (const layout of ["desktop", "desktop-narrow", "mobile"]) for (const entry of ["paste", "picker"]) {
+		const f = environment("draft");
+		let images: ComposerImageController | undefined;
+		let picker: NativeImagePickerController<ComposerImageCapture> | undefined;
+		try {
+			const view = await sessionView(f.editor) as Awaited<ReturnType<typeof sessionView>> & {
+				createComposerImageController(input: typeof f.editor.input): ComposerImageController;
+				insertImageFiles(files: FileList, context?: ComposerImageCapture): Promise<void>;
+			};
+			const disk = new Map<string, ArrayBuffer>();
+			const app = {
+				fileManager: { getAvailablePathForAttachment: async (name: string) => `Attachments/${name}`,
+					generateMarkdownLink: (file: { path: string }) => `[[${file.path}]]` },
+				vault: { getAbstractFileByPath: (path: string) => disk.has(path) ? { path } : null,
+					createBinary: async (path: string, bytes: ArrayBuffer) => { disk.set(path, bytes); return { path }; } },
+			};
+			Object.assign(view, { currentLayout: layout, composerOpen: false, attachmentService: new AttachmentService(app as never),
+				getTodayDailyNotePath: () => "Daily/today.md" });
+			images = view.createComposerImageController(f.editor.input);
+			Object.assign(view, { composerImages: images });
+			const file = { name: "picked.png", type: "image/png", size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+			const paste = () => {
+				const event = new f.win.Event("paste", { bubbles: true, cancelable: true });
+				Object.defineProperty(event, "clipboardData", { value: { getData: () => "",
+					items: [{ kind: "file", type: file.type, getAsFile: () => file }] } });
+				f.editor.input.dispatchEvent(event);
+				return event.defaultPrevented;
+			};
+			// 原生兜底由宿主实现；测试仍让生产图片监听器先处理事件。
+			f.editor.input.addEventListener("paste", event => event.stopImmediatePropagation(), { capture: true });
+			if (layout === "mobile") {
+				assert.equal(paste(), false);
+				assert.equal(images.capture(), undefined);
+				assert.equal(disk.size, 0);
+				view.composerOpen = true;
+			}
+			if (entry === "paste") {
+				assert.equal(paste(), true, `${layout}: paste must reach the attachment service`);
+			} else {
+				const input = f.win.document.createElement("input");
+				input.detach = () => input.remove();
+				Object.defineProperty(input, "files", { value: [file] });
+				picker = new NativeImagePickerController({
+					createInput: () => input, beginFocusGuard: () => false, finishFocusGuard: () => undefined,
+					captureContext: () => images!.capture(), isContextCurrent: context => images!.isCurrent(context),
+					releaseContext: context => images!.release(context), insertImageFiles: (files, context) => view.insertImageFiles(files, context),
+				});
+				picker.open();
+				input.dispatchEvent(new f.win.Event("change"));
+			}
+			await flushImages();
+			assert.equal(disk.size, 1, `${layout}/${entry}: one attachment must be written`);
+			const path = [...disk.keys()][0];
+			assert.equal(f.editor.input.value, `draft![[${path}]]`);
+			assert.deepEqual([...new Uint8Array(disk.get(path)!)], [1, 2, 3]);
+			undo(f.editor.view); redo(f.editor.view);
+			assert.equal(disk.size, 1);
+			view.isSaving = true;
+			assert.equal(images.capture(), undefined);
+			view.isSaving = false;
+			view.trashViewClosed = true;
+			assert.equal(images.capture(), undefined);
+		} finally { picker?.dispose(); images?.dispose(); f.close(); }
+	}
+});
+
+test("native list continuation preserves unrelated pending images and generated link validation", async () => {
+	const f = imageSession("head\n- item");
+	try {
+		f.editor.input.setSelectionRange(2, 2);
+		const done = f.controller.insert([f.file]);
+		const enter = () => {
+			const end = f.editor.view.state.doc.length;
+			f.editor.view.dispatch({ changes: { from: end, insert: "\n" }, selection: { anchor: end + 1 }, annotations: Transaction.userEvent.of("input.type") });
+		};
+		enter();
+		assert.equal(f.controller.pending, true);
+		assert.equal(f.editor.input.value, "head\n- item\n- ");
+		f.writes[0].resolve(imageResult());
+		await done;
+		const links = f.editor.view.state.field(composerImageLinks);
+		f.editor.apply({ value: f.editor.input.value + "next", anchor: f.editor.input.value.length + 4, head: f.editor.input.value.length + 4 });
+		const before = f.editor.input.value;
+		enter();
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, before);
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+	} finally { f.close(); }
+});
+
+test("clearing all text cancels images at either boundary and never revives them on undo", async () => {
+	for (const anchor of [0, 5]) {
+		const f = imageSession("draft");
+		try {
+			f.editor.input.setSelectionRange(anchor, anchor);
+			const done = f.controller.insert([f.file]);
+			f.editor.view.dispatch({ changes: { from: 0, to: 5 }, annotations: Transaction.userEvent.of("delete.selection") });
+			assert.equal(f.controller.pending, false);
+			await done;
+			undo(f.editor.view);
+			assert.equal(f.controller.pending, false);
+			f.editor.apply({ value: "new draft", anchor: 9, head: 9 });
+			f.writes[0].resolve(imageResult());
+			await flushImages();
+			assert.equal(f.editor.input.value, "new draft");
+			assert.ok(f.errors.some(error => error.includes("Attachments/image.png")));
+		} finally { f.close(); }
+	}
+});
+
+test("image paste maps continued typing and keeps current caret; history and Redo preserve bytes", async () => {
+	const f = imageSession();
+	try {
+		f.editor.input.setSelectionRange(1, 1);
+		const done = f.controller.insert([f.file]);
+		assert.equal(f.controller.pending, true);
+		assert.equal(f.editor.input.value, "甲乙");
+		f.editor.view.dispatch({ changes: { from: 1, insert: "丙" }, selection: { anchor: 2 }, annotations: Transaction.userEvent.of("input.type") });
+		f.writes[0].resolve(imageResult());
+		await done;
+		const link = imageResult()[0].link;
+		assert.equal(f.editor.input.value, `甲${link}丙乙`);
+		assert.equal(f.editor.input.selectionStart, link.length + 2);
+		assert.equal(undoDepth(f.editor.view.state), 2);
+		assert.equal(f.controller.pending, false);
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, "甲丙乙");
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 0);
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, "甲乙");
+		redo(f.editor.view); redo(f.editor.view);
+		assert.equal(f.editor.input.value, `甲${link}丙乙`);
+		assert.equal(f.editor.view.state.field(composerImageLinks)[0].from, 1);
+		assert.equal(f.writes.length, 1);
+	} finally { f.close(); }
+});
+
+test("multi-image selection replacement is atomic, preserves boundary edits and reverses cleanly", async () => {
+	for (const direction of ["forward", "backward"]) {
+		const f = imageSession("abcd");
+		try {
+			f.editor.input.setSelectionRange(1, 3, direction);
+			const done = f.controller.insert([f.file, f.file]);
+			f.editor.view.dispatch({ changes: [{ from: 1, insert: "L" }, { from: 3, insert: "R" }], selection: { anchor: 0 }, annotations: Transaction.userEvent.of("input.type") });
+			f.writes[0].resolve([...imageResult("A"), ...imageResult("B")]);
+			await done;
+			assert.equal(f.editor.input.value, `aL${imageResult("A")[0].link}\n${imageResult("B")[0].link}Rd`);
+			assert.equal(f.editor.input.selectionStart, 0);
+			undo(f.editor.view);
+			assert.equal(f.editor.input.value, "aLbcRd");
+		} finally { f.close(); }
+	}
+});
+
+test("image insertion cancels on range edits, crossing deletion, reset, close and history", async () => {
+	for (const action of ["inside", "cross", "reset", "context", "cancel", "undo", "redo-key", "dispose"]) {
+		const f = imageSession("abcd");
+		try {
+			f.editor.input.setSelectionRange(1, action === "inside" ? 3 : 1);
+			const done = f.controller.insert([f.file]);
+			if (action === "inside") f.editor.view.dispatch({ changes: { from: 2, insert: "new" } });
+			if (action === "cross") f.editor.view.dispatch({ changes: { from: 0, to: 3, insert: "new" } });
+			if (action === "reset") f.editor.reset("new memo");
+			if (action === "context") f.editor.invalidateContext();
+			if (action === "cancel") f.controller.cancelAll();
+			if (action === "dispose") f.controller.dispose();
+			if (action === "undo") {
+				f.editor.view.dispatch({ changes: { from: 4, insert: "x" }, annotations: Transaction.userEvent.of("input.type") });
+				undo(f.editor.view);
+			}
+			if (action === "redo-key") f.editor.input.dispatchEvent(new f.win.KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+			await done;
+			assert.equal(f.controller.pending, false, action);
+			const value = f.editor.input.value;
+			f.writes[0].resolve(imageResult());
+			await flushImages();
+			assert.equal(f.editor.input.value, value, action);
+			assert.ok(f.errors.some(error => error.includes("Attachments/image.png")), action);
+		} finally { f.close(); }
+	}
+});
+
+test("consecutive pastes at one empty anchor keep order, even after typing", async () => {
+	const f = imageSession();
+	try {
+		f.editor.input.setSelectionRange(1, 1);
+		const first = f.controller.insert([f.file]);
+		const second = f.controller.insert([f.file]);
+		f.editor.view.dispatch({ changes: { from: 1, insert: "text" }, selection: { anchor: 5 } });
+		assert.equal(f.writes.length, 1);
+		f.writes[0].resolve(imageResult("A"));
+		await first;
+		assert.equal(f.writes.length, 2);
+		f.writes[1].resolve(imageResult("B"));
+		await second;
+		assert.equal(f.editor.input.value, `甲${imageResult("A")[0].link}${imageResult("B")[0].link}text乙`);
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 2);
+	} finally { f.close(); }
+});
+
+test("new overlapping replacement supersedes the previous task without waiting for old I/O", async () => {
+	const f = imageSession("abcd");
+	try {
+		f.editor.input.setSelectionRange(1, 3);
+		const first = f.controller.insert([f.file]);
+		const second = f.controller.insert([f.file]);
+		await first;
+		assert.equal(f.writes.length, 2);
+		f.writes[1].resolve(imageResult("new"));
+		await second;
+		f.writes[0].resolve(imageResult("old"));
+		await flushImages();
+		assert.equal(f.editor.input.value, `a${imageResult("new")[0].link}d`);
+		assert.ok(f.errors.some(error => error.includes("Attachments/old.png")));
+	} finally { f.close(); }
+});
+
+test("failed task releases the next batch and source changes never insert old links", async () => {
+	const f = imageSession();
+	try {
+		const first = f.controller.insert([f.file]);
+		const second = f.controller.insert([f.file]);
+		f.writes[0].reject(new Error("disk failed"));
+		await first;
+		assert.equal(f.writes.length, 2);
+		f.setSource("Daily/2026-09-22.md");
+		f.writes[1].resolve(imageResult());
+		await second;
+		assert.equal(f.controller.pending, false);
+		assert.equal(f.editor.input.value, "甲乙");
+		assert.ok(f.errors.some(error => error.includes("Attachments/image.png")));
+	} finally { f.close(); }
+});
+
+test("IME holds completed images until native composition settles, without overwriting input", async () => {
+	const f = imageSession();
+	try {
+		f.editor.input.setSelectionRange(1, 1);
+		const done = f.controller.insert([f.file]);
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionstart"));
+		f.editor.view.dispatch({ changes: { from: 1, insert: "你" }, selection: { anchor: 2 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		f.writes[0].resolve(imageResult());
+		await flushImages();
+		assert.equal(f.editor.input.value, "甲你乙");
+		assert.equal(f.controller.pending, true);
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionend", { data: "你" }));
+		await done;
+		assert.equal(f.editor.input.value, `甲${imageResult()[0].link}你乙`);
+	} finally { f.close(); }
+});
+
+test("image paste consumes one event, native text passes through, and IME/readonly do not create files", async () => {
+	const f = imageSession();
+	try {
+		const paste = (text: string, image = true) => {
+			const event = new f.win.Event("paste", { bubbles: true, cancelable: true });
+			Object.defineProperty(event, "clipboardData", { value: {
+				getData: (type: string) => type === "text/plain" ? text : "",
+				items: image ? [{ kind: "file", type: "image/png", getAsFile: () => f.file }] : [], files: [f.file],
+			} });
+			f.editor.input.dispatchEvent(event);
+			return event.defaultPrevented;
+		};
+		// 只观察本次图片处理器，不让 jsdom 的原生粘贴尝试访问未实现的剪贴板 API。
+		const native = (event: Event) => event.stopImmediatePropagation();
+		f.editor.input.addEventListener("paste", native, { capture: true });
+		assert.equal(paste("text"), false);
+		assert.equal(f.writes.length, 0);
+		f.editor.input.disabled = true;
+		assert.equal(paste(""), false);
+		f.editor.input.disabled = false;
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionstart"));
+		assert.equal(paste(""), true);
+		assert.equal(f.writes.length, 0);
+		await new Promise<void>(resolve => {
+			f.editor.input.addEventListener("composer-compositionend", () => resolve(), { once: true });
+			f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionend"));
+		});
+		f.editor.reset("甲乙");
+		assert.equal(paste(""), true);
+		assert.equal(f.writes.length, 1);
+		f.writes[0].resolve(imageResult());
+		await flushImages();
+		assert.equal(f.editor.input.value, `甲乙${imageResult()[0].link}`);
+	} finally { f.close(); }
+});
+
+test("Composer send waits for all images and never submits a queued click automatically", async () => {
+	const f = imageSession("");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller });
+		let saves = 0;
+		const original = view.memoCommandService.startCreate;
+		view.memoCommandService.startCreate = content => { saves++; return original(content); };
+		const image = f.controller.insert([f.file]);
+		await view.saveInput();
+		assert.equal(view.isSaving, false);
+		assert.equal(saves, 0);
+		f.writes[0].resolve(imageResult());
+		await image;
+		await flushImages();
+		assert.equal(saves, 0);
+		assert.equal(f.editor.readOnly, false);
+		await view.saveInput();
+		assert.equal(saves, 1);
+		assert.equal(f.editor.input.value, "");
+	} finally { f.close(); }
+});
+
+test("closing with a draft cancels images immediately and preserves existing Undo history", async () => {
+	const f = imageSession("draft");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller });
+		f.editor.apply({ value: "draft text", anchor: 10, head: 10 });
+		const image = f.controller.insert([f.file]);
+		view.closeComposerKeepingDraft();
+		await image;
+		assert.equal(f.controller.pending, false);
+		assert.equal(f.editor.input.value, "draft text");
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, "draft");
+		f.writes[0].resolve(imageResult());
+		await flushImages();
+		assert.equal(f.editor.input.value, "draft");
+	} finally { f.close(); }
+});
+
+test("generated-link metadata survives suspended Create and Undo of manual link edits", async () => {
+	const f = imageSession("draft");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller });
+		const image = f.controller.insert([f.file]);
+		f.writes[0].resolve(imageResult());
+		await image;
+		const links = f.editor.view.state.field(composerImageLinks);
+		view.startEditing(sessionMemo("other"));
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 0);
+		view.cancelEditing();
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+		f.editor.view.dispatch({ changes: { from: links[0].from + 4, insert: "x" }, annotations: Transaction.userEvent.of("input.type") });
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 0);
+		undo(f.editor.view);
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+	} finally { f.close(); }
+});
+
+test("picker capture maps edits before file selection and keeps the original range", async () => {
+	const f = imageSession("abcd");
+	try {
+		f.editor.input.setSelectionRange(1, 3);
+		const capture = f.controller.capture();
+		assert.equal(f.controller.pending, false);
+		f.editor.view.dispatch({ changes: { from: 0, insert: "prefix" }, selection: { anchor: 10 } });
+		const done = f.controller.insert([f.file], capture);
+		f.writes[0].resolve(imageResult());
+		await done;
+		assert.equal(f.editor.input.value, `prefixa${imageResult()[0].link}d`);
+		assert.equal(f.editor.input.selectionStart, f.editor.input.value.length);
+	} finally { f.close(); }
+});
+
+test("save receives a frozen image validator; failure keeps draft and manual removal permits saving", async () => {
+	const f = imageSession("");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller, app: { metadataCache: { getFirstLinkpathDest: () => null } } });
+		const done = f.controller.insert([f.file]);
+		f.writes[0].resolve(imageResult());
+		await done;
+		let validated = 0;
+		const original = view.memoCommandService.startCreate;
+		view.memoCommandService.startCreate = (content: string, validate?: (path: string) => void) => {
+			if (validate) { validated++; validate("Other/2026-09-22.md"); }
+			return original(content);
+		};
+		await view.saveInput();
+		assert.equal(validated, 1);
+		assert.equal(f.editor.input.value, imageResult()[0].link);
+		assert.equal(f.editor.readOnly, false);
+		f.editor.apply({ value: "ordinary text", anchor: 13, head: 13 });
+		await view.saveInput();
+		assert.equal(validated, 1);
+		assert.equal(f.editor.input.value, "");
+	} finally { f.close(); }
 });

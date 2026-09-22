@@ -706,3 +706,52 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 	});
 	return { promise, resolve: resolvePromise };
 }
+
+test("image source is checked against the actual Daily at prepare and commit without changing body on failure", async () => {
+	for (const activeEditor of [false, true]) for (const edit of [false, true]) {
+		const fixture = createFixture({ activeEditor });
+		await fixture.service.create({ content: "original" });
+		const observation = await fixture.getOnlyObservation("2026-08-22");
+		const original = fixture.vault.readText(observation.sourcePath);
+		let checks = 0;
+		const validateImageSource = (path: string) => {
+			assert.equal(path, observation.sourcePath);
+			if (++checks === 2) throw new Error("attachment changed while preparing Daily");
+		};
+		const saving = edit
+			? fixture.service.edit({ observation: toHandle(observation), content: "![[image.png]]", validateImageSource })
+			: fixture.service.create({ content: "![[image.png]]", validateImageSource });
+		await assert.rejects(saving, /attachment changed/);
+		assert.equal(checks, 2);
+		assert.equal(fixture.vault.readText(observation.sourcePath), original);
+	}
+});
+
+test("MemoCommand passes image validation to the actual creation date and preserves original edit handle", async () => {
+	const fixture = createFixture();
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const command = new MemoCommandService(fixture.app, catalog, {
+		refreshCatalogPaths: async () => undefined,
+		refreshLocalCatalog: async () => { throw new Error("Must not refresh"); },
+		rebuildLocalCatalog: async () => { throw new Error("Must not rebuild"); },
+		getMemoTimeFormat: () => "HH:mm", now: () => new Date(2026, 7, 23, 0, 0),
+	}, fixture.service);
+	const seen: string[] = [];
+	const operation = command.startCreate("![[image.png]]", path => { seen.push(path); throw new Error("bad image source"); });
+	await assert.rejects(operation.dailyCommitted, /bad image source/);
+	await assert.rejects(operation.settled, /bad image source/);
+	assert.deepEqual(seen, ["Daily/2026-08-23.md"]);
+	assert.equal((await fixture.parse("2026-08-23")).length, 0);
+	await fixture.service.create({ content: "original" });
+	const observation = await fixture.getOnlyObservation("2026-08-22");
+	const handle = toHandle(observation);
+	const editing = command.startEdit({ observationHandle: handle } as import("../src/types/catalogView").CatalogMemoItem, "changed", path => {
+		assert.equal(path, handle.sourcePath);
+		throw new Error("invalid image in edit");
+	});
+	await assert.rejects(editing.dailyCommitted, /invalid image in edit/);
+	await assert.rejects(editing.settled, /invalid image in edit/);
+	assert.equal((await fixture.getOnlyObservation("2026-08-22")).content, "original");
+});

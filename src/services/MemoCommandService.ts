@@ -117,10 +117,11 @@ export class MemoCommandService {
 		};
 	}
 
-	startCreate(contentInput: string): MemoSaveOperation {
+	startCreate(contentInput: string, validateImageSource?: (sourcePath: string) => void): MemoSaveOperation {
 		return this.startSaveOperation((onDailyCommitted) => this.createInternal(
 			contentInput,
 			onDailyCommitted,
+			validateImageSource,
 		));
 	}
 
@@ -131,6 +132,7 @@ export class MemoCommandService {
 	private async createInternal(
 		contentInput: string,
 		onDailyCommitted?: () => void,
+		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
@@ -141,6 +143,7 @@ export class MemoCommandService {
 			targetLogicalDate: logicalDate,
 			createdAt,
 			onDailyCommitted,
+			validateImageSource,
 		});
 		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? []);
 	}
@@ -163,8 +166,8 @@ export class MemoCommandService {
 		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
 	}
 
-	startEdit(item: CatalogMemoItem, contentInput: string): MemoSaveOperation {
-		return this.startSaveOperation((onDailyCommitted) => this.editInternal(item, contentInput, onDailyCommitted));
+	startEdit(item: CatalogMemoItem, contentInput: string, validateImageSource?: (sourcePath: string) => void): MemoSaveOperation {
+		return this.startSaveOperation((onDailyCommitted) => this.editInternal(item, contentInput, onDailyCommitted, validateImageSource));
 	}
 
 	async edit(item: CatalogMemoItem, contentInput: string): Promise<MemoSaveResult> {
@@ -175,6 +178,7 @@ export class MemoCommandService {
 		item: CatalogMemoItem,
 		contentInput: string,
 		onDailyCommitted?: () => void,
+		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
@@ -182,6 +186,7 @@ export class MemoCommandService {
 			observation: item.observationHandle,
 			content,
 			onDailyCommitted,
+			validateImageSource,
 		});
 		return this.finishMarkdownSavedMemo(result, extractTimeBuoyDates(content));
 	}

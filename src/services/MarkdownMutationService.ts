@@ -93,7 +93,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			content,
 			formatTimePart(createdAt, this.options.getMemoTimeFormat()),
 		);
-		return this.appendRawBlock(target.file, logicalDate, rawBlock, target.created, null, undefined, input.onDailyCommitted);
+		return this.appendRawBlock(target.file, logicalDate, rawBlock, target.created, null, undefined, input.onDailyCommitted, input.validateImageSource);
 	}
 
 	async edit(input: MarkdownEditInput): Promise<MarkdownMutationResult> {
@@ -109,6 +109,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				logicalDate,
 				expectedRevision: input.observation.sourceRevision,
 				update: (currentContent, parsed) => {
+					input.validateImageSource?.(file.path);
 					beforeObservation = findObservation(parsed, input.observation, file.path);
 					afterRawBlock = this.blockService.buildMemoBlockWithBlockId(
 						content,
@@ -302,6 +303,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		existingBlockId: string | null = null,
 		preferredSection?: string | null,
 		onDailyCommitted?: () => void,
+		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MarkdownMutationResult> {
 		return this.withStaleRefresh([file.path], async () => {
 			try {
@@ -315,6 +317,8 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					logicalDate,
 					expectedRevision: null,
 					update: (content, parsed) => {
+						// 使用实际落盘文件，在 prepare 与 commit 重放时分别检查图片来源。
+						validateImageSource?.(file.path);
 						if (existingBlockId !== null && parsed.observations.some((item) => item.existingBlockId === existingBlockId)) {
 							throw new Error("Moved Obsidian block ID already exists in the target Daily file.");
 						}

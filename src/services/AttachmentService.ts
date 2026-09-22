@@ -1,62 +1,77 @@
-import type { App, TFile } from "obsidian";
+import type { App } from "obsidian";
+import { parseMarkdownReferences } from "../utils/markdownReferences";
 
-export interface AttachmentRollbackFailure {
-	path: string;
-	error: unknown;
+export interface ImageAttachmentInput {
+	name: string;
+	size: number;
+	arrayBuffer(): Promise<ArrayBuffer>;
 }
 
-export class AttachmentBatchRollbackError extends Error {
-	readonly name = "AttachmentBatchRollbackError";
+export interface ImageAttachment {
+	path: string;
+	link: string;
+}
 
+export class AttachmentBatchError extends Error {
+	readonly name = "AttachmentBatchError";
 	constructor(
 		readonly originalError: unknown,
-		readonly rollbackFailures: readonly AttachmentRollbackFailure[],
+		readonly createdPaths: readonly string[],
+		readonly uncertainPath: string | null,
 	) {
-		super(
-			`${getErrorMessage(originalError)}; failed to move partial attachments to Trash: ${rollbackFailures
-				.map((failure) => failure.path)
-				.join(", ")}`,
-		);
+		super(originalError instanceof Error ? originalError.message : String(originalError));
 	}
 }
 
 export class AttachmentService {
 	constructor(private readonly app: App) {}
 
-	async createImageEmbedLinks(sourcePath: string, files: readonly File[]): Promise<string[]> {
-		const links: string[] = [];
-		const createdAttachments: TFile[] = [];
+	async createImageEmbedLinks(
+		sourcePath: string,
+		files: readonly ImageAttachmentInput[],
+		assertCurrent: () => void = () => undefined,
+	): Promise<ImageAttachment[]> {
+		const attachments: ImageAttachment[] = [];
+		const createdPaths: string[] = [];
+		let uncertainPath: string | null = null;
 		try {
+			if (files.some(file => file.size === 0)) throw new Error("Empty image data");
 			for (const file of files) {
-				const path = await this.app.fileManager.getAvailablePathForAttachment(file.name, sourcePath);
-				const attachment = await this.app.vault.createBinary(path, await file.arrayBuffer());
-				createdAttachments.push(attachment);
-				links.push(`!${this.app.fileManager.generateMarkdownLink(attachment, sourcePath)}`);
+				assertCurrent();
+				const bytes = await file.arrayBuffer();
+				if (bytes.byteLength === 0) throw new Error("Empty image data");
+				// 先读数据，再申请路径；路径分配并不是磁盘预留。
+				let path = "";
+				let attachment: Awaited<ReturnType<App["vault"]["createBinary"]>> | null = null;
+				for (let attempt = 0; attempt < 3; attempt++) {
+					assertCurrent();
+					path = await this.app.fileManager.getAvailablePathForAttachment(file.name, sourcePath);
+					assertCurrent();
+					if (this.app.vault.getAbstractFileByPath(path) !== null) continue;
+					// 只重试明确的 EEXIST；普通异常即使发现文件存在也不能推断未写入。
+					uncertainPath = path;
+					try {
+						attachment = await this.app.vault.createBinary(path, bytes);
+						break;
+					} catch (error) {
+						if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "EEXIST") throw error;
+						uncertainPath = null;
+					}
+				}
+				if (attachment === null) throw new Error("Attachment filename is already in use");
+				createdPaths.push(attachment.path);
+				uncertainPath = null;
+				assertCurrent();
+				const generated = this.app.fileManager.generateMarkdownLink(attachment, sourcePath);
+				const link = generated.startsWith("!") ? generated : `!${generated}`;
+				const reference = parseMarkdownReferences(link.slice(1))[0];
+				if (!reference?.valid || reference.raw !== link.slice(1)) throw new Error("Invalid image embed link");
+				attachments.push({ path: attachment.path, link });
 			}
-			return links;
+			return attachments;
 		} catch (error) {
-			const rollbackFailures = await this.rollbackAttachments(createdAttachments);
-			if (rollbackFailures.length > 0) {
-				throw new AttachmentBatchRollbackError(error, rollbackFailures);
-			}
-			throw error;
+			// 文件一旦写入就可能被其他笔记使用；失败只报告，不自动删除。
+			throw new AttachmentBatchError(error, createdPaths, uncertainPath);
 		}
 	}
-
-	private async rollbackAttachments(attachments: readonly TFile[]): Promise<AttachmentRollbackFailure[]> {
-		const failures: AttachmentRollbackFailure[] = [];
-		for (let index = attachments.length - 1; index >= 0; index -= 1) {
-			const attachment = attachments[index];
-			try {
-				await this.app.fileManager.trashFile(attachment);
-			} catch (error) {
-				failures.push({ path: attachment.path, error });
-			}
-		}
-		return failures;
-	}
-}
-
-function getErrorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

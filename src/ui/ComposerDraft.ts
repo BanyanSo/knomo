@@ -1,4 +1,5 @@
 import { buildQuoteCreatedMemoContent } from "../utils/references";
+import type { ComposerImageLink } from "./ComposerImageState";
 
 export interface ComposerDraftSnapshot {
 	content: string;
@@ -7,6 +8,7 @@ export interface ComposerDraftSnapshot {
 	anchor: number;
 	head: number;
 	scrollTop: number;
+	imageLinks?: readonly ComposerImageLink[];
 }
 
 export interface ComposerQuoteContext {

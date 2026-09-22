@@ -7,12 +7,14 @@ import type { ComposerEdit } from "../utils/composerCommands";
 import { isCjkMemoContent } from "./KnomoCardMetadata";
 import { t } from "../i18n";
 import { TreeFragment, type ChangedRange } from "@lezer/common";
+import { composerImageLinks, composerImageHistory } from "./ComposerImageState";
 
 declare global {
 	interface HTMLElementEventMap {
 		"composer-reset": Event;
 		"composer-change": CustomEvent<{ event: InputEvent | null; userInput: boolean; history: boolean }>;
 		"composer-compositionend": CustomEvent<CompositionEvent>;
+		"composer-transactions": CustomEvent<readonly Transaction[]>;
 	}
 }
 
@@ -253,6 +255,7 @@ export class ComposerEditor {
 				// 即使调用方绕过 transactionFilter，保存期间也不能修改正文。
 				if ((!this.enabled || this.saving) && transactions.some(tr => tr.docChanged)) return;
 				view.update(transactions);
+				view.contentDOM.dispatchEvent(new view.dom.ownerDocument.defaultView!.CustomEvent("composer-transactions", { detail: transactions }));
 				if (transactions.some(tr => tr.docChanged)) {
 					this.revision++;
 					const isNativeInput = transactions.some(tr => tr.isUserEvent("input.type"));
@@ -320,7 +323,7 @@ export class ComposerEditor {
 
 	private createState(doc: string, label: string, hint: string): EditorState {
 		return EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [
-			history(), this.editable.of(this.availabilityExtensions()),
+			history(), composerImageLinks, composerImageHistory, this.editable.of(this.availabilityExtensions()),
 			// 通过 facet 保留宿主类名，避免焦点切换时被 CodeMirror 重写。
 			EditorView.editorAttributes.of({ class: "knomo-composer-editor" }),
 			// Memo 是自然语言输入，覆盖代码编辑器默认关闭的系统纠错和联想能力。
@@ -345,7 +348,8 @@ export class ComposerEditor {
 				const selection = tr.newSelection.main;
 				const patch = getListEnterPatchForNativeInput(tr.startState.doc.toString(), tr.newDoc.toString(), selection.from, selection.to,
 					{ allowTextChangeWithNewline: true, allowInsertedMarkerCorrection: true });
-				return patch ? [tr, { changes: { from: 0, to: tr.newDoc.length, insert: patch.value },
+				// 保留未变正文的范围映射；整篇替换会误取消图片任务和链接校验记录。
+				return patch ? [tr, { changes: getMinimalTextChange(tr.newDoc.toString(), patch.value),
 					selection: { anchor: patch.cursor }, sequential: true }] : tr;
 			}),
 		] });
@@ -356,10 +360,7 @@ export class ComposerEditor {
 		const value = this.input.value;
 		if (value === edit.value) return false;
 		// 最小差异保留选区映射和输入法附近的 DOM，文本与选区只提交一次。
-		let from = 0, end = value.length, nextEnd = edit.value.length;
-		while (from < end && from < nextEnd && value[from] === edit.value[from]) from++;
-		while (end > from && nextEnd > from && value[end - 1] === edit.value[nextEnd - 1]) { end--; nextEnd--; }
-		this.view.dispatch({ changes: { from, to: end, insert: edit.value.slice(from, nextEnd) },
+		this.view.dispatch({ changes: getMinimalTextChange(value, edit.value),
 			selection: { anchor: edit.anchor, head: edit.head }, annotations: [Transaction.userEvent.of("input.toolbar"), isolateHistory.of("full")] });
 		return true;
 	}
@@ -405,7 +406,14 @@ export class ComposerEditor {
 		const win = this.input.ownerDocument.defaultView!;
 		return rect ? new win.DOMRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top) : null;
 	}
-	destroy(): void { if (this.disposed) return; this.disposed = true; this.session++; this.view.destroy(); }
+	destroy(): void { if (this.disposed) return; this.invalidateContext(); this.disposed = true; this.view.destroy(); }
+}
+
+function getMinimalTextChange(value: string, nextValue: string): { from: number; to: number; insert: string } {
+	let from = 0, end = value.length, nextEnd = nextValue.length;
+	while (from < end && from < nextEnd && value[from] === nextValue[from]) from++;
+	while (end > from && nextEnd > from && value[end - 1] === nextValue[nextEnd - 1]) { end--; nextEnd--; }
+	return { from, to: end, insert: nextValue.slice(from, nextEnd) };
 }
 
 export function applyComposerEdit(input: ComposerInput, value: string, anchor: number, head = anchor): boolean {

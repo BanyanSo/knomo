@@ -143,6 +143,9 @@ import { MobileSendPointerGuard } from "./MobileSendPointerGuard";
 import { MobileComposerController } from "./MobileComposerController";
 import { MobileNavbarCompactController } from "./MobileNavbarCompactController";
 import { NativeImagePickerController } from "./NativeImagePickerController";
+import { ComposerImageController, type ComposerImageCapture } from "./ComposerImageController";
+import { composerImageLinks, setComposerImageLinks, type ComposerImageLink } from "./ComposerImageState";
+import { validateComposerImages } from "./validateComposerImages";
 import { KnomoPopupState } from "./KnomoPopupState";
 import { RandomReunionController } from "./RandomReunionController";
 import { appendTimeBuoyItems, renderTimeBuoyPage } from "./TimeBuoyPage";
@@ -312,6 +315,9 @@ export class KnomoView extends ItemView {
 	private sendButtonEl: HTMLButtonElement | null = null;
 	private cancelEditButtonEl: HTMLButtonElement | null = null;
 	private statusEl: HTMLElement | null = null;
+	private imageStatusEl: HTMLElement | null = null;
+	private composerImages: ComposerImageController | null = null;
+	private draftImageLinks: readonly ComposerImageLink[] = [];
 	private referencePreviewEl: HTMLElement | null = null;
 	private composerEl: HTMLElement | null = null;
 	private composerBarEl: HTMLElement | null = null;
@@ -390,7 +396,7 @@ export class KnomoView extends ItemView {
 	private readonly mobileHeaderTitleController: MobileHeaderTitleController;
 	private readonly mobileImagePickerFocusGuard: MobileImagePickerFocusGuard;
 	private readonly mobileSendPointerGuard = new MobileSendPointerGuard({ getNow: () => Date.now() });
-	private readonly nativeImagePickerController: NativeImagePickerController<ReturnType<ComposerInput["composer"]["capture"]>>;
+	private readonly nativeImagePickerController: NativeImagePickerController<ComposerImageCapture>;
 	private readonly cardImageLoadQueue: CardImageLoadQueue;
 	private readonly cardImageCache = new MemoCardImageCache();
 	private readonly imageLoadPauseReasons = new Map<PausableImageLoadSurface, Set<ImageLoadPauseReason>>();
@@ -630,8 +636,9 @@ export class KnomoView extends ItemView {
 			}),
 			beginFocusGuard: () => this.beginMobileImagePickerFocusGuard(),
 			finishFocusGuard: (shouldRestoreFocus) => this.finishMobileImagePickerFocusGuard(shouldRestoreFocus),
-			captureContext: () => this.inputEl?.composer.capture(),
-			isContextCurrent: (context) => !this.trashViewClosed && !this.isSaving && this.composerOpen && (context?.sameSession() ?? false),
+			captureContext: () => this.composerImages?.capture(),
+			isContextCurrent: (context) => this.composerImages?.isCurrent(context) ?? false,
+			releaseContext: (context) => this.composerImages?.release(context),
 			insertImageFiles: (files, context) => this.insertImageFiles(files, context),
 		});
 		this.mobileSearchController = new MobileSearchController({
@@ -851,6 +858,7 @@ export class KnomoView extends ItemView {
 			getLayout: () => this.currentLayout,
 			isComposerOpen: () => this.composerOpen,
 			setComposerOpen: (open) => {
+				if (!open) this.composerImages?.cancelAll();
 				this.composerOpen = open;
 			},
 			getCardFlowScrollTop: () => this.getCardFlowScrollTop(),
@@ -1136,6 +1144,7 @@ export class KnomoView extends ItemView {
 		this.cancelPendingQuickCommand();
 		this.suspendedCreate = null;
 		this.draftContent = "";
+		this.draftImageLinks = [];
 		this.editingMemo = null;
 		this.quoteReferenceText = null;
 		this.quoteMarkdownText = null;
@@ -1286,6 +1295,7 @@ export class KnomoView extends ItemView {
 		if (this.trashViewClosed) return;
 		if (this.isSaving) { this.composerRenderPending = true; return; }
 		this.draftContent = this.inputEl?.value ?? this.draftContent;
+		this.draftImageLinks = this.inputEl?.composer.view.state.field(composerImageLinks) ?? this.draftImageLinks;
 		const selection = this.inputEl?.composer.view.state.selection.main;
 		const scrollTop = this.inputEl?.composer.view.scrollDOM.scrollTop ?? 0;
 		this.memos = [];
@@ -1476,7 +1486,19 @@ export class KnomoView extends ItemView {
 		this.composerBarEl = composer.composerBarEl;
 		this.cancelEditButtonEl = composer.cancelEditButtonEl;
 		this.statusEl = composer.statusEl;
+		this.imageStatusEl = composer.imageStatusEl;
 		this.sendButtonEl = composer.sendButtonEl;
+		composer.inputEl.composer.view.dispatch({ effects: setComposerImageLinks.of(this.draftImageLinks) });
+		const images = this.createComposerImageController(composer.inputEl);
+		this.composerImages = images;
+		this.getRenderScope().register(() => images.dispose());
+		this.getRenderScope().registerDomEvent(composer.cancelImagesButtonEl, "pointerdown", event => event.preventDefault());
+		this.getRenderScope().registerDomEvent(composer.cancelImagesButtonEl, "click", event => {
+			event.stopPropagation();
+			const restoreFocus = composer.cancelImagesButtonEl.ownerDocument.activeElement === composer.cancelImagesButtonEl;
+			images.cancelAll();
+			if (restoreFocus && !composer.inputEl.composer.composing) composer.inputEl.composer.view.focus();
+		});
 		this.getRenderScope().registerDomEvent(composer.composerEl, "click", (event) => {
 			if (this.isMobileComposerLayered()) {
 				void this.handleRootClick(event);
@@ -3935,6 +3957,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeOpenChromeFromEscape(): void {
+		this.composerImages?.cancelAll();
 		this.closeCardMenu();
 		this.scopeMenuOpen = false;
 		this.desktopSearchOpen = false;
@@ -4203,6 +4226,7 @@ export class KnomoView extends ItemView {
 		if (this.trashViewClosed || this.inputEl === null || this.inputEl.disabled || this.isSaving) {
 			return;
 		}
+		if (this.composerImages?.pending) { this.updateSendButtonState(); return; }
 		if (this.composerIsComposing || this.inputEl.composer.composing) { new Notice(t("composer.finishComposition")); return; }
 		this.closeTimeBuoyPicker(false);
 
@@ -4218,6 +4242,8 @@ export class KnomoView extends ItemView {
 		}
 		const isMobileSave = this.currentLayout === "mobile";
 		const submittedEditor = this.inputEl;
+		const imageLinks = this.composerImages?.editor.view.state.field(composerImageLinks) ?? [];
+		const validateImageSource = imageLinks.length ? (path: string) => validateComposerImages(this.app, imageLinks, path) : undefined;
 		this.inputEl.composer.setSaving(true);
 		const submittedContext = this.inputEl.composer.capture();
 		const submittedEditingMemo = this.editingMemo;
@@ -4259,9 +4285,10 @@ export class KnomoView extends ItemView {
 				operation = this.memoCommandService.startEdit(
 					await this.resolveCatalogMemo(preparedInput.previousMemo),
 					preparedInput.content,
+					validateImageSource,
 				);
 			} else {
-				operation = this.memoCommandService.startCreate(preparedInput.content);
+				operation = this.memoCommandService.startCreate(preparedInput.content, validateImageSource);
 			}
 			// 两阶段可以同时拒绝；立即监听后续阶段，避免等待 Daily 时出现未处理拒绝。
 			void operation.settled.catch(() => undefined);
@@ -4734,6 +4761,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeComposerKeepingDraft(): void {
+		this.composerImages?.cancelAll();
 		this.closeTimeBuoyPicker(false);
 		if (this.currentLayout === "mobile") {
 			this.closeMobileComposerKeepingDraft();
@@ -4750,6 +4778,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeMobileComposerKeepingDraft(): void {
+		this.composerImages?.cancelAll();
 		this.closeTimeBuoyPicker(false);
 		this.tagSuggest?.close();
 		this.wikiLinkSuggest?.close();
@@ -4829,6 +4858,7 @@ export class KnomoView extends ItemView {
 		this.draftContent = draft?.content ?? "";
 		if (this.inputEl !== null) {
 			this.inputEl.value = this.draftContent;
+			this.inputEl.composer.view.dispatch({ effects: setComposerImageLinks.of(draft?.imageLinks ?? []) });
 			if (draft) {
 				this.inputEl.setSelectionRange(Math.min(draft.anchor, draft.head), Math.max(draft.anchor, draft.head), draft.anchor > draft.head ? "backward" : "forward");
 				this.inputEl.composer.view.scrollDOM.scrollTop = draft.scrollTop;
@@ -4856,6 +4886,7 @@ export class KnomoView extends ItemView {
 		const selection = this.inputEl?.composer.view.state.selection.main;
 		this.suspendedCreate = {
 			content: this.inputEl?.value ?? this.draftContent,
+			imageLinks: this.inputEl?.composer.view.state.field(composerImageLinks) ?? [],
 			referenceText: this.quoteReferenceText, markdownText: this.quoteMarkdownText,
 			anchor: selection?.anchor ?? 0, head: selection?.head ?? 0,
 			scrollTop: this.inputEl?.composer.view.scrollDOM.scrollTop ?? 0,
@@ -5688,11 +5719,13 @@ export class KnomoView extends ItemView {
 		if (this.inputEl === null || this.sendButtonEl === null) {
 			return;
 		}
+		const imagesPending = this.composerImages?.pending ?? false;
+		this.imageStatusEl?.toggleAttribute("hidden", !imagesPending);
 		this.sendButtonEl.disabled =
-			this.isSaving || this.inputEl.disabled || this.inputEl.value.trim().length === 0;
-		const label = this.isSaving ? t("composer.saving") : this.editingMemo !== null ? t("composer.save") : t("composer.send");
+			this.isSaving || imagesPending || this.inputEl.disabled || this.inputEl.value.trim().length === 0;
+		const label = imagesPending ? t("composer.imagesPending") : this.isSaving ? t("composer.saving") : this.editingMemo !== null ? t("composer.save") : t("composer.send");
 		this.sendButtonEl.setAttr("aria-label", label);
-		this.sendButtonEl.setAttr("aria-busy", String(this.isSaving));
+		this.sendButtonEl.setAttr("aria-busy", String(this.isSaving || imagesPending));
 		this.sendButtonEl.toggleClass("is-saving", this.isSaving);
 		setIcon(this.sendButtonEl, this.isSaving ? "loader-circle" : this.editingMemo !== null ? "check" : "send");
 		for (const button of Array.from(this.composerEl?.querySelectorAll<HTMLButtonElement>(".knomo-tool-button, .knomo-reference-clear, .knomo-cancel-edit-button") ?? [])) {
@@ -6478,39 +6511,27 @@ export class KnomoView extends ItemView {
 		await this.app.workspace.openLinkText(linkInfo.linktext, linkInfo.sourcePath, Keymap.isModEvent(event));
 	}
 
-	private async insertImageFiles(files: FileList | null, context = this.inputEl?.composer.capture()): Promise<void> {
-		const input = this.inputEl;
-		if (this.isSaving || input?.disabled || this.trashViewClosed) return;
-		if (files === null || files.length === 0) {
-			return;
-		}
-		try {
-			const sourcePath = this.getAttachmentSourcePath();
-			if (sourcePath === null) {
-				return;
-			}
-			if (!input || !context?.valid()) { new Notice(t("composer.asyncChanged")); return; }
-			const links = await this.attachmentService.createImageEmbedLinks(sourcePath, Array.from(files));
-			if (this.isSaving || this.inputEl !== input || !context.valid() || input.composer.composing) { new Notice(t("composer.asyncChanged")); return; }
-			const from = Math.min(context.anchor, context.head), to = Math.max(context.anchor, context.head);
-			const text = links.join("\n");
-			applyComposerEdit(input, input.value.slice(0, from) + text + input.value.slice(to), from + text.length);
-		} catch (error) {
-			const message = formatServiceError(error, t("error.imageInsertFailed"));
-			if (!this.trashViewClosed && this.inputEl === input && context?.sameSession()) this.updateStatus(message, true);
-			new Notice(message);
-		}
+	private createComposerImageController(input: ComposerInput): ComposerImageController {
+		return new ComposerImageController(input.composer, {
+			attachments: this.attachmentService,
+			getSourcePath: () => this.getImageSourcePath(),
+			// 桌面输入框常驻，只有移动端弹层依赖打开状态。
+			canInsert: () => !this.trashViewClosed && !this.isSaving
+				&& (this.currentLayout !== "mobile" || this.composerOpen) && this.inputEl === input,
+			onPendingChanged: () => { if (!this.trashViewClosed && this.inputEl === input) this.updateSendButtonState(); },
+			onError: message => { if (!this.trashViewClosed) new Notice(message); },
+		});
 	}
 
-	private getAttachmentSourcePath(): string | null {
-		const sourcePath = this.getComposerSourcePath();
-		if (sourcePath !== null) {
-			return sourcePath;
-		}
-		const message = t("composer.enableDailyOrOpenMarkdown");
-		this.updateStatus(message, true);
-		new Notice(message);
-		return null;
+	private async insertImageFiles(files: FileList | null, context?: ComposerImageCapture): Promise<void> {
+		if (!files || !context || !this.composerImages) return;
+		await this.composerImages.insert(Array.from(files), context);
+	}
+
+	private getImageSourcePath(): string | null {
+		if (!this.getDailyNotesStatus().enabled || !this.isComposerCreationAvailable()) return null;
+		if (this.editingMemo && !(this.app.vault.getAbstractFileByPath(this.editingMemo.dailyRef.path) instanceof TFile)) return null;
+		return this.editingMemo?.dailyRef.path ?? this.getTodayDailyNotePath();
 	}
 
 	private getWikiLinkSourcePath(): string {

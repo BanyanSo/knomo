@@ -3,6 +3,17 @@ import assert from "node:assert/strict";
 
 import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
 
+test("unavailable picker context never opens the file dialog or starts a focus guard", () => {
+	const calls: string[] = [];
+	const picker = new NativeImagePickerController({
+		captureContext: () => undefined,
+		createInput: () => { calls.push("input"); return new FakeInput(new FakeScheduler()).asNativeInput(); },
+		beginFocusGuard: () => { calls.push("guard"); return true; },
+		finishFocusGuard: () => undefined, insertImageFiles: async () => undefined,
+	});
+	try { picker.open(); assert.deepEqual(calls, []); } finally { picker.dispose(); }
+});
+
 test("image picker captures context before selection and never substitutes a later context", async () => {
 	const input = new FakeInput(new FakeScheduler());
 	input.files = { length: 1 } as FileList;
@@ -332,3 +343,19 @@ class FakeScheduler {
 		callback();
 	}
 }
+
+test("picker context is released on cancel and disposal", () => {
+	for (const cancel of [true, false]) {
+		const input = new FakeInput(new FakeScheduler());
+		const context = { id: "original" };
+		const released: unknown[] = [];
+		const controller = new NativeImagePickerController({
+			createInput: () => input.asNativeInput(), beginFocusGuard: () => false, finishFocusGuard: () => undefined,
+			captureContext: () => context, releaseContext: value => released.push(value), insertImageFiles: async () => undefined,
+		});
+		controller.open();
+		if (cancel) input.emit("cancel");
+		controller.dispose();
+		assert.deepEqual(released, [context]);
+	}
+});

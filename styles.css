@@ -2214,6 +2214,23 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-error);
 }
 
+/* 图片处理状态与取消入口 */
+.knomo-plugin .knomo-image-status:not([hidden]) {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 4px;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-image-status {
+	flex: 0 0 auto;
+	padding: 0 16px 12px;
+}
+
 /* Send button */
 .knomo-plugin .knomo-send-button {
 	display: inline-flex;

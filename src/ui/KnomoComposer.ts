@@ -16,6 +16,8 @@ export interface KnomoComposerElements {
 	timeBuoyMonthStatusEl: HTMLElement | null;
 	cancelEditButtonEl: HTMLButtonElement;
 	statusEl: HTMLElement;
+	imageStatusEl: HTMLElement;
+	cancelImagesButtonEl: HTMLButtonElement;
 	sendButtonEl: HTMLButtonElement;
 }
 
@@ -96,6 +98,9 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 	const statusEl = composerEl.createDiv({
 		cls: options.dailyEnabled ? "knomo-status" : "knomo-status is-error",
 	});
+	const imageStatusEl = composerEl.createDiv({ cls: "knomo-image-status", attr: { hidden: "", role: "status", "aria-live": "polite" } });
+	imageStatusEl.createSpan({ text: t("composer.imagesPending") });
+	const cancelImagesButtonEl = imageStatusEl.createEl("button", { text: t("composer.cancelImages"), attr: { type: "button" } });
 	const sendButtonEl = actions.createEl("button", {
 		cls: "knomo-send-button",
 		attr: {
@@ -116,6 +121,8 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 		timeBuoyMonthStatusEl,
 		cancelEditButtonEl,
 		statusEl,
+		imageStatusEl,
+		cancelImagesButtonEl,
 		sendButtonEl,
 	};
 }

@@ -46,7 +46,7 @@ function preservesCompositionSyntax(tr: Transaction, syntax: ComposerSyntax): bo
 	tr.changes.iterChanges((from, to, fromB, _toB, inserted) => {
 		const removed = tr.startState.sliceDoc(from, to);
 		const changedText = removed + inserted.toString();
-		if (/[\r\n\t\\`*_~=$%<>\[\]{}#!|:+.\-]/u.test(changedText)) { safe = false; return; }
+		if (/[\r\n\t\\`*_~=$%<>[\]{}#!|:+.-]/u.test(changedText)) { safe = false; return; }
 		const line = tr.startState.doc.lineAt(from);
 		const nextLine = tr.newDoc.lineAt(fromB);
 		const list = syntax.ranges.find(r => r.list && tr.startState.doc.lineAt(r.from).from === line.from);
@@ -57,7 +57,7 @@ function preservesCompositionSyntax(tr: Transaction, syntax: ComposerSyntax): bo
 			|| /^[\t ]*/u.exec(line.text)![0] !== /^[\t ]*/u.exec(nextLine.text)![0]
 			|| changedText.includes(" ") && /[^ \p{L}\p{M}\p{N}]/u.test(neighbors)
 			|| !list && /^[\t ]*\d+[.)](?:\s|$)/u.test(nextLine.text)
-			|| /[\\<>\[\]*_~=$%]/u.test(neighbors)
+			|| /[\\<>[\]*_~=$%]/u.test(neighbors)
 			|| syntax.contexts.some(n => n.type === "HTMLTag" && from >= n.from && to <= n.to)
 			|| syntax.ranges.some(r => r.markers.some(m => from === to ? from > m.from && from < m.to : from < m.to && to > m.from))) safe = false;
 	});
@@ -223,11 +223,15 @@ const decorationsField = StateField.define<DecorationSet>({
 		if (tr.state.field(composingField)) {
 			const { safeUntil, syntax } = tr.state.field(syntaxField);
 			const revealed = syntax.ranges.filter(r => revealComposerRange(r, tr.state.selection.ranges));
-			return previous.map(tr.changes).update({ filter: (from, to, decoration) => from < safeUntil && to <= safeUntil
+			return previous.map(tr.changes).update({ filter: (from, to, decoration) => {
+				const spec: unknown = decoration.spec;
+				const isProse = typeof spec === "object" && spec !== null && "class" in spec && spec.class === "knomo-composer-prose";
+				return from < safeUntil && to <= safeUntil
 				&& !revealed.some(r => from === to
 					? r.list && tr.state.doc.lineAt(r.from).from === from
-						|| decoration.spec.class === "knomo-composer-prose" && r.from < tr.state.doc.lineAt(from).to && r.to > from
-					: from < r.to && to > r.from) });
+						|| isProse && r.from < tr.state.doc.lineAt(from).to && r.to > from
+					: from < r.to && to > r.from);
+			} });
 		}
 		if (!tr.docChanged && !tr.selection && !tr.reconfigured && !tr.effects.some(effect => effect.is(composingEffect) || effect.is(contextEffect))) return previous;
 		return decorations(tr.state);

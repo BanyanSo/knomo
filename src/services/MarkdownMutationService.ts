@@ -602,7 +602,7 @@ function findHeadingOffsets(content: string, observations: readonly MemoObservat
 	let observationIndex = 0;
 	for (let lineIndex = 0; lineIndex < starts.length; lineIndex += 1) {
 		// Parser 是 Memo 行归属的唯一事实来源；有序区间只前进一次。
-		while (observationIndex < observations.length && observations[observationIndex]!.endLine < lineIndex) observationIndex += 1;
+		while (observationIndex < observations.length && observations[observationIndex].endLine < lineIndex) observationIndex += 1;
 		const observation = observations[observationIndex];
 		if (observation !== undefined && observation.startLine <= lineIndex) {
 			lineIndex = observation.endLine;

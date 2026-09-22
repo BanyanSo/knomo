@@ -188,7 +188,7 @@ export function scanComposerSyntax(text: string, fragments: readonly TreeFragmen
 		const raw = text.slice(from + match[0].length, close);
 		const pipe = raw.indexOf("|");
 		links.push({ from, to });
-		if (match[0].startsWith("!") || !raw.trim() || /[\[\]\\]/u.test(raw)
+		if (match[0].startsWith("!") || !raw.trim() || /[[\]\\]/u.test(raw)
 			|| pipe >= 0 && (!raw.slice(0, pipe).trim() || !raw.slice(pipe + 1).trim() || raw.indexOf("|", pipe + 1) >= 0)) {
 			extensionSources.push({ from, to }); continue;
 		}

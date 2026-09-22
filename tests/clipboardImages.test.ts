@@ -75,6 +75,17 @@ test("clipboard filenames cannot introduce paths or invalid Windows names", () =
 	}
 });
 
+test("clipboard filenames replace every ASCII control character and preserve adjacent Unicode", () => {
+	for (const code of [...Array.from({ length: 32 }, (_, index) => index), 127]) {
+		const result = classifyClipboardImages(data(["image/png"], "", "", false, [`图${String.fromCharCode(code)}😀.png`]));
+		assert.equal(result.type, "images");
+		if (result.type === "images") assert.equal(result.files[0].name, "图_😀.png", `control ${code}`);
+	}
+	const result = classifyClipboardImages(data(["image/png"], "", "", false, ["图 ~😀.png"]));
+	if (result.type !== "images") assert.fail("Expected image input");
+	assert.equal(result.files[0].name, "图 ~😀.png");
+});
+
 test("same-name clipboard images retain separate inputs for host collision handling", () => {
 	const result = classifyClipboardImages(data(["image/png", "image/png"], "", "", false, ["照片.png", "照片.png"]));
 	assert.equal(result.type, "images");

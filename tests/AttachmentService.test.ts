@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AttachmentBatchError, AttachmentService } from "../src/services/AttachmentService";
+import { classifyClipboardImages } from "../src/ui/clipboardImages";
 
 function file(name: string, content = "image") {
 	return { name, size: content.length, arrayBuffer: async () => new TextEncoder().encode(content).buffer };
@@ -30,6 +31,26 @@ function fixture() {
 	return { service, disk, paths, setCreate: (value: typeof create) => { create = value; },
 		setGenerate: (value: typeof generate) => { generate = value; }, setAvailable: (value: typeof available) => { available = value; } };
 }
+
+test("named clipboard images reach host allocation separately and keep valid embed links", async () => {
+	for (const markdown of [false, true]) {
+		const f = fixture();
+		const name = "旅行_1_.png";
+		f.setAvailable(candidate => f.disk.has(`Attachments/${candidate}`) ? `Attachments/旅行_1_ 1.png` : `Attachments/${candidate}`);
+		if (markdown) f.setGenerate(path => `[](<${path}>)`);
+		const inputs = [file("旅行[1].png", "first"), file("旅行[1].png", "second")];
+		const decision = classifyClipboardImages({ getData: () => "", items: inputs.map(input => ({
+			kind: "file", type: "image/png", getAsFile: () => input,
+		})) } as unknown as DataTransfer);
+		assert.equal(decision.type, "images");
+		if (decision.type !== "images") return;
+		const results = await f.service.createImageEmbedLinks("Daily/today.md", decision.files);
+		assert.deepEqual(results.map(item => item.path), [`Attachments/${name}`, "Attachments/旅行_1_ 1.png"]);
+		assert.equal(new TextDecoder().decode(f.disk.get(results[0].path)), "first");
+		assert.equal(new TextDecoder().decode(f.disk.get(results[1].path)), "second");
+		assert.deepEqual(results.map(item => item.link), results.map(item => markdown ? `![](<${item.path}>)` : `![[${item.path}]]`));
+	}
+});
 
 test("attachments preserve bytes and source, order, and exactly one embed prefix", async () => {
 	for (const markdown of [false, true]) {

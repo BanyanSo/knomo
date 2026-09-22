@@ -1,16 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM, VirtualConsole } from "jsdom";
-import { Transaction } from "@codemirror/state";
-import { redo, undo, undoDepth } from "@codemirror/commands";
+import { EditorSelection, EditorState, StateEffect, Transaction } from "@codemirror/state";
+import { cursorCharLeft, cursorCharRight, cursorLineStart, cursorLineEnd, deleteCharBackward, deleteCharForward, redo, undo, undoDepth } from "@codemirror/commands";
 import { ComposerEditor } from "../src/ui/ComposerEditor";
 import { runComposerCommand } from "../src/utils/composerCommands";
 import { registerComposerToolGesture } from "../src/ui/ComposerToolGesture";
-import { parser } from "@lezer/markdown";
+import { composerParser as parser } from "../src/utils/composerSyntax";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
+import { ComposerImageController, type ComposerImageCapture } from "../src/ui/ComposerImageController";
+import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
+import { composerImageLinks } from "../src/ui/ComposerImageState";
+import { AttachmentService, type ImageAttachment } from "../src/services/AttachmentService";
 
 function environment(value: string) {
-	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true });
+	const errors: Error[] = [];
+	const virtualConsole = new VirtualConsole();
+	virtualConsole.on("jsdomError", error => errors.push(error));
+	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true, virtualConsole });
 	const win = dom.window;
 	Object.assign(win.Node.prototype, { createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); } });
 	// jsdom 没有原生布局 API；让 CodeMirror 的测量临时节点能正常完成清理。
@@ -29,6 +37,7 @@ function environment(value: string) {
 			if (descriptor) Object.defineProperty(globalThis, name, descriptor);
 			else Reflect.deleteProperty(globalThis, name);
 		}
+		assert.deepEqual(errors, [], "DOM 事件异常必须使测试失败");
 	} };
 }
 
@@ -111,7 +120,7 @@ test("rendered elements use semantic Markdown and native checkbox styling withou
 		assert.equal(checkboxes.length, 2);
 		assert.equal(checkboxes[0].checked, false);
 		assert.equal(checkboxes[1].checked, true);
-		assert.equal(checkboxes[0].tabIndex, -1);
+		assert.equal(checkboxes[0].tabIndex, 0);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-list-line").length, 4);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-task-line.is-checked").length, 1);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-bullet-marker ul > li").length, 1);
@@ -122,11 +131,9 @@ test("rendered elements use semantic Markdown and native checkbox styling withou
 		assert.equal(editor.input.querySelector("mark")?.textContent, "高亮");
 		assert.equal(editor.input.querySelector("a.internal-link")?.textContent, "链接");
 		assert.equal(editor.input.querySelector("a.internal-link")?.hasAttribute("href"), false);
-		checkboxes[0].click();
-		assert.equal(checkboxes[0].checked, false);
 		checkboxes[0].dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
-		assert.equal(editor.input.selectionStart, 0);
-		assert.equal(editor.input.querySelectorAll("input.task-list-item-checkbox").length, 1);
+		assert.equal(editor.input.selectionStart, value.length);
+		assert.equal(editor.input.querySelectorAll("input.task-list-item-checkbox").length, 2);
 		assert.equal(editor.input.value, value);
 		assert.equal(undoDepth(editor.view.state), 0);
 		editor.input.setSelectionRange(value.length, value.length);
@@ -163,7 +170,7 @@ test("real decorations reveal locally without editing Markdown or selection or u
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-bold").length, 1);
 		assert.equal(editor.input.querySelectorAll(".knomo-composer-marker").length, 1);
 		editor.input.setSelectionRange(6, 6);
-		assert.equal(editor.input.querySelectorAll(".knomo-composer-marker").length, 0);
+		assert.equal(editor.input.querySelectorAll(".knomo-composer-marker").length, 1);
 		assert.equal(editor.input.value, value);
 		assert.equal(editor.input.selectionStart, 6);
 		assert.equal(undoDepth(editor.view.state), 0);
@@ -228,11 +235,12 @@ test("composition defers Markdown parsing until native input settles", async t =
 				selection: { anchor: 9 + text.length }, annotations: Transaction.userEvent.of("input.type.compose") });
 		}
 		assert.equal(parse.mock.callCount(), 0, "preedit changes must not parse the full draft");
-		assert.equal(editor.input.querySelector("strong")?.textContent, "bold");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "bold", "普通候选文字不能撤销前文装饰");
 		editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { data: "你" }));
 		await new Promise(resolve => setTimeout(resolve, 80));
 		assert.equal(parse.mock.callCount(), 1);
 		assert.equal(editor.input.value, "**bold**\n你");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "bold");
 		assert.equal(editor.composing, false);
 	} finally { parse.mock.restore(); close(); }
 });
@@ -518,4 +526,879 @@ test("IME 的 229 确认键即使没有 isComposing 也不进入快捷键", () =
 		editor.input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "a", bubbles: true }));
 		assert.equal(shortcuts, 1);
 	} finally { close(); }
+});
+
+test("saving freezes native and programmatic changes while retaining selection and history", () => {
+	const { editor, close } = environment("draft");
+	try {
+		editor.apply({ value: "draft!", anchor: 6, head: 6 });
+		const pending = editor.capture();
+		editor.setSaving(true);
+		assert.equal(pending.sameSession(), false);
+		assert.equal(editor.input.disabled, false);
+		assert.equal(editor.input.getAttribute("aria-readonly"), "true");
+		for (const event of ["input.type", "input.paste", "input.drop", "input.toolbar"]) {
+			editor.view.dispatch({ changes: { from: 0, insert: "bad" }, annotations: Transaction.userEvent.of(event) });
+			assert.equal(editor.input.value, "draft!");
+		}
+		editor.view.dispatch({ changes: { from: 0, insert: "bad" }, filter: false });
+		undo(editor.view); redo(editor.view);
+		assert.equal(editor.apply({ value: "bad", anchor: 0, head: 0 }), false);
+		assert.equal(editor.input.value, "draft!");
+		editor.input.setSelectionRange(0, 5);
+		assert.equal(editor.view.state.sliceDoc(editor.input.selectionStart, editor.input.selectionEnd), "draft");
+		editor.setSaving(false);
+		undo(editor.view);
+		assert.equal(editor.input.value, "draft");
+		editor.input.disabled = true;
+		editor.setSaving(true); editor.setSaving(false);
+		assert.equal(editor.input.disabled, true);
+		assert.equal(editor.apply({ value: "bad", anchor: 0, head: 0 }), false);
+	} finally { close(); }
+});
+
+test("CJK threshold changes with body and waits until composition settles", async () => {
+	const { editor, win, close } = environment("中文");
+	try {
+		assert.equal(editor.input.getAttribute("data-cjk"), "false");
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.view.dispatch({ changes: { from: 2, insert: "这是中文测试文本" }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.equal(editor.input.getAttribute("data-cjk"), "false");
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+		await new Promise(resolve => setTimeout(resolve, 80));
+		assert.equal(editor.input.getAttribute("data-cjk"), "true");
+		editor.input.setSelectionRange(0, 2);
+		assert.equal(editor.input.getAttribute("data-cjk"), "true");
+	} finally { close(); }
+});
+
+test("every supported fixture keeps source through decoration, selection, paste and undo", () => {
+	for (const fixture of composerMarkdownFixtures) {
+		const value = fixture.text.replace(/\r\n/g, "\n");
+		const { editor, close } = environment(value + "\n\nend");
+		try {
+			for (let pos = 0; pos <= value.length; pos++) {
+				editor.input.setSelectionRange(pos, pos);
+				assert.equal(editor.input.selectionStart, pos, fixture.name);
+				assert.equal(editor.input.value, value + "\n\nend");
+			}
+			assert.equal(undoDepth(editor.view.state), 0);
+			editor.input.setSelectionRange(0, value.length, "backward");
+			assert.equal(editor.view.state.sliceDoc(editor.input.selectionStart, editor.input.selectionEnd), value);
+			editor.view.dispatch({ changes: { from: 0, to: value.length, insert: "replacement" }, annotations: Transaction.userEvent.of("input.paste") });
+			undo(editor.view);
+			assert.equal(editor.input.value, value + "\n\nend");
+			assert.equal(editor.input.selectionDirection, "backward");
+		} finally { close(); }
+	}
+});
+
+test("marker click, character keys, Home/End and reversed marker deletion address actual source", () => {
+	const value = "1. first\n1. second\nend";
+	const { editor, win, close } = environment(value);
+	try {
+		assert.deepEqual(Array.from(editor.input.querySelectorAll("ol"), n => n.start), [1, 2]);
+		const marker = editor.input.querySelectorAll<HTMLElement>(".knomo-composer-marker")[1];
+		marker.dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+		assert.equal(editor.input.selectionStart, 11);
+		assert.equal(editor.input.querySelectorAll("ol").length, 1);
+		cursorCharRight(editor.view);
+		assert.equal(editor.input.selectionStart, 12);
+		assert.deepEqual(Array.from(editor.input.querySelectorAll("ol"), n => n.start), [1, 2]);
+		cursorCharLeft(editor.view);
+		assert.equal(editor.input.selectionStart, 11);
+		cursorLineStart(editor.view); assert.equal(editor.input.selectionStart, 9);
+		cursorLineEnd(editor.view); assert.equal(editor.input.selectionStart, 18);
+		editor.input.setSelectionRange(9, 11, "backward");
+		assert.equal(editor.view.state.sliceDoc(9, 11), "1.");
+		deleteCharBackward(editor.view);
+		assert.equal(editor.input.value, "1. first\n second\nend");
+		undo(editor.view); assert.equal(editor.input.value, value);
+		assert.equal(editor.input.selectionDirection, "backward");
+		deleteCharForward(editor.view); assert.equal(editor.input.value, "1. first\n second\nend");
+	} finally { close(); }
+});
+
+test("checkbox pointer/click and Space change one draft character with exact X undo", () => {
+	const { editor, win, close } = environment("+ [X] task\nend");
+	try {
+		const checkbox = () => editor.input.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+		assert.equal(checkbox().checked, true);
+		assert.ok(checkbox().getAttribute("aria-label")?.includes("task"));
+		assert.equal(checkbox().closest('[aria-hidden="true"]'), null);
+		checkbox().dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+		assert.equal(editor.input.value, "+ [X] task\nend");
+		checkbox().click();
+		assert.equal(editor.input.value, "+ [ ] task\nend");
+		assert.equal(checkbox().checked, false);
+		assert.equal(undoDepth(editor.view.state), 1);
+		undo(editor.view); assert.equal(editor.input.value, "+ [X] task\nend");
+		redo(editor.view); assert.equal(editor.input.value, "+ [ ] task\nend");
+		checkbox().focus();
+		checkbox().dispatchEvent(new win.KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+		assert.equal(editor.input.value, "+ [x] task\nend");
+		assert.equal(win.document.activeElement, checkbox());
+		assert.equal(undoDepth(editor.view.state), 2);
+		checkbox().dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
+		assert.equal(editor.input.selectionStart, 5);
+		assert.equal(editor.input.querySelector("input[type=checkbox]"), null);
+	} finally { close(); }
+});
+
+test("checkbox refuses stale widgets, changed contexts, saving, readonly and composition", async () => {
+	const value = "- [ ] task\nend";
+	const { editor, win, close } = environment(value);
+	try {
+		const checkbox = () => editor.input.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+		for (const boundary of ["reset", "context", "changed", "saving", "readonly", "composition"]) {
+			editor.reset(value);
+			const old = checkbox();
+			if (boundary === "reset") editor.reset(value);
+			if (boundary === "context") editor.invalidateContext();
+			if (boundary === "changed") editor.view.dispatch({ changes: { from: 6, to: 10, insert: "new" } });
+			if (boundary === "saving") editor.setSaving(true);
+			if (boundary === "readonly") editor.input.disabled = true;
+			if (boundary === "composition") editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			const before = editor.input.value;
+			old.click(); assert.equal(editor.input.value, before, boundary);
+			if (["saving", "readonly", "composition"].includes(boundary)) {
+				checkbox().click(); assert.equal(editor.input.value, before, boundary);
+			}
+			if (boundary === "saving") editor.setSaving(false);
+			if (boundary === "readonly") editor.input.disabled = false;
+			if (boundary === "composition") {
+				editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+				await new Promise(resolve => setTimeout(resolve, 80));
+			}
+		}
+	} finally { close(); }
+});
+
+test("focused checkbox handles history keyboard events without leaving the draft", () => {
+	const { editor, win, close } = environment("- [X] task\n\nend");
+	const checkbox = () => editor.input.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+	const key = (name: string, modifiers: KeyboardEventInit = {}) => {
+		const event = new win.KeyboardEvent("keydown", { key: name, keyCode: name.toUpperCase().charCodeAt(0), bubbles: true, cancelable: true, ...modifiers });
+		checkbox().dispatchEvent(event);
+		return event;
+	};
+	try {
+		checkbox().focus(); key(" ");
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+		assert.equal(key("z", { ctrlKey: true }).defaultPrevented, true);
+		assert.equal(editor.input.value, "- [X] task\n\nend");
+		assert.equal(win.document.activeElement, checkbox());
+		assert.equal(key("y", { ctrlKey: true }).defaultPrevented, true);
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+		key(" ", { repeat: true });
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+		editor.setSaving(true);
+		key("z", { ctrlKey: true });
+		assert.equal(editor.input.value, "- [ ] task\n\nend");
+	} finally { close(); }
+});
+
+test("ordinary IME text preserves list widgets and unrelated inline decoration through preedit", async () => {
+	for (const initial of ["- [ ] 正文", "1. 正文", "- ", "普通正文"]) {
+		const value = initial + "\n\n**后文**";
+		const { editor, win, close } = environment(value);
+		try {
+			editor.input.setSelectionRange(initial.length, initial.length);
+			const marker = editor.input.querySelector(".knomo-composer-marker");
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			let end = initial.length;
+			for (const text of ["n", "ni hao", "你好，世界😀"]) {
+				editor.view.dispatch({ changes: { from: initial.length, to: end, insert: text }, selection: { anchor: initial.length + text.length }, annotations: Transaction.userEvent.of("input.type.compose") });
+				end = initial.length + text.length;
+				assert.equal(editor.input.querySelector(".knomo-composer-marker"), marker, initial);
+				assert.equal(editor.input.querySelector("strong")?.textContent, "后文");
+				assert.equal(editor.input.value, initial + text + "\n\n**后文**");
+			}
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+			await new Promise(resolve => setTimeout(resolve, 80));
+			assert.equal(editor.input.querySelector("strong")?.textContent, "后文");
+			undo(editor.view); assert.equal(editor.input.value, value);
+		} finally { close(); }
+	}
+});
+
+test("IME boundary edits remain unsafe after earlier mapped prose changes", () => {
+	const { editor, win, close } = environment("- 正文\n\n**后文**\nend");
+	try {
+		editor.input.setSelectionRange(4, 4);
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.view.dispatch({ changes: { from: 4, insert: "你好" }, selection: { anchor: 6 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.ok(editor.input.querySelector("strong"));
+		editor.view.dispatch({ changes: { from: 0, to: 2, insert: "```\n" }, selection: { anchor: 4 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.equal(editor.input.querySelector("strong, .knomo-composer-marker"), null);
+		assert.equal(editor.composing, true);
+	} finally { close(); }
+});
+
+test("selection-only changes reuse parsing and safe CJK lines lose justify on source reveal", t => {
+	const value = "普通中文正文测试内容\n**中文加粗正文测试**\n\n- 中文列表测试\n\n混合 `code` 中文正文\nhttps://x\n\nend";
+	const { editor, close } = environment(value);
+	const parse = t.mock.method(parser, "parse");
+	try {
+		assert.equal(editor.input.querySelectorAll(".knomo-composer-prose").length, 3);
+		editor.input.setSelectionRange(value.indexOf("加粗"), value.indexOf("加粗"));
+		assert.equal(editor.input.querySelectorAll(".knomo-composer-prose").length, 2);
+		for (let pos = 0; pos < value.length; pos++) editor.input.setSelectionRange(pos, pos);
+		assert.equal(parse.mock.callCount(), 0);
+	} finally { parse.mock.restore(); close(); }
+});
+
+test("IME boundary changes remove invalid hiding before parsing without changing composition or history", async t => {
+	for (const initial of ["**bold**\nend", "[[Note|Alias]]\nend", "- [ ] task\nend"]) {
+		const { editor, win, close } = environment(initial);
+		const parse = t.mock.method(parser, "parse");
+		try {
+			editor.view.focus();
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			editor.view.dispatch({ changes: { from: 0, to: 1, insert: "你" }, selection: { anchor: 1 }, annotations: Transaction.userEvent.of("input.type.compose") });
+			assert.equal(parse.mock.callCount(), 0);
+			assert.equal(editor.input.querySelector(".knomo-composer-marker, strong, a.internal-link"), null);
+			assert.equal(editor.input.textContent, "你" + initial.slice(1).replace(/\n/g, ""));
+			assert.equal(editor.input.selectionStart, 1);
+			assert.equal(editor.composing, true);
+			assert.equal(undoDepth(editor.view.state), 1);
+			editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+			await new Promise(resolve => setTimeout(resolve, 80));
+			assert.equal(parse.mock.callCount(), 1);
+			undo(editor.view); assert.equal(editor.input.value, initial);
+		} finally { parse.mock.restore(); close(); }
+	}
+});
+
+test("delimiter deletion, cross-boundary paste and fence changes never reuse stale hiding", () => {
+	const { editor, close } = environment("**bold**\nend");
+	try {
+		editor.view.dispatch({ changes: { from: 0, to: 2, insert: "" }, annotations: Transaction.userEvent.of("delete.backward") });
+		assert.equal(editor.input.textContent, "bold**end");
+		undo(editor.view); assert.equal(editor.input.value, "**bold**\nend");
+		editor.view.dispatch({ changes: { from: 3, to: 9, insert: "`code`" }, annotations: Transaction.userEvent.of("input.paste") });
+		assert.equal(editor.input.querySelector("strong"), null);
+		editor.reset("```\n**bold**\n```\n\n**outside**\nend");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "outside");
+		editor.view.dispatch({ changes: { from: 13, to: 16, insert: "" } });
+		assert.equal(editor.input.querySelector("strong"), null);
+		undo(editor.view); assert.equal(editor.input.querySelector("strong")?.textContent, "outside");
+	} finally { close(); }
+});
+
+test("IME in a blank boundary withdraws decoration from the preceding potential Setext paragraph", () => {
+	const { editor, win, close } = environment("**bold**\n\nend");
+	try {
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.view.dispatch({ changes: { from: 9, to: 9, insert: "===" }, selection: { anchor: 12 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		assert.equal(editor.input.querySelector("strong"), null);
+		assert.equal(editor.input.value, "**bold**\n===\nend");
+		assert.equal(editor.composing, true);
+	} finally { close(); }
+});
+
+test("all selection ranges reveal source without creating undo entries", () => {
+	const { editor, close } = environment("**one** **two**\nend");
+	try {
+		editor.view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.allowMultipleSelections.of(true)) });
+		editor.view.dispatch({ selection: EditorSelection.create([EditorSelection.range(0, 2), EditorSelection.range(9, 10)]) });
+		assert.equal(editor.view.state.selection.ranges.length, 2);
+		assert.equal(editor.input.querySelector("strong"), null);
+		assert.equal(editor.input.value, "**one** **two**\nend");
+		assert.equal(undoDepth(editor.view.state), 0);
+	} finally { close(); }
+});
+
+test("Markdown link escaped labels display literal text and expand to the original source", () => {
+	const value = "[te\\]xt](https://x/a\\(b\\))\nend";
+	const { editor, close } = environment(value);
+	try {
+		assert.equal(editor.input.querySelector(".knomo-composer-markdown-link")?.textContent, "te]xt");
+		editor.input.setSelectionRange(4, 4);
+		assert.equal(editor.input.querySelector(".knomo-composer-markdown-link"), null);
+		assert.equal(editor.input.textContent, value.replace(/\n/g, ""));
+		assert.equal(editor.input.value, value);
+	} finally { close(); }
+});
+
+async function sessionView(editor: ComposerEditor) {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const fields = {
+		inputEl: editor.input, draftContent: "", suspendedCreate: null as unknown,
+		editingMemo: null as import("../src/types/memoView").MemoViewItem | null,
+		quoteReferenceText: null as string | null, quoteMarkdownText: null as string | null,
+		composerOpen: true, isSaving: false, trashViewClosed: false, composerRenderPending: false,
+		currentLayout: "desktop", composerIsComposing: false,
+		focusComposerInputNow: () => undefined,
+		closeTimeBuoyPicker: () => undefined, syncRootState: () => undefined,
+		updateStatus: (_message: string, _error: boolean) => undefined,
+		updateSendButtonState: () => undefined, updateCancelEditButtonState: () => undefined,
+		syncComposerMode: () => undefined, syncUiChrome: () => undefined, resizeInput: () => undefined,
+		openComposer() { this.composerOpen = true; },
+		mobileComposerController: { resetInactiveState: () => undefined },
+		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+		resolveCatalogMemo: async (memo: import("../src/types/memoView").MemoViewItem) => memo.catalog!,
+		memoCommandService: {
+			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
+			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
+			createReferenceText: async (_memo: unknown) => ({ text: "[[reference]]" }),
+		},
+		reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
+		closeCardMenu: () => undefined, syncCardMenuState: () => undefined,
+	};
+	return Object.assign(Object.create(KnomoView.prototype), fields) as typeof fields & {
+		startEditing(memo: import("../src/types/memoView").MemoViewItem): void;
+		cancelEditing(): void; clearReference(): void; saveInput(): Promise<void>;
+		closeComposerKeepingDraft(): void; cancelComposerFromEscape(): void;
+		handleMemoAction(action: "reference", memo: import("../src/types/memoView").MemoViewItem): Promise<void>;
+		render(): Promise<void>;
+	};
+}
+
+function sessionMemo(id: string) {
+	// 只提供会话测试使用的目标字段；原 observation 对象必须原样到达服务。
+	return { id, contentSnapshot: "original " + id, dailyRef: { path: "Daily/2026-09-19.md" }, catalog: { observationHandle: { sourcePath: "Daily/2026-09-19.md", sourceRevision: id } } } as unknown as import("../src/types/memoView").MemoViewItem;
+}
+
+test("S01-S05 Create and Reference survive Edit, close, reopen, refusal and Cancel", async () => {
+	const { editor, close } = environment("comment");
+	try {
+		const view = await sessionView(editor);
+		view.quoteReferenceText = "[[source]]"; view.quoteMarkdownText = "> source";
+		editor.apply({ value: "comment!", anchor: 2, head: 5 });
+		const pending = editor.capture(); const memo = sessionMemo("a");
+		view.startEditing(memo);
+		assert.equal(pending.sameSession(), false);
+		editor.apply({ value: "edited A", anchor: 8, head: 8 });
+		const editing = editor.capture();
+		view.closeComposerKeepingDraft(); view.cancelComposerFromEscape();
+		assert.equal(editing.valid(), true);
+		view.openComposer();
+		view.startEditing({ ...memo });
+		assert.equal(editing.valid(), true);
+		view.startEditing(sessionMemo("b"));
+		assert.equal(view.editingMemo, memo);
+		let references = 0;
+		view.memoCommandService.createReferenceText = async () => { references++; return { text: "[[bad]]" }; };
+		await view.handleMemoAction("reference", sessionMemo("b"));
+		assert.equal(references, 0);
+		view.cancelEditing();
+		assert.equal(editor.input.value, "comment!");
+		assert.equal(view.quoteReferenceText, "[[source]]");
+		assert.equal(view.quoteMarkdownText, "> source");
+		assert.equal(editor.input.selectionStart, 2);
+		assert.equal(editor.input.selectionEnd, 5);
+		assert.equal(undo(editor.view), false); assert.equal(redo(editor.view), false);
+		assert.equal(editing.sameSession(), false);
+		view.clearReference();
+		assert.equal(editor.input.value, "comment!");
+		assert.equal(view.quoteReferenceText, null);
+	} finally { close(); }
+});
+
+test("W01-W05 edit saves the original handle once while frozen and restores Create", async () => {
+	const { editor, close } = environment("create draft");
+	try {
+		const view = await sessionView(editor); const memo = sessionMemo("a");
+		view.quoteReferenceText = "[[source]]"; view.quoteMarkdownText = "> source";
+		view.startEditing(memo); editor.apply({ value: "edited", anchor: 6, head: 6 });
+		let complete!: () => void; const daily = new Promise<void>(resolve => { complete = resolve; });
+		let calls = 0;
+		view.memoCommandService.startEdit = (target, content) => {
+			calls++; assert.equal(target, memo.catalog); assert.equal(content, "edited");
+			return { dailyCommitted: daily, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) };
+		};
+		const saving = view.saveInput(); await Promise.resolve();
+		view.cancelEditing(); view.clearReference(); view.startEditing(sessionMemo("b"));
+		view.closeComposerKeepingDraft(); view.openComposer();
+		assert.equal(editor.apply({ value: "bad", anchor: 0, head: 0 }), false);
+		await view.saveInput(); assert.equal(calls, 1);
+		assert.equal(view.editingMemo, memo);
+		complete(); await saving;
+		assert.equal(editor.input.value, "create draft"); assert.equal(view.quoteReferenceText, "[[source]]");
+		assert.equal(view.editingMemo, null); assert.equal(view.isSaving, false);
+		assert.equal(editor.input.getAttribute("aria-readonly"), "false");
+	} finally { close(); }
+});
+
+test("W03 stale retains edits and original target, failure restores current availability", async () => {
+	const { editor, close } = environment("draft");
+	try {
+		const view = await sessionView(editor); const memo = sessionMemo("a");
+		view.startEditing(memo); editor.apply({ value: "unsaved", anchor: 7, head: 7 });
+		let status = ""; view.updateStatus = message => { status = message; };
+		view.memoCommandService.startEdit = () => { view.getDailyNotesStatus = () => ({ enabled: false }); throw new Error("stale: refresh and reselect"); };
+		await view.saveInput();
+		assert.equal(editor.input.value, "unsaved"); assert.equal(view.editingMemo, memo);
+		assert.equal(editor.input.disabled, true); assert.equal(view.isSaving, false);
+		assert.match(status, /stale/);
+	} finally { close(); }
+});
+
+test("S08 late Reference result cannot attach to a switched or restored session", async () => {
+	const { editor, close } = environment("comment");
+	try {
+		const view = await sessionView(editor); let finish!: (value: { text: string }) => void;
+		view.memoCommandService.createReferenceText = () => new Promise(resolve => { finish = resolve; });
+		const pending = view.handleMemoAction("reference", sessionMemo("source"));
+		await Promise.resolve();
+		view.startEditing(sessionMemo("edit")); view.cancelEditing();
+		finish({ text: "[[late]]" }); await pending;
+		assert.equal(view.quoteReferenceText, null); assert.equal(editor.input.value, "comment");
+	} finally { close(); }
+});
+
+test("W06-W07 late settled refresh preserves new errors, sheet and scroll ownership", async () => {
+	const { editor, close } = environment("first");
+	try {
+		const view = await sessionView(editor);
+		let finish!: (result: Awaited<ReturnType<typeof view.memoCommandService.startCreate>["settled"]>) => void;
+		const settled: ReturnType<typeof view.memoCommandService.startCreate>["settled"] = new Promise(resolve => { finish = resolve; });
+		view.memoCommandService.startCreate = () => ({ dailyCommitted: Promise.resolve(), settled });
+		let status = ""; view.updateStatus = message => { status = message; };
+		let refreshed!: () => void; const refreshedPromise = new Promise<void>(resolve => { refreshed = resolve; });
+		view.reloadMemos = async () => { refreshed(); return true; };
+		await view.saveInput();
+		editor.reset("new draft"); view.openComposer(); status = "new error";
+		finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+		await refreshedPromise; await Promise.resolve();
+		assert.equal(editor.input.value, "new draft"); assert.equal(view.composerOpen, true); assert.equal(status, "new error");
+	} finally { close(); }
+});
+
+test("W10 rebuild waits for consumption and close does not cancel the committed write or update DOM", async () => {
+	for (const closing of [false, true]) {
+		const { editor, close } = environment("submitted");
+		try {
+			const view = await sessionView(editor);
+			let commit!: () => void; const dailyCommitted = new Promise<void>(resolve => { commit = resolve; });
+			let finish!: (result: Awaited<ReturnType<typeof view.memoCommandService.startCreate>["settled"]>) => void;
+			const settled: ReturnType<typeof view.memoCommandService.startCreate>["settled"] = new Promise(resolve => { finish = resolve; });
+			view.memoCommandService.startCreate = () => ({ dailyCommitted, settled });
+			const saving = view.saveInput();
+			await view.render(); assert.equal(view.composerRenderPending, true);
+			let renders = 0;
+			view.render = async () => { renders++; assert.equal(editor.input.value, ""); assert.equal(view.draftContent, ""); };
+			if (closing) {
+				view.trashViewClosed = true; editor.destroy();
+				view.updateStatus = view.updateSendButtonState = view.syncRootState = () => { throw new Error("closed DOM"); };
+				view.reloadMemos = async () => { throw new Error("closed reload"); };
+			}
+			commit(); await saving;
+			finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+			await Promise.resolve(); await Promise.resolve();
+			assert.equal(renders, closing ? 0 : 1); assert.equal(view.isSaving, false);
+		} finally { close(); }
+	}
+});
+
+function imageSession(value = "甲乙") {
+	const env = environment(value);
+	const errors: string[] = [];
+	let source: string | null = "Daily/2026-09-21.md";
+	const writes: Array<{ files: readonly { name: string }[]; resolve(value: ImageAttachment[]): void; reject(error: Error): void }> = [];
+	const controller = new ComposerImageController(env.editor, {
+		attachments: { createImageEmbedLinks: (_source, files) => new Promise((resolve, reject) => writes.push({ files, resolve, reject })) },
+		getSourcePath: () => source, canInsert: () => true, onPendingChanged: () => undefined,
+		onError: message => errors.push(message),
+	});
+	const file = { name: "image.png", size: 1, arrayBuffer: async () => new ArrayBuffer(1) };
+	return { ...env, controller, errors, writes, file, setSource: (path: string | null) => { source = path; },
+		close: () => { controller.dispose(); env.close(); } };
+}
+
+const imageResult = (name = "image") => [{ path: `Attachments/${name}.png`, link: `![[Attachments/${name}.png]]` }];
+
+async function flushImages() { for (let i = 0; i < 6; i++) await Promise.resolve(); }
+
+test("view image wiring accepts desktop paste and picker without opening the mobile composer", async () => {
+	for (const layout of ["desktop", "desktop-narrow", "mobile"]) for (const entry of ["paste", "picker"]) {
+		const f = environment("draft");
+		let images: ComposerImageController | undefined;
+		let picker: NativeImagePickerController<ComposerImageCapture> | undefined;
+		try {
+			const view = await sessionView(f.editor) as Awaited<ReturnType<typeof sessionView>> & {
+				createComposerImageController(input: typeof f.editor.input): ComposerImageController;
+				insertImageFiles(files: FileList, context?: ComposerImageCapture): Promise<void>;
+			};
+			const disk = new Map<string, ArrayBuffer>();
+			const app = {
+				fileManager: { getAvailablePathForAttachment: async (name: string) => `Attachments/${name}`,
+					generateMarkdownLink: (file: { path: string }) => `[[${file.path}]]` },
+				vault: { getAbstractFileByPath: (path: string) => disk.has(path) ? { path } : null,
+					createBinary: async (path: string, bytes: ArrayBuffer) => { disk.set(path, bytes); return { path }; } },
+			};
+			Object.assign(view, { currentLayout: layout, composerOpen: false, attachmentService: new AttachmentService(app as never),
+				getTodayDailyNotePath: () => "Daily/today.md" });
+			images = view.createComposerImageController(f.editor.input);
+			Object.assign(view, { composerImages: images });
+			const file = { name: "picked.png", type: "image/png", size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+			const paste = () => {
+				const event = new f.win.Event("paste", { bubbles: true, cancelable: true });
+				Object.defineProperty(event, "clipboardData", { value: { getData: () => "",
+					items: [{ kind: "file", type: file.type, getAsFile: () => file }] } });
+				f.editor.input.dispatchEvent(event);
+				return event.defaultPrevented;
+			};
+			// 原生兜底由宿主实现；测试仍让生产图片监听器先处理事件。
+			f.editor.input.addEventListener("paste", event => event.stopImmediatePropagation(), { capture: true });
+			if (layout === "mobile") {
+				assert.equal(paste(), false);
+				assert.equal(images.capture(), undefined);
+				assert.equal(disk.size, 0);
+				view.composerOpen = true;
+			}
+			if (entry === "paste") {
+				assert.equal(paste(), true, `${layout}: paste must reach the attachment service`);
+			} else {
+				const input = f.win.document.createElement("input");
+				input.detach = () => input.remove();
+				Object.defineProperty(input, "files", { value: [file] });
+				picker = new NativeImagePickerController({
+					createInput: () => input, beginFocusGuard: () => false, finishFocusGuard: () => undefined,
+					captureContext: () => images!.capture(), isContextCurrent: context => images!.isCurrent(context),
+					releaseContext: context => images!.release(context), insertImageFiles: (files, context) => view.insertImageFiles(files, context),
+				});
+				picker.open();
+				input.dispatchEvent(new f.win.Event("change"));
+			}
+			await flushImages();
+			assert.equal(disk.size, 1, `${layout}/${entry}: one attachment must be written`);
+			const path = [...disk.keys()][0];
+			assert.equal(f.editor.input.value, `draft![[${path}]]`);
+			assert.deepEqual([...new Uint8Array(disk.get(path)!)], [1, 2, 3]);
+			undo(f.editor.view); redo(f.editor.view);
+			assert.equal(disk.size, 1);
+			view.isSaving = true;
+			assert.equal(images.capture(), undefined);
+			view.isSaving = false;
+			view.trashViewClosed = true;
+			assert.equal(images.capture(), undefined);
+		} finally { picker?.dispose(); images?.dispose(); f.close(); }
+	}
+});
+
+test("native list continuation preserves unrelated pending images and generated link validation", async () => {
+	const f = imageSession("head\n- item");
+	try {
+		f.editor.input.setSelectionRange(2, 2);
+		const done = f.controller.insert([f.file]);
+		const enter = () => {
+			const end = f.editor.view.state.doc.length;
+			f.editor.view.dispatch({ changes: { from: end, insert: "\n" }, selection: { anchor: end + 1 }, annotations: Transaction.userEvent.of("input.type") });
+		};
+		enter();
+		assert.equal(f.controller.pending, true);
+		assert.equal(f.editor.input.value, "head\n- item\n- ");
+		f.writes[0].resolve(imageResult());
+		await done;
+		const links = f.editor.view.state.field(composerImageLinks);
+		f.editor.apply({ value: f.editor.input.value + "next", anchor: f.editor.input.value.length + 4, head: f.editor.input.value.length + 4 });
+		const before = f.editor.input.value;
+		enter();
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, before);
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+	} finally { f.close(); }
+});
+
+test("clearing all text cancels images at either boundary and never revives them on undo", async () => {
+	for (const anchor of [0, 5]) {
+		const f = imageSession("draft");
+		try {
+			f.editor.input.setSelectionRange(anchor, anchor);
+			const done = f.controller.insert([f.file]);
+			f.editor.view.dispatch({ changes: { from: 0, to: 5 }, annotations: Transaction.userEvent.of("delete.selection") });
+			assert.equal(f.controller.pending, false);
+			await done;
+			undo(f.editor.view);
+			assert.equal(f.controller.pending, false);
+			f.editor.apply({ value: "new draft", anchor: 9, head: 9 });
+			f.writes[0].resolve(imageResult());
+			await flushImages();
+			assert.equal(f.editor.input.value, "new draft");
+			assert.ok(f.errors.some(error => error.includes("Attachments/image.png")));
+		} finally { f.close(); }
+	}
+});
+
+test("image paste maps continued typing and keeps current caret; history and Redo preserve bytes", async () => {
+	const f = imageSession();
+	try {
+		f.editor.input.setSelectionRange(1, 1);
+		const done = f.controller.insert([f.file]);
+		assert.equal(f.controller.pending, true);
+		assert.equal(f.editor.input.value, "甲乙");
+		f.editor.view.dispatch({ changes: { from: 1, insert: "丙" }, selection: { anchor: 2 }, annotations: Transaction.userEvent.of("input.type") });
+		f.writes[0].resolve(imageResult());
+		await done;
+		const link = imageResult()[0].link;
+		assert.equal(f.editor.input.value, `甲${link}丙乙`);
+		assert.equal(f.editor.input.selectionStart, link.length + 2);
+		assert.equal(undoDepth(f.editor.view.state), 2);
+		assert.equal(f.controller.pending, false);
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, "甲丙乙");
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 0);
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, "甲乙");
+		redo(f.editor.view); redo(f.editor.view);
+		assert.equal(f.editor.input.value, `甲${link}丙乙`);
+		assert.equal(f.editor.view.state.field(composerImageLinks)[0].from, 1);
+		assert.equal(f.writes.length, 1);
+	} finally { f.close(); }
+});
+
+test("multi-image selection replacement is atomic, preserves boundary edits and reverses cleanly", async () => {
+	for (const direction of ["forward", "backward"]) {
+		const f = imageSession("abcd");
+		try {
+			f.editor.input.setSelectionRange(1, 3, direction);
+			const done = f.controller.insert([f.file, f.file]);
+			f.editor.view.dispatch({ changes: [{ from: 1, insert: "L" }, { from: 3, insert: "R" }], selection: { anchor: 0 }, annotations: Transaction.userEvent.of("input.type") });
+			f.writes[0].resolve([...imageResult("A"), ...imageResult("B")]);
+			await done;
+			assert.equal(f.editor.input.value, `aL${imageResult("A")[0].link}\n${imageResult("B")[0].link}Rd`);
+			assert.equal(f.editor.input.selectionStart, 0);
+			undo(f.editor.view);
+			assert.equal(f.editor.input.value, "aLbcRd");
+		} finally { f.close(); }
+	}
+});
+
+test("image insertion cancels on range edits, crossing deletion, reset, close and history", async () => {
+	for (const action of ["inside", "cross", "reset", "context", "cancel", "undo", "redo-key", "dispose"]) {
+		const f = imageSession("abcd");
+		try {
+			f.editor.input.setSelectionRange(1, action === "inside" ? 3 : 1);
+			const done = f.controller.insert([f.file]);
+			if (action === "inside") f.editor.view.dispatch({ changes: { from: 2, insert: "new" } });
+			if (action === "cross") f.editor.view.dispatch({ changes: { from: 0, to: 3, insert: "new" } });
+			if (action === "reset") f.editor.reset("new memo");
+			if (action === "context") f.editor.invalidateContext();
+			if (action === "cancel") f.controller.cancelAll();
+			if (action === "dispose") f.controller.dispose();
+			if (action === "undo") {
+				f.editor.view.dispatch({ changes: { from: 4, insert: "x" }, annotations: Transaction.userEvent.of("input.type") });
+				undo(f.editor.view);
+			}
+			if (action === "redo-key") f.editor.input.dispatchEvent(new f.win.KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+			await done;
+			assert.equal(f.controller.pending, false, action);
+			const value = f.editor.input.value;
+			f.writes[0].resolve(imageResult());
+			await flushImages();
+			assert.equal(f.editor.input.value, value, action);
+			assert.ok(f.errors.some(error => error.includes("Attachments/image.png")), action);
+		} finally { f.close(); }
+	}
+});
+
+test("consecutive pastes at one empty anchor keep order, even after typing", async () => {
+	const f = imageSession();
+	try {
+		f.editor.input.setSelectionRange(1, 1);
+		const first = f.controller.insert([f.file]);
+		const second = f.controller.insert([f.file]);
+		f.editor.view.dispatch({ changes: { from: 1, insert: "text" }, selection: { anchor: 5 } });
+		assert.equal(f.writes.length, 1);
+		f.writes[0].resolve(imageResult("A"));
+		await first;
+		assert.equal(f.writes.length, 2);
+		f.writes[1].resolve(imageResult("B"));
+		await second;
+		assert.equal(f.editor.input.value, `甲${imageResult("A")[0].link}${imageResult("B")[0].link}text乙`);
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 2);
+	} finally { f.close(); }
+});
+
+test("new overlapping replacement supersedes the previous task without waiting for old I/O", async () => {
+	const f = imageSession("abcd");
+	try {
+		f.editor.input.setSelectionRange(1, 3);
+		const first = f.controller.insert([f.file]);
+		const second = f.controller.insert([f.file]);
+		await first;
+		assert.equal(f.writes.length, 2);
+		f.writes[1].resolve(imageResult("new"));
+		await second;
+		f.writes[0].resolve(imageResult("old"));
+		await flushImages();
+		assert.equal(f.editor.input.value, `a${imageResult("new")[0].link}d`);
+		assert.ok(f.errors.some(error => error.includes("Attachments/old.png")));
+	} finally { f.close(); }
+});
+
+test("failed task releases the next batch and source changes never insert old links", async () => {
+	const f = imageSession();
+	try {
+		const first = f.controller.insert([f.file]);
+		const second = f.controller.insert([f.file]);
+		f.writes[0].reject(new Error("disk failed"));
+		await first;
+		assert.equal(f.writes.length, 2);
+		f.setSource("Daily/2026-09-22.md");
+		f.writes[1].resolve(imageResult());
+		await second;
+		assert.equal(f.controller.pending, false);
+		assert.equal(f.editor.input.value, "甲乙");
+		assert.ok(f.errors.some(error => error.includes("Attachments/image.png")));
+	} finally { f.close(); }
+});
+
+test("IME holds completed images until native composition settles, without overwriting input", async () => {
+	const f = imageSession();
+	try {
+		f.editor.input.setSelectionRange(1, 1);
+		const done = f.controller.insert([f.file]);
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionstart"));
+		f.editor.view.dispatch({ changes: { from: 1, insert: "你" }, selection: { anchor: 2 }, annotations: Transaction.userEvent.of("input.type.compose") });
+		f.writes[0].resolve(imageResult());
+		await flushImages();
+		assert.equal(f.editor.input.value, "甲你乙");
+		assert.equal(f.controller.pending, true);
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionend", { data: "你" }));
+		await done;
+		assert.equal(f.editor.input.value, `甲${imageResult()[0].link}你乙`);
+	} finally { f.close(); }
+});
+
+test("image paste consumes one event, native text passes through, and IME/readonly do not create files", async () => {
+	const f = imageSession();
+	try {
+		const paste = (text: string, image = true) => {
+			const event = new f.win.Event("paste", { bubbles: true, cancelable: true });
+			Object.defineProperty(event, "clipboardData", { value: {
+				getData: (type: string) => type === "text/plain" ? text : "",
+				items: image ? [{ kind: "file", type: "image/png", getAsFile: () => f.file }] : [], files: [f.file],
+			} });
+			f.editor.input.dispatchEvent(event);
+			return event.defaultPrevented;
+		};
+		// 只观察本次图片处理器，不让 jsdom 的原生粘贴尝试访问未实现的剪贴板 API。
+		const native = (event: Event) => event.stopImmediatePropagation();
+		f.editor.input.addEventListener("paste", native, { capture: true });
+		assert.equal(paste("text"), false);
+		assert.equal(f.writes.length, 0);
+		f.editor.input.disabled = true;
+		assert.equal(paste(""), false);
+		f.editor.input.disabled = false;
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionstart"));
+		assert.equal(paste(""), true);
+		assert.equal(f.writes.length, 0);
+		await new Promise<void>(resolve => {
+			f.editor.input.addEventListener("composer-compositionend", () => resolve(), { once: true });
+			f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionend"));
+		});
+		f.editor.reset("甲乙");
+		assert.equal(paste(""), true);
+		assert.equal(f.writes.length, 1);
+		f.writes[0].resolve(imageResult());
+		await flushImages();
+		assert.equal(f.editor.input.value, `甲乙${imageResult()[0].link}`);
+	} finally { f.close(); }
+});
+
+test("Composer send waits for all images and never submits a queued click automatically", async () => {
+	const f = imageSession("");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller });
+		let saves = 0;
+		const original = view.memoCommandService.startCreate;
+		view.memoCommandService.startCreate = content => { saves++; return original(content); };
+		const image = f.controller.insert([f.file]);
+		await view.saveInput();
+		assert.equal(view.isSaving, false);
+		assert.equal(saves, 0);
+		f.writes[0].resolve(imageResult());
+		await image;
+		await flushImages();
+		assert.equal(saves, 0);
+		assert.equal(f.editor.readOnly, false);
+		await view.saveInput();
+		assert.equal(saves, 1);
+		assert.equal(f.editor.input.value, "");
+	} finally { f.close(); }
+});
+
+test("closing with a draft cancels images immediately and preserves existing Undo history", async () => {
+	const f = imageSession("draft");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller });
+		f.editor.apply({ value: "draft text", anchor: 10, head: 10 });
+		const image = f.controller.insert([f.file]);
+		view.closeComposerKeepingDraft();
+		await image;
+		assert.equal(f.controller.pending, false);
+		assert.equal(f.editor.input.value, "draft text");
+		undo(f.editor.view);
+		assert.equal(f.editor.input.value, "draft");
+		f.writes[0].resolve(imageResult());
+		await flushImages();
+		assert.equal(f.editor.input.value, "draft");
+	} finally { f.close(); }
+});
+
+test("generated-link metadata survives suspended Create and Undo of manual link edits", async () => {
+	const f = imageSession("draft");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller });
+		const image = f.controller.insert([f.file]);
+		f.writes[0].resolve(imageResult());
+		await image;
+		const links = f.editor.view.state.field(composerImageLinks);
+		view.startEditing(sessionMemo("other"));
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 0);
+		view.cancelEditing();
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+		f.editor.view.dispatch({ changes: { from: links[0].from + 4, insert: "x" }, annotations: Transaction.userEvent.of("input.type") });
+		assert.equal(f.editor.view.state.field(composerImageLinks).length, 0);
+		undo(f.editor.view);
+		assert.deepEqual(f.editor.view.state.field(composerImageLinks), links);
+	} finally { f.close(); }
+});
+
+test("picker capture maps edits before file selection and keeps the original range", async () => {
+	const f = imageSession("abcd");
+	try {
+		f.editor.input.setSelectionRange(1, 3);
+		const capture = f.controller.capture();
+		assert.equal(f.controller.pending, false);
+		f.editor.view.dispatch({ changes: { from: 0, insert: "prefix" }, selection: { anchor: 10 } });
+		const done = f.controller.insert([f.file], capture);
+		f.writes[0].resolve(imageResult());
+		await done;
+		assert.equal(f.editor.input.value, `prefixa${imageResult()[0].link}d`);
+		assert.equal(f.editor.input.selectionStart, f.editor.input.value.length);
+	} finally { f.close(); }
+});
+
+test("save receives a frozen image validator; failure keeps draft and manual removal permits saving", async () => {
+	const f = imageSession("");
+	try {
+		const view = await sessionView(f.editor);
+		Object.assign(view, { composerImages: f.controller, app: { metadataCache: { getFirstLinkpathDest: () => null } } });
+		const done = f.controller.insert([f.file]);
+		f.writes[0].resolve(imageResult());
+		await done;
+		let validated = 0;
+		const original = view.memoCommandService.startCreate;
+		view.memoCommandService.startCreate = (content: string, validate?: (path: string) => void) => {
+			if (validate) { validated++; validate("Other/2026-09-22.md"); }
+			return original(content);
+		};
+		await view.saveInput();
+		assert.equal(validated, 1);
+		assert.equal(f.editor.input.value, imageResult()[0].link);
+		assert.equal(f.editor.readOnly, false);
+		f.editor.apply({ value: "ordinary text", anchor: 13, head: 13 });
+		await view.saveInput();
+		assert.equal(validated, 1);
+		assert.equal(f.editor.input.value, "");
+	} finally { f.close(); }
 });

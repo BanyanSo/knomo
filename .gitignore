@@ -10,6 +10,10 @@ main.js
 .corepack/
 .obsidian/
 
+# Local development probes
+/scripts/composer/
+/scripts/card-images/
+
 AGENTS.md
 CLAUDE.md
 knomo-assets/

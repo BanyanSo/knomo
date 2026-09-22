@@ -1,6 +1,7 @@
 interface NativeImagePickerControllerOptions<T> {
 	captureContext?(): T | undefined;
 	isContextCurrent?(context: T | undefined): boolean;
+	releaseContext?(context: T | undefined): void;
 	createInput(): HTMLInputElement;
 	beginFocusGuard(): boolean;
 	finishFocusGuard(shouldRestoreFocus: boolean): void;
@@ -14,8 +15,10 @@ export class NativeImagePickerController<T = undefined> {
 
 	open(): void {
 		this.dispose();
-		const shouldRestoreMobileFocus = this.options.beginFocusGuard();
 		const context = this.options.captureContext?.();
+		// 需要上下文的调用方必须先捕获成功，避免选完文件后静默丢弃。
+		if (this.options.captureContext && context === undefined) return;
+		const shouldRestoreMobileFocus = this.options.beginFocusGuard();
 		const input = this.options.createInput();
 		let handledChange = false;
 		let cleanedUp = false;
@@ -29,6 +32,7 @@ export class NativeImagePickerController<T = undefined> {
 			input.removeEventListener("change", handleChange);
 			input.removeEventListener("cancel", handleCancel);
 			input.detach();
+			this.options.releaseContext?.(context);
 			if (this.cleanupActivePicker === cleanup) {
 				this.cleanupActivePicker = null;
 			}

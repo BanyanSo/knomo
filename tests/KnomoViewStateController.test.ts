@@ -3,6 +3,48 @@ import assert from "node:assert/strict";
 
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 
+test("Things 保留组合条件、单项清除、Scope 日期与统计返回", () => {
+	const state = new KnomoViewStateController();
+	state.activeTag = "project";
+	state.activeTagKey = "project";
+	state.searchQuery = "release";
+	state.scopeFilter = "last-30";
+	state.setSidebarNav("things");
+	assert.equal(state.scopeFilter, "all");
+	assert.equal(state.searchDateFilter, "last-30");
+	state.setSidebarNav("things");
+	assert.equal(state.searchQuery, "release");
+	assert.equal(state.activeTagKey, "project");
+	state.setSearchQuery("");
+	assert.equal(state.activeNav, "things");
+	assert.equal(state.searchDateFilter, "last-30");
+	state.setScope("last-30");
+	assert.equal(state.searchDateFilter, null);
+	state.setScope("week");
+	state.setSearchQuery("ship");
+	state.setSidebarNav("record-stats");
+	assert.equal(state.returnFromRecordStats().reloadCatalogQuery, true);
+	assert.equal(state.activeNav, "things");
+	assert.equal(state.searchQuery, "ship");
+	assert.equal(state.searchDateFilter, "week");
+	assert.equal(state.activeTagKey, "project");
+	state.setSidebarNav("all");
+	assert.equal(state.isDefaultListState(), true);
+});
+
+test("从专用视图进入 Things 清除专用条件", () => {
+	for (const nav of ["review", "random", "shuffleDay", "time-buoy", "record-stats", "trash"] as const) {
+		const state = new KnomoViewStateController();
+		state.activeNav = nav;
+		state.searchQuery = "old";
+		state.recordStatsSearchFilter = { type: "day", date: "2026-09-20" };
+		state.setSidebarNav("things");
+		assert.equal(state.activeNav, "things");
+		assert.equal(state.searchQuery, "");
+		assert.equal(state.recordStatsSearchFilter, null);
+	}
+});
+
 test("scope transition closes chrome without changing an already active default scope", () => {
 	const state = new KnomoViewStateController();
 	state.mobileDrawerOpen = true;

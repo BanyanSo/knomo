@@ -185,6 +185,7 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	refreshForCursor(): void {
+		if (this.inputEl.composer.readOnly) { this.close(); return; }
 		const range = getWikiLinkRangeAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			this.close();

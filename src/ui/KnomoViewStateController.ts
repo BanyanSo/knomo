@@ -73,6 +73,10 @@ export class KnomoViewStateController {
 	}
 
 	setScope(scope: ScopeFilter): SetScopeResult {
+		if (this.activeNav === "things" && ["week", "month", "last-month", "last-7", "last-30"].includes(scope)) {
+			this.setSearchDateFilter(scope as SearchDateFilter);
+			return { type: "changed", closeScopeMenu: true };
+		}
 		if (
 			this.activeNav === "all" &&
 			this.activeTagKey === null &&
@@ -96,6 +100,7 @@ export class KnomoViewStateController {
 
 	setSearchQuery(query: string): SearchStateResult {
 		this.searchQuery = query;
+		if (this.activeNav === "things") return { type: "changed", clearCardMenu: true };
 		if (query.trim().length > 0 || this.searchDateFilter !== null || this.recordStatsSearchFilter !== null) {
 			this.clearActiveTag();
 			this.activeNav = "all";
@@ -107,6 +112,11 @@ export class KnomoViewStateController {
 
 	setSearchDateFilter(filter: SearchDateFilter): SearchStateResult {
 		this.searchDateFilter = this.searchDateFilter === filter ? null : filter;
+		if (this.activeNav === "things") {
+			this.desktopSearchOpen = false;
+			this.compactSearchOpen = false;
+			return { type: "changed", clearCardMenu: true };
+		}
 		this.recordStatsSearchFilter = null;
 		this.clearActiveTag();
 		this.activeNav = "all";
@@ -146,9 +156,13 @@ export class KnomoViewStateController {
 		} else if (nav !== "record-stats") {
 			this.recordStatsReturnState = null;
 		}
-		this.clearDesktopSearchState();
+		if (nav !== "things" || (previousNav !== "all" && previousNav !== "things") || this.recordStatsSearchFilter !== null) {
+			this.clearDesktopSearchState();
+			this.clearActiveTag();
+		} else if (["week", "month", "last-month", "last-7", "last-30"].includes(this.scopeFilter)) {
+			this.searchDateFilter ??= this.scopeFilter as SearchDateFilter;
+		}
 		this.activeNav = nav;
-		this.clearActiveTag();
 		this.scopeFilter = "all";
 		this.mobileDrawerOpen = false;
 		return {
@@ -157,7 +171,7 @@ export class KnomoViewStateController {
 			clearCardMenu: true,
 			clearRandomReunion: false,
 			clearShuffleDay: false,
-			reloadCatalogQuery: nav === "review" || nav === "all",
+			reloadCatalogQuery: nav === "things" || nav === "review" || nav === "all",
 			refreshRandomReunion: nav === "random",
 			refreshShuffleDay: nav === "shuffleDay" && previousNav !== "shuffleDay",
 			loadTrashMemos: nav === "trash",
@@ -201,7 +215,7 @@ export class KnomoViewStateController {
 			returnedNav: returnState.activeNav,
 			closeScopeMenu: true,
 			clearCardMenu: true,
-			reloadCatalogQuery: returnState.activeNav === "review",
+			reloadCatalogQuery: returnState.activeNav === "things" || returnState.activeNav === "review",
 			refreshRandomReunionIfEmpty: returnState.activeNav === "random",
 			loadTrashMemos: returnState.activeNav === "trash",
 			refreshShuffleDayIfEmpty: returnState.activeNav === "shuffleDay",

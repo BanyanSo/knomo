@@ -66,16 +66,30 @@ export function stripMemoContinuationIndent(value: string): string {
 
 export function parseMemoTags(content: string): string[] {
 	const tags: string[] = [];
-	TAG_REGEX.lastIndex = 0;
-	let match = TAG_REGEX.exec(content);
-	while (match !== null) {
-		const tag = match[2];
+	for (const range of memoTagRanges(content)) {
+		const tag = content.slice(range.from + 1, range.to);
 		if (!tags.includes(tag)) {
 			tags.push(tag);
 		}
-		match = TAG_REGEX.exec(content);
 	}
 	return tags;
+}
+
+// Composer 与 Catalog 共用词法边界；上下文隔离由 Composer 模型负责。
+export function memoTagRanges(content: string): { from: number; to: number }[] {
+	const ranges: { from: number; to: number }[] = [];
+	const expression = new RegExp(TAG_REGEX);
+	let match: RegExpExecArray | null;
+	while ((match = expression.exec(content)) !== null) ranges.push({ from: match.index + match[1].length, to: match.index + match[0].length });
+	return ranges;
+}
+
+export function memoUrlRanges(content: string): { from: number; to: number }[] {
+	const ranges: { from: number; to: number }[] = [];
+	const expression = new RegExp(WEB_URL_REGEX);
+	let match: RegExpExecArray | null;
+	while ((match = expression.exec(content)) !== null) ranges.push({ from: match.index, to: match.index + trimBareUrl(match[0]).length });
+	return ranges;
 }
 
 export function parseMemoImages(content: string): MemoImageRef[] {

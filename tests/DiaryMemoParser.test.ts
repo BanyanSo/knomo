@@ -9,6 +9,14 @@ import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "../src/services/DiaryMe
 const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
 
+test("Things 的 Daily 任务位置保留首行、引用与续行原始偏移", async () => {
+	const content = "- 09:00 - [ ] first\n  > - [-] quoted\n  ```md\n  - [x] example\n  ```\n  - parent\n    1. [X] nested\n";
+	const result = await parser.parse({ sourcePath: "Daily/2026-09-20.md", logicalDate: "2026-09-20", bytes: Buffer.from(content) });
+	assert.equal(result.observations.length, 1);
+	assert.equal(result.observations[0].time, "09:00");
+	assert.deepEqual(result.observations[0].tasks.map(task => [task.taskIndex, task.lineOffset, task.marker]), [[0, 0, " "], [1, 1, "-"], [2, 6, "X"]]);
+});
+
 test("PARSE-CUSTOM-ROOT：识别根层和所有 heading，排除 frontmatter 与代码块", async () => {
 	const result = await parseFixture("PARSE-CUSTOM-ROOT", {
 		sourcePath: "Journal/2026/08/2026-08-09.md",
@@ -81,7 +89,7 @@ test("所有 H1-H6 与根区域识别合法时间 memo，并排除嵌套、引�
 });
 
 test("Catalog Parser 本机缓存标记随重复项扫描元数据更新", () => {
-	assert.equal(CATALOG_PARSER_VERSION, 5);
+	assert.equal(CATALOG_PARSER_VERSION, 6);
 });
 
 test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async () => {

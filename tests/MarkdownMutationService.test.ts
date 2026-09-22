@@ -10,14 +10,28 @@ import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import {
 	MarkdownMutationService,
 	MarkdownMutationStaleError,
+	UnsafeDailyInsertError,
 	type MarkdownCatalogCommitInput,
 } from "../src/services/MarkdownMutationService";
 import type { MemoObservation, ObservationHandle } from "../src/types/catalog";
 import { MemoCommandService } from "../src/services/MemoCommandService";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
+import { formatServiceError } from "../src/utils/serviceText";
 
 const HEADINGS = ["## Memos"] as const;
+
+test("Composer Markdown fixtures preserve semantic source through Daily create, parse and edit", async () => {
+	for (const content of [...composerMarkdownFixtures.map(f => f.text.replace(/\r\n/g, "\n")), "first  \nsecond\\\nthird"]) {
+		const fixture = createFixture();
+		await fixture.service.create({ content });
+		const saved = await fixture.getOnlyObservation("2026-08-22");
+		assert.equal(saved.content, content);
+		await fixture.service.edit({ observation: toHandle(saved), content: content + "\nchanged" });
+		assert.equal((await fixture.getOnlyObservation("2026-08-22")).content, content + "\nchanged");
+	}
+});
 
 test("缺失日记先应用模板再追加 Memo，复制和移动到新日期也保留模板", async () => {
 	const fixture = createFixture({ template: "Templates/Daily", initialFiles: {
@@ -74,6 +88,17 @@ test("正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (cont
 			assert.doesNotMatch(fixture.vault.readText(fixture.getPath("2026-08-22")), /<!--|memoId|knomo-id/u);
 		});
 	}
+});
+
+test("Things 混合代码、HTML 与引用任务只修改对应 marker，旧句柄拒绝写入", async () => {
+	const fixture = createFixture();
+	const content = "intro\n\n<!--\n- [ ] fake\n-->\n\n> - [ ] quoted\n\n```md\n- [ ] example\n```\n\n- [X] last";
+	await fixture.service.create({ content });
+	const observation = await fixture.getOnlyObservation("2026-08-22");
+	assert.equal(observation.tasks.length, 2);
+	const result = await fixture.service.toggleTask({ observation: toHandle(observation), taskIndex: 0, checked: true });
+	assert.equal(result.observation?.content, content.replace("> - [ ] quoted", "> - [x] quoted"));
+	await assert.rejects(fixture.service.toggleTask({ observation: toHandle(observation), taskIndex: 1, checked: false }));
 });
 
 test("任务列表起始的 memo 按原始 Daily 行切换 checkbox，不失败也不跳行", async () => {
@@ -404,7 +429,113 @@ test("末尾缩进空行属于原 memo，连续创建不转移正文或解析失
 	}
 });
 
+test("插入遵循 Parser 的 Memo 区间，内部标题和围栏不改变外层边界", async (context) => {
+	for (const eol of ["\n", "\r\n"]) for (const indent of ["  ", "\t"]) {
+		for (const insertPosition of ["top", "bottom"] as const) for (const activeEditor of [false, true]) {
+			await context.test(JSON.stringify({ eol, indent, insertPosition, activeEditor }), async () => {
+				const path = "Daily/2026-08-22.md";
+				const initial = ["---", "title: Daily", "---", "## Memos", "- 08:00 ```js",
+					indent + "code", indent + "```", indent + "## Fake", "- 08:01 second",
+					indent + "## Other", "## Other", "```md", "# Example", "```", "- 08:02 outside", ""].join(eol);
+				const fixture = createFixture({ initialFiles: { [path]: initial }, insertPosition, activeEditor });
+				const before = await fixture.parse("2026-08-22");
+				const result = await fixture.service.create({ content: "new" });
+				const after = await fixture.parse("2026-08-22");
+				assert.equal(result.observation?.section, "## Memos");
+				assert.equal(after.length, before.length + 1);
+				assert.deepEqual(after.filter(item => item.content !== "new").map(item => item.rawBlockHash), before.map(item => item.rawBlockHash));
+				const expected = initial.replace(insertPosition === "top" ? "## Memos" + eol : "## Other" + eol + "```md",
+					insertPosition === "top" ? "## Memos" + eol + "- 09:00 new" + eol : "- 09:00 new" + eol + "## Other" + eol + "```md");
+				assert.equal(fixture.vault.readText(path), expected);
+				assert.equal(fixture.committedPartitions.length, 1);
+				assert.equal(fixture.writeCalls.editor, activeEditor ? 1 : 0);
+				assert.equal(fixture.writeCalls.process, activeEditor ? 0 : 1);
+			});
+		}
+	}
+});
+
+test("不安全插入及数量校验失败不提交 Daily 或后续状态", async (context) => {
+	for (const activeEditor of [false, true]) for (const eol of ["\n", "\r\n"]) {
+		for (const scenario of [
+			{ initial: ["---", "title: unfinished"], content: "new", position: "top" },
+			{ initial: ["## Memos", "```md", "unfinished"], content: "new", position: "bottom" },
+			{ initial: ["```md", "unfinished"], content: "new", position: "top" },
+			{ initial: ["## Memos"], content: " ^only-id", position: "bottom" },
+		] as const) {
+			await context.test(JSON.stringify({ activeEditor, eol, scenario }), async () => {
+				const path = "Daily/2026-08-22.md";
+				const initial = scenario.initial.join(eol) + eol;
+				const fixture = createFixture({ initialFiles: { [path]: initial }, activeEditor, insertPosition: scenario.position });
+				let committed = false;
+				await assert.rejects(fixture.service.create({ content: scenario.content, onDailyCommitted: () => { committed = true; } }), (error: unknown) => {
+					assert.ok(error instanceof UnsafeDailyInsertError);
+					assert.equal(error.diagnostics.sourcePath, path);
+					assert.equal(error.diagnostics.beforeCount, 0);
+					assert.doesNotMatch(formatServiceError(error), /observation|only-id|unfinished/u);
+					assert.match(formatServiceError(error), /Daily was not modified/u);
+					if (scenario.content === " ^only-id") {
+						assert.equal(error.diagnostics.afterCount, 0);
+						assert.equal(error.diagnostics.reason, "Create must add exactly one parsed memo observation.");
+					}
+					return true;
+				});
+				assert.deepEqual(Buffer.from(fixture.vault.readText(path)), Buffer.from(initial));
+				assert.equal(fixture.writeCalls.process, 0);
+				assert.equal(fixture.writeCalls.editor, 0);
+				assert.equal(committed, false);
+				assert.deepEqual(fixture.committedPartitions, []);
+				assert.deepEqual(fixture.refreshedPaths, []);
+			});
+		}
+	}
+});
+
+test("未闭合外层围栏之前仍可安全顶部插入", async () => {
+	const fixture = createFixture({ initialFiles: { "Daily/2026-08-22.md": "## Memos\n```md\nunfinished\n" }, insertPosition: "top" });
+	await fixture.service.create({ content: "new" });
+	assert.equal(fixture.vault.readText("Daily/2026-08-22.md"), "## Memos\n- 09:00 new\n```md\nunfinished\n");
+});
+
+test("Memo 内伪标题不能截断底部插入区域", async () => {
+	for (const indent of ["  ", "\t"]) {
+		const initial = `## Memos\n- 08:00 old\n${indent}## Other\n- 08:01 second\n## Other\ntext\n`;
+		const fixture = createFixture({ initialFiles: { "Daily/2026-08-22.md": initial } });
+		await fixture.service.create({ content: "new" });
+		assert.equal(fixture.vault.readText("Daily/2026-08-22.md"), initial.replace("- 08:01 second\n", "- 08:01 second\n- 09:00 new\n"));
+	}
+});
+
+test("结构失败时两阶段保存均拒绝，不报告部分提交", async () => {
+	const fixture = createFixture({ initialFiles: { "Daily/2026-08-22.md": "## Memos\n```\n" } });
+	const command = new MemoCommandService(fixture.app, new MemoCatalogService(new InMemoryMemoCatalogStore()), {
+		refreshCatalogPaths: async () => { throw new Error("Must not refresh"); },
+		refreshLocalCatalog: async () => { throw new Error("Must not refresh"); },
+		rebuildLocalCatalog: async () => { throw new Error("Must not rebuild"); },
+		getMemoTimeFormat: () => "HH:mm",
+		now: () => new Date(2026, 7, 22, 9, 0),
+	}, fixture.service);
+	const operation = command.startCreate("new");
+	await assert.rejects(operation.dailyCommitted, UnsafeDailyInsertError);
+	await assert.rejects(operation.settled, UnsafeDailyInsertError);
+	assert.deepEqual(fixture.writeCalls, { process: 0, editor: 0 });
+	assert.deepEqual(fixture.committedPartitions, []);
+});
+
+test("无标题和新建标题仍使用 Parser 区间并保留 frontmatter", async () => {
+	for (const heading of [null, "## New"]) for (const insertPosition of ["top", "bottom"] as const) {
+		const initial = "---\ntitle: daily\n---\n- 08:00 old\n  ## New\n  ```\n## Other\ntext\n";
+		const fixture = createFixture({ initialFiles: { "Daily/2026-08-22.md": initial }, heading, insertPosition });
+		const created = await fixture.service.create({ content: "new" });
+		assert.equal(created.observation?.section, heading);
+		assert.ok(fixture.vault.readText("Daily/2026-08-22.md").startsWith("---\ntitle: daily\n---\n"));
+		assert.equal((await fixture.parse("2026-08-22")).length, 2);
+	}
+});
+
 interface FixtureOptions {
+	heading?: string | null;
+	activeEditor?: boolean;
 	template?: string;
 	catalogDegraded?: boolean;
 	initialFiles?: Readonly<Record<string, string>>;
@@ -418,15 +549,24 @@ function createFixture(options: FixtureOptions = {}) {
 		"Daily/2026-08-22.md": "## Memos\n",
 		"Daily/2026-08-23.md": "## Memos\n",
 	});
+	const activePath = "Daily/2026-08-22.md";
+	const writeCalls = { process: 0, editor: 0 };
+	const process = vault.process.bind(vault);
+	vault.process = async (file, update) => { writeCalls.process += 1; return process(file, update); };
+	const editor = {
+		getValue: () => vault.readText(activePath),
+		offsetToPos: (offset: number) => ({ line: 0, ch: offset }),
+		transaction: (input: { changes: Array<{ text: string }> }) => { writeCalls.editor += 1; vault.writeText(activePath, input.changes[0]!.text); },
+	};
 	const app = {
-		workspace: { getActiveViewOfType: () => null, containerEl: { win: { setTimeout } } },
+		workspace: { getActiveViewOfType: () => options.activeEditor ? { file: vault.getAbstractFileByPath(activePath), editor } : null, containerEl: { win: { setTimeout } } },
 		vault,
 	} as unknown as App;
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
 	const committedPartitions: MarkdownCatalogCommitInput[] = [];
 	const refreshedPaths: string[][] = [];
 	const service = new MarkdownMutationService(app, {
-		getWriteHeading: () => HEADINGS[0],
+		getWriteHeading: () => options.heading === undefined ? HEADINGS[0] : options.heading,
 		getDailyFileForDate: async (logicalDate) => options.template === undefined
 			? vault.ensureFile(`Daily/${logicalDate}.md`, "## Memos\n")
 			: new DailyNoteService(app).getOrCreateDailyNoteForDateWithConfig(new Date(`${logicalDate}T00:00:00`), {
@@ -456,6 +596,7 @@ function createFixture(options: FixtureOptions = {}) {
 		})).observations;
 	};
 	return {
+		writeCalls,
 		app,
 		service,
 		vault,
@@ -565,3 +706,52 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 	});
 	return { promise, resolve: resolvePromise };
 }
+
+test("image source is checked against the actual Daily at prepare and commit without changing body on failure", async () => {
+	for (const activeEditor of [false, true]) for (const edit of [false, true]) {
+		const fixture = createFixture({ activeEditor });
+		await fixture.service.create({ content: "original" });
+		const observation = await fixture.getOnlyObservation("2026-08-22");
+		const original = fixture.vault.readText(observation.sourcePath);
+		let checks = 0;
+		const validateImageSource = (path: string) => {
+			assert.equal(path, observation.sourcePath);
+			if (++checks === 2) throw new Error("attachment changed while preparing Daily");
+		};
+		const saving = edit
+			? fixture.service.edit({ observation: toHandle(observation), content: "![[image.png]]", validateImageSource })
+			: fixture.service.create({ content: "![[image.png]]", validateImageSource });
+		await assert.rejects(saving, /attachment changed/);
+		assert.equal(checks, 2);
+		assert.equal(fixture.vault.readText(observation.sourcePath), original);
+	}
+});
+
+test("MemoCommand passes image validation to the actual creation date and preserves original edit handle", async () => {
+	const fixture = createFixture();
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const command = new MemoCommandService(fixture.app, catalog, {
+		refreshCatalogPaths: async () => undefined,
+		refreshLocalCatalog: async () => { throw new Error("Must not refresh"); },
+		rebuildLocalCatalog: async () => { throw new Error("Must not rebuild"); },
+		getMemoTimeFormat: () => "HH:mm", now: () => new Date(2026, 7, 23, 0, 0),
+	}, fixture.service);
+	const seen: string[] = [];
+	const operation = command.startCreate("![[image.png]]", path => { seen.push(path); throw new Error("bad image source"); });
+	await assert.rejects(operation.dailyCommitted, /bad image source/);
+	await assert.rejects(operation.settled, /bad image source/);
+	assert.deepEqual(seen, ["Daily/2026-08-23.md"]);
+	assert.equal((await fixture.parse("2026-08-23")).length, 0);
+	await fixture.service.create({ content: "original" });
+	const observation = await fixture.getOnlyObservation("2026-08-22");
+	const handle = toHandle(observation);
+	const editing = command.startEdit({ observationHandle: handle } as import("../src/types/catalogView").CatalogMemoItem, "changed", path => {
+		assert.equal(path, handle.sourcePath);
+		throw new Error("invalid image in edit");
+	});
+	await assert.rejects(editing.dailyCommitted, /invalid image in edit/);
+	await assert.rejects(editing.settled, /invalid image in edit/);
+	assert.equal((await fixture.getOnlyObservation("2026-08-22")).content, "original");
+});

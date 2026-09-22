@@ -1,6 +1,15 @@
 import { buildQuoteCreatedMemoContent } from "../utils/references";
+import type { ComposerImageLink } from "./ComposerImageState";
 
-export type ComposerMode = "create" | "edit" | "quote";
+export interface ComposerDraftSnapshot {
+	content: string;
+	referenceText: string | null;
+	markdownText: string | null;
+	anchor: number;
+	head: number;
+	scrollTop: number;
+	imageLinks?: readonly ComposerImageLink[];
+}
 
 export interface ComposerQuoteContext {
 	referenceText: string | null;
@@ -27,32 +36,6 @@ export type PreparedComposerSaveInput<TEditingMemo> =
 		sourceReferenceText: string | null;
 		dailyTrailer: string | null;
 	};
-
-export function getComposerMode(editingMemo: object | null, quoteSourceKey: string | null): ComposerMode {
-	if (editingMemo !== null) {
-		return "edit";
-	}
-	if (quoteSourceKey !== null) {
-		return "quote";
-	}
-	return "create";
-}
-
-export function getDraftForComposerClose(
-	draft: string,
-	mode: ComposerMode,
-	quoteMarkdownText: string | null,
-): string {
-	if (mode !== "quote" || quoteMarkdownText === null) {
-		return draft;
-	}
-	const normalizedDraft = draft.replace(/\s+$/g, "");
-	const normalizedQuote = quoteMarkdownText.trim();
-	if (normalizedDraft === normalizedQuote) {
-		return "";
-	}
-	return draft;
-}
 
 export function formatMarkdownQuoteDraft(content: string): string {
 	return content

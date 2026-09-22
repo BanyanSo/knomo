@@ -10,10 +10,18 @@ export function runComposerCommand(value: string, anchor: number, head: number, 
 	const syntax = scanComposerSyntax(value);
 	const intersects = (a: number, b: number) => from === to ? from >= a && from <= b : from < b && to > a;
 	if (syntax.protectedRanges.some(range => intersects(range.from, range.to))) return { type: "unavailable" };
+	if (command !== "link" && syntax.ranges.some(r => r.kind === "link" && intersects(r.from, r.to))) return { type: "unavailable" };
+	if ((command === "bold" || command === "highlight") && from === to
+		&& syntax.ranges.some(r => !r.list && r.kind !== command && from > r.from && from < r.to
+			&& (from < r.contentFrom || from > r.contentTo))) return { type: "unavailable" };
 	const edits: Edit[] = [];
 	let selection: { from: number; to: number } | null = null;
 	if (command === "link") {
 		if (syntax.ranges.some(r => r.kind === "link" && intersects(r.from, r.to))) return { type: "unchanged" };
+		// 链接也必须遵守已支持格式的结构边界，不能只靠目标字符黑名单。
+		if (syntax.ranges.some(r => !r.list && intersects(r.from, r.to)
+			&& !(from >= r.contentFrom && to <= r.contentTo)
+			&& !(from !== to && from <= r.from && to >= r.to))) return { type: "unavailable" };
 		if (from === to) {
 			// 产品文档中的竖线表示光标位置，不是 alias 分隔符。
 			edits.push({ from, to, insert: "[[]]" });
@@ -49,7 +57,7 @@ export function runComposerCommand(value: string, anchor: number, head: number, 
 				}
 				if (start < finish) {
 					// 允许完整包裹或位于另一格式正文内，但不能穿过它的标记边界。
-					if (syntax.ranges.some(r => (r.kind === "bold" || r.kind === "highlight") && r.kind !== command
+					if (syntax.ranges.some(r => !r.list && r.kind !== command
 						&& start < r.to && finish > r.from
 						&& !(start <= r.from && finish >= r.to)
 						&& !(start >= r.contentFrom && finish <= r.contentTo))) return { type: "unavailable" };
@@ -83,10 +91,11 @@ export function runComposerCommand(value: string, anchor: number, head: number, 
 			const end = newline < 0 ? value.length : newline;
 			const line = value.slice(offset, end);
 			if (line.trim() || from === to) {
+				const list = syntax.ranges.find(r => r.list && r.from >= offset && r.from <= end);
 				const prefix = /^([\t ]*)(?:(?:[-*+]|\d+[.)])\s+(\[[^\]]\]\s*)?)?/u.exec(line)!;
-				if (!(command === "task" && prefix[2])) {
+				if (!(command === "task" && (list?.task || prefix[2]))) {
 					const marker = command === "task" ? "- [ ] " : command === "bullet" ? "- " : `${number}. `;
-					edits.push({ from: offset + prefix[1].length, to: offset + prefix[0].length, insert: marker });
+					edits.push({ from: list?.from ?? offset + prefix[1].length, to: list?.to ?? offset + prefix[0].length, insert: marker });
 				}
 				number++;
 			}

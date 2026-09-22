@@ -53,6 +53,8 @@ export function renderKnomoSidebar(sidebar: HTMLElement, options: KnomoSidebarOp
 	options.createIconButton(actions, "refresh-cw", t("sidebar.refresh"), "knomo-sidebar-action", "refresh");
 	options.createIconButton(actions, "panel-left-close", t("sidebar.hide"), "knomo-sidebar-action knomo-desktop-only", "collapse-sidebar");
 
+	options.createIconButton(actions, "x", t("sidebar.hide"), "knomo-sidebar-action knomo-drawer-close", "close-drawer");
+
 	const statsLabelId = options.createHiddenText(sidebar, "stats-label", t("sidebar.stats"));
 	const statsEl = sidebar.createDiv({ cls: "knomo-sidebar-stats", attr: { "aria-labelledby": statsLabelId, tabindex: "-1" } });
 

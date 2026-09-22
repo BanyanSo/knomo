@@ -1247,3 +1247,51 @@ test("移动端 Catalog 数据库名称使用实际自定义配置目录", async
 	assert.equal(createCatalogDatabaseName(makeApp("custom-config")), createCatalogDatabaseName(makeApp("custom-config")));
 	assert.notEqual(createCatalogDatabaseName(makeApp("custom-config")), createCatalogDatabaseName(makeApp(".obsidian")));
 });
+
+test("Things 旧解析版本重建未编辑 Daily，后续 warm start 不重解析", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const files = [
+		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 unchanged\n  - [x] task", mtime: 10 },
+	];
+	const first = await createCoordinatorFixture(files);
+	const firstCoordinator = new CatalogIndexCoordinator(
+		first.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		{ now: () => 1_000, fullAuditIntervalMs: 10_000 },
+	);
+	firstCoordinator.start(first.owner);
+	await firstCoordinator.initialize();
+	await firstCoordinator.waitForIdle();
+	assert.equal(first.readCount(), 1);
+	first.unload();
+	const { buildCatalogPartition } = await import("../src/services/MemoCatalogService");
+	const { CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
+	const batch = (await store.listFileRevisionBatches())[0];
+	await store.replaceFilePartition(buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
+		observations: batch.observations.map(item => ({ ...item, tasks: [] })), parserVersion: CATALOG_PARSER_VERSION - 1,
+		settingsFingerprint: batch.file.settingsFingerprint, auditedAt: batch.file.auditedAt }));
+
+	const second = await createCoordinatorFixture(files);
+	const secondCoordinator = new CatalogIndexCoordinator(
+		second.app,
+		new MemoCatalogService(store),
+		new DiaryMemoParser(async (bytes) => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+		{ now: () => 2_000, fullAuditIntervalMs: 10_000 },
+	);
+	secondCoordinator.start(second.owner);
+	await secondCoordinator.initialize();
+	await secondCoordinator.waitForIdle();
+
+	assert.equal(second.readCount(), 1);
+	assert.equal((await store.query({ hasTask: true, limit: 50 })).items.length, 1);
+	assert.equal((await store.query({ limit: 50 })).items[0]?.content, "unchanged\n- [x] task");
+	second.unload();
+});

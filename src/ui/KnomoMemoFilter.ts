@@ -55,6 +55,13 @@ export function filterVisibleMemos(options: FilterVisibleMemosOptions): MemoReco
 	if (activeNav === "shuffleDay") {
 		return shuffleDayMemos;
 	}
+	if (activeNav === "things") {
+		return memos.filter((memo) => {
+			if (!memo.catalog?.observation.tasks.length) return false;
+			if (activeTagKey !== null && !memo.tags.some(tag => tagMatchesActiveTagKey(tag, activeTagKey))) return false;
+			return memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter, dailyStatus, getMemoSearchText, today);
+		});
+	}
 	if (hasActiveMemoSearch(normalizedQuery, searchDateFilter, recordStatsFilter)) {
 		return memos.filter((memo) => {
 			return memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter, dailyStatus, getMemoSearchText, today);

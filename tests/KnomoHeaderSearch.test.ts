@@ -50,6 +50,7 @@ test("renders desktop and compact header search structure", async () => {
 	renderKnomoScopePopover(scopeHost.asHtml(), "knomo-scope-popover knomo-mobile-scope-popover");
 	assert.deepEqual(scopeHost.findAll("[data-title-mode]").map((item) => item.getAttr("data-title-mode")), [
 		"all",
+		"things",
 		"no-tag",
 		"with-link",
 		"with-image",

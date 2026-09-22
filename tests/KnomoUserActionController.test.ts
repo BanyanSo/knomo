@@ -225,7 +225,7 @@ test("handleAction dispatches every simple action to the expected view callbacks
 			expected: ["close-mobile-search"],
 		},
 		"open-drawer": {
-			overrides: { composerOpen: true },
+			overrides: { composerOpen: true, mobile: true },
 			expected: ["close-composer-draft", "open-drawer", "defer-sidebar", "sync-chrome", "sync-card-menu"],
 		},
 		"close-drawer": {
@@ -377,6 +377,15 @@ test("handleAction covers guarded and fallback action branches", async () => {
 	const none = createHarness();
 	await none.controller.handleAction(null, null);
 	assert.deepEqual(none.calls, []);
+});
+
+test("桌面打开 Drawer 保留 Composer 会话，移动端仍收起 Composer", async () => {
+	for (const mobile of [false, true]) {
+		const harness = createHarness({ mobile, composerOpen: true });
+		await harness.controller.handleAction("open-drawer", null);
+		assert.equal(harness.calls.includes("close-composer-draft"), mobile);
+		assert.equal(harness.calls.includes("open-drawer"), true);
+	}
 });
 
 interface HarnessState {

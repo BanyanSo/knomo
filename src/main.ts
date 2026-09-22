@@ -45,6 +45,7 @@ import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
+import { createKnomoQuickCommands, KnomoQuickCommandController } from "./ui/KnomoQuickCommands";
 import type { CatalogCoverage, CatalogRefreshResult } from "./types/catalog";
 import { formatDatePart } from "./utils/date";
 import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
@@ -69,6 +70,7 @@ export default class KnomoPlugin extends Plugin {
 	private legacyTrashMigrationService: LegacyTrashMigrationService | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
+	private quickCommandController: KnomoQuickCommandController<WorkspaceLeaf> | null = null;
 
 	async onload(): Promise<void> {
 		registerKnomoIcons();
@@ -338,6 +340,22 @@ export default class KnomoPlugin extends Plugin {
 			if (settingsRecovered) await this.catalogIndexCoordinator?.refreshLocalCatalog();
 			await this.legacyTrashMigrationService?.run();
 		};
+		this.quickCommandController = new KnomoQuickCommandController({
+			getLeaves: () => this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE),
+			getActiveLeaf: () => this.app.workspace.getActiveViewOfType(KnomoView)?.leaf ?? this.app.workspace.activeLeaf,
+			createLeaf: () => this.app.workspace.getLeaf("tab"),
+			openLeaf: async (leaf) => { await leaf.setViewState({ type: KNOMO_VIEW_TYPE, active: false }); },
+			loadLeaf: (leaf) => leaf.loadIfDeferred(),
+			revealLeaf: async (leaf) => {
+				await this.app.workspace.revealLeaf(leaf);
+				this.requestMobileNavbarSync(leaf);
+			},
+			focusLeaf: (leaf) => this.app.workspace.setActiveLeaf(leaf, { focus: true }),
+			getView: (leaf) => leaf.view instanceof KnomoView ? leaf.view : null,
+			isTimeBuoyEnabled: () => this.settingsService.getSettings().timeBuoyEnabled,
+			showNotice: (message) => { new Notice(message); },
+		});
+		this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => this.quickCommandController?.activeLeafChanged(leaf)));
 		this.registerView(
 			KNOMO_VIEW_TYPE,
 			(leaf: WorkspaceLeaf) => new KnomoView(
@@ -359,6 +377,7 @@ export default class KnomoPlugin extends Plugin {
 					await this.memoCommandService!.runWithMutationsPaused(() => this.catalogIndexCoordinator!.rebuildLocalCatalog());
 					await retryRuntimeState();
 				},
+				() => this.quickCommandController?.cancel(),
 			),
 		);
 		this.registerAttachmentEvents();
@@ -380,6 +399,9 @@ export default class KnomoPlugin extends Plugin {
 				void this.activateView();
 			},
 		});
+		for (const command of createKnomoQuickCommands(async (id) => { await this.quickCommandController?.execute(id); })) {
+			this.addCommand(command);
+		}
 		this.addCommand({
 			id: "clear-trash",
 			name: t("trash.clear"),
@@ -436,6 +458,8 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.quickCommandController?.dispose();
+		this.quickCommandController = null;
 		this.viewRefreshScheduler?.clear();
 		MobileNavbarCompactController.cleanupDocument(this.app.workspace.containerEl.doc);
 	}

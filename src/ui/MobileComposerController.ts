@@ -1,3 +1,4 @@
+import type { LayoutMode } from "./KnomoLayout";
 import {
 	attachMobileComposerLayer,
 	clearMobileComposerLayerState,
@@ -62,7 +63,7 @@ interface MobileKeyboardDismissRequest {
 }
 
 export type MobileComposerPhase = "closed" | "opening" | "focusing" | "open" | "closing";
-export type MobileComposerLayoutMode = "desktop-wide" | "desktop-medium" | "desktop-narrow" | "mobile";
+export type MobileComposerLayoutMode = LayoutMode;
 
 export interface MobileComposerControllerOptions {
 	getWindow: () => Window;
@@ -71,6 +72,7 @@ export interface MobileComposerControllerOptions {
 	getRootEl: () => HTMLElement | null;
 	getComposerEl: () => HTMLElement | null;
 	getInputEl: () => HTMLElement | null;
+	captureFocusContext?: () => (() => boolean);
 	getComposerBarEl: () => HTMLElement | null;
 	getReferencePreviewEl: () => HTMLElement | null;
 	getLayout: () => MobileComposerLayoutMode;
@@ -282,8 +284,11 @@ export class MobileComposerController {
 			this.options.focusInputNow();
 			return;
 		}
+		const current = this.options.getInputEl();
+		const valid = this.options.captureFocusContext?.();
 		this.mobileComposerFocusFrameId = this.options.getWindow().requestAnimationFrame(() => {
 			this.mobileComposerFocusFrameId = null;
+			if (this.options.getInputEl() !== current || (valid && !valid())) return;
 			const inputEl = this.options.getInputEl();
 			if (inputEl !== null && this.options.getDocument().activeElement !== inputEl) {
 				this.options.focusInputNow();

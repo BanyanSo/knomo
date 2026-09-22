@@ -42,6 +42,7 @@ test("renders sidebar navigation, trash, stats, tags, and resizer structure", as
 
 	assert.deepEqual(sidebar.findAll("[data-nav]").map((item) => item.getAttr("data-nav")), [
 		"all",
+		"things",
 		"review",
 		"random",
 		"shuffleDay",

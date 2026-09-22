@@ -13,6 +13,8 @@ test("composer 在 Daily 提交后立即清空，不等待卡片刷新", async (
 	const reloadFinished = createDeferred<boolean>();
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
 	view.inputEl = createComposerInput("memo");
+	view.getDailyNotesStatus = () => ({ enabled: true });
+	view.isComposerCreationAvailable = () => true;
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -58,12 +60,14 @@ test("composer 在 Daily 提交后立即清空，不等待卡片刷新", async (
 	}
 });
 
-test("Daily 提交前继续输入的新草稿不会被旧保存清空", async () => {
+test("强制替换会话的新草稿不会被旧保存清空", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const dailyCommitted = createDeferred<void>();
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
 	view.inputEl = createComposerInput("old memo");
+	view.getDailyNotesStatus = () => ({ enabled: true });
+	view.isComposerCreationAvailable = () => true;
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -102,6 +106,7 @@ test("保存期间切换到同文新会话不会被旧提交清空，失败保�
 		const daily = createDeferred<void>();
 		const view = Object.create(KnomoView.prototype) as SaveInputView;
 		Object.assign(view, {
+			getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
 			inputEl: createComposerInput("same text"), isSaving: false, editingMemo: null,
 			quoteReferenceText: null, quoteMarkdownText: null, currentLayout: "desktop",
 			draftContent: "same text", composerOpen: true,
@@ -175,6 +180,8 @@ test("任务保存使 observation key 失效时重新加载，不按旧卡片位
 });
 
 interface SaveInputView {
+	getDailyNotesStatus: () => { enabled: boolean };
+	isComposerCreationAvailable: () => boolean;
 	inputEl: ReturnType<typeof createComposerInput> | null;
 	isSaving: boolean;
 	editingMemo: null;
@@ -254,6 +261,6 @@ function createComposerInput(initial: string) {
 	return {
 		get value() { return value; },
 		set value(next: string) { value = next; revision++; },
-		composer: { capture: () => { const current = revision; return { valid: () => current === revision }; } },
+		composer: { setSaving: (_saving: boolean) => undefined, capture: () => { const current = revision; return { valid: () => current === revision, sameSession: () => current === revision }; } },
 	};
 }

@@ -7,6 +7,32 @@ import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
 
+test("Things 稀疏命中分页与组合计数保留同文 occurrence", async () => {
+	const databaseName = uniqueDatabaseName("things");
+	const store = createStore(databaseName);
+	await store.open();
+	try {
+		const sourcePath = "Journal/2020-01-01.md";
+		const observations = Array.from({ length: 45 }, (_, index) => makeObservation(sourcePath, "2020-01-01", index + 1, "09:00", "release same", {
+			contentHash: "same", tags: ["project"],
+			tasks: index % 10 === 0 ? [{ taskIndex: 0, lineOffset: 0, marker: index === 0 ? " " : "x", text: "release" }] : [],
+		}));
+		await store.replaceFilePartition(makePartition(sourcePath, "2020-01-01", observations));
+		await store.setCoverage({ kind: "complete", coveredFromDate: "2020-01-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+		const filter = { hasTask: true, tags: ["project"], text: "release", fromDate: "2020-01-01", toDate: "2020-01-31" };
+		assert.equal((await store.count(filter)).count, 5);
+		let page = await store.query({ ...filter, limit: 2 });
+		const lines = page.items.map(item => item.startLine);
+		while (page.nextCursor !== null) {
+			page = await store.query({ ...filter, limit: 2, cursor: page.nextCursor });
+			lines.push(...page.items.map(item => item.startLine));
+		}
+		assert.equal(lines.length, 5);
+		assert.equal(new Set(lines).size, 5);
+		assert.equal((await store.count({ ...filter, tags: ["absent"] })).count, 0);
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});
+
 test("IndexedDB 使用真实索引完成 recent、搜索、筛选、分页和 aggregate", async () => {
 	const databaseName = uniqueDatabaseName("query");
 	const store = createStore(databaseName);

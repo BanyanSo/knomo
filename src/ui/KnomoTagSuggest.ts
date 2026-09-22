@@ -64,6 +64,7 @@ export class KnomoTagSuggest {
 		});
 	}
 	refresh(): void {
+		if (this.inputEl.composer.readOnly) { this.close(); return; }
 		if (this.inputEl.composer.composing) return;
 		if (!this.inputEl.contains(this.inputEl.ownerDocument.activeElement)) { this.close(); return; }
 		const current = this.inputEl.composer.capture();

@@ -1,5 +1,5 @@
 import { initializeCatalogRuntime } from "./services/CatalogStartup";
-import { getLanguage, Notice, Platform, Plugin, TFile } from "obsidian";
+import { getLanguage, Notice, Platform, Plugin, TFile, View } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
@@ -342,7 +342,7 @@ export default class KnomoPlugin extends Plugin {
 		};
 		this.quickCommandController = new KnomoQuickCommandController({
 			getLeaves: () => this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE),
-			getActiveLeaf: () => this.app.workspace.getActiveViewOfType(KnomoView)?.leaf ?? this.app.workspace.activeLeaf,
+			getActiveLeaf: () => this.app.workspace.getActiveViewOfType(View)?.leaf ?? null,
 			createLeaf: () => this.app.workspace.getLeaf("tab"),
 			openLeaf: async (leaf) => { await leaf.setViewState({ type: KNOMO_VIEW_TYPE, active: false }); },
 			loadLeaf: (leaf) => leaf.loadIfDeferred(),

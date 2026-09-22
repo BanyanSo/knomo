@@ -11,7 +11,9 @@ export type ClipboardImageDecision =
 
 function getClipboardImageName(name: string, extension: string, stamp: string): string {
 	// 只保留文件名，统一清理跨设备非法字符及会干扰 Wiki/行内代码解析的字符。
-	const basename = name.split(/[\\/]/u).pop()!.replace(/[<>:"|?*\u0000-\u001f\u007f#\[\]^`]/gu, "_").trim().replace(/[. ]+$/u, "");
+	const basename = Array.from(name.split(/[\\/]/u).pop()!, char =>
+		char.charCodeAt(0) <= 0x1f || char.charCodeAt(0) === 0x7f ? "_" : char
+	).join("").replace(/[<>:"|?*#[\]^`]/gu, "_").trim().replace(/[. ]+$/u, "");
 	const dot = basename.lastIndexOf(".");
 	const suffix = dot >= 0 ? basename.slice(dot + 1) : "";
 	let stem = (dot >= 0 ? basename.slice(0, dot) : basename).trim().replace(/[. ]+$/u, "");

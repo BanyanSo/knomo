@@ -1,4 +1,6 @@
 import { MemoCardImageCache } from "./KnomoCardImages";
+import { getMemoRenderRevision } from "./MemoRenderRevision";
+import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
 import {
@@ -27,6 +29,9 @@ interface OpenMobileSearchOptions {
 }
 
 interface MobileSearchControllerOptions {
+	scheduleRenderTask?: (callback: () => void) => number;
+	cancelRenderTask?: (id: number) => void;
+	prioritizeMarkdown?: (root: HTMLElement, scrollTop: number) => void;
 	getThingsStatus?: () => string | null;
 	getThingsContext?: () => { activeNav: "things"; activeTag: string | null; activeTagKey: string | null } | undefined;
 	syncThingsSearch?: (query: string, date: SearchDateFilter | null) => void;
@@ -50,7 +55,7 @@ interface MobileSearchControllerOptions {
 		dateFilter: SearchDateFilter | null,
 		recordStatsFilter: RecordStatsSearchFilter | null,
 	) => boolean;
-	renderMemoCard: (container: HTMLElement, memo: MemoRecord, generation: number, index: number, reusedImagesEl?: HTMLElement | null) => void;
+	renderMemoCard: (container: HTMLElement, memo: MemoRecord, generation: number, index: number, reusedImagesEl?: HTMLElement | null) => HTMLElement | void;
 	clearMarkdown: (surface?: MobileSearchSurface) => void;
 	clearImages: (surface: MobileSearchSurface) => void;
 	bindImageRoot?: (root: HTMLElement | null) => void;
@@ -60,7 +65,7 @@ interface MobileSearchControllerOptions {
 	syncRootState: () => void;
 	getCardFlowScrollTop: () => number | null;
 	restoreCardFlowScrollTop: (scrollTop: number | null) => void;
-	restoreElementScrollTop: (element: HTMLElement | null, scrollTop: number | null) => void;
+	restoreElementScrollTop: (element: HTMLElement | null, scrollTop: number | null, isCurrent?: () => boolean) => void;
 	handleMarkdownInternalLinkClick: (event: MouseEvent) => void;
 	handleTaskCheckboxClick: (event: MouseEvent) => void;
 	handleTaskCheckboxChange: (event: Event) => void;
@@ -88,6 +93,16 @@ export class MobileSearchController {
 	private open = false;
 	private renderGeneration = 0;
 	private debounceTimeoutId: number | null = null;
+	private renderTaskId: number | null = null;
+	private renderedRevisions: string[] = [];
+	private renderedViewKey = "";
+	private scrollRevision = 0;
+	private renderRun = 0;
+	private renderedStatus: string | null = null;
+	private pendingScrollTop: number | null = null;
+	private renderedCards: Array<{ memo: MemoRecord; card: HTMLElement }> = [];
+	private seedPlaceholder: ReturnType<typeof createMemoRenderPlaceholders> | null = null;
+	private markdownPriorityTaskId: number | null = null;
 
 	constructor(private readonly options: MobileSearchControllerOptions) {
 		this.visibleCount = options.batchSize;
@@ -210,12 +225,21 @@ export class MobileSearchController {
 		this.options.registerDomEvent(this.resultsEl, "change", (event) => {
 			this.options.handleTaskCheckboxChange(event);
 		});
+		const onScrollIntent = () => {
+			this.scrollRevision++;
+			this.pendingScrollTop = null;
+			this.queueMarkdownPriority();
+		};
+		this.options.registerDomEvent(this.resultsEl, "touchstart", onScrollIntent);
+		this.options.registerDomEvent(this.resultsEl, "wheel", onScrollIntent);
+		this.options.registerDomEvent(this.resultsEl, "scroll", () => this.queueMarkdownPriority());
 	}
 
 	syncPage(): void {
 		const shouldOpen = this.options.isMobileLayout() && this.open;
 		this.options.getDocument().body.toggleClass("knomo-mobile-search-active", shouldOpen);
 		if (!this.options.isMobileLayout()) {
+			this.cancelRender();
 			this.clearImageCache();
 			this.open = false;
 			this.options.bindImageRoot?.(null);
@@ -235,6 +259,8 @@ export class MobileSearchController {
 	}
 
 	closePage(): void {
+		this.cancelRender();
+		if (this.resultsEl) this.imageCache.capture(this.resultsEl, this.resultsEl);
 		this.queryRun += 1;
 		const scrollTop = this.options.getCardFlowScrollTop();
 		this.open = false;
@@ -243,7 +269,7 @@ export class MobileSearchController {
 			this.flushQuery();
 			this.options.syncThingsSearch?.(this.query, this.dateFilter);
 		} else {
-			this.resetState();
+			this.resetState(true);
 		}
 		this.options.bindImageRoot?.(null);
 		this.options.setCardFlowPaused(false);
@@ -256,7 +282,41 @@ export class MobileSearchController {
 		this.imageCache.clear();
 	}
 
+	invalidateImagePaths(paths: readonly string[]): void {
+		this.imageCache.invalidateResourcePaths(paths);
+	}
+
+	private cancelRender(): void {
+		this.renderRun++;
+		if (this.renderTaskId !== null) this.options.cancelRenderTask?.(this.renderTaskId);
+		this.renderTaskId = null;
+		this.renderedRevisions = [];
+		this.pendingScrollTop = null;
+		this.renderedCards = [];
+		this.seedPlaceholder = null;
+		if (this.markdownPriorityTaskId !== null) this.options.cancelRenderTask?.(this.markdownPriorityTaskId);
+		this.markdownPriorityTaskId = null;
+	}
+
+	private prioritizeMarkdown(): void {
+		if (this.open && this.resultsEl) {
+			this.options.prioritizeMarkdown?.(this.resultsEl, this.pendingScrollTop ?? this.resultsEl.scrollTop);
+		}
+	}
+
+	private queueMarkdownPriority(): void {
+		if (!this.options.prioritizeMarkdown || this.markdownPriorityTaskId !== null) return;
+		if (!this.options.scheduleRenderTask) { this.prioritizeMarkdown(); return; }
+		const run = this.renderRun;
+		this.markdownPriorityTaskId = this.options.scheduleRenderTask(() => {
+			if (run !== this.renderRun) return;
+			this.markdownPriorityTaskId = null;
+			this.prioritizeMarkdown();
+		});
+	}
+
 	removePage(): void {
+		this.cancelRender();
 		this.clearImageCache();
 		this.options.bindImageRoot?.(null);
 		this.clearDebounce();
@@ -309,10 +369,11 @@ export class MobileSearchController {
 		void this.refreshRemoteResults(true, this.getChangeIntent(previousViewStateKey));
 	}
 
-	resetState(): void {
+	resetState(preserveImages = false): void {
+		this.cancelRender();
 		this.queryRun += 1;
 		this.queryError = null;
-		this.clearImageCache();
+		if (!preserveImages) this.clearImageCache();
 		this.clearDebounce();
 		this.query = "";
 		this.dateFilter = null;
@@ -340,12 +401,12 @@ export class MobileSearchController {
 			void this.refreshRemoteResults(false);
 			return;
 		}
-		this.renderResults();
+		this.renderResults("content-change", true);
 	}
 
 	private async refreshRemoteResults(reset: boolean, changeIntent: CardFlowChangeIntent = "content-change"): Promise<void> {
 		if (this.options.loadRemoteResults === undefined) {
-			this.renderResults(changeIntent);
+			this.renderResults(changeIntent, !reset);
 			return;
 		}
 		const run = ++this.queryRun;
@@ -356,26 +417,63 @@ export class MobileSearchController {
 		} catch (error) {
 			if (run === this.queryRun) this.queryError = error instanceof Error ? error.message : t("empty.cardFlowFailed");
 		} finally {
-			if (run === this.queryRun) this.renderResults(changeIntent);
+			if (run === this.queryRun) this.renderResults(changeIntent, !reset);
 		}
 	}
 
-	renderResults(changeIntent: CardFlowChangeIntent = "content-change"): void {
+	renderResults(changeIntent: CardFlowChangeIntent = "content-change", append = false): void {
 		const resultsEl = this.resultsEl;
 		if (resultsEl === null || !this.open) {
 			return;
 		}
-		const scrollTop = changeIntent === "view-scope-change" ? 0 : resultsEl.scrollTop;
+		const viewKey = this.getViewStateKey();
+		const sameView = changeIntent !== "view-scope-change" && viewKey === this.renderedViewKey;
+		// 临时清空 DOM 会压缩 scrollTop；同范围的后续刷新必须继承尚未完成的恢复目标。
+		const scrollTop = changeIntent === "view-scope-change" ? 0
+			: (sameView ? this.pendingScrollTop : null) ?? resultsEl.scrollTop;
 		const query = this.query.trim();
 		const normalizedQuery = query.toLowerCase();
 		const memos = this.getMatchedMemos(normalizedQuery);
 		const visibleMemos = memos.slice(0, this.visibleCount);
-		this.imageCache.capture(resultsEl);
-		const generation = this.renderGeneration + 1;
-		this.renderGeneration = generation;
-		this.options.clearMarkdown("mobile-search");
-		this.options.clearImages("mobile-search");
-		resultsEl.empty();
+		const revisions = visibleMemos.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
+		const status = this.queryError ?? this.options.getThingsStatus?.() ?? null;
+		const canAppend = append && changeIntent !== "view-scope-change" && !status && this.renderTaskId === null
+			&& this.renderedStatus === status
+			&& this.renderedViewKey === this.getViewStateKey() && this.renderedRevisions.length > 0
+			&& this.renderedRevisions.length <= revisions.length
+			&& this.renderedRevisions.every((revision, index) => revision === revisions[index]);
+		const startIndex = canAppend ? this.renderedRevisions.length : 0;
+		if (!canAppend) {
+			const seedPlaceholder = sameView
+				? this.seedPlaceholder ?? createMemoRenderPlaceholders(this.renderedCards)
+				: null;
+			this.cancelRender();
+			this.pendingScrollTop = scrollTop;
+			this.seedPlaceholder = seedPlaceholder;
+			this.imageCache.capture(resultsEl, this.options.scheduleRenderTask ? resultsEl : null, scrollTop);
+			this.renderGeneration += 1;
+			this.options.clearMarkdown("mobile-search");
+			this.options.clearImages("mobile-search");
+			resultsEl.empty();
+		} else {
+			resultsEl.find(".knomo-mobile-search-more")?.remove();
+		}
+		if (this.markdownPriorityTaskId !== null) this.options.cancelRenderTask?.(this.markdownPriorityTaskId);
+		this.markdownPriorityTaskId = null;
+		const generation = this.renderGeneration;
+		const renderRun = ++this.renderRun;
+		const scrollRevision = this.scrollRevision;
+		const completeRender = () => {
+			const target = this.pendingScrollTop;
+			this.pendingScrollTop = null;
+			this.seedPlaceholder = null;
+			if (!canAppend && target !== null && scrollRevision === this.scrollRevision) {
+				this.options.restoreElementScrollTop(resultsEl, target, () =>
+					this.open && renderRun === this.renderRun && scrollRevision === this.scrollRevision);
+			}
+		};
+		this.renderedStatus = status;
+		this.renderedViewKey = viewKey;
 		this.syncDateButtons();
 		if (
 			!this.options.getThingsContext?.()
@@ -384,12 +482,11 @@ export class MobileSearchController {
 			&& this.recordStatsFilter === null
 		) {
 			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.emptyPrompt") });
-			this.options.restoreElementScrollTop(resultsEl, scrollTop);
+			completeRender();
 			return;
 		}
-		const status = this.queryError ?? this.options.getThingsStatus?.();
 		if (status) renderKnomoListSummary(resultsEl, status);
-		if (memos.length === 0 && status) return;
+		if (memos.length === 0 && status) { completeRender(); return; }
 		const context = this.options.getThingsContext?.();
 		const regularState = context === undefined ? null : {
 			...context,
@@ -405,7 +502,7 @@ export class MobileSearchController {
 					? formatMobileSearchEmptyTitle(query, this.dateFilter, this.recordStatsFilter)
 					: getRegularFilterCopy(regularState, 0)?.emptyTitle,
 			});
-			this.options.restoreElementScrollTop(resultsEl, scrollTop);
+			completeRender();
 			return;
 		}
 		const matchedTotalCount = this.options.getMatchedTotalCount === undefined
@@ -416,20 +513,43 @@ export class MobileSearchController {
 				? formatMobileSearchSummary(query, this.dateFilter, matchedTotalCount, this.recordStatsFilter)
 				: getRegularFilterCopy(regularState, matchedTotalCount)?.summary;
 			if (summary != null) {
-				renderKnomoListSummary(resultsEl, summary);
+				const previous = canAppend ? resultsEl.find(".knomo-list-summary") : null;
+				if (previous) previous.setText(summary);
+				else renderKnomoListSummary(resultsEl, summary);
 			}
 		}
-		for (const [index, memo] of visibleMemos.entries()) {
-			this.options.renderMemoCard(resultsEl, memo, generation, index, this.imageCache.take(memo));
-		}
-		if (visibleMemos.length < memos.length || this.options.hasRemoteNextPage?.() === true) {
-			renderKnomoLoadMoreButton(resultsEl, {
-				remainingCount: Math.max(1, (matchedTotalCount ?? memos.length) - visibleMemos.length),
-				action: "load-more-mobile-search",
-				extraClass: "knomo-mobile-search-more",
-			});
-		}
-		this.options.restoreElementScrollTop(resultsEl, scrollTop);
+		let index = startIndex;
+		const renderChunk = () => {
+			if (renderRun !== this.renderRun || !this.open || generation !== this.renderGeneration || resultsEl !== this.resultsEl) return;
+			this.renderTaskId = null;
+			const startedAt = performance.now();
+			let count = 0;
+			while (index < visibleMemos.length) {
+				const memo = visibleMemos[index];
+				const card = this.options.renderMemoCard(resultsEl, memo, generation, index, this.imageCache.take(memo));
+				if (card) {
+					this.seedPlaceholder?.(memo, card);
+					this.renderedCards.push({ memo, card });
+				}
+				this.renderedRevisions.push(revisions[index++]);
+				if (this.options.scheduleRenderTask && (++count >= 6 || performance.now() - startedAt >= 4)) break;
+			}
+			this.prioritizeMarkdown();
+			if (index < visibleMemos.length && this.options.scheduleRenderTask) {
+				this.renderTaskId = this.options.scheduleRenderTask(renderChunk);
+				return;
+			}
+			if (visibleMemos.length < memos.length || this.options.hasRemoteNextPage?.() === true) {
+				renderKnomoLoadMoreButton(resultsEl, {
+					remainingCount: Math.max(1, (matchedTotalCount ?? memos.length) - visibleMemos.length),
+					action: "load-more-mobile-search",
+					extraClass: "knomo-mobile-search-more",
+				});
+			}
+			// 追加时保留浏览器的当前位置，不用旧 scrollTop 覆盖用户刚发生的滚动。
+			completeRender();
+		};
+		renderChunk();
 	}
 
 	syncDateButtons(): void {

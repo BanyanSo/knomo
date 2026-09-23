@@ -289,6 +289,7 @@ export const zhCN = {
 	"card.markReviewed": "标记已回顾",
 	"card.wordCount": "字数：{{count}}",
 	"image.unavailable": "图片无法显示",
+	"image.retry": "图片暂时无法显示，点击重试",
 	"image.loadFailed": "图片加载失败",
 	"image.previous": "上一张",
 	"image.next": "下一张",

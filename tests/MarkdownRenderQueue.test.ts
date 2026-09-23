@@ -99,6 +99,48 @@ test("pauses queued markdown work until resumed", async () => {
 	assert.deepEqual(order, ["queued"]);
 });
 
+test("移动端每帧最多启动一个 Markdown 任务，清理取消待执行帧", async () => {
+	const frames = new Map<number, () => void>();
+	let id = 0;
+	const order: number[] = [];
+	const queue = new MarkdownRenderQueue({
+		concurrency: 4, getGeneration: () => 1,
+		scheduleTask: callback => { frames.set(++id, callback); return id; },
+		cancelTask: frame => { frames.delete(frame); },
+	});
+	for (let index = 0; index < 5; index++) queue.enqueue("normal", 1, async () => { order.push(index); });
+	assert.deepEqual(order, []);
+	const frame = [...frames.entries()][0]; frames.delete(frame[0]); frame[1]();
+	await Promise.resolve(); await Promise.resolve();
+	assert.deepEqual(order, [0]);
+	assert.equal(frames.size, 1);
+	queue.clear();
+	assert.equal(frames.size, 0);
+});
+
+test("视口任务优先于离屏高优先级任务，并在视口改变后重新排序", async () => {
+	const frames: Array<() => void> = [];
+	const order: number[] = [];
+	const targets = Array.from({ length: 300 }, () => ({} as HTMLElement));
+	const queue = new MarkdownRenderQueue({
+		concurrency: 1, getGeneration: () => 1,
+		scheduleTask: callback => { frames.push(callback); return frames.length; },
+	});
+	for (let index = 0; index < targets.length; index++) {
+		queue.enqueue(index < 12 ? "high" : "normal", 1, async () => { order.push(index); }, targets[index]);
+	}
+	queue.prioritizeTargets(target => target === targets[299] || target === targets[298]);
+	frames.shift()!(); await Promise.resolve(); await Promise.resolve();
+	assert.deepEqual(order, [298]);
+	queue.prioritizeTargets(target => target === targets[200]);
+	frames.shift()!(); await Promise.resolve(); await Promise.resolve();
+	assert.deepEqual(order, [298, 200]);
+	queue.prioritizeTargets(() => false);
+	frames.shift()!(); await Promise.resolve(); await Promise.resolve();
+	assert.deepEqual(order, [298, 200, 0]);
+	queue.clear();
+});
+
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 	let resolve: () => void = () => {};
 	const promise = new Promise<void>((innerResolve) => {

@@ -2781,6 +2781,15 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: var(--background-modifier-hover);
 }
 
+/* 保留占位几何，原图解码完成后才参与显示。 */
+.knomo-plugin .knomo-card-image-item.is-loading img {
+	visibility: hidden;
+}
+
+.knomo-plugin .knomo-card-text-placeholder {
+	white-space: pre-wrap;
+}
+
 .knomo-plugin .knomo-card-image-item.is-loading .knomo-card-image-button::before {
 	content: "";
 	position: absolute;

@@ -21,6 +21,8 @@ interface MemoMarkdownRendererOptions {
 	getDocument: () => Document;
 	getGeneration: (surface: MemoMarkdownSurface) => number;
 	concurrency: number;
+	scheduleTask?: (callback: () => void) => number;
+	cancelTask?: (id: number) => void;
 }
 
 interface MarkdownRenderToken {
@@ -42,10 +44,14 @@ export class MemoMarkdownRenderer {
 	constructor(private readonly options: MemoMarkdownRendererOptions) {
 		this.cardFlowQueue = new MarkdownRenderQueue({
 			concurrency: options.concurrency,
+			scheduleTask: options.scheduleTask,
+			cancelTask: options.cancelTask,
 			getGeneration: () => options.getGeneration("card-flow"),
 		});
 		this.mobileSearchQueue = new MarkdownRenderQueue({
 			concurrency: options.concurrency,
+			scheduleTask: options.scheduleTask,
+			cancelTask: options.cancelTask,
 			getGeneration: () => options.getGeneration("mobile-search"),
 		});
 	}
@@ -63,6 +69,7 @@ export class MemoMarkdownRenderer {
 			priority,
 			generation,
 			() => this.renderMemoMarkdown(memo, container, token, previewText, surface),
+			container,
 		);
 	}
 
@@ -78,7 +85,19 @@ export class MemoMarkdownRenderer {
 			"normal",
 			generation,
 			() => this.renderSourceReferenceMarkdown(container, text, sourcePath, token, surface),
+			container,
 		);
+	}
+
+	prioritizeVisible(surface: MemoMarkdownSurface, root: HTMLElement, scrollTop = root.scrollTop): void {
+		const bounds = root.getBoundingClientRect();
+		const offset = root.scrollTop - scrollTop;
+		// 重建尚未恢复滚动时，按目标位置判断；集中读布局，不在逐任务执行时反复测量。
+		this.getQueue(surface).prioritizeTargets(target => {
+			if (!root.contains(target)) return false;
+			const rect = target.getBoundingClientRect();
+			return rect.bottom + offset > bounds.top && rect.top + offset < bounds.bottom;
+		});
 	}
 
 	clear(surface: MemoMarkdownSurface = "card-flow"): void {

@@ -28,6 +28,47 @@ test("both Card surfaces pass literal Markdown and Daily sourcePath to the host"
 	} finally { renderer.clear(); MarkdownRenderer.render = original; }
 });
 
+test("按待恢复视口优先渲染深处正文，实际滚动后切换优先目标", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const original = MarkdownRenderer.render;
+	const calls: string[] = [];
+	const frames = new Map<number, () => void>();
+	let id = 0, scrollTop = 0;
+	const targets = Array.from({ length: 300 }, (_, index) => Object.assign(new TestElement("div").asHtml(), {
+		getBoundingClientRect: () => ({ top: 100 + index * 100 - scrollTop, bottom: 200 + index * 100 - scrollTop }),
+	}));
+	const root = {
+		get scrollTop() { return scrollTop; },
+		getBoundingClientRect: () => ({ top: 100, bottom: 500 }),
+		contains: (target: HTMLElement) => targets.includes(target),
+	} as HTMLElement;
+	MarkdownRenderer.render = async (_app, markdown) => { calls.push(markdown); };
+	const renderer = new MemoMarkdownRenderer({
+		app: {} as never, createComponent: () => new TestComponent() as never,
+		getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1,
+		scheduleTask: callback => { frames.set(++id, callback); return id; },
+		cancelTask: frame => { frames.delete(frame); },
+	});
+	const frame = async () => {
+		const [frameId, callback] = [...frames][0]; frames.delete(frameId); callback();
+		for (let tick = 0; tick < 6; tick++) await Promise.resolve();
+	};
+	try {
+		targets.forEach((target, index) => renderer.queueMemoMarkdown(makeMemo(), target, 0,
+			index < 12 ? "high" : "normal", String(index), "mobile-search"));
+		renderer.prioritizeVisible("mobile-search", root, 24000);
+		await frame();
+		assert.deepEqual(calls, ["240"]);
+		scrollTop = 15000;
+		renderer.prioritizeVisible("mobile-search", root);
+		await frame();
+		assert.deepEqual(calls, ["240", "150"]);
+	} finally { renderer.clear("mobile-search"); MarkdownRenderer.render = original; }
+});
+
 test("post-processes memo markdown DOM metadata", async () => {
 	await ensureObsidianStub();
 	const { prepareRenderedMemoMarkdown, applyTaskCheckboxDomState } = await import("../src/ui/MemoMarkdownRenderer");

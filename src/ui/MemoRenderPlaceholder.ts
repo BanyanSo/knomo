@@ -11,9 +11,9 @@ export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewI
 	return (memo: MemoViewItem, card: HTMLElement): void => {
 		const previous = snapshots.get(key(memo));
 		const content = card.querySelector<HTMLElement>(".knomo-card-content");
-		if (!previous || !content || content.childNodes.length > 0) return;
+		if (!previous || !content || (content.childNodes.length > 0 && !content.querySelector(":scope > [data-knomo-render-placeholder]"))) return;
 		const snapshot = (previous.querySelector(":scope > [data-knomo-render-placeholder]") ?? previous).cloneNode(true) as HTMLElement;
-		snapshot.className = "";
+		snapshot.className = snapshot.classList.contains("knomo-card-text-placeholder") ? "knomo-card-text-placeholder" : "";
 		snapshot.setAttribute("data-knomo-render-placeholder", "");
 		snapshot.setAttribute("inert", "");
 		// 新正文完成渲染前，快照只供显示；同文卡片也各自使用独立克隆。
@@ -21,6 +21,6 @@ export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewI
 			element.removeAttribute("data-knomo-memo-id"); element.removeAttribute("data-action");
 		});
 		snapshot.querySelectorAll<HTMLInputElement>("input").forEach(input => { input.disabled = true; });
-		content.append(snapshot);
+		content.replaceChildren(snapshot);
 	};
 }

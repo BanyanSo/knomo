@@ -9,6 +9,8 @@ import {
 	type RenderedMemoCardImages,
 } from "../src/ui/KnomoCardImages";
 import type { MemoPreviewImage } from "../src/ui/MemoCardPreview";
+import type { CardImageLoadRequest } from "../src/ui/CardImageLoadQueue";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 const labels = {
 	previewLabel: "Preview image",
@@ -237,6 +239,137 @@ test("image cache counts individual images and evicts the least recently retaine
 	assert.notEqual(cache.take(third), null);
 });
 
+test("本地三张原图经过其他筛选和空页面后复用同一批已加载节点", () => {
+	const root = new TestElement("div");
+	const cache = new MemoCardImageCache();
+	const memo = makeObservedMemo(1);
+	const images = Array.from({ length: 3 }, (_, index) => makeImage({ resourcePath: `${index}.jpg` }));
+	const first = renderMemoCardImages(root.asHtml(), memo, images, labels)!;
+	const nodes = first.loadItems.map(item => item.imageEl);
+	for (const item of first.loadItems) {
+		Object.assign(item.imageEl, { naturalWidth: 4000, naturalHeight: 3000 });
+		item.imageEl.setAttr("src", item.src); item.onLoad?.();
+	}
+	cache.capture(root.asHtml()); root.empty();
+	const other = renderMemoCardImages(root.asHtml(), makeObservedMemo(4), [makeImage()], labels)!;
+	other.loadItems[0].imageEl.setAttr("src", other.loadItems[0].src); other.loadItems[0].onLoad?.();
+	cache.capture(root.asHtml()); root.empty();
+	cache.capture(root.asHtml());
+	const returned = renderMemoCardImages(root.asHtml(), memo, images, labels, cache.take(memo))!;
+	assert.equal(returned.loadItems.length, 0);
+	assert.deepEqual(root.findAll("img").map(node => node.asHtml()), nodes);
+});
+
+test("失败卡片点击后仅重试自身，恢复加载占位且不冒泡打开预览", () => {
+	const root = new TestElement("div");
+	const rendered = renderMemoCardImages(root.asHtml(), makeMemo(), [makeImage(), makeImage()], {
+		...labels, retryLabel: "Tap to retry",
+	})!;
+	const [failed, ready] = rendered.loadItems;
+	ready.imageEl.setAttr("src", ready.src); ready.onLoad?.();
+	let retries = 0;
+	failed.onError?.(() => { retries++; failed.imageEl.setAttr("src", failed.src); return true; });
+	const [button] = root.findAll(".knomo-card-image-button");
+	assert.equal(button.find(".knomo-card-image-placeholder")?.getText(), "Tap to retry");
+	assert.equal(button.click(), true);
+	assert.equal(retries, 1);
+	assert.equal(button.find("img")?.asHtml(), failed.imageEl);
+	assert.equal(root.findAll(".knomo-card-image-item")[0].hasClass("is-loading"), true);
+	assert.equal(ready.imageEl.getAttr("src"), ready.src);
+	assert.equal(button.click(), false);
+	failed.onLoad?.();
+	assert.equal(root.findAll(".knomo-card-image-item")[0].hasClass("is-error"), false);
+	failed.onError?.(() => false);
+	button.click();
+	assert.equal(root.findAll(".knomo-card-image-item")[0].hasClass("is-loading"), false);
+	assert.equal(root.findAll(".knomo-card-image-item")[0].hasClass("is-error"), true);
+});
+
+test("移动 View 的实际重建入口经过其他筛选与空页后复用原图", async () => {
+	await ensureObsidianStub();
+	const { Platform } = await import("obsidian");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const oldMobile = Platform.isMobile;
+	Platform.isMobile = true;
+	const root = new TestElement("div");
+	const memo = makeObservedMemo(1), other = makeObservedMemo(4);
+	const images = Array.from({ length: 3 }, (_, index) => makeImage({ resourcePath: `${index}.jpg` }));
+	let current: MemoViewItem | null = memo, loads = 0;
+	const view = Object.create(KnomoView.prototype);
+	Object.assign(view, {
+		viewStateController: { activeNav: "all" }, cardFlowEl: root.asHtml(), containerEl: { win: {} },
+		cardImageCache: new MemoCardImageCache(), renderedCardMemos: new Map(), renderedPreviewImages: new WeakMap(),
+		cardFlowCoordinator: { generation: 0, setPendingScrollRestore() {}, resetFlowRuntime() {} },
+		memoMarkdownRenderer: { clear() {} }, recordStatsViewStateController: { clearRendered() {} },
+		deferMobileCardFlowRender: () => false, getInitialCardBatchSize: () => 30,
+		restoreCardFlowScrollTop() {}, resetTimeBuoyCardFlow() {},
+		getDirectCardElements: () => root.findAll(".knomo-card"), getCurrentCardFlowPresentation: () => ({}),
+		cardImageLoadQueue: {
+			clear() {}, forget() {},
+			observe(request: CardImageLoadRequest) {
+				for (const item of request.images) {
+					loads++; Object.assign(item.imageEl, { naturalWidth: 4000, naturalHeight: 3000 });
+					item.imageEl.setAttr("src", item.src); item.onLoad?.();
+				}
+			},
+		},
+		renderCardFlowPresentation: () => {
+			if (!current) return;
+			const card = root.createDiv({ cls: "knomo-card", attr: { "data-memo-id": current.id } });
+			view.renderMemoCardImages(card.asHtml(), current, images, view.renderGeneration, "card-flow");
+			view.renderedCardMemos.set(current.id, current);
+		},
+	});
+	try {
+		view.forceRebuildCardFlow("view-scope-change");
+		const original = root.findAll("img");
+		assert.equal(loads, 3);
+		current = other; view.forceRebuildCardFlow("view-scope-change");
+		assert.equal(loads, 6);
+		current = null; view.forceRebuildCardFlow("view-scope-change");
+		current = memo; view.forceRebuildCardFlow("view-scope-change");
+		assert.equal(loads, 6);
+		assert.deepEqual(root.findAll("img"), original);
+	} finally { Platform.isMobile = oldMobile; }
+});
+
+test("资源变化只清理相关缓存节点", () => {
+	const root = new TestElement("div");
+	const cache = new MemoCardImageCache(1);
+	const first = makeObservedMemo(1), second = makeObservedMemo(4);
+	for (const [memo, path] of [[first, "a.jpg"], [second, "b.jpg"]] as const) {
+		const rendered = renderMemoCardImages(root.asHtml(), memo, [makeImage({ path, resourcePath: path })], labels)!;
+		const item = rendered.loadItems[0];
+		Object.assign(item.imageEl, { naturalWidth: 4000, naturalHeight: 3000 });
+		item.imageEl.setAttr("src", item.src); item.onLoad?.();
+		cache.capture(root.asHtml()); root.empty();
+	}
+	assert.equal(cache.take(first), null);
+	cache.invalidateResourcePaths(["unrelated.jpg"]);
+	assert.notEqual(cache.take(second), null);
+	const rendered = renderMemoCardImages(root.asHtml(), second, [makeImage({resourcePath:"b.jpg"})], labels)!;
+	rendered.loadItems[0].imageEl.setAttr("src", "app://image.png"); rendered.loadItems[0].onLoad?.();
+	cache.capture(root.asHtml()); root.empty();
+	cache.invalidateResourcePaths(["b.jpg"]);
+	assert.equal(cache.take(second), null);
+});
+
+test("超过缓存容量时优先保留视口附近图片而非列表尾部", () => {
+	const root = new TestElement("div");
+	const cache = new MemoCardImageCache(2);
+	const memos = [makeObservedMemo(1), makeObservedMemo(4), makeObservedMemo(7)];
+	memos.forEach((memo, index) => {
+		const rendered = renderMemoCardImages(root.asHtml(), memo, [makeImage()], labels)!;
+		Object.assign(rendered.imagesEl, { getBoundingClientRect: () => ({ top:index * 500, bottom:index * 500 + 100 }) });
+		rendered.loadItems[0].imageEl.setAttr("src", "app://image.png"); rendered.loadItems[0].onLoad?.();
+	});
+	const viewport = { getBoundingClientRect: () => ({top:0, bottom:200}) } as HTMLElement;
+	cache.capture(root.asHtml(), viewport); root.empty();
+	assert.notEqual(cache.take(memos[0]), null);
+	assert.notEqual(cache.take(memos[1]), null);
+	assert.equal(cache.take(memos[2]), null);
+});
+
 function makeObservedMemo(startLine: number, sourceRevision = "revision"): MemoViewItem {
 	return makeMemo({catalog: {
 		observationHandle: { sourcePath: "Daily/2026-06-02.md", sourceRevision, startLine, endLine: startLine + 1, rawBlockHash: "same-content" },
@@ -250,6 +383,19 @@ interface CreateElementOptions {
 }
 
 class TestElement {
+	scrollTop = 0;
+	getBoundingClientRect(): DOMRect { return { top: 0, bottom: 200 } as DOMRect; }
+	querySelector(selector: string): TestElement | null { return this.find(selector); }
+	private readonly clickListeners: Array<(event: MouseEvent) => void> = [];
+	addEventListener(type: string, listener: (event: MouseEvent) => void): void {
+		if (type === "click") this.clickListeners.push(listener);
+	}
+	click(): boolean {
+		let stopped = false;
+		const event = { preventDefault() {}, stopPropagation() { stopped = true; } } as MouseEvent;
+		for (const listener of this.clickListeners) listener(event);
+		return stopped;
+	}
 	private readonly children: TestElement[] = [];
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();

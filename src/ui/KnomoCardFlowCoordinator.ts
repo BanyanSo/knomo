@@ -277,6 +277,7 @@ export class KnomoCardFlowCoordinator {
 			cancelBatch: () => this.batcher.cancelBatch(),
 			startIndex,
 			maxItems,
+			timeBudgetMs: options.isMobile ? 4 : undefined,
 		});
 		if (result.type === "pending") {
 			options.scheduleContinuation(() => {

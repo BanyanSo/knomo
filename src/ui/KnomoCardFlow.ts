@@ -41,6 +41,8 @@ export interface RunCardFlowBatchOptions<TMemo extends MemoRecord = MemoRecord> 
 	cancelBatch: () => void;
 	startIndex?: number;
 	maxItems?: number;
+	timeBudgetMs?: number;
+	now?: () => number;
 }
 
 export function getVisibleCardFlowMemoStateKey(
@@ -71,6 +73,8 @@ export function runCardFlowBatch<TMemo extends MemoRecord>(options: RunCardFlowB
 	const startIndex = Math.max(0, options.startIndex ?? 0);
 	const maxItems = Math.max(1, options.maxItems ?? batch.items.length);
 	const endIndex = Math.min(startIndex + maxItems, batch.items.length);
+	const now = options.now ?? (() => performance.now());
+	const startedAt = options.timeBudgetMs === undefined ? 0 : now();
 	if (startIndex === 0) {
 		options.removeSentinel();
 	}
@@ -80,6 +84,9 @@ export function runCardFlowBatch<TMemo extends MemoRecord>(options: RunCardFlowB
 			return { type: "cancelled" };
 		}
 		options.renderItem(batch.items[index]);
+		if (options.timeBudgetMs !== undefined && index + 1 < batch.items.length && now() - startedAt >= options.timeBudgetMs) {
+			return { type: "pending", nextIndex: index + 1 };
+		}
 	}
 	if (endIndex < batch.items.length) {
 		return { type: "pending", nextIndex: endIndex };

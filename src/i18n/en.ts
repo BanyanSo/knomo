@@ -291,6 +291,7 @@ export const en: Record<TranslationKey, string> = {
 	"card.markReviewed": "Mark as reviewed",
 	"card.wordCount": "Words: {{count}}",
 	"image.unavailable": "Image unavailable",
+	"image.retry": "Image unavailable. Tap to retry",
 	"image.loadFailed": "Image failed to load",
 	"image.previous": "Previous image",
 	"image.next": "Next image",

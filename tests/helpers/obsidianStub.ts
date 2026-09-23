@@ -1,7 +1,16 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 export async function ensureObsidianStub(): Promise<void> {
+	for (const name of ["Banyan-WeChat-Reward.png", "buymeacoffe-code.png"]) {
+		const imagePath = resolve(__dirname, "../../src/assets", name);
+		await mkdir(dirname(imagePath), { recursive: true });
+		await copyFile(resolve("src/assets", name), imagePath);
+	}
+	require.extensions[".png"] = (module, filename) => {
+		module.exports = "data:image/png;base64," + readFileSync(filename).toString("base64");
+	};
 	const obsidianStubPath = resolve(__dirname, "../../node_modules/obsidian/index.js");
 	await mkdir(dirname(obsidianStubPath), { recursive: true });
 	await writeFile(obsidianStubPath, buildObsidianStub());
@@ -141,12 +150,13 @@ function buildObsidianStub(): string {
 		"class MarkdownView {}",
 		"class PluginSettingTab { constructor(app, plugin) { this.app = app; this.plugin = plugin; this.containerEl = {}; } display() {} hide() {} }",
 		"class Setting { constructor(containerEl) { this.containerEl = containerEl; } setName() { return this; } setDesc() { return this; } setHeading() { return this; } addButton(callback) { callback?.({ setButtonText() { return this; }, setCta() { return this; }, onClick() { return this; }, setDisabled() { return this; } }); return this; } addText(callback) { callback?.({ inputEl: { addEventListener() {} }, setValue() { return this; }, onChange() { return this; }, setPlaceholder() { return this; } }); return this; } addToggle(callback) { callback?.({ setValue() { return this; }, onChange() { return this; } }); return this; } addDropdown(callback) { callback?.({ addOption() { return this; }, setValue() { return this; }, onChange() { return this; } }); return this; } }",
+		"class SettingGroup { constructor(containerEl) { this.containerEl = containerEl; this.listEl = containerEl.createDiv ? containerEl.createDiv({ cls: 'setting-items' }) : containerEl; } setHeading(text) { new Setting(this.containerEl).setName(text).setHeading(); return this; } addClass(...names) { this.listEl.classList?.add(...names); return this; } }",
 		"class AbstractInputSuggest { constructor(app, inputEl) { this.app = app; this.inputEl = inputEl; } close() {} }",
 		"function getAllTags(cache) { return cache?.allTags ?? []; }",
 		"function prepareFuzzySearch(query) { return (text) => ({ score: String(text).includes(query) ? 0 : null, matches: [] }); }",
 		"function renderResults() {}",
 		"class MarkdownRenderer { static async render() {} }",
-		"module.exports = { requireApiVersion, MarkdownView, Component, TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon, Notice, Platform, Modal, ItemView, Scope, Plugin, PluginSettingTab, Setting, AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults, MarkdownRenderer };",
+		"module.exports = { requireApiVersion, MarkdownView, Component, TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon, Notice, Platform, Modal, ItemView, Scope, Plugin, PluginSettingTab, Setting, SettingGroup, AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults, MarkdownRenderer };",
 	].join("\n");
 }
 

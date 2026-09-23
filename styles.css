@@ -4568,6 +4568,124 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-toolbar-details[open] > .knomo-toolbar-settings { margin-top: var(--size-4-3); }
 .knomo-toolbar-setting-row > .setting-item-control:empty { display: none; }
 
+.setting-group > .setting-items.knomo-settings-host-list,
+.setting-group > .setting-items.knomo-settings-host-list > .setting-item.knomo-settings-host-row {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	padding: 0;
+}
+.setting-group > .setting-items.knomo-settings-host-list > .setting-item.knomo-settings-host-row {
+	display: block;
+}
+.setting-group > .setting-items.knomo-settings-host-list > .setting-item.knomo-settings-host-row::before {
+	content: none;
+}
+.knomo-settings-page {
+	width: 100%;
+	min-width: 0;
+}
+.knomo-settings-header {
+	padding: var(--size-4-4) var(--size-4-4) var(--size-4-2);
+}
+.knomo-settings-header h2 {
+	margin: 0;
+	padding: 0;
+	font-size: calc(var(--font-ui-medium) + 2px);
+	font-weight: var(--font-bold, 700);
+	line-height: 1.25;
+}
+.knomo-settings-attention[hidden],
+.knomo-settings-panel[hidden] {
+	display: none;
+}
+.knomo-settings-panel {
+	margin-top: var(--size-4-6);
+}
+.setting-group.knomo-settings-navigation > .setting-items {
+	border: 0;
+	box-shadow: none;
+}
+.knomo-settings-tabs {
+	display: flex;
+	width: 100%;
+	margin: 0;
+	padding: var(--size-4-2) 0;
+	gap: var(--size-4-1);
+	border-radius: var(--radius-m);
+	overflow: hidden;
+}
+.knomo-settings-tabs > .knomo-settings-tab {
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 36px;
+	padding: var(--size-4-2);
+	border: 0;
+	box-shadow: none;
+	border-radius: var(--radius-s);
+	background: transparent;
+	color: var(--text-normal);
+	white-space: normal;
+}
+.knomo-settings-tabs > .knomo-settings-tab[aria-selected="true"] {
+	background: var(--background-primary);
+	box-shadow: inset 0 -2px var(--interactive-accent);
+	font-weight: var(--font-semibold, 600);
+}
+.knomo-settings-tab:focus-visible {
+	outline: 2px solid var(--background-modifier-border-focus);
+	outline-offset: -2px;
+}
+.knomo-settings-panel .setting-item {
+	min-width: 0;
+}
+.knomo-settings-panel .setting-item-info,
+.knomo-settings-panel .setting-item-control {
+	min-width: 0;
+}
+.knomo-settings-panel .setting-item-description {
+	overflow-wrap: anywhere;
+}
+.knomo-settings-panel .setting-item.knomo-settings-support {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+}
+.knomo-settings-support > .setting-item-control {
+	display: none;
+}
+.knomo-settings-page a.external-link {
+	background-image: none;
+	padding-inline-end: 0;
+}
+.knomo-settings-support-codes {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--size-4-6) var(--size-4-10);
+}
+.knomo-settings-support-code {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--size-4-2);
+	max-width: 100%;
+	text-align: center;
+}
+.knomo-settings-qr {
+	display: block;
+	width: min(160px, 100%);
+	height: 160px;
+	object-fit: contain;
+	border-radius: 8px;
+	margin-top: var(--size-4-2);
+}
+@media (max-width: 600px) {
+	.knomo-settings-tabs > .knomo-settings-tab {
+		min-height: 44px;
+	}
+}
+
 /* 统一使用 CodeMirror 的字体几何绘制光标，避免空行与文字后的原生 caret 高度不同。 */
 .knomo-plugin .knomo-composer-editor .cm-cursor { border-left: 1px solid var(--caret-color, var(--text-normal)); margin-left: 0; }
 .knomo-plugin .knomo-composer-editor > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: var(--text-selection); }

@@ -27,6 +27,7 @@ export class KnomoTagSuggest {
 	private readonly popoverId: string;
 	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
 	private clearTouchClickGuard: (() => void) | null = null;
+	private clearGesture: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -46,6 +47,8 @@ export class KnomoTagSuggest {
 	private clear(): void {
 		this.requestGeneration++;
 		this.clearPopoverReposition();
+		this.clearGesture?.();
+		this.clearGesture = null;
 		this.popoverEl?.remove();
 		this.popoverEl = null;
 		this.suggestions = [];
@@ -84,7 +87,10 @@ export class KnomoTagSuggest {
 		this.renderedQuery = query;
 		this.suggestions = suggestions;
 		this.selectedIndex = Math.max(0, suggestions.findIndex(suggestion => suggestion.tag === selected));
-		const container = this.inputEl.ownerDocument.body.createDiv({ cls: "suggestion-container knomo-tag-suggest-popover" });
+		const mobile = this.inputEl.closest(".knomo-mobile-composer-layer") !== null;
+		const container = this.inputEl.ownerDocument.body.createDiv({
+			cls: `suggestion-container knomo-tag-suggest-popover${mobile ? " knomo-tag-suggest-mobile" : ""}`,
+		});
 		this.popoverEl = container;
 		container.id = this.popoverId;
 		this.hidePopoverUntilPositioned();
@@ -92,15 +98,27 @@ export class KnomoTagSuggest {
 		this.inputEl.setAttribute("aria-expanded", "true");
 		container.setAttribute("role", "listbox");
 		// 与工具栏共用触摸手势：松手点选、滑动/取消不选，阻止兼容鼠标事件夺走焦点。
-		registerComposerToolGesture(container, (action, event) => {
+		this.clearGesture = registerComposerToolGesture(container, (action, event) => {
 			const suggestion = this.suggestions[Number(action)];
-			if (this.popoverEl !== container || !suggestion) return;
+			if (this.popoverEl !== container || !suggestion || this.inputEl.composer.readOnly || this.inputEl.composer.composing) return;
 			if (event.type === "pointerup") {
 				event.stopImmediatePropagation();
-				this.guardTouchClickThrough(event);
+				this.guardTouchClickThrough(event, container);
 			}
 			this.selectSuggestion(suggestion);
-		});
+		}, mobile ? {
+			scrollElement: container,
+			capture: () => {
+				const context = this.inputEl.composer.capture();
+				const canStart = !this.inputEl.composer.readOnly && !this.inputEl.composer.composing;
+				return () => {
+					const current = this.inputEl.composer.capture();
+					return canStart && this.popoverEl === container && context.valid()
+						&& current.anchor === context.anchor && current.head === context.head
+						&& !this.inputEl.composer.readOnly && !this.inputEl.composer.composing;
+				};
+			},
+		} : undefined);
 		for (const [index, suggestion] of suggestions.entries()) {
 			const item = container.createDiv({ cls: "suggestion-item" });
 			item.setAttribute("role", "option");
@@ -108,7 +126,8 @@ export class KnomoTagSuggest {
 			item.id = `${this.popoverId}-${index}`;
 			item.setAttribute("aria-selected", String(index === this.selectedIndex));
 			item.toggleClass("is-selected", index === this.selectedIndex);
-			this.renderSuggestion(suggestion, item);
+			const label = mobile ? item.appendChild(item.ownerDocument.createElement("span")) : item;
+			this.renderSuggestion(suggestion, label);
 			item.addEventListener("pointermove", event => {
 				if (event.pointerType === "mouse") this.setSelectedIndex(index, false);
 			});
@@ -134,11 +153,13 @@ export class KnomoTagSuggest {
 			this.close();
 		};
 	}
-	private guardTouchClickThrough(origin: MouseEvent): void {
+	private guardTouchClickThrough(origin: MouseEvent, container: HTMLElement): void {
 		this.clearTouchClickGuard?.();
 		const win = this.inputEl.ownerDocument.defaultView;
 		if (win === null) return;
-		// 松手后候选 DOM 会消失；在窗口捕获同一次触摸的尾部事件，防止重新命中编辑器/蒙层。
+		// touchend 仍可能指向已移除的原候选；兼容事件也可能重新命中编辑器/蒙层。
+		// 两条路径共用短期防护，独立于已关闭 Popup 的手势注册。
+		const targets: EventTarget[] = [win, container];
 		const types = ["touchend", "mousedown", "mouseup", "click"] as const;
 		const guard = (event: Event) => {
 			if (event.type === "click" && (event as MouseEvent).detail === 0) return;
@@ -150,14 +171,18 @@ export class KnomoTagSuggest {
 			if (event.type === "click") clear();
 		};
 		const clear = () => {
-			for (const type of types) win.removeEventListener(type, guard, true);
+			for (const target of targets) {
+				for (const type of types) target.removeEventListener(type, guard, true);
+			}
 			win.removeEventListener("pointerdown", clear, true);
 			win.clearTimeout(timer);
 			this.clearTouchClickGuard = null;
 		};
 		const timer = win.setTimeout(clear, 600);
 		this.clearTouchClickGuard = clear;
-		for (const type of types) win.addEventListener(type, guard, { capture: true, passive: false });
+		for (const target of targets) {
+			for (const type of types) target.addEventListener(type, guard, { capture: true, passive: false });
+		}
 		// 新的真实手势立即放行，不依赖固定延时封锁后续点击。
 		win.addEventListener("pointerdown", clear, true);
 	}

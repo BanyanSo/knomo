@@ -3462,6 +3462,28 @@ body .knomo-mobile-create-fab.is-hidden {
 	touch-action: pan-y;
 }
 
+.knomo-tag-suggest-mobile,
+.knomo-tag-suggest-mobile * {
+	-webkit-user-select: none;
+	user-select: none;
+	-webkit-touch-callout: none;
+}
+
+.knomo-tag-suggest-mobile .suggestion-item {
+	box-sizing: border-box;
+	min-height: var(--knomo-touch-target, 44px);
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	padding-block: var(--size-4-2, 8px);
+	overflow-wrap: anywhere;
+}
+
+.knomo-tag-suggest-mobile .suggestion-item > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
 .knomo-tag-suggest-positioning {
 	visibility: hidden;
 }

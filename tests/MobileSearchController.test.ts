@@ -184,10 +184,6 @@ function makeMemo(id: string, content: string): MemoViewItem {
 	};
 }
 
-function contentBlock(content: string): string {
-	return `- 00:00 ${content}`;
-}
-
 test("mobile search hands off ready images through repeated rebuilds and unbinds closed roots", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

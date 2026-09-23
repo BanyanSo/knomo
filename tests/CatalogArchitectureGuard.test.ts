@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { ensureObsidianStub } from "./helpers/obsidianStub";
-
 test("生产源码只暴露无版本 Catalog 模块和存储名称", async () => {
 	const sourceFiles = listFiles("src").filter((file) => file.endsWith(".ts"));
 	const forbidden = /CatalogV[23]|catalogV[23]|CATALOG_V[23]|catalog-v[23]|catalogShadow|identity-v[23]|catalog\.v[23]Unavailable/u;

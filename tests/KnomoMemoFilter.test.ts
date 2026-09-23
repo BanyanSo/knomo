@@ -139,7 +139,6 @@ function makeMemo(
 	} = {},
 ): MemoViewItem {
 	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
-	const dailyBlock = "- 09:00:00 memo";
 	return {
 		id,
 		createdAt,

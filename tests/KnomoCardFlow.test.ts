@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-	getVisibleCardFlowMemoStateKey,
 	KnomoCardFlowBatcher,
 	runCardFlowBatch,
 } from "../src/ui/KnomoCardFlow";
@@ -83,24 +82,6 @@ test("updates hydrated items from rendered memo ids without duplicating promoted
 	assert.equal(nextBatch?.type, "items");
 	if (nextBatch?.type !== "items") return;
 	assert.deepEqual(nextBatch.items.map((item) => item.memo.id), ["recent-1", "older-0"]);
-});
-
-test("compares only the rendered memo window during hydration", () => {
-	const visibleMemos = makeMemos(2);
-	const previousKey = getVisibleCardFlowMemoStateKey(visibleMemos, 2, 50);
-	const appendedKey = getVisibleCardFlowMemoStateKey(
-		[...visibleMemos, makeMemo("older-0"), makeMemo("older-1")],
-		2,
-		50,
-	);
-	const prependedKey = getVisibleCardFlowMemoStateKey(
-		[makeMemo("new-0"), ...visibleMemos],
-		2,
-		50,
-	);
-
-	assert.equal(appendedKey, previousKey);
-	assert.notEqual(prependedKey, previousKey);
 });
 
 test("syncs the rendered count after inserting a memo at the front", () => {

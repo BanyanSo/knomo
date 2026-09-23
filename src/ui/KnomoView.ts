@@ -174,7 +174,6 @@ import {
 	getCardFlowChangeIntent as getCardFlowChangeIntentKey,
 	getCardFlowStateKey as getCardFlowStateKeyValue,
 	getCardFlowViewStateKey as getCardFlowViewStateKeyValue,
-	getVisibleCardFlowStateKey as getVisibleCardFlowStateKeyValue,
 } from "./KnomoViewStateKeys";
 import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
 import { KnomoViewStateController } from "./KnomoViewStateController";
@@ -4667,26 +4666,6 @@ export class KnomoView extends ItemView {
 		});
 	}
 
-	private renderAllMemosLoadErrorState(): void {
-		const cardFlow = this.cardFlowEl;
-		this.cardFlowDeferredForAllMemos = false;
-		if (cardFlow === null) {
-			return;
-		}
-		cardFlow.empty();
-		const errorState = renderKnomoEmptyState(
-			cardFlow,
-			t("empty.allMemosLoadFailed"),
-			t("empty.allMemosLoadFailedDesc"),
-		);
-		errorState.setAttr("role", "alert");
-		errorState.createEl("button", {
-			cls: "knomo-inline-button knomo-all-memos-retry",
-			text: t("empty.allMemosRetry"),
-			attr: { type: "button", "data-action": "retry-all-memos" },
-		});
-	}
-
 	private shouldDeferCardFlowForAllMemos(): boolean {
 		return !this.hasCommittedCatalogDesktopQuery && this.catalogReadState === "history_building";
 	}
@@ -6190,21 +6169,6 @@ export class KnomoView extends ItemView {
 			recordStatsSelectedDate: recordStatsState.selectedDate,
 			today: new Date(),
 			presentation: this.getCurrentCardFlowPresentation(),
-		});
-	}
-
-	private getVisibleCardFlowStateKey(renderedCardCount: number): string {
-		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
-		return getVisibleCardFlowStateKeyValue({
-			presentationContextKey: this.getRecentPresentationStateKey(),
-			activeNav: this.activeNav,
-			recordStatsSnapshot: this.recordStatsService.getSnapshot(),
-			recordStatsView: recordStatsState.view,
-			recordStatsSelectedDate: recordStatsState.selectedDate,
-			today: new Date(),
-			presentation: this.getCurrentCardFlowPresentation(),
-			renderedCardCount,
-			initialBatchSize: this.getInitialCardBatchSize(),
 		});
 	}
 

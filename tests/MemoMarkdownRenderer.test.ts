@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
 
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
@@ -487,3 +488,81 @@ function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
 		...overrides,
 	};
 }
+
+async function renderCardLineBreaks(html: string): Promise<string> {
+	await ensureObsidianStub();
+	const { prepareRenderedMemoMarkdown } = await import("../src/ui/MemoMarkdownRenderer");
+	const dom = new JSDOM(`<div>${html}</div>`);
+	try {
+		const container = dom.window.document.querySelector("div")!;
+		Object.assign(container, { findAll: (selector: string) => Array.from(container.querySelectorAll(selector)) });
+		prepareRenderedMemoMarkdown(container, makeMemo());
+		const result = container.innerHTML;
+		prepareRenderedMemoMarkdown(container, makeMemo());
+		assert.equal(container.innerHTML, result, "重复处理不能新增空行");
+		return result;
+	} finally { dom.window.close(); }
+}
+
+test("卡片普通软换行及行内格式之间的换行可见", async () => {
+	assert.equal(await renderCardLineBreaks("<p>第一行\n第二行\n第三行</p>"), "<p>第一行<br>第二行<br>第三行</p>");
+	assert.equal(await renderCardLineBreaks("<p><strong>粗体</strong>\n<a href='Note'>链接</a></p>"), '<p><strong>粗体</strong><br><a href="Note">链接</a></p>');
+	assert.equal(await renderCardLineBreaks("<p><em>第一行\n第二行</em></p>"), "<p><em>第一行<br>第二行</em></p>");
+});
+
+test("已有硬换行不重复，段落间距不变", async () => {
+	assert.equal(await renderCardLineBreaks("<p>第一行<br>\n第二行<br>第三行</p>\n<p>另一段</p>"), "<p>第一行<br>第二行<br>第三行</p>\n<p>另一段</p>");
+});
+
+test("列表正文保留换行，不转换嵌套块间空白", async () => {
+	assert.equal(await renderCardLineBreaks("<ul>\n<li>第一行\n续行<ul>\n<li>子项</li>\n</ul>\n</li>\n</ul>"), "<ul>\n<li>第一行<br>续行<ul>\n<li>子项</li>\n</ul>\n</li>\n</ul>");
+});
+
+test("代码、公式、嵌入和表格交给宿主处理", async () => {
+	const html = '<pre><code>a\nb</code></pre><p><code>a\nb</code><span class="math">a\nb</span></p><div class="internal-embed"><p>a\nb</p></div><table><tbody><tr><td>a\nb</td></tr></tbody></table>';
+	assert.equal(await renderCardLineBreaks(html), html);
+});
+
+test("主卡片流和移动搜索渲染完成后都保留换行，源码保持原样", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	const original = MarkdownRenderer.render;
+	const dom = new JSDOM("<body></body>");
+	const prototype = dom.window.HTMLElement.prototype;
+	Object.assign(prototype, {
+		findAll(this: HTMLElement, selector: string) { return Array.from(this.querySelectorAll(selector)); },
+		createDiv(this: HTMLElement) { const div = this.ownerDocument.createElement("div"); this.appendChild(div); return div; },
+		detach(this: HTMLElement) { this.remove(); },
+		empty(this: HTMLElement) { this.replaceChildren(); },
+	});
+	const markdown = "第一行\n第二行";
+	const memo = { id: "memo-1", contentSnapshot: markdown, dailyRef: { path: "Daily/test.md" } } as MemoViewItem;
+	const renderer = new MemoMarkdownRenderer({
+		app: {} as never, createComponent: () => ({ load() {}, unload() {} }) as never,
+		getDocument: () => dom.window.document, getGeneration: () => 0, concurrency: 1,
+	});
+	MarkdownRenderer.render = async (_app, text, target, path) => {
+		assert.equal(text, markdown);
+		assert.equal(path, memo.dailyRef.path);
+		// 模拟宿主将软换行保留为段落内文本的输出。
+		const paragraph = target.ownerDocument.createElement("p");
+		paragraph.textContent = text;
+		target.appendChild(paragraph);
+	};
+	try {
+		for (const surface of ["card-flow", "mobile-search"] as const) {
+			const target = dom.window.document.createElement("div");
+			renderer.queueMemoMarkdown(memo, target, 0, "normal", markdown, surface);
+			for (let attempt = 0; attempt < 100 && !target.querySelector("br"); attempt++) {
+				await new Promise(resolve => setTimeout(resolve, 5));
+			}
+			assert.equal(target.innerHTML, "<p>第一行<br>第二行</p>", surface);
+			assert.equal(memo.contentSnapshot, markdown);
+		}
+	} finally {
+		renderer.clear(); renderer.clear("mobile-search");
+		MarkdownRenderer.render = original;
+		dom.window.close();
+	}
+});

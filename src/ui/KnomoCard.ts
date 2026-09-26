@@ -239,6 +239,8 @@ export function renderMemoCardBody<TMemo extends MemoRecord>(card: HTMLElement, 
 	const body = card.createDiv({ cls: "knomo-card-body" });
 	if (preview.text.trim().length > 0) {
 		const content = body.createDiv({ cls: "knomo-card-content markdown-rendered" });
+		// 首次渲染先提供正文占位，避免图片先出现而整段正文稍后从零高度插入。
+		content.createDiv({ cls: "knomo-card-text-placeholder", text: preview.text, attr: { "data-knomo-render-placeholder": "", inert: "" } });
 		options.queueMemoMarkdown(memo, content, options.generation, options.markdownPriority, preview.text);
 	}
 	options.renderMemoCardImages(body, memo, preview.images, options.generation, options.reusedImagesEl ?? null);

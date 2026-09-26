@@ -193,7 +193,8 @@ test("迁移中源 revision 变化不落 completion，下一次重试完成", as
 test("生产入口依赖图不包含旧 Identity/current-state/writer/receipts/config runtime", async () => {
 	const { build } = await import("esbuild");
 	const result = await build({ entryPoints: ["src/main.ts"], bundle: true, write: false, metafile: true,
-		platform: "browser", format: "cjs", external: ["obsidian", "electron", "@codemirror/*", "@lezer/*"] });
+		platform: "browser", format: "cjs", loader: { ".png": "dataurl" },
+		external: ["obsidian", "electron", "@codemirror/*", "@lezer/*"] });
 	const modules = Object.keys(result.metafile!.inputs);
 	for (const name of ["IdentityLedgerService", "KnomoCurrentStateStore", "LocalWriterIdentityService", "IdentityReceiptStore",
 		"KnomoSharedConfigService", "KnomoBootstrapStateStore", "HistoricalIdentityBootstrapService", "IdentityRevisionTransitionQueue",

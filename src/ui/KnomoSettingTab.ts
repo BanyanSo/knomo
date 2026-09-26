@@ -1,6 +1,6 @@
 import { normalizeComposerToolbar } from "../settings/composerToolbar";
 import { composerActionLabels } from "./KnomoComposer";
-import { Notice, requireApiVersion, PluginSettingTab, Setting } from "obsidian";
+import { Notice, requireApiVersion, PluginSettingTab, Setting, SettingGroup } from "obsidian";
 import type { App, ButtonComponent, Plugin, SettingDefinitionItem, ToggleComponent } from "obsidian";
 
 import {
@@ -10,7 +10,10 @@ import {
 	DEFAULT_MONTHLY_MEMO_FOLDER,
 	KNOMO_VIEW_TYPE,
 } from "../constants";
-import { t } from "../i18n";
+import { getKnomoLocale, t } from "../i18n";
+import type { TranslationKey } from "../i18n";
+import wechatQr from "../assets/Banyan-WeChat-Reward.png";
+import coffeeQr from "../assets/buymeacoffe-code.png";
 import { buildMonthlyFolderExcludeRule, type ObsidianExcludeService } from "../services/ObsidianExcludeService";
 import type { SettingsService } from "../services/SettingsService";
 import type { KnomoCurrentConfigService } from "../services/KnomoCurrentConfigService";
@@ -32,6 +35,30 @@ import { KnomoView } from "./KnomoView";
 
 const SETTING_NOTICE_DELAY_MS = 800;
 
+type SettingTabId = "record" | "archive-data" | "about";
+
+const ABOUT_LINKS = {
+	releases: "https://github.com/BanyanSo/knomo/releases",
+	guideZh: "https://github.com/BanyanSo/knomo/blob/HEAD/README.zh-CN.md",
+	guideEn: "https://github.com/BanyanSo/knomo/blob/HEAD/README.md",
+	issues: "https://github.com/BanyanSo/knomo/issues/new",
+	coffee: "https://www.buymeacoffee.com/banyanso",
+} as const;
+
+interface DeveloperContact {
+	id: string;
+	labelKey: TranslationKey;
+	value: string;
+	href?: string;
+}
+export const DEVELOPER_CONTACTS: DeveloperContact[] = [
+	{ id: "email", labelKey: "settings.about.email", value: "rongshuso@gmail.com", href: "mailto:rongshuso@gmail.com" },
+	{ id: "x", labelKey: "settings.about.x", value: "@Banyansu", href: "https://x.com/Banyansu" },
+	{ id: "github", labelKey: "settings.about.github", value: "@BanyanSo", href: "https://github.com/BanyanSo" },
+	{ id: "xiaohongshu", labelKey: "settings.about.xiaohongshu", value: t("settings.about.rednoteAccount"), href: "https://xhslink.cn/o/3vSar1g1BMs" },
+	{ id: "wechat", labelKey: "settings.about.wechatContact", value: "rongshuso" },
+];
+
 type SettingNoticeKey = "dailyHeading" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat";
 
 interface DelayedSettingNotice {
@@ -41,15 +68,24 @@ interface DelayedSettingNotice {
 
 export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildRunning = false;
+	private runtimeRetryRunning = false;
 	private monthlyRetryRunning = false;
+	private legacyMigrationRunning = false;
+	private currentConfigRetryRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
 	private timeBuoyToggleRunning = false;
 	private monthlyFolderEditing = false;
 	private monthlyFolderDraft: string | null = null;
 	private settingsVisible = false;
+	private selectedTab: SettingTabId = "record";
+	private toolbarExpanded = true;
+	private pageEl: HTMLElement | null = null;
+	private attentionEl: HTMLElement | null = null;
+	private renderedAttentionKinds: KnomoSettingAttentionKind[] = [];
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
 	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
+	private readonly pluginVersion: string;
 
 	constructor(
 		app: App,
@@ -65,161 +101,34 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly retryRuntimeState: () => Promise<void>,
 	) {
 		super(app, plugin);
+		this.pluginVersion = plugin.manifest.version;
 	}
 
 	getSettingDefinitions(): SettingDefinitionItem[] {
-		const attentionItems = this.getAttentionKinds().map((kind) => ({
-			name: this.getAttentionName(kind),
-			desc: this.getAttentionDescription(kind),
-			render: (setting: Setting) => { this.renderAttentionSetting(kind, setting); },
-		}));
-		return [
-			{
-				type: "group",
-				heading: t("settings.attention.heading"),
-				visible: attentionItems.length > 0,
-				items: attentionItems,
+		return [{
+			name: "Knomo",
+			aliases: [
+				"Knomo", t("settings.capture.heading"), t("settings.presentation.heading"),
+				t("settings.monthly.heading"), t("settings.files.heading"),
+				t("settings.dailyHeading.name"), t("settings.insertPosition.name"),
+				t("settings.timeFormat.name"), t("settings.timeBuoy.name"),
+				t("settings.toolbar.name"), t("settings.recentTimeFlow.name"),
+				t("settings.dateOrder.name"), t("settings.monthlyFileFormat.name"),
+				t("settings.dateHeadingFormat.name"), t("settings.excludeMonthly.name"),
+				t("settings.monthlyFolder.name"), t("settings.tab.about"),
+			],
+			render: (setting: Setting, group: SettingGroup) => {
+				group?.listEl.addClass("knomo-settings-host-list");
+				setting.settingEl.addClass("knomo-settings-host-row");
+				setting.settingEl.empty();
+				this.mountPage(setting.settingEl);
 			},
-			{
-				type: "group",
-				heading: t("settings.capture.heading"),
-				items: [
-					{
-						name: t("settings.dailyHeading.name"),
-						desc: t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING }),
-						render: (setting: Setting) => { this.renderDailyHeadingSetting(setting); },
-					},
-					{
-						name: t("settings.insertPosition.name"),
-						desc: t("settings.insertPosition.desc"),
-						render: (setting: Setting) => { this.renderInsertPositionSetting(setting); },
-					},
-					{
-						name: t("settings.timeFormat.name"),
-						desc: t("settings.timeFormat.desc"),
-						render: (setting: Setting) => { this.renderTimeFormatSetting(setting); },
-					},
-					{
-						name: t("settings.timeBuoy.name"),
-						desc: t("settings.timeBuoy.desc"),
-						render: (setting: Setting) => { this.renderTimeBuoySetting(setting); },
-					},
-					{
-						name: t("settings.toolbar.name"),
-						desc: t("settings.toolbar.desc"),
-						render: (setting: Setting) => this.renderToolbarSetting(setting),
-					},
-				],
-			},
-			{
-				type: "group",
-				heading: t("settings.monthly.heading"),
-				items: [
-					{
-						name: t("settings.dateOrder.name"),
-						desc: t("settings.dateOrder.desc"),
-						render: (setting: Setting) => { this.renderDateOrderSetting(setting); },
-					},
-					{
-						name: t("settings.monthlyFileFormat.name"),
-						desc: t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT }),
-						render: (setting: Setting) => { this.renderMonthlyFileFormatSetting(setting); },
-					},
-					{
-						name: t("settings.dateHeadingFormat.name"),
-						desc: t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT }),
-						render: (setting: Setting) => { this.renderDateHeadingFormatSetting(setting); },
-					},
-					{
-						name: t("settings.excludeMonthly.name"),
-						desc: t("settings.excludeMonthly.desc"),
-						render: (setting: Setting) => { this.renderMonthlyExcludeSetting(setting); },
-					},
-				],
-			},
-			{
-				type: "group",
-				heading: t("settings.presentation.heading"),
-				items: [{
-					name: t("settings.recentTimeFlow.name"),
-					desc: t("settings.recentTimeFlow.desc"),
-					render: (setting: Setting) => { this.renderRecentTimeFlowSetting(setting); },
-				}],
-			},
-			{
-				type: "group",
-				heading: t("settings.files.heading"),
-				items: [{
-					name: t("settings.monthlyFolder.name"),
-					desc: t("settings.monthlyFolder.desc"),
-					render: (setting: Setting) => { this.renderMonthlyFolderSetting(setting); },
-				}],
-			},
-		];
+		}];
 	}
 
 	display(): void {
-		this.settingsVisible = true;
-		const { containerEl } = this;
-		this.cancelAllDelayedSettingNotices();
-		this.pendingSettingDrafts.clear();
-		containerEl.empty();
-
-		const attentionKinds = this.getAttentionKinds();
-		if (attentionKinds.length > 0) {
-			new Setting(containerEl)
-				.setName(t("settings.attention.heading"))
-				.setHeading();
-			for (const kind of attentionKinds) {
-				this.renderAttentionSetting(kind, new Setting(containerEl));
-			}
-		}
-
-		new Setting(containerEl)
-			.setName(t("settings.capture.heading"))
-			.setHeading();
-		this.renderDailyHeadingSetting(new Setting(containerEl)
-			.setName(t("settings.dailyHeading.name"))
-			.setDesc(t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING })));
-		this.renderInsertPositionSetting(new Setting(containerEl)
-			.setName(t("settings.insertPosition.name"))
-			.setDesc(t("settings.insertPosition.desc")));
-		this.renderTimeFormatSetting(new Setting(containerEl)
-			.setName(t("settings.timeFormat.name"))
-			.setDesc(t("settings.timeFormat.desc")));
-		this.renderTimeBuoySetting(new Setting(containerEl)
-			.setName(t("settings.timeBuoy.name"))
-			.setDesc(t("settings.timeBuoy.desc")));
-		this.renderToolbarSetting(new Setting(containerEl).setName(t("settings.toolbar.name")).setDesc(t("settings.toolbar.desc")));
-
-		new Setting(containerEl)
-			.setName(t("settings.monthly.heading"))
-			.setHeading();
-		this.renderDateOrderSetting(new Setting(containerEl)
-			.setName(t("settings.dateOrder.name"))
-			.setDesc(t("settings.dateOrder.desc")));
-		this.renderMonthlyFileFormatSetting(new Setting(containerEl)
-			.setName(t("settings.monthlyFileFormat.name"))
-			.setDesc(t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT })));
-		this.renderDateHeadingFormatSetting(new Setting(containerEl)
-			.setName(t("settings.dateHeadingFormat.name"))
-			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT })));
-		this.renderMonthlyExcludeSetting(new Setting(containerEl)
-			.setName(t("settings.excludeMonthly.name"))
-			.setDesc(t("settings.excludeMonthly.desc")));
-
-		new Setting(containerEl)
-			.setName(t("settings.presentation.heading")).setHeading();
-		this.renderRecentTimeFlowSetting(new Setting(containerEl)
-			.setName(t("settings.recentTimeFlow.name"))
-			.setDesc(t("settings.recentTimeFlow.desc")));
-
-		new Setting(containerEl)
-			.setName(t("settings.files.heading"))
-			.setHeading();
-		this.renderMonthlyFolderSetting(new Setting(containerEl)
-			.setName(t("settings.monthlyFolder.name"))
-			.setDesc(t("settings.monthlyFolder.desc")));
+		this.containerEl.empty();
+		this.mountPage(this.containerEl);
 	}
 
 	hide(): void {
@@ -227,6 +136,188 @@ export class KnomoSettingTab extends PluginSettingTab {
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
 		this.cancelAllDelayedSettingNotices();
+		this.selectedTab = "record";
+		this.toolbarExpanded = true;
+		this.monthlyFolderEditing = false;
+		this.monthlyFolderDraft = null;
+		this.pendingSettingDrafts.clear();
+		this.pageEl = null;
+		this.attentionEl = null;
+	}
+	private mountPage(parent: HTMLElement): void {
+		this.settingsVisible = true;
+		const page = parent.createDiv({ cls: "knomo-settings-page" });
+		this.pageEl = page;
+		const navigation = new SettingGroup(page).addClass("knomo-settings-navigation");
+		const header = navigation.listEl.createDiv({ cls: "knomo-settings-header" });
+		header.createEl("h2", { text: "Knomo" });
+		this.attentionEl = page.createDiv({ cls: "knomo-settings-attention" });
+		this.refreshAttentionRegion();
+
+		const tabs = [
+			{ id: "record", label: t("settings.tab.record") },
+			{ id: "archive-data", label: t("settings.tab.archiveData") },
+			{ id: "about", label: t("settings.tab.about") },
+		] as const;
+		const tablist = navigation.listEl.createDiv({ cls: "knomo-settings-tabs", attr: {
+			role: "tablist", "aria-label": t("settings.tabs.label"),
+		} });
+		const buttons = new Map<SettingTabId, HTMLButtonElement>();
+		const panels = new Map<SettingTabId, HTMLElement>();
+		for (const tab of tabs) {
+			const button = tablist.createEl("button", { text: tab.label, cls: "knomo-settings-tab", attr: {
+				type: "button", role: "tab", id: "knomo-settings-tab-" + tab.id,
+				"aria-controls": "knomo-settings-panel-" + tab.id,
+			} });
+			buttons.set(tab.id, button);
+			const panel = page.createDiv({ cls: "knomo-settings-panel", attr: {
+				role: "tabpanel", id: "knomo-settings-panel-" + tab.id,
+				"aria-labelledby": button.id,
+			} });
+			panels.set(tab.id, panel);
+			button.addEventListener("click", () => {
+				this.selectedTab = tab.id;
+				activate();
+			});
+			button.addEventListener("keydown", (event) => {
+				const index = tabs.findIndex(item => item.id === tab.id);
+				const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+					: event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+						: event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+				if (next < 0) return;
+				event.preventDefault();
+				buttons.get(tabs[next].id)?.focus();
+			});
+		}
+		const activate = () => {
+			for (const tab of tabs) {
+				const active = tab.id === this.selectedTab;
+				const button = buttons.get(tab.id);
+				const panel = panels.get(tab.id);
+				if (!button || !panel) continue;
+				button.setAttribute("aria-selected", String(active));
+				button.tabIndex = active ? 0 : -1;
+				panel.hidden = !active;
+			}
+		};
+		this.renderRecordSettings(panels.get("record")!);
+		this.renderArchiveSettings(panels.get("archive-data")!);
+		this.renderAboutSettings(panels.get("about")!);
+		activate();
+	}
+
+	private refreshAttentionRegion(): void {
+		const parent = this.attentionEl;
+		if (!parent) return;
+		const focused = parent.ownerDocument.activeElement;
+		const focusedButtonIndex = focused?.tagName === "BUTTON" && parent.contains(focused)
+			? Array.from(parent.querySelectorAll("button")).indexOf(focused as HTMLButtonElement) : -1;
+		parent.empty();
+		const currentKinds = this.getAttentionKinds();
+		const running = this.rebuildRunning || this.runtimeRetryRunning || this.monthlyRetryRunning
+			|| this.legacyMigrationRunning || this.currentConfigRetryRunning;
+		const kinds = running
+			? [...new Set([...currentKinds, ...this.renderedAttentionKinds])]
+			: currentKinds;
+		this.renderedAttentionKinds = kinds;
+		parent.hidden = kinds.length === 0;
+		if (kinds.length === 0) return;
+		const card = this.createSettingCard(parent, "settings.attention.heading");
+		for (const kind of kinds) this.renderAttentionSetting(kind, new Setting(card));
+		if (focusedButtonIndex >= 0) parent.querySelectorAll("button")[focusedButtonIndex]?.focus();
+	}
+
+	private createSettingCard(parent: HTMLElement, headingKey: TranslationKey): HTMLElement {
+		return new SettingGroup(parent).setHeading(t(headingKey)).listEl;
+	}
+	private renderRecordSettings(parent: HTMLElement): void {
+		let card = this.createSettingCard(parent, "settings.capture.heading");
+		this.renderDailyHeadingSetting(new Setting(card).setName(t("settings.dailyHeading.name"))
+			.setDesc(t("settings.dailyHeading.desc", { heading: DEFAULT_DAILY_HEADING })));
+		this.renderInsertPositionSetting(new Setting(card).setName(t("settings.insertPosition.name"))
+			.setDesc(t("settings.insertPosition.desc")));
+		this.renderTimeFormatSetting(new Setting(card).setName(t("settings.timeFormat.name"))
+			.setDesc(t("settings.timeFormat.desc")));
+		this.renderTimeBuoySetting(new Setting(card).setName(t("settings.timeBuoy.name"))
+			.setDesc(t("settings.timeBuoy.desc")));
+		this.renderToolbarSetting(new Setting(card).setName(t("settings.toolbar.name"))
+			.setDesc(t("settings.toolbar.desc")));
+		card = this.createSettingCard(parent, "settings.presentation.heading");
+		this.renderRecentTimeFlowSetting(new Setting(card).setName(t("settings.recentTimeFlow.name"))
+			.setDesc(t("settings.recentTimeFlow.desc")));
+	}
+
+	private renderArchiveSettings(parent: HTMLElement): void {
+		let card = this.createSettingCard(parent, "settings.monthly.heading");
+		this.renderDateOrderSetting(new Setting(card).setName(t("settings.dateOrder.name"))
+			.setDesc(t("settings.dateOrder.desc")));
+		this.renderMonthlyFileFormatSetting(new Setting(card).setName(t("settings.monthlyFileFormat.name"))
+			.setDesc(t("settings.monthlyFileFormat.desc", { format: DEFAULT_MONTHLY_MEMO_FILE_FORMAT })));
+		this.renderDateHeadingFormatSetting(new Setting(card).setName(t("settings.dateHeadingFormat.name"))
+			.setDesc(t("settings.dateHeadingFormat.desc", { format: DEFAULT_MONTHLY_DATE_HEADING_FORMAT })));
+		this.renderMonthlyExcludeSetting(new Setting(card).setName(t("settings.excludeMonthly.name"))
+			.setDesc(t("settings.excludeMonthly.desc")));
+		card = this.createSettingCard(parent, "settings.files.heading");
+		this.renderMonthlyFolderSetting(new Setting(card).setName(t("settings.monthlyFolder.name"))
+			.setDesc(t("settings.monthlyFolder.desc")));
+	}
+
+	private renderAboutSettings(parent: HTMLElement): void {
+		let card = this.createSettingCard(parent, "settings.about.versionHeading");
+		new Setting(card).setName(t("settings.about.currentVersion") + " " + this.pluginVersion)
+			.addButton(button => button.setButtonText(t("settings.about.manageUpdates")).onClick(() => {
+				// 复用宿主设置管理器，直接切换到原生第三方插件页。
+				const setting = (this.app as App & { setting: { openTabById(id: string): void } }).setting;
+				setting.openTabById("community-plugins");
+			}));
+		this.renderLinkSetting(card, "settings.about.releaseNotes", "settings.about.viewReleaseNotes", ABOUT_LINKS.releases);
+		card = this.createSettingCard(parent, "settings.about.helpHeading");
+		this.renderTextLink(new Setting(card).setName(t("settings.about.reportIssue")).controlEl,
+			t("settings.about.submitGithub"), ABOUT_LINKS.issues);
+		this.renderTextLink(new Setting(card).setName(t("settings.about.userGuide")).controlEl,
+			t("settings.about.open"), getKnomoLocale() === "zh-CN" ? ABOUT_LINKS.guideZh : ABOUT_LINKS.guideEn);
+		this.renderDeveloperContacts(card, DEVELOPER_CONTACTS);
+		const support = new Setting(card).setName(t("settings.about.supportHeading")).setDesc(t("settings.about.wechatDesc"));
+		support.settingEl.addClass("knomo-settings-support");
+		const codes = support.settingEl.createDiv({ cls: "knomo-settings-support-codes" });
+		for (const code of [
+			{ src: coffeeQr, label: t("settings.about.coffee"), href: ABOUT_LINKS.coffee },
+			{ src: wechatQr, label: t("settings.about.wechat"), href: null },
+		]) {
+			const item = codes.createDiv({ cls: "knomo-settings-support-code" });
+			item.createEl("img", { cls: "knomo-settings-qr", attr: { src: code.src, alt: code.label } });
+			if (code.href) this.renderTextLink(item, code.label, code.href);
+			else item.createEl("span", { text: code.label });
+		}
+		new Setting(card).setName(t("settings.about.licenseHeading")).setDesc("copyright©️BanyanSo，GPL-3.0-only");
+		new Setting(card).setName(t("settings.about.privacyHeading")).setDesc(t("settings.about.privacyDesc"));
+	}
+
+	private renderDeveloperContacts(parent: HTMLElement, contacts: readonly DeveloperContact[]): void {
+		for (const contact of contacts) {
+			const setting = new Setting(parent).setName(t(contact.labelKey));
+			if (contact.href) this.renderTextLink(setting.controlEl, contact.value, contact.href);
+			else setting.controlEl.createEl("span", { text: contact.value });
+		}
+	}
+
+	private renderTextLink(parent: HTMLElement, label: string, href: string): void {
+		parent.createEl("a", { text: label, cls: "external-link", attr: { href, target: "_blank", rel: "noopener noreferrer" } });
+	}
+
+	private renderLinkSetting(
+		parent: HTMLElement, nameKey: TranslationKey, actionKey: TranslationKey,
+		href: string,
+	): void {
+		const setting = new Setting(parent).setName(t(nameKey));
+		setting.addButton(button => {
+			button.setButtonText(t(actionKey));
+			button.onClick(() => { this.openAboutLink(href); });
+		});
+	}
+
+	private openAboutLink(href: string): void {
+		this.containerEl.win.open(href, "_blank", "noopener,noreferrer");
 	}
 
 	private renderToolbarSetting(setting: Setting): void {
@@ -236,6 +327,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (!details) {
 			details = setting.settingEl.createEl("details");
 			details.className = "knomo-toolbar-details";
+			details.open = this.toolbarExpanded;
+			const detailsEl = details;
+			details.addEventListener("toggle", () => { this.toolbarExpanded = detailsEl.open; });
 			const summary = details.createEl("summary");
 			const info = setting.settingEl.querySelector(":scope > .setting-item-info");
 			if (info) summary.appendChild(info);
@@ -277,10 +371,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderDailyHeadingSetting(setting: Setting): void {
 		const settings = this.settingsService.getSettings();
+		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
+		const showValidation = (value: string) => {
+			const invalid = !this.settingsService.validateDailyHeading(value.trim());
+			statusEl.setText(invalid ? t("settings.dailyHeading.invalid") : "");
+			statusEl.toggleClass("is-error", invalid);
+		};
+		const initial = this.pendingSettingDrafts.get("dailyHeading") ?? settings.dailyHeading;
+		if (this.pendingSettingDrafts.has("dailyHeading")) showValidation(initial);
 		setting.addText((text) => {
+			text.inputEl.dataset.knomoSettingInput = "dailyHeading";
 			text.setPlaceholder(DEFAULT_DAILY_HEADING);
-			text.setValue(settings.dailyHeading);
+			text.setValue(initial);
 			text.onChange((value) => {
+				showValidation(value);
 				this.updateTextSettingDraft(
 					"dailyHeading",
 					value,
@@ -396,7 +500,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private renderMonthlyFileFormatSetting(setting: Setting): void {
 		const settings = this.settingsService.getSettings();
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
-		let draft = settings.monthlyMemoFileFormat;
+		let draft = this.pendingSettingDrafts.get("monthlyMemoFileFormat") ?? settings.monthlyMemoFileFormat;
 		let applyButton: ButtonComponent | null = null;
 		const updateApplyState = (): void => {
 			const nextValue = draft.trim();
@@ -407,8 +511,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		};
 		setting
 			.addText((text) => {
+				text.inputEl.dataset.knomoSettingInput = "monthlyMemoFileFormat";
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FILE_FORMAT);
-				text.setValue(settings.monthlyMemoFileFormat);
+				text.setValue(draft);
 				text.onChange((value) => {
 					draft = value;
 					this.updateTextSettingDraft(
@@ -438,15 +543,26 @@ export class KnomoSettingTab extends PluginSettingTab {
 				});
 				updateApplyState();
 			});
-		this.updateMonthlyFileFormatStatus(statusEl);
+		if (draft !== settings.monthlyMemoFileFormat) this.updateMonthlyFileFormatDraftStatus(statusEl, draft);
+		else this.updateMonthlyFileFormatStatus(statusEl);
 	}
 
 	private renderDateHeadingFormatSetting(setting: Setting): void {
 		const settings = this.settingsService.getSettings();
+		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
+		const showValidation = (value: string) => {
+			const invalid = !this.settingsService.validateMarkdownHeading(value.trim());
+			statusEl.setText(invalid ? t("settings.dateHeadingFormat.invalid") : "");
+			statusEl.toggleClass("is-error", invalid);
+		};
+		const initial = this.pendingSettingDrafts.get("monthlyDateHeadingFormat") ?? settings.monthlyDateHeadingFormat;
+		if (this.pendingSettingDrafts.has("monthlyDateHeadingFormat")) showValidation(initial);
 		setting.addText((text) => {
+			text.inputEl.dataset.knomoSettingInput = "monthlyDateHeadingFormat";
 			text.setPlaceholder(DEFAULT_MONTHLY_DATE_HEADING_FORMAT);
-			text.setValue(settings.monthlyDateHeadingFormat);
+			text.setValue(initial);
 			text.onChange((value) => {
+				showValidation(value);
 				this.updateTextSettingDraft(
 					"monthlyDateHeadingFormat",
 					value,
@@ -465,6 +581,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (!this.monthlyFolderEditing) {
 			setting
 				.addText((text) => {
+					text.inputEl.dataset.knomoSettingInput = "monthlyMemoFolder";
 					text.setValue(settings.monthlyMemoFolder);
 					text.inputEl.readOnly = true;
 				})
@@ -482,6 +599,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.monthlyFolderDraft ??= settings.monthlyMemoFolder;
 		setting
 			.addText((text) => {
+				text.inputEl.dataset.knomoSettingInput = "monthlyMemoFolder";
 				text.setPlaceholder(DEFAULT_MONTHLY_MEMO_FOLDER);
 				text.setValue(this.monthlyFolderDraft ?? settings.monthlyMemoFolder);
 				text.onChange((value) => { this.monthlyFolderDraft = value; });
@@ -511,15 +629,19 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderCatalogAttentionSetting(setting: Setting): void {
 		const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
+		if (this.rebuildRunning) this.renderRebuildResult(t("settings.rebuild.catalogStatus"), resultEl);
 		setting
 			.setName(t("settings.attention.catalog.name"))
 			.setDesc(t("settings.attention.catalog.desc"))
 			.addButton((button) => {
-				button.setButtonText(t("settings.attention.checkAgain"));
+				button.setButtonText(t(this.runtimeRetryRunning
+					? "settings.attention.checking" : "settings.attention.checkAgain"));
+				button.setDisabled(this.runtimeRetryRunning);
 				button.onClick(() => { void this.runRuntimeRetry(button); });
 			})
 			.addButton((button) => {
-				button.setButtonText(t("settings.rebuild.start"));
+				button.setButtonText(t(this.rebuildRunning ? "settings.rebuild.running" : "settings.rebuild.start"));
+				button.setDisabled(this.rebuildRunning);
 				button.onClick(() => {
 					void this.runRebuildIndex(button, resultEl);
 				});
@@ -532,7 +654,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setName(t("settings.attention.monthly.name"))
 			.setDesc(t("settings.attention.monthly.desc", { periods: periods.join(", ") || "—" }))
 			.addButton((button) => {
-				button.setButtonText(t("settings.attention.retry"));
+				button.setButtonText(t(this.monthlyRetryRunning
+					? "settings.attention.retrying" : "settings.attention.retry"));
+				button.setDisabled(this.monthlyRetryRunning);
 				button.onClick(() => { void this.runMonthlyRetry(button); });
 			});
 	}
@@ -542,7 +666,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setName(t("settings.attention.settings.name"))
 			.setDesc(t("settings.attention.settings.desc"))
 			.addButton((button) => {
-				button.setButtonText(t("settings.attention.settings.retry"));
+				button.setButtonText(t(this.runtimeRetryRunning
+					? "settings.attention.checking" : "settings.attention.settings.retry"));
+				button.setDisabled(this.runtimeRetryRunning);
 				button.onClick(() => {
 					void this.runRuntimeRetry(button, t("settings.attention.settings.retry"));
 				});
@@ -554,12 +680,22 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setName(t("settings.legacyMigration.name"))
 			.setDesc(this.getLegacyMigrationDescription());
 		setting.addButton((button) => {
-			button.setButtonText(t(this.legacyTrashMigrationService.getReport().cleanupCandidate
-				? "settings.legacyMigration.retryCleanup" : "settings.legacyMigration.retry"));
+			button.setButtonText(t(this.legacyMigrationRunning
+				? "settings.attention.retrying"
+				: this.legacyTrashMigrationService.getReport().cleanupCandidate
+					? "settings.legacyMigration.retryCleanup" : "settings.legacyMigration.retry"));
+			button.setDisabled(this.legacyMigrationRunning);
 			button.onClick(() => {
+				if (this.legacyMigrationRunning) return;
+				this.legacyMigrationRunning = true;
 				button.setDisabled(true);
 				void this.legacyTrashMigrationService.run()
-					.finally(() => { button.setDisabled(false); this.refreshSettingTab(); });
+					.catch(error => { new Notice(formatServiceError(error, t("settings.attention.retryFailed"))); })
+					.finally(() => {
+						this.legacyMigrationRunning = false;
+						button.setDisabled(false);
+						this.refreshSettingTab();
+					});
 			});
 		});
 	}
@@ -657,11 +793,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (value === undefined) {
 			return;
 		}
-		if (
-			await this.saveDailyHeading(value, showChangedNotice)
-			&& this.pendingSettingDrafts.get("dailyHeading") === value
-		) {
-			this.pendingSettingDrafts.delete("dailyHeading");
+		try {
+			if (
+				await this.saveDailyHeading(value, showChangedNotice)
+				&& this.pendingSettingDrafts.get("dailyHeading") === value
+			) this.pendingSettingDrafts.delete("dailyHeading");
+		} catch (error) {
+			new Notice(formatServiceError(error, t("error.saveFailed")));
 		}
 	}
 
@@ -683,11 +821,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (value === undefined) {
 			return;
 		}
-		if (
-			await this.saveMonthlyDateHeadingFormat(value)
-			&& this.pendingSettingDrafts.get("monthlyDateHeadingFormat") === value
-		) {
-			this.pendingSettingDrafts.delete("monthlyDateHeadingFormat");
+		try {
+			if (
+				await this.saveMonthlyDateHeadingFormat(value)
+				&& this.pendingSettingDrafts.get("monthlyDateHeadingFormat") === value
+			) this.pendingSettingDrafts.delete("monthlyDateHeadingFormat");
+		} catch (error) {
+			new Notice(formatServiceError(error, t("error.saveFailed")));
 		}
 	}
 
@@ -974,6 +1114,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
 		idleButtonText = t("settings.attention.checkAgain"),
 	): Promise<void> {
+		if (this.runtimeRetryRunning) return;
+		this.runtimeRetryRunning = true;
 		button.setDisabled(true);
 		button.setButtonText(t("settings.attention.checking"));
 		try {
@@ -982,6 +1124,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		} catch {
 			new Notice(t("settings.attention.retryFailed"));
 		} finally {
+			this.runtimeRetryRunning = false;
 			button.setDisabled(false);
 			button.setButtonText(idleButtonText);
 			this.refreshSettingTab();
@@ -1024,28 +1167,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		);
 	}
 
-	private getAttentionName(kind: KnomoSettingAttentionKind): string {
-		switch (kind) {
-			case "settings": return t("settings.attention.settings.name");
-			case "current-config": return t("settings.currentConfig.name");
-			case "catalog": return t("settings.attention.catalog.name");
-			case "monthly": return t("settings.attention.monthly.name");
-			case "legacy": return t("settings.legacyMigration.name");
-		}
-	}
-
-	private getAttentionDescription(kind: KnomoSettingAttentionKind): string {
-		switch (kind) {
-			case "settings": return t("settings.attention.settings.desc");
-			case "current-config": return this.getCurrentConfigDescription();
-			case "catalog": return t("settings.attention.catalog.desc");
-			case "monthly": return t("settings.attention.monthly.desc", {
-				periods: this.monthlyProjectionCoordinator.getFailedPeriods().join(", ") || "—",
-			});
-			case "legacy": return this.getLegacyMigrationDescription();
-		}
-	}
-
 	private renderAttentionSetting(kind: KnomoSettingAttentionKind, setting: Setting): void {
 		switch (kind) {
 			case "settings": this.renderSettingsAttentionSetting(setting); break;
@@ -1077,12 +1198,17 @@ export class KnomoSettingTab extends PluginSettingTab {
 			.setDesc(this.getCurrentConfigDescription());
 		if (status === "ready") return;
 		setting.addButton((button) => {
-			button.setButtonText(status === "unavailable"
-				? t("settings.currentConfig.checkAgain")
-				: status === "conflicted"
-					? t("settings.currentConfig.resolve")
-					: t("settings.currentConfig.publish"));
+			button.setButtonText(this.currentConfigRetryRunning
+				? t("settings.attention.checking")
+				: status === "unavailable"
+					? t("settings.currentConfig.checkAgain")
+					: status === "conflicted"
+						? t("settings.currentConfig.resolve")
+						: t("settings.currentConfig.publish"));
+			button.setDisabled(this.currentConfigRetryRunning);
 			button.onClick(() => {
+				if (this.currentConfigRetryRunning) return;
+				this.currentConfigRetryRunning = true;
 				void (async () => {
 					button.setDisabled(true);
 					try {
@@ -1095,6 +1221,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 					} catch {
 						new Notice(t("settings.currentConfig.failed"));
 					} finally {
+						this.currentConfigRetryRunning = false;
 						button.setDisabled(false);
 						this.refreshSettingTab();
 					}
@@ -1121,19 +1248,46 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	refreshAttentionIfVisible(): void {
-		// 声明式设置在注册时缓存定义，且不会调用 display()；隐藏时也须更新入口。
-		// 1.11/1.12 使用 display；声明式刷新仅在 1.13 起可用。
-		if (requireApiVersion("1.13.0")) this.update();
-		else if (this.settingsVisible) this.display();
+		if (this.settingsVisible && this.attentionEl?.isConnected) this.refreshAttentionRegion();
+		else if (requireApiVersion("1.13.0")) this.update();
 	}
 
 	private refreshSettingTab(): void {
-		// 1.11/1.12 使用 display；声明式刷新仅在 1.13 起可用。
-		if (requireApiVersion("1.13.0")) {
-			this.update();
+		if (this.settingsVisible && this.pageEl?.parentElement) {
+			const focused = this.pageEl.ownerDocument.activeElement;
+			const input = focused?.tagName === "INPUT" && this.pageEl.contains(focused)
+				? focused as HTMLInputElement : null;
+			const inputKey = input?.dataset.knomoSettingInput;
+			const selectionStart = input?.selectionStart;
+			const selectionEnd = input?.selectionEnd;
+			const tabId = focused?.getAttribute("role") === "tab" && this.pageEl.contains(focused)
+				? focused.id : null;
+			const parent = this.pageEl.parentElement;
+			// 重建页面会暂时缩短滚动容器，保留各层位置以避免跳回顶部。
+			const scrollPositions: { element: HTMLElement; top: number; left: number }[] = [];
+			for (let element: HTMLElement | null = parent; element; element = element.parentElement) {
+				scrollPositions.push({ element, top: element.scrollTop, left: element.scrollLeft });
+			}
+			this.pageEl.remove();
+			this.mountPage(parent);
+			if (inputKey) {
+				const restored = this.pageEl?.querySelector<HTMLInputElement>(
+					`[data-knomo-setting-input="${inputKey}"]`,
+				);
+				restored?.focus({ preventScroll: true });
+				if (restored && selectionStart !== null && selectionStart !== undefined
+					&& selectionEnd !== null && selectionEnd !== undefined) {
+					restored.setSelectionRange(selectionStart, selectionEnd);
+				}
+			} else if (tabId) this.pageEl?.querySelector<HTMLElement>(`#${tabId}`)?.focus({ preventScroll: true });
+			for (const { element, top, left } of scrollPositions) {
+				element.scrollTop = top;
+				element.scrollLeft = left;
+			}
 			return;
 		}
-		this.display();
+		if (requireApiVersion("1.13.0")) this.update();
+		else if (this.settingsVisible) this.display();
 	}
 
 }

@@ -12,6 +12,7 @@ test("revision 更新时复用静态显示，不转移旧句柄且同文卡片�
 	const memo = { id: "old", contentSnapshot: "- [ ] same", dailyRef: { path: "Daily.md" } } as MemoViewItem;
 	const seed = createMemoRenderPlaceholders([{ memo, card: old }]);
 	const first = card(), second = card();
+	first.firstElementChild!.innerHTML = '<div data-knomo-render-placeholder class="knomo-card-text-placeholder">- [ ] same</div>';
 	seed({ ...memo, id: "new-1" }, first);
 	seed({ ...memo, id: "new-2" }, second);
 	assert.equal(first.textContent, "same");

@@ -4,7 +4,7 @@ export interface CardImageLoadItem {
 	resourcePath?: string;
 	priority?: CardImageLoadPriority;
 	onLoad?: () => void;
-	onError?: () => void;
+	onError?: (retry?: () => boolean) => void;
 	allowDisconnected?: boolean;
 }
 
@@ -31,6 +31,8 @@ interface CardImageLoadQueueOptions {
 	maxInFlight?: number;
 	Observer?: typeof IntersectionObserver;
 	rootMargin?: string;
+	scrollAware?: boolean;
+	deferPresentation?: boolean;
 }
 
 interface CardImageLoadTask {
@@ -46,6 +48,9 @@ interface CardImageLoadTask {
 	handleError: () => void;
 	listening: boolean;
 	decoding: boolean;
+	ready: boolean;
+	retries: number;
+	retryWhenVisible: boolean;
 	attempt: number;
 }
 
@@ -54,17 +59,24 @@ export class CardImageLoadQueue {
 		root: HTMLElement;
 		nearby: IntersectionObserver;
 		visible: IntersectionObserver;
+		scrollTop: number;
+		direction: number;
+		scrolling: boolean;
+		settleTaskId: number | null;
+		onScroll: () => void;
 	}>();
-	private readonly ranges = new Map<Element, { surface: CardImageLoadSurface; nearby: boolean; visible: boolean }>();
+	private readonly ranges = new Map<Element, { surface: CardImageLoadSurface; nearby: boolean; visible: boolean; offset?: number }>();
 	private readonly observedRequests = new Map<Element, CardImageLoadRequest>();
 	private pendingTasks: CardImageLoadTask[] = [];
 	private readonly activeTasks = new Set<CardImageLoadTask>();
+	private readonly failedTasks = new Set<CardImageLoadTask>();
 	private readonly activeSources = new Set<string>();
 	private readonly activeTargets = new Set<HTMLElement>();
 	private readonly pausedSurfaces = new Set<CardImageLoadSurface>();
 	private nextSequence = 0;
 	private paused = false;
 	private updateTaskId: number | null = null;
+	private presentationTaskId: number | null = null;
 
 	constructor(private readonly options: CardImageLoadQueueOptions) {}
 
@@ -74,6 +86,10 @@ export class CardImageLoadQueue {
 		this.surfaces.delete(surface);
 		previous?.nearby.disconnect();
 		previous?.visible.disconnect();
+		if (previous) {
+			if (this.options.scrollAware) previous.root.removeEventListener("scroll", previous.onScroll);
+			if (previous.settleTaskId !== null) this.options.cancelTask(previous.settleTaskId);
+		}
 		this.clear(surface);
 		const Observer = this.options.Observer;
 		if (root === null || Observer === undefined) return;
@@ -85,7 +101,25 @@ export class CardImageLoadQueue {
 			if (this.surfaces.get(surface)?.visible !== visible) return;
 			this.handleIntersections(entries, true);
 		}, { root, rootMargin: "0px", threshold: 0 });
-		this.surfaces.set(surface, { root, nearby, visible });
+		const state = {
+			root, nearby, visible, scrollTop: root.scrollTop, direction: 0, scrolling: false,
+			settleTaskId: null as number | null,
+			onScroll: () => {
+				const delta = root.scrollTop - state.scrollTop;
+				state.scrollTop = root.scrollTop;
+				if (delta === 0) return;
+				state.direction = Math.sign(delta);
+				state.scrolling = true;
+				if (state.settleTaskId !== null) this.options.cancelTask(state.settleTaskId);
+				state.settleTaskId = this.options.scheduleTask(() => {
+					state.settleTaskId = null;
+					state.scrolling = false;
+					this.scheduleUpdate();
+				}, 120);
+			},
+		};
+		this.surfaces.set(surface, state);
+		if (this.options.scrollAware) root.addEventListener("scroll", state.onScroll, { passive: true });
 	}
 
 	private unobserve(target: Element): void {
@@ -112,6 +146,7 @@ export class CardImageLoadQueue {
 	}
 
 	forget(targetEl: HTMLElement, clearSources = false): void {
+		for (const task of this.failedTasks) if (task.targetEl === targetEl) this.failedTasks.delete(task);
 		this.unobserve(targetEl);
 		const observedRequest = this.observedRequests.get(targetEl);
 		if (observedRequest !== undefined) {
@@ -139,6 +174,9 @@ export class CardImageLoadQueue {
 	}
 
 	clear(surface?: CardImageLoadSurface): void {
+		for (const task of this.failedTasks) {
+			if (surface === undefined || task.surface === surface) this.failedTasks.delete(task);
+		}
 		for (const [target, request] of this.observedRequests) {
 			if (surface !== undefined && request.surface !== surface) {
 				continue;
@@ -167,6 +205,10 @@ export class CardImageLoadQueue {
 	}
 
 	dispose(): void {
+		if (this.presentationTaskId !== null) {
+			(this.options.cancelStartTask ?? this.options.cancelTask)(this.presentationTaskId);
+			this.presentationTaskId = null;
+		}
 		if (this.updateTaskId !== null) {
 			(this.options.cancelStartTask ?? this.options.cancelTask)(this.updateTaskId);
 			this.updateTaskId = null;
@@ -205,6 +247,9 @@ export class CardImageLoadQueue {
 
 	invalidateResourcePaths(paths: readonly string[]): void {
 		const normalizedPaths = new Set(paths.map(normalizeResourcePath));
+		for (const task of this.failedTasks) {
+			if (matchesResourcePath(task.item, normalizedPaths)) this.failedTasks.delete(task);
+		}
 		for (const [target, request] of this.observedRequests) {
 			const images = request.images.filter((item) => !matchesResourcePath(item, normalizedPaths));
 			if (images.length === request.images.length) {
@@ -240,6 +285,11 @@ export class CardImageLoadQueue {
 		for (const entry of entries) {
 			const range = this.ranges.get(entry.target);
 			if (!range) continue;
+			// nearby 的 rootBounds 包含预加载边距，方向计算只使用真实视口观察器的坐标。
+			if (visible && entry.rootBounds && entry.boundingClientRect) {
+				range.offset = entry.boundingClientRect.top - entry.rootBounds.top
+					+ (this.surfaces.get(range.surface)?.root.scrollTop ?? 0);
+			}
 			if (visible) range.visible = entry.isIntersecting;
 			else range.nearby = entry.isIntersecting;
 			if (!range.nearby && !range.visible) continue;
@@ -267,6 +317,9 @@ export class CardImageLoadQueue {
 				handleError: () => this.handleImageError(task),
 				listening: false,
 				decoding: false,
+				ready: false,
+				retries: 0,
+				retryWhenVisible: false,
 				attempt: 0,
 			};
 			this.nextSequence += 1;
@@ -290,12 +343,22 @@ export class CardImageLoadQueue {
 
 	private canStartInRange(task: CardImageLoadTask): boolean {
 		const rank = this.regionRank(task);
+		if (task.retryWhenVisible && rank > 1) return false;
 		if (rank === 3) return false;
 		if (rank !== 2) return true;
+		if (this.surfaces.get(task.surface)?.scrolling) return false;
 		for (const active of this.activeTasks) {
-			if (active !== task && !active.decoding && this.regionRank(active) === 2) return false;
+			// 预加载预算覆盖解码与待显示阶段，已离屏的活动任务也不能腾出新的预加载预算。
+			if (active !== task && this.regionRank(active) >= 2) return false;
 		}
 		return true;
+	}
+
+	private directionRank(task: CardImageLoadTask): number {
+		const state = this.surfaces.get(task.surface);
+		const offset = this.ranges.get(task.targetEl)?.offset;
+		if (!state || offset === undefined || this.regionRank(task) !== 2) return 0;
+		return (offset - state.root.scrollTop) * state.direction < 0 ? 1 : 0;
 	}
 
 	private get loadingCount(): number {
@@ -351,6 +414,7 @@ export class CardImageLoadQueue {
 				if (
 					selectedIndex === -1
 					|| (this.regionRank(task) - this.regionRank(this.pendingTasks[selectedIndex])
+						|| this.directionRank(task) - this.directionRank(this.pendingTasks[selectedIndex])
 						|| compareTaskPriority(task, this.pendingTasks[selectedIndex])) < 0
 				) {
 					selectedIndex = index;
@@ -391,8 +455,7 @@ export class CardImageLoadQueue {
 			if (!this.activeTasks.has(task)) {
 				return;
 			}
-			const shouldNotify = this.isCurrentTask(task);
-			this.finishTask(task, false, true, shouldNotify);
+			this.handleTaskFailure(task);
 		}, this.options.watchdogMs);
 	}
 
@@ -412,17 +475,63 @@ export class CardImageLoadQueue {
 				this.cancelActiveTask(task, true);
 				return;
 			}
-			this.finishTask(task, loaded, !loaded, true);
+			if (loaded && this.options.deferPresentation) {
+				task.ready = true;
+				if (task.watchdogTaskId !== null) this.options.cancelTask(task.watchdogTaskId);
+				task.watchdogTaskId = null;
+				this.schedulePresentation();
+			} else if (loaded) {
+				this.finishTask(task, true, false, true);
+			} else {
+				this.handleTaskFailure(task);
+			}
 		};
 		void this.decodeImage(task).then(() => settle(true), () => settle(false));
 		this.pump();
+	}
+
+	private schedulePresentation(): void {
+		if (this.presentationTaskId !== null || ![...this.activeTasks].some(task => task.ready)) return;
+		// 第一张就绪图直接显示；仅将同帧内集中完成的后续图片延至下一帧。
+		const task = [...this.activeTasks].filter(task => task.ready).sort((a, b) =>
+			this.regionRank(a) - this.regionRank(b) || compareTaskPriority(a, b))[0];
+		if (this.isCurrentTask(task)) this.finishTask(task, true, false, true);
+		else this.cancelActiveTask(task, true);
+		const nextFrame = () => {
+			this.presentationTaskId = null;
+			this.schedulePresentation();
+		};
+		this.presentationTaskId = this.options.scheduleStartTask?.(nextFrame) ?? this.options.scheduleTask(nextFrame, 16);
 	}
 
 	private handleImageError(task: CardImageLoadTask): void {
 		if (!this.activeTasks.has(task)) {
 			return;
 		}
-		this.finishTask(task, false, true, this.isCurrentTask(task));
+		this.handleTaskFailure(task);
+	}
+
+	private handleTaskFailure(task: CardImageLoadTask): void {
+		if (!this.isCurrentTask(task)) { this.cancelActiveTask(task, true); return; }
+		// 离屏或滚动中断不应立即变成永久错误；仅在重新可见时自动重试一次。
+		if (task.surface !== "image-preview" && this.ranges.has(task.targetEl) && task.retries < 1) {
+			task.retries++;
+			task.retryWhenVisible = true;
+			this.preemptActiveTask(task);
+			return;
+		}
+		this.finishTask(task, false, true, true);
+	}
+
+	private retryFailedTask(task: CardImageLoadTask): boolean {
+		if (!this.failedTasks.delete(task) || !this.isCurrentTask(task)) return false;
+		task.retries = 0;
+		task.retryWhenVisible = false;
+		task.decoding = false;
+		task.ready = false;
+		this.pendingTasks.push(task);
+		this.pump();
+		return true;
 	}
 
 	private finishTask(
@@ -441,7 +550,8 @@ export class CardImageLoadQueue {
 			if (loaded) {
 				task.item.onLoad?.();
 			} else {
-				task.item.onError?.();
+				this.failedTasks.add(task);
+				task.item.onError?.(() => this.retryFailedTask(task));
 			}
 		}
 	}
@@ -478,6 +588,7 @@ export class CardImageLoadQueue {
 		}
 		if (shouldResume) {
 			task.decoding = false;
+			task.ready = false;
 			this.pendingTasks.push(task);
 		}
 		this.pump();

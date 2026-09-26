@@ -481,9 +481,11 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 				assert.equal(closed, 1);
 				editor.view.focus(); backdrop.remove();
 			}
-			// 模拟 WebView 的默认失焦；mousedown 被阻止时编辑器应保持焦点。
-			if (target.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true, cancelable: true }))) editor.input.blur();
-			target.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+			// 已关闭的候选不再接收兼容事件；仍显示的候选须防止 mousedown 夺走焦点。
+			if (gesture !== "tap") {
+				if (target.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true, cancelable: true }))) editor.input.blur();
+				target.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+			}
 			const chosen = gesture === "tap" || gesture === "mouse";
 			assert.equal(selections, before + (chosen ? 1 : 0), gesture);
 			assert.equal(editor.input.value, chosen ? "#beta " : gesture === "reset" ? "#new-session" : "#", gesture);
@@ -493,7 +495,7 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 				undo(editor.view); assert.equal(editor.input.value, "#");
 			}
 		}
-		for (const release of ["next-pointer", "reset", "timeout", "unregister"] as const) {
+		for (const release of ["next-pointer", "terminal-click", "reset", "timeout", "unregister"] as const) {
 			editor.reset("#"); editor.view.focus(); suggest.open();
 			const target = win.document.querySelectorAll<HTMLElement>(".suggestion-item")[1];
 			for (const type of ["pointerdown", "pointerup"]) {
@@ -507,11 +509,129 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 			assert.equal(click(200), true, "不同位置的点击不能被吞掉");
 			assert.equal(click(40, 0), true, "键盘/辅助功能激活不能被吞掉");
 			if (release === "next-pointer") editor.input.dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true }));
+			if (release === "terminal-click") assert.equal(click(), false);
 			if (release === "reset") editor.reset("new session");
 			if (release === "timeout") await new Promise(resolve => win.setTimeout(resolve, 650));
 			if (release === "unregister") unregister();
 			assert.equal(click(), true, release);
+			assert.equal(target.dispatchEvent(new win.MouseEvent("mousedown", {
+				bubbles: true, cancelable: true, clientX: 40, clientY: 80,
+			})), true, `${release}: 原候选上的尾随防护也须释放`);
 		}
+	} finally { unregister(); close(); }
+});
+
+test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gestures", async () => {
+	await ensureObsidianStub();
+	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
+	const { editor, win, close } = environment("before #alph after");
+	const prototype = win.HTMLElement.prototype as unknown as Record<string, unknown>;
+	prototype.createDiv = function(this: HTMLElement, options: { cls?: string }) {
+		const child = this.ownerDocument.createElement("div");
+		child.className = options.cls ?? "";
+		this.appendChild(child);
+		return child;
+	};
+	prototype.setText = function(this: HTMLElement, value: string) { this.textContent = value; };
+	prototype.empty = function(this: HTMLElement) { this.replaceChildren(); };
+	prototype.addClass = function(this: HTMLElement, name: string) { this.classList.add(name); };
+	prototype.removeClass = function(this: HTMLElement, name: string) { this.classList.remove(name); };
+	prototype.toggleClass = function(this: HTMLElement, name: string, enabled: boolean) { this.classList.toggle(name, enabled); };
+	(win.document.getElementById("host") as HTMLElement).classList.add("knomo-mobile-composer-layer");
+	let selections = 0;
+	let tags = ["alpha"];
+	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
+		getSnapshot: () => ({ suggestions: tags }), ensureReady: async () => undefined,
+	} as never);
+	const unregister = suggest.registerLifecycle();
+	const initial = "before #alph after";
+	const open = (count = 1) => {
+		editor.reset(initial);
+		editor.input.setSelectionRange(12, 12);
+		editor.view.focus();
+		suggest.open();
+		const popup = win.document.querySelector<HTMLElement>(".knomo-tag-suggest-mobile")!;
+		assert.ok(popup);
+		assert.equal(popup.children.length, count);
+		assert.equal(popup.parentElement, win.document.body);
+		return { popup, row: popup.children[0] as HTMLElement };
+	};
+	const pointer = (target: HTMLElement, type: string, x = 20, y = 20, id = 1) => {
+		const event = new win.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+		Object.defineProperties(event, { pointerId: { value: id }, pointerType: { value: "touch" } });
+		target.dispatchEvent(event);
+	};
+	try {
+		for (const targetKind of ["row", "label", "held-label"] as const) {
+			const { row } = open();
+			const target = targetKind === "row" ? row : row.firstElementChild as HTMLElement;
+			const before = selections;
+			pointer(target, "pointerdown");
+			if (targetKind === "held-label") await new Promise(resolve => win.setTimeout(resolve, 650));
+			assert.equal(editor.input.value, initial, "停留期间不能提前补全");
+			pointer(target, "pointermove", 24, 23);
+			pointer(target, "pointerup", 24, 23);
+			assert.equal(editor.input.value, "before #alpha after");
+			assert.equal(editor.input.selectionStart, 14);
+			assert.equal(win.document.activeElement, editor.input);
+			assert.equal(selections, before + 1);
+			assert.equal(win.document.querySelector(".knomo-tag-suggest-mobile"), null);
+			assert.equal(target.isConnected, false);
+			// TouchEvent 保留最初触点目标：即使已移除，touchend 仍须被取消。
+			const end = new win.Event("touchend", { bubbles: true, cancelable: true });
+			Object.defineProperty(end, "changedTouches", { value: [{ clientX: 24, clientY: 23 }] });
+			assert.equal(target.dispatchEvent(end), false, "脱离文档的候选不能漏掉 touchend");
+			assert.equal(target.dispatchEvent(new win.MouseEvent("mousedown", {
+				bubbles: true, cancelable: true, clientX: 24, clientY: 23,
+			})), false);
+			for (const type of ["mouseup", "click"]) {
+				assert.equal(editor.input.dispatchEvent(new win.MouseEvent(type, {
+					bubbles: true, cancelable: true, detail: 1, clientX: 24, clientY: 23,
+				})), false, "重新命中 Composer 的尾随事件也须被取消");
+			}
+			assert.equal(editor.input.selectionStart, 14);
+			assert.equal(selections, before + 1, "尾随事件不能重复选择");
+			undo(editor.view);
+			assert.equal(editor.input.value, initial);
+			redo(editor.view);
+			assert.equal(editor.input.value, "before #alpha after");
+		}
+		for (const invalid of ["up-distance", "return", "scroll", "scroll-event", "outside", "cancel", "second-finger", "selection", "composition", "readonly", "reset"] as const) {
+			const { popup, row } = open();
+			const before = selections;
+			pointer(row, "pointerdown");
+			if (invalid === "return") { pointer(row, "pointermove", 40); pointer(row, "pointermove"); }
+			if (invalid === "scroll") popup.scrollTop = 12;
+			if (invalid === "scroll-event") popup.dispatchEvent(new win.Event("scroll"));
+			if (invalid === "cancel") pointer(row, "pointercancel");
+			if (invalid === "second-finger") pointer(row, "pointerdown", 20, 20, 2);
+			if (invalid === "selection") editor.input.setSelectionRange(0, 0);
+			if (invalid === "composition") editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			if (invalid === "readonly") editor.setSaving(true);
+			if (invalid === "reset") editor.reset("new draft");
+			pointer(invalid === "outside" ? popup : row, "pointerup", invalid === "up-distance" ? 40 : 20);
+			assert.equal(selections, before, invalid);
+			assert.equal(editor.input.value, invalid === "reset" ? "new draft" : initial, invalid);
+			if (invalid === "composition") editor.input.dispatchEvent(new win.CompositionEvent("compositionend"));
+			if (invalid === "readonly") editor.setSaving(false);
+			if (invalid === "scroll" || invalid === "scroll-event" || invalid === "cancel") {
+				assert.equal(win.document.querySelector(".knomo-tag-suggest-mobile"), popup);
+				pointer(row, "pointerdown"); pointer(row, "pointerup");
+				assert.equal(selections, before + 1, "下一次独立 Tap 应可选择");
+			}
+		}
+		tags = ["alpha", "alpine"];
+		const { popup, row } = open(2);
+		assert.equal(popup.children.length, 2);
+		pointer(row, "pointerdown");
+		pointer(popup.children[1] as HTMLElement, "pointerup");
+		assert.equal(editor.input.value, initial, "跨行松手不能选择相邻候选");
+		pointer(row, "pointerdown");
+		tags = ["alpine", "alpha"];
+		suggest.refresh();
+		assert.notEqual(win.document.querySelector(".knomo-tag-suggest-mobile"), popup);
+		pointer(row, "pointerup");
+		assert.equal(editor.input.value, initial, "候选重排后旧手势不能作用于新列表");
 	} finally { unregister(); close(); }
 });
 

@@ -669,7 +669,198 @@ test("leaving range before the scheduled start defers until reentry", () => {
 	queue.dispose(); assert.equal(scheduler.size, 0);
 });
 
+test("附近图片解码期间不继续占用预加载预算，可见图片仍能开始", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true, concurrency: 2 });
+	queue.bindSurface("card-flow", new FakeCard().asElement());
+	const cards = [new FakeCard(), new FakeCard(), new FakeCard()];
+	const images = [new FakeImage(), new FakeImage(), new FakeImage()];
+	cards.forEach((card, index) => queue.observe({ ...createRequest("card-flow", card, [createLoadItem(images[index], `app://${index}`)]), observe: true }));
+	const [nearby, visible] = FakeIntersectionObserver.instances;
+	nearby.trigger(cards.slice(0, 2)); scheduler.flushDelay(16);
+	images[0].dispatch("load");
+	assert.equal(images[1].getAttr("src"), null);
+	visible.trigger([cards[2]]); scheduler.flushDelay(16);
+	assert.equal(images[2].getAttr("src"), "app://2");
+	queue.dispose();
+});
+
+test("滚动中保留活动图片，只暂停附近预加载，停滑后恢复", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true, concurrency: 2, scrollAware: true });
+	const root = new FakeCard(), nearCard = new FakeCard(), visibleCard = new FakeCard();
+	const near = new FakeImage(), visibleImage = new FakeImage();
+	queue.bindSurface("card-flow", root.asElement());
+	queue.observe({ ...createRequest("card-flow", nearCard, [createLoadItem(near, "app://near")]), observe: true });
+	queue.observe({ ...createRequest("card-flow", visibleCard, [createLoadItem(visibleImage, "app://visible")]), observe: true });
+	root.scrollTo(100);
+	const [nearby, visible] = FakeIntersectionObserver.instances;
+	nearby.trigger([nearCard]); visible.trigger([visibleCard]); scheduler.flushDelay(16);
+	assert.equal(near.getAttr("src"), null);
+	assert.equal(visibleImage.getAttr("src"), "app://visible");
+	scheduler.flushDelay(120); scheduler.flushDelay(16);
+	assert.equal(near.getAttr("src"), "app://near");
+	root.scrollTo(0);
+	assert.equal(visibleImage.getAttr("src"), "app://visible");
+	queue.dispose();
+	assert.equal(scheduler.size, 0);
+});
+
+test("预加载方向使用真实视口坐标，不被附近观察器的边距改写", () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true, scrollAware: true });
+	const root = new FakeCard(), behind = new FakeCard(), ahead = new FakeCard();
+	behind.top = -100; ahead.top = 300;
+	const backImage = new FakeImage(), nextImage = new FakeImage();
+	queue.bindSurface("card-flow", root.asElement());
+	queue.observe({ ...createRequest("card-flow", behind, [createLoadItem(backImage,"app://back")]), observe:true });
+	queue.observe({ ...createRequest("card-flow", ahead, [createLoadItem(nextImage,"app://next")]), observe:true });
+	root.scrollTo(100);
+	const [nearby, visible] = FakeIntersectionObserver.instances;
+	visible.trigger([behind, ahead], false, false, 0);
+	nearby.trigger([behind, ahead], true, false, -280);
+	scheduler.flushDelay(16);
+	scheduler.flushDelay(120); scheduler.flushDelay(16);
+	assert.equal(backImage.getAttr("src"), null);
+	assert.equal(nextImage.getAttr("src"), "app://next");
+	queue.dispose();
+});
+
+test("解码完成后每帧只显示一张，失效任务不能迟到显示", async () => {
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { concurrency: 2, deferPresentation: true });
+	const images = [new FakeImage(), new FakeImage()];
+	const shown: number[] = [];
+	images.forEach((image, index) => queue.observe(createRequest("card-flow", new FakeCard(), [{
+		...createLoadItem(image, `app://${index}`, `${index}.png`), onLoad: () => shown.push(index),
+	}])));
+	scheduler.flushDelay(0); scheduler.flushDelay(0);
+	images.forEach(image => { image.dispatch("load"); image.resolveDecode(); });
+	await flushMicrotasks();
+	assert.deepEqual(shown, [0]);
+	queue.invalidateResourcePaths(["1.png"]);
+	scheduler.flushDelay(16);
+	assert.deepEqual(shown, [0]);
+	assert.equal(images[1].getAttr("src"), null);
+	queue.dispose();
+});
+
+test("加载中的卡片离屏后超时不显示错误，回到视口自动重试且旧解码不能覆盖", async () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true });
+	queue.bindSurface("card-flow", new FakeCard().asElement());
+	const [nearby, visible] = FakeIntersectionObserver.instances;
+	const card = new FakeCard(), image = new FakeImage();
+	let errors = 0, loaded = 0;
+	queue.observe({ ...createRequest("card-flow", card, [{
+		...createLoadItem(image, "app://photo", undefined, () => errors++), onLoad: () => loaded++,
+	}]), observe: true });
+	visible.trigger([card]); scheduler.flushDelay(16);
+	image.dispatch("load");
+	visible.trigger([card], false); nearby.trigger([card], false);
+	scheduler.flushDelay(10_000);
+	assert.equal(errors, 0);
+	image.resolveDecode(); await flushMicrotasks();
+	assert.equal(loaded, 0);
+	scheduler.flushDelay(16);
+	assert.equal(image.getAttr("src"), null);
+	visible.trigger([card]); scheduler.flushDelay(16);
+	assert.equal(image.getAttr("src"), "app://photo");
+	image.dispatch("load"); await flushMicrotasks();
+	assert.equal(loaded, 1);
+	assert.equal(errors, 0);
+	queue.dispose(); assert.equal(scheduler.size, 0);
+});
+
+test("滑回时解码失败自动重试一次，真正损坏的图片不会无限循环", async () => {
+	FakeIntersectionObserver.instances = [];
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler, { observe: true });
+	queue.bindSurface("card-flow", new FakeCard().asElement());
+	const [, visible] = FakeIntersectionObserver.instances;
+	const card = new FakeCard(), image = new FakeImage();
+	let errors = 0;
+	image.decode = () => Promise.reject(new Error("decode interrupted"));
+	queue.observe({ ...createRequest("card-flow", card, [createLoadItem(image, "app://photo", undefined, () => errors++)]), observe: true });
+	visible.trigger([card]); scheduler.flushDelay(16);
+	visible.trigger([card], false); visible.trigger([card]);
+	image.dispatch("load"); await flushMicrotasks();
+	assert.equal(errors, 0);
+	scheduler.flushDelay(0);
+	image.dispatch("load"); await flushMicrotasks();
+	assert.equal(errors, 1);
+	queue.dispose(); assert.equal(scheduler.size, 0);
+});
+
+test("最终失败可手动重试，重复点击不重复入队且旧 generation 的重试失效", async () => {
+	const scheduler = new FakeScheduler();
+	const generations = new Map<CardImageLoadSurface, number>([["card-flow", 1]]);
+	const queue = createQueue(scheduler, { generations });
+	const image = new FakeImage();
+	let retry: (() => void) | undefined;
+	let loaded = 0;
+	queue.observe(createRequest("card-flow", new FakeCard(), [{
+		...createLoadItem(image, "app://photo"), onError: next => { retry = next; }, onLoad: () => loaded++,
+	}]));
+	scheduler.flushDelay(0); image.dispatch("error");
+	assert.ok(retry);
+	retry(); retry();
+	assert.equal(scheduler.size, 1);
+	scheduler.flushDelay(0); image.dispatch("load"); image.resolveDecode(); await flushMicrotasks();
+	assert.equal(loaded, 1);
+	generations.set("card-flow", 2); retry();
+	assert.equal(scheduler.size, 0);
+	queue.dispose();
+});
+
+test("等待回滑重试时清理或附件失效，不能被旧观察器重新加载", () => {
+	for (const invalidate of [false, true]) {
+		FakeIntersectionObserver.instances = [];
+		const scheduler = new FakeScheduler();
+		const queue = createQueue(scheduler, { observe: true });
+		queue.bindSurface("card-flow", new FakeCard().asElement());
+		const [, visible] = FakeIntersectionObserver.instances;
+		const card = new FakeCard(), image = new FakeImage();
+		let errors = 0;
+		queue.observe({ ...createRequest("card-flow", card, [createLoadItem(image, "app://photo", "photo.jpg", () => errors++)]), observe: true });
+		visible.trigger([card]); scheduler.flushDelay(16);
+		visible.trigger([card], false); image.dispatch("error");
+		assert.equal(errors, 0);
+		if (invalidate) queue.invalidateResourcePaths(["photo.jpg"]); else queue.clear();
+		visible.trigger([card], true, true); scheduler.flushDelay(16);
+		assert.equal(image.getAttr("src"), null);
+		queue.dispose(); assert.equal(scheduler.size, 0);
+	}
+});
+
+test("已显示错误的旧重试入口在清理、移除或附件失效后不能复活任务", () => {
+	for (const mode of ["clear", "forget", "resource"] as const) {
+		const scheduler = new FakeScheduler();
+		const queue = createQueue(scheduler);
+		const card = new FakeCard(), image = new FakeImage();
+		let retry: (() => void) | undefined;
+		queue.observe(createRequest("card-flow", card, [{
+			...createLoadItem(image, "app://photo", "photo.jpg"), onError: next => { retry = next; },
+		}]));
+		scheduler.flushDelay(0); image.dispatch("error");
+		assert.ok(retry);
+		if (mode === "clear") queue.clear("card-flow");
+		else if (mode === "forget") queue.forget(card.asElement());
+		else queue.invalidateResourcePaths(["photo.jpg"]);
+		retry();
+		assert.equal(scheduler.size, 0);
+		assert.equal(image.getAttr("src"), null);
+		queue.dispose();
+	}
+});
+
 interface CreateQueueOptions {
+	scrollAware?: boolean;
+	deferPresentation?: boolean;
 	concurrency?: number;
 	generations?: Map<CardImageLoadSurface, number>;
 	observe?: boolean;
@@ -683,6 +874,8 @@ function createQueue(scheduler: FakeScheduler, options: CreateQueueOptions = {})
 		["image-preview", 1],
 	]);
 	return new CardImageLoadQueue({
+		scrollAware: options.scrollAware,
+		deferPresentation: options.deferPresentation,
 		concurrency: options.concurrency ?? 1,
 		getGeneration: (surface) => generations.get(surface) ?? 0,
 		scheduleTask: (callback, delayMs) => scheduler.schedule(callback, delayMs),
@@ -798,13 +991,15 @@ class FakeIntersectionObserver {
 		return [];
 	}
 
-	trigger(cards: FakeCard[], isIntersecting = true, stale = false): void {
+	trigger(cards: FakeCard[], isIntersecting = true, stale = false, rootTop?: number): void {
 		const entries = cards
 			.map((card) => card.asElement())
 			.filter((card) => stale || this.observed.has(card))
 			.map((card) => ({
 				isIntersecting,
 				target: card,
+				rootBounds: rootTop === undefined ? null : { top:rootTop },
+				boundingClientRect: { top:(card as unknown as FakeCard).top },
 			} as unknown as IntersectionObserverEntry));
 		this.callback(entries, this as unknown as IntersectionObserver);
 	}
@@ -812,6 +1007,12 @@ class FakeIntersectionObserver {
 
 class FakeCard {
 	isConnected = true;
+	top = 0;
+	scrollTop = 0;
+	private onScroll: (() => void) | null = null;
+	addEventListener(_type: string, callback: () => void): void { this.onScroll = callback; }
+	removeEventListener(): void { this.onScroll = null; }
+	scrollTo(top: number): void { this.scrollTop = top; this.onScroll?.(); }
 
 	asElement(): HTMLElement {
 		return this as unknown as HTMLElement;

@@ -3,7 +3,6 @@ import test from "node:test";
 import type { App } from "obsidian";
 
 import type { MemoObservation } from "../src/types/catalog";
-import type { TrashMemoItem } from "../src/types/trash";
 import { toTrashMemoItem } from "../src/types/memoView";
 import type { MarkdownMutationService } from "../src/types/memoOperations";
 

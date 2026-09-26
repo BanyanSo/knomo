@@ -113,7 +113,7 @@ test("写后抛错不乐观减计数或显示空状态，等待中的展示读�
  const f = await fixture(1); await f.controller.loadTrashMemos(); const memo = f.controller.getSnapshot().trashMemos![0]!;
  const process = f.vault.app.vault.process.bind(f.vault.app.vault); let queued: Promise<void> | undefined;
  f.vault.app.vault.process = async (file, update) => {
-  const value = await process(file, update); f.store.handleFileChange(file.path);
+  await process(file, update); f.store.handleFileChange(file.path);
   queued = f.controller.ensureLoaded(); throw new Error("uncertain");
  };
  await f.controller.handleTrashAction("purge", memo); await queued;

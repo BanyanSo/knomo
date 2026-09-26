@@ -46,6 +46,7 @@ import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
 import { createKnomoQuickCommands, KnomoQuickCommandController } from "./ui/KnomoQuickCommands";
+import { createKnomoProtocolHandler } from "./ui/KnomoProtocolHandler";
 import type { CatalogCoverage, CatalogRefreshResult } from "./types/catalog";
 import { formatDatePart } from "./utils/date";
 import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
@@ -402,6 +403,13 @@ export default class KnomoPlugin extends Plugin {
 		for (const command of createKnomoQuickCommands(async (id) => { await this.quickCommandController?.execute(id); })) {
 			this.addCommand(command);
 		}
+		this.registerObsidianProtocolHandler("knomo", createKnomoProtocolHandler({
+			onLayoutReady: (callback) => this.app.workspace.onLayoutReady(callback),
+			isActive: () => !lowPriorityWorkQueue.signal.aborted && this.quickCommandController !== null,
+			openView: () => this.activateView(),
+			quickCommands: this.quickCommandController,
+			onError: (error) => { new Notice(t("command.openFailed", { error: String(error) })); },
+		}));
 		this.addCommand({
 			id: "clear-trash",
 			name: t("trash.clear"),

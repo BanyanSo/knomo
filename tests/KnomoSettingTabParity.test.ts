@@ -3,65 +3,36 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-const expectedGroupKeys = [
-	"settings.attention.heading",
-	"settings.capture.heading",
-	"settings.monthly.heading",
-	"settings.presentation.heading",
-	"settings.files.heading",
-];
-
-const expectedRenderOrder = [
-	"renderAttentionSetting",
-	"renderDailyHeadingSetting",
-	"renderInsertPositionSetting",
-	"renderTimeFormatSetting",
-	"renderTimeBuoySetting",
-	"renderToolbarSetting",
-	"renderDateOrderSetting",
-	"renderMonthlyFileFormatSetting",
-	"renderDateHeadingFormatSetting",
-	"renderMonthlyExcludeSetting",
-	"renderRecentTimeFlowSetting",
-	"renderMonthlyFolderSetting",
-];
-
-test("keeps declarative and legacy setting groups in task order", () => {
+test("both host paths mount the same settings page", () => {
 	const source = readSettingTabSource();
-	const declarativeSource = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
-	const legacySource = getSourceBetween(source, "\tdisplay(): void", "\n\thide(): void");
-
-	assert.deepEqual(
-		extractMatches(declarativeSource, /heading:\s*t\("([^"]+)"/g),
-		expectedGroupKeys,
-	);
-	assert.deepEqual(
-		extractMatches(legacySource, /\.setName\(t\("([^"]+\.heading)"\)\)[\s\S]*?\.setHeading\(\)/g),
-		expectedGroupKeys,
-	);
+	const definitions = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
+	const legacy = getSourceBetween(source, "\tdisplay(): void", "\n\thide(): void");
+	assert.match(definitions, /this\.mountPage\(setting\.settingEl\)/u);
+	assert.match(legacy, /this\.mountPage\(this\.containerEl\)/u);
 });
 
-test("keeps declarative and legacy setting rows in parity", () => {
+test("record and archive groups retain the existing setting order", () => {
 	const source = readSettingTabSource();
-	const declarativeSource = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
-	const legacySource = getSourceBetween(source, "\tdisplay(): void", "\n\thide(): void");
-
-	assert.deepEqual(extractRenderCalls(declarativeSource), expectedRenderOrder);
-	assert.deepEqual(extractRenderCalls(legacySource), expectedRenderOrder);
+	const record = getSourceBetween(source, "\tprivate renderRecordSettings(", "\n\tprivate renderArchiveSettings(");
+	const archive = getSourceBetween(source, "\tprivate renderArchiveSettings(", "\n\tprivate renderAboutSettings(");
+	assert.deepEqual(extractRenderCalls(record), [
+		"renderDailyHeadingSetting", "renderInsertPositionSetting", "renderTimeFormatSetting",
+		"renderTimeBuoySetting", "renderToolbarSetting", "renderRecentTimeFlowSetting",
+	]);
+	assert.deepEqual(extractRenderCalls(archive), [
+		"renderDateOrderSetting", "renderMonthlyFileFormatSetting",
+		"renderDateHeadingFormatSetting", "renderMonthlyExcludeSetting", "renderMonthlyFolderSetting",
+	]);
 });
 
-test("only shows the attention group when actionable rows exist", () => {
+test("attention remains outside the three panels and hides when empty", () => {
 	const source = readSettingTabSource();
-	const attentionSource = getSourceBetween(
-		source,
-		"\t\t\t{\n\t\t\t\ttype: \"group\",\n\t\t\t\theading: t(\"settings.attention.heading\")",
-		"\n\t\t\t{\n\t\t\t\ttype: \"group\",\n\t\t\t\theading: t(\"settings.capture.heading\")",
-	);
-
-	assert.match(attentionSource, /visible:\s*attentionItems\.length > 0/u);
-	assert.match(source, /getKnomoSettingAttentionKinds/u);
+	const page = getSourceBetween(source, "\tprivate mountPage(", "\n\tprivate refreshAttentionRegion(");
+	const attention = getSourceBetween(source, "\tprivate refreshAttentionRegion(", "\n\tprivate renderRecordSettings(");
+	assert.ok(page.indexOf("this.refreshAttentionRegion()") < page.indexOf("const tablist"));
+	assert.match(attention, /parent\.hidden = kinds\.length === 0/u);
+	assert.match(attention, /this\.renderAttentionSetting\(kind, new Setting\(card\)\)/u);
 });
-
 test("retries current configuration independently of Identity startup and refreshes after failure", () => {
 	const source = readSettingTabSource();
 	const sharedConfigSource = getSourceBetween(
@@ -74,7 +45,7 @@ test("retries current configuration independently of Identity startup and refres
 	assert.doesNotMatch(sharedConfigSource, /this\.startupBootstrapService/u);
 	assert.match(sharedConfigSource, /new Notice\(t\("settings\.currentConfig\.failed"\)\)/u);
 	assert.match(sharedConfigSource, /finally[\s\S]*this\.refreshSettingTab\(\)/u);
-	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*else if \(this\.settingsVisible\) this\.display\(\)/u);
+	assert.match(source, /refreshAttentionIfVisible\(\): void[\s\S]*this\.refreshAttentionRegion\(\)/u);
 });
 
 test("does not expose permanent runtime, maintenance, or monthly locale rows", () => {
@@ -96,7 +67,7 @@ test("legacy attention exposes retry actions and scoped cleanup details", () => 
 	assert.match(legacySource, /if \(report\.cleanupCandidate\)/u);
 	assert.match(legacySource, /run\(\)/u);
 	assert.match(legacySource, /legacyTrashMigrationService\.run\(\)/u);
-	assert.doesNotMatch(legacySource, /new Notice|explicit/);
+	assert.doesNotMatch(legacySource, /explicit/u);
 });
 
 test("settings load failure is routed through the shared retry action", () => {

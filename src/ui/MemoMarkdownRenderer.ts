@@ -21,6 +21,8 @@ interface MemoMarkdownRendererOptions {
 	getDocument: () => Document;
 	getGeneration: (surface: MemoMarkdownSurface) => number;
 	concurrency: number;
+	scheduleTask?: (callback: () => void) => number;
+	cancelTask?: (id: number) => void;
 }
 
 interface MarkdownRenderToken {
@@ -42,10 +44,14 @@ export class MemoMarkdownRenderer {
 	constructor(private readonly options: MemoMarkdownRendererOptions) {
 		this.cardFlowQueue = new MarkdownRenderQueue({
 			concurrency: options.concurrency,
+			scheduleTask: options.scheduleTask,
+			cancelTask: options.cancelTask,
 			getGeneration: () => options.getGeneration("card-flow"),
 		});
 		this.mobileSearchQueue = new MarkdownRenderQueue({
 			concurrency: options.concurrency,
+			scheduleTask: options.scheduleTask,
+			cancelTask: options.cancelTask,
 			getGeneration: () => options.getGeneration("mobile-search"),
 		});
 	}
@@ -63,6 +69,7 @@ export class MemoMarkdownRenderer {
 			priority,
 			generation,
 			() => this.renderMemoMarkdown(memo, container, token, previewText, surface),
+			container,
 		);
 	}
 
@@ -78,7 +85,19 @@ export class MemoMarkdownRenderer {
 			"normal",
 			generation,
 			() => this.renderSourceReferenceMarkdown(container, text, sourcePath, token, surface),
+			container,
 		);
+	}
+
+	prioritizeVisible(surface: MemoMarkdownSurface, root: HTMLElement, scrollTop = root.scrollTop): void {
+		const bounds = root.getBoundingClientRect();
+		const offset = root.scrollTop - scrollTop;
+		// 重建尚未恢复滚动时，按目标位置判断；集中读布局，不在逐任务执行时反复测量。
+		this.getQueue(surface).prioritizeTargets(target => {
+			if (!root.contains(target)) return false;
+			const rect = target.getBoundingClientRect();
+			return rect.bottom + offset > bounds.top && rect.top + offset < bounds.bottom;
+		});
 	}
 
 	clear(surface: MemoMarkdownSurface = "card-flow"): void {
@@ -318,6 +337,7 @@ function createSurfaceMap<T>(createValue: () => T): Record<MemoMarkdownSurface, 
 }
 
 export function prepareRenderedMemoMarkdown(container: HTMLElement, memo: MemoRecord): void {
+	preserveMemoCardLineBreaks(container);
 	for (const imageEl of container.findAll("img")) {
 		imageEl.setAttr("loading", "lazy");
 	}
@@ -395,5 +415,40 @@ export function applyTaskCheckboxDomState(input: HTMLInputElement, marker: Markd
 	const taskItem = input.closest("li");
 	if (taskItem?.instanceOf(HTMLElement)) {
 		taskItem.setAttr("data-task", renderedMarker);
+	}
+}
+
+// 只处理宿主渲染后的正文软换行，不改写 Daily 或传给宿主的 Markdown。
+function preserveMemoCardLineBreaks(container: HTMLElement): void {
+	for (const block of container.findAll("p, li")) {
+		if (block.closest("pre, code, .math, .internal-embed, .markdown-embed")) continue;
+		preserveInlineLineBreaks(block);
+	}
+}
+
+function preserveInlineLineBreaks(element: Element): void {
+	for (const child of Array.from(element.childNodes)) {
+		if (child.nodeType === 1) {
+			const inline = child as Element;
+			// 不进入嵌入、公式、代码及嵌套块；段落和列表项分别处理。
+			if (/^(A|EM|STRONG|DEL|S|MARK|SPAN)$/.test(inline.tagName)
+				&& !inline.matches(".math, .internal-embed, .markdown-embed")) preserveInlineLineBreaks(inline);
+			continue;
+		}
+		if (child.nodeType !== 3 || !child.textContent?.includes("\n")) continue;
+		const value = child.textContent;
+		// 紧凑列表的块间排版空白不是正文换行。
+		if (element.tagName === "LI" && value.trim() === "") continue;
+		const parts = value.split(/\r?\n/);
+		const fragment = child.ownerDocument!.createDocumentFragment();
+		for (let index = 0; index < parts.length; index++) {
+			// Markdown 硬换行通常输出 <br>\n，不能再增加一行。
+			if (index > 0 && !(index === 1 && parts[0] === ""
+				&& child.previousSibling?.nodeName === "BR")) {
+				fragment.appendChild(child.ownerDocument!.createElement("br"));
+			}
+			if (parts[index]) fragment.appendChild(child.ownerDocument!.createTextNode(parts[index]));
+		}
+		child.parentNode!.replaceChild(fragment, child);
 	}
 }

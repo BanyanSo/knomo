@@ -6,7 +6,6 @@ import {
 	getMemoActionClass,
 	getMemoCardActions,
 	getMemoCardShell,
-	getMemoDeleteMode,
 	getMemoDisplayContent,
 	getMemoSourceReferenceMeta,
 	getTrashActionClass,

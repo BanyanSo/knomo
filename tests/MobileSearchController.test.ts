@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
 
 import type { MemoViewItem } from "../src/types/memoView";
 import type { RecordStatsSearchFilter } from "../src/ui/viewFilters";
@@ -183,10 +184,6 @@ function makeMemo(id: string, content: string): MemoViewItem {
 	};
 }
 
-function contentBlock(content: string): string {
-	return `- 00:00 ${content}`;
-}
-
 test("mobile search hands off ready images through repeated rebuilds and unbinds closed roots", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -219,9 +216,146 @@ test("mobile search hands off ready images through repeated rebuilds and unbinds
 	controller.closePage(); assert.equal(roots[roots.length - 1], null);
 	controller.searchQuery = "image"; controller.openPage({focusInput:false});
 	assert.equal(roots[roots.length - 1], controller.results);
-	assert.equal(loads, 3);
+	assert.equal(loads, 2);
 	assert.notEqual(root.find("img"), original);
+	const beforeClose = root.find("img");
+	controller.closePage();
+	controller.searchQuery = "image"; controller.openPage({ focusInput: false });
+	assert.equal(loads, 2, "关闭非空筛选结果也应先收集已加载图片");
+	assert.equal(root.find("img"), beforeClose);
 	controller.removePage(); assert.equal(roots[roots.length - 1], null);
+});
+
+test("移动搜索追加保留已有卡片和 generation，正文改变时安全重建", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = [makeMemo("one", "memo one"), makeMemo("two", "memo two"), makeMemo("three", "memo three")];
+	let clears = 0;
+	const { controller, root, state } = createControllerHarness(MobileSearchController, memos, undefined, undefined, {
+		clearImages: () => { clears++; },
+	});
+	controller.searchQuery = "memo"; controller.openPage({ focusInput:false });
+	const original = root.find(".knomo-card");
+	controller.loadMore();
+	assert.equal(root.find(".knomo-card"), original);
+	assert.deepEqual(state.renderedMemoIds, ["one", "two"]);
+	assert.equal(clears, 1);
+	memos[0] = { ...memos[0], contentHash:"changed", contentSnapshot:"changed memo" };
+	controller.loadMore();
+	assert.notEqual(root.find(".knomo-card"), original);
+	assert.equal(clears, 2);
+});
+
+test("移动搜索分帧追加且关闭取消未完成渲染", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const frames = new Map<number, () => void>();
+	let id = 0;
+	const { controller, state } = createControllerHarness(MobileSearchController,
+		Array.from({length:14}, (_, index) => makeMemo(String(index), "memo")), undefined, undefined, {
+			batchSize:14,
+			scheduleRenderTask: callback => { frames.set(++id, callback); return id; },
+			cancelRenderTask: frame => { frames.delete(frame); },
+		});
+	controller.searchQuery = "memo"; controller.openPage({focusInput:false});
+	assert.ok(state.renderedMemoIds.length > 0 && state.renderedMemoIds.length <= 6);
+	assert.equal(frames.size, 1);
+	const late = [...frames.values()][0];
+	controller.closePage();
+	const count = state.renderedMemoIds.length;
+	assert.equal(frames.size, 0);
+	late();
+	assert.equal(state.renderedMemoIds.length, count);
+});
+
+test("连续分帧重建保留最初滚动目标，用户滚动和范围切换使旧目标失效", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const frames = new Map<number, () => void>();
+	let id = 0;
+	const restored: number[] = [];
+	const guards: Array<() => boolean> = [];
+	const priorities: number[] = [];
+	const { controller, dispatch } = createControllerHarness(MobileSearchController,
+		Array.from({ length: 30 }, (_, index) => makeMemo(String(index), "memo")), undefined, undefined, {
+			batchSize: 30,
+			scheduleRenderTask: callback => { frames.set(++id, callback); return id; },
+			cancelRenderTask: frame => { frames.delete(frame); },
+			restoreElementScrollTop: (element, top, isCurrent) => { restored.push(top!); element!.scrollTop = top!; guards.push(isCurrent!); },
+			prioritizeMarkdown: (_root, top) => { priorities.push(top); },
+		});
+	const drain = () => {
+		while (frames.size) {
+			const [frame, callback] = [...frames][0]; frames.delete(frame); callback();
+		}
+	};
+	controller.searchQuery = "memo"; controller.openPage({ focusInput: false }); drain();
+	const results = controller.results as unknown as TestElement;
+	results.scrollTop = 2400;
+	controller.renderResults();
+	assert.equal(results.scrollTop, 0);
+	controller.renderResults(); drain();
+	assert.equal(restored.at(-1), 2400);
+	assert.ok(priorities.includes(2400));
+	assert.equal(guards.at(-1)!(), true);
+	const restoreCount = restored.length;
+	controller.renderResults();
+	dispatch(results, "wheel", createKeyboardEvent(""));
+	results.scrollTop = 160;
+	drain();
+	assert.equal(restored.length, restoreCount);
+	assert.equal(results.scrollTop, 160);
+	controller.renderResults();
+	assert.equal(guards.at(-1)!(), false);
+	dispatch(results, "touchstart", createKeyboardEvent(""));
+	results.scrollTop = 125;
+	controller.renderResults(); drain();
+	assert.equal(restored.at(-1), 125);
+	dispatch(results, "wheel", createKeyboardEvent(""));
+	assert.equal(guards.at(-1)!(), false);
+	controller.renderResults();
+	controller.renderResults("view-scope-change"); drain();
+	assert.equal(restored.at(-1), 0);
+	controller.removePage();
+});
+
+test("连续重建复用未变正文快照，深处尚未创建的卡片也保留快照且不复用旧交互", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const dom = new JSDOM("<body></body>");
+	const frames = new Map<number, () => void>();
+	const cards = new Map<string, HTMLElement>();
+	const memos = Array.from({ length: 30 }, (_, index) => makeMemo(String(index), "**memo**"));
+	let id = 0, rebuilding = false;
+	const { controller } = createControllerHarness(MobileSearchController, memos, undefined, undefined, {
+		batchSize: 30,
+		scheduleRenderTask: callback => { frames.set(++id, callback); return id; },
+		cancelRenderTask: frame => { frames.delete(frame); },
+		renderMemoCard: (_container, memo) => {
+			const card = dom.window.document.createElement("article");
+			card.innerHTML = rebuilding
+				? '<div class="knomo-card-content"><div data-knomo-render-placeholder>**memo**</div></div>'
+				: '<div class="knomo-card-content"><p><strong>memo</strong><input data-knomo-memo-id="old"></p></div>';
+			cards.set(memo.id, card);
+			return card;
+		},
+	});
+	const drain = () => {
+		while (frames.size) {
+			const [frame, callback] = [...frames][0]; frames.delete(frame); callback();
+		}
+	};
+	try {
+		controller.searchQuery = "memo"; controller.openPage({ focusInput: false }); drain();
+		rebuilding = true;
+		controller.renderResults(); controller.renderResults(); drain();
+		assert.equal(cards.get("29")!.querySelector("strong")?.textContent, "memo");
+		assert.equal(cards.get("29")!.querySelector("[data-knomo-memo-id]"), null);
+		assert.ok(cards.get("29")!.querySelector("[inert]"));
+		memos[29] = { ...memos[29], contentSnapshot: "changed memo", contentHash: "changed" };
+		controller.renderResults(); drain();
+		assert.equal(cards.get("29")!.querySelector("strong"), null);
+	} finally { controller.removePage(); dom.window.close(); }
 });
 
 function createControllerHarness(
@@ -346,6 +480,8 @@ interface CreateElementOptions {
 }
 
 class TestElement {
+	addEventListener(): void {}
+	getBoundingClientRect(): DOMRect { return {top:0, bottom:200} as DOMRect; }
 	private readonly children: TestElement[] = [];
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
@@ -439,6 +575,7 @@ class TestElement {
 	}
 
 	empty(): void {
+		this.scrollTop = 0;
 		for (const child of this.children) child.parent = null;
 		this.children.length = 0;
 		this.text = "";

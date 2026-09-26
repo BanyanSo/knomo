@@ -592,7 +592,6 @@ function makeItemsForMemo(memoId: string, targetDates: string[], createdAt: stri
 
 function makeMemo(id: string, contentSnapshot: string, createdAt: string): MemoViewItem {
 	const contentHash = `hash:${id}:${contentSnapshot}`;
-	const block = `- 08:00:00 ${contentSnapshot}`;
 	return {
 		id,
 		createdAt,

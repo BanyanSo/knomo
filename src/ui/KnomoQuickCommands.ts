@@ -12,6 +12,10 @@ const QUICK_COMMANDS = [
 
 export type KnomoQuickCommand = typeof QUICK_COMMANDS[number][0];
 
+export function isKnomoQuickCommand(value: unknown): value is KnomoQuickCommand {
+	return QUICK_COMMANDS.some(([id]) => id === value);
+}
+
 export function createKnomoQuickCommands(execute: (command: KnomoQuickCommand) => Promise<void>): Command[] {
 	return QUICK_COMMANDS.map(([id, key]) => ({ id, name: t(key), callback: () => execute(id) }));
 }

@@ -2,11 +2,28 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-	getVisibleCardFlowMemoStateKey,
 	KnomoCardFlowBatcher,
 	runCardFlowBatch,
 } from "../src/ui/KnomoCardFlow";
 import type { MemoViewItem } from "../src/types/memoView";
+
+test("移动卡片批次在耗时预算用尽后让出执行，下一帧从准确位置继续", () => {
+	const batcher = new KnomoCardFlowBatcher();
+	const batch = batcher.start(makeMemos(5), "memo", 5);
+	let time = 0;
+	const rendered: string[] = [];
+	const options = {
+		batch, generation:1, hasRenderTarget:true, isCurrentGeneration: () => true,
+		removeSentinel: () => undefined,
+		renderItem: (item: {memo: MemoViewItem}) => { rendered.push(item.memo.id); time += 3; },
+		completeBatch: () => ({hasMoreItems:false, remainingCount:0}), cancelBatch: () => undefined,
+		timeBudgetMs:4, now: () => time,
+	};
+	assert.deepEqual(runCardFlowBatch(options), {type:"pending", nextIndex:2});
+	assert.deepEqual(runCardFlowBatch({...options, startIndex:2}), {type:"pending", nextIndex:4});
+	assert.equal(runCardFlowBatch({...options, startIndex:4}).type, "completed");
+	assert.deepEqual(rendered, ["memo-0", "memo-1", "memo-2", "memo-3", "memo-4"]);
+});
 
 test("starts card flow with the default batch size", () => {
 	const batcher = new KnomoCardFlowBatcher();
@@ -65,24 +82,6 @@ test("updates hydrated items from rendered memo ids without duplicating promoted
 	assert.equal(nextBatch?.type, "items");
 	if (nextBatch?.type !== "items") return;
 	assert.deepEqual(nextBatch.items.map((item) => item.memo.id), ["recent-1", "older-0"]);
-});
-
-test("compares only the rendered memo window during hydration", () => {
-	const visibleMemos = makeMemos(2);
-	const previousKey = getVisibleCardFlowMemoStateKey(visibleMemos, 2, 50);
-	const appendedKey = getVisibleCardFlowMemoStateKey(
-		[...visibleMemos, makeMemo("older-0"), makeMemo("older-1")],
-		2,
-		50,
-	);
-	const prependedKey = getVisibleCardFlowMemoStateKey(
-		[makeMemo("new-0"), ...visibleMemos],
-		2,
-		50,
-	);
-
-	assert.equal(appendedKey, previousKey);
-	assert.notEqual(prependedKey, previousKey);
 });
 
 test("syncs the rendered count after inserting a memo at the front", () => {

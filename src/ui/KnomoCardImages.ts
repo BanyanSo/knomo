@@ -7,6 +7,7 @@ const MAX_CARD_PREVIEW_IMAGES = 3;
 interface RenderMemoCardImagesLabels {
 	previewLabel: string;
 	unavailableLabel: string;
+	retryLabel?: string;
 }
 
 export interface RenderedMemoCardImages {
@@ -14,25 +15,34 @@ export interface RenderedMemoCardImages {
 	loadItems: CardImageLoadItem[];
 }
 
-// 仅缓存当前视图移除的已就绪节点；取出即转移所有权，按最近使用顺序限制图片数量。
+// 仅缓存当前视图移除的已就绪节点；取出即转移所有权，按图片数量保持有界。
 export class MemoCardImageCache {
-	private readonly images = new Map<string, { holder: HTMLElement; count: number }>();
+	private readonly images = new Map<string, { holder: HTMLElement; count: number; paths: Set<string> }>();
 	private imageCount = 0;
 
 	constructor(private readonly maxImages = 24) {}
 
-	capture(root: HTMLElement): void {
-		for (const imagesEl of root.findAll(".knomo-card-images")) {
+	capture(root: HTMLElement, viewport?: HTMLElement | null, restoreScrollTop?: number): void {
+		const bounds = viewport?.getBoundingClientRect();
+		const offset = viewport && restoreScrollTop !== undefined ? viewport.scrollTop - restoreScrollTop : 0;
+		// 先批量读位置，再移动节点；最靠近当前视口的图片最后收集，优先保留。
+		const candidates = root.findAll(".knomo-card-images").map(imagesEl => {
+			const rect = bounds ? imagesEl.getBoundingClientRect() : null;
+			const distance = rect && bounds ? Math.max(bounds.top - rect.bottom - offset, rect.top + offset - bounds.bottom, 0) : 0;
+			return { imagesEl, distance };
+		}).sort((a, b) => b.distance - a.distance);
+		for (const { imagesEl } of candidates) {
 			const key = imagesEl.getAttr("data-knomo-image-occurrence");
 			if (!key) continue;
 			const ready = imagesEl.findAll(".knomo-card-image-item").filter((item) =>
 				!item.hasClass("is-loading") && !item.hasClass("is-error") && item.find("img")?.getAttr("src"));
 			if (ready.length === 0 || ready.length > this.maxImages) continue;
 			this.remove(key);
+			const paths = new Set(ready.map(item => item.getAttr("data-knomo-image-resource")).filter((path): path is string => !!path));
 			const holder = root.createDiv();
 			holder.remove();
 			for (const item of ready) holder.appendChild(item);
-			this.images.set(key, { holder, count: ready.length });
+			this.images.set(key, { holder, count: ready.length, paths });
 			this.imageCount += ready.length;
 			while (this.imageCount > this.maxImages) {
 				const oldest = this.images.keys().next().value;
@@ -50,6 +60,15 @@ export class MemoCardImageCache {
 	clear(): void {
 		this.images.clear();
 		this.imageCount = 0;
+	}
+
+	invalidateResourcePaths(paths: readonly string[]): void {
+		const normalize = (path: string) => path.replace(/\\/g, "/").toLowerCase();
+		const changed = new Set(paths.map(normalize));
+		const basenames = new Set([...changed].map(path => path.split("/").pop()));
+		for (const [key, entry] of this.images) {
+			if ([...entry.paths].some(path => changed.has(normalize(path)) || basenames.has(normalize(path).split("/").pop()))) this.remove(key);
+		}
 	}
 
 	private remove(key: string): HTMLElement | null {
@@ -152,7 +171,7 @@ function renderMemoCardImage(
 ): CardImageLoadItem | null {
 	const item = container.createDiv({
 		cls: "knomo-card-image-item",
-		attr: { "data-knomo-image-key": imageKey },
+		attr: { "data-knomo-image-key": imageKey, "data-knomo-image-resource": image.isRemote ? "" : image.resourcePath ?? image.path },
 	});
 	const button = item.createEl("button", {
 		cls: "knomo-card-image-button",
@@ -181,12 +200,30 @@ function renderMemoCardImage(
 	const handleLoad = () => {
 		item.removeClass("is-loading");
 	};
-	const handleError = () => {
+	let retryLoad: (() => boolean) | undefined;
+	const handleError = (retry?: () => boolean) => {
+		retryLoad = retry;
 		item.removeClass("is-loading");
 		item.addClass("is-error");
 		button.empty();
-		renderMemoCardImagePlaceholder(button, hiddenCount, labels.unavailableLabel);
+		const label = retry && labels.retryLabel ? labels.retryLabel : labels.unavailableLabel;
+		button.setAttr("aria-label", label);
+		renderMemoCardImagePlaceholder(button, hiddenCount, label);
 	};
+	button.addEventListener("click", event => {
+		if (!retryLoad) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const retry = retryLoad;
+		retryLoad = undefined;
+		item.removeClass("is-error");
+		item.addClass("is-loading");
+		button.empty();
+		button.appendChild(imageEl);
+		button.setAttr("aria-label", labels.previewLabel);
+		if (hiddenCount > 0) renderMemoCardImageMore(button, hiddenCount);
+		if (!retry()) handleError();
+	});
 	if (hiddenCount > 0) {
 		renderMemoCardImageMore(button, hiddenCount);
 	}

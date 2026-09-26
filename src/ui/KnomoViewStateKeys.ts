@@ -6,7 +6,6 @@ import type { CardFlowHeader, CardFlowPresentation } from "./KnomoCardFlowPresen
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 import { getRecordStatsSearchFilterKey } from "./viewFilters";
 import type { SidebarNav } from "./viewNavigation";
-import { getVisibleCardFlowMemoStateKey } from "./KnomoCardFlow";
 
 export type CardFlowChangeIntent = "content-change" | "view-scope-change";
 
@@ -27,11 +26,6 @@ interface CardFlowStateKeyOptions {
 	recordStatsSelectedDate: Date;
 	today: Date;
 	presentation: CardFlowPresentation;
-}
-
-interface VisibleCardFlowStateKeyOptions extends CardFlowStateKeyOptions {
-	renderedCardCount: number;
-	initialBatchSize: number;
 }
 
 interface MobileSearchViewStateKeyOptions {
@@ -105,23 +99,6 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 		getCardFlowHeadersStateKey(options.presentation.headers),
 		getMemoListStateKey(options.presentation.memos),
 	]);
-}
-
-export function getVisibleCardFlowStateKey(options: VisibleCardFlowStateKeyOptions): string {
-	if (options.activeNav === "record-stats") {
-		return getCardFlowStateKey(options);
-	}
-	if (options.presentation.type === "empty") {
-		return getStateKey(["empty", options.presentation.title, options.presentation.description]);
-	}
-	if (options.presentation.type === "onboarding") {
-		return getCardFlowStateKey(options);
-	}
-	return `${options.presentationContextKey ?? ""}:${options.presentation.mode}:${getVisibleCardFlowMemoStateKey(
-		options.presentation.memos,
-		options.renderedCardCount,
-		options.initialBatchSize,
-	)}`;
 }
 
 export function getMobileSearchViewStateKey(options: MobileSearchViewStateKeyOptions): string {

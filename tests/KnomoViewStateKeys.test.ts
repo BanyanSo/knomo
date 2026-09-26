@@ -112,7 +112,3 @@ function makeMemo(id: string): MemoViewItem {
 		},
 	};
 }
-
-function contentBlock(content: string): string {
-	return `- 00:00 ${content}`;
-}

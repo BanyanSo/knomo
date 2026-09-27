@@ -4663,6 +4663,25 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	white-space: normal;
 	overflow-wrap: anywhere;
 }
+/* 手机宿主会将设置行改为纵向；此时不能沿用桌面的像素 flex-basis。 */
+body.is-mobile .knomo-settings-panel .setting-item.knomo-settings-text-row {
+	flex-direction: column;
+	align-items: stretch;
+}
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-info,
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control {
+	flex: 0 1 auto;
+	width: 100%;
+}
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control {
+	flex-direction: column;
+	align-items: stretch;
+}
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control > input[type="text"],
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control > button {
+	flex: 0 1 auto;
+	width: 100%;
+}
 .knomo-settings-panel .setting-item.knomo-settings-support {
 	display: flex;
 	flex-direction: column;

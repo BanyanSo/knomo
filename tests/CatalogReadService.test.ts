@@ -10,6 +10,28 @@ import type { MemoObservation } from "../src/types/catalog";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("今日浮标等待源 Daily 历史覆盖，扫描完成补齐历史浮标", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, [makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "today")]);
+	await store.setCoverage({ kind: "partial", coveredFromDate: "2026-08-01", pendingFileCount: 1, coveredFileCount: 1, totalFileCount: 2 });
+	const service = new CatalogReadService({ catalog });
+	const partial = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.ok(partial.missingPeriods.length > 0);
+	const historical = makeObservation("Daily/2020-01-01.md", "2020-01-01", 1, "historical buoy");
+	historical.timeBuoyDates = ["2026-08-22"];
+	await seedCatalogFiles(catalog, store, [historical]);
+	const complete = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.deepEqual(complete.missingPeriods, []);
+	assert.equal(complete.items.length, 1);
+	assert.equal(complete.items[0]?.instance.targetDate, "2026-08-22");
+	store.close();
+});
+
 test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白归一化后保持一致", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
@@ -111,7 +133,16 @@ test("浮标保留实际页 revision，跨页失效不是成功空结果", async
 	const invalid = await service.queryTimeBuoysForDate("2026-08-22");
 	assert.equal(invalid.invalidated, true);
 	assert.deepEqual(invalid.items, []);
+	assert.ok(invalid.missingPeriods.length > 0);
 	assert.equal(calls, 2);
+	calls = 0;
+	service.query = async () => ++calls === 1
+		? { ...page, nextCursor: {} as NonNullable<typeof page.nextCursor> }
+		: { ...page, invalidated: true };
+	const sameRevision = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.equal(sameRevision.invalidated, true);
+	assert.deepEqual(sameRevision.items, []);
+	assert.ok(sameRevision.missingPeriods.length > 0);
 });
 
 test("清理待处理状态独立于已完成迁移传递，成功后可清除", async () => {

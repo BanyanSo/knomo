@@ -1,10 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCatalogPartition, MemoCatalogService } from "../src/services/MemoCatalogService";
+import { buildCatalogPartition, buildCatalogSearchTokens, MemoCatalogService, selectCatalogSearchToken } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogInventoryEntry, MemoObservation } from "../src/types/catalog";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+
+test("搜索 token 保持首次出现顺序，混排汉字短 token 不跨越非汉字", () => {
+	assert.deepEqual(buildCatalogSearchTokens("中文 abc 中文 abc"), ["中文", "中", "文", "abc"]);
+	assert.deepEqual(buildCatalogSearchTokens("中文abc项目2026"), [
+		"中文abc项目2026", "中文a", "文ab", "abc", "bc项", "c项目", "项目2", "目20", "202", "026",
+		"中", "中文", "文", "项", "项目", "目",
+	]);
+	for (const word of ["中文abc项目2026", "中文123项目", "中_文", "中-文", "𠀀文abc项目"]) {
+		const tokens = buildCatalogSearchTokens(word);
+		assert.equal(tokens.length, new Set(tokens).size);
+		const chars = [...word];
+		for (let start = 0; start < chars.length; start += 1) {
+			for (let end = start + 1; end <= chars.length; end += 1) {
+				const query = chars.slice(start, end).join("");
+				const selected = selectCatalogSearchToken(query);
+				assert.ok(selected === null || tokens.includes(selected), query);
+			}
+		}
+	}
+});
 
 test("Things 随真实 Daily 的首个任务、完成状态及最后任务删除增量收敛", async () => {
 	const store = new InMemoryMemoCatalogStore();

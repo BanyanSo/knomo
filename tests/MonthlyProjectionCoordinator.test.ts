@@ -18,6 +18,48 @@ import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const MONTHLY_PATH = "Memos/2026-08.md";
 
+for (const stage of ["build", "hash", "process", "folder"] as const) {
+	test(`Monthly 在 ${stage} 等待期间源变化拒绝旧提交，下一轮收敛`, async () => {
+		const dailyPath = "Daily/2026-08-01.md";
+		const previous = "<!-- knomo:monthly-archive -->\nprevious projection\n";
+		const fixture = createFixture({ [dailyPath]: "- 09:00 old input\n", ...(stage === "folder" ? {} : { [MONTHLY_PATH]: previous }) });
+		await fixture.coordinator.initialize();
+		let changed = false;
+		const changeSource = async () => {
+			if (changed) return;
+			changed = true;
+			fixture.replica.replace(dailyPath, "- 09:00 current input\n");
+			const file = fixture.replica.app.vault.getAbstractFileByPath(dailyPath);
+			assert.ok(file instanceof TFile);
+			await invokeVaultChanged(fixture.coordinator, file);
+		};
+		const vault = fixture.replica.app.vault;
+		if (stage === "build") {
+			const build = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+			fixture.inputBuilder.build = async (...args) => { const result = await build(...args); await changeSource(); return result; };
+		} else if (stage === "hash") {
+			const read = vault.readBinary.bind(vault);
+			vault.readBinary = async (file) => { const result = await read(file); if (file.path === MONTHLY_PATH) await changeSource(); return result; };
+		} else if (stage === "process") {
+			const process = vault.process.bind(vault);
+			vault.process = async (...args) => { await changeSource(); return process(...args); };
+		} else {
+			const createFolder = vault.createFolder.bind(vault);
+			vault.createFolder = async (...args) => { const result = await createFolder(...args); await changeSource(); return result; };
+		}
+		assert.deepEqual(await fixture.coordinator.run(true), { projected: 0, failed: 0 });
+		assert.equal(changed, true);
+		assert.equal(fixture.replica.read(MONTHLY_PATH), stage === "folder" ? null : previous);
+		assert.equal(fixture.coordinator.getProjectionState(), "stale");
+		assert.deepEqual(fixture.coordinator.getFailedPeriods(), []);
+		assert.deepEqual(await fixture.coordinator.run(false), { projected: 1, failed: 0 });
+		assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /current input/u);
+		assert.doesNotMatch(fixture.replica.read(MONTHLY_PATH) ?? "", /old input/u);
+		assert.equal(fixture.replica.read(dailyPath), "- 09:00 current input\n");
+		assert.equal(fixture.coordinator.getProjectionState(), "ready");
+	});
+}
+
 test("配置在 Monthly 构建中变化即拒绝旧任务提交，包括同目录顺序变化", async () => {
 	const fixture = createFixture({ "Daily/2026-08-01.md": "- 09:00 old input\n" });
 	await fixture.coordinator.initialize();
@@ -653,8 +695,10 @@ test("投影进行中再次失效不会丢失更新", async () => {
 		return originalCreate(path, content);
 	};
 
-	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 1, failed: 0 });
+	// create 调用内部已开始写入，无法撤销；但不得把旧版本登记为完成。
+	assert.deepEqual(await fixture.coordinator.rebuildPeriod("2026-08"), { projected: 0, failed: 0 });
 	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /unresolved memo/u);
+	assert.equal(fixture.coordinator.getProjectionMetadata("2026-08"), null);
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
 	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /updated while projecting/u);
 });

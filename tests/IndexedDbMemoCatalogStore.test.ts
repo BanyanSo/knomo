@@ -7,6 +7,38 @@ import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
 
+test("混排搜索在 IndexedDB 与内存中保持候选、计数和分页一致", async () => {
+	const databaseName = uniqueDatabaseName("mixed-search");
+	const indexed = createStore(databaseName);
+	const memory = new InMemoryMemoCatalogStore();
+	await indexed.open();
+	await memory.open();
+	try {
+		const path = "Journal/2026-08-09.md";
+		const contents = ["中文ABC项目2026", "中文123项目", "中文_项目", "ABC中文项目", "无关", "中文ABC项目2026"];
+		const partition = makePartition(path, "2026-08-09", contents.map((content, index) =>
+			makeObservation(path, "2026-08-09", index + 1, "09:00", content, { tags: index % 2 === 0 ? ["project"] : [] })));
+		await indexed.replaceFilePartition(partition);
+		await memory.replaceFilePartition(partition);
+		for (const text of ["中", "文", "中文", "项", "项目", "ABC", "ab", "2026", "文123", "文_", "_项", "中文ABC项目2026"]) {
+			for (const tags of [undefined, ["project"], ["absent"]]) {
+				const filter = { text, tags };
+				const expected = await memory.query({ ...filter, limit: 50 });
+				const keys: string[] = [];
+				let page = await indexed.query({ ...filter, limit: 1 });
+				for (;;) {
+					keys.push(...page.items.map(item => item.observationKey));
+					if (page.nextCursor === null) break;
+					page = await indexed.query({ ...filter, limit: 1, cursor: page.nextCursor });
+				}
+				assert.deepEqual(keys, expected.items.map(item => item.observationKey), JSON.stringify(filter));
+				assert.equal((await indexed.count(filter)).count, (await memory.count(filter)).count, JSON.stringify(filter));
+				assert.equal(keys.length, (await indexed.count(filter)).count);
+			}
+		}
+	} finally { indexed.close(); memory.close(); await deleteDatabase(databaseName); }
+});
+
 test("Things 稀疏命中分页与组合计数保留同文 occurrence", async () => {
 	const databaseName = uniqueDatabaseName("things");
 	const store = createStore(databaseName);

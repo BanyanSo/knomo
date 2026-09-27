@@ -324,7 +324,8 @@ export class CatalogReadService {
 			catalogRevision, coverage, invalidated,
 			items: memos.map((memo) => ({ memo: toCatalogMemoView(memo), instance: buildTimeBuoyInstance(memo, targetDate) })),
 			stale: [],
-			missingPeriods: isDateCovered(coverage, targetDate) ? [] : [targetDate.slice(0, 7)],
+			// 任意历史 Daily 都可能含有指向该日期的浮标，目标日期已覆盖不足以证明完整。
+			missingPeriods: !invalidated && isCompleteCoverage(coverage) ? [] : [targetDate.slice(0, 7)],
 		};
 	}
 
@@ -788,10 +789,6 @@ function buildReviewCatalogQuery(date: Date, text?: string): CatalogFeatureFilte
 	};
 	if (text?.trim()) query.text = text.trim();
 	return query;
-}
-
-function isDateCovered(coverage: CatalogCoverage, logicalDate: string): boolean {
-	return isRangeCovered(coverage, logicalDate, logicalDate);
 }
 
 function isCompleteCoverage(coverage: CatalogCoverage): boolean {

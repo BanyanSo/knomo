@@ -88,8 +88,8 @@ test("所有 H1-H6 与根区域识别合法时间 memo，并排除嵌套、引�
 	]);
 });
 
-test("Catalog Parser 本机缓存标记随重复项扫描元数据更新", () => {
-	assert.equal(CATALOG_PARSER_VERSION, 6);
+test("Catalog 本机缓存版本包含混排搜索短 token 更新", () => {
+	assert.ok(CATALOG_PARSER_VERSION >= 7);
 });
 
 test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async () => {

@@ -15,6 +15,7 @@ test("about groups expose updates, text contacts and two bundled reward codes", 
 	const node = {
 		addClass() {},
 		createDiv() { return node; },
+		createSpan() { return node; },
 		createEl(tag: string, options: { text?: string; attr?: Record<string, string> }) {
 			if (tag === "a") links.push({ text: options.text ?? "", ...options.attr });
 			if (tag === "img") images.push(options.attr ?? {});

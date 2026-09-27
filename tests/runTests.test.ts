@@ -78,7 +78,7 @@ test("product and tooling partition every current test source exactly once", () 
 	const product = getRunTestSelection(sources, []).sourceFileNames;
 	const tooling = getRunTestSelection(sources, ["--suite=tooling"]).sourceFileNames;
 	const all = getRunTestSelection(sources, ["--suite=all"]).sourceFileNames;
-	assert.deepEqual(tooling, ["VerifyCore.test.ts", "runTests.test.ts"]);
+	assert.deepEqual(tooling, ["ReleaseVersion.test.ts", "VerifyCore.test.ts", "runTests.test.ts"]);
 	assert.deepEqual(all, sources);
 	assert.deepEqual([...product, ...tooling].sort(), sources);
 	assert.equal(new Set([...product, ...tooling]).size, sources.length);

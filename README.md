@@ -367,17 +367,19 @@ If you use a different theme and see spacing, color, contrast, or mobile layout 
 
 ### Install from Obsidian Community Plugins
 
-When Knomo is available in the Obsidian community plugin marketplace:
+Open the [Knomo community plugin page](https://community.obsidian.md/plugins/knomo), select **Add to Obsidian**, then **Install** and **Enable** in Obsidian.
+
+You can also install it from Obsidian Settings:
 
 1. Open Obsidian Settings;
 2. Go to **Community plugins**;
 3. Turn off Restricted Mode if needed;
-4. Search for `Knomo`;
+4. Select **Browse**, search for `Knomo`, and open its plugin page;
 5. Install and enable the plugin.
 
 ### Manual installation
 
-1. Download the latest release files:
+1. Download these three files from the same [latest release](https://github.com/BanyanSo/knomo/releases/latest):
    - `main.js`
    - `manifest.json`
    - `styles.css`
@@ -386,6 +388,8 @@ When Knomo is available in the Obsidian community plugin marketplace:
 ```text
 .obsidian/plugins/knomo/
 ```
+
+If your Vault uses a custom configuration folder, replace `.obsidian` with that folder.
 
 3. Put the three files into the folder;
 4. Restart Obsidian;

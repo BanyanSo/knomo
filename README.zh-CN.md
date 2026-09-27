@@ -367,17 +367,19 @@ Knomo 尽量使用 Obsidian 主题变量，并对 Minimal 等社区主题做了�
 
 ### 从 Obsidian 社区插件市场安装
 
-当 Knomo 可在 Obsidian 社区插件市场中安装后：
+打开 [Knomo 社区插件页面](https://community.obsidian.md/plugins/knomo)，点击 **Add to Obsidian**，然后在 Obsidian 中点击 **安装**并**启用**。
+
+也可以从 Obsidian 设置中安装：
 
 1. 打开 Obsidian 设置；
 2. 进入 **第三方插件 / Community plugins**；
-3. 如有需要，关闭安全模式；
-4. 搜索 `Knomo`；
+3. 如有需要，关闭受限模式（Restricted Mode），启用第三方插件；
+4. 点击**浏览 / Browse**，搜索 `Knomo` 并打开插件页面；
 5. 安装并启用插件。
 
 ### 手动安装
 
-1. 下载最新 Release 中的文件：
+1. 从同一个[最新 Release](https://github.com/BanyanSo/knomo/releases/latest) 下载以下三个文件：
    - `main.js`
    - `manifest.json`
    - `styles.css`
@@ -386,6 +388,8 @@ Knomo 尽量使用 Obsidian 主题变量，并对 Minimal 等社区主题做了�
 ```text
 .obsidian/plugins/knomo/
 ```
+
+如果 Vault 使用了自定义配置文件夹，请将 `.obsidian` 替换为该文件夹。
 
 3. 将三个文件放入该目录；
 4. 重启 Obsidian；

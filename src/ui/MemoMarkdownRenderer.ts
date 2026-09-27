@@ -440,7 +440,7 @@ function preserveInlineLineBreaks(element: Element): void {
 		// 紧凑列表的块间排版空白不是正文换行。
 		if (element.tagName === "LI" && value.trim() === "") continue;
 		const parts = value.split(/\r?\n/);
-		const fragment = (child.ownerDocument!.win as Window & typeof globalThis).createFragment();
+		const fragment = (child.ownerDocument!.win as Window & { createFragment: typeof createFragment }).createFragment();
 		for (let index = 0; index < parts.length; index++) {
 			// Markdown 硬换行通常输出 <br>\n，不能再增加一行。
 			if (index > 0 && !(index === 1 && parts[0] === ""

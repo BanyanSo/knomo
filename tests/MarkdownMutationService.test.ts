@@ -33,22 +33,19 @@ test("Composer Markdown fixtures preserve semantic source through Daily create, 
 	}
 });
 
-test("缺失日记先应用模板再追加 Memo，复制和移动到新日期也保留模板", async () => {
+test("缺失日记先应用模板再追加 Memo，指定日期创建也保留模板", async () => {
 	const fixture = createFixture({ template: "Templates/Daily", initialFiles: {
 		"Templates/Daily.md": "---\ndate: {{date}}\n---\n# {{title}}\n\n## Memos\n\n## Review\nkeep\n",
 	} });
 	await fixture.service.create({ content: "first" });
 	await fixture.service.create({ content: "second" });
-	const original = (await fixture.parse("2026-08-22"))[0]!;
-	await fixture.service.copy({ observation: toHandle(original), targetLogicalDate: "2026-08-23" });
-	const source = (await fixture.parse("2026-08-22"))[0]!;
-	await fixture.service.move({ observation: toHandle(source), targetLogicalDate: "2026-08-24" });
-	for (const day of ["2026-08-22", "2026-08-23", "2026-08-24"]) {
+	await fixture.service.create({ content: "third", targetLogicalDate: "2026-08-23" });
+	for (const day of ["2026-08-22", "2026-08-23"]) {
 		const text = fixture.vault.readText(fixture.getPath(day));
 		assert.ok(text.startsWith(`---\ndate: ${day}\n---\n# ${day}\n`));
 		assert.ok(text.endsWith("## Review\nkeep\n"));
 		assert.equal(text.split("## Memos").length - 1, 1);
-		assert.equal((await fixture.parse(day)).length, 1);
+		assert.equal((await fixture.parse(day)).length, day === "2026-08-22" ? 2 : 1);
 	}
 });
 
@@ -78,13 +75,6 @@ test("正文 mutation 不依赖 bootstrap、identity 或本机 IDB", async (cont
 			});
 			assert.equal(toggled.observation?.content, "edited\n- [x] task");
 
-			const copySource = await fixture.getOnlyObservation("2026-08-22");
-			const copied = await fixture.service.copy({
-				observation: toHandle(copySource),
-				targetLogicalDate: "2026-08-23",
-			});
-			assert.equal(copied.status, "committed");
-			assert.equal((await fixture.getOnlyObservation("2026-08-23")).content, copySource.content);
 			assert.doesNotMatch(fixture.vault.readText(fixture.getPath("2026-08-22")), /<!--|memoId|knomo-id/u);
 		});
 	}
@@ -264,112 +254,14 @@ test("P8 同文旧句柄遇到前插、删除、换行、外部编辑和同步�
 			fixture.vault.writeText(path, content);
 			for (const observation of handles) {
 				await assert.rejects(() => fixture.service.edit({ observation, content: "wrong target" }), MarkdownMutationStaleError);
-				await assert.rejects(() => fixture.service.remove({ observation }), MarkdownMutationStaleError);
+				await assert.rejects(() => fixture.service.createBlockReference({ observation, sourcePath: "Notes/source.md" }), MarkdownMutationStaleError);
 			}
 			assert.equal(fixture.vault.readText(path), content);
 		});
 	}
 });
 
-test("copy 保留 multiline、列表、任务和代码块结构，但不复制显式 block ID", async (context) => {
-	for (const [name, content] of [
-		["multiline", "first\nsecond"],
-		["list", "- first\n- second"],
-		["task", "- [ ] first\n  continuation"],
-		["code", "```ts\nconst x = 1;\n```"],
-	] as const) {
-		await context.test(name, async () => {
-			const fixture = createFixture();
-			await fixture.service.create({ content });
-			const source = await fixture.getOnlyObservation("2026-08-22");
-
-			await fixture.service.copy({
-				observation: toHandle(source),
-				targetLogicalDate: "2026-08-23",
-			});
-
-			assert.equal((await fixture.getOnlyObservation("2026-08-23")).content, content);
-		});
-	}
-
-	const fixture = createFixture({
-		initialFiles: { "Daily/2026-08-22.md": "## Memos\n- 08:00 referenced ^userref\n" },
-	});
-	const source = await fixture.getOnlyObservation("2026-08-22");
-	await fixture.service.copy({ observation: toHandle(source), targetLogicalDate: "2026-08-23" });
-	const copied = await fixture.getOnlyObservation("2026-08-23");
-	assert.equal(copied.content, "referenced");
-	assert.equal(copied.existingBlockId, null);
-});
-
-test("move 来源删除失败时精确回滚目标，不留下无恢复记录的重复正文", async () => {
-	const sourcePath = "Daily/2026-08-22.md";
-	const targetPath = "Daily/2026-08-23.md";
-	const fixture = createFixture({
-		initialFiles: {
-			[sourcePath]: "## Memos\n- 08:00 move me\n",
-			[targetPath]: "## Memos\n",
-		},
-	});
-	const source = await fixture.getOnlyObservation("2026-08-22");
-	fixture.vault.failNextProcess(sourcePath);
-
-	await assert.rejects(() => fixture.service.move({
-		observation: toHandle(source),
-		targetLogicalDate: "2026-08-23",
-	}), /process failed/u);
-
-	assert.match(fixture.vault.readText(sourcePath), /move me/u);
-	assert.doesNotMatch(fixture.vault.readText(targetPath), /move me/u);
-});
-
-test("move 回滚目标遇到并发修改时保留两份正文并明确报告 content pending", async () => {
-	const sourcePath = "Daily/2026-08-22.md";
-	const targetPath = "Daily/2026-08-23.md";
-	const fixture = createFixture({
-		initialFiles: {
-			[sourcePath]: "## Memos\n- 08:00 move me\n",
-			[targetPath]: "## Memos\n",
-		},
-	});
-	const source = await fixture.getOnlyObservation("2026-08-22");
-	fixture.vault.failNextProcess(sourcePath, () => {
-		fixture.vault.writeText(targetPath, `${fixture.vault.readText(targetPath)}- 08:01 concurrent\n`);
-	});
-
-	const result = await fixture.service.move({
-		observation: toHandle(source),
-		targetLogicalDate: "2026-08-23",
-	});
-
-	assert.equal(result.status, "committed_content_pending");
-	assert.equal(result.catalogUpdatePending, true);
-	assert.match(fixture.vault.readText(sourcePath), /move me/u);
-	assert.match(fixture.vault.readText(targetPath), /move me/u);
-	assert.match(fixture.vault.readText(targetPath), /concurrent/u);
-});
-
-test("move 保留任意 H1-H6 section，不受新 memo 写入标题限制", async () => {
-	const sourcePath = "Daily/2026-08-22.md";
-	const targetPath = "Daily/2026-08-23.md";
-	const fixture = createFixture({
-		initialFiles: {
-			[sourcePath]: "### Ideas\n- 14:26 move with section\n",
-			[targetPath]: "## Memos\n",
-		},
-	});
-	const source = await fixture.getOnlyObservation("2026-08-22");
-
-	await fixture.service.move({
-		observation: toHandle(source),
-		targetLogicalDate: "2026-08-23",
-	});
-
-	assert.equal(fixture.vault.readText(sourcePath), "### Ideas\n");
-	assert.equal(fixture.vault.readText(targetPath), "## Memos\n### Ideas\n- 14:26 move with section\n");
-});
-
-test("remove 删除当前 block；显式 reference 只写用户请求的 block ID", async () => {
+test("显式 reference 只写用户请求的 block ID，重复请求复用已有引用", async () => {
 	const fixture = createFixture({
 		initialFiles: { "Daily/2026-08-22.md": "## Memos\n- 08:00 referenced\n" },
 	});
@@ -383,11 +275,12 @@ test("remove 删除当前 block；显式 reference 只写用户请求的 block I
 	assert.equal(fixture.vault.readText(fixture.getPath("2026-08-22")), "## Memos\n- 08:00 referenced ^aaaaaa\n");
 
 	assert.ok(referenced.observation !== null);
-	await fixture.service.remove({ observation: toHandle(referenced.observation) });
-	assert.equal(fixture.vault.readText(fixture.getPath("2026-08-22")), "## Memos\n");
+	const repeated = await fixture.service.createBlockReference({ observation: toHandle(referenced.observation), sourcePath: "Notes/source.md" });
+	assert.equal(repeated.blockId, referenced.blockId);
+	assert.equal(fixture.vault.readText(fixture.getPath("2026-08-22")), "## Memos\n- 08:00 referenced ^aaaaaa\n");
 });
 
-test("切换新建时间格式不改写已有 Memo 的精度：编辑、任务、移动", async (context) => {
+test("切换新建时间格式不改写已有 Memo 的精度：编辑、任务、引用", async (context) => {
 	for (const time of ["10:30", "10:30:00", "10:30:27"]) {
 		await context.test(time, async () => {
 			let format: "HH:mm" | "HH:mm:ss" = "HH:mm";
@@ -399,12 +292,10 @@ test("切换新建时间格式不改写已有 Memo 的精度：编辑、任务�
 			const source = await fixture.getOnlyObservation("2026-08-22");
 			await fixture.service.edit({ observation: source, content: "edited\n- [ ] task" });
 			await fixture.service.toggleTask({ observation: await fixture.getOnlyObservation("2026-08-22"), taskIndex: 0, checked: true });
-			await fixture.service.move({ observation: await fixture.getOnlyObservation("2026-08-22"), targetLogicalDate: "2026-08-23" });
-			const moved = await fixture.getOnlyObservation("2026-08-23");
-			assert.equal(moved.time, time);
-			assert.equal((await fixture.getOnlyObservation("2026-08-23")).time, time);
+			await fixture.service.createBlockReference({ observation: await fixture.getOnlyObservation("2026-08-22"), sourcePath: "Notes/source.md" });
+			assert.equal((await fixture.getOnlyObservation("2026-08-22")).time, time);
 			await fixture.service.create({ content: "new" });
-			assert.equal((await fixture.getOnlyObservation("2026-08-22")).time, "09:00:00");
+			assert.deepEqual((await fixture.parse("2026-08-22")).map(item => item.time), [time, "09:00:00"]);
 		});
 	}
 });
@@ -533,7 +424,74 @@ test("无标题和新建标题仍使用 Parser 区间并保留 frontmatter", asy
 	}
 });
 
+test("新建目标变化通过真实命令链路拒绝保存，Composer 保留草稿且不更新 Catalog", async (context) => {
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const activeEditor of [false, true]) for (const stage of ["commit", "process"] as const) {
+		if (activeEditor && stage === "process") continue;
+		for (const change of ["rename", "outside-daily", "replacement", "configuration", "logical-date"] as const) {
+			await context.test(JSON.stringify({ activeEditor, stage, change }), async () => {
+				let changed = false;
+				const changeTarget = (file: TFile) => {
+					changed = true;
+					if (change === "replacement") fixture.vault.replaceFile(file);
+					if (change === "rename") fixture.vault.rename(file, "Daily/2026-08-24.md");
+					if (change === "outside-daily") fixture.vault.rename(file, "Notes/2026-08-22.md");
+				};
+				const fixture = createFixture({
+					activeEditor,
+					initialFiles: {},
+					beforeCommit: stage === "commit" ? changeTarget : undefined,
+					beforeProcess: stage === "process" ? changeTarget : undefined,
+					getLogicalDateForPath: () => {
+						if (changed && change === "configuration") throw new Error("Daily configuration unavailable");
+						return changed && change === "logical-date" ? "2026-08-23" : "2026-08-22";
+					},
+				});
+				const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore());
+				await catalog.open();
+				const command = new MemoCommandService(fixture.app, catalog, {
+					refreshCatalogPaths: async () => undefined,
+					refreshLocalCatalog: async () => { throw new Error("Must not refresh"); },
+					rebuildLocalCatalog: async () => { throw new Error("Must not rebuild"); },
+					getMemoTimeFormat: () => "HH:mm", now: () => new Date(2026, 7, 22, 9, 0),
+				}, fixture.service);
+				const errors: string[] = [];
+				const input = { value: "unfinished memo", disabled: false, composer: {
+					composing: false, setSaving: (_saving: boolean) => undefined,
+					capture: () => ({ valid: () => true, sameSession: () => true }),
+				} };
+				const view = Object.assign(Object.create(KnomoView.prototype) as { saveInput: () => Promise<void> }, {
+					getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+					inputEl: input, isSaving: false, editingMemo: null,
+					quoteReferenceText: null, quoteMarkdownText: null, currentLayout: "desktop",
+					draftContent: input.value, composerOpen: true,
+					closeTimeBuoyPicker: () => undefined, updateSendButtonState: () => undefined,
+					syncRootState: () => undefined,
+					updateStatus: (message: string, error: boolean) => { if (error) errors.push(message); },
+					clearComposerContext: () => { throw new Error("Must retain context"); },
+					memoCommandService: command,
+				});
+				await view.saveInput();
+				assert.equal(changed, true);
+				assert.equal(errors.length, 1);
+				assert.equal(input.value, "unfinished memo");
+				assert.equal(view.draftContent, input.value);
+				assert.equal(view.composerOpen, true);
+				assert.equal(view.isSaving, false);
+				assert.deepEqual(fixture.committedPartitions, []);
+				assert.deepEqual(fixture.cleanupCalls, []);
+				assert.equal(fixture.writeCalls.editor, 0);
+				for (const file of fixture.vault.getFiles()) assert.equal(fixture.vault.readText(file.path), "## Memos\n");
+				assert.deepEqual(fixture.refreshedPaths, [["Daily/2026-08-22.md"]]);
+			});
+		}
+	}
+});
+
 interface FixtureOptions {
+	beforeCommit?: (file: TFile) => void;
+	beforeProcess?: (file: TFile) => void;
+	getLogicalDateForPath?: (path: string) => string;
 	heading?: string | null;
 	activeEditor?: boolean;
 	template?: string;
@@ -552,7 +510,7 @@ function createFixture(options: FixtureOptions = {}) {
 	const activePath = "Daily/2026-08-22.md";
 	const writeCalls = { process: 0, editor: 0 };
 	const process = vault.process.bind(vault);
-	vault.process = async (file, update) => { writeCalls.process += 1; return process(file, update); };
+	vault.process = async (file, update) => { writeCalls.process += 1; options.beforeProcess?.(file); return process(file, update); };
 	const editor = {
 		getValue: () => vault.readText(activePath),
 		offsetToPos: (offset: number) => ({ line: 0, ch: offset }),
@@ -563,7 +521,11 @@ function createFixture(options: FixtureOptions = {}) {
 		vault,
 	} as unknown as App;
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
+	const gateway = new DailyMemoWriteGateway(app, parser);
+	const commit = gateway.commit.bind(gateway);
+	gateway.commit = (prepared) => { options.beforeCommit?.(prepared.file); return commit(prepared); };
 	const committedPartitions: MarkdownCatalogCommitInput[] = [];
+	const cleanupCalls: string[] = [];
 	const refreshedPaths: string[][] = [];
 	const service = new MarkdownMutationService(app, {
 		getWriteHeading: () => options.heading === undefined ? HEADINGS[0] : options.heading,
@@ -572,8 +534,11 @@ function createFixture(options: FixtureOptions = {}) {
 			: new DailyNoteService(app).getOrCreateDailyNoteForDateWithConfig(new Date(`${logicalDate}T00:00:00`), {
 				folder: "Daily", format: "YYYY-MM-DD", template: options.template,
 			}),
-		getLogicalDateForPath: async (sourcePath) => sourcePath.match(/(\d{4}-\d{2}-\d{2})\.md$/u)?.[1]
-			?? Promise.reject(new Error(`Not a Daily path: ${sourcePath}`)),
+		getLogicalDateForPath: options.getLogicalDateForPath ?? ((sourcePath) => {
+			const date = sourcePath.match(/^Daily\/(\d{4}-\d{2}-\d{2})\.md$/u)?.[1];
+			if (!date) throw new Error(`Not a Daily path: ${sourcePath}`);
+			return date;
+		}),
 		getMemoTimeFormat: options.getMemoTimeFormat ?? (() => "HH:mm"),
 		getInsertPosition: () => options.insertPosition ?? "bottom",
 		updateCatalogPartition: async (input) => {
@@ -582,9 +547,10 @@ function createFixture(options: FixtureOptions = {}) {
 			if (options.catalogDegraded) throw new Error("Catalog storage is degraded.");
 		},
 		refreshCatalogPaths: async (paths) => { refreshedPaths.push([...paths]); },
+		removeEmptyCreatedDailyFile: async (file) => { cleanupCalls.push(file.path); },
 		now: () => new Date(2026, 7, 22, 9, 0, 0),
 		random: () => 0,
-	}, new DailyMemoWriteGateway(app, parser));
+	}, gateway);
 
 	const getPath = (logicalDate: string) => `Daily/${logicalDate}.md`;
 	const parse = async (logicalDate: string): Promise<MemoObservation[]> => {
@@ -596,6 +562,7 @@ function createFixture(options: FixtureOptions = {}) {
 		})).observations;
 	};
 	return {
+		cleanupCalls,
 		writeCalls,
 		app,
 		service,
@@ -625,7 +592,6 @@ function toHandle(observation: MemoObservation): ObservationHandle {
 class MemoryVault {
 	private readonly files = new Map<string, TFile>();
 	private readonly contents = new Map<string, string>();
-	private readonly failingProcessPaths = new Map<string, (() => void) | null>();
 
 	constructor(initialFiles: Readonly<Record<string, string>>) {
 		for (const [path, content] of Object.entries(initialFiles)) this.ensureFile(path, content);
@@ -633,6 +599,21 @@ class MemoryVault {
 
 	getFiles(): TFile[] {
 		return [...this.files.values()];
+	}
+
+	rename(file: TFile, path: string): void {
+		const content = this.readText(file.path);
+		this.contents.delete(file.path);
+		this.files.delete(file.path);
+		file.path = path;
+		this.files.set(path, file);
+		this.contents.set(path, content);
+	}
+
+	replaceFile(file: TFile): void {
+		const content = this.readText(file.path);
+		this.files.delete(file.path);
+		this.ensureFile(file.path, content);
 	}
 
 	getAbstractFileByPath(path: string): TFile | null {
@@ -655,12 +636,6 @@ class MemoryVault {
 	}
 
 	async process(file: TFile, update: (content: string) => string): Promise<string> {
-		if (this.failingProcessPaths.has(file.path)) {
-			const onFailure = this.failingProcessPaths.get(file.path);
-			this.failingProcessPaths.delete(file.path);
-			onFailure?.();
-			throw new Error(`process failed: ${file.path}`);
-		}
 		const next = update(this.readText(file.path));
 		this.writeText(file.path, next);
 		return next;
@@ -694,9 +669,6 @@ class MemoryVault {
 		file.stat = { ...file.stat, mtime: file.stat.mtime + 1, size: Buffer.byteLength(content) };
 	}
 
-	failNextProcess(path: string, onFailure: (() => void) | null = null): void {
-		this.failingProcessPaths.set(path, onFailure);
-	}
 }
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

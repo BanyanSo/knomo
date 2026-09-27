@@ -1,11 +1,8 @@
 import type { MemoObservation, ObservationHandle } from "./catalog";
 
-export type MarkdownMutationCommitStatus = "committed" | "committed_content_pending";
-
 export interface MarkdownMutationResult {
-	status: MarkdownMutationCommitStatus;
+	status: "committed";
 	observation: MemoObservation | null;
-	sourcePaths: string[];
 	catalogUpdatePending: boolean;
 }
 
@@ -34,18 +31,6 @@ export interface MarkdownTaskInput {
 	checked: boolean;
 }
 
-export interface MarkdownCopyInput {
-	observation: ObservationHandle;
-	targetLogicalDate: string;
-	createdAt?: Date;
-}
-
-export type MarkdownMoveInput = MarkdownCopyInput;
-
-export interface MarkdownRemoveInput {
-	observation: ObservationHandle;
-}
-
 export interface MarkdownBlockReferenceInput {
 	observation: ObservationHandle;
 	sourcePath: string;
@@ -55,8 +40,5 @@ export interface MarkdownMutationService {
 	create(input: MarkdownCreateInput): Promise<MarkdownMutationResult>;
 	edit(input: MarkdownEditInput): Promise<MarkdownMutationResult>;
 	toggleTask(input: MarkdownTaskInput): Promise<MarkdownMutationResult>;
-	copy(input: MarkdownCopyInput): Promise<MarkdownMutationResult>;
-	move(input: MarkdownMoveInput): Promise<MarkdownMutationResult>;
-	remove(input: MarkdownRemoveInput): Promise<MarkdownMutationResult>;
 	createBlockReference(input: MarkdownBlockReferenceInput): Promise<MarkdownBlockReferenceResult>;
 }

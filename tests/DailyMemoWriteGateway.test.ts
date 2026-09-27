@@ -15,6 +15,7 @@ test("active Daily writes through one editor transaction", async () => {
 	const app = {
 		workspace: { getActiveViewOfType: () => view },
 		vault: {
+			getAbstractFileByPath: () => file,
 			cachedRead: async () => "stale vault bytes",
 			process: async () => {
 				processCalls += 1;
@@ -47,6 +48,7 @@ test("background Daily writes through Vault.process with a compare-and-swap guar
 	const app = {
 		workspace: { getActiveViewOfType: () => null },
 		vault: {
+			getAbstractFileByPath: () => file,
 			cachedRead: async () => content,
 			process: async (_file: TFile, update: (current: string) => string) => {
 				processCalls += 1;
@@ -79,7 +81,7 @@ test("expected revision and late editor changes reject stale Daily writes", asyn
 	const view = { file, editor } as unknown as MarkdownView;
 	const app = {
 		workspace: { getActiveViewOfType: () => view },
-		vault: { cachedRead: async () => "", process: async () => "" },
+		vault: { getAbstractFileByPath: () => file, cachedRead: async () => "", process: async () => "" },
 	} as unknown as App;
 	const gateway = makeGateway(app);
 
@@ -108,6 +110,7 @@ test("Daily 写入网关为大文件解析传入协作式 runtime", async () => 
 	const app = {
 		workspace: { getActiveViewOfType: () => null },
 		vault: {
+			getAbstractFileByPath: () => file,
 			cachedRead: async () => content,
 			process: async () => content,
 		},
@@ -130,6 +133,55 @@ test("Daily 写入网关为大文件解析传入协作式 runtime", async () => 
 	});
 
 	assert.ok(yieldCount > 0);
+});
+
+test("目标在准备、提交前或 process 回调前变化时拒绝写入，即使正文完全相同", async (context) => {
+	for (const mode of ["active_editor", "vault_process"] as const) {
+		for (const stage of ["prepare", "commit", "process"] as const) {
+			if (mode === "active_editor" && stage === "process") continue;
+			for (const change of ["rename", "outside-daily", "replacement"] as const) {
+				await context.test(`${mode}/${stage}/${change}`, async () => {
+					const path = "Daily/2026-08-09.md";
+					const file = makeFile(path);
+					let currentFile = file;
+					let disk = "## Memos\n";
+					const editor = new MemoryEditor(disk);
+					const changeTarget = () => {
+						if (change === "replacement") currentFile = makeFile(path);
+						else file.path = change === "rename" ? "Daily/2026-08-10.md" : "Notes/2026-08-09.md";
+					};
+					let changed = false;
+					const app = {
+						workspace: { getActiveViewOfType: () => mode === "active_editor" ? { file, editor } : null },
+						vault: {
+							getAbstractFileByPath: (lookup: string) => lookup === currentFile.path ? currentFile : null,
+							cachedRead: async () => disk,
+							process: async (_file: TFile, update: (content: string) => string) => {
+								if (stage === "process") changeTarget();
+								disk = update(disk);
+								return disk;
+							},
+						},
+					} as unknown as App;
+					const gateway = makeGateway(app);
+					await assert.rejects(async () => {
+						const prepared = await gateway.prepare({
+							file, logicalDate: "2026-08-09", expectedRevision: null,
+							update: (content) => {
+								if (stage === "prepare" && !changed) { changed = true; changeTarget(); }
+								return `${content}- 09:00 new memo\n`;
+							},
+						});
+						if (stage === "commit") changeTarget();
+						await gateway.commit(prepared);
+					}, StaleDailyWriteError);
+					assert.equal(disk, "## Memos\n");
+					assert.equal(editor.getValue(), disk);
+					assert.equal(editor.transactionCount, 0);
+				});
+			}
+		}
+	}
 });
 
 function makeGateway(app: App): DailyMemoWriteGateway {

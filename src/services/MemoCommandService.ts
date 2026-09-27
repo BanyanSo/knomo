@@ -66,8 +66,6 @@ export class MemoCommandService {
 	) {
 		this.now = options.now ?? (() => new Date());
 		this.createInternal = this.mutationBarrier.wrap(this.createInternal.bind(this));
-		this.copy = this.mutationBarrier.wrap(this.copy.bind(this));
-		this.move = this.mutationBarrier.wrap(this.move.bind(this));
 		this.editInternal = this.mutationBarrier.wrap(this.editInternal.bind(this));
 		this.toggleTask = this.mutationBarrier.wrap(this.toggleTask.bind(this));
 		this.delete = this.mutationBarrier.wrap(this.delete.bind(this));
@@ -148,24 +146,6 @@ export class MemoCommandService {
 		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? []);
 	}
 
-	async copy(item: CatalogMemoItem, logicalDate = formatDatePart(this.now())): Promise<MemoSaveResult> {
-		const createdAt = this.now();
-		const result = await this.markdownMutations.copy({
-			observation: item.observationHandle,
-			targetLogicalDate: logicalDate,
-			createdAt,
-		});
-		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
-	}
-
-	async move(item: CatalogMemoItem, targetLogicalDate: string): Promise<MemoSaveResult> {
-		const result = await this.markdownMutations.move({
-			observation: item.observationHandle,
-			targetLogicalDate,
-		});
-		return this.finishMarkdownSavedMemo(result, result.observation?.timeBuoyDates ?? item.timeBuoyDates);
-	}
-
 	startEdit(item: CatalogMemoItem, contentInput: string, validateImageSource?: (sourcePath: string) => void): MemoSaveOperation {
 		return this.startSaveOperation((onDailyCommitted) => this.editInternal(item, contentInput, onDailyCommitted, validateImageSource));
 	}
@@ -202,14 +182,14 @@ export class MemoCommandService {
 
 	async delete(item: CatalogMemoItem): Promise<DailyMutationResult> {
 		const result = await this.requireTrashService().delete(item.observationHandle);
-		return { status: "saved", followUpPending: false, localRefreshPending: result.catalogUpdatePending };
+		return { status: "saved", localRefreshPending: result.catalogUpdatePending };
 	}
 
 	async restore(item: TrashMemoItem): Promise<MemoSaveResult> {
 		const result = await this.requireTrashService().restore(item.snapshotId);
 		if (result.state === "restored_cleanup_pending") throw new Error(result.message ?? t("trash.restoredCleanupPending"));
 		const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(() => null);
-		return { status: "saved", memo, timeBuoyDates: memo?.timeBuoyDates ?? [], followUpPending: false,
+		return { status: "saved", memo, timeBuoyDates: memo?.timeBuoyDates ?? [],
 			localRefreshPending: result.catalogUpdatePending || memo === null };
 	}
 
@@ -238,7 +218,6 @@ export class MemoCommandService {
 		const link = this.app.fileManager.generateMarkdownLink(file, sourcePath, `#^${anchored.blockId}`);
 		return {
 			text: withCreatedAtAlias(link, `${item.observation.logicalDate}T${item.observation.time}`),
-			followUpPending: saved.followUpPending,
 			localRefreshPending: saved.localRefreshPending,
 		};
 	}
@@ -262,10 +241,9 @@ export class MemoCommandService {
 		}
 		if (input.observation !== null && memo === null) localRefreshPending = true;
 		return {
-			status: input.status === "committed_content_pending" ? "content_pending" : "saved",
+			status: "saved",
 			memo,
 			timeBuoyDates: [...(memo?.timeBuoyDates ?? timeBuoyDates)],
-			followUpPending: input.status === "committed_content_pending",
 			localRefreshPending,
 		};
 	}

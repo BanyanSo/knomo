@@ -191,7 +191,7 @@ export default class KnomoPlugin extends Plugin {
 				const date = parseLogicalDate(logicalDate);
 				return dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig());
 			},
-			getLogicalDateForPath: async (sourcePath) => {
+			getLogicalDateForPath: (sourcePath) => {
 				const date = parseDailyNoteDateFromPath(sourcePath, getEffectiveDailyConfig());
 				if (date === null) throw new Error("Daily path does not match the active configuration: " + sourcePath);
 				return formatDatePart(date);

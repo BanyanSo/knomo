@@ -70,12 +70,11 @@ export interface CatalogMemoItem {
 }
 
 export interface MutationFollowUpState {
-	followUpPending: boolean;
 	localRefreshPending: boolean;
 }
 
 export interface DailyMutationResult extends MutationFollowUpState {
-	status: "saved" | "content_pending";
+	status: "saved";
 }
 
 export interface MemoSaveResult extends DailyMutationResult {

@@ -47,7 +47,7 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 		const trashStore = new TrashSnapshotStore(vault.app, "Knomo");
 		const trash = new IndependentTrashService(vault.app, trashStore, { ...options,
 			getOriginalDailyFile: async (path) => vault.app.vault.getAbstractFileByPath(path) as TFile | null });
-		const mutations = new MarkdownMutationService(vault.app, { ...options, getWriteHeading: () => "## Memos", getMemoTimeFormat: () => "HH:mm:ss" });
+		const mutations = new MarkdownMutationService(vault.app, { ...options, getLogicalDateForPath: () => "2026-09-01", getWriteHeading: () => "## Memos", getMemoTimeFormat: () => "HH:mm:ss" });
 		const read = new CatalogReadService({ catalog, references: new CatalogReferenceService(vault.app, catalog),
 			now: () => new Date(2026, 8, 8), random: () => 0 });
 		return { catalog, read, mutations, trash, trashStore, reset: async () => {

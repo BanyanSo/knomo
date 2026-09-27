@@ -963,8 +963,8 @@ async function sessionView(editor: ComposerEditor) {
 		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
 		resolveCatalogMemo: async (memo: import("../src/types/memoView").MemoViewItem) => memo.catalog!,
 		memoCommandService: {
-			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
-			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
+			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),
+			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),
 			createReferenceText: async (_memo: unknown) => ({ text: "[[reference]]" }),
 		},
 		reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
@@ -1030,7 +1030,7 @@ test("W01-W05 edit saves the original handle once while frozen and restores Crea
 		let calls = 0;
 		view.memoCommandService.startEdit = (target, content) => {
 			calls++; assert.equal(target, memo.catalog); assert.equal(content, "edited");
-			return { dailyCommitted: daily, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) };
+			return { dailyCommitted: daily, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false }) };
 		};
 		const saving = view.saveInput(); await Promise.resolve();
 		view.cancelEditing(); view.clearReference(); view.startEditing(sessionMemo("b"));
@@ -1084,7 +1084,7 @@ test("W06-W07 late settled refresh preserves new errors, sheet and scroll owners
 		view.reloadMemos = async () => { refreshed(); return true; };
 		await view.saveInput();
 		editor.reset("new draft"); view.openComposer(); status = "new error";
-		finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+		finish({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false });
 		await refreshedPromise; await Promise.resolve();
 		assert.equal(editor.input.value, "new draft"); assert.equal(view.composerOpen, true); assert.equal(status, "new error");
 	} finally { close(); }
@@ -1109,7 +1109,7 @@ test("W10 rebuild waits for consumption and close does not cancel the committed 
 				view.reloadMemos = async () => { throw new Error("closed reload"); };
 			}
 			commit(); await saving;
-			finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+			finish({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false });
 			await Promise.resolve(); await Promise.resolve();
 			assert.equal(renders, closing ? 0 : 1); assert.equal(view.isSaving, false);
 		} finally { close(); }

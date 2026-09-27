@@ -20,7 +20,10 @@ function environment(value: string) {
 	virtualConsole.on("jsdomError", error => errors.push(error));
 	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true, virtualConsole });
 	const win = dom.window;
-	Object.assign(win.Node.prototype, { createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); } });
+	Object.assign(win.Node.prototype, {
+		createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); },
+		createSpan(this: HTMLElement) { return this.createEl("span"); },
+	});
 	// jsdom 没有原生布局 API；让 CodeMirror 的测量临时节点能正常完成清理。
 	win.Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 	win.Range.prototype.getBoundingClientRect = () => new win.DOMRect();

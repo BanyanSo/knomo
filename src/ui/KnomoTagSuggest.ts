@@ -126,7 +126,7 @@ export class KnomoTagSuggest {
 			item.id = `${this.popoverId}-${index}`;
 			item.setAttribute("aria-selected", String(index === this.selectedIndex));
 			item.toggleClass("is-selected", index === this.selectedIndex);
-			const label = mobile ? item.createEl("span") : item;
+			const label = mobile ? item.createSpan() : item;
 			this.renderSuggestion(suggestion, label);
 			item.addEventListener("pointermove", event => {
 				if (event.pointerType === "mouse") this.setSelectedIndex(index, false);

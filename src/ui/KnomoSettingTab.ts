@@ -285,7 +285,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			const item = codes.createDiv({ cls: "knomo-settings-support-code" });
 			item.createEl("img", { cls: "knomo-settings-qr", attr: { src: code.src, alt: code.label } });
 			if (code.href) this.renderTextLink(item, code.label, code.href);
-			else item.createEl("span", { text: code.label });
+			else item.createSpan({ text: code.label });
 		}
 		new Setting(card).setName(t("settings.about.licenseHeading")).setDesc("copyright©️BanyanSo，GPL-3.0-only");
 		new Setting(card).setName(t("settings.about.privacyHeading")).setDesc(t("settings.about.privacyDesc"));
@@ -295,7 +295,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		for (const contact of contacts) {
 			const setting = new Setting(parent).setName(t(contact.labelKey));
 			if (contact.href) this.renderTextLink(setting.controlEl, contact.value, contact.href);
-			else setting.controlEl.createEl("span", { text: contact.value });
+			else setting.controlEl.createSpan({ text: contact.value });
 		}
 	}
 

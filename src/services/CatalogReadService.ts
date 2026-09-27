@@ -30,7 +30,8 @@ import type { KnomoCurrentConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
 import { toCatalogMemoView } from "../types/memoView";
-import type { TimeBuoyAllQueryResult, TimeBuoyQueryResult } from "../types/timeBuoy";
+import type { TimeBuoyPageRequest, TimeBuoyPageResult, TimeBuoyQueryResult } from "../types/timeBuoy";
+import { getTimeBuoyTabDates } from "./TimeBuoyQuery";
 import { formatDatePart } from "../utils/date";
 import { filterRandomReunionCandidates, sampleRandomReunionCandidates } from "../utils/randomReunion";
 import type { RandomReunionCandidate } from "../utils/randomReunion";
@@ -162,10 +163,11 @@ export class CatalogReadService {
 		}));
 		const status = this.getReadStatus(page.coverage, page.lifecycle, false);
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
+		const referenceCache = this.options.references?.createQueryCache();
 		return this.rememberPage({
 			items: await Promise.all(resolved.map(async (memo) => ({
 				...this.toMemoItem(memo, catalogCapabilities),
-				...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(memo.observation) }),
+				...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(memo.observation, referenceCache) }),
 			}))),
 			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
 			catalogRevision: page.catalogRevision,
@@ -289,27 +291,34 @@ export class CatalogReadService {
 		));
 	}
 
-	async queryTimeBuoysForDate(targetDate: string): Promise<TimeBuoyQueryResult> {
-		const page = await this.queryTimeBuoyItems({ timeBuoyDate: targetDate, limit: 150 });
-		const { items: memos, coverage, catalogRevision, invalidated } = page;
-		return {
-			catalogRevision, coverage, invalidated,
-			items: memos.map((memo) => ({ memo: toCatalogMemoView(memo), instance: buildTimeBuoyInstance(memo, targetDate) })),
-			stale: [],
-			// 任意历史 Daily 都可能含有指向该日期的浮标，目标日期已覆盖不足以证明完整。
-			missingPeriods: !invalidated && isCompleteCoverage(coverage) ? [] : [targetDate.slice(0, 7)],
-		};
+	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"]): Promise<TimeBuoyQueryResult> {
+		const page = await this.queryTimeBuoyPage({ today: targetDate, tab: "today", limit: 30, cursor });
+		// 任意历史 Daily 都可能含有指向今天的浮标；分页完成和索引覆盖分开判断。
+		return { ...page, missingPeriods: page.complete ? [] : [targetDate.slice(0, 7)] };
 	}
 
-	async queryAllTimeBuoys(): Promise<TimeBuoyAllQueryResult> {
-		const { items: memos, coverage, catalogRevision, invalidated } = await this.queryTimeBuoyItems({ hasTimeBuoy: true, limit: 150 });
+	async queryTimeBuoyPage(request: TimeBuoyPageRequest): Promise<TimeBuoyPageResult> {
+		const page = await this.options.catalog.getStore().queryTimeBuoys(request);
+		const { coverage, catalogRevision } = page;
+		let invalidated = page.invalidated || this.getReadState(coverage, page.lifecycle) === "storage_unavailable";
+		const capabilities = createCatalogCapabilities(coverage);
+		const referenceCache = this.options.references?.createQueryCache();
+		const memos = invalidated ? [] : await Promise.all(page.items.map(async (observation) => ({
+			...this.toMemoItem({ kind: "observation", observation, capabilities: createResolvedMemoCapabilities() }, capabilities),
+			...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(observation, referenceCache) }),
+		})));
+		const store = this.options.catalog.getStore();
+		const [currentRevision, currentCoverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		invalidated ||= currentRevision !== catalogRevision || JSON.stringify(currentCoverage) !== JSON.stringify(coverage)
+			|| this.getReadState(currentCoverage, store.getLifecycle()) === "storage_unavailable";
 		return {
 			catalogRevision, coverage, invalidated,
-			items: memos.flatMap((memo) => memo.timeBuoyDates.map((targetDate) => ({
+			nextCursor: invalidated ? null : page.nextCursor,
+			metrics: page.metrics,
+			items: invalidated ? [] : memos.flatMap((memo) => getTimeBuoyTabDates(memo.timeBuoyDates, request).map((targetDate) => ({
 				memo: toCatalogMemoView(memo),
 				instance: buildTimeBuoyInstance(memo, targetDate),
-			}))).sort((left, right) => left.instance.targetDate.localeCompare(right.instance.targetDate)
-				|| right.memo.createdAt.localeCompare(left.memo.createdAt)),
+			}))),
 			stale: [],
 			missingPeriods: [],
 			complete: !invalidated && isCompleteCoverage(coverage),
@@ -599,22 +608,6 @@ export class CatalogReadService {
 			return "storage_unavailable";
 		}
 		return coverage.kind === "complete" ? "ready" : "history_building";
-	}
-
-	private async queryTimeBuoyItems(request: Omit<CatalogFeatureQuery, "cursor">): Promise<CatalogMemoPage> {
-		let page = await this.query(request);
-		if (page.readState === "storage_unavailable") return { ...page, items: [], nextCursor: null, invalidated: true };
-		const first = page;
-		const items = [...page.items];
-		while (!page.invalidated && page.nextCursor !== null) {
-			page = await this.query({ ...request, cursor: page.nextCursor });
-			if (page.readState === "storage_unavailable" || page.catalogRevision !== first.catalogRevision
-				|| JSON.stringify(page.coverage) !== JSON.stringify(first.coverage)) {
-				return { ...first, items: [], nextCursor: null, invalidated: true };
-			}
-			items.push(...page.items);
-		}
-		return { ...first, items: page.invalidated ? [] : items, nextCursor: null, invalidated: page.invalidated };
 	}
 
 	private async queryAllItems(

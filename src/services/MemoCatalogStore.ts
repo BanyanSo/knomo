@@ -12,6 +12,9 @@ import type {
 	CatalogStoreLifecycle,
 } from "../types/catalog";
 
+import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/timeBuoy";
+import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
+
 export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 	kind: "partial",
 	coveredFromDate: null,
@@ -31,6 +34,7 @@ export interface MemoCatalogStore {
 	open(): Promise<void>;
 	close(): void;
 	getLifecycle(): CatalogStoreLifecycle;
+	getCatalogRevision(): Promise<number>;
 	replaceFilePartition(partition: CatalogFilePartition): Promise<number>;
 	replaceFilePartitions(partitions: readonly CatalogFilePartition[]): Promise<number>;
 	deleteFilePartition(sourcePath: string): Promise<number>;
@@ -41,6 +45,7 @@ export interface MemoCatalogStore {
 	listFiles(): Promise<CatalogFileRecord[]>;
 	count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult>;
 	query(request: CatalogQuery): Promise<CatalogQueryPage>;
+	queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage>;
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]>;
 	getCoverage(): Promise<CatalogCoverage>;
 	setCoverage(coverage: CatalogCoverage): Promise<void>;
@@ -64,6 +69,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	constructor(private readonly maxObservations = IN_MEMORY_CATALOG_OBSERVATION_LIMIT) {}
 
 	async open(): Promise<void> {}
+	async getCatalogRevision(): Promise<number> { return this.catalogRevision; }
 
 	close(): void {}
 
@@ -201,6 +207,21 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 			metrics: { cursorReads, observationsRead, returned: items.length },
 			invalidated: false,
 		};
+	}
+
+	async queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage> {
+		const selection = new TimeBuoyPageSelection(request, this.catalogRevision, this.coverage);
+		let cursorReads = 0;
+		if (!selection.invalidated) for (const observation of this.observations.values()) {
+			if (observation.timeBuoyDates.length === 0) continue;
+			cursorReads++;
+			selection.add({ observationKey: observation.observationKey, timeBuoyDates: observation.timeBuoyDates,
+				createdAtKey: `${observation.logicalDate}T${observation.time}` });
+		}
+		const items = selection.items.slice(0, selection.limit).map((item) => clone(this.observations.get(item.observationKey)!));
+		return { items, nextCursor: selection.nextCursor, catalogRevision: this.catalogRevision,
+			coverage: clone(this.coverage), lifecycle: this.getLifecycle(), invalidated: selection.invalidated,
+			metrics: { cursorReads, observationsRead: items.length, returned: items.length } };
 	}
 
 	async listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]> {
@@ -393,6 +414,11 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		const page = await this.run((store) => store.query(request));
 		return { ...page, lifecycle: this.getLifecycle() };
 	}
+	async queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage> {
+		const page = await this.run((store) => store.queryTimeBuoys(request));
+		return { ...page, lifecycle: this.getLifecycle() };
+	}
+	getCatalogRevision(): Promise<number> { return this.run((store) => store.getCatalogRevision()); }
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]> {
 		return this.run((store) => store.listDailyAggregates(fromDate, toDate));
 	}

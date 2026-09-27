@@ -7,6 +7,95 @@ import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
 
+test("浮标分页保留三组排序、多日期合并、同文 occurrence 及查询边界", async () => {
+	const databaseName = uniqueDatabaseName("buoy-pages");
+	const stores = [createStore(databaseName), new InMemoryMemoCatalogStore()];
+	const path = "Daily/2026-07-01.md", today = "2026-09-27";
+	const observations = Array.from({ length: 77 }, (_, index) => makeObservation(path, "2026-07-01", index + 1,
+		index % 2 ? "10:30" : "10:30:00", "same", { timeBuoyDates: index % 7 === 0 ? [] : [
+			"2026-09-26", "2026-08-01", today, "2026-10-02", index % 3 === 0 ? "2026-10-01" : "2026-11-01", today,
+		] }));
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, "2026-07-01", observations));
+			await store.setCoverage({ kind: "complete", coveredFromDate: "2026-07-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+			for (const tab of ["today", "upcoming", "past"] as const) {
+				const expected = (await store.query({ hasTimeBuoy: true, limit: 150 })).items.map(item => {
+					const dates = [...new Set(item.timeBuoyDates.filter(date => tab === "today" ? date === today : tab === "upcoming" ? date > today : date < today))].sort();
+					return { item, dates, primary: tab === "past" ? dates[dates.length - 1]! : dates[0]! };
+				}).filter(item => item.dates.length).sort((a, b) => (
+					(tab === "upcoming" ? a.primary.localeCompare(b.primary) : b.primary.localeCompare(a.primary))
+					|| `${b.item.logicalDate}T${b.item.time}`.localeCompare(`${a.item.logicalDate}T${a.item.time}`)
+					|| b.item.observationKey.localeCompare(a.item.observationKey)));
+				const keys: string[] = [];
+				let page = await store.queryTimeBuoys({ today, tab, limit: 7 });
+				const first = page;
+				for (;;) {
+					assert.equal(page.invalidated, false);
+					assert.equal(page.metrics.observationsRead, page.items.length);
+					assert.ok(page.items.length <= 7);
+					keys.push(...page.items.map(item => item.observationKey));
+					if (page.nextCursor === null) break;
+					page = await store.queryTimeBuoys({ today, tab, limit: 7, cursor: page.nextCursor });
+				}
+				assert.deepEqual(keys, expected.map(({ item }) => item.observationKey));
+				assert.equal(new Set(keys).size, keys.length);
+				assert.equal((await store.queryTimeBuoys({ today: "2026-09-28", tab, limit: 7, cursor: first.nextCursor })).invalidated, true);
+				assert.equal((await store.queryTimeBuoys({ today, tab: tab === "past" ? "today" : "past", limit: 7, cursor: first.nextCursor })).invalidated, true);
+			}
+			const first = await store.queryTimeBuoys({ today, tab: "today", limit: 7 });
+			await store.deleteFilePartition(path);
+			assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7, cursor: first.nextCursor })).invalidated, true);
+			assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7 })).items.length, 0);
+		}
+	} finally { for (const store of stores) store.close(); await deleteDatabase(databaseName); }
+});
+
+test("旧浮标缓存升级后重建，分钟改为零秒时更新分页排序字段", async () => {
+	const name = uniqueDatabaseName("buoy-upgrade");
+	const old = createStore(name, { version: 2 });
+	const path = "Daily/2026-07-01.md";
+	const memo = makeObservation(path, "2026-07-01", 1, "10:30", "same", { timeBuoyDates: ["2026-09-27"] });
+	await old.open();
+	await old.replaceFilePartition(makePartition(path, "2026-07-01", [memo]));
+	old.close();
+	const store = createStore(name);
+	try {
+		await store.open();
+		assert.deepEqual(await store.listFiles(), []);
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", [memo]));
+		const changed = makePartition(path, "2026-07-01", [{ ...memo, time: "10:30:00" }]);
+		changed.file.sourceRevision = "new-revision";
+		await store.replaceFilePartition(changed);
+		assert.equal((await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1 })).items[0]?.time, "10:30:00");
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("完全同时间的跨文件浮标保留各 Store 原来的稳定并列顺序", async () => {
+	const name = uniqueDatabaseName("buoy-ties");
+	const stores = [createStore(name), new InMemoryMemoCatalogStore()];
+	try {
+		for (const store of stores) {
+			await store.open();
+			for (const path of ["Daily/a.md", "Daily/A.md", "日记/一.md", "日记/二.md"]) {
+				await store.replaceFilePartition(makePartition(path, "2026-09-27", [
+					makeObservation(path, "2026-09-27", 1, "09:00", "same", { timeBuoyDates: ["2026-09-27"] }),
+				]));
+			}
+			const expected = (await store.query({ hasTimeBuoy: true, limit: 30 })).items.map(item => item.observationKey);
+			const keys: string[] = [];
+			let page = await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1 });
+			for (;;) {
+				keys.push(...page.items.map(item => item.observationKey));
+				if (!page.nextCursor) break;
+				page = await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1, cursor: page.nextCursor });
+			}
+			assert.deepEqual(keys, expected);
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(name); }
+});
+
 test("混排搜索在 IndexedDB 与内存中保持候选、计数和分页一致", async () => {
 	const databaseName = uniqueDatabaseName("mixed-search");
 	const indexed = createStore(databaseName);
@@ -431,7 +520,7 @@ test("IDB-VERSIONCHANGE：运行期连接失效后自动重开，无法重开时
 	assert.equal((await store.listFiles()).length, 1, "同版本连接关闭后应自动重开");
 	assert.equal(recoveryCount, 1);
 
-	const newer = await openRawDatabase(databaseName, 3, () => undefined);
+	const newer = await openRawDatabase(databaseName, 4, () => undefined);
 	assert.equal(primary.getLifecycle().state, "read-only");
 	assert.deepEqual(await store.listFiles(), []);
 	assert.equal(store.isUsingFallback, true);

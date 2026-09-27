@@ -806,11 +806,13 @@ export class KnomoView extends ItemView {
 		});
 		this.timeBuoyViewController = new TimeBuoyViewController({
 			getNow: () => new Date(),
+			isPageActive: () => !this.trashViewClosed && this.activeNav === "time-buoy",
 			isTodayIndexReady: (targetDate) => this.catalogReadService.getCoverageForRange(targetDate, targetDate),
 			ensureReady: async () => undefined,
-			queryAll: () => this.catalogReadService.queryAllTimeBuoys(),
-			queryDate: (date) => this.catalogReadService.queryTimeBuoysForDate(date),
+			queryPage: (request) => this.catalogReadService.queryTimeBuoyPage(request),
+			queryDate: (date, cursor) => this.catalogReadService.queryTimeBuoysForDate(date, cursor),
 			requestRender: () => {
+				if (this.trashViewClosed) return;
 				if (this.activeNav === "time-buoy") {
 					this.renderCardFlow();
 				} else if (this.shouldShowTodayTimeBuoys()) {
@@ -1236,6 +1238,7 @@ export class KnomoView extends ItemView {
 		const timeBuoyEnabled = this.settingsService.getSettings().timeBuoyEnabled;
 		if (this.renderedTimeBuoyEnabled !== timeBuoyEnabled) {
 			if (!timeBuoyEnabled && this.activeNav === "time-buoy") {
+				this.timeBuoyViewController.clear();
 				this.activeNav = "all";
 			}
 			await this.render();
@@ -1973,6 +1976,20 @@ export class KnomoView extends ItemView {
 
 	private async loadNextCatalogPage(): Promise<boolean> {
 		if (this.catalogLoadingNextPage) return false;
+		const today = this.catalogTodayTimeBuoys;
+		if (today?.todayValid && today.todayCursor != null && this.shouldShowTodayTimeBuoys()) {
+			const queryRun = this.catalogDesktopQueryRun;
+			this.catalogLoadingNextPage = true;
+			try {
+				const next = await this.timeBuoyViewController.prepareTodayOnly(today.todayCursor);
+				if (this.trashViewClosed || queryRun !== this.catalogDesktopQueryRun || !this.shouldShowTodayTimeBuoys()) return false;
+				if (!next.todayValid || next.todayRevision !== today.todayRevision) return this.reloadMemos(false, true);
+				this.catalogTodayTimeBuoys = { ...next, today: [...today.today, ...next.today] };
+				this.renderCardFlow();
+				this.renderNextCardBatch(this.renderGeneration);
+				return true;
+			} finally { this.catalogLoadingNextPage = false; }
+		}
 		if (this.catalogHistoryExpansionPending) {
 			this.catalogHistoryExpansionPending = false;
 			this.catalogLoadingNextPage = true;
@@ -2934,6 +2951,17 @@ export class KnomoView extends ItemView {
 		if (cardFlow === null) {
 			return;
 		}
+		const snapshot = this.timeBuoyViewController.getSnapshot();
+		const nextItems = snapshot[snapshot.activeTab];
+		if (this.timeBuoyPanelEl?.id === `${this.getA11yId("time-buoy")}-panel-${snapshot.activeTab}`
+			&& nextItems.length > this.timeBuoyRenderItems.length
+			&& this.timeBuoyRenderItems.every((item, index) => item.memo === nextItems[index]?.memo
+				&& item.primaryTargetDate === nextItems[index]?.primaryTargetDate)) {
+			// 翻页追加保留已有卡片及高度，不重建已渲染的 Markdown。
+			this.timeBuoyRenderItems = nextItems;
+			this.renderNextTimeBuoyBatch(this.renderGeneration);
+			return;
+		}
 		this.resetTimeBuoyCardFlow();
 		this.renderGeneration += 1;
 		const generation = this.renderGeneration;
@@ -2953,6 +2981,11 @@ export class KnomoView extends ItemView {
 
 	private renderNextTimeBuoyBatch(generation: number, batchSize = CARD_BATCH_SIZE): void {
 		const panel = this.timeBuoyPanelEl;
+		if (panel !== null && generation === this.renderGeneration && this.timeBuoyBatchFrameId === null
+			&& this.timeBuoyRenderedCount >= this.timeBuoyRenderItems.length) {
+			void this.timeBuoyViewController.loadMore();
+			return;
+		}
 		if (
 			panel === null
 			|| generation !== this.renderGeneration
@@ -3031,11 +3064,12 @@ export class KnomoView extends ItemView {
 	private renderTimeBuoyLoadMore(generation: number): void {
 		const panel = this.timeBuoyPanelEl;
 		const remainingCount = this.timeBuoyRenderItems.length - this.timeBuoyRenderedCount;
-		if (panel === null || remainingCount <= 0) {
+		const hasNextPage = this.timeBuoyViewController.getSnapshot().nextCursor !== null;
+		if (panel === null || (remainingCount <= 0 && !hasNextPage)) {
 			return;
 		}
 		const button = renderKnomoLoadMoreButton(panel, {
-			remainingCount,
+			remainingCount: hasNextPage ? null : remainingCount,
 			action: "load-more-time-buoy-cards",
 			extraClass: "knomo-time-buoy-load-more",
 			sentinel: true,
@@ -3144,7 +3178,8 @@ export class KnomoView extends ItemView {
 			&& this.activeNav !== "shuffleDay";
 		const todayItems = this.getTodayTimeBuoyItems();
 		const memos = shouldLoadListMemos
-			? mergeTodayTimeBuoyFeed(this.getFilteredMemos(), todayItems)
+			? mergeTodayTimeBuoyFeed(this.catalogTodayTimeBuoys?.todayCursor != null && this.shouldShowTodayTimeBuoys()
+				? [] : this.getFilteredMemos(), todayItems)
 			: [];
 		let presentation = getCardFlowPresentation({
 			cardFlowError: this.activeNav === "shuffleDay" ? null : this.cardFlowError,
@@ -4454,6 +4489,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private setSidebarNav(nav: SidebarNav): void {
+		if (nav !== "time-buoy" && this.activeNav === "time-buoy") this.timeBuoyViewController.clear();
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.catalogMobileQueryRun += 1;
@@ -6085,20 +6121,22 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null || !this.canLoadOlderMemoPeriods() || this.cardFlowCoordinator.remainingCount > 0) {
 			return;
 		}
+		const label = t(this.catalogTodayTimeBuoys?.todayCursor != null && this.shouldShowTodayTimeBuoys() ? "list.loadMoreUnknown" : "list.loadOlder");
 		this.cardFlowEl.createEl("button", {
 			cls: "knomo-load-more knomo-history-load-more",
-			text: t("list.loadOlder"),
+			text: label,
 			attr: {
 				type: "button",
 				"data-action": "load-more",
-				"aria-label": t("list.loadOlder"),
+				"aria-label": label,
 			},
 		});
 	}
 
 	private canLoadOlderMemoPeriods(): boolean {
 		if (this.activeNav === "trash") return this.trashMemoController.hasMore();
-		return (this.catalogCursor !== null || this.catalogHistoryExpansionPending)
+		return (this.catalogCursor !== null || this.catalogHistoryExpansionPending
+			|| (this.catalogTodayTimeBuoys?.todayCursor != null && this.shouldShowTodayTimeBuoys()))
 			&& this.activeNav !== "random"
 			&& this.activeNav !== "shuffleDay"
 			&& this.activeNav !== "time-buoy"
@@ -6176,7 +6214,7 @@ export class KnomoView extends ItemView {
 			if (
 				cardFlow !== null
 				&& this.timeBuoyLoadMoreObserver === null
-				&& this.timeBuoyRenderedCount < this.timeBuoyRenderItems.length
+				&& (this.timeBuoyRenderedCount < this.timeBuoyRenderItems.length || this.timeBuoyViewController.getSnapshot().nextCursor !== null)
 				&& cardFlow.scrollTop + cardFlow.clientHeight >= cardFlow.scrollHeight - 160
 			) {
 				this.renderNextTimeBuoyBatch(this.renderGeneration);

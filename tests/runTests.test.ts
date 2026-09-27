@@ -78,11 +78,11 @@ test("product and tooling partition every current test source exactly once", () 
 	const product = getRunTestSelection(sources, []).sourceFileNames;
 	const tooling = getRunTestSelection(sources, ["--suite=tooling"]).sourceFileNames;
 	const all = getRunTestSelection(sources, ["--suite=all"]).sourceFileNames;
-	assert.deepEqual(tooling, ["CatalogBenchmarkTooling.test.ts", "VerifyCore.test.ts", "runTests.test.ts"]);
+	assert.deepEqual(tooling, ["VerifyCore.test.ts", "runTests.test.ts"]);
 	assert.deepEqual(all, sources);
 	assert.deepEqual([...product, ...tooling].sort(), sources);
 	assert.equal(new Set([...product, ...tooling]).size, sources.length);
-	for (const file of ["CatalogBenchmark.test.ts", "CatalogArchitectureGuard.test.ts", "P8SyncAcceptance.test.ts",
+	for (const file of ["CatalogArchitectureGuard.test.ts", "P8SyncAcceptance.test.ts",
 		"DiaryMemoParser.test.ts", "IndependentTrashService.test.ts", "MarkdownMutationService.test.ts",
 		"LegacyTrashMigrationService.test.ts", "MonthlyProjectionCoordinator.test.ts"]) {
 		assert.ok(product.includes(file), `${file} must remain in the product gate.`);

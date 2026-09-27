@@ -304,6 +304,7 @@ export const zhCN = {
 	"mobileSearchSummary.combo": "{{conditions}}，找到 {{count}} 条 Memos",
 	"mobileSearchSummary.emptySearch": "搜索「{{query}}」，没有找到 Memos",
 	"list.loadMore": "加载更多（剩余 {{count}} 条）",
+	"list.loadMoreUnknown": "加载更多",
 	"list.loadOlder": "加载更多 Memos",
 	"card.moreActions": "更多操作",
 	"card.actionsPreparing": "卡片操作正在准备",

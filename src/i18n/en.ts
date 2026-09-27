@@ -306,6 +306,7 @@ export const en: Record<TranslationKey, string> = {
 	"mobileSearchSummary.combo": "{{conditions}}: {{count}} Memos",
 	"mobileSearchSummary.emptySearch": "No Memos found for “{{query}}”",
 	"list.loadMore": "Load more ({{count}} remaining)",
+	"list.loadMoreUnknown": "Load more",
 	"list.loadOlder": "Load more memos",
 	"card.moreActions": "More actions",
 	"card.actionsPreparing": "Card actions are preparing",

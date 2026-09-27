@@ -154,7 +154,7 @@ test("真实 revision key 的普通与浮标两种到达顺序收敛，同文 oc
 		const view = Object.create(KnomoView.prototype);
 		let revision = 1;
 		let promoted = [memo("a", 1)];
-		const controller = new TimeBuoyViewController({ getNow: () => new Date(), queryAll: async () => ({ items: [], stale: [], missingPeriods: [], complete: true }),
+		const controller = new TimeBuoyViewController({ getNow: () => new Date(), queryPage: async () => ({ items: [], stale: [], missingPeriods: [], complete: true, nextCursor: null, metrics: { cursorReads: 0, observationsRead: 0, returned: 0 } }),
 			queryDate: async () => ({ catalogRevision: revision, items: promoted.map((memo) => ({ memo, instance: { memoId: memo.id, targetDate: today } })), stale: [], missingPeriods: [] }), requestRender: () => {},
 		});
 		Object.assign(view, { catalogRevision: 1, shouldShowTodayTimeBuoys: () => true, timeBuoyViewController: controller });

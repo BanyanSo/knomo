@@ -32,6 +32,26 @@ test("今日浮标等待源 Daily 历史覆盖，扫描完成补齐历史浮标"
 	store.close();
 });
 
+test("浮标正文转换期间索引变化时拒绝提交旧页", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const path = "Daily/2026-08-22.md";
+	await seedCatalog(catalog, store, [{ ...makeObservation(path, "2026-08-22", 1, "same"), timeBuoyDates: ["2026-08-22"] }]);
+	const original = store.queryTimeBuoys.bind(store);
+	store.queryTimeBuoys = async request => {
+		const page = await original(request);
+		await catalog.deleteFile(path);
+		return page;
+	};
+	const page = await new CatalogReadService({ catalog }).queryTimeBuoyPage({ today: "2026-08-22", tab: "today", limit: 30 });
+	assert.equal(page.invalidated, true);
+	assert.deepEqual(page.items, []);
+});
+
 test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白归一化后保持一致", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
@@ -112,37 +132,33 @@ test("那年今日的实际视图查询、分页和统计均排除今天的三�
 	}
 });
 
-test("浮标保留实际页 revision，跨页失效不是成功空结果", async () => {
+test("今日浮标按页读取并拒绝 revision 或覆盖变化后的游标", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
 	const catalog = new MemoCatalogService(store);
-	await seedCatalog(catalog, store, [makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "same")]);
+	const observations = Array.from({ length: 65 }, (_, i) => ({
+		...makeObservation("Daily/2026-08-22.md", "2026-08-22", i + 1, "same"), timeBuoyDates: ["2026-08-22"],
+	}));
+	await seedCatalog(catalog, store, observations);
 	const service = new CatalogReadService({ catalog });
-	const page = await service.query({ limit: 1 });
-	service.query = async () => page;
-	const result = await service.queryTimeBuoysForDate("2026-08-22");
-	assert.equal(result.catalogRevision, page.catalogRevision);
-	assert.deepEqual(result.coverage, page.coverage);
-	let calls = 0;
-	service.query = async () => ++calls === 1
-		? { ...page, nextCursor: {} as NonNullable<typeof page.nextCursor> }
-		: { ...page, invalidated: true, catalogRevision: page.catalogRevision + 1 };
-	const invalid = await service.queryTimeBuoysForDate("2026-08-22");
-	assert.equal(invalid.invalidated, true);
-	assert.deepEqual(invalid.items, []);
-	assert.ok(invalid.missingPeriods.length > 0);
-	assert.equal(calls, 2);
-	calls = 0;
-	service.query = async () => ++calls === 1
-		? { ...page, nextCursor: {} as NonNullable<typeof page.nextCursor> }
-		: { ...page, invalidated: true };
-	const sameRevision = await service.queryTimeBuoysForDate("2026-08-22");
-	assert.equal(sameRevision.invalidated, true);
-	assert.deepEqual(sameRevision.items, []);
-	assert.ok(sameRevision.missingPeriods.length > 0);
+	const first = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.equal(first.items.length, 30);
+	assert.ok(first.nextCursor);
+	const second = await service.queryTimeBuoysForDate("2026-08-22", first.nextCursor);
+	assert.equal(new Set([...first.items, ...second.items].map(item => item.memo.id)).size, 60);
+	const third = await service.queryTimeBuoysForDate("2026-08-22", second.nextCursor);
+	assert.equal(third.items.length, 5);
+	assert.equal(third.nextCursor, null);
+	await store.setCoverage({ ...(await store.getCoverage()), kind: "partial", pendingFileCount: 1 });
+	const changedCoverage = await service.queryTimeBuoysForDate("2026-08-22", first.nextCursor);
+	assert.equal(changedCoverage.invalidated, true);
+	assert.deepEqual(changedCoverage.items, []);
+	assert.ok(changedCoverage.missingPeriods.length);
+	await catalog.deleteFile("Daily/2026-08-22.md");
+	assert.equal((await service.queryTimeBuoysForDate("2026-08-22", first.nextCursor)).invalidated, true);
 });
 
 test("清理待处理状态独立于已完成迁移传递，成功后可清除", async () => {

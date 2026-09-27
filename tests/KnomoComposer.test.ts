@@ -198,7 +198,7 @@ test("renders a retry action for a Time buoy Catalog error", async () => {
 	const root = new TestElement("div");
 
 	renderTimeBuoyPage(root.asHtml(), {
-		loading: false,
+		loading: false, loadingMore: false, nextCursor: null,
 		error: new Error("corrupt shard"),
 		refreshError: null,
 		todayError: null,
@@ -220,7 +220,7 @@ test("renders accessible Time buoy tabs and the active tab empty state", async (
 	const root = new TestElement("div");
 
 	const result = renderTimeBuoyPage(root.asHtml(), {
-		loading: false,
+		loading: false, loadingMore: false, nextCursor: null,
 		error: null,
 		refreshError: null,
 		todayError: null,
@@ -248,7 +248,7 @@ test("labels upcoming and past Time buoy tabs as partial without hiding known re
 	const memo = { id: "memo-1" } as never;
 
 	const result = renderTimeBuoyPage(root.asHtml(), {
-		loading: false,
+		loading: false, loadingMore: false, nextCursor: null,
 		error: null,
 		refreshError: null,
 		todayError: null,
@@ -272,7 +272,7 @@ test("keeps Time buoy tabs visible with a retry action after a warm refresh fail
 	const memo = { id: "memo-1" } as never;
 
 	const result = renderTimeBuoyPage(root.asHtml(), {
-		loading: false,
+		loading: false, loadingMore: false, nextCursor: null,
 		error: null,
 		refreshError: new Error("temporary failure"),
 		todayError: null,

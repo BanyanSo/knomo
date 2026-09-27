@@ -4,14 +4,59 @@ import assert from "node:assert/strict";
 import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../src/types/timeBuoy";
 import type { MemoViewItem } from "../src/types/memoView";
 import { mergeTodayTimeBuoyFeed, TimeBuoyViewController } from "../src/ui/TimeBuoyViewController";
+import type { TimeBuoyCursor, TimeBuoyPageResult } from "../src/types/timeBuoy";
+
+test("分页追加、重复触发、切换、后台刷新、关闭和游标失效不提交旧结果", async () => {
+	const today = "2026-07-11";
+	const cursor: TimeBuoyCursor = { today, tab: "today", catalogRevision: 1, coverageKey: "complete",
+		primaryTargetDate: today, createdAtKey: "2026-07-01T09:00", observationKey: "first" };
+	const result = (id: string, nextCursor: TimeBuoyCursor | null = null): TimeBuoyPageResult => ({
+		items: [makeItem(id, today, "2026-07-01T09:00")], nextCursor, complete: true, stale: [], missingPeriods: [],
+		catalogRevision: 1, metrics: { cursorReads: 1, observationsRead: 1, returned: 1 },
+	});
+	let next = createDeferred<TimeBuoyPageResult>(), pageCalls = 0;
+	const controller = new TimeBuoyViewController({ getNow: () => new Date(2026, 6, 11),
+		queryDate: async () => EMPTY_RESULT, requestRender: () => {},
+		queryPage: async request => {
+			if (request.cursor) { pageCalls++; return next.promise; }
+			return result(request.tab === "today" ? "first" : "upcoming", cursor);
+		},
+	});
+	await controller.loadInitial();
+	let pending = controller.loadMore();
+	await controller.loadMore();
+	assert.equal(pageCalls, 1);
+	next.resolve(result("second"));
+	await pending;
+	assert.deepEqual(controller.getSnapshot().today.map(item => item.memo.id), ["first", "second"]);
+	for (const action of ["switch", "refresh", "close"] as const) {
+		controller.clear();
+		await controller.loadInitial();
+		next = createDeferred<TimeBuoyPageResult>();
+		pending = controller.loadMore();
+		if (action === "switch") { controller.setActiveTab("upcoming"); await controller.loadInitial(); }
+		if (action === "refresh") await controller.loadInitial();
+		if (action === "close") controller.clear();
+		next.resolve(result("obsolete"));
+		await pending;
+		assert.ok(!controller.getMemos().some(memo => memo.id === "obsolete"));
+		assert.equal(controller.getSnapshot().loadingMore, false);
+	}
+	await controller.loadInitial();
+	next = createDeferred<TimeBuoyPageResult>();
+	pending = controller.loadMore();
+	next.resolve({ ...result("invalid"), items: [], invalidated: true });
+	await pending;
+	assert.deepEqual(controller.getSnapshot().today.map(item => item.memo.id), ["first"]);
+});
 
 const EMPTY_RESULT: TimeBuoyQueryResult = { items: [], stale: [], missingPeriods: [] };
 const EMPTY_ALL_RESULT: TimeBuoyAllQueryResult = { ...EMPTY_RESULT, complete: true };
 
 test("准备列表置顶结果时不发出中间重绘，失败仍使结果失效", async () => {
 	let renders = 0, fail = false;
-	const controller = new TimeBuoyViewController({
-		getNow: () => new Date(2026, 8, 13), queryAll: async () => EMPTY_ALL_RESULT,
+	const controller = createTestController({
+		getNow: () => new Date(2026, 8, 13), queryItems: async () => EMPTY_ALL_RESULT,
 		queryDate: async () => { if (fail) throw new Error("unavailable"); return { ...EMPTY_RESULT, catalogRevision: 5 }; },
 		requestRender: () => { renders++; },
 	});
@@ -31,8 +76,8 @@ test("准备列表置顶结果时不发出中间重绘，失败仍使结果失�
 test("今日浮标保留空结果 revision 并拒绝跨午夜旧请求", async () => {
 	let now = new Date(2026, 8, 10);
 	let resolve!: (result: TimeBuoyQueryResult) => void;
-	const controller = new TimeBuoyViewController({
-		getNow: () => now, queryAll: async () => EMPTY_ALL_RESULT,
+	const controller = createTestController({
+		getNow: () => now, queryItems: async () => EMPTY_ALL_RESULT,
 		queryDate: () => new Promise((done) => { resolve = done; }), requestRender: () => {},
 	});
 	const first = controller.loadTodayOnly();
@@ -89,9 +134,9 @@ test("replaces a memo in loaded Time buoy tabs without querying again", async ()
 	const staleMemo = makeMemo("memo-1", "- [ ] task", "2026-07-10T08:00:00+08:00");
 	const latestMemo = makeMemo("memo-1", "- [x] task", "2026-07-10T08:00:00+08:00");
 	let renderCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: async () => ({
+		queryItems: async () => ({
 			items: [makeQueryItem(staleMemo, "2026-07-11")],
 			stale: [],
 			missingPeriods: [],
@@ -111,7 +156,7 @@ test("replaces a memo in loaded Time buoy tabs without querying again", async ()
 	assert.equal(controller.replaceMemo(latestMemo), false);
 });
 
-test("loads every Time buoy once and partitions the complete result into tabs", async () => {
+test("loads only the active tab and releases it when another tab is selected", async () => {
 	let queryCount = 0;
 	const controller = createController(new Date(2026, 6, 11), async () => {
 		queryCount += 1;
@@ -133,8 +178,12 @@ test("loads every Time buoy once and partitions the complete result into tabs", 
 	const snapshot = controller.getSnapshot();
 	assert.equal(queryCount, 1);
 	assert.deepEqual(snapshot.today.map((item) => item.memo.id), ["today-new"]);
-	assert.deepEqual(snapshot.upcoming.map((item) => item.memo.id), ["upcoming-near", "upcoming-far"]);
-	assert.deepEqual(snapshot.past.map((item) => item.memo.id), ["past-old"]);
+	assert.deepEqual(snapshot.upcoming, []);
+	assert.deepEqual(snapshot.past, []);
+	controller.setActiveTab("upcoming");
+	await controller.loadInitial();
+	assert.deepEqual(controller.getSnapshot().upcoming.map((item) => item.memo.id), ["upcoming-near", "upcoming-far"]);
+	assert.deepEqual(controller.getSnapshot().today, []);
 	assert.equal(snapshot.activeTab, "today");
 	assert.equal(snapshot.error, null);
 });
@@ -155,18 +204,20 @@ test("keeps partial all-history Time buoy results visible while Catalog continue
 	const snapshot = controller.getSnapshot();
 	assert.equal(snapshot.error, null);
 	assert.equal(snapshot.complete, false);
-	assert.deepEqual(snapshot.upcoming.map((item) => item.memo.id), ["upcoming-known"]);
-	assert.deepEqual(snapshot.past.map((item) => item.memo.id), ["past-known"]);
+	controller.setActiveTab("upcoming");
+	await controller.loadInitial();
+	assert.deepEqual(controller.getSnapshot().upcoming.map((item) => item.memo.id), ["upcoming-known"]);
+	assert.equal(controller.getSnapshot().complete, false);
 });
 
 test("prepares a deferred Time buoy index before the first full query", async () => {
 	const calls: string[] = [];
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
 		ensureReady: async () => {
 			calls.push("rebuild");
 		},
-		queryAll: async () => {
+		queryItems: async () => {
 			calls.push("query");
 			return EMPTY_ALL_RESULT;
 		},
@@ -182,9 +233,9 @@ test("prepares a deferred Time buoy index before the first full query", async ()
 test("shows a blocking loading state only for the first complete Time buoy load", async () => {
 	const firstQuery = createDeferred<TimeBuoyAllQueryResult>();
 	let renderCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: () => firstQuery.promise,
+		queryItems: () => firstQuery.promise,
 		queryDate: async () => EMPTY_RESULT,
 		requestRender: () => {
 			renderCount += 1;
@@ -213,9 +264,9 @@ test("keeps complete Time buoy content visible and skips rendering when a warm r
 	const refreshQuery = createDeferred<TimeBuoyAllQueryResult>();
 	let queryCount = 0;
 	let renderCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: () => {
+		queryItems: () => {
 			queryCount += 1;
 			return queryCount === 1
 				? Promise.resolve({ items: [item], stale: [], missingPeriods: [], complete: true })
@@ -242,9 +293,9 @@ test("keeps complete Time buoy content visible and skips rendering when a warm r
 test("keeps a tab selected while a warm Time buoy refresh is pending", async () => {
 	const refreshQuery = createDeferred<TimeBuoyAllQueryResult>();
 	let queryCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: () => {
+		queryItems: () => {
 			queryCount += 1;
 			return queryCount === 1 ? Promise.resolve(EMPTY_ALL_RESULT) : refreshQuery.promise;
 		},
@@ -265,9 +316,9 @@ test("keeps committed content visible when a warm refresh fails and retries in p
 	const retryQuery = createDeferred<TimeBuoyAllQueryResult>();
 	const original = makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00");
 	let queryCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: () => {
+		queryItems: () => {
 			queryCount += 1;
 			if (queryCount === 1) {
 				return Promise.resolve({ items: [original], stale: [], missingPeriods: [], complete: true });
@@ -310,9 +361,9 @@ test("renders a warm Time buoy refresh exactly once when its content changes", a
 		complete: true,
 	};
 	let renderCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: async () => result,
+		queryItems: async () => result,
 		queryDate: async () => EMPTY_RESULT,
 		requestRender: () => {
 			renderCount += 1;
@@ -331,9 +382,9 @@ test("renders a warm Time buoy refresh exactly once when its content changes", a
 test("a today-only query does not suppress the first complete Time buoy loading state", async () => {
 	const completeQuery = createDeferred<TimeBuoyAllQueryResult>();
 	let renderCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: () => completeQuery.promise,
+		queryItems: () => completeQuery.promise,
 		queryDate: async () => ({
 			items: [makeItem("today", "2026-07-11", "2026-07-10T09:00:00+08:00")],
 			stale: [],
@@ -358,9 +409,9 @@ test("a today-only query does not suppress the first complete Time buoy loading 
 test("clear restores the blocking state for the next complete Time buoy load", async () => {
 	const nextQuery = createDeferred<TimeBuoyAllQueryResult>();
 	let useDeferredQuery = false;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: () => useDeferredQuery ? nextQuery.promise : Promise.resolve(EMPTY_ALL_RESULT),
+		queryItems: () => useDeferredQuery ? nextQuery.promise : Promise.resolve(EMPTY_ALL_RESULT),
 		queryDate: async () => EMPTY_RESULT,
 		requestRender: () => undefined,
 	});
@@ -382,9 +433,9 @@ test("today-only refresh requests render only when the visible result changes", 
 		stale: [],
 		missingPeriods: [],
 	};
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: async () => EMPTY_ALL_RESULT,
+		queryItems: async () => EMPTY_ALL_RESULT,
 		queryDate: async () => result,
 		requestRender: () => {
 			renderCount += 1;
@@ -413,9 +464,9 @@ test("today-only refresh preserves the last successful result when the index bec
 		stale: [],
 		missingPeriods: [],
 	};
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: async () => EMPTY_ALL_RESULT,
+		queryItems: async () => EMPTY_ALL_RESULT,
 		queryDate: async () => result,
 		requestRender: () => undefined,
 	});
@@ -432,13 +483,13 @@ test("today-only refresh preserves the last successful result when the index bec
 test("today-only refresh preserves visible items while a background rebuild is pending", async () => {
 	let todayIndexReady = true;
 	let queryDateCalls = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
 		isTodayIndexReady: async (targetDate) => {
 			assert.equal(targetDate, "2026-07-11");
 			return todayIndexReady;
 		},
-		queryAll: async () => EMPTY_ALL_RESULT,
+		queryItems: async () => EMPTY_ALL_RESULT,
 		queryDate: async () => {
 			queryDateCalls += 1;
 			return {
@@ -475,16 +526,22 @@ test("merges one memo within each tab, preserves its dates, and keeps cross-tab 
 
 	await controller.loadInitial();
 
-	const snapshot = controller.getSnapshot();
+	controller.setActiveTab("upcoming");
+	await controller.loadInitial();
+	let snapshot = controller.getSnapshot();
 	assert.deepEqual(snapshot.upcoming.map((item) => item.memo.id), ["nearer", "shared"]);
 	assert.deepEqual(snapshot.upcoming[1]?.targetDates, ["2026-07-20", "2026-08-01"]);
 	assert.equal(snapshot.upcoming[1]?.primaryTargetDate, "2026-07-20");
+	controller.setActiveTab("past");
+	await controller.loadInitial();
+	snapshot = controller.getSnapshot();
+	assert.deepEqual(snapshot.upcoming, []);
 	assert.deepEqual(snapshot.past.map((item) => item.memo.id), ["shared"]);
 	assert.deepEqual(snapshot.past[0]?.targetDates, ["2026-07-09", "2026-07-10"]);
 	assert.equal(snapshot.past[0]?.primaryTargetDate, "2026-07-10");
 });
 
-test("switches tabs without querying again and preserves the tab through reload", async () => {
+test("queries the selected tab on demand and preserves it through reload", async () => {
 	let queryCount = 0;
 	const controller = createController(new Date(2026, 6, 11), async () => {
 		queryCount += 1;
@@ -513,9 +570,9 @@ test("removes a deleted memo after the next Catalog query", async () => {
 		complete: true,
 	};
 	let renderCount = 0;
-	const controller = new TimeBuoyViewController({
+	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
-		queryAll: async () => result,
+		queryItems: async () => result,
 		queryDate: async () => ({
 			items: [{
 				memo,
@@ -540,11 +597,11 @@ test("removes a deleted memo after the next Catalog query", async () => {
 
 function createController(
 	now: Date,
-	queryAll: () => Promise<TimeBuoyAllQueryResult> = async () => EMPTY_ALL_RESULT,
+	queryItems: () => Promise<TimeBuoyAllQueryResult> = async () => EMPTY_ALL_RESULT,
 ): TimeBuoyViewController {
-	return new TimeBuoyViewController({
+	return createTestController({
 		getNow: () => now,
-		queryAll,
+		queryItems,
 		queryDate: async () => EMPTY_RESULT,
 		requestRender: () => undefined,
 	});
@@ -609,4 +666,16 @@ function makeMemo(id: string, contentSnapshot: string, createdAt: string): MemoV
 			lineNumberHint: 1,
 		},
 	};
+}
+
+// 小型无分页 fixture；实际分页与延迟请求另有真实 queryPage 回归。
+function createTestController(options: Omit<ConstructorParameters<typeof TimeBuoyViewController>[0], "queryPage"> & {
+	queryItems: () => Promise<TimeBuoyAllQueryResult>;
+}): TimeBuoyViewController {
+	return new TimeBuoyViewController({ ...options, queryPage: async (request) => {
+		const result = await options.queryItems();
+		return { ...result, nextCursor: null, metrics: { cursorReads: 0, observationsRead: 0, returned: 0 },
+			items: result.items.filter(({ instance: { targetDate } }) => request.tab === "today" ? targetDate === request.today
+				: request.tab === "upcoming" ? targetDate > request.today : targetDate < request.today) };
+	} });
 }

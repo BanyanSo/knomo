@@ -8,7 +8,6 @@ const TEST_FILES_MARKER = "--files";
 const TOOLING_TEST_FILES = new Set([
 	"runTests.test.ts",
 	"VerifyCore.test.ts",
-	"CatalogBenchmarkTooling.test.ts",
 ]);
 
 export interface RunTestSelection {

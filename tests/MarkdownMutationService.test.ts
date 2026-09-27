@@ -489,6 +489,7 @@ test("新建目标变化通过真实命令链路拒绝保存，Composer 保留�
 });
 
 interface FixtureOptions {
+	delayEditorDiskWrite?: boolean;
 	beforeCommit?: (file: TFile) => void;
 	beforeProcess?: (file: TFile) => void;
 	getLogicalDateForPath?: (path: string) => string;
@@ -511,10 +512,15 @@ function createFixture(options: FixtureOptions = {}) {
 	const writeCalls = { process: 0, editor: 0 };
 	const process = vault.process.bind(vault);
 	vault.process = async (file, update) => { writeCalls.process += 1; options.beforeProcess?.(file); return process(file, update); };
+	let editorContent: string | null = null;
 	const editor = {
-		getValue: () => vault.readText(activePath),
+		getValue: () => editorContent ?? vault.readText(activePath),
 		offsetToPos: (offset: number) => ({ line: 0, ch: offset }),
-		transaction: (input: { changes: Array<{ text: string }> }) => { writeCalls.editor += 1; vault.writeText(activePath, input.changes[0]!.text); },
+		transaction: (input: { changes: Array<{ text: string }> }) => {
+			writeCalls.editor += 1;
+			if (options.delayEditorDiskWrite) editorContent = input.changes[0]!.text;
+			else vault.writeText(activePath, input.changes[0]!.text);
+		},
 	};
 	const app = {
 		workspace: { getActiveViewOfType: () => options.activeEditor ? { file: vault.getAbstractFileByPath(activePath), editor } : null, containerEl: { win: { setTimeout } } },
@@ -726,4 +732,29 @@ test("MemoCommand passes image validation to the actual creation date and preser
 	await assert.rejects(editing.dailyCommitted, /invalid image in edit/);
 	await assert.rejects(editing.settled, /invalid image in edit/);
 	assert.equal((await fixture.getOnlyObservation("2026-08-22")).content, "original");
+});
+
+
+test("编辑器事务仅更新内存或磁盘读取失败时，不授权清理持久草稿", async () => {
+	for (const readFailure of [false, true]) {
+		const fixture = createFixture({ activeEditor: true, delayEditorDiskWrite: true });
+		if (readFailure) fixture.vault.read = async () => { throw new Error("disk unavailable"); };
+		const confirmations: Array<boolean | undefined> = [];
+		const result = await fixture.service.create({ content: "submitted once", onDailyCommitted: confirmed => confirmations.push(confirmed) });
+		assert.equal(result.status, "committed");
+		assert.deepEqual(confirmations, [false]);
+		assert.equal(fixture.vault.readText("Daily/2026-08-22.md"), "## Memos\n");
+		assert.equal(fixture.writeCalls.editor, 1);
+		assert.equal(fixture.writeCalls.process, 0);
+	}
+});
+
+test("已读回编辑器落盘内容或 Vault.process 成功才确认草稿可清理", async () => {
+	for (const activeEditor of [false, true]) {
+		const fixture = createFixture({ activeEditor });
+		const confirmations: Array<boolean | undefined> = [];
+		await fixture.service.create({ content: "durable", onDailyCommitted: confirmed => confirmations.push(confirmed) });
+		assert.deepEqual(confirmations, [true]);
+		assert.match(fixture.vault.readText("Daily/2026-08-22.md"), /durable/);
+	}
 });

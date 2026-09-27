@@ -1,3 +1,4 @@
+import { LocalComposerDraftStore, type LocalComposerDraft } from "../src/ui/LocalComposerDraftStore";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM, VirtualConsole } from "jsdom";
@@ -11,7 +12,7 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
 import { ComposerImageController, type ComposerImageCapture } from "../src/ui/ComposerImageController";
 import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
-import { composerImageLinks } from "../src/ui/ComposerImageState";
+import { composerImageLinks, setComposerImageLinks } from "../src/ui/ComposerImageState";
 import { AttachmentService, type ImageAttachment } from "../src/services/AttachmentService";
 
 function environment(value: string) {
@@ -1524,4 +1525,209 @@ test("save receives a frozen image validator; failure keeps draft and manual rem
 		assert.equal(validated, 1);
 		assert.equal(f.editor.input.value, "");
 	} finally { f.close(); }
+});
+
+
+function draftStorage() {
+	const data = new Map<string, unknown>();
+	return { loadLocalStorage: (key: string) => data.get(key) ?? null,
+		saveLocalStorage: (key: string, value: unknown) => { data.set(key, JSON.parse(JSON.stringify(value))); } };
+}
+
+async function draftSession(editor: ComposerEditor, win: ReturnType<typeof environment>["win"], disk = draftStorage()) {
+	const view = await sessionView(editor) as Awaited<ReturnType<typeof sessionView>> & {
+		localDraftStore: LocalComposerDraftStore; localDraftTimer: number | null; draftImageLinks: [];
+		containerEl: { win: typeof win; doc: Document }; app: unknown;
+		restoredEditNeedsTarget: boolean; restoredDraftSelection: LocalComposerDraft["active"] | null;
+		flushLocalDraft(): void; captureLocalDraft(): LocalComposerDraft; scheduleLocalDraft(): void;
+		validateRestoredDraft(draft: LocalComposerDraft): Promise<void>; applyRestoredDraftSelection(): void;
+		onOpen(): Promise<void>; initializeView(): Promise<void>; settleQuickCommandReady(ready: boolean): void;
+		register(callback: () => void): void; registerDomEvent(target: EventTarget, type: string, callback: EventListener): void;
+		getImageSourcePath(): string | null;
+	};
+	view.localDraftStore = new LocalComposerDraftStore(disk, assert.fail);
+	view.localDraftTimer = null; view.draftImageLinks = [];
+	view.containerEl = { win, doc: win.document as unknown as Document };
+	view.app = disk; view.restoredEditNeedsTarget = false;
+	return view;
+}
+
+test("本地快照读取真实 EditorState，不结束 IME、不改变反向选区和撤销", async () => {
+	const f = environment("draft");
+	try {
+		const view = await draftSession(f.editor, f.win);
+		f.editor.apply({ value: "draft changed", anchor: 10, head: 2 });
+		f.editor.view.scrollDOM.scrollTop = 72;
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionstart", { bubbles: true }));
+		view.composerIsComposing = true;
+		const state = f.editor.view.state, composing = f.editor.composing, history = undoDepth(state);
+		view.flushLocalDraft();
+		assert.equal(f.editor.view.state, state);
+		assert.equal(f.editor.composing, composing);
+		assert.equal(view.composerIsComposing, true);
+		assert.deepEqual(view.localDraftStore.draft.active, {
+			content: "draft changed", referenceText: null, markdownText: null, anchor: 10, head: 2, scrollTop: 72, imageLinks: [],
+		});
+		assert.equal(undoDepth(f.editor.view.state), history);
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionend", { bubbles: true }));
+		undo(f.editor.view); assert.equal(f.editor.input.value, "draft");
+		view.localDraftStore.close();
+	} finally { f.close(); }
+});
+
+test("编辑与新建切换的真实接线同时保存两份草稿，取消后恢复引用、选区及图片", async () => {
+	const f = environment("![[image.png]] comment");
+	try {
+		const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+		view.quoteReferenceText = "[[ref]]"; view.quoteMarkdownText = "> ref";
+		f.editor.input.setSelectionRange(1, 4, "backward");
+		f.editor.view.dispatch({ effects: setComposerImageLinks.of([{ from: 0, to: 14, link: "![[image.png]]", path: "image.png", sourcePath: "Daily/2026-09-19.md" }]) });
+		const memo = sessionMemo("a");
+		Object.assign(memo.catalog!.observationHandle, { startLine: 0, endLine: 1, rawBlockHash: "raw" });
+		view.startEditing(memo); f.editor.apply({ value: "unfinished edit", anchor: 3, head: 7 });
+		view.flushLocalDraft(); view.localDraftStore.close();
+		const recovered = new LocalComposerDraftStore(disk, assert.fail);
+		assert.equal(recovered.draft.active.content, "unfinished edit");
+		assert.deepEqual(recovered.draft.editingMemo?.catalog?.observationHandle, memo.catalog!.observationHandle);
+		view.localDraftStore = recovered; view.cancelEditing(); view.flushLocalDraft();
+		assert.equal(f.editor.input.value, "![[image.png]] comment");
+		assert.equal(view.quoteReferenceText, "[[ref]]");
+		assert.equal(f.editor.input.selectionDirection, "backward");
+		assert.equal(recovered.draft.active.imageLinks?.length, 1);
+		assert.equal(recovered.draft.editingMemo, null); recovered.close();
+	} finally { f.close(); }
+});
+
+test("未收到 Daily 确认则保留待核对版本，存储失败不阻断正常保存", async () => {
+	for (const failure of ["daily", "storage"] as const) {
+		const f = environment("unfinished");
+		try {
+			const view = await draftSession(f.editor, f.win);
+			if (failure === "daily") view.memoCommandService.startCreate = () => { throw new Error("I/O uncertain"); };
+			else {
+				let notices = 0;
+				view.localDraftStore = new LocalComposerDraftStore({ loadLocalStorage: () => null,
+					saveLocalStorage: () => { throw new Error("quota"); } }, () => notices++);
+				await view.saveInput();
+				assert.equal(f.editor.input.value, ""); assert.equal(notices, 1);
+				view.localDraftStore.close(); continue;
+			}
+			await view.saveInput();
+			assert.equal(f.editor.input.value, "unfinished");
+			assert.equal(view.localDraftStore.pending?.active.content, "unfinished");
+			assert.equal(view.localDraftStore.draft.active.content, "unfinished"); view.localDraftStore.close();
+		} finally { f.close(); }
+	}
+});
+
+test("原文变化后保留恢复文字和旧句柄，仅显式重选目标沿用草稿", async () => {
+	const f = environment("valuable edit");
+	try {
+		const view = await draftSession(f.editor, f.win);
+		const { TFile } = await import("obsidian");
+		const memo = sessionMemo("old-revision"); view.editingMemo = memo;
+		const originalHandle = memo.catalog!.observationHandle;
+		view.app = { vault: { getAbstractFileByPath: () => new TFile(), read: async () => "changed source" } };
+		view.getImageSourcePath = () => memo.dailyRef.path;
+		await view.validateRestoredDraft(view.captureLocalDraft());
+		assert.equal(view.restoredEditNeedsTarget, true);
+		assert.equal(memo.catalog!.observationHandle, originalHandle);
+		await view.saveInput(); assert.equal(f.editor.input.value, "valuable edit");
+		const freshTarget = sessionMemo("explicit-new-selection");
+		Object.assign(freshTarget.catalog!.observationHandle, { startLine: 0, endLine: 1, rawBlockHash: "raw" });
+		const before = f.editor.view.state;
+		view.startEditing(freshTarget);
+		assert.equal(view.editingMemo, freshTarget); assert.equal(view.restoredEditNeedsTarget, false);
+		assert.equal(f.editor.view.state, before); view.localDraftStore.close();
+	} finally { f.close(); }
+});
+
+test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依赖节流计时器", async () => {
+	const f = environment("");
+	const cleanup: Array<() => void> = [];
+	try {
+		const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+		f.editor.apply({ value: "saved draft", anchor: 8, head: 2 });
+		view.flushLocalDraft(); view.localDraftStore.close();
+		view.register = callback => { cleanup.push(callback); };
+		view.registerDomEvent = (target, type, callback) => {
+			target.addEventListener(type, callback); cleanup.push(() => target.removeEventListener(type, callback));
+		};
+		view.settleQuickCommandReady = () => undefined;
+		view.getImageSourcePath = () => "Daily/today.md";
+		view.initializeView = async () => {
+			f.editor.reset(view.draftContent);
+			f.editor.view.dispatch({ effects: setComposerImageLinks.of(view.draftImageLinks) });
+			view.applyRestoredDraftSelection();
+		};
+		await view.onOpen();
+		assert.equal(f.editor.input.value, "saved draft");
+		assert.equal(f.editor.view.state.selection.main.anchor, 8);
+		assert.equal(f.editor.view.state.selection.main.head, 2);
+		f.editor.apply({ value: "background input", anchor: 5, head: 5 });
+		view.scheduleLocalDraft(); const timer = view.localDraftTimer;
+		view.scheduleLocalDraft(); assert.equal(view.localDraftTimer, timer);
+		f.win.document.dispatchEvent(new f.win.Event("visibilitychange"));
+		assert.equal(view.localDraftTimer, null);
+		assert.equal(view.localDraftStore.draft.active.content, "background input");
+		f.editor.apply({ value: "last input", anchor: 4, head: 4 });
+		for (const callback of cleanup.splice(0).reverse()) callback();
+		const reopened = new LocalComposerDraftStore(disk, assert.fail);
+		assert.equal(reopened.draft.active.content, "last input"); reopened.close();
+	} finally { for (const callback of cleanup.reverse()) callback(); f.close(); }
+});
+
+
+test("恢复图片重新验证附件存在性、原来源及当前目标路径，缺失不丢正文", async () => {
+	for (const mode of ["valid", "missing", "source-changed"] as const) {
+		const f = environment("![[image.png]]");
+		try {
+			const view = await draftSession(f.editor, f.win);
+			const { TFile, Notice } = await import("obsidian");
+			const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+			const file = new TFile(); file.path = "image.png";
+			const sources: string[] = [];
+			view.app = { vault: { getAbstractFileByPath: () => mode === "missing" ? null : file }, metadataCache: {
+				getFirstLinkpathDest: (_target: string, source: string) => {
+					sources.push(source);
+					return mode === "source-changed" && source === "Daily/new.md" ? null : file;
+				},
+			} };
+			view.getImageSourcePath = () => "Daily/new.md";
+			f.editor.view.dispatch({ effects: setComposerImageLinks.of([{ from: 0, to: 14, link: "![[image.png]]", path: "image.png", sourcePath: "Daily/old.md" }]) });
+			const before = f.editor.view.state;
+			await view.validateRestoredDraft(view.captureLocalDraft());
+			assert.equal(f.editor.view.state, before);
+			assert.equal(f.editor.input.value, "![[image.png]]");
+			assert.equal(notices.length, mode === "valid" ? 0 : 1);
+			if (mode !== "missing") assert.deepEqual(sources, ["Daily/old.md", "Daily/new.md"]);
+			view.localDraftStore.close();
+		} finally { f.close(); }
+	}
+});
+
+test("真实保存回调在关闭后清理对应草稿，旧保存不能清理新视图的输入", async () => {
+	for (const newInput of [false, true]) {
+		const f = environment("submitted");
+		try {
+			const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+			let confirm!: () => void;
+			const dailyCommitted = new Promise<void>(resolve => { confirm = resolve; });
+			view.memoCommandService.startCreate = () => ({ dailyCommitted, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false }) });
+			const saving = view.saveInput();
+			await Promise.resolve();
+			if (newInput) {
+				f.editor.reset("new session");
+				view.localDraftStore.changed();
+				f.editor.reset("submitted");
+			}
+			view.flushLocalDraft(); view.localDraftStore.close(); view.trashViewClosed = true;
+			const second = new LocalComposerDraftStore(disk, assert.fail);
+			assert.equal(second.draft.active.content, "");
+			confirm(); await saving;
+			const restored = new LocalComposerDraftStore(disk, assert.fail);
+			assert.equal(restored.draft.active.content, newInput ? "submitted" : "");
+			assert.equal(restored.pending, null); restored.close(); second.close();
+		} finally { f.close(); }
+	}
 });

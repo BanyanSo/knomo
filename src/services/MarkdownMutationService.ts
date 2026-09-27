@@ -194,7 +194,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		logicalDate: string,
 		rawBlock: string,
 		createdFile: boolean,
-		onDailyCommitted?: () => void,
+		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MarkdownMutationResult> {
 		const sourcePath = normalizePath(file.path);
@@ -228,7 +228,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 
 	private async commitAndUpdateCatalog(
 		prepared: PreparedDailyWrite,
-		onDailyCommitted?: () => void,
+		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		insertedObservation?: MemoObservation,
 	): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
@@ -239,8 +239,15 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			parsed: prepared.after,
 			...(insertedObservation === undefined ? {} : { insertedObservation }),
 		});
+		void catalogUpdate.catch(() => undefined);
+		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
+		let diskConfirmed = prepared.mode !== "active_editor";
+		if (!diskConfirmed && onDailyCommitted) {
+			try { diskConfirmed = await this.app.vault.read(prepared.file) === prepared.afterContent; }
+			catch { diskConfirmed = false; }
+		}
 		try {
-			onDailyCommitted?.();
+			onDailyCommitted?.(diskConfirmed);
 		} catch {
 			// Daily 已提交，阶段观察者失败不能反向把正文保存标记为失败。
 		}

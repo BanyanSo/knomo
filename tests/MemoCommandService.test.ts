@@ -254,3 +254,25 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 	});
 	return { promise, resolve: resolvePromise };
 }
+
+
+test("编辑器已更新但落盘未确认时，最终成功不能覆盖阶段拒绝并误清理草稿", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore(); const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created memo");
+	const service = new MemoCommandService({} as App, catalog, makeCommandOptions(), {
+		create: async (input: { onDailyCommitted?: (confirmed?: boolean) => void }) => {
+			input.onDailyCommitted?.(false);
+			await seedCatalog(catalog, store, observation);
+			return mutationResult(observation);
+		},
+	} as unknown as MarkdownMutationService);
+	const operation = service.startCreate(observation.content);
+	await assert.rejects(operation.dailyCommitted, /not confirmed/);
+	assert.equal((await operation.settled).status, "saved");
+	await assert.rejects(operation.dailyCommitted, /not confirmed/);
+});

@@ -466,6 +466,9 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+			if (leaf.view instanceof KnomoView) leaf.view.flushLocalDraft();
+		}
 		this.quickCommandController?.dispose();
 		this.quickCommandController = null;
 		this.viewRefreshScheduler?.clear();

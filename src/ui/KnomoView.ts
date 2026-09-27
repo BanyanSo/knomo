@@ -1,3 +1,7 @@
+import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalComposerDraftStore";
+import { sha256Bytes } from "../services/DiaryMemoParser";
+import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
+import { MarkdownMutationStaleError } from "../services/MarkdownMutationService";
 import { DesktopDrawerFocus, getDrawerWidth, resolveLayout, type LayoutMode } from "./KnomoLayout";
 import { registerComposerToolGesture } from "./ComposerToolGesture";
 import type { KnomoQuickCommand } from "./KnomoQuickCommands";
@@ -367,6 +371,11 @@ export class KnomoView extends ItemView {
 	private quoteMarkdownText: string | null = null;
 	private draftContent = "";
 	private suspendedCreate: ComposerDraftSnapshot | null = null;
+	private localDraftStore: LocalComposerDraftStore | null = null;
+	private localDraftTimer: number | null = null;
+	private restoredDraftSelection: ComposerDraftSnapshot | null = null;
+	private restoredEditNeedsTarget = false;
+	private draftConfirmationOpen = false;
 	private composerRenderPending = false;
 	private isSaving = false;
 	private composerSaveRefreshQueue: Promise<void> = Promise.resolve();
@@ -1031,9 +1040,29 @@ export class KnomoView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		try {
+			this.localDraftStore = new LocalComposerDraftStore(this.app, () => new Notice(t("composer.draftStorageFailed")));
+			const restored = this.localDraftStore.draft;
+			this.draftContent = restored.active.content;
+			this.draftImageLinks = restored.active.imageLinks ?? [];
+			this.quoteReferenceText = restored.active.referenceText;
+			this.quoteMarkdownText = restored.active.markdownText;
+			this.editingMemo = restored.editingMemo;
+			this.suspendedCreate = restored.suspendedCreate;
+			this.restoredDraftSelection = restored.active;
+			const flush = () => this.flushLocalDraft();
+			this.register(() => { this.flushLocalDraft(); this.localDraftStore?.close(); });
+			this.registerDomEvent(this.containerEl.doc, "visibilitychange", flush);
+			this.registerDomEvent(this.containerEl.win, "pagehide", flush);
+			this.registerDomEvent(this.containerEl.win, "blur", flush);
 			await this.initializeView();
+			if (!this.trashViewClosed) {
+				await this.validateRestoredDraft(restored);
+				if (this.localDraftStore.pending) new Notice(t("composer.draftUnconfirmed"));
+				else if (restored.active.content || restored.editingMemo || restored.active.referenceText) new Notice(t("composer.draftRestored"));
+			}
 			this.settleQuickCommandReady(!this.trashViewClosed);
 		} catch (error) {
+			this.localDraftStore?.close();
 			this.settleQuickCommandReady(false);
 			throw error;
 		}
@@ -1147,6 +1176,8 @@ export class KnomoView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.flushLocalDraft();
+		this.localDraftStore?.close();
 		this.trashViewClosed = true;
 		this.settleQuickCommandReady?.(false);
 		this.cancelPendingQuickCommand();
@@ -1500,6 +1531,16 @@ export class KnomoView extends ItemView {
 		this.imageStatusEl = composer.imageStatusEl;
 		this.sendButtonEl = composer.sendButtonEl;
 		composer.inputEl.composer.view.dispatch({ effects: setComposerImageLinks.of(this.draftImageLinks) });
+		this.applyRestoredDraftSelection();
+		this.getRenderScope().registerDomEvent(composer.inputEl, "composer-transactions", event => {
+			if (event.detail.some(transaction => transaction.docChanged)) this.localDraftStore?.changed();
+			this.scheduleLocalDraft();
+		});
+		this.getRenderScope().registerDomEvent(composer.inputEl, "composer-reset", () => {
+			this.localDraftStore?.changed();
+			this.scheduleLocalDraft();
+		});
+		this.getRenderScope().registerDomEvent(composer.inputEl.composer.view.scrollDOM, "scroll", () => this.scheduleLocalDraft());
 		const images = this.createComposerImageController(composer.inputEl);
 		this.composerImages = images;
 		this.getRenderScope().register(() => images.dispose());
@@ -2326,6 +2367,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncComposerMode(): void {
+		this.scheduleLocalDraft();
 		if (this.referencePreviewEl !== null) {
 			renderComposerReferencePreview(
 				this.referencePreviewEl,
@@ -4250,8 +4292,26 @@ export class KnomoView extends ItemView {
 		if (this.trashViewClosed || this.inputEl === null || this.inputEl.disabled || this.isSaving) {
 			return;
 		}
+		if (this.draftConfirmationOpen) return;
+		if (this.restoredEditNeedsTarget) { new Notice(t("composer.draftTargetChanged")); return; }
 		if (this.composerImages?.pending) { this.updateSendButtonState(); return; }
 		if (this.composerIsComposing || this.inputEl.composer.composing) { new Notice(t("composer.finishComposition")); return; }
+		const pending = this.localDraftStore?.pending;
+		if (pending) {
+			this.draftConfirmationOpen = true;
+			try {
+				const previousInput = prepareComposerSaveInput(pending.active.content, pending.editingMemo, {
+					referenceText: pending.active.referenceText, markdownText: pending.active.markdownText,
+				});
+				const confirmed = await showKnomoConfirmModal(this.app, {
+					message: t("composer.draftConfirmRetry") + "\n\n" + (previousInput.type === "empty" ? pending.active.content : previousInput.content),
+					confirmLabel: t("composer.draftChecked"),
+				});
+				if (confirmed && !this.trashViewClosed) this.localDraftStore?.acknowledgePending();
+			} finally { this.draftConfirmationOpen = false; }
+			// 核对和保存分开，弹窗期间的新输入不能随旧确认自动提交。
+			return;
+		}
 		this.closeTimeBuoyPicker(false);
 
 		const input = this.inputEl.value;
@@ -4264,6 +4324,8 @@ export class KnomoView extends ItemView {
 			this.updateSendButtonState();
 			return;
 		}
+		this.flushLocalDraft();
+		const submittedDraft = this.localDraftStore?.beginSubmission();
 		const isMobileSave = this.currentLayout === "mobile";
 		const submittedEditor = this.inputEl;
 		const imageLinks = this.composerImages?.editor.view.state.field(composerImageLinks) ?? [];
@@ -4317,18 +4379,29 @@ export class KnomoView extends ItemView {
 			// 两阶段可以同时拒绝；立即监听后续阶段，避免等待 Daily 时出现未处理拒绝。
 			void operation.settled.catch(() => undefined);
 			await operation.dailyCommitted;
+			const canClear = this.trashViewClosed || (this.inputEl === submittedEditor && submittedContext.valid()
+				&& this.inputEl.value === input && this.editingMemo === submittedEditingMemo
+				&& this.quoteReferenceText === submittedQuoteReferenceText && this.quoteMarkdownText === submittedQuoteMarkdownText);
+			if (!this.trashViewClosed) this.flushLocalDraft();
+			if (submittedDraft) this.localDraftStore?.committed(submittedDraft, canClear);
 			clearSavedComposer();
+			this.flushLocalDraft();
 			this.queueComposerSaveFinish(
 				operation.settled,
 				extractTimeBuoyDates(preparedInput.content),
 			);
 		} catch (error) {
-			const message = formatServiceError(error, t("error.saveFailed"));
+			if (error instanceof StaleDailyWriteError || error instanceof MarkdownMutationStaleError) {
+				if (submittedEditingMemo) this.restoredEditNeedsTarget = true;
+				this.localDraftStore?.acknowledgePending();
+			}
+			const message = this.restoredEditNeedsTarget ? t("composer.draftTargetChanged") : formatServiceError(error, t("error.saveFailed"));
 			if (!this.trashViewClosed && this.inputEl === submittedEditor && submittedContext.sameSession()) {
 				this.updateStatus(message, true);
 				new Notice(message);
 			}
 		} finally {
+			this.localDraftStore?.finishSubmission();
 			this.isSaving = false;
 			submittedEditor.composer.setSaving(false);
 			if (!this.trashViewClosed) {
@@ -4827,6 +4900,68 @@ export class KnomoView extends ItemView {
 		this.resizeInput();
 	}
 
+	private captureLocalDraft(): LocalComposerDraft {
+		const editor = this.inputEl?.composer;
+		const selection = editor?.view.state.selection.main;
+		return { active: {
+			content: this.inputEl?.value ?? this.draftContent,
+			referenceText: this.quoteReferenceText, markdownText: this.quoteMarkdownText,
+			anchor: selection?.anchor ?? 0, head: selection?.head ?? 0,
+			scrollTop: Math.max(0, editor?.view.scrollDOM.scrollTop ?? 0),
+			imageLinks: editor?.view.state.field(composerImageLinks) ?? this.draftImageLinks,
+		}, editingMemo: this.editingMemo, suspendedCreate: this.suspendedCreate };
+	}
+
+	private applyRestoredDraftSelection(): void {
+		const snapshot = this.restoredDraftSelection;
+		const editor = this.inputEl?.composer;
+		if (!snapshot || !editor) return;
+		this.restoredDraftSelection = null;
+		editor.view.dispatch({ selection: { anchor: snapshot.anchor, head: snapshot.head } });
+		editor.view.requestMeasure({ read: () => undefined,
+			write: () => { editor.view.scrollDOM.scrollTop = snapshot.scrollTop; } });
+	}
+
+	private scheduleLocalDraft(): void {
+		if (!this.localDraftStore || this.trashViewClosed || this.localDraftTimer !== null) return;
+		this.localDraftTimer = this.containerEl.win.setTimeout(() => { this.localDraftTimer = null; this.flushLocalDraft(); }, 500);
+	}
+
+	flushLocalDraft(): void {
+		if (!this.localDraftStore || this.trashViewClosed) return;
+		if (this.localDraftTimer !== null) this.containerEl.win.clearTimeout(this.localDraftTimer);
+		this.localDraftTimer = null;
+		// 只读取当前 EditorState，不 blur、不 dispatch，也不强制提交 IME。
+		this.localDraftStore.update(this.captureLocalDraft());
+	}
+
+	private async validateRestoredDraft(draft: LocalComposerDraft): Promise<void> {
+		const memo = draft.editingMemo;
+		if (memo?.catalog) {
+			const handle = memo.catalog.observationHandle;
+			let current = false;
+			try {
+				const file = this.app.vault.getAbstractFileByPath(handle.sourcePath);
+				current = file instanceof TFile && await sha256Bytes(new TextEncoder().encode(await this.app.vault.read(file))) === handle.sourceRevision;
+			} catch { current = false; }
+			if (this.trashViewClosed || this.editingMemo !== memo) return;
+			if (!current) { this.restoredEditNeedsTarget = true; new Notice(t("composer.draftTargetChanged")); }
+		}
+		try {
+			for (const snapshot of [draft.active, draft.suspendedCreate]) {
+				for (const link of snapshot?.imageLinks ?? []) {
+					if (!(this.app.vault.getAbstractFileByPath(link.path) instanceof TFile)) throw new Error(t("composer.imageLinkChanged", { path: link.path }));
+					validateComposerImages(this.app, [link], link.sourcePath);
+				}
+			}
+			if (draft.active.imageLinks?.length) {
+				const sourcePath = this.getImageSourcePath();
+				if (sourcePath === null) throw new Error(t("composer.imageSourceUnavailable"));
+				validateComposerImages(this.app, draft.active.imageLinks, sourcePath);
+			}
+		} catch (error) { if (!this.trashViewClosed) new Notice(formatServiceError(error, t("error.imageInsertFailed"))); }
+	}
+
 	private cancelComposerFromEscape(): void {
 		if (this.composerOpen) this.closeComposerKeepingDraft();
 	}
@@ -4881,11 +5016,22 @@ export class KnomoView extends ItemView {
 	private clearComposerContext(): void {
 		this.closeTimeBuoyPicker(false);
 		this.editingMemo = null;
+		this.restoredEditNeedsTarget = false;
 		this.quoteReferenceText = null;
 		this.quoteMarkdownText = null;
 	}
 
 	private startEditing(memo: MemoRecord): void {
+		if (this.restoredEditNeedsTarget && !this.isSaving && !this.trashViewClosed
+			&& !this.composerIsComposing && !this.inputEl?.composer.composing) {
+			// 只有用户显式选择卡片的编辑动作才能更换目标，草稿文字和历史留在原编辑器。
+			this.editingMemo = memo;
+			this.restoredEditNeedsTarget = false;
+			this.flushLocalDraft();
+			this.openComposer();
+			this.updateStatus("", false);
+			return;
+		}
 		if (this.editingMemo !== null && this.editingMemo.id === memo.id) { this.openComposer(); return; }
 		if (!this.canChangeComposerContext()) return;
 		const selection = this.inputEl?.composer.view.state.selection.main;
@@ -5688,6 +5834,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncInputState(): void {
+		this.scheduleLocalDraft();
 		this.updateSendButtonState();
 		if (this.currentLayout === "mobile") {
 			this.scheduleMobileComposerResize();

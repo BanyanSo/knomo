@@ -129,7 +129,7 @@ export class MemoCommandService {
 
 	private async createInternal(
 		contentInput: string,
-		onDailyCommitted?: () => void,
+		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
@@ -157,7 +157,7 @@ export class MemoCommandService {
 	private async editInternal(
 		item: CatalogMemoItem,
 		contentInput: string,
-		onDailyCommitted?: () => void,
+		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MemoSaveResult> {
 		const content = normalizeMemoInput(contentInput);
@@ -249,7 +249,7 @@ export class MemoCommandService {
 	}
 
 	private startSaveOperation(
-		action: (onDailyCommitted: () => void) => Promise<MemoSaveResult>,
+		action: (onDailyCommitted: (diskConfirmed?: boolean) => void) => Promise<MemoSaveResult>,
 	): MemoSaveOperation {
 		let committed = false;
 		let resolveCommitted: () => void = () => undefined;
@@ -258,10 +258,11 @@ export class MemoCommandService {
 			resolveCommitted = resolve;
 			rejectCommitted = reject;
 		});
-		const markCommitted = (): void => {
+		const markCommitted = (diskConfirmed = true): void => {
 			if (committed) return;
 			committed = true;
-			resolveCommitted();
+			if (diskConfirmed) resolveCommitted();
+			else rejectCommitted(new Error(t("composer.draftUnconfirmed")));
 		};
 		const settled = Promise.resolve()
 			.then(() => action(markCommitted))

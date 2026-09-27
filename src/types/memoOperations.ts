@@ -14,14 +14,14 @@ export interface MarkdownCreateInput {
 	content: string;
 	targetLogicalDate?: string;
 	createdAt?: Date;
-	onDailyCommitted?: () => void;
+	onDailyCommitted?: (diskConfirmed?: boolean) => void;
 	validateImageSource?: (sourcePath: string) => void;
 }
 
 export interface MarkdownEditInput {
 	observation: ObservationHandle;
 	content: string;
-	onDailyCommitted?: () => void;
+	onDailyCommitted?: (diskConfirmed?: boolean) => void;
 	validateImageSource?: (sourcePath: string) => void;
 }
 

@@ -4,10 +4,6 @@ export function canonicalJson(value: unknown): string {
 	return JSON.stringify(toCanonicalValue(value));
 }
 
-export function canonicalJsonFileBytes(value: unknown): Uint8Array {
-	return new TextEncoder().encode(`${canonicalJson(value)}\n`);
-}
-
 export async function sha256Text(value: string): Promise<string> {
 	return sha256Bytes(new TextEncoder().encode(value));
 }

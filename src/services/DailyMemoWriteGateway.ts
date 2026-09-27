@@ -139,20 +139,6 @@ export class DailyMemoWriteGateway {
 		target.validateTarget?.(target.sourcePath, target.logicalDate);
 	}
 
-	async prepareTransition(input: {
-		file: TFile;
-		logicalDate: string;
-		expectedRevision: string;
-		afterContent: string;
-	}): Promise<PreparedDailyWrite> {
-		return this.prepare({
-			file: input.file,
-			logicalDate: input.logicalDate,
-			expectedRevision: input.expectedRevision,
-			update: () => input.afterContent,
-		});
-	}
-
 	private getActiveEditor(file: TFile): Editor | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (view === null || !(view.file instanceof TFile)

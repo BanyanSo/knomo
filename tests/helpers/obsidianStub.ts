@@ -14,10 +14,6 @@ export async function ensureObsidianStub(): Promise<void> {
 	const obsidianStubPath = resolve(__dirname, "../../node_modules/obsidian/index.js");
 	await mkdir(dirname(obsidianStubPath), { recursive: true });
 	await writeFile(obsidianStubPath, buildObsidianStub());
-
-	const dailyNotesInterfaceStubPath = resolve(__dirname, "../../node_modules/obsidian-daily-notes-interface/index.js");
-	await mkdir(dirname(dailyNotesInterfaceStubPath), { recursive: true });
-	await writeFile(dailyNotesInterfaceStubPath, buildDailyNotesInterfaceStub());
 }
 
 function buildObsidianStub(): string {
@@ -157,14 +153,5 @@ function buildObsidianStub(): string {
 		"function renderResults() {}",
 		"class MarkdownRenderer { static async render() {} }",
 		"module.exports = { requireApiVersion, MarkdownView, Component, TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon, Notice, Platform, Modal, ItemView, Scope, Plugin, PluginSettingTab, Setting, SettingGroup, AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults, MarkdownRenderer };",
-	].join("\n");
-}
-
-function buildDailyNotesInterfaceStub(): string {
-	return [
-		"async function createDailyNote(date) {",
-		"  return window.__knomoCreateDailyNote(date);",
-		"}",
-		"module.exports = { createDailyNote };",
 	].join("\n");
 }

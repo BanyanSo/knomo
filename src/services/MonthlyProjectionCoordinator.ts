@@ -1,13 +1,11 @@
 import { TFile } from "obsidian";
 import type { App, Component } from "obsidian";
 
-import type { KnomoSettings } from "../types/settings";
 import type { MonthlyProjectionState } from "../types/catalogView";
 import { ensureFolder, getParentFolderPath } from "../utils/vault";
 import {
 	buildMonthlyProjection,
 	extractLegacyMonthlyArchiveMarker,
-	getMonthlyArchivePath,
 	hasKnomoMonthlyArchiveMarker,
 } from "./MonthlyProjection";
 import type { MonthlyProjectionInputBuilder } from "./MonthlyProjectionInputBuilder";
@@ -688,7 +686,3 @@ function isMonthlyProjectionCheckpoint(value: unknown): value is MonthlyProjecti
 
 class MonthlyProjectionStoppedError extends Error {}
 class MonthlyProjectionStaleError extends Error {}
-
-export function getMonthlyProjectionTargetPath(settings: KnomoSettings, period: string): string {
-	return getMonthlyArchivePath(settings, period);
-}

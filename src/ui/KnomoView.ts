@@ -2897,10 +2897,6 @@ export class KnomoView extends ItemView {
 			this.renderEmptyCardFlow(presentation);
 			return;
 		}
-		if (presentation.type === "onboarding") {
-			this.renderCatalogOnboarding(presentation);
-			return;
-		}
 		this.syncCardFlowPresentation(presentation, preserveCardMemoId);
 	}
 
@@ -3441,11 +3437,6 @@ export class KnomoView extends ItemView {
 			this.restorePendingCardFlowScrollTop(generation);
 			return;
 		}
-		if (presentation.type === "onboarding") {
-			this.renderCatalogOnboarding(presentation);
-			this.restorePendingCardFlowScrollTop(generation);
-			return;
-		}
 		if (this.cardFlowEl === null) {
 			return;
 		}
@@ -3892,26 +3883,6 @@ export class KnomoView extends ItemView {
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
 		this.refreshCatalogActiveQuery();
-	}
-
-	private renderCatalogOnboarding(presentation: Extract<CardFlowPresentation, { type: "onboarding" }>): void {
-		if (this.cardFlowEl === null) return;
-		this.cardImageCache.capture(this.cardFlowEl, Platform.isMobile ? this.cardFlowEl : null);
-		this.cardFlowCoordinator.setPendingScrollRestore(null);
-		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
-		this.cardFlowEl.empty();
-		this.renderedCardMemos.clear();
-		const state = renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
-		state.addClass("knomo-catalog-onboarding");
-		state.setAttrs({ role: "status", "aria-live": "polite", "aria-atomic": "true" });
-		const actions = state.createDiv({ cls: "knomo-catalog-onboarding-actions" });
-		for (const action of presentation.actions) {
-			actions.createEl("button", {
-				cls: action.modCta === true ? "mod-cta" : undefined,
-				text: action.label,
-				attr: { type: "button", "data-action": action.action },
-			});
-		}
 	}
 
 	private async runTrashActionById(action: TrashAction, memoId: string | null): Promise<void> {

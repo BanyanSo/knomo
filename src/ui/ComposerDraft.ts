@@ -18,8 +18,6 @@ export interface ComposerQuoteContext {
 
 export interface PreparedComposerCreateInput {
 	content: string;
-	sourceReferenceText: string | null;
-	quoteTrailer: string | null;
 }
 
 export type PreparedComposerSaveInput<TEditingMemo> =
@@ -32,9 +30,6 @@ export type PreparedComposerSaveInput<TEditingMemo> =
 	| {
 		type: "create";
 		content: string;
-		source: "plugin_input" | "quote_create";
-		sourceReferenceText: string | null;
-		dailyTrailer: string | null;
 	};
 
 export function formatMarkdownQuoteDraft(content: string): string {
@@ -54,8 +49,6 @@ export function prepareComposerCreateInput(
 	) {
 		return {
 			content: input,
-			sourceReferenceText: null,
-			quoteTrailer: null,
 		};
 	}
 	return {
@@ -64,8 +57,6 @@ export function prepareComposerCreateInput(
 			quoteContext.markdownText,
 			quoteContext.referenceText,
 		),
-		sourceReferenceText: quoteContext.referenceText,
-		quoteTrailer: null,
 	};
 }
 
@@ -88,8 +79,5 @@ export function prepareComposerSaveInput<TEditingMemo>(
 	return {
 		type: "create",
 		content: createInput.content,
-		source: createInput.sourceReferenceText === null ? "plugin_input" : "quote_create",
-		sourceReferenceText: createInput.sourceReferenceText,
-		dailyTrailer: createInput.quoteTrailer,
 	};
 }

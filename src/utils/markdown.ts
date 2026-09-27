@@ -60,10 +60,6 @@ export function isMemoContinuationLine(value: string): boolean {
 	return MEMO_CONTINUATION_INDENT_REGEX.test(value);
 }
 
-export function stripMemoContinuationIndent(value: string): string {
-	return value.replace(MEMO_CONTINUATION_INDENT_REGEX, "");
-}
-
 export function parseMemoTags(content: string): string[] {
 	const tags: string[] = [];
 	for (const range of memoTagRanges(content)) {

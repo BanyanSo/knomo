@@ -37,18 +37,6 @@ export interface KnomoRuntimeAttentionSnapshot {
 	legacyCleanupPending?: boolean;
 }
 
-export interface KnomoRuntimeSnapshot {
-	settings?: KnomoSettingsLoadStatus;
-	catalog: {
-		coverage: CatalogCoverage;
-		lifecycle: CatalogStoreLifecycle;
-	};
-	currentConfiguration: KnomoCurrentConfigStatus;
-	monthly: MonthlyProjectionState;
-	legacyMigration: LegacyMigrationStatus;
-	legacyCleanupPending?: boolean;
-}
-
 export interface CatalogMemoItem {
 	derivedReferences?: import("../services/CatalogReferenceService").CatalogReference[];
 	key: string;

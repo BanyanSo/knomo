@@ -45,11 +45,6 @@ export class DailyNoteService {
 		return createStatus(config);
 	}
 
-	async getFreshStatus(): Promise<DailyNotesStatus> {
-		const config = (await this.dailyNotesConfigProvider?.loadConfig()) ?? null;
-		return createStatus(config);
-	}
-
 	async getOrCreateDailyNoteForDate(date: Date): Promise<TFile> {
 		return this.getOrCreateDailyNoteForDateWithConfig(date, await this.getDailyNotesConfig());
 	}

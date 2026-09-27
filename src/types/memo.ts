@@ -21,16 +21,3 @@ export interface DailyRef {
 	sectionType?: DailyRefSectionType;
 	lineNumberHint: number | null;
 }
-
-export interface ParsedMemoBlock {
-	startLine: number;
-	endLine: number;
-	rawBlock: string;
-	time: string;
-	content: string;
-	contentHash: string;
-	blockId: string | null;
-	tags: string[];
-	links: MemoLinkRef[];
-	images: MemoImageRef[];
-}

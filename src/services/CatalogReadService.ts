@@ -21,7 +21,6 @@ import type {
 	CatalogReadState,
 	CatalogReadStatus,
 	KnomoRuntimeAttentionSnapshot,
-	KnomoRuntimeSnapshot,
 	MonthlyProjectionState,
 	CatalogTagFacet,
 } from "../types/catalogView";
@@ -127,33 +126,6 @@ export class CatalogReadService {
 			monthly: this.getProjectionState(),
 			legacyMigration,
 			legacyCleanupPending,
-		};
-	}
-
-	async getRuntimeSnapshot(): Promise<KnomoRuntimeSnapshot> {
-		const attention = this.getRuntimeAttentionSnapshot();
-		let coverage: CatalogCoverage = {
-			kind: "partial",
-			coveredFromDate: null,
-			pendingFileCount: 0,
-			coveredFileCount: 0,
-			totalFileCount: 0,
-		};
-		let lifecycle = attention.catalogLifecycle;
-		try {
-			const store = this.options.catalog.getStore();
-			coverage = await store.getCoverage();
-			lifecycle = store.getLifecycle();
-		} catch {
-			// 运行状态本身不可用时返回只读降级快照，不触发修复或扫描。
-		}
-		return {
-			settings: attention.settings,
-			catalog: { coverage, lifecycle },
-			currentConfiguration: attention.currentConfiguration,
-			monthly: attention.monthly,
-			legacyMigration: attention.legacyMigration,
-			legacyCleanupPending: attention.legacyCleanupPending,
 		};
 	}
 
@@ -410,20 +382,6 @@ export class CatalogReadService {
 		return [...new Set(aggregates
 			.filter((aggregate) => aggregate.memoCount > 0)
 			.map((aggregate) => aggregate.logicalDate.slice(0, 7)))].sort();
-	}
-
-	async resolveObservationInFile(sourcePath: string, startLine: number): Promise<ResolvedMemo> {
-		// 按文件位置获取当前查询结果；写入仍须保留用户原始 observation 句柄。
-		const observationKey = `${sourcePath}\u0000${startLine.toString().padStart(10, "0")}`;
-		const observation = await this.options.catalog.getObservation(observationKey);
-		if (observation === null) throw new Error("Memo observation is no longer present in its Daily note.");
-		return this.resolveObservation(observation);
-	}
-
-	async resolveMemoItemInFile(sourcePath: string, startLine: number): Promise<CatalogMemoItem> {
-		const resolved = await this.resolveObservationInFile(sourcePath, startLine);
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		return this.toMemoItem(resolved, createCatalogCapabilities(coverage));
 	}
 
 	private resolveObservation(observation: CatalogObservation): ResolvedMemo {

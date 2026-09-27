@@ -45,8 +45,5 @@
 		"jsdom": "26.1.0",
 		"obsidian": "1.13.1",
 		"typescript": "^5.8.0"
-	},
-	"dependencies": {
-		"obsidian-daily-notes-interface": "^0.9.5"
 	}
 }

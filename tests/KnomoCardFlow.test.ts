@@ -60,30 +60,6 @@ test("continues card flow batches and reports exhaustion", () => {
 	assert.equal(batcher.hasMoreItems, false);
 });
 
-test("updates hydrated items from rendered memo ids without duplicating promoted cards", () => {
-	const batcher = new KnomoCardFlowBatcher();
-	const firstBatch = batcher.start([
-		makeMemo("promoted-old"),
-		makeMemo("recent-0"),
-		makeMemo("recent-1"),
-	], "memo", 2);
-	assert.equal(firstBatch?.type, "items");
-	if (firstBatch?.type !== "items") return;
-	batcher.completeBatch(firstBatch);
-
-	batcher.updateItemsAfterRendered([
-		makeMemo("promoted-old"),
-		makeMemo("recent-0"),
-		makeMemo("recent-1"),
-		makeMemo("older-0"),
-	], ["promoted-old", "recent-0"]);
-	const nextBatch = batcher.beginNextBatch(3);
-
-	assert.equal(nextBatch?.type, "items");
-	if (nextBatch?.type !== "items") return;
-	assert.deepEqual(nextBatch.items.map((item) => item.memo.id), ["recent-1", "older-0"]);
-});
-
 test("syncs the rendered count after inserting a memo at the front", () => {
 	const batcher = new KnomoCardFlowBatcher();
 	const firstBatch = batcher.start(makeMemos(4), "memo", 3);

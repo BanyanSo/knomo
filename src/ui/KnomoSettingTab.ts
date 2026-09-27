@@ -150,7 +150,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		this.pageEl = page;
 		const navigation = new SettingGroup(page).addClass("knomo-settings-navigation");
 		const header = navigation.listEl.createDiv({ cls: "knomo-settings-header" });
-		header.createEl("h2", { text: "Knomo" });
+		new Setting(header).setName("Knomo").setHeading();
 		this.attentionEl = page.createDiv({ cls: "knomo-settings-attention" });
 		this.refreshAttentionRegion();
 

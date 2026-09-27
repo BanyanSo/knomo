@@ -493,6 +493,9 @@ async function renderCardLineBreaks(html: string): Promise<string> {
 	await ensureObsidianStub();
 	const { prepareRenderedMemoMarkdown } = await import("../src/ui/MemoMarkdownRenderer");
 	const dom = new JSDOM(`<div>${html}</div>`);
+	Object.assign(dom.window.Node.prototype, {
+		createEl(this: Node, tag: string) { return this.appendChild(this.ownerDocument!.createElement(tag)); },
+	});
 	try {
 		const container = dom.window.document.querySelector("div")!;
 		Object.assign(container, { findAll: (selector: string) => Array.from(container.querySelectorAll(selector)) });
@@ -529,6 +532,9 @@ test("主卡片流和移动搜索渲染完成后都保留换行，源码保持�
 	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
 	const original = MarkdownRenderer.render;
 	const dom = new JSDOM("<body></body>");
+	Object.assign(dom.window.Node.prototype, {
+		createEl(this: Node, tag: string) { return this.appendChild(this.ownerDocument!.createElement(tag)); },
+	});
 	const prototype = dom.window.HTMLElement.prototype;
 	Object.assign(prototype, {
 		findAll(this: HTMLElement, selector: string) { return Array.from(this.querySelectorAll(selector)); },

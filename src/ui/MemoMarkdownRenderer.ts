@@ -445,7 +445,7 @@ function preserveInlineLineBreaks(element: Element): void {
 			// Markdown 硬换行通常输出 <br>\n，不能再增加一行。
 			if (index > 0 && !(index === 1 && parts[0] === ""
 				&& child.previousSibling?.nodeName === "BR")) {
-				fragment.appendChild(child.ownerDocument!.createElement("br"));
+				fragment.createEl("br");
 			}
 			if (parts[index]) fragment.appendChild(child.ownerDocument!.createTextNode(parts[index]));
 		}

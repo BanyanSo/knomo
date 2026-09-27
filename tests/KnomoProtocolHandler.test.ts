@@ -183,6 +183,23 @@ test("open-view 取消等待初始化的 Quick Command，复用已打开的 Leaf
 	assert.deepEqual(h.calls, []);
 });
 
+test("协议打开和快捷命令失败时保留错误处理方法的 this", async () => {
+	for (const command of ["open-view", "new-memo"]) {
+		const failure = new Error(command);
+		const options = {
+			errors: [] as unknown[],
+			onLayoutReady: (callback: () => void) => callback(),
+			isActive: () => true,
+			openView: () => Promise.reject(failure),
+			quickCommands: { cancel() {}, execute: () => Promise.reject(failure) },
+			onError(error: unknown) { this.errors.push(error); },
+		};
+		createHandler(options)({ action: "knomo", command });
+		await new Promise<void>(resolve => setImmediate(resolve));
+		assert.deepEqual(options.errors, [failure]);
+	}
+});
+
 test("宿主路由契约模拟：Vault 名称、ID、编码名称、缺省目标及多实例隔离", async () => {
 	// 仅模拟宿主选择目标后才分发的边界，不将该测试当作 Obsidian 路由验收。
 	for (const vault of ["ef6ca3e3b524d22f", "My Vault", "工作 笔记", "100% 笔记", undefined]) {

@@ -4588,9 +4588,11 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-settings-header {
 	padding: var(--size-4-4) var(--size-4-4) var(--size-4-2);
 }
-.knomo-settings-header h2 {
+.knomo-settings-header .setting-item {
 	margin: 0;
 	padding: 0;
+}
+.knomo-settings-header .setting-item-name {
 	font-size: calc(var(--font-ui-medium) + 2px);
 	font-weight: var(--font-bold, 700);
 	line-height: 1.25;
@@ -4644,6 +4646,33 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	min-width: 0;
 }
 .knomo-settings-panel .setting-item-description {
+	overflow-wrap: anywhere;
+}
+/* 固定两层 flex 的横向主轴，让 basis 始终表示宽度；窄屏通过换行排列。 */
+.knomo-settings-panel .setting-item:has(> .setting-item-control > input[type="text"]) {
+	flex-direction: row;
+	flex-wrap: wrap;
+	gap: var(--size-4-3);
+}
+.knomo-settings-panel .setting-item:has(> .setting-item-control > input[type="text"]) > .setting-item-info {
+	flex: 1 1 240px;
+	margin-inline-end: 0;
+}
+.knomo-settings-panel .setting-item:has(> .setting-item-control > input[type="text"]) > .setting-item-control {
+	flex: 1 1 280px;
+	flex-direction: row;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+	max-width: 100%;
+}
+.knomo-settings-panel .setting-item-control > input[type="text"] {
+	flex: 1 1 160px;
+	min-width: 0;
+	max-width: 100%;
+}
+.knomo-settings-panel .setting-item-control > button {
+	max-width: 100%;
+	white-space: normal;
 	overflow-wrap: anywhere;
 }
 .knomo-settings-panel .setting-item.knomo-settings-support {

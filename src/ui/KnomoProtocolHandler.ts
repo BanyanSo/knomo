@@ -22,9 +22,9 @@ export function createKnomoProtocolHandler(options: KnomoProtocolOptions): Obsid
 			if (!options.isActive() || request !== revision) return;
 			if (command === "open-view") {
 				options.quickCommands.cancel();
-				void options.openView().catch(options.onError);
+				void options.openView().catch(error => options.onError(error));
 			} else {
-				void options.quickCommands.execute(command).catch(options.onError);
+				void options.quickCommands.execute(command).catch(error => options.onError(error));
 			}
 		});
 	};

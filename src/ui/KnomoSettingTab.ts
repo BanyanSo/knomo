@@ -149,8 +149,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const page = parent.createDiv({ cls: "knomo-settings-page" });
 		this.pageEl = page;
 		const navigation = new SettingGroup(page).addClass("knomo-settings-navigation");
-		const header = navigation.listEl.createDiv({ cls: "knomo-settings-header" });
-		new Setting(header).setName("Knomo").setHeading();
 		this.attentionEl = page.createDiv({ cls: "knomo-settings-attention" });
 		this.refreshAttentionRegion();
 
@@ -370,6 +368,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderDailyHeadingSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-text-row");
 		const settings = this.settingsService.getSettings();
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
 		const showValidation = (value: string) => {
@@ -498,6 +497,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderMonthlyFileFormatSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-text-row");
 		const settings = this.settingsService.getSettings();
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
 		let draft = this.pendingSettingDrafts.get("monthlyMemoFileFormat") ?? settings.monthlyMemoFileFormat;
@@ -548,6 +548,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderDateHeadingFormatSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-text-row");
 		const settings = this.settingsService.getSettings();
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
 		const showValidation = (value: string) => {
@@ -577,6 +578,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderMonthlyFolderSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-text-row");
 		const settings = this.settingsService.getSettings();
 		if (!this.monthlyFolderEditing) {
 			setting

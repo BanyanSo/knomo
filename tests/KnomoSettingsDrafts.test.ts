@@ -32,6 +32,7 @@ test("invalid and failed text drafts survive rerender; valid blur draft saves on
 		let blur: () => void = () => undefined;
 		let message = "";
 		const setting = {
+			settingEl: { addClass: () => undefined },
 			infoEl: { createDiv: () => ({
 				setText: (next: string) => { message = next; },
 				toggleClass: () => undefined,

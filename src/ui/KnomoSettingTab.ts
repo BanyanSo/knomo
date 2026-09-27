@@ -262,7 +262,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderAboutSettings(parent: HTMLElement): void {
 		let card = this.createSettingCard(parent, "settings.about.versionHeading");
-		new Setting(card).setName(t("settings.about.currentVersion") + " " + this.pluginVersion)
+		new Setting(card).setClass("knomo-settings-action-row").setName(t("settings.about.currentVersion") + " " + this.pluginVersion)
 			.addButton(button => button.setButtonText(t("settings.about.manageUpdates")).onClick(() => {
 				// 复用宿主设置管理器，直接切换到原生第三方插件页。
 				const setting = (this.app as App & { setting: { openTabById(id: string): void } }).setting;
@@ -270,9 +270,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			}));
 		this.renderLinkSetting(card, "settings.about.releaseNotes", "settings.about.viewReleaseNotes", ABOUT_LINKS.releases);
 		card = this.createSettingCard(parent, "settings.about.helpHeading");
-		this.renderTextLink(new Setting(card).setName(t("settings.about.reportIssue")).controlEl,
+		this.renderTextLink(new Setting(card).setClass("knomo-settings-value-row").setName(t("settings.about.reportIssue")).controlEl,
 			t("settings.about.submitGithub"), ABOUT_LINKS.issues);
-		this.renderTextLink(new Setting(card).setName(t("settings.about.userGuide")).controlEl,
+		this.renderTextLink(new Setting(card).setClass("knomo-settings-value-row").setName(t("settings.about.userGuide")).controlEl,
 			t("settings.about.open"), getKnomoLocale() === "zh-CN" ? ABOUT_LINKS.guideZh : ABOUT_LINKS.guideEn);
 		this.renderDeveloperContacts(card, DEVELOPER_CONTACTS);
 		const support = new Setting(card).setName(t("settings.about.supportHeading")).setDesc(t("settings.about.wechatDesc"));
@@ -293,7 +293,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderDeveloperContacts(parent: HTMLElement, contacts: readonly DeveloperContact[]): void {
 		for (const contact of contacts) {
-			const setting = new Setting(parent).setName(t(contact.labelKey));
+			const setting = new Setting(parent).setClass("knomo-settings-value-row").setName(t(contact.labelKey));
 			if (contact.href) this.renderTextLink(setting.controlEl, contact.value, contact.href);
 			else setting.controlEl.createSpan({ text: contact.value });
 		}
@@ -307,7 +307,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		parent: HTMLElement, nameKey: TranslationKey, actionKey: TranslationKey,
 		href: string,
 	): void {
-		const setting = new Setting(parent).setName(t(nameKey));
+		const setting = new Setting(parent).setClass("knomo-settings-action-row").setName(t(nameKey));
 		setting.addButton(button => {
 			button.setButtonText(t(actionKey));
 			button.onClick(() => { this.openAboutLink(href); });
@@ -349,7 +349,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				finally { saving = false; render(); }
 			};
 			preferences.order.forEach((action, index) => {
-				new Setting(container).setName(t(composerActionLabels[action]))
+				new Setting(container).setClass("knomo-toolbar-item").setName(t(composerActionLabels[action]))
 					.addToggle(toggle => { controls.push(toggle); toggle.setValue(!preferences.hidden.includes(action)).onChange(visible => {
 						void save({ order: [...preferences.order], hidden: visible ? preferences.hidden.filter(item => item !== action) : [...preferences.hidden, action] });
 					}); })
@@ -362,7 +362,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 						void save({ ...preferences, order });
 					}); });
 			});
-			new Setting(container).addButton(button => { controls.push(button); button.setButtonText(t("settings.toolbar.reset")).onClick(() => { void save(normalizeComposerToolbar(undefined)); }); });
+			new Setting(container).setClass("knomo-toolbar-reset").addButton(button => { controls.push(button); button.setButtonText(t("settings.toolbar.reset")).onClick(() => { void save(normalizeComposerToolbar(undefined)); }); });
 		};
 		render();
 	}
@@ -398,6 +398,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderInsertPositionSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-select-row");
 		const settings = this.settingsService.getSettings();
 		setting.addDropdown((dropdown) => {
 			dropdown.addOption("bottom", t("settings.insertPosition.bottom"));
@@ -412,6 +413,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderTimeFormatSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-select-row");
 		const settings = this.settingsService.getSettings();
 		setting.addDropdown((dropdown) => {
 			dropdown.addOption("HH:mm:ss", "HH:mm:ss");
@@ -426,6 +428,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderRecentTimeFlowSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-toggle-row");
 		setting.addToggle((toggle) => {
 			toggle.setValue(this.settingsService.getSettings().recentTimeFlowEnabled);
 			toggle.onChange(async (value) => {
@@ -440,6 +443,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderTimeBuoySetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-toggle-row");
 		const settings = this.settingsService.getSettings();
 		setting.addToggle((toggle) => {
 			toggle.setValue(settings.timeBuoyEnabled);
@@ -450,6 +454,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderDateOrderSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-select-row");
 		const settings = this.settingsService.getSettings();
 		setting.addDropdown((dropdown) => {
 			dropdown.addOption("asc", t("settings.dateOrder.asc"));
@@ -467,6 +472,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderMonthlyExcludeSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-toggle-row");
 		const settings = this.settingsService.getSettings();
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
 		setting.addToggle((toggle) => {
@@ -479,6 +485,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			this.setExcludeStatus(statusEl, t("settings.excludeMonthly.autoFailed"), true);
 			setting.addButton((button) => {
 				button.setButtonText(t("settings.excludeMonthly.retry"));
+				// 重试独占下一行，避免错误状态改变开关列的宽度。
+				button.buttonEl.addClass("knomo-settings-row-action");
+				setting.settingEl.appendChild(button.buttonEl);
 				button.onClick(() => { void this.retryMonthlyExcludeInitialization(button); });
 			});
 		}
@@ -1170,6 +1179,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderAttentionSetting(kind: KnomoSettingAttentionKind, setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-action-row");
 		switch (kind) {
 			case "settings": this.renderSettingsAttentionSetting(setting); break;
 			case "current-config": this.renderCurrentConfigSetting(setting); break;

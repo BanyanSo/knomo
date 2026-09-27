@@ -4626,15 +4626,154 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	outline: 2px solid var(--background-modifier-border-focus);
 	outline-offset: -2px;
 }
-.knomo-settings-panel .setting-item {
+.knomo-settings-page .setting-item {
 	min-width: 0;
 }
-.knomo-settings-panel .setting-item-info,
-.knomo-settings-panel .setting-item-control {
+.knomo-settings-page .setting-item-info,
+.knomo-settings-page .setting-item-control {
 	min-width: 0;
 }
-.knomo-settings-panel .setting-item-description {
+.knomo-settings-page .setting-item-description {
 	overflow-wrap: anywhere;
+}
+/* 开关列不拉伸，宿主的移动端纵向布局不改变其右侧锚点。 */
+.knomo-settings-page .setting-item.knomo-settings-toggle-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: start;
+	gap: var(--size-4-3);
+}
+.knomo-settings-page .knomo-settings-toggle-row > .setting-item-info {
+	width: auto;
+	margin: 0;
+}
+.knomo-settings-page .knomo-settings-toggle-row > .setting-item-control {
+	display: flex;
+	flex: none;
+	flex-direction: row;
+	justify-content: flex-end;
+	width: auto;
+	padding: 0;
+	margin: 0;
+}
+.knomo-settings-page .knomo-settings-row-action {
+	grid-column: 1 / -1;
+	justify-self: end;
+	width: auto;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+/* 值和操作都从右侧排列；空间不足时整个控制区换行。 */
+.knomo-settings-page .setting-item.knomo-settings-value-row,
+.knomo-settings-page .setting-item.knomo-settings-action-row,
+.knomo-settings-page .setting-item.knomo-settings-select-row,
+.knomo-settings-page .setting-item.knomo-toolbar-item {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--size-4-2) var(--size-4-3);
+}
+.knomo-settings-page .knomo-settings-value-row > .setting-item-info,
+.knomo-settings-page .knomo-settings-action-row > .setting-item-info,
+.knomo-settings-page .knomo-settings-select-row > .setting-item-info,
+.knomo-settings-page .knomo-toolbar-item > .setting-item-info {
+	flex: 1 1 7rem;
+	width: auto;
+	margin: 0;
+}
+.knomo-settings-page .knomo-settings-value-row > .setting-item-control,
+.knomo-settings-page .knomo-settings-action-row > .setting-item-control,
+.knomo-settings-page .knomo-settings-select-row > .setting-item-control {
+	display: flex;
+	flex: 0 1 auto;
+	flex-direction: row;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	width: auto;
+	max-width: 100%;
+	gap: var(--size-4-2);
+	margin: 0 0 0 auto;
+	padding: 0;
+	text-align: end;
+}
+.knomo-settings-page .knomo-settings-value-row > .setting-item-control > * {
+	min-width: 0;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+.knomo-settings-page .setting-item.knomo-settings-action-row > .setting-item-control > button {
+	flex: 0 1 auto;
+	width: auto;
+	min-width: 0;
+}
+.knomo-settings-page .knomo-toolbar-item > .setting-item-control {
+	display: grid;
+	grid-template-columns: auto 44px 44px;
+	align-items: center;
+	gap: var(--size-4-2);
+	flex: 0 0 auto;
+	width: auto;
+	max-width: 100%;
+	margin: 0 0 0 auto;
+	padding: 0;
+}
+.knomo-settings-page .setting-item.knomo-toolbar-item > .setting-item-control > button {
+	width: 44px;
+	min-width: 44px;
+	height: 44px;
+	min-height: 44px;
+	padding: 0;
+}
+.knomo-settings-page .setting-item.knomo-toolbar-reset {
+	display: block;
+}
+.knomo-settings-page .knomo-toolbar-reset > .setting-item-info {
+	display: none;
+}
+.knomo-settings-page .knomo-toolbar-reset > .setting-item-control {
+	display: flex;
+	justify-content: flex-end;
+	width: 100%;
+}
+.knomo-settings-page .knomo-settings-select-row select {
+	min-width: 0;
+	max-width: 100%;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-select-row {
+	flex-direction: column;
+	align-items: stretch;
+}
+body.is-mobile .knomo-settings-page .knomo-settings-select-row > .setting-item-info,
+body.is-mobile .knomo-settings-page .knomo-settings-select-row > .setting-item-control {
+	flex: 0 1 auto;
+	width: 100%;
+}
+body.is-mobile .knomo-settings-page .knomo-settings-select-row select {
+	width: 100%;
+}
+/* 覆盖手机 modal 的高优先级纵排和全宽规则，同时保留宿主的颜色、边框和开关外观。 */
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-value-row,
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-action-row,
+body.is-mobile .knomo-settings-page .setting-item.knomo-toolbar-item {
+	flex-direction: row;
+	align-items: center;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-toggle-row > .setting-item-control,
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-value-row > .setting-item-control,
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-action-row > .setting-item-control,
+body.is-mobile .knomo-settings-page .setting-item.knomo-toolbar-item > .setting-item-control {
+	width: auto;
+	justify-content: flex-end;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-toolbar-item > .setting-item-control > button {
+	width: 44px;
+	padding: 0;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-action-row > .setting-item-control > button {
+	width: auto;
 }
 /* 固定两层 flex 的横向主轴，让 basis 始终表示宽度；窄屏通过换行排列。 */
 .knomo-settings-panel .setting-item.knomo-settings-text-row {
@@ -4658,7 +4797,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	min-width: 0;
 	max-width: 100%;
 }
-.knomo-settings-panel .setting-item-control > button {
+.knomo-settings-page .setting-item-control > button {
 	max-width: 100%;
 	white-space: normal;
 	overflow-wrap: anywhere;

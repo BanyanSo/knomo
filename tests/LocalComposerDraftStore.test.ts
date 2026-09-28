@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LocalComposerDraftStore, emptyComposerDraft, type LocalComposerDraft } from "../src/ui/LocalComposerDraftStore";
+import { LocalComposerDraftStore, disposeLocalComposerDraftStores, emptyComposerDraft, type LocalComposerDraft } from "../src/ui/LocalComposerDraftStore";
 import type { MemoViewItem } from "../src/types/memoView";
 
 function storage() {
@@ -12,6 +12,53 @@ function storage() {
 function draft(content: string): LocalComposerDraft {
 	return { ...emptyComposerDraft(), active: { ...emptyComposerDraft().active, content, anchor: content.length, head: 0, scrollTop: 24 } };
 }
+
+function reloadDraftModule(): typeof import("../src/ui/LocalComposerDraftStore") {
+	const path = require.resolve("../src/ui/LocalComposerDraftStore");
+	const cached = require.cache[path];
+	delete require.cache[path];
+	try { return require(path); }
+	finally { require.cache[path] = cached; }
+}
+
+test("跨模块重载后旧提交不能覆盖新实例持久化的版本", () => {
+	for (const callback of ["committed", "acknowledge"] as const) {
+		const disk = storage();
+		const old = new LocalComposerDraftStore(disk, () => undefined);
+		old.update(draft("submitted")); const token = old.beginSubmission(); old.close();
+		const current = new (reloadDraftModule().LocalComposerDraftStore)(disk, assert.fail);
+		current.update(draft("new input after reload"));
+		const before = JSON.stringify([...disk.data]);
+		if (callback === "committed") old.committed(token, true);
+		else old.acknowledgePending();
+		old.finishSubmission();
+		assert.equal(JSON.stringify([...disk.data]), before, callback);
+		current.close();
+	}
+});
+
+test("插件卸载撤销打开及已关闭未决实例的权限，并保留待核对提交", () => {
+	for (const closed of [false, true]) {
+		const disk = storage();
+		const old = new LocalComposerDraftStore(disk, assert.fail);
+		old.update(editingDraft()); const token = old.beginSubmission();
+		if (closed) old.close();
+		disposeLocalComposerDraftStores(disk);
+		const current = new LocalComposerDraftStore(disk, assert.fail);
+		assert.deepEqual(current.pending, editingDraft());
+		const before = JSON.stringify([...disk.data]);
+		old.committed(token, true); old.acknowledgePending(); old.update(draft("stale input"));
+		old.finishSubmission(); old.close();
+		assert.equal(JSON.stringify([...disk.data]), before);
+		const other = new LocalComposerDraftStore(disk, assert.fail);
+		assert.equal(other.draft.active.content, "", "旧回调不能释放新实例认领");
+		current.update({ ...editingDraft(), active: draft("new input").active });
+		const newToken = current.beginSubmission();
+		current.committed(newToken, true); current.finishSubmission();
+		assert.equal(current.draft.active.content, "new text");
+		current.close(); other.close();
+	}
+});
 
 function editingDraft(): LocalComposerDraft {
 	const result = draft("edited text");

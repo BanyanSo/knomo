@@ -45,6 +45,7 @@ import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
+import { disposeLocalComposerDraftStores } from "./ui/LocalComposerDraftStore";
 import { createKnomoQuickCommands, KnomoQuickCommandController } from "./ui/KnomoQuickCommands";
 import { createKnomoProtocolHandler } from "./ui/KnomoProtocolHandler";
 import type { CatalogCoverage, CatalogRefreshResult } from "./types/catalog";
@@ -469,6 +470,7 @@ export default class KnomoPlugin extends Plugin {
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 			if (leaf.view instanceof KnomoView) leaf.view.flushLocalDraft();
 		}
+		disposeLocalComposerDraftStores(this.app);
 		this.quickCommandController?.dispose();
 		this.quickCommandController = null;
 		this.viewRefreshScheduler?.clear();

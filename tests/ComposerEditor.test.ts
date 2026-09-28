@@ -1642,6 +1642,36 @@ test("原文变化后保留恢复文字和旧句柄，仅显式重选目标沿�
 	} finally { f.close(); }
 });
 
+test("插件卸载先补保存再撤销包括已关闭视图在内的草稿写入", async () => {
+	const f = environment("last input");
+	try {
+		Object.assign(f.win.document.body, {
+			removeClass: (name: string) => f.win.document.body.classList.remove(name),
+			findAll: (selector: string) => [...f.win.document.body.querySelectorAll(selector)],
+		});
+		const app = { ...draftStorage(), workspace: {
+			getLeavesOfType: () => [{ view }], containerEl: { doc: f.win.document },
+		} };
+		const view = await draftSession(f.editor, f.win, app);
+		const closed = new LocalComposerDraftStore(app, assert.fail);
+		closed.update({ ...view.captureLocalDraft(), active: { ...view.captureLocalDraft().active, content: "pending", anchor: 0, head: 0 } });
+		const token = closed.beginSubmission(); closed.close();
+		const { default: Plugin } = await import("../src/main");
+		Plugin.prototype.onunload.call({ app } as unknown as InstanceType<typeof Plugin>);
+		const restored = new LocalComposerDraftStore(app, assert.fail);
+		assert.equal(restored.draft.active.content, "pending");
+		closed.committed(token, true); closed.finishSubmission();
+		f.editor.reset("late input"); view.flushLocalDraft();
+		restored.close();
+		// 使用同一宿主认领剩余条目，确认卸载前的最后输入确实落入草稿存储。
+		const first = new LocalComposerDraftStore(app, assert.fail);
+		const second = new LocalComposerDraftStore(app, assert.fail);
+		assert.equal(first.draft.active.content, "pending");
+		assert.equal(second.draft.active.content, "last input");
+		first.close(); second.close();
+	} finally { f.close(); }
+});
+
 test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依赖节流计时器", async () => {
 	const f = environment("");
 	const cleanup: Array<() => void> = [];

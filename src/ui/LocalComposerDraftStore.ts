@@ -5,6 +5,11 @@ import type { ComposerDraftSnapshot } from "./ComposerDraft";
 const STORAGE_KEY = "knomo.composerDrafts";
 type Storage = Pick<App, "loadLocalStorage" | "saveLocalStorage">;
 const claims = new WeakMap<Storage, Set<string>>();
+const stores = new WeakMap<Storage, Set<LocalComposerDraftStore>>();
+
+export function disposeLocalComposerDraftStores(storage: Storage): void {
+	for (const store of stores.get(storage) ?? []) store.dispose();
+}
 
 export interface LocalComposerDraft {
 	active: ComposerDraftSnapshot;
@@ -35,6 +40,8 @@ export function emptyComposerDraft(): LocalComposerDraft {
 export class LocalComposerDraftStore {
 	private entry: Entry;
 	private closed = false;
+	private disposed = false;
+	private persistedEntry: string;
 	private inFlight = false;
 	private reportedFailure = false;
 	private readonly claimed: Set<string>;
@@ -46,7 +53,11 @@ export class LocalComposerDraftStore {
 		try { restored = this.read().find(item => !this.claimed.has(item.id)); }
 		catch { this.reportError(); }
 		this.entry = restored ?? { id: newDraftId(), revision: 0, draft: emptyComposerDraft(), pending: null };
+		this.persistedEntry = JSON.stringify(restored ?? null);
 		this.claimed.add(this.entry.id);
+		const active = stores.get(storage) ?? new Set<LocalComposerDraftStore>();
+		active.add(this);
+		stores.set(storage, active);
 	}
 
 	get draft(): LocalComposerDraft { return clone(this.entry.draft); }
@@ -73,6 +84,7 @@ export class LocalComposerDraftStore {
 
 	// 只清理提交时的版本；即使正文后来改回同文，也不能清理新输入。
 	committed(id: string, clearCurrent: boolean): void {
+		if (this.disposed) return;
 		const pending = this.entry.pending;
 		if (!pending || pending.id !== id) return;
 		if (clearCurrent && pending.revision === this.entry.revision) {
@@ -84,19 +96,30 @@ export class LocalComposerDraftStore {
 		this.persist();
 	}
 
-	acknowledgePending(): void { this.entry.pending = null; this.persist(); }
+	acknowledgePending(): void { if (!this.disposed) { this.entry.pending = null; this.persist(); } }
 
 	finishSubmission(): void {
 		if (!this.inFlight) return;
 		this.inFlight = false;
-		if (this.closed) this.claimed.delete(this.entry.id);
+		if (this.closed) this.release();
 	}
 
 	close(): void {
 		if (this.closed) return;
 		this.closed = true;
 		// 未决写入仍持有认领，避免新视图恢复后又被旧保存回调清理。
-		if (!this.inFlight) this.claimed.delete(this.entry.id);
+		if (!this.inFlight) this.release();
+	}
+
+	// 插件卸载不同于关闭视图：旧异步回调不得再写设备草稿。
+	dispose(): void {
+		this.disposed = true;
+		this.closed = true;
+		this.release();
+	}
+
+	private release(): void {
+		if (stores.get(this.storage)?.delete(this)) this.claimed.delete(this.entry.id);
 	}
 
 	private read(): Entry[] {
@@ -110,8 +133,16 @@ export class LocalComposerDraftStore {
 	}
 
 	private persist(): void {
+		if (this.disposed) return;
 		try {
-			const entries = this.read().filter(item => item.id !== this.entry.id);
+			const latest = this.read();
+			// 比较实际持久化基线，不能用旧实例的内存版本覆盖重载后的新版本。
+			if (JSON.stringify(latest.find(item => item.id === this.entry.id) ?? null) !== this.persistedEntry) {
+				this.dispose();
+				this.reportError();
+				return;
+			}
+			const entries = latest.filter(item => item.id !== this.entry.id);
 			const draft = this.entry.draft;
 			if (draft.active.content.length || draft.active.referenceText !== null || draft.editingMemo || draft.suspendedCreate || this.entry.pending) {
 				entries.push(clone(this.entry));
@@ -119,6 +150,7 @@ export class LocalComposerDraftStore {
 			this.storage.saveLocalStorage(STORAGE_KEY, { schema: 1, entries });
 			// 某些宿主会静默忽略写入，读回失败也必须提示。
 			if (JSON.stringify(this.read()) !== JSON.stringify(entries)) throw new Error("Draft write was not retained");
+			this.persistedEntry = JSON.stringify(entries.find(item => item.id === this.entry.id) ?? null);
 			this.reportedFailure = false;
 		} catch { this.reportError(); }
 	}

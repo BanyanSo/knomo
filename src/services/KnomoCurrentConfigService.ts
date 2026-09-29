@@ -15,8 +15,6 @@ export class KnomoCurrentConfigService {
 	constructor(private readonly settings: SettingsService, private readonly daily: DailyNotesProvider,
 		private readonly locale: () => string) {}
 
-	initializeLocalConfig(): Promise<void> { return this.daily.loadConfig().then(() => undefined); }
-
 	initialize(): Promise<void> {
 		if (this.initializing !== null) return this.initializing;
 		this.initializing = this.initializeCurrent().catch((error: unknown) => {

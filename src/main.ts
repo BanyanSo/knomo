@@ -73,8 +73,18 @@ export default class KnomoPlugin extends Plugin {
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
 	private quickCommandController: KnomoQuickCommandController<WorkspaceLeaf> | null = null;
+	private cancelStartup: (() => void) | null = null;
 
 	async onload(): Promise<void> {
+		try {
+			await this.initializePlugin();
+		} catch (error) {
+			this.cancelStartup?.();
+			throw error;
+		}
+	}
+
+	private async initializePlugin(): Promise<void> {
 		registerKnomoIcons();
 		const selfWriteTracker = new SelfWriteTracker();
 		const lowPriorityWorkQueue = new LowPriorityWorkQueue(() => this.app.workspace.containerEl.win);
@@ -89,15 +99,9 @@ export default class KnomoPlugin extends Plugin {
 			assertActive: () => { if (lowPriorityWorkQueue.signal.aborted) throw new Error("Monthly relocation cancelled."); },
 		});
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
-		const settingsLoaded = await this.loadSettingsSafely();
-		if (settingsLoaded) {
-			await this.initializeTimeBuoyDefaultSafely();
-		}
-
 		const diaryMemoParser = new DiaryMemoParser();
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
 		const dailyNoteService = new DailyNoteService(this.app, dailyNotesProvider);
-		await this.refreshDailyStatusSafely(dailyNoteService);
 		const attachmentService = new AttachmentService(this.app);
 
 		const memoCatalogStore = new FallbackMemoCatalogStore(
@@ -105,11 +109,28 @@ export default class KnomoPlugin extends Plugin {
 			new InMemoryMemoCatalogStore(),
 			async () => { await this.catalogIndexCoordinator?.refreshLocalCatalog(); },
 		);
-		this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
-		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
-		await this.memoCatalogService.open();
+		const memoCatalogService = this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
+		this.cancelStartup = () => {
+			lowPriorityWorkQueue.stop();
+			memoCatalogService.close();
+		};
+		this.register(this.cancelStartup);
+		// 三路独立 I/O 同步发起并立即汇合；时间浮标默认值仍串行等待设置。
+		// 工作区恢复可能早于布局就绪，视图注册必须等待 DB（含降级）打开终态。
+		const [settingsLoaded] = await Promise.all([
+			(async () => {
+				const loaded = await this.loadSettingsSafely();
+				if (loaded && !lowPriorityWorkQueue.signal.aborted) await this.initializeTimeBuoyDefaultSafely();
+				return loaded;
+			})(),
+			this.refreshDailyStatusSafely(dailyNoteService),
+			memoCatalogService.open().finally(() => {
+				// 卸载时 open 可能尚未完成，晚到的连接也必须关闭。
+				if (lowPriorityWorkQueue.signal.aborted) memoCatalogService.close();
+			}),
+		]);
+		if (lowPriorityWorkQueue.signal.aborted) return;
 		const knomoCurrentConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage());
-		await knomoCurrentConfigService.initializeLocalConfig();
 
 		const getEffectiveDailyConfig = () => {
 			const config = dailyNotesProvider.getConfig();
@@ -467,6 +488,7 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.cancelStartup?.();
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 			if (leaf.view instanceof KnomoView) leaf.view.flushLocalDraft();
 		}

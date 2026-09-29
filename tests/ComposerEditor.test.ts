@@ -1761,3 +1761,35 @@ test("真实保存回调在关闭后清理对应草稿，旧保存不能清理�
 		} finally { f.close(); }
 	}
 });
+
+test("Tag Suggest deferred readiness respects changed input, close, IME and rejection", async () => {
+	await ensureObsidianStub();
+	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
+	for (const action of ["current", "edit", "close", "ime", "failure"] as const) {
+		const { editor, win, close } = environment("#");
+		let resolve!: () => void;
+		let reject!: (error: Error) => void;
+		const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+		const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
+			getSnapshot: () => ({ suggestions: [] }), ensureReady: () => pending,
+		} as never);
+		// 仅观测真实 refresh 是否读取候选，避免以 mock 替代输入上下文/IME 检查。
+		let reads = 0;
+		Object.assign(suggest, { getSuggestions: () => { reads++; return []; } });
+		try {
+			editor.view.focus();
+			suggest.openForCurrentTrigger();
+			const before = reads;
+			if (action === "edit") editor.view.dispatch({ changes: { from: 1, insert: "other" } });
+			if (action === "close") suggest.close();
+			if (action === "ime") editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+			if (action === "failure") reject(new Error("index unavailable"));
+			else resolve();
+			for (let i = 0; i < 10; i++) await Promise.resolve();
+			assert.equal(reads - before, action === "current" ? 1 : 0, action);
+		} finally {
+			suggest.close();
+			close();
+		}
+	}
+});

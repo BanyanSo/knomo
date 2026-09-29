@@ -64,6 +64,9 @@ export class KnomoTagSuggest {
 		const context = this.inputEl.composer.capture();
 		void this.vaultTagIndex.ensureReady().then(() => {
 			if (generation === this.requestGeneration && context.valid()) this.refresh();
+		}).catch((error: unknown) => {
+			if (generation === this.requestGeneration && context.valid()) this.clear();
+			console.error("[Knomo] Tag suggestions could not be loaded", error);
 		});
 	}
 	refresh(): void {

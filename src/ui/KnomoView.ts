@@ -1126,11 +1126,22 @@ export class KnomoView extends ItemView {
 			if (!this.trashViewClosed && this.containerEl.isShown()) this.handleLocalDateChange();
 		}));
 		this.contentEl.addClass("knomo-view-host");
+		let tagRenderFrame: number | null = null;
+		let tagRevision = this.vaultTagIndex.getSnapshot().revision;
+		const tagWindow = this.containerEl.win;
 		this.register(this.vaultTagIndex.subscribe(() => {
-			if (this.rootEl !== null) {
-				this.renderTags();
-			}
+			const snapshot = this.vaultTagIndex.getSnapshot();
+			if (snapshot.revision <= tagRevision || this.trashViewClosed) return;
+			tagRevision = snapshot.revision;
+			if (tagRenderFrame !== null) return;
+			tagRenderFrame = tagWindow.requestAnimationFrame(() => {
+				tagRenderFrame = null;
+				if (this.rootEl !== null && !this.trashViewClosed) this.renderTags();
+			});
 		}));
+		this.register(() => {
+			if (tagRenderFrame !== null) tagWindow.cancelAnimationFrame(tagRenderFrame);
+		});
 		if (Platform.isMobile) {
 			this.updateCurrentLayout();
 		}
@@ -2791,7 +2802,9 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (!Platform.isMobile && this.vaultTagIndex.getSnapshot().status === "idle") {
-			void this.vaultTagIndex.ensureReady();
+			void this.vaultTagIndex.ensureReady().catch((error: unknown) => {
+				if (!this.trashViewClosed) console.error("[Knomo] Sidebar tag index could not be loaded", error);
+			});
 		}
 		if (this.libraryTagFacets === null) {
 			this.allTagsEl?.setAttr("aria-busy", "true");
@@ -6117,10 +6130,11 @@ export class KnomoView extends ItemView {
 
 	private async ensureSidebarIndexes(): Promise<void> {
 		void this.trashMemoController.ensureLoaded();
-		const yieldToUi = () => new Promise<void>((resolve) => {
-			this.containerEl.win.setTimeout(resolve, 0);
-		});
-		await this.vaultTagIndex.ensureReady(yieldToUi);
+		try {
+			await this.vaultTagIndex.ensureReady();
+		} catch (error) {
+			if (!this.trashViewClosed) console.error("[Knomo] Sidebar tag index could not be loaded", error);
+		}
 	}
 
 	private scheduleTrashCountRefresh(): void {

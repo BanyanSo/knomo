@@ -130,7 +130,28 @@ export default class KnomoPlugin extends Plugin {
 			}),
 		]);
 		if (lowPriorityWorkQueue.signal.aborted) return;
-		const knomoCurrentConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage());
+		const knomoCurrentConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage(), {
+			cancellationSignal: lowPriorityWorkQueue.signal,
+			prepareInitialization: async (reload) => {
+				if (reload) await this.initializeTimeBuoyDefaultSafely();
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				if (this.settingsService.getLoadStatus() === "ready") await this.initializeMonthlyExcludeDefaultSafely();
+			},
+		});
+		let catalogInitialization: Promise<void>;
+		let catalogInitialized = false;
+		let monthlyInitialization: Promise<void> | null = null;
+		const initializeMonthly = async () => {
+			await catalogInitialization;
+			if (lowPriorityWorkQueue.signal.aborted || !knomoCurrentConfigService.isMonthlyProjectionAllowed()) return;
+			if (monthlyInitialization === null) {
+				monthlyInitialization = this.monthlyProjectionCoordinator!.initialize().catch(error => {
+					monthlyInitialization = null;
+					throw error;
+				});
+			}
+			await monthlyInitialization;
+		};
 
 		const getEffectiveDailyConfig = () => {
 			const config = dailyNotesProvider.getConfig();
@@ -175,7 +196,7 @@ export default class KnomoPlugin extends Plugin {
 					if (this.catalogReadService === null) throw new Error("Catalog read service is not available.");
 					return this.catalogReadService.listMonthlyProjectionPeriods();
 				},
-				isProjectionAllowed: () => knomoCurrentConfigService.isMonthlyProjectionAllowed(),
+				isProjectionAllowed: () => catalogInitialized && knomoCurrentConfigService.isMonthlyProjectionAllowed(),
 				workQueue: lowPriorityWorkQueue,
 				onStateChanged: () => {
 					const failureVisible = this.monthlyProjectionCoordinator?.getProjectionState() === "failed";
@@ -324,6 +345,11 @@ export default class KnomoPlugin extends Plugin {
 				const nextTrashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
 				trashStore.invalidateConfiguration(nextTrashConfiguration !== trashConfiguration);
 				trashConfiguration = nextTrashConfiguration;
+				if (knomoCurrentConfigService.getStatus() !== "ready") await knomoCurrentConfigService.initialize();
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				// 默认值通知不能提前启动 Monthly；复用本次 inventory 和初始化。
+				try { await initializeMonthly(); } catch { return; }
+				if (lowPriorityWorkQueue.signal.aborted) return;
 				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
 				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.queueRefreshOpenViews();
@@ -343,24 +369,21 @@ export default class KnomoPlugin extends Plugin {
 		const shuffleDayService = new ShuffleDayService(pluginDataStore);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
 		const retryRuntimeState = async (): Promise<void> => {
-			let settingsRecovered = false;
-			if (this.settingsService.getLoadStatus() === "unavailable") {
-				await this.settingsService.loadSettings();
-				await this.settingsService.initializeTimeBuoyDefault().catch(() => undefined);
-				await this.settingsService.initializeMonthlyExcludeDefault();
-				await startupBootstrapService.initialize();
-				settingsRecovered = true;
-			} else if (startupBootstrapService.getSnapshot().status === "unavailable") {
-				await startupBootstrapService.initialize();
-			} else if (knomoCurrentConfigService.getStatus() === "unavailable") {
-				await knomoCurrentConfigService.reloadConfiguration();
+			const settingsRecovered = this.settingsService.getLoadStatus() === "unavailable";
+			if (settingsRecovered || startupBootstrapService.getSnapshot().status === "unavailable"
+				|| knomoCurrentConfigService.getStatus() !== "ready") {
+				const retry = knomoCurrentConfigService.reloadConfiguration();
+				await startupBootstrapService.initialize(retry);
 			}
+			if (lowPriorityWorkQueue.signal.aborted) return;
 			const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
 			await this.memoCatalogService?.open();
-			if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
-				await this.catalogIndexCoordinator?.refreshLocalCatalog();
+			if (!catalogInitialized || settingsRecovered || catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
+				await catalogInitialization.catch(() => undefined);
+				catalogInitialization = this.catalogIndexCoordinator!.refreshLocalCatalog().then(() => { catalogInitialized = true; });
+				await catalogInitialization;
 			}
-			if (settingsRecovered) await this.catalogIndexCoordinator?.refreshLocalCatalog();
+			await initializeMonthly();
 			await this.legacyTrashMigrationService?.run();
 		};
 		this.quickCommandController = new KnomoQuickCommandController({
@@ -462,16 +485,17 @@ export default class KnomoPlugin extends Plugin {
 		);
 		this.addSettingTab(settingTab);
 
+		// 前台默认值已完成；后台配置串行链与 inventory 同步启动。
+		const configurationInitialization = knomoCurrentConfigService.initialize();
+		const bootstrapInitialization = startupBootstrapService.initialize(configurationInitialization).catch(() => undefined);
+		catalogInitialization = this.catalogIndexCoordinator!.initialize().then(() => { catalogInitialized = true; });
 		this.runtimeInitializationPromise = initializeCatalogRuntime({
-			initializeCatalog: () => this.catalogIndexCoordinator!.initialize(),
+			initializeCatalog: () => catalogInitialization,
 			primeCatalog: async () => { await this.catalogReadService?.prime(); },
-			initializeConfiguration: async () => {
-				await knomoCurrentConfigService.initialize();
-				if (!lowPriorityWorkQueue.signal.aborted) await this.initializeMonthlyExcludeDefaultSafely();
-			},
-			initializeMonthly: async () => { await this.monthlyProjectionCoordinator?.initialize(); },
+			initializeConfiguration: () => configurationInitialization,
+			initializeMonthly,
 			initializeRecovery: async () => {
-				if (settingsLoaded) await startupBootstrapService.initialize().catch(() => undefined);
+				if (settingsLoaded) await bootstrapInitialization;
 				if (!lowPriorityWorkQueue.signal.aborted) await this.legacyTrashMigrationService?.run();
 			},
 			isCancelled: () => lowPriorityWorkQueue.signal.aborted,

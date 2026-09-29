@@ -11,6 +11,9 @@ let Daily: typeof import("../src/services/DailyNotesProvider").DailyNotesProvide
 let Indexed: typeof import("../src/services/IndexedDbMemoCatalogStore").IndexedDbMemoCatalogStore;
 let Memory: typeof import("../src/services/MemoCatalogStore").InMemoryMemoCatalogStore;
 let Coordinator: typeof import("../src/services/CatalogIndexCoordinator").CatalogIndexCoordinator;
+let Current: typeof import("../src/services/KnomoCurrentConfigService").KnomoCurrentConfigService;
+let Monthly: typeof import("../src/services/MonthlyProjectionCoordinator").MonthlyProjectionCoordinator;
+let Bootstrap: typeof import("../src/services/KnomoStartupBootstrapService").KnomoStartupBootstrapService;
 
 before(async () => {
 	await ensureObsidianStub();
@@ -20,6 +23,9 @@ before(async () => {
 	({ IndexedDbMemoCatalogStore: Indexed } = await import("../src/services/IndexedDbMemoCatalogStore"));
 	({ InMemoryMemoCatalogStore: Memory } = await import("../src/services/MemoCatalogStore"));
 	({ CatalogIndexCoordinator: Coordinator } = await import("../src/services/CatalogIndexCoordinator"));
+	({ KnomoCurrentConfigService: Current } = await import("../src/services/KnomoCurrentConfigService"));
+	({ MonthlyProjectionCoordinator: Monthly } = await import("../src/services/MonthlyProjectionCoordinator"));
+	({ KnomoStartupBootstrapService: Bootstrap } = await import("../src/services/KnomoStartupBootstrapService"));
 });
 
 function deferred() {
@@ -32,16 +38,22 @@ function deferred() {
 // 只推进一个事件循环边界，不依赖任意毫秒延迟。
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
-function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable" = "ready") {
+function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable" = "ready", p2 = false) {
 	const settings = deferred(), daily = deferred(), db = deferred(), defaults = deferred(), background = deferred();
+	const monthly = deferred();
+	if (!p2) monthly.resolve();
 	const calls: string[] = [];
 	const layouts: Array<() => void> = [];
 	const queries: Array<Promise<CatalogQueryPage>> = [];
 	let primary: InstanceType<typeof Indexed> | undefined;
 	let provider: InstanceType<typeof Daily> | undefined;
+	let current: InstanceType<typeof Current> | undefined;
+	let bootstrap: InstanceType<typeof Bootstrap> | undefined;
+	let saved: unknown = p2 ? { dailyHeading: "## Capture", memoTimeFormat: "HH:mm" } : { timeBuoyEnabled: false };
 	const app = {
 		vault: { configDir: ".obsidian", getName: () => t.name, on: () => ({}),
-			adapter: { read: async () => { throw new Error("Daily unavailable"); } } },
+			adapter: { read: async () => { throw new Error("Daily unavailable"); } },
+			getConfig: () => [], setConfig: async () => undefined },
 		metadataCache: { on: () => ({}) },
 		workspace: { containerEl: { win: { setTimeout, clearTimeout }, doc: { visibilityState: "visible", body: { removeClass() {}, findAll: () => [] } } },
 			on: () => ({}), getLeavesOfType: () => [], onLayoutReady: (callback: () => void) => layouts.push(callback) },
@@ -51,7 +63,8 @@ function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable
 	} as unknown as App;
 	const plugin = new Plugin(app, {} as PluginManifest);
 	Object.assign(plugin, {
-		app, manifest: { version: "test" }, loadData: async () => ({ timeBuoyEnabled: false }),
+		app, manifest: { version: "test" }, loadData: async () => saved,
+		saveData: async (value: unknown) => { saved = value; },
 		registerView: () => {
 			calls.push("view");
 			// 模拟 layout-ready 之前恢复视图的首次真实 store 查询。
@@ -66,15 +79,35 @@ function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable
 		await settings.promise;
 		return loadSettings.call(this);
 	});
+	const timeDefault = Settings.prototype.initializeTimeBuoyDefault;
 	t.mock.method(Settings.prototype, "initializeTimeBuoyDefault", async function (this: InstanceType<typeof Settings>) {
 		calls.push("defaults");
 		await defaults.promise;
-		return this.getSettings();
+		return p2 ? timeDefault.call(this) : this.getSettings();
 	});
+	const monthlyDefault = Settings.prototype.initializeMonthlyExcludeDefault;
 	t.mock.method(Settings.prototype, "initializeMonthlyExcludeDefault", async function (this: InstanceType<typeof Settings>) {
 		calls.push("monthly-defaults");
-		return this.getSettings();
+		await monthly.promise;
+		return p2 ? monthlyDefault.call(this) : this.getSettings();
 	});
+	const initialize = Current.prototype.initialize;
+	t.mock.method(Current.prototype, "initialize", function (this: InstanceType<typeof Current>) {
+		current = this;
+		return initialize.call(this);
+	});
+	const verify = Settings.prototype.verifyCurrentSettings;
+	t.mock.method(Settings.prototype, "verifyCurrentSettings", function (this: InstanceType<typeof Settings>, ...args: Parameters<typeof verify>) {
+		calls.push("verify");
+		return verify.apply(this, args);
+	});
+	const bootstrapInitialize = Bootstrap.prototype.initialize;
+	t.mock.method(Bootstrap.prototype, "initialize", function (this: InstanceType<typeof Bootstrap>, ...args: Parameters<typeof bootstrapInitialize>) {
+		bootstrap = this;
+		return bootstrapInitialize.apply(this, args);
+	});
+	t.mock.method(Monthly.prototype, "initialize", async () => { calls.push("monthly"); });
+	t.mock.method(Monthly.prototype, "handleConfigurationChanged", async () => { calls.push("monthly-change"); });
 	const loadDaily = Daily.prototype.loadConfig;
 	t.mock.method(Daily.prototype, "loadConfig", async function (this: InstanceType<typeof Daily>) {
 		provider = this;
@@ -95,10 +128,12 @@ function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable
 		calls.push("close");
 		close.call(this);
 	});
-	// 停在 P2/inventory 入口，P1 测试不执行后续阶段。
+	// 受控 inventory，不依赖真实文件扫描耗时。
 	t.mock.method(Coordinator.prototype, "initialize", () => background.promise);
 	t.after(() => { plugin.unload(); background.resolve(); });
-	return { plugin, calls, settings, daily, db, defaults, queries, layouts,
+	return { plugin, calls, settings, daily, db, defaults, queries, layouts, monthly, background,
+		getCurrent: () => current!, getBootstrap: () => bootstrap!, saved: () => saved,
+		layout: () => { Object.assign(app.workspace, { layoutReady: true }); layouts.splice(0).forEach(callback => callback()); },
 		getPrimary: () => primary!, getDaily: () => provider!,
 		release: () => { settings.resolve(); daily.resolve(); db.resolve(); defaults.resolve(); } };
 }
@@ -122,7 +157,7 @@ test("P1 三分支先启动再汇合，默认值仍等待设置，视图恢复�
 	const [page] = await Promise.all(h.queries);
 	assert.equal(page!.lifecycle.state, "ready");
 	assert.notEqual(page!.coverage.kind, "complete");
-	assert.equal(h.calls.includes("monthly-defaults"), false);
+	assert.ok(h.calls.indexOf("monthly-defaults") > h.calls.indexOf("defaults"));
 	assert.ok(h.layouts.length > 0);
 });
 
@@ -230,4 +265,93 @@ test("P1 DB 与 fallback 均失败时及时收尾，慢设置完成后不继续�
 	assert.ok(h.calls.includes("close"));
 	assert.equal(h.calls.includes("defaults"), false);
 	assert.equal(h.calls.includes("view"), false);
+});
+
+test("P2 默认值与核验串行且复用，配置不等待 inventory，Monthly 等待两者", async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload();
+	h.release();
+	await loading;
+	h.layout();
+	await turn();
+	assert.equal(h.calls.filter(call => call === "monthly-defaults").length, 1);
+	assert.equal(h.calls.includes("verify"), false);
+	assert.equal(h.calls.includes("monthly"), false);
+	const sameAttempt = h.getCurrent().initialize();
+	h.monthly.resolve();
+	await sameAttempt;
+	await turn();
+	assert.equal(h.getCurrent().getStatus(), "ready");
+	assert.equal(h.getBootstrap().getSnapshot().status, "ready");
+	assert.equal(h.calls.filter(call => call === "verify").length, 1);
+	assert.equal(h.calls.includes("monthly"), false);
+	const saved = h.saved() as { settings: Record<string, unknown> };
+	assert.equal(saved.settings.dailyHeading, "## Capture");
+	assert.equal(saved.settings.memoTimeFormat, "HH:mm");
+	assert.equal(saved.settings.timeBuoyEnabled, true);
+	assert.equal(saved.settings.excludeMonthlyMemosFromObsidian, true);
+	assert.equal(saved.settings.currentConfigInitialized, true);
+	h.background.resolve();
+	await turn();
+	assert.equal(h.calls.filter(call => call === "monthly").length, 1);
+	assert.equal(h.calls.filter(call => call === "verify").length, 1);
+});
+
+test("P2 Catalog inventory 失败不阻断独立配置和 Bootstrap 就绪", async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	h.layout();
+	h.background.reject(new Error("inventory failed"));
+	h.monthly.resolve();
+	await turn();
+	assert.equal(h.getCurrent().getStatus(), "ready");
+	assert.equal(h.getBootstrap().getSnapshot().status, "ready");
+	assert.equal(h.calls.includes("monthly"), false);
+});
+
+test("P2 排除规则失败但 Settings 可读时继续核验并保留失败提示", async t => {
+	const h = harness(t, "ready", true);
+	Object.assign(h.plugin.app.vault, { getConfig: () => { throw new Error("exclude unreadable"); } });
+	const loading = h.plugin.onload(); h.release(); await loading;
+	h.monthly.resolve();
+	await h.getCurrent().initialize();
+	assert.equal(h.plugin.settingsService.hasMonthlyExcludeInitializationFailure(), true);
+	assert.equal(h.getCurrent().getStatus(), "ready");
+	assert.equal(h.calls.filter(call => call === "verify").length, 1);
+});
+
+test("P2 排除默认值持久化失败不标记 ready，Catalog 只读仍可用", async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	h.plugin.saveData = async () => { throw new Error("settings write failed"); };
+	h.monthly.resolve();
+	await assert.rejects(h.getCurrent().initialize());
+	assert.notEqual(h.getCurrent().getStatus(), "ready");
+	assert.equal((await h.queries[0])!.lifecycle.state, "ready");
+	assert.equal(h.calls.includes("monthly"), false);
+});
+
+test("P2 显式 reload 等待旧默认值终态，再串行读取与核验", async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	const retry = h.getCurrent().reloadConfiguration();
+	await turn();
+	assert.equal(h.calls.filter(call => call === "settings").length, 1);
+	assert.equal(h.calls.includes("verify"), false);
+	h.monthly.resolve();
+	await retry;
+	assert.equal(h.calls.filter(call => call === "settings").length, 2);
+	assert.equal(h.calls.filter(call => call === "verify").length, 2);
+	assert.equal(h.getCurrent().getStatus(), "ready");
+});
+
+test("P2 Monthly 默认值等待中卸载，后到结果不再核验或发布就绪", async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	const pending = h.getCurrent().initialize();
+	h.plugin.unload(); h.monthly.resolve();
+	await assert.rejects(pending, /cancelled/);
+	assert.equal(h.calls.includes("verify"), false);
+	assert.notEqual(h.getCurrent().getStatus(), "ready");
+	assert.notEqual(h.getBootstrap().getSnapshot().status, "ready");
 });

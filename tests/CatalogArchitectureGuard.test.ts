@@ -123,7 +123,8 @@ test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分
 	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
 	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 2);
 	assert.match(main, /initializeCatalogRuntime\(\{/u);
-	assert.match(main, /initializeCatalog: \(\) => this\.catalogIndexCoordinator!\.initialize\(\)/u);
+	assert.match(main, /catalogInitialization = this\.catalogIndexCoordinator!\.initialize\(\)/u);
+	assert.match(main, /initializeCatalog: \(\) => catalogInitialization/u);
 	const startup = fs.readFileSync("src/services/CatalogStartup.ts", "utf8");
 	assert.ok(startup.indexOf("await options.initializeCatalog()") < startup.indexOf("await options.initializeMonthly()"));
 	assert.equal(monthlyInput.includes("dailyInventory.listPeriod(period)"), true);

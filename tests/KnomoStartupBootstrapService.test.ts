@@ -28,7 +28,7 @@ test("启动等待布局并合并并发请求，只初始化配置且不访问 T
  assert.deepEqual(f.calls, []);
  f.layoutReady(); await first;
  assert.equal(f.service.getSnapshot().status, "ready");
- assert.deepEqual(f.calls, ["config", "config"]);
+ assert.deepEqual(f.calls, ["config"]);
  assert.equal(f.vault.read("Daily/2026-08-22.md"), "- 09:00 memo\n");
  assert.equal(f.vault.paths().some(p => /identity|receipts|writer|current-state|segments/.test(p)), false);
 });
@@ -61,4 +61,28 @@ test("损坏 Trash 不参与启动初始化，启动不创建恢复目录或单�
  await f.service.initialize();
  assert.equal(f.service.getSnapshot().status, "ready");
  assert.equal(f.vault.read("Knomo/knomo-trash.json"), "broken");
+});
+
+test("Bootstrap 复用已完成的启动核验，布局前失败立即处理且允许新尝试", async () => {
+	const f = fixture(false);
+	const failed = f.service.initialize(Promise.reject(new Error("configuration failed")));
+	await new Promise<void>(resolve => setImmediate(resolve));
+	f.layoutReady();
+	await assert.rejects(failed, /configuration failed/);
+	assert.equal(f.service.getSnapshot().status, "unavailable");
+	await f.service.initialize(Promise.resolve());
+	assert.equal(f.service.getSnapshot().status, "ready");
+	assert.deepEqual(f.calls, []);
+});
+
+test("Bootstrap 新尝试等待旧报告终态并使用新操作结果", async () => {
+	const f = fixture(false);
+	const old = f.service.initialize(Promise.reject(new Error("old failure")));
+	const oldFailure = assert.rejects(old, /old failure/);
+	const retry = f.service.initialize(Promise.resolve());
+	f.layoutReady();
+	await oldFailure;
+	await retry;
+	assert.equal(f.service.getSnapshot().status, "ready");
+	assert.deepEqual(f.calls, []);
 });

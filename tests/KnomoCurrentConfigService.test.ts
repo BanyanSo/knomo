@@ -64,7 +64,7 @@ test("配置读取失败不覆盖已有值且不阻断 Daily 范围，写入和 
 	assert.equal(f.current.getStatus(), "ready");
 });
 
-async function fixture() {
+async function fixture(cancellationSignal?: AbortSignal) {
 	await ensureObsidianStub();
 	const { SettingsService } = await import("../src/services/SettingsService");
 	const { KnomoCurrentConfigService } = await import("../src/services/KnomoCurrentConfigService");
@@ -80,7 +80,7 @@ async function fixture() {
 	const settings = new SettingsService(plugin as never);
 	await settings.loadSettings();
 	const daily = { onChanged: () => () => undefined, getConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }), loadConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }) };
-	const current = new KnomoCurrentConfigService(settings, daily as never, () => "en");
+	const current = new KnomoCurrentConfigService(settings, daily as never, () => "en", { cancellationSignal });
 	return { settings, current, saved: () => saved, local: () => local,
 		setSaved: (value: unknown) => { saved = value; }, discardSaves: () => { discardSave = true; }, setReadFailure: (value: boolean) => { failure = value; } };
 }
@@ -132,4 +132,103 @@ test("已知 Obsidian Daily 配置读取暂时失败可继续浏览，显式禁�
 	runtime = { enabled: false };
 	assert.equal(await provider.loadConfig(), null);
 	assert.equal(changes, 2);
+});
+
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>(done => { resolve = done; });
+	return { promise, resolve };
+}
+
+test("核验期间配置改变，旧结果不标记 ready；显式重读核验当前配置", async t => {
+	const f = await fixture();
+	await f.current.initialize();
+	const gate = deferred(), entered = deferred();
+	const verify = f.settings.verifyCurrentSettings.bind(f.settings);
+	let checks = 0;
+	t.mock.method(f.settings, "verifyCurrentSettings", async (patch: Parameters<typeof verify>[0]) => {
+		checks++;
+		if (checks === 1) { entered.resolve(); await gate.promise; }
+		await verify(patch);
+	});
+	const pending = f.current.initialize();
+	await entered.promise;
+	await f.settings.updateSettings({ dailyHeading: "## New scope" });
+	assert.notEqual(f.current.getStatus(), "ready");
+	gate.resolve();
+	await assert.rejects(pending, /changed during verification/);
+	assert.equal(f.current.getStatus(), "unavailable");
+	await f.current.reloadConfiguration();
+	assert.equal(checks, 2);
+	assert.equal(f.current.getStatus(), "ready");
+	assert.equal(f.current.getEffectiveConfig().daily.headings[0], "## New scope");
+});
+
+test("核验失败后 retry 建立新操作，已经 ready 也不能永久跳过读回", async t => {
+	const f = await fixture();
+	await f.current.initialize();
+	let checks = 0;
+	const verify = f.settings.verifyCurrentSettings.bind(f.settings);
+	t.mock.method(f.settings, "verifyCurrentSettings", async (patch: Parameters<typeof verify>[0]) => {
+		if (++checks === 1) throw new Error("verification I/O failed");
+		await verify(patch);
+	});
+	await assert.rejects(f.current.initialize(), /I\/O failed/);
+	await f.current.reloadConfiguration();
+	await f.current.initialize();
+	assert.equal(checks, 3);
+	assert.equal(f.current.getStatus(), "ready");
+});
+
+test("核验读回等待期间卸载，晚到成功不发布 ready", async t => {
+	const cancellation = new AbortController();
+	const f = await fixture(cancellation.signal);
+	const gate = deferred(), entered = deferred();
+	t.mock.method(f.settings, "verifyCurrentSettings", async () => { entered.resolve(); await gate.promise; });
+	const pending = f.current.initialize();
+	await entered.promise;
+	cancellation.abort(); gate.resolve();
+	await assert.rejects(pending, /cancelled/);
+	assert.equal(f.current.getStatus(), "unavailable");
+});
+
+test("显式 reload 不被进行中的本地 refresh 吞掉，随后读取外部最新设置", async t => {
+	const f = await fixture();
+	await f.current.initialize();
+	const gate = deferred(), entered = deferred();
+	const verify = f.settings.verifyCurrentSettings.bind(f.settings);
+	let checks = 0;
+	t.mock.method(f.settings, "verifyCurrentSettings", async (patch: Parameters<typeof verify>[0]) => {
+		if (++checks === 1) { entered.resolve(); await gate.promise; }
+		await verify(patch);
+	});
+	const local = f.current.refreshLocalConfig();
+	await entered.promise;
+	const saved = f.saved() as { settings: Record<string, unknown> };
+	f.setSaved({ ...saved, settings: { ...saved.settings, dailyHeading: "## Remote" } });
+	const reload = f.current.reloadConfiguration();
+	gate.resolve();
+	await Promise.all([local, reload]);
+	assert.equal(checks, 2);
+	assert.equal(f.current.getEffectiveConfig().daily.headings[0], "## Remote");
+});
+
+test("配置失败不阻断 Catalog prime；慢 inventory 不阻断配置启动", async () => {
+	const inventory = deferred(), configured = deferred();
+	const calls: string[] = [];
+	const pending = initializeCatalogRuntime({
+		initializeCatalog: () => inventory.promise,
+		initializeConfiguration: async () => { calls.push("configuration"); configured.resolve(); throw new Error("configuration failed"); },
+		initializeMonthly: async () => { calls.push("monthly"); },
+		initializeRecovery: async () => { calls.push("recovery"); },
+		primeCatalog: async () => { calls.push("prime"); },
+		isCancelled: () => false, onAuxiliaryError: () => { calls.push("error"); },
+	});
+	await configured.promise;
+	assert.deepEqual(calls, ["configuration"]);
+	inventory.resolve();
+	assert.equal(await pending, true);
+	assert.ok(calls.includes("prime"));
+	assert.ok(calls.includes("error"));
+	assert.equal(calls.includes("monthly"), false);
 });

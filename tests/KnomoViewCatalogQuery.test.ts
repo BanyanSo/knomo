@@ -1,3 +1,4 @@
+import type { CatalogLibraryIndexesResult } from "../src/types/catalogView";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
@@ -704,8 +705,7 @@ test("完整 Catalog 的普通 revision 更新静默保留旧侧栏统计直到�
 	view.renderStats = () => { statsRenderCount += 1; };
 	view.renderTags = () => { tagsRenderCount += 1; };
 	view.getCatalogReadService = () => ({
-		getLibrarySummary: () => nextSummary.promise,
-		getTagFacets: () => nextFacets.promise,
+		getLibraryIndexes: async () => combineIndexes(await nextSummary.promise, await nextFacets.promise, 5),
 	});
 
 	const refreshing = view.refreshCatalogLibraryIndexes();
@@ -772,15 +772,11 @@ test("coverage 降级保留旧完整统计并标记更新中，恢复后按当�
 	view.renderTags = () => undefined;
 	view.syncRecordStatsSource = () => undefined;
 	view.getCatalogReadService = () => ({
-		getLibrarySummary: () => {
-			const load = summaryLoads.shift();
-			assert.notEqual(load, undefined);
-			return load?.promise ?? Promise.reject(new Error("missing summary request"));
-		},
-		getTagFacets: () => {
-			const load = facetLoads.shift();
-			assert.notEqual(load, undefined);
-			return load?.promise ?? Promise.reject(new Error("missing facet request"));
+		getLibraryIndexes: async () => {
+			const revision = view.catalogRevision;
+			const summary = summaryLoads.shift()!;
+			const facets = facetLoads.shift()!;
+			return combineIndexes(await summary.promise, await facets.promise, revision);
 		},
 	});
 
@@ -841,6 +837,7 @@ test("CAT-PAGE-001：分页合并超过旧窗口阈值时不丢失已显示的�
 type QueryMemo = MemoViewItem;
 
 interface QueryView {
+	trashViewClosed: boolean;
 	memoSourceGeneration: number;
 	catalogDesktopQueryRun: number;
 	catalogDesktopCountRun: number;
@@ -881,8 +878,7 @@ interface QueryView {
 	renderStats: () => void;
 	renderTags: () => void;
 	getCatalogReadService: () => {
-		getLibrarySummary: () => Promise<AggregateSummary>;
-		getTagFacets: () => Promise<AggregateFacets>;
+		getLibraryIndexes: () => Promise<CatalogLibraryIndexesResult>;
 	};
 	randomReunionController: {
 		getSnapshot: () => {
@@ -1040,12 +1036,14 @@ type TestCatalogMemoCount = {
 	coverage: TestCoverage;
 };
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } {
 	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
+	let rejectPromise: (reason: unknown) => void = () => undefined;
+	const promise = new Promise<T>((resolve, reject) => {
 		resolvePromise = resolve;
+		rejectPromise = reject;
 	});
-	return { promise, resolve: resolvePromise };
+	return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
 function makeMemo(id: string, createdAt: string): MemoViewItem {
@@ -1151,3 +1149,112 @@ class TestStatsElement {
 		return new TestStatsElement().asHtml();
 	}
 }
+
+function combineIndexes(summary: AggregateSummary, facets: AggregateFacets, catalogRevision: number): CatalogLibraryIndexesResult {
+	return { value: summary.value && facets.value ? { summary: summary.value, facets: facets.value } : null,
+		complete: summary.complete && facets.complete, coverage: summary.coverage, catalogRevision,
+		lifecycle: { state: "ready", persistent: true, writable: true, reason: null }, invalidated: false };
+}
+
+async function libraryFixture() {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	const requests: Array<ReturnType<typeof createDeferred<CatalogLibraryIndexesResult>>> = [];
+	let renders = 0;
+	Object.assign(view, {
+		catalogCoverage: completeCoverage(), catalogRevision: 1, libraryIndexRevision: 0, libraryIndexRun: 0,
+		libraryIndexesUpdating: false, trashViewClosed: false,
+		librarySummary: { memoCount: 1, tagCount: 1, imageCount: 0, wordCount: 1 },
+		libraryTagFacets: [{ key: "old", label: "old", count: 1 }],
+		renderStats: () => { renders++; }, renderTags: () => { renders++; },
+		syncRecordStatsSource: () => false,
+		getCatalogReadService: () => ({ getLibraryIndexes: () => {
+			const request = createDeferred<CatalogLibraryIndexesResult>(); requests.push(request); return request.promise;
+		} }),
+	});
+	const result = (revision: number) => combineIndexes({ value: { memoCount: revision, tagCount: 1, imageCount: 0, wordCount: revision }, complete: true, coverage: completeCoverage() },
+		{ value: [{ key: `tag-${revision}`, label: `tag-${revision}`, count: revision }], complete: true, coverage: completeCoverage() }, revision);
+	return { view, requests, result, renders: () => renders };
+}
+
+test("P3 同上下文共享 Promise，多次 revision 变化只补最新读取", async () => {
+	const h = await libraryFixture();
+	const first = h.view.refreshCatalogLibraryIndexes();
+	assert.strictEqual(h.view.refreshCatalogLibraryIndexes(), first);
+	h.view.catalogRevision = 2;
+	assert.strictEqual(h.view.refreshCatalogLibraryIndexes(), first);
+	h.view.catalogRevision = 3;
+	h.view.refreshCatalogLibraryIndexes();
+	assert.equal(h.requests.length, 1);
+	h.requests[0]!.resolve(h.result(1));
+	await waitUntil(() => h.requests.length === 2);
+	assert.equal(h.view.librarySummary!.memoCount, 1);
+	assert.equal(h.renders(), 0);
+	assert.strictEqual(h.view.refreshCatalogLibraryIndexes(), first);
+	h.requests[1]!.resolve(h.result(3));
+	await first;
+	assert.equal(h.requests.length, 2);
+	assert.equal(h.view.librarySummary!.memoCount, 3);
+	assert.equal(h.view.libraryTagFacets![0]!.key, "tag-3");
+	assert.equal(h.view.libraryIndexRevision, 3);
+});
+
+test("P3 拒绝来源 revision/coverage 不匹配及失效快照，后续刷新可重试", async () => {
+	const h = await libraryFixture();
+	for (const result of [h.result(2), { ...h.result(1), coverage: { ...completeCoverage(), configurationComplete: false } },
+		{ ...h.result(1), invalidated: true }]) {
+		const pending = h.view.refreshCatalogLibraryIndexes();
+		h.requests[h.requests.length - 1]!.resolve(result);
+		await pending;
+		assert.equal(h.view.libraryIndexRevision, -1);
+		assert.equal(h.view.libraryTagFacets![0]!.key, "old");
+	}
+	const retry = h.view.refreshCatalogLibraryIndexes();
+	h.requests[h.requests.length - 1]!.resolve(h.result(1));
+	await retry;
+	assert.equal(h.view.libraryIndexRevision, 1);
+});
+
+test("P3 失败清理进行中请求，保留旧值并允许重试", async () => {
+	const h = await libraryFixture();
+	const failed = h.view.refreshCatalogLibraryIndexes();
+	h.requests[0]!.reject(new Error("read failed"));
+	await failed;
+	assert.equal(h.view.librarySummary!.memoCount, 1);
+	assert.equal(h.view.libraryIndexesUpdating, false);
+	const retry = h.view.refreshCatalogLibraryIndexes();
+	assert.notStrictEqual(retry, failed);
+	h.requests[1]!.resolve(h.result(1));
+	await retry;
+	assert.equal(h.view.libraryIndexRevision, 1);
+});
+
+test("P3 重绘代次使旧结果失效，关闭后不补读或重绘", async () => {
+	const h = await libraryFixture();
+	const pending = h.view.refreshCatalogLibraryIndexes();
+	h.view.libraryIndexRun++;
+	h.view.refreshCatalogLibraryIndexes();
+	h.requests[0]!.resolve(h.result(1));
+	await waitUntil(() => h.requests.length === 2);
+	assert.equal(h.renders(), 0);
+	h.view.trashViewClosed = true;
+	h.requests[1]!.resolve(h.result(1));
+	await pending;
+	assert.equal(h.renders(), 0);
+	assert.equal(h.view.libraryIndexRevision, 0);
+});
+
+test("P3 同 revision 的 coverage 变化合并为最新请求", async () => {
+	const h = await libraryFixture();
+	const pending = h.view.refreshCatalogLibraryIndexes();
+	const coverage = { ...completeCoverage(), coveredFileCount: 2, totalFileCount: 2 };
+	h.view.updateCatalogProgress(coverage);
+	h.requests[0]!.resolve(h.result(1));
+	await waitUntil(() => h.requests.length === 2);
+	assert.equal(h.renders(), 0);
+	h.requests[1]!.resolve({ ...h.result(1), coverage });
+	await pending;
+	assert.equal(h.view.libraryIndexRevision, 1);
+	assert.equal(h.view.libraryTagFacets![0]!.key, "tag-1");
+});

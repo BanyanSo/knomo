@@ -72,6 +72,7 @@ export class MemoCatalogService {
 	listDailyAggregates(fromDate?: string, toDate?: string) {
 		return this.store.listDailyAggregates(fromDate, toDate);
 	}
+	readAggregateSnapshot() { return this.store.readAggregateSnapshot(); }
 
 	getStore(): MemoCatalogStore {
 		return this.store;

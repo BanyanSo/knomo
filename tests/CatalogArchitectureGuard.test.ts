@@ -76,6 +76,7 @@ test("全库统计和功能查询只从 Catalog Read Service 获取", () => {
 	assert.equal(view.includes("collectTags(this.memos"), false);
 	assert.equal(view.includes("ensureAllMemosLoaded"), false);
 	for (const method of [
+		"getLibraryIndexes",
 		"getLibrarySummary",
 		"getTagFacets",
 		"queryReviewItems",

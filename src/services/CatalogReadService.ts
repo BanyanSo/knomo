@@ -14,6 +14,7 @@ import type {
 	CatalogFunctionPageRequest,
 	CatalogAggregateResult,
 	CatalogLibrarySummary,
+	CatalogLibraryIndexesResult,
 	CatalogMemoItem,
 	CatalogMemoCountResult,
 	CatalogMemoPage,
@@ -208,16 +209,17 @@ export class CatalogReadService {
 		const aggregates = await this.options.catalog.listDailyAggregates();
 		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
 		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
-		const tagKeys = new Set(aggregates.flatMap((aggregate) => Object.keys(aggregate.tagMemoCounts ?? {})));
+		return { value: buildLibrarySummary(aggregates), complete: true, coverage: verifiedCoverage };
+	}
+
+	async getLibraryIndexes(): Promise<CatalogLibraryIndexesResult> {
+		const snapshot = await this.options.catalog.readAggregateSnapshot();
+		const complete = !snapshot.invalidated && isCompleteCoverage(snapshot.coverage)
+			&& snapshot.lifecycle.state === "ready";
 		return {
-			value: {
-				memoCount: sumAggregates(aggregates, (aggregate) => aggregate.memoCount),
-				tagCount: tagKeys.size,
-				imageCount: sumAggregates(aggregates, (aggregate) => aggregate.imageCount),
-				wordCount: sumAggregates(aggregates, (aggregate) => aggregate.wordCount ?? 0),
-			},
-			complete: true,
-			coverage: verifiedCoverage,
+			value: complete ? { summary: buildLibrarySummary(snapshot.aggregates), facets: buildTagFacets(snapshot.aggregates) } : null,
+			complete, catalogRevision: snapshot.catalogRevision, coverage: snapshot.coverage,
+			lifecycle: snapshot.lifecycle, invalidated: snapshot.invalidated,
 		};
 	}
 
@@ -227,23 +229,7 @@ export class CatalogReadService {
 		const aggregates = await this.options.catalog.listDailyAggregates();
 		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
 		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
-		const counts = new Map<string, number>();
-		const labels = new Map<string, string>();
-		for (const aggregate of aggregates) {
-			for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
-				counts.set(key, (counts.get(key) ?? 0) + count);
-			}
-			for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
-				if (!labels.has(key)) labels.set(key, label);
-			}
-		}
-		return {
-			value: [...counts.entries()]
-				.map(([key, count]) => ({ key, label: labels.get(key) ?? key, count }))
-				.sort((left, right) => right.count - left.count || left.key.localeCompare(right.key)),
-			complete: true,
-			coverage: verifiedCoverage,
-		};
+		return { value: buildTagFacets(aggregates), complete: true, coverage: verifiedCoverage };
 	}
 
 	async getCoverageForRange(fromDate: string, toDate: string): Promise<boolean> {
@@ -842,4 +828,30 @@ function sumAggregates(
 	getValue: (aggregate: CatalogDailyAggregate) => number,
 ): number {
 	return aggregates.reduce((total, aggregate) => total + getValue(aggregate), 0);
+}
+
+function buildLibrarySummary(aggregates: CatalogDailyAggregate[]): CatalogLibrarySummary {
+	const tagKeys = new Set(aggregates.flatMap(aggregate => Object.keys(aggregate.tagMemoCounts ?? {})));
+	return {
+		memoCount: sumAggregates(aggregates, (aggregate) => aggregate.memoCount),
+		tagCount: tagKeys.size,
+		imageCount: sumAggregates(aggregates, (aggregate) => aggregate.imageCount),
+		wordCount: sumAggregates(aggregates, (aggregate) => aggregate.wordCount ?? 0),
+	};
+}
+
+function buildTagFacets(aggregates: CatalogDailyAggregate[]): CatalogTagFacet[] {
+	const counts = new Map<string, number>();
+	const labels = new Map<string, string>();
+	for (const aggregate of aggregates) {
+		for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
+			counts.set(key, (counts.get(key) ?? 0) + count);
+		}
+		for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
+			if (!labels.has(key)) labels.set(key, label);
+		}
+	}
+	return [...counts.entries()]
+		.map(([key, count]) => ({ key, label: labels.get(key) ?? key, count }))
+		.sort((left, right) => right.count - left.count || left.key.localeCompare(right.key));
 }

@@ -1,4 +1,5 @@
 import type {
+	CatalogAggregateSnapshot,
 	CatalogCoverage,
 	CatalogDailyAggregate,
 	CatalogFilePartition,
@@ -47,6 +48,7 @@ export interface MemoCatalogStore {
 	query(request: CatalogQuery): Promise<CatalogQueryPage>;
 	queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage>;
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]>;
+	readAggregateSnapshot(): Promise<CatalogAggregateSnapshot>;
 	getCoverage(): Promise<CatalogCoverage>;
 	setCoverage(coverage: CatalogCoverage): Promise<void>;
 	saveScanProgress(coverage: CatalogCoverage, metadata: readonly CatalogMetaEntry[]): Promise<void>;
@@ -65,13 +67,15 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	private catalogRevision = 0;
 	private coverage: CatalogCoverage = { ...DEFAULT_CATALOG_COVERAGE };
 	private capacityLimited = false;
+	private snapshotClosed = false;
+	private snapshotGeneration = 0;
 
 	constructor(private readonly maxObservations = IN_MEMORY_CATALOG_OBSERVATION_LIMIT) {}
 
-	async open(): Promise<void> {}
+	async open(): Promise<void> { this.snapshotClosed = false; }
 	async getCatalogRevision(): Promise<number> { return this.catalogRevision; }
 
-	close(): void {}
+	close(): void { this.snapshotClosed = true; this.snapshotGeneration++; }
 
 	getLifecycle(): CatalogStoreLifecycle {
 		return { state: "ready", persistent: false, writable: true, reason: null };
@@ -225,6 +229,18 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]> {
+		return this.collectDailyAggregates(fromDate, toDate);
+	}
+
+	readAggregateSnapshot(): Promise<CatalogAggregateSnapshot> {
+		// 采集期间没有异步插入点，数据与元信息属于同一个内存状态。
+		const generation = this.snapshotGeneration;
+		return Promise.resolve({ aggregates: this.collectDailyAggregates(), catalogRevision: this.catalogRevision,
+			coverage: clone(this.coverage), lifecycle: this.getLifecycle(), invalidated: this.snapshotClosed })
+			.then(snapshot => ({ ...snapshot, invalidated: snapshot.invalidated || generation !== this.snapshotGeneration }));
+	}
+
+	private collectDailyAggregates(fromDate?: string, toDate?: string): CatalogDailyAggregate[] {
 		const byDate = new Map<string, CatalogDailyAggregate>();
 		for (const aggregate of this.aggregates.values()) {
 			if ((fromDate !== undefined && aggregate.logicalDate < fromDate)
@@ -332,6 +348,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 }
 
 export class FallbackMemoCatalogStore implements MemoCatalogStore {
+	private snapshotGeneration = 0;
 	private active: MemoCatalogStore | null = null;
 	private fallbackActive = false;
 	private activatingFallback: Promise<void> | null = null;
@@ -354,6 +371,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async open(): Promise<void> {
+		this.snapshotGeneration++;
 		this.lifecycle = {
 			state: this.fallbackActive ? "retrying" : "opening",
 			persistent: true,
@@ -374,6 +392,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	close(): void {
+		this.snapshotGeneration++;
 		this.primary.close();
 		this.fallback.close();
 		this.active = null;
@@ -419,6 +438,21 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		return { ...page, lifecycle: this.getLifecycle() };
 	}
 	getCatalogRevision(): Promise<number> { return this.run((store) => store.getCatalogRevision()); }
+	async readAggregateSnapshot(): Promise<CatalogAggregateSnapshot> {
+		const active = this.getActive();
+		const generation = this.snapshotGeneration;
+		const lifecycle = this.getLifecycle();
+		try {
+			const snapshot = await active.readAggregateSnapshot();
+			return { ...snapshot, lifecycle, invalidated: snapshot.invalidated || generation !== this.snapshotGeneration
+				|| active !== this.active || JSON.stringify(lifecycle) !== JSON.stringify(this.getLifecycle())
+				|| JSON.stringify(snapshot.lifecycle) !== JSON.stringify(active.getLifecycle()) };
+		} catch (error) {
+			// 本次读取固定来源，切换后由后续刷新重试完整快照，不混合两个 store。
+			if (active === this.primary && active === this.active && generation === this.snapshotGeneration) await this.activateFallback();
+			throw error;
+		}
+	}
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]> {
 		return this.run((store) => store.listDailyAggregates(fromDate, toDate));
 	}
@@ -476,6 +510,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	private async activateFallback(): Promise<void> {
 		if (this.active === this.fallback) return;
 		if (this.activatingFallback !== null) return this.activatingFallback;
+		this.snapshotGeneration++;
 		this.activatingFallback = (async () => {
 			await this.fallback.open();
 			this.primary.close();

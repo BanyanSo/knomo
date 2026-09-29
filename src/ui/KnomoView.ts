@@ -351,7 +351,10 @@ export class KnomoView extends ItemView {
 	private catalogDesktopQueryFingerprint: string | null = null;
 	private hasCommittedCatalogDesktopQuery = false;
 	private libraryIndexRevision = -1;
+	private libraryIndexCoverageKey: string | null = null;
 	private libraryIndexRun = 0;
+	private libraryIndexRequest: Promise<void> | null = null;
+	private libraryIndexRequestedKey: string | null = null;
 	private libraryIndexesInvalidatedByCoverage = false;
 	private librarySummary: CatalogLibrarySummary | null = null;
 	private libraryTagFacets: CatalogTagFacet[] | null = null;
@@ -1179,6 +1182,8 @@ export class KnomoView extends ItemView {
 		this.flushLocalDraft();
 		this.localDraftStore?.close();
 		this.trashViewClosed = true;
+		this.libraryIndexRun += 1;
+		this.libraryIndexRequestedKey = null;
 		this.settleQuickCommandReady?.(false);
 		this.cancelPendingQuickCommand();
 		this.suspendedCreate = null;
@@ -1348,6 +1353,8 @@ export class KnomoView extends ItemView {
 		this.catalogDesktopQueryFingerprint = null;
 		this.hasCommittedCatalogDesktopQuery = false;
 		this.memoLoadingFingerprint = null;
+		this.libraryIndexRun += 1;
+		this.libraryIndexRequestedKey = null;
 		this.librarySummary = null;
 		this.libraryTagFacets = null;
 		this.libraryIndexesUpdating = false;
@@ -1915,7 +1922,8 @@ export class KnomoView extends ItemView {
 		this.catalogStatus = load.status;
 		this.catalogRevision = load.catalogRevision;
 		this.syncRecordStatsSource();
-		if (this.libraryIndexRevision !== load.catalogRevision || this.librarySummary === null || this.libraryTagFacets === null) {
+		if (this.libraryIndexRevision !== load.catalogRevision || this.libraryIndexCoverageKey !== catalogCoverageKey(load.coverage)
+			|| this.librarySummary === null || this.libraryTagFacets === null) {
 			void this.refreshCatalogLibraryIndexes();
 		}
 	}
@@ -1973,6 +1981,7 @@ export class KnomoView extends ItemView {
 	}
 
 	updateCatalogProgress(coverage: CatalogCoverage): void {
+		const previousCoverageKey = catalogCoverageKey(this.catalogCoverage);
 		this.catalogCoverage = { ...coverage };
 		const recordStatsSourceChanged = this.syncRecordStatsSource();
 		if (recordStatsSourceChanged && this.activeNav === "record-stats") {
@@ -2005,7 +2014,10 @@ export class KnomoView extends ItemView {
 			}
 			return;
 		}
-		if (!this.libraryIndexesInvalidatedByCoverage) return;
+		if (!this.libraryIndexesInvalidatedByCoverage) {
+			if (previousCoverageKey !== catalogCoverageKey(coverage)) void this.refreshCatalogLibraryIndexes();
+			return;
+		}
 		this.libraryIndexesInvalidatedByCoverage = false;
 		this.libraryIndexRun += 1;
 		this.libraryIndexRevision = -1;
@@ -4474,39 +4486,58 @@ export class KnomoView extends ItemView {
 		this.refreshCatalogActiveQuery();
 	}
 
-	private async refreshCatalogLibraryIndexes(): Promise<void> {
-		const run = ++this.libraryIndexRun;
-		const revision = this.catalogRevision;
-		let committed = false;
-		if (this.librarySummary === null || this.libraryTagFacets === null) {
-			this.renderStats();
-			this.renderTags();
-		}
-		try {
-			const [summary, facets] = await Promise.all([
-				this.getCatalogReadService().getLibrarySummary(),
-				this.getCatalogReadService().getTagFacets(),
-			]);
-			if (run !== this.libraryIndexRun || revision !== this.catalogRevision) return;
-			if (summary.complete && facets.complete && summary.value !== null && facets.value !== null) {
-				this.librarySummary = summary.value;
-				this.libraryTagFacets = facets.value;
-				this.libraryIndexRevision = revision;
-				committed = true;
-			} else {
-				this.libraryIndexRevision = -1;
-			}
-		} catch {
-			if (run !== this.libraryIndexRun || revision !== this.catalogRevision) return;
-			this.libraryIndexRevision = -1;
-		} finally {
-			if (run === this.libraryIndexRun) {
-				if (committed || (this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage))) {
-					this.libraryIndexesUpdating = false;
-				}
+	private getLibraryIndexContextKey(): string {
+		return JSON.stringify([this.libraryIndexRun, this.catalogRevision, catalogCoverageKey(this.catalogCoverage)]);
+	}
+
+	private refreshCatalogLibraryIndexes(): Promise<void> {
+		if (this.trashViewClosed) return Promise.resolve();
+		this.libraryIndexRequestedKey = this.getLibraryIndexContextKey();
+		if (this.libraryIndexRequest != null) return this.libraryIndexRequest;
+		const operation = this.refreshCatalogLibraryIndexesUntilCurrent().finally(() => {
+			if (this.libraryIndexRequest !== operation) return;
+			this.libraryIndexRequest = null;
+			if (this.libraryIndexRequestedKey != null && !this.trashViewClosed) return this.refreshCatalogLibraryIndexes();
+		});
+		this.libraryIndexRequest = operation;
+		return operation;
+	}
+
+	private async refreshCatalogLibraryIndexesUntilCurrent(): Promise<void> {
+		while (this.libraryIndexRequestedKey != null && !this.trashViewClosed) {
+			const key = this.libraryIndexRequestedKey;
+			this.libraryIndexRequestedKey = null;
+			if (this.librarySummary === null || this.libraryTagFacets === null) {
 				this.renderStats();
 				this.renderTags();
 			}
+			let committed = false;
+			try {
+				const result = await this.getCatalogReadService().getLibraryIndexes();
+				if (!this.trashViewClosed && key === this.getLibraryIndexContextKey()) {
+					if (result.complete && !result.invalidated && result.value !== null
+						&& result.catalogRevision === this.catalogRevision
+						&& catalogCoverageKey(result.coverage) === catalogCoverageKey(this.catalogCoverage)) {
+						this.librarySummary = result.value.summary;
+						this.libraryTagFacets = result.value.facets;
+						this.libraryIndexRevision = result.catalogRevision;
+						this.libraryIndexCoverageKey = catalogCoverageKey(result.coverage);
+						committed = true;
+					} else this.libraryIndexRevision = -1;
+				}
+			} catch {
+				if (key === this.getLibraryIndexContextKey() && !this.trashViewClosed) this.libraryIndexRevision = -1;
+			} finally {
+				if (key === this.getLibraryIndexContextKey() && !this.trashViewClosed) {
+					if (committed || (this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage))) {
+						this.libraryIndexesUpdating = false;
+					}
+					this.renderStats();
+					this.renderTags();
+				}
+			}
+			// 同上下文来访者共享刚完成的请求；只补一次最新上下文的需求。
+			if (this.libraryIndexRequestedKey === key) this.libraryIndexRequestedKey = null;
 		}
 	}
 
@@ -6755,4 +6786,8 @@ function isTimeBuoyTab(value: string | null): value is TimeBuoyTab {
 
 function isTimeBuoyTabNavigationKey(key: string): boolean {
 	return key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End";
+}
+
+function catalogCoverageKey(coverage: CatalogCoverage | null): string {
+	return JSON.stringify(coverage == null ? null : [coverage.kind, coverage.configurationComplete, coverage.coveredFromDate, coverage.pendingFileCount, coverage.coveredFileCount, coverage.totalFileCount]);
 }

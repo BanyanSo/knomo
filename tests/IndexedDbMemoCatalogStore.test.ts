@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IDBKeyRange, indexedDB } from "fake-indexeddb";
+import { IDBDatabase as FakeDatabase, IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
@@ -677,4 +677,101 @@ test("升级回调抛出非 Error 时保留原因并拒绝打开", async () => {
 	try {
 		await assert.rejects(store.open(), error => error instanceof Error && error.message === "upgrade failure");
 	} finally { store.close(); await deleteDatabase(databaseName); }
+});
+test("P3 内存与 IndexedDB 聚合快照绑定同一 revision 和 coverage，不读取正文", async t => {
+	const databaseName = uniqueDatabaseName("aggregate-snapshot");
+	const stores = [new InMemoryMemoCatalogStore(), createStore(databaseName)];
+	const path = "Daily/2026-09-01.md", date = "2026-09-01";
+	const coverage = { kind: "complete" as const, coveredFromDate: date, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, date, [makeObservation(path, date, 1, "10:00", "old", { tags: ["#Old"] })]));
+			await store.setCoverage(coverage);
+			t.mock.method(store, "query", () => { throw new Error("No body query"); });
+			t.mock.method(store, "count", () => { throw new Error("No count probe"); });
+			const before = await store.getCatalogRevision();
+			const pending = store.readAggregateSnapshot();
+			await store.replaceFilePartition(makePartition(path, date, [makeObservation(path, date, 1, "10:01", "new"), makeObservation(path, date, 2, "10:02", "new2")]));
+			await store.setCoverage({ ...coverage, kind: "partial", pendingFileCount: 1 });
+			const snapshot = await pending;
+			assert.equal(snapshot.catalogRevision, before);
+			assert.deepEqual(snapshot.coverage, coverage);
+			assert.equal(snapshot.aggregates[0]!.memoCount, 1);
+			assert.equal(snapshot.invalidated, false);
+			snapshot.aggregates[0]!.tagMemoCounts.old = 999;
+			const next = await store.readAggregateSnapshot();
+			assert.equal(next.aggregates[0]!.memoCount, 2);
+			assert.equal(next.coverage.kind, "partial");
+			assert.ok(next.catalogRevision > before);
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(databaseName); }
+});
+
+test("P3 IndexedDB 只用 aggregates/meta 同一事务，关闭或 versionchange 使快照失效", async t => {
+	for (const action of ["close", "versionchange"] as const) {
+		const name = uniqueDatabaseName(action);
+		const store = createStore(name);
+		await store.open();
+		const transaction = FakeDatabase.prototype.transaction;
+		const transactions: string[][] = [];
+		const mock = t.mock.method(FakeDatabase.prototype, "transaction", function (this: IDBDatabase, ...args: Parameters<IDBDatabase["transaction"]>) {
+			const result = transaction.apply(this, args);
+			const names = typeof args[0] === "string" ? [args[0]] : [...args[0]];
+			transactions.push(names);
+			queueMicrotask(() => {
+				if (action === "close") store.close();
+				else this.onversionchange?.call(this, { target: this } as unknown as IDBVersionChangeEvent);
+			});
+			return result;
+		});
+		try {
+			const snapshot = await store.readAggregateSnapshot();
+			assert.deepEqual(transactions, [["aggregates", "meta"]]);
+			assert.equal(snapshot.invalidated, true);
+		} finally { mock.mock.restore(); store.close(); await deleteDatabase(name); }
+	}
+});
+
+test("P3 内存快照返回前关闭再打开也失效", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	const pending = store.readAggregateSnapshot();
+	store.close(); await store.open();
+	assert.equal((await pending).invalidated, true);
+});
+
+test("P3 fallback 固定来源，切换及关闭重开不提交旧快照", async t => {
+	for (const action of ["switch", "close"] as const) {
+		const primary = new InMemoryMemoCatalogStore(), fallback = new InMemoryMemoCatalogStore();
+		const store = new FallbackMemoCatalogStore(primary, fallback);
+		await store.open();
+		let release!: () => void;
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		const read = primary.readAggregateSnapshot.bind(primary);
+		t.mock.method(primary, "readAggregateSnapshot", async () => { const snapshot = await read(); await gate; return snapshot; });
+		const pending = store.readAggregateSnapshot();
+		if (action === "switch") {
+			t.mock.method(primary, "query", async () => { throw new Error("primary unavailable"); });
+			await store.query({ limit: 1 });
+		} else { store.close(); await store.open(); }
+		release();
+		assert.equal((await pending).invalidated, true);
+		const next = await store.readAggregateSnapshot();
+		assert.equal(next.invalidated, false);
+		store.close();
+	}
+});
+
+test("P3 聚合读取失败切换 fallback，后续请求重新读取完整快照", async t => {
+	const primary = new InMemoryMemoCatalogStore(), fallback = new InMemoryMemoCatalogStore();
+	const store = new FallbackMemoCatalogStore(primary, fallback);
+	await store.open();
+	t.mock.method(primary, "readAggregateSnapshot", async () => { throw new Error("snapshot failure"); });
+	await assert.rejects(store.readAggregateSnapshot(), /snapshot failure/);
+	assert.equal(store.isUsingFallback, true);
+	const next = await store.readAggregateSnapshot();
+	assert.equal(next.invalidated, false);
+	assert.equal(next.lifecycle.persistent, false);
+	assert.equal(next.coverage.kind, "partial");
+	store.close();
 });

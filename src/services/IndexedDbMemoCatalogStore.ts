@@ -1,4 +1,5 @@
 import type {
+	CatalogAggregateSnapshot,
 	CatalogCoverage,
 	CatalogDailyAggregate,
 	CatalogFileAggregate,
@@ -82,6 +83,7 @@ export class CatalogDatabaseCorruptError extends Error {
 
 export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	private database: IDBDatabase | null = null;
+	private snapshotGeneration = 0;
 	private opening: Promise<void> | null = null;
 	private readonly factory: IDBFactory | undefined;
 	private readonly keyRange: typeof IDBKeyRange | undefined;
@@ -147,6 +149,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		}
 		const database = this.database;
 		database.onversionchange = () => {
+			this.snapshotGeneration++;
 			this.lifecycle = {
 				state: "read-only",
 				persistent: true,
@@ -159,6 +162,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	close(): void {
+		this.snapshotGeneration++;
 		this.database?.close();
 		this.database = null;
 		if (this.lifecycle.state !== "read-only") {
@@ -612,6 +616,37 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 				.sort((left, right) => right.logicalDate.localeCompare(left.logicalDate)));
 			transaction.onerror = () => reject(transaction.error ?? new Error("Memo Catalog aggregate query failed."));
 			transaction.onabort = () => reject(transaction.error ?? new Error("Memo Catalog aggregate query aborted."));
+		});
+	}
+
+	async readAggregateSnapshot(): Promise<CatalogAggregateSnapshot> {
+		const generation = this.snapshotGeneration;
+		await this.open();
+		const database = this.getDatabase();
+		const lifecycle = this.getLifecycle();
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([AGGREGATES_STORE, META_STORE], "readonly");
+			const metadata = transaction.objectStore(META_STORE);
+			const revision = metadata.get(CATALOG_REVISION_META);
+			const coverage = metadata.get(COVERAGE_META);
+			const byDate = new Map<string, CatalogDailyAggregate>();
+			const request = transaction.objectStore(AGGREGATES_STORE).index(BY_LOGICAL_DATE).openCursor(null, "prev");
+			request.onsuccess = () => {
+				const cursor = request.result;
+				if (cursor === null) return;
+				mergeAggregate(byDate, cursor.value as CatalogFileAggregate);
+				cursor.continue();
+			};
+			transaction.oncomplete = () => resolve({
+				aggregates: [...byDate.values()].sort((left, right) => right.logicalDate.localeCompare(left.logicalDate)),
+				catalogRevision: (revision.result as CatalogMetaRecord<number> | undefined)?.value ?? 0,
+				coverage: (coverage.result as CatalogMetaRecord<CatalogCoverage> | undefined)?.value ?? { ...DEFAULT_CATALOG_COVERAGE },
+				lifecycle,
+				invalidated: generation !== this.snapshotGeneration || this.database !== database
+					|| JSON.stringify(lifecycle) !== JSON.stringify(this.getLifecycle()),
+			});
+			transaction.onerror = () => reject(transaction.error ?? new Error("Catalog aggregate snapshot failed."));
+			transaction.onabort = () => reject(transaction.error ?? new Error("Catalog aggregate snapshot aborted."));
 		});
 	}
 

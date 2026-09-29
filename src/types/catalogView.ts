@@ -149,3 +149,11 @@ export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 };
 
 export type CatalogFeatureFilter = Omit<CatalogFeatureQuery, "limit" | "cursor">;
+export interface CatalogLibraryIndexesResult {
+	value: { summary: CatalogLibrarySummary; facets: CatalogTagFacet[] } | null;
+	complete: boolean;
+	catalogRevision: number;
+	coverage: CatalogCoverage;
+	lifecycle: CatalogStoreLifecycle;
+	invalidated: boolean;
+}

@@ -453,7 +453,7 @@ test("Catalog revision 变化后随机重逢重建候选池", async () => {
 	assert.deepEqual(new Set(refreshed.map((item) => item.contentSnapshot)), new Set([first.content, second.content]));
 });
 
-test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影响", async () => {
+test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影响", async t => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -479,6 +479,21 @@ test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影�
 		{ key: "project/alpha", label: "project/alpha", count: 2 },
 		{ key: "life", label: "Life", count: 1 },
 	]);
+	const read = store.readAggregateSnapshot.bind(store);
+	let reads = 0;
+	t.mock.method(store, "readAggregateSnapshot", () => { reads++; return read(); });
+	for (const method of ["listDailyAggregates", "query", "count", "getCoverage", "getCatalogRevision"] as const) {
+		t.mock.method(store, method, () => { throw new Error("Sidebar must use one aggregate snapshot"); });
+	}
+	const combined = await service.getLibraryIndexes();
+	assert.equal(reads, 1);
+	assert.equal(combined.complete, true);
+	assert.deepEqual(combined.value, { summary: summary.value, facets: facets.value });
+	assert.equal(combined.catalogRevision, (await read()).catalogRevision);
+	await service.getLibraryIndexes();
+	assert.equal(reads, 2);
+	t.mock.method(store, "readAggregateSnapshot", async () => ({ ...await read(), invalidated: true }));
+	assert.equal((await service.getLibraryIndexes()).value, null);
 });
 
 test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", async () => {
@@ -500,6 +515,7 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	const service = new CatalogReadService({ catalog, });
 
 	assert.equal((await service.getLibrarySummary()).value, null);
+	assert.equal((await service.getLibraryIndexes()).value, null);
 	assert.equal(await service.getCoverageForRange("2026-08-01", "2026-08-31"), true);
 	assert.equal(await service.getCoverageForRange("2026-07-31", "2026-08-31"), false);
 	assert.equal((await service.count({ fromDate: "2026-08-01", toDate: "2026-08-31" })).count, 1);

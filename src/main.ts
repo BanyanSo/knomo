@@ -140,9 +140,32 @@ export default class KnomoPlugin extends Plugin {
 		});
 		let catalogInitialization: Promise<void>;
 		let catalogInitialized = false;
+		const trackCatalogInventory = <T>(operation: Promise<T>): Promise<T> => {
+			const tracked = operation.then(result => {
+				if (catalogInitialization === completion && !lowPriorityWorkQueue.signal.aborted) catalogInitialized = true;
+				return result;
+			});
+			const completion = catalogInitialization = tracked.then(() => undefined);
+			// 调用方处理原始错误；共享等待也立即接住失败。
+			void catalogInitialization.catch(() => undefined);
+			return tracked;
+		};
+		const refreshCatalogInventory = (): Promise<CatalogRefreshResult> => {
+			const previous = catalogInitialization;
+			return trackCatalogInventory((async () => {
+				await previous.catch(() => undefined);
+				if (lowPriorityWorkQueue.signal.aborted) throw new Error("Catalog refresh cancelled.");
+				return this.catalogIndexCoordinator!.refreshLocalCatalog();
+			})());
+		};
 		let monthlyInitialization: Promise<void> | null = null;
 		const initializeMonthly = async () => {
-			await catalogInitialization;
+			// 配置通知可能排入新的 inventory，旧尝试完成不能提前放行 Monthly。
+			let inventory: Promise<void>;
+			do {
+				inventory = catalogInitialization;
+				await inventory;
+			} while (inventory !== catalogInitialization);
 			if (lowPriorityWorkQueue.signal.aborted || !knomoCurrentConfigService.isMonthlyProjectionAllowed()) return;
 			if (monthlyInitialization === null) {
 				monthlyInitialization = this.monthlyProjectionCoordinator!.initialize().catch(error => {
@@ -293,9 +316,10 @@ export default class KnomoPlugin extends Plugin {
 					return dailyNoteService.getDailyNotePathForDateWithConfig(date, getEffectiveDailyConfig());
 				},
 				refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
-				refreshLocalCatalog: () => {
-					if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
-					return this.catalogIndexCoordinator.refreshLocalCatalog();
+				refreshLocalCatalog: async () => {
+					const result = await refreshCatalogInventory();
+					await initializeMonthly().catch(() => settingTab?.refreshAttentionIfVisible());
+					return result;
 				},
 				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
@@ -347,11 +371,15 @@ export default class KnomoPlugin extends Plugin {
 				trashConfiguration = nextTrashConfiguration;
 				if (knomoCurrentConfigService.getStatus() !== "ready") await knomoCurrentConfigService.initialize();
 				if (lowPriorityWorkQueue.signal.aborted) return;
-				// 默认值通知不能提前启动 Monthly；复用本次 inventory 和初始化。
-				try { await initializeMonthly(); } catch { return; }
+				// 先恢复当前 inventory；Monthly 失败不能阻断独立索引与视图刷新。
+				await refreshCatalogInventory().catch(() => undefined);
+				try {
+					await initializeMonthly();
+					if (!lowPriorityWorkQueue.signal.aborted) await this.monthlyProjectionCoordinator?.handleConfigurationChanged();
+				} catch {
+					settingTab?.refreshAttentionIfVisible();
+				}
 				if (lowPriorityWorkQueue.signal.aborted) return;
-				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
 				await this.queueRefreshOpenViews();
 			});
 			this.registerDomEvent(this.app.workspace.containerEl.win, "focus", () => {
@@ -379,9 +407,7 @@ export default class KnomoPlugin extends Plugin {
 			const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
 			await this.memoCatalogService?.open();
 			if (!catalogInitialized || settingsRecovered || catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
-				await catalogInitialization.catch(() => undefined);
-				catalogInitialization = this.catalogIndexCoordinator!.refreshLocalCatalog().then(() => { catalogInitialized = true; });
-				await catalogInitialization;
+				await refreshCatalogInventory();
 			}
 			await initializeMonthly();
 			await this.legacyTrashMigrationService?.run();
@@ -488,7 +514,7 @@ export default class KnomoPlugin extends Plugin {
 		// 前台默认值已完成；后台配置串行链与 inventory 同步启动。
 		const configurationInitialization = knomoCurrentConfigService.initialize();
 		const bootstrapInitialization = startupBootstrapService.initialize(configurationInitialization).catch(() => undefined);
-		catalogInitialization = this.catalogIndexCoordinator!.initialize().then(() => { catalogInitialized = true; });
+		trackCatalogInventory(this.catalogIndexCoordinator!.initialize());
 		this.runtimeInitializationPromise = initializeCatalogRuntime({
 			initializeCatalog: () => catalogInitialization,
 			primeCatalog: async () => { await this.catalogReadService?.prime(); },

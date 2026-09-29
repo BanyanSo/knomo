@@ -130,6 +130,10 @@ function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable
 	});
 	// 受控 inventory，不依赖真实文件扫描耗时。
 	t.mock.method(Coordinator.prototype, "initialize", () => background.promise);
+	t.mock.method(Coordinator.prototype, "refreshLocalCatalog", async () => {
+		await background.promise;
+		return { scannedFiles: 0, created: 0, updated: 0, deleted: 0, skipped: 0, failed: 0, errors: [] };
+	});
 	t.after(() => { plugin.unload(); background.resolve(); });
 	return { plugin, calls, settings, daily, db, defaults, queries, layouts, monthly, background,
 		getCurrent: () => current!, getBootstrap: () => bootstrap!, saved: () => saved,
@@ -307,6 +311,108 @@ test("P2 Catalog inventory 失败不阻断独立配置和 Bootstrap 就绪", asy
 	assert.equal(h.getCurrent().getStatus(), "ready");
 	assert.equal(h.getBootstrap().getSnapshot().status, "ready");
 	assert.equal(h.calls.includes("monthly"), false);
+});
+
+for (const recovery of ["configuration", "manual"] as const) {
+	test(`P2 首次 inventory 失败后 ${recovery} 刷新恢复 Catalog 和 Monthly`, async t => {
+		const h = harness(t, "disabled", true);
+		const inventory = deferred();
+		let refreshes = 0;
+		t.mock.method(Coordinator.prototype, "refreshLocalCatalog", async () => {
+			refreshes++;
+			await inventory.promise;
+			return { scannedFiles: 1, created: 1, updated: 0, deleted: 0, skipped: 0, failed: 0, errors: [] };
+		});
+		t.mock.method(Monthly.prototype, "initialize", async function (this: InstanceType<typeof Monthly>) {
+			assert.equal((this as unknown as { isProjectionAllowed(): boolean }).isProjectionAllowed(), true);
+			h.calls.push("monthly");
+		});
+		const loading = h.plugin.onload(); h.release(); await loading;
+		h.monthly.resolve();
+		await h.getCurrent().initialize();
+		h.background.reject(new Error("Daily disabled"));
+		await turn();
+		Object.assign(h.plugin.app, { internalPlugins: { plugins: {
+			"daily-notes": { enabled: true, instance: { options: { folder: "Daily", format: "YYYY-MM-DD" } } },
+		} } });
+		if (recovery === "configuration") h.layout();
+		await h.getDaily().loadConfig();
+		const recovered = recovery === "configuration"
+			? h.getCurrent().reloadConfiguration()
+			: (h.plugin as unknown as { memoCommandService: { refreshLocalCatalog(): Promise<unknown> } }).memoCommandService.refreshLocalCatalog();
+		await turn();
+		assert.equal(refreshes, 1);
+		assert.equal(h.calls.includes("monthly"), false);
+		inventory.resolve();
+		await recovered;
+		assert.equal(h.calls.filter(call => call === "monthly").length, 1);
+	});
+}
+
+test("P2 Monthly 初始化失败不阻断配置触发的 Catalog 和视图刷新，后续可以重试", async t => {
+	const h = harness(t, "ready", true);
+	let refreshes = 0, views = 0, attempts = 0;
+	t.mock.method(Coordinator.prototype, "refreshLocalCatalog", async () => { refreshes++; });
+	t.mock.method(h.plugin as unknown as { queueRefreshOpenViews(): Promise<void> }, "queueRefreshOpenViews", async () => { views++; });
+	t.mock.method(Monthly.prototype, "initialize", async () => {
+		if (++attempts <= 2) throw new Error("Monthly unavailable");
+		h.calls.push("monthly");
+	});
+	const loading = h.plugin.onload(); h.release(); await loading;
+	h.monthly.resolve(); await h.getCurrent().initialize();
+	h.background.resolve(); await turn();
+	assert.equal(attempts, 1);
+	h.layout();
+	await h.getCurrent().reloadConfiguration();
+	assert.ok(refreshes > 0);
+	assert.ok(views > 0);
+	assert.equal(h.calls.includes("monthly"), false);
+	await h.getCurrent().reloadConfiguration();
+	assert.equal(h.calls.includes("monthly"), true);
+});
+
+for (const unload of [false, true]) {
+	test(`P2 inventory 恢复再次失败后${unload ? "卸载不放行 Monthly" : "仍可重新恢复"}`, async t => {
+		const h = harness(t, "ready", true);
+		const retry = deferred();
+		let attempts = 0;
+		t.mock.method(Coordinator.prototype, "refreshLocalCatalog", async () => {
+			if (++attempts === 1) throw new Error("inventory still unavailable");
+			await retry.promise;
+		});
+		const loading = h.plugin.onload(); h.release(); await loading;
+		h.monthly.resolve(); await h.getCurrent().initialize();
+		h.background.reject(new Error("inventory unavailable")); await turn();
+		h.layout();
+		await h.getCurrent().reloadConfiguration();
+		assert.equal(h.calls.includes("monthly"), false);
+		assert.equal(h.calls.includes("monthly-change"), false);
+		const recovered = h.getCurrent().reloadConfiguration();
+		await turn();
+		assert.equal(attempts, 2);
+		assert.equal(h.calls.includes("monthly"), false);
+		if (unload) h.plugin.unload();
+		retry.resolve(); await recovered;
+		assert.equal(h.calls.includes("monthly"), !unload);
+	});
+}
+
+test("P2 已初始化的 Catalog 普通刷新不暂停现有 Monthly 调度", async t => {
+	const h = harness(t, "ready", true);
+	const inventory = deferred();
+	t.mock.method(Coordinator.prototype, "refreshLocalCatalog", () => inventory.promise);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	h.monthly.resolve(); await h.getCurrent().initialize();
+	h.background.resolve(); await turn();
+	const runtime = h.plugin as unknown as {
+		memoCommandService: { refreshLocalCatalog(): Promise<unknown> };
+		monthlyProjectionCoordinator: InstanceType<typeof Monthly>;
+	};
+	assert.equal(runtime.monthlyProjectionCoordinator.getProjectionState(), "ready");
+	const refreshed = runtime.memoCommandService.refreshLocalCatalog();
+	await turn();
+	assert.equal(runtime.monthlyProjectionCoordinator.getProjectionState(), "ready");
+	inventory.resolve(); await refreshed;
 });
 
 test("P2 排除规则失败但 Settings 可读时继续核验并保留失败提示", async t => {

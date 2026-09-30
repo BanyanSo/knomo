@@ -624,14 +624,14 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 				assert.equal(selections, before + 1, "下一次独立 Tap 应可选择");
 			}
 		}
-		tags = ["alpha", "alpine"];
+		tags = ["alpha", "alphabet"];
 		const { popup, row } = open(2);
 		assert.equal(popup.children.length, 2);
 		pointer(row, "pointerdown");
 		pointer(popup.children[1] as HTMLElement, "pointerup");
 		assert.equal(editor.input.value, initial, "跨行松手不能选择相邻候选");
 		pointer(row, "pointerdown");
-		tags = ["alpine", "alpha"];
+		tags = ["alphabet", "alpha"];
 		suggest.refresh();
 		assert.notEqual(win.document.querySelector(".knomo-tag-suggest-mobile"), popup);
 		pointer(row, "pointerup");
@@ -1762,34 +1762,93 @@ test("真实保存回调在关闭后清理对应草稿，旧保存不能清理�
 	}
 });
 
-test("Tag Suggest deferred readiness respects changed input, close, IME and rejection", async () => {
+test("Tag Suggest cold readiness renders current candidates through keyup and cancels closed sessions", async (t) => {
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
-	for (const action of ["current", "edit", "close", "ime", "failure"] as const) {
-		const { editor, win, close } = environment("#");
-		let resolve!: () => void;
-		let reject!: (error: Error) => void;
-		const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-		const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
-			getSnapshot: () => ({ suggestions: [] }), ensureReady: () => pending,
-		} as never);
-		// 仅观测真实 refresh 是否读取候选，避免以 mock 替代输入上下文/IME 检查。
-		let reads = 0;
-		Object.assign(suggest, { getSuggestions: () => { reads++; return []; } });
-		try {
-			editor.view.focus();
-			suggest.openForCurrentTrigger();
-			const before = reads;
-			if (action === "edit") editor.view.dispatch({ changes: { from: 1, insert: "other" } });
-			if (action === "close") suggest.close();
-			if (action === "ime") editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
-			if (action === "failure") reject(new Error("index unavailable"));
-			else resolve();
-			for (let i = 0; i < 10; i++) await Promise.resolve();
-			assert.equal(reads - before, action === "current" ? 1 : 0, action);
-		} finally {
-			suggest.close();
-			close();
-		}
+	const { VaultTagIndex } = await import("../src/services/VaultTagIndex");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { TFile } = await import("obsidian");
+	for (const action of ["desktop", "mobile", "real-index", "retained", "toolbar", "toolbar-narrow", "toolbar-mobile", "keyup", "edit", "close", "escape", "blur", "ime", "reset", "destroy", "failure"] as const) {
+		await t.test(action, async () => {
+			const { editor, win, close } = environment("#");
+			const prototype = win.HTMLElement.prototype;
+			Object.assign(prototype, {
+				createDiv(this: HTMLElement, options: { cls?: string }) {
+					const child = this.ownerDocument.createElement("div");
+					child.className = options.cls ?? ""; this.appendChild(child); return child;
+				},
+				setText(this: HTMLElement, text: string) { this.textContent = text; },
+				empty(this: HTMLElement) { this.replaceChildren(); },
+				addClass(this: HTMLElement, name: string) { this.classList.add(name); },
+				removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
+				toggleClass(this: HTMLElement, name: string, enabled: boolean) { this.classList.toggle(name, enabled); },
+			});
+			let resolve!: () => void;
+			let reject!: (error: Error) => void;
+			let tags: string[] = [];
+			let status = "building";
+			let requests = 0;
+			const realIndex = action === "real-index" ? new VaultTagIndex({
+				workspace: { containerEl: { win } },
+				vault: { getMarkdownFiles: () => [Object.assign(new TFile(), { path: "Tags.md", extension: "md" })] },
+				metadataCache: { getFileCache: () => ({ allTags: ["alpha", "beta"] }) },
+			} as never) : null;
+			const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+			const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
+				getSnapshot: () => realIndex?.getSnapshot() ?? { suggestions: tags, status },
+				ensureReady: () => { requests++; return realIndex?.ensureReady() ?? pending; },
+			} as never);
+			const unregister = suggest.registerLifecycle();
+			try {
+				if (action === "mobile" || action === "toolbar-mobile") win.document.getElementById("host")!.classList.add("knomo-mobile-composer-layer");
+				if (action === "retained") tags = ["old"];
+				editor.view.focus();
+				if (action.startsWith("toolbar")) {
+					editor.reset("");
+					const button = win.document.body.appendChild(win.document.createElement("button"));
+					button.focus();
+					editor.input.addEventListener("composer-change", () => suggest.refresh());
+					const view = Object.create(KnomoView.prototype) as { runComposerToolAction(action: string): boolean };
+					Object.assign(view, { inputEl: editor.input, tagSuggest: suggest, containerEl: { win },
+						currentLayout: action === "toolbar-mobile" ? "mobile" : action === "toolbar-narrow" ? "desktop-narrow" : "desktop-wide",
+						composerOpen: true, isSaving: false, trashViewClosed: false, composerIsComposing: false });
+					assert.equal(view.runComposerToolAction("insert-tag"), true);
+					await new Promise<void>(done => win.requestAnimationFrame(() => done()));
+					assert.equal(editor.input.value, "#");
+				} else if (action === "desktop" || action === "real-index") suggest.refresh();
+				else suggest.openForCurrentTrigger();
+				assert.equal(win.document.querySelectorAll(".suggestion-item").length, action === "retained" ? 1 : 0);
+				if (action === "keyup" || action === "edit" || action === "real-index") {
+					editor.input.dispatchEvent(new win.KeyboardEvent("keyup", { key: "#", bubbles: true }));
+					suggest.refresh();
+				}
+				if (action === "edit") {
+					editor.apply({ value: "#bet", anchor: 4, head: 4 });
+					suggest.refresh();
+					editor.input.dispatchEvent(new win.KeyboardEvent("keyup", { key: "t", bubbles: true }));
+				}
+				if (action === "close") suggest.close();
+				if (action === "escape") editor.input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+				if (action === "blur") { editor.input.blur(); editor.view.focus(); }
+				if (action === "ime") {
+					editor.input.dispatchEvent(new win.CompositionEvent("compositionstart", { bubbles: true }));
+					editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { bubbles: true }));
+				}
+				if (action === "reset") editor.reset("#");
+				if (action === "destroy") { unregister(); editor.destroy(); }
+				tags = ["alpha", "beta"]; status = "ready";
+				if (realIndex) await realIndex.ensureReady();
+				else if (action === "failure") reject(new Error("index unavailable"));
+				else await new Promise<void>(done => win.setTimeout(() => { resolve(); done(); }, 0));
+				await Promise.resolve();
+				assert.equal(requests, 1, `${action}: readiness requests are merged`);
+				const labels = Array.from(win.document.querySelectorAll(".suggestion-item"), el => el.textContent);
+				assert.deepEqual(labels, action === "edit" ? ["beta"] : ["desktop", "mobile", "real-index", "retained", "toolbar", "toolbar-narrow", "toolbar-mobile", "keyup"].includes(action) ? tags : [], action);
+			} finally {
+				unregister();
+				realIndex?.onunload();
+				close();
+			}
+		});
 	}
 });

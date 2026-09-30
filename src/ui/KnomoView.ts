@@ -296,6 +296,7 @@ export class KnomoView extends ItemView {
 	private titleHosts: TitleHost[] = [];
 	private statsEls: HTMLElement[] = [];
 	private allTagsEl: HTMLElement | null = null;
+	private renderedTagRevision = -1;
 	private cardFlowEl: HTMLElement | null = null;
 	private trashCountEls: HTMLElement[] = [];
 	private trashCountRefreshTimer: number | null = null;
@@ -1136,7 +1137,7 @@ export class KnomoView extends ItemView {
 			if (tagRenderFrame !== null) return;
 			tagRenderFrame = tagWindow.requestAnimationFrame(() => {
 				tagRenderFrame = null;
-				if (this.rootEl !== null && !this.trashViewClosed) this.renderTags();
+				this.renderPublishedSidebarTags();
 			});
 		}));
 		this.register(() => {
@@ -1487,6 +1488,7 @@ export class KnomoView extends ItemView {
 		});
 		this.statsEls.push(elements.statsEl);
 		this.allTagsEl = elements.allTagsEl;
+		this.renderedTagRevision = -1;
 		this.trashCountEls.push(elements.trashCountEl);
 		this.sidebarResizerEl = elements.resizerEl;
 		this.getRenderScope().registerDomEvent(this.sidebarResizerEl, "pointerdown", (event) => this.startSidebarResize(event));
@@ -2797,6 +2799,14 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private renderPublishedSidebarTags(): void {
+		// 等待回调与订阅帧可能先后到达，同一快照只补绘一次。
+		if (this.rootEl === null || this.trashViewClosed
+			|| (this.isDrawerLayout() ? !this.mobileDrawerOpen : this.desktopSidebarStateController.getSnapshot().collapsed)
+			|| this.renderedTagRevision === this.vaultTagIndex.getSnapshot().revision) return;
+		this.renderTags();
+	}
+
 	private renderTags(): void {
 		if (Platform.isMobile && !this.mobileDrawerOpen) {
 			return;
@@ -2806,6 +2816,8 @@ export class KnomoView extends ItemView {
 				if (!this.trashViewClosed) console.error("[Knomo] Sidebar tag index could not be loaded", error);
 			});
 		}
+		if (this.allTagsEl === null) return;
+		this.renderedTagRevision = this.vaultTagIndex.getSnapshot().revision;
 		if (this.libraryTagFacets === null) {
 			this.allTagsEl?.setAttr("aria-busy", "true");
 			this.allTagsEl?.empty();
@@ -5216,6 +5228,8 @@ export class KnomoView extends ItemView {
 			this.insertText("#");
 			if (this.currentLayout === "mobile") {
 				this.openTagSuggestAfterHashInsert();
+			} else {
+				this.tagSuggest?.openForCurrentTrigger();
 			}
 			return true;
 		}
@@ -6129,9 +6143,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private async ensureSidebarIndexes(): Promise<void> {
+		if (this.trashViewClosed) return;
+		// 打开动作负责首次绘制，不依赖已就绪索引再次发布通知。
+		this.renderTags();
+		if (this.libraryTagFacets === null || this.librarySummary === null
+			|| this.libraryIndexRevision !== this.catalogRevision
+			|| this.libraryIndexCoverageKey !== catalogCoverageKey(this.catalogCoverage)) {
+			void this.refreshCatalogLibraryIndexes();
+		}
 		void this.trashMemoController.ensureLoaded();
 		try {
 			await this.vaultTagIndex.ensureReady();
+			this.renderPublishedSidebarTags();
 		} catch (error) {
 			if (!this.trashViewClosed) console.error("[Knomo] Sidebar tag index could not be loaded", error);
 		}
@@ -6152,12 +6175,14 @@ export class KnomoView extends ItemView {
 	private toggleSidebarCollapsed(): void {
 		this.desktopSidebarStateController.toggleCollapsed();
 		this.syncRootState();
+		if (!this.desktopSidebarStateController.getSnapshot().collapsed) void this.ensureSidebarIndexes();
 		void this.persistSidebarPreferences();
 	}
 
 	private setSidebarCollapsed(collapsed: boolean): void {
 		this.desktopSidebarStateController.setCollapsed(collapsed);
 		this.syncRootState();
+		if (!collapsed) void this.ensureSidebarIndexes();
 		void this.persistSidebarPreferences();
 	}
 

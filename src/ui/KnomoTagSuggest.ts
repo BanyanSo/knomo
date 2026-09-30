@@ -24,6 +24,7 @@ export class KnomoTagSuggest {
 	private selectedIndex = 0;
 	private renderedQuery: string | null = null;
 	private requestGeneration = 0;
+	private pendingRequest: number | null = null;
 	private readonly popoverId: string;
 	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
 	private clearTouchClickGuard: (() => void) | null = null;
@@ -42,10 +43,14 @@ export class KnomoTagSuggest {
 	open(): void { this.dismissed = null; this.refresh(); }
 	close(): void {
 		this.dismissed = this.inputEl.composer.capture();
-		this.clear();
+		this.cancelRequest();
+		this.clearPopover();
 	}
-	private clear(): void {
+	private cancelRequest(): void {
 		this.requestGeneration++;
+		this.pendingRequest = null;
+	}
+	private clearPopover(): void {
 		this.clearPopoverReposition();
 		this.clearGesture?.();
 		this.clearGesture = null;
@@ -60,22 +65,38 @@ export class KnomoTagSuggest {
 	openForCurrentTrigger(): void {
 		this.dismissed = null;
 		this.refresh();
+	}
+	private prepareSuggestions(): void {
+		const status = this.vaultTagIndex.getSnapshot().status;
+		if (this.pendingRequest !== null || (status !== "idle" && status !== "building")) return;
 		const generation = ++this.requestGeneration;
+		this.pendingRequest = generation;
 		const context = this.inputEl.composer.capture();
 		void this.vaultTagIndex.ensureReady().then(() => {
-			if (generation === this.requestGeneration && context.valid()) this.refresh();
+			if (generation !== this.requestGeneration) return;
+			this.pendingRequest = null;
+			// 同一编辑会话允许继续输入；完成后读取当前查询，重置和销毁仍使等待失效。
+			if (context.sameSession()) this.refresh();
 		}).catch((error: unknown) => {
-			if (generation === this.requestGeneration && context.valid()) this.clear();
+			if (generation !== this.requestGeneration) return;
+			this.pendingRequest = null;
+			if (context.sameSession()) this.close();
 			console.error("[Knomo] Tag suggestions could not be loaded", error);
 		});
 	}
 	refresh(): void {
 		if (this.inputEl.composer.readOnly) { this.close(); return; }
-		if (this.inputEl.composer.composing) return;
+		if (this.inputEl.composer.composing) { this.close(); return; }
 		if (!this.inputEl.contains(this.inputEl.ownerDocument.activeElement)) { this.close(); return; }
 		const current = this.inputEl.composer.capture();
 		if (this.dismissed?.valid() && this.dismissed.anchor === current.anchor && this.dismissed.head === current.head) return;
 		this.dismissed = null;
+		if (getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart) === null) {
+			this.cancelRequest();
+			this.clearPopover();
+			return;
+		}
+		this.prepareSuggestions();
 		const selected = this.suggestions[this.selectedIndex]?.tag;
 		const suggestions = this.getSuggestions();
 		const query = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart)?.query ?? null;
@@ -85,7 +106,7 @@ export class KnomoTagSuggest {
 			this.queuePopoverReposition();
 			return;
 		}
-		this.clear();
+		this.clearPopover();
 		if (!suggestions.length) return;
 		this.renderedQuery = query;
 		this.suggestions = suggestions;
@@ -146,11 +167,13 @@ export class KnomoTagSuggest {
 		this.inputEl.addEventListener("keydown", keydown, true);
 		this.inputEl.addEventListener("keyup", keyup);
 		this.inputEl.addEventListener("blur", close);
+		this.inputEl.addEventListener("compositionstart", close);
 		this.inputEl.addEventListener("composer-reset", reset);
 		return () => {
 			this.inputEl.removeEventListener("keydown", keydown, true);
 			this.inputEl.removeEventListener("keyup", keyup);
 			this.inputEl.removeEventListener("blur", close);
+			this.inputEl.removeEventListener("compositionstart", close);
 			this.inputEl.removeEventListener("composer-reset", reset);
 			this.clearTouchClickGuard?.();
 			this.close();
@@ -190,6 +213,9 @@ export class KnomoTagSuggest {
 		win.addEventListener("pointerdown", clear, true);
 	}
 	handleKeydown(event: KeyboardEvent): boolean {
+		if (event.key === "Escape" && this.pendingRequest !== null && !event.isComposing && !this.inputEl.composer.composing) {
+			event.preventDefault(); event.stopImmediatePropagation(); this.close(); return true;
+		}
 		const controlNavigation = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["n", "p"].includes(event.key.toLowerCase());
 		if (!this.popoverEl || event.isComposing || this.inputEl.composer.composing || (event.ctrlKey || event.metaKey) && !controlNavigation) return false;
 		if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key) && !controlNavigation) return false;

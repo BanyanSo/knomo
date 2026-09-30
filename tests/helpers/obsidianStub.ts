@@ -149,8 +149,8 @@ function buildObsidianStub(): string {
 		"class SettingGroup { constructor(containerEl) { this.containerEl = containerEl; this.listEl = containerEl.createDiv ? containerEl.createDiv({ cls: 'setting-items' }) : containerEl; } setHeading(text) { new Setting(this.containerEl).setName(text).setHeading(); return this; } addClass(...names) { this.listEl.classList?.add(...names); return this; } }",
 		"class AbstractInputSuggest { constructor(app, inputEl) { this.app = app; this.inputEl = inputEl; } close() {} }",
 		"function getAllTags(cache) { return cache?.allTags ?? []; }",
-		"function prepareFuzzySearch(query) { return (text) => ({ score: String(text).includes(query) ? 0 : null, matches: [] }); }",
-		"function renderResults() {}",
+		"function prepareFuzzySearch(query) { return (text) => String(text).includes(query) ? { score: 0, matches: [] } : null; }",
+		"function renderResults(el, text) { el.setText(text); }",
 		"class MarkdownRenderer { static async render() {} }",
 		"module.exports = { requireApiVersion, MarkdownView, Component, TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon, Notice, Platform, Modal, ItemView, Scope, Plugin, PluginSettingTab, Setting, SettingGroup, AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults, MarkdownRenderer };",
 	].join("\n");

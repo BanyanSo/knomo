@@ -243,9 +243,6 @@ test("handleAction dispatches every simple action to the expected view callbacks
 		refresh: {
 			expected: ["refresh"],
 		},
-		"focus-stats": {
-			expected: ["focus-stats", "sync-chrome", "sync-card-menu"],
-		},
 		"record-stats-back": {
 			expected: ["record-back"],
 		},
@@ -498,7 +495,6 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			handleManualRefresh: async () => {
 				calls.push("refresh");
 			},
-			focusStats: () => calls.push("focus-stats"),
 			returnFromRecordStats: () => calls.push("record-back"),
 			goToPreviousRecordStatsPeriod: () => calls.push("record-prev"),
 			goToNextRecordStatsPeriod: () => calls.push("record-next"),

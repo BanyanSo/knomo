@@ -583,11 +583,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	pointer-events: auto;
 }
 
-.knomo-plugin .knomo-sidebar-action[data-action="focus-stats"] {
-	visibility: hidden;
-	pointer-events: none;
-}
-
 .knomo-plugin .knomo-sidebar-action {
 	display: inline-flex;
 	align-items: center;

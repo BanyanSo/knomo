@@ -978,9 +978,6 @@ export class KnomoView extends ItemView {
 			toggleSidebar: () => this.toggleSidebar(),
 			collapseSidebar: () => this.collapseSidebarFromUserAction(),
 			handleManualRefresh: () => this.handleManualRefresh(),
-			focusStats: () => {
-				this.sidebarEl?.querySelector<HTMLElement>(".knomo-sidebar-stats")?.focus();
-			},
 			returnFromRecordStats: () => this.returnFromRecordStats(),
 			goToPreviousRecordStatsPeriod: () => this.goToPreviousRecordStatsPeriod(),
 			goToNextRecordStatsPeriod: () => this.goToNextRecordStatsPeriod(),

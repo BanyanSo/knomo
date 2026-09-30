@@ -88,7 +88,6 @@ test("keeps legacy render-after-action behavior explicit", () => {
 		"toggle-scope-menu",
 		"toggle-sidebar",
 		"collapse-sidebar",
-		"focus-stats",
 		"toggle-compact-search",
 		"unknown-action",
 	];

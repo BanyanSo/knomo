@@ -32,6 +32,8 @@ export class VaultTagIndex extends Component {
 	private readonly yields = new Map<number, (error: Error) => void>();
 	private readonly waiters: { generation: number; resolve: (snapshot: VaultTagSnapshot) => void; reject: (error: unknown) => void }[] = [];
 	private yieldOverride?: () => Promise<void>;
+	private readonly interactionPauses = new Set<object>();
+	private readonly interactionWaiters = new Set<{ resolve: () => void; reject: (error: Error) => void }>();
 
 	constructor(private readonly app: App) { super(); }
 
@@ -48,6 +50,23 @@ export class VaultTagIndex extends Component {
 	}
 
 	getSnapshot(): VaultTagSnapshot { return this.snapshot; }
+
+	// 键盘/输入法关键阶段暂停下一片；多个视图分别释放，不取消或重建已有索引。
+	pauseForInteraction(): () => void {
+		if (this.stopped) return () => {};
+		const token = {};
+		this.interactionPauses.add(token);
+		if (this.timer !== null) {
+			this.app.workspace.containerEl.win.clearTimeout(this.timer);
+			this.timer = null;
+		}
+		return () => {
+			if (!this.interactionPauses.delete(token) || this.interactionPauses.size > 0 || this.stopped) return;
+			for (const waiter of this.interactionWaiters) waiter.resolve();
+			this.interactionWaiters.clear();
+			if (this.publishedGeneration < this.generation) this.schedule();
+		};
+	}
 
 	subscribe(listener: () => void): () => void {
 		this.listeners.add(listener);
@@ -72,6 +91,9 @@ export class VaultTagIndex extends Component {
 		if (this.timer !== null) win.clearTimeout(this.timer);
 		this.timer = null;
 		const error = new Error("Vault tag index is unloaded.");
+		for (const waiter of this.interactionWaiters) waiter.reject(error);
+		this.interactionWaiters.clear();
+		this.interactionPauses.clear();
 		for (const [timer, reject] of this.yields) { win.clearTimeout(timer); reject(error); }
 		this.yields.clear();
 		this.buildPromise = null;
@@ -83,6 +105,7 @@ export class VaultTagIndex extends Component {
 	private schedule(): void {
 		if (!this.started || this.stopped || this.timer !== null || this.buildPromise !== null) return;
 		this.snapshot = { ...this.snapshot, status: "building" };
+		if (this.interactionPauses.size > 0) return;
 		this.timer = this.app.workspace.containerEl.win.setTimeout(() => {
 			this.timer = null;
 			const operation = this.build().then(() => {
@@ -112,7 +135,16 @@ export class VaultTagIndex extends Component {
 			}, 0);
 			this.yields.set(timer, reject);
 		});
+		await this.waitForInteraction();
 		this.checkActive();
+	}
+
+	private async waitForInteraction(): Promise<void> {
+		this.checkActive();
+		while (this.interactionPauses.size > 0) {
+			await new Promise<void>((resolve, reject) => this.interactionWaiters.add({ resolve, reject }));
+			this.checkActive();
+		}
 	}
 
 	private checkActive(): void {

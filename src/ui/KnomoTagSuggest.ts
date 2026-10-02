@@ -23,6 +23,7 @@ export class KnomoTagSuggest {
 	private suggestions: TagSuggestion[] = [];
 	private selectedIndex = 0;
 	private renderedQuery: string | null = null;
+	private calculated: { revision: number; query: string; suggestions: TagSuggestion[] } | null = null;
 	private requestGeneration = 0;
 	private pendingRequest: number | null = null;
 	private readonly popoverId: string;
@@ -43,6 +44,7 @@ export class KnomoTagSuggest {
 	open(): void { this.dismissed = null; this.refresh(); }
 	close(): void {
 		this.dismissed = this.inputEl.composer.capture();
+		this.calculated = null;
 		this.cancelRequest();
 		this.clearPopover();
 	}
@@ -92,6 +94,7 @@ export class KnomoTagSuggest {
 		if (this.dismissed?.valid() && this.dismissed.anchor === current.anchor && this.dismissed.head === current.head) return;
 		this.dismissed = null;
 		if (getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart) === null) {
+			this.calculated = null;
 			this.cancelRequest();
 			this.clearPopover();
 			return;
@@ -101,8 +104,10 @@ export class KnomoTagSuggest {
 		const suggestions = this.getSuggestions();
 		const query = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart)?.query ?? null;
 		// 导航和松键不重建候选 DOM，保留滚动位置与鼠标目标。
-		if (this.popoverEl && query === this.renderedQuery && suggestions.length === this.suggestions.length
-			&& suggestions.every((suggestion, index) => suggestion.tag === this.suggestions[index].tag)) {
+		if (this.popoverEl && query === this.renderedQuery && (suggestions === this.suggestions
+			|| suggestions.length === this.suggestions.length
+			&& suggestions.every((suggestion, index) => suggestion.tag === this.suggestions[index].tag))) {
+			this.suggestions = suggestions;
 			this.queuePopoverReposition();
 			return;
 		}
@@ -242,10 +247,16 @@ export class KnomoTagSuggest {
 		if (range === null) {
 			return [];
 		}
-		const tags = this.getTagsSnapshot();
+		const snapshot = this.vaultTagIndex.getSnapshot();
+		if (this.calculated?.revision === snapshot.revision && this.calculated.query === range.query) {
+			return this.calculated.suggestions;
+		}
+		const tags = snapshot.suggestions;
 		const suggestions = range.query.length === 0
 			? tags.map((tag) => ({ tag, result: null }))
 			: this.getFuzzySuggestions(tags, range.query);
+		// 只保留当前查询，空结果也复用；关闭与 trigger 失效时释放。
+		this.calculated = { revision: snapshot.revision, query: range.query, suggestions };
 		if (suggestions.length > 0) {
 			this.queuePopoverReposition();
 		}
@@ -289,11 +300,7 @@ export class KnomoTagSuggest {
 		container?.removeClass("knomo-tag-suggest-positioning");
 	}
 
-	private getTagsSnapshot(): string[] {
-		return [...this.vaultTagIndex.getSnapshot().suggestions];
-	}
-
-	private getFuzzySuggestions(tags: string[], query: string): TagSuggestion[] {
+	private getFuzzySuggestions(tags: readonly string[], query: string): TagSuggestion[] {
 		const search = prepareFuzzySearch(query);
 		const suggestions: TagSuggestion[] = [];
 		for (const tag of tags) {

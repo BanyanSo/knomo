@@ -443,7 +443,7 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 	prototype.scrollIntoView = () => undefined;
 	let selections = 0;
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
-		getSnapshot: () => ({ suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
+		getSnapshot: () => ({ revision: 1, suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
 	} as never);
 	const unregister = suggest.registerLifecycle();
 	try {
@@ -592,8 +592,9 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 	(win.document.getElementById("host") as HTMLElement).classList.add("knomo-mobile-composer-layer");
 	let selections = 0;
 	let tags = ["alpha"];
+	let tagRevision = 1;
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
-		getSnapshot: () => ({ suggestions: tags }), ensureReady: async () => undefined,
+		getSnapshot: () => ({ revision: tagRevision, suggestions: tags }), ensureReady: async () => undefined,
 	} as never);
 	const unregister = suggest.registerLifecycle();
 	const initial = "before #alph after";
@@ -673,6 +674,7 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 			}
 		}
 		tags = ["alpha", "alphabet"];
+		tagRevision++;
 		const { popup, row } = open(2);
 		assert.equal(popup.children.length, 2);
 		pointer(row, "pointerdown");
@@ -680,6 +682,7 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 		assert.equal(editor.input.value, initial, "跨行松手不能选择相邻候选");
 		pointer(row, "pointerdown");
 		tags = ["alphabet", "alpha"];
+		tagRevision++;
 		suggest.refresh();
 		assert.notEqual(win.document.querySelector(".knomo-tag-suggest-mobile"), popup);
 		pointer(row, "pointerup");
@@ -1810,6 +1813,52 @@ test("真实保存回调在关闭后清理对应草稿，旧保存不能清理�
 	}
 });
 
+test("Tag Suggest reuses calculations for the current revision and query, including empty results", async () => {
+	await ensureObsidianStub();
+	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
+	const { editor, win, close } = environment("#");
+	Object.assign(win.HTMLElement.prototype, {
+		createDiv(this: HTMLElement, options: { cls?: string }) {
+			const child = this.ownerDocument.createElement("div"); child.className = options.cls ?? "";
+			this.appendChild(child); return child;
+		},
+		setText(this: HTMLElement, text: string) { this.textContent = text; },
+		empty(this: HTMLElement) { this.replaceChildren(); },
+		addClass(this: HTMLElement, name: string) { this.classList.add(name); },
+		removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
+		toggleClass(this: HTMLElement, name: string, enabled: boolean) { this.classList.toggle(name, enabled); },
+	});
+	let reads = 0;
+	const tags = new Proxy(["alpha", "beta"], { get(target, key, receiver) {
+		if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+		return Reflect.get(target, key, receiver);
+	} });
+	const snapshot = { revision: 1, status: "ready", suggestions: tags };
+	const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
+		getSnapshot: () => snapshot, ensureReady: async () => snapshot,
+	} as never);
+	const unregister = suggest.registerLifecycle();
+	try {
+		for (const query of ["", "alp", "zzz"]) {
+			editor.reset(`#${query}`); editor.view.focus(); suggest.open();
+			const baseline = reads;
+			const popup = win.document.querySelector(".suggestion-container");
+			for (let i = 0; i < 10; i++) {
+				suggest.refresh();
+				editor.input.dispatchEvent(new win.KeyboardEvent("keyup", { key: "ArrowLeft" }));
+			}
+			assert.equal(reads, baseline, `${query}: 重复刷新不访问标签内容`);
+			assert.equal(win.document.querySelector(".suggestion-container"), popup);
+			snapshot.revision++;
+			suggest.refresh();
+			assert.ok(reads > baseline, "新索引版本必须重新计算");
+			const updated = reads;
+			suggest.close(); suggest.open();
+			assert.ok(reads > updated, "关闭后释放查询结果");
+		}
+	} finally { unregister(); close(); }
+});
+
 test("Tag Suggest cold readiness renders current candidates through keyup and cancels closed sessions", async (t) => {
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
@@ -1843,7 +1892,7 @@ test("Tag Suggest cold readiness renders current candidates through keyup and ca
 			} as never) : null;
 			const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
 			const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
-				getSnapshot: () => realIndex?.getSnapshot() ?? { suggestions: tags, status },
+				getSnapshot: () => realIndex?.getSnapshot() ?? { revision: status === "ready" ? 1 : 0, suggestions: tags, status },
 				ensureReady: () => { requests++; return realIndex?.ensureReady() ?? pending; },
 			} as never);
 			const unregister = suggest.registerLifecycle();

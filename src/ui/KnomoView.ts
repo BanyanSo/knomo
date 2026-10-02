@@ -315,6 +315,10 @@ export class KnomoView extends ItemView {
 	private suppressTimeBuoyAutoOpen = false;
 	private composerIsComposing = false;
 	private tagSuggest: KnomoTagSuggest | null = null;
+	private tagIndexWarmupReady = false;
+	private tagIndexWarmupCancel: (() => void) | null = null;
+	private tagIndexKeyboardBusy = false;
+	private tagIndexInteractionResume: (() => void) | null = null;
 	private wikiLinkSuggest: KnomoWikiLinkSuggest | null = null;
 	private sendButtonEl: HTMLButtonElement | null = null;
 	private cancelEditButtonEl: HTMLButtonElement | null = null;
@@ -896,6 +900,7 @@ export class KnomoView extends ItemView {
 			updateSendButtonState: () => this.updateSendButtonState(),
 			updateCancelEditButtonState: () => this.updateCancelEditButtonState(),
 			onClosed: () => this.resumeMobileBackgroundWork(),
+			onKeyboardTrackingChange: (busy) => this.setTagIndexKeyboardBusy(busy),
 		});
 		this.scope = new Scope(this.app.scope);
 		this.scope.register(["Mod"], "Enter", (event) => {
@@ -1122,6 +1127,7 @@ export class KnomoView extends ItemView {
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
 			if (this.app.workspace.getActiveViewOfType(KnomoView) !== this) this.mobileComposerController.clearFocus();
 			if (!this.trashViewClosed && this.containerEl.isShown()) this.handleLocalDateChange();
+			this.syncTagIndexInteraction();
 		}));
 		this.contentEl.addClass("knomo-view-host");
 		let tagRenderFrame: number | null = null;
@@ -1147,6 +1153,14 @@ export class KnomoView extends ItemView {
 		if (this.trashViewClosed) return;
 		if (Platform.isMobile) {
 			this.mobileComposerController.prepare();
+			this.tagIndexWarmupReady = true;
+			this.scheduleTagIndexWarmup();
+			this.register(() => this.disposeTagIndexWarmup());
+			const deferWarmup = () => { this.clearTagIndexWarmup(); this.scheduleTagIndexWarmup(); };
+			this.registerDomEvent(this.contentEl, "pointerdown", deferWarmup, { passive: true });
+			this.registerDomEvent(this.contentEl, "wheel", deferWarmup, { passive: true });
+			this.registerDomEvent(this.contentEl, "scroll", deferWarmup, { capture: true, passive: true });
+			this.registerDomEvent(this.containerEl.win, "resize", deferWarmup, { passive: true });
 		}
 		this.mobileNavbarCompactController = new MobileNavbarCompactController(this, {
 			isActive: () => this.isMobileNavbarSyncTarget(),
@@ -1169,7 +1183,10 @@ export class KnomoView extends ItemView {
 		this.containerEl.doc.addEventListener("backbutton", handleMobileBack, { capture: true });
 		this.register(() => this.containerEl.doc.removeEventListener("backbutton", handleMobileBack, { capture: true }));
 		this.registerDomEvent(this.containerEl.doc, "visibilitychange", () => {
+			this.clearTagIndexWarmup();
+			this.syncTagIndexInteraction();
 			if (this.containerEl.doc.visibilityState === "visible") {
+				this.scheduleTagIndexWarmup();
 				this.handleLocalDateChange();
 			}
 		});
@@ -1191,6 +1208,7 @@ export class KnomoView extends ItemView {
 		this.flushLocalDraft();
 		this.localDraftStore?.close();
 		this.trashViewClosed = true;
+		this.disposeTagIndexWarmup();
 		this.libraryIndexRun += 1;
 		this.libraryIndexRequestedKey = null;
 		this.settleQuickCommandReady?.(false);
@@ -1597,6 +1615,8 @@ export class KnomoView extends ItemView {
 			this.handleComposerBeforeInput(event);
 		}, { capture: true });
 		this.getRenderScope().registerDomEvent(this.inputEl, "composer-change", (event) => {
+			this.clearTagIndexWarmup();
+			this.scheduleTagIndexWarmup();
 			this.syncInputState();
 			if (this.composerIsComposing || this.inputEl?.composer.composing) return;
 			if (event.detail.history) { this.tagSuggest?.close(); this.wikiLinkSuggest?.close(); return; }
@@ -1610,20 +1630,24 @@ export class KnomoView extends ItemView {
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "blur", () => {
 			this.handleComposerInputBlur();
+			this.syncTagIndexInteraction();
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "compositionstart", () => {
 			this.composerIsComposing = true;
+			this.syncTagIndexInteraction();
 			this.tagSuggest?.close();
 			this.wikiLinkSuggest?.handleCompositionStart();
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "composer-compositionend", (event) => {
 			this.composerIsComposing = false;
+			this.syncTagIndexInteraction();
 			this.wikiLinkSuggest?.handleCompositionEnd();
 			this.tagSuggest?.refresh();
 			this.handleTimeBuoyCompositionEnd(event.detail);
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "composer-reset", () => {
 			this.composerIsComposing = this.inputEl?.composer.composing ?? false;
+			this.syncTagIndexInteraction();
 			if (!this.composerIsComposing) this.wikiLinkSuggest?.handleCompositionReset();
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "click", () => {
@@ -4864,6 +4888,74 @@ export class KnomoView extends ItemView {
 		this.scopeMenuOpen = false;
 		this.pauseMobileBackgroundWork();
 		this.mobileComposerController.open();
+	}
+
+	private setTagIndexKeyboardBusy(busy: boolean): void {
+		this.tagIndexKeyboardBusy = busy;
+		this.syncTagIndexInteraction();
+	}
+
+	private syncTagIndexInteraction(): void {
+		if (!Platform.isMobile || this.trashViewClosed) return;
+		const visible = this.containerEl.doc.visibilityState === "visible" && this.containerEl.isShown();
+		const composing = this.composerIsComposing && this.inputEl?.contains(this.inputEl.ownerDocument.activeElement);
+		if (visible && (this.tagIndexKeyboardBusy || composing)) {
+			this.clearTagIndexWarmup();
+			this.tagIndexInteractionResume ??= this.vaultTagIndex.pauseForInteraction();
+		} else {
+			this.tagIndexInteractionResume?.();
+			this.tagIndexInteractionResume = null;
+			this.scheduleTagIndexWarmup();
+		}
+	}
+
+	private canWarmTagIndex(): boolean {
+		return Platform.isMobile && this.tagIndexWarmupReady && !this.trashViewClosed
+			&& !this.tagIndexKeyboardBusy && !this.composerIsComposing
+			&& this.containerEl.doc.visibilityState === "visible" && this.containerEl.isShown()
+			&& this.vaultTagIndex.getSnapshot().status === "idle";
+	}
+
+	private scheduleTagIndexWarmup(): void {
+		if (this.tagIndexWarmupCancel || !this.canWarmTagIndex()) return;
+		const win = this.containerEl.win;
+		let cancelled = false;
+		let idle: number | null = null;
+		let timer: number | null = null;
+		const warm = () => {
+			if (cancelled) return;
+			cancelled = true;
+			this.tagIndexWarmupCancel = null;
+			if (!this.canWarmTagIndex()) return;
+			void this.vaultTagIndex.ensureReady().catch((error: unknown) => {
+				if (!this.trashViewClosed) console.error("[Knomo] Tag index warmup failed", error);
+			});
+		};
+		// 首屏先获得绘制机会；输入/视口变化会撤销等待，旧回调也不能启动构建。
+		let frame: number | null = win.requestAnimationFrame(() => {
+			frame = null;
+			if (cancelled) return;
+			if (typeof win.requestIdleCallback === "function") idle = win.requestIdleCallback(warm);
+			else timer = win.setTimeout(warm, 120);
+		});
+		this.tagIndexWarmupCancel = () => {
+			cancelled = true;
+			if (frame !== null) win.cancelAnimationFrame(frame);
+			if (idle !== null) win.cancelIdleCallback(idle);
+			if (timer !== null) win.clearTimeout(timer);
+		};
+	}
+
+	private clearTagIndexWarmup(): void {
+		this.tagIndexWarmupCancel?.();
+		this.tagIndexWarmupCancel = null;
+	}
+
+	private disposeTagIndexWarmup(): void {
+		this.tagIndexWarmupReady = false;
+		this.clearTagIndexWarmup();
+		this.tagIndexInteractionResume?.();
+		this.tagIndexInteractionResume = null;
 	}
 
 	private pauseMobileBackgroundWork(): void {

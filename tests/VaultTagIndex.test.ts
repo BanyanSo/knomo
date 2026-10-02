@@ -133,6 +133,42 @@ test("Vault tag index default scan yields and preserves changes and deletion dur
 	f.index.unload();
 });
 
+for (const started of [false, true]) test(`Vault tag index yields to interaction and resumes one shared build: started=${started}`, async () => {
+	const f = await fixture(600);
+	let done = false;
+	const pending = f.index.ensureReady().then(snapshot => { done = true; return snapshot; });
+	if (started) await f.step();
+	const index = f.index as unknown as { pauseForInteraction(): () => void };
+	const resume = index.pauseForInteraction();
+	const resumeOther = index.pauseForInteraction();
+	const second = f.index.ensureReady();
+	for (let i = 0; i < 10; i++) await f.step();
+	assert.equal(done, false, "输入关键期不能继续完成构建");
+	assert.equal(f.counts().scanCount, started ? 1 : 0);
+	resume(); resume();
+	for (let i = 0; i < 10; i++) await f.step();
+	assert.equal(done, false, "另一视图仍在交互时不恢复");
+	resumeOther();
+	await f.until(() => done);
+	assert.equal(await pending, await second);
+	assert.equal(f.counts().scanCount, 1, "恢复不能重新扫描全库");
+	f.index.unload();
+});
+
+test("Vault tag index unload settles a build paused between slices", async () => {
+	const f = await fixture(600);
+	const rejected = assert.rejects(f.index.ensureReady(), /unloaded/);
+	await f.step();
+	const resume = (f.index as unknown as { pauseForInteraction(): () => void }).pauseForInteraction();
+	await f.step();
+	f.index.unload();
+	await rejected;
+	resume();
+	await f.microtasks();
+	assert.equal(f.timers.size, 0);
+	assert.equal(f.counts().notifications, 0);
+});
+
 test("Vault tag index retains partial caches, rename/delete semantics and mtime display selection", async () => {
 	const f = await fixture();
 	const [a, b] = [...f.files.values()];

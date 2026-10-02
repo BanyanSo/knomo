@@ -43,8 +43,7 @@ export function measureSuggestionContentWidth(
 		return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
 	}
 	host.addClass("knomo-suggest-measure-host");
-	doc.body.appendChild(host);
-	let width = 0;
+	const clones: HTMLElement[] = [];
 	for (const item of items) {
 		const clone = asHTMLElement(item.cloneNode(true), doc);
 		if (clone === null) {
@@ -52,9 +51,16 @@ export function measureSuggestionContentWidth(
 		}
 		clone.addClass("knomo-suggest-measure-item");
 		host.appendChild(clone);
-		width = Math.max(width, clone.getBoundingClientRect().width);
+		clones.push(clone);
 	}
-	host.detach();
+	let width = 0;
+	// 先批量挂载再集中测量，避免每插入一行就迫使浏览器重新布局。
+	doc.body.appendChild(host);
+	try {
+		for (const clone of clones) width = Math.max(width, clone.getBoundingClientRect().width);
+	} finally {
+		host.detach();
+	}
 	const win = doc.defaultView;
 	if (win === null) {
 		return Math.ceil(width);

@@ -376,6 +376,54 @@ test("toolbar gesture ignores a hover move without an active pointer", () => {
 	}
 });
 
+test("desktop toolbar dragging scrolls without activating a tool and the next click still works", () => {
+	const dom = new JSDOM("<div id='tools'><button data-action='insert-bold'>Bold</button></div>");
+	const tools = dom.window.document.getElementById("tools")!;
+	const button = tools.querySelector("button")!;
+	Object.defineProperties(tools, { clientWidth: { value: 100 }, scrollWidth: { value: 300 } });
+	let captured: number | null = null;
+	Object.assign(tools, {
+		setPointerCapture: (id: number) => { captured = id; },
+		hasPointerCapture: (id: number) => captured === id,
+		releasePointerCapture: () => { captured = null; },
+	});
+	let calls = 0;
+	const cleanup = registerComposerToolGesture(tools, () => calls++, undefined, true);
+	const pointer = (type: string, x: number, target: HTMLElement = button, pointerType = "mouse") => {
+		const event = new dom.window.MouseEvent(type, { clientX: x, bubbles: true, cancelable: true, button: 0 });
+		Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: pointerType } });
+		target.dispatchEvent(event);
+	};
+	try {
+		pointer("pointerdown", 80);
+		pointer("pointermove", 76);
+		assert.equal(tools.scrollLeft, 0);
+		pointer("pointermove", 40);
+		assert.equal(tools.scrollLeft, 40);
+		assert.equal(captured, 1);
+		pointer("pointerup", 40, tools);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 1 }));
+		assert.equal(calls, 0);
+		assert.equal(captured, null);
+		pointer("pointerdown", 20); pointer("pointerup", 20);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 1 }));
+		assert.equal(calls, 1);
+		pointer("pointerdown", 80, tools); pointer("pointermove", 60, tools);
+		assert.equal(tools.scrollLeft, 60);
+		pointer("pointercancel", 60, tools);
+		assert.equal(captured, null);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 1 }));
+		assert.equal(calls, 1);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 0 }));
+		assert.equal(calls, 2);
+		pointer("pointerdown", 80); pointer("pointermove", 40);
+		cleanup();
+		assert.equal(captured, null);
+		pointer("pointermove", 20);
+		assert.equal(tools.scrollLeft, 100);
+	} finally { cleanup(); dom.window.close(); }
+});
+
 test("Tag Suggest uses the same editor transaction and preserves IME and save shortcut priority", async () => {
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");

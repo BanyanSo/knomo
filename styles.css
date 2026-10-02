@@ -1889,6 +1889,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 /* Composer toolbar */
 .knomo-plugin .knomo-composer-bar {
 	display: flex;
+	flex-wrap: nowrap;
 	align-items: flex-end;
 	justify-content: space-between;
 	gap: 10px;
@@ -1905,9 +1906,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-tool-group {
 	display: flex;
+	flex: 1 1 auto;
 	align-items: center;
 	gap: 10px;
 	color: var(--text-faint);
+	scrollbar-width: none;
 }
 
 .knomo-plugin.is-layout-mobile .knomo-tool-group {
@@ -1919,7 +1922,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	scrollbar-width: none;
 }
 
-.knomo-plugin.is-layout-mobile .knomo-tool-group::-webkit-scrollbar {
+.knomo-plugin .knomo-tool-group::-webkit-scrollbar {
 	display: none;
 }
 
@@ -2151,6 +2154,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-composer-actions {
 	display: flex;
+	flex: 0 0 auto;
+	flex-wrap: nowrap;
 	align-items: center;
 	justify-content: flex-end;
 	gap: 8px;
@@ -4873,12 +4878,6 @@ body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-co
 }
 .knomo-plugin.is-layout-desktop-narrow .knomo-sidebar-header {
 	flex-wrap: wrap;
-}
-.knomo-plugin:not(.is-layout-mobile) .knomo-composer-bar,
-.knomo-plugin:not(.is-layout-mobile) .knomo-tool-group,
-.knomo-plugin:not(.is-layout-mobile) .knomo-composer-actions {
-	flex-wrap: wrap;
-	min-width: 0;
 }
 .knomo-plugin:not(.is-layout-mobile) .knomo-card-content {
 	min-width: 0;

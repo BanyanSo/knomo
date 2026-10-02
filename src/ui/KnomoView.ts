@@ -1651,7 +1651,8 @@ export class KnomoView extends ItemView {
 			if (!(event.ctrlKey || event.metaKey)) this.wikiLinkSuggest?.refreshForCursor();
 			this.closeTimeBuoyPickerIfTriggerMoved();
 		});
-		this.getRenderScope().register(registerComposerToolGesture(composer.toolsEl, action => { this.runComposerToolAction(action); }));
+		this.getRenderScope().register(registerComposerToolGesture(composer.toolsEl, action => { this.runComposerToolAction(action); },
+			undefined, this.currentLayout !== "mobile"));
 		this.getRenderScope().registerDomEvent(this.sendButtonEl, "pointerdown", (event) => {
 			this.handleSendPointerDown(event);
 		});

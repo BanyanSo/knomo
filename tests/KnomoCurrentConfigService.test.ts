@@ -55,7 +55,6 @@ test("配置读取失败不覆盖已有值且不阻断 Daily 范围，写入和 
 	await f.current.initialize();
 	f.setReadFailure(true);
 	await assert.rejects(() => f.settings.loadSettings());
-	assert.equal(f.current.isCoverageComplete(), true);
 	assert.equal(f.current.isMonthlyProjectionAllowed(), false);
 	await assert.rejects(() => f.settings.updateSettings({ dailyHeading: "## changed" }), /unreadable/u);
 	await f.settings.updateSettings({ desktopSidebarCollapsed: true });
@@ -90,7 +89,6 @@ test("当前配置保存未通过读回验证时不得开放依赖功能", async
 	f.discardSaves();
 	await assert.rejects(() => f.current.initialize(), /read-back/u);
 	assert.equal(f.current.getStatus(), "unavailable");
-	assert.equal(f.current.isCoverageComplete(), true);
 	assert.equal(f.current.isMonthlyProjectionAllowed(), false);
 });
 

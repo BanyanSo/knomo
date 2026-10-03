@@ -45,6 +45,29 @@ function environment(value: string) {
 	} };
 }
 
+test("当前列表命令覆盖单行、类型转换和多行选择，并精确撤销", () => {
+	for (const [initial, from, to, command, expected] of [
+		["hello", 5, 5, "bullet", "- hello"],
+		["hello", 5, 5, "ordered", "1. hello"],
+		["- hello", 7, 7, "ordered", "1. hello"],
+		["a\nb\nc", 0, 5, "bullet", "- a\n- b\n- c"],
+		["a\nb\nc", 0, 5, "ordered", "1. a\n2. b\n3. c"],
+	] as const) {
+		const { editor, close } = environment(initial);
+		try {
+			editor.input.setSelectionRange(from, to);
+			const result = runComposerCommand(editor.input.value, from, to, command);
+			assert.equal(result.type, "changed");
+			if (result.type !== "changed") throw new Error("Expected list conversion");
+			editor.apply(result.edit);
+			assert.equal(editor.input.value, expected);
+			undo(editor.view);
+			assert.equal(editor.input.value, initial);
+			assert.deepEqual([editor.input.selectionStart, editor.input.selectionEnd], [from, to]);
+		} finally { close(); }
+	}
+});
+
 test("浮标返回焦点时恢复编辑状态选区而非旧 DOM 光标", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");

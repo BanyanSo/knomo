@@ -2584,18 +2584,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	pointer-events: auto;
 }
 
-.knomo-plugin .knomo-card-actions.has-explanation {
-	width: 220px;
-}
-
-.knomo-plugin .knomo-card-action-explanation {
-	padding: 8px 10px 2px;
-	border-top: var(--border-width) solid var(--knomo-soft-border);
-	color: var(--text-muted);
-	font-size: var(--knomo-card-time-font-size);
-	line-height: 1.4;
-}
-
 .knomo-plugin .knomo-card-action {
 	display: flex;
 	align-items: center;
@@ -2923,31 +2911,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin: var(--size-4-2) 0 var(--size-4-4);
 }
 
-@media (max-width: 900px) {
-	.knomo-maintenance-setting {
-		flex-direction: column;
-		align-items: stretch;
-	}
-
-	.knomo-maintenance-setting .setting-item-info,
-	.knomo-maintenance-setting .setting-item-control {
-		width: 100%;
-	}
-
-	.knomo-maintenance-setting .setting-item-control {
-		justify-content: flex-start;
-		flex-wrap: wrap;
-	}
-
-	.knomo-maintenance-setting .setting-item-control > * {
-		flex: 1 1 min(12rem, 100%);
-	}
-
-	.knomo-maintenance-setting .setting-item-control button {
-		flex: 0 1 auto;
-	}
-}
-
 .knomo-plugin .knomo-muted-text {
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
@@ -2956,26 +2919,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 /* --------------------------------------------------------------------------
    12. Utilities
    -------------------------------------------------------------------------- */
-.knomo-textarea-mirror {
-	position: fixed;
-	visibility: hidden;
-	pointer-events: none;
-	white-space: pre-wrap;
-	overflow-wrap: break-word;
-	word-break: var(--knomo-textarea-mirror-word-break, normal);
-	box-sizing: var(--knomo-textarea-mirror-box-sizing, border-box);
-	width: var(--knomo-textarea-mirror-width, auto);
-	min-height: var(--knomo-textarea-mirror-min-height, 0);
-	padding: var(--knomo-textarea-mirror-padding, 0);
-	border: var(--knomo-textarea-mirror-border, 0);
-	font: var(--knomo-textarea-mirror-font, inherit);
-	line-height: var(--knomo-textarea-mirror-line-height, normal);
-	letter-spacing: var(--knomo-textarea-mirror-letter-spacing, normal);
-	text-transform: var(--knomo-textarea-mirror-text-transform, none);
-	left: var(--knomo-textarea-mirror-left, -10000px);
-	top: var(--knomo-textarea-mirror-top, 0);
-}
-
 .knomo-suggest-measure-host {
 	position: fixed;
 	visibility: hidden;
@@ -4301,13 +4244,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	overflow-wrap: anywhere;
 }
 
-.knomo-plugin .knomo-record-stats-retry,
-.knomo-plugin .knomo-all-memos-retry {
+.knomo-plugin .knomo-record-stats-retry {
 	min-height: var(--knomo-touch-target);
-}
-
-.knomo-plugin .knomo-all-memos-retry {
-	margin-top: var(--size-4-2);
 }
 
 .knomo-plugin .knomo-record-stats-skeleton {

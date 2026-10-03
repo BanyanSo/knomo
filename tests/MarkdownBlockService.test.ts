@@ -86,7 +86,7 @@ test("daily note creation returns existing file without applying template", asyn
 		},
 	);
 
-	const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
+	const file = await dailyNoteService.getOrCreateDailyNoteForDateWithConfig(new Date("2026-05-14T10:00:00"), { folder: "Daily", format: "YYYY-MM-DD" });
 
 	assert.equal(file, existingFile);
 	assert.equal(createCalls, 0);
@@ -120,7 +120,7 @@ test("daily note creation without a template creates an empty file", async () =>
 			},
 		);
 
-		const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
+		const file = await dailyNoteService.getOrCreateDailyNoteForDateWithConfig(new Date("2026-05-14T10:00:00"), { folder: "Daily", format: "YYYY-MM-DD" });
 
 		assert.equal(file.path, "Daily/2026-05-14.md");
 	} finally {
@@ -128,7 +128,7 @@ test("daily note creation without a template creates an empty file", async () =>
 	}
 });
 
-test("daily note creation still errors when Daily Notes core plugin is disabled", async () => {
+test("disabled Daily Notes cannot provide a creation path", async () => {
 	const { DailyNoteService } = await loadDailyNoteService();
 	const dailyNoteService = new DailyNoteService(
 		{
@@ -144,9 +144,10 @@ test("daily note creation still errors when Daily Notes core plugin is disabled"
 		},
 	);
 
-	await assert.rejects(
-		() => dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00")),
-		/Enable the Daily Notes core plugin in Obsidian settings/,
+	assert.equal(dailyNoteService.getStatus().enabled, false);
+	assert.throws(
+		() => dailyNoteService.getDailyNotePathForDate(new Date("2026-05-14T10:00:00")),
+		/Daily Notes/,
 	);
 });
 

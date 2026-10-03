@@ -8,6 +8,33 @@ import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import type { CatalogFeatureQuery, CatalogFeatureFilter } from "../src/types/catalogView";
 
+test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛选覆盖历史，日期筛选跨月", async context => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	context.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 2, 2, 12).getTime() });
+	const state = new KnomoViewStateController();
+	const view = Object.assign(Object.create(KnomoView.prototype) as {
+		buildCatalogActiveQuery(all: boolean): CatalogFeatureFilter;
+	}, { viewStateController: state });
+	assert.deepEqual(view.buildCatalogActiveQuery(false), { fromDate: "2026-02-01" });
+	assert.deepEqual(view.buildCatalogActiveQuery(true), {});
+	state.activeTagKey = "project";
+	assert.deepEqual(view.buildCatalogActiveQuery(false), { tags: ["project"] });
+	state.activeTagKey = null;
+	state.searchQuery = " historical text ";
+	assert.deepEqual(view.buildCatalogActiveQuery(false), { text: "historical text" });
+	state.searchQuery = "";
+	for (const [scope, expected] of [["with-link", { hasLink: true }], ["with-image", { hasImage: true }], ["no-tag", { hasTag: false }]] as const) {
+		state.scopeFilter = scope;
+		assert.deepEqual(view.buildCatalogActiveQuery(false), expected);
+	}
+	state.scopeFilter = "all";
+	state.searchDateFilter = "last-30";
+	assert.deepEqual(view.buildCatalogActiveQuery(false), { fromDate: "2026-02-01", toDate: "2026-03-02" });
+	state.searchDateFilter = "last-month";
+	assert.deepEqual(view.buildCatalogActiveQuery(false), { fromDate: "2026-02-01", toDate: "2026-02-28" });
+});
+
 test("Things 桌面与移动首屏、分页、计数使用相同组合条件且默认覆盖历史", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");

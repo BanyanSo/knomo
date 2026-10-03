@@ -157,23 +157,6 @@ export function getMonthlyArchivePath(
 	return normalizePath(`${folder}/${format.replace(/YYYY-MM/g, period)}`);
 }
 
-export function getMonthlyConflictPeriod(
-	settings: Pick<KnomoSettings, "monthlyMemoFolder" | "monthlyMemoFileFormat">,
-	path: string,
-): string | null {
-	const normalizedPath = normalizePath(path);
-	const fileName = normalizedPath.split("/").pop() ?? "";
-	const period = fileName.match(/\d{4}-(?:0[1-9]|1[0-2])/)?.[0] ?? null;
-	if (period === null) return null;
-	const canonicalPath = getMonthlyArchivePath(settings, period);
-	if (normalizedPath === canonicalPath || parentPath(normalizedPath) !== parentPath(canonicalPath)) return null;
-	const canonicalName = canonicalPath.split("/").pop() ?? "";
-	const canonicalStem = stripMarkdownExtension(canonicalName);
-	const fileStem = stripMarkdownExtension(fileName);
-	if (!fileStem.startsWith(canonicalStem) || fileStem === canonicalStem) return null;
-	return /^[-\s(._]/.test(fileStem.slice(canonicalStem.length)) ? period : null;
-}
-
 export function getMonthlyCanonicalPeriod(
 	settings: Pick<KnomoSettings, "monthlyMemoFolder" | "monthlyMemoFileFormat">,
 	path: string,
@@ -284,13 +267,4 @@ function assertMonthlyPeriod(period: string): void {
 
 function assertLogicalDate(logicalDate: string): void {
 	if (!LOGICAL_DATE_PATTERN.test(logicalDate)) throw new Error(`Invalid Monthly logical date: ${logicalDate}`);
-}
-
-function parentPath(path: string): string {
-	const index = path.lastIndexOf("/");
-	return index === -1 ? "" : path.slice(0, index);
-}
-
-function stripMarkdownExtension(fileName: string): string {
-	return fileName.replace(/\.md$/i, "");
 }

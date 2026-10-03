@@ -8,7 +8,7 @@ import {
 	buildMonthlyProjection,
 	extractLegacyMonthlyArchiveMarker,
 	formatMonthlyDateHeading,
-	getMonthlyConflictPeriod,
+	getMonthlyCanonicalPeriod,
 	hasKnomoMonthlyArchiveMarker,
 	normalizeMonthlyLocaleKey,
 } from "../src/services/MonthlyProjection";
@@ -133,11 +133,11 @@ test("两台不同 UI 语言设备使用同一共享 locale 时生成字节级�
 	assert.match(right.content, /## \[\[2026-08-09\]\]/u);
 });
 
-test("Monthly conflict copy 只识别 canonical 同目录的 side copy", () => {
+test("Monthly 只维护 canonical 路径，忽略同目录或其他目录的 conflict copy", () => {
 	const settings = makeSettings();
-	assert.equal(getMonthlyConflictPeriod(settings, "Knomo/Memos-2026-08 (conflict).md"), "2026-08");
-	assert.equal(getMonthlyConflictPeriod(settings, "Knomo/Memos-2026-08.md"), null);
-	assert.equal(getMonthlyConflictPeriod(settings, "Elsewhere/Memos-2026-08 (conflict).md"), null);
+	assert.equal(getMonthlyCanonicalPeriod(settings, "Knomo/Memos-2026-08 (conflict).md"), null);
+	assert.equal(getMonthlyCanonicalPeriod(settings, "Knomo/Memos-2026-08.md"), "2026-08");
+	assert.equal(getMonthlyCanonicalPeriod(settings, "Elsewhere/Memos-2026-08 (conflict).md"), null);
 });
 
 function makeSettings(locale = "en"): KnomoSettings & { locale: string } {

@@ -37,10 +37,6 @@ export class MemoCatalogService {
 		return this.store.replaceFilePartition(buildCatalogPartition(input));
 	}
 
-	async replaceFiles(inputs: readonly CatalogPartitionInput[]): Promise<number> {
-		return this.store.replaceFilePartitions(inputs.map(buildCatalogPartition));
-	}
-
 	deleteFile(sourcePath: string): Promise<number> {
 		return this.store.deleteFilePartition(sourcePath);
 	}

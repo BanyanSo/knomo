@@ -112,12 +112,6 @@ export interface CatalogTagFacet {
 	count: number;
 }
 
-export interface CatalogAggregateResult<T> {
-	value: T | null;
-	complete: boolean;
-	coverage: CatalogCoverage;
-}
-
 export interface CatalogFunctionPageRequest {
 	limit: number;
 	cursor?: CatalogFeatureCursor | null;

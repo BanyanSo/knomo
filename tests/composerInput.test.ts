@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyListFormatToText, getHashInsertionText, getListEnterPatch, getListEnterPatchAfterNativeNewline, getListEnterPatchForNativeInput, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../src/utils/composerInput";
+import { getHashInsertionText, getListEnterPatch, getListEnterPatchAfterNativeNewline, getListEnterPatchForNativeInput, getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../src/utils/composerInput";
 import { parseMemoTags } from "../src/utils/markdown";
 
 test("inserts a spaced hash after existing content", () => {
@@ -41,32 +41,6 @@ test("replaces current tag query with selected suggestion", () => {
 	assert.deepEqual(replaceTagQueryWithSuggestion("今天 #pro明天", { from: 3, to: 7, query: "pro" }, "project/knomo"), {
 		value: "今天 #project/knomo 明天",
 		cursor: 18,
-	});
-});
-
-test("formats the current line as a Markdown list", () => {
-	assert.deepEqual(applyListFormatToText("hello", 5, 5, "bullet"), {
-		value: "- hello",
-		cursor: 7,
-	});
-	assert.deepEqual(applyListFormatToText("hello", 5, 5, "ordered"), {
-		value: "1. hello",
-		cursor: 8,
-	});
-	assert.deepEqual(applyListFormatToText("- hello", 7, 7, "ordered"), {
-		value: "1. hello",
-		cursor: 8,
-	});
-});
-
-test("formats selected lines as a Markdown list", () => {
-	assert.deepEqual(applyListFormatToText("a\nb\nc", 0, 5, "bullet"), {
-		value: "- a\n- b\n- c",
-		cursor: 11,
-	});
-	assert.deepEqual(applyListFormatToText("a\nb\nc", 0, 5, "ordered"), {
-		value: "1. a\n2. b\n3. c",
-		cursor: 14,
 	});
 });
 

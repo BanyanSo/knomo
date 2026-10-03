@@ -161,10 +161,6 @@ export class MonthlyProjectionInputBuilder {
 		};
 	}
 
-	hasDailyPeriod(period: string): boolean {
-		return this.dailyInventory.hasPeriod(period);
-	}
-
 	async updateDailyFile(file: TFile): Promise<string[]> {
 		const dailyConfig = await this.ensureDailyInventory();
 		const previous = this.dailyInventory.get(file.path);
@@ -187,11 +183,6 @@ export class MonthlyProjectionInputBuilder {
 		if (removed !== null) return [removed.logicalDate.slice(0, 7)];
 		const date = parseDailyNoteDateFromPath(path, dailyConfig);
 		return date === null ? [] : [formatDatePart(date).slice(0, 7)];
-	}
-
-	async getDailyPeriod(path: string): Promise<string | null> {
-		const date = parseDailyNoteDateFromPath(path, await this.options.getDailyConfig());
-		return date === null ? null : formatDatePart(date).slice(0, 7);
 	}
 
 	private async ensureDailyInventory(runtime?: CooperativeTaskRuntime): Promise<DailyNotesConfig> {

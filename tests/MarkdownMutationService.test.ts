@@ -91,6 +91,24 @@ test("Things 混合代码、HTML 与引用任务只修改对应 marker，旧句�
 	await assert.rejects(fixture.service.toggleTask({ observation: toHandle(observation), taskIndex: 1, checked: false }));
 });
 
+test("任务修改保留其他任务、缩进、正文格式与代码围栏，越界索引拒绝写入", async () => {
+	for (const [content, taskIndex, expected] of [
+		["- [ ] first\n- [ ] second\n- [x] third", 1, "- [ ] first\n- [x] second\n- [x] third"],
+		["intro\n  1) [ ] keep **format** #tag", 0, "intro\n  1) [x] keep **format** #tag"],
+		["```markdown\n- [ ] code\n```\n- [ ] real", 0, "```markdown\n- [ ] code\n```\n- [x] real"],
+	] as const) {
+		const fixture = createFixture();
+		await fixture.service.create({ content });
+		const observation = await fixture.getOnlyObservation("2026-08-22");
+		const result = await fixture.service.toggleTask({ observation: toHandle(observation), taskIndex, checked: true });
+		assert.equal(result.observation?.content, expected);
+		const current = await fixture.getOnlyObservation("2026-08-22");
+		const before = fixture.vault.readText(fixture.getPath("2026-08-22"));
+		await assert.rejects(fixture.service.toggleTask({ observation: toHandle(current), taskIndex: current.tasks.length, checked: true }));
+		assert.equal(fixture.vault.readText(fixture.getPath("2026-08-22")), before);
+	}
+});
+
 test("任务列表起始的 memo 按原始 Daily 行切换 checkbox，不失败也不跳行", async () => {
 	const fixture = createFixture();
 	await fixture.service.create({ content: "- [ ] first\n- [ ] second" });

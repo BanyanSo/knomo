@@ -12,7 +12,6 @@ import type {
 	CatalogFeatureFilter,
 	CatalogFeatureQuery,
 	CatalogFunctionPageRequest,
-	CatalogAggregateResult,
 	CatalogLibrarySummary,
 	CatalogLibraryIndexesResult,
 	CatalogMemoItem,
@@ -197,21 +196,6 @@ export class CatalogReadService {
 		}
 	}
 
-	async queryBacklinks(targetPath: string, fragment: string | null, request: CatalogFunctionPageRequest): Promise<CatalogMemoPage> {
-		return this.queryFiltered({ hasLink: true, limit: request.limit, cursor: request.cursor, text: request.text }, (memo) =>
-			memo.derivedReferences?.some((link) => link.state === "resolved" && link.targetPath === targetPath
-				&& (fragment === null || link.fragment === fragment)) ?? false);
-	}
-
-	async getLibrarySummary(): Promise<CatalogAggregateResult<CatalogLibrarySummary>> {
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(coverage)) return { value: null, complete: false, coverage };
-		const aggregates = await this.options.catalog.listDailyAggregates();
-		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
-		return { value: buildLibrarySummary(aggregates), complete: true, coverage: verifiedCoverage };
-	}
-
 	async getLibraryIndexes(): Promise<CatalogLibraryIndexesResult> {
 		const snapshot = await this.options.catalog.readAggregateSnapshot();
 		const complete = !snapshot.invalidated && isCompleteCoverage(snapshot.coverage)
@@ -221,15 +205,6 @@ export class CatalogReadService {
 			complete, catalogRevision: snapshot.catalogRevision, coverage: snapshot.coverage,
 			lifecycle: snapshot.lifecycle, invalidated: snapshot.invalidated,
 		};
-	}
-
-	async getTagFacets(): Promise<CatalogAggregateResult<CatalogTagFacet[]>> {
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(coverage)) return { value: null, complete: false, coverage };
-		const aggregates = await this.options.catalog.listDailyAggregates();
-		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
-		return { value: buildTagFacets(aggregates), complete: true, coverage: verifiedCoverage };
 	}
 
 	async getCoverageForRange(fromDate: string, toDate: string): Promise<boolean> {

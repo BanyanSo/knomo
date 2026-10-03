@@ -53,13 +53,6 @@ import { formatDatePart } from "./utils/date";
 import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
-const DESKTOP_STARTUP_DAILY_SCAN_DAYS = 30;
-const MOBILE_STARTUP_DAILY_SCAN_DAYS = 7;
-
-export function getStartupDailyScanDays(isMobile: boolean): number {
-	return isMobile ? MOBILE_STARTUP_DAILY_SCAN_DAYS : DESKTOP_STARTUP_DAILY_SCAN_DAYS;
-}
-
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
 	manualRefreshPromise: Promise<CatalogRefreshResult> | null = null;

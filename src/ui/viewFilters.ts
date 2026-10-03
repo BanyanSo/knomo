@@ -56,40 +56,6 @@ export interface DailyDateConfig {
 	format: string | null;
 }
 
-export type MemoDataRequirement =
-	| { kind: "recent" }
-	| { kind: "periods"; periods: readonly string[] }
-	| { kind: "all-active" };
-
-export interface MemoDataRequirementState {
-	activeNav?: SidebarNav;
-	scope: ScopeFilter;
-	query: string;
-	searchDateFilter: SearchDateFilter | null;
-	recordStatsFilter: RecordStatsSearchFilter | null;
-	activeTagKey: string | null;
-	tagPeriods: readonly string[] | null;
-	today?: Date;
-}
-
-export function getMemoDataRequirement(state: MemoDataRequirementState): MemoDataRequirement {
-	if (state.activeNav === "things" || state.activeNav === "review" || state.query.trim().length > 0 || isSummaryScopeFilter(state.scope)) {
-		return { kind: "all-active" };
-	}
-	if (state.activeTagKey !== null) {
-		return state.tagPeriods === null
-			? { kind: "all-active" }
-			: { kind: "periods", periods: state.tagPeriods };
-	}
-	if (state.recordStatsFilter !== null) {
-		return { kind: "periods", periods: getRecordStatsFilterPeriods(state.recordStatsFilter) };
-	}
-	if (state.searchDateFilter !== null) {
-		return { kind: "periods", periods: getSearchDateFilterPeriods(state.searchDateFilter, state.today ?? new Date()) };
-	}
-	return { kind: "recent" };
-}
-
 export function collectTagsFromCounts(
 	counts: ReadonlyMap<string, number>,
 	displayTags: Map<string, string>,
@@ -105,12 +71,6 @@ export function collectTagsFromCounts(
 		.sort((left, right) => {
 			return right.count - left.count || left.name.localeCompare(right.name, "zh");
 		});
-}
-
-export function periodHasActiveTag(tagCounts: Readonly<Record<string, number>>, activeTagKey: string): boolean {
-	return Object.entries(tagCounts).some(([tagKey, count]) => (
-		count > 0 && tagMatchesActiveTagKey(tagKey, activeTagKey)
-	));
 }
 
 function collectTagKeys(
@@ -506,71 +466,6 @@ export function matchesSearchDateFilter(date: Date, filter: SearchDateFilter, to
 	if (filter === "last-7") return date >= addDays(today, -6) && date < addDays(today, 1);
 	if (filter === "last-30") return date >= addDays(today, -29) && date < addDays(today, 1);
 	return true;
-}
-
-export function needsAllMemos(
-	scope: ScopeFilter,
-	query: string,
-	searchDateFilter: SearchDateFilter | null,
-	recordStatsFilter: RecordStatsSearchFilter | null = null,
-	activeTagKey: string | null = null,
-): boolean {
-	return query.trim().length > 0 ||
-		activeTagKey !== null ||
-		searchDateFilter !== null ||
-		recordStatsFilter !== null ||
-		isSummaryScopeFilter(scope);
-}
-
-function getSearchDateFilterPeriods(filter: SearchDateFilter, today: Date): string[] {
-	const day = startOfDay(today);
-	if (filter === "month") {
-		return [formatPeriod(day)];
-	}
-	if (filter === "last-month") {
-		return [formatPeriod(new Date(day.getFullYear(), day.getMonth() - 1, 1))];
-	}
-	if (filter === "week" || filter === "last-week") {
-		const mondayOffset = (day.getDay() + 6) % 7;
-		const thisWeekStart = addDays(day, -mondayOffset);
-		const start = filter === "week" ? thisWeekStart : addDays(thisWeekStart, -7);
-		return listPeriodsBetween(start, addDays(start, 6));
-	}
-	return listPeriodsBetween(addDays(day, filter === "last-7" ? -6 : -29), day);
-}
-
-function getRecordStatsFilterPeriods(filter: RecordStatsSearchFilter): string[] {
-	if (filter.type === "day") {
-		return [filter.date.slice(0, 7)];
-	}
-	if (filter.type === "month") {
-		return [filter.month.slice(0, 7)];
-	}
-	if (filter.type === "max-daily-notes" || filter.type === "max-daily-words") {
-		return [...new Set(filter.dates.map((date) => date.slice(0, 7)))];
-	}
-	const end = addDays(parseDateKey(filter.endDateExclusive), -1);
-	return listPeriodsBetween(parseDateKey(filter.startDate), end);
-}
-
-function listPeriodsBetween(start: Date, end: Date): string[] {
-	const periods: string[] = [];
-	const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-	const last = new Date(end.getFullYear(), end.getMonth(), 1);
-	while (cursor <= last) {
-		periods.push(formatPeriod(cursor));
-		cursor.setMonth(cursor.getMonth() + 1);
-	}
-	return periods;
-}
-
-function parseDateKey(value: string): Date {
-	const [year, month, day] = value.slice(0, 10).split("-").map(Number);
-	return new Date(year, month - 1, day);
-}
-
-function formatPeriod(date: Date): string {
-	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function getTagDisplayName(key: string, fallbackName: string, displayTags: Map<string, string>): string {

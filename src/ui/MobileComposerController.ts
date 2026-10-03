@@ -143,10 +143,6 @@ export class MobileComposerController {
 		return this.mobileComposerOpenScrollTop;
 	}
 
-	clearOpenScrollTop(): void {
-		this.mobileComposerOpenScrollTop = null;
-	}
-
 	getMaxInputHeight(): number {
 		if (this.options.getLayout() === "mobile" && this.mobileComposerInputMaxHeight !== null) {
 			return this.mobileComposerInputMaxHeight;

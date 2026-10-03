@@ -43,7 +43,7 @@ test("当前配置不可读时显式失败，重试成功且不创建目录", as
  const f = fixture(); f.setStatus("unavailable");
  await assert.rejects(f.service.initialize(), /unreadable/);
  assert.equal(f.service.getSnapshot().status, "unavailable");
- f.setStatus("ready"); await f.service.retryInitialization();
+ f.setStatus("ready"); await f.service.initialize();
  assert.equal(f.service.getSnapshot().status, "ready");
  assert.deepEqual(f.vault.paths(), ["Daily/2026-08-22.md"]);
 });

@@ -31,7 +31,6 @@ export class SettingsService {
 	private settings = cloneSettings(DEFAULT_KNOMO_SETTINGS);
 	private timeBuoySettingPersisted = false;
 	private monthlyExcludeSettingPersisted = false;
-	private initialTimeBuoyBuildPending = false;
 	private loadStatus: KnomoSettingsLoadStatus = "not_loaded";
 	private monthlyExcludeInitializationFailed = false;
 	private settingsWriteQueue: Promise<void> = Promise.resolve();
@@ -133,7 +132,6 @@ export class SettingsService {
 			timeBuoyEnabled: true,
 			timeBuoyIntroDismissed: true,
 		});
-		this.initialTimeBuoyBuildPending = true;
 		this.timeBuoySettingPersisted = true;
 		return settings;
 	}
@@ -188,12 +186,6 @@ export class SettingsService {
 
 	hasMonthlyExcludeInitializationFailure(): boolean {
 		return this.monthlyExcludeInitializationFailed;
-	}
-
-	consumeInitialTimeBuoyBuildPending(): boolean {
-		const pending = this.initialTimeBuoyBuildPending;
-		this.initialTimeBuoyBuildPending = false;
-		return pending;
 	}
 
 	getSettings(): KnomoSettings {

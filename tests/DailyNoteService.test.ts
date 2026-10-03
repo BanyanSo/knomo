@@ -38,7 +38,7 @@ test("实际配置入口创建日记时应用模板，已有文件不重复套�
 	const file = await f.service.getOrCreateDailyNoteForDateWithConfig(date, f.config);
 	assert.equal(f.contents.get(file.path), "---\ndate: 2026-05-14\n---\n# 2026-05-14\n2026/05/14\n## Memos\n\n## Review\n");
 	f.contents.set(file.path, "existing memo");
-	assert.equal(await f.service.getOrCreateDailyNoteForDate(date), file);
+	assert.equal(await f.service.getOrCreateDailyNoteForDateWithConfig(date, f.config), file);
 	assert.equal(f.contents.get(file.path), "existing memo");
 });
 
@@ -49,7 +49,7 @@ test("模板缺失或读取失败不创建空日记；未配置模板仍可创�
 	assert.equal(f.contents.has("Daily/2026-05-14.md"), false);
 	f.put("Templates/Daily.md", "template");
 	f.vault.read = async () => { throw new Error("Template I/O failed"); };
-	await assert.rejects(f.service.getOrCreateDailyNoteForDate(date), /Template I\/O failed/);
+	await assert.rejects(f.service.getOrCreateDailyNoteForDateWithConfig(date, f.config), /Template I\/O failed/);
 	assert.equal(f.contents.has("Daily/2026-05-14.md"), false);
 	const file = await f.service.getOrCreateDailyNoteForDateWithConfig(date, { folder: "Daily", format: "YYYY-MM-DD" });
 	assert.equal(f.contents.get(file.path), "");

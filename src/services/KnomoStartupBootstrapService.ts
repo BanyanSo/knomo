@@ -47,10 +47,6 @@ export class KnomoStartupBootstrapService {
 		return this.activeOperation ?? this.startOperation(configurationOperation);
 	}
 
-	retryInitialization(): Promise<void> {
-		return this.activeOperation ?? this.startOperation();
-	}
-
 	private startOperation(configurationOperation?: Promise<void>): Promise<void> {
 		// 立即接住后台配置失败，不能等布局就绪后才订阅 rejection。
 		const configurationResult = configurationOperation?.then(

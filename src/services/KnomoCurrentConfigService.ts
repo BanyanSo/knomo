@@ -85,7 +85,6 @@ export class KnomoCurrentConfigService {
 		const settings = this.settings.getSettings();
 		return buildKnomoCurrentConfig(daily, settings, settings.monthlyLocale!);
 	}
-	isCoverageComplete(): boolean { return this.daily.getConfig() !== null; }
 	isMonthlyProjectionAllowed(): boolean {
 		try { this.getEffectiveConfig(); return true; } catch { return false; }
 	}

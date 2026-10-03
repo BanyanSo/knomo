@@ -469,13 +469,11 @@ test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影�
 	const service = new CatalogReadService({ catalog, });
 
 	assert.equal((await service.query({ limit: 1 })).items.length, 1);
-	const summary = await service.getLibrarySummary();
-	const facets = await service.getTagFacets();
+	const indexes = await service.getLibraryIndexes();
 
-	assert.equal(summary.complete, true);
-	assert.deepEqual(summary.value, { memoCount: 2, tagCount: 2, imageCount: 1, wordCount: 5 });
-	assert.equal(facets.complete, true);
-	assert.deepEqual(facets.value, [
+	assert.equal(indexes.complete, true);
+	assert.deepEqual(indexes.value?.summary, { memoCount: 2, tagCount: 2, imageCount: 1, wordCount: 5 });
+	assert.deepEqual(indexes.value?.facets, [
 		{ key: "project/alpha", label: "project/alpha", count: 2 },
 		{ key: "life", label: "Life", count: 1 },
 	]);
@@ -488,7 +486,7 @@ test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影�
 	const combined = await service.getLibraryIndexes();
 	assert.equal(reads, 1);
 	assert.equal(combined.complete, true);
-	assert.deepEqual(combined.value, { summary: summary.value, facets: facets.value });
+	assert.deepEqual(combined.value, indexes.value);
 	assert.equal(combined.catalogRevision, (await read()).catalogRevision);
 	await service.getLibraryIndexes();
 	assert.equal(reads, 2);
@@ -514,7 +512,6 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	});
 	const service = new CatalogReadService({ catalog, });
 
-	assert.equal((await service.getLibrarySummary()).value, null);
 	assert.equal((await service.getLibraryIndexes()).value, null);
 	assert.equal(await service.getCoverageForRange("2026-08-01", "2026-08-31"), true);
 	assert.equal(await service.getCoverageForRange("2026-07-31", "2026-08-31"), false);

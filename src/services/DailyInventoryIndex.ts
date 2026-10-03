@@ -67,10 +67,6 @@ export class DailyInventoryIndex {
 		return [...this.pathsByPeriod.keys()].sort();
 	}
 
-	hasPeriod(period: string): boolean {
-		return (this.pathsByPeriod.get(period)?.size ?? 0) > 0;
-	}
-
 	hasScope(scopeKey: string): boolean {
 		return this.scopeKey === scopeKey;
 	}

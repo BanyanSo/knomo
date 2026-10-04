@@ -45,6 +45,7 @@ import { t } from "./i18n";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
+import { disposeLocalComposerDraftStores } from "./ui/LocalComposerDraftStore";
 import { createKnomoQuickCommands, KnomoQuickCommandController } from "./ui/KnomoQuickCommands";
 import { createKnomoProtocolHandler } from "./ui/KnomoProtocolHandler";
 import type { CatalogCoverage, CatalogRefreshResult } from "./types/catalog";
@@ -52,13 +53,6 @@ import { formatDatePart } from "./utils/date";
 import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
-const DESKTOP_STARTUP_DAILY_SCAN_DAYS = 30;
-const MOBILE_STARTUP_DAILY_SCAN_DAYS = 7;
-
-export function getStartupDailyScanDays(isMobile: boolean): number {
-	return isMobile ? MOBILE_STARTUP_DAILY_SCAN_DAYS : DESKTOP_STARTUP_DAILY_SCAN_DAYS;
-}
-
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
 	manualRefreshPromise: Promise<CatalogRefreshResult> | null = null;
@@ -72,8 +66,18 @@ export default class KnomoPlugin extends Plugin {
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
 	private quickCommandController: KnomoQuickCommandController<WorkspaceLeaf> | null = null;
+	private cancelStartup: (() => void) | null = null;
 
 	async onload(): Promise<void> {
+		try {
+			await this.initializePlugin();
+		} catch (error) {
+			this.cancelStartup?.();
+			throw error;
+		}
+	}
+
+	private async initializePlugin(): Promise<void> {
 		registerKnomoIcons();
 		const selfWriteTracker = new SelfWriteTracker();
 		const lowPriorityWorkQueue = new LowPriorityWorkQueue(() => this.app.workspace.containerEl.win);
@@ -88,15 +92,9 @@ export default class KnomoPlugin extends Plugin {
 			assertActive: () => { if (lowPriorityWorkQueue.signal.aborted) throw new Error("Monthly relocation cancelled."); },
 		});
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
-		const settingsLoaded = await this.loadSettingsSafely();
-		if (settingsLoaded) {
-			await this.initializeTimeBuoyDefaultSafely();
-		}
-
 		const diaryMemoParser = new DiaryMemoParser();
 		const dailyNotesProvider = new DailyNotesProvider(this.app);
 		const dailyNoteService = new DailyNoteService(this.app, dailyNotesProvider);
-		await this.refreshDailyStatusSafely(dailyNoteService);
 		const attachmentService = new AttachmentService(this.app);
 
 		const memoCatalogStore = new FallbackMemoCatalogStore(
@@ -104,11 +102,72 @@ export default class KnomoPlugin extends Plugin {
 			new InMemoryMemoCatalogStore(),
 			async () => { await this.catalogIndexCoordinator?.refreshLocalCatalog(); },
 		);
-		this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
-		// 工作区恢复早于布局就绪回调，先打开视图查询依赖。
-		await this.memoCatalogService.open();
-		const knomoCurrentConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage());
-		await knomoCurrentConfigService.initializeLocalConfig();
+		const memoCatalogService = this.memoCatalogService = new MemoCatalogService(memoCatalogStore);
+		this.cancelStartup = () => {
+			lowPriorityWorkQueue.stop();
+			memoCatalogService.close();
+		};
+		this.register(this.cancelStartup);
+		// 三路独立 I/O 同步发起并立即汇合；时间浮标默认值仍串行等待设置。
+		// 工作区恢复可能早于布局就绪，视图注册必须等待 DB（含降级）打开终态。
+		const [settingsLoaded] = await Promise.all([
+			(async () => {
+				const loaded = await this.loadSettingsSafely();
+				if (loaded && !lowPriorityWorkQueue.signal.aborted) await this.initializeTimeBuoyDefaultSafely();
+				return loaded;
+			})(),
+			this.refreshDailyStatusSafely(dailyNoteService),
+			memoCatalogService.open().finally(() => {
+				// 卸载时 open 可能尚未完成，晚到的连接也必须关闭。
+				if (lowPriorityWorkQueue.signal.aborted) memoCatalogService.close();
+			}),
+		]);
+		if (lowPriorityWorkQueue.signal.aborted) return;
+		const knomoCurrentConfigService = new KnomoCurrentConfigService(this.settingsService, dailyNotesProvider, () => getLanguage(), {
+			cancellationSignal: lowPriorityWorkQueue.signal,
+			prepareInitialization: async (reload) => {
+				if (reload) await this.initializeTimeBuoyDefaultSafely();
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				if (this.settingsService.getLoadStatus() === "ready") await this.initializeMonthlyExcludeDefaultSafely();
+			},
+		});
+		let catalogInitialization: Promise<void>;
+		let catalogInitialized = false;
+		const trackCatalogInventory = <T>(operation: Promise<T>): Promise<T> => {
+			const tracked = operation.then(result => {
+				if (catalogInitialization === completion && !lowPriorityWorkQueue.signal.aborted) catalogInitialized = true;
+				return result;
+			});
+			const completion = catalogInitialization = tracked.then(() => undefined);
+			// 调用方处理原始错误；共享等待也立即接住失败。
+			void catalogInitialization.catch(() => undefined);
+			return tracked;
+		};
+		const refreshCatalogInventory = (): Promise<CatalogRefreshResult> => {
+			const previous = catalogInitialization;
+			return trackCatalogInventory((async () => {
+				await previous.catch(() => undefined);
+				if (lowPriorityWorkQueue.signal.aborted) throw new Error("Catalog refresh cancelled.");
+				return this.catalogIndexCoordinator!.refreshLocalCatalog();
+			})());
+		};
+		let monthlyInitialization: Promise<void> | null = null;
+		const initializeMonthly = async () => {
+			// 配置通知可能排入新的 inventory，旧尝试完成不能提前放行 Monthly。
+			let inventory: Promise<void>;
+			do {
+				inventory = catalogInitialization;
+				await inventory;
+			} while (inventory !== catalogInitialization);
+			if (lowPriorityWorkQueue.signal.aborted || !knomoCurrentConfigService.isMonthlyProjectionAllowed()) return;
+			if (monthlyInitialization === null) {
+				monthlyInitialization = this.monthlyProjectionCoordinator!.initialize().catch(error => {
+					monthlyInitialization = null;
+					throw error;
+				});
+			}
+			await monthlyInitialization;
+		};
 
 		const getEffectiveDailyConfig = () => {
 			const config = dailyNotesProvider.getConfig();
@@ -153,7 +212,7 @@ export default class KnomoPlugin extends Plugin {
 					if (this.catalogReadService === null) throw new Error("Catalog read service is not available.");
 					return this.catalogReadService.listMonthlyProjectionPeriods();
 				},
-				isProjectionAllowed: () => knomoCurrentConfigService.isMonthlyProjectionAllowed(),
+				isProjectionAllowed: () => catalogInitialized && knomoCurrentConfigService.isMonthlyProjectionAllowed(),
 				workQueue: lowPriorityWorkQueue,
 				onStateChanged: () => {
 					const failureVisible = this.monthlyProjectionCoordinator?.getProjectionState() === "failed";
@@ -191,7 +250,7 @@ export default class KnomoPlugin extends Plugin {
 				const date = parseLogicalDate(logicalDate);
 				return dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig());
 			},
-			getLogicalDateForPath: async (sourcePath) => {
+			getLogicalDateForPath: (sourcePath) => {
 				const date = parseDailyNoteDateFromPath(sourcePath, getEffectiveDailyConfig());
 				if (date === null) throw new Error("Daily path does not match the active configuration: " + sourcePath);
 				return formatDatePart(date);
@@ -250,9 +309,10 @@ export default class KnomoPlugin extends Plugin {
 					return dailyNoteService.getDailyNotePathForDateWithConfig(date, getEffectiveDailyConfig());
 				},
 				refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
-				refreshLocalCatalog: () => {
-					if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
-					return this.catalogIndexCoordinator.refreshLocalCatalog();
+				refreshLocalCatalog: async () => {
+					const result = await refreshCatalogInventory();
+					await initializeMonthly().catch(() => settingTab?.refreshAttentionIfVisible());
+					return result;
 				},
 				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
@@ -302,8 +362,17 @@ export default class KnomoPlugin extends Plugin {
 				const nextTrashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
 				trashStore.invalidateConfiguration(nextTrashConfiguration !== trashConfiguration);
 				trashConfiguration = nextTrashConfiguration;
-				await this.monthlyProjectionCoordinator?.handleConfigurationChanged().catch(() => undefined);
-				await this.catalogIndexCoordinator?.refreshLocalCatalog().catch(() => undefined);
+				if (knomoCurrentConfigService.getStatus() !== "ready") await knomoCurrentConfigService.initialize();
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				// 先恢复当前 inventory；Monthly 失败不能阻断独立索引与视图刷新。
+				await refreshCatalogInventory().catch(() => undefined);
+				try {
+					await initializeMonthly();
+					if (!lowPriorityWorkQueue.signal.aborted) await this.monthlyProjectionCoordinator?.handleConfigurationChanged();
+				} catch {
+					settingTab?.refreshAttentionIfVisible();
+				}
+				if (lowPriorityWorkQueue.signal.aborted) return;
 				await this.queueRefreshOpenViews();
 			});
 			this.registerDomEvent(this.app.workspace.containerEl.win, "focus", () => {
@@ -321,24 +390,19 @@ export default class KnomoPlugin extends Plugin {
 		const shuffleDayService = new ShuffleDayService(pluginDataStore);
 		const obsidianExcludeService = new ObsidianExcludeService(this.app);
 		const retryRuntimeState = async (): Promise<void> => {
-			let settingsRecovered = false;
-			if (this.settingsService.getLoadStatus() === "unavailable") {
-				await this.settingsService.loadSettings();
-				await this.settingsService.initializeTimeBuoyDefault().catch(() => undefined);
-				await this.settingsService.initializeMonthlyExcludeDefault();
-				await startupBootstrapService.initialize();
-				settingsRecovered = true;
-			} else if (startupBootstrapService.getSnapshot().status === "unavailable") {
-				await startupBootstrapService.initialize();
-			} else if (knomoCurrentConfigService.getStatus() === "unavailable") {
-				await knomoCurrentConfigService.reloadConfiguration();
+			const settingsRecovered = this.settingsService.getLoadStatus() === "unavailable";
+			if (settingsRecovered || startupBootstrapService.getSnapshot().status === "unavailable"
+				|| knomoCurrentConfigService.getStatus() !== "ready") {
+				const retry = knomoCurrentConfigService.reloadConfiguration();
+				await startupBootstrapService.initialize(retry);
 			}
+			if (lowPriorityWorkQueue.signal.aborted) return;
 			const catalogWasUsingFallback = memoCatalogStore.isUsingFallback;
 			await this.memoCatalogService?.open();
-			if (catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
-				await this.catalogIndexCoordinator?.refreshLocalCatalog();
+			if (!catalogInitialized || settingsRecovered || catalogWasUsingFallback && !memoCatalogStore.isUsingFallback) {
+				await refreshCatalogInventory();
 			}
-			if (settingsRecovered) await this.catalogIndexCoordinator?.refreshLocalCatalog();
+			await initializeMonthly();
 			await this.legacyTrashMigrationService?.run();
 		};
 		this.quickCommandController = new KnomoQuickCommandController({
@@ -440,16 +504,17 @@ export default class KnomoPlugin extends Plugin {
 		);
 		this.addSettingTab(settingTab);
 
+		// 前台默认值已完成；后台配置串行链与 inventory 同步启动。
+		const configurationInitialization = knomoCurrentConfigService.initialize();
+		const bootstrapInitialization = startupBootstrapService.initialize(configurationInitialization).catch(() => undefined);
+		trackCatalogInventory(this.catalogIndexCoordinator!.initialize());
 		this.runtimeInitializationPromise = initializeCatalogRuntime({
-			initializeCatalog: () => this.catalogIndexCoordinator!.initialize(),
+			initializeCatalog: () => catalogInitialization,
 			primeCatalog: async () => { await this.catalogReadService?.prime(); },
-			initializeConfiguration: async () => {
-				await knomoCurrentConfigService.initialize();
-				if (!lowPriorityWorkQueue.signal.aborted) await this.initializeMonthlyExcludeDefaultSafely();
-			},
-			initializeMonthly: async () => { await this.monthlyProjectionCoordinator?.initialize(); },
+			initializeConfiguration: () => configurationInitialization,
+			initializeMonthly,
 			initializeRecovery: async () => {
-				if (settingsLoaded) await startupBootstrapService.initialize().catch(() => undefined);
+				if (settingsLoaded) await bootstrapInitialization;
 				if (!lowPriorityWorkQueue.signal.aborted) await this.legacyTrashMigrationService?.run();
 			},
 			isCancelled: () => lowPriorityWorkQueue.signal.aborted,
@@ -466,6 +531,11 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.cancelStartup?.();
+		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+			if (leaf.view instanceof KnomoView) leaf.view.flushLocalDraft();
+		}
+		disposeLocalComposerDraftStores(this.app);
 		this.quickCommandController?.dispose();
 		this.quickCommandController = null;
 		this.viewRefreshScheduler?.clear();

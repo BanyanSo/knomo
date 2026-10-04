@@ -96,7 +96,7 @@ function renderTabs(
 		error.createSpan({ text: t("timeBuoy.loadFailed") });
 		renderActionButton(error, t("timeBuoy.retry"), "retry-time-buoy");
 	}
-	if (activePanel !== null && snapshot.activeTab !== "today" && !snapshot.complete) {
+	if (activePanel !== null && !snapshot.complete) {
 		activePanel.createDiv({
 			cls: "knomo-time-buoy-partial",
 			text: t("timeBuoy.partial"),

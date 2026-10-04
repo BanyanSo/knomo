@@ -233,7 +233,6 @@ interface SaveResult {
 	memoId: string;
 	memo: null;
 	timeBuoyDates: string[];
-	followUpPending: false;
 	localRefreshPending: false;
 }
 
@@ -243,7 +242,6 @@ function makeSaveResult(): SaveResult {
 		memoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
 		memo: null,
 		timeBuoyDates: [],
-		followUpPending: false,
 		localRefreshPending: false,
 	};
 }

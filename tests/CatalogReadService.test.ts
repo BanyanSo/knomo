@@ -10,6 +10,48 @@ import type { MemoObservation } from "../src/types/catalog";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("今日浮标等待源 Daily 历史覆盖，扫描完成补齐历史浮标", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, [makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "today")]);
+	await store.setCoverage({ kind: "partial", coveredFromDate: "2026-08-01", pendingFileCount: 1, coveredFileCount: 1, totalFileCount: 2 });
+	const service = new CatalogReadService({ catalog });
+	const partial = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.ok(partial.missingPeriods.length > 0);
+	const historical = makeObservation("Daily/2020-01-01.md", "2020-01-01", 1, "historical buoy");
+	historical.timeBuoyDates = ["2026-08-22"];
+	await seedCatalogFiles(catalog, store, [historical]);
+	const complete = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.deepEqual(complete.missingPeriods, []);
+	assert.equal(complete.items.length, 1);
+	assert.equal(complete.items[0]?.instance.targetDate, "2026-08-22");
+	store.close();
+});
+
+test("浮标正文转换期间索引变化时拒绝提交旧页", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const path = "Daily/2026-08-22.md";
+	await seedCatalog(catalog, store, [{ ...makeObservation(path, "2026-08-22", 1, "same"), timeBuoyDates: ["2026-08-22"] }]);
+	const original = store.queryTimeBuoys.bind(store);
+	store.queryTimeBuoys = async request => {
+		const page = await original(request);
+		await catalog.deleteFile(path);
+		return page;
+	};
+	const page = await new CatalogReadService({ catalog }).queryTimeBuoyPage({ today: "2026-08-22", tab: "today", limit: 30 });
+	assert.equal(page.invalidated, true);
+	assert.deepEqual(page.items, []);
+});
+
 test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白归一化后保持一致", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
@@ -90,28 +132,33 @@ test("那年今日的实际视图查询、分页和统计均排除今天的三�
 	}
 });
 
-test("浮标保留实际页 revision，跨页失效不是成功空结果", async () => {
+test("今日浮标按页读取并拒绝 revision 或覆盖变化后的游标", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
 	const catalog = new MemoCatalogService(store);
-	await seedCatalog(catalog, store, [makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "same")]);
+	const observations = Array.from({ length: 65 }, (_, i) => ({
+		...makeObservation("Daily/2026-08-22.md", "2026-08-22", i + 1, "same"), timeBuoyDates: ["2026-08-22"],
+	}));
+	await seedCatalog(catalog, store, observations);
 	const service = new CatalogReadService({ catalog });
-	const page = await service.query({ limit: 1 });
-	service.query = async () => page;
-	const result = await service.queryTimeBuoysForDate("2026-08-22");
-	assert.equal(result.catalogRevision, page.catalogRevision);
-	assert.deepEqual(result.coverage, page.coverage);
-	let calls = 0;
-	service.query = async () => ++calls === 1
-		? { ...page, nextCursor: {} as NonNullable<typeof page.nextCursor> }
-		: { ...page, invalidated: true, catalogRevision: page.catalogRevision + 1 };
-	const invalid = await service.queryTimeBuoysForDate("2026-08-22");
-	assert.equal(invalid.invalidated, true);
-	assert.deepEqual(invalid.items, []);
-	assert.equal(calls, 2);
+	const first = await service.queryTimeBuoysForDate("2026-08-22");
+	assert.equal(first.items.length, 30);
+	assert.ok(first.nextCursor);
+	const second = await service.queryTimeBuoysForDate("2026-08-22", first.nextCursor);
+	assert.equal(new Set([...first.items, ...second.items].map(item => item.memo.id)).size, 60);
+	const third = await service.queryTimeBuoysForDate("2026-08-22", second.nextCursor);
+	assert.equal(third.items.length, 5);
+	assert.equal(third.nextCursor, null);
+	await store.setCoverage({ ...(await store.getCoverage()), kind: "partial", pendingFileCount: 1 });
+	const changedCoverage = await service.queryTimeBuoysForDate("2026-08-22", first.nextCursor);
+	assert.equal(changedCoverage.invalidated, true);
+	assert.deepEqual(changedCoverage.items, []);
+	assert.ok(changedCoverage.missingPeriods.length);
+	await catalog.deleteFile("Daily/2026-08-22.md");
+	assert.equal((await service.queryTimeBuoysForDate("2026-08-22", first.nextCursor)).invalidated, true);
 });
 
 test("清理待处理状态独立于已完成迁移传递，成功后可清除", async () => {
@@ -406,7 +453,7 @@ test("Catalog revision 变化后随机重逢重建候选池", async () => {
 	assert.deepEqual(new Set(refreshed.map((item) => item.contentSnapshot)), new Set([first.content, second.content]));
 });
 
-test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影响", async () => {
+test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影响", async t => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -422,16 +469,29 @@ test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影�
 	const service = new CatalogReadService({ catalog, });
 
 	assert.equal((await service.query({ limit: 1 })).items.length, 1);
-	const summary = await service.getLibrarySummary();
-	const facets = await service.getTagFacets();
+	const indexes = await service.getLibraryIndexes();
 
-	assert.equal(summary.complete, true);
-	assert.deepEqual(summary.value, { memoCount: 2, tagCount: 2, imageCount: 1, wordCount: 5 });
-	assert.equal(facets.complete, true);
-	assert.deepEqual(facets.value, [
+	assert.equal(indexes.complete, true);
+	assert.deepEqual(indexes.value?.summary, { memoCount: 2, tagCount: 2, imageCount: 1, wordCount: 5 });
+	assert.deepEqual(indexes.value?.facets, [
 		{ key: "project/alpha", label: "project/alpha", count: 2 },
 		{ key: "life", label: "Life", count: 1 },
 	]);
+	const read = store.readAggregateSnapshot.bind(store);
+	let reads = 0;
+	t.mock.method(store, "readAggregateSnapshot", () => { reads++; return read(); });
+	for (const method of ["listDailyAggregates", "query", "count", "getCoverage", "getCatalogRevision"] as const) {
+		t.mock.method(store, method, () => { throw new Error("Sidebar must use one aggregate snapshot"); });
+	}
+	const combined = await service.getLibraryIndexes();
+	assert.equal(reads, 1);
+	assert.equal(combined.complete, true);
+	assert.deepEqual(combined.value, indexes.value);
+	assert.equal(combined.catalogRevision, (await read()).catalogRevision);
+	await service.getLibraryIndexes();
+	assert.equal(reads, 2);
+	t.mock.method(store, "readAggregateSnapshot", async () => ({ ...await read(), invalidated: true }));
+	assert.equal((await service.getLibraryIndexes()).value, null);
 });
 
 test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", async () => {
@@ -452,7 +512,7 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	});
 	const service = new CatalogReadService({ catalog, });
 
-	assert.equal((await service.getLibrarySummary()).value, null);
+	assert.equal((await service.getLibraryIndexes()).value, null);
 	assert.equal(await service.getCoverageForRange("2026-08-01", "2026-08-31"), true);
 	assert.equal(await service.getCoverageForRange("2026-07-31", "2026-08-31"), false);
 	assert.equal((await service.count({ fromDate: "2026-08-01", toDate: "2026-08-31" })).count, 1);

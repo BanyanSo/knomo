@@ -1,4 +1,4 @@
-import { normalizeComposerToolbar } from "../settings/composerToolbar";
+import { normalizeComposerToolbar, type ComposerAction } from "../settings/composerToolbar";
 import { composerActionLabels } from "./KnomoComposer";
 import { Notice, requireApiVersion, PluginSettingTab, Setting, SettingGroup } from "obsidian";
 import type { App, ButtonComponent, Plugin, SettingDefinitionItem, ToggleComponent } from "obsidian";
@@ -262,7 +262,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderAboutSettings(parent: HTMLElement): void {
 		let card = this.createSettingCard(parent, "settings.about.versionHeading");
-		new Setting(card).setName(t("settings.about.currentVersion") + " " + this.pluginVersion)
+		new Setting(card).setClass("knomo-settings-action-row").setName(t("settings.about.currentVersion") + " " + this.pluginVersion)
 			.addButton(button => button.setButtonText(t("settings.about.manageUpdates")).onClick(() => {
 				// 复用宿主设置管理器，直接切换到原生第三方插件页。
 				const setting = (this.app as App & { setting: { openTabById(id: string): void } }).setting;
@@ -270,9 +270,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			}));
 		this.renderLinkSetting(card, "settings.about.releaseNotes", "settings.about.viewReleaseNotes", ABOUT_LINKS.releases);
 		card = this.createSettingCard(parent, "settings.about.helpHeading");
-		this.renderTextLink(new Setting(card).setName(t("settings.about.reportIssue")).controlEl,
+		this.renderTextLink(new Setting(card).setClass("knomo-settings-value-row").setName(t("settings.about.reportIssue")).controlEl,
 			t("settings.about.submitGithub"), ABOUT_LINKS.issues);
-		this.renderTextLink(new Setting(card).setName(t("settings.about.userGuide")).controlEl,
+		this.renderTextLink(new Setting(card).setClass("knomo-settings-value-row").setName(t("settings.about.userGuide")).controlEl,
 			t("settings.about.open"), getKnomoLocale() === "zh-CN" ? ABOUT_LINKS.guideZh : ABOUT_LINKS.guideEn);
 		this.renderDeveloperContacts(card, DEVELOPER_CONTACTS);
 		const support = new Setting(card).setName(t("settings.about.supportHeading")).setDesc(t("settings.about.wechatDesc"));
@@ -293,7 +293,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private renderDeveloperContacts(parent: HTMLElement, contacts: readonly DeveloperContact[]): void {
 		for (const contact of contacts) {
-			const setting = new Setting(parent).setName(t(contact.labelKey));
+			const setting = new Setting(parent).setClass("knomo-settings-value-row").setName(t(contact.labelKey));
 			if (contact.href) this.renderTextLink(setting.controlEl, contact.value, contact.href);
 			else setting.controlEl.createSpan({ text: contact.value });
 		}
@@ -307,7 +307,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		parent: HTMLElement, nameKey: TranslationKey, actionKey: TranslationKey,
 		href: string,
 	): void {
-		const setting = new Setting(parent).setName(t(nameKey));
+		const setting = new Setting(parent).setClass("knomo-settings-action-row").setName(t(nameKey));
 		setting.addButton(button => {
 			button.setButtonText(t(actionKey));
 			button.onClick(() => { this.openAboutLink(href); });
@@ -336,35 +336,64 @@ export class KnomoSettingTab extends PluginSettingTab {
 		details.querySelectorAll(":scope > .knomo-toolbar-settings").forEach(container => container.remove());
 		const container = details.createDiv({ cls: "knomo-toolbar-settings" });
 		let saving = false;
-		const render = () => {
-			container.empty();
-			const controls: { setDisabled(disabled: boolean): unknown }[] = [];
-			const preferences = this.settingsService.getSettings().composerToolbar;
-			const save = async (next: typeof preferences) => {
-				if (saving) return;
-				saving = true;
-				controls.forEach(control => control.setDisabled(true));
-				try { await this.settingsService.updateSettings({ composerToolbar: next }); }
-				catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
-				finally { saving = false; render(); }
-			};
+		let preferences = this.settingsService.getSettings().composerToolbar;
+		const controls: { setDisabled(disabled: boolean): unknown }[] = [];
+		const rows = new Map<ComposerAction, { element: HTMLElement; update(index: number): void }>();
+		const sync = () => {
+			preferences = this.settingsService.getSettings().composerToolbar;
+			const focused = container.ownerDocument.activeElement as HTMLElement | null;
+			const scrollPositions: { element: HTMLElement; top: number; left: number }[] = [];
+			for (let element: HTMLElement | null = container; element; element = element.parentElement) {
+				scrollPositions.push({ element, top: element.scrollTop, left: element.scrollLeft });
+			}
+			// 复用现有行，显示切换不重建；排序与重置只移动发生变化的节点。
 			preferences.order.forEach((action, index) => {
-				new Setting(container).setName(t(composerActionLabels[action]))
-					.addToggle(toggle => { controls.push(toggle); toggle.setValue(!preferences.hidden.includes(action)).onChange(visible => {
-						void save({ order: [...preferences.order], hidden: visible ? preferences.hidden.filter(item => item !== action) : [...preferences.hidden, action] });
-					}); })
-					.addButton(button => { controls.push(button); button.setIcon("arrow-up").setTooltip(t("settings.toolbar.up")).setDisabled(index === 0).onClick(() => {
-						const order = [...preferences.order]; [order[index - 1], order[index]] = [order[index], order[index - 1]];
-						void save({ ...preferences, order });
-					}); })
-					.addButton(button => { controls.push(button); button.setIcon("arrow-down").setTooltip(t("settings.toolbar.down")).setDisabled(index === preferences.order.length - 1).onClick(() => {
-						const order = [...preferences.order]; [order[index + 1], order[index]] = [order[index], order[index + 1]];
-						void save({ ...preferences, order });
-					}); });
+				const row = rows.get(action)!;
+				if (container.children[index] !== row.element) container.insertBefore(row.element, container.children[index] ?? null);
+				row.update(index);
 			});
-			new Setting(container).addButton(button => { controls.push(button); button.setButtonText(t("settings.toolbar.reset")).onClick(() => { void save(normalizeComposerToolbar(undefined)); }); });
+			if (focused && container.contains(focused) && container.ownerDocument.activeElement !== focused) focused.focus({ preventScroll: true });
+			for (const { element, top, left } of scrollPositions) { element.scrollTop = top; element.scrollLeft = left; }
 		};
-		render();
+		const save = async (next: typeof preferences) => {
+			if (saving) return;
+			const focused = container.ownerDocument.activeElement as HTMLElement | null;
+			const ownedFocus = focused && container.contains(focused) ? focused : null;
+			saving = true;
+			controls.forEach(control => control.setDisabled(true));
+			try { await this.settingsService.updateSettings({ composerToolbar: next }); }
+			catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
+			finally {
+				saving = false;
+				controls.forEach(control => control.setDisabled(false));
+				sync();
+				// 禁用按钮可能丢失焦点；用户已转移焦点或关闭面板时不抢回。
+				if (ownedFocus?.isConnected && !ownedFocus.closest("[hidden]") && container.ownerDocument.activeElement === container.ownerDocument.body) {
+					ownedFocus.focus({ preventScroll: true });
+				}
+			}
+		};
+		preferences.order.forEach(action => {
+			let toggleControl: ToggleComponent | undefined, upControl: ButtonComponent | undefined, downControl: ButtonComponent | undefined;
+			const setting = new Setting(container).setClass("knomo-toolbar-item").setName(t(composerActionLabels[action]));
+			setting.addToggle(toggle => { toggleControl = toggle; controls.push(toggle); toggle.onChange(visible => {
+				void save({ order: [...preferences.order], hidden: visible ? preferences.hidden.filter(item => item !== action) : [...preferences.hidden, action] });
+			}); });
+			const move = (offset: number) => {
+				const index = preferences.order.indexOf(action);
+				const order = [...preferences.order]; [order[index + offset], order[index]] = [order[index], order[index + offset]];
+				void save({ ...preferences, order });
+			};
+			setting.addButton(button => { upControl = button; controls.push(button); button.setIcon("arrow-up").setTooltip(t("settings.toolbar.up")).onClick(() => { move(-1); }); });
+			setting.addButton(button => { downControl = button; controls.push(button); button.setIcon("arrow-down").setTooltip(t("settings.toolbar.down")).onClick(() => { move(1); }); });
+			rows.set(action, { element: setting.settingEl, update: index => {
+				toggleControl?.setValue(!preferences.hidden.includes(action));
+				upControl?.setDisabled(index === 0);
+				downControl?.setDisabled(index === preferences.order.length - 1);
+			} });
+		});
+		new Setting(container).setClass("knomo-toolbar-reset").addButton(button => { controls.push(button); button.setButtonText(t("settings.toolbar.reset")).onClick(() => { void save(normalizeComposerToolbar(undefined)); }); });
+		sync();
 	}
 
 	private renderDailyHeadingSetting(setting: Setting): void {
@@ -398,6 +427,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderInsertPositionSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-select-row");
 		const settings = this.settingsService.getSettings();
 		setting.addDropdown((dropdown) => {
 			dropdown.addOption("bottom", t("settings.insertPosition.bottom"));
@@ -412,6 +442,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderTimeFormatSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-select-row");
 		const settings = this.settingsService.getSettings();
 		setting.addDropdown((dropdown) => {
 			dropdown.addOption("HH:mm:ss", "HH:mm:ss");
@@ -426,6 +457,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderRecentTimeFlowSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-toggle-row");
 		setting.addToggle((toggle) => {
 			toggle.setValue(this.settingsService.getSettings().recentTimeFlowEnabled);
 			toggle.onChange(async (value) => {
@@ -440,6 +472,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderTimeBuoySetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-toggle-row");
 		const settings = this.settingsService.getSettings();
 		setting.addToggle((toggle) => {
 			toggle.setValue(settings.timeBuoyEnabled);
@@ -450,6 +483,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderDateOrderSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-select-row");
 		const settings = this.settingsService.getSettings();
 		setting.addDropdown((dropdown) => {
 			dropdown.addOption("asc", t("settings.dateOrder.asc"));
@@ -467,6 +501,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderMonthlyExcludeSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-toggle-row");
 		const settings = this.settingsService.getSettings();
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
 		setting.addToggle((toggle) => {
@@ -479,6 +514,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 			this.setExcludeStatus(statusEl, t("settings.excludeMonthly.autoFailed"), true);
 			setting.addButton((button) => {
 				button.setButtonText(t("settings.excludeMonthly.retry"));
+				// 重试独占下一行，避免错误状态改变开关列的宽度。
+				button.buttonEl.addClass("knomo-settings-row-action");
+				setting.settingEl.appendChild(button.buttonEl);
 				button.onClick(() => { void this.retryMonthlyExcludeInitialization(button); });
 			});
 		}
@@ -1170,6 +1208,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderAttentionSetting(kind: KnomoSettingAttentionKind, setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-action-row");
 		switch (kind) {
 			case "settings": this.renderSettingsAttentionSetting(setting); break;
 			case "current-config": this.renderCurrentConfigSetting(setting); break;

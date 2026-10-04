@@ -72,7 +72,9 @@ test("enables Time Buoy by default when no setting was persisted", async () => {
 
 	assert.equal(service.getSettings().timeBuoyEnabled, true);
 	assert.equal(service.getSettings().timeBuoyIntroDismissed, true);
-	assert.equal(service.consumeInitialTimeBuoyBuildPending(), true);
+	assert.equal(plugin.saveCalls, 1);
+	await service.initializeTimeBuoyDefault();
+	assert.equal(plugin.saveCalls, 1);
 });
 
 test("does not override an explicitly persisted Time Buoy setting", async () => {

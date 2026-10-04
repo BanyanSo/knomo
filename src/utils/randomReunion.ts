@@ -17,11 +17,6 @@ export interface RandomReunionOptions {
 	random?: () => number;
 }
 
-interface WeightedMemo {
-	memo: MemoRecord;
-	weight: number;
-}
-
 const DEFAULT_MIN_CONTENT_LENGTH = 8;
 const DEFAULT_BLACKLIST_TAGS = ["临时", "草稿", "已归档", "temp", "temporary", "draft", "archived"];
 const DEFAULT_BLACKLIST_PATH_PREFIXES = ["Template/", "Archive/"];
@@ -207,24 +202,6 @@ export function selectDiverseRandomReunionMemos(
 		}
 	}
 	return selected;
-}
-
-export function getRandomReunionMemos(
-	memos: MemoRecord[],
-	reviewStates: MemoReviewStateMap,
-	count: number,
-	options: RandomReunionOptions = {},
-): MemoRecord[] {
-	const today = options.today ?? new Date();
-	const random = options.random ?? Math.random;
-	const candidates = filterRandomReunionCandidates(memos, { ...options, today });
-	const weightedMemos: WeightedMemo[] = candidates.map((memo) => ({
-		memo,
-		weight: calculateRandomReunionWeight(memo, reviewStates[memo.id], today),
-	}));
-	const ordered = weightedSampleWithoutReplacement(weightedMemos, (item) => item.weight, weightedMemos.length, random)
-		.map((item) => item.memo);
-	return selectDiverseRandomReunionMemos(ordered, count, options);
 }
 
 function hasBlacklistedTag(tags: string[], blacklistTags: Set<string>): boolean {

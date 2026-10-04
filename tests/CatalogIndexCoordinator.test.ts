@@ -6,6 +6,56 @@ import type { App } from "obsidian";
 import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB 下次启动复用新缓存", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator, CATALOG_CHECKPOINT_META_KEY } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser, CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService, buildCatalogPartition } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
+	const { hashText } = await import("../src/utils/hash");
+	const databaseName = `search-upgrade-${Date.now()}`;
+	for (const store of [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(databaseName, { factory: indexedDB, keyRange: IDBKeyRange })]) {
+		const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 中文ABC项目2026\n", mtime: 10 }];
+		for (let boot = 0; boot < 3; boot += 1) {
+			const fixture = await createCoordinatorFixture(files);
+			const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(store),
+				new DiaryMemoParser(async bytes => sha256(bytes)), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+				{ now: () => 1000 + boot * 1000, fullAuditIntervalMs: 10_000 });
+			try {
+				coordinator.start(fixture.owner);
+				await coordinator.initialize();
+				await coordinator.waitForIdle();
+				assert.equal(fixture.readCount(), boot === 2 ? 0 : 1, `boot ${boot}`);
+				for (const text of ["中", "中文", "项目", "ABC"]) {
+					assert.equal((await store.query({ text, limit: 1 })).items.length, 1, text);
+					assert.equal((await store.count({ text })).count, 1, text);
+				}
+			} finally { fixture.unload(); }
+			if (boot === 0) {
+				await store.open();
+				const batch = (await store.listFileRevisionBatches())[0];
+				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: 6 }));
+				const oldPartition = buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
+					observations: batch.observations, parserVersion: 6, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
+				oldPartition.observations[0].searchTokens = ["中文abc项目2026", "中文a", "文ab", "abc", "bc项", "c项目", "项目2", "目20", "202", "026"];
+				await store.replaceFilePartition(oldPartition);
+				const checkpoint = await store.getMeta<Record<string, unknown>>(CATALOG_CHECKPOINT_META_KEY);
+				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: 6, settingsFingerprint: oldFingerprint });
+				assert.ok(CATALOG_PARSER_VERSION > 6);
+				store.close();
+			}
+		}
+	}
+	await new Promise<void>((resolve, reject) => {
+		const request = indexedDB.deleteDatabase(databaseName);
+		request.onsuccess = () => resolve();
+		request.onerror = () => reject(request.error);
+	});
+});
+
 test("Catalog 扫描 off switch 不注册事件、不读取 Daily", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

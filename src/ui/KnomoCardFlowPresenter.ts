@@ -23,12 +23,6 @@ export type CardFlowPresentation =
 		description: string;
 	}
 	| {
-		type: "onboarding";
-		title: string;
-		description: string;
-		actions: Array<{ label: string; action: string; modCta?: boolean }>;
-	}
-	| {
 		type: "items";
 		memos: MemoRecord[];
 		mode: CardFlowRenderMode;

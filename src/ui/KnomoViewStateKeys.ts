@@ -84,14 +84,6 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 	if (options.presentation.type === "empty") {
 		return getStateKey(["empty", options.presentation.title, options.presentation.description]);
 	}
-	if (options.presentation.type === "onboarding") {
-		return getStateKey([
-			"onboarding",
-			options.presentation.title,
-			options.presentation.description,
-			...options.presentation.actions.flatMap((action) => [action.label, action.action]),
-		]);
-	}
 	return getStateKey([
 		"items",
 		options.presentationContextKey ?? "",

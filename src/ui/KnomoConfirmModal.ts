@@ -12,7 +12,6 @@ export interface KnomoConfirmModalOptions {
 	confirmLabel?: string;
 	cancelLabel?: string;
 	danger?: boolean;
-	getReturnFocus?: (confirmed: boolean, previousFocus: HTMLElement | null) => HTMLElement | null;
 }
 
 export class KnomoConfirmModal extends Modal {
@@ -74,11 +73,8 @@ export class KnomoConfirmModal extends Modal {
 		}
 		this.contentEl.empty();
 
-		const focusTarget = this.options.getReturnFocus === undefined
-			? this.previousFocusEl
-			: this.options.getReturnFocus(this.result, this.previousFocusEl);
 		scheduleKnomoConfirmFocus(
-			focusTarget,
+			this.previousFocusEl,
 			(callback) => this.containerEl.win.requestAnimationFrame(callback),
 		);
 		if (!this.resolved) {
@@ -108,13 +104,6 @@ export function showKnomoConfirmModal(app: App, options: KnomoConfirmModalOption
 	return new Promise<boolean>((resolve) => {
 		new KnomoConfirmModal(app, options, resolve).open();
 	});
-}
-
-export function getDestructiveConfirmReturnFocus(
-	confirmed: boolean,
-	previousFocus: HTMLElement | null,
-): HTMLElement | null {
-	return confirmed ? null : previousFocus;
 }
 
 export function scheduleKnomoConfirmFocus(

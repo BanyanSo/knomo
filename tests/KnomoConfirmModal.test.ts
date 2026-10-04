@@ -3,12 +3,28 @@ import assert from "node:assert/strict";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("destructive confirmation restores the trigger only when cancelled", async () => {
-	const { getDestructiveConfirmReturnFocus } = await loadConfirmModalModule();
-	const previousFocus = {} as HTMLElement;
-
-	assert.equal(getDestructiveConfirmReturnFocus(false, previousFocus), previousFocus);
-	assert.equal(getDestructiveConfirmReturnFocus(true, previousFocus), null);
+test("取消或确认后关闭弹窗都恢复原焦点，并只结算一次结果", async () => {
+	const { KnomoConfirmModal } = await loadConfirmModalModule();
+	for (const confirmed of [false, true]) {
+		const callbacks: FrameRequestCallback[] = [];
+		const results: boolean[] = [];
+		let focused = 0;
+		const previousFocus = { isConnected: true, focus: () => { focused++; } } as unknown as HTMLElement;
+		const modal = Object.assign(Object.create(KnomoConfirmModal.prototype) as { onClose(): void }, {
+			previousFocusEl: previousFocus, result: confirmed, resolved: false, initialFocusFrameId: null,
+			contentEl: { empty: () => undefined },
+			containerEl: { win: { requestAnimationFrame: (callback: FrameRequestCallback) => { callbacks.push(callback); return 1; } } },
+			resolveResult: (result: boolean) => results.push(result),
+		});
+		modal.onClose();
+		assert.equal(focused, 0);
+		assert.equal(callbacks.length, 1);
+		callbacks[0]?.(0);
+		assert.equal(focused, 1);
+		assert.deepEqual(results, [confirmed]);
+		modal.onClose();
+		assert.deepEqual(results, [confirmed]);
+	}
 });
 
 test("confirm modal restores a connected focus target on the next frame", async () => {

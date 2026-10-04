@@ -407,7 +407,24 @@ function prepareComposerGeometry(
 	harness.win.flushAnimationFrames();
 }
 
-function createHarness(layout: "mobile" | "desktop-wide" = "mobile") {
+test("keyboard tracking pauses background work before focus and resumes only after settling or disposal", () => {
+	const changes: boolean[] = [];
+	const harness = createHarness("mobile", { onKeyboardTrackingChange: busy => changes.push(busy) });
+	harness.controller.open();
+	assert.deepEqual(changes, [true]);
+	harness.win.flushAnimationFrames();
+	assert.equal(harness.controller.getPhase(), "open");
+	assert.deepEqual(changes, [true], "open 阶段不等于键盘已经稳定");
+	harness.win.visualViewport.dispatchEvent("resize");
+	harness.win.flushAllTimers();
+	assert.deepEqual(changes, [true, false]);
+	harness.win.visualViewport.dispatchEvent("resize");
+	assert.deepEqual(changes, [true, false, true]);
+	harness.controller.dispose();
+	assert.deepEqual(changes, [true, false, true, false]);
+});
+
+function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { onKeyboardTrackingChange?: (busy: boolean) => void } = {}) {
 	const win = new FakeWindow();
 	const doc = new FakeDocument();
 	const root = new FakeElement("div");
@@ -431,6 +448,7 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile") {
 	const syncRootLayerOpenStates: boolean[] = [];
 	const backdropHandlers: Array<{ element: HTMLElement; handler: (event: MouseEvent) => void }> = [];
 	const controller = new MobileComposerController({
+		...options,
 		getWindow: () => win.asWindow(),
 		getDocument: () => doc.asDocument(),
 		getContainerEl: () => container.asHtml(),

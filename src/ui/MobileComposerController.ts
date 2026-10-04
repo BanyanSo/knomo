@@ -88,6 +88,7 @@ export interface MobileComposerControllerOptions {
 	updateSendButtonState: () => void;
 	updateCancelEditButtonState: () => void;
 	onClosed?: () => void;
+	onKeyboardTrackingChange?: (busy: boolean) => void;
 }
 
 export class MobileComposerController {
@@ -130,6 +131,7 @@ export class MobileComposerController {
 	private mobileComposerToolbarAnchorSource: MobileComposerToolbarAnchorSource = "unknown";
 	private mobileComposerToolbarWrapperBottom: number | null = null;
 	private mobileComposerPrepared = false;
+	private keyboardTracking = false;
 
 	constructor(private readonly options: MobileComposerControllerOptions) {}
 
@@ -139,10 +141,6 @@ export class MobileComposerController {
 
 	getOpenScrollTop(): number | null {
 		return this.mobileComposerOpenScrollTop;
-	}
-
-	clearOpenScrollTop(): void {
-		this.mobileComposerOpenScrollTop = null;
 	}
 
 	getMaxInputHeight(): number {
@@ -230,6 +228,7 @@ export class MobileComposerController {
 
 	open(): void {
 		const win = this.options.getWindow();
+		if (this.options.getLayout() === "mobile") this.setKeyboardTracking(true);
 		if (this.options.getLayout() === "mobile" && !this.options.isComposerOpen()) {
 			this.mobileComposerOpenScrollTop = this.options.getCardFlowScrollTop();
 		}
@@ -716,6 +715,7 @@ export class MobileComposerController {
 		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
 			return;
 		}
+		this.setKeyboardTracking(true);
 		if (this.mobileKeyboardDockStopTimerId !== null) {
 			this.options.getWindow().clearTimeout(this.mobileKeyboardDockStopTimerId);
 			this.mobileKeyboardDockStopTimerId = null;
@@ -758,6 +758,13 @@ export class MobileComposerController {
 			this.options.resizeInput();
 			this.refreshToolbarAnchorAndDock();
 		}
+		this.setKeyboardTracking(false);
+	}
+
+	private setKeyboardTracking(busy: boolean): void {
+		if (this.keyboardTracking === busy) return;
+		this.keyboardTracking = busy;
+		this.options.onKeyboardTrackingChange?.(busy);
 	}
 
 	private updateKeyboardMetrics(): void {

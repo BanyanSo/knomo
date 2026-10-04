@@ -49,7 +49,6 @@ export function renderKnomoSidebar(sidebar: HTMLElement, options: KnomoSidebarOp
 	brand.createDiv({ cls: "knomo-brand-title", text: "Knomo" });
 	brand.createDiv({ cls: "knomo-brand-subtitle", text: t("sidebar.subtitle") });
 	const actions = header.createDiv({ cls: "knomo-sidebar-actions" });
-	options.createIconButton(actions, "bar-chart-3", t("sidebar.stats"), "knomo-sidebar-action", "focus-stats");
 	options.createIconButton(actions, "refresh-cw", t("sidebar.refresh"), "knomo-sidebar-action", "refresh");
 	options.createIconButton(actions, "panel-left-close", t("sidebar.hide"), "knomo-sidebar-action knomo-desktop-only", "collapse-sidebar");
 

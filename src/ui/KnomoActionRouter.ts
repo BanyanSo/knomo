@@ -110,17 +110,6 @@ export function getMemoCardOpenRoute(target: Element): { element: HTMLElement; m
 	};
 }
 
-export function getComposerToolButtonRoute(target: Element): { element: HTMLElement; action: string | null } | null {
-	const toolButtonEl = closestHTMLElement(target, ".knomo-tool-button");
-	if (toolButtonEl === null) {
-		return null;
-	}
-	return {
-		element: toolButtonEl,
-		action: toolButtonEl.getAttr("data-action"),
-	};
-}
-
 function closestHTMLElement(target: Element, selector: string): HTMLElement | null {
 	const element = target.closest(selector);
 	return element?.instanceOf(HTMLElement) ? element : null;

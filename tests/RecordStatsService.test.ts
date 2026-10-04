@@ -5,28 +5,18 @@ import {
 	canAdvanceRecordStatsDate,
 	canRetreatRecordStatsDate,
 	getRecordStatsRange,
-	RecordStatsBuilder,
 	RecordStatsService as ProductionRecordStatsService,
 	shiftRecordStatsDate,
 } from "../src/services/RecordStatsService";
+import type { PreparedRecordStats } from "../src/services/RecordStatsService";
 import type { MemoViewItem } from "../src/types/memoView";
 import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 class RecordStatsService extends ProductionRecordStatsService {
 	async prepare(memos: readonly MemoViewItem[], yieldToUi: () => Promise<void>): Promise<boolean> {
-		return this.prepareFromSource(memos, async (isCurrent) => {
-			const builder = new RecordStatsBuilder();
-			for (let index = 0; index < memos.length; index += 1) {
-				if (index > 0 && index % 250 === 0) {
-					await yieldToUi();
-					if (!isCurrent()) {
-						return null;
-					}
-				}
-				builder.addMemo(memos[index]);
-			}
-			return builder.build();
-		});
+		const reader = await createCatalogReader(memos);
+		return this.prepareFromSource(memos, isCurrent => reader.buildRecordStats(yieldToUi, isCurrent));
 	}
 }
 
@@ -54,19 +44,20 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	assert.notEqual(selected, null);
 	assert.deepEqual(selected?.overview, {
 		memoCount: 4,
-		wordCount: 8,
+		// 标签现在来自真实 Markdown，标签文字也属于当前正文计数。
+		wordCount: 10,
 		recordDayCount: 3,
 	});
 	assert.deepEqual(selected?.range, {
 		memoCount: 3,
-		wordCount: 7,
+		wordCount: 9,
 		recordDayCount: 2,
 		referenceMemoCount: 0,
 		taggedMemoCount: 2,
 		untaggedMemoCount: 1,
 		imageMemoCount: 1,
 		maxDailyMemoCount: 2,
-		maxDailyWordCount: 6,
+		maxDailyWordCount: 7,
 		maxDailyMemoDates: ["2026-06-08"],
 		maxDailyWordDates: ["2026-06-08"],
 	});
@@ -110,7 +101,7 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	})).length, selected?.activeHours[23].count);
 });
 
-test("converts zoned createdAt to the current device calendar date and hour", async () => {
+test("统计使用 Daily 日期和 Markdown 时间，不随设备时区换日", async () => {
 	const originalTimeZone = process.env.TZ;
 	process.env.TZ = "Asia/Shanghai";
 	try {
@@ -123,10 +114,10 @@ test("converts zoned createdAt to the current device calendar date and hour", as
 		await service.prepare(memos, async () => {});
 		const currentWeek = service.select("week", new Date(2026, 5, 8));
 		const previousWeek = service.select("week", new Date(2026, 5, 1));
-		assert.equal(currentWeek?.range.memoCount, 1);
+		assert.equal(currentWeek?.range.memoCount, 2);
 		assert.equal(currentWeek?.activeHours[1].count, 1);
-		assert.equal(previousWeek?.range.memoCount, 1);
-		assert.equal(previousWeek?.activeHours[23].count, 1);
+		assert.equal(currentWeek?.activeHours[0].count, 1);
+		assert.equal(previousWeek?.range.memoCount, 0);
 	} finally {
 		if (originalTimeZone === undefined) delete process.env.TZ;
 		else process.env.TZ = originalTimeZone;
@@ -230,9 +221,8 @@ test("reports empty and error states without exposing partial statistics", async
 	assert.equal(emptyService.select("week", new Date(2026, 5, 8))?.range.memoCount, 0);
 
 	const service = new RecordStatsService();
-	assert.equal(await service.prepare([
-		makeMemo("invalid", "not-a-date", "text"),
-	], async () => {}), false);
+	const incomplete = await createCatalogReader([makeMemo("known", "2026-06-08T12:00:00", "text")], false);
+	assert.equal(await service.prepareFromSource("partial", isCurrent => incomplete.buildRecordStats(async () => {}, isCurrent)), false);
 	assert.equal(service.getSnapshot().state, "error");
 	assert.equal(service.select("week", new Date(2026, 5, 8)), null);
 });
@@ -255,8 +245,7 @@ test("invalidating an in-flight preparation discards its result", async () => {
 
 test("prepares statistics from a scanned source key", async () => {
 	const service = new RecordStatsService();
-	const builder = new RecordStatsBuilder();
-	builder.addMemos([
+	const prepared = await buildStats([
 		makeMemo("memo-1", "2026-06-08T10:00:00+08:00", "one"),
 		makeMemo("memo-2", "2026-06-09T10:00:00+08:00", "two words"),
 	]);
@@ -264,7 +253,7 @@ test("prepares statistics from a scanned source key", async () => {
 
 	assert.equal(await service.prepareFromSource("catalog:1", async () => {
 		loadCalls += 1;
-		return builder.build();
+		return prepared;
 	}), true);
 	assert.equal(await service.prepareFromSource("catalog:1", async () => {
 		loadCalls += 1;
@@ -278,11 +267,10 @@ test("prepares statistics from a scanned source key", async () => {
 
 test("source refresh keeps committed statistics visible until the replacement is ready", async () => {
 	const service = new RecordStatsService();
-	const oldBuilder = new RecordStatsBuilder();
-	oldBuilder.addMemos([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
-	assert.equal(await service.prepareFromSource("catalog:1", async () => oldBuilder.build()), true);
+	const oldPrepared = await buildStats([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
+	assert.equal(await service.prepareFromSource("catalog:1", async () => oldPrepared), true);
 
-	const nextPrepared = createDeferred<ReturnType<RecordStatsBuilder["build"]>>();
+	const nextPrepared = createDeferred<PreparedRecordStats>();
 	service.invalidate();
 	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
 	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise);
@@ -290,12 +278,11 @@ test("source refresh keeps committed statistics visible until the replacement is
 	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
 
-	const newBuilder = new RecordStatsBuilder();
-	newBuilder.addMemos([
+	const replacement = await buildStats([
 		makeMemo("new-1", "2026-06-08T10:00:00+08:00", "new one"),
 		makeMemo("new-2", "2026-06-09T10:00:00+08:00", "new two"),
 	]);
-	nextPrepared.resolve(newBuilder.build());
+	nextPrepared.resolve(replacement);
 	assert.equal(await refreshing, true);
 	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
@@ -303,11 +290,10 @@ test("source refresh keeps committed statistics visible until the replacement is
 
 test("routine complete-revision refresh keeps committed statistics visible without an updating marker", async () => {
 	const service = new RecordStatsService();
-	const oldBuilder = new RecordStatsBuilder();
-	oldBuilder.addMemos([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
-	assert.equal(await service.prepareFromSource("catalog:1", async () => oldBuilder.build()), true);
+	const oldPrepared = await buildStats([makeMemo("old", "2026-06-08T10:00:00+08:00", "old")]);
+	assert.equal(await service.prepareFromSource("catalog:1", async () => oldPrepared), true);
 
-	const nextPrepared = createDeferred<ReturnType<RecordStatsBuilder["build"]>>();
+	const nextPrepared = createDeferred<PreparedRecordStats>();
 	service.invalidate(false);
 	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
 	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise, false);
@@ -315,12 +301,11 @@ test("routine complete-revision refresh keeps committed statistics visible witho
 	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
 
-	const newBuilder = new RecordStatsBuilder();
-	newBuilder.addMemos([
+	const replacement = await buildStats([
 		makeMemo("new-1", "2026-06-08T10:00:00+08:00", "new one"),
 		makeMemo("new-2", "2026-06-09T10:00:00+08:00", "new two"),
 	]);
-	nextPrepared.resolve(newBuilder.build());
+	nextPrepared.resolve(replacement);
 	assert.equal(await refreshing, true);
 	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
@@ -369,6 +354,48 @@ function makeMemo(
 			lineNumberHint: 1,
 		},
 	};
+}
+
+async function createCatalogReader(memos: readonly MemoViewItem[], complete = true) {
+	await ensureObsidianStub();
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MarkdownBlockService } = await import("../src/services/MarkdownBlockService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const parser = new DiaryMemoParser();
+	const blocks = new MarkdownBlockService();
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const daily = new Map<string, string[]>();
+	for (const memo of memos) {
+		if (memo.status !== "active") continue;
+		const date = memo.dailyRef!.path.slice(6, -3);
+		const content = [memo.contentSnapshot, ...memo.tags.map(tag => `#${tag.replace(/^#/, "")}`),
+			...memo.images.map(image => `![[${image.path}]]`)].join("\n");
+		const file = daily.get(date) ?? [];
+		file.push(blocks.buildMemoBlock(content, memo.createdAt.slice(11, 19)));
+		daily.set(date, file);
+	}
+	for (const [logicalDate, fileBlocks] of daily) {
+		const sourcePath = `Daily/${logicalDate}.md`;
+		const bytes = new TextEncoder().encode(`## Memos\n${fileBlocks.join("\n")}\n`);
+		const parsed = await parser.parse({ sourcePath, logicalDate, bytes });
+		await catalog.replaceFile({ inventory: { sourcePath, logicalDate, mtime: 1, size: bytes.length },
+			sourceRevision: parsed.sourceRevision, observations: parsed.observations,
+			parserVersion: 1, settingsFingerprint: "stats-test", auditedAt: 1 });
+	}
+	await store.setCoverage({ kind: complete ? "complete" : "partial", coveredFromDate: "1900-01-01",
+		pendingFileCount: complete ? 0 : 1, coveredFileCount: daily.size, totalFileCount: daily.size + (complete ? 0 : 1) });
+	return new CatalogReadService({ catalog });
+}
+
+async function buildStats(memos: readonly MemoViewItem[]): Promise<PreparedRecordStats> {
+	const reader = await createCatalogReader(memos);
+	const prepared = await reader.buildRecordStats(async () => {}, () => true);
+	assert.notEqual(prepared, null);
+	return prepared!;
 }
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

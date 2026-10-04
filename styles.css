@@ -583,11 +583,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	pointer-events: auto;
 }
 
-.knomo-plugin .knomo-sidebar-action[data-action="focus-stats"] {
-	visibility: hidden;
-	pointer-events: none;
-}
-
 .knomo-plugin .knomo-sidebar-action {
 	display: inline-flex;
 	align-items: center;
@@ -1894,6 +1889,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 /* Composer toolbar */
 .knomo-plugin .knomo-composer-bar {
 	display: flex;
+	flex-wrap: nowrap;
 	align-items: flex-end;
 	justify-content: space-between;
 	gap: 10px;
@@ -1910,9 +1906,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-tool-group {
 	display: flex;
+	flex: 1 1 auto;
 	align-items: center;
 	gap: 10px;
 	color: var(--text-faint);
+	scrollbar-width: none;
 }
 
 .knomo-plugin.is-layout-mobile .knomo-tool-group {
@@ -1924,7 +1922,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	scrollbar-width: none;
 }
 
-.knomo-plugin.is-layout-mobile .knomo-tool-group::-webkit-scrollbar {
+.knomo-plugin .knomo-tool-group::-webkit-scrollbar {
 	display: none;
 }
 
@@ -2156,6 +2154,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-composer-actions {
 	display: flex;
+	flex: 0 0 auto;
+	flex-wrap: nowrap;
 	align-items: center;
 	justify-content: flex-end;
 	gap: 8px;
@@ -2584,18 +2584,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	pointer-events: auto;
 }
 
-.knomo-plugin .knomo-card-actions.has-explanation {
-	width: 220px;
-}
-
-.knomo-plugin .knomo-card-action-explanation {
-	padding: 8px 10px 2px;
-	border-top: var(--border-width) solid var(--knomo-soft-border);
-	color: var(--text-muted);
-	font-size: var(--knomo-card-time-font-size);
-	line-height: 1.4;
-}
-
 .knomo-plugin .knomo-card-action {
 	display: flex;
 	align-items: center;
@@ -2894,29 +2882,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	font-size: var(--font-ui-small);
 }
 
-.knomo-plugin .knomo-catalog-onboarding {
-	max-width: 560px;
-	margin-inline: auto;
-}
-
-.knomo-plugin .knomo-catalog-onboarding-actions {
-	display: flex;
-	flex-wrap: wrap;
-	justify-content: center;
-	gap: var(--size-4-2);
-	margin-top: var(--size-4-4);
-}
-
-.knomo-plugin .knomo-catalog-onboarding-actions button {
-	min-height: 44px;
-	padding-inline: var(--size-4-4);
-}
-
-.knomo-plugin .knomo-catalog-onboarding-actions button:focus-visible {
-	outline: 2px solid var(--interactive-accent);
-	outline-offset: 2px;
-}
-
 .knomo-plugin .knomo-catalog-status {
 	display: flex;
 	align-items: center;
@@ -2946,31 +2911,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin: var(--size-4-2) 0 var(--size-4-4);
 }
 
-@media (max-width: 900px) {
-	.knomo-maintenance-setting {
-		flex-direction: column;
-		align-items: stretch;
-	}
-
-	.knomo-maintenance-setting .setting-item-info,
-	.knomo-maintenance-setting .setting-item-control {
-		width: 100%;
-	}
-
-	.knomo-maintenance-setting .setting-item-control {
-		justify-content: flex-start;
-		flex-wrap: wrap;
-	}
-
-	.knomo-maintenance-setting .setting-item-control > * {
-		flex: 1 1 min(12rem, 100%);
-	}
-
-	.knomo-maintenance-setting .setting-item-control button {
-		flex: 0 1 auto;
-	}
-}
-
 .knomo-plugin .knomo-muted-text {
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
@@ -2979,26 +2919,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 /* --------------------------------------------------------------------------
    12. Utilities
    -------------------------------------------------------------------------- */
-.knomo-textarea-mirror {
-	position: fixed;
-	visibility: hidden;
-	pointer-events: none;
-	white-space: pre-wrap;
-	overflow-wrap: break-word;
-	word-break: var(--knomo-textarea-mirror-word-break, normal);
-	box-sizing: var(--knomo-textarea-mirror-box-sizing, border-box);
-	width: var(--knomo-textarea-mirror-width, auto);
-	min-height: var(--knomo-textarea-mirror-min-height, 0);
-	padding: var(--knomo-textarea-mirror-padding, 0);
-	border: var(--knomo-textarea-mirror-border, 0);
-	font: var(--knomo-textarea-mirror-font, inherit);
-	line-height: var(--knomo-textarea-mirror-line-height, normal);
-	letter-spacing: var(--knomo-textarea-mirror-letter-spacing, normal);
-	text-transform: var(--knomo-textarea-mirror-text-transform, none);
-	left: var(--knomo-textarea-mirror-left, -10000px);
-	top: var(--knomo-textarea-mirror-top, 0);
-}
-
 .knomo-suggest-measure-host {
 	position: fixed;
 	visibility: hidden;
@@ -4324,13 +4244,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	overflow-wrap: anywhere;
 }
 
-.knomo-plugin .knomo-record-stats-retry,
-.knomo-plugin .knomo-all-memos-retry {
+.knomo-plugin .knomo-record-stats-retry {
 	min-height: var(--knomo-touch-target);
-}
-
-.knomo-plugin .knomo-all-memos-retry {
-	margin-top: var(--size-4-2);
 }
 
 .knomo-plugin .knomo-record-stats-skeleton {
@@ -4626,15 +4541,154 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	outline: 2px solid var(--background-modifier-border-focus);
 	outline-offset: -2px;
 }
-.knomo-settings-panel .setting-item {
+.knomo-settings-page .setting-item {
 	min-width: 0;
 }
-.knomo-settings-panel .setting-item-info,
-.knomo-settings-panel .setting-item-control {
+.knomo-settings-page .setting-item-info,
+.knomo-settings-page .setting-item-control {
 	min-width: 0;
 }
-.knomo-settings-panel .setting-item-description {
+.knomo-settings-page .setting-item-description {
 	overflow-wrap: anywhere;
+}
+/* 开关列不拉伸，宿主的移动端纵向布局不改变其右侧锚点。 */
+.knomo-settings-page .setting-item.knomo-settings-toggle-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: start;
+	gap: var(--size-4-3);
+}
+.knomo-settings-page .knomo-settings-toggle-row > .setting-item-info {
+	width: auto;
+	margin: 0;
+}
+.knomo-settings-page .knomo-settings-toggle-row > .setting-item-control {
+	display: flex;
+	flex: none;
+	flex-direction: row;
+	justify-content: flex-end;
+	width: auto;
+	padding: 0;
+	margin: 0;
+}
+.knomo-settings-page .knomo-settings-row-action {
+	grid-column: 1 / -1;
+	justify-self: end;
+	width: auto;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+/* 值和操作都从右侧排列；空间不足时整个控制区换行。 */
+.knomo-settings-page .setting-item.knomo-settings-value-row,
+.knomo-settings-page .setting-item.knomo-settings-action-row,
+.knomo-settings-page .setting-item.knomo-settings-select-row,
+.knomo-settings-page .setting-item.knomo-toolbar-item {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--size-4-2) var(--size-4-3);
+}
+.knomo-settings-page .knomo-settings-value-row > .setting-item-info,
+.knomo-settings-page .knomo-settings-action-row > .setting-item-info,
+.knomo-settings-page .knomo-settings-select-row > .setting-item-info,
+.knomo-settings-page .knomo-toolbar-item > .setting-item-info {
+	flex: 1 1 7rem;
+	width: auto;
+	margin: 0;
+}
+.knomo-settings-page .knomo-settings-value-row > .setting-item-control,
+.knomo-settings-page .knomo-settings-action-row > .setting-item-control,
+.knomo-settings-page .knomo-settings-select-row > .setting-item-control {
+	display: flex;
+	flex: 0 1 auto;
+	flex-direction: row;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	width: auto;
+	max-width: 100%;
+	gap: var(--size-4-2);
+	margin: 0 0 0 auto;
+	padding: 0;
+	text-align: end;
+}
+.knomo-settings-page .knomo-settings-value-row > .setting-item-control > * {
+	min-width: 0;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+.knomo-settings-page .setting-item.knomo-settings-action-row > .setting-item-control > button {
+	flex: 0 1 auto;
+	width: auto;
+	min-width: 0;
+}
+.knomo-settings-page .knomo-toolbar-item > .setting-item-control {
+	display: grid;
+	grid-template-columns: auto 44px 44px;
+	align-items: center;
+	gap: var(--size-4-2);
+	flex: 0 0 auto;
+	width: auto;
+	max-width: 100%;
+	margin: 0 0 0 auto;
+	padding: 0;
+}
+.knomo-settings-page .setting-item.knomo-toolbar-item > .setting-item-control > button {
+	width: 44px;
+	min-width: 44px;
+	height: 44px;
+	min-height: 44px;
+	padding: 0;
+}
+.knomo-settings-page .setting-item.knomo-toolbar-reset {
+	display: block;
+}
+.knomo-settings-page .knomo-toolbar-reset > .setting-item-info {
+	display: none;
+}
+.knomo-settings-page .knomo-toolbar-reset > .setting-item-control {
+	display: flex;
+	justify-content: flex-end;
+	width: 100%;
+}
+.knomo-settings-page .knomo-settings-select-row select {
+	min-width: 0;
+	max-width: 100%;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-select-row {
+	flex-direction: column;
+	align-items: stretch;
+}
+body.is-mobile .knomo-settings-page .knomo-settings-select-row > .setting-item-info,
+body.is-mobile .knomo-settings-page .knomo-settings-select-row > .setting-item-control {
+	flex: 0 1 auto;
+	width: 100%;
+}
+body.is-mobile .knomo-settings-page .knomo-settings-select-row select {
+	width: 100%;
+}
+/* 覆盖手机 modal 的高优先级纵排和全宽规则，同时保留宿主的颜色、边框和开关外观。 */
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-value-row,
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-action-row,
+body.is-mobile .knomo-settings-page .setting-item.knomo-toolbar-item {
+	flex-direction: row;
+	align-items: center;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-toggle-row > .setting-item-control,
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-value-row > .setting-item-control,
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-action-row > .setting-item-control,
+body.is-mobile .knomo-settings-page .setting-item.knomo-toolbar-item > .setting-item-control {
+	width: auto;
+	justify-content: flex-end;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-toolbar-item > .setting-item-control > button {
+	width: 44px;
+	padding: 0;
+}
+body.is-mobile .knomo-settings-page .setting-item.knomo-settings-action-row > .setting-item-control > button {
+	width: auto;
 }
 /* 固定两层 flex 的横向主轴，让 basis 始终表示宽度；窄屏通过换行排列。 */
 .knomo-settings-panel .setting-item.knomo-settings-text-row {
@@ -4658,10 +4712,29 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	min-width: 0;
 	max-width: 100%;
 }
-.knomo-settings-panel .setting-item-control > button {
+.knomo-settings-page .setting-item-control > button {
 	max-width: 100%;
 	white-space: normal;
 	overflow-wrap: anywhere;
+}
+/* 手机宿主会将设置行改为纵向；此时不能沿用桌面的像素 flex-basis。 */
+body.is-mobile .knomo-settings-panel .setting-item.knomo-settings-text-row {
+	flex-direction: column;
+	align-items: stretch;
+}
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-info,
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control {
+	flex: 0 1 auto;
+	width: 100%;
+}
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control {
+	flex-direction: column;
+	align-items: stretch;
+}
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control > input[type="text"],
+body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-control > button {
+	flex: 0 1 auto;
+	width: 100%;
 }
 .knomo-settings-panel .setting-item.knomo-settings-support {
 	display: flex;
@@ -4743,12 +4816,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 }
 .knomo-plugin.is-layout-desktop-narrow .knomo-sidebar-header {
 	flex-wrap: wrap;
-}
-.knomo-plugin:not(.is-layout-mobile) .knomo-composer-bar,
-.knomo-plugin:not(.is-layout-mobile) .knomo-tool-group,
-.knomo-plugin:not(.is-layout-mobile) .knomo-composer-actions {
-	flex-wrap: wrap;
-	min-width: 0;
 }
 .knomo-plugin:not(.is-layout-mobile) .knomo-card-content {
 	min-width: 0;

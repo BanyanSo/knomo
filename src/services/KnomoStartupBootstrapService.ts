@@ -39,17 +39,21 @@ export class KnomoStartupBootstrapService {
 		return { ...this.snapshot };
 	}
 
-	initialize(): Promise<void> {
-		return this.activeOperation ?? this.startOperation();
+	initialize(configurationOperation?: Promise<void>): Promise<void> {
+		if (this.activeOperation !== null && configurationOperation !== undefined) {
+			return Promise.all([this.activeOperation.catch(() => undefined), configurationOperation.catch(() => undefined)])
+				.then(() => this.initialize(configurationOperation));
+		}
+		return this.activeOperation ?? this.startOperation(configurationOperation);
 	}
 
-	retryInitialization(): Promise<void> {
-		return this.activeOperation ?? this.startOperation();
-	}
-
-	private startOperation(): Promise<void> {
+	private startOperation(configurationOperation?: Promise<void>): Promise<void> {
+		// 立即接住后台配置失败，不能等布局就绪后才订阅 rejection。
+		const configurationResult = configurationOperation?.then(
+			() => ({ ok: true as const }), error => ({ ok: false as const, error }),
+		);
 		let operation: Promise<void>;
-		operation = this.runOnce().finally(() => {
+		operation = this.runOnce(configurationResult).finally(() => {
 			if (this.activeOperation === operation) {
 				this.activeOperation = null;
 			}
@@ -58,7 +62,7 @@ export class KnomoStartupBootstrapService {
 		return operation;
 	}
 
-	private async runOnce(): Promise<void> {
+	private async runOnce(configurationResult?: Promise<{ ok: true } | { ok: false; error: unknown }>): Promise<void> {
 		let stage: KnomoStartupBootstrapStage = "current_config";
 		this.setInitializing(stage);
 		try {
@@ -66,7 +70,11 @@ export class KnomoStartupBootstrapService {
 			this.throwIfCancelled();
 			stage = "current_config";
 			this.setInitializing(stage);
-			await this.options.currentConfig.initialize();
+			if (configurationResult === undefined) await this.options.currentConfig.initialize();
+			else {
+				const result = await configurationResult;
+				if (!result.ok) throw result.error;
+			}
 			this.throwIfCancelled();
 			const currentStatus = this.options.currentConfig.getStatus();
 			if (currentStatus === "unavailable") {
@@ -77,17 +85,6 @@ export class KnomoStartupBootstrapService {
 				return;
 			}
 
-			stage = "verification";
-			this.setInitializing(stage);
-			await this.options.currentConfig.initialize();
-			this.throwIfCancelled();
-			const verifiedStatus = this.options.currentConfig.getStatus();
-			if (verifiedStatus === "conflicted") {
-				throw new Error("Current configuration remains conflicted after initialization.");
-			}
-			if (verifiedStatus !== "ready") {
-				throw new Error(this.options.currentConfig.getLastError() ?? "Current configuration verification failed.");
-			}
 			this.snapshot = { status: "ready", stage: null, error: null };
 		} catch (error) {
 			if (error instanceof KnomoStartupCancelledError || this.options.cancellationSignal?.aborted === true) {

@@ -6,6 +6,66 @@ import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import type { TimeBuoyQueryResult } from "../src/types/timeBuoy";
 import type { MemoViewItem } from "../src/types/memoView";
 
+test("普通列表今日浮标逐页置顶，最后接普通记录，后台更新和关闭拒绝旧页", async () => {
+	const { view, result, memo, setQuery } = await refreshHarness();
+	const today = formatTimeBuoyDate(new Date());
+	const cursor = { today, tab: "today" as const, catalogRevision: 1, coverageKey: "complete",
+		primaryTargetDate: today, createdAtKey: memo.createdAt, observationKey: memo.id };
+	setQuery(async () => ({ ...result(1), nextCursor: cursor }));
+	await view.loadInitialMobileMemos();
+	const ordinary = { ...memo, id: "ordinary", createdAt: `${today}T12:00` };
+	const second = { ...memo, id: "second", createdAt: `${today}T08:00` };
+	Object.assign(view, {
+		randomReunionController: { getSnapshot: () => ({ status: "idle", error: null }) },
+		shuffleDayController: { getSnapshot: () => ({ status: "idle", error: null }) },
+		trashMemoController: { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [] }) },
+		getFilteredMemos: () => [ordinary, memo], catalogDesktopTotalCount: null,
+		catalogStatus: { content: "ready", catalog: "complete", projection: "ready" }, catalogCoverage: null,
+		catalogCursor: null, catalogHistoryExpansionPending: false, renderNextCardBatch: () => {},
+	});
+	const keys = () => view.getCurrentCardFlowPresentation().memos.map((item: MemoViewItem) => item.id);
+	assert.deepEqual(keys(), [memo.id]);
+	assert.equal(view.canLoadOlderMemoPeriods(), true);
+	setQuery(async () => ({ ...result(1, [second]), nextCursor: null }));
+	assert.equal(await view.loadNextCatalogPage(), true);
+	assert.deepEqual(keys(), [memo.id, second.id, ordinary.id]);
+	assert.equal(view.canLoadOlderMemoPeriods(), false);
+	for (const action of ["refresh", "close"] as const) {
+		view.trashViewClosed = false;
+		view.catalogTodayTimeBuoys.todayCursor = cursor;
+		const committed = view.catalogTodayTimeBuoys;
+		let release!: (value: TimeBuoyQueryResult) => void;
+		setQuery(() => new Promise(resolve => { release = resolve; }));
+		const pending = view.loadNextCatalogPage();
+		await new Promise(resolve => setImmediate(resolve));
+		if (action === "refresh") view.catalogDesktopQueryRun++;
+		else view.trashViewClosed = true;
+		release(result(1, [{ ...memo, id: "obsolete" }]));
+		assert.equal(await pending, false);
+		assert.equal(view.catalogTodayTimeBuoys, committed);
+	}
+});
+
+test("独立浮标翻页走实际视图追加路径，保留原卡片容器与渲染代次", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype);
+	const item = (id: string) => ({ memo: { id } as MemoViewItem, primaryTargetDate: "2026-09-27", targetDates: ["2026-09-27"] });
+	const first = item("first"), second = item("second");
+	const panel = { id: "buoy-panel-today" };
+	let appended = 0;
+	Object.assign(view, { cardFlowEl: {}, timeBuoyPanelEl: panel, getA11yId: () => "buoy", timeBuoyRenderItems: [first],
+		cardFlowCoordinator: { generation: 7 },
+		timeBuoyViewController: { getSnapshot: () => ({ activeTab: "today", today: [first, second] }) },
+		renderNextTimeBuoyBatch: (generation: number) => { assert.equal(generation, 7); appended++; },
+		resetTimeBuoyCardFlow: () => assert.fail("不能重建已有卡片"),
+	});
+	view.renderTimeBuoyPage();
+	assert.equal(appended, 1);
+	assert.equal(view.timeBuoyPanelEl, panel);
+	assert.deepEqual(view.timeBuoyRenderItems, [first, second]);
+});
+
 async function refreshHarness() {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
@@ -21,7 +81,7 @@ async function refreshHarness() {
 	const renders: string[][] = [];
 	const controller = new TimeBuoyViewController({
 		getNow: () => new Date(), isTodayIndexReady: async () => ready,
-		queryDate: () => query(), queryAll: async () => ({ ...result(revision), complete: true }),
+		queryDate: () => query(), queryPage: async () => ({ ...result(revision), complete: true, nextCursor: null, metrics: { cursorReads: 0, observationsRead: 0, returned: 0 } }),
 		requestRender: () => { view.renderCardFlow(); },
 	});
 	Object.assign(view, {

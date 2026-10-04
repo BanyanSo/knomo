@@ -1,3 +1,5 @@
+import { CooperativeYieldController, type CooperativeTaskRuntime } from "../services/CooperativeTask";
+
 export function normalizeTagKey(tag: string): string {
 	return tag.trim().replace(/^#/, "").toLowerCase();
 }
@@ -33,6 +35,30 @@ export function buildTagDisplayMap(sources: TagDisplaySource[]): Map<string, str
 		}
 	}
 	return displayTags;
+}
+
+// 与同步入口使用相同候选比较规则，累加和选取均分片执行。
+export async function buildTagDisplayMapCooperatively(sources: readonly TagDisplaySource[], runtime: CooperativeTaskRuntime): Promise<Map<string, string>> {
+	const controller = new CooperativeYieldController(runtime);
+	const candidates = new Map<string, Map<string, TagDisplayCandidate>>();
+	for (const source of sources) {
+		const key = normalizeTagKey(source.tag);
+		const displayName = normalizeTagDisplay(source.tag);
+		if (key.length > 0 && displayName.length > 0) {
+			addTagDisplayPathCandidates(candidates, key, displayName, source.modifiedTime, source.order);
+		}
+		if (controller.shouldYield()) await controller.yieldNow();
+	}
+	const result = new Map<string, string>();
+	for (const [key, values] of candidates) {
+		let selected: TagDisplayCandidate | null = null;
+		for (const candidate of values.values()) {
+			if (selected === null || compareTagDisplayCandidate(candidate, selected) < 0) selected = candidate;
+			if (controller.shouldYield()) await controller.yieldNow();
+		}
+		if (selected !== null) result.set(key, selected.displayName);
+	}
+	return result;
 }
 
 export function normalizeTagDisplay(tag: string): string {

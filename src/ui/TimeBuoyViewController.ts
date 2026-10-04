@@ -1,5 +1,5 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
-import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../types/timeBuoy";
+import type { TimeBuoyCursor, TimeBuoyPageRequest, TimeBuoyPageResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../types/timeBuoy";
 import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
 import { getMemoRenderKey, getMemoRenderRevision } from "./MemoRenderRevision";
 
@@ -15,7 +15,10 @@ export interface TimeBuoyViewSnapshot {
 	todayDate: string | null;
 	todayRevision: number | null;
 	todayValid: boolean;
+	todayCursor?: TimeBuoyCursor | null;
 	loading: boolean;
+	loadingMore: boolean;
+	nextCursor: TimeBuoyCursor | null;
 	error: unknown;
 	refreshError: unknown;
 	todayError: unknown;
@@ -27,7 +30,7 @@ export interface TimeBuoyViewSnapshot {
 }
 
 export type TodayTimeBuoySnapshot = Pick<TimeBuoyViewSnapshot,
-	"todayDate" | "todayRevision" | "todayValid" | "today" | "todayError">;
+	"todayDate" | "todayRevision" | "todayValid" | "today" | "todayError" | "todayCursor">;
 
 export function mergeTodayTimeBuoyFeed(
 	memos: readonly MemoRecord[],
@@ -51,17 +54,19 @@ export function mergeTodayTimeBuoyFeed(
 
 interface TimeBuoyViewControllerOptions {
 	getNow: () => Date;
+	isPageActive?: () => boolean;
 	ensureReady?: () => Promise<void>;
 	isTodayIndexReady?: (targetDate: string) => Promise<boolean>;
-	queryAll: () => Promise<TimeBuoyAllQueryResult>;
-	queryDate: (date: string) => Promise<TimeBuoyQueryResult>;
+	queryPage: (request: TimeBuoyPageRequest) => Promise<TimeBuoyPageResult>;
+	queryDate: (date: string, cursor?: TimeBuoyCursor | null) => Promise<TimeBuoyQueryResult>;
 	requestRender: () => void;
 }
 
 export class TimeBuoyViewController {
 	private snapshot: TimeBuoyViewSnapshot;
 	private requestId = 0;
-	private hasLoadedAll = false;
+	private hasLoadedPage = false;
+	private refreshing = false;
 
 	constructor(private readonly options: TimeBuoyViewControllerOptions) {
 		this.snapshot = createInitialSnapshot();
@@ -86,8 +91,10 @@ export class TimeBuoyViewController {
 		if (this.snapshot.activeTab === tab) {
 			return false;
 		}
-		this.snapshot = { ...this.snapshot, activeTab: tab };
-		this.options.requestRender();
+		this.requestId++;
+		this.hasLoadedPage = false;
+		this.snapshot = createInitialSnapshot(tab);
+		void this.loadInitial();
 		return true;
 	}
 
@@ -110,9 +117,11 @@ export class TimeBuoyViewController {
 	}
 
 	async loadInitial(): Promise<void> {
+		if (this.options.isPageActive?.() === false) { this.clear(); return; }
 		const requestId = ++this.requestId;
+		this.refreshing = true;
 		const activeTab = this.snapshot.activeTab;
-		if (!this.hasLoadedAll) {
+		if (!this.hasLoadedPage) {
 			this.snapshot = { ...createInitialSnapshot(activeTab), loading: true };
 			this.options.requestRender();
 		} else if (this.snapshot.refreshError !== null) {
@@ -122,61 +131,97 @@ export class TimeBuoyViewController {
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
 			await this.options.ensureReady?.();
-			if (requestId !== this.requestId) {
+			if (!this.isCurrentPageRequest(requestId)) {
 				return;
 			}
-			const result = await this.options.queryAll();
-			if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) {
+			const result = await this.options.queryPage({ today, tab: activeTab, limit: 30 });
+			if (!this.isCurrentPageRequest(requestId) || today !== formatTimeBuoyDate(this.options.getNow())) {
 				return;
 			}
 			if (result.invalidated) throw new Error("Time buoy query invalidated");
-			const partitioned = partitionItems(result.items, today);
+			const items = groupTabItems(result.items, activeTab);
 			const nextSnapshot = {
 				...createInitialSnapshot(this.snapshot.activeTab),
-				...partitioned,
+				[activeTab]: items,
+				nextCursor: result.nextCursor,
 				todayDate: today,
 				todayRevision: result.catalogRevision ?? null,
-				todayValid: result.complete && result.missingPeriods.length === 0,
+				todayValid: activeTab === "today" && result.nextCursor === null && result.complete && result.missingPeriods.length === 0,
 				complete: result.complete && result.missingPeriods.length === 0,
 			};
 			const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
 			this.snapshot = nextSnapshot;
-			this.hasLoadedAll = true;
+			this.hasLoadedPage = true;
 			if (changed) {
 				this.options.requestRender();
 			}
 		} catch (error) {
-			if (requestId !== this.requestId) {
+			if (!this.isCurrentPageRequest(requestId)) {
 				return;
 			}
-			if (this.hasLoadedAll) {
-				this.snapshot = { ...this.snapshot, refreshError: error };
+			if (this.hasLoadedPage) {
+				this.snapshot = { ...this.snapshot, loadingMore: false, nextCursor: null, refreshError: error };
 				this.options.requestRender();
 				return;
 			}
 			const nextSnapshot = { ...createInitialSnapshot(this.snapshot.activeTab), error };
 			const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
 			this.snapshot = nextSnapshot;
-			this.hasLoadedAll = false;
+			this.hasLoadedPage = false;
 			if (changed) {
 				this.options.requestRender();
 			}
+		} finally {
+			if (requestId === this.requestId) this.refreshing = false;
 		}
 	}
 
+	async loadMore(): Promise<void> {
+		if (this.options.isPageActive?.() === false) { this.clear(); return; }
+		const cursor = this.snapshot.nextCursor;
+		if (cursor === null || this.refreshing || this.snapshot.loading || this.snapshot.loadingMore || this.snapshot.refreshError !== null) return;
+		const requestId = this.requestId;
+		const tab = this.snapshot.activeTab;
+		this.snapshot = { ...this.snapshot, loadingMore: true };
+		try {
+			const result = await this.options.queryPage({ today: cursor.today, tab, limit: 30, cursor });
+			if (!this.isCurrentPageRequest(requestId)) return;
+			if (cursor.today !== formatTimeBuoyDate(this.options.getNow()) || result.invalidated) {
+				// 游标失效明确进入重载状态，不把空页当作已读完。
+				this.hasLoadedPage = false;
+				await this.loadInitial();
+				return;
+			}
+			this.snapshot = { ...this.snapshot, loadingMore: false, nextCursor: result.nextCursor,
+				[tab]: [...this.snapshot[tab], ...groupTabItems(result.items, tab)] };
+			this.options.requestRender();
+		} catch (refreshError) {
+			if (!this.isCurrentPageRequest(requestId)) return;
+			this.snapshot = { ...this.snapshot, loadingMore: false, refreshError };
+			this.options.requestRender();
+		}
+	}
+
+	private isCurrentPageRequest(requestId: number): boolean {
+		if (requestId !== this.requestId) return false;
+		if (this.options.isPageActive?.() === false) { this.clear(); return false; }
+		return true;
+	}
+
 	// 列表先准备独立结果，校验查询仍有效后再与普通 Memo 一起提交。
-	async prepareTodayOnly(): Promise<TodayTimeBuoySnapshot> {
+	async prepareTodayOnly(cursor?: TimeBuoyCursor | null): Promise<TodayTimeBuoySnapshot> {
 		const today = formatTimeBuoyDate(this.options.getNow());
 		const result: TodayTimeBuoySnapshot = {
 			todayDate: today, todayRevision: null, todayValid: false, today: [], todayError: null,
 		};
 		try {
 			if (!((await this.options.isTodayIndexReady?.(today)) ?? true)) return result;
-			const query = await this.options.queryDate(today);
+			const query = await this.options.queryDate(today, cursor);
 			if (today !== formatTimeBuoyDate(this.options.getNow())) throw new Error("Time buoy date changed while loading");
 			if (query.invalidated) throw new Error("Time buoy query invalidated");
 			if (query.missingPeriods.length > 0) throw new Error(`Incomplete time buoy index: ${query.missingPeriods.join(", ")}`);
-			return { ...result, todayRevision: query.catalogRevision ?? null, todayValid: true, today: groupTabItems(query.items, "today") };
+			return { ...result, todayRevision: query.catalogRevision ?? null, todayValid: true,
+				todayCursor: query.nextCursor ?? null, today: groupTabItems(query.items, "today") };
 		} catch (todayError) {
 			return { ...result, todayError };
 		}
@@ -189,7 +234,7 @@ export class TimeBuoyViewController {
 		if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) return;
 		if (!prepared.todayValid) {
 			// 独立页保留最后结果；列表使用自己已提交的同版本快照。
-			if (prepared.todayError === null) this.hasLoadedAll = false;
+			if (prepared.todayError === null) this.hasLoadedPage = false;
 			const changed = this.snapshot.todayValid || (this.snapshot.todayError === null && prepared.todayError !== null);
 			this.snapshot = { ...this.snapshot, todayValid: false, todayError: prepared.todayError };
 			if (changed && render) this.options.requestRender();
@@ -207,7 +252,8 @@ export class TimeBuoyViewController {
 
 	clear(): void {
 		this.requestId += 1;
-		this.hasLoadedAll = false;
+		this.refreshing = false;
+		this.hasLoadedPage = false;
 		this.snapshot = createInitialSnapshot();
 	}
 }
@@ -217,9 +263,12 @@ function areTimeBuoySnapshotsEqual(
 	right: TimeBuoyViewSnapshot,
 ): boolean {
 	return left.loading === right.loading
+		&& left.loadingMore === right.loadingMore
+		&& JSON.stringify(left.nextCursor) === JSON.stringify(right.nextCursor)
 		&& left.todayDate === right.todayDate
 		&& left.todayRevision === right.todayRevision
 		&& left.todayValid === right.todayValid
+		&& JSON.stringify(left.todayCursor) === JSON.stringify(right.todayCursor)
 		&& left.error === right.error
 		&& left.refreshError === right.refreshError
 		&& left.todayError === right.todayError
@@ -250,6 +299,8 @@ function createInitialSnapshot(activeTab: TimeBuoyTab = "today"): TimeBuoyViewSn
 		todayRevision: null,
 		todayValid: false,
 		loading: false,
+		loadingMore: false,
+		nextCursor: null,
 		error: null,
 		refreshError: null,
 		todayError: null,
@@ -258,29 +309,6 @@ function createInitialSnapshot(activeTab: TimeBuoyTab = "today"): TimeBuoyViewSn
 		today: [],
 		upcoming: [],
 		past: [],
-	};
-}
-
-function partitionItems(
-	items: readonly TimeBuoyQueryItem[],
-	today: string,
-): Pick<TimeBuoyViewSnapshot, "today" | "upcoming" | "past"> {
-	const todayItems: TimeBuoyQueryItem[] = [];
-	const upcoming: TimeBuoyQueryItem[] = [];
-	const past: TimeBuoyQueryItem[] = [];
-	for (const item of items) {
-		if (item.instance.targetDate === today) {
-			todayItems.push(item);
-		} else if (item.instance.targetDate > today) {
-			upcoming.push(item);
-		} else {
-			past.push(item);
-		}
-	}
-	return {
-		today: groupTabItems(todayItems, "today"),
-		upcoming: groupTabItems(upcoming, "upcoming"),
-		past: groupTabItems(past, "past"),
 	};
 }
 

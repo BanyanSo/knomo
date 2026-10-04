@@ -1,5 +1,4 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
-import { getMemoRenderKey } from "./MemoRenderRevision";
 
 export type CardFlowRenderMode = "memo" | "trash";
 
@@ -121,19 +120,6 @@ export class KnomoCardFlowBatcher {
 		this.loading = false;
 		this.hasMore = memos.length > 0;
 		return this.beginNextBatch(initialBatchSize);
-	}
-
-	updateItemsAfterRendered(memos: MemoRecord[], renderedMemoKeys: readonly string[]): void {
-		const memosByKey = new Map(memos.map((memo) => [getMemoRenderKey(memo), memo]));
-		const renderedKeys = new Set(renderedMemoKeys);
-		const rendered = renderedMemoKeys.flatMap((renderKey) => {
-			const memo = memosByKey.get(renderKey);
-			return memo === undefined ? [] : [memo];
-		});
-		const pending = memos.filter((memo) => !renderedKeys.has(getMemoRenderKey(memo)));
-		this.items = [...rendered, ...pending];
-		this.renderOffset = rendered.length;
-		this.hasMore = this.renderOffset < this.items.length;
 	}
 
 	sync(memos: MemoRecord[], mode: CardFlowRenderMode, renderedCount: number): void {

@@ -83,6 +83,9 @@ async function fixture() {
 		flushTimers(): void;
 	};
 	view.trashViewClosed = false;
+	Object.assign(view, { renderTags: () => {}, libraryTagFacets: [], librarySummary: {},
+		libraryIndexRevision: 0, catalogRevision: 0, libraryIndexCoverageKey: "null", catalogCoverage: null,
+		rootEl: null });
 	view.trashCountRefreshTimer = null;
 	view.viewStateController = { mobileDrawerOpen: false, activeNav: "all" };
 	view.containerEl = { win: { setTimeout: (callback: () => void) => { timers.set(++next, callback); return next; },

@@ -7,17 +7,14 @@ import { KnomoError } from "../types/serviceError";
 import type {
 	MarkdownBlockReferenceInput,
 	MarkdownBlockReferenceResult,
-	MarkdownCopyInput,
 	MarkdownCreateInput,
 	MarkdownEditInput,
-	MarkdownMoveInput,
 	MarkdownMutationResult,
 	MarkdownMutationService as MarkdownMutationContract,
-	MarkdownRemoveInput,
 	MarkdownTaskInput,
 } from "../types/memoOperations";
 import { formatDatePart, formatTimePart } from "../utils/date";
-import { isMemoContinuationLine, isValidMarkdownHeading } from "../utils/markdown";
+import { isMemoContinuationLine } from "../utils/markdown";
 import type { DiaryMemoParseResult } from "./DiaryMemoParser";
 import {
 	DailyMemoWriteGateway,
@@ -37,7 +34,7 @@ export interface MarkdownCatalogCommitInput {
 export interface MarkdownMutationServiceOptions {
 	getWriteHeading: () => string | null;
 	getDailyFileForDate: (logicalDate: string) => Promise<TFile>;
-	getLogicalDateForPath: (sourcePath: string) => Promise<string>;
+	getLogicalDateForPath: (sourcePath: string) => string;
 	getMemoTimeFormat: () => "HH:mm" | "HH:mm:ss";
 	getInsertPosition?: () => DailyInsertPosition;
 	updateCatalogPartition: (input: MarkdownCatalogCommitInput) => Promise<void>;
@@ -93,14 +90,14 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			content,
 			formatTimePart(createdAt, this.options.getMemoTimeFormat()),
 		);
-		return this.appendRawBlock(target.file, logicalDate, rawBlock, target.created, null, undefined, input.onDailyCommitted, input.validateImageSource);
+		return this.appendRawBlock(target.file, logicalDate, rawBlock, target.created, input.onDailyCommitted, input.validateImageSource);
 	}
 
 	async edit(input: MarkdownEditInput): Promise<MarkdownMutationResult> {
 		const content = normalizeMemoInput(input.content);
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
 		const file = this.getSourceFile(input.observation.sourcePath);
-		const logicalDate = await this.options.getLogicalDateForPath(file.path);
+		const logicalDate = this.options.getLogicalDateForPath(file.path);
 		return this.withStaleRefresh([file.path], async () => {
 			let beforeObservation: MemoObservation | null = null;
 			let afterRawBlock = "";
@@ -108,6 +105,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				file,
 				logicalDate,
 				expectedRevision: input.observation.sourceRevision,
+				validateTarget: (path, date) => this.assertDailyTarget(path, date),
 				update: (currentContent, parsed) => {
 					input.validateImageSource?.(file.path);
 					beforeObservation = findObservation(parsed, input.observation, file.path);
@@ -121,13 +119,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			});
 			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
 			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted);
-			return committedResult(changed, [file.path], catalogUpdatePending);
+			return committedResult(changed, catalogUpdatePending);
 		});
 	}
 
 	async toggleTask(input: MarkdownTaskInput): Promise<MarkdownMutationResult> {
 		const file = this.getSourceFile(input.observation.sourcePath);
-		const logicalDate = await this.options.getLogicalDateForPath(file.path);
+		const logicalDate = this.options.getLogicalDateForPath(file.path);
 		return this.withStaleRefresh([file.path], async () => {
 			let beforeObservation: MemoObservation | null = null;
 			let afterRawBlock = "";
@@ -135,6 +133,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				file,
 				logicalDate,
 				expectedRevision: input.observation.sourceRevision,
+				validateTarget: (path, date) => this.assertDailyTarget(path, date),
 				update: (currentContent, parsed) => {
 					beforeObservation = findObservation(parsed, input.observation, file.path);
 					const task = beforeObservation.tasks.find((candidate) => candidate.taskIndex === input.taskIndex);
@@ -151,119 +150,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			});
 			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
 			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
-			return committedResult(changed, [file.path], catalogUpdatePending);
-		});
-	}
-
-	async copy(input: MarkdownCopyInput): Promise<MarkdownMutationResult> {
-		const sourceFile = this.getSourceFile(input.observation.sourcePath);
-		const sourceLogicalDate = await this.options.getLogicalDateForPath(sourceFile.path);
-		return this.withStaleRefresh([sourceFile.path], async () => {
-			let sourceObservation: MemoObservation | null = null;
-			await this.dailyGateway.prepare({
-				file: sourceFile,
-				logicalDate: sourceLogicalDate,
-				expectedRevision: input.observation.sourceRevision,
-				update: (content, parsed) => {
-					sourceObservation = findObservation(parsed, input.observation, sourceFile.path);
-					return content;
-				},
-			});
-			const target = await this.getTargetFile(input.targetLogicalDate);
-			const rawBlock = this.blockService.buildMemoBlock(
-				requireObservation(sourceObservation).content,
-				formatTimePart(input.createdAt ?? this.now(), this.options.getMemoTimeFormat()),
-			);
-			return this.appendRawBlock(target.file, input.targetLogicalDate, rawBlock, target.created);
-		});
-	}
-
-	async move(input: MarkdownMoveInput): Promise<MarkdownMutationResult> {
-		const sourceFile = this.getSourceFile(input.observation.sourcePath);
-		const sourceLogicalDate = await this.options.getLogicalDateForPath(sourceFile.path);
-		const target = await this.getTargetFile(input.targetLogicalDate);
-		if (normalizePath(sourceFile.path) === normalizePath(target.file.path)) {
-			throw new Error("Move target must be another Daily file.");
-		}
-		return this.withStaleRefresh([sourceFile.path], async () => {
-			let sourceObservation: MemoObservation | null = null;
-			let sourceRawBlock = "";
-			const sourcePrepared = await this.dailyGateway.prepare({
-				file: sourceFile,
-				logicalDate: sourceLogicalDate,
-				expectedRevision: input.observation.sourceRevision,
-				update: (content, parsed) => {
-					sourceObservation = findObservation(parsed, input.observation, sourceFile.path);
-					sourceRawBlock = getRawBlock(content, sourceObservation);
-					return replaceObservation(content, sourceObservation, "", true);
-				},
-			});
-			const movedObservation = requireObservation(sourceObservation);
-			const targetResult = await this.appendRawBlock(
-				target.file,
-				input.targetLogicalDate,
-				sourceRawBlock,
-				target.created,
-				movedObservation.existingBlockId,
-				movedObservation.section,
-			);
-			try {
-				const sourceCatalogPending = await this.commitAndUpdateCatalog(sourcePrepared);
-				return committedResult(
-					targetResult.observation,
-					[sourceFile.path, target.file.path],
-					targetResult.catalogUpdatePending || sourceCatalogPending,
-				);
-			} catch (error) {
-				let rollbackSucceeded = false;
-				if (targetResult.observation !== null) {
-					try {
-						await this.remove({ observation: targetResult.observation });
-						if (target.created) {
-							await this.options.removeEmptyCreatedDailyFile?.(target.file).catch(() => undefined);
-						}
-						rollbackSucceeded = true;
-					} catch {
-						// 目标已被并发修改时不猜测删除，保留两份正文并报告待恢复。
-					}
-				}
-				if (rollbackSucceeded) throw error;
-				if (isStaleError(error)) {
-					await this.options.refreshCatalogPaths([sourceFile.path]).catch(() => undefined);
-				}
-				return {
-					status: "committed_content_pending",
-					observation: targetResult.observation,
-					sourcePaths: [normalizePath(sourceFile.path), normalizePath(target.file.path)],
-					catalogUpdatePending: true,
-				};
-			}
-		});
-	}
-
-	async remove(input: MarkdownRemoveInput): Promise<MarkdownMutationResult> {
-		const file = this.getSourceFile(input.observation.sourcePath);
-		const logicalDate = await this.options.getLogicalDateForPath(file.path);
-		return this.withStaleRefresh([file.path], async () => {
-			const prepared = await this.dailyGateway.prepare({
-				file,
-				logicalDate,
-				expectedRevision: input.observation.sourceRevision,
-				update: (content, parsed) => replaceObservation(
-					content,
-					findObservation(parsed, input.observation, file.path),
-					"",
-					true,
-				),
-			});
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
-			return committedResult(null, [file.path], catalogUpdatePending);
+			return committedResult(changed, catalogUpdatePending);
 		});
 	}
 
 	async createBlockReference(input: MarkdownBlockReferenceInput): Promise<MarkdownBlockReferenceResult> {
 		const file = this.getSourceFile(input.observation.sourcePath);
-		const logicalDate = await this.options.getLogicalDateForPath(file.path);
+		const logicalDate = this.options.getLogicalDateForPath(file.path);
 		return this.withStaleRefresh([file.path], async () => {
 			let beforeObservation: MemoObservation | null = null;
 			let afterRawBlock = "";
@@ -272,6 +165,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				file,
 				logicalDate,
 				expectedRevision: input.observation.sourceRevision,
+				validateTarget: (path, date) => this.assertDailyTarget(path, date),
 				update: (content, parsed) => {
 					beforeObservation = findObservation(parsed, input.observation, file.path);
 					if (beforeObservation.existingBlockId !== null) {
@@ -287,11 +181,11 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			});
 			const current = requireObservation(beforeObservation);
 			if (current.existingBlockId !== null) {
-				return { ...committedResult(current, [file.path], false), blockId };
+				return { ...committedResult(current, false), blockId };
 			}
 			const changed = findReplacementObservation(prepared, current, afterRawBlock, blockId);
 			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
-			return { ...committedResult(changed, [file.path], catalogUpdatePending), blockId };
+			return { ...committedResult(changed, catalogUpdatePending), blockId };
 		});
 	}
 
@@ -300,36 +194,33 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		logicalDate: string,
 		rawBlock: string,
 		createdFile: boolean,
-		existingBlockId: string | null = null,
-		preferredSection?: string | null,
-		onDailyCommitted?: () => void,
+		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MarkdownMutationResult> {
+		const sourcePath = normalizePath(file.path);
 		return this.withStaleRefresh([file.path], async () => {
 			try {
 				const position = this.options.getInsertPosition?.() ?? "bottom";
-				const section = preferredSection !== undefined
-					&& (preferredSection === null || isValidMarkdownHeading(preferredSection))
-					? preferredSection
-					: this.options.getWriteHeading();
+				const section = this.options.getWriteHeading();
 				const prepared = await this.dailyGateway.prepare({
 					file,
 					logicalDate,
 					expectedRevision: null,
+					validateTarget: (path, date) => this.assertDailyTarget(path, date),
 					update: (content, parsed) => {
 						// 使用实际落盘文件，在 prepare 与 commit 重放时分别检查图片来源。
 						validateImageSource?.(file.path);
-						if (existingBlockId !== null && parsed.observations.some((item) => item.existingBlockId === existingBlockId)) {
-							throw new Error("Moved Obsidian block ID already exists in the target Daily file.");
-						}
 						return insertRawBlock(content, rawBlock, section, position, parsed.observations, file.path);
 					},
 				});
 				const created = findAppendedObservation(prepared, rawBlock, section, position);
 				const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, onDailyCommitted, created);
-				return committedResult(created, [file.path], catalogUpdatePending);
+				return committedResult(created, catalogUpdatePending);
 			} catch (error) {
-				if (createdFile) await this.options.removeEmptyCreatedDailyFile?.(file).catch(() => undefined);
+				if (createdFile && !isStaleError(error) && normalizePath(file.path) === sourcePath
+					&& this.app.vault.getAbstractFileByPath(sourcePath) === file) {
+					await this.options.removeEmptyCreatedDailyFile?.(file).catch(() => undefined);
+				}
 				throw error;
 			}
 		});
@@ -337,7 +228,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 
 	private async commitAndUpdateCatalog(
 		prepared: PreparedDailyWrite,
-		onDailyCommitted?: () => void,
+		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		insertedObservation?: MemoObservation,
 	): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
@@ -348,8 +239,15 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			parsed: prepared.after,
 			...(insertedObservation === undefined ? {} : { insertedObservation }),
 		});
+		void catalogUpdate.catch(() => undefined);
+		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
+		let diskConfirmed = prepared.mode !== "active_editor";
+		if (!diskConfirmed && onDailyCommitted) {
+			try { diskConfirmed = await this.app.vault.read(prepared.file) === prepared.afterContent; }
+			catch { diskConfirmed = false; }
+		}
 		try {
-			onDailyCommitted?.();
+			onDailyCommitted?.(diskConfirmed);
 		} catch {
 			// Daily 已提交，阶段观察者失败不能反向把正文保存标记为失败。
 		}
@@ -378,6 +276,16 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			},
 		);
 		return queued;
+	}
+
+	private assertDailyTarget(path: string, logicalDate: string): void {
+		try {
+			if (this.options.getLogicalDateForPath(path) === logicalDate) return;
+		} catch {
+			// 配置不可读或路径不再属于 Daily 时，旧准备结果不再有写入权限。
+			throw new StaleDailyWriteError(path);
+		}
+		throw new StaleDailyWriteError(path);
 	}
 
 	private async getTargetFile(logicalDate: string): Promise<{ file: TFile; created: boolean }> {
@@ -423,13 +331,11 @@ function normalizeMemoInput(input: string): string {
 
 function committedResult(
 	observation: MemoObservation | null,
-	sourcePaths: readonly string[],
 	catalogUpdatePending: boolean,
 ): MarkdownMutationResult {
 	return {
 		status: "committed",
 		observation,
-		sourcePaths: [...new Set(sourcePaths.map(normalizePath))],
 		catalogUpdatePending,
 	};
 }

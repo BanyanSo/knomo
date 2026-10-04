@@ -1,3 +1,4 @@
+import { LocalComposerDraftStore, type LocalComposerDraft } from "../src/ui/LocalComposerDraftStore";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM, VirtualConsole } from "jsdom";
@@ -11,7 +12,7 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
 import { ComposerImageController, type ComposerImageCapture } from "../src/ui/ComposerImageController";
 import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
-import { composerImageLinks } from "../src/ui/ComposerImageState";
+import { composerImageLinks, setComposerImageLinks } from "../src/ui/ComposerImageState";
 import { AttachmentService, type ImageAttachment } from "../src/services/AttachmentService";
 
 function environment(value: string) {
@@ -43,6 +44,29 @@ function environment(value: string) {
 		assert.deepEqual(errors, [], "DOM 事件异常必须使测试失败");
 	} };
 }
+
+test("当前列表命令覆盖单行、类型转换和多行选择，并精确撤销", () => {
+	for (const [initial, from, to, command, expected] of [
+		["hello", 5, 5, "bullet", "- hello"],
+		["hello", 5, 5, "ordered", "1. hello"],
+		["- hello", 7, 7, "ordered", "1. hello"],
+		["a\nb\nc", 0, 5, "bullet", "- a\n- b\n- c"],
+		["a\nb\nc", 0, 5, "ordered", "1. a\n2. b\n3. c"],
+	] as const) {
+		const { editor, close } = environment(initial);
+		try {
+			editor.input.setSelectionRange(from, to);
+			const result = runComposerCommand(editor.input.value, from, to, command);
+			assert.equal(result.type, "changed");
+			if (result.type !== "changed") throw new Error("Expected list conversion");
+			editor.apply(result.edit);
+			assert.equal(editor.input.value, expected);
+			undo(editor.view);
+			assert.equal(editor.input.value, initial);
+			assert.deepEqual([editor.input.selectionStart, editor.input.selectionEnd], [from, to]);
+		} finally { close(); }
+	}
+});
 
 test("浮标返回焦点时恢复编辑状态选区而非旧 DOM 光标", async () => {
 	await ensureObsidianStub();
@@ -375,6 +399,54 @@ test("toolbar gesture ignores a hover move without an active pointer", () => {
 	}
 });
 
+test("desktop toolbar dragging scrolls without activating a tool and the next click still works", () => {
+	const dom = new JSDOM("<div id='tools'><button data-action='insert-bold'>Bold</button></div>");
+	const tools = dom.window.document.getElementById("tools")!;
+	const button = tools.querySelector("button")!;
+	Object.defineProperties(tools, { clientWidth: { value: 100 }, scrollWidth: { value: 300 } });
+	let captured: number | null = null;
+	Object.assign(tools, {
+		setPointerCapture: (id: number) => { captured = id; },
+		hasPointerCapture: (id: number) => captured === id,
+		releasePointerCapture: () => { captured = null; },
+	});
+	let calls = 0;
+	const cleanup = registerComposerToolGesture(tools, () => calls++, undefined, true);
+	const pointer = (type: string, x: number, target: HTMLElement = button, pointerType = "mouse") => {
+		const event = new dom.window.MouseEvent(type, { clientX: x, bubbles: true, cancelable: true, button: 0 });
+		Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: pointerType } });
+		target.dispatchEvent(event);
+	};
+	try {
+		pointer("pointerdown", 80);
+		pointer("pointermove", 76);
+		assert.equal(tools.scrollLeft, 0);
+		pointer("pointermove", 40);
+		assert.equal(tools.scrollLeft, 40);
+		assert.equal(captured, 1);
+		pointer("pointerup", 40, tools);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 1 }));
+		assert.equal(calls, 0);
+		assert.equal(captured, null);
+		pointer("pointerdown", 20); pointer("pointerup", 20);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 1 }));
+		assert.equal(calls, 1);
+		pointer("pointerdown", 80, tools); pointer("pointermove", 60, tools);
+		assert.equal(tools.scrollLeft, 60);
+		pointer("pointercancel", 60, tools);
+		assert.equal(captured, null);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 1 }));
+		assert.equal(calls, 1);
+		button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 0 }));
+		assert.equal(calls, 2);
+		pointer("pointerdown", 80); pointer("pointermove", 40);
+		cleanup();
+		assert.equal(captured, null);
+		pointer("pointermove", 20);
+		assert.equal(tools.scrollLeft, 100);
+	} finally { cleanup(); dom.window.close(); }
+});
+
 test("Tag Suggest uses the same editor transaction and preserves IME and save shortcut priority", async () => {
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
@@ -394,7 +466,7 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 	prototype.scrollIntoView = () => undefined;
 	let selections = 0;
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
-		getSnapshot: () => ({ suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
+		getSnapshot: () => ({ revision: 1, suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
 	} as never);
 	const unregister = suggest.registerLifecycle();
 	try {
@@ -543,8 +615,9 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 	(win.document.getElementById("host") as HTMLElement).classList.add("knomo-mobile-composer-layer");
 	let selections = 0;
 	let tags = ["alpha"];
+	let tagRevision = 1;
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
-		getSnapshot: () => ({ suggestions: tags }), ensureReady: async () => undefined,
+		getSnapshot: () => ({ revision: tagRevision, suggestions: tags }), ensureReady: async () => undefined,
 	} as never);
 	const unregister = suggest.registerLifecycle();
 	const initial = "before #alph after";
@@ -623,14 +696,16 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 				assert.equal(selections, before + 1, "下一次独立 Tap 应可选择");
 			}
 		}
-		tags = ["alpha", "alpine"];
+		tags = ["alpha", "alphabet"];
+		tagRevision++;
 		const { popup, row } = open(2);
 		assert.equal(popup.children.length, 2);
 		pointer(row, "pointerdown");
 		pointer(popup.children[1] as HTMLElement, "pointerup");
 		assert.equal(editor.input.value, initial, "跨行松手不能选择相邻候选");
 		pointer(row, "pointerdown");
-		tags = ["alpine", "alpha"];
+		tags = ["alphabet", "alpha"];
+		tagRevision++;
 		suggest.refresh();
 		assert.notEqual(win.document.querySelector(".knomo-tag-suggest-mobile"), popup);
 		pointer(row, "pointerup");
@@ -963,8 +1038,8 @@ async function sessionView(editor: ComposerEditor) {
 		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
 		resolveCatalogMemo: async (memo: import("../src/types/memoView").MemoViewItem) => memo.catalog!,
 		memoCommandService: {
-			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
-			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) }),
+			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),
+			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),
 			createReferenceText: async (_memo: unknown) => ({ text: "[[reference]]" }),
 		},
 		reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
@@ -1030,7 +1105,7 @@ test("W01-W05 edit saves the original handle once while frozen and restores Crea
 		let calls = 0;
 		view.memoCommandService.startEdit = (target, content) => {
 			calls++; assert.equal(target, memo.catalog); assert.equal(content, "edited");
-			return { dailyCommitted: daily, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false }) };
+			return { dailyCommitted: daily, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false }) };
 		};
 		const saving = view.saveInput(); await Promise.resolve();
 		view.cancelEditing(); view.clearReference(); view.startEditing(sessionMemo("b"));
@@ -1084,7 +1159,7 @@ test("W06-W07 late settled refresh preserves new errors, sheet and scroll owners
 		view.reloadMemos = async () => { refreshed(); return true; };
 		await view.saveInput();
 		editor.reset("new draft"); view.openComposer(); status = "new error";
-		finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+		finish({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false });
 		await refreshedPromise; await Promise.resolve();
 		assert.equal(editor.input.value, "new draft"); assert.equal(view.composerOpen, true); assert.equal(status, "new error");
 	} finally { close(); }
@@ -1109,7 +1184,7 @@ test("W10 rebuild waits for consumption and close does not cancel the committed 
 				view.reloadMemos = async () => { throw new Error("closed reload"); };
 			}
 			commit(); await saving;
-			finish({ status: "saved", memo: null, timeBuoyDates: [], followUpPending: false, localRefreshPending: false });
+			finish({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false });
 			await Promise.resolve(); await Promise.resolve();
 			assert.equal(renders, closing ? 0 : 1); assert.equal(view.isSaving, false);
 		} finally { close(); }
@@ -1524,4 +1599,376 @@ test("save receives a frozen image validator; failure keeps draft and manual rem
 		assert.equal(validated, 1);
 		assert.equal(f.editor.input.value, "");
 	} finally { f.close(); }
+});
+
+
+function draftStorage() {
+	const data = new Map<string, unknown>();
+	return { loadLocalStorage: (key: string) => data.get(key) ?? null,
+		saveLocalStorage: (key: string, value: unknown) => { data.set(key, JSON.parse(JSON.stringify(value))); } };
+}
+
+async function draftSession(editor: ComposerEditor, win: ReturnType<typeof environment>["win"], disk = draftStorage()) {
+	const view = await sessionView(editor) as Awaited<ReturnType<typeof sessionView>> & {
+		localDraftStore: LocalComposerDraftStore; localDraftTimer: number | null; draftImageLinks: [];
+		containerEl: { win: typeof win; doc: Document }; app: unknown;
+		restoredEditNeedsTarget: boolean; restoredDraftSelection: LocalComposerDraft["active"] | null;
+		flushLocalDraft(): void; captureLocalDraft(): LocalComposerDraft; scheduleLocalDraft(): void;
+		validateRestoredDraft(draft: LocalComposerDraft): Promise<void>; applyRestoredDraftSelection(): void;
+		onOpen(): Promise<void>; initializeView(): Promise<void>; settleQuickCommandReady(ready: boolean): void;
+		register(callback: () => void): void; registerDomEvent(target: EventTarget, type: string, callback: EventListener): void;
+		getImageSourcePath(): string | null;
+	};
+	view.localDraftStore = new LocalComposerDraftStore(disk, assert.fail);
+	view.localDraftTimer = null; view.draftImageLinks = [];
+	view.containerEl = { win, doc: win.document as unknown as Document };
+	view.app = disk; view.restoredEditNeedsTarget = false;
+	return view;
+}
+
+test("本地快照读取真实 EditorState，不结束 IME、不改变反向选区和撤销", async () => {
+	const f = environment("draft");
+	try {
+		const view = await draftSession(f.editor, f.win);
+		f.editor.apply({ value: "draft changed", anchor: 10, head: 2 });
+		f.editor.view.scrollDOM.scrollTop = 72;
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionstart", { bubbles: true }));
+		view.composerIsComposing = true;
+		const state = f.editor.view.state, composing = f.editor.composing, history = undoDepth(state);
+		view.flushLocalDraft();
+		assert.equal(f.editor.view.state, state);
+		assert.equal(f.editor.composing, composing);
+		assert.equal(view.composerIsComposing, true);
+		assert.deepEqual(view.localDraftStore.draft.active, {
+			content: "draft changed", referenceText: null, markdownText: null, anchor: 10, head: 2, scrollTop: 72, imageLinks: [],
+		});
+		assert.equal(undoDepth(f.editor.view.state), history);
+		f.editor.input.dispatchEvent(new f.win.CompositionEvent("compositionend", { bubbles: true }));
+		undo(f.editor.view); assert.equal(f.editor.input.value, "draft");
+		view.localDraftStore.close();
+	} finally { f.close(); }
+});
+
+test("编辑与新建切换的真实接线同时保存两份草稿，取消后恢复引用、选区及图片", async () => {
+	const f = environment("![[image.png]] comment");
+	try {
+		const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+		view.quoteReferenceText = "[[ref]]"; view.quoteMarkdownText = "> ref";
+		f.editor.input.setSelectionRange(1, 4, "backward");
+		f.editor.view.dispatch({ effects: setComposerImageLinks.of([{ from: 0, to: 14, link: "![[image.png]]", path: "image.png", sourcePath: "Daily/2026-09-19.md" }]) });
+		const memo = sessionMemo("a");
+		Object.assign(memo.catalog!.observationHandle, { startLine: 0, endLine: 1, rawBlockHash: "raw" });
+		view.startEditing(memo); f.editor.apply({ value: "unfinished edit", anchor: 3, head: 7 });
+		view.flushLocalDraft(); view.localDraftStore.close();
+		const recovered = new LocalComposerDraftStore(disk, assert.fail);
+		assert.equal(recovered.draft.active.content, "unfinished edit");
+		assert.deepEqual(recovered.draft.editingMemo?.catalog?.observationHandle, memo.catalog!.observationHandle);
+		view.localDraftStore = recovered; view.cancelEditing(); view.flushLocalDraft();
+		assert.equal(f.editor.input.value, "![[image.png]] comment");
+		assert.equal(view.quoteReferenceText, "[[ref]]");
+		assert.equal(f.editor.input.selectionDirection, "backward");
+		assert.equal(recovered.draft.active.imageLinks?.length, 1);
+		assert.equal(recovered.draft.editingMemo, null); recovered.close();
+	} finally { f.close(); }
+});
+
+test("未收到 Daily 确认则保留待核对版本，存储失败不阻断正常保存", async () => {
+	for (const failure of ["daily", "storage"] as const) {
+		const f = environment("unfinished");
+		try {
+			const view = await draftSession(f.editor, f.win);
+			if (failure === "daily") view.memoCommandService.startCreate = () => { throw new Error("I/O uncertain"); };
+			else {
+				let notices = 0;
+				view.localDraftStore = new LocalComposerDraftStore({ loadLocalStorage: () => null,
+					saveLocalStorage: () => { throw new Error("quota"); } }, () => notices++);
+				await view.saveInput();
+				assert.equal(f.editor.input.value, ""); assert.equal(notices, 1);
+				view.localDraftStore.close(); continue;
+			}
+			await view.saveInput();
+			assert.equal(f.editor.input.value, "unfinished");
+			assert.equal(view.localDraftStore.pending?.active.content, "unfinished");
+			assert.equal(view.localDraftStore.draft.active.content, "unfinished"); view.localDraftStore.close();
+		} finally { f.close(); }
+	}
+});
+
+test("原文变化后保留恢复文字和旧句柄，仅显式重选目标沿用草稿", async () => {
+	const f = environment("valuable edit");
+	try {
+		const view = await draftSession(f.editor, f.win);
+		const { TFile } = await import("obsidian");
+		const memo = sessionMemo("old-revision"); view.editingMemo = memo;
+		const originalHandle = memo.catalog!.observationHandle;
+		view.app = { vault: { getAbstractFileByPath: () => new TFile(), read: async () => "changed source" } };
+		view.getImageSourcePath = () => memo.dailyRef.path;
+		await view.validateRestoredDraft(view.captureLocalDraft());
+		assert.equal(view.restoredEditNeedsTarget, true);
+		assert.equal(memo.catalog!.observationHandle, originalHandle);
+		await view.saveInput(); assert.equal(f.editor.input.value, "valuable edit");
+		const freshTarget = sessionMemo("explicit-new-selection");
+		Object.assign(freshTarget.catalog!.observationHandle, { startLine: 0, endLine: 1, rawBlockHash: "raw" });
+		const before = f.editor.view.state;
+		view.startEditing(freshTarget);
+		assert.equal(view.editingMemo, freshTarget); assert.equal(view.restoredEditNeedsTarget, false);
+		assert.equal(f.editor.view.state, before); view.localDraftStore.close();
+	} finally { f.close(); }
+});
+
+test("插件卸载先补保存再撤销包括已关闭视图在内的草稿写入", async () => {
+	const f = environment("last input");
+	try {
+		Object.assign(f.win.document.body, {
+			removeClass: (name: string) => f.win.document.body.classList.remove(name),
+			findAll: (selector: string) => [...f.win.document.body.querySelectorAll(selector)],
+		});
+		const app = { ...draftStorage(), workspace: {
+			getLeavesOfType: () => [{ view }], containerEl: { doc: f.win.document },
+		} };
+		const view = await draftSession(f.editor, f.win, app);
+		const closed = new LocalComposerDraftStore(app, assert.fail);
+		closed.update({ ...view.captureLocalDraft(), active: { ...view.captureLocalDraft().active, content: "pending", anchor: 0, head: 0 } });
+		const token = closed.beginSubmission(); closed.close();
+		const { default: Plugin } = await import("../src/main");
+		Plugin.prototype.onunload.call({ app } as unknown as InstanceType<typeof Plugin>);
+		const restored = new LocalComposerDraftStore(app, assert.fail);
+		assert.equal(restored.draft.active.content, "pending");
+		closed.committed(token, true); closed.finishSubmission();
+		f.editor.reset("late input"); view.flushLocalDraft();
+		restored.close();
+		// 使用同一宿主认领剩余条目，确认卸载前的最后输入确实落入草稿存储。
+		const first = new LocalComposerDraftStore(app, assert.fail);
+		const second = new LocalComposerDraftStore(app, assert.fail);
+		assert.equal(first.draft.active.content, "pending");
+		assert.equal(second.draft.active.content, "last input");
+		first.close(); second.close();
+	} finally { f.close(); }
+});
+
+test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依赖节流计时器", async () => {
+	const f = environment("");
+	const cleanup: Array<() => void> = [];
+	try {
+		const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+		f.editor.apply({ value: "saved draft", anchor: 8, head: 2 });
+		view.flushLocalDraft(); view.localDraftStore.close();
+		view.register = callback => { cleanup.push(callback); };
+		view.registerDomEvent = (target, type, callback) => {
+			target.addEventListener(type, callback); cleanup.push(() => target.removeEventListener(type, callback));
+		};
+		view.settleQuickCommandReady = () => undefined;
+		view.getImageSourcePath = () => "Daily/today.md";
+		view.initializeView = async () => {
+			f.editor.reset(view.draftContent);
+			f.editor.view.dispatch({ effects: setComposerImageLinks.of(view.draftImageLinks) });
+			view.applyRestoredDraftSelection();
+		};
+		await view.onOpen();
+		assert.equal(f.editor.input.value, "saved draft");
+		assert.equal(f.editor.view.state.selection.main.anchor, 8);
+		assert.equal(f.editor.view.state.selection.main.head, 2);
+		f.editor.apply({ value: "background input", anchor: 5, head: 5 });
+		view.scheduleLocalDraft(); const timer = view.localDraftTimer;
+		view.scheduleLocalDraft(); assert.equal(view.localDraftTimer, timer);
+		f.win.document.dispatchEvent(new f.win.Event("visibilitychange"));
+		assert.equal(view.localDraftTimer, null);
+		assert.equal(view.localDraftStore.draft.active.content, "background input");
+		f.editor.apply({ value: "last input", anchor: 4, head: 4 });
+		for (const callback of cleanup.splice(0).reverse()) callback();
+		const reopened = new LocalComposerDraftStore(disk, assert.fail);
+		assert.equal(reopened.draft.active.content, "last input"); reopened.close();
+	} finally { for (const callback of cleanup.reverse()) callback(); f.close(); }
+});
+
+
+test("恢复图片重新验证附件存在性、原来源及当前目标路径，缺失不丢正文", async () => {
+	for (const mode of ["valid", "missing", "source-changed"] as const) {
+		const f = environment("![[image.png]]");
+		try {
+			const view = await draftSession(f.editor, f.win);
+			const { TFile, Notice } = await import("obsidian");
+			const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+			const file = new TFile(); file.path = "image.png";
+			const sources: string[] = [];
+			view.app = { vault: { getAbstractFileByPath: () => mode === "missing" ? null : file }, metadataCache: {
+				getFirstLinkpathDest: (_target: string, source: string) => {
+					sources.push(source);
+					return mode === "source-changed" && source === "Daily/new.md" ? null : file;
+				},
+			} };
+			view.getImageSourcePath = () => "Daily/new.md";
+			f.editor.view.dispatch({ effects: setComposerImageLinks.of([{ from: 0, to: 14, link: "![[image.png]]", path: "image.png", sourcePath: "Daily/old.md" }]) });
+			const before = f.editor.view.state;
+			await view.validateRestoredDraft(view.captureLocalDraft());
+			assert.equal(f.editor.view.state, before);
+			assert.equal(f.editor.input.value, "![[image.png]]");
+			assert.equal(notices.length, mode === "valid" ? 0 : 1);
+			if (mode !== "missing") assert.deepEqual(sources, ["Daily/old.md", "Daily/new.md"]);
+			view.localDraftStore.close();
+		} finally { f.close(); }
+	}
+});
+
+test("真实保存回调在关闭后清理对应草稿，旧保存不能清理新视图的输入", async () => {
+	for (const newInput of [false, true]) {
+		const f = environment("submitted");
+		try {
+			const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+			let confirm!: () => void;
+			const dailyCommitted = new Promise<void>(resolve => { confirm = resolve; });
+			view.memoCommandService.startCreate = () => ({ dailyCommitted, settled: Promise.resolve({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false }) });
+			const saving = view.saveInput();
+			await Promise.resolve();
+			if (newInput) {
+				f.editor.reset("new session");
+				view.localDraftStore.changed();
+				f.editor.reset("submitted");
+			}
+			view.flushLocalDraft(); view.localDraftStore.close(); view.trashViewClosed = true;
+			const second = new LocalComposerDraftStore(disk, assert.fail);
+			assert.equal(second.draft.active.content, "");
+			confirm(); await saving;
+			const restored = new LocalComposerDraftStore(disk, assert.fail);
+			assert.equal(restored.draft.active.content, newInput ? "submitted" : "");
+			assert.equal(restored.pending, null); restored.close(); second.close();
+		} finally { f.close(); }
+	}
+});
+
+test("Tag Suggest reuses calculations for the current revision and query, including empty results", async () => {
+	await ensureObsidianStub();
+	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
+	const { editor, win, close } = environment("#");
+	Object.assign(win.HTMLElement.prototype, {
+		createDiv(this: HTMLElement, options: { cls?: string }) {
+			const child = this.ownerDocument.createElement("div"); child.className = options.cls ?? "";
+			this.appendChild(child); return child;
+		},
+		setText(this: HTMLElement, text: string) { this.textContent = text; },
+		empty(this: HTMLElement) { this.replaceChildren(); },
+		addClass(this: HTMLElement, name: string) { this.classList.add(name); },
+		removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
+		toggleClass(this: HTMLElement, name: string, enabled: boolean) { this.classList.toggle(name, enabled); },
+	});
+	let reads = 0;
+	const tags = new Proxy(["alpha", "beta"], { get(target, key, receiver) {
+		if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+		return Reflect.get(target, key, receiver);
+	} });
+	const snapshot = { revision: 1, status: "ready", suggestions: tags };
+	const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
+		getSnapshot: () => snapshot, ensureReady: async () => snapshot,
+	} as never);
+	const unregister = suggest.registerLifecycle();
+	try {
+		for (const query of ["", "alp", "zzz"]) {
+			editor.reset(`#${query}`); editor.view.focus(); suggest.open();
+			const baseline = reads;
+			const popup = win.document.querySelector(".suggestion-container");
+			for (let i = 0; i < 10; i++) {
+				suggest.refresh();
+				editor.input.dispatchEvent(new win.KeyboardEvent("keyup", { key: "ArrowLeft" }));
+			}
+			assert.equal(reads, baseline, `${query}: 重复刷新不访问标签内容`);
+			assert.equal(win.document.querySelector(".suggestion-container"), popup);
+			snapshot.revision++;
+			suggest.refresh();
+			assert.ok(reads > baseline, "新索引版本必须重新计算");
+			const updated = reads;
+			suggest.close(); suggest.open();
+			assert.ok(reads > updated, "关闭后释放查询结果");
+		}
+	} finally { unregister(); close(); }
+});
+
+test("Tag Suggest cold readiness renders current candidates through keyup and cancels closed sessions", async (t) => {
+	await ensureObsidianStub();
+	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
+	const { VaultTagIndex } = await import("../src/services/VaultTagIndex");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { TFile } = await import("obsidian");
+	for (const action of ["desktop", "mobile", "real-index", "retained", "toolbar", "toolbar-narrow", "toolbar-mobile", "keyup", "edit", "close", "escape", "blur", "ime", "reset", "destroy", "failure"] as const) {
+		await t.test(action, async () => {
+			const { editor, win, close } = environment("#");
+			const prototype = win.HTMLElement.prototype;
+			Object.assign(prototype, {
+				createDiv(this: HTMLElement, options: { cls?: string }) {
+					const child = this.ownerDocument.createElement("div");
+					child.className = options.cls ?? ""; this.appendChild(child); return child;
+				},
+				setText(this: HTMLElement, text: string) { this.textContent = text; },
+				empty(this: HTMLElement) { this.replaceChildren(); },
+				addClass(this: HTMLElement, name: string) { this.classList.add(name); },
+				removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
+				toggleClass(this: HTMLElement, name: string, enabled: boolean) { this.classList.toggle(name, enabled); },
+			});
+			let resolve!: () => void;
+			let reject!: (error: Error) => void;
+			let tags: string[] = [];
+			let status = "building";
+			let requests = 0;
+			const realIndex = action === "real-index" ? new VaultTagIndex({
+				workspace: { containerEl: { win } },
+				vault: { getMarkdownFiles: () => [Object.assign(new TFile(), { path: "Tags.md", extension: "md" })] },
+				metadataCache: { getFileCache: () => ({ allTags: ["alpha", "beta"] }) },
+			} as never) : null;
+			const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+			const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
+				getSnapshot: () => realIndex?.getSnapshot() ?? { revision: status === "ready" ? 1 : 0, suggestions: tags, status },
+				ensureReady: () => { requests++; return realIndex?.ensureReady() ?? pending; },
+			} as never);
+			const unregister = suggest.registerLifecycle();
+			try {
+				if (action === "mobile" || action === "toolbar-mobile") win.document.getElementById("host")!.classList.add("knomo-mobile-composer-layer");
+				if (action === "retained") tags = ["old"];
+				editor.view.focus();
+				if (action.startsWith("toolbar")) {
+					editor.reset("");
+					const button = win.document.body.appendChild(win.document.createElement("button"));
+					button.focus();
+					editor.input.addEventListener("composer-change", () => suggest.refresh());
+					const view = Object.create(KnomoView.prototype) as { runComposerToolAction(action: string): boolean };
+					Object.assign(view, { inputEl: editor.input, tagSuggest: suggest, containerEl: { win },
+						currentLayout: action === "toolbar-mobile" ? "mobile" : action === "toolbar-narrow" ? "desktop-narrow" : "desktop-wide",
+						composerOpen: true, isSaving: false, trashViewClosed: false, composerIsComposing: false });
+					assert.equal(view.runComposerToolAction("insert-tag"), true);
+					await new Promise<void>(done => win.requestAnimationFrame(() => done()));
+					assert.equal(editor.input.value, "#");
+				} else if (action === "desktop" || action === "real-index") suggest.refresh();
+				else suggest.openForCurrentTrigger();
+				assert.equal(win.document.querySelectorAll(".suggestion-item").length, action === "retained" ? 1 : 0);
+				if (action === "keyup" || action === "edit" || action === "real-index") {
+					editor.input.dispatchEvent(new win.KeyboardEvent("keyup", { key: "#", bubbles: true }));
+					suggest.refresh();
+				}
+				if (action === "edit") {
+					editor.apply({ value: "#bet", anchor: 4, head: 4 });
+					suggest.refresh();
+					editor.input.dispatchEvent(new win.KeyboardEvent("keyup", { key: "t", bubbles: true }));
+				}
+				if (action === "close") suggest.close();
+				if (action === "escape") editor.input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+				if (action === "blur") { editor.input.blur(); editor.view.focus(); }
+				if (action === "ime") {
+					editor.input.dispatchEvent(new win.CompositionEvent("compositionstart", { bubbles: true }));
+					editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { bubbles: true }));
+				}
+				if (action === "reset") editor.reset("#");
+				if (action === "destroy") { unregister(); editor.destroy(); }
+				tags = ["alpha", "beta"]; status = "ready";
+				if (realIndex) await realIndex.ensureReady();
+				else if (action === "failure") reject(new Error("index unavailable"));
+				else await new Promise<void>(done => win.setTimeout(() => { resolve(); done(); }, 0));
+				await Promise.resolve();
+				assert.equal(requests, 1, `${action}: readiness requests are merged`);
+				const labels = Array.from(win.document.querySelectorAll(".suggestion-item"), el => el.textContent);
+				assert.deepEqual(labels, action === "edit" ? ["beta"] : ["desktop", "mobile", "real-index", "retained", "toolbar", "toolbar-narrow", "toolbar-mobile", "keyup"].includes(action) ? tags : [], action);
+			} finally {
+				unregister();
+				realIndex?.onunload();
+				close();
+			}
+		});
+	}
 });

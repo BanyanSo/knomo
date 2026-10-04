@@ -37,10 +37,6 @@ export class MemoCatalogService {
 		return this.store.replaceFilePartition(buildCatalogPartition(input));
 	}
 
-	async replaceFiles(inputs: readonly CatalogPartitionInput[]): Promise<number> {
-		return this.store.replaceFilePartitions(inputs.map(buildCatalogPartition));
-	}
-
 	deleteFile(sourcePath: string): Promise<number> {
 		return this.store.deleteFilePartition(sourcePath);
 	}
@@ -72,6 +68,7 @@ export class MemoCatalogService {
 	listDailyAggregates(fromDate?: string, toDate?: string) {
 		return this.store.listDailyAggregates(fromDate, toDate);
 	}
+	readAggregateSnapshot() { return this.store.readAggregateSnapshot(); }
 
 	getStore(): MemoCatalogStore {
 		return this.store;
@@ -128,23 +125,25 @@ export function buildCatalogObservation(observation: MemoObservation): CatalogOb
 
 export function buildCatalogSearchTokens(normalizedText: string): string[] {
 	const words = normalizedText.match(/[\p{L}\p{N}_-]+/gu) ?? [];
-	const tokens: string[] = [];
+	const tokens = new Set<string>();
 	for (const word of words) {
-		pushUnique(tokens, word);
+		tokens.add(word);
 		const characters = [...word];
 		for (let index = 0; index + 2 < characters.length; index += 1) {
-			pushUnique(tokens, characters.slice(index, index + 3).join(""));
+			tokens.add(characters.slice(index, index + 3).join(""));
 		}
-		if (characters.every((character) => /\p{Script=Han}/u.test(character))) {
-			for (let index = 0; index < characters.length; index += 1) {
-				pushUnique(tokens, characters[index]);
-				if (index + 1 < characters.length) {
-					pushUnique(tokens, `${characters[index]}${characters[index + 1]}`);
+		// 混排词段也必须包含连续汉字的短 token，否则候选索引会漏掉真实子串。
+		for (const run of word.match(/\p{Script=Han}+/gu) ?? []) {
+			const han = [...run];
+			for (let index = 0; index < han.length; index += 1) {
+				tokens.add(han[index]);
+				if (index + 1 < han.length) {
+					tokens.add(`${han[index]}${han[index + 1]}`);
 				}
 			}
 		}
 	}
-	return tokens;
+	return [...tokens];
 }
 
 export function selectCatalogSearchToken(query: string): string | null {

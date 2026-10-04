@@ -5,7 +5,7 @@ import type { ShuffleDayStats } from "../utils/shuffleDay";
 type LoadMoreAction = "load-more" | "load-more-mobile-search" | "load-more-time-buoy-cards";
 
 interface RenderLoadMoreButtonOptions {
-	remainingCount: number;
+	remainingCount: number | null;
 	action: LoadMoreAction;
 	extraClass?: string;
 	sentinel?: boolean;
@@ -87,7 +87,7 @@ export function renderKnomoLoadMoreButton(container: HTMLElement, options: Rende
 		: `knomo-load-more ${options.extraClass}`;
 	return container.createEl("button", {
 		cls,
-		text: t("list.loadMore", { count: options.remainingCount }),
+		text: options.remainingCount === null ? t("list.loadMoreUnknown") : t("list.loadMore", { count: options.remainingCount }),
 		attr,
 	});
 }

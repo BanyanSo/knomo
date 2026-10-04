@@ -1,4 +1,5 @@
 import type {
+	CatalogAggregateSnapshot,
 	CatalogCoverage,
 	CatalogDailyAggregate,
 	CatalogFileAggregate,
@@ -24,7 +25,10 @@ import {
 import type { CatalogMetaEntry, MemoCatalogStore } from "./MemoCatalogStore";
 import { selectCatalogSearchToken } from "./MemoCatalogService";
 
-const CATALOG_DATABASE_VERSION = 2;
+import type { TimeBuoyIndexEntry, TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/timeBuoy";
+import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
+
+const CATALOG_DATABASE_VERSION = 3;
 const FILES_STORE = "files";
 const OBSERVATIONS_STORE = "observations";
 const POSTINGS_STORE = "postings";
@@ -33,6 +37,7 @@ const META_STORE = "meta";
 const BY_SOURCE_PATH = "bySourcePath";
 const BY_CREATED_AT = "byCreatedAt";
 const BY_LOOKUP = "byLookup";
+const BY_TIME_BUOY = "byTimeBuoy";
 const BY_LOGICAL_DATE = "byLogicalDate";
 const CATALOG_REVISION_META = "catalogRevision";
 const COVERAGE_META = "coverage";
@@ -42,6 +47,7 @@ interface CatalogPostingRecord {
 	sourcePath: string;
 	observationKey: string;
 	lookupKeys: string[];
+	buoyKey?: string;
 }
 
 interface CatalogMetaRecord<T = unknown> {
@@ -77,6 +83,7 @@ export class CatalogDatabaseCorruptError extends Error {
 
 export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	private database: IDBDatabase | null = null;
+	private snapshotGeneration = 0;
 	private opening: Promise<void> | null = null;
 	private readonly factory: IDBFactory | undefined;
 	private readonly keyRange: typeof IDBKeyRange | undefined;
@@ -142,6 +149,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		}
 		const database = this.database;
 		database.onversionchange = () => {
+			this.snapshotGeneration++;
 			this.lifecycle = {
 				state: "read-only",
 				persistent: true,
@@ -154,6 +162,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	close(): void {
+		this.snapshotGeneration++;
 		this.database?.close();
 		this.database = null;
 		if (this.lifecycle.state !== "read-only") {
@@ -231,6 +240,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 				const posting = buildPostingRecord(observation);
 				const existingObservation = existingByKey.get(observation.observationKey);
 				if (existingObservation === undefined
+					|| existingObservation.time !== observation.time
 					|| !sameLookupKeys(buildPostingRecord(existingObservation).lookupKeys, posting.lookupKeys)) {
 					postings.put(posting);
 				}
@@ -354,6 +364,47 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		const files = await requestResult(transaction.objectStore(FILES_STORE).getAll()) as CatalogFileRecord[];
 		await done;
 		return files.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+	}
+
+	async queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage> {
+		await this.open();
+		const transaction = this.getDatabase().transaction([POSTINGS_STORE, OBSERVATIONS_STORE, META_STORE], "readonly");
+		const done = waitForTransaction(transaction);
+		const metadata = transaction.objectStore(META_STORE);
+		const [revisionRecord, coverageRecord] = await Promise.all([
+			requestResult(metadata.get(CATALOG_REVISION_META)) as Promise<CatalogMetaRecord<number> | undefined>,
+			requestResult(metadata.get(COVERAGE_META)) as Promise<CatalogMetaRecord<CatalogCoverage> | undefined>,
+		]);
+		const catalogRevision = revisionRecord?.value ?? 0;
+		const coverage = coverageRecord?.value ?? { ...DEFAULT_CATALOG_COVERAGE };
+		// 完全同时间时保留原 Catalog 的 IndexedDB key 倒序，不能用 locale 改变并列项顺序。
+		const selection = new TimeBuoyPageSelection(request, catalogRevision, coverage,
+			(left, right) => left === right ? 0 : left > right ? -1 : 1);
+		let cursorReads = 0;
+		if (!selection.invalidated) {
+			await new Promise<void>((resolve, reject) => {
+				const cursorRequest = transaction.objectStore(POSTINGS_STORE).index(BY_TIME_BUOY).openKeyCursor();
+				cursorRequest.onerror = () => reject(cursorRequest.error);
+				cursorRequest.onsuccess = () => {
+					const cursor = cursorRequest.result;
+					if (cursor === null) { resolve(); return; }
+					cursorReads++;
+					try {
+						selection.add(JSON.parse(String(cursor.key)) as TimeBuoyIndexEntry);
+						cursor.continue();
+					} catch (error) {
+						reject(error);
+					}
+				};
+			});
+		}
+		const observations = transaction.objectStore(OBSERVATIONS_STORE);
+		const items = await Promise.all(selection.items.slice(0, selection.limit).map((item) =>
+			requestResult(observations.get(item.observationKey)) as Promise<CatalogObservation>));
+		await done;
+		return { items, nextCursor: selection.nextCursor, catalogRevision, coverage,
+			lifecycle: this.getLifecycle(), invalidated: selection.invalidated,
+			metrics: { cursorReads, observationsRead: items.length, returned: items.length } };
 	}
 
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
@@ -568,6 +619,37 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		});
 	}
 
+	async readAggregateSnapshot(): Promise<CatalogAggregateSnapshot> {
+		const generation = this.snapshotGeneration;
+		await this.open();
+		const database = this.getDatabase();
+		const lifecycle = this.getLifecycle();
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([AGGREGATES_STORE, META_STORE], "readonly");
+			const metadata = transaction.objectStore(META_STORE);
+			const revision = metadata.get(CATALOG_REVISION_META);
+			const coverage = metadata.get(COVERAGE_META);
+			const byDate = new Map<string, CatalogDailyAggregate>();
+			const request = transaction.objectStore(AGGREGATES_STORE).index(BY_LOGICAL_DATE).openCursor(null, "prev");
+			request.onsuccess = () => {
+				const cursor = request.result;
+				if (cursor === null) return;
+				mergeAggregate(byDate, cursor.value as CatalogFileAggregate);
+				cursor.continue();
+			};
+			transaction.oncomplete = () => resolve({
+				aggregates: [...byDate.values()].sort((left, right) => right.logicalDate.localeCompare(left.logicalDate)),
+				catalogRevision: (revision.result as CatalogMetaRecord<number> | undefined)?.value ?? 0,
+				coverage: (coverage.result as CatalogMetaRecord<CatalogCoverage> | undefined)?.value ?? { ...DEFAULT_CATALOG_COVERAGE },
+				lifecycle,
+				invalidated: generation !== this.snapshotGeneration || this.database !== database
+					|| JSON.stringify(lifecycle) !== JSON.stringify(this.getLifecycle()),
+			});
+			transaction.onerror = () => reject(transaction.error ?? new Error("Catalog aggregate snapshot failed."));
+			transaction.onabort = () => reject(transaction.error ?? new Error("Catalog aggregate snapshot aborted."));
+		});
+	}
+
 	async getCoverage(): Promise<CatalogCoverage> {
 		return (await this.getMeta<CatalogCoverage>(COVERAGE_META)) ?? { ...DEFAULT_CATALOG_COVERAGE };
 	}
@@ -661,7 +743,8 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		return this.keyRange;
 	}
 
-	private async getCatalogRevision(): Promise<number> {
+	async getCatalogRevision(): Promise<number> {
+		await this.open();
 		return (await this.getMeta<number>(CATALOG_REVISION_META)) ?? 0;
 	}
 }
@@ -741,6 +824,7 @@ function createCatalogSchema(database: IDBDatabase, transaction: IDBTransaction 
 		const postings = database.createObjectStore(POSTINGS_STORE, { keyPath: "postingKey" });
 		postings.createIndex(BY_SOURCE_PATH, "sourcePath", { unique: false });
 		postings.createIndex(BY_LOOKUP, "lookupKeys", { unique: false, multiEntry: true });
+		postings.createIndex(BY_TIME_BUOY, "buoyKey", { unique: false });
 	}
 	if (!database.objectStoreNames.contains(AGGREGATES_STORE)) {
 		const aggregates = database.createObjectStore(AGGREGATES_STORE, { keyPath: "sourcePath" });
@@ -763,7 +847,7 @@ function validateCatalogSchema(database: IDBDatabase): void {
 	const transaction = database.transaction([OBSERVATIONS_STORE, POSTINGS_STORE, AGGREGATES_STORE], "readonly");
 	const expectedIndexes = [
 		[OBSERVATIONS_STORE, [BY_SOURCE_PATH, BY_CREATED_AT, BY_LOGICAL_DATE]],
-		[POSTINGS_STORE, [BY_SOURCE_PATH, BY_LOOKUP]],
+		[POSTINGS_STORE, [BY_SOURCE_PATH, BY_LOOKUP, BY_TIME_BUOY]],
 		[AGGREGATES_STORE, [BY_LOGICAL_DATE]],
 	] as const;
 	for (const [storeName, indexes] of expectedIndexes) {
@@ -822,6 +906,10 @@ function buildPostingRecord(observation: CatalogObservation): CatalogPostingReco
 		sourcePath: observation.sourcePath,
 		observationKey: observation.observationKey,
 		lookupKeys,
+		// 单独索引的 key 包含选页所需字段，扫描不读取正文或通用 postings 的所有 token。
+		buoyKey: observation.timeBuoyDates.length === 0 ? undefined : JSON.stringify({
+			observationKey: observation.observationKey, createdAtKey: `${observation.logicalDate}T${observation.time}`, timeBuoyDates: observation.timeBuoyDates,
+		} satisfies TimeBuoyIndexEntry),
 	};
 }
 

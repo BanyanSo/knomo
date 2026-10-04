@@ -67,7 +67,6 @@ interface KnomoUserActionControllerOptions {
 	toggleSidebar: () => void;
 	collapseSidebar: () => void;
 	handleManualRefresh: () => Promise<void>;
-	focusStats: () => void;
 	returnFromRecordStats: () => void;
 	goToPreviousRecordStatsPeriod: () => void;
 	goToNextRecordStatsPeriod: () => void;
@@ -316,9 +315,6 @@ export class KnomoUserActionController {
 			case "refresh":
 				await this.options.handleManualRefresh();
 				return;
-			case "focus-stats":
-				this.options.focusStats();
-				break;
 			case "record-stats-back":
 				this.options.returnFromRecordStats();
 				return;

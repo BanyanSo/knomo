@@ -20,8 +20,6 @@ test("composer create input leaves plain create input unchanged", () => {
 		}),
 		{
 			content: "plain memo",
-			sourceReferenceText: null,
-			quoteTrailer: null,
 		},
 	);
 });
@@ -34,8 +32,6 @@ test("composer create input builds referenced quote content", () => {
 		}),
 		{
 			content: "reply memo [[Daily#^abc]]\n> source memo",
-			sourceReferenceText: "[[Daily#^abc]]",
-			quoteTrailer: null,
 		},
 	);
 });
@@ -75,9 +71,6 @@ test("composer save input prepares plain creates", () => {
 		{
 			type: "create",
 			content: "plain memo",
-			source: "plugin_input",
-			sourceReferenceText: null,
-			dailyTrailer: null,
 		},
 	);
 });
@@ -91,9 +84,6 @@ test("quote create preserves the explicit block reference when identity is absen
 		{
 			type: "create",
 			content: "reply memo [[Daily#^abc]]\n> source memo",
-			source: "quote_create",
-			sourceReferenceText: "[[Daily#^abc]]",
-			dailyTrailer: null,
 		},
 	);
 });

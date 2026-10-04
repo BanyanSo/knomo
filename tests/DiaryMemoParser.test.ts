@@ -1,3 +1,4 @@
+import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -88,8 +89,8 @@ test("所有 H1-H6 与根区域识别合法时间 memo，并排除嵌套、引�
 	]);
 });
 
-test("Catalog Parser 本机缓存标记随重复项扫描元数据更新", () => {
-	assert.equal(CATALOG_PARSER_VERSION, 6);
+test("Catalog 本机缓存版本包含混排搜索短 token 更新", () => {
+	assert.ok(CATALOG_PARSER_VERSION >= 7);
 });
 
 test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async () => {
@@ -246,4 +247,280 @@ function fixturePath(name: string): string {
 
 function sha256(bytes: Uint8Array): string {
 	return createHash("sha256").update(bytes).digest("hex");
+}
+
+
+test("parses list-leading memo content from a detached timestamp line", () => {
+	const parsed = parseCurrentDiary([
+		"- 12:00:00",
+		"  - 第一项",
+		"  - 第二项 ^abc123",
+	].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.existingBlockId, "abc123");
+	assert.equal(parsed.content, "- 第一项\n- 第二项");
+});
+
+test("parses tab-indented memo continuation lines", () => {
+	const parsed = parseCurrentDiary([
+		"- 12:00:00 第一行",
+		"\t- 子项",
+		"\t\t- 嵌套子项 ^abc123",
+	].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.existingBlockId, "abc123");
+	assert.equal(parsed.content, "第一行\n- 子项\n\t- 嵌套子项");
+});
+
+test("does not parse an empty detached timestamp line as a memo", () => {
+	assert.equal(parseCurrentDiary("- 12:00:00").length, 0);
+});
+
+test("parses a three-line memo block with tags and links", () => {
+	const parsed = parseCurrentDiary([
+			"- 12:00:00 第一行",
+			"  第二行包含 #tag",
+			"  第三行包含 [[链接]]",
+		].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.time, "12:00:00");
+	assert.equal(parsed.content, "第一行\n第二行包含 #tag\n第三行包含 [[链接]]");
+	assert.deepEqual(parsed.tags, ["tag"]);
+	assert.deepEqual(parsed.links, [
+		{
+			target: "链接",
+			displayText: null,
+			syntax: "wiki_link",
+		},
+	]);
+});
+
+test("parses bare web URLs without duplicating wrapped links", () => {
+	const metadata = parseCurrentDiary(new MarkdownBlockService().buildMemoBlock("裸链接 https://example.com/docs?q=1，括号 (http://example.org/a_(b)). "
+		+ "Markdown [官网](https://knomo.app) 图片 ![封面](https://example.com/a.png) www.example.com", "12:00:00"))[0];
+
+	assert.deepEqual(metadata.links, [
+		{
+			target: "https://example.com/docs?q=1",
+			displayText: null,
+			syntax: "url",
+		},
+		{
+			target: "http://example.org/a_(b)",
+			displayText: null,
+			syntax: "url",
+		},
+		{
+			target: "https://knomo.app",
+			displayText: "官网",
+			syntax: "markdown_link",
+		},
+	]);
+});
+
+test("parses memo time in HH:mm format", () => {
+	const parsed = parseCurrentDiary(["- 18:30 内容"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.time, "18:30");
+	assert.equal(parsed.content, "内容");
+});
+
+test("parses memo time in HH:mm:ss format", () => {
+	const parsed = parseCurrentDiary(["- 18:30:12 内容"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.time, "18:30:12");
+	assert.equal(parsed.content, "内容");
+});
+
+test("parses multiple memos in the same minute and second", () => {
+	const blocks = parseCurrentDiary([
+		"- 18:30 同一分钟第一条",
+		"- 18:30 同一分钟第二条",
+		"- 18:30:12 同一秒第一条",
+		"- 18:30:12 同一秒第二条",
+	].join("\n"));
+
+	assert.deepEqual(blocks.map((block) => block.content), [
+		"同一分钟第一条",
+		"同一分钟第二条",
+		"同一秒第一条",
+		"同一秒第二条",
+	]);
+});
+
+test("parses Obsidian image embeds", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 第一行", "  第二行 ![[Assets/a.png]]"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images, [
+		{
+			path: "Assets/a.png",
+			altText: "",
+			syntax: "obsidian_embed",
+		},
+	]);
+	assert.deepEqual(parsed.links, []);
+});
+
+test("decodes percent-encoded Obsidian image embed paths", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 图片 ![[Assets/a%20b%20c.jpg|300]]"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images, [
+		{
+			path: "Assets/a b c.jpg",
+			altText: "",
+			syntax: "obsidian_embed",
+		},
+	]);
+});
+
+test("parses supported Obsidian image embeds", () => {
+	const parsed = parseCurrentDiary([
+		"- 12:00:00 图片 ![[Assets/a.avif]] ![[Assets/a.bmp]] ![[Assets/a.gif]] ![[Assets/a.jpeg]]",
+		"  ![[Assets/a.jpg]] ![[Assets/a.png]] ![[Assets/a.svg]] ![[Assets/a.webp]] ![[Assets/a.WEBP|300]]",
+	].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images.map((image) => image.path), [
+		"Assets/a.avif",
+		"Assets/a.bmp",
+		"Assets/a.gif",
+		"Assets/a.jpeg",
+		"Assets/a.jpg",
+		"Assets/a.png",
+		"Assets/a.svg",
+		"Assets/a.webp",
+		"Assets/a.WEBP",
+	]);
+});
+
+test("does not treat Obsidian block embeds as images", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 引用 ![[2026-05-18#^5i3h99]]"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images, []);
+});
+
+test("parses Markdown images", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 第一行", "  第二行 ![alt](Assets/a.png)"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images, [
+		{
+			path: "Assets/a.png",
+			altText: "alt",
+			syntax: "markdown_image",
+		},
+	]);
+});
+
+test("decodes percent-encoded local Markdown image paths", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 图片 ![](Pasted%20image%2020260606110900.png)"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.deepEqual(parsed.images, [
+		{
+			path: "Pasted image 20260606110900.png",
+			altText: "",
+			syntax: "markdown_image",
+		},
+	]);
+});
+
+test("keeps remote Markdown image URLs percent-encoded", () => {
+	const metadata = parseCurrentDiary(new MarkdownBlockService().buildMemoBlock("![remote](https://example.com/Pasted%20image%2020260606110900.png)", "12:00:00"))[0];
+
+	assert.deepEqual(metadata.images, [
+		{
+			path: "https://example.com/Pasted%20image%2020260606110900.png",
+			altText: "remote",
+			syntax: "markdown_image",
+		},
+	]);
+});
+
+test("treats numeric-only Markdown image labels as sizes for local and remote images", () => {
+	const metadata = parseCurrentDiary(new MarkdownBlockService().buildMemoBlock([
+		"![200](Assets/local.png)",
+		"![ 320 ](https://example.com/remote.png)",
+		"![图 200](Assets/labeled.png)",
+	].join(" "), "12:00:00"))[0];
+
+	assert.deepEqual(metadata.images, [
+		{
+			path: "Assets/local.png",
+			altText: "",
+			syntax: "markdown_image",
+		},
+		{
+			path: "https://example.com/remote.png",
+			altText: "",
+			syntax: "markdown_image",
+		},
+		{
+			path: "Assets/labeled.png",
+			altText: "图 200",
+			syntax: "markdown_image",
+		},
+	]);
+});
+
+test("ignores blockId on the first line", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 第一行 ^abc123", "  第二行"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.existingBlockId, "abc123");
+	assert.equal(parsed.content, "第一行\n第二行");
+});
+
+test("ignores blockId on the last effective content line", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 第一行", "  第二行 ^abc123"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.existingBlockId, "abc123");
+	assert.equal(parsed.content, "第一行\n第二行");
+});
+
+test("contentSnapshot has no time prefix or blockId", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 第一行 ^abc123"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.content, "第一行");
+});
+
+test("unindented paragraphs do not belong to the previous memo", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 第一行", "普通段落", "  不是 continuation"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.endLine, 0);
+	assert.equal(parsed.content, "第一行");
+});
+
+test("a new Markdown heading stops memo parsing", () => {
+	const parsed = parseCurrentDiary(["- 12:00:00 第一行", "  第二行", "## Next", "  不是 continuation"].join("\n"))[0];
+
+	assert.ok(parsed);
+	assert.equal(parsed.endLine, 1);
+	assert.equal(parsed.content, "第一行\n第二行");
+});
+
+test("parses all memo blocks in content", () => {
+	const blocks = parseCurrentDiary("- 12:00:00 第一行\n  第二行\n普通段落\n- 13:00:00 下一条");
+
+	assert.equal(blocks.length, 2);
+	assert.equal(blocks[0].content, "第一行\n第二行");
+	assert.equal(blocks[1].content, "下一条");
+});
+
+function parseCurrentDiary(content: string) {
+	return parser.parseRevision({
+		sourcePath: "Daily/2026-05-14.md", logicalDate: "2026-05-14",
+		content, sourceRevision: sha256(Buffer.from(content)),
+	}).observations;
 }

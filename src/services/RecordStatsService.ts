@@ -1,11 +1,3 @@
-import type { MemoViewItem as MemoRecord } from "../types/memoView";
-import { parseMemoCalendarDate } from "../utils/date";
-import { isSupportedMemoImage } from "../utils/markdown";
-import { getMemoContentStats } from "../utils/memoContentStats";
-import { hasMemoReference } from "../utils/references";
-import { buildTagDisplayMap, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
-import type { TagDisplaySource } from "../utils/tags";
-
 export type RecordStatsView = "week" | "month" | "year";
 export type RecordStatsLoadState = "idle" | "loading" | "ready" | "empty" | "error";
 
@@ -78,13 +70,6 @@ export interface PreparedRecordStats {
 	daily: Map<string, DailyRecordStats>;
 	earliestYear: number | null;
 	tagDisplayNames: Map<string, string>;
-}
-
-interface LocalMemoTimestamp {
-	year: number;
-	month: number;
-	day: number;
-	hour: number;
 }
 
 export class RecordStatsService {
@@ -185,94 +170,6 @@ export class RecordStatsService {
 			return null;
 		}
 		return selectRecordStats(this.prepared, view, selectedDate);
-	}
-}
-
-export class RecordStatsBuilder {
-	private readonly daily = new Map<string, DailyRecordStats>();
-	private readonly tagDisplaySources: TagDisplaySource[] = [];
-	private memoCount = 0;
-	private wordCount = 0;
-	private earliestYear: number | null = null;
-	private tagDisplayOrder = 0;
-
-	addMemos(memos: readonly MemoRecord[]): void {
-		for (const memo of memos) {
-			this.addMemo(memo);
-		}
-	}
-
-	addMemo(memo: MemoRecord): void {
-		if (memo.status !== "active") {
-			return;
-		}
-		const localTimestamp = parseLocalMemoTimestamp(memo.createdAt);
-		if (localTimestamp === null) {
-			throw new Error(`Invalid memo createdAt: ${memo.id}`);
-		}
-		const memoWordCount = getMemoContentStats(memo).wordCount;
-		const isTagged = memo.tags.length > 0;
-		const hasImage = memo.images.some(isSupportedMemoImage);
-		const memoTagDisplays = new Map<string, string>();
-		for (const tag of memo.tags) {
-			const key = normalizeTagKey(tag);
-			const label = normalizeTagDisplay(tag);
-			if (key.length > 0 && label.length > 0 && !memoTagDisplays.has(key)) {
-				memoTagDisplays.set(key, label);
-			}
-		}
-		const updatedTimestamp = Date.parse(memo.updatedAt);
-		const tagModifiedTime = Number.isFinite(updatedTimestamp) ? updatedTimestamp : Date.parse(memo.createdAt);
-		for (const label of memoTagDisplays.values()) {
-			this.tagDisplaySources.push({ tag: label, modifiedTime: tagModifiedTime, order: this.tagDisplayOrder });
-			this.tagDisplayOrder += 1;
-		}
-		this.earliestYear = this.earliestYear === null
-			? localTimestamp.year
-			: Math.min(this.earliestYear, localTimestamp.year);
-		const dayKey = formatDateKey(localTimestamp.year, localTimestamp.month, localTimestamp.day);
-		let current = this.daily.get(dayKey);
-		if (current === undefined) {
-			const hourCounts = Array.from({ length: 24 }, () => 0);
-			hourCounts[localTimestamp.hour] = 1;
-			current = {
-				memoCount: 1,
-				wordCount: memoWordCount,
-				referenceMemoCount: hasMemoReference(memo) ? 1 : 0,
-				taggedMemoCount: isTagged ? 1 : 0,
-				untaggedMemoCount: isTagged ? 0 : 1,
-				imageMemoCount: hasImage ? 1 : 0,
-				hourCounts,
-				tagMemoCounts: new Map<string, number>(),
-			};
-			this.daily.set(dayKey, current);
-		} else {
-			current.memoCount += 1;
-			current.wordCount += memoWordCount;
-			current.referenceMemoCount += hasMemoReference(memo) ? 1 : 0;
-			current.taggedMemoCount += isTagged ? 1 : 0;
-			current.untaggedMemoCount += isTagged ? 0 : 1;
-			current.imageMemoCount += hasImage ? 1 : 0;
-			current.hourCounts[localTimestamp.hour] += 1;
-		}
-		for (const key of memoTagDisplays.keys()) {
-			current.tagMemoCounts.set(key, (current.tagMemoCounts.get(key) ?? 0) + 1);
-		}
-		this.memoCount += 1;
-		this.wordCount += memoWordCount;
-	}
-
-	build(): PreparedRecordStats {
-		return {
-			overview: {
-				memoCount: this.memoCount,
-				wordCount: this.wordCount,
-				recordDayCount: this.daily.size,
-			},
-			daily: this.daily,
-			earliestYear: this.earliestYear,
-			tagDisplayNames: buildTagDisplayMap(this.tagDisplaySources),
-		};
 	}
 }
 
@@ -453,17 +350,6 @@ function listDateKeys(start: Date, endExclusive: Date): string[] {
 		cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
 	}
 	return keys;
-}
-
-function parseLocalMemoTimestamp(value: string): LocalMemoTimestamp | null {
-	const date = parseMemoCalendarDate(value);
-	if (date === null) return null;
-	return {
-		year: date.getFullYear(),
-		month: date.getMonth() + 1,
-		day: date.getDate(),
-		hour: date.getHours(),
-	};
 }
 
 function formatDateKey(year: number, month: number, day: number): string {

@@ -63,7 +63,6 @@ test("routes generic actions, random cards, composer tools, and outside clicks",
 	const cleanup = installDomGlobals();
 	try {
 		const {
-			getComposerToolButtonRoute,
 			getMemoCardOpenRoute,
 			getRootClickRoute,
 		} = await import("../src/ui/KnomoActionRouter");
@@ -76,14 +75,11 @@ test("routes generic actions, random cards, composer tools, and outside clicks",
 		const actionRoute = getRootClickRoute(toolChild.asElement(), true);
 		assert.equal(actionRoute.type, "action");
 		if (actionRoute.type === "action") {
+			assert.equal(actionRoute.element, toolButton.asElement());
 			assert.equal(actionRoute.action, "insert-tag");
 			assert.equal(actionRoute.memoId, "memo-3");
 			assert.equal(actionRoute.mobileToolButtonEl, toolButton.asElement());
 		}
-
-		const composerToolRoute = getComposerToolButtonRoute(toolChild.asElement());
-		assert.equal(composerToolRoute?.element, toolButton.asElement());
-		assert.equal(composerToolRoute?.action, "insert-tag");
 
 		const memoCard = new TestElement("article", {
 			attr: { "data-memo-id": "memo-4" },

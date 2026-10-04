@@ -12,8 +12,8 @@ import type {
 	CatalogFeatureFilter,
 	CatalogFeatureQuery,
 	CatalogFunctionPageRequest,
-	CatalogAggregateResult,
 	CatalogLibrarySummary,
+	CatalogLibraryIndexesResult,
 	CatalogMemoItem,
 	CatalogMemoCountResult,
 	CatalogMemoPage,
@@ -21,7 +21,6 @@ import type {
 	CatalogReadState,
 	CatalogReadStatus,
 	KnomoRuntimeAttentionSnapshot,
-	KnomoRuntimeSnapshot,
 	MonthlyProjectionState,
 	CatalogTagFacet,
 } from "../types/catalogView";
@@ -31,7 +30,8 @@ import type { KnomoCurrentConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
 import type { KnomoSettingsLoadStatus } from "../types/settings";
 import { toCatalogMemoView } from "../types/memoView";
-import type { TimeBuoyAllQueryResult, TimeBuoyQueryResult } from "../types/timeBuoy";
+import type { TimeBuoyPageRequest, TimeBuoyPageResult, TimeBuoyQueryResult } from "../types/timeBuoy";
+import { getTimeBuoyTabDates } from "./TimeBuoyQuery";
 import { formatDatePart } from "../utils/date";
 import { filterRandomReunionCandidates, sampleRandomReunionCandidates } from "../utils/randomReunion";
 import type { RandomReunionCandidate } from "../utils/randomReunion";
@@ -130,33 +130,6 @@ export class CatalogReadService {
 		};
 	}
 
-	async getRuntimeSnapshot(): Promise<KnomoRuntimeSnapshot> {
-		const attention = this.getRuntimeAttentionSnapshot();
-		let coverage: CatalogCoverage = {
-			kind: "partial",
-			coveredFromDate: null,
-			pendingFileCount: 0,
-			coveredFileCount: 0,
-			totalFileCount: 0,
-		};
-		let lifecycle = attention.catalogLifecycle;
-		try {
-			const store = this.options.catalog.getStore();
-			coverage = await store.getCoverage();
-			lifecycle = store.getLifecycle();
-		} catch {
-			// 运行状态本身不可用时返回只读降级快照，不触发修复或扫描。
-		}
-		return {
-			settings: attention.settings,
-			catalog: { coverage, lifecycle },
-			currentConfiguration: attention.currentConfiguration,
-			monthly: attention.monthly,
-			legacyMigration: attention.legacyMigration,
-			legacyCleanupPending: attention.legacyCleanupPending,
-		};
-	}
-
 	async prime(): Promise<void> {
 		await this.query({ limit: 1 });
 	}
@@ -190,10 +163,11 @@ export class CatalogReadService {
 		}));
 		const status = this.getReadStatus(page.coverage, page.lifecycle, false);
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
+		const referenceCache = this.options.references?.createQueryCache();
 		return this.rememberPage({
 			items: await Promise.all(resolved.map(async (memo) => ({
 				...this.toMemoItem(memo, catalogCapabilities),
-				...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(memo.observation) }),
+				...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(memo.observation, referenceCache) }),
 			}))),
 			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
 			catalogRevision: page.catalogRevision,
@@ -222,53 +196,14 @@ export class CatalogReadService {
 		}
 	}
 
-	async queryBacklinks(targetPath: string, fragment: string | null, request: CatalogFunctionPageRequest): Promise<CatalogMemoPage> {
-		return this.queryFiltered({ hasLink: true, limit: request.limit, cursor: request.cursor, text: request.text }, (memo) =>
-			memo.derivedReferences?.some((link) => link.state === "resolved" && link.targetPath === targetPath
-				&& (fragment === null || link.fragment === fragment)) ?? false);
-	}
-
-	async getLibrarySummary(): Promise<CatalogAggregateResult<CatalogLibrarySummary>> {
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(coverage)) return { value: null, complete: false, coverage };
-		const aggregates = await this.options.catalog.listDailyAggregates();
-		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
-		const tagKeys = new Set(aggregates.flatMap((aggregate) => Object.keys(aggregate.tagMemoCounts ?? {})));
+	async getLibraryIndexes(): Promise<CatalogLibraryIndexesResult> {
+		const snapshot = await this.options.catalog.readAggregateSnapshot();
+		const complete = !snapshot.invalidated && isCompleteCoverage(snapshot.coverage)
+			&& snapshot.lifecycle.state === "ready";
 		return {
-			value: {
-				memoCount: sumAggregates(aggregates, (aggregate) => aggregate.memoCount),
-				tagCount: tagKeys.size,
-				imageCount: sumAggregates(aggregates, (aggregate) => aggregate.imageCount),
-				wordCount: sumAggregates(aggregates, (aggregate) => aggregate.wordCount ?? 0),
-			},
-			complete: true,
-			coverage: verifiedCoverage,
-		};
-	}
-
-	async getTagFacets(): Promise<CatalogAggregateResult<CatalogTagFacet[]>> {
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(coverage)) return { value: null, complete: false, coverage };
-		const aggregates = await this.options.catalog.listDailyAggregates();
-		const verifiedCoverage = await this.options.catalog.getStore().getCoverage();
-		if (!isCompleteCoverage(verifiedCoverage)) return { value: null, complete: false, coverage: verifiedCoverage };
-		const counts = new Map<string, number>();
-		const labels = new Map<string, string>();
-		for (const aggregate of aggregates) {
-			for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
-				counts.set(key, (counts.get(key) ?? 0) + count);
-			}
-			for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
-				if (!labels.has(key)) labels.set(key, label);
-			}
-		}
-		return {
-			value: [...counts.entries()]
-				.map(([key, count]) => ({ key, label: labels.get(key) ?? key, count }))
-				.sort((left, right) => right.count - left.count || left.key.localeCompare(right.key)),
-			complete: true,
-			coverage: verifiedCoverage,
+			value: complete ? { summary: buildLibrarySummary(snapshot.aggregates), facets: buildTagFacets(snapshot.aggregates) } : null,
+			complete, catalogRevision: snapshot.catalogRevision, coverage: snapshot.coverage,
+			lifecycle: snapshot.lifecycle, invalidated: snapshot.invalidated,
 		};
 	}
 
@@ -317,26 +252,34 @@ export class CatalogReadService {
 		));
 	}
 
-	async queryTimeBuoysForDate(targetDate: string): Promise<TimeBuoyQueryResult> {
-		const page = await this.queryTimeBuoyItems({ timeBuoyDate: targetDate, limit: 150 });
-		const { items: memos, coverage, catalogRevision, invalidated } = page;
-		return {
-			catalogRevision, coverage, invalidated,
-			items: memos.map((memo) => ({ memo: toCatalogMemoView(memo), instance: buildTimeBuoyInstance(memo, targetDate) })),
-			stale: [],
-			missingPeriods: isDateCovered(coverage, targetDate) ? [] : [targetDate.slice(0, 7)],
-		};
+	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"]): Promise<TimeBuoyQueryResult> {
+		const page = await this.queryTimeBuoyPage({ today: targetDate, tab: "today", limit: 30, cursor });
+		// 任意历史 Daily 都可能含有指向今天的浮标；分页完成和索引覆盖分开判断。
+		return { ...page, missingPeriods: page.complete ? [] : [targetDate.slice(0, 7)] };
 	}
 
-	async queryAllTimeBuoys(): Promise<TimeBuoyAllQueryResult> {
-		const { items: memos, coverage, catalogRevision, invalidated } = await this.queryTimeBuoyItems({ hasTimeBuoy: true, limit: 150 });
+	async queryTimeBuoyPage(request: TimeBuoyPageRequest): Promise<TimeBuoyPageResult> {
+		const page = await this.options.catalog.getStore().queryTimeBuoys(request);
+		const { coverage, catalogRevision } = page;
+		let invalidated = page.invalidated || this.getReadState(coverage, page.lifecycle) === "storage_unavailable";
+		const capabilities = createCatalogCapabilities(coverage);
+		const referenceCache = this.options.references?.createQueryCache();
+		const memos = invalidated ? [] : await Promise.all(page.items.map(async (observation) => ({
+			...this.toMemoItem({ kind: "observation", observation, capabilities: createResolvedMemoCapabilities() }, capabilities),
+			...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(observation, referenceCache) }),
+		})));
+		const store = this.options.catalog.getStore();
+		const [currentRevision, currentCoverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		invalidated ||= currentRevision !== catalogRevision || JSON.stringify(currentCoverage) !== JSON.stringify(coverage)
+			|| this.getReadState(currentCoverage, store.getLifecycle()) === "storage_unavailable";
 		return {
 			catalogRevision, coverage, invalidated,
-			items: memos.flatMap((memo) => memo.timeBuoyDates.map((targetDate) => ({
+			nextCursor: invalidated ? null : page.nextCursor,
+			metrics: page.metrics,
+			items: invalidated ? [] : memos.flatMap((memo) => getTimeBuoyTabDates(memo.timeBuoyDates, request).map((targetDate) => ({
 				memo: toCatalogMemoView(memo),
 				instance: buildTimeBuoyInstance(memo, targetDate),
-			}))).sort((left, right) => left.instance.targetDate.localeCompare(right.instance.targetDate)
-				|| right.memo.createdAt.localeCompare(left.memo.createdAt)),
+			}))),
 			stale: [],
 			missingPeriods: [],
 			complete: !invalidated && isCompleteCoverage(coverage),
@@ -409,20 +352,6 @@ export class CatalogReadService {
 		return [...new Set(aggregates
 			.filter((aggregate) => aggregate.memoCount > 0)
 			.map((aggregate) => aggregate.logicalDate.slice(0, 7)))].sort();
-	}
-
-	async resolveObservationInFile(sourcePath: string, startLine: number): Promise<ResolvedMemo> {
-		// 按文件位置获取当前查询结果；写入仍须保留用户原始 observation 句柄。
-		const observationKey = `${sourcePath}\u0000${startLine.toString().padStart(10, "0")}`;
-		const observation = await this.options.catalog.getObservation(observationKey);
-		if (observation === null) throw new Error("Memo observation is no longer present in its Daily note.");
-		return this.resolveObservation(observation);
-	}
-
-	async resolveMemoItemInFile(sourcePath: string, startLine: number): Promise<CatalogMemoItem> {
-		const resolved = await this.resolveObservationInFile(sourcePath, startLine);
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		return this.toMemoItem(resolved, createCatalogCapabilities(coverage));
 	}
 
 	private resolveObservation(observation: CatalogObservation): ResolvedMemo {
@@ -642,22 +571,6 @@ export class CatalogReadService {
 		return coverage.kind === "complete" ? "ready" : "history_building";
 	}
 
-	private async queryTimeBuoyItems(request: Omit<CatalogFeatureQuery, "cursor">): Promise<CatalogMemoPage> {
-		let page = await this.query(request);
-		if (page.readState === "storage_unavailable") return { ...page, items: [], nextCursor: null, invalidated: true };
-		const first = page;
-		const items = [...page.items];
-		while (!page.invalidated && page.nextCursor !== null) {
-			page = await this.query({ ...request, cursor: page.nextCursor });
-			if (page.readState === "storage_unavailable" || page.catalogRevision !== first.catalogRevision
-				|| JSON.stringify(page.coverage) !== JSON.stringify(first.coverage)) {
-				return { ...first, items: [], nextCursor: null, invalidated: true };
-			}
-			items.push(...page.items);
-		}
-		return { ...first, items: page.invalidated ? [] : items, nextCursor: null, invalidated: page.invalidated };
-	}
-
 	private async queryAllItems(
 		request: Omit<CatalogFeatureQuery, "cursor">,
 		maximum = Number.MAX_SAFE_INTEGER,
@@ -790,10 +703,6 @@ function buildReviewCatalogQuery(date: Date, text?: string): CatalogFeatureFilte
 	return query;
 }
 
-function isDateCovered(coverage: CatalogCoverage, logicalDate: string): boolean {
-	return isRangeCovered(coverage, logicalDate, logicalDate);
-}
-
 function isCompleteCoverage(coverage: CatalogCoverage): boolean {
 	return coverage.kind === "complete" && coverage.configurationComplete !== false;
 }
@@ -894,4 +803,30 @@ function sumAggregates(
 	getValue: (aggregate: CatalogDailyAggregate) => number,
 ): number {
 	return aggregates.reduce((total, aggregate) => total + getValue(aggregate), 0);
+}
+
+function buildLibrarySummary(aggregates: CatalogDailyAggregate[]): CatalogLibrarySummary {
+	const tagKeys = new Set(aggregates.flatMap(aggregate => Object.keys(aggregate.tagMemoCounts ?? {})));
+	return {
+		memoCount: sumAggregates(aggregates, (aggregate) => aggregate.memoCount),
+		tagCount: tagKeys.size,
+		imageCount: sumAggregates(aggregates, (aggregate) => aggregate.imageCount),
+		wordCount: sumAggregates(aggregates, (aggregate) => aggregate.wordCount ?? 0),
+	};
+}
+
+function buildTagFacets(aggregates: CatalogDailyAggregate[]): CatalogTagFacet[] {
+	const counts = new Map<string, number>();
+	const labels = new Map<string, string>();
+	for (const aggregate of aggregates) {
+		for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
+			counts.set(key, (counts.get(key) ?? 0) + count);
+		}
+		for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
+			if (!labels.has(key)) labels.set(key, label);
+		}
+	}
+	return [...counts.entries()]
+		.map(([key, count]) => ({ key, label: labels.get(key) ?? key, count }))
+		.sort((left, right) => right.count - left.count || left.key.localeCompare(right.key));
 }

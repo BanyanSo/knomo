@@ -1,11 +1,132 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IDBKeyRange, indexedDB } from "fake-indexeddb";
+import { IDBDatabase as FakeDatabase, IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
+
+test("浮标分页保留三组排序、多日期合并、同文 occurrence 及查询边界", async () => {
+	const databaseName = uniqueDatabaseName("buoy-pages");
+	const stores = [createStore(databaseName), new InMemoryMemoCatalogStore()];
+	const path = "Daily/2026-07-01.md", today = "2026-09-27";
+	const observations = Array.from({ length: 77 }, (_, index) => makeObservation(path, "2026-07-01", index + 1,
+		index % 2 ? "10:30" : "10:30:00", "same", { timeBuoyDates: index % 7 === 0 ? [] : [
+			"2026-09-26", "2026-08-01", today, "2026-10-02", index % 3 === 0 ? "2026-10-01" : "2026-11-01", today,
+		] }));
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, "2026-07-01", observations));
+			await store.setCoverage({ kind: "complete", coveredFromDate: "2026-07-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+			for (const tab of ["today", "upcoming", "past"] as const) {
+				const expected = (await store.query({ hasTimeBuoy: true, limit: 150 })).items.map(item => {
+					const dates = [...new Set(item.timeBuoyDates.filter(date => tab === "today" ? date === today : tab === "upcoming" ? date > today : date < today))].sort();
+					return { item, dates, primary: tab === "past" ? dates[dates.length - 1]! : dates[0]! };
+				}).filter(item => item.dates.length).sort((a, b) => (
+					(tab === "upcoming" ? a.primary.localeCompare(b.primary) : b.primary.localeCompare(a.primary))
+					|| `${b.item.logicalDate}T${b.item.time}`.localeCompare(`${a.item.logicalDate}T${a.item.time}`)
+					|| b.item.observationKey.localeCompare(a.item.observationKey)));
+				const keys: string[] = [];
+				let page = await store.queryTimeBuoys({ today, tab, limit: 7 });
+				const first = page;
+				for (;;) {
+					assert.equal(page.invalidated, false);
+					assert.equal(page.metrics.observationsRead, page.items.length);
+					assert.ok(page.items.length <= 7);
+					keys.push(...page.items.map(item => item.observationKey));
+					if (page.nextCursor === null) break;
+					page = await store.queryTimeBuoys({ today, tab, limit: 7, cursor: page.nextCursor });
+				}
+				assert.deepEqual(keys, expected.map(({ item }) => item.observationKey));
+				assert.equal(new Set(keys).size, keys.length);
+				assert.equal((await store.queryTimeBuoys({ today: "2026-09-28", tab, limit: 7, cursor: first.nextCursor })).invalidated, true);
+				assert.equal((await store.queryTimeBuoys({ today, tab: tab === "past" ? "today" : "past", limit: 7, cursor: first.nextCursor })).invalidated, true);
+			}
+			const first = await store.queryTimeBuoys({ today, tab: "today", limit: 7 });
+			await store.deleteFilePartition(path);
+			assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7, cursor: first.nextCursor })).invalidated, true);
+			assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7 })).items.length, 0);
+		}
+	} finally { for (const store of stores) store.close(); await deleteDatabase(databaseName); }
+});
+
+test("旧浮标缓存升级后重建，分钟改为零秒时更新分页排序字段", async () => {
+	const name = uniqueDatabaseName("buoy-upgrade");
+	const old = createStore(name, { version: 2 });
+	const path = "Daily/2026-07-01.md";
+	const memo = makeObservation(path, "2026-07-01", 1, "10:30", "same", { timeBuoyDates: ["2026-09-27"] });
+	await old.open();
+	await old.replaceFilePartition(makePartition(path, "2026-07-01", [memo]));
+	old.close();
+	const store = createStore(name);
+	try {
+		await store.open();
+		assert.deepEqual(await store.listFiles(), []);
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", [memo]));
+		const changed = makePartition(path, "2026-07-01", [{ ...memo, time: "10:30:00" }]);
+		changed.file.sourceRevision = "new-revision";
+		await store.replaceFilePartition(changed);
+		assert.equal((await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1 })).items[0]?.time, "10:30:00");
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("完全同时间的跨文件浮标保留各 Store 原来的稳定并列顺序", async () => {
+	const name = uniqueDatabaseName("buoy-ties");
+	const stores = [createStore(name), new InMemoryMemoCatalogStore()];
+	try {
+		for (const store of stores) {
+			await store.open();
+			for (const path of ["Daily/a.md", "Daily/A.md", "日记/一.md", "日记/二.md"]) {
+				await store.replaceFilePartition(makePartition(path, "2026-09-27", [
+					makeObservation(path, "2026-09-27", 1, "09:00", "same", { timeBuoyDates: ["2026-09-27"] }),
+				]));
+			}
+			const expected = (await store.query({ hasTimeBuoy: true, limit: 30 })).items.map(item => item.observationKey);
+			const keys: string[] = [];
+			let page = await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1 });
+			for (;;) {
+				keys.push(...page.items.map(item => item.observationKey));
+				if (!page.nextCursor) break;
+				page = await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1, cursor: page.nextCursor });
+			}
+			assert.deepEqual(keys, expected);
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(name); }
+});
+
+test("混排搜索在 IndexedDB 与内存中保持候选、计数和分页一致", async () => {
+	const databaseName = uniqueDatabaseName("mixed-search");
+	const indexed = createStore(databaseName);
+	const memory = new InMemoryMemoCatalogStore();
+	await indexed.open();
+	await memory.open();
+	try {
+		const path = "Journal/2026-08-09.md";
+		const contents = ["中文ABC项目2026", "中文123项目", "中文_项目", "ABC中文项目", "无关", "中文ABC项目2026"];
+		const partition = makePartition(path, "2026-08-09", contents.map((content, index) =>
+			makeObservation(path, "2026-08-09", index + 1, "09:00", content, { tags: index % 2 === 0 ? ["project"] : [] })));
+		await indexed.replaceFilePartition(partition);
+		await memory.replaceFilePartition(partition);
+		for (const text of ["中", "文", "中文", "项", "项目", "ABC", "ab", "2026", "文123", "文_", "_项", "中文ABC项目2026"]) {
+			for (const tags of [undefined, ["project"], ["absent"]]) {
+				const filter = { text, tags };
+				const expected = await memory.query({ ...filter, limit: 50 });
+				const keys: string[] = [];
+				let page = await indexed.query({ ...filter, limit: 1 });
+				for (;;) {
+					keys.push(...page.items.map(item => item.observationKey));
+					if (page.nextCursor === null) break;
+					page = await indexed.query({ ...filter, limit: 1, cursor: page.nextCursor });
+				}
+				assert.deepEqual(keys, expected.items.map(item => item.observationKey), JSON.stringify(filter));
+				assert.equal((await indexed.count(filter)).count, (await memory.count(filter)).count, JSON.stringify(filter));
+				assert.equal(keys.length, (await indexed.count(filter)).count);
+			}
+		}
+	} finally { indexed.close(); memory.close(); await deleteDatabase(databaseName); }
+});
 
 test("Things 稀疏命中分页与组合计数保留同文 occurrence", async () => {
 	const databaseName = uniqueDatabaseName("things");
@@ -399,7 +520,7 @@ test("IDB-VERSIONCHANGE：运行期连接失效后自动重开，无法重开时
 	assert.equal((await store.listFiles()).length, 1, "同版本连接关闭后应自动重开");
 	assert.equal(recoveryCount, 1);
 
-	const newer = await openRawDatabase(databaseName, 3, () => undefined);
+	const newer = await openRawDatabase(databaseName, 4, () => undefined);
 	assert.equal(primary.getLifecycle().state, "read-only");
 	assert.deepEqual(await store.listFiles(), []);
 	assert.equal(store.isUsingFallback, true);
@@ -556,4 +677,101 @@ test("升级回调抛出非 Error 时保留原因并拒绝打开", async () => {
 	try {
 		await assert.rejects(store.open(), error => error instanceof Error && error.message === "upgrade failure");
 	} finally { store.close(); await deleteDatabase(databaseName); }
+});
+test("P3 内存与 IndexedDB 聚合快照绑定同一 revision 和 coverage，不读取正文", async t => {
+	const databaseName = uniqueDatabaseName("aggregate-snapshot");
+	const stores = [new InMemoryMemoCatalogStore(), createStore(databaseName)];
+	const path = "Daily/2026-09-01.md", date = "2026-09-01";
+	const coverage = { kind: "complete" as const, coveredFromDate: date, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, date, [makeObservation(path, date, 1, "10:00", "old", { tags: ["#Old"] })]));
+			await store.setCoverage(coverage);
+			t.mock.method(store, "query", () => { throw new Error("No body query"); });
+			t.mock.method(store, "count", () => { throw new Error("No count probe"); });
+			const before = await store.getCatalogRevision();
+			const pending = store.readAggregateSnapshot();
+			await store.replaceFilePartition(makePartition(path, date, [makeObservation(path, date, 1, "10:01", "new"), makeObservation(path, date, 2, "10:02", "new2")]));
+			await store.setCoverage({ ...coverage, kind: "partial", pendingFileCount: 1 });
+			const snapshot = await pending;
+			assert.equal(snapshot.catalogRevision, before);
+			assert.deepEqual(snapshot.coverage, coverage);
+			assert.equal(snapshot.aggregates[0]!.memoCount, 1);
+			assert.equal(snapshot.invalidated, false);
+			snapshot.aggregates[0]!.tagMemoCounts.old = 999;
+			const next = await store.readAggregateSnapshot();
+			assert.equal(next.aggregates[0]!.memoCount, 2);
+			assert.equal(next.coverage.kind, "partial");
+			assert.ok(next.catalogRevision > before);
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(databaseName); }
+});
+
+test("P3 IndexedDB 只用 aggregates/meta 同一事务，关闭或 versionchange 使快照失效", async t => {
+	for (const action of ["close", "versionchange"] as const) {
+		const name = uniqueDatabaseName(action);
+		const store = createStore(name);
+		await store.open();
+		const transaction = FakeDatabase.prototype.transaction;
+		const transactions: string[][] = [];
+		const mock = t.mock.method(FakeDatabase.prototype, "transaction", function (this: IDBDatabase, ...args: Parameters<IDBDatabase["transaction"]>) {
+			const result = transaction.apply(this, args);
+			const names = typeof args[0] === "string" ? [args[0]] : [...args[0]];
+			transactions.push(names);
+			queueMicrotask(() => {
+				if (action === "close") store.close();
+				else this.onversionchange?.call(this, { target: this } as unknown as IDBVersionChangeEvent);
+			});
+			return result;
+		});
+		try {
+			const snapshot = await store.readAggregateSnapshot();
+			assert.deepEqual(transactions, [["aggregates", "meta"]]);
+			assert.equal(snapshot.invalidated, true);
+		} finally { mock.mock.restore(); store.close(); await deleteDatabase(name); }
+	}
+});
+
+test("P3 内存快照返回前关闭再打开也失效", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	const pending = store.readAggregateSnapshot();
+	store.close(); await store.open();
+	assert.equal((await pending).invalidated, true);
+});
+
+test("P3 fallback 固定来源，切换及关闭重开不提交旧快照", async t => {
+	for (const action of ["switch", "close"] as const) {
+		const primary = new InMemoryMemoCatalogStore(), fallback = new InMemoryMemoCatalogStore();
+		const store = new FallbackMemoCatalogStore(primary, fallback);
+		await store.open();
+		let release!: () => void;
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		const read = primary.readAggregateSnapshot.bind(primary);
+		t.mock.method(primary, "readAggregateSnapshot", async () => { const snapshot = await read(); await gate; return snapshot; });
+		const pending = store.readAggregateSnapshot();
+		if (action === "switch") {
+			t.mock.method(primary, "query", async () => { throw new Error("primary unavailable"); });
+			await store.query({ limit: 1 });
+		} else { store.close(); await store.open(); }
+		release();
+		assert.equal((await pending).invalidated, true);
+		const next = await store.readAggregateSnapshot();
+		assert.equal(next.invalidated, false);
+		store.close();
+	}
+});
+
+test("P3 聚合读取失败切换 fallback，后续请求重新读取完整快照", async t => {
+	const primary = new InMemoryMemoCatalogStore(), fallback = new InMemoryMemoCatalogStore();
+	const store = new FallbackMemoCatalogStore(primary, fallback);
+	await store.open();
+	t.mock.method(primary, "readAggregateSnapshot", async () => { throw new Error("snapshot failure"); });
+	await assert.rejects(store.readAggregateSnapshot(), /snapshot failure/);
+	assert.equal(store.isUsingFallback, true);
+	const next = await store.readAggregateSnapshot();
+	assert.equal(next.invalidated, false);
+	assert.equal(next.lifecycle.persistent, false);
+	assert.equal(next.coverage.kind, "partial");
+	store.close();
 });

@@ -259,3 +259,11 @@ export interface ResolvedMemo {
 	observation: MemoObservation;
 	capabilities: ResolvedMemoCapabilities;
 }
+// 单次聚合读取的正文派生数据与元信息；失效结果不得用于侧栏提交。
+export interface CatalogAggregateSnapshot {
+	aggregates: CatalogDailyAggregate[];
+	catalogRevision: number;
+	coverage: CatalogCoverage;
+	lifecycle: CatalogStoreLifecycle;
+	invalidated: boolean;
+}

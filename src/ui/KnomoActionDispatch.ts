@@ -14,7 +14,6 @@ export type KnomoSimpleAction =
 	| "toggle-sidebar"
 	| "collapse-sidebar"
 	| "refresh"
-	| "focus-stats"
 	| "record-stats-back"
 	| "record-stats-previous"
 	| "record-stats-next"
@@ -79,7 +78,6 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "toggle-sidebar" ||
 		action === "collapse-sidebar" ||
 		action === "refresh" ||
-		action === "focus-stats" ||
 		action === "record-stats-back" ||
 		action === "record-stats-previous" ||
 		action === "record-stats-next" ||
@@ -123,7 +121,6 @@ export function shouldRenderAfterActionDispatch(dispatch: KnomoActionDispatch): 
 		dispatch.type === "toggle-scope-menu" ||
 		dispatch.type === "toggle-sidebar" ||
 		dispatch.type === "collapse-sidebar" ||
-		dispatch.type === "focus-stats" ||
 		dispatch.type === "toggle-compact-search" ||
 		dispatch.type === "unknown";
 }

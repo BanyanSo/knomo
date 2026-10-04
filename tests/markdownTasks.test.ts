@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import {
 	getMarkdownTaskLines,
-	replaceMarkdownTaskMarkerByIndex,
 } from "../src/utils/markdownTasks";
 
 test("Things 使用 Markdown 结构排除代码与 HTML，并保留引用任务位置", () => {
@@ -14,7 +13,6 @@ test("Things 使用 Markdown 结构排除代码与 HTML，并保留引用任务�
 	const mixed = "<!--\n- [ ] fake\n-->\n\n> - [ ] real\n>   - [X] nested";
 	const tasks = getMarkdownTaskLines(mixed);
 	assert.deepEqual(tasks.map(task => [task.lineIndex, task.markerStart, task.marker]), [[4, 4, " "], [5, 6, "X"]]);
-	assert.equal(replaceMarkdownTaskMarkerByIndex(mixed, 1, "-"), mixed.replace("[X] nested", "[-] nested"));
 });
 
 test("indexes Markdown task lines outside fenced code blocks", () => {
@@ -40,34 +38,4 @@ test("indexes Markdown task lines outside fenced code blocks", () => {
 		{ index: 1, lineIndex: 4, listMarker: "-", marker: "-", body: "nested" },
 		{ index: 2, lineIndex: 5, listMarker: "1.", marker: "X", body: "ordered" },
 	]);
-});
-
-test("updates only the requested task by task index", () => {
-	const content = "- [ ] first\n- [ ] second\n- [x] third";
-
-	const result = replaceMarkdownTaskMarkerByIndex(content, 1, "x");
-
-	assert.equal(result, "- [ ] first\n- [x] second\n- [x] third");
-});
-
-test("preserves indentation, list marker, task body, and other Markdown", () => {
-	const content = "  1) [ ] keep **format** #tag";
-
-	const result = replaceMarkdownTaskMarkerByIndex(content, 0, "x");
-
-	assert.equal(result, "  1) [x] keep **format** #tag");
-});
-
-test("does not rewrite task-like text inside fenced code blocks", () => {
-	const content = [
-		"```markdown",
-		"- [ ] code",
-		"```",
-		"- [ ] real",
-	].join("\n");
-
-	const result = replaceMarkdownTaskMarkerByIndex(content, 0, "x");
-
-	assert.equal(result, "```markdown\n- [ ] code\n```\n- [x] real");
-	assert.equal(replaceMarkdownTaskMarkerByIndex(content, 1, "x"), null);
 });

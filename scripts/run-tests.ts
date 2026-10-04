@@ -6,9 +6,9 @@ const TESTS_DIR = "tests";
 const COMPILED_TESTS_DIR = path.join(".tmp", "knomo-tests", "tests");
 const TEST_FILES_MARKER = "--files";
 const TOOLING_TEST_FILES = new Set([
+	"ReleaseVersion.test.ts",
 	"runTests.test.ts",
 	"VerifyCore.test.ts",
-	"CatalogBenchmarkTooling.test.ts",
 ]);
 
 export interface RunTestSelection {

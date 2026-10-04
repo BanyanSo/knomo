@@ -16,8 +16,6 @@ export interface NativeListInputOptions {
 	allowInsertedMarkerCorrection?: boolean;
 }
 
-export type ListFormatType = "bullet" | "ordered";
-
 export function getHashInsertionText(value: string, cursor: number): string {
 	if (cursor <= 0) {
 		return "#";
@@ -67,30 +65,6 @@ export function replaceTagQueryWithSuggestion(value: string, range: TagQueryRang
 	return {
 		value: `${before}${replacement} ${after}`,
 		cursor: range.from + replacement.length + 1,
-	};
-}
-
-export function applyListFormatToText(value: string, start: number, end: number, type: ListFormatType): TextReplacement {
-	const blockStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-	const nextLineBreak = value.indexOf("\n", end);
-	const blockEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
-	const before = value.slice(0, blockStart);
-	const target = value.slice(blockStart, blockEnd);
-	const after = value.slice(blockEnd);
-	const lines = target.split("\n");
-	const formatted = lines.map((line, index) => {
-		const match = line.match(/^(\s*)(?:[-*+]\s+|\d+[.)]\s+)?(.*)$/);
-		const indent = match?.[1] ?? "";
-		const content = match?.[2] ?? line.replace(/^\s+/, "");
-		if (type === "bullet") {
-			return `${indent}- ${content}`;
-		}
-		return `${indent}${index + 1}. ${content}`;
-	});
-	const formattedText = formatted.join("\n");
-	return {
-		value: `${before}${formattedText}${after}`,
-		cursor: blockStart + formattedText.length,
 	};
 }
 

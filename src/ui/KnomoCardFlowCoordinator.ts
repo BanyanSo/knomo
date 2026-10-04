@@ -116,10 +116,6 @@ export class KnomoCardFlowCoordinator {
 		this.batcher.sync(memos, mode, renderedCount);
 	}
 
-	updateBatchItemsAfterRendered(memos: MemoRecord[], renderedMemoIds: readonly string[]): void {
-		this.batcher.updateItemsAfterRendered(memos, renderedMemoIds);
-	}
-
 	setPendingScrollRestore(pending: PendingCardFlowScrollRestore | null): void {
 		this.pendingScrollRestore = pending;
 	}

@@ -12,19 +12,15 @@ import {
 	matchesRecordStatsSearchFilter,
 	matchesScope,
 	matchesSearchDateFilter,
-	needsAllMemos,
-	getMemoDataRequirement,
 	parseMemoLocalDate,
-	periodHasActiveTag,
 	tagMatchesActiveTagKey,
 } from "../src/ui/viewFilters";
 
-test("Things 摘要包含所有 AND 条件，数据需求不退回近期窗口", () => {
+test("Things 摘要包含所有 AND 条件", () => {
 	const state = { activeNav: "things" as const, activeTag: "project", activeTagKey: "project", searchQuery: "release", searchDateFilter: "week" as const, recordStatsSearchFilter: null, scopeFilter: "all" as const };
 	assert.deepEqual(getRegularFilterConditions(state).map(item => item.type), ["things", "tag", "search", "date"]);
 	assert.match(getRegularFilterCopy(state, 3)!.summary, /Things/);
 	assert.match(getRegularFilterCopy(state, 0)!.emptyTitle, /Things/);
-	assert.deepEqual(getMemoDataRequirement({ activeNav: "things", scope: "all", query: "", searchDateFilter: null, recordStatsFilter: null, activeTagKey: null, tagPeriods: null }), { kind: "all-active" });
 });
 
 test("普通 Catalog 筛选和搜索时间取当前 observation，不取旧创建时间", () => {
@@ -311,53 +307,6 @@ test("builds memo search text and all-memo loading flags", () => {
 	assert.equal(searchText.includes("project"), true);
 	assert.equal(searchText.includes("linked note"), true);
 	assert.equal(searchText.includes("clip.png"), true);
-	assert.equal(needsAllMemos("all", "", null), false);
-	assert.equal(needsAllMemos("all", "knomo", null), true);
-	assert.equal(needsAllMemos("all", "", "week"), true);
-	assert.equal(needsAllMemos("all", "", null, { type: "day", date: "2026-05-20" }), true);
-	assert.equal(needsAllMemos("anniversary", "", null), true);
-	assert.equal(needsAllMemos("no-tag", "", null), true);
-	assert.equal(needsAllMemos("with-link", "", null), true);
-	assert.equal(needsAllMemos("with-image", "", null), true);
-});
-
-test("resolves tag and date filters to only the required memo periods", () => {
-	assert.deepEqual(getMemoDataRequirement({
-		scope: "all",
-		query: "",
-		searchDateFilter: null,
-		recordStatsFilter: null,
-		activeTagKey: "project",
-		tagPeriods: ["2026-05", "2025-12"],
-	}), { kind: "periods", periods: ["2026-05", "2025-12"] });
-	assert.deepEqual(getMemoDataRequirement({
-		scope: "all",
-		query: "",
-		searchDateFilter: "last-30",
-		recordStatsFilter: null,
-		activeTagKey: null,
-		tagPeriods: null,
-		today: new Date(2026, 2, 2),
-	}), { kind: "periods", periods: ["2026-02", "2026-03"] });
-	assert.deepEqual(getMemoDataRequirement({
-		scope: "all",
-		query: "historical text",
-		searchDateFilter: null,
-		recordStatsFilter: null,
-		activeTagKey: null,
-		tagPeriods: null,
-	}), { kind: "all-active" });
-	assert.deepEqual(getMemoDataRequirement({
-		activeNav: "review",
-		scope: "all",
-		query: "",
-		searchDateFilter: null,
-		recordStatsFilter: null,
-		activeTagKey: null,
-		tagPeriods: null,
-	}), { kind: "all-active" });
-	assert.equal(periodHasActiveTag({ "project/sub": 2 }, "project"), true);
-	assert.equal(periodHasActiveTag({ "project-other": 1 }, "project"), false);
 });
 
 function disabledDailyStatus(): { enabled: false; folder: null; format: null } {

@@ -12,10 +12,14 @@ export interface DailyWritePrepareInput {
 	file: TFile;
 	logicalDate: string;
 	expectedRevision: string | null;
+	// 同步复核当前 Daily 配置，供提交前和 Vault.process 回调内调用。
+	validateTarget?: (sourcePath: string, logicalDate: string) => void;
 	update: (content: string, parsed: DiaryMemoParseResult) => string;
 }
 
 export interface PreparedDailyWrite {
+	readonly sourcePath: string;
+	validateTarget?: DailyWritePrepareInput["validateTarget"];
 	requireDiskMatch?: boolean;
 	file: TFile;
 	logicalDate: string;
@@ -55,19 +59,27 @@ export class DailyMemoWriteGateway {
 	) {}
 
 	async prepare(input: DailyWritePrepareInput): Promise<PreparedDailyWrite> {
+		const sourcePath = normalizePath(input.file.path);
+		const target = { ...input, sourcePath };
+		this.assertTarget(target);
 		const editor = this.getActiveEditor(input.file);
 		const mode: DailyWriteMode = editor === null ? "vault_process" : "active_editor";
 		const beforeContent = editor?.getValue() ?? await this.app.vault.cachedRead(input.file);
 		if (input.requireDiskMatch && await this.app.vault.read(input.file) !== beforeContent) {
 			throw new StaleDailyWriteError(input.file.path);
 		}
-		const before = await this.parse(input.file.path, input.logicalDate, beforeContent);
+		this.assertTarget(target);
+		const before = await this.parse(sourcePath, input.logicalDate, beforeContent);
 		if (input.expectedRevision !== null && input.expectedRevision !== before.sourceRevision) {
 			throw new StaleDailyWriteError(input.file.path);
 		}
+		this.assertTarget(target);
 		const afterContent = input.update(beforeContent, before);
-		const after = await this.parse(input.file.path, input.logicalDate, afterContent);
+		const after = await this.parse(sourcePath, input.logicalDate, afterContent);
+		this.assertTarget(target);
 		return {
+			sourcePath,
+			validateTarget: input.validateTarget,
 			requireDiskMatch: input.requireDiskMatch,
 			file: input.file,
 			logicalDate: input.logicalDate,
@@ -82,6 +94,7 @@ export class DailyMemoWriteGateway {
 	}
 
 	async commit(prepared: PreparedDailyWrite): Promise<DailyWriteResult> {
+		this.assertTarget(prepared);
 		if (prepared.mode === "active_editor") {
 			if (prepared.requireDiskMatch && await this.app.vault.read(prepared.file) !== prepared.beforeContent) {
 				throw new StaleDailyWriteError(prepared.file.path);
@@ -105,34 +118,31 @@ export class DailyMemoWriteGateway {
 	}
 
 	private replayPreparedUpdate(prepared: PreparedDailyWrite, currentContent: string): string {
+		this.assertTarget(prepared);
 		if (currentContent !== prepared.beforeContent) {
 			throw new StaleDailyWriteError(prepared.file.path);
 		}
 		const afterContent = prepared.update(currentContent, prepared.before);
+		this.assertTarget(prepared);
 		if (afterContent !== prepared.afterContent) {
 			throw new StaleDailyWriteError(prepared.file.path);
 		}
 		return afterContent;
 	}
 
-	async prepareTransition(input: {
-		file: TFile;
-		logicalDate: string;
-		expectedRevision: string;
-		afterContent: string;
-	}): Promise<PreparedDailyWrite> {
-		return this.prepare({
-			file: input.file,
-			logicalDate: input.logicalDate,
-			expectedRevision: input.expectedRevision,
-			update: () => input.afterContent,
-		});
+	private assertTarget(target: Pick<PreparedDailyWrite, "file" | "sourcePath" | "logicalDate" | "validateTarget">): void {
+		// TFile 会随重命名改变 path；同文和同路径均不能替代准备时选定的文件对象。
+		if (normalizePath(target.file.path) !== target.sourcePath
+			|| this.app.vault.getAbstractFileByPath(target.sourcePath) !== target.file) {
+			throw new StaleDailyWriteError(target.sourcePath);
+		}
+		target.validateTarget?.(target.sourcePath, target.logicalDate);
 	}
 
 	private getActiveEditor(file: TFile): Editor | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (view === null || !(view.file instanceof TFile)
-			|| normalizePath(view.file.path) !== normalizePath(file.path)) {
+			|| view.file !== file) {
 			return null;
 		}
 		return view.editor;

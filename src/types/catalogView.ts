@@ -37,18 +37,6 @@ export interface KnomoRuntimeAttentionSnapshot {
 	legacyCleanupPending?: boolean;
 }
 
-export interface KnomoRuntimeSnapshot {
-	settings?: KnomoSettingsLoadStatus;
-	catalog: {
-		coverage: CatalogCoverage;
-		lifecycle: CatalogStoreLifecycle;
-	};
-	currentConfiguration: KnomoCurrentConfigStatus;
-	monthly: MonthlyProjectionState;
-	legacyMigration: LegacyMigrationStatus;
-	legacyCleanupPending?: boolean;
-}
-
 export interface CatalogMemoItem {
 	derivedReferences?: import("../services/CatalogReferenceService").CatalogReference[];
 	key: string;
@@ -70,12 +58,11 @@ export interface CatalogMemoItem {
 }
 
 export interface MutationFollowUpState {
-	followUpPending: boolean;
 	localRefreshPending: boolean;
 }
 
 export interface DailyMutationResult extends MutationFollowUpState {
-	status: "saved" | "content_pending";
+	status: "saved";
 }
 
 export interface MemoSaveResult extends DailyMutationResult {
@@ -125,12 +112,6 @@ export interface CatalogTagFacet {
 	count: number;
 }
 
-export interface CatalogAggregateResult<T> {
-	value: T | null;
-	complete: boolean;
-	coverage: CatalogCoverage;
-}
-
 export interface CatalogFunctionPageRequest {
 	limit: number;
 	cursor?: CatalogFeatureCursor | null;
@@ -162,3 +143,11 @@ export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 };
 
 export type CatalogFeatureFilter = Omit<CatalogFeatureQuery, "limit" | "cursor">;
+export interface CatalogLibraryIndexesResult {
+	value: { summary: CatalogLibrarySummary; facets: CatalogTagFacet[] } | null;
+	complete: boolean;
+	catalogRevision: number;
+	coverage: CatalogCoverage;
+	lifecycle: CatalogStoreLifecycle;
+	invalidated: boolean;
+}

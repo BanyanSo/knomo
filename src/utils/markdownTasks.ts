@@ -83,22 +83,6 @@ export function getMarkdownTaskLines(content: string): IndexedMarkdownTaskLine[]
 	return tasks;
 }
 
-export function getMarkdownTaskLineByIndex(content: string, taskIndex: number): IndexedMarkdownTaskLine | null {
-	if (!Number.isInteger(taskIndex) || taskIndex < 0) {
-		return null;
-	}
-	return getMarkdownTaskLines(content)[taskIndex] ?? null;
-}
-
-export function replaceMarkdownTaskMarkerByIndex(
-	content: string,
-	taskIndex: number,
-	marker: WritableMarkdownTaskMarker,
-): string | null {
-	const task = getMarkdownTaskLineByIndex(content, taskIndex);
-	return task === null ? null : replaceMarkdownTaskMarker(content, task, marker);
-}
-
 export function getMarkdownTaskEnterPatch(value: string, start: number, end: number): TextReplacement | null {
 	if (start !== end) {
 		return null;
@@ -154,20 +138,6 @@ export function getMarkdownTaskEnterPatchAfterNativeNewline(value: string, start
 		value: `${value.slice(0, start)}${insert}${value.slice(start)}`,
 		cursor,
 	};
-}
-
-function replaceMarkdownTaskMarker(
-	content: string,
-	task: IndexedMarkdownTaskLine,
-	marker: WritableMarkdownTaskMarker,
-): string | null {
-	const lines = splitMarkdownLines(content);
-	const line = lines[task.lineIndex];
-	if (line === undefined) {
-		return null;
-	}
-	lines[task.lineIndex] = `${line.slice(0, task.markerStart)}[${marker}]${line.slice(task.markerEnd)}`;
-	return lines.join("\n");
 }
 
 function isMarkdownTaskMarker(value: string): value is MarkdownTaskMarker {

@@ -16,7 +16,11 @@ export interface CatalogReference extends MarkdownReference {
 export class CatalogReferenceService {
 	constructor(private readonly app: App, private readonly catalog: MemoCatalogService) {}
 
-	async resolve(source: MemoObservation): Promise<CatalogReference[]> {
+	createQueryCache(): Map<string, ReturnType<MemoCatalogService["getFileRevisionBatch"]>> {
+		return new Map();
+	}
+
+	async resolve(source: MemoObservation, batches = this.createQueryCache()): Promise<CatalogReference[]> {
 		const links: MarkdownReference[] = [...parseMarkdownReferences(source.content),
 			...source.links.filter((link) => link.syntax === "url").map((link) => ({ ...link, raw: link.target, valid: true }))];
 		return Promise.all(links.map(async (link): Promise<CatalogReference> => {
@@ -53,7 +57,12 @@ export class CatalogReferenceService {
 				const blockId = fragment.slice(1);
 				const block = cache.blocks?.[blockId];
 				if (block === undefined) return base;
-				const batch = await this.catalog.getFileRevisionBatch(file.path);
+				let pending = batches.get(file.path);
+				if (pending === undefined) {
+					pending = this.catalog.getFileRevisionBatch(file.path);
+					batches.set(file.path, pending);
+				}
+				const batch = await pending;
 				if (batch !== null && (batch.file.mtime !== file.stat.mtime || batch.file.size !== file.stat.size)) return base;
 				const matches = batch?.observations.filter((item) => item.existingBlockId === blockId
 					&& item.startLine <= block.position.start.line && item.endLine >= block.position.start.line) ?? [];

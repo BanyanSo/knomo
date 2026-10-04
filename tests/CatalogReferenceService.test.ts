@@ -4,7 +4,33 @@ import { createHash } from "node:crypto";
 import type { App, CachedMetadata, TFile as FileType } from "obsidian";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("引用和 backlink 按当前文件上下文解析，保留原 alias 与分钟/秒精度", async () => {
+test("单页重复引用共享目标读取 Promise，下次查询重新检查正文、锚点和 rename", async () => {
+	const fixture = await makeFixture();
+	const target = "Folder/Target (1).md";
+	await fixture.seed(target, "2026-09-01", "## Memos\n- 10:30 target ^anchor\n");
+	fixture.cache.set(target, { blocks: { anchor: { position: { start: { line: 1 } } } } } as unknown as CachedMetadata);
+	await fixture.seed("Daily/2026-09-02.md", "2026-09-02", "## Memos\n" + Array.from({ length: 30 }, () => "- 11:00 [[Target#^anchor]] [[Target#^anchor]]\n").join(""));
+	const read = fixture.catalog.getFileRevisionBatch.bind(fixture.catalog);
+	let calls = 0;
+	fixture.catalog.getFileRevisionBatch = async (path) => { calls++; await Promise.resolve(); return read(path); };
+	let page = await fixture.read.query({ fromDate: "2026-09-02", limit: 30 });
+	assert.equal(calls, 1);
+	assert.equal(page.items.length, 30);
+	assert.ok(page.items.every(item => item.derivedReferences?.every(link => link.targetTime === "2026-09-01 10:30")));
+	await fixture.seed(target, "2026-09-01", "## Memos\n- 10:30:27 target ^anchor\n");
+	page = await fixture.read.query({ fromDate: "2026-09-02", limit: 30 });
+	assert.equal(calls, 2);
+	assert.equal(page.items[0]?.derivedReferences?.[0]?.targetTime, "2026-09-01 10:30:27");
+	fixture.cache.set(target, {});
+	page = await fixture.read.query({ fromDate: "2026-09-02", limit: 30 });
+	assert.equal(page.items[0]?.derivedReferences?.[0]?.state, "unresolved");
+	fixture.files.delete(target);
+	page = await fixture.read.query({ fromDate: "2026-09-02", limit: 30 });
+	assert.equal(page.items[0]?.derivedReferences?.[0]?.targetPath, null);
+	assert.equal(calls, 2);
+});
+
+test("查询引用按当前文件上下文解析，保留原 alias 与分钟/秒精度", async () => {
 	const fixture = await makeFixture();
 	await fixture.seed("Folder/Target (1).md", "2026-09-01", "## Memos\n- 10:30 target ^anchor\n");
 	const source = await fixture.seed("Daily/2026-09-02.md", "2026-09-02",
@@ -16,13 +42,13 @@ test("引用和 backlink 按当前文件上下文解析，保留原 alias 与分
 	assert.equal(links[1]?.raw, '[source](../Folder/Target%20(1).md#%5Eanchor "title")');
 	assert.equal(links[0]?.displayText, "自定义");
 	assert.ok(fixture.lookups.every((lookup) => lookup.source === source.sourcePath));
-	assert.equal((await fixture.read.queryBacklinks("Folder/Target (1).md", "^anchor", { limit: 10 })).items.length, 1);
+	assert.equal((await fixture.read.query({ fromDate: "2026-09-02", hasLink: true, limit: 10 })).items[0]?.derivedReferences?.[1]?.state, "resolved");
 	await fixture.seed("Folder/Target (1).md", "2026-09-01", "## Memos\n- 10:30:27 target ^anchor\n");
 	links = await fixture.references.resolve(source);
 	assert.equal(links[1]?.targetTime, "2026-09-01 10:30:27");
 	fixture.cache.set("Folder/Target (1).md", {});
 	assert.equal((await fixture.references.resolve(source))[1]?.state, "unresolved");
-	assert.equal((await fixture.read.queryBacklinks("Folder/Target (1).md", "^anchor", { limit: 10 })).items.length, 0);
+	assert.equal((await fixture.read.query({ fromDate: "2026-09-02", hasLink: true, limit: 10 })).items[0]?.derivedReferences?.[1]?.state, "unresolved");
 });
 
 test("目标后到、rename 与同文多锚点不会通过历史身份或 basename 猜测", async () => {

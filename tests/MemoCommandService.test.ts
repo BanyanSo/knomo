@@ -61,15 +61,14 @@ test("普通命令不访问 Identity，并将最初 observation handle 原样交
 	}, loadLocalStorage: () => null, saveLocalStorage: () => undefined } as unknown as App;
 	const handles: unknown[] = [];
 	const mutate = async (input: { observation: unknown }) => { handles.push(input.observation); return mutationResult(observation); };
-	const mutations = { create: async () => mutationResult(observation), edit: mutate, copy: mutate, move: mutate,
+	const mutations = { create: async () => mutationResult(observation), edit: mutate,
 		toggleTask: mutate, createBlockReference: async (input: { observation: unknown }) => ({ ...await mutate(input), blockId: "block" }),
 	} as unknown as MarkdownMutationService;
 	const service = new MemoCommandService(app, catalog, { ...makeCommandOptions(), now: () => new Date("2026-09-08T12:00:00Z") }, mutations);
 	const item = (await service.getReadService().query({ limit: 10 })).items[0]!;
-	assert.equal((await service.create("created")).followUpPending, false);
-	for (const result of [await service.edit(item, "edited"), await service.copy(item),
-		await service.move(item, "2026-08-23"), await service.toggleTask(item, 0, true)]) {
-		assert.equal(result.followUpPending, false);
+	assert.equal((await service.create("created")).status, "saved");
+	for (const result of [await service.edit(item, "edited"), await service.toggleTask(item, 0, true)]) {
+		assert.equal(result.status, "saved");
 	}
 	assert.equal((await service.createReferenceText(item)).text, "[[Daily/2026-08-22#^block|20260822-1234]]");
 	const secondPrecisionItem = {
@@ -78,7 +77,7 @@ test("普通命令不访问 Identity，并将最初 observation handle 原样交
 	};
 	assert.equal((await service.createReferenceText(secondPrecisionItem)).text,
 		"[[Daily/2026-08-22#^block|20260822-123456]]");
-	assert.equal(handles.length, 6);
+	assert.equal(handles.length, 4);
 	for (const handle of handles) assert.strictEqual(handle, item.observationHandle);
 	await service.recordReview(item);
 	assert.equal((await service.getReadService().getRandomReunionItems(1)).length, 1);
@@ -111,7 +110,7 @@ test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async ()
 	const result = await service.create(observation.content);
 
 	assert.deepEqual(events, ["daily"]);
-	assert.equal(result.followUpPending, false);
+	assert.equal(result.status, "saved");
 	assert.equal(result.localRefreshPending, false);
 
 	events.length = 0;
@@ -244,7 +243,6 @@ function mutationResult(observation: MemoObservation | null) {
 	return {
 		status: "committed" as const,
 		observation,
-		sourcePaths: observation === null ? [] : [observation.sourcePath],
 		catalogUpdatePending: false,
 	};
 }
@@ -256,3 +254,25 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 	});
 	return { promise, resolve: resolvePromise };
 }
+
+
+test("编辑器已更新但落盘未确认时，最终成功不能覆盖阶段拒绝并误清理草稿", async () => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore(); const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "created memo");
+	const service = new MemoCommandService({} as App, catalog, makeCommandOptions(), {
+		create: async (input: { onDailyCommitted?: (confirmed?: boolean) => void }) => {
+			input.onDailyCommitted?.(false);
+			await seedCatalog(catalog, store, observation);
+			return mutationResult(observation);
+		},
+	} as unknown as MarkdownMutationService);
+	const operation = service.startCreate(observation.content);
+	await assert.rejects(operation.dailyCommitted, /not confirmed/);
+	assert.equal((await operation.settled).status, "saved");
+	await assert.rejects(operation.dailyCommitted, /not confirmed/);
+});

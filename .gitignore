@@ -13,6 +13,8 @@ main.js
 # Local development probes
 /scripts/composer/
 /scripts/card-images/
+/scripts/catalog/
+/tsconfig.benchmark.json
 
 AGENTS.md
 CLAUDE.md

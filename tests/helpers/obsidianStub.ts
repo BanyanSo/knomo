@@ -14,10 +14,6 @@ export async function ensureObsidianStub(): Promise<void> {
 	const obsidianStubPath = resolve(__dirname, "../../node_modules/obsidian/index.js");
 	await mkdir(dirname(obsidianStubPath), { recursive: true });
 	await writeFile(obsidianStubPath, buildObsidianStub());
-
-	const dailyNotesInterfaceStubPath = resolve(__dirname, "../../node_modules/obsidian-daily-notes-interface/index.js");
-	await mkdir(dirname(dailyNotesInterfaceStubPath), { recursive: true });
-	await writeFile(dailyNotesInterfaceStubPath, buildDailyNotesInterfaceStub());
 }
 
 function buildObsidianStub(): string {
@@ -149,22 +145,13 @@ function buildObsidianStub(): string {
 		"requireApiVersion.set = (version) => { apiVersion = version; };",
 		"class MarkdownView {}",
 		"class PluginSettingTab { constructor(app, plugin) { this.app = app; this.plugin = plugin; this.containerEl = {}; } display() {} hide() {} }",
-		"class Setting { constructor(containerEl) { this.containerEl = containerEl; } setName() { return this; } setDesc() { return this; } setHeading() { return this; } addButton(callback) { callback?.({ setButtonText() { return this; }, setCta() { return this; }, onClick() { return this; }, setDisabled() { return this; } }); return this; } addText(callback) { callback?.({ inputEl: { addEventListener() {} }, setValue() { return this; }, onChange() { return this; }, setPlaceholder() { return this; } }); return this; } addToggle(callback) { callback?.({ setValue() { return this; }, onChange() { return this; } }); return this; } addDropdown(callback) { callback?.({ addOption() { return this; }, setValue() { return this; }, onChange() { return this; } }); return this; } }",
+		"class Setting { constructor(containerEl) { this.containerEl = containerEl; } setName() { return this; } setDesc() { return this; } setHeading() { return this; } setClass() { return this; } addButton(callback) { callback?.({ setButtonText() { return this; }, setCta() { return this; }, onClick() { return this; }, setDisabled() { return this; } }); return this; } addText(callback) { callback?.({ inputEl: { addEventListener() {} }, setValue() { return this; }, onChange() { return this; }, setPlaceholder() { return this; } }); return this; } addToggle(callback) { callback?.({ setValue() { return this; }, onChange() { return this; } }); return this; } addDropdown(callback) { callback?.({ addOption() { return this; }, setValue() { return this; }, onChange() { return this; } }); return this; } }",
 		"class SettingGroup { constructor(containerEl) { this.containerEl = containerEl; this.listEl = containerEl.createDiv ? containerEl.createDiv({ cls: 'setting-items' }) : containerEl; } setHeading(text) { new Setting(this.containerEl).setName(text).setHeading(); return this; } addClass(...names) { this.listEl.classList?.add(...names); return this; } }",
 		"class AbstractInputSuggest { constructor(app, inputEl) { this.app = app; this.inputEl = inputEl; } close() {} }",
 		"function getAllTags(cache) { return cache?.allTags ?? []; }",
-		"function prepareFuzzySearch(query) { return (text) => ({ score: String(text).includes(query) ? 0 : null, matches: [] }); }",
-		"function renderResults() {}",
+		"function prepareFuzzySearch(query) { return (text) => String(text).includes(query) ? { score: 0, matches: [] } : null; }",
+		"function renderResults(el, text) { el.setText(text); }",
 		"class MarkdownRenderer { static async render() {} }",
 		"module.exports = { requireApiVersion, MarkdownView, Component, TFile, TFolder, Vault, normalizePath, moment, getLanguage, setIcon, addIcon, Notice, Platform, Modal, ItemView, Scope, Plugin, PluginSettingTab, Setting, SettingGroup, AbstractInputSuggest, getAllTags, prepareFuzzySearch, renderResults, MarkdownRenderer };",
-	].join("\n");
-}
-
-function buildDailyNotesInterfaceStub(): string {
-	return [
-		"async function createDailyNote(date) {",
-		"  return window.__knomoCreateDailyNote(date);",
-		"}",
-		"module.exports = { createDailyNote };",
 	].join("\n");
 }

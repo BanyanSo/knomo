@@ -44,168 +44,6 @@ test("builds task-list-leading memo content as nested memo content", () => {
 	);
 });
 
-test("parses list-leading memo content from a detached timestamp line", () => {
-	const parsed = service.parseMemoBlock([
-		"- 12:00:00",
-		"  - 第一项",
-		"  - 第二项 ^abc123",
-	], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.blockId, "abc123");
-	assert.equal(parsed.content, "- 第一项\n- 第二项");
-});
-
-test("parses tab-indented memo continuation lines", () => {
-	const parsed = service.parseMemoBlock([
-		"- 12:00:00 第一行",
-		"\t- 子项",
-		"\t\t- 嵌套子项 ^abc123",
-	], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.blockId, "abc123");
-	assert.equal(parsed.content, "第一行\n- 子项\n\t- 嵌套子项");
-});
-
-test("does not parse an empty detached timestamp line as a memo", () => {
-	assert.equal(service.parseMemoBlock(["- 12:00:00"], 0), null);
-});
-
-test("parses a three-line memo block with tags and links", () => {
-	const parsed = service.parseMemoBlock(
-		[
-			"- 12:00:00 第一行",
-			"  第二行包含 #tag",
-			"  第三行包含 [[链接]]",
-		],
-		0,
-	);
-
-	assert.ok(parsed);
-	assert.equal(parsed.time, "12:00:00");
-	assert.equal(parsed.content, "第一行\n第二行包含 #tag\n第三行包含 [[链接]]");
-	assert.deepEqual(parsed.tags, ["tag"]);
-	assert.deepEqual(parsed.links, [
-		{
-			target: "链接",
-			displayText: null,
-			syntax: "wiki_link",
-		},
-	]);
-});
-
-test("parses bare web URLs without duplicating wrapped links", () => {
-	const metadata = service.parseMemoMetadata(
-		"裸链接 https://example.com/docs?q=1，括号 (http://example.org/a_(b)). "
-		+ "Markdown [官网](https://knomo.app) 图片 ![封面](https://example.com/a.png) www.example.com",
-	);
-
-	assert.deepEqual(metadata.links, [
-		{
-			target: "https://knomo.app",
-			displayText: "官网",
-			syntax: "markdown_link",
-		},
-		{
-			target: "https://example.com/docs?q=1",
-			displayText: null,
-			syntax: "url",
-		},
-		{
-			target: "http://example.org/a_(b)",
-			displayText: null,
-			syntax: "url",
-		},
-	]);
-});
-
-test("parses memo time in HH:mm format", () => {
-	const parsed = service.parseMemoBlock(["- 18:30 内容"], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.time, "18:30");
-	assert.equal(parsed.content, "内容");
-});
-
-test("parses memo time in HH:mm:ss format", () => {
-	const parsed = service.parseMemoBlock(["- 18:30:12 内容"], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.time, "18:30:12");
-	assert.equal(parsed.content, "内容");
-});
-
-test("parses multiple memos in the same minute and second", () => {
-	const blocks = service.parseMemoBlocks([
-		"- 18:30 同一分钟第一条",
-		"- 18:30 同一分钟第二条",
-		"- 18:30:12 同一秒第一条",
-		"- 18:30:12 同一秒第二条",
-	].join("\n"));
-
-	assert.deepEqual(blocks.map((block) => block.content), [
-		"同一分钟第一条",
-		"同一分钟第二条",
-		"同一秒第一条",
-		"同一秒第二条",
-	]);
-});
-
-test("parses Obsidian image embeds", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 第一行", "  第二行 ![[Assets/a.png]]"], 0);
-
-	assert.ok(parsed);
-	assert.deepEqual(parsed.images, [
-		{
-			path: "Assets/a.png",
-			altText: "",
-			syntax: "obsidian_embed",
-		},
-	]);
-	assert.deepEqual(parsed.links, []);
-});
-
-test("decodes percent-encoded Obsidian image embed paths", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 图片 ![[Assets/a%20b%20c.jpg|300]]"], 0);
-
-	assert.ok(parsed);
-	assert.deepEqual(parsed.images, [
-		{
-			path: "Assets/a b c.jpg",
-			altText: "",
-			syntax: "obsidian_embed",
-		},
-	]);
-});
-
-test("parses supported Obsidian image embeds", () => {
-	const parsed = service.parseMemoBlock([
-		"- 12:00:00 图片 ![[Assets/a.avif]] ![[Assets/a.bmp]] ![[Assets/a.gif]] ![[Assets/a.jpeg]]",
-		"  ![[Assets/a.jpg]] ![[Assets/a.png]] ![[Assets/a.svg]] ![[Assets/a.webp]] ![[Assets/a.WEBP|300]]",
-	], 0);
-
-	assert.ok(parsed);
-	assert.deepEqual(parsed.images.map((image) => image.path), [
-		"Assets/a.avif",
-		"Assets/a.bmp",
-		"Assets/a.gif",
-		"Assets/a.jpeg",
-		"Assets/a.jpg",
-		"Assets/a.png",
-		"Assets/a.svg",
-		"Assets/a.webp",
-		"Assets/a.WEBP",
-	]);
-});
-
-test("does not treat Obsidian block embeds as images", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 引用 ![[2026-05-18#^5i3h99]]"], 0);
-
-	assert.ok(parsed);
-	assert.deepEqual(parsed.images, []);
-});
-
 test("rejects stale Obsidian block embed image metadata", () => {
 	assert.equal(isSupportedMemoImage({
 		path: "2026-05-18#^5i3h99",
@@ -219,213 +57,8 @@ test("rejects stale Obsidian block embed image metadata", () => {
 	}), true);
 });
 
-test("parses Markdown images", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 第一行", "  第二行 ![alt](Assets/a.png)"], 0);
-
-	assert.ok(parsed);
-	assert.deepEqual(parsed.images, [
-		{
-			path: "Assets/a.png",
-			altText: "alt",
-			syntax: "markdown_image",
-		},
-	]);
-});
-
-test("decodes percent-encoded local Markdown image paths", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 图片 ![](Pasted%20image%2020260606110900.png)"], 0);
-
-	assert.ok(parsed);
-	assert.deepEqual(parsed.images, [
-		{
-			path: "Pasted image 20260606110900.png",
-			altText: "",
-			syntax: "markdown_image",
-		},
-	]);
-});
-
-test("keeps remote Markdown image URLs percent-encoded", () => {
-	const metadata = service.parseMemoMetadata("![remote](https://example.com/Pasted%20image%2020260606110900.png)");
-
-	assert.deepEqual(metadata.images, [
-		{
-			path: "https://example.com/Pasted%20image%2020260606110900.png",
-			altText: "remote",
-			syntax: "markdown_image",
-		},
-	]);
-});
-
-test("treats numeric-only Markdown image labels as sizes for local and remote images", () => {
-	const metadata = service.parseMemoMetadata([
-		"![200](Assets/local.png)",
-		"![ 320 ](https://example.com/remote.png)",
-		"![图 200](Assets/labeled.png)",
-	].join(" "));
-
-	assert.deepEqual(metadata.images, [
-		{
-			path: "Assets/local.png",
-			altText: "",
-			syntax: "markdown_image",
-		},
-		{
-			path: "https://example.com/remote.png",
-			altText: "",
-			syntax: "markdown_image",
-		},
-		{
-			path: "Assets/labeled.png",
-			altText: "图 200",
-			syntax: "markdown_image",
-		},
-	]);
-});
-
-test("ignores blockId on the first line", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 第一行 ^abc123", "  第二行"], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.blockId, "abc123");
-	assert.equal(parsed.content, "第一行\n第二行");
-});
-
-test("ignores blockId on the last effective content line", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 第一行", "  第二行 ^abc123"], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.blockId, "abc123");
-	assert.equal(parsed.content, "第一行\n第二行");
-});
-
-test("contentSnapshot has no time prefix or blockId", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 第一行 ^abc123"], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.content, "第一行");
-});
-
 test("hash ignores blockId", () => {
 	assert.equal(hashMemoContent("第一行"), hashMemoContent("第一行 ^abc123"));
-});
-
-test("unindented paragraphs do not belong to the previous memo", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 第一行", "普通段落", "  不是 continuation"], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.endLine, 0);
-	assert.equal(parsed.content, "第一行");
-});
-
-test("a new Markdown heading stops memo parsing", () => {
-	const parsed = service.parseMemoBlock(["- 12:00:00 第一行", "  第二行", "## Next", "  不是 continuation"], 0);
-
-	assert.ok(parsed);
-	assert.equal(parsed.endLine, 1);
-	assert.equal(parsed.content, "第一行\n第二行");
-});
-
-test("inserts memo under an existing heading at the top", () => {
-	const content = "# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n\n## Next";
-	const block = service.buildMemoBlock("新 memo", "12:00:00");
-
-	assert.equal(
-		service.insertMemoBlock(content, {
-			heading: "## Knomo",
-			block,
-			position: "top",
-			createHeadingIfMissing: false,
-		}),
-		"# 2026-05-14\n\n## Knomo\n\n- 12:00:00 新 memo\n- 11:00:00 旧 memo\n\n## Next",
-	);
-});
-
-test("inserts memo under an existing heading at the bottom", () => {
-	const content = "# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n\n## Next";
-	const block = service.buildMemoBlock("新 memo", "12:00:00");
-
-	assert.equal(
-		service.insertMemoBlock(content, {
-			heading: "## Knomo",
-			block,
-			position: "bottom",
-			createHeadingIfMissing: false,
-		}),
-		"# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n- 12:00:00 新 memo\n\n## Next",
-	);
-});
-
-test("inserts memo at the bottom before preserving multiple trailing heading blank lines", () => {
-	const content = "# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n\n\n## Next";
-	const block = service.buildMemoBlock("新 memo", "12:00:00");
-
-	assert.equal(
-		service.insertMemoBlock(content, {
-			heading: "## Knomo",
-			block,
-			position: "bottom",
-			createHeadingIfMissing: false,
-		}),
-		"# 2026-05-14\n\n## Knomo\n\n- 11:00:00 旧 memo\n- 12:00:00 新 memo\n\n\n## Next",
-	);
-});
-
-test("inserts memo into an empty heading before preserving existing blank lines", () => {
-	const content = "# 2026-05-14\n\n## Knomo\n\n\n## Next";
-	const block = service.buildMemoBlock("新 memo", "12:00:00");
-
-	assert.equal(
-		service.insertMemoBlock(content, {
-			heading: "## Knomo",
-			block,
-			position: "bottom",
-			createHeadingIfMissing: false,
-		}),
-		"# 2026-05-14\n\n## Knomo\n- 12:00:00 新 memo\n\n\n## Next",
-	);
-});
-
-test("inserts memo between adjacent headings", () => {
-	const content = "# 2026-05-14\n\n## Knomo\n## Next";
-	const block = service.buildMemoBlock("新 memo", "12:00:00");
-
-	assert.equal(
-		service.insertMemoBlock(content, {
-			heading: "## Knomo",
-			block,
-			position: "bottom",
-			createHeadingIfMissing: false,
-		}),
-		"# 2026-05-14\n\n## Knomo\n- 12:00:00 新 memo\n## Next",
-	);
-});
-
-test("creates heading when missing and allowed", () => {
-	const block = service.buildMemoBlock("新 memo", "12:00:00");
-
-	assert.equal(
-		service.insertMemoBlock("# 2026-05-14", {
-			heading: "## Knomo",
-			block,
-			position: "bottom",
-			createHeadingIfMissing: true,
-		}),
-		"# 2026-05-14\n\n## Knomo\n- 12:00:00 新 memo",
-	);
-});
-
-test("throws when heading is missing and creation is disabled", () => {
-	const block = service.buildMemoBlock("新 memo", "12:00:00");
-
-	assert.throws(() => {
-		service.insertMemoBlock("# 2026-05-14", {
-			heading: "## Knomo",
-			block,
-			position: "bottom",
-			createHeadingIfMissing: false,
-		});
-	}, /Heading not found/);
 });
 
 test("daily note creation returns existing file without applying template", async () => {
@@ -453,7 +86,7 @@ test("daily note creation returns existing file without applying template", asyn
 		},
 	);
 
-	const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
+	const file = await dailyNoteService.getOrCreateDailyNoteForDateWithConfig(new Date("2026-05-14T10:00:00"), { folder: "Daily", format: "YYYY-MM-DD" });
 
 	assert.equal(file, existingFile);
 	assert.equal(createCalls, 0);
@@ -487,7 +120,7 @@ test("daily note creation without a template creates an empty file", async () =>
 			},
 		);
 
-		const file = await dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00"));
+		const file = await dailyNoteService.getOrCreateDailyNoteForDateWithConfig(new Date("2026-05-14T10:00:00"), { folder: "Daily", format: "YYYY-MM-DD" });
 
 		assert.equal(file.path, "Daily/2026-05-14.md");
 	} finally {
@@ -495,7 +128,7 @@ test("daily note creation without a template creates an empty file", async () =>
 	}
 });
 
-test("daily note creation still errors when Daily Notes core plugin is disabled", async () => {
+test("disabled Daily Notes cannot provide a creation path", async () => {
 	const { DailyNoteService } = await loadDailyNoteService();
 	const dailyNoteService = new DailyNoteService(
 		{
@@ -511,23 +144,10 @@ test("daily note creation still errors when Daily Notes core plugin is disabled"
 		},
 	);
 
-	await assert.rejects(
-		() => dailyNoteService.getOrCreateDailyNoteForDate(new Date("2026-05-14T10:00:00")),
-		/Enable the Daily Notes core plugin in Obsidian settings/,
-	);
-});
-
-test("appends blockId to a single-line memo block", () => {
-	assert.equal(
-		service.appendBlockIdToMemoBlock("- 12:00:00 第一行", "abc123"),
-		"- 12:00:00 第一行 ^abc123",
-	);
-});
-
-test("appends blockId to the last effective line of a multiline memo block", () => {
-	assert.equal(
-		service.appendBlockIdToMemoBlock("- 12:00:00 第一行\n  第二行\n  ", "abc123"),
-		"- 12:00:00 第一行\n  第二行 ^abc123\n  ",
+	assert.equal(dailyNoteService.getStatus().enabled, false);
+	assert.throws(
+		() => dailyNoteService.getDailyNotePathForDate(new Date("2026-05-14T10:00:00")),
+		/Daily Notes/,
 	);
 });
 
@@ -536,20 +156,6 @@ test("appends blockId to list-leading memo content", () => {
 		service.buildMemoBlockWithBlockId("- 第一项\n- 第二项", "12:00:00", "abc123"),
 		"- 12:00:00\n\t- 第一项\n\t- 第二项 ^abc123",
 	);
-});
-
-test("deletes a complete memo block without deleting the next memo", () => {
-	const content = "- 12:00:00 第一行\n  第二行\n- 13:00:00 下一条";
-
-	assert.equal(service.deleteMemoBlock(content, 0), "- 13:00:00 下一条");
-});
-
-test("parses all memo blocks in content", () => {
-	const blocks = service.parseMemoBlocks("- 12:00:00 第一行\n  第二行\n普通段落\n- 13:00:00 下一条");
-
-	assert.equal(blocks.length, 2);
-	assert.equal(blocks[0].content, "第一行\n第二行");
-	assert.equal(blocks[1].content, "下一条");
 });
 
 test("parses daily note dates from custom formats and folders", () => {

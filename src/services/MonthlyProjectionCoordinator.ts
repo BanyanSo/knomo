@@ -1,13 +1,11 @@
 import { TFile } from "obsidian";
 import type { App, Component } from "obsidian";
 
-import type { KnomoSettings } from "../types/settings";
 import type { MonthlyProjectionState } from "../types/catalogView";
 import { ensureFolder, getParentFolderPath } from "../utils/vault";
 import {
 	buildMonthlyProjection,
 	extractLegacyMonthlyArchiveMarker,
-	getMonthlyArchivePath,
 	hasKnomoMonthlyArchiveMarker,
 } from "./MonthlyProjection";
 import type { MonthlyProjectionInputBuilder } from "./MonthlyProjectionInputBuilder";
@@ -260,7 +258,7 @@ export class MonthlyProjectionCoordinator {
 			const lastProjected = this.lastProjectedAt.get(period);
 			if (!ignoreCooldown && lastProjected !== undefined && this.now() - lastProjected < this.cooldownMs) continue;
 			try {
-				const outcome = await this.runLowPriorityTask(period, () => this.project(period));
+				const outcome = await this.runLowPriorityTask(period, () => this.project(period, invalidationVersion));
 				if (outcome === "incomplete") {
 					if ((this.invalidationVersions.get(period) ?? 0) === invalidationVersion) {
 						this.incompleteVersions.set(period, invalidationVersion);
@@ -290,6 +288,11 @@ export class MonthlyProjectionCoordinator {
 				projected += 1;
 			} catch (error) {
 				if (this.isStopped() || error instanceof MonthlyProjectionStoppedError) break;
+				if (error instanceof MonthlyProjectionStaleError) {
+					// 新版本已在 pending 中，交给下一轮重建，不记作 I/O 失败或成功冷却。
+					this.failedPeriods.delete(period);
+					continue;
+				}
 				this.failedPeriods.add(period);
 				failed += 1;
 			} finally {
@@ -299,11 +302,12 @@ export class MonthlyProjectionCoordinator {
 		return { projected, failed };
 	}
 
-	private async project(period: string): Promise<"complete" | "incomplete"> {
+	private async project(period: string, invalidationVersion: number): Promise<"complete" | "incomplete"> {
 		const generation = this.configurationGeneration;
 		const assertCurrent = () => {
 			this.assertRunning();
 			if (generation !== this.configurationGeneration || !this.isProjectionAllowed()) throw new Error("Monthly configuration changed during projection.");
+			if ((this.invalidationVersions.get(period) ?? 0) !== invalidationVersion) throw new MonthlyProjectionStaleError();
 		};
 		const targetPath = this.options.inputBuilder.getTargetPath(period);
 		let outcome: "complete" | "incomplete" = "complete";
@@ -346,6 +350,7 @@ export class MonthlyProjectionCoordinator {
 			if (projection.path !== targetPath) throw new Error("Monthly projection settings changed during build.");
 			if (existing instanceof TFile) {
 				const currentHash = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(existing)));
+				assertCurrent();
 				if (currentHash === projection.outputHash) {
 					this.metadata.set(period, toMetadata(projection));
 					return;
@@ -395,10 +400,12 @@ export class MonthlyProjectionCoordinator {
 					file = await this.app.vault.create(targetPath, projection.content);
 				}
 				const outputHash = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(file)));
+				assertCurrent();
 				if (outputHash !== projection.outputHash) throw new Error("Monthly projection output verification failed.");
 				this.metadata.set(period, toMetadata(projection));
 			} catch (error) {
 				this.options.selfWriteTracker.discard(targetPath, opId);
+				if (error instanceof MonthlyProjectionStaleError) throw error;
 				const racedFile = this.app.vault.getAbstractFileByPath(targetPath);
 				if (existing === null && racedFile instanceof TFile) {
 					const racedContent = await this.app.vault.read(racedFile);
@@ -678,7 +685,4 @@ function isMonthlyProjectionCheckpoint(value: unknown): value is MonthlyProjecti
 }
 
 class MonthlyProjectionStoppedError extends Error {}
-
-export function getMonthlyProjectionTargetPath(settings: KnomoSettings, period: string): string {
-	return getMonthlyArchivePath(settings, period);
-}
+class MonthlyProjectionStaleError extends Error {}

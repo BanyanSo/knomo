@@ -45,15 +45,6 @@ export class DailyNoteService {
 		return createStatus(config);
 	}
 
-	async getFreshStatus(): Promise<DailyNotesStatus> {
-		const config = (await this.dailyNotesConfigProvider?.loadConfig()) ?? null;
-		return createStatus(config);
-	}
-
-	async getOrCreateDailyNoteForDate(date: Date): Promise<TFile> {
-		return this.getOrCreateDailyNoteForDateWithConfig(date, await this.getDailyNotesConfig());
-	}
-
 	async getOrCreateDailyNoteForDateWithConfig(date: Date, config: DailyNotesConfig): Promise<TFile> {
 		const path = this.getDailyNotePathForDateWithConfig(date, config);
 		const existing = this.app.vault.getAbstractFileByPath(path);
@@ -101,12 +92,6 @@ export class DailyNoteService {
 		return config.folder === null || config.folder.trim().length === 0
 			? normalizePath(fileName)
 			: normalizePath(`${config.folder}/${fileName}`);
-	}
-
-	async getDailyNotesConfig(): Promise<DailyNotesConfig> {
-		const config = (await this.dailyNotesConfigProvider?.loadConfig()) ?? null;
-		if (config === null) throw new KnomoError("daily_notes_disabled");
-		return config;
 	}
 
 	getTodayDailyNotePath(status = this.getStatus()): string {

@@ -50,7 +50,7 @@ export class KnomoStartupBootstrapService {
 	private startOperation(configurationOperation?: Promise<void>): Promise<void> {
 		// 立即接住后台配置失败，不能等布局就绪后才订阅 rejection。
 		const configurationResult = configurationOperation?.then(
-			() => ({ ok: true as const }), error => ({ ok: false as const, error }),
+			() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }),
 		);
 		let operation: Promise<void>;
 		operation = this.runOnce(configurationResult).finally(() => {

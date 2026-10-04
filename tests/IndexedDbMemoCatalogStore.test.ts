@@ -1,11 +1,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IDBDatabase as FakeDatabase, IDBKeyRange, indexedDB } from "fake-indexeddb";
+import { IDBDatabase as FakeDatabase, IDBIndex as FakeIndex, IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
+
+test("浮标游标缺少错误原因时仍以 Error 拒绝查询", async t => {
+	const databaseName = uniqueDatabaseName("buoy-cursor-error");
+	const store = createStore(databaseName);
+	const openKeyCursor = FakeIndex.prototype.openKeyCursor;
+	t.mock.method(FakeIndex.prototype, "openKeyCursor", function (this: IDBIndex, ...args: Parameters<IDBIndex["openKeyCursor"]>) {
+		const request = openKeyCursor.apply(this, args);
+		request.addEventListener("success", event => {
+			event.stopImmediatePropagation();
+			request.onerror?.call(request, event);
+		});
+		return request;
+	});
+	try {
+		await assert.rejects(store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 7 }),
+			error => error instanceof Error && error.message === "Memo Catalog time buoy query failed.");
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});
+
+test("浮标索引解析抛出非 Error 时保留原因并拒绝查询", async t => {
+	const databaseName = uniqueDatabaseName("buoy-selection-error");
+	const store = createStore(databaseName);
+	const path = "Daily/2026-07-01.md";
+	t.mock.method(TimeBuoyPageSelection.prototype, "add", () => { throw "invalid buoy posting"; });
+	try {
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", [
+			makeObservation(path, "2026-07-01", 1, "10:30", "same", { timeBuoyDates: ["2026-09-27"] }),
+		]));
+		await assert.rejects(store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 7 }),
+			error => error instanceof Error && error.message === "invalid buoy posting");
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});
 
 test("浮标分页保留三组排序、多日期合并、同文 occurrence 及查询边界", async () => {
 	const databaseName = uniqueDatabaseName("buoy-pages");

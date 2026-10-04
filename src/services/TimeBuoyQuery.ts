@@ -25,14 +25,14 @@ export class TimeBuoyPageSelection {
 		const item: TimeBuoyCursor = {
 			catalogRevision: this.revision, coverageKey: JSON.stringify(this.coverage),
 			today: this.request.today, tab: this.request.tab,
-			primaryTargetDate: this.request.tab === "past" ? dates[dates.length - 1]! : dates[0]!,
+			primaryTargetDate: this.request.tab === "past" ? dates[dates.length - 1] : dates[0],
 			createdAtKey: entry.createdAtKey, observationKey: entry.observationKey,
 		};
 		if (this.request.cursor != null && this.compare(item, this.request.cursor) <= 0) return;
 		let low = 0, high = this.items.length;
 		while (low < high) {
 			const middle = (low + high) >>> 1;
-			if (this.compare(this.items[middle]!, item) < 0) low = middle + 1;
+			if (this.compare(this.items[middle], item) < 0) low = middle + 1;
 			else high = middle;
 		}
 		if (low > this.limit) return;
@@ -41,7 +41,7 @@ export class TimeBuoyPageSelection {
 	}
 
 	get nextCursor(): TimeBuoyCursor | null {
-		return this.items.length > this.limit ? this.items[this.limit - 1]! : null;
+		return this.items.length > this.limit ? this.items[this.limit - 1] : null;
 	}
 
 	private compare(left: TimeBuoyCursor, right: TimeBuoyCursor): number {

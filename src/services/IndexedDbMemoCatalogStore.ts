@@ -384,7 +384,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		if (!selection.invalidated) {
 			await new Promise<void>((resolve, reject) => {
 				const cursorRequest = transaction.objectStore(POSTINGS_STORE).index(BY_TIME_BUOY).openKeyCursor();
-				cursorRequest.onerror = () => reject(cursorRequest.error);
+				cursorRequest.onerror = () => reject(cursorRequest.error ?? new Error("Memo Catalog time buoy query failed."));
 				cursorRequest.onsuccess = () => {
 					const cursor = cursorRequest.result;
 					if (cursor === null) { resolve(); return; }
@@ -393,7 +393,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 						selection.add(JSON.parse(String(cursor.key)) as TimeBuoyIndexEntry);
 						cursor.continue();
 					} catch (error) {
-						reject(error);
+						reject(error instanceof Error ? error : new Error(String(error)));
 					}
 				};
 			});

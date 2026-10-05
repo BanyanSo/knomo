@@ -58,7 +58,7 @@ test("Things 桌面与移动首屏、分页、计数使用相同组合条件且�
 			},
 			count: async (query: CatalogFeatureFilter) => { counts.push(query); return { count: 3, complete: true, catalogRevision: 1 }; },
 		}),
-		syncRecordStatsSource: () => undefined, invalidateMemoSearchCache: () => undefined,
+		syncRecordStatsSource: () => undefined,
 		retainMemoCardPreviews: () => undefined, renderMobileSearchResults: () => undefined,
 	});
 	assert.deepEqual(view.buildCatalogActiveQuery(false), { hasTask: true, tags: ["project"], text: "release" });
@@ -199,7 +199,6 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
 	view.invalidateRecordStats = () => undefined;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -269,7 +268,6 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
 	view.invalidateRecordStats = () => undefined;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -321,7 +319,6 @@ test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展�
 	view.hasCommittedCatalogDesktopQuery = false;
 	view.cardFlowError = null;
 	view.filteredMemosCache = null;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -425,7 +422,6 @@ test("Catalog revision 变化触发刷新时保留当前随机重逢批次", asy
 	view.loadCatalogMemos = async () => makeCatalogLoad(2, completeCoverage());
 	view.getCardFlowStateKey = () => "random-ready";
 	view.getMobileSearchStateKey = () => "mobile-search";
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -520,7 +516,6 @@ test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快�
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
 	view.invalidateRecordStats = () => undefined;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -570,7 +565,6 @@ test("查询 fingerprint 变化时保留旧结果、清空 cursor，并启动新
 	view.getCatalogQueryFingerprint = () => fingerprint;
 	let recordStatsInvalidations = 0;
 	view.invalidateRecordStats = () => { recordStatsInvalidations += 1; };
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderAllMemosLoadingState = () => { loadingRenderCount += 1; };
@@ -958,7 +952,6 @@ interface QueryView {
 	getMobileSearchStateKey: () => string;
 	getCatalogQueryFingerprint: (loadAll: boolean) => string;
 	invalidateRecordStats: () => void;
-	invalidateMemoSearchCache: () => void;
 	retainMemoCardPreviews: () => void;
 	resetVisibleMemos: () => void;
 	renderUiState: (options: object) => void;
@@ -1018,7 +1011,6 @@ interface InitialMobileView {
 	hasCommittedCatalogDesktopQuery: boolean;
 	cardFlowError: string | null;
 	filteredMemosCache: null;
-	invalidateMemoSearchCache: () => void;
 	retainMemoCardPreviews: () => void;
 	resetVisibleMemos: () => void;
 	renderUiState: () => void;
@@ -1205,12 +1197,16 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 class TestStatsElement {
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
+	private text = "";
 
 	asHtml(): HTMLElement {
 		return this as unknown as HTMLElement;
 	}
 
 	empty(): void {}
+
+	getText(): string { return this.text; }
+	setText(value: string): void { this.text = value; }
 
 	toggleClass(name: string, active: boolean): void {
 		if (active) this.classes.add(name);

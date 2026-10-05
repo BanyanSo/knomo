@@ -713,6 +713,8 @@ npm run test:file -- tests/<Name>.test.ts
 
 Persistence, migration, identity, data-safety and cross-service semantic changes require focused regression coverage followed by `npm run test:quiet` and `npm run typecheck`. Run `npm run build` when build artifacts need verification. Expand or repeat checks only for new changes, failures or unresolved risks; report unrun checks separately.
 
+`npm run build` writes the release assets `main.js`, `manifest.json`, and minified `styles.css` to `dist/`. Use these three files for local installation or publication; the root `styles.css` remains readable source.
+
 `npm run verify` is a comprehensive check, not a default handoff requirement: it includes type checking, all tests, the production build, i18n, diff whitespace, forbidden source patterns and trailing whitespace scans. Use it only when that full scope is required. Do not run lint unless requested. Coordinate test commands serially within one working tree because they share compiled output.
 
 When device verification is in the current task, select the affected scenarios; the full device matrix belongs to the corresponding Stage/Beta/Release scope. The optional local [mobile QA checklist](./docs/mobile-qa-checklist.md) is supporting guidance, not a test/build dependency.

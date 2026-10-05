@@ -1,5 +1,5 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
-import { matchesCatalogQuery, normalizeCatalogText } from "../services/MemoCatalogStore";
+import { matchesCatalogQuery } from "../services/MemoCatalogStore";
 import { formatDatePart } from "../utils/date";
 import type { SidebarNav } from "./viewNavigation";
 import {
@@ -27,7 +27,6 @@ interface FilterVisibleMemosOptions {
 	searchDateFilter: SearchDateFilter | null;
 	recordStatsFilter: RecordStatsSearchFilter | null;
 	dailyStatus: DailyDateConfig;
-	getMemoSearchText: (memo: MemoRecord) => string;
 	today?: Date;
 }
 
@@ -43,7 +42,6 @@ export function filterVisibleMemos(options: FilterVisibleMemosOptions): MemoReco
 		searchDateFilter,
 		recordStatsFilter,
 		dailyStatus,
-		getMemoSearchText,
 	} = options;
 	const today = options.today ?? new Date();
 	if (activeNav === "trash" || activeNav === "record-stats") {
@@ -59,12 +57,12 @@ export function filterVisibleMemos(options: FilterVisibleMemosOptions): MemoReco
 		return memos.filter((memo) => {
 			if (!memo.catalog?.observation.tasks.length) return false;
 			if (activeTagKey !== null && !memo.tags.some(tag => tagMatchesActiveTagKey(tag, activeTagKey))) return false;
-			return memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter, dailyStatus, getMemoSearchText, today);
+			return memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter, dailyStatus, today);
 		});
 	}
 	if (hasActiveMemoSearch(normalizedQuery, searchDateFilter, recordStatsFilter)) {
 		return memos.filter((memo) => {
-			return memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter, dailyStatus, getMemoSearchText, today);
+			return memoMatchesSearch(memo, normalizedQuery, searchDateFilter, recordStatsFilter, dailyStatus, today);
 		});
 	}
 	if (activeNav === "review") {
@@ -74,7 +72,7 @@ export function filterVisibleMemos(options: FilterVisibleMemosOptions): MemoReco
 		if (activeTagKey !== null && !memo.tags.some((tag) => tagMatchesActiveTagKey(tag, activeTagKey))) {
 			return false;
 		}
-		if (!matchesMemoSearchText(memo, normalizedQuery, getMemoSearchText)) {
+		if (!matchesMemoSearchText(memo, normalizedQuery)) {
 			return false;
 		}
 		return matchesScope(memo, scopeFilter, today);
@@ -87,10 +85,9 @@ export function memoMatchesSearch(
 	dateFilter: SearchDateFilter | null,
 	recordStatsFilter: RecordStatsSearchFilter | null,
 	dailyStatus: DailyDateConfig,
-	getMemoSearchText: (memo: MemoRecord) => string,
 	today = new Date(),
 ): boolean {
-	if (!matchesMemoSearchText(memo, normalizedQuery, getMemoSearchText)) {
+	if (!matchesMemoSearchText(memo, normalizedQuery)) {
 		return false;
 	}
 	if (dateFilter !== null && !memoMatchesSearchDate(memo, dateFilter, dailyStatus, today)) {
@@ -105,12 +102,10 @@ export function memoMatchesSearch(
 function matchesMemoSearchText(
 	memo: MemoRecord,
 	query: string,
-	getMemoSearchText: (memo: MemoRecord) => string,
 ): boolean {
 	if (query.length === 0) return true;
 	// Catalog 卡片复用计数的匹配规则，避免二次过滤丢掉已命中的结果。
-	if (memo.catalog !== undefined) return matchesCatalogQuery(memo.catalog.observation, { text: query });
-	return normalizeCatalogText(getMemoSearchText(memo)).includes(normalizeCatalogText(query));
+	return memo.catalog !== undefined && matchesCatalogQuery(memo.catalog.observation, { text: query });
 }
 
 function hasActiveMemoSearch(

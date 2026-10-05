@@ -8,6 +8,36 @@ import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/servi
 import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
 
+test("同一查询和计数只准备一次文本条件，两个 Store 保持组合筛选一致", async t => {
+	const name = uniqueDatabaseName("prepared-query");
+	const stores = [createStore(name), new InMemoryMemoCatalogStore()];
+	const path = "Daily/2026-07-01.md";
+	const filter = { text: "ＰＲＯＢＥ", tags: ["ＰＲＯＪＥＣＴ"], hasTask: false };
+	let preparations = 0;
+	const normalize = String.prototype.normalize;
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 40 }, (_, i) =>
+				makeObservation(path, "2026-07-01", i + 1, "10:30", i % 2 ? "probe" : "other", { tags: ["Project/Child"] }))));
+		}
+		t.mock.method(String.prototype, "normalize", function(this: string, form?: string) {
+			if (String(this) === filter.text) preparations++;
+			return normalize.call(this, form);
+		});
+		for (const store of stores) {
+			preparations = 0;
+			const page = await store.query({ ...filter, limit: 7 });
+			assert.equal(page.items.length, 7);
+			assert.ok(page.items.every(item => item.content === "probe"));
+			assert.equal(preparations, 1, "分页的条件准备不能随候选数增长");
+			preparations = 0;
+			assert.equal((await store.count(filter)).count, 20);
+			assert.equal(preparations, 1, "计数的条件准备不能随候选数增长");
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(name); }
+});
+
 test("取消计数立即终止游标，主数据库保持可用且不激活 fallback", async t => {
 	const databaseName = uniqueDatabaseName("count-cancel");
 	const primary = createStore(databaseName);

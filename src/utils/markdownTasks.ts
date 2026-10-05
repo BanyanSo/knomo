@@ -50,21 +50,34 @@ export function parseMarkdownTaskLine(line: string): ParsedMarkdownTaskLine | nu
 }
 
 export function getMarkdownTaskLines(content: string): IndexedMarkdownTaskLine[] {
+	return parseMarkdownTaskStructure(content).tasks;
+}
+
+export function parseMarkdownTaskStructure(content: string): {
+	tasks: IndexedMarkdownTaskLine[];
+	listLines: number[];
+	hasRawTaskHtml: boolean;
+} {
 	const lines = splitMarkdownLines(content);
 	const markdown = lines.join("\n");
 	const tasks: IndexedMarkdownTaskLine[] = [];
+	const listLines: number[] = [];
+	let hasRawTaskHtml = false;
 	let lineIndex = 0;
 	let lineStart = 0;
 	// 语法树负责容器和代码边界；逐行匹配只校验本期支持的 marker。
 	parser.parse(markdown).iterate({
 		enter(node) {
+			if ((node.name === "HTMLBlock" || node.name === "HTMLTag")
+				&& /<(?:li|input)\b/iu.test(markdown.slice(node.from, node.to))) hasRawTaskHtml = true;
 			if (node.name !== "ListItem") return;
-			const listMark = node.node.getChild("ListMark");
-			if (listMark === null) return;
-			while (lineIndex < lines.length - 1 && lineStart + lines[lineIndex].length < listMark.from) {
+			while (lineIndex < lines.length - 1 && lineStart + lines[lineIndex].length < node.from) {
 				lineStart += lines[lineIndex].length + 1;
 				lineIndex += 1;
 			}
+			listLines.push(lineIndex);
+			const listMark = node.node.getChild("ListMark");
+			if (listMark === null) return;
 			const line = lines[lineIndex];
 			const prefix = listMark.from - lineStart;
 			const task = parseMarkdownTaskLine(line.slice(prefix));
@@ -80,7 +93,7 @@ export function getMarkdownTaskLines(content: string): IndexedMarkdownTaskLine[]
 			});
 		},
 	});
-	return tasks;
+	return { tasks, listLines, hasRawTaskHtml };
 }
 
 export function getMarkdownTaskEnterPatch(value: string, start: number, end: number): TextReplacement | null {

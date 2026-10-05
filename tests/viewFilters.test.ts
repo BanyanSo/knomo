@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import type { MemoViewItem } from "../src/types/memoView";
 import {
-	buildMemoSearchText,
 	getMemoImages,
 	getRegularFilterConditions,
 	getRegularFilterCopy,
@@ -23,7 +22,7 @@ test("Things 摘要包含所有 AND 条件", () => {
 	assert.match(getRegularFilterCopy(state, 0)!.emptyTitle, /Things/);
 });
 
-test("普通 Catalog 筛选和搜索时间取当前 observation，不取旧创建时间", () => {
+test("普通 Catalog 日期与小时筛选取当前 observation，不取旧创建时间", () => {
 	const memo = makeMemo("current", {
 		createdAt: "2020-01-01T23:59:59Z",
 	});
@@ -32,9 +31,6 @@ test("普通 Catalog 筛选和搜索时间取当前 observation，不取旧创�
 	assert.equal(matchesRecordStatsSearchFilter(memo, {
 		type: "hour", startDate: "2026-09-01", endDateExclusive: "2026-09-02", hour: 6,
 	}), true);
-	const search = buildMemoSearchText(memo);
-	assert.match(search, /2026-09-01 06:04/u);
-	assert.doesNotMatch(search, /2020-01-01|06:04:00/u);
 });
 
 test("filters supported memo images", () => {
@@ -290,23 +286,6 @@ test("converts zoned creation time to the current device calendar semantics", ()
 		if (originalTimeZone === undefined) delete process.env.TZ;
 		else process.env.TZ = originalTimeZone;
 	}
-});
-
-test("builds memo search text and all-memo loading flags", () => {
-	const memo = makeMemo("search", {
-		createdAt: "2026-05-20T09:00:00",
-		contentSnapshot: "Hello Knomo",
-		tags: ["Project"],
-		links: [{ target: "Linked note", displayText: null, syntax: "wiki_link" }],
-		images: [{ path: "clip.png", altText: "", syntax: "obsidian_embed" }],
-	});
-	const searchText = buildMemoSearchText(memo);
-
-	assert.equal(searchText.includes("hello knomo"), true);
-	assert.equal(searchText.includes("2026-05-20 09:00:00"), true);
-	assert.equal(searchText.includes("project"), true);
-	assert.equal(searchText.includes("linked note"), true);
-	assert.equal(searchText.includes("clip.png"), true);
 });
 
 function disabledDailyStatus(): { enabled: false; folder: null; format: null } {

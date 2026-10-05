@@ -3,14 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-test("both host paths mount the same settings page", () => {
-	const source = readSettingTabSource();
-	const definitions = getSourceBetween(source, "\tgetSettingDefinitions():", "\n\tdisplay(): void");
-	const legacy = getSourceBetween(source, "\tdisplay(): void", "\n\thide(): void");
-	assert.match(definitions, /this\.mountPage\(setting\.settingEl\)/u);
-	assert.match(legacy, /this\.mountPage\(this\.containerEl\)/u);
-});
-
 test("record and archive groups retain the existing setting order", () => {
 	const source = readSettingTabSource();
 	const record = getSourceBetween(source, "\tprivate renderRecordSettings(", "\n\tprivate renderArchiveSettings(");

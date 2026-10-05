@@ -165,10 +165,10 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 
 	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
 		signal?.throwIfAborted();
-		const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+		const matches = createCatalogQueryMatcher(request);
 		let count = 0;
 		for (const observation of this.observations.values()) {
-			if (matchesCatalogQuery(observation, request, sourcePaths)) {
+			if (matches(observation)) {
 				count += 1;
 			}
 		}
@@ -187,7 +187,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		const limit = clampPageLimit(request.limit);
 		let cursorReads = 0;
 		let observationsRead = 0;
-		const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+		const matchesQuery = createCatalogQueryMatcher(request);
 		const candidates = [...this.observations.values()].sort(compareCatalogObservations);
 		const matches: CatalogObservation[] = [];
 		for (const observation of candidates) {
@@ -196,7 +196,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 				continue;
 			}
 			observationsRead += 1;
-			if (!matchesCatalogQuery(observation, request, sourcePaths)) {
+			if (!matchesQuery(observation)) {
 				continue;
 			}
 			matches.push(clone(observation));
@@ -560,15 +560,24 @@ export function matchesCatalogQuery(
 	request: CatalogQueryFilter,
 	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
 ): boolean {
+	return createCatalogQueryMatcher(request, sourcePaths)(observation);
+}
+
+export function createCatalogQueryMatcher(
+	request: CatalogQueryFilter,
+	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
+): (observation: CatalogObservation) => boolean {
 	const tags = request.tags?.map(normalizeCatalogText).filter((tag) => tag.length > 0) ?? [];
 	const normalizedText = request.text === undefined ? "" : normalizeCatalogText(request.text);
-	return (normalizedText.length === 0 || observation.searchText.includes(normalizedText))
+	const linkTarget = request.linkTarget === undefined ? undefined : normalizeCatalogText(request.linkTarget);
+	const imagePath = request.imagePath === undefined ? undefined : normalizeCatalogText(request.imagePath);
+	return observation => (normalizedText.length === 0 || observation.searchText.includes(normalizedText))
 		&& tags.every((tag) => observation.tagKeys.some((observationTag) => (
 			observationTag === tag || observationTag.startsWith(`${tag}/`)
 		)))
-		&& (request.linkTarget === undefined || observation.linkTargets.includes(normalizeCatalogText(request.linkTarget)))
+		&& (linkTarget === undefined || observation.linkTargets.includes(linkTarget))
 		&& (request.hasLink === undefined || (observation.hasLink === 1) === request.hasLink)
-		&& (request.imagePath === undefined || observation.imagePaths.includes(normalizeCatalogText(request.imagePath)))
+		&& (imagePath === undefined || observation.imagePaths.includes(imagePath))
 		&& (request.hasImage === undefined || (observation.hasImage === 1) === request.hasImage)
 		&& (request.hasTask === undefined || (observation.hasTask === 1) === request.hasTask)
 		&& (request.hasTag === undefined || (observation.tags.length > 0) === request.hasTag)

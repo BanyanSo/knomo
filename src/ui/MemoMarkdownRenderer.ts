@@ -1,11 +1,11 @@
 import { MarkdownRenderer } from "obsidian";
-import { parser } from "@lezer/markdown";
 import type { App, Component } from "obsidian";
 import { t } from "../i18n";
 
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
 	getMarkdownTaskLines,
+	parseMarkdownTaskStructure,
 	type MarkdownTaskMarker,
 	type WritableMarkdownTaskMarker,
 } from "../utils/markdownTasks";
@@ -143,6 +143,7 @@ export class MemoMarkdownRenderer {
 	}
 
 	syncTaskCheckboxesForMemo(containers: readonly (HTMLElement | null)[], memo: MemoRecord): void {
+		const tasks = getMarkdownTaskLines(memo.contentSnapshot);
 		for (const container of containers) {
 			if (container === null) {
 				continue;
@@ -150,7 +151,8 @@ export class MemoMarkdownRenderer {
 			for (const checkboxEl of container.findAll(".knomo-task-checkbox")) {
 				const input = checkboxEl as HTMLInputElement;
 				if (input.getAttr("data-knomo-memo-id") === memo.id) {
-					this.syncTaskCheckboxDom(input, memo);
+					const index = this.getTaskCheckboxIndex(input);
+					if (index !== null && tasks[index] !== undefined) applyTaskCheckboxDomState(input, tasks[index].marker);
 				}
 			}
 		}
@@ -361,49 +363,42 @@ export function prepareInternalLinks(container: HTMLElement, sourcePath: string)
 }
 
 export function prepareRenderedTaskCheckboxes(container: HTMLElement, memo: MemoRecord): void {
-	const tasks = getMarkdownTaskLines(memo.contentSnapshot);
+	const { tasks, listLines, hasRawTaskHtml } = parseMarkdownTaskStructure(memo.contentSnapshot);
 	const inputs = container.findAll("input[type='checkbox']") as HTMLInputElement[];
 	for (const input of inputs) {
 		input.disabled = true;
 		input.setAttr("title", t("task.refreshRequired"));
 	}
-	if (tasks.length === 0) return;
+	if (tasks.length === 0 || hasRawTaskHtml) return;
 	// 对齐完整列表结构，不能用第 N 个 input 猜测第 N 个源码任务。
-	const sourceLines: number[] = [];
-	let rawTaskHtml = false;
-	parser.parse(memo.contentSnapshot).iterate({
-		enter(node) {
-			if (node.name === "ListItem") sourceLines.push(memo.contentSnapshot.slice(0, node.from).split("\n").length - 1);
-			if ((node.name === "HTMLBlock" || node.name === "HTMLTag")
-				&& /<(?:li|input)\b/iu.test(memo.contentSnapshot.slice(node.from, node.to))) rawTaskHtml = true;
-		},
-	});
-	if (rawTaskHtml) return;
 	const items = container.findAll("li");
-	if (items.length !== sourceLines.length) return;
-	const bindings: Array<{ input: HTMLInputElement; taskIndex: number }> = [];
+	if (items.length !== listLines.length) return;
+	const itemsByLine = new Map<number, HTMLElement | null>();
+	listLines.forEach((line, index) => itemsByLine.set(line, itemsByLine.has(line) ? null : items[index]));
+	const inputsByItem = new Map<Element, HTMLInputElement | null>();
+	for (const input of inputs) {
+		const item = input.closest("li");
+		if (item !== null) inputsByItem.set(item, inputsByItem.has(item) ? null : input);
+	}
+	const bindings: Array<{ input: HTMLInputElement; item: HTMLElement; taskIndex: number }> = [];
 	for (const task of tasks) {
-		const positions = sourceLines.flatMap((line, index) => line === task.lineIndex ? [index] : []);
-		if (positions.length !== 1) return;
-		const item = items[positions[0]];
-		const candidates = inputs.filter(input => input.closest("li") === item);
-		if (candidates.length !== 1 || !item.hasClass("task-list-item")) return;
+		const item = itemsByLine.get(task.lineIndex);
+		if (!item || !item.hasClass("task-list-item")) return;
+		const input = inputsByItem.get(item);
+		if (!input) return;
 		const marker = item.getAttr("data-task");
 		// 宿主可用空字符串表示未完成，源码则固定使用单个空格；缺失属性仍拒绝绑定。
 		const renderedMarker = marker === "" ? " " : marker?.toLowerCase();
 		if (renderedMarker !== task.marker.toLowerCase()) return;
-		bindings.push({ input: candidates[0], taskIndex: task.index });
+		bindings.push({ input, item, taskIndex: task.index });
 	}
-	for (const { input, taskIndex } of bindings) {
+	for (const { input, item, taskIndex } of bindings) {
 		input.disabled = false;
 		input.setAttr("title", "");
 		input.addClass("knomo-task-checkbox");
 		input.setAttr("data-knomo-memo-id", memo.id);
 		input.setAttr("data-knomo-task-index", String(taskIndex));
-		const taskItem = input.closest("li");
-		if (taskItem?.instanceOf(HTMLElement)) {
-			taskItem.setAttr("data-knomo-task-index", String(taskIndex));
-		}
+		item.setAttr("data-knomo-task-index", String(taskIndex));
 	}
 }
 

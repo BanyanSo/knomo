@@ -93,7 +93,7 @@ async function refreshHarness() {
 		prepareCatalogDesktopQuery: () => {}, isCatalogQueryCurrent: () => true, buildCatalogActiveQuery: () => ({}),
 		queryCatalogFeature: async () => ({ items: [], catalogRevision: revision, nextCursor: null, readState: "ready" }),
 		syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {}, getImmediateCatalogTotalCount: () => 0,
-		invalidateMemoSearchCache: () => {}, retainMemoCardPreviews: () => {}, resetVisibleMemos: () => {},
+		retainMemoCardPreviews: () => {}, resetVisibleMemos: () => {},
 		renderUiState: (options?: { renderCardFlow?: boolean }) => { if (options?.renderCardFlow !== false) view.renderCardFlow(); },
 		getCardFlowStateKey: () => JSON.stringify(view.getTodayTimeBuoyItems().map((item: { memo: MemoViewItem }) => item.memo.id)),
 		getMobileSearchStateKey: () => "", renderMobileSearchResultsIfChanged: () => {},

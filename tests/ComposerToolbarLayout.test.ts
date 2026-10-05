@@ -40,7 +40,7 @@ test("Composer keeps scrollable tools and send actions on one row across desktop
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const html = await composerHtml();
-	const css = readFileSync("styles.css", "utf8");
+	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
 	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
 	try {
 		const page = await browser.newPage({ viewport: { width: 1000, height: 720 } });

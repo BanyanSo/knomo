@@ -126,7 +126,6 @@ test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白�
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const { filterVisibleMemos, memoMatchesSearch } = await import("../src/ui/KnomoMemoFilter");
-	const { buildMemoSearchText } = await import("../src/ui/viewFilters");
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	const store = new InMemoryMemoCatalogStore();
 	const catalog = new MemoCatalogService(store);
@@ -142,11 +141,40 @@ test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白�
 		assert.equal(filterVisibleMemos({
 			memos, randomMemos: [], shuffleDayMemos: [], activeNav: "all", activeTagKey: null,
 			scopeFilter: "all", normalizedQuery: text.trim().toLowerCase(), searchDateFilter: null,
-			recordStatsFilter: null, dailyStatus, getMemoSearchText: buildMemoSearchText,
+			recordStatsFilter: null, dailyStatus,
 		}).length, expected, `桌面：${text}`);
-		assert.equal(memos.filter((memo) => memoMatchesSearch(memo, text.trim().toLowerCase(), null, null, dailyStatus, buildMemoSearchText)).length, expected, `移动端：${text}`);
+		assert.equal(memos.filter((memo) => memoMatchesSearch(memo, text.trim().toLowerCase(), null, null, dailyStatus)).length, expected, `移动端：${text}`);
 	}
 	await store.close();
+});
+
+test("实际 Catalog 链路按正文、标签、链接和图片搜索，并保留分钟精度", async () => {
+	await ensureObsidianStub();
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { memoMatchesSearch } = await import("../src/ui/KnomoMemoFilter");
+	const { toCatalogMemoView } = await import("../src/types/memoView");
+	const sourcePath = "Daily/2026-09-01.md";
+	const { observations } = new DiaryMemoParser().parseRevision({
+		sourcePath, logicalDate: "2026-09-01", sourceRevision: "revision",
+		content: "- 06:04 Hello Knomo #Project [[Linked note]] ![[clip.png]]\n",
+	});
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, observations);
+	const service = new CatalogReadService({ catalog });
+	const dailyStatus = { enabled: false, folder: null, format: null } as const;
+	for (const text of ["hello knomo", "project", "linked note", "clip.png"]) {
+		const page = await service.query({ text, limit: 1 });
+		assert.equal(page.items.length, 1, text);
+		assert.equal((await service.count({ text })).count, 1, text);
+		const memo = toCatalogMemoView(page.items[0]);
+		assert.equal(memo.createdAt, "2026-09-01T06:04");
+		assert.equal(memoMatchesSearch(memo, text, null, null, dailyStatus), true, text);
+	}
+	store.close();
 });
 
 test("那年今日的实际视图查询、分页和统计均排除今天的三条 Memo", async () => {

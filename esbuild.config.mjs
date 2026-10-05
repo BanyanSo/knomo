@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from "module";
+import { prepareReleaseAssets } from "./scripts/prepare-release-assets.mjs";
 
 const isProduction = process.argv[2] === "production";
 const nodeExternals = builtinModules.flatMap((moduleName) => [
@@ -38,6 +39,7 @@ const context = await esbuild.context({
 if (isProduction) {
 	await context.rebuild();
 	await context.dispose();
+	await prepareReleaseAssets();
 } else {
 	await context.watch();
 }

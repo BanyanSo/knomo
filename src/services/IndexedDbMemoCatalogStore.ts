@@ -19,7 +19,7 @@ import {
 	createCatalogCountAbortError,
 	DEFAULT_CATALOG_COVERAGE,
 	emptyInvalidatedPage,
-	matchesCatalogQuery,
+	createCatalogQueryMatcher,
 	mergeAggregate,
 	normalizeCatalogText,
 } from "./MemoCatalogStore";
@@ -419,7 +419,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			const revisionRequest = metadata.get(CATALOG_REVISION_META);
 			const coverageRequest = metadata.get(COVERAGE_META);
 			const limit = clampPageLimit(request.limit);
-			const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+			const matches = createCatalogQueryMatcher(request);
 			const items: CatalogObservation[] = [];
 			let cursorReads = 0;
 			let observationsRead = 0;
@@ -455,7 +455,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 							cursorReads += 1;
 							observationsRead += 1;
 							const observation = cursor.value as CatalogObservation;
-							if (matchesCatalogQuery(observation, request, sourcePaths)) {
+							if (matches(observation)) {
 								items.push(observation);
 							}
 							if (items.length <= limit) {
@@ -477,7 +477,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 								const observation = observationRequest.result as CatalogObservation | undefined;
 								if (observation !== undefined) {
 									observationsRead += 1;
-									if (matchesCatalogQuery(observation, request, sourcePaths)) {
+									if (matches(observation)) {
 										items.push(observation);
 									}
 								}
@@ -540,7 +540,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			const metadata = transaction.objectStore(META_STORE);
 			const revisionRequest = metadata.get(CATALOG_REVISION_META);
 			const coverageRequest = metadata.get(COVERAGE_META);
-			const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+			const matches = createCatalogQueryMatcher(request);
 			let count = 0;
 			let catalogRevision = 0;
 			let coverage: CatalogCoverage = { ...DEFAULT_CATALOG_COVERAGE };
@@ -564,7 +564,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 							const cursor = cursorRequest.result;
 							if (cursor === null) return;
 							const observation = cursor.value as CatalogObservation;
-							if (matchesCatalogQuery(observation, request, sourcePaths)) count += 1;
+							if (matches(observation)) count += 1;
 							cursor.continue();
 						};
 					} else {
@@ -579,7 +579,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 							observationRequest.onsuccess = () => {
 								if (signal?.aborted) return;
 								const observation = observationRequest.result as CatalogObservation | undefined;
-								if (observation !== undefined && matchesCatalogQuery(observation, request, sourcePaths)) {
+								if (observation !== undefined && matches(observation)) {
 									count += 1;
 								}
 								cursor.continue();

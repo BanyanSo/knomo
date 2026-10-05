@@ -41,7 +41,7 @@ test("桌面近月不足一页仍能展开更早历史，完整读完后才结�
 				return { fullHistoryLoaded: loadAll, memos: loadAll ? history : recent, nextCursor: null, readState: "ready" };
 			},
 			applyCatalogMemoLoad: (load: { nextCursor: null }) => { view.catalogCursor = load.nextCursor; },
-			getImmediateCatalogTotalCount: () => 17, invalidateMemoSearchCache: () => {}, retainMemoCardPreviews: () => {},
+			getImmediateCatalogTotalCount: () => 17, retainMemoCardPreviews: () => {},
 			renderUiState: () => {}, renderCardFlowIfChanged: () => {}, renderMobileSearchResultsIfChanged: () => {},
 			renderNextCardBatch: () => {},
 		});
@@ -119,7 +119,7 @@ test("分页新增全部已置顶时仍保留下一页，异步返回按最新�
 	Object.assign(view, { memos: [memo], catalogCursor: nextCursor, catalogLoadingNextPage: false,
 		catalogHistoryExpansionPending: false, catalogDesktopQueryRun: 1, catalogDesktopQueryFingerprint: "default",
 		getCatalogQueryFingerprint: () => "default", isCatalogQueryCurrent: () => true, buildCatalogActiveQuery: () => ({}),
-		queryCatalogFeature: () => new Promise((done) => { resolve = done; }), syncRecordStatsSource: () => {}, invalidateMemoSearchCache: () => {},
+		queryCatalogFeature: () => new Promise((done) => { resolve = done; }), syncRecordStatsSource: () => {},
 		renderCardFlow: () => renderedModes.push(view.getRecentTimeFlowContext().enabled),
 		forceRebuildCardFlow: () => { throw new Error("分页不应清空已渲染正文和滚动高度"); },
 		renderNextCardBatch: () => {},

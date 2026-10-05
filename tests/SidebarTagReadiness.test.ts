@@ -11,7 +11,7 @@ async function fixture(layout: "mobile" | "desktop-narrow" | "desktop-wide") {
 	const { Platform } = await import("obsidian");
 	Object.assign(Platform, { isMobile: layout === "mobile" });
 	const { KnomoView } = await import("../src/ui/KnomoView");
-	const dom = new JSDOM("<body><aside><div id='tags'></div></aside></body>");
+	const dom = new JSDOM("<body><aside><div id='tags'></div><div id='stats'></div></aside></body>");
 	interface Options { cls?: string; text?: string; attr?: Record<string, string> }
 	Object.assign(dom.window.HTMLElement.prototype, {
 		createEl(this: HTMLElement, tag: string, options: Options = {}) {
@@ -24,8 +24,13 @@ async function fixture(layout: "mobile" | "desktop-narrow" | "desktop-wide") {
 		createSpan(this: HTMLElement, options: Options) { return this.createEl("span", options); },
 		empty(this: HTMLElement) { this.replaceChildren(); },
 		setAttr(this: HTMLElement, key: string, value: string) { this.setAttribute(key, value); },
+		setText(this: HTMLElement, value: string) { this.textContent = value; },
+		getText(this: HTMLElement) { return this.textContent ?? ""; },
+		toggleClass(this: HTMLElement, name: string, active: boolean) { this.classList.toggle(name, active); },
+		removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
 	});
 	const tags = dom.window.document.getElementById("tags")!;
+	const stats = dom.window.document.getElementById("stats")!;
 	const state = new KnomoViewStateController();
 	state.activeTagKey = "project/child";
 	const expanded = new Set(["project"]);
@@ -43,6 +48,7 @@ async function fixture(layout: "mobile" | "desktop-narrow" | "desktop-wide") {
 	};
 	Object.assign(view, {
 		currentLayout: layout, viewStateController: state, desktopSidebarStateController: sidebar, expandedTagGroups: expanded,
+		statsEls: [stats],
 		rootEl: tags.parentElement, allTagsEl: tags, trashViewClosed: false, popupState: { scopeMenuOpen: false },
 		catalogCoverage: coverage, catalogRevision: 1, libraryIndexRevision: 1, libraryIndexRun: 0,
 		libraryIndexCoverageKey: JSON.stringify(["complete", null, "2026-09-01", 0, 1, 1]),
@@ -60,7 +66,8 @@ async function fixture(layout: "mobile" | "desktop-narrow" | "desktop-wide") {
 		complete: true, invalidated: false, coverage, catalogRevision: 1,
 		lifecycle: { state: "ready", persistent: true, writable: true, reason: null },
 	};
-	return { view, state, expanded, tags, snapshot, reads: () => reads, releaseTags, releaseFacets: () => releaseFacets(result), close: () => dom.window.close() };
+	const renderStats = () => (KnomoView.prototype as unknown as { renderStats(): void }).renderStats.call(view);
+	return { view, state, expanded, tags, stats, renderStats, snapshot, reads: () => reads, releaseTags, releaseFacets: () => releaseFacets(result), close: () => dom.window.close() };
 }
 
 for (const layout of ["mobile", "desktop-narrow", "desktop-wide"] as const) {
@@ -152,6 +159,47 @@ for (const layout of ["mobile", "desktop-narrow", "desktop-wide"] as const) {
 				assert.equal(h.reads(), 1);
 			} finally { h.close(); }
 		}
+	});
+
+	test(`${layout}: unchanged refresh preserves tag nodes and reacts to selection, counts and loading`, async () => {
+		const h = await fixture(layout);
+		try {
+			h.view.toggleSidebar();
+			const first = h.tags.firstElementChild;
+			h.view.renderTags();
+			assert.equal(h.tags.firstElementChild, first, "分页或 UI 刷新不能重建未变化的标签树");
+			h.state.activeTagKey = null;
+			h.view.renderTags();
+			assert.equal(h.tags.querySelector("[data-tag-key='project/child']")?.getAttribute("aria-pressed"), "false");
+			h.expanded.delete("project");
+			h.view.renderTags();
+			assert.equal(h.tags.querySelector("[data-tag-toggle='project']")?.getAttribute("aria-expanded"), "false");
+			Object.assign(h.view, { libraryTagFacets: [{ key: "project/child", label: "Project/Child", count: 9 }], libraryIndexesUpdating: true });
+			h.view.renderTags();
+			assert.equal(h.tags.querySelector(".knomo-tag-count")?.textContent, "9");
+			assert.equal(h.tags.getAttribute("aria-busy"), "true");
+			Object.assign(h.view, { libraryIndexesUpdating: false });
+			h.view.renderTags();
+			assert.equal(h.tags.hasAttribute("aria-busy"), false);
+		} finally { h.close(); }
+	});
+
+	test(`${layout}: statistics update values and loading without replacing metric nodes`, async () => {
+		const h = await fixture(layout);
+		try {
+			h.renderStats();
+			const metrics = Array.from(h.stats.querySelectorAll(".knomo-stat"));
+			h.renderStats();
+			metrics.forEach((metric, index) => assert.equal(h.stats.querySelectorAll(".knomo-stat")[index], metric));
+			Object.assign(h.view, { librarySummary: { memoCount: 5, tagCount: 2, imageCount: 4, wordCount: 10 }, libraryIndexesUpdating: true });
+			h.renderStats();
+			assert.deepEqual(Array.from(h.stats.querySelectorAll(".knomo-stat-value"), node => node.textContent), ["5", "2", "4"]);
+			assert.equal(h.stats.getAttribute("aria-busy"), "true");
+			Object.assign(h.view, { libraryIndexesUpdating: false });
+			h.renderStats();
+			assert.equal(h.stats.hasAttribute("aria-busy"), false);
+			metrics.forEach((metric, index) => assert.equal(h.stats.querySelectorAll(".knomo-stat")[index], metric));
+		} finally { h.close(); }
 	});
 }
 

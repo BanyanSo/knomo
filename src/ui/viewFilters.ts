@@ -7,7 +7,6 @@ import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
 import { hasMemoReference } from "../utils/references";
 import type { TagSummary } from "../utils/tagTree";
 import { normalizeTagKey } from "../utils/tags";
-import { formatMemoDisplayTime, formatObservationDisplayTime } from "./MemoDisplayFormatters";
 import type { SidebarNav } from "./viewNavigation";
 
 export type ScopeFilter =
@@ -361,17 +360,6 @@ export function formatTagFilterText(tag: string): string {
 
 export function isSummaryScopeFilter(filter: ScopeFilter): filter is SummaryScopeFilter {
 	return filter === "no-tag" || filter === "with-link" || filter === "with-image" || filter === "anniversary";
-}
-
-export function buildMemoSearchText(memo: MemoRecord): string {
-	return [
-		memo.contentSnapshot,
-		memo.catalog === undefined ? formatMemoDisplayTime(memo.createdAt) : formatObservationDisplayTime(memo.catalog.observation),
-		getMemoCalendarValue(memo),
-		memo.tags.join(" "),
-		memo.links.map((link) => link.target).join(" "),
-		getMemoImages(memo).map((image) => image.path).join(" "),
-	].join(" ").toLowerCase();
 }
 
 export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfig): Date | null {

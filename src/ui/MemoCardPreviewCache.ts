@@ -65,7 +65,6 @@ export function getMemoCardPreviewKey(memo: MemoPreviewCacheItem): string {
 	return [
 		memo.updatedAt,
 		memo.contentHash,
-		memo.updatedAt,
 		memo.dailyRef.path,
 	].join(":");
 }

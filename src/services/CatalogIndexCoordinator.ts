@@ -1,4 +1,4 @@
-import { MarkdownView, normalizePath, TFile, TFolder } from "obsidian";
+import { normalizePath, TFile, TFolder } from "obsidian";
 import type { App, Component } from "obsidian";
 
 import type {
@@ -146,10 +146,6 @@ export class CatalogIndexCoordinator {
 		owner.registerEvent(this.app.vault.on("create", (file) => this.handleFileChanged(file)));
 		owner.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.handleFileRenamed(file, oldPath)));
 		owner.registerEvent(this.app.vault.on("delete", (file) => this.handleFileDeleted(file)));
-		this.registerTrustedInputDocument(owner, this.app.workspace.containerEl.doc);
-		owner.registerEvent(this.app.workspace.on("window-open", (_workspaceWindow, win) => {
-			this.registerTrustedInputDocument(owner, win.document);
-		}));
 		owner.registerDomEvent(this.app.workspace.containerEl.doc, "visibilitychange", () => this.handleVisibilityChange());
 		owner.register(() => this.stop());
 		this.paused = this.app.workspace.containerEl.doc.visibilityState === "hidden";
@@ -282,20 +278,6 @@ export class CatalogIndexCoordinator {
 		this.setPathCovered(entry.sourcePath, false);
 		this.enqueuePath(entry.sourcePath);
 		this.scheduleDrain();
-	}
-
-	private registerTrustedInputDocument(owner: Component, doc: Document): void {
-		owner.registerDomEvent(doc, "input", (event) => this.handleTrustedEditorInput(event));
-	}
-
-	private handleTrustedEditorInput(event: Event): void {
-		if (!event.isTrusted || event.target === null) return;
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (view?.getViewType() !== "markdown" || !view.containerEl.contains(event.target as Node)) return;
-		const file = view.file;
-		if (!(file instanceof TFile) || file.extension !== "md") return;
-		const entry = this.toInventoryEntry(file);
-		if (entry === null) return;
 	}
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {

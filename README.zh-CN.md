@@ -713,6 +713,8 @@ npm run test:file -- tests/<Name>.test.ts
 
 persistence、migration、identity、数据安全及跨服务语义修改须先补有效回归，再运行 `npm run test:quiet` 和 `npm run typecheck`。需要验证构建产物时运行 `npm run build`。仅因新增修改、失败或未解决风险扩大或重复检查；未执行的检查单独说明。
 
+`npm run build` 将发布用的 `main.js`、`manifest.json` 和压缩后的 `styles.css` 输出到 `dist/`。本地安装或发布请使用该目录下的三个文件；根目录的 `styles.css` 保留为可读源码。
+
 `npm run verify` 是综合检查入口，不是每次交付的默认要求：它包含类型检查、全量测试、生产构建、i18n、diff 空白、禁用源码模式及尾随空白扫描，仅在需要这些完整检查时运行。未经要求不运行 lint。同一工作树的测试命令共用编译目录，应串行协调。
 
 当前任务包含设备验证时，选择受影响的场景；完整设备矩阵属于对应 Stage/Beta/Release 范围。本地可选的[移动 QA 清单](./docs/mobile-qa-checklist.md)仅作辅助，不是 test/build 前提。

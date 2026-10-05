@@ -77,6 +77,7 @@ interface MobileSearchControllerOptions {
 	) => Promise<void>;
 	hasRemoteNextPage?: () => boolean;
 	restoreRemoteResults?: () => Promise<void>;
+	cancelRemoteCount?: () => void;
 }
 
 export class MobileSearchController {
@@ -93,8 +94,10 @@ export class MobileSearchController {
 	private open = false;
 	private renderGeneration = 0;
 	private debounceTimeoutId: number | null = null;
+	private composing = false;
 	private renderTaskId: number | null = null;
 	private renderedRevisions: string[] = [];
+	private targetRevisions: string[] = [];
 	private renderedViewKey = "";
 	private scrollRevision = 0;
 	private renderRun = 0;
@@ -206,11 +209,22 @@ export class MobileSearchController {
 		this.inputEl = page.inputEl;
 		this.resultsEl = page.resultsEl;
 		this.options.bindImageRoot?.(this.resultsEl);
-		this.options.registerDomEvent(this.inputEl, "input", () => {
+		this.options.registerDomEvent(this.inputEl, "compositionstart", () => {
+			this.queryRun++;
+			this.composing = true;
+			this.clearDebounce();
+			this.options.cancelRemoteCount?.();
+		});
+		this.options.registerDomEvent(this.inputEl, "compositionend", () => {
+			this.composing = false;
+			if (this.open) this.queueQuery(this.inputEl?.value ?? "");
+		});
+		this.options.registerDomEvent(this.inputEl, "input", (event) => {
+			if (this.composing || ("isComposing" in event && event.isComposing === true) || !this.open) return;
 			this.queueQuery(this.inputEl?.value ?? "");
 		});
 		this.options.registerDomEvent(this.inputEl, "keydown", (event) => {
-			if (event.key === "Escape") {
+			if (event.key === "Escape" && !this.composing && !event.isComposing) {
 				event.preventDefault();
 				event.stopPropagation();
 				this.closePage();
@@ -239,6 +253,9 @@ export class MobileSearchController {
 		const shouldOpen = this.options.isMobileLayout() && this.open;
 		this.options.getDocument().body.toggleClass("knomo-mobile-search-active", shouldOpen);
 		if (!this.options.isMobileLayout()) {
+			this.clearDebounce();
+			this.composing = false;
+			this.options.cancelRemoteCount?.();
 			this.cancelRender();
 			this.clearImageCache();
 			this.open = false;
@@ -259,6 +276,8 @@ export class MobileSearchController {
 	}
 
 	closePage(): void {
+		this.options.cancelRemoteCount?.();
+		this.composing = false;
 		this.cancelRender();
 		if (this.resultsEl) this.imageCache.capture(this.resultsEl, this.resultsEl);
 		this.queryRun += 1;
@@ -291,6 +310,7 @@ export class MobileSearchController {
 		if (this.renderTaskId !== null) this.options.cancelRenderTask?.(this.renderTaskId);
 		this.renderTaskId = null;
 		this.renderedRevisions = [];
+		this.targetRevisions = [];
 		this.pendingScrollTop = null;
 		this.renderedCards = [];
 		this.seedPlaceholder = null;
@@ -316,6 +336,9 @@ export class MobileSearchController {
 	}
 
 	removePage(): void {
+		this.options.cancelRemoteCount?.();
+		this.queryRun++;
+		this.composing = false;
 		this.cancelRender();
 		this.clearImageCache();
 		this.options.bindImageRoot?.(null);
@@ -339,7 +362,9 @@ export class MobileSearchController {
 	}
 
 	queueQuery(query: string): void {
+		this.queryRun++;
 		this.clearDebounce();
+		this.options.cancelRemoteCount?.();
 		this.debounceTimeoutId = this.options.getWindow().setTimeout(() => {
 			this.debounceTimeoutId = null;
 			const previousViewStateKey = this.getViewStateKey();
@@ -370,6 +395,8 @@ export class MobileSearchController {
 	}
 
 	resetState(preserveImages = false): void {
+		this.options.cancelRemoteCount?.();
+		this.composing = false;
 		this.cancelRender();
 		this.queryRun += 1;
 		this.queryError = null;
@@ -421,7 +448,7 @@ export class MobileSearchController {
 		}
 	}
 
-	renderResults(changeIntent: CardFlowChangeIntent = "content-change", append = false): void {
+	renderResults(changeIntent: CardFlowChangeIntent = "content-change", append = false, metadataOnly = false): void {
 		const resultsEl = this.resultsEl;
 		if (resultsEl === null || !this.open) {
 			return;
@@ -437,6 +464,14 @@ export class MobileSearchController {
 		const visibleMemos = memos.slice(0, this.visibleCount);
 		const revisions = visibleMemos.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
 		const status = this.queryError ?? this.options.getThingsStatus?.() ?? null;
+		// 总数晚到时仅沿用已开始渲染的卡片列表；空搜索提示不能新增加载入口。
+		if (metadataOnly && sameView && !status && this.renderedStatus === status && revisions.length > 0
+			&& this.renderedRevisions.length > 0
+			&& revisions.length === this.targetRevisions.length
+			&& revisions.every((revision, index) => revision === this.targetRevisions[index])) {
+			this.syncResultMetadata(memos.length, visibleMemos.length, this.renderTaskId === null);
+			return;
+		}
 		const canAppend = append && changeIntent !== "view-scope-change" && !status && this.renderTaskId === null
 			&& this.renderedStatus === status
 			&& this.renderedViewKey === this.getViewStateKey() && this.renderedRevisions.length > 0
@@ -458,6 +493,7 @@ export class MobileSearchController {
 		} else {
 			resultsEl.find(".knomo-mobile-search-more")?.remove();
 		}
+		this.targetRevisions = revisions;
 		if (this.markdownPriorityTaskId !== null) this.options.cancelRenderTask?.(this.markdownPriorityTaskId);
 		this.markdownPriorityTaskId = null;
 		const generation = this.renderGeneration;
@@ -505,19 +541,7 @@ export class MobileSearchController {
 			completeRender();
 			return;
 		}
-		const matchedTotalCount = this.options.getMatchedTotalCount === undefined
-			? memos.length
-			: this.options.getMatchedTotalCount();
-		if (matchedTotalCount !== null) {
-			const summary = regularState === null
-				? formatMobileSearchSummary(query, this.dateFilter, matchedTotalCount, this.recordStatsFilter)
-				: getRegularFilterCopy(regularState, matchedTotalCount)?.summary;
-			if (summary != null) {
-				const previous = canAppend ? resultsEl.find(".knomo-list-summary") : null;
-				if (previous) previous.setText(summary);
-				else renderKnomoListSummary(resultsEl, summary);
-			}
-		}
+		if (!status) this.syncResultMetadata(memos.length, visibleMemos.length, false);
 		let index = startIndex;
 		const renderChunk = () => {
 			if (renderRun !== this.renderRun || !this.open || generation !== this.renderGeneration || resultsEl !== this.resultsEl) return;
@@ -539,17 +563,39 @@ export class MobileSearchController {
 				this.renderTaskId = this.options.scheduleRenderTask(renderChunk);
 				return;
 			}
-			if (visibleMemos.length < memos.length || this.options.hasRemoteNextPage?.() === true) {
-				renderKnomoLoadMoreButton(resultsEl, {
-					remainingCount: Math.max(1, (matchedTotalCount ?? memos.length) - visibleMemos.length),
-					action: "load-more-mobile-search",
-					extraClass: "knomo-mobile-search-more",
-				});
-			}
+			this.syncResultMetadata(memos.length, visibleMemos.length, true, !status);
 			// 追加时保留浏览器的当前位置，不用旧 scrollTop 覆盖用户刚发生的滚动。
 			completeRender();
 		};
 		renderChunk();
+	}
+
+	private syncResultMetadata(matchedCount: number, visibleCount: number, updateMore: boolean, updateSummary = true): void {
+		const results = this.resultsEl;
+		if (!results) return;
+		const total = this.options.getMatchedTotalCount === undefined ? matchedCount : this.options.getMatchedTotalCount();
+		if (updateSummary && total !== null) {
+			const query = this.query.trim();
+			const context = this.options.getThingsContext?.();
+			const summary = context === undefined
+				? formatMobileSearchSummary(query, this.dateFilter, total, this.recordStatsFilter)
+				: getRegularFilterCopy({ ...context, searchQuery: query, searchDateFilter: this.dateFilter,
+					recordStatsSearchFilter: null, scopeFilter: "all" }, total)?.summary;
+			if (summary != null) {
+				const previous = results.find(".knomo-list-summary");
+				if (previous) previous.setText(summary);
+				else results.prepend(renderKnomoListSummary(results, summary));
+			}
+		}
+		if (!updateMore) return;
+		const previous = results.find(".knomo-mobile-search-more");
+		if (visibleCount >= matchedCount && this.options.hasRemoteNextPage?.() !== true) {
+			previous?.remove();
+			return;
+		}
+		const remainingCount = total === null ? null : Math.max(1, total - visibleCount);
+		if (previous) previous.setText(remainingCount === null ? t("list.loadMoreUnknown") : t("list.loadMore", { count: remainingCount }));
+		else renderKnomoLoadMoreButton(results, { remainingCount, action: "load-more-mobile-search", extraClass: "knomo-mobile-search-more" });
 	}
 
 	syncDateButtons(): void {

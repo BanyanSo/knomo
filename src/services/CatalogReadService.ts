@@ -43,6 +43,7 @@ import {
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
 import type { MemoCatalogService } from "./MemoCatalogService";
+import { createCatalogCountAbortError } from "./MemoCatalogStore";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
 
 export interface CatalogReadServiceOptions {
@@ -66,6 +67,12 @@ interface RandomReunionCandidatePool {
 	candidates: Array<RandomReunionCandidate & { observationKey: string }>;
 }
 
+interface CountTask {
+	controller: AbortController;
+	promise: Promise<CatalogMemoCountResult>;
+	consumers: number;
+}
+
 function yieldToUi(): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
@@ -77,6 +84,8 @@ export class CatalogReadService {
 	private lastReadState: CatalogReadState | null = null;
 	private randomReunionCandidatePool: RandomReunionCandidatePool | null = null;
 	private randomReunionCandidatePoolLoad: Promise<RandomReunionCandidatePool> | null = null;
+	private readonly countCache = new Map<string, CatalogMemoCountResult>();
+	private readonly countTasks = new Map<string, CountTask>();
 
 	constructor(private readonly options: CatalogReadServiceOptions) {
 		this.reviews = options.reviews ?? new LocalMemoReviewStore();
@@ -181,19 +190,65 @@ export class CatalogReadService {
 		});
 	}
 
-	async count(request: CatalogFeatureFilter): Promise<CatalogMemoCountResult> {
+	async count(request: CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
 		try {
-			const result = await this.options.catalog.count(request);
-			const complete = isQueryCovered(result.coverage, request);
-			return {
-				count: complete ? result.count : null,
-				complete,
-				catalogRevision: result.catalogRevision,
-				coverage: result.coverage,
-			};
+			return await this.cachedCount(request, signal, async (countSignal) => {
+				const result = await this.options.catalog.count(request, countSignal);
+				const complete = isQueryCovered(result.coverage, request);
+				return { count: complete ? result.count : null, complete,
+					catalogRevision: result.catalogRevision, coverage: result.coverage };
+			});
 		} catch {
+			signal?.throwIfAborted();
 			return this.createUnavailableCount();
 		}
+	}
+
+	private async cachedCount(request: CatalogFeatureFilter, signal: AbortSignal | undefined,
+		load: (signal: AbortSignal) => Promise<CatalogMemoCountResult>, kind = ""): Promise<CatalogMemoCountResult> {
+		signal?.throwIfAborted();
+		const store = this.options.catalog.getStore();
+		const [revision, coverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		signal?.throwIfAborted();
+		const key = JSON.stringify([kind, Object.entries(request).sort(([left], [right]) => left.localeCompare(right)),
+			revision, coverage, store.getLifecycle()]);
+		const cached = this.countCache.get(key);
+		if (cached) {
+			this.countCache.delete(key);
+			this.countCache.set(key, cached);
+			return cached;
+		}
+		let task = this.countTasks.get(key);
+		if (!task || task.controller.signal.aborted) {
+			const controller = new AbortController();
+			const next: CountTask = { controller, consumers: 0, promise: Promise.resolve().then(() => load(controller.signal)) };
+			next.promise = next.promise.then(result => {
+				if (!controller.signal.aborted && result.complete && result.catalogRevision === revision
+					&& JSON.stringify(result.coverage) === JSON.stringify(coverage)) {
+					this.countCache.set(key, result);
+					if (this.countCache.size > 16) this.countCache.delete(this.countCache.keys().next().value!);
+				}
+				return result;
+			}).finally(() => { if (this.countTasks.get(key) === next) this.countTasks.delete(key); });
+			this.countTasks.set(key, next);
+			task = next;
+		}
+		const activeTask = task;
+		activeTask.consumers++;
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return false;
+				settled = true;
+				signal?.removeEventListener("abort", abort);
+				if (--activeTask.consumers === 0) activeTask.controller.abort();
+				return true;
+			};
+			// 只有最后一个使用者取消时终止扫描，避免伤及共享计数的其他视图。
+			const abort = () => { if (finish()) reject(createCatalogCountAbortError(signal)); };
+			signal?.addEventListener("abort", abort, { once: true });
+			activeTask.promise.then(result => { if (finish()) resolve(result); }, error => { if (finish()) reject(error); });
+		});
 	}
 
 	async getLibraryIndexes(): Promise<CatalogLibraryIndexesResult> {
@@ -219,8 +274,8 @@ export class CatalogReadService {
 		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
 	}
 
-	async countReviewItems(date: Date, text?: string): Promise<CatalogMemoCountResult> {
-		return this.count(buildReviewCatalogQuery(date, text));
+	async countReviewItems(date: Date, text?: string, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
+		return this.count(buildReviewCatalogQuery(date, text), signal);
 	}
 
 	async queryRecordStatsDrilldown(
@@ -240,16 +295,18 @@ export class CatalogReadService {
 	async countRecordStatsDrilldown(
 		filter: CatalogRecordStatsFilter,
 		text?: string,
+		signal?: AbortSignal,
 	): Promise<CatalogMemoCountResult> {
+		signal?.throwIfAborted();
 		const { query, fromDate, toDate } = buildRecordStatsCatalogQuery(filter);
 		if (text?.trim()) query.text = text.trim();
 		if (!await this.getCoverageForRange(fromDate, toDate)) {
+			signal?.throwIfAborted();
 			return this.createUnavailableCount(await this.options.catalog.getStore().getCoverage());
 		}
-		if (filter.type !== "references") return this.count(query);
-		return this.countFiltered(query, (memo) => (
-			memo.observation.explicitReferenceTargets.length > 0
-		));
+		if (filter.type !== "references") return this.count(query, signal);
+		return this.cachedCount(query, signal, countSignal => this.countFiltered(query,
+			memo => memo.observation.explicitReferenceTargets.length > 0, countSignal), "references");
 	}
 
 	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"]): Promise<TimeBuoyQueryResult> {
@@ -482,13 +539,16 @@ export class CatalogReadService {
 	private async countFiltered(
 		request: CatalogFeatureFilter,
 		predicate: (memo: CatalogMemoItem) => boolean,
+		signal?: AbortSignal,
 	): Promise<CatalogMemoCountResult> {
 		let cursor: CatalogFeatureCursor | null = null;
 		let count = 0;
 		let catalogRevision: number | null = null;
 		let coverage: CatalogCoverage | null = null;
 		do {
+			signal?.throwIfAborted();
 			const page = await this.query({ ...request, limit: 150, cursor });
+			signal?.throwIfAborted();
 			if (page.invalidated
 				|| (catalogRevision !== null && catalogRevision !== page.catalogRevision)) {
 				return {

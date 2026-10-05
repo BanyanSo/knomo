@@ -17,27 +17,7 @@ interface TagDisplayCandidate {
 	order: number;
 }
 
-export function buildTagDisplayMap(sources: TagDisplaySource[]): Map<string, string> {
-	const candidates = new Map<string, Map<string, TagDisplayCandidate>>();
-	for (const source of sources) {
-		const key = normalizeTagKey(source.tag);
-		const displayName = normalizeTagDisplay(source.tag);
-		if (key.length === 0 || displayName.length === 0) {
-			continue;
-		}
-		addTagDisplayPathCandidates(candidates, key, displayName, source.modifiedTime, source.order);
-	}
-	const displayTags = new Map<string, string>();
-	for (const [key, candidatesForKey] of candidates) {
-		const candidate = chooseTagDisplayCandidate(candidatesForKey);
-		if (candidate !== null) {
-			displayTags.set(key, candidate.displayName);
-		}
-	}
-	return displayTags;
-}
-
-// 与同步入口使用相同候选比较规则，累加和选取均分片执行。
+// 按频次、修改时间和稳定顺序选择展示名，累加和选取均分片执行。
 export async function buildTagDisplayMapCooperatively(sources: readonly TagDisplaySource[], runtime: CooperativeTaskRuntime): Promise<Map<string, string>> {
 	const controller = new CooperativeYieldController(runtime);
 	const candidates = new Map<string, Map<string, TagDisplayCandidate>>();
@@ -111,16 +91,6 @@ function addTagDisplayCandidate(
 	candidate.count += 1;
 	candidate.modifiedTime = Math.max(candidate.modifiedTime, modifiedTime);
 	candidate.order = Math.min(candidate.order, order);
-}
-
-function chooseTagDisplayCandidate(candidates: Map<string, TagDisplayCandidate>): TagDisplayCandidate | null {
-	let selected: TagDisplayCandidate | null = null;
-	for (const candidate of candidates.values()) {
-		if (selected === null || compareTagDisplayCandidate(candidate, selected) < 0) {
-			selected = candidate;
-		}
-	}
-	return selected;
 }
 
 function compareTagDisplayCandidate(left: TagDisplayCandidate, right: TagDisplayCandidate): number {

@@ -83,21 +83,9 @@ export function calculateRandomReunionWeight(
 	return clampWeight(weight);
 }
 
-export function weightedSampleWithoutReplacement<T>(
-	items: T[],
-	getWeight: (item: T) => number,
-	count: number,
-	random: () => number = Math.random,
-): T[] {
-	const work = sampleWeighted(items, getWeight, count, random);
-	let step = work.next();
-	while (!step.done) step = work.next();
-	return step.value;
-}
-
 // 权重树避免每次抽取重扫剩余候选，保持按原顺序累计权重的无放回抽样。
-function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: number,
-	random: () => number): Generator<void, T[]> {
+function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number,
+	random: () => number): Generator<T | undefined> {
 	let size = 1;
 	while (size < items.length) size *= 2;
 	const tree = new Float64Array(size * 2);
@@ -109,9 +97,7 @@ function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: n
 		tree[index] = tree[index * 2] + tree[index * 2 + 1];
 		yield;
 	}
-	const picked: T[] = [];
-	const targetCount = Math.min(Math.max(0, Math.floor(count)), items.length);
-	while (picked.length < targetCount) {
+	for (let picked = 0; picked < items.length; picked++) {
 		let cursor = clampRandom(random()) * tree[1];
 		let index = 1;
 		while (index < size) {
@@ -119,87 +105,45 @@ function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: n
 			if (left > 0 && cursor <= left) index *= 2;
 			else { cursor -= left; index = index * 2 + 1; }
 		}
-		picked.push(items[index - size]);
+		const memo = items[index - size];
 		tree[index] = 0;
 		while (index > 1) {
 			index = Math.floor(index / 2);
 			tree[index] = tree[index * 2] + tree[index * 2 + 1];
 		}
-		yield;
+		yield memo;
 	}
-	return picked;
 }
 
 export async function sampleRandomReunionCandidates<T extends RandomReunionCandidate>(
 	candidates: T[], reviews: MemoReviewStateMap, count: number, options: RandomReunionOptions,
 	runtime: CooperativeTaskRuntime,
 ): Promise<T[]> {
+	const limit = Math.min(Math.max(0, Math.floor(count)), candidates.length);
+	if (limit === 0) return [];
 	const control = new CooperativeYieldController(runtime);
 	const work = sampleWeighted(candidates, (memo) => calculateRandomReunionWeight(memo, reviews[memo.id], options.today),
-		candidates.length, options.random ?? Math.random);
-	let step = work.next();
-	while (!step.done) {
-		if (control.shouldYield()) await control.yieldNow();
-		step = work.next();
-	}
-	const ordered = step.value;
+		options.random ?? Math.random);
 	const selected: T[] = [];
+	const rejected: T[] = [];
 	const ids = new Set<string>();
 	const sources = new Map<string, number>();
 	const dates = new Map<string, number>();
 	const tags = new Map<string, number>();
-	const limit = Math.min(Math.max(0, Math.floor(count)), candidates.length);
-	for (const memo of ordered) {
-		if (selected.length >= limit) break;
-		if (canUseDiverseMemo(memo, sources, dates, tags, options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT,
+	for (const memo of work) {
+		if (memo !== undefined && canUseDiverseMemo(memo, sources, dates, tags, options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT,
 			options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT, options.maxPerPrimaryTag ?? DEFAULT_DIVERSITY_LIMIT)) {
 			selected.push(memo); ids.add(memo.id); incrementDiversityCounts(memo, sources, dates, tags);
+		} else if (memo !== undefined) {
+			rejected.push(memo);
 		}
+		if (selected.length >= limit) break;
 		if (control.shouldYield()) await control.yieldNow();
 	}
-	for (const memo of ordered) {
+	for (const memo of rejected) {
 		if (selected.length >= limit) break;
 		if (!ids.has(memo.id)) { selected.push(memo); ids.add(memo.id); }
 		if (control.shouldYield()) await control.yieldNow();
-	}
-	return selected;
-}
-
-export function selectDiverseRandomReunionMemos(
-	orderedMemos: MemoRecord[],
-	count: number,
-	options: RandomReunionOptions = {},
-): MemoRecord[] {
-	const targetCount = Math.min(Math.max(0, Math.floor(count)), orderedMemos.length);
-	const maxPerSourcePath = options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT;
-	const maxPerDate = options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT;
-	const maxPerPrimaryTag = options.maxPerPrimaryTag ?? DEFAULT_DIVERSITY_LIMIT;
-	const selected: MemoRecord[] = [];
-	const selectedIds = new Set<string>();
-	const sourceCounts = new Map<string, number>();
-	const dateCounts = new Map<string, number>();
-	const tagCounts = new Map<string, number>();
-
-	for (const memo of orderedMemos) {
-		if (selected.length >= targetCount) {
-			break;
-		}
-		if (!canUseDiverseMemo(memo, sourceCounts, dateCounts, tagCounts, maxPerSourcePath, maxPerDate, maxPerPrimaryTag)) {
-			continue;
-		}
-		selected.push(memo);
-		selectedIds.add(memo.id);
-		incrementDiversityCounts(memo, sourceCounts, dateCounts, tagCounts);
-	}
-
-	for (const memo of orderedMemos) {
-		if (selected.length >= targetCount) {
-			break;
-		}
-		if (!selectedIds.has(memo.id)) {
-			selected.push(memo);
-			selectedIds.add(memo.id);
-		}
 	}
 	return selected;
 }

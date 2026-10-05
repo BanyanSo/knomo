@@ -3579,7 +3579,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	padding: 48px 56px;
 	overflow: hidden;
 	overscroll-behavior: contain;
-	touch-action: pan-y;
+	touch-action: none;
 }
 
 .knomo-image-preview-stage.is-loading::before {
@@ -3603,6 +3603,31 @@ body .knomo-mobile-create-fab.is-hidden {
 	max-width: 100%;
 	max-height: 100%;
 	object-fit: contain;
+	transform: translate(var(--knomo-preview-x, 0px), var(--knomo-preview-y, 0px)) scale(var(--knomo-preview-scale, 1));
+}
+
+.knomo-image-preview-stage.is-zoomed {
+	cursor: grab;
+}
+
+.knomo-image-preview-stage.is-error {
+	flex-direction: column;
+	gap: 12px;
+}
+
+.knomo-image-preview-action {
+	min-height: 44px;
+	padding: 8px 12px;
+	border: 0;
+	border-radius: 6px;
+	color: var(--knomo-image-preview-control-foreground);
+	background: var(--knomo-image-preview-control-background);
+	pointer-events: auto;
+}
+
+.knomo-image-preview-action:focus-visible {
+	outline: 2px solid var(--knomo-image-preview-control-focus);
+	outline-offset: 2px;
 }
 
 .knomo-image-preview-modal .knomo-image-preview-close,

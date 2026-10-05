@@ -26,6 +26,14 @@ export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 
 export const IN_MEMORY_CATALOG_OBSERVATION_LIMIT = 5_000;
 
+export function createCatalogCountAbortError(signal?: AbortSignal): Error {
+	const reason: unknown = signal?.reason;
+	if (reason instanceof Error) return reason;
+	const error = new Error("Memo Catalog count cancelled.");
+	error.name = "AbortError";
+	return error;
+}
+
 export interface CatalogMetaEntry {
 	key: string;
 	value: unknown;
@@ -44,7 +52,7 @@ export interface MemoCatalogStore {
 	listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]>;
 	getObservation(observationKey: string): Promise<CatalogObservation | null>;
 	listFiles(): Promise<CatalogFileRecord[]>;
-	count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult>;
+	count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult>;
 	query(request: CatalogQuery): Promise<CatalogQueryPage>;
 	queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage>;
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]>;
@@ -155,7 +163,8 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		return [...this.files.values()].map(clone).sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 	}
 
-	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
+	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		signal?.throwIfAborted();
 		const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
 		let count = 0;
 		for (const observation of this.observations.values()) {
@@ -425,8 +434,8 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		return this.run((store) => store.getObservation(observationKey));
 	}
 	listFiles(): Promise<CatalogFileRecord[]> { return this.run((store) => store.listFiles()); }
-	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
-		const result = await this.run((store) => store.count(request));
+	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		const result = await this.run((store) => store.count(request, signal), signal);
 		return { ...result, lifecycle: this.getLifecycle() };
 	}
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
@@ -488,7 +497,8 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		return this.run((store) => store.clear(preserveMetaKeys));
 	}
 
-	private async run<T>(operation: (store: MemoCatalogStore) => Promise<T>): Promise<T> {
+	private async run<T>(operation: (store: MemoCatalogStore) => Promise<T>, signal?: AbortSignal): Promise<T> {
+		signal?.throwIfAborted();
 		const active = this.getActive();
 		const lifecycleBefore = active.getLifecycle();
 		try {
@@ -501,6 +511,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 			}
 			return result;
 		} catch (error) {
+			signal?.throwIfAborted();
 			if (active !== this.primary) throw error;
 			await this.activateFallback();
 			return operation(this.fallback);

@@ -45,8 +45,8 @@ export class MemoCatalogService {
 		return this.store.query(request);
 	}
 
-	count(request: Omit<CatalogQuery, "limit" | "cursor">) {
-		return this.store.count(request);
+	count(request: Omit<CatalogQuery, "limit" | "cursor">, signal?: AbortSignal) {
+		return this.store.count(request, signal);
 	}
 
 	getObservation(observationKey: string) {

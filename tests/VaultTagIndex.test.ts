@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { App, CachedMetadata, TFile as ObsidianTFile } from "obsidian";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
-import { buildTagDisplayMap, buildTagDisplayMapCooperatively } from "../src/utils/tags";
+import { buildTagDisplayMapCooperatively } from "../src/utils/tags";
 
 async function fixture(count = 2) {
 	await ensureObsidianStub();
@@ -245,7 +245,8 @@ test("Cooperative tag display aggregation matches frequency, mtime, parent and s
 	}));
 	let yields = 0;
 	const result = await buildTagDisplayMapCooperatively(sources, { yieldControl: async () => { yields++; } });
-	assert.deepEqual(result, buildTagDisplayMap(sources));
+	assert.deepEqual([...result], [["project", "Project"], ["project/sub", "Project/Sub"],
+		["project/other", "PROJECT/Other"], ["alpha", "alpha"]]);
 	assert.ok(yields > 0);
 });
 

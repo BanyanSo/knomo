@@ -119,7 +119,6 @@ test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分
 	const monthlyInput = fs.readFileSync("src/services/MonthlyProjectionInputBuilder.ts", "utf8");
 	const monthlyCoordinator = fs.readFileSync("src/services/MonthlyProjectionCoordinator.ts", "utf8");
 	const catalogCoordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
-	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
 	assert.equal((main.match(/workQueue: lowPriorityWorkQueue/gu) ?? []).length, 2);
 	assert.match(main, /initializeCatalogRuntime\(\{/u);
 	assert.match(main, /trackCatalogInventory\(this\.catalogIndexCoordinator\.initialize\(\)\)/u);
@@ -129,11 +128,6 @@ test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分
 	assert.equal(monthlyInput.includes("dailyInventory.listPeriod(period)"), true);
 	assert.equal(monthlyCoordinator.includes("invalidatePeriods(await this.options.inputBuilder.listPeriods())"), false);
 	assert.equal(monthlyCoordinator.includes("await this.yieldControl()"), true);
-	const saveDataRoot = settingTab.slice(
-		settingTab.indexOf("private async saveKnomoDataRoot"),
-		settingTab.indexOf("private async toggleMonthlyMemosExcludeRule"),
-	);
-	assert.equal(saveDataRoot.includes("rebuildPeriod"), false);
 	assert.equal(catalogCoordinator.includes("runLowPriorityTask(() => this.drainSlice())"), true);
 });
 

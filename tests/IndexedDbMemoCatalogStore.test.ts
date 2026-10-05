@@ -8,6 +8,30 @@ import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/servi
 import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
 
+test("取消计数立即终止游标，主数据库保持可用且不激活 fallback", async t => {
+	const databaseName = uniqueDatabaseName("count-cancel");
+	const primary = createStore(databaseName);
+	const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+	const controller = new AbortController();
+	const openCursor = FakeIndex.prototype.openCursor;
+	let reads = 0;
+	try {
+		await store.open();
+		const path = "Daily/2026-07-01.md";
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 20 }, (_, i) =>
+			makeObservation(path, "2026-07-01", i + 1, "10:30", "memo"))));
+		t.mock.method(FakeIndex.prototype, "openCursor", function(this: IDBIndex, ...args: Parameters<IDBIndex["openCursor"]>) {
+			const request = openCursor.apply(this, args);
+			request.addEventListener("success", () => { if (++reads === 2) controller.abort(); });
+			return request;
+		});
+		await assert.rejects(store.count({}, controller.signal), { name: "AbortError" });
+		assert.equal(reads, 2);
+		assert.equal(store.getLifecycle().persistent, true);
+		assert.equal((await store.query({ limit: 1 })).items.length, 1);
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});
+
 test("浮标游标缺少错误原因时仍以 Error 拒绝查询", async t => {
 	const databaseName = uniqueDatabaseName("buoy-cursor-error");
 	const store = createStore(databaseName);

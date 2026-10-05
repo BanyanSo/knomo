@@ -246,6 +246,8 @@ Supported use cases include:
 - opening a larger preview from the card;
 - switching between images in the preview.
 
+Double-click the image to enlarge it, then drag to pan. On mobile, double-tap or pinch with two fingers; panning a zoomed image does not switch images. Double-click or double-tap again to fit the image, or pinch inward to zoom out. If loading fails, retry directly in the preview.
+
 The goal is not to become an image manager. Knomo only provides compact previews so image-based memos remain easy to browse.
 
 ---

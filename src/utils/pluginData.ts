@@ -20,20 +20,21 @@ export function buildPluginDataWithSettings(savedData: unknown, settings: KnomoS
 	return nextData;
 }
 
-export function extractShuffleDayHistory(savedData: unknown): ShuffleDayHistoryEntry[] {
+export function extractShuffleDayHistory(savedData: unknown, now = new Date()): ShuffleDayHistoryEntry[] {
 	if (!isRecord(savedData) || !Array.isArray(savedData[SHUFFLE_DAY_HISTORY_KEY])) {
 		return [];
 	}
 	return normalizeShuffleDayHistory(savedData[SHUFFLE_DAY_HISTORY_KEY].map(normalizeShuffleDayHistoryEntry)
-		.filter((entry): entry is ShuffleDayHistoryEntry => entry !== null));
+		.filter((entry): entry is ShuffleDayHistoryEntry => entry !== null), now);
 }
 
 export function buildPluginDataWithShuffleDayHistory(
 	savedData: unknown,
 	history: ShuffleDayHistoryEntry[],
+	now = new Date(),
 ): Record<string, unknown> {
 	const nextData = getStructuredPluginData(savedData);
-	nextData[SHUFFLE_DAY_HISTORY_KEY] = normalizeShuffleDayHistory(history);
+	nextData[SHUFFLE_DAY_HISTORY_KEY] = normalizeShuffleDayHistory(history, now);
 	return nextData;
 }
 

@@ -1,5 +1,4 @@
 import { t } from "../i18n";
-import type { ShuffleDayService } from "../services/ShuffleDayService";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import {
@@ -27,12 +26,15 @@ export interface ShuffleDaySnapshot {
 	error: string | null;
 }
 
+export interface ShuffleDayRequest {
+	currentDate: string | null;
+	signal: AbortSignal;
+}
+
 interface ShuffleDayControllerOptions {
-	prepareCatalogData: () => Promise<void>;
-	getMemos: () => MemoRecord[];
-	loadSelectedDate: (date: string) => Promise<MemoRecord[]>;
-	service: ShuffleDayService;
-	selectShuffleDay?: (memos: MemoRecord[]) => Promise<ShuffleDaySelectionResult>;
+	loadSelectedDate: (date: string, signal: AbortSignal) => Promise<MemoRecord[]>;
+	selectShuffleDay: (request: ShuffleDayRequest) => Promise<ShuffleDaySelectionResult>;
+	acceptSelection: (date: string) => Promise<void>;
 	isShuffleDayActive: () => boolean;
 	showNotice: (message: string) => void;
 	requestRender: () => void;
@@ -46,6 +48,7 @@ export class ShuffleDayController {
 	private error: string | null = null;
 	private loading = false;
 	private runId = 0;
+	private request: AbortController | null = null;
 
 	constructor(private readonly options: ShuffleDayControllerOptions) {}
 
@@ -60,13 +63,21 @@ export class ShuffleDayController {
 	}
 
 	clearSelection(): void {
-		this.runId += 1;
-		this.loading = false;
+		this.cancelPending();
 		this.status = "idle";
 		this.selectedDate = null;
 		this.memos = [];
 		this.stats = null;
 		this.error = null;
+	}
+
+	cancelPending(): void {
+		this.cancelInFlightLoad();
+		if (this.status === "loading") this.status = this.selectedDate === null ? "idle" : this.memos.length > 0 ? "ready" : "empty-day-cleared";
+	}
+
+	dispose(): void {
+		this.clearSelection();
 	}
 
 	async reloadSelectedDate(): Promise<boolean> {
@@ -76,6 +87,8 @@ export class ShuffleDayController {
 		const selectedDate = this.selectedDate;
 		const previousStatus = this.status;
 		const runId = ++this.runId;
+		const request = new AbortController();
+		this.request = request;
 		this.loading = true;
 		this.status = "loading";
 		this.error = null;
@@ -83,17 +96,22 @@ export class ShuffleDayController {
 			this.options.requestRender();
 		}
 		try {
-			const memos = await this.options.loadSelectedDate(selectedDate);
-			if (runId !== this.runId || selectedDate !== this.selectedDate) return false;
+			const memos = await this.options.loadSelectedDate(selectedDate, request.signal);
+			if (runId !== this.runId || selectedDate !== this.selectedDate || !this.options.isShuffleDayActive()) {
+				if (runId === this.runId) this.cancelPending();
+				return false;
+			}
 			this.setSelectedMemos(memos.filter((memo) => getMemoLocalDateKey(memo) === selectedDate));
 			return true;
 		} catch (error) {
 			if (runId !== this.runId) return false;
+			if (!this.options.isShuffleDayActive()) { this.cancelPending(); return false; }
 			this.status = previousStatus;
 			this.error = formatServiceError(error, t("shuffleDay.failedDesc"));
 			this.options.showNotice(this.error);
 			return false;
 		} finally {
+			if (this.request === request) this.request = null;
 			if (runId === this.runId) {
 				this.loading = false;
 				if (this.options.isShuffleDayActive()) {
@@ -140,6 +158,8 @@ export class ShuffleDayController {
 			return;
 		}
 		const runId = ++this.runId;
+		const request = new AbortController();
+		this.request = request;
 		const previousStatus = this.status;
 		const hasCommittedSelection = this.selectedDate !== null && this.stats !== null && this.memos.length > 0;
 		this.loading = true;
@@ -154,13 +174,21 @@ export class ShuffleDayController {
 			this.options.requestRender();
 		}
 		try {
-			await this.options.prepareCatalogData();
-			const result = await (this.options.selectShuffleDay?.(this.options.getMemos())
-				?? this.options.service.selectShuffleDay(this.options.getMemos()));
-			if (runId !== this.runId) return;
+			const result = await this.options.selectShuffleDay({ currentDate: this.selectedDate, signal: request.signal });
+			if (runId !== this.runId || !this.options.isShuffleDayActive()) {
+				if (runId === this.runId) this.cancelPending();
+				return;
+			}
 			if (result.status === "ready") {
 				this.selectedDate = result.selectedDate;
 				this.setSelectedMemos(result.memos);
+				if (result.historyUnavailable) this.options.showNotice(t("shuffleDay.historyReadFailed"));
+				void this.options.acceptSelection(result.selectedDate).catch(error => {
+					if (runId !== this.runId || !this.options.isShuffleDayActive()) return;
+					this.options.showNotice(t("error.actionFailedWithReason", {
+						action: t("shuffleDay.historySaveFailed"), message: formatServiceError(error, t("shuffleDay.historySaveFailed")),
+					}));
+				});
 			} else {
 				this.selectedDate = null;
 				this.memos = [];
@@ -169,10 +197,12 @@ export class ShuffleDayController {
 			}
 		} catch (error) {
 			if (runId !== this.runId) return;
+			if (!this.options.isShuffleDayActive()) { this.cancelPending(); return; }
 			this.status = hasCommittedSelection ? previousStatus : "failed";
 			this.error = formatServiceError(error, t("shuffleDay.failedDesc"));
 			this.options.showNotice(this.error);
 		} finally {
+			if (this.request === request) this.request = null;
 			if (runId === this.runId) {
 				this.loading = false;
 				if (this.options.isShuffleDayActive()) {
@@ -198,6 +228,8 @@ export class ShuffleDayController {
 	private cancelInFlightLoad(): void {
 		this.runId += 1;
 		this.loading = false;
+		this.request?.abort();
+		this.request = null;
 	}
 
 	private requestRenderIfActive(): void {

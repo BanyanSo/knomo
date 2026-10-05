@@ -297,6 +297,8 @@ Statistics are designed for review and navigation, not for turning writing into 
 
 Knomo includes lightweight review entry points such as random revisit and date-based review. They are designed to help old fragments meet the present again without requiring AI or external services.
 
+Random revisit shows up to 10 eligible memos per group, including image-only and link-only notes. During the current view session, it favors memos outside the last three groups. With at least 20 stable candidates, consecutive full groups do not overlap; smaller pools repeat only as needed. Showing a card does not mark it as reviewed. Opening it successfully or explicitly marking it does, which lowers its selection weight for the next three calendar days.
+
 A memo does not need to become useful immediately. Sometimes its value appears when you encounter it again in a different context.
 
 ---
@@ -304,6 +306,8 @@ A memo does not need to become useful immediately. Sometimes its value appears w
 ### Shuffle day
 
 Shuffle day brings back one complete day from at least seven days ago and displays that day's memos in chronological order. It favors varied dates and avoids immediately repeating recently shown days when possible.
+
+It first chooses among available time ranges, then chooses a day within that range. Days with more content receive a modest preference. Returning to either review view keeps its current results; use Shuffle to choose again. If review history cannot be saved, the selected day's content remains available and Knomo shows a notice.
 
 Alongside the memo cards, Knomo summarizes the day's memo count, word count, tags, images, and links. Selection happens entirely from your local memo index, without AI or external services.
 

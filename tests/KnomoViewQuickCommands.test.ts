@@ -23,6 +23,8 @@ async function harness() {
 		draftContent: "unfinished draft", suspendedCreate: { content: "suspended" },
 		viewStateController: state, mobileSearchController: { isOpen: false }, popupState: { scopeMenuOpen: false },
 		settingsService: { getSettings: () => ({ timeBuoyEnabled: true }) },
+		randomReunionController: { cancelPending: () => {} },
+		shuffleDayController: { cancelPending: () => {} },
 		mobileComposerController: {
 			clearFocus: () => { events.push("clear-focus"); },
 			prepareDesktopOpen: () => {},

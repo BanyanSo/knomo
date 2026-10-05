@@ -280,10 +280,16 @@ test("缓存候选池应用设备本地的最新 review 权重", async () => {
 	const unreviewed = makeObservation("Daily/2026-08-20.md", "2026-08-20", 1, "unreviewed random candidate");
 	const recentlyReviewed = makeObservation("Daily/2026-08-21.md", "2026-08-21", 1, "recently reviewed candidate");
 	await seedCatalogFiles(catalog, store, [unreviewed, recentlyReviewed]);
+	const { LocalMemoReviewStore } = await import("../src/services/LocalMemoReviewStore");
+	const { calculateRandomReunionWeight } = await import("../src/utils/randomReunion");
+	let saved: unknown;
+	const storage = { loadLocalStorage: () => saved, saveLocalStorage: (_key: string, value: unknown) => { saved = value; } };
 	const service = new CatalogReadService({
 		catalog,
+		reviews: new LocalMemoReviewStore(storage),
 		now: () => new Date(2026, 7, 26, 12, 0, 0),
-		random: () => 0.5,
+		// 这个随机点能区分错误的权重 1 和近期冷却权重 0.01。
+		random: () => 0.1,
 	});
 
 	assert.deepEqual(
@@ -291,6 +297,9 @@ test("缓存候选池应用设备本地的最新 review 权重", async () => {
 		["recently reviewed candidate"],
 	);
 	await service.recordReview((await service.query({ limit: 10 })).items.find((item) => item.content === recentlyReviewed.content)!);
+	const reviewedState = Object.values(new LocalMemoReviewStore(storage).read())[0];
+	assert.ok(reviewedState?.lastReviewedAt?.endsWith("Z"));
+	assert.equal(calculateRandomReunionWeight({ id: "reviewed", createdAt: `${recentlyReviewed.logicalDate}T12:34`, tags: [], dailyRef: { path: recentlyReviewed.sourcePath, heading: "Memos", lineNumberHint: 1 } }, reviewedState, new Date(2026, 7, 26, 12)), 0.01);
 	const items = await service.getRandomReunionItems(1);
 
 	assert.deepEqual(items.map((item) => item.contentSnapshot), ["unreviewed random candidate"]);
@@ -356,7 +365,7 @@ test("随机重逢按 Catalog revision 复用多页候选池", async () => {
 	assert.equal((await service.getRandomReunionItems(5)).length, 5);
 
 	assert.ok(firstLoadQueryCalls > 2);
-	assert.equal(queryCalls, firstLoadQueryCalls + 1);
+	assert.equal(queryCalls, firstLoadQueryCalls);
 });
 
 test("P8 重逢热缓存只读取选中正文，跨日重新纳入昨天的候选", async () => {
@@ -658,6 +667,111 @@ test("Daily 混合时间精度、重复 occurrence、分页与版本刷新贯穿
 	assert.ok(refreshed.items.every((item) => !items.some((old) => old.key === item.key)));
 	assert.deepEqual(refreshed.items.map((item) => item.createdAt), items.map((item) => item.createdAt));
 	assert.equal(items[0]?.observationHandle.sourceRevision, (await parse(text)).sourceRevision);
+});
+
+test("共享重逢冷池取消一个消费者不影响另一个，最后取消后停止分页且不发布池", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	for (const survives of [true, false]) {
+		const store = new InMemoryMemoCatalogStore();
+		const catalog = new MemoCatalogService(store);
+		await seedCatalog(catalog, store, Array.from({ length: 350 }, (_, i) => makeObservation("Daily/2026-08-01.md", "2026-08-01", i + 1, `long enough ${i}`)));
+		const query = catalog.query.bind(catalog);
+		let calls = 0;
+		let release: () => void = () => {};
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		catalog.query = async request => { calls++; if (calls === 1) await gate; return query(request); };
+		const service = new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26) });
+		const first = new AbortController();
+		const work = service.getRandomReunionItems(10, { signal: first.signal });
+		const rejected = assert.rejects(work, { name: "AbortError" });
+		const survivor = survives ? service.getRandomReunionItems(10) : null;
+		await waitImmediate();
+		assert.equal(calls, 1);
+		first.abort();
+		await rejected;
+		release();
+		if (survivor !== null) {
+			assert.equal((await survivor).length, 10);
+			assert.equal(calls, 3);
+		} else {
+			await waitImmediate();
+			await waitImmediate();
+			assert.equal(calls, 1);
+			assert.equal((await service.getRandomReunionItems(10)).length, 10);
+			assert.equal(calls, 4);
+		}
+		store.close();
+	}
+});
+
+test("重逢持续失效最多三次完整尝试；覆盖不完整不能当作空库", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, []);
+	const query = catalog.query.bind(catalog);
+	let calls = 0;
+	catalog.query = async request => { calls++; return { ...await query(request), invalidated: true }; };
+	const service = new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26) });
+	await assert.rejects(service.getRandomReunionItems(10), /try again later/);
+	assert.equal(calls, 3);
+	catalog.query = query;
+	await store.setCoverage({ kind: "partial", coveredFromDate: null, coveredFileCount: 0, totalFileCount: 1, pendingFileCount: 1 });
+	await assert.rejects(service.getRandomReunionItems(10), /complete Catalog coverage/);
+	store.close();
+});
+
+test("真实 Daily 元数据的纯图片、Wiki 与 Markdown 链接进入重逢冷池", async () => {
+	await ensureObsidianStub();
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { createHash } = await import("node:crypto");
+	const parser = new DiaryMemoParser(async bytes => createHash("sha256").update(bytes).digest("hex"));
+	const { observations } = await parser.parse({ sourcePath: "Daily/2026-08-01.md", logicalDate: "2026-08-01", bytes: Buffer.from("## Memos\n- 08:00 ![[photo.png]]\n- 09:00 [[a]]\n- 10:00 [a](https://example.com)\n- 11:00 short\n") });
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, observations);
+	const items = await new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26) }).getRandomReunionItems(10);
+	assert.equal(items.length, 3);
+	assert.deepEqual(new Set(items.map(item => item.contentSnapshot)), new Set(["![[photo.png]]", "[[a]]", "[a](https://example.com)"]));
+	store.close();
+});
+
+test("漫游日期分页取全且保留原时间精度与同文 occurrence，跨版本不得混合", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService, CatalogDiscoveryInvalidatedError } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const observations = Array.from({ length: 175 }, (_, i) => ({ ...makeObservation("Daily/2026-08-01.md", "2026-08-01", i + 1, "same"), time: i % 2 === 0 ? "09:00" : "09:00:01" }));
+	await seedCatalog(catalog, store, observations);
+	const service = new CatalogReadService({ catalog, now: () => new Date(2026, 9, 5) });
+	const snapshot = await service.readDailyAggregateSnapshot();
+	const memos = await service.listMemoViewsForDate("2026-08-01", { snapshot });
+	assert.equal(memos.length, 175);
+	assert.equal(new Set(memos.map(memo => memo.id)).size, 175);
+	assert.equal(memos.filter(memo => memo.createdAt.endsWith("T09:00")).length, 88);
+	const original = service.query.bind(service);
+	let changed = false;
+	service.query = async request => {
+		const page = await original(request);
+		if (!changed) { changed = true; await seedCatalog(catalog, store, observations.map(item => ({ ...item, sourceRevision: "b".repeat(64) }))); }
+		return page;
+	};
+	await assert.rejects(service.listMemoViewsForDate("2026-08-01", { snapshot }), CatalogDiscoveryInvalidatedError);
+	const fresh = await service.listMemoViewsForDate("2026-08-01");
+	assert.equal(fresh.length, 175);
+	assert.ok(fresh.every(memo => !memos.some(old => old.id === memo.id)));
+	store.close();
 });
 
 async function seedCatalog(

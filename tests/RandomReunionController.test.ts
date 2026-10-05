@@ -37,7 +37,7 @@ test("refreshes random reunion once while loading and preserves render transitio
 	assert.equal(controller.getSnapshot().status, "loading-candidates");
 	assert.equal(controller.getSnapshot().memos, null);
 	assert.equal(randomCalls, 1);
-	assert.equal(requestedCount, 5);
+	assert.equal(requestedCount, 10);
 	assert.equal(renderCalls, 1);
 
 	resolveRandom(randomMemos);
@@ -165,7 +165,7 @@ test("clears cached random reunion memos before the next Catalog refresh", async
 		loadRandomReunionMemos: async () => [firstMemo, secondMemo],
 		openRandomReunionMemo: async () => {},
 		markRandomReunionReviewed: async () => {},
-		isRandomActive: () => false,
+		isRandomActive: () => true,
 		showNotice: () => {},
 		requestRender: () => {},
 	});
@@ -175,6 +175,48 @@ test("clears cached random reunion memos before the next Catalog refresh", async
 	controller.clearMemos();
 	assert.equal(controller.getSnapshot().memos, null);
 	assert.equal(controller.getSnapshot().status, "idle");
+});
+
+test("展示历史只收录已提交的三批，失败、取消、返回和列表清理不记录回看", async () => {
+	const { RandomReunionController } = await loadController();
+	const histories: string[][][] = [];
+	let reviewCalls = 0;
+	let active = true;
+	let mode: "ready" | "failed" | "pending" = "ready";
+	const pending = createDeferred<MemoViewItem[]>();
+	let signal: AbortSignal | undefined;
+	const controller = new RandomReunionController({
+		loadRandomReunionMemos: async (_count, request) => {
+			histories.push(request.shownBatches.map(batch => [...batch]));
+			signal = request.signal;
+			if (mode === "failed") throw new Error("failed");
+			if (mode === "pending") return pending.promise;
+			return [makeMemo(`batch-${histories.length}`)];
+		},
+		openRandomReunionMemo: async () => {}, markRandomReunionReviewed: async () => { reviewCalls++; },
+		isRandomActive: () => active, showNotice: () => {}, requestRender: () => {},
+	});
+	for (let i = 0; i < 4; i++) await controller.refresh();
+	assert.deepEqual(histories[3], [["batch-1"], ["batch-2"], ["batch-3"]]);
+	mode = "failed";
+	await controller.refresh();
+	mode = "pending";
+	const loading = controller.refresh();
+	active = false;
+	controller.cancelPending();
+	assert.equal(signal?.aborted, true);
+	pending.resolve([makeMemo("late")]);
+	await loading;
+	assert.deepEqual(controller.getSnapshot().memos?.map(memo => memo.id), ["batch-4"]);
+	active = true;
+	mode = "ready";
+	controller.clearMemos();
+	await controller.refresh();
+	assert.deepEqual(histories.at(-1), [["batch-2"], ["batch-3"], ["batch-4"]]);
+	assert.equal(reviewCalls, 0);
+	controller.dispose();
+	await controller.refresh();
+	assert.deepEqual(histories.at(-1), []);
 });
 
 test("clearing random reunion invalidates an in-flight result", async () => {

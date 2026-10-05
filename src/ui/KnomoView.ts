@@ -519,6 +519,8 @@ export class KnomoView extends ItemView {
 
 	private set activeNav(nav: SidebarNav) {
 		this.viewStateController.activeNav = nav;
+		if (nav !== "random") this.randomReunionController?.cancelPending();
+		if (nav !== "shuffleDay") this.shuffleDayController?.cancelPending();
 	}
 
 	private get mobileDrawerOpen(): boolean {
@@ -841,7 +843,7 @@ export class KnomoView extends ItemView {
 			},
 		});
 		this.randomReunionController = new RandomReunionController({
-			loadRandomReunionMemos: (count) => this.catalogReadService.getRandomReunionItems(count),
+			loadRandomReunionMemos: (count, request) => this.catalogReadService.getRandomReunionItems(count, request),
 			openRandomReunionMemo: async (memo) => {
 				const file = this.app.vault.getAbstractFileByPath(memo.dailyRef.path);
 				if (!(file instanceof TFile)) throw new Error(t("error.dailyNoteMissing"));
@@ -852,20 +854,15 @@ export class KnomoView extends ItemView {
 				if (memo === null || !isCatalogMemoView(memo)) throw new Error("Random reunion observation is unavailable.");
 				await this.memoCommandService.recordReview(await this.resolveCatalogMemo(memo));
 			},
-			isRandomActive: () => this.activeNav === "random",
+			isRandomActive: () => !this.trashViewClosed && this.activeNav === "random",
 			showNotice: (message) => new Notice(message),
 			requestRender: () => this.renderUiState(),
 		});
 		this.shuffleDayController = new ShuffleDayController({
-			prepareCatalogData: async () => undefined,
-			getMemos: () => this.memos,
-			loadSelectedDate: (date) => this.catalogReadService.listMemoViewsForDate(date),
-			service: this.shuffleDayService,
-			selectShuffleDay: async () => this.shuffleDayService.selectCatalogShuffleDay(
-					await this.getCatalogReadService().listDailyAggregates(),
-					(date) => this.catalogReadService.listMemoViewsForDate(date),
-				),
-			isShuffleDayActive: () => this.activeNav === "shuffleDay",
+			loadSelectedDate: (date, signal) => this.catalogReadService.listMemoViewsForDate(date, { signal }),
+			selectShuffleDay: (request) => this.shuffleDayService.selectCatalogShuffleDay(this.getCatalogReadService(), request),
+			acceptSelection: (date) => this.shuffleDayService.acceptSelection(date),
+			isShuffleDayActive: () => !this.trashViewClosed && this.activeNav === "shuffleDay",
 			showNotice: (message) => new Notice(message),
 			requestRender: () => this.renderUiState(),
 		});
@@ -1228,6 +1225,8 @@ export class KnomoView extends ItemView {
 		this.recentPreferenceUnsubscribe?.();
 		this.recentPreferenceUnsubscribe = null;
 		this.trashMemoController.dispose();
+		this.randomReunionController.dispose();
+		this.shuffleDayController.dispose();
 		if (this.trashCountRefreshTimer !== null) {
 			this.containerEl.win.clearTimeout(this.trashCountRefreshTimer);
 			this.trashCountRefreshTimer = null;
@@ -4256,7 +4255,7 @@ export class KnomoView extends ItemView {
 		this.desktopSearchOpen = false;
 		this.compactSearchOpen = false;
 		this.activeMenuMemoId = null;
-		this.randomReunionController.clearMemos();
+		this.randomReunionController.cancelPending();
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
 	}
@@ -4684,6 +4683,8 @@ export class KnomoView extends ItemView {
 
 	private applyViewStateTransitionEffects(effects: KnomoViewStateTransitionEffects): void {
 		this.cancelPendingQuickCommand();
+		if (this.activeNav !== "random") this.randomReunionController.cancelPending();
+		if (this.activeNav !== "shuffleDay") this.shuffleDayController.cancelPending();
 		if (effects.closeScopeMenu === true) {
 			this.scopeMenuOpen = false;
 		}

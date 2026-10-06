@@ -156,3 +156,95 @@ test("attention refresh preserves the active tab and its input", async () => {
 	assert.equal(container.querySelector(".knomo-settings-attention")?.hasAttribute("hidden"), true);
 	dom.window.close();
 });
+
+test("closing settings saves automatic drafts while explicit-apply fields remain unapplied", async () => {
+	await ensureObsidianStub();
+	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
+	const dom = setupDom();
+	const persisted = { dailyHeading: "Memos", monthlyDateHeadingFormat: "## DD" };
+	const updates: Partial<typeof persisted>[] = [];
+	const tab = Object.create(KnomoSettingTab.prototype) as InstanceType<typeof KnomoSettingTab>;
+	Object.assign(tab, {
+		containerEl: dom.window.document.getElementById("settings"), settingsVisible: true,
+		pendingSettingDrafts: new Map(), latestSettingNoticeValues: new Map(), delayedSettingNotices: new Map(),
+		settingsService: {
+			getSettings: () => ({ ...persisted }), validateDailyHeading: () => true, validateMarkdownHeading: () => true,
+			updateSettings: async (patch: Partial<typeof persisted>) => { updates.push(patch); Object.assign(persisted, patch); },
+		},
+		refreshCurrentConfiguration: async () => {},
+	});
+	const internal = tab as unknown as {
+		pendingSettingDrafts: Map<string, string>;
+		updateTextSettingDraft(key: string, value: string, validate: (value: string) => boolean, message: string): void;
+		commitAllPendingSettingDrafts(notice: boolean): Promise<void>;
+	};
+	internal.updateTextSettingDraft("dailyHeading", "Captured", () => true, "");
+	internal.updateTextSettingDraft("monthlyDateHeadingFormat", "## YYYY-MM-DD", () => true, "");
+	internal.pendingSettingDrafts.set("monthlyMemoFileFormat", "pending-explicit-format");
+	let completion: Promise<void> | undefined;
+	const commit = internal.commitAllPendingSettingDrafts.bind(internal);
+	internal.commitAllPendingSettingDrafts = notice => completion = commit(notice);
+	try {
+		tab.hide();
+		assert.ok(completion);
+		await completion;
+		assert.deepEqual(persisted, { dailyHeading: "Captured", monthlyDateHeadingFormat: "## YYYY-MM-DD" });
+		assert.deepEqual(updates, [{ dailyHeading: "Captured" }, { monthlyDateHeadingFormat: "## YYYY-MM-DD" }]);
+		assert.equal(internal.pendingSettingDrafts.size, 0);
+	} finally { dom.window.close(); }
+});
+
+test("a close batch cannot overwrite a newer setting after reopening during a delayed save", async () => {
+	await ensureObsidianStub();
+	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
+	const dom = setupDom();
+	const persisted = { dailyHeading: "Memos", monthlyDateHeadingFormat: "## DD" };
+	const updates: Partial<typeof persisted>[] = [];
+	let releaseDaily: (() => void) | undefined;
+	const dailyGate = new Promise<void>(resolve => { releaseDaily = resolve; });
+	let writes = Promise.resolve();
+	const tab = Object.create(KnomoSettingTab.prototype) as InstanceType<typeof KnomoSettingTab>;
+	Object.assign(tab, {
+		containerEl: dom.window.document.getElementById("settings"), settingsVisible: true,
+		pendingSettingDrafts: new Map(), latestSettingNoticeValues: new Map(), delayedSettingNotices: new Map(),
+		settingsService: {
+			getSettings: () => ({ ...persisted }), validateDailyHeading: () => true, validateMarkdownHeading: () => true,
+			updateSettings: (patch: Partial<typeof persisted>) => {
+				writes = writes.then(async () => {
+					if (patch.dailyHeading !== undefined) await dailyGate;
+					updates.push(patch); Object.assign(persisted, patch);
+				});
+				return writes;
+			},
+		},
+		refreshCurrentConfiguration: async () => {},
+	});
+	const internal = tab as unknown as {
+		updateTextSettingDraft(key: string, value: string, validate: (value: string) => boolean, message: string): void;
+		commitAllPendingSettingDrafts(notice: boolean): Promise<void>;
+		commitMonthlyDateHeadingFormatDraft(): Promise<void>;
+	};
+	internal.updateTextSettingDraft("dailyHeading", "Captured", () => true, "");
+	internal.updateTextSettingDraft("monthlyDateHeadingFormat", "## MMMM DD", () => true, "");
+	let completion: Promise<void> | undefined;
+	const commit = internal.commitAllPendingSettingDrafts.bind(internal);
+	internal.commitAllPendingSettingDrafts = notice => completion = commit(notice);
+	try {
+		tab.hide();
+		assert.ok(completion);
+		Object.assign(tab, { settingsVisible: true });
+		const input = dom.window.document.createElement("input");
+		input.value = "## YYYY-MM-DD";
+		dom.window.document.getElementById("settings")!.appendChild(input);
+		input.focus();
+		internal.updateTextSettingDraft("monthlyDateHeadingFormat", input.value, () => true, "");
+		const newest = internal.commitMonthlyDateHeadingFormatDraft();
+		assert.ok(releaseDaily);
+		releaseDaily();
+		await Promise.all([completion, newest]);
+		assert.equal(persisted.monthlyDateHeadingFormat, "## YYYY-MM-DD");
+		assert.deepEqual(updates, [{ dailyHeading: "Captured" }, { monthlyDateHeadingFormat: "## YYYY-MM-DD" }]);
+		assert.equal(input.value, "## YYYY-MM-DD");
+		assert.equal(dom.window.document.activeElement, input);
+	} finally { releaseDaily?.(); dom.window.close(); }
+});

@@ -1,6 +1,6 @@
 import { normalizeComposerToolbar, type ComposerToolbarPreferences } from "../settings/composerToolbar";
 import { isCjkMemoContent } from "./KnomoCardMetadata";
-import { setIcon } from "obsidian";
+import { requireApiVersion, setIcon } from "obsidian";
 
 import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
@@ -48,7 +48,7 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 	const inputArea = composerEl.createDiv({ cls: "knomo-composer-input-area" });
 	const composerInputLabelId = options.createHiddenText(inputArea, "composer-input-label", t("composer.inputLabel"));
 	const inputEl = options.createEditor?.(inputArea, options.draftContent, composerInputLabelId, t("composer.placeholder"))
-		?? new ComposerEditor(inputArea, options.draftContent, composerInputLabelId, t("composer.placeholder")).input;
+		?? new ComposerEditor(inputArea, options.draftContent, composerInputLabelId, t("composer.placeholder"), requireApiVersion("1.14.0")).input;
 	inputEl.disabled = !options.dailyEnabled;
 
 	const referencePreviewEl = inputArea.createDiv({ cls: "knomo-reference-preview" });

@@ -15,12 +15,13 @@ import { NativeImagePickerController } from "../src/ui/NativeImagePickerControll
 import { composerImageLinks, setComposerImageLinks } from "../src/ui/ComposerImageState";
 import { AttachmentService, type ImageAttachment } from "../src/services/AttachmentService";
 
-function environment(value: string) {
+function environment(value: string, colorHighlights = false, setupWindow?: (win: JSDOM["window"]) => void) {
 	const errors: Error[] = [];
 	const virtualConsole = new VirtualConsole();
 	virtualConsole.on("jsdomError", error => errors.push(error));
 	const dom = new JSDOM("<!doctype html><body><div id='host'></div></body>", { pretendToBeVisual: true, virtualConsole });
 	const win = dom.window;
+	setupWindow?.(win);
 	Object.assign(win.Node.prototype, {
 		createEl(this: HTMLElement, tag: string) { return this.appendChild(this.ownerDocument.createElement(tag)); },
 		createSpan(this: HTMLElement) { return this.createEl("span"); },
@@ -29,12 +30,12 @@ function environment(value: string) {
 	win.Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 	win.Range.prototype.getBoundingClientRect = () => new win.DOMRect();
 	const previous = new Map<string, PropertyDescriptor | undefined>();
-	for (const name of ["createSpan", "window", "document", "MutationObserver", "Node", "HTMLElement", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
+	for (const name of ["createSpan", "window", "document", "MutationObserver", "Node", "HTMLElement", "Window", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
 		previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
 		const source = name === "createSpan" ? () => win.document.createElement("span") : name === "window" ? win : (win as unknown as Record<string, unknown>)[name];
-		Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: typeof source === "function" && name !== "Node" && name !== "HTMLElement" && name !== "MutationObserver" ? source.bind(win) : source });
+		Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: typeof source === "function" && name !== "Node" && name !== "HTMLElement" && name !== "MutationObserver" && name !== "Window" ? source.bind(win) : source });
 	}
-	const editor = new ComposerEditor(win.document.getElementById("host")!, value, "label", "Write here");
+	const editor = new ComposerEditor(win.document.getElementById("host")!, value, "label", "Write here", colorHighlights);
 	return { editor, win, close() {
 		editor.destroy(); dom.window.close();
 		for (const [name, descriptor] of previous) {
@@ -1971,4 +1972,145 @@ test("Tag Suggest cold readiness renders current candidates through keyup and ca
 			}
 		});
 	}
+});
+
+test("colored highlight decorations follow host capability and leave source, selection and history intact", () => {
+	for (const enabled of [false, true]) {
+		for (const [prefix, color] of [["🔴", "red"], ["🟥", "red"], ["🟠", "orange"], ["🟡", "yellow"], ["🟢", "green"], ["🔵", "blue"], ["🟣", "purple"]]) {
+			const body = prefix + " 正文😀";
+			const value = "==" + body + "==\nend";
+			const { editor, close } = environment(value, enabled);
+			try {
+				const mark = editor.input.querySelector("mark")!;
+				assert.equal(mark.textContent, enabled ? " 正文😀" : body);
+				assert.equal(mark.getAttribute("data-highlight"), enabled ? color : null);
+				assert.equal(editor.input.value, value);
+				assert.deepEqual([editor.input.selectionStart, editor.input.selectionEnd], [value.length, value.length]);
+				assert.equal(undoDepth(editor.view.state), 0);
+				editor.input.setSelectionRange(3, 3);
+				assert.equal(editor.input.querySelector("mark"), null);
+				assert.ok(editor.input.textContent?.includes("==" + body + "=="));
+				editor.input.setSelectionRange(value.length, value.length);
+				assert.equal(editor.input.querySelector("mark")?.getAttribute("data-highlight"), enabled ? color : null);
+				assert.equal(undoDepth(editor.view.state), 0);
+			} finally { close(); }
+		}
+	}
+});
+
+test("colored highlight toggles preserve nested body and raw emoji through undo and redo", () => {
+	const value = "==🟣 **正文😀**==\nend";
+	const { editor, close } = environment(value, true);
+	try {
+		assert.equal(editor.input.querySelector("mark")?.textContent, " 正文😀");
+		assert.equal(editor.input.querySelector("strong")?.textContent, "正文😀");
+		editor.input.setSelectionRange(2, value.indexOf("\n") - 2);
+		const result = runComposerCommand(value, editor.input.selectionStart, editor.input.selectionEnd, "highlight");
+		assert.equal(result.type, "changed");
+		if (result.type !== "changed") throw new Error("Expected highlight removal");
+		editor.apply(result.edit);
+		assert.equal(editor.input.value, "🟣 **正文😀**\nend");
+		undo(editor.view);
+		assert.equal(editor.input.value, value);
+		editor.input.setSelectionRange(value.length, value.length);
+		assert.equal(editor.input.querySelector("mark")?.getAttribute("data-highlight"), "purple");
+		redo(editor.view);
+		assert.equal(editor.input.value, "🟣 **正文😀**\nend");
+	} finally { close(); }
+});
+
+test("colored highlight prefixes remain correct after IME edits before and inside the prefix", async () => {
+	const initial = "start\n==🔴 正文==\nend";
+	const { editor, win, close } = environment(initial, true);
+	try {
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		for (const text of ["n", "ni", "你"]) {
+			editor.view.dispatch({ changes: { from: 0, to: editor.input.value.indexOf("\n"), insert: text },
+				selection: { anchor: text.length }, annotations: Transaction.userEvent.of("input.type.compose") });
+			assert.equal(editor.input.querySelector("mark")?.getAttribute("data-highlight"), "red");
+			assert.equal(editor.input.querySelector("mark")?.textContent, " 正文");
+		}
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { data: "你" }));
+		await new Promise(resolve => setTimeout(resolve, 80));
+		const prefixFrom = editor.input.value.indexOf("🔴");
+		editor.input.setSelectionRange(prefixFrom, prefixFrom + "🔴".length);
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionstart"));
+		editor.view.dispatch({ changes: { from: prefixFrom, to: prefixFrom + "🔴".length, insert: "🟦" },
+			selection: { anchor: prefixFrom + "🟦".length }, annotations: Transaction.userEvent.of("input.type.compose") });
+		editor.input.dispatchEvent(new win.CompositionEvent("compositionend", { data: "🟦" }));
+		await new Promise(resolve => setTimeout(resolve, 80));
+		editor.input.setSelectionRange(editor.input.value.length, editor.input.value.length);
+		assert.equal(editor.input.value, "你\n==🟦 正文==\nend");
+		assert.equal(editor.input.querySelector("mark")?.getAttribute("data-highlight"), "blue");
+		assert.equal(editor.input.querySelector("mark")?.textContent, " 正文");
+	} finally { close(); }
+});
+
+test("empty colored highlights and ordinary highlights preserve their source on reset", () => {
+	for (const value of ["==🔴==\nend", "==🔵\uFE0F 正文==\nend", "== 🔴 普通==\nend", "==普通==\nend"]) {
+		const { editor, close } = environment(value, true);
+		try {
+			assert.equal(editor.input.value, value);
+			assert.equal(undoDepth(editor.view.state), 0);
+			editor.reset(value);
+			assert.equal(editor.input.value, value);
+			assert.equal(undoDepth(editor.view.state), 0);
+		} finally { close(); }
+	}
+});
+
+test("content resize measurement preserves editing state and stops after destruction", t => {
+	let notify: ResizeObserverCallback | undefined;
+	let observer: ResizeObserver | undefined;
+	const targets: Element[] = [];
+	let disconnected = false;
+	class ContentResizeObserver implements ResizeObserver {
+		constructor(callback: ResizeObserverCallback) { notify = callback; observer = this; }
+		observe(target: Element): void { targets.push(target); }
+		unobserve(): void {}
+		disconnect(): void { disconnected = true; }
+	}
+	const { editor, close } = environment("==🔴 正文==\nend", true, win => {
+		Object.defineProperty(win, "ResizeObserver", { value: ContentResizeObserver, configurable: true });
+	});
+	const measure = t.mock.method(editor.view, "requestMeasure", () => {});
+	try {
+		const state = editor.view.state;
+		const capture = editor.capture();
+		assert.deepEqual(targets, [editor.input]);
+		assert.ok(notify);
+		assert.ok(observer);
+		notify([], observer);
+		assert.equal(measure.mock.callCount(), 1);
+		assert.equal(editor.view.state, state);
+		assert.equal(capture.valid(), true);
+		assert.equal(undoDepth(editor.view.state), 0);
+		editor.destroy();
+		assert.equal(disconnected, true);
+		const measurementsAtDestroy = measure.mock.callCount();
+		notify([], observer);
+		assert.equal(measure.mock.callCount(), measurementsAtDestroy);
+		assert.equal(capture.valid(), false);
+	} finally { measure.mock.restore(); close(); }
+});
+
+test("clicking the blank scroll area starts input at the end without changing the draft or history", () => {
+	const value = "正文😀";
+	const { editor, win, close } = environment(value, true);
+	try {
+		editor.input.setSelectionRange(0, 0);
+		editor.view.scrollDOM.dispatchEvent(new win.MouseEvent("click", { bubbles: true, button: 0 }));
+		assert.equal(win.document.activeElement === editor.input, true);
+		assert.equal(editor.input.value, value);
+		assert.deepEqual([editor.input.selectionStart, editor.input.selectionEnd], [value.length, value.length]);
+		assert.equal(undoDepth(editor.view.state), 0);
+		editor.input.setSelectionRange(0, 0);
+		editor.view.scrollDOM.dispatchEvent(new win.MouseEvent("click", { bubbles: true, button: 0, shiftKey: true }));
+		assert.deepEqual([editor.input.selectionStart, editor.input.selectionEnd], [0, value.length]);
+		assert.equal(editor.input.value, value);
+		editor.input.blur();
+		editor.input.disabled = true;
+		editor.view.scrollDOM.dispatchEvent(new win.MouseEvent("click", { bubbles: true, button: 0 }));
+		assert.equal(win.document.activeElement === editor.input, false);
+	} finally { close(); }
 });

@@ -116,6 +116,8 @@ Commands reuse an open Knomo view or open one when needed. **New memo** keeps th
 
 The Composer displays Markdown formatting while revealing the relevant source as you edit. Use it to write lists, links, quotes, and code, or toggle supported checkboxes in the draft with undo and redo support.
 
+On Obsidian 1.14+, the Composer displays six highlight colors from a leading 🔴, 🟠, 🟡, 🟢, 🔵, or 🟣 inside `==...==`. Editing reveals the complete source; removing highlight formatting preserves the original body, including the emoji. Older hosts retain the ordinary highlight display. Card text, input, and supporting UI text use the host's preferred sizes where available, including system text scaling on Obsidian 1.14 mobile.
+
 Within the same open Knomo view, closing and reopening the Composer keeps your draft. Editing an existing memo temporarily sets aside the new-memo draft and restores its text, references, selection, and scroll position after you save or cancel the edit. A failed save keeps your editing content available. Drafts are not guaranteed to survive closing the view or restarting Obsidian.
 
 ---
@@ -702,6 +704,8 @@ Yes. Knomo is designed to keep content readable in Markdown. If you edit files m
 ---
 
 ## Development Verification
+
+The Obsidian 1.14.4 API types are pinned to [an official repository commit](https://github.com/obsidianmd/obsidian-api/commit/9abd9605ce081383674aae1ed111c456edde0688), because that version was not available from npm when the adaptation was implemented. `package-lock.json` records the archive integrity and matching CodeMirror peers. These are development dependencies; supported-host compatibility still starts at Obsidian 1.11.0.
 
 Choose verification by the change's scope and risk. Documentation-only work needs content, reference and diff checks. For a low-risk local change, run the relevant tests (multiple files may be passed together):
 

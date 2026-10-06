@@ -145,3 +145,15 @@ test("empty list conversions replace the parsed marker and remain idempotent", (
 		}
 	}
 });
+
+test("removing colored highlights preserves the full raw body and exact UTF-16 selection", () => {
+	for (const prefix of ["🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "🟥"]) {
+		const body = prefix + " **正文😀**";
+		const value = "==" + body + "==";
+		for (const [from, to] of [[0, value.length], [2, value.length - 2], [value.length - 2, 2]]) {
+			const result = apply(value, from, to, "highlight");
+			assert.equal(result.value, body);
+			assert.deepEqual([result.anchor, result.head], from <= to ? [0, body.length] : [body.length, 0]);
+		}
+	}
+});

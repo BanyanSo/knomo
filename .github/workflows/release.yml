@@ -37,12 +37,6 @@ jobs:
       - name: Run all product and tooling tests
         run: npm run test:all
 
-      - name: Prepare release assets
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp main.js manifest.json styles.css dist/
-
       - name: Verify release assets
         shell: bash
         run: |

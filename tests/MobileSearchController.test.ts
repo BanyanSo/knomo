@@ -60,6 +60,109 @@ test("mobile search summary uses the complete remote match count before later pa
 	assert.equal(root.find(".knomo-list-summary")?.getText(), "Found 90 Memos for “project”");
 });
 
+test("总数晚到只更新摘要，保留卡片、滚动和正在加载的图片", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let total: number | null = null, clears = 0;
+	const { controller, root, state } = createControllerHarness(MobileSearchController,
+		[makeMemo("one", "memo"), makeMemo("two", "memo")], () => total, undefined, {
+			batchSize: 2, clearImages: () => { clears++; }, clearMarkdown: () => { clears++; },
+		});
+	controller.searchQuery = "memo";
+	controller.openPage({ focusInput: false });
+	const card = root.find(".knomo-card");
+	const before = clears;
+	const results = controller.results as unknown as TestElement;
+	results.scrollTop = 128;
+	total = 90;
+	controller.renderResults("content-change", false, true);
+	assert.equal(root.find(".knomo-card"), card);
+	assert.deepEqual(state.renderedMemoIds, ["one", "two"]);
+	assert.equal(clears, before);
+	assert.equal(results.scrollTop, 128);
+	assert.equal(root.find(".knomo-list-summary")?.getText(), "Found 90 Memos for “memo”");
+	const frames = new Map<number, () => void>();
+	let frameId = 0;
+	total = null;
+	const chunked = createControllerHarness(MobileSearchController,
+		Array.from({ length: 14 }, (_, index) => makeMemo(String(index), "memo")), () => total, undefined, {
+			batchSize: 14, hasRemoteNextPage: () => true,
+			scheduleRenderTask: callback => { frames.set(++frameId, callback); return frameId; },
+			cancelRenderTask: frame => { frames.delete(frame); },
+		});
+	chunked.controller.searchQuery = "memo"; chunked.controller.openPage({ focusInput: false });
+	const ongoing = [...frames.values()][0];
+	const firstCard = chunked.root.find(".knomo-card");
+	total = 90;
+	chunked.controller.renderResults("content-change", false, true);
+	assert.equal([...frames.values()][0], ongoing);
+	assert.equal(chunked.root.find(".knomo-card"), firstCard);
+	while (frames.size) { const [frame, callback] = [...frames][0]; frames.delete(frame); callback(); }
+	assert.equal(chunked.state.renderedMemoIds.length, 14);
+	assert.equal(chunked.root.findAll(".knomo-list-summary").length, 1);
+	assert.equal(chunked.root.find(".knomo-mobile-search-more")?.getText(), "Load more (76 remaining)");
+});
+
+test("空搜索收到晚到计数不显示加载入口，清空关键词后仍保持提示", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let total: number | null = null;
+	const { controller, root } = createControllerHarness(MobileSearchController,
+		Array.from({ length: 50 }, (_, index) => makeMemo(String(index), "memo")), () => total, undefined, {
+			batchSize: 12, hasRemoteNextPage: () => true,
+		});
+	const receiveCount = () => {
+		total = 90;
+		controller.renderResults("content-change", false, true);
+		assert.equal(root.findAll(".knomo-mobile-search-empty").length, 1);
+		assert.equal(root.findAll(".knomo-card").length, 0);
+		assert.equal(root.find(".knomo-list-summary"), null);
+		assert.equal(root.find(".knomo-mobile-search-more"), null);
+	};
+	controller.openPage({ focusInput: false });
+	receiveCount();
+	controller.searchQuery = "memo";
+	controller.renderResults("view-scope-change");
+	assert.equal(root.findAll(".knomo-card").length, 12);
+	controller.searchQuery = "";
+	total = null;
+	controller.renderResults("view-scope-change");
+	receiveCount();
+});
+
+test("移动搜索等待中文选字，最终 input 不重复查询，关闭取消待提交文本", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const tasks = new Map<number, () => void>();
+	let id = 0;
+	const queries: string[] = [];
+	const { controller, dispatch } = createControllerHarness(MobileSearchController, [], undefined,
+		async query => { queries.push(query); }, {
+			getWindow: () => ({ setTimeout: (callback: () => void) => { tasks.set(++id, callback); return id; },
+				clearTimeout: (task: number) => tasks.delete(task) }) as unknown as Window,
+		});
+	controller.openPage({ focusInput: false });
+	const input = controller.input as unknown as TestElement;
+	input.value = "z";
+	dispatch(input, "input", createKeyboardEvent(""));
+	dispatch(input, "compositionstart", createKeyboardEvent(""));
+	input.value = "zhong";
+	dispatch(input, "input", createKeyboardEvent(""));
+	assert.equal(tasks.size, 0);
+	input.value = "中文";
+	dispatch(input, "compositionend", createKeyboardEvent(""));
+	dispatch(input, "input", createKeyboardEvent(""));
+	assert.equal(tasks.size, 1);
+	for (const callback of [...tasks.values()]) callback();
+	tasks.clear();
+	await Promise.resolve();
+	assert.deepEqual(queries, ["中文"]);
+	input.value = "next";
+	dispatch(input, "input", createKeyboardEvent(""));
+	controller.closePage();
+	assert.equal(tasks.size, 0);
+});
+
 test("mobile record stats filter refreshes remote results and renders its summary", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -500,6 +603,12 @@ class TestElement {
 
 	asHtml(): HTMLElement {
 		return this as unknown as HTMLElement;
+	}
+
+	prepend(child: TestElement): void {
+		child.remove();
+		child.parent = this;
+		this.children.unshift(child);
 	}
 
 	createDiv(options: CreateElementOptions = {}): TestElement {

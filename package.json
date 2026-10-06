@@ -1,6 +1,6 @@
 {
 	"name": "knomo",
-	"version": "1.12.7",
+	"version": "1.12.9",
 	"description": "Capture local-first memos into daily notes and monthly archives.",
 	"main": "main.js",
 	"scripts": {
@@ -27,8 +27,8 @@
 	"private": true,
 	"devDependencies": {
 		"@codemirror/commands": "6.8.1",
-		"@codemirror/state": "6.5.0",
-		"@codemirror/view": "6.38.6",
+		"@codemirror/state": "6.7.6",
+		"@codemirror/view": "6.43.13",
 		"@lezer/common": "1.5.2",
 		"@lezer/markdown": "1.4.3",
 		"@types/jsdom": "21.1.7",
@@ -38,7 +38,7 @@
 		"eslint": "^9.39.4",
 		"fake-indexeddb": "^6.2.5",
 		"jsdom": "26.1.0",
-		"obsidian": "1.13.1",
+		"obsidian": "https://codeload.github.com/obsidianmd/obsidian-api/tar.gz/9abd9605ce081383674aae1ed111c456edde0688",
 		"typescript": "^5.8.0"
 	}
 }

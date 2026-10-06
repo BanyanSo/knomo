@@ -1,4 +1,4 @@
-import { Compartment, EditorState, StateEffect, StateField, Transaction, type ChangeDesc } from "@codemirror/state";
+import { Compartment, EditorState, Facet, StateEffect, StateField, Transaction, type ChangeDesc } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, drawSelection, keymap, placeholder, runScopeHandlers, type DecorationSet } from "@codemirror/view";
 import { standardKeymap, history, historyKeymap, insertNewline, isolateHistory } from "@codemirror/commands";
 import { getListEnterPatchForNativeInput } from "../utils/composerInput";
@@ -29,6 +29,7 @@ export interface ComposerInput extends HTMLElement {
 	composer: ComposerEditor;
 }
 
+const colorHighlightsFacet = Facet.define<boolean, boolean>({ combine: values => values.some(Boolean) });
 const composingEffect = StateEffect.define<boolean>();
 const contextEffect = StateEffect.define<null>();
 const contextField = StateField.define({
@@ -59,7 +60,9 @@ function preservesCompositionSyntax(tr: Transaction, syntax: ComposerSyntax): bo
 			|| !list && /^[\t ]*\d+[.)](?:\s|$)/u.test(nextLine.text)
 			|| /[\\<>[\]*_~=$%]/u.test(neighbors)
 			|| syntax.contexts.some(n => n.type === "HTMLTag" && from >= n.from && to <= n.to)
-			|| syntax.ranges.some(r => r.markers.some(m => from === to ? from > m.from && from < m.to : from < m.to && to > m.from))) safe = false;
+			|| syntax.ranges.some(r => r.markers.some(m => from === to ? from > m.from && from < m.to : from < m.to && to > m.from)
+				|| r.highlight && (from === to ? from >= r.highlight.prefix.from && from < r.highlight.prefix.to
+					: from < r.highlight.prefix.to && to > r.highlight.prefix.from))) safe = false;
 	});
 	return safe;
 }
@@ -75,6 +78,7 @@ function mapCompositionSyntax(syntax: ComposerSyntax, changes: ChangeDesc): Comp
 		protectedRanges: syntax.protectedRanges.map(map), proseLines: syntax.proseLines.map(map),
 		ranges: syntax.ranges.map(r => ({ ...map(r), contentFrom: changes.mapPos(r.contentFrom, -1), contentTo: changes.mapPos(r.contentTo, 1),
 			markers: r.markers.map(mapMarker), separators: r.separators.map(mapMarker), target: r.target && map(r.target), escapes: r.escapes?.map(mapMarker),
+			highlight: r.highlight && { ...r.highlight, prefix: mapMarker(r.highlight.prefix) },
 			list: r.list && { ...r.list, item: map(r.list.item), content: map(r.list.content) },
 			task: r.task && { ...r.task, from: changes.mapPos(r.task.from, 1) },
 		})),
@@ -204,12 +208,15 @@ function decorations(state: EditorState): DecorationSet {
 			} }).range(state.doc.lineAt(range.from).from));
 			result.push(Decoration.replace({ widget: new ComposerMarker(range, label, state) }).range(range.from, range.to));
 		} else {
-			if (range.from < range.contentFrom) result.push(Decoration.replace({}).range(range.from, range.contentFrom));
+			const highlight = state.facet(colorHighlightsFacet) ? range.highlight : undefined;
+			const displayFrom = highlight?.prefix.to ?? range.contentFrom;
+			if (range.from < displayFrom) result.push(Decoration.replace({}).range(range.from, displayFrom));
 			for (const escape of range.escapes ?? []) result.push(Decoration.replace({}).range(escape.from, escape.to));
-			result.push(Decoration.mark({
+			if (displayFrom < range.contentTo) result.push(Decoration.mark({
+				attributes: highlight ? { "data-highlight": highlight.color } : undefined,
 				tagName: range.kind === "bold" ? "strong" : range.kind === "highlight" ? "mark" : range.kind === "italic" ? "em" : range.kind === "strike" ? "s" : range.kind === "code" ? "code" : "a",
 				class: `knomo-composer-${range.kind}${range.kind === "link" ? " internal-link" : ""}`,
-			}).range(range.contentFrom, range.contentTo));
+			}).range(displayFrom, range.contentTo));
 			if (range.contentTo < range.to) result.push(Decoration.replace({}).range(range.contentTo, range.to));
 		}
 	}
@@ -243,6 +250,7 @@ export class ComposerEditor {
 	readonly input: ComposerInput;
 	readonly view: EditorView;
 	private readonly editable = new Compartment();
+	private readonly contentResizeObserver: ResizeObserver | null;
 	private enabled = true;
 	private saving = false;
 	private disposed = false;
@@ -253,7 +261,7 @@ export class ComposerEditor {
 	private compositionGeneration = 0;
 	private beforeInput: InputEvent | null = null;
 
-	constructor(parent: HTMLElement, doc: string, private readonly label: string, private readonly hint: string) {
+	constructor(parent: HTMLElement, doc: string, private readonly label: string, private readonly hint: string, private readonly colorHighlights = false) {
 		this.view = new EditorView({ parent, state: this.createState(doc, label, hint),
 			dispatchTransactions: (transactions, view) => {
 				// 即使调用方绕过 transactionFilter，保存期间也不能修改正文。
@@ -275,6 +283,19 @@ export class ComposerEditor {
 		});
 		this.input = this.view.contentDOM as ComposerInput;
 		this.input.composer = this;
+		// 固定滚动区高度时，字号变化仍须使编辑器重新测量行高和光标位置。
+		const ownerWindow = parent.ownerDocument.defaultView;
+		this.contentResizeObserver = ownerWindow && typeof ownerWindow.ResizeObserver === "function"
+			? new ownerWindow.ResizeObserver(() => { if (!this.disposed) this.view.requestMeasure(); }) : null;
+		this.contentResizeObserver?.observe(this.input);
+		// 最小高度由滚动区提供时，正文下方的空白仍须保留原有点击输入体验。
+		this.view.scrollDOM.addEventListener("click", event => {
+			if (event.target !== this.view.scrollDOM || event.defaultPrevented || event.button !== 0
+				|| this.disposed || this.readOnly || this.composing) return;
+			const end = this.view.state.doc.length;
+			this.view.dispatch({ selection: { anchor: event.shiftKey ? this.view.state.selection.main.anchor : end, head: end } });
+			this.view.focus();
+		});
 		Object.defineProperties(this.input, {
 			value: { get: () => this.view.state.doc.toString(), set: (value: string) => this.reset(value) },
 			selectionStart: { get: () => this.view.state.selection.main.from },
@@ -335,7 +356,7 @@ export class ComposerEditor {
 				inputmode: "text", spellcheck: "true", autocorrect: "on", autocapitalize: "sentences", writingsuggestions: "true" }),
 			EditorView.lineWrapping, placeholder(hint), drawSelection({ drawRangeCursor: false }),
 			keymap.of([...historyKeymap.map(binding => ({ ...binding, scope: "editor composer-task" })), ...standardKeymap.filter(binding => binding.key !== "Enter"), { key: "Enter", run: insertNewline, shift: insertNewline }]),
-			contextField, composingField, syntaxField,
+			colorHighlightsFacet.of(this.colorHighlights), contextField, composingField, syntaxField,
 			EditorView.contentAttributes.of(state => ({
 				"data-cjk": String(state.state.field(syntaxField).cjk),
 			})),
@@ -410,7 +431,13 @@ export class ComposerEditor {
 		const win = this.input.ownerDocument.defaultView!;
 		return rect ? new win.DOMRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top) : null;
 	}
-	destroy(): void { if (this.disposed) return; this.invalidateContext(); this.disposed = true; this.view.destroy(); }
+	destroy(): void {
+		if (this.disposed) return;
+		this.invalidateContext();
+		this.disposed = true;
+		this.contentResizeObserver?.disconnect();
+		this.view.destroy();
+	}
 }
 
 function getMinimalTextChange(value: string, nextValue: string): { from: number; to: number; insert: string } {

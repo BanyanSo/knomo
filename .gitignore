@@ -5,6 +5,7 @@
 node_modules/
 .tmp/
 main.js
+/dist/
 .npm-cache/
 .pnpm-store/
 .corepack/

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildTagTree } from "../src/utils/tagTree";
-import { buildTagDisplayMap, normalizeTagKey } from "../src/utils/tags";
+import { buildTagDisplayMapCooperatively, normalizeTagKey } from "../src/utils/tags";
 
 test("normalizes tag keys without cleaning valid tag characters", () => {
 	assert.equal(normalizeTagKey("#Life/健康+😀 "), "life/健康+😀");
@@ -72,19 +72,20 @@ test("merges tag tree nodes by normalized paths", () => {
 	]);
 });
 
-test("chooses tag display casing by count and latest modified source", () => {
-	const displayTags = buildTagDisplayMap([
+test("chooses tag display casing by count and latest modified source", async () => {
+	const runtime = { yieldControl: async () => undefined };
+	const displayTags = await buildTagDisplayMapCooperatively([
 		{ tag: "#life/健康", modifiedTime: 100, order: 0 },
 		{ tag: "#Life/健康", modifiedTime: 200, order: 1 },
-	]);
+	], runtime);
 	assert.equal(displayTags.get("life"), "Life");
 	assert.equal(displayTags.get("life/健康"), "Life/健康");
 
-	const frequentTags = buildTagDisplayMap([
+	const frequentTags = await buildTagDisplayMapCooperatively([
 		{ tag: "#Life/健康", modifiedTime: 300, order: 0 },
 		{ tag: "#life/健康", modifiedTime: 100, order: 1 },
 		{ tag: "#life/健康", modifiedTime: 200, order: 2 },
-	]);
+	], runtime);
 	assert.equal(frequentTags.get("life"), "life");
 	assert.equal(frequentTags.get("life/健康"), "life/健康");
 });

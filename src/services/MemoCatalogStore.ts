@@ -26,6 +26,14 @@ export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 
 export const IN_MEMORY_CATALOG_OBSERVATION_LIMIT = 5_000;
 
+export function createCatalogCountAbortError(signal?: AbortSignal): Error {
+	const reason: unknown = signal?.reason;
+	if (reason instanceof Error) return reason;
+	const error = new Error("Memo Catalog count cancelled.");
+	error.name = "AbortError";
+	return error;
+}
+
 export interface CatalogMetaEntry {
 	key: string;
 	value: unknown;
@@ -44,7 +52,7 @@ export interface MemoCatalogStore {
 	listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]>;
 	getObservation(observationKey: string): Promise<CatalogObservation | null>;
 	listFiles(): Promise<CatalogFileRecord[]>;
-	count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult>;
+	count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult>;
 	query(request: CatalogQuery): Promise<CatalogQueryPage>;
 	queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage>;
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]>;
@@ -155,11 +163,12 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		return [...this.files.values()].map(clone).sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 	}
 
-	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
-		const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		signal?.throwIfAborted();
+		const matches = createCatalogQueryMatcher(request);
 		let count = 0;
 		for (const observation of this.observations.values()) {
-			if (matchesCatalogQuery(observation, request, sourcePaths)) {
+			if (matches(observation)) {
 				count += 1;
 			}
 		}
@@ -178,7 +187,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		const limit = clampPageLimit(request.limit);
 		let cursorReads = 0;
 		let observationsRead = 0;
-		const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+		const matchesQuery = createCatalogQueryMatcher(request);
 		const candidates = [...this.observations.values()].sort(compareCatalogObservations);
 		const matches: CatalogObservation[] = [];
 		for (const observation of candidates) {
@@ -187,7 +196,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 				continue;
 			}
 			observationsRead += 1;
-			if (!matchesCatalogQuery(observation, request, sourcePaths)) {
+			if (!matchesQuery(observation)) {
 				continue;
 			}
 			matches.push(clone(observation));
@@ -425,8 +434,8 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		return this.run((store) => store.getObservation(observationKey));
 	}
 	listFiles(): Promise<CatalogFileRecord[]> { return this.run((store) => store.listFiles()); }
-	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
-		const result = await this.run((store) => store.count(request));
+	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		const result = await this.run((store) => store.count(request, signal), signal);
 		return { ...result, lifecycle: this.getLifecycle() };
 	}
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
@@ -488,7 +497,8 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		return this.run((store) => store.clear(preserveMetaKeys));
 	}
 
-	private async run<T>(operation: (store: MemoCatalogStore) => Promise<T>): Promise<T> {
+	private async run<T>(operation: (store: MemoCatalogStore) => Promise<T>, signal?: AbortSignal): Promise<T> {
+		signal?.throwIfAborted();
 		const active = this.getActive();
 		const lifecycleBefore = active.getLifecycle();
 		try {
@@ -501,6 +511,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 			}
 			return result;
 		} catch (error) {
+			signal?.throwIfAborted();
 			if (active !== this.primary) throw error;
 			await this.activateFallback();
 			return operation(this.fallback);
@@ -549,15 +560,24 @@ export function matchesCatalogQuery(
 	request: CatalogQueryFilter,
 	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
 ): boolean {
+	return createCatalogQueryMatcher(request, sourcePaths)(observation);
+}
+
+export function createCatalogQueryMatcher(
+	request: CatalogQueryFilter,
+	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
+): (observation: CatalogObservation) => boolean {
 	const tags = request.tags?.map(normalizeCatalogText).filter((tag) => tag.length > 0) ?? [];
 	const normalizedText = request.text === undefined ? "" : normalizeCatalogText(request.text);
-	return (normalizedText.length === 0 || observation.searchText.includes(normalizedText))
+	const linkTarget = request.linkTarget === undefined ? undefined : normalizeCatalogText(request.linkTarget);
+	const imagePath = request.imagePath === undefined ? undefined : normalizeCatalogText(request.imagePath);
+	return observation => (normalizedText.length === 0 || observation.searchText.includes(normalizedText))
 		&& tags.every((tag) => observation.tagKeys.some((observationTag) => (
 			observationTag === tag || observationTag.startsWith(`${tag}/`)
 		)))
-		&& (request.linkTarget === undefined || observation.linkTargets.includes(normalizeCatalogText(request.linkTarget)))
+		&& (linkTarget === undefined || observation.linkTargets.includes(linkTarget))
 		&& (request.hasLink === undefined || (observation.hasLink === 1) === request.hasLink)
-		&& (request.imagePath === undefined || observation.imagePaths.includes(normalizeCatalogText(request.imagePath)))
+		&& (imagePath === undefined || observation.imagePaths.includes(imagePath))
 		&& (request.hasImage === undefined || (observation.hasImage === 1) === request.hasImage)
 		&& (request.hasTask === undefined || (observation.hasTask === 1) === request.hasTask)
 		&& (request.hasTag === undefined || (observation.tags.length > 0) === request.hasTag)

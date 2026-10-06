@@ -13,7 +13,7 @@ export interface KnomoStartupBootstrapOptions {
 }
 
 export type KnomoStartupBootstrapStatus = "unconfigured" | "initializing" | "ready" | "conflicted" | "unavailable";
-export type KnomoStartupBootstrapStage = "current_config" | "verification";
+export type KnomoStartupBootstrapStage = "current_config";
 
 export interface KnomoStartupBootstrapSnapshot {
 	status: KnomoStartupBootstrapStatus;
@@ -50,7 +50,7 @@ export class KnomoStartupBootstrapService {
 	private startOperation(configurationOperation?: Promise<void>): Promise<void> {
 		// 立即接住后台配置失败，不能等布局就绪后才订阅 rejection。
 		const configurationResult = configurationOperation?.then(
-			() => ({ ok: true as const }), error => ({ ok: false as const, error }),
+			() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }),
 		);
 		let operation: Promise<void>;
 		operation = this.runOnce(configurationResult).finally(() => {
@@ -63,13 +63,11 @@ export class KnomoStartupBootstrapService {
 	}
 
 	private async runOnce(configurationResult?: Promise<{ ok: true } | { ok: false; error: unknown }>): Promise<void> {
-		let stage: KnomoStartupBootstrapStage = "current_config";
+		const stage: KnomoStartupBootstrapStage = "current_config";
 		this.setInitializing(stage);
 		try {
 			await this.waitForLayoutReady();
 			this.throwIfCancelled();
-			stage = "current_config";
-			this.setInitializing(stage);
 			if (configurationResult === undefined) await this.options.currentConfig.initialize();
 			else {
 				const result = await configurationResult;
@@ -91,8 +89,7 @@ export class KnomoStartupBootstrapService {
 				throw new KnomoStartupCancelledError();
 			}
 			const detail = error instanceof Error ? error.message : String(error);
-			const conflicted = (stage === "current_config" || stage === "verification")
-				&& this.options.currentConfig.getStatus() === "conflicted";
+			const conflicted = this.options.currentConfig.getStatus() === "conflicted";
 			this.snapshot = {
 				status: conflicted ? "conflicted" : "unavailable",
 				stage,

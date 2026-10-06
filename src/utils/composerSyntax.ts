@@ -3,6 +3,7 @@ import type { Tree, TreeFragment } from "@lezer/common";
 import { memoTagRanges, memoUrlRanges } from "./markdown";
 
 export interface SourceRange { from: number; to: number }
+type ComposerHighlightColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple";
 export interface ComposerSyntaxRange extends SourceRange {
 	kind: "bold" | "italic" | "strike" | "code" | "highlight" | "link" | "markdown-link" | "url" | "tag" | "task" | "bullet" | "ordered";
 	contentFrom: number;
@@ -12,6 +13,8 @@ export interface ComposerSyntaxRange extends SourceRange {
 	parent: number;
 	target?: SourceRange;
 	escapes?: SourceRange[];
+	// 颜色前缀只控制显示；正文和格式命令继续使用原始 contentFrom/contentTo。
+	highlight?: { color: ComposerHighlightColor; prefix: SourceRange };
 	list?: { container: number; item: SourceRange; content: SourceRange; depth: number; source: string; display: number };
 	task?: { from: number; state: string };
 }
@@ -26,6 +29,11 @@ export interface ComposerSyntax {
 	proseLines: SourceRange[];
 }
 export const composerParser = parser.configure([Table, Strikethrough]);
+const highlightColors = new Map<string, ComposerHighlightColor>([
+	["🔴", "red"], ["🟥", "red"], ["🟠", "orange"], ["🟧", "orange"],
+	["🟡", "yellow"], ["🟨", "yellow"], ["🟢", "green"], ["🟩", "green"],
+	["🔵", "blue"], ["🟦", "blue"], ["🟣", "purple"], ["🟪", "purple"],
+]);
 const overlaps = (a: SourceRange, b: SourceRange) => a.from < b.to && a.to > b.from;
 const contains = (a: SourceRange, b: SourceRange) => a.from <= b.from && a.to >= b.to;
 const sourceTypes = /^(?:ATXHeading\d|SetextHeading\d|Blockquote|FencedCode|CodeBlock|HTMLBlock|HTMLTag|Table|LinkReference|Image|Autolink|HorizontalRule)$/u;
@@ -252,7 +260,13 @@ export function scanComposerSyntax(text: string, fragments: readonly TreeFragmen
 	for (const match of matches(text, /==([^=\n]+)==/gu)) {
 		const from = match.index, to = from + match[0].length;
 		if (escaped(from) || escaped(to - 2) || originalBlocked({ from, to }) || sourceBlocked({ from, to }) || !match[1].trim() || text[from - 1] === "=" || text[to] === "=") continue;
-		add("highlight", from, to, from + 2, to - 2, contextAt({ from, to }));
+		const range = add("highlight", from, to, from + 2, to - 2, contextAt({ from, to }));
+		for (const [prefix, color] of highlightColors) {
+			if (match[1].startsWith(prefix)) {
+				range.highlight = { color, prefix: { from: range.contentFrom, to: range.contentFrom + prefix.length } };
+				break;
+			}
+		}
 	}
 	for (const tag of memoTagRanges(text)) {
 		if (!escaped(tag.from) && !originalBlocked(tag) && !sourceBlocked(tag) && !linksBlocked(tag) && !urlsBlocked(tag)) {

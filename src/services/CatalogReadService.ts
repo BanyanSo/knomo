@@ -33,6 +33,7 @@ import { toCatalogMemoView } from "../types/memoView";
 import type { TimeBuoyPageRequest, TimeBuoyPageResult, TimeBuoyQueryResult } from "../types/timeBuoy";
 import { getTimeBuoyTabDates } from "./TimeBuoyQuery";
 import { formatDatePart } from "../utils/date";
+import { t } from "../i18n";
 import { filterRandomReunionCandidates, sampleRandomReunionCandidates } from "../utils/randomReunion";
 import type { RandomReunionCandidate } from "../utils/randomReunion";
 import { CooperativeYieldController } from "./CooperativeTask";
@@ -43,6 +44,7 @@ import {
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
 import type { MemoCatalogService } from "./MemoCatalogService";
+import { createCatalogCountAbortError } from "./MemoCatalogStore";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
 
 export interface CatalogReadServiceOptions {
@@ -60,10 +62,30 @@ export interface CatalogReadServiceOptions {
 	random?: () => number;
 }
 
-interface RandomReunionCandidatePool {
+export interface CatalogDiscoverySnapshot {
 	catalogRevision: number;
 	day: string;
+	coverage: CatalogCoverage;
+}
+
+export class CatalogDiscoveryInvalidatedError extends Error {
+	constructor() { super("Catalog discovery snapshot changed."); }
+}
+
+interface RandomReunionCandidatePool extends CatalogDiscoverySnapshot {
 	candidates: Array<RandomReunionCandidate & { observationKey: string }>;
+}
+
+interface RandomReunionPoolTask {
+	controller: AbortController;
+	promise: Promise<RandomReunionCandidatePool>;
+	consumers: number;
+}
+
+interface CountTask {
+	controller: AbortController;
+	promise: Promise<CatalogMemoCountResult>;
+	consumers: number;
 }
 
 function yieldToUi(): Promise<void> {
@@ -76,7 +98,9 @@ export class CatalogReadService {
 	private readonly random: () => number;
 	private lastReadState: CatalogReadState | null = null;
 	private randomReunionCandidatePool: RandomReunionCandidatePool | null = null;
-	private randomReunionCandidatePoolLoad: Promise<RandomReunionCandidatePool> | null = null;
+	private randomReunionCandidatePoolLoad: RandomReunionPoolTask | null = null;
+	private readonly countCache = new Map<string, CatalogMemoCountResult>();
+	private readonly countTasks = new Map<string, CountTask>();
 
 	constructor(private readonly options: CatalogReadServiceOptions) {
 		this.reviews = options.reviews ?? new LocalMemoReviewStore();
@@ -181,19 +205,65 @@ export class CatalogReadService {
 		});
 	}
 
-	async count(request: CatalogFeatureFilter): Promise<CatalogMemoCountResult> {
+	async count(request: CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
 		try {
-			const result = await this.options.catalog.count(request);
-			const complete = isQueryCovered(result.coverage, request);
-			return {
-				count: complete ? result.count : null,
-				complete,
-				catalogRevision: result.catalogRevision,
-				coverage: result.coverage,
-			};
+			return await this.cachedCount(request, signal, async (countSignal) => {
+				const result = await this.options.catalog.count(request, countSignal);
+				const complete = isQueryCovered(result.coverage, request);
+				return { count: complete ? result.count : null, complete,
+					catalogRevision: result.catalogRevision, coverage: result.coverage };
+			});
 		} catch {
+			signal?.throwIfAborted();
 			return this.createUnavailableCount();
 		}
+	}
+
+	private async cachedCount(request: CatalogFeatureFilter, signal: AbortSignal | undefined,
+		load: (signal: AbortSignal) => Promise<CatalogMemoCountResult>, kind = ""): Promise<CatalogMemoCountResult> {
+		signal?.throwIfAborted();
+		const store = this.options.catalog.getStore();
+		const [revision, coverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		signal?.throwIfAborted();
+		const key = JSON.stringify([kind, Object.entries(request).sort(([left], [right]) => left.localeCompare(right)),
+			revision, coverage, store.getLifecycle()]);
+		const cached = this.countCache.get(key);
+		if (cached) {
+			this.countCache.delete(key);
+			this.countCache.set(key, cached);
+			return cached;
+		}
+		let task = this.countTasks.get(key);
+		if (!task || task.controller.signal.aborted) {
+			const controller = new AbortController();
+			const next: CountTask = { controller, consumers: 0, promise: Promise.resolve().then(() => load(controller.signal)) };
+			next.promise = next.promise.then(result => {
+				if (!controller.signal.aborted && result.complete && result.catalogRevision === revision
+					&& JSON.stringify(result.coverage) === JSON.stringify(coverage)) {
+					this.countCache.set(key, result);
+					if (this.countCache.size > 16) this.countCache.delete(this.countCache.keys().next().value!);
+				}
+				return result;
+			}).finally(() => { if (this.countTasks.get(key) === next) this.countTasks.delete(key); });
+			this.countTasks.set(key, next);
+			task = next;
+		}
+		const activeTask = task;
+		activeTask.consumers++;
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return false;
+				settled = true;
+				signal?.removeEventListener("abort", abort);
+				if (--activeTask.consumers === 0) activeTask.controller.abort();
+				return true;
+			};
+			// 只有最后一个使用者取消时终止扫描，避免伤及共享计数的其他视图。
+			const abort = () => { if (finish()) reject(createCatalogCountAbortError(signal)); };
+			signal?.addEventListener("abort", abort, { once: true });
+			activeTask.promise.then(result => { if (finish()) resolve(result); }, error => { if (finish()) reject(error); });
+		});
 	}
 
 	async getLibraryIndexes(): Promise<CatalogLibraryIndexesResult> {
@@ -219,8 +289,8 @@ export class CatalogReadService {
 		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
 	}
 
-	async countReviewItems(date: Date, text?: string): Promise<CatalogMemoCountResult> {
-		return this.count(buildReviewCatalogQuery(date, text));
+	async countReviewItems(date: Date, text?: string, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
+		return this.count(buildReviewCatalogQuery(date, text), signal);
 	}
 
 	async queryRecordStatsDrilldown(
@@ -240,16 +310,18 @@ export class CatalogReadService {
 	async countRecordStatsDrilldown(
 		filter: CatalogRecordStatsFilter,
 		text?: string,
+		signal?: AbortSignal,
 	): Promise<CatalogMemoCountResult> {
+		signal?.throwIfAborted();
 		const { query, fromDate, toDate } = buildRecordStatsCatalogQuery(filter);
 		if (text?.trim()) query.text = text.trim();
 		if (!await this.getCoverageForRange(fromDate, toDate)) {
+			signal?.throwIfAborted();
 			return this.createUnavailableCount(await this.options.catalog.getStore().getCoverage());
 		}
-		if (filter.type !== "references") return this.count(query);
-		return this.countFiltered(query, (memo) => (
-			memo.observation.explicitReferenceTargets.length > 0
-		));
+		if (filter.type !== "references") return this.count(query, signal);
+		return this.cachedCount(query, signal, countSignal => this.countFiltered(query,
+			memo => memo.observation.explicitReferenceTargets.length > 0, countSignal), "references");
 	}
 
 	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"]): Promise<TimeBuoyQueryResult> {
@@ -298,28 +370,37 @@ export class CatalogReadService {
 		return isCurrent() ? buildPreparedRecordStats(aggregates) : null;
 	}
 
-	async getRandomReunionItems(count: number): Promise<MemoViewItem[]> {
-		await this.requireCompleteCoverage("Random reunion");
-		while (true) {
-			const pool = await this.loadRandomReunionCandidatePool();
-			const coverage = await this.requireCompleteCoverage("Random reunion");
-			const capabilities = createCatalogCapabilities(coverage);
-			const selected = await sampleRandomReunionCandidates(pool.candidates, this.reviews.read(), count, {
-				today: this.now(), random: this.random,
-			}, { yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
-			const items: MemoViewItem[] = [];
-			for (const candidate of selected) {
-				const observation = await this.options.catalog.getObservation(candidate.observationKey);
-				if (observation !== null && observationLocalKey(observation) === candidate.id) {
+	async getRandomReunionItems(count: number, options: {
+		shownBatches?: readonly (readonly string[])[]; signal?: AbortSignal;
+	} = {}): Promise<MemoViewItem[]> {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			options.signal?.throwIfAborted();
+			const now = this.now();
+			try {
+				await this.requireCompleteCoverage("Random reunion");
+				options.signal?.throwIfAborted();
+				const pool = await this.loadRandomReunionCandidatePool(now, options.signal);
+				const selected = await sampleRandomReunionCandidates(pool.candidates, this.reviews.read(), count, {
+					today: now, random: this.random, ...options,
+				}, { yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
+				const capabilities = createCatalogCapabilities(pool.coverage);
+				const items: MemoViewItem[] = [];
+				for (const candidate of selected) {
+					options.signal?.throwIfAborted();
+					const observation = await this.options.catalog.getObservation(candidate.observationKey);
+					options.signal?.throwIfAborted();
+					if (observation === null || observationLocalKey(observation) !== candidate.id) throw new CatalogDiscoveryInvalidatedError();
 					items.push(toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities)));
 				}
+				if (!await this.isDiscoverySnapshotCurrent(pool, options.signal)) throw new CatalogDiscoveryInvalidatedError();
+				return items;
+			} catch (error) {
+				options.signal?.throwIfAborted();
+				if (!(error instanceof CatalogDiscoveryInvalidatedError)) throw error;
+				this.randomReunionCandidatePool = null;
 			}
-			if (!await this.isRandomReunionCandidatePoolCurrent(pool)) {
-				if (this.randomReunionCandidatePool === pool) this.randomReunionCandidatePool = null;
-				continue;
-			}
-			return items;
 		}
+		throw new Error(t("error.revisitChanged"));
 	}
 
 	async recordReview(item: CatalogMemoItem): Promise<void> {
@@ -338,11 +419,56 @@ export class CatalogReadService {
 		return aggregates;
 	}
 
-	async listMemoViewsForDate(date: string): Promise<MemoViewItem[]> {
-		await this.requireCompleteCoverage("Shuffle Day");
-		const items = await this.queryAllItems({ fromDate: date, toDate: date, limit: 150 });
-		await this.requireCompleteCoverage("Shuffle Day");
-		return items.map(toCatalogMemoView);
+	async readDailyAggregateSnapshot(signal?: AbortSignal): Promise<CatalogDiscoverySnapshot & { aggregates: CatalogDailyAggregate[] }> {
+		signal?.throwIfAborted();
+		const store = this.options.catalog.getStore();
+		const catalogRevision = await store.getCatalogRevision();
+		const coverage = await this.requireCompleteCoverage("Shuffle Day");
+		const day = formatDatePart(this.now());
+		signal?.throwIfAborted();
+		const aggregates = await this.options.catalog.listDailyAggregates();
+		signal?.throwIfAborted();
+		const snapshot = { catalogRevision, coverage, day, aggregates };
+		if (!await this.isDiscoverySnapshotCurrent(snapshot, signal)) throw new CatalogDiscoveryInvalidatedError();
+		return snapshot;
+	}
+
+	async isDiscoverySnapshotCurrent(snapshot: CatalogDiscoverySnapshot, signal?: AbortSignal): Promise<boolean> {
+		signal?.throwIfAborted();
+		const store = this.options.catalog.getStore();
+		const [catalogRevision, coverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		signal?.throwIfAborted();
+		return catalogRevision === snapshot.catalogRevision && JSON.stringify(coverage) === JSON.stringify(snapshot.coverage)
+			&& isCompleteCoverage(coverage) && snapshot.day === formatDatePart(this.now())
+			&& this.getReadState(coverage, store.getLifecycle()) === "ready";
+	}
+
+	async listMemoViewsForDate(date: string, options: { signal?: AbortSignal; snapshot?: CatalogDiscoverySnapshot } = {}): Promise<MemoViewItem[]> {
+		for (let attempt = 0; attempt < (options.snapshot === undefined ? 3 : 1); attempt++) {
+			options.signal?.throwIfAborted();
+			const snapshot = options.snapshot ?? {
+				catalogRevision: await this.options.catalog.getStore().getCatalogRevision(),
+				coverage: await this.requireCompleteCoverage("Shuffle Day"), day: formatDatePart(this.now()),
+			};
+			const items: MemoViewItem[] = [];
+			let cursor: CatalogFeatureCursor | null = null;
+			let invalidated = false;
+			do {
+				options.signal?.throwIfAborted();
+				const page = await this.query({ fromDate: date, toDate: date, limit: 150, cursor });
+				options.signal?.throwIfAborted();
+				if (page.invalidated || page.catalogRevision !== snapshot.catalogRevision
+					|| JSON.stringify(page.coverage) !== JSON.stringify(snapshot.coverage)) { invalidated = true; break; }
+				items.push(...page.items.map(toCatalogMemoView));
+				cursor = page.nextCursor;
+				if (cursor !== null) {
+					await yieldToUi();
+					options.signal?.throwIfAborted();
+				}
+			} while (cursor !== null);
+			if (!invalidated && await this.isDiscoverySnapshotCurrent(snapshot, options.signal)) return items;
+		}
+		throw new CatalogDiscoveryInvalidatedError();
 	}
 
 	async listMonthlyProjectionPeriods(): Promise<string[]> {
@@ -482,13 +608,16 @@ export class CatalogReadService {
 	private async countFiltered(
 		request: CatalogFeatureFilter,
 		predicate: (memo: CatalogMemoItem) => boolean,
+		signal?: AbortSignal,
 	): Promise<CatalogMemoCountResult> {
 		let cursor: CatalogFeatureCursor | null = null;
 		let count = 0;
 		let catalogRevision: number | null = null;
 		let coverage: CatalogCoverage | null = null;
 		do {
+			signal?.throwIfAborted();
 			const page = await this.query({ ...request, limit: 150, cursor });
+			signal?.throwIfAborted();
 			if (page.invalidated
 				|| (catalogRevision !== null && catalogRevision !== page.catalogRevision)) {
 				return {
@@ -571,87 +700,78 @@ export class CatalogReadService {
 		return coverage.kind === "complete" ? "ready" : "history_building";
 	}
 
-	private async queryAllItems(
-		request: Omit<CatalogFeatureQuery, "cursor">,
-		maximum = Number.MAX_SAFE_INTEGER,
-	): Promise<CatalogMemoItem[]> {
-		const items: CatalogMemoItem[] = [];
-		let cursor = null;
-		do {
-			const page = await this.query({ ...request, cursor });
-			if (page.invalidated) {
-				cursor = null;
-				items.length = 0;
-				continue;
-			}
-			items.push(...page.items.slice(0, Math.max(0, maximum - items.length)));
-			cursor = items.length >= maximum ? null : page.nextCursor;
-		} while (cursor !== null);
-		return items;
-	}
-
-	private async loadRandomReunionCandidatePool(): Promise<RandomReunionCandidatePool> {
-		if (this.randomReunionCandidatePool?.day !== formatDatePart(this.now())) this.randomReunionCandidatePool = null;
+	private async loadRandomReunionCandidatePool(now: Date, signal?: AbortSignal): Promise<RandomReunionCandidatePool> {
+		signal?.throwIfAborted();
+		if (this.randomReunionCandidatePool?.day !== formatDatePart(now)) this.randomReunionCandidatePool = null;
 		if (this.randomReunionCandidatePool !== null) return this.randomReunionCandidatePool;
-		if (this.randomReunionCandidatePoolLoad !== null) return this.randomReunionCandidatePoolLoad;
-		const load = this.buildRandomReunionCandidatePool();
-		this.randomReunionCandidatePoolLoad = load;
-		try {
-			return await load;
-		} finally {
-			if (this.randomReunionCandidatePoolLoad === load) {
-				this.randomReunionCandidatePoolLoad = null;
-			}
+		let task = this.randomReunionCandidatePoolLoad;
+		if (task === null || task.controller.signal.aborted) {
+			const controller = new AbortController();
+			const next: RandomReunionPoolTask = { controller, consumers: 0,
+				promise: Promise.resolve().then(() => this.buildRandomReunionCandidatePool(now, controller.signal)) };
+			next.promise = next.promise.finally(() => { if (this.randomReunionCandidatePoolLoad === next) this.randomReunionCandidatePoolLoad = null; });
+			this.randomReunionCandidatePoolLoad = next;
+			task = next;
 		}
-	}
-
-	private async buildRandomReunionCandidatePool(): Promise<RandomReunionCandidatePool> {
-		const control = new CooperativeYieldController({ yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
-		while (true) {
-			const today = this.now();
-			const day = formatDatePart(today);
-			let page = await this.queryRandomReunionObservations(null, 150);
-			this.requireRandomReunionCoverage(page.coverage);
-			const catalogRevision = page.catalogRevision;
-			const candidates: RandomReunionCandidatePool["candidates"] = [];
-			const append = (items: CatalogObservation[]) => {
-				const capabilities = createCatalogCapabilities(page.coverage);
-				for (const observation of items) {
-					if (observation.logicalDate >= day) continue;
-					const view = toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities));
-					if (filterRandomReunionCandidates([view], { today }).length === 0) continue;
-					// 候选缓存不保留正文、卡片或 observation；选中后按本地 key 读取并校验 revision。
-					candidates.push({ id: view.id, createdAt: view.createdAt, tags: view.tags,
-						dailyRef: view.dailyRef, observationKey: observation.observationKey });
-				}
+		const activeTask = task;
+		activeTask.consumers++;
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return false;
+				settled = true;
+				signal?.removeEventListener("abort", abort);
+				if (--activeTask.consumers === 0) activeTask.controller.abort();
+				return true;
 			};
-			append(page.items);
-			let invalidated = page.invalidated;
-			while (!invalidated && page.nextCursor !== null) {
-				page = await this.queryRandomReunionObservations(page.nextCursor, 150);
-				if (page.invalidated || page.catalogRevision !== catalogRevision) {
-					invalidated = true;
-					break;
-				}
-				this.requireRandomReunionCoverage(page.coverage);
-				append(page.items);
-				if (control.shouldYield(page.items.length)) await control.yieldNow();
-			}
-			if (invalidated) continue;
-			const verification = await this.queryRandomReunionObservations(null, 1);
-			this.requireRandomReunionCoverage(verification.coverage);
-			if (verification.catalogRevision !== catalogRevision) continue;
-			if (day !== formatDatePart(this.now())) continue;
-			const pool = { catalogRevision, day, candidates };
-			this.randomReunionCandidatePool = pool;
-			return pool;
-		}
+			const abort = () => { if (finish()) reject(createCatalogCountAbortError(signal)); };
+			signal?.addEventListener("abort", abort, { once: true });
+			activeTask.promise.then(pool => { if (finish()) resolve(pool); }, error => { if (finish()) reject(error); });
+		});
 	}
 
-	private async isRandomReunionCandidatePoolCurrent(pool: RandomReunionCandidatePool): Promise<boolean> {
-		const page = await this.queryRandomReunionObservations(null, 1);
+	private async buildRandomReunionCandidatePool(today: Date, signal: AbortSignal): Promise<RandomReunionCandidatePool> {
+		const control = new CooperativeYieldController({ yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
+		signal.throwIfAborted();
+		const day = formatDatePart(today);
+		let page = await this.queryRandomReunionObservations(null, 150);
+		signal.throwIfAborted();
 		this.requireRandomReunionCoverage(page.coverage);
-		return page.catalogRevision === pool.catalogRevision && pool.day === formatDatePart(this.now());
+		if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
+		const catalogRevision = page.catalogRevision;
+		const coverage = page.coverage;
+		const candidates: RandomReunionCandidatePool["candidates"] = [];
+		const append = (items: CatalogObservation[]) => {
+			const capabilities = createCatalogCapabilities(page.coverage);
+			for (const observation of items) {
+				if (observation.logicalDate >= day) continue;
+				const view = toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities));
+				if (filterRandomReunionCandidates([view], { today }).length === 0) continue;
+				// 候选缓存不保留正文、卡片或 observation；选中后按本地 key 读取并校验 revision。
+				candidates.push({ id: view.id, createdAt: view.createdAt, logicalDate: observation.logicalDate, tags: view.tags,
+					dailyRef: view.dailyRef, observationKey: observation.observationKey });
+			}
+		};
+		append(page.items);
+		let invalidated: boolean = false;
+		while (!invalidated && page.nextCursor !== null) {
+			signal.throwIfAborted();
+			page = await this.queryRandomReunionObservations(page.nextCursor, 150);
+			signal.throwIfAborted();
+			if (page.invalidated || page.catalogRevision !== catalogRevision || JSON.stringify(page.coverage) !== JSON.stringify(coverage)) {
+				invalidated = true;
+				break;
+			}
+			this.requireRandomReunionCoverage(page.coverage);
+			append(page.items);
+			if (control.shouldYield(page.items.length)) await control.yieldNow();
+		}
+		if (invalidated) throw new CatalogDiscoveryInvalidatedError();
+		const pool = { catalogRevision, day, coverage, candidates };
+		if (!await this.isDiscoverySnapshotCurrent(pool, signal)) throw new CatalogDiscoveryInvalidatedError();
+		signal.throwIfAborted();
+		this.randomReunionCandidatePool = pool;
+		return pool;
 	}
 
 	private async queryRandomReunionObservations(

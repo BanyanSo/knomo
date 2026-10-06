@@ -104,10 +104,36 @@ export function getSidebarDragWidth(drag: SidebarDragState, clientX: number): nu
 	return drag.startWidth + clientX - drag.startX;
 }
 
-export function renderSidebarStat(container: HTMLElement, value: string, label: string): void {
+export function renderSidebarStat(container: HTMLElement, value: string, label: string): { value: HTMLElement; label: HTMLElement } {
 	const item = container.createDiv({ cls: "knomo-stat" });
-	item.createDiv({ cls: "knomo-stat-value", text: value });
-	item.createDiv({ cls: "knomo-stat-label", text: label });
+	return {
+		value: item.createDiv({ cls: "knomo-stat-value", text: value }),
+		label: item.createDiv({ cls: "knomo-stat-label", text: label }),
+	};
+}
+
+const sidebarStats = new WeakMap<HTMLElement, {
+	items: Array<{ value: HTMLElement; label: HTMLElement }>;
+	updating: HTMLElement;
+}>();
+
+export function renderSidebarStats(container: HTMLElement, metrics: readonly [string, string][], updating: boolean): void {
+	let rendered = sidebarStats.get(container);
+	if (!rendered || !container.contains(rendered.updating)) {
+		container.empty();
+		rendered = {
+			items: metrics.map(([value, label]) => renderSidebarStat(container, value, label)),
+			updating: container.createDiv({ cls: "knomo-sidebar-updating" }),
+		};
+		sidebarStats.set(container, rendered);
+	}
+	metrics.forEach(([value, label], index) => {
+		const item = rendered!.items[index];
+		if (item.value.getText() !== value) item.value.setText(value);
+		if (item.label.getText() !== label) item.label.setText(label);
+	});
+	rendered.updating.hidden = !updating;
+	if (updating) rendered.updating.setText(t("status.updating"));
 }
 
 export function renderSidebarTags(container: HTMLElement | null, tags: TagSummary[], options: RenderSidebarTagsOptions): void {

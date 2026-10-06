@@ -116,6 +116,8 @@ Commands reuse an open Knomo view or open one when needed. **New memo** keeps th
 
 The Composer displays Markdown formatting while revealing the relevant source as you edit. Use it to write lists, links, quotes, and code, or toggle supported checkboxes in the draft with undo and redo support.
 
+On Obsidian 1.14+, the Composer displays six highlight colors from a leading 🔴, 🟠, 🟡, 🟢, 🔵, or 🟣 inside `==...==`. Editing reveals the complete source; removing highlight formatting preserves the original body, including the emoji. Older hosts retain the ordinary highlight display. Card text, input, and supporting UI text use the host's preferred sizes where available, including system text scaling on Obsidian 1.14 mobile.
+
 Within the same open Knomo view, closing and reopening the Composer keeps your draft. Editing an existing memo temporarily sets aside the new-memo draft and restores its text, references, selection, and scroll position after you save or cancel the edit. A failed save keeps your editing content available. Drafts are not guaranteed to survive closing the view or restarting Obsidian.
 
 ---
@@ -246,6 +248,8 @@ Supported use cases include:
 - opening a larger preview from the card;
 - switching between images in the preview.
 
+Double-click the image to enlarge it, then drag to pan. On mobile, double-tap or pinch with two fingers; panning a zoomed image does not switch images. Double-click or double-tap again to fit the image, or pinch inward to zoom out. If loading fails, retry directly in the preview.
+
 The goal is not to become an image manager. Knomo only provides compact previews so image-based memos remain easy to browse.
 
 ---
@@ -295,6 +299,8 @@ Statistics are designed for review and navigation, not for turning writing into 
 
 Knomo includes lightweight review entry points such as random revisit and date-based review. They are designed to help old fragments meet the present again without requiring AI or external services.
 
+Random revisit shows up to 10 eligible memos per group, including image-only and link-only notes. During the current view session, it favors memos outside the last three groups. With at least 20 stable candidates, consecutive full groups do not overlap; smaller pools repeat only as needed. Showing a card does not mark it as reviewed. Opening it successfully or explicitly marking it does, which lowers its selection weight for the next three calendar days.
+
 A memo does not need to become useful immediately. Sometimes its value appears when you encounter it again in a different context.
 
 ---
@@ -302,6 +308,8 @@ A memo does not need to become useful immediately. Sometimes its value appears w
 ### Shuffle day
 
 Shuffle day brings back one complete day from at least seven days ago and displays that day's memos in chronological order. It favors varied dates and avoids immediately repeating recently shown days when possible.
+
+It first chooses among available time ranges, then chooses a day within that range. Days with more content receive a modest preference. Returning to either review view keeps its current results; use Shuffle to choose again. If review history cannot be saved, the selected day's content remains available and Knomo shows a notice.
 
 Alongside the memo cards, Knomo summarizes the day's memo count, word count, tags, images, and links. Selection happens entirely from your local memo index, without AI or external services.
 
@@ -697,6 +705,8 @@ Yes. Knomo is designed to keep content readable in Markdown. If you edit files m
 
 ## Development Verification
 
+The Obsidian 1.14.4 API types are pinned to [an official repository commit](https://github.com/obsidianmd/obsidian-api/commit/9abd9605ce081383674aae1ed111c456edde0688), because that version was not available from npm when the adaptation was implemented. `package-lock.json` records the archive integrity and matching CodeMirror peers. These are development dependencies; supported-host compatibility still starts at Obsidian 1.11.0.
+
 Choose verification by the change's scope and risk. Documentation-only work needs content, reference and diff checks. For a low-risk local change, run the relevant tests (multiple files may be passed together):
 
 ```bash
@@ -706,6 +716,8 @@ npm run test:file -- tests/<Name>.test.ts
 `npm test` / `npm run test:quiet` run product behavior, data safety, sync acceptance and architecture/product contracts. `npm run test:tooling` runs the test runner, verification utilities and benchmark trace validator tests. `npm run test:all` runs both sets; CI, release checks and `npm run verify` use this full set. Tests remain in the same directory, new files default to the product set, and `test:file` can select files from either set. Synthetic trace tests do not replace real-device performance acceptance.
 
 Persistence, migration, identity, data-safety and cross-service semantic changes require focused regression coverage followed by `npm run test:quiet` and `npm run typecheck`. Run `npm run build` when build artifacts need verification. Expand or repeat checks only for new changes, failures or unresolved risks; report unrun checks separately.
+
+`npm run build` writes the release assets `main.js`, `manifest.json`, and minified `styles.css` to `dist/`. Use these three files for local installation or publication; the root `styles.css` remains readable source.
 
 `npm run verify` is a comprehensive check, not a default handoff requirement: it includes type checking, all tests, the production build, i18n, diff whitespace, forbidden source patterns and trailing whitespace scans. Use it only when that full scope is required. Do not run lint unless requested. Coordinate test commands serially within one working tree because they share compiled output.
 

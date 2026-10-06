@@ -174,6 +174,39 @@ test("共享任务映射跳过普通列表并在 DOM 结构不一致时禁止写
 	assert.equal(valid.getAttr("data-knomo-task-index"), null);
 });
 
+test("长任务列表一次解析并线性绑定，保留普通和嵌套列表位置", async t => {
+	await ensureObsidianStub();
+	const { parser } = await import("@lezer/markdown");
+	const { prepareRenderedTaskCheckboxes } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const container = new TestElement("div");
+	container.createEl("li");
+	const inputs = Array.from({ length: 80 }, (_, index) => {
+		const item = container.createEl("li", { cls: "task-list-item", attr: { "data-task": index % 2 ? "x" : " " } });
+		return item.createEl("input", { attr: { type: "checkbox" } });
+	});
+	const parse = t.mock.method(parser, "parse");
+	const closest = t.mock.method(TestElement.prototype, "closest");
+	const contentSnapshot = ["- plain", ...inputs.map((_, index) => `${index % 2 ? "  " : ""}- [${index % 2 ? "X" : " "}] task ${index}`)].join("\r\n");
+	prepareRenderedTaskCheckboxes(container.asHtml(), makeMemo({ contentSnapshot }));
+	assert.deepEqual(inputs.map(input => input.getAttr("data-knomo-task-index")), inputs.map((_, index) => String(index)));
+	assert.ok(inputs.every(input => !input.disabled));
+	assert.equal(parse.mock.callCount(), 1, "同一正文只解析一次");
+	assert.ok(closest.mock.callCount() <= inputs.length * 2, "不能逐任务重新扫描所有 checkbox");
+});
+
+test("原始任务 HTML 使整组复选框保持只读", async () => {
+	await ensureObsidianStub();
+	const { prepareRenderedTaskCheckboxes } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const container = new TestElement("div");
+	const input = container.createEl("li", { cls: "task-list-item", attr: { "data-task": " " } })
+		.createEl("input", { attr: { type: "checkbox" } });
+	prepareRenderedTaskCheckboxes(container.asHtml(), makeMemo({ contentSnapshot: "- [ ] task\n\n<input type='checkbox'>" }));
+	assert.equal(input.disabled, true);
+	assert.equal(input.getAttr("data-knomo-task-index"), null);
+});
+
 test("owns one render component per container and unloads it when replaced or cleared", async () => {
 	await ensureObsidianStub();
 	const obsidian = await import("obsidian");

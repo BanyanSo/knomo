@@ -1,11 +1,98 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IDBDatabase as FakeDatabase, IDBKeyRange, indexedDB } from "fake-indexeddb";
+import { IDBDatabase as FakeDatabase, IDBIndex as FakeIndex, IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
+
+test("同一查询和计数只准备一次文本条件，两个 Store 保持组合筛选一致", async t => {
+	const name = uniqueDatabaseName("prepared-query");
+	const stores = [createStore(name), new InMemoryMemoCatalogStore()];
+	const path = "Daily/2026-07-01.md";
+	const filter = { text: "ＰＲＯＢＥ", tags: ["ＰＲＯＪＥＣＴ"], hasTask: false };
+	let preparations = 0;
+	const normalize = String.prototype.normalize;
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 40 }, (_, i) =>
+				makeObservation(path, "2026-07-01", i + 1, "10:30", i % 2 ? "probe" : "other", { tags: ["Project/Child"] }))));
+		}
+		t.mock.method(String.prototype, "normalize", function(this: string, form?: string) {
+			if (String(this) === filter.text) preparations++;
+			return normalize.call(this, form);
+		});
+		for (const store of stores) {
+			preparations = 0;
+			const page = await store.query({ ...filter, limit: 7 });
+			assert.equal(page.items.length, 7);
+			assert.ok(page.items.every(item => item.content === "probe"));
+			assert.equal(preparations, 1, "分页的条件准备不能随候选数增长");
+			preparations = 0;
+			assert.equal((await store.count(filter)).count, 20);
+			assert.equal(preparations, 1, "计数的条件准备不能随候选数增长");
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(name); }
+});
+
+test("取消计数立即终止游标，主数据库保持可用且不激活 fallback", async t => {
+	const databaseName = uniqueDatabaseName("count-cancel");
+	const primary = createStore(databaseName);
+	const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+	const controller = new AbortController();
+	const openCursor = FakeIndex.prototype.openCursor;
+	let reads = 0;
+	try {
+		await store.open();
+		const path = "Daily/2026-07-01.md";
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 20 }, (_, i) =>
+			makeObservation(path, "2026-07-01", i + 1, "10:30", "memo"))));
+		t.mock.method(FakeIndex.prototype, "openCursor", function(this: IDBIndex, ...args: Parameters<IDBIndex["openCursor"]>) {
+			const request = openCursor.apply(this, args);
+			request.addEventListener("success", () => { if (++reads === 2) controller.abort(); });
+			return request;
+		});
+		await assert.rejects(store.count({}, controller.signal), { name: "AbortError" });
+		assert.equal(reads, 2);
+		assert.equal(store.getLifecycle().persistent, true);
+		assert.equal((await store.query({ limit: 1 })).items.length, 1);
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});
+
+test("浮标游标缺少错误原因时仍以 Error 拒绝查询", async t => {
+	const databaseName = uniqueDatabaseName("buoy-cursor-error");
+	const store = createStore(databaseName);
+	const openKeyCursor = FakeIndex.prototype.openKeyCursor;
+	t.mock.method(FakeIndex.prototype, "openKeyCursor", function (this: IDBIndex, ...args: Parameters<IDBIndex["openKeyCursor"]>) {
+		const request = openKeyCursor.apply(this, args);
+		request.addEventListener("success", event => {
+			event.stopImmediatePropagation();
+			request.onerror?.call(request, event);
+		});
+		return request;
+	});
+	try {
+		await assert.rejects(store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 7 }),
+			error => error instanceof Error && error.message === "Memo Catalog time buoy query failed.");
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});
+
+test("浮标索引解析抛出非 Error 时保留原因并拒绝查询", async t => {
+	const databaseName = uniqueDatabaseName("buoy-selection-error");
+	const store = createStore(databaseName);
+	const path = "Daily/2026-07-01.md";
+	t.mock.method(TimeBuoyPageSelection.prototype, "add", () => { throw "invalid buoy posting"; });
+	try {
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", [
+			makeObservation(path, "2026-07-01", 1, "10:30", "same", { timeBuoyDates: ["2026-09-27"] }),
+		]));
+		await assert.rejects(store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 7 }),
+			error => error instanceof Error && error.message === "invalid buoy posting");
+	} finally { store.close(); await deleteDatabase(databaseName); }
+});
 
 test("浮标分页保留三组排序、多日期合并、同文 occurrence 及查询边界", async () => {
 	const databaseName = uniqueDatabaseName("buoy-pages");

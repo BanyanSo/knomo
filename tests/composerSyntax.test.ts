@@ -92,3 +92,39 @@ test("incremental parser agrees with fresh parsing across marker, fence and link
 		}
 	}
 });
+
+test("colored highlights recognize native circle and square prefixes without changing raw content bounds", () => {
+	for (const [prefix, color] of [["🔴", "red"], ["🟥", "red"], ["🟠", "orange"], ["🟧", "orange"], ["🟡", "yellow"], ["🟨", "yellow"], ["🟢", "green"], ["🟩", "green"], ["🔵", "blue"], ["🟦", "blue"], ["🟣", "purple"], ["🟪", "purple"]]) {
+		const value = "before ==" + prefix + " 正文== after";
+		const range = scanComposerSyntax(value).ranges.find(r => r.kind === "highlight")!;
+		assert.equal(value.slice(range.contentFrom, range.contentTo), prefix + " 正文");
+		assert.deepEqual(range.highlight, { color, prefix: { from: range.contentFrom, to: range.contentFrom + prefix.length } });
+		assert.equal(revealComposerRange(range, [{ from: range.contentFrom + 1, to: range.contentFrom + 1 }]), true);
+	}
+});
+
+test("highlight color prefixes are literal-first and retain source isolation", () => {
+	for (const content of ["普通高亮", "文字 🔴", " 🔴 正文", "😀 正文"]) {
+		const range = scanComposerSyntax("==" + content + "==").ranges[0];
+		assert.equal(range.highlight, undefined);
+	}
+	for (const source of ["`==🔴 literal==`", "[[Note|==🔵 alias==]]", "[==🟢 label==](https://x)", "~~~\n==🟣 code==\n~~~"]) {
+		assert.equal(scanComposerSyntax(source).ranges.some(r => r.kind === "highlight"), false, source);
+	}
+});
+
+test("incremental colored-prefix edits agree with fresh parsing and preserve UTF-16 boundaries", () => {
+	let text = "before ==🔴 **正文**== after";
+	let syntax = scanComposerSyntax(text);
+	for (const insert of ["🟦", "x", "🟢"]) {
+		const from = text.indexOf("==") + 2;
+		const codePoint = text.codePointAt(from)!;
+		const to = from + (codePoint > 0xffff ? 2 : 1);
+		const fragments = TreeFragment.applyChanges(TreeFragment.addTree(syntax.tree), [{ fromA: from, toA: to, fromB: from, toB: from + insert.length }]);
+		text = text.slice(0, from) + insert + text.slice(to);
+		syntax = scanComposerSyntax(text, fragments);
+		assert.deepEqual(syntax.ranges, scanComposerSyntax(text).ranges);
+		const highlight = syntax.ranges.find(r => r.kind === "highlight")!;
+		assert.equal(highlight.highlight?.color, insert === "🟦" ? "blue" : insert === "🟢" ? "green" : undefined);
+	}
+});

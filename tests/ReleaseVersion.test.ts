@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import { JSDOM } from "jsdom";
 
 const script = path.resolve("scripts/check-release-version.mjs");
 const tag = "1.12.5";
@@ -98,4 +100,34 @@ test("release workflow gates dependency installation and publication on the vers
 		assert.ok(workflow.indexOf(step) > check, `${step} must follow validation`);
 	}
 	assert.doesNotMatch(workflow, /continue-on-error: true|if:.*always\(/u);
+});
+
+test("production assets preserve JS and manifest and compress CSS without changing source or styles", async () => {
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-release-assets-"));
+	const css = "/* readable source */\n.knomo-button { display: flex; gap: 12px; color: #ffffff; padding: 4px 8px; }\n";
+	const main = Buffer.from([0, 1, 2, 255]);
+	const manifest = '{"id":"knomo"}\n';
+	try {
+		fs.writeFileSync(path.join(directory, "main.js"), main);
+		fs.writeFileSync(path.join(directory, "manifest.json"), manifest);
+		fs.writeFileSync(path.join(directory, "styles.css"), css);
+		const importModule = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<{ prepareReleaseAssets(root: string): Promise<void> }>;
+		const { prepareReleaseAssets } = await importModule(pathToFileURL(path.resolve("scripts/prepare-release-assets.mjs")).href);
+		await prepareReleaseAssets(directory);
+		const destination = path.join(directory, "dist");
+		assert.deepEqual(fs.readdirSync(destination).sort(), ["main.js", "manifest.json", "styles.css"]);
+		assert.deepEqual(fs.readFileSync(path.join(destination, "main.js")), main);
+		assert.equal(fs.readFileSync(path.join(destination, "manifest.json"), "utf8"), manifest);
+		assert.equal(fs.readFileSync(path.join(directory, "styles.css"), "utf8"), css);
+		const compressed = fs.readFileSync(path.join(destination, "styles.css"), "utf8");
+		assert.ok(Buffer.byteLength(compressed) < Buffer.byteLength(css));
+		const computed = (styles: string) => {
+			const dom = new JSDOM(`<style>${styles}</style><button class="knomo-button"></button>`);
+			try {
+				const style = dom.window.getComputedStyle(dom.window.document.querySelector("button")!);
+				return [style.display, style.gap, style.color, style.padding];
+			} finally { dom.window.close(); }
+		};
+		assert.deepEqual(computed(compressed), computed(css));
+	} finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

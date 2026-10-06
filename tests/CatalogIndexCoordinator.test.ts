@@ -1125,7 +1125,6 @@ async function createCoordinatorFixture(
 	const { TFile } = await import("obsidian");
 	const registeredVaultEvents: string[] = [];
 	const vaultListeners = new Map<string, Array<(...args: unknown[]) => void>>();
-	const workspaceListeners = new Map<string, Array<(...args: unknown[]) => void>>();
 	const cleanupCallbacks: Array<() => void> = [];
 	const domListeners = new Map<string, (...args: unknown[]) => void>();
 	const failedReads = new Set<string>();
@@ -1140,12 +1139,6 @@ async function createCoordinatorFixture(
 		stat: { mtime: entry.mtime, size: Buffer.byteLength(entry.content) },
 	}));
 	const contentByPath = new Map(entries.map((entry) => [entry.path, Buffer.from(entry.content, "utf8")]));
-	let activeView: {
-		file: InstanceType<typeof TFile>;
-		editor: { getValue: () => string };
-		getViewType: () => string;
-		containerEl: { contains: (target: unknown) => boolean };
-	} | null = null;
 	const app = {
 		vault: {
 			on: (name: string, callback: (...args: unknown[]) => void) => {
@@ -1176,13 +1169,6 @@ async function createCoordinatorFixture(
 			configDir: ".obsidian",
 		},
 		workspace: {
-			getActiveViewOfType: () => activeView,
-			on: (name: string, callback: (...args: unknown[]) => void) => {
-				const listeners = workspaceListeners.get(name) ?? [];
-				listeners.push(callback);
-				workspaceListeners.set(name, listeners);
-				return {};
-			},
 			containerEl: {
 				doc,
 				win: {
@@ -1221,16 +1207,6 @@ async function createCoordinatorFixture(
 		file: (path: string) => files.find((file) => file.path === path) ?? null,
 		emitVaultEvent: (name: string, ...args: unknown[]) => {
 			for (const listener of vaultListeners.get(name) ?? []) listener(...args);
-		},
-		emitTrustedEditorInput: (file: InstanceType<typeof TFile>, content: string, isTrusted = true) => {
-			const target = {};
-			activeView = {
-				file,
-				editor: { getValue: () => content },
-				getViewType: () => "markdown",
-				containerEl: { contains: (candidate) => candidate === target },
-			};
-			domListeners.get("input")?.({ isTrusted, target });
 		},
 		setFile: (path: string, content: string, mtime: number) => {
 			let file = files.find((item) => item.path === path);

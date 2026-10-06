@@ -48,6 +48,8 @@ test("Things 桌面与移动首屏、分页、计数使用相同组合条件且�
 	};
 	Object.assign(view, {
 		viewStateController: Object.assign(new KnomoViewStateController(), { activeNav: "things", activeTagKey: "project", searchQuery: "release" }),
+		containerEl: { win: { setTimeout, clearTimeout } },
+		catalogRevision: 1,
 		catalogMobileQueryRun: 0, catalogMobileCursor: null, memos: [],
 		getCatalogReadService: () => ({
 			query: async (query: CatalogFeatureQuery) => {
@@ -56,7 +58,7 @@ test("Things 桌面与移动首屏、分页、计数使用相同组合条件且�
 			},
 			count: async (query: CatalogFeatureFilter) => { counts.push(query); return { count: 3, complete: true, catalogRevision: 1 }; },
 		}),
-		syncRecordStatsSource: () => undefined, invalidateMemoSearchCache: () => undefined,
+		syncRecordStatsSource: () => undefined,
 		retainMemoCardPreviews: () => undefined, renderMobileSearchResults: () => undefined,
 	});
 	assert.deepEqual(view.buildCatalogActiveQuery(false), { hasTask: true, tags: ["project"], text: "release" });
@@ -70,6 +72,8 @@ test("Things 桌面与移动首屏、分页、计数使用相同组合条件且�
 	}
 	assert.equal(queries[0].cursor, null);
 	assert.notEqual(queries[1].cursor, null);
+	assert.deepEqual(counts, []);
+	await new Promise(resolve => setTimeout(resolve, 0));
 	assert.deepEqual(counts, [expected]);
 	assert.equal(view.catalogMobileTotalCount, 3);
 });
@@ -84,12 +88,48 @@ test("Things 的迟到移动计数不能覆盖已经切换的标签条件", asyn
 		refreshCatalogMobileTotalCount(options: { run: number; query: CatalogFeatureFilter; recordStatsFilter: null; catalogRevision: number; contextKey: string }): Promise<void>;
 	};
 	Object.assign(view, { viewStateController: state, catalogMobileQueryRun: 1, catalogMobileTotalCount: null,
+		catalogRevision: 1,
+		containerEl: { win: { setTimeout, clearTimeout } },
 		getCatalogReadService: () => ({ count: () => pending.promise }), renderMobileSearchResults: () => assert.fail("迟到计数不应渲染") });
 	const work = view.refreshCatalogMobileTotalCount({ run: 1, query: { hasTask: true, tags: ["old"] }, recordStatsFilter: null, catalogRevision: 1, contextKey: JSON.stringify(["things", "old"]) });
+	await new Promise(resolve => setTimeout(resolve, 0));
 	state.activeTagKey = "new";
 	pending.resolve({ count: 99, complete: true, catalogRevision: 1 });
 	await work;
 	assert.equal(view.catalogMobileTotalCount, null);
+});
+
+test("关闭移动搜索取消尚未启动的计数，也终止正在扫描的计数", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const timers = new Map<number, () => void>();
+	let id = 0, scans = 0;
+	let scanSignal: AbortSignal | undefined;
+	const view = Object.assign(Object.create(KnomoView.prototype) as {
+		refreshCatalogMobileTotalCount(options: { run: number; query: CatalogFeatureFilter; recordStatsFilter: null; catalogRevision: number; contextKey: string }): Promise<void>;
+		cancelCatalogMobileCount(): void;
+	}, {
+		viewStateController: new KnomoViewStateController(), catalogMobileQueryRun: 1, catalogRevision: 1,
+		containerEl: { win: { setTimeout: (callback: () => void) => { timers.set(++id, callback); return id; }, clearTimeout: (key: number) => timers.delete(key) } },
+		getCatalogReadService: () => ({ count: async (_request: CatalogFeatureFilter, signal: AbortSignal) => {
+			scans++; scanSignal = signal;
+			return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+		} }),
+		renderMobileSearchResults: () => assert.fail("取消计数不能刷新结果"),
+	});
+	const options = { run: 1, query: {}, recordStatsFilter: null, catalogRevision: 1, contextKey: JSON.stringify(["all", null]) };
+	const beforeStart = view.refreshCatalogMobileTotalCount(options);
+	view.cancelCatalogMobileCount();
+	await beforeStart;
+	assert.equal(timers.size, 0);
+	assert.equal(scans, 0);
+	const duringScan = view.refreshCatalogMobileTotalCount(options);
+	const [key, callback] = [...timers][0]; timers.delete(key); callback();
+	await Promise.resolve();
+	assert.equal(scans, 1);
+	view.cancelCatalogMobileCount();
+	await duringScan;
+	assert.equal(scanSignal?.aborted, true);
 });
 
 test("全历史查询结果不变时立即移除旧加载按钮，保留已渲染卡片", async () => {
@@ -159,7 +199,6 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
 	view.invalidateRecordStats = () => undefined;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -229,7 +268,6 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
 	view.invalidateRecordStats = () => undefined;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -281,7 +319,6 @@ test("MOBILE-CAT-PAGE-001：近月首查即使无 cursor 也保留全历史展�
 	view.hasCommittedCatalogDesktopQuery = false;
 	view.cardFlowError = null;
 	view.filteredMemosCache = null;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -385,7 +422,6 @@ test("Catalog revision 变化触发刷新时保留当前随机重逢批次", asy
 	view.loadCatalogMemos = async () => makeCatalogLoad(2, completeCoverage());
 	view.getCardFlowStateKey = () => "random-ready";
 	view.getMobileSearchStateKey = () => "mobile-search";
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -480,7 +516,6 @@ test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快�
 	view.getCardFlowStateKey = () => "card-flow";
 	view.getMobileSearchStateKey = () => "mobile-search";
 	view.invalidateRecordStats = () => undefined;
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderUiState = () => undefined;
@@ -530,7 +565,6 @@ test("查询 fingerprint 变化时保留旧结果、清空 cursor，并启动新
 	view.getCatalogQueryFingerprint = () => fingerprint;
 	let recordStatsInvalidations = 0;
 	view.invalidateRecordStats = () => { recordStatsInvalidations += 1; };
-	view.invalidateMemoSearchCache = () => undefined;
 	view.retainMemoCardPreviews = () => undefined;
 	view.resetVisibleMemos = () => undefined;
 	view.renderAllMemosLoadingState = () => { loadingRenderCount += 1; };
@@ -604,6 +638,31 @@ test("桌面精确计数只提交当前查询与 Catalog revision", async () => 
 	await ignored;
 	assert.equal(view.catalogDesktopTotalCount, 90);
 	assert.equal(renderCount, 1);
+});
+
+test("新桌面计数终止旧扫描，旧任务收尾不清除新任务", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype) as QueryView;
+	const signals: AbortSignal[] = [];
+	let renders = 0;
+	Object.assign(view, {
+		memoSourceGeneration: 0, catalogDesktopQueryRun: 1, catalogDesktopCountRun: 0, catalogDesktopTotalCount: null,
+		isCatalogQueryCurrent: () => true, getCardFlowStateKey: () => "count", renderCardFlowIfChanged: () => { renders++; },
+		countCatalogFeature: async (_loadAll: boolean, signal: AbortSignal) => {
+			signals.push(signal);
+			if (signals.length === 1) return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+			return makeCatalogCount(90, 7);
+		},
+	});
+	const options = { loadAll: true, queryFingerprint: "tag:project", queryRun: 1, sourceGeneration: 0, catalogRevision: 7 };
+	const old = view.refreshCatalogDesktopTotalCount(options);
+	const next = view.refreshCatalogDesktopTotalCount(options);
+	await Promise.all([old, next]);
+	assert.equal(signals[0].aborted, true);
+	assert.equal(signals[1].aborted, false);
+	assert.equal(view.catalogDesktopTotalCount, 90);
+	assert.equal(renders, 1);
 });
 
 test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
@@ -893,7 +952,6 @@ interface QueryView {
 	getMobileSearchStateKey: () => string;
 	getCatalogQueryFingerprint: (loadAll: boolean) => string;
 	invalidateRecordStats: () => void;
-	invalidateMemoSearchCache: () => void;
 	retainMemoCardPreviews: () => void;
 	resetVisibleMemos: () => void;
 	renderUiState: (options: object) => void;
@@ -953,7 +1011,6 @@ interface InitialMobileView {
 	hasCommittedCatalogDesktopQuery: boolean;
 	cardFlowError: string | null;
 	filteredMemosCache: null;
-	invalidateMemoSearchCache: () => void;
 	retainMemoCardPreviews: () => void;
 	resetVisibleMemos: () => void;
 	renderUiState: () => void;
@@ -1140,12 +1197,16 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 class TestStatsElement {
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
+	private text = "";
 
 	asHtml(): HTMLElement {
 		return this as unknown as HTMLElement;
 	}
 
 	empty(): void {}
+
+	getText(): string { return this.text; }
+	setText(value: string): void { this.text = value; }
 
 	toggleClass(name: string, active: boolean): void {
 		if (active) this.classes.add(name);

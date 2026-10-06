@@ -1,10 +1,10 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { MemoReviewState, MemoReviewStateMap } from "../types/review";
-import { formatDatePart } from "./date";
+import { formatDatePart, parseMemoCalendarDate } from "./date";
 import { CooperativeYieldController } from "../services/CooperativeTask";
 import type { CooperativeTaskRuntime } from "../services/CooperativeTask";
 
-export type RandomReunionCandidate = Pick<MemoRecord, "id" | "createdAt" | "tags" | "dailyRef">;
+export type RandomReunionCandidate = Pick<MemoRecord, "id" | "createdAt" | "tags" | "dailyRef"> & { logicalDate?: string };
 
 export interface RandomReunionOptions {
 	today?: Date;
@@ -15,6 +15,9 @@ export interface RandomReunionOptions {
 	maxPerDate?: number;
 	maxPerPrimaryTag?: number;
 	random?: () => number;
+	// 批次按提交顺序排列，最后一批是最近展示；不代表已回看。
+	shownBatches?: readonly (readonly string[])[];
+	signal?: AbortSignal;
 }
 
 const DEFAULT_MIN_CONTENT_LENGTH = 8;
@@ -37,11 +40,11 @@ export function filterRandomReunionCandidates(
 		if (memo.status !== "active" || memo.deletedAt !== undefined) {
 			return false;
 		}
-		const createdAt = parseMemoDate(memo.createdAt);
-		if (createdAt === null || isSameDay(createdAt, today)) {
+		const createdAt = getMemoDate({ ...memo, logicalDate: memo.catalog?.observation.logicalDate });
+		if (createdAt === null || formatDatePart(createdAt) >= formatDatePart(today)) {
 			return false;
 		}
-		if (getComparableContentLength(memo.contentSnapshot) < minContentLength) {
+		if (getComparableContentLength(memo.contentSnapshot) < minContentLength && memo.images.length === 0 && memo.links.length === 0) {
 			return false;
 		}
 		if (hasBlacklistedTag(memo.tags, blacklistTags)) {
@@ -57,8 +60,8 @@ export function calculateRandomReunionWeight(
 	today = new Date(),
 ): number {
 	let weight = 1;
-	const createdAt = parseMemoDate(memo.createdAt);
-	const todayStart = startOfDay(today);
+	const createdAt = getMemoDate(memo);
+	const todayStart = today;
 	if (
 		createdAt !== null &&
 		createdAt.getMonth() === todayStart.getMonth() &&
@@ -72,9 +75,9 @@ export function calculateRandomReunionWeight(
 	}
 	const lastReviewedAt = reviewState?.lastReviewedAt === undefined
 		? null
-		: parseDatePart(reviewState.lastReviewedAt);
+		: parseReviewDate(reviewState.lastReviewedAt);
 	if (lastReviewedAt !== null) {
-		const daysSinceReview = differenceInDays(todayStart, startOfDay(lastReviewedAt));
+		const daysSinceReview = Math.max(0, differenceInDays(todayStart, lastReviewedAt));
 		if (daysSinceReview <= 3) {
 			return MIN_WEIGHT;
 		}
@@ -83,21 +86,9 @@ export function calculateRandomReunionWeight(
 	return clampWeight(weight);
 }
 
-export function weightedSampleWithoutReplacement<T>(
-	items: T[],
-	getWeight: (item: T) => number,
-	count: number,
-	random: () => number = Math.random,
-): T[] {
-	const work = sampleWeighted(items, getWeight, count, random);
-	let step = work.next();
-	while (!step.done) step = work.next();
-	return step.value;
-}
-
 // 权重树避免每次抽取重扫剩余候选，保持按原顺序累计权重的无放回抽样。
-function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: number,
-	random: () => number): Generator<void, T[]> {
+function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number,
+	random: () => number): Generator<T | undefined> {
 	let size = 1;
 	while (size < items.length) size *= 2;
 	const tree = new Float64Array(size * 2);
@@ -109,9 +100,7 @@ function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: n
 		tree[index] = tree[index * 2] + tree[index * 2 + 1];
 		yield;
 	}
-	const picked: T[] = [];
-	const targetCount = Math.min(Math.max(0, Math.floor(count)), items.length);
-	while (picked.length < targetCount) {
+	for (let picked = 0; picked < items.length; picked++) {
 		let cursor = clampRandom(random()) * tree[1];
 		let index = 1;
 		while (index < size) {
@@ -119,88 +108,92 @@ function* sampleWeighted<T>(items: T[], getWeight: (item: T) => number, count: n
 			if (left > 0 && cursor <= left) index *= 2;
 			else { cursor -= left; index = index * 2 + 1; }
 		}
-		picked.push(items[index - size]);
+		const memo = items[index - size];
 		tree[index] = 0;
 		while (index > 1) {
 			index = Math.floor(index / 2);
 			tree[index] = tree[index * 2] + tree[index * 2 + 1];
 		}
-		yield;
+		yield memo;
 	}
-	return picked;
 }
 
 export async function sampleRandomReunionCandidates<T extends RandomReunionCandidate>(
 	candidates: T[], reviews: MemoReviewStateMap, count: number, options: RandomReunionOptions,
 	runtime: CooperativeTaskRuntime,
 ): Promise<T[]> {
+	const limit = Math.min(Math.max(0, Math.floor(count)), candidates.length);
+	options.signal?.throwIfAborted();
+	if (limit === 0) return [];
 	const control = new CooperativeYieldController(runtime);
-	const work = sampleWeighted(candidates, (memo) => calculateRandomReunionWeight(memo, reviews[memo.id], options.today),
-		candidates.length, options.random ?? Math.random);
-	let step = work.next();
-	while (!step.done) {
-		if (control.shouldYield()) await control.yieldNow();
-		step = work.next();
+	const today = options.today ?? new Date();
+	const batches = options.shownBatches?.slice(-3) ?? [];
+	const latestBatch = new Map<string, number>();
+	batches.forEach((batch, index) => batch.forEach(key => latestBatch.set(key, index + 1)));
+	const layers: T[][] = batches.length === 0 ? [candidates] : Array.from({ length: batches.length + 1 }, () => []);
+	if (batches.length > 0) {
+		for (const memo of candidates) {
+			layers[latestBatch.get(memo.id) ?? 0].push(memo);
+			if (control.shouldYield()) {
+				await control.yieldNow();
+				options.signal?.throwIfAborted();
+			}
+		}
 	}
-	const ordered = step.value;
 	const selected: T[] = [];
 	const ids = new Set<string>();
 	const sources = new Map<string, number>();
 	const dates = new Map<string, number>();
 	const tags = new Map<string, number>();
-	const limit = Math.min(Math.max(0, Math.floor(count)), candidates.length);
-	for (const memo of ordered) {
-		if (selected.length >= limit) break;
-		if (canUseDiverseMemo(memo, sources, dates, tags, options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT,
-			options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT, options.maxPerPrimaryTag ?? DEFAULT_DIVERSITY_LIMIT)) {
-			selected.push(memo); ids.add(memo.id); incrementDiversityCounts(memo, sources, dates, tags);
-		}
-		if (control.shouldYield()) await control.yieldNow();
-	}
-	for (const memo of ordered) {
-		if (selected.length >= limit) break;
-		if (!ids.has(memo.id)) { selected.push(memo); ids.add(memo.id); }
-		if (control.shouldYield()) await control.yieldNow();
-	}
-	return selected;
-}
-
-export function selectDiverseRandomReunionMemos(
-	orderedMemos: MemoRecord[],
-	count: number,
-	options: RandomReunionOptions = {},
-): MemoRecord[] {
-	const targetCount = Math.min(Math.max(0, Math.floor(count)), orderedMemos.length);
-	const maxPerSourcePath = options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT;
-	const maxPerDate = options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT;
-	const maxPerPrimaryTag = options.maxPerPrimaryTag ?? DEFAULT_DIVERSITY_LIMIT;
-	const selected: MemoRecord[] = [];
-	const selectedIds = new Set<string>();
-	const sourceCounts = new Map<string, number>();
-	const dateCounts = new Map<string, number>();
-	const tagCounts = new Map<string, number>();
-
-	for (const memo of orderedMemos) {
-		if (selected.length >= targetCount) {
-			break;
-		}
-		if (!canUseDiverseMemo(memo, sourceCounts, dateCounts, tagCounts, maxPerSourcePath, maxPerDate, maxPerPrimaryTag)) {
-			continue;
-		}
+	const accept = (memo: T) => {
 		selected.push(memo);
-		selectedIds.add(memo.id);
-		incrementDiversityCounts(memo, sourceCounts, dateCounts, tagCounts);
-	}
-
-	for (const memo of orderedMemos) {
-		if (selected.length >= targetCount) {
-			break;
+		ids.add(memo.id);
+		incrementDiversityCounts(memo, sources, dates, tags);
+	};
+	for (const layer of layers) {
+		if (selected.length >= limit) break;
+		const rejected: T[] = [];
+		const rejectedByTags: T[] = [];
+		const work = sampleWeighted(layer, memo => calculateRandomReunionWeight(memo, reviews[memo.id], today), options.random ?? Math.random);
+		for (const memo of work) {
+			options.signal?.throwIfAborted();
+			if (memo !== undefined && !ids.has(memo.id)) {
+				if (canUseDiverseMemo(memo, sources, dates, tags, options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT,
+					options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT, options.maxPerPrimaryTag ?? DEFAULT_DIVERSITY_LIMIT)) accept(memo);
+				else {
+					rejected.push(memo);
+					if (canUseDiverseMemo(memo, sources, dates, tags, options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT,
+						options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT, Number.POSITIVE_INFINITY)) rejectedByTags.push(memo);
+				}
+			}
+			if (selected.length >= limit) break;
+			if (control.shouldYield()) {
+				await control.yieldNow();
+				options.signal?.throwIfAborted();
+			}
 		}
-		if (!selectedIds.has(memo.id)) {
-			selected.push(memo);
-			selectedIds.add(memo.id);
+		// 同层先放宽主题，再放宽来源和日期；新鲜度始终优先于多样性。
+		for (const memo of rejectedByTags) {
+			if (selected.length >= limit) break;
+			options.signal?.throwIfAborted();
+			if (canUseDiverseMemo(memo, sources, dates, tags, options.maxPerSourcePath ?? DEFAULT_DIVERSITY_LIMIT,
+				options.maxPerDate ?? DEFAULT_DIVERSITY_LIMIT, Number.POSITIVE_INFINITY)) accept(memo);
+			if (control.shouldYield()) {
+				await control.yieldNow();
+				options.signal?.throwIfAborted();
+			}
+		}
+		for (const memo of rejected) {
+			if (selected.length >= limit) break;
+			options.signal?.throwIfAborted();
+			if (!ids.has(memo.id)) accept(memo);
+			if (control.shouldYield()) {
+				await control.yieldNow();
+				options.signal?.throwIfAborted();
+			}
 		}
 	}
+	options.signal?.throwIfAborted();
 	return selected;
 }
 
@@ -241,13 +234,10 @@ function canUseDiverseMemo(
 	maxPerPrimaryTag: number,
 ): boolean {
 	const sourcePath = memo.dailyRef.path;
+	if ((sourceCounts.get(sourcePath) ?? 0) >= maxPerSourcePath) return false;
 	const dateKey = getMemoDateKey(memo);
-	const primaryTag = getPrimaryTag(memo.tags);
-	return (
-		(sourceCounts.get(sourcePath) ?? 0) < maxPerSourcePath &&
-		(dateKey === null || (dateCounts.get(dateKey) ?? 0) < maxPerDate) &&
-		(primaryTag === null || (tagCounts.get(primaryTag) ?? 0) < maxPerPrimaryTag)
-	);
+	if (dateKey !== null && (dateCounts.get(dateKey) ?? 0) >= maxPerDate) return false;
+	return maxPerPrimaryTag === Number.POSITIVE_INFINITY || getRootTags(memo.tags).every(tag => (tagCounts.get(tag) ?? 0) < maxPerPrimaryTag);
 }
 
 function incrementDiversityCounts(
@@ -258,28 +248,21 @@ function incrementDiversityCounts(
 ): void {
 	const sourcePath = memo.dailyRef.path;
 	const dateKey = getMemoDateKey(memo);
-	const primaryTag = getPrimaryTag(memo.tags);
+	const rootTags = getRootTags(memo.tags);
 	sourceCounts.set(sourcePath, (sourceCounts.get(sourcePath) ?? 0) + 1);
 	if (dateKey !== null) {
 		dateCounts.set(dateKey, (dateCounts.get(dateKey) ?? 0) + 1);
 	}
-	if (primaryTag !== null) {
-		tagCounts.set(primaryTag, (tagCounts.get(primaryTag) ?? 0) + 1);
-	}
+	for (const tag of rootTags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
 }
 
 function getMemoDateKey(memo: RandomReunionCandidate): string | null {
-	const date = parseMemoDate(memo.createdAt);
-	return date === null ? null : formatDatePart(date);
+	const key = memo.logicalDate ?? memo.createdAt.slice(0, 10);
+	return /^\d{4}-\d{2}-\d{2}$/u.test(key) ? key : null;
 }
 
-function getPrimaryTag(tags: string[]): string | null {
-	const firstTag = tags[0] ?? null;
-	if (firstTag === null) {
-		return null;
-	}
-	const normalizedTag = firstTag.replace(/^#/, "").toLowerCase();
-	return normalizedTag.split("/")[0] ?? null;
+function getRootTags(tags: string[]): string[] {
+	return [...new Set(tags.map(tag => tag.trim().replace(/^#/, "").toLowerCase().split("/")[0]).filter(tag => tag.length > 0))];
 }
 
 function normalizeTags(tags: string[]): Set<string> {
@@ -293,36 +276,28 @@ function normalizePathPrefixes(paths: string[]): string[] {
 	});
 }
 
-function parseMemoDate(value: string): Date | null {
-	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? null : date;
+function getMemoDate(memo: RandomReunionCandidate): Date | null {
+	const key = getMemoDateKey(memo);
+	if (key === null) return null;
+	const date = new Date(`${key}T00:00:00`);
+	return formatDatePart(date) === key ? date : null;
 }
 
-function parseDatePart(value: string): Date | null {
-	const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-	if (match === null) {
-		return null;
-	}
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	const date = new Date(year, month - 1, day);
-	if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-		return null;
-	}
-	return date;
+function parseReviewDate(value: string): Date | null {
+	if (/^\d{4}-\d{2}-\d{2}$/u.test(value)) return parseMemoCalendarDate(value);
+	const calendar = /^(\d{4}-\d{2}-\d{2})[T ]/u.exec(value);
+	if (calendar !== null && parseMemoCalendarDate(calendar[1]) === null) return null;
+	const date = new Date(value);
+	return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function startOfDay(date: Date): Date {
 	return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-function isSameDay(first: Date, second: Date): boolean {
-	return formatDatePart(first) === formatDatePart(second);
-}
-
 function differenceInDays(later: Date, earlier: Date): number {
-	return Math.floor((later.getTime() - earlier.getTime()) / 86400000);
+	return (Date.UTC(later.getFullYear(), later.getMonth(), later.getDate())
+		- Date.UTC(earlier.getFullYear(), earlier.getMonth(), earlier.getDate())) / 86400000;
 }
 
 function getReviewRecoveryMultiplier(daysSinceReview: number): number {

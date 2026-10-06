@@ -823,7 +823,9 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (dailyHeading !== undefined) {
 			await this.commitDailyHeadingDraft(showChangedNotice, dailyHeading);
 		}
-		if (monthlyDateHeadingFormat !== undefined) {
+		// 前一字段保存期间可能重新打开并编辑，旧批次不得重新提交已被替换的草稿。
+		if (monthlyDateHeadingFormat !== undefined
+			&& this.isLatestSettingNoticeValue("monthlyDateHeadingFormat", monthlyDateHeadingFormat.trim())) {
 			await this.commitMonthlyDateHeadingFormatDraft(monthlyDateHeadingFormat);
 		}
 	}

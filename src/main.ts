@@ -507,7 +507,7 @@ export default class KnomoPlugin extends Plugin {
 		// 前台默认值已完成；后台配置串行链与 inventory 同步启动。
 		const configurationInitialization = knomoCurrentConfigService.initialize();
 		const bootstrapInitialization = startupBootstrapService.initialize(configurationInitialization).catch(() => undefined);
-		trackCatalogInventory(this.catalogIndexCoordinator!.initialize());
+		void trackCatalogInventory(this.catalogIndexCoordinator.initialize());
 		this.runtimeInitializationPromise = initializeCatalogRuntime({
 			initializeCatalog: () => catalogInitialization,
 			primeCatalog: async () => { await this.catalogReadService?.prime(); },

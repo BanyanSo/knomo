@@ -16,9 +16,10 @@ import type {
 } from "../types/catalog";
 import {
 	clampPageLimit,
+	createCatalogCountAbortError,
 	DEFAULT_CATALOG_COVERAGE,
 	emptyInvalidatedPage,
-	matchesCatalogQuery,
+	createCatalogQueryMatcher,
 	mergeAggregate,
 	normalizeCatalogText,
 } from "./MemoCatalogStore";
@@ -384,7 +385,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		if (!selection.invalidated) {
 			await new Promise<void>((resolve, reject) => {
 				const cursorRequest = transaction.objectStore(POSTINGS_STORE).index(BY_TIME_BUOY).openKeyCursor();
-				cursorRequest.onerror = () => reject(cursorRequest.error);
+				cursorRequest.onerror = () => reject(cursorRequest.error ?? new Error("Memo Catalog time buoy query failed."));
 				cursorRequest.onsuccess = () => {
 					const cursor = cursorRequest.result;
 					if (cursor === null) { resolve(); return; }
@@ -393,7 +394,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 						selection.add(JSON.parse(String(cursor.key)) as TimeBuoyIndexEntry);
 						cursor.continue();
 					} catch (error) {
-						reject(error);
+						reject(error instanceof Error ? error : new Error(String(error)));
 					}
 				};
 			});
@@ -418,7 +419,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			const revisionRequest = metadata.get(CATALOG_REVISION_META);
 			const coverageRequest = metadata.get(COVERAGE_META);
 			const limit = clampPageLimit(request.limit);
-			const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+			const matches = createCatalogQueryMatcher(request);
 			const items: CatalogObservation[] = [];
 			let cursorReads = 0;
 			let observationsRead = 0;
@@ -454,7 +455,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 							cursorReads += 1;
 							observationsRead += 1;
 							const observation = cursor.value as CatalogObservation;
-							if (matchesCatalogQuery(observation, request, sourcePaths)) {
+							if (matches(observation)) {
 								items.push(observation);
 							}
 							if (items.length <= limit) {
@@ -476,7 +477,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 								const observation = observationRequest.result as CatalogObservation | undefined;
 								if (observation !== undefined) {
 									observationsRead += 1;
-									if (matchesCatalogQuery(observation, request, sourcePaths)) {
+									if (matches(observation)) {
 										items.push(observation);
 									}
 								}
@@ -521,24 +522,32 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		});
 	}
 
-	async count(request: CatalogQueryFilter): Promise<CatalogQueryCountResult> {
+	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		signal?.throwIfAborted();
 		await this.open();
+		signal?.throwIfAborted();
 		const database = this.getDatabase();
 		const keyRange = this.getKeyRange();
 		return new Promise<CatalogQueryCountResult>((resolve, reject) => {
 			const transaction = database.transaction([OBSERVATIONS_STORE, POSTINGS_STORE, META_STORE], "readonly");
+			const abort = () => {
+				try { transaction.abort(); }
+				catch { cleanup(); reject(createCatalogCountAbortError(signal)); }
+			};
+			const cleanup = () => signal?.removeEventListener("abort", abort);
+			signal?.addEventListener("abort", abort, { once: true });
 			const observations = transaction.objectStore(OBSERVATIONS_STORE);
 			const metadata = transaction.objectStore(META_STORE);
 			const revisionRequest = metadata.get(CATALOG_REVISION_META);
 			const coverageRequest = metadata.get(COVERAGE_META);
-			const sourcePaths = request.sourcePaths === undefined ? null : new Set(request.sourcePaths);
+			const matches = createCatalogQueryMatcher(request);
 			let count = 0;
 			let catalogRevision = 0;
 			let coverage: CatalogCoverage = { ...DEFAULT_CATALOG_COVERAGE };
 			let started = false;
 
 			const startCursor = () => {
-				if (started || revisionRequest.readyState !== "done" || coverageRequest.readyState !== "done") {
+				if (signal?.aborted || started || revisionRequest.readyState !== "done" || coverageRequest.readyState !== "done") {
 					return;
 				}
 				started = true;
@@ -551,23 +560,26 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 						const range = buildObservationCountRange(keyRange, request);
 						const cursorRequest = observations.index(BY_CREATED_AT).openCursor(range, "prev");
 						cursorRequest.onsuccess = () => {
+							if (signal?.aborted) return;
 							const cursor = cursorRequest.result;
 							if (cursor === null) return;
 							const observation = cursor.value as CatalogObservation;
-							if (matchesCatalogQuery(observation, request, sourcePaths)) count += 1;
+							if (matches(observation)) count += 1;
 							cursor.continue();
 						};
 					} else {
 						const range = buildPostingCountRange(keyRange, request, selection);
 						const cursorRequest = transaction.objectStore(POSTINGS_STORE).index(BY_LOOKUP).openCursor(range, "prev");
 						cursorRequest.onsuccess = () => {
+							if (signal?.aborted) return;
 							const cursor = cursorRequest.result;
 							if (cursor === null) return;
 							const posting = cursor.value as CatalogPostingRecord;
 							const observationRequest = observations.get(posting.observationKey);
 							observationRequest.onsuccess = () => {
+								if (signal?.aborted) return;
 								const observation = observationRequest.result as CatalogObservation | undefined;
-								if (observation !== undefined && matchesCatalogQuery(observation, request, sourcePaths)) {
+								if (observation !== undefined && matches(observation)) {
 									count += 1;
 								}
 								cursor.continue();
@@ -582,14 +594,18 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 
 			revisionRequest.onsuccess = startCursor;
 			coverageRequest.onsuccess = startCursor;
-			transaction.oncomplete = () => resolve({
-				count,
-				catalogRevision,
-				coverage,
-				lifecycle: this.getLifecycle(),
-			});
-			transaction.onerror = () => reject(transaction.error ?? new Error("Memo Catalog count failed."));
-			transaction.onabort = () => reject(transaction.error ?? new Error("Memo Catalog count aborted."));
+			transaction.oncomplete = () => {
+				cleanup();
+				resolve({ count, catalogRevision, coverage, lifecycle: this.getLifecycle() });
+			};
+			transaction.onerror = () => {
+				cleanup();
+				reject(transaction.error ?? new Error("Memo Catalog count failed."));
+			};
+			transaction.onabort = () => {
+				cleanup();
+				reject(signal?.aborted ? createCatalogCountAbortError(signal) : transaction.error ?? new Error("Memo Catalog count aborted."));
+			};
 		});
 	}
 

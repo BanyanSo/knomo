@@ -78,6 +78,48 @@ test("最后一个计数使用者取消时传递取消，不缓存失败，后�
 	store.close();
 });
 
+test("计数失败保留不可用状态并允许后续重试", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, []);
+	const original = store.count.bind(store);
+	let failure: unknown = "count temporarily unavailable";
+	store.count = async () => { throw failure; };
+	const service = new CatalogReadService({ catalog });
+	const unavailable = await service.count({ text: "memo" });
+	assert.equal(unavailable.count, null);
+	assert.equal(unavailable.complete, false);
+	failure = new Error("count storage failed");
+	assert.equal((await service.count({ text: "memo" })).count, null);
+	store.count = original;
+	assert.equal((await service.count({ text: "memo" })).count, 0);
+	store.close();
+});
+
+test("重逢候选加载失败以 Error 报告，保留原错误且后续可以重试", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, []);
+	const original = catalog.query.bind(catalog);
+	let failure: unknown = "reunion temporarily unavailable";
+	catalog.query = async () => { throw failure; };
+	const service = new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26) });
+	await assert.rejects(service.getRandomReunionItems(10), error => error instanceof Error && error.message === failure);
+	failure = new Error("reunion storage failed");
+	await assert.rejects(service.getRandomReunionItems(10), error => error === failure);
+	catalog.query = original;
+	assert.deepEqual(await service.getRandomReunionItems(10), []);
+	store.close();
+});
+
 test("今日浮标等待源 Daily 历史覆盖，扫描完成补齐历史浮标", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");

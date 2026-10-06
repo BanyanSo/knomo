@@ -262,7 +262,9 @@ export class CatalogReadService {
 			// 只有最后一个使用者取消时终止扫描，避免伤及共享计数的其他视图。
 			const abort = () => { if (finish()) reject(createCatalogCountAbortError(signal)); };
 			signal?.addEventListener("abort", abort, { once: true });
-			activeTask.promise.then(result => { if (finish()) resolve(result); }, error => { if (finish()) reject(error); });
+			activeTask.promise.then(result => { if (finish()) resolve(result); }, (error: unknown) => {
+				if (finish()) reject(error instanceof Error ? error : new Error(String(error)));
+			});
 		});
 	}
 
@@ -726,7 +728,9 @@ export class CatalogReadService {
 			};
 			const abort = () => { if (finish()) reject(createCatalogCountAbortError(signal)); };
 			signal?.addEventListener("abort", abort, { once: true });
-			activeTask.promise.then(pool => { if (finish()) resolve(pool); }, error => { if (finish()) reject(error); });
+			activeTask.promise.then(pool => { if (finish()) resolve(pool); }, (error: unknown) => {
+				if (finish()) reject(error instanceof Error ? error : new Error(String(error)));
+			});
 		});
 	}
 

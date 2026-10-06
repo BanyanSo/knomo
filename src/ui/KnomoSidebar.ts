@@ -127,8 +127,9 @@ export function renderSidebarStats(container: HTMLElement, metrics: readonly [st
 		};
 		sidebarStats.set(container, rendered);
 	}
+	const items = rendered.items;
 	metrics.forEach(([value, label], index) => {
-		const item = rendered!.items[index];
+		const item = items[index];
 		if (item.value.getText() !== value) item.value.setText(value);
 		if (item.label.getText() !== label) item.label.setText(label);
 	});

@@ -745,12 +745,7 @@ export class KnomoView extends ItemView {
 				),
 			hasRemoteNextPage: () => this.catalogMobileCursor !== null,
 			cancelRemoteCount: () => { this.catalogMobileQueryRun++; this.cancelCatalogMobileCount(); },
-			restoreRemoteResults: async () => {
-					this.catalogMobileQueryRun += 1;
-					this.catalogMobileCursor = null;
-					this.catalogMobileTotalCount = null;
-					await this.reloadMemos(false, true);
-			},
+			restoreRemoteResults: () => this.restoreCardFlowAfterMobileSearch(),
 		});
 		this.userActionController = this.createUserActionController();
 		const imageQueueWindow = this.containerEl.win;
@@ -2745,6 +2740,14 @@ export class KnomoView extends ItemView {
 		this.mobileSearchController.closePage();
 	}
 
+	private async restoreCardFlowAfterMobileSearch(): Promise<void> {
+		this.catalogMobileQueryRun += 1;
+		this.catalogMobileCursor = null;
+		this.catalogMobileTotalCount = null;
+		// 仍读取当前查询并更新 occurrence；未变化的显示沿用增量比较，不强制重建卡片。
+		await this.reloadMemos(false);
+	}
+
 	private removeMobileSearchPage(): void {
 		this.mobileSearchController.removePage();
 	}
@@ -3491,6 +3494,7 @@ export class KnomoView extends ItemView {
 				card = existingCard;
 			} else if (existingCard !== null) {
 				card = this.replaceMemoCard(existingCard, previousMemo, memo, index, presentation.mode);
+				if (presentation.mode === "memo") seedPlaceholder(memo, card);
 			} else {
 				card = this.renderCardForMode(cardFlow, memo, this.renderGeneration, index, presentation.mode);
 				if (presentation.mode === "memo") seedPlaceholder(memo, card);

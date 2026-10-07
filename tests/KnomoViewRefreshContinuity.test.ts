@@ -5,6 +5,7 @@ import { TimeBuoyViewController } from "../src/ui/TimeBuoyViewController";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import type { TimeBuoyQueryResult } from "../src/types/timeBuoy";
 import type { MemoViewItem } from "../src/types/memoView";
+import { getMemoListStateKey } from "../src/ui/MemoRenderRevision";
 
 test("普通列表今日浮标逐页置顶，最后接普通记录，后台更新和关闭拒绝旧页", async () => {
 	const { view, result, memo, setQuery } = await refreshHarness();
@@ -265,4 +266,30 @@ test("引用事件增量刷新且原位排队正文与来源引用，不清空�
 	view.trashViewClosed = true;
 	await view.refreshReferences();
 	assert.equal(queued.length, 2);
+});
+
+test("搜索返回重新读取当前数据但同显示版本不重建，正文变化后提交当前记录", async () => {
+	const { view, memo, result, renders, setQuery, setRevision } = await refreshHarness();
+	await view.loadInitialMobileMemos();
+	Object.assign(view, {
+		catalogMobileQueryRun: 4, catalogMobileCursor: {}, catalogMobileTotalCount: 12,
+		forceRebuildCardFlow: () => assert.fail("搜索返回不能无条件重建卡片"),
+		resetVisibleMemos: () => assert.fail("搜索返回不能无条件重置可见范围"),
+		getCardFlowStateKey: () => getMemoListStateKey(view.getTodayTimeBuoyItems().map((item: { memo: MemoViewItem }) => item.memo)),
+	});
+	const before = renders.length;
+	const current = { ...memo };
+	setQuery(async () => result(1, [current]));
+	await view.restoreCardFlowAfterMobileSearch();
+	assert.equal(renders.length, before);
+	assert.equal(view.catalogMobileQueryRun, 5);
+	assert.equal(view.catalogMobileCursor, null);
+	assert.equal(view.catalogMobileTotalCount, null);
+	assert.equal(view.findMemoById(memo.id), current, "复用显示时仍提交本次查询的当前对象");
+
+	const changed = { ...memo, contentHash: "changed", contentSnapshot: "新的正文与引用" };
+	setRevision(2); setQuery(async () => result(2, [changed]));
+	await view.restoreCardFlowAfterMobileSearch();
+	assert.equal(renders.length, before + 1);
+	assert.equal(view.findMemoById(memo.id), changed);
 });

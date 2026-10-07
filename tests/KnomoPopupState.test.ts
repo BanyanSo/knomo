@@ -97,6 +97,8 @@ test("popup outside handler preserves editable defaults while closing popups", (
 
 function fakeWindow(): Window {
 	return {
+		addEventListener: () => undefined,
+		removeEventListener: () => undefined,
 		setTimeout: () => 1,
 		clearTimeout: () => undefined,
 	} as unknown as Window;
@@ -201,6 +203,10 @@ class FakeInputElement extends FakeElement {
 }
 
 class FakeEvent {
+	readonly detail = 1;
+	readonly clientX = 0;
+	readonly clientY = 0;
+	readonly pointerId = 1;
 	defaultPrevented = false;
 	propagationStopped = false;
 	immediatePropagationStopped = false;

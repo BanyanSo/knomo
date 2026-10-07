@@ -83,6 +83,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 			attr: {
 				type: "button",
 				"aria-label": cardMenuReady ? t("card.moreActions") : t("card.actionsPreparing"),
+				"aria-haspopup": "menu",
 				"aria-expanded": cardMenuReady && options.activeMenuMemoId === memo.id ? "true" : "false",
 				...(cardMenuReady
 					? { "data-action": "toggle-card-menu", "data-memo-id": memo.id }
@@ -300,7 +301,7 @@ function renderTrashAction(
 	}).disabled = disabled;
 }
 
-function getMemoActionLabel(action: MemoAction): string {
+export function getMemoActionLabel(action: MemoAction): string {
 	if (action === "edit") return t("card.edit");
 	if (action === "reference") return t("card.reference");
 	if (action === "open-daily") return t("card.openDaily");

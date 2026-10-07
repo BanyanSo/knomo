@@ -33,6 +33,7 @@ export class KnomoConfirmModal extends Modal {
 	}
 
 	onOpen(): void {
+		this.containerEl.addClass("knomo-confirm-backdrop");
 		this.modalEl.addClass("knomo-confirm-modal");
 		removeObsidianModalCloseButtons(this.modalEl);
 		this.titleEl.setText(this.options.title ?? t("confirm.title"));

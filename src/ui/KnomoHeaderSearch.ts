@@ -101,7 +101,7 @@ export function renderTitleModeButton(container: HTMLElement, option: TitleModeO
 		cls,
 		attr: {
 			type: "button",
-			"aria-pressed": "false",
+			...(cls === "knomo-scope-option" ? { role: "menuitemradio", "aria-checked": "false" } : { "aria-pressed": "false" }),
 			"data-title-mode": option.mode,
 		},
 	});

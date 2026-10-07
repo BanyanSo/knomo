@@ -1,3 +1,4 @@
+import type { MobileComposerAction } from "./MobileComposerActionGesture";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
 	getKnomoActionDispatch,
@@ -23,6 +24,8 @@ export interface EscapeState {
 	composerOpen: boolean;
 	editingOrQuoting: boolean;
 	hasOpenChrome: boolean;
+	cardMenuOpen?: boolean;
+	scopeMenuOpen?: boolean;
 }
 
 interface KnomoUserActionControllerOptions {
@@ -34,7 +37,7 @@ interface KnomoUserActionControllerOptions {
 	getRenderGeneration: () => number;
 	hasMoreCardFlowItems: () => boolean;
 	shouldDeferCardFlowForAllMemos: () => boolean;
-	shouldIgnoreMobileSaveInput: () => boolean;
+	canRunComposerAction: (action: MobileComposerAction, element: HTMLElement | null) => boolean;
 	getEscapeState: () => EscapeState;
 	consumeSuppressedOpenPopupDismissClick: (event: Event) => boolean;
 	handleOpenPopupOutsideEvent: (event: Event, target: EventTarget | null, suppressFollowingClick: boolean) => boolean;
@@ -46,13 +49,12 @@ interface KnomoUserActionControllerOptions {
 	setSearchDateFilter: (filter: SearchDateFilter, sourceEl: HTMLElement | null) => void;
 	setMobileSearchDateFilter: (filter: SearchDateFilter) => void;
 	runTrashAction: (action: TrashAction, memoId: string | null) => Promise<void>;
-	shouldIgnoreHandledMobileToolClick: (element: HTMLElement, action: string | null) => boolean;
 	openMemoCardDailyNote: (memoId: string, randomReunion: boolean) => Promise<void>;
 	closeCardMenu: () => void;
 	closeScopeMenu: () => void;
 	closeDesktopSearch: () => void;
 	closeCompactSearch: () => void;
-	toggleCardMenu: (memoId: string | null) => void;
+	toggleCardMenu: (memoId: string | null, keyboard: boolean) => void;
 	refreshRandomReunion: () => Promise<void>;
 	renderNextCardBatch: (generation: number) => void;
 	loadOlderMemoPeriods: () => void;
@@ -63,7 +65,7 @@ interface KnomoUserActionControllerOptions {
 	openDrawer: () => void;
 	closeDrawer: () => void;
 	ensureSidebarIndexes: () => void;
-	toggleScopeMenu: () => void;
+	toggleScopeMenu: (keyboard: boolean) => void;
 	toggleSidebar: () => void;
 	collapseSidebar: () => void;
 	handleManualRefresh: () => Promise<void>;
@@ -212,10 +214,7 @@ export class KnomoUserActionController {
 				this.options.openCatalogSettings?.();
 				return;
 			}
-			if (this.options.shouldIgnoreHandledMobileToolClick(route.element, route.action)) {
-				return;
-			}
-			await this.handleAction(route.action, route.memoId, route.element);
+			await this.handleAction(route.action, route.memoId, route.element, event.detail === 0);
 			if (route.mobileToolButtonEl !== null) {
 				route.mobileToolButtonEl.blur();
 			}
@@ -266,13 +265,16 @@ export class KnomoUserActionController {
 		action: string | null,
 		memoId: string | null,
 		sourceEl: HTMLElement | null = null,
+		keyboard = false,
 	): Promise<void> {
+		if ((action === "save-input" || action === "cancel-edit" || action === "clear-reference")
+			&& !this.options.canRunComposerAction(action, sourceEl)) return;
 		const dispatch = getKnomoActionDispatch(action);
 		switch (dispatch.type) {
 			case "none":
 				return;
 			case "toggle-card-menu":
-				this.options.toggleCardMenu(memoId);
+				this.options.toggleCardMenu(memoId, keyboard);
 				return;
 			case "refresh-random-reunion":
 				await this.options.refreshRandomReunion();
@@ -304,7 +306,7 @@ export class KnomoUserActionController {
 				this.options.closeDrawer();
 				break;
 			case "toggle-scope-menu":
-				this.options.toggleScopeMenu();
+				this.options.toggleScopeMenu(keyboard);
 				break;
 			case "toggle-sidebar":
 				this.options.toggleSidebar();
@@ -415,9 +417,6 @@ export class KnomoUserActionController {
 				this.options.cancelEditing();
 				return;
 			case "save-input":
-				if (this.options.shouldIgnoreMobileSaveInput()) {
-					return;
-				}
 				await this.options.saveInput();
 				return;
 			case "unknown":
@@ -431,6 +430,19 @@ export class KnomoUserActionController {
 				this.options.syncCardMenuState();
 			}
 		}
+	}
+
+	closeMobileSurface(): boolean {
+		const state = this.options.getEscapeState();
+		if (state.cardMenuOpen) this.options.closeCardMenu();
+		else if (state.scopeMenuOpen) this.options.closeScopeMenu();
+		else if (state.composerOpen) this.options.closeComposerKeepingDraft();
+		else if (this.options.isDrawerOpen()) {
+			this.options.closeDrawer();
+			this.options.syncUiChrome();
+		} else if (state.mobileSearchPageOpen) this.options.closeMobileSearchPage();
+		else return false;
+		return true;
 	}
 
 	async handleRootKeydown(event: KeyboardEvent): Promise<void> {
@@ -451,6 +463,10 @@ export class KnomoUserActionController {
 			}
 		}
 		if (event.key !== "Escape") {
+			return;
+		}
+		if (this.options.isMobileLayout()) {
+			if (this.closeMobileSurface()) event.preventDefault();
 			return;
 		}
 		const state = this.options.getEscapeState();

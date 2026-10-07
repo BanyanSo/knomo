@@ -8,7 +8,8 @@ export class KnomoPopupState {
 	private cardMenuMemoId: string | null = null;
 	private scopeOpen = false;
 	private suppressNextDismissClick = false;
-	private suppressNextDismissClickTimerId: number | null = null;
+	private dismissGestures = new Map<number, { x: number; y: number }>();
+	private releaseDismissListeners: (() => void) | null = null;
 
 	constructor(private readonly getWindow: () => Window) {}
 
@@ -59,7 +60,7 @@ export class KnomoPopupState {
 		}
 		const result = this.closeOpenPopups();
 		if (suppressFollowingClick) {
-			this.markSuppressNextOpenPopupDismissClick();
+			this.markSuppressNextOpenPopupDismissClick(event as PointerEvent);
 		}
 		if (!this.shouldPreserveDefaultForPopupDismiss(element)) {
 			event.preventDefault();
@@ -69,10 +70,17 @@ export class KnomoPopupState {
 	}
 
 	consumeSuppressedOpenPopupDismissClick(event: Event): boolean {
+		const click = event as MouseEvent;
+		if (click.detail === 0) return false;
 		if (!this.suppressNextDismissClick) {
 			return false;
 		}
-		this.clearSuppressNextOpenPopupDismissClick();
+		const pointerId = (event as PointerEvent).pointerId;
+		const gestureId = pointerId > 0 ? (this.dismissGestures.has(pointerId) ? pointerId : undefined)
+			: Array.from(this.dismissGestures).find(([, point]) => Math.hypot(click.clientX - point.x, click.clientY - point.y) <= 8)?.[0];
+		if (gestureId === undefined) return false;
+		this.dismissGestures.delete(gestureId);
+		if (this.dismissGestures.size === 0) this.clearSuppressNextOpenPopupDismissClick();
 		const target = this.getEventElement(event.target);
 		const memoTimeButton = target?.closest("[data-memo-time-open='daily']");
 		if (memoTimeButton?.instanceOf(HTMLElement)) {
@@ -86,20 +94,41 @@ export class KnomoPopupState {
 
 	clearSuppressNextOpenPopupDismissClick(): void {
 		this.suppressNextDismissClick = false;
-		if (this.suppressNextDismissClickTimerId === null) {
-			return;
-		}
-		this.getWindow().clearTimeout(this.suppressNextDismissClickTimerId);
-		this.suppressNextDismissClickTimerId = null;
+		this.dismissGestures.clear();
+		this.releaseDismissListeners?.();
+		this.releaseDismissListeners = null;
 	}
 
-	private markSuppressNextOpenPopupDismissClick(): void {
+	private markSuppressNextOpenPopupDismissClick(event: PointerEvent): void {
 		this.clearSuppressNextOpenPopupDismissClick();
 		this.suppressNextDismissClick = true;
-		this.suppressNextDismissClickTimerId = this.getWindow().setTimeout(() => {
-			this.suppressNextDismissClick = false;
-			this.suppressNextDismissClickTimerId = null;
-		}, 350);
+		this.dismissGestures.set(event.pointerId, { x: event.clientX, y: event.clientY });
+		const win = this.getWindow();
+		const pointers = new Set([event.pointerId]);
+		const down = (next: PointerEvent): void => {
+			if (pointers.size === 0 && next.isPrimary !== false) { this.clearSuppressNextOpenPopupDismissClick(); return; }
+			pointers.add(next.pointerId);
+			this.dismissGestures.set(next.pointerId, { x: next.clientX, y: next.clientY });
+		};
+		const end = (next: PointerEvent): void => {
+			pointers.delete(next.pointerId);
+			if (this.dismissGestures.has(next.pointerId)) this.dismissGestures.set(next.pointerId, { x: next.clientX, y: next.clientY });
+		};
+		// 退出后 click 可能重定向到根节点外，捕获仍仅消费本关闭序列。
+		const click = (next: MouseEvent): void => { this.consumeSuppressedOpenPopupDismissClick(next); };
+		const blur = (): void => { pointers.clear(); };
+		win.addEventListener("pointerdown", down, true);
+		win.addEventListener("pointerup", end, true);
+		win.addEventListener("pointercancel", end, true);
+		win.addEventListener("click", click, true);
+		win.addEventListener("blur", blur);
+		this.releaseDismissListeners = () => {
+			win.removeEventListener("pointerdown", down, true);
+			win.removeEventListener("pointerup", end, true);
+			win.removeEventListener("pointercancel", end, true);
+			win.removeEventListener("click", click, true);
+			win.removeEventListener("blur", blur);
+		};
 	}
 
 	private isTargetInOpenPopup(target: Element): boolean {

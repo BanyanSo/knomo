@@ -8,7 +8,7 @@ interface MobileHeaderTitleControllerOptions {
 	registerDomEvent: MobileHeaderTitleRegisterDomEvent;
 	renderChevron: (container: HTMLElement) => void;
 	canToggleScopeMenu: () => boolean;
-	onToggleScopeMenu: () => void;
+	onToggleScopeMenu: (keyboard: boolean) => void;
 }
 
 interface MobileHeaderTitleSyncOptions {
@@ -79,7 +79,7 @@ export class MobileHeaderTitleController {
 				return;
 			}
 			event.preventDefault();
-			this.options.onToggleScopeMenu();
+			this.options.onToggleScopeMenu(event.detail === 0);
 		});
 		this.options.registerDomEvent(titleEl, "keydown", (event) => {
 			if (!this.options.canToggleScopeMenu()) {
@@ -89,7 +89,7 @@ export class MobileHeaderTitleController {
 				return;
 			}
 			event.preventDefault();
-			this.options.onToggleScopeMenu();
+			this.options.onToggleScopeMenu(true);
 		});
 	}
 

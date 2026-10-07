@@ -161,3 +161,17 @@ test("calculates mobile composer content and input heights", () => {
 		inputMaxHeight: 344,
 	});
 });
+
+
+test("short keyboard viewports keep a visible input line and controls within the available height", () => {
+	for (const referenceHeight of [0, 74]) {
+		const measurements = calculateMobileComposerMeasurements({
+			baselineHeight: 320, windowHeight: 320, viewportOffsetTop: 0, viewportHeight: 200,
+			containerTop: 0, composerDockTop: 200, toolbarHeight: 44, referenceHeight, topGuard: 52,
+		});
+		assert.ok(measurements.contentMaxHeight <= 192, "Sheet 保留顶部安全余量且不超过键盘上方空间");
+		assert.ok(measurements.inputMaxHeight >= 32, "受限空间仍能显示一行正文");
+		assert.ok(measurements.inputMaxHeight + 44 + referenceHeight + 32 <= measurements.contentMaxHeight,
+			"正文、引用和工具栏的预算不能超过 Sheet 高度");
+	}
+});

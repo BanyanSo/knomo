@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { KnomoQuickCommand } from "../src/ui/KnomoQuickCommands";
 import type { CatalogFeatureFilter } from "../src/types/catalogView";
+import { KnomoPopupState } from "../src/ui/KnomoPopupState";
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -21,7 +22,7 @@ async function harness() {
 		composerOpen: false, currentLayout: "desktop-wide", inputEl: input,
 		editingMemo: null, quoteReferenceText: null, quoteMarkdownText: null,
 		draftContent: "unfinished draft", suspendedCreate: { content: "suspended" },
-		viewStateController: state, mobileSearchController: { isOpen: false }, popupState: { scopeMenuOpen: false },
+		viewStateController: state, mobileSearchController: { isOpen: false }, popupState: new KnomoPopupState(() => { throw new Error("该测试不应注册弹层事件"); }),
 		settingsService: { getSettings: () => ({ timeBuoyEnabled: true }) },
 		randomReunionController: { cancelPending: () => {} },
 		shuffleDayController: { cancelPending: () => {} },

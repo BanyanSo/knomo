@@ -2294,8 +2294,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin-bottom: 0;
 }
 
-.knomo-plugin .knomo-card-flow .knomo-card.has-card-actions:not(.is-menu-open),
-.knomo-plugin .knomo-mobile-search-results .knomo-card.has-card-actions:not(.is-menu-open) {
+.knomo-plugin .knomo-card-flow .knomo-card.has-card-actions:not(.is-menu-open):not(.is-menu-closing),
+.knomo-plugin .knomo-mobile-search-results .knomo-card.has-card-actions:not(.is-menu-open):not(.is-menu-closing) {
 	overflow: clip;
 }
 
@@ -3188,7 +3188,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	inset: 0;
 	z-index: 1;
 	pointer-events: none;
-	background: rgba(0, 0, 0, 0.82);
+	background: rgba(0, 0, 0, var(--knomo-composer-backdrop-alpha, 0.4));
 	opacity: 0;
 	transition: opacity var(--knomo-transition-backdrop);
 }
@@ -3205,18 +3205,18 @@ body .knomo-mobile-create-fab.is-hidden {
 	position: absolute;
 	left: 0;
 	right: 0;
-	bottom: var(--knomo-mobile-composer-bottom-offset, 0px);
+	bottom: 0;
 	z-index: 3;
 	max-height: var(--knomo-composer-content-max-height, calc(100dvh - 52px));
 	overflow: visible;
 	pointer-events: none;
 	background: var(--knomo-composer-surface);
 	border-radius: 18px 18px 0 0;
-	transform: translateY(100%);
+	opacity: 0;
+	transform: translate3d(0, calc(0px - var(--knomo-mobile-composer-bottom-offset, 0px)), 0);
 	transition:
-		transform var(--knomo-transition-panel),
-		bottom var(--knomo-transition-panel-offset),
-		max-height var(--knomo-transition-panel-size);
+		opacity var(--knomo-transition-panel),
+		transform var(--knomo-transition-panel);
 }
 
 .knomo-mobile-composer-layer.is-active .knomo-mobile-composer-backdrop,
@@ -3233,17 +3233,12 @@ body .knomo-mobile-create-fab.is-hidden {
 	height: max(0px, var(--knomo-mobile-composer-bottom-offset, 0px));
 	background: var(--knomo-composer-surface);
 	pointer-events: none;
-	transition: height var(--knomo-transition-panel-offset);
 }
 
-.knomo-mobile-composer-layer.is-keyboard-tracking .knomo-mobile-composer-content {
-	transition:
-		transform var(--knomo-transition-panel),
-		max-height var(--knomo-transition-panel-size);
-}
-
-.knomo-mobile-composer-layer.is-keyboard-tracking .knomo-mobile-composer-content::after {
-	transition: none;
+/* 键盘位移仅使用合成变换，避免 bottom/填充高度逐帧重排工具栏。
+   视口提供实时位置时直接跟随；原生键盘终点高度才使用变换过渡。 */
+.knomo-mobile-composer-layer.is-keyboard-tracking:where(:not(.is-reopening)):where([data-knomo-composer-dock-source="visual-viewport"], [data-knomo-composer-dock-source="layout-viewport"], [data-knomo-composer-dock-source="virtual-keyboard"]) .knomo-mobile-composer-content {
+	transition: opacity var(--knomo-transition-panel);
 }
 
 .knomo-mobile-composer-layer.is-open .knomo-mobile-composer-backdrop {
@@ -3251,15 +3246,18 @@ body .knomo-mobile-create-fab.is-hidden {
 }
 
 .knomo-mobile-composer-layer.is-open .knomo-mobile-composer-content {
-	transform: translateY(0);
+	opacity: 1;
+	transform: translate3d(0, calc(0px - var(--knomo-mobile-composer-bottom-offset, 0px)), 0);
 }
 
-.knomo-mobile-composer-layer.is-closing .knomo-mobile-composer-backdrop {
+.knomo-mobile-composer-layer[data-close-stage="exit"].is-closing .knomo-mobile-composer-backdrop {
 	opacity: 0;
 }
 
-.knomo-mobile-composer-layer.is-closing:not(.is-keyboard-tracking) .knomo-mobile-composer-content {
-	transform: translateY(100%);
+.knomo-mobile-composer-layer[data-close-stage="exit"].is-closing .knomo-mobile-composer-content {
+	opacity: 0;
+	transform: translate3d(0, 100%, 0);
+	transition: transform var(--knomo-transition-panel), opacity var(--knomo-transition-panel);
 }
 
 .knomo-mobile-composer-layer.knomo-plugin.is-layout-mobile .knomo-composer {
@@ -4857,4 +4855,118 @@ body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-co
 	.knomo-plugin.is-layout-desktop-narrow .knomo-compact-inline-search { flex: 1 1 100%; max-width: none; min-width: 0; }
 	.knomo-plugin.is-layout-desktop-narrow .knomo-record-stats-tag-button { grid-template-columns: minmax(0, 1fr) auto; }
 	.knomo-plugin .knomo-card-images--grid { height: 108px; gap: 4px; }
+}
+
+/* 移动菜单：宽度下限服从可用空间，换行和滚动不压缩命中区域。 */
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover,
+.knomo-plugin.is-layout-mobile .knomo-card-actions {
+	box-sizing: border-box;
+	width: max-content;
+	min-width: min(var(--knomo-menu-preferred-width, 118px), var(--knomo-menu-max-width, calc(100vw - 24px)));
+	max-width: var(--knomo-menu-max-width, calc(100vw - 24px));
+	max-height: var(--knomo-menu-max-height, calc(100dvh - 80px));
+	/* 可见性由打开/关闭状态立即切换，避免首次聚焦等待过渡首帧。 */
+	transition-property: opacity, transform;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	touch-action: pan-y;
+}
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover {
+	--knomo-menu-preferred-width: var(--knomo-dropdown-width);
+}
+.knomo-plugin.is-layout-mobile .knomo-scope-option,
+.knomo-plugin.is-layout-mobile .knomo-card-action {
+	box-sizing: border-box;
+	flex: 0 0 auto;
+	min-height: var(--knomo-touch-target, 44px);
+	height: auto;
+	min-width: 0;
+	padding-block: 8px;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.knomo-plugin.is-layout-mobile .knomo-card-word-count { flex: 0 0 auto; }
+.knomo-plugin.is-layout-mobile .knomo-scope-option .knomo-button-label { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+
+/* 移动菜单保留本轮展开方向和关闭溢出，视觉完成后才恢复裁切。 */
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover {
+	left: var(--knomo-title-popover-left);
+	transform: translateY(-4px) scale(0.98);
+	transform-origin: top left;
+}
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover.is-menu-above {
+	transform: translateY(4px) scale(0.98);
+	transform-origin: bottom left;
+}
+.knomo-plugin.is-layout-mobile.is-scope-open .knomo-mobile-scope-popover {
+	transform: translateY(0) scale(1);
+}
+.knomo-plugin.is-layout-mobile [data-knomo-menu-state="closing"] {
+	visibility: visible;
+	pointer-events: none;
+}
+.knomo-plugin.is-layout-mobile [data-knomo-menu-state="hidden"] { visibility: hidden; pointer-events: none; }
+.knomo-plugin.is-layout-mobile .is-reduced-motion { transition: none; }
+
+.knomo-mobile-composer-layer:not(.is-active) { visibility: hidden; }
+.knomo-mobile-composer-layer.is-reduced-motion .knomo-mobile-composer-content,
+.knomo-mobile-composer-layer.is-reduced-motion.is-closing .knomo-mobile-composer-content,
+.knomo-mobile-composer-layer.is-reduced-motion .knomo-mobile-composer-backdrop { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+	.knomo-plugin.is-layout-mobile .knomo-scope-popover,
+	.knomo-plugin.is-layout-mobile .knomo-card-actions,
+	.knomo-mobile-composer-layer .knomo-mobile-composer-content,
+	.knomo-mobile-composer-layer[data-close-stage="exit"].is-closing .knomo-mobile-composer-content,
+	.knomo-mobile-composer-layer .knomo-mobile-composer-backdrop { transition: none; }
+}
+
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover,
+.knomo-plugin.is-layout-mobile .knomo-card-actions {
+	scroll-padding-top: max(12px, env(safe-area-inset-top));
+	scroll-padding-right: max(12px, env(safe-area-inset-right));
+	scroll-padding-bottom: max(12px, env(safe-area-inset-bottom));
+	scroll-padding-left: max(12px, env(safe-area-inset-left));
+}
+.knomo-plugin.is-layout-mobile .knomo-scope-option:active,
+.knomo-plugin.is-layout-mobile .knomo-card-action:active { background: var(--knomo-row-hover); }
+
+/* 移动端菜单交由 Obsidian 呈现，桌面的卡片与范围 Popover 保持原布局。 */
+.knomo-plugin.is-layout-mobile .knomo-card-actions,
+.knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover { display: none; }
+
+.knomo-plugin.is-layout-mobile .knomo-reference-clear {
+	width: var(--knomo-touch-target);
+	min-width: var(--knomo-touch-target);
+	height: var(--knomo-touch-target);
+	min-height: var(--knomo-touch-target);
+}
+.knomo-plugin.is-layout-mobile .knomo-cancel-edit-button,
+.knomo-plugin.is-layout-mobile .knomo-tag-nav,
+.knomo-plugin.is-layout-mobile .knomo-tag-toggle,
+.knomo-plugin.is-layout-mobile .knomo-mobile-search-chip {
+	min-height: var(--knomo-touch-target);
+	height: auto;
+}
+.knomo-plugin.is-layout-mobile .knomo-sidebar-action {
+	width: var(--knomo-touch-target);
+	min-width: var(--knomo-touch-target);
+	height: var(--knomo-touch-target);
+	min-height: var(--knomo-touch-target);
+}
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title[role="button"] {
+	min-height: var(--knomo-touch-target, 44px);
+}
+
+/* 草稿核对或危险确认须覆盖 body 上的移动 Composer。 */
+body.is-mobile .modal-container.knomo-confirm-backdrop { z-index: 10030; }
+
+
+/* 范围菜单当前项与侧边栏当前项使用同一组主题变量。 */
+.menu.knomo-mobile-menu-scope .menu-item.mod-checked {
+	color: var(--text-accent);
+	background: var(--background-modifier-hover);
+	font-weight: var(--font-semibold);
+}
+.menu.knomo-mobile-menu-scope .menu-item.mod-checked .menu-item-icon {
+	color: inherit;
 }

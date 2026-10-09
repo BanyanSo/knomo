@@ -221,3 +221,25 @@ test("宿主路由契约模拟：Vault 名称、ID、编码名称、缺省目标
 		}
 	}
 });
+
+
+test("打开命令在宿主 reveal/focus 完成后恢复视图焦点，覆盖新建及重复打开同一标签", async () => {
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const existing of [false, true]) {
+		const events: string[] = [];
+		const view = Object.assign(Object.create(KnomoView.prototype), {
+			recoverMobileViewFocus: () => events.push("recover"),
+		});
+		const leaf = { view, setViewState: async () => { events.push("load"); } };
+		const plugin = Object.assign(Object.create(Plugin.prototype), {
+			app: { workspace: {
+				getLeavesOfType: () => existing ? [leaf] : [], getLeaf: () => leaf,
+				revealLeaf: async () => { events.push("reveal"); },
+				setActiveLeaf: () => { events.push("host-focus"); },
+			} },
+			requestMobileNavbarSync: () => events.push("navbar"),
+		}) as InstanceType<typeof Plugin>;
+		await plugin.activateView();
+		assert.deepEqual(events, [...(existing ? [] : ["load"]), "reveal", "host-focus", "recover", "navbar"]);
+	}
+});

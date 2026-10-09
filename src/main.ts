@@ -552,6 +552,7 @@ export default class KnomoPlugin extends Plugin {
 			const leaf = existingLeaves[0];
 			await this.app.workspace.revealLeaf(leaf);
 			this.app.workspace.setActiveLeaf(leaf, { focus: true });
+			if (leaf.view instanceof KnomoView) leaf.view.recoverMobileViewFocus();
 			this.requestMobileNavbarSync(leaf);
 			return;
 		}
@@ -563,6 +564,7 @@ export default class KnomoPlugin extends Plugin {
 		});
 		await this.app.workspace.revealLeaf(leaf);
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		if (leaf.view instanceof KnomoView) leaf.view.recoverMobileViewFocus();
 		this.requestMobileNavbarSync(leaf);
 	}
 

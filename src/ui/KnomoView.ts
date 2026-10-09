@@ -1,4 +1,6 @@
+import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
 import { KnomoMobileMenu } from "./KnomoMobileMenu";
+import { registerMobileFirstTapRecovery, registerMobileMenuTriggerTap } from "./MobileMenuTap";
 import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalComposerDraftStore";
 import { sha256Bytes } from "../services/DiaryMemoParser";
 import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
@@ -386,6 +388,7 @@ export class KnomoView extends ItemView {
 	private settleQuickCommandReady!: (ready: boolean) => void;
 	private readonly quickCommandReady = new Promise<boolean>((resolve) => { this.settleQuickCommandReady = resolve; });
 	private executingQuickCommand = false;
+	private mobileViewFocusRecovery: MobileViewFocusRecovery | null = null;
 	private editingMemo: MemoRecord | null = null;
 	private quoteReferenceText: string | null = null;
 	private quoteMarkdownText: string | null = null;
@@ -1068,12 +1071,27 @@ export class KnomoView extends ItemView {
 				if (this.localDraftStore.pending) new Notice(t("composer.draftUnconfirmed"));
 				else if (restored.active.content || restored.editingMemo || restored.active.referenceText) new Notice(t("composer.draftRestored"));
 			}
+			if (!this.trashViewClosed) this.recoverMobileViewFocus();
 			this.settleQuickCommandReady(!this.trashViewClosed);
 		} catch (error) {
 			this.localDraftStore?.close();
 			this.settleQuickCommandReady(false);
 			throw error;
 		}
+	}
+
+	recoverMobileViewFocus(isCurrent: () => boolean = () => true, defer = false): void {
+		if (!Platform.isMobile) return;
+		if (this.mobileViewFocusRecovery === null) {
+			this.mobileViewFocusRecovery = new MobileViewFocusRecovery({
+				getRoot: () => this.rootEl,
+				canRecover: () => !this.trashViewClosed && this.currentLayout === "mobile"
+					&& !this.composerOpen && !this.mobileSearchPageOpen
+					&& this.app.workspace.getActiveViewOfType(KnomoView) === this,
+			});
+			this.register(() => this.mobileViewFocusRecovery?.cancel());
+		}
+		this.mobileViewFocusRecovery.recover(isCurrent, defer);
 	}
 
 	waitForQuickCommands(): Promise<boolean> {
@@ -1127,6 +1145,9 @@ export class KnomoView extends ItemView {
 			this.renderCardFlow();
 		});
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
+			if (this.app.workspace.getActiveViewOfType(KnomoView) === this && !this.trashViewClosed) {
+				this.recoverMobileViewFocus();
+			} else this.mobileViewFocusRecovery?.cancel();
 			if (this.app.workspace.getActiveViewOfType(KnomoView) !== this) {
 				this.mobileComposerController.clearFocus();
 				this.mobileMenuController?.close();
@@ -1175,7 +1196,10 @@ export class KnomoView extends ItemView {
 		});
 		this.mobileNavbarCompactController.start();
 		this.register(() => this.clearTimeBuoyPickerEventListeners());
-		this.registerDomEvent(this.containerEl.win, "focus", () => this.handleLocalDateChange());
+		this.registerDomEvent(this.containerEl.win, "focus", () => {
+			this.handleLocalDateChange();
+			this.recoverMobileViewFocus();
+		});
 		this.registerDomEvent(this.containerEl.win, "orientationchange", () => this.closeTimeBuoyPicker(false));
 		const handleMobileBack = (event: Event): void => this.handleMobileBack(event);
 		this.containerEl.doc.addEventListener("backbutton", handleMobileBack, { capture: true });
@@ -1184,6 +1208,9 @@ export class KnomoView extends ItemView {
 			this.clearTagIndexWarmup();
 			this.syncTagIndexInteraction();
 			if (this.containerEl.doc.visibilityState === "visible") {
+				if (this.app.workspace.getActiveViewOfType(KnomoView) === this && !this.trashViewClosed) {
+					this.recoverMobileViewFocus();
+				}
 				this.scheduleTagIndexWarmup();
 				this.handleLocalDateChange();
 			}
@@ -1203,6 +1230,7 @@ export class KnomoView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.mobileViewFocusRecovery?.cancel();
 		this.mobileMenuController?.close();
 		this.catalogMobileQueryRun++;
 		this.cancelCatalogMobileCount();
@@ -1401,6 +1429,8 @@ export class KnomoView extends ItemView {
 		}
 		this.renderScope = this.addChild(new Component());
 		this.renderScope.register(() => this.mobileMenuController?.close());
+		this.renderScope.register(() => this.mobileViewFocusRecovery?.cancel());
+		if (Platform.isMobile) this.registerMobileMenuTriggerEvents();
 		const container = this.contentEl;
 		this.finishSidebarResize();
 		if (this.rootEl) this.layoutObserver?.unobserve(this.rootEl);
@@ -1473,6 +1503,7 @@ export class KnomoView extends ItemView {
 		}
 		this.renderScopeState();
 		this.syncRootState();
+		this.recoverMobileViewFocus();
 		void this.refreshCatalogLibraryIndexes();
 		if (Platform.isMobile) {
 			this.renderStats();
@@ -2624,7 +2655,7 @@ export class KnomoView extends ItemView {
 
 	private syncTitlePopoverPosition(): void {
 		const root = this.rootEl;
-		if (root === null) {
+		if (root === null || this.currentLayout === "mobile") {
 			return;
 		}
 		const anchor = this.getTitlePopoverAnchor();
@@ -2636,13 +2667,6 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const rect = anchor.getBoundingClientRect();
-		if (this.currentLayout === "mobile") {
-			root.setCssProps({
-				"--knomo-title-popover-left": TITLE_POPOVER_LEFT_DEFAULT,
-				"--knomo-title-popover-top": `${Math.round(rect.bottom + 6)}px`,
-			});
-			return;
-		}
 		const container = anchor.closest(".knomo-main");
 		const containerRect = container?.getBoundingClientRect() ?? root.getBoundingClientRect();
 		const dropdownWidth = 168;
@@ -4350,6 +4374,7 @@ export class KnomoView extends ItemView {
 		this.closeCardMenu();
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		let referenceIsCurrent: (() => boolean) | null = null;
+		let releaseReferenceRequest: (() => void) | null = null;
 		try {
 			if (action === "mark-reviewed") {
 				await this.randomReunionController.markReviewed(memo.id);
@@ -4362,14 +4387,27 @@ export class KnomoView extends ItemView {
 				return;
 			} else if (action === "reference") {
 				if (!this.canChangeComposerContext()) return;
+				const mobileReference = this.currentLayout === "mobile";
+				if (mobileReference) {
+					// 在菜单点击栈内打开输入，再读取引用；异步完成只补充引用内容。
+					this.inputEl?.composer.invalidateContext();
+					const cursor = this.inputEl?.value.length ?? 0;
+					this.inputEl?.setSelectionRange(cursor, cursor);
+					this.openComposer();
+				}
 				const editor = this.inputEl;
 				const context = editor?.composer.capture();
-				referenceIsCurrent = () => !this.trashViewClosed && this.inputEl === editor && !!context?.sameSession();
+				let cancelled = false;
+				const cancel = (): void => { cancelled = true; };
+				editor?.addEventListener("composer-action-cancel", cancel);
+				releaseReferenceRequest = () => editor?.removeEventListener("composer-action-cancel", cancel);
+				referenceIsCurrent = () => !cancelled && !this.trashViewClosed && this.inputEl === editor && !!context?.sameSession()
+					&& (!mobileReference || this.composerOpen && this.app.workspace.getActiveViewOfType(KnomoView) === this);
 				const target = await this.resolveCatalogMemo(memo);
-				if (this.trashViewClosed || this.inputEl !== editor || !context?.sameSession() || this.isSaving || this.editingMemo !== null) return;
+				if (!referenceIsCurrent() || this.isSaving || this.editingMemo !== null) return;
 				const reference = await this.memoCommandService.createReferenceText(target);
-				if (this.trashViewClosed || this.inputEl !== editor || !context?.sameSession() || this.isSaving || this.editingMemo !== null) return;
-				this.startReferenceMemo(memo, reference.text);
+				if (!referenceIsCurrent() || this.isSaving || this.editingMemo !== null) return;
+				this.startReferenceMemo(memo, reference.text, !mobileReference);
 				this.syncCardMenuState();
 				return;
 			} else if (action === "open-daily") {
@@ -4420,7 +4458,7 @@ export class KnomoView extends ItemView {
 			new Notice(message);
 			this.syncUiChrome();
 			this.syncCardMenuState();
-		}
+		} finally { releaseReferenceRequest?.(); }
 	}
 
 	private async saveInput(): Promise<void> {
@@ -5285,15 +5323,17 @@ export class KnomoView extends ItemView {
 		this.updateCancelEditButtonState();
 	}
 
-	private startReferenceMemo(memo: MemoRecord, referenceText: string): void {
+	private startReferenceMemo(memo: MemoRecord, referenceText: string, open = true): void {
 		if (!this.canChangeComposerContext()) return;
-		this.inputEl?.composer.invalidateContext();
+		if (open) this.inputEl?.composer.invalidateContext();
 		this.editingMemo = null;
 		this.quoteReferenceText = referenceText;
 		this.quoteMarkdownText = formatMarkdownQuoteDraft(memo.contentSnapshot);
-		this.openComposer();
-		const cursor = this.inputEl?.value.length ?? 0;
-		this.inputEl?.setSelectionRange(cursor, cursor);
+		if (open) {
+			this.openComposer();
+			const cursor = this.inputEl?.value.length ?? 0;
+			this.inputEl?.setSelectionRange(cursor, cursor);
+		}
 		this.resizeInput();
 		this.updateStatus("", false);
 		this.syncComposerMode();
@@ -6214,6 +6254,32 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private registerMobileMenuTriggerEvents(): void {
+		this.getRenderScope().register(registerMobileFirstTapRecovery(this.containerEl.doc, target => {
+			if (this.currentLayout !== "mobile" || this.trashViewClosed
+				|| this.app.workspace.getActiveViewOfType(KnomoView) !== this) return null;
+			const menuItem = this.mobileMenuController?.getInputTapTarget(target);
+			if (menuItem) return menuItem;
+			if (target.closest(".modal-container, .menu, .suggestion-container, .suggestion-bg, .knomo-mobile-composer-layer")) return null;
+			// addAction 的搜索入口位于宿主标题栏，不属于 rootEl 或 mobile-navbar。
+			const search = this.mobileSearchHeaderActionEl;
+			let button = search?.contains(target) ? search
+				: target.closest<HTMLElement>(".knomo-mobile-create-fab, .knomo-mobile-navbar-sidebar-action, .sidebar-toggle-button");
+			if (!button && target.closest(".mobile-navbar")) button = target.closest<HTMLElement>(".clickable-icon, button, .mobile-navbar-action");
+			if (!button && this.rootEl?.contains(target)) button = target.closest<HTMLElement>("button[data-action='open-composer'], button[data-action='toggle-sidebar'], button[data-action='toggle-compact-search']");
+			return button?.closest("[inert], [hidden], [aria-hidden='true'], :disabled, [aria-disabled='true']") ? null : button;
+		}));
+		this.getRenderScope().register(registerMobileMenuTriggerTap(this.containerEl.doc, target => {
+			if (this.currentLayout !== "mobile" || this.trashViewClosed
+				|| this.app.workspace.getActiveViewOfType(KnomoView) !== this) return null;
+			const title = this.mobileHeaderTitleController.getAnchor();
+			if (title?.contains(target) && title.getAttribute("role") === "button") return title;
+			const trigger = target.closest<HTMLElement>("button[data-action='toggle-card-menu'], button[data-action='toggle-scope-menu']");
+			if (!trigger || trigger.matches(":disabled, [aria-disabled='true']")) return null;
+			return this.rootEl?.contains(trigger) || this.mobileSearchResultsEl?.contains(trigger) ? trigger : null;
+		}));
+	}
+
 	private toggleMobileCardMenu(memoId: string | null): void {
 		if (this.activeMenuMemoId === memoId) { this.closeCardMenu(); return; }
 		const memo = memoId === null ? null : this.findMemoById(memoId);
@@ -6231,10 +6297,12 @@ export class KnomoView extends ItemView {
 		this.mobileMenuController ??= new KnomoMobileMenu();
 		this.mobileMenuController.open({
 			kind: "card", trigger,
+			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const { action } of getMemoCardActions(memo)) {
-					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action))).setIcon(MOBILE_MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
-						.onClick(() => select(() => { void this.handleMemoAction(action, memo); })));
+					const focus = action === "edit" || action === "reference" || action === "open-daily" ? "action" : "view";
+					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MOBILE_MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
+						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
 				}
 				menu.addSeparator();
 				menu.addItem(item => item.setTitle(createTitle(t("card.wordCount", { count: getMemoContentStats(memo).wordCount }))).setIcon("text").setIsLabel(true));
@@ -6258,6 +6326,7 @@ export class KnomoView extends ItemView {
 		this.mobileMenuController ??= new KnomoMobileMenu();
 		this.mobileMenuController.open({
 			kind: "scope", trigger,
+			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const option of TITLE_MODE_OPTIONS) {
 					menu.addItem(item => item.setTitle(createTitle(option.label)).setIcon(option.icon).setChecked(option.mode === mode)

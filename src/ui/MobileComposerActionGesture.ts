@@ -14,7 +14,30 @@ export function registerMobileComposerActionGesture(root: HTMLElement, options: 
 	let pending: { button: HTMLElement; action: MobileComposerAction; id: number; x: number; y: number; valid: () => boolean } | null = null;
 	const tails = new Map<number, { x: number; y: number }>();
 	const pointers = new Set<number>();
+	let releaseReferenceTail: (() => void) | null = null;
 	const cancel = (): void => { pending = null; };
+	const protectReferenceTail = (button: HTMLElement, origin: PointerEvent): void => {
+		releaseReferenceTail?.();
+		// 清除引用会移除按钮，touchend 仍可能指向旧节点，兼容鼠标事件也可能命中下层。
+		const targets: EventTarget[] = [win, button];
+		const types = ["touchend", "mousedown", "mouseup", "click"] as const;
+		const guard = (event: Event): void => {
+			if (event.type === "click" && (event as MouseEvent).detail === 0) return;
+			const point = event.type === "touchend" ? (event as TouchEvent).changedTouches[0] : event as MouseEvent;
+			if (!point || Math.hypot(point.clientX - origin.clientX, point.clientY - origin.clientY) > 8) return;
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			if (event.type === "click") release();
+		};
+		const release = (): void => {
+			for (const target of targets) for (const type of types) target.removeEventListener(type, guard, true);
+			win.clearTimeout(timer);
+			releaseReferenceTail = null;
+		};
+		const timer = win.setTimeout(release, 600);
+		releaseReferenceTail = release;
+		for (const target of targets) for (const type of types) target.addEventListener(type, guard, { capture: true, passive: false });
+	};
 	const hit = (button: HTMLElement, event: PointerEvent): boolean => {
 		const rect = button.getBoundingClientRect();
 		const target = doc.elementFromPoint(event.clientX, event.clientY);
@@ -22,6 +45,7 @@ export function registerMobileComposerActionGesture(root: HTMLElement, options: 
 			&& event.clientY < rect.bottom && target !== null && button.contains(target);
 	};
 	const down = (event: PointerEvent): void => {
+		releaseReferenceTail?.();
 		if (pointers.size === 0) tails.clear();
 		pointers.add(event.pointerId);
 		if (pointers.size > 1 || event.isPrimary === false) {
@@ -52,6 +76,10 @@ export function registerMobileComposerActionGesture(root: HTMLElement, options: 
 		if (event.type === "pointerup" && current.valid() && current.button.isConnected
 			&& Math.hypot(event.clientX - current.x, event.clientY - current.y) <= 8
 			&& hit(current.button, event) && options.isAvailable(current.button, current.action)) {
+			if (current.action === "clear-reference" && event.pointerType === "touch") {
+				event.preventDefault();
+				protectReferenceTail(current.button, event);
+			}
 			options.execute(current.action);
 		}
 	};
@@ -62,6 +90,7 @@ export function registerMobileComposerActionGesture(root: HTMLElement, options: 
 			: Array.from(tails).find(([, point]) => Math.hypot(event.clientX - point.x, event.clientY - point.y) <= 8)?.[0];
 		if (entry === undefined) return;
 		tails.delete(entry);
+		releaseReferenceTail?.();
 		event.preventDefault();
 		event.stopImmediatePropagation();
 	};
@@ -79,6 +108,7 @@ export function registerMobileComposerActionGesture(root: HTMLElement, options: 
 	];
 	for (const [target, type, handler] of listeners) target.addEventListener(type, handler, true);
 	return () => {
+		releaseReferenceTail?.();
 		cancel(); tails.clear(); pointers.clear();
 		for (const [target, type, handler] of listeners) target.removeEventListener(type, handler, true);
 	};

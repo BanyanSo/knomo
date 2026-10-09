@@ -2,14 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createMobilePopupFixture, mobilePopupText, type MobilePopupAction, type MobilePopupKind } from "./helpers/mobilePopupFixture";
 
-// P0 保留真实失败，供 P1 修复；不跳过、标记 todo 或断言旧 guard 的时间常量。
-test("P0 场景使用九项范围菜单、长文本、真实卡片菜单和编辑中的 Composer", async () => {
-	const fixture = await createMobilePopupFixture("cancel-edit", true);
+// 覆盖 Composer 与通用关闭手势；移动端宿主菜单由 KnomoMobileMenu.test.ts 验证。
+test("弹层夹具使用真实范围菜单、卡片动作和编辑中的 Composer", async () => {
+	const fixture = await createMobilePopupFixture("cancel-edit");
 	try {
 		assert.deepEqual(Array.from(fixture.scopeMenu.querySelectorAll("[data-title-mode]"), item => item.getAttribute("data-title-mode")), ["all", "things", "no-tag", "with-link", "with-image", "anniversary", "review", "random", "shuffleDay"]);
 		assert.deepEqual(Array.from(fixture.card.querySelectorAll("[data-memo-action]"), item => item.getAttribute("data-memo-action")), ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"]);
-		assert.ok(fixture.scopeMenu.textContent?.includes(mobilePopupText.longChinese));
-		assert.ok(fixture.card.textContent?.includes(mobilePopupText.longEnglish));
 		assert.equal(fixture.view.inputEl.value, mobilePopupText.editDraft);
 		assert.equal(fixture.button.hidden, false);
 	} finally { fixture.close(); }

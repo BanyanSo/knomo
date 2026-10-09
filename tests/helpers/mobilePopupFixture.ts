@@ -13,8 +13,6 @@ export const mobilePopupText = {
 	createDraft: "创建草稿：保留这段正文与选区。",
 	editDraft: "编辑中的 Memo：取消手势不应丢失这些修改。",
 	reference: "> 引用原文：保留引用，直到用户明确清除。",
-	longChinese: "这是用于检查大字体与受限宽度换行的移动端菜单长文本选项",
-	longEnglish: "A deliberately long mobile menu label with an UnbrokenLabelForNarrowSplitScreen",
 };
 
 interface FixtureView {
@@ -41,7 +39,7 @@ interface FixtureView {
 }
 
 // 使用实际渲染器、Composer 接线和根路由；仅隔离宿主、持久化和无关 UI 刷新。
-export async function createMobilePopupFixture(action: MobilePopupAction = "save-input", longLabels = false) {
+export async function createMobilePopupFixture(action: MobilePopupAction = "save-input") {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../../src/ui/KnomoView");
 	const { renderComposerReferencePreview } = await import("../../src/ui/KnomoComposer");
@@ -52,6 +50,8 @@ export async function createMobilePopupFixture(action: MobilePopupAction = "save
 	virtualConsole.on("jsdomError", error => errors.push(error));
 	const dom = new JSDOM("<!doctype html><body></body>", { pretendToBeVisual: true, virtualConsole });
 	const win = dom.window;
+	// JSDOM 不实现原生窗口激活；各焦点用例独立控制 document.hasFocus。
+	win.focus = () => {};
 	Object.assign(win.HTMLElement.prototype, {
 		createEl(this: HTMLElement, tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> } = {}) {
 			const element = this.ownerDocument.createElement(tag);
@@ -95,7 +95,7 @@ export async function createMobilePopupFixture(action: MobilePopupAction = "save
 	const popup = new KnomoPopupState(() => win as unknown as Window);
 	const calls: string[] = [];
 	const view = Object.assign(Object.create(KnomoView.prototype) as FixtureView, {
-		popupState: popup, currentLayout: "mobile", composerOpen: true, isSaving: false,
+		containerEl: { doc: win.document }, popupState: popup, currentLayout: "mobile", composerOpen: true, isSaving: false,
 		viewStateController: { mobileDrawerOpen: false }, timeBuoyPickerState: null,
 		editingMemo: action === "cancel-edit" ? memo() : null,
 		quoteReferenceText: action === "clear-reference" ? "[[Daily/2026-10-06#^p0-reference]]" : null,
@@ -142,9 +142,6 @@ export async function createMobilePopupFixture(action: MobilePopupAction = "save
 		queueMemoMarkdown: (_item, container, _generation, _priority, text) => container.setText(text),
 		renderMemoCardImages: () => undefined, queueSourceReferenceMarkdown: () => undefined,
 	});
-	if (longLabels) for (const menu of [scopeMenu, card.querySelector<HTMLElement>(".knomo-card-actions")!]) {
-		for (const [index, label] of Array.from(menu.querySelectorAll<HTMLElement>(".knomo-button-label, .knomo-card-action")).entries()) label.textContent = index % 2 ? mobilePopupText.longEnglish : mobilePopupText.longChinese;
-	}
 	let hitTarget: Element = root;
 	// 这里只模拟命中，不能用这些矩形证明浏览器布局或设备点击高度。
 	win.document.elementFromPoint = (x, y) => x >= 0 && x < 120 && y >= 0 && y < 44 ? hitTarget : root;

@@ -162,30 +162,24 @@ test("浮标正文转换期间索引变化时拒绝提交旧页", async () => {
 	assert.deepEqual(page.items, []);
 });
 
-test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白归一化后保持一致", async () => {
+test("文本搜索的统计、查询和共享卡片筛选在全角及空白归一化后保持一致", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const { filterVisibleMemos, memoMatchesSearch } = await import("../src/ui/KnomoMemoFilter");
+	const { filterCatalogMemos } = await import("../src/ui/KnomoMemoFilter");
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	const store = new InMemoryMemoCatalogStore();
 	const catalog = new MemoCatalogService(store);
 	const contents = ["ＡＢＣ", "alpha   beta", "alpha\n\tbeta", "unrelated"];
 	await seedCatalog(catalog, store, contents.map((content, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, content)));
 	const service = new CatalogReadService({ catalog });
-	const dailyStatus = { enabled: false, folder: null, format: null } as const;
 	for (const [text, expected] of [["abc", 1], ["ＡＢＣ", 1], ["alpha beta", 2], ["ALPHA\t  BETA", 2], ["missing", 0]] as const) {
 		const page = await service.query({ text, limit: 50 });
 		const memos = page.items.map(toCatalogMemoView);
 		assert.equal((await service.count({ text })).count, expected);
 		assert.equal(memos.length, expected);
-		assert.equal(filterVisibleMemos({
-			memos, randomMemos: [], shuffleDayMemos: [], activeNav: "all", activeTagKey: null,
-			scopeFilter: "all", normalizedQuery: text.trim().toLowerCase(), searchDateFilter: null,
-			recordStatsFilter: null, dailyStatus,
-		}).length, expected, `桌面：${text}`);
-		assert.equal(memos.filter((memo) => memoMatchesSearch(memo, text.trim().toLowerCase(), null, null, dailyStatus)).length, expected, `移动端：${text}`);
+		assert.equal(filterCatalogMemos(memos, { text }).length, expected, `卡片筛选：${text}`);
 	}
 	await store.close();
 });
@@ -196,7 +190,7 @@ test("实际 Catalog 链路按正文、标签、链接和图片搜索，并保�
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const { memoMatchesSearch } = await import("../src/ui/KnomoMemoFilter");
+	const { filterCatalogMemos } = await import("../src/ui/KnomoMemoFilter");
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	const sourcePath = "Daily/2026-09-01.md";
 	const { observations } = new DiaryMemoParser().parseRevision({
@@ -207,14 +201,13 @@ test("实际 Catalog 链路按正文、标签、链接和图片搜索，并保�
 	const catalog = new MemoCatalogService(store);
 	await seedCatalog(catalog, store, observations);
 	const service = new CatalogReadService({ catalog });
-	const dailyStatus = { enabled: false, folder: null, format: null } as const;
 	for (const text of ["hello knomo", "project", "linked note", "clip.png"]) {
 		const page = await service.query({ text, limit: 1 });
 		assert.equal(page.items.length, 1, text);
 		assert.equal((await service.count({ text })).count, 1, text);
 		const memo = toCatalogMemoView(page.items[0]);
 		assert.equal(memo.createdAt, "2026-09-01T06:04");
-		assert.equal(memoMatchesSearch(memo, text, null, null, dailyStatus), true, text);
+		assert.deepEqual(filterCatalogMemos([memo], { text }), [memo], text);
 	}
 	store.close();
 });
@@ -665,9 +658,7 @@ test("记录统计钻取在分页前处理标签、引用、小时和并列日�
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "tag", ...range, tagKey: "project", tagLabel: "Project" }, { limit: 50 })).items.map((item) => item.content), ["parent"]);
 	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "hour", ...range, hour: 9 }, { limit: 50 })).items.map((item) => item.content), ["explicit [[Daily#^abc]]", "parent"]);
 	const references = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1 });
-	const moreReferences = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1, cursor: references.nextCursor });
-	assert.deepEqual(moreReferences.items, []);
-	assert.equal(moreReferences.nextCursor, null);
+	assert.equal(references.nextCursor, null, "统一 evaluator 在分页前判定引用条件，不提供无结果的额外页面");
 	const referenceCount = await service.countRecordStatsDrilldown({ type: "references", ...range });
 	assert.deepEqual(references.items.map((item) => item.content), ["explicit [[Daily#^abc]]"]);
 	assert.equal(referenceCount.count, 1);

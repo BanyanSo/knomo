@@ -1,6 +1,9 @@
 import { MarkdownRenderer } from "obsidian";
 import type { App, Component } from "obsidian";
 import { t } from "../i18n";
+import type { CatalogQueryFilter } from "../types/catalog";
+import { getCatalogQueryKey } from "../services/SearchMatching";
+import { renderSearchHits } from "./SearchHitRenderer";
 
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
@@ -21,6 +24,8 @@ interface MemoMarkdownRendererOptions {
 	createComponent: () => Component;
 	getDocument: () => Document;
 	getGeneration: (surface: MemoMarkdownSurface) => number;
+	getSearchFilter?: (surface: MemoMarkdownSurface) => CatalogQueryFilter;
+	getSearchVersion?: (surface: MemoMarkdownSurface) => number;
 	concurrency: number;
 	scheduleTask?: (callback: () => void) => number;
 	cancelTask?: (id: number) => void;
@@ -30,6 +35,8 @@ interface MarkdownRenderToken {
 	generation: number;
 	requestId: number;
 	surfaceEpoch: number;
+	searchKey?: string;
+	searchVersion?: number;
 }
 
 export class MemoMarkdownRenderer {
@@ -66,6 +73,8 @@ export class MemoMarkdownRenderer {
 		surface: MemoMarkdownSurface,
 	): void {
 		const token = this.createRenderToken(container, generation, surface);
+		if (this.options.getSearchFilter) token.searchKey = getCatalogQueryKey(this.options.getSearchFilter(surface));
+		token.searchVersion = this.options.getSearchVersion?.(surface);
 		this.getQueue(surface).enqueue(
 			priority,
 			generation,
@@ -178,6 +187,10 @@ export class MemoMarkdownRenderer {
 		applyTaskCheckboxDomState(input, marker);
 	}
 
+	refreshSearchHits(memo: MemoRecord, container: HTMLElement, surface: MemoMarkdownSurface): void {
+		if (this.options.getSearchFilter) renderSearchHits(container, memo, this.options.getSearchFilter(surface));
+	}
+
 	private getQueue(surface: MemoMarkdownSurface): MarkdownRenderQueue {
 		return surface === "card-flow" ? this.cardFlowQueue : this.mobileSearchQueue;
 	}
@@ -213,6 +226,7 @@ export class MemoMarkdownRenderer {
 				container.appendChild(renderTarget.firstChild);
 			}
 			prepareRenderedMemoMarkdown(container, memo);
+			this.refreshSearchHits(memo, container, surface);
 			this.adoptRenderComponent(container, component, surface);
 			adopted = true;
 		} catch {
@@ -221,6 +235,7 @@ export class MemoMarkdownRenderer {
 			}
 			this.releaseContainerComponent(container, surface);
 			container.setText(previewText);
+			this.refreshSearchHits(memo, container, surface);
 		} finally {
 			if (!adopted) {
 				this.releasePendingComponent(component, surface);
@@ -330,6 +345,8 @@ export class MemoMarkdownRenderer {
 		surface: MemoMarkdownSurface,
 	): boolean {
 		return token.generation === this.options.getGeneration(surface)
+			&& (token.searchKey === undefined || token.searchKey === getCatalogQueryKey(this.options.getSearchFilter?.(surface) ?? {}))
+			&& (token.searchVersion === undefined || token.searchVersion === this.options.getSearchVersion?.(surface))
 			&& token.surfaceEpoch === this.surfaceEpochs[surface]
 			&& token.requestId === this.latestRequestIds[surface].get(container);
 	}

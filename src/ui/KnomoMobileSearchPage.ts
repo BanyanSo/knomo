@@ -52,6 +52,7 @@ export function renderKnomoMobileSearchPage(
 	setIcon(closeButtonEl, "x");
 
 	const contentEl = pageEl.createDiv({ cls: "knomo-mobile-search-content" });
+	contentEl.createDiv({ cls: "knomo-search-date-hint", attr: { hidden: "", role: "status", "aria-live": "polite" } });
 	const quickSection = contentEl.createDiv({ cls: "knomo-mobile-search-quick" });
 	quickSection.createDiv({ cls: "knomo-mobile-search-section-title", text: t("search.quick") });
 	const quickListEl = quickSection.createDiv({ cls: "knomo-mobile-search-chip-list" });

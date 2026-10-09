@@ -7,9 +7,10 @@ import type {
 	CatalogQuery,
 	MemoObservation,
 } from "../types/catalog";
-import { extractDailyExplicitReferenceTargets, getIndexableDiaryMemoContent } from "./DiaryMemoParser";
+import { extractDailyExplicitReferenceTargets } from "./DiaryMemoParser";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
 import { normalizeCatalogText } from "./MemoCatalogStore";
+import { buildSearchBody } from "./SearchDocument";
 import { getMemoContentStatsFromContent } from "../utils/memoContentStats";
 import { normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 
@@ -100,18 +101,14 @@ export function buildCatalogObservation(observation: MemoObservation): CatalogOb
 	const linkTargets = dedupe(observation.links.map((link) => normalizeCatalogText(link.target)));
 	const imagePaths = dedupe(observation.images.map((image) => normalizeCatalogText(image.path)));
 	const explicitReferenceTargets = extractDailyExplicitReferenceTargets(observation.content);
-	const searchText = normalizeCatalogText([
-		getIndexableDiaryMemoContent(observation.content),
-		...observation.tags,
-		...linkTargets,
-		...imagePaths,
-	].join(" "));
+	const searchBody = buildSearchBody(observation.content);
+	const searchValues = [...searchBody, ...observation.tags.map(normalizeCatalogText), ...linkTargets, ...imagePaths];
 	return {
 		...observation,
 		observationKey: `${observation.sourcePath}\0${observation.startLine.toString().padStart(10, "0")}`,
 		createdAtKey: `${observation.logicalDate}T${normalizeMemoTime(observation.time)}`,
-		searchText,
-		searchTokens: buildCatalogSearchTokens(searchText),
+		searchBody,
+		searchTokens: [...new Set(searchValues.flatMap(buildCatalogSearchTokens))],
 		tagKeys: dedupe(observation.tags.map(normalizeTagKey)),
 		linkTargets,
 		imagePaths,

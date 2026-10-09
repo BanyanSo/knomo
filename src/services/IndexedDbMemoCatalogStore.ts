@@ -1,3 +1,4 @@
+import { getCatalogTextTerms, narrowCatalogQuery } from "./SearchMatching";
 import type {
 	CatalogAggregateSnapshot,
 	CatalogCoverage,
@@ -409,6 +410,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
+		request = { ...request, ...narrowCatalogQuery(request) };
 		await this.open();
 		const database = this.getDatabase();
 		const keyRange = this.getKeyRange();
@@ -442,6 +444,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 					return;
 				}
 
+				if (request.matchNone) return;
 				const selection = selectCatalogIndex(request);
 				try {
 					if (selection === null) {
@@ -523,6 +526,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		request = narrowCatalogQuery(request);
 		signal?.throwIfAborted();
 		await this.open();
 		signal?.throwIfAborted();
@@ -554,6 +558,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 				catalogRevision = (revisionRequest.result as CatalogMetaRecord<number> | undefined)?.value ?? 0;
 				coverage = (coverageRequest.result as CatalogMetaRecord<CatalogCoverage> | undefined)?.value
 					?? { ...DEFAULT_CATALOG_COVERAGE };
+				if (request.matchNone) return;
 				const selection = selectCatalogIndex(request);
 				try {
 					if (selection === null) {
@@ -948,11 +953,9 @@ function selectCatalogIndex(request: CatalogQueryFilter): CatalogIndexSelection 
 	if (tag !== undefined) {
 		return { kind: "tag", value: tag };
 	}
-	if (request.text !== undefined) {
-		const token = selectCatalogSearchToken(request.text);
-		if (token !== null) {
-			return { kind: "search", value: token };
-		}
+	for (const term of getCatalogTextTerms(request)) {
+		const token = selectCatalogSearchToken(term);
+		if (token !== null) return { kind: "search", value: token };
 	}
 	if (request.linkTarget !== undefined) {
 		return { kind: "link", value: `target:${normalizeCatalogText(request.linkTarget)}` };

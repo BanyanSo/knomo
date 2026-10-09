@@ -4,6 +4,7 @@ import type { MemoViewItem } from "../../src/types/memoView";
 import type { ComposerInput } from "../../src/ui/ComposerEditor";
 import type { KnomoUserActionController } from "../../src/ui/KnomoUserActionController";
 import { KnomoPopupState } from "../../src/ui/KnomoPopupState";
+import { KnomoViewStateController } from "../../src/ui/KnomoViewStateController";
 import { ensureObsidianStub } from "./obsidianStub";
 
 export type MobilePopupAction = "save-input" | "cancel-edit" | "clear-reference";
@@ -96,7 +97,9 @@ export async function createMobilePopupFixture(action: MobilePopupAction = "save
 	const calls: string[] = [];
 	const view = Object.assign(Object.create(KnomoView.prototype) as FixtureView, {
 		containerEl: { doc: win.document }, popupState: popup, currentLayout: "mobile", composerOpen: true, isSaving: false,
-		viewStateController: { mobileDrawerOpen: false }, timeBuoyPickerState: null,
+		viewStateController: new KnomoViewStateController(), timeBuoyPickerState: null,
+		catalogDesktopQueryRun: 0, catalogDesktopCountRun: 0,
+		clearSearchDebounce: () => undefined, refreshCatalogActiveQuery: () => undefined,
 		editingMemo: action === "cancel-edit" ? memo() : null,
 		quoteReferenceText: action === "clear-reference" ? "[[Daily/2026-10-06#^p0-reference]]" : null,
 		quoteMarkdownText: action === "clear-reference" ? mobilePopupText.reference : null,

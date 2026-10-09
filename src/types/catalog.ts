@@ -1,4 +1,5 @@
 import type { MemoImageRef, MemoLinkRef } from "./memo";
+import type { SearchDate } from "./search";
 
 export type CatalogCoverageKind = "partial" | "complete" | "rebuilding";
 export type CatalogStoreLifecycleState = "opening" | "ready" | "degraded" | "retrying" | "read-only" | "rebuilding";
@@ -75,7 +76,8 @@ export interface MemoCapabilities {
 export interface CatalogObservation extends MemoObservation {
 	observationKey: string;
 	createdAtKey: string;
-	searchText: string;
+	// 分段可读正文；排除区形成不可跨越边界，旧缓存缺少此字段时不能用于新文字搜索。
+	searchBody: string[];
 	searchTokens: string[];
 	tagKeys: string[];
 	linkTargets: string[];
@@ -187,6 +189,10 @@ export interface CatalogCursor {
 
 export interface CatalogQuery {
 	text?: string;
+	textTerms?: readonly string[];
+	searchDate?: SearchDate;
+	matchNone?: boolean;
+	hasReference?: boolean;
 	tags?: string[];
 	linkTarget?: string;
 	hasLink?: boolean;

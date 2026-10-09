@@ -45,6 +45,7 @@ import {
 } from "./MemoCapabilityModel";
 import type { MemoCatalogService } from "./MemoCatalogService";
 import { createCatalogCountAbortError } from "./MemoCatalogStore";
+import { getCatalogQueryKey, intersectCatalogFilters, narrowCatalogQuery } from "./SearchMatching";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
 
 export interface CatalogReadServiceOptions {
@@ -159,6 +160,7 @@ export class CatalogReadService {
 	}
 
 	async query(request: CatalogFeatureQuery): Promise<CatalogMemoPage> {
+		request = { ...request, ...narrowCatalogQuery(request) };
 		let page: CatalogQueryPage;
 		try {
 			page = await this.options.catalog.query({ ...request, cursor: request.cursor?.catalog ?? null });
@@ -206,6 +208,7 @@ export class CatalogReadService {
 	}
 
 	async count(request: CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
+		request = narrowCatalogQuery(request);
 		try {
 			return await this.cachedCount(request, signal, async (countSignal) => {
 				const result = await this.options.catalog.count(request, countSignal);
@@ -225,7 +228,7 @@ export class CatalogReadService {
 		const store = this.options.catalog.getStore();
 		const [revision, coverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
 		signal?.throwIfAborted();
-		const key = JSON.stringify([kind, Object.entries(request).sort(([left], [right]) => left.localeCompare(right)),
+		const key = JSON.stringify([kind, getCatalogQueryKey(request),
 			revision, coverage, store.getLifecycle()]);
 		const cached = this.countCache.get(key);
 		if (cached) {
@@ -286,44 +289,33 @@ export class CatalogReadService {
 
 	async queryReviewItems(date: Date, page: CatalogFunctionPageRequest): Promise<CatalogMemoPage> {
 		const coverage = await this.options.catalog.getStore().getCoverage();
-		const query = buildReviewCatalogQuery(date, page.text);
-		if (!isCompleteCoverage(coverage)) return this.createCoveragePendingPage(query);
+		const query = intersectCatalogFilters(buildReviewCatalogQuery(date), page);
+		if (!isQueryCovered(coverage, query)) return this.createCoveragePendingPage(query);
 		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
 	}
 
-	async countReviewItems(date: Date, text?: string, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
-		return this.count(buildReviewCatalogQuery(date, text), signal);
+	async countReviewItems(date: Date, text?: string | CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
+		return this.count(intersectCatalogFilters(buildReviewCatalogQuery(date), typeof text === "string" ? { text } : text ?? {}), signal);
 	}
 
 	async queryRecordStatsDrilldown(
 		filter: CatalogRecordStatsFilter,
 		page: CatalogFunctionPageRequest,
 	): Promise<CatalogMemoPage> {
-		const { query, fromDate, toDate } = buildRecordStatsCatalogQuery(filter);
-		if (page.text?.trim()) query.text = page.text.trim();
-		if (!await this.getCoverageForRange(fromDate, toDate)) return this.createCoveragePendingPage(query);
-		const request = { ...query, limit: page.limit, cursor: page.cursor ?? null };
-		if (filter.type !== "references") return this.query(request);
-		return this.queryFiltered(request, (memo) => (
-			memo.observation.explicitReferenceTargets.length > 0
-		));
+		const query = intersectCatalogFilters(buildRecordStatsCatalogQuery(filter).query, page);
+		const coverage = await this.options.catalog.getStore().getCoverage();
+		if (!isQueryCovered(coverage, query)) return this.createCoveragePendingPage(query);
+		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
 	}
 
 	async countRecordStatsDrilldown(
 		filter: CatalogRecordStatsFilter,
-		text?: string,
+		text?: string | CatalogFeatureFilter,
 		signal?: AbortSignal,
 	): Promise<CatalogMemoCountResult> {
 		signal?.throwIfAborted();
-		const { query, fromDate, toDate } = buildRecordStatsCatalogQuery(filter);
-		if (text?.trim()) query.text = text.trim();
-		if (!await this.getCoverageForRange(fromDate, toDate)) {
-			signal?.throwIfAborted();
-			return this.createUnavailableCount(await this.options.catalog.getStore().getCoverage());
-		}
-		if (filter.type !== "references") return this.count(query, signal);
-		return this.cachedCount(query, signal, countSignal => this.countFiltered(query,
-			memo => memo.observation.explicitReferenceTargets.length > 0, countSignal), "references");
+		const query = intersectCatalogFilters(buildRecordStatsCatalogQuery(filter).query, typeof text === "string" ? { text } : text ?? {});
+		return this.count(query, signal);
 	}
 
 	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"]): Promise<TimeBuoyQueryResult> {
@@ -573,79 +565,6 @@ export class CatalogReadService {
 		});
 	}
 
-	private async queryFiltered(
-		request: CatalogFeatureQuery,
-		predicate: (memo: CatalogMemoItem) => boolean,
-	): Promise<CatalogMemoPage> {
-		const limit = Math.max(1, Math.min(150, Math.trunc(request.limit)));
-		const items: CatalogMemoItem[] = [];
-		let cursor = request.cursor ?? null;
-		let lastPage: CatalogMemoPage | null = null;
-		do {
-			const page = await this.query({ ...request, limit: 150, cursor });
-			lastPage = page;
-			if (page.invalidated) return page;
-			for (let index = 0; index < page.items.length; index += 1) {
-				const memo = page.items[index];
-				if (memo === undefined || !predicate(memo)) continue;
-				items.push(memo);
-				if (items.length === limit) {
-					const hasMore = index < page.items.length - 1 || page.nextCursor !== null;
-					return {
-						...page,
-						items,
-						nextCursor: hasMore ? { catalog: {
-							catalogRevision: page.catalogRevision,
-							createdAtKey: memo.observation.createdAtKey,
-							observationKey: memo.observation.observationKey,
-						} } : null,
-					};
-				}
-			}
-			cursor = page.nextCursor;
-		} while (cursor !== null);
-		return lastPage === null ? this.query(request) : { ...lastPage, items, nextCursor: null };
-	}
-
-	private async countFiltered(
-		request: CatalogFeatureFilter,
-		predicate: (memo: CatalogMemoItem) => boolean,
-		signal?: AbortSignal,
-	): Promise<CatalogMemoCountResult> {
-		let cursor: CatalogFeatureCursor | null = null;
-		let count = 0;
-		let catalogRevision: number | null = null;
-		let coverage: CatalogCoverage | null = null;
-		do {
-			signal?.throwIfAborted();
-			const page = await this.query({ ...request, limit: 150, cursor });
-			signal?.throwIfAborted();
-			if (page.invalidated
-				|| (catalogRevision !== null && catalogRevision !== page.catalogRevision)) {
-				return {
-					count: null,
-					complete: false,
-					catalogRevision: page.catalogRevision,
-					coverage: page.coverage,
-				};
-			}
-			catalogRevision = page.catalogRevision;
-			coverage = page.coverage;
-			count += page.items.filter(predicate).length;
-			cursor = page.nextCursor;
-		} while (cursor !== null);
-		if (catalogRevision === null || coverage === null) {
-			return this.createUnavailableCount();
-		}
-		const complete = isQueryCovered(coverage, request);
-		return {
-			count: complete ? count : null,
-			complete,
-			catalogRevision,
-			coverage,
-		};
-	}
-
 	private getReadStatus(
 		coverage: CatalogCoverage,
 		lifecycle: CatalogStoreLifecycle,
@@ -815,7 +734,7 @@ function buildTimeBuoyInstance(memo: CatalogMemoItem, targetDate: string) {
 	return { memoId: memo.key, targetDate };
 }
 
-function buildReviewCatalogQuery(date: Date, text?: string): CatalogFeatureFilter {
+export function buildReviewCatalogQuery(date: Date, text?: string): CatalogFeatureFilter {
 	const logicalDate = formatDatePart(date);
 	const query: CatalogFeatureFilter = {
 		toDate: formatDatePart(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)),
@@ -831,8 +750,9 @@ function isCompleteCoverage(coverage: CatalogCoverage): boolean {
 	return coverage.kind === "complete" && coverage.configurationComplete !== false;
 }
 
-function isQueryCovered(coverage: CatalogCoverage, request: CatalogFeatureFilter): boolean {
-	if (isCompleteCoverage(coverage)) return true;
+export function isQueryCovered(coverage: CatalogCoverage, request: CatalogFeatureFilter): boolean {
+	request = narrowCatalogQuery(request);
+	if (request.matchNone || isCompleteCoverage(coverage)) return true;
 	return request.fromDate !== undefined
 		&& coverage.coveredFromDate !== null
 		&& request.fromDate >= coverage.coveredFromDate
@@ -845,7 +765,7 @@ function isRangeCovered(coverage: CatalogCoverage, fromDate: string, toDate: str
 		|| (coverage.coveredFromDate !== null && fromDate >= coverage.coveredFromDate);
 }
 
-function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): {
+export function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): {
 	query: Omit<CatalogFeatureQuery, "limit" | "cursor">;
 	fromDate: string;
 	toDate: string;
@@ -872,6 +792,7 @@ function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): {
 	if (filter.type === "with-image") query.hasImage = true;
 	if (filter.type === "tag") query.tags = [filter.tagKey];
 	if (filter.type === "hour") query.hour = filter.hour;
+	if (filter.type === "references") query.hasReference = true;
 	return { query, fromDate, toDate };
 }
 

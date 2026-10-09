@@ -6,6 +6,7 @@ import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import type { TimeBuoyQueryResult } from "../src/types/timeBuoy";
 import type { MemoViewItem } from "../src/types/memoView";
 import { getMemoListStateKey } from "../src/ui/MemoRenderRevision";
+import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 
 test("普通列表今日浮标逐页置顶，最后接普通记录，后台更新和关闭拒绝旧页", async () => {
 	const { view, result, memo, setQuery } = await refreshHarness();
@@ -90,7 +91,7 @@ async function refreshHarness() {
 		catalogRevision: 0, hasCommittedCatalogDesktopQuery: false, cardFlowEl: { isConnected: true, childElementCount: 1, querySelector: () => null },
 		cardFlowCoordinator: { deferredForAllMemos: false },
 		timeBuoyViewController: controller, shouldShowTodayTimeBuoys: () => true, isDefaultListState: () => true,
-		viewStateController: { activeNav: "all" }, getCatalogQueryFingerprint: () => "all",
+		viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false }, getCatalogQueryFingerprint: () => "all",
 		prepareCatalogDesktopQuery: () => {}, isCatalogQueryCurrent: () => true, buildCatalogActiveQuery: () => ({}),
 		queryCatalogFeature: async () => ({ items: [], catalogRevision: revision, nextCursor: null, readState: "ready" }),
 		syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {}, getImmediateCatalogTotalCount: () => 0,

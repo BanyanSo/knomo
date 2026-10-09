@@ -15,6 +15,8 @@ import type {
 
 import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/timeBuoy";
 import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
+import { getCatalogTextTerms, matchesSearchDate, matchesSearchTerms, narrowCatalogQuery } from "./SearchMatching";
+import { normalizeSearchText } from "../utils/searchText";
 
 export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 	kind: "partial",
@@ -164,10 +166,11 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		request = narrowCatalogQuery(request);
 		signal?.throwIfAborted();
 		const matches = createCatalogQueryMatcher(request);
 		let count = 0;
-		for (const observation of this.observations.values()) {
+		for (const observation of request.matchNone ? [] : this.observations.values()) {
 			if (matches(observation)) {
 				count += 1;
 			}
@@ -181,6 +184,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
+		request = { ...request, ...narrowCatalogQuery(request) };
 		if (request.cursor !== undefined && request.cursor !== null && request.cursor.catalogRevision !== this.catalogRevision) {
 			return emptyInvalidatedPage(this.catalogRevision, this.coverage);
 		}
@@ -188,7 +192,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		let cursorReads = 0;
 		let observationsRead = 0;
 		const matchesQuery = createCatalogQueryMatcher(request);
-		const candidates = [...this.observations.values()].sort(compareCatalogObservations);
+		const candidates = request.matchNone ? [] : [...this.observations.values()].sort(compareCatalogObservations);
 		const matches: CatalogObservation[] = [];
 		for (const observation of candidates) {
 			cursorReads += 1;
@@ -552,7 +556,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 }
 
 export function normalizeCatalogText(value: string): string {
-	return value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+	return normalizeSearchText(value);
 }
 
 export function matchesCatalogQuery(
@@ -568,10 +572,15 @@ export function createCatalogQueryMatcher(
 	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
 ): (observation: CatalogObservation) => boolean {
 	const tags = request.tags?.map(normalizeCatalogText).filter((tag) => tag.length > 0) ?? [];
-	const normalizedText = request.text === undefined ? "" : normalizeCatalogText(request.text);
+	request = narrowCatalogQuery(request);
+	const terms = getCatalogTextTerms(request);
 	const linkTarget = request.linkTarget === undefined ? undefined : normalizeCatalogText(request.linkTarget);
 	const imagePath = request.imagePath === undefined ? undefined : normalizeCatalogText(request.imagePath);
-	return observation => (normalizedText.length === 0 || observation.searchText.includes(normalizedText))
+	return observation => !request.matchNone
+		&& (request.textTerms === undefined || observation.searchBody !== undefined)
+		&& matchesSearchTerms(observation, terms)
+		&& matchesSearchDate(observation.logicalDate, request.searchDate)
+		&& (request.hasReference === undefined || (observation.explicitReferenceTargets.length > 0) === request.hasReference)
 		&& tags.every((tag) => observation.tagKeys.some((observationTag) => (
 			observationTag === tag || observationTag.startsWith(`${tag}/`)
 		)))

@@ -18,7 +18,7 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 	const { hashText } = await import("../src/utils/hash");
 	const databaseName = `search-upgrade-${Date.now()}`;
 	for (const store of [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(databaseName, { factory: indexedDB, keyRange: IDBKeyRange })]) {
-		const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 中文ABC项目2026\n", mtime: 10 }];
+		const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 中文ABC项目2026 **完成** [[Hidden|可读别名]]\n", mtime: 10 }];
 		for (let boot = 0; boot < 3; boot += 1) {
 			const fixture = await createCoordinatorFixture(files);
 			const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(store),
@@ -29,7 +29,7 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 				await coordinator.initialize();
 				await coordinator.waitForIdle();
 				assert.equal(fixture.readCount(), boot === 2 ? 0 : 1, `boot ${boot}`);
-				for (const text of ["中", "中文", "项目", "ABC"]) {
+				for (const text of ["中", "中文", "项目", "ABC", "可读别名"]) {
 					assert.equal((await store.query({ text, limit: 1 })).items.length, 1, text);
 					assert.equal((await store.count({ text })).count, 1, text);
 				}
@@ -37,14 +37,15 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 			if (boot === 0) {
 				await store.open();
 				const batch = (await store.listFileRevisionBatches())[0];
-				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: 6 }));
+				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: 7 }));
 				const oldPartition = buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
-					observations: batch.observations, parserVersion: 6, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
+					observations: batch.observations, parserVersion: 7, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
 				oldPartition.observations[0].searchTokens = ["中文abc项目2026", "中文a", "文ab", "abc", "bc项", "c项目", "项目2", "目20", "202", "026"];
+				Reflect.deleteProperty(oldPartition.observations[0], "searchBody");
 				await store.replaceFilePartition(oldPartition);
 				const checkpoint = await store.getMeta<Record<string, unknown>>(CATALOG_CHECKPOINT_META_KEY);
-				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: 6, settingsFingerprint: oldFingerprint });
-				assert.ok(CATALOG_PARSER_VERSION > 6);
+				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: 7, settingsFingerprint: oldFingerprint });
+				assert.ok(CATALOG_PARSER_VERSION > 7);
 				store.close();
 			}
 		}

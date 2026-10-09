@@ -18,7 +18,7 @@ import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { assignObservationOccurrences } from "./ObservationOccurrences";
 
-export const CATALOG_PARSER_VERSION = 7;
+export const CATALOG_PARSER_VERSION = 8;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;
@@ -310,10 +310,6 @@ export function extractDailyExplicitReferenceTargets(content: string): string[] 
 	return dedupeStable(parseMarkdownReferences(content)
 		.filter((link) => link.valid && /#(?:\^|%5[eE])/u.test(link.target))
 		.map((link) => link.target), (target) => target);
-}
-
-export function getIndexableDiaryMemoContent(content: string): string {
-	return maskProtectedMarkdown(content);
 }
 
 function decodeUtf8(bytes: Uint8Array): string {

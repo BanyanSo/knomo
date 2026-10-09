@@ -723,3 +723,38 @@ test("主卡片流和移动搜索渲染完成后都保留换行，源码保持�
 		dom.window.close();
 	}
 });
+
+test("两种卡片表面拒绝旧搜索指纹与旧草稿代次的异步 Markdown 结果", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const original = MarkdownRenderer.render;
+	let key = "alpha", version = 0, gate = deferred<void>();
+	const components: TestComponent[] = [];
+	MarkdownRenderer.render = async (_app, text, target) => {
+		target.createEl("p", { text }); await gate.promise;
+	};
+	const renderer = new MemoMarkdownRenderer({
+		app: {} as never, getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1,
+		getSearchFilter: () => ({ textTerms: [key] }), getSearchVersion: () => version,
+		createComponent: () => { const component = new TestComponent(); components.push(component); return component as never; },
+	});
+	try {
+		for (const surface of ["card-flow", "mobile-search"] as const) {
+			for (const change of ["query", "draft"] as const) {
+				key = "alpha"; gate = deferred<void>();
+				const target = new TestElement("div", { text: "current result" });
+				const count = components.length;
+				renderer.queueMemoMarkdown(makeMemo(), target.asHtml(), 0, "normal", "old render", surface);
+				await waitFor(() => components.length > count);
+				if (change === "query") key = "beta"; else version++;
+				gate.resolve();
+				await waitFor(() => components[count].unloadCalls === 1);
+				assert.equal(target.getText(), "current result");
+			}
+		}
+	} finally {
+		gate.resolve(); renderer.clear(); renderer.clear("mobile-search"); MarkdownRenderer.render = original;
+	}
+});

@@ -4913,3 +4913,18 @@ body.is-mobile .modal-container.knomo-confirm-backdrop { z-index: 10030; }
 .menu.knomo-mobile-menu-scope .menu-item.mod-checked .menu-item-icon {
 	color: inherit;
 }
+
+/* 搜索只增强正文高亮；日期无效时在原输入附近轻提示。 */
+.knomo-plugin mark.knomo-search-hit {
+	background: var(--text-highlight-bg);
+	color: inherit;
+	border-radius: 2px;
+}
+.knomo-plugin .knomo-search-date-hint {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+	padding: 6px 8px;
+}
+.knomo-plugin .knomo-search-date-hint[hidden] { display: none; }

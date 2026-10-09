@@ -1,6 +1,6 @@
 import { normalizeComposerToolbar, type ComposerToolbarPreferences } from "../settings/composerToolbar";
 import { isCjkMemoContent } from "./KnomoCardMetadata";
-import { requireApiVersion, setIcon } from "obsidian";
+import { Platform, requireApiVersion, setIcon } from "obsidian";
 
 import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
@@ -141,11 +141,17 @@ export function renderComposerReferencePreview(
 	const previewText = container.createDiv({
 		cls: "knomo-reference-preview-text",
 	});
-	previewText.createSpan({ cls: "knomo-reference-label", text: t("reference.label") });
-	previewText.createSpan({
-		cls: "knomo-reference-content",
-		text: quoteMarkdownText.replace(/^> ?/gm, ""),
-	});
+	const isCjkContent = isCjkMemoContent(quoteMarkdownText);
+	const quoteText = quoteMarkdownText.replace(/^> ?/gm, "");
+	const content = previewText.createSpan({ cls: "knomo-reference-content" });
+	if (Platform.isIosApp && isCjkContent) {
+		// 将汉字及标点分为独立行内片段，避免 WebKit 用未展开的字宽定位两端对齐后的省略号。
+		for (const part of quoteText.split(/((?:\p{Ideographic}|[\u3000-\u303f\uff00-\uffef])\p{Mark}*)/u)) {
+			if (part.length > 0) content.createSpan({ text: part });
+		}
+	} else {
+		content.setText(quoteText);
+	}
 	const clearButton = container.createEl("button", {
 		cls: "knomo-reference-clear",
 		attr: {
@@ -157,7 +163,7 @@ export function renderComposerReferencePreview(
 	options.setTooltipIfDesktopOnly(clearButton);
 	setIcon(clearButton, "x");
 	container.addClass("is-visible");
-	container.toggleClass("is-cjk-content", isCjkMemoContent(quoteMarkdownText));
+	container.toggleClass("is-cjk-content", isCjkContent);
 }
 
 export const composerActionLabels = {

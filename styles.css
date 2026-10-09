@@ -1794,6 +1794,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: flex;
 }
 
+/* 移动端右侧只保留按钮占位，不再叠加间距和右内边距。 */
+.knomo-plugin.is-layout-mobile .knomo-reference-preview {
+	gap: 0;
+	padding-right: 0;
+}
+
 .knomo-plugin .knomo-reference-preview-text {
 	flex: 1 1 auto;
 	min-width: 0;
@@ -1804,7 +1810,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-reference-content {
 	display: -webkit-box;
-	-webkit-line-clamp: 3;
+	-webkit-line-clamp: 4;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 	white-space: pre-wrap;
@@ -1814,12 +1820,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-reference-preview.is-cjk-content .knomo-reference-content {
 	text-align: justify;
 	text-align-last: start;
-}
-
-.knomo-plugin .knomo-reference-label {
-	display: block;
-	color: var(--text-faint);
-	font-weight: var(--font-medium);
 }
 
 .knomo-plugin .knomo-reference-clear {
@@ -4851,10 +4851,37 @@ body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-co
 .knomo-plugin.is-layout-mobile .knomo-mobile-scope-popover { display: none; }
 
 .knomo-plugin.is-layout-mobile .knomo-reference-clear {
+	position: relative;
 	width: var(--knomo-touch-target);
 	min-width: var(--knomo-touch-target);
 	height: var(--knomo-touch-target);
 	min-height: var(--knomo-touch-target);
+	border: 0;
+	background: transparent;
+}
+
+/* 可见圆形保持 26px，按钮本身保留完整的移动触摸区域。 */
+.knomo-plugin.is-layout-mobile .knomo-reference-clear::before {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 26px;
+	height: 26px;
+	box-sizing: border-box;
+	border: 1px solid var(--knomo-soft-border);
+	border-radius: inherit;
+	transform: translate(-50%, -50%);
+	pointer-events: none;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-reference-clear svg {
+	position: relative;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-reference-clear:hover::before,
+.knomo-plugin.is-layout-mobile .knomo-reference-clear:focus-visible::before {
+	background: var(--knomo-row-hover);
 }
 .knomo-plugin.is-layout-mobile .knomo-cancel-edit-button,
 .knomo-plugin.is-layout-mobile .knomo-tag-nav,

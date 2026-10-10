@@ -7,6 +7,7 @@ import { DailyMemoWriteGateway, type PreparedDailyWrite } from "./DailyMemoWrite
 import { findObservation, findAppendedObservation, getRawBlock, replaceObservation, insertRawBlock, hasBlockId,
 	type MarkdownCatalogCommitInput } from "./MarkdownMutationService";
 import { TrashSnapshotStore, assertVaultPath, type TrashOperationStore } from "./TrashSnapshotStore";
+import { buildDailyMemoPresentationChange } from "./DailyMemoPresentationChange";
 
 export interface IndependentTrashOptions {
 	assertActive?: () => void;
@@ -56,7 +57,7 @@ export class IndependentTrashService {
 			await store.save(snapshot);
 			await this.commit(prepared, snapshot, store);
 			return { snapshotId: snapshot.snapshotId, state: "deleted", observation: null,
-				catalogUpdatePending: await this.updateCatalog(prepared) };
+				catalogUpdatePending: await this.updateCatalog(prepared, undefined, observation) };
 		});
 	}
 
@@ -148,11 +149,12 @@ export class IndependentTrashService {
 		} catch { return "unreadable"; }
 	}
 
-	private async updateCatalog(prepared: PreparedDailyWrite, observation?: MemoObservation): Promise<boolean> {
+	private async updateCatalog(prepared: PreparedDailyWrite, observation?: MemoObservation, deleted?: MemoObservation): Promise<boolean> {
 		try {
 			this.options.assertActive?.();
 			await this.options.updateCatalogPartition({ file: prepared.file, logicalDate: prepared.logicalDate,
-				content: prepared.afterContent, parsed: prepared.after, insertedObservation: observation });
+				content: prepared.afterContent, parsed: prepared.after, insertedObservation: observation,
+				presentationChange: buildDailyMemoPresentationChange(prepared, deleted ?? null, observation ?? null) });
 			return false;
 		} catch {
 			await this.options.refreshCatalogPaths([prepared.file.path]).catch(() => undefined);

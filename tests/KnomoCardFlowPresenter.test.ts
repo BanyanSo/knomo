@@ -161,6 +161,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Not enough memos to revisit yet",
 		description: "",
+		headers: [{ type: "random-toolbar", count: 0 }],
 	});
 });
 

@@ -1049,6 +1049,7 @@ async function sessionView(editor: ComposerEditor) {
 	return Object.assign(Object.create(KnomoView.prototype), fields) as typeof fields & {
 		startEditing(memo: import("../src/types/memoView").MemoViewItem): void;
 		cancelEditing(): void; clearReference(): void; saveInput(): Promise<void>;
+		composerSaveRefreshQueue: Promise<void>;
 		closeComposerKeepingDraft(): void; cancelComposerFromEscape(): void;
 		handleMemoAction(action: "reference", memo: import("../src/types/memoView").MemoViewItem): Promise<void>;
 		render(): Promise<void>;
@@ -1148,7 +1149,7 @@ test("S08 late Reference result cannot attach to a switched or restored session"
 	} finally { close(); }
 });
 
-test("W06-W07 late settled refresh preserves new errors, sheet and scroll ownership", async () => {
+test("W06-W07 late settled feedback preserves new errors, sheet and scroll ownership", async () => {
 	const { editor, close } = environment("first");
 	try {
 		const view = await sessionView(editor);
@@ -1156,12 +1157,13 @@ test("W06-W07 late settled refresh preserves new errors, sheet and scroll owners
 		const settled: ReturnType<typeof view.memoCommandService.startCreate>["settled"] = new Promise(resolve => { finish = resolve; });
 		view.memoCommandService.startCreate = () => ({ dailyCommitted: Promise.resolve(), settled });
 		let status = ""; view.updateStatus = message => { status = message; };
-		let refreshed!: () => void; const refreshedPromise = new Promise<void>(resolve => { refreshed = resolve; });
-		view.reloadMemos = async () => { refreshed(); return true; };
+		let reloads = 0;
+		view.reloadMemos = async () => { reloads++; return true; };
 		await view.saveInput();
 		editor.reset("new draft"); view.openComposer(); status = "new error";
 		finish({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false });
-		await refreshedPromise; await Promise.resolve();
+		await view.composerSaveRefreshQueue;
+		assert.equal(reloads, 0);
 		assert.equal(editor.input.value, "new draft"); assert.equal(view.composerOpen, true); assert.equal(status, "new error");
 	} finally { close(); }
 });

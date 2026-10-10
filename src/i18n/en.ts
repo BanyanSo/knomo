@@ -252,6 +252,7 @@ export const en: Record<TranslationKey, string> = {
 	"empty.loadingAllMemos": "Preparing your history. You can keep recording.",
 	"catalog.storageUnavailable": "Local cache could not be persisted. Only limited results are available; restart Obsidian and try again.",
 	"catalog.savedRefreshPending": "Memo saved. Its local view is still refreshing.",
+	"random.sourceChanged": "Some notes in this group changed. Outdated cards were removed. Choose another group to reload.",
 	"catalog.retryLocalStorage": "Retry local storage",
 	"catalog.retrySyncState": "Check sync state again",
 	"catalog.rebuildBasicData": "Rebuild from Daily notes",

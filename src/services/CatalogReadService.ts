@@ -6,6 +6,7 @@ import type {
 	CatalogQueryPage,
 	CatalogStoreLifecycle,
 	ResolvedMemo,
+	ObservationHandle,
 } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
@@ -47,6 +48,7 @@ import type { MemoCatalogService } from "./MemoCatalogService";
 import { createCatalogCountAbortError } from "./MemoCatalogStore";
 import { getCatalogQueryKey, intersectCatalogFilters, narrowCatalogQuery } from "./SearchMatching";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
+import { observationHandleKey } from "./DailyMemoPresentationChange";
 
 export interface CatalogReadServiceOptions {
 	references?: CatalogReferenceService;
@@ -397,6 +399,47 @@ export class CatalogReadService {
 		throw new Error(t("error.revisitChanged"));
 	}
 
+	// 只读取页面已经选中的句柄，不以旧行号、正文 hash 或当前查询结果重定位 occurrence。
+	async readMemoItems(handles: readonly ObservationHandle[]): Promise<CatalogMemoItem[]> {
+		const items = await this.readMemoHandles(handles);
+		if (items.some(item => item === null)) throw new CatalogDiscoveryInvalidatedError();
+		return items as CatalogMemoItem[];
+	}
+
+	async refreshMemoViews(memos: readonly MemoViewItem[]): Promise<MemoViewItem[]> {
+		const catalogMemos = memos.filter(memo => memo.catalog !== undefined);
+		const items = await this.readMemoHandles(catalogMemos.map(memo => memo.catalog!.observationHandle));
+		const current = new Map(catalogMemos.map((memo, index) => [memo.id, items[index]]));
+		return memos.flatMap(memo => {
+			if (!current.has(memo.id)) return [memo];
+			const item = current.get(memo.id);
+			return item ? [toCatalogMemoView(item)] : [];
+		});
+	}
+
+	private async readMemoHandles(handles: readonly ObservationHandle[]): Promise<Array<CatalogMemoItem | null>> {
+		if (handles.length === 0) return [];
+		const store = this.options.catalog.getStore();
+		const [revision, coverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		const capabilities = createCatalogCapabilities(coverage);
+		const referenceCache = this.options.references?.createQueryCache();
+		const items = await Promise.all(handles.map(async handle => {
+			const key = handle.sourcePath + "\0" + String(handle.startLine).padStart(10, "0");
+			const observation = await this.options.catalog.getObservation(key);
+			if (observation === null || observation.sourcePath !== handle.sourcePath
+				|| observation.sourceRevision !== handle.sourceRevision || observation.startLine !== handle.startLine
+				|| observation.endLine !== handle.endLine || observation.rawBlockHash !== handle.rawBlockHash) return null;
+			return {
+				...this.toMemoItem(this.resolveObservation(observation), capabilities),
+				...(this.options.references === undefined ? {} : {
+					derivedReferences: await this.options.references.resolve(observation, referenceCache),
+				}),
+			};
+		}));
+		if (await store.getCatalogRevision() !== revision) throw new CatalogDiscoveryInvalidatedError();
+		return items;
+	}
+
 	async recordReview(item: CatalogMemoItem): Promise<void> {
 		const current = await this.options.catalog.getObservation(item.observation.observationKey);
 		if (current === null || current.sourcePath !== item.observationHandle.sourcePath
@@ -727,7 +770,7 @@ export class CatalogReadService {
 
 function observationLocalKey(observation: CatalogObservation): string {
 	// 文件 revision 变化即失效，避免同一行的新 occurrence 继承旧卡片状态。
-	return `${observation.observationKey}\u0000${observation.sourceRevision}`;
+	return observationHandleKey(observation);
 }
 
 function buildTimeBuoyInstance(memo: CatalogMemoItem, targetDate: string) {

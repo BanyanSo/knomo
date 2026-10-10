@@ -161,19 +161,18 @@ test("旧移动端首屏在较新列表查询后返回时，不覆盖列表或�
 	}
 });
 
-test("仅在置顶结果中的历史卡片仍使用原 occurrence，并独立接收保存结果", async () => {
+test("仅在置顶结果中的历史卡片由提交映射独立更新", async () => {
 	const { view, memo, result, setQuery } = await refreshHarness();
 	const other = { ...memo, id: "same-content-other-occurrence" };
 	setQuery(async () => result(1, [memo, other]));
 	await view.loadInitialMobileMemos();
 	assert.deepEqual(view.memos, []);
 	assert.equal(view.findMemoById(memo.id), memo);
-	view.shuffleDayController = { applyMemoUpdate: () => {} };
-	const updated = view.applySavedMemo({
-		key: memo.id, renderKey: memo.id, createdAt: memo.createdAt,
-		content: "- [x] done", tags: [], links: [], images: [], sourcePath: memo.dailyRef.path,
-		observation: { contentHash: "saved", section: null },
-	});
+	view.shuffleDayController = { applyMemoChanges: () => {} };
+	view.randomReunionController = { applyMemoChanges: () => false };
+	const updated = { ...memo, contentSnapshot: "- [x] done", contentHash: "saved",
+		catalog: { timeBuoyDates: [formatTimeBuoyDate(new Date())] } } as MemoViewItem;
+	view.applyCachedMemoChanges(new Map([[memo.id, updated]]));
 	assert.equal(view.findMemoById(memo.id), updated);
 	assert.equal(view.findMemoById(other.id), other);
 	assert.equal(view.getTodayTimeBuoyItems()[0].memo.contentSnapshot, "- [x] done");

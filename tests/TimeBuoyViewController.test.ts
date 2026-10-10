@@ -130,9 +130,9 @@ test("today promotion keeps the latest Catalog memo when the controller snapshot
 	assert.equal(result[0], latestMemo);
 });
 
-test("replaces a memo in loaded Time buoy tabs without querying again", async () => {
+test("按提交映射更新已加载的浮标卡片，不重复查询", async () => {
 	const staleMemo = makeMemo("memo-1", "- [ ] task", "2026-07-10T08:00:00+08:00");
-	const latestMemo = makeMemo("memo-1", "- [x] task", "2026-07-10T08:00:00+08:00");
+	const latestMemo = makeMemo("memo-1-latest", "- [x] task", "2026-07-10T08:00:00+08:00");
 	let renderCount = 0;
 	const controller = createTestController({
 		getNow: () => new Date(2026, 6, 11),
@@ -150,10 +150,10 @@ test("replaces a memo in loaded Time buoy tabs without querying again", async ()
 	await controller.loadInitial();
 	const rendersAfterLoad = renderCount;
 
-	assert.equal(controller.replaceMemo(latestMemo), true);
+	assert.equal(controller.applyMemoChanges(new Map([[staleMemo.id, latestMemo]])), true);
 	assert.equal(controller.getSnapshot().today[0]?.memo, latestMemo);
 	assert.equal(renderCount, rendersAfterLoad + 1);
-	assert.equal(controller.replaceMemo(latestMemo), false);
+	assert.equal(controller.applyMemoChanges(new Map([[staleMemo.id, latestMemo]])), false);
 });
 
 test("loads only the active tab and releases it when another tab is selected", async () => {

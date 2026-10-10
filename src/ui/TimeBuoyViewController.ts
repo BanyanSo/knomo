@@ -2,6 +2,7 @@ import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { TimeBuoyCursor, TimeBuoyPageRequest, TimeBuoyPageResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../types/timeBuoy";
 import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
 import { getMemoRenderKey, getMemoRenderRevision } from "./MemoRenderRevision";
+import { getTimeBuoyTabDates } from "../services/TimeBuoyQuery";
 
 export type TimeBuoyTab = "today" | "upcoming" | "past";
 
@@ -98,20 +99,23 @@ export class TimeBuoyViewController {
 		return true;
 	}
 
-	replaceMemo(memo: MemoRecord): boolean {
-		let changed = false;
-		const renderKey = getMemoRenderKey(memo);
-		const replace = (items: readonly TimeBuoyTabItem[]): TimeBuoyTabItem[] => items.map((item) => {
-			if (item.memo.id !== memo.id && getMemoRenderKey(item.memo) !== renderKey) return item;
-			if (getMemoRenderRevision(item.memo) === getMemoRenderRevision(memo)) return item;
-			changed = true;
-			return { ...item, memo };
-		});
-		const today = replace(this.snapshot.today);
-		const upcoming = replace(this.snapshot.upcoming);
-		const past = replace(this.snapshot.past);
-		if (!changed) return false;
-		this.snapshot = { ...this.snapshot, today, upcoming, past };
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>): boolean {
+		if (!this.getMemos().some(memo => changes.has(memo.id))) return false;
+		const todayDate = formatTimeBuoyDate(this.options.getNow());
+		const replace = (tab: TimeBuoyTab): TimeBuoyTabItem[] => {
+			const items = this.snapshot[tab].flatMap(item => {
+				if (!changes.has(item.memo.id)) return [item];
+				const memo = changes.get(item.memo.id);
+				if (!memo) return [];
+				const targetDates = getTimeBuoyTabDates(memo.catalog?.timeBuoyDates ?? item.targetDates, { tab, today: todayDate });
+				return targetDates.length > 0 ? [{ memo, targetDates, primaryTargetDate: getPrimaryTargetDate(tab, targetDates) }] : [];
+			});
+			return sortTabItems(items, tab);
+		};
+		const today = replace("today"), upcoming = replace("upcoming"), past = replace("past");
+		this.requestId++;
+		this.refreshing = false;
+		this.snapshot = { ...this.snapshot, today, upcoming, past, nextCursor: null, todayCursor: null, loading: false, loadingMore: false };
 		this.options.requestRender();
 		return true;
 	}

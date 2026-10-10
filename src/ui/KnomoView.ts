@@ -5,6 +5,7 @@ import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalCompose
 import { sha256Bytes } from "../services/DiaryMemoParser";
 import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
 import { MarkdownMutationStaleError } from "../services/MarkdownMutationService";
+import { observationHandleKey, type DailyMemoPresentationChange } from "../services/DailyMemoPresentationChange";
 import { DesktopDrawerFocus, getDrawerWidth, resolveLayout, type LayoutMode } from "./KnomoLayout";
 import { registerComposerToolGesture } from "./ComposerToolGesture";
 import type { KnomoQuickCommand } from "./KnomoQuickCommands";
@@ -398,6 +399,7 @@ export class KnomoView extends ItemView {
 	private composerRenderPending = false;
 	private isSaving = false;
 	private composerSaveRefreshQueue: Promise<void> = Promise.resolve();
+	private presentationChangeQueue: Promise<void> | null = null;
 	private isManualRefreshing = false;
 	private lastKnownLocalDate = formatTimeBuoyDate(new Date());
 	private recentTimeFlowContext = createRecentTimeFlowContext(new Date(), false, new Set());
@@ -1317,7 +1319,95 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	async handleDailyMemoPresentationChange(change: DailyMemoPresentationChange, catalogCommitted: Promise<void> = Promise.resolve()): Promise<void> {
+		if (this.trashViewClosed) return;
+		this.randomReunionController.cancelPending();
+		this.shuffleDayController.cancelPending();
+		const previous = this.presentationChangeQueue ?? Promise.resolve();
+		const queued = previous.catch(() => undefined).then(async () => {
+			// 提交发布前就占住展示队列；失败时不消费变化，也不授权重试正文。
+			try { await catalogCommitted; } catch { return; }
+			await this.applyDailyMemoPresentationChange(change);
+		});
+		this.presentationChangeQueue = queued;
+		try { await queued; }
+		finally { if (this.presentationChangeQueue === queued) this.presentationChangeQueue = null; }
+	}
+
+	private async applyDailyMemoPresentationChange(change: DailyMemoPresentationChange): Promise<void> {
+		if (this.trashViewClosed) return;
+		const cached = [
+			...this.memos,
+			...(this.randomReunionController.getSnapshot().memos ?? []),
+			...this.shuffleDayController.getSnapshot().memos,
+			...this.timeBuoyViewController.getMemos(),
+			...(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? []),
+		];
+		const ids = new Set(cached.map(memo => memo.id));
+		const replacements = change.replacements.filter(item => ids.has(observationHandleKey(item.before)));
+		const inserted = change.inserted !== null && this.shuffleDayController.getSnapshot().selectedDate === change.logicalDate
+			? change.inserted : null;
+		if (replacements.length === 0 && inserted === null) return;
+		const changes = new Map<string, MemoRecord | null>(replacements.map(item => [observationHandleKey(item.before), null]));
+		try {
+			const handles = [...replacements.flatMap(item => item.after ? [item.after] : []), ...(inserted ? [inserted] : [])];
+			const current = await this.catalogReadService.readMemoItems(handles);
+			if (this.trashViewClosed) return;
+			const byKey = new Map(current.map(item => [item.key, toCatalogMemoView(item)]));
+			for (const item of replacements) {
+				changes.set(observationHandleKey(item.before), item.after ? byKey.get(observationHandleKey(item.after))! : null);
+			}
+			this.applyCachedMemoChanges(changes, inserted ? [byKey.get(observationHandleKey(inserted))!] : []);
+		} catch {
+			if (this.trashViewClosed) return;
+			// 当前 Catalog 已变化或暂不可读时只使旧展示失效，不猜测对应关系或重试正文写入。
+			this.applyCachedMemoChanges(changes);
+			new Notice(t("catalog.savedRefreshPending"));
+		}
+	}
+
+	private applyCachedMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = []): void {
+		this.catalogDesktopQueryRun++;
+		this.catalogMobileQueryRun++;
+		this.memos = this.memos.flatMap(memo => {
+			if (!changes.has(memo.id)) return [memo];
+			const current = changes.get(memo.id);
+			return current ? [current] : [];
+		});
+		this.filteredMemosCache = null;
+		if (this.catalogTodayTimeBuoys !== null) {
+			const today = this.catalogTodayTimeBuoys.todayDate;
+			this.catalogTodayTimeBuoys = { ...this.catalogTodayTimeBuoys, todayCursor: null,
+				today: this.catalogTodayTimeBuoys.today.flatMap(item => {
+					if (!changes.has(item.memo.id)) return [item];
+					const memo = changes.get(item.memo.id);
+					return memo && memo.catalog?.timeBuoyDates.includes(today ?? "")
+						? [{ ...item, memo, targetDates: [today!], primaryTargetDate: today! }] : [];
+				}),
+			};
+		}
+		this.randomReunionController.applyMemoChanges(changes);
+		this.shuffleDayController.applyMemoChanges(changes, inserted);
+		this.timeBuoyViewController.applyMemoChanges(changes);
+		this.renderUiState();
+	}
+
+	private async refreshRandomReunionBatch(): Promise<void> {
+		const snapshot = this.randomReunionController.getSnapshot().memos;
+		if (snapshot === null) return;
+		try {
+			const current = await this.catalogReadService.refreshMemoViews(snapshot);
+			await this.presentationChangeQueue;
+			if (!this.trashViewClosed) this.randomReunionController.reconcileMemos(current, snapshot);
+		} catch {
+			if (!this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
+		}
+	}
+
 	async refresh(forceRebuild = false): Promise<void> {
+		await this.presentationChangeQueue;
+		if (this.trashViewClosed) return;
+		await this.refreshRandomReunionBatch();
 		if (this.mobileSearchController?.isOpen) { await this.mobileSearchController.refreshAppliedResults(); return; }
 		const timeBuoyEnabled = this.settingsService.getSettings().timeBuoyEnabled;
 		if (this.renderedTimeBuoyEnabled !== timeBuoyEnabled) {
@@ -1344,7 +1434,8 @@ export class KnomoView extends ItemView {
 		if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
 			await this.randomReunionController.refresh();
 		} else if (this.activeNav === "shuffleDay") {
-			await this.shuffleDayController.reloadSelectedDate();
+			if (this.shuffleDayController.getSnapshot().status === "idle") await this.shuffleDayController.refresh();
+			else await this.shuffleDayController.reloadSelectedDate();
 		}
 	}
 
@@ -3394,6 +3485,7 @@ export class KnomoView extends ItemView {
 		}
 		this.cardFlowEl.empty();
 		this.renderedCardMemos.clear();
+		renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
 		renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
 		this.renderHistoryLoadMore();
 	}
@@ -3592,6 +3684,7 @@ export class KnomoView extends ItemView {
 	): void {
 		if (presentation.type === "empty") {
 			if (this.cardFlowEl !== null) {
+				renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
 				renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
 				this.renderHistoryLoadMore();
 			}
@@ -4383,6 +4476,7 @@ export class KnomoView extends ItemView {
 				return;
 			} else if (action === "delete") {
 				await this.memoCommandService.delete(await this.resolveCatalogMemo(memo));
+				this.randomReunionController.removeMemo(memo.id);
 				this.shuffleDayController.removeMemo(memo.id);
 				await this.reloadMemos(false).catch(() => false);
 				new Notice(t("notice.deleted"));
@@ -4500,6 +4594,7 @@ export class KnomoView extends ItemView {
 			this.queueComposerSaveFinish(
 				operation.settled,
 				extractTimeBuoyDates(preparedInput.content),
+				preparedInput.type === "update" ? preparedInput.previousMemo : null,
 			);
 		} catch (error) {
 			if (error instanceof StaleDailyWriteError || error instanceof MarkdownMutationStaleError) {
@@ -4727,11 +4822,15 @@ export class KnomoView extends ItemView {
 		if (result.refreshRandomReunion) {
 			if (this.randomReunionController.getSnapshot().status === "idle") {
 				void this.randomReunionController.refresh();
+			} else {
+				void this.refreshRandomReunionBatch();
 			}
 		}
 		if (result.refreshShuffleDay) {
 			if (this.shuffleDayController.getSnapshot().status === "idle") {
 				void this.shuffleDayController.refresh();
+			} else {
+				void this.shuffleDayController.reloadSelectedDate();
 			}
 		}
 		if (result.loadTrashMemos) {
@@ -4777,11 +4876,19 @@ export class KnomoView extends ItemView {
 		if (result.reloadCatalogQuery) {
 			void this.reloadCurrentCatalogQuery();
 		}
-		if (result.refreshRandomReunionIfEmpty && this.randomReunionController.getSnapshot().status === "idle") {
-			void this.randomReunionController.refresh();
+		if (result.refreshRandomReunionIfEmpty) {
+			if (this.randomReunionController.getSnapshot().status === "idle") {
+				void this.randomReunionController.refresh();
+			} else {
+				void this.refreshRandomReunionBatch();
+			}
 		}
-		if (result.refreshShuffleDayIfEmpty && this.shuffleDayController.getSnapshot().status === "idle") {
-			void this.shuffleDayController.refresh();
+		if (result.refreshShuffleDayIfEmpty) {
+			if (this.shuffleDayController.getSnapshot().status === "idle") {
+				void this.shuffleDayController.refresh();
+			} else {
+				void this.shuffleDayController.reloadSelectedDate();
+			}
 		}
 		if (result.loadTrashMemos) {
 			void this.trashMemoController.loadTrashMemos();
@@ -6732,6 +6839,7 @@ export class KnomoView extends ItemView {
 	private queueComposerSaveFinish(
 		settled: Promise<MemoSaveResult>,
 		fallbackTimeBuoyDates: readonly string[],
+		previousMemo: MemoRecord | null = null,
 	): void {
 		const previous = this.composerSaveRefreshQueue ?? Promise.resolve();
 		this.composerSaveRefreshQueue = previous
@@ -6739,6 +6847,7 @@ export class KnomoView extends ItemView {
 			.then(() => this.finishComposerSave(
 				settled,
 				fallbackTimeBuoyDates,
+				previousMemo,
 			));
 		void this.composerSaveRefreshQueue.catch(() => undefined);
 	}
@@ -6746,15 +6855,14 @@ export class KnomoView extends ItemView {
 	private async finishComposerSave(
 		settled: Promise<MemoSaveResult>,
 		fallbackTimeBuoyDates: readonly string[],
+		previousMemo: MemoRecord | null = null,
 	): Promise<void> {
 		let timeBuoyDates = fallbackTimeBuoyDates;
 		try {
 			const result = await settled;
 			if (this.trashViewClosed) return;
 			timeBuoyDates = result.timeBuoyDates;
-			if (result.memo !== null) this.applySavedMemo(result.memo);
-			const reloaded = await this.reloadMemos(false);
-			if (!reloaded && !this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
+			await this.refreshPendingSave(result, previousMemo);
 		} catch {
 			if (!this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
 		} finally {
@@ -6783,18 +6891,7 @@ export class KnomoView extends ItemView {
 		try {
 			const result = await this.memoCommandService.toggleTask(await this.resolveCatalogMemo(memo), taskIndex, checked);
 			dailySaved = result.status === "saved";
-			if (result.memo !== null && result.memo.key !== memo.id) {
-				// 文件 revision 改变后旧卡片句柄已失效，重新加载当前 occurrence。
-				if (!await this.reloadMemos(false)) new Notice(t("catalog.savedRefreshPending"));
-				return;
-			}
-			if (result.memo !== null) {
-				const updatedMemo = this.applySavedMemo(result.memo);
-				this.memoMarkdownRenderer.syncTaskCheckboxesForMemo(
-					[this.cardFlowEl, this.mobileSearchResultsEl],
-					updatedMemo,
-				);
-			}
+			await this.refreshPendingSave(result, memo);
 		} catch {
 			if (dailySaved) {
 				new Notice(t("catalog.savedRefreshPending"));
@@ -6805,35 +6902,24 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private applySavedMemo(savedMemo: NonNullable<MemoSaveResult["memo"]>): MemoRecord {
-		const updatedMemo = toCatalogMemoView(savedMemo);
-		const renderKey = getMemoRenderKey(updatedMemo);
-		let replaced = false;
-		const memos = this.memos.map((memo) => {
-			if (memo.id !== updatedMemo.id && getMemoRenderKey(memo) !== renderKey) return memo;
-			replaced = true;
-			return updatedMemo;
-		});
-		if (replaced) {
-			this.memos = memos;
-			this.filteredMemosCache = null;
+	private async refreshPendingSave(result: MemoSaveResult, previousMemo: MemoRecord | null = null): Promise<void> {
+		if (!result.localRefreshPending || this.trashViewClosed) return;
+		await this.presentationChangeQueue;
+		if (this.trashViewClosed) return;
+		const handle = previousMemo?.catalog?.observationHandle;
+		if (handle) {
+			// 成功提交由广播更新；失败回退只清除原版本，迟到结果不能清除较新的展示。
+			const cached = [...this.memos, ...(this.randomReunionController.getSnapshot().memos ?? []),
+				...this.shuffleDayController.getSnapshot().memos, ...this.timeBuoyViewController.getMemos(),
+				...(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? [])];
+			const changes = new Map<string, MemoRecord | null>(cached
+				.filter(memo => memo.dailyRef.path === handle.sourcePath
+					&& memo.catalog?.observationHandle.sourceRevision === handle.sourceRevision)
+				.map(memo => [memo.id, null]));
+			if (changes.size > 0) this.applyCachedMemoChanges(changes);
 		}
-		if (this.catalogTodayTimeBuoys?.today.some((item) => (
-			(item.memo.id === updatedMemo.id || getMemoRenderKey(item.memo) === renderKey)
-			&& !this.canReuseRenderedMemo(item.memo, updatedMemo)
-		))) {
-			this.catalogTodayTimeBuoys = {
-				...this.catalogTodayTimeBuoys,
-				today: this.catalogTodayTimeBuoys.today.map((item) => (
-					item.memo.id === updatedMemo.id || getMemoRenderKey(item.memo) === renderKey
-						? { ...item, memo: updatedMemo } : item
-				)),
-			};
-			this.renderCardFlow();
-		}
-		this.timeBuoyViewController.replaceMemo(updatedMemo);
-		this.shuffleDayController.applyMemoUpdate(updatedMemo);
-		return updatedMemo;
+		await this.refresh();
+		if (!this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
 	}
 
 	private findMemoForTaskCheckbox(input: HTMLInputElement): MemoRecord | null {

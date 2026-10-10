@@ -22,6 +22,7 @@ import {
 	type PreparedDailyWrite,
 } from "./DailyMemoWriteGateway";
 import { MarkdownBlockService } from "./MarkdownBlockService";
+import { buildDailyMemoPresentationChange, type DailyMemoPresentationChange } from "./DailyMemoPresentationChange";
 
 export interface MarkdownCatalogCommitInput {
 	file: TFile;
@@ -29,6 +30,7 @@ export interface MarkdownCatalogCommitInput {
 	content: string;
 	parsed: DiaryMemoParseResult;
 	insertedObservation?: MemoObservation;
+	presentationChange?: DailyMemoPresentationChange;
 }
 
 export interface MarkdownMutationServiceOptions {
@@ -118,7 +120,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				},
 			});
 			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted, undefined, requireObservation(beforeObservation), changed);
 			return committedResult(changed, catalogUpdatePending);
 		});
 	}
@@ -149,7 +151,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				},
 			});
 			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed);
 			return committedResult(changed, catalogUpdatePending);
 		});
 	}
@@ -184,7 +186,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				return { ...committedResult(current, false), blockId };
 			}
 			const changed = findReplacementObservation(prepared, current, afterRawBlock, blockId);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed);
 			return { ...committedResult(changed, catalogUpdatePending), blockId };
 		});
 	}
@@ -230,6 +232,8 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		prepared: PreparedDailyWrite,
 		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		insertedObservation?: MemoObservation,
+		changedBefore: MemoObservation | null = null,
+		changedAfter: MemoObservation | null = insertedObservation ?? null,
 	): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
 		const catalogUpdate = this.enqueueCatalogUpdate({
@@ -237,6 +241,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			logicalDate: prepared.logicalDate,
 			content: prepared.afterContent,
 			parsed: prepared.after,
+			presentationChange: buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter),
 			...(insertedObservation === undefined ? {} : { insertedObservation }),
 		});
 		void catalogUpdate.catch(() => undefined);

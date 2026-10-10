@@ -86,6 +86,27 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 	assert.equal(defaultEmptyState.find(".knomo-empty-description"), null);
 });
 
+test("重逢组失效或删除为空后两种视图渲染仍保留换一组入口", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const root = new TestElement("div");
+	const view = Object.assign(Object.create(KnomoView.prototype), {
+		cardFlowEl: root.asHtml(), containerEl: { win: {} }, renderedCardMemos: new Map(),
+		cardFlowCoordinator: { setPendingScrollRestore: () => {}, resetFlowRuntime: () => {} },
+		getDirectCardElements: () => [], renderHistoryLoadMore: () => {}, restorePendingCardFlowScrollTop: () => {},
+	});
+	const presentation: Extract<import("../src/ui/KnomoCardFlowPresenter").CardFlowPresentation, { type: "empty" }> = {
+		type: "empty", title: "No current cards", description: "Source changed", headers: [{ type: "random-toolbar", count: 0 }],
+	};
+	for (const incremental of [true, false]) {
+		root.empty();
+		if (incremental) view.renderEmptyCardFlow(presentation);
+		else view.renderCardFlowPresentation(presentation, 0, 1);
+		assert.equal(root.find("[data-action='refresh-random-reunion']")?.getText(), "Shuffle");
+		assert.equal(root.find(".knomo-empty-description")?.getText(), "Source changed");
+	}
+});
+
 interface CreateElementOptions {
 	cls?: string;
 	text?: string;
@@ -102,6 +123,11 @@ class TestElement {
 
 	asHtml(): HTMLElement {
 		return this as unknown as HTMLElement;
+	}
+
+	empty(): void {
+		this.children.length = 0;
+		this.text = "";
 	}
 
 	createDiv(options: CreateElementOptions = {}): TestElement {

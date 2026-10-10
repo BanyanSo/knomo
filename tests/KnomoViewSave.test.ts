@@ -3,14 +3,13 @@ import test from "node:test";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("composer 在 Daily 提交后立即清空，不等待卡片刷新", async () => {
+test("composer 在 Daily 提交后立即清空，不等待后续查询反馈", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const reloadCalls: Array<{ loadAll: boolean; forceRebuild: boolean | undefined }> = [];
 	const dailyCommitted = createDeferred<void>();
 	const saveSettled = createDeferred<SaveResult>();
-	const reloadStarted = createDeferred<void>();
-	const reloadFinished = createDeferred<boolean>();
+	const feedback: string[][] = [];
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
 	view.inputEl = createComposerInput("memo");
 	view.getDailyNotesStatus = () => ({ enabled: true });
@@ -29,15 +28,14 @@ test("composer 在 Daily 提交后立即清空，不等待卡片刷新", async (
 	view.syncComposerMode = () => undefined;
 	view.updateCancelEditButtonState = () => undefined;
 	view.resizeInput = () => undefined;
-	view.showTimeBuoySaveFeedback = () => undefined;
+	view.showTimeBuoySaveFeedback = dates => { feedback.push([...dates]); };
 	view.syncRootState = () => undefined;
 	view.memoCommandService = {
 		startCreate: () => ({ dailyCommitted: dailyCommitted.promise, settled: saveSettled.promise }),
 	};
 	view.reloadMemos = async (loadAll, forceRebuild) => {
 		reloadCalls.push({ loadAll, forceRebuild });
-		reloadStarted.resolve();
-		return reloadFinished.promise;
+		return true;
 	};
 
 	const saving = view.saveInput();
@@ -50,14 +48,11 @@ test("composer 在 Daily 提交后立即清空，不等待卡片刷新", async (
 	assert.equal(view.isSaving, false);
 	assert.deepEqual(reloadCalls, []);
 
+	assert.deepEqual(feedback, []);
 	saveSettled.resolve(makeSaveResult());
-	await reloadStarted.promise;
-	try {
-		assert.deepEqual(reloadCalls, [{ loadAll: false, forceRebuild: undefined }]);
-	} finally {
-		reloadFinished.resolve(true);
-		await Promise.resolve();
-	}
+	await view.composerSaveRefreshQueue;
+	assert.deepEqual(feedback, [[]]);
+	assert.deepEqual(reloadCalls, []);
 });
 
 test("强制替换会话的新草稿不会被旧保存清空", async () => {
@@ -129,54 +124,40 @@ test("保存期间切换到同文新会话不会被旧提交清空，失败保�
 	}
 });
 
-test("task checkbox applies the saved card without waiting for a second page reload", async () => {
+test("任务提交成功后由广播更新展示，不重复查询或改写复选框", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
-	const reloadCalls: Array<{ loadAll: boolean; forceRebuild: boolean | undefined }> = [];
-	const events: string[] = [];
-	const savedCatalogMemo = { key: "memo-1" };
-	const updatedMemo = { id: "memo-1" };
-	const view = Object.create(KnomoView.prototype) as TaskToggleView;
-	view.resolveCatalogMemo = async () => ({ observationHandle: {} });
-	view.memoCommandService = {
-		toggleTask: async () => ({ status: "saved", memo: savedCatalogMemo }),
-	};
-	view.applySavedMemo = (memo) => {
-		assert.equal(memo, savedCatalogMemo);
-		events.push("apply");
-		return updatedMemo;
-	};
-	view.reloadMemos = async (loadAll, forceRebuild) => {
-		events.push("reload");
-		reloadCalls.push({ loadAll, forceRebuild });
-		return true;
-	};
-	view.memoMarkdownRenderer = {
-		syncTaskCheckboxesForMemo: (_containers, memo) => {
-			assert.equal(memo, updatedMemo);
-			events.push("sync");
-		},
-	};
-	view.cardFlowEl = null;
-	view.mobileSearchController = { results: null };
-
-	await view.handleCatalogTaskToggle({ id: "memo-1" }, 0, true);
-
-	assert.deepEqual(reloadCalls, []);
-	assert.deepEqual(events, ["apply", "sync"]);
+	for (const id of ["memo-1", "old-revision-key"]) {
+		const events: string[] = [];
+		const original = { id };
+		const view = Object.create(KnomoView.prototype) as TaskToggleView;
+		view.resolveCatalogMemo = async memo => { assert.equal(memo, original); return { observationHandle: {} }; };
+		view.memoCommandService = { toggleTask: async () => {
+			events.push("save");
+			return { status: "saved", memo: { key: "memo-1" }, localRefreshPending: false };
+		} };
+		view.reloadMemos = async () => { events.push("reload"); return true; };
+		view.memoMarkdownRenderer = { syncTaskCheckboxesForMemo: () => { events.push("sync"); } };
+		view.cardFlowEl = null;
+		view.mobileSearchController = { results: null };
+		await view.handleCatalogTaskToggle(original, 0, true);
+		assert.deepEqual(events, ["save"]);
+	}
 });
 
-test("任务保存使 observation key 失效时重新加载，不按旧卡片位置替换句柄", async () => {
+test("任务正文提交失败时恢复原复选框", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
+	const original = { id: "memo-1" };
 	const view = Object.create(KnomoView.prototype) as TaskToggleView;
-	const events: string[] = [];
 	view.resolveCatalogMemo = async () => ({ observationHandle: {} });
-	view.memoCommandService = { toggleTask: async () => ({ status: "saved", memo: { key: "memo-1" } }) };
-	view.applySavedMemo = () => { throw new Error("Must reload the file revision"); };
-	view.reloadMemos = async () => { events.push("reload"); return true; };
-	await view.handleCatalogTaskToggle({ id: "old-revision-key" }, 0, true);
-	assert.deepEqual(events, ["reload"]);
+	view.memoCommandService = { toggleTask: async () => { throw new Error("Daily unavailable"); } };
+	const synced: Array<{ id: string }> = [];
+	view.memoMarkdownRenderer = { syncTaskCheckboxesForMemo: (_containers, memo) => { synced.push(memo); } };
+	view.cardFlowEl = null;
+	view.mobileSearchController = { results: null };
+	await view.handleCatalogTaskToggle(original, 0, true);
+	assert.deepEqual(synced, [original]);
 });
 
 interface SaveInputView {
@@ -207,6 +188,7 @@ interface SaveInputView {
 	};
 	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
 	saveInput: () => Promise<void>;
+	composerSaveRefreshQueue: Promise<void>;
 }
 
 interface TaskToggleView {
@@ -216,9 +198,8 @@ interface TaskToggleView {
 			item: { observationHandle: object },
 			taskIndex: number,
 			checked: boolean,
-		) => Promise<{ status: "saved"; memo: { key: string } }>;
+		) => Promise<{ status: "saved"; memo: { key: string }; localRefreshPending: boolean }>;
 	};
-	applySavedMemo: (memo: { key: string }) => { id: string };
 	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
 	cardFlowEl: null;
 	mobileSearchController: { results: null };

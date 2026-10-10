@@ -250,6 +250,7 @@ export const zhCN = {
 	"empty.loadingAllMemos": "正在准备历史记录，期间仍可继续记录",
 	"catalog.storageUnavailable": "本机缓存无法持久化；当前只提供受限结果，请重启 Obsidian 后重试。",
 	"catalog.savedRefreshPending": "Memo 已保存，本机视图仍在刷新。",
+	"random.sourceChanged": "本组部分记录的来源已变化，已移除过期卡片。可点击“换一组”重新加载。",
 	"catalog.retryLocalStorage": "重试本机存储",
 	"catalog.retrySyncState": "重新检查同步状态",
 	"catalog.rebuildBasicData": "按现有日记重建",

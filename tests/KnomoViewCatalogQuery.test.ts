@@ -448,7 +448,7 @@ test("Catalog revision 变化触发刷新时保留当前随机重逢批次", asy
 	assert.equal(refreshCount, 0);
 });
 
-test("返回随机重逢或漫游往日时复用已提交结果", async () => {
+test("返回重逢时校验本组，漫游重载原日期，不重新抽样", async () => {
 	await ensureObsidianStub();
 	const [{ KnomoView }, { KnomoViewStateController }] = await Promise.all([
 		import("../src/ui/KnomoView"),
@@ -459,6 +459,9 @@ test("返回随机重逢或漫游往日时复用已提交结果", async () => {
 	let randomClearCount = 0;
 	let shuffleRefreshCount = 0;
 	let shuffleClearCount = 0;
+	let randomValidateCount = 0;
+	let shuffleReloadCount = 0;
+	view.refreshRandomReunionBatch = async () => { randomValidateCount += 1; };
 	view.viewStateController = new KnomoViewStateController();
 	view.clearSearchDebounce = () => undefined;
 	view.getCardFlowViewStateKey = () => "view";
@@ -476,6 +479,7 @@ test("返回随机重逢或漫游往日时复用已提交结果", async () => {
 		getSnapshot: () => ({ status: "ready" }),
 		clearSelection: () => { shuffleClearCount += 1; },
 		refresh: async () => { shuffleRefreshCount += 1; },
+		reloadSelectedDate: async () => { shuffleReloadCount += 1; return true; },
 	};
 	view.trashMemoController = { loadTrashMemos: async () => undefined };
 	view.timeBuoyViewController = { loadInitial: async () => undefined };
@@ -492,6 +496,8 @@ test("返回随机重逢或漫游往日时复用已提交结果", async () => {
 	assert.equal(randomClearCount, 0);
 	assert.equal(shuffleRefreshCount, 0);
 	assert.equal(shuffleClearCount, 0);
+	assert.equal(randomValidateCount, 2);
+	assert.equal(shuffleReloadCount, 2);
 });
 
 test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快照", async () => {
@@ -1050,6 +1056,7 @@ interface NavigationView {
 	renderUiState: (options?: object) => void;
 	shouldDeferCardFlowForAllMemos: () => boolean;
 	reloadCurrentCatalogQuery: (forceReload?: boolean) => Promise<boolean>;
+	refreshRandomReunionBatch: () => Promise<void>;
 	randomReunionController: {
 		getSnapshot: () => { status: "ready"; error: null; memos: QueryMemo[] };
 		clearMemos: () => void;
@@ -1059,6 +1066,7 @@ interface NavigationView {
 		getSnapshot: () => { status: "ready" };
 		clearSelection: () => void;
 		refresh: () => Promise<void>;
+		reloadSelectedDate: () => Promise<boolean>;
 	};
 	trashMemoController: { loadTrashMemos: () => Promise<void> };
 	timeBuoyViewController: { loadInitial: () => Promise<void> };

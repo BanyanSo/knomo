@@ -36,6 +36,20 @@ async function fixture(count = 5) {
   setFolder: (next: string) => { folder = next; store.invalidateConfiguration(); } };
 }
 
+test("状态、badge 和窗口展示不读取完整 Trash 正文集合", async t => {
+ const f = await fixture(300);
+ await f.controller.loadTrashMemos();
+ t.mock.method(f.store, "getState", () => { throw new Error("must not clone the entire collection"); });
+ assert.equal(f.controller.getSnapshot().trashCount, 300);
+ assert.equal(f.controller.getSnapshot().trashMemos?.length, 2);
+ assert.equal(f.controller.hasMore(), true);
+ await f.controller.ensureLoaded();
+ await f.controller.loadNextPage();
+ assert.equal(f.controller.getSnapshot().trashMemos?.length, 3);
+ assert.equal(f.reads(), 1);
+ f.controller.dispose();
+});
+
 test("列表、badge、数量共享一次读取，多视图和分页只派生窗口", async () => {
  const f = await fixture(); const second = f.another();
  assert.equal(f.controller.getSnapshot().trashCount, null);

@@ -20,6 +20,35 @@ async function fixture(initial: Record<string, string> = {}) {
 		setFolder: (value: string) => { folder = value; }, cancel: () => { active = false; } };
 }
 
+test("摘要不克隆正文，显示窗口仅克隆选中条目且不能改写共享状态", async t => {
+	const items = Array.from({ length: 500 }, (_, i) => snapshot("s" + String(i).padStart(4, "0")));
+	const f = await fixture({ [PATH]: encode(items) });
+	await f.store.ensureLoaded();
+	const clone = structuredClone;
+	const clonedSizes: number[] = [];
+	t.mock.method(global, "structuredClone", (value: unknown) => {
+		if (Array.isArray(value)) clonedSizes.push(value.length);
+		else throw new Error("summary must not clone bodies");
+		return clone(value);
+	});
+	assert.deepEqual(f.store.getSummary(), { status: "ready", count: 500, error: null });
+	assert.deepEqual(clonedSizes, []);
+	const state = f.store.getWindow(200, 150);
+	assert.equal(state.count, 500);
+	assert.equal(state.items?.length, 150);
+	assert.equal(state.items?.[0].snapshotId, "s0050");
+	state.items![0].rawBlock = "mutated";
+	assert.equal(f.store.getWindow(200, 150).items?.[0].rawBlock, items[50].rawBlock);
+	assert.deepEqual(clonedSizes, [150, 150]);
+	const summary = f.store.getSummary(); summary.count = 0;
+	assert.equal(f.store.getSummary().count, 500);
+	f.store.invalidate();
+	assert.equal(f.store.getWindow(200, 150).status, "idle");
+	assert.equal(f.store.getSummary().count, null);
+	f.store.dispose();
+	assert.equal(f.store.getSummary().status, "error");
+});
+
 test("单文件完整六字段、批量保存、同文独立、同 ID 同内容重试，state count 同源且不可被调用方改写", async () => {
 	const f = await fixture();
 	assert.equal(f.store.getState().count, null);

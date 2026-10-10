@@ -1,12 +1,198 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IDBDatabase as FakeDatabase, IDBIndex as FakeIndex, IDBKeyRange, indexedDB } from "fake-indexeddb";
+import { IDBDatabase as FakeDatabase, IDBIndex as FakeIndex, IDBObjectStore as FakeObjectStore, IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
 import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
+
+test("原生计数和候选规划阶段取消均拒绝结果且不切换 fallback", async t => {
+	for (const filter of [{}, { tags: ["Common", "Rare"] }]) await t.test(JSON.stringify(filter), async t => {
+		const name = uniqueDatabaseName("count-plan-cancel"), primary = createStore(name);
+		const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+		const path = "Daily/2026-07-01.md", controller = new AbortController(), count = FakeIndex.prototype.count;
+		try {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, "2026-07-01", [makeObservation(path, "2026-07-01", 1, "10:30", "memo", { tags: ["Common", "Rare"] })]));
+			t.mock.method(FakeIndex.prototype, "count", function(this: IDBIndex, ...args: Parameters<IDBIndex["count"]>) {
+				const request = count.apply(this, args);
+				request.addEventListener("success", () => controller.abort());
+				return request;
+			});
+			await assert.rejects(store.count(filter, controller.signal), { name: "AbortError" });
+			assert.equal(store.isUsingFallback, false);
+			assert.equal((await store.query({ limit: 1 })).items.length, 1);
+		} finally { store.close(); await deleteDatabase(name); }
+	});
+});
+
+test("浮标日期与正文增量更新、删项及重建清理不保留旧轻量记录", async t => {
+	const name = uniqueDatabaseName("buoy-update"), store = createStore(name), path = "Daily/2026-07-01.md", today = "2026-09-27";
+	const observation = makeObservation(path, "2026-07-01", 1, "10:30", "same", { timeBuoyDates: [today, "2026-09-28", "2026-09-28"] });
+	const put = FakeObjectStore.prototype.put;
+	let indexWrites = 0;
+	async function save(items: MemoObservation[], revision: string) {
+		const partition = makePartition(path, "2026-07-01", items); partition.file.sourceRevision = revision;
+		await store.replaceFilePartition(partition);
+	}
+	try {
+		await save([observation], "initial");
+		t.mock.method(FakeObjectStore.prototype, "put", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["put"]>) {
+			if (this.name === "timeBuoys") indexWrites++;
+			return put.apply(this, args);
+		});
+		await save([{ ...observation, content: "updated body" }], "body-only");
+		assert.equal(indexWrites, 0, "未变日期与排序不重写轻量索引");
+		assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7 })).items[0].content, "updated body");
+		await save([{ ...observation, timeBuoyDates: ["2026-09-26", "2026-09-29"] }], "date-change");
+		assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7 })).items.length, 0);
+		assert.equal((await store.queryTimeBuoys({ today, tab: "upcoming", limit: 7 })).items.length, 1);
+		assert.equal((await store.queryTimeBuoys({ today: "2026-09-30", tab: "past", limit: 7 })).items.length, 1);
+		await save([], "removed");
+		assert.equal((await store.queryTimeBuoys({ today, tab: "upcoming", limit: 7 })).metrics.cursorReads, 0);
+		await save([observation], "again");
+		await store.clear();
+		assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7 })).items.length, 0);
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("浮标索引写入失败中止整个分区事务，保留旧正文、索引和 revision", async t => {
+	const name = uniqueDatabaseName("buoy-write-abort"), store = createStore(name), path = "Daily/2026-07-01.md", today = "2026-09-27";
+	const observation = makeObservation(path, "2026-07-01", 1, "10:30", "old", { timeBuoyDates: [today] });
+	try {
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", [observation]));
+		const revision = await store.getCatalogRevision(), put = FakeObjectStore.prototype.put;
+		t.mock.method(FakeObjectStore.prototype, "put", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["put"]>) {
+			if (this.name === "timeBuoys") throw new Error("buoy write failed");
+			return put.apply(this, args);
+		});
+		const partition = makePartition(path, "2026-07-01", [{ ...observation, content: "new", time: "11:30" }]);
+		partition.file.sourceRevision = "new-revision";
+		await assert.rejects(store.replaceFilePartition(partition), /buoy write failed/);
+		assert.equal(await store.getCatalogRevision(), revision);
+		assert.equal((await store.queryTimeBuoys({ today, tab: "today", limit: 7 })).items[0].content, "old");
+		assert.equal((await store.getFile(path))?.sourceRevision, "sha-" + path + "-1");
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("浮标首屏和后续页只扫描目标日期内所需候选", async () => {
+	const name = uniqueDatabaseName("buoy-bounded-scan"), store = createStore(name);
+	const path = "Daily/2026-07-01.md", today = "2026-09-27";
+	try {
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 300 }, (_, i) =>
+			makeObservation(path, "2026-07-01", i + 1, i % 2 ? "10:30" : "10:30:00", "same", {
+				timeBuoyDates: i < 30 ? ["2026-09-26", today, "2026-09-28", "2026-10-01"] : ["2027-01-01"],
+			}))));
+		for (const tab of ["today", "upcoming", "past"] as const) {
+			const first = await store.queryTimeBuoys({ today, tab, limit: 7 });
+			assert.equal(first.items.length, 7);
+			assert.ok(first.nextCursor);
+			const second = await store.queryTimeBuoys({ today, tab, limit: 7, cursor: first.nextCursor });
+			assert.equal(second.items.length, 7);
+			for (const page of [first, second]) {
+				assert.ok(page.metrics.cursorReads <= 10, tab + ": scanned " + page.metrics.cursorReads);
+				assert.equal(page.metrics.observationsRead, 7);
+			}
+			assert.equal(new Set([...first.items, ...second.items].map(item => item.observationKey)).size, 14);
+		}
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("多日期浮标末页跳过全部重复的日期组，不按日期数放大扫描", async () => {
+	const name = uniqueDatabaseName("buoy-last-page"), store = createStore(name);
+	const path = "Daily/2026-07-01.md", today = "2026-09-27";
+	const dates = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05",
+		"2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05"];
+	try {
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 90 }, (_, i) =>
+			makeObservation(path, "2026-07-01", i + 1, "10:30", "same", { timeBuoyDates: dates }))));
+		for (const tab of ["upcoming", "past"] as const) {
+			const keys: string[] = [];
+			let page = await store.queryTimeBuoys({ today, tab, limit: 30 });
+			for (;;) {
+				assert.ok(page.metrics.cursorReads <= 40, tab + ": scanned " + page.metrics.cursorReads);
+				assert.equal(page.metrics.observationsRead, 30);
+				keys.push(...page.items.map(item => item.observationKey));
+				if (page.nextCursor === null) break;
+				page = await store.queryTimeBuoys({ today, tab, limit: 30, cursor: page.nextCursor });
+			}
+			assert.equal(keys.length, 90);
+			assert.equal(new Set(keys).size, 90);
+		}
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("浮标日期组中有效项稀疏时改用相邻日期索引，切换不重复已选项", async () => {
+	const name = uniqueDatabaseName("buoy-sparse-date"), store = createStore(name);
+	const path = "Daily/2026-07-01.md", today = "2026-09-27";
+	try {
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 180 }, (_, i) =>
+			makeObservation(path, "2026-07-01", i + 1, i < 170 ? "11:00" : i < 172 ? "13:00" : "09:00", "same", {
+				timeBuoyDates: i < 170 ? ["2026-09-01", "2026-09-02", "2026-10-01", "2026-10-02"] : ["2026-09-01", "2026-10-02"],
+			}))));
+		for (const tab of ["upcoming", "past"] as const) {
+			const keys: string[] = [];
+			let page = await store.queryTimeBuoys({ today, tab, limit: 30 });
+			for (;;) {
+				assert.ok(page.metrics.cursorReads <= 110, tab + ": scanned " + page.metrics.cursorReads);
+				assert.equal(page.metrics.observationsRead, 30);
+				keys.push(...page.items.map(item => item.observationKey));
+				if (page.nextCursor === null) break;
+				page = await store.queryTimeBuoys({ today, tab, limit: 30, cursor: page.nextCursor });
+			}
+			assert.equal(keys.length, 180);
+			assert.equal(new Set(keys).size, 180);
+		}
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("无筛选和纯日期计数使用索引原生 count，不读取正文", async t => {
+	const name = uniqueDatabaseName("native-count"), store = createStore(name);
+	const get = FakeObjectStore.prototype.get;
+	try {
+		for (const date of ["2026-07-01", "2026-07-02", "2026-07-03"]) {
+			const path = "Daily/" + date + ".md";
+			await store.replaceFilePartition(makePartition(path, date, Array.from({ length: 40 }, (_, i) =>
+				makeObservation(path, date, i + 1, "10:30", "memo"))));
+		}
+		t.mock.method(FakeIndex.prototype, "openCursor", () => { throw new Error("count must not scan bodies"); });
+		t.mock.method(FakeObjectStore.prototype, "get", function(this: IDBObjectStore, key: IDBValidKey | IDBKeyRange) {
+			assert.notEqual(this.name, "observations");
+			return get.call(this, key);
+		});
+		assert.equal((await store.count({})).count, 120);
+		assert.equal((await store.count({ fromDate: "2026-07-02", toDate: "2026-07-02" })).count, 40);
+		assert.equal((await store.count({ toDate: "2026-07-02" })).count, 80);
+		assert.equal((await store.count({ fromDate: "2026-07-03" })).count, 40);
+		assert.equal((await store.count({ fromDate: "2026-08-01" })).count, 0);
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("组合筛选根据候选量选索引，标签输入顺序不放大正文读取", async t => {
+	const name = uniqueDatabaseName("selective-query"), store = createStore(name);
+	const path = "Daily/2026-07-01.md", get = FakeObjectStore.prototype.get;
+	try {
+		await store.replaceFilePartition(makePartition(path, "2026-07-01", Array.from({ length: 300 }, (_, i) =>
+			makeObservation(path, "2026-07-01", i + 1, "10:30", "memo", { tags: i === 0 ? ["Common", "Rare/Child"] : ["Common"] }))));
+		let reads = 0;
+		t.mock.method(FakeObjectStore.prototype, "get", function(this: IDBObjectStore, key: IDBValidKey | IDBKeyRange) {
+			if (this.name === "observations") reads++;
+			return get.call(this, key);
+		});
+		for (const tags of [["Common", "Rare"], ["Rare", "Common"]]) {
+			const page = await store.query({ tags, limit: 7 });
+			assert.equal(page.items.length, 1);
+			assert.equal(page.items[0].startLine, 1);
+			assert.equal(page.metrics.observationsRead, 1);
+			assert.equal(page.metrics.cursorReads, 1);
+			reads = 0;
+			assert.equal((await store.count({ tags })).count, 1);
+			assert.equal(reads, 1);
+		}
+	} finally { store.close(); await deleteDatabase(name); }
+});
 
 test("同一查询和计数只准备一次文本条件，两个 Store 保持组合筛选一致", async t => {
 	const name = uniqueDatabaseName("prepared-query");
@@ -55,7 +241,7 @@ test("取消计数立即终止游标，主数据库保持可用且不激活 fall
 			request.addEventListener("success", () => { if (++reads === 2) controller.abort(); });
 			return request;
 		});
-		await assert.rejects(store.count({}, controller.signal), { name: "AbortError" });
+		await assert.rejects(store.count({ hour: 10 }, controller.signal), { name: "AbortError" });
 		assert.equal(reads, 2);
 		assert.equal(store.getLifecycle().persistent, true);
 		assert.equal((await store.query({ limit: 1 })).items.length, 1);
@@ -75,7 +261,7 @@ test("浮标游标缺少错误原因时仍以 Error 拒绝查询", async t => {
 		return request;
 	});
 	try {
-		await assert.rejects(store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 7 }),
+		await assert.rejects(store.queryTimeBuoys({ today: "2026-09-27", tab: "upcoming", limit: 7 }),
 			error => error instanceof Error && error.message === "Memo Catalog time buoy query failed.");
 	} finally { store.close(); await deleteDatabase(databaseName); }
 });
@@ -141,11 +327,16 @@ test("浮标分页保留三组排序、多日期合并、同文 occurrence 及�
 
 test("旧浮标缓存升级后重建，分钟改为零秒时更新分页排序字段", async () => {
 	const name = uniqueDatabaseName("buoy-upgrade");
-	const old = createStore(name, { version: 2 });
 	const path = "Daily/2026-07-01.md";
 	const memo = makeObservation(path, "2026-07-01", 1, "10:30", "same", { timeBuoyDates: ["2026-09-27"] });
-	await old.open();
-	await old.replaceFilePartition(makePartition(path, "2026-07-01", [memo]));
+	const partition = makePartition(path, "2026-07-01", [memo]);
+	const old = await openRawDatabase(name, 3, database => {
+		database.createObjectStore("files", { keyPath: "sourcePath" }).put(partition.file);
+		const postings = database.createObjectStore("postings", { keyPath: "postingKey" });
+		postings.createIndex("byTimeBuoy", "buoyKey");
+		postings.put({ postingKey: "old", buoyKey: JSON.stringify(["2026-07-01T10:30", "old", memo.timeBuoyDates]) });
+	});
+	assert.equal(old.objectStoreNames.contains("timeBuoys"), false);
 	old.close();
 	const store = createStore(name);
 	try {
@@ -287,7 +478,9 @@ test("IndexedDB 使用真实索引完成 recent、搜索、筛选、分页和 ag
 		assert.equal(fileBatch.file.observationCount, 2);
 		assert.deepEqual(fileBatch.observations.map((item) => item.content), ["中文索引 alpha", "newest beta"]);
 		assert.equal(fileBatch.catalogRevision, firstPage.catalogRevision);
-		const allBatches = await store.listFileRevisionBatches();
+		const olderBatch = await store.getFileRevisionBatch("Journal/2026-08-08.md");
+		assert.ok(olderBatch);
+		const allBatches = [olderBatch, fileBatch];
 		assert.deepEqual(allBatches.map((batch) => ({
 			path: batch.file.sourcePath,
 			contents: batch.observations.map((item) => item.content),
@@ -607,7 +800,7 @@ test("IDB-VERSIONCHANGE：运行期连接失效后自动重开，无法重开时
 	assert.equal((await store.listFiles()).length, 1, "同版本连接关闭后应自动重开");
 	assert.equal(recoveryCount, 1);
 
-	const newer = await openRawDatabase(databaseName, 4, () => undefined);
+	const newer = await openRawDatabase(databaseName, 5, () => undefined);
 	assert.equal(primary.getLifecycle().state, "read-only");
 	assert.deepEqual(await store.listFiles(), []);
 	assert.equal(store.isUsingFallback, true);

@@ -12,7 +12,6 @@ import type {
 	CatalogFeatureCursor,
 	CatalogFeatureFilter,
 	CatalogFeatureQuery,
-	CatalogFunctionPageRequest,
 	CatalogLibrarySummary,
 	CatalogLibraryIndexesResult,
 	CatalogMemoItem,
@@ -44,9 +43,9 @@ import {
 	createCatalogCapabilities,
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
-import type { MemoCatalogService } from "./MemoCatalogService";
+import type { CatalogChangeCursor, MemoCatalogService } from "./MemoCatalogService";
 import { createCatalogCountAbortError } from "./MemoCatalogStore";
-import { getCatalogQueryKey, intersectCatalogFilters, narrowCatalogQuery } from "./SearchMatching";
+import { getCatalogQueryKey, narrowCatalogQuery } from "./SearchMatching";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
 import { observationHandleKey } from "./DailyMemoPresentationChange";
 
@@ -76,6 +75,7 @@ export class CatalogDiscoveryInvalidatedError extends Error {
 }
 
 interface RandomReunionCandidatePool extends CatalogDiscoverySnapshot {
+	changeCursor: CatalogChangeCursor;
 	candidates: Array<RandomReunionCandidate & { observationKey: string }>;
 }
 
@@ -289,37 +289,6 @@ export class CatalogReadService {
 		return isRangeCovered(coverage, fromDate, toDate);
 	}
 
-	async queryReviewItems(date: Date, page: CatalogFunctionPageRequest): Promise<CatalogMemoPage> {
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		const query = intersectCatalogFilters(buildReviewCatalogQuery(date), page);
-		if (!isQueryCovered(coverage, query)) return this.createCoveragePendingPage(query);
-		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
-	}
-
-	async countReviewItems(date: Date, text?: string | CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
-		return this.count(intersectCatalogFilters(buildReviewCatalogQuery(date), typeof text === "string" ? { text } : text ?? {}), signal);
-	}
-
-	async queryRecordStatsDrilldown(
-		filter: CatalogRecordStatsFilter,
-		page: CatalogFunctionPageRequest,
-	): Promise<CatalogMemoPage> {
-		const query = intersectCatalogFilters(buildRecordStatsCatalogQuery(filter).query, page);
-		const coverage = await this.options.catalog.getStore().getCoverage();
-		if (!isQueryCovered(coverage, query)) return this.createCoveragePendingPage(query);
-		return this.query({ ...query, limit: page.limit, cursor: page.cursor ?? null });
-	}
-
-	async countRecordStatsDrilldown(
-		filter: CatalogRecordStatsFilter,
-		text?: string | CatalogFeatureFilter,
-		signal?: AbortSignal,
-	): Promise<CatalogMemoCountResult> {
-		signal?.throwIfAborted();
-		const query = intersectCatalogFilters(buildRecordStatsCatalogQuery(filter).query, typeof text === "string" ? { text } : text ?? {});
-		return this.count(query, signal);
-	}
-
 	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"]): Promise<TimeBuoyQueryResult> {
 		const page = await this.queryTimeBuoyPage({ today: targetDate, tab: "today", limit: 30, cursor });
 		// 任意历史 Daily 都可能含有指向今天的浮标；分页完成和索引覆盖分开判断。
@@ -373,9 +342,9 @@ export class CatalogReadService {
 			options.signal?.throwIfAborted();
 			const now = this.now();
 			try {
-				await this.requireCompleteCoverage("Random reunion");
+				const coverage = await this.requireCompleteCoverage("Random reunion");
 				options.signal?.throwIfAborted();
-				const pool = await this.loadRandomReunionCandidatePool(now, options.signal);
+				const pool = await this.loadRandomReunionCandidatePool(now, coverage, options.signal);
 				const selected = await sampleRandomReunionCandidates(pool.candidates, this.reviews.read(), count, {
 					today: now, random: this.random, ...options,
 				}, { yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
@@ -388,7 +357,7 @@ export class CatalogReadService {
 					if (observation === null || observationLocalKey(observation) !== candidate.id) throw new CatalogDiscoveryInvalidatedError();
 					items.push(toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities)));
 				}
-				if (!await this.isDiscoverySnapshotCurrent(pool, options.signal)) throw new CatalogDiscoveryInvalidatedError();
+				if (!await this.isRandomReunionPoolCurrent(pool, options.signal)) throw new CatalogDiscoveryInvalidatedError();
 				return items;
 			} catch (error) {
 				options.signal?.throwIfAborted();
@@ -449,13 +418,6 @@ export class CatalogReadService {
 		}
 		this.reviews.record(observationLocalKey(current), this.now().toISOString());
 	}
-	async listDailyAggregates() {
-		await this.requireCompleteCoverage("Shuffle Day");
-		const aggregates = await this.options.catalog.listDailyAggregates();
-		await this.requireCompleteCoverage("Shuffle Day");
-		return aggregates;
-	}
-
 	async readDailyAggregateSnapshot(signal?: AbortSignal): Promise<CatalogDiscoverySnapshot & { aggregates: CatalogDailyAggregate[] }> {
 		signal?.throwIfAborted();
 		const store = this.options.catalog.getStore();
@@ -595,19 +557,6 @@ export class CatalogReadService {
 		};
 	}
 
-	private async createCoveragePendingPage(
-		request: Omit<CatalogFeatureQuery, "limit" | "cursor">,
-	): Promise<CatalogMemoPage> {
-		const page = await this.query({ ...request, limit: 1, cursor: null });
-		return this.rememberPage({
-			...page,
-			items: [],
-			nextCursor: null,
-			readState: page.readState === "storage_unavailable" ? page.readState : "history_building",
-			status: { ...page.status, content: page.status.content === "unavailable" ? "unavailable" : "scanning" },
-		});
-	}
-
 	private getReadStatus(
 		coverage: CatalogCoverage,
 		lifecycle: CatalogStoreLifecycle,
@@ -664,15 +613,25 @@ export class CatalogReadService {
 		return coverage.kind === "complete" ? "ready" : "history_building";
 	}
 
-	private async loadRandomReunionCandidatePool(now: Date, signal?: AbortSignal): Promise<RandomReunionCandidatePool> {
+	private async loadRandomReunionCandidatePool(now: Date, coverage: CatalogCoverage, signal?: AbortSignal): Promise<RandomReunionCandidatePool> {
 		signal?.throwIfAborted();
-		if (this.randomReunionCandidatePool?.day !== formatDatePart(now)) this.randomReunionCandidatePool = null;
-		if (this.randomReunionCandidatePool !== null) return this.randomReunionCandidatePool;
+		const day = formatDatePart(now);
+		if (this.randomReunionCandidatePool?.day !== day) this.randomReunionCandidatePool = null;
+		const previous = this.randomReunionCandidatePool;
+		const changes = await this.options.catalog.readFileChangesSince(previous?.changeCursor);
+		signal?.throwIfAborted();
+		if (changes.invalidated) throw new CatalogDiscoveryInvalidatedError();
+		const sameCoverage = previous !== null && JSON.stringify(previous.coverage) === JSON.stringify(coverage);
+		const incremental = previous !== null && changes.sourcePaths !== null
+			&& (sameCoverage || previous.catalogRevision !== changes.cursor.catalogRevision);
+		if (incremental && changes.sourcePaths!.length === 0 && await this.isRandomReunionPoolCurrent(previous, signal)) return previous;
+		const snapshot = { catalogRevision: changes.cursor.catalogRevision, day, coverage, changeCursor: changes.cursor };
 		let task = this.randomReunionCandidatePoolLoad;
 		if (task === null || task.controller.signal.aborted) {
 			const controller = new AbortController();
 			const next: RandomReunionPoolTask = { controller, consumers: 0,
-				promise: Promise.resolve().then(() => this.buildRandomReunionCandidatePool(now, controller.signal)) };
+				promise: Promise.resolve().then(() => this.buildRandomReunionCandidatePool(now, controller.signal,
+					snapshot, incremental ? previous : null, incremental ? changes.sourcePaths : null)) };
 			next.promise = next.promise.finally(() => { if (this.randomReunionCandidatePoolLoad === next) this.randomReunionCandidatePoolLoad = null; });
 			this.randomReunionCandidatePoolLoad = next;
 			task = next;
@@ -696,56 +655,62 @@ export class CatalogReadService {
 		});
 	}
 
-	private async buildRandomReunionCandidatePool(today: Date, signal: AbortSignal): Promise<RandomReunionCandidatePool> {
+	private async buildRandomReunionCandidatePool(
+		today: Date, signal: AbortSignal, snapshot: CatalogDiscoverySnapshot & { changeCursor: CatalogChangeCursor },
+		previous: RandomReunionCandidatePool | null, sourcePaths: readonly string[] | null,
+	): Promise<RandomReunionCandidatePool> {
 		const control = new CooperativeYieldController({ yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
 		signal.throwIfAborted();
-		const day = formatDatePart(today);
-		let page = await this.queryRandomReunionObservations(null, 150);
-		signal.throwIfAborted();
-		this.requireRandomReunionCoverage(page.coverage);
-		if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
-		const catalogRevision = page.catalogRevision;
-		const coverage = page.coverage;
-		const candidates: RandomReunionCandidatePool["candidates"] = [];
-		const append = (items: CatalogObservation[]) => {
-			const capabilities = createCatalogCapabilities(page.coverage);
-			for (const observation of items) {
-				if (observation.logicalDate >= day) continue;
-				const view = toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities));
-				if (filterRandomReunionCandidates([view], { today }).length === 0) continue;
-				// 候选缓存不保留正文、卡片或 observation；选中后按本地 key 读取并校验 revision。
-				candidates.push({ id: view.id, createdAt: view.createdAt, logicalDate: observation.logicalDate, tags: view.tags,
-					dailyRef: view.dailyRef, observationKey: observation.observationKey });
-			}
-		};
-		append(page.items);
-		let invalidated: boolean = false;
-		while (!invalidated && page.nextCursor !== null) {
+		const changed = new Set(sourcePaths ?? []);
+		const candidates = previous === null ? [] : previous.candidates.filter(candidate => !changed.has(candidate.dailyRef.path));
+		const capabilities = createCatalogCapabilities(snapshot.coverage);
+		for (const sourcePath of sourcePaths ?? [null]) {
+			if (control.shouldYield()) await control.yieldNow();
 			signal.throwIfAborted();
-			page = await this.queryRandomReunionObservations(page.nextCursor, 150);
+			const file = sourcePath === null ? null : await this.options.catalog.getStore().getFile(sourcePath);
 			signal.throwIfAborted();
-			if (page.invalidated || page.catalogRevision !== catalogRevision || JSON.stringify(page.coverage) !== JSON.stringify(coverage)) {
-				invalidated = true;
-				break;
-			}
-			this.requireRandomReunionCoverage(page.coverage);
-			append(page.items);
-			if (control.shouldYield(page.items.length)) await control.yieldNow();
+			if (sourcePath !== null && (file === null || file.logicalDate >= snapshot.day)) continue;
+			// sourcePaths 本身是后置过滤；同时限定实际 Daily 日期才能利用现有时间索引。
+			let cursor: CatalogQueryPage["nextCursor"] = null;
+			do {
+				signal.throwIfAborted();
+				const page = await this.queryRandomReunionObservations(cursor, 150, sourcePath === null ? undefined : [sourcePath], file?.logicalDate);
+				signal.throwIfAborted();
+				this.requireRandomReunionCoverage(page.coverage);
+				if (page.invalidated || page.catalogRevision !== snapshot.catalogRevision
+					|| JSON.stringify(page.coverage) !== JSON.stringify(snapshot.coverage)) throw new CatalogDiscoveryInvalidatedError();
+				for (const observation of page.items) {
+					if (observation.logicalDate >= snapshot.day) continue;
+					const view = toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities));
+					if (filterRandomReunionCandidates([view], { today }).length === 0) continue;
+					// 缓存只留候选元数据；所有正文变更均以已提交的文件分区为边界失效。
+					candidates.push({ id: view.id, createdAt: view.createdAt, logicalDate: observation.logicalDate, tags: view.tags,
+						dailyRef: view.dailyRef, observationKey: observation.observationKey });
+				}
+				cursor = page.nextCursor;
+				if (cursor !== null && control.shouldYield(page.items.length)) await control.yieldNow();
+			} while (cursor !== null);
 		}
-		if (invalidated) throw new CatalogDiscoveryInvalidatedError();
-		const pool = { catalogRevision, day, coverage, candidates };
-		if (!await this.isDiscoverySnapshotCurrent(pool, signal)) throw new CatalogDiscoveryInvalidatedError();
+		const pool = { ...snapshot, candidates };
+		if (!await this.isRandomReunionPoolCurrent(pool, signal)) throw new CatalogDiscoveryInvalidatedError();
 		signal.throwIfAborted();
 		this.randomReunionCandidatePool = pool;
 		return pool;
 	}
 
+	private async isRandomReunionPoolCurrent(pool: RandomReunionCandidatePool, signal?: AbortSignal): Promise<boolean> {
+		const store = this.options.catalog.getStore();
+		return store.getRuntimeGeneration() === pool.changeCursor.storeGeneration
+			&& await this.isDiscoverySnapshotCurrent(pool, signal)
+			&& store.getRuntimeGeneration() === pool.changeCursor.storeGeneration;
+	}
+
 	private async queryRandomReunionObservations(
-		cursor: CatalogQueryPage["nextCursor"],
-		limit: number,
+		cursor: CatalogQueryPage["nextCursor"], limit: number, sourcePaths?: readonly string[], logicalDate?: string,
 	): Promise<CatalogQueryPage> {
 		try {
-			return await this.options.catalog.query({ limit, cursor });
+			return await this.options.catalog.query({ limit, cursor, ...(sourcePaths === undefined ? {} : { sourcePaths }),
+				...(logicalDate === undefined ? {} : { fromDate: logicalDate, toDate: logicalDate }) });
 		} catch (error) {
 			void Promise.resolve().then(() => this.options.requestObservationScan?.()).catch(() => undefined);
 			throw error;

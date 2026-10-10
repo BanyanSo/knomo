@@ -163,7 +163,6 @@ export const en: Record<TranslationKey, string> = {
 	"mobile.menu": "Menu",
 	"mobile.openOrCloseSidebar": "Open or close Knomo sidebar",
 	"mobile.newMemo": "New memo",
-	"reference.label": "Reference:",
 	"reference.clear": "Clear reference",
 	"reference.fromPrefix": "Referenced from: ",
 	"stats.notes": "Notes",

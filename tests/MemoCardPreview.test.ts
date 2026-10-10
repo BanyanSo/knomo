@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import type { App, TFile } from "obsidian";
 
-import { ImageResourceCache } from "../src/ui/ImageResourceCache";
+import { IMAGE_RESOURCE_CACHE_LIMIT, ImageResourceCache } from "../src/ui/ImageResourceCache";
 import {
 	parseMemoCardPreviewLite,
 	resolveMemoPreviewImages,
@@ -269,3 +269,21 @@ function parseMemoCardPreview(
 ) {
 	return resolveMemoPreviewImages(parseMemoCardPreviewLite(content), sourcePath, app, imageResourceCache);
 }
+
+
+test("图片解析 LRU 淘汰最久未用项，保留热项并支持完整清理", () => {
+	const app = createAppStub(["photo.png"]);
+	const cache = new ImageResourceCache();
+	cache.get("Daily/hot.md", "photo.png", app);
+	for (let index = 0; index < IMAGE_RESOURCE_CACHE_LIMIT - 1; index++) cache.get(`Daily/${index}.md`, "photo.png", app);
+	assert.equal(getResolveCount(app), IMAGE_RESOURCE_CACHE_LIMIT);
+	cache.get("Daily/hot.md", "photo.png", app);
+	cache.get("Daily/new.md", "photo.png", app);
+	cache.get("Daily/hot.md", "photo.png", app);
+	assert.equal(getResolveCount(app), IMAGE_RESOURCE_CACHE_LIMIT + 1);
+	cache.get("Daily/0.md", "photo.png", app);
+	assert.equal(getResolveCount(app), IMAGE_RESOURCE_CACHE_LIMIT + 2);
+	cache.clear();
+	cache.get("Daily/hot.md", "photo.png", app);
+	assert.equal(getResolveCount(app), IMAGE_RESOURCE_CACHE_LIMIT + 3);
+});

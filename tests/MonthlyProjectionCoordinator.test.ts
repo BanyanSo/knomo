@@ -107,6 +107,29 @@ test("Monthly 的完整输入只来自实际 Daily，空或 partial Catalog 不�
 	assert.equal(fixture.replica.paths().some((path) => path.includes("_knomo-data")), false);
 });
 
+test("Monthly 每次构建使用当前 Daily 字节，即使 mtime 和大小不变", async () => {
+	const sourcePath = "Daily/2026-08-01.md";
+	const fixture = createFixture({ [sourcePath]: "- 09:00 first body\n" });
+	const original = await fixture.inputBuilder.build("2026-08");
+	assert.equal(original.status, "complete");
+	if (original.status !== "complete") throw new Error("Expected complete Monthly input.");
+	const file = fixture.replica.app.vault.getAbstractFileByPath(sourcePath);
+	assert.ok(file instanceof TFile);
+	const stat = { ...file.stat };
+	fixture.replica.replace(sourcePath, "- 09:00 other body\n");
+	file.stat = stat;
+	const changed = await fixture.inputBuilder.build("2026-08");
+	assert.equal(changed.status, "complete");
+	if (changed.status !== "complete") throw new Error("Expected complete Monthly input.");
+	assert.notEqual(changed.sourceDigest, original.sourceDigest);
+	assert.equal(changed.observations[0]?.content, "other body");
+	assert.equal(original.observations[0]?.content, "first body");
+	changed.observations[0]!.content = "mutated result";
+	const next = await fixture.inputBuilder.build("2026-08");
+	assert.equal(next.status, "complete");
+	if (next.status === "complete") assert.equal(next.observations[0]?.content, "other body");
+});
+
 test("Monthly 与 Catalog 共用全区域 Parser 语义，source 输入不包含写入标题", async () => {
 	const daily = {
 		"Daily/2026-08-27.md": "- 12:58 root\n### Ideas\n- 14:26 under ideas\n",

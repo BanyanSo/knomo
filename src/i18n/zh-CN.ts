@@ -161,7 +161,6 @@ export const zhCN = {
 	"mobile.menu": "菜单",
 	"mobile.openOrCloseSidebar": "打开或收起 Knomo 侧栏",
 	"mobile.newMemo": "新建 memo",
-	"reference.label": "引用：",
 	"reference.clear": "清除引用",
 	"reference.fromPrefix": "引用自：",
 	"stats.notes": "笔记",

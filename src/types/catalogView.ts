@@ -4,7 +4,6 @@ import type {
 	CatalogCursor,
 	CatalogObservation,
 	CatalogQuery,
-	CatalogQueryFilter,
 	CatalogStoreLifecycle,
 	MemoCapabilities,
 	ObservationHandle,
@@ -111,12 +110,6 @@ export interface CatalogTagFacet {
 	key: string;
 	label: string;
 	count: number;
-}
-
-export interface CatalogFunctionPageRequest extends CatalogQueryFilter {
-	limit: number;
-	cursor?: CatalogFeatureCursor | null;
-	text?: string;
 }
 
 export type CatalogRecordStatsFilter =

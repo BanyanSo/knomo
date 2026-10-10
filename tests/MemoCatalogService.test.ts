@@ -1,10 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCatalogPartition, buildCatalogSearchTokens, MemoCatalogService, selectCatalogSearchToken } from "../src/services/MemoCatalogService";
+import { buildCatalogPartition, buildCatalogPartitionCooperatively, buildCatalogSearchTokens, MemoCatalogService, selectCatalogSearchToken } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogInventoryEntry, MemoObservation } from "../src/types/catalog";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+
+test("分片准备覆盖搜索和聚合，结果与同步路径相同且准备阶段不发布", async t => {
+	const inventory = makeInventory("Journal/2026-08-12.md", "2026-08-12");
+	const observations = Array.from({ length: 23 }, (_, i) => {
+		const observation = makeObservation(inventory, i + 1, i % 2 ? "09:15" : "21:45:00", "中文 hello **word** [[Note#^block-a]] ![[photo.png]]");
+		observation.tags = ["#Project/Alpha", "#project/alpha"];
+		observation.images = [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }];
+		observation.timeBuoyDates = ["2026-09-01"];
+		return observation;
+	});
+	const input = makePartitionInput(inventory, observations, "sha-sliced"), store = new InMemoryMemoCatalogStore();
+	await store.open();
+	t.mock.method(store, "replaceFilePartition", () => { throw new Error("prepare must not publish"); });
+	let yields = 0;
+	const partition = await buildCatalogPartitionCooperatively(input, {
+		now: () => 0, maxOperationsPerSlice: 7, sliceBudgetMs: 8, yieldControl: async () => { yields++; },
+	});
+	assert.equal(yields, 3);
+	assert.deepEqual(partition, buildCatalogPartition(input));
+	assert.equal(await store.getCatalogRevision(), 0);
+	await assert.rejects(buildCatalogPartitionCooperatively(input, {
+		maxOperationsPerSlice: 1, yieldControl: async () => { throw new Error("cancelled preparation"); },
+	}), /cancelled preparation/);
+	assert.equal(await store.getCatalogRevision(), 0);
+	let current = true;
+	assert.equal(await new MemoCatalogService(store).replaceFile(input, {
+		maxOperationsPerSlice: 1, isCurrent: () => current, yieldControl: async () => { current = false; },
+	}), null, "准备期间失效的配置或文件不发布分区");
+	assert.equal(await store.getCatalogRevision(), 0);
+});
 
 test("搜索 token 保持首次出现顺序，混排汉字短 token 不跨越非汉字", () => {
 	assert.deepEqual(buildCatalogSearchTokens("中文 abc 中文 abc"), ["中文", "中", "文", "abc"]);
@@ -76,7 +106,7 @@ test("文件 revision 批次始终返回该文件的全部 observations", async 
 	assert.equal(batch.catalogRevision, 1);
 });
 
-test("一次快照读取返回全部文件及 observations，并共享同一 catalogRevision", async () => {
+test("按需读取多个文件分区，未变索引的 revision 一致且返回结果隔离", async () => {
 	const store = new InMemoryMemoCatalogStore();
 	const service = new MemoCatalogService(store);
 	await service.open();
@@ -88,7 +118,11 @@ test("一次快照读取返回全部文件及 observations，并共享同一 cat
 		makeObservation(second, 3, "11:00", "second-b"),
 	], "sha-second"));
 
-	const batches = await service.listFileRevisionBatches();
+	const firstBatch = await service.getFileRevisionBatch(first.sourcePath);
+	const secondBatch = await service.getFileRevisionBatch(second.sourcePath);
+	assert.ok(firstBatch);
+	assert.ok(secondBatch);
+	const batches = [firstBatch, secondBatch];
 	assert.deepEqual(batches.map((batch) => ({
 		path: batch.file.sourcePath,
 		contents: batch.observations.map((item) => item.content),
@@ -97,6 +131,8 @@ test("一次快照读取返回全部文件及 observations，并共享同一 cat
 		{ path: first.sourcePath, contents: ["first"], catalogRevision: 2 },
 		{ path: second.sourcePath, contents: ["second-a", "second-b"], catalogRevision: 2 },
 	]);
+	firstBatch.observations[0].content = "changed outside store";
+	assert.equal((await service.getFileRevisionBatch(first.sourcePath))?.observations[0].content, "first");
 });
 
 test("reference aggregate 只统计 Daily 可重建的显式 block reference", async () => {

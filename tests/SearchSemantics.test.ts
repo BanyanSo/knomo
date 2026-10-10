@@ -57,18 +57,21 @@ test("连续文字不跨字段或排除边界；标签、链接和图片字段�
 test("双存储的 count、逐页结果和 evaluator 在来源组合及稀疏命中时完全一致", async () => {
 	const name = "search-semantics-" + Date.now();
 	const stores = [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange })];
+	const partitions = [
+		searchPartition("2026-10-09", Array.from({ length: 120 }, (_, index) =>
+				index % 17 ? "ordinary project" : `项目**完成** #Work/Child [[Target|别名]] ![真实说明](photo.jpg)\n- [ ] 稀疏复盘 ${index}`)),
+		searchPartition("2025-10-09", ["项目 稀疏复盘 #Work/Child\n- [ ] old"]),
+		searchPartition("2026-10-10", ["项目 稀疏复盘 #Work/Child"]),
+	];
 	try {
 		for (const store of stores) {
 			await store.open();
-			await store.replaceFilePartition(searchPartition("2026-10-09", Array.from({ length: 120 }, (_, index) =>
-				index % 17 ? "ordinary project" : `项目**完成** #Work/Child [[Target|别名]] ![真实说明](photo.jpg)\n- [ ] 稀疏复盘 ${index}`)));
-			await store.replaceFilePartition(searchPartition("2025-10-09", ["项目 稀疏复盘 #Work/Child\n- [ ] old"]));
-			await store.replaceFilePartition(searchPartition("2026-10-10", ["项目 稀疏复盘 #Work/Child"]));
+			for (const partition of partitions) await store.replaceFilePartition(partition);
 			const session = new SearchSession();
 			const source = buildSearchSourceScope({ activeNav: "things", scopeFilter: "with-image", activeTag: "Work", activeTagKey: "work", recordStatsSearchFilter: null }, new Date(2026, 9, 9));
 			session.updateDraft("20261009 稀疏复盘"); session.submit();
 			const filter = session.getFilter(source);
-			const expected = (await store.listFileRevisionBatches()).flatMap(batch => batch.observations)
+			const expected = partitions.flatMap(partition => partition.observations)
 				.filter(item => matchesCatalogQuery(item, filter)).sort((a, b) => b.createdAtKey.localeCompare(a.createdAtKey) || b.observationKey.localeCompare(a.observationKey));
 			assert.equal(expected.length, 8);
 			const keys: string[] = [];

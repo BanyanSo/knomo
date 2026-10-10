@@ -1,6 +1,6 @@
 import { TFile, TFolder } from "obsidian";
 import type { App } from "obsidian";
-import type { TrashQueryResult, TrashSnapshot, TrashStoreState } from "../types/trash";
+import type { TrashQueryResult, TrashSnapshot, TrashStoreState, TrashStoreSummary } from "../types/trash";
 
 // 所有实例共享当前 Vault 的本地操作队列；不形成磁盘协议。
 interface TrashCoordinator {
@@ -33,12 +33,27 @@ export class TrashSnapshotStore {
 
 	get path(): string { return getTrashFilePath(typeof this.monthlyFolder === "string" ? this.monthlyFolder : this.monthlyFolder()); }
 
-	getState(): TrashStoreState {
+	getState(): TrashStoreState { return structuredClone(this.readState()); }
+
+	getSummary(): TrashStoreSummary {
+		const state = this.readState();
+		if (state.status === "ready") return { status: state.status, count: state.count, error: state.error };
+		return { status: state.status, count: state.count, error: state.error };
+	}
+
+	getWindow(end: number, limit: number): TrashStoreState {
+		const state = this.readState();
+		if (state.status !== "ready") return { ...state };
+		const windowEnd = Math.max(0, Math.min(Math.trunc(end), state.count));
+		return { ...state, items: structuredClone(state.items.slice(Math.max(0, windowEnd - Math.max(0, Math.trunc(limit))), windowEnd)) };
+	}
+
+	private readState(): TrashStoreState {
 		try {
 			if (this.disposed) throw new Error("Trash runtime disposed.");
 			this.assertActive();
 			const current = this.coordinator.publication;
-			if (current?.path === this.path && current.revision === this.coordinator.revision) return structuredClone(current.state);
+			if (current?.path === this.path && current.revision === this.coordinator.revision) return current.state;
 			return { status: "idle", items: null, count: null, error: null };
 		} catch (error) { return { status: "error", items: null, count: null, error: String(error) }; }
 	}
@@ -164,7 +179,11 @@ export class TrashSnapshotStore {
 		});
 	}
 
-	query(): Promise<TrashQueryResult> {
+	query(): Promise<TrashQueryResult> { return this.loadShared().then((result) => structuredClone(result)); }
+
+	async ensureLoaded(): Promise<void> { await this.loadShared(); }
+
+	private loadShared(): Promise<TrashQueryResult> {
 		if (!this.reading) {
 			let resolve!: (result: TrashQueryResult) => void;
 			let reject!: (error: unknown) => void;
@@ -173,14 +192,14 @@ export class TrashSnapshotStore {
 			this.reading = pending.finally(() => { this.reading = null; });
 			void this.load().then(resolve, reject);
 		}
-		return this.reading.then((result) => structuredClone(result));
+		return this.reading;
 	}
 
 	private async load(): Promise<TrashQueryResult> {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			if (this.coordinator.pending > 0) {
 				await this.coordinator.queue.catch(() => undefined);
-				const current = this.getState();
+				const current = this.readState();
 				if (current.status === "error") return { items: [], errors: [{ snapshotId: "", message: current.error ?? "Trash unavailable." }] };
 			}
 			let path = "";
@@ -189,7 +208,7 @@ export class TrashSnapshotStore {
 				if (this.disposed) throw new Error("Trash runtime disposed.");
 				path = this.path;
 				this.assertActive();
-				const state = this.getState();
+				const state = this.readState();
 				if (state.status === "ready") return { items: state.items, errors: [] };
 				if (attempt > 0 && state.status === "error") return { items: [], errors: [{ snapshotId: "", message: state.error ?? "Trash unavailable." }] };
 				this.publish(path, { status: "loading", items: null, count: null, error: null });
@@ -198,7 +217,7 @@ export class TrashSnapshotStore {
 				if (path !== this.path || revision !== this.coordinator.revision) continue;
 				const sorted = this.publishReady(path, items);
 				if (path !== this.path || revision !== this.coordinator.revision) continue;
-				return { items: structuredClone(sorted), errors: [] };
+				return { items: sorted, errors: [] };
 			} catch (error) {
 				if (revision !== this.coordinator.revision) continue;
 				try { if (path && path !== this.path) continue; } catch { /* 配置错误由下面的失败 state 报告。 */ }

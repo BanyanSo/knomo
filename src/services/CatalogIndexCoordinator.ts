@@ -204,18 +204,27 @@ export class CatalogIndexCoordinator {
 			size: new TextEncoder().encode(input.content).byteLength,
 		};
 		this.bumpPathGeneration(sourcePath);
+		const revision = { generation: this.getPathGeneration(sourcePath), mtime: input.file.stat.mtime, size: input.file.stat.size };
+		const settingsFingerprint = this.settingsFingerprint;
 		if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;
 		await this.runPathSerial(sourcePath, async () => {
 			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
-			await this.catalogService.replaceFile({
+			const catalogRevision = await this.catalogService.replaceFile({
 				inventory,
 				sourceRevision: input.parsed.sourceRevision,
 				observations: input.parsed.observations,
 				parserVersion: CATALOG_PARSER_VERSION,
-				settingsFingerprint: this.settingsFingerprint,
+				settingsFingerprint,
 				auditedAt: this.now(),
+			}, {
+				sliceBudgetMs: Math.max(1, Math.min(8, this.sliceBudgetMs)), yieldControl: () => this.yieldToEventLoop(),
+				isCurrent: () => !this.isStopped() && settingsFingerprint === this.settingsFingerprint && this.isPathRevisionCurrent(sourcePath, revision),
 			});
-			if (this.isStopped()) return;
+			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
+			if (catalogRevision === null) {
+				this.requeueCurrentPath(sourcePath);
+				throw new Error("Memo Catalog source changed during preparation.");
+			}
 			this.upsertInventoryEntry(inventory);
 			this.setPathCovered(sourcePath, true);
 			this.failedPaths.delete(sourcePath);
@@ -592,6 +601,7 @@ export class CatalogIndexCoordinator {
 			mtime: abstractFile.stat.mtime,
 			size: abstractFile.stat.size,
 		};
+		const settingsFingerprint = this.settingsFingerprint;
 		try {
 			const raw = await this.app.vault.readBinary(abstractFile);
 			if (this.isStopped()) return;
@@ -627,7 +637,7 @@ export class CatalogIndexCoordinator {
 						return;
 					}
 					if (this.isStopped()) return;
-					await this.catalogService.replaceFile({
+					const catalogRevision = await this.catalogService.replaceFile({
 						inventory: {
 							...inventory,
 							mtime: revision.mtime,
@@ -636,9 +646,17 @@ export class CatalogIndexCoordinator {
 						sourceRevision: parsed.sourceRevision,
 						observations: parsed.observations,
 						parserVersion: CATALOG_PARSER_VERSION,
-						settingsFingerprint: this.settingsFingerprint,
+						settingsFingerprint,
 						auditedAt: this.now(),
+					}, {
+						sliceBudgetMs: Math.max(1, Math.min(8, this.sliceBudgetMs)), yieldControl: () => this.yieldToEventLoop(),
+						isCurrent: () => !this.isStopped() && settingsFingerprint === this.settingsFingerprint && this.isPathRevisionCurrent(sourcePath, revision),
 					});
+					if (this.isStopped()) return;
+					if (catalogRevision === null) {
+						this.requeueCurrentPath(sourcePath);
+						return;
+					}
 					if (!this.suppressScannedPeriodChanges) {
 						this.notifyDailyPeriodsChanged([inventory.logicalDate.slice(0, 7)]);
 					}

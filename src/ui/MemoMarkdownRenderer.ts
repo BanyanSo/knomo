@@ -171,18 +171,6 @@ export class MemoMarkdownRenderer {
 		}
 	}
 
-	syncTaskCheckboxDom(input: HTMLInputElement, memo: MemoRecord): void {
-		const taskIndex = this.getTaskCheckboxIndex(input);
-		if (taskIndex === null) {
-			return;
-		}
-		const task = getMarkdownTaskLines(memo.contentSnapshot)[taskIndex] ?? null;
-		if (task === null) {
-			return;
-		}
-		applyTaskCheckboxDomState(input, task.marker);
-	}
-
 	applyTaskCheckboxDomState(input: HTMLInputElement, marker: MarkdownTaskMarker | WritableMarkdownTaskMarker): void {
 		applyTaskCheckboxDomState(input, marker);
 	}

@@ -1,5 +1,5 @@
 import { parser, Strikethrough, Table } from "@lezer/markdown";
-import { decodeHTMLStrict } from "entities";
+import { decodeHTMLStrict } from "entities/decode";
 import { normalizeSearchText } from "../utils/searchText";
 
 const searchMarkdownParser = parser.configure([Table, Strikethrough]);

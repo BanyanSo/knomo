@@ -684,6 +684,7 @@ test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const memos = Array.from({ length: 50 }, (_, index) => makeMemo(`memo-${index + 1}`, "2026-08-24T10:00:00"));
 	const view = Object.create(KnomoView.prototype) as PresentationView;
+	Object.assign(view, { hasCommittedCatalogDesktopQuery: true });
 	view.catalogDesktopTotalCount = 90;
 	view.cardFlowError = null;
 	view.catalogCoverage = completeCoverage();

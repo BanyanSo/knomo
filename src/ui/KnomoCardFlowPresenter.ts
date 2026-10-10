@@ -22,6 +22,7 @@ export type CardFlowPresentation =
 		title: string;
 		description: string;
 		headers?: CardFlowHeader[];
+		loading?: boolean;
 	}
 	| {
 		type: "items";

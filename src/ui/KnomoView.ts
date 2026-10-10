@@ -1993,9 +1993,7 @@ export class KnomoView extends ItemView {
 				throw new Error(t("search.statusChanged"));
 			}
 			this.applyCatalogMemoLoad(load);
-			if (!this.hasCommittedCatalogDesktopQuery
-				&& load.readState === "history_building"
-				&& getCatalogReadStatusHeaders({ status: load.status, coverage: load.coverage }).length === 0) {
+			if (this.shouldWaitForInitialCatalogLoad(load)) {
 				this.memos = [];
 				this.cardFlowError = null;
 				this.filteredMemosCache = null;
@@ -2108,6 +2106,12 @@ export class KnomoView extends ItemView {
 			status: page.status,
 			catalogRevision: page.catalogRevision,
 		};
+	}
+
+	private shouldWaitForInitialCatalogLoad(load: CatalogMemoLoad): boolean {
+		return !this.hasCommittedCatalogDesktopQuery
+			&& load.readState === "history_building"
+			&& getCatalogReadStatusHeaders({ status: load.status, coverage: load.coverage }).length === 0;
 	}
 
 	private applyCatalogMemoLoad(load: CatalogMemoLoad): void {
@@ -2455,6 +2459,14 @@ export class KnomoView extends ItemView {
 			}
 			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new Error(t("search.statusChanged"));
 			this.applyCatalogMemoLoad(load);
+			// 两端使用相同的首批提交条件，不将构建中的空结果或子集视为已加载。
+			if (this.shouldWaitForInitialCatalogLoad(load)) {
+				this.memos = [];
+				this.cardFlowError = null;
+				this.filteredMemosCache = null;
+				this.renderUiState();
+				return;
+			}
 			this.catalogHistoryExpansionPending = !load.fullHistoryLoaded && this.isDefaultListState();
 			this.memos = load.memos;
 			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll), load.catalogRevision, catalogCoverageKey(load.coverage));
@@ -3384,6 +3396,15 @@ export class KnomoView extends ItemView {
 	}
 
 	private getCurrentCardFlowPresentation(): CardFlowPresentation {
+		// 焦点和可见性检查也会重绘；首批结果未确认时不能按空数组显示空库。
+		if (["all", "things", "review"].includes(this.activeNav)
+			&& !this.hasCommittedCatalogDesktopQuery && this.cardFlowError === null
+			&& getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage }).length === 0) {
+			return {
+				type: "empty", description: "", loading: true,
+				title: this.getDailyNotesStatus().enabled ? t("empty.loadingAllMemos") : t("service.dailyNotesDisabled"),
+			};
+		}
 		const randomSnapshot = this.randomReunionController.getSnapshot();
 		const shuffleDaySnapshot = this.shuffleDayController.getSnapshot();
 		const trashSnapshot = this.trashMemoController.getSnapshot();
@@ -3486,7 +3507,7 @@ export class KnomoView extends ItemView {
 		this.cardFlowEl.empty();
 		this.renderedCardMemos.clear();
 		renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
-		renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
+		renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description, presentation.loading);
 		this.renderHistoryLoadMore();
 	}
 
@@ -3685,7 +3706,7 @@ export class KnomoView extends ItemView {
 		if (presentation.type === "empty") {
 			if (this.cardFlowEl !== null) {
 				renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
-				renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
+				renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description, presentation.loading);
 				this.renderHistoryLoadMore();
 			}
 			this.restorePendingCardFlowScrollTop(generation);
@@ -4974,14 +4995,9 @@ export class KnomoView extends ItemView {
 		this.renderedCardMemos.clear();
 		cardFlow.empty();
 		// 日记不可用时历史索引无法完成，应显示启用指引而不是无限等待。
-		const loadingState = renderKnomoEmptyState(cardFlow, this.getDailyNotesStatus().enabled
+		renderKnomoEmptyState(cardFlow, this.getDailyNotesStatus().enabled
 			? t("empty.loadingAllMemos")
-			: t("service.dailyNotesDisabled"));
-		loadingState.setAttrs({
-			role: "status",
-			"aria-live": "polite",
-			"aria-atomic": "true",
-		});
+			: t("service.dailyNotesDisabled"), "", true);
 	}
 
 	private shouldDeferCardFlowForAllMemos(): boolean {

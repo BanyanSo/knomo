@@ -106,7 +106,7 @@ export function renderTitleModeButton(container: HTMLElement, option: TitleModeO
 			"data-title-mode": option.mode,
 		},
 	});
-	setIcon(button.createSpan({ cls: "knomo-button-icon" }), option.icon);
+	setIcon(button.createSpan({ cls: "knomo-button-icon", attr: { "aria-hidden": "true" } }), option.icon);
 	button.createSpan({ cls: "knomo-button-label", text: option.label });
 	return button;
 }

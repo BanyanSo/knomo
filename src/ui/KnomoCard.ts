@@ -14,6 +14,8 @@ import {
 	getTrashMemoCardClass,
 	isCjkMemoContent,
 	isMemoCardMenuReady,
+	MEMO_ACTION_ICONS,
+	MEMO_WORD_COUNT_ICON,
 } from "./KnomoCardMetadata";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import type { MemoCardPreview, MemoPreviewImage } from "./MemoCardPreview";
@@ -107,10 +109,9 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 					action.className,
 				);
 			}
-			actions.createDiv({
-				cls: "knomo-card-word-count",
-				text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }),
-			});
+			const wordCount = actions.createDiv({ cls: "knomo-card-word-count" });
+			setIcon(wordCount.createSpan({ cls: "knomo-menu-icon", attr: { "aria-hidden": "true" } }), MEMO_WORD_COUNT_ICON);
+			wordCount.createSpan({ cls: "knomo-menu-label", text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }) });
 		}
 	}
 
@@ -269,9 +270,8 @@ function renderCardAction(
 	label: string,
 	className: string,
 ): void {
-	container.createEl("button", {
+	const button = container.createEl("button", {
 		cls: className,
-		text: label,
 		attr: {
 			type: "button",
 			role: "menuitem",
@@ -280,6 +280,8 @@ function renderCardAction(
 			"data-memo-id": memoId,
 		},
 	});
+	setIcon(button.createSpan({ cls: "knomo-menu-icon", attr: { "aria-hidden": "true" } }), MEMO_ACTION_ICONS[action]);
+	button.createSpan({ cls: "knomo-menu-label", text: label });
 }
 
 function renderTrashAction(

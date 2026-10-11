@@ -1332,7 +1332,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	top: 32px;
 	left: 0;
 	width: var(--knomo-dropdown-width);
-	min-width: var(--knomo-dropdown-width);
+	min-width: 0;
 }
 
 .knomo-plugin.is-scope-open .knomo-desktop-scope-popover {
@@ -1354,16 +1354,54 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	top: var(--knomo-title-popover-top);
 	left: var(--knomo-title-popover-left);
 	width: var(--knomo-dropdown-width);
-	min-width: var(--knomo-dropdown-width);
+	min-width: 0;
 }
 
-.knomo-plugin .knomo-scope-option .knomo-button-icon {
-	display: none;
+.knomo-plugin:not(.is-layout-mobile) .knomo-scope-popover,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-actions {
+	max-width: var(--knomo-desktop-menu-max-width, none);
+	max-height: var(--knomo-desktop-menu-max-height, none);
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-scope-option,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-action {
+	flex: 0 0 auto;
+	justify-content: flex-start;
+	gap: 8px;
+	height: auto;
+	padding: 6px 10px;
+	line-height: 1.4;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-scope-option .knomo-button-icon,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-actions .knomo-menu-icon {
+	display: inline-flex;
+	flex: 0 0 16px;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	color: inherit;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-scope-option .knomo-button-icon svg,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-actions .knomo-menu-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-scope-option .knomo-button-label,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-actions .knomo-menu-label {
+	min-width: 0;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 
 .knomo-plugin .knomo-scope-option:hover,
-.knomo-plugin .knomo-scope-option:focus-visible,
-.knomo-plugin .knomo-scope-option.is-active {
+.knomo-plugin .knomo-scope-option:focus-visible {
 	color: var(--text-normal);
 	background: var(--knomo-row-hover);
 }
@@ -2512,8 +2550,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: flex;
 	flex-direction: column;
 	gap: 0;
-	width: 118px;
-	min-width: 118px;
+	width: var(--knomo-dropdown-width);
+	min-width: 0;
 	padding: 6px;
 	border: var(--border-width) solid var(--knomo-soft-border);
 	border-radius: var(--knomo-radius);
@@ -2535,6 +2573,14 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	bottom: calc(100% + 6px);
 	transform: translateY(4px) scale(0.98);
 	transform-origin: bottom right;
+}
+
+.knomo-plugin:not(.is-layout-mobile) .knomo-scope-popover.is-desktop-menu-positioned,
+.knomo-plugin:not(.is-layout-mobile) .knomo-card-actions.is-desktop-menu-positioned {
+	top: var(--knomo-desktop-menu-top);
+	right: auto;
+	bottom: auto;
+	left: var(--knomo-desktop-menu-left);
 }
 
 .knomo-plugin .knomo-card.is-menu-open .knomo-card-actions {
@@ -2576,6 +2622,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-card-word-count {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 8px;
 	box-sizing: border-box;
 	width: 100%;
 	min-width: 0;
@@ -2587,7 +2637,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	font-size: var(--knomo-card-time-font-size);
 	font-variant-numeric: tabular-nums;
 	line-height: 1.3;
-	text-align: right;
+	text-align: left;
 }
 
 /* Card content */
@@ -2607,6 +2657,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	line-height: var(--knomo-content-line-height);
 	text-align: start;
 	white-space: normal;
+	-webkit-user-select: text;
+	user-select: text;
 }
 
 .knomo-plugin .knomo-card.is-cjk-content .knomo-card-content {
@@ -4905,6 +4957,7 @@ body.is-mobile .modal-container.knomo-confirm-backdrop { z-index: 10030; }
 
 
 /* 范围菜单当前项与侧边栏当前项使用同一组主题变量。 */
+.knomo-plugin .knomo-scope-option.is-active,
 .menu.knomo-mobile-menu-scope .menu-item.mod-checked {
 	color: var(--text-accent);
 	background: var(--background-modifier-hover);

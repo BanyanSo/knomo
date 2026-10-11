@@ -6,7 +6,7 @@ import { build } from "esbuild";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
 
 // 宿主 Menu 的实际呈现需在 Obsidian 验收；这里验证 Knomo 的命中区、层级和桌面样式。
-test("mobile touch targets and confirm layering work across themes, font sizes and orientations; desktop popovers keep their size", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile touch targets and confirm layering work across themes, font sizes and orientations; desktop popovers share the menu width", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const editFixture = await createMobilePopupFixture("cancel-edit");
 	const editingHtml = editFixture.layer.innerHTML, cardHtml = editFixture.card.outerHTML, scopeHtml = editFixture.scopeMenu.outerHTML;
 	editFixture.close();
@@ -122,7 +122,7 @@ test("mobile touch targets and confirm layering work across themes, font sizes a
 		await page.locator(".knomo-card").evaluate((card: HTMLElement) => card.classList.add("is-menu-open"));
 		await page.waitForTimeout(200);
 		const desktop=await page.locator(".knomo-card-actions").evaluate((menu: HTMLElement) => ({ width:menu.getBoundingClientRect().width,display:getComputedStyle(menu).display }));
-		assert.equal(desktop.width,118);assert.equal(desktop.display,"flex");
+		assert.equal(desktop.width,168);assert.equal(desktop.display,"flex");
 		assert.equal(await page.locator(".knomo-reference-clear").count(),0);
 		assert.deepEqual(errors,[]);
 	} finally { await browser.close(); }
@@ -291,18 +291,27 @@ test("Composer coordinates keyboard dismissal, visual exit and reentry in a real
 });
 
 
-test("Scope current item shares Sidebar accent, background and weight across themes without changing other host menus", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("Desktop and mobile Scope current items share Sidebar accent, background and weight across themes without changing other host menus", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const fixture = await createMobilePopupFixture();
+	const currentScope = fixture.scopeMenu.querySelector<HTMLElement>('[data-title-mode="all"]')!;
+	currentScope.classList.add("is-active");
+	currentScope.setAttribute("aria-checked", "true");
+	const scopeHtml = fixture.scopeMenu.outerHTML;
+	fixture.close();
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
 	const hostCss = process.env.KNOMO_HOST_CSS ? readFileSync(process.env.KNOMO_HOST_CSS, "utf8") : "";
 	try {
 		const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
-		for (const theme of ["theme-light", "theme-dark"]) {
+		for (const theme of ["theme-light", "theme-dark"]) for (const layout of ["mobile", "desktop-wide", "desktop-narrow"]) {
+			const scope = layout === "desktop-wide" ? scopeHtml.replace("knomo-mobile-scope-popover", "knomo-desktop-scope-popover") : scopeHtml;
 			await page.setContent(`<style>${hostCss}${css}
 				body { display:block; margin:0; --text-accent:rgb(97, 71, 217); --text-normal:rgb(111, 112, 113); --background-modifier-hover:rgba(97, 71, 217, 0.15); --font-semibold:600; }
-			</style><body class="is-mobile ${theme}">
-				<div class="knomo-plugin is-layout-mobile"><button class="knomo-nav-button is-active">当前侧边栏项</button></div>
+				#scope-root { display:block; position:relative; width:300px; height:360px; }
+				.menu { position:static; }
+			</style><body class="${layout === "mobile" ? "is-mobile" : ""} ${theme}">
+				<div id="scope-root" class="knomo-plugin is-layout-${layout} is-scope-open"><button class="knomo-nav-button is-active">当前侧边栏项</button>${layout === "mobile" ? "" : scope}</div>
 				<div class="menu knomo-mobile-menu knomo-mobile-menu-scope">
 					<div id="current" class="menu-item mod-checked"><div class="menu-item-icon">图标</div><div class="menu-item-title"><span>全部笔记</span></div></div>
 					<div id="other" class="menu-item"><div class="menu-item-title">其他范围</div></div>
@@ -320,6 +329,31 @@ test("Scope current item shares Sidebar accent, background and weight across the
 			assert.equal(colors.icon.color, colors.sidebar.color, theme);
 			assert.notEqual(colors.other.color, colors.sidebar.color, theme);
 			assert.notEqual(colors.host.color, colors.sidebar.color, theme);
+			if (layout !== "mobile") {
+				const current = page.locator('.knomo-scope-option[data-title-mode="all"]');
+				for (const state of ["rest", "hover", "focus"]) {
+					if (state === "hover") await current.hover();
+					if (state === "focus") {
+						await page.keyboard.press("Tab");
+						await current.focus();
+					}
+					const desktop = await current.evaluate((element: HTMLElement) => {
+						const style = getComputedStyle(element);
+						return {
+							color: style.color, background: style.backgroundColor, weight: style.fontWeight,
+							icon: getComputedStyle(element.querySelector(".knomo-button-icon")!).color,
+							label: getComputedStyle(element.querySelector(".knomo-button-label")!).color,
+							focusVisible: element.matches(":focus-visible"),
+						};
+					});
+					const context = `${theme}/${layout}/${state}`;
+					assert.deepEqual({ color: desktop.color, background: desktop.background, weight: desktop.weight }, colors.current, context);
+					assert.equal(desktop.icon, colors.current.color, context);
+					assert.equal(desktop.label, colors.current.color, context);
+					if (state === "focus") assert.equal(desktop.focusVisible, true, context);
+				}
+				assert.notEqual(await page.locator('.knomo-scope-option[data-title-mode="things"]').evaluate((element: HTMLElement) => getComputedStyle(element).color), colors.current.color, `${theme}/${layout}/other`);
+			}
 		}
 	} finally { await browser.close(); }
 });

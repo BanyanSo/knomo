@@ -9,7 +9,8 @@ import { observationHandleKey, type DailyMemoPresentationChange } from "../servi
 import { DesktopDrawerFocus, getDrawerWidth, resolveLayout, type LayoutMode } from "./KnomoLayout";
 import { registerComposerToolGesture } from "./ComposerToolGesture";
 import type { KnomoQuickCommand } from "./KnomoQuickCommands";
-import { getMemoCardActions, getMemoSourceReferenceMeta, isMemoCardMenuReady } from "./KnomoCardMetadata";
+import { getMemoCardActions, getMemoSourceReferenceMeta, isMemoCardMenuReady, MEMO_ACTION_ICONS, MEMO_WORD_COUNT_ICON } from "./KnomoCardMetadata";
+import { positionDesktopMenu } from "./DesktopMenuPosition";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 import { updateComposerToolbar } from "./KnomoComposer";
@@ -230,15 +231,6 @@ interface CatalogMemoLoad {
 	status: CatalogReadStatus;
 }
 
-const MOBILE_MEMO_ACTION_ICONS: Record<MemoAction, string> = {
-	edit: "pencil",
-	reference: "quote",
-	"open-daily": "calendar-days",
-	"copy-text": "copy",
-	"copy-link": "link",
-	delete: "trash-2",
-	"mark-reviewed": "check",
-};
 const CARD_BATCH_SIZE = 50;
 const CATALOG_PAGE_SIZE = 50;
 const TRASH_MEMO_WINDOW_LIMIT = 150;
@@ -259,8 +251,6 @@ const MOBILE_VIEW_HEADER_SELECTORS = [
 	".mod-active .view-header",
 	".view-header",
 ];
-const TITLE_POPOVER_LEFT_DEFAULT = "max(16px, env(safe-area-inset-left))";
-const TITLE_POPOVER_TOP_DEFAULT = MOBILE_DRAWER_TOP_DEFAULT;
 
 type WindowWithIntersectionObserver = Window & {
 	IntersectionObserver?: typeof IntersectionObserver;
@@ -2597,6 +2587,7 @@ export class KnomoView extends ItemView {
 			}
 		});
 		this.mobileNavbarCompactController?.sync();
+		this.positionOpenCardMenus();
 	}
 
 	private syncManualRefreshButtonState(): void {
@@ -2694,43 +2685,24 @@ export class KnomoView extends ItemView {
 
 	private syncTitlePopoverPosition(): void {
 		const root = this.rootEl;
-		if (root === null || this.currentLayout === "mobile") {
+		if (root === null || this.currentLayout === "mobile" || !this.scopeMenuOpen) {
 			return;
 		}
 		const anchor = this.getTitlePopoverAnchor();
-		if (anchor === null) {
-			root.setCssProps({
-				"--knomo-title-popover-left": TITLE_POPOVER_LEFT_DEFAULT,
-				"--knomo-title-popover-top": TITLE_POPOVER_TOP_DEFAULT,
-			});
-			return;
-		}
-		const rect = anchor.getBoundingClientRect();
-		const container = anchor.closest(".knomo-main");
-		const containerRect = container?.getBoundingClientRect() ?? root.getBoundingClientRect();
-		const dropdownWidth = 168;
-		const popoverPadding = 12;
-		const maxLeft = Math.max(popoverPadding, Math.round(containerRect.width - dropdownWidth - popoverPadding));
-		const left = Math.min(
-			maxLeft,
-			Math.max(popoverPadding, Math.round(rect.left - containerRect.left)),
-		);
-		root.setCssProps({
-			"--knomo-title-popover-left": `${left}px`,
-			"--knomo-title-popover-top": `${Math.round(rect.bottom - containerRect.top + 6)}px`,
-		});
+		const menu = root.find(this.currentLayout === "desktop-wide" ? ".knomo-desktop-scope-popover" : ".knomo-mobile-scope-popover");
+		if (anchor === null || !menu?.instanceOf(HTMLElement)) return;
+		positionDesktopMenu(menu, anchor, anchor.closest<HTMLElement>(".knomo-main") ?? root, "start");
 	}
 
 	private getTitlePopoverAnchor(): HTMLElement | null {
 		if (this.currentLayout === "mobile") {
 			return this.mobileHeaderTitleController.getAnchor();
 		}
-		if (this.currentLayout === "desktop-narrow") {
-			for (const titleHost of this.titleHosts) {
-				if (titleHost.el.isConnected && titleHost.el.closest(".knomo-compact-header") !== null) {
-					const labelEl = titleHost.el.find(".knomo-title-label");
-					return labelEl?.instanceOf(HTMLElement) ? labelEl : titleHost.el;
-				}
+		const header = this.currentLayout === "desktop-narrow" ? ".knomo-compact-header" : ".knomo-topbar";
+		for (const titleHost of this.titleHosts) {
+			if (titleHost.el.isConnected && titleHost.el.closest(header) !== null) {
+				const labelEl = titleHost.el.find(".knomo-title-label");
+				return labelEl?.instanceOf(HTMLElement) ? labelEl : titleHost.el;
 			}
 		}
 		return null;
@@ -6329,11 +6301,11 @@ export class KnomoView extends ItemView {
 			build: (menu, select, createTitle) => {
 				for (const { action } of getMemoCardActions(memo)) {
 					const focus = action === "edit" || action === "reference" || action === "open-daily" ? "action" : "view";
-					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MOBILE_MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
+					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
 						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
 				}
 				menu.addSeparator();
-				menu.addItem(item => item.setTitle(createTitle(t("card.wordCount", { count: getMemoContentStats(memo).wordCount }))).setIcon("text").setIsLabel(true));
+				menu.addItem(item => item.setTitle(createTitle(t("card.wordCount", { count: getMemoContentStats(memo).wordCount }))).setIcon(MEMO_WORD_COUNT_ICON).setIsLabel(true));
 			},
 			onClose: () => {
 				if (this.popupState.activeMenuMemoId === memo.id) this.popupState.activeMenuMemoId = null;
@@ -6366,6 +6338,13 @@ export class KnomoView extends ItemView {
 		this.syncRootState();
 	}
 
+	private positionOpenCardMenus(): void {
+		if (this.currentLayout === "mobile" || this.activeMenuMemoId === null) return;
+		for (const card of this.cardFlowEl?.findAll(".knomo-card.is-menu-open") ?? []) {
+			this.positionOpenCardMenu(card);
+		}
+	}
+
 	private positionOpenCardMenu(card: HTMLElement): void {
 		const actions = card.find(".knomo-card-actions");
 		const head = card.find(".knomo-card-head");
@@ -6377,12 +6356,7 @@ export class KnomoView extends ItemView {
 		if (flowEl === null) {
 			return;
 		}
-		const flowRect = flowEl.getBoundingClientRect();
-		const headRect = head.getBoundingClientRect();
-		const menuHeight = actions.offsetHeight;
-		const spaceBelow = flowRect.bottom - 8 - headRect.bottom - 6;
-		const spaceAbove = headRect.top - flowRect.top - 8 - 6;
-		card.toggleClass("is-menu-above", menuHeight > spaceBelow && spaceAbove > spaceBelow);
+		card.toggleClass("is-menu-above", positionDesktopMenu(actions, head, flowEl, "end"));
 	}
 
 	private prepareDesktopDrawer(): boolean {
@@ -6702,6 +6676,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleCardFlowScroll(): void {
+		this.positionOpenCardMenus();
 		if (Platform.isMobile && this.cardFlowEl) this.memoMarkdownRenderer.prioritizeVisible("card-flow", this.cardFlowEl);
 		if (this.activeNav === "time-buoy") {
 			const cardFlow = this.cardFlowEl;

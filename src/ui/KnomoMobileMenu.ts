@@ -88,11 +88,11 @@ export class KnomoMobileMenu {
 				}
 			}, (text, opensInput = false) => {
 				// 使用公开的 DocumentFragment 标题定位本菜单，不依赖 Menu 的私有 DOM 属性。
-				const title = doc.createElement("span");
+				const title = doc.adoptNode(createSpan());
 				title.textContent = text;
 				if (opensInput) title.setAttribute("data-knomo-menu-input", "");
 				titleElements.push(title);
-				const fragment = doc.createDocumentFragment();
+				const fragment = doc.adoptNode(createFragment());
 				fragment.appendChild(title);
 				return fragment;
 			});

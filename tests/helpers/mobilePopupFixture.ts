@@ -77,9 +77,11 @@ export async function createMobilePopupFixture(action: MobilePopupAction = "save
 	win.Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 	win.Range.prototype.getBoundingClientRect = () => new win.DOMRect();
 	const previous = new Map<string, PropertyDescriptor | undefined>();
-	for (const name of ["window", "document", "Node", "Element", "HTMLElement", "HTMLInputElement", "Window", "MutationObserver", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "createSpan"]) {
+	for (const name of ["window", "document", "Node", "Element", "HTMLElement", "HTMLInputElement", "Window", "MutationObserver", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "createSpan", "createFragment"]) {
 		previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-		const source = name === "createSpan" ? () => win.document.createElement("span") : name === "window" ? win : (win as unknown as Record<string, unknown>)[name];
+		const source = name === "createSpan" ? () => win.document.createElement("span")
+			: name === "createFragment" ? () => win.document.createDocumentFragment()
+			: name === "window" ? win : (win as unknown as Record<string, unknown>)[name];
 		Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: typeof source === "function" && ["getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"].includes(name) ? source.bind(win) : source });
 	}
 	const cleanups: Array<() => void> = [];

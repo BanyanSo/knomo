@@ -116,7 +116,7 @@ function markTextRuns(runs: readonly TextRun[], ranges: readonly { from: number;
 			if (to <= from) continue;
 			const tail = run.node.splitText(to);
 			const hit = run.node.splitText(from);
-			const mark = hit.ownerDocument.createElement("mark");
+			const mark = hit.ownerDocument.adoptNode(createEl("mark"));
 			mark.className = "knomo-search-hit";
 			hit.parentNode?.insertBefore(mark, hit); mark.appendChild(hit);
 			// 保留原有元素，只包裹文字节点；链接与 checkbox 仍使用原绑定。

@@ -75,6 +75,30 @@ async function createHarness() {
 	};
 }
 
+test("menu titles stay plain text and belong to the trigger document when helpers use another document", async () => {
+	const h = await createHarness();
+	try {
+		const doc = h.f.win.document;
+		const helperDocument = doc.implementation.createHTMLDocument("helper window");
+		Object.defineProperty(globalThis, "createSpan", { configurable: true, writable: true, value: () => helperDocument.createElement("span") });
+		Object.defineProperty(globalThis, "createFragment", { configurable: true, writable: true, value: () => helperDocument.createDocumentFragment() });
+		const text = '菜单 <img src="x"> & 搜索';
+		h.controller.open({ kind: "scope", trigger: h.trigger, onClose: () => undefined,
+			build(menu, _select, createTitle) {
+				const title = createTitle(text, true);
+				assert.equal(title.ownerDocument, doc);
+				assert.equal(title.firstChild?.ownerDocument, doc);
+				assert.equal(title.textContent, text);
+				assert.equal(title.querySelector("img"), null);
+				assert.ok(title.querySelector("[data-knomo-menu-input]"));
+				menu.addItem(item => item.setTitle(title));
+			},
+		});
+		assert.equal(h.menus[0].doc, doc);
+		assert.equal(h.menus[0].items[0].title, text);
+	} finally { h.close(); }
+});
+
 test("mobile Card Menu delegates to host and retains the selected observation instead of looking up a new memo", async () => {
 	const h = await createHarness();
 	try {

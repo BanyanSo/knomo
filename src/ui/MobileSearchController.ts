@@ -143,7 +143,7 @@ export class MobileSearchController {
 
 	set searchQuery(query: string) {
 		this.query = query;
-		if (this.open) this.refreshAppliedResults();
+		if (this.open) void this.refreshAppliedResults();
 	}
 
 	get searchDateFilter(): SearchDateFilter | null {

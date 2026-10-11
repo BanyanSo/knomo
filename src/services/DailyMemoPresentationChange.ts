@@ -21,12 +21,12 @@ export function buildDailyMemoPresentationChange(
 	const after = prepared.after.observations.filter(memo => !sameObservation(memo, changedAfter));
 	// 提交只替换/插入/删除指定区间；其余 occurrence 按原顺序对应，hash 只复核未变的 raw block。
 	const unchanged = before.length === after.length && before.every((memo, index) => {
-		const next = after[index]!;
+		const next = after[index];
 		return memo.rawBlockHash === next.rawBlockHash && memo.time === next.time
 			&& memo.logicalDate === next.logicalDate && memo.section === next.section;
 	});
 	const retained = new Map(before.map((memo, index) => [
-		observationHandleKey(memo), unchanged ? after[index]! : null,
+		observationHandleKey(memo), unchanged ? after[index] : null,
 	]));
 	return {
 		logicalDate: prepared.logicalDate,

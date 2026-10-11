@@ -18,7 +18,7 @@ export function splitSearchGraphemes(text: string): Grapheme[] {
 	for (const char of text) {
 		const regional = /[\u{1f1e6}-\u{1f1ff}]/u.test(char);
 		const previous = parts[parts.length - 1];
-		if (previous && (/\p{Mark}|[\u200d\ufe0f\u{1f3fb}-\u{1f3ff}]/u.test(char)
+		if (previous && (/\p{Mark}|\u200d|\ufe0f|[\u{1f3fb}-\u{1f3ff}]/u.test(char)
 			|| previous.text.endsWith("\u200d") || (regional && regionalCount % 2 === 1))) {
 			previous.text += char; previous.to += char.length;
 		} else parts.push({ text: char, from: offset, to: offset + char.length });

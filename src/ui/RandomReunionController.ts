@@ -138,7 +138,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	reconcileMemos(memos: TMemo[], expected: TMemo[]): boolean {
 		if (this.memos !== expected) return false;
 		const changed = memos.length !== expected.length
-			|| memos.some((memo, index) => getMemoRenderRevision(memo) !== getMemoRenderRevision(expected[index]!));
+			|| memos.some((memo, index) => getMemoRenderRevision(memo) !== getMemoRenderRevision(expected[index]));
 		if (!changed) return false;
 		const removed = memos.length < expected.length;
 		this.cancelPending();

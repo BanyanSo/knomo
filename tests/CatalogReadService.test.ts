@@ -162,30 +162,24 @@ test("浮标正文转换期间索引变化时拒绝提交旧页", async () => {
 	assert.deepEqual(page.items, []);
 });
 
-test("文本搜索的统计、桌面卡片与移动端匹配在全角及空白归一化后保持一致", async () => {
+test("文本搜索的统计、查询和共享卡片筛选在全角及空白归一化后保持一致", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const { filterVisibleMemos, memoMatchesSearch } = await import("../src/ui/KnomoMemoFilter");
+	const { filterCatalogMemos } = await import("../src/ui/KnomoMemoFilter");
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	const store = new InMemoryMemoCatalogStore();
 	const catalog = new MemoCatalogService(store);
 	const contents = ["ＡＢＣ", "alpha   beta", "alpha\n\tbeta", "unrelated"];
 	await seedCatalog(catalog, store, contents.map((content, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, content)));
 	const service = new CatalogReadService({ catalog });
-	const dailyStatus = { enabled: false, folder: null, format: null } as const;
 	for (const [text, expected] of [["abc", 1], ["ＡＢＣ", 1], ["alpha beta", 2], ["ALPHA\t  BETA", 2], ["missing", 0]] as const) {
 		const page = await service.query({ text, limit: 50 });
 		const memos = page.items.map(toCatalogMemoView);
 		assert.equal((await service.count({ text })).count, expected);
 		assert.equal(memos.length, expected);
-		assert.equal(filterVisibleMemos({
-			memos, randomMemos: [], shuffleDayMemos: [], activeNav: "all", activeTagKey: null,
-			scopeFilter: "all", normalizedQuery: text.trim().toLowerCase(), searchDateFilter: null,
-			recordStatsFilter: null, dailyStatus,
-		}).length, expected, `桌面：${text}`);
-		assert.equal(memos.filter((memo) => memoMatchesSearch(memo, text.trim().toLowerCase(), null, null, dailyStatus)).length, expected, `移动端：${text}`);
+		assert.equal(filterCatalogMemos(memos, { text }).length, expected, `卡片筛选：${text}`);
 	}
 	await store.close();
 });
@@ -196,7 +190,7 @@ test("实际 Catalog 链路按正文、标签、链接和图片搜索，并保�
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	const { memoMatchesSearch } = await import("../src/ui/KnomoMemoFilter");
+	const { filterCatalogMemos } = await import("../src/ui/KnomoMemoFilter");
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	const sourcePath = "Daily/2026-09-01.md";
 	const { observations } = new DiaryMemoParser().parseRevision({
@@ -207,14 +201,13 @@ test("实际 Catalog 链路按正文、标签、链接和图片搜索，并保�
 	const catalog = new MemoCatalogService(store);
 	await seedCatalog(catalog, store, observations);
 	const service = new CatalogReadService({ catalog });
-	const dailyStatus = { enabled: false, folder: null, format: null } as const;
 	for (const text of ["hello knomo", "project", "linked note", "clip.png"]) {
 		const page = await service.query({ text, limit: 1 });
 		assert.equal(page.items.length, 1, text);
 		assert.equal((await service.count({ text })).count, 1, text);
 		const memo = toCatalogMemoView(page.items[0]);
 		assert.equal(memo.createdAt, "2026-09-01T06:04");
-		assert.equal(memoMatchesSearch(memo, text, null, null, dailyStatus), true, text);
+		assert.deepEqual(filterCatalogMemos([memo], { text }), [memo], text);
 	}
 	store.close();
 });
@@ -545,7 +538,7 @@ test("全库摘要和标签 facet 来自 Catalog 聚合，不受查询分页影�
 
 test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", async () => {
 	await ensureObsidianStub();
-	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { CatalogReadService, buildRecordStatsCatalogQuery } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
@@ -576,23 +569,25 @@ test("部分扫描只开放已覆盖范围，不伪装成完整全库统计", as
 	});
 	assert.equal(await service.getCoverageForRange("2026-08-20", "2026-08-20"), true);
 	assert.equal(await service.getCoverageForRange("2026-08-19", "2026-08-20"), false);
-	const pending = await service.queryRecordStatsDrilldown({
+	const pending = await service.query({ ...buildRecordStatsCatalogQuery({
 		type: "range",
 		startDate: "2026-07-01",
 		endDateExclusive: "2026-09-01",
-	}, { limit: 50 });
-	assert.deepEqual(pending.items, []);
+	}).query, limit: 50 });
+	// 统一查询展示已索引条目，同时保留历史构建状态和未知总数。
+	assert.deepEqual(pending.items.map(item => item.content), ["known"]);
+	assert.equal(pending.status.content, "scanning");
 	assert.equal(pending.readState, "history_building");
-	assert.equal((await service.countRecordStatsDrilldown({
+	assert.equal((await service.count(buildRecordStatsCatalogQuery({
 		type: "range",
 		startDate: "2026-07-01",
 		endDateExclusive: "2026-09-01",
-	})).count, null);
+	}).query)).count, null);
 });
 
 test("往日漫游按同日号查询、排除当天并支持跨页", async () => {
 	await ensureObsidianStub();
-	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { CatalogReadService, buildReviewCatalogQuery } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
@@ -605,9 +600,9 @@ test("往日漫游按同日号查询、排除当天并支持跨页", async () =>
 	]);
 	const service = new CatalogReadService({ catalog, });
 
-	const first = await service.queryReviewItems(new Date(2026, 2, 15), { limit: 1 });
-	const second = await service.queryReviewItems(new Date(2026, 2, 15), { limit: 1, cursor: first.nextCursor });
-	const count = await service.countReviewItems(new Date(2026, 2, 15));
+	const first = await service.query({ ...buildReviewCatalogQuery(new Date(2026, 2, 15)), limit: 1 });
+	const second = await service.query({ ...buildReviewCatalogQuery(new Date(2026, 2, 15)), limit: 1, cursor: first.nextCursor });
+	const count = await service.count(buildReviewCatalogQuery(new Date(2026, 2, 15)));
 
 	assert.deepEqual(first.items.map((item) => item.content), ["february"]);
 	assert.deepEqual(second.items.map((item) => item.content), ["november"]);
@@ -619,7 +614,7 @@ test("往日漫游按同日号查询、排除当天并支持跨页", async () =>
 
 test("2 月 29 日往日漫游只返回历史闰日", async () => {
 	await ensureObsidianStub();
-	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { CatalogReadService, buildReviewCatalogQuery } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
@@ -631,14 +626,14 @@ test("2 月 29 日往日漫游只返回历史闰日", async () => {
 	]);
 	const service = new CatalogReadService({ catalog, });
 
-	const page = await service.queryReviewItems(new Date(2024, 1, 29), { limit: 50 });
+	const page = await service.query({ ...buildReviewCatalogQuery(new Date(2024, 1, 29)), limit: 50 });
 
 	assert.deepEqual(page.items.map((item) => item.content), ["leap day"]);
 });
 
 test("记录统计钻取在分页前处理标签、引用、小时和并列日期", async () => {
 	await ensureObsidianStub();
-	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { CatalogReadService, buildRecordStatsCatalogQuery } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
@@ -656,24 +651,22 @@ test("记录统计钻取在分页前处理标签、引用、小时和并列日�
 	const service = new CatalogReadService({ catalog, });
 
 	const range = { startDate: "2026-08-01", endDateExclusive: "2026-08-05" };
-	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "day", date: "2026-08-03" }, { limit: 50 })).items.map((item) => item.content), ["identity"]);
-	assert.equal((await service.queryRecordStatsDrilldown({ type: "month", month: "2026-08" }, { limit: 50 })).items.length, 4);
-	assert.equal((await service.queryRecordStatsDrilldown({ type: "range", ...range }, { limit: 50 })).items.length, 4);
-	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "with-tag", ...range }, { limit: 50 })).items.map((item) => item.content), ["parent"]);
-	assert.equal((await service.queryRecordStatsDrilldown({ type: "no-tag", ...range }, { limit: 50 })).items.length, 3);
-	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "with-image", ...range }, { limit: 50 })).items.map((item) => item.content), ["image"]);
-	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "tag", ...range, tagKey: "project", tagLabel: "Project" }, { limit: 50 })).items.map((item) => item.content), ["parent"]);
-	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "hour", ...range, hour: 9 }, { limit: 50 })).items.map((item) => item.content), ["explicit [[Daily#^abc]]", "parent"]);
-	const references = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1 });
-	const moreReferences = await service.queryRecordStatsDrilldown({ type: "references", ...range }, { limit: 1, cursor: references.nextCursor });
-	assert.deepEqual(moreReferences.items, []);
-	assert.equal(moreReferences.nextCursor, null);
-	const referenceCount = await service.countRecordStatsDrilldown({ type: "references", ...range });
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "day", date: "2026-08-03" }).query, limit: 50 })).items.map((item) => item.content), ["identity"]);
+	assert.equal((await service.query({ ...buildRecordStatsCatalogQuery({ type: "month", month: "2026-08" }).query, limit: 50 })).items.length, 4);
+	assert.equal((await service.query({ ...buildRecordStatsCatalogQuery({ type: "range", ...range }).query, limit: 50 })).items.length, 4);
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "with-tag", ...range }).query, limit: 50 })).items.map((item) => item.content), ["parent"]);
+	assert.equal((await service.query({ ...buildRecordStatsCatalogQuery({ type: "no-tag", ...range }).query, limit: 50 })).items.length, 3);
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "with-image", ...range }).query, limit: 50 })).items.map((item) => item.content), ["image"]);
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "tag", ...range, tagKey: "project", tagLabel: "Project" }).query, limit: 50 })).items.map((item) => item.content), ["parent"]);
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "hour", ...range, hour: 9 }).query, limit: 50 })).items.map((item) => item.content), ["explicit [[Daily#^abc]]", "parent"]);
+	const references = await service.query({ ...buildRecordStatsCatalogQuery({ type: "references", ...range }).query, limit: 1 });
+	assert.equal(references.nextCursor, null, "统一 evaluator 在分页前判定引用条件，不提供无结果的额外页面");
+	const referenceCount = await service.count(buildRecordStatsCatalogQuery({ type: "references", ...range }).query);
 	assert.deepEqual(references.items.map((item) => item.content), ["explicit [[Daily#^abc]]"]);
 	assert.equal(referenceCount.count, 1);
 	assert.equal(referenceCount.complete, true);
-	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-notes", dates: ["2026-08-01", "2026-08-04"] }, { limit: 50 })).items.map((item) => item.content), ["image", "parent"]);
-	assert.deepEqual((await service.queryRecordStatsDrilldown({ type: "max-daily-words", dates: ["2026-08-02", "2026-08-03"] }, { limit: 50 })).items.map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "max-daily-notes", dates: ["2026-08-01", "2026-08-04"] }).query, limit: 50 })).items.map((item) => item.content), ["image", "parent"]);
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "max-daily-words", dates: ["2026-08-02", "2026-08-03"] }).query, limit: 50 })).items.map((item) => item.content), ["identity", "explicit [[Daily#^abc]]"]);
 });
 
 test("记录统计从 Daily aggregate 构建，引用计数取当前 Markdown", async () => {
@@ -704,7 +697,7 @@ test("Daily 混合时间精度、重复 occurrence、分页与版本刷新贯穿
 	await ensureObsidianStub();
 	const { createHash } = await import("node:crypto");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { CatalogReadService, buildRecordStatsCatalogQuery } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const store = new InMemoryMemoCatalogStore();
@@ -727,7 +720,7 @@ test("Daily 混合时间精度、重复 occurrence、分页与版本刷新贯穿
 	assert.ok(items.every(item => item.resolved.kind === "observation" && item.capabilities.markdown.edit));
 	assert.equal("snapshotRevision" in first, false);
 	assert.equal((await service.count({})).count, 4);
-	assert.equal((await service.countRecordStatsDrilldown({ type: "hour", startDate: "2026-08-22", endDateExclusive: "2026-08-23", hour: 10 })).count, 4);
+	assert.equal((await service.count(buildRecordStatsCatalogQuery({ type: "hour", startDate: "2026-08-22", endDateExclusive: "2026-08-23", hour: 10 }).query)).count, 4);
 	assert.equal((await service.buildRecordStats(async () => {}, () => true))?.daily.get("2026-08-22")?.hourCounts[10], 4);
 	const repeated = await service.query({ limit: 4 });
 	assert.deepEqual(repeated.items.map(item => item.renderKey), items.map(item => item.renderKey));

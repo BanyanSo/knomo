@@ -25,7 +25,7 @@ test("card flow owns one shared content-end marker", () => {
 	assert.match(styles, /\.knomo-plugin \.knomo-card-flow::after \{[\s\S]*?content: "";[\s\S]*?block-size: var\(--knomo-content-end-space\);[\s\S]*?pointer-events: none;/u);
 	assert.doesNotMatch(styles, /\.knomo-plugin\.is-record-stats \.knomo-card-flow[\s\S]*?padding-bottom/u);
 	assert.doesNotMatch(styles, /\.knomo-plugin\.is-time-buoy \.knomo-card-flow[\s\S]*?padding-bottom/u);
-	assert.doesNotMatch(styles, /\.knomo-plugin \.knomo-record-stats-page \{[\s\S]*?padding-bottom/u);
+	assert.doesNotMatch(styles, /\.knomo-plugin \.knomo-record-stats-page \{[^}]*?(?:^|\n)\s*padding-bottom\s*:/u);
 	assert.doesNotMatch(styles, /\.knomo-plugin\.is-[\w-]+(?:\.is-[\w-]+)* \.knomo-card-flow \{[^}]*?(?:padding|margin)-(?:bottom|block-end)/u);
 });
 
@@ -61,7 +61,7 @@ test("desktop search inherits the shared 60px card-flow end space", () => {
 test("main and search card flows clip only closed menu-card overflow", () => {
 	assert.match(
 		styles,
-		/\.knomo-plugin \.knomo-card-flow \.knomo-card\.has-card-actions:not\(\.is-menu-open\),\s*\.knomo-plugin \.knomo-mobile-search-results \.knomo-card\.has-card-actions:not\(\.is-menu-open\) \{\s*overflow: clip;\s*\}/u,
+		/\.knomo-plugin \.knomo-card-flow \.knomo-card\.has-card-actions:not\(\.is-menu-open\):not\(\.is-menu-closing\),\s*\.knomo-plugin \.knomo-mobile-search-results \.knomo-card\.has-card-actions:not\(\.is-menu-open\):not\(\.is-menu-closing\) \{\s*overflow: clip;\s*\}/u,
 	);
 	assert.match(styles, /\.knomo-plugin \.knomo-card-actions \{[\s\S]*?position: absolute;[\s\S]*?visibility: hidden;/u);
 	assert.match(styles, /\.knomo-plugin \.knomo-card\.is-menu-above \.knomo-card-actions \{/u);

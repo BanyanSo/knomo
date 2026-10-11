@@ -92,8 +92,11 @@ export function renderKnomoLoadMoreButton(container: HTMLElement, options: Rende
 	});
 }
 
-export function renderKnomoEmptyState(container: HTMLElement, title = t("empty.generic"), description = ""): HTMLElement {
+export function renderKnomoEmptyState(container: HTMLElement, title = t("empty.generic"), description = "", loading = false): HTMLElement {
 	const emptyState = container.createDiv({ cls: "knomo-empty-state" });
+	if (loading) {
+		emptyState.setAttrs({ role: "status", "aria-live": "polite", "aria-atomic": "true" });
+	}
 	emptyState.createDiv({ cls: "knomo-empty-title", text: title });
 	if (description.length > 0) {
 		emptyState.createDiv({ cls: "knomo-empty-description", text: description });

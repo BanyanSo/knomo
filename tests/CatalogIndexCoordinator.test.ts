@@ -7,6 +7,55 @@ import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("索引准备分片期间修改、直接提交和卸载不会发布旧分区", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	for (const scenario of ["scan-modify", "scan-close", "commit-modify"] as const) await t.test(scenario, { timeout: 5000 }, async t => {
+		const path = "Journal/2026-08-22.md", before = "## Memos\n- 09:00 before\n", after = "## Memos\n- 09:00 after\n";
+		const fixture = await createCoordinatorFixture([{ path, content: before, mtime: 10 }]);
+		const store = new InMemoryMemoCatalogStore(), service = new MemoCatalogService(store), parser = new DiaryMemoParser(async bytes => sha256(bytes));
+		const prepare = service.replaceFile.bind(service), replace = store.replaceFilePartition.bind(store);
+		let release = () => {}, started = () => {}, blockPreparation = scenario !== "commit-modify";
+		const blocked = new Promise<void>(resolve => { release = resolve; });
+		const preparing = new Promise<void>(resolve => { started = resolve; });
+		const published: string[][] = [];
+		t.mock.method(service, "replaceFile", async (...[input, runtime]: Parameters<typeof prepare>) => {
+			if (!blockPreparation || runtime === undefined) return prepare(input, runtime);
+			blockPreparation = false;
+			return prepare(input, { ...runtime, maxOperationsPerSlice: 1, yieldControl: async () => {
+				started(); await blocked; await runtime.yieldControl();
+			} });
+		});
+		t.mock.method(store, "replaceFilePartition", async (partition: Parameters<typeof replace>[0]) => {
+			published.push(partition.observations.map(item => item.content));
+			return replace(partition);
+		});
+		const coordinator = new CatalogIndexCoordinator(fixture.app, service, parser,
+			async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), { fullAuditIntervalMs: 10000, yieldControl: async () => undefined });
+		try {
+			coordinator.start(fixture.owner); await coordinator.initialize();
+			let committed: Promise<void> | null = null;
+			if (scenario === "commit-modify") {
+				await coordinator.waitForIdle(); published.length = 0;
+				fixture.setFile(path, before, 20); blockPreparation = true;
+				committed = coordinator.replaceCommittedFile({ file: fixture.file(path)!, logicalDate: "2026-08-22", content: before,
+					parsed: parser.parseRevision({ sourcePath: path, logicalDate: "2026-08-22", content: before, sourceRevision: "committed-before" }) });
+			}
+			await preparing;
+			if (scenario === "scan-close") fixture.unload();
+			else { fixture.setFile(path, after, 30); fixture.emitVaultEvent("modify", fixture.file(path)); }
+			const rejection = committed === null ? null : assert.rejects(committed, /source changed during preparation/);
+			release(); if (rejection !== null) await rejection;
+			await coordinator.waitForIdle();
+			assert.deepEqual(published, scenario === "scan-close" ? [] : [["after"]]);
+			if (scenario !== "scan-close") assert.deepEqual((await store.query({ limit: 10 })).items.map(item => item.content), ["after"]);
+		} finally { release(); fixture.unload(); }
+	});
+});
+
 test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB 下次启动复用新缓存", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator, CATALOG_CHECKPOINT_META_KEY } = await import("../src/services/CatalogIndexCoordinator");
@@ -18,7 +67,7 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 	const { hashText } = await import("../src/utils/hash");
 	const databaseName = `search-upgrade-${Date.now()}`;
 	for (const store of [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(databaseName, { factory: indexedDB, keyRange: IDBKeyRange })]) {
-		const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 中文ABC项目2026\n", mtime: 10 }];
+		const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 中文ABC项目2026 **完成** [[Hidden|可读别名]]\n", mtime: 10 }];
 		for (let boot = 0; boot < 3; boot += 1) {
 			const fixture = await createCoordinatorFixture(files);
 			const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(store),
@@ -29,22 +78,24 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 				await coordinator.initialize();
 				await coordinator.waitForIdle();
 				assert.equal(fixture.readCount(), boot === 2 ? 0 : 1, `boot ${boot}`);
-				for (const text of ["中", "中文", "项目", "ABC"]) {
+				for (const text of ["中", "中文", "项目", "ABC", "可读别名"]) {
 					assert.equal((await store.query({ text, limit: 1 })).items.length, 1, text);
 					assert.equal((await store.count({ text })).count, 1, text);
 				}
 			} finally { fixture.unload(); }
 			if (boot === 0) {
 				await store.open();
-				const batch = (await store.listFileRevisionBatches())[0];
-				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: 6 }));
+				const batch = await store.getFileRevisionBatch(files[0].path);
+				assert.ok(batch);
+				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: 7 }));
 				const oldPartition = buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
-					observations: batch.observations, parserVersion: 6, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
+					observations: batch.observations, parserVersion: 7, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
 				oldPartition.observations[0].searchTokens = ["中文abc项目2026", "中文a", "文ab", "abc", "bc项", "c项目", "项目2", "目20", "202", "026"];
+				Reflect.deleteProperty(oldPartition.observations[0], "searchBody");
 				await store.replaceFilePartition(oldPartition);
 				const checkpoint = await store.getMeta<Record<string, unknown>>(CATALOG_CHECKPOINT_META_KEY);
-				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: 6, settingsFingerprint: oldFingerprint });
-				assert.ok(CATALOG_PARSER_VERSION > 6);
+				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: 7, settingsFingerprint: oldFingerprint });
+				assert.ok(CATALOG_PARSER_VERSION > 7);
 				store.close();
 			}
 		}
@@ -1299,7 +1350,8 @@ test("Things 旧解析版本重建未编辑 Daily，后续 warm start 不重解�
 	first.unload();
 	const { buildCatalogPartition } = await import("../src/services/MemoCatalogService");
 	const { CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
-	const batch = (await store.listFileRevisionBatches())[0];
+	const batch = await store.getFileRevisionBatch(files[0].path);
+	assert.ok(batch);
 	await store.replaceFilePartition(buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
 		observations: batch.observations.map(item => ({ ...item, tasks: [] })), parserVersion: CATALOG_PARSER_VERSION - 1,
 		settingsFingerprint: batch.file.settingsFingerprint, auditedAt: batch.file.auditedAt }));

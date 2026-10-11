@@ -35,6 +35,16 @@ export interface TrashCardActionMeta {
 }
 
 const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"];
+export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
+	edit: "pencil",
+	reference: "quote",
+	"open-daily": "calendar-days",
+	"copy-text": "copy",
+	"copy-link": "link",
+	delete: "trash-2",
+	"mark-reviewed": "check",
+};
+export const MEMO_WORD_COUNT_ICON = "text";
 const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
 const CJK_CONTENT_MIN_HAN_COUNT = 8;
 const CJK_CONTENT_MIN_HAN_RATIO = 0.25;

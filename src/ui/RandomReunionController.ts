@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
+import { getMemoRenderRevision } from "./MemoRenderRevision";
 
 const RANDOM_REUNION_DEFAULT_COUNT = 10;
 
@@ -114,6 +115,41 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 				this.options.requestRender();
 			}
 		}
+	}
+
+	applyMemoChanges(changes: ReadonlyMap<string, TMemo | null>): boolean {
+		if (this.memos === null || !this.memos.some(memo => changes.has(memo.id))) return false;
+		this.cancelPending();
+		this.memos = this.memos.flatMap(memo => {
+			if (!changes.has(memo.id)) return [memo];
+			const current = changes.get(memo.id);
+			return current ? [current] : [];
+		});
+		this.status = this.memos.length > 0 ? "ready" : "empty";
+		this.error = null;
+		if (this.options.isRandomActive()) this.options.requestRender();
+		return true;
+	}
+
+	removeMemo(memoId: string): boolean {
+		return this.applyMemoChanges(new Map([[memoId, null]]));
+	}
+
+	reconcileMemos(memos: TMemo[], expected: TMemo[]): boolean {
+		if (this.memos !== expected) return false;
+		const changed = memos.length !== expected.length
+			|| memos.some((memo, index) => getMemoRenderRevision(memo) !== getMemoRenderRevision(expected[index]!));
+		if (!changed) return false;
+		const removed = memos.length < expected.length;
+		this.cancelPending();
+		this.memos = memos;
+		this.status = memos.length > 0 ? "ready" : "empty";
+		this.error = removed ? t("random.sourceChanged") : null;
+		if (this.options.isRandomActive()) {
+			if (removed) this.options.showNotice(this.error!);
+			this.options.requestRender();
+		}
+		return true;
 	}
 
 	async markReviewed(memoId: string): Promise<void> {

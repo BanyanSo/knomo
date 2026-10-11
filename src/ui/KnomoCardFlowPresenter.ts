@@ -21,6 +21,8 @@ export type CardFlowPresentation =
 		type: "empty";
 		title: string;
 		description: string;
+		headers?: CardFlowHeader[];
+		loading?: boolean;
 	}
 	| {
 		type: "items";
@@ -83,7 +85,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 		return {
 			type: "empty",
 			title: options.regularFilterCopy?.emptyTitle ?? getEmptyStateTitle(options.activeNav),
-			description: "",
+			description: options.activeNav === "random" ? options.randomReunionError ?? "" : "",
+			...(options.activeNav === "random" ? { headers: [{ type: "random-toolbar" as const, count: 0 }] } : {}),
 		};
 	}
 

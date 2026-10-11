@@ -31,7 +31,7 @@ import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MemoCommandService } from "./services/MemoCommandService";
-import { MarkdownMutationService } from "./services/MarkdownMutationService";
+import { MarkdownMutationService, type MarkdownCatalogCommitInput } from "./services/MarkdownMutationService";
 import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "./services/MemoCatalogStore";
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
 import { PluginDataStore } from "./services/PluginDataStore";
@@ -257,10 +257,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 			getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 			getInsertPosition: () => this.settingsService.getSettings().dailyInsertPosition,
-			updateCatalogPartition: async (input) => {
-				if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
-				await this.catalogIndexCoordinator.replaceCommittedFile(input);
-			},
+			updateCatalogPartition: (input) => this.updateCommittedCatalogPartition(input),
 			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
 			removeEmptyCreatedDailyFile: async (file) => {
 				if ((await this.app.vault.cachedRead(file)).length === 0) await this.app.fileManager.trashFile(file);
@@ -292,7 +289,7 @@ export default class KnomoPlugin extends Plugin {
 				return date !== null && formatDatePart(date) === logicalDate && file instanceof TFile ? file : null;
 			},
 			getDailyFileForDate: (date) => dailyNoteService.getOrCreateDailyNoteForDateWithConfig(parseLogicalDate(date), getEffectiveDailyConfig()),
-			updateCatalogPartition: (input) => this.catalogIndexCoordinator!.replaceCommittedFile(input),
+			updateCatalogPartition: (input) => this.updateCommittedCatalogPartition(input),
 			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator!.refreshPaths(paths),
 		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
 		const getTrashService = () => {
@@ -552,6 +549,7 @@ export default class KnomoPlugin extends Plugin {
 			const leaf = existingLeaves[0];
 			await this.app.workspace.revealLeaf(leaf);
 			this.app.workspace.setActiveLeaf(leaf, { focus: true });
+			if (leaf.view instanceof KnomoView) leaf.view.recoverMobileViewFocus();
 			this.requestMobileNavbarSync(leaf);
 			return;
 		}
@@ -563,6 +561,7 @@ export default class KnomoPlugin extends Plugin {
 		});
 		await this.app.workspace.revealLeaf(leaf);
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		if (leaf.view instanceof KnomoView) leaf.view.recoverMobileViewFocus();
 		this.requestMobileNavbarSync(leaf);
 	}
 
@@ -587,6 +586,23 @@ export default class KnomoPlugin extends Plugin {
 			return;
 		}
 		await this.viewRefreshScheduler.queue();
+	}
+
+	private async updateCommittedCatalogPartition(input: MarkdownCatalogCommitInput): Promise<void> {
+		if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
+		const committed = this.catalogIndexCoordinator.replaceCommittedFile(input);
+		const change = input.presentationChange;
+		const presentation = change === undefined ? Promise.resolve() : Promise.all(
+			this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async leaf => {
+				if (!(leaf.view instanceof KnomoView)) return;
+				try { await leaf.view.handleDailyMemoPresentationChange(change, committed); }
+				catch (error) { console.error("Knomo committed card refresh failed", error); }
+			}),
+		);
+		await committed;
+		await presentation;
+		// 卡片展示失败不改变 Daily/Catalog 成功状态；普通查询、浮标和统计仍走现有合并刷新。
+		void this.queueRefreshOpenViews().catch((error: unknown) => console.error("Knomo view refresh failed", error));
 	}
 
 	private async runRefreshOpenViews(forceRebuild = false): Promise<void> {

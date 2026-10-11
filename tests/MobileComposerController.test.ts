@@ -74,6 +74,23 @@ test("positions the mobile composer from the toolbar anchor inset", () => {
 	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
 });
 
+test("measures the current toolbar before an immediate keyboard signal on every open", () => {
+	const h = createHarness("mobile", { onFocusInput: () => h.win.dispatchKeyboardEvent("keyboardWillShow", 300) });
+	prepareComposerGeometry(h, 500, 480);
+	for (let cycle = 0; cycle < 3; cycle += 1) {
+		// 首次准备后工具栏可能因字号、编辑/引用模式变化；关闭也会清空锚点。
+		h.composerBar.bottom = 475 - cycle * 5;
+		const expectedOffset = `${300 + 4 - (500 - h.composerBar.bottom)}px`;
+		h.controller.open();
+		h.win.flushAnimationFrames();
+		assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), expectedOffset, "首帧必须使用当前工具栏间距");
+		h.win.flushAllTimers();
+		assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), expectedOffset, "键盘稳定后不能再补算出另一位置");
+		h.controller.closeKeepingDraft(); h.win.flushAllTimers();
+		assert.equal(h.controller.getPhase(), "closed");
+	}
+});
+
 test("positions the mobile composer from the toolbar button row visual bottom", () => {
 	const harness = createHarness();
 	const toolButton = harness.composerBar.createDiv({ cls: "knomo-tool-button" });
@@ -365,14 +382,14 @@ test("closes the mobile composer while keeping the prepared layer mounted", () =
 
 	const layer = harness.getLayer();
 	assert.equal(harness.controller.getPhase(), "closing");
-	assert.equal(layer?.hasClass("is-open"), true);
+	assert.equal(layer?.hasClass("is-open"), false);
 	assert.equal(layer?.hasClass("is-closing"), true);
-	assert.equal(layer?.hasClass("is-keyboard-tracking"), true);
+	assert.equal(layer?.hasClass("is-keyboard-tracking"), false);
 	assert.equal(harness.input.blurCount, 1);
 
 	harness.win.visualViewport.height = 800;
 	harness.win.visualViewport.dispatchEvent("resize");
-	harness.win.flushAnimationFrames();
+	harness.win.flushAnimationFrameCycles(5);
 
 	assert.equal(layer?.hasClass("is-open"), false);
 
@@ -390,6 +407,85 @@ test("closes the mobile composer while keeping the prepared layer mounted", () =
 	assert.equal(harness.updateSendButtonCalls, 1);
 	assert.equal(harness.updateCancelEditButtonCalls, 1);
 	assert.equal(harness.closedCalls, 1);
+});
+
+test("repeated close does not blur twice or restart the closing sequence", () => {
+	const h = createHarness(); h.controller.open(); h.win.flushAnimationFrames();
+	h.controller.closeKeepingDraft(); h.controller.closeKeepingDraft();
+	assert.equal(h.input.blurCount, 1);
+	h.win.flushAllTimers(); assert.equal(h.closedCalls, 1);
+});
+
+test("closing starts visual exit immediately while the keyboard is still visible", () => {
+	const h = createHarness(); prepareComposerGeometry(h, 500, 480);
+	h.win.visualViewport.height = 500; h.controller.open(); h.win.flushAnimationFrameCycles(2);
+	h.win.dispatchKeyboardEvent("keyboardWillShow", 300); h.win.flushAnimationFrames();
+	const offset = h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset");
+	h.controller.closeKeepingDraft();
+	assert.equal(h.getLayer()?.hasClass("is-open"), false, "退场不能等待 keyboardDidHide 或兜底计时器");
+	assert.equal(h.controller.getPhase(), "closing");
+	assert.equal(h.closedCalls, 0);
+	h.win.dispatchEvent("keyboardWillHide");
+	h.win.visualViewport.height = 800; h.win.visualViewport.dispatchEvent("resize");
+	h.win.flushAnimationFrameCycles(4);
+	assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), offset, "退场期间键盘回调不能重新定位面板");
+	h.win.flushAllTimers(); assert.equal(h.closedCalls, 1);
+});
+
+test("exit waits for both own properties and ignores child or previous-round events", () => {
+	const h = createHarness(); h.controller.prepare(); h.controller.open(); h.win.flushAnimationFrameCycles(3);
+	h.controller.closeKeepingDraft();
+	const content = h.getContent()!, backdrop = h.getBackdrop()!;
+	backdrop.transition("opacity", "transitioncancel");
+	assert.equal(h.closedCalls, 0, "旧过渡取消不是本轮收尾条件");
+	content.transition("transform", "transitionrun"); content.transition("opacity", "transitionrun"); backdrop.transition("opacity", "transitionrun");
+	content.transition("transform", "transitionend", h.input);
+	assert.equal(h.closedCalls, 0);
+	content.transition("transform"); assert.equal(h.closedCalls, 0);
+	content.transition("opacity"); assert.equal(h.closedCalls, 0, "面板结束仍需等待蒙版");
+	backdrop.transition("opacity"); assert.equal(h.closedCalls, 1);
+	h.win.flushAllTimers(); assert.equal(h.closedCalls, 1);
+	assert.equal(h.getLayer()?.inert, true);
+});
+
+test("zero transitions and reduced motion close immediately; each new visual stage rereads preference", () => {
+	for (const reduced of [false, true]) {
+		const h = createHarness(); h.win.reducedMotion = reduced;
+		if (!reduced) h.win.transitionDuration = "0s";
+		h.controller.open(); h.win.flushAnimationFrameCycles(3); h.controller.closeKeepingDraft();
+		assert.equal(h.closedCalls, 1); assert.equal(h.controller.getPhase(), "closed");
+		h.win.reducedMotion = false; h.win.transitionDuration = "240ms, 220ms";
+		h.controller.open(); h.win.flushAnimationFrameCycles(3); h.controller.closeKeepingDraft();
+		assert.equal(h.closedCalls, 1, "新的退出仍须等实际过渡");
+		h.win.flushAllTimers(); assert.equal(h.closedCalls, 2);
+	}
+});
+
+test("reopening invalidates old exit callbacks without resetting dock geometry or editor", () => {
+	const h = createHarness(); prepareComposerGeometry(h, 500, 480);
+	h.win.visualViewport.height = 500; h.controller.open(); h.win.flushAnimationFrameCycles(3);
+	const offset = h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset");
+	h.controller.closeKeepingDraft(); h.controller.open();
+	assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), offset);
+	assert.equal(h.getContent()?.inert, false);
+	h.win.flushAllTimers(); h.win.flushAnimationFrameCycles(3);
+	assert.equal(h.getComposerOpen(), true); assert.equal(h.closedCalls, 0);
+	h.win.visualViewport.height = 800; h.win.visualViewport.dispatchEvent("resize"); h.win.flushAnimationFrameCycles(3);
+	h.controller.closeKeepingDraft(); h.getContent()!.transition("transform", "transitionrun");
+	h.controller.open(); h.getContent()!.transition("transform"); h.getBackdrop()!.transition("opacity");
+	h.win.flushAllTimers(); assert.equal(h.closedCalls, 0); assert.equal(h.getComposerOpen(), true);
+	h.controller.closeKeepingDraft(); h.controller.dispose(); h.win.flushAllTimers();
+	assert.equal(h.closedCalls, 0, "销毁不补发关闭通知");
+});
+
+test("visual exit freezes measurements even if a host resize requests another layout", () => {
+	const h = createHarness(); h.controller.prepare(); h.controller.open(); h.win.flushAnimationFrameCycles(3);
+	h.controller.closeKeepingDraft();
+	const before = new Map(h.getLayer()!.style.values);
+	h.win.visualViewport.height = 300;
+	h.controller.scheduleResize(); h.win.flushAnimationFrameCycles(3);
+	assert.deepEqual(h.getLayer()!.style.values, before, "exit 不再受键盘/宿主布局调整驱动");
+	h.win.flushAllTimers(); assert.equal(h.closedCalls, 1);
 });
 
 function prepareComposerGeometry(
@@ -424,7 +520,22 @@ test("keyboard tracking pauses background work before focus and resumes only aft
 	assert.deepEqual(changes, [true, false, true, false]);
 });
 
-function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { onKeyboardTrackingChange?: (busy: boolean) => void } = {}) {
+test("parallel exit keeps background work paused until completion or disposal", () => {
+	for (const dispose of [false, true]) {
+		const changes: boolean[] = [];
+		const h = createHarness("mobile", { onKeyboardTrackingChange: busy => changes.push(busy) });
+		h.controller.prepare(); h.controller.open(); h.win.flushAnimationFrameCycles(3); h.win.flushAllTimers();
+		changes.length = 0;
+		h.controller.closeKeepingDraft();
+		assert.deepEqual(changes, [true], "停止键盘定位不能提前恢复后台索引");
+		if (dispose) h.controller.dispose();
+		h.win.flushAllTimers();
+		assert.deepEqual(changes, [true, false]);
+		assert.equal(h.closedCalls, dispose ? 0 : 1);
+	}
+});
+
+function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { onKeyboardTrackingChange?: (busy: boolean) => void; onFocusInput?: () => void } = {}) {
 	const win = new FakeWindow();
 	const doc = new FakeDocument();
 	const root = new FakeElement("div");
@@ -471,6 +582,7 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		},
 		focusInputNow: () => {
 			focusCalls += 1;
+			options.onFocusInput?.();
 		},
 		resizeInput: () => undefined,
 		syncRootState: () => {
@@ -508,6 +620,10 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		controller,
 		getComposerOpen: () => composerOpen,
 		getLayer: () => doc.body.children.find((child) => child.hasClass("knomo-mobile-composer-layer")) ?? null,
+		getBackdrop: () => {
+			const layer = doc.body.children.find(child => child.hasClass("knomo-mobile-composer-layer"));
+			return layer?.children.find(child => child.hasClass("knomo-mobile-composer-backdrop")) ?? null;
+		},
 		getContent: () => {
 			const layer = doc.body.children.find((child) => child.hasClass("knomo-mobile-composer-layer")) ?? null;
 			const stage = layer?.children.find((child) => child.hasClass("knomo-mobile-composer-stage")) ?? null;
@@ -553,6 +669,16 @@ class FakeStyle {
 }
 
 class FakeElement {
+	inert = false;
+	private readonly transitionListeners = new Map<string, Set<(event: TransitionEvent) => void>>();
+	addEventListener(type: string, handler: (event: TransitionEvent) => void): void {
+		const handlers = this.transitionListeners.get(type) ?? new Set(); handlers.add(handler); this.transitionListeners.set(type, handlers);
+	}
+	removeEventListener(type: string, handler: (event: TransitionEvent) => void): void { this.transitionListeners.get(type)?.delete(handler); }
+	transition(propertyName: string, type = "transitionend", target: FakeElement = this): void {
+		for (const handler of this.transitionListeners.get(type) ?? []) handler({ type, target, propertyName, timeStamp: 10 } as unknown as TransitionEvent);
+	}
+
 	readonly children: FakeElement[] = [];
 	readonly classes = new Set<string>();
 	readonly attrs = new Map<string, string>();
@@ -768,6 +894,14 @@ class FakeVirtualKeyboard {
 }
 
 class FakeWindow {
+	reducedMotion = false;
+	transitionDuration = "240ms, 220ms";
+	readonly performance = { now: () => 0 };
+	matchMedia(): { matches: boolean } { return { matches: this.reducedMotion }; }
+	getComputedStyle(): { transitionProperty: string; transitionDuration: string; transitionDelay: string } {
+		return { transitionProperty: "transform, opacity", transitionDuration: this.reducedMotion ? "0s" : this.transitionDuration, transitionDelay: "0s" };
+	}
+
 	innerHeight = 800;
 	readonly visualViewport = new FakeVisualViewport();
 	readonly virtualKeyboard = new FakeVirtualKeyboard();

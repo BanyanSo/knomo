@@ -135,6 +135,7 @@ test("Escape key closes the highest-priority active surface", async () => {
 	const cleanup = installDomGlobals();
 	try {
 		const mobileSearch = createHarness({
+			mobile: true,
 			escapeState: {
 				mobileSearchPageOpen: true,
 				composerOpen: true,
@@ -144,7 +145,7 @@ test("Escape key closes the highest-priority active surface", async () => {
 		});
 		const mobileSearchEvent = createKeyboardEvent("Escape");
 		await mobileSearch.controller.handleRootKeydown(mobileSearchEvent);
-		assert.deepEqual(mobileSearch.calls, ["close-mobile-search"]);
+		assert.deepEqual(mobileSearch.calls, ["close-composer-draft"]);
 		assert.equal(mobileSearchEvent.defaultPrevented, true);
 
 		const composer = createHarness({
@@ -182,6 +183,38 @@ test("Escape key closes the highest-priority active surface", async () => {
 	} finally {
 		cleanup();
 	}
+});
+
+test("mobile closes menus before Composer and Drawer before the search page", async () => {
+	const cases = [
+		{ cardMenuOpen: true, expected: ["close-card"] },
+		{ scopeMenuOpen: true, expected: ["close-scope"] },
+		{ expected: ["close-composer-draft"] },
+	];
+	for (const item of cases) {
+		const h = createHarness({ mobile: true, escapeState: {
+			cardMenuOpen: "cardMenuOpen" in item, scopeMenuOpen: "scopeMenuOpen" in item,
+			composerOpen: true, mobileSearchPageOpen: true, editingOrQuoting: true, hasOpenChrome: true,
+		} });
+		await h.controller.handleRootKeydown(createKeyboardEvent("Escape"));
+		assert.deepEqual(h.calls, item.expected);
+	}
+	const drawer = createHarness({ mobile: true, drawerOpen: true, escapeState: {
+		composerOpen: false, mobileSearchPageOpen: true, editingOrQuoting: false, hasOpenChrome: true,
+	} });
+	assert.equal(drawer.controller.closeMobileSurface(), true);
+	assert.deepEqual(drawer.calls, ["close-drawer", "sync-chrome"]);
+	const search = createHarness({ mobile: true, escapeState: {
+		composerOpen: false, mobileSearchPageOpen: true, editingOrQuoting: false, hasOpenChrome: false,
+	} });
+	assert.equal(search.controller.closeMobileSurface(), true);
+	assert.deepEqual(search.calls, ["close-mobile-search"]);
+	const draft = createHarness({ mobile: true, escapeState: {
+		composerOpen: false, mobileSearchPageOpen: false, editingOrQuoting: true, hasOpenChrome: false,
+	} });
+	assert.equal(draft.controller.closeMobileSurface(), false);
+	await draft.controller.handleRootKeydown(createKeyboardEvent("Escape"));
+	assert.deepEqual(draft.calls, [], "隐藏的草稿不能因返回而取消");
 });
 
 test("keyboard opens memo cards and shortcut toggles the sidebar", async () => {
@@ -355,9 +388,9 @@ test("handleAction covers guarded and fallback action branches", async () => {
 	await retryAllMemosBlocked.controller.handleAction("retry-all-memos", null);
 	assert.deepEqual(retryAllMemosBlocked.calls, []);
 
-	const ignoredSave = createHarness({ ignoreMobileSave: true });
-	await ignoredSave.controller.handleAction("save-input", null);
-	assert.deepEqual(ignoredSave.calls, []);
+	const blockedSave = createHarness({ composerActionBlocked: true });
+	await blockedSave.controller.handleAction("save-input", null);
+	assert.deepEqual(blockedSave.calls, []);
 
 	const handledComposerTool = createHarness({ composerToolHandled: true });
 	await handledComposerTool.controller.handleAction("insert-tag", null);
@@ -392,7 +425,7 @@ interface HarnessState {
 	drawerOpen: boolean;
 	cardFlowHasMore: boolean;
 	deferAllMemos: boolean;
-	ignoreMobileSave: boolean;
+	composerActionBlocked: boolean;
 	composerToolHandled: boolean;
 	consumeSuppressed: boolean;
 	outsideHandled: boolean;
@@ -417,7 +450,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 		drawerOpen: false,
 		cardFlowHasMore: false,
 		deferAllMemos: false,
-		ignoreMobileSave: false,
+		composerActionBlocked: false,
 		composerToolHandled: true,
 		consumeSuppressed: false,
 		outsideHandled: false,
@@ -439,7 +472,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			getRenderGeneration: () => 7,
 			hasMoreCardFlowItems: () => state.cardFlowHasMore,
 			shouldDeferCardFlowForAllMemos: () => state.deferAllMemos,
-			shouldIgnoreMobileSaveInput: () => state.ignoreMobileSave,
+			canRunComposerAction: () => !state.composerActionBlocked,
 			getEscapeState: () => state.escapeState,
 			consumeSuppressedOpenPopupDismissClick: () => {
 				if (state.consumeSuppressed) {
@@ -468,7 +501,6 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			runMemoAction: async (action, memoId) => {
 				calls.push(`memo:${action}:${memoId ?? ""}`);
 			},
-			shouldIgnoreHandledMobileToolClick: () => false,
 			openMemoCardDailyNote: async (memoId, randomReunion) => {
 				calls.push(`open-memo:${memoId}:${String(randomReunion)}`);
 			},

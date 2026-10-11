@@ -13,6 +13,8 @@ interface ImageResourceCacheEntry {
 	value: ImageResourceCacheValue;
 }
 
+export const IMAGE_RESOURCE_CACHE_LIMIT = 1_024;
+
 export class ImageResourceCache {
 	private readonly entries = new Map<string, ImageResourceCacheEntry>();
 
@@ -20,6 +22,8 @@ export class ImageResourceCache {
 		const key = getImageResourceCacheKey(sourcePath, rawPath);
 		const cached = this.entries.get(key);
 		if (cached !== undefined) {
+			this.entries.delete(key);
+			this.entries.set(key, cached);
 			return cached.value;
 		}
 		const file = app.metadataCache.getFirstLinkpathDest(rawPath, sourcePath);
@@ -33,6 +37,10 @@ export class ImageResourceCache {
 				missing: false,
 			};
 		this.entries.set(key, { rawPath, value });
+		if (this.entries.size > IMAGE_RESOURCE_CACHE_LIMIT) {
+			const oldest = this.entries.keys().next().value;
+			if (oldest !== undefined) this.entries.delete(oldest);
+		}
 		return value;
 	}
 

@@ -90,6 +90,7 @@ export function renderKnomoCompactSearchPanel(container: HTMLElement, options: H
 
 export function renderKnomoSearchPopover(container: HTMLElement): HTMLElement {
 	const searchMenu = container.createDiv({ cls: "knomo-search-menu", attr: { role: "menu" } });
+	searchMenu.createDiv({ cls: "knomo-search-date-hint", attr: { hidden: "", role: "status", "aria-live": "polite" } });
 	for (const option of SEARCH_DATE_OPTIONS) {
 		renderSearchDateButton(searchMenu, option, "knomo-search-menu-option");
 	}
@@ -101,11 +102,11 @@ export function renderTitleModeButton(container: HTMLElement, option: TitleModeO
 		cls,
 		attr: {
 			type: "button",
-			"aria-pressed": "false",
+			...(cls === "knomo-scope-option" ? { role: "menuitemradio", "aria-checked": "false" } : { "aria-pressed": "false" }),
 			"data-title-mode": option.mode,
 		},
 	});
-	setIcon(button.createSpan({ cls: "knomo-button-icon" }), option.icon);
+	setIcon(button.createSpan({ cls: "knomo-button-icon", attr: { "aria-hidden": "true" } }), option.icon);
 	button.createSpan({ cls: "knomo-button-label", text: option.label });
 	return button;
 }

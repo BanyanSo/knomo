@@ -112,12 +112,6 @@ export interface CatalogTagFacet {
 	count: number;
 }
 
-export interface CatalogFunctionPageRequest {
-	limit: number;
-	cursor?: CatalogFeatureCursor | null;
-	text?: string;
-}
-
 export type CatalogRecordStatsFilter =
 	| { type: "day"; date: string }
 	| { type: "month"; month: string }

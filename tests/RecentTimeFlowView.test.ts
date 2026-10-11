@@ -15,6 +15,7 @@ async function setup() {
 	Object.assign(view, {
 		viewStateController: state, settingsService: { getSettings: () => ({ recentTimeFlowEnabled: enabled, timeBuoyEnabled: true }) },
 		catalogRevision: 1, recentLifecycleKey: "", trashViewClosed: false,
+		mobileSearchController: { isOpen: false },
 		cardFlowCoordinator: { generation: 0 }, cardFlowEl: null,
 		getTodayTimeBuoyItems: () => [], clearMobileCardBatchContinuation: () => {},
 		deferMobileCardFlowRender: () => false,

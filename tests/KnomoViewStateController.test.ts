@@ -232,3 +232,16 @@ test("reset to all notes reports whether only chrome sync is needed", () => {
 	assert.equal(filteredState.scopeFilter, "all");
 	assert.equal(filteredState.compactSearchOpen, false);
 });
+
+test("恢复旧导航：普通搜索回到全部，切换范围清空搜索", () => {
+ const state = new KnomoViewStateController();
+ state.activeNav = "review"; state.scopeFilter = "with-image";
+ state.activeTag = "work"; state.activeTagKey = "work";
+ state.setSearchQuery("20261009 项目");
+ assert.equal(state.activeNav, "all"); assert.equal(state.scopeFilter, "all");
+ assert.equal(state.activeTagKey, null);
+ assert.equal(state.search.applied.date?.kind, "range");
+ state.setScope("with-image");
+ assert.equal(state.searchQuery, ""); assert.equal(state.search.applied.date, null);
+ assert.equal(state.scopeFilter, "with-image");
+});

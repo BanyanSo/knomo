@@ -48,6 +48,10 @@ test("renders desktop and compact header search structure", async () => {
 
 	const scopeHost = new TestElement("div");
 	renderKnomoScopePopover(scopeHost.asHtml(), "knomo-scope-popover knomo-mobile-scope-popover");
+	assert.ok(scopeHost.findAll(".knomo-button-icon").every((icon) => icon.getAttr("aria-hidden") === "true"));
+	assert.deepEqual(scopeHost.findAll(".knomo-button-icon").map((icon) => icon.getAttr("data-icon")), [
+		"knomo-all-notes", "list-todo", "tag", "link", "image", "history", "calendar-check", "knomo-random-reunion", "calendar-days",
+	]);
 	assert.deepEqual(scopeHost.findAll("[data-title-mode]").map((item) => item.getAttr("data-title-mode")), [
 		"all",
 		"things",

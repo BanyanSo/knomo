@@ -7,9 +7,14 @@ import type {
 	CatalogQuery,
 	MemoObservation,
 } from "../types/catalog";
-import { extractDailyExplicitReferenceTargets, getIndexableDiaryMemoContent } from "./DiaryMemoParser";
+import { extractDailyExplicitReferenceTargets } from "./DiaryMemoParser";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
+import type { CatalogChangeCursor } from "./CatalogFileChanges";
+export type { CatalogChangeCursor } from "./CatalogFileChanges";
 import { normalizeCatalogText } from "./MemoCatalogStore";
+import { buildSearchBody } from "./SearchDocument";
+import { CooperativeYieldController } from "./CooperativeTask";
+import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { getMemoContentStatsFromContent } from "../utils/memoContentStats";
 import { normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 
@@ -20,6 +25,10 @@ export interface CatalogPartitionInput {
 	parserVersion: number;
 	settingsFingerprint: string;
 	auditedAt: number;
+}
+
+export interface CatalogPartitionRuntime extends CooperativeTaskRuntime {
+	isCurrent: () => boolean;
 }
 
 export class MemoCatalogService {
@@ -33,8 +42,11 @@ export class MemoCatalogService {
 		this.store.close();
 	}
 
-	async replaceFile(input: CatalogPartitionInput): Promise<number> {
-		return this.store.replaceFilePartition(buildCatalogPartition(input));
+	async replaceFile(input: CatalogPartitionInput, runtime?: CatalogPartitionRuntime): Promise<number | null> {
+		if (runtime?.isCurrent() === false) return null;
+		const partition = runtime === undefined ? buildCatalogPartition(input) : await buildCatalogPartitionCooperatively(input, runtime);
+		if (runtime?.isCurrent() === false) return null;
+		return this.store.replaceFilePartition(partition);
 	}
 
 	deleteFile(sourcePath: string): Promise<number> {
@@ -57,10 +69,6 @@ export class MemoCatalogService {
 		return this.store.getFileRevisionBatch(sourcePath);
 	}
 
-	listFileRevisionBatches() {
-		return this.store.listFileRevisionBatches();
-	}
-
 	listFiles() {
 		return this.store.listFiles();
 	}
@@ -70,13 +78,31 @@ export class MemoCatalogService {
 	}
 	readAggregateSnapshot() { return this.store.readAggregateSnapshot(); }
 
+	readFileChangesSince(previous?: CatalogChangeCursor) { return this.store.readFileChangesSince(previous); }
+
 	getStore(): MemoCatalogStore {
 		return this.store;
 	}
 }
 
 export function buildCatalogPartition(input: CatalogPartitionInput): CatalogFilePartition {
-	const observations = input.observations.map(buildCatalogObservation);
+	const partition = createCatalogPartition(input);
+	for (const observation of input.observations) appendCatalogObservation(partition, observation);
+	return partition;
+}
+
+// 搜索正文、token 和聚合一起分片；准备完成后才由调用方开启写事务。
+export async function buildCatalogPartitionCooperatively(input: CatalogPartitionInput, runtime: CooperativeTaskRuntime): Promise<CatalogFilePartition> {
+	const partition = createCatalogPartition(input);
+	const controller = new CooperativeYieldController(runtime);
+	for (const observation of input.observations) {
+		appendCatalogObservation(partition, observation);
+		if (controller.shouldYield()) await controller.yieldNow();
+	}
+	return partition;
+}
+
+function createCatalogPartition(input: CatalogPartitionInput): CatalogFilePartition {
 	const file: CatalogFileRecord = {
 		sourcePath: input.inventory.sourcePath,
 		sourceRevision: input.sourceRevision,
@@ -85,33 +111,33 @@ export function buildCatalogPartition(input: CatalogPartitionInput): CatalogFile
 		size: input.inventory.size,
 		parserVersion: input.parserVersion,
 		settingsFingerprint: input.settingsFingerprint,
-		observationCount: observations.length,
-		observationKeys: observations.map((observation) => observation.observationKey),
+		observationCount: 0,
+		observationKeys: [],
 		auditedAt: input.auditedAt,
 	};
-	return {
-		file,
-		observations,
-		aggregate: buildFileAggregate(file, observations),
-	};
+	return { file, observations: [], aggregate: createFileAggregate(file) };
+}
+
+function appendCatalogObservation(partition: CatalogFilePartition, source: MemoObservation): void {
+	const observation = buildCatalogObservation(source);
+	partition.observations.push(observation);
+	partition.file.observationKeys!.push(observation.observationKey);
+	partition.file.observationCount++;
+	addFileAggregateObservation(partition.aggregate, observation);
 }
 
 export function buildCatalogObservation(observation: MemoObservation): CatalogObservation {
 	const linkTargets = dedupe(observation.links.map((link) => normalizeCatalogText(link.target)));
 	const imagePaths = dedupe(observation.images.map((image) => normalizeCatalogText(image.path)));
 	const explicitReferenceTargets = extractDailyExplicitReferenceTargets(observation.content);
-	const searchText = normalizeCatalogText([
-		getIndexableDiaryMemoContent(observation.content),
-		...observation.tags,
-		...linkTargets,
-		...imagePaths,
-	].join(" "));
+	const searchBody = buildSearchBody(observation.content);
+	const searchValues = [...searchBody, ...observation.tags.map(normalizeCatalogText), ...linkTargets, ...imagePaths];
 	return {
 		...observation,
 		observationKey: `${observation.sourcePath}\0${observation.startLine.toString().padStart(10, "0")}`,
 		createdAtKey: `${observation.logicalDate}T${normalizeMemoTime(observation.time)}`,
-		searchText,
-		searchTokens: buildCatalogSearchTokens(searchText),
+		searchBody,
+		searchTokens: [...new Set(searchValues.flatMap(buildCatalogSearchTokens))],
 		tagKeys: dedupe(observation.tags.map(normalizeTagKey)),
 		linkTargets,
 		imagePaths,
@@ -165,57 +191,41 @@ export function selectCatalogSearchToken(query: string): string | null {
 	return null;
 }
 
-function buildFileAggregate(file: CatalogFileRecord, observations: readonly CatalogObservation[]): CatalogFileAggregate {
-	const explicitReferenceTargets: string[] = [];
-	const tagMemoCounts: Record<string, number> = {};
-	const tagDisplayNames: Record<string, string> = {};
-	const hourCounts = Array.from({ length: 24 }, () => 0);
-	for (const observation of observations) {
-		for (const target of observation.explicitReferenceTargets) {
-			pushUnique(explicitReferenceTargets, target);
-		}
-		for (const key of observation.tagKeys) {
-			tagMemoCounts[key] = (tagMemoCounts[key] ?? 0) + 1;
-		}
-		for (const tag of observation.tags) {
-			const key = normalizeTagKey(tag);
-			const display = normalizeTagDisplay(tag);
-			if (key.length > 0 && display.length > 0 && tagDisplayNames[key] === undefined) tagDisplayNames[key] = display;
-		}
-		const hour = Number.parseInt(observation.time.slice(0, 2), 10);
-		if (Number.isInteger(hour) && hour >= 0 && hour < hourCounts.length) hourCounts[hour] += 1;
-	}
+function createFileAggregate(file: CatalogFileRecord): CatalogFileAggregate {
 	return {
-		sourcePath: file.sourcePath,
-		logicalDate: file.logicalDate,
-		memoCount: observations.length,
-		tagCount: sum(observations, (item) => item.tags.length),
-		linkCount: sum(observations, (item) => item.links.length),
-		imageCount: sum(observations, (item) => item.images.length),
-		taskCount: sum(observations, (item) => item.tasks.length),
-		timeBuoyCount: sum(observations, (item) => item.timeBuoyDates.length),
-		explicitReferenceCount: sum(observations, (item) => item.explicitReferenceTargets.length),
-		explicitReferenceMemoCount: sum(observations, (item) => item.explicitReferenceTargets.length > 0 ? 1 : 0),
-		explicitReferenceTargets,
-		wordCount: sum(observations, (item) => getMemoContentStatsFromContent(
-			item.content,
-			item.explicitReferenceTargets.length > 0,
-		).wordCount),
-		imageMemoCount: sum(observations, (item) => item.images.length > 0 ? 1 : 0),
-		taggedMemoCount: sum(observations, (item) => item.tagKeys.length > 0 ? 1 : 0),
-		untaggedMemoCount: sum(observations, (item) => item.tagKeys.length === 0 ? 1 : 0),
-		hourCounts,
-		tagMemoCounts,
-		tagDisplayNames,
+		sourcePath: file.sourcePath, logicalDate: file.logicalDate, memoCount: 0,
+		tagCount: 0, linkCount: 0, imageCount: 0, taskCount: 0, timeBuoyCount: 0,
+		explicitReferenceCount: 0, explicitReferenceMemoCount: 0, explicitReferenceTargets: [],
+		wordCount: 0, imageMemoCount: 0, taggedMemoCount: 0, untaggedMemoCount: 0,
+		hourCounts: Array.from({ length: 24 }, () => 0), tagMemoCounts: {}, tagDisplayNames: {},
 	};
+}
+
+function addFileAggregateObservation(aggregate: CatalogFileAggregate, observation: CatalogObservation): void {
+	aggregate.memoCount++;
+	aggregate.tagCount += observation.tags.length;
+	aggregate.linkCount += observation.links.length;
+	aggregate.imageCount += observation.images.length;
+	aggregate.taskCount += observation.tasks.length;
+	aggregate.timeBuoyCount += observation.timeBuoyDates.length;
+	aggregate.explicitReferenceCount += observation.explicitReferenceTargets.length;
+	aggregate.explicitReferenceMemoCount += observation.explicitReferenceTargets.length > 0 ? 1 : 0;
+	aggregate.wordCount += getMemoContentStatsFromContent(observation.content, observation.explicitReferenceTargets.length > 0).wordCount;
+	aggregate.imageMemoCount += observation.images.length > 0 ? 1 : 0;
+	aggregate.taggedMemoCount += observation.tagKeys.length > 0 ? 1 : 0;
+	aggregate.untaggedMemoCount += observation.tagKeys.length === 0 ? 1 : 0;
+	for (const target of observation.explicitReferenceTargets) pushUnique(aggregate.explicitReferenceTargets, target);
+	for (const key of observation.tagKeys) aggregate.tagMemoCounts[key] = (aggregate.tagMemoCounts[key] ?? 0) + 1;
+	for (const tag of observation.tags) {
+		const key = normalizeTagKey(tag), display = normalizeTagDisplay(tag);
+		if (key.length > 0 && display.length > 0 && aggregate.tagDisplayNames[key] === undefined) aggregate.tagDisplayNames[key] = display;
+	}
+	const hour = Number.parseInt(observation.time.slice(0, 2), 10);
+	if (Number.isInteger(hour) && hour >= 0 && hour < aggregate.hourCounts.length) aggregate.hourCounts[hour]++;
 }
 
 function normalizeMemoTime(time: string): string {
 	return time.length === 5 ? `${time}:00` : time;
-}
-
-function sum<T>(values: readonly T[], getValue: (value: T) => number): number {
-	return values.reduce((total, value) => total + getValue(value), 0);
 }
 
 function dedupe(values: readonly string[]): string[] {

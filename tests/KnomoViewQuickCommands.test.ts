@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { KnomoQuickCommand } from "../src/ui/KnomoQuickCommands";
 import type { CatalogFeatureFilter } from "../src/types/catalogView";
+import { KnomoPopupState } from "../src/ui/KnomoPopupState";
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -21,7 +22,7 @@ async function harness() {
 		composerOpen: false, currentLayout: "desktop-wide", inputEl: input,
 		editingMemo: null, quoteReferenceText: null, quoteMarkdownText: null,
 		draftContent: "unfinished draft", suspendedCreate: { content: "suspended" },
-		viewStateController: state, mobileSearchController: { isOpen: false }, popupState: { scopeMenuOpen: false },
+		viewStateController: state, mobileSearchController: { isOpen: false }, popupState: new KnomoPopupState(() => { throw new Error("该测试不应注册弹层事件"); }),
 		settingsService: { getSettings: () => ({ timeBuoyEnabled: true }) },
 		randomReunionController: { cancelPending: () => {} },
 		shuffleDayController: { cancelPending: () => {} },
@@ -176,10 +177,12 @@ test("视图就绪只在初始化成功后报告，失败与关闭不会报告�
 	for (const mode of ["ready", "failed", "closed"]) {
 		const h = await harness();
 		const cleanup: Array<() => void> = [];
+		let recoveries = 0;
 		Object.assign(h.view, {
 			app: { loadLocalStorage: () => null, saveLocalStorage: () => undefined },
 			containerEl: { doc: new EventTarget(), win: new EventTarget() },
 			register: (callback: () => void) => cleanup.push(callback),
+			recoverMobileViewFocus: () => { recoveries++; },
 			registerDomEvent: () => undefined,
 		});
 		h.view.quickCommandReady = new Promise((resolve) => { h.view.settleQuickCommandReady = resolve; });
@@ -190,6 +193,7 @@ test("视图就绪只在初始化成功后报告，失败与关闭不会报告�
 		if (mode === "failed") await assert.rejects(h.view.onOpen(), /initialization failed/);
 		else await h.view.onOpen();
 		assert.equal(await h.view.waitForQuickCommands(), mode === "ready");
+		assert.equal(recoveries, mode === "ready" ? 1 : 0, "初始化完成补交接，失败或关闭不抢焦点");
 		h.view.trashViewClosed = true;
 		for (const callback of cleanup) callback();
 	}

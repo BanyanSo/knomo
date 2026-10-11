@@ -84,6 +84,31 @@ test("renders composer input, tools, actions, and reference preview", async () =
 	assert.equal(elements.referencePreviewEl.find(".knomo-reference-content"), null);
 });
 
+test("preserves complete iOS CJK quote text, whitespace, and clear action in the preview", async () => {
+	await obsidianStubReady;
+	const { Platform } = await import("obsidian");
+	const { renderComposerReferencePreview } = await import("../src/ui/KnomoComposer");
+	const originalIosApp = Platform.isIosApp;
+	const quoteText = "今天吃早餐的时候，突然闪现的问题「假如现在就死去，会有遗憾吗？」心里的答案肯定是有很大的遗憾，然后告诉自己的是，人生的意义不就是在死去的时候不留遗憾吗？然而，人生不可避免的有很多遗憾，那最终的是自己要如何面对和坦然。 #Life/自我 #思考\n保留  双空格、café、👨‍👩‍👧‍👦和禰\u{E0100}。\n\n<script>原文</script>";
+	const markdown = quoteText.split("\n").map(line => "> " + line).join("\n");
+	try {
+		for (const isIosApp of [true, false]) {
+			Platform.isIosApp = isIosApp;
+			const root = new TestElement("div");
+			renderComposerReferencePreview(root.asHtml(), markdown, { setTooltipIfDesktopOnly: () => {} });
+			assert.equal(root.find(".knomo-reference-content")?.getText(), quoteText);
+			assert.equal(root.hasClass("is-cjk-content"), true);
+			assert.equal(root.find(".knomo-reference-clear")?.getAttr("data-action"), "clear-reference");
+			assert.equal(root.find(".knomo-reference-clear")?.getAttr("type"), "button");
+			renderComposerReferencePreview(root.asHtml(), null, { setTooltipIfDesktopOnly: () => {} });
+			assert.equal(root.hasClass("is-visible"), false);
+			assert.equal(root.getText(), "");
+		}
+	} finally {
+		Platform.isIosApp = originalIosApp;
+	}
+});
+
 test("renders mobile Time buoy pickers with future-only dates and direct selection", async () => {
 	await obsidianStubReady;
 	const { renderTimeBuoyDatePicker } = await import("../src/ui/TimeBuoyDatePicker");

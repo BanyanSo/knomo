@@ -186,7 +186,7 @@ function makeObservation(overrides: Partial<CatalogObservation>): CatalogObserva
 		images: [],
 		tasks: [],
 		timeBuoyDates: [],
-		searchText: "memo",
+		searchBody: ["memo"],
 		searchTokens: ["memo"],
 		tagKeys: [],
 		linkTargets: [],

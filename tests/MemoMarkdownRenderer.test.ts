@@ -70,6 +70,120 @@ test("按待恢复视口优先渲染深处正文，实际滚动后切换优先�
 	} finally { renderer.clear("mobile-search"); MarkdownRenderer.render = original; }
 });
 
+test("来源引用在移动端排队前可见，两种卡片表面等待宿主时不清空来源行", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	const original = MarkdownRenderer.render;
+	const frames = new Map<number, () => void>();
+	const calls: { text: string; path: string }[] = [];
+	let frameId = 0;
+	let gate = deferred<void>();
+	MarkdownRenderer.render = async (_app, text, target, path) => {
+		calls.push({ text, path });
+		const paragraph = target.createEl("p");
+		paragraph.createSpan({ text: "引用自：" });
+		paragraph.createEl("a", { cls: "internal-link", text: "自定义来源", attr: { "data-href": "../旧记录.md#^block-a" } });
+		await gate.promise;
+	};
+	const renderer = new MemoMarkdownRenderer({
+		app: {} as never, createComponent: () => new TestComponent() as never,
+		getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1,
+		scheduleTask: callback => { frames.set(++frameId, callback); return frameId; },
+		cancelTask: id => { frames.delete(id); },
+	});
+	try {
+		for (const surface of ["card-flow", "mobile-search"] as const) {
+			gate = deferred<void>();
+			const target = new TestElement("div");
+			const text = "引用自：[自定义来源](../旧记录.md#^block-a)";
+			const path = "Daily/2026-10-07.md";
+			const count = calls.length;
+			renderer.queueSourceReferenceMarkdown(target.asHtml(), text, path, 0, surface);
+			assert.equal(target.getText(), "引用自：自定义来源", "首帧已有可读来源，不能等待下一帧或宿主完成");
+			assert.equal(calls.length, count);
+			const placeholder = target.firstChild;
+			const [id, callback] = [...frames][0]; frames.delete(id); callback();
+			await waitFor(() => calls.length === count + 1);
+			assert.equal(target.firstChild, placeholder, "宿主离屏渲染期间保留来源行");
+			assert.deepEqual(calls[count], { text, path });
+			gate.resolve();
+			await waitFor(() => target.firstChild !== placeholder);
+			assert.equal(target.getText(), "引用自：自定义来源");
+			const link = target.findAll("a.internal-link")[0];
+			assert.equal(link.getAttr("data-href"), "../旧记录.md#^block-a");
+			assert.equal(link.getAttr("data-knomo-source-path"), path);
+		}
+	} finally {
+		gate.resolve(); renderer.clear(); renderer.clear("mobile-search");
+		MarkdownRenderer.render = original;
+	}
+});
+
+test("来源引用首帧保留 Wiki alias 和长别名，旧代次不得改写当前显示", async () => {
+	await ensureObsidianStub();
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	const frames = new Map<number, () => void>();
+	let frameId = 0;
+	const renderer = new MemoMarkdownRenderer({
+		app: {} as never, createComponent: () => new TestComponent() as never,
+		getDocument: () => ({} as Document), getGeneration: () => 1, concurrency: 1,
+		scheduleTask: callback => { frames.set(++frameId, callback); return frameId; },
+		cancelTask: id => { frames.delete(id); },
+	});
+	try {
+		for (const alias of ["20241006-160339", "自定义中文来源与 English alias ".repeat(12), "<img src=x onerror=alert(1)>"]) {
+			const target = new TestElement("div");
+			renderer.queueSourceReferenceMarkdown(target.asHtml(), "引用自：[[Daily/旧记录#^block-a|" + alias + "]]", "Daily/今天.md", 1, "card-flow");
+			assert.equal(target.getText(), "引用自：" + alias);
+			assert.equal(target.findAll("img").length, 0);
+		}
+		const current = new TestElement("div");
+		current.createEl("p", { text: "已显示的来源" });
+		const original = current.firstChild;
+		renderer.queueSourceReferenceMarkdown(current.asHtml(), "引用自：[[Old#^block|旧来源]]", "Daily.md", 0, "card-flow");
+		assert.equal(current.firstChild, original);
+		assert.equal(current.getText(), "已显示的来源");
+	} finally { renderer.clear(); renderer.clear("mobile-search"); }
+});
+
+test("来源渲染失败保留可读 alias，刷新失败也保留已显示来源及其组件", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	const original = MarkdownRenderer.render;
+	let fail = true;
+	const components: TestComponent[] = [];
+	MarkdownRenderer.render = async (_app, _text, target) => {
+		if (fail) throw new Error("render failed");
+		target.createEl("p", { text: "引用自：自定义来源" });
+	};
+	const renderer = new MemoMarkdownRenderer({
+		app: {} as never, getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1,
+		createComponent: () => { const component = new TestComponent(); components.push(component); return component as never; },
+	});
+	try {
+		const text = "引用自：[[Daily/来源#^block-a|自定义来源]]";
+		const first = new TestElement("div");
+		renderer.queueSourceReferenceMarkdown(first.asHtml(), text, "Daily/今天.md", 0, "card-flow");
+		await waitFor(() => components[0].unloadCalls === 1);
+		assert.equal(first.getText(), "引用自：自定义来源", "失败不能重新显示原始 Wiki 语法并改变来源行尺寸");
+		fail = false;
+		const ready = new TestElement("div");
+		renderer.queueSourceReferenceMarkdown(ready.asHtml(), text, "Daily/今天.md", 0, "card-flow");
+		await waitFor(() => components.length === 2 && ready.firstChild?.getAttr("inert") === null);
+		const previous = ready.firstChild;
+		fail = true;
+		renderer.queueSourceReferenceMarkdown(ready.asHtml(), text, "Daily/今天.md", 0, "card-flow");
+		await waitFor(() => components.length === 3 && components[2].unloadCalls === 1);
+		assert.equal(ready.firstChild, previous);
+		assert.equal(components[1].unloadCalls, 0, "保留的宿主 DOM 仍由原组件管理");
+	} finally {
+		renderer.clear(); renderer.clear("mobile-search"); MarkdownRenderer.render = original;
+	}
+	assert.equal(components[1].unloadCalls, 1);
+});
+
 test("post-processes memo markdown DOM metadata", async () => {
 	await ensureObsidianStub();
 	const { prepareRenderedMemoMarkdown, applyTaskCheckboxDomState } = await import("../src/ui/MemoMarkdownRenderer");
@@ -607,5 +721,40 @@ test("主卡片流和移动搜索渲染完成后都保留换行，源码保持�
 		renderer.clear(); renderer.clear("mobile-search");
 		MarkdownRenderer.render = original;
 		dom.window.close();
+	}
+});
+
+test("两种卡片表面拒绝旧搜索指纹与旧草稿代次的异步 Markdown 结果", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const original = MarkdownRenderer.render;
+	let key = "alpha", version = 0, gate = deferred<void>();
+	const components: TestComponent[] = [];
+	MarkdownRenderer.render = async (_app, text, target) => {
+		target.createEl("p", { text }); await gate.promise;
+	};
+	const renderer = new MemoMarkdownRenderer({
+		app: {} as never, getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1,
+		getSearchFilter: () => ({ textTerms: [key] }), getSearchVersion: () => version,
+		createComponent: () => { const component = new TestComponent(); components.push(component); return component as never; },
+	});
+	try {
+		for (const surface of ["card-flow", "mobile-search"] as const) {
+			for (const change of ["query", "draft"] as const) {
+				key = "alpha"; gate = deferred<void>();
+				const target = new TestElement("div", { text: "current result" });
+				const count = components.length;
+				renderer.queueMemoMarkdown(makeMemo(), target.asHtml(), 0, "normal", "old render", surface);
+				await waitFor(() => components.length > count);
+				if (change === "query") key = "beta"; else version++;
+				gate.resolve();
+				await waitFor(() => components[count].unloadCalls === 1);
+				assert.equal(target.getText(), "current result");
+			}
+		}
+	} finally {
+		gate.resolve(); renderer.clear(); renderer.clear("mobile-search"); MarkdownRenderer.render = original;
 	}
 });

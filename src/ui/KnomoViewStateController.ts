@@ -1,4 +1,6 @@
 import type { SidebarNav } from "./viewNavigation";
+import { SearchSession } from "./SearchSession";
+import { buildSearchSourceScope } from "./SearchSourceScope";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 
 export interface KnomoViewStateTransitionEffects {
@@ -52,8 +54,17 @@ interface RecordStatsReturnState {
 export class KnomoViewStateController {
 	activeNav: SidebarNav = "all";
 	scopeFilter: ScopeFilter = "all";
-	searchQuery = "";
-	searchDateFilter: SearchDateFilter | null = null;
+	readonly search = new SearchSession();
+	get searchQuery(): string { return this.search.applied.input; }
+	set searchQuery(query: string) { this.search.updateDraft(query); this.search.submit(); }
+	get searchDateFilter(): SearchDateFilter | null { return this.search.applied.shortcut; }
+	set searchDateFilter(filter: SearchDateFilter | null) {
+		this.search.applied.shortcut = filter;
+		if (filter !== null || this.search.applied.dateOrigin === "shortcut") {
+			this.search.applied.date = null;
+			this.search.applied.dateOrigin = filter === null ? null : "shortcut";
+		}
+	}
 	recordStatsSearchFilter: RecordStatsSearchFilter | null = null;
 	activeTag: string | null = null;
 	activeTagKey: string | null = null;
@@ -99,7 +110,8 @@ export class KnomoViewStateController {
 	}
 
 	setSearchQuery(query: string): SearchStateResult {
-		this.searchQuery = query;
+		this.search.updateDraft(query);
+		if (!this.search.submit()) return { type: "changed" };
 		if (this.activeNav === "things") return { type: "changed", clearCardMenu: true };
 		if (query.trim().length > 0 || this.searchDateFilter !== null || this.recordStatsSearchFilter !== null) {
 			this.clearActiveTag();
@@ -111,7 +123,7 @@ export class KnomoViewStateController {
 	}
 
 	setSearchDateFilter(filter: SearchDateFilter): SearchStateResult {
-		this.searchDateFilter = this.searchDateFilter === filter ? null : filter;
+		if (!this.search.toggleShortcut(filter)) return { type: "changed" };
 		if (this.activeNav === "things") {
 			this.desktopSearchOpen = false;
 			this.compactSearchOpen = false;
@@ -240,9 +252,16 @@ export class KnomoViewStateController {
 	}
 
 	clearDesktopSearchState(): void {
-		this.searchQuery = "";
-		this.searchDateFilter = null;
+		this.search.reset();
 		this.recordStatsSearchFilter = null;
+	}
+
+	getSearchSource(today = new Date()) {
+		return buildSearchSourceScope({
+			activeNav: this.activeNav, scopeFilter: this.scopeFilter,
+			activeTag: this.activeTag, activeTagKey: this.activeTagKey,
+			recordStatsSearchFilter: this.recordStatsSearchFilter,
+		}, today);
 	}
 
 	clearActiveTag(): void {

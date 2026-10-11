@@ -46,18 +46,18 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		this.unsubscribe?.();
 		this.unsubscribe = this.options.store.subscribe(() => {
 			if (this.disposed) return;
-			const state = this.options.store.getState();
+			const state = this.options.store.getSummary();
 			if (state.status === "idle") { this.windowEnd = this.options.pageSize; this.options.onInvalidated(); }
 			this.render(this.options.isTrashActive() ? "ui-state" : "trash-count-and-scope");
 		});
 	}
 
 	getSnapshot(): TrashMemoSnapshot<TMemo> {
-		const state = this.options.store.getState();
 		const end = Math.max(this.options.pageSize, this.windowEnd);
+		const state = this.options.store.getWindow(end, this.options.windowLimit);
 		const error = state.error === null ? null : formatServiceError(new Error(state.error), t("error.trashLoadFailed"));
 		const memos = state.status === "ready"
-			? state.items.slice(Math.max(0, Math.min(end, state.count) - this.options.windowLimit), end).map(this.options.toMemo) : null;
+			? state.items.map(this.options.toMemo) : null;
 		return {
 			trashMemos: memos,
 			trashLoading: state.status === "idle" || state.status === "loading",
@@ -75,8 +75,8 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 
 	async ensureLoaded(): Promise<void> {
 		if (this.disposed) return;
-		const status = this.options.store.getState().status;
-		if (status === "idle" || status === "loading") await this.options.store.query();
+		const status = this.options.store.getSummary().status;
+		if (status === "idle" || status === "loading") await this.options.store.ensureLoaded();
 	}
 
 	async loadTrashMemos(retry = false): Promise<void> {
@@ -88,7 +88,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	}
 
 	hasMore(): boolean {
-		const state = this.options.store.getState();
+		const state = this.options.store.getSummary();
 		return state.status === "ready" && Math.max(this.windowEnd, this.options.pageSize) < state.count;
 	}
 

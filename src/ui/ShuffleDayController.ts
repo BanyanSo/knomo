@@ -143,6 +143,23 @@ export class ShuffleDayController {
 		return true;
 	}
 
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = []): boolean {
+		if (this.selectedDate === null) return false;
+		const additions = inserted.filter(memo => getMemoLocalDateKey(memo) === this.selectedDate);
+		if (additions.length === 0 && !this.memos.some(memo => changes.has(memo.id))) return false;
+		this.cancelInFlightLoad();
+		const updated = this.memos.flatMap(memo => {
+			if (!changes.has(memo.id)) return [memo];
+			const current = changes.get(memo.id);
+			return current && getMemoLocalDateKey(current) === this.selectedDate ? [current] : [];
+		});
+		const byId = new Map([...updated, ...additions].map(memo => [memo.id, memo]));
+		this.error = null;
+		this.setSelectedMemos([...byId.values()]);
+		this.requestRenderIfActive();
+		return true;
+	}
+
 	removeMemo(memoId: string): boolean {
 		const index = this.memos.findIndex((memo) => memo.id === memoId);
 		if (index < 0) return false;

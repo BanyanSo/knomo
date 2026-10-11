@@ -5,6 +5,8 @@ import { TimeBuoyViewController } from "../src/ui/TimeBuoyViewController";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import type { TimeBuoyQueryResult } from "../src/types/timeBuoy";
 import type { MemoViewItem } from "../src/types/memoView";
+import { getMemoListStateKey } from "../src/ui/MemoRenderRevision";
+import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 
 test("普通列表今日浮标逐页置顶，最后接普通记录，后台更新和关闭拒绝旧页", async () => {
 	const { view, result, memo, setQuery } = await refreshHarness();
@@ -89,7 +91,7 @@ async function refreshHarness() {
 		catalogRevision: 0, hasCommittedCatalogDesktopQuery: false, cardFlowEl: { isConnected: true, childElementCount: 1, querySelector: () => null },
 		cardFlowCoordinator: { deferredForAllMemos: false },
 		timeBuoyViewController: controller, shouldShowTodayTimeBuoys: () => true, isDefaultListState: () => true,
-		viewStateController: { activeNav: "all" }, getCatalogQueryFingerprint: () => "all",
+		viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false }, getCatalogQueryFingerprint: () => "all",
 		prepareCatalogDesktopQuery: () => {}, isCatalogQueryCurrent: () => true, buildCatalogActiveQuery: () => ({}),
 		queryCatalogFeature: async () => ({ items: [], catalogRevision: revision, nextCursor: null, readState: "ready" }),
 		syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {}, getImmediateCatalogTotalCount: () => 0,
@@ -159,19 +161,18 @@ test("旧移动端首屏在较新列表查询后返回时，不覆盖列表或�
 	}
 });
 
-test("仅在置顶结果中的历史卡片仍使用原 occurrence，并独立接收保存结果", async () => {
+test("仅在置顶结果中的历史卡片由提交映射独立更新", async () => {
 	const { view, memo, result, setQuery } = await refreshHarness();
 	const other = { ...memo, id: "same-content-other-occurrence" };
 	setQuery(async () => result(1, [memo, other]));
 	await view.loadInitialMobileMemos();
 	assert.deepEqual(view.memos, []);
 	assert.equal(view.findMemoById(memo.id), memo);
-	view.shuffleDayController = { applyMemoUpdate: () => {} };
-	const updated = view.applySavedMemo({
-		key: memo.id, renderKey: memo.id, createdAt: memo.createdAt,
-		content: "- [x] done", tags: [], links: [], images: [], sourcePath: memo.dailyRef.path,
-		observation: { contentHash: "saved", section: null },
-	});
+	view.shuffleDayController = { applyMemoChanges: () => {} };
+	view.randomReunionController = { applyMemoChanges: () => false };
+	const updated = { ...memo, contentSnapshot: "- [x] done", contentHash: "saved",
+		catalog: { timeBuoyDates: [formatTimeBuoyDate(new Date())] } } as MemoViewItem;
+	view.applyCachedMemoChanges(new Map([[memo.id, updated]]));
 	assert.equal(view.findMemoById(memo.id), updated);
 	assert.equal(view.findMemoById(other.id), other);
 	assert.equal(view.getTodayTimeBuoyItems()[0].memo.contentSnapshot, "- [x] done");
@@ -265,4 +266,30 @@ test("引用事件增量刷新且原位排队正文与来源引用，不清空�
 	view.trashViewClosed = true;
 	await view.refreshReferences();
 	assert.equal(queued.length, 2);
+});
+
+test("搜索返回重新读取当前数据但同显示版本不重建，正文变化后提交当前记录", async () => {
+	const { view, memo, result, renders, setQuery, setRevision } = await refreshHarness();
+	await view.loadInitialMobileMemos();
+	Object.assign(view, {
+		catalogMobileQueryRun: 4, catalogMobileCursor: {}, catalogMobileTotalCount: 12,
+		forceRebuildCardFlow: () => assert.fail("搜索返回不能无条件重建卡片"),
+		resetVisibleMemos: () => assert.fail("搜索返回不能无条件重置可见范围"),
+		getCardFlowStateKey: () => getMemoListStateKey(view.getTodayTimeBuoyItems().map((item: { memo: MemoViewItem }) => item.memo)),
+	});
+	const before = renders.length;
+	const current = { ...memo };
+	setQuery(async () => result(1, [current]));
+	await view.restoreCardFlowAfterMobileSearch();
+	assert.equal(renders.length, before);
+	assert.equal(view.catalogMobileQueryRun, 5);
+	assert.equal(view.catalogMobileCursor, null);
+	assert.equal(view.catalogMobileTotalCount, null);
+	assert.equal(view.findMemoById(memo.id), current, "复用显示时仍提交本次查询的当前对象");
+
+	const changed = { ...memo, contentHash: "changed", contentSnapshot: "新的正文与引用" };
+	setRevision(2); setQuery(async () => result(2, [changed]));
+	await view.restoreCardFlowAfterMobileSearch();
+	assert.equal(renders.length, before + 1);
+	assert.equal(view.findMemoById(memo.id), changed);
 });

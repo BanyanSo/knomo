@@ -2,131 +2,77 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { toCatalogMemoView, type MemoViewItem } from "../src/types/memoView";
-import { filterVisibleMemos, memoMatchesSearch } from "../src/ui/KnomoMemoFilter";
+import { filterCatalogMemos } from "../src/ui/KnomoMemoFilter";
+import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 
-test("Catalog Memo 搜索统一全角字符、大小写和跨行空白", async () => {
+test("Catalog 卡片筛选统一全角字符、大小写和跨行空白", async () => {
 	const memo = await makeMemo("normalized", { contentSnapshot: "ＡＬＰＨＡ\n\t beta" });
 	for (const query of ["alpha beta", "ＡＬＰＨＡ   BETA"]) {
-		assert.equal(memoMatchesSearch(memo, query, null, null, disabledDailyStatus()), true);
+		assert.deepEqual(filterCatalogMemos([memo], { text: query }), [memo]);
 	}
-	assert.equal(memoMatchesSearch(memo, "alpha gamma", null, null, disabledDailyStatus()), false);
+	assert.deepEqual(filterCatalogMemos([memo], { text: "alpha gamma" }), []);
 });
 
-test("filterVisibleMemos returns random, trash, and record stats branches directly", async () => {
+test("实际视图直接返回随机重逢、Shuffle Day，回收站和统计页不返回普通卡片", async () => {
 	const memos = [await makeMemo("regular")];
 	const randomMemos = [await makeMemo("random")];
 	const shuffleDayMemos = [await makeMemo("shuffle")];
-
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions(memos),
-		activeNav: "random",
-		randomMemos,
-	}), randomMemos);
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions(memos),
-		activeNav: "shuffleDay",
-		shuffleDayMemos,
-	}), shuffleDayMemos);
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions(memos),
-		activeNav: "trash",
-	}), []);
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions(memos),
-		activeNav: "record-stats",
-	}), []);
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const state = new KnomoViewStateController();
+	const view = Object.assign(Object.create(KnomoView.prototype) as { getFilteredMemos(): MemoViewItem[] }, {
+		viewStateController: state, memos,
+		randomReunionController: { getSnapshot: () => ({ memos: randomMemos }) },
+		shuffleDayController: { getSnapshot: () => ({ memos: shuffleDayMemos }) },
+	});
+	for (const [nav, expected] of [["random", randomMemos], ["shuffleDay", shuffleDayMemos], ["trash", []], ["record-stats", []]] as const) {
+		state.activeNav = nav;
+		assert.deepEqual(view.getFilteredMemos(), expected);
+	}
 });
 
-test("filterVisibleMemos applies regular tag, query, and scope filters", async () => {
-	const tagged = await makeMemo("tagged", {
-		contentSnapshot: "Alpha memo",
-		tags: ["Project/Knomo"],
-	});
-	const childTagged = await makeMemo("child-tagged", {
-		contentSnapshot: "Beta memo",
-		tags: ["Project/Knomo/UI"],
-	});
-	const untagged = await makeMemo("untagged", {
-		contentSnapshot: "Alpha memo",
-		tags: [],
-	});
-
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions([tagged, childTagged, untagged]),
-		activeTagKey: "project/knomo",
-		normalizedQuery: "alpha",
-	}).map((memo) => memo.id), ["tagged", "untagged"]);
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions([tagged, childTagged, untagged]),
-		activeTagKey: "project/knomo",
-	}).map((memo) => memo.id), ["tagged", "child-tagged"]);
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions([tagged, childTagged, untagged]),
-		scopeFilter: "no-tag",
-	}).map((memo) => memo.id), ["untagged"]);
+test("当前来源和搜索条件共同筛选标签、文字及无标签范围", async () => {
+	const tagged = await makeMemo("tagged", { contentSnapshot: "Alpha memo", tags: ["Project/Knomo"] });
+	const childTagged = await makeMemo("child-tagged", { contentSnapshot: "Beta memo", tags: ["Project/Knomo/UI"] });
+	const untagged = await makeMemo("untagged", { contentSnapshot: "Alpha memo", tags: [] });
+	const memos = [tagged, childTagged, untagged];
+	const state = new KnomoViewStateController();
+	state.activeTagKey = "project/knomo";
+	state.searchQuery = "alpha";
+	assert.deepEqual(filterCatalogMemos(memos, state.search.getFilter(state.getSearchSource())).map(memo => memo.id), ["tagged"]);
+	state.searchQuery = "";
+	assert.deepEqual(filterCatalogMemos(memos, state.search.getFilter(state.getSearchSource())).map(memo => memo.id), ["tagged", "child-tagged"]);
+	state.activeTagKey = null;
+	state.scopeFilter = "no-tag";
+	assert.deepEqual(filterCatalogMemos(memos, state.search.getFilter(state.getSearchSource())).map(memo => memo.id), ["untagged"]);
 });
 
-test("filterVisibleMemos returns historical same-day review memos in newest order", async () => {
+test("回顾范围排除今天和其他日期，卡片保留 Catalog 的排序", async () => {
 	const today = await makeMemo("today", { createdAt: "2026-05-21T09:00:00" });
 	const lastYear = await makeMemo("last-year", { createdAt: "2025-05-21T09:00:00" });
 	const older = await makeMemo("older", { createdAt: "2024-05-21T09:00:00" });
 	const otherDay = await makeMemo("other-day", { createdAt: "2025-05-22T09:00:00" });
-
-	assert.deepEqual(filterVisibleMemos({
-		...baseOptions([older, today, otherDay, lastYear]),
-		activeNav: "review",
-		today: new Date(2026, 4, 21),
-	}).map((memo) => memo.id), ["last-year", "older"]);
+	const state = new KnomoViewStateController();
+	state.activeNav = "review";
+	assert.deepEqual(filterCatalogMemos([lastYear, today, otherDay, older], state.getSearchSource(new Date(2026, 4, 21)))
+		.map(memo => memo.id), ["last-year", "older"]);
 });
 
-test("memoMatchesSearch uses query, date, and record stats filters together", async () => {
-	const memo = await makeMemo("memo", {
-		createdAt: "2026-06-08T09:15:00",
-		contentSnapshot: "Alpha memo",
-		tags: ["Work"],
-	});
-
-	assert.equal(memoMatchesSearch(
-		memo,
-		"alpha",
-		"week",
-		{ type: "tag", startDate: "2026-06-01", endDateExclusive: "2026-07-01", tagKey: "work", tagLabel: "Work" },
-		disabledDailyStatus(),
-		new Date(2026, 5, 10),
-	), true);
-	assert.equal(memoMatchesSearch(
-		memo,
-		"missing",
-		"week",
-		null,
-		disabledDailyStatus(),
-		new Date(2026, 5, 10),
-	), false);
+test("文字、快捷日期和统计钻取条件取交集", async () => {
+	const memo = await makeMemo("memo", { createdAt: "2026-06-08T09:15:00", contentSnapshot: "Alpha memo", tags: ["Work"] });
+	const state = new KnomoViewStateController();
+	const today = new Date(2026, 5, 10);
+	state.searchDateFilter = "week";
+	state.searchQuery = "alpha";
+	state.recordStatsSearchFilter = { type: "tag", startDate: "2026-06-01", endDateExclusive: "2026-07-01", tagKey: "work", tagLabel: "Work" };
+	assert.deepEqual(filterCatalogMemos([memo], state.search.getFilter(state.getSearchSource(today), today)), [memo]);
+	state.searchQuery = "missing";
+	state.recordStatsSearchFilter = null;
+	assert.deepEqual(filterCatalogMemos([memo], state.search.getFilter(state.getSearchSource(today), today)), []);
 });
-
-function baseOptions(memos: MemoViewItem[]) {
-	return {
-		memos,
-		randomMemos: [],
-		shuffleDayMemos: [],
-		activeNav: "all" as const,
-		activeTagKey: null,
-		scopeFilter: "all" as const,
-		normalizedQuery: "",
-		searchDateFilter: null,
-		recordStatsFilter: null,
-		dailyStatus: disabledDailyStatus(),
-		today: new Date(2026, 4, 21),
-	};
-}
-
-function disabledDailyStatus(): { enabled: false; folder: null; format: null } {
-	return { enabled: false, folder: null, format: null };
-}
 
 async function makeMemo(
 	id: string,

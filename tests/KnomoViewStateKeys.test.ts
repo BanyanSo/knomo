@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("builds card flow view keys from normalized filters", async () => {
@@ -74,41 +73,3 @@ test("keys record stats idle state as loading", async () => {
 		}),
 	);
 });
-
-test("keys closed mobile search independently from visible memos", async () => {
-	await ensureObsidianStub();
-	const {
-		getMobileSearchIdsKey,
-		getMobileSearchStateKey,
-	} = await import("../src/ui/KnomoViewStateKeys");
-	const memo = makeMemo("memo-1");
-
-	assert.equal(getMobileSearchStateKey({
-		open: false,
-		query: "memo",
-		dateFilter: null,
-		recordStatsFilter: null,
-		visibleMemos: [memo],
-	}), "closed");
-	assert.equal(getMobileSearchIdsKey(false, [memo]), "closed");
-	assert.equal(getMobileSearchIdsKey(true, [memo]), "memo-1");
-});
-
-function makeMemo(id: string): MemoViewItem {
-	return {
-		id,
-		createdAt: "2026-06-02T00:00:00+08:00",
-		updatedAt: "2026-06-02T00:00:00+08:00",
-		contentSnapshot: id,
-		contentHash: id,
-		status: "active",
-		tags: [],
-		links: [],
-		images: [],
-		dailyRef: {
-			path: "Journal/2026-06-02.md",
-			heading: null,
-			lineNumberHint: 1,
-		},
-	};
-}

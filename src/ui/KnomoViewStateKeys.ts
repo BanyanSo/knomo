@@ -1,7 +1,6 @@
 import type { RecordStatsSnapshot, RecordStatsView } from "../services/RecordStatsService";
-import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatDatePart } from "../utils/date";
-import { getMemoListStateKey, getMemoRenderKey } from "./MemoRenderRevision";
+import { getMemoListStateKey } from "./MemoRenderRevision";
 import type { CardFlowHeader, CardFlowPresentation } from "./KnomoCardFlowPresenter";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 import { getRecordStatsSearchFilterKey } from "./viewFilters";
@@ -26,19 +25,6 @@ interface CardFlowStateKeyOptions {
 	recordStatsSelectedDate: Date;
 	today: Date;
 	presentation: CardFlowPresentation;
-}
-
-interface MobileSearchViewStateKeyOptions {
-	activeNav?: SidebarNav;
-	activeTagKey?: string | null;
-	query: string;
-	dateFilter: SearchDateFilter | null;
-	recordStatsFilter: RecordStatsSearchFilter | null;
-}
-
-interface MobileSearchStateKeyOptions extends MobileSearchViewStateKeyOptions {
-	open: boolean;
-	visibleMemos: readonly MemoRecord[];
 }
 
 export function getStateKey(parts: readonly (string | number)[]): string {
@@ -91,44 +77,6 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 		getCardFlowHeadersStateKey(options.presentation.headers),
 		getMemoListStateKey(options.presentation.memos),
 	]);
-}
-
-export function getMobileSearchViewStateKey(options: MobileSearchViewStateKeyOptions): string {
-	return getStateKey([
-		options.activeNav ?? "all",
-		options.activeTagKey ?? "",
-		options.query.trim().toLowerCase(),
-		options.dateFilter ?? "",
-		getRecordStatsSearchFilterKey(options.recordStatsFilter),
-	]);
-}
-
-export function getMobileSearchChangeIntent(
-	previousViewStateKey: string,
-	options: MobileSearchViewStateKeyOptions,
-): CardFlowChangeIntent {
-	return getChangeIntent(previousViewStateKey, getMobileSearchViewStateKey(options));
-}
-
-export function getMobileSearchStateKey(options: MobileSearchStateKeyOptions): string {
-	if (!options.open) {
-		return "closed";
-	}
-	return getStateKey([
-		options.activeNav ?? "all",
-		options.activeTagKey ?? "",
-		options.query.trim().toLowerCase(),
-		options.dateFilter ?? "",
-		getRecordStatsSearchFilterKey(options.recordStatsFilter),
-		getMemoListStateKey(options.visibleMemos),
-	]);
-}
-
-export function getMobileSearchIdsKey(open: boolean, visibleMemos: readonly MemoRecord[]): string {
-	if (!open) {
-		return "closed";
-	}
-	return visibleMemos.map(getMemoRenderKey).join("\n");
 }
 
 function getChangeIntent(previousViewStateKey: string, currentViewStateKey: string): CardFlowChangeIntent {

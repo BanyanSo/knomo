@@ -1049,6 +1049,7 @@ async function sessionView(editor: ComposerEditor) {
 	return Object.assign(Object.create(KnomoView.prototype), fields) as typeof fields & {
 		startEditing(memo: import("../src/types/memoView").MemoViewItem): void;
 		cancelEditing(): void; clearReference(): void; saveInput(): Promise<void>;
+		composerSaveRefreshQueue: Promise<void>;
 		closeComposerKeepingDraft(): void; cancelComposerFromEscape(): void;
 		handleMemoAction(action: "reference", memo: import("../src/types/memoView").MemoViewItem): Promise<void>;
 		render(): Promise<void>;
@@ -1148,7 +1149,7 @@ test("S08 late Reference result cannot attach to a switched or restored session"
 	} finally { close(); }
 });
 
-test("W06-W07 late settled refresh preserves new errors, sheet and scroll ownership", async () => {
+test("W06-W07 late settled feedback preserves new errors, sheet and scroll ownership", async () => {
 	const { editor, close } = environment("first");
 	try {
 		const view = await sessionView(editor);
@@ -1156,12 +1157,13 @@ test("W06-W07 late settled refresh preserves new errors, sheet and scroll owners
 		const settled: ReturnType<typeof view.memoCommandService.startCreate>["settled"] = new Promise(resolve => { finish = resolve; });
 		view.memoCommandService.startCreate = () => ({ dailyCommitted: Promise.resolve(), settled });
 		let status = ""; view.updateStatus = message => { status = message; };
-		let refreshed!: () => void; const refreshedPromise = new Promise<void>(resolve => { refreshed = resolve; });
-		view.reloadMemos = async () => { refreshed(); return true; };
+		let reloads = 0;
+		view.reloadMemos = async () => { reloads++; return true; };
 		await view.saveInput();
 		editor.reset("new draft"); view.openComposer(); status = "new error";
 		finish({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false });
-		await refreshedPromise; await Promise.resolve();
+		await view.composerSaveRefreshQueue;
+		assert.equal(reloads, 0);
 		assert.equal(editor.input.value, "new draft"); assert.equal(view.composerOpen, true); assert.equal(status, "new error");
 	} finally { close(); }
 });
@@ -2113,4 +2115,54 @@ test("clicking the blank scroll area starts input at the end without changing th
 		editor.view.scrollDOM.dispatchEvent(new win.MouseEvent("click", { bubbles: true, button: 0 }));
 		assert.equal(win.document.activeElement === editor.input, false);
 	} finally { close(); }
+});
+
+test("移动端引用在异步读取前打开编辑器，结果只更新引用，不重新聚焦或移动新选区", async () => {
+	const { editor, close } = environment("comment");
+	try {
+		const view = await sessionView(editor);
+		view.currentLayout = "mobile"; view.composerOpen = false;
+		Object.assign(view, { mobileSearchController: { isOpen: false }, app: { workspace: { getActiveViewOfType: () => view } } });
+		let opens = 0;
+		view.openComposer = () => { opens++; view.composerOpen = true; editor.view.focus(); };
+		let finish!: (value: { text: string }) => void;
+		view.memoCommandService.createReferenceText = () => new Promise(resolve => { finish = resolve; });
+		const pending = view.handleMemoAction("reference", sessionMemo("source"));
+		assert.equal(opens, 1, "原始点击调用栈内必须打开编辑器");
+		await Promise.resolve();
+		editor.input.setSelectionRange(1, 3);
+		finish({ text: "[[source]]" }); await pending;
+		assert.equal(opens, 1, "异步结果不重新打开、抢焦点或重置入场动画");
+		assert.equal(editor.input.selectionStart, 1); assert.equal(editor.input.selectionEnd, 3);
+		assert.equal(view.quoteReferenceText, "[[source]]");
+		assert.equal(editor.input.value, "comment");
+	} finally { close(); }
+});
+
+test("移动端引用等待期间关闭重开、切页或读取失败，不追加迟到引用也不重新打开", async () => {
+	for (const scenario of ["close-reopen", "other-view", "failure"] as const) {
+		const { editor, win, close } = environment("draft");
+		try {
+			const view = await sessionView(editor);
+			view.currentLayout = "mobile"; view.composerOpen = false;
+			let active = true, opens = 0;
+			Object.assign(view, { mobileSearchController: { isOpen: false }, app: { workspace: { getActiveViewOfType: () => active ? view : null } } });
+			view.openComposer = () => { opens++; view.composerOpen = true; editor.view.focus(); };
+			let finish!: (value: { text: string }) => void, fail!: (error: Error) => void;
+			view.memoCommandService.createReferenceText = () => new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+			const pending = view.handleMemoAction("reference", sessionMemo("source"));
+			await Promise.resolve();
+			if (scenario === "close-reopen") {
+				editor.input.dispatchEvent(new win.Event("composer-action-cancel"));
+				view.composerOpen = false; view.composerOpen = true;
+			}
+			if (scenario === "other-view") active = false;
+			if (scenario === "failure") fail(new Error("reference read failed"));
+			else finish({ text: "[[late]]" });
+			await pending;
+			assert.equal(view.quoteReferenceText, null, scenario);
+			assert.equal(editor.input.value, "draft", scenario);
+			assert.equal(opens, 1, scenario);
+		} finally { close(); }
+	}
 });

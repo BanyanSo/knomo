@@ -139,8 +139,11 @@ export function calculateMobileComposerDockOffset(input: MobileComposerDockOffse
 export function calculateMobileComposerMeasurements(input: MobileComposerMeasurementsInput): MobileComposerMeasurements {
 	const viewportTop = input.viewportOffsetTop === null ? 0 : Math.max(0, input.viewportOffsetTop);
 	const topLimit = Math.max(viewportTop + input.topGuard, input.containerTop + 8);
-	const contentMaxHeight = Math.round(Math.max(160, input.composerDockTop - topLimit));
-	const inputMaxHeight = Math.round(Math.max(120, contentMaxHeight - input.toolbarHeight - input.referenceHeight - 32));
+	// 窄高视口优先保留工具栏和至少一行正文，必要时减少顶部留白。
+	const availableHeight = Math.max(0, input.composerDockTop - Math.max(viewportTop, input.containerTop) - 8);
+	const minimumContentHeight = input.toolbarHeight + input.referenceHeight + 32 + 48;
+	const contentMaxHeight = Math.round(Math.min(availableHeight, Math.max(160, minimumContentHeight, input.composerDockTop - topLimit)));
+	const inputMaxHeight = Math.round(Math.max(0, contentMaxHeight - input.toolbarHeight - input.referenceHeight - 32));
 	return {
 		contentMaxHeight,
 		inputMaxHeight,

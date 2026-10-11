@@ -1,6 +1,9 @@
 import { MarkdownRenderer } from "obsidian";
 import type { App, Component } from "obsidian";
 import { t } from "../i18n";
+import type { CatalogQueryFilter } from "../types/catalog";
+import { getCatalogQueryKey } from "../services/SearchMatching";
+import { renderSearchHits } from "./SearchHitRenderer";
 
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import {
@@ -10,6 +13,7 @@ import {
 	type WritableMarkdownTaskMarker,
 } from "../utils/markdownTasks";
 import { normalizeTagKey } from "../utils/tags";
+import { parseMarkdownReferences } from "../utils/markdownReferences";
 import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 
@@ -20,6 +24,8 @@ interface MemoMarkdownRendererOptions {
 	createComponent: () => Component;
 	getDocument: () => Document;
 	getGeneration: (surface: MemoMarkdownSurface) => number;
+	getSearchFilter?: (surface: MemoMarkdownSurface) => CatalogQueryFilter;
+	getSearchVersion?: (surface: MemoMarkdownSurface) => number;
 	concurrency: number;
 	scheduleTask?: (callback: () => void) => number;
 	cancelTask?: (id: number) => void;
@@ -29,6 +35,8 @@ interface MarkdownRenderToken {
 	generation: number;
 	requestId: number;
 	surfaceEpoch: number;
+	searchKey?: string;
+	searchVersion?: number;
 }
 
 export class MemoMarkdownRenderer {
@@ -65,6 +73,8 @@ export class MemoMarkdownRenderer {
 		surface: MemoMarkdownSurface,
 	): void {
 		const token = this.createRenderToken(container, generation, surface);
+		if (this.options.getSearchFilter) token.searchKey = getCatalogQueryKey(this.options.getSearchFilter(surface));
+		token.searchVersion = this.options.getSearchVersion?.(surface);
 		this.getQueue(surface).enqueue(
 			priority,
 			generation,
@@ -80,6 +90,9 @@ export class MemoMarkdownRenderer {
 		generation: number,
 		surface: MemoMarkdownSurface,
 	): void {
+		if (generation !== this.options.getGeneration(surface)) return;
+		// 来源已包含在当前正文中，先同步显示；宿主只在离屏完成后替换，避免来源行从零高度插入。
+		if (container.firstChild === null) renderSourceReferencePlaceholder(container, text);
 		const token = this.createRenderToken(container, generation, surface);
 		this.getQueue(surface).enqueue(
 			"normal",
@@ -158,20 +171,12 @@ export class MemoMarkdownRenderer {
 		}
 	}
 
-	syncTaskCheckboxDom(input: HTMLInputElement, memo: MemoRecord): void {
-		const taskIndex = this.getTaskCheckboxIndex(input);
-		if (taskIndex === null) {
-			return;
-		}
-		const task = getMarkdownTaskLines(memo.contentSnapshot)[taskIndex] ?? null;
-		if (task === null) {
-			return;
-		}
-		applyTaskCheckboxDomState(input, task.marker);
-	}
-
 	applyTaskCheckboxDomState(input: HTMLInputElement, marker: MarkdownTaskMarker | WritableMarkdownTaskMarker): void {
 		applyTaskCheckboxDomState(input, marker);
+	}
+
+	refreshSearchHits(memo: MemoRecord, container: HTMLElement, surface: MemoMarkdownSurface): void {
+		if (this.options.getSearchFilter) renderSearchHits(container, memo, this.options.getSearchFilter(surface));
 	}
 
 	private getQueue(surface: MemoMarkdownSurface): MarkdownRenderQueue {
@@ -209,6 +214,7 @@ export class MemoMarkdownRenderer {
 				container.appendChild(renderTarget.firstChild);
 			}
 			prepareRenderedMemoMarkdown(container, memo);
+			this.refreshSearchHits(memo, container, surface);
 			this.adoptRenderComponent(container, component, surface);
 			adopted = true;
 		} catch {
@@ -217,6 +223,7 @@ export class MemoMarkdownRenderer {
 			}
 			this.releaseContainerComponent(container, surface);
 			container.setText(previewText);
+			this.refreshSearchHits(memo, container, surface);
 		} finally {
 			if (!adopted) {
 				this.releasePendingComponent(component, surface);
@@ -258,8 +265,8 @@ export class MemoMarkdownRenderer {
 			if (!this.isCurrentRender(container, token, surface)) {
 				return;
 			}
-			this.releaseContainerComponent(container, surface);
-			container.setText(text);
+			// 宿主失败时保留可读来源及仍在使用的组件，后续 metadata 刷新可以再次尝试。
+			if (container.firstChild === null) renderSourceReferencePlaceholder(container, text);
 		} finally {
 			if (!adopted) {
 				this.releasePendingComponent(component, surface);
@@ -326,6 +333,8 @@ export class MemoMarkdownRenderer {
 		surface: MemoMarkdownSurface,
 	): boolean {
 		return token.generation === this.options.getGeneration(surface)
+			&& (token.searchKey === undefined || token.searchKey === getCatalogQueryKey(this.options.getSearchFilter?.(surface) ?? {}))
+			&& (token.searchVersion === undefined || token.searchVersion === this.options.getSearchVersion?.(surface))
 			&& token.surfaceEpoch === this.surfaceEpochs[surface]
 			&& token.requestId === this.latestRequestIds[surface].get(container);
 	}
@@ -353,6 +362,23 @@ export function prepareRenderedMemoMarkdown(container: HTMLElement, memo: MemoRe
 		}
 	}
 	prepareRenderedTaskCheckboxes(container, memo);
+}
+
+function renderSourceReferencePlaceholder(container: HTMLElement, text: string): void {
+	const paragraph = container.createEl("p", { attr: { "data-knomo-render-placeholder": "", inert: "" } });
+	const reference = parseMarkdownReferences(text)[0];
+	if (!reference?.valid || reference.startOffset === undefined) {
+		paragraph.setText(text);
+		return;
+	}
+	paragraph.createSpan({ text: text.slice(0, reference.startOffset) });
+	// 仅显示已知 alias；实际导航、解析状态与 Markdown 格式仍交给宿主，不把占位当成交互结果。
+	paragraph.createEl("a", {
+		cls: /^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(reference.target) ? "external-link" : "internal-link",
+		text: reference.displayText ?? reference.target,
+	});
+	const suffix = text.slice(reference.startOffset + reference.raw.length);
+	if (suffix) paragraph.createSpan({ text: suffix });
 }
 
 export function prepareInternalLinks(container: HTMLElement, sourcePath: string): void {

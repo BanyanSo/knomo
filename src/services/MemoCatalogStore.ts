@@ -1,3 +1,5 @@
+import { CatalogFileChangeTracker, readCatalogFileChanges } from "./CatalogFileChanges";
+import type { CatalogChangeCursor, CatalogFileChanges } from "./CatalogFileChanges";
 import type {
 	CatalogAggregateSnapshot,
 	CatalogCoverage,
@@ -15,6 +17,8 @@ import type {
 
 import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/timeBuoy";
 import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
+import { getCatalogTextTerms, matchesSearchDate, matchesSearchTerms, narrowCatalogQuery } from "./SearchMatching";
+import { normalizeSearchText } from "../utils/searchText";
 
 export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 	kind: "partial",
@@ -43,13 +47,14 @@ export interface MemoCatalogStore {
 	open(): Promise<void>;
 	close(): void;
 	getLifecycle(): CatalogStoreLifecycle;
+	getRuntimeGeneration(): string;
+	readFileChangesSince(previous?: CatalogChangeCursor): Promise<CatalogFileChanges>;
 	getCatalogRevision(): Promise<number>;
 	replaceFilePartition(partition: CatalogFilePartition): Promise<number>;
 	replaceFilePartitions(partitions: readonly CatalogFilePartition[]): Promise<number>;
 	deleteFilePartition(sourcePath: string): Promise<number>;
 	getFile(sourcePath: string): Promise<CatalogFileRecord | null>;
 	getFileRevisionBatch(sourcePath: string): Promise<CatalogFileRevisionBatch | null>;
-	listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]>;
 	getObservation(observationKey: string): Promise<CatalogObservation | null>;
 	listFiles(): Promise<CatalogFileRecord[]>;
 	count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult>;
@@ -67,6 +72,7 @@ export interface MemoCatalogStore {
 }
 
 export class InMemoryMemoCatalogStore implements MemoCatalogStore {
+	private readonly fileChanges = new CatalogFileChangeTracker();
 	private readonly files = new Map<string, CatalogFileRecord>();
 	private readonly observations = new Map<string, CatalogObservation>();
 	private readonly observationsByFile = new Map<string, string[]>();
@@ -83,7 +89,12 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	async open(): Promise<void> { this.snapshotClosed = false; }
 	async getCatalogRevision(): Promise<number> { return this.catalogRevision; }
 
-	close(): void { this.snapshotClosed = true; this.snapshotGeneration++; }
+	close(): void { this.snapshotClosed = true; this.snapshotGeneration++; this.fileChanges.clear(); }
+
+	getRuntimeGeneration(): string { return String(this.snapshotGeneration); }
+	readFileChangesSince(previous?: CatalogChangeCursor): Promise<CatalogFileChanges> {
+		return readCatalogFileChanges(this, this.fileChanges, previous);
+	}
 
 	getLifecycle(): CatalogStoreLifecycle {
 		return { state: "ready", persistent: false, writable: true, reason: null };
@@ -110,6 +121,8 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		}
 		this.catalogRevision += 1;
 		this.trimToLimit();
+		if (this.capacityLimited) this.fileChanges.clear();
+		else this.fileChanges.record(this.catalogRevision, partitions.map(partition => partition.file.sourcePath));
 		return this.catalogRevision;
 	}
 
@@ -119,6 +132,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		}
 		this.removeFilePartition(sourcePath);
 		this.catalogRevision += 1;
+		this.fileChanges.record(this.catalogRevision, [sourcePath]);
 		return this.catalogRevision;
 	}
 
@@ -139,21 +153,6 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		return { file: clone(file), observations, catalogRevision: this.catalogRevision };
 	}
 
-	async listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]> {
-		return [...this.files.values()]
-			.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
-			.map((file) => ({
-				file: clone(file),
-				observations: (this.observationsByFile.get(file.sourcePath) ?? [])
-					.flatMap((key) => {
-						const observation = this.observations.get(key);
-						return observation === undefined ? [] : [clone(observation)];
-					})
-					.sort((left, right) => left.observationKey.localeCompare(right.observationKey)),
-				catalogRevision: this.catalogRevision,
-			}));
-	}
-
 	async getObservation(observationKey: string): Promise<CatalogObservation | null> {
 		const observation = this.observations.get(observationKey);
 		return observation === undefined ? null : clone(observation);
@@ -164,10 +163,11 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
+		request = narrowCatalogQuery(request);
 		signal?.throwIfAborted();
 		const matches = createCatalogQueryMatcher(request);
 		let count = 0;
-		for (const observation of this.observations.values()) {
+		for (const observation of request.matchNone ? [] : this.observations.values()) {
 			if (matches(observation)) {
 				count += 1;
 			}
@@ -181,6 +181,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
+		request = { ...request, ...narrowCatalogQuery(request) };
 		if (request.cursor !== undefined && request.cursor !== null && request.cursor.catalogRevision !== this.catalogRevision) {
 			return emptyInvalidatedPage(this.catalogRevision, this.coverage);
 		}
@@ -188,7 +189,12 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		let cursorReads = 0;
 		let observationsRead = 0;
 		const matchesQuery = createCatalogQueryMatcher(request);
-		const candidates = [...this.observations.values()].sort(compareCatalogObservations);
+		const observations = request.sourcePaths === undefined ? [...this.observations.values()]
+			: [...new Set(request.sourcePaths)].flatMap(sourcePath => (this.observationsByFile.get(sourcePath) ?? []).flatMap(key => {
+				const observation = this.observations.get(key);
+				return observation === undefined ? [] : [observation];
+			}));
+		const candidates = request.matchNone ? [] : observations.sort(compareCatalogObservations);
 		const matches: CatalogObservation[] = [];
 		for (const observation of candidates) {
 			cursorReads += 1;
@@ -309,6 +315,8 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async clear(preserveMetaKeys: readonly string[] = []): Promise<void> {
+		this.snapshotGeneration++;
+		this.fileChanges.clear();
 		const preservedMeta = new Map<string, unknown>();
 		for (const key of new Set(preserveMetaKeys)) {
 			if (this.metadata.has(key)) preservedMeta.set(key, this.metadata.get(key));
@@ -408,6 +416,20 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		this.lifecycle = degradedLifecycle("closed");
 	}
 
+	getRuntimeGeneration(): string {
+		return `${this.snapshotGeneration}:${this.active?.getRuntimeGeneration() ?? ""}`;
+	}
+
+	async readFileChangesSince(previous?: CatalogChangeCursor): Promise<CatalogFileChanges> {
+		const generation = this.getRuntimeGeneration();
+		const snapshot = await this.run(store => store.readFileChangesSince(previous?.storeGeneration === generation
+			? { ...previous, storeGeneration: store.getRuntimeGeneration() } : undefined));
+		const storeGeneration = this.getRuntimeGeneration();
+		return { ...snapshot, cursor: { ...snapshot.cursor, storeGeneration },
+			sourcePaths: previous?.storeGeneration === generation ? snapshot.sourcePaths : null,
+			invalidated: snapshot.invalidated || generation !== storeGeneration };
+	}
+
 	getLifecycle(): CatalogStoreLifecycle {
 		return { ...this.lifecycle };
 	}
@@ -426,9 +448,6 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	}
 	getFileRevisionBatch(sourcePath: string): Promise<CatalogFileRevisionBatch | null> {
 		return this.run((store) => store.getFileRevisionBatch(sourcePath));
-	}
-	listFileRevisionBatches(): Promise<CatalogFileRevisionBatch[]> {
-		return this.run((store) => store.listFileRevisionBatches());
 	}
 	getObservation(observationKey: string): Promise<CatalogObservation | null> {
 		return this.run((store) => store.getObservation(observationKey));
@@ -552,7 +571,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 }
 
 export function normalizeCatalogText(value: string): string {
-	return value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+	return normalizeSearchText(value);
 }
 
 export function matchesCatalogQuery(
@@ -568,10 +587,15 @@ export function createCatalogQueryMatcher(
 	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
 ): (observation: CatalogObservation) => boolean {
 	const tags = request.tags?.map(normalizeCatalogText).filter((tag) => tag.length > 0) ?? [];
-	const normalizedText = request.text === undefined ? "" : normalizeCatalogText(request.text);
+	request = narrowCatalogQuery(request);
+	const terms = getCatalogTextTerms(request);
 	const linkTarget = request.linkTarget === undefined ? undefined : normalizeCatalogText(request.linkTarget);
 	const imagePath = request.imagePath === undefined ? undefined : normalizeCatalogText(request.imagePath);
-	return observation => (normalizedText.length === 0 || observation.searchText.includes(normalizedText))
+	return observation => !request.matchNone
+		&& (request.textTerms === undefined || observation.searchBody !== undefined)
+		&& matchesSearchTerms(observation, terms)
+		&& matchesSearchDate(observation.logicalDate, request.searchDate)
+		&& (request.hasReference === undefined || (observation.explicitReferenceTargets.length > 0) === request.hasReference)
 		&& tags.every((tag) => observation.tagKeys.some((observationTag) => (
 			observationTag === tag || observationTag.startsWith(`${tag}/`)
 		)))

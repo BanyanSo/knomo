@@ -6,7 +6,7 @@ import { build } from "esbuild";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
 
 // 宿主 Menu 的实际呈现需在 Obsidian 验收；这里验证 Knomo 的命中区、层级和桌面样式。
-test("mobile touch targets and confirm layering work across themes, font sizes and orientations; desktop popovers share the menu width", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile touch targets and confirm layering work across themes, host font overrides, Knomo Token scales and orientations; desktop popovers share the menu width", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const editFixture = await createMobilePopupFixture("cancel-edit");
 	const editingHtml = editFixture.layer.innerHTML, cardHtml = editFixture.card.outerHTML, scopeHtml = editFixture.scopeMenu.outerHTML;
 	editFixture.close();
@@ -23,11 +23,12 @@ test("mobile touch targets and confirm layering work across themes, font sizes a
 		const page = await browser.newPage();
 		const errors: string[] = [];
 		page.on("pageerror", (error: Error) => errors.push(error.message));
-		for (const theme of ["theme-light", "theme-dark"]) for (const size of [15, 22]) for (const [width, height] of [[320, 700], [740, 320], [240, 500]]) {
+		for (const theme of ["theme-light", "theme-dark"]) for (const { size, scale } of [{ size: 15, scale: 1 }, { size: 22, scale: 1 }, { size: 15, scale: 1.5 }, { size: 15, scale: 2 }]) for (const [width, height] of [[320, 700], [740, 320], [240, 500]]) {
 			await page.setViewportSize({ width, height });
 			for (const [mode, html] of [["edit", editingHtml], ["reference", referenceHtml]]) {
 				await page.setContent(`<style>${hostCss}${css}
 					body { margin:0; display:block; font:${size}px Arial; --font-ui-medium:${size}px; --font-preferred-size:${size}px; --font-ui-small:14px; --border-width:1px; --size-4-3:12px; --size-4-4:16px; --size-4-8:32px; --layer-modal:50; }
+					body { --knomo-text-ui-medium:${15 * scale}px; --knomo-text-ui-base:${14 * scale}px; --knomo-text-meta:${13 * scale}px; --knomo-text-caption:${12 * scale}px; }
 					.theme-light { --background-primary:#fff; --background-secondary:#f6f6f6; --background-modifier-border:#ddd; --text-normal:#222; --text-muted:#666; --text-faint:#888; --interactive-accent:#6479e5; }
 					.theme-dark { --background-primary:#202020; --background-secondary:#282828; --background-modifier-border:#444; --text-normal:#eee; --text-muted:#bbb; --text-faint:#999; --interactive-accent:#8290f0; }
 					#root { display:block; height:100vh; width:100%; } .modal-container { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:var(--layer-modal); }
@@ -64,6 +65,8 @@ test("mobile touch targets and confirm layering work across themes, font sizes a
 					win.touchController=controller;controller.prepare();controller.open();
 				});
 				await page.waitForTimeout(280);
+				assert.equal(await page.locator(".knomo-cancel-edit-button").evaluate((el: HTMLElement) => getComputedStyle(el).fontSize), `${14 * scale}px`);
+				if (mode === "reference") assert.equal(await page.locator(".knomo-reference-preview-text").evaluate((el: HTMLElement) => getComputedStyle(el).fontSize), `${13 * scale}px`);
 				const selectors = [".knomo-send-button", ".knomo-tool-button", mode === "edit" ? ".knomo-cancel-edit-button" : ".knomo-reference-clear"];
 				for (const selector of selectors) {
 					const target = await page.locator(selector).first().evaluate((button: HTMLElement) => {
@@ -115,6 +118,8 @@ test("mobile touch targets and confirm layering work across themes, font sizes a
 					});
 					assert.ok(geometry.width>=44 && geometry.height>=44 && geometry.hit,JSON.stringify({ selector,geometry,width,height }));
 				}
+				assert.equal(await page.locator(".knomo-tag-nav").evaluate((el: HTMLElement) => getComputedStyle(el).fontSize), `${14 * scale}px`);
+				assert.equal(await page.locator(".knomo-mobile-search-chip").evaluate((el: HTMLElement) => getComputedStyle(el).fontSize), `${13 * scale}px`);
 			}
 		}
 		await page.setViewportSize({ width:1000,height:720 });

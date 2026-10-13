@@ -247,6 +247,7 @@ export default class KnomoPlugin extends Plugin {
 		const markdownMutationService = new MarkdownMutationService(this.app, {
 			getWriteHeading: getEffectiveWriteHeading,
 			getDailyFileForDate: (logicalDate) => {
+				if (lowPriorityWorkQueue.signal.aborted) throw new Error("Daily write runtime cancelled.");
 				const date = parseLogicalDate(logicalDate);
 				return dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig());
 			},
@@ -257,12 +258,12 @@ export default class KnomoPlugin extends Plugin {
 			},
 			getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 			getInsertPosition: () => this.settingsService.getSettings().dailyInsertPosition,
-			updateCatalogPartition: (input) => this.updateCommittedCatalogPartition(input),
-			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
-			removeEmptyCreatedDailyFile: async (file) => {
-				if ((await this.app.vault.cachedRead(file)).length === 0) await this.app.fileManager.trashFile(file);
+			updateCatalogPartition: (input) => {
+				if (lowPriorityWorkQueue.signal.aborted) throw new Error("Daily write runtime cancelled.");
+				return this.updateCommittedCatalogPartition(input);
 			},
-		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
+			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
+		}, new DailyMemoWriteGateway(this.app, diaryMemoParser, { cancellationSignal: lowPriorityWorkQueue.signal }));
 
 		const getTrashFolder = () => {
 			if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable.");

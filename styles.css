@@ -2666,15 +2666,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	text-align-last: start;
 }
 
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h1,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h2,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h3,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h4,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h5,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h6,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content pre,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content code,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content table {
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content :is(h1, h2, h3, h4, h5, h6, pre, code, table) {
 	text-align: start;
 }
 

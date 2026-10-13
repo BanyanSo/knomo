@@ -60,15 +60,16 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator, CATALOG_CHECKPOINT_META_KEY } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser, CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
-	const { MemoCatalogService, buildCatalogPartition } = await import("../src/services/MemoCatalogService");
+	const { MemoCatalogService, buildCatalogPartition, buildCatalogSearchTokens } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
 	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
 	const { hashText } = await import("../src/utils/hash");
 	const databaseName = `search-upgrade-${Date.now()}`;
 	for (const store of [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(databaseName, { factory: indexedDB, keyRange: IDBKeyRange })]) {
-		const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 中文ABC项目2026 **完成** [[Hidden|可读别名]]\n", mtime: 10 }];
-		for (let boot = 0; boot < 3; boot += 1) {
+		const oldVersions = [7, 8, 9];
+		const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 中文ABC项目2026 **完成** [[Hidden|可读别名]] %%秘密注释%%\n- 09:01 `code\n  %%literal%%\n  end`\n- 09:02 left ![before %%hidden%% after](image.png) right\n", mtime: 10 }];
+		for (let boot = 0; boot < oldVersions.length + 2; boot += 1) {
 			const fixture = await createCoordinatorFixture(files);
 			const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(store),
 				new DiaryMemoParser(async bytes => sha256(bytes)), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
@@ -77,25 +78,40 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 				coordinator.start(fixture.owner);
 				await coordinator.initialize();
 				await coordinator.waitForIdle();
-				assert.equal(fixture.readCount(), boot === 2 ? 0 : 1, `boot ${boot}`);
+				assert.equal(fixture.readCount(), boot === oldVersions.length + 1 ? 0 : 1, `boot ${boot}`);
 				for (const text of ["中", "中文", "项目", "ABC", "可读别名"]) {
 					assert.equal((await store.query({ text, limit: 1 })).items.length, 1, text);
 					assert.equal((await store.count({ text })).count, 1, text);
 				}
+				assert.equal((await store.query({ text: "秘密注释", limit: 1 })).items.length, 0);
+				assert.equal((await store.count({ text: "秘密注释" })).count, 0);
+				assert.equal((await store.query({ text: "literal", limit: 1 })).items.length, 1);
+				assert.equal((await store.count({ text: "literal" })).count, 1);
+				assert.equal((await store.count({ text: "before after" })).count, 0);
 			} finally { fixture.unload(); }
-			if (boot === 0) {
+			if (boot < oldVersions.length) {
+				const oldVersion = oldVersions[boot]!;
 				await store.open();
 				const batch = await store.getFileRevisionBatch(files[0].path);
 				assert.ok(batch);
-				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: 7 }));
+				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: oldVersion }));
 				const oldPartition = buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
-					observations: batch.observations, parserVersion: 7, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
+					observations: batch.observations, parserVersion: oldVersion, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
 				oldPartition.observations[0].searchTokens = ["中文abc项目2026", "中文a", "文ab", "abc", "bc项", "c项目", "项目2", "目20", "202", "026"];
-				Reflect.deleteProperty(oldPartition.observations[0], "searchBody");
+				if (oldVersion === 7) Reflect.deleteProperty(oldPartition.observations[0], "searchBody");
+				else {
+					oldPartition.observations[0].searchBody.push("秘密注释");
+					oldPartition.observations[0].searchTokens.push("秘密注释", "秘密", "密注", "注释");
+				}
+				if (oldVersion === 9) {
+					oldPartition.observations[1].searchBody = ["`code", "end`"];
+					oldPartition.observations[2].searchBody = ["left before after right"];
+					for (const item of oldPartition.observations.slice(1)) item.searchTokens = [...new Set(item.searchBody.flatMap(buildCatalogSearchTokens))];
+				}
 				await store.replaceFilePartition(oldPartition);
 				const checkpoint = await store.getMeta<Record<string, unknown>>(CATALOG_CHECKPOINT_META_KEY);
-				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: 7, settingsFingerprint: oldFingerprint });
-				assert.ok(CATALOG_PARSER_VERSION > 7);
+				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: oldVersion, settingsFingerprint: oldFingerprint });
+				assert.ok(CATALOG_PARSER_VERSION > oldVersion);
 				store.close();
 			}
 		}

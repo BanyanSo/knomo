@@ -245,6 +245,22 @@ export default class KnomoPlugin extends Plugin {
 		);
 
 		const markdownMutationService = new MarkdownMutationService(this.app, {
+			onCatalogUpdateSettled: change => {
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+					if (leaf.view instanceof KnomoView) leaf.view.handleConfirmedCatalogSettled(change);
+				}
+			},
+			onDailyConfirmed: (presentation) => {
+				if (lowPriorityWorkQueue.signal.aborted) return;
+				const date = parseDailyNoteDateFromPath(presentation.change.sourcePath, getEffectiveDailyConfig());
+				if (date === null || formatDatePart(date) !== presentation.change.logicalDate) return;
+				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+					if (!(leaf.view instanceof KnomoView)) continue;
+					try { leaf.view.handleConfirmedDailyMemoChange(presentation); }
+					catch (error) { console.error("Knomo confirmed card refresh failed", error); }
+				}
+			},
 			getWriteHeading: getEffectiveWriteHeading,
 			getDailyFileForDate: (logicalDate) => {
 				if (lowPriorityWorkQueue.signal.aborted) throw new Error("Daily write runtime cancelled.");
@@ -356,7 +372,15 @@ export default class KnomoPlugin extends Plugin {
 
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
+			let confirmedDailyConfiguration = JSON.stringify(dailyNotesProvider.getConfig());
 			knomoCurrentConfigService.start(this, async () => {
+				const nextDailyConfiguration = JSON.stringify(dailyNotesProvider.getConfig());
+				if (nextDailyConfiguration !== confirmedDailyConfiguration) {
+					confirmedDailyConfiguration = nextDailyConfiguration;
+					for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+						if (leaf.view instanceof KnomoView) leaf.view.invalidateConfirmedDailyMemos();
+					}
+				}
 				const nextTrashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
 				trashStore.invalidateConfiguration(nextTrashConfiguration !== trashConfiguration);
 				trashConfiguration = nextTrashConfiguration;
@@ -591,6 +615,8 @@ export default class KnomoPlugin extends Plugin {
 
 	private async updateCommittedCatalogPartition(input: MarkdownCatalogCommitInput): Promise<void> {
 		if (this.catalogIndexCoordinator === null) throw new Error("Memo Catalog is not available.");
+		// 排队期间 Daily 可再次提交；旧内容不能在更新版本之后发布为当前分区。
+		if (await this.app.vault.read(input.file) !== input.content) throw new Error("Daily changed before Catalog publication.");
 		const committed = this.catalogIndexCoordinator.replaceCommittedFile(input);
 		const change = input.presentationChange;
 		const presentation = change === undefined ? Promise.resolve() : Promise.all(

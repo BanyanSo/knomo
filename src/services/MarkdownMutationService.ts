@@ -22,7 +22,7 @@ import {
 	type PreparedDailyWrite,
 } from "./DailyMemoWriteGateway";
 import { MarkdownBlockService } from "./MarkdownBlockService";
-import { buildDailyMemoPresentationChange, type DailyMemoPresentationChange } from "./DailyMemoPresentationChange";
+import { buildDailyMemoPresentationChange, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
 
 export interface MarkdownCatalogCommitInput {
 	file: TFile;
@@ -34,6 +34,8 @@ export interface MarkdownCatalogCommitInput {
 }
 
 export interface MarkdownMutationServiceOptions {
+	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation) => void;
+	onCatalogUpdateSettled?: (change: DailyMemoPresentationChange) => void;
 	getWriteHeading: () => string | null;
 	getDailyFileForDate: (logicalDate: string) => Promise<TFile>;
 	getLogicalDateForPath: (sourcePath: string) => string;
@@ -225,32 +227,41 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		changedAfter: MemoObservation | null = insertedObservation ?? null,
 	): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
-		const catalogUpdate = this.enqueueCatalogUpdate({
-			file: prepared.file,
-			logicalDate: prepared.logicalDate,
-			content: prepared.afterContent,
-			parsed: prepared.after,
-			presentationChange: buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter),
-			...(insertedObservation === undefined ? {} : { insertedObservation }),
-		});
-		void catalogUpdate.catch(() => undefined);
+		const presentationChange = buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter);
 		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
 		let diskConfirmed = prepared.mode !== "active_editor";
-		if (!diskConfirmed && onDailyCommitted) {
+		if (!diskConfirmed && (onDailyCommitted || this.options.onDailyConfirmed)) {
 			try { diskConfirmed = await this.app.vault.read(prepared.file) === prepared.afterContent; }
 			catch { diskConfirmed = false; }
+		}
+		try {
+			if (diskConfirmed) this.options.onDailyConfirmed?.({
+				change: presentationChange, observations: prepared.after.observations,
+			});
+		} catch (error) {
+			console.error("Knomo confirmed Daily presentation failed", error);
 		}
 		try {
 			onDailyCommitted?.(diskConfirmed);
 		} catch {
 			// Daily 已提交，阶段观察者失败不能反向把正文保存标记为失败。
 		}
+		const catalogUpdate = this.enqueueCatalogUpdate({
+			file: prepared.file, logicalDate: prepared.logicalDate, content: prepared.afterContent,
+			parsed: prepared.after, presentationChange,
+			...(insertedObservation === undefined ? {} : { insertedObservation }),
+		});
 		try {
 			await catalogUpdate;
 			return false;
 		} catch {
 			void this.options.refreshCatalogPaths([prepared.file.path]).catch(() => undefined);
 			return true;
+		} finally {
+			if (onDailyCommitted || this.options.onDailyConfirmed) {
+				try { this.options.onCatalogUpdateSettled?.(presentationChange); }
+				catch (error) { console.error("Knomo Catalog presentation settlement failed", error); }
+			}
 		}
 	}
 

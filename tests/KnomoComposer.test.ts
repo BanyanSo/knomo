@@ -348,6 +348,17 @@ class TestElement {
 	hidden = false;
 	querySelector(selector: string): TestElement | null { return this.find(selector.replace(/"/g, "'")); }
 	appendChild(child: TestElement): TestElement { const index = this.children.indexOf(child); if (index >= 0) this.children.splice(index, 1); this.children.push(child); return child; }
+	get firstChild(): TestElement | null { return this.children[0] ?? null; }
+	insertBefore(child: TestElement, reference: TestElement | null): TestElement {
+		if (child === reference) return child;
+		if (reference === null) return this.appendChild(child);
+		const previous = this.children.indexOf(child);
+		if (previous >= 0) this.children.splice(previous, 1);
+		const index = this.children.indexOf(reference);
+		assert.notEqual(index, -1);
+		this.children.splice(index, 0, child);
+		return child;
+	}
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
 	readonly style: { display?: string } = {};

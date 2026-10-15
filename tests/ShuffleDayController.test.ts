@@ -113,12 +113,13 @@ test("targeted memo updates preserve unaffected shuffle-day memos and clear only
 	const { ShuffleDayController } = await loadController();
 	const firstMemo = makeMemo("first", "2026-05-01T09:00:00");
 	const secondMemo = makeMemo("second", "2026-05-01T10:00:00");
+	let renderCalls = 0;
 	const controller = new ShuffleDayController({
 		loadSelectedDate: async () => [firstMemo, secondMemo],
 		...makeService(async () => makeSelectionWithMemos("2026-05-01", [firstMemo, secondMemo])),
 		isShuffleDayActive: () => true,
 		showNotice: () => {},
-		requestRender: () => {},
+		requestRender: () => { renderCalls++; },
 	});
 
 	await controller.refresh();
@@ -129,9 +130,20 @@ test("targeted memo updates preserve unaffected shuffle-day memos and clear only
 	assert.deepEqual(controller.getSnapshot().memos.map((memo) => memo.id), ["first"]);
 	assert.equal(controller.getSnapshot().status, "ready");
 
-	assert.equal(controller.removeMemo(firstMemo.id), true);
+	const rendersBeforeChange = renderCalls;
+	const current = { ...firstMemo, id: "first-current", contentSnapshot: "confirmed first" };
+	const inserted = makeMemo("inserted", "2026-05-01T11:00:00");
+	const unrelated = makeMemo("outside", "2026-05-02T11:00:00");
+	assert.equal(controller.applyMemoChanges(new Map([[firstMemo.id, current]]), [inserted, unrelated]), true);
+	assert.deepEqual(controller.getSnapshot().memos.map(memo => memo.id).sort(), ["first-current", "inserted"]);
+	assert.equal(renderCalls, rendersBeforeChange, "提交更新由父视图统一重绘");
+	assert.equal(controller.removeMemo(current.id), true);
+	assert.equal(controller.getSnapshot().status, "ready");
+	assert.equal(renderCalls, rendersBeforeChange + 1, "独立删除仍触发重绘");
+	assert.equal(controller.removeMemo(inserted.id), true);
 	assert.equal(controller.getSnapshot().status, "empty-day-cleared");
 	assert.deepEqual(controller.getSnapshot().memos, []);
+	assert.equal(renderCalls, rendersBeforeChange + 2);
 });
 
 test("a late selected-date reload cannot overwrite a newer targeted update", async () => {

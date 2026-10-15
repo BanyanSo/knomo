@@ -532,6 +532,7 @@ test("新建目标变化通过真实命令链路拒绝保存，Composer 保留�
 });
 
 interface FixtureOptions {
+	onDailyConfirmed?: import("../src/services/MarkdownMutationService").MarkdownMutationServiceOptions["onDailyConfirmed"];
 	delayEditorDiskWrite?: boolean;
 	beforeCommit?: (file: TFile) => void;
 	beforeProcess?: (file: TFile) => void;
@@ -578,6 +579,7 @@ function createFixture(options: FixtureOptions = {}) {
 	const committedPartitions: MarkdownCatalogCommitInput[] = [];
 	const refreshedPaths: string[][] = [];
 	const service = new MarkdownMutationService(app, {
+		onDailyConfirmed: options.onDailyConfirmed,
 		getWriteHeading: () => options.heading === undefined ? HEADINGS[0] : options.heading,
 		getDailyFileForDate: async (logicalDate) => options.template === undefined
 			? vault.ensureFile(`Daily/${logicalDate}.md`, "## Memos\n")
@@ -780,12 +782,14 @@ test("MemoCommand passes image validation to the actual creation date and preser
 
 test("编辑器事务仅更新内存或磁盘读取失败时，不授权清理持久草稿", async () => {
 	for (const readFailure of [false, true]) {
-		const fixture = createFixture({ activeEditor: true, delayEditorDiskWrite: true });
+		const displayed: unknown[] = [];
+		const fixture = createFixture({ activeEditor: true, delayEditorDiskWrite: true, onDailyConfirmed: change => displayed.push(change) });
 		if (readFailure) fixture.vault.read = async () => { throw new Error("disk unavailable"); };
 		const confirmations: Array<boolean | undefined> = [];
 		const result = await fixture.service.create({ content: "submitted once", onDailyCommitted: confirmed => confirmations.push(confirmed) });
 		assert.equal(result.status, "committed");
 		assert.deepEqual(confirmations, [false]);
+		assert.deepEqual(displayed, []);
 		assert.equal(fixture.vault.readText("Daily/2026-08-22.md"), "## Memos\n");
 		assert.equal(fixture.writeCalls.editor, 1);
 		assert.equal(fixture.writeCalls.process, 0);
@@ -794,10 +798,13 @@ test("编辑器事务仅更新内存或磁盘读取失败时，不授权清理�
 
 test("已读回编辑器落盘内容或 Vault.process 成功才确认草稿可清理", async () => {
 	for (const activeEditor of [false, true]) {
-		const fixture = createFixture({ activeEditor });
+		const displayed: import("../src/services/DailyMemoPresentationChange").ConfirmedDailyMemoPresentation[] = [];
+		const fixture = createFixture({ activeEditor, onDailyConfirmed: change => displayed.push(change) });
 		const confirmations: Array<boolean | undefined> = [];
 		await fixture.service.create({ content: "durable", onDailyCommitted: confirmed => confirmations.push(confirmed) });
 		assert.deepEqual(confirmations, [true]);
+		assert.equal(displayed.length, 1);
+		assert.equal(displayed[0]!.observations[0]!.content, "durable");
 		assert.match(fixture.vault.readText("Daily/2026-08-22.md"), /durable/);
 	}
 });

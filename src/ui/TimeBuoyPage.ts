@@ -43,6 +43,30 @@ export function appendTimeBuoyItems(
 	}
 }
 
+export function syncTimeBuoyPanelState(panel: HTMLElement, snapshot: TimeBuoyViewSnapshot): void {
+	const previousError = panel.find(".knomo-time-buoy-refresh-error");
+	if (snapshot.refreshError === null) previousError?.remove();
+	else if (!previousError) {
+		const error = panel.createDiv({ cls: "knomo-time-buoy-refresh-error", attr: { role: "alert" } });
+		error.createSpan({ text: t("timeBuoy.loadFailed") });
+		renderActionButton(error, t("timeBuoy.retry"), "retry-time-buoy");
+		panel.insertBefore(error, panel.firstChild);
+	}
+	const partial = panel.find(".knomo-time-buoy-partial");
+	if (snapshot.complete) partial?.remove();
+	else if (!partial) {
+		const notice = panel.createDiv({ cls: "knomo-time-buoy-partial", text: t("timeBuoy.partial"),
+			attr: { role: "status", "aria-live": "polite", "data-time-buoy-partial": "" } });
+		panel.insertBefore(notice, panel.find(".knomo-card") ?? panel.find(".knomo-empty-state"));
+	}
+	const empty = panel.find(".knomo-empty-state");
+	if (snapshot[snapshot.activeTab].length > 0) empty?.remove();
+	else if (!empty) {
+		const copy = getEmptyCopy(snapshot.activeTab);
+		renderKnomoEmptyState(panel, copy.title, copy.description);
+	}
+}
+
 function renderTabs(
 	container: HTMLElement,
 	snapshot: TimeBuoyViewSnapshot,
@@ -91,28 +115,8 @@ function renderTabs(
 		}
 	}
 	const items = [...snapshot[snapshot.activeTab]];
-	if (activePanel !== null && snapshot.refreshError !== null) {
-		const error = activePanel.createDiv({ cls: "knomo-time-buoy-refresh-error", attr: { role: "alert" } });
-		error.createSpan({ text: t("timeBuoy.loadFailed") });
-		renderActionButton(error, t("timeBuoy.retry"), "retry-time-buoy");
-	}
-	if (activePanel !== null && !snapshot.complete) {
-		activePanel.createDiv({
-			cls: "knomo-time-buoy-partial",
-			text: t("timeBuoy.partial"),
-			attr: {
-				role: "status",
-				"aria-live": "polite",
-				"data-time-buoy-partial": "",
-			},
-		});
-	}
-	if (activePanel !== null && items.length === 0) {
-		const copy = getEmptyCopy(snapshot.activeTab);
-		renderKnomoEmptyState(activePanel, copy.title, copy.description);
-		return { panelEl: null, items };
-	}
-	return { panelEl: activePanel, items };
+	if (activePanel !== null) syncTimeBuoyPanelState(activePanel, snapshot);
+	return { panelEl: items.length > 0 ? activePanel : null, items };
 }
 
 function getEmptyCopy(tab: TimeBuoyTab): { title: string; description: string } {

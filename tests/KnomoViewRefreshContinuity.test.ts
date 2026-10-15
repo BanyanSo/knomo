@@ -88,10 +88,10 @@ async function refreshHarness() {
 	});
 	Object.assign(view, {
 		memoSourceGeneration: 0, catalogDesktopQueryRun: 0, memos: [], catalogTodayTimeBuoys: null,
-		catalogRevision: 0, hasCommittedCatalogDesktopQuery: false, cardFlowEl: { isConnected: true, childElementCount: 1, querySelector: () => null },
+		catalogRevision: 0, hasCommittedCatalogDesktopQuery: false, cardFlowEl: { isConnected: true, childElementCount: 1, querySelector: () => null, querySelectorAll: () => [] },
 		cardFlowCoordinator: { deferredForAllMemos: false },
 		timeBuoyViewController: controller, shouldShowTodayTimeBuoys: () => true, isDefaultListState: () => true,
-		viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false }, getCatalogQueryFingerprint: () => "all",
+		viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, applyMemoChanges: () => {} }, getCatalogQueryFingerprint: () => "all",
 		prepareCatalogDesktopQuery: () => {}, isCatalogQueryCurrent: () => true, buildCatalogActiveQuery: () => ({}),
 		queryCatalogFeature: async () => ({ items: [], catalogRevision: revision, nextCursor: null, readState: "ready" }),
 		syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {}, getImmediateCatalogTotalCount: () => 0,

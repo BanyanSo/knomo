@@ -54,6 +54,7 @@ export function mergeTodayTimeBuoyFeed(
 }
 
 interface TimeBuoyViewControllerOptions {
+	projectSnapshot?: (snapshot: TimeBuoyViewSnapshot) => TimeBuoyViewSnapshot;
 	getNow: () => Date;
 	isPageActive?: () => boolean;
 	ensureReady?: () => Promise<void>;
@@ -74,16 +75,18 @@ export class TimeBuoyViewController {
 	}
 
 	getSnapshot(): TimeBuoyViewSnapshot {
-		return {
+		const snapshot = {
 			...this.snapshot,
 			today: cloneTabItems(this.snapshot.today),
 			upcoming: cloneTabItems(this.snapshot.upcoming),
 			past: cloneTabItems(this.snapshot.past),
 		};
+		return this.options.projectSnapshot?.(snapshot) ?? snapshot;
 	}
 
 	getMemos(): MemoRecord[] {
-		const memos = [...this.snapshot.today, ...this.snapshot.upcoming, ...this.snapshot.past]
+		const snapshot = this.getSnapshot();
+		const memos = [...snapshot.today, ...snapshot.upcoming, ...snapshot.past]
 			.map((item) => item.memo);
 		return [...new Map(memos.map((memo) => [memo.id, memo])).values()];
 	}
@@ -99,8 +102,10 @@ export class TimeBuoyViewController {
 		return true;
 	}
 
-	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>): boolean {
-		if (!this.getMemos().some(memo => changes.has(memo.id))) return false;
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = []): boolean {
+		if (!inserted.some(memo => memo.catalog?.timeBuoyDates.length)
+			&& ![...this.snapshot.today, ...this.snapshot.upcoming, ...this.snapshot.past]
+				.some(item => changes.has(item.memo.id))) return false;
 		const todayDate = formatTimeBuoyDate(this.options.getNow());
 		const replace = (tab: TimeBuoyTab): TimeBuoyTabItem[] => {
 			const items = this.snapshot[tab].flatMap(item => {
@@ -110,13 +115,13 @@ export class TimeBuoyViewController {
 				const targetDates = getTimeBuoyTabDates(memo.catalog?.timeBuoyDates ?? item.targetDates, { tab, today: todayDate });
 				return targetDates.length > 0 ? [{ memo, targetDates, primaryTargetDate: getPrimaryTargetDate(tab, targetDates) }] : [];
 			});
-			return sortTabItems(items, tab);
+			return sortTabItems([...new Map([...items, ...buildTimeBuoyTabItems(inserted, tab, todayDate)]
+				.map(item => [item.memo.id, item])).values()], tab);
 		};
 		const today = replace("today"), upcoming = replace("upcoming"), past = replace("past");
 		this.requestId++;
 		this.refreshing = false;
 		this.snapshot = { ...this.snapshot, today, upcoming, past, nextCursor: null, todayCursor: null, loading: false, loadingMore: false };
-		this.options.requestRender();
 		return true;
 	}
 
@@ -260,6 +265,14 @@ export class TimeBuoyViewController {
 		this.hasLoadedPage = false;
 		this.snapshot = createInitialSnapshot();
 	}
+}
+
+export function buildTimeBuoyTabItems(memos: readonly MemoRecord[], tab: TimeBuoyTab, today: string): TimeBuoyTabItem[] {
+	const items = [...new Map(memos.map(memo => [memo.id, memo])).values()].flatMap(memo => {
+		const targetDates = getTimeBuoyTabDates(memo.catalog?.timeBuoyDates ?? [], { tab, today });
+		return targetDates.length ? [{ memo, targetDates, primaryTargetDate: getPrimaryTargetDate(tab, targetDates) }] : [];
+	});
+	return sortTabItems(items, tab);
 }
 
 function areTimeBuoySnapshotsEqual(

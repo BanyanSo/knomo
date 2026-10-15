@@ -156,7 +156,6 @@ export class ShuffleDayController {
 		const byId = new Map([...updated, ...additions].map(memo => [memo.id, memo]));
 		this.error = null;
 		this.setSelectedMemos([...byId.values()]);
-		this.requestRenderIfActive();
 		return true;
 	}
 

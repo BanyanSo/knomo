@@ -130,7 +130,7 @@ test("today promotion keeps the latest Catalog memo when the controller snapshot
 	assert.equal(result[0], latestMemo);
 });
 
-test("按提交映射更新已加载的浮标卡片，不重复查询", async () => {
+test("按提交映射更新已加载的浮标卡片，由父视图统一重绘", async () => {
 	const staleMemo = makeMemo("memo-1", "- [ ] task", "2026-07-10T08:00:00+08:00");
 	const latestMemo = makeMemo("memo-1-latest", "- [x] task", "2026-07-10T08:00:00+08:00");
 	let renderCount = 0;
@@ -152,7 +152,7 @@ test("按提交映射更新已加载的浮标卡片，不重复查询", async ()
 
 	assert.equal(controller.applyMemoChanges(new Map([[staleMemo.id, latestMemo]])), true);
 	assert.equal(controller.getSnapshot().today[0]?.memo, latestMemo);
-	assert.equal(renderCount, rendersAfterLoad + 1);
+	assert.equal(renderCount, rendersAfterLoad);
 	assert.equal(controller.applyMemoChanges(new Map([[staleMemo.id, latestMemo]])), false);
 });
 

@@ -184,6 +184,55 @@ test("目标在准备、提交前或 process 回调前变化时拒绝写入，�
 	}
 });
 
+test("runtime 取消阻止编辑器、process 与解析后续提交，已提交正文仍返回成功", async (context) => {
+	for (const stage of ["editor", "disk-read", "process", "parse-yield", "committed"] as const) {
+		await context.test(stage, async () => {
+			const cancellation = new AbortController();
+			const file = makeFile("Daily/2026-08-09.md");
+			const before = "- 09:00 before\n".repeat(100);
+			let disk = before;
+			const editor = new MemoryEditor(before);
+			const active = stage === "editor" || stage === "disk-read";
+			let preparedDone = false;
+			let yieldCount = 0;
+			const app = {
+				workspace: { getActiveViewOfType: () => active ? { file, editor } : null },
+				vault: {
+					getAbstractFileByPath: () => file, cachedRead: async () => disk,
+					read: async () => { if (preparedDone) cancellation.abort(); return disk; },
+					process: async (_file: TFile, update: (value: string) => string) => {
+						if (stage === "process") cancellation.abort();
+						disk = update(disk);
+						if (stage === "committed") cancellation.abort();
+						return disk;
+					},
+				},
+			} as unknown as App;
+			const gateway = new DailyMemoWriteGateway(app, new DiaryMemoParser(), {
+				cancellationSignal: cancellation.signal, maxLinesPerSlice: 10,
+				yieldControl: async () => { yieldCount++; if (stage === "parse-yield") cancellation.abort(); },
+			});
+			const save = async () => {
+				const prepared = await gateway.prepare({ file, logicalDate: "2026-08-09", expectedRevision: null,
+					requireDiskMatch: stage === "disk-read", update: value => value.replace("before", "after") });
+				preparedDone = true;
+				if (stage === "editor") cancellation.abort();
+				return gateway.commit(prepared);
+			};
+			if (stage === "committed") {
+				assert.equal((await save()).mode, "vault_process");
+				assert.equal(disk, before.replace("before", "after"));
+			} else {
+				await assert.rejects(save, /cancel/iu);
+				assert.equal(disk, before);
+				assert.equal(editor.getValue(), before);
+				assert.equal(editor.transactionCount, 0);
+				if (stage === "parse-yield") assert.equal(yieldCount, 1);
+			}
+		});
+	}
+});
+
 function makeGateway(app: App): DailyMemoWriteGateway {
 	return new DailyMemoWriteGateway(app, new DiaryMemoParser(async (bytes) => (
 		createHash("sha256").update(bytes).digest("hex")

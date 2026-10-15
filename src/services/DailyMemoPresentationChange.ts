@@ -3,9 +3,18 @@ import type { PreparedDailyWrite } from "./DailyMemoWriteGateway";
 
 // 仅描述一次已确认提交的展示变化，不持久化，也不授权继续旧编辑或排队写入。
 export interface DailyMemoPresentationChange {
+	sourcePath: string;
+	beforeSourceRevision: string;
+	sourceRevision: string;
 	logicalDate: string;
 	replacements: ReadonlyArray<{ before: ObservationHandle; after: ObservationHandle | null }>;
 	inserted: ObservationHandle | null;
+	changed: ObservationHandle | null;
+}
+
+export interface ConfirmedDailyMemoPresentation {
+	change: DailyMemoPresentationChange;
+	observations: readonly MemoObservation[];
 }
 
 export function observationHandleKey(handle: Pick<ObservationHandle, "sourcePath" | "sourceRevision" | "startLine">): string {
@@ -29,12 +38,16 @@ export function buildDailyMemoPresentationChange(
 		observationHandleKey(memo), unchanged ? after[index] : null,
 	]));
 	return {
+		sourcePath: prepared.sourcePath,
+		beforeSourceRevision: prepared.before.sourceRevision,
+		sourceRevision: prepared.after.sourceRevision,
 		logicalDate: prepared.logicalDate,
 		replacements: prepared.before.observations.map(memo => ({
 			before: toHandle(memo),
 			after: toHandleOrNull(sameObservation(memo, changedBefore) ? changedAfter : retained.get(observationHandleKey(memo)) ?? null),
 		})),
 		inserted: changedBefore === null ? toHandleOrNull(changedAfter) : null,
+		changed: toHandleOrNull(changedAfter),
 	};
 }
 

@@ -159,6 +159,30 @@ test("restore blockId 冲突检查覆盖 Memo 外锚点，损坏 snapshot 不被
 	assert.equal(f.vault.read("Knomo/knomo-trash.json"), "broken");
 });
 
+test("restore 以完整 block ID 判断冲突，保留连字符和下划线边界", async (context) => {
+	for (const [existing, restored, conflict] of [
+		["anchor", "anchor", true], ["anchor-", "anchor-", true],
+		["anchor_part", "anchor_part", true], ["anchor-part", "anchor", false],
+		["anchor_part", "anchor", false], ["anchor", "anchor-part", false],
+	] as const) {
+		await context.test(`${existing}/${restored}`, async () => {
+			const f = await fixture(`## Memos\n- 10:30 memo ^${restored}\n`);
+			const deleted = await f.service.delete(f.initial[0]!);
+			const before = `ordinary ^${existing}\n## Memos\n`;
+			f.vault.replace(PATH, before);
+			if (conflict) {
+				await assert.rejects(() => f.service.restore(deleted.snapshotId), /block ID/u);
+				assert.equal(f.vault.read(PATH), before);
+				assert.equal((await f.store.query()).items.length, 1);
+			} else {
+				assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+				assert.equal(f.vault.read(PATH), `${before}- 10:30 memo ^${restored}\n`);
+				assert.equal((await f.store.query()).items.length, 0);
+			}
+		});
+	}
+});
+
 test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追加或旧 Catalog 覆盖", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete(f.initial[0]!);

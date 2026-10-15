@@ -47,6 +47,7 @@ export class MemoMarkdownRenderer {
 	private readonly latestRequestIds = createSurfaceMap(() => new WeakMap<HTMLElement, number>());
 	private readonly surfaceEpochs = createSurfaceMap(() => 0);
 	private readonly unloadedComponents = new WeakSet<Component>();
+	private readonly memoBindings = new WeakMap<HTMLElement, MemoRecord>();
 	private nextRequestId = 0;
 
 	constructor(private readonly options: MemoMarkdownRendererOptions) {
@@ -72,6 +73,8 @@ export class MemoMarkdownRenderer {
 		previewText: string,
 		surface: MemoMarkdownSurface,
 	): void {
+		if (generation !== this.options.getGeneration(surface)) return;
+		this.memoBindings.set(container, memo);
 		const token = this.createRenderToken(container, generation, surface);
 		if (this.options.getSearchFilter) token.searchKey = getCatalogQueryKey(this.options.getSearchFilter(surface));
 		token.searchVersion = this.options.getSearchVersion?.(surface);
@@ -111,6 +114,19 @@ export class MemoMarkdownRenderer {
 			const rect = target.getBoundingClientRect();
 			return rect.bottom + offset > bounds.top && rect.top + offset < bounds.bottom;
 		});
+	}
+
+	releaseCard(card: HTMLElement, surface: MemoMarkdownSurface): void {
+		for (const container of this.activeComponents[surface].keys()) {
+			if (card.contains(container)) this.releaseContainerComponent(container, surface);
+		}
+	}
+
+	retainCard(card: HTMLElement, memo: MemoRecord): void {
+		// 未完成的 Markdown 仍可接入原容器，但任务绑定必须使用本次确认后的句柄。
+		for (const content of Array.from(card.querySelectorAll<HTMLElement>(".knomo-card-content"))) {
+			this.memoBindings.set(content, memo);
+		}
 	}
 
 	clear(surface: MemoMarkdownSurface = "card-flow"): void {
@@ -213,8 +229,9 @@ export class MemoMarkdownRenderer {
 			while (renderTarget.firstChild !== null) {
 				container.appendChild(renderTarget.firstChild);
 			}
-			prepareRenderedMemoMarkdown(container, memo);
-			this.refreshSearchHits(memo, container, surface);
+			const current = this.memoBindings.get(container) ?? memo;
+			prepareRenderedMemoMarkdown(container, current);
+			this.refreshSearchHits(current, container, surface);
 			this.adoptRenderComponent(container, component, surface);
 			adopted = true;
 		} catch {

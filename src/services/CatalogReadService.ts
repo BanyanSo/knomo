@@ -161,6 +161,10 @@ export class CatalogReadService {
 		await this.query({ limit: 1 });
 	}
 
+	async getFileSourceRevision(sourcePath: string): Promise<string | null> {
+		return (await this.options.catalog.getStore().getFile(sourcePath))?.sourceRevision ?? null;
+	}
+
 	async query(request: CatalogFeatureQuery): Promise<CatalogMemoPage> {
 		request = { ...request, ...narrowCatalogQuery(request) };
 		let page: CatalogQueryPage;
@@ -194,7 +198,7 @@ export class CatalogReadService {
 		const referenceCache = this.options.references?.createQueryCache();
 		return this.rememberPage({
 			items: await Promise.all(resolved.map(async (memo) => ({
-				...this.toMemoItem(memo, catalogCapabilities),
+				...toCatalogMemoItem(memo, catalogCapabilities),
 				...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(memo.observation, referenceCache) }),
 			}))),
 			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
@@ -302,7 +306,7 @@ export class CatalogReadService {
 		const capabilities = createCatalogCapabilities(coverage);
 		const referenceCache = this.options.references?.createQueryCache();
 		const memos = invalidated ? [] : await Promise.all(page.items.map(async (observation) => ({
-			...this.toMemoItem({ kind: "observation", observation, capabilities: createResolvedMemoCapabilities() }, capabilities),
+			...toCatalogMemoItem({ kind: "observation", observation, capabilities: createResolvedMemoCapabilities() }, capabilities),
 			...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(observation, referenceCache) }),
 		})));
 		const store = this.options.catalog.getStore();
@@ -355,7 +359,7 @@ export class CatalogReadService {
 					const observation = await this.options.catalog.getObservation(candidate.observationKey);
 					options.signal?.throwIfAborted();
 					if (observation === null || observationLocalKey(observation) !== candidate.id) throw new CatalogDiscoveryInvalidatedError();
-					items.push(toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities)));
+					items.push(toCatalogMemoView(toCatalogMemoItem(this.resolveObservation(observation), capabilities)));
 				}
 				if (!await this.isRandomReunionPoolCurrent(pool, options.signal)) throw new CatalogDiscoveryInvalidatedError();
 				return items;
@@ -399,7 +403,7 @@ export class CatalogReadService {
 				|| observation.sourceRevision !== handle.sourceRevision || observation.startLine !== handle.startLine
 				|| observation.endLine !== handle.endLine || observation.rawBlockHash !== handle.rawBlockHash) return null;
 			return {
-				...this.toMemoItem(this.resolveObservation(observation), capabilities),
+				...toCatalogMemoItem(this.resolveObservation(observation), capabilities),
 				...(this.options.references === undefined ? {} : {
 					derivedReferences: await this.options.references.resolve(observation, referenceCache),
 				}),
@@ -481,33 +485,6 @@ export class CatalogReadService {
 
 	private resolveObservation(observation: CatalogObservation): ResolvedMemo {
 		return { kind: "observation", observation, capabilities: createResolvedMemoCapabilities() };
-	}
-
-	private toMemoItem(resolved: ResolvedMemo, catalogCapabilities: CatalogCapabilities): CatalogMemoItem {
-		const observation = resolved.observation as CatalogObservation;
-		return {
-			key: observationLocalKey(observation),
-			renderKey: observationLocalKey(observation),
-			observationHandle: {
-				sourcePath: observation.sourcePath,
-				sourceRevision: observation.sourceRevision,
-				startLine: observation.startLine,
-				endLine: observation.endLine,
-				rawBlockHash: observation.rawBlockHash,
-			},
-			createdAt: `${observation.logicalDate}T${observation.time}`,
-			content: observation.content,
-			tags: [...observation.tags],
-			links: [...observation.links],
-			images: [...observation.images],
-			tasks: [...observation.tasks],
-			timeBuoyDates: [...observation.timeBuoyDates],
-			sourcePath: observation.sourcePath,
-			lineNumberHint: observation.startLine + 1,
-			capabilities: { ...resolved.capabilities, catalog: catalogCapabilities },
-			resolved,
-			observation,
-		};
 	}
 
 	private async createUnavailablePage(): Promise<CatalogMemoPage> {
@@ -681,7 +658,7 @@ export class CatalogReadService {
 					|| JSON.stringify(page.coverage) !== JSON.stringify(snapshot.coverage)) throw new CatalogDiscoveryInvalidatedError();
 				for (const observation of page.items) {
 					if (observation.logicalDate >= snapshot.day) continue;
-					const view = toCatalogMemoView(this.toMemoItem(this.resolveObservation(observation), capabilities));
+					const view = toCatalogMemoView(toCatalogMemoItem(this.resolveObservation(observation), capabilities));
 					if (filterRandomReunionCandidates([view], { today }).length === 0) continue;
 					// 缓存只留候选元数据；所有正文变更均以已提交的文件分区为边界失效。
 					candidates.push({ id: view.id, createdAt: view.createdAt, logicalDate: observation.logicalDate, tags: view.tags,
@@ -731,6 +708,19 @@ export class CatalogReadService {
 		this.lastReadState = page.readState;
 		return page;
 	}
+}
+
+export function toCatalogMemoItem(resolved: ResolvedMemo, catalogCapabilities: CatalogCapabilities): CatalogMemoItem {
+	const observation = resolved.observation as CatalogObservation;
+	return {
+		key: observationLocalKey(observation), renderKey: observationLocalKey(observation),
+		observationHandle: { sourcePath: observation.sourcePath, sourceRevision: observation.sourceRevision,
+			startLine: observation.startLine, endLine: observation.endLine, rawBlockHash: observation.rawBlockHash },
+		createdAt: `${observation.logicalDate}T${observation.time}`, content: observation.content,
+		tags: [...observation.tags], links: [...observation.links], images: [...observation.images], tasks: [...observation.tasks],
+		timeBuoyDates: [...observation.timeBuoyDates], sourcePath: observation.sourcePath, lineNumberHint: observation.startLine + 1,
+		capabilities: { ...resolved.capabilities, catalog: catalogCapabilities }, resolved, observation,
+	};
 }
 
 function observationLocalKey(observation: CatalogObservation): string {

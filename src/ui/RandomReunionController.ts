@@ -117,7 +117,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		}
 	}
 
-	applyMemoChanges(changes: ReadonlyMap<string, TMemo | null>): boolean {
+	applyMemoChanges(changes: ReadonlyMap<string, TMemo | null>, render = true): boolean {
 		if (this.memos === null || !this.memos.some(memo => changes.has(memo.id))) return false;
 		this.cancelPending();
 		this.memos = this.memos.flatMap(memo => {
@@ -127,7 +127,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		});
 		this.status = this.memos.length > 0 ? "ready" : "empty";
 		this.error = null;
-		if (this.options.isRandomActive()) this.options.requestRender();
+		if (render && this.options.isRandomActive()) this.options.requestRender();
 		return true;
 	}
 

@@ -22,7 +22,7 @@ import {
 	type PreparedDailyWrite,
 } from "./DailyMemoWriteGateway";
 import { MarkdownBlockService } from "./MarkdownBlockService";
-import { buildDailyMemoPresentationChange, type DailyMemoPresentationChange } from "./DailyMemoPresentationChange";
+import { buildDailyMemoPresentationChange, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
 
 export interface MarkdownCatalogCommitInput {
 	file: TFile;
@@ -34,6 +34,8 @@ export interface MarkdownCatalogCommitInput {
 }
 
 export interface MarkdownMutationServiceOptions {
+	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation) => void;
+	onCatalogUpdateSettled?: (change: DailyMemoPresentationChange) => void;
 	getWriteHeading: () => string | null;
 	getDailyFileForDate: (logicalDate: string) => Promise<TFile>;
 	getLogicalDateForPath: (sourcePath: string) => string;
@@ -41,7 +43,6 @@ export interface MarkdownMutationServiceOptions {
 	getInsertPosition?: () => DailyInsertPosition;
 	updateCatalogPartition: (input: MarkdownCatalogCommitInput) => Promise<void>;
 	refreshCatalogPaths: (paths: readonly string[]) => Promise<void>;
-	removeEmptyCreatedDailyFile?: (file: TFile) => Promise<void>;
 	now?: () => Date;
 	random?: () => number;
 }
@@ -87,12 +88,12 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		if (content.trim().length === 0) throw new Error("Memo content is empty.");
 		const createdAt = input.createdAt ?? this.now();
 		const logicalDate = input.targetLogicalDate ?? formatDatePart(createdAt);
-		const target = await this.getTargetFile(logicalDate);
+		const file = await this.options.getDailyFileForDate(logicalDate);
 		const rawBlock = this.blockService.buildMemoBlock(
 			content,
 			formatTimePart(createdAt, this.options.getMemoTimeFormat()),
 		);
-		return this.appendRawBlock(target.file, logicalDate, rawBlock, target.created, input.onDailyCommitted, input.validateImageSource);
+		return this.appendRawBlock(file, logicalDate, rawBlock, input.onDailyCommitted, input.validateImageSource);
 	}
 
 	async edit(input: MarkdownEditInput): Promise<MarkdownMutationResult> {
@@ -195,36 +196,26 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		file: TFile,
 		logicalDate: string,
 		rawBlock: string,
-		createdFile: boolean,
 		onDailyCommitted?: (diskConfirmed?: boolean) => void,
 		validateImageSource?: (sourcePath: string) => void,
 	): Promise<MarkdownMutationResult> {
-		const sourcePath = normalizePath(file.path);
 		return this.withStaleRefresh([file.path], async () => {
-			try {
-				const position = this.options.getInsertPosition?.() ?? "bottom";
-				const section = this.options.getWriteHeading();
-				const prepared = await this.dailyGateway.prepare({
-					file,
-					logicalDate,
-					expectedRevision: null,
-					validateTarget: (path, date) => this.assertDailyTarget(path, date),
-					update: (content, parsed) => {
-						// 使用实际落盘文件，在 prepare 与 commit 重放时分别检查图片来源。
-						validateImageSource?.(file.path);
-						return insertRawBlock(content, rawBlock, section, position, parsed.observations, file.path);
-					},
-				});
-				const created = findAppendedObservation(prepared, rawBlock, section, position);
-				const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, onDailyCommitted, created);
-				return committedResult(created, catalogUpdatePending);
-			} catch (error) {
-				if (createdFile && !isStaleError(error) && normalizePath(file.path) === sourcePath
-					&& this.app.vault.getAbstractFileByPath(sourcePath) === file) {
-					await this.options.removeEmptyCreatedDailyFile?.(file).catch(() => undefined);
-				}
-				throw error;
-			}
+			const position = this.options.getInsertPosition?.() ?? "bottom";
+			const section = this.options.getWriteHeading();
+			const prepared = await this.dailyGateway.prepare({
+				file,
+				logicalDate,
+				expectedRevision: null,
+				validateTarget: (path, date) => this.assertDailyTarget(path, date),
+				update: (content, parsed) => {
+					// 使用实际落盘文件，在 prepare 与 commit 重放时分别检查图片来源。
+					validateImageSource?.(file.path);
+					return insertRawBlock(content, rawBlock, section, position, parsed.observations, file.path);
+				},
+			});
+			const created = findAppendedObservation(prepared, rawBlock, section, position);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, onDailyCommitted, created);
+			return committedResult(created, catalogUpdatePending);
 		});
 	}
 
@@ -236,32 +227,41 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		changedAfter: MemoObservation | null = insertedObservation ?? null,
 	): Promise<boolean> {
 		await this.dailyGateway.commit(prepared);
-		const catalogUpdate = this.enqueueCatalogUpdate({
-			file: prepared.file,
-			logicalDate: prepared.logicalDate,
-			content: prepared.afterContent,
-			parsed: prepared.after,
-			presentationChange: buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter),
-			...(insertedObservation === undefined ? {} : { insertedObservation }),
-		});
-		void catalogUpdate.catch(() => undefined);
+		const presentationChange = buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter);
 		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
 		let diskConfirmed = prepared.mode !== "active_editor";
-		if (!diskConfirmed && onDailyCommitted) {
+		if (!diskConfirmed && (onDailyCommitted || this.options.onDailyConfirmed)) {
 			try { diskConfirmed = await this.app.vault.read(prepared.file) === prepared.afterContent; }
 			catch { diskConfirmed = false; }
+		}
+		try {
+			if (diskConfirmed) this.options.onDailyConfirmed?.({
+				change: presentationChange, observations: prepared.after.observations,
+			});
+		} catch (error) {
+			console.error("Knomo confirmed Daily presentation failed", error);
 		}
 		try {
 			onDailyCommitted?.(diskConfirmed);
 		} catch {
 			// Daily 已提交，阶段观察者失败不能反向把正文保存标记为失败。
 		}
+		const catalogUpdate = this.enqueueCatalogUpdate({
+			file: prepared.file, logicalDate: prepared.logicalDate, content: prepared.afterContent,
+			parsed: prepared.after, presentationChange,
+			...(insertedObservation === undefined ? {} : { insertedObservation }),
+		});
 		try {
 			await catalogUpdate;
 			return false;
 		} catch {
 			void this.options.refreshCatalogPaths([prepared.file.path]).catch(() => undefined);
 			return true;
+		} finally {
+			if (onDailyCommitted || this.options.onDailyConfirmed) {
+				try { this.options.onCatalogUpdateSettled?.(presentationChange); }
+				catch (error) { console.error("Knomo Catalog presentation settlement failed", error); }
+			}
 		}
 	}
 
@@ -291,12 +291,6 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			throw new StaleDailyWriteError(path);
 		}
 		throw new StaleDailyWriteError(path);
-	}
-
-	private async getTargetFile(logicalDate: string): Promise<{ file: TFile; created: boolean }> {
-		const existingPaths = new Set(this.app.vault.getFiles().map((file) => normalizePath(file.path)));
-		const file = await this.options.getDailyFileForDate(logicalDate);
-		return { file, created: !existingPaths.has(normalizePath(file.path)) };
 	}
 
 	private getSourceFile(sourcePath: string): TFile {
@@ -614,5 +608,5 @@ function appendReferenceBlockId(rawBlock: string, blockId: string): string {
 
 export function hasBlockId(content: string, blockId: string): boolean {
 	const escaped = blockId.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-	return new RegExp(`(?:^|[^A-Za-z0-9_-])\\^${escaped}\\b`, "u").test(content);
+	return new RegExp(`(?:^|[^A-Za-z0-9_-])\\^${escaped}(?![A-Za-z0-9_-])`, "u").test(content);
 }

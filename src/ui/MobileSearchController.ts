@@ -1,10 +1,11 @@
 import { MemoCardImageCache } from "./KnomoCardImages";
-import { getMemoRenderRevision } from "./MemoRenderRevision";
+import { areMemoListsUnchanged, canRetainMemoCard, getMemoRenderRevision, rebindMemoCard } from "./MemoRenderRevision";
 import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
 import type { CatalogQueryFilter } from "../types/catalog";
 import { getCatalogQueryKey } from "../services/SearchMatching";
+import { compareCatalogObservations } from "../services/MemoCatalogStore";
 import { SearchSession } from "./SearchSession";
 import { buildSearchSourceScope } from "./SearchSourceScope";
 import { bindSearchInput } from "./SearchInputBinding";
@@ -54,6 +55,8 @@ interface MobileSearchControllerOptions {
 	filterMemos: (memos: readonly MemoRecord[], filter: CatalogQueryFilter) => MemoRecord[];
 	renderMemoCard: (container: HTMLElement, memo: MemoRecord, generation: number, index: number, reusedImagesEl?: HTMLElement | null) => HTMLElement | void;
 	clearMarkdown: (surface?: MobileSearchSurface) => void;
+	releaseCard?: (card: HTMLElement) => void;
+	retainCard?: (card: HTMLElement, memo: MemoRecord) => void;
 	clearImages: (surface: MobileSearchSurface) => void;
 	bindImageRoot?: (root: HTMLElement | null) => void;
 	setCardFlowPaused: (paused: boolean) => void;
@@ -506,8 +509,9 @@ export class MobileSearchController {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
 			if (key !== getCatalogQueryKey(this.getAppliedFilter())) return;
 			this.displayedContext = context;
+			const previousCount = this.session.result?.key === key ? this.displayedCount : null;
 			this.displayedMemos = this.options.loadRemoteResults ? [...this.options.getMemos()] : this.options.getMemos();
-			this.displayedCount = this.options.getMatchedTotalCount?.() ?? (this.options.loadRemoteResults ? null : this.options.filterMemos(this.displayedMemos, filter).length);
+			this.displayedCount = this.options.getMatchedTotalCount?.() ?? (this.options.loadRemoteResults ? previousCount : this.options.filterMemos(this.displayedMemos, filter).length);
 			this.session.commitResult(filter, this.options.getCatalogRevision?.() ?? 0, this.options.getCoverageKey?.() ?? "");
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
@@ -517,12 +521,100 @@ export class MobileSearchController {
 			if (this.open && run === this.queryRun && version === this.session.version) {
 				this.pendingQueryKey = null;
 				this.syncControls();
-				this.renderResults(changeIntent, !reset);
+				this.renderResults(changeIntent, !reset, true);
 			}
 		}
 	}
 
 	refreshAppliedResults(): Promise<void> { return this.refreshRemoteResults(true); }
+
+	getDisplayedMemos(): readonly MemoRecord[] { return this.displayedMemos ?? []; }
+
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false): void {
+		if (!this.open || !this.hasSearchConditions()) return;
+		const additions = this.options.filterMemos(inserted, this.getDisplayedFilter());
+		if (additions.length === 0 && !this.displayedMemos?.some(memo => changes.has(memo.id))) return;
+		const resumeSearch = this.pendingQueryKey !== null && this.pendingQueryKey !== this.session.result?.key;
+		const previous = this.getMatchedMemos();
+		this.queryRun++;
+		this.pendingQueryKey = null;
+		this.options.cancelRemoteCount?.();
+		this.displayedMemos = [...new Map([...(this.displayedMemos ?? []).flatMap(memo => {
+			const current = changes.has(memo.id) ? changes.get(memo.id) : memo;
+			return current ? [current] : [];
+		}), ...additions].map(memo => [memo.id, memo])).values()]
+			.sort((left, right) => left.catalog && right.catalog
+				? compareCatalogObservations(left.catalog.observation, right.catalog.observation)
+				: right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
+		const current = this.getMatchedMemos();
+		if (!areMemoListsUnchanged(previous, current, changes)) this.displayedCount = created && this.displayedCount !== null
+			? this.displayedCount + current.length - previous.length : null;
+		if (this.session.result) this.session.requestStatus = "ready";
+		if (!this.reconcileCommittedCards(changes)) this.renderResults();
+		// 提交通知使旧查询失效后，继续完成用户已提交的新搜索条件。
+		if (resumeSearch) void this.refreshAppliedResults();
+	}
+
+	private reconcileCommittedCards(changes: ReadonlyMap<string, MemoRecord | null>): boolean {
+		const root = this.resultsEl;
+		if (!root || this.renderedCards.length === 0
+			|| this.renderedViewKey !== this.getViewStateKey()) return false;
+		const wasPending = this.renderTaskId !== null;
+		const memos = this.getMatchedMemos(), visible = memos.slice(0, wasPending ? this.renderedCards.length : this.visibleCount);
+		if (visible.length === 0) return false;
+		if (wasPending) {
+			this.options.cancelRenderTask?.(this.renderTaskId!);
+			this.renderTaskId = null; this.renderRun++;
+		}
+		const visibleIds = new Set(visible.map(memo => memo.id));
+		const retained = new Map<string, { memo: MemoRecord; card: HTMLElement }>();
+		for (const item of this.renderedCards) {
+			const current = changes.has(item.memo.id) ? changes.get(item.memo.id) : item.memo;
+			if (current && visibleIds.has(current.id)) retained.set(current.id, item);
+		}
+		const seed = createMemoRenderPlaceholders(this.renderedCards);
+		const scrollTop = root.scrollTop;
+		const next: Array<{ memo: MemoRecord; card: HTMLElement }> = [];
+		for (const [index, memo] of visible.entries()) {
+			const previous = retained.get(memo.id);
+			let card = previous?.card;
+			if (previous && canRetainMemoCard(previous.memo, memo)) {
+				rebindMemoCard(previous.card, memo);
+				this.options.retainCard?.(previous.card, memo);
+			} else if (!previous || previous.memo !== memo) {
+				const rendered = this.options.renderMemoCard(root, memo, this.renderGeneration, index,
+					previous?.card.querySelector<HTMLElement>(".knomo-card-images") ?? null);
+				if (!rendered) return false;
+				seed(memo, rendered);
+				if (card) card.replaceWith(rendered);
+				card = rendered;
+			}
+			next.push({ memo, card: card! });
+		}
+		const cards = new Set(next.map(item => item.card));
+		for (const item of this.renderedCards) if (!cards.has(item.card)) {
+			this.options.releaseCard?.(item.card); item.card.remove();
+		}
+		// 保留现有卡片容器和视口；只在提交影响顺序时移动卡片。
+		let following: HTMLElement | null = root.querySelector(".knomo-mobile-search-more");
+		for (const item of [...next].reverse()) {
+			if (item.card.nextElementSibling !== following) root.insertBefore(item.card, following);
+			following = item.card;
+		}
+		this.renderedCards = next;
+		this.renderedRevisions = visible.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
+		this.targetRevisions = [...this.renderedRevisions];
+		root.scrollTop = scrollTop;
+		this.syncControls();
+		this.syncResultMetadata(memos.length, visible.length, !wasPending);
+		this.prioritizeMarkdown();
+		if (wasPending) {
+			this.pendingScrollTop = scrollTop;
+			this.seedPlaceholder = seed;
+			this.renderResults("content-change", true);
+		}
+		return true;
+	}
 
 	renderResults(changeIntent: CardFlowChangeIntent = "content-change", append = false, metadataOnly = false): void {
 		const resultsEl = this.resultsEl;
@@ -542,8 +634,7 @@ export class MobileSearchController {
 		if (metadataOnly && this.session.requestStatus === "ready") this.displayedCount = this.options.getMatchedTotalCount?.() ?? this.displayedCount;
 		this.syncControls();
 		// 总数晚到时仅沿用已开始渲染的卡片列表；空搜索提示不能新增加载入口。
-		if (metadataOnly && sameView && !status && this.renderedStatus === status && revisions.length > 0
-			&& this.renderedRevisions.length > 0
+		if (metadataOnly && sameView && !status && this.renderedStatus === status
 			&& revisions.length === this.targetRevisions.length
 			&& revisions.every((revision, index) => revision === this.targetRevisions[index])) {
 			this.syncResultMetadata(memos.length, visibleMemos.length, this.renderTaskId === null);

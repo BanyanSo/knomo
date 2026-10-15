@@ -22,6 +22,31 @@ import { formatServiceError } from "../src/utils/serviceText";
 
 const HEADINGS = ["## Memos"] as const;
 
+test("新建失败或 I/O 结果不确定时保留 Daily，不自动清理或重试正文", async (context) => {
+	for (const failure of ["prepare", "before-write", "after-write", "concurrent-write"] as const) {
+		await context.test(failure, async () => {
+			const fixture = createFixture({ initialFiles: {} });
+			const path = fixture.getPath("2026-08-22");
+			const process = fixture.vault.process.bind(fixture.vault);
+			let writes = 0;
+			fixture.vault.process = async (file, update) => {
+				writes++;
+				if (failure === "after-write") await process(file, update);
+				if (failure === "concurrent-write") fixture.vault.writeText(path, "并发写入的正文\n");
+				throw new Error("Daily I/O failed");
+			};
+			await assert.rejects(() => fixture.service.create({ content: "new memo",
+				validateImageSource: failure === "prepare" ? () => { throw new Error("Daily I/O failed"); } : undefined,
+			}), /Daily I\/O failed/u);
+			assert.deepEqual(fixture.cleanupCalls, []);
+			assert.equal(writes, failure === "prepare" ? 0 : 1);
+			assert.equal(fixture.vault.readText(path), failure === "after-write" ? "## Memos\n- 09:00 new memo\n"
+				: failure === "concurrent-write" ? "并发写入的正文\n" : "## Memos\n");
+			assert.deepEqual(fixture.committedPartitions, []);
+		});
+	}
+});
+
 test("Composer Markdown fixtures preserve semantic source through Daily create, parse and edit", async () => {
 	for (const content of [...composerMarkdownFixtures.map(f => f.text.replace(/\r\n/g, "\n")), "first  \nsecond\\\nthird"]) {
 		const fixture = createFixture();
@@ -507,6 +532,7 @@ test("新建目标变化通过真实命令链路拒绝保存，Composer 保留�
 });
 
 interface FixtureOptions {
+	onDailyConfirmed?: import("../src/services/MarkdownMutationService").MarkdownMutationServiceOptions["onDailyConfirmed"];
 	delayEditorDiskWrite?: boolean;
 	beforeCommit?: (file: TFile) => void;
 	beforeProcess?: (file: TFile) => void;
@@ -540,18 +566,20 @@ function createFixture(options: FixtureOptions = {}) {
 			else vault.writeText(activePath, input.changes[0]!.text);
 		},
 	};
+	const cleanupCalls: string[] = [];
 	const app = {
 		workspace: { getActiveViewOfType: () => options.activeEditor ? { file: vault.getAbstractFileByPath(activePath), editor } : null, containerEl: { win: { setTimeout } } },
 		vault,
+		fileManager: { trashFile: async (file: TFile) => { cleanupCalls.push(file.path); } },
 	} as unknown as App;
 	const parser = new DiaryMemoParser(async (bytes) => createHash("sha256").update(bytes).digest("hex"));
 	const gateway = new DailyMemoWriteGateway(app, parser);
 	const commit = gateway.commit.bind(gateway);
 	gateway.commit = (prepared) => { options.beforeCommit?.(prepared.file); return commit(prepared); };
 	const committedPartitions: MarkdownCatalogCommitInput[] = [];
-	const cleanupCalls: string[] = [];
 	const refreshedPaths: string[][] = [];
 	const service = new MarkdownMutationService(app, {
+		onDailyConfirmed: options.onDailyConfirmed,
 		getWriteHeading: () => options.heading === undefined ? HEADINGS[0] : options.heading,
 		getDailyFileForDate: async (logicalDate) => options.template === undefined
 			? vault.ensureFile(`Daily/${logicalDate}.md`, "## Memos\n")
@@ -571,7 +599,6 @@ function createFixture(options: FixtureOptions = {}) {
 			if (options.catalogDegraded) throw new Error("Catalog storage is degraded.");
 		},
 		refreshCatalogPaths: async (paths) => { refreshedPaths.push([...paths]); },
-		removeEmptyCreatedDailyFile: async (file) => { cleanupCalls.push(file.path); },
 		now: () => new Date(2026, 7, 22, 9, 0, 0),
 		random: () => 0,
 	}, gateway);
@@ -755,12 +782,14 @@ test("MemoCommand passes image validation to the actual creation date and preser
 
 test("编辑器事务仅更新内存或磁盘读取失败时，不授权清理持久草稿", async () => {
 	for (const readFailure of [false, true]) {
-		const fixture = createFixture({ activeEditor: true, delayEditorDiskWrite: true });
+		const displayed: unknown[] = [];
+		const fixture = createFixture({ activeEditor: true, delayEditorDiskWrite: true, onDailyConfirmed: change => displayed.push(change) });
 		if (readFailure) fixture.vault.read = async () => { throw new Error("disk unavailable"); };
 		const confirmations: Array<boolean | undefined> = [];
 		const result = await fixture.service.create({ content: "submitted once", onDailyCommitted: confirmed => confirmations.push(confirmed) });
 		assert.equal(result.status, "committed");
 		assert.deepEqual(confirmations, [false]);
+		assert.deepEqual(displayed, []);
 		assert.equal(fixture.vault.readText("Daily/2026-08-22.md"), "## Memos\n");
 		assert.equal(fixture.writeCalls.editor, 1);
 		assert.equal(fixture.writeCalls.process, 0);
@@ -769,10 +798,13 @@ test("编辑器事务仅更新内存或磁盘读取失败时，不授权清理�
 
 test("已读回编辑器落盘内容或 Vault.process 成功才确认草稿可清理", async () => {
 	for (const activeEditor of [false, true]) {
-		const fixture = createFixture({ activeEditor });
+		const displayed: import("../src/services/DailyMemoPresentationChange").ConfirmedDailyMemoPresentation[] = [];
+		const fixture = createFixture({ activeEditor, onDailyConfirmed: change => displayed.push(change) });
 		const confirmations: Array<boolean | undefined> = [];
 		await fixture.service.create({ content: "durable", onDailyCommitted: confirmed => confirmations.push(confirmed) });
 		assert.deepEqual(confirmations, [true]);
+		assert.equal(displayed.length, 1);
+		assert.equal(displayed[0]!.observations[0]!.content, "durable");
 		assert.match(fixture.vault.readText("Daily/2026-08-22.md"), /durable/);
 	}
 });

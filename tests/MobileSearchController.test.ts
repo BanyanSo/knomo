@@ -465,6 +465,129 @@ test("连续重建复用未变正文快照，深处尚未创建的卡片也保�
 	} finally { controller.removePage(); dom.window.close(); }
 });
 
+test("移动搜索提交即时更新深处卡片，保留其它 DOM、滚动与独立结果快照", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const dom = new JSDOM("<body></body>");
+	const root = dom.window.document.createElement("div");
+	Object.assign(root, {
+		find: (selector: string) => root.querySelector(selector),
+		findAll: (selector: string) => Array.from(root.querySelectorAll(selector)),
+		empty: () => root.replaceChildren(),
+		createEl: (tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> }) => {
+			const element = dom.window.document.createElement(tag);
+			element.className = options.cls ?? ""; element.textContent = options.text ?? "";
+			for (const [name, value] of Object.entries(options.attr ?? {})) element.setAttribute(name, value);
+			root.append(element); return element;
+		},
+		createDiv: (options: { cls?: string; text?: string }) => {
+			const element = dom.window.document.createElement("div");
+			element.className = options.cls ?? ""; element.textContent = options.text ?? "";
+			Object.assign(element, { setText: (text: string) => { element.textContent = text; } });
+			root.appendChild(element); return element;
+		},
+	});
+	dom.window.document.body.append(root);
+	const memos = Array.from({ length: 30 }, (_, index) => makeMemo(String(index), "original memo"));
+	const frames = new Map<number, () => void>();
+	const released: HTMLElement[] = [];
+	let id = 0;
+	const { controller } = createControllerHarness(MobileSearchController, memos, undefined, undefined, {
+		batchSize: 30, scheduleRenderTask: callback => { frames.set(++id, callback); return id; },
+		cancelRenderTask: frame => { frames.delete(frame); }, releaseCard: card => released.push(card),
+		renderMemoCard: (_container, memo, _generation, _index, reusedImagesEl) => {
+			const card = dom.window.document.createElement("article"); card.className = "knomo-card";
+			card.setAttribute("data-memo-id", memo.id);
+			const body = dom.window.document.createElement("div"); body.className = "knomo-card-content";
+			body.textContent = memo.contentSnapshot; card.append(body);
+			if (reusedImagesEl) card.append(reusedImagesEl);
+			else if (memo.id === "29") { const images = dom.window.document.createElement("div"); images.className = "knomo-card-images"; card.append(images); }
+			root.append(card); return card;
+		},
+	});
+	try {
+		controller.searchQuery = "memo"; controller.openPage({ focusInput: false });
+		while (frames.size) { const [frame, action] = [...frames][0]; frames.delete(frame); action(); }
+		Object.assign(controller, { resultsEl: root }); root.scrollTop = 900;
+		const first = root.querySelector('[data-memo-id="0"]');
+		const old = root.querySelector<HTMLElement>('[data-memo-id="29"]')!;
+		const images = old.querySelector(".knomo-card-images");
+		controller.applyMemoChanges(new Map(), [makeMemo("unmatched-new", "outside the active search")]);
+		assert.equal(root.querySelector('[data-memo-id="0"]'), first);
+		assert.equal(controller.getDisplayedMemos().some(memo => memo.id === "unmatched-new"), false);
+		await controller.refreshAppliedResults();
+		assert.equal(root.querySelector('[data-memo-id="0"]'), first, "同结果后台查询不能重建搜索页面");
+		assert.equal(root.querySelector('[data-memo-id="29"]'), old);
+		const updated = { ...memos[29]!, id: "29-current", contentSnapshot: "updated memo", contentHash: "updated" };
+		controller.applyMemoChanges(new Map([["29", updated]]));
+		assert.equal(root.querySelector('[data-memo-id="0"]'), first);
+		assert.equal(root.querySelector('[data-memo-id="29-current"]')?.textContent, "updated memo");
+		assert.equal(root.querySelector('[data-memo-id="29"]'), null);
+		assert.equal(root.querySelector('[data-memo-id="29-current"] .knomo-card-images'), images);
+		assert.equal(root.scrollTop, 900);
+		assert.deepEqual(released, [old]);
+		assert.equal(controller.getDisplayedMemos().some(memo => memo.id === updated.id), true);
+		assert.equal(frames.size, 0);
+		controller.applyMemoChanges(new Map([[updated.id, { ...updated, id: "29-unmatched", contentSnapshot: "unmatched" }]]));
+		assert.equal(root.querySelectorAll(".knomo-card").length, 29);
+		controller.renderResults();
+		assert.ok(frames.size > 0);
+		const retained = root.querySelector('[data-memo-id="0"]');
+		const partial = controller.getDisplayedMemos().find(memo => memo.id === "12")!;
+		controller.applyMemoChanges(new Map([[partial.id, { ...partial, id: "12-current", contentSnapshot: "partial memo", contentHash: "partial" }]]));
+		assert.equal(root.querySelector('[data-memo-id="0"]'), retained);
+		assert.equal(root.querySelector('[data-memo-id="12-current"]')?.textContent, "partial memo");
+		while (frames.size) { const [frame, action] = [...frames][0]; frames.delete(frame); action(); }
+		assert.equal(root.querySelectorAll(".knomo-card").length, 29);
+		assert.equal(root.querySelectorAll('[data-memo-id="12-current"]').length, 1);
+		assert.equal(root.querySelector('[data-memo-id="12"]'), null);
+		const beforeInsert = root.querySelector('[data-memo-id="0"]');
+		controller.applyMemoChanges(new Map(), [{ ...makeMemo("matched-new", "new memo"), createdAt: "2099-12-31T12:00" }]);
+		assert.equal(root.querySelector('[data-memo-id="0"]'), beforeInsert);
+		assert.equal(root.querySelector('[data-memo-id="matched-new"]')?.textContent, "new memo");
+		assert.equal(root.scrollTop, 900);
+	} finally { dom.window.close(); }
+});
+
+test("移动搜索的迟到查询不能覆盖已确认提交的结果快照", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = [makeMemo("original", "original memo")];
+	let release!: () => void;
+	let pending: Promise<void> | undefined;
+	const { controller, root } = createControllerHarness(MobileSearchController, memos, undefined, () => pending ?? Promise.resolve());
+	controller.searchQuery = "memo"; controller.openPage({ focusInput: false });
+	await Promise.resolve(); await Promise.resolve();
+	pending = new Promise<void>(resolve => { release = resolve; });
+	const refreshing = controller.refreshAppliedResults();
+	controller.applyMemoChanges(new Map([["original", makeMemo("current", "confirmed memo")]]));
+	release(); await refreshing;
+	assert.deepEqual(controller.getDisplayedMemos().map(memo => memo.id), ["current"]);
+	assert.deepEqual(root.findAll(".knomo-card").map(card => card.getAttr("data-memo-id")), ["current"]);
+	controller.closePage();
+});
+
+test("保存通知接入旧结果时，仍完成用户正在切换的新搜索", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = [makeMemo("original", "original memo"), makeMemo("next", "next memo")];
+	let release!: () => void;
+	let pending: Promise<void> | undefined;
+	const { controller, root } = createControllerHarness(MobileSearchController, memos, undefined, () => pending ?? Promise.resolve());
+	controller.searchQuery = "original";
+	controller.openPage({ focusInput: false });
+	await controller.refreshAppliedResults();
+	pending = new Promise<void>(resolve => { release = resolve; });
+	try {
+		controller.searchQuery = "next";
+		controller.applyMemoChanges(new Map([["original", makeMemo("current", "original confirmed memo")]]));
+		release();
+		await new Promise<void>(resolve => setImmediate(resolve));
+		assert.equal(controller.session.result?.input, "next");
+		assert.deepEqual(root.findAll(".knomo-card").map(card => card.getAttr("data-memo-id")), ["next"]);
+	} finally { release(); controller.closePage(); }
+});
+
 function createControllerHarness(
 	Controller: MobileSearchControllerConstructor,
 	memos: MemoViewItem[],

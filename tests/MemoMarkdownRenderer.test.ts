@@ -6,6 +6,34 @@ import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
 
+test("复用未变卡片时，迟到的 Markdown 将任务绑定到已确认的新句柄", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const original = MarkdownRenderer.render;
+	const gate = deferred<void>();
+	let started = false;
+	MarkdownRenderer.render = async (_app, _markdown, target) => {
+		target.createEl("li", { cls: "task-list-item", attr: { "data-task": " " } }).createEl("input", { attr: { type: "checkbox" } });
+		started = true;
+		await gate.promise;
+	};
+	const renderer = new MemoMarkdownRenderer({ app: {} as never, createComponent: () => new TestComponent() as never,
+		getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1 });
+	const memo = makeMemo({ id: "original", contentSnapshot: "- [ ] task" });
+	const content = new TestElement("div");
+	try {
+		renderer.queueMemoMarkdown(memo, content.asHtml(), 0, "normal", memo.contentSnapshot, "card-flow");
+		await waitFor(() => started);
+		renderer.retainCard({ querySelectorAll: () => [content.asHtml()] } as unknown as HTMLElement, { ...memo, id: "current" });
+		renderer.queueMemoMarkdown({ ...memo, id: "stale" }, content.asHtml(), -1, "normal", memo.contentSnapshot, "card-flow");
+		gate.resolve();
+		await waitFor(() => content.findAll("input").some(input => input.getAttr("data-knomo-memo-id") === "current"));
+		assert.equal(memo.id, "original");
+	} finally { gate.resolve(); renderer.clear(); MarkdownRenderer.render = original; }
+});
+
 test("both Card surfaces pass literal Markdown and Daily sourcePath to the host", async () => {
 	await ensureObsidianStub();
 	const { MarkdownRenderer } = await import("obsidian");

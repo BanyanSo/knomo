@@ -26,6 +26,7 @@ const context = await esbuild.context({
 	],
 	format: "cjs",
 	target: "es2018",
+	charset: isProduction ? "utf8" : "ascii",
 	logLevel: "info",
 	sourcemap: isProduction ? false : "inline",
 	treeShaking: true,
@@ -37,8 +38,11 @@ const context = await esbuild.context({
 });
 
 if (isProduction) {
-	await context.rebuild();
-	await context.dispose();
+	try {
+		await context.rebuild();
+	} finally {
+		await context.dispose();
+	}
 	await prepareReleaseAssets();
 } else {
 	await context.watch();

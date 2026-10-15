@@ -155,7 +155,7 @@ test("桌面滚动只重新定位打开的卡片菜单，保留其他卡片状�
 });
 
 // 使用真实菜单 DOM、生产定位函数和浏览器布局；宿主 SVG 由占位图形代替，真实主题仍需 Obsidian 验收。
-test("桌面菜单在宽窄面板、中英文、明暗主题与放大字体下显示图标并限制裁切", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆盖与 Knomo Token 放大下显示图标并限制裁切", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const f = await createMobilePopupFixture();
 	const menus = { card: f.card.outerHTML, scope: f.scopeMenu.outerHTML };
 	f.close();
@@ -179,13 +179,14 @@ test("桌面菜单在宽窄面板、中英文、明暗主题与放大字体下�
 		const page = await browser.newPage();
 		const errors: string[] = [];
 		page.on("pageerror", (error: Error) => errors.push(error.message));
-		for (const theme of ["theme-light", "theme-dark"]) for (const font of [15, 22]) for (const locale of ["en", "zh-CN"] as const) {
+		for (const theme of ["theme-light", "theme-dark"]) for (const { font, scale } of [{ font: 15, scale: 1 }, { font: 22, scale: 1 }, { font: 15, scale: 1.5 }, { font: 15, scale: 2 }]) for (const locale of ["en", "zh-CN"] as const) {
 			for (const [width, height] of [[1000, 720], [360, 320], [180, 260]]) {
 				const narrow = width < 780;
 				const scope = narrow ? menus.scope : menus.scope.replace("knomo-mobile-scope-popover", "knomo-desktop-scope-popover");
 				await page.setViewportSize({ width, height });
 				await page.setContent(`<style>${hostCss}${css}
 					body{margin:0;display:block;font:${font}px Arial;background:var(--background-primary);--font-ui-medium:${font}px;--border-width:1px;--text-normal:${theme === "theme-dark" ? "#ddd" : "#222"};--text-muted:var(--text-normal);--text-error:#d33;--background-primary:${theme === "theme-dark" ? "#222" : "#fff"};--background-secondary:var(--background-primary)}
+					body{--knomo-text-ui-medium:${15 * scale}px;--knomo-text-ui-base:${14 * scale}px;--knomo-text-meta:${13 * scale}px;--knomo-text-caption:${12 * scale}px}
 					#root{position:relative;display:block;margin:20px;width:calc(100vw - 40px);height:calc(100vh - 40px)}
 					#bounds{position:relative;display:block;width:100%;height:100%;padding:0;overflow:hidden}
 					#header{display:flex;position:relative;height:48px;padding:0}
@@ -221,24 +222,33 @@ test("桌面菜单在宽窄面板、中英文、明暗主题与放大字体下�
 						const icons = Array.from(menu.querySelectorAll<HTMLElement>(".knomo-menu-icon, .knomo-button-icon"));
 						const rows = Array.from(menu.querySelectorAll<HTMLElement>("button"));
 						const last = menu.lastElementChild as HTMLElement;
-						last.scrollIntoView({ block: "nearest" });
+						// 极窄视口放大后，非交互字数区可能高于菜单；验证其首尾都可滚动抵达。
+						menu.scrollTop = last.offsetTop;
+						const lastStartReachable = last.getBoundingClientRect().top >= menu.getBoundingClientRect().top - 1;
+						menu.scrollTop = menu.scrollHeight;
 						return {
 							within: rect.left >= bound.left + 7 && rect.right <= bound.right - 7 && rect.top >= bound.top + 7 && rect.bottom <= bound.bottom - 7,
 							width: rect.width, boundWidth: bound.width,
 							icons: icons.length, iconsVisible: icons.every(el => el.getBoundingClientRect().width === 16 && el.getBoundingClientRect().height === 16 && el.getAttribute("aria-hidden") === "true"),
 							iconsAligned: icons.every(el => Math.abs(el.getBoundingClientRect().left - icons[0].getBoundingClientRect().left) <= 1),
 							rowsFit: rows.every(el => el.getBoundingClientRect().height >= 32 && el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1),
+							fontSizes: rows.map(el => getComputedStyle(el).fontSize),
+							wordCountSize: getComputedStyle(card.querySelector(".knomo-card-word-count")!).fontSize,
+							lastStartReachable,
 							lastReachable: last.getBoundingClientRect().bottom <= menu.getBoundingClientRect().bottom + 1,
 							scrollable: menu.scrollHeight > menu.clientHeight,
 						};
 					}, kind);
-					const context = `${theme}/${font}/${locale}/${width}/${kind}`;
+					const context = `${theme}/${font}/${scale}/${locale}/${width}/${kind}`;
 					assert.equal(result.within, true, context);
 					assert.equal(result.width, Math.min(168, result.boundWidth - 16), context);
 					assert.equal(result.icons, kind === "scope" ? 9 : 7, context);
 					assert.equal(result.iconsVisible, true, context);
 					assert.equal(result.iconsAligned, true, context);
 					assert.equal(result.rowsFit, true, context);
+					assert.ok(result.fontSizes.every((size: string) => size === `${14 * scale}px`), context);
+					assert.equal(result.wordCountSize, `${13 * scale}px`, context);
+					assert.equal(result.lastStartReachable, true, context);
 					assert.equal(result.lastReachable, true, context);
 					if (width === 180 || (width === 360 && kind === "scope")) assert.equal(result.scrollable, true, context);
 				}
@@ -248,6 +258,8 @@ test("桌面菜单在宽窄面板、中英文、明暗主题与放大字体下�
 		const placements = await page.evaluate(() => {
 			const api = (window as unknown as { DesktopMenuFixture: { positionDesktopMenu: (menu: HTMLElement, anchor: HTMLElement, bounds: HTMLElement, align: "start" | "end") => boolean } }).DesktopMenuFixture;
 			const root = document.querySelector<HTMLElement>("#root")!;
+			// 放大矩阵已验证；以下用默认字号独立验证空间变化和自定义菜单宽度。
+			for (const [name, size] of [["ui-medium", 15], ["ui-base", 14], ["meta", 13], ["caption", 12]] as const) root.style.setProperty("--knomo-text-" + name, size + "px");
 			const flow = document.querySelector<HTMLElement>("#flow")!;
 			const card = document.querySelector<HTMLElement>(".knomo-card")!;
 			const head = card.querySelector<HTMLElement>(".knomo-card-head")!;

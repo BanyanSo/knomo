@@ -1,0 +1,394 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { build } from "esbuild";
+import type { ComposerEditor } from "../src/ui/ComposerEditor";
+
+interface TypographyWindow extends Window {
+	KnomoTypographyFixture: {
+		ComposerEditor: typeof ComposerEditor;
+		createMobileComposerLayer: typeof import("../src/ui/MobileComposerLayer").createMobileComposerLayer;
+		measureSuggestionContentWidth: typeof import("../src/ui/composerSuggestPosition").measureSuggestionContentWidth;
+		KnomoTagSuggest: typeof import("../src/ui/KnomoTagSuggest").KnomoTagSuggest;
+		KnomoWikiLinkSuggest: typeof import("../src/ui/KnomoWikiLinkSuggest").KnomoWikiLinkSuggest;
+		undoDepth: typeof import("@codemirror/commands").undoDepth;
+		undo: typeof import("@codemirror/commands").undo;
+		redo: typeof import("@codemirror/commands").redo;
+	};
+	editor: ComposerEditor;
+	tagSuggest: import("../src/ui/KnomoTagSuggest").KnomoTagSuggest;
+	wikiSuggest: import("../src/ui/KnomoWikiLinkSuggest").KnomoWikiLinkSuggest;
+	retainedState: import("@codemirror/state").EditorState;
+	retainedCapture: ReturnType<ComposerEditor["capture"]>;
+}
+
+// 布局由真实浏览器和编辑器测量；默认宿主样式自包含，外部快照只作附加输入。
+const hostFixture = `
+	* { box-sizing: border-box; }
+	body { margin:0; display:block; font:19px Arial; --font-text:Arial; --font-monospace:monospace;
+		--font-ui-medium:19px; --font-ui-small:17px; --font-ui-smaller:15px; --font-ui-large:24px;
+		--font-normal:400; --font-medium:500; --font-semibold:600; --border-width:1px;
+		--size-2-1:2px; --size-2-2:4px; --size-4-1:4px; --size-4-2:8px; --size-4-3:12px;
+		--size-4-4:16px; --size-4-5:20px; --size-4-6:24px; --size-4-8:32px;
+		--background-primary:white; --background-secondary:#eee; --text-normal:#222; --text-muted:#666; }
+	button, input, .suggestion-item { font:inherit; }
+	.theme-dark { --background-primary:#202020; --background-secondary:#282828; --text-normal:#eee; --text-muted:#bbb; }
+	.menu, .setting-item, .modal, .view-header { font-size:var(--font-ui-medium); }
+	.markdown-rendered h2 { font-size:1.5em; }
+	.markdown-rendered code { font-family:var(--font-monospace); font-size:0.9em; }
+	.probe { display:block; width:calc(100% - 32px); margin:16px; height:auto; }
+`;
+
+async function typographyBundle() {
+	const result = await build({
+		stdin: { contents: `
+			export { ComposerEditor } from "./src/ui/ComposerEditor";
+			export { createMobileComposerLayer } from "./src/ui/MobileComposerLayer";
+			export { measureSuggestionContentWidth } from "./src/ui/composerSuggestPosition";
+			export { KnomoTagSuggest } from "./src/ui/KnomoTagSuggest";
+			export { KnomoWikiLinkSuggest } from "./src/ui/KnomoWikiLinkSuggest";
+			export { undoDepth, undo, redo } from "@codemirror/commands";
+		`, resolveDir: process.cwd(), loader: "ts" },
+		bundle: true, write: false, format: "iife", globalName: "KnomoTypographyFixture",
+		plugins: [{ name: "host-api-fixture", setup(builder) {
+			builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "fixture" }));
+			builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: `
+				export const getLanguage = () => "en";
+				export const prepareFuzzySearch = () => () => null;
+				export const renderResults = (el, text) => { el.textContent = text; };
+			`, loader: "js" }));
+		} }],
+	});
+	return result.outputFiles[0].text;
+}
+
+const installDomHelpers = () => {
+	Object.assign(HTMLElement.prototype, {
+		createEl(this: HTMLElement, tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> } = {}) {
+			const el = this.ownerDocument.createElement(tag);
+			el.className = options.cls ?? "";
+			el.textContent = options.text ?? "";
+			for (const [key, value] of Object.entries(options.attr ?? {})) el.setAttribute(key, value);
+			return this.appendChild(el);
+		},
+		createDiv(this: HTMLElement, options?: { cls?: string; text?: string; attr?: Record<string, string> }) { return this.createEl("div", options); },
+		createSpan(this: HTMLElement) { return this.createEl("span"); },
+		setAttr(this: HTMLElement, key: string, value: string) { this.setAttribute(key, value); },
+		addClass(this: HTMLElement, key: string) { this.classList.add(key); },
+		removeClass(this: HTMLElement, key: string) { this.classList.remove(key); },
+		toggleClass(this: HTMLElement, key: string, value: boolean) { this.classList.toggle(key, value); },
+		setCssProps(this: HTMLElement, props: Record<string, string>) { for (const [key, value] of Object.entries(props)) this.style.setProperty(key, value); },
+		empty(this: HTMLElement) { this.replaceChildren(); },
+		setText(this: HTMLElement, text: string) { this.textContent = text; },
+		detach(this: HTMLElement) { this.remove(); },
+		instanceOf(this: HTMLElement, ctor: typeof HTMLElement) { return this instanceof ctor; },
+	});
+};
+
+test("Typography separates content from UI in desktop and body-mounted mobile Composer, preserving host controls and display exceptions", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	const bundle = await typographyBundle();
+	try {
+		const page = await browser.newPage();
+		const errors: string[] = [];
+		page.on("pageerror", (error: Error) => errors.push(error.message));
+		for (const theme of ["theme-light", "theme-dark"]) for (const mobile of [false, true]) for (const size of [14, 15, 16, 17, 18, 22]) {
+			await page.setViewportSize({ width: mobile ? 390 : 1000, height: 800 });
+			await page.setContent(`<style>${host}${hostFixture}${css}
+				body { --font-preferred-size:${size}px; }
+			</style><body class="${theme} ${mobile ? "is-mobile" : ""}">
+				<div class="probe knomo-plugin ${mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}">
+					<div class="knomo-card">
+						<div class="knomo-card-head"><span class="knomo-card-time">12:34</span><button class="knomo-card-time" data-memo-time-open="daily">12:34</button></div>
+						<div class="knomo-card-content markdown-rendered"><p>中文 Memo and text <a class="tag">#标签</a> <code>code</code></p><h2>Heading</h2></div>
+						<div class="knomo-card-word-count">123 words</div>
+						<div class="knomo-card-meta"><div class="knomo-source-reference"><p><a>来源于</a></p></div></div>
+						<div class="knomo-card-image-more">+3</div>
+					</div>
+					<div class="knomo-composer"><div id="editor"></div><div class="knomo-reference-preview-text">引用摘录</div></div>
+					<div class="knomo-recent-flow-date">2026-10-13</div><div class="knomo-recent-flow-decoration knomo-recent-flow-history">更多时光涟漪</div>
+					<div class="knomo-empty-title">暂无记录</div><div class="knomo-empty-description">记录一些内容</div>
+					<input class="knomo-search-input"><button class="knomo-nav-button">笔记</button><button class="knomo-mobile-search-chip">本周</button>
+					<div class="knomo-status">状态 <button class="knomo-inline-button">重试</button></div><span class="knomo-tag-count">12</span>
+					<div class="knomo-stat-value">123</div><div class="knomo-record-stats-metric-value">456</div>
+					<button class="knomo-tool-button">工具</button>
+				</div>
+				<div class="menu knomo-mobile-menu-scope">Native menu</div><div class="setting-item">Setting</div>
+				<div class="modal knomo-confirm-modal"><div class="knomo-confirm-message">Confirm</div></div><div class="view-header">Header</div>
+				<div class="suggestion-container"><div class="suggestion-item">Other suggestion</div></div><div class="knomo-setting-help">Help</div>
+				<div class="knomo-image-preview-counter">1/3</div>
+			</body>`);
+			await page.addScriptTag({ content: bundle });
+			await page.evaluate(installDomHelpers);
+			await page.evaluate((mobile: boolean) => {
+				const win = window as unknown as TypographyWindow;
+				if (mobile) {
+					const layer = win.KnomoTypographyFixture.createMobileComposerLayer(document);
+					layer.layerEl.classList.add("is-active", "is-open");
+					layer.contentEl.appendChild(document.querySelector(".knomo-composer")!);
+				}
+				win.editor = new win.KnomoTypographyFixture.ComposerEditor(document.querySelector("#editor")!, "中文 prose and English #标签\nend", "editor-label", "Write");
+				win.editor.input.setSelectionRange(win.editor.input.value.length, win.editor.input.value.length);
+			}, mobile);
+			const actual = await page.evaluate(() => {
+				const font = (selector: string) => getComputedStyle(document.querySelector(selector)!).fontSize;
+				return {
+					content: font(".knomo-card-content"), composer: font(".knomo-composer-input"),
+					times: Array.from(document.querySelectorAll(".knomo-card-time")).map(el => getComputedStyle(el).fontSize),
+					wordCount: font(".knomo-card-word-count"), cardTag: font(".knomo-card-content .tag"), composerTag: font(".knomo-composer-tag"),
+					date: font(".knomo-recent-flow-date"), history: font(".knomo-recent-flow-history"), title: font(".knomo-empty-title"),
+					search: font(".knomo-search-input"), nav: font(".knomo-nav-button"), chip: font(".knomo-mobile-search-chip"),
+					reference: font(".knomo-reference-preview-text"), source: font(".knomo-source-reference a"),
+					status: font(".knomo-status"), action: font(".knomo-inline-button"), count: font(".knomo-tag-count"), empty: font(".knomo-empty-description"),
+					host: [".menu", ".setting-item", ".knomo-confirm-message", ".view-header", ".suggestion-container > .suggestion-item"].map(font),
+					help: font(".knomo-setting-help"), preview: font(".knomo-image-preview-counter"),
+					display: [font(".knomo-stat-value"), font(".knomo-record-stats-metric-value"), font(".knomo-card-image-more")],
+					heading: font(".markdown-rendered h2"), code: font(".markdown-rendered code"),
+					lineHeight: getComputedStyle(document.querySelector(".knomo-composer-input")!).lineHeight,
+					iconSize: font(".knomo-tool-button"),
+				};
+			});
+			assert.deepEqual(actual, {
+				content: `${size}px`, composer: `${mobile ? Math.max(16, size) : size}px`, times: ["13px", "13px"],
+				wordCount: "13px", cardTag: "14px", composerTag: "14px", date: "15px", history: "13px", title: "15px",
+				search: "14px", nav: "14px", chip: "13px", reference: "13px", source: "12px", status: "12px", action: "14px", count: "12px", empty: "12px",
+				host: Array(5).fill("19px"), help: "17px", preview: "19px", display: ["24px", "24px", "26.4px"],
+				heading: `${size * 1.5}px`, code: `${size * 0.9}px`, lineHeight: `${Number(((mobile ? Math.max(16, size) : size) * 1.7).toFixed(2))}px`,
+				iconSize: mobile ? "24px" : "19px",
+			}, JSON.stringify({ theme, mobile, size }));
+			await page.evaluate(() => (window as unknown as TypographyWindow).editor.destroy());
+		}
+		assert.deepEqual(errors, []);
+	} finally { await browser.close(); }
+});
+
+test("live content font and width changes remeasure the real Composer without replacing state, selection, draft or history", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const bundle = await typographyBundle();
+	try {
+		const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+		const errors: string[] = [];
+		page.on("pageerror", (error: Error) => errors.push(error.message));
+		for (const mobile of [false, true]) {
+			await page.setContent(`<style>${hostFixture}${css}body { --font-preferred-size:14px; } .probe { width:720px; }</style>
+				<body><div class="probe knomo-plugin ${mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}"><div id="editor"></div></div></body>`);
+			await page.addScriptTag({ content: bundle });
+			const before = await page.evaluate(async () => {
+				const win = window as unknown as TypographyWindow;
+				const source = "中文 English 混排与很长的句子 ".repeat(24) + "\n#长标签\n\nend";
+				win.editor = new win.KnomoTypographyFixture.ComposerEditor(document.querySelector("#editor")!, source, "editor-label", "Write");
+				win.editor.view.dispatch({ changes: { from: source.length, insert: "!" }, userEvent: "input" });
+				win.editor.input.setSelectionRange(5, 12, "backward");
+				win.editor.view.focus();
+				await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+				win.retainedState = win.editor.view.state;
+				win.retainedCapture = win.editor.capture();
+				return { source: win.editor.input.value, height: win.editor.input.getBoundingClientRect().height, lineHeight: win.editor.view.defaultLineHeight, anchor: win.editor.coordsAtPos(12)?.left };
+			});
+			await page.evaluate(() => {
+				document.body.style.setProperty("--font-preferred-size", "22px");
+				document.body.style.setProperty("--knomo-text-ui-base", "28px");
+				document.body.style.setProperty("--font-text", "Georgia");
+				document.querySelector<HTMLElement>(".probe")!.style.width = "240px";
+			});
+			await page.waitForFunction(() => (window as unknown as TypographyWindow).editor.view.defaultLineHeight > 35);
+			const after = await page.evaluate(() => {
+				const win = window as unknown as TypographyWindow;
+				return {
+					sameState: win.editor.view.state === win.retainedState, captureValid: win.retainedCapture.valid(),
+					source: win.editor.input.value, selection: [win.editor.view.state.selection.main.anchor, win.editor.view.state.selection.main.head],
+					undoDepth: win.KnomoTypographyFixture.undoDepth(win.editor.view.state),
+					height: win.editor.input.getBoundingClientRect().height, anchor: win.editor.coordsAtPos(12)?.left,
+					font: getComputedStyle(win.editor.input).fontSize, family: getComputedStyle(win.editor.input).fontFamily,
+					tag: getComputedStyle(document.querySelector(".knomo-composer-tag")!).fontSize,
+				};
+			});
+			assert.equal(after.sameState, true);
+			assert.equal(after.captureValid, true);
+			assert.equal(after.source, before.source);
+			assert.deepEqual(after.selection, [12, 5]);
+			assert.equal(after.undoDepth, 1);
+			assert.ok(after.height > before.height * 2);
+			assert.notEqual(after.anchor, before.anchor);
+			assert.equal(after.font, "22px");
+			assert.equal(after.family, "Georgia");
+			assert.equal(after.tag, "28px");
+			const history = await page.evaluate(() => {
+				const win = window as unknown as TypographyWindow;
+				const undo = win.KnomoTypographyFixture.undo(win.editor.view);
+				const source = win.editor.input.value;
+				const redo = win.KnomoTypographyFixture.redo(win.editor.view);
+				return { undo, source, redo, restored: win.editor.input.value };
+			});
+			assert.equal(history.undo, true);
+			assert.equal(history.source, before.source.slice(0, -1));
+			assert.equal(history.redo, true);
+			assert.equal(history.restored, before.source);
+			await page.evaluate(() => (window as unknown as TypographyWindow).editor.destroy());
+		}
+		assert.deepEqual(errors, []);
+	} finally { await browser.close(); }
+});
+
+test("body-mounted Tag and Wiki candidates share typography with real measurement clones, clamp long content and retain keyboard selection", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	const bundle = await typographyBundle();
+	try {
+		const page = await browser.newPage();
+		const errors: string[] = [];
+		page.on("pageerror", (error: Error) => errors.push(error.message));
+		for (const mobile of [false, true]) for (const width of [240, 390, 900]) for (const scale of [1, 1.5, 2]) {
+			await page.setViewportSize({ width, height: 800 });
+			await page.setContent(`<style>${host}${hostFixture}${css}
+				body { --font-preferred-size:18px; --knomo-text-ui-medium:${15 * scale}px; --knomo-text-ui-base:${14 * scale}px; --knomo-text-meta:${13 * scale}px; --knomo-text-caption:${12 * scale}px; }
+				.suggestion-container { padding:4px; border:1px solid; }
+				.suggestion-item { padding:6px 8px; }
+			</style><body><div class="probe knomo-plugin"><div class="knomo-composer"><div id="editor"></div></div></div></body>`);
+			await page.addScriptTag({ content: bundle });
+			await page.evaluate(installDomHelpers);
+			await page.evaluate((mobile: boolean) => {
+				const win = window as unknown as TypographyWindow;
+				if (mobile) {
+					const layer = win.KnomoTypographyFixture.createMobileComposerLayer(document);
+					layer.layerEl.classList.add("is-active", "is-open");
+					layer.contentEl.appendChild(document.querySelector(".knomo-composer")!);
+				}
+				win.editor = new win.KnomoTypographyFixture.ComposerEditor(document.querySelector("#editor")!, "prefix #", "editor-label", "Write");
+				win.editor.view.focus();
+				const tags = Array.from({ length: 12 }, (_, i) => `#${i}_长标签_${"中文English".repeat(12)}`);
+				win.tagSuggest = new win.KnomoTypographyFixture.KnomoTagSuggest({} as import("obsidian").App, win.editor.input, () => {}, {
+					getSnapshot: () => ({ status: "ready", revision: 1, suggestions: tags }),
+				} as unknown as import("../src/services/VaultTagIndex").VaultTagIndex);
+				win.tagSuggest.open();
+			}, mobile);
+			for (const kind of ["tag", "wiki"]) {
+				if (kind === "wiki") await page.evaluate(() => {
+					const win = window as unknown as TypographyWindow;
+					win.tagSuggest.close();
+					win.editor.reset("prefix [[]]");
+					win.editor.input.setSelectionRange(9, 9);
+					const basename = "会议记录_" + "中文English".repeat(12);
+					const files = Array.from({ length: 10 }, (_, i) => ({ basename, path: `目录_${i}/${"很长的目录/".repeat(10)}${basename}.md` }));
+					const app = {
+						vault: { on: () => ({}), getMarkdownFiles: () => files },
+						metadataCache: { fileToLinktext: (file: { path: string }) => file.path.slice(0, -3), getFirstLinkpathDest: (path: string) => files.find(file => file.path === path + ".md") },
+					};
+					win.wikiSuggest = new win.KnomoTypographyFixture.KnomoWikiLinkSuggest(app as unknown as import("obsidian").App, win.editor.input, {
+						listboxId: "wiki", getSourcePath: () => "Daily/2026-10-13.md", onInputChanged: () => {}, closeTagSuggest: () => win.tagSuggest.close(), registerVaultEvent: () => {},
+					});
+					win.wikiSuggest.openForCurrentRange();
+				});
+				await page.waitForFunction((kind: string) => {
+					const popup = document.querySelector(kind === "tag" ? ".knomo-tag-suggest-popover" : ".knomo-link-suggest-popover");
+					return popup && getComputedStyle(popup).visibility === "visible";
+				}, kind);
+				const actual = await page.evaluate((kind: string) => {
+					const win = window as unknown as TypographyWindow;
+					const popup = document.querySelector<HTMLElement>(kind === "tag" ? ".knomo-tag-suggest-popover" : ".knomo-link-suggest-popover")!;
+					const selector = kind === "tag" ? ".suggestion-item" : ".knomo-link-suggest-item";
+					const styles = (el: Element) => {
+						const css = getComputedStyle(el);
+						return [css.fontSize, css.fontWeight, css.fontFamily, css.lineHeight];
+					};
+					const rowStyles = (el: Element) => [styles(el), ...Array.from(el.querySelectorAll("span, .knomo-link-suggest-title, .knomo-link-suggest-path")).map(styles)];
+					const visible = Array.from(popup.querySelectorAll(selector)).map(rowStyles);
+					const clones: string[][][] = [];
+					const originalRect = HTMLElement.prototype.getBoundingClientRect;
+					HTMLElement.prototype.getBoundingClientRect = function () {
+						if (this.classList.contains("knomo-suggest-measure-item")) clones.push(rowStyles(this));
+						return originalRect.call(this);
+					};
+					let measured: number;
+					try { measured = win.KnomoTypographyFixture.measureSuggestionContentWidth(win.editor.input, popup, selector); }
+					finally { HTMLElement.prototype.getBoundingClientRect = originalRect; }
+					const rect = popup.getBoundingClientRect();
+					const saved = popup.getAttribute("style")!;
+					popup.style.width = "max-content"; popup.style.maxWidth = "none"; popup.style.minWidth = "0";
+					popup.style.maxHeight = "none"; popup.style.overflowY = "visible";
+					const naturalWidth = Math.ceil(popup.getBoundingClientRect().width + 2);
+					popup.setAttribute("style", saved);
+					const first = popup.querySelector<HTMLElement>(selector)!;
+					const title = popup.querySelector(".knomo-link-suggest-title");
+					const path = popup.querySelector(".knomo-link-suggest-path");
+					return {
+						visible, clones, measured, naturalWidth, bodyMounted: popup.parentElement === document.body,
+						tokens: ["ui-medium", "ui-base", "meta", "caption"].map(name => getComputedStyle(popup).getPropertyValue("--knomo-text-" + name).trim()),
+						mainSize: getComputedStyle(title ?? first).fontSize, pathSize: path ? getComputedStyle(path).fontSize : null,
+						within: rect.left >= 11 && rect.right <= innerWidth - 11 && rect.top >= 0 && rect.bottom <= innerHeight,
+						rowHeight: first.getBoundingClientRect().height, scrollable: popup.scrollHeight > popup.clientHeight,
+						ellipsis: title ? getComputedStyle(title).textOverflow === "ellipsis" && title.scrollWidth > title.clientWidth : true,
+						leftoverClones: document.querySelectorAll(".knomo-suggest-measure-host").length,
+					};
+				}, kind);
+				const context = JSON.stringify({ mobile, width, scale, kind });
+				assert.equal(actual.bodyMounted, true, context);
+				assert.deepEqual(actual.clones, actual.visible, context);
+				assert.ok(Math.abs(actual.measured - actual.naturalWidth) <= 1, context);
+				assert.deepEqual(actual.tokens, [15, 14, 13, 12].map(size => `${size * scale}px`), context);
+				assert.equal(actual.mainSize, `${14 * scale}px`, context);
+				if (kind === "wiki") assert.equal(actual.pathSize, `${12 * scale}px`, context);
+				if (mobile || kind === "wiki") assert.ok(actual.rowHeight >= 44, context);
+				assert.equal(actual.within, true, context);
+				assert.equal(actual.scrollable, true, context);
+				assert.equal(actual.ellipsis, true, context);
+				assert.equal(actual.leftoverClones, 0, context);
+				if (scale === 1 && width === 390) {
+					const dynamic = await page.evaluate(async ({ kind, mobile }: { kind: string; mobile: boolean }) => {
+						const win = window as unknown as TypographyWindow;
+						const state = win.editor.view.state, capture = win.editor.capture();
+						const anchorBefore = win.editor.coordsAtPos(win.editor.input.selectionStart)!;
+						document.body.style.setProperty("--font-preferred-size", "22px");
+						document.body.style.setProperty("--knomo-text-ui-base", "21px");
+						document.body.style.setProperty("--knomo-text-caption", "18px");
+						document.body.style.setProperty("--font-text", "Georgia");
+						win.editor.view.dom.style.width = "200px";
+						await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+						// 复用视图重排后调用的既有刷新入口，不另建候选定位逻辑。
+						if (kind === "tag") win.tagSuggest.refresh(); else win.wikiSuggest.refreshForCursor();
+						await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+						const popup = document.querySelector<HTMLElement>(kind === "tag" ? ".knomo-tag-suggest-popover" : ".knomo-link-suggest-popover")!;
+						const rect = popup.getBoundingClientRect(), anchor = win.editor.coordsAtPos(win.editor.input.selectionStart)!;
+						return {
+							sameState: win.editor.view.state === state, captureValid: capture.valid(),
+							anchorChanged: anchor.left !== anchorBefore.left || anchor.bottom !== anchorBefore.bottom,
+							anchored: mobile ? rect.bottom <= anchor.top - 7 && rect.top >= 51 : Math.abs(rect.top - anchor.bottom) <= 1,
+							within: rect.left >= 11 && rect.right <= innerWidth - 11,
+							font: getComputedStyle(popup.querySelector(kind === "tag" ? ".suggestion-item" : ".knomo-link-suggest-title")!).fontSize,
+						};
+					}, { kind, mobile });
+					assert.deepEqual(dynamic, { sameState: true, captureValid: true, anchorChanged: true, anchored: true, within: true, font: "21px" }, context);
+					await page.evaluate(() => {
+						document.body.style.removeProperty("--font-preferred-size"); document.body.style.removeProperty("--knomo-text-ui-base");
+						document.body.style.removeProperty("--knomo-text-caption"); document.body.style.removeProperty("--font-text");
+						(window as unknown as TypographyWindow).editor.view.dom.style.removeProperty("width");
+					});
+				}
+				const selected = await page.evaluate((kind: string) => {
+					const win = window as unknown as TypographyWindow;
+					const suggest = kind === "tag" ? win.tagSuggest : win.wikiSuggest;
+					suggest.handleKeydown(new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true }));
+					const row = document.querySelector<HTMLElement>(kind === "tag" ? ".knomo-tag-suggest-popover .is-selected" : ".knomo-link-suggest-popover .is-selected")!;
+					const text = row.textContent!;
+					suggest.handleKeydown(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
+					return { text, source: win.editor.input.value, expanded: win.editor.input.getAttribute("aria-expanded") };
+				}, kind);
+				assert.equal(selected.expanded, "false", context);
+				assert.ok(selected.source.startsWith(kind === "tag" ? "prefix #1_" : "prefix [[目录_1/"), context);
+				assert.ok(selected.text.length > 20, context);
+			}
+			await page.evaluate(() => {
+				const win = window as unknown as TypographyWindow;
+				win.wikiSuggest.destroy(); win.editor.destroy();
+			});
+		}
+		assert.deepEqual(errors, []);
+	} finally { await browser.close(); }
+});

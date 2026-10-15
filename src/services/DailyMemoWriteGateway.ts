@@ -39,6 +39,7 @@ export interface DailyWriteResult {
 }
 
 export interface DailyMemoWriteGatewayOptions {
+	cancellationSignal?: AbortSignal;
 	sliceBudgetMs?: number;
 	maxLinesPerSlice?: number;
 	yieldControl?: () => Promise<void>;
@@ -131,6 +132,7 @@ export class DailyMemoWriteGateway {
 	}
 
 	private assertTarget(target: Pick<PreparedDailyWrite, "file" | "sourcePath" | "logicalDate" | "validateTarget">): void {
+		this.assertActive();
 		// TFile 会随重命名改变 path；同文和同路径均不能替代准备时选定的文件对象。
 		if (normalizePath(target.file.path) !== target.sourcePath
 			|| this.app.vault.getAbstractFileByPath(target.sourcePath) !== target.file) {
@@ -164,9 +166,17 @@ export class DailyMemoWriteGateway {
 		return {
 			sliceBudgetMs: this.options.sliceBudgetMs ?? 8,
 			maxLinesPerSlice: this.options.maxLinesPerSlice ?? 256,
-			yieldControl: this.options.yieldControl ?? (() => new Promise<void>((resolve) => {
-				this.app.workspace.containerEl.win.setTimeout(resolve, 0);
-			})),
+			yieldControl: async () => {
+				this.assertActive();
+				await (this.options.yieldControl?.() ?? new Promise<void>((resolve) => {
+					this.app.workspace.containerEl.win.setTimeout(resolve, 0);
+				}));
+				this.assertActive();
+			},
 		};
+	}
+
+	private assertActive(): void {
+		if (this.options.cancellationSignal?.aborted) throw new Error("Daily write runtime cancelled.");
 	}
 }

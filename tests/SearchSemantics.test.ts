@@ -54,6 +54,78 @@ test("连续文字不跨字段或排除边界；标签、链接和图片字段�
 	assert.equal(matchesCatalogQuery(separated, searchFilter('"项目 复盘"')), false);
 });
 
+test("搜索正文排除缩进代码和 Obsidian 注释，并保留文字边界与转义", () => {
+	assert.deepEqual(buildSearchBody("before\n\n    secret\n\nafter"), ["before", "after"]);
+	assert.deepEqual(buildSearchBody("before %%secret%% after"), ["before", "after"]);
+	assert.deepEqual(buildSearchBody("before\n%%secret\n\nmore%% **after**"), ["before", "after"]);
+	assert.deepEqual(buildSearchBody("before\n%%unfinished"), ["before"]);
+	assert.deepEqual(buildSearchBody("before %%unfinished"), ["before %%unfinished"]);
+	assert.deepEqual(buildSearchBody("before `%%literal%%` after"), ["before %%literal%% after"]);
+	assert.deepEqual(buildSearchBody("before \\%\\%literal\\%\\% after"), ["before %%literal%% after"]);
+	assert.deepEqual(buildSearchBody("before %%hidden `code` **strong**%% after"), ["before", "after"]);
+	assert.deepEqual(buildSearchBody("before %%hidden%% **after**"), ["before", "after"]);
+	assert.deepEqual(buildSearchBody("before\n%%\n```md\nhidden\n%% **after**\nvisible %%hidden%% end"), ["before", "after visible", "end"]);
+	assert.deepEqual(buildSearchBody("before\n```md\n%%literal\n```\nafter"), ["before", "after"]);
+	assert.deepEqual(buildSearchBody("**before %%hidden%% after**"), ["before", "after"]);
+});
+
+test("跨行行内代码保留百分号文字，真正的块注释仍排除", () => {
+	for (const marker of ["`", "``"]) {
+		assert.deepEqual(buildSearchBody(`before\n${marker}code\n%%literal%%\nend${marker}\nafter`), ["before code %%literal%% end after"]);
+		assert.deepEqual(buildSearchBody(`before\n${marker}code\n%%literal\nmore%%\nend${marker}\nafter`), ["before code %%literal more%% end after"]);
+	}
+	assert.deepEqual(buildSearchBody("before `unclosed\n%%hidden\n\nmore%% after"), ["before `unclosed", "after"]);
+	assert.deepEqual(buildSearchBody("before\n%%hidden `code\n\nmore%% after"), ["before", "after"]);
+	assert.deepEqual(buildSearchBody("before\n%% hidden `fake\n%% after\n%%secret%%\nend`"), ["before", "after", "end`"]);
+	assert.deepEqual(buildSearchBody("before\n%%\n```md\nhidden\n%% `code\n%%literal%%\nend` after"), ["before", "code %%literal%% end after"]);
+	assert.deepEqual(buildSearchBody("before\n%%\n<div>\nhidden\n%% `code\n%%literal%%\nend` after"), ["before", "code %%literal%% end after"]);
+});
+
+test("图片说明递归提取保留排除边界和外部正文", () => {
+	for (const hidden of ["%%hidden%%", "<!--hidden-->"]) {
+		assert.deepEqual(buildSearchBody(`![before ${hidden} after](image.png)`), ["before", "after"]);
+		assert.deepEqual(buildSearchBody(`left ![before ${hidden} after](image.png) right`), ["left before", "after right"]);
+		assert.deepEqual(buildSearchBody(`left ![${hidden}](image.png) right`), ["left", "right"]);
+		assert.deepEqual(buildSearchBody(`![${hidden}before${hidden}](image.png)`), ["before"]);
+	}
+	assert.deepEqual(buildSearchBody("left ![**before** `%%literal%%` after](image.png) right"), ["left before %%literal%% after right"]);
+	assert.deepEqual(buildSearchBody("left ![%%hidden%%after](image.png) right"), ["left", "after right"]);
+	assert.deepEqual(buildSearchBody("left ![before%%hidden%%](image.png) right"), ["left before", "right"]);
+});
+
+test("代码和注释排除在双存储查询、count、逐页结果中一致，短语不跨排除边界", async () => {
+	const name = "search-exclusions-" + Date.now();
+	const stores = [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange })];
+	const partition = searchPartition("2026-10-13", [
+		"before %%secret%% after", "before\n\n    secret\n\nafter", "before\n%%secret\n\nmore%% after",
+		"visible secret", "`secret`", "before after",
+		"`code\n%%literal%%\nend`", "left ![before %%hidden%% after](image.png) right",
+	]);
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(partition);
+			for (const [text, expectedCount] of [["secret", 2], ["literal", 1], ["before after", 1], ["left before after right", 0], ["before", 5]] as const) {
+				const filter = searchFilter(text);
+				const expected = partition.observations.filter(item => matchesCatalogQuery(item, filter)).map(item => item.observationKey).sort();
+				assert.equal(expected.length, expectedCount, text);
+				const keys: string[] = [];
+				let cursor: Awaited<ReturnType<typeof store.query>>["nextCursor"] = null;
+				do {
+					const page: Awaited<ReturnType<typeof store.query>> = await store.query({ ...filter, limit: 1, cursor });
+					keys.push(...page.items.map(item => item.observationKey));
+					cursor = page.nextCursor;
+				} while (cursor);
+				assert.deepEqual(keys.sort(), expected, text);
+				assert.equal((await store.count(filter)).count, expectedCount, text);
+			}
+		}
+	} finally {
+		stores.forEach(store => store.close());
+		await new Promise<void>((resolve, reject) => { const request = indexedDB.deleteDatabase(name); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); });
+	}
+});
+
 test("双存储的 count、逐页结果和 evaluator 在来源组合及稀疏命中时完全一致", async () => {
 	const name = "search-semantics-" + Date.now();
 	const stores = [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange })];

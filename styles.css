@@ -9,6 +9,11 @@
 body {
 	--knomo-app-background-primary: var(--background-primary);
 	--knomo-app-background-secondary: var(--background-secondary);
+	/* 普通 UI 与正文独立，body 浮层及其测量副本共享同一字号来源。 */
+	--knomo-text-ui-medium: 15px;
+	--knomo-text-ui-base: 14px;
+	--knomo-text-meta: 13px;
+	--knomo-text-caption: 12px;
 }
 
 /* Time buoy */
@@ -32,6 +37,7 @@ body {
 
 .knomo-plugin .knomo-time-buoy-intro-actions button {
 	min-height: 44px;
+	font-size: var(--knomo-text-ui-base);
 }
 
 .knomo-plugin .knomo-time-buoy-panel {
@@ -119,8 +125,14 @@ body {
 	color: var(--text-error);
 }
 
+.knomo-plugin .knomo-time-buoy-partial {
+	color: var(--text-muted);
+	font-size: var(--knomo-text-caption);
+}
+
 .knomo-plugin .knomo-time-buoy-action {
 	min-height: 44px;
+	font-size: var(--knomo-text-ui-base);
 }
 
 .knomo-plugin .knomo-time-buoy-action:focus-visible {
@@ -149,7 +161,6 @@ body {
 	--knomo-desktop-header-composer-gap: 10px;
 	--knomo-header-offset-y: 6px;
 	--knomo-desktop-compact-edge-padding: 12px;
-	--knomo-card-time-font-size: calc(var(--knomo-content-size) * 13 / 15);
 	--knomo-content-end-base: 60px;
 	--knomo-content-end-clearance: var(--size-4-6);
 	--knomo-content-bottom-occlusion: 0px;
@@ -194,7 +205,7 @@ body {
 	position: relative;
 	color: var(--text-muted);
 	background-color: var(--knomo-page-background);
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	line-height: 1.6;
 }
 
@@ -550,7 +561,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 }
 
 .knomo-plugin .knomo-brand-title {
-	font-size: var(--font-ui-medium, 15px);
+	font-size: var(--knomo-text-ui-medium);
 	font-weight: var(--font-normal);
 	line-height: 1.3;
 }
@@ -558,7 +569,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 .knomo-plugin .knomo-brand-subtitle {
 	margin: 0 0 7px;
 	color: var(--text-faint);
-	font-size: var(--font-ui-smaller, 12px);
+	font-size: var(--knomo-text-caption);
 	font-weight: var(--font-normal);
 	line-height: 17px;
 }
@@ -653,7 +664,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 .knomo-plugin .knomo-sidebar-updating {
 	grid-column: 1 / -1;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 }
 
 @keyframes knomo-stat-loading {
@@ -674,7 +685,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 .knomo-plugin .knomo-stat-label {
 	margin-top: 2px;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 }
 
 /* ---- Sidebar Navigation ---- */
@@ -700,7 +711,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-normal);
 	line-height: 1.5;
 	cursor: pointer;
@@ -765,7 +776,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 .knomo-plugin .knomo-trash-count {
 	margin-left: auto;
 	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin .knomo-trash-count[hidden] {
@@ -776,7 +787,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	margin: 0 0 8px;
 	padding: 0 16px;
 	color: var(--text-faint);
-	font-size: var(--font-ui-smaller, 12px);
+	font-size: var(--knomo-text-caption);
 	font-weight: var(--font-normal);
 }
 
@@ -876,7 +887,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 .knomo-plugin .knomo-tag-count {
 	margin-left: auto;
 	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 	justify-self: end;
 }
 
@@ -1117,7 +1128,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-normal);
 	line-height: 1;
 	cursor: pointer;
@@ -1134,7 +1145,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-normal);
 	line-height: 1;
 	cursor: pointer;
@@ -1223,7 +1234,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: transparent;
 	color: var(--text-normal);
 	font: inherit;
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	appearance: none;
 }
 
@@ -1284,14 +1295,9 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: var(--font-ui-small, 13px);
+	font-size: var(--knomo-text-ui-base);
 	text-align: left;
 	cursor: pointer;
-}
-
-.knomo-plugin:not(.is-layout-mobile) .knomo-search-menu-option,
-.knomo-plugin:not(.is-layout-mobile) .knomo-scope-option {
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
 }
 
 .knomo-plugin .knomo-search-menu-option .knomo-button-icon {
@@ -1473,7 +1479,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: transparent;
 	box-shadow: none;
 	color: var(--text-muted);
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-normal);
 	line-height: 1;
 }
@@ -1664,7 +1670,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-mobile-search-section-title {
 	margin: 0 0 6px;
 	color: var(--text-faint);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 	font-weight: var(--font-medium);
 }
 
@@ -1695,7 +1701,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-normal);
 	background: var(--knomo-subtle-surface);
 	box-shadow: none;
-	font-size: var(--font-ui-small, 13px);
+	font-size: var(--knomo-text-meta);
 	cursor: pointer;
 }
 
@@ -1727,7 +1733,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-mobile-search-empty {
 	padding: 24px 0 0;
 	color: var(--text-muted);
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	text-align: center;
 }
 
@@ -1842,7 +1848,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	flex: 1 1 auto;
 	min-width: 0;
 	color: var(--text-muted);
-	font-size: var(--font-ui-small, 13px);
+	font-size: var(--knomo-text-meta);
 	line-height: 1.5;
 }
 
@@ -1987,12 +1993,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	gap: var(--size-4-2);
 }
 
-.knomo-plugin .knomo-time-buoy-picker-title,
-.knomo-plugin .knomo-time-buoy-picker-month-label {
+.knomo-plugin .knomo-time-buoy-picker-title {
+	font-size: var(--knomo-text-ui-medium);
 	font-weight: var(--font-semibold);
 }
 
 .knomo-plugin .knomo-time-buoy-picker-month-label {
+	font-weight: var(--font-semibold);
 	text-align: center;
 }
 
@@ -2024,7 +2031,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-time-buoy-picker-shortcut {
 	padding-inline: var(--size-4-2);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-ui-base);
 }
 
 .knomo-plugin .knomo-time-buoy-picker-grid {
@@ -2037,7 +2044,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	padding-block: var(--size-4-1);
 	color: var(--text-muted);
 	text-align: center;
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin .knomo-time-buoy-picker-day.is-adjacent {
@@ -2158,12 +2165,15 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	justify-content: flex-end;
 	gap: 8px;
 	margin-left: auto;
+	/* 文字放大时保留至少一个工具入口，操作区内的文字按钮可换行。 */
+	max-width: calc(100% - 32px);
 }
 
 .knomo-plugin.is-layout-mobile .knomo-composer-actions {
 	flex: 0 0 auto;
 	width: auto;
 	margin-left: 0;
+	max-width: calc(100% - var(--knomo-touch-target) - 10px);
 }
 
 .knomo-plugin .knomo-cancel-edit-button {
@@ -2171,13 +2181,16 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	align-items: center;
 	justify-content: center;
 	min-height: 32px;
+	min-width: 0;
 	padding: 0 10px;
 	border: 0;
 	border-radius: 6px;
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: var(--font-ui-small, 13px);
+	font-size: var(--knomo-text-ui-base);
+	white-space: normal;
+	overflow-wrap: anywhere;
 	cursor: pointer;
 }
 
@@ -2196,7 +2209,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	min-height: 0;
 	margin-top: 4px;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller, 12px);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin.is-layout-mobile .knomo-status {
@@ -2221,7 +2234,11 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	flex-wrap: wrap;
 	margin-top: 4px;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller, 12px);
+	font-size: var(--knomo-text-caption);
+}
+
+.knomo-plugin .knomo-image-status button {
+	font-size: var(--knomo-text-ui-base);
 }
 
 .knomo-plugin.is-layout-mobile .knomo-image-status {
@@ -2335,7 +2352,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-list-summary {
 	margin: 0 0 10px;
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin .knomo-list-toolbar {
@@ -2359,13 +2376,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-shuffle-day-date {
 	color: var(--text-normal);
-	font-size: var(--font-ui-medium);
+	font-size: var(--knomo-text-ui-medium);
 	font-weight: var(--font-semibold);
 }
 
 .knomo-plugin .knomo-shuffle-day-summary {
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 	line-height: 1.5;
 }
 
@@ -2377,7 +2394,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-muted);
 	background: var(--knomo-surface);
 	box-shadow: none;
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-ui-base);
 	cursor: pointer;
 }
 
@@ -2407,7 +2424,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-ui-base);
 	cursor: pointer;
 }
 
@@ -2464,13 +2481,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	gap: 8px;
 	margin-bottom: 2px;
 	color: var(--text-faint);
-	font-size: var(--font-ui-smaller, 12px);
+	font-size: var(--knomo-text-caption);
 	line-height: 1.3;
 }
 
 .knomo-plugin .knomo-card-time {
 	color: var(--text-faint);
-	font-size: var(--knomo-card-time-font-size);
+	font-size: var(--knomo-text-meta);
 }
 
 .knomo-plugin .knomo-card-time[data-memo-time-open="daily"] {
@@ -2487,7 +2504,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: transparent;
 	box-shadow: none;
 	font: inherit;
-	font-size: var(--knomo-card-time-font-size);
+	font-size: var(--knomo-text-meta);
 	line-height: 1.3;
 	text-align: left;
 	cursor: pointer;
@@ -2601,7 +2618,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	color: var(--text-muted);
 	background: transparent;
 	box-shadow: none;
-	font-size: calc(var(--font-ui-medium, 15px) * 14 / 15);
+	font-size: var(--knomo-text-ui-base);
 	text-align: left;
 	cursor: pointer;
 }
@@ -2634,7 +2651,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	border-top: var(--border-width) solid var(--knomo-soft-border);
 	overflow-wrap: anywhere;
 	color: var(--text-faint);
-	font-size: var(--knomo-card-time-font-size);
+	font-size: var(--knomo-text-meta);
 	font-variant-numeric: tabular-nums;
 	line-height: 1.3;
 	text-align: left;
@@ -2666,15 +2683,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	text-align-last: start;
 }
 
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h1,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h2,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h3,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h4,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h5,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content h6,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content pre,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content code,
-.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content table {
+.knomo-plugin .knomo-card.is-cjk-content .knomo-card-content :is(h1, h2, h3, h4, h5, h6, pre, code, table) {
 	text-align: start;
 }
 
@@ -2714,7 +2723,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	border-radius: 10px;
 	color: var(--text-muted);
 	background: var(--background-modifier-hover);
-	font-size: var(--font-ui-small, 13px);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-normal);
 }
 
@@ -2838,7 +2847,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	padding: 12px;
 	color: var(--text-faint);
 	background: var(--background-modifier-hover);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 	line-height: 1.4;
 	text-align: center;
 }
@@ -2864,7 +2873,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-meta {
 	margin-top: 6px;
 	color: var(--text-faint);
-	font-size: var(--font-ui-smaller, 12px);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin .knomo-source-reference p {
@@ -2886,12 +2895,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-empty-title {
 	margin-bottom: var(--size-2-2);
+	font-size: var(--knomo-text-ui-medium);
 	font-weight: var(--font-semibold);
 }
 
 .knomo-plugin .knomo-empty-description {
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin .knomo-catalog-status {
@@ -2904,6 +2914,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-catalog-status button {
 	min-height: 44px;
 	flex: 0 0 auto;
+	font-size: var(--knomo-text-ui-base);
 }
 
 /* --------------------------------------------------------------------------
@@ -2925,7 +2936,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-muted-text {
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 }
 
 /* --------------------------------------------------------------------------
@@ -3392,6 +3403,10 @@ body .knomo-mobile-create-fab.is-hidden {
 	touch-action: pan-y;
 }
 
+.knomo-tag-suggest-popover .suggestion-item {
+	font-size: var(--knomo-text-ui-base);
+}
+
 .knomo-tag-suggest-mobile,
 .knomo-tag-suggest-mobile * {
 	-webkit-user-select: none;
@@ -3480,15 +3495,15 @@ body .knomo-mobile-create-fab.is-hidden {
 	white-space: nowrap;
 }
 
-.knomo-link-suggest-title {
-	font-size: var(--font-ui-small);
+.knomo-link-suggest-popover .knomo-link-suggest-title {
+	font-size: var(--knomo-text-ui-base);
 	font-weight: 600;
 	line-height: 1.3;
 }
 
-.knomo-link-suggest-path {
+.knomo-link-suggest-popover .knomo-link-suggest-path {
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 	line-height: 1.25;
 }
 
@@ -3848,13 +3863,13 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-plugin .knomo-record-stats-updating {
 	align-self: flex-end;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin .knomo-record-stats-subtitle {
 	margin: 0;
 	color: var(--text-normal);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-semibold);
 }
 
@@ -3921,7 +3936,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	max-width: 100%;
 	overflow-wrap: anywhere;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 	line-height: 1.3;
 	text-align: center;
 	white-space: normal;
@@ -4117,7 +4132,7 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-plugin .knomo-record-stats-bar-label {
 	overflow: hidden;
 	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 	font-variant-numeric: tabular-nums;
 	line-height: 1.2;
 	text-align: center;
@@ -4147,7 +4162,7 @@ body .knomo-mobile-create-fab.is-hidden {
 
 .knomo-plugin .knomo-record-stats-chart-empty {
 	color: var(--text-faint);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 	text-align: center;
 }
 
@@ -4198,7 +4213,7 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-plugin .knomo-record-stats-tag-label {
 	min-width: 0;
 	overflow: hidden;
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-medium);
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -4221,7 +4236,7 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-plugin .knomo-record-stats-tag-count {
 	min-width: 2ch;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--knomo-text-caption);
 	font-variant-numeric: tabular-nums;
 	text-align: end;
 }
@@ -4236,7 +4251,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	border-radius: var(--radius-m);
 	color: var(--text-faint);
 	background: var(--knomo-surface);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 	text-align: center;
 }
 
@@ -4264,6 +4279,7 @@ body .knomo-mobile-create-fab.is-hidden {
 
 .knomo-plugin .knomo-record-stats-state-title {
 	color: var(--text-normal);
+	font-size: var(--knomo-text-ui-medium);
 	font-weight: var(--font-semibold);
 }
 
@@ -4271,11 +4287,12 @@ body .knomo-mobile-create-fab.is-hidden {
 .knomo-plugin .knomo-record-stats-error-detail {
 	max-width: 520px;
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 }
 
 .knomo-plugin .knomo-record-stats-error-detail {
 	color: var(--text-error);
+	font-size: var(--knomo-text-ui-base);
 	overflow-wrap: anywhere;
 }
 
@@ -4440,12 +4457,12 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 /* 近三天时间流只装饰默认卡片流。 */
 .knomo-plugin .knomo-recent-flow-decoration {
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-meta);
 	font-weight: var(--font-normal);
 	padding: 10px var(--size-4-2) 8px;
 }
 .knomo-plugin .knomo-recent-flow-date {
-	font-size: var(--font-ui-medium, 15px);
+	font-size: var(--knomo-text-ui-medium);
 	display: flex;
 	align-items: baseline;
 	gap: var(--size-4-2);
@@ -4975,7 +4992,7 @@ body.is-mobile .modal-container.knomo-confirm-backdrop { z-index: 10030; }
 }
 .knomo-plugin .knomo-search-date-hint {
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 	line-height: 1.5;
 	overflow-wrap: anywhere;
 	padding: 6px 8px;

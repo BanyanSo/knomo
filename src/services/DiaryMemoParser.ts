@@ -18,7 +18,7 @@ import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { assignObservationOccurrences } from "./ObservationOccurrences";
 
-export const CATALOG_PARSER_VERSION = 8;
+export const CATALOG_PARSER_VERSION = 10;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;

@@ -38,6 +38,57 @@ function deferred() {
 // 只推进一个事件循环边界，不依赖任意毫秒延迟。
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
+for (const stage of ["read", "process", "committed"] as const) {
+	test(`普通 Daily 写入在 ${stage} 阶段卸载插件，取消未提交写入并保留已提交正文`, async t => {
+		const h = harness(t);
+		const loading = h.plugin.onload();
+		h.release();
+		await loading;
+		const { TFile } = await import("obsidian");
+		const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+		const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md" });
+		const before = "- 09:00 before\n";
+		let content = before;
+		let writes = 0;
+		let published = 0;
+		Object.assign(h.plugin, { updateCommittedCatalogPartition: async () => { published++; } });
+		const entered = deferred(), release = deferred();
+		t.after(() => release.resolve());
+		const app = h.plugin.app;
+		Object.assign(app.workspace, { getActiveViewOfType: () => null });
+		Object.assign(app.vault, {
+			getAbstractFileByPath: () => file,
+			cachedRead: async () => {
+				if (stage === "read") { entered.resolve(); await release.promise; }
+				return content;
+			},
+			process: async (_file: unknown, update: (value: string) => string) => {
+				if (stage !== "read") { entered.resolve(); await release.promise; }
+				content = update(content);
+				writes++;
+				if (stage === "committed") h.plugin.unload();
+				return content;
+			},
+		});
+		const parsed = await new DiaryMemoParser().parse({ sourcePath: file.path, logicalDate: "2026-10-13", bytes: Buffer.from(before) });
+		const command = (h.plugin as unknown as { memoCommandService: import("../src/services/MemoCommandService").MemoCommandService }).memoCommandService;
+		const editing = command.startEdit({ observationHandle: parsed.observations[0]! } as unknown as import("../src/types/catalogView").CatalogMemoItem, "after");
+		const rejected = stage === "committed" ? null : Promise.all([
+			assert.rejects(editing.dailyCommitted, /abort|cancel/iu), assert.rejects(editing.settled, /abort|cancel/iu),
+		]);
+		await entered.promise;
+		if (stage !== "committed") h.plugin.unload();
+		release.resolve();
+		if (stage === "committed") {
+			await editing.dailyCommitted;
+			assert.equal((await editing.settled).localRefreshPending, true);
+		} else await rejected;
+		assert.equal(content, stage === "committed" ? before.replace("before", "after") : before);
+		assert.equal(writes, stage === "committed" ? 1 : 0);
+		assert.equal(published, 0);
+	});
+}
+
 function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable" = "ready", p2 = false) {
 	const settings = deferred(), daily = deferred(), db = deferred(), defaults = deferred(), background = deferred();
 	const monthly = deferred();

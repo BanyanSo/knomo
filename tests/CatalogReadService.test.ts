@@ -6,7 +6,7 @@ const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
 after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
-import type { MemoObservation } from "../src/types/catalog";
+import type { CatalogQuery, MemoObservation } from "../src/types/catalog";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -447,8 +447,8 @@ test("P8 重逢热缓存只读取选中正文，跨日重新纳入昨天的候�
 	const service = new CatalogReadService({ catalog, now: () => today, random: () => 0 });
 	await service.getRandomReunionItems(5);
 	let bodyReads = 0;
-	const getObservation = catalog.getObservation.bind(catalog);
-	catalog.getObservation = async (key) => { bodyReads++; return getObservation(key); };
+	const readSnapshot = catalog.readObservationSnapshot.bind(catalog);
+	catalog.readObservationSnapshot = async (keys, signal) => { bodyReads += keys.length; return readSnapshot(keys, signal); };
 	const items = await service.getRandomReunionItems(5);
 	assert.equal(bodyReads, 5);
 	assert.equal(items.length, 5);
@@ -745,8 +745,17 @@ test("共享重逢冷池取消一个消费者不影响另一个，最后取消�
 		let calls = 0;
 		let release: () => void = () => {};
 		const gate = new Promise<void>(resolve => { release = resolve; });
-		catalog.query = async request => { calls++; if (calls === 1) await gate; return query(request); };
-		const service = new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26) });
+		let querySignal: AbortSignal | undefined, scans = 0;
+		catalog.query = async (request, signal) => {
+			calls++; querySignal = signal;
+			if (calls === 1) await new Promise<void>((resolve, reject) => {
+				const abort = () => reject(signal?.reason);
+				signal?.addEventListener("abort", abort, { once: true });
+				void gate.then(() => { signal?.removeEventListener("abort", abort); resolve(); });
+			});
+			return query(request, signal);
+		};
+		const service = new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26), requestObservationScan: () => { scans++; } });
 		const first = new AbortController();
 		const work = service.getRandomReunionItems(10, { signal: first.signal });
 		const rejected = assert.rejects(work, { name: "AbortError" });
@@ -755,6 +764,8 @@ test("共享重逢冷池取消一个消费者不影响另一个，最后取消�
 		assert.equal(calls, 1);
 		first.abort();
 		await rejected;
+		assert.ok(querySignal);
+		assert.equal(querySignal.aborted, !survives, "共享池只在最后消费者取消时终止底层查询");
 		release();
 		if (survivor !== null) {
 			assert.equal((await survivor).length, 10);
@@ -766,6 +777,7 @@ test("共享重逢冷池取消一个消费者不影响另一个，最后取消�
 			assert.equal((await service.getRandomReunionItems(10)).length, 10);
 			assert.equal(calls, 4);
 		}
+		assert.equal(scans, 0);
 		store.close();
 	}
 });
@@ -918,3 +930,202 @@ function makeObservation(sourcePath: string, logicalDate: string, startLine: num
 		timeBuoyDates: [],
 	};
 }
+
+test("完整句柄批读按 150 分片，保留输入顺序、重复键及同文独立 occurrence", async t => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { toCatalogMemoView } = await import("../src/types/memoView");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+	const observations = Array.from({ length: 301 }, (_, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, "same content"));
+	await seedCatalog(catalog, store, observations);
+	const service = new CatalogReadService({ catalog }), read = catalog.readObservationSnapshot.bind(catalog);
+	const sizes: number[] = [];
+	t.mock.method(catalog, "readObservationSnapshot", async (keys: readonly string[], signal?: AbortSignal) => { sizes.push(keys.length); return read(keys, signal); });
+	t.mock.method(catalog, "getObservation", async () => { throw new Error("No single-observation transactions."); });
+	assert.deepEqual(await service.readMemoItems([]), []);
+	assert.deepEqual(sizes, []);
+	const handles = [...observations].reverse().concat(observations[0]!);
+	const items = await service.readMemoItems(handles);
+	assert.deepEqual(sizes, [150, 150, 2]);
+	assert.deepEqual(items.map(item => item.observationHandle.startLine), handles.map(item => item.startLine));
+	assert.equal(new Set(items.map(item => item.key)).size, 301);
+	const before = items.slice(0, 2).map(toCatalogMemoView);
+	before[0] = { ...before[0]!, catalog: { ...before[0]!.catalog!, observationHandle: { ...before[0]!.catalog!.observationHandle, rawBlockHash: "stale" } } };
+	assert.deepEqual((await service.refreshMemoViews(before)).map(memo => memo.id), [before[1]!.id]);
+	await assert.rejects(service.readMemoItems([{ ...observations[0]!, startLine: 999 }]), /snapshot changed/iu);
+});
+
+test("批间或最终检查的 revision、coverage 与关闭重开变化均拒绝混合快照", async t => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	for (const size of [1, 151]) for (const change of ["revision", "coverage", "generation"] as const) await t.test(`${size}:${change}`, async t => {
+		const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+		const observations = Array.from({ length: size }, (_, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, "same content"));
+		await seedCatalog(catalog, store, observations);
+		const service = new CatalogReadService({ catalog }), read = catalog.readObservationSnapshot.bind(catalog);
+		let calls = 0;
+		t.mock.method(catalog, "readObservationSnapshot", async (keys: readonly string[], signal?: AbortSignal) => {
+			const snapshot = await read(keys, signal);
+			if (++calls === 1) {
+				if (change === "revision") await seedCatalog(catalog, store, observations.map(item => ({ ...item, sourceRevision: "b".repeat(64) })));
+				else if (change === "coverage") await store.setCoverage({ ...snapshot.coverage, kind: "partial", pendingFileCount: 1 });
+				else { store.close(); await store.open(); }
+			}
+			return snapshot;
+		});
+		await assert.rejects(service.readMemoItems(observations), /snapshot changed/iu);
+		assert.ok(calls <= 2);
+	});
+});
+
+test("批读取消传入 Store 并在下一片前停止，已取消的空输入同样拒绝", async t => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+	const observations = Array.from({ length: 301 }, (_, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, "same content"));
+	await seedCatalog(catalog, store, observations);
+	const service = new CatalogReadService({ catalog }), read = catalog.readObservationSnapshot.bind(catalog), controller = new AbortController();
+	let calls = 0;
+	t.mock.method(catalog, "readObservationSnapshot", async (keys: readonly string[], signal?: AbortSignal) => {
+		calls++; assert.strictEqual(signal, controller.signal);
+		const snapshot = await read(keys, signal); controller.abort(); return snapshot;
+	});
+	await assert.rejects(service.readMemoItems(observations, controller.signal), { name: "AbortError" });
+	assert.equal(calls, 1);
+	await assert.rejects(service.readMemoItems([], controller.signal), { name: "AbortError" });
+	assert.equal(calls, 1);
+});
+
+test("随机重逢选中结果批读有界，不逐条读取正文", async t => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+	const observations = Array.from({ length: 225 }, (_, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, "long enough random candidate"));
+	await seedCatalog(catalog, store, observations);
+	const service = new CatalogReadService({ catalog, now: () => new Date(2026, 8, 8), random: () => 0 });
+	const read = catalog.readObservationSnapshot.bind(catalog), sizes: number[] = [];
+	t.mock.method(catalog, "readObservationSnapshot", async (keys: readonly string[], signal?: AbortSignal) => { sizes.push(keys.length); return read(keys, signal); });
+	t.mock.method(catalog, "getObservation", async () => { throw new Error("No sequential body reads."); });
+	const items = await service.getRandomReunionItems(200);
+	assert.equal(items.length, 200);
+	assert.equal(new Set(items.map(item => item.id)).size, 200);
+	assert.deepEqual(sizes, [150, 50]);
+});
+
+test("451 条已加载卡片使用四个 observation 事务，最终一致性检查仍独立读取元信息", async t => {
+	await ensureObsidianStub();
+	const { IDBFactory, IDBKeyRange, IDBDatabase: FakeDatabase } = await import("fake-indexeddb");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const factory = new IDBFactory(), name = "batch-read-" + Math.random();
+	const store = new IndexedDbMemoCatalogStore(name, { factory, keyRange: IDBKeyRange }), catalog = new MemoCatalogService(store);
+	try {
+		const observations = Array.from({ length: 451 }, (_, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, "same content"));
+		await seedCatalog(catalog, store, observations);
+		const transaction = FakeDatabase.prototype.transaction, transactions: string[][] = [];
+		t.mock.method(FakeDatabase.prototype, "transaction", function(this: IDBDatabase, ...args: Parameters<IDBDatabase["transaction"]>) {
+			transactions.push(typeof args[0] === "string" ? [args[0]] : [...args[0]]);
+			return transaction.apply(this, args);
+		});
+		const items = await new CatalogReadService({ catalog }).readMemoItems(observations);
+		assert.equal(items.length, 451);
+		assert.equal(transactions.filter(names => names.includes("observations")).length, 4);
+		assert.ok(transactions.filter(names => names.length === 1 && names[0] === "meta").length >= 2);
+	} finally {
+		store.close();
+		await new Promise<void>((resolve, reject) => { const request = factory.deleteDatabase(name); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); });
+	}
+});
+
+test("列表取消贯通 Store，取消与 runtime 失效不补扫、不发布不可用页，真正故障仍补扫", async t => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { CatalogQueryCancelledError, InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+	await seedCatalog(catalog, store, [makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "memo")]);
+	let scans = 0;
+	const service = new CatalogReadService({ catalog, requestObservationScan: () => { scans++; } });
+	const query = store.query.bind(store), controller = new AbortController();
+	let seenSignal: AbortSignal | undefined;
+	const mock = t.mock.method(store, "query", async (_request: CatalogQuery, signal?: AbortSignal) => {
+		seenSignal = signal;
+		return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+	});
+	const pending = service.query({ limit: 10 }, controller.signal);
+	const rejected = assert.rejects(pending, { name: "AbortError" });
+	assert.strictEqual(seenSignal, controller.signal);
+	controller.abort(); await rejected;
+	assert.equal(service.getLastReadState(), null);
+	assert.equal(scans, 0);
+	mock.mock.restore();
+	const runtimeMock = t.mock.method(store, "query", async () => { throw new CatalogQueryCancelledError(); });
+	await assert.rejects(service.query({ limit: 10 }), error => error instanceof CatalogQueryCancelledError);
+	assert.equal(service.getLastReadState(), null);
+	assert.equal(scans, 0);
+	runtimeMock.mock.restore();
+	const failureMock = t.mock.method(store, "query", async () => { throw new Error("query I/O failed"); });
+	assert.equal((await service.query({ limit: 10 })).readState, "storage_unavailable");
+	assert.equal(scans, 1);
+	failureMock.mock.restore();
+	assert.equal((await service.query({ limit: 10 })).items.length, 1);
+	assert.equal((await query({ limit: 10 })).items.length, 1);
+	store.close();
+});
+
+test("列表转换阶段取消停止后续 Memo 转换，不记录旧页面", async t => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store), controller = new AbortController();
+	await seedCatalog(catalog, store, [1, 2].map(line => makeObservation("Daily/2026-08-22.md", "2026-08-22", line, "memo")));
+	const page = await store.query({ limit: 10 });
+	let conversions = 0;
+	for (const observation of page.items) Object.defineProperty(observation, "content", { get: () => { conversions++; controller.abort(); return "memo"; } });
+	t.mock.method(catalog, "query", async () => page);
+	const service = new CatalogReadService({ catalog, requestObservationScan: () => assert.fail("取消不能补扫") });
+	await assert.rejects(service.query({ limit: 10 }, controller.signal), { name: "AbortError" });
+	assert.equal(conversions, 1);
+	assert.equal(service.getLastReadState(), null);
+	store.close();
+});
+
+test("Shuffle Day、浮标日期及 prime 传递查询取消，浮标最终校验期间取消不提交结果", async t => {
+	await ensureObsidianStub();
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	for (const kind of ["shuffle", "buoy", "prime"] as const) await t.test(kind, async t => {
+		const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store), controller = new AbortController();
+		await seedCatalog(catalog, store, []);
+		const service = new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26), requestObservationScan: () => assert.fail("取消不能补扫") });
+		let seenSignal: AbortSignal | undefined;
+		const cancel = async (_request: unknown, signal?: AbortSignal): Promise<never> => {
+			seenSignal = signal; controller.abort(); signal?.throwIfAborted(); throw new Error("Missing signal");
+		};
+		if (kind === "buoy") t.mock.method(store, "queryTimeBuoys", cancel);
+		else t.mock.method(store, "query", cancel);
+		const pending = kind === "shuffle" ? service.listMemoViewsForDate("2026-08-22", { signal: controller.signal })
+			: kind === "buoy" ? service.queryTimeBuoysForDate("2026-08-22", null, controller.signal) : service.prime(controller.signal);
+		await assert.rejects(pending, { name: "AbortError" });
+		assert.strictEqual(seenSignal, controller.signal);
+		store.close();
+	});
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store), controller = new AbortController();
+	await seedCatalog(catalog, store, []);
+	const service = new CatalogReadService({ catalog });
+	const revision = store.getCatalogRevision.bind(store);
+	t.mock.method(store, "getCatalogRevision", async () => { controller.abort(); return revision(); });
+	await assert.rejects(service.queryTimeBuoyPage({ today: "2026-08-22", tab: "today", limit: 10 }, controller.signal), { name: "AbortError" });
+	store.close();
+});

@@ -5,6 +5,56 @@ import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } f
 import type { MemoViewItem } from "../src/types/memoView";
 import { mergeTodayTimeBuoyFeed, TimeBuoyViewController } from "../src/ui/TimeBuoyViewController";
 import type { TimeBuoyCursor, TimeBuoyPageResult } from "../src/types/timeBuoy";
+import { CatalogQueryCancelledError } from "../src/services/MemoCatalogStore";
+
+test("查询取消：切换浮标标签与关闭立即中止旧页，取消不记录错误", async () => {
+	const requests: Array<{ signal: AbortSignal; reject: (reason: unknown) => void }> = [];
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11), queryDate: async () => EMPTY_RESULT, requestRender: () => {},
+		queryPage: (_request, signal) => new Promise<TimeBuoyPageResult>((_resolve, reject) => {
+			assert.ok(signal);
+			requests.push({ signal, reject });
+			signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+		}),
+	});
+	const first = controller.loadInitial();
+	await Promise.resolve();
+	controller.setActiveTab("upcoming");
+	assert.equal(requests[0].signal.aborted, true);
+	await Promise.resolve();
+	assert.equal(requests[1].signal.aborted, false);
+	controller.clear();
+	assert.equal(requests[1].signal.aborted, true);
+	await first;
+	await Promise.resolve();
+	assert.equal(controller.getSnapshot().error, null);
+	assert.equal(controller.getSnapshot().refreshError, null);
+	assert.equal(controller.getSnapshot().loading, false);
+});
+
+test("查询取消：今日置顶准备保留调用者所有权，不把取消包装为索引失败", async () => {
+	let calls = 0;
+	let signalSeen: AbortSignal | undefined;
+	const ready = createDeferred<boolean>();
+	const controller = new TimeBuoyViewController({
+		getNow: () => new Date(2026, 6, 11), isTodayIndexReady: () => ready.promise,
+		queryPage: async () => { throw new CatalogQueryCancelledError(); },
+		queryDate: async (_date, _cursor, signal) => { calls++; signalSeen = signal; return EMPTY_RESULT; }, requestRender: () => {},
+	});
+	const request = new AbortController();
+	const cancelled = controller.prepareTodayOnly(undefined, request.signal);
+	request.abort(); ready.resolve(true);
+	await assert.rejects(cancelled, error => error === request.signal.reason);
+	assert.equal(calls, 0);
+	const current = new AbortController();
+	await controller.prepareTodayOnly(undefined, current.signal);
+	assert.equal(signalSeen, current.signal);
+	controller.clear();
+	assert.equal(current.signal.aborted, false, "独立页清理不得取消普通列表拥有的请求");
+	await controller.loadInitial();
+	assert.equal(controller.getSnapshot().error, null);
+	assert.equal(controller.getSnapshot().loading, false);
+});
 
 test("分页追加、重复触发、切换、后台刷新、关闭和游标失效不提交旧结果", async () => {
 	const today = "2026-07-11";

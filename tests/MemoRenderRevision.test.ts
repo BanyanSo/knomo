@@ -6,7 +6,17 @@ import {
 	getMemoListStateKey,
 	getMemoRenderKey,
 	getMemoRenderRevision,
+	canRetainMemoCard,
 } from "../src/ui/MemoRenderRevision";
+import { createReferenceMemo } from "./helpers/referenceMemo";
+
+test("只改变隐藏锚点时固定菜单无需额外重绘，保留可复用卡片", () => {
+	const before = createReferenceMemo(), after = createReferenceMemo("own-anchor");
+	assert.equal(before.contentSnapshot, after.contentSnapshot);
+	assert.equal(getMemoRenderRevision(before), getMemoRenderRevision(after));
+	assert.equal(canRetainMemoCard(before, after), true);
+	assert.equal(canRetainMemoCard(after, createReferenceMemo("own-anchor")), true);
+});
 
 test("keeps render revisions stable for non-rendered metadata arrays", () => {
 	const memo = makeMemo("memo-1");

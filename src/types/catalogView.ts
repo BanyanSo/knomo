@@ -38,7 +38,6 @@ export interface KnomoRuntimeAttentionSnapshot {
 }
 
 export interface CatalogMemoItem {
-	derivedReferences?: import("../services/CatalogReferenceService").CatalogReference[];
 	key: string;
 	renderKey: string;
 	observationHandle: ObservationHandle;
@@ -68,6 +67,11 @@ export interface DailyMutationResult extends MutationFollowUpState {
 export interface MemoSaveResult extends DailyMutationResult {
 	memo: CatalogMemoItem | null;
 	timeBuoyDates: string[];
+}
+
+export interface MemoRestoreResult extends MemoSaveResult {
+	cleanupPending: boolean;
+	message?: string;
 }
 
 export interface MemoSaveOperation {

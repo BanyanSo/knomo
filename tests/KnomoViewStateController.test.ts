@@ -1,7 +1,13 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 
-import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+let KnomoViewStateController: typeof import("../src/ui/KnomoViewStateController").KnomoViewStateController;
+before(async () => {
+	await ensureObsidianStub();
+	({ KnomoViewStateController } = await import("../src/ui/KnomoViewStateController"));
+});
 
 test("Things 保留组合条件、单项清除、Scope 日期与统计返回", () => {
 	const state = new KnomoViewStateController();
@@ -244,4 +250,51 @@ test("恢复旧导航：普通搜索回到全部，切换范围清空搜索", ()
  state.setScope("with-image");
  assert.equal(state.searchQuery, ""); assert.equal(state.search.applied.date, null);
  assert.equal(state.scopeFilter, "with-image");
+});
+
+test("Workspace 导出只保留已提交搜索，恢复重新解析并清除旧请求与临时 chrome", () => {
+	const source = new KnomoViewStateController();
+	source.activeNav = "things";
+	source.activeTag = "Work"; source.activeTagKey = "work";
+	source.searchQuery = "20261009 项目";
+	source.search.updateDraft("2026-");
+	source.search.beginComposition();
+	const saved = source.exportWorkspaceState();
+	assert.equal(saved.navigation.search.input, "20261009 项目");
+	assert.equal(source.search.draft.text, "2026-");
+	const restored = new KnomoViewStateController();
+	restored.mobileDrawerOpen = restored.desktopSearchOpen = restored.compactSearchOpen = true;
+	restored.search.commitResult({ text: "old" }, 10, "old");
+	restored.applyWorkspaceState(saved);
+	assert.equal(restored.activeNav, "things");
+	assert.equal(restored.activeTagKey, "work");
+	assert.deepEqual(restored.search.applied.terms, ["项目"]);
+	assert.deepEqual(restored.search.applied.date, { kind: "range", granularity: "day", fromDate: "2026-10-09", toDate: "2026-10-09" });
+	assert.equal(restored.search.draft.text, "20261009 项目");
+	assert.equal(restored.search.draft.composing, false);
+	assert.equal(restored.search.result, null);
+	assert.equal(restored.search.requestStatus, "idle");
+	assert.equal(restored.mobileDrawerOpen || restored.desktopSearchOpen || restored.compactSearchOpen, false);
+});
+
+test("Workspace 恢复 Stats 的单层返回导航、tag、快捷日期与独立 filter", () => {
+	const source = new KnomoViewStateController();
+	source.activeNav = "things";
+	source.activeTag = "Project"; source.activeTagKey = "project";
+	source.searchQuery = "release"; source.searchDateFilter = "last-30";
+	source.recordStatsSearchFilter = { type: "max-daily-notes", dates: ["2024-02-29"] };
+	source.setSidebarNav("record-stats");
+	const saved = source.exportWorkspaceState(), first = new KnomoViewStateController(), second = new KnomoViewStateController();
+	first.applyWorkspaceState(saved); second.applyWorkspaceState(saved);
+	assert.equal(first.activeNav, "record-stats");
+	assert.equal(first.returnFromRecordStats().returnedNav, "things");
+	assert.equal(first.activeTag, "Project");
+	assert.equal(first.searchQuery, "release");
+	assert.equal(first.searchDateFilter, "last-30");
+	assert.deepEqual(first.recordStatsSearchFilter, { type: "max-daily-notes", dates: ["2024-02-29"] });
+	if (first.recordStatsSearchFilter?.type === "max-daily-notes") first.recordStatsSearchFilter.dates[0] = "2000-01-01";
+	assert.equal(second.returnFromRecordStats().returnedNav, "things");
+	assert.deepEqual(second.recordStatsSearchFilter, { type: "max-daily-notes", dates: ["2024-02-29"] });
+	assert.deepEqual(saved.recordStatsReturn?.recordStatsSearchFilter, { type: "max-daily-notes", dates: ["2024-02-29"] });
+	assert.equal(first.exportWorkspaceState().recordStatsReturn, null);
 });

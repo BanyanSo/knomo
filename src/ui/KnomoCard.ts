@@ -50,6 +50,7 @@ export interface RenderTrashMemoCardOptions<TMemo extends MemoRecord = MemoRecor
 	generation: number;
 	renderIndex: number;
 	busyAction: TrashAction | null;
+	cleanupPending?: boolean;
 	formatDisplayTime: (value: string) => string;
 	formatOptionalTime: (value: string | undefined) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
@@ -208,7 +209,7 @@ export function renderKnomoTrashMemoCard<TMemo extends MemoRecord>(container: HT
 			actions,
 			memo.id,
 			action.action,
-			getTrashActionLabel(action.action, action.state.busy),
+			getTrashActionLabel(action.action, action.state.busy, options.cleanupPending),
 			action.state.disabled,
 			action.className,
 		);
@@ -313,7 +314,8 @@ export function getMemoActionLabel(action: MemoAction): string {
 	return t("card.delete");
 }
 
-function getTrashActionLabel(action: TrashAction, busy: boolean): string {
+function getTrashActionLabel(action: TrashAction, busy: boolean, cleanupPending = false): string {
 	if (action === "purge") return busy ? t("trash.purging") : t("trash.purge");
+	if (cleanupPending) return busy ? t("trash.cleaningUp") : t("trash.retryCleanup");
 	return busy ? t("trash.restoring") : t("trash.restore");
 }

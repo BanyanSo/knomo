@@ -10,6 +10,7 @@ import type {
 	CatalogFileRecord,
 	CatalogFileRevisionBatch,
 	CatalogObservation,
+	CatalogObservationSnapshot,
 	CatalogPostingKind,
 	CatalogQuery,
 	CatalogQueryCountResult,
@@ -19,6 +20,8 @@ import type {
 } from "../types/catalog";
 import {
 	clampPageLimit,
+	CATALOG_OBSERVATION_READ_BATCH_LIMIT,
+	CatalogQueryCancelledError,
 	createCatalogCountAbortError,
 	DEFAULT_CATALOG_COVERAGE,
 	emptyInvalidatedPage,
@@ -97,6 +100,7 @@ export class CatalogDatabaseCorruptError extends Error {
 
 export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	private readonly fileChanges = new CatalogFileChangeTracker();
+	private readonly queryControllers = new Set<AbortController>();
 	private database: IDBDatabase | null = null;
 	private snapshotGeneration = 0;
 	private opening: Promise<void> | null = null;
@@ -164,6 +168,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		}
 		const database = this.database;
 		database.onversionchange = () => {
+			this.cancelQueries();
 			this.snapshotGeneration++;
 			this.fileChanges.clear();
 			this.lifecycle = {
@@ -178,6 +183,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	close(): void {
+		this.cancelQueries();
 		this.snapshotGeneration++;
 		this.fileChanges.clear();
 		this.database?.close();
@@ -188,6 +194,27 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	getRuntimeGeneration(): string { return String(this.snapshotGeneration); }
+
+	private cancelQueries(): void {
+		for (const controller of this.queryControllers) controller.abort(new CatalogQueryCancelledError());
+	}
+
+	private async withQuerySignal<T>(signal: AbortSignal | undefined, read: (querySignal: AbortSignal) => Promise<T>): Promise<T> {
+		signal?.throwIfAborted();
+		const controller = new AbortController();
+		const abort = () => controller.abort(signal?.reason);
+		this.queryControllers.add(controller);
+		signal?.addEventListener("abort", abort, { once: true });
+		try {
+			const result = await read(controller.signal);
+			controller.signal.throwIfAborted();
+			return result;
+		}
+		finally {
+			signal?.removeEventListener("abort", abort);
+			this.queryControllers.delete(controller);
+		}
+	}
 	readFileChangesSince(previous?: CatalogChangeCursor): Promise<CatalogFileChanges> {
 		return readCatalogFileChanges(this, this.fileChanges, previous);
 	}
@@ -378,6 +405,39 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		return observation ?? null;
 	}
 
+	async readObservationSnapshot(observationKeys: readonly string[], signal?: AbortSignal): Promise<CatalogObservationSnapshot> {
+		signal?.throwIfAborted();
+		if (observationKeys.length > CATALOG_OBSERVATION_READ_BATCH_LIMIT) throw new RangeError("Catalog observation batch is too large.");
+		const storeGeneration = this.getRuntimeGeneration();
+		await this.open();
+		signal?.throwIfAborted();
+		const database = this.getDatabase(), lifecycle = this.getLifecycle();
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([OBSERVATIONS_STORE, META_STORE], "readonly");
+			const abort = () => {
+				try { transaction.abort(); }
+				catch { cleanup(); reject(createCatalogCountAbortError(signal)); }
+			};
+			const cleanup = () => signal?.removeEventListener("abort", abort);
+			signal?.addEventListener("abort", abort, { once: true });
+			const observations = transaction.objectStore(OBSERVATIONS_STORE), metadata = transaction.objectStore(META_STORE);
+			const revision = metadata.get(CATALOG_REVISION_META), coverage = metadata.get(COVERAGE_META);
+			const requests = new Map([...new Set(observationKeys)].map(key => [key, observations.get(key)]));
+			transaction.oncomplete = () => {
+				cleanup();
+				if (signal?.aborted) { reject(createCatalogCountAbortError(signal)); return; }
+				resolve({ observations: observationKeys.map(key => (requests.get(key)!.result as CatalogObservation | undefined) ?? null),
+					catalogRevision: (revision.result as CatalogMetaRecord<number> | undefined)?.value ?? 0,
+					coverage: (coverage.result as CatalogMetaRecord<CatalogCoverage> | undefined)?.value ?? { ...DEFAULT_CATALOG_COVERAGE },
+					lifecycle, storeGeneration, invalidated: storeGeneration !== this.getRuntimeGeneration() || database !== this.database
+						|| JSON.stringify(lifecycle) !== JSON.stringify(this.getLifecycle()) });
+			};
+			transaction.onerror = () => { cleanup(); reject(transaction.error ?? new Error("Catalog observation snapshot failed.")); };
+			transaction.onabort = () => { cleanup(); reject(signal?.aborted ? createCatalogCountAbortError(signal)
+				: transaction.error ?? new Error("Catalog observation snapshot aborted.")); };
+		});
+	}
+
 	async listFiles(): Promise<CatalogFileRecord[]> {
 		await this.open();
 		const transaction = this.getDatabase().transaction(FILES_STORE, "readonly");
@@ -387,43 +447,69 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		return files.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 	}
 
-	async queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage> {
+	queryTimeBuoys(request: TimeBuoyPageRequest, signal?: AbortSignal): Promise<TimeBuoyObservationPage> {
+		return this.withQuerySignal(signal, querySignal => this.readTimeBuoyPage(request, querySignal));
+	}
+
+	private async readTimeBuoyPage(request: TimeBuoyPageRequest, signal: AbortSignal): Promise<TimeBuoyObservationPage> {
+		signal.throwIfAborted();
 		await this.open();
+		signal.throwIfAborted();
 		const transaction = this.getDatabase().transaction([TIME_BUOYS_STORE, OBSERVATIONS_STORE, META_STORE], "readonly");
 		const done = waitForTransaction(transaction);
+		const abort = () => { try { transaction.abort(); } catch { /* 事务已经结束时由提交前检查拒绝结果。 */ } };
+		signal.addEventListener("abort", abort, { once: true });
 		try {
 			const metadata = transaction.objectStore(META_STORE);
 			const [revisionRecord, coverageRecord] = await Promise.all([
 				requestResult(metadata.get(CATALOG_REVISION_META)) as Promise<CatalogMetaRecord<number> | undefined>,
 				requestResult(metadata.get(COVERAGE_META)) as Promise<CatalogMetaRecord<CatalogCoverage> | undefined>,
 			]);
+			signal.throwIfAborted();
 			const catalogRevision = revisionRecord?.value ?? 0;
 			const coverage = coverageRecord?.value ?? { ...DEFAULT_CATALOG_COVERAGE };
 			// 完全同时间时保留 IndexedDB key 倒序；时间仍使用原始分钟或秒文本。
 			const selection = new TimeBuoyPageSelection(request, catalogRevision, coverage,
 				(left, right) => left === right ? 0 : left > right ? -1 : 1);
 			const cursorReads = selection.invalidated ? 0 : await readTimeBuoyCandidates(
-				transaction.objectStore(TIME_BUOYS_STORE), this.getKeyRange(), request, selection);
+				transaction.objectStore(TIME_BUOYS_STORE), this.getKeyRange(), request, selection, signal);
+			signal.throwIfAborted();
 			const observations = transaction.objectStore(OBSERVATIONS_STORE);
 			const items = await Promise.all(selection.items.slice(0, selection.limit).map((item) =>
 				requestResult(observations.get(item.observationKey)) as Promise<CatalogObservation>));
 			await done;
+			signal.throwIfAborted();
 			return { items, nextCursor: selection.nextCursor, catalogRevision, coverage,
 				lifecycle: this.getLifecycle(), invalidated: selection.invalidated,
 				metrics: { cursorReads, observationsRead: items.length, returned: items.length } };
 		} catch (error) {
 			await done.catch(() => undefined);
+			signal.throwIfAborted();
 			throw error instanceof Error ? error : new Error(String(error));
+		} finally {
+			signal.removeEventListener("abort", abort);
 		}
 	}
 
-	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
+	query(request: CatalogQuery, signal?: AbortSignal): Promise<CatalogQueryPage> {
+		return this.withQuerySignal(signal, querySignal => this.readQueryPage(request, querySignal));
+	}
+
+	private async readQueryPage(request: CatalogQuery, signal: AbortSignal): Promise<CatalogQueryPage> {
+		signal.throwIfAborted();
 		request = { ...request, ...narrowCatalogQuery(request), text: undefined, textTerms: getCatalogTextTerms(request) };
 		await this.open();
+		signal.throwIfAborted();
 		const database = this.getDatabase();
 		const keyRange = this.getKeyRange();
 		return new Promise<CatalogQueryPage>((resolve, reject) => {
 			const transaction = database.transaction([OBSERVATIONS_STORE, POSTINGS_STORE, META_STORE], "readonly");
+			const abort = () => {
+				try { transaction.abort(); }
+				catch { cleanup(); reject(createCatalogCountAbortError(signal)); }
+			};
+			const cleanup = () => signal.removeEventListener("abort", abort);
+			signal.addEventListener("abort", abort, { once: true });
 			const observations = transaction.objectStore(OBSERVATIONS_STORE);
 			const metadata = transaction.objectStore(META_STORE);
 			const revisionRequest = metadata.get(CATALOG_REVISION_META);
@@ -439,7 +525,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			let started = false;
 
 			const startCursor = () => {
-				if (started || revisionRequest.readyState !== "done" || coverageRequest.readyState !== "done") {
+				if (signal.aborted || started || revisionRequest.readyState !== "done" || coverageRequest.readyState !== "done") {
 					return;
 				}
 				started = true;
@@ -454,11 +540,13 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 
 				if (request.matchNone) return;
 				const startSelectedCursor = (selection: CatalogIndexSelection | null) => {
+					if (signal.aborted) return;
 					try {
 						if (selection === null) {
 							const range = buildObservationRange(keyRange, request);
 							const cursorRequest = observations.index(BY_CREATED_AT).openCursor(range, "prev");
 							cursorRequest.onsuccess = () => {
+								if (signal.aborted) return;
 								const cursor = cursorRequest.result;
 								if (cursor === null || items.length > limit) {
 									return;
@@ -477,6 +565,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 							const range = buildPostingRange(keyRange, request, selection);
 							const cursorRequest = transaction.objectStore(POSTINGS_STORE).index(BY_LOOKUP).openCursor(range, "prev");
 							cursorRequest.onsuccess = () => {
+								if (signal.aborted) return;
 								const cursor = cursorRequest.result;
 								if (cursor === null || items.length > limit) {
 									return;
@@ -485,6 +574,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 								const posting = cursor.value as CatalogPostingRecord;
 								const observationRequest = observations.get(posting.observationKey);
 								observationRequest.onsuccess = () => {
+									if (signal.aborted) return;
 									const observation = observationRequest.result as CatalogObservation | undefined;
 									if (observation !== undefined) {
 										observationsRead += 1;
@@ -515,6 +605,8 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			revisionRequest.onsuccess = startCursor;
 			coverageRequest.onsuccess = startCursor;
 			transaction.oncomplete = () => {
+				cleanup();
+				if (signal.aborted) { reject(createCatalogCountAbortError(signal)); return; }
 				if (invalidated) {
 					resolve(emptyInvalidatedPage(catalogRevision, coverage, this.getLifecycle()));
 					return;
@@ -536,8 +628,10 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 					invalidated: false,
 				});
 			};
-			transaction.onerror = () => reject(transaction.error ?? new Error("Memo Catalog query failed."));
-			transaction.onabort = () => reject(transaction.error ?? new Error("Memo Catalog query aborted."));
+			transaction.onerror = () => { cleanup(); reject(signal.aborted ? createCatalogCountAbortError(signal)
+				: transaction.error ?? new Error("Memo Catalog query failed.")); };
+			transaction.onabort = () => { cleanup(); reject(signal.aborted ? createCatalogCountAbortError(signal)
+				: transaction.error ?? new Error("Memo Catalog query aborted.")); };
 		});
 	}
 
@@ -753,6 +847,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 	}
 
 	async clear(preserveMetaKeys: readonly string[] = []): Promise<void> {
+		this.cancelQueries();
 		this.snapshotGeneration++;
 		this.fileChanges.clear();
 		await this.open();
@@ -986,11 +1081,19 @@ function buildTimeBuoyPostings(observation: CatalogObservation): TimeBuoyPosting
 }
 
 // 先按目标日定位，再按原始记录时间倒序取页；只读取轻量 key 和当前页正文。
-function readTimeBuoyCandidates(store: IDBObjectStore, keyRange: typeof IDBKeyRange, request: TimeBuoyPageRequest, selection: TimeBuoyPageSelection): Promise<number> {
-	return new Promise((resolve, reject) => {
+function readTimeBuoyCandidates(store: IDBObjectStore, keyRange: typeof IDBKeyRange, request: TimeBuoyPageRequest,
+	selection: TimeBuoyPageSelection, signal: AbortSignal): Promise<number> {
+	signal.throwIfAborted();
+	return new Promise((resolveResult, rejectResult) => {
+		const cleanup = () => signal.removeEventListener("abort", abort);
+		const resolve = (value: number) => { cleanup(); resolveResult(value); };
+		const reject = (error: Error) => { cleanup(); rejectResult(error); };
+		const abort = () => reject(createCatalogCountAbortError(signal));
+		signal.addEventListener("abort", abort, { once: true });
 		let reads = 0;
 		const fail = (error: unknown) => reject(error instanceof Error ? error : new Error(String(error)));
 		const readDate = (date: string, nextDate: () => void) => {
+			if (signal.aborted) return;
 			const neighborRange = request.tab === "today" ? null : request.tab === "upcoming"
 				? keyRange.bound([date, "previous", ""], [date, "previous", request.today])
 				: keyRange.bound([date, "next", request.today], [date, "next", "\uffff"]);
@@ -998,10 +1101,12 @@ function readTimeBuoyCandidates(store: IDBObjectStore, keyRange: typeof IDBKeyRa
 				selection.add({ observationKey, createdAtKey, timeBuoyDates: [targetDate] });
 			const finishDate = () => { if (selection.items.length > selection.limit) resolve(reads); else nextDate(); };
 			const readEligibleCandidates = (range: IDBKeyRange, boundary: IDBValidKey) => {
+				if (signal.aborted) return;
 				const remainingRange = keyRange.upperBound(boundary, true);
 				const eligible = store.index(BY_NEIGHBOR_DATE).openKeyCursor(range, "prev");
 				eligible.onerror = () => fail(eligible.error ?? new Error("Memo Catalog time buoy query failed."));
 				eligible.onsuccess = () => {
+					if (signal.aborted) return;
 					try {
 						const cursor = eligible.result;
 						if (cursor === null) { finishDate(); return; }
@@ -1012,12 +1117,14 @@ function readTimeBuoyCandidates(store: IDBObjectStore, keyRange: typeof IDBKeyRa
 				};
 			};
 			const readCandidates = () => {
+				if (signal.aborted) return;
 				const boundary = request.cursor?.primaryTargetDate === date ? request.cursor : null;
 				const upper = boundary === null ? [date, "\uffff"] : [date, boundary.createdAtKey, boundary.observationKey];
 				const cursorRequest = store.openKeyCursor(keyRange.bound([date], upper, false, boundary !== null), "prev");
 				let skipped = 0;
 				cursorRequest.onerror = () => fail(cursorRequest.error ?? new Error("Memo Catalog time buoy query failed."));
 				cursorRequest.onsuccess = () => {
+					if (signal.aborted) return;
 					try {
 						const cursor = cursorRequest.result;
 						if (cursor === null) { finishDate(); return; }
@@ -1037,6 +1144,7 @@ function readTimeBuoyCandidates(store: IDBObjectStore, keyRange: typeof IDBKeyRa
 			const probe = store.index(BY_NEIGHBOR_DATE).getKey(neighborRange);
 			probe.onerror = () => fail(probe.error ?? new Error("Memo Catalog time buoy query failed."));
 			probe.onsuccess = () => {
+				if (signal.aborted) return;
 				try { if (probe.result === undefined) nextDate(); else readCandidates(); }
 				catch (error) { fail(error); }
 			};
@@ -1048,6 +1156,7 @@ function readTimeBuoyCandidates(store: IDBObjectStore, keyRange: typeof IDBKeyRa
 		const cursorRequest = store.index(BY_TARGET_DATE).openKeyCursor(range, request.tab === "upcoming" ? "nextunique" : "prevunique");
 		cursorRequest.onerror = () => fail(cursorRequest.error ?? new Error("Memo Catalog time buoy query failed."));
 		cursorRequest.onsuccess = () => {
+			if (signal.aborted) return;
 			try {
 				const cursor = cursorRequest.result;
 				if (cursor === null) { resolve(reads); return; }

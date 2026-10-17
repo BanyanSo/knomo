@@ -8,6 +8,7 @@ import type {
 	CatalogFileRecord,
 	CatalogFileRevisionBatch,
 	CatalogObservation,
+	CatalogObservationSnapshot,
 	CatalogQuery,
 	CatalogQueryCountResult,
 	CatalogQueryFilter,
@@ -19,6 +20,7 @@ import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/time
 import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
 import { getCatalogTextTerms, matchesSearchDate, matchesSearchTerms, narrowCatalogQuery } from "./SearchMatching";
 import { normalizeSearchText } from "../utils/searchText";
+import { CooperativeYieldController, stableSortCooperatively } from "./CooperativeTask";
 
 export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 	kind: "partial",
@@ -29,6 +31,13 @@ export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
 };
 
 export const IN_MEMORY_CATALOG_OBSERVATION_LIMIT = 5_000;
+export const CATALOG_OBSERVATION_READ_BATCH_LIMIT = 150;
+
+export class CatalogQueryCancelledError extends Error {
+	constructor() { super("Memo Catalog query cancelled."); this.name = "AbortError"; }
+}
+
+class InMemoryQueryInvalidatedError extends Error {}
 
 export function createCatalogCountAbortError(signal?: AbortSignal): Error {
 	const reason: unknown = signal?.reason;
@@ -56,10 +65,11 @@ export interface MemoCatalogStore {
 	getFile(sourcePath: string): Promise<CatalogFileRecord | null>;
 	getFileRevisionBatch(sourcePath: string): Promise<CatalogFileRevisionBatch | null>;
 	getObservation(observationKey: string): Promise<CatalogObservation | null>;
+	readObservationSnapshot(observationKeys: readonly string[], signal?: AbortSignal): Promise<CatalogObservationSnapshot>;
 	listFiles(): Promise<CatalogFileRecord[]>;
 	count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult>;
-	query(request: CatalogQuery): Promise<CatalogQueryPage>;
-	queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage>;
+	query(request: CatalogQuery, signal?: AbortSignal): Promise<CatalogQueryPage>;
+	queryTimeBuoys(request: TimeBuoyPageRequest, signal?: AbortSignal): Promise<TimeBuoyObservationPage>;
 	listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]>;
 	readAggregateSnapshot(): Promise<CatalogAggregateSnapshot>;
 	getCoverage(): Promise<CatalogCoverage>;
@@ -158,6 +168,23 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		return observation === undefined ? null : clone(observation);
 	}
 
+	readObservationSnapshot(observationKeys: readonly string[], signal?: AbortSignal): Promise<CatalogObservationSnapshot> {
+		signal?.throwIfAborted();
+		if (observationKeys.length > CATALOG_OBSERVATION_READ_BATCH_LIMIT) throw new RangeError("Catalog observation batch is too large.");
+		const storeGeneration = this.getRuntimeGeneration();
+		const observations = new Map([...new Set(observationKeys)].map(key => [key, this.observations.get(key)]));
+		// 采集期间没有异步插入点；正文、revision 与 coverage 属于同一个内存状态。
+		const snapshot: CatalogObservationSnapshot = { observations: observationKeys.map(key => {
+			const observation = observations.get(key);
+			return observation === undefined ? null : clone(observation);
+		}), catalogRevision: this.catalogRevision, coverage: clone(this.coverage), lifecycle: this.getLifecycle(),
+		storeGeneration, invalidated: this.snapshotClosed };
+		return Promise.resolve().then(() => {
+			signal?.throwIfAborted();
+			return { ...snapshot, invalidated: snapshot.invalidated || storeGeneration !== this.getRuntimeGeneration() };
+		});
+	}
+
 	async listFiles(): Promise<CatalogFileRecord[]> {
 		return [...this.files.values()].map(clone).sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 	}
@@ -180,35 +207,53 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		};
 	}
 
-	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
+	async query(request: CatalogQuery, signal?: AbortSignal): Promise<CatalogQueryPage> {
+		signal?.throwIfAborted();
 		request = { ...request, ...narrowCatalogQuery(request) };
 		if (request.cursor !== undefined && request.cursor !== null && request.cursor.catalogRevision !== this.catalogRevision) {
 			return emptyInvalidatedPage(this.catalogRevision, this.coverage);
 		}
 		const limit = clampPageLimit(request.limit);
+		const assertCurrent = this.createQuerySnapshotGuard(signal);
+		const runtime = signal === undefined ? undefined : { maxOperationsPerSlice: 4096, yieldControl: async () => {
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+			assertCurrent();
+		} };
+		const control = runtime === undefined ? null : new CooperativeYieldController(runtime);
 		let cursorReads = 0;
 		let observationsRead = 0;
 		const matchesQuery = createCatalogQueryMatcher(request);
-		const observations = request.sourcePaths === undefined ? [...this.observations.values()]
-			: [...new Set(request.sourcePaths)].flatMap(sourcePath => (this.observationsByFile.get(sourcePath) ?? []).flatMap(key => {
-				const observation = this.observations.get(key);
-				return observation === undefined ? [] : [observation];
-			}));
-		const candidates = request.matchNone ? [] : observations.sort(compareCatalogObservations);
 		const matches: CatalogObservation[] = [];
-		for (const observation of candidates) {
-			cursorReads += 1;
-			if (!isAfterCursor(observation, request)) {
-				continue;
+		try {
+			assertCurrent();
+			const observations: CatalogObservation[] = [];
+			const collect = function* (store: InMemoryMemoCatalogStore) {
+				if (request.sourcePaths === undefined) yield* store.observations.values();
+				else for (const sourcePath of new Set(request.sourcePaths)) for (const key of store.observationsByFile.get(sourcePath) ?? []) {
+					const observation = store.observations.get(key);
+					if (observation !== undefined) yield observation;
+				}
+			};
+			if (!request.matchNone) for (const observation of collect(this)) {
+				observations.push(observation);
+				if (control?.shouldYield()) await control.yieldNow();
 			}
-			observationsRead += 1;
-			if (!matchesQuery(observation)) {
-				continue;
+			const candidates = runtime === undefined ? observations.sort(compareCatalogObservations)
+				: await stableSortCooperatively(observations, compareCatalogObservations, runtime);
+			assertCurrent();
+			for (const observation of candidates) {
+				if (control?.shouldYield()) await control.yieldNow();
+				cursorReads += 1;
+				if (!isAfterCursor(observation, request)) continue;
+				observationsRead += 1;
+				if (!matchesQuery(observation)) continue;
+				matches.push(clone(observation));
+				if (matches.length > limit) break;
 			}
-			matches.push(clone(observation));
-			if (matches.length > limit) {
-				break;
-			}
+			assertCurrent();
+		} catch (error) {
+			if (error instanceof InMemoryQueryInvalidatedError) return emptyInvalidatedPage(this.catalogRevision, this.coverage);
+			throw error;
 		}
 		const hasNext = matches.length > limit;
 		const items = matches.slice(0, limit);
@@ -228,19 +273,44 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		};
 	}
 
-	async queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage> {
+	async queryTimeBuoys(request: TimeBuoyPageRequest, signal?: AbortSignal): Promise<TimeBuoyObservationPage> {
+		signal?.throwIfAborted();
+		const assertCurrent = this.createQuerySnapshotGuard(signal);
+		const control = signal === undefined ? null : new CooperativeYieldController({ maxOperationsPerSlice: 4096, yieldControl: async () => {
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+			assertCurrent();
+		} });
 		const selection = new TimeBuoyPageSelection(request, this.catalogRevision, this.coverage);
 		let cursorReads = 0;
-		if (!selection.invalidated) for (const observation of this.observations.values()) {
-			if (observation.timeBuoyDates.length === 0) continue;
-			cursorReads++;
-			selection.add({ observationKey: observation.observationKey, timeBuoyDates: observation.timeBuoyDates,
-				createdAtKey: `${observation.logicalDate}T${observation.time}` });
+		try {
+			assertCurrent();
+			if (!selection.invalidated) for (const observation of this.observations.values()) {
+				if (control?.shouldYield()) await control.yieldNow();
+				if (observation.timeBuoyDates.length === 0) continue;
+				cursorReads++;
+				selection.add({ observationKey: observation.observationKey, timeBuoyDates: observation.timeBuoyDates,
+					createdAtKey: `${observation.logicalDate}T${observation.time}` });
+			}
+			assertCurrent();
+		} catch (error) {
+			if (error instanceof InMemoryQueryInvalidatedError) return { items: [], nextCursor: null, catalogRevision: this.catalogRevision,
+				coverage: clone(this.coverage), lifecycle: this.getLifecycle(), invalidated: true,
+				metrics: { cursorReads, observationsRead: 0, returned: 0 } };
+			throw error;
 		}
 		const items = selection.items.slice(0, selection.limit).map((item) => clone(this.observations.get(item.observationKey)!));
 		return { items, nextCursor: selection.nextCursor, catalogRevision: this.catalogRevision,
 			coverage: clone(this.coverage), lifecycle: this.getLifecycle(), invalidated: selection.invalidated,
 			metrics: { cursorReads, observationsRead: items.length, returned: items.length } };
+	}
+
+	private createQuerySnapshotGuard(signal?: AbortSignal): () => void {
+		const generation = this.snapshotGeneration, revision = this.catalogRevision, coverageKey = JSON.stringify(this.coverage);
+		return () => {
+			signal?.throwIfAborted();
+			if (this.snapshotClosed || generation !== this.snapshotGeneration) throw new CatalogQueryCancelledError();
+			if (revision !== this.catalogRevision || coverageKey !== JSON.stringify(this.coverage)) throw new InMemoryQueryInvalidatedError();
+		};
 	}
 
 	async listDailyAggregates(fromDate?: string, toDate?: string): Promise<CatalogDailyAggregate[]> {
@@ -452,17 +522,38 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 	getObservation(observationKey: string): Promise<CatalogObservation | null> {
 		return this.run((store) => store.getObservation(observationKey));
 	}
+	async readObservationSnapshot(observationKeys: readonly string[], signal?: AbortSignal): Promise<CatalogObservationSnapshot> {
+		signal?.throwIfAborted();
+		if (observationKeys.length > CATALOG_OBSERVATION_READ_BATCH_LIMIT) throw new RangeError("Catalog observation batch is too large.");
+		const active = this.getActive(), storeGeneration = this.getRuntimeGeneration();
+		const lifecycle = this.getLifecycle();
+		try {
+			const snapshot = await active.readObservationSnapshot(observationKeys, signal);
+			signal?.throwIfAborted();
+			return { ...snapshot, lifecycle, storeGeneration, invalidated: snapshot.invalidated
+				|| storeGeneration !== this.getRuntimeGeneration() || active !== this.active
+				|| JSON.stringify(lifecycle) !== JSON.stringify(this.getLifecycle())
+				|| JSON.stringify(snapshot.lifecycle) !== JSON.stringify(active.getLifecycle()) };
+		} catch (error) {
+			signal?.throwIfAborted();
+			// 当前请求固定来源；切换后由下一次完整读取接续，不能拼接主库与 fallback。
+			if (active === this.primary && active === this.active && storeGeneration === this.getRuntimeGeneration()) await this.activateFallback();
+			throw error;
+		}
+	}
 	listFiles(): Promise<CatalogFileRecord[]> { return this.run((store) => store.listFiles()); }
 	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
 		const result = await this.run((store) => store.count(request, signal), signal);
 		return { ...result, lifecycle: this.getLifecycle() };
 	}
-	async query(request: CatalogQuery): Promise<CatalogQueryPage> {
-		const page = await this.run((store) => store.query(request));
+	async query(request: CatalogQuery, signal?: AbortSignal): Promise<CatalogQueryPage> {
+		const page = await this.run((store) => store.query(request, signal), signal);
+		signal?.throwIfAborted();
 		return { ...page, lifecycle: this.getLifecycle() };
 	}
-	async queryTimeBuoys(request: TimeBuoyPageRequest): Promise<TimeBuoyObservationPage> {
-		const page = await this.run((store) => store.queryTimeBuoys(request));
+	async queryTimeBuoys(request: TimeBuoyPageRequest, signal?: AbortSignal): Promise<TimeBuoyObservationPage> {
+		const page = await this.run((store) => store.queryTimeBuoys(request, signal), signal);
+		signal?.throwIfAborted();
 		return { ...page, lifecycle: this.getLifecycle() };
 	}
 	getCatalogRevision(): Promise<number> { return this.run((store) => store.getCatalogRevision()); }
@@ -531,6 +622,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 			return result;
 		} catch (error) {
 			signal?.throwIfAborted();
+			if (error instanceof CatalogQueryCancelledError) throw error;
 			if (active !== this.primary) throw error;
 			await this.activateFallback();
 			return operation(this.fallback);

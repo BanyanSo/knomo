@@ -45,7 +45,10 @@ test("both Card surfaces pass literal Markdown and Daily sourcePath to the host"
 	const renderer = new MemoMarkdownRenderer({ app: {} as never, createComponent: () => new TestComponent() as never,
 		getDocument: () => ({ createElement: (tag: string) => new TestElement(tag).asHtml() }) as Document, getGeneration: () => 0, concurrency: 1 });
 	try {
-		const values = ["第一行\n第二行\n第三行", "第一段\n\n第二段", "空格硬换行  \n反斜杠硬换行\\\n最后一行", "**粗体** [[内部链接]] #标签\n继续正文", ...composerMarkdownFixtures.map(f => f.text)];
+		const values = ["第一行\n第二行\n第三行", "第一段\n\n第二段", "空格硬换行  \n反斜杠硬换行\\\n最后一行", "**粗体** [[内部链接]] #标签\n继续正文",
+			"[[Target#^anchor|自定义来源]] [相对来源](../Folder/Target%20(1).md#%5Eanchor \"title\") [[Target#Heading]]",
+			"[[Folder/Target|同名文件一]] [[Other/Target|同名文件二]] ![[Target]] [broken](bad%ZZ.md)",
+			...composerMarkdownFixtures.map(f => f.text)];
 		for (const surface of ["card-flow", "mobile-search"] as const) {
 			for (const markdown of values) {
 				const count = calls.length;

@@ -4,9 +4,10 @@ import { IDBDatabase as FakeDatabase, IDBIndex as FakeIndex, IDBObjectStore as F
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
-import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { CatalogQueryCancelledError, FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
-import type { CatalogFilePartition, MemoObservation } from "../src/types/catalog";
+import type { CatalogFilePartition, CatalogQuery, MemoObservation } from "../src/types/catalog";
+import type { TimeBuoyPageRequest } from "../src/types/timeBuoy";
 
 test("原生计数和候选规划阶段取消均拒绝结果且不切换 fallback", async t => {
 	for (const filter of [{}, { tags: ["Common", "Rare"] }]) await t.test(JSON.stringify(filter), async t => {
@@ -1054,4 +1055,290 @@ test("P3 聚合读取失败切换 fallback，后续请求重新读取完整快�
 	assert.equal(next.lifecycle.persistent, false);
 	assert.equal(next.coverage.kind, "partial");
 	store.close();
+});
+
+test("批读 observation 在内存与 IDB 保留顺序、缺失、重复键和同文 occurrence，并绑定元信息", async () => {
+	const name = uniqueDatabaseName("observation-snapshot"), stores = [new InMemoryMemoCatalogStore(), createStore(name)];
+	const path = "Daily/2026-09-01.md", date = "2026-09-01";
+	const partition = makePartition(path, date, [makeObservation(path, date, 1, "10:00", "same"), makeObservation(path, date, 2, "10:00", "same")]);
+	const [first, second] = partition.observations.map(item => item.observationKey);
+	const coverage = { kind: "complete" as const, coveredFromDate: date, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
+	try {
+		for (const store of stores) {
+			await store.open(); await store.replaceFilePartition(partition); await store.setCoverage(coverage);
+			const revision = await store.getCatalogRevision();
+			const pending = store.readObservationSnapshot([second, "missing", first, second]);
+			await store.replaceFilePartition(makePartition(path, date, [makeObservation(path, date, 1, "10:01", "updated")]));
+			await store.setCoverage({ ...coverage, kind: "partial", pendingFileCount: 1 });
+			const snapshot = await pending;
+			assert.deepEqual(snapshot.observations.map(item => item?.observationKey ?? null), [second, null, first, second]);
+			assert.deepEqual(snapshot.observations.map(item => item?.content ?? null), ["same", null, "same", "same"]);
+			assert.equal(snapshot.catalogRevision, revision);
+			assert.deepEqual(snapshot.coverage, coverage);
+			assert.equal(snapshot.storeGeneration, store.getRuntimeGeneration());
+			assert.equal(snapshot.invalidated, false);
+			snapshot.observations[2]!.content = "mutated result";
+			assert.equal((await store.getObservation(first))?.content, "updated");
+			assert.deepEqual((await store.readObservationSnapshot([])).observations, []);
+			await assert.rejects(async () => store.readObservationSnapshot(Array(151).fill(first) as string[]), RangeError);
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(name); }
+});
+
+test("IDB 一批只使用 observations/meta 一个事务，重复 lookup key 合并底层 get", async t => {
+	const name = uniqueDatabaseName("observation-transactions"), store = createStore(name);
+	const path = "Daily/2026-09-01.md", date = "2026-09-01";
+	try {
+		await store.open();
+		const partition = makePartition(path, date, [makeObservation(path, date, 1, "10:00", "same"), makeObservation(path, date, 2, "10:00", "same")]);
+		await store.replaceFilePartition(partition);
+		const transaction = FakeDatabase.prototype.transaction, get = FakeObjectStore.prototype.get;
+		const transactions: string[][] = [], reads: unknown[] = [];
+		t.mock.method(FakeDatabase.prototype, "transaction", function(this: IDBDatabase, ...args: Parameters<IDBDatabase["transaction"]>) {
+			transactions.push(typeof args[0] === "string" ? [args[0]] : [...args[0]]);
+			return transaction.apply(this, args);
+		});
+		t.mock.method(FakeObjectStore.prototype, "get", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["get"]>) {
+			if (this.name === "observations") reads.push(args[0]);
+			return get.apply(this, args);
+		});
+		const [first, second] = partition.observations.map(item => item.observationKey);
+		const snapshot = await store.readObservationSnapshot([second, first, second, "missing"]);
+		assert.deepEqual(transactions, [["observations", "meta"]]);
+		assert.deepEqual(reads, [second, first, "missing"]);
+		assert.equal(snapshot.observations.length, 4);
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("批读取消中止 IDB 事务且不切换 fallback，预取消与过大批次不读主库", async t => {
+	const name = uniqueDatabaseName("observation-cancel"), primary = createStore(name);
+	const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+	try {
+		await store.open();
+		const path = "Daily/2026-09-01.md", date = "2026-09-01";
+		const partition = makePartition(path, date, Array.from({ length: 20 }, (_, index) => makeObservation(path, date, index + 1, "10:00", "same")));
+		await store.replaceFilePartition(partition);
+		const keys = partition.observations.map(item => item.observationKey), controller = new AbortController();
+		const get = FakeObjectStore.prototype.get;
+		let successes = 0;
+		const mock = t.mock.method(FakeObjectStore.prototype, "get", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["get"]>) {
+			const request = get.apply(this, args);
+			if (this.name === "observations") request.addEventListener("success", () => { successes++; controller.abort(); });
+			return request;
+		});
+		await assert.rejects(store.readObservationSnapshot(keys, controller.signal), { name: "AbortError" });
+		assert.equal(successes, 1, "取消后不继续交付剩余 observation 读取");
+		assert.equal(store.isUsingFallback, false);
+		mock.mock.restore();
+		let calls = 0;
+		t.mock.method(primary, "readObservationSnapshot", async () => { calls++; throw new Error("Unexpected primary read."); });
+		await assert.rejects(store.readObservationSnapshot(keys, controller.signal), { name: "AbortError" });
+		await assert.rejects(store.readObservationSnapshot(Array(151).fill(keys[0]) as string[]), RangeError);
+		assert.equal(calls, 0);
+		assert.equal(store.isUsingFallback, false);
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("IDB 批读关闭或 versionchange 使结果失效，内存关闭重开同样失效", async t => {
+	for (const action of ["close", "versionchange"] as const) {
+		const name = uniqueDatabaseName("observation-" + action), store = createStore(name);
+		await store.open();
+		const transaction = FakeDatabase.prototype.transaction;
+		const mock = t.mock.method(FakeDatabase.prototype, "transaction", function(this: IDBDatabase, ...args: Parameters<IDBDatabase["transaction"]>) {
+			const result = transaction.apply(this, args);
+			queueMicrotask(() => { if (action === "close") store.close();
+				else this.onversionchange?.call(this, { target: this } as unknown as IDBVersionChangeEvent); });
+			return result;
+		});
+		try { assert.equal((await store.readObservationSnapshot(["missing"])).invalidated, true); }
+		finally { mock.mock.restore(); store.close(); await deleteDatabase(name); }
+	}
+	const memory = new InMemoryMemoCatalogStore();
+	const pending = memory.readObservationSnapshot(["missing"]);
+	memory.close(); await memory.open();
+	assert.equal((await pending).invalidated, true);
+});
+
+test("fallback 批读固定来源，切换或关闭重开后拒绝旧结果；失败后下次完整读取 fallback", async t => {
+	for (const action of ["switch", "close"] as const) await t.test(action, async t => {
+		const primary = new InMemoryMemoCatalogStore(), fallback = new InMemoryMemoCatalogStore();
+		const store = new FallbackMemoCatalogStore(primary, fallback);
+		await store.open();
+		let release!: () => void;
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		const read = primary.readObservationSnapshot.bind(primary);
+		t.mock.method(primary, "readObservationSnapshot", async (keys: readonly string[]) => { const snapshot = await read(keys); await gate; return snapshot; });
+		const pending = store.readObservationSnapshot(["missing"]);
+		if (action === "switch") {
+			t.mock.method(primary, "query", async () => { throw new Error("primary unavailable"); });
+			await store.query({ limit: 1 });
+		} else { store.close(); await store.open(); }
+		release();
+		assert.equal((await pending).invalidated, true);
+		assert.equal((await store.readObservationSnapshot(["missing"])).invalidated, false);
+		store.close();
+	});
+	const primary = new InMemoryMemoCatalogStore(), fallback = new InMemoryMemoCatalogStore();
+	const store = new FallbackMemoCatalogStore(primary, fallback);
+	await store.open();
+	t.mock.method(primary, "readObservationSnapshot", async () => { throw new Error("snapshot failure"); });
+	await assert.rejects(store.readObservationSnapshot(["missing"]), /snapshot failure/u);
+	assert.equal(store.isUsingFallback, true);
+	assert.equal((await store.readObservationSnapshot(["missing"])).invalidated, false);
+	store.close();
+});
+
+test("列表查询在候选规划、普通游标和 posting 正文读取阶段取消，停止后续读取且不切换 fallback", async t => {
+	for (const stage of ["planning", "cursor", "observation"] as const) await t.test(stage, async t => {
+		const name = uniqueDatabaseName("query-cancel-" + stage), primary = createStore(name);
+		const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+		const controller = new AbortController(), path = "Daily/2026-09-01.md", date = "2026-09-01";
+		let reads = 0;
+		try {
+			await store.open();
+			await store.replaceFilePartition(makePartition(path, date, Array.from({ length: 30 }, (_, index) =>
+				makeObservation(path, date, index + 1, "10:00", "memo", { tags: ["Common", "Rare"] }))));
+			const count = FakeIndex.prototype.count, openCursor = FakeIndex.prototype.openCursor, get = FakeObjectStore.prototype.get;
+			const mocks = stage === "planning" ? [t.mock.method(FakeIndex.prototype, "count", function(this: IDBIndex, ...args: Parameters<IDBIndex["count"]>) {
+				const request = count.apply(this, args);
+				request.addEventListener("success", () => { reads++; controller.abort(); });
+				return request;
+			})] : stage === "cursor" ? [t.mock.method(FakeIndex.prototype, "openCursor", function(this: IDBIndex, ...args: Parameters<IDBIndex["openCursor"]>) {
+				const request = openCursor.apply(this, args);
+				request.addEventListener("success", () => { if (++reads === 2) controller.abort(); });
+				return request;
+			})] : [t.mock.method(FakeObjectStore.prototype, "get", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["get"]>) {
+				const request = get.apply(this, args);
+				if (this.name === "observations") request.addEventListener("success", () => { if (++reads === 2) controller.abort(); });
+				return request;
+			})];
+			const filter = stage === "planning" ? { tags: ["Common", "Rare"] } : stage === "cursor" ? { hour: 11 } : { tags: ["Common"], hour: 11 };
+			await assert.rejects(store.query({ ...filter, limit: 3 }, controller.signal), { name: "AbortError" });
+			assert.equal(reads, stage === "planning" ? 1 : 2);
+			assert.equal(store.isUsingFallback, false);
+			mocks.forEach(mock => mock.mock.restore());
+			assert.equal((await store.query({ limit: 3 })).items.length, 3);
+		} finally { store.close(); await deleteDatabase(name); }
+	});
+});
+
+test("浮标候选游标取消会结算查询、停止读取，并保持当前数据库可用", async t => {
+	for (const tab of ["today", "upcoming", "past"] as const) await t.test(tab, { timeout: 2_000 }, async t => {
+		const name = uniqueDatabaseName("buoy-query-cancel-" + tab), primary = createStore(name);
+		const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore()), controller = new AbortController();
+		try {
+			await store.open();
+			const path = "Daily/2026-09-01.md", date = "2026-09-01", today = "2026-09-20";
+			await store.replaceFilePartition(makePartition(path, date, Array.from({ length: 30 }, (_, index) =>
+				makeObservation(path, date, index + 1, "10:00", "memo", { timeBuoyDates: ["2026-09-19", today, "2026-09-21"] }))));
+			let reads = 0;
+			const openStoreCursor = FakeObjectStore.prototype.openKeyCursor, openIndexCursor = FakeIndex.prototype.openKeyCursor;
+			const onSuccess = () => { if (++reads === 2) controller.abort(); };
+			const storeMock = t.mock.method(FakeObjectStore.prototype, "openKeyCursor", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["openKeyCursor"]>) {
+				const request = openStoreCursor.apply(this, args); request.addEventListener("success", onSuccess); return request;
+			});
+			const indexMock = t.mock.method(FakeIndex.prototype, "openKeyCursor", function(this: IDBIndex, ...args: Parameters<IDBIndex["openKeyCursor"]>) {
+				const request = openIndexCursor.apply(this, args); request.addEventListener("success", onSuccess); return request;
+			});
+			await assert.rejects(store.queryTimeBuoys({ today, tab, limit: 3 }, controller.signal), { name: "AbortError" });
+			assert.equal(reads, 2);
+			assert.equal(store.isUsingFallback, false);
+			storeMock.mock.restore(); indexMock.mock.restore();
+			assert.equal((await store.queryTimeBuoys({ today, tab, limit: 3 })).items.length, 3);
+		} finally { store.close(); await deleteDatabase(name); }
+	});
+});
+
+test("close 与 versionchange 中止活跃列表和浮标查询，runtime 取消不会触发 fallback", async t => {
+	for (const kind of ["list", "buoy"] as const) for (const action of ["close", "versionchange"] as const) await t.test(`${kind}:${action}`, async t => {
+		const name = uniqueDatabaseName("query-runtime-" + kind + action), primary = createStore(name);
+		const store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+		try {
+			await store.open();
+			const transaction = FakeDatabase.prototype.transaction;
+			const mock = t.mock.method(FakeDatabase.prototype, "transaction", function(this: IDBDatabase, ...args: Parameters<IDBDatabase["transaction"]>) {
+				const result = transaction.apply(this, args);
+				queueMicrotask(() => {
+					if (action === "close") primary.close();
+					else this.onversionchange?.call(this, { target: this } as unknown as IDBVersionChangeEvent);
+				});
+				return result;
+			});
+			const pending = kind === "list" ? store.query({ limit: 3 }) : store.queryTimeBuoys({ today: "2026-09-20", tab: "today", limit: 3 });
+			await assert.rejects(pending, error => error instanceof CatalogQueryCancelledError);
+			assert.equal(store.isUsingFallback, false);
+			mock.mock.restore();
+		} finally { store.close(); await deleteDatabase(name); }
+	});
+});
+
+test("内存查询长循环可协作取消，批间变化使查询失效，当前独立查询仍完成", async t => {
+	const path = "Daily/2026-09-01.md", date = "2026-09-01";
+	const partition = makePartition(path, date, Array.from({ length: 4_600 }, (_, index) =>
+		makeObservation(path, date, index + 1, "10:00", "memo", { timeBuoyDates: ["2026-09-20"] })));
+	for (const kind of ["list", "buoy"] as const) for (const action of ["cancel", "revision", "close"] as const) await t.test(`${kind}:${action}`, async () => {
+		const store = new InMemoryMemoCatalogStore(), controller = new AbortController();
+		await store.open(); await store.replaceFilePartition(partition);
+		const timer = globalThis.setTimeout(() => {
+			if (action === "cancel") controller.abort();
+			else if (action === "revision") void store.replaceFilePartition(makePartition(path, date, []));
+			else store.close();
+		}, 0);
+		try {
+			const pending = kind === "list" ? store.query({ hour: 11, limit: 3 }, controller.signal)
+				: store.queryTimeBuoys({ today: "2026-09-20", tab: "today", limit: 3 }, controller.signal);
+			if (action === "revision") assert.equal((await pending).invalidated, true);
+			else await assert.rejects(pending, error => action === "close" ? error instanceof CatalogQueryCancelledError : error instanceof Error && error.name === "AbortError");
+			await store.open();
+			assert.equal((await store.query({ limit: 1 })).items.length, action === "revision" ? 0 : 1);
+		} finally { globalThis.clearTimeout(timer); store.close(); }
+	});
+});
+
+test("预取消的列表与浮标查询不读主库，真实读取故障仍切换 fallback", async t => {
+	for (const kind of ["list", "buoy"] as const) await t.test(kind, async t => {
+		const primary = new InMemoryMemoCatalogStore(), store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+		await store.open();
+		const controller = new AbortController(); controller.abort();
+		let calls = 0;
+		if (kind === "list") t.mock.method(primary, "query", async () => { calls++; throw new Error("query I/O failed"); });
+		else t.mock.method(primary, "queryTimeBuoys", async () => { calls++; throw new Error("query I/O failed"); });
+		const read = (signal?: AbortSignal) => kind === "list" ? store.query({ limit: 3 }, signal)
+			: store.queryTimeBuoys({ today: "2026-09-20", tab: "today", limit: 3 }, signal);
+		await assert.rejects(read(controller.signal), { name: "AbortError" });
+		assert.equal(calls, 0);
+		assert.equal(store.isUsingFallback, false);
+		assert.equal((await read()).items.length, 0);
+		assert.equal(calls, 1);
+		assert.equal(store.isUsingFallback, true);
+		store.close();
+	});
+});
+
+test("主库忽略 signal 并完成读取后，fallback wrapper 提交前取消仍拒绝列表与浮标页面", async t => {
+	for (const kind of ["list", "buoy"] as const) await t.test(kind, async t => {
+		const primary = new InMemoryMemoCatalogStore(), store = new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore());
+		await store.open();
+		const controller = new AbortController();
+		if (kind === "list") {
+			const page = await primary.query({ limit: 3 });
+			t.mock.method(primary, "query", async (_request: CatalogQuery, signal?: AbortSignal) => {
+				assert.strictEqual(signal, controller.signal);
+				queueMicrotask(() => controller.abort());
+				return page;
+			});
+		} else {
+			const page = await primary.queryTimeBuoys({ today: "2026-09-20", tab: "today", limit: 3 });
+			t.mock.method(primary, "queryTimeBuoys", async (_request: TimeBuoyPageRequest, signal?: AbortSignal) => {
+				assert.strictEqual(signal, controller.signal);
+				queueMicrotask(() => controller.abort());
+				return page;
+			});
+		}
+		const pending = kind === "list" ? store.query({ limit: 3 }, controller.signal)
+			: store.queryTimeBuoys({ today: "2026-09-20", tab: "today", limit: 3 }, controller.signal);
+		await assert.rejects(pending, { name: "AbortError" });
+		assert.equal(store.isUsingFallback, false);
+		store.close();
+	});
 });

@@ -180,7 +180,7 @@ test("视图就绪只在初始化成功后报告，失败与关闭不会报告�
 		let recoveries = 0;
 		Object.assign(h.view, {
 			app: { loadLocalStorage: () => null, saveLocalStorage: () => undefined },
-			containerEl: { doc: new EventTarget(), win: new EventTarget() },
+			containerEl: { doc: new EventTarget(), win: Object.assign(new EventTarget(), { setTimeout, clearTimeout }) },
 			register: (callback: () => void) => cleanup.push(callback),
 			recoverMobileViewFocus: () => { recoveries++; },
 			registerDomEvent: () => undefined,

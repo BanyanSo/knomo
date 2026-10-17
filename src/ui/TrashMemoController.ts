@@ -4,6 +4,7 @@ import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import type { TrashAction } from "./KnomoActionDispatch";
+import type { MemoRestoreResult } from "../types/catalogView";
 
 export type TrashMemoRenderTarget = "ui-state" | "trash-count-and-scope" | "card-flow";
 
@@ -15,7 +16,10 @@ export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	trashCountLoading: boolean;
 	trashCountError: string | null;
 	trashBusyMemoActions: ReadonlyMap<string, TrashAction>;
+	trashCleanupPendingMemoIds: ReadonlySet<string>;
 }
+
+export type TrashRestoreResult<TMemo> = Pick<MemoRestoreResult, "cleanupPending" | "localRefreshPending" | "message"> & { memo: TMemo | null };
 
 interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	store: TrashSnapshotStore;
@@ -23,7 +27,8 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	pageSize: number;
 	windowLimit: number;
 	onInvalidated: () => void;
-	restoreMemo: (memo: TMemo) => Promise<TMemo | null>;
+	restoreMemo: (memo: TMemo) => Promise<TrashRestoreResult<TMemo>>;
+	isCleanupPending: (memo: TMemo) => boolean;
 	purgeMemo: (memo: TMemo) => Promise<void>;
 	confirmPurge: (memo: TMemo) => Promise<boolean>;
 	handleRestoredMemo: (deletedMemo: TMemo, restoredMemo: TMemo) => void;
@@ -35,6 +40,7 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 
 export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	private disposed = false;
+	private session = 0;
 	private unsubscribe: (() => void) | null = null;
 	private windowEnd = 0;
 	private trashBusyMemoActions = new Map<string, TrashAction>();
@@ -42,7 +48,9 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
 	start(): void {
+		this.session++;
 		this.disposed = false;
+		this.trashBusyMemoActions = new Map();
 		this.unsubscribe?.();
 		this.unsubscribe = this.options.store.subscribe(() => {
 			if (this.disposed) return;
@@ -66,12 +74,13 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			trashCountLoading: state.status === "loading",
 			trashCountError: error,
 			trashBusyMemoActions: this.trashBusyMemoActions,
+			trashCleanupPendingMemoIds: new Set(memos?.filter(this.options.isCleanupPending).map(memo => memo.id)),
 		};
 	}
 
 	private render(target: TrashMemoRenderTarget): void { if (!this.disposed) this.options.requestRender(target); }
 
-	dispose(): void { this.disposed = true; this.unsubscribe?.(); this.unsubscribe = null; }
+	dispose(): void { this.disposed = true; this.session++; this.unsubscribe?.(); this.unsubscribe = null; }
 
 	async ensureLoaded(): Promise<void> {
 		if (this.disposed) return;
@@ -105,32 +114,42 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		}
 
 		this.trashBusyMemoActions.set(memo.id, action);
+		const session = this.session;
+		const isCurrent = () => !this.disposed && session === this.session;
 		const renderBusyState = action !== "purge";
 		let trashChanged = false;
 		if (renderBusyState) this.render("card-flow");
 		try {
 			if (action === "purge") {
-				if (!await this.options.confirmPurge(memo) || this.disposed) return;
+				if (!await this.options.confirmPurge(memo) || !isCurrent()) return;
 				await this.options.purgeMemo(memo);
+				if (!isCurrent()) return;
 				trashChanged = true;
 				this.options.showNotice(t("notice.purged"));
 			} else {
-				const restoredMemo = await this.options.restoreMemo(memo);
+				const result = await this.options.restoreMemo(memo);
+				if (!isCurrent()) return;
 				trashChanged = true;
-				if (restoredMemo !== null && !this.disposed) this.options.handleRestoredMemo(memo, restoredMemo);
-				this.options.showNotice(t("notice.restored"));
+				if (result.memo !== null) this.options.handleRestoredMemo(memo, result.memo);
+				this.options.showNotice(result.cleanupPending
+					? `${result.message ?? t("trash.restoredCleanupError", { error: t("trash.cleanupUnavailable") })} ${t("trash.cleanupRetryOnly")}`
+					: t("notice.restored"));
+				if (result.localRefreshPending) this.options.showNotice(t("catalog.savedRefreshPending"));
 			}
 			try {
 				await this.options.forceRefreshViews();
 			} catch {
-				this.options.showNotice(t("catalog.savedRefreshPending"));
+				if (isCurrent()) this.options.showNotice(t("catalog.savedRefreshPending"));
 			}
 		} catch (error) {
+			if (!isCurrent()) return;
 			this.options.showNotice(formatTrashActionErrorMessage(action, error));
 			if (renderBusyState) this.render("ui-state");
 		} finally {
-			this.trashBusyMemoActions.delete(memo.id);
-			if (renderBusyState || trashChanged) this.render("card-flow");
+			if (isCurrent()) {
+				this.trashBusyMemoActions.delete(memo.id);
+				if (renderBusyState || trashChanged) this.render("card-flow");
+			}
 		}
 	}
 

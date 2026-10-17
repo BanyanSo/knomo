@@ -683,7 +683,7 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	private registerReferenceEvents(): void {
-		// 只重查已打开视图的 Catalog 页面；目标变化不触发全库 Daily 重读。
+		// 合并引用事件，只更新已打开视图的宿主渲染，不重查列表或重新抽样。
 		const scheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
 			async () => {

@@ -118,7 +118,16 @@ The Composer displays Markdown formatting while revealing the relevant source as
 
 On Obsidian 1.14+, the Composer displays six highlight colors from a leading 🔴, 🟠, 🟡, 🟢, 🔵, or 🟣 inside `==...==`. Editing reveals the complete source; removing highlight formatting preserves the original body, including the emoji. Older hosts retain the ordinary highlight display. Card text, input, and supporting UI text use the host's preferred sizes where available, including system text scaling on Obsidian 1.14 mobile.
 
-Within the same open Knomo view, closing and reopening the Composer keeps your draft. Editing an existing memo temporarily sets aside the new-memo draft and restores its text, references, selection, and scroll position after you save or cancel the edit. A failed save keeps your editing content available. Drafts are not guaranteed to survive closing the view or restarting Obsidian.
+Within the same open Knomo view, closing and reopening the Composer keeps your draft. Editing an existing memo temporarily sets aside the new-memo draft and restores its text, references, selection, and scroll position after you save or cancel the edit. A failed save keeps your editing content available.
+
+Since [1.12.7](release-notes/1.12.7.md), reopening Knomo after closing its view or restarting Obsidian can restore unfinished new and edited drafts, including text, references, selection, scroll position, and completed image attachments. Drafts stay on the current device, are isolated by vault, and do not sync between devices with the vault. A recovered draft still needs to be saved to Daily to become a Memo.
+
+Recovery has these limits:
+
+- A crash or forced shutdown may lose recent input that has not yet been stored. Unavailable, damaged, or cleared local storage can also prevent recovery. If local draft storage fails, keep the view open or copy your text; saving to Daily is still available.
+- Unfinished image processing is not recovered. Completed image attachments are checked again on recovery; if an attachment is missing or its link resolves differently, follow the notice to check or reinsert it. Your draft text is kept.
+- If the original edit target changed or is unavailable, Knomo keeps the text and pauses saving. Refresh the list and choose **Edit** on the intended Memo again.
+- If a Daily write is unconfirmed, check Daily before deciding whether to retry. Knomo keeps the pending draft and does not resubmit it automatically.
 
 ---
 
@@ -198,6 +207,19 @@ Knomo supports multiple ways to narrow down your memo stream:
 - tag filtering;
 - keyword search;
 - statistics-driven filters.
+
+Since [1.13.0](release-notes/1.13.0.md), desktop and mobile search accept dates directly and can combine them with text:
+
+| Example input | Matches |
+| --- | --- |
+| `2026`, `2026-10`, `2026-10-09` | Memos from that year, month, or day |
+| `10-09` | October 9 in any year |
+| `2026-10-01~2026-10-09 review` | Memos containing “review” within the date range; `至` also joins range endpoints |
+| `"2026"` | The literal text 2026 |
+
+Ordinary text uses normalized, contiguous matching: `project review` requires the contiguous text “project review”. Finding “project” and “review” at separate positions does not satisfy this query. Spaces do not create separate keyword AND conditions; multi-keyword AND remains a future candidate and is not supported in the current version.
+
+Search highlights matches that can be reliably located in the card's currently visible body. A result may have no highlight when only a link target, image path, or content outside the preview matches.
 
 Knomo uses a rebuildable local Catalog for historical queries, filters, and statistics, and loads memo cards in pages. Each device builds its own Catalog from Daily Notes; the index itself does not need to be synced.
 
@@ -442,7 +464,7 @@ After saving, the memo appears in the card flow and is written to the correspond
 After writing for a while, try:
 
 - filtering by tags;
-- searching keywords;
+- searching text or entering a date such as `2026-10-09`;
 - opening memos with links or images;
 - using Random revisit;
 - checking Record statistics;

@@ -53,8 +53,8 @@ export class MemoCatalogService {
 		return this.store.deleteFilePartition(sourcePath);
 	}
 
-	query(request: CatalogQuery) {
-		return this.store.query(request);
+	query(request: CatalogQuery, signal?: AbortSignal) {
+		return this.store.query(request, signal);
 	}
 
 	count(request: Omit<CatalogQuery, "limit" | "cursor">, signal?: AbortSignal) {
@@ -63,6 +63,10 @@ export class MemoCatalogService {
 
 	getObservation(observationKey: string) {
 		return this.store.getObservation(observationKey);
+	}
+
+	readObservationSnapshot(observationKeys: readonly string[], signal?: AbortSignal) {
+		return this.store.readObservationSnapshot(observationKeys, signal);
 	}
 
 	getFileRevisionBatch(sourcePath: string) {

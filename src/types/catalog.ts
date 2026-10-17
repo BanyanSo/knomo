@@ -273,3 +273,13 @@ export interface CatalogAggregateSnapshot {
 	lifecycle: CatalogStoreLifecycle;
 	invalidated: boolean;
 }
+
+// 一批本地查找键的有序读取；缺失项保留 null，不以新 occurrence 替代旧句柄。
+export interface CatalogObservationSnapshot {
+	observations: Array<CatalogObservation | null>;
+	catalogRevision: number;
+	coverage: CatalogCoverage;
+	lifecycle: CatalogStoreLifecycle;
+	storeGeneration: string;
+	invalidated: boolean;
+}

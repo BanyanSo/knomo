@@ -5,11 +5,109 @@ import { JSDOM } from "jsdom";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { RecordStatsSearchFilter } from "../src/ui/viewFilters";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+import { CatalogQueryCancelledError } from "../src/services/MemoCatalogStore";
+
+test("Workspace恢复仅还原移动已提交条件，下次打开沿用且不恢复弹层或草稿", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let saves = 0;
+	const queries: Parameters<LoadRemoteResults>[0][] = [];
+	const { controller, dispatch } = createControllerHarness(MobileSearchController, [], undefined,
+		async filter => { queries.push(filter); }, { onAppliedStateChanged: () => { saves++; } });
+	controller.applyWorkspaceState({ input: "memo", shortcut: "last-7", recordStatsSearchFilter: null });
+	assert.equal(controller.isOpen, false);
+	assert.equal(queries.length, 0);
+	assert.equal(saves, 0);
+	controller.session.updateDraft("unsubmitted");
+	assert.deepEqual(controller.exportWorkspaceState(), { input: "memo", shortcut: "last-7", recordStatsSearchFilter: null });
+	controller.applyWorkspaceState(controller.exportWorkspaceState());
+	controller.openPage({ focusInput: false });
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.deepEqual(queries[0].textTerms, ["memo"]);
+	const input = controller.input as unknown as TestElement;
+	input.value = "draft";
+	dispatch(input, "input", createKeyboardEvent(""));
+	assert.equal(saves, 0, "keyup与未提交草稿不保存Workspace布局");
+	controller.flushQuery();
+	assert.equal(saves, 1);
+	assert.equal(controller.exportWorkspaceState().input, "draft");
+	controller.removePage();
+});
+
+test("Workspace不保存移动超长已提交搜索，live条件保持原文", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const { controller } = createControllerHarness(MobileSearchController, []);
+	const query = "q".repeat(4097);
+	controller.searchQuery = query;
+	assert.equal(controller.exportWorkspaceState().input, "");
+	assert.equal(controller.searchQuery, query);
+	assert.equal(controller.session.applied.input, query);
+	controller.removePage();
+});
 
 type MobileSearchControllerConstructor = typeof import("../src/ui/MobileSearchController").MobileSearchController;
 type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstructor>;
 type MobileSearchControllerOptions = ConstructorParameters<MobileSearchControllerConstructor>[0];
 type LoadRemoteResults = NonNullable<MobileSearchControllerOptions["loadRemoteResults"]>;
+
+test("查询取消：移动草稿变化立即停止旧读取，后续只提交新条件", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = [makeMemo("alpha", "alpha")];
+	const signals: AbortSignal[] = [];
+	const { controller, root } = createControllerHarness(MobileSearchController, memos, undefined,
+		async (filter, _reset, signal) => {
+			signals.push(signal);
+			if (filter.textTerms?.[0] === "alpha") {
+				await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+			} else memos.splice(0, memos.length, makeMemo("beta", "beta"));
+		});
+	controller.searchQuery = "alpha";
+	controller.openPage({ focusInput: false });
+	controller.queueQuery("beta");
+	assert.equal(signals[0].aborted, true);
+	controller.searchQuery = "beta";
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(signals[1].aborted, false);
+	assert.equal(controller.session.result?.input, "beta");
+	assert.deepEqual(root.findAll(".knomo-card").map(card => card.getAttr("data-memo-id")), ["beta"]);
+	assert.equal(controller.session.requestStatus, "ready");
+	controller.removePage();
+});
+
+test("查询取消：移除移动页面只停止本视图请求，runtime取消不显示错误", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const signals: AbortSignal[] = [];
+	const loader: LoadRemoteResults = (_filter, _reset, signal) => {
+		signals.push(signal);
+		return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+	};
+	const first = createControllerHarness(MobileSearchController, [], undefined, loader).controller;
+	const second = createControllerHarness(MobileSearchController, [], undefined, loader).controller;
+	first.searchQuery = "memo"; second.searchQuery = "memo";
+	first.openPage({ focusInput: false }); second.openPage({ focusInput: false });
+	first.removePage();
+	assert.equal(signals[0].aborted, true);
+	assert.equal(signals[1].aborted, false);
+	second.removePage();
+	const runtime = createControllerHarness(MobileSearchController, [], undefined, async () => { throw new CatalogQueryCancelledError(); });
+	runtime.controller.searchQuery = "memo";
+	runtime.controller.openPage({ focusInput: false });
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(runtime.controller.session.requestStatus, "idle");
+	assert.equal(runtime.root.findAll(".knomo-empty-description").some(element => element.getText().includes("cancelled")), false);
+	runtime.controller.removePage();
+	const failure = createControllerHarness(MobileSearchController, [], undefined, async () => { throw new Error("Vault read failed"); });
+	failure.controller.searchQuery = "memo";
+	failure.controller.openPage({ focusInput: false });
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(failure.controller.session.requestStatus, "failed");
+	failure.controller.applyMemoChanges(new Map([["unrelated", makeMemo("updated", "other")]]));
+	assert.equal(failure.controller.session.requestStatus, "failed", "无关变化不能清除既有读取失败状态");
+	failure.controller.removePage();
+});
 
 test("Things 移动搜索显示组合摘要，关闭保留搜索与日期，标签改变使状态键失效", async () => {
 	await ensureObsidianStub();
@@ -193,7 +291,9 @@ test("mobile record stats filter refreshes remote results and renders its summar
 	});
 	await Promise.resolve();
 
-	assert.deepEqual(remoteCalls, [[{ fromDate: "2026-06-01", toDate: "2026-06-30" }, true]]);
+	assert.deepEqual(remoteCalls.map(([filter, reset]) => [filter, reset]), [[{ fromDate: "2026-06-01", toDate: "2026-06-30" }, true]]);
+	assert.ok(remoteCalls[0][2] instanceof AbortSignal);
+	assert.equal(remoteCalls[0][2].aborted, false);
 	assert.equal(root.find(".knomo-list-summary")?.getText(), "2026-06-01 to 2026-06-30: 13 Memos");
 });
 

@@ -61,6 +61,10 @@ export class IndependentTrashService {
 		});
 	}
 
+	isRestoreCleanupPending(snapshotId: string): boolean {
+		return this.cleanupOnly.get(snapshotId)?.confirmed === true;
+	}
+
 	restore(snapshotId: string): Promise<TrashWriteResult> {
 		return this.serial(async (store) => {
 			const pending = this.cleanupOnly.get(snapshotId);

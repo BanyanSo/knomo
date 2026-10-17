@@ -248,9 +248,9 @@ test("引用事件增量刷新且原位排队正文与来源引用，不清空�
 	const queued: unknown[][] = [];
 	const memo = { id: "memo", contentSnapshot: "text [[Daily#^block]]", dailyRef: { path: "Daily.md" } };
 	Object.assign(view, {
-		refresh: async (force?: boolean) => { assert.equal(force, undefined); },
+		refresh: async () => { assert.fail("纯 metadata 不得进入通用查询、计数或随机刷新"); },
 		trashViewClosed: false, cardFlowEl: container,
-		cardFlowCoordinator: { generation: 3 }, mobileSearchController: { results: null, renderGeneration: 1 },
+		cardFlowCoordinator: { generation: 3 }, mobileSearchController: { results: container, renderGeneration: 1 },
 		findMemoById: () => memo, getMemoCardPreview: () => ({ text: "text" }),
 		memoMarkdownRenderer: {
 			queueMemoMarkdown: (...args: unknown[]) => queued.push(args),
@@ -260,12 +260,14 @@ test("引用事件增量刷新且原位排队正文与来源引用，不清空�
 	await view.refreshReferences();
 	assert.equal(view.cardFlowEl, container);
 	assert.equal(cards[0], card);
-	assert.equal(queued.length, 2);
+	assert.equal(queued.length, 4);
 	assert.equal(queued[0][1], content);
 	assert.equal(queued[1][0], meta);
+	assert.equal(queued[0][5], "card-flow");
+	assert.equal(queued[2][5], "mobile-search");
 	view.trashViewClosed = true;
 	await view.refreshReferences();
-	assert.equal(queued.length, 2);
+	assert.equal(queued.length, 4);
 });
 
 test("搜索返回重新读取当前数据但同显示版本不重建，正文变化后提交当前记录", async () => {

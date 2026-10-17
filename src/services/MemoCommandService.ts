@@ -5,15 +5,15 @@ import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import { KnomoMutationBarrier } from "./KnomoMutationBarrier";
 
-import type { CatalogRefreshResult, ResolvedMemo } from "../types/catalog";
+import type { CatalogRefreshResult, ObservationHandle } from "../types/catalog";
 import type {
 	DailyMutationResult,
-	CatalogFeatureQuery,
 	CatalogMemoItem,
 	CatalogOperationalState,
 	CatalogReadState,
 	MemoSaveOperation,
 	MemoSaveResult,
+	MemoRestoreResult,
 	MonthlyProjectionState,
 	MutationFollowUpState,
 } from "../types/catalogView";
@@ -30,7 +30,6 @@ import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CatalogReadService } from "./CatalogReadService";
 import type { MemoCatalogService } from "./MemoCatalogService";
 import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
-import { CatalogReferenceService } from "./CatalogReferenceService";
 
 export interface MemoCommandServiceOptions {
 	getTrashService?: () => IndependentTrashService;
@@ -75,7 +74,6 @@ export class MemoCommandService {
 		this.createReferenceText = this.mutationBarrier.wrap(this.createReferenceText.bind(this));
 		this.recordReview = this.mutationBarrier.wrap(this.recordReview.bind(this));
 		this.readService = new CatalogReadService({
-			references: new CatalogReferenceService(app, catalog),
 			reviews: new LocalMemoReviewStore(app),
 			catalog,
 			requestObservationScan: async () => { await options.refreshLocalCatalog(); },
@@ -185,12 +183,16 @@ export class MemoCommandService {
 		return { status: "saved", localRefreshPending: result.catalogUpdatePending };
 	}
 
-	async restore(item: TrashMemoItem): Promise<MemoSaveResult> {
+	isRestoreCleanupPending(item: TrashMemoItem): boolean {
+		return this.requireTrashService().isRestoreCleanupPending(item.snapshotId);
+	}
+
+	async restore(item: TrashMemoItem): Promise<MemoRestoreResult> {
 		const result = await this.requireTrashService().restore(item.snapshotId);
-		if (result.state === "restored_cleanup_pending") throw new Error(result.message ?? t("trash.restoredCleanupPending"));
 		const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(() => null);
 		return { status: "saved", memo, timeBuoyDates: memo?.timeBuoyDates ?? [],
-			localRefreshPending: result.catalogUpdatePending || memo === null };
+			localRefreshPending: result.catalogUpdatePending || memo === null,
+			cleanupPending: result.state === "restored_cleanup_pending", message: result.message };
 	}
 
 	async purge(item: TrashMemoItem): Promise<void> {
@@ -281,19 +283,10 @@ export class MemoCommandService {
 		return { dailyCommitted, settled };
 	}
 
-	private async findMemoByObservation(observation: ResolvedMemo["observation"]): Promise<CatalogMemoItem | null> {
-		let cursor: CatalogFeatureQuery["cursor"] = null;
-		do {
-			const page = await this.readService.query({ sourcePaths: [observation.sourcePath], limit: 150, cursor });
-			const found = page.items.find((item) => item.observation.sourceRevision === observation.sourceRevision
-				&& item.observation.startLine === observation.startLine
-				&& item.observation.endLine === observation.endLine
-				&& item.observation.rawBlockHash === observation.rawBlockHash);
-			if (found !== undefined) return found;
-			if (page.invalidated) return null;
-			cursor = page.nextCursor;
-		} while (cursor !== null);
-		return null;
+	private async findMemoByObservation(observation: ObservationHandle): Promise<CatalogMemoItem | null> {
+		const { sourcePath, sourceRevision, startLine, endLine, rawBlockHash } = observation;
+		const items = await this.readService.readMemoItems([{ sourcePath, sourceRevision, startLine, endLine, rawBlockHash }]);
+		return items[0] ?? null;
 	}
 
 	private getFile(path: string): TFile {

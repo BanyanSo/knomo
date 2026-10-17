@@ -137,7 +137,7 @@ function buildObsidianStub(): string {
 		"  registerDomEvent(target, type, listener, options) { target?.addEventListener?.(type, listener, options); this.register(() => target?.removeEventListener?.(type, listener, options)); }",
 		"}",
 		"class Modal { constructor(app) { this.app = app; this.containerEl = app?.workspace?.containerEl ?? {}; this.modalEl = {}; this.contentEl = {}; this.titleEl = { setText() {} }; } open() {} close() {} }",
-		"class ItemView extends Component { constructor(leaf) { super(); this.leaf = leaf; this.app = leaf?.app; this.containerEl = leaf?.containerEl ?? {}; this.contentEl = this.containerEl; } }",
+		"class ItemView extends Component { constructor(leaf) { super(); this.leaf = leaf; this.app = leaf?.app; this.containerEl = leaf?.containerEl ?? {}; this.contentEl = this.containerEl; } getState() { return {}; } async setState() {} }",
 		"class Scope { constructor(parent) { this.parent = parent; } register() {} }",
 		"class Plugin extends Component {}",
 		"let apiVersion = '1.11.0';",

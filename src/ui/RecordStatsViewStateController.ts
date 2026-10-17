@@ -4,6 +4,9 @@ import {
 	shiftRecordStatsDate,
 	type RecordStatsView,
 } from "../services/RecordStatsService";
+import { formatDatePart, parseMemoCalendarDate } from "../utils/date";
+import { sanitizeWorkspaceStatsState } from "./KnomoWorkspaceViewState";
+import type { KnomoWorkspaceStatsState } from "./KnomoWorkspaceViewState";
 
 interface RecordStatsViewStateSnapshot {
 	view: RecordStatsView;
@@ -24,6 +27,17 @@ export class RecordStatsViewStateController {
 			view: this.view,
 			selectedDate: new Date(this.selectedDate.getTime()),
 		};
+	}
+
+	exportWorkspaceState(): KnomoWorkspaceStatsState {
+		return sanitizeWorkspaceStatsState({ view: this.view, selectedDate: formatDatePart(this.selectedDate) });
+	}
+
+	applyWorkspaceState(state: KnomoWorkspaceStatsState): void {
+		const current = sanitizeWorkspaceStatsState(state);
+		this.view = current.view;
+		this.selectedDate = parseMemoCalendarDate(current.selectedDate)!;
+		this.renderedKey = null;
 	}
 
 	isRendered(renderKey: string): boolean {

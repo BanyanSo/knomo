@@ -59,3 +59,19 @@ test("record stats view state blocks retreat before the earliest year", () => {
 function toDateParts(date: Date): [number, number, number] {
 	return [date.getFullYear(), date.getMonth() + 1, date.getDate()];
 }
+
+test("Workspace Stats 导出本地日历日期，恢复清除渲染缓存且 leaf 独立", () => {
+	const source = new RecordStatsViewStateController(new Date(2024, 1, 29, 20, 30));
+	source.setView("year");
+	const saved = source.exportWorkspaceState();
+	assert.deepEqual(saved, { view: "year", selectedDate: "2024-02-29" });
+	const first = new RecordStatsViewStateController(), second = new RecordStatsViewStateController();
+	first.markRendered("old"); first.applyWorkspaceState(saved); second.applyWorkspaceState(saved);
+	assert.equal(first.isRendered("old"), false);
+	assert.equal(first.getSnapshot().view, "year");
+	assert.deepEqual(toDateParts(first.getSnapshot().selectedDate), [2024, 2, 29]);
+	saved.selectedDate = "2000-01-01";
+	first.goToPrevious(2000);
+	assert.deepEqual(toDateParts(second.getSnapshot().selectedDate), [2024, 2, 29]);
+	assert.deepEqual(source.exportWorkspaceState(), { view: "year", selectedDate: "2024-02-29" });
+});

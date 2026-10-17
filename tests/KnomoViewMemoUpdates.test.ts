@@ -139,15 +139,15 @@ test("Catalog 读取校验完整句柄并拒绝读取期间发生的 revision �
 	const h = await fixture();
 	const handle = h.memos[0]!.catalog!.observationHandle;
 	await assert.rejects(h.read.readMemoItems([{ ...handle, rawBlockHash: "wrong" }]), /snapshot changed/iu);
-	const get = h.catalog.getObservation.bind(h.catalog);
+	const read = h.catalog.readObservationSnapshot.bind(h.catalog);
 	let changed = false;
-	t.mock.method(h.catalog, "getObservation", async (key: string) => {
-		const observation = await get(key);
+	t.mock.method(h.catalog, "readObservationSnapshot", async (keys: readonly string[]) => {
+		const snapshot = await read(keys);
 		if (!changed) {
 			changed = true;
 			await h.externalReplace("## Memos\n- 09:00 replaced\n- 10:00 same\n");
 		}
-		return observation;
+		return snapshot;
 	});
 	await assert.rejects(h.read.readMemoItems([handle]), /snapshot changed/iu);
 });
@@ -247,7 +247,7 @@ test("提交使尚未完成的首次重逢和漫游抽样失效，下一次刷�
 	}
 });
 
-test("迟到的编辑和任务查询查不到旧版本时保留最新卡片", async t => {
+test("迟到的编辑和任务定点读取拒绝旧版本时保留最新卡片", async t => {
 	for (const kind of ["composer", "task"] as const) {
 		const h = await fixture({ body: "## Memos\n- 09:00 - [ ] todo @2026-10-10\n- 10:00 same\n" });
 		h.view.memos = [...h.memos];
@@ -255,11 +255,11 @@ test("迟到的编辑和任务查询查不到旧版本时保留最新卡片", as
 		h.view.catalogTodayTimeBuoys = h.buoy.getSnapshot();
 		const original = h.memos[0]!;
 		const entered = deferred<void>(), release = deferred<void>();
-		const read = h.command.getReadService(), query = read.query.bind(read);
+		const read = h.command.getReadService(), readItems = read.readMemoItems.bind(read);
 		let first = true;
-		t.mock.method(read, "query", async (request: Parameters<typeof query>[0]) => {
+		t.mock.method(read, "readMemoItems", async (handles: Parameters<typeof readItems>[0]) => {
 			if (first) { first = false; entered.resolve(); await release.promise; }
-			return query(request);
+			return readItems(handles);
 		});
 		const finishing = kind === "composer"
 			? h.view.finishComposerSave(h.edit(original, "first @2026-10-10"), [], original)
@@ -429,10 +429,10 @@ test("超过一页的有链接视图在顶部保存无链接 Memo 后保留摘�
 	} finally { catalogGate.resolve(); countGate.resolve(); await counting; dom.dispose(); }
 });
 
-test("首次新建链接 Memo 的 Catalog 引用接续使精确计数失效时保留无标签摘要", async () => {
+test("首次新建链接 Memo 的 Catalog 接续保留精确计数、无标签摘要与未变卡片", async () => {
 	const gate = deferred<void>();
 	const body = "## Memos\n" + Array.from({ length: 150 }, (_, index) => `- 09:00 kept-${index}\n`).join("");
-	const h = await fixture({ immediate: true, catalogGate: gate.promise, references: true, body });
+	const h = await fixture({ immediate: true, catalogGate: gate.promise, body });
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	h.view.viewStateController.scopeFilter = "no-tag";
 	const initial = await h.read.query({ hasTag: false, limit: 50 });
@@ -456,8 +456,9 @@ test("首次新建链接 Memo 的 Catalog 引用接续使精确计数失效时�
 		gate.resolve();
 		await h.view.composerSaveRefreshQueue;
 		const indexed = h.view.getFilteredMemos().find(memo => memo.contentSnapshot === "new [[target]]")!;
-		assert.equal(indexed.catalog?.derivedReferences?.[0]?.state, "unresolved");
-		assert.equal(readCount(), null, "引用补全后仍按原流程重新核对精确计数");
+		assert.equal(indexed.catalog?.links[0]?.target, "target");
+		assert.equal(indexed.catalog?.observationHandle.rawBlockHash, indexed.catalog?.observation.rawBlockHash);
+		assert.equal(readCount(), 151, "未变的 Markdown 展示不因额外引用派生而使计数失效");
 		assert.deepEqual(h.view.getCurrentCardFlowPresentation().headers, confirmed.headers, "完整覆盖下的 Catalog 接续也不能撤下刚显示的摘要");
 		assert.equal(card.parentElement, dom.root);
 		assert.equal(card.querySelector(".knomo-card-content"), content);
@@ -684,7 +685,7 @@ test("新建浮标在索引等待期间立即归入今日置顶和浮标页面�
 	assert.equal(h.buoy.getSnapshot().today[0]!.memo.contentSnapshot, `new buoy @${date}`);
 });
 
-async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void>; references?: boolean } = {}) {
+async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void> } = {}) {
 	await ensureObsidianStub();
 	const { InMemoryVault } = await import("./helpers/InMemoryVault");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -693,7 +694,6 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
-	const { CatalogReferenceService } = await import("../src/services/CatalogReferenceService");
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { IndependentTrashService } = await import("../src/services/IndependentTrashService");
 	const { TrashSnapshotStore } = await import("../src/services/TrashSnapshotStore");
@@ -731,7 +731,7 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 		await seed(await parser.parse({ sourcePath: PATH, logicalDate: DATE, bytes: Buffer.from(body) }));
 	};
 	await externalReplace(vault.read(PATH)!);
-	const read = new CatalogReadService({ catalog, ...(options.references ? { references: new CatalogReferenceService(app, catalog) } : {}) });
+	const read = new CatalogReadService({ catalog });
 	const loadMemos = async () => (await read.query({ sourcePaths: [PATH], limit: 20 })).items.map(toCatalogMemoView)
 		.sort((left, right) => left.catalog!.observationHandle.startLine - right.catalog!.observationHandle.startLine);
 	const memos = await loadMemos();

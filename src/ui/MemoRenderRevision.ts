@@ -30,7 +30,6 @@ export function canRetainMemoCard(before: MemoRecord, after: MemoRecord): boolea
 		&& before.createdAt === after.createdAt && before.updatedAt === after.updatedAt
 		&& before.contentHash === after.contentHash && before.contentSnapshot === after.contentSnapshot
 		&& before.status === after.status && before.deletedAt === after.deletedAt
-		&& JSON.stringify(before.catalog?.derivedReferences ?? []) === JSON.stringify(after.catalog?.derivedReferences ?? [])
 		&& JSON.stringify(before.catalog?.resolved.capabilities) === JSON.stringify(after.catalog?.resolved.capabilities);
 }
 

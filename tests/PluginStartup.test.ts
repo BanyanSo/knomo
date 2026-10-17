@@ -120,7 +120,10 @@ function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable
 			calls.push("view");
 			// 模拟 layout-ready 之前恢复视图的首次真实 store 查询。
 			const catalog = (plugin as unknown as { memoCatalogService: import("../src/services/MemoCatalogService").MemoCatalogService }).memoCatalogService;
-			queries.push(catalog.query({ limit: 10 }));
+			const query = catalog.query({ limit: 10 });
+			// 部分卸载用例不消费首次查询；观察拒绝，原 promise 仍保留给结果断言。
+			void query.catch(() => undefined);
+			queries.push(query);
 		},
 		registerHoverLinkSource() {}, addRibbonIcon() {}, addCommand() {}, registerObsidianProtocolHandler() {}, addSettingTab() {},
 	});

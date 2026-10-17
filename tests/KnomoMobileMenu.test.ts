@@ -5,6 +5,21 @@ import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoAction } from "../src/ui/KnomoActionDispatch";
 import type { KnomoMobileMenu } from "../src/ui/KnomoMobileMenu";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
+import { createReferenceMemo } from "./helpers/referenceMemo";
+
+test("原生菜单有无自身锚点均显示固定的引用和复制链接", async () => {
+	const h = await createHarness();
+	try {
+		for (const anchor of [null, "own-anchor"]) {
+			h.originalMemo.catalog = createReferenceMemo(anchor).catalog;
+			h.view.toggleCardMenu(h.originalMemo.id);
+			const menu = h.menus.at(-1)!;
+			assert.equal(menu.items[1].title, "Reference");
+			assert.equal(menu.items[4].title, "Copy link");
+			h.controller.close();
+		}
+	} finally { h.close(); }
+});
 
 interface MenuView {
 	currentLayout: string;

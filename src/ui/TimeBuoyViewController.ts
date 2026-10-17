@@ -4,6 +4,11 @@ import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
 import { getMemoRenderKey, getMemoRenderRevision } from "./MemoRenderRevision";
 import { getTimeBuoyTabDates } from "../services/TimeBuoyQuery";
 import { CatalogQueryCancelledError } from "../services/MemoCatalogStore";
+import { CatalogDiscoveryInvalidatedError } from "../services/CatalogReadService";
+
+export class TimeBuoyIndexPendingError extends Error {
+	constructor() { super("Time buoy index is not ready."); }
+}
 
 export type TimeBuoyTab = "today" | "upcoming" | "past";
 
@@ -256,9 +261,8 @@ export class TimeBuoyViewController {
 			if (!ready) return result;
 			const query = await this.options.queryDate(today, cursor, signal);
 			signal?.throwIfAborted();
-			if (today !== formatTimeBuoyDate(this.options.getNow())) throw new Error("Time buoy date changed while loading");
-			if (query.invalidated) throw new Error("Time buoy query invalidated");
-			if (query.missingPeriods.length > 0) throw new Error(`Incomplete time buoy index: ${query.missingPeriods.join(", ")}`);
+			if (today !== formatTimeBuoyDate(this.options.getNow()) || query.invalidated) throw new CatalogDiscoveryInvalidatedError();
+			if (query.missingPeriods.length > 0) throw new TimeBuoyIndexPendingError();
 			return { ...result, todayRevision: query.catalogRevision ?? null, todayValid: true,
 				todayCursor: query.nextCursor ?? null, today: groupTabItems(query.items, "today") };
 		} catch (todayError) {

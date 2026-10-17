@@ -21,7 +21,6 @@ import {
 import { renderKnomoListSummary, renderKnomoLoadMoreButton } from "./KnomoFeed";
 import { renderKnomoMobileSearchPage } from "./KnomoMobileSearchPage";
 import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
-import { sanitizeWorkspaceRecordStatsFilter, sanitizeWorkspaceSearchState, type KnomoWorkspaceMobileSearchState } from "./KnomoWorkspaceViewState";
 
 type MobileSearchSurface = "mobile-search";
 type ThingsSearchContext = { activeNav: "things"; activeTag: string | null; activeTagKey: string | null };
@@ -32,8 +31,6 @@ interface OpenMobileSearchOptions {
 }
 
 interface MobileSearchControllerOptions {
-	onAppliedStateChanged?: () => void;
-	onInteraction?: () => void;
 	scheduleRenderTask?: (callback: () => void) => number;
 	cancelRenderTask?: (id: number) => void;
 	prioritizeMarkdown?: (root: HTMLElement, scrollTop: number) => void;
@@ -292,7 +289,6 @@ export class MobileSearchController {
 			this.options.syncThingsSearch?.(this.query, this.dateFilter);
 		} else {
 			this.resetState(true);
-			this.options.onAppliedStateChanged?.();
 		}
 		this.options.bindImageRoot?.(null);
 		this.options.setCardFlowPaused(false);
@@ -380,7 +376,6 @@ export class MobileSearchController {
 	}
 
 	private invalidateDraft(): void {
-		this.options.onInteraction?.();
 		this.cancelPendingRequest();
 		this.queryRun++;
 		this.pendingQueryKey = null;
@@ -393,11 +388,9 @@ export class MobileSearchController {
 
 	private submitDraft(): void {
 		this.clearDebounce();
-		const before = JSON.stringify(this.exportWorkspaceState());
 		if (!this.open || !this.session.submit()) { this.syncControls(); return; }
 		this.syncInput();
 		if (this.options.getThingsContext?.()) this.options.syncThingsSearch?.(this.query, this.dateFilter);
-		if (before !== JSON.stringify(this.exportWorkspaceState())) this.options.onAppliedStateChanged?.();
 		this.visibleCount = this.options.batchSize;
 		void this.refreshRemoteResults(true, "view-scope-change", true);
 	}
@@ -439,7 +432,6 @@ export class MobileSearchController {
 		if (!this.session.toggleShortcut(filter)) { this.syncControls(); return; }
 		this.recordStatsFilter = null;
 		if (this.options.getThingsContext?.()) this.options.syncThingsSearch?.(this.query, this.dateFilter);
-		this.options.onAppliedStateChanged?.();
 		this.invalidateDraft();
 		this.syncInput();
 		this.visibleCount = this.options.batchSize;
@@ -474,9 +466,8 @@ export class MobileSearchController {
 
 	flushQuery(): void {
 		this.clearDebounce();
-		const before = JSON.stringify(this.exportWorkspaceState());
 		if (this.inputEl) this.session.updateDraft(this.inputEl.value);
-		if (this.session.submit() && before !== JSON.stringify(this.exportWorkspaceState())) this.options.onAppliedStateChanged?.();
+		this.session.submit();
 	}
 
 	loadMore(): void {
@@ -557,41 +548,6 @@ export class MobileSearchController {
 	}
 
 	refreshAppliedResults(): Promise<void> { return this.refreshRemoteResults(true); }
-
-	exportWorkspaceState(): KnomoWorkspaceMobileSearchState {
-		return { ...sanitizeWorkspaceSearchState({ input: this.session.applied.input, shortcut: this.session.applied.shortcut }),
-			recordStatsSearchFilter: sanitizeWorkspaceRecordStatsFilter(this.recordStatsFilter) };
-	}
-
-	applyWorkspaceState(state: KnomoWorkspaceMobileSearchState): void {
-		const wasOpen = this.open;
-		this.cancelPendingRequest();
-		this.options.cancelRemoteCount?.();
-		this.clearDebounce();
-		this.queryRun++;
-		this.session.reset();
-		const search = sanitizeWorkspaceSearchState(state);
-		this.session.updateDraft(search.input);
-		this.session.submit();
-		if (this.session.applied.dateOrigin !== "input") this.dateFilter = search.shortcut;
-		this.recordStatsFilter = sanitizeWorkspaceRecordStatsFilter(state.recordStatsSearchFilter);
-		this.displayedMemos = null;
-		this.displayedCount = null;
-		this.displayedContext = null;
-		this.pendingQueryKey = null;
-		this.queryError = null;
-		this.open = false;
-		this.cancelRender();
-		this.visibleCount = this.options.batchSize;
-		if (wasOpen) {
-			this.setPageActive(false);
-			this.options.setCardFlowPaused(false);
-			this.options.bindImageRoot?.(null);
-			this.options.getDocument().body.toggleClass("knomo-mobile-search-active", false);
-		}
-		this.syncInput();
-		this.syncControls();
-	}
 
 	cancelPendingRequest(): void {
 		this.queryController?.abort();

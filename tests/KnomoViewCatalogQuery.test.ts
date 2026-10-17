@@ -1569,7 +1569,8 @@ test("查询与计数不得用迟到的旧 coverage 覆盖更新状态和总数"
 	assert.equal(await loading, false);
 	assert.deepEqual(view.memos.map(item => item.id), ["A"]);
 	assert.equal(view.catalogCoverage, partial);
-	assert.equal(state.search.requestStatus, "failed");
+	assert.equal(state.search.requestStatus, "ready", "旧 coverage 被丢弃，保留当前结果且不误报刷新失败");
+	assert.equal(Reflect.get(view, "pageRefreshError") ?? null, null);
 	const count = createDeferred<TestCatalogMemoCount>();
 	view.catalogCoverage = completeCoverage();
 	view.countCatalogFeature = () => count.promise;

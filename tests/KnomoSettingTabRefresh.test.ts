@@ -81,7 +81,7 @@ test("浮标设置保存与查询结果分开，就地说明保留启用事实�
 	const { Notice } = await import("obsidian"); const notices = (Notice as unknown as { messages: string[] }).messages;
 	for (const mode of ["ready", "query-failed", "save-failed"] as const) {
 		const dom = setupDom(); const root = dom.window.document.getElementById("settings")!; const status = root.createDiv();
-		let enabled = false, disabled = false;
+		let enabled = false, disabled = false, refreshes = 0;
 		const toggle = { setDisabled: (value: boolean) => { disabled = value; }, setValue: (value: boolean) => { assert.equal(value, enabled); } };
 		const tab = Object.create(KnomoSettingTab.prototype) as unknown as { toggleTimeBuoy(value: boolean, control: unknown, status: HTMLElement): Promise<void> };
 		Object.assign(tab, { settingsVisible: true, settingsSession: 0,
@@ -89,10 +89,11 @@ test("浮标设置保存与查询结果分开，就地说明保留启用事实�
 				if (mode === "save-failed") throw new Error("settings storage unavailable"); enabled = true;
 			} },
 			catalogReadService: { queryTimeBuoysForDate: async () => { if (mode === "query-failed") throw new Error("index unavailable"); } },
-			refreshOpenKnomoViews: async () => {},
+			refreshOpenKnomoViews: async () => { refreshes++; },
 		});
 		notices.length = 0; await tab.toggleTimeBuoy(true, toggle, status);
 		assert.equal(disabled, false); assert.equal(enabled, mode !== "save-failed");
+		assert.equal(refreshes, mode === "save-failed" ? 0 : 1, "配置已保存时，索引查询失败也必须将新开关状态应用到视图");
 		assert.ok(status.textContent?.length); assert.equal(status.getAttribute("role"), "status");
 		if (mode !== "save-failed") assert.match(status.textContent!, /enabled/i);
 		if (mode === "query-failed") assert.match(status.textContent!, /could not be prepared/i);

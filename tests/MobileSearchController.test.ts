@@ -7,45 +7,6 @@ import type { RecordStatsSearchFilter } from "../src/ui/viewFilters";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { CatalogQueryCancelledError } from "../src/services/MemoCatalogStore";
 
-test("Workspace恢复仅还原移动已提交条件，下次打开沿用且不恢复弹层或草稿", async () => {
-	await ensureObsidianStub();
-	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
-	let saves = 0;
-	const queries: Parameters<LoadRemoteResults>[0][] = [];
-	const { controller, dispatch } = createControllerHarness(MobileSearchController, [], undefined,
-		async filter => { queries.push(filter); }, { onAppliedStateChanged: () => { saves++; } });
-	controller.applyWorkspaceState({ input: "memo", shortcut: "last-7", recordStatsSearchFilter: null });
-	assert.equal(controller.isOpen, false);
-	assert.equal(queries.length, 0);
-	assert.equal(saves, 0);
-	controller.session.updateDraft("unsubmitted");
-	assert.deepEqual(controller.exportWorkspaceState(), { input: "memo", shortcut: "last-7", recordStatsSearchFilter: null });
-	controller.applyWorkspaceState(controller.exportWorkspaceState());
-	controller.openPage({ focusInput: false });
-	await new Promise<void>(resolve => setImmediate(resolve));
-	assert.deepEqual(queries[0].textTerms, ["memo"]);
-	const input = controller.input as unknown as TestElement;
-	input.value = "draft";
-	dispatch(input, "input", createKeyboardEvent(""));
-	assert.equal(saves, 0, "keyup与未提交草稿不保存Workspace布局");
-	controller.flushQuery();
-	assert.equal(saves, 1);
-	assert.equal(controller.exportWorkspaceState().input, "draft");
-	controller.removePage();
-});
-
-test("Workspace不保存移动超长已提交搜索，live条件保持原文", async () => {
-	await ensureObsidianStub();
-	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
-	const { controller } = createControllerHarness(MobileSearchController, []);
-	const query = "q".repeat(4097);
-	controller.searchQuery = query;
-	assert.equal(controller.exportWorkspaceState().input, "");
-	assert.equal(controller.searchQuery, query);
-	assert.equal(controller.session.applied.input, query);
-	controller.removePage();
-});
-
 type MobileSearchControllerConstructor = typeof import("../src/ui/MobileSearchController").MobileSearchController;
 type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstructor>;
 type MobileSearchControllerOptions = ConstructorParameters<MobileSearchControllerConstructor>[0];

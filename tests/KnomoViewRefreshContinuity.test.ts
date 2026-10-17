@@ -231,10 +231,15 @@ test("列表查询等待置顶数据后才返回，拒绝混合不同 Catalog re
 	release(); await first;
 	assert.equal(returned, true);
 	revision = 3;
+	const { CatalogDiscoveryInvalidatedError } = await import("../src/services/CatalogReadService");
 	const stale = view.loadCatalogMemos(false);
-	await Promise.resolve(); await Promise.resolve();
-	release();
-	await assert.rejects(stale, /Catalog changed/);
+	const rejected = assert.rejects(stale, CatalogDiscoveryInvalidatedError);
+	for (let attempt = 0; attempt < 3; attempt++) {
+		await new Promise(resolve => setImmediate(resolve));
+		release();
+	}
+	await rejected;
+	assert.equal(queries, 4, "初次成功一次，过期快照最多重读三次");
 });
 
 test("引用事件增量刷新且原位排队正文与来源引用，不清空卡片容器", async () => {

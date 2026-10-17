@@ -2,8 +2,6 @@ import type { SidebarNav } from "./viewNavigation";
 import { SearchSession } from "./SearchSession";
 import { buildSearchSourceScope } from "./SearchSourceScope";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
-import { parseKnomoWorkspaceViewState, sanitizeWorkspaceNavigationState } from "./KnomoWorkspaceViewState";
-import type { KnomoWorkspaceNavigationState, KnomoWorkspaceViewState } from "./KnomoWorkspaceViewState";
 
 export interface KnomoViewStateTransitionEffects {
 	closeScopeMenu?: boolean;
@@ -75,36 +73,6 @@ export class KnomoViewStateController {
 	compactSearchOpen = false;
 
 	private recordStatsReturnState: RecordStatsReturnState | null = null;
-
-	exportWorkspaceState(): Pick<KnomoWorkspaceViewState, "navigation" | "recordStatsReturn"> {
-		const navigation = sanitizeWorkspaceNavigationState({ activeNav: this.activeNav, scopeFilter: this.scopeFilter,
-			activeTag: this.activeTag, activeTagKey: this.activeTagKey,
-			search: { input: this.search.applied.input, shortcut: this.search.applied.shortcut }, recordStatsSearchFilter: this.recordStatsSearchFilter });
-		const previous = this.recordStatsReturnState;
-		const recordStatsReturn = this.activeNav === "record-stats" && previous !== null ? sanitizeWorkspaceNavigationState({
-			activeNav: previous.activeNav, scopeFilter: previous.scopeFilter, activeTag: previous.activeTag, activeTagKey: previous.activeTagKey,
-			search: { input: previous.searchQuery, shortcut: previous.searchDateFilter }, recordStatsSearchFilter: previous.recordStatsSearchFilter,
-		}) : null;
-		return { navigation, recordStatsReturn };
-	}
-
-	// 恢复只设置稳定条件；首次查询与用户已开始交互的保护由 View 生命周期负责。
-	applyWorkspaceState(state: Pick<KnomoWorkspaceViewState, "navigation" | "recordStatsReturn">): void {
-		const { navigation, recordStatsReturn } = parseKnomoWorkspaceViewState({ ...state, version: 1 });
-		this.activeNav = navigation.activeNav;
-		this.scopeFilter = navigation.scopeFilter;
-		this.activeTag = navigation.activeTag;
-		this.activeTagKey = navigation.activeTagKey;
-		this.search.reset();
-		this.search.updateDraft(navigation.search.input);
-		this.search.submit();
-		this.searchDateFilter = navigation.search.shortcut;
-		this.recordStatsSearchFilter = navigation.recordStatsSearchFilter;
-		this.recordStatsReturnState = recordStatsReturn === null ? null : toRecordStatsReturnState(recordStatsReturn);
-		this.mobileDrawerOpen = false;
-		this.desktopSearchOpen = false;
-		this.compactSearchOpen = false;
-	}
 
 	isDefaultListState(): boolean {
 		return this.activeNav === "all"
@@ -300,10 +268,4 @@ export class KnomoViewStateController {
 		this.activeTag = null;
 		this.activeTagKey = null;
 	}
-}
-
-function toRecordStatsReturnState(state: KnomoWorkspaceNavigationState): RecordStatsReturnState | null {
-	if (state.activeNav === "record-stats") return null;
-	return { activeNav: state.activeNav, scopeFilter: state.scopeFilter, activeTag: state.activeTag, activeTagKey: state.activeTagKey,
-		searchQuery: state.search.input, searchDateFilter: state.search.shortcut, recordStatsSearchFilter: state.recordStatsSearchFilter };
 }

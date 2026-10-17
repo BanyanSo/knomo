@@ -13,6 +13,7 @@ import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import { RecordStatsViewStateController } from "../src/ui/RecordStatsViewStateController";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+import { createReferenceMemo } from "./helpers/referenceMemo";
 
 interface MemoLoad {
 	memos: MemoViewItem[];
@@ -146,6 +147,73 @@ test("移动首查不完整但存在故障时保留诊断操作，不被加载�
 		assert.notEqual(h.root.querySelector("[data-action='open-catalog-settings']"), null);
 		assert.equal(h.title(), null);
 	} finally { h.close(); }
+});
+
+test("全部笔记首屏已有卡片后，后台快照前进或今日索引待就绪不短暂显示失败，真实读取失败仍提示", async context => {
+	await ensureObsidianStub();
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { TimeBuoyViewController } = await import("../src/ui/TimeBuoyViewController");
+	for (const mobile of [false, true]) {
+		for (const stage of ["list-invalidated", "list-busy", "today-invalidated", "today-revision", "today-pending", "today-incomplete", "today-io"] as const) {
+			await context.test(`${stage}, mobile=${mobile}`, async () => {
+				const h = await createLoadingHarness(mobile);
+				const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+				try {
+					const today = formatTimeBuoyDate(new Date());
+					const observation = { ...createReferenceMemo().catalog!.observation, sourcePath: `Daily/${today}.md`,
+						logicalDate: today, createdAtKey: `${today}T09:00:00` };
+					await catalog.open();
+					await catalog.replaceFile({ inventory: { sourcePath: observation.sourcePath, logicalDate: today, mtime: 1, size: 1 },
+						sourceRevision: observation.sourceRevision, observations: [observation], parserVersion: 1, settingsFingerprint: "settings", auditedAt: 1 });
+					const coverage: CatalogCoverage = { kind: "complete", configurationComplete: true, coveredFromDate: today,
+						pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
+					await store.setCoverage(coverage);
+					const read = new CatalogReadService({ catalog });
+					let changed = false;
+					const query = read.query.bind(read);
+					read.query = async (...args: Parameters<typeof query>) => {
+						const page = await query(...args);
+						if (stage === "list-invalidated" && changed) { changed = false; return { ...page, invalidated: true }; }
+						if (stage === "list-busy" && changed) return { ...page, invalidated: true };
+						return page;
+					};
+					const queryToday = read.queryTimeBuoysForDate.bind(read);
+					read.queryTimeBuoysForDate = async (...args: Parameters<typeof queryToday>) => {
+						if (stage === "today-io" && changed) throw new Error("today index I/O failed");
+						const result = await queryToday(...args);
+						if (stage === "today-invalidated" && changed) { changed = false; return { ...result, invalidated: true }; }
+						if (stage === "today-revision" && changed) { changed = false; return { ...result, catalogRevision: (result.catalogRevision ?? 0) + 1 }; }
+						if (stage === "today-incomplete" && changed) return { ...result, missingPeriods: [today.slice(0, 7)] };
+						return result;
+					};
+					const feedback = h.root.ownerDocument.body.createDiv(); feedback.hidden = true; feedback.createSpan();
+					const shown: boolean[] = [];
+					Object.defineProperty(feedback, "hidden", { get: () => feedback.hasAttribute("hidden"),
+						set: (value: boolean) => { shown.push(!value); feedback.toggleAttribute("hidden", value); } });
+					Object.assign(h.view, { getCatalogReadService: () => read, pageFeedbackEl: feedback, pageRefreshError: null,
+						timeBuoyViewController: new TimeBuoyViewController({ getNow: () => new Date(),
+							isTodayIndexReady: date => read.getCoverageForRange(date, date), queryDate: (date, cursor, signal) => read.queryTimeBuoysForDate(date, cursor, signal),
+							queryPage: (request, signal) => read.queryTimeBuoyPage(request, signal), requestRender: () => {} }) });
+					await h.loadInitial();
+					const card = h.root.querySelector(".knomo-card"); assert.ok(card);
+					shown.length = 0; changed = true;
+					if (stage === "today-pending") await store.setCoverage({ ...coverage, kind: "partial", pendingFileCount: 1 });
+					await h.view.reloadMemos(false);
+					assert.equal(h.root.querySelector(".knomo-card"), card, stage);
+					assert.equal(shown.includes(true), stage === "today-io", `${stage}, mobile=${mobile}`);
+					if (stage === "today-pending" || stage === "today-incomplete" || stage === "list-busy") {
+						assert.equal(h.view.viewStateController.search.requestStatus, "ready");
+						changed = false;
+						await store.setCoverage(coverage);
+						await h.view.reloadMemos(false);
+						assert.equal(shown.includes(true), false);
+					}
+				} finally { store.close(); h.close(); }
+			});
+		}
+	}
 });
 
 test("日记关闭时首查等待中的重绘保留启用指引", async () => {

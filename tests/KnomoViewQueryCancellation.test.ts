@@ -82,6 +82,40 @@ test("查询取消：每个 View 独立拥有请求，近月与全历史补查�
 	assert.equal(reads, 1, "取消后不能继续全历史补查");
 });
 
+test("两端启动和后台刷新遇到一次索引失效时重读当前结果，不闪现刷新失败提示", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const mode of ["desktop", "mobile", "refresh"] as const) {
+		let reads = 0;
+		const failures: unknown[] = [];
+		const view = createView(KnomoView, async () => ({ ...page(), invalidated: ++reads === 1 }));
+		Object.assign(view, { hasCommittedCatalogDesktopQuery: mode === "refresh", cardFlowEl: { isConnected: true },
+			reportViewRefreshFailure: (error: unknown) => failures.push(error) });
+		if (mode === "mobile") await view.loadInitialMobileMemos();
+		else assert.equal(await view.reloadMemos(true), true);
+		assert.equal(reads, mode === "mobile" ? 3 : 2);
+		assert.deepEqual(failures, []);
+		assert.equal(view.viewStateController.search.requestStatus, "ready");
+	}
+});
+
+test("索引持续失效最多重读三次；两次读取之间取消立即停止，真正 I/O 故障不重读", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const mode of ["invalidated", "cancelled", "io"] as const) {
+		let reads = 0;
+		const view = createView(KnomoView, async () => {
+			reads++;
+			if (mode === "io") throw new Error("I/O unavailable");
+			if (mode === "cancelled") view.cancelCatalogDesktopQuery();
+			return { ...page(), invalidated: true };
+		});
+		assert.equal(await view.reloadMemos(true), false);
+		assert.equal(reads, mode === "invalidated" ? 3 : 1);
+		assert.equal(view.viewStateController.search.requestStatus, mode === "io" ? "failed" : "idle");
+	}
+});
+
 const COVERAGE = { kind: "complete" as const, coveredFromDate: "2026-01-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
 const CURSOR: CatalogFeatureCursor = { catalog: { catalogRevision: 1, createdAtKey: "2026-01-01T09:00", observationKey: "first" } };
 
@@ -123,6 +157,7 @@ interface CancellationView {
 	reloadMemos(loadAll: boolean): Promise<boolean>;
 	loadNextCatalogPage(): Promise<boolean>;
 	loadCatalogMemos(loadAll: boolean, signal?: AbortSignal): Promise<unknown>;
+	loadInitialMobileMemos(): Promise<void>;
 	invalidateSearchDraft(): void;
 	cancelCatalogDesktopQuery(): void;
 }

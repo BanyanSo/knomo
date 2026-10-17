@@ -1020,6 +1020,28 @@ test("随机重逢选中结果批读有界，不逐条读取正文", async t => 
 	assert.deepEqual(sizes, [150, 50]);
 });
 
+test("IndexedDB 冷启动与重新打开后随机重逢读取持久化历史候选", async () => {
+	await ensureObsidianStub();
+	const { IDBFactory, IDBKeyRange } = await import("fake-indexeddb");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const factory = new IDBFactory(), name = "random-startup-" + Math.random();
+	const store = new IndexedDbMemoCatalogStore(name, { factory, keyRange: IDBKeyRange });
+	try {
+		await seedCatalog(new MemoCatalogService(store), store, [makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "historical random candidate")]);
+		for (let opened = 0; opened < 2; opened++) {
+			store.close();
+			const service = new CatalogReadService({ catalog: new MemoCatalogService(store), now: () => new Date(2026, 8, 8), random: () => 0 });
+			const items = await service.getRandomReunionItems(10);
+			assert.deepEqual(items.map(item => item.contentSnapshot), ["historical random candidate"]);
+		}
+	} finally {
+		store.close();
+		await new Promise<void>((resolve, reject) => { const request = factory.deleteDatabase(name); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); });
+	}
+});
+
 test("451 条已加载卡片使用四个 observation 事务，最终一致性检查仍独立读取元信息", async t => {
 	await ensureObsidianStub();
 	const { IDBFactory, IDBKeyRange, IDBDatabase: FakeDatabase } = await import("fake-indexeddb");

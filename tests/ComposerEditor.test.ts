@@ -100,6 +100,26 @@ test("浮标返回焦点时恢复编辑状态选区而非旧 DOM 光标", async 
 	}
 });
 
+test("移动草稿聚焦期间宿主重置光标后仍恢复最后编辑选区，不改变正文和撤销", async () => {
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const [anchor, head] of [[18, 18], [9, 3]]) {
+		const f = environment("first line\nsecond!");
+		try {
+			f.editor.view.dispatch({ selection: { anchor, head } });
+			const history = undoDepth(f.editor.view.state), context = f.editor.capture();
+			// 模拟移动 WebView 在原生 focus 事件中将 contenteditable 选区置于开头。
+			f.editor.input.addEventListener("focus", () => f.editor.view.dispatch({ selection: { anchor: 0 } }), { once: true });
+			(KnomoView.prototype as unknown as { focusComposerInputNow(this: unknown, resize: boolean, viewport: boolean): void })
+				.focusComposerInputNow.call({ inputEl: f.editor.input }, false, false);
+			assert.equal(f.editor.input.ownerDocument.activeElement, f.editor.input);
+			assert.deepEqual([f.editor.view.state.selection.main.anchor, f.editor.view.state.selection.main.head], [anchor, head]);
+			assert.equal(f.editor.input.value, "first line\nsecond!");
+			assert.equal(undoDepth(f.editor.view.state), history);
+			assert.equal(context.valid(), true);
+		} finally { f.close(); }
+	}
+});
+
 test("real EditorView keeps one Markdown state, atomic toolbar history and session invalidation", async () => {
 	const { editor, close } = environment("中文 memo");
 	try {
@@ -1783,6 +1803,7 @@ test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依
 		assert.equal(f.editor.input.value, "saved draft");
 		assert.equal(f.editor.view.state.selection.main.anchor, 8);
 		assert.equal(f.editor.view.state.selection.main.head, 2);
+		assert.notEqual(f.win.document.activeElement, f.editor.input, "桌面启动只恢复草稿，不主动获焦");
 		f.editor.apply({ value: "background input", anchor: 5, head: 5 });
 		view.scheduleLocalDraft(); const timer = view.localDraftTimer;
 		view.scheduleLocalDraft(); assert.equal(view.localDraftTimer, timer);

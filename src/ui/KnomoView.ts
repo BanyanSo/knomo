@@ -21,7 +21,7 @@ import { runComposerCommand, type ComposerCommand } from "../utils/composerComma
 import { applyComposerEdit, type ComposerInput } from "./ComposerEditor";
 import type { TrashSnapshotStore } from "../services/TrashSnapshotStore";
 import { Component, ItemView, Keymap, Notice, Platform, Scope, setIcon, TFile } from "obsidian";
-import type { HoverPopover, ViewStateResult, WorkspaceLeaf } from "obsidian";
+import type { HoverPopover, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_DISPLAY_TEXT, KNOMO_VIEW_TYPE } from "../constants";
 import { KNOMO_LOGO_ICON, KNOMO_SEARCH_ICON } from "../icons";
@@ -173,6 +173,7 @@ import {
 	mergeTodayTimeBuoyFeed,
 	buildTimeBuoyTabItems,
 	TimeBuoyViewController,
+	TimeBuoyIndexPendingError,
 	type TimeBuoyTab,
 	type TimeBuoyTabItem,
 	type TodayTimeBuoySnapshot,
@@ -200,7 +201,6 @@ import {
 import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
 import { KnomoViewStateController } from "./KnomoViewStateController";
 import type { KnomoViewStateTransitionEffects } from "./KnomoViewStateController";
-import { parseKnomoWorkspaceViewState } from "./KnomoWorkspaceViewState";
 import {
 	collectTagsFromCounts,
 	getRegularFilterCopy,
@@ -466,12 +466,6 @@ export class KnomoView extends ItemView {
 	private readonly recordStatsPreparationController: RecordStatsPreparationController;
 	private readonly recordStatsViewStateController = new RecordStatsViewStateController();
 	private readonly viewStateController = new KnomoViewStateController();
-	private workspaceViewReady = false;
-	private workspaceStateReceived = false;
-	private workspaceInitialLoadStarted = false;
-	private workspaceInitialLoadTimer: number | null = null;
-	private workspaceRestoreRun = 0;
-	private workspaceInteractionEpoch = 0;
 	private readonly popupState: KnomoPopupState;
 	private readonly mobileSearchController: MobileSearchController;
 	private readonly getDailyNotesStatus: () => DailyNotesStatus;
@@ -700,8 +694,6 @@ export class KnomoView extends ItemView {
 			insertImageFiles: (files, context) => this.insertImageFiles(files, context),
 		});
 		this.mobileSearchController = new MobileSearchController({
-			onAppliedStateChanged: () => this.requestWorkspaceLayoutSave(),
-			onInteraction: () => this.noteWorkspaceInteraction(),
 			getThingsContext: () => this.activeNav === "things"
 				? { activeNav: "things", activeTag: this.activeTag, activeTagKey: this.activeTagKey } : undefined,
 			syncThingsSearch: (query, date) => {
@@ -1077,132 +1069,6 @@ export class KnomoView extends ItemView {
 		this.mobileNavbarCompactController?.requestSync();
 	}
 
-	getState(): Record<string, unknown> {
-		return { version: 1, ...this.viewStateController.exportWorkspaceState(),
-			recordStats: this.recordStatsViewStateController.exportWorkspaceState(), mobileSearch: this.mobileSearchController.exportWorkspaceState() };
-	}
-
-	async setState(raw: unknown, result: ViewStateResult): Promise<void> {
-		if (this.trashViewClosed) return;
-		const firstRestore = !this.workspaceStateReceived;
-		this.workspaceStateReceived = true;
-		// 首次宿主状态不能覆盖界面就绪前已经开始的新导航或输入。
-		if (firstRestore && (this.workspaceInteractionEpoch ?? 0) > 0) {
-			await super.setState(this.getState(), result);
-			return;
-		}
-		const state = parseKnomoWorkspaceViewState(raw, { timeBuoyEnabled: this.settingsService.getSettings().timeBuoyEnabled });
-		this.workspaceRestoreRun = (this.workspaceRestoreRun ?? 0) + 1;
-		this.cancelWorkspaceInitialLoad();
-		this.cancelCatalogDesktopQuery();
-		this.cancelCatalogDesktopCount();
-		this.cancelCatalogMobileCount();
-		this.randomReunionController.cancelPending();
-		this.shuffleDayController.cancelPending();
-		this.timeBuoyViewController.clear();
-		this.viewStateController.applyWorkspaceState(state);
-		this.recordStatsViewStateController.applyWorkspaceState(state.recordStats);
-		this.mobileSearchController.applyWorkspaceState(state.mobileSearch);
-		if (this.workspaceViewReady) {
-			this.syncSearchInputs();
-			this.renderUiState({ renderCardFlow: false, renderMobileSearchResults: false });
-			this.startWorkspaceNavigationLoad();
-		}
-		await super.setState(state, result);
-	}
-
-	private noteWorkspaceInteraction(): void {
-		this.workspaceInteractionEpoch = (this.workspaceInteractionEpoch ?? 0) + 1;
-	}
-
-	private requestWorkspaceLayoutSave(invalidateNavigation = true): void {
-		this.noteWorkspaceInteraction();
-		if (this.trashViewClosed) return;
-		if (invalidateNavigation) this.workspaceRestoreRun = (this.workspaceRestoreRun ?? 0) + 1;
-		this.cancelWorkspaceInitialLoad();
-		this.workspaceInitialLoadStarted = true;
-		try {
-			const saved = this.app?.workspace?.requestSaveLayout?.();
-			void Promise.resolve(saved).catch(error => console.warn("[Knomo] Workspace navigation could not be saved", error));
-		} catch (error) { console.warn("[Knomo] Workspace navigation could not be saved", error); }
-	}
-
-	private cancelWorkspaceInitialLoad(): void {
-		if (this.workspaceInitialLoadTimer != null) this.containerEl.win.clearTimeout(this.workspaceInitialLoadTimer);
-		this.workspaceInitialLoadTimer = null;
-	}
-
-	private scheduleWorkspaceInitialLoad(): void {
-		if (this.trashViewClosed || this.workspaceInitialLoadStarted) return;
-		if (this.workspaceStateReceived) { this.startWorkspaceNavigationLoad(); return; }
-		this.cancelWorkspaceInitialLoad();
-		this.workspaceInitialLoadTimer = this.containerEl.win.setTimeout(() => {
-			this.workspaceInitialLoadTimer = null;
-			if (!this.trashViewClosed && this.workspaceViewReady && !this.workspaceInitialLoadStarted) this.startWorkspaceNavigationLoad();
-		}, 0);
-	}
-
-	private startWorkspaceNavigationLoad(): void {
-		if (this.trashViewClosed || !this.workspaceViewReady) return;
-		this.cancelWorkspaceInitialLoad();
-		this.workspaceInitialLoadStarted = true;
-		const run = this.workspaceRestoreRun ?? 0;
-		const current = () => !this.trashViewClosed && run === (this.workspaceRestoreRun ?? 0);
-		void this.loadWorkspaceNavigation(current).catch(error => {
-			if (current()) this.reportViewRefreshFailure(error, "workspace-load");
-		});
-	}
-
-	private async loadWorkspaceNavigation(current: () => boolean): Promise<void> {
-		if (this.activeTagKey !== null) await this.validateWorkspaceTag(current);
-		if (!current()) return;
-		this.renderUiState({ renderCardFlow: false, renderMobileSearchResults: false });
-		if (["all", "things", "review"].includes(this.activeNav)) {
-			if (Platform.isMobile) await this.loadInitialMobileMemos();
-			else await this.reloadCurrentCatalogQuery(true);
-		} else if (this.activeNav === "record-stats") {
-			await this.loadWorkspaceSidebarIndexes(current);
-			if (!current()) return;
-			this.syncRecordStatsSource();
-			await this.prepareRecordStats();
-		} else {
-			// 侧栏派生读取不阻断 Trash、随机和浮标的独立入口。
-			void this.loadWorkspaceSidebarIndexes(current);
-			if (this.activeNav === "random") await this.randomReunionController.refresh();
-			else if (this.activeNav === "shuffleDay") await this.shuffleDayController.refresh();
-			else if (this.activeNav === "trash") await this.trashMemoController.loadTrashMemos();
-			else if (this.activeNav === "time-buoy") await this.timeBuoyViewController.loadInitial();
-		}
-	}
-
-	private async validateWorkspaceTag(current: () => boolean): Promise<void> {
-		const tagKey = this.activeTagKey;
-		if (tagKey === null) return;
-		try {
-			const result = await this.getCatalogReadService().getLibraryIndexes();
-			if (!current() || this.activeTagKey !== tagKey || !result.complete || result.invalidated || result.value === null
-				|| result.catalogRevision < this.catalogRevision || !isCompleteCatalogCoverage(result.coverage)) return;
-			if (!result.value.facets.some(tag => tag.key === tagKey || tag.key.startsWith(`${tagKey}/`))) this.viewStateController.clearActiveTag();
-		} catch (error) { if (current()) console.warn("[Knomo] Workspace tag could not be checked", error); }
-	}
-
-	private async loadWorkspaceSidebarIndexes(current: () => boolean): Promise<void> {
-		try {
-			const result = await this.getCatalogReadService().getLibraryIndexes();
-			if (!current() || result.invalidated || result.value === null || !result.complete
-				|| result.catalogRevision < this.catalogRevision || !isCompleteCatalogCoverage(result.coverage)) return;
-			this.catalogRevision = result.catalogRevision;
-			this.catalogCoverage = result.coverage;
-			this.librarySummary = result.value.summary;
-			this.libraryTagFacets = result.value.facets;
-			this.libraryIndexRevision = result.catalogRevision;
-			this.libraryIndexCoverageKey = catalogCoverageKey(result.coverage);
-			this.libraryIndexesUpdating = false;
-			this.renderStats();
-			this.renderTags();
-		} catch (error) { if (current()) console.warn("[Knomo] Workspace sidebar could not be loaded", error); }
-	}
-
 	async onOpen(): Promise<void> {
 		try {
 			this.localDraftStore = new LocalComposerDraftStore(this.app, () => new Notice(t("composer.draftStorageFailed")));
@@ -1224,8 +1090,6 @@ export class KnomoView extends ItemView {
 				await this.validateRestoredDraft(restored);
 			}
 			if (!this.trashViewClosed) this.recoverMobileViewFocus();
-			this.workspaceViewReady = !this.trashViewClosed;
-			this.scheduleWorkspaceInitialLoad();
 			this.settleQuickCommandReady(!this.trashViewClosed);
 		} catch (error) {
 			this.localDraftStore?.close();
@@ -1334,7 +1198,7 @@ export class KnomoView extends ItemView {
 		if (Platform.isMobile) {
 			this.updateCurrentLayout();
 		}
-		await this.render(false, false);
+		await this.render(false);
 		if (this.trashViewClosed) return;
 		if (Platform.isMobile) {
 			this.mobileComposerController.prepare();
@@ -1392,9 +1256,6 @@ export class KnomoView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
-		this.workspaceViewReady = false;
-		this.workspaceRestoreRun = (this.workspaceRestoreRun ?? 0) + 1;
-		this.cancelWorkspaceInitialLoad();
 		this.cancelCatalogDesktopQuery();
 		this.mobileSearchController?.cancelPendingRequest?.();
 		this.hasConfirmedMemoPresentation = false;
@@ -1819,7 +1680,7 @@ export class KnomoView extends ItemView {
 		return this.renderScope ?? this;
 	}
 
-	private async render(waitForCatalog = true, loadData = true): Promise<void> {
+	private async render(waitForCatalog = true): Promise<void> {
 		if (this.trashViewClosed) return;
 		// 保存中的 DOM 重建延至提交归属已消费，避免留下可重复发送的副本。
 		if (this.isSaving) { this.composerRenderPending = true; return; }
@@ -1942,7 +1803,6 @@ export class KnomoView extends ItemView {
 		this.renderScopeState();
 		this.syncRootState();
 		this.recoverMobileViewFocus();
-		if (!loadData) return;
 		void this.refreshCatalogLibraryIndexes();
 		if (Platform.isMobile) {
 			this.renderStats();
@@ -2107,7 +1967,6 @@ export class KnomoView extends ItemView {
 			this.handleComposerBeforeInput(event);
 		}, { capture: true });
 		this.getRenderScope().registerDomEvent(this.inputEl, "composer-change", (event) => {
-			if (event.detail.userInput) this.noteWorkspaceInteraction();
 			this.clearTagIndexWarmup();
 			this.scheduleTagIndexWarmup();
 			this.syncInputState();
@@ -2281,7 +2140,6 @@ export class KnomoView extends ItemView {
 	private registerCompactSearchInput(searchInput: HTMLInputElement): void { this.registerDesktopSearchInput(searchInput); }
 
 	private invalidateSearchDraft(): void {
-		this.noteWorkspaceInteraction();
 		this.cancelCatalogDesktopQuery();
 		this.clearSearchDebounce();
 		this.catalogDesktopQueryRun++;
@@ -2306,7 +2164,6 @@ export class KnomoView extends ItemView {
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		session.submit();
 		this.applyViewStateTransitionEffects(this.viewStateController.setSearchQuery(session.applied.input));
-		this.requestWorkspaceLayoutSave();
 		this.syncSearchInputs();
 		this.syncSearchControls();
 		this.syncRootState();
@@ -2355,7 +2212,7 @@ export class KnomoView extends ItemView {
 				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
 			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) {
-				throw new Error(t("search.statusChanged"));
+				throw new CatalogDiscoveryInvalidatedError();
 			}
 			this.applyCatalogMemoLoad(load);
 			if (this.shouldWaitForInitialCatalogLoad(load)) {
@@ -2391,7 +2248,8 @@ export class KnomoView extends ItemView {
 			}
 			loaded = true;
 		} catch (error) {
-			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) {
+			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError
+				|| error instanceof CatalogDiscoveryInvalidatedError || error instanceof TimeBuoyIndexPendingError) {
 				if (!this.trashViewClosed && sourceGeneration === this.memoSourceGeneration
 					&& queryRun === this.catalogDesktopQueryRun && searchVersion === this.viewStateController.search.version) {
 					this.viewStateController.search.requestStatus = this.viewStateController.search.result === null ? "idle" : "ready";
@@ -2444,6 +2302,24 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadCatalogMemos(loadAll: boolean, signal?: AbortSignal): Promise<CatalogMemoLoad> {
+		for (let attempt = 0; ; attempt++) {
+			const coverageKey = catalogCoverageKey(this.catalogCoverage);
+			try {
+				const load = await this.loadCatalogMemoSnapshot(loadAll, signal);
+				signal?.throwIfAborted();
+				if (coverageKey !== catalogCoverageKey(this.catalogCoverage)
+					&& catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new CatalogDiscoveryInvalidatedError();
+				return load;
+			} catch (error) {
+				signal?.throwIfAborted();
+				if (!(error instanceof CatalogDiscoveryInvalidatedError)) throw error;
+				// 索引正常前进时最多重读三次；仍失效交回后续刷新，不把等待画成失败。
+				if (attempt === 2) throw error;
+			}
+		}
+	}
+
+	private async loadCatalogMemoSnapshot(loadAll: boolean, signal?: AbortSignal): Promise<CatalogMemoLoad> {
 		signal?.throwIfAborted();
 		let page = await this.queryCatalogFeature({
 			...this.buildCatalogActiveQuery(loadAll),
@@ -2451,7 +2327,7 @@ export class KnomoView extends ItemView {
 			cursor: null,
 		}, signal);
 		signal?.throwIfAborted();
-		if (page.invalidated) throw new Error(t("search.statusChanged"));
+		if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
 		if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 		let fullHistoryLoaded = loadAll;
 		if (!loadAll && this.isDefaultListState() && page.nextCursor === null) {
@@ -2462,7 +2338,7 @@ export class KnomoView extends ItemView {
 				cursor: null,
 			}, signal);
 			signal?.throwIfAborted();
-			if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
+			if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
 			fullHistoryLoaded = true;
 		}
 		let todayTimeBuoys: TodayTimeBuoySnapshot | undefined;
@@ -2471,11 +2347,12 @@ export class KnomoView extends ItemView {
 			const today = await this.timeBuoyViewController.prepareTodayOnly(undefined, signal);
 			signal?.throwIfAborted();
 			if (!today.todayValid && this.hasCommittedCatalogDesktopQuery) {
+				if (today.todayError === null) throw new TimeBuoyIndexPendingError();
 				if (today.todayError instanceof Error) throw today.todayError;
 				throw new Error(formatServiceError(today.todayError, "Today's time buoy index is not ready."));
 			}
 			if (today.todayValid && today.todayRevision !== page.catalogRevision) {
-				throw new Error("Catalog changed while loading today's time buoys.");
+				throw new CatalogDiscoveryInvalidatedError();
 			}
 			todayTimeBuoys = today;
 		}
@@ -2887,7 +2764,7 @@ export class KnomoView extends ItemView {
 				queryFingerprint = this.getCatalogQueryFingerprint(true);
 				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
-			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new Error(t("search.statusChanged"));
+			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new CatalogDiscoveryInvalidatedError();
 			this.applyCatalogMemoLoad(load);
 			// 两端使用相同的首批提交条件，不将构建中的空结果或子集视为已加载。
 			if (this.shouldWaitForInitialCatalogLoad(load)) {
@@ -2909,7 +2786,8 @@ export class KnomoView extends ItemView {
 			this.resetVisibleMemos();
 			this.renderUiState();
 		} catch (error) {
-			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) return;
+			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError
+				|| error instanceof CatalogDiscoveryInvalidatedError || error instanceof TimeBuoyIndexPendingError) return;
 			if (
 				sourceGeneration !== this.memoSourceGeneration
 				|| queryRun !== this.catalogDesktopQueryRun
@@ -4676,7 +4554,6 @@ export class KnomoView extends ItemView {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = null;
-		this.requestWorkspaceLayoutSave();
 		this.renderUiState({
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
@@ -4712,7 +4589,6 @@ export class KnomoView extends ItemView {
 		if (!this.recordStatsViewStateController.goToPrevious(this.recordStatsService.getEarliestYear())) {
 			return;
 		}
-		this.requestWorkspaceLayoutSave(false);
 		this.renderCardFlow(null, "view-scope-change");
 	}
 
@@ -4720,7 +4596,6 @@ export class KnomoView extends ItemView {
 		if (!this.recordStatsViewStateController.goToNext()) {
 			return;
 		}
-		this.requestWorkspaceLayoutSave(false);
 		this.renderCardFlow(null, "view-scope-change");
 	}
 
@@ -4734,7 +4609,6 @@ export class KnomoView extends ItemView {
 		if (!this.recordStatsViewStateController.setView(view)) {
 			return;
 		}
-		this.requestWorkspaceLayoutSave(false);
 		this.renderCardFlow(null, "view-scope-change");
 	}
 
@@ -4760,7 +4634,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleRootPointerDown(event: PointerEvent): void {
-		this.noteWorkspaceInteraction();
 		this.cancelPendingQuickCommand();
 		const target = event.target as Node | null;
 		if (
@@ -4776,7 +4649,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleRootClick(event: MouseEvent): Promise<void> {
-		this.noteWorkspaceInteraction();
 		this.cancelPendingQuickCommand();
 		await this.userActionController.handleRootClick(event);
 	}
@@ -4853,7 +4725,6 @@ export class KnomoView extends ItemView {
 				focusInput: false,
 				changeIntent: "view-scope-change",
 			});
-			this.requestWorkspaceLayoutSave();
 			return;
 		}
 
@@ -4870,7 +4741,6 @@ export class KnomoView extends ItemView {
 		this.compactSearchOpen = false;
 		this.activeMenuMemoId = null;
 		this.randomReunionController.cancelPending();
-		this.requestWorkspaceLayoutSave();
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
 	}
@@ -4889,7 +4759,6 @@ export class KnomoView extends ItemView {
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
 		if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
-		this.noteWorkspaceInteraction();
 		if (event.key === "Escape" && this.timeBuoyPickerState !== null) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -5239,7 +5108,6 @@ export class KnomoView extends ItemView {
 			this.syncSearchInputs();
 			return;
 		}
-		this.requestWorkspaceLayoutSave();
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
 	}
@@ -5312,7 +5180,6 @@ export class KnomoView extends ItemView {
 		if (!session.canRewrite) { this.syncSearchControls(); return; }
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.applyViewStateTransitionEffects(this.viewStateController.setSearchDateFilter(filter));
-		this.requestWorkspaceLayoutSave();
 		this.invalidateSearchDraft();
 		this.syncSearchInputs();
 		this.syncRootState();
@@ -5367,7 +5234,6 @@ export class KnomoView extends ItemView {
 			this.syncCardMenuState();
 			return;
 		}
-		this.requestWorkspaceLayoutSave();
 		this.cancelCatalogDesktopQuery();
 		this.mobileSearchController?.cancelPendingRequest?.();
 		if (result.clearRandomReunion) {
@@ -5432,7 +5298,6 @@ export class KnomoView extends ItemView {
 		if (result.type === "inactive") {
 			return;
 		}
-		this.requestWorkspaceLayoutSave();
 		this.cancelCatalogDesktopQuery();
 		this.applyViewStateTransitionEffects(result);
 		const shouldDeferReview = result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
@@ -5489,7 +5354,6 @@ export class KnomoView extends ItemView {
 			this.syncCardMenuState();
 			return;
 		}
-		this.requestWorkspaceLayoutSave();
 		this.renderUiState({
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
@@ -5597,7 +5461,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private openComposer(): void {
-		this.noteWorkspaceInteraction();
 		if (this.currentLayout === "mobile") {
 			this.openMobileComposer();
 			return;
@@ -5745,8 +5608,11 @@ export class KnomoView extends ItemView {
 		if (this.inputEl === null) {
 			return;
 		}
-		// 由编辑器恢复源码选区，避免原生 focus 将旧 DOM 光标写回状态。
-		this.inputEl.composer.view.focus();
+		const editor = this.inputEl.composer.view;
+		const selection = editor.state.selection;
+		// 原生聚焦可能同步重置 contenteditable 光标，随后恢复最后的源码选区。
+		editor.focus();
+		if (!editor.state.selection.eq(selection)) editor.dispatch({ selection, scrollIntoView: true });
 		if (shouldResize) {
 			this.resizeInput();
 		}
@@ -5888,7 +5754,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private startEditing(memo: MemoRecord): void {
-		this.noteWorkspaceInteraction();
 		if (this.restoredEditNeedsTarget && !this.isSaving && !this.trashViewClosed
 			&& !this.composerIsComposing && !this.inputEl?.composer.composing) {
 			// 只有用户显式选择卡片的编辑动作才能更换目标，草稿文字和历史留在原编辑器。

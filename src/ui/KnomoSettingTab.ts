@@ -1024,14 +1024,21 @@ export class KnomoSettingTab extends PluginSettingTab {
 			try { await this.settingsService.updateSettings({ timeBuoyEnabled: enabled, timeBuoyIntroDismissed: true }); }
 			catch (error) { feedback(formatServiceError(error, t("error.saveFailed")), true); return; }
 			const message = t(enabled ? "settings.timeBuoy.enabled" : "settings.timeBuoy.disabled");
-			try {
-				if (enabled) await this.catalogReadService.queryTimeBuoysForDate(formatDatePart(new Date()));
-				await this.refreshOpenKnomoViews();
-				feedback(message);
-			} catch (error) {
-				logContinuationFailure("time-buoy-setting", "refresh", error);
-				feedback(`${message} ${t("settings.timeBuoy.buildFailed")}`);
+			let refreshFailed = false;
+			if (enabled) {
+				try { await this.catalogReadService.queryTimeBuoysForDate(formatDatePart(new Date())); }
+				catch (error) {
+					refreshFailed = true;
+					logContinuationFailure("time-buoy-setting", "query", error);
+				}
 			}
+			try {
+				await this.refreshOpenKnomoViews();
+			} catch (error) {
+				refreshFailed = true;
+				logContinuationFailure("time-buoy-setting", "refresh", error);
+			}
+			feedback(refreshFailed ? `${message} ${t("settings.timeBuoy.buildFailed")}` : message);
 		} finally {
 			this.timeBuoyToggleRunning = false;
 			toggle.setDisabled(false);

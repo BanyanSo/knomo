@@ -27,13 +27,12 @@ import type { LegacyTrashMigrationService } from "../services/LegacyTrashMigrati
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart } from "../utils/date";
 import { formatServiceError } from "../utils/serviceText";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import { showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoFolderSuggest } from "./KnomoFolderSuggest";
 import { getKnomoSettingAttentionKinds } from "./KnomoSettingAttention";
 import type { KnomoSettingAttentionKind } from "./KnomoSettingAttention";
 import { KnomoView } from "./KnomoView";
-
-const SETTING_NOTICE_DELAY_MS = 800;
 
 type SettingTabId = "record" | "archive-data" | "about";
 
@@ -61,11 +60,6 @@ export const DEVELOPER_CONTACTS: DeveloperContact[] = [
 
 type SettingNoticeKey = "dailyHeading" | "monthlyMemoFileFormat" | "monthlyDateHeadingFormat";
 
-interface DelayedSettingNotice {
-	value: string;
-	timeoutId: number;
-}
-
 export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildRunning = false;
 	private runtimeRetryRunning = false;
@@ -81,9 +75,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private toolbarExpanded = true;
 	private pageEl: HTMLElement | null = null;
 	private attentionEl: HTMLElement | null = null;
+	private attentionResultEl: HTMLElement | null = null;
+	private attentionResult: { message: string; error: boolean } | null = null;
+	private dailyHeadingStatusEl: HTMLElement | null = null;
+	private dailyHeadingResult: { message: string; error: boolean } | null = null;
+	private timeBuoyResult: { message: string; error: boolean } | null = null;
+	private settingsSession = 0;
 	private renderedAttentionKinds: KnomoSettingAttentionKind[] = [];
 	private readonly latestSettingNoticeValues = new Map<SettingNoticeKey, string>();
-	private readonly delayedSettingNotices = new Map<SettingNoticeKey, DelayedSettingNotice>();
 	private readonly pendingSettingDrafts = new Map<SettingNoticeKey, string>();
 	private readonly pluginVersion: string;
 
@@ -133,9 +132,14 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	hide(): void {
 		this.settingsVisible = false;
+		this.settingsSession++;
+		this.attentionResult = null;
+		this.attentionResultEl = null;
+		this.dailyHeadingStatusEl = null;
+		this.dailyHeadingResult = null;
+		this.timeBuoyResult = null;
 		void this.commitAllPendingSettingDrafts(false);
 		super.hide();
-		this.cancelAllDelayedSettingNotices();
 		this.selectedTab = "record";
 		this.toolbarExpanded = true;
 		this.monthlyFolderEditing = false;
@@ -151,6 +155,12 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const navigation = new SettingGroup(page).addClass("knomo-settings-navigation");
 		this.attentionEl = page.createDiv({ cls: "knomo-settings-attention" });
 		this.refreshAttentionRegion();
+		this.attentionResultEl = page.createDiv({ cls: "knomo-setting-operation-result", attr: { role: "status", "aria-live": "off" } });
+		this.attentionResultEl.hidden = !this.attentionResult;
+		if (this.attentionResult) {
+			this.attentionResultEl.setText(this.attentionResult.message);
+			this.attentionResultEl.toggleClass("is-error", this.attentionResult.error);
+		}
 
 		const tabs = [
 			{ id: "record", label: t("settings.tab.record") },
@@ -400,6 +410,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		setting.settingEl.addClass("knomo-settings-text-row");
 		const settings = this.settingsService.getSettings();
 		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help" });
+		this.dailyHeadingStatusEl = statusEl;
+		statusEl.setAttrs({ role: "status", "aria-live": "off" });
 		const showValidation = (value: string) => {
 			const invalid = !this.settingsService.validateDailyHeading(value.trim());
 			statusEl.setText(invalid ? t("settings.dailyHeading.invalid") : "");
@@ -407,17 +419,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 		};
 		const initial = this.pendingSettingDrafts.get("dailyHeading") ?? settings.dailyHeading;
 		if (this.pendingSettingDrafts.has("dailyHeading")) showValidation(initial);
+		if (this.dailyHeadingResult && this.settingsService.validateDailyHeading(initial.trim())) {
+			statusEl.setText(this.dailyHeadingResult.message);
+			statusEl.toggleClass("is-error", this.dailyHeadingResult.error);
+		}
 		setting.addText((text) => {
 			text.inputEl.dataset.knomoSettingInput = "dailyHeading";
 			text.setPlaceholder(DEFAULT_DAILY_HEADING);
 			text.setValue(initial);
 			text.onChange((value) => {
+				this.dailyHeadingResult = null;
 				showValidation(value);
 				this.updateTextSettingDraft(
 					"dailyHeading",
 					value,
-					(nextValue) => this.settingsService.validateDailyHeading(nextValue),
-					t("settings.dailyHeading.invalid"),
 				);
 			});
 			text.inputEl.addEventListener("blur", () => {
@@ -474,10 +489,16 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private renderTimeBuoySetting(setting: Setting): void {
 		setting.settingEl.addClass("knomo-settings-toggle-row");
 		const settings = this.settingsService.getSettings();
+		const statusEl = setting.infoEl.createDiv({ cls: "knomo-setting-help", attr: { role: "status", "aria-live": "off" } });
+		if (this.timeBuoyResult) {
+			statusEl.setText(this.timeBuoyResult.message);
+			statusEl.toggleClass("is-error", this.timeBuoyResult.error);
+		}
 		setting.addToggle((toggle) => {
 			toggle.setValue(settings.timeBuoyEnabled);
+			toggle.setDisabled(this.timeBuoyToggleRunning);
 			toggle.onChange((value) => {
-				void this.toggleTimeBuoy(value, toggle);
+				void this.toggleTimeBuoy(value, toggle, statusEl);
 			});
 		});
 	}
@@ -557,8 +578,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 					this.updateTextSettingDraft(
 						"monthlyMemoFileFormat",
 						value,
-						(nextValue) => this.settingsService.validateMonthlyMemoFileFormat(nextValue),
-						t("settings.monthlyFileFormat.invalid"),
 					);
 					this.updateMonthlyFileFormatDraftStatus(statusEl, value);
 					updateApplyState();
@@ -605,8 +624,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 				this.updateTextSettingDraft(
 					"monthlyDateHeadingFormat",
 					value,
-					(nextValue) => this.settingsService.validateMarkdownHeading(nextValue),
-					t("settings.dateHeadingFormat.invalid"),
 				);
 			});
 			text.inputEl.addEventListener("blur", () => {
@@ -668,8 +685,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private renderCatalogAttentionSetting(setting: Setting): void {
-		const resultEl = setting.infoEl.createDiv({ cls: "knomo-scan-result" });
-		if (this.rebuildRunning) this.renderRebuildResult(t("settings.rebuild.catalogStatus"), resultEl);
 		setting
 			.setName(t("settings.attention.catalog.name"))
 			.setDesc(t("settings.attention.catalog.desc"))
@@ -683,7 +698,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				button.setButtonText(t(this.rebuildRunning ? "settings.rebuild.running" : "settings.rebuild.start"));
 				button.setDisabled(this.rebuildRunning);
 				button.onClick(() => {
-					void this.runRebuildIndex(button, resultEl);
+					void this.runRebuildIndex(button);
 				});
 			});
 	}
@@ -726,18 +741,30 @@ export class KnomoSettingTab extends PluginSettingTab {
 					? "settings.legacyMigration.retryCleanup" : "settings.legacyMigration.retry"));
 			button.setDisabled(this.legacyMigrationRunning);
 			button.onClick(() => {
-				if (this.legacyMigrationRunning) return;
-				this.legacyMigrationRunning = true;
-				button.setDisabled(true);
-				void this.legacyTrashMigrationService.run()
-					.catch(error => { new Notice(formatServiceError(error, t("settings.attention.retryFailed"))); })
-					.finally(() => {
-						this.legacyMigrationRunning = false;
-						button.setDisabled(false);
-						this.refreshSettingTab();
-					});
+				void this.runLegacyMigration(button);
 			});
 		});
+	}
+
+	private async runLegacyMigration(button: { setDisabled(disabled: boolean): void }): Promise<void> {
+		if (this.legacyMigrationRunning) return;
+		this.legacyMigrationRunning = true;
+		const session = this.settingsSession;
+		button.setDisabled(true);
+		try {
+			await this.legacyTrashMigrationService.run();
+			const report = this.legacyTrashMigrationService.getReport();
+			const complete = ["ready", "not_applicable", "idle"].includes(report.status) && report.cleanupCandidate === null;
+			const message = complete ? t("settings.legacyMigration.completed") : report.cleanupCandidate || report.status === "recovery_required"
+				? this.getLegacyMigrationDescription() : t("settings.attention.retryFailed");
+			this.showAttentionResult(message, !complete, session);
+		} catch (error) {
+			this.showAttentionResult(formatServiceError(error, t("settings.attention.retryFailed")), true, session);
+		} finally {
+			this.legacyMigrationRunning = false;
+			if (session === this.settingsSession && this.settingsVisible) button.setDisabled(false);
+			if (this.settingsVisible) this.refreshSettingTab();
+		}
 	}
 
 	private getLegacyMigrationDescription(): string {
@@ -761,60 +788,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 		return this.latestSettingNoticeValues.get(key) === value;
 	}
 
-	private scheduleDelayedSettingNotice(
-		key: SettingNoticeKey,
-		value: string,
-		message: string,
-		shouldShowNotice: () => boolean,
-	): void {
-		this.cancelDelayedSettingNotice(key);
-		const timeoutId = this.containerEl.win.setTimeout(() => {
-			const pendingNotice = this.delayedSettingNotices.get(key);
-			if (pendingNotice === undefined || pendingNotice.timeoutId !== timeoutId || !this.isLatestSettingNoticeValue(key, value)) {
-				return;
-			}
-			this.delayedSettingNotices.delete(key);
-			if (shouldShowNotice()) {
-				new Notice(message);
-			}
-		}, SETTING_NOTICE_DELAY_MS);
-		this.delayedSettingNotices.set(key, { value, timeoutId });
-	}
-
-	private cancelDelayedSettingNotice(key: SettingNoticeKey): void {
-		const pendingNotice = this.delayedSettingNotices.get(key);
-		if (pendingNotice === undefined) {
-			return;
-		}
-		this.containerEl.win.clearTimeout(pendingNotice.timeoutId);
-		this.delayedSettingNotices.delete(key);
-	}
-
-	private cancelAllDelayedSettingNotices(): void {
-		for (const key of this.delayedSettingNotices.keys()) {
-			this.cancelDelayedSettingNotice(key);
-		}
-	}
-
 	private updateTextSettingDraft(
 		key: SettingNoticeKey,
 		value: string,
-		validate: (value: string) => boolean,
-		invalidMessage: string,
 	): void {
 		const nextValue = value.trim();
 		this.pendingSettingDrafts.set(key, value);
 		this.rememberSettingNoticeValue(key, nextValue);
-		if (!validate(nextValue)) {
-			this.scheduleDelayedSettingNotice(
-				key,
-				nextValue,
-				invalidMessage,
-				() => !validate(nextValue),
-			);
-			return;
-		}
-		this.cancelDelayedSettingNotice(key);
 	}
 
 	private async commitAllPendingSettingDrafts(showChangedNotice: boolean): Promise<void> {
@@ -835,13 +815,20 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (value === undefined) {
 			return;
 		}
+		const session = this.settingsSession;
 		try {
 			if (
 				await this.saveDailyHeading(value, showChangedNotice)
 				&& this.pendingSettingDrafts.get("dailyHeading") === value
 			) this.pendingSettingDrafts.delete("dailyHeading");
 		} catch (error) {
-			new Notice(formatServiceError(error, t("error.saveFailed")));
+			if (session !== this.settingsSession || !this.settingsVisible || !this.isLatestSettingNoticeValue("dailyHeading", value.trim())) return;
+			const message = formatServiceError(error, t("error.saveFailed"));
+			this.dailyHeadingResult = { message, error: true };
+			if (this.dailyHeadingStatusEl?.isConnected && !this.dailyHeadingStatusEl.closest("[hidden]")) {
+				this.dailyHeadingStatusEl.setAttr("aria-live", "polite");
+				this.dailyHeadingStatusEl.setText(message); this.dailyHeadingStatusEl.toggleClass("is-error", true);
+			} else new Notice(message);
 		}
 	}
 
@@ -874,19 +861,13 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	private async saveDailyHeading(value: string, showChangedNotice = true): Promise<boolean> {
+		const session = this.settingsSession;
 		const key: SettingNoticeKey = "dailyHeading";
 		const nextHeading = value.trim();
 		this.rememberSettingNoticeValue(key, nextHeading);
 		if (!this.settingsService.validateDailyHeading(nextHeading)) {
-			this.scheduleDelayedSettingNotice(
-				key,
-				nextHeading,
-				t("settings.dailyHeading.invalid"),
-				() => !this.settingsService.validateDailyHeading(nextHeading),
-			);
 			return false;
 		}
-		this.cancelDelayedSettingNotice(key);
 		if (nextHeading === this.settingsService.getSettings().dailyHeading) {
 			return true;
 		}
@@ -895,13 +876,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 		if (!this.isLatestSettingNoticeValue(key, nextHeading)) {
 			return true;
 		}
-		if (showChangedNotice) {
-			this.scheduleDelayedSettingNotice(
-				key,
-				nextHeading,
-				t("settings.dailyHeading.changed"),
-				() => this.settingsService.getSettings().dailyHeading === nextHeading,
-			);
+		if (showChangedNotice && session === this.settingsSession && this.settingsVisible) {
+			this.dailyHeadingResult = { message: t("settings.dailyHeading.changed"), error: false };
+			this.dailyHeadingStatusEl?.setAttrs({ role: "status", "aria-live": "polite" });
+			this.dailyHeadingStatusEl?.setText(this.dailyHeadingResult.message);
+			this.dailyHeadingStatusEl?.toggleClass("is-error", false);
 		}
 		return true;
 	}
@@ -911,15 +890,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const nextFormat = value.trim();
 		this.rememberSettingNoticeValue(key, nextFormat);
 		if (!this.settingsService.validateMarkdownHeading(nextFormat)) {
-			this.scheduleDelayedSettingNotice(
-				key,
-				nextFormat,
-				t("settings.dateHeadingFormat.invalid"),
-				() => !this.settingsService.validateMarkdownHeading(nextFormat),
-			);
 			return false;
 		}
-		this.cancelDelayedSettingNotice(key);
 		if (nextFormat === this.settingsService.getSettings().monthlyDateHeadingFormat) {
 			return true;
 		}
@@ -933,15 +905,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const nextFormat = value.trim();
 		this.rememberSettingNoticeValue(key, nextFormat);
 		if (!this.settingsService.validateMonthlyMemoFileFormat(nextFormat)) {
-			this.scheduleDelayedSettingNotice(
-				key,
-				nextFormat,
-				t("settings.monthlyFileFormat.invalid"),
-				() => !this.settingsService.validateMonthlyMemoFileFormat(nextFormat),
-			);
 			return false;
 		}
-		this.cancelDelayedSettingNotice(key);
 		if (nextFormat === this.settingsService.getSettings().monthlyMemoFileFormat) {
 			return true;
 		}
@@ -1039,26 +1004,34 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async toggleTimeBuoy(enabled: boolean, toggle: ToggleComponent): Promise<void> {
+	private async toggleTimeBuoy(enabled: boolean, toggle: ToggleComponent, statusEl?: HTMLElement): Promise<void> {
 		if (this.timeBuoyToggleRunning) {
 			return;
 		}
 		this.timeBuoyToggleRunning = true;
 		toggle.setDisabled(true);
+		const session = this.settingsSession;
+		const feedback = (message: string, error = false): void => {
+			if (session !== this.settingsSession || !this.settingsVisible) return;
+			this.timeBuoyResult = { message, error };
+			if (statusEl?.isConnected && !statusEl.closest("[hidden]")) {
+				statusEl.setAttrs({ role: "status", "aria-live": "polite" });
+				if (statusEl.textContent !== message) statusEl.setText(message);
+				statusEl.toggleClass("is-error", error);
+			} else new Notice(message);
+		};
 		try {
-			await this.settingsService.updateSettings({ timeBuoyEnabled: enabled, timeBuoyIntroDismissed: true });
-			await this.refreshOpenKnomoViews();
-			if (!enabled) {
-				new Notice(t("settings.timeBuoy.disabled"));
-				return;
+			try { await this.settingsService.updateSettings({ timeBuoyEnabled: enabled, timeBuoyIntroDismissed: true }); }
+			catch (error) { feedback(formatServiceError(error, t("error.saveFailed")), true); return; }
+			const message = t(enabled ? "settings.timeBuoy.enabled" : "settings.timeBuoy.disabled");
+			try {
+				if (enabled) await this.catalogReadService.queryTimeBuoysForDate(formatDatePart(new Date()));
+				await this.refreshOpenKnomoViews();
+				feedback(message);
+			} catch (error) {
+				logContinuationFailure("time-buoy-setting", "refresh", error);
+				feedback(`${message} ${t("settings.timeBuoy.buildFailed")}`);
 			}
-			new Notice(t("settings.timeBuoy.building"));
-			await this.catalogReadService.queryTimeBuoysForDate(formatDatePart(new Date()));
-			new Notice(t("settings.timeBuoy.enabled"));
-			await this.refreshOpenKnomoViews();
-		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.timeBuoy.buildFailed")));
-			await this.refreshOpenKnomoViews();
 		} finally {
 			this.timeBuoyToggleRunning = false;
 			toggle.setDisabled(false);
@@ -1127,24 +1100,25 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private async runRebuildIndex(
 		button: { setButtonText(text: string): void; setDisabled(disabled: boolean): void },
-		resultEl: HTMLElement,
 	): Promise<void> {
 		if (this.rebuildRunning) {
 			return;
 		}
 		this.rebuildRunning = true;
+		const session = this.settingsSession;
 		button.setDisabled(true);
 		button.setButtonText(t("settings.rebuild.running"));
 		try {
-			this.renderRebuildResult(t("settings.rebuild.catalogStatus"), resultEl);
+			this.showAttentionResult(t("settings.rebuild.catalogStatus"), false, session, false);
 			await this.memoCommandService.rebuildLocalCatalog();
-			this.renderRebuildResult(t("settings.rebuild.catalogComplete"), resultEl);
-			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.rebuild.completedNotice"));
+			const status = await this.catalogReadService.getLibraryIndexes();
+			this.showAttentionResult(t(status.complete && !status.invalidated ? "settings.rebuild.catalogComplete" : "settings.rebuild.incomplete"),
+				!status.complete || status.invalidated, session);
+			try { await this.refreshOpenKnomoViews(); }
+			catch (error) { logContinuationFailure("rebuild", "view-refresh", error); }
 		} catch (error) {
 			const message = formatServiceError(error, t("settings.rebuild.failed"));
-			this.renderRebuildResult(message, resultEl);
-			new Notice(message);
+			this.showAttentionResult(message, true, session);
 		} finally {
 			this.rebuildRunning = false;
 			button.setDisabled(false);
@@ -1158,13 +1132,16 @@ export class KnomoSettingTab extends PluginSettingTab {
 	): Promise<void> {
 		if (this.runtimeRetryRunning) return;
 		this.runtimeRetryRunning = true;
+		const session = this.settingsSession;
 		button.setDisabled(true);
 		button.setButtonText(t("settings.attention.checking"));
 		try {
 			await this.retryRuntimeState();
-			await this.refreshOpenKnomoViews();
-		} catch {
-			new Notice(t("settings.attention.retryFailed"));
+			this.showAttentionResult(t("settings.attention.checked"), false, session);
+			try { await this.refreshOpenKnomoViews(); }
+			catch (error) { logContinuationFailure("runtime-retry", "view-refresh", error); }
+		} catch (error) {
+			this.showAttentionResult(formatServiceError(error, t("settings.attention.retryFailed")), true, session);
 		} finally {
 			this.runtimeRetryRunning = false;
 			button.setDisabled(false);
@@ -1178,6 +1155,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 	): Promise<void> {
 		if (this.monthlyRetryRunning) return;
 		this.monthlyRetryRunning = true;
+		const session = this.settingsSession;
 		button.setDisabled(true);
 		button.setButtonText(t("settings.attention.retrying"));
 		try {
@@ -1185,10 +1163,11 @@ export class KnomoSettingTab extends PluginSettingTab {
 			if (result.failed > 0 || this.monthlyProjectionCoordinator.getProjectionState() === "failed") {
 				throw new Error(t("settings.attention.monthly.retryFailed"));
 			}
-			await this.refreshOpenKnomoViews();
-			new Notice(t("settings.attention.monthly.retried"));
+			this.showAttentionResult(t("settings.attention.monthly.retried"), false, session);
+			try { await this.refreshOpenKnomoViews(); }
+			catch (error) { logContinuationFailure("monthly-retry", "view-refresh", error); }
 		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.attention.monthly.retryFailed")));
+			this.showAttentionResult(formatServiceError(error, t("settings.attention.monthly.retryFailed")), true, session);
 		} finally {
 			this.monthlyRetryRunning = false;
 			button.setDisabled(false);
@@ -1197,9 +1176,16 @@ export class KnomoSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderRebuildResult(message: string, resultEl: HTMLElement): void {
-		resultEl.empty();
-		resultEl.createDiv({ cls: "knomo-setting-help", text: message });
+	private showAttentionResult(message: string, error: boolean, session: number, fallbackNotice = true): void {
+		if (session !== this.settingsSession || !this.settingsVisible) return;
+		this.attentionResult = { message, error };
+		const element = this.attentionResultEl;
+		if (element?.isConnected && !element.parentElement?.closest("[hidden]")) {
+			element.hidden = false;
+			element.setAttr("aria-live", "polite");
+			if (element.textContent !== message) element.setText(message);
+			element.toggleClass("is-error", error);
+		} else if (fallbackNotice) new Notice(message);
 	}
 
 	private getAttentionKinds(): KnomoSettingAttentionKind[] {
@@ -1284,7 +1270,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private async refreshOpenKnomoViews(): Promise<void> {
 		const refreshes = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
 			if (leaf.view instanceof KnomoView) {
-				await leaf.view.refresh(true);
+				try { await leaf.view.refresh(true); }
+				catch (error) { leaf.view.reportViewRefreshFailure(error); }
 			}
 		});
 		await Promise.all(refreshes);

@@ -2,6 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("页面问题有状态语义，同一说明重绘不重复播报，新问题重新播报", async () => {
+	await ensureObsidianStub(); const { renderKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
+	const root = new TestElement("div");
+	const render = (text: string) => renderKnomoCardFlowHeaders(root.asHtml(), [{ type: "summary", text, feedback: true }])[0]!;
+	const first = render("Previous results are still shown");
+	assert.equal(first.getAttr("role"), "status"); assert.equal(first.getAttr("aria-live"), "polite");
+	assert.equal(render("Previous results are still shown").getAttr("aria-live"), "off");
+	assert.equal(render("Source changed").getAttr("aria-live"), "polite");
+	const announcement = { key: "", context: "random" };
+	const remount = () => renderKnomoCardFlowHeaders(new TestElement("div").asHtml(), [{ type: "summary", text: "Source changed", feedback: true }], announcement)[0]!;
+	assert.equal(remount().getAttr("aria-live"), "polite");
+	assert.equal(remount().getAttr("aria-live"), "off", "整个容器重建也不重复播报");
+	announcement.context = "shuffleDay";
+	assert.equal(remount().getAttr("aria-live"), "polite");
+});
+
 test("renders feed summary, toolbar, load more buttons, and empty states", async () => {
 	await ensureObsidianStub();
 	const {
@@ -168,6 +184,7 @@ class TestElement {
 	setAttr(key: string, value: string): void {
 		this.attrs.set(key, value);
 	}
+	setAttrs(attributes: Record<string, string>): void { for (const [key, value] of Object.entries(attributes)) this.setAttr(key, value); }
 
 	getAttr(key: string): string | null {
 		return this.attrs.get(key) ?? null;

@@ -245,6 +245,7 @@ test("handleAction dispatches every simple action to the expected view callbacks
 		"refresh-random-reunion": {
 			expected: ["refresh-random"],
 		},
+		"refresh-shuffle-day": { expected: ["refresh-shuffle"] },
 		"load-more": {
 			expected: ["hydrate"],
 		},
@@ -512,6 +513,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			refreshRandomReunion: async () => {
 				calls.push("refresh-random");
 			},
+			refreshShuffleDay: async () => { calls.push("refresh-shuffle"); },
 			renderNextCardBatch: (generation) => calls.push(`next-batch:${generation}`),
 			loadOlderMemoPeriods: () => calls.push("hydrate"),
 			loadMoreMobileSearchResults: () => calls.push("load-more-mobile-search"),

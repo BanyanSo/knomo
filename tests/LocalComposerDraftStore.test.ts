@@ -69,6 +69,22 @@ function editingDraft(): LocalComposerDraft {
 	return result;
 }
 
+test("草稿存储连续失败仅报告一次，可靠写入恢复后下一故障重新报告", () => {
+	const disk = storage();
+	const save = disk.saveLocalStorage;
+	let ignore = true, failures = 0;
+	disk.saveLocalStorage = (key, value) => { if (!ignore) save(key, value); };
+	const store = new LocalComposerDraftStore(disk, () => { failures++; });
+	store.update(draft("keep this input")); store.update(draft("keep this input"));
+	assert.equal(failures, 1);
+	assert.equal(store.draft.active.content, "keep this input");
+	ignore = false; store.update(draft("keep this input"));
+	assert.equal(failures, 1);
+	ignore = true; store.update(draft("new input"));
+	assert.equal(failures, 2);
+	store.close();
+});
+
 test("关闭重开与应用重启保留正文、引用、反向选区、滚动和完成图片", () => {
 	const disk = storage();
 	const initial = draft("![[image.png]]");

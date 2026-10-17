@@ -13,8 +13,6 @@ test("invalid and failed text drafts survive rerender; valid blur draft saves on
 	Object.assign(tab, {
 		pendingSettingDrafts: pending,
 		latestSettingNoticeValues: new Map(),
-		delayedSettingNotices: new Map(),
-		containerEl: { win: { setTimeout: () => 1, clearTimeout: () => undefined } },
 		settingsService: {
 			getSettings: () => ({ dailyHeading: saved }),
 			validateDailyHeading: (value: string) => value.length > 0 && value !== "bad",
@@ -34,6 +32,7 @@ test("invalid and failed text drafts survive rerender; valid blur draft saves on
 		const setting = {
 			settingEl: { addClass: () => undefined },
 			infoEl: { createDiv: () => ({
+				setAttrs: () => undefined,
 				setText: (next: string) => { message = next; },
 				toggleClass: () => undefined,
 			}) },

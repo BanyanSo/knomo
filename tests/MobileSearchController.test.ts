@@ -51,6 +51,30 @@ type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstru
 type MobileSearchControllerOptions = ConstructorParameters<MobileSearchControllerConstructor>[0];
 type LoadRemoteResults = NonNullable<MobileSearchControllerOptions["loadRemoteResults"]>;
 
+test("移动搜索刷新失败保留有效卡片并显示本次未更新和重试，首次失败不画成无结果", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	for (const warm of [false, true]) {
+		let fail = !warm;
+		const f = createControllerHarness(MobileSearchController, [makeMemo("memo", "memo")], undefined,
+			async () => { if (fail) throw new Error("private read failure"); });
+		f.controller.searchQuery = "memo"; f.controller.openPage({ focusInput: false });
+		await new Promise<void>(resolve => setImmediate(resolve));
+		if (warm) { fail = true; await f.controller.refreshAppliedResults(); }
+		assert.equal(f.controller.session.requestStatus, "failed");
+		const summary = f.root.findAll(".knomo-list-summary").find(item => item.getAttr("role") === "status");
+		assert.ok(summary); assert.equal(summary.getAttr("aria-live"), "polite");
+		assert.match(summary.getText(), warm ? /previous results/i : /could not load/i);
+		assert.ok(summary.findAll("button").length > 0);
+		assert.equal(f.root.findAll(".knomo-card").length, warm ? 1 : 0);
+		assert.equal(f.root.findAll(".knomo-mobile-search-empty").length, 0);
+		fail = false; await f.controller.refreshAppliedResults();
+		assert.equal(f.controller.session.requestStatus, "ready");
+		assert.equal(f.root.findAll(".knomo-list-summary").some(item => /previous results|could not load/i.test(item.getText())), false);
+		f.controller.removePage();
+	}
+});
+
 test("查询取消：移动草稿变化立即停止旧读取，后续只提交新条件", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

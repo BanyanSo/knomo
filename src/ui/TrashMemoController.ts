@@ -5,6 +5,8 @@ import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import type { TrashAction } from "./KnomoActionDispatch";
 import type { MemoRestoreResult } from "../types/catalogView";
+import { TrashDailyWriteError } from "../services/IndependentTrashService";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
 export type TrashMemoRenderTarget = "ui-state" | "trash-count-and-scope" | "card-flow";
 
@@ -36,6 +38,7 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	showNotice: (message: string) => void;
 	forceRefreshViews: () => Promise<void>;
 	requestRender: (target: TrashMemoRenderTarget) => void;
+	onPresentationError?: (error: unknown) => void;
 }
 
 export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
@@ -78,7 +81,14 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		};
 	}
 
-	private render(target: TrashMemoRenderTarget): void { if (!this.disposed) this.options.requestRender(target); }
+	private render(target: TrashMemoRenderTarget): void {
+		if (this.disposed) return;
+		try { this.options.requestRender(target); }
+		catch (error) {
+			logContinuationFailure("trash", "render", error, this.session);
+			this.options.onPresentationError?.(error);
+		}
+	}
 
 	dispose(): void { this.disposed = true; this.session++; this.unsubscribe?.(); this.unsubscribe = null; }
 
@@ -130,16 +140,17 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 				const result = await this.options.restoreMemo(memo);
 				if (!isCurrent()) return;
 				trashChanged = true;
-				if (result.memo !== null) this.options.handleRestoredMemo(memo, result.memo);
 				this.options.showNotice(result.cleanupPending
 					? `${result.message ?? t("trash.restoredCleanupError", { error: t("trash.cleanupUnavailable") })} ${t("trash.cleanupRetryOnly")}`
 					: t("notice.restored"));
-				if (result.localRefreshPending) this.options.showNotice(t("catalog.savedRefreshPending"));
+				try {
+					if (result.memo !== null) this.options.handleRestoredMemo(memo, result.memo);
+				} catch (error) { logContinuationFailure("restore", "card-callback", error, session); }
 			}
 			try {
 				await this.options.forceRefreshViews();
-			} catch {
-				if (isCurrent()) this.options.showNotice(t("catalog.savedRefreshPending"));
+			} catch (error) {
+				if (isCurrent()) logContinuationFailure(action, "view-refresh", error, session);
 			}
 		} catch (error) {
 			if (!isCurrent()) return;
@@ -156,6 +167,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 }
 
 export function formatTrashActionErrorMessage(action: TrashAction, error: unknown): string {
+	if (error instanceof TrashDailyWriteError) return t("trash.writeUnconfirmed");
 	const actionLabel = action === "purge" ? t("error.purgeFailed") : t("error.restoreFailed");
 	const fallbackMessage = action === "purge" ? t("error.purgeFailedRetry") : t("error.restoreFailedRetry");
 	const message = formatServiceError(error, fallbackMessage);

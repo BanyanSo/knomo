@@ -61,7 +61,13 @@ export function renderKnomoShuffleDayHeader(
 	return header;
 }
 
-export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[]): HTMLElement[] {
+const lastFeedback = new WeakMap<HTMLElement, string>();
+
+export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[], announcement?: { key: string; context: string }): HTMLElement[] {
+	const feedback = JSON.stringify([announcement?.context, headers.flatMap(header => header.type === "summary" && header.feedback ? [header.text] : [])]);
+	const changed = feedback !== (announcement?.key ?? lastFeedback.get(container));
+	if (announcement) announcement.key = feedback;
+	lastFeedback.set(container, feedback);
 	return headers.map((header) => {
 		if (header.type === "random-toolbar") {
 			return renderKnomoRandomReunionToolbar(container, header.count);
@@ -69,8 +75,10 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 		if (header.type === "shuffle-day") {
 			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats);
 		}
-		if (header.action !== undefined) return renderKnomoActionableListSummary(container, header.text, header.action);
-		return renderKnomoListSummary(container, header.text);
+		const summary = header.action !== undefined ? renderKnomoActionableListSummary(container, header.text, header.action)
+			: renderKnomoListSummary(container, header.text);
+		if (header.feedback) summary.setAttrs({ role: "status", "aria-live": changed ? "polite" : "off", "aria-atomic": "true" });
+		return summary;
 	});
 }
 

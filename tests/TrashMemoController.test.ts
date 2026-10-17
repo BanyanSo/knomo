@@ -138,7 +138,7 @@ test("写后抛错不乐观减计数或显示空状态，等待中的展示读�
  assert.ok(f.notices.some((text) => text.includes("uncertain")));
 });
 
-test("Restore 防重复点击；正文成功后视图刷新失败仅报告刷新待处理", async () => {
+test("Restore 防重复点击；正文成功后视图刷新失败不追加操作通知", async () => {
  const f = await fixture(1); await f.controller.loadTrashMemos(); const memo = f.controller.getSnapshot().trashMemos![0]!;
  const gate = deferred<void>(); let restores = 0;
  f.options.restoreMemo = async () => { restores++; await gate.promise; await f.store.remove(item("s0")); return { memo, cleanupPending: false, localRefreshPending: false }; };
@@ -148,7 +148,7 @@ test("Restore 防重复点击；正文成功后视图刷新失败仅报告刷新
  gate.resolve(); await pending;
  assert.equal(f.controller.getSnapshot().trashBusyMemoActions.size, 0);
  assert.equal(f.controller.getSnapshot().trashCount, 0);
- assert.equal(f.notices.length, 2);
+ assert.equal(f.notices.length, 1);
  assert.ok(!f.notices.join("").includes("view failed"));
 });
 
@@ -167,9 +167,23 @@ test("恢复清理待重试保留成功事实和原因，服务状态决定重�
  assert.equal(writes, 1); assert.equal(f.controller.getSnapshot().trashCount, 1);
  assert.ok(f.controller.getSnapshot().trashCleanupPendingMemoIds.has(memo.id));
  assert.ok(f.notices[0]?.includes("disk locked")); assert.ok(f.notices[0]?.includes("Retry only"));
- assert.ok(!f.notices.join("").includes("Restore failed")); assert.equal(f.notices.length, 2);
+ assert.ok(!f.notices.join("").includes("Restore failed")); assert.equal(f.notices.length, 1);
  await f.controller.handleTrashAction("restore", memo);
  assert.equal(writes, 1); assert.equal(cleanups, 1); assert.equal(f.controller.getSnapshot().trashCount, 0);
+});
+
+test("恢复部分成功不被卡片回调与跨视图刷新错误覆盖，只反馈一次清理结果", async () => {
+ const f = await fixture(1); await f.controller.loadTrashMemos(); const memo = f.controller.getSnapshot().trashMemos![0]!;
+ f.options.restoreMemo = async () => ({ memo, cleanupPending: true, localRefreshPending: true });
+ f.options.handleRestoredMemo = () => { throw new Error("render failed"); };
+ f.options.forceRefreshViews = async () => { throw new Error("refresh failed"); };
+ f.options.requestRender = () => { throw new Error("render failed"); };
+ await f.controller.handleTrashAction("restore", memo);
+ assert.equal(f.notices.length, 1);
+ assert.match(f.notices[0]!, /restored/i);
+ assert.match(f.notices[0]!, /Retry only/);
+ assert.doesNotMatch(f.notices[0]!, /Restore failed/);
+ assert.equal(f.controller.getSnapshot().trashBusyMemoActions.size, 0);
 });
 
 test("关闭并重启 controller 后旧 Restore 不发通知、不回填也不清除新会话 busy", async () => {
@@ -193,6 +207,19 @@ test("formats trash action errors without duplicating the action label", async (
 	assert.equal(formatTrashActionErrorMessage("restore", new Error("Restore failed: conflict")), "Restore failed: conflict");
 	assert.equal(formatTrashActionErrorMessage("purge", null), "Permanent delete failed. Please try again later");
 	assert.equal(formatTrashActionErrorMessage("purge", new Error("disk unavailable")), "Permanent delete failed: disk unavailable");
+});
+
+test("恢复 I/O 未确认与明确失败分别反馈，均保留副本且不自动重试正文", async () => {
+ const f = await fixture(1); await f.controller.loadTrashMemos(); const memo = f.controller.getSnapshot().trashMemos![0]!;
+ const { TrashDailyWriteError } = await import("../src/services/IndependentTrashService");
+ let calls = 0;
+ f.options.restoreMemo = async () => { calls++; throw new TrashDailyWriteError("s0", "unreadable", "disk read failed"); };
+ await f.controller.handleTrashAction("restore", memo);
+ assert.equal(f.notices.length, 1); assert.match(f.notices[0]!, /not confirmed/); assert.doesNotMatch(f.notices[0]!, /Restore failed/);
+ assert.equal(f.controller.getSnapshot().trashCount, 1); assert.equal(calls, 1);
+ f.options.restoreMemo = async () => { calls++; throw new Error("snapshot invalid"); };
+ await f.controller.handleTrashAction("restore", memo);
+ assert.equal(f.notices.length, 2); assert.match(f.notices[1]!, /Restore failed/); assert.equal(calls, 2);
 });
 
 async function loadController(): Promise<typeof import("../src/ui/TrashMemoController")> {

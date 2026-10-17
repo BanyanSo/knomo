@@ -19,7 +19,6 @@ test("refreshes shuffle day through the service and renders loading transitions"
 			stats: buildShuffleDayStats([memo]),
 		})),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {
 			renderCalls += 1;
 		},
@@ -46,7 +45,6 @@ test("refresh keeps the previous shuffle day visible until the next selection co
 			return makeSelection("2026-05-01", oldMemo);
 		}),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -71,7 +69,6 @@ test("clearing shuffle day invalidates an in-flight selection", async () => {
 		loadSelectedDate: async () => [memo],
 		...makeService(async () => selection.promise),
 		isShuffleDayActive: () => false,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -94,7 +91,6 @@ test("selected-date reload keeps the committed day visible until its complete re
 		loadSelectedDate: async () => dateLoad.promise,
 		...makeService(async () => makeSelection("2026-05-01", oldMemo)),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -118,7 +114,6 @@ test("targeted memo updates preserve unaffected shuffle-day memos and clear only
 		loadSelectedDate: async () => [firstMemo, secondMemo],
 		...makeService(async () => makeSelectionWithMemos("2026-05-01", [firstMemo, secondMemo])),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => { renderCalls++; },
 	});
 
@@ -154,7 +149,6 @@ test("a late selected-date reload cannot overwrite a newer targeted update", asy
 		loadSelectedDate: async () => dateLoad.promise,
 		...makeService(async () => makeSelection("2026-05-01", oldMemo)),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -185,7 +179,7 @@ test("漫游只接受有效请求一次，导航取消传递 signal，保留已�
 			return ++calls === 1 ? makeSelection("2026-05-01", old) : pending.promise;
 		},
 		acceptSelection: async date => { accepts.push(date); },
-		loadSelectedDate: async () => [old], isShuffleDayActive: () => active, showNotice: () => {}, requestRender: () => {},
+		loadSelectedDate: async () => [old], isShuffleDayActive: () => active, requestRender: () => {},
 	});
 	await controller.refresh();
 	const first = controller.refresh();
@@ -213,20 +207,21 @@ test("历史保存失败不阻断 ready 内容，读取降级可见，迟到错�
 	let active = true;
 	let failLoad = false;
 	let accepts = 0;
-	const notices: string[] = [];
+	const { Notice } = await import("obsidian"); const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
 	const memo = makeMemo("memo", "2026-05-01T09:00");
 	const controller = new ShuffleDayController({
 		selectShuffleDay: async () => { if (failLoad) throw new Error("load failed"); return { ...makeSelection("2026-05-01", memo), historyUnavailable: true }; },
 		acceptSelection: () => ++accepts === 1 ? failedSave : saved.promise,
 		loadSelectedDate: async () => [memo], isShuffleDayActive: () => active,
-		showNotice: message => { notices.push(message); }, requestRender: () => {},
+		requestRender: () => {},
 	});
 	await controller.refresh();
 	assert.equal(controller.getSnapshot().status, "ready");
-	assert.match(notices[0], /history could not be read/);
+	assert.match(controller.getSnapshot().historyError!, /history could not be read/);
 	rejectSave(new Error("save failed"));
 	await Promise.resolve();
-	assert.match(notices[1], /history was not saved/);
+	assert.match(controller.getSnapshot().historyError!, /history was not saved/);
+	assert.deepEqual(notices, []);
 	assert.equal(controller.getSnapshot().status, "ready");
 	failLoad = true;
 	await controller.refresh();

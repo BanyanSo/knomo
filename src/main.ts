@@ -42,6 +42,7 @@ import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
 import { VaultTagIndex } from "./services/VaultTagIndex";
 import { KNOMO_LOGO_ICON, registerKnomoIcons } from "./icons";
 import { t } from "./i18n";
+import { logContinuationFailure } from "./utils/continuationDiagnostics";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
@@ -258,7 +259,7 @@ export default class KnomoPlugin extends Plugin {
 				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 					if (!(leaf.view instanceof KnomoView)) continue;
 					try { leaf.view.handleConfirmedDailyMemoChange(presentation); }
-					catch (error) { console.error("Knomo confirmed card refresh failed", error); }
+					catch (error) { leaf.view.reportViewRefreshFailure(error, "confirmed-render"); }
 				}
 			},
 			getWriteHeading: getEffectiveWriteHeading,
@@ -623,19 +624,20 @@ export default class KnomoPlugin extends Plugin {
 			this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async leaf => {
 				if (!(leaf.view instanceof KnomoView)) return;
 				try { await leaf.view.handleDailyMemoPresentationChange(change, committed); }
-				catch (error) { console.error("Knomo committed card refresh failed", error); }
+				catch (error) { leaf.view.reportViewRefreshFailure(error, "committed-render"); }
 			}),
 		);
 		await committed;
 		await presentation;
 		// 卡片展示失败不改变 Daily/Catalog 成功状态；普通查询、浮标和统计仍走现有合并刷新。
-		void this.queueRefreshOpenViews().catch((error: unknown) => console.error("Knomo view refresh failed", error));
+		void this.queueRefreshOpenViews().catch((error: unknown) => logContinuationFailure("view", "scheduled-refresh", error));
 	}
 
 	private async runRefreshOpenViews(forceRebuild = false): Promise<void> {
 		const refreshes = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
 			if (leaf.view instanceof KnomoView) {
-				await leaf.view.refresh(forceRebuild);
+				try { await leaf.view.refresh(forceRebuild); }
+				catch (error) { leaf.view.reportViewRefreshFailure(error); }
 			}
 		});
 		await Promise.all(refreshes);

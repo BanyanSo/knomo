@@ -1,19 +1,29 @@
 import { LocalComposerDraftStore, type LocalComposerDraft } from "../src/ui/LocalComposerDraftStore";
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { EditorSelection, EditorState, StateEffect, Transaction } from "@codemirror/state";
 import { cursorCharLeft, cursorCharRight, cursorLineStart, cursorLineEnd, deleteCharBackward, deleteCharForward, redo, undo, undoDepth } from "@codemirror/commands";
-import { ComposerEditor } from "../src/ui/ComposerEditor";
 import { runComposerCommand } from "../src/utils/composerCommands";
 import { registerComposerToolGesture } from "../src/ui/ComposerToolGesture";
 import { composerParser as parser } from "../src/utils/composerSyntax";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
-import { ComposerImageController, type ComposerImageCapture } from "../src/ui/ComposerImageController";
+import type { ComposerImageCapture } from "../src/ui/ComposerImageController";
 import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
 import { composerImageLinks, setComposerImageLinks } from "../src/ui/ComposerImageState";
 import { AttachmentService, type ImageAttachment } from "../src/services/AttachmentService";
+
+type ComposerEditor = import("../src/ui/ComposerEditor").ComposerEditor;
+let ComposerEditor: typeof import("../src/ui/ComposerEditor").ComposerEditor;
+type ComposerImageController = import("../src/ui/ComposerImageController").ComposerImageController;
+let ComposerImageController: typeof import("../src/ui/ComposerImageController").ComposerImageController;
+
+before(async () => {
+	await ensureObsidianStub();
+	({ ComposerEditor } = await import("../src/ui/ComposerEditor"));
+	({ ComposerImageController } = await import("../src/ui/ComposerImageController"));
+});
 
 function environment(value: string, colorHighlights = false, setupWindow?: (win: JSDOM["window"]) => void) {
 	const errors: Error[] = [];
@@ -1043,7 +1053,7 @@ async function sessionView(editor: ComposerEditor) {
 			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),
 			createReferenceText: async (_memo: unknown) => ({ text: "[[reference]]" }),
 		},
-		reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
+		reloadMemos: async () => true,
 		closeCardMenu: () => undefined, syncCardMenuState: () => undefined,
 	};
 	return Object.assign(Object.create(KnomoView.prototype), fields) as typeof fields & {
@@ -1620,7 +1630,6 @@ async function draftSession(editor: ComposerEditor, win: ReturnType<typeof envir
 		validateRestoredDraft(draft: LocalComposerDraft): Promise<void>; applyRestoredDraftSelection(): void;
 		onOpen(): Promise<void>; initializeView(): Promise<void>; settleQuickCommandReady(ready: boolean): void;
 		register(callback: () => void): void; registerDomEvent(target: EventTarget, type: string, callback: EventListener): void;
-		getImageSourcePath(): string | null;
 	};
 	view.localDraftStore = new LocalComposerDraftStore(disk, assert.fail);
 	view.localDraftTimer = null; view.draftImageLinks = [];
@@ -1705,7 +1714,6 @@ test("原文变化后保留恢复文字和旧句柄，仅显式重选目标沿�
 		const memo = sessionMemo("old-revision"); view.editingMemo = memo;
 		const originalHandle = memo.catalog!.observationHandle;
 		view.app = { vault: { getAbstractFileByPath: () => new TFile(), read: async () => "changed source" } };
-		view.getImageSourcePath = () => memo.dailyRef.path;
 		await view.validateRestoredDraft(view.captureLocalDraft());
 		assert.equal(view.restoredEditNeedsTarget, true);
 		assert.equal(memo.catalog!.observationHandle, originalHandle);
@@ -1754,6 +1762,10 @@ test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依
 	const cleanup: Array<() => void> = [];
 	try {
 		const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+		const { Notice } = await import("obsidian");
+		const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+		f.editor.apply({ value: "older draft", anchor: 4, head: 4 });
+		view.flushLocalDraft();
 		f.editor.apply({ value: "saved draft", anchor: 8, head: 2 });
 		view.flushLocalDraft(); view.localDraftStore.close();
 		view.register = callback => { cleanup.push(callback); };
@@ -1761,13 +1773,13 @@ test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依
 			target.addEventListener(type, callback); cleanup.push(() => target.removeEventListener(type, callback));
 		};
 		view.settleQuickCommandReady = () => undefined;
-		view.getImageSourcePath = () => "Daily/today.md";
 		view.initializeView = async () => {
 			f.editor.reset(view.draftContent);
 			f.editor.view.dispatch({ effects: setComposerImageLinks.of(view.draftImageLinks) });
 			view.applyRestoredDraftSelection();
 		};
 		await view.onOpen();
+		assert.deepEqual(notices, []);
 		assert.equal(f.editor.input.value, "saved draft");
 		assert.equal(f.editor.view.state.selection.main.anchor, 8);
 		assert.equal(f.editor.view.state.selection.main.head, 2);
@@ -1785,7 +1797,7 @@ test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依
 });
 
 
-test("恢复图片重新验证附件存在性、原来源及当前目标路径，缺失不丢正文", async () => {
+test("图片草稿安静恢复，保存时检查原附件与实际目标，失败保留最新文字", async () => {
 	for (const mode of ["valid", "missing", "source-changed"] as const) {
 		const f = environment("![[image.png]]");
 		try {
@@ -1795,19 +1807,27 @@ test("恢复图片重新验证附件存在性、原来源及当前目标路径�
 			const file = new TFile(); file.path = "image.png";
 			const sources: string[] = [];
 			view.app = { vault: { getAbstractFileByPath: () => mode === "missing" ? null : file }, metadataCache: {
-				getFirstLinkpathDest: (_target: string, source: string) => {
-					sources.push(source);
-					return mode === "source-changed" && source === "Daily/new.md" ? null : file;
-				},
+				getFirstLinkpathDest: (_target: string, source: string) => { sources.push(source);
+					return mode === "source-changed" && source === "Daily/new.md" ? null : file; },
 			} };
-			view.getImageSourcePath = () => "Daily/new.md";
+			Object.assign(view, { composerImages: { editor: f.editor, pending: false } });
 			f.editor.view.dispatch({ effects: setComposerImageLinks.of([{ from: 0, to: 14, link: "![[image.png]]", path: "image.png", sourcePath: "Daily/old.md" }]) });
 			const before = f.editor.view.state;
 			await view.validateRestoredDraft(view.captureLocalDraft());
 			assert.equal(f.editor.view.state, before);
-			assert.equal(f.editor.input.value, "![[image.png]]");
+			assert.deepEqual(notices, []); assert.deepEqual(sources, []);
+			let writes = 0;
+			const create = view.memoCommandService.startCreate;
+			view.memoCommandService.startCreate = (content: string, validate?: (path: string) => void) => {
+				validate?.("Daily/new.md"); writes++; return create(content);
+			};
+			await view.saveInput();
+			assert.equal(writes, mode === "valid" ? 1 : 0);
+			assert.equal(f.editor.input.value, mode === "valid" ? "" : "![[image.png]]");
+			assert.equal(view.localDraftStore.draft.active.content, f.editor.input.value);
 			assert.equal(notices.length, mode === "valid" ? 0 : 1);
 			if (mode !== "missing") assert.deepEqual(sources, ["Daily/old.md", "Daily/new.md"]);
+			if (mode !== "valid") assert.match(notices[0], /image|attachment/i);
 			view.localDraftStore.close();
 		} finally { f.close(); }
 	}

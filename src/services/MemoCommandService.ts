@@ -27,7 +27,8 @@ import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapServi
 import { formatDatePart } from "../utils/date";
 import { withCreatedAtAlias } from "../utils/references";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
-import { CatalogReadService } from "./CatalogReadService";
+import { CatalogDiscoveryInvalidatedError, CatalogReadService } from "./CatalogReadService";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import type { MemoCatalogService } from "./MemoCatalogService";
 import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
 
@@ -189,7 +190,10 @@ export class MemoCommandService {
 
 	async restore(item: TrashMemoItem): Promise<MemoRestoreResult> {
 		const result = await this.requireTrashService().restore(item.snapshotId);
-		const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(() => null);
+		const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(error => {
+			if (!(error instanceof CatalogDiscoveryInvalidatedError)) logContinuationFailure("restore", "readback", error);
+			return null;
+		});
 		return { status: "saved", memo, timeBuoyDates: memo?.timeBuoyDates ?? [],
 			localRefreshPending: result.catalogUpdatePending || memo === null,
 			cleanupPending: result.state === "restored_cleanup_pending", message: result.message };
@@ -237,7 +241,8 @@ export class MemoCommandService {
 		if (!localRefreshPending && input.observation !== null) {
 			try {
 				memo = await this.findMemoByObservation(input.observation);
-			} catch {
+			} catch (error) {
+				if (!(error instanceof CatalogDiscoveryInvalidatedError)) logContinuationFailure("save", "readback", error);
 				localRefreshPending = true;
 			}
 		}

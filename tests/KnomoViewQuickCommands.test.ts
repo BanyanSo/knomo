@@ -14,7 +14,7 @@ async function harness() {
 	const input = {
 		get value() { return "unfinished draft"; },
 		set value(_text: string) { assert.fail("命令不得重设编辑器值"); },
-		composer: { composing: false, view: { state: editorState, focus: () => { events.push("focus"); } } },
+		composer: { composing: false, capture: () => ({ valid: () => true, sameSession: () => true }), view: { state: editorState, focus: () => { events.push("focus"); } } },
 	};
 	const state = new KnomoViewStateController();
 	const view = Object.assign(Object.create(KnomoView.prototype), {

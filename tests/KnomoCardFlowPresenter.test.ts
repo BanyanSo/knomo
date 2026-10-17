@@ -4,6 +4,28 @@ import assert from "node:assert/strict";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("重逢旧卡片的错误与来源变化在工具栏附近可见，全部移除仍有换组入口", async () => {
+	await ensureObsidianStub(); const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	for (const memos of [makeMemos(2), []]) {
+		const presentation = getCardFlowPresentation({ ...baseOptions(), activeNav: "random", randomReunionStatus: memos.length ? "ready" : "empty",
+			randomReunionError: "Source changed", memos });
+		assert.ok(presentation.headers?.some(header => header.type === "random-toolbar"));
+		assert.ok(presentation.headers?.some(header => header.type === "summary" && header.text === "Source changed" && header.feedback));
+		if (memos.length) { assert.equal(presentation.type, "items"); if (presentation.type === "items") assert.deepEqual(presentation.memos, memos); }
+	}
+});
+
+test("漫游正文、刷新错误与历史弱状态分别呈现，失败保留重试入口", async () => {
+	await ensureObsidianStub(); const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const { buildShuffleDayStats } = await import("../src/utils/shuffleDay"); const memos = makeMemos(2);
+	const presentation = getCardFlowPresentation({ ...baseOptions(), activeNav: "shuffleDay", shuffleDay: { status: "ready", selectedDate: "2026-06-02", memos,
+		stats: buildShuffleDayStats(memos), error: "Previous results are still shown", historyError: "History was not saved" } });
+	assert.equal(presentation.type, "items");
+	const messages = presentation.headers?.filter(header => header.type === "summary") ?? [];
+	assert.equal(messages.length, 2); assert.ok(messages.every(header => header.feedback));
+	assert.ok(messages.some(header => header.action?.action === "refresh-shuffle-day"));
+});
+
 test("presents card flow error before other states", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
@@ -152,6 +174,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Random revisit failed to load",
 		description: "Candidate query failed",
+		headers: [{ type: "random-toolbar", count: 0 }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),

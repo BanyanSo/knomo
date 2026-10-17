@@ -4,6 +4,7 @@ export type TrashAction = "restore" | "purge";
 export type KnomoSimpleAction =
 	| "toggle-card-menu"
 	| "refresh-random-reunion"
+	| "refresh-shuffle-day"
 	| "load-more"
 	| "load-more-mobile-search"
 	| "reset-list-state"
@@ -68,6 +69,7 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 	if (
 		action === "toggle-card-menu" ||
 		action === "refresh-random-reunion" ||
+		action === "refresh-shuffle-day" ||
 		action === "load-more" ||
 		action === "load-more-mobile-search" ||
 		action === "reset-list-state" ||

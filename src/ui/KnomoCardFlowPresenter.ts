@@ -12,7 +12,7 @@ export interface CardFlowRegularFilterCopy {
 }
 
 export type CardFlowHeader =
-	| { type: "summary"; text: string; action?: { label: string; action: string } }
+	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean }
 	| { type: "random-toolbar"; count: number }
 	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
 
@@ -75,6 +75,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 				type: "empty",
 				title: t("error.randomLoadFailed"),
 				description: options.randomReunionError ?? "",
+				headers: [{ type: "random-toolbar", count: 0 }],
 			};
 		}
 	}
@@ -85,8 +86,9 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 		return {
 			type: "empty",
 			title: options.regularFilterCopy?.emptyTitle ?? getEmptyStateTitle(options.activeNav),
-			description: options.activeNav === "random" ? options.randomReunionError ?? "" : "",
-			...(options.activeNav === "random" ? { headers: [{ type: "random-toolbar" as const, count: 0 }] } : {}),
+			description: "",
+			...(options.activeNav === "random" ? { headers: [{ type: "random-toolbar" as const, count: 0 },
+				...(options.randomReunionError ? [{ type: "summary" as const, text: options.randomReunionError, feedback: true }] : [])] } : {}),
 		};
 	}
 
@@ -96,6 +98,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 	}
 	if (options.activeNav === "random") {
 		headers.push({ type: "random-toolbar", count: options.memos.length });
+		if (options.randomReunionError) headers.push({ type: "summary", text: options.randomReunionError, feedback: true });
 	}
 	if (options.regularFilterCopy !== null) {
 		headers.push({ type: "summary", text: options.regularFilterCopy.summary });
@@ -109,6 +112,10 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 }
 
 function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFlowPresentation {
+	const action = { label: t("settings.attention.retry"), action: "refresh-shuffle-day" };
+	const feedback: CardFlowHeader[] = [snapshot.error, snapshot.historyError].filter((text): text is string => !!text)
+		.map(text => ({ type: "summary", text, feedback: true, ...(text === snapshot.error ? { action } : {}) }));
+	const retry: CardFlowHeader = { type: "summary", text: "", action };
 	if (snapshot.status === "idle" || (snapshot.status === "loading"
 		&& (snapshot.selectedDate === null || snapshot.stats === null || snapshot.memos.length === 0))) {
 		return {
@@ -136,13 +143,15 @@ function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFl
 			type: "empty",
 			title: t("shuffleDay.emptyDayClearedTitle"),
 			description: t("shuffleDay.emptyDayClearedDesc"),
+			headers: [...feedback, retry],
 		};
 	}
 	if (snapshot.status === "failed") {
 		return {
 			type: "empty",
 			title: t("shuffleDay.failedTitle"),
-			description: t("shuffleDay.failedDesc"),
+			description: snapshot.error ?? t("shuffleDay.failedDesc"),
+			headers: [retry],
 		};
 	}
 	if (snapshot.selectedDate === null || snapshot.stats === null || snapshot.memos.length === 0) {
@@ -156,7 +165,7 @@ function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFl
 		type: "items",
 		memos: snapshot.memos,
 		mode: "memo",
-		headers: [{ type: "shuffle-day", selectedDate: snapshot.selectedDate, stats: snapshot.stats }],
+		headers: [{ type: "shuffle-day", selectedDate: snapshot.selectedDate, stats: snapshot.stats }, ...feedback],
 	};
 }
 

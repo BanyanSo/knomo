@@ -8,7 +8,7 @@ import type { MarkdownMutationService } from "../src/types/memoOperations";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失败不误报成功", async () => {
+test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失败不误报成功", async t => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -36,9 +36,12 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	const deleted = { items: (await trash.store.query()).items.map(toTrashMemoItem) };
 	assert.deepEqual(deleted.items.map((memo) => memo.snapshotId), ["s1", "s2"]);
 	assert.equal(deleted.items[0]!.createdAt, "2026-08-22T12:34");
+	t.mock.method(read, "readMemoItems", async () => { throw new Error("readback unavailable"); });
 	const pendingResult = await command.restore(deleted.items[0]!);
 	assert.equal(pendingResult.status, "saved");
 	assert.equal("cleanupPending" in pendingResult && pendingResult.cleanupPending, true);
+	assert.equal(pendingResult.memo, null); assert.equal(pendingResult.localRefreshPending, true);
+	t.mock.restoreAll();
 	pending = false;
 	assert.equal((await command.restore(deleted.items[0]!)).status, "saved");
 	await command.purge(deleted.items[1]!);

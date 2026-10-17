@@ -7,6 +7,7 @@ import type { CatalogQueryFilter } from "../types/catalog";
 import { getCatalogQueryKey } from "../services/SearchMatching";
 import { CatalogQueryCancelledError, compareCatalogObservations } from "../services/MemoCatalogStore";
 import { SearchSession } from "./SearchSession";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import { buildSearchSourceScope } from "./SearchSourceScope";
 import { bindSearchInput } from "./SearchInputBinding";
 import { renderSearchDateHint } from "./SearchDateHint";
@@ -542,7 +543,8 @@ export class MobileSearchController {
 				this.session.requestStatus = this.session.result === null ? "idle" : "ready";
 				return;
 			}
-			this.queryError = error instanceof Error ? error.message : t("empty.cardFlowFailed");
+			logContinuationFailure("mobile-search", "query", error, run);
+			this.queryError = t("feedback.loadFailed");
 			this.session.requestStatus = "failed";
 		} finally {
 			if (this.queryController === controller) this.queryController = null;
@@ -707,8 +709,9 @@ export class MobileSearchController {
 		const memos = this.getMatchedMemos();
 		const visibleMemos = memos.slice(0, this.visibleCount);
 		const revisions = visibleMemos.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
-		const status = this.session.result === null
-			? (this.hasSearchConditions() ? this.queryError ?? t("empty.loadingAllMemos") : null) : this.options.getThingsStatus?.() ?? null;
+		const status = this.queryError !== null ? (memos.length > 0 ? t("feedback.refreshFailed") : this.queryError)
+			: this.session.result === null ? (this.hasSearchConditions() ? t("empty.loadingAllMemos") : null) : this.options.getThingsStatus?.() ?? null;
+		const statusChanged = status !== this.renderedStatus;
 		if (metadataOnly && this.session.requestStatus === "ready") this.displayedCount = this.options.getMatchedTotalCount?.() ?? this.displayedCount;
 		this.syncControls();
 		// 总数晚到时仅沿用已开始渲染的卡片列表；空搜索提示不能新增加载入口。
@@ -766,7 +769,14 @@ export class MobileSearchController {
 			completeRender();
 			return;
 		}
-		if (status) renderKnomoListSummary(resultsEl, status);
+		if (status) {
+			const summary = renderKnomoListSummary(resultsEl, status);
+			if (this.queryError !== null) {
+				summary.setAttr("role", "status"); summary.setAttr("aria-live", statusChanged ? "polite" : "off");
+				const retry = summary.createEl("button", { cls: "knomo-inline-button", text: t("settings.attention.retry"), attr: { type: "button" } });
+				retry.addEventListener("click", event => { event.stopPropagation(); void this.refreshAppliedResults(); });
+			}
+		}
 		if (memos.length === 0 && status) { completeRender(); return; }
 		if (memos.length === 0) {
 			resultsEl.createDiv({

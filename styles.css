@@ -1741,6 +1741,20 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	display: none;
 }
 
+.knomo-plugin .knomo-page-feedback {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 8px 0;
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+
+.knomo-plugin .knomo-page-feedback[hidden] { display: none; }
+.knomo-setting-operation-result { margin: 8px 0; overflow-wrap: anywhere; }
+.knomo-setting-operation-result.is-error { color: var(--text-error); }
+
 /* --------------------------------------------------------------------------
    8. Composer
    -------------------------------------------------------------------------- */
@@ -2928,10 +2942,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-setting-help.is-error {
 	color: var(--text-error);
-}
-
-.knomo-scan-result {
-	margin: var(--size-4-2) 0 var(--size-4-4);
 }
 
 .knomo-plugin .knomo-muted-text {

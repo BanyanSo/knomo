@@ -97,6 +97,7 @@ export function renderKnomoComposer(container: HTMLElement, options: RenderKnomo
 	});
 	const statusEl = composerEl.createDiv({
 		cls: options.dailyEnabled ? "knomo-status" : "knomo-status is-error",
+		attr: { role: "status", "aria-live": "polite" },
 	});
 	const imageStatusEl = composerEl.createDiv({ cls: "knomo-image-status", attr: { hidden: "", role: "status", "aria-live": "polite" } });
 	imageStatusEl.createSpan({ text: t("composer.imagesPending") });

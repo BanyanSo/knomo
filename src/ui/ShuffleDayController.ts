@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import {
 	buildShuffleDayStats,
 	getMemoLocalDateKey,
@@ -24,6 +25,7 @@ export interface ShuffleDaySnapshot {
 	memos: MemoRecord[];
 	stats: ShuffleDayStats | null;
 	error: string | null;
+	historyError?: string | null;
 }
 
 export interface ShuffleDayRequest {
@@ -36,7 +38,6 @@ interface ShuffleDayControllerOptions {
 	selectShuffleDay: (request: ShuffleDayRequest) => Promise<ShuffleDaySelectionResult>;
 	acceptSelection: (date: string) => Promise<void>;
 	isShuffleDayActive: () => boolean;
-	showNotice: (message: string) => void;
 	requestRender: () => void;
 }
 
@@ -46,6 +47,7 @@ export class ShuffleDayController {
 	private memos: MemoRecord[] = [];
 	private stats: ShuffleDayStats | null = null;
 	private error: string | null = null;
+	private historyError: string | null = null;
 	private loading = false;
 	private runId = 0;
 	private request: AbortController | null = null;
@@ -59,6 +61,7 @@ export class ShuffleDayController {
 			memos: this.memos,
 			stats: this.stats,
 			error: this.error,
+			historyError: this.historyError,
 		};
 	}
 
@@ -69,6 +72,7 @@ export class ShuffleDayController {
 		this.memos = [];
 		this.stats = null;
 		this.error = null;
+		this.historyError = null;
 	}
 
 	cancelPending(): void {
@@ -107,8 +111,8 @@ export class ShuffleDayController {
 			if (runId !== this.runId) return false;
 			if (!this.options.isShuffleDayActive()) { this.cancelPending(); return false; }
 			this.status = previousStatus;
-			this.error = formatServiceError(error, t("shuffleDay.failedDesc"));
-			this.options.showNotice(this.error);
+			this.error = this.memos.length > 0 ? t("feedback.refreshFailed") : formatServiceError(error, t("shuffleDay.failedDesc"));
+			logContinuationFailure("shuffle-day", "selected-date", error, runId);
 			return false;
 		} finally {
 			if (this.request === request) this.request = null;
@@ -198,14 +202,15 @@ export class ShuffleDayController {
 			if (result.status === "ready") {
 				this.selectedDate = result.selectedDate;
 				this.setSelectedMemos(result.memos);
-				if (result.historyUnavailable) this.options.showNotice(t("shuffleDay.historyReadFailed"));
+				this.historyError = result.historyUnavailable ? t("shuffleDay.historyReadFailed") : null;
 				void this.options.acceptSelection(result.selectedDate).catch(error => {
 					if (runId !== this.runId || !this.options.isShuffleDayActive()) return;
-					this.options.showNotice(t("error.actionFailedWithReason", {
-						action: t("shuffleDay.historySaveFailed"), message: formatServiceError(error, t("shuffleDay.historySaveFailed")),
-					}));
+					logContinuationFailure("shuffle-day", "history-write", error, runId);
+					this.historyError = [this.historyError, t("shuffleDay.historySaveFailed")].filter(Boolean).join(" ");
+					this.requestRenderIfActive();
 				});
 			} else {
+				this.historyError = null;
 				this.selectedDate = null;
 				this.memos = [];
 				this.stats = null;
@@ -215,8 +220,8 @@ export class ShuffleDayController {
 			if (runId !== this.runId) return;
 			if (!this.options.isShuffleDayActive()) { this.cancelPending(); return; }
 			this.status = hasCommittedSelection ? previousStatus : "failed";
-			this.error = formatServiceError(error, t("shuffleDay.failedDesc"));
-			this.options.showNotice(this.error);
+			this.error = hasCommittedSelection ? t("feedback.refreshFailed") : formatServiceError(error, t("shuffleDay.failedDesc"));
+			logContinuationFailure("shuffle-day", "selection", error, runId);
 		} finally {
 			if (this.request === request) this.request = null;
 			if (runId === this.runId) {

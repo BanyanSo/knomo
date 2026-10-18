@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { undo, undoDepth } from "@codemirror/commands";
 import type { Menu, MenuItem, MenuPositionDef } from "obsidian";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoAction } from "../src/ui/KnomoActionDispatch";
@@ -698,7 +699,9 @@ async function useRealComposerActions(h: Awaited<ReturnType<typeof createHarness
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const proto = KnomoView.prototype as unknown as {
 		handleMemoAction(action: MemoAction, memo: MemoViewItem): Promise<void>;
-		focusComposerInputNow(resize?: boolean, viewport?: boolean): void;
+		focusComposerInputNow(resize?: boolean, viewport?: boolean, moveToEnd?: boolean): void;
+		openComposer(): void;
+		applyRestoredDraftSelection(): void;
 	};
 	const { f, view } = h;
 	Object.assign(f.win.HTMLElement.prototype, {
@@ -727,17 +730,86 @@ async function useRealComposerActions(h: Awaited<ReturnType<typeof createHarness
 		setComposerOpen: value => { view.composerOpen = value; }, getCardFlowScrollTop: () => 0,
 		registerBackdropClick: (element, handler) => element.addEventListener("click", handler),
 		closeComposerKeepingDraft: () => controller.closeKeepingDraft(),
-		focusInputNow: (resize, viewport) => {
+		focusInputNow: (resize, viewport, moveToEnd) => {
 			focusStates.push(f.win.document.hasFocus());
-			proto.focusComposerInputNow.call(view, resize, viewport);
+			proto.focusComposerInputNow.call(view, resize, viewport, moveToEnd);
 		},
 		resizeInput: () => undefined, syncRootState: () => undefined, syncComposerMode: () => undefined,
 		updateSendButtonState: () => undefined, updateCancelEditButtonState: () => undefined,
 	});
 	Object.assign(view, { mobileComposerController: controller });
 	controller.prepare();
-	return { controller, focusStates, done: () => pending };
+	return { controller, focusStates, done: () => pending,
+		open: () => proto.openComposer.call(view),
+		restoreSelection: (anchor: number, head: number) => {
+			Object.assign(view, { restoredDraftSelection: { anchor, head, scrollTop: 0 } });
+			proto.applyRestoredDraftSelection.call(view);
+		},
+	};
 }
+
+test("移动端从收起状态打开恢复草稿时，真实编辑器光标落在全文末尾", async t => {
+	for (const { text, anchor, head } of [
+		{ text: "第一行草稿\n\n最后一段继续写 📝", anchor: 0, head: 0 },
+		{ text: "恢复中的反向选区\n最后一段", anchor: 5, head: 2 },
+		{ text: "保留末尾空行\n\n", anchor: 0, head: 0 },
+		{ text: "", anchor: 0, head: 0 },
+	]) {
+		await t.test(JSON.stringify(text), async () => {
+			const h = await createHarness();
+			const real = await useRealComposerActions(h);
+			try {
+				const input = h.f.view.inputEl;
+				const editor = input.composer.view;
+				input.value = text;
+				real.restoreSelection(anchor, head);
+				input.blur();
+				const doc = editor.state.doc;
+				real.open();
+				assert.equal(h.f.win.document.activeElement, input);
+				assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [text.length, text.length]);
+				await new Promise(resolve => h.f.win.requestAnimationFrame(resolve));
+				assert.equal(editor.state.selection.main.head, text.length, "后续视口更新不能再把光标移回行首");
+				const selection = h.f.win.getSelection()!;
+				assert.equal(editor.posAtDOM(selection.anchorNode!, selection.anchorOffset), text.length);
+				assert.equal(selection.isCollapsed, true);
+				assert.equal(editor.state.doc, doc, "打开草稿只移动光标，不重置正文");
+			} finally { real.controller.dispose(); h.close(); }
+		});
+	}
+});
+
+test("移动草稿重新展开定位末尾，已展开时再次聚焦保留选区与撤销历史", async () => {
+	const h = await createHarness();
+	const real = await useRealComposerActions(h);
+	try {
+		const input = h.f.view.inputEl;
+		const editor = input.composer.view;
+		const original = "第一段\n最后一段";
+		input.value = original;
+		editor.dispatch({ changes: { from: original.length, insert: "继续写" }, selection: { anchor: 0 } });
+		const doc = editor.state.doc;
+		assert.equal(undoDepth(editor.state), 1);
+		real.open();
+		assert.equal(editor.state.selection.main.head, doc.length);
+		editor.dispatch({ selection: { anchor: 5, head: 2 } });
+		real.open();
+		assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [5, 2]);
+		input.blur();
+		real.controller.focusInputSoon();
+		await new Promise(resolve => h.f.win.requestAnimationFrame(resolve));
+		assert.equal(h.f.win.document.activeElement, input);
+		assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [5, 2]);
+		real.controller.closeKeepingDraft();
+		assert.equal(h.view.composerOpen, false);
+		real.open();
+		assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [doc.length, doc.length]);
+		assert.equal(editor.state.doc, doc);
+		assert.equal(undoDepth(editor.state), 1);
+		assert.equal(undo(editor), true);
+		assert.equal(input.value, original);
+	} finally { real.controller.dispose(); h.close(); }
+});
 
 test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Composer 和 CodeMirror 获得焦点", async () => {
 	for (const index of [0, 1]) {

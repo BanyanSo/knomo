@@ -2918,6 +2918,29 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	font-size: var(--knomo-text-caption);
 }
 
+/* 首屏短暂等待保持安静，骨架沿用卡片区域的布局。 */
+.knomo-plugin .knomo-loading-placeholder {
+	min-height: 180px;
+}
+
+.knomo-plugin .knomo-loading-card {
+	margin-bottom: var(--size-4-3);
+	padding: var(--size-4-4);
+	border: var(--border-width) solid var(--knomo-soft-border);
+	border-radius: var(--radius-m);
+}
+
+.knomo-plugin .knomo-loading-line {
+	height: 10px;
+	margin: var(--size-4-2) 0;
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+}
+
+.knomo-plugin .knomo-loading-line.is-short {
+	width: 30%;
+}
+
 .knomo-plugin .knomo-catalog-status {
 	display: flex;
 	align-items: center;
@@ -3870,12 +3893,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	min-width: 0;
 }
 
-.knomo-plugin .knomo-record-stats-updating {
-	align-self: flex-end;
-	color: var(--text-muted);
-	font-size: var(--knomo-text-caption);
-}
-
 .knomo-plugin .knomo-record-stats-subtitle {
 	margin: 0;
 	color: var(--text-normal);
@@ -4265,8 +4282,7 @@ body .knomo-mobile-create-fab.is-hidden {
 	text-align: center;
 }
 
-.knomo-plugin .knomo-record-stats-state,
-.knomo-plugin .knomo-record-stats-loading {
+.knomo-plugin .knomo-record-stats-state {
 	display: flex;
 	align-items: center;
 	flex-direction: column;
@@ -4278,13 +4294,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	text-align: center;
 }
 
-.knomo-plugin .knomo-record-stats-loading {
-	position: absolute;
-	z-index: 2;
-	inset-block-start: 0;
-	inset-inline: 0;
-	min-height: 76px;
-	padding: var(--size-4-2) var(--size-4-4);
+.knomo-plugin .knomo-record-stats-pending {
+	min-height: 180px;
 }
 
 .knomo-plugin .knomo-record-stats-state-title {

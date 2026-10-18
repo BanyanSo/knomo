@@ -90,7 +90,7 @@ test("Catalog 扫描进度不触发卡片全量刷新，交互路径不构建全
 	const readService = fs.readFileSync("src/services/CatalogReadService.ts", "utf8");
 	const commandService = fs.readFileSync("src/services/MemoCommandService.ts", "utf8");
 	const catalogStore = fs.readFileSync("src/services/MemoCatalogStore.ts", "utf8");
-	assert.equal(main.includes("onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage)"), true);
+	assert.match(main, /onProgress: \(coverage, scan\) => this\.updateOpenViewCatalogProgress\(coverage, scan\)/u);
 	assert.equal(main.includes("onProgress: () => this.queueRefreshOpenViews()"), false);
 	assert.equal(main.includes("materializeResolutionSnapshot()"), false);
 	assert.equal(commandService.includes("materializeResolutionSnapshot()"), false);

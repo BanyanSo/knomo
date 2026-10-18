@@ -18,7 +18,9 @@ import {
 	type RecordStatsSearchFilter,
 	type SearchDateFilter,
 } from "./viewFilters";
-import { renderKnomoListSummary, renderKnomoLoadMoreButton } from "./KnomoFeed";
+import { renderKnomoListSummary, renderKnomoLoadMoreButton, renderKnomoCardFlowHeaders, renderKnomoLoadingPlaceholder } from "./KnomoFeed";
+import { DelayedLoadingIndicator } from "./DelayedLoadingIndicator";
+import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import { renderKnomoMobileSearchPage } from "./KnomoMobileSearchPage";
 import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
 
@@ -34,7 +36,7 @@ interface MobileSearchControllerOptions {
 	scheduleRenderTask?: (callback: () => void) => number;
 	cancelRenderTask?: (id: number) => void;
 	prioritizeMarkdown?: (root: HTMLElement, scrollTop: number) => void;
-	getThingsStatus?: () => string | null;
+	getResultStatus?: (filter: CatalogQueryFilter) => { headers: CardFlowHeader[]; complete: boolean; blocked: boolean };
 	getThingsContext?: () => ThingsSearchContext | undefined;
 	syncThingsSearch?: (query: string, date: SearchDateFilter | null) => void;
 	getCatalogRevision?: () => number;
@@ -43,6 +45,7 @@ interface MobileSearchControllerOptions {
 	debounceMs: number;
 	getWindow: () => Window;
 	getDocument: () => Document;
+	isVisible?: () => boolean;
 	getRootEl: () => HTMLElement | null;
 	isMobileLayout: () => boolean;
 	getMemos: () => MemoRecord[];
@@ -113,6 +116,8 @@ export class MobileSearchController {
 	private scrollRevision = 0;
 	private renderRun = 0;
 	private renderedStatus: string | null = null;
+	private renderedPending = false;
+	private readonly loadingIndicator: DelayedLoadingIndicator;
 	private pendingScrollTop: number | null = null;
 	private renderedCards: Array<{ memo: MemoRecord; card: HTMLElement }> = [];
 	private seedPlaceholder: ReturnType<typeof createMemoRenderPlaceholders> | null = null;
@@ -120,6 +125,10 @@ export class MobileSearchController {
 
 	constructor(private readonly options: MobileSearchControllerOptions) {
 		this.visibleCount = options.batchSize;
+		this.loadingIndicator = new DelayedLoadingIndicator({
+			scheduleTask: (callback, delay) => options.getWindow().setTimeout(callback, delay),
+			cancelTask: id => options.getWindow().clearTimeout(id),
+		});
 	}
 
 	get isOpen(): boolean {
@@ -509,7 +518,7 @@ export class MobileSearchController {
 			if (this.session.requestStatus === "ready") this.renderResults("content-change");
 			return;
 		}
-		this.cancelPendingRequest();
+		this.cancelPendingRequest(false);
 		const controller = new AbortController();
 		this.queryController = controller;
 		const run = ++this.queryRun, version = this.session.version;
@@ -549,10 +558,13 @@ export class MobileSearchController {
 
 	refreshAppliedResults(): Promise<void> { return this.refreshRemoteResults(true); }
 
-	cancelPendingRequest(): void {
+	cancelPendingRequest(clearIndicator = true): void {
 		this.queryController?.abort();
 		this.queryController = null;
+		if (clearIndicator) this.loadingIndicator.clear();
 	}
+
+	suspendLoadingFeedback(): void { this.loadingIndicator.clear(); }
 
 	getDisplayedMemos(): readonly MemoRecord[] { return this.displayedMemos ?? []; }
 
@@ -665,13 +677,26 @@ export class MobileSearchController {
 		const memos = this.getMatchedMemos();
 		const visibleMemos = memos.slice(0, this.visibleCount);
 		const revisions = visibleMemos.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
+		const readStatus = this.options.getResultStatus?.(this.getDisplayedFilter());
+		const waiting = this.hasSearchConditions() && this.session.requestStatus === "pending" && !readStatus?.blocked
+			&& this.options.isVisible?.() !== false && this.options.getDocument().visibilityState !== "hidden";
+		const visible = waiting && this.session.result === null ? this.loadingIndicator.pending(viewKey, () => {
+			if (this.open && this.options.isVisible?.() !== false && this.options.getDocument().visibilityState !== "hidden") this.renderResults("content-change", true, true);
+			else this.loadingIndicator.clear();
+		}) : false;
+		if (!waiting || this.session.result !== null) this.loadingIndicator.clear();
+		const headers: CardFlowHeader[] = this.queryError !== null ? [] : [...(readStatus?.headers ?? [])];
+		if (this.session.result !== null && readStatus?.complete === false && headers.length === 0) {
+			headers.push({ type: "summary", text: t("catalog.incompleteResults") });
+		}
 		const status = this.queryError !== null ? (memos.length > 0 ? t("feedback.refreshFailed") : this.queryError)
-			: this.session.result === null ? (this.hasSearchConditions() ? t("empty.loadingAllMemos") : null) : this.options.getThingsStatus?.() ?? null;
+			: headers.length > 0 ? JSON.stringify(headers) : null;
 		const statusChanged = status !== this.renderedStatus;
 		if (metadataOnly && this.session.requestStatus === "ready") this.displayedCount = this.options.getMatchedTotalCount?.() ?? this.displayedCount;
 		this.syncControls();
 		// 总数晚到时仅沿用已开始渲染的卡片列表；空搜索提示不能新增加载入口。
-		if (metadataOnly && sameView && !status && this.renderedStatus === status
+		if (metadataOnly && sameView && this.renderedPending === waiting && this.renderedStatus === status
+			&& (this.session.result !== null || !waiting)
 			&& revisions.length === this.targetRevisions.length
 			&& revisions.every((revision, index) => revision === this.targetRevisions[index])) {
 			this.syncResultMetadata(memos.length, visibleMemos.length, this.renderTaskId === null);
@@ -714,6 +739,7 @@ export class MobileSearchController {
 			}
 		};
 		this.renderedStatus = status;
+		this.renderedPending = waiting;
 		this.renderedViewKey = viewKey;
 		this.syncDateButtons();
 		if (!this.hasSearchConditions()) {
@@ -725,13 +751,19 @@ export class MobileSearchController {
 			completeRender();
 			return;
 		}
-		if (status) {
+		if (this.queryError === null) renderKnomoCardFlowHeaders(resultsEl, headers);
+		if (status && this.queryError !== null) {
 			const summary = renderKnomoListSummary(resultsEl, status);
 			if (this.queryError !== null) {
 				summary.setAttr("role", "status"); summary.setAttr("aria-live", statusChanged ? "polite" : "off");
 				const retry = summary.createEl("button", { cls: "knomo-inline-button", text: t("settings.attention.retry"), attr: { type: "button" } });
 				retry.addEventListener("click", event => { event.stopPropagation(); void this.refreshAppliedResults(); });
 			}
+		}
+		if (this.session.result === null && this.queryError === null) {
+			if (waiting) renderKnomoLoadingPlaceholder(resultsEl, visible);
+			completeRender();
+			return;
 		}
 		if (memos.length === 0 && status) { completeRender(); return; }
 		if (memos.length === 0) {
@@ -805,7 +837,7 @@ export class MobileSearchController {
 
 	getStateKey(): string {
 		return JSON.stringify([this.open, this.getViewStateKey(), this.getVisibleMemos().map(getMemoRenderRevision),
-			this.session.result?.catalogRevision, this.session.result?.coverageKey]);
+			this.session.result?.catalogRevision, this.session.result?.coverageKey, this.options.getResultStatus?.(this.getDisplayedFilter())]);
 	}
 
 	getViewStateKey(): string { return getCatalogQueryKey(this.getAppliedFilter()); }

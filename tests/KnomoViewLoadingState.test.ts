@@ -11,6 +11,7 @@ import { renderKnomoCardFlowHeaders } from "../src/ui/KnomoFeed";
 import type { CardFlowPresentation } from "../src/ui/KnomoCardFlowPresenter";
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import { RecordStatsViewStateController } from "../src/ui/RecordStatsViewStateController";
+import { DelayedLoadingIndicator } from "../src/ui/DelayedLoadingIndicator";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { createReferenceMemo } from "./helpers/referenceMemo";
@@ -32,12 +33,18 @@ test("桌面与移动首查等待时，焦点日期检查和强制重绘不能�
 		h.view.loadCatalogMemos = () => load.promise;
 		const pending = h.loadInitial();
 		try {
-			assert.equal(h.title(), t("empty.loadingAllMemos"));
+			assert.equal(h.title(), null, "快速首查不能先闪现加载文字");
 			h.view.handleLocalDateChange();
-			assert.equal(h.title(), t("empty.loadingAllMemos"));
+			assert.equal(h.title(), null);
 			h.view.forceRebuildCardFlow();
-			assert.equal(h.title(), t("empty.loadingAllMemos"));
+			assert.equal(h.title(), null);
+			h.revealLoading();
+			assert.ok(h.root.querySelector(".knomo-loading-skeleton"));
+			assert.equal(h.root.querySelector(".knomo-loading-placeholder")?.textContent, "", "等待骨架不显示系统阶段文案");
 			assert.equal(h.root.querySelector("[role='status']")?.getAttribute("aria-live"), "polite");
+			const status = h.root.querySelector("[role='status']");
+			h.view.forceRebuildCardFlow();
+			assert.equal(h.root.querySelector("[role='status']"), status, "重复重绘不重复创建朗读区域");
 			load.resolve(readyLoad([memo("first")]));
 			await pending;
 			assert.equal(h.title(), null);
@@ -57,7 +64,9 @@ test("移动首查构建中的空结果和已知子集都不能提前确认完�
 			h.view.loadCatalogMemos = async () => buildingLoad(items);
 			await h.loadInitial();
 			h.view.handleLocalDateChange();
-			assert.equal(h.title(), t("empty.loadingAllMemos"));
+			assert.equal(h.title(), null);
+			h.revealLoading();
+			assert.ok(h.root.querySelector(".knomo-loading-placeholder"));
 			assert.equal(h.view.hasCommittedCatalogDesktopQuery, false);
 			assert.deepEqual(h.cards(), []);
 			h.view.loadCatalogMemos = async () => readyLoad([memo("complete")]);
@@ -146,6 +155,135 @@ test("移动首查不完整但存在故障时保留诊断操作，不被加载�
 		h.view.handleLocalDateChange();
 		assert.notEqual(h.root.querySelector("[data-action='open-catalog-settings']"), null);
 		assert.equal(h.title(), null);
+		assert.equal(h.view.hasCommittedCatalogDesktopQuery, false);
+	} finally { h.close(); }
+});
+
+test("快速首查完成后旧计时器不能再覆盖卡片，切换独立页面会取消提示", async () => {
+	for (const mobile of [false, true]) {
+		const h = await createLoadingHarness(mobile);
+		try {
+			h.view.loadCatalogMemos = async () => readyLoad([memo("fast")]);
+			await h.loadInitial();
+			h.revealLoading();
+			assert.deepEqual(h.cards(), ["fast"]);
+			assert.equal(h.root.querySelector(".knomo-loading-placeholder"), null);
+			h.view.hasCommittedCatalogDesktopQuery = false;
+			h.view.initialCatalogQueryPending = true;
+			h.view.memos = [];
+			h.view.renderCardFlow();
+			h.view.activeNav = "random";
+			h.view.forceRebuildCardFlow();
+			h.revealLoading();
+			assert.equal(h.title(), t("empty.randomLoading"));
+		} finally { h.close(); }
+	}
+});
+
+test("Monthly 故障可见，但不能把构建中的子集提交为首批完整结果", async () => {
+	for (const mobile of [false, true]) {
+		const h = await createLoadingHarness(mobile);
+		try {
+			h.view.loadCatalogMemos = async () => ({ ...buildingLoad([memo("subset")]), status: { content: "scanning", catalog: "partial", projection: "failed" } });
+			await h.loadInitial();
+			assert.equal(h.view.hasCommittedCatalogDesktopQuery, false);
+			assert.deepEqual(h.cards(), []);
+			assert.ok(h.root.querySelector("[data-action='open-catalog-settings']"));
+			h.revealLoading();
+			assert.ok(h.root.querySelector(".knomo-loading-placeholder"));
+		} finally { h.close(); }
+	}
+});
+
+test("部分文件失败等待重试时退出忙碌占位并保留重试入口", async () => {
+	const h = await createLoadingHarness(true);
+	try {
+		h.view.loadCatalogMemos = async () => ({ ...buildingLoad([]), status: { content: "scanning", catalog: "partial", projection: "ready", scan: { state: "waiting-retry", failedFileCount: 1 } } });
+		await h.loadInitial();
+		h.revealLoading();
+		assert.equal(h.root.querySelector(".knomo-loading-placeholder"), null);
+		assert.ok(h.root.querySelector("[data-action='refresh-catalog-sync-state']"));
+		assert.equal(h.view.hasCommittedCatalogDesktopQuery, false);
+	} finally { h.close(); }
+});
+
+test("首查被取消且没有扫描在运行时不留下正在加载或真实空库", async () => {
+	const { CatalogQueryCancelledError } = await import("../src/services/MemoCatalogStore");
+	for (const mobile of [false, true]) {
+		const h = await createLoadingHarness(mobile);
+		try {
+			h.view.loadCatalogMemos = async () => { throw new CatalogQueryCancelledError(); };
+			await h.loadInitial();
+			h.revealLoading();
+			assert.equal(h.root.querySelector(".knomo-loading-placeholder"), null);
+			assert.equal(h.title(), null);
+		} finally { h.close(); }
+	}
+});
+
+test("尚未提交 Catalog 首查时重新查询不能撤下已确认保存的卡片", async () => {
+	const h = await createLoadingHarness(false);
+	const load = deferred<MemoLoad>();
+	try {
+		h.view.hasConfirmedMemoPresentation = true;
+		h.view.memos = [memo("saved")];
+		h.view.renderCardFlow();
+		const card = h.root.querySelector(".knomo-card");
+		h.view.loadCatalogMemos = () => load.promise;
+		const pending = h.loadInitial();
+		assert.equal(h.root.querySelector(".knomo-card"), card);
+		assert.equal(h.root.querySelector(".knomo-loading-placeholder"), null);
+		load.resolve(readyLoad([memo("saved")]));
+		await pending;
+	} finally { load.resolve(readyLoad([])); h.close(); }
+});
+
+test("统计首次等待遇到设置故障或日记关闭，直接显示指引而不是无限加载", async () => {
+	const h = await createLoadingHarness(false);
+	try {
+		h.view.activeNav = "record-stats";
+		h.view.catalogStatus = { content: "scanning", catalog: "partial", projection: "ready", settings: "unavailable" };
+		h.view.renderCardFlow();
+		assert.ok(h.root.querySelector("[data-action='open-catalog-settings']"));
+		assert.equal(h.root.querySelector("[aria-busy='true']"), null);
+		h.view.getDailyNotesStatus = () => ({ enabled: false });
+		h.view.renderCardFlow();
+		assert.ok(h.root.textContent?.includes(t("service.dailyNotesDisabled")));
+		assert.equal(h.root.querySelector(".knomo-record-stats-loading"), null);
+	} finally { h.close(); }
+});
+
+test("历史未完整时保存过其他范围的卡片，不得把不匹配筛选当成真实空库", async () => {
+	const h = await createLoadingHarness(false);
+	try {
+		h.view.hasConfirmedMemoPresentation = true;
+		h.view.memos = [memo("saved-elsewhere")];
+		h.view.getFilteredMemos = () => [];
+		h.view.loadCatalogMemos = async () => buildingLoad([]);
+		await h.loadInitial();
+		assert.equal(h.view.hasCommittedCatalogDesktopQuery, false);
+		assert.equal(h.title(), null);
+		assert.ok(h.root.querySelector(".knomo-loading-placeholder"));
+		h.view.hasCommittedCatalogDesktopQuery = true;
+		h.view.renderCardFlow();
+		assert.equal(h.title(), null);
+		assert.ok(h.root.textContent?.includes(t("catalog.incompleteResults")));
+	} finally { h.close(); }
+});
+
+test("隐藏视图时延迟回调不能绘制骨架，重新显示后从安静等待恢复", async () => {
+	const h = await createLoadingHarness(false);
+	try {
+		h.view.initialCatalogQueryPending = true;
+		h.view.renderCardFlow();
+		h.setShown(false);
+		h.revealLoading();
+		assert.equal(h.root.querySelector(".knomo-loading-skeleton"), null);
+		h.setShown(true);
+		h.view.handleLocalDateChange();
+		assert.equal(h.root.querySelector(".knomo-loading-skeleton"), null);
+		h.revealLoading();
+		assert.ok(h.root.querySelector(".knomo-loading-skeleton"));
 	} finally { h.close(); }
 });
 
@@ -247,8 +385,15 @@ async function createLoadingHarness(mobile: boolean) {
 		setAttrs(this: HTMLElement, attrs: Record<string, string>) { for (const [key, value] of Object.entries(attrs)) this.setAttribute(key, value); },
 	});
 	const root = dom.window.document.body.createDiv({ cls: "knomo-card-flow" });
+	let shown = true;
+	let reveal: (() => void) | null = null;
+	const loading = new DelayedLoadingIndicator({
+		scheduleTask: callback => { reveal = callback; return 1; },
+		cancelTask: () => { reveal = null; },
+	});
 	const view = Object.assign(Object.create(KnomoView.prototype), {
-		containerEl: { win: dom.window }, cardFlowEl: root, trashViewClosed: false,
+		loadingIndicators: new Map([["cards", loading]]),
+		containerEl: { win: dom.window, isShown: () => shown }, cardFlowEl: root, trashViewClosed: false,
 		viewStateController: new KnomoViewStateController(), currentLayout: mobile ? "mobile" : "desktop-wide",
 		settingsService: { getSettings: () => ({ recentTimeFlowEnabled: false, timeBuoyEnabled: true }) },
 		lastKnownLocalDate: formatTimeBuoyDate(new Date()), recentLifecycleKey: "", composerOpen: false,
@@ -273,7 +418,7 @@ async function createLoadingHarness(mobile: boolean) {
 		renderHistoryLoadMore: () => {}, restorePendingCardFlowScrollTop: () => {}, stopDateChangeWatcher: () => {}, startDateChangeWatcher: () => {},
 	});
 	const renderItems = (presentation: Extract<CardFlowPresentation, { type: "items" }>) => {
-		if (root.querySelector(".knomo-empty-state") === null && presentation.headers.length === 0
+		if (root.querySelector(".knomo-empty-state, .knomo-loading-placeholder") === null && presentation.headers.length === 0
 			&& JSON.stringify(Array.from(root.querySelectorAll(".knomo-card"), card => card.getAttribute("data-memo-id"))) === JSON.stringify(presentation.memos.map(item => item.id))
 			&& root.childElementCount > 0) return;
 		root.replaceChildren();
@@ -282,7 +427,7 @@ async function createLoadingHarness(mobile: boolean) {
 	};
 	view.syncCardFlowPresentation = renderItems;
 	return {
-		view, root,
+		view, root, revealLoading: () => { reveal?.(); }, setShown: (value: boolean) => { shown = value; },
 		loadInitial: (): Promise<unknown> => mobile ? view.loadInitialMobileMemos() : view.reloadCurrentCatalogQuery(true),
 		title: () => root.querySelector(".knomo-empty-title")?.textContent ?? null,
 		cards: () => Array.from(root.querySelectorAll(".knomo-card"), card => card.getAttribute("data-memo-id")),

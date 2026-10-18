@@ -18,6 +18,11 @@ export type CatalogContentState = "ready" | "scanning" | "unavailable";
 export type CatalogState = "partial" | "complete" | "degraded";
 export type MonthlyProjectionState = "ready" | "stale" | "failed";
 
+export interface CatalogScanSnapshot {
+	state: "idle" | "scanning" | "paused" | "waiting-retry";
+	failedFileCount: number;
+}
+
 
 export interface CatalogReadStatus {
 	settings?: KnomoSettingsLoadStatus;
@@ -25,6 +30,7 @@ export interface CatalogReadStatus {
 	catalog: CatalogState;
 	currentConfiguration?: KnomoCurrentConfigStatus;
 	projection: MonthlyProjectionState;
+	scan?: CatalogScanSnapshot;
 
 }
 

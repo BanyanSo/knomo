@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getCatalogReadStatusHeaders } from "../src/ui/CatalogReadStatusPresenter";
+import { getCatalogReadStatusHeaders, hasCatalogReadBlocker } from "../src/ui/CatalogReadStatusPresenter";
 import type { CatalogCoverage } from "../src/types/catalog";
 
 const completeCoverage: CatalogCoverage = {
@@ -11,6 +11,24 @@ const completeCoverage: CatalogCoverage = {
 	coveredFileCount: 2,
 	totalFileCount: 2,
 };
+
+test("Monthly 故障与扫描失败分开判断，不把等待重试伪装为仍在扫描", () => {
+	const status = { content: "scanning" as const, catalog: "partial" as const, projection: "failed" as const };
+	assert.equal(hasCatalogReadBlocker(status), false);
+	const failed = { ...status, scan: { state: "waiting-retry" as const, failedFileCount: 1 } };
+	assert.equal(hasCatalogReadBlocker(failed), true);
+	assert.ok(getCatalogReadStatusHeaders({ status: failed, coverage: completeCoverage })
+		.some(header => header.type === "summary" && header.action?.action === "refresh-catalog-sync-state"));
+});
+
+test("扫描暂停或已空闲但覆盖不足时，不继续声称正在整理", () => {
+	for (const state of ["idle", "paused"] as const) {
+		const status = { content: "scanning" as const, catalog: "partial" as const, projection: "ready" as const, scan: { state, failedFileCount: 0 } };
+		const coverage = { ...completeCoverage, kind: "partial" as const, pendingFileCount: 1 };
+		assert.equal(hasCatalogReadBlocker(status, coverage), true);
+		assert.deepEqual(getCatalogReadStatusHeaders({ status, coverage }), [], "暂停与收尾等内部状态不进入页面");
+	}
+});
 
 test("Observation-first 全部就绪时不添加状态提示", () => {
 	assert.deepEqual(getCatalogReadStatusHeaders({

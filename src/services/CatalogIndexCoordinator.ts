@@ -1,5 +1,6 @@
 import { normalizePath, TFile, TFolder } from "obsidian";
 import type { App, Component } from "obsidian";
+import type { CatalogScanSnapshot } from "../types/catalogView";
 
 import type {
 	CatalogCheckpoint,
@@ -52,7 +53,7 @@ export interface CatalogIndexCoordinatorOptions {
 	checkpointIntervalMs?: number;
 	progressIntervalMs?: number;
 	now?: () => number;
-	onProgress?: (coverage: CatalogCoverage) => void | Promise<void>;
+	onProgress?: (coverage: CatalogCoverage, scan: CatalogScanSnapshot) => void | Promise<void>;
 	onCatalogSettled?: () => void | Promise<void>;
 	onDailyPeriodsChanged?: (periods: readonly string[]) => void | Promise<void>;
 	preserveMetaKeysOnRebuild?: readonly string[];
@@ -70,7 +71,7 @@ export class CatalogIndexCoordinator {
 	private readonly checkpointIntervalMs: number;
 	private readonly progressIntervalMs: number;
 	private readonly now: () => number;
-	private readonly onProgress: ((coverage: CatalogCoverage) => void | Promise<void>) | null;
+	private readonly onProgress: ((coverage: CatalogCoverage, scan: CatalogScanSnapshot) => void | Promise<void>) | null;
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
 	private readonly onDailyPeriodsChanged: ((periods: readonly string[]) => void | Promise<void>) | null;
 	private readonly preserveMetaKeysOnRebuild: readonly string[];
@@ -169,6 +170,16 @@ export class CatalogIndexCoordinator {
 			return Promise.resolve();
 		}
 		return new Promise<void>((resolve) => this.idleResolvers.push(resolve));
+	}
+
+	getScanSnapshot(): CatalogScanSnapshot {
+		const failedFileCount = this.failedPaths.size;
+		const hasWork = this.reconciling || this.reconcileQueued || this.queue.length > 0 || this.activePath !== null;
+		return {
+			state: this.isStopped() ? "idle" : this.paused && hasWork ? "paused"
+				: hasWork ? "scanning" : failedFileCount > 0 ? "waiting-retry" : "idle",
+			failedFileCount,
+		};
 	}
 
 	async refreshPaths(paths: readonly string[]): Promise<void> {
@@ -735,7 +746,7 @@ export class CatalogIndexCoordinator {
 		const currentTime = monotonicNow();
 		if (!force && currentTime - this.lastProgressAt < this.progressIntervalMs) return;
 		this.lastProgressAt = currentTime;
-		void Promise.resolve(this.onProgress({ ...coverage })).catch(() => undefined);
+		void Promise.resolve(this.onProgress({ ...coverage }, this.getScanSnapshot())).catch(() => undefined);
 	}
 
 	private async finishScan(): Promise<void> {

@@ -11,6 +11,7 @@ import type {
 	CatalogMemoItem,
 	CatalogOperationalState,
 	CatalogReadState,
+	CatalogScanSnapshot,
 	MemoSaveOperation,
 	MemoSaveResult,
 	MemoRestoreResult,
@@ -44,6 +45,7 @@ export interface MemoCommandServiceOptions {
 	getLegacyCleanupPending?: () => boolean;
 	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
+	getScanSnapshot?: () => CatalogScanSnapshot;
 	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
 	random?: () => number;
@@ -83,6 +85,7 @@ export class MemoCommandService {
 			getLegacyCleanupPending: options.getLegacyCleanupPending,
 			getCurrentConfigurationStatus: options.getCurrentConfigurationStatus,
 			getSettingsStatus: options.getSettingsStatus,
+			getScanSnapshot: options.getScanSnapshot,
 			getStartupBootstrapSnapshot: options.getStartupBootstrapSnapshot,
 			now: options.now,
 			random: options.random,

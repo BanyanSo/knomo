@@ -58,6 +58,24 @@ test("opens the prepared mobile composer and focuses synchronously", () => {
 	assert.deepEqual(harness.syncRootLayerOpenStates, [true]);
 });
 
+test("requests the draft end only when expanding or reopening a closing mobile composer", () => {
+	const focusIntents: Array<boolean | undefined> = [];
+	const h = createHarness("mobile", { onFocusInput: moveToEnd => focusIntents.push(moveToEnd) });
+	h.controller.prepare();
+	h.controller.open();
+	h.controller.open();
+	h.controller.closeKeepingDraft();
+	assert.equal(h.controller.getPhase(), "closing");
+	assert.equal(h.getComposerOpen(), true, "退出过渡结束前，打开标记仍为 true");
+	h.controller.open();
+	h.controller.closeKeepingDraft();
+	h.win.flushAllTimers();
+	assert.equal(h.controller.getPhase(), "closed");
+	h.controller.open();
+	assert.deepEqual(focusIntents, [true, false, true, true]);
+	h.controller.dispose();
+});
+
 test("positions the mobile composer from the toolbar anchor inset", () => {
 	const harness = createHarness();
 	prepareComposerGeometry(harness, 500, 480);
@@ -535,7 +553,7 @@ test("parallel exit keeps background work paused until completion or disposal", 
 	}
 });
 
-function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { onKeyboardTrackingChange?: (busy: boolean) => void; onFocusInput?: () => void } = {}) {
+function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { onKeyboardTrackingChange?: (busy: boolean) => void; onFocusInput?: (moveToEnd?: boolean) => void } = {}) {
 	const win = new FakeWindow();
 	const doc = new FakeDocument();
 	const root = new FakeElement("div");
@@ -580,9 +598,9 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		closeComposerKeepingDraft: () => {
 			closeDraftCalls += 1;
 		},
-		focusInputNow: () => {
+		focusInputNow: (_resize, _viewport, moveToEnd) => {
 			focusCalls += 1;
-			options.onFocusInput?.();
+			options.onFocusInput?.(moveToEnd);
 		},
 		resizeInput: () => undefined,
 		syncRootState: () => {

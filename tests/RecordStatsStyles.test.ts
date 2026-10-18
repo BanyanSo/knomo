@@ -17,9 +17,41 @@ test("record statistics renders loading state with reserved skeleton sections", 
 		createHiddenText,
 	});
 
-	assert.equal(root.find("[role='status']")?.hasClass("knomo-record-stats-loading"), true);
+	assert.equal(root.find("[role='status']")?.hasClass("knomo-record-stats-pending"), true);
+	assert.equal(root.getText(), "", "统计骨架不显示计算、索引等内部阶段");
 	assert.equal(root.findAll(".knomo-record-stats-skeleton-chart").length, 2);
 	assert.notEqual(root.find(".knomo-record-stats-skeleton-tag-chart"), null);
+});
+
+test("快速统计只保留布局，前置条件失败时立即显示操作且不继续忙碌", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
+	for (const blocked of [false, true]) {
+		const root = new TestElement("div");
+		renderKnomoRecordStatsPage(root.asHtml(), {
+			snapshot: { state: "idle", error: null, updating: false }, selected: null,
+			view: "month", canAdvance: false, canRetreat: false, createHiddenText,
+			pending: { visible: false, blocked, headers: blocked
+				? [{ type: "summary", text: "Read failed", action: { label: "Retry", action: "refresh-catalog-sync-state" } }] : [] },
+		});
+		assert.equal(root.find(".knomo-record-stats-loading"), null);
+		assert.equal(root.find(".knomo-record-stats-skeleton-chart"), null);
+		assert.equal(root.find("[aria-busy='true']") !== null, !blocked);
+		assert.equal(root.find("[data-action='refresh-catalog-sync-state']") !== null, blocked);
+	}
+});
+
+test("统计刷新失败保留旧数据并显示重试入口", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
+	const root = new TestElement("div");
+	renderKnomoRecordStatsPage(root.asHtml(), {
+		snapshot: { state: "ready", error: "read failed", updating: false }, selected: makeSelectedStats(),
+		view: "month", canAdvance: false, canRetreat: true, createHiddenText,
+	});
+	assert.ok(root.find("[data-action='record-stats-retry']"));
+	assert.ok(root.find("[data-action='reset-list-state']"));
+	assert.equal(root.find(".knomo-record-stats-loading"), null);
 });
 
 test("record statistics renders actionable range metrics, charts, hours, and common tags", async () => {
@@ -49,7 +81,7 @@ test("record statistics renders actionable range metrics, charts, hours, and com
 	assert.equal(tagButton?.find(".knomo-record-stats-tag-bar")?.getCssProp("--knomo-record-stats-tag-ratio"), "1");
 });
 
-test("record statistics keeps the committed page visible with an updating marker", async () => {
+test("record statistics keeps the committed page visible while updating silently", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
 	const root = new TestElement("div");
@@ -63,7 +95,7 @@ test("record statistics keeps the committed page visible with an updating marker
 		createHiddenText,
 	});
 
-	assert.equal(root.find(".knomo-record-stats-updating")?.getText(), "Updating");
+	assert.equal(root.find(".knomo-record-stats-updating"), null);
 	assert.equal(root.find("[data-action='reset-list-state']")?.getText(), "13All notes");
 });
 

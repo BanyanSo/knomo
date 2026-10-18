@@ -112,6 +112,20 @@ export function renderKnomoEmptyState(container: HTMLElement, title = t("empty.g
 	return emptyState;
 }
 
+export function renderKnomoLoadingPlaceholder(container: HTMLElement, visible: boolean): HTMLElement {
+	const placeholder = container.createDiv({ cls: "knomo-loading-placeholder", attr: { "aria-busy": "true",
+		...(visible ? { role: "status", "aria-live": "polite", "aria-label": t("loading.label") } : {}) } });
+	if (!visible) return placeholder;
+	const skeleton = placeholder.createDiv({ cls: "knomo-loading-skeleton", attr: { "aria-hidden": "true" } });
+	for (let index = 0; index < 3; index++) {
+		const card = skeleton.createDiv({ cls: "knomo-loading-card" });
+		card.createDiv({ cls: "knomo-loading-line is-short" });
+		card.createDiv({ cls: "knomo-loading-line" });
+		card.createDiv({ cls: "knomo-loading-line" });
+	}
+	return placeholder;
+}
+
 function formatShuffleDayDateTitle(selectedDate: string): string {
 	const date = parseDateKey(selectedDate);
 	if (date === null) {

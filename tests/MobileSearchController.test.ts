@@ -12,6 +12,52 @@ type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstru
 type MobileSearchControllerOptions = ConstructorParameters<MobileSearchControllerConstructor>[0];
 type LoadRemoteResults = NonNullable<MobileSearchControllerOptions["loadRemoteResults"]>;
 
+test("移动搜索快速结果不闪加载提示，取消后旧延迟回调不再显示", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let reveal: (() => void) | null = null;
+	const overrides = { getWindow: () => ({
+		setTimeout: (callback: () => void) => { reveal = callback; return 1; }, clearTimeout: () => { reveal = null; },
+	} as unknown as Window) };
+	const h = createControllerHarness(MobileSearchController, [makeMemo("memo", "memo")], undefined, async () => {}, overrides);
+	h.controller.searchQuery = "memo";
+	h.controller.openPage({ focusInput: false });
+	const late = reveal;
+	assert.equal(h.root.findAll(".knomo-loading-skeleton").length, 0);
+	assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 0);
+	await new Promise<void>(resolve => setImmediate(resolve));
+	(late as (() => void) | null)?.();
+	assert.equal(h.root.findAll(".knomo-loading-skeleton").length, 0);
+	assert.equal(h.root.findAll(".knomo-card").length, 1);
+	h.controller.removePage();
+});
+
+test("移动搜索延迟出现无阶段文案的骨架；部分空结果不能冒充无匹配", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let reveal: (() => void) | null = null, complete = false;
+	let release!: () => void;
+	const waiting = new Promise<void>(resolve => { release = resolve; });
+	const h = createControllerHarness(MobileSearchController, [], undefined, () => waiting, {
+		getWindow: () => ({ setTimeout: (callback: () => void) => { reveal = callback; return 1; }, clearTimeout: () => { reveal = null; } } as unknown as Window),
+		getResultStatus: () => ({ headers: [], complete, blocked: false }),
+	});
+	h.controller.searchQuery = "memo";
+	h.controller.openPage({ focusInput: false });
+	(reveal as (() => void) | null)?.();
+	assert.equal(h.root.findAll(".knomo-loading-skeleton").length, 1);
+	assert.equal(h.root.find(".knomo-loading-placeholder")?.getText(), "");
+	release();
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(h.root.findAll(".knomo-loading-skeleton").length, 0);
+	assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 0);
+	assert.match(h.root.getText(), /incomplete/i);
+	complete = true;
+	h.controller.renderResults();
+	assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 1);
+	h.controller.removePage();
+});
+
 test("移动搜索刷新失败保留有效卡片并显示本次未更新和重试，首次失败不画成无结果", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

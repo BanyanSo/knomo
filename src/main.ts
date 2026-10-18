@@ -15,6 +15,7 @@ import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { DiaryMemoParser } from "./services/DiaryMemoParser";
 import { DailyMemoWriteGateway } from "./services/DailyMemoWriteGateway";
 import type { CatalogReadService } from "./services/CatalogReadService";
+import type { CatalogScanSnapshot } from "./types/catalogView";
 import {
 	MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
 	MonthlyProjectionCoordinator,
@@ -232,7 +233,7 @@ export default class KnomoPlugin extends Plugin {
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
 				isConfigurationComplete: () => dailyNotesProvider.getConfig() !== null,
-				onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage),
+				onProgress: (coverage, scan) => this.updateOpenViewCatalogProgress(coverage, scan),
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [MONTHLY_PROJECTION_CHECKPOINT_META_KEY],
 				onCatalogSettled: async () => {
@@ -330,6 +331,7 @@ export default class KnomoPlugin extends Plugin {
 					return result;
 				},
 				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
+				getScanSnapshot: () => this.catalogIndexCoordinator!.getScanSnapshot(),
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyTrashMigrationService?.getReport().status ?? "idle",
@@ -643,9 +645,11 @@ export default class KnomoPlugin extends Plugin {
 		await Promise.all(refreshes);
 	}
 
-	private updateOpenViewCatalogProgress(coverage: CatalogCoverage): void {
+	private updateOpenViewCatalogProgress(coverage: CatalogCoverage, scan: CatalogScanSnapshot): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
-			if (leaf.view instanceof KnomoView) leaf.view.updateCatalogProgress(coverage);
+			if (!(leaf.view instanceof KnomoView)) continue;
+			try { leaf.view.updateCatalogProgress(coverage, scan); }
+			catch (error) { leaf.view.reportViewRefreshFailure(error, "catalog-progress"); }
 		}
 	}
 

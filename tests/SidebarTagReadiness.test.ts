@@ -38,7 +38,8 @@ async function fixture(layout: "mobile" | "desktop-narrow" | "desktop-wide") {
 	const coverage = { kind: "complete" as const, coveredFromDate: "2026-09-01", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
 	let reads = 0;
 	let releaseFacets!: (result: CatalogLibraryIndexesResult) => void;
-	const facetsPromise = new Promise<CatalogLibraryIndexesResult>(resolve => { releaseFacets = resolve; });
+	let rejectFacets!: (error: Error) => void;
+	const facetsPromise = new Promise<CatalogLibraryIndexesResult>((resolve, reject) => { releaseFacets = resolve; rejectFacets = reject; });
 	let releaseTags!: () => void;
 	const tagPromise = new Promise<void>(resolve => { releaseTags = resolve; });
 	const snapshot = { revision: 1, status: "ready", displayByKey: new Map<string, string>(), suggestions: [] };
@@ -47,6 +48,9 @@ async function fixture(layout: "mobile" | "desktop-narrow" | "desktop-wide") {
 		libraryIndexRequest: Promise<void> | null; trashViewClosed: boolean;
 	};
 	Object.assign(view, {
+		containerEl: { win: dom.window, isShown: () => true }, memoSourceGeneration: 0,
+		getDailyNotesStatus: () => ({ enabled: true }),
+		catalogStatus: { content: "ready", catalog: "complete", projection: "ready" },
 		currentLayout: layout, viewStateController: state, desktopSidebarStateController: sidebar, expandedTagGroups: expanded,
 		statsEls: [stats],
 		rootEl: tags.parentElement, allTagsEl: tags, trashViewClosed: false, popupState: { scopeMenuOpen: false },
@@ -67,8 +71,27 @@ async function fixture(layout: "mobile" | "desktop-narrow" | "desktop-wide") {
 		lifecycle: { state: "ready", persistent: true, writable: true, reason: null },
 	};
 	const renderStats = () => (KnomoView.prototype as unknown as { renderStats(): void }).renderStats.call(view);
-	return { view, state, expanded, tags, stats, renderStats, snapshot, reads: () => reads, releaseTags, releaseFacets: () => releaseFacets(result), close: () => dom.window.close() };
+	return { view, state, expanded, tags, stats, renderStats, snapshot, result, rejectFacets, reads: () => reads, releaseTags, releaseFacets: () => releaseFacets(result), close: () => dom.window.close() };
 }
+
+test("首次标签聚合失败退出加载并可通过局部重试恢复", async () => {
+	const h = await fixture("desktop-wide");
+	try {
+		Object.assign(h.view, { libraryTagFacets: null, libraryIndexRevision: -1 });
+		h.view.toggleSidebar();
+		assert.equal(h.tags.getAttribute("aria-busy"), "true");
+		h.rejectFacets(new Error("read failed"));
+		await h.view.libraryIndexRequest;
+		assert.equal(h.tags.getAttribute("aria-busy"), null);
+		const retry = h.tags.querySelector<HTMLButtonElement>("button");
+		assert.ok(retry);
+		Object.assign(h.view, { getCatalogReadService: () => ({ getLibraryIndexes: async () => h.result }) });
+		retry.click();
+		await h.view.libraryIndexRequest;
+		assert.equal(h.tags.querySelectorAll("[data-tag-key='project/child']").length, 1);
+		assert.equal(h.tags.getAttribute("aria-busy"), null);
+	} finally { h.close(); }
+});
 
 for (const layout of ["mobile", "desktop-narrow", "desktop-wide"] as const) {
 	for (const first of ["waiter", "subscription"] as const) {
@@ -126,6 +149,7 @@ for (const layout of ["mobile", "desktop-narrow", "desktop-wide"] as const) {
 			Object.assign(h.view, { libraryTagFacets: null, libraryIndexRevision: -1 }); h.snapshot.status = "building";
 			h.view.toggleSidebar();
 			assert.equal(h.tags.getAttribute("aria-busy"), "true");
+			assert.equal(h.tags.querySelector(".knomo-sidebar-updating"), null, "已有标签后台更新不显示内部阶段");
 			assert.ok(h.tags.querySelector(".knomo-muted-text"));
 			assert.equal(h.reads(), 1);
 			const opening = h.view.ensureSidebarIndexes();

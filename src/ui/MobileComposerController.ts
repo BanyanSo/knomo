@@ -80,7 +80,7 @@ export interface MobileComposerControllerOptions {
 	getCardFlowScrollTop: () => number | null;
 	registerBackdropClick: (element: HTMLElement, handler: (event: MouseEvent) => void) => void;
 	closeComposerKeepingDraft: () => void;
-	focusInputNow: (shouldResize?: boolean, shouldQueueViewport?: boolean) => void;
+	focusInputNow: (shouldResize?: boolean, shouldQueueViewport?: boolean, moveToEnd?: boolean) => void;
 	resizeInput: () => void;
 	syncRootState: () => void;
 	syncComposerMode: () => void;
@@ -238,6 +238,7 @@ export class MobileComposerController {
 	open(): void {
 		const win = this.options.getWindow();
 		const reopening = this.mobileComposerPhase === "closing";
+		const moveToEnd = this.options.getLayout() === "mobile" && (!this.options.isComposerOpen() || reopening);
 		this.cancelKeyboardDismissRequest();
 		if (this.options.getLayout() === "mobile") this.setKeyboardTracking(true);
 		if (this.options.getLayout() === "mobile" && !this.options.isComposerOpen()) {
@@ -280,7 +281,7 @@ export class MobileComposerController {
 		this.revealMobileComposer();
 		this.mobileComposerPhase = "focusing";
 		this.startViewportTracking();
-		this.options.focusInputNow(false, false);
+		this.options.focusInputNow(false, false, moveToEnd);
 		this.queueViewportUpdate();
 		this.scheduleKeyboardViewportFallback();
 		this.scheduleOpenRootSync();

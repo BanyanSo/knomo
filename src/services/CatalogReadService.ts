@@ -21,6 +21,7 @@ import type {
 	CatalogRecordStatsFilter,
 	CatalogReadState,
 	CatalogReadStatus,
+	CatalogScanSnapshot,
 	KnomoRuntimeAttentionSnapshot,
 	MonthlyProjectionState,
 	CatalogTagFacet,
@@ -58,6 +59,7 @@ export interface CatalogReadServiceOptions {
 	getLegacyCleanupPending?: () => boolean;
 	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
+	getScanSnapshot?: () => CatalogScanSnapshot;
 	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
 	random?: () => number;
@@ -579,6 +581,7 @@ export class CatalogReadService {
 			// 内容状态与辅助服务诊断分别提供。
 			currentConfiguration: this.getCurrentConfigurationStatus(),
 			projection: this.getProjectionState(),
+			...(this.options.getScanSnapshot ? { scan: this.options.getScanSnapshot() } : {}),
 		};
 	}
 

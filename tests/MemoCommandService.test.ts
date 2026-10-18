@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { App } from "obsidian";
+import { createDeferred } from "./helpers/deferred";
 
 import type { MemoObservation } from "../src/types/catalog";
 import { toTrashMemoItem } from "../src/types/memoView";
@@ -112,6 +113,10 @@ test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async ()
 		markdownMutations,
 	);
 
+	await service.runWithMutationsPaused(async () => {
+		await assert.rejects(service.create("blocked during rebuild"), /basic data is being rebuilt/u);
+		assert.deepEqual(events, []);
+	});
 	const result = await service.create(observation.content);
 
 	assert.deepEqual(events, ["daily"]);
@@ -326,13 +331,6 @@ function mutationResult(observation: MemoObservation | null) {
 	};
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 
 test("编辑器已更新但落盘未确认时，最终成功不能覆盖阶段拒绝并误清理草稿", async () => {

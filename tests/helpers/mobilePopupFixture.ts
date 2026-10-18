@@ -110,7 +110,7 @@ export async function createMobilePopupFixture(action: MobilePopupAction = "save
 		app: { vault: { on: () => ({}), getMarkdownFiles: () => [] } },
 		settingsService: { getSettings: () => ({ timeBuoyEnabled: false }) },
 		mobileComposerController: { getPhase: () => "open", isLayered: () => true, closeKeepingDraft: () => { view.composerOpen = false; } },
-		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+		getDailyNotesStatus: () => ({ enabled: true }),
 		getRenderScope: () => scope, getA11yId: (name: string) => `p0-${name}`,
 		createIconButton: (parent: HTMLElement, _icon: string, label: string, cls: string, name: string) => parent.createEl("button", { cls, attr: { type: "button", "aria-label": label, "data-action": name } }),
 		createComposerImageController: () => ({ pending: false, dispose: () => undefined, cancelAll: () => undefined }),

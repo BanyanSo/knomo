@@ -1066,7 +1066,7 @@ async function sessionView(editor: ComposerEditor) {
 		syncComposerMode: () => undefined, syncUiChrome: () => undefined, resizeInput: () => undefined,
 		openComposer() { this.composerOpen = true; },
 		mobileComposerController: { resetInactiveState: () => undefined },
-		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+		getDailyNotesStatus: () => ({ enabled: true }),
 		resolveCatalogMemo: async (memo: import("../src/types/memoView").MemoViewItem) => memo.catalog!,
 		memoCommandService: {
 			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),

@@ -5,7 +5,7 @@ import type { LegacyMigrationReport } from "../types/legacyMigration";
 import type { TrashSnapshot } from "../types/trash";
 import { PluginDataStore } from "./PluginDataStore";
 import { classifyLegacyArtifactPath } from "./LegacyArtifactInventory";
-import { sha256Text } from "./CanonicalJson";
+import { sha256Text } from "../utils/sha256";
 import { buildPluginDataWithLegacyMigration, extractLegacyMigration, type LegacyMigrationCompletion } from "../utils/pluginData";
 import { assertVaultPath, getTrashFilePath, TrashSnapshotStore } from "./TrashSnapshotStore";
 

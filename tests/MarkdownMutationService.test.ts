@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
+import { createDeferred } from "./helpers/deferred";
 
 import { DailyNoteService } from "../src/services/DailyNoteService";
 import { DailyMemoWriteGateway } from "../src/services/DailyMemoWriteGateway";
@@ -504,7 +505,7 @@ test("新建目标变化通过真实命令链路拒绝保存，Composer 保留�
 					capture: () => ({ valid: () => true, sameSession: () => true }),
 				} };
 				const view = Object.assign(Object.create(KnomoView.prototype) as { saveInput: () => Promise<void> }, {
-					getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+					getDailyNotesStatus: () => ({ enabled: true }),
 					inputEl: input, isSaving: false, editingMemo: null,
 					quoteReferenceText: null, quoteMarkdownText: null, currentLayout: "desktop",
 					draftContent: input.value, composerOpen: true,
@@ -722,13 +723,6 @@ class MemoryVault {
 
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 test("image source is checked against the actual Daily at prepare and commit without changing body on failure", async () => {
 	for (const activeEditor of [false, true]) for (const edit of [false, true]) {

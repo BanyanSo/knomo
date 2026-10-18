@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createDeferred } from "./helpers/deferred";
 
 import {
 	canAdvanceRecordStatsDate,
@@ -10,7 +11,7 @@ import {
 } from "../src/services/RecordStatsService";
 import type { PreparedRecordStats } from "../src/services/RecordStatsService";
 import type { MemoViewItem } from "../src/types/memoView";
-import { matchesRecordStatsSearchFilter } from "../src/ui/viewFilters";
+import { buildRecordStatsCatalogQuery } from "../src/services/CatalogReadService";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 class RecordStatsService extends ProductionRecordStatsService {
@@ -64,41 +65,42 @@ test("prepares overview and selects weekly statistics with natural-day boundarie
 	assert.deepEqual(selected?.trend.map((point) => point.count), [2, 0, 0, 0, 0, 0, 1]);
 	assert.equal(selected?.activeHours[0].count, 1);
 	assert.equal(selected?.activeHours[23].count, 2);
-	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+	const reader = await createCatalogReader(memos);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "day",
 		date: "2026-06-08",
-	})).length, 2);
-	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+	}).query)).count, 2);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "range",
 		startDate: selected?.startDate ?? "",
 		endDateExclusive: selected?.endDateExclusive ?? "",
-	})).length, selected?.range.memoCount);
-	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+	}).query)).count, 3);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "references",
 		startDate: selected?.startDate ?? "",
 		endDateExclusive: selected?.endDateExclusive ?? "",
-	})).length, selected?.range.referenceMemoCount);
-	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+	}).query)).count, 0);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "with-tag",
 		startDate: selected?.startDate ?? "",
 		endDateExclusive: selected?.endDateExclusive ?? "",
-	})).length, selected?.range.taggedMemoCount);
-	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+	}).query)).count, 2);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "no-tag",
 		startDate: selected?.startDate ?? "",
 		endDateExclusive: selected?.endDateExclusive ?? "",
-	})).length, selected?.range.untaggedMemoCount);
-	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+	}).query)).count, 1);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "with-image",
 		startDate: selected?.startDate ?? "",
 		endDateExclusive: selected?.endDateExclusive ?? "",
-	})).length, selected?.range.imageMemoCount);
-	assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+	}).query)).count, 1);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "hour",
 		startDate: selected?.startDate ?? "",
 		endDateExclusive: selected?.endDateExclusive ?? "",
 		hour: 23,
-	})).length, selected?.activeHours[23].count);
+	}).query)).count, 2);
 });
 
 test("统计使用 Daily 日期和 Markdown 时间，不随设备时区换日", async () => {
@@ -136,11 +138,12 @@ test("counts historical references recoverable from a Knomo memoId alias", async
 	const selected = service.select("week", new Date(2026, 5, 8));
 
 	assert.equal(selected?.range.referenceMemoCount, 1);
-	assert.equal(matchesRecordStatsSearchFilter(historicalReference, {
+	const reader = await createCatalogReader([historicalReference]);
+	assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 		type: "references",
 		startDate: "2026-06-08",
 		endDateExclusive: "2026-06-15",
-	}), true);
+	}).query)).count, 1);
 });
 
 test("builds month and year trends including leap day", async () => {
@@ -194,14 +197,15 @@ test("returns the top five normalized tags by memo count", async () => {
 		{ key: "delta", label: "delta", count: 1 },
 		{ key: "epsilon", label: "epsilon", count: 1 },
 	]);
+	const reader = await createCatalogReader(memos);
 	for (const tag of selected?.commonTags ?? []) {
-		assert.equal(memos.filter((memo) => matchesRecordStatsSearchFilter(memo, {
+		assert.equal((await reader.count(buildRecordStatsCatalogQuery({
 			type: "tag",
 			startDate: selected?.startDate ?? "",
 			endDateExclusive: selected?.endDateExclusive ?? "",
 			tagKey: tag.key,
 			tagLabel: tag.label,
-		})).length, tag.count);
+		}).query)).count, tag.count);
 	}
 });
 
@@ -398,13 +402,6 @@ async function buildStats(memos: readonly MemoViewItem[]): Promise<PreparedRecor
 	return prepared!;
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 function toDateParts(date: Date): [number, number, number] {
 	return [date.getFullYear(), date.getMonth() + 1, date.getDate()];

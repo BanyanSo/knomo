@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createHash } from "node:crypto";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { hashMemoContent, hashText } from "../src/utils/hash";
 
@@ -84,6 +83,9 @@ async function fixture(monthly = "Knomo") {
 
 test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Daily，completion 后不读源或快照", async () => {
 	const f = await fixture();
+	const source = await f.reader.load();
+	assert.ok(source.kind === "ready");
+	assert.equal(source.snapshot.sourceRevision, "8788cd2ec493f6e3a4ff655d715d379b3fa7c952cdc43246654fc91038f8c770");
 	let writes = 0;
 	const create = f.vault.app.vault.create.bind(f.vault.app.vault);
 	f.vault.app.vault.create = async (path, content) => { if (path.endsWith("knomo-trash.json")) writes++; return create(path, content); };
@@ -94,8 +96,8 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 	const snapshots = (await f.store.query()).items;
 	assert.equal(snapshots.length, 2);
 	assert.deepEqual(snapshots.map((snapshot) => snapshot.snapshotId).sort(),
-		["2026082209000001", "2026082209000002"].map((memoId) =>
-			`legacy_${createHash("sha256").update(JSON.stringify(["legacy-index:Knomo", memoId])).digest("hex")}`).sort());
+		["legacy_938f0af2224a78932b1104981229e5d2974e7c2d95c4bf94583130a4c44c61da",
+			"legacy_626af545f45f319cefe9296ba538cdbb16e76794391a132d176e64ba565ed60d"].sort());
 	assert.notEqual(snapshots[0]!.snapshotId, snapshots[1]!.snapshotId);
 	assert.equal(snapshots[0]!.rawBlock, snapshots[1]!.rawBlock);
 	assert.equal(f.vault.read(DAILY), "## Memos\n- 10:30 当前 Daily\n");

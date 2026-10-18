@@ -42,6 +42,8 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 	assert.equal(first.content, second.content);
 	assert.equal(first.semanticHash, second.semanticHash);
 	assert.equal(first.outputSha256, second.outputSha256);
+	assert.equal(first.sourceDigest, "08ed925cc9bf21dc89eff9789fa0d5f8eb8362c10ce8db61e90a3838219b557b");
+	assert.equal(first.outputHash, "ba169d610b4d5db2237e5e97da613ceff4f6d6b7a1e44a924a2bde332eeccd4c");
 	assert.equal(first.path, "Knomo/Memos-2026-08.md");
 	assert.equal(first.content, [
 		"<!-- knomo:monthly-archive -->",

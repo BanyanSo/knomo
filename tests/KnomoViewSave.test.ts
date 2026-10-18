@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MemoSaveResult } from "../src/types/catalogView";
+import { createDeferred } from "./helpers/deferred";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -15,7 +16,6 @@ test("composer 在 Daily 提交后立即清空，不等待后续查询反馈", a
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
 	view.inputEl = createComposerInput("memo");
 	view.getDailyNotesStatus = () => ({ enabled: true });
-	view.isComposerCreationAvailable = () => true;
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -63,7 +63,6 @@ test("强制替换会话的新草稿不会被旧保存清空", async () => {
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
 	view.inputEl = createComposerInput("old memo");
 	view.getDailyNotesStatus = () => ({ enabled: true });
-	view.isComposerCreationAvailable = () => true;
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -101,7 +100,7 @@ test("保存期间切换到同文新会话不会被旧提交清空，失败保�
 		const daily = createDeferred<void>();
 		const view = Object.create(KnomoView.prototype) as SaveInputView;
 		Object.assign(view, {
-			getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+			getDailyNotesStatus: () => ({ enabled: true }),
 			inputEl: createComposerInput("same text"), isSaving: false, editingMemo: null,
 			quoteReferenceText: null, quoteMarkdownText: null, currentLayout: "desktop",
 			draftContent: "same text", composerOpen: true,
@@ -162,7 +161,6 @@ test("任务正文提交失败时恢复原复选框", async () => {
 
 interface SaveInputView {
 	getDailyNotesStatus: () => { enabled: boolean };
-	isComposerCreationAvailable: () => boolean;
 	inputEl: ReturnType<typeof createComposerInput> | null;
 	isSaving: boolean;
 	editingMemo: null;
@@ -217,13 +215,6 @@ function makeSaveResult(): MemoSaveResult {
 	};
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 function createComposerInput(initial: string) {
 	let value = initial, revision = 0;

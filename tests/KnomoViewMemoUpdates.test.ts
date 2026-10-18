@@ -844,7 +844,7 @@ function prepareComposer(view: TestView, content: string, editingMemo: MemoViewI
 				return { valid: () => current === revision, sameSession: () => current === revision }; } } },
 		isSaving: false, editingMemo, quoteReferenceText: null, quoteMarkdownText: null,
 		currentLayout: "desktop", draftContent: content, composerOpen: true,
-		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+		getDailyNotesStatus: () => ({ enabled: true }),
 		closeTimeBuoyPicker: () => {}, updateStatus: () => {}, updateSendButtonState: () => {}, clearComposerContext: () => {},
 		syncComposerMode: () => {}, updateCancelEditButtonState: () => {}, resizeInput: () => {}, syncRootState: () => {},
 		restoreCreateDraft: () => { value = ""; view.editingMemo = null; },

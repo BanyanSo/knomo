@@ -363,6 +363,95 @@ test("日记关闭时首查等待中的重绘保留启用指引", async () => {
 	} finally { h.close(); }
 });
 
+test("两端旧请求成功或失败的收尾不清除新请求，也不覆盖新卡片", async t => {
+	for (const mobile of [false, true]) for (const failure of [false, true]) for (const oldFinishesFirst of [false, true]) {
+		await t.test(`${mobile ? "mobile" : "desktop"}/${failure ? "failure" : "success"}/${oldFinishesFirst ? "A-B" : "B-A"}`, async () => {
+			const h = await createLoadingHarness(mobile);
+			const first = deferred<MemoLoad>(), second = deferred<MemoLoad>();
+			let loads = 0;
+			const load = () => mobile ? h.view.loadInitialMobileMemos() : h.view.reloadMemos(false);
+			try {
+				h.view.loadCatalogMemos = () => ++loads === 1 ? first.promise : second.promise;
+				const old = load(), firstController = h.view.catalogDesktopQueryController;
+				const current = load(), currentController = h.view.catalogDesktopQueryController;
+				assert.equal(firstController.signal.aborted, true);
+				const finishOld = async () => {
+					if (failure) first.reject(new Error("late old I/O failure"));
+					else first.resolve(readyLoad([memo("old")]));
+					assert.equal(await old, mobile ? undefined : false);
+				};
+				if (oldFinishesFirst) {
+					await finishOld();
+					assert.strictEqual(h.view.catalogDesktopQueryController, currentController);
+					assert.equal(h.view.initialCatalogQueryPending, true);
+				}
+				second.resolve(readyLoad([memo("current")]));
+				assert.equal(await current, mobile ? undefined : true);
+				const card = h.root.querySelector(".knomo-card");
+				if (!oldFinishesFirst) await finishOld();
+				assert.deepEqual(h.view.memos.map((item: MemoViewItem) => item.id), ["current"]);
+				assert.deepEqual(h.cards(), ["current"]);
+				assert.strictEqual(h.root.querySelector(".knomo-card"), card);
+				assert.equal(h.view.cardFlowError, null);
+				assert.equal(h.view.viewStateController.search.requestStatus, "ready");
+				assert.equal(h.view.catalogDesktopQueryController, null);
+				assert.equal(h.view.initialCatalogQueryPending, false);
+			} finally { first.resolve(readyLoad([])); second.resolve(readyLoad([])); h.close(); }
+		});
+	}
+});
+
+test("两端 generation、搜索、fingerprint 和 coverage 中途变化拒绝旧结果，移动 DOM 脱离也不提交", async t => {
+	for (const mobile of [false, true]) for (const change of ["source", "search", "fingerprint", "coverage", ...(mobile ? ["detach"] : [])]) {
+		await t.test(`${mobile ? "mobile" : "desktop"}/${change}`, async () => {
+			const h = await createLoadingHarness(mobile), pending = deferred<MemoLoad>();
+			try {
+				h.view.hasCommittedCatalogDesktopQuery = true;
+				h.view.memos = [memo("committed")];
+				h.view.renderCardFlow();
+				const card = h.root.querySelector(".knomo-card");
+				h.view.loadCatalogMemos = () => pending.promise;
+				const loading = mobile ? h.view.loadInitialMobileMemos() : h.view.reloadMemos(false);
+				if (change === "source") h.view.memoSourceGeneration++;
+				if (change === "search") h.view.viewStateController.search.updateDraft("changed");
+				if (change === "fingerprint") h.view.viewStateController.activeTagKey = "changed";
+				if (change === "coverage") h.view.catalogCoverage = buildingLoad([]).coverage;
+				if (change === "detach") h.root.remove();
+				const coverage = h.view.catalogCoverage;
+				pending.resolve(readyLoad([memo("stale")]));
+				assert.equal(await loading, mobile ? undefined : false);
+				assert.deepEqual(h.view.memos.map((item: MemoViewItem) => item.id), ["committed"]);
+				assert.strictEqual(h.root.querySelector(".knomo-card"), card);
+				assert.strictEqual(h.view.catalogCoverage, coverage);
+				assert.equal(h.view.cardFlowError, null);
+				assert.equal(h.view.catalogDesktopQueryController, null);
+				assert.equal(h.view.initialCatalogQueryPending, false);
+			} finally { pending.resolve(readyLoad([])); h.close(); }
+		});
+	}
+});
+
+test("关闭查询代次后重新加载，两端迟到结果不能覆盖重新打开的内容", async () => {
+	for (const mobile of [false, true]) {
+		const h = await createLoadingHarness(mobile), beforeClose = deferred<MemoLoad>();
+		const load = () => mobile ? h.view.loadInitialMobileMemos() : h.view.reloadMemos(false);
+		try {
+			h.view.loadCatalogMemos = () => beforeClose.promise;
+			const old = load(), controller = h.view.catalogDesktopQueryController;
+			h.view.trashViewClosed = true;
+			h.view.cancelCatalogDesktopQuery();
+			assert.equal(controller.signal.aborted, true);
+			h.view.trashViewClosed = false;
+			h.view.loadCatalogMemos = async () => readyLoad([memo("reopened")]);
+			await load();
+			beforeClose.resolve(readyLoad([memo("before-close")]));
+			await old;
+			assert.deepEqual(h.cards(), ["reopened"]);
+			assert.equal(h.view.initialCatalogQueryPending, false);
+		} finally { beforeClose.resolve(readyLoad([])); h.close(); }
+	}
+});
+
 // 仅隔离宿主、存储和正文卡片绘制；查询提交、状态判定与空态 DOM 使用实际实现。
 async function createLoadingHarness(mobile: boolean) {
 	await ensureObsidianStub();

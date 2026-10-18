@@ -222,7 +222,7 @@ test("那年今日的实际视图查询、分页和统计均排除今天的三�
 	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
 	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
 	const { formatDatePart } = await import("../src/utils/date");
-	const { matchesScope } = await import("../src/ui/viewFilters");
+	const { filterCatalogMemos } = await import("../src/ui/KnomoMemoFilter");
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	const today = new Date();
 	const todayKey = formatDatePart(today);
@@ -256,7 +256,7 @@ test("那年今日的实际视图查询、分页和统计均排除今天的三�
 				assert.deepEqual((await service.query({ ...query, limit: 1, cursor: page.nextCursor })).items, []);
 			}
 			const unfiltered = await service.query({ limit: 50 });
-			assert.deepEqual(unfiltered.items.filter((item) => matchesScope(toCatalogMemoView(item), "anniversary", today)).map((item) => item.content), ["old"]);
+			assert.deepEqual(filterCatalogMemos(unfiltered.items.map(toCatalogMemoView), query).map(item => item.contentSnapshot), ["old"]);
 		} finally {
 			await store.close();
 		}
@@ -1087,24 +1087,24 @@ test("列表取消贯通 Store，取消与 runtime 失效不补扫、不发布�
 	const rejected = assert.rejects(pending, { name: "AbortError" });
 	assert.strictEqual(seenSignal, controller.signal);
 	controller.abort(); await rejected;
-	assert.equal(service.getLastReadState(), null);
 	assert.equal(scans, 0);
 	mock.mock.restore();
 	const runtimeMock = t.mock.method(store, "query", async () => { throw new CatalogQueryCancelledError(); });
 	await assert.rejects(service.query({ limit: 10 }), error => error instanceof CatalogQueryCancelledError);
-	assert.equal(service.getLastReadState(), null);
 	assert.equal(scans, 0);
 	runtimeMock.mock.restore();
 	const failureMock = t.mock.method(store, "query", async () => { throw new Error("query I/O failed"); });
 	assert.equal((await service.query({ limit: 10 })).readState, "storage_unavailable");
 	assert.equal(scans, 1);
 	failureMock.mock.restore();
-	assert.equal((await service.query({ limit: 10 })).items.length, 1);
+	const recovered = await service.query({ limit: 10 });
+	assert.equal(recovered.readState, "ready");
+	assert.equal(recovered.items.length, 1);
 	assert.equal((await query({ limit: 10 })).items.length, 1);
 	store.close();
 });
 
-test("列表转换阶段取消停止后续 Memo 转换，不记录旧页面", async t => {
+test("列表转换阶段取消停止后续 Memo 转换，后续查询可重新提交完整页", async t => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -1118,7 +1118,9 @@ test("列表转换阶段取消停止后续 Memo 转换，不记录旧页面", as
 	const service = new CatalogReadService({ catalog, requestObservationScan: () => assert.fail("取消不能补扫") });
 	await assert.rejects(service.query({ limit: 10 }, controller.signal), { name: "AbortError" });
 	assert.equal(conversions, 1);
-	assert.equal(service.getLastReadState(), null);
+	const recovered = await service.query({ limit: 10 });
+	assert.equal(recovered.readState, "ready");
+	assert.equal(recovered.items.length, 2);
 	store.close();
 });
 

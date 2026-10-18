@@ -9,8 +9,6 @@ import type { CatalogRefreshResult, ObservationHandle } from "../types/catalog";
 import type {
 	DailyMutationResult,
 	CatalogMemoItem,
-	CatalogOperationalState,
-	CatalogReadState,
 	CatalogScanSnapshot,
 	MemoSaveOperation,
 	MemoSaveResult,
@@ -106,15 +104,6 @@ export class MemoCommandService {
 
 	async refreshLocalCatalog(): Promise<CatalogRefreshResult> {
 		return this.options.refreshLocalCatalog();
-	}
-
-	getOperationalState(readState: CatalogReadState = this.readService.getLastReadState() ?? "history_building"): CatalogOperationalState {
-		return {
-			readState,
-			capabilities: {
-				createNew: true,
-			},
-		};
 	}
 
 	startCreate(contentInput: string, validateImageSource?: (sourcePath: string) => void): MemoSaveOperation {

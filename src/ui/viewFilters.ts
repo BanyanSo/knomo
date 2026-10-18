@@ -2,9 +2,7 @@ import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CatalogRecordStatsFilter } from "../types/catalogView";
 import { parseMemoCalendarDate } from "../utils/date";
-import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
-import { isSupportedMemoImage, parseMemoLinks } from "../utils/markdown";
-import { hasMemoReference } from "../utils/references";
+import { isSupportedMemoImage } from "../utils/markdown";
 import type { TagSummary } from "../utils/tagTree";
 import { normalizeTagKey } from "../utils/tags";
 import type { SidebarNav } from "./viewNavigation";
@@ -47,12 +45,6 @@ export interface RegularFilterState {
 export interface RegularFilterCopy {
 	summary: string;
 	emptyTitle: string;
-}
-
-export interface DailyDateConfig {
-	enabled: boolean;
-	folder: string | null;
-	format: string | null;
 }
 
 export function collectTagsFromCounts(
@@ -316,44 +308,6 @@ export function getRecordStatsSearchFilterKey(filter: RecordStatsSearchFilter | 
 	return `hour:${filter.startDate}:${filter.endDateExclusive}:${filter.hour}`;
 }
 
-export function matchesRecordStatsSearchFilter(memo: MemoRecord, filter: RecordStatsSearchFilter): boolean {
-	if (memo.status !== "active") {
-		return false;
-	}
-	const date = parseLocalDateText(getMemoCalendarValue(memo));
-	if (date === null) {
-		return false;
-	}
-	const dateKey = formatLocalDateKey(date);
-	if (filter.type === "day") return dateKey === filter.date;
-	if (filter.type === "month") return dateKey.startsWith(`${filter.month}-`);
-	if (filter.type === "max-daily-notes" || filter.type === "max-daily-words") {
-		return filter.dates.includes(dateKey);
-	}
-	if (dateKey < filter.startDate || dateKey >= filter.endDateExclusive) {
-		return false;
-	}
-	if (filter.type === "range") {
-		return true;
-	}
-	if (filter.type === "with-tag") {
-		return memo.tags.length > 0;
-	}
-	if (filter.type === "no-tag") {
-		return memo.tags.length === 0;
-	}
-	if (filter.type === "with-image") {
-		return getMemoImages(memo).length > 0;
-	}
-	if (filter.type === "tag") {
-		return memo.tags.some((tag) => tagMatchesActiveTagKey(tag, filter.tagKey));
-	}
-	if (filter.type === "references") {
-		return hasMemoReference(memo);
-	}
-	return date.getHours() === filter.hour;
-}
-
 export function formatTagFilterText(tag: string): string {
 	return `#${tag.replace(/^#/, "")}`;
 }
@@ -362,57 +316,9 @@ export function isSummaryScopeFilter(filter: ScopeFilter): filter is SummaryScop
 	return filter === "no-tag" || filter === "with-link" || filter === "with-image" || filter === "anniversary";
 }
 
-export function parseMemoLocalDate(memo: MemoRecord, dailyStatus: DailyDateConfig): Date | null {
-	const createdAtDate = parseLocalDateText(getMemoCalendarValue(memo));
-	if (createdAtDate !== null) {
-		return createdAtDate;
-	}
-	if (dailyStatus.enabled && dailyStatus.format !== null) {
-		const dailyDate = parseDailyNoteDateFromPath(memo.dailyRef.path, {
-			folder: dailyStatus.folder,
-			format: dailyStatus.format,
-		});
-		if (dailyDate !== null) {
-			return dailyDate;
-		}
-	}
-	return null;
-}
-
-function getMemoCalendarValue(memo: MemoRecord): string {
-	const observation = memo.catalog?.observation;
-	return observation === undefined ? memo.createdAt : `${observation.logicalDate}T${observation.time}`;
-}
-
 export function parseLocalDateText(value: string): Date | null {
 	const match = value.match(/(?:^|[^\d])(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?)/u);
 	return match === null ? null : parseMemoCalendarDate(match[1]);
-}
-
-export function matchesScope(memo: MemoRecord, filter: ScopeFilter, todayDate = new Date()): boolean {
-	const date = new Date(getMemoCalendarValue(memo));
-	const today = startOfDay(todayDate);
-	if (filter === "all") return true;
-	if (filter === "no-tag") return memo.tags.length === 0;
-	if (filter === "with-link") return memo.links.length > 0 || parseMemoLinks(memo.contentSnapshot).length > 0;
-	if (filter === "with-image") return getMemoImages(memo).length > 0;
-	if (filter === "anniversary") {
-		return date.getMonth() === today.getMonth() && date.getDate() === today.getDate() && date.getFullYear() !== today.getFullYear();
-	}
-	if (filter === "week") {
-		const mondayOffset = (today.getDay() + 6) % 7;
-		const start = addDays(today, -mondayOffset);
-		return date >= start && date < addDays(start, 7);
-	}
-	if (filter === "month") {
-		return date >= new Date(today.getFullYear(), today.getMonth(), 1) && date < new Date(today.getFullYear(), today.getMonth() + 1, 1);
-	}
-	if (filter === "last-month") {
-		return date >= new Date(today.getFullYear(), today.getMonth() - 1, 1) && date < new Date(today.getFullYear(), today.getMonth(), 1);
-	}
-	if (filter === "last-7") return date >= addDays(today, -6) && date < addDays(today, 1);
-	if (filter === "last-30") return date >= addDays(today, -29) && date < addDays(today, 1);
-	return true;
 }
 
 export function getScopeLabel(filter: ScopeFilter): string {
@@ -430,30 +336,6 @@ export function getSearchDateLabel(filter: SearchDateFilter): string {
 	if (filter === "last-30") return t("date.last30");
 	if (filter === "last-week") return t("date.lastWeek");
 	return t("date.lastMonth");
-}
-
-export function matchesSearchDateFilter(date: Date, filter: SearchDateFilter, todayDate = new Date()): boolean {
-	const today = startOfDay(todayDate);
-	if (filter === "week") {
-		const mondayOffset = (today.getDay() + 6) % 7;
-		const start = addDays(today, -mondayOffset);
-		return date >= start && date < addDays(start, 7);
-	}
-	if (filter === "last-week") {
-		const mondayOffset = (today.getDay() + 6) % 7;
-		const thisWeekStart = addDays(today, -mondayOffset);
-		const lastWeekStart = addDays(thisWeekStart, -7);
-		return date >= lastWeekStart && date < thisWeekStart;
-	}
-	if (filter === "month") {
-		return date >= new Date(today.getFullYear(), today.getMonth(), 1) && date < new Date(today.getFullYear(), today.getMonth() + 1, 1);
-	}
-	if (filter === "last-month") {
-		return date >= new Date(today.getFullYear(), today.getMonth() - 1, 1) && date < new Date(today.getFullYear(), today.getMonth(), 1);
-	}
-	if (filter === "last-7") return date >= addDays(today, -6) && date < addDays(today, 1);
-	if (filter === "last-30") return date >= addDays(today, -29) && date < addDays(today, 1);
-	return true;
 }
 
 function getTagDisplayName(key: string, fallbackName: string, displayTags: Map<string, string>): string {
@@ -513,14 +395,4 @@ function formatLocalDateKey(date: Date): string {
 		String(date.getMonth() + 1).padStart(2, "0"),
 		String(date.getDate()).padStart(2, "0"),
 	].join("-");
-}
-
-function startOfDay(date: Date): Date {
-	return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addDays(date: Date, days: number): Date {
-	const nextDate = new Date(date);
-	nextDate.setDate(nextDate.getDate() + days);
-	return nextDate;
 }

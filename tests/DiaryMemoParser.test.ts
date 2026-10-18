@@ -10,6 +10,15 @@ import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "../src/services/DiaryMe
 const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
 
+test("Daily SHA-256 revision 和完整 raw block 的历史摘要保持固定", async () => {
+	const result = await new DiaryMemoParser().parse({
+		sourcePath: "Daily/2026-09-01.md", logicalDate: "2026-09-01",
+		bytes: new TextEncoder().encode("## Memos\r\n- 06:04 备忘 🌱\r\n  second line\r\n"),
+	});
+	assert.equal(result.sourceRevision, "320173fe5bea44fa6aa17347c52b9703f04d07b75db27f6b518ed0147a6ebb31");
+	assert.equal(result.observations[0]?.rawBlockHash, "fnv1a-2e412316");
+});
+
 test("Things 的 Daily 任务位置保留首行、引用与续行原始偏移", async () => {
 	const content = "- 09:00 - [ ] first\n  > - [-] quoted\n  ```md\n  - [x] example\n  ```\n  - parent\n    1. [X] nested\n";
 	const result = await parser.parse({ sourcePath: "Daily/2026-09-20.md", logicalDate: "2026-09-20", bytes: Buffer.from(content) });

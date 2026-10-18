@@ -2,7 +2,7 @@ import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
 import { KnomoMobileMenu } from "./KnomoMobileMenu";
 import { registerMobileFirstTapRecovery, registerMobileMenuTriggerTap } from "./MobileMenuTap";
 import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalComposerDraftStore";
-import { sha256Bytes } from "../services/DiaryMemoParser";
+import { sha256Bytes } from "../utils/sha256";
 import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
 import { MarkdownMutationStaleError } from "../services/MarkdownMutationService";
 import { observationHandleKey, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "../services/DailyMemoPresentationChange";
@@ -1903,10 +1903,9 @@ export class KnomoView extends ItemView {
 
 	private renderComposer(main: HTMLElement): void {
 		const dailyStatus = this.getDailyNotesStatus();
-		const createEnabled = dailyStatus.enabled && this.isComposerCreationAvailable();
 		const wikiLinkListboxId = this.getA11yId("wiki-link-suggestions");
 		const composer = renderKnomoComposer(main, {
-			dailyEnabled: createEnabled,
+			dailyEnabled: dailyStatus.enabled,
 			toolbar: this.settingsService.getSettings().composerToolbar,
 			timeBuoyEnabled: this.settingsService.getSettings().timeBuoyEnabled,
 			timeBuoyPickerId: this.getA11yId("time-buoy-picker"),
@@ -2227,9 +2226,7 @@ export class KnomoView extends ItemView {
 		try {
 			const load = await this.loadCatalogMemos(loadAll, controller.signal);
 			controller.signal.throwIfAborted();
-			if (sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+			if (!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
 			}
@@ -2278,8 +2275,7 @@ export class KnomoView extends ItemView {
 		} catch (error) {
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError
 				|| error instanceof CatalogDiscoveryInvalidatedError || error instanceof TimeBuoyIndexPendingError) {
-				if (!this.trashViewClosed && sourceGeneration === this.memoSourceGeneration
-					&& queryRun === this.catalogDesktopQueryRun && searchVersion === this.viewStateController.search.version) {
+				if (!this.trashViewClosed && this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)) {
 					this.viewStateController.search.requestStatus = this.viewStateController.search.result === null ? "idle" : "ready";
 					this.initialCatalogQueryPending = false;
 					this.clearLoadingIndicators("cards");
@@ -2288,9 +2284,7 @@ export class KnomoView extends ItemView {
 				}
 				return false;
 			}
-			if (sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+			if (!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
 			}
@@ -2764,6 +2758,12 @@ export class KnomoView extends ItemView {
 			&& queryFingerprint === this.getCatalogQueryFingerprint(loadAll);
 	}
 
+	private isCatalogQueryRunCurrent(queryRun: number, sourceGeneration: number, searchVersion: number): boolean {
+		return sourceGeneration === this.memoSourceGeneration
+			&& queryRun === this.catalogDesktopQueryRun
+			&& searchVersion === this.viewStateController.search.version;
+	}
+
 	private queryCatalogFeature(request: CatalogFeatureQuery, signal?: AbortSignal): Promise<CatalogMemoPage> {
 		return this.getCatalogReadService().query(request, signal);
 	}
@@ -2800,9 +2800,7 @@ export class KnomoView extends ItemView {
 			const load = await this.loadCatalogMemos(loadAll, controller.signal);
 			controller.signal.throwIfAborted();
 			if (
-				sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+				!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
@@ -2838,8 +2836,7 @@ export class KnomoView extends ItemView {
 		} catch (error) {
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError
 				|| error instanceof CatalogDiscoveryInvalidatedError || error instanceof TimeBuoyIndexPendingError) {
-				if (!this.trashViewClosed && sourceGeneration === this.memoSourceGeneration
-					&& queryRun === this.catalogDesktopQueryRun && searchVersion === this.viewStateController.search.version) {
+				if (!this.trashViewClosed && this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)) {
 					this.initialCatalogQueryPending = false;
 					this.clearLoadingIndicators("cards");
 					if (!this.hasCommittedCatalogDesktopQuery && !this.hasConfirmedMemoPresentation) this.renderUiState();
@@ -2847,9 +2844,7 @@ export class KnomoView extends ItemView {
 				return;
 			}
 			if (
-				sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+				!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, false)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
@@ -2896,18 +2891,13 @@ export class KnomoView extends ItemView {
 
 	private syncComposerDailyStatus(): void {
 		const dailyStatus = this.getDailyNotesStatus();
-		const createEnabled = dailyStatus.enabled && this.isComposerCreationAvailable();
 		if (this.inputEl !== null) {
-			this.inputEl.disabled = !createEnabled;
+			this.inputEl.disabled = !dailyStatus.enabled;
 		}
 		if (this.isSaving || this.editingMemo !== null || this.quoteReferenceText !== null || this.cardFlowError !== null) {
 			return;
 		}
 		this.updateStatus("", false);
-	}
-
-	private isComposerCreationAvailable(): boolean {
-		return this.memoCommandService.getOperationalState(this.catalogReadState).capabilities.createNew;
 	}
 
 	private syncComposerMode(): void {
@@ -5169,7 +5159,7 @@ export class KnomoView extends ItemView {
 			this.isSaving = false;
 			submittedEditor.composer.setSaving(false);
 			if (!this.trashViewClosed) {
-				if (this.inputEl !== null) this.inputEl.disabled = !this.getDailyNotesStatus().enabled || !this.isComposerCreationAvailable();
+				if (this.inputEl !== null) this.inputEl.disabled = !this.getDailyNotesStatus().enabled;
 				this.updateSendButtonState();
 				this.syncRootState();
 				if (this.composerRenderPending) { this.composerRenderPending = false; await this.render(); }
@@ -7581,7 +7571,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private getImageSourcePath(): string | null {
-		if (!this.getDailyNotesStatus().enabled || !this.isComposerCreationAvailable()) return null;
+		if (!this.getDailyNotesStatus().enabled) return null;
 		if (this.editingMemo && !(this.app.vault.getAbstractFileByPath(this.editingMemo.dailyRef.path) instanceof TFile)) return null;
 		return this.editingMemo?.dailyRef.path ?? this.getTodayDailyNotePath();
 	}

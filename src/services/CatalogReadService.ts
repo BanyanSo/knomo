@@ -100,7 +100,6 @@ export class CatalogReadService {
 	private readonly reviews: LocalMemoReviewStore;
 	private readonly now: () => Date;
 	private readonly random: () => number;
-	private lastReadState: CatalogReadState | null = null;
 	private randomReunionCandidatePool: RandomReunionCandidatePool | null = null;
 	private randomReunionCandidatePoolLoad: RandomReunionPoolTask | null = null;
 	private readonly countCache = new Map<string, CatalogMemoCountResult>();
@@ -110,10 +109,6 @@ export class CatalogReadService {
 		this.reviews = options.reviews ?? new LocalMemoReviewStore();
 		this.now = options.now ?? (() => new Date());
 		this.random = options.random ?? Math.random;
-	}
-
-	getLastReadState(): CatalogReadState | null {
-		return this.lastReadState;
 	}
 
 	getRuntimeAttentionSnapshot(): KnomoRuntimeAttentionSnapshot {
@@ -181,7 +176,7 @@ export class CatalogReadService {
 		}
 		signal?.throwIfAborted();
 		if (page.invalidated) {
-			return this.rememberPage({
+			return {
 				items: [],
 				nextCursor: null,
 				catalogRevision: page.catalogRevision,
@@ -192,7 +187,7 @@ export class CatalogReadService {
 				readState: this.getReadState(page.coverage, page.lifecycle),
 				degraded: true,
 				invalidated: true,
-			});
+			};
 		}
 		const resolved = page.items.map((observation): ResolvedMemo => ({
 			kind: "observation",
@@ -203,7 +198,7 @@ export class CatalogReadService {
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
 		const items = resolved.map(memo => { signal?.throwIfAborted(); return toCatalogMemoItem(memo, catalogCapabilities); });
 		signal?.throwIfAborted();
-		return this.rememberPage({
+		return {
 			items,
 			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
 			catalogRevision: page.catalogRevision,
@@ -214,7 +209,7 @@ export class CatalogReadService {
 			readState: this.getReadState(page.coverage, page.lifecycle),
 			degraded: status.content === "unavailable" || status.catalog === "degraded",
 			invalidated: false,
-		});
+		};
 	}
 
 	async count(request: CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
@@ -527,7 +522,7 @@ export class CatalogReadService {
 			lifecycle = { state: "degraded", persistent: false, writable: false, reason: "catalog_query_failed" };
 		}
 		signal?.throwIfAborted();
-		return this.rememberPage({
+		return {
 			items: [],
 			nextCursor: null,
 			catalogRevision: 0,
@@ -538,7 +533,7 @@ export class CatalogReadService {
 			readState: "storage_unavailable",
 			degraded: true,
 			invalidated: false,
-		});
+		};
 	}
 
 	private async createUnavailableCount(
@@ -730,11 +725,6 @@ export class CatalogReadService {
 		const coverage = await this.options.catalog.getStore().getCoverage();
 		if (!isCompleteCoverage(coverage)) throw new Error(`${feature} requires complete Catalog coverage.`);
 		return coverage;
-	}
-
-	private rememberPage(page: CatalogMemoPage): CatalogMemoPage {
-		this.lastReadState = page.readState;
-		return page;
 	}
 }
 

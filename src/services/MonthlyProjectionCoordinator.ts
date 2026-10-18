@@ -11,7 +11,7 @@ import {
 import type { MonthlyProjectionInputBuilder } from "./MonthlyProjectionInputBuilder";
 import type { MonthlyProjectionConfigurationSnapshot } from "./MonthlyProjectionInputBuilder";
 import type { LowPriorityWorkRunner } from "./LowPriorityWorkQueue";
-import { sha256Bytes } from "./CanonicalJson";
+import { sha256Bytes } from "../utils/sha256";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createCardMemo as makeMemo } from "./helpers/memoCardFixture";
 
 import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import type { MemoViewItem } from "../src/types/memoView";
@@ -609,25 +610,6 @@ class TestElement {
 	}
 }
 
-function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
-	return {
-		id: "memo-1",
-		createdAt: "2026-06-02T00:00:00+08:00",
-		updatedAt: "2026-06-02T00:00:00+08:00",
-		contentSnapshot: "memo",
-		contentHash: "hash",
-		status: "active",
-		tags: [],
-		links: [],
-		images: [],
-		dailyRef: {
-			path: "Daily/2026-06-02.md",
-			heading: null,
-			lineNumberHint: null,
-		},
-		...overrides,
-	};
-}
 
 function makeCapabilities() {
 	return {

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createDeferred } from "./helpers/deferred";
 
 import type { ShuffleDaySelectionResult } from "../src/utils/shuffleDay";
 import type { MemoViewItem } from "../src/types/memoView";
@@ -258,13 +259,6 @@ function makeSelectionWithMemos(selectedDate: string, memos: MemoViewItem[]) {
 	};
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 function makeMemo(id: string, createdAt: string): MemoViewItem {
 	return {

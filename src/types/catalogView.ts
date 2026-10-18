@@ -135,12 +135,6 @@ export type CatalogRecordStatsFilter =
 	| { type: "max-daily-words"; dates: string[] }
 	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };
 
-export interface CatalogOperationalState {
-	readState: CatalogReadState;
-	capabilities: {
-		createNew: boolean;
-	};
-}
 
 export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 	cursor?: CatalogFeatureCursor | null;

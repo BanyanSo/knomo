@@ -11,6 +11,11 @@ interface TypographyWindow extends Window {
 		measureSuggestionContentWidth: typeof import("../src/ui/composerSuggestPosition").measureSuggestionContentWidth;
 		KnomoTagSuggest: typeof import("../src/ui/KnomoTagSuggest").KnomoTagSuggest;
 		KnomoWikiLinkSuggest: typeof import("../src/ui/KnomoWikiLinkSuggest").KnomoWikiLinkSuggest;
+		renderKnomoListSummary: typeof import("../src/ui/KnomoFeed").renderKnomoListSummary;
+		renderKnomoActionableListSummary: typeof import("../src/ui/KnomoFeed").renderKnomoActionableListSummary;
+		renderKnomoRandomReunionToolbar: typeof import("../src/ui/KnomoFeed").renderKnomoRandomReunionToolbar;
+		renderKnomoShuffleDayHeader: typeof import("../src/ui/KnomoFeed").renderKnomoShuffleDayHeader;
+		MobileHeaderTitleController: typeof import("../src/ui/MobileHeaderTitleController").MobileHeaderTitleController;
 		undoDepth: typeof import("@codemirror/commands").undoDepth;
 		undo: typeof import("@codemirror/commands").undo;
 		redo: typeof import("@codemirror/commands").redo;
@@ -47,6 +52,8 @@ async function typographyBundle() {
 			export { measureSuggestionContentWidth } from "./src/ui/composerSuggestPosition";
 			export { KnomoTagSuggest } from "./src/ui/KnomoTagSuggest";
 			export { KnomoWikiLinkSuggest } from "./src/ui/KnomoWikiLinkSuggest";
+			export { renderKnomoListSummary, renderKnomoActionableListSummary, renderKnomoRandomReunionToolbar, renderKnomoShuffleDayHeader } from "./src/ui/KnomoFeed";
+			export { MobileHeaderTitleController } from "./src/ui/MobileHeaderTitleController";
 			export { undoDepth, undo, redo } from "@codemirror/commands";
 		`, resolveDir: process.cwd(), loader: "ts" },
 		bundle: true, write: false, format: "iife", globalName: "KnomoTypographyFixture",
@@ -72,7 +79,7 @@ const installDomHelpers = () => {
 			return this.appendChild(el);
 		},
 		createDiv(this: HTMLElement, options?: { cls?: string; text?: string; attr?: Record<string, string> }) { return this.createEl("div", options); },
-		createSpan(this: HTMLElement) { return this.createEl("span"); },
+		createSpan(this: HTMLElement, options?: { cls?: string; text?: string; attr?: Record<string, string> }) { return this.createEl("span", options); },
 		setAttr(this: HTMLElement, key: string, value: string) { this.setAttribute(key, value); },
 		addClass(this: HTMLElement, key: string) { this.classList.add(key); },
 		removeClass(this: HTMLElement, key: string) { this.classList.remove(key); },
@@ -84,6 +91,130 @@ const installDomHelpers = () => {
 		instanceOf(this: HTMLElement, ctor: typeof HTMLElement) { return this instanceof ctor; },
 	});
 };
+
+test("top titles and summaries retain hierarchy, spacing and button reachability across desktop and mobile layouts", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	const bundle = await typographyBundle();
+	try {
+		const page = await browser.newPage();
+		for (const theme of ["theme-light", "theme-dark"]) for (const [layout, width] of [["desktop-wide", 1000], ["desktop-narrow", 540], ["mobile", 320], ["mobile", 390]] as const) {
+			const mobile = layout === "mobile";
+			await page.setViewportSize({ width, height: 900 });
+			await page.setContent(`<style>${host}${hostFixture}${css}
+				body { --font-preferred-size:22px; --text-faint:#888; }
+			</style><body class="${theme} ${mobile ? "is-mobile is-phone" : ""}">
+				<div class="workspace-leaf-content" data-type="knomo-view"><div class="view-header"><div class="view-header-title-container"><div class="view-header-title"></div></div></div><div class="view-content">
+				<div class="probe knomo-plugin is-layout-${layout}">
+					<div class="${layout === "desktop-narrow" ? "knomo-compact-title" : "knomo-scope-wrap"}">
+						<div class="knomo-title-host"><button class="knomo-title-root">全部笔记</button><span class="knomo-title-separator">/</span>
+							<button class="knomo-scope-trigger" aria-haspopup="menu"><span class="knomo-title-label">全部笔记</span><span class="knomo-title-chevron">⌄</span></button></div>
+					</div>
+					<div class="knomo-title-host"><span class="knomo-title-label">记录统计</span></div>
+					<div id="ordinary"></div><div id="long"></div><div id="random"></div><div id="catalog"></div><div id="shuffle"></div>
+					<div class="knomo-mobile-search-results"></div>
+				</div>
+				</div></div>
+			</body>`);
+			await page.addScriptTag({ content: bundle });
+			await page.evaluate(installDomHelpers);
+			await page.evaluate(() => {
+				const fixture = (window as unknown as TypographyWindow).KnomoTypographyFixture;
+				const container = (id: string) => document.getElementById(id)!;
+				const card = (parent: HTMLElement) => parent.createDiv({ cls: "knomo-card", text: "Memo" });
+				fixture.renderKnomoListSummary(container("ordinary"), "标签 #日常 · 2026年10月 · 关键词 项目复盘 · 共 28 条笔记");
+				card(container("ordinary"));
+				fixture.renderKnomoListSummary(container("long"), "#" + "LongTagAndSearchKeyword".repeat(20));
+				const random = fixture.renderKnomoRandomReunionToolbar(container("random"), 12345);
+				random.querySelector(".knomo-list-summary")!.textContent += " · " + "LongSearchKeyword".repeat(8);
+				fixture.renderKnomoActionableListSummary(container("catalog"), "当前笔记暂不可用 · " + "LongConfigurationMessage".repeat(8), { label: "重试", action: "refresh-catalog-sync-state" });
+				fixture.renderKnomoShuffleDayHeader(container("shuffle"), "2026-10-18", { memoCount: 12, wordCount: 1234, tagCount: 5, imageCount: 2, linkCount: 3, firstMemoTime: null, lastMemoTime: null });
+				card(container("shuffle"));
+				fixture.renderKnomoListSummary(document.querySelector<HTMLElement>(".knomo-mobile-search-results")!, "关键词 " + "LongMobileSearchKeyword".repeat(12));
+			});
+			const context = JSON.stringify({ theme, layout, width });
+			for (const label of ["全部笔记", "勾事记", "往日回顾", "随机重逢", "往日漫游", "时光浮标", "记录统计", "搜索", "有图片"]) {
+				const titles = await page.evaluate(({ label, mobile }: { label: string; mobile: boolean }) => {
+					const fixture = (window as unknown as TypographyWindow).KnomoTypographyFixture;
+					const titleEl = document.querySelector<HTMLElement>(".view-header-title")!;
+					new fixture.MobileHeaderTitleController({
+						registerDomEvent: (target, type, listener) => target.addEventListener(type, listener),
+						renderChevron: container => container.createSpan({ cls: "knomo-title-chevron", text: "⌄" }),
+						canToggleScopeMenu: () => true, onToggleScopeMenu: () => {},
+					}).sync({ headerEl: titleEl.closest<HTMLElement>(".view-header")!, titleEl, isRecordStats: label === "记录统计", scopeMenuOpen: false, label });
+					const title = document.querySelector<HTMLElement>(".knomo-scope-trigger .knomo-title-label")!;
+					title.textContent = label;
+					const typography = (el: Element) => {
+						const style = getComputedStyle(el);
+						return [style.fontSize, style.fontWeight, style.color];
+					};
+					const normal = getComputedStyle(document.body).getPropertyValue("--text-normal").trim();
+					const swatch = document.createElement("span");
+					swatch.style.color = normal; document.body.appendChild(swatch);
+					const normalColor = getComputedStyle(swatch).color;
+					swatch.style.color = "var(--text-muted)";
+					const mutedColor = getComputedStyle(swatch).color;
+					swatch.style.color = "var(--text-faint)";
+					const faintColor = getComputedStyle(swatch).color;
+					swatch.remove();
+					return {
+						active: typography(mobile ? titleEl : title), stats: typography(document.querySelector(".knomo-title-host > .knomo-title-label")!),
+						visible: (mobile ? titleEl : title).getBoundingClientRect().height > 0,
+						root: typography(document.querySelector(".knomo-title-root")!), separator: getComputedStyle(document.querySelector(".knomo-title-separator")!).color,
+						chevron: getComputedStyle(document.querySelector(mobile && label !== "记录统计" ? ".knomo-mobile-title .knomo-title-chevron" : ".knomo-scope-trigger .knomo-title-chevron")!).color,
+						normalColor, mutedColor, faintColor,
+					};
+				}, { label, mobile });
+				assert.deepEqual(titles.active, ["15px", "400", titles.normalColor], `${context} ${label}`);
+				assert.equal(titles.visible, true, `${context} ${label}`);
+				assert.deepEqual(titles.stats, ["15px", "400", titles.normalColor], context);
+				assert.deepEqual(titles.root, ["14px", "400", titles.mutedColor], context);
+				assert.equal(titles.separator, titles.faintColor, context);
+				assert.equal(titles.chevron, titles.faintColor, context);
+			}
+			const actual = await page.evaluate(() => {
+				const el = (selector: string) => document.querySelector<HTMLElement>(selector)!;
+				const rect = (selector: string) => el(selector).getBoundingClientRect();
+				const typography = (selector: string) => {
+					const style = getComputedStyle(el(selector));
+					return [style.fontSize, style.fontWeight, style.lineHeight, style.color];
+				};
+				const bounded = (parent: string, child: string) => {
+					const outer = rect(parent), inner = rect(child);
+					return inner.left >= outer.left && inner.right <= outer.right + 1 && el(child).scrollWidth <= el(child).clientWidth + 1;
+				};
+				return {
+					summaries: Array.from(document.querySelectorAll(".knomo-list-summary")).map(summary => {
+						const style = getComputedStyle(summary);
+						return [style.fontSize, style.fontWeight, style.lineHeight, style.color];
+					}),
+					date: typography(".knomo-shuffle-day-date"), shuffle: typography(".knomo-shuffle-day-summary"),
+					gap: rect("#ordinary .knomo-card").top - rect("#ordinary .knomo-list-summary").bottom,
+					shuffleGap: rect(".knomo-shuffle-day-summary").top - rect(".knomo-shuffle-day-date").bottom,
+					shuffleCardGap: rect("#shuffle .knomo-card").top - rect(".knomo-shuffle-day-header").bottom,
+					wrapped: ["#long .knomo-list-summary", ".knomo-mobile-search-results .knomo-list-summary"].every(selector => rect(selector).height > 21 && bounded(".probe", selector)),
+					buttons: ["#random", "#catalog"].map(parent => ({
+						within: bounded(parent, `${parent} button`) && bounded(parent, `${parent} .knomo-list-summary`),
+						separate: parent === "#random" ? rect(`${parent} .knomo-list-summary`).right + 11 <= rect(`${parent} button`).left
+							: rect(`${parent} span`).right + 11 <= rect(`${parent} button`).left,
+					})),
+					caption: getComputedStyle(document.body).getPropertyValue("--knomo-text-caption").trim(),
+				};
+			});
+			for (const summary of actual.summaries) assert.deepEqual(summary.slice(0, 3), ["14px", "400", "21px"], context);
+			assert.ok(actual.summaries.every((summary: string[]) => summary[3] === actual.shuffle[3]), context);
+			assert.deepEqual(actual.date.slice(0, 2), ["14px", "600"], context);
+			assert.deepEqual(actual.shuffle.slice(0, 3), ["14px", "400", "21px"], context);
+			assert.notEqual(actual.date[3], actual.shuffle[3], context);
+			assert.deepEqual([actual.gap, actual.shuffleGap, actual.shuffleCardGap], [10, 4, 14], context);
+			assert.equal(actual.wrapped, true, context);
+			assert.ok(actual.buttons.every((button: { within: boolean; separate: boolean }) => button.within && button.separate), context);
+			assert.equal(actual.caption, "12px", context);
+		}
+	} finally { await browser.close(); }
+});
 
 test("Typography separates content from UI in desktop and body-mounted mobile Composer, preserving host controls and display exceptions", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);

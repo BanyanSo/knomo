@@ -278,7 +278,8 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	color: var(--text-muted);
+	color: var(--text-normal);
+	font-size: var(--knomo-text-ui-medium);
 	font-weight: var(--font-normal);
 	cursor: pointer;
 }
@@ -291,6 +292,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	width: 14px;
 	height: 14px;
 	color: var(--text-faint);
+	font-weight: var(--font-normal);
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title .knomo-title-chevron svg {
@@ -1165,6 +1167,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.knomo-plugin .knomo-title-label {
+	color: var(--text-normal);
+	font-size: var(--knomo-text-ui-medium);
+	font-weight: var(--font-normal);
 }
 
 .knomo-plugin .knomo-title-separator {
@@ -2365,8 +2373,12 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-list-summary {
 	margin: 0 0 10px;
+	min-width: 0;
 	color: var(--text-muted);
-	font-size: var(--knomo-text-caption);
+	font-size: var(--knomo-text-ui-base);
+	font-weight: var(--font-normal);
+	line-height: 1.5;
+	overflow-wrap: anywhere;
 }
 
 .knomo-plugin .knomo-list-toolbar {
@@ -2381,6 +2393,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin: 0;
 }
 
+.knomo-plugin .knomo-list-toolbar > .knomo-inline-button {
+	flex: 0 0 auto;
+}
+
 .knomo-plugin .knomo-shuffle-day-header {
 	display: flex;
 	flex-direction: column;
@@ -2390,13 +2406,14 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-shuffle-day-date {
 	color: var(--text-normal);
-	font-size: var(--knomo-text-ui-medium);
+	font-size: var(--knomo-text-ui-base);
 	font-weight: var(--font-semibold);
 }
 
 .knomo-plugin .knomo-shuffle-day-summary {
 	color: var(--text-muted);
-	font-size: var(--knomo-text-caption);
+	font-size: var(--knomo-text-ui-base);
+	font-weight: var(--font-normal);
 	line-height: 1.5;
 }
 

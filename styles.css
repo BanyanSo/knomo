@@ -234,9 +234,94 @@ body:not(.is-mobile) .workspace-leaf-content[data-type="knomo-view"] .view-heade
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
+	--knomo-mobile-header-safe-space: 0px;
+	--knomo-mobile-header-surface: var(--background-secondary);
+	--knomo-mobile-header-filter: none;
 	border-bottom: 0;
-	backdrop-filter: blur(18px) saturate(1.4);
-	-webkit-backdrop-filter: blur(18px) saturate(1.4);
+	/* 普通导航的安全区在标题栏内部，由标题栏自身采样背后的列表。 */
+	background: var(--knomo-mobile-header-surface);
+	backdrop-filter: var(--knomo-mobile-header-filter);
+	-webkit-backdrop-filter: var(--knomo-mobile-header-filter);
+}
+
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .view-header {
+	--knomo-mobile-header-safe-space: var(--view-header-top-offset, env(safe-area-inset-top, 0px));
+	/* 材质独立绘制，向按钮下方延伸时不改变按钮和卡片的位置。 */
+	background: transparent;
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+}
+
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .view-header::before {
+	content: "";
+	position: absolute;
+	inset: 0 0 -4px;
+	z-index: -1;
+	pointer-events: none;
+	background: var(--knomo-mobile-header-surface);
+	backdrop-filter: var(--knomo-mobile-header-filter);
+	-webkit-backdrop-filter: var(--knomo-mobile-header-filter);
+}
+
+body.is-mobile.is-phone.is-floating-nav .workspace-leaf-content[data-type="knomo-view"] .view-header::before {
+	/* 浮动导航的安全区在标题栏外，材质向上覆盖该区域。 */
+	top: calc(-1 * var(--knomo-mobile-header-safe-space));
+}
+
+/* 标题和内容共用视区，列表内留白随正文滚走，避免外部占位隔开两层。 */
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] {
+	--knomo-mobile-feed-top: calc(var(--view-header-top-offset, env(safe-area-inset-top, 0px)) + var(--view-header-height, 44px));
+	display: grid;
+	grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] > .view-header {
+	grid-area: 1 / 1;
+	align-self: start;
+}
+
+body.is-mobile.is-phone:not(.is-floating-nav):not(.auto-full-screen) .workspace-leaf-content[data-type="knomo-view"] > .view-header {
+	position: relative;
+}
+
+body.is-mobile.is-phone:is(.is-floating-nav, .auto-full-screen) .workspace-leaf-content[data-type="knomo-view"] {
+	--knomo-mobile-feed-top: var(--view-top-spacing, calc(var(--view-header-top-offset, env(safe-area-inset-top, 0px)) + var(--view-header-height, 44px) + 8px));
+}
+
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] > .view-content {
+	/* 扩展滚动视图区，而不是把磨砂层向正常卡片延伸。 */
+	grid-area: 1 / 1;
+	margin-top: 0;
+	height: 100%;
+}
+
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .knomo-card-flow {
+	/* 原来的外部占位改为列表内留白，首屏位置不变，滚动后正文可进入栏后。 */
+	padding-top: var(--knomo-mobile-feed-top);
+	scroll-padding-top: var(--knomo-mobile-feed-top);
+}
+
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .knomo-page-feedback:not([hidden]) {
+	margin-top: var(--knomo-mobile-feed-top);
+}
+
+body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .knomo-page-feedback:not([hidden]) ~ .knomo-card-flow {
+	padding-top: 0;
+}
+
+@supports (background: color-mix(in srgb, black 85%, transparent)) and ((backdrop-filter: blur(18px)) or (-webkit-backdrop-filter: blur(18px))) {
+	body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
+		/* 状态栏与标题栏连续透出正文，底部最透明，轻模糊保留文字的可辨认度。 */
+		--knomo-mobile-header-surface: linear-gradient(to bottom, color-mix(in srgb, var(--background-secondary) 72%, transparent) 0%, color-mix(in srgb, var(--background-secondary) 34%, transparent) var(--knomo-mobile-header-safe-space), color-mix(in srgb, var(--background-secondary) 4%, transparent) 100%);
+		--knomo-mobile-header-filter: blur(2px) saturate(1.25);
+	}
+}
+
+@media (prefers-reduced-transparency: reduce) {
+	body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
+		--knomo-mobile-header-surface: var(--background-secondary);
+		--knomo-mobile-header-filter: none;
+	}
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header {

@@ -194,6 +194,7 @@ import { RecordStatsViewStateController } from "./RecordStatsViewStateController
 import { SearchQueryDebounce } from "./SearchQueryDebounce";
 import { ShuffleDayController } from "./ShuffleDayController";
 import { TrashMemoController } from "./TrashMemoController";
+import type { ClearTrashAction } from "./clearTrashAction";
 import type { TrashMemoRenderTarget } from "./TrashMemoController";
 import { KnomoUserActionController } from "./KnomoUserActionController";
 import {
@@ -645,6 +646,7 @@ export class KnomoView extends ItemView {
 		private readonly memoCommandService: MemoCommandService,
 		private readonly catalogReadService: CatalogReadService,
 		trashStore: TrashSnapshotStore,
+		clearTrash: ClearTrashAction,
 		getDailyNotesStatus: () => DailyNotesStatus,
 		getTodayDailyNotePath: () => string | null,
 		private readonly onRefreshCatalogProtocolState: (() => Promise<void>) | null = null,
@@ -847,6 +849,7 @@ export class KnomoView extends ItemView {
 				confirmLabel: t("trash.purge"),
 				danger: true,
 			}),
+			clearTrash,
 			handleRestoredMemo: (deletedMemo, restoredMemo) => this.handleRestoredTrashMemo(deletedMemo, restoredMemo),
 			isTrashActive: () => this.activeNav === "trash",
 			showNotice: (message) => new Notice(message),
@@ -979,6 +982,7 @@ export class KnomoView extends ItemView {
 			setSearchDateFilter: (filter, sourceEl) => this.setSearchDateFilter(filter, sourceEl),
 			setMobileSearchDateFilter: (filter) => this.setMobileSearchDateFilter(filter),
 			runTrashAction: (action, memoId) => this.runTrashActionById(action, memoId),
+			clearTrash: () => this.trashMemoController.handleClearTrash(),
 			runMemoAction: (action, memoId) => this.runMemoActionById(action, memoId),
 			openMemoCardDailyNote: (memoId, randomReunion) => this.openMemoCardDailyNote(memoId, randomReunion),
 			closeCardMenu: () => this.closeCardMenu(),
@@ -3887,6 +3891,8 @@ export class KnomoView extends ItemView {
 			trashLoading: trashSnapshot.trashLoading,
 			trashError: trashSnapshot.trashError,
 			trashMemos: trashSnapshot.trashMemos,
+			trashCount: trashSnapshot.trashCount,
+			trashClearBusy: trashSnapshot.trashClearBusy,
 		});
 		if (presentation.type === "empty" && this.shouldShowTimeBuoyIntro() && this.cardFlowError === null) {
 			presentation = { type: "items", memos: [], mode: "memo", headers: [] };
@@ -7303,6 +7309,14 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleTrashRenderRequest(target: TrashMemoRenderTarget): void {
+		if (target === "clear-trash-state") {
+			const busy = this.trashMemoController.getSnapshot().trashClearBusy;
+			for (const button of Array.from(this.cardFlowEl?.querySelectorAll<HTMLButtonElement>('button[data-action="clear-trash"]') ?? [])) {
+				button.disabled = busy;
+				button.setAttribute("aria-busy", String(busy));
+			}
+			return;
+		}
 		if (target === "ui-state") {
 			this.renderUiState();
 			return;

@@ -7,8 +7,9 @@ import type { TrashAction } from "./KnomoActionDispatch";
 import type { MemoRestoreResult } from "../types/catalogView";
 import { TrashDailyWriteError } from "../services/IndependentTrashService";
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
+import type { ClearTrashAction } from "./clearTrashAction";
 
-export type TrashMemoRenderTarget = "ui-state" | "trash-count-and-scope" | "card-flow";
+export type TrashMemoRenderTarget = "ui-state" | "trash-count-and-scope" | "card-flow" | "clear-trash-state";
 
 export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	trashMemos: TMemo[] | null;
@@ -17,6 +18,7 @@ export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	trashCount: number | null;
 	trashCountLoading: boolean;
 	trashCountError: string | null;
+	trashClearBusy: boolean;
 	trashBusyMemoActions: ReadonlyMap<string, TrashAction>;
 	trashCleanupPendingMemoIds: ReadonlySet<string>;
 }
@@ -33,6 +35,7 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	isCleanupPending: (memo: TMemo) => boolean;
 	purgeMemo: (memo: TMemo) => Promise<void>;
 	confirmPurge: (memo: TMemo) => Promise<boolean>;
+	clearTrash: ClearTrashAction;
 	handleRestoredMemo: (deletedMemo: TMemo, restoredMemo: TMemo) => void;
 	isTrashActive: () => boolean;
 	showNotice: (message: string) => void;
@@ -47,6 +50,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	private unsubscribe: (() => void) | null = null;
 	private windowEnd = 0;
 	private trashBusyMemoActions = new Map<string, TrashAction>();
+	private trashClearBusy = false;
 
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
@@ -54,6 +58,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		this.session++;
 		this.disposed = false;
 		this.trashBusyMemoActions = new Map();
+		this.trashClearBusy = false;
 		this.unsubscribe?.();
 		this.unsubscribe = this.options.store.subscribe(() => {
 			if (this.disposed) return;
@@ -76,6 +81,7 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			trashCount: state.count,
 			trashCountLoading: state.status === "loading",
 			trashCountError: error,
+			trashClearBusy: this.trashClearBusy,
 			trashBusyMemoActions: this.trashBusyMemoActions,
 			trashCleanupPendingMemoIds: new Set(memos?.filter(this.options.isCleanupPending).map(memo => memo.id)),
 		};
@@ -116,6 +122,23 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		this.windowEnd = Math.max(this.windowEnd, this.options.pageSize) + this.options.pageSize;
 		this.render("card-flow");
 		return true;
+	}
+
+	async handleClearTrash(): Promise<void> {
+		const state = this.options.store.getSummary();
+		if (this.disposed || this.trashClearBusy || !this.options.isTrashActive() || state.status !== "ready" || state.count === 0) return;
+		const session = this.session;
+		const isCurrent = () => !this.disposed && session === this.session;
+		this.trashClearBusy = true;
+		this.render("clear-trash-state");
+		try {
+			await this.options.clearTrash(isCurrent);
+		} finally {
+			if (isCurrent()) {
+				this.trashClearBusy = false;
+				this.render("clear-trash-state");
+			}
+		}
 	}
 
 	async handleTrashAction(action: TrashAction, memo: TMemo): Promise<void> {

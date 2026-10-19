@@ -42,6 +42,19 @@ test("presents card flow error before other states", async () => {
 	});
 });
 
+test("回收站操作栏使用完整总数，分页、加载、空集合及错误状态不混淆", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const options = { ...baseOptions(), activeNav: "trash" as const, trashMemos: makeMemos(2, "trash"), trashCount: 101 };
+	assert.deepEqual(getCardFlowPresentation(options).headers, [{ type: "trash-toolbar", count: 101, busy: false }]);
+	assert.deepEqual(getCardFlowPresentation({ ...options, trashClearBusy: true }).headers,
+		[{ type: "trash-toolbar", count: 101, busy: true }]);
+	for (const state of [{ trashLoading: true }, { trashCount: null }, { trashMemos: null },
+		{ trashCount: 0, trashMemos: [] }, { trashError: "Unreadable" }]) {
+		assert.ok(!getCardFlowPresentation({ ...options, ...state }).headers?.some(header => header.type === "trash-toolbar"));
+	}
+});
+
 test("presents regular empty state and filtered empty copy", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
@@ -342,6 +355,8 @@ function baseOptions() {
 		trashLoading: false,
 		trashError: null,
 		trashMemos: [],
+		trashCount: null,
+		trashClearBusy: false,
 	};
 }
 

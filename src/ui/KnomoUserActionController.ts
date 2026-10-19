@@ -49,6 +49,7 @@ interface KnomoUserActionControllerOptions {
 	setSearchDateFilter: (filter: SearchDateFilter, sourceEl: HTMLElement | null) => void;
 	setMobileSearchDateFilter: (filter: SearchDateFilter) => void;
 	runTrashAction: (action: TrashAction, memoId: string | null) => Promise<void>;
+	clearTrash: () => Promise<void>;
 	openMemoCardDailyNote: (memoId: string, randomReunion: boolean) => Promise<void>;
 	closeCardMenu: () => void;
 	closeScopeMenu: () => void;
@@ -282,6 +283,9 @@ export class KnomoUserActionController {
 				return;
 			case "refresh-shuffle-day":
 				await this.options.refreshShuffleDay?.();
+				return;
+			case "clear-trash":
+				await this.options.clearTrash();
 				return;
 			case "load-more":
 				if (this.options.hasMoreCardFlowItems()) {

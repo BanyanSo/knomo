@@ -14,6 +14,7 @@ export interface CardFlowRegularFilterCopy {
 export type CardFlowHeader =
 	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean }
 	| { type: "random-toolbar"; count: number }
+	| { type: "trash-toolbar"; count: number; busy: boolean }
 	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
 
 export type CardFlowPresentation =
@@ -43,6 +44,8 @@ export interface CardFlowPresentationOptions {
 	trashLoading: boolean;
 	trashError: string | null;
 	trashMemos: MemoRecord[] | null;
+	trashCount: number | null;
+	trashClearBusy: boolean;
 }
 
 export function getCardFlowPresentation(options: CardFlowPresentationOptions): CardFlowPresentation {
@@ -58,6 +61,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 			trashLoading: options.trashLoading,
 			trashError: options.trashError,
 			trashMemos: options.trashMemos,
+			trashCount: options.trashCount,
+			trashClearBusy: options.trashClearBusy,
 		});
 	}
 	if (options.activeNav === "random") {
@@ -173,6 +178,8 @@ interface TrashCardFlowPresentationOptions {
 	trashLoading: boolean;
 	trashError: string | null;
 	trashMemos: MemoRecord[] | null;
+	trashCount: number | null;
+	trashClearBusy: boolean;
 }
 
 function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions): CardFlowPresentation {
@@ -195,7 +202,8 @@ function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions)
 			type: "items",
 			memos: options.trashMemos,
 			mode: "trash",
-			headers: [],
+			headers: !options.trashLoading && options.trashCount !== null && options.trashCount > 0
+				? [{ type: "trash-toolbar", count: options.trashCount, busy: options.trashClearBusy }] : [],
 		};
 	}
 

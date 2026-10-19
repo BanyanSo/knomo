@@ -246,6 +246,7 @@ test("handleAction dispatches every simple action to the expected view callbacks
 			expected: ["refresh-random"],
 		},
 		"refresh-shuffle-day": { expected: ["refresh-shuffle"] },
+		"clear-trash": { expected: ["clear-trash"] },
 		"load-more": {
 			expected: ["hydrate"],
 		},
@@ -499,6 +500,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): {
 			runTrashAction: async (action, memoId) => {
 				calls.push(`trash:${action}:${memoId ?? ""}`);
 			},
+			clearTrash: async () => { calls.push("clear-trash"); },
 			runMemoAction: async (action, memoId) => {
 				calls.push(`memo:${action}:${memoId ?? ""}`);
 			},

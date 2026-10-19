@@ -102,6 +102,20 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 	assert.equal(defaultEmptyState.find(".knomo-empty-description"), null);
 });
 
+test("回收站工具栏显示完整数量、单复数及危险按钮，busy 禁止再次触发", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
+	for (const [count, busy, expected] of [[1, false, "1 memo in Trash"], [101, true, "101 memos in Trash"]] as const) {
+		const root = new TestElement("div");
+		renderKnomoCardFlowHeaders(root.asHtml(), [{ type: "trash-toolbar", count, busy }]);
+		assert.equal(root.find(".knomo-list-summary")?.getText(), expected);
+		const button = root.find("[data-action='clear-trash']")!;
+		assert.equal(button.getText(), "Empty Trash"); assert.equal(button.hasClass("is-danger"), true);
+		assert.equal((button.asHtml() as HTMLButtonElement).disabled, busy);
+		assert.equal(button.getAttr("aria-busy"), String(busy));
+	}
+});
+
 test("重逢组失效或删除为空后两种视图渲染仍保留换一组入口", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");

@@ -28,6 +28,7 @@ import { LegacyTrashMigrationService } from "./services/LegacyTrashMigrationServ
 import { IndependentTrashService } from "./services/IndependentTrashService";
 import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
 import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
+import { createClearTrashAction } from "./ui/clearTrashAction";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
@@ -345,6 +346,14 @@ export default class KnomoPlugin extends Plugin {
 		);
 		this.catalogReadService = this.memoCommandService.getReadService();
 		this.registerTrashEvents(trashStore);
+		const clearTrash = createClearTrashAction({
+			getPath: () => trashStore.path,
+			confirm: () => showKnomoConfirmModal(this.app, { title: t("trash.clear"), message: t("confirm.clearTrash"),
+				confirmLabel: t("trash.clear"), danger: true }),
+			clear: () => this.memoCommandService!.clearTrash(),
+			showNotice: message => { new Notice(message); },
+			isActive: () => !lowPriorityWorkQueue.signal.aborted,
+		});
 
 		const legacyIndexReader = new LegacyIndexReader(
 			this.app,
@@ -459,6 +468,7 @@ export default class KnomoPlugin extends Plugin {
 				this.memoCommandService!,
 				this.catalogReadService!,
 				trashStore,
+				clearTrash,
 				() => dailyNoteService.getStatus(),
 				() => dailyNoteService.getTodayDailyNotePath(),
 				() => retryRuntimeState(),
@@ -502,16 +512,7 @@ export default class KnomoPlugin extends Plugin {
 		this.addCommand({
 			id: "clear-trash",
 			name: t("trash.clear"),
-			callback: async () => {
-				try {
-					const selectedPath = trashStore.path;
-					if (!await showKnomoConfirmModal(this.app, { title: t("trash.clear"), message: t("confirm.clearTrash"),
-						confirmLabel: t("trash.clear"), danger: true })) return;
-					if (trashStore.path !== selectedPath) throw new Error("Trash configuration changed.");
-					await this.memoCommandService!.clearTrash();
-					new Notice(t("notice.trashCleared"));
-				} catch (error) { new Notice(t("error.clearTrashFailed", { error: String(error) })); }
-			},
+			callback: () => clearTrash(),
 		});
 
 		settingTab = new KnomoSettingTab(

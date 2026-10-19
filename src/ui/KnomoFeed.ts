@@ -72,6 +72,17 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 		if (header.type === "random-toolbar") {
 			return renderKnomoRandomReunionToolbar(container, header.count);
 		}
+		if (header.type === "trash-toolbar") {
+			const toolbar = container.createDiv({ cls: "knomo-list-toolbar" });
+			renderKnomoListSummary(toolbar, t(header.count === 1 ? "trash.summaryOne" : "trash.summary", { count: header.count }));
+			const button = toolbar.createEl("button", {
+				cls: "knomo-inline-button is-danger",
+				text: t("trash.clear"),
+				attr: { type: "button", "data-action": "clear-trash", "aria-busy": String(header.busy) },
+			});
+			button.disabled = header.busy;
+			return toolbar;
+		}
 		if (header.type === "shuffle-day") {
 			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats);
 		}

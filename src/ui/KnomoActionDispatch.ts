@@ -5,6 +5,7 @@ export type KnomoSimpleAction =
 	| "toggle-card-menu"
 	| "refresh-random-reunion"
 	| "refresh-shuffle-day"
+	| "clear-trash"
 	| "load-more"
 	| "load-more-mobile-search"
 	| "reset-list-state"
@@ -70,6 +71,7 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "toggle-card-menu" ||
 		action === "refresh-random-reunion" ||
 		action === "refresh-shuffle-day" ||
+		action === "clear-trash" ||
 		action === "load-more" ||
 		action === "load-more-mobile-search" ||
 		action === "reset-list-state" ||

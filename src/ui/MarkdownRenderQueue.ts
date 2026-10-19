@@ -17,6 +17,7 @@ interface MarkdownRenderQueueOptions {
 export class MarkdownRenderQueue {
 	private highPriorityQueue: MarkdownRenderTask[] = [];
 	private normalPriorityQueue: MarkdownRenderTask[] = [];
+	private readonly pendingTargets = new Map<HTMLElement, MarkdownRenderTask>();
 	private activeCount = 0;
 	private paused = false;
 	private scheduledTask: number | null = null;
@@ -27,7 +28,19 @@ export class MarkdownRenderQueue {
 		if (generation !== this.options.getGeneration()) {
 			return;
 		}
+		const pending = target === undefined ? undefined : this.pendingTargets.get(target);
+		if (pending !== undefined && pending.generation === generation) {
+			// 只替换尚未开始的请求，保留视口标记和已有高优先级。
+			pending.run = run;
+			if (priority === "high") {
+				const index = this.normalPriorityQueue.indexOf(pending);
+				if (index >= 0) this.highPriorityQueue.push(...this.normalPriorityQueue.splice(index, 1));
+			}
+			this.pump();
+			return;
+		}
 		const task: MarkdownRenderTask = { generation, run, target, preferred: false };
+		if (target !== undefined) this.pendingTargets.set(target, task);
 		if (priority === "high") {
 			this.highPriorityQueue.push(task);
 		} else {
@@ -47,6 +60,7 @@ export class MarkdownRenderQueue {
 		this.scheduledTask = null;
 		this.highPriorityQueue = [];
 		this.normalPriorityQueue = [];
+		this.pendingTargets.clear();
 	}
 
 	setPaused(paused: boolean): void {
@@ -83,6 +97,7 @@ export class MarkdownRenderQueue {
 			if (task === undefined) {
 				return;
 			}
+			if (task.target !== undefined && this.pendingTargets.get(task.target) === task) this.pendingTargets.delete(task.target);
 			if (task.generation !== this.options.getGeneration()) {
 				continue;
 			}

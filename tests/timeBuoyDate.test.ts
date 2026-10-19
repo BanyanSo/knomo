@@ -26,6 +26,13 @@ test("uses local calendar dates without UTC conversion", () => {
 	assert.equal(getTimeBuoyDateStatus("2026-07-19", today), "past");
 });
 
+test("日期格式化保留四位年份补零", () => {
+	const date = new Date(0);
+	date.setHours(12, 0, 0, 0);
+	date.setFullYear(5, 0, 2);
+	assert.equal(formatTimeBuoyDate(date), "0005-01-02");
+});
+
 test("prioritizes today, then upcoming, for multi-date card states", () => {
 	const today = new Date(2026, 6, 20, 23, 30);
 	assert.equal(getTimeBuoyCardStatus(["2026-07-18", "2026-07-19"], today), "past");

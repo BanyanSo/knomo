@@ -691,22 +691,28 @@ export default class KnomoPlugin extends Plugin {
 
 	private registerReferenceEvents(): void {
 		// 合并引用事件，只更新已打开视图的宿主渲染，不重查列表或重新抽样。
+		let pendingPaths: Set<string> | null = new Set();
 		const scheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
 			async () => {
+				const changedPaths = pendingPaths === null ? undefined : [...pendingPaths];
+				pendingPaths = new Set();
 				await Promise.all(this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async leaf => {
-					if (leaf.view instanceof KnomoView) await leaf.view.refreshReferences();
+					if (leaf.view instanceof KnomoView) await leaf.view.refreshReferences(changedPaths);
 				}));
 			},
 			OPEN_VIEWS_REFRESH_DEBOUNCE_MS,
 		);
-		this.register(() => scheduler.clear());
-		const refresh = (): void => {
+		this.register(() => { scheduler.clear(); pendingPaths = null; });
+		const refresh = (path?: string): void => {
+			if (path === undefined) pendingPaths = null;
+			else pendingPaths?.add(path);
 			void scheduler.queue().catch((error: unknown) => console.error("Knomo reference refresh failed", error));
 		};
-		this.registerEvent(this.app.metadataCache.on("changed", refresh));
-		this.registerEvent(this.app.vault.on("rename", refresh));
-		this.registerEvent(this.app.vault.on("delete", refresh));
+		this.registerEvent(this.app.metadataCache.on("changed", file => refresh(file?.path)));
+		// 结构变化可能改变旧目标或嵌入的解析关系，继续保留全量保守刷新。
+		this.registerEvent(this.app.vault.on("rename", () => refresh()));
+		this.registerEvent(this.app.vault.on("delete", () => refresh()));
 	}
 
 	private broadcastAttachmentChanges(paths: readonly string[]): void {

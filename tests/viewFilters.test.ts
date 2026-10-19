@@ -1,15 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoViewItem } from "../src/types/memoView";
 import {
-	getMemoImages,
 	getRegularFilterConditions,
 	getRegularFilterCopy,
 	getRecordStatsSearchFilterKey,
 	getRecordStatsSearchFilterLabel,
 	parseLocalDateText,
-	tagMatchesActiveTagKey,
 } from "../src/ui/viewFilters";
 
 test("Things 摘要包含所有 AND 条件", () => {
@@ -17,22 +14,6 @@ test("Things 摘要包含所有 AND 条件", () => {
 	assert.deepEqual(getRegularFilterConditions(state).map(item => item.type), ["things", "tag", "search", "date"]);
 	assert.match(getRegularFilterCopy(state, 3)!.summary, /Things/);
 	assert.match(getRegularFilterCopy(state, 0)!.emptyTitle, /Things/);
-});
-
-test("filters supported memo images", () => {
-	const memo = makeMemo("a", {
-		images: [
-			{ path: "image.png", altText: "", syntax: "obsidian_embed" },
-			{ path: "doc.pdf", altText: "", syntax: "obsidian_embed" },
-		],
-	});
-
-	assert.deepEqual(getMemoImages(memo).map((image) => image.path), ["image.png"]);
-});
-
-test("matches nested active tag keys", () => {
-	assert.equal(tagMatchesActiveTagKey("project/knomo/ui", "project/knomo"), true);
-	assert.equal(tagMatchesActiveTagKey("project/other", "project/knomo"), false);
 });
 
 test("builds regular filter copy from active filters", () => {
@@ -112,6 +93,17 @@ test("formats record statistics filter keys and labels", () => {
 	assert.equal(getRecordStatsSearchFilterLabel(tagFilter), "2026-06-01 to 2026-06-30 · #Work");
 });
 
+test("统计范围的含尾日期保留跨月、跨年、闰年和无效输入行为", () => {
+	for (const [endDateExclusive, expected] of [
+		["2024-03-01", "2024-02-29"],
+		["2026-01-01", "2025-12-31"],
+		["2026-07-01", "2026-06-30"],
+		["invalid", "invalid"],
+	]) {
+		assert.equal(getRecordStatsSearchFilterLabel({ type: "range", startDate: "2020-01-01", endDateExclusive }), `2020-01-01 to ${expected}`);
+	}
+});
+
 test("display date parsing keeps local calendar and rejects invalid dates", () => {
 	const date = parseLocalDateText("2026-05-20T08:09:10");
 	assert.deepEqual(date === null ? null : [date.getFullYear(), date.getMonth(), date.getDate(), date.getHours()], [2026, 4, 20, 8]);
@@ -135,35 +127,3 @@ test("converts zoned creation time to the current device calendar semantics", ()
 		else process.env.TZ = originalTimeZone;
 	}
 });
-
-function makeMemo(
-	id: string,
-	overrides: {
-		createdAt?: string;
-		contentSnapshot?: string;
-		tags?: MemoViewItem["tags"];
-		links?: MemoViewItem["links"];
-		images?: MemoViewItem["images"];
-		dailyPath?: string;
-		monthlyDateHeading?: string;
-	} = {},
-): MemoViewItem {
-	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
-	const dailyPath = overrides.dailyPath ?? `Daily/${createdAt.slice(0, 10)}.md`;
-	return {
-		id,
-		createdAt,
-		updatedAt: createdAt,
-		contentSnapshot: overrides.contentSnapshot ?? "memo",
-		contentHash: `hash-${id}`,
-		status: "active",
-		tags: overrides.tags ?? [],
-		links: overrides.links ?? [],
-		images: overrides.images ?? [],
-		dailyRef: {
-			path: dailyPath,
-			heading: "## Memos",
-			lineNumberHint: 1,
-		},
-	};
-}

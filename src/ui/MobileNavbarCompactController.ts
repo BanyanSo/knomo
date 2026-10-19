@@ -94,6 +94,7 @@ export function getMobileContentBottomOcclusion(
 export class MobileNavbarCompactController {
 	private started = false;
 	private observer: MutationObserver | null = null;
+	private navbarWaitObserver: MutationObserver | null = null;
 	private readonly observedElements = new Set<HTMLElement>();
 	private syncFrameId: number | null = null;
 	private syncThrottleTimerId: number | null = null;
@@ -167,10 +168,11 @@ export class MobileNavbarCompactController {
 		if (navbarEl === null) {
 			this.recordDebugInfo("mobile navbar not found");
 			this.cleanupRenderedState();
-			this.scheduleStabilizedSyncs();
+			this.waitForNavbar();
 			return;
 		}
 
+		this.stopWaitingForNavbar();
 		this.ensureObserver(navbarEl);
 		this.beginMutationSuppression();
 		try {
@@ -272,6 +274,29 @@ export class MobileNavbarCompactController {
 		this.delayedSyncTimerIds.clear();
 	}
 
+	private waitForNavbar(): void {
+		if (this.navbarWaitObserver !== null) return;
+		const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
+		// 稳定同步只执行当前一轮；晚到的宿主节点由 DOM 变化唤醒，不续订定时器。
+		const observer = new MutationObserverConstructor(() => {
+			if (this.navbarWaitObserver !== observer) return;
+			if (!this.shouldEnable()) {
+				this.stopWaitingForNavbar();
+				return;
+			}
+			if (this.findNavbar() === null) return;
+			this.stopWaitingForNavbar();
+			this.queueSyncCycle();
+		});
+		this.navbarWaitObserver = observer;
+		observer.observe(this.doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+	}
+
+	private stopWaitingForNavbar(): void {
+		this.navbarWaitObserver?.disconnect();
+		this.navbarWaitObserver = null;
+	}
+
 	private ensureObserver(navbarEl: HTMLElement): void {
 		if (this.observer === null) {
 			const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
@@ -354,6 +379,7 @@ export class MobileNavbarCompactController {
 	}
 
 	private disconnectObserver(): void {
+		this.stopWaitingForNavbar();
 		this.observer?.disconnect();
 		this.observer = null;
 		this.observedElements.clear();

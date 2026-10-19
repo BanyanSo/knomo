@@ -176,7 +176,6 @@ body {
 	--knomo-surface: var(--knomo-app-background-primary);
 	--knomo-card-surface: var(--knomo-surface);
 	--knomo-composer-surface: var(--knomo-surface);
-	--knomo-menu-surface: color-mix(in srgb, var(--background-primary) 98%, var(--text-normal) 2%);
 	--knomo-subtle-surface: color-mix(in srgb, var(--background-primary) 94%, var(--text-normal) 6%);
 	--knomo-soft-border: var(--background-modifier-border);
 	--knomo-row-hover: var(--background-modifier-hover);
@@ -198,8 +197,6 @@ body {
 	--knomo-transition-drawer-fade: 180ms ease;
 	--knomo-transition-backdrop: 220ms ease;
 	--knomo-transition-panel: 240ms cubic-bezier(0.32, 0.72, 0, 1);
-	--knomo-transition-panel-offset: 160ms cubic-bezier(0.32, 0.72, 0, 1);
-	--knomo-transition-panel-size: 120ms linear;
 
 	/* Typography */
 	position: relative;
@@ -403,7 +400,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 }
 
 .knomo-plugin.is-layout-desktop-narrow {
-	--knomo-menu-surface: color-mix(in srgb, var(--background-primary) 96%, var(--text-normal) 4%);
 	--knomo-subtle-surface: color-mix(in srgb, var(--background-primary) 92%, var(--text-normal) 8%);
 }
 
@@ -563,7 +559,6 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-view-host {
 	height: 100%;
 	margin: 0;
 	padding: 0;
-	background-color: var(--knomo-page-background);
 }
 
 .knomo-plugin.is-layout-desktop-wide .knomo-shell {
@@ -3797,8 +3792,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 44px;
-	height: 44px;
 	padding: 0;
 	border: 0;
 	box-shadow: none;
@@ -4561,8 +4554,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 		--knomo-transition-drawer-fade: 0.01ms linear;
 		--knomo-transition-backdrop: 0.01ms linear;
 		--knomo-transition-panel: 0.01ms linear;
-		--knomo-transition-panel-offset: 0.01ms linear;
-		--knomo-transition-panel-size: 0.01ms linear;
 		--knomo-animation-duration: 0.01ms;
 		--knomo-animation-iteration-count: 1;
 		--knomo-scroll-behavior: auto;

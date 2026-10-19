@@ -32,6 +32,26 @@ function searchFilter(text: string): CatalogQueryFilter {
 	return { textTerms: parsed.terms, ...(parsed.date ? { searchDate: parsed.date } : {}) };
 }
 
+test("生产 Catalog 查询父标签包含同名和子标签，排除相邻标签，两个 store 一致", async () => {
+	const name = `knomo-parent-tag-${Date.now()}-${Math.random()}`;
+	const stores = [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange })];
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(searchPartition("2026-10-09", ["#project/knomo/ui", "#project/other", "#project/knomo"]));
+			const page = await store.query({ tags: ["project/knomo"], limit: 10 });
+			assert.deepEqual(page.items.map(item => item.content).sort(), ["#project/knomo", "#project/knomo/ui"]);
+			assert.equal((await store.count({ tags: ["project/knomo"] })).count, 2);
+		}
+	} finally {
+		stores.forEach(store => store.close());
+		await new Promise<void>((resolve, reject) => {
+			const request = indexedDB.deleteDatabase(name);
+			request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
+		});
+	}
+});
+
 test("可读正文使用 Markdown 节点，排除区域保持不可跨越的边界", () => {
 	assert.deepEqual(buildSearchBody("今天**完成**项目 _review_ ~~old~~ ==new== `a*b` \\* &amp;"), ["今天完成项目 review old new a*b * &"]);
 	assert.deepEqual(buildSearchBody("left<!-- secret -->right"), ["left", "right"]);

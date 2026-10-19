@@ -446,6 +446,47 @@ test("unloads an in-flight render component when its generation becomes stale", 
 	}
 });
 
+test("两个卡片表面保留运行中请求、最新 pending 和搜索版本的过期结果保护", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const original = MarkdownRenderer.render;
+	try {
+		for (const surface of ["card-flow", "mobile-search"] as const) {
+			const oldGate = deferred<void>(), latestGate = deferred<void>();
+			const calls: string[] = [], components: TestComponent[] = [];
+			let searchVersion = 1;
+			MarkdownRenderer.render = async (_app, markdown, target) => {
+				calls.push(markdown);
+				(target as unknown as TestElement).createSpan({ text: markdown });
+				if (markdown === "old") await oldGate.promise;
+				if (markdown === "latest") await latestGate.promise;
+			};
+			const renderer = new MemoMarkdownRenderer({ app: {} as never,
+				createComponent: () => { const component = new TestComponent(); components.push(component); return component as never; },
+				getDocument: () => ({} as Document), getGeneration: () => 0, getSearchVersion: () => searchVersion, concurrency: 1 });
+			const target = new TestElement("div", { text: "confirmed" });
+			const queue = (text: string) => renderer.queueMemoMarkdown(makeMemo({ contentSnapshot: text }), target.asHtml(), 0, "normal", text, surface);
+			try {
+				queue("old"); queue("obsolete"); queue("latest");
+				assert.deepEqual(calls, ["old"]);
+				oldGate.resolve();
+				await waitFor(() => calls.includes("latest"));
+				assert.deepEqual(calls, ["old", "latest"]);
+				assert.equal(target.getText(), "confirmed", "旧请求不得覆盖已确认正文");
+				assert.equal(components[0].unloadCalls, 1);
+				searchVersion++;
+				latestGate.resolve();
+				await waitFor(() => components[1].unloadCalls === 1);
+				assert.equal(target.getText(), "confirmed", "旧搜索版本不得发布结果");
+				queue("current");
+				await waitFor(() => target.getText() === "current");
+			} finally { oldGate.resolve(); latestGate.resolve(); renderer.clear(surface); }
+		}
+	} finally { MarkdownRenderer.render = original; }
+});
+
 function setDomGlobals(): void {
 	(globalThis as unknown as { HTMLElement: typeof TestElement }).HTMLElement = TestElement;
 }

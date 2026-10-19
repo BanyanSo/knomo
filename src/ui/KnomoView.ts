@@ -1363,7 +1363,7 @@ export class KnomoView extends ItemView {
 		this.contentEl.removeClass("knomo-view-host");
 	}
 
-	async refreshReferences(): Promise<void> {
+	async refreshReferences(changedPaths?: readonly string[]): Promise<void> {
 		// 纯 metadata 更新只重排已挂载的宿主渲染；Daily 变化由原增量链路处理。
 		if (this.trashViewClosed) return;
 		for (const [container, surface, generation] of [
@@ -1376,12 +1376,12 @@ export class KnomoView extends ItemView {
 				const content = card.querySelector<HTMLElement>(".knomo-card-content");
 				if (content) {
 					// 渲染器在离屏完成后原子替换正文，等待期间保留已有内容。
-					this.memoMarkdownRenderer.queueMemoMarkdown(memo, content, generation, "normal", this.getMemoCardPreview(memo).text, surface);
+					this.memoMarkdownRenderer.queueMemoMarkdown(memo, content, generation, "normal", this.getMemoCardPreview(memo).text, surface, changedPaths);
 				}
 				const meta = card.querySelector<HTMLElement>(".knomo-source-reference");
 				const reference = getMemoSourceReferenceMeta(memo);
 				if (meta && reference.type !== "none") this.memoMarkdownRenderer.queueSourceReferenceMarkdown(
-					meta, `${t("reference.fromPrefix")}${reference.text}`, reference.sourcePath, generation, surface,
+					meta, `${t("reference.fromPrefix")}${reference.text}`, reference.sourcePath, generation, surface, changedPaths,
 				);
 			}
 		}

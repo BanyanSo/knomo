@@ -349,7 +349,6 @@ export const en: Record<TranslationKey, string> = {
 	"trash.writeUnconfirmed": "The Daily change was not confirmed. The recovery copy is kept. Check Daily before trying again.",
 	"trash.cleanupRetryOnly": "Retry only removes the recovery copy in this session.",
 	"trash.restoredCleanupError": "Content restored, but the recovery copy was not removed: {{error}}",
-	"trash.restoredCleanupPending": "Content restored, but the recovery copy was not removed. Retry only removes the copy.",
 	"trash.restoring": "Restoring",
 	"trash.purge": "Permanently delete",
 	"trash.clear": "Empty Trash",

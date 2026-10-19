@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import { parseDailyNoteDateFromPath } from "../src/utils/dailyNotes";
 import { hashMemoContent } from "../src/utils/hash";
-import { isSupportedMemoImage } from "../src/utils/markdown";
 import {
 	buildQuoteCreatedMemoContent,
 	formatCreatedAtAlias,
@@ -42,19 +41,6 @@ test("builds task-list-leading memo content as nested memo content", () => {
 		service.buildMemoBlock("- [ ] 第一项\n- [x] 第二项\n- [-] 第三项", "12:00:00"),
 		"- 12:00:00\n\t- [ ] 第一项\n\t- [x] 第二项\n\t- [-] 第三项",
 	);
-});
-
-test("rejects stale Obsidian block embed image metadata", () => {
-	assert.equal(isSupportedMemoImage({
-		path: "2026-05-18#^5i3h99",
-		altText: "",
-		syntax: "obsidian_embed",
-	}), false);
-	assert.equal(isSupportedMemoImage({
-		path: "Assets/a.WEBP|300",
-		altText: "",
-		syntax: "obsidian_embed",
-	}), true);
 });
 
 test("hash ignores blockId", () => {

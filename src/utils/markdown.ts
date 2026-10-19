@@ -1,11 +1,9 @@
-import type { MemoImageRef, MemoLinkRef } from "../types/memo";
+import type { MemoImageRef } from "../types/memo";
 import { decodePercentEncodedImagePath, parseMarkdownImages } from "./markdownImages";
 
 const MARKDOWN_HEADING_REGEX = /^(#{1,6})\s+\S.*$/;
 const MEMO_START_LINE_REGEX = /^- \d{2}:\d{2}(?::\d{2})?(?: .*)?$/;
 const MEMO_CONTINUATION_INDENT_REGEX = /^(?:\t| {2,})/;
-const OBSIDIAN_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
-const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
 const WEB_URL_REGEX = /\bhttps?:\/\/[^\s<>"'，。！？；：、（）【】《》]+/gi;
 const URL_TRAILING_PUNCTUATION_REGEX = /[.,!?;:，。！？；：、]+$/u;
 const URL_CLOSING_DELIMITERS = [["(", ")"], ["[", "]"], ["{", "}"]] as const;
@@ -98,62 +96,6 @@ export function parseMemoImages(content: string): MemoImageRef[] {
 		}));
 }
 
-export function isSupportedMemoImage(image: MemoImageRef): boolean {
-	if (image.syntax === "markdown_image") {
-		return true;
-	}
-	return isSupportedObsidianImagePath(extractObsidianEmbedPath(image.path));
-}
-
-export function parseMemoLinks(content: string): MemoLinkRef[] {
-	const links: MemoLinkRef[] = [];
-	const wrappedLinkRanges: Array<[number, number]> = [];
-	OBSIDIAN_LINK_REGEX.lastIndex = 0;
-	let obsidianLinkMatch = OBSIDIAN_LINK_REGEX.exec(content);
-	while (obsidianLinkMatch !== null) {
-		wrappedLinkRanges.push([obsidianLinkMatch.index, obsidianLinkMatch.index + obsidianLinkMatch[0].length]);
-		if (content.charAt(obsidianLinkMatch.index - 1) !== "!") {
-			const [target, displayText] = splitLinkAlias(obsidianLinkMatch[1]);
-			links.push({
-				target,
-				displayText,
-				syntax: "wiki_link",
-			});
-		}
-		obsidianLinkMatch = OBSIDIAN_LINK_REGEX.exec(content);
-	}
-
-	MARKDOWN_LINK_REGEX.lastIndex = 0;
-	let markdownLinkMatch = MARKDOWN_LINK_REGEX.exec(content);
-	while (markdownLinkMatch !== null) {
-		wrappedLinkRanges.push([markdownLinkMatch.index, markdownLinkMatch.index + markdownLinkMatch[0].length]);
-		if (content.charAt(markdownLinkMatch.index - 1) !== "!") {
-			links.push({
-				target: markdownLinkMatch[2],
-				displayText: markdownLinkMatch[1],
-				syntax: "markdown_link",
-			});
-		}
-		markdownLinkMatch = MARKDOWN_LINK_REGEX.exec(content);
-	}
-
-	WEB_URL_REGEX.lastIndex = 0;
-	let webUrlMatch = WEB_URL_REGEX.exec(content);
-	while (webUrlMatch !== null) {
-		const matchIndex = webUrlMatch.index;
-		const isWrappedLink = wrappedLinkRanges.some(([start, end]) => matchIndex >= start && matchIndex < end);
-		if (!isWrappedLink) {
-			links.push({
-				target: trimBareUrl(webUrlMatch[0]),
-				displayText: null,
-				syntax: "url",
-			});
-		}
-		webUrlMatch = WEB_URL_REGEX.exec(content);
-	}
-	return links;
-}
-
 function trimBareUrl(value: string): string {
 	let target = value.replace(URL_TRAILING_PUNCTUATION_REGEX, "");
 	for (const [opening, closing] of URL_CLOSING_DELIMITERS) {
@@ -165,20 +107,6 @@ function trimBareUrl(value: string): string {
 		}
 	}
 	return target;
-}
-
-function splitLinkAlias(value: string): [string, string | null] {
-	const separatorIndex = value.indexOf("|");
-	if (separatorIndex === -1) {
-		return [value, null];
-	}
-	return [value.slice(0, separatorIndex), value.slice(separatorIndex + 1)];
-}
-
-function extractObsidianEmbedPath(value: string): string {
-	const [target] = splitLinkAlias(value);
-	const subpathIndex = target.indexOf("#");
-	return (subpathIndex === -1 ? target : target.slice(0, subpathIndex)).trim();
 }
 
 function isSupportedObsidianImagePath(path: string): boolean {

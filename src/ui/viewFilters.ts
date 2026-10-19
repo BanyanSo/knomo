@@ -1,10 +1,8 @@
 import { t } from "../i18n";
-import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CatalogRecordStatsFilter } from "../types/catalogView";
 import { parseMemoCalendarDate } from "../utils/date";
-import { isSupportedMemoImage } from "../utils/markdown";
 import type { TagSummary } from "../utils/tagTree";
-import { normalizeTagKey } from "../utils/tags";
+import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
 import type { SidebarNav } from "./viewNavigation";
 
 export type ScopeFilter =
@@ -76,15 +74,6 @@ function collectTagKeys(
 		}
 	}
 	return keys;
-}
-
-export function tagMatchesActiveTagKey(tag: string, activeTagKey: string): boolean {
-	const tagKey = normalizeTagKey(tag);
-	return tagKey === activeTagKey || tagKey.startsWith(`${activeTagKey}/`);
-}
-
-export function getMemoImages(memo: MemoRecord): MemoRecord["images"] {
-	return memo.images.filter(isSupportedMemoImage);
 }
 
 export function formatRegularFilterSummary(conditions: RegularFilterCondition[], count: number): string {
@@ -386,13 +375,5 @@ function getInclusiveEndDate(endDateExclusive: string): string {
 		return endDateExclusive;
 	}
 	date.setDate(date.getDate() - 1);
-	return formatLocalDateKey(date);
-}
-
-function formatLocalDateKey(date: Date): string {
-	return [
-		String(date.getFullYear()).padStart(4, "0"),
-		String(date.getMonth() + 1).padStart(2, "0"),
-		String(date.getDate()).padStart(2, "0"),
-	].join("-");
+	return formatTimeBuoyDate(date);
 }

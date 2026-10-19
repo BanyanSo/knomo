@@ -409,6 +409,11 @@ test("parses supported Obsidian image embeds", () => {
 	]);
 });
 
+test("生产 Daily 图片元数据排除 PDF 和普通笔记嵌入，保留支持的图片", () => {
+	const memo = parseCurrentDiary("- 12:00:00 ![[image.png]] ![[doc.pdf]] ![[note.md]] ![[2026-05-18#^5i3h99]] ![[Assets/a.WEBP|300]]")[0];
+	assert.deepEqual(memo.images.map(image => image.path), ["image.png", "Assets/a.WEBP"]);
+});
+
 test("does not treat Obsidian block embeds as images", () => {
 	const parsed = parseCurrentDiary(["- 12:00:00 引用 ![[2026-05-18#^5i3h99]]"].join("\n"))[0];
 

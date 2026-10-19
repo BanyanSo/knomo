@@ -1,16 +1,9 @@
-import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { parseMarkdownReferences } from "./markdownReferences";
-
-type MemoReferenceView = Pick<MemoRecord, "contentSnapshot">;
 
 interface BlockReferenceCandidate {
 	startOffset: number;
 	quoted: boolean;
 	referenceText: string;
-}
-
-export function hasMemoReference(memo: MemoReferenceView): boolean {
-	return getPreferredReferenceCandidates(memo.contentSnapshot).length > 0;
 }
 
 export function buildQuoteCreatedMemoContent(input: string, quoteText: string, referenceText: string): string {

@@ -4,6 +4,7 @@ import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
 import type { CatalogQueryFilter } from "../types/catalog";
+import type { CatalogMemoPage } from "../types/catalogView";
 import { getCatalogQueryKey } from "../services/SearchMatching";
 import { CatalogQueryCancelledError, compareCatalogObservations } from "../services/MemoCatalogStore";
 import { SearchSession } from "./SearchSession";
@@ -26,6 +27,12 @@ import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
 
 type MobileSearchSurface = "mobile-search";
 type ThingsSearchContext = { activeNav: "things"; activeTag: string | null; activeTagKey: string | null };
+
+export type MobileSearchPage = Omit<CatalogMemoPage, "items"> & {
+	items: MemoRecord[];
+	totalCount: number | null;
+	coverageKey: string;
+};
 
 interface OpenMobileSearchOptions {
 	focusInput?: boolean;
@@ -73,7 +80,7 @@ interface MobileSearchControllerOptions {
 	handleMarkdownInternalLinkClick: (event: MouseEvent) => void;
 	handleTaskCheckboxClick: (event: MouseEvent) => void;
 	handleTaskCheckboxChange: (event: Event) => void;
-	loadRemoteResults?: (filter: CatalogQueryFilter, reset: boolean, signal: AbortSignal) => Promise<void>;
+	loadRemoteResults?: (filter: CatalogQueryFilter, reset: boolean, signal: AbortSignal) => Promise<MobileSearchPage>;
 	hasRemoteNextPage?: () => boolean;
 	restoreRemoteResults?: () => Promise<void>;
 	cancelRemoteCount?: () => void;
@@ -528,15 +535,17 @@ export class MobileSearchController {
 		this.syncControls();
 		if (this.displayedMemos === null && this.options.loadRemoteResults) this.renderResults();
 		try {
-			if (this.options.loadRemoteResults) await this.options.loadRemoteResults(filter, reset, controller.signal);
+			const page = this.options.loadRemoteResults ? await this.options.loadRemoteResults(filter, reset, controller.signal) : null;
 			controller.signal.throwIfAborted();
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
 			if (key !== getCatalogQueryKey(this.getAppliedFilter())) return;
 			this.displayedContext = context;
 			const previousCount = this.session.result?.key === key ? this.displayedCount : null;
-			this.displayedMemos = this.options.loadRemoteResults ? [...this.options.getMemos()] : this.options.getMemos();
-			this.displayedCount = this.options.getMatchedTotalCount?.() ?? (this.options.loadRemoteResults ? previousCount : this.options.filterMemos(this.displayedMemos, filter).length);
-			this.session.commitResult(filter, this.options.getCatalogRevision?.() ?? 0, this.options.getCoverageKey?.() ?? "");
+			this.displayedMemos = page === null ? this.options.getMemos() : [...page.items];
+			this.displayedCount = (page === null ? this.options.getMatchedTotalCount?.() : page.totalCount)
+				?? (page === null ? this.options.filterMemos(this.displayedMemos, filter).length : previousCount);
+			this.session.commitResult(filter, page?.catalogRevision ?? this.options.getCatalogRevision?.() ?? 0,
+				page?.coverageKey ?? this.options.getCoverageKey?.() ?? "");
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) {

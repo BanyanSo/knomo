@@ -7,6 +7,7 @@ import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import type { CatalogFeatureQuery, CatalogFeatureFilter } from "../src/types/catalogView";
+import type { MobileSearchPage } from "../src/ui/MobileSearchController";
 
 test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛选覆盖历史，日期筛选跨月", async context => {
 	await ensureObsidianStub();
@@ -42,7 +43,7 @@ test("Things 桌面与移动首屏、分页、计数使用相同组合条件且�
 	const counts: CatalogFeatureFilter[] = [];
 	const view = Object.create(KnomoView.prototype) as {
 		buildCatalogActiveQuery(all: boolean): CatalogFeatureFilter;
-		loadCatalogMobileSearchResults(filter: CatalogFeatureFilter, reset: boolean): Promise<void>;
+		loadCatalogMobileSearchResults(filter: CatalogFeatureFilter, reset: boolean): Promise<MobileSearchPage>;
 		viewStateController: KnomoViewStateController;
 		catalogMobileTotalCount: number | null;
 	};

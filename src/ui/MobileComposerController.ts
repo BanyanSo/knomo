@@ -422,6 +422,21 @@ export class MobileComposerController {
 	}
 
 	stopViewportTracking(clearMetrics = true): void {
+		const hasTracking = this.mobileVisualViewport !== null || this.mobileVirtualKeyboard !== null
+			|| this.mobileVirtualKeyboardPreviousOverlaysContent !== null
+			|| this.mobileWindowResizeHandler !== null || this.mobileOrientationChangeHandler !== null
+			|| this.mobileCapacitorKeyboardShowHandler !== null || this.mobileCapacitorKeyboardHideHandler !== null
+			|| this.mobileKeyboardDockFrameId !== null || this.mobileKeyboardDockStopTimerId !== null
+			|| this.mobileKeyboardViewportFallbackTimerId !== null || this.mobileToolbarAnchorFrameId !== null
+			|| this.keyboardTracking;
+		const hasMetrics = this.mobileKeyboardHeight !== 0 || this.mobileComposerBottomOffset !== 0
+			|| this.mobileComposerViewportBaselineHeight !== null || this.mobileComposerDockTop !== null
+			|| this.mobileComposerDockSource !== "fallback" || this.mobileComposerLayerBottom !== null
+			|| this.mobileCapacitorKeyboardHeight !== null || this.mobileComposerToolbarAnchorInset !== null
+			|| this.mobileComposerToolbarAnchorBottom !== null || this.mobileComposerToolbarAnchorSource !== "unknown"
+			|| this.mobileComposerToolbarWrapperBottom !== null;
+		// 稳定停止时不重复清理或测量；实际布局变化由既有布局和输入入口更新。
+		if (!hasTracking && (!clearMetrics || !hasMetrics)) return;
 		const win = this.options.getWindow();
 		if (this.mobileVisualViewport !== null && this.mobileVisualViewportHandler !== null) {
 			this.mobileVisualViewport.removeEventListener("resize", this.mobileVisualViewportHandler);
@@ -736,24 +751,7 @@ export class MobileComposerController {
 	}
 
 	private removeLayer(): void {
-		this.restoreLayer();
-		this.clearResizeFrame();
-		this.stopKeyboardDockTracking();
-		this.clearToolbarAnchorFrame();
-		this.mobileComposerViewportBaselineHeight = null;
-		this.mobileComposerDockTop = null;
-		this.mobileComposerDockSource = "fallback";
-		this.mobileComposerLayerBottom = null;
-		this.mobileCapacitorKeyboardHeight = null;
-		this.mobileComposerRevealed = false;
-		this.mobileComposerInputMaxHeight = null;
-		this.mobileComposerToolbarAnchorInset = null;
-		this.mobileComposerToolbarAnchorBottom = null;
-		this.mobileComposerToolbarAnchorSource = "unknown";
-		this.mobileComposerToolbarWrapperBottom = null;
-		this.setComposerBottomOffset(0);
-		this.clearLayerState();
-		this.mobileComposerLayerEl?.detach();
+		this.detachLayer();
 		this.mobileComposerLayerEl = null;
 		this.mobileComposerContentEl = null;
 		this.mobileComposerBackdropEl = null;

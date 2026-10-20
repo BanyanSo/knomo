@@ -89,6 +89,105 @@ test("移动导航栏等待在 stop 后释放，旧观察回调不能干扰重�
 	} finally { h.close(); }
 });
 
+test("活动期间替换导航栏和 header 25 轮只观察当前四个根，旧节点和回调不再唤醒", async (context) => {
+	const h = await createHarness();
+	const addHeader = () => {
+		const header = h.doc.createElement("header");
+		header.className = "view-header";
+		header.innerHTML = '<div class="view-header-nav-buttons"></div><div class="view-actions"></div>';
+		h.doc.body.appendChild(header);
+		return header;
+	};
+	try {
+		let navbar = h.addNavbar();
+		let header = addHeader();
+		h.controller.start();
+		await h.advance(1_000);
+		const oldObserver = [...h.observed.keys()][0]!;
+		const oldNavbar = navbar;
+		for (let round = 0; round < 25; round++) {
+			navbar.remove(); header.remove();
+			navbar = h.addNavbar(); header = addHeader();
+			h.workspaceEvent("layout-change");
+			await h.advance(1_000);
+			const roots = [...h.observed.values()].flatMap(elements => [...elements]);
+			assert.equal(roots.length, 4);
+			assert.ok(roots.every(element => element.isConnected));
+			h.assertRestored();
+		}
+		context.diagnostic("25 replacements: 4 current roots, 0 detached roots");
+		const settled = h.syncCalls;
+		oldNavbar.classList.add("old-mutation");
+		h.callbacks.get(oldObserver)!([{ type: "attributes", target: oldNavbar, addedNodes: [], removedNodes: [] } as unknown as MutationRecord], oldObserver);
+		await h.advance(1_000);
+		assert.equal(h.syncCalls, settled);
+		header.classList.add("current-mutation");
+		await h.flushMutations();
+		await h.advance(1_000);
+		assert.ok(h.syncCalls > settled);
+		h.state.active = false;
+		h.workspaceEvent("active-leaf-change");
+		await h.advance(1_000);
+		assert.equal(h.observed.size, 0);
+		h.state.active = true;
+		h.workspaceEvent("active-leaf-change");
+		await h.advance(1_000);
+		h.assertRestored();
+		h.controller.stop();
+		assert.equal(h.observed.size, 0);
+		assert.equal(h.tasks.size, 0);
+	} finally { h.close(); }
+});
+
+test("只替换 header 也释放旧根，相同根不重新注册，角色重叠保留 navbar 子树观察", async () => {
+	const h = await createHarness();
+	try {
+		const navbar = h.addNavbar();
+		navbar.classList.add("view-header");
+		const chrome = h.doc.createElement("div");
+		chrome.className = "view-header-nav-buttons view-actions";
+		navbar.appendChild(chrome);
+		h.controller.start();
+		await h.advance(1_000);
+		assert.equal([...h.observed.values()][0]!.size, 2);
+		const original = [...h.observed.keys()][0];
+		h.controller.requestSync();
+		await h.advance(1_000);
+		assert.equal([...h.observed.keys()][0], original);
+		const nextChrome = chrome.cloneNode() as HTMLElement;
+		chrome.replaceWith(nextChrome);
+		h.workspaceEvent("layout-change");
+		await h.advance(1_000);
+		const roots = [...h.observed.values()][0]!;
+		assert.deepEqual(roots, new Set([navbar, nextChrome]));
+		const settled = h.syncCalls;
+		nextChrome.appendChild(h.doc.createElement("span"));
+		await h.flushMutations();
+		await h.advance(1_000);
+		assert.ok(h.syncCalls > settled);
+	} finally { h.close(); }
+});
+
+test("活动导航栏消失时释放旧根，并继续等待晚到的替代导航栏", async () => {
+	const h = await createHarness();
+	try {
+		const navbar = h.addNavbar();
+		h.controller.start();
+		await h.advance(1_000);
+		navbar.remove();
+		h.workspaceEvent("layout-change");
+		await h.advance(1_000);
+		assert.equal(h.observed.size, 1);
+		assert.equal(h.waitingObservers().length, 1);
+		assert.ok([...h.observed.values()].every(roots => !roots.has(navbar)));
+		h.addNavbar();
+		await h.flushMutations();
+		await h.advance(1_000);
+		h.assertRestored();
+		assert.equal(h.waitingObservers().length, 0);
+	} finally { h.close(); }
+});
+
 async function createHarness() {
 	await ensureObsidianStub();
 	const { Platform } = await import("obsidian");

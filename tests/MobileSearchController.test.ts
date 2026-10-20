@@ -6,11 +6,21 @@ import type { MemoViewItem } from "../src/types/memoView";
 import type { RecordStatsSearchFilter } from "../src/ui/viewFilters";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { CatalogQueryCancelledError } from "../src/services/MemoCatalogStore";
+import { createCatalogCapabilities } from "../src/services/MemoCapabilityModel";
+import type { MobileSearchPage } from "../src/ui/MobileSearchController";
 
 type MobileSearchControllerConstructor = typeof import("../src/ui/MobileSearchController").MobileSearchController;
 type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstructor>;
 type MobileSearchControllerOptions = ConstructorParameters<MobileSearchControllerConstructor>[0];
-type LoadRemoteResults = NonNullable<MobileSearchControllerOptions["loadRemoteResults"]>;
+type LoadRemoteResults = (...args: Parameters<NonNullable<MobileSearchControllerOptions["loadRemoteResults"]>>) => Promise<MobileSearchPage | void>;
+
+function makeRemotePage(items: MemoViewItem[], totalCount: number | null, catalogRevision: number, coverageKey: string): MobileSearchPage {
+	const coverage = { kind: "complete" as const, coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
+	return { items, totalCount, catalogRevision, coverageKey, nextCursor: null, coverage,
+		readState: "ready", invalidated: false, degraded: false,
+		status: { content: "ready", catalog: "complete", projection: "ready" },
+		lifecycle: { state: "ready", persistent: true, writable: true, reason: null }, capabilities: createCatalogCapabilities(coverage) };
+}
 
 test("移动搜索快速结果不闪加载提示，取消后旧延迟回调不再显示", async () => {
 	await ensureObsidianStub();
@@ -320,7 +330,7 @@ test("mobile record stats filter refreshes remote results and renders its summar
 		focusInput: false,
 		changeIntent: "view-scope-change",
 	});
-	await Promise.resolve();
+	await new Promise(resolve => setImmediate(resolve));
 
 	assert.deepEqual(remoteCalls.map(([filter, reset]) => [filter, reset]), [[{ fromDate: "2026-06-01", toDate: "2026-06-30" }, true]]);
 	assert.ok(remoteCalls[0][2] instanceof AbortSignal);
@@ -754,7 +764,12 @@ function createControllerHarness(
 		isMobileLayout: () => true,
 		getMemos: () => memos,
 		getMatchedTotalCount,
-		loadRemoteResults,
+		loadRemoteResults: loadRemoteResults === undefined ? undefined : async (...args) => {
+			const page = await loadRemoteResults(...args);
+			// 旧行为夹具继续按原方式安排异步读取，在边界转换为生产的显式结果契约。
+			return page ?? makeRemotePage(overrides.getMemos?.() ?? memos, getMatchedTotalCount?.() ?? null,
+				overrides.getCatalogRevision?.() ?? 0, overrides.getCoverageKey?.() ?? "");
+		},
 		registerDomEvent: (target, type, listener) => {
 			events.push({
 				target: target as unknown as TestElement,

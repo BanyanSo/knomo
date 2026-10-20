@@ -95,7 +95,7 @@ export class MobileNavbarCompactController {
 	private started = false;
 	private observer: MutationObserver | null = null;
 	private navbarWaitObserver: MutationObserver | null = null;
-	private readonly observedElements = new Set<HTMLElement>();
+	private readonly observedElements = new Map<HTMLElement, boolean>();
 	private syncFrameId: number | null = null;
 	private syncThrottleTimerId: number | null = null;
 	private mutationSuppressionTimerId: number | null = null;
@@ -167,6 +167,7 @@ export class MobileNavbarCompactController {
 		const navbarEl = this.findNavbar();
 		if (navbarEl === null) {
 			this.recordDebugInfo("mobile navbar not found");
+			if (this.observer !== null) this.disconnectObserver();
 			this.cleanupRenderedState();
 			this.waitForNavbar();
 			return;
@@ -298,30 +299,34 @@ export class MobileNavbarCompactController {
 	}
 
 	private ensureObserver(navbarEl: HTMLElement): void {
-		if (this.observer === null) {
-			const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
-			this.observer = new MutationObserverConstructor((mutations) => this.handleObservedMutations(mutations));
-		}
-		this.observeElement(navbarEl, true);
+		const roots = new Map<HTMLElement, boolean>([[navbarEl, true]]);
 		for (const selectorKey of ["topLeftChrome", "topRightChrome", "topChrome"] satisfies MobileNavbarSelectorKey[]) {
 			const element = this.findElement(this.doc.body, MOBILE_NAVBAR_SELECTORS[selectorKey]);
-			if (element !== null) {
-				this.observeElement(element, false);
+			if (element !== null && !roots.has(element)) {
+				roots.set(element, false);
 			}
 		}
-	}
-
-	private observeElement(element: HTMLElement, subtree: boolean): void {
-		if (this.observer === null || this.observedElements.has(element)) {
+		if (this.observer !== null && roots.size === this.observedElements.size
+			&& [...roots].every(([element, subtree]) => this.observedElements.get(element) === subtree)) {
 			return;
 		}
-		this.observer.observe(element, {
-			attributes: true,
-			attributeFilter: ["class", "style"],
-			childList: subtree,
-			subtree,
+		// 宿主根变化时同时撤销旧注册与引用；同节点兼任角色时保留较强的观察范围。
+		this.observer?.disconnect();
+		this.observedElements.clear();
+		const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
+		const observer = new MutationObserverConstructor((mutations) => {
+			if (this.observer === observer) this.handleObservedMutations(mutations);
 		});
-		this.observedElements.add(element);
+		this.observer = observer;
+		for (const [element, subtree] of roots) {
+			observer.observe(element, {
+				attributes: true,
+				attributeFilter: ["class", "style"],
+				childList: subtree,
+				subtree,
+			});
+			this.observedElements.set(element, subtree);
+		}
 	}
 
 	private handleObservedMutations(mutations: MutationRecord[]): void {

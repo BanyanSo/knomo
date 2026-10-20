@@ -128,7 +128,7 @@ import {
 	renderKnomoDesktopTopbar,
 	renderKnomoScopePopover,
 } from "./KnomoHeaderSearch";
-import { MobileSearchController } from "./MobileSearchController";
+import { MobileSearchController, type MobileSearchPage } from "./MobileSearchController";
 import { renderKnomoRecordStatsPage } from "./KnomoRecordStatsPage";
 import {
 	renderKnomoSidebar,
@@ -2639,7 +2639,7 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private async loadCatalogMobileSearchResults(query: CatalogFeatureFilter, reset: boolean, signal?: AbortSignal): Promise<void> {
+	private async loadCatalogMobileSearchResults(query: CatalogFeatureFilter, reset: boolean, signal?: AbortSignal): Promise<MobileSearchPage> {
 		signal?.throwIfAborted();
 		const contextKey = JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter]);
 		const fingerprint = getCatalogQueryKey(query);
@@ -2656,7 +2656,7 @@ export class KnomoView extends ItemView {
 			cursor: reset ? null : this.catalogMobileCursor }, signal);
 		signal?.throwIfAborted();
 		if (run !== this.catalogMobileQueryRun || !this.mobileSearchPageOpen
-			|| contextKey !== JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter])) return;
+			|| contextKey !== JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter])) throw new CatalogQueryCancelledError();
 		if (page.invalidated || (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(page.coverage) !== catalogCoverageKey(this.catalogCoverage))) throw new Error(t("search.statusChanged"));
 		if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 		const next = this.confirmedDailyMemos?.merge(page.items.map(toCatalogMemoView), query) ?? page.items.map(toCatalogMemoView);
@@ -2679,6 +2679,8 @@ export class KnomoView extends ItemView {
 				void this.refreshCatalogMobileTotalCount({ run, query, catalogRevision: page.catalogRevision, contextKey });
 			}
 		}
+		// 本批保留 View 的分页和展示副作用，仅将可接受结果改为显式传递。
+		return { ...page, items: this.memos, totalCount: this.catalogMobileTotalCount, coverageKey: catalogCoverageKey(page.coverage) };
 	}
 
 	private async refreshCatalogMobileTotalCount(options: {
@@ -7386,14 +7388,17 @@ export class KnomoView extends ItemView {
 		this.lastKnownLocalDate = nextDate;
 		this.filteredMemosCache = null;
 		this.renderUiState();
+		// 默认流的刷新会继续协调确认展示和重逢，并刷新当前打开的移动搜索。
+		if (this.shouldShowTodayTimeBuoys()) {
+			void this.refresh();
+			return;
+		}
 		if (this.mobileSearchPageOpen) { void this.mobileSearchController.refreshAppliedResults(); }
 		else if (this.activeNav === "review" || this.scopeFilter !== "all" || this.searchDateFilter !== null) {
 			void this.reloadCurrentCatalogQuery();
 		}
 		if (this.activeNav === "time-buoy") {
 			void this.timeBuoyViewController.loadInitial();
-		} else if (this.shouldShowTodayTimeBuoys()) {
-			void this.refresh();
 		} else if (this.settingsService.getSettings().timeBuoyEnabled) {
 			void this.timeBuoyViewController.loadTodayOnly();
 		}

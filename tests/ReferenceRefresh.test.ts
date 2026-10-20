@@ -163,7 +163,21 @@ test("渲染期间到达的 metadata 路径归入下一批，不丢失或混入�
 	} finally { h.close(); }
 });
 
-async function referenceHarness(contents: readonly string[], viewCount = 2) {
+test("两个 surface 的不同 occurrence 由生产查找和渲染链分别刷新，移动结果不依赖普通数组", async () => {
+	const h = await referenceHarness(["ordinary [[Target|normal]]"], 1, ["mobile [[Target|search]]"]);
+	try {
+		await h.warm();
+		h.emit("metadata:changed", "Notes/Target.md"); await h.flush();
+		assert.deepEqual(h.calls.map(call => [call.text, call.path]), [
+			["ordinary [[Target|normal]]", "Daily/2026-10-19.md"],
+			["mobile [[Target|search]]", "Daily/2026-10-20.md"],
+		]);
+		assert.equal(h.views[0].memos.length, 1);
+		assert.equal(h.views[0].memos[0].id, "0");
+	} finally { h.close(); }
+});
+
+async function referenceHarness(contents: readonly string[], viewCount = 2, mobileContents: readonly string[] = contents) {
 	await ensureObsidianStub();
 	const { MarkdownRenderer, TFile } = await import("obsidian");
 	const { default: KnomoPlugin } = await import("../src/main");
@@ -185,7 +199,8 @@ async function referenceHarness(contents: readonly string[], viewCount = 2) {
 	const listeners = new Map<string, (file?: { path: string }, oldPath?: string) => void>();
 	const cleanups: Array<() => void> = [];
 	const views: Array<{ refreshReferences(paths?: readonly string[]): Promise<void>; trashViewClosed: boolean;
-		cardFlowCoordinator: { generation: number }; mobileSearchController: { generation: number; results: HTMLElement } }> = [];
+		cardFlowCoordinator: { generation: number }; memos: MemoViewItem[];
+		mobileSearchController: { generation: number; results: HTMLElement; getDisplayedMemos(): readonly MemoViewItem[] } }> = [];
 	let generation = 1, searchVersion = 1;
 	const renderers: InstanceType<typeof MemoMarkdownRenderer>[] = [];
 	const doms: JSDOM[] = [];
@@ -193,6 +208,9 @@ async function referenceHarness(contents: readonly string[], viewCount = 2) {
 	const memos: MemoViewItem[] = contents.map((contentSnapshot, index) => ({ id: String(index), contentSnapshot,
 		createdAt: "2026-10-19T09:00", updatedAt: "2026-10-19T09:00", contentHash: String(index), status: "active",
 		tags: [], links: [], images: [], dailyRef: { path: "Daily/2026-10-19.md", heading: "Memos", lineNumberHint: index + 1 } }));
+	const mobileMemos = mobileContents === contents ? memos : mobileContents.map((contentSnapshot, index) => ({
+		...memos[index], id: "mobile-" + index, contentSnapshot, dailyRef: { ...memos[index].dailyRef, path: "Daily/2026-10-20.md" },
+	}));
 	const app = {
 		metadataCache: { ...metadataCache, on: (name: string, callback: (file?: { path: string }) => void) => {
 			listeners.set(`metadata:${name}`, callback); return name;
@@ -223,7 +241,7 @@ async function referenceHarness(contents: readonly string[], viewCount = 2) {
 		renderers.push(renderer);
 		const [flow, search] = [doc.querySelector<HTMLElement>("main")!, doc.querySelector<HTMLElement>("aside")!];
 		for (const root of [flow, search]) {
-			for (const memo of memos) {
+			for (const memo of root === search ? mobileMemos : memos) {
 				const card = doc.createElement("div");
 				card.className = "knomo-card"; card.setAttribute("data-memo-id", memo.id); root.appendChild(card);
 				const body = doc.createElement("div"); body.className = "knomo-card-content"; card.appendChild(body); targets.push(body);
@@ -234,8 +252,10 @@ async function referenceHarness(contents: readonly string[], viewCount = 2) {
 		}
 		const view = Object.create(KnomoView.prototype);
 		Object.assign(view, { app, trashViewClosed: false, cardFlowEl: flow, cardFlowCoordinator: { generation: 1 },
-			mobileSearchController: { results: search, generation: 1 }, memoMarkdownRenderer: renderer,
-			findMemoById: (id: string) => memos.find(memo => memo.id === id),
+			memos, mobileSearchController: { results: search, generation: 1, getDisplayedMemos: () => mobileMemos }, memoMarkdownRenderer: renderer,
+			catalogTodayTimeBuoys: null, randomReunionController: { getSnapshot: () => ({ memos: [] }) },
+			shuffleDayController: { getSnapshot: () => ({ memos: [] }) }, timeBuoyViewController: { getMemos: () => [] },
+			trashMemoController: { getSnapshot: () => ({ trashMemos: [] }) },
 			getMemoCardPreview: (memo: MemoViewItem) => ({ text: getMemoDisplayContent(memo) }),
 			refresh: () => assert.fail("metadata 不得触发列表重查"),
 		});

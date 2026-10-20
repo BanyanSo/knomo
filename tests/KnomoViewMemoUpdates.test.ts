@@ -185,7 +185,7 @@ test("侧栏与记录统计返回均校验重逢缓存，漫游重载原选中�
 			Object.assign(h.view, {
 				clearSearchDebounce: () => {}, applyViewStateTransitionEffects: () => {},
 				getCardFlowViewStateKey: () => "", getCardFlowChangeIntent: () => "view-scope-change",
-				cancelCatalogMobileCount: () => {}, cancelCatalogDesktopCount: () => {},
+				cancelCatalogDesktopCount: () => {},
 			});
 			let pending: Promise<unknown> | undefined;
 			if (nav === "random") {
@@ -685,6 +685,107 @@ test("新建浮标在索引等待期间立即归入今日置顶和浮标页面�
 	assert.equal(h.buoy.getSnapshot().today[0]!.memo.contentSnapshot, `new buoy @${date}`);
 });
 
+test("真实 Daily 确认保存接入独立移动会话，同文 occurrence 和旧读取保护保留", async () => {
+	const gate = deferred<void>();
+	const h = await fixture({ immediate: true, catalogGate: gate.promise });
+	const firstPage = await h.read.query({ textTerms: ["same"], limit: 50 });
+	Object.assign(h.view, { containerEl: { win: { setTimeout, clearTimeout } },
+		catalogCoverage: firstPage.coverage, catalogRevision: firstPage.catalogRevision, catalogStatus: firstPage.status,
+		syncRecordStatsSource: () => {}, retainMemoCardPreviews: () => {},
+	});
+	const search = h.view.createMobileSearchController();
+	Object.assign(h.view, { mobileSearchController: search });
+	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
+	search.searchQuery = "same"; search.isOpen = true;
+	await search.refreshAppliedResults();
+	assert.equal(search.getDisplayedMemos().length, 2);
+	const old = deferred<typeof firstPage>(), query = h.read.query.bind(h.read);
+	let hold = true;
+	h.read.query = (...args) => { if (hold) { hold = false; return old.promise; } return query(...args); };
+	const pending = search.refreshAppliedResults();
+	prepareComposer(h.view, "same");
+	try {
+		await h.view.saveInput();
+		assert.equal(search.getDisplayedMemos().length, 3, "首屏无需等待 Catalog 接续");
+		assert.equal(search.getDisplayedCount(), 3);
+		assert.equal(new Set(search.getDisplayedMemos().map(memo => memo.id)).size, 3);
+		const revision = createHash("sha256").update(h.body()).digest("hex");
+		assert.ok(search.getDisplayedMemos().every(memo => memo.catalog?.observationHandle.sourceRevision === revision));
+		old.resolve(firstPage); await pending;
+		await search.refreshAppliedResults();
+		assert.equal(search.getDisplayedMemos().length, 3, "旧 Catalog 页面经唯一 confirmed 投影不能撤下保存结果");
+		const ordinary = h.view.memos;
+		assert.equal(ordinary.length, 4, "普通列表仍保留独立的全部 Memo");
+		await search.refreshAppliedResults();
+		assert.equal(h.view.memos, ordinary);
+	} finally { old.resolve(firstPage); gate.resolve(); }
+	await h.view.composerSaveRefreshQueue;
+	await search.refreshAppliedResults();
+	assert.equal(search.getDisplayedMemos().length, 3);
+	search.isOpen = false;
+});
+
+test("真实 Daily 编辑后的移动分页失效不会被等价输入及取消刷新重新激活", async () => {
+	const h = await fixture({ immediate: true, body: "## Memos\n" + "- 10:00 same\n".repeat(51) });
+	const query = h.read.query.bind(h.read);
+	const firstPage = await query({ textTerms: ["same"], limit: 50 });
+	const timers = new Map<number, () => void>(); let timerId = 0;
+	Object.assign(h.view, {
+		containerEl: { win: { setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
+			clearTimeout: (id: number) => { timers.delete(id); } } },
+		catalogCoverage: firstPage.coverage, catalogRevision: firstPage.catalogRevision, catalogStatus: firstPage.status,
+		syncRecordStatsSource: () => {}, retainMemoCardPreviews: () => {},
+	});
+	const search = h.view.createMobileSearchController();
+	Object.assign(h.view, { mobileSearchController: search });
+	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
+	search.searchQuery = "same"; search.isOpen = true;
+	await search.refreshAppliedResults();
+	const pendingPage = deferred<typeof firstPage>(), refreshStarted = deferred<void>();
+	const requests: Array<Parameters<typeof query>[0]> = [], signals: Array<AbortSignal | undefined> = [];
+	const flushTimers = async () => {
+		const tasks = [...timers.values()]; timers.clear();
+		for (const callback of tasks) callback();
+		await new Promise(resolve => setImmediate(resolve));
+	};
+	try {
+		await h.edit(h.memos[0], "same changed");
+		assert.match(h.body(), /same changed/);
+		const currentPage = await query({ textTerms: ["same"], limit: 50 });
+		assert.notEqual(currentPage.catalogRevision, firstPage.catalogRevision);
+		assert.equal(search.session.result?.catalogRevision, firstPage.catalogRevision);
+		assert.equal(search.getDisplayedMemos().length, 50);
+		h.read.query = (request, signal) => {
+			requests.push(request); signals.push(signal);
+			if (requests.length === 1) { refreshStarted.resolve(); return pendingPage.promise; }
+			return query(request, signal);
+		};
+		// 使用真实 View.refresh -> Controller -> Catalog 适配，仅挂起这次 I/O。
+		const refreshing = h.view.refresh();
+		await refreshStarted.promise;
+		const ordinary = h.view.memos;
+		search.queueQuery("same "); await flushTimers();
+		assert.equal(signals[0]?.aborted, true);
+		assert.equal(requests.length, 2, "Daily 已使旧分页失效，必须重新读取首屏");
+		assert.equal(requests[1].cursor, null);
+		assert.equal(search.session.result?.catalogRevision, currentPage.catalogRevision);
+		const accepted = search.getDisplayedMemos();
+		pendingPage.resolve(currentPage); await refreshing;
+		assert.equal(search.getDisplayedMemos(), accepted, "迟到刷新和旧 finally 不能替换新快照");
+		search.loadMore(); await new Promise(resolve => setImmediate(resolve));
+		assert.deepEqual(requests[2].cursor, currentPage.nextCursor);
+		assert.equal(search.getDisplayedMemos().length, 51);
+		assert.equal(new Set(search.getDisplayedMemos().map(memo => memo.id)).size, 51);
+		const revision = createHash("sha256").update(h.body()).digest("hex");
+		assert.ok(search.getDisplayedMemos().every(memo => memo.catalog?.observationHandle.sourceRevision === revision));
+		await flushTimers();
+		assert.equal(search.getDisplayedCount(), 51);
+		assert.equal(h.view.memos, ordinary, "恢复移动分页不能回写普通列表");
+	} finally {
+		pendingPage.resolve(firstPage); search.isOpen = false; timers.clear(); h.read.query = query;
+	}
+});
+
 async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void> } = {}) {
 	await ensureObsidianStub();
 	const { InMemoryVault } = await import("./helpers/InMemoryVault");
@@ -759,7 +860,7 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 		Object.assign(view, { app, memos: options.immediate ? await loadMemos() : [], editingMemo: null, viewStateController: new KnomoViewStateController(),
 			randomReunionController: random, shuffleDayController: shuffle,
 			timeBuoyViewController: buoy, catalogReadService: read, catalogTodayTimeBuoys: null, trashViewClosed: false,
-			catalogDesktopQueryRun: 0, catalogMobileQueryRun: 0,
+			catalogDesktopQueryRun: 0,
 			hasCommittedCatalogDesktopQuery: options.immediate ?? false,
 			reloadMemos: async () => { view.memos = await loadMemos(); return true; },
 			settingsService: { getSettings: () => ({ timeBuoyEnabled: false }) }, renderedTimeBuoyEnabled: false,
@@ -807,6 +908,7 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 }
 
 interface TestView {
+	createMobileSearchController: () => import("../src/ui/MobileSearchController").MobileSearchController;
 	renderUiState: () => void;
 	getCurrentCardFlowPresentation: () => import("../src/ui/KnomoCardFlowPresenter").CardFlowPresentation;
 	deferMobileCardFlowRender: (id: string | null, force: boolean, intent: "content-change") => boolean;

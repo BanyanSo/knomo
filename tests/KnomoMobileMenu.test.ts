@@ -81,7 +81,8 @@ async function createHarness() {
 		setTitleMode: (mode: string) => scopes.push(mode),
 	});
 	view.app.workspace = { getActiveViewOfType: () => view };
-	Object.defineProperty(view, "mobileSearchResultsEl", { configurable: true, value: null });
+	// 本夹具的 root 承载开启的 Search，菜单触发卡片必须属于实际显示的 surface。
+	Object.defineProperty(view, "mobileSearchResultsEl", { configurable: true, get: () => view.mobileSearchPageOpen ? f.root : null });
 	Object.defineProperty(view, "mobileSearchPageOpen", { configurable: true, writable: true, value: true });
 	view.syncCardMenuState = (KnomoView.prototype as unknown as MenuView).syncCardMenuState.bind(view);
 	view.registerMobileMenuTriggerEvents();

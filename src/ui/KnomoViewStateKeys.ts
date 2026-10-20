@@ -5,6 +5,11 @@ import type { CardFlowHeader, CardFlowPresentation } from "./KnomoCardFlowPresen
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 import { getRecordStatsSearchFilterKey } from "./viewFilters";
 import type { SidebarNav } from "./viewNavigation";
+import type { CatalogCoverage } from "../types/catalog";
+
+export function catalogCoverageKey(coverage: CatalogCoverage | null): string {
+	return JSON.stringify(coverage == null ? null : [coverage.kind, coverage.configurationComplete, coverage.coveredFromDate, coverage.pendingFileCount, coverage.coveredFileCount, coverage.totalFileCount]);
+}
 
 export type CardFlowChangeIntent = "content-change" | "view-scope-change";
 

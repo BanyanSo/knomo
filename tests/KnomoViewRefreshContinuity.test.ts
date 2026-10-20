@@ -281,7 +281,7 @@ test("搜索返回重新读取当前数据但同显示版本不重建，正文�
 	const { view, memo, result, renders, setQuery, setRevision } = await refreshHarness();
 	await view.loadInitialMobileMemos();
 	Object.assign(view, {
-		catalogMobileQueryRun: 4, catalogMobileCursor: {}, catalogMobileTotalCount: 12,
+		mobileSearchController: { cancelPendingRequest: () => assert.fail("关闭恢复不能再次协调移动请求") },
 		forceRebuildCardFlow: () => assert.fail("搜索返回不能无条件重建卡片"),
 		resetVisibleMemos: () => assert.fail("搜索返回不能无条件重置可见范围"),
 		getCardFlowStateKey: () => getMemoListStateKey(view.getTodayTimeBuoyItems().map((item: { memo: MemoViewItem }) => item.memo)),
@@ -291,9 +291,6 @@ test("搜索返回重新读取当前数据但同显示版本不重建，正文�
 	setQuery(async () => result(1, [current]));
 	await view.restoreCardFlowAfterMobileSearch();
 	assert.equal(renders.length, before);
-	assert.equal(view.catalogMobileQueryRun, 5);
-	assert.equal(view.catalogMobileCursor, null);
-	assert.equal(view.catalogMobileTotalCount, null);
 	assert.equal(view.findMemoById(memo.id), current, "复用显示时仍提交本次查询的当前对象");
 
 	const changed = { ...memo, contentHash: "changed", contentSnapshot: "新的正文与引用" };

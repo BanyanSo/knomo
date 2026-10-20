@@ -7,7 +7,6 @@ import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import type { CatalogFeatureQuery, CatalogFeatureFilter } from "../src/types/catalogView";
-import type { MobileSearchPage } from "../src/ui/MobileSearchController";
 
 test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛选覆盖历史，日期筛选跨月", async context => {
 	await ensureObsidianStub();
@@ -34,103 +33,6 @@ test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛�
 	assert.deepEqual(view.buildCatalogActiveQuery(false), { textTerms: [], searchDate: { kind: "range", granularity: "day", fromDate: "2026-02-01", toDate: "2026-03-02" }, fromDate: "2026-02-01", toDate: "2026-03-02" });
 	state.searchDateFilter = "last-month";
 	assert.deepEqual(view.buildCatalogActiveQuery(false), { textTerms: [], searchDate: { kind: "range", granularity: "day", fromDate: "2026-02-01", toDate: "2026-02-28" }, fromDate: "2026-02-01", toDate: "2026-02-28" });
-});
-
-test("Things 桌面与移动首屏、分页、计数使用相同组合条件且默认覆盖历史", async () => {
-	await ensureObsidianStub();
-	const { KnomoView } = await import("../src/ui/KnomoView");
-	const queries: CatalogFeatureQuery[] = [];
-	const counts: CatalogFeatureFilter[] = [];
-	const view = Object.create(KnomoView.prototype) as {
-		buildCatalogActiveQuery(all: boolean): CatalogFeatureFilter;
-		loadCatalogMobileSearchResults(filter: CatalogFeatureFilter, reset: boolean): Promise<MobileSearchPage>;
-		viewStateController: KnomoViewStateController;
-		catalogMobileTotalCount: number | null;
-	};
-	Object.assign(view, {
-		viewStateController: Object.assign(new KnomoViewStateController(), { activeNav: "things", activeTagKey: "project", searchQuery: "release" }),
-		containerEl: { win: { setTimeout, clearTimeout } },
-		catalogRevision: 1,
-		catalogMobileQueryRun: 0, catalogMobileCursor: null, memos: [], mobileSearchController: { isOpen: true },
-		getCatalogReadService: () => ({
-			query: async (query: CatalogFeatureQuery) => {
-				queries.push(query);
-				return { items: [], nextCursor: { catalog: { catalogRevision: 1, createdAtKey: "old", observationKey: "old" } }, coverage: completeCoverage(), catalogRevision: 1, readState: "ready", status: { content: "ready", catalog: "complete", projection: "ready" } };
-			},
-			count: async (query: CatalogFeatureFilter) => { counts.push(query); return { count: 3, complete: true, catalogRevision: 1, coverage: completeCoverage() }; },
-		}),
-		syncRecordStatsSource: () => undefined,
-		retainMemoCardPreviews: () => undefined, renderMobileSearchResults: () => undefined,
-	});
-	assert.deepEqual(view.buildCatalogActiveQuery(false), { hasTask: true, tags: ["project"], textTerms: ["release"] });
-	view.viewStateController.searchDateFilter = "last-30";
-	const expected = view.buildCatalogActiveQuery(false);
-	await view.loadCatalogMobileSearchResults(expected, true);
-	await view.loadCatalogMobileSearchResults(expected, false);
-	for (const { limit, cursor, ...query } of queries) {
-		assert.ok(limit > 0);
-		assert.deepEqual(query, expected);
-	}
-	assert.equal(queries[0].cursor, null);
-	assert.notEqual(queries[1].cursor, null);
-	assert.deepEqual(counts, []);
-	await new Promise(resolve => setTimeout(resolve, 0));
-	assert.deepEqual(counts, [expected]);
-	assert.equal(view.catalogMobileTotalCount, 3);
-});
-
-test("Things 的迟到移动计数不能覆盖已经切换的标签条件", async () => {
-	await ensureObsidianStub();
-	const { KnomoView } = await import("../src/ui/KnomoView");
-	const pending = createDeferred<{ count: number; complete: boolean; catalogRevision: number }>();
-	const state = Object.assign(new KnomoViewStateController(), { activeNav: "things" as const, activeTagKey: "old" });
-	const view = Object.create(KnomoView.prototype) as {
-		catalogMobileTotalCount: number | null;
-		refreshCatalogMobileTotalCount(options: { run: number; query: CatalogFeatureFilter; recordStatsFilter: null; catalogRevision: number; contextKey: string }): Promise<void>;
-	};
-	Object.assign(view, { viewStateController: state, catalogMobileQueryRun: 1, catalogMobileTotalCount: null,
-		catalogRevision: 1,
-		containerEl: { win: { setTimeout, clearTimeout } },
-		getCatalogReadService: () => ({ count: () => pending.promise }), renderMobileSearchResults: () => assert.fail("迟到计数不应渲染") });
-	const work = view.refreshCatalogMobileTotalCount({ run: 1, query: { hasTask: true, tags: ["old"] }, recordStatsFilter: null, catalogRevision: 1, contextKey: JSON.stringify(["things", "old", "all"]) });
-	await new Promise(resolve => setTimeout(resolve, 0));
-	state.activeTagKey = "new";
-	pending.resolve({ count: 99, complete: true, catalogRevision: 1 });
-	await work;
-	assert.equal(view.catalogMobileTotalCount, null);
-});
-
-test("关闭移动搜索取消尚未启动的计数，也终止正在扫描的计数", async () => {
-	await ensureObsidianStub();
-	const { KnomoView } = await import("../src/ui/KnomoView");
-	const timers = new Map<number, () => void>();
-	let id = 0, scans = 0;
-	let scanSignal: AbortSignal | undefined;
-	const view = Object.assign(Object.create(KnomoView.prototype) as {
-		refreshCatalogMobileTotalCount(options: { run: number; query: CatalogFeatureFilter; recordStatsFilter: null; catalogRevision: number; contextKey: string }): Promise<void>;
-		cancelCatalogMobileCount(): void;
-	}, {
-		viewStateController: new KnomoViewStateController(), catalogMobileQueryRun: 1, catalogRevision: 1,
-		containerEl: { win: { setTimeout: (callback: () => void) => { timers.set(++id, callback); return id; }, clearTimeout: (key: number) => timers.delete(key) } },
-		getCatalogReadService: () => ({ count: async (_request: CatalogFeatureFilter, signal: AbortSignal) => {
-			scans++; scanSignal = signal;
-			return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
-		} }),
-		renderMobileSearchResults: () => assert.fail("取消计数不能刷新结果"),
-	});
-	const options = { run: 1, query: {}, recordStatsFilter: null, catalogRevision: 1, contextKey: JSON.stringify(["all", null, "all"]) };
-	const beforeStart = view.refreshCatalogMobileTotalCount(options);
-	view.cancelCatalogMobileCount();
-	await beforeStart;
-	assert.equal(timers.size, 0);
-	assert.equal(scans, 0);
-	const duringScan = view.refreshCatalogMobileTotalCount(options);
-	const [key, callback] = [...timers][0]; timers.delete(key); callback();
-	await Promise.resolve();
-	assert.equal(scans, 1);
-	view.cancelCatalogMobileCount();
-	await duringScan;
-	assert.equal(scanSignal?.aborted, true);
 });
 
 test("全历史查询结果不变时立即移除旧加载按钮，保留已渲染卡片", async () => {
@@ -175,7 +77,7 @@ test("CAT-QUERY-002：桌面 Catalog 查询只提交最后发起的请求", asyn
 	const second = createDeferred<QueryMemo[]>();
 	const loads = [first, second];
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	view.memoSourceGeneration = 0;
 	view.catalogDesktopQueryRun = 0;
 	view.catalogDesktopQueryFingerprint = null;
@@ -234,7 +136,7 @@ test("首次 Catalog 仍在构建时不把已知子集提交为完整历史", as
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	view.memoSourceGeneration = 0;
 	view.catalogDesktopQueryRun = 0;
 	view.catalogDesktopQueryFingerprint = null;
@@ -413,7 +315,7 @@ test("Catalog revision 变化触发刷新时保留当前随机重逢批次", asy
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	let clearCount = 0;
 	let refreshCount = 0;
 	const randomMemo = makeMemo("random-ready", "2026-08-20T10:00:00");
@@ -506,7 +408,7 @@ test("普通 Catalog 请求在返回漫游往日后完成时不重算日期快�
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const pending = createDeferred<QueryMemo[]>();
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	let selectedDateReloadCount = 0;
 	view.memoSourceGeneration = 0;
 	view.catalogDesktopQueryRun = 0;
@@ -565,7 +467,7 @@ test("查询 fingerprint 变化时保留旧结果、清空 cursor，并启动新
 	const second = createDeferred<boolean>();
 	const loads = [first, second];
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	let fingerprint = "review";
 	let loadCount = 0;
 	let loadingRenderCount = 0;
@@ -611,7 +513,7 @@ test("桌面精确计数只提交当前查询与 Catalog revision", async () => 
 	const stale = createDeferred<TestCatalogMemoCount>();
 	const counts = [current, stale];
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	view.memoSourceGeneration = 0;
 	view.catalogDesktopQueryRun = 1;
 	view.catalogDesktopCountRun = 0;
@@ -658,7 +560,7 @@ test("新桌面计数终止旧扫描，旧任务收尾不清除新任务", async
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	const signals: AbortSignal[] = [];
 	let renders = 0;
 	Object.assign(view, {
@@ -836,7 +738,7 @@ test("统计缓存只随 Catalog 和完整覆盖版本变化而失效", async ()
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	let currentSource = "catalog:uninitialized";
 	let invalidationCount = 0;
 	let recordStatsUpdating = false;
@@ -898,7 +800,7 @@ test("空库加载占位即使状态键未变化也会渲染暂无内容终态",
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	let renderCount = 0;
 	view.cardFlowCoordinator = { deferredForAllMemos: true };
 	view.cardFlowEl = { childElementCount: 1 };
@@ -916,7 +818,7 @@ test("完整 Catalog 的普通 revision 更新静默保留旧侧栏统计直到�
 	const nextSummary = createDeferred<AggregateSummary>();
 	const nextFacets = createDeferred<AggregateFacets>();
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	let statsRenderCount = 0;
 	let tagsRenderCount = 0;
 	view.catalogCoverage = completeCoverage();
@@ -963,7 +865,7 @@ test("侧栏统计使用 Knomo 作用域更新类，避免触发 Obsidian 通用
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const statsEl = new TestStatsElement();
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	view.statsEls = [statsEl.asHtml()];
 	view.librarySummary = { memoCount: 9, tagCount: 3, imageCount: 1, wordCount: 20 };
 	view.libraryIndexesUpdating = true;
@@ -985,7 +887,7 @@ test("coverage 降级保留旧完整统计并标记更新中，恢复后按当�
 	const summaryLoads = [oldSummary, newSummary];
 	const facetLoads = [oldFacets, newFacets];
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	view.catalogCoverage = completeCoverage();
 	view.catalogRevision = 4;
 	view.libraryIndexRevision = 4;
@@ -1390,7 +1292,7 @@ async function libraryFixture() {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const view = Object.create(KnomoView.prototype) as QueryView;
-	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined } });
+	Object.assign(view, { viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, resetState: () => undefined, updateCatalogProgress: () => undefined } });
 	const requests: Array<ReturnType<typeof createDeferred<CatalogLibraryIndexesResult>>> = [];
 	let renders = 0;
 	Object.assign(view, {
@@ -1530,7 +1432,7 @@ async function progressPresentationHarness() {
 	Object.assign(view, {
 		hasCommittedCatalogDesktopQuery: true, catalogDesktopTotalCount: 1, cardFlowError: null,
 		catalogCoverage: completeCoverage(), catalogStatus: { content: "ready", catalog: "complete", projection: "ready" },
-		viewStateController: state, memoSourceGeneration: 0, catalogDesktopQueryRun: 0, catalogMobileQueryRun: 0,
+		viewStateController: state, memoSourceGeneration: 0, catalogDesktopQueryRun: 0,
 		getFilteredMemos: () => [memo], getTodayTimeBuoyItems: () => [],
 		randomReunionController: { getSnapshot: () => ({ status: "ready", error: null, memos: [memo] }) },
 		shuffleDayController: { getSnapshot: () => ({ status: "ready", selectedDate: previousDate, memos: [memo],

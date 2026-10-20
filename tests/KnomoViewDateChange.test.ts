@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CatalogFeatureQuery } from "../src/types/catalogView";
-import type { CatalogQueryFilter } from "../src/types/catalog";
 import { DateChangeWatcher } from "../src/ui/DateChangeWatcher";
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
@@ -83,7 +82,6 @@ test("跨日请求在关闭后不提交迟到结果，多 View 的请求和日�
 async function createHarness(context: PageContext, enabled: boolean, mobileOpen: boolean) {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
-	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
 	const view = Object.create(KnomoView.prototype);
 	const state = new KnomoViewStateController();
 	if (context === "things" || context === "review" || context === "time-buoy") state.activeNav = context;
@@ -99,7 +97,7 @@ async function createHarness(context: PageContext, enabled: boolean, mobileOpen:
 		readState: "ready", invalidated: false, status: { content: "ready", catalog: "complete", projection: "ready" } });
 	Object.assign(view, {
 		viewStateController: state, trashViewClosed: false, lastKnownLocalDate: "0001-01-01", memos: [],
-		catalogCoverage: coverage, catalogRevision: 1, catalogMobileQueryRun: 0, catalogMobileCursor: null,
+		catalogCoverage: coverage, catalogRevision: 1, containerEl: { win: { setTimeout, clearTimeout } },
 		settingsService: { getSettings: () => ({ timeBuoyEnabled: enabled }) }, renderedTimeBuoyEnabled: enabled,
 		reconcileConfirmedCatalog: async () => { effects.confirmed++; },
 		refreshRandomReunionBatch: async () => { effects.reunion++; },
@@ -109,12 +107,7 @@ async function createHarness(context: PageContext, enabled: boolean, mobileOpen:
 		syncRecordStatsSource: () => {}, retainMemoCardPreviews: () => {},
 		getCatalogReadService: () => ({ query: async (query: CatalogFeatureQuery) => { queries.push(query); return page(); } }),
 	});
-	const search = new MobileSearchController({
-		batchSize: 50, debounceMs: 0, getWindow: () => ({ setTimeout, clearTimeout }),
-		getMemos: () => view.memos, getMatchedTotalCount: () => view.catalogMobileTotalCount,
-		getThingsContext: () => state.activeNav === "things" ? { activeNav: "things", activeTag: null, activeTagKey: state.activeTagKey } : undefined,
-		loadRemoteResults: (filter: CatalogQueryFilter, reset: boolean, signal: AbortSignal) => view.loadCatalogMobileSearchResults(filter, reset, signal),
-	} as never);
+	const search = view.createMobileSearchController();
 	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
 	search.searchQuery = "memo";
 	search.isOpen = mobileOpen;

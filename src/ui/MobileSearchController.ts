@@ -1,10 +1,11 @@
 import { MemoCardImageCache } from "./KnomoCardImages";
-import { areMemoListsUnchanged, canRetainMemoCard, getMemoRenderRevision, rebindMemoCard } from "./MemoRenderRevision";
+import { areMemoListsUnchanged, canRetainMemoCard, getMemoRenderKey, getMemoRenderRevision, rebindMemoCard } from "./MemoRenderRevision";
 import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
-import type { CatalogQueryFilter } from "../types/catalog";
-import type { CatalogMemoPage } from "../types/catalogView";
+import type { CatalogCoverage, CatalogQueryFilter } from "../types/catalog";
+import type { CatalogFeatureCursor, CatalogMemoCountResult, CatalogMemoPage } from "../types/catalogView";
+import { isQueryCovered } from "../services/CatalogReadService";
 import { getCatalogQueryKey } from "../services/SearchMatching";
 import { CatalogQueryCancelledError, compareCatalogObservations } from "../services/MemoCatalogStore";
 import { SearchSession } from "./SearchSession";
@@ -24,14 +25,13 @@ import { DelayedLoadingIndicator } from "./DelayedLoadingIndicator";
 import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import { renderKnomoMobileSearchPage } from "./KnomoMobileSearchPage";
 import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
+import { catalogCoverageKey } from "./KnomoViewStateKeys";
 
 type MobileSearchSurface = "mobile-search";
 type ThingsSearchContext = { activeNav: "things"; activeTag: string | null; activeTagKey: string | null };
 
 export type MobileSearchPage = Omit<CatalogMemoPage, "items"> & {
 	items: MemoRecord[];
-	totalCount: number | null;
-	coverageKey: string;
 };
 
 interface OpenMobileSearchOptions {
@@ -48,6 +48,10 @@ interface MobileSearchControllerOptions {
 	syncThingsSearch?: (query: string, date: SearchDateFilter | null) => void;
 	getCatalogRevision?: () => number;
 	getCoverageKey?: () => string;
+	getQueryContextKey?: () => string;
+	projectResults?: (memos: readonly MemoRecord[], filter: CatalogQueryFilter) => MemoRecord[];
+	hasPendingConfirmedMemos?: () => boolean;
+	onResultsAccepted?: (page: Omit<MobileSearchPage, "items" | "nextCursor">) => void;
 	batchSize: number;
 	debounceMs: number;
 	getWindow: () => Window;
@@ -55,8 +59,6 @@ interface MobileSearchControllerOptions {
 	isVisible?: () => boolean;
 	getRootEl: () => HTMLElement | null;
 	isMobileLayout: () => boolean;
-	getMemos: () => MemoRecord[];
-	getMatchedTotalCount?: () => number | null;
 	registerDomEvent: <K extends keyof HTMLElementEventMap>(
 		target: HTMLElement,
 		type: K,
@@ -80,10 +82,9 @@ interface MobileSearchControllerOptions {
 	handleMarkdownInternalLinkClick: (event: MouseEvent) => void;
 	handleTaskCheckboxClick: (event: MouseEvent) => void;
 	handleTaskCheckboxChange: (event: Event) => void;
-	loadRemoteResults?: (filter: CatalogQueryFilter, reset: boolean, signal: AbortSignal) => Promise<MobileSearchPage>;
-	hasRemoteNextPage?: () => boolean;
+	loadRemoteResults: (filter: CatalogQueryFilter, cursor: CatalogFeatureCursor | null, signal: AbortSignal) => Promise<MobileSearchPage>;
+	countRemoteResults?: (filter: CatalogQueryFilter, signal: AbortSignal) => Promise<CatalogMemoCountResult>;
 	restoreRemoteResults?: () => Promise<void>;
-	cancelRemoteCount?: () => void;
 }
 
 export class MobileSearchController {
@@ -92,7 +93,7 @@ export class MobileSearchController {
 	private inputEl: HTMLInputElement | null = null;
 	private resultsEl: HTMLElement | null = null;
 	readonly session = new SearchSession();
-	private displayedContext: { things: ThingsSearchContext | undefined; stats: RecordStatsSearchFilter | null } | null = null;
+	private displayedContext: { things: ThingsSearchContext | undefined; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
 	private displayedMemos: MemoRecord[] | null = null;
 	private displayedCount: number | null = null;
 	private dateHintEl: HTMLElement | null = null;
@@ -102,6 +103,9 @@ export class MobileSearchController {
 	private queryError: string | null = null;
 	private queryRun = 0;
 	private queryController: AbortController | null = null;
+	private cursor: CatalogFeatureCursor | null = null;
+	private acceptedResultsInvalidated = true;
+	private countController: AbortController | null = null;
 	private get dateFilter(): SearchDateFilter | null { return this.session.applied.shortcut; }
 	private set dateFilter(filter: SearchDateFilter | null) {
 		this.session.applied.shortcut = filter;
@@ -143,7 +147,7 @@ export class MobileSearchController {
 	}
 
 	set isOpen(open: boolean) {
-		if (!open) this.cancelPendingRequest();
+		if (this.open && !open) this.cancelPendingRequest();
 		this.open = open;
 	}
 
@@ -263,10 +267,10 @@ export class MobileSearchController {
 		const shouldOpen = this.options.isMobileLayout() && this.open;
 		this.options.getDocument().body.toggleClass("knomo-mobile-search-active", shouldOpen);
 		if (!this.options.isMobileLayout()) {
+			if (!this.open) { this.setPageActive(false); return; }
 			this.cancelPendingRequest();
 			this.clearDebounce();
 			this.session.draft.composing = false;
-			this.options.cancelRemoteCount?.();
 			this.cancelRender();
 			this.clearImageCache();
 			this.open = false;
@@ -287,20 +291,18 @@ export class MobileSearchController {
 	}
 
 	closePage(): void {
-		this.cancelPendingRequest();
-		this.clearDebounce();
-		this.options.cancelRemoteCount?.();
+		if (!this.open) return;
 		const composing = this.session.draft.composing;
 		this.session.draft.composing = false;
-		this.cancelRender();
 		if (this.resultsEl) this.imageCache.capture(this.resultsEl, this.resultsEl);
-		this.queryRun++;
-		this.pendingQueryKey = null;
 		const scrollTop = this.options.getCardFlowScrollTop();
 		this.open = false;
-		this.session.close();
 		this.options.closeCardMenu();
 		if (this.options.getThingsContext?.()) {
+			this.cancelPendingRequest();
+			this.cancelRender();
+			this.clearDebounce();
+			this.session.close();
 			if (!composing) this.flushQuery();
 			this.options.syncThingsSearch?.(this.query, this.dateFilter);
 		} else {
@@ -353,8 +355,6 @@ export class MobileSearchController {
 
 	removePage(): void {
 		this.cancelPendingRequest();
-		this.options.cancelRemoteCount?.();
-		this.queryRun++;
 		this.session.draft.composing = false;
 		this.cancelRender();
 		this.clearImageCache();
@@ -392,12 +392,10 @@ export class MobileSearchController {
 	}
 
 	private invalidateDraft(): void {
-		this.cancelPendingRequest();
-		this.queryRun++;
-		this.pendingQueryKey = null;
+		// 草稿变化只取消在途读取，已接受结果的分页有效性保持不变。
+		this.cancelPendingRequest(true);
 		this.clearDebounce();
 		this.cancelRender();
-		this.options.cancelRemoteCount?.();
 		if (this.session.requestStatus === "pending") this.session.requestStatus = "idle";
 		this.syncControls();
 	}
@@ -456,10 +454,8 @@ export class MobileSearchController {
 
 	resetState(preserveImages = false): void {
 		this.cancelPendingRequest();
-		this.options.cancelRemoteCount?.();
 		this.session.draft.composing = false;
 		this.cancelRender();
-		this.queryRun += 1;
 		this.queryError = null;
 		if (!preserveImages) this.clearImageCache();
 		this.clearDebounce();
@@ -487,10 +483,16 @@ export class MobileSearchController {
 	}
 
 	loadMore(): void {
-		if (this.session.requestStatus === "pending" || this.session.result?.key !== getCatalogQueryKey(this.getAppliedFilter())) return;
+		if (this.session.requestStatus === "pending" || this.getDisplayedRequestKey() !== this.getRequestKey(this.getAppliedFilter())) return;
+		if (this.acceptedResultsInvalidated
+			|| (this.options.getCatalogRevision?.() ?? this.session.result?.catalogRevision) !== this.session.result?.catalogRevision
+			|| (this.options.getCoverageKey?.() ?? this.session.result?.coverageKey) !== this.session.result?.coverageKey) {
+			void this.refreshAppliedResults();
+			return;
+		}
 		this.visibleCount += this.options.batchSize;
 		const matchedCount = this.getMatchedMemos().length;
-		if (this.visibleCount >= matchedCount && this.options.hasRemoteNextPage?.() === true) {
+		if (this.visibleCount >= matchedCount && this.cursor !== null) {
 			void this.refreshRemoteResults(false);
 			return;
 		}
@@ -501,8 +503,6 @@ export class MobileSearchController {
 		if (!this.open) return;
 		if (!this.hasSearchConditions()) {
 			this.cancelPendingRequest();
-			this.queryRun++;
-			this.options.cancelRemoteCount?.();
 			this.displayedMemos = null;
 			this.displayedCount = null;
 			this.displayedContext = null;
@@ -513,19 +513,23 @@ export class MobileSearchController {
 			this.renderResults(changeIntent);
 			return;
 		}
-		const context = { things: this.options.getThingsContext?.(), stats: this.recordStatsFilter };
+		const context = { things: this.options.getThingsContext?.(), stats: this.recordStatsFilter,
+			queryContextKey: this.options.getQueryContextKey?.() ?? "" };
 		const filter = this.getAppliedFilter();
-		const key = getCatalogQueryKey(filter);
+		const key = this.getRequestKey(filter);
 		const revision = this.options.getCatalogRevision?.() ?? 0;
 		const coverageKey = this.options.getCoverageKey?.() ?? "";
-		if (deduplicate && (this.pendingQueryKey === key || (this.session.requestStatus === "ready"
-			&& this.session.result?.key === key && this.session.result.catalogRevision === revision
+		if (deduplicate && (this.pendingQueryKey === key || (this.session.requestStatus === "ready" && !this.acceptedResultsInvalidated
+			&& this.getDisplayedRequestKey() === key && this.session.result?.catalogRevision === revision
 			&& this.session.result.coverageKey === coverageKey))) {
 			this.syncControls();
 			if (this.session.requestStatus === "ready") this.renderResults("content-change");
 			return;
 		}
-		this.cancelPendingRequest(false);
+		if (this.acceptedResultsInvalidated || this.getDisplayedRequestKey() !== key) reset = true;
+		this.abortQuery(false);
+		// 刷新被取消时仍可沿用旧快照，接纳新页时再替换 cursor。
+		if (reset) this.cancelCount();
 		const controller = new AbortController();
 		this.queryController = controller;
 		const run = ++this.queryRun, version = this.session.version;
@@ -533,19 +537,37 @@ export class MobileSearchController {
 		this.session.beginRequest();
 		this.queryError = null;
 		this.syncControls();
-		if (this.displayedMemos === null && this.options.loadRemoteResults) this.renderResults();
+		if (this.displayedMemos === null) this.renderResults();
 		try {
-			const page = this.options.loadRemoteResults ? await this.options.loadRemoteResults(filter, reset, controller.signal) : null;
+			const page = await this.options.loadRemoteResults(filter, reset ? null : this.cursor, controller.signal);
 			controller.signal.throwIfAborted();
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
-			if (key !== getCatalogQueryKey(this.getAppliedFilter())) return;
+			if (key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
+			const pageCoverageKey = catalogCoverageKey(page.coverage);
+			const currentCoverageKey = this.options.getCoverageKey?.() ?? coverageKey;
+			const currentRevision = this.options.getCatalogRevision?.() ?? revision;
+			if (page.invalidated || (coverageKey !== currentCoverageKey && pageCoverageKey !== currentCoverageKey)
+				|| (revision !== currentRevision && page.catalogRevision !== currentRevision)
+				|| (!reset && (this.acceptedResultsInvalidated || page.catalogRevision !== this.session.result?.catalogRevision
+					|| pageCoverageKey !== this.session.result.coverageKey))) {
+				this.cancelCount(); this.invalidateAcceptedResults();
+				throw new Error(t("search.statusChanged"));
+			}
+			if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 			this.displayedContext = context;
-			const previousCount = this.session.result?.key === key ? this.displayedCount : null;
-			this.displayedMemos = page === null ? this.options.getMemos() : [...page.items];
-			this.displayedCount = (page === null ? this.options.getMatchedTotalCount?.() : page.totalCount)
-				?? (page === null ? this.options.filterMemos(this.displayedMemos, filter).length : previousCount);
-			this.session.commitResult(filter, page?.catalogRevision ?? this.options.getCatalogRevision?.() ?? 0,
-				page?.coverageKey ?? this.options.getCoverageKey?.() ?? "");
+			const items = reset ? page.items : [...new Map([...(this.displayedMemos ?? []), ...page.items]
+				.map(memo => [getMemoRenderKey(memo), memo])).values()];
+			this.displayedMemos = this.options.projectResults?.(items, filter) ?? [...items];
+			this.cursor = page.nextCursor;
+			if (reset) {
+				this.acceptedResultsInvalidated = false;
+				this.displayedCount = !this.options.hasPendingConfirmedMemos?.()
+					&& page.nextCursor === null && isQueryCovered(page.coverage, filter) ? this.displayedMemos.length : null;
+			}
+			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey);
+			this.options.onResultsAccepted?.(page);
+			if (reset && this.displayedCount === null && !this.options.hasPendingConfirmedMemos?.()
+				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) {
@@ -567,35 +589,105 @@ export class MobileSearchController {
 
 	refreshAppliedResults(): Promise<void> { return this.refreshRemoteResults(true); }
 
-	cancelPendingRequest(clearIndicator = true): void {
+	cancelPendingRequest(preserveAcceptedResults = false): void {
+		this.abortQuery();
+		this.queryRun++;
+		this.pendingQueryKey = null;
+		this.cancelCount();
+		if (!preserveAcceptedResults) this.invalidateAcceptedResults();
+		if (this.session.requestStatus === "pending") this.session.requestStatus = this.session.result === null ? "idle" : "ready";
+	}
+
+	private abortQuery(clearIndicator = true): void {
 		this.queryController?.abort();
 		this.queryController = null;
 		if (clearIndicator) this.loadingIndicator.clear();
 	}
 
+	private invalidateAcceptedResults(): void {
+		// null cursor 也可能表示正常末页；真实失效须保留到新首屏被接纳。
+		this.acceptedResultsInvalidated = true;
+		this.cursor = null;
+	}
+
 	suspendLoadingFeedback(): void { this.loadingIndicator.clear(); }
 
 	getDisplayedMemos(): readonly MemoRecord[] { return this.displayedMemos ?? []; }
+	getDisplayedCount(): number | null { return this.displayedCount; }
+
+	private getRequestKey(filter: CatalogQueryFilter): string {
+		return JSON.stringify([getCatalogQueryKey(filter), this.options.getQueryContextKey?.() ?? ""]);
+	}
+
+	private getDisplayedRequestKey(): string | null {
+		return this.session.result === null ? null : JSON.stringify([this.session.result.key, this.displayedContext?.queryContextKey ?? ""]);
+	}
+
+	private cancelCount(): void {
+		this.countController?.abort();
+		this.countController = null;
+	}
+
+	private async refreshCount(filter: CatalogQueryFilter, queryContextKey: string): Promise<void> {
+		if (!this.options.countRemoteResults || !this.session.result) return;
+		this.cancelCount();
+		const controller = new AbortController();
+		this.countController = controller;
+		const { catalogRevision, coverageKey } = this.session.result;
+		const key = JSON.stringify([getCatalogQueryKey(filter), queryContextKey]);
+		const isCurrent = () => this.open && !this.acceptedResultsInvalidated && this.countController === controller && !controller.signal.aborted
+			&& this.getDisplayedRequestKey() === key && this.getRequestKey(this.getAppliedFilter()) === key
+			&& this.session.result?.catalogRevision === catalogRevision && this.session.result.coverageKey === coverageKey
+			&& (this.options.getCatalogRevision?.() ?? catalogRevision) === catalogRevision
+			&& (this.options.getCoverageKey?.() ?? coverageKey) === coverageKey
+			&& !this.options.hasPendingConfirmedMemos?.();
+		try {
+			// 计数属于查询快照，首屏之后启动，同一查询的后续分页不能使它失效。
+			await new Promise<void>(resolve => {
+				const win = this.options.getWindow();
+				const abort = () => { win.clearTimeout(timer); resolve(); };
+				const timer = win.setTimeout(() => { controller.signal.removeEventListener("abort", abort); resolve(); }, 0);
+				controller.signal.addEventListener("abort", abort, { once: true });
+			});
+			if (!isCurrent()) return;
+			const result = await this.options.countRemoteResults(filter, controller.signal);
+			if (!isCurrent() || result.catalogRevision !== catalogRevision || catalogCoverageKey(result.coverage) !== coverageKey
+				|| !result.complete || result.count === null) return;
+			this.displayedCount = result.count;
+			this.renderResults("content-change", true, true);
+		} catch (error) {
+			if (!controller.signal.aborted) console.warn("Knomo mobile search count failed", error);
+		} finally {
+			if (this.countController === controller) this.countController = null;
+		}
+	}
+
+	updateCatalogProgress(coverage: CatalogCoverage): void {
+		if (!this.open || this.session.result === null) return;
+		if (catalogCoverageKey(coverage) !== this.session.result.coverageKey) {
+			this.cancelCount();
+			this.invalidateAcceptedResults();
+		}
+		if (!isQueryCovered(coverage, this.getDisplayedFilter()) && this.displayedCount !== null) {
+			this.displayedCount = null;
+			this.renderResults("content-change", true, true);
+		}
+	}
 
 	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false): void {
 		if (!this.open || !this.hasSearchConditions()) return;
 		const hadPendingQuery = this.pendingQueryKey !== null;
-		const resumeSearch = this.pendingQueryKey !== null && this.pendingQueryKey !== this.session.result?.key;
+		const resumeSearch = this.pendingQueryKey !== null && this.pendingQueryKey !== this.getDisplayedRequestKey();
 		this.cancelPendingRequest();
 		const additions = this.options.filterMemos(inserted, this.getDisplayedFilter());
 		if (additions.length === 0 && !this.displayedMemos?.some(memo => changes.has(memo.id))) {
 			if (!hadPendingQuery) return;
-			this.queryRun++;
-			this.pendingQueryKey = null;
 			this.session.requestStatus = this.session.result === null ? "idle" : "ready";
 			if (resumeSearch) void this.refreshAppliedResults();
 			else this.syncControls();
 			return;
 		}
 		const previous = this.getMatchedMemos();
-		this.queryRun++;
-		this.pendingQueryKey = null;
-		this.options.cancelRemoteCount?.();
 		this.displayedMemos = [...new Map([...(this.displayedMemos ?? []).flatMap(memo => {
 			const current = changes.has(memo.id) ? changes.get(memo.id) : memo;
 			return current ? [current] : [];
@@ -701,7 +793,6 @@ export class MobileSearchController {
 		const status = this.queryError !== null ? (memos.length > 0 ? t("feedback.refreshFailed") : this.queryError)
 			: headers.length > 0 ? JSON.stringify(headers) : null;
 		const statusChanged = status !== this.renderedStatus;
-		if (metadataOnly && this.session.requestStatus === "ready") this.displayedCount = this.options.getMatchedTotalCount?.() ?? this.displayedCount;
 		this.syncControls();
 		// 总数晚到时仅沿用已开始渲染的卡片列表；空搜索提示不能新增加载入口。
 		if (metadataOnly && sameView && this.renderedPending === waiting && this.renderedStatus === status
@@ -826,12 +917,12 @@ export class MobileSearchController {
 		}
 		if (!updateMore) return;
 		const previous = results.find(".knomo-mobile-search-more");
-		if (visibleCount >= matchedCount && this.options.hasRemoteNextPage?.() !== true) {
+		if (visibleCount >= matchedCount && this.cursor === null && !this.acceptedResultsInvalidated) {
 			previous?.remove();
 			return;
 		}
-		if (this.session.requestStatus === "pending" || this.session.result?.key !== getCatalogQueryKey(this.getAppliedFilter())) { previous?.remove(); return; }
-		const remainingCount = total === null ? null : Math.max(1, total - visibleCount);
+		if (this.session.requestStatus === "pending" || this.getDisplayedRequestKey() !== this.getRequestKey(this.getAppliedFilter())) { previous?.remove(); return; }
+		const remainingCount = this.acceptedResultsInvalidated || total === null ? null : Math.max(1, total - visibleCount);
 		if (previous) previous.setText(remainingCount === null ? t("list.loadMoreUnknown") : t("list.loadMore", { count: remainingCount }));
 		else renderKnomoLoadMoreButton(results, { remainingCount, action: "load-more-mobile-search", extraClass: "knomo-mobile-search-more" });
 	}
@@ -846,7 +937,7 @@ export class MobileSearchController {
 
 	getStateKey(): string {
 		return JSON.stringify([this.open, this.getViewStateKey(), this.getVisibleMemos().map(getMemoRenderRevision),
-			this.session.result?.catalogRevision, this.session.result?.coverageKey, this.options.getResultStatus?.(this.getDisplayedFilter())]);
+			this.session.result?.catalogRevision, this.session.result?.coverageKey, this.acceptedResultsInvalidated, this.options.getResultStatus?.(this.getDisplayedFilter())]);
 	}
 
 	getViewStateKey(): string { return getCatalogQueryKey(this.getAppliedFilter()); }

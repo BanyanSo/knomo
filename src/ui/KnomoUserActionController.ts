@@ -29,7 +29,7 @@ export interface EscapeState {
 }
 
 interface KnomoUserActionControllerOptions {
-	runMemoAction: (action: MemoAction, memoId: string | null) => Promise<void>;
+	runMemoAction: (action: MemoAction, memoId: string | null, sourceEl?: HTMLElement | null) => Promise<void>;
 	isMobileLayout: () => boolean;
 	isMobileSearchPageOpen: () => boolean;
 	isComposerOpen: () => boolean;
@@ -50,12 +50,12 @@ interface KnomoUserActionControllerOptions {
 	setMobileSearchDateFilter: (filter: SearchDateFilter) => void;
 	runTrashAction: (action: TrashAction, memoId: string | null) => Promise<void>;
 	clearTrash: () => Promise<void>;
-	openMemoCardDailyNote: (memoId: string, randomReunion: boolean) => Promise<void>;
+	openMemoCardDailyNote: (memoId: string, randomReunion: boolean, sourceEl?: HTMLElement | null) => Promise<void>;
 	closeCardMenu: () => void;
 	closeScopeMenu: () => void;
 	closeDesktopSearch: () => void;
 	closeCompactSearch: () => void;
-	toggleCardMenu: (memoId: string | null, keyboard: boolean) => void;
+	toggleCardMenu: (memoId: string | null, keyboard: boolean, sourceEl?: HTMLElement | null) => void;
 	refreshRandomReunion: () => Promise<void>;
 	refreshShuffleDay?: () => Promise<void>;
 	renderNextCardBatch: (generation: number) => void;
@@ -198,7 +198,7 @@ export class KnomoUserActionController {
 		if (route.type === "memo-action") {
 			const dispatch = getMemoActionDispatch(route.action);
 			if (dispatch.type === "memo-action") {
-				await this.options.runMemoAction(dispatch.action, route.memoId);
+				await this.options.runMemoAction(dispatch.action, route.memoId, route.element);
 			}
 			return;
 		}
@@ -225,7 +225,7 @@ export class KnomoUserActionController {
 
 		if (route.type === "memo-card-open") {
 			if (route.memoId !== null) {
-				await this.options.openMemoCardDailyNote(route.memoId, route.randomReunion);
+				await this.options.openMemoCardDailyNote(route.memoId, route.randomReunion, route.element);
 			}
 			return;
 		}
@@ -276,7 +276,7 @@ export class KnomoUserActionController {
 			case "none":
 				return;
 			case "toggle-card-menu":
-				this.options.toggleCardMenu(memoId, keyboard);
+				this.options.toggleCardMenu(memoId, keyboard, sourceEl);
 				return;
 			case "refresh-random-reunion":
 				await this.options.refreshRandomReunion();
@@ -465,7 +465,7 @@ export class KnomoUserActionController {
 			if (memoCardOpenRoute !== null) {
 				if (memoCardOpenRoute.memoId !== null) {
 					event.preventDefault();
-					await this.options.openMemoCardDailyNote(memoCardOpenRoute.memoId, memoCardOpenRoute.randomReunion);
+					await this.options.openMemoCardDailyNote(memoCardOpenRoute.memoId, memoCardOpenRoute.randomReunion, memoCardOpenRoute.element);
 				}
 				return;
 			}

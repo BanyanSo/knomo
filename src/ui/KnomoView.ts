@@ -449,6 +449,7 @@ export class KnomoView extends ItemView {
 	private readonly composerSaveShortcutController = new ComposerSaveShortcutController();
 	private readonly imagePreviewScrollLock = new ImagePreviewScrollLock();
 	private mobileMenuController: KnomoMobileMenu | null = null;
+	private mobileGlassSurfaces: Set<HTMLElement> | null = null;
 	private readonly mobileHeaderTitleController: MobileHeaderTitleController;
 	private readonly mobileImagePickerFocusGuard: MobileImagePickerFocusGuard;
 	private readonly nativeImagePickerController: NativeImagePickerController<ComposerImageCapture>;
@@ -1198,6 +1199,10 @@ export class KnomoView extends ItemView {
 			if (this.app.workspace.getActiveViewOfType(KnomoView) !== this) {
 				this.mobileComposerController.clearFocus();
 				this.mobileMenuController?.close();
+				if (this.currentLayout === "mobile") {
+					this.tagSuggest?.close();
+					this.wikiLinkSuggest?.close();
+				}
 			}
 			if (!this.trashViewClosed && this.containerEl.isShown()) {
 				this.handleLocalDateChange();
@@ -1345,6 +1350,7 @@ export class KnomoView extends ItemView {
 		this.resetTimeBuoyCardFlow();
 		this.clearMobileCardBatchContinuation();
 		this.cardFlowCoordinator.setPendingScrollRestore(null);
+		this.clearMobileGlassSurfaces();
 		this.mobileComposerController.dispose();
 		this.cardImageLoadQueue.dispose();
 		this.cardImageCache.clear();
@@ -1984,6 +1990,7 @@ export class KnomoView extends ItemView {
 			this.inputEl,
 			() => this.syncInputState(),
 			this.vaultTagIndex,
+			surface => this.registerMobileGlassSurface(surface),
 		);
 		this.wikiLinkSuggest = new KnomoWikiLinkSuggest(this.app, this.inputEl, {
 			listboxId: wikiLinkListboxId,
@@ -1991,6 +1998,7 @@ export class KnomoView extends ItemView {
 			onInputChanged: () => this.syncInputState(),
 			closeTagSuggest: () => this.tagSuggest?.close(),
 			registerVaultEvent: (eventRef) => this.getRenderScope().registerEvent(eventRef),
+			registerGlassSurface: surface => this.registerMobileGlassSurface(surface),
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "beforeinput", (event: InputEvent) => {
 			this.handleComposerBeforeInput(event);
@@ -2839,9 +2847,29 @@ export class KnomoView extends ItemView {
 
 	private syncReducedGlassEffects(): void {
 		const reduced = this.settingsService.getSettings().reduceGlassEffects === true;
-		for (const container of [this.containerEl, this.rootEl, this.mobileComposerController.getLayerEl()]) {
+		for (const container of [this.containerEl, this.rootEl, this.mobileComposerController.getLayerEl(), ...(this.mobileGlassSurfaces ?? [])]) {
 			container?.toggleClass("knomo-reduce-glass", reduced);
 		}
+	}
+
+	private registerMobileGlassSurface(surface: HTMLElement): () => void {
+		if (this.currentLayout !== "mobile") return () => {};
+		// 只登记本视图创建的独立浮层，不查询或标记其他插件的宿主菜单。
+		const surfaces = this.mobileGlassSurfaces ??= new Set<HTMLElement>();
+		surfaces.add(surface);
+		surface.addClass("knomo-mobile-glass-surface");
+		surface.toggleClass("knomo-reduce-glass", this.settingsService.getSettings().reduceGlassEffects === true);
+		return () => {
+			surfaces.delete(surface);
+			surface.classList.remove("knomo-mobile-glass-surface", "knomo-reduce-glass");
+		};
+	}
+
+	private clearMobileGlassSurfaces(): void {
+		for (const surface of this.mobileGlassSurfaces ?? []) surface.classList.remove("knomo-mobile-glass-surface", "knomo-reduce-glass");
+		this.mobileGlassSurfaces?.clear();
+		this.mobileGlassSurfaces = null;
+		for (const container of [this.containerEl, this.rootEl, this.mobileComposerController.getLayerEl()]) container?.removeClass("knomo-reduce-glass");
 	}
 
 	private syncRootState(): void {
@@ -6816,6 +6844,7 @@ export class KnomoView extends ItemView {
 		this.mobileMenuController ??= new KnomoMobileMenu();
 		this.mobileMenuController.open({
 			kind: "card", trigger,
+			registerGlassSurface: surface => this.registerMobileGlassSurface(surface),
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const { action } of getMemoCardActions(memo)) {
@@ -6845,6 +6874,7 @@ export class KnomoView extends ItemView {
 		this.mobileMenuController ??= new KnomoMobileMenu();
 		this.mobileMenuController.open({
 			kind: "scope", trigger,
+			registerGlassSurface: surface => this.registerMobileGlassSurface(surface),
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const option of TITLE_MODE_OPTIONS) {

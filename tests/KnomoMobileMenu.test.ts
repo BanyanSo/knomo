@@ -116,6 +116,56 @@ test("menu titles stay plain text and belong to the trigger document when helper
 	} finally { h.close(); }
 });
 
+test("owned host menus initialize and update glass preference and release it on every close path", async () => {
+	const h = await createHarness();
+	try {
+		let reduced = true;
+		const leaf = h.f.win.document.body.createDiv();
+		Object.defineProperty(leaf, "doc", { value: h.f.win.document });
+		leaf.appendChild(h.f.root);
+		const view = Object.assign(h.view as unknown as { syncReducedGlassEffects(): void }, {
+			containerEl: leaf, settingsService: { getSettings: () => ({ reduceGlassEffects: reduced }) },
+		});
+		Object.assign(h.view.mobileComposerController, { getLayerEl: () => h.f.layer });
+		const unrelated = h.f.win.document.body.createDiv({ cls: "menu" });
+		for (const close of ["hide", "replace", "trigger-detach", "controller"] as const) {
+			h.view.toggleScopeMenu();
+			const owned = h.f.win.document.querySelector<HTMLElement>(".menu.knomo-mobile-menu")!;
+			assert.ok(owned, close);
+			assert.equal(owned.classList.contains("knomo-reduce-glass"), true, close);
+			assert.equal(owned.classList.contains("knomo-mobile-glass-surface"), true, close);
+			reduced = false; view.syncReducedGlassEffects();
+			assert.equal(owned.classList.contains("knomo-reduce-glass"), false, close);
+			assert.equal(h.f.win.document.querySelector(".menu.knomo-mobile-menu"), owned, close);
+			reduced = true; view.syncReducedGlassEffects();
+			if (close === "hide") h.menus.at(-1)!.hide();
+			else if (close === "replace") { h.view.toggleCardMenu(h.originalMemo.id); h.controller.close(); }
+			else if (close === "trigger-detach") {
+				const parent = h.trigger.parentElement!;
+				h.trigger.remove(); await Promise.resolve();
+				parent.appendChild(h.trigger);
+			} else h.controller.close();
+			assert.equal(owned.classList.contains("knomo-mobile-glass-surface"), false, close);
+			assert.equal(owned.classList.contains("knomo-reduce-glass"), false, close);
+			assert.equal(owned.classList.contains("knomo-mobile-menu"), false, close);
+			assert.equal(unrelated.className, "menu", "other host menus never inherit Knomo state");
+		}
+	} finally { h.close(); }
+});
+
+test("menu material registration requires a title belonging to the exact host menu", async () => {
+	const h = await createHarness();
+	try {
+		let registrations = 0;
+		h.controller.open({ kind: "scope", trigger: h.trigger, onClose: () => undefined,
+			registerGlassSurface: () => { registrations++; return () => {}; },
+			build: menu => { menu.addItem(item => item.setTitle("Unmarked title")); },
+		});
+		assert.equal(registrations, 0);
+		assert.equal(h.f.win.document.querySelector(".knomo-mobile-glass-surface"), null);
+	} finally { h.close(); }
+});
+
 test("mobile Card Menu delegates to host and retains the selected observation instead of looking up a new memo", async () => {
 	const h = await createHarness();
 	try {

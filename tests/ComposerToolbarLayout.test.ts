@@ -44,11 +44,13 @@ test("mobile Composer tool focus remains visible inside scrolling tools, includi
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	try {
 		const page = await browser.newPage();
+		await page.emulateMedia({ reducedMotion: "reduce" });
 		for (const theme of ["theme-light", "theme-dark"]) for (const mountedOnBody of [false, true]) for (const width of [320, 390]) {
 			await page.setViewportSize({ width, height: 700 });
 			// 页内原位与 body 浮层使用真实挂载类；显式展示原位 Composer 以验证迁移前后的同一组按钮。
 			await page.setContent(`<style>${host}${css}
-				body { display:block; margin:0; --size-2-1:2px; }
+				body { display:block; margin:0; --size-2-1:2px; --background-primary:#fff; --background-secondary:#eee; --text-normal:#222; }
+				body.theme-dark { --background-primary:#202020; --background-secondary:#303030; --text-normal:#eee; }
 				.fixture-page { height:700px; }
 				.fixture-page.knomo-plugin.is-layout-mobile > .knomo-composer { display:flex; }
 			</style><body class="is-mobile is-phone ${theme}" style="--interactive-accent:#7755cc">${mountedOnBody
@@ -74,7 +76,7 @@ test("mobile Composer tool focus remains visible inside scrolling tools, includi
 						return {
 							style: style.outlineStyle, width: style.outlineWidth, offset: style.outlineOffset,
 							color: style.outlineColor,
-							image: style.backgroundImage, shadow: style.boxShadow,
+							image: style.backgroundImage, shadow: style.boxShadow, background: style.backgroundColor,
 							contained: rect.left >= clip.left - 1 && rect.right <= clip.right + 1 && rect.top >= clip.top - 1 && rect.bottom <= clip.bottom + 1,
 							size: [rect.width, rect.height],
 						};
@@ -85,10 +87,9 @@ test("mobile Composer tool focus remains visible inside scrolling tools, includi
 					assert.equal(focus.color, "rgb(119, 85, 204)", context);
 					assert.equal(focus.contained, true, `${context}/${index}: visible tool contains its focus ring`);
 					assert.deepEqual(focus.size, [44, 44], context);
-					if (expandable || pressed) {
-						assert.match(focus.image, /linear-gradient/, `${context}/${index}: expanded=${expandable}, pressed=${pressed}`);
-						assert.match(focus.shadow, /inset/, context);
-					} else assert.equal(focus.image, "none", context);
+					assert.equal(focus.image, "none", `${context}: tool state adds no glass shell`);
+					assert.equal(focus.shadow, "none", context);
+					if (expandable || pressed) assert.notEqual(focus.background, "rgba(0, 0, 0, 0)", `${context}/${index}: state fill stays visible`);
 					if (pressed) await page.keyboard.up("Space");
 				}
 				if (expandable) {
@@ -128,7 +129,7 @@ test("mobile Glass sample shares accent across independent mounts, honors solid 
 				return { size: [el.offsetWidth, el.offsetHeight], image: style.backgroundImage, filter: style.backdropFilter };
 			});
 			assert.deepEqual(fabStyle.size, [60, 60], context);
-			assert.match(fabStyle.image, /radial-gradient/, context);
+			assert.match(fabStyle.image, /linear-gradient/, context);
 			assert.equal(fabStyle.filter, "none", `${context}: sample adds no FAB blur`);
 			await page.evaluate(() => {
 				const button = document.querySelector<HTMLButtonElement>(".knomo-mobile-create-fab")!;
@@ -152,10 +153,10 @@ test("mobile Glass sample shares accent across independent mounts, honors solid 
 				};
 			});
 			const solid = manual || system === "reduce";
-			assert.equal(surface.fabAlpha, solid ? 255 : 240, context);
+			assert.equal(surface.fabAlpha, solid ? 255 : 224, context);
 			assert.equal(surface.sendAlpha, surface.fabAlpha, `${context}: body layer has the same material`);
-			assert.equal(surface.headerFilter, solid ? "none" : "blur(2px) saturate(1.25)", context);
-			assert.match(surface.sendImage, /radial-gradient/, context);
+			assert.equal(surface.headerFilter, solid ? "none" : "blur(1px) saturate(1.1)", context);
+			assert.match(surface.sendImage, /linear-gradient/, context);
 			assert.deepEqual(surface.size, [58, 44], context);
 			assert.equal(surface.pointer, "none", context);
 			assert.equal(surface.hiddenFabPointer, "none", context);

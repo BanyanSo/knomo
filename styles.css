@@ -232,8 +232,8 @@ body:not(.is-mobile) .workspace-leaf-content[data-type="knomo-view"] .view-heade
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
 	--knomo-mobile-header-safe-space: 0px;
-	--knomo-mobile-header-surface: var(--background-secondary);
-	--knomo-mobile-header-filter: none;
+	--knomo-mobile-header-surface: linear-gradient(to bottom, var(--knomo-glass-nav-top) 0%, var(--knomo-glass-nav-middle) var(--knomo-mobile-header-safe-space), var(--knomo-glass-nav-bottom) 100%);
+	--knomo-mobile-header-filter: var(--knomo-glass-nav-filter);
 	border-bottom: 0;
 	/* 普通导航的安全区在标题栏内部，由标题栏自身采样背后的列表。 */
 	background: var(--knomo-mobile-header-surface);
@@ -243,7 +243,7 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
 
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .view-header {
 	--knomo-mobile-header-safe-space: var(--view-header-top-offset, env(safe-area-inset-top, 0px));
-	/* 材质独立绘制，向按钮下方延伸时不改变按钮和卡片的位置。 */
+	/* 材质独立绘制，边界与标题栏及按钮一致，不改变卡片位置。 */
 	background: transparent;
 	backdrop-filter: none;
 	-webkit-backdrop-filter: none;
@@ -252,7 +252,7 @@ body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .view-he
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .view-header::before {
 	content: "";
 	position: absolute;
-	inset: 0 0 -4px;
+	inset: 0;
 	z-index: -1;
 	pointer-events: none;
 	background: var(--knomo-mobile-header-surface);
@@ -304,21 +304,6 @@ body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .knomo-p
 
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .knomo-page-feedback:not([hidden]) ~ .knomo-card-flow {
 	padding-top: 0;
-}
-
-@supports (background: color-mix(in srgb, black 85%, transparent)) and ((backdrop-filter: blur(18px)) or (-webkit-backdrop-filter: blur(18px))) {
-	body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
-		/* 状态栏与标题栏连续透出正文，底部最透明，轻模糊保留文字的可辨认度。 */
-		--knomo-mobile-header-surface: linear-gradient(to bottom, color-mix(in srgb, var(--background-secondary) 78%, transparent) 0%, color-mix(in srgb, var(--background-secondary) 40%, transparent) var(--knomo-mobile-header-safe-space), color-mix(in srgb, var(--background-secondary) 6%, transparent) 100%);
-		--knomo-mobile-header-filter: blur(2px) saturate(1.25);
-	}
-}
-
-@media (prefers-reduced-transparency: reduce) {
-	body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {
-		--knomo-mobile-header-surface: var(--background-secondary);
-		--knomo-mobile-header-filter: none;
-	}
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header {
@@ -3534,12 +3519,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	touch-action: pan-y;
 }
 
-.knomo-tag-suggest-popover .suggestion-item {
-	font-size: var(--knomo-text-ui-base);
-}
-
-.knomo-tag-suggest-mobile,
-.knomo-tag-suggest-mobile * {
+.knomo-suggest-mobile,
+.knomo-suggest-mobile * {
 	-webkit-user-select: none;
 	user-select: none;
 	-webkit-touch-callout: none;
@@ -3580,11 +3561,6 @@ body .knomo-mobile-create-fab.is-hidden {
 	overscroll-behavior: contain;
 	touch-action: pan-y;
 	-webkit-overflow-scrolling: touch;
-	padding: 4px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
-	background: var(--background-primary);
-	box-shadow: var(--shadow-s);
 }
 
 .knomo-link-suggest-positioning {
@@ -3601,41 +3577,32 @@ body .knomo-mobile-create-fab.is-hidden {
 	transform: none;
 }
 
-.knomo-link-suggest-item {
-	box-sizing: border-box;
+/* 两端候选框复用原生外壳与内层滚动列表；只保留触摸和定位所需的约束。 */
+.knomo-native-suggest {
 	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	width: 100%;
-	min-height: 44px;
-	padding: 7px 9px;
-	border-radius: 6px;
-	cursor: pointer;
-	color: var(--text-normal);
-}
-
-.knomo-link-suggest-item.is-selected,
-.knomo-link-suggest-item:hover {
-	background: var(--background-modifier-hover);
-}
-
-.knomo-link-suggest-title,
-.knomo-link-suggest-path {
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
-.knomo-link-suggest-popover .knomo-link-suggest-title {
-	font-size: var(--knomo-text-ui-base);
-	font-weight: 600;
-	line-height: 1.3;
+.knomo-native-suggest > .knomo-suggest-list {
+	position: relative;
+	flex: 1 1 auto;
+	min-height: 0;
+	overscroll-behavior: contain;
+	touch-action: pan-y;
+	-webkit-overflow-scrolling: touch;
 }
 
-.knomo-link-suggest-popover .knomo-link-suggest-path {
-	color: var(--text-muted);
-	font-size: var(--knomo-text-caption);
-	line-height: 1.25;
+.knomo-native-suggest .suggestion-item {
+	box-sizing: border-box;
+}
+
+.knomo-suggest-mobile .suggestion-item {
+	min-height: var(--knomo-touch-target, 44px);
+}
+
+.knomo-suggest-measure-host > .knomo-suggest-list {
+	flex: none;
+	overflow: visible;
 }
 
 .modal.knomo-confirm-modal {
@@ -5116,48 +5083,56 @@ body.is-mobile .modal-container.knomo-confirm-backdrop { z-index: 10030; }
 }
 .knomo-plugin .knomo-search-date-hint[hidden] { display: none; }
 
-/* 移动 Glass：独立挂载点共享迎光方向，导航和内容控制的光泽弱于主要操作。 */
-body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .mobile-navbar.knomo-mobile-navbar-compact) {
+/* 移动材质只定义在 Knomo 自有表面；底部导航完整使用宿主材质。 */
+body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface) {
+	--knomo-glass-nav-top: var(--background-secondary);
+	--knomo-glass-nav-middle: var(--background-secondary);
+	--knomo-glass-nav-bottom: var(--background-secondary);
+	--knomo-glass-nav-filter: none;
 	--knomo-glass-accent: var(--interactive-accent);
 	--knomo-glass-selected: var(--background-primary);
-	--knomo-glass-highlight: rgba(255, 255, 255, 0.34);
-	--knomo-glass-gloss: rgba(255, 255, 255, 0.30);
-	--knomo-glass-rim: rgba(255, 255, 255, 0.48);
-	--knomo-glass-shade: rgba(0, 0, 0, 0.10);
-	--knomo-glass-inner-shade: rgba(0, 0, 0, 0.12);
-	--knomo-glass-depth: 0 4px 12px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.10);
+	--knomo-glass-pressed: var(--background-modifier-hover);
+	--knomo-glass-highlight: rgba(255, 255, 255, 0.14);
+	--knomo-glass-rim: rgba(255, 255, 255, 0.22);
+	--knomo-glass-depth: 0 4px 12px rgba(0, 0, 0, 0.14);
+	--knomo-glass-popup: var(--background-primary);
+	--knomo-glass-popup-filter: none;
+	--knomo-glass-popup-border: var(--background-modifier-border);
+	--knomo-glass-popup-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
 }
 
-body.is-mobile.theme-dark :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .mobile-navbar.knomo-mobile-navbar-compact) {
-	--knomo-glass-highlight: rgba(255, 255, 255, 0.24);
-	--knomo-glass-gloss: rgba(255, 255, 255, 0.08);
-	--knomo-glass-rim: rgba(255, 255, 255, 0.21);
-	--knomo-glass-inner-shade: rgba(0, 0, 0, 0.28);
-	--knomo-glass-depth: 0 4px 14px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.18);
+body.is-mobile.theme-dark :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface) {
+	--knomo-glass-highlight: rgba(255, 255, 255, 0.08);
+	--knomo-glass-rim: rgba(255, 255, 255, 0.14);
+	--knomo-glass-depth: 0 4px 14px rgba(0, 0, 0, 0.26);
+	--knomo-glass-popup-shadow: 0 4px 16px rgba(0, 0, 0, 0.30);
 }
 
-/* 增强表达式单独门控，能力未知时仍有完整、可读的实色材质。 */
-@supports (background: color-mix(in srgb, black 94%, transparent)) {
-	body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile) {
-		--knomo-glass-accent: color-mix(in srgb, var(--interactive-accent) 94%, transparent);
-		--knomo-glass-selected: color-mix(in srgb, var(--background-primary) 97%, var(--interactive-accent));
+/* 无 color-mix 时保留实色。操作按钮和内容状态不增加背景模糊。 */
+@supports (background: color-mix(in srgb, black 88%, transparent)) {
+	body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface) {
+		--knomo-glass-accent: color-mix(in srgb, var(--interactive-accent) 88%, transparent);
+		--knomo-glass-selected: color-mix(in srgb, var(--background-primary) 94%, var(--interactive-accent));
+		--knomo-glass-pressed: color-mix(in srgb, var(--background-primary) 88%, var(--interactive-accent));
 	}
 }
 
-/* 只补光泽与轮廓，不覆盖宿主背景色或滤镜，实色模式无需接管原生材质。 */
-body.is-mobile.knomo-mobile-navbar-compact-active .mobile-navbar.knomo-mobile-navbar-compact {
-	background-image: linear-gradient(155deg, var(--knomo-glass-gloss), transparent 60%);
-	box-shadow: inset 0 1px 0 var(--knomo-glass-rim);
-}
-
-body.is-mobile.knomo-mobile-navbar-compact-active.knomo-mobile-navbar-floating .mobile-navbar.knomo-mobile-navbar-compact {
-	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), inset 0 -1px 0 var(--knomo-glass-inner-shade), 0 3px 12px rgba(0, 0, 0, 0.10);
+/* 浮层比导航更稳定，叠在模态遮罩上仍保留清楚的文字底色。 */
+@supports (background: color-mix(in srgb, black 94%, transparent)) and ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+	body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface) {
+		--knomo-glass-nav-top: color-mix(in srgb, var(--background-secondary) 72%, transparent);
+		--knomo-glass-nav-middle: color-mix(in srgb, var(--background-secondary) 30%, transparent);
+		--knomo-glass-nav-bottom: color-mix(in srgb, var(--background-secondary) 4%, transparent);
+		--knomo-glass-nav-filter: blur(1px) saturate(1.1);
+		--knomo-glass-popup: color-mix(in srgb, var(--background-primary) 94%, transparent);
+		--knomo-glass-popup-filter: blur(6px) saturate(1.1);
+	}
 }
 
 body.is-mobile .knomo-plugin.is-layout-mobile :is(.knomo-time-buoy-tabs, .knomo-record-stats-view-controls) {
 	background-color: var(--background-secondary);
-	background-image: linear-gradient(155deg, var(--knomo-glass-gloss), transparent 70%);
-	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), inset 0 -1px 0 var(--knomo-glass-inner-shade);
+	background-image: none;
+	box-shadow: none;
 }
 
 body.is-mobile .knomo-plugin.is-layout-mobile :is(.knomo-time-buoy-tab, .knomo-record-stats-view-button) {
@@ -5177,14 +5152,14 @@ body.is-mobile .knomo-plugin.is-layout-mobile :is(.knomo-time-buoy-tab, .knomo-r
 body.is-mobile .knomo-plugin.is-layout-mobile :is(.knomo-time-buoy-tab, .knomo-record-stats-view-button).is-active {
 	color: var(--text-normal);
 	background-color: var(--knomo-glass-selected);
-	background-image: linear-gradient(155deg, var(--knomo-glass-gloss), transparent 68%);
-	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), inset 0 -1px 0 var(--knomo-glass-inner-shade), 0 1px 3px rgba(0, 0, 0, 0.08);
+	background-image: none;
+	box-shadow: none;
 }
 
 body.is-mobile .knomo-plugin.is-layout-mobile :is(.knomo-time-buoy-tab, .knomo-record-stats-view-button):active:not(:disabled) {
 	color: var(--text-normal);
-	background-color: var(--knomo-glass-selected);
-	box-shadow: inset 0 1px 2px var(--knomo-glass-inner-shade);
+	background-color: var(--knomo-glass-pressed);
+	box-shadow: none;
 }
 
 body.is-mobile .knomo-plugin.is-layout-mobile :is(.knomo-time-buoy-tab, .knomo-record-stats-view-button):focus-visible {
@@ -5196,47 +5171,83 @@ body.is-mobile .knomo-plugin.is-layout-mobile .knomo-tool-button[aria-expanded="
 body.is-mobile .knomo-plugin.is-layout-mobile .knomo-tool-button:active:not(:disabled) {
 	color: var(--text-normal);
 	background-color: var(--knomo-glass-selected);
-	background-image: linear-gradient(155deg, var(--knomo-glass-gloss), transparent 75%);
-	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), inset 0 -1px 0 var(--knomo-glass-inner-shade);
+	background-image: none;
+	box-shadow: none;
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] > .knomo-mobile-create-fab {
 	background-color: var(--knomo-glass-accent);
-	background-image: radial-gradient(ellipse at 22% 3%, var(--knomo-glass-highlight), transparent 65%), linear-gradient(155deg, transparent 55%, var(--knomo-glass-shade));
-	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), inset 1px 0 0 rgba(255, 255, 255, 0.16), inset 0 -1px 1px var(--knomo-glass-shade), var(--knomo-glass-depth);
+	background-image: linear-gradient(155deg, var(--knomo-glass-highlight), transparent 65%);
+	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), var(--knomo-glass-depth);
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] > .knomo-mobile-create-fab:active {
-	background-color: var(--interactive-accent);
-	box-shadow: inset 0 1px 2px var(--knomo-glass-shade), 0 2px 5px rgba(0, 0, 0, 0.15);
+	background-color: var(--knomo-glass-accent);
+	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), 0 2px 5px rgba(0, 0, 0, 0.12);
 }
 
 /* 排除 disabled/saving，让既有禁用与保存状态完整接管表面和进度图标。 */
 body.is-mobile .knomo-plugin.is-layout-mobile .knomo-send-button:not(:disabled):not(.is-saving)::before {
 	pointer-events: none;
 	background-color: var(--knomo-glass-accent);
-	background-image: radial-gradient(ellipse at 20% 0%, var(--knomo-glass-highlight), transparent 74%), linear-gradient(155deg, transparent 60%, var(--knomo-glass-shade));
-	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), inset 0 -1px 0 var(--knomo-glass-shade), 0 2px 5px rgba(0, 0, 0, 0.10);
+	background-image: linear-gradient(155deg, var(--knomo-glass-highlight), transparent 75%);
+	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), 0 2px 5px rgba(0, 0, 0, 0.10);
 }
 
 body.is-mobile .knomo-plugin.is-layout-mobile .knomo-send-button:active:not(:disabled):not(.is-saving)::before {
-	background-color: var(--interactive-accent);
-	box-shadow: inset 0 1px 2px var(--knomo-glass-shade);
+	background-color: var(--knomo-glass-accent);
+	box-shadow: inset 0 1px 0 var(--knomo-glass-rim), 0 1px 3px rgba(0, 0, 0, 0.10);
 }
 
-body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile).knomo-reduce-glass {
+/* Knomo 绘制已识别的范围/卡片菜单与浮标日期面板；候选框复用原生 suggestion 表面。
+   搜索日期筛选是页面内状态；编辑器、卡片与大型模态面板保留原有实色。 */
+body.is-mobile .knomo-mobile-glass-surface.menu.knomo-mobile-menu,
+body.is-mobile .knomo-plugin.is-layout-mobile .knomo-time-buoy-picker.is-mobile {
+	color: var(--text-normal);
+	background: var(--knomo-glass-popup);
+	box-shadow: var(--knomo-glass-popup-shadow);
+	backdrop-filter: var(--knomo-glass-popup-filter);
+	-webkit-backdrop-filter: var(--knomo-glass-popup-filter);
+}
+
+body.is-mobile .knomo-mobile-glass-surface.menu.knomo-mobile-menu,
+body.is-mobile .knomo-plugin.is-layout-mobile .knomo-time-buoy-picker.is-mobile {
+	border: 1px solid var(--knomo-glass-popup-border);
+}
+
+/* 原生候选背景随宿主主题；减少透明度时仍复用已有偏好与浮层生命周期。 */
+body.is-mobile .knomo-native-suggest.knomo-reduce-glass {
+	background-color: var(--suggestion-background, var(--background-primary));
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+}
+
+body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface).knomo-reduce-glass {
+	--knomo-glass-nav-top: var(--background-secondary);
+	--knomo-glass-nav-middle: var(--background-secondary);
+	--knomo-glass-nav-bottom: var(--background-secondary);
+	--knomo-glass-nav-filter: none;
 	--knomo-glass-accent: var(--interactive-accent);
-}
-
-body.is-mobile .workspace-leaf-content[data-type="knomo-view"].knomo-reduce-glass .view-header {
-	--knomo-mobile-header-surface: var(--background-secondary);
-	--knomo-mobile-header-filter: none;
+	--knomo-glass-popup: var(--background-primary);
+	--knomo-glass-popup-filter: none;
 }
 
 /* 只响应明确的 reduce；系统查询未知时仍可使用标准材质与手动开关。 */
 @media (prefers-reduced-transparency: reduce) {
-	body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile) {
+	body.is-mobile .knomo-native-suggest {
+		background-color: var(--suggestion-background, var(--background-primary));
+		backdrop-filter: none;
+		-webkit-backdrop-filter: none;
+	}
+
+	body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface) {
+		--knomo-glass-nav-top: var(--background-secondary);
+		--knomo-glass-nav-middle: var(--background-secondary);
+		--knomo-glass-nav-bottom: var(--background-secondary);
+		--knomo-glass-nav-filter: none;
 		--knomo-glass-accent: var(--interactive-accent);
+		--knomo-glass-popup: var(--background-primary);
+		--knomo-glass-popup-filter: none;
 	}
 }
 

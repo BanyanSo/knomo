@@ -72,7 +72,7 @@ test("mobile surface preserves native controls and first-card position while ext
 					const surface = getComputedStyle(el, "::before");
 					return { blur: surface.backdropFilter, pointer: surface.pointerEvents, headerBlur: getComputedStyle(el).backdropFilter };
 				});
-				const filter = preference === "reduce" ? "none" : "blur(2px) saturate(1.25)";
+				const filter = preference === "reduce" ? "none" : "blur(1px) saturate(1.1)";
 				assert.equal(style.blur, filter, context);
 				assert.equal(style.headerBlur, "none", context);
 				assert.equal(style.pointer, "none", context);
@@ -111,7 +111,7 @@ test("mobile surface preserves native controls and first-card position while ext
 	}
 });
 
-test("phone frost fades continuously from status bar to the 4px edge below both buttons", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("phone frost fades through the header and stops at both buttons without blurring normal cards", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
 	const css = readFileSync("styles.css", "utf8");
@@ -146,10 +146,10 @@ test("phone frost fades continuously from status bar to the 4px edge below both 
 						return Math.sqrt(pixels.reduce((sum, value) => sum + (value - mean) ** 2, 0) / pixels.length);
 					};
 					// 左侧纯黑正文用于量化透出程度，右侧条纹用于区分模糊与底色遮盖。
-					const gradient = [8, 35, 70, bottom + 3].map(y => ctx.getImageData(70, y, 1, 1).data[0]);
+					const gradient = [8, 35, 70, bottom - 1].map(y => ctx.getImageData(70, y, 1, 1).data[0]);
 					ctx.fillStyle = getComputedStyle(document.querySelector(".view-header")!).getPropertyValue("--background-secondary").trim();
 					ctx.fillRect(0, 0, 1, 1);
-					return { behindTab: contrast(bottom - 4), belowButtons: contrast(bottom + 3), gradient, opaque: ctx.getImageData(0, 0, 1, 1).data[0], visiblePixels: Array.from(ctx.getImageData(40, bottom + 5, 300, 30).data) };
+					return { behindTab: contrast(bottom - 4), belowButtons: contrast(bottom + 3), gradient, opaque: ctx.getImageData(0, 0, 1, 1).data[0], visiblePixels: Array.from(ctx.getImageData(40, bottom + 1, 300, 30).data) };
 				}, { png: screenshot.toString("base64"), bottom });
 			};
 			const firstTop = await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top);
@@ -165,8 +165,8 @@ test("phone frost fades continuously from status bar to the 4px edge below both 
 			await page.addStyleTag({ content: '.view-header, .view-header::before { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }' });
 			const sharp = await sample();
 			assert.ok(frosted.behindTab < sharp.behindTab * 0.65, `${theme}: only feed behind tab is frosted, ${frosted.behindTab} / ${sharp.behindTab}`);
-			assert.ok(frosted.belowButtons < sharp.belowButtons * 0.65, `${theme}/${mode}: frost continues below both buttons`);
-			assert.deepEqual(frosted.visiblePixels, sharp.visiblePixels, `${theme}/${mode}: card pixels beyond the 4px frost edge must be unchanged`);
+			assert.equal(frosted.belowButtons, sharp.belowButtons, `${theme}/${mode}: normal card below both buttons stays sharp`);
+			assert.deepEqual(frosted.visiblePixels, sharp.visiblePixels, `${theme}/${mode}: all card pixels beyond the header edge must be unchanged`);
 			await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 0; });
 			assert.equal(await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top), firstTop, `${theme}: returning to top restores first card`);
 		}

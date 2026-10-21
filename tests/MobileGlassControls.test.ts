@@ -60,6 +60,9 @@ const hostFixture = `
    background-color:var(--background-primary); background-image:linear-gradient(90deg, transparent, rgba(0,0,0,.02));
    backdrop-filter:blur(7px); box-shadow:0 0 2px red; }
  .mobile-navbar button { width:44px; height:44px; }
+ .mobile-navbar::before { content:""; position:absolute; inset:0; pointer-events:none; border:1px solid rgba(255,255,255,.3); border-radius:inherit; }
+ .mobile-navbar::after { content:""; position:absolute; inset:1px; pointer-events:none; border-radius:inherit;
+   background:linear-gradient(180deg, rgba(255,255,255,.06), transparent); }
 `;
 
 test("mobile Glass segments share selected, pressed and focus surfaces while Navbar preserves host material", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
@@ -91,7 +94,7 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 			}));
 			assert.deepEqual(surfaces.map((surface: { role: string }) => surface.role), ["tablist", "group"], context);
 			for (const surface of surfaces) {
-				assert.match(surface.image, /linear-gradient/, context);
+				assert.equal(surface.image, "none", context);
 				assert.equal(surface.filter, "none", context);
 				assert.equal(surface.buttons.length, 3, context);
 				assert.equal(surface.buttons.filter((button: { active: boolean }) => button.active).length, 1, context);
@@ -100,7 +103,7 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 					assert.ok(button.height >= 44, context);
 					assert.ok(Math.abs(button.width - surface.buttons[0].width) <= 1, context);
 					assert.equal(button.filter, "none", context);
-					if (button.active) { assert.match(button.image, /linear-gradient/, context); assert.notEqual(button.shadow, "none", context); }
+					if (button.active) { assert.equal(button.image, "none", context); assert.equal(button.shadow, "none", context); }
 					else { assert.equal(button.image, "none", context); assert.equal(button.background, "rgba(0, 0, 0, 0)", context); }
 				}
 			}
@@ -125,16 +128,38 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 			});
 			assert.equal(focus.width, "2px", context);
 			assert.equal(focus.offset, "-2px", context);
-			assert.match(focus.shadow, /inset/, context);
+			assert.equal(focus.shadow, "none", context);
 			await page.keyboard.up("Space");
 			const navbar = page.locator(".mobile-navbar");
 			const navPaint = await navbar.evaluate((el: HTMLElement) => {
 				const style = getComputedStyle(el);
-				return { color: style.backgroundColor, filter: style.backdropFilter, image: style.backgroundImage, radius: style.borderRadius };
+				const edge = (pseudo: string) => {
+					const paint = getComputedStyle(el, pseudo);
+					return [paint.content, paint.backgroundColor, paint.backgroundImage, paint.border, paint.boxShadow, paint.backdropFilter];
+				};
+				return { color: style.backgroundColor, filter: style.backdropFilter, image: style.backgroundImage, radius: style.borderRadius,
+					shadow: style.boxShadow, border: style.border, before: edge("::before"), after: edge("::after") };
 			});
 			assert.equal(navPaint.color, theme === "theme-dark" ? "rgb(32, 32, 32)" : "rgb(255, 255, 255)", `${context}: host background is untouched`);
 			assert.equal(navPaint.filter, "blur(7px)", `${context}: host filter is neither removed nor duplicated`);
-			assert.match(navPaint.image, /155deg/, context);
+			assert.match(navPaint.image, /90deg/, `${context}: host gradient is untouched`);
+			assert.equal(navPaint.shadow, "rgb(255, 0, 0) 0px 0px 2px 0px", `${context}: no Knomo rim or shadow`);
+			await page.evaluate(() => document.body.classList.remove("knomo-mobile-navbar-compact-active"));
+			const hostPaint = await navbar.evaluate((el: HTMLElement) => {
+				const paint = (pseudo?: string) => {
+					const style = getComputedStyle(el, pseudo);
+					return [style.backgroundColor, style.backgroundImage, style.border, style.boxShadow, style.backdropFilter];
+				};
+				return [paint(), paint("::before"), paint("::after")];
+			});
+			await page.evaluate(() => document.body.classList.add("knomo-mobile-navbar-compact-active"));
+			assert.deepEqual(await navbar.evaluate((el: HTMLElement) => {
+				const paint = (pseudo?: string) => {
+					const style = getComputedStyle(el, pseudo);
+					return [style.backgroundColor, style.backgroundImage, style.border, style.boxShadow, style.backdropFilter];
+				};
+				return [paint(), paint("::before"), paint("::after")];
+			}), hostPaint, `${context}: host surface and both edge pseudo-elements survive Knomo activation`);
 			await page.locator("[data-action=host-menu]").tap();
 			assert.equal(await page.locator("[data-action=host-menu]").getAttribute("data-calls"), "1", context);
 			await page.evaluate(() => document.body.classList.replace("knomo-mobile-navbar-floating", "knomo-mobile-navbar-fixed"));

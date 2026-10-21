@@ -1,4 +1,6 @@
 import { applyComposerEdit, type ComposerInput } from "./ComposerEditor";
+import { registerComposerToolGesture } from "./ComposerToolGesture";
+import { getSuggestionNavigationIndex, guardSuggestionTouchClickThrough, scrollSuggestionIntoView } from "./composerSuggestInteraction";
 import type { App, EventRef, TFile } from "obsidian";
 
 import {
@@ -11,6 +13,7 @@ import {
 import type { TextReplacement, WikiLinkSuggestionMatch } from "../utils/wikiLinkInput";
 import {
 	clamp,
+	getDesktopSuggestionPosition,
 	getTextareaCharacterRect,
 	measureSuggestionContentHeight,
 	measureSuggestionContentWidth,
@@ -22,6 +25,7 @@ interface KnomoWikiLinkSuggestOptions {
 	onInputChanged: () => void;
 	closeTagSuggest: () => void;
 	registerVaultEvent: (eventRef: EventRef) => void;
+	registerGlassSurface?: (surface: HTMLElement) => () => void;
 }
 
 type WikiLinkSuggestion = WikiLinkSuggestionMatch<TFile>;
@@ -35,10 +39,16 @@ const VIEWPORT_MARGIN = 12;
 export class KnomoWikiLinkSuggest {
 	private filesSnapshot: TFile[] | null = null;
 	private popoverEl: HTMLElement | null = null;
+	private listEl: HTMLElement | null = null;
 	private suggestions: WikiLinkSuggestion[] = [];
 	private selectedIndex = 0;
 	private composing = false;
 	private repositionFrameId: number | null = null;
+	private releaseGlassSurface: (() => void) | null = null;
+	private clearGesture: (() => void) | null = null;
+	private clearTouchClickGuard: (() => void) | null = null;
+	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
+	private renderedQuery: string | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -55,6 +65,7 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	destroy(): void {
+		this.clearTouchClickGuard?.();
 		this.close();
 		this.filesSnapshot = null;
 		this.inputEl.removeAttribute("aria-autocomplete");
@@ -64,9 +75,16 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	close(): void {
+		this.dismissed = this.inputEl.composer.capture();
 		this.clearReposition();
+		this.clearGesture?.();
+		this.clearGesture = null;
+		this.releaseGlassSurface?.();
+		this.releaseGlassSurface = null;
 		this.popoverEl?.detach();
 		this.popoverEl = null;
+		this.listEl = null;
+		this.renderedQuery = null;
 		this.suggestions = [];
 		this.selectedIndex = 0;
 		this.inputEl.setAttr("aria-expanded", "false");
@@ -119,6 +137,7 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	handleCompositionReset(): void {
+		this.clearTouchClickGuard?.();
 		this.composing = false;
 		this.close();
 	}
@@ -136,9 +155,11 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	handleKeydown(event: KeyboardEvent): boolean {
-		if (this.popoverEl === null || event.isComposing || this.composing || ((event.ctrlKey || event.metaKey) && (event.key === "Enter" || event.key === "Tab"))) {
+		if (this.listEl === null || event.isComposing || this.composing || this.inputEl.composer.composing) {
 			return false;
 		}
+		const nextIndex = getSuggestionNavigationIndex(event, this.selectedIndex, this.listEl);
+		if ((event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) && nextIndex === null) return false;
 		if (event.key === "Escape") {
 			event.preventDefault();
 			event.stopPropagation();
@@ -149,31 +170,25 @@ export class KnomoWikiLinkSuggest {
 		if (this.suggestions.length === 0) {
 			return false;
 		}
-		if (event.key === "ArrowDown" || isControlNavigationKey(event, "n")) {
+		if (nextIndex !== null) {
 			event.preventDefault();
 			event.stopPropagation();
 			event.stopImmediatePropagation();
-			this.moveSelection(1);
-			return true;
-		}
-		if (event.key === "ArrowUp" || isControlNavigationKey(event, "p")) {
-			event.preventDefault();
-			event.stopPropagation();
-			event.stopImmediatePropagation();
-			this.moveSelection(-1);
+			this.setSelectedIndex(nextIndex, true);
 			return true;
 		}
 		if (event.key === "Enter" || event.key === "Tab") {
 			event.preventDefault();
 			event.stopPropagation();
 			event.stopImmediatePropagation();
-			this.selectSuggestion(this.selectedIndex);
+			this.selectSuggestion(this.selectedIndex, event.key === "Tab");
 			return true;
 		}
 		return false;
 	}
 
 	openForCurrentRange(): void {
+		this.dismissed = null;
 		const range = getWikiLinkRangeAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			this.close();
@@ -185,7 +200,10 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	refreshForCursor(): void {
-		if (this.inputEl.composer.readOnly) { this.close(); return; }
+		if (this.inputEl.composer.readOnly || this.composing || this.inputEl.composer.composing) { this.close(); return; }
+		const current = this.inputEl.composer.capture();
+		if (this.dismissed?.valid() && this.dismissed.anchor === current.anchor && this.dismissed.head === current.head) return;
+		this.dismissed = null;
 		const range = getWikiLinkRangeAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			this.close();
@@ -210,8 +228,15 @@ export class KnomoWikiLinkSuggest {
 
 	private refreshSuggestions(query: string): void {
 		const files = this.getFilesSnapshot();
-		this.suggestions = getWikiLinkFileSuggestions(files, query, WIKI_LINK_SUGGESTION_LIMIT);
-		this.selectedIndex = this.suggestions.length === 0 ? 0 : Math.min(this.selectedIndex, this.suggestions.length - 1);
+		const suggestions = getWikiLinkFileSuggestions(files, query, WIKI_LINK_SUGGESTION_LIMIT);
+		if (query === this.renderedQuery && suggestions.length === this.suggestions.length
+			&& suggestions.every((suggestion, index) => suggestion.path === this.suggestions[index].path)) {
+			this.queueReposition();
+			return;
+		}
+		this.suggestions = suggestions;
+		this.renderedQuery = query;
+		this.selectedIndex = 0;
 		if (this.suggestions.length === 0) {
 			this.close();
 			return;
@@ -219,101 +244,54 @@ export class KnomoWikiLinkSuggest {
 		this.renderSuggestions();
 	}
 
-	private moveSelection(offset: number): void {
-		this.selectedIndex = (this.selectedIndex + this.suggestions.length + offset) % this.suggestions.length;
-		this.renderSuggestions(true);
-	}
-
-	private renderSuggestions(ensureSelectedVisible = false): void {
-		const popover = this.popoverEl;
-		if (popover === null) {
+	private renderSuggestions(): void {
+		const list = this.listEl;
+		if (list === null) {
 			return;
 		}
-		popover.empty();
-		let selectedItem: HTMLElement | null = null;
+		list.empty();
 		for (const [index, suggestion] of this.suggestions.entries()) {
 			const optionId = this.getOptionId(index);
-			const item = popover.createDiv({
-				cls: "knomo-link-suggest-item",
+			const item = list.createDiv({
+				cls: "suggestion-item mod-complex knomo-link-suggest-item",
 				attr: {
 					id: optionId,
 					role: "option",
 					tabindex: "-1",
 					"aria-selected": index === this.selectedIndex ? "true" : "false",
+					"data-action": String(index),
 				},
 			});
 			const selected = index === this.selectedIndex;
 			item.toggleClass("is-selected", selected);
-			if (selected) {
-				selectedItem = item;
-			}
-			item.createDiv({ cls: "knomo-link-suggest-title", text: suggestion.basename });
+			const content = item.createDiv({ cls: "suggestion-content" });
+			content.createDiv({ cls: "suggestion-title knomo-link-suggest-title", text: suggestion.basename });
 			if (suggestion.showPath) {
-				item.createDiv({ cls: "knomo-link-suggest-path", text: suggestion.path });
+				content.createDiv({ cls: "suggestion-note knomo-link-suggest-path", text: suggestion.path });
 			}
-			let touchStartY: number | null = null;
-			let touchMoved = false;
-			const preventBlur = (event: Event) => {
-				if (isTouchPointerEvent(event)) {
-					return;
-				}
-				event.preventDefault();
-			};
-			const choose = (event: Event) => {
-				if (isTouchPointerEvent(event)) {
-					return;
-				}
-				if (touchMoved) {
-					touchMoved = false;
-					return;
-				}
-				event.preventDefault();
-				this.selectSuggestion(index);
-			};
-			const startTouch = (event: TouchEvent) => {
-				touchStartY = event.touches[0]?.clientY ?? null;
-				touchMoved = false;
-			};
-			const trackTouchMove = (event: TouchEvent) => {
-				if (touchStartY === null) {
-					return;
-				}
-				const currentY = event.touches[0]?.clientY ?? touchStartY;
-				if (Math.abs(currentY - touchStartY) > 6) {
-					touchMoved = true;
-				}
-			};
-			item.addEventListener("pointerdown", preventBlur);
-			item.addEventListener("mousedown", preventBlur);
-			item.addEventListener("touchstart", startTouch);
-			item.addEventListener("touchmove", trackTouchMove);
-			item.addEventListener("pointerup", choose);
-			item.addEventListener("touchend", choose);
-			item.addEventListener("click", choose);
+			item.addEventListener("pointermove", event => {
+				if (event.pointerType === "mouse") this.setSelectedIndex(index, false);
+			});
 		}
 		this.inputEl.setAttr("aria-expanded", "true");
 		this.inputEl.setAttr("aria-activedescendant", this.getOptionId(this.selectedIndex));
-		if (ensureSelectedVisible && selectedItem !== null) {
-			this.ensureSuggestionVisible(popover, selectedItem);
-		}
+		list.scrollTop = 0;
 		this.queueReposition();
 	}
 
-	private ensureSuggestionVisible(popover: HTMLElement, item: HTMLElement): void {
-		const itemTop = item.offsetTop;
-		const itemBottom = itemTop + item.offsetHeight;
-		const visibleTop = popover.scrollTop;
-		const visibleBottom = visibleTop + popover.clientHeight;
-		if (itemTop < visibleTop) {
-			popover.scrollTop = itemTop;
-			return;
-		}
-		if (itemBottom > visibleBottom) {
-			popover.scrollTop = itemBottom - popover.clientHeight;
-		}
+	private setSelectedIndex(index: number, scroll: boolean): void {
+		if (!this.listEl) return;
+		this.selectedIndex = index;
+		Array.from(this.listEl.children).forEach((child, childIndex) => {
+			child.classList.toggle("is-selected", childIndex === index);
+			child.setAttribute("aria-selected", String(childIndex === index));
+		});
+		this.inputEl.setAttr("aria-activedescendant", this.getOptionId(index));
+		const selected = this.listEl.children[index] as HTMLElement | undefined;
+		if (scroll && selected) scrollSuggestionIntoView(this.listEl, selected);
 	}
 
-	private selectSuggestion(index: number): void {
+	private selectSuggestion(index: number, completing = false): void {
 		const suggestion = this.suggestions[index];
 		if (suggestion === undefined) {
 			return;
@@ -325,8 +303,11 @@ export class KnomoWikiLinkSuggest {
 		}
 		const sourcePath = this.options.getSourcePath();
 		const linktext = this.getSafeLinktext(suggestion.file, sourcePath);
-		this.applyPatch(replaceWikiLinkRangeWithLinktext(this.inputEl.value, range, linktext));
-		this.close();
+		const patch = replaceWikiLinkRangeWithLinktext(this.inputEl.value, range, linktext);
+		if (completing) patch.cursor -= 2;
+		if (!this.applyPatch(patch)) return;
+		if (completing) this.refreshForCursor();
+		else this.close();
 	}
 
 	private getSafeLinktext(file: TFile, sourcePath: string): string {
@@ -340,10 +321,14 @@ export class KnomoWikiLinkSuggest {
 		return fallbackResolved?.path === file.path ? fallback : linktext;
 	}
 
-	private applyPatch(patch: TextReplacement): void {
-		applyComposerEdit(this.inputEl, patch.value, patch.cursor);
+	private applyPatch(patch: TextReplacement): boolean {
+		if (this.inputEl.composer.readOnly || this.inputEl.composer.composing || this.composing) return false;
+		// Tab 后 Enter 可能只移动光标，不应因正文未变而跳过选区更新或增加撤销记录。
+		if (this.inputEl.value === patch.value) this.inputEl.setSelectionRange(patch.cursor, patch.cursor);
+		else if (!applyComposerEdit(this.inputEl, patch.value, patch.cursor)) return false;
 		this.focusInput();
 		this.options.onInputChanged();
+		return true;
 	}
 
 	private focusInput(): void {
@@ -374,8 +359,9 @@ export class KnomoWikiLinkSuggest {
 		if (this.popoverEl !== null) {
 			return;
 		}
+		const mobile = this.inputEl.closest(".knomo-mobile-composer-layer") !== null;
 		const popover = this.inputEl.ownerDocument.body.createDiv({
-			cls: "knomo-link-suggest-popover knomo-link-suggest-positioning",
+			cls: `suggestion-container knomo-link-suggest-popover knomo-link-suggest-positioning knomo-native-suggest${mobile ? " knomo-suggest-mobile" : ""}`,
 			attr: {
 				id: this.options.listboxId,
 				role: "listbox",
@@ -383,6 +369,25 @@ export class KnomoWikiLinkSuggest {
 		});
 		popover.setCssProps({ "--knomo-suggest-z-index": WIKI_LINK_POPOVER_Z_INDEX });
 		this.popoverEl = popover;
+		const list = this.listEl = popover.createDiv({ cls: "suggestion knomo-suggest-list" });
+		this.clearGesture = registerComposerToolGesture(popover, (action, event) => {
+			if (this.inputEl.composer.readOnly || this.inputEl.composer.composing) return;
+			if (event.type === "pointerup") {
+				event.stopImmediatePropagation();
+				this.clearTouchClickGuard?.();
+				this.clearTouchClickGuard = guardSuggestionTouchClickThrough(event, popover, () => { this.clearTouchClickGuard = null; });
+			}
+			this.selectSuggestion(Number(action));
+		}, mobile ? {
+			scrollElement: list,
+			capture: () => {
+				const context = this.inputEl.composer.capture();
+				return () => this.popoverEl === popover && context.valid()
+					&& this.inputEl.selectionStart === context.anchor && this.inputEl.selectionEnd === context.head
+					&& !this.inputEl.composer.readOnly && !this.inputEl.composer.composing;
+			},
+		} : undefined);
+		this.releaseGlassSurface = this.options.registerGlassSurface?.(popover) ?? null;
 	}
 
 	private getOptionId(index: number): string {
@@ -443,6 +448,7 @@ export class KnomoWikiLinkSuggest {
 			"--knomo-suggest-left": `${Math.round(left)}px`,
 			"--knomo-suggest-width": `${Math.round(width)}px`,
 		};
+		popover.setCssProps(popoverCssProps);
 		if (mobileLayer !== null) {
 			const availableAbove = Math.max(0, anchor.top - viewportTop - MOBILE_TOP_GUARD - POPOVER_GAP);
 			const maxHeight = Math.min(240, availableAbove);
@@ -457,11 +463,12 @@ export class KnomoWikiLinkSuggest {
 			popover.removeClass("knomo-link-suggest-positioning");
 			return;
 		}
-		const maxHeight = Math.max(72, Math.min(240, viewportBottom - anchor.bottom - VIEWPORT_MARGIN));
+		const position = getDesktopSuggestionPosition(anchor,
+			measureSuggestionContentHeight(this.inputEl, popover, ".knomo-link-suggest-item"), viewportTop, viewportBottom);
 		popover.setCssProps({
 			...popoverCssProps,
-			"--knomo-suggest-top": `${Math.round(anchor.bottom)}px`,
-			"--knomo-suggest-max-height": `${Math.round(maxHeight)}px`,
+			"--knomo-suggest-top": `${Math.round(position.top)}px`,
+			"--knomo-suggest-max-height": `${Math.round(position.maxHeight)}px`,
 		});
 		popover.removeClass("knomo-link-suggest-positioning");
 	}
@@ -474,16 +481,4 @@ export class KnomoWikiLinkSuggest {
 		this.repositionFrameId = null;
 	}
 
-}
-
-function isControlNavigationKey(event: KeyboardEvent, key: "n" | "p"): boolean {
-	return event.ctrlKey
-		&& !event.altKey
-		&& !event.metaKey
-		&& !event.shiftKey
-		&& event.key.toLowerCase() === key;
-}
-
-function isTouchPointerEvent(event: Event): boolean {
-	return "pointerType" in event && (event as PointerEvent).pointerType === "touch";
 }

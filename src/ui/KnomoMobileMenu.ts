@@ -9,6 +9,7 @@ interface MobileMenuOptions {
 	build: (menu: Menu, select: (action: () => void, focus?: "view" | "action") => void, createTitle: (text: string, opensInput?: boolean) => DocumentFragment) => void;
 	onClose: () => void;
 	onReturnToView?: (isCurrent: () => boolean) => void;
+	registerGlassSurface?: (surface: HTMLElement) => () => void;
 }
 
 // 只管理 Knomo 的一个宿主菜单；菜单隐藏后通知视图恢复焦点，布局、主题与历史返回由宿主管理。
@@ -38,6 +39,7 @@ export class KnomoMobileMenu {
 		const doc = options.trigger.ownerDocument;
 		const titleElements: HTMLElement[] = [];
 		let releaseInteraction: (() => void) | null = null;
+		let releaseGlassSurface: (() => void) | null = null;
 		let closed = false;
 		let selected = false;
 		let returnFocus = true;
@@ -51,6 +53,9 @@ export class KnomoMobileMenu {
 			observer?.disconnect();
 			releaseInteraction?.();
 			releaseInteraction = null;
+			releaseGlassSurface?.();
+			releaseGlassSurface = null;
+			session.element?.classList.remove("knomo-mobile-menu", "knomo-mobile-menu-" + options.kind);
 			if (this.current === session) this.current = null;
 			options.onClose();
 		} };
@@ -107,6 +112,7 @@ export class KnomoMobileMenu {
 			if (menuEl) {
 				session.element = menuEl;
 				menuEl.classList.add("knomo-mobile-menu", "knomo-mobile-menu-" + options.kind);
+				releaseGlassSurface = options.registerGlassSurface?.(menuEl) ?? null;
 				const backdrop = menuEl.nextElementSibling;
 				if (backdrop instanceof win.HTMLElement && backdrop.matches(".suggestion-bg")) {
 					const dismiss = (): void => {

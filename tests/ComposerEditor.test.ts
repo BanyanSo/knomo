@@ -506,18 +506,21 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		assert.equal(win.document.querySelectorAll(".suggestion-item").length, 2);
 		const key = (type: string, key: string) => editor.input.dispatchEvent(new win.KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
 		const popover = win.document.querySelector<HTMLElement>(".suggestion-container")!;
-		const second = popover.children[1] as HTMLElement;
+		const list = popover.querySelector<HTMLElement>(".knomo-suggest-list")!;
+		const second = list.children[1] as HTMLElement;
 		const hover = new win.MouseEvent("pointermove", { bubbles: true });
 		Object.defineProperty(hover, "pointerType", { value: "mouse" });
 		second.dispatchEvent(hover);
 		assert.equal(second.getAttribute("aria-selected"), "true");
-		let scrolled = 0;
-		(popover.children[0] as HTMLElement).scrollIntoView = () => { scrolled++; popover.scrollTop = 80; };
+		const first = list.children[0] as HTMLElement;
+		Object.defineProperties(first, { offsetTop: { value: 0 }, offsetHeight: { value: 44 } });
+		Object.defineProperty(list, "clientHeight", { value: 44 });
+		list.scrollTop = 80;
 		key("keydown", "ArrowDown"); key("keyup", "ArrowDown");
-		assert.equal(scrolled, 1);
 		assert.equal(win.document.querySelector(".suggestion-container"), popover);
-		assert.equal(popover.scrollTop, 80);
-		assert.equal(popover.children[0].getAttribute("aria-selected"), "true");
+		assert.equal(list.scrollTop, 0, "键盘选择只滚动内层列表，松键不重置列表 DOM");
+		assert.equal(popover.scrollTop, 0);
+		assert.equal(first.getAttribute("aria-selected"), "true");
 		assert.equal(key("keydown", "Escape"), false);
 		key("keyup", "Escape");
 		assert.equal(win.document.querySelector(".suggestion-container"), null);
@@ -659,9 +662,10 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 		suggest.open();
 		const popup = win.document.querySelector<HTMLElement>(".knomo-tag-suggest-mobile")!;
 		assert.ok(popup);
-		assert.equal(popup.children.length, count);
+		const list = popup.querySelector<HTMLElement>(".knomo-suggest-list")!;
+		assert.equal(list.children.length, count);
 		assert.equal(popup.parentElement, win.document.body);
-		return { popup, row: popup.children[0] as HTMLElement };
+		return { popup, list, row: list.children[0] as HTMLElement };
 	};
 	const pointer = (target: HTMLElement, type: string, x = 20, y = 20, id = 1) => {
 		const event = new win.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
@@ -704,12 +708,12 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 			assert.equal(editor.input.value, "before #alpha after");
 		}
 		for (const invalid of ["up-distance", "return", "scroll", "scroll-event", "outside", "cancel", "second-finger", "selection", "composition", "readonly", "reset"] as const) {
-			const { popup, row } = open();
+			const { popup, list, row } = open();
 			const before = selections;
 			pointer(row, "pointerdown");
 			if (invalid === "return") { pointer(row, "pointermove", 40); pointer(row, "pointermove"); }
-			if (invalid === "scroll") popup.scrollTop = 12;
-			if (invalid === "scroll-event") popup.dispatchEvent(new win.Event("scroll"));
+			if (invalid === "scroll") list.scrollTop = 12;
+			if (invalid === "scroll-event") list.dispatchEvent(new win.Event("scroll"));
 			if (invalid === "cancel") pointer(row, "pointercancel");
 			if (invalid === "second-finger") pointer(row, "pointerdown", 20, 20, 2);
 			if (invalid === "selection") editor.input.setSelectionRange(0, 0);
@@ -729,10 +733,10 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 		}
 		tags = ["alpha", "alphabet"];
 		tagRevision++;
-		const { popup, row } = open(2);
-		assert.equal(popup.children.length, 2);
+		const { popup, list, row } = open(2);
+		assert.equal(list.children.length, 2);
 		pointer(row, "pointerdown");
-		pointer(popup.children[1] as HTMLElement, "pointerup");
+		pointer(list.children[1] as HTMLElement, "pointerup");
 		assert.equal(editor.input.value, initial, "跨行松手不能选择相邻候选");
 		pointer(row, "pointerdown");
 		tags = ["alphabet", "alpha"];

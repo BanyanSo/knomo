@@ -379,9 +379,14 @@ test("body-mounted Tag and Wiki candidates share typography with real measuremen
 		for (const mobile of [false, true]) for (const width of [240, 390, 900]) for (const scale of [1, 1.5, 2]) {
 			await page.setViewportSize({ width, height: 800 });
 			await page.setContent(`<style>${host}${hostFixture}${css}
-				body { --font-preferred-size:18px; --knomo-text-ui-medium:${15 * scale}px; --knomo-text-ui-base:${14 * scale}px; --knomo-text-meta:${13 * scale}px; --knomo-text-caption:${12 * scale}px; }
+				body { --font-preferred-size:18px; --font-ui-medium:${19 * scale}px; --knomo-text-ui-medium:${15 * scale}px; --knomo-text-ui-base:${14 * scale}px; --knomo-text-meta:${13 * scale}px; --knomo-text-caption:${12 * scale}px; }
 				.suggestion-container { padding:4px; border:1px solid; }
-				.suggestion-item { padding:6px 8px; }
+				.suggestion { overflow-y:auto; padding:6px; }
+				.suggestion-item { font-size:var(--font-ui-medium); padding:6px 8px; }
+				.suggestion-item.mod-complex { display:flex; align-items:baseline; }
+				.suggestion-content { display:flex; flex-direction:column; overflow:hidden; }
+				.suggestion-title, .suggestion-note { overflow-wrap:break-word; }
+				.suggestion-note { font-size:.8em; color:var(--text-muted); }
 			</style><body><div class="probe knomo-plugin"><div class="knomo-composer"><div id="editor"></div></div></div></body>`);
 			await page.addScriptTag({ content: bundle });
 			await page.evaluate(installDomHelpers);
@@ -454,8 +459,9 @@ test("body-mounted Tag and Wiki candidates share typography with real measuremen
 						tokens: ["ui-medium", "ui-base", "meta", "caption"].map(name => getComputedStyle(popup).getPropertyValue("--knomo-text-" + name).trim()),
 						mainSize: getComputedStyle(title ?? first).fontSize, pathSize: path ? getComputedStyle(path).fontSize : null,
 						within: rect.left >= 11 && rect.right <= innerWidth - 11 && rect.top >= 0 && rect.bottom <= innerHeight,
-						rowHeight: first.getBoundingClientRect().height, scrollable: popup.scrollHeight > popup.clientHeight,
-						ellipsis: title ? getComputedStyle(title).textOverflow === "ellipsis" && title.scrollWidth > title.clientWidth : true,
+						rowHeight: first.getBoundingClientRect().height, scrollable: (popup.querySelector(".suggestion") ?? popup).scrollHeight > (popup.querySelector(".suggestion") ?? popup).clientHeight,
+						ellipsis: title ? popup.classList.contains("knomo-native-suggest") ? title.scrollWidth <= title.clientWidth + 1
+							: getComputedStyle(title).textOverflow === "ellipsis" && title.scrollWidth > title.clientWidth : true,
 						leftoverClones: document.querySelectorAll(".knomo-suggest-measure-host").length,
 					};
 				}, kind);
@@ -464,9 +470,9 @@ test("body-mounted Tag and Wiki candidates share typography with real measuremen
 				assert.deepEqual(actual.clones, actual.visible, context);
 				assert.ok(Math.abs(actual.measured - actual.naturalWidth) <= 1, context);
 				assert.deepEqual(actual.tokens, [15, 14, 13, 12].map(size => `${size * scale}px`), context);
-				assert.equal(actual.mainSize, `${14 * scale}px`, context);
-				if (kind === "wiki") assert.equal(actual.pathSize, `${12 * scale}px`, context);
-				if (mobile || kind === "wiki") assert.ok(actual.rowHeight >= 44, context);
+				assert.equal(actual.mainSize, `${19 * scale}px`, context);
+				if (kind === "wiki") assert.equal(actual.pathSize, `${Number((19 * scale * .8).toFixed(2))}px`, context);
+				if (mobile) assert.ok(actual.rowHeight >= 44, context);
 				assert.equal(actual.within, true, context);
 				assert.equal(actual.scrollable, true, context);
 				assert.equal(actual.ellipsis, true, context);
@@ -479,6 +485,7 @@ test("body-mounted Tag and Wiki candidates share typography with real measuremen
 						document.body.style.setProperty("--font-preferred-size", "22px");
 						document.body.style.setProperty("--knomo-text-ui-base", "21px");
 						document.body.style.setProperty("--knomo-text-caption", "18px");
+						document.body.style.setProperty("--font-ui-medium", "27px");
 						document.body.style.setProperty("--font-text", "Georgia");
 						win.editor.view.dom.style.width = "200px";
 						await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -495,10 +502,11 @@ test("body-mounted Tag and Wiki candidates share typography with real measuremen
 							font: getComputedStyle(popup.querySelector(kind === "tag" ? ".suggestion-item" : ".knomo-link-suggest-title")!).fontSize,
 						};
 					}, { kind, mobile });
-					assert.deepEqual(dynamic, { sameState: true, captureValid: true, anchorChanged: true, anchored: true, within: true, font: "21px" }, context);
+					assert.deepEqual(dynamic, { sameState: true, captureValid: true, anchorChanged: true, anchored: true, within: true, font: "27px" }, context);
 					await page.evaluate(() => {
 						document.body.style.removeProperty("--font-preferred-size"); document.body.style.removeProperty("--knomo-text-ui-base");
 						document.body.style.removeProperty("--knomo-text-caption"); document.body.style.removeProperty("--font-text");
+						document.body.style.removeProperty("--font-ui-medium");
 						(window as unknown as TypographyWindow).editor.view.dom.style.removeProperty("width");
 					});
 				}
@@ -514,6 +522,31 @@ test("body-mounted Tag and Wiki candidates share typography with real measuremen
 				assert.equal(selected.expanded, "false", context);
 				assert.ok(selected.source.startsWith(kind === "tag" ? "prefix #1_" : "prefix [[目录_1/"), context);
 				assert.ok(selected.text.length > 20, context);
+				if (!mobile) {
+					const edge = await page.evaluate(async (kind: string) => {
+						const win = window as unknown as TypographyWindow;
+						const probe = document.querySelector<HTMLElement>(".probe")!;
+						probe.style.position = "fixed";
+						probe.style.top = `${innerHeight - 80}px`;
+						const source = kind === "tag" ? "prefix #" : "prefix [[]]";
+						const cursor = source.length - (kind === "tag" ? 0 : 2);
+						win.editor.reset(source);
+						win.editor.input.setSelectionRange(cursor, cursor);
+						win.editor.view.focus();
+						win.editor.view.requestMeasure();
+						await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+						if (kind === "tag") win.tagSuggest.open(); else win.wikiSuggest.openForCurrentRange();
+						await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+						const popup = document.querySelector<HTMLElement>(kind === "tag" ? ".knomo-tag-suggest-popover" : ".knomo-link-suggest-popover")!;
+						const rect = popup.getBoundingClientRect(), anchor = win.editor.coordsAtPos(cursor)!;
+						const result = { above: rect.bottom <= anchor.top + 1, within: rect.top >= 11 && rect.bottom <= innerHeight - 11,
+							unchanged: win.editor.input.value === source && win.editor.input.selectionStart === cursor };
+						win.tagSuggest.close(); win.wikiSuggest?.close();
+						probe.style.removeProperty("position"); probe.style.removeProperty("top");
+						return result;
+					}, kind);
+					assert.deepEqual(edge, { above: true, within: true, unchanged: true }, `${context}: desktop candidates stay visible near the bottom edge`);
+				}
 			}
 			await page.evaluate(() => {
 				const win = window as unknown as TypographyWindow;

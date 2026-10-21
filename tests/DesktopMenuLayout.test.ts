@@ -86,7 +86,7 @@ async function createDesktopMenuPositionFixture() {
 		settingsService: { getSettings: () => ({ mobileCompactMode: "off" }) },
 		mobileComposerController: { syncViewportTracking: () => {}, syncLayer: () => {} },
 		finishSidebarResize: () => {}, updateMobileComposerMeasurements: () => 0, resizeInput: () => {},
-		syncTooltipState: () => {}, syncManualRefreshButtonState: () => {}, syncMobileHeaderActions: () => {},
+		syncReducedGlassEffects: () => {}, syncTooltipState: () => {}, syncManualRefreshButtonState: () => {}, syncMobileHeaderActions: () => {},
 		syncMobileHeaderTitle: () => {}, syncMobileTopOffsets: () => {}, syncMobileSearchPage: () => {}, syncSearchControls: () => {},
 		cardFlowCoordinator: { handleScroll: () => scrollCalls++ }, memoMarkdownRenderer: { prioritizeVisible: () => {} },
 	}) as unknown as DesktopMenuView;

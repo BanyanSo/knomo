@@ -27,6 +27,7 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	recentTimeFlowEnabled: true,
 	timeBuoyIntroDismissed: false,
 	mobileCompactMode: "auto",
+	reduceGlassEffects: false,
 	syncDebounceMs: DEFAULT_SYNC_DEBOUNCE_MS,
 	desktopSidebarWidth: DEFAULT_DESKTOP_SIDEBAR_WIDTH,
 	desktopSidebarCollapsed: false,

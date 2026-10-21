@@ -17,6 +17,25 @@ test("prepares a persistent mobile layer before opening", () => {
 	assert.equal(harness.doc.body.children.length, 1);
 });
 
+test("body Composer inherits the current glass preference on first mount, reuse and reopening", () => {
+	const harness = createHarness();
+	harness.root.toggleClass("knomo-reduce-glass", true);
+	harness.controller.prepare();
+	const layer = harness.getLayer();
+	assert.equal(layer?.hasClass("knomo-reduce-glass"), true);
+	harness.root.toggleClass("knomo-reduce-glass", false);
+	harness.controller.syncLayer();
+	assert.equal(harness.getLayer(), layer);
+	assert.equal(layer?.hasClass("knomo-reduce-glass"), false);
+	harness.controller.open();
+	harness.controller.closeKeepingDraft();
+	harness.root.toggleClass("knomo-reduce-glass", true);
+	harness.controller.open();
+	assert.equal(harness.getLayer(), layer);
+	assert.equal(layer?.hasClass("knomo-reduce-glass"), true);
+	assert.equal(harness.composer.parentElement, harness.getContent());
+});
+
 test("does not prepare a composer layer for desktop layouts", () => {
 	const harness = createHarness("desktop-wide");
 

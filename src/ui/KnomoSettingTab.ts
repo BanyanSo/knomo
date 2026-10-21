@@ -112,6 +112,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 				t("settings.dailyHeading.name"), t("settings.insertPosition.name"),
 				t("settings.timeFormat.name"), t("settings.timeBuoy.name"),
 				t("settings.toolbar.name"), t("settings.recentTimeFlow.name"),
+				t("settings.reduceGlass.name"),
 				t("settings.dateOrder.name"), t("settings.monthlyFileFormat.name"),
 				t("settings.dateHeadingFormat.name"), t("settings.excludeMonthly.name"),
 				t("settings.monthlyFolder.name"), t("settings.tab.about"),
@@ -253,6 +254,8 @@ export class KnomoSettingTab extends PluginSettingTab {
 		card = this.createSettingCard(parent, "settings.presentation.heading");
 		this.renderRecentTimeFlowSetting(new Setting(card).setName(t("settings.recentTimeFlow.name"))
 			.setDesc(t("settings.recentTimeFlow.desc")));
+		this.renderReduceGlassSetting(new Setting(card).setName(t("settings.reduceGlass.name"))
+			.setDesc(t("settings.reduceGlass.desc")));
 	}
 
 	private renderArchiveSettings(parent: HTMLElement): void {
@@ -467,6 +470,21 @@ export class KnomoSettingTab extends PluginSettingTab {
 				void this.settingsService.updateSettings({
 					memoTimeFormat: value as MemoTimeFormat,
 				});
+			});
+		});
+	}
+
+	private renderReduceGlassSetting(setting: Setting): void {
+		setting.settingEl.addClass("knomo-settings-toggle-row");
+		setting.addToggle((toggle) => {
+			toggle.setValue(this.settingsService.getSettings().reduceGlassEffects === true);
+			toggle.onChange(async (value) => {
+				try {
+					await this.settingsService.updateSettings({ reduceGlassEffects: value });
+				} catch {
+					toggle.setValue(this.settingsService.getSettings().reduceGlassEffects === true);
+					new Notice(t("error.saveFailed"));
+				}
 			});
 		});
 	}

@@ -22,6 +22,7 @@ export interface KnomoSettings {
 	recentTimeFlowEnabled: boolean;
 	timeBuoyIntroDismissed?: boolean;
 	mobileCompactMode: MobileCompactMode;
+	reduceGlassEffects?: boolean;
 	syncDebounceMs: number;
 	desktopSidebarWidth: number;
 	desktopSidebarCollapsed: boolean;

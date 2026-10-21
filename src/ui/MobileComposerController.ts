@@ -698,6 +698,8 @@ export class MobileComposerController {
 		} else {
 			attachMobileComposerLayer(this.options.getDocument(), this.mobileComposerLayerEl);
 		}
+		// body 浮层不能继承原页面的设备偏好，沿现有挂载流程同步样式状态。
+		this.mobileComposerLayerEl.toggleClass("knomo-reduce-glass", this.options.getRootEl()?.hasClass("knomo-reduce-glass") === true);
 		if (this.mobileComposerContentEl === null) {
 			return;
 		}

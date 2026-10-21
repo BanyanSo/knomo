@@ -42,6 +42,8 @@ export const en: Record<TranslationKey, string> = {
 	"settings.toolbar.down": "Move down",
 	"settings.presentation.heading": "Display preferences",
 	"settings.recentTimeFlow.name": "Recent 3-day time flow",
+	"settings.reduceGlass.name": "Reduce glass effects",
+	"settings.reduceGlass.desc": "Use solid mobile controls with less transparency and blur on this device, keeping theme colors and interaction feedback.",
 	"settings.recentTimeFlow.desc": "Group ordinary notes from today and the previous two days by date in the default All Notes view, and highlight their times. Turn this off to restore the original card layout.",
 	"recentTimeFlow.today": "Today",
 	"recentTimeFlow.yesterday": "Yesterday",

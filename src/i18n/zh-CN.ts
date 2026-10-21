@@ -40,6 +40,8 @@ export const zhCN = {
 	"settings.toolbar.down": "下移",
 	"settings.presentation.heading": "展示偏好",
 	"settings.recentTimeFlow.name": "近三天时间流",
+	"settings.reduceGlass.name": "减少玻璃效果",
+	"settings.reduceGlass.desc": "在这台设备上使用实色移动控制界面，减少透明和模糊，保留主题色与操作反馈。",
 	"settings.recentTimeFlow.desc": "在“全部笔记”默认视图中，将近三天的普通笔记按日期分组，并突出显示时间。关闭后恢复原有卡片样式。",
 	"recentTimeFlow.today": "今天",
 	"recentTimeFlow.yesterday": "昨天",

@@ -10,6 +10,7 @@ test("record and archive groups retain the existing setting order", () => {
 	assert.deepEqual(extractRenderCalls(record), [
 		"renderDailyHeadingSetting", "renderInsertPositionSetting", "renderTimeFormatSetting",
 		"renderTimeBuoySetting", "renderToolbarSetting", "renderRecentTimeFlowSetting",
+		"renderReduceGlassSetting",
 	]);
 	assert.deepEqual(extractRenderCalls(archive), [
 		"renderDateOrderSetting", "renderMonthlyFileFormatSetting",

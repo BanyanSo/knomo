@@ -60,6 +60,38 @@ test("时间流仅本地保存，关闭重载保留且失败不发布新值", as
 	assert.equal(service.getSettings().recentTimeFlowEnabled, true);
 });
 
+test("减少玻璃效果作为设备偏好保存，重载保留且失败不发布，不写 Vault 配置", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: { ...createSettings(), reduceGlassEffects: true } });
+	let local: unknown = null;
+	Object.assign(plugin.app, {
+		loadLocalStorage: () => local,
+		saveLocalStorage: (_key: string, value: unknown) => { local = value; },
+	});
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, false, "忽略 Vault 中的设备偏好");
+	let changes = 0;
+	service.onChanged(() => changes++);
+	await service.updateSettings({ reduceGlassEffects: true });
+	assert.equal(plugin.saveCalls, 0);
+	assert.equal(changes, 1);
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, true);
+	const otherDevice = new SettingsService((await createPlugin({}, plugin.savedData)) as never);
+	await otherDevice.loadSettings();
+	assert.equal(otherDevice.getSettings().reduceGlassEffects, false);
+	Object.assign(plugin.app, { saveLocalStorage: () => { throw new Error("local write failed"); } });
+	await assert.rejects(service.updateSettings({ reduceGlassEffects: false }));
+	assert.equal(service.getSettings().reduceGlassEffects, true);
+	local = { reduceGlassEffects: "true" };
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, false);
+	Object.assign(plugin.app, { loadLocalStorage: () => { throw new Error("local read failed"); } });
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, false);
+});
+
 test("enables Time Buoy by default when no setting was persisted", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;

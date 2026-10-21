@@ -1183,6 +1183,7 @@ export class KnomoView extends ItemView {
 		this.lastKnownLocalDate = formatTimeBuoyDate(new Date());
 		let recentEnabled = this.settingsService.getSettings().recentTimeFlowEnabled;
 		this.recentPreferenceUnsubscribe = this.settingsService.onChanged(() => {
+			this.syncReducedGlassEffects();
 			const tools = this.composerBarEl?.querySelector<HTMLElement>(".knomo-tool-group");
 			if (tools) updateComposerToolbar(tools, this.settingsService.getSettings().composerToolbar);
 			const next = this.settingsService.getSettings().recentTimeFlowEnabled;
@@ -1317,6 +1318,7 @@ export class KnomoView extends ItemView {
 		this.quoteMarkdownText = null;
 		this.recentPreferenceUnsubscribe?.();
 		this.recentPreferenceUnsubscribe = null;
+		this.containerEl.removeClass("knomo-reduce-glass");
 		this.trashMemoController.dispose();
 		this.randomReunionController.dispose();
 		this.shuffleDayController.dispose();
@@ -2835,6 +2837,13 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private syncReducedGlassEffects(): void {
+		const reduced = this.settingsService.getSettings().reduceGlassEffects === true;
+		for (const container of [this.containerEl, this.rootEl, this.mobileComposerController.getLayerEl()]) {
+			container?.toggleClass("knomo-reduce-glass", reduced);
+		}
+	}
+
 	private syncRootState(): void {
 		const root = this.rootEl;
 		if (root === null) {
@@ -2858,6 +2867,7 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-compact-search-open", this.compactSearchOpen);
 		root.toggleClass("is-mobile-search-open", this.mobileSearchPageOpen);
 		root.toggleClass("is-mobile-compact", this.settingsService.getSettings().mobileCompactMode !== "off");
+		this.syncReducedGlassEffects();
 		root.toggleClass("is-record-stats", this.activeNav === "record-stats");
 		root.toggleClass("is-time-buoy", this.activeNav === "time-buoy");
 		root.toggleClass("is-shuffle-day", this.activeNav === "shuffleDay");

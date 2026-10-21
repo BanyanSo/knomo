@@ -267,7 +267,9 @@ body.is-mobile.is-phone.is-floating-nav .workspace-leaf-content[data-type="knomo
 
 /* 标题和内容共用视区，列表内留白随正文滚走，避免外部占位隔开两层。 */
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] {
-	--knomo-mobile-feed-top: calc(var(--view-header-top-offset, env(safe-area-inset-top, 0px)) + var(--view-header-height, 44px));
+	--knomo-mobile-header-bottom-space: var(--size-4-2, 8px);
+	--knomo-mobile-header-clearance: calc(var(--view-header-top-offset, env(safe-area-inset-top, 0px)) + var(--view-header-height, 44px) + var(--knomo-mobile-header-bottom-space));
+	--knomo-mobile-feed-top: var(--knomo-mobile-header-clearance);
 	display: grid;
 	grid-template: minmax(0, 1fr) / minmax(0, 1fr);
 }
@@ -275,6 +277,8 @@ body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] {
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] > .view-header {
 	grid-area: 1 / 1;
 	align-self: start;
+	/* 留白属于标题栏，按钮行仍使用宿主高度，材质随实际边界结束。 */
+	padding-bottom: var(--knomo-mobile-header-bottom-space);
 }
 
 body.is-mobile.is-phone:not(.is-floating-nav):not(.auto-full-screen) .workspace-leaf-content[data-type="knomo-view"] > .view-header {
@@ -282,7 +286,8 @@ body.is-mobile.is-phone:not(.is-floating-nav):not(.auto-full-screen) .workspace-
 }
 
 body.is-mobile.is-phone:is(.is-floating-nav, .auto-full-screen) .workspace-leaf-content[data-type="knomo-view"] {
-	--knomo-mobile-feed-top: var(--view-top-spacing, calc(var(--view-header-top-offset, env(safe-area-inset-top, 0px)) + var(--view-header-height, 44px) + 8px));
+	/* 仅补到标题栏下沿，保留主题已有的更大间距，避免重复叠加。 */
+	--knomo-mobile-feed-top: max(var(--view-top-spacing, 0px), var(--knomo-mobile-header-clearance));
 }
 
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] > .view-content {
@@ -310,13 +315,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knom
 	border-inline-end: 0;
 }
 
-body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header .view-header-title-container {
-	position: absolute;
-	inset: 0;
-	justify-content: center;
-	pointer-events: none;
-}
-
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header .view-header-title-container::after {
 	display: none;
 }
@@ -327,16 +325,6 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knom
 	border: 0;
 }
 
-body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header .knomo-record-stats-back {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 44px;
-	min-width: 44px;
-	height: 44px;
-	min-height: 44px;
-}
-
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .view-action:not(.knomo-mobile-header-action) {
 	display: none;
 }
@@ -344,11 +332,23 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-actions .vi
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title {
 	display: inline-flex;
 	align-items: center;
+	/* 复用宿主标题槽的高度与居中，只让文字在可用宽度内收缩。 */
+	flex: 0 1 auto;
+	min-width: 0;
+	height: 100%;
+	overflow: hidden;
 	gap: 4px;
 	color: var(--text-normal);
 	font-size: var(--knomo-text-ui-medium);
 	font-weight: var(--font-normal);
 	cursor: pointer;
+}
+
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .knomo-mobile-title-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title .knomo-title-chevron {
@@ -4550,6 +4550,9 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 	gap: var(--size-4-2);
 	white-space: nowrap;
 }
+.knomo-plugin.is-layout-mobile .knomo-recent-flow-date {
+	padding-top: var(--size-4-2, 8px);
+}
 .knomo-plugin .knomo-recent-flow-relative {
 	color: var(--text-accent);
 	font-weight: var(--font-semibold);
@@ -5049,10 +5052,6 @@ body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-co
 	height: var(--knomo-touch-target);
 	min-height: var(--knomo-touch-target);
 }
-body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title.knomo-mobile-title[role="button"] {
-	min-height: var(--knomo-touch-target, 44px);
-}
-
 /* 草稿核对或危险确认须覆盖 body 上的移动 Composer。 */
 body.is-mobile .modal-container.knomo-confirm-backdrop { z-index: 10030; }
 

@@ -31,6 +31,7 @@ test("mobile header title renders scope title and reuses existing event registra
 	assert.equal(harness.title.getAttr("aria-expanded"), "true");
 	assert.equal(harness.title.getAttr("tabindex"), "0");
 	assert.equal(harness.title.getText(), "Tagged");
+	assert.equal(harness.title.find(".knomo-mobile-title-label")?.getText(), "Tagged");
 	assert.notEqual(harness.title.find(".knomo-title-chevron"), null);
 	assert.equal(harness.registrations.length, 2);
 });
@@ -68,6 +69,7 @@ test("mobile header title ignores menu events while showing record stats", () =>
 	assert.equal(harness.title.getAttr("aria-expanded"), null);
 	assert.equal(harness.title.getAttr("tabindex"), null);
 	assert.equal(harness.title.getText(), "Record stats");
+	assert.equal(harness.title.find(".knomo-mobile-title-label")?.getText(), "Record stats");
 });
 
 test("mobile header title remove restores the original Obsidian title", () => {

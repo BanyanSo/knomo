@@ -7,7 +7,7 @@ const hostFixture = `
  * { box-sizing:border-box; }
  body.is-mobile { margin:0; --background-primary:#fffef3; --background-secondary:#f2f0e3;
    --text-normal:#222; --text-muted:#666; --view-header-height:44px; --view-header-top-offset:var(--fixture-safe); --safe-area-inset-top:var(--fixture-safe);
-   --size-4-2:8px; --size-4-6:24px; }
+   --size-4-2:8px; --size-4-4:16px; --size-4-6:24px; }
  body.theme-dark { --background-primary:#242424; --background-secondary:#303030; --text-normal:#eee; }
  .workspace-leaf-content { height:100vh; width:100%; position:relative; display:flex; flex-direction:column; overflow:hidden; }
  .view-header { position:relative; height:44px; z-index:1; display:flex; align-items:center; flex-shrink:0; }
@@ -29,7 +29,7 @@ const hostFixture = `
  .fixture-overlay { position:fixed; inset:0; z-index:9990; background:var(--background-primary); }
 `;
 
-test("mobile surface preserves native controls and first-card position while extending every phone viewport", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile surface preserves native controls and adds only the missing lower clearance in every phone viewport", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
 	const css = readFileSync("styles.css", "utf8");
@@ -58,9 +58,10 @@ test("mobile surface preserves native controls and first-card position while ext
 			await page.addStyleTag({ content: css });
 			const context = `${theme}/${mode}/${width}`;
 			const after = await geometry();
-			assert.deepEqual(after[0], before[0], `${context}: native header`);
+			assert.deepEqual(after[0], [before[0][0], before[0][1], before[0][2], before[0][3] + 8], `${context}: header adds lower breathing room`);
 			assert.deepEqual(after[1], before[1], `${context}: native button`);
-			assert.deepEqual(after[3], before[3], `${context}: first card at rest`);
+			const headerBottom = after[0][1] + after[0][3];
+			assert.deepEqual(after[3], [before[3][0], Math.max(before[3][1], headerBottom), before[3][2], before[3][3]], `${context}: first card only adds missing clearance`);
 			{
 				assert.equal(after[2][1], 0, `${context}: viewport extends to top`);
 				assert.equal(after[2][3], width === 390 ? 844 : 390, `${context}: viewport fills leaf`);
@@ -94,12 +95,12 @@ test("mobile surface preserves native controls and first-card position while ext
 					for (const pixel of paint.pixels) assert.deepEqual(pixel, paint.expected, context);
 				}
 			}
-			if (mode === "is-floating-nav") {
+			{
 				await page.locator(".knomo-page-feedback").evaluate((el: HTMLElement) => { el.hidden = false; });
 				assert.ok(await page.evaluate(() => document.querySelector(".knomo-page-feedback")!.getBoundingClientRect().top >= document.querySelector(".view-header")!.getBoundingClientRect().bottom), `${context}: feedback clears header`);
 				await page.locator(".knomo-page-feedback").evaluate((el: HTMLElement) => { el.hidden = true; });
 				await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 0; });
-				assert.deepEqual((await geometry())[3], before[3], `${context}: dismissing feedback restores first card`);
+				assert.deepEqual((await geometry())[3], after[3], `${context}: dismissing feedback restores first card`);
 			}
 			await page.locator(".fixture-overlay").evaluate((el: HTMLElement) => { el.hidden = false; });
 			assert.equal(await page.evaluate(() => document.elementFromPoint(100, 10)?.className), "fixture-overlay", context);
@@ -111,7 +112,7 @@ test("mobile surface preserves native controls and first-card position while ext
 	}
 });
 
-test("phone frost fades through the header and stops at both buttons without blurring normal cards", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("phone frost includes lower breathing room and stops at the padded header edge without blurring normal cards", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
 	const css = readFileSync("styles.css", "utf8");
@@ -129,7 +130,7 @@ test("phone frost fades through the header and stops at both buttons without blu
 			 </div></body>`);
 			const bottom = await page.locator(".view-header").evaluate((el: HTMLElement) => Math.round(el.getBoundingClientRect().bottom));
 			for (const buttonBottom of await page.locator(".view-action").evaluateAll((buttons: HTMLElement[]) => buttons.map(el => Math.round(el.getBoundingClientRect().bottom)))) {
-				assert.equal(buttonBottom, bottom, `${theme}/${mode}: both buttons end at the header edge`);
+				assert.equal(bottom - buttonBottom, 8, `${theme}/${mode}: header reserves space below both buttons`);
 			}
 			const sample = async () => {
 				const screenshot = await page.screenshot();
@@ -149,7 +150,7 @@ test("phone frost fades through the header and stops at both buttons without blu
 					const gradient = [8, 35, 70, bottom - 1].map(y => ctx.getImageData(70, y, 1, 1).data[0]);
 					ctx.fillStyle = getComputedStyle(document.querySelector(".view-header")!).getPropertyValue("--background-secondary").trim();
 					ctx.fillRect(0, 0, 1, 1);
-					return { behindTab: contrast(bottom - 4), belowButtons: contrast(bottom + 3), gradient, opaque: ctx.getImageData(0, 0, 1, 1).data[0], visiblePixels: Array.from(ctx.getImageData(40, bottom + 1, 300, 30).data) };
+					return { behindTab: contrast(bottom - 4), belowHeader: contrast(bottom + 3), gradient, opaque: ctx.getImageData(0, 0, 1, 1).data[0], visiblePixels: Array.from(ctx.getImageData(40, bottom + 1, 300, 30).data) };
 				}, { png: screenshot.toString("base64"), bottom });
 			};
 			const firstTop = await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top);
@@ -165,7 +166,7 @@ test("phone frost fades through the header and stops at both buttons without blu
 			await page.addStyleTag({ content: '.view-header, .view-header::before { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }' });
 			const sharp = await sample();
 			assert.ok(frosted.behindTab < sharp.behindTab * 0.65, `${theme}: only feed behind tab is frosted, ${frosted.behindTab} / ${sharp.behindTab}`);
-			assert.equal(frosted.belowButtons, sharp.belowButtons, `${theme}/${mode}: normal card below both buttons stays sharp`);
+			assert.equal(frosted.belowHeader, sharp.belowHeader, `${theme}/${mode}: normal card below the padded header stays sharp`);
 			assert.deepEqual(frosted.visiblePixels, sharp.visiblePixels, `${theme}/${mode}: all card pixels beyond the header edge must be unchanged`);
 			await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 0; });
 			assert.equal(await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top), firstTop, `${theme}: returning to top restores first card`);

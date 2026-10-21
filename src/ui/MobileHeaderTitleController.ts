@@ -102,14 +102,14 @@ export class MobileHeaderTitleController {
 			titleEl.removeAttribute("aria-haspopup");
 			titleEl.removeAttribute("aria-expanded");
 			titleEl.removeAttribute("tabindex");
-			titleEl.createSpan({ text: options.label });
+			titleEl.createSpan({ cls: "knomo-mobile-title-label", text: options.label });
 			return;
 		}
 		titleEl.setAttr("role", "button");
 		titleEl.setAttr("aria-haspopup", "menu");
 		titleEl.setAttr("aria-expanded", options.scopeMenuOpen ? "true" : "false");
 		titleEl.setAttr("tabindex", "0");
-		titleEl.createSpan({ text: options.label });
+		titleEl.createSpan({ cls: "knomo-mobile-title-label", text: options.label });
 		this.options.renderChevron(titleEl);
 	}
 }

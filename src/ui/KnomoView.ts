@@ -70,6 +70,7 @@ import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
 import { formatTimeBuoyDate, getTimeBuoyCardStatus } from "../utils/timeBuoyDate";
 import { createRecentTimeFlowContext, formatRecentCalendarDate, getRecentMemoPresentation, RecentTimeFlowDecorations, type RecentDecoration } from "./RecentTimeFlowPresentation";
+import { BeyondTodayDecorations, createBeyondTodayContext, type BeyondTodayContext } from "./BeyondTodayPresentation";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import {
 	alreadyHasTimeBuoyDate,
@@ -432,6 +433,8 @@ export class KnomoView extends ItemView {
 	private lastKnownLocalDate = formatTimeBuoyDate(new Date());
 	private recentTimeFlowContext = createRecentTimeFlowContext(new Date(), false, new Set());
 	private recentDecorations = new RecentTimeFlowDecorations(this.recentTimeFlowContext);
+	private beyondTodayContext: BeyondTodayContext | null = null;
+	private beyondTodayDecorations = new BeyondTodayDecorations(null);
 	private recentLifecycleKey = "";
 	private recentPreferenceUnsubscribe: (() => void) | null = null;
 	private currentLayout: LayoutMode = "desktop-narrow";
@@ -2221,7 +2224,8 @@ export class KnomoView extends ItemView {
 
 	private async reloadMemos(loadAll: boolean, forceRebuild = false): Promise<boolean> {
 		if (this.mobileSearchController?.isOpen) { await this.mobileSearchController.refreshAppliedResults(); return true; }
-		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
+		const queryDate = new Date();
+		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll, queryDate);
 		const previousQueryFingerprint = this.catalogDesktopQueryFingerprint;
 		this.prepareCatalogDesktopQuery(queryFingerprint);
 		const controller = this.beginCatalogDesktopQuery();
@@ -2235,7 +2239,7 @@ export class KnomoView extends ItemView {
 		const previousMobileSearchKey = this.getMobileSearchStateKey();
 		let loaded = false;
 		try {
-			const load = await this.loadCatalogMemos(loadAll, controller.signal);
+			const load = await this.loadCatalogMemos(loadAll, controller.signal, queryDate);
 			controller.signal.throwIfAborted();
 			if (!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
@@ -2243,7 +2247,7 @@ export class KnomoView extends ItemView {
 			}
 			if (load.fullHistoryLoaded) {
 				loadAll = true;
-				queryFingerprint = this.getCatalogQueryFingerprint(true);
+				queryFingerprint = this.getCatalogQueryFingerprint(true, queryDate);
 				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
 			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) {
@@ -2258,12 +2262,14 @@ export class KnomoView extends ItemView {
 				return true;
 			}
 			this.memos = load.memos;
+			// 只在接受结果时一起提交分组快照，刷新等待或失败期间保留旧标题。
+			this.beyondTodayContext = this.activeNav === "review" ? createBeyondTodayContext(queryDate) : null;
 			// 近月窗口结束不代表全历史结束，桌面与移动端都保留展开入口。
 			this.catalogHistoryExpansionPending = !loadAll && !load.fullHistoryLoaded && this.isDefaultListState();
-			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll), load.catalogRevision, catalogCoverageKey(load.coverage));
+			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll, queryDate), load.catalogRevision, catalogCoverageKey(load.coverage));
 			const immediateTotalCount = this.getImmediateCatalogTotalCount(load);
 			this.catalogDesktopTotalCount = immediateTotalCount ?? (previousQueryFingerprint === queryFingerprint
-				&& isQueryCovered(load.coverage, this.buildCatalogActiveQuery(loadAll)) ? this.catalogDesktopTotalCount : null);
+				&& isQueryCovered(load.coverage, this.buildCatalogActiveQuery(loadAll, queryDate)) ? this.catalogDesktopTotalCount : null);
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
 			this.pageRefreshError = null;
@@ -2340,11 +2346,11 @@ export class KnomoView extends ItemView {
 		await this.onForceRefreshViews();
 	}
 
-	private async loadCatalogMemos(loadAll: boolean, signal?: AbortSignal): Promise<CatalogMemoLoad> {
+	private async loadCatalogMemos(loadAll: boolean, signal?: AbortSignal, queryDate = new Date()): Promise<CatalogMemoLoad> {
 		for (let attempt = 0; ; attempt++) {
 			const coverageKey = catalogCoverageKey(this.catalogCoverage);
 			try {
-				const load = await this.loadCatalogMemoSnapshot(loadAll, signal);
+				const load = await this.loadCatalogMemoSnapshot(loadAll, signal, queryDate);
 				signal?.throwIfAborted();
 				if (coverageKey !== catalogCoverageKey(this.catalogCoverage)
 					&& catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new CatalogDiscoveryInvalidatedError();
@@ -2358,10 +2364,10 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private async loadCatalogMemoSnapshot(loadAll: boolean, signal?: AbortSignal): Promise<CatalogMemoLoad> {
+	private async loadCatalogMemoSnapshot(loadAll: boolean, signal?: AbortSignal, queryDate = new Date()): Promise<CatalogMemoLoad> {
 		signal?.throwIfAborted();
 		let page = await this.queryCatalogFeature({
-			...this.buildCatalogActiveQuery(loadAll),
+			...this.buildCatalogActiveQuery(loadAll, queryDate),
 			limit: CATALOG_PAGE_SIZE,
 			cursor: null,
 		}, signal);
@@ -2372,7 +2378,7 @@ export class KnomoView extends ItemView {
 		if (!loadAll && this.isDefaultListState() && page.nextCursor === null) {
 			// 近月窗口已读完时直接确认全历史，避免小库反复显示无效的加载入口。
 			page = await this.queryCatalogFeature({
-				...this.buildCatalogActiveQuery(true),
+				...this.buildCatalogActiveQuery(true, queryDate),
 				limit: CATALOG_PAGE_SIZE,
 				cursor: null,
 			}, signal);
@@ -2398,7 +2404,7 @@ export class KnomoView extends ItemView {
 		return {
 			todayTimeBuoys,
 			fullHistoryLoaded,
-			memos: this.confirmedDailyMemos?.merge(page.items.map(toCatalogMemoView), this.buildCatalogActiveQuery(loadAll)) ?? page.items.map(toCatalogMemoView),
+			memos: this.confirmedDailyMemos?.merge(page.items.map(toCatalogMemoView), this.buildCatalogActiveQuery(loadAll, queryDate)) ?? page.items.map(toCatalogMemoView),
 			nextCursor: page.nextCursor,
 			coverage: page.coverage,
 			readState: page.readState,
@@ -2596,7 +2602,8 @@ export class KnomoView extends ItemView {
 			}
 		}
 		if (this.catalogCursor === null) return false;
-		const queryFingerprint = this.getCatalogQueryFingerprint(true);
+		const queryDate = new Date();
+		const queryFingerprint = this.getCatalogQueryFingerprint(true, queryDate);
 		if (queryFingerprint !== this.catalogDesktopQueryFingerprint) {
 			return this.reloadMemos(true, true);
 		}
@@ -2606,7 +2613,7 @@ export class KnomoView extends ItemView {
 		this.catalogLoadingNextPage = true;
 		try {
 			const page = await this.queryCatalogFeature({
-				...this.buildCatalogActiveQuery(true),
+				...this.buildCatalogActiveQuery(true, queryDate),
 				limit: CATALOG_PAGE_SIZE,
 				cursor: this.catalogCursor,
 			}, controller.signal);
@@ -2616,14 +2623,14 @@ export class KnomoView extends ItemView {
 			if (page.invalidated || (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(page.coverage) !== catalogCoverageKey(this.catalogCoverage))) return this.reloadMemos(false, true);
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
 			for (const memo of page.items.map(toCatalogMemoView)) byRenderKey.set(getMemoRenderKey(memo), memo);
-			this.memos = this.confirmedDailyMemos?.merge([...byRenderKey.values()], this.buildCatalogActiveQuery(true))
+			this.memos = this.confirmedDailyMemos?.merge([...byRenderKey.values()], this.buildCatalogActiveQuery(true, queryDate))
 				?? mergeCatalogMemoPages([...byRenderKey.values()]);
 			this.catalogCursor = page.nextCursor;
 			this.catalogCoverage = page.coverage;
 			this.catalogReadState = page.readState;
 			this.catalogStatus = page.status;
 			this.catalogRevision = page.catalogRevision;
-			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(true), page.catalogRevision, catalogCoverageKey(page.coverage));
+			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(true, queryDate), page.catalogRevision, catalogCoverageKey(page.coverage));
 			this.syncRecordStatsSource();
 			this.filteredMemosCache = null;
 			// 分页保留已渲染正文的高度，避免异步 Markdown 重建使滚动位置被压回顶部。
@@ -2650,15 +2657,14 @@ export class KnomoView extends ItemView {
 		return { ...page, items: page.items.map(toCatalogMemoView) };
 	}
 
-	private buildCatalogActiveQuery(loadAll: boolean): CatalogQueryFilter {
-		const today = new Date();
+	private buildCatalogActiveQuery(loadAll: boolean, today = new Date()): CatalogQueryFilter {
 		const source = this.viewStateController.getSearchSource(today);
 		const query = this.viewStateController.search.getFilter(source, today);
 		if (!loadAll && this.isDefaultListState()) query.fromDate = formatDatePart(new Date(today.getFullYear(), today.getMonth() - 1, 1));
 		return query;
 	}
 
-	private getCatalogQueryFingerprint(loadAll: boolean): string { return getCatalogQueryKey(this.buildCatalogActiveQuery(loadAll)); }
+	private getCatalogQueryFingerprint(loadAll: boolean, queryDate = new Date()): string { return getCatalogQueryKey(this.buildCatalogActiveQuery(loadAll, queryDate)); }
 
 	private prepareCatalogDesktopQuery(queryFingerprint: string): void {
 		if (queryFingerprint === this.catalogDesktopQueryFingerprint) { this.initialCatalogQueryPending = true; return; }
@@ -2717,7 +2723,8 @@ export class KnomoView extends ItemView {
 
 	private async loadInitialMobileMemos(): Promise<void> {
 		let loadAll = false;
-		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
+		const queryDate = new Date();
+		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll, queryDate);
 		this.prepareCatalogDesktopQuery(queryFingerprint);
 		const controller = this.beginCatalogDesktopQuery();
 		const queryRun = ++this.catalogDesktopQueryRun;
@@ -2725,7 +2732,7 @@ export class KnomoView extends ItemView {
 		const searchVersion = this.viewStateController.search.version;
 		const coverageKey = catalogCoverageKey(this.catalogCoverage);
 		try {
-			const load = await this.loadCatalogMemos(loadAll, controller.signal);
+			const load = await this.loadCatalogMemos(loadAll, controller.signal, queryDate);
 			controller.signal.throwIfAborted();
 			if (
 				!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
@@ -2737,7 +2744,7 @@ export class KnomoView extends ItemView {
 			}
 			if (load.fullHistoryLoaded) {
 				loadAll = true;
-				queryFingerprint = this.getCatalogQueryFingerprint(true);
+				queryFingerprint = this.getCatalogQueryFingerprint(true, queryDate);
 				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
 			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new CatalogDiscoveryInvalidatedError();
@@ -2752,7 +2759,8 @@ export class KnomoView extends ItemView {
 			}
 			this.catalogHistoryExpansionPending = !load.fullHistoryLoaded && this.isDefaultListState();
 			this.memos = load.memos;
-			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll), load.catalogRevision, catalogCoverageKey(load.coverage));
+			this.beyondTodayContext = this.activeNav === "review" ? createBeyondTodayContext(queryDate) : null;
+			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll, queryDate), load.catalogRevision, catalogCoverageKey(load.coverage));
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
 			this.pageRefreshError = null;
@@ -3422,8 +3430,7 @@ export class KnomoView extends ItemView {
 	): void {
 		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
 		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
-		const context = this.getRecentTimeFlowContext();
-		const lifecycleKey = JSON.stringify([context.enabled, context.dates]);
+		const lifecycleKey = this.getCardFlowDecorationLifecycleKey();
 		const presentationChanged = this.recentLifecycleKey !== "" && this.recentLifecycleKey !== lifecycleKey;
 		this.recentLifecycleKey = lifecycleKey;
 		if (presentationChanged) {
@@ -3887,8 +3894,32 @@ export class KnomoView extends ItemView {
 
 	private prepareRecentTimeFlow(): void {
 		this.recentTimeFlowContext = this.getRecentTimeFlowContext();
-		this.recentLifecycleKey = JSON.stringify([this.recentTimeFlowContext.enabled, this.recentTimeFlowContext.dates]);
+		this.recentLifecycleKey = this.getCardFlowDecorationLifecycleKey();
 		this.recentDecorations = new RecentTimeFlowDecorations(this.recentTimeFlowContext);
+		this.beyondTodayDecorations = new BeyondTodayDecorations(this.getBeyondTodayContext());
+	}
+
+	private getBeyondTodayContext(): BeyondTodayContext | null {
+		return this.activeNav === "review" ? this.beyondTodayContext ?? null : null;
+	}
+
+	private getCardFlowDecorationLifecycleKey(): string {
+		const context = this.getRecentTimeFlowContext();
+		return JSON.stringify([context.enabled, context.enabled ? context.dates : [], this.getBeyondTodayContext(), getKnomoLocale()]);
+	}
+
+	private renderMemoDecoration(container: HTMLElement, memo: MemoRecord): HTMLElement | null {
+		const group = this.beyondTodayDecorations?.next(memo);
+		if (group) {
+			// 分组从属于视图标题；使用扁平同级标题，保留卡片复用与读屏阅读顺序。
+			return container.createDiv({
+				cls: "knomo-recent-flow-decoration knomo-recent-flow-history knomo-beyond-today-group",
+				text: t(`beyondToday.${group.period}`, { year: group.year }),
+				attr: { role: "heading", "aria-level": "2" },
+			});
+		}
+		const decoration = this.recentDecorations.next(memo);
+		return decoration === null ? null : this.renderRecentDecoration(container, decoration);
 	}
 
 	private renderRecentDecoration(container: HTMLElement, decoration: RecentDecoration): HTMLElement {
@@ -4045,8 +4076,8 @@ export class KnomoView extends ItemView {
 		}
 		const firstCard = renderedCards[0] ?? null;
 		for (const [index, card] of renderedCards.entries()) {
-			const decoration = this.recentDecorations.next(visibleMemos[index]);
-			if (decoration !== null) cardFlow.insertBefore(this.renderRecentDecoration(cardFlow, decoration), card);
+			const decoration = this.renderMemoDecoration(cardFlow, visibleMemos[index]);
+			if (decoration !== null) cardFlow.insertBefore(decoration, card);
 		}
 		const headers = this.renderCardFlowHeaders(cardFlow, presentation.headers);
 		if (firstCard !== null) {
@@ -4288,8 +4319,7 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
-		const decoration = this.recentDecorations.next(memo);
-		if (decoration !== null) this.renderRecentDecoration(this.cardFlowEl, decoration);
+		this.renderMemoDecoration(this.cardFlowEl, memo);
 		const card = this.renderMemoCardInContainer(
 			this.cardFlowEl,
 			memo,
@@ -7320,7 +7350,7 @@ export class KnomoView extends ItemView {
 
 	private getRecentPresentationStateKey(): string {
 		const context = this.getRecentTimeFlowContext();
-		return JSON.stringify([context.enabled, context.dates, [...context.pinnedKeys]]);
+		return JSON.stringify([this.getCardFlowDecorationLifecycleKey(), [...context.pinnedKeys]]);
 	}
 
 	private handleLocalDateChange(): void {

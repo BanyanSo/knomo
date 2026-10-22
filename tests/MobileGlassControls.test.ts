@@ -52,8 +52,8 @@ const hostFixture = `
  * { box-sizing:border-box; }
  body { display:block; margin:0; font:16px/1.5 Arial; --size-2-1:2px; --size-4-2:8px;
    --background-primary:#fff; --background-secondary:#ededed; --background-modifier-hover:rgba(0,0,0,.08);
-   --text-normal:#222; --text-muted:#666; --text-on-accent:#fff; }
- body.theme-dark { --background-primary:#202020; --background-secondary:#303030; --text-normal:#eee; --text-muted:#aaa; }
+   --text-normal:#222; --text-muted:#666; --text-on-accent:#fff; --background-modifier-border:#ccc; }
+ body.theme-dark { --background-primary:#202020; --background-secondary:#303030; --text-normal:#eee; --text-muted:#aaa; --background-modifier-border:#555; }
  .fixture-root { display:block; height:auto; padding:12px; }
  .knomo-time-buoy-tabs, .knomo-record-stats-view-controls { margin-bottom:24px; }
  .mobile-navbar { position:fixed; bottom:12px; left:8px; width:280px; height:48px; border-radius:24px;
@@ -64,6 +64,26 @@ const hostFixture = `
  .mobile-navbar::after { content:""; position:absolute; inset:1px; pointer-events:none; border-radius:inherit;
    background:linear-gradient(180deg, rgba(255,255,255,.06), transparent); }
 `;
+
+test("forced colors preserve segment selection separately from keyboard focus", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage();
+		const html = await segmentHtml();
+		for (const mobile of [false, true]) {
+			await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+			await page.setContent(`<style>${hostFixture}${readFileSync("styles.css", "utf8")}</style><body class="theme-light ${mobile ? "is-mobile" : ""}"><main class="fixture-root knomo-plugin ${mobile ? "is-layout-mobile" : ""}">${html}</main></body>`);
+			const selected = page.locator(".knomo-time-buoy-tab.is-active");
+			assert.equal(await selected.evaluate((el: HTMLElement) => getComputedStyle(el).textDecorationLine), "underline", "selection survives removal of backgrounds and shadows");
+			const inactive = page.locator(".knomo-time-buoy-tab").nth(1);
+			await page.keyboard.press("Tab");
+			await inactive.focus();
+			assert.equal(await inactive.evaluate((el: HTMLElement) => getComputedStyle(el).outlineStyle), "solid");
+			assert.equal(await inactive.evaluate((el: HTMLElement) => getComputedStyle(el).textDecorationLine), "none", "focus is not mistaken for selection");
+		}
+	} finally { await browser.close(); }
+});
 
 test("mobile Glass segments share selected, pressed and focus surfaces while Navbar preserves host material", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
@@ -84,7 +104,7 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 			const tracks = page.locator(".knomo-time-buoy-tabs, .knomo-record-stats-view-controls");
 			const surfaces = await tracks.evaluateAll((elements: HTMLElement[]) => elements.map(el => {
 				const style = getComputedStyle(el);
-				return { role: el.getAttribute("role"), image: style.backgroundImage, filter: style.backdropFilter,
+				return { role: el.getAttribute("role"), image: style.backgroundImage, filter: style.backdropFilter, shadow: style.boxShadow, borderWidth: style.borderTopWidth,
 					buttons: [...el.querySelectorAll("button")].map(button => {
 						const paint = getComputedStyle(button);
 						return { selected: button.getAttribute(el.getAttribute("role") === "tablist" ? "aria-selected" : "aria-pressed"),
@@ -96,6 +116,8 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 			for (const surface of surfaces) {
 				assert.equal(surface.image, "none", context);
 				assert.equal(surface.filter, "none", context);
+				assert.equal(surface.shadow, "none", `${context}: tab track has no decorative outline`);
+				assert.equal(surface.borderWidth, "0px", `${context}: tab track has no border`);
 				assert.equal(surface.buttons.length, 3, context);
 				assert.equal(surface.buttons.filter((button: { active: boolean }) => button.active).length, 1, context);
 				for (const button of surface.buttons) {
@@ -103,7 +125,11 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 					assert.ok(button.height >= 44, context);
 					assert.ok(Math.abs(button.width - surface.buttons[0].width) <= 1, context);
 					assert.equal(button.filter, "none", context);
-					if (button.active) { assert.equal(button.image, "none", context); assert.equal(button.shadow, "none", context); }
+					if (button.active) {
+						assert.equal(button.image, "none", context);
+						assert.equal(button.shadow, "none", `${context}: selected segment uses a fill without an outline or shadow`);
+						assert.notEqual(button.background, "rgba(0, 0, 0, 0)", `${context}: selection is not conveyed by text alone`);
+					}
 					else { assert.equal(button.image, "none", context); assert.equal(button.background, "rgba(0, 0, 0, 0)", context); }
 				}
 			}

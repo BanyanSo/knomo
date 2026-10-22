@@ -32,7 +32,7 @@ const hostFixture = `
 test("mobile surface preserves native controls and adds only the missing lower clearance in every phone viewport", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
-	const css = readFileSync("styles.css", "utf8");
+	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
 	// 对照保留其余插件样式，避免把原有主题适配误判为本次材质造成的布局变化。
 	const start = css.indexOf('body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header {');
 	const end = css.indexOf('body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header.knomo-record-stats-header {');
@@ -73,8 +73,8 @@ test("mobile surface preserves native controls and adds only the missing lower c
 					const surface = getComputedStyle(el, "::before");
 					return { blur: surface.backdropFilter, pointer: surface.pointerEvents, headerBlur: getComputedStyle(el).backdropFilter };
 				});
-				const filter = preference === "reduce" ? "none" : "blur(1px) saturate(1.1)";
-				assert.equal(style.blur, filter, context);
+				if (preference === "reduce") assert.equal(style.blur, "none", context);
+				else assert.match(style.blur, /blur\([\d.]+px\)/, `${context}: only the background softens the feed`);
 				assert.equal(style.headerBlur, "none", context);
 				assert.equal(style.pointer, "none", context);
 				if (preference === "reduce") {
@@ -112,17 +112,17 @@ test("mobile surface preserves native controls and adds only the missing lower c
 	}
 });
 
-test("phone frost includes lower breathing room and stops at the padded header edge without blurring normal cards", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("phone header softly veils background strokes while preserving clearance and normal card pixels", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
-	const css = readFileSync("styles.css", "utf8");
+	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
 	const extraHost = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
 	try {
 		const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
 		for (const theme of ["theme-light", "theme-dark"]) for (const mode of ["", "is-floating-nav", "auto-full-screen"]) {
 			await page.setContent(`<style>${extraHost}${hostFixture}${css}
 			 .fixture-card:first-child { height:300px; }
-			 .fixture-ink { height:260px; background:linear-gradient(to right, #000 0 96px, transparent 96px), repeating-linear-gradient(to right, #000 0 2px, #fff 2px 4px); }
+			 .fixture-ink { height:260px; background:linear-gradient(to right, #000 0 96px, transparent 96px), repeating-linear-gradient(to right, #000 0 6px, #fff 6px 12px); }
 			</style><body class="is-mobile is-phone ${mode} show-view-header ${theme}" style="--fixture-safe:59px">
 			 <div class="workspace-leaf-content" data-type="knomo-view">
 			 <div class="view-header"><div class="view-header-left"><button class="view-action">菜单</button></div><div class="view-header-title-container">全部笔记</div><div class="view-actions"><button class="view-action knomo-mobile-header-action">搜索</button></div></div>
@@ -141,33 +141,30 @@ test("phone frost includes lower breathing room and stops at the padded header e
 					canvas.width = bitmap.width; canvas.height = bitmap.height;
 					const ctx = canvas.getContext("2d")!;
 					ctx.drawImage(bitmap, 0, 0); bitmap.close();
-					const contrast = (y: number) => {
+					const stroke = (y: number) => {
 						const pixels = Array.from(ctx.getImageData(140, y, 200, 1).data).filter((_, i) => i % 4 === 0);
 						const mean = pixels.reduce((sum, value) => sum + value, 0) / pixels.length;
-						return Math.sqrt(pixels.reduce((sum, value) => sum + (value - mean) ** 2, 0) / pixels.length);
+						return { contrast: Math.sqrt(pixels.reduce((sum, value) => sum + (value - mean) ** 2, 0) / pixels.length),
+							outline: Math.abs(ctx.getImageData(70, y, 1, 1).data[0] - mean) };
 					};
-					// 左侧纯黑正文用于量化透出程度，右侧条纹用于区分模糊与底色遮盖。
-					const gradient = [8, 35, 70, bottom - 1].map(y => ctx.getImageData(70, y, 1, 1).data[0]);
-					ctx.fillStyle = getComputedStyle(document.querySelector(".view-header")!).getPropertyValue("--background-secondary").trim();
-					ctx.fillRect(0, 0, 1, 1);
-					return { behindTab: contrast(bottom - 4), belowHeader: contrast(bottom + 3), gradient, opaque: ctx.getImageData(0, 0, 1, 1).data[0], visiblePixels: Array.from(ctx.getImageData(40, bottom + 1, 300, 30).data) };
+					// 轻度柔化细笔画、允许宽轮廓更清楚；同时约束过透明和完全遮盖两端。
+					return { behindStatus: stroke(40), behindTab: stroke(bottom - 4), belowHeader: stroke(bottom + 3), visiblePixels: Array.from(ctx.getImageData(40, bottom + 1, 300, 30).data) };
 				}, { png: screenshot.toString("base64"), bottom });
 			};
 			const firstTop = await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top);
 			assert.ok(firstTop >= bottom, `${theme}: initial card clears tab`);
 			await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 150; });
 			assert.ok(await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top) < bottom - 4, `${theme}: real card reaches behind tab`);
-			const frosted = await sample();
-			assert.ok(frosted.gradient[0]! < frosted.opaque, `${theme}/${mode}: status bar also reveals the feed`);
-			for (let index = 1; index < frosted.gradient.length; index++) {
-				assert.ok(frosted.gradient[index]! < frosted.gradient[index - 1]!, `${theme}/${mode}: background becomes progressively more transparent toward the bottom`);
+			const glass = await sample();
+			for (const area of [glass.behindStatus, glass.behindTab]) {
+				assert.ok(area.outline > 4 && area.outline < 50, `${theme}/${mode}: background silhouettes remain visible through the tint (${area.outline})`);
 			}
 			assert.equal(await page.evaluate((y: number) => document.elementFromPoint(100, y)?.className, bottom + 1), "fixture-ink", theme);
 			await page.addStyleTag({ content: '.view-header, .view-header::before { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }' });
 			const sharp = await sample();
-			assert.ok(frosted.behindTab < sharp.behindTab * 0.65, `${theme}: only feed behind tab is frosted, ${frosted.behindTab} / ${sharp.behindTab}`);
-			assert.equal(frosted.belowHeader, sharp.belowHeader, `${theme}/${mode}: normal card below the padded header stays sharp`);
-			assert.deepEqual(frosted.visiblePixels, sharp.visiblePixels, `${theme}/${mode}: all card pixels beyond the header edge must be unchanged`);
+			assert.ok(glass.behindTab.contrast < sharp.behindTab.contrast * 0.8, `${theme}: text detail softens behind the header`);
+			assert.deepEqual(glass.belowHeader, sharp.belowHeader, `${theme}/${mode}: normal card below the padded header stays sharp`);
+			assert.deepEqual(glass.visiblePixels, sharp.visiblePixels, `${theme}/${mode}: all card pixels beyond the header edge must be unchanged`);
 			await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 0; });
 			assert.equal(await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top), firstTop, `${theme}: returning to top restores first card`);
 		}

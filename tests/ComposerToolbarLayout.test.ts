@@ -95,6 +95,7 @@ test("mobile Composer tool focus remains visible inside scrolling tools, includi
 				if (expandable) {
 					await tool.evaluate((el: HTMLButtonElement) => { el.disabled = true; });
 					assert.equal(await tool.evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none", `${context}: disabled tools do not retain an expanded surface`);
+					assert.equal(await tool.evaluate((el: HTMLElement) => getComputedStyle(el).opacity), "1", `${context}: disabled tools use a state color without fading their foreground`);
 					await tool.evaluate((el: HTMLButtonElement) => { el.disabled = false; el.setAttribute("aria-expanded", "false"); });
 				}
 				await page.keyboard.press("Tab");
@@ -129,7 +130,7 @@ test("mobile Glass sample shares accent across independent mounts, honors solid 
 				return { size: [el.offsetWidth, el.offsetHeight], image: style.backgroundImage, filter: style.backdropFilter };
 			});
 			assert.deepEqual(fabStyle.size, [60, 60], context);
-			assert.match(fabStyle.image, /linear-gradient/, context);
+			assert.equal(fabStyle.image === "none", manual || system === "reduce", `${context}: solid preferences remove the optical sheen`);
 			assert.equal(fabStyle.filter, "none", `${context}: sample adds no FAB blur`);
 			await page.evaluate(() => {
 				const button = document.querySelector<HTMLButtonElement>(".knomo-mobile-create-fab")!;
@@ -155,8 +156,9 @@ test("mobile Glass sample shares accent across independent mounts, honors solid 
 			const solid = manual || system === "reduce";
 			assert.equal(surface.fabAlpha, solid ? 255 : 224, context);
 			assert.equal(surface.sendAlpha, surface.fabAlpha, `${context}: body layer has the same material`);
-			assert.equal(surface.headerFilter, solid ? "none" : "blur(1px) saturate(1.1)", context);
-			assert.match(surface.sendImage, /linear-gradient/, context);
+			if (solid) assert.equal(surface.headerFilter, "none", context);
+			else assert.match(surface.headerFilter, /blur\([\d.]+px\)/, `${context}: header uses its own soft backdrop while actions remain clear`);
+			assert.equal(surface.sendImage === "none", solid, `${context}: detached send follows the same solid preference`);
 			assert.deepEqual(surface.size, [58, 44], context);
 			assert.equal(surface.pointer, "none", context);
 			assert.equal(surface.hiddenFabPointer, "none", context);

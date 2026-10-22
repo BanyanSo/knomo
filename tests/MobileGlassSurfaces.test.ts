@@ -55,10 +55,60 @@ function markup(reduced: boolean, mobile = true): string {
 	 </div>
 	 <div id="owned-menu" class="menu knomo-mobile-menu knomo-mobile-menu-scope ${surface}"><div class="menu-item mod-checked">All</div></div>
 	 <div id="host-menu" class="menu"><div class="menu-item">Host</div></div>
-	 <div class="knomo-plugin is-layout-mobile ${preference}"><div id="picker" class="knomo-time-buoy-picker is-mobile is-open">Date</div></div>
+	 <div class="knomo-plugin is-layout-mobile ${preference}"><div id="picker" class="knomo-time-buoy-picker is-mobile is-open">Date
+	  <div class="knomo-time-buoy-picker-grid">${Array.from({ length: 35 }, (_, index) => `<button class="knomo-time-buoy-picker-day ${index === 0 ? "is-today" : ""}" ${index === 1 ? "disabled" : ""}>${index % 31 + 1}</button>`).join("")}</div></div></div>
 	 <div class="fixture-composer knomo-plugin is-layout-mobile knomo-mobile-composer-layer is-active is-open ${preference}"><div class="knomo-mobile-composer-stage"><div class="knomo-mobile-composer-content"><div class="knomo-composer"><div class="knomo-composer-editor">Readable draft</div>
 	  <button class="knomo-send-button" aria-label="Send"><svg><path d="M4 12H20" stroke="currentColor"/></svg></button></div></div></div></div>`;
 }
+
+test("contrast preferences make owned glass solid without changing host menus", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+		for (const theme of ["theme-light", "theme-dark"]) for (const forcedColors of ["none", "active"]) {
+			await page.emulateMedia({ contrast: "more", forcedColors });
+			await page.setContent(`<style>${hostFixture}${readFileSync("styles.css", "utf8")}</style><body class="is-mobile is-phone ${theme}">${markup(false)}</body>`);
+			for (const selector of ["#single", "#owned-menu", "#picker", ".view-header"]) {
+				const paint = await page.locator(selector).evaluate((el: HTMLElement) => {
+					const s = getComputedStyle(el, el.classList.contains("view-header") ? "::before" : null);
+					return { filter: s.backdropFilter };
+				});
+				assert.equal(paint.filter, "none", `${theme}/${forcedColors}/${selector}: contrast removes blur`);
+			}
+			assert.equal(await page.locator("#owned-menu").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none");
+			if (forcedColors === "none") {
+				assert.equal(await page.locator("#owned-menu").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor), theme === "theme-light" ? "rgb(255, 255, 255)" : "rgb(32, 32, 32)");
+				assert.equal(await page.locator("#host-menu").evaluate((el: HTMLElement) => getComputedStyle(el).borderTopColor), "rgb(255, 0, 0)");
+			}
+		}
+	} finally { await browser.close(); }
+});
+
+test("mobile date grid keeps separate 44px touch targets inside a narrow viewport", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage();
+		for (const width of [320, 350, 390, 844]) for (const fontSize of [16, 32]) {
+			await page.setViewportSize({ width, height: 844 });
+			await page.setContent(`<style>${hostFixture}${readFileSync("styles.css", "utf8")}</style><body class="is-mobile is-phone theme-light">${markup(false)}</body>`);
+			await page.locator(".knomo-time-buoy-picker-day").evaluateAll((days: HTMLElement[], size: number) => days.forEach(day => { day.style.fontSize = `${size}px`; }), fontSize);
+			const geometry = await page.locator(".knomo-time-buoy-picker-grid").evaluate((el: HTMLElement) => {
+				const frame = el.getBoundingClientRect();
+				return { left: frame.left, right: frame.right, cells: [...el.children].map(child => {
+					const rect = child.getBoundingClientRect();
+					return { left: rect.left, right: rect.right, width: rect.width, height: rect.height };
+				}) };
+			});
+			for (const [index, cell] of geometry.cells.entries()) {
+				assert.ok(cell.width >= 44 && cell.height >= 44, `${width}/${fontSize}/${index}: full touch target`);
+				assert.ok(cell.left >= geometry.left - 1 && cell.right <= geometry.right + 1, `${width}/${fontSize}/${index}: target stays within the calendar`);
+				if (index % 7 > 0) assert.ok(cell.left >= geometry.cells[index - 1].right - 0.1, `${width}/${fontSize}/${index}: neighboring dates do not share a touch area`);
+			}
+		}
+	} finally { await browser.close(); }
+});
 
 test("mobile candidates follow native material and row insets while owned menus retain the shared glass", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
@@ -82,11 +132,13 @@ test("mobile candidates follow native material and row insets while owned menus 
 			for (const [index, surface] of surfaces.entries()) {
 				const native = index < 3;
 				assert.equal(surface.background, surfaces[native ? 0 : 3].background, context);
-				assert.equal(surface.alpha, solid ? 255 : native ? 204 : 240, context);
-				assert.equal(surface.image, "none", context);
-				assert.equal(surface.border, surfaces[0].border, context);
+				if (solid || native) assert.equal(surface.alpha, solid ? 255 : 204, context);
+				else assert.ok(surface.alpha >= 204 && surface.alpha <= 230, `${context}: owned glass retains a readable tint while revealing the background`);
+				assert.equal(surface.image === "none", native || solid, `${context}: only enhanced owned shells carry a sheen`);
+				assert.equal(surface.border, surfaces[native ? 0 : 3].border, context);
 				assert.equal(surface.shadow, surfaces[native ? 0 : 3].shadow, context);
-				assert.equal(surface.filter, solid ? "none" : native ? "blur(8px)" : "blur(6px) saturate(1.1)", context);
+				if (solid || native) assert.equal(surface.filter, solid ? "none" : "blur(8px)", context);
+				else assert.match(surface.filter, /blur\([\d.]+px\)/, `${context}: one native backdrop filter on the owned shell`);
 				assert.equal(surface.opacity, "1", `${context}: foreground is never faded`);
 			}
 			for (const id of ["single", "multi"]) {
@@ -119,6 +171,10 @@ test("mobile candidates follow native material and row insets while owned menus 
 			assert.equal(await page.locator("#link > .suggestion").evaluate((el: HTMLElement) => getComputedStyle(el).padding), "6px", `${context}: native link list inset`);
 			assert.equal(await page.locator("#link [role=option]").evaluate((el: HTMLElement) => getComputedStyle(el).borderRadius), "10px", `${context}: native link row radius`);
 			assert.equal(await page.locator("#host-menu").evaluate((el: HTMLElement) => getComputedStyle(el).boxShadow), "rgb(255, 0, 0) 0px 0px 2px 0px", `${context}: unowned menu is untouched`);
+			const grid = page.locator(".knomo-time-buoy-picker-grid");
+			assert.equal(await grid.evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor), theme === "theme-dark" ? "rgb(32, 32, 32)" : "rgb(255, 255, 255)", `${context}: calendar content stays solid behind the glass shell`);
+			assert.equal(await grid.locator(":disabled").evaluate((el: HTMLElement) => getComputedStyle(el).opacity), "1", `${context}: disabled dates use color without reducing foreground opacity`);
+			assert.notEqual(await grid.locator(".is-today").evaluate((el: HTMLElement) => getComputedStyle(el).boxShadow), "none", `${context}: today remains marked in both materials`);
 		}
 		const retained = await page.locator("#single").elementHandle();
 		await page.locator(".knomo-reduce-glass").evaluateAll((elements: HTMLElement[]) => elements.forEach(el => el.classList.remove("knomo-reduce-glass")));
@@ -126,6 +182,9 @@ test("mobile candidates follow native material and row insets while owned menus 
 			await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: system }] });
 			assert.equal(await retained.evaluate((el: HTMLElement) => el === document.getElementById("single")), true, "system changes retain the open popup");
 			assert.equal(await retained.evaluate((el: HTMLElement) => getComputedStyle(el).backdropFilter), system === "reduce" ? "none" : "blur(8px)");
+			for (const selector of ["#owned-menu", "#picker"]) {
+				assert.equal(await page.locator(selector).evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage === "none"), system === "reduce", `${selector}: open owned shells follow system changes`);
+			}
 		}
 	} finally { await browser.close(); }
 });
@@ -223,7 +282,7 @@ test("mobile primary actions keep tint on press and preserve disabled, saving, f
 				const el = document.querySelector<HTMLElement>(selector)!, style = getComputedStyle(el, index ? "::before" : undefined);
 				const ctx = document.createElement("canvas").getContext("2d")!;
 				ctx.fillStyle = style.backgroundColor; ctx.fillRect(0, 0, 1, 1);
-				return { background: style.backgroundColor, alpha: ctx.getImageData(0, 0, 1, 1).data[3], filter: style.backdropFilter,
+				return { background: style.backgroundColor, alpha: ctx.getImageData(0, 0, 1, 1).data[3], filter: style.backdropFilter, image: style.backgroundImage,
 					opacity: getComputedStyle(el).opacity, iconOpacity: getComputedStyle(el.querySelector("svg")!).opacity };
 			}));
 			const normal = await paint();
@@ -233,6 +292,7 @@ test("mobile primary actions keep tint on press and preserve disabled, saving, f
 				assert.equal(surface.filter, "none", context);
 				assert.equal(surface.opacity, "1", context);
 				assert.equal(surface.iconOpacity, "1", context);
+				assert.equal(surface.image === "none", manual || system === "reduce", `${context}: solid preferences suppress the sheen without hiding the foreground`);
 			}
 			// 同屏比较时让新建按钮避开面板；实际停靠位置由已有布局回归覆盖。
 			// 用浏览器引擎模拟按下伪类；实际点击、触摸取消另由交互回归覆盖。
@@ -265,6 +325,24 @@ test("mobile primary actions keep tint on press and preserve disabled, saving, f
 			assert.equal((await paint())[1].alpha, 255, context);
 			assert.deepEqual(await geometry(), before, context);
 		}
+		// 按压只缩放装饰底层；减少动态效果时保留即时阴影反馈，停用收缩。
+		await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "no-preference" }] });
+		const send = page.locator(".knomo-send-button");
+		await send.evaluate((el: HTMLButtonElement) => { el.disabled = false; el.classList.remove("is-saving"); });
+		const controlGeometry = () => send.evaluate((el: HTMLElement) => [el, el.querySelector("svg")!].map(node => {
+			const rect = node.getBoundingClientRect(); return [rect.x, rect.y, rect.width, rect.height];
+		}));
+		const stationary = await controlGeometry();
+		const { root } = await cdp.send("DOM.getDocument");
+		const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: ".knomo-send-button" });
+		await cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: ["active"] });
+		await page.waitForFunction(() => new DOMMatrixReadOnly(getComputedStyle(document.querySelector(".knomo-send-button")!, "::before").transform).a < 0.97);
+		assert.deepEqual(await controlGeometry(), stationary, "press does not move the icon or shrink the hit area");
+		await page.emulateMedia({ reducedMotion: "reduce" });
+		await page.waitForFunction(() => matchMedia("(prefers-reduced-motion: reduce)").matches
+			&& getComputedStyle(document.querySelector(".knomo-send-button")!, "::before").transitionDuration === "0s");
+		assert.equal(await send.evaluate((el: HTMLElement) => new DOMMatrixReadOnly(getComputedStyle(el, "::before").transform).a), 1, "reduced motion stops the decorative contraction");
+		await cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: [] });
 		// 关闭增强分支模拟能力不足：既不要求本机浏览器卸载特性，也不依赖宿主快照。
 		for (const missing of ["color-mix", "backdrop-filter"]) {
 			await cdp.send("Emulation.setEmulatedMedia", { features: [] });
@@ -284,7 +362,10 @@ test("mobile primary actions keep tint on press and preserve disabled, saving, f
 					return { filter: style.backdropFilter, background: style.backgroundColor, image: style.backgroundImage };
 				}, pseudo);
 				assert.equal(fallback.filter, "none", `${missing}/${selector}`);
-				if (!pseudo) assert.equal(fallback.background, "rgb(255, 255, 255)", `${missing}/${selector}: stable fallback`);
+				if (!pseudo) {
+					assert.equal(fallback.background, "rgb(255, 255, 255)", `${missing}/${selector}: stable fallback`);
+					assert.equal(fallback.image, "none", `${missing}/${selector}: unsupported enhancement leaves a solid shell`);
+				}
 				else assert.match(fallback.image, /rgb\(237, 237, 237\)/, `${missing}: opaque header gradient`);
 			}
 		}

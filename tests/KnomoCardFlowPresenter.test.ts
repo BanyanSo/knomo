@@ -180,6 +180,7 @@ test("keeps the current random list visible while the next group loads", async (
 		type: "empty",
 		title: "Looking for memos to revisit",
 		description: "",
+		headers: [{ type: "random-toolbar", count: 0 }],
 	});
 });
 
@@ -195,6 +196,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Looking for memos to revisit",
 		description: "",
+		headers: [{ type: "random-toolbar", count: 0 }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),

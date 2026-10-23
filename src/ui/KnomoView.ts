@@ -117,6 +117,7 @@ import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
 import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
 import {
 	renderKnomoCardFlowHeaders,
+	syncKnomoCardFlowHeaders,
 	renderKnomoEmptyState,
 	renderKnomoLoadingPlaceholder,
 	renderKnomoLoadMoreButton,
@@ -1284,10 +1285,7 @@ export class KnomoView extends ItemView {
 		});
 		this.mobileNavbarCompactController.start();
 		this.register(() => this.clearTimeBuoyPickerEventListeners());
-		this.registerDomEvent(this.containerEl.win, "focus", () => {
-			this.handleLocalDateChange();
-			this.recoverMobileViewFocus();
-		});
+		this.registerWindowFocusEvent();
 		this.registerDomEvent(this.containerEl.win, "orientationchange", () => this.closeTimeBuoyPicker(false));
 		const handleMobileBack = (event: Event): void => this.handleMobileBack(event);
 		this.containerEl.doc.addEventListener("backbutton", handleMobileBack, { capture: true });
@@ -1319,6 +1317,13 @@ export class KnomoView extends ItemView {
 			this.syncLayoutMeasurements();
 		}));
 		this.startDateChangeWatcher();
+	}
+
+	private registerWindowFocusEvent(): void {
+		this.registerDomEvent(this.containerEl.win, "focus", () => {
+			this.handleLocalDateChange();
+			this.recoverMobileViewFocus();
+		});
 	}
 
 	private isMobileNavbarSyncTarget(): boolean {
@@ -3823,7 +3828,13 @@ export class KnomoView extends ItemView {
 		}
 		this.recordStatsViewStateController.clearRendered();
 		const presentation = this.getCurrentCardFlowPresentation();
-		if (presentation.type === "empty" && presentation.loading) {
+		if (presentation.type === "empty") {
+			if (!presentation.loading) {
+				this.renderGeneration += 1;
+				this.cardImageCache.capture(this.cardFlowEl, Platform.isMobile ? this.cardFlowEl : null, scrollTop);
+				this.memoMarkdownRenderer.clear();
+				this.cardImageLoadQueue.clear("card-flow");
+			}
 			this.renderEmptyCardFlow(presentation);
 			return;
 		}
@@ -3839,7 +3850,10 @@ export class KnomoView extends ItemView {
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
-		this.cardFlowEl.empty();
+		const headers = this.renderCardFlowHeaders(this.cardFlowEl, presentation.headers);
+		for (const child of Array.from(this.cardFlowEl.children)) {
+			if (!headers.includes(child as HTMLElement)) child.remove();
+		}
 		this.renderedCardMemos.clear();
 		this.cardFlowCoordinator.setPendingScrollRestore({ generation, scrollTop, visibleCount: initialBatchSize, anchor });
 		this.renderCardFlowPresentation(presentation, generation, initialBatchSize, seedPlaceholder);
@@ -4052,9 +4066,11 @@ export class KnomoView extends ItemView {
 		for (const card of this.getDirectCardElements(this.cardFlowEl)) {
 			this.removeCardElement(card);
 		}
-		this.cardFlowEl.empty();
+		const headers = this.renderCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
+		for (const child of Array.from(this.cardFlowEl.children)) {
+			if (!headers.includes(child as HTMLElement)) child.remove();
+		}
 		this.renderedCardMemos.clear();
-		this.renderCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
 		if (presentation.loading) renderKnomoLoadingPlaceholder(this.cardFlowEl, visible);
 		else renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
 		this.renderHistoryLoadMore();
@@ -4071,8 +4087,9 @@ export class KnomoView extends ItemView {
 		this.cardFlowCoordinator.clearMobileBatchContinuation(this.containerEl.win);
 		this.prepareRecentTimeFlow();
 		this.cardFlowCoordinator.removeSentinel();
+		const headers = this.renderCardFlowHeaders(cardFlow, presentation.headers);
 		for (const child of Array.from(cardFlow.children)) {
-			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card")) {
+			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card") && !headers.includes(child)) {
 				for (const card of child.findAll(".knomo-card")) {
 					this.removeCardImageTargets(card);
 				}
@@ -4132,24 +4149,16 @@ export class KnomoView extends ItemView {
 			}
 		}
 
-		let currentCard = cardFlow.firstElementChild;
+		let currentCard = headers.length > 0 ? headers[headers.length - 1].nextElementSibling : cardFlow.firstElementChild;
 		for (const card of renderedCards) {
 			if (card !== currentCard) {
 				cardFlow.insertBefore(card, currentCard);
 			}
 			currentCard = card.nextElementSibling;
 		}
-		const firstCard = renderedCards[0] ?? null;
 		for (const [index, card] of renderedCards.entries()) {
 			const decoration = this.renderMemoDecoration(cardFlow, visibleMemos[index]);
 			if (decoration !== null) cardFlow.insertBefore(decoration, card);
-		}
-		const headers = this.renderCardFlowHeaders(cardFlow, presentation.headers);
-		if (firstCard !== null) {
-			const firstContent = cardFlow.firstElementChild;
-			for (const header of headers) {
-				cardFlow.insertBefore(header, firstContent);
-			}
 		}
 		const intro = this.renderTimeBuoyIntro(cardFlow);
 		if (intro !== null) {
@@ -4261,15 +4270,15 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
-		this.renderTimeBuoyIntro(this.cardFlowEl);
-		this.renderCardFlowHeaders(this.cardFlowEl, presentation.headers);
+		const intro = this.renderTimeBuoyIntro(this.cardFlowEl);
+		if (intro !== null) this.cardFlowEl.prepend(intro);
 		this.startCardFeed(presentation.memos, presentation.mode, generation, initialBatchSize, seedPlaceholder);
 	}
 
 	private renderCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[]): HTMLElement[] {
 		this.cardFlowFeedback ??= { key: "", context: "" };
 		this.cardFlowFeedback.context = headers.some(header => header.type === "summary" && header.feedback) ? this.getPageFeedbackContext() : "";
-		return renderKnomoCardFlowHeaders(container, headers, this.cardFlowFeedback);
+		return syncKnomoCardFlowHeaders(container, headers, this.getPageFeedbackContext(), this.cardFlowFeedback);
 	}
 
 	private shouldShowTimeBuoyIntro(): boolean {

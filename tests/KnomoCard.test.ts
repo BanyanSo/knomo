@@ -142,6 +142,7 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 			getInitialCardBatchSize: () => 10, renderCardForMode: render,
 			replaceMemoCard: (old: TestElement, _previous: MemoViewItem, memo: MemoViewItem) => { old.remove(); return render(root.asHtml(), memo); },
 			removeCardImageTargets: () => {}, renderTimeBuoyIntro: () => null, renderCardFlowSentinelIfNeeded: () => {},
+			renderCardFlowHeaders: () => [],
 			renderHistoryLoadMore: () => {}, syncCardMenuState: () => {}, restorePendingCardFlowScrollTop: () => {},
 		});
 		const recent = makeMemo({ id: "today", catalog: { observation: { logicalDate: "2026-09-10", time: "12:34" } } as NonNullable<MemoViewItem["catalog"]> });

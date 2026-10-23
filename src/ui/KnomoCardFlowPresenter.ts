@@ -86,6 +86,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 				type: "empty",
 				title: t("empty.randomLoading"),
 				description: "",
+				...(options.randomReunionStatus === "loading-candidates" ? { headers: [{ type: "random-toolbar" as const, count: 0 }] } : {}),
 			};
 		}
 

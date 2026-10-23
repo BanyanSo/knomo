@@ -70,19 +70,77 @@ export function renderKnomoShuffleDayHeader(
 }
 
 const lastFeedback = new WeakMap<HTMLElement, string>();
+const historyHeaders = new WeakMap<HTMLElement, { context: string; elements: Map<string, HTMLElement>; rendered: HTMLElement[] }>();
 
-export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[], announcement?: { key: string; context: string }): HTMLElement[] {
+// 仅复用历史浏览中的操作表面；内容更新不替换触摸目标，切页后旧节点不再使用。
+export function syncKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[], context: string, announcement?: { key: string; context: string }): HTMLElement[] {
+	const previous = historyHeaders.get(container);
+	const occurrences = new Map<string, number>();
+	const keys = headers.map(header => {
+		const key = header.type === "random-toolbar" ? header.type
+			: header.type === "random-day" ? `${header.type}:${header.selectedDate}`
+			: header.type === "summary" && header.action?.action === "retry-random-day" ? header.action.action : null;
+		if (key === null) return null;
+		const occurrence = occurrences.get(key) ?? 0;
+		occurrences.set(key, occurrence + 1);
+		return `${key}:${occurrence}`;
+	});
+	const reused = keys.map(key => {
+		const element = key !== null && previous?.context === context ? previous.elements.get(key) : undefined;
+		return element?.parentElement === container ? element : undefined;
+	});
+	// 先清理全部过期头部，避免旧提示占位导致仍在使用的工具栏被移动。
+	for (const element of previous?.rendered ?? []) {
+		if (!reused.includes(element)) element.remove();
+	}
+	const elements = renderKnomoCardFlowHeaders(container, headers, announcement, reused);
+	historyHeaders.set(container, { context, elements: new Map(keys.flatMap((key, index) => key === null ? [] : [[key, elements[index]]])), rendered: elements });
+	// 只定位新增或确实换序的头部；原位节点不能先移除再插回。
+	let next = container.firstElementChild;
+	for (const element of elements) {
+		if (element !== next) container.insertBefore(element, next);
+		next = element.nextElementSibling;
+	}
+	return elements;
+}
+
+function updateHeaderText(element: HTMLElement | null, text: string): void {
+	if (element !== null && element.textContent !== text) element.setText(text);
+}
+
+export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[], announcement?: { key: string; context: string }, reused: readonly (HTMLElement | undefined)[] = []): HTMLElement[] {
 	const feedback = JSON.stringify([announcement?.context, headers.flatMap(header => header.type === "summary" && header.feedback ? [header.text] : [])]);
 	const changed = feedback !== (announcement?.key ?? lastFeedback.get(container));
 	if (announcement) announcement.key = feedback;
 	lastFeedback.set(container, feedback);
-	return headers.map((header) => {
+	return headers.map((header, index) => {
+		const existing = reused[index];
 		if (header.type === "random-day") {
+			if (existing) {
+				updateHeaderText(existing.querySelector(".knomo-shuffle-day-date"), formatShuffleDayDateTitle(header.selectedDate));
+				const toolbar = existing.querySelector<HTMLElement>(".knomo-list-toolbar")!;
+				const button = toolbar.querySelector<HTMLButtonElement>("button")!;
+				const text = header.stats === null ? "" : formatShuffleDaySummary(header.stats);
+				let summary = toolbar.querySelector<HTMLElement>(".knomo-shuffle-day-summary");
+				if (text && !summary) {
+					summary = toolbar.createDiv({ cls: "knomo-shuffle-day-summary knomo-list-summary" });
+					toolbar.insertBefore(summary, button);
+				}
+				if (text) updateHeaderText(summary, text);
+				else summary?.remove();
+				updateHeaderText(button, t("random.dayBack"));
+				return existing;
+			}
 			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats, {
 				label: t("random.dayBack"), action: "random-day-back",
 			});
 		}
 		if (header.type === "random-toolbar") {
+			if (existing) {
+				updateHeaderText(existing.querySelector(".knomo-list-summary"), t("list.randomSummary", { count: header.count }));
+				updateHeaderText(existing.querySelector("button"), t("list.randomRefresh"));
+				return existing;
+			}
 			return renderKnomoRandomReunionToolbar(container, header.count);
 		}
 		if (header.type === "trash-toolbar") {
@@ -99,9 +157,14 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 		if (header.type === "shuffle-day") {
 			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats);
 		}
-		const summary = header.action !== undefined ? renderKnomoActionableListSummary(container, header.text, header.action)
-			: renderKnomoListSummary(container, header.text);
+		const summary = existing ?? (header.action !== undefined ? renderKnomoActionableListSummary(container, header.text, header.action)
+			: renderKnomoListSummary(container, header.text));
+		if (existing && header.action) {
+			updateHeaderText(summary.querySelector("span"), header.text);
+			updateHeaderText(summary.querySelector("button"), header.action.label);
+		}
 		if (header.feedback) summary.setAttrs({ role: "status", "aria-live": changed ? "polite" : "off", "aria-atomic": "true" });
+		else if (existing) for (const name of ["role", "aria-live", "aria-atomic"]) summary.removeAttribute(name);
 		return summary;
 	});
 }

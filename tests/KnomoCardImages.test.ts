@@ -305,6 +305,7 @@ test("移动 View 的实际重建入口经过其他筛选与空页后复用原�
 		deferMobileCardFlowRender: () => false, getInitialCardBatchSize: () => 30,
 		restoreCardFlowScrollTop() {}, resetTimeBuoyCardFlow() {},
 		getDirectCardElements: () => root.findAll(".knomo-card"), getCurrentCardFlowPresentation: () => ({}),
+		renderCardFlowHeaders: () => [],
 		cardImageLoadQueue: {
 			clear() {}, forget() {},
 			observe(request: CardImageLoadRequest) {

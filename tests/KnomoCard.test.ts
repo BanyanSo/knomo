@@ -11,6 +11,24 @@ import { KnomoCardFlowBatcher, runCardFlowBatch } from "../src/ui/KnomoCardFlow"
 import { MemoCardImageCache } from "../src/ui/KnomoCardImages";
 import { createReferenceMemo } from "./helpers/referenceMemo";
 
+test("查看那一天只出现在随机批次卡片，整日详情沿用普通 Daily 打开行为", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	for (const randomCard of [true, false]) {
+		const root = new TestElement("div");
+		renderKnomoMemoCard(root.asHtml(), createReferenceMemo(), {
+			generation: 1, renderIndex: 0, includeActions: true, randomCard, activeMenuMemoId: null,
+			formatDisplayTime: value => value, getMarkdownPriority: () => "normal", getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }),
+			queueMemoMarkdown: () => {}, renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
+		});
+		const action = root.find("[data-memo-action='view-day']");
+		assert.equal(action !== null, randomCard);
+		if (action) { assert.equal(action.getText(), "View this day"); assert.equal(action.getAttr("role"), "menuitem"); }
+		assert.ok(root.find("[data-memo-action='open-daily']"));
+		assert.equal(root.find("[data-memo-time-open='daily']")?.getAttr("data-random-reunion-card"), randomCard ? "true" : null);
+	}
+});
+
 test("引用和复制链接使用固定简洁文案，有无自身锚点均与无障碍名称一致", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");

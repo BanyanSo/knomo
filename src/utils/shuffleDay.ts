@@ -38,16 +38,10 @@ export interface ShuffleDaySelectorOptions {
 
 export type ShuffleDayAggregate = Pick<CatalogDailyAggregate, "logicalDate" | "memoCount" | "imageCount" | "linkCount">;
 
-const SHUFFLE_DAY_BUCKETS = [
-	{ minDays: 7, maxDays: 30, weight: 10 },
-	{ minDays: 31, maxDays: 180, weight: 40 },
-	{ minDays: 181, maxDays: 365, weight: 30 },
-	{ minDays: 366, maxDays: Number.POSITIVE_INFINITY, weight: 20 },
-];
 const HISTORY_LIMIT = 100;
 const HISTORY_MAX_AGE_DAYS = 180;
 
-// 唯一选择核心：只用轻量聚合，年代概率不随该段日期数量变化。
+// 唯一选择核心：全局避让后先等概率选年，再在年内按轻量聚合选日。
 export function selectShuffleDayDate(
 	aggregates: readonly ShuffleDayAggregate[],
 	options: ShuffleDaySelectorOptions = {},
@@ -59,7 +53,7 @@ export function selectShuffleDayDate(
 	const eligible = nonEmpty.flatMap(item => {
 		const date = parseDateKey(item.logicalDate);
 		const daysAgo = date === null ? -1 : differenceInCalendarDays(today, date);
-		return daysAgo >= 7 ? [{ ...item, daysAgo }] : [];
+		return daysAgo >= 7 ? [item] : [];
 	});
 	if (eligible.length === 0) return { status: "empty-not-enough-history" };
 	const history = normalizeShuffleDayHistory(options.history ?? [], now);
@@ -76,12 +70,17 @@ export function selectShuffleDayDate(
 	}
 	if (candidates.length === 0) candidates = eligible;
 	const random = options.random ?? Math.random;
-	const bucket = weightedPick(SHUFFLE_DAY_BUCKETS.map(bucket => ({
-		item: candidates.filter(item => item.daysAgo >= bucket.minDays && item.daysAgo <= bucket.maxDays),
-		weight: bucket.weight,
-	})).filter(bucket => bucket.item.length > 0), random)!;
+	const years = new Map<string, ShuffleDayAggregate[]>();
+	for (const item of candidates) {
+		const year = item.logicalDate.slice(0, 4);
+		const dates = years.get(year) ?? [];
+		dates.push(item);
+		years.set(year, dates);
+	}
+	const dates = weightedPick([...years].sort(([left], [right]) => left.localeCompare(right))
+		.map(([, item]) => ({ item, weight: 1 })), random)!;
 	const recentEvents = new Set(history.slice(0, 30).map(entry => entry.date));
-	const selected = weightedPick(bucket.map(item => ({
+	const selected = weightedPick(dates.map(item => ({
 		item, weight: calculateShuffleDayDateWeight(item, recentEvents.has(item.logicalDate)),
 	})), random)!;
 	return { status: "ready", selectedDate: selected.logicalDate };

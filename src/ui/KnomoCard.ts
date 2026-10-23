@@ -101,7 +101,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				cls: "knomo-card-actions",
 				attr: { role: "menu" },
 			});
-			for (const action of getMemoCardActions(memo)) {
+			for (const action of getMemoCardActions(memo, options.randomCard)) {
 				renderCardAction(
 					actions,
 					memo.id,
@@ -308,6 +308,7 @@ export function getMemoActionLabel(action: MemoAction): string {
 	if (action === "edit") return t("card.edit");
 	if (action === "reference") return t("card.reference");
 	if (action === "open-daily") return t("card.openDaily");
+	if (action === "view-day") return t("card.viewDay");
 	if (action === "copy-text") return t("card.copyText");
 	if (action === "copy-link") return t("card.copyLink");
 	if (action === "mark-reviewed") return t("card.markReviewed");

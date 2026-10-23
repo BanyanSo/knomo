@@ -2,6 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("日期详情的日期、原时间精度与返回在加载、失败和空态中可见，且不提供换日", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
+	const root = new TestElement("div");
+	renderKnomoCardFlowHeaders(root.asHtml(), [{ type: "random-day", selectedDate: "2026-10-22", stats: null }]);
+	assert.ok(root.find(".knomo-shuffle-day-date")?.getText().includes("2026"));
+	assert.equal(root.find("[data-action='random-day-back']")?.getAttr("type"), "button");
+	assert.equal(root.find("[data-action='random-day-back']")?.getText(), "Back");
+	assert.equal(root.find("[data-action='refresh-random-reunion']"), null);
+	assert.equal(root.find("[data-action='refresh-shuffle-day']"), null);
+});
+
 test("页面问题有状态语义，同一说明重绘不重复播报，新问题重新播报", async () => {
 	await ensureObsidianStub(); const { renderKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
 	const root = new TestElement("div");

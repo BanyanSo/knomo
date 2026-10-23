@@ -15,6 +15,7 @@ export type CardFlowHeader =
 	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean }
 	| { type: "random-toolbar"; count: number }
 	| { type: "trash-toolbar"; count: number; busy: boolean }
+	| { type: "random-day"; selectedDate: string; stats: ShuffleDaySnapshot["stats"] }
 	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
 
 export type CardFlowPresentation =
@@ -38,6 +39,7 @@ export interface CardFlowPresentationOptions {
 	randomReunionStatus: RandomReunionStatus;
 	randomReunionError: string | null;
 	shuffleDay: ShuffleDaySnapshot;
+	randomDay?: ShuffleDaySnapshot;
 	memos: MemoRecord[];
 	matchedTotalCount: number | null;
 	regularFilterCopy: CardFlowRegularFilterCopy | null;
@@ -49,6 +51,18 @@ export interface CardFlowPresentationOptions {
 }
 
 export function getCardFlowPresentation(options: CardFlowPresentationOptions): CardFlowPresentation {
+	if (options.activeNav === "random" && options.randomDay?.selectedDate) {
+		const snapshot = options.randomDay;
+		const presentation = getShuffleDayCardFlowPresentation(snapshot, "retry-random-day");
+		if (presentation.type === "empty") {
+			if (snapshot.status === "idle" || snapshot.status === "loading") presentation.title = t("random.dayLoading");
+			if (snapshot.status === "failed") presentation.title = t("random.dayFailed");
+			presentation.loading = snapshot.status === "loading";
+		}
+		presentation.headers = [{ type: "random-day", selectedDate: snapshot.selectedDate!, stats: snapshot.stats },
+			...(presentation.headers ?? []).filter(header => header.type !== "shuffle-day")];
+		return presentation;
+	}
 	if (options.cardFlowError !== null) {
 		return {
 			type: "empty",
@@ -116,8 +130,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 	};
 }
 
-function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFlowPresentation {
-	const action = { label: t("settings.attention.retry"), action: "refresh-shuffle-day" };
+function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot, retryAction = "refresh-shuffle-day"): CardFlowPresentation {
+	const action = { label: t("settings.attention.retry"), action: retryAction };
 	const feedback: CardFlowHeader[] = [snapshot.error, snapshot.historyError].filter((text): text is string => !!text)
 		.map(text => ({ type: "summary", text, feedback: true, ...(text === snapshot.error ? { action } : {}) }));
 	const retry: CardFlowHeader = { type: "summary", text: "", action };

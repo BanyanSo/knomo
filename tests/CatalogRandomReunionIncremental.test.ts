@@ -10,6 +10,31 @@ before(() => Object.defineProperty(globalThis, "window", { configurable: true, v
 after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 for (const kind of ["memory", "indexeddb"] as const) {
+	test(`${kind}：短文本与归档 Daily 在初次构建、缓存复用和分区更新中一致入选`, async () => {
+		const f = await fixture(kind);
+		try {
+			const path = "Archive/2026-08-01.md";
+			const put = async (content: string) => {
+				const partition = await buildPartition(path, "2026-08-01", content, 1, content);
+				await f.store.replaceFilePartition(partition);
+			};
+			await put("- 09:00 好\n- 09:01 好\n- 09:02 **\n- 09:03 草稿 #draft\n- 09:04 ![[photo.png]]\n- 09:05 [[Note]]");
+			await complete(f.store, 1);
+			for (let i = 0; i < 2; i++) {
+				const items = await f.service.getRandomReunionItems(20);
+				assert.equal(items.length, 4);
+				assert.equal(items.filter(item => item.contentSnapshot === "好").length, 2, "同文独立 occurrence 不合并");
+				assert.ok(items.some(item => item.images.length > 0));
+				assert.ok(items.some(item => item.links.length > 0));
+				f.requests.length = 0;
+			}
+			await put("- 09:00 新\n- 09:01 #archived");
+			const items = await f.service.getRandomReunionItems(20);
+			assert.deepEqual(items.map(item => item.contentSnapshot), ["新"]);
+			assert.ok(f.requests.every(request => request.sourcePaths?.join() === path));
+		} finally { f.store.close(); }
+	});
+
 	test(`${kind}：新增今日文件只更新对应分区，历史候选不重新全量读取`, async () => {
 		const f = await fixture(kind);
 		try {
@@ -140,10 +165,10 @@ async function fixture(kind: "memory" | "indexeddb") {
 	};
 }
 
-async function buildPartition(sourcePath: string, logicalDate: string, label: string, count: number) {
+async function buildPartition(sourcePath: string, logicalDate: string, label: string, count: number, raw?: string) {
 	const { DiaryMemoParser, CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
 	const { buildCatalogPartition } = await import("../src/services/MemoCatalogService");
-	const content = Array.from({ length: count }, (_, index) => `- 12:34 ${label} eligible historical memo ${index}`).join("\n");
+	const content = raw ?? Array.from({ length: count }, (_, index) => `- 12:34 ${label} eligible historical memo ${index}`).join("\n");
 	const parsed = new DiaryMemoParser().parseRevision({ sourcePath, logicalDate, content, sourceRevision: `${label}-${count}` });
 	return buildCatalogPartition({ inventory: { sourcePath, logicalDate, mtime: 1, size: content.length },
 		sourceRevision: parsed.sourceRevision, observations: parsed.observations,

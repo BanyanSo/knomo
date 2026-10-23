@@ -381,7 +381,7 @@ test("随机重逢从完整 Catalog 候选池筛选而不是只抽样 24 个日�
 			`Daily/2026-07-${day}.md`,
 			`2026-07-${day}`,
 			1,
-			index === 0 ? "oldest complete-catalog candidate" : "short",
+			index === 0 ? "oldest complete-catalog candidate" : "**",
 		);
 	});
 	await seedCatalogFiles(catalog, store, observations);
@@ -815,8 +815,8 @@ test("真实 Daily 元数据的纯图片、Wiki 与 Markdown 链接进入重逢�
 	const catalog = new MemoCatalogService(store);
 	await seedCatalog(catalog, store, observations);
 	const items = await new CatalogReadService({ catalog, now: () => new Date(2026, 7, 26) }).getRandomReunionItems(10);
-	assert.equal(items.length, 3);
-	assert.deepEqual(new Set(items.map(item => item.contentSnapshot)), new Set(["![[photo.png]]", "[[a]]", "[a](https://example.com)"]));
+	assert.equal(items.length, 4);
+	assert.deepEqual(new Set(items.map(item => item.contentSnapshot)), new Set(["![[photo.png]]", "[[a]]", "[a](https://example.com)", "short"]));
 	store.close();
 });
 

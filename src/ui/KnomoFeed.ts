@@ -50,11 +50,11 @@ export function renderKnomoRandomReunionToolbar(container: HTMLElement, count: n
 export function renderKnomoShuffleDayHeader(
 	container: HTMLElement,
 	selectedDate: string,
-	stats: ShuffleDayStats,
+	stats: ShuffleDayStats | null,
 ): HTMLElement {
 	const header = container.createDiv({ cls: "knomo-shuffle-day-header" });
 	header.createDiv({ cls: "knomo-shuffle-day-date", text: formatShuffleDayDateTitle(selectedDate) });
-	const summary = formatShuffleDaySummary(stats);
+	const summary = stats === null ? "" : formatShuffleDaySummary(stats);
 	if (summary.length > 0) {
 		header.createDiv({ cls: "knomo-shuffle-day-summary", text: summary });
 	}
@@ -69,6 +69,16 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 	if (announcement) announcement.key = feedback;
 	lastFeedback.set(container, feedback);
 	return headers.map((header) => {
+		if (header.type === "random-day") {
+			const wrapper = container.createDiv();
+			const toolbar = wrapper.createDiv({ cls: "knomo-list-toolbar" });
+			toolbar.createEl("button", {
+				cls: "knomo-inline-button", text: t("random.dayBack"),
+				attr: { type: "button", "data-action": "random-day-back" },
+			});
+			renderKnomoShuffleDayHeader(wrapper, header.selectedDate, header.stats);
+			return wrapper;
+		}
 		if (header.type === "random-toolbar") {
 			return renderKnomoRandomReunionToolbar(container, header.count);
 		}

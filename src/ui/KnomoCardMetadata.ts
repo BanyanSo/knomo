@@ -39,6 +39,7 @@ export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
 	edit: "pencil",
 	reference: "quote",
 	"open-daily": "calendar-days",
+	"view-day": "calendar-search",
 	"copy-text": "copy",
 	"copy-link": "link",
 	delete: "trash-2",
@@ -81,8 +82,10 @@ export function getMemoActionClass(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-action is-danger" : "knomo-card-action";
 }
 
-export function getMemoCardActions(memo?: MemoRecord): MemoCardActionMeta[] {
-	const actions = MEMO_CARD_ACTIONS.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
+export function getMemoCardActions(memo?: MemoRecord, randomCard = false): MemoCardActionMeta[] {
+	const available: readonly MemoAction[] = randomCard && memo?.catalog
+		? [...MEMO_CARD_ACTIONS.slice(0, 3), "view-day", ...MEMO_CARD_ACTIONS.slice(3)] : MEMO_CARD_ACTIONS;
+	const actions = available.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
 		action,
 		className: getMemoActionClass(action),
 	}));
@@ -103,6 +106,7 @@ function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction)
 	const capabilities = memo?.catalog?.capabilities;
 	if (capabilities === undefined) return true;
 	if (action === "open-daily") return capabilities.markdown.openDaily;
+	if (action === "view-day") return capabilities.markdown.view;
 	if (action === "copy-text") return capabilities.markdown.copy;
 	if (action === "edit") return capabilities.markdown.edit;
 	if (action === "delete") return memo === undefined || getMemoDeleteMode(memo) !== "unavailable";

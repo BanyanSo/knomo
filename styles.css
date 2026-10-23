@@ -2464,6 +2464,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	flex: 0 0 auto;
 }
 
+.knomo-plugin .knomo-list-toolbar > .knomo-inline-button[data-action="random-day-back"] {
+	margin-inline-start: auto;
+}
+
 .knomo-plugin .knomo-shuffle-day-header {
 	display: flex;
 	flex-direction: column;

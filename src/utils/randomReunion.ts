@@ -20,9 +20,9 @@ export interface RandomReunionOptions {
 	signal?: AbortSignal;
 }
 
-const DEFAULT_MIN_CONTENT_LENGTH = 8;
+const DEFAULT_MIN_CONTENT_LENGTH = 1;
 const DEFAULT_BLACKLIST_TAGS = ["临时", "草稿", "已归档", "temp", "temporary", "draft", "archived"];
-const DEFAULT_BLACKLIST_PATH_PREFIXES = ["Template/", "Archive/"];
+const DEFAULT_BLACKLIST_PATH_PREFIXES = ["Template/"];
 const DEFAULT_DIVERSITY_LIMIT = 2;
 const MIN_WEIGHT = 0.01;
 const MAX_WEIGHT = 10;
@@ -32,7 +32,7 @@ export function filterRandomReunionCandidates(
 	options: RandomReunionOptions = {},
 ): MemoRecord[] {
 	const today = startOfDay(options.today ?? new Date());
-	const minContentLength = options.minContentLength ?? DEFAULT_MIN_CONTENT_LENGTH;
+	const minContentLength = Math.max(1, options.minContentLength ?? DEFAULT_MIN_CONTENT_LENGTH);
 	const blacklistTags = normalizeTags(options.blacklistTags ?? DEFAULT_BLACKLIST_TAGS);
 	const blacklistPathPrefixes = normalizePathPrefixes(options.blacklistPathPrefixes ?? DEFAULT_BLACKLIST_PATH_PREFIXES);
 

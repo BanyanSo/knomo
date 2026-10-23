@@ -99,6 +99,7 @@ function getCardFlowHeadersStateKey(headers: readonly CardFlowHeader[]): string 
 			return getStateKey([header.type, header.count]);
 		}
 		if (header.type === "trash-toolbar") return getStateKey([header.type, header.count, String(header.busy)]);
+		if (header.type === "random-day") return getStateKey([header.type, header.selectedDate, JSON.stringify(header.stats)]);
 		return getStateKey([
 			header.type,
 			header.selectedDate,

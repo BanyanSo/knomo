@@ -194,6 +194,7 @@ import { RecordStatsPreparationController } from "./RecordStatsPreparationContro
 import { RecordStatsViewStateController } from "./RecordStatsViewStateController";
 import { SearchQueryDebounce } from "./SearchQueryDebounce";
 import { ShuffleDayController } from "./ShuffleDayController";
+import { getMemoLocalDateKey } from "../utils/shuffleDay";
 import { TrashMemoController } from "./TrashMemoController";
 import type { ClearTrashAction } from "./clearTrashAction";
 import type { TrashMemoRenderTarget } from "./TrashMemoController";
@@ -308,6 +309,12 @@ interface OpenTimeBuoyPickerState {
 }
 
 let nextA11yId = 0;
+
+interface HistoryBrowsePosition {
+	scrollTop: number;
+	visibleCount: number;
+	anchor?: { renderKey: string; offset: number };
+}
 
 export class KnomoView extends ItemView {
 	private readonly a11yIdPrefix = `knomo-view-${nextA11yId += 1}`;
@@ -462,6 +469,9 @@ export class KnomoView extends ItemView {
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly randomReunionController: RandomReunionController;
 	private readonly shuffleDayController: ShuffleDayController;
+	private readonly randomDayController: ShuffleDayController;
+	private randomDayReturnContext: { position: HistoryBrowsePosition; memoId: string } | null = null;
+	private historyBrowsePositions: Partial<Record<"random" | "shuffleDay", HistoryBrowsePosition>> = {};
 	private readonly trashMemoController: TrashMemoController;
 	private readonly timeBuoyViewController: TimeBuoyViewController;
 	private catalogTodayTimeBuoys: TodayTimeBuoySnapshot | null = null;
@@ -558,10 +568,15 @@ export class KnomoView extends ItemView {
 		return this.viewStateController.activeNav;
 	}
 
+	private get randomDayOpen(): boolean {
+		return this.activeNav === "random" && this.randomDayController?.getSnapshot().selectedDate != null;
+	}
+
 	private set activeNav(nav: SidebarNav) {
 		if (nav !== this.viewStateController.activeNav) this.cancelCatalogDesktopQuery();
 		this.viewStateController.activeNav = nav;
 		if (nav !== "random") this.randomReunionController?.cancelPending();
+		if (nav !== "random") this.clearRandomDay();
 		if (nav !== "shuffleDay") this.shuffleDayController?.cancelPending();
 	}
 
@@ -819,7 +834,7 @@ export class KnomoView extends ItemView {
 				if (memo === null || !isCatalogMemoView(memo)) throw new Error("Random reunion observation is unavailable.");
 				await this.memoCommandService.recordReview(await this.resolveCatalogMemo(memo));
 			},
-			isRandomActive: () => !this.trashViewClosed && this.activeNav === "random",
+			isRandomActive: () => !this.trashViewClosed && this.activeNav === "random" && !this.randomDayOpen,
 			showNotice: (message) => new Notice(message),
 			requestRender: () => this.renderUiState(),
 		});
@@ -832,6 +847,14 @@ export class KnomoView extends ItemView {
 			acceptSelection: (date) => this.shuffleDayService.acceptSelection(date),
 			isShuffleDayActive: () => !this.trashViewClosed && this.activeNav === "shuffleDay",
 			requestRender: () => this.renderUiState(),
+		});
+		this.randomDayController = new ShuffleDayController({
+			loadSelectedDate: async (date, signal) => {
+				const memos = await this.catalogReadService.listMemoViewsForDate(date, { signal });
+				return this.confirmedDailyMemos?.merge(memos, { logicalDates: [date] }) ?? memos;
+			},
+			isShuffleDayActive: () => !this.trashViewClosed && this.randomDayOpen,
+			requestRender: () => this.renderRandomDay(),
 		});
 		this.mobileComposerController = new MobileComposerController({
 			getWindow: () => this.containerEl.win,
@@ -1011,8 +1034,10 @@ export class KnomoView extends ItemView {
 				this.syncRootState();
 			},
 			toggleCardMenu: (memoId, keyboard, sourceEl) => this.toggleCardMenu(memoId, keyboard, sourceEl),
-			refreshRandomReunion: () => this.randomReunionController.refresh(),
-			refreshShuffleDay: () => this.shuffleDayController.refresh(),
+			refreshRandomReunion: () => this.refreshHistorySelection("random"),
+			refreshShuffleDay: () => this.refreshHistorySelection("shuffleDay"),
+			returnFromRandomDay: () => this.returnFromRandomDay(),
+			retryRandomDay: async () => { await this.randomDayController.reloadSelectedDate(); },
 			renderNextCardBatch: (generation) => this.renderNextCardBatch(generation),
 			loadOlderMemoPeriods: () => {
 				void this.loadOlderMemoPeriods();
@@ -1330,6 +1355,9 @@ export class KnomoView extends ItemView {
 		this.trashMemoController.dispose();
 		this.randomReunionController.dispose();
 		this.shuffleDayController.dispose();
+		this.randomDayController.dispose();
+		this.randomDayReturnContext = null;
+		this.historyBrowsePositions = {};
 		if (this.trashCountRefreshTimer !== null) {
 			this.containerEl.win.clearTimeout(this.trashCountRefreshTimer);
 			this.trashCountRefreshTimer = null;
@@ -1403,6 +1431,7 @@ export class KnomoView extends ItemView {
 				if (pendingIds.size) collect(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? []);
 				if (pendingIds.size) collect(this.randomReunionController.getSnapshot().memos ?? []);
 				if (pendingIds.size) collect(this.shuffleDayController.getSnapshot().memos);
+				if (pendingIds.size) collect(this.randomDayController?.getSnapshot().memos ?? []);
 				if (pendingIds.size) collect(this.timeBuoyViewController.getMemos());
 				if (pendingIds.size) collect(this.trashMemoController.getSnapshot().trashMemos ?? []);
 			}
@@ -1514,6 +1543,7 @@ export class KnomoView extends ItemView {
 			...this.memos,
 			...(this.randomReunionController.getSnapshot().memos ?? []),
 			...this.shuffleDayController.getSnapshot().memos,
+			...(this.randomDayController?.getSnapshot().memos ?? []),
 			...this.timeBuoyViewController.getMemos(),
 			...(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? []),
 			...(this.mobileSearchController?.getDisplayedMemos() ?? []),
@@ -1528,7 +1558,8 @@ export class KnomoView extends ItemView {
 		const pending = this.confirmedDailyMemos?.getMemos().filter(memo => memo.dailyRef.path === change.sourcePath) ?? [];
 		const ids = new Set(cached.map(memo => memo.id));
 		const replacements = change.replacements.filter(item => ids.has(observationHandleKey(item.before)));
-		const inserted = change.inserted !== null && this.shuffleDayController.getSnapshot().selectedDate === change.logicalDate
+		const inserted = change.inserted !== null && (this.shuffleDayController.getSnapshot().selectedDate === change.logicalDate
+			|| this.randomDayController?.getSnapshot().selectedDate === change.logicalDate)
 			? change.inserted : null;
 		if (replacements.length === 0 && inserted === null && pending.length === 0) return;
 		const changes = new Map<string, MemoRecord | null>(replacements.map(item => [observationHandleKey(item.before), null]));
@@ -1642,6 +1673,7 @@ export class KnomoView extends ItemView {
 		}
 		this.randomReunionController.applyMemoChanges(changes, false);
 		this.shuffleDayController.applyMemoChanges(changes, inserted);
+		this.randomDayController?.applyMemoChanges(changes, inserted);
 		this.timeBuoyViewController.applyMemoChanges(changes, confirmed ? inserted : []);
 		this.mobileSearchController?.applyMemoChanges(changes, confirmed ? inserted : [], created);
 		const current = this.captureMemoChangePresentation();
@@ -1676,7 +1708,7 @@ export class KnomoView extends ItemView {
 			await this.presentationChangeQueue;
 			if (!this.trashViewClosed && generation === (this.confirmedPresentationGeneration ?? 0)) this.randomReunionController.reconcileMemos(current, snapshot);
 		} catch (error) {
-			if (!(error instanceof CatalogDiscoveryInvalidatedError) && !this.trashViewClosed
+			if ((this.randomDayOpen || !(error instanceof CatalogDiscoveryInvalidatedError)) && !this.trashViewClosed
 				&& generation === (this.confirmedPresentationGeneration ?? 0)) this.randomReunionController.reportRefreshFailure(snapshot, error);
 		}
 	}
@@ -1709,7 +1741,9 @@ export class KnomoView extends ItemView {
 		if (this.settingsService.getSettings().timeBuoyEnabled && !this.shouldShowTodayTimeBuoys()) {
 			await this.timeBuoyViewController.loadTodayOnly();
 		}
-		if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
+		if (this.randomDayOpen) {
+			await this.randomDayController.reloadSelectedDate();
+		} else if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
 			await this.randomReunionController.refresh();
 		} else if (this.activeNav === "shuffleDay") {
 			if (this.shuffleDayController.getSnapshot().status === "idle") await this.shuffleDayController.refresh();
@@ -1719,6 +1753,7 @@ export class KnomoView extends ItemView {
 
 	private handleRestoredTrashMemo(_deletedMemo: MemoRecord, restoredMemo: MemoRecord): void {
 		this.shuffleDayController.applyMemoUpdate(restoredMemo);
+		this.randomDayController?.applyMemoUpdate(restoredMemo);
 		if (isCatalogMemoView(restoredMemo)) void this.reloadMemos(false, true).catch(error => this.reportViewRefreshFailure(error, "restore-refresh"));
 	}
 
@@ -2222,6 +2257,7 @@ export class KnomoView extends ItemView {
 		const session = this.viewStateController.search;
 		this.clearSearchDebounce();
 		if (!session.canRewrite) { this.syncSearchControls(); return; }
+		this.rememberHistoryBrowsePosition("all");
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		session.submit();
 		this.applyViewStateTransitionEffects(this.viewStateController.setSearchQuery(session.applied.input));
@@ -3852,6 +3888,7 @@ export class KnomoView extends ItemView {
 			randomReunionStatus: randomSnapshot.status,
 			randomReunionError: randomSnapshot.error,
 			shuffleDay: shuffleDaySnapshot,
+			randomDay: this.randomDayOpen ? this.randomDayController.getSnapshot() : undefined,
 			memos,
 			matchedTotalCount,
 			regularFilterCopy: shouldLoadListMemos
@@ -4174,7 +4211,7 @@ export class KnomoView extends ItemView {
 			generation,
 			renderIndex,
 			true,
-			this.activeNav === "random",
+			this.activeNav === "random" && !this.randomDayOpen,
 			"card-flow",
 			reusedBodyEl,
 			reusedImagesEl,
@@ -4352,7 +4389,7 @@ export class KnomoView extends ItemView {
 			generation,
 			renderIndex,
 			true,
-			this.activeNav === "random",
+			this.activeNav === "random" && !this.randomDayOpen,
 			"card-flow",
 		);
 		seedPlaceholder?.(memo, card);
@@ -4656,6 +4693,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private applySidebarTagFilter(tag: string, tagKey: string): void {
+		this.rememberHistoryBrowsePosition("all");
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearSearchDebounce();
 		if (this.activeNav !== "things") this.viewStateController.clearDesktopSearchState();
@@ -4681,6 +4719,85 @@ export class KnomoView extends ItemView {
 		if (memo !== null) {
 			await this.trashMemoController.handleTrashAction(action, memo);
 		}
+	}
+
+	private captureHistoryBrowsePosition(): HistoryBrowsePosition {
+		const flow = this.cardFlowEl;
+		if (!flow) return { scrollTop: 0, visibleCount: 0 };
+		const cards = this.getDirectCardElements(flow);
+		const top = flow.getBoundingClientRect().top;
+		const card = cards.find(item => item.getBoundingClientRect().bottom > top);
+		const renderKey = card?.getAttr("data-memo-render-key");
+		return { scrollTop: this.getCardFlowScrollTop() ?? 0, visibleCount: cards.length,
+			anchor: card && renderKey ? { renderKey, offset: card.getBoundingClientRect().top - top } : undefined };
+	}
+
+	private restoreHistoryBrowsePosition(position: HistoryBrowsePosition): void {
+		if (!this.cardFlowEl) return;
+		const anchor = position.anchor && this.getFilteredMemos().some(memo => getMemoRenderKey(memo) === position.anchor!.renderKey)
+			? position.anchor : undefined;
+		this.cardFlowCoordinator.setPendingScrollRestore({ ...position, anchor,
+			scrollTop: position.anchor && !anchor ? 0 : position.scrollTop, generation: this.renderGeneration });
+		this.renderCardFlow();
+	}
+
+	private rememberHistoryBrowsePosition(nextNav: SidebarNav): void {
+		if (nextNav === this.activeNav || this.randomDayOpen || !this.cardFlowEl) return;
+		if (this.activeNav === "random" || this.activeNav === "shuffleDay") {
+			(this.historyBrowsePositions ??= {})[this.activeNav] = this.captureHistoryBrowsePosition();
+		}
+	}
+
+	private clearRandomDay(): void {
+		if (this.randomDayReturnContext) (this.historyBrowsePositions ??= {}).random = this.randomDayReturnContext.position;
+		this.randomDayReturnContext = null;
+		this.randomDayController?.clearSelection();
+	}
+
+	private async openRandomDay(memo: MemoRecord): Promise<void> {
+		if (this.activeNav !== "random" || !memo.catalog || this.trashViewClosed) return;
+		const date = getMemoLocalDateKey(memo);
+		if (date === null) return;
+		if (!this.randomDayOpen) this.randomDayReturnContext = { position: this.captureHistoryBrowsePosition(), memoId: memo.id };
+		this.randomReunionController.cancelPending();
+		const loading = this.randomDayController.openDate(date);
+		this.cardFlowEl?.querySelector<HTMLElement>("[data-action='random-day-back']")?.focus({ preventScroll: true });
+		await loading;
+	}
+
+	private renderRandomDay(): void {
+		const focused = this.cardFlowEl?.querySelector<HTMLElement>(":focus")?.getAttr("data-action");
+		this.renderUiState({ cardFlowChangeIntent: this.randomDayController.getSnapshot().stats === null
+			? "view-scope-change" : "content-change" });
+		if (focused === "random-day-back" || focused === "retry-random-day") {
+			const target = this.cardFlowEl?.querySelector<HTMLElement>(`[data-action='${focused}']`)
+				?? this.cardFlowEl?.querySelector<HTMLElement>("[data-action='random-day-back']");
+			target?.focus({ preventScroll: true });
+		}
+	}
+
+	private async returnFromRandomDay(): Promise<void> {
+		if (!this.randomDayOpen) return;
+		const context = this.randomDayReturnContext;
+		this.randomDayController.cancelPending();
+		await this.refreshRandomReunionBatch();
+		if (this.trashViewClosed || !this.randomDayOpen || this.randomDayReturnContext !== context) return;
+		this.clearRandomDay();
+		this.renderUiState({ cardFlowChangeIntent: "view-scope-change" });
+		if (context) this.restoreHistoryBrowsePosition(context.position);
+		const card = this.cardFlowEl ? this.getDirectCardElements(this.cardFlowEl).find(item => item.getAttr("data-memo-id") === context?.memoId) : null;
+		const target = card?.querySelector<HTMLElement>(".knomo-card-menu") ?? this.cardFlowEl?.querySelector<HTMLElement>("[data-action='refresh-random-reunion']");
+		target?.focus({ preventScroll: true });
+	}
+
+	private async refreshHistorySelection(nav: "random" | "shuffleDay"): Promise<void> {
+		if (this.activeNav !== nav || this.randomDayOpen) return;
+		const controller = nav === "random" ? this.randomReunionController : this.shuffleDayController;
+		const before = controller.getSnapshot().memos;
+		await controller.refresh();
+		if (this.activeNav !== nav || this.randomDayOpen || controller.getSnapshot().memos === before) return;
+		if (this.historyBrowsePositions) delete this.historyBrowsePositions[nav];
+		this.renderUiState({ cardFlowChangeIntent: "view-scope-change" });
 	}
 
 	private async runMemoActionById(
@@ -4870,7 +4987,10 @@ export class KnomoView extends ItemView {
 		let handled = true;
 		if (this.timeBuoyPickerState !== null) this.closeTimeBuoyPicker(true);
 		else if (this.composerOpen && this.mobileComposerController.isKeyboardOpen()) this.inputEl?.blur();
-		else handled = this.userActionController.closeMobileSurface();
+		else {
+			handled = this.userActionController.closeMobileSurface();
+			if (!handled && this.randomDayOpen) { handled = true; void this.returnFromRandomDay(); }
+		}
 		if (handled) { event.preventDefault(); event.stopImmediatePropagation(); }
 	}
 
@@ -4890,6 +5010,10 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		await this.userActionController.handleRootKeydown(event);
+		if (!event.defaultPrevented && event.key === "Escape" && this.randomDayOpen) {
+			event.preventDefault();
+			await this.returnFromRandomDay();
+		}
 	}
 
 	private handleTimeBuoyTabKeydown(event: KeyboardEvent): boolean {
@@ -4937,6 +5061,10 @@ export class KnomoView extends ItemView {
 
 	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
 		this.closeCardMenu();
+		if (action === "view-day") {
+			await this.openRandomDay(memo);
+			return;
+		}
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		let referenceIsCurrent: (() => boolean) | null = null;
 		let releaseReferenceRequest: (() => void) | null = null;
@@ -4977,7 +5105,7 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "open-daily") {
-				if (this.activeNav === "random") {
+				if (this.activeNav === "random" && !this.randomDayOpen) {
 					await this.randomReunionController.openMemo(memo.id);
 					return;
 				}
@@ -5019,6 +5147,7 @@ export class KnomoView extends ItemView {
 				try {
 					this.randomReunionController.removeMemo(memo.id);
 					this.shuffleDayController.removeMemo(memo.id);
+					this.randomDayController?.removeMemo(memo.id);
 					await this.reloadMemos(false);
 				} catch (error) { this.reportViewRefreshFailure(error, "delete-refresh"); }
 				return;
@@ -5215,6 +5344,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private setScope(scope: ScopeFilter): void {
+		this.rememberHistoryBrowsePosition("all");
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		const result = this.viewStateController.setScope(scope);
@@ -5327,6 +5457,7 @@ export class KnomoView extends ItemView {
 
 	private applyViewStateTransitionEffects(effects: KnomoViewStateTransitionEffects): void {
 		this.cancelPendingQuickCommand();
+		if (this.activeNav !== "random") this.clearRandomDay();
 		if (this.activeNav !== "random") this.randomReunionController.cancelPending();
 		if (this.activeNav !== "shuffleDay") this.shuffleDayController.cancelPending();
 		if (effects.closeScopeMenu === true) {
@@ -5338,6 +5469,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private setSidebarNav(nav: SidebarNav): void {
+		this.rememberHistoryBrowsePosition(nav);
 		if (nav !== this.activeNav) {
 			const things = this.activeNav === "things";
 			if (this.mobileSearchController?.isOpen) {
@@ -5369,6 +5501,10 @@ export class KnomoView extends ItemView {
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
+		if (nav === "random" || nav === "shuffleDay") {
+			const position = this.historyBrowsePositions?.[nav];
+			if (position) this.restoreHistoryBrowsePosition(position);
+		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
 		}
@@ -5427,6 +5563,11 @@ export class KnomoView extends ItemView {
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
+		const restoredNav = this.viewStateController.activeNav;
+		if (restoredNav === "random" || restoredNav === "shuffleDay") {
+			const position = this.historyBrowsePositions?.[restoredNav];
+			if (position) this.restoreHistoryBrowsePosition(position);
+		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
 		}
@@ -5465,6 +5606,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private resetToAllNotes(): void {
+		this.rememberHistoryBrowsePosition("all");
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		const result = this.viewStateController.resetToAllNotes();
@@ -6697,7 +6839,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private getPageFeedbackContext(): string {
-		return JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter, this.viewStateController?.search.result?.key]);
+		return JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter, this.viewStateController?.search.result?.key,
+			this.randomDayOpen ? this.randomDayController.getSnapshot().selectedDate : null]);
 	}
 
 	private syncPageFeedback(): void {
@@ -6719,7 +6862,7 @@ export class KnomoView extends ItemView {
 		this.pageFeedbackContext = this.getPageFeedbackContext();
 		this.pageFeedbackRun = (this.pageFeedbackRun ?? 0) + 1;
 		const visible = this.activeNav === "trash" ? this.trashMemoController.getSnapshot().trashMemos ?? []
-			: this.activeNav === "random" ? this.randomReunionController.getSnapshot().memos ?? []
+			: this.activeNav === "random" ? this.getFilteredMemos()
 			: this.activeNav === "shuffleDay" ? this.shuffleDayController.getSnapshot().memos
 				: this.activeNav === "time-buoy" ? (() => { const snapshot = this.timeBuoyViewController.getSnapshot(); return snapshot[snapshot.activeTab]; })()
 					: this.getFilteredMemos();
@@ -6781,7 +6924,7 @@ export class KnomoView extends ItemView {
 			return [];
 		}
 		if (this.activeNav === "random") {
-			return this.randomReunionController.getSnapshot().memos ?? [];
+			return this.randomDayOpen ? this.randomDayController.getSnapshot().memos : this.randomReunionController.getSnapshot().memos ?? [];
 		}
 		if (this.activeNav === "shuffleDay") {
 			return this.shuffleDayController.getSnapshot().memos;
@@ -6903,8 +7046,8 @@ export class KnomoView extends ItemView {
 			registerGlassSurface: surface => this.registerMobileGlassSurface(surface),
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
-				for (const { action } of getMemoCardActions(memo)) {
-					const focus = action === "edit" || action === "reference" || action === "open-daily" ? "action" : "view";
+				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen)) {
+					const focus = action === "edit" || action === "reference" || action === "open-daily" || action === "view-day" ? "action" : "view";
 					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
 						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
 				}
@@ -7357,6 +7500,7 @@ export class KnomoView extends ItemView {
 
 	private findMemoById(memoId: string, surface?: CardRenderSurface): MemoRecord | null {
 		if (surface === "mobile-search") return this.mobileSearchController.getDisplayedMemos().find(memo => memo.id === memoId) ?? null;
+		if (this.randomDayOpen) return this.randomDayController.getSnapshot().memos.find(memo => memo.id === memoId) ?? null;
 		return this.memos.find((memo) => memo.id === memoId)
 			?? this.catalogTodayTimeBuoys?.today.find((item) => item.memo.id === memoId)?.memo
 			?? this.randomReunionController.getSnapshot().memos?.find((memo) => memo.id === memoId)

@@ -9,6 +9,27 @@ import type { MarkdownCatalogCommitInput } from "../src/services/MarkdownMutatio
 import type { DailyMemoPresentationChange, ConfirmedDailyMemoPresentation } from "../src/services/DailyMemoPresentationChange";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("日期详情接收真实 Daily 编辑、新建和删除广播，原重逢批次不补抽", async () => {
+	const h = await fixture();
+	const { ShuffleDayController } = await import("../src/ui/ShuffleDayController");
+	const detail = new ShuffleDayController({ loadSelectedDate: () => h.loadMemos(),
+		isShuffleDayActive: () => true, requestRender: () => {} });
+	Object.assign(h.view, { randomDayController: detail });
+	h.view.viewStateController.activeNav = "random";
+	await detail.openDate(DATE);
+	await h.edit(h.memos[0]!, "changed in day detail");
+	assert.deepEqual(detail.getSnapshot().memos.map(memo => memo.contentSnapshot), ["changed in day detail", "same", "same"]);
+	await h.command.create("new day memo");
+	assert.equal(detail.getSnapshot().stats?.memoCount, 4);
+	assert.equal(h.random.getSnapshot().memos!.length, 3);
+	const selected = detail.getSnapshot().memos[1]!;
+	await h.command.delete(selected.catalog!);
+	assert.equal(detail.getSnapshot().stats?.memoCount, 3);
+	assert.equal(detail.getSnapshot().selectedDate, DATE);
+	assert.deepEqual(new Set(detail.getSnapshot().memos.map(memo => memo.id)), new Set((await h.loadMemos()).map(memo => memo.id)));
+	assert.equal(h.randomLoads(), 1);
+});
+
 test("真实 Daily 编辑改变 key 后原位更新重逢卡片，保留本组与原编辑句柄", async () => {
 	const h = await fixture();
 	const original = h.memos[0]!;

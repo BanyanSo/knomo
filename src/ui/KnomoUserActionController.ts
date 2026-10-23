@@ -58,6 +58,8 @@ interface KnomoUserActionControllerOptions {
 	toggleCardMenu: (memoId: string | null, keyboard: boolean, sourceEl?: HTMLElement | null) => void;
 	refreshRandomReunion: () => Promise<void>;
 	refreshShuffleDay?: () => Promise<void>;
+	returnFromRandomDay?: () => Promise<void>;
+	retryRandomDay?: () => Promise<void>;
 	renderNextCardBatch: (generation: number) => void;
 	loadOlderMemoPeriods: () => void;
 	loadMoreMobileSearchResults: () => void;
@@ -283,6 +285,12 @@ export class KnomoUserActionController {
 				return;
 			case "refresh-shuffle-day":
 				await this.options.refreshShuffleDay?.();
+				return;
+			case "random-day-back":
+				await this.options.returnFromRandomDay?.();
+				return;
+			case "retry-random-day":
+				await this.options.retryRandomDay?.();
 				return;
 			case "clear-trash":
 				await this.options.clearTrash();

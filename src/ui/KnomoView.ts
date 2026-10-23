@@ -4761,7 +4761,9 @@ export class KnomoView extends ItemView {
 		if (!this.randomDayOpen) this.randomDayReturnContext = { position: this.captureHistoryBrowsePosition(), memoId: memo.id };
 		this.randomReunionController.cancelPending();
 		const loading = this.randomDayController.openDate(date);
-		this.cardFlowEl?.querySelector<HTMLElement>("[data-action='random-day-back']")?.focus({ preventScroll: true });
+		// 移动端菜单退场后交还页面焦点，避免按钮持有触摸焦点及窗口失焦。
+		if (this.currentLayout === "mobile") this.recoverMobileViewFocus();
+		else this.cardFlowEl?.querySelector<HTMLElement>("[data-action='random-day-back']")?.focus({ preventScroll: true });
 		await loading;
 	}
 
@@ -7020,6 +7022,7 @@ export class KnomoView extends ItemView {
 				: target.closest<HTMLElement>(".knomo-mobile-create-fab, .knomo-mobile-navbar-sidebar-action, .sidebar-toggle-button");
 			if (!button && target.closest(".mobile-navbar")) button = target.closest<HTMLElement>(".clickable-icon, button, .mobile-navbar-action");
 			if (!button && this.rootEl?.contains(target)) button = target.closest<HTMLElement>("button[data-action='open-composer'], button[data-action='toggle-sidebar'], button[data-action='toggle-compact-search']");
+			if (!button && this.rootEl?.contains(target)) button = target.closest<HTMLElement>("button[data-action='random-day-back'], button[data-action='refresh-random-reunion'], button[data-action='retry-random-day']");
 			return button?.closest("[inert], [hidden], [aria-hidden='true'], :disabled, [aria-disabled='true']") ? null : button;
 		}));
 		this.getRenderScope().register(registerMobileMenuTriggerTap(this.containerEl.doc, target => {
@@ -7051,7 +7054,7 @@ export class KnomoView extends ItemView {
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen)) {
-					const focus = action === "edit" || action === "reference" || action === "open-daily" || action === "view-day" ? "action" : "view";
+					const focus = action === "edit" || action === "reference" || action === "open-daily" ? "action" : "view";
 					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
 						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
 				}

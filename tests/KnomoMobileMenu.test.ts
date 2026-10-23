@@ -727,7 +727,10 @@ test("真实视图接线覆盖新建、搜索、Knomo 侧栏和宿主导航，�
 		const tabs = navbar.createDiv({ cls: "mobile-navbar-action mobile-navbar-action-tabs" });
 		const menu = navbar.createDiv({ cls: "mobile-navbar-action mobile-navbar-action-menu" });
 		const icon = menu.createSpan({ cls: "clickable-icon" });
-		for (const button of [fab, sidebar, nativeSidebar, search, quickSwitcher, tabs, icon]) {
+		const historyButtons = ["random-day-back", "refresh-random-reunion", "retry-random-day"].map(action =>
+			h.f.root.createEl("button", { attr: { "data-action": action } }));
+		Object.assign(h.view, { randomDayController: { reloadSelectedDate: async () => true, getSnapshot: () => ({ selectedDate: null }) } });
+		for (const button of [fab, sidebar, nativeSidebar, search, quickSwitcher, tabs, icon, ...historyButtons]) {
 			let calls = 0; button.addEventListener("click", () => calls++);
 			focused = false; assert.equal(tap(h, button).defaultPrevented, false);
 			focused = true;

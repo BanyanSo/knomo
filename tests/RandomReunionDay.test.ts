@@ -175,7 +175,7 @@ test("日期详情返回后移动端恢复页面焦点，桌面端恢复原卡�
 			});
 			await h.random.refresh();
 			await h.view.openRandomDay(h.memo);
-			assert.equal(doc.activeElement?.getAttribute("data-action"), "random-day-back");
+			assert.equal(doc.activeElement, layout === "mobile" ? root : flow.querySelector("button"), "移动端进入日期详情恢复页面焦点，不聚焦返回按钮");
 			await h.view.returnFromRandomDay();
 			const menu = flow.querySelector(".knomo-card-menu")!;
 			assert.equal(doc.activeElement, layout === "mobile" ? root : menu, layout);
@@ -193,6 +193,8 @@ test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜�
 	const h = await harness();
 	for (const surface of ["card-flow", "mobile-search"]) {
 		const titles: string[] = [];
+		const actions = new Map<string, () => void>();
+		const focusTargets: unknown[] = [];
 		const trigger = { isConnected: true };
 		const card = { getAttr: () => h.memo.id, find: () => trigger };
 		Object.assign(h.view, {
@@ -201,16 +203,21 @@ test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜�
 			syncRootState: () => {}, syncCardMenuState: () => {},
 			mobileMenuController: { close: () => {}, open: (options: { build: (menu: unknown, select: () => void, title: (text: string) => string) => void }) => {
 				const menu = { addSeparator: () => {}, addItem: (build: (item: unknown) => void) => {
-					const item = { setTitle: (title: string) => { titles.push(title); return item; }, setIcon: () => item,
-						setWarning: () => item, onClick: () => item, setIsLabel: () => item };
+					let title = "";
+					const item = { setTitle: (value: string) => { title = value; titles.push(value); return item; }, setIcon: () => item,
+						setWarning: () => item, onClick: (callback: () => void) => { actions.set(title, callback); return item; }, setIsLabel: () => item };
 					build(item);
 				} };
-				options.build(menu, () => {}, text => text);
+				options.build(menu, (...args: unknown[]) => { focusTargets.push(args[1]); }, text => text);
 			} },
 		});
 		h.view.toggleMobileCardMenu(h.memo.id, {});
 		assert.equal(titles.includes("View this day"), surface === "card-flow");
 		assert.ok(titles.includes("Open daily note"));
+		if (surface === "card-flow") {
+			actions.get("View this day")!();
+			assert.deepEqual(focusTargets, ["view"], "日期详情须在原生菜单隐藏后恢复页面焦点");
+		}
 	}
 });
 

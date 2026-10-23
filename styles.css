@@ -2513,10 +2513,16 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	cursor: pointer;
 }
 
-.knomo-plugin .knomo-inline-button:hover,
 .knomo-plugin .knomo-inline-button:focus-visible {
 	color: var(--text-normal);
 	background: var(--knomo-row-hover);
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.knomo-plugin .knomo-inline-button:hover {
+		color: var(--text-normal);
+		background: var(--knomo-row-hover);
+	}
 }
 
 .knomo-plugin .knomo-inline-button.is-danger {

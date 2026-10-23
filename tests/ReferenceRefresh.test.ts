@@ -4,6 +4,27 @@ import { JSDOM } from "jsdom";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("metadata 刷新按已加载 Memo 数量线性查找，两个 surface 保持独立", async () => {
+	const reads: number[] = [];
+	for (const size of [10, 100]) {
+		const h = await referenceHarness(Array.from({ length: size }, (_, index) => `plain ${index}`), 1);
+		try {
+			await h.warm();
+			let idReads = 0;
+			for (const memo of h.memos) {
+				const id = memo.id;
+				Object.defineProperty(memo, "id", { get: () => { idReads++; return id; } });
+			}
+			h.emit("metadata:changed", "Notes/Unrelated.md");
+			await h.flush();
+			reads.push(idReads);
+			assert.equal(h.calls.length, 0);
+		} finally { h.close(); }
+	}
+	console.log("Reference memo lookup reads", JSON.stringify({ sizes: [10, 100], reads }));
+	assert.ok(reads[1] <= reads[0] * 12, "十倍卡片不应产生近百倍的 Memo 查找");
+});
+
 test("metadata 工作量测量经过生产事件、View 和 Markdown 渲染器", async () => {
 	const measured: unknown[] = [];
 	const counts: number[][] = [];

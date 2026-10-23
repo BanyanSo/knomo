@@ -252,47 +252,6 @@ test("Monthly folder settings use the final migration entry", async () => {
 	assert.equal(service.getSettings().monthlyMemoFolder, "Archive/Knomo");
 });
 
-test("Monthly filename migration derives periods from projection files and creates no backup", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const plugin = await createPlugin({
-		"Memos/Memos-2026-05.md": "# projection",
-		"Memos/notes.md": "# ordinary note",
-		"Memos/_knomo-system/indexes/memo-index-2026-05.json": "legacy index",
-	}, { settings: createSettings() });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-	const rebuilt: string[][] = [];
-
-	const result = await service.migrateMonthlyMemoFileFormat(
-		"Archive-YYYY-MM.md",
-		async (periods) => { rebuilt.push([...periods]); },
-	);
-
-	assert.equal(result.status, "migrated");
-	assert.deepEqual(result.plan.periods, ["2026-05"]);
-	assert.deepEqual(rebuilt, [["2026-05"]]);
-	assert.equal(service.getSettings().monthlyMemoFileFormat, "Archive-YYYY-MM.md");
-	assert.equal(plugin.vault.exists("Memos/Memos-2026-05.md"), true);
-	assert.equal(plugin.vault.exists("Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
-});
-
-test("restores staged Monthly settings when projection rebuild fails", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const plugin = await createPlugin({
-		"Memos/Memos-2026-05.md": "# projection",
-	}, { settings: createSettings() });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await assert.rejects(() => service.migrateMonthlyMemoFileFormat(
-		"Archive-YYYY-MM.md",
-		async () => { throw new Error("projection failed"); },
-	), /projection failed/u);
-
-	assert.equal(service.getSettings().monthlyMemoFileFormat, "Memos-YYYY-MM.md");
-	assert.equal(plugin.saveCalls, 0);
-});
-
 test("keeps runtime settings unchanged when persistence fails", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const plugin = await createPlugin({}, { settings: createSettings() }, true);

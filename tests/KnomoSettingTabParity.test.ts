@@ -58,8 +58,8 @@ test("legacy attention exposes retry actions and scoped cleanup details", () => 
 
 	assert.doesNotMatch(legacySource, /memoId|item\.code|item\.detail/u);
 	assert.match(legacySource, /if \(report\.cleanupCandidate\)/u);
-	assert.match(legacySource, /run\(\)/u);
-	assert.match(legacySource, /legacyTrashMigrationService\.run\(\)/u);
+	assert.doesNotMatch(legacySource, /legacyTrashMigrationService\.run\(\)/u);
+	assert.match(legacySource, /legacyTrashMigrationService\.run\("manual"\)/u);
 	assert.doesNotMatch(legacySource, /explicit/u);
 });
 

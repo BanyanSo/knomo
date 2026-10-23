@@ -363,6 +363,62 @@ test("日记关闭时首查等待中的重绘保留启用指引", async () => {
 	} finally { h.close(); }
 });
 
+test("全历史补查不可用时保留已提交列表，成功重试后才接纳新结果", async () => {
+	for (const mobile of [false, true]) {
+		const h = await createLoadingHarness(mobile);
+		try {
+			h.view.settingsService.getSettings = () => ({ recentTimeFlowEnabled: false, timeBuoyEnabled: false });
+			h.view.loadCatalogMemos = async () => readyLoad([memo("committed")]);
+			await h.loadInitial();
+			delete h.view.loadCatalogMemos;
+			const previous = h.view.memos, cursor = h.view.catalogCursor, revision = h.view.catalogRevision;
+			let queries = 0, unavailable = true;
+			const load = readyLoad([]);
+			h.view.queryCatalogFeature = async () => ({ ...load, items: [], invalidated: false,
+				readState: ++queries % 2 === 0 && unavailable ? "storage_unavailable" : "ready",
+			});
+			assert.equal(await h.view.reloadMemos(false), false);
+			assert.equal(queries, 2);
+			assert.strictEqual(h.view.memos, previous);
+			assert.strictEqual(h.view.catalogCursor, cursor);
+			assert.equal(h.view.catalogRevision, revision);
+			assert.equal(h.view.viewStateController.search.requestStatus, "failed");
+			unavailable = false;
+			assert.equal(await h.view.reloadMemos(false), true);
+			assert.deepEqual(h.view.memos, []);
+		} finally { h.close(); }
+	}
+});
+
+test("分页不可用不消费 cursor 或替换已提交版本，同一 cursor 可以重试", async () => {
+	const h = await createLoadingHarness(false);
+	try {
+		h.view.loadCatalogMemos = async () => readyLoad([memo("committed")]);
+		await h.loadInitial();
+		const cursor = { catalog: { after: "previous-page" } };
+		Object.assign(h.view, { catalogCursor: cursor, catalogHistoryExpansionPending: false,
+			renderNextCardBatch: () => {} });
+		const previous = h.view.memos, revision = h.view.catalogRevision, result = h.view.viewStateController.search.result;
+		let unavailable = true;
+		const cursors: unknown[] = [];
+		h.view.queryCatalogFeature = async (query: { cursor: unknown }) => {
+			cursors.push(query.cursor);
+			return { ...readyLoad([]), items: [], invalidated: false,
+				readState: unavailable ? "storage_unavailable" : "ready", catalogRevision: unavailable ? 0 : revision };
+		};
+		await assert.rejects(h.view.loadNextCatalogPage(), { message: t("empty.cardFlowFailed") });
+		assert.strictEqual(h.view.memos, previous);
+		assert.strictEqual(h.view.catalogCursor, cursor);
+		assert.equal(h.view.catalogRevision, revision);
+		assert.strictEqual(h.view.viewStateController.search.result, result);
+		assert.equal(h.view.catalogLoadingNextPage, false);
+		unavailable = false;
+		assert.equal(await h.view.loadNextCatalogPage(), true);
+		assert.deepEqual(cursors, [cursor, cursor]);
+		assert.equal(h.view.catalogCursor, null);
+	} finally { h.close(); }
+});
+
 test("两端旧请求成功或失败的收尾不清除新请求，也不覆盖新卡片", async t => {
 	for (const mobile of [false, true]) for (const failure of [false, true]) for (const oldFinishesFirst of [false, true]) {
 		await t.test(`${mobile ? "mobile" : "desktop"}/${failure ? "failure" : "success"}/${oldFinishesFirst ? "A-B" : "B-A"}`, async () => {
@@ -493,7 +549,7 @@ async function createLoadingHarness(mobile: boolean) {
 		catalogStatus: { content: "ready", catalog: "complete", projection: "ready" }, cardFlowError: null,
 		hasCommittedCatalogDesktopQuery: false, catalogDesktopQueryFingerprint: null, catalogDesktopQueryRun: 0,
 		catalogCursor: null, catalogHistoryExpansionPending: false, catalogDesktopTotalCount: null,
-		catalogDesktopCountRun: 0, catalogDesktopCountController: null, catalogMobileCountController: null,
+		catalogDesktopCountRun: 0, catalogDesktopCountController: null,
 		memoSourceGeneration: 0, memoLoadingPromise: null, memoLoadingFingerprint: null, filteredMemosCache: null,
 		librarySummary: null, mobileSearchController: { isOpen: false },
 		randomReunionController: { getSnapshot: () => ({ status: "idle", error: null, memos: null }), cancelPending: () => {} },

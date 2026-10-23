@@ -23,6 +23,8 @@ const DEFAULT_DAILY_NOTES_FORMAT = "YYYY-MM-DD";
 // 职责：只读取日记核心插件配置，不猜测用户的日记路径。
 export class DailyNotesProvider {
 	private cachedConfig: DailyNotesConfig | null = null;
+	private configSource: "runtime" | "file" | null = null;
+	private loadGeneration = 0;
 	private readonly listeners = new Set<() => void>();
 
 	constructor(private readonly app: App) {}
@@ -32,9 +34,10 @@ export class DailyNotesProvider {
 		return () => { this.listeners.delete(listener); };
 	}
 
-	private setConfig(config: DailyNotesConfig | null): void {
+	private setConfig(config: DailyNotesConfig | null, source: "runtime" | "file" = "runtime"): void {
 		const changed = JSON.stringify(config) !== JSON.stringify(this.cachedConfig);
 		this.cachedConfig = config;
+		this.configSource = config === null ? null : source;
 		if (changed) for (const listener of this.listeners) listener();
 	}
 
@@ -48,10 +51,13 @@ export class DailyNotesProvider {
 			this.setConfig(null);
 			return null;
 		}
+		// 运行时配置消失后不能继续按旧范围写入；文件回退只复用已成功读取的配置。
+		if (this.configSource === "runtime") this.setConfig(null);
 		return this.cachedConfig;
 	}
 
 	async loadConfig(): Promise<DailyNotesConfig | null> {
+		const generation = ++this.loadGeneration;
 		const runtimeConfig = this.readRuntimeConfig();
 		if (runtimeConfig.type === "config") {
 			this.setConfig(runtimeConfig.config);
@@ -63,7 +69,14 @@ export class DailyNotesProvider {
 		}
 
 		const fileConfig = await this.readConfigFile();
-		if (fileConfig !== null) this.setConfig(fileConfig);
+		if (generation !== this.loadGeneration) return this.getConfig();
+		// 文件读取期间核心插件可能已完成加载或被禁用，以当前运行时为准。
+		const latest = this.readRuntimeConfig();
+		if (latest.type !== "unavailable") {
+			this.setConfig(latest.type === "config" ? latest.config : null);
+		} else {
+			this.setConfig(fileConfig, "file");
+		}
 		return this.cachedConfig;
 	}
 
@@ -77,11 +90,6 @@ export class DailyNotesProvider {
 		}
 
 		const options = getDailyNotesOptions(pluginRecord);
-		if (pluginState === "enabled") {
-			const config = parseDailyNotesConfig(options ?? {}, DEFAULT_DAILY_NOTES_FORMAT);
-			return { type: "config", config: config ?? getDefaultDailyNotesConfig() };
-		}
-
 		const config = parseDailyNotesConfig(options, DEFAULT_DAILY_NOTES_FORMAT);
 		return config === null ? { type: "unavailable" } : { type: "config", config };
 	}
@@ -146,18 +154,12 @@ function getDailyNotesOptions(pluginRecord: Record<string, unknown> | null): Rec
 	);
 }
 
-function getDefaultDailyNotesConfig(): DailyNotesConfig {
-	return {
-		folder: null,
-		format: DEFAULT_DAILY_NOTES_FORMAT,
-	};
-}
-
 function parseDailyNotesConfig(value: unknown, fallbackFormat: string | null): DailyNotesConfig | null {
 	const record = asRecord(value);
 	if (record === null) {
 		return null;
 	}
+	if (["folder", "format", "template"].some(key => record[key] !== undefined && typeof record[key] !== "string")) return null;
 
 	const rawFormat = stringOrNull(record.format);
 	const format = rawFormat?.trim() || fallbackFormat;

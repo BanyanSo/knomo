@@ -6,7 +6,6 @@ import type {
 	MonthlyFolderMigrationPlan,
 	MonthlyFolderMigrationResult,
 	MonthlyMemoFileFormatMigrationPlan,
-	MonthlyMemoFileFormatMigrationResult,
 } from "../settings/MonthlyFolderMigrationService";
 import { cloneSettings, isValidMonthlyMemoFileFormat, normalizeSettings } from "../settings/normalizeSettings";
 import type { KnomoSettings, KnomoSettingsLoadStatus } from "../types/settings";
@@ -24,7 +23,6 @@ export type {
 	MonthlyFolderMigrationPlan,
 	MonthlyFolderMigrationResult,
 	MonthlyMemoFileFormatMigrationPlan,
-	MonthlyMemoFileFormatMigrationResult,
 } from "../settings/MonthlyFolderMigrationService";
 
 export class SettingsService {
@@ -53,9 +51,6 @@ export class SettingsService {
 				try { await this.verifyCurrentSettings({ monthlyMemoFolder: result.monthlyMemoFolder }); }
 				catch (error) { this.loadStatus = "unavailable"; this.notifyChanged(); throw error; }
 				return result;
-			},
-			(settings) => {
-				this.settings = cloneSettings(settings);
 			},
 			() => { this.monthlyRuntime.assertActive(); if (this.loadStatus !== "ready") throw new Error("Knomo settings unavailable."); },
 		);
@@ -303,22 +298,12 @@ export class SettingsService {
 
 	async planMonthlyMemoFileFormatMigration(
 		nextMonthlyMemoFileFormat: string,
-		sourcePeriods?: readonly string[],
+		sourcePeriods: readonly string[],
 	): Promise<MonthlyMemoFileFormatMigrationPlan> {
 		return this.monthlyFolderMigrationService.planMonthlyMemoFileFormatMigration(
 			nextMonthlyMemoFileFormat,
 			sourcePeriods,
 		);
-	}
-
-	async migrateMonthlyMemoFileFormat(
-		nextMonthlyMemoFileFormat: string,
-		rebuildPeriods: (periods: string[], trackGeneratedPath: (path: string) => void) => Promise<void>,
-	): Promise<MonthlyMemoFileFormatMigrationResult> {
-		return this.runSettingsWriteExclusive(() => this.monthlyFolderMigrationService.migrateMonthlyMemoFileFormat(
-			nextMonthlyMemoFileFormat,
-			rebuildPeriods,
-		));
 	}
 }
 

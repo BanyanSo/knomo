@@ -1385,8 +1385,29 @@ export class KnomoView extends ItemView {
 			[this.cardFlowEl, "card-flow", this.renderGeneration],
 			[this.mobileSearchResultsEl, "mobile-search", this.mobileSearchRenderGeneration],
 		] as const) {
-			for (const card of Array.from(container?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? [])) {
-				const memo = this.findMemoById(card.getAttribute("data-memo-id")!, surface);
+			const cards = Array.from(container?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? []);
+			if (cards.length === 0) continue;
+			const pendingIds = new Set(cards.map(card => card.getAttribute("data-memo-id")!));
+			const memosById = new Map<string, MemoRecord>();
+			const collect = (memos: readonly MemoRecord[]) => {
+				for (const memo of memos) {
+					const id = memo.id;
+					if (pendingIds.delete(id)) memosById.set(id, memo);
+					if (pendingIds.size === 0) break;
+				}
+			};
+			// 查找表只用于本次已挂载卡片，保持原有来源优先级并按需读取各面板快照。
+			if (surface === "mobile-search") collect(this.mobileSearchController.getDisplayedMemos());
+			else {
+				collect(this.memos);
+				if (pendingIds.size) collect(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? []);
+				if (pendingIds.size) collect(this.randomReunionController.getSnapshot().memos ?? []);
+				if (pendingIds.size) collect(this.shuffleDayController.getSnapshot().memos);
+				if (pendingIds.size) collect(this.timeBuoyViewController.getMemos());
+				if (pendingIds.size) collect(this.trashMemoController.getSnapshot().trashMemos ?? []);
+			}
+			for (const card of cards) {
+				const memo = memosById.get(card.getAttribute("data-memo-id")!);
 				if (!memo) continue;
 				const content = card.querySelector<HTMLElement>(".knomo-card-content");
 				if (content) {
@@ -2372,8 +2393,7 @@ export class KnomoView extends ItemView {
 			cursor: null,
 		}, signal);
 		signal?.throwIfAborted();
-		if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
-		if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
+		this.assertCatalogPageAvailable(page);
 		let fullHistoryLoaded = loadAll;
 		if (!loadAll && this.isDefaultListState() && page.nextCursor === null) {
 			// 近月窗口已读完时直接确认全历史，避免小库反复显示无效的加载入口。
@@ -2383,7 +2403,7 @@ export class KnomoView extends ItemView {
 				cursor: null,
 			}, signal);
 			signal?.throwIfAborted();
-			if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
+			this.assertCatalogPageAvailable(page);
 			fullHistoryLoaded = true;
 		}
 		let todayTimeBuoys: TodayTimeBuoySnapshot | undefined;
@@ -2621,6 +2641,7 @@ export class KnomoView extends ItemView {
 			if (queryRun !== this.catalogDesktopQueryRun
 				|| !this.isCatalogQueryCurrent(queryFingerprint, true)) return false;
 			if (page.invalidated || (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(page.coverage) !== catalogCoverageKey(this.catalogCoverage))) return this.reloadMemos(false, true);
+			this.assertCatalogPageAvailable(page);
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
 			for (const memo of page.items.map(toCatalogMemoView)) byRenderKey.set(getMemoRenderKey(memo), memo);
 			this.memos = this.confirmedDailyMemos?.merge([...byRenderKey.values()], this.buildCatalogActiveQuery(true, queryDate))
@@ -2700,6 +2721,11 @@ export class KnomoView extends ItemView {
 
 	private queryCatalogFeature(request: CatalogFeatureQuery, signal?: AbortSignal): Promise<CatalogMemoPage> {
 		return this.getCatalogReadService().query(request, signal);
+	}
+
+	private assertCatalogPageAvailable(page: CatalogMemoPage): void {
+		if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
+		if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 	}
 
 	private beginCatalogDesktopQuery(): AbortController {

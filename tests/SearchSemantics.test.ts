@@ -3,7 +3,7 @@ import test from "node:test";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { DiaryMemoParser, CATALOG_PARSER_VERSION } from "../src/services/DiaryMemoParser";
 import { buildCatalogPartition, buildCatalogObservation, MemoCatalogService } from "../src/services/MemoCatalogService";
-import { InMemoryMemoCatalogStore, matchesCatalogQuery } from "../src/services/MemoCatalogStore";
+import { InMemoryMemoCatalogStore, createCatalogQueryMatcher } from "../src/services/MemoCatalogStore";
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { CatalogReadService, buildReviewCatalogQuery } from "../src/services/CatalogReadService";
 import { buildSearchBody } from "../src/services/SearchDocument";
@@ -62,16 +62,16 @@ test("可读正文使用 Markdown 节点，排除区域保持不可跨越的边�
 
 test("连续文字不跨字段或排除边界；标签、链接和图片字段独立匹配", () => {
 	const observation = buildCatalogObservation(searchPartition("2026-10-09", ["项目 **完成**\n\n复盘 #work [[Target|别名]] ![说明](photo.jpg)"]).observations[0]);
-	assert.equal(matchesCatalogQuery(observation, searchFilter("项目 work")), false);
-	assert.equal(matchesCatalogQuery(observation, searchFilter("完成 复盘")), true);
-	assert.equal(matchesCatalogQuery(observation, searchFilter("work target")), false);
-	assert.equal(matchesCatalogQuery(observation, searchFilter("target photo")), false);
-	for (const text of ["work", "target", "photo"]) assert.equal(matchesCatalogQuery(observation, searchFilter(text)), true, text);
-	assert.equal(matchesCatalogQuery(observation, { textTerms: ["target", "photo"] }), true);
+	assert.equal(createCatalogQueryMatcher(searchFilter("项目 work"))(observation), false);
+	assert.equal(createCatalogQueryMatcher(searchFilter("完成 复盘"))(observation), true);
+	assert.equal(createCatalogQueryMatcher(searchFilter("work target"))(observation), false);
+	assert.equal(createCatalogQueryMatcher(searchFilter("target photo"))(observation), false);
+	for (const text of ["work", "target", "photo"]) assert.equal(createCatalogQueryMatcher(searchFilter(text))(observation), true, text);
+	assert.equal(createCatalogQueryMatcher({ textTerms: ["target", "photo"] })(observation), true);
 	const separated = buildCatalogObservation(searchPartition("2026-10-09", ["项目<!-- erased -->复盘"]).observations[0]);
-	assert.equal(matchesCatalogQuery(separated, searchFilter("项目 复盘")), false);
-	assert.equal(matchesCatalogQuery(separated, searchFilter("项目复盘")), false);
-	assert.equal(matchesCatalogQuery(separated, searchFilter('"项目 复盘"')), false);
+	assert.equal(createCatalogQueryMatcher(searchFilter("项目 复盘"))(separated), false);
+	assert.equal(createCatalogQueryMatcher(searchFilter("项目复盘"))(separated), false);
+	assert.equal(createCatalogQueryMatcher(searchFilter('"项目 复盘"'))(separated), false);
 });
 
 test("搜索正文排除缩进代码和 Obsidian 注释，并保留文字边界与转义", () => {
@@ -127,7 +127,7 @@ test("代码和注释排除在双存储查询、count、逐页结果中一致，
 			await store.replaceFilePartition(partition);
 			for (const [text, expectedCount] of [["secret", 2], ["literal", 1], ["before after", 1], ["left before after right", 0], ["before", 5]] as const) {
 				const filter = searchFilter(text);
-				const expected = partition.observations.filter(item => matchesCatalogQuery(item, filter)).map(item => item.observationKey).sort();
+				const expected = partition.observations.filter(createCatalogQueryMatcher(filter)).map(item => item.observationKey).sort();
 				assert.equal(expected.length, expectedCount, text);
 				const keys: string[] = [];
 				let cursor: Awaited<ReturnType<typeof store.query>>["nextCursor"] = null;
@@ -164,7 +164,7 @@ test("双存储的 count、逐页结果和 evaluator 在来源组合及稀疏命
 			session.updateDraft("20261009 稀疏复盘"); session.submit();
 			const filter = session.getFilter(source);
 			const expected = partitions.flatMap(partition => partition.observations)
-				.filter(item => matchesCatalogQuery(item, filter)).sort((a, b) => b.createdAtKey.localeCompare(a.createdAtKey) || b.observationKey.localeCompare(a.observationKey));
+				.filter(createCatalogQueryMatcher(filter)).sort((a, b) => b.createdAtKey.localeCompare(a.createdAtKey) || b.observationKey.localeCompare(a.observationKey));
 			assert.equal(expected.length, 8);
 			const keys: string[] = [];
 			let cursor: Awaited<ReturnType<typeof store.query>>["nextCursor"] = null;

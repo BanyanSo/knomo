@@ -26,6 +26,7 @@ interface Options {
 export class LegacyTrashMigrationService {
 	private report: LegacyMigrationReport = emptyReport();
 	private flight: Promise<LegacyMigrationReport> | null = null;
+	private flightMode: "startup" | "manual" | null = null;
 	private cancelRetry: (() => void) | null = null;
 	private retryCount = 0;
 	constructor(private readonly app: App, private readonly source: LegacyIndexSource, private readonly options: Options) {
@@ -33,12 +34,14 @@ export class LegacyTrashMigrationService {
 	}
 	getReport(): LegacyMigrationReport { return structuredClone(this.report); }
 	async waitForIdle(): Promise<void> { await this.flight; }
-	// 启动、有限延迟重试和手动恢复共用一个任务；不排队重复导入。
-	run(): Promise<LegacyMigrationReport> {
-		if (this.flight) return this.flight;
+	// 启动只检查完成事实及清理；导入须由用户明确发起，重试沿用本次授权。
+	run(mode: "startup" | "manual" = "startup"): Promise<LegacyMigrationReport> {
+		if (this.flight) return mode === "manual" && this.flightMode === "startup"
+			? this.flight.then(() => this.run(mode)) : this.flight;
 		this.cancelRetry?.(); this.cancelRetry = null;
+		this.flightMode = mode;
 		const operation = Promise.resolve().then(() => this.options.runExclusive
-			? this.options.runExclusive(() => this.runOnce()) : this.runOnce()).catch((error: unknown) => {
+			? this.options.runExclusive(() => this.runOnce(mode)) : this.runOnce(mode)).catch((error: unknown) => {
 			// 进入写入屏障前被其他维护任务阻挡时，保留旧源等待后续重试。
 			return this.report = { ...emptyReport(), status: "pending", diagnostics: [{ code: "legacy_migration_busy", sourcePath: null, memoId: null, detail: String(error) }] };
 		});
@@ -48,15 +51,16 @@ export class LegacyTrashMigrationService {
 			return report;
 		}).finally(() => {
 			this.flight = null;
+			this.flightMode = null;
 			if (!this.options.signal?.aborted && this.options.scheduleRetry && this.retryCount < 2
-				&& (this.report.status === "pending" || this.report.status === "recovery_required" || this.report.cleanupCandidate)) {
+				&& (this.report.status === "pending" || mode === "manual" && this.report.status === "recovery_required" || this.report.cleanupCandidate)) {
 				const delay = [5000, 30000][this.retryCount++];
-				this.cancelRetry = this.options.scheduleRetry(() => { this.cancelRetry = null; void this.run(); }, delay);
+				this.cancelRetry = this.options.scheduleRetry(() => { this.cancelRetry = null; void this.run(mode); }, delay);
 			}
 		});
 		return this.flight;
 	}
-	private async runOnce(): Promise<LegacyMigrationReport> {
+	private async runOnce(mode: "startup" | "manual"): Promise<LegacyMigrationReport> {
 		try {
 			if (this.options.isReady?.() === false) throw new RetryableMigrationError("Migration configuration is not ready.");
 			const root = this.options.getTrashFolder();
@@ -68,6 +72,9 @@ export class LegacyTrashMigrationService {
 			assertActive();
 			if (completion !== null) return this.report = await this.cleanup(completion, assertActive);
 			if (this.source.inspect().kind === "missing") return this.report = { ...emptyReport(), status: "not_applicable" };
+			if (mode === "startup") return this.report = { ...emptyReport(), status: "recovery_required", diagnostics: [{
+				code: "legacy_import_required", sourcePath: null, memoId: null, detail: "Legacy Trash import requires an explicit recovery action.",
+			}] };
 			const loaded = await this.source.load({ cancellationSignal: this.options.signal, yieldControl: this.options.yieldControl });
 			assertActive();
 			if (loaded.kind === "missing") return this.report = { ...emptyReport(), status: "not_applicable" };

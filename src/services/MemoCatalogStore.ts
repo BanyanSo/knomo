@@ -666,14 +666,6 @@ export function normalizeCatalogText(value: string): string {
 	return normalizeSearchText(value);
 }
 
-export function matchesCatalogQuery(
-	observation: CatalogObservation,
-	request: CatalogQueryFilter,
-	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),
-): boolean {
-	return createCatalogQueryMatcher(request, sourcePaths)(observation);
-}
-
 export function createCatalogQueryMatcher(
 	request: CatalogQueryFilter,
 	sourcePaths: ReadonlySet<string> | null = request.sourcePaths === undefined ? null : new Set(request.sourcePaths),

@@ -214,6 +214,56 @@ test("daily notes provider keeps configured folder when runtime format is omitte
 	});
 });
 
+test("运行时 options 尚未加载时不猜测 Daily 路径，改读实际配置文件", async () => {
+	const { DailyNotesProvider } = await loadDailyNotesProvider();
+	for (const plugin of [{ enabled: true }, { enabled: true, instance: {} }]) {
+		let reads = 0;
+		const provider = new DailyNotesProvider(createDailyNotesApp({
+			internalPlugins: { getPluginById: () => plugin },
+			configFile: JSON.stringify({ folder: "Journal", format: "YYYY/MM/DD" }),
+			onRead: () => { reads++; },
+		}) as never);
+		assert.equal(provider.getConfig(), null);
+		assert.deepEqual(await provider.loadConfig(), { folder: "Journal", format: "YYYY/MM/DD" });
+		assert.deepEqual(provider.getConfig(), { folder: "Journal", format: "YYYY/MM/DD" });
+		assert.equal(reads, 1);
+	}
+});
+
+test("缺失或损坏的 Daily 配置不能作为默认范围放行", async () => {
+	const { DailyNotesProvider } = await loadDailyNotesProvider();
+	for (const options of [undefined, { folder: 42 }, { format: false }]) {
+		const provider = new DailyNotesProvider(createDailyNotesApp({
+			internalPlugins: { getPluginById: () => ({ enabled: true, instance: { options } }) },
+			configFile: "broken JSON",
+		}) as never);
+		assert.equal(provider.getConfig(), null);
+		assert.equal(await provider.loadConfig(), null);
+		assert.equal(provider.getConfig(), null);
+	}
+});
+
+test("Daily 文件回退的迟到读取不能覆盖较新的配置，读取期间禁用也不能放行", async () => {
+	const { DailyNotesProvider } = await loadDailyNotesProvider();
+	let runtime: unknown = { enabled: true, instance: {} };
+	const reads: Array<(text: string) => void> = [];
+	const provider = new DailyNotesProvider({
+		internalPlugins: { getPluginById: () => runtime },
+		vault: { configDir: ".obsidian", adapter: { read: () => new Promise<string>(resolve => { reads.push(resolve); }) } },
+	} as never);
+	const older = provider.loadConfig(), newer = provider.loadConfig();
+	reads[1]!(JSON.stringify({ folder: "Current" }));
+	assert.equal((await newer)?.folder, "Current");
+	reads[0]!(JSON.stringify({ folder: "Stale" }));
+	assert.equal((await older)?.folder, "Current");
+	assert.equal(provider.getConfig()?.folder, "Current");
+	const pending = provider.loadConfig();
+	runtime = { enabled: false };
+	reads[2]!(JSON.stringify({ folder: "Current" }));
+	assert.equal(await pending, null);
+	assert.equal(provider.getConfig(), null);
+});
+
 test("daily notes provider treats explicit disabled runtime as unavailable even when config exists", async () => {
 	const { DailyNotesProvider } = await loadDailyNotesProvider();
 	let readCount = 0;

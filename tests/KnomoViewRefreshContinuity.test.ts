@@ -257,8 +257,9 @@ test("引用事件增量刷新且原位排队正文与来源引用，不清空�
 	Object.assign(view, {
 		refresh: async () => { assert.fail("纯 metadata 不得进入通用查询、计数或随机刷新"); },
 		trashViewClosed: false, cardFlowEl: container,
-		cardFlowCoordinator: { generation: 3 }, mobileSearchController: { results: container, renderGeneration: 1 },
-		findMemoById: () => memo, getMemoCardPreview: () => ({ text: "text" }),
+		cardFlowCoordinator: { generation: 3 }, memos: [memo],
+		mobileSearchController: { results: container, renderGeneration: 1, getDisplayedMemos: () => [memo] },
+		getMemoCardPreview: () => ({ text: "text" }),
 		memoMarkdownRenderer: {
 			queueMemoMarkdown: (...args: unknown[]) => queued.push(args),
 			queueSourceReferenceMarkdown: (...args: unknown[]) => queued.push(args),

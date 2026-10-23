@@ -95,7 +95,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly catalogReadService: CatalogReadService,
 		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
 		private readonly knomoCurrentConfigService: Pick<KnomoCurrentConfigService, "getStatus" | "getLastError" | "reloadConfiguration" | "refreshLocalConfig">,
-		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(): Promise<unknown> },
+		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(mode: "manual"): Promise<unknown> },
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 		private readonly retryRuntimeState: () => Promise<void>,
 	) {
@@ -770,7 +770,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		const session = this.settingsSession;
 		button.setDisabled(true);
 		try {
-			await this.legacyTrashMigrationService.run();
+			await this.legacyTrashMigrationService.run("manual");
 			const report = this.legacyTrashMigrationService.getReport();
 			const complete = ["ready", "not_applicable", "idle"].includes(report.status) && report.cleanupCandidate === null;
 			const message = complete ? t("settings.legacyMigration.completed") : report.cleanupCandidate || report.status === "recovery_required"
@@ -932,14 +932,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return false;
 		}
 		this.monthlyFileFormatMigrationRunning = true;
+		let configurationSaved = false;
 		try {
 			const sourcePeriods = await this.monthlyProjectionCoordinator.listPeriods();
 			const plan = await this.settingsService.planMonthlyMemoFileFormatMigration(nextFormat, sourcePeriods);
-			if (plan.conflicts.length > 0) {
-				throw new Error(t("settings.monthlyFileFormat.conflict", {
-					paths: plan.conflicts.join("; "),
-				}));
-			}
 			const confirmed = await showKnomoConfirmModal(this.app, {
 				message: t("settings.monthlyFileFormat.confirm", {
 					current: plan.oldFormat,
@@ -951,17 +947,25 @@ export class KnomoSettingTab extends PluginSettingTab {
 				return false;
 			}
 			await this.settingsService.updateSettings({ monthlyMemoFileFormat: nextFormat });
+			configurationSaved = true;
 			await this.refreshCurrentConfiguration();
+			let rebuildFailed = false;
 			for (const period of plan.periods) {
-				await this.monthlyProjectionCoordinator.rebuildPeriod(period);
+				const result = await this.monthlyProjectionCoordinator.rebuildPeriod(period);
+				if (result.failed > 0) rebuildFailed = true;
 			}
 			if (statusEl !== undefined) {
 				this.updateMonthlyFileFormatStatus(statusEl);
 			}
+			if (rebuildFailed || plan.periods.length > 0 && this.monthlyProjectionCoordinator.getProjectionState() !== "ready") {
+				new Notice(t("settings.monthlyFileFormat.rebuildIncomplete"));
+				return false;
+			}
 			new Notice(t("settings.monthlyFileFormat.migrated", { count: plan.periods.length }));
 			return true;
 		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.monthlyFileFormat.migrationFailed")));
+			new Notice(configurationSaved ? `${t("settings.monthlyFileFormat.rebuildIncomplete")} ${formatServiceError(error, t("settings.attention.monthly.retryFailed"))}`
+				: formatServiceError(error, t("settings.monthlyFileFormat.migrationFailed")));
 			return false;
 		} finally {
 			this.monthlyFileFormatMigrationRunning = false;

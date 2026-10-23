@@ -28,6 +28,38 @@ function setupDom() {
 	return dom;
 }
 
+test("实际 Monthly 文件名设置流程只在全部完成时提示成功，失败或待处理保留已保存配置", async context => {
+	await ensureObsidianStub();
+	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
+	const confirm = await import("../src/ui/KnomoConfirmModal");
+	context.mock.method(confirm, "showKnomoConfirmModal", async () => true);
+	const { Notice } = await import("obsidian");
+	const notices = (Notice as unknown as { messages: string[] }).messages;
+	for (const mode of ["ready", "failed", "stale", "save-failed", "rebuild-threw", "refresh-failed", "empty"] as const) {
+		let format = "Memos-YYYY-MM.md";
+		const periods: string[] = [];
+		const tab = Object.create(KnomoSettingTab.prototype) as unknown as { saveMonthlyMemoFileFormat(value: string): Promise<boolean> };
+		Object.assign(tab, { latestSettingNoticeValues: new Map(), settingsService: {
+			getSettings: () => ({ monthlyMemoFileFormat: format }), validateMonthlyMemoFileFormat: () => true,
+			planMonthlyMemoFileFormatMigration: async (_format: string, sourcePeriods: string[]) => ({ oldFormat: format, newFormat: "Archive-YYYY-MM.md", periods: sourcePeriods }),
+			updateSettings: async () => { if (mode === "save-failed") throw new Error("save failed"); format = "Archive-YYYY-MM.md"; },
+		}, refreshCurrentConfiguration: async () => { if (mode === "refresh-failed") throw new Error("configuration refresh failed"); }, monthlyProjectionCoordinator: {
+			listPeriods: async () => mode === "empty" ? [] : ["2026-07", "2026-08"],
+			rebuildPeriod: async (period: string) => { periods.push(period); if (mode === "rebuild-threw") throw new Error("projection failed"); return { projected: mode === "ready" ? 1 : 0, failed: mode === "failed" ? 1 : 0 }; },
+			getProjectionState: () => mode === "stale" || mode === "empty" ? "stale" : "ready",
+		} });
+		notices.length = 0;
+		assert.equal(await tab.saveMonthlyMemoFileFormat("Archive-YYYY-MM.md"), mode === "ready" || mode === "empty", mode);
+		assert.equal(format, mode === "save-failed" ? "Memos-YYYY-MM.md" : "Archive-YYYY-MM.md");
+		assert.deepEqual(periods, mode === "save-failed" || mode === "refresh-failed" || mode === "empty" ? [] : mode === "rebuild-threw" ? ["2026-07"] : ["2026-07", "2026-08"]);
+		assert.equal(notices.length, 1);
+		if (mode === "ready" || mode === "empty") assert.match(notices[0], new RegExp(`${periods.length} months regenerated`, "i"));
+		else assert.doesNotMatch(notices[0], /months regenerated|previous setting is still in use/i);
+		if (mode === "rebuild-threw") assert.match(notices[0], /projection failed/);
+		if (mode === "refresh-failed") assert.match(notices[0], /configuration refresh failed/);
+	}
+});
+
 test("legacy and declarative entry points render the same three-tab page", async () => {
 	await ensureObsidianStub();
 	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
@@ -114,7 +146,7 @@ test("重建与 Monthly 重试结果在需要处理区域消失及重绘后仍�
 			memoCommandService: { rebuildLocalCatalog: async () => {} },
 			catalogReadService: { getLibraryIndexes: async () => ({ complete: action !== "rebuild-incomplete", invalidated: false }) },
 			monthlyProjectionCoordinator: { run: async () => ({ failed: action === "monthly-failed" ? 1 : 0 }), getProjectionState: () => "ready" },
-			legacyTrashMigrationService: { run: async () => {}, getReport: () => ({ status: action === "legacy-failed" ? "recovery_required" : "ready",
+			legacyTrashMigrationService: { run: async (mode: string) => { assert.equal(mode, "manual"); }, getReport: () => ({ status: action === "legacy-failed" ? "recovery_required" : "ready",
 				cleanupCandidate: action === "legacy-partial" ? { legacySystemRoot: "Old/_knomo-system" } : null, diagnostics: [] }) },
 			refreshOpenKnomoViews: async () => { throw new Error("view render unavailable"); },
 		});

@@ -105,6 +105,54 @@ const geometry = () => [
 	return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 });
 
+test("mobile feed gives every first content 8px below the header without doubling date spacing", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ headless: true, channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge" });
+	const css = readFileSync("styles.css", "utf8");
+	const firstContents = [
+		'<div class="knomo-recent-flow-decoration knomo-recent-flow-date"><span class="fixture-first">今天</span></div>',
+		'<div class="fixture-first knomo-list-summary">标签筛选：3 条笔记</div>',
+		'<div class="fixture-first knomo-list-toolbar"><div class="knomo-list-summary">随机重逢：3 条笔记</div><button class="knomo-inline-button">刷新</button></div>',
+		'<div class="fixture-first knomo-shuffle-day-header"><div class="knomo-shuffle-day-date">2026年10月23日</div><div class="knomo-shuffle-day-summary">3 条笔记</div></div>',
+		'<div class="fixture-first"><div class="knomo-list-toolbar"><button class="knomo-inline-button">返回</button></div><div class="knomo-shuffle-day-header">2026年10月23日</div></div>',
+		'<div class="fixture-first fixture-card knomo-card">Memo</div>',
+	];
+	try {
+		const page = await browser.newPage();
+		for (const theme of ["theme-light", "theme-dark"]) for (const width of [390, 768, 1280]) {
+			const phone = width === 390;
+			const mobile = width !== 1280;
+			await page.setViewportSize({ width, height: 844 });
+			for (const mode of phone ? ["", "is-floating-nav", "auto-full-screen"] : [""]) for (const [index, content] of firstContents.entries()) {
+				const context = `${theme}/${width}/${mode}/${index}`;
+				await page.setContent(`<style>body { margin:0; --size-4-2:8px; --view-header-height:44px; } ${hostFixture}${css}</style><body class="${mobile ? "is-mobile" : ""} ${phone ? "is-phone" : ""} ${theme} ${mode}" style="--fixture-height:44px;--fixture-safe:${phone ? 59 : 0}px;--fixture-view-gap:8px">
+					<div class="workspace-leaf-content" data-type="knomo-view"><div class="view-header"><div class="view-header-title-container">Knomo</div></div>
+					<div class="view-content"><div class="knomo-plugin ${mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}"><div class="knomo-shell"><div class="knomo-main"><div class="knomo-content-column"><div class="knomo-page-feedback" hidden>提示</div><div class="knomo-card-flow">
+					${content}<div class="fixture-card knomo-card">Memo</div><div class="fixture-card knomo-card">Next memo</div>
+					<div class="fixture-later knomo-recent-flow-decoration knomo-recent-flow-date"><span>昨天</span></div>${'<div class="fixture-card knomo-card">Memo</div>'.repeat(8)}
+					</div></div></div></div></div></div></div></body>`);
+				const actual = await page.evaluate(() => {
+					const rect = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+					const cards = document.querySelectorAll(".fixture-card");
+					return { gap: rect(".fixture-first").top - rect(".view-header").bottom,
+						cardGap: cards[1].getBoundingClientRect().top - cards[0].getBoundingClientRect().bottom,
+						laterPadding: getComputedStyle(document.querySelector(".fixture-later")!).paddingTop };
+				});
+				assert.equal(actual.gap, mobile ? 8 : index === 0 ? 10 : 0, `${context}: first content spacing`);
+				assert.equal(actual.cardGap, 8, `${context}: card spacing`);
+				assert.equal(actual.laterPadding, mobile ? "8px" : "10px", `${context}: later date spacing`);
+				if (mobile) {
+					await page.locator(".knomo-page-feedback").evaluate((el: HTMLElement) => { el.hidden = false; });
+					assert.ok(await page.evaluate(() => document.querySelector(".fixture-first")!.getBoundingClientRect().top >= document.querySelector(".knomo-page-feedback")!.getBoundingClientRect().bottom), `${context}: feedback does not overlap content`);
+					await page.locator(".knomo-page-feedback").evaluate((el: HTMLElement) => { el.hidden = true; });
+					await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 0; });
+					assert.equal(await page.locator(".fixture-first").evaluate((el: HTMLElement) => el.getBoundingClientRect().top - el.ownerDocument.querySelector(".view-header")!.getBoundingClientRect().bottom), 8, `${context}: dismissing feedback restores spacing`);
+				}
+			}
+		}
+	} finally { await browser.close(); }
+});
+
 for (const stats of [false, true]) test(`mobile ${stats ? "statistics" : "filter"} header adds lower space while retaining native control positions`, { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true, channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge" });
@@ -156,8 +204,8 @@ for (const stats of [false, true]) test(`mobile ${stats ? "statistics" : "filter
 					const clearance = current[0].y + current[0].height - current[3].y - current[3].height;
 					if (phone) assert.equal(clearance, bottomSpace, `${context}: breathing room below buttons`);
 					const headerBottom = current[0].y + current[0].height;
-					assert.ok(await page.locator(".fixture-flow-start").evaluate((el: HTMLElement) => el.getBoundingClientRect().top) >= headerBottom, `${context}: first content clears header`);
-					if (phone && !stats) {
+					assert.ok(await page.locator(".fixture-flow-start").evaluate((el: HTMLElement) => el.getBoundingClientRect().top) >= headerBottom + 8, `${context}: first content clears header with spacing`);
+					if (!stats) {
 						const textTop = await page.locator(".knomo-recent-flow-relative").evaluate((el: HTMLElement) => el.getBoundingClientRect().top);
 						assert.equal(textTop - headerBottom, 8, `${context}: today text begins 8px below header`);
 					}
@@ -186,7 +234,7 @@ for (const stats of [false, true]) test(`mobile ${stats ? "statistics" : "filter
 				if (phone && mode) {
 					await page.locator("body").evaluate((el: HTMLElement) => el.style.setProperty("--fixture-view-gap", "32px"));
 					const top = await page.locator(".fixture-flow-start").evaluate((el: HTMLElement) => el.getBoundingClientRect().top);
-					assert.equal(top, Math.max(safe + height + 32, native[2].y + native[2].height + 8), `${context}: preserve larger host spacing without adding it twice`);
+					assert.equal(top, Math.max(safe + height + 32, native[2].y + native[2].height + 8) + 8, `${context}: preserve larger host spacing without adding it twice`);
 				}
 				await page.locator(".fixture-search").click();
 				await page.locator(".fixture-sidebar").click();

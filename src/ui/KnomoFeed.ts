@@ -51,12 +51,20 @@ export function renderKnomoShuffleDayHeader(
 	container: HTMLElement,
 	selectedDate: string,
 	stats: ShuffleDayStats | null,
+	action?: { label: string; action: string },
 ): HTMLElement {
 	const header = container.createDiv({ cls: "knomo-shuffle-day-header" });
 	header.createDiv({ cls: "knomo-shuffle-day-date", text: formatShuffleDayDateTitle(selectedDate) });
 	const summary = stats === null ? "" : formatShuffleDaySummary(stats);
+	const summaryContainer = action ? header.createDiv({ cls: "knomo-list-toolbar" }) : header;
 	if (summary.length > 0) {
-		header.createDiv({ cls: "knomo-shuffle-day-summary", text: summary });
+		summaryContainer.createDiv({ cls: action ? "knomo-shuffle-day-summary knomo-list-summary" : "knomo-shuffle-day-summary", text: summary });
+	}
+	if (action) {
+		summaryContainer.createEl("button", {
+			cls: "knomo-inline-button", text: action.label,
+			attr: { type: "button", "data-action": action.action },
+		});
 	}
 	return header;
 }
@@ -70,14 +78,9 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 	lastFeedback.set(container, feedback);
 	return headers.map((header) => {
 		if (header.type === "random-day") {
-			const wrapper = container.createDiv();
-			const toolbar = wrapper.createDiv({ cls: "knomo-list-toolbar" });
-			toolbar.createEl("button", {
-				cls: "knomo-inline-button", text: t("random.dayBack"),
-				attr: { type: "button", "data-action": "random-day-back" },
+			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats, {
+				label: t("random.dayBack"), action: "random-day-back",
 			});
-			renderKnomoShuffleDayHeader(wrapper, header.selectedDate, header.stats);
-			return wrapper;
 		}
 		if (header.type === "random-toolbar") {
 			return renderKnomoRandomReunionToolbar(container, header.count);

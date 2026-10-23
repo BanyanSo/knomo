@@ -61,7 +61,7 @@ test("mobile surface preserves native controls and adds only the missing lower c
 			assert.deepEqual(after[0], [before[0][0], before[0][1], before[0][2], before[0][3] + 8], `${context}: header adds lower breathing room`);
 			assert.deepEqual(after[1], before[1], `${context}: native button`);
 			const headerBottom = after[0][1] + after[0][3];
-			assert.deepEqual(after[3], [before[3][0], Math.max(before[3][1], headerBottom), before[3][2], before[3][3]], `${context}: first card only adds missing clearance`);
+			assert.deepEqual(after[3], [before[3][0], Math.max(before[3][1], headerBottom + 8), before[3][2], before[3][3]], `${context}: first card clears header with 8px spacing`);
 			{
 				assert.equal(after[2][1], 0, `${context}: viewport extends to top`);
 				assert.equal(after[2][3], width === 390 ? 844 : 390, `${context}: viewport fills leaf`);

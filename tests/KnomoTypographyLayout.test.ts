@@ -15,6 +15,7 @@ interface TypographyWindow extends Window {
 		renderKnomoActionableListSummary: typeof import("../src/ui/KnomoFeed").renderKnomoActionableListSummary;
 		renderKnomoRandomReunionToolbar: typeof import("../src/ui/KnomoFeed").renderKnomoRandomReunionToolbar;
 		renderKnomoShuffleDayHeader: typeof import("../src/ui/KnomoFeed").renderKnomoShuffleDayHeader;
+		renderKnomoCardFlowHeaders: typeof import("../src/ui/KnomoFeed").renderKnomoCardFlowHeaders;
 		MobileHeaderTitleController: typeof import("../src/ui/MobileHeaderTitleController").MobileHeaderTitleController;
 		undoDepth: typeof import("@codemirror/commands").undoDepth;
 		undo: typeof import("@codemirror/commands").undo;
@@ -52,7 +53,7 @@ async function typographyBundle() {
 			export { measureSuggestionContentWidth } from "./src/ui/composerSuggestPosition";
 			export { KnomoTagSuggest } from "./src/ui/KnomoTagSuggest";
 			export { KnomoWikiLinkSuggest } from "./src/ui/KnomoWikiLinkSuggest";
-			export { renderKnomoListSummary, renderKnomoActionableListSummary, renderKnomoRandomReunionToolbar, renderKnomoShuffleDayHeader } from "./src/ui/KnomoFeed";
+			export { renderKnomoListSummary, renderKnomoActionableListSummary, renderKnomoRandomReunionToolbar, renderKnomoShuffleDayHeader, renderKnomoCardFlowHeaders } from "./src/ui/KnomoFeed";
 			export { MobileHeaderTitleController } from "./src/ui/MobileHeaderTitleController";
 			export { undoDepth, undo, redo } from "@codemirror/commands";
 		`, resolveDir: process.cwd(), loader: "ts" },
@@ -212,6 +213,51 @@ test("top titles and summaries retain hierarchy, spacing and button reachability
 			assert.equal(actual.wrapped, true, context);
 			assert.ok(actual.buttons.every((button: { within: boolean; separate: boolean }) => button.within && button.separate), context);
 			assert.equal(actual.caption, "12px", context);
+		}
+	} finally { await browser.close(); }
+});
+
+test("random day summary and back button share the random toolbar layout on desktop and mobile", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const bundle = await typographyBundle();
+	try {
+		const page = await browser.newPage();
+		for (const theme of ["theme-light", "theme-dark"]) for (const width of [1000, 540, 390, 320]) {
+			const mobile = width < 500;
+			await page.setViewportSize({ width, height: 900 });
+			for (const content of ["empty", "normal", "long"] as const) {
+				await page.setContent(`<style>${hostFixture}${css}</style><body class="${theme} ${mobile ? "is-mobile is-phone" : ""}"><main class="probe knomo-plugin is-layout-${mobile ? "mobile" : "desktop-wide"}"><section id="random"></section><section id="day"></section></main></body>`);
+				await page.addScriptTag({ content: bundle });
+				await page.evaluate(installDomHelpers);
+				const actual = await page.evaluate((content: string) => {
+					const fixture = (window as unknown as TypographyWindow).KnomoTypographyFixture;
+					fixture.renderKnomoRandomReunionToolbar(document.getElementById("random")!, 7);
+					const day = document.getElementById("day")!;
+					fixture.renderKnomoCardFlowHeaders(day, [{ type: "random-day", selectedDate: "2025-12-29", stats: content === "empty" ? null : {
+						memoCount: 7, wordCount: 200, tagCount: 1, imageCount: 0, linkCount: 0, firstMemoTime: null, lastMemoTime: null,
+					} }]);
+					const summary = day.querySelector<HTMLElement>(".knomo-shuffle-day-summary");
+					if (summary) summary.textContent = "这一天写下了 7 条 Memos · 200 字 · 1 个标签" + (content === "long" ? " · LongHistoricalSummary".repeat(20) : "");
+					day.querySelector<HTMLElement>(".knomo-shuffle-day-date")!.textContent = "2025-12-29 · 星期一";
+					const back = day.querySelector<HTMLElement>("[data-action='random-day-back']")!;
+					back.textContent = "返回";
+					const button = back.getBoundingClientRect();
+					const summaryRect = summary?.getBoundingClientRect();
+					const row = back.parentElement!.getBoundingClientRect();
+					const date = day.querySelector(".knomo-shuffle-day-date")!.getBoundingClientRect();
+					const shuffle = document.querySelector("[data-action='refresh-random-reunion']")!.getBoundingClientRect();
+					return {
+						aligned: Math.abs(button.right - shuffle.right) < 1 && Math.abs(button.right - row.right) < 1,
+						dateAbove: date.bottom <= row.top,
+						sameRow: !summaryRect || Math.abs(summaryRect.top + summaryRect.height / 2 - button.top - button.height / 2) < 1,
+						separate: !summaryRect || summaryRect.right + 11 <= button.left,
+						bounded: !summary || summary.scrollWidth <= summary.clientWidth + 1,
+					};
+				}, content);
+				assert.deepEqual(actual, { aligned: true, dateAbove: true, sameRow: true, separate: true, bounded: true }, JSON.stringify({ theme, width, content }));
+			}
 		}
 	} finally { await browser.close(); }
 });

@@ -151,6 +151,44 @@ test("加载完成重绘保留日期返回按钮焦点，重试按钮消失后�
 	} finally { dom.window.close(); }
 });
 
+test("日期详情返回后移动端恢复页面焦点，桌面端恢复原卡片菜单焦点", async () => {
+	for (const layout of ["mobile", "desktop-wide"] as const) {
+		const h = await harness();
+		const { Platform } = await import("obsidian");
+		const platform = Platform as unknown as { isMobile: boolean };
+		const wasMobile = platform.isMobile;
+		const dom = new JSDOM("<main><div><button data-action='random-day-back'>Back</button></div></main>", { pretendToBeVisual: true });
+		const cleanups: Array<() => void> = [];
+		try {
+			platform.isMobile = layout === "mobile";
+			const doc = dom.window.document;
+			const root = doc.querySelector("main")!;
+			const flow = root.querySelector("div")!;
+			Object.assign(dom.window.HTMLElement.prototype, { getAttr(this: HTMLElement, name: string) { return this.getAttribute(name); } });
+			doc.hasFocus = () => true;
+			Object.assign(h.view, { currentLayout: layout, rootEl: root, cardFlowEl: flow, mobileViewFocusRecovery: null,
+				containerEl: { doc, win: dom.window }, app: { workspace: { getActiveViewOfType: () => h.view } },
+				mobileSearchController: { isOpen: false },
+				register: (cleanup: () => void) => cleanups.push(cleanup),
+				getDirectCardElements: () => [...flow.querySelectorAll("article")],
+				renderUiState: () => { flow.innerHTML = `<article data-memo-id='${h.memo.id}'><button class='knomo-card-menu' aria-expanded='false'>Menu</button></article>`; },
+			});
+			await h.random.refresh();
+			await h.view.openRandomDay(h.memo);
+			assert.equal(doc.activeElement?.getAttribute("data-action"), "random-day-back");
+			await h.view.returnFromRandomDay();
+			const menu = flow.querySelector(".knomo-card-menu")!;
+			assert.equal(doc.activeElement, layout === "mobile" ? root : menu, layout);
+			assert.equal(menu.getAttribute("aria-expanded"), "false");
+			assert.deepEqual(h.restored, [h.position]);
+		} finally {
+			for (const cleanup of cleanups) cleanup();
+			platform.isMobile = wasMobile;
+			dom.window.close();
+		}
+	}
+});
+
 test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜索覆盖层不继承此入口", async () => {
 	const h = await harness();
 	for (const surface of ["card-flow", "mobile-search"]) {

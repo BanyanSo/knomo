@@ -298,9 +298,9 @@ body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] > .view-
 }
 
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .knomo-card-flow {
-	/* 原来的外部占位改为列表内留白，首屏位置不变，滚动后正文可进入栏后。 */
-	padding-top: var(--knomo-mobile-feed-top);
-	scroll-padding-top: var(--knomo-mobile-feed-top);
+	/* 避让标题栏后统一留出首屏间距，留白仍随列表滚走。 */
+	padding-top: calc(var(--knomo-mobile-feed-top) + var(--size-4-2, 8px));
+	scroll-padding-top: calc(var(--knomo-mobile-feed-top) + var(--size-4-2, 8px));
 }
 
 body.is-mobile.is-phone .workspace-leaf-content[data-type="knomo-view"] .knomo-page-feedback:not([hidden]) {
@@ -2397,6 +2397,15 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	scrollbar-width: none;
 }
 
+.knomo-plugin.is-layout-mobile .knomo-card-flow {
+	padding-top: var(--size-4-2, 8px);
+	scroll-padding-top: var(--size-4-2, 8px);
+}
+
+.knomo-plugin.is-layout-mobile .knomo-page-feedback:not([hidden]) ~ .knomo-card-flow {
+	padding-top: 0;
+}
+
 .knomo-plugin .knomo-card-flow::after {
 	content: "";
 	display: block;
@@ -2473,6 +2482,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	flex-direction: column;
 	gap: 4px;
 	margin: 0 0 14px;
+}
+
+.knomo-plugin .knomo-shuffle-day-header > .knomo-list-toolbar {
+	margin: 0;
 }
 
 .knomo-plugin .knomo-shuffle-day-date {
@@ -4559,6 +4572,10 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 }
 .knomo-plugin.is-layout-mobile .knomo-recent-flow-date {
 	padding-top: var(--size-4-2, 8px);
+}
+.knomo-plugin.is-layout-mobile .knomo-card-flow > .knomo-recent-flow-date:first-child {
+	/* 首项间距已由列表提供，后续日期分组继续保留自身留白。 */
+	padding-top: 0;
 }
 .knomo-plugin .knomo-recent-flow-relative {
 	color: var(--text-accent);

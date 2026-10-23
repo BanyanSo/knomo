@@ -330,7 +330,7 @@ export const zhCN = {
 	"card.edit": "编辑",
 	"card.reference": "引用",
 	"card.openDaily": "打开日记",
-	"card.viewDay": "查看那一天",
+	"card.viewDay": "查看这一天",
 	"random.dayBack": "返回",
 	"random.dayLoading": "正在读取这一天",
 	"random.dayFailed": "这一天加载失败",

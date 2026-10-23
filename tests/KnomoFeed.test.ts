@@ -12,6 +12,13 @@ test("日期详情的日期、原时间精度与返回在加载、失败和空�
 	assert.equal(root.find("[data-action='random-day-back']")?.getText(), "Back");
 	assert.equal(root.find("[data-action='refresh-random-reunion']"), null);
 	assert.equal(root.find("[data-action='refresh-shuffle-day']"), null);
+	const ready = new TestElement("div");
+	renderKnomoCardFlowHeaders(ready.asHtml(), [{ type: "random-day", selectedDate: "2026-10-22", stats: {
+		memoCount: 7, wordCount: 200, tagCount: 1, imageCount: 0, linkCount: 0, firstMemoTime: null, lastMemoTime: null,
+	} }]);
+	const toolbar = ready.find(".knomo-list-toolbar")!;
+	assert.ok(toolbar.find(".knomo-shuffle-day-summary"), "摘要与返回按钮放在同一工具栏");
+	assert.ok(toolbar.find("[data-action='random-day-back']"));
 });
 
 test("页面问题有状态语义，同一说明重绘不重复播报，新问题重新播报", async () => {

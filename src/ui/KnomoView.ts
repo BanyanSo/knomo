@@ -4785,6 +4785,11 @@ export class KnomoView extends ItemView {
 		this.clearRandomDay();
 		this.renderUiState({ cardFlowChangeIntent: "view-scope-change" });
 		if (context) this.restoreHistoryBrowsePosition(context.position);
+		if (this.currentLayout === "mobile") {
+			// 触屏返回恢复页面焦点，避免原菜单按钮留下点击边框。
+			this.recoverMobileViewFocus();
+			return;
+		}
 		const card = this.cardFlowEl ? this.getDirectCardElements(this.cardFlowEl).find(item => item.getAttr("data-memo-id") === context?.memoId) : null;
 		const target = card?.querySelector<HTMLElement>(".knomo-card-menu") ?? this.cardFlowEl?.querySelector<HTMLElement>("[data-action='refresh-random-reunion']");
 		target?.focus({ preventScroll: true });

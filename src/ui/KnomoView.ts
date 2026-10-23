@@ -7048,7 +7048,6 @@ export class KnomoView extends ItemView {
 		this.mobileMenuController ??= new KnomoMobileMenu();
 		this.mobileMenuController.open({
 			kind: "card", trigger,
-			registerGlassSurface: surface => this.registerMobileGlassSurface(surface),
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen)) {
@@ -7078,7 +7077,6 @@ export class KnomoView extends ItemView {
 		this.mobileMenuController ??= new KnomoMobileMenu();
 		this.mobileMenuController.open({
 			kind: "scope", trigger,
-			registerGlassSurface: surface => this.registerMobileGlassSurface(surface),
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const option of TITLE_MODE_OPTIONS) {

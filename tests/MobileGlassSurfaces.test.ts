@@ -26,7 +26,8 @@ const hostFixture = `
  .suggestion-content { display:flex; flex-direction:column; overflow:hidden; margin-inline-end:auto; }
  .suggestion-title { overflow-wrap:break-word; }
  .suggestion-note { font-size:.8em; color:var(--text-muted); overflow-wrap:break-word; }
- .menu { padding:6px; border:1px solid red; border-radius:12px; background:var(--background-secondary); box-shadow:0 0 2px red; }
+  .menu { padding:6px; border:1px solid red; border-radius:12px; background:var(--background-secondary); box-shadow:0 0 2px red;
+    backdrop-filter:var(--fixture-menu-filter, none); background-image:var(--fixture-menu-image, none); }
  .menu-item { padding:8px; }
  .fixture-mask { position:fixed; inset:0; background:rgba(0,0,0,.48); }
  .fixture-content { height:100vh; background:repeating-linear-gradient(0deg, #aaa 0 10px, #777 10px 20px); }
@@ -53,12 +54,26 @@ function markup(reduced: boolean, mobile = true): string {
 	 <div id="link" class="suggestion-container knomo-native-suggest knomo-link-suggest-popover ${mobileClass} ${surface}" style="--knomo-suggest-left:206px;--knomo-suggest-top:120px;--knomo-suggest-width:168px" role="listbox">
 	  <div class="suggestion knomo-suggest-list"><div class="suggestion-item mod-complex knomo-link-suggest-item is-selected" role="option" aria-selected="true"><div class="suggestion-content"><div class="suggestion-title knomo-link-suggest-title">Alpha</div><div class="suggestion-note knomo-link-suggest-path">Notes/Alpha.md</div></div></div></div>
 	 </div>
-	 <div id="owned-menu" class="menu knomo-mobile-menu knomo-mobile-menu-scope ${surface}"><div class="menu-item mod-checked">All</div></div>
+  <div id="owned-menu" class="menu knomo-mobile-menu knomo-mobile-menu-scope"><div class="menu-item mod-checked">All</div></div>
+  <div id="card-menu" class="menu knomo-mobile-menu knomo-mobile-menu-card"><div class="menu-item">More</div></div>
 	 <div id="host-menu" class="menu"><div class="menu-item">Host</div></div>
 	 <div class="knomo-plugin is-layout-mobile ${preference}"><div id="picker" class="knomo-time-buoy-picker is-mobile is-open">Date
 	  <div class="knomo-time-buoy-picker-grid">${Array.from({ length: 35 }, (_, index) => `<button class="knomo-time-buoy-picker-day ${index === 0 ? "is-today" : ""}" ${index === 1 ? "disabled" : ""}>${index % 31 + 1}</button>`).join("")}</div></div></div>
 	 <div class="fixture-composer knomo-plugin is-layout-mobile knomo-mobile-composer-layer is-active is-open ${preference}"><div class="knomo-mobile-composer-stage"><div class="knomo-mobile-composer-content"><div class="knomo-composer"><div class="knomo-composer-editor">Readable draft</div>
 	  <button class="knomo-send-button" aria-label="Send"><svg><path d="M4 12H20" stroke="currentColor"/></svg></button></div></div></div></div>`;
+}
+
+function menuShellStyles(elements: HTMLElement[]) {
+	return elements.map(el => {
+		const style = getComputedStyle(el);
+		return {
+			background: style.backgroundColor, image: style.backgroundImage, border: style.border,
+			radius: style.borderRadius, padding: style.padding, shadow: style.boxShadow,
+			filter: style.backdropFilter, webkitFilter: style.getPropertyValue("-webkit-backdrop-filter"),
+			color: style.color, font: style.fontFamily, size: style.fontSize, weight: style.fontWeight,
+			lineHeight: style.lineHeight, opacity: style.opacity,
+		};
+	});
 }
 
 test("contrast preferences make owned glass solid without changing host menus", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
@@ -69,16 +84,19 @@ test("contrast preferences make owned glass solid without changing host menus", 
 		for (const theme of ["theme-light", "theme-dark"]) for (const forcedColors of ["none", "active"]) {
 			await page.emulateMedia({ contrast: "more", forcedColors });
 			await page.setContent(`<style>${hostFixture}${readFileSync("styles.css", "utf8")}</style><body class="is-mobile is-phone ${theme}">${markup(false)}</body>`);
-			for (const selector of ["#single", "#owned-menu", "#picker", ".view-header"]) {
+			for (const selector of ["#single", "#picker", ".view-header"]) {
 				const paint = await page.locator(selector).evaluate((el: HTMLElement) => {
 					const s = getComputedStyle(el, el.classList.contains("view-header") ? "::before" : null);
 					return { filter: s.backdropFilter };
 				});
 				assert.equal(paint.filter, "none", `${theme}/${forcedColors}/${selector}: contrast removes blur`);
 			}
-			assert.equal(await page.locator("#owned-menu").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none");
+			assert.equal(await page.locator("#picker").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none");
+			const menus = await page.locator("#owned-menu, #card-menu, #host-menu").evaluateAll(menuShellStyles);
+			assert.deepEqual(menus[0], menus[2], `${theme}/${forcedColors}: scope shell follows the host`);
+			assert.deepEqual(menus[1], menus[2], `${theme}/${forcedColors}: card shell follows the host`);
 			if (forcedColors === "none") {
-				assert.equal(await page.locator("#owned-menu").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor), theme === "theme-light" ? "rgb(255, 255, 255)" : "rgb(32, 32, 32)");
+				assert.equal(await page.locator("#picker").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor), theme === "theme-light" ? "rgb(255, 255, 255)" : "rgb(32, 32, 32)");
 				assert.equal(await page.locator("#host-menu").evaluate((el: HTMLElement) => getComputedStyle(el).borderTopColor), "rgb(255, 0, 0)");
 			}
 		}
@@ -110,19 +128,24 @@ test("mobile date grid keeps separate 44px touch targets inside a narrow viewpor
 	} finally { await browser.close(); }
 });
 
-test("mobile candidates follow native material and row insets while owned menus retain the shared glass", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile candidates and menus follow native material while the date picker retains glass", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
 	try {
 		const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
 		const cdp = await page.context().newCDPSession(page);
 		const css = readFileSync("styles.css", "utf8");
-		for (const theme of ["theme-light", "theme-dark"]) for (const manual of [false, true]) for (const system of ["no-preference", "reduce"]) {
+		for (const theme of ["theme-light", "theme-dark"]) for (const nativeGlass of [false, true]) for (const manual of [false, true]) for (const system of ["no-preference", "reduce"]) {
 			await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: system }, { name: "prefers-reduced-motion", value: "reduce" }] });
-			await page.setContent(`<style>${hostFixture}${css}</style><body class="is-mobile is-phone ${theme}">${markup(manual)}</body>`);
-			const context = `${theme}/manual=${manual}/system=${system}`;
+			const nativeStyle = nativeGlass ? "--fixture-menu-filter:blur(4px);--fixture-menu-image:linear-gradient(120deg, rgba(255, 255, 255, .2), transparent);" : "";
+			await page.setContent(`<style>${hostFixture}${css}</style><body class="is-mobile is-phone ${theme}" style="${nativeStyle}">${markup(manual)}</body>`);
+			const context = `${theme}/nativeGlass=${nativeGlass}/manual=${manual}/system=${system}`;
 			const solid = manual || system === "reduce";
-			const surfaces = await page.locator("#single, #multi, #link, #owned-menu, #picker").evaluateAll((elements: HTMLElement[]) => elements.map(el => {
+			const menus = await page.locator("#owned-menu, #card-menu, #host-menu").evaluateAll(menuShellStyles);
+			assert.deepEqual(menus[0], menus[2], `${context}: scope shell follows the host`);
+			assert.deepEqual(menus[1], menus[2], `${context}: card shell follows the host`);
+			assert.equal(menus[2].filter, nativeGlass ? "blur(4px)" : "none", `${context}: host material is retained independently of Knomo preferences`);
+			const surfaces = await page.locator("#single, #multi, #link, #picker").evaluateAll((elements: HTMLElement[]) => elements.map(el => {
 				const style = getComputedStyle(el);
 				const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d")!;
 				ctx.fillStyle = style.backgroundColor; ctx.fillRect(0, 0, 1, 1);
@@ -182,9 +205,10 @@ test("mobile candidates follow native material and row insets while owned menus 
 			await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: system }] });
 			assert.equal(await retained.evaluate((el: HTMLElement) => el === document.getElementById("single")), true, "system changes retain the open popup");
 			assert.equal(await retained.evaluate((el: HTMLElement) => getComputedStyle(el).backdropFilter), system === "reduce" ? "none" : "blur(8px)");
-			for (const selector of ["#owned-menu", "#picker"]) {
-				assert.equal(await page.locator(selector).evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage === "none"), system === "reduce", `${selector}: open owned shells follow system changes`);
-			}
+			assert.equal(await page.locator("#picker").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage === "none"), system === "reduce", "open date picker follows system changes");
+			const menus = await page.locator("#owned-menu, #card-menu, #host-menu").evaluateAll(menuShellStyles);
+			assert.deepEqual(menus[0], menus[2], `${system}: open scope shell follows the host`);
+			assert.deepEqual(menus[1], menus[2], `${system}: open card shell follows the host`);
 		}
 	} finally { await browser.close(); }
 });
@@ -276,7 +300,7 @@ test("mobile primary actions keep tint on press and preserve disabled, saving, f
 		for (const theme of ["theme-light", "theme-dark"]) for (const manual of [false, true]) for (const system of ["no-preference", "reduce"]) {
 			await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: system }, { name: "prefers-reduced-motion", value: "reduce" }] });
 			await page.setContent(`<style>${hostFixture}${readFileSync("styles.css", "utf8")}</style><body class="is-mobile is-phone ${theme}">${markup(manual)}</body>`);
-			await page.locator("#single, #multi, #link, #owned-menu, #host-menu, #picker").evaluateAll((elements: HTMLElement[]) => elements.forEach(el => el.remove()));
+			await page.locator("#single, #multi, #link, #owned-menu, #card-menu, #host-menu, #picker").evaluateAll((elements: HTMLElement[]) => elements.forEach(el => el.remove()));
 			const context = `${theme}/manual=${manual}/system=${system}`;
 			const paint = () => page.evaluate(() => [".knomo-mobile-create-fab", ".knomo-send-button"].map((selector, index) => {
 				const el = document.querySelector<HTMLElement>(selector)!, style = getComputedStyle(el, index ? "::before" : undefined);
@@ -354,8 +378,8 @@ test("mobile primary actions keep tint on press and preserve disabled, saving, f
 					if (rule instanceof CSSSupportsRule && rule.conditionText.includes(feature)) sheet.deleteRule(i);
 				}
 			}, missing);
-			// 候选框已交由宿主绘制；此处只关闭 Knomo 自己的增强材质分支。
-			for (const selector of ["#owned-menu", "#picker", ".view-header::before"]) {
+			// 菜单与候选框已交由宿主绘制；此处只关闭 Knomo 自己的增强材质分支。
+			for (const selector of ["#picker", ".view-header::before"]) {
 				const pseudo = selector.includes("::before");
 				const fallback = await page.locator(pseudo ? ".view-header" : selector).evaluate((el: HTMLElement, pseudo: boolean) => {
 					const style = getComputedStyle(el, pseudo ? "::before" : undefined);
@@ -368,6 +392,9 @@ test("mobile primary actions keep tint on press and preserve disabled, saving, f
 				}
 				else assert.match(fallback.image, /rgb\(237, 237, 237\)/, `${missing}: opaque header gradient`);
 			}
+			const menus = await page.locator("#owned-menu, #card-menu, #host-menu").evaluateAll(menuShellStyles);
+			assert.deepEqual(menus[0], menus[2], `${missing}: scope shell follows the host`);
+			assert.deepEqual(menus[1], menus[2], `${missing}: card shell follows the host`);
 		}
 	} finally { await browser.close(); }
 });

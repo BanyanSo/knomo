@@ -5243,9 +5243,8 @@ body.is-mobile .knomo-plugin.is-layout-mobile .knomo-send-button:active:not(:dis
 	transform: translate(-50%, -50%) scale(0.96);
 }
 
-/* Knomo 绘制已识别的范围/卡片菜单与浮标日期面板；候选框复用原生 suggestion 表面。
+/* Knomo 绘制浮标日期面板；范围/卡片菜单及候选框分别复用原生 menu/suggestion 表面。
    搜索日期筛选是页面内状态；编辑器、卡片与大型模态面板保留原有实色。 */
-body.is-mobile .knomo-mobile-glass-surface.menu.knomo-mobile-menu,
 body.is-mobile .knomo-plugin.is-layout-mobile .knomo-time-buoy-picker.is-mobile {
 	color: var(--text-normal);
 	background-color: var(--knomo-glass-popup);
@@ -5255,7 +5254,6 @@ body.is-mobile .knomo-plugin.is-layout-mobile .knomo-time-buoy-picker.is-mobile 
 	-webkit-backdrop-filter: var(--knomo-glass-popup-filter);
 }
 
-body.is-mobile .knomo-mobile-glass-surface.menu.knomo-mobile-menu,
 body.is-mobile .knomo-plugin.is-layout-mobile .knomo-time-buoy-picker.is-mobile {
 	border: 1px solid var(--knomo-glass-popup-border);
 }

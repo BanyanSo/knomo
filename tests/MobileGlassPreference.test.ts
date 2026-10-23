@@ -87,10 +87,12 @@ test("glass preference updates the leaf, page and body Composer in place without
 		const leaf = f.win.document.body.createDiv();
 		leaf.appendChild(f.root);
 		let reduced = true;
+		const navbarPreferences: boolean[] = [];
 		const view = Object.assign(f.view as unknown as { syncReducedGlassEffects(): void }, {
 			containerEl: leaf, rootEl: f.root,
 			settingsService: { getSettings: () => ({ reduceGlassEffects: reduced }) },
 			mobileComposerController: { getLayerEl: () => f.layer },
+			mobileNavbarCompactController: { syncGlassPreference: () => { navbarPreferences.push(reduced); } },
 		});
 		const input = f.view.inputEl;
 		const draft = input.value;
@@ -102,5 +104,6 @@ test("glass preference updates the leaf, page and body Composer in place without
 			assert.equal(input.value, draft);
 			assert.equal(leaf.contains(f.layer), false, "body 浮层独立获得偏好");
 		}
+		assert.deepEqual(navbarPreferences, [true, false, true], "设置变化同步通知宿主导航栏");
 	} finally { f.close(); }
 });

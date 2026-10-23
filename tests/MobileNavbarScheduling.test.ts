@@ -188,6 +188,55 @@ test("活动导航栏消失时释放旧根，并继续等待晚到的替代导�
 	} finally { h.close(); }
 });
 
+test("导航栏材质偏好就地同步，切页、替换和停止时遵循宿主归属", async () => {
+	const h = await createHarness();
+	try {
+		let navbar = h.addNavbar();
+		const unrelated = h.doc.createElement("div");
+		unrelated.classList.add("knomo-reduce-glass");
+		h.doc.body.appendChild(unrelated);
+		h.state.reducedGlass = true;
+		h.controller.syncGlassPreference();
+		assert.equal(navbar.classList.contains("knomo-reduce-glass"), false, "启动前不接管宿主");
+		h.controller.start();
+		await h.advance(1_000);
+		assert.equal(navbar.classList.contains("knomo-reduce-glass"), true, "首次接管应用当前偏好");
+		const sidebar = navbar.querySelector(".knomo-mobile-navbar-sidebar-action");
+		const settled = h.syncCalls;
+		for (const reduced of [false, true, false]) {
+			h.state.reducedGlass = reduced;
+			h.controller.syncGlassPreference();
+			assert.equal(navbar.classList.contains("knomo-reduce-glass"), reduced);
+			assert.equal(navbar.querySelector(".knomo-mobile-navbar-sidebar-action"), sidebar);
+			await h.flushMutations();
+			await h.advance(1_000);
+			assert.equal(h.syncCalls, settled, "偏好同步不触发布局重算");
+		}
+		h.state.reducedGlass = true;
+		h.controller.syncGlassPreference();
+		h.state.active = false;
+		h.workspaceEvent("active-leaf-change");
+		await h.advance(1_000);
+		assert.equal(navbar.classList.contains("knomo-mobile-navbar-compact"), false);
+		assert.equal(navbar.classList.contains("knomo-reduce-glass"), false);
+		h.controller.syncGlassPreference();
+		assert.equal(navbar.classList.contains("knomo-reduce-glass"), false, "非活动视图不能重新标记宿主");
+		h.state.active = true;
+		h.workspaceEvent("active-leaf-change");
+		await h.advance(1_000);
+		assert.equal(navbar.classList.contains("knomo-reduce-glass"), true);
+		navbar.remove();
+		navbar = h.addNavbar();
+		h.workspaceEvent("layout-change");
+		await h.advance(1_000);
+		assert.equal(navbar.classList.contains("knomo-reduce-glass"), true, "替代节点应用当前偏好");
+		h.controller.stop();
+		assert.equal(navbar.classList.contains("knomo-reduce-glass"), false);
+		assert.equal(navbar.classList.contains("knomo-mobile-navbar-compact"), false);
+		assert.equal(unrelated.classList.contains("knomo-reduce-glass"), true, "仅清理接管的宿主节点");
+	} finally { h.close(); }
+});
+
 async function createHarness() {
 	await ensureObsidianStub();
 	const { Platform } = await import("obsidian");
@@ -245,7 +294,7 @@ async function createHarness() {
 		}
 		disconnect(): void { super.disconnect(); observed.delete(this); }
 	};
-	const state = { active: true };
+	const state = { active: true, reducedGlass: false };
 	const actions: string[] = [];
 	const workspaceListeners = new Map<string, Set<() => void>>();
 	const domCleanups: Array<() => void> = [];
@@ -266,6 +315,7 @@ async function createHarness() {
 	};
 	const controller = new MobileNavbarCompactController(view as never, {
 		isActive: () => state.active, isComposerOpen: () => false,
+		isGlassReduced: () => state.reducedGlass,
 		toggleSidebar: () => actions.push("sidebar"), openComposer: () => actions.push("composer"),
 	});
 	const sync = controller.sync.bind(controller);

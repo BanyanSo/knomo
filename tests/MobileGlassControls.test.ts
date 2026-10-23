@@ -52,7 +52,7 @@ const hostFixture = `
  * { box-sizing:border-box; }
  body { display:block; margin:0; font:16px/1.5 Arial; --size-2-1:2px; --size-4-2:8px;
    --background-primary:#fff; --background-secondary:#ededed; --background-modifier-hover:rgba(0,0,0,.08);
-   --text-normal:#222; --text-muted:#666; --text-on-accent:#fff; --background-modifier-border:#ccc; }
+   --text-normal:#222; --text-muted:#666; --text-on-accent:#fff; --interactive-accent:#7852c9; --background-modifier-border:#ccc; }
  body.theme-dark { --background-primary:#202020; --background-secondary:#303030; --text-normal:#eee; --text-muted:#aaa; --background-modifier-border:#555; }
  .fixture-root { display:block; height:auto; padding:12px; }
  .knomo-time-buoy-tabs, .knomo-record-stats-view-controls { margin-bottom:24px; }
@@ -85,7 +85,7 @@ test("forced colors preserve segment selection separately from keyboard focus", 
 	} finally { await browser.close(); }
 });
 
-test("mobile Glass segments share selected, pressed and focus surfaces while Navbar preserves host material", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile Glass segments share state surfaces while Navbar shares Header material and restores the host", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const html = await segmentHtml();
 	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
@@ -99,7 +99,8 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 			await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: system }, { name: "prefers-reduced-motion", value: "reduce" }] });
 			await page.setContent(`<style>${host}${css}${hostFixture}</style><body class="is-mobile ${theme} knomo-mobile-navbar-compact-active knomo-mobile-navbar-floating" style="--interactive-accent:${accent}">
 				<main class="fixture-root knomo-plugin is-layout-mobile ${manual ? "knomo-reduce-glass" : ""}">${html}</main>
-				<nav class="mobile-navbar knomo-mobile-navbar-compact"><button type="button" data-action="host-menu">Menu</button></nav></body>`);
+				<div class="workspace-leaf-content ${manual ? "knomo-reduce-glass" : ""}" data-type="knomo-view" style="display:none"><div class="view-header"></div></div>
+				<nav class="mobile-navbar knomo-mobile-navbar-compact ${manual ? "knomo-reduce-glass" : ""}"><button type="button" data-action="host-menu">Menu</button></nav></body>`);
 			const context = `${theme}/${accent}/manual=${manual}/system=${system}`;
 			const tracks = page.locator(".knomo-time-buoy-tabs, .knomo-record-stats-view-controls");
 			const surfaces = await tracks.evaluateAll((elements: HTMLElement[]) => elements.map(el => {
@@ -166,10 +167,20 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 				return { color: style.backgroundColor, filter: style.backdropFilter, image: style.backgroundImage, radius: style.borderRadius,
 					shadow: style.boxShadow, border: style.border, before: edge("::before"), after: edge("::after") };
 			});
-			assert.equal(navPaint.color, theme === "theme-dark" ? "rgb(32, 32, 32)" : "rgb(255, 255, 255)", `${context}: host background is untouched`);
-			assert.equal(navPaint.filter, "blur(7px)", `${context}: host filter is neither removed nor duplicated`);
-			assert.match(navPaint.image, /90deg/, `${context}: host gradient is untouched`);
-			assert.equal(navPaint.shadow, "rgb(255, 0, 0) 0px 0px 2px 0px", `${context}: no Knomo rim or shadow`);
+			assert.equal(navPaint.filter, await page.locator(".view-header").evaluate((el: HTMLElement) => getComputedStyle(el).backdropFilter), `${context}: Header and Navbar share the filter`);
+			assert.notEqual(navPaint.shadow, "rgb(255, 0, 0) 0px 0px 2px 0px", `${context}: only the Knomo contour is drawn`);
+			for (const edge of [navPaint.before, navPaint.after]) {
+				assert.equal(edge[0], "none", `${context}: host edge does not overlay the material`);
+				assert.equal(edge[5], "none", `${context}: no second backdrop filter`);
+			}
+			const systemReduced = await page.evaluate(() => matchMedia("(prefers-reduced-transparency: reduce)").matches);
+			if (manual || systemReduced) {
+				assert.equal(navPaint.filter, "none", context);
+				assert.ok(navPaint.image.includes(theme === "theme-dark" ? "rgb(48, 48, 48)" : "rgb(237, 237, 237)"), `${context}: opaque theme fallback`);
+			} else {
+				assert.equal(navPaint.filter, "blur(2px) saturate(1.1)", context);
+				assert.match(navPaint.image, /(?:color-mix|color)\(/, `${context}: translucent theme fill`);
+			}
 			await page.evaluate(() => document.body.classList.remove("knomo-mobile-navbar-compact-active"));
 			const hostPaint = await navbar.evaluate((el: HTMLElement) => {
 				const paint = (pseudo?: string) => {
@@ -178,6 +189,9 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 				};
 				return [paint(), paint("::before"), paint("::after")];
 			});
+			assert.equal(hostPaint[0][4], "blur(7px)", `${context}: leaving Knomo restores the host filter`);
+			assert.match(hostPaint[0][1], /90deg/, `${context}: leaving Knomo restores the host gradient`);
+			assert.notEqual(await navbar.evaluate((el: HTMLElement) => getComputedStyle(el, "::after").content), "none", `${context}: leaving Knomo restores the native edge`);
 			await page.evaluate(() => document.body.classList.add("knomo-mobile-navbar-compact-active"));
 			assert.deepEqual(await navbar.evaluate((el: HTMLElement) => {
 				const paint = (pseudo?: string) => {
@@ -185,7 +199,7 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 					return [style.backgroundColor, style.backgroundImage, style.border, style.boxShadow, style.backdropFilter];
 				};
 				return [paint(), paint("::before"), paint("::after")];
-			}), hostPaint, `${context}: host surface and both edge pseudo-elements survive Knomo activation`);
+			}), [[navPaint.color, navPaint.image, navPaint.border, navPaint.shadow, navPaint.filter], navPaint.before.slice(1), navPaint.after.slice(1)], `${context}: returning to Knomo restores its material`);
 			await page.locator("[data-action=host-menu]").tap();
 			assert.equal(await page.locator("[data-action=host-menu]").getAttribute("data-calls"), "1", context);
 			await page.evaluate(() => document.body.classList.replace("knomo-mobile-navbar-floating", "knomo-mobile-navbar-fixed"));
@@ -208,5 +222,57 @@ test("mobile Glass segments share selected, pressed and focus surfaces while Nav
 		assert.equal(await page.locator(".knomo-time-buoy-tab.is-active").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none", "desktop keeps its existing selected surface");
 		assert.equal(await page.locator(".knomo-time-buoy-tabs").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none", "desktop track is unchanged");
 		assert.equal(await page.locator(".mobile-navbar").evaluate((el: HTMLElement) => getComputedStyle(el).boxShadow), "rgb(255, 0, 0) 0px 0px 2px 0px", "leaving Knomo restores the host decoration");
+	} finally { await browser.close(); }
+});
+
+test("Navbar retains geometry and focus across capability and contrast fallbacks", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	try {
+		const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+		const cdp = await page.context().newCDPSession(page);
+		for (const theme of ["theme-light", "theme-dark"]) for (const mode of ["floating", "fixed"]) for (const fallback of ["color-mix", "backdrop-filter", "prefers-contrast", "forced-colors"]) {
+			await cdp.send("Emulation.setEmulatedMedia", { features: [] });
+			await page.setContent(`<style id="material">${host}${css}${hostFixture}</style><body class="is-mobile is-phone is-ios ${mode === "floating" ? "is-floating-nav" : ""} ${theme} knomo-mobile-navbar-compact-active knomo-mobile-navbar-${mode}">
+				<nav class="mobile-navbar mod-raised knomo-mobile-navbar-compact"><button class="knomo-mobile-navbar-sidebar-action" aria-label="Menu">Menu</button></nav></body>`);
+			const navbar = page.locator(".mobile-navbar");
+			const geometry = await navbar.boundingBox();
+			const button = navbar.locator("button");
+			const hitArea = await button.boundingBox();
+			if (fallback === "prefers-contrast" || fallback === "forced-colors") {
+				await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: fallback, value: fallback === "forced-colors" ? "active" : "more" }] });
+			} else {
+				// 仅关闭增强分支，宿主仍保留原滤镜，以验证降级不会漏回宿主材质。
+				await page.evaluate((feature: string) => {
+					const sheet = (document.getElementById("material") as HTMLStyleElement).sheet!;
+					for (let i = sheet.cssRules.length - 1; i >= 0; i--) {
+						const rule = sheet.cssRules[i];
+						if (rule instanceof CSSSupportsRule && rule.conditionText.includes(feature)) sheet.deleteRule(i);
+					}
+				}, fallback);
+			}
+			const context = `${theme}/${mode}/${fallback}`;
+			const paint = await navbar.evaluate((el: HTMLElement) => {
+				const style = getComputedStyle(el);
+				return { filter: style.backdropFilter, image: style.backgroundImage, color: style.backgroundColor, shadow: style.boxShadow, outline: style.outlineStyle };
+			});
+			assert.equal(paint.filter, "none", context);
+			assert.deepEqual(await navbar.boundingBox(), geometry, `${context}: material does not resize or move the host`);
+			assert.deepEqual(await button.boundingBox(), hitArea, `${context}: material preserves the touch target`);
+			if (fallback === "forced-colors") {
+				assert.equal(paint.image, "none", `${context}: system color surface`);
+				assert.notEqual(paint.color, "rgba(0, 0, 0, 0)", `${context}: opaque system fallback`);
+			}
+			else assert.ok(paint.image.includes(theme === "theme-dark" ? "rgb(48, 48, 48)" : "rgb(237, 237, 237)"), `${context}: opaque theme surface`);
+			if (fallback === "prefers-contrast" || fallback === "forced-colors") {
+				assert.equal(paint.shadow, "none", context);
+				assert.equal(paint.outline, "solid", context);
+			}
+			await button.focus();
+			await page.keyboard.press("ArrowRight");
+			assert.equal(await button.evaluate((el: HTMLElement) => getComputedStyle(el).outlineWidth), "2px", `${context}: keyboard focus survives`);
+		}
 	} finally { await browser.close(); }
 });

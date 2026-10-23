@@ -7,6 +7,7 @@ import { t } from "../i18n";
 interface MobileNavbarCompactControllerOptions {
 	isActive: () => boolean;
 	isComposerOpen: () => boolean;
+	isGlassReduced: () => boolean;
 	toggleSidebar: () => void;
 	openComposer: () => void;
 }
@@ -53,6 +54,7 @@ const BODY_ACTIVE_CLASS = "knomo-mobile-navbar-compact-active";
 const BODY_FLOATING_CLASS = "knomo-mobile-navbar-floating";
 const BODY_FIXED_CLASS = "knomo-mobile-navbar-fixed";
 const NAVBAR_COMPACT_CLASS = "knomo-mobile-navbar-compact";
+const NAVBAR_REDUCED_GLASS_CLASS = "knomo-reduce-glass";
 const NATIVE_HIDDEN_CLASS = "knomo-mobile-navbar-hidden";
 const SIDEBAR_ACTION_CLASS = "knomo-mobile-navbar-sidebar-action";
 const CREATE_BUTTON_CLASS = "knomo-mobile-create-fab";
@@ -140,6 +142,19 @@ export class MobileNavbarCompactController {
 		this.queueSyncCycle();
 	}
 
+	syncGlassPreference(): void {
+		if (!this.shouldEnable()) return;
+		const navbarEl = this.findNavbar();
+		const reduced = this.options.isGlassReduced();
+		if (!navbarEl?.hasClass(NAVBAR_COMPACT_CLASS) || navbarEl.hasClass(NAVBAR_REDUCED_GLASS_CLASS) === reduced) return;
+		this.beginMutationSuppression();
+		try {
+			navbarEl.toggleClass(NAVBAR_REDUCED_GLASS_CLASS, reduced);
+		} finally {
+			this.endMutationSuppressionSoon();
+		}
+	}
+
 	stop(): void {
 		if (!this.started) {
 			return;
@@ -184,6 +199,7 @@ export class MobileNavbarCompactController {
 			body.toggleClass(BODY_FLOATING_CLASS, floating);
 			body.toggleClass(BODY_FIXED_CLASS, !floating);
 			navbarEl.addClass(NAVBAR_COMPACT_CLASS);
+			navbarEl.toggleClass(NAVBAR_REDUCED_GLASS_CLASS, this.options.isGlassReduced());
 			this.syncNavbarPlacement(navbarEl, floating, edgeInsets);
 
 			this.hideNativeActions(navbarEl);
@@ -406,6 +422,7 @@ export class MobileNavbarCompactController {
 		for (const element of body.findAll(`.${NAVBAR_COMPACT_CLASS}`)) {
 			this.clearNavbarStyleProperties(element);
 			element.removeClass(NAVBAR_COMPACT_CLASS);
+			element.removeClass(NAVBAR_REDUCED_GLASS_CLASS);
 		}
 		for (const element of body.findAll(`.${NATIVE_HIDDEN_CLASS}`)) {
 			element.removeClass(NATIVE_HIDDEN_CLASS);
@@ -755,6 +772,7 @@ export class MobileNavbarCompactController {
 				[NAVBAR_RESERVED_RIGHT_VAR]: NAVBAR_RESERVED_RIGHT_DEFAULT,
 			});
 			element.removeClass(NAVBAR_COMPACT_CLASS);
+			element.removeClass(NAVBAR_REDUCED_GLASS_CLASS);
 		}
 		for (const element of body.findAll(`.${NATIVE_HIDDEN_CLASS}`)) {
 			element.removeClass(NATIVE_HIDDEN_CLASS);

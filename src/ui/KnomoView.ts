@@ -1278,6 +1278,7 @@ export class KnomoView extends ItemView {
 		this.mobileNavbarCompactController = new MobileNavbarCompactController(this, {
 			isActive: () => this.isMobileNavbarSyncTarget(),
 			isComposerOpen: () => this.composerOpen,
+			isGlassReduced: () => this.settingsService.getSettings().reduceGlassEffects === true,
 			toggleSidebar: () => this.toggleSidebar(),
 			openComposer: () => this.openComposer(),
 		});
@@ -2920,6 +2921,7 @@ export class KnomoView extends ItemView {
 		for (const container of [this.containerEl, this.rootEl, this.mobileComposerController.getLayerEl(), ...(this.mobileGlassSurfaces ?? [])]) {
 			container?.toggleClass("knomo-reduce-glass", reduced);
 		}
+		this.mobileNavbarCompactController?.syncGlassPreference();
 	}
 
 	private registerMobileGlassSurface(surface: HTMLElement): () => void {

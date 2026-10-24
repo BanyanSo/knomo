@@ -85,7 +85,7 @@ test("forced colors preserve segment selection separately from keyboard focus", 
 	} finally { await browser.close(); }
 });
 
-test("mobile Glass segments share state surfaces while Navbar shares Header material and restores the host", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile segments retain their base styles while Navbar shares Header material and restores the host", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const html = await segmentHtml();
 	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
@@ -101,20 +101,23 @@ test("mobile Glass segments share state surfaces while Navbar shares Header mate
 				<main class="fixture-root knomo-plugin is-layout-mobile ${manual ? "knomo-reduce-glass" : ""}">${html}</main>
 				<div class="workspace-leaf-content ${manual ? "knomo-reduce-glass" : ""}" data-type="knomo-view" style="display:none"><div class="view-header"></div></div>
 				<nav class="mobile-navbar knomo-mobile-navbar-compact ${manual ? "knomo-reduce-glass" : ""}"><button type="button" data-action="host-menu">Menu</button></nav></body>`);
+			await page.mouse.move(319, 699);
 			const context = `${theme}/${accent}/manual=${manual}/system=${system}`;
+			const accentColor = `rgb(${[1, 3, 5].map(offset => parseInt(accent.slice(offset, offset + 2), 16)).join(", ")})`;
 			const tracks = page.locator(".knomo-time-buoy-tabs, .knomo-record-stats-view-controls");
 			const surfaces = await tracks.evaluateAll((elements: HTMLElement[]) => elements.map(el => {
 				const style = getComputedStyle(el);
-				return { role: el.getAttribute("role"), image: style.backgroundImage, filter: style.backdropFilter, shadow: style.boxShadow, borderWidth: style.borderTopWidth,
+				return { role: el.getAttribute("role"), background: style.backgroundColor, image: style.backgroundImage, filter: style.backdropFilter, shadow: style.boxShadow, borderWidth: style.borderTopWidth,
 					buttons: [...el.querySelectorAll("button")].map(button => {
 						const paint = getComputedStyle(button);
 						return { selected: button.getAttribute(el.getAttribute("role") === "tablist" ? "aria-selected" : "aria-pressed"),
 							active: button.classList.contains("is-active"), width: button.offsetWidth, height: button.offsetHeight,
-							image: paint.backgroundImage, background: paint.backgroundColor, shadow: paint.boxShadow, filter: paint.backdropFilter };
+							image: paint.backgroundImage, background: paint.backgroundColor, color: paint.color, shadow: paint.boxShadow, filter: paint.backdropFilter };
 					}) };
 			}));
 			assert.deepEqual(surfaces.map((surface: { role: string }) => surface.role), ["tablist", "group"], context);
 			for (const surface of surfaces) {
+				assert.equal(surface.background, "rgba(0, 0, 0, 0.08)", `${context}: tab track keeps its original background`);
 				assert.equal(surface.image, "none", context);
 				assert.equal(surface.filter, "none", context);
 				assert.equal(surface.shadow, "none", `${context}: tab track has no decorative outline`);
@@ -129,12 +132,13 @@ test("mobile Glass segments share state surfaces while Navbar shares Header mate
 					if (button.active) {
 						assert.equal(button.image, "none", context);
 						assert.equal(button.shadow, "none", `${context}: selected segment uses a fill without an outline or shadow`);
-						assert.notEqual(button.background, "rgba(0, 0, 0, 0)", `${context}: selection is not conveyed by text alone`);
+						assert.equal(button.background, accentColor, `${context}: selection uses the original theme accent`);
+						assert.equal(button.color, "rgb(255, 255, 255)", `${context}: selected text keeps its original on-accent color`);
 					}
 					else { assert.equal(button.image, "none", context); assert.equal(button.background, "rgba(0, 0, 0, 0)", context); }
 				}
 			}
-			assert.equal(surfaces[0].buttons[0].background, surfaces[1].buttons[0].background, `${context}: same selected material`);
+			assert.equal(surfaces[0].buttons[0].background, surfaces[1].buttons[0].background, `${context}: both pages keep the same selected color`);
 			await page.evaluate(() => {
 				document.body.addEventListener("click", event => {
 					const target = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-action]");
@@ -144,9 +148,14 @@ test("mobile Glass segments share state surfaces while Navbar shares Header mate
 			const inactive = tracks.first().locator("button").nth(1);
 			await inactive.tap();
 			assert.equal(await inactive.getAttribute("data-calls"), "1", `${context}: native action is reachable once`);
-			// Chromium 的触摸反馈在 touchend 后短暂保留，等待实际绘制状态恢复，避免读取中间帧。
-			await page.waitForFunction(() => getComputedStyle(document.querySelectorAll(".knomo-time-buoy-tab")[1]).backgroundColor === "rgba(0, 0, 0, 0)", undefined, { timeout: 3000 });
-			assert.equal(await inactive.evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)", `${context}: touch leaves no hover fill`);
+			// 用指针核对原有 hover，再移出控件，显式复位触摸后的浏览器悬停反馈。
+			await inactive.hover();
+			assert.equal(await inactive.evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0.08)", `${context}: hover keeps its base feedback`);
+			await page.mouse.move(1, 699);
+			await page.waitForFunction(() => {
+				const button = document.querySelectorAll(".knomo-time-buoy-tab")[1];
+				return getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)";
+			}, undefined, { timeout: 3000 });
 			await inactive.focus();
 			await page.keyboard.down("Space");
 			const focus = await inactive.evaluate((el: HTMLElement) => {

@@ -11,7 +11,8 @@ const hostFixture = `
    --background-modifier-border:#ccc; --background-modifier-hover:rgba(0,0,0,.08); --interactive-accent:#7852c9;
    --interactive-accent-hover:#6945ba; --text-normal:#222; --text-muted:#666; --text-faint:#888; --text-on-accent:#fff;
    --suggestion-background:var(--background-secondary); --suggestion-backdrop-filter:none; --font-ui-medium:16px;
-   --size-2-1:2px; --size-4-1:4px; --size-4-2:8px; --size-4-8:32px; --border-width:1px; --radius-l:12px; --radius-xl:16px; color:var(--text-normal); }
+   --size-2-1:2px; --size-4-1:4px; --size-4-2:8px; --size-4-8:32px; --border-width:1px; --radius-l:12px; --radius-xl:16px;
+   --shadow-l:0 6px 18px rgba(0,0,0,.22); color:var(--text-normal); }
  body.theme-dark { --background-primary:#202020; --background-secondary:#303030; --background-modifier-border:#555;
    --background-modifier-hover:rgba(255,255,255,.08); --text-normal:#eee; --text-muted:#aaa; }
  .suggestion-container { display:flex; flex-direction:column; padding:var(--fixture-suggest-padding, 0px); border:var(--border-width) solid var(--background-modifier-border); border-radius:var(--fixture-suggest-radius, 12px);
@@ -128,7 +129,7 @@ test("mobile date grid keeps separate 44px touch targets inside a narrow viewpor
 	} finally { await browser.close(); }
 });
 
-test("mobile candidates and menus follow native material while the date picker retains glass", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile candidates and menus follow native material while the date picker keeps its base surface", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
 	try {
@@ -145,23 +146,34 @@ test("mobile candidates and menus follow native material while the date picker r
 			assert.deepEqual(menus[0], menus[2], `${context}: scope shell follows the host`);
 			assert.deepEqual(menus[1], menus[2], `${context}: card shell follows the host`);
 			assert.equal(menus[2].filter, nativeGlass ? "blur(4px)" : "none", `${context}: host material is retained independently of Knomo preferences`);
-			const surfaces = await page.locator("#single, #multi, #link, #picker").evaluateAll((elements: HTMLElement[]) => elements.map(el => {
+			const picker = await page.locator("#picker").evaluate((el: HTMLElement) => {
+				const paint = (element: HTMLElement) => {
+					const style = getComputedStyle(element);
+					return { color: style.color, background: style.backgroundColor, image: style.backgroundImage,
+						border: style.border, shadow: style.boxShadow, filter: style.backdropFilter };
+				};
+				const reference = el.cloneNode(false) as HTMLElement;
+				reference.removeAttribute("id");
+				reference.classList.remove("is-mobile", "is-open");
+				el.after(reference);
+				try { return { actual: paint(el), base: paint(reference) }; }
+				finally { reference.remove(); }
+			});
+			assert.deepEqual(picker.actual, picker.base, `${context}: mobile picker keeps its original surface`);
+			const surfaces = await page.locator("#single, #multi, #link").evaluateAll((elements: HTMLElement[]) => elements.map(el => {
 				const style = getComputedStyle(el);
 				const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d")!;
 				ctx.fillStyle = style.backgroundColor; ctx.fillRect(0, 0, 1, 1);
 				return { background: style.backgroundColor, alpha: ctx.getImageData(0, 0, 1, 1).data[3], image: style.backgroundImage,
 					border: style.border, shadow: style.boxShadow, filter: style.backdropFilter, opacity: style.opacity, color: style.color };
 			}));
-			for (const [index, surface] of surfaces.entries()) {
-				const native = index < 3;
-				assert.equal(surface.background, surfaces[native ? 0 : 3].background, context);
-				if (solid || native) assert.equal(surface.alpha, solid ? 255 : 204, context);
-				else assert.ok(surface.alpha >= 204 && surface.alpha <= 230, `${context}: owned glass retains a readable tint while revealing the background`);
-				assert.equal(surface.image === "none", native || solid, `${context}: only enhanced owned shells carry a sheen`);
-				assert.equal(surface.border, surfaces[native ? 0 : 3].border, context);
-				assert.equal(surface.shadow, surfaces[native ? 0 : 3].shadow, context);
-				if (solid || native) assert.equal(surface.filter, solid ? "none" : "blur(8px)", context);
-				else assert.match(surface.filter, /blur\([\d.]+px\)/, `${context}: one native backdrop filter on the owned shell`);
+			for (const surface of surfaces) {
+				assert.equal(surface.background, surfaces[0].background, context);
+				assert.equal(surface.alpha, solid ? 255 : 204, context);
+				assert.equal(surface.image, "none", `${context}: candidates keep the native background without a sheen`);
+				assert.equal(surface.border, surfaces[0].border, context);
+				assert.equal(surface.shadow, surfaces[0].shadow, context);
+				assert.equal(surface.filter, solid ? "none" : "blur(8px)", context);
 				assert.equal(surface.opacity, "1", `${context}: foreground is never faded`);
 			}
 			for (const id of ["single", "multi"]) {
@@ -205,7 +217,10 @@ test("mobile candidates and menus follow native material while the date picker r
 			await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: system }] });
 			assert.equal(await retained.evaluate((el: HTMLElement) => el === document.getElementById("single")), true, "system changes retain the open popup");
 			assert.equal(await retained.evaluate((el: HTMLElement) => getComputedStyle(el).backdropFilter), system === "reduce" ? "none" : "blur(8px)");
-			assert.equal(await page.locator("#picker").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage === "none"), system === "reduce", "open date picker follows system changes");
+			assert.deepEqual(await page.locator("#picker").evaluate((el: HTMLElement) => {
+				const style = getComputedStyle(el);
+				return { image: style.backgroundImage, filter: style.backdropFilter };
+			}), { image: "none", filter: "none" }, "open date picker stays on its base surface across system changes");
 			const menus = await page.locator("#owned-menu, #card-menu, #host-menu").evaluateAll(menuShellStyles);
 			assert.deepEqual(menus[0], menus[2], `${system}: open scope shell follows the host`);
 			assert.deepEqual(menus[1], menus[2], `${system}: open card shell follows the host`);

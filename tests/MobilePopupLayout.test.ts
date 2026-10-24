@@ -157,6 +157,7 @@ test("Composer coordinates keyboard dismissal, visual exit and reentry in a real
 					return this.appendChild(el);
 				},
 				setAttr(this: HTMLElement, key: string, value: string) { this.setAttribute(key, value); },
+				hasClass(this: HTMLElement, cls: string) { return this.classList.contains(cls); },
 				toggleClass(this: HTMLElement, cls: string, enabled: boolean) { this.classList.toggle(cls, enabled); },
 				setCssProps(this: HTMLElement, props: Record<string, string>) { for (const [key, value] of Object.entries(props)) this.style.setProperty(key, value); },
 				detach(this: HTMLElement) { this.remove(); },

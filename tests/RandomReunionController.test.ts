@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createDeferred } from "./helpers/deferred";
 
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
@@ -103,9 +104,9 @@ test("keeps the current random reunion batch when loading the next group fails",
 	await controller.refresh();
 
 	assert.equal(controller.getSnapshot().status, "ready");
-	assert.equal(controller.getSnapshot().error, null);
 	assert.deepEqual(controller.getSnapshot().memos, firstMemos);
-	assert.deepEqual(notices, ["next group unavailable"]);
+	assert.match(controller.getSnapshot().error!, /previous results/i);
+	assert.deepEqual(notices, []);
 });
 
 test("reports random reunion refresh errors without presenting a false empty result", async () => {
@@ -130,7 +131,7 @@ test("reports random reunion refresh errors without presenting a false empty res
 	assert.equal(controller.getSnapshot().status, "failed");
 	assert.equal(controller.getSnapshot().error, "random source unavailable");
 	assert.equal(controller.getSnapshot().memos, null);
-	assert.deepEqual(notices, ["random source unavailable"]);
+	assert.deepEqual(notices, []);
 	assert.equal(renderCalls, 2);
 });
 
@@ -154,7 +155,7 @@ test("reports candidate loading failure without an identity phase", async () => 
 	assert.deepEqual(states, ["loading-candidates", "failed"]);
 	assert.equal(controller.getSnapshot().status, "failed");
 	assert.equal(controller.getSnapshot().memos, null);
-	assert.equal(notices.length, 1);
+	assert.equal(notices.length, 0);
 });
 
 test("clears cached random reunion memos before the next Catalog refresh", async () => {
@@ -341,10 +342,4 @@ function makeMemo(id: string): MemoViewItem {
 			lineNumberHint: 1,
 		},
 	};
-}
-
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => { resolvePromise = resolve; });
-	return { promise, resolve: resolvePromise };
 }

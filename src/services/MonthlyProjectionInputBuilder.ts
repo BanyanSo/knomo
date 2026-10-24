@@ -4,7 +4,8 @@ import type { App } from "obsidian";
 import type { CatalogInventoryEntry, MemoObservation } from "../types/catalog";
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
-import { canonicalJson, sha256Text } from "./CanonicalJson";
+import { canonicalJson } from "./CanonicalJson";
+import { sha256Text } from "../utils/sha256";
 import {
 	getMonthlyArchivePath,
 	getMonthlyCanonicalPeriod,

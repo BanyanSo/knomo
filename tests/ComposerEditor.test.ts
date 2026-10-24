@@ -1,19 +1,29 @@
 import { LocalComposerDraftStore, type LocalComposerDraft } from "../src/ui/LocalComposerDraftStore";
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { EditorSelection, EditorState, StateEffect, Transaction } from "@codemirror/state";
 import { cursorCharLeft, cursorCharRight, cursorLineStart, cursorLineEnd, deleteCharBackward, deleteCharForward, redo, undo, undoDepth } from "@codemirror/commands";
-import { ComposerEditor } from "../src/ui/ComposerEditor";
 import { runComposerCommand } from "../src/utils/composerCommands";
 import { registerComposerToolGesture } from "../src/ui/ComposerToolGesture";
 import { composerParser as parser } from "../src/utils/composerSyntax";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
-import { ComposerImageController, type ComposerImageCapture } from "../src/ui/ComposerImageController";
+import type { ComposerImageCapture } from "../src/ui/ComposerImageController";
 import { NativeImagePickerController } from "../src/ui/NativeImagePickerController";
 import { composerImageLinks, setComposerImageLinks } from "../src/ui/ComposerImageState";
 import { AttachmentService, type ImageAttachment } from "../src/services/AttachmentService";
+
+type ComposerEditor = import("../src/ui/ComposerEditor").ComposerEditor;
+let ComposerEditor: typeof import("../src/ui/ComposerEditor").ComposerEditor;
+type ComposerImageController = import("../src/ui/ComposerImageController").ComposerImageController;
+let ComposerImageController: typeof import("../src/ui/ComposerImageController").ComposerImageController;
+
+before(async () => {
+	await ensureObsidianStub();
+	({ ComposerEditor } = await import("../src/ui/ComposerEditor"));
+	({ ComposerImageController } = await import("../src/ui/ComposerImageController"));
+});
 
 function environment(value: string, colorHighlights = false, setupWindow?: (win: JSDOM["window"]) => void) {
 	const errors: Error[] = [];
@@ -87,6 +97,26 @@ test("浮标返回焦点时恢复编辑状态选区而非旧 DOM 光标", async 
 			assert.equal(editor.input.selectionStart, next.length);
 			assert.equal(editor.input.value, next);
 		} finally { close(); }
+	}
+});
+
+test("移动草稿聚焦期间宿主重置光标后仍恢复最后编辑选区，不改变正文和撤销", async () => {
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const [anchor, head] of [[18, 18], [9, 3]]) {
+		const f = environment("first line\nsecond!");
+		try {
+			f.editor.view.dispatch({ selection: { anchor, head } });
+			const history = undoDepth(f.editor.view.state), context = f.editor.capture();
+			// 模拟移动 WebView 在原生 focus 事件中将 contenteditable 选区置于开头。
+			f.editor.input.addEventListener("focus", () => f.editor.view.dispatch({ selection: { anchor: 0 } }), { once: true });
+			(KnomoView.prototype as unknown as { focusComposerInputNow(this: unknown, resize: boolean, viewport: boolean): void })
+				.focusComposerInputNow.call({ inputEl: f.editor.input }, false, false);
+			assert.equal(f.editor.input.ownerDocument.activeElement, f.editor.input);
+			assert.deepEqual([f.editor.view.state.selection.main.anchor, f.editor.view.state.selection.main.head], [anchor, head]);
+			assert.equal(f.editor.input.value, "first line\nsecond!");
+			assert.equal(undoDepth(f.editor.view.state), history);
+			assert.equal(context.valid(), true);
+		} finally { f.close(); }
 	}
 });
 
@@ -476,18 +506,21 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 		assert.equal(win.document.querySelectorAll(".suggestion-item").length, 2);
 		const key = (type: string, key: string) => editor.input.dispatchEvent(new win.KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
 		const popover = win.document.querySelector<HTMLElement>(".suggestion-container")!;
-		const second = popover.children[1] as HTMLElement;
+		const list = popover.querySelector<HTMLElement>(".knomo-suggest-list")!;
+		const second = list.children[1] as HTMLElement;
 		const hover = new win.MouseEvent("pointermove", { bubbles: true });
 		Object.defineProperty(hover, "pointerType", { value: "mouse" });
 		second.dispatchEvent(hover);
 		assert.equal(second.getAttribute("aria-selected"), "true");
-		let scrolled = 0;
-		(popover.children[0] as HTMLElement).scrollIntoView = () => { scrolled++; popover.scrollTop = 80; };
+		const first = list.children[0] as HTMLElement;
+		Object.defineProperties(first, { offsetTop: { value: 0 }, offsetHeight: { value: 44 } });
+		Object.defineProperty(list, "clientHeight", { value: 44 });
+		list.scrollTop = 80;
 		key("keydown", "ArrowDown"); key("keyup", "ArrowDown");
-		assert.equal(scrolled, 1);
 		assert.equal(win.document.querySelector(".suggestion-container"), popover);
-		assert.equal(popover.scrollTop, 80);
-		assert.equal(popover.children[0].getAttribute("aria-selected"), "true");
+		assert.equal(list.scrollTop, 0, "键盘选择只滚动内层列表，松键不重置列表 DOM");
+		assert.equal(popover.scrollTop, 0);
+		assert.equal(first.getAttribute("aria-selected"), "true");
 		assert.equal(key("keydown", "Escape"), false);
 		key("keyup", "Escape");
 		assert.equal(win.document.querySelector(".suggestion-container"), null);
@@ -629,9 +662,10 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 		suggest.open();
 		const popup = win.document.querySelector<HTMLElement>(".knomo-tag-suggest-mobile")!;
 		assert.ok(popup);
-		assert.equal(popup.children.length, count);
+		const list = popup.querySelector<HTMLElement>(".knomo-suggest-list")!;
+		assert.equal(list.children.length, count);
 		assert.equal(popup.parentElement, win.document.body);
-		return { popup, row: popup.children[0] as HTMLElement };
+		return { popup, list, row: list.children[0] as HTMLElement };
 	};
 	const pointer = (target: HTMLElement, type: string, x = 20, y = 20, id = 1) => {
 		const event = new win.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
@@ -674,12 +708,12 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 			assert.equal(editor.input.value, "before #alpha after");
 		}
 		for (const invalid of ["up-distance", "return", "scroll", "scroll-event", "outside", "cancel", "second-finger", "selection", "composition", "readonly", "reset"] as const) {
-			const { popup, row } = open();
+			const { popup, list, row } = open();
 			const before = selections;
 			pointer(row, "pointerdown");
 			if (invalid === "return") { pointer(row, "pointermove", 40); pointer(row, "pointermove"); }
-			if (invalid === "scroll") popup.scrollTop = 12;
-			if (invalid === "scroll-event") popup.dispatchEvent(new win.Event("scroll"));
+			if (invalid === "scroll") list.scrollTop = 12;
+			if (invalid === "scroll-event") list.dispatchEvent(new win.Event("scroll"));
 			if (invalid === "cancel") pointer(row, "pointercancel");
 			if (invalid === "second-finger") pointer(row, "pointerdown", 20, 20, 2);
 			if (invalid === "selection") editor.input.setSelectionRange(0, 0);
@@ -699,10 +733,10 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 		}
 		tags = ["alpha", "alphabet"];
 		tagRevision++;
-		const { popup, row } = open(2);
-		assert.equal(popup.children.length, 2);
+		const { popup, list, row } = open(2);
+		assert.equal(list.children.length, 2);
 		pointer(row, "pointerdown");
-		pointer(popup.children[1] as HTMLElement, "pointerup");
+		pointer(list.children[1] as HTMLElement, "pointerup");
 		assert.equal(editor.input.value, initial, "跨行松手不能选择相邻候选");
 		pointer(row, "pointerdown");
 		tags = ["alphabet", "alpha"];
@@ -1036,14 +1070,14 @@ async function sessionView(editor: ComposerEditor) {
 		syncComposerMode: () => undefined, syncUiChrome: () => undefined, resizeInput: () => undefined,
 		openComposer() { this.composerOpen = true; },
 		mobileComposerController: { resetInactiveState: () => undefined },
-		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+		getDailyNotesStatus: () => ({ enabled: true }),
 		resolveCatalogMemo: async (memo: import("../src/types/memoView").MemoViewItem) => memo.catalog!,
 		memoCommandService: {
 			startCreate: (_content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),
 			startEdit: (_memo: unknown, _content: string) => ({ dailyCommitted: Promise.resolve(), settled: Promise.resolve({ status: "saved" as const, memo: null, timeBuoyDates: [], localRefreshPending: false }) }),
 			createReferenceText: async (_memo: unknown) => ({ text: "[[reference]]" }),
 		},
-		reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
+		reloadMemos: async () => true,
 		closeCardMenu: () => undefined, syncCardMenuState: () => undefined,
 	};
 	return Object.assign(Object.create(KnomoView.prototype), fields) as typeof fields & {
@@ -1620,7 +1654,6 @@ async function draftSession(editor: ComposerEditor, win: ReturnType<typeof envir
 		validateRestoredDraft(draft: LocalComposerDraft): Promise<void>; applyRestoredDraftSelection(): void;
 		onOpen(): Promise<void>; initializeView(): Promise<void>; settleQuickCommandReady(ready: boolean): void;
 		register(callback: () => void): void; registerDomEvent(target: EventTarget, type: string, callback: EventListener): void;
-		getImageSourcePath(): string | null;
 	};
 	view.localDraftStore = new LocalComposerDraftStore(disk, assert.fail);
 	view.localDraftTimer = null; view.draftImageLinks = [];
@@ -1705,7 +1738,6 @@ test("原文变化后保留恢复文字和旧句柄，仅显式重选目标沿�
 		const memo = sessionMemo("old-revision"); view.editingMemo = memo;
 		const originalHandle = memo.catalog!.observationHandle;
 		view.app = { vault: { getAbstractFileByPath: () => new TFile(), read: async () => "changed source" } };
-		view.getImageSourcePath = () => memo.dailyRef.path;
 		await view.validateRestoredDraft(view.captureLocalDraft());
 		assert.equal(view.restoredEditNeedsTarget, true);
 		assert.equal(memo.catalog!.observationHandle, originalHandle);
@@ -1754,6 +1786,10 @@ test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依
 	const cleanup: Array<() => void> = [];
 	try {
 		const disk = draftStorage(); const view = await draftSession(f.editor, f.win, disk);
+		const { Notice } = await import("obsidian");
+		const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+		f.editor.apply({ value: "older draft", anchor: 4, head: 4 });
+		view.flushLocalDraft();
 		f.editor.apply({ value: "saved draft", anchor: 8, head: 2 });
 		view.flushLocalDraft(); view.localDraftStore.close();
 		view.register = callback => { cleanup.push(callback); };
@@ -1761,16 +1797,17 @@ test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依
 			target.addEventListener(type, callback); cleanup.push(() => target.removeEventListener(type, callback));
 		};
 		view.settleQuickCommandReady = () => undefined;
-		view.getImageSourcePath = () => "Daily/today.md";
 		view.initializeView = async () => {
 			f.editor.reset(view.draftContent);
 			f.editor.view.dispatch({ effects: setComposerImageLinks.of(view.draftImageLinks) });
 			view.applyRestoredDraftSelection();
 		};
 		await view.onOpen();
+		assert.deepEqual(notices, []);
 		assert.equal(f.editor.input.value, "saved draft");
 		assert.equal(f.editor.view.state.selection.main.anchor, 8);
 		assert.equal(f.editor.view.state.selection.main.head, 2);
+		assert.notEqual(f.win.document.activeElement, f.editor.input, "桌面启动只恢复草稿，不主动获焦");
 		f.editor.apply({ value: "background input", anchor: 5, head: 5 });
 		view.scheduleLocalDraft(); const timer = view.localDraftTimer;
 		view.scheduleLocalDraft(); assert.equal(view.localDraftTimer, timer);
@@ -1785,7 +1822,7 @@ test("视图 onOpen 恢复草稿并绑定后台补保存，卸载补保存不依
 });
 
 
-test("恢复图片重新验证附件存在性、原来源及当前目标路径，缺失不丢正文", async () => {
+test("图片草稿安静恢复，保存时检查原附件与实际目标，失败保留最新文字", async () => {
 	for (const mode of ["valid", "missing", "source-changed"] as const) {
 		const f = environment("![[image.png]]");
 		try {
@@ -1795,19 +1832,27 @@ test("恢复图片重新验证附件存在性、原来源及当前目标路径�
 			const file = new TFile(); file.path = "image.png";
 			const sources: string[] = [];
 			view.app = { vault: { getAbstractFileByPath: () => mode === "missing" ? null : file }, metadataCache: {
-				getFirstLinkpathDest: (_target: string, source: string) => {
-					sources.push(source);
-					return mode === "source-changed" && source === "Daily/new.md" ? null : file;
-				},
+				getFirstLinkpathDest: (_target: string, source: string) => { sources.push(source);
+					return mode === "source-changed" && source === "Daily/new.md" ? null : file; },
 			} };
-			view.getImageSourcePath = () => "Daily/new.md";
+			Object.assign(view, { composerImages: { editor: f.editor, pending: false } });
 			f.editor.view.dispatch({ effects: setComposerImageLinks.of([{ from: 0, to: 14, link: "![[image.png]]", path: "image.png", sourcePath: "Daily/old.md" }]) });
 			const before = f.editor.view.state;
 			await view.validateRestoredDraft(view.captureLocalDraft());
 			assert.equal(f.editor.view.state, before);
-			assert.equal(f.editor.input.value, "![[image.png]]");
+			assert.deepEqual(notices, []); assert.deepEqual(sources, []);
+			let writes = 0;
+			const create = view.memoCommandService.startCreate;
+			view.memoCommandService.startCreate = (content: string, validate?: (path: string) => void) => {
+				validate?.("Daily/new.md"); writes++; return create(content);
+			};
+			await view.saveInput();
+			assert.equal(writes, mode === "valid" ? 1 : 0);
+			assert.equal(f.editor.input.value, mode === "valid" ? "" : "![[image.png]]");
+			assert.equal(view.localDraftStore.draft.active.content, f.editor.input.value);
 			assert.equal(notices.length, mode === "valid" ? 0 : 1);
 			if (mode !== "missing") assert.deepEqual(sources, ["Daily/old.md", "Daily/new.md"]);
+			if (mode !== "valid") assert.match(notices[0], /image|attachment/i);
 			view.localDraftStore.close();
 		} finally { f.close(); }
 	}

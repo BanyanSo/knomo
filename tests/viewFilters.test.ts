@@ -1,18 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MemoViewItem } from "../src/types/memoView";
 import {
-	getMemoImages,
 	getRegularFilterConditions,
 	getRegularFilterCopy,
 	getRecordStatsSearchFilterKey,
 	getRecordStatsSearchFilterLabel,
-	matchesRecordStatsSearchFilter,
-	matchesScope,
-	matchesSearchDateFilter,
-	parseMemoLocalDate,
-	tagMatchesActiveTagKey,
+	parseLocalDateText,
 } from "../src/ui/viewFilters";
 
 test("Things 摘要包含所有 AND 条件", () => {
@@ -20,33 +14,6 @@ test("Things 摘要包含所有 AND 条件", () => {
 	assert.deepEqual(getRegularFilterConditions(state).map(item => item.type), ["things", "tag", "search", "date"]);
 	assert.match(getRegularFilterCopy(state, 3)!.summary, /Things/);
 	assert.match(getRegularFilterCopy(state, 0)!.emptyTitle, /Things/);
-});
-
-test("普通 Catalog 日期与小时筛选取当前 observation，不取旧创建时间", () => {
-	const memo = makeMemo("current", {
-		createdAt: "2020-01-01T23:59:59Z",
-	});
-	memo.catalog = { observation: { logicalDate: "2026-09-01", time: "06:04" } } as never;
-	assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-09-01" }), true);
-	assert.equal(matchesRecordStatsSearchFilter(memo, {
-		type: "hour", startDate: "2026-09-01", endDateExclusive: "2026-09-02", hour: 6,
-	}), true);
-});
-
-test("filters supported memo images", () => {
-	const memo = makeMemo("a", {
-		images: [
-			{ path: "image.png", altText: "", syntax: "obsidian_embed" },
-			{ path: "doc.pdf", altText: "", syntax: "obsidian_embed" },
-		],
-	});
-
-	assert.deepEqual(getMemoImages(memo).map((image) => image.path), ["image.png"]);
-});
-
-test("matches nested active tag keys", () => {
-	assert.equal(tagMatchesActiveTagKey("project/knomo/ui", "project/knomo"), true);
-	assert.equal(tagMatchesActiveTagKey("project/other", "project/knomo"), false);
 });
 
 test("builds regular filter copy from active filters", () => {
@@ -87,129 +54,9 @@ test("regular filter copy is empty when filters are inactive", () => {
 	}, 0), null);
 });
 
-test("matches scope filters against a fixed day", () => {
-	const today = new Date(2026, 4, 21);
-
-	assert.equal(matchesScope(makeMemo("all"), "all", today), true);
-	assert.equal(matchesScope(makeMemo("tagged", { tags: ["x"] }), "no-tag", today), false);
-	assert.equal(matchesScope(makeMemo("link", { links: [{ target: "Note", displayText: null, syntax: "wiki_link" }] }), "with-link", today), true);
-	assert.equal(matchesScope(makeMemo("bare-url", { contentSnapshot: "Visit https://example.com", links: [] }), "with-link", today), true);
-	assert.equal(matchesScope(makeMemo("image", { images: [{ path: "a.png", altText: "", syntax: "obsidian_embed" }] }), "with-image", today), true);
-	assert.equal(matchesScope(makeMemo("anniversary", { createdAt: "2025-05-21T09:00:00" }), "anniversary", today), true);
-	assert.equal(matchesScope(makeMemo("this-week", { createdAt: "2026-05-18T09:00:00" }), "week", today), true);
-	assert.equal(matchesScope(makeMemo("last-week", { createdAt: "2026-05-17T09:00:00" }), "week", today), false);
-	assert.equal(matchesScope(makeMemo("this-month", { createdAt: "2026-05-01T09:00:00" }), "month", today), true);
-	assert.equal(matchesScope(makeMemo("last-month", { createdAt: "2026-04-30T09:00:00" }), "last-month", today), true);
-	assert.equal(matchesScope(makeMemo("last-7", { createdAt: "2026-05-15T09:00:00" }), "last-7", today), true);
-	assert.equal(matchesScope(makeMemo("last-30", { createdAt: "2026-04-22T09:00:00" }), "last-30", today), true);
-});
-
-test("matches search date filters against a fixed day", () => {
-	const today = new Date(2026, 4, 21);
-
-	assert.equal(matchesSearchDateFilter(new Date(2026, 4, 21), "week", today), true);
-	assert.equal(matchesSearchDateFilter(new Date(2026, 4, 12), "last-week", today), true);
-	assert.equal(matchesSearchDateFilter(new Date(2026, 4, 18), "last-week", today), false);
-	assert.equal(matchesSearchDateFilter(new Date(2026, 4, 1), "month", today), true);
-	assert.equal(matchesSearchDateFilter(new Date(2026, 3, 30), "last-month", today), true);
-	assert.equal(matchesSearchDateFilter(new Date(2026, 4, 15), "last-7", today), true);
-	assert.equal(matchesSearchDateFilter(new Date(2026, 3, 22), "last-30", today), true);
-});
-
-test("matches record statistics drill-down filters with local date and hour semantics", () => {
-	const morning = makeMemo("morning", { createdAt: "2026-06-08T09:15:00" });
-	const late = makeMemo("late", { createdAt: "2026-06-30T23:45:00" });
-	const nextMonth = makeMemo("next-month", { createdAt: "2026-07-01T09:00:00" });
-	const inactive = makeMemo("inactive", { createdAt: "2026-06-09T09:00:00" });
-	inactive.status = "deleted";
-	const referenced = makeMemo("referenced", {
-		createdAt: "2026-06-09T09:00:00",
-		contentSnapshot: "current [[Daily#^source|custom alias]]",
-	});
-	const tagged = makeMemo("tagged", {
-		createdAt: "2026-06-10T09:00:00",
-		tags: ["Work"],
-	});
-	const childTagged = makeMemo("child-tagged", {
-		createdAt: "2026-06-10T10:00:00",
-		tags: ["work/project"],
-	});
-	const imaged = makeMemo("imaged", {
-		createdAt: "2026-06-11T09:00:00",
-		images: [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }],
-	});
-
-	assert.equal(matchesRecordStatsSearchFilter(morning, { type: "day", date: "2026-06-08" }), true);
-	assert.equal(matchesRecordStatsSearchFilter(late, { type: "month", month: "2026-06" }), true);
-	assert.equal(matchesRecordStatsSearchFilter(nextMonth, { type: "month", month: "2026-06" }), false);
-	const rangeFilter = {
-		type: "range" as const,
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-	};
-	assert.equal(matchesRecordStatsSearchFilter(morning, rangeFilter), true);
-	assert.equal(matchesRecordStatsSearchFilter(nextMonth, rangeFilter), false);
-	assert.equal(matchesRecordStatsSearchFilter(inactive, rangeFilter), false);
-	assert.equal(matchesRecordStatsSearchFilter(late, {
-		type: "hour",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-		hour: 23,
-	}), true);
-	assert.equal(matchesRecordStatsSearchFilter(morning, {
-		type: "hour",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-		hour: 23,
-	}), false);
-	assert.equal(matchesRecordStatsSearchFilter(referenced, {
-		type: "references",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-	}), true);
-	assert.equal(matchesRecordStatsSearchFilter(morning, {
-		type: "references",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-	}), false);
-	assert.equal(matchesRecordStatsSearchFilter(tagged, {
-		type: "with-tag",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-	}), true);
-	assert.equal(matchesRecordStatsSearchFilter(morning, {
-		type: "no-tag",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-	}), true);
-	assert.equal(matchesRecordStatsSearchFilter(tagged, {
-		type: "no-tag",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-	}), false);
-	assert.equal(matchesRecordStatsSearchFilter(imaged, {
-		type: "with-image",
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-	}), true);
-	const tagFilter = {
-		type: "tag" as const,
-		startDate: "2026-06-01",
-		endDateExclusive: "2026-07-01",
-		tagKey: "work",
-		tagLabel: "Work",
-	};
-	assert.equal(matchesRecordStatsSearchFilter(tagged, tagFilter), true);
-	assert.equal(matchesRecordStatsSearchFilter(childTagged, tagFilter), true);
-	assert.equal(matchesRecordStatsSearchFilter(nextMonth, tagFilter), false);
-	assert.equal(matchesRecordStatsSearchFilter(morning, {
-		type: "max-daily-notes",
-		dates: ["2026-06-08", "2026-06-09"],
-	}), true);
-	assert.equal(matchesRecordStatsSearchFilter(nextMonth, {
-		type: "max-daily-words",
-		dates: ["2026-06-08", "2026-06-09"],
-	}), false);
+test("formats record statistics filter keys and labels", () => {
+	const rangeFilter = { type: "range" as const, startDate: "2026-06-01", endDateExclusive: "2026-07-01" };
+	const tagFilter = { type: "tag" as const, startDate: "2026-06-01", endDateExclusive: "2026-07-01", tagKey: "work", tagLabel: "Work" };
 	assert.equal(getRecordStatsSearchFilterKey({ type: "day", date: "2026-06-08" }), "day:2026-06-08");
 	assert.equal(getRecordStatsSearchFilterKey(rangeFilter), "range:2026-06-01:2026-07-01");
 	assert.equal(getRecordStatsSearchFilterKey({
@@ -246,80 +93,37 @@ test("matches record statistics drill-down filters with local date and hour sema
 	assert.equal(getRecordStatsSearchFilterLabel(tagFilter), "2026-06-01 to 2026-06-30 · #Work");
 });
 
-test("parses memo local date from createdAt and falls back to the Daily path date", () => {
-	const createdAtMemo = makeMemo("created", { createdAt: "2026-05-20T08:09:10" });
-	assert.equal(parseMemoLocalDate(createdAtMemo, disabledDailyStatus())?.getHours(), 8);
+test("统计范围的含尾日期保留跨月、跨年、闰年和无效输入行为", () => {
+	for (const [endDateExclusive, expected] of [
+		["2024-03-01", "2024-02-29"],
+		["2026-01-01", "2025-12-31"],
+		["2026-07-01", "2026-06-30"],
+		["invalid", "invalid"],
+	]) {
+		assert.equal(getRecordStatsSearchFilterLabel({ type: "range", startDate: "2020-01-01", endDateExclusive }), `2020-01-01 to ${expected}`);
+	}
+});
 
-	const dailyMemo = makeMemo("daily", {
-		createdAt: "invalid",
-		dailyPath: "Daily/2026-05-20.md",
-	});
-	const dailyDate = parseMemoLocalDate(dailyMemo, { enabled: true, folder: "Daily", format: "YYYY-MM-DD" });
-	assert.equal(dailyDate?.getFullYear(), 2026);
-	assert.equal(dailyDate?.getMonth(), 4);
-	assert.equal(dailyDate?.getDate(), 20);
-	assert.equal(dailyDate?.getHours(), 0);
-	assert.equal(dailyDate?.getMinutes(), 0);
-	assert.equal(dailyDate?.getSeconds(), 0);
+test("display date parsing keeps local calendar and rejects invalid dates", () => {
+	const date = parseLocalDateText("2026-05-20T08:09:10");
+	assert.deepEqual(date === null ? null : [date.getFullYear(), date.getMonth(), date.getDate(), date.getHours()], [2026, 4, 20, 8]);
+	assert.equal(parseLocalDateText("invalid"), null);
+	assert.equal(parseLocalDateText("2026-02-30"), null);
 });
 
 test("converts zoned creation time to the current device calendar semantics", () => {
 	const originalTimeZone = process.env.TZ;
 	process.env.TZ = "Asia/Shanghai";
 	try {
-		const memo = makeMemo("zoned", { createdAt: "2026-08-31T22:04:15.986Z" });
-		const date = parseMemoLocalDate(memo, disabledDailyStatus());
+		const date = parseLocalDateText("2026-08-31T22:04:15.986Z");
 
 		assert.equal(date?.getFullYear(), 2026);
 		assert.equal(date?.getMonth(), 8);
 		assert.equal(date?.getDate(), 1);
 		assert.equal(date?.getHours(), 6);
-		assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-09-01" }), true);
-		assert.equal(matchesRecordStatsSearchFilter(memo, { type: "day", date: "2026-08-31" }), false);
-		assert.equal(matchesRecordStatsSearchFilter(memo, {
-			type: "hour",
-			startDate: "2026-09-01",
-			endDateExclusive: "2026-09-02",
-			hour: 6,
-		}), true);
+
 	} finally {
 		if (originalTimeZone === undefined) delete process.env.TZ;
 		else process.env.TZ = originalTimeZone;
 	}
 });
-
-function disabledDailyStatus(): { enabled: false; folder: null; format: null } {
-	return { enabled: false, folder: null, format: null };
-}
-
-function makeMemo(
-	id: string,
-	overrides: {
-		createdAt?: string;
-		contentSnapshot?: string;
-		tags?: MemoViewItem["tags"];
-		links?: MemoViewItem["links"];
-		images?: MemoViewItem["images"];
-		dailyPath?: string;
-		monthlyDateHeading?: string;
-	} = {},
-): MemoViewItem {
-	const createdAt = overrides.createdAt ?? "2026-05-20T09:00:00";
-	const dailyPath = overrides.dailyPath ?? `Daily/${createdAt.slice(0, 10)}.md`;
-	return {
-		id,
-		createdAt,
-		updatedAt: createdAt,
-		contentSnapshot: overrides.contentSnapshot ?? "memo",
-		contentHash: `hash-${id}`,
-		status: "active",
-		tags: overrides.tags ?? [],
-		links: overrides.links ?? [],
-		images: overrides.images ?? [],
-		dailyRef: {
-			path: dailyPath,
-			heading: "## Memos",
-			lineNumberHint: 1,
-		},
-	};
-}

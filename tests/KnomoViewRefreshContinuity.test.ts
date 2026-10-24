@@ -93,7 +93,9 @@ async function refreshHarness() {
 		timeBuoyViewController: controller, shouldShowTodayTimeBuoys: () => true, isDefaultListState: () => true,
 		viewStateController: new KnomoViewStateController(), mobileSearchController: { isOpen: false, applyMemoChanges: () => {} }, getCatalogQueryFingerprint: () => "all",
 		prepareCatalogDesktopQuery: () => {}, isCatalogQueryCurrent: () => true, buildCatalogActiveQuery: () => ({}),
-		queryCatalogFeature: async () => ({ items: [], catalogRevision: revision, nextCursor: null, readState: "ready" }),
+		queryCatalogFeature: async () => ({ items: [], catalogRevision: revision, nextCursor: null, readState: "ready",
+			coverage: { kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 },
+			status: { content: "ready", catalog: "complete", projection: "ready" } }),
 		syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {}, getImmediateCatalogTotalCount: () => 0,
 		retainMemoCardPreviews: () => {}, resetVisibleMemos: () => {},
 		renderUiState: (options?: { renderCardFlow?: boolean }) => { if (options?.renderCardFlow !== false) view.renderCardFlow(); },
@@ -231,10 +233,15 @@ test("列表查询等待置顶数据后才返回，拒绝混合不同 Catalog re
 	release(); await first;
 	assert.equal(returned, true);
 	revision = 3;
+	const { CatalogDiscoveryInvalidatedError } = await import("../src/services/CatalogReadService");
 	const stale = view.loadCatalogMemos(false);
-	await Promise.resolve(); await Promise.resolve();
-	release();
-	await assert.rejects(stale, /Catalog changed/);
+	const rejected = assert.rejects(stale, CatalogDiscoveryInvalidatedError);
+	for (let attempt = 0; attempt < 3; attempt++) {
+		await new Promise(resolve => setImmediate(resolve));
+		release();
+	}
+	await rejected;
+	assert.equal(queries, 4, "初次成功一次，过期快照最多重读三次");
 });
 
 test("引用事件增量刷新且原位排队正文与来源引用，不清空卡片容器", async () => {
@@ -248,10 +255,11 @@ test("引用事件增量刷新且原位排队正文与来源引用，不清空�
 	const queued: unknown[][] = [];
 	const memo = { id: "memo", contentSnapshot: "text [[Daily#^block]]", dailyRef: { path: "Daily.md" } };
 	Object.assign(view, {
-		refresh: async (force?: boolean) => { assert.equal(force, undefined); },
+		refresh: async () => { assert.fail("纯 metadata 不得进入通用查询、计数或随机刷新"); },
 		trashViewClosed: false, cardFlowEl: container,
-		cardFlowCoordinator: { generation: 3 }, mobileSearchController: { results: null, renderGeneration: 1 },
-		findMemoById: () => memo, getMemoCardPreview: () => ({ text: "text" }),
+		cardFlowCoordinator: { generation: 3 }, memos: [memo],
+		mobileSearchController: { results: container, renderGeneration: 1, getDisplayedMemos: () => [memo] },
+		getMemoCardPreview: () => ({ text: "text" }),
 		memoMarkdownRenderer: {
 			queueMemoMarkdown: (...args: unknown[]) => queued.push(args),
 			queueSourceReferenceMarkdown: (...args: unknown[]) => queued.push(args),
@@ -260,19 +268,21 @@ test("引用事件增量刷新且原位排队正文与来源引用，不清空�
 	await view.refreshReferences();
 	assert.equal(view.cardFlowEl, container);
 	assert.equal(cards[0], card);
-	assert.equal(queued.length, 2);
+	assert.equal(queued.length, 4);
 	assert.equal(queued[0][1], content);
 	assert.equal(queued[1][0], meta);
+	assert.equal(queued[0][5], "card-flow");
+	assert.equal(queued[2][5], "mobile-search");
 	view.trashViewClosed = true;
 	await view.refreshReferences();
-	assert.equal(queued.length, 2);
+	assert.equal(queued.length, 4);
 });
 
 test("搜索返回重新读取当前数据但同显示版本不重建，正文变化后提交当前记录", async () => {
 	const { view, memo, result, renders, setQuery, setRevision } = await refreshHarness();
 	await view.loadInitialMobileMemos();
 	Object.assign(view, {
-		catalogMobileQueryRun: 4, catalogMobileCursor: {}, catalogMobileTotalCount: 12,
+		mobileSearchController: { cancelPendingRequest: () => assert.fail("关闭恢复不能再次协调移动请求") },
 		forceRebuildCardFlow: () => assert.fail("搜索返回不能无条件重建卡片"),
 		resetVisibleMemos: () => assert.fail("搜索返回不能无条件重置可见范围"),
 		getCardFlowStateKey: () => getMemoListStateKey(view.getTodayTimeBuoyItems().map((item: { memo: MemoViewItem }) => item.memo)),
@@ -282,9 +292,6 @@ test("搜索返回重新读取当前数据但同显示版本不重建，正文�
 	setQuery(async () => result(1, [current]));
 	await view.restoreCardFlowAfterMobileSearch();
 	assert.equal(renders.length, before);
-	assert.equal(view.catalogMobileQueryRun, 5);
-	assert.equal(view.catalogMobileCursor, null);
-	assert.equal(view.catalogMobileTotalCount, null);
 	assert.equal(view.findMemoById(memo.id), current, "复用显示时仍提交本次查询的当前对象");
 
 	const changed = { ...memo, contentHash: "changed", contentSnapshot: "新的正文与引用" };

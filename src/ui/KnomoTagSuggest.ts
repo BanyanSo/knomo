@@ -1,5 +1,6 @@
 import { applyComposerEdit, type ComposerInput } from "./ComposerEditor";
 import { registerComposerToolGesture } from "./ComposerToolGesture";
+import { getSuggestionNavigationIndex, guardSuggestionTouchClickThrough, scrollSuggestionIntoView } from "./composerSuggestInteraction";
 import { prepareFuzzySearch, renderResults } from "obsidian";
 import type { App, SearchResult } from "obsidian";
 
@@ -7,6 +8,7 @@ import type { VaultTagIndex } from "../services/VaultTagIndex";
 import { getTagQueryAtCursor, replaceTagQueryWithSuggestion } from "../utils/composerInput";
 import {
 	clamp,
+	getDesktopSuggestionPosition,
 	getTextareaCharacterRect,
 	measureSuggestionContentHeight,
 	measureSuggestionContentWidth,
@@ -20,6 +22,7 @@ interface TagSuggestion {
 export class KnomoTagSuggest {
 	private popoverRepositionFrameId: number | null = null;
 	private popoverEl: HTMLElement | null = null;
+	private listEl: HTMLElement | null = null;
 	private suggestions: TagSuggestion[] = [];
 	private selectedIndex = 0;
 	private renderedQuery: string | null = null;
@@ -30,12 +33,14 @@ export class KnomoTagSuggest {
 	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
 	private clearTouchClickGuard: (() => void) | null = null;
 	private clearGesture: (() => void) | null = null;
+	private releaseGlassSurface: (() => void) | null = null;
 
 	constructor(
 		app: App,
 		private readonly inputEl: ComposerInput,
 		private readonly onInputChanged: () => void,
 		private readonly vaultTagIndex: VaultTagIndex,
+		private readonly registerGlassSurface?: (surface: HTMLElement) => () => void,
 	) {
 		void app;
 		this.popoverId = `${inputEl.getAttribute("aria-labelledby") ?? "knomo-composer"}-tag-suggestions`;
@@ -56,8 +61,11 @@ export class KnomoTagSuggest {
 		this.clearPopoverReposition();
 		this.clearGesture?.();
 		this.clearGesture = null;
+		this.releaseGlassSurface?.();
+		this.releaseGlassSurface = null;
 		this.popoverEl?.remove();
 		this.popoverEl = null;
+		this.listEl = null;
 		this.suggestions = [];
 		if (this.inputEl.getAttribute("aria-controls") === this.popoverId) {
 			this.inputEl.setAttribute("aria-expanded", "false");
@@ -103,8 +111,9 @@ export class KnomoTagSuggest {
 		const selected = this.suggestions[this.selectedIndex]?.tag;
 		const suggestions = this.getSuggestions();
 		const query = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart)?.query ?? null;
+		const sameQuery = query === this.renderedQuery;
 		// 导航和松键不重建候选 DOM，保留滚动位置与鼠标目标。
-		if (this.popoverEl && query === this.renderedQuery && (suggestions === this.suggestions
+		if (this.popoverEl && sameQuery && (suggestions === this.suggestions
 			|| suggestions.length === this.suggestions.length
 			&& suggestions.every((suggestion, index) => suggestion.tag === this.suggestions[index].tag))) {
 			this.suggestions = suggestions;
@@ -115,28 +124,31 @@ export class KnomoTagSuggest {
 		if (!suggestions.length) return;
 		this.renderedQuery = query;
 		this.suggestions = suggestions;
-		this.selectedIndex = Math.max(0, suggestions.findIndex(suggestion => suggestion.tag === selected));
+		this.selectedIndex = sameQuery ? Math.max(0, suggestions.findIndex(suggestion => suggestion.tag === selected)) : 0;
 		const mobile = this.inputEl.closest(".knomo-mobile-composer-layer") !== null;
 		const container = this.inputEl.ownerDocument.body.createDiv({
-			cls: `suggestion-container knomo-tag-suggest-popover${mobile ? " knomo-tag-suggest-mobile" : ""}`,
+			cls: `suggestion-container knomo-tag-suggest-popover knomo-native-suggest${mobile ? " knomo-tag-suggest-mobile knomo-suggest-mobile" : ""}`,
 		});
 		this.popoverEl = container;
+		this.releaseGlassSurface = this.registerGlassSurface?.(container) ?? null;
 		container.id = this.popoverId;
 		this.hidePopoverUntilPositioned();
 		this.inputEl.setAttribute("aria-controls", this.popoverId);
 		this.inputEl.setAttribute("aria-expanded", "true");
 		container.setAttribute("role", "listbox");
+		const list = this.listEl = container.createDiv({ cls: "suggestion knomo-suggest-list" });
 		// 与工具栏共用触摸手势：松手点选、滑动/取消不选，阻止兼容鼠标事件夺走焦点。
 		this.clearGesture = registerComposerToolGesture(container, (action, event) => {
 			const suggestion = this.suggestions[Number(action)];
 			if (this.popoverEl !== container || !suggestion || this.inputEl.composer.readOnly || this.inputEl.composer.composing) return;
-			if (event.type === "pointerup") {
+			if (event.type === "pointerup" || event.type === "touchend") {
 				event.stopImmediatePropagation();
-				this.guardTouchClickThrough(event, container);
+				this.clearTouchClickGuard?.();
+				this.clearTouchClickGuard = guardSuggestionTouchClickThrough(event, container, () => { this.clearTouchClickGuard = null; });
 			}
 			this.selectSuggestion(suggestion);
 		}, mobile ? {
-			scrollElement: container,
+			scrollElement: list,
 			capture: () => {
 				const context = this.inputEl.composer.capture();
 				const canStart = !this.inputEl.composer.readOnly && !this.inputEl.composer.composing;
@@ -149,7 +161,7 @@ export class KnomoTagSuggest {
 			},
 		} : undefined);
 		for (const [index, suggestion] of suggestions.entries()) {
-			const item = container.createDiv({ cls: "suggestion-item" });
+			const item = list.createDiv({ cls: "suggestion-item" });
 			item.setAttribute("role", "option");
 			item.setAttribute("data-action", String(index));
 			item.id = `${this.popoverId}-${index}`;
@@ -184,63 +196,34 @@ export class KnomoTagSuggest {
 			this.close();
 		};
 	}
-	private guardTouchClickThrough(origin: MouseEvent, container: HTMLElement): void {
-		this.clearTouchClickGuard?.();
-		const win = this.inputEl.ownerDocument.defaultView;
-		if (win === null) return;
-		// touchend 仍可能指向已移除的原候选；兼容事件也可能重新命中编辑器/蒙层。
-		// 两条路径共用短期防护，独立于已关闭 Popup 的手势注册。
-		const targets: EventTarget[] = [win, container];
-		const types = ["touchend", "mousedown", "mouseup", "click"] as const;
-		const guard = (event: Event) => {
-			if (event.type === "click" && (event as MouseEvent).detail === 0) return;
-			const point = event.type === "touchend"
-				? (event as TouchEvent).changedTouches[0] : event as MouseEvent;
-			if (!point || Math.hypot(point.clientX - origin.clientX, point.clientY - origin.clientY) > 12) return;
-			event.preventDefault();
-			event.stopImmediatePropagation();
-			if (event.type === "click") clear();
-		};
-		const clear = () => {
-			for (const target of targets) {
-				for (const type of types) target.removeEventListener(type, guard, true);
-			}
-			win.removeEventListener("pointerdown", clear, true);
-			win.clearTimeout(timer);
-			this.clearTouchClickGuard = null;
-		};
-		const timer = win.setTimeout(clear, 600);
-		this.clearTouchClickGuard = clear;
-		for (const target of targets) {
-			for (const type of types) target.addEventListener(type, guard, { capture: true, passive: false });
-		}
-		// 新的真实手势立即放行，不依赖固定延时封锁后续点击。
-		win.addEventListener("pointerdown", clear, true);
-	}
 	handleKeydown(event: KeyboardEvent): boolean {
 		if (event.key === "Escape" && this.pendingRequest !== null && !event.isComposing && !this.inputEl.composer.composing) {
 			event.preventDefault(); event.stopImmediatePropagation(); this.close(); return true;
 		}
-		const controlNavigation = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["n", "p"].includes(event.key.toLowerCase());
-		if (!this.popoverEl || event.isComposing || this.inputEl.composer.composing || (event.ctrlKey || event.metaKey) && !controlNavigation) return false;
-		if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key) && !controlNavigation) return false;
+		if (!this.listEl || event.isComposing || this.inputEl.composer.composing) return false;
+		const nextIndex = getSuggestionNavigationIndex(event, this.selectedIndex, this.listEl);
+		if ((event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) && nextIndex === null) return false;
+		if (!["Enter", "Tab", "Escape"].includes(event.key) && nextIndex === null) return false;
 		event.preventDefault(); event.stopImmediatePropagation();
 		if (event.key === "Escape") this.close();
 		else if (event.key === "Enter" || event.key === "Tab") this.selectSuggestion(this.suggestions[this.selectedIndex], event);
 		else {
-			this.setSelectedIndex((this.selectedIndex + (event.key === "ArrowDown" || event.key.toLowerCase() === "n" ? 1 : -1) + this.suggestions.length) % this.suggestions.length, true);
+			this.setSelectedIndex(nextIndex!, true);
 		}
 		return true;
 	}
 	private setSelectedIndex(index: number, scroll: boolean): void {
-		if (!this.popoverEl) return;
+		if (!this.listEl) return;
 		this.selectedIndex = index;
-		Array.from(this.popoverEl.children).forEach((child, childIndex) => {
+		Array.from(this.listEl.children).forEach((child, childIndex) => {
 			child.classList.toggle("is-selected", childIndex === index);
 			child.setAttribute("aria-selected", String(childIndex === index));
 		});
 		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${index}`);
-		if (scroll) this.popoverEl.children[index]?.scrollIntoView({ block: "nearest" });
+		if (scroll) {
+			const item = this.listEl.children[index] as HTMLElement | undefined;
+			if (item) scrollSuggestionIntoView(this.listEl, item);
+		}
 	}
 	private getSuggestions(): TagSuggestion[] {
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
@@ -274,17 +257,23 @@ export class KnomoTagSuggest {
 		this.queuePopoverReposition();
 	}
 
-	selectSuggestion(value: TagSuggestion, _evt?: MouseEvent | KeyboardEvent): void {
+	selectSuggestion(value: TagSuggestion, event?: MouseEvent | KeyboardEvent): void {
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			this.close();
 			return;
 		}
-		const next = replaceTagQueryWithSuggestion(this.inputEl.value, range, value.tag);
+		const completing = event?.type === "keydown" && (event as KeyboardEvent).key === "Tab";
+		const replacement = `#${value.tag.replace(/^#/, "")}`;
+		const next = completing ? {
+			value: `${this.inputEl.value.slice(0, range.from)}${replacement}${this.inputEl.value.slice(range.to)}`,
+			cursor: range.from + replacement.length,
+		} : replaceTagQueryWithSuggestion(this.inputEl.value, range, value.tag);
 		if (!applyComposerEdit(this.inputEl, next.value, next.cursor)) return;
 		this.inputEl.composer.view.focus();
 		this.onInputChanged();
-		this.close();
+		if (completing) this.refresh();
+		else this.close();
 	}
 
 	private hidePopoverUntilPositioned(): void {
@@ -347,10 +336,7 @@ export class KnomoTagSuggest {
 			const maxHeightLimit = 240;
 			const availableAbove = Math.max(0, anchor.top - viewportTop - topGuard - gap);
 			const maxHeight = Math.min(maxHeightLimit, availableAbove);
-			const contentHeight = measureSuggestionContentHeight(this.inputEl, container, ".suggestion-item");
-			const measuredHeight = Math.min(maxHeight, contentHeight > 0 ? contentHeight : maxHeight);
 			container.addClass("knomo-tag-suggest-popover");
-			const top = Math.max(viewportTop + topGuard, anchor.top - measuredHeight - gap);
 			const inputRect = this.inputEl.getBoundingClientRect();
 			const viewportLeft = viewport ? Math.max(0, viewport.offsetLeft) : 0;
 			const viewportRight = viewport
@@ -361,6 +347,10 @@ export class KnomoTagSuggest {
 			const contentWidth = measureSuggestionContentWidth(this.inputEl, container, ".suggestion-item");
 			const targetWidth = contentWidth > 0 ? contentWidth + 44 : inputRect.width - 24;
 			const width = Math.max(0, Math.min(targetWidth, availableWidth));
+			container.setCssProps({ "--knomo-suggest-width": `${Math.round(width)}px` });
+			const contentHeight = measureSuggestionContentHeight(this.inputEl, container, ".suggestion-item");
+			const measuredHeight = Math.min(maxHeight, contentHeight > 0 ? contentHeight : maxHeight);
+			const top = Math.max(viewportTop + topGuard, anchor.top - measuredHeight - gap);
 			const minLeft = viewportLeft + viewportMargin;
 			const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
 			const left = clamp(anchor.left, minLeft, maxLeft);
@@ -387,7 +377,12 @@ export class KnomoTagSuggest {
 		const minLeft = viewportLeft + viewportMargin;
 		const maxLeft = Math.max(minLeft, viewportRight - viewportMargin - width);
 		const left = clamp(anchor.left, minLeft, maxLeft);
-		this.setPopoverOffsetPosition(container, left, anchor.bottom, width, 240);
+		container.setCssProps({ "--knomo-suggest-width": `${Math.round(width)}px` });
+		const viewportTop = viewport ? Math.max(0, viewport.offsetTop) : 0;
+		const viewportBottom = viewportTop + (viewport?.height ?? win?.innerHeight ?? this.inputEl.ownerDocument.documentElement.clientHeight);
+		const position = getDesktopSuggestionPosition(anchor,
+			measureSuggestionContentHeight(this.inputEl, container, ".suggestion-item"), viewportTop, viewportBottom);
+		this.setPopoverOffsetPosition(container, left, position.top, width, position.maxHeight);
 		this.showPositionedPopover(container);
 	}
 

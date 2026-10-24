@@ -2,6 +2,7 @@ import type {
 	CatalogCoverage,
 	CatalogDailyAggregate,
 	CatalogObservation,
+	CatalogObservationSnapshot,
 	CatalogCapabilities,
 	CatalogQueryPage,
 	CatalogStoreLifecycle,
@@ -20,6 +21,7 @@ import type {
 	CatalogRecordStatsFilter,
 	CatalogReadState,
 	CatalogReadStatus,
+	CatalogScanSnapshot,
 	KnomoRuntimeAttentionSnapshot,
 	MonthlyProjectionState,
 	CatalogTagFacet,
@@ -38,19 +40,17 @@ import { filterRandomReunionCandidates, sampleRandomReunionCandidates } from "..
 import type { RandomReunionCandidate } from "../utils/randomReunion";
 import { CooperativeYieldController } from "./CooperativeTask";
 import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
-import type { CatalogReferenceService } from "./CatalogReferenceService";
 import {
 	createCatalogCapabilities,
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
 import type { CatalogChangeCursor, MemoCatalogService } from "./MemoCatalogService";
-import { createCatalogCountAbortError } from "./MemoCatalogStore";
+import { CATALOG_OBSERVATION_READ_BATCH_LIMIT, CatalogQueryCancelledError, createCatalogCountAbortError } from "./MemoCatalogStore";
 import { getCatalogQueryKey, narrowCatalogQuery } from "./SearchMatching";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
 import { observationHandleKey } from "./DailyMemoPresentationChange";
 
 export interface CatalogReadServiceOptions {
-	references?: CatalogReferenceService;
 	reviews?: LocalMemoReviewStore;
 	catalog: MemoCatalogService;
 	requestObservationScan?: () => void | Promise<void>;
@@ -59,6 +59,7 @@ export interface CatalogReadServiceOptions {
 	getLegacyCleanupPending?: () => boolean;
 	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
+	getScanSnapshot?: () => CatalogScanSnapshot;
 	getStartupBootstrapSnapshot?: () => KnomoStartupBootstrapSnapshot;
 	now?: () => Date;
 	random?: () => number;
@@ -99,7 +100,6 @@ export class CatalogReadService {
 	private readonly reviews: LocalMemoReviewStore;
 	private readonly now: () => Date;
 	private readonly random: () => number;
-	private lastReadState: CatalogReadState | null = null;
 	private randomReunionCandidatePool: RandomReunionCandidatePool | null = null;
 	private randomReunionCandidatePoolLoad: RandomReunionPoolTask | null = null;
 	private readonly countCache = new Map<string, CatalogMemoCountResult>();
@@ -109,10 +109,6 @@ export class CatalogReadService {
 		this.reviews = options.reviews ?? new LocalMemoReviewStore();
 		this.now = options.now ?? (() => new Date());
 		this.random = options.random ?? Math.random;
-	}
-
-	getLastReadState(): CatalogReadState | null {
-		return this.lastReadState;
 	}
 
 	getRuntimeAttentionSnapshot(): KnomoRuntimeAttentionSnapshot {
@@ -157,25 +153,30 @@ export class CatalogReadService {
 		};
 	}
 
-	async prime(): Promise<void> {
-		await this.query({ limit: 1 });
+	async prime(signal?: AbortSignal): Promise<void> {
+		await this.query({ limit: 1 }, signal);
+		signal?.throwIfAborted();
 	}
 
 	async getFileSourceRevision(sourcePath: string): Promise<string | null> {
 		return (await this.options.catalog.getStore().getFile(sourcePath))?.sourceRevision ?? null;
 	}
 
-	async query(request: CatalogFeatureQuery): Promise<CatalogMemoPage> {
+	async query(request: CatalogFeatureQuery, signal?: AbortSignal): Promise<CatalogMemoPage> {
+		signal?.throwIfAborted();
 		request = { ...request, ...narrowCatalogQuery(request) };
 		let page: CatalogQueryPage;
 		try {
-			page = await this.options.catalog.query({ ...request, cursor: request.cursor?.catalog ?? null });
-		} catch {
-			void Promise.resolve().then(() => this.options.requestObservationScan?.()).catch(() => undefined);
-			return this.createUnavailablePage();
+			page = await this.options.catalog.query({ ...request, cursor: request.cursor?.catalog ?? null }, signal);
+		} catch (error) {
+			signal?.throwIfAborted();
+			if (error instanceof CatalogQueryCancelledError) throw error;
+			void Promise.resolve().then(() => { if (!signal?.aborted) return this.options.requestObservationScan?.(); }).catch(() => undefined);
+			return this.createUnavailablePage(signal);
 		}
+		signal?.throwIfAborted();
 		if (page.invalidated) {
-			return this.rememberPage({
+			return {
 				items: [],
 				nextCursor: null,
 				catalogRevision: page.catalogRevision,
@@ -186,7 +187,7 @@ export class CatalogReadService {
 				readState: this.getReadState(page.coverage, page.lifecycle),
 				degraded: true,
 				invalidated: true,
-			});
+			};
 		}
 		const resolved = page.items.map((observation): ResolvedMemo => ({
 			kind: "observation",
@@ -195,12 +196,10 @@ export class CatalogReadService {
 		}));
 		const status = this.getReadStatus(page.coverage, page.lifecycle, false);
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
-		const referenceCache = this.options.references?.createQueryCache();
-		return this.rememberPage({
-			items: await Promise.all(resolved.map(async (memo) => ({
-				...toCatalogMemoItem(memo, catalogCapabilities),
-				...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(memo.observation, referenceCache) }),
-			}))),
+		const items = resolved.map(memo => { signal?.throwIfAborted(); return toCatalogMemoItem(memo, catalogCapabilities); });
+		signal?.throwIfAborted();
+		return {
+			items,
 			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
 			catalogRevision: page.catalogRevision,
 			coverage: page.coverage,
@@ -210,7 +209,7 @@ export class CatalogReadService {
 			readState: this.getReadState(page.coverage, page.lifecycle),
 			degraded: status.content === "unavailable" || status.catalog === "degraded",
 			invalidated: false,
-		});
+		};
 	}
 
 	async count(request: CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
@@ -293,24 +292,27 @@ export class CatalogReadService {
 		return isRangeCovered(coverage, fromDate, toDate);
 	}
 
-	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"]): Promise<TimeBuoyQueryResult> {
-		const page = await this.queryTimeBuoyPage({ today: targetDate, tab: "today", limit: 30, cursor });
+	async queryTimeBuoysForDate(targetDate: string, cursor?: TimeBuoyPageRequest["cursor"], signal?: AbortSignal): Promise<TimeBuoyQueryResult> {
+		const page = await this.queryTimeBuoyPage({ today: targetDate, tab: "today", limit: 30, cursor }, signal);
+		signal?.throwIfAborted();
 		// 任意历史 Daily 都可能含有指向今天的浮标；分页完成和索引覆盖分开判断。
 		return { ...page, missingPeriods: page.complete ? [] : [targetDate.slice(0, 7)] };
 	}
 
-	async queryTimeBuoyPage(request: TimeBuoyPageRequest): Promise<TimeBuoyPageResult> {
-		const page = await this.options.catalog.getStore().queryTimeBuoys(request);
+	async queryTimeBuoyPage(request: TimeBuoyPageRequest, signal?: AbortSignal): Promise<TimeBuoyPageResult> {
+		signal?.throwIfAborted();
+		const page = await this.options.catalog.getStore().queryTimeBuoys(request, signal);
+		signal?.throwIfAborted();
 		const { coverage, catalogRevision } = page;
 		let invalidated = page.invalidated || this.getReadState(coverage, page.lifecycle) === "storage_unavailable";
 		const capabilities = createCatalogCapabilities(coverage);
-		const referenceCache = this.options.references?.createQueryCache();
-		const memos = invalidated ? [] : await Promise.all(page.items.map(async (observation) => ({
-			...toCatalogMemoItem({ kind: "observation", observation, capabilities: createResolvedMemoCapabilities() }, capabilities),
-			...(this.options.references === undefined ? {} : { derivedReferences: await this.options.references.resolve(observation, referenceCache) }),
-		})));
+		const memos = invalidated ? [] : page.items.map(observation => {
+			signal?.throwIfAborted();
+			return toCatalogMemoItem({ kind: "observation", observation, capabilities: createResolvedMemoCapabilities() }, capabilities);
+		});
 		const store = this.options.catalog.getStore();
 		const [currentRevision, currentCoverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		signal?.throwIfAborted();
 		invalidated ||= currentRevision !== catalogRevision || JSON.stringify(currentCoverage) !== JSON.stringify(coverage)
 			|| this.getReadState(currentCoverage, store.getLifecycle()) === "storage_unavailable";
 		return {
@@ -353,14 +355,14 @@ export class CatalogReadService {
 					today: now, random: this.random, ...options,
 				}, { yieldControl: yieldToUi, maxOperationsPerSlice: 4096 });
 				const capabilities = createCatalogCapabilities(pool.coverage);
-				const items: MemoViewItem[] = [];
-				for (const candidate of selected) {
-					options.signal?.throwIfAborted();
-					const observation = await this.options.catalog.getObservation(candidate.observationKey);
-					options.signal?.throwIfAborted();
+				const snapshot = await this.readObservationSnapshots(selected.map(candidate => candidate.observationKey), options.signal);
+				if (snapshot.catalogRevision !== pool.catalogRevision || JSON.stringify(snapshot.coverage) !== JSON.stringify(pool.coverage)
+					|| snapshot.storeGeneration !== pool.changeCursor.storeGeneration) throw new CatalogDiscoveryInvalidatedError();
+				const items = selected.map((candidate, index) => {
+					const observation = snapshot.observations[index];
 					if (observation === null || observationLocalKey(observation) !== candidate.id) throw new CatalogDiscoveryInvalidatedError();
-					items.push(toCatalogMemoView(toCatalogMemoItem(this.resolveObservation(observation), capabilities)));
-				}
+					return toCatalogMemoView(toCatalogMemoItem(this.resolveObservation(observation), capabilities));
+				});
 				if (!await this.isRandomReunionPoolCurrent(pool, options.signal)) throw new CatalogDiscoveryInvalidatedError();
 				return items;
 			} catch (error) {
@@ -373,15 +375,15 @@ export class CatalogReadService {
 	}
 
 	// 只读取页面已经选中的句柄，不以旧行号、正文 hash 或当前查询结果重定位 occurrence。
-	async readMemoItems(handles: readonly ObservationHandle[]): Promise<CatalogMemoItem[]> {
-		const items = await this.readMemoHandles(handles);
+	async readMemoItems(handles: readonly ObservationHandle[], signal?: AbortSignal): Promise<CatalogMemoItem[]> {
+		const items = await this.readMemoHandles(handles, signal);
 		if (items.some(item => item === null)) throw new CatalogDiscoveryInvalidatedError();
 		return items as CatalogMemoItem[];
 	}
 
-	async refreshMemoViews(memos: readonly MemoViewItem[]): Promise<MemoViewItem[]> {
+	async refreshMemoViews(memos: readonly MemoViewItem[], signal?: AbortSignal): Promise<MemoViewItem[]> {
 		const catalogMemos = memos.filter(memo => memo.catalog !== undefined);
-		const items = await this.readMemoHandles(catalogMemos.map(memo => memo.catalog!.observationHandle));
+		const items = await this.readMemoHandles(catalogMemos.map(memo => memo.catalog!.observationHandle), signal);
 		const current = new Map(catalogMemos.map((memo, index) => [memo.id, items[index]]));
 		return memos.flatMap(memo => {
 			if (!current.has(memo.id)) return [memo];
@@ -390,27 +392,44 @@ export class CatalogReadService {
 		});
 	}
 
-	private async readMemoHandles(handles: readonly ObservationHandle[]): Promise<Array<CatalogMemoItem | null>> {
+	private async readMemoHandles(handles: readonly ObservationHandle[], signal?: AbortSignal): Promise<Array<CatalogMemoItem | null>> {
+		signal?.throwIfAborted();
 		if (handles.length === 0) return [];
-		const store = this.options.catalog.getStore();
-		const [revision, coverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
-		const capabilities = createCatalogCapabilities(coverage);
-		const referenceCache = this.options.references?.createQueryCache();
-		const items = await Promise.all(handles.map(async handle => {
-			const key = handle.sourcePath + "\0" + String(handle.startLine).padStart(10, "0");
-			const observation = await this.options.catalog.getObservation(key);
+		const snapshot = await this.readObservationSnapshots(handles.map(handle => handle.sourcePath + "\0" + String(handle.startLine).padStart(10, "0")), signal);
+		const capabilities = createCatalogCapabilities(snapshot.coverage);
+		return handles.map((handle, index) => {
+			const observation = snapshot.observations[index];
 			if (observation === null || observation.sourcePath !== handle.sourcePath
 				|| observation.sourceRevision !== handle.sourceRevision || observation.startLine !== handle.startLine
 				|| observation.endLine !== handle.endLine || observation.rawBlockHash !== handle.rawBlockHash) return null;
-			return {
-				...toCatalogMemoItem(this.resolveObservation(observation), capabilities),
-				...(this.options.references === undefined ? {} : {
-					derivedReferences: await this.options.references.resolve(observation, referenceCache),
-				}),
-			};
-		}));
-		if (await store.getCatalogRevision() !== revision) throw new CatalogDiscoveryInvalidatedError();
-		return items;
+			return toCatalogMemoItem(this.resolveObservation(observation), capabilities);
+		});
+	}
+
+	private async readObservationSnapshots(observationKeys: readonly string[], signal?: AbortSignal): Promise<CatalogObservationSnapshot> {
+		const store = this.options.catalog.getStore();
+		const storeGeneration = store.getRuntimeGeneration();
+		let first: CatalogObservationSnapshot | null = null;
+		const observations: Array<CatalogObservation | null> = [];
+		for (let offset = 0; offset < Math.max(1, observationKeys.length); offset += CATALOG_OBSERVATION_READ_BATCH_LIMIT) {
+			signal?.throwIfAborted();
+			if (store.getRuntimeGeneration() !== storeGeneration) throw new CatalogDiscoveryInvalidatedError();
+			const snapshot = await this.options.catalog.readObservationSnapshot(observationKeys.slice(offset, offset + CATALOG_OBSERVATION_READ_BATCH_LIMIT), signal);
+			signal?.throwIfAborted();
+			if (snapshot.invalidated || snapshot.storeGeneration !== storeGeneration || (first !== null
+				&& (snapshot.catalogRevision !== first.catalogRevision || JSON.stringify(snapshot.coverage) !== JSON.stringify(first.coverage)
+					|| JSON.stringify(snapshot.lifecycle) !== JSON.stringify(first.lifecycle)))) throw new CatalogDiscoveryInvalidatedError();
+			first ??= snapshot;
+			observations.push(...snapshot.observations);
+			// 每批事务有限；批间让出 UI，并在下一批拒绝混合 revision、coverage 或 store。
+			if (offset + CATALOG_OBSERVATION_READ_BATCH_LIMIT < observationKeys.length) await yieldToUi();
+		}
+		const [revision, coverage] = await Promise.all([store.getCatalogRevision(), store.getCoverage()]);
+		signal?.throwIfAborted();
+		if (store.getRuntimeGeneration() !== storeGeneration || revision !== first!.catalogRevision
+			|| JSON.stringify(coverage) !== JSON.stringify(first!.coverage)
+			|| JSON.stringify(store.getLifecycle()) !== JSON.stringify(first!.lifecycle)) throw new CatalogDiscoveryInvalidatedError();
+		return { ...first!, observations };
 	}
 
 	async recordReview(item: CatalogMemoItem): Promise<void> {
@@ -458,7 +477,7 @@ export class CatalogReadService {
 			let invalidated = false;
 			do {
 				options.signal?.throwIfAborted();
-				const page = await this.query({ fromDate: date, toDate: date, limit: 150, cursor });
+				const page = await this.query({ fromDate: date, toDate: date, limit: 150, cursor }, options.signal);
 				options.signal?.throwIfAborted();
 				if (page.invalidated || page.catalogRevision !== snapshot.catalogRevision
 					|| JSON.stringify(page.coverage) !== JSON.stringify(snapshot.coverage)) { invalidated = true; break; }
@@ -487,7 +506,7 @@ export class CatalogReadService {
 		return { kind: "observation", observation, capabilities: createResolvedMemoCapabilities() };
 	}
 
-	private async createUnavailablePage(): Promise<CatalogMemoPage> {
+	private async createUnavailablePage(signal?: AbortSignal): Promise<CatalogMemoPage> {
 		const store = this.options.catalog.getStore();
 		const coverage = await store.getCoverage().catch((): CatalogCoverage => ({
 			kind: "partial",
@@ -502,7 +521,8 @@ export class CatalogReadService {
 		} catch {
 			lifecycle = { state: "degraded", persistent: false, writable: false, reason: "catalog_query_failed" };
 		}
-		return this.rememberPage({
+		signal?.throwIfAborted();
+		return {
 			items: [],
 			nextCursor: null,
 			catalogRevision: 0,
@@ -513,7 +533,7 @@ export class CatalogReadService {
 			readState: "storage_unavailable",
 			degraded: true,
 			invalidated: false,
-		});
+		};
 	}
 
 	private async createUnavailableCount(
@@ -556,6 +576,7 @@ export class CatalogReadService {
 			// 内容状态与辅助服务诊断分别提供。
 			currentConfiguration: this.getCurrentConfigurationStatus(),
 			projection: this.getProjectionState(),
+			...(this.options.getScanSnapshot ? { scan: this.options.getScanSnapshot() } : {}),
 		};
 	}
 
@@ -651,7 +672,7 @@ export class CatalogReadService {
 			let cursor: CatalogQueryPage["nextCursor"] = null;
 			do {
 				signal.throwIfAborted();
-				const page = await this.queryRandomReunionObservations(cursor, 150, sourcePath === null ? undefined : [sourcePath], file?.logicalDate);
+				const page = await this.queryRandomReunionObservations(cursor, 150, sourcePath === null ? undefined : [sourcePath], file?.logicalDate, signal);
 				signal.throwIfAborted();
 				this.requireRandomReunionCoverage(page.coverage);
 				if (page.invalidated || page.catalogRevision !== snapshot.catalogRevision
@@ -683,13 +704,15 @@ export class CatalogReadService {
 	}
 
 	private async queryRandomReunionObservations(
-		cursor: CatalogQueryPage["nextCursor"], limit: number, sourcePaths?: readonly string[], logicalDate?: string,
+		cursor: CatalogQueryPage["nextCursor"], limit: number, sourcePaths?: readonly string[], logicalDate?: string, signal?: AbortSignal,
 	): Promise<CatalogQueryPage> {
 		try {
 			return await this.options.catalog.query({ limit, cursor, ...(sourcePaths === undefined ? {} : { sourcePaths }),
-				...(logicalDate === undefined ? {} : { fromDate: logicalDate, toDate: logicalDate }) });
+				...(logicalDate === undefined ? {} : { fromDate: logicalDate, toDate: logicalDate }) }, signal);
 		} catch (error) {
-			void Promise.resolve().then(() => this.options.requestObservationScan?.()).catch(() => undefined);
+			signal?.throwIfAborted();
+			if (error instanceof CatalogQueryCancelledError) throw error;
+			void Promise.resolve().then(() => { if (!signal?.aborted) return this.options.requestObservationScan?.(); }).catch(() => undefined);
 			throw error;
 		}
 	}
@@ -702,11 +725,6 @@ export class CatalogReadService {
 		const coverage = await this.options.catalog.getStore().getCoverage();
 		if (!isCompleteCoverage(coverage)) throw new Error(`${feature} requires complete Catalog coverage.`);
 		return coverage;
-	}
-
-	private rememberPage(page: CatalogMemoPage): CatalogMemoPage {
-		this.lastReadState = page.readState;
-		return page;
 	}
 }
 

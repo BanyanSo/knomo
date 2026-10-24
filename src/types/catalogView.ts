@@ -18,6 +18,11 @@ export type CatalogContentState = "ready" | "scanning" | "unavailable";
 export type CatalogState = "partial" | "complete" | "degraded";
 export type MonthlyProjectionState = "ready" | "stale" | "failed";
 
+export interface CatalogScanSnapshot {
+	state: "idle" | "scanning" | "paused" | "waiting-retry";
+	failedFileCount: number;
+}
+
 
 export interface CatalogReadStatus {
 	settings?: KnomoSettingsLoadStatus;
@@ -25,6 +30,7 @@ export interface CatalogReadStatus {
 	catalog: CatalogState;
 	currentConfiguration?: KnomoCurrentConfigStatus;
 	projection: MonthlyProjectionState;
+	scan?: CatalogScanSnapshot;
 
 }
 
@@ -38,7 +44,6 @@ export interface KnomoRuntimeAttentionSnapshot {
 }
 
 export interface CatalogMemoItem {
-	derivedReferences?: import("../services/CatalogReferenceService").CatalogReference[];
 	key: string;
 	renderKey: string;
 	observationHandle: ObservationHandle;
@@ -68,6 +73,11 @@ export interface DailyMutationResult extends MutationFollowUpState {
 export interface MemoSaveResult extends DailyMutationResult {
 	memo: CatalogMemoItem | null;
 	timeBuoyDates: string[];
+}
+
+export interface MemoRestoreResult extends MemoSaveResult {
+	cleanupPending: boolean;
+	message?: string;
 }
 
 export interface MemoSaveOperation {
@@ -125,12 +135,6 @@ export type CatalogRecordStatsFilter =
 	| { type: "max-daily-words"; dates: string[] }
 	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };
 
-export interface CatalogOperationalState {
-	readState: CatalogReadState;
-	capabilities: {
-		createNew: boolean;
-	};
-}
 
 export type CatalogFeatureQuery = Omit<CatalogQuery, "cursor"> & {
 	cursor?: CatalogFeatureCursor | null;

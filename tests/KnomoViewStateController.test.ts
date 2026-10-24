@@ -1,7 +1,13 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 
-import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+let KnomoViewStateController: typeof import("../src/ui/KnomoViewStateController").KnomoViewStateController;
+before(async () => {
+	await ensureObsidianStub();
+	({ KnomoViewStateController } = await import("../src/ui/KnomoViewStateController"));
+});
 
 test("Things 保留组合条件、单项清除、Scope 日期与统计返回", () => {
 	const state = new KnomoViewStateController();

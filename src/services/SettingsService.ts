@@ -6,7 +6,6 @@ import type {
 	MonthlyFolderMigrationPlan,
 	MonthlyFolderMigrationResult,
 	MonthlyMemoFileFormatMigrationPlan,
-	MonthlyMemoFileFormatMigrationResult,
 } from "../settings/MonthlyFolderMigrationService";
 import { cloneSettings, isValidMonthlyMemoFileFormat, normalizeSettings } from "../settings/normalizeSettings";
 import type { KnomoSettings, KnomoSettingsLoadStatus } from "../types/settings";
@@ -24,7 +23,6 @@ export type {
 	MonthlyFolderMigrationPlan,
 	MonthlyFolderMigrationResult,
 	MonthlyMemoFileFormatMigrationPlan,
-	MonthlyMemoFileFormatMigrationResult,
 } from "../settings/MonthlyFolderMigrationService";
 
 export class SettingsService {
@@ -54,9 +52,6 @@ export class SettingsService {
 				catch (error) { this.loadStatus = "unavailable"; this.notifyChanged(); throw error; }
 				return result;
 			},
-			(settings) => {
-				this.settings = cloneSettings(settings);
-			},
 			() => { this.monthlyRuntime.assertActive(); if (this.loadStatus !== "ready") throw new Error("Knomo settings unavailable."); },
 		);
 	}
@@ -73,6 +68,7 @@ export class SettingsService {
 				&& typeof settingsData.excludeMonthlyMemosFromObsidian === "boolean";
 			this.settings = this.migrateSettings(settingsData);
 			this.settings.recentTimeFlowEnabled = DEFAULT_KNOMO_SETTINGS.recentTimeFlowEnabled;
+			this.settings.reduceGlassEffects = DEFAULT_KNOMO_SETTINGS.reduceGlassEffects;
 			this.loadedConfiguration = configurationFingerprint(settingsData);
 			try {
 				const local: unknown = this.plugin.app.loadLocalStorage?.("knomo.preferences");
@@ -302,26 +298,16 @@ export class SettingsService {
 
 	async planMonthlyMemoFileFormatMigration(
 		nextMonthlyMemoFileFormat: string,
-		sourcePeriods?: readonly string[],
+		sourcePeriods: readonly string[],
 	): Promise<MonthlyMemoFileFormatMigrationPlan> {
 		return this.monthlyFolderMigrationService.planMonthlyMemoFileFormatMigration(
 			nextMonthlyMemoFileFormat,
 			sourcePeriods,
 		);
 	}
-
-	async migrateMonthlyMemoFileFormat(
-		nextMonthlyMemoFileFormat: string,
-		rebuildPeriods: (periods: string[], trackGeneratedPath: (path: string) => void) => Promise<void>,
-	): Promise<MonthlyMemoFileFormatMigrationResult> {
-		return this.runSettingsWriteExclusive(() => this.monthlyFolderMigrationService.migrateMonthlyMemoFileFormat(
-			nextMonthlyMemoFileFormat,
-			rebuildPeriods,
-		));
-	}
 }
 
-const PREFERENCE_KEYS = ["recentTimeFlowEnabled", "mobileCompactMode", "desktopSidebarWidth", "desktopSidebarCollapsed", "pinnedTags", "timeBuoyIntroDismissed"];
+const PREFERENCE_KEYS = ["recentTimeFlowEnabled", "mobileCompactMode", "reduceGlassEffects", "desktopSidebarWidth", "desktopSidebarCollapsed", "pinnedTags", "timeBuoyIntroDismissed"];
 
 function pickPreferences(value: object): Record<string, unknown> {
 	return Object.fromEntries(Object.entries(value).filter(([key]) => PREFERENCE_KEYS.includes(key)));

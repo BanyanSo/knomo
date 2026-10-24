@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { MemoSaveResult } from "../src/types/catalogView";
+import { createDeferred } from "./helpers/deferred";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
@@ -8,12 +10,12 @@ test("composer 在 Daily 提交后立即清空，不等待后续查询反馈", a
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const reloadCalls: Array<{ loadAll: boolean; forceRebuild: boolean | undefined }> = [];
 	const dailyCommitted = createDeferred<void>();
-	const saveSettled = createDeferred<SaveResult>();
-	const feedback: string[][] = [];
+	const saveSettled = createDeferred<MemoSaveResult>();
+	const { Notice } = await import("obsidian");
+	const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
 	view.inputEl = createComposerInput("memo");
 	view.getDailyNotesStatus = () => ({ enabled: true });
-	view.isComposerCreationAvailable = () => true;
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -28,7 +30,6 @@ test("composer 在 Daily 提交后立即清空，不等待后续查询反馈", a
 	view.syncComposerMode = () => undefined;
 	view.updateCancelEditButtonState = () => undefined;
 	view.resizeInput = () => undefined;
-	view.showTimeBuoySaveFeedback = dates => { feedback.push([...dates]); };
 	view.syncRootState = () => undefined;
 	view.memoCommandService = {
 		startCreate: () => ({ dailyCommitted: dailyCommitted.promise, settled: saveSettled.promise }),
@@ -48,10 +49,10 @@ test("composer 在 Daily 提交后立即清空，不等待后续查询反馈", a
 	assert.equal(view.isSaving, false);
 	assert.deepEqual(reloadCalls, []);
 
-	assert.deepEqual(feedback, []);
+	assert.deepEqual(notices, []);
 	saveSettled.resolve(makeSaveResult());
 	await view.composerSaveRefreshQueue;
-	assert.deepEqual(feedback, [[]]);
+	assert.deepEqual(notices, []);
 	assert.deepEqual(reloadCalls, []);
 });
 
@@ -62,7 +63,6 @@ test("强制替换会话的新草稿不会被旧保存清空", async () => {
 	const view = Object.create(KnomoView.prototype) as SaveInputView;
 	view.inputEl = createComposerInput("old memo");
 	view.getDailyNotesStatus = () => ({ enabled: true });
-	view.isComposerCreationAvailable = () => true;
 	view.isSaving = false;
 	view.editingMemo = null;
 	view.quoteReferenceText = null;
@@ -77,7 +77,6 @@ test("强制替换会话的新草稿不会被旧保存清空", async () => {
 	view.syncComposerMode = () => undefined;
 	view.updateCancelEditButtonState = () => undefined;
 	view.resizeInput = () => undefined;
-	view.showTimeBuoySaveFeedback = () => undefined;
 	view.syncRootState = () => undefined;
 	view.memoCommandService = {
 		startCreate: () => ({ dailyCommitted: dailyCommitted.promise, settled: Promise.resolve(makeSaveResult()) }),
@@ -101,7 +100,7 @@ test("保存期间切换到同文新会话不会被旧提交清空，失败保�
 		const daily = createDeferred<void>();
 		const view = Object.create(KnomoView.prototype) as SaveInputView;
 		Object.assign(view, {
-			getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+			getDailyNotesStatus: () => ({ enabled: true }),
 			inputEl: createComposerInput("same text"), isSaving: false, editingMemo: null,
 			quoteReferenceText: null, quoteMarkdownText: null, currentLayout: "desktop",
 			draftContent: "same text", composerOpen: true,
@@ -112,7 +111,7 @@ test("保存期间切换到同文新会话不会被旧提交清空，失败保�
 				if (fail) throw new Error("Daily unavailable");
 				return { dailyCommitted: daily.promise, settled: Promise.resolve(makeSaveResult()) };
 			} },
-			reloadMemos: async () => true, showTimeBuoySaveFeedback: () => undefined,
+			reloadMemos: async () => true,
 		});
 		const saving = view.saveInput();
 		if (!fail) view.inputEl = createComposerInput("same text");
@@ -162,7 +161,6 @@ test("任务正文提交失败时恢复原复选框", async () => {
 
 interface SaveInputView {
 	getDailyNotesStatus: () => { enabled: boolean };
-	isComposerCreationAvailable: () => boolean;
 	inputEl: ReturnType<typeof createComposerInput> | null;
 	isSaving: boolean;
 	editingMemo: null;
@@ -178,12 +176,11 @@ interface SaveInputView {
 	syncComposerMode: () => void;
 	updateCancelEditButtonState: () => void;
 	resizeInput: () => void;
-	showTimeBuoySaveFeedback: (dates: readonly string[]) => void;
 	syncRootState: () => void;
 	memoCommandService: {
 		startCreate: (content: string) => {
 			dailyCommitted: Promise<void>;
-			settled: Promise<SaveResult>;
+			settled: Promise<MemoSaveResult>;
 		};
 	};
 	reloadMemos: (loadAll: boolean, forceRebuild?: boolean) => Promise<boolean>;
@@ -209,31 +206,15 @@ interface TaskToggleView {
 	handleCatalogTaskToggle: (memo: { id: string }, taskIndex: number, checked: boolean) => Promise<void>;
 }
 
-interface SaveResult {
-	status: "saved";
-	memoId: string;
-	memo: null;
-	timeBuoyDates: string[];
-	localRefreshPending: false;
-}
-
-function makeSaveResult(): SaveResult {
+function makeSaveResult(): MemoSaveResult {
 	return {
 		status: "saved",
-		memoId: "0198f02c-1a2b-7c3d-8e4f-123456789abc",
 		memo: null,
 		timeBuoyDates: [],
 		localRefreshPending: false,
 	};
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 function createComposerInput(initial: string) {
 	let value = initial, revision = 0;

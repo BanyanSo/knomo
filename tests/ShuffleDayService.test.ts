@@ -12,10 +12,10 @@ import { CatalogDiscoveryInvalidatedError } from "../src/services/CatalogReadSer
 
 const now = new Date(2026, 9, 5, 12);
 
-test("生产漫游先抽非空年代段，1:1000 个日期不放大年代概率", async () => {
+test("生产漫游先等概率选年，1:1000 的 Memo 数不放大选年概率", async () => {
 	const { service } = harness();
 	const middle = aggregate("2026-08-01");
-	const old = Array.from({ length: 1000 }, (_, i) => aggregate(formatDatePart(new Date(2020, 0, i + 1))));
+	const old = Array.from({ length: 300 }, (_, i) => aggregate(formatDatePart(new Date(2020, 0, i + 1)), 1000));
 	const result = await service.selectCatalogShuffleDay(reader([middle, ...old]), { now, today: now, random: () => 0.5 });
 	assert.equal(result.status, "ready");
 	if (result.status === "ready") assert.equal(result.selectedDate, middle.logicalDate);

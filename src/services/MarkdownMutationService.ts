@@ -4,6 +4,7 @@ import type { App } from "obsidian";
 import type { MemoObservation, ObservationHandle } from "../types/catalog";
 import type { DailyInsertPosition } from "../types/settings";
 import { KnomoError } from "../types/serviceError";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import type {
 	MarkdownBlockReferenceInput,
 	MarkdownBlockReferenceResult,
@@ -239,12 +240,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				change: presentationChange, observations: prepared.after.observations,
 			});
 		} catch (error) {
-			console.error("Knomo confirmed Daily presentation failed", error);
+			logContinuationFailure("save", "confirmed-render", error);
 		}
 		try {
 			onDailyCommitted?.(diskConfirmed);
-		} catch {
+		} catch (error) {
 			// Daily 已提交，阶段观察者失败不能反向把正文保存标记为失败。
+			logContinuationFailure("save", "daily-observer", error);
 		}
 		const catalogUpdate = this.enqueueCatalogUpdate({
 			file: prepared.file, logicalDate: prepared.logicalDate, content: prepared.afterContent,
@@ -254,13 +256,14 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		try {
 			await catalogUpdate;
 			return false;
-		} catch {
+		} catch (error) {
+			logContinuationFailure("save", "publication", error);
 			void this.options.refreshCatalogPaths([prepared.file.path]).catch(() => undefined);
 			return true;
 		} finally {
 			if (onDailyCommitted || this.options.onDailyConfirmed) {
 				try { this.options.onCatalogUpdateSettled?.(presentationChange); }
-				catch (error) { console.error("Knomo Catalog presentation settlement failed", error); }
+				catch (error) { logContinuationFailure("save", "settled-observer", error); }
 			}
 		}
 	}

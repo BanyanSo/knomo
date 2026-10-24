@@ -45,10 +45,6 @@ export class ConfirmedMemoPresentation {
 			const handle = replacements.get(memo.id);
 			const current = handle ? memos.get(observationHandleKey(handle)) ?? makeMemo(handle)
 				: memo.catalog?.observationHandle.sourceRevision === change.sourceRevision ? memo : null;
-			if (current?.catalog && memo.catalog
-				&& current.catalog.observation.rawBlockHash === memo.catalog.observation.rawBlockHash) {
-				current.catalog.derivedReferences = memo.catalog.derivedReferences;
-			}
 			changes.set(memo.id, current);
 			if (current) memos.set(current.id, current);
 		}
@@ -125,5 +121,5 @@ function remapUnchangedMemo(memo: MemoViewItem, handle: ObservationHandle): Memo
 	const observation = { ...memo.catalog.observation, ...handle,
 		observationKey: `${handle.sourcePath}\0${String(handle.startLine).padStart(10, "0")}` };
 	const item = toCatalogMemoItem({ ...memo.catalog.resolved, observation }, memo.catalog.capabilities.catalog);
-	return toCatalogMemoView({ ...item, derivedReferences: memo.catalog.derivedReferences });
+	return toCatalogMemoView(item);
 }

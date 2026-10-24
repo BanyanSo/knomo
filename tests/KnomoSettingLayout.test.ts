@@ -27,6 +27,8 @@ async function renderSettings(locale: "zh-CN" | "en") {
 		createSpan(this: HTMLElement, options?: { text?: string }) { return this.createEl("span", options); },
 		addClass(this: HTMLElement, ...names: string[]) { this.classList.add(...names); },
 		setText(this: HTMLElement, text: string) { this.textContent = text; },
+		setAttr(this: HTMLElement, name: string, value: string) { this.setAttribute(name, value); },
+		setAttrs(this: HTMLElement, attributes: Record<string, string>) { for (const [name, value] of Object.entries(attributes)) this.setAttribute(name, value); },
 		toggleClass(this: HTMLElement, name: string, value: boolean) { this.classList.toggle(name, value); },
 		empty(this: HTMLElement) { this.replaceChildren(); },
 	});

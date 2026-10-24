@@ -1,10 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { undo, undoDepth } from "@codemirror/commands";
 import type { Menu, MenuItem, MenuPositionDef } from "obsidian";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoAction } from "../src/ui/KnomoActionDispatch";
 import type { KnomoMobileMenu } from "../src/ui/KnomoMobileMenu";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
+import { createReferenceMemo } from "./helpers/referenceMemo";
+
+test("原生菜单有无自身锚点均显示固定的引用和复制链接", async () => {
+	const h = await createHarness();
+	try {
+		for (const anchor of [null, "own-anchor"]) {
+			h.originalMemo.catalog = createReferenceMemo(anchor).catalog;
+			h.view.toggleCardMenu(h.originalMemo.id);
+			const menu = h.menus.at(-1)!;
+			assert.equal(menu.items[1].title, "Reference");
+			assert.equal(menu.items[4].title, "Copy link");
+			h.controller.close();
+		}
+	} finally { h.close(); }
+});
 
 interface MenuView {
 	currentLayout: string;
@@ -65,7 +81,8 @@ async function createHarness() {
 		setTitleMode: (mode: string) => scopes.push(mode),
 	});
 	view.app.workspace = { getActiveViewOfType: () => view };
-	Object.defineProperty(view, "mobileSearchResultsEl", { configurable: true, value: null });
+	// 本夹具的 root 承载开启的 Search，菜单触发卡片必须属于实际显示的 surface。
+	Object.defineProperty(view, "mobileSearchResultsEl", { configurable: true, get: () => view.mobileSearchPageOpen ? f.root : null });
 	Object.defineProperty(view, "mobileSearchPageOpen", { configurable: true, writable: true, value: true });
 	view.syncCardMenuState = (KnomoView.prototype as unknown as MenuView).syncCardMenuState.bind(view);
 	view.registerMobileMenuTriggerEvents();
@@ -96,6 +113,64 @@ test("menu titles stay plain text and belong to the trigger document when helper
 		});
 		assert.equal(h.menus[0].doc, doc);
 		assert.equal(h.menus[0].items[0].title, text);
+	} finally { h.close(); }
+});
+
+test("native Card and Scope menus stay outside glass preferences and release ownership on every close path", async () => {
+	const h = await createHarness();
+	try {
+		let reduced = true;
+		const leaf = h.f.win.document.body.createDiv();
+		Object.defineProperty(leaf, "doc", { value: h.f.win.document });
+		leaf.appendChild(h.f.root);
+		const view = Object.assign(h.view as unknown as { syncReducedGlassEffects(): void }, {
+			containerEl: leaf, settingsService: { getSettings: () => ({ reduceGlassEffects: reduced }) },
+		});
+		Object.assign(h.view.mobileComposerController, { getLayerEl: () => h.f.layer });
+		const unrelated = h.f.win.document.body.createDiv({ cls: "menu" });
+		for (const mobileSearch of [false, true]) for (const kind of ["scope", "card"] as const) for (const close of ["hide", "replace", "trigger-detach", "controller"] as const) {
+			h.view.mobileSearchPageOpen = mobileSearch;
+			const context = `${mobileSearch ? "search" : "feed"}/${kind}/${close}`;
+			const trigger = kind === "scope" ? h.trigger : h.f.card.querySelector<HTMLElement>(".knomo-card-menu")!;
+			if (kind === "scope") h.view.toggleScopeMenu(); else h.view.toggleCardMenu(h.originalMemo.id);
+			const owned = h.f.win.document.querySelector<HTMLElement>(".menu.knomo-mobile-menu")!;
+			assert.ok(owned, context);
+			assert.equal(owned.classList.contains("knomo-reduce-glass"), false, context);
+			assert.equal(owned.classList.contains("knomo-mobile-glass-surface"), false, context);
+			const className = owned.className;
+			for (const value of [false, true]) {
+				reduced = value; view.syncReducedGlassEffects();
+				assert.equal(leaf.classList.contains("knomo-reduce-glass"), value, context);
+				assert.equal(owned.className, className, `${context}: preferences do not change menu ownership or material`);
+				assert.equal(h.f.win.document.querySelector(".menu.knomo-mobile-menu"), owned, context);
+			}
+			if (close === "hide") h.menus.at(-1)!.hide();
+			else if (close === "replace") {
+				if (kind === "scope") h.view.toggleCardMenu(h.originalMemo.id); else h.view.toggleScopeMenu();
+				h.controller.close();
+			}
+			else if (close === "trigger-detach") {
+				const parent = trigger.parentElement!;
+				trigger.remove(); await Promise.resolve();
+				parent.appendChild(trigger);
+			} else h.controller.close();
+			assert.equal(owned.classList.contains("knomo-mobile-glass-surface"), false, context);
+			assert.equal(owned.classList.contains("knomo-reduce-glass"), false, context);
+			assert.equal(owned.classList.contains("knomo-mobile-menu"), false, context);
+			assert.equal(owned.classList.contains(`knomo-mobile-menu-${kind}`), false, context);
+			assert.equal(unrelated.className, "menu", "other host menus never inherit Knomo state");
+		}
+	} finally { h.close(); }
+});
+
+test("menu interaction ownership requires a title belonging to the exact host menu", async () => {
+	const h = await createHarness();
+	try {
+		h.controller.open({ kind: "scope", trigger: h.trigger, onClose: () => undefined,
+			build: menu => { menu.addItem(item => item.setTitle("Unmarked title")); },
+		});
+		assert.equal(h.f.win.document.querySelector(".knomo-mobile-menu"), null);
+		assert.equal(h.f.win.document.querySelector(".knomo-mobile-glass-surface"), null);
 	} finally { h.close(); }
 });
 
@@ -652,7 +727,10 @@ test("真实视图接线覆盖新建、搜索、Knomo 侧栏和宿主导航，�
 		const tabs = navbar.createDiv({ cls: "mobile-navbar-action mobile-navbar-action-tabs" });
 		const menu = navbar.createDiv({ cls: "mobile-navbar-action mobile-navbar-action-menu" });
 		const icon = menu.createSpan({ cls: "clickable-icon" });
-		for (const button of [fab, sidebar, nativeSidebar, search, quickSwitcher, tabs, icon]) {
+		const historyButtons = ["random-day-back", "refresh-random-reunion", "retry-random-day"].map(action =>
+			h.f.root.createEl("button", { attr: { "data-action": action } }));
+		Object.assign(h.view, { randomDayController: { reloadSelectedDate: async () => true, getSnapshot: () => ({ selectedDate: null }) } });
+		for (const button of [fab, sidebar, nativeSidebar, search, quickSwitcher, tabs, icon, ...historyButtons]) {
 			let calls = 0; button.addEventListener("click", () => calls++);
 			focused = false; assert.equal(tap(h, button).defaultPrevented, false);
 			focused = true;
@@ -683,7 +761,9 @@ async function useRealComposerActions(h: Awaited<ReturnType<typeof createHarness
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const proto = KnomoView.prototype as unknown as {
 		handleMemoAction(action: MemoAction, memo: MemoViewItem): Promise<void>;
-		focusComposerInputNow(resize?: boolean, viewport?: boolean): void;
+		focusComposerInputNow(resize?: boolean, viewport?: boolean, moveToEnd?: boolean): void;
+		openComposer(): void;
+		applyRestoredDraftSelection(): void;
 	};
 	const { f, view } = h;
 	Object.assign(f.win.HTMLElement.prototype, {
@@ -712,17 +792,86 @@ async function useRealComposerActions(h: Awaited<ReturnType<typeof createHarness
 		setComposerOpen: value => { view.composerOpen = value; }, getCardFlowScrollTop: () => 0,
 		registerBackdropClick: (element, handler) => element.addEventListener("click", handler),
 		closeComposerKeepingDraft: () => controller.closeKeepingDraft(),
-		focusInputNow: (resize, viewport) => {
+		focusInputNow: (resize, viewport, moveToEnd) => {
 			focusStates.push(f.win.document.hasFocus());
-			proto.focusComposerInputNow.call(view, resize, viewport);
+			proto.focusComposerInputNow.call(view, resize, viewport, moveToEnd);
 		},
 		resizeInput: () => undefined, syncRootState: () => undefined, syncComposerMode: () => undefined,
 		updateSendButtonState: () => undefined, updateCancelEditButtonState: () => undefined,
 	});
 	Object.assign(view, { mobileComposerController: controller });
 	controller.prepare();
-	return { controller, focusStates, done: () => pending };
+	return { controller, focusStates, done: () => pending,
+		open: () => proto.openComposer.call(view),
+		restoreSelection: (anchor: number, head: number) => {
+			Object.assign(view, { restoredDraftSelection: { anchor, head, scrollTop: 0 } });
+			proto.applyRestoredDraftSelection.call(view);
+		},
+	};
 }
+
+test("移动端从收起状态打开恢复草稿时，真实编辑器光标落在全文末尾", async t => {
+	for (const { text, anchor, head } of [
+		{ text: "第一行草稿\n\n最后一段继续写 📝", anchor: 0, head: 0 },
+		{ text: "恢复中的反向选区\n最后一段", anchor: 5, head: 2 },
+		{ text: "保留末尾空行\n\n", anchor: 0, head: 0 },
+		{ text: "", anchor: 0, head: 0 },
+	]) {
+		await t.test(JSON.stringify(text), async () => {
+			const h = await createHarness();
+			const real = await useRealComposerActions(h);
+			try {
+				const input = h.f.view.inputEl;
+				const editor = input.composer.view;
+				input.value = text;
+				real.restoreSelection(anchor, head);
+				input.blur();
+				const doc = editor.state.doc;
+				real.open();
+				assert.equal(h.f.win.document.activeElement, input);
+				assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [text.length, text.length]);
+				await new Promise(resolve => h.f.win.requestAnimationFrame(resolve));
+				assert.equal(editor.state.selection.main.head, text.length, "后续视口更新不能再把光标移回行首");
+				const selection = h.f.win.getSelection()!;
+				assert.equal(editor.posAtDOM(selection.anchorNode!, selection.anchorOffset), text.length);
+				assert.equal(selection.isCollapsed, true);
+				assert.equal(editor.state.doc, doc, "打开草稿只移动光标，不重置正文");
+			} finally { real.controller.dispose(); h.close(); }
+		});
+	}
+});
+
+test("移动草稿重新展开定位末尾，已展开时再次聚焦保留选区与撤销历史", async () => {
+	const h = await createHarness();
+	const real = await useRealComposerActions(h);
+	try {
+		const input = h.f.view.inputEl;
+		const editor = input.composer.view;
+		const original = "第一段\n最后一段";
+		input.value = original;
+		editor.dispatch({ changes: { from: original.length, insert: "继续写" }, selection: { anchor: 0 } });
+		const doc = editor.state.doc;
+		assert.equal(undoDepth(editor.state), 1);
+		real.open();
+		assert.equal(editor.state.selection.main.head, doc.length);
+		editor.dispatch({ selection: { anchor: 5, head: 2 } });
+		real.open();
+		assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [5, 2]);
+		input.blur();
+		real.controller.focusInputSoon();
+		await new Promise(resolve => h.f.win.requestAnimationFrame(resolve));
+		assert.equal(h.f.win.document.activeElement, input);
+		assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [5, 2]);
+		real.controller.closeKeepingDraft();
+		assert.equal(h.view.composerOpen, false);
+		real.open();
+		assert.deepEqual([editor.state.selection.main.anchor, editor.state.selection.main.head], [doc.length, doc.length]);
+		assert.equal(editor.state.doc, doc);
+		assert.equal(undoDepth(editor.state), 1);
+		assert.equal(undo(editor), true);
+		assert.equal(input.value, original);
+	} finally { real.controller.dispose(); h.close(); }
+});
 
 test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Composer 和 CodeMirror 获得焦点", async () => {
 	for (const index of [0, 1]) {

@@ -2,13 +2,13 @@ import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
 import { KnomoMobileMenu } from "./KnomoMobileMenu";
 import { registerMobileFirstTapRecovery, registerMobileMenuTriggerTap } from "./MobileMenuTap";
 import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalComposerDraftStore";
-import { sha256Bytes } from "../services/DiaryMemoParser";
+import { sha256Bytes } from "../utils/sha256";
 import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
 import { MarkdownMutationStaleError } from "../services/MarkdownMutationService";
 import { observationHandleKey, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "../services/DailyMemoPresentationChange";
 import { ConfirmedMemoPresentation } from "./ConfirmedMemoPresentation";
 import { createCatalogCapabilities } from "../services/MemoCapabilityModel";
-import { compareCatalogObservations } from "../services/MemoCatalogStore";
+import { CatalogQueryCancelledError, compareCatalogObservations } from "../services/MemoCatalogStore";
 import { DesktopDrawerFocus, getDrawerWidth, resolveLayout, type LayoutMode } from "./KnomoLayout";
 import { registerComposerToolGesture } from "./ComposerToolGesture";
 import type { KnomoQuickCommand } from "./KnomoQuickCommands";
@@ -29,7 +29,9 @@ import { t, getKnomoLocale } from "../i18n";
 import type { AttachmentService } from "../services/AttachmentService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { CatalogReadService } from "../services/CatalogReadService";
-import { isQueryCovered } from "../services/CatalogReadService";
+import { CatalogDiscoveryInvalidatedError, isQueryCovered } from "../services/CatalogReadService";
+import { TrashDailyWriteError } from "../services/IndependentTrashService";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import { filterCatalogMemos } from "./KnomoMemoFilter";
 import { getCatalogQueryKey } from "../services/SearchMatching";
 import { bindSearchInput } from "./SearchInputBinding";
@@ -50,6 +52,7 @@ import type {
 	CatalogMemoPage,
 	CatalogReadState,
 	CatalogReadStatus,
+	CatalogScanSnapshot,
 	CatalogTagFacet,
 	MemoSaveOperation,
 	MemoSaveResult,
@@ -67,6 +70,7 @@ import type { TextReplacement } from "../utils/composerInput";
 import { formatDatePart } from "../utils/date";
 import { formatTimeBuoyDate, getTimeBuoyCardStatus } from "../utils/timeBuoyDate";
 import { createRecentTimeFlowContext, formatRecentCalendarDate, getRecentMemoPresentation, RecentTimeFlowDecorations, type RecentDecoration } from "./RecentTimeFlowPresentation";
+import { BeyondTodayDecorations, createBeyondTodayContext, type BeyondTodayContext } from "./BeyondTodayPresentation";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import {
 	alreadyHasTimeBuoyDate,
@@ -78,7 +82,8 @@ import {
 import { formatServiceError } from "../utils/serviceText";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import { CardImageLoadQueue, type CardImageLoadSurface } from "./CardImageLoadQueue";
-import { getCatalogReadStatusHeaders } from "./CatalogReadStatusPresenter";
+import { getCatalogReadStatusHeaders, hasCatalogReadBlocker } from "./CatalogReadStatusPresenter";
+import { DelayedLoadingIndicator } from "./DelayedLoadingIndicator";
 import { DateChangeWatcher } from "./DateChangeWatcher";
 import { DesktopSidebarStateController } from "./DesktopSidebarStateController";
 import { getMemoActionLabel, renderKnomoMemoCard, renderKnomoTrashMemoCard } from "./KnomoCard";
@@ -112,18 +117,20 @@ import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
 import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
 import {
 	renderKnomoCardFlowHeaders,
+	syncKnomoCardFlowHeaders,
 	renderKnomoEmptyState,
+	renderKnomoLoadingPlaceholder,
 	renderKnomoLoadMoreButton,
 } from "./KnomoFeed";
 import { getCardFlowPresentation } from "./KnomoCardFlowPresenter";
-import type { CardFlowPresentation } from "./KnomoCardFlowPresenter";
+import type { CardFlowHeader, CardFlowPresentation } from "./KnomoCardFlowPresenter";
 import {
 	renderKnomoCompactHeader,
 	renderKnomoCompactSearchPanel,
 	renderKnomoDesktopTopbar,
 	renderKnomoScopePopover,
 } from "./KnomoHeaderSearch";
-import { MobileSearchController } from "./MobileSearchController";
+import { MobileSearchController, type MobileSearchPage } from "./MobileSearchController";
 import { renderKnomoRecordStatsPage } from "./KnomoRecordStatsPage";
 import {
 	renderKnomoSidebar,
@@ -171,6 +178,7 @@ import {
 	mergeTodayTimeBuoyFeed,
 	buildTimeBuoyTabItems,
 	TimeBuoyViewController,
+	TimeBuoyIndexPendingError,
 	type TimeBuoyTab,
 	type TimeBuoyTabItem,
 	type TodayTimeBuoySnapshot,
@@ -187,10 +195,13 @@ import { RecordStatsPreparationController } from "./RecordStatsPreparationContro
 import { RecordStatsViewStateController } from "./RecordStatsViewStateController";
 import { SearchQueryDebounce } from "./SearchQueryDebounce";
 import { ShuffleDayController } from "./ShuffleDayController";
+import { getMemoLocalDateKey } from "../utils/shuffleDay";
 import { TrashMemoController } from "./TrashMemoController";
+import type { ClearTrashAction } from "./clearTrashAction";
 import type { TrashMemoRenderTarget } from "./TrashMemoController";
 import { KnomoUserActionController } from "./KnomoUserActionController";
 import {
+	catalogCoverageKey,
 	getCardFlowChangeIntent as getCardFlowChangeIntentKey,
 	getCardFlowStateKey as getCardFlowStateKeyValue,
 	getCardFlowViewStateKey as getCardFlowViewStateKeyValue,
@@ -300,6 +311,12 @@ interface OpenTimeBuoyPickerState {
 
 let nextA11yId = 0;
 
+interface HistoryBrowsePosition {
+	scrollTop: number;
+	visibleCount: number;
+	anchor?: { renderKey: string; offset: number };
+}
+
 export class KnomoView extends ItemView {
 	private readonly a11yIdPrefix = `knomo-view-${nextA11yId += 1}`;
 	hoverPopover: HoverPopover | null = null;
@@ -337,6 +354,14 @@ export class KnomoView extends ItemView {
 	private sendButtonEl: HTMLButtonElement | null = null;
 	private cancelEditButtonEl: HTMLButtonElement | null = null;
 	private statusEl: HTMLElement | null = null;
+	private draftValidationRun = 0;
+	private pageFeedbackEl: HTMLElement | null = null;
+	private pageRefreshError: string | null = null;
+	private pageFeedbackContext = "";
+	// 只给页面说明编号，防止旧读取清除新问题；不据此推断服务健康。
+	private pageFeedbackRun = 0;
+	private pageAnnouncementKey = "";
+	private cardFlowFeedback = { key: "", context: "" };
 	private imageStatusEl: HTMLElement | null = null;
 	private composerImages: ComposerImageController | null = null;
 	private draftImageLinks: readonly ComposerImageLink[] = [];
@@ -357,6 +382,7 @@ export class KnomoView extends ItemView {
 	private catalogDesktopCountPresentation: { queryKey: string; count: number } | null = null;
 	private catalogDesktopCountRun = 0;
 	private catalogDesktopCountController: AbortController | null = null;
+	private catalogDesktopQueryController: AbortController | null = null;
 	private catalogCoverage: CatalogCoverage | null = null;
 	private catalogReadState: CatalogReadState = "ready";
 	private catalogStatus: CatalogReadStatus = {
@@ -364,14 +390,10 @@ export class KnomoView extends ItemView {
 		catalog: "complete",
 		projection: "ready",
 	};
-	private catalogMobileCursor: CatalogFeatureCursor | null = null;
-	private catalogMobileQueryRun = 0;
-	private catalogMobileCountController: AbortController | null = null;
-	private catalogMobileQueryFingerprint: string | null = null;
-	private catalogMobileTotalCount: number | null = null;
 	private catalogRevision = 0;
 	private catalogDesktopQueryFingerprint: string | null = null;
 	private hasCommittedCatalogDesktopQuery = false;
+	private initialCatalogQueryPending = false;
 	private libraryIndexRevision = -1;
 	private libraryIndexCoverageKey: string | null = null;
 	private libraryIndexRun = 0;
@@ -381,6 +403,9 @@ export class KnomoView extends ItemView {
 	private librarySummary: CatalogLibrarySummary | null = null;
 	private libraryTagFacets: CatalogTagFacet[] | null = null;
 	private libraryIndexesUpdating = false;
+	private libraryIndexError = false;
+	private loadingIndicators?: Map<string, DelayedLoadingIndicator>;
+	private pendingCardFlowKey: string | null = null;
 	private cardFlowError: string | null = null;
 	private memoLoadingPromise: Promise<boolean> | null = null;
 	private memoLoadingFingerprint: string | null = null;
@@ -416,6 +441,8 @@ export class KnomoView extends ItemView {
 	private lastKnownLocalDate = formatTimeBuoyDate(new Date());
 	private recentTimeFlowContext = createRecentTimeFlowContext(new Date(), false, new Set());
 	private recentDecorations = new RecentTimeFlowDecorations(this.recentTimeFlowContext);
+	private beyondTodayContext: BeyondTodayContext | null = null;
+	private beyondTodayDecorations = new BeyondTodayDecorations(null);
 	private recentLifecycleKey = "";
 	private recentPreferenceUnsubscribe: (() => void) | null = null;
 	private currentLayout: LayoutMode = "desktop-narrow";
@@ -433,6 +460,7 @@ export class KnomoView extends ItemView {
 	private readonly composerSaveShortcutController = new ComposerSaveShortcutController();
 	private readonly imagePreviewScrollLock = new ImagePreviewScrollLock();
 	private mobileMenuController: KnomoMobileMenu | null = null;
+	private mobileGlassSurfaces: Set<HTMLElement> | null = null;
 	private readonly mobileHeaderTitleController: MobileHeaderTitleController;
 	private readonly mobileImagePickerFocusGuard: MobileImagePickerFocusGuard;
 	private readonly nativeImagePickerController: NativeImagePickerController<ComposerImageCapture>;
@@ -442,6 +470,9 @@ export class KnomoView extends ItemView {
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly randomReunionController: RandomReunionController;
 	private readonly shuffleDayController: ShuffleDayController;
+	private readonly randomDayController: ShuffleDayController;
+	private randomDayReturnContext: { position: HistoryBrowsePosition; memoId: string } | null = null;
+	private historyBrowsePositions: Partial<Record<"random" | "shuffleDay", HistoryBrowsePosition>> = {};
 	private readonly trashMemoController: TrashMemoController;
 	private readonly timeBuoyViewController: TimeBuoyViewController;
 	private catalogTodayTimeBuoys: TodayTimeBuoySnapshot | null = null;
@@ -538,9 +569,15 @@ export class KnomoView extends ItemView {
 		return this.viewStateController.activeNav;
 	}
 
+	private get randomDayOpen(): boolean {
+		return this.activeNav === "random" && this.randomDayController?.getSnapshot().selectedDate != null;
+	}
+
 	private set activeNav(nav: SidebarNav) {
+		if (nav !== this.viewStateController.activeNav) this.cancelCatalogDesktopQuery();
 		this.viewStateController.activeNav = nav;
 		if (nav !== "random") this.randomReunionController?.cancelPending();
+		if (nav !== "random") this.clearRandomDay();
 		if (nav !== "shuffleDay") this.shuffleDayController?.cancelPending();
 	}
 
@@ -625,6 +662,7 @@ export class KnomoView extends ItemView {
 		private readonly memoCommandService: MemoCommandService,
 		private readonly catalogReadService: CatalogReadService,
 		trashStore: TrashSnapshotStore,
+		clearTrash: ClearTrashAction,
 		getDailyNotesStatus: () => DailyNotesStatus,
 		getTodayDailyNotePath: () => string | null,
 		private readonly onRefreshCatalogProtocolState: (() => Promise<void>) | null = null,
@@ -680,71 +718,7 @@ export class KnomoView extends ItemView {
 			releaseContext: (context) => this.composerImages?.release(context),
 			insertImageFiles: (files, context) => this.insertImageFiles(files, context),
 		});
-		this.mobileSearchController = new MobileSearchController({
-			getThingsContext: () => this.activeNav === "things"
-				? { activeNav: "things", activeTag: this.activeTag, activeTagKey: this.activeTagKey } : undefined,
-			syncThingsSearch: (query, date) => {
-				this.searchQuery = query;
-				this.searchDateFilter = date;
-			},
-			getCatalogRevision: () => this.catalogRevision,
-			getCoverageKey: () => catalogCoverageKey(this.catalogCoverage),
-			getThingsStatus: () => this.activeNav === "things" ? getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage })
-				.find(header => header.type === "summary")?.text ?? null : null,
-			batchSize: MOBILE_SEARCH_BATCH_SIZE,
-			debounceMs: SEARCH_DEBOUNCE_MS,
-			getWindow: () => this.containerEl.win,
-			getDocument: () => this.containerEl.doc,
-			getRootEl: () => this.rootEl,
-			isMobileLayout: () => this.currentLayout === "mobile",
-			getMemos: () => this.memos,
-			getMatchedTotalCount: () => this.catalogMobileTotalCount,
-			registerDomEvent: (target, type, listener) => {
-				this.getRenderScope().registerDomEvent(target, type, listener);
-			},
-			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
-			filterMemos: (memos, filter) => filterCatalogMemos(memos, filter),
-			renderMemoCard: (container, memo, generation, index, reusedImagesEl) => {
-				return this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, reusedImagesEl);
-			},
-			clearMarkdown: (surface) => this.memoMarkdownRenderer.clear(surface),
-			releaseCard: (card) => this.memoMarkdownRenderer.releaseCard(card, "mobile-search"),
-			retainCard: (card, memo) => this.memoMarkdownRenderer.retainCard(card, memo),
-			clearImages: (surface) => this.cardImageLoadQueue.clear(surface),
-			bindImageRoot: (root) => this.cardImageLoadQueue.bindSurface("mobile-search", root),
-			scheduleRenderTask: callback => this.containerEl.win.requestAnimationFrame(callback),
-			cancelRenderTask: id => this.containerEl.win.cancelAnimationFrame(id),
-			prioritizeMarkdown: (root, scrollTop) => this.memoMarkdownRenderer.prioritizeVisible("mobile-search", root, scrollTop),
-			setCardFlowPaused: (paused) => this.setImageLoadSurfacePaused("card-flow", "mobile-search", paused),
-			closeSurroundingChrome: () => {
-				// 移动搜索拥有自己的结果，打开时使底层旧列表请求失效。
-				this.catalogDesktopQueryRun++;
-				this.cancelCatalogDesktopCount();
-				this.memoLoadingFingerprint = null;
-				this.clearSearchDebounce();
-				this.mobileDrawerOpen = false;
-				this.scopeMenuOpen = false;
-				this.compactSearchOpen = false;
-				this.desktopSearchOpen = false;
-				this.activeMenuMemoId = null;
-			},
-			closeCardMenu: () => {
-				this.activeMenuMemoId = null;
-			},
-			syncRootState: () => this.syncRootState(),
-			getCardFlowScrollTop: () => this.getCardFlowScrollTop(),
-			restoreCardFlowScrollTop: (scrollTop) => this.restoreCardFlowScrollTop(scrollTop),
-			restoreElementScrollTop: (element, scrollTop, isCurrent) => this.restoreElementScrollTop(element, scrollTop, isCurrent),
-			handleMarkdownInternalLinkClick: (event) => {
-				void this.handleMarkdownInternalLinkClick(event);
-			},
-			handleTaskCheckboxClick: (event) => this.handleTaskCheckboxClick(event),
-			handleTaskCheckboxChange: (event) => this.handleTaskCheckboxChange(event),
-			loadRemoteResults: (filter, reset) => this.loadCatalogMobileSearchResults(filter, reset),
-			hasRemoteNextPage: () => this.catalogMobileCursor !== null,
-			cancelRemoteCount: () => { this.catalogMobileQueryRun++; this.cancelCatalogMobileCount(); },
-			restoreRemoteResults: () => this.restoreCardFlowAfterMobileSearch(),
-		});
+		this.mobileSearchController = this.createMobileSearchController();
 		this.userActionController = this.createUserActionController();
 		const imageQueueWindow = this.containerEl.win;
 		this.cardImageLoadQueue = new CardImageLoadQueue({
@@ -804,10 +778,11 @@ export class KnomoView extends ItemView {
 			restoreMemo: async (memo) => {
 				if (isTrashMemoView(memo)) {
 					const result = await this.memoCommandService.restore(memo.trashItem);
-					return result.memo === null ? null : toCatalogMemoView(result.memo);
+					return { ...result, memo: result.memo === null ? null : toCatalogMemoView(result.memo) };
 				}
 				throw new Error("Deleted memo source is unavailable.");
 			},
+			isCleanupPending: memo => isTrashMemoView(memo) && this.memoCommandService.isRestoreCleanupPending(memo.trashItem),
 			purgeMemo: async (memo) => {
 				if (isTrashMemoView(memo) && memo.trashItem.purgeAllowed) {
 					await this.memoCommandService.purge(memo.trashItem);
@@ -821,6 +796,7 @@ export class KnomoView extends ItemView {
 				confirmLabel: t("trash.purge"),
 				danger: true,
 			}),
+			clearTrash,
 			handleRestoredMemo: (deletedMemo, restoredMemo) => this.handleRestoredTrashMemo(deletedMemo, restoredMemo),
 			isTrashActive: () => this.activeNav === "trash",
 			showNotice: (message) => new Notice(message),
@@ -828,6 +804,7 @@ export class KnomoView extends ItemView {
 			requestRender: (target) => {
 				if (!this.trashViewClosed) this.handleTrashRenderRequest(target);
 			},
+			onPresentationError: error => this.reportViewRefreshFailure(error, "trash-render"),
 		});
 		this.timeBuoyViewController = new TimeBuoyViewController({
 			projectSnapshot: snapshot => this.projectConfirmedTimeBuoySnapshot(snapshot),
@@ -835,8 +812,8 @@ export class KnomoView extends ItemView {
 			isPageActive: () => !this.trashViewClosed && this.activeNav === "time-buoy",
 			isTodayIndexReady: (targetDate) => this.catalogReadService.getCoverageForRange(targetDate, targetDate),
 			ensureReady: async () => undefined,
-			queryPage: (request) => this.catalogReadService.queryTimeBuoyPage(request),
-			queryDate: (date, cursor) => this.catalogReadService.queryTimeBuoysForDate(date, cursor),
+			queryPage: (request, signal) => this.catalogReadService.queryTimeBuoyPage(request, signal),
+			queryDate: (date, cursor, signal) => this.catalogReadService.queryTimeBuoysForDate(date, cursor, signal),
 			requestRender: () => {
 				if (this.trashViewClosed) return;
 				if (this.activeNav === "time-buoy") {
@@ -858,7 +835,7 @@ export class KnomoView extends ItemView {
 				if (memo === null || !isCatalogMemoView(memo)) throw new Error("Random reunion observation is unavailable.");
 				await this.memoCommandService.recordReview(await this.resolveCatalogMemo(memo));
 			},
-			isRandomActive: () => !this.trashViewClosed && this.activeNav === "random",
+			isRandomActive: () => !this.trashViewClosed && this.activeNav === "random" && !this.randomDayOpen,
 			showNotice: (message) => new Notice(message),
 			requestRender: () => this.renderUiState(),
 		});
@@ -870,8 +847,15 @@ export class KnomoView extends ItemView {
 			selectShuffleDay: (request) => this.shuffleDayService.selectCatalogShuffleDay(this.getCatalogReadService(), request),
 			acceptSelection: (date) => this.shuffleDayService.acceptSelection(date),
 			isShuffleDayActive: () => !this.trashViewClosed && this.activeNav === "shuffleDay",
-			showNotice: (message) => new Notice(message),
 			requestRender: () => this.renderUiState(),
+		});
+		this.randomDayController = new ShuffleDayController({
+			loadSelectedDate: async (date, signal) => {
+				const memos = await this.catalogReadService.listMemoViewsForDate(date, { signal });
+				return this.confirmedDailyMemos?.merge(memos, { logicalDates: [date] }) ?? memos;
+			},
+			isShuffleDayActive: () => !this.trashViewClosed && this.randomDayOpen,
+			requestRender: () => this.renderRandomDay(),
 		});
 		this.mobileComposerController = new MobileComposerController({
 			getWindow: () => this.containerEl.win,
@@ -898,8 +882,8 @@ export class KnomoView extends ItemView {
 				this.getRenderScope().registerDomEvent(element, "click", handler);
 			},
 			closeComposerKeepingDraft: () => this.closeComposerKeepingDraft(),
-			focusInputNow: (shouldResize, shouldQueueViewport) => {
-				this.focusComposerInputNow(shouldResize, shouldQueueViewport);
+			focusInputNow: (shouldResize, shouldQueueViewport, moveToEnd) => {
+				this.focusComposerInputNow(shouldResize, shouldQueueViewport, moveToEnd);
 			},
 			resizeInput: () => this.resizeInput(),
 			syncRootState: () => this.syncRootState(),
@@ -915,6 +899,87 @@ export class KnomoView extends ItemView {
 			if (this.handleComposerSaveShortcut(event)) {
 				return false;
 			}
+		});
+	}
+
+	private createMobileSearchController(): MobileSearchController {
+		return new MobileSearchController({
+			getThingsContext: () => this.activeNav === "things"
+				? { activeNav: "things", activeTag: this.activeTag, activeTagKey: this.activeTagKey } : undefined,
+			syncThingsSearch: (query, date) => {
+				this.searchQuery = query;
+				this.searchDateFilter = date;
+			},
+			getCatalogRevision: () => this.catalogRevision,
+			getCoverageKey: () => catalogCoverageKey(this.catalogCoverage),
+			getResultStatus: filter => ({
+				headers: getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage }),
+				complete: this.catalogCoverage !== null && isQueryCovered(this.catalogCoverage, filter),
+				blocked: hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage),
+			}),
+			batchSize: MOBILE_SEARCH_BATCH_SIZE,
+			debounceMs: SEARCH_DEBOUNCE_MS,
+			getWindow: () => this.containerEl.win,
+			getDocument: () => this.containerEl.doc,
+			isVisible: () => this.containerEl.isShown() && this.containerEl.doc.visibilityState !== "hidden",
+			getRootEl: () => this.rootEl,
+			isMobileLayout: () => this.currentLayout === "mobile",
+			getQueryContextKey: () => JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter]),
+			projectResults: (memos, filter) => this.confirmedDailyMemos?.merge(memos, filter) ?? mergeCatalogMemoPages(memos),
+			hasPendingConfirmedMemos: () => this.confirmedDailyMemos?.pending ?? false,
+			onResultsAccepted: page => {
+				this.catalogCoverage = page.coverage;
+				this.catalogReadState = page.readState;
+				this.catalogStatus = page.status;
+				this.catalogRevision = page.catalogRevision;
+				this.syncRecordStatsSource();
+				this.retainMemoCardPreviews();
+			},
+			registerDomEvent: (target, type, listener) => {
+				this.getRenderScope().registerDomEvent(target, type, listener);
+			},
+			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
+			filterMemos: (memos, filter) => filterCatalogMemos(memos, filter),
+			renderMemoCard: (container, memo, generation, index, reusedImagesEl) => {
+				return this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, reusedImagesEl);
+			},
+			clearMarkdown: (surface) => this.memoMarkdownRenderer.clear(surface),
+			releaseCard: (card) => this.memoMarkdownRenderer.releaseCard(card, "mobile-search"),
+			retainCard: (card, memo) => this.memoMarkdownRenderer.retainCard(card, memo),
+			clearImages: (surface) => this.cardImageLoadQueue.clear(surface),
+			bindImageRoot: (root) => this.cardImageLoadQueue.bindSurface("mobile-search", root),
+			scheduleRenderTask: callback => this.containerEl.win.requestAnimationFrame(callback),
+			cancelRenderTask: id => this.containerEl.win.cancelAnimationFrame(id),
+			prioritizeMarkdown: (root, scrollTop) => this.memoMarkdownRenderer.prioritizeVisible("mobile-search", root, scrollTop),
+			setCardFlowPaused: (paused) => this.setImageLoadSurfacePaused("card-flow", "mobile-search", paused),
+			closeSurroundingChrome: () => {
+				// 移动搜索拥有自己的结果，打开时使底层旧列表请求失效。
+				this.cancelCatalogDesktopQuery();
+				this.catalogDesktopQueryRun++;
+				this.cancelCatalogDesktopCount();
+				this.memoLoadingFingerprint = null;
+				this.clearSearchDebounce();
+				this.mobileDrawerOpen = false;
+				this.scopeMenuOpen = false;
+				this.compactSearchOpen = false;
+				this.desktopSearchOpen = false;
+				this.activeMenuMemoId = null;
+			},
+			closeCardMenu: () => {
+				this.activeMenuMemoId = null;
+			},
+			syncRootState: () => this.syncRootState(),
+			getCardFlowScrollTop: () => this.getCardFlowScrollTop(),
+			restoreCardFlowScrollTop: (scrollTop) => this.restoreCardFlowScrollTop(scrollTop),
+			restoreElementScrollTop: (element, scrollTop, isCurrent) => this.restoreElementScrollTop(element, scrollTop, isCurrent),
+			handleMarkdownInternalLinkClick: (event) => {
+				void this.handleMarkdownInternalLinkClick(event);
+			},
+			handleTaskCheckboxClick: (event) => this.handleTaskCheckboxClick(event),
+			handleTaskCheckboxChange: (event) => this.handleTaskCheckboxChange(event),
+			loadRemoteResults: (filter, cursor, signal) => this.loadCatalogMobileSearchResults(filter, cursor, signal),
+			countRemoteResults: (filter, signal) => this.getCatalogReadService().count(filter, signal),
+			restoreRemoteResults: () => this.restoreCardFlowAfterMobileSearch(),
 		});
 	}
 
@@ -953,8 +1018,9 @@ export class KnomoView extends ItemView {
 			setSearchDateFilter: (filter, sourceEl) => this.setSearchDateFilter(filter, sourceEl),
 			setMobileSearchDateFilter: (filter) => this.setMobileSearchDateFilter(filter),
 			runTrashAction: (action, memoId) => this.runTrashActionById(action, memoId),
-			runMemoAction: (action, memoId) => this.runMemoActionById(action, memoId),
-			openMemoCardDailyNote: (memoId, randomReunion) => this.openMemoCardDailyNote(memoId, randomReunion),
+			clearTrash: () => this.trashMemoController.handleClearTrash(),
+			runMemoAction: (action, memoId, sourceEl) => this.runMemoActionById(action, memoId, sourceEl),
+			openMemoCardDailyNote: (memoId, randomReunion, sourceEl) => this.openMemoCardDailyNote(memoId, randomReunion, sourceEl),
 			closeCardMenu: () => this.closeCardMenu(),
 			closeScopeMenu: () => {
 				this.scopeMenuOpen = false;
@@ -968,8 +1034,11 @@ export class KnomoView extends ItemView {
 				this.compactSearchOpen = false;
 				this.syncRootState();
 			},
-			toggleCardMenu: (memoId, keyboard) => this.toggleCardMenu(memoId, keyboard),
-			refreshRandomReunion: () => this.randomReunionController.refresh(),
+			toggleCardMenu: (memoId, keyboard, sourceEl) => this.toggleCardMenu(memoId, keyboard, sourceEl),
+			refreshRandomReunion: () => this.refreshHistorySelection("random"),
+			refreshShuffleDay: () => this.refreshHistorySelection("shuffleDay"),
+			returnFromRandomDay: () => this.returnFromRandomDay(),
+			retryRandomDay: async () => { await this.randomDayController.reloadSelectedDate(); },
 			renderNextCardBatch: (generation) => this.renderNextCardBatch(generation),
 			loadOlderMemoPeriods: () => {
 				void this.loadOlderMemoPeriods();
@@ -1072,8 +1141,6 @@ export class KnomoView extends ItemView {
 			await this.initializeView();
 			if (!this.trashViewClosed) {
 				await this.validateRestoredDraft(restored);
-				if (this.localDraftStore.pending) new Notice(t("composer.draftUnconfirmed"));
-				else if (restored.active.content || restored.editingMemo || restored.active.referenceText) new Notice(t("composer.draftRestored"));
 			}
 			if (!this.trashViewClosed) this.recoverMobileViewFocus();
 			this.settleQuickCommandReady(!this.trashViewClosed);
@@ -1146,6 +1213,7 @@ export class KnomoView extends ItemView {
 		this.lastKnownLocalDate = formatTimeBuoyDate(new Date());
 		let recentEnabled = this.settingsService.getSettings().recentTimeFlowEnabled;
 		this.recentPreferenceUnsubscribe = this.settingsService.onChanged(() => {
+			this.syncReducedGlassEffects();
 			const tools = this.composerBarEl?.querySelector<HTMLElement>(".knomo-tool-group");
 			if (tools) updateComposerToolbar(tools, this.settingsService.getSettings().composerToolbar);
 			const next = this.settingsService.getSettings().recentTimeFlowEnabled;
@@ -1160,8 +1228,19 @@ export class KnomoView extends ItemView {
 			if (this.app.workspace.getActiveViewOfType(KnomoView) !== this) {
 				this.mobileComposerController.clearFocus();
 				this.mobileMenuController?.close();
+				if (this.currentLayout === "mobile") {
+					this.tagSuggest?.close();
+					this.wikiLinkSuggest?.close();
+				}
 			}
-			if (!this.trashViewClosed && this.containerEl.isShown()) this.handleLocalDateChange();
+			if (!this.trashViewClosed && this.containerEl.isShown()) {
+				this.handleLocalDateChange();
+				if (this.libraryTagFacets === null) this.renderTags();
+				if (this.mobileSearchController.isOpen) this.mobileSearchController.renderResults("content-change", true, true);
+			} else {
+				this.clearLoadingIndicators();
+				this.mobileSearchController.suspendLoadingFeedback();
+			}
 			this.syncTagIndexInteraction();
 		}));
 		this.contentEl.addClass("knomo-view-host");
@@ -1200,20 +1279,22 @@ export class KnomoView extends ItemView {
 		this.mobileNavbarCompactController = new MobileNavbarCompactController(this, {
 			isActive: () => this.isMobileNavbarSyncTarget(),
 			isComposerOpen: () => this.composerOpen,
+			isGlassReduced: () => this.settingsService.getSettings().reduceGlassEffects === true,
 			toggleSidebar: () => this.toggleSidebar(),
 			openComposer: () => this.openComposer(),
 		});
 		this.mobileNavbarCompactController.start();
 		this.register(() => this.clearTimeBuoyPickerEventListeners());
-		this.registerDomEvent(this.containerEl.win, "focus", () => {
-			this.handleLocalDateChange();
-			this.recoverMobileViewFocus();
-		});
+		this.registerWindowFocusEvent();
 		this.registerDomEvent(this.containerEl.win, "orientationchange", () => this.closeTimeBuoyPicker(false));
 		const handleMobileBack = (event: Event): void => this.handleMobileBack(event);
 		this.containerEl.doc.addEventListener("backbutton", handleMobileBack, { capture: true });
 		this.register(() => this.containerEl.doc.removeEventListener("backbutton", handleMobileBack, { capture: true }));
 		this.registerDomEvent(this.containerEl.doc, "visibilitychange", () => {
+			if (this.containerEl.doc.visibilityState === "hidden") {
+				this.clearLoadingIndicators();
+				this.mobileSearchController.suspendLoadingFeedback();
+			}
 			this.clearTagIndexWarmup();
 			this.syncTagIndexInteraction();
 			if (this.containerEl.doc.visibilityState === "visible") {
@@ -1222,6 +1303,8 @@ export class KnomoView extends ItemView {
 				}
 				this.scheduleTagIndexWarmup();
 				this.handleLocalDateChange();
+				if (this.libraryTagFacets === null) this.renderTags();
+				if (this.mobileSearchController.isOpen) this.mobileSearchController.renderResults("content-change", true, true);
 			}
 		});
 		this.startLayoutObserver();
@@ -1236,19 +1319,27 @@ export class KnomoView extends ItemView {
 		this.startDateChangeWatcher();
 	}
 
+	private registerWindowFocusEvent(): void {
+		this.registerDomEvent(this.containerEl.win, "focus", () => {
+			this.handleLocalDateChange();
+			this.recoverMobileViewFocus();
+		});
+	}
+
 	private isMobileNavbarSyncTarget(): boolean {
 		return this.app.workspace.getActiveViewOfType(KnomoView) === this
 			|| (Platform.isMobile && this.containerEl.isShown());
 	}
 
 	async onClose(): Promise<void> {
+		this.clearLoadingIndicators();
+		this.cancelCatalogDesktopQuery();
+		this.removeMobileSearchPage();
 		this.hasConfirmedMemoPresentation = false;
 		this.confirmedDailyMemos?.clear();
 		this.confirmedTodayTimeBuoys = [];
 		this.mobileViewFocusRecovery?.cancel();
 		this.mobileMenuController?.close();
-		this.catalogMobileQueryRun++;
-		this.cancelCatalogMobileCount();
 		this.cancelCatalogDesktopCount();
 		this.flushLocalDraft();
 		this.localDraftStore?.close();
@@ -1266,9 +1357,13 @@ export class KnomoView extends ItemView {
 		this.quoteMarkdownText = null;
 		this.recentPreferenceUnsubscribe?.();
 		this.recentPreferenceUnsubscribe = null;
+		this.containerEl.removeClass("knomo-reduce-glass");
 		this.trashMemoController.dispose();
 		this.randomReunionController.dispose();
 		this.shuffleDayController.dispose();
+		this.randomDayController.dispose();
+		this.randomDayReturnContext = null;
+		this.historyBrowsePositions = {};
 		if (this.trashCountRefreshTimer !== null) {
 			this.containerEl.win.clearTimeout(this.trashCountRefreshTimer);
 			this.trashCountRefreshTimer = null;
@@ -1285,7 +1380,6 @@ export class KnomoView extends ItemView {
 		}
 		this.closeTimeBuoyPicker(false);
 		this.clearSearchDebounce();
-		this.clearMobileSearchDebounce();
 		this.clearRecordStatsPreparation();
 		this.recordStatsPreparationController.clearRetryRequest();
 		this.recordStatsService.invalidate();
@@ -1293,6 +1387,7 @@ export class KnomoView extends ItemView {
 		this.resetTimeBuoyCardFlow();
 		this.clearMobileCardBatchContinuation();
 		this.cardFlowCoordinator.setPendingScrollRestore(null);
+		this.clearMobileGlassSurfaces();
 		this.mobileComposerController.dispose();
 		this.cardImageLoadQueue.dispose();
 		this.cardImageCache.clear();
@@ -1301,7 +1396,6 @@ export class KnomoView extends ItemView {
 		this.nativeImagePickerController.dispose();
 		this.clearMobileImagePickerFocusGuard();
 		this.clearSuppressNextOpenPopupDismissClick();
-		this.removeMobileSearchPage();
 		this.containerEl.doc.body.removeClass("knomo-mobile-search-active");
 		if (this.rootEl !== null) {
 			this.resetMobileTopOffsets(this.rootEl);
@@ -1318,26 +1412,47 @@ export class KnomoView extends ItemView {
 		this.contentEl.removeClass("knomo-view-host");
 	}
 
-	async refreshReferences(): Promise<void> {
-		// 正文变化先走原有增量查询；引用更新不清空列表或重置置顶布局。
-		await this.refresh();
+	async refreshReferences(changedPaths?: readonly string[]): Promise<void> {
+		// 纯 metadata 更新只重排已挂载的宿主渲染；Daily 变化由原增量链路处理。
 		if (this.trashViewClosed) return;
 		for (const [container, surface, generation] of [
 			[this.cardFlowEl, "card-flow", this.renderGeneration],
 			[this.mobileSearchResultsEl, "mobile-search", this.mobileSearchRenderGeneration],
 		] as const) {
-			for (const card of Array.from(container?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? [])) {
-				const memo = this.findMemoById(card.getAttribute("data-memo-id")!);
+			const cards = Array.from(container?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? []);
+			if (cards.length === 0) continue;
+			const pendingIds = new Set(cards.map(card => card.getAttribute("data-memo-id")!));
+			const memosById = new Map<string, MemoRecord>();
+			const collect = (memos: readonly MemoRecord[]) => {
+				for (const memo of memos) {
+					const id = memo.id;
+					if (pendingIds.delete(id)) memosById.set(id, memo);
+					if (pendingIds.size === 0) break;
+				}
+			};
+			// 查找表只用于本次已挂载卡片，保持原有来源优先级并按需读取各面板快照。
+			if (surface === "mobile-search") collect(this.mobileSearchController.getDisplayedMemos());
+			else {
+				collect(this.memos);
+				if (pendingIds.size) collect(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? []);
+				if (pendingIds.size) collect(this.randomReunionController.getSnapshot().memos ?? []);
+				if (pendingIds.size) collect(this.shuffleDayController.getSnapshot().memos);
+				if (pendingIds.size) collect(this.randomDayController?.getSnapshot().memos ?? []);
+				if (pendingIds.size) collect(this.timeBuoyViewController.getMemos());
+				if (pendingIds.size) collect(this.trashMemoController.getSnapshot().trashMemos ?? []);
+			}
+			for (const card of cards) {
+				const memo = memosById.get(card.getAttribute("data-memo-id")!);
 				if (!memo) continue;
 				const content = card.querySelector<HTMLElement>(".knomo-card-content");
 				if (content) {
 					// 渲染器在离屏完成后原子替换正文，等待期间保留已有内容。
-					this.memoMarkdownRenderer.queueMemoMarkdown(memo, content, generation, "normal", this.getMemoCardPreview(memo).text, surface);
+					this.memoMarkdownRenderer.queueMemoMarkdown(memo, content, generation, "normal", this.getMemoCardPreview(memo).text, surface, changedPaths);
 				}
 				const meta = card.querySelector<HTMLElement>(".knomo-source-reference");
 				const reference = getMemoSourceReferenceMeta(memo);
 				if (meta && reference.type !== "none") this.memoMarkdownRenderer.queueSourceReferenceMarkdown(
-					meta, `${t("reference.fromPrefix")}${reference.text}`, reference.sourcePath, generation, surface,
+					meta, `${t("reference.fromPrefix")}${reference.text}`, reference.sourcePath, generation, surface, changedPaths,
 				);
 			}
 		}
@@ -1380,13 +1495,14 @@ export class KnomoView extends ItemView {
 	}
 
 	invalidateConfirmedDailyMemos(): void {
+		this.cancelCatalogDesktopQuery();
+		this.mobileSearchController?.cancelPendingRequest?.();
 		this.catalogDesktopCountPresentation = null;
 		this.hasConfirmedMemoPresentation = false;
 		this.confirmedPresentationGeneration = (this.confirmedPresentationGeneration ?? 0) + 1;
 		this.confirmedDailyMemos?.clear();
 		this.confirmedTodayTimeBuoys = [];
 		this.catalogDesktopQueryRun++;
-		this.catalogMobileQueryRun++;
 	}
 
 	handleConfirmedCatalogSettled(change: DailyMemoPresentationChange): void {
@@ -1397,7 +1513,7 @@ export class KnomoView extends ItemView {
 			await this.presentationChangeQueue;
 			const latest = this.confirmedDailyMemos?.getChanges().find(item => item.sourcePath === change.sourcePath);
 			if (latest?.sourceRevision === revision) await this.handleDailyMemoPresentationChange(latest);
-		}).catch(error => { if (!this.trashViewClosed) console.error("Knomo confirmed Catalog reconciliation failed", error); });
+		}).catch(error => { if (!this.trashViewClosed) logContinuationFailure("save", "catalog-reconciliation", error); });
 	}
 
 	private async reconcileConfirmedCatalog(): Promise<void> {
@@ -1405,7 +1521,7 @@ export class KnomoView extends ItemView {
 			const revision = await this.catalogReadService.getFileSourceRevision(change.sourcePath);
 			if (this.trashViewClosed || this.confirmedDailyMemos?.getRevision(change.sourcePath) !== change.sourceRevision) return;
 			if (revision === change.sourceRevision) await this.handleDailyMemoPresentationChange(change);
-		})).catch(error => { if (!this.trashViewClosed) console.error("Knomo confirmed Catalog refresh failed", error); });
+		})).catch(error => { if (!this.trashViewClosed) logContinuationFailure("save", "catalog-refresh", error); });
 	}
 
 	async handleDailyMemoPresentationChange(change: DailyMemoPresentationChange, catalogCommitted: Promise<void> = Promise.resolve()): Promise<void> {
@@ -1433,6 +1549,7 @@ export class KnomoView extends ItemView {
 			...this.memos,
 			...(this.randomReunionController.getSnapshot().memos ?? []),
 			...this.shuffleDayController.getSnapshot().memos,
+			...(this.randomDayController?.getSnapshot().memos ?? []),
 			...this.timeBuoyViewController.getMemos(),
 			...(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? []),
 			...(this.mobileSearchController?.getDisplayedMemos() ?? []),
@@ -1442,21 +1559,34 @@ export class KnomoView extends ItemView {
 	private async applyDailyMemoPresentationChange(change: DailyMemoPresentationChange): Promise<void> {
 		if (this.trashViewClosed) return;
 		const generation = this.confirmedPresentationGeneration ?? 0;
+		const feedbackRun = this.pageFeedbackRun ?? 0;
 		const cached = this.getCachedMemos();
 		const pending = this.confirmedDailyMemos?.getMemos().filter(memo => memo.dailyRef.path === change.sourcePath) ?? [];
 		const ids = new Set(cached.map(memo => memo.id));
 		const replacements = change.replacements.filter(item => ids.has(observationHandleKey(item.before)));
-		const inserted = change.inserted !== null && this.shuffleDayController.getSnapshot().selectedDate === change.logicalDate
+		const inserted = change.inserted !== null && (this.shuffleDayController.getSnapshot().selectedDate === change.logicalDate
+			|| this.randomDayController?.getSnapshot().selectedDate === change.logicalDate)
 			? change.inserted : null;
 		if (replacements.length === 0 && inserted === null && pending.length === 0) return;
 		const changes = new Map<string, MemoRecord | null>(replacements.map(item => [observationHandleKey(item.before), null]));
+		const handles = [...new Map([...replacements.flatMap(item => item.after ? [item.after] : []),
+			...(inserted ? [inserted] : []), ...pending.map(memo => memo.catalog!.observationHandle)]
+			.map(handle => [observationHandleKey(handle), handle])).values()];
+		let current: Awaited<ReturnType<CatalogReadService["readMemoItems"]>>;
 		try {
-			const handles = [...new Map([...replacements.flatMap(item => item.after ? [item.after] : []),
-				...(inserted ? [inserted] : []), ...pending.map(memo => memo.catalog!.observationHandle)]
-				.map(handle => [observationHandleKey(handle), handle])).values()];
-			const current = await this.catalogReadService.readMemoItems(handles);
-			if (this.trashViewClosed || generation !== (this.confirmedPresentationGeneration ?? 0)) return;
-			if (this.confirmedDailyMemos?.isOlder(change)) { this.confirmedDailyMemos.acknowledge(change); return; }
+			current = await this.catalogReadService.readMemoItems(handles);
+		} catch (error) {
+			if (this.trashViewClosed || generation !== (this.confirmedPresentationGeneration ?? 0) || this.confirmedDailyMemos?.isOlder(change)) return;
+			// 快照失效不代表持久故障；仅移除本次变化确定已过期的原 occurrence。
+			if (changes.size > 0) this.applyCachedMemoChanges(changes);
+			if (!(error instanceof CatalogDiscoveryInvalidatedError) || pending.length === 0) {
+				this.reportViewRefreshFailure(error, "readback", changes.size > 0 && pending.length === 0);
+			}
+			return;
+		}
+		if (this.trashViewClosed || generation !== (this.confirmedPresentationGeneration ?? 0)) return;
+		if (this.confirmedDailyMemos?.isOlder(change)) { this.confirmedDailyMemos.acknowledge(change); return; }
+		try {
 			const byKey = new Map(current.map(item => [item.key, toCatalogMemoView(item)]));
 			for (const item of replacements) {
 				changes.set(observationHandleKey(item.before), item.after ? byKey.get(observationHandleKey(item.after))! : null);
@@ -1467,16 +1597,14 @@ export class KnomoView extends ItemView {
 				changes.set(memo.id, projected ? byKey.get(projected.id) ?? projected : null);
 			}
 			for (const memo of pending) changes.set(memo.id, byKey.get(memo.id)!);
-			this.confirmedDailyMemos?.acknowledge(change);
 			const upserts = pending.length > 0 ? pending.map(memo => byKey.get(memo.id)!)
 				: inserted ? [byKey.get(observationHandleKey(inserted))!] : [];
-			this.applyCachedMemoChanges(changes, upserts, pending.length > 0);
-		} catch {
-			if (this.trashViewClosed || generation !== (this.confirmedPresentationGeneration ?? 0)) return;
-			if (this.confirmedDailyMemos?.isOlder(change)) return;
-			// 当前 Catalog 已变化或暂不可读时只使旧展示失效，不猜测对应关系或重试正文写入。
-			this.applyCachedMemoChanges(changes);
-			new Notice(t("catalog.savedRefreshPending"));
+			if (this.applyCachedMemoChanges(changes, upserts, pending.length > 0)) {
+				this.confirmedDailyMemos?.acknowledge(change);
+				if (feedbackRun === (this.pageFeedbackRun ?? 0)) { this.pageRefreshError = null; this.syncPageFeedback(); }
+			}
+		} catch (error) {
+			this.reportViewRefreshFailure(error, "state-apply");
 		}
 	}
 
@@ -1516,10 +1644,10 @@ export class KnomoView extends ItemView {
 	private applyCachedMemoChanges(
 		changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], confirmed = false,
 		previousPresentation = this.captureMemoChangePresentation(), created = false,
-	): void {
+	): boolean {
+		this.cancelCatalogDesktopQuery();
 		this.retainUnchangedMemoCards(changes, previousPresentation.memos);
 		this.catalogDesktopQueryRun++;
-		this.catalogMobileQueryRun++;
 		this.memos = this.memos.flatMap(memo => {
 			if (!changes.has(memo.id)) return [memo];
 			const current = changes.get(memo.id);
@@ -1529,9 +1657,7 @@ export class KnomoView extends ItemView {
 			this.memos = [...new Map([...this.memos, ...inserted].map(memo => [memo.id, memo])).values()]
 				.sort((left, right) => compareCatalogObservations(left.catalog!.observation, right.catalog!.observation));
 			this.cancelCatalogDesktopCount();
-			this.cancelCatalogMobileCount();
 			this.catalogCursor = null;
-			this.catalogMobileCursor = null;
 		}
 		const pinned = (this.confirmedTodayTimeBuoys ?? []).flatMap(item => {
 			const memo = changes.has(item.memo.id) ? changes.get(item.memo.id) : item.memo;
@@ -1553,6 +1679,7 @@ export class KnomoView extends ItemView {
 		}
 		this.randomReunionController.applyMemoChanges(changes, false);
 		this.shuffleDayController.applyMemoChanges(changes, inserted);
+		this.randomDayController?.applyMemoChanges(changes, inserted);
 		this.timeBuoyViewController.applyMemoChanges(changes, confirmed ? inserted : []);
 		this.mobileSearchController?.applyMemoChanges(changes, confirmed ? inserted : [], created);
 		const current = this.captureMemoChangePresentation();
@@ -1564,17 +1691,20 @@ export class KnomoView extends ItemView {
 		if (confirmed && !sameMemos) {
 			this.catalogDesktopTotalCount = created && typeof this.catalogDesktopTotalCount === "number"
 				? this.catalogDesktopTotalCount + current.memos.length - previousPresentation.memos.length : null;
-			this.catalogMobileTotalCount = null;
 		}
-		this.renderUiState({ renderMobileSearchResults: false, renderCardFlow: !sameMemos
-			|| previousPresentation.timeBuoyState !== current.timeBuoyState
-			|| previousPresentation.error !== (this.cardFlowError ?? null)
-			|| (previousPresentation.waitingForCatalog && this.hasConfirmedMemoPresentation) });
+		try {
+			this.renderUiState({ renderMobileSearchResults: false, renderCardFlow: !sameMemos
+				|| previousPresentation.timeBuoyState !== current.timeBuoyState
+				|| previousPresentation.error !== (this.cardFlowError ?? null)
+				|| (previousPresentation.waitingForCatalog && this.hasConfirmedMemoPresentation) });
+			return true;
+		} catch (error) { this.reportViewRefreshFailure(error, "render"); return false; }
 	}
 
 	private async refreshRandomReunionBatch(): Promise<void> {
 		const snapshot = this.randomReunionController.getSnapshot().memos;
 		if (snapshot === null) return;
+		const generation = this.confirmedPresentationGeneration ?? 0;
 		try {
 			const queryable = snapshot.filter(memo => this.confirmedDailyMemos?.getRevision(memo.dailyRef.path) === undefined);
 			const validated = await this.catalogReadService.refreshMemoViews(queryable);
@@ -1582,14 +1712,15 @@ export class KnomoView extends ItemView {
 			const current = snapshot.flatMap(memo => this.confirmedDailyMemos?.getRevision(memo.dailyRef.path) !== undefined
 				? [memo] : byId.has(memo.id) ? [byId.get(memo.id)!] : []);
 			await this.presentationChangeQueue;
-			if (!this.trashViewClosed) this.randomReunionController.reconcileMemos(current, snapshot);
-		} catch {
-			if (!this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
+			if (!this.trashViewClosed && generation === (this.confirmedPresentationGeneration ?? 0)) this.randomReunionController.reconcileMemos(current, snapshot);
+		} catch (error) {
+			if ((this.randomDayOpen || !(error instanceof CatalogDiscoveryInvalidatedError)) && !this.trashViewClosed
+				&& generation === (this.confirmedPresentationGeneration ?? 0)) this.randomReunionController.reportRefreshFailure(snapshot, error);
 		}
 	}
 
 	async refresh(forceRebuild = false): Promise<void> {
-		await this.presentationChangeQueue;
+		await this.presentationChangeQueue?.catch(error => { if (!this.trashViewClosed) logContinuationFailure("view", "presentation-queue", error); });
 		if (this.trashViewClosed) return;
 		await this.reconcileConfirmedCatalog();
 		await this.refreshRandomReunionBatch();
@@ -1616,7 +1747,9 @@ export class KnomoView extends ItemView {
 		if (this.settingsService.getSettings().timeBuoyEnabled && !this.shouldShowTodayTimeBuoys()) {
 			await this.timeBuoyViewController.loadTodayOnly();
 		}
-		if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
+		if (this.randomDayOpen) {
+			await this.randomDayController.reloadSelectedDate();
+		} else if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
 			await this.randomReunionController.refresh();
 		} else if (this.activeNav === "shuffleDay") {
 			if (this.shuffleDayController.getSnapshot().status === "idle") await this.shuffleDayController.refresh();
@@ -1626,7 +1759,8 @@ export class KnomoView extends ItemView {
 
 	private handleRestoredTrashMemo(_deletedMemo: MemoRecord, restoredMemo: MemoRecord): void {
 		this.shuffleDayController.applyMemoUpdate(restoredMemo);
-		if (isCatalogMemoView(restoredMemo)) void this.reloadMemos(false, true);
+		this.randomDayController?.applyMemoUpdate(restoredMemo);
+		if (isCatalogMemoView(restoredMemo)) void this.reloadMemos(false, true).catch(error => this.reportViewRefreshFailure(error, "restore-refresh"));
 	}
 
 	handleAttachmentFilesChanged(paths: readonly string[]): void {
@@ -1651,17 +1785,13 @@ export class KnomoView extends ItemView {
 		if (this.trashViewClosed) return;
 		// 保存中的 DOM 重建延至提交归属已消费，避免留下可重复发送的副本。
 		if (this.isSaving) { this.composerRenderPending = true; return; }
+		this.clearLoadingIndicators();
 		this.cardImageCache.clear();
 		this.closeTimeBuoyPicker(false);
-		const pendingMemoLoad = this.memoLoadingPromise;
+		this.cancelCatalogDesktopQuery();
+		this.mobileSearchController?.cancelPendingRequest?.();
 		this.memoSourceGeneration += 1;
 		this.catalogDesktopCountPresentation = null;
-		if (pendingMemoLoad !== null) {
-			await pendingMemoLoad.catch(() => false);
-			if (this.memoLoadingPromise === pendingMemoLoad) {
-				this.memoLoadingPromise = null;
-			}
-		}
 		if (this.trashViewClosed) return;
 		if (this.isSaving) { this.composerRenderPending = true; return; }
 		this.draftContent = this.inputEl?.value ?? this.draftContent;
@@ -1675,8 +1805,6 @@ export class KnomoView extends ItemView {
 		this.catalogDesktopTotalCount = null;
 		this.catalogDesktopCountRun += 1;
 		this.cancelCatalogDesktopCount();
-		this.cancelCatalogMobileCount();
-		this.catalogMobileTotalCount = null;
 		this.catalogDesktopQueryFingerprint = null;
 		this.hasCommittedCatalogDesktopQuery = false;
 		this.memoLoadingFingerprint = null;
@@ -1685,6 +1813,7 @@ export class KnomoView extends ItemView {
 		this.librarySummary = null;
 		this.libraryTagFacets = null;
 		this.libraryIndexesUpdating = false;
+		this.libraryIndexError = false;
 		this.libraryIndexRevision = -1;
 		this.filteredMemosCache = null;
 		this.tagSuggest?.close();
@@ -1731,6 +1860,10 @@ export class KnomoView extends ItemView {
 		this.renderDesktopTopbar(contentColumn);
 		this.renderScopePopover(contentColumn);
 		this.renderComposer(contentColumn);
+		this.pageFeedbackEl = contentColumn.createDiv({ cls: "knomo-page-feedback", attr: { hidden: "" } });
+		this.pageFeedbackEl.createSpan({ attr: { role: "status", "aria-live": "off", "aria-atomic": "true" } });
+		this.pageFeedbackEl.createEl("button", { cls: "knomo-inline-button", text: t("settings.attention.retry"), attr: { type: "button", "data-action": "refresh" } });
+		this.syncPageFeedback();
 		if (selection && this.inputEl) {
 			this.inputEl.setSelectionRange(selection.from, selection.to, selection.anchor > selection.head ? "backward" : "forward");
 			this.inputEl.composer.view.scrollDOM.scrollTop = scrollTop;
@@ -1783,7 +1916,7 @@ export class KnomoView extends ItemView {
 			// 首次打开只等待可交互界面；数据继续使用原查询加载与错误状态。
 			if (waitForCatalog) await initialQuery;
 			else void initialQuery.catch((error: unknown) => {
-				if (!this.trashViewClosed) this.updateStatus(formatServiceError(error, t("empty.cardFlowFailed")), true);
+				if (!this.trashViewClosed) this.reportViewRefreshFailure(error, "initial-load");
 			});
 		}
 		if (this.settingsService.getSettings().timeBuoyEnabled) {
@@ -1844,10 +1977,9 @@ export class KnomoView extends ItemView {
 
 	private renderComposer(main: HTMLElement): void {
 		const dailyStatus = this.getDailyNotesStatus();
-		const createEnabled = dailyStatus.enabled && this.isComposerCreationAvailable();
 		const wikiLinkListboxId = this.getA11yId("wiki-link-suggestions");
 		const composer = renderKnomoComposer(main, {
-			dailyEnabled: createEnabled,
+			dailyEnabled: dailyStatus.enabled,
 			toolbar: this.settingsService.getSettings().composerToolbar,
 			timeBuoyEnabled: this.settingsService.getSettings().timeBuoyEnabled,
 			timeBuoyPickerId: this.getA11yId("time-buoy-picker"),
@@ -1923,6 +2055,7 @@ export class KnomoView extends ItemView {
 			this.inputEl,
 			() => this.syncInputState(),
 			this.vaultTagIndex,
+			surface => this.registerMobileGlassSurface(surface),
 		);
 		this.wikiLinkSuggest = new KnomoWikiLinkSuggest(this.app, this.inputEl, {
 			listboxId: wikiLinkListboxId,
@@ -1930,6 +2063,7 @@ export class KnomoView extends ItemView {
 			onInputChanged: () => this.syncInputState(),
 			closeTagSuggest: () => this.tagSuggest?.close(),
 			registerVaultEvent: (eventRef) => this.getRenderScope().registerEvent(eventRef),
+			registerGlassSurface: surface => this.registerMobileGlassSurface(surface),
 		});
 		this.getRenderScope().registerDomEvent(this.inputEl, "beforeinput", (event: InputEvent) => {
 			this.handleComposerBeforeInput(event);
@@ -2108,6 +2242,7 @@ export class KnomoView extends ItemView {
 	private registerCompactSearchInput(searchInput: HTMLInputElement): void { this.registerDesktopSearchInput(searchInput); }
 
 	private invalidateSearchDraft(): void {
+		this.cancelCatalogDesktopQuery();
 		this.clearSearchDebounce();
 		this.catalogDesktopQueryRun++;
 		this.catalogDesktopCountRun++;
@@ -2128,6 +2263,7 @@ export class KnomoView extends ItemView {
 		const session = this.viewStateController.search;
 		this.clearSearchDebounce();
 		if (!session.canRewrite) { this.syncSearchControls(); return; }
+		this.rememberHistoryBrowsePosition("all");
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		session.submit();
 		this.applyViewStateTransitionEffects(this.viewStateController.setSearchQuery(session.applied.input));
@@ -2151,9 +2287,11 @@ export class KnomoView extends ItemView {
 
 	private async reloadMemos(loadAll: boolean, forceRebuild = false): Promise<boolean> {
 		if (this.mobileSearchController?.isOpen) { await this.mobileSearchController.refreshAppliedResults(); return true; }
-		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
+		const queryDate = new Date();
+		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll, queryDate);
 		const previousQueryFingerprint = this.catalogDesktopQueryFingerprint;
 		this.prepareCatalogDesktopQuery(queryFingerprint);
+		const controller = this.beginCatalogDesktopQuery();
 		const queryRun = ++this.catalogDesktopQueryRun;
 		const sourceGeneration = this.memoSourceGeneration;
 		const searchVersion = this.viewStateController.search.version;
@@ -2164,37 +2302,41 @@ export class KnomoView extends ItemView {
 		const previousMobileSearchKey = this.getMobileSearchStateKey();
 		let loaded = false;
 		try {
-			const load = await this.loadCatalogMemos(loadAll);
-			if (sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+			const load = await this.loadCatalogMemos(loadAll, controller.signal, queryDate);
+			controller.signal.throwIfAborted();
+			if (!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
 			}
 			if (load.fullHistoryLoaded) {
 				loadAll = true;
-				queryFingerprint = this.getCatalogQueryFingerprint(true);
+				queryFingerprint = this.getCatalogQueryFingerprint(true, queryDate);
 				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
 			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) {
-				throw new Error(t("search.statusChanged"));
+				throw new CatalogDiscoveryInvalidatedError();
 			}
 			this.applyCatalogMemoLoad(load);
 			if (this.shouldWaitForInitialCatalogLoad(load)) {
 				this.memos = [];
 				this.cardFlowError = null;
 				this.filteredMemosCache = null;
+				this.renderUiState();
 				return true;
 			}
 			this.memos = load.memos;
+			// 只在接受结果时一起提交分组快照，刷新等待或失败期间保留旧标题。
+			this.beyondTodayContext = this.activeNav === "review" ? createBeyondTodayContext(queryDate) : null;
 			// 近月窗口结束不代表全历史结束，桌面与移动端都保留展开入口。
 			this.catalogHistoryExpansionPending = !loadAll && !load.fullHistoryLoaded && this.isDefaultListState();
-			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll), load.catalogRevision, catalogCoverageKey(load.coverage));
+			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll, queryDate), load.catalogRevision, catalogCoverageKey(load.coverage));
 			const immediateTotalCount = this.getImmediateCatalogTotalCount(load);
 			this.catalogDesktopTotalCount = immediateTotalCount ?? (previousQueryFingerprint === queryFingerprint
-				&& isQueryCovered(load.coverage, this.buildCatalogActiveQuery(loadAll)) ? this.catalogDesktopTotalCount : null);
+				&& isQueryCovered(load.coverage, this.buildCatalogActiveQuery(loadAll, queryDate)) ? this.catalogDesktopTotalCount : null);
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
+			this.pageRefreshError = null;
+			this.syncPageFeedback();
 			this.filteredMemosCache = null;
 			this.retainMemoCardPreviews();
 			if (forceRebuild) {
@@ -2211,9 +2353,18 @@ export class KnomoView extends ItemView {
 			}
 			loaded = true;
 		} catch (error) {
-			if (sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError
+				|| error instanceof CatalogDiscoveryInvalidatedError || error instanceof TimeBuoyIndexPendingError) {
+				if (!this.trashViewClosed && this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)) {
+					this.viewStateController.search.requestStatus = this.viewStateController.search.result === null ? "idle" : "ready";
+					this.initialCatalogQueryPending = false;
+					this.clearLoadingIndicators("cards");
+					if (!this.hasCommittedCatalogDesktopQuery && !this.hasConfirmedMemoPresentation) this.renderUiState();
+					this.syncSearchControls();
+				}
+				return false;
+			}
+			if (!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
 			}
@@ -2224,7 +2375,12 @@ export class KnomoView extends ItemView {
 				this.retainMemoCardPreviews();
 				this.cardFlowError = message;
 			}
-			this.updateStatus(message, true);
+			if (!this.cardFlowError) this.reportViewRefreshFailure(error, "query");
+		} finally {
+			if (this.catalogDesktopQueryController === controller) {
+				this.catalogDesktopQueryController = null;
+				this.initialCatalogQueryPending = false;
+			}
 		}
 		this.renderUiState({
 			renderCardFlow: false,
@@ -2253,42 +2409,64 @@ export class KnomoView extends ItemView {
 		await this.onForceRefreshViews();
 	}
 
-	private async loadCatalogMemos(loadAll: boolean): Promise<CatalogMemoLoad> {
+	private async loadCatalogMemos(loadAll: boolean, signal?: AbortSignal, queryDate = new Date()): Promise<CatalogMemoLoad> {
+		for (let attempt = 0; ; attempt++) {
+			const coverageKey = catalogCoverageKey(this.catalogCoverage);
+			try {
+				const load = await this.loadCatalogMemoSnapshot(loadAll, signal, queryDate);
+				signal?.throwIfAborted();
+				if (coverageKey !== catalogCoverageKey(this.catalogCoverage)
+					&& catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new CatalogDiscoveryInvalidatedError();
+				return load;
+			} catch (error) {
+				signal?.throwIfAborted();
+				if (!(error instanceof CatalogDiscoveryInvalidatedError)) throw error;
+				// 索引正常前进时最多重读三次；仍失效交回后续刷新，不把等待画成失败。
+				if (attempt === 2) throw error;
+			}
+		}
+	}
+
+	private async loadCatalogMemoSnapshot(loadAll: boolean, signal?: AbortSignal, queryDate = new Date()): Promise<CatalogMemoLoad> {
+		signal?.throwIfAborted();
 		let page = await this.queryCatalogFeature({
-			...this.buildCatalogActiveQuery(loadAll),
+			...this.buildCatalogActiveQuery(loadAll, queryDate),
 			limit: CATALOG_PAGE_SIZE,
 			cursor: null,
-		});
-		if (page.invalidated) throw new Error(t("search.statusChanged"));
-		if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
+		}, signal);
+		signal?.throwIfAborted();
+		this.assertCatalogPageAvailable(page);
 		let fullHistoryLoaded = loadAll;
 		if (!loadAll && this.isDefaultListState() && page.nextCursor === null) {
 			// 近月窗口已读完时直接确认全历史，避免小库反复显示无效的加载入口。
 			page = await this.queryCatalogFeature({
-				...this.buildCatalogActiveQuery(true),
+				...this.buildCatalogActiveQuery(true, queryDate),
 				limit: CATALOG_PAGE_SIZE,
 				cursor: null,
-			});
-			if (page.invalidated) throw new Error("Catalog changed while loading the current view.");
+			}, signal);
+			signal?.throwIfAborted();
+			this.assertCatalogPageAvailable(page);
 			fullHistoryLoaded = true;
 		}
 		let todayTimeBuoys: TodayTimeBuoySnapshot | undefined;
 		if (this.shouldShowTodayTimeBuoys()) {
 			// 先准备同版本的置顶结果，再提交列表，避免先撤下置顶又重新提升。
-			const today = await this.timeBuoyViewController.prepareTodayOnly();
+			const today = await this.timeBuoyViewController.prepareTodayOnly(undefined, signal);
+			signal?.throwIfAborted();
 			if (!today.todayValid && this.hasCommittedCatalogDesktopQuery) {
+				if (today.todayError === null) throw new TimeBuoyIndexPendingError();
 				if (today.todayError instanceof Error) throw today.todayError;
 				throw new Error(formatServiceError(today.todayError, "Today's time buoy index is not ready."));
 			}
 			if (today.todayValid && today.todayRevision !== page.catalogRevision) {
-				throw new Error("Catalog changed while loading today's time buoys.");
+				throw new CatalogDiscoveryInvalidatedError();
 			}
 			todayTimeBuoys = today;
 		}
 		return {
 			todayTimeBuoys,
 			fullHistoryLoaded,
-			memos: this.confirmedDailyMemos?.merge(page.items.map(toCatalogMemoView), this.buildCatalogActiveQuery(loadAll)) ?? page.items.map(toCatalogMemoView),
+			memos: this.confirmedDailyMemos?.merge(page.items.map(toCatalogMemoView), this.buildCatalogActiveQuery(loadAll, queryDate)) ?? page.items.map(toCatalogMemoView),
 			nextCursor: page.nextCursor,
 			coverage: page.coverage,
 			readState: page.readState,
@@ -2298,9 +2476,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private shouldWaitForInitialCatalogLoad(load: CatalogMemoLoad): boolean {
-		return !this.hasConfirmedMemoPresentation && !this.hasCommittedCatalogDesktopQuery
-			&& load.readState === "history_building"
-			&& getCatalogReadStatusHeaders({ status: load.status, coverage: load.coverage }).length === 0;
+		return !this.hasVisibleConfirmedMemoPresentation() && !this.hasCommittedCatalogDesktopQuery
+			&& (load.readState === "history_building" || load.coverage.configurationComplete === false);
+	}
+
+	private hasVisibleConfirmedMemoPresentation(): boolean {
+		return this.hasConfirmedMemoPresentation && (this.getFilteredMemos().length > 0 || this.getTodayTimeBuoyItems().length > 0);
 	}
 
 	private applyCatalogMemoLoad(load: CatalogMemoLoad): void {
@@ -2379,9 +2560,20 @@ export class KnomoView extends ItemView {
 			|| (this.scopeFilter !== undefined && this.scopeFilter !== "all");
 	}
 
-	updateCatalogProgress(coverage: CatalogCoverage): void {
+	updateCatalogProgress(coverage: CatalogCoverage, scan?: CatalogScanSnapshot): void {
+		const previousAttention = scan ? JSON.stringify(getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage })) : "";
+		const wasBlocked = scan && hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage);
+		if (scan) this.catalogStatus = { ...this.catalogStatus, scan };
 		const previousCoverageKey = catalogCoverageKey(this.catalogCoverage);
 		this.catalogCoverage = { ...coverage };
+		this.mobileSearchController?.updateCatalogProgress(coverage);
+		const attentionChanged = scan && previousAttention !== JSON.stringify(getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage }));
+		const waitingChanged = scan && ((!this.hasCommittedCatalogDesktopQuery && !this.hasConfirmedMemoPresentation) || this.activeNav === "record-stats")
+			&& wasBlocked !== hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage);
+		if (scan && (attentionChanged || waitingChanged) && !this.trashViewClosed) {
+			this.renderCardFlow();
+			this.renderMobileSearchResults();
+		}
 		const recordStatsSourceChanged = this.syncRecordStatsSource();
 		if (recordStatsSourceChanged && this.activeNav === "record-stats") {
 			this.renderCardFlow();
@@ -2394,17 +2586,13 @@ export class KnomoView extends ItemView {
 		}
 		if (!isCompleteCatalogCoverage(coverage)) {
 			this.cancelCatalogDesktopCount();
-			this.cancelCatalogMobileCount();
 			const hadDesktopTotalCount = typeof this.catalogDesktopTotalCount === "number";
-			const hadMobileTotalCount = typeof this.catalogMobileTotalCount === "number";
 			const previousDesktopCount = this.catalogDesktopTotalCount;
 			if (!isQueryCovered(coverage, this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true))) this.catalogDesktopTotalCount = null;
 			this.catalogDesktopCountRun += 1;
-			if (this.mobileSearchController?.isOpen && !isQueryCovered(coverage, this.mobileSearchController.getDisplayedFilter())) this.catalogMobileTotalCount = null;
 			if (hadDesktopTotalCount && (this.activeNav === "things"
 				|| ((this.activeNav === "all" || this.activeNav === "review")
 					&& this.getCatalogPresentationTotalCount() !== previousDesktopCount))) this.renderCardFlow();
-			if (hadMobileTotalCount) this.renderMobileSearchResults("content-change", true);
 			const shouldRender = !this.libraryIndexesInvalidatedByCoverage || !this.libraryIndexesUpdating;
 			if (!this.libraryIndexesInvalidatedByCoverage) {
 				this.libraryIndexesInvalidatedByCoverage = true;
@@ -2437,16 +2625,26 @@ export class KnomoView extends ItemView {
 		const today = this.catalogTodayTimeBuoys;
 		if (today?.todayValid && today.todayCursor != null && this.shouldShowTodayTimeBuoys()) {
 			const queryRun = this.catalogDesktopQueryRun;
+			const controller = this.beginCatalogDesktopQuery();
 			this.catalogLoadingNextPage = true;
 			try {
-				const next = await this.timeBuoyViewController.prepareTodayOnly(today.todayCursor);
+				const next = await this.timeBuoyViewController.prepareTodayOnly(today.todayCursor, controller.signal);
+				controller.signal.throwIfAborted();
 				if (this.trashViewClosed || queryRun !== this.catalogDesktopQueryRun || !this.shouldShowTodayTimeBuoys()) return false;
 				if (!next.todayValid || next.todayRevision !== today.todayRevision) return this.reloadMemos(false, true);
 				this.catalogTodayTimeBuoys = { ...next, today: [...today.today, ...next.today] };
 				this.renderCardFlow();
 				this.renderNextCardBatch(this.renderGeneration);
 				return true;
-			} finally { this.catalogLoadingNextPage = false; }
+			} catch (error) {
+				if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) return false;
+				throw error;
+			} finally {
+				if (this.catalogDesktopQueryController === controller) {
+					this.catalogDesktopQueryController = null;
+					this.catalogLoadingNextPage = false;
+				}
+			}
 		}
 		if (this.catalogHistoryExpansionPending) {
 			this.catalogHistoryExpansionPending = false;
@@ -2466,32 +2664,36 @@ export class KnomoView extends ItemView {
 			}
 		}
 		if (this.catalogCursor === null) return false;
-		const queryFingerprint = this.getCatalogQueryFingerprint(true);
+		const queryDate = new Date();
+		const queryFingerprint = this.getCatalogQueryFingerprint(true, queryDate);
 		if (queryFingerprint !== this.catalogDesktopQueryFingerprint) {
 			return this.reloadMemos(true, true);
 		}
 		const queryRun = this.catalogDesktopQueryRun;
 		const coverageKey = catalogCoverageKey(this.catalogCoverage);
+		const controller = this.beginCatalogDesktopQuery();
 		this.catalogLoadingNextPage = true;
 		try {
 			const page = await this.queryCatalogFeature({
-				...this.buildCatalogActiveQuery(true),
+				...this.buildCatalogActiveQuery(true, queryDate),
 				limit: CATALOG_PAGE_SIZE,
 				cursor: this.catalogCursor,
-			});
+			}, controller.signal);
+			controller.signal.throwIfAborted();
 			if (queryRun !== this.catalogDesktopQueryRun
 				|| !this.isCatalogQueryCurrent(queryFingerprint, true)) return false;
 			if (page.invalidated || (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(page.coverage) !== catalogCoverageKey(this.catalogCoverage))) return this.reloadMemos(false, true);
+			this.assertCatalogPageAvailable(page);
 			const byRenderKey = new Map(this.memos.map((memo) => [getMemoRenderKey(memo), memo]));
 			for (const memo of page.items.map(toCatalogMemoView)) byRenderKey.set(getMemoRenderKey(memo), memo);
-			this.memos = this.confirmedDailyMemos?.merge([...byRenderKey.values()], this.buildCatalogActiveQuery(true))
+			this.memos = this.confirmedDailyMemos?.merge([...byRenderKey.values()], this.buildCatalogActiveQuery(true, queryDate))
 				?? mergeCatalogMemoPages([...byRenderKey.values()]);
 			this.catalogCursor = page.nextCursor;
 			this.catalogCoverage = page.coverage;
 			this.catalogReadState = page.readState;
 			this.catalogStatus = page.status;
 			this.catalogRevision = page.catalogRevision;
-			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(true), page.catalogRevision, catalogCoverageKey(page.coverage));
+			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(true, queryDate), page.catalogRevision, catalogCoverageKey(page.coverage));
 			this.syncRecordStatsSource();
 			this.filteredMemosCache = null;
 			// 分页保留已渲染正文的高度，避免异步 Markdown 重建使滚动位置被压回顶部。
@@ -2500,109 +2702,37 @@ export class KnomoView extends ItemView {
 				this.renderNextCardBatch(this.renderGeneration);
 			}
 			return true;
-		} finally {
-			this.catalogLoadingNextPage = false;
-		}
-	}
-
-	private async loadCatalogMobileSearchResults(query: CatalogFeatureFilter, reset: boolean): Promise<void> {
-		const contextKey = JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter]);
-		const fingerprint = getCatalogQueryKey(query);
-		const coverageKey = catalogCoverageKey(this.catalogCoverage);
-		if (fingerprint !== this.catalogMobileQueryFingerprint) reset = true;
-		this.catalogMobileQueryFingerprint = fingerprint;
-		const run = reset ? ++this.catalogMobileQueryRun : this.catalogMobileQueryRun;
-		if (reset) {
-			this.cancelCatalogMobileCount();
-			this.catalogMobileTotalCount = null;
-			this.catalogMobileCursor = null;
-		}
-		const page = await this.getCatalogReadService().query({ ...query, limit: CATALOG_PAGE_SIZE,
-			cursor: reset ? null : this.catalogMobileCursor });
-		if (run !== this.catalogMobileQueryRun || !this.mobileSearchPageOpen
-			|| contextKey !== JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter])) return;
-		if (page.invalidated || (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(page.coverage) !== catalogCoverageKey(this.catalogCoverage))) throw new Error(t("search.statusChanged"));
-		if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
-		const next = this.confirmedDailyMemos?.merge(page.items.map(toCatalogMemoView), query) ?? page.items.map(toCatalogMemoView);
-		if (reset) this.memos = next;
-		else {
-			const byRenderKey = new Map(this.memos.map(memo => [getMemoRenderKey(memo), memo]));
-			for (const memo of next) byRenderKey.set(getMemoRenderKey(memo), memo);
-			this.memos = this.confirmedDailyMemos?.merge([...byRenderKey.values()], query) ?? mergeCatalogMemoPages([...byRenderKey.values()]);
-		}
-		this.catalogMobileCursor = page.nextCursor;
-		this.catalogCoverage = page.coverage;
-		this.catalogReadState = page.readState;
-		this.catalogStatus = page.status;
-		this.catalogRevision = page.catalogRevision;
-		this.syncRecordStatsSource();
-		this.retainMemoCardPreviews();
-		if (reset && !this.confirmedDailyMemos?.pending) {
-			this.catalogMobileTotalCount = page.nextCursor === null && isQueryCovered(page.coverage, query) ? next.length : null;
-			if (this.catalogMobileTotalCount === null && isQueryCovered(page.coverage, query)) {
-				void this.refreshCatalogMobileTotalCount({ run, query, catalogRevision: page.catalogRevision, contextKey });
-			}
-		}
-	}
-
-	private async refreshCatalogMobileTotalCount(options: {
-		run: number;
-		query: CatalogFeatureFilter;
-		catalogRevision: number;
-		contextKey: string;
-	}): Promise<void> {
-		this.cancelCatalogMobileCount();
-		const controller = new AbortController();
-		this.catalogMobileCountController = controller;
-		try {
-			// 先让首屏卡片渲染，再启动可取消的全量计数。
-			await new Promise<void>(resolve => {
-				const win = this.containerEl.win;
-				const abort = () => { win.clearTimeout(timer); resolve(); };
-				const timer = win.setTimeout(() => { controller.signal.removeEventListener("abort", abort); resolve(); }, 0);
-				controller.signal.addEventListener("abort", abort, { once: true });
-			});
-			if (controller.signal.aborted || options.run !== this.catalogMobileQueryRun
-				|| options.contextKey !== JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter])) return;
-			const result = await this.getCatalogReadService().count(options.query, controller.signal);
-			if (options.run !== this.catalogMobileQueryRun
-				|| controller.signal.aborted
-				|| options.contextKey !== JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter])
-				|| result.catalogRevision !== options.catalogRevision
-				|| result.catalogRevision !== this.catalogRevision
-				|| catalogCoverageKey(result.coverage) !== catalogCoverageKey(this.catalogCoverage)
-				|| !result.complete
-				|| result.count === null) {
-				return;
-			}
-			this.catalogMobileTotalCount = result.count;
-			this.renderMobileSearchResults("content-change", true);
 		} catch (error) {
-			if (!controller.signal.aborted) console.warn("Knomo mobile search count failed", error);
+			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) return false;
+			throw error;
 		} finally {
-			if (this.catalogMobileCountController === controller) this.catalogMobileCountController = null;
+			if (this.catalogDesktopQueryController === controller) {
+				this.catalogDesktopQueryController = null;
+				this.catalogLoadingNextPage = false;
+			}
 		}
 	}
 
-	private cancelCatalogMobileCount(): void {
-		this.catalogMobileCountController?.abort();
-		this.catalogMobileCountController = null;
+	private async loadCatalogMobileSearchResults(query: CatalogFeatureFilter, cursor: CatalogFeatureCursor | null, signal: AbortSignal): Promise<MobileSearchPage> {
+		signal.throwIfAborted();
+		const page = await this.getCatalogReadService().query({ ...query, limit: CATALOG_PAGE_SIZE, cursor }, signal);
+		signal.throwIfAborted();
+		return { ...page, items: page.items.map(toCatalogMemoView) };
 	}
 
-	private buildCatalogActiveQuery(loadAll: boolean): CatalogQueryFilter {
-		const today = new Date();
+	private buildCatalogActiveQuery(loadAll: boolean, today = new Date()): CatalogQueryFilter {
 		const source = this.viewStateController.getSearchSource(today);
 		const query = this.viewStateController.search.getFilter(source, today);
 		if (!loadAll && this.isDefaultListState()) query.fromDate = formatDatePart(new Date(today.getFullYear(), today.getMonth() - 1, 1));
 		return query;
 	}
 
-	private getCatalogQueryFingerprint(loadAll: boolean): string { return getCatalogQueryKey(this.buildCatalogActiveQuery(loadAll)); }
+	private getCatalogQueryFingerprint(loadAll: boolean, queryDate = new Date()): string { return getCatalogQueryKey(this.buildCatalogActiveQuery(loadAll, queryDate)); }
 
 	private prepareCatalogDesktopQuery(queryFingerprint: string): void {
-		if (queryFingerprint === this.catalogDesktopQueryFingerprint) return;
+		if (queryFingerprint === this.catalogDesktopQueryFingerprint) { this.initialCatalogQueryPending = true; return; }
+		this.cancelCatalogDesktopQuery();
 		this.cancelCatalogDesktopCount();
-		this.cancelCatalogMobileCount();
 		this.catalogDesktopQueryFingerprint = queryFingerprint;
 		this.catalogDesktopQueryRun += 1;
 		this.catalogDesktopCountRun += 1;
@@ -2612,7 +2742,8 @@ export class KnomoView extends ItemView {
 		this.cardFlowError = null;
 		this.filteredMemosCache = null;
 		this.retainMemoCardPreviews();
-		if (!this.hasCommittedCatalogDesktopQuery) {
+		this.initialCatalogQueryPending = true;
+		if (!this.hasCommittedCatalogDesktopQuery && !this.hasVisibleConfirmedMemoPresentation()) {
 			this.memos = [];
 			this.resetVisibleMemos();
 			this.renderAllMemosLoadingState();
@@ -2624,24 +2755,55 @@ export class KnomoView extends ItemView {
 			&& queryFingerprint === this.getCatalogQueryFingerprint(loadAll);
 	}
 
-	private queryCatalogFeature(request: CatalogFeatureQuery): Promise<CatalogMemoPage> {
-		return this.getCatalogReadService().query(request);
+	private isCatalogQueryRunCurrent(queryRun: number, sourceGeneration: number, searchVersion: number): boolean {
+		return sourceGeneration === this.memoSourceGeneration
+			&& queryRun === this.catalogDesktopQueryRun
+			&& searchVersion === this.viewStateController.search.version;
+	}
+
+	private queryCatalogFeature(request: CatalogFeatureQuery, signal?: AbortSignal): Promise<CatalogMemoPage> {
+		return this.getCatalogReadService().query(request, signal);
+	}
+
+	private assertCatalogPageAvailable(page: CatalogMemoPage): void {
+		if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
+		if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
+	}
+
+	private beginCatalogDesktopQuery(): AbortController {
+		this.cancelCatalogDesktopQuery();
+		this.initialCatalogQueryPending = true;
+		const controller = new AbortController();
+		this.catalogDesktopQueryController = controller;
+		return controller;
+	}
+
+	private cancelCatalogDesktopQuery(): void {
+		this.initialCatalogQueryPending = false;
+		if (this.catalogDesktopQueryController != null) {
+			this.catalogDesktopQueryController.abort();
+			this.catalogLoadingNextPage = false;
+		}
+		this.catalogDesktopQueryController = null;
+		this.memoLoadingPromise = null;
+		this.memoLoadingFingerprint = null;
 	}
 
 	private async loadInitialMobileMemos(): Promise<void> {
 		let loadAll = false;
-		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll);
+		const queryDate = new Date();
+		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll, queryDate);
 		this.prepareCatalogDesktopQuery(queryFingerprint);
+		const controller = this.beginCatalogDesktopQuery();
 		const queryRun = ++this.catalogDesktopQueryRun;
 		const sourceGeneration = this.memoSourceGeneration;
 		const searchVersion = this.viewStateController.search.version;
 		const coverageKey = catalogCoverageKey(this.catalogCoverage);
 		try {
-			const load = await this.loadCatalogMemos(loadAll);
+			const load = await this.loadCatalogMemos(loadAll, controller.signal, queryDate);
+			controller.signal.throwIfAborted();
 			if (
-				sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+				!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
@@ -2650,10 +2812,10 @@ export class KnomoView extends ItemView {
 			}
 			if (load.fullHistoryLoaded) {
 				loadAll = true;
-				queryFingerprint = this.getCatalogQueryFingerprint(true);
+				queryFingerprint = this.getCatalogQueryFingerprint(true, queryDate);
 				this.catalogDesktopQueryFingerprint = queryFingerprint;
 			}
-			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new Error(t("search.statusChanged"));
+			if (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new CatalogDiscoveryInvalidatedError();
 			this.applyCatalogMemoLoad(load);
 			// 两端使用相同的首批提交条件，不将构建中的空结果或子集视为已加载。
 			if (this.shouldWaitForInitialCatalogLoad(load)) {
@@ -2665,18 +2827,28 @@ export class KnomoView extends ItemView {
 			}
 			this.catalogHistoryExpansionPending = !load.fullHistoryLoaded && this.isDefaultListState();
 			this.memos = load.memos;
-			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll), load.catalogRevision, catalogCoverageKey(load.coverage));
+			this.beyondTodayContext = this.activeNav === "review" ? createBeyondTodayContext(queryDate) : null;
+			this.viewStateController.search.commitResult(this.buildCatalogActiveQuery(loadAll, queryDate), load.catalogRevision, catalogCoverageKey(load.coverage));
 			this.hasCommittedCatalogDesktopQuery = true;
 			this.cardFlowError = null;
+			this.pageRefreshError = null;
+			this.syncPageFeedback();
 			this.filteredMemosCache = null;
 			this.retainMemoCardPreviews();
 			this.resetVisibleMemos();
 			this.renderUiState();
 		} catch (error) {
+			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError
+				|| error instanceof CatalogDiscoveryInvalidatedError || error instanceof TimeBuoyIndexPendingError) {
+				if (!this.trashViewClosed && this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)) {
+					this.initialCatalogQueryPending = false;
+					this.clearLoadingIndicators("cards");
+					if (!this.hasCommittedCatalogDesktopQuery && !this.hasConfirmedMemoPresentation) this.renderUiState();
+				}
+				return;
+			}
 			if (
-				sourceGeneration !== this.memoSourceGeneration
-				|| queryRun !== this.catalogDesktopQueryRun
-				|| searchVersion !== this.viewStateController.search.version
+				!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, false)
 				|| this.cardFlowEl === null
 				|| !this.cardFlowEl.isConnected
@@ -2688,8 +2860,13 @@ export class KnomoView extends ItemView {
 				this.retainMemoCardPreviews();
 				this.cardFlowError = message;
 			}
-			this.updateStatus(message, true);
+			if (!this.cardFlowError) this.reportViewRefreshFailure(error, "initial-query");
 			this.renderUiState();
+		} finally {
+			if (this.catalogDesktopQueryController === controller) {
+				this.catalogDesktopQueryController = null;
+				this.initialCatalogQueryPending = false;
+			}
 		}
 	}
 
@@ -2718,18 +2895,13 @@ export class KnomoView extends ItemView {
 
 	private syncComposerDailyStatus(): void {
 		const dailyStatus = this.getDailyNotesStatus();
-		const createEnabled = dailyStatus.enabled && this.isComposerCreationAvailable();
 		if (this.inputEl !== null) {
-			this.inputEl.disabled = !createEnabled;
+			this.inputEl.disabled = !dailyStatus.enabled;
 		}
 		if (this.isSaving || this.editingMemo !== null || this.quoteReferenceText !== null || this.cardFlowError !== null) {
 			return;
 		}
 		this.updateStatus("", false);
-	}
-
-	private isComposerCreationAvailable(): boolean {
-		return this.memoCommandService.getOperationalState(this.catalogReadState).capabilities.createNew;
 	}
 
 	private syncComposerMode(): void {
@@ -2747,6 +2919,34 @@ export class KnomoView extends ItemView {
 			this.updateMobileComposerMeasurements();
 			this.resizeInput();
 		}
+	}
+
+	private syncReducedGlassEffects(): void {
+		const reduced = this.settingsService.getSettings().reduceGlassEffects === true;
+		for (const container of [this.containerEl, this.rootEl, this.mobileComposerController.getLayerEl(), ...(this.mobileGlassSurfaces ?? [])]) {
+			container?.toggleClass("knomo-reduce-glass", reduced);
+		}
+		this.mobileNavbarCompactController?.syncGlassPreference();
+	}
+
+	private registerMobileGlassSurface(surface: HTMLElement): () => void {
+		if (this.currentLayout !== "mobile") return () => {};
+		// 只登记本视图创建的独立浮层，不查询或标记其他插件的宿主菜单。
+		const surfaces = this.mobileGlassSurfaces ??= new Set<HTMLElement>();
+		surfaces.add(surface);
+		surface.addClass("knomo-mobile-glass-surface");
+		surface.toggleClass("knomo-reduce-glass", this.settingsService.getSettings().reduceGlassEffects === true);
+		return () => {
+			surfaces.delete(surface);
+			surface.classList.remove("knomo-mobile-glass-surface", "knomo-reduce-glass");
+		};
+	}
+
+	private clearMobileGlassSurfaces(): void {
+		for (const surface of this.mobileGlassSurfaces ?? []) surface.classList.remove("knomo-mobile-glass-surface", "knomo-reduce-glass");
+		this.mobileGlassSurfaces?.clear();
+		this.mobileGlassSurfaces = null;
+		for (const container of [this.containerEl, this.rootEl, this.mobileComposerController.getLayerEl()]) container?.removeClass("knomo-reduce-glass");
 	}
 
 	private syncRootState(): void {
@@ -2768,9 +2968,11 @@ export class KnomoView extends ItemView {
 		root.toggleClass("is-desktop-search-open", this.desktopSearchOpen);
 		root.toggleClass("is-scope-open", this.currentLayout !== "mobile" && this.scopeMenuOpen);
 		root.toggleClass("is-composer-open", this.composerOpen);
+		this.syncPageFeedback();
 		root.toggleClass("is-compact-search-open", this.compactSearchOpen);
 		root.toggleClass("is-mobile-search-open", this.mobileSearchPageOpen);
 		root.toggleClass("is-mobile-compact", this.settingsService.getSettings().mobileCompactMode !== "off");
+		this.syncReducedGlassEffects();
 		root.toggleClass("is-record-stats", this.activeNav === "record-stats");
 		root.toggleClass("is-time-buoy", this.activeNav === "time-buoy");
 		root.toggleClass("is-shuffle-day", this.activeNav === "shuffleDay");
@@ -2982,19 +3184,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private async restoreCardFlowAfterMobileSearch(): Promise<void> {
-		this.catalogMobileQueryRun += 1;
-		this.catalogMobileCursor = null;
-		this.catalogMobileTotalCount = null;
 		// 仍读取当前查询并更新 occurrence；未变化的显示沿用增量比较，不强制重建卡片。
 		await this.reloadMemos(false);
 	}
 
 	private removeMobileSearchPage(): void {
 		this.mobileSearchController.removePage();
-	}
-
-	private clearMobileSearchDebounce(): void {
-		this.mobileSearchController.clearDebounce();
 	}
 
 	private setMobileSearchDateFilter(filter: SearchDateFilter): void {
@@ -3128,6 +3323,7 @@ export class KnomoView extends ItemView {
 
 	private renderTags(): void {
 		if (Platform.isMobile && !this.mobileDrawerOpen) {
+			this.clearLoadingIndicators("tags");
 			return;
 		}
 		if (!Platform.isMobile && this.vaultTagIndex.getSnapshot().status === "idle") {
@@ -3138,15 +3334,28 @@ export class KnomoView extends ItemView {
 		if (this.allTagsEl === null) return;
 		const snapshot = this.vaultTagIndex.getSnapshot();
 		this.renderedTagRevision = snapshot.revision;
+		const blocked = !this.getDailyNotesStatus().enabled || hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage);
+		const visible = this.libraryTagFacets === null && !this.libraryIndexError && !blocked
+			? this.revealLoadingAfterDelay("tags", `tags:${this.memoSourceGeneration}`, () => this.renderTags()) : false;
+		if (this.libraryTagFacets !== null || this.libraryIndexError || blocked) this.clearLoadingIndicators("tags");
 		const key = JSON.stringify([this.libraryTagFacets, snapshot.revision, this.activeTagKey,
-			[...this.expandedTagGroups], this.libraryIndexesUpdating, getKnomoLocale()]);
+			[...this.expandedTagGroups], this.libraryIndexesUpdating, this.libraryIndexError, blocked, visible,
+			blocked ? this.catalogStatus : null, getKnomoLocale()]);
 		const previous = this.sidebarTagRender;
 		if (previous?.container === this.allTagsEl && previous.key === key
 			&& previous.firstChild === this.allTagsEl.firstChild) return;
 		if (this.libraryTagFacets === null) {
-			this.allTagsEl?.setAttr("aria-busy", "true");
+			if (this.libraryIndexError || blocked) this.allTagsEl.removeAttribute("aria-busy");
+			else this.allTagsEl.setAttr("aria-busy", "true");
 			this.allTagsEl?.empty();
-			this.allTagsEl?.createDiv({ cls: "knomo-muted-text", text: t("empty.loadingAllMemos") });
+			if (blocked) {
+				if (!this.getDailyNotesStatus().enabled) this.allTagsEl.createDiv({ cls: "knomo-muted-text", text: t("service.dailyNotesDisabled") });
+				else renderKnomoCardFlowHeaders(this.allTagsEl, getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage }));
+			} else if (this.libraryIndexError) this.renderTagIndexFailure();
+			else if (visible) {
+				const skeleton = this.allTagsEl.createDiv({ cls: "knomo-tag-loading", attr: { role: "status", "aria-live": "polite", "aria-label": t("loading.label") } });
+				for (let index = 0; index < 3; index++) skeleton.createDiv({ cls: "knomo-loading-line is-short", attr: { "aria-hidden": "true" } });
+			} else this.allTagsEl.createDiv({ cls: "knomo-muted-text" });
 			this.sidebarTagRender = { container: this.allTagsEl, key, firstChild: this.allTagsEl.firstChild };
 			return;
 		}
@@ -3169,10 +3378,15 @@ export class KnomoView extends ItemView {
 			expandedTagGroups: this.expandedTagGroups,
 			emptyText: t("tags.empty"),
 		});
-		if (this.libraryIndexesUpdating) {
-			this.allTagsEl?.createDiv({ cls: "knomo-sidebar-updating", text: t("status.updating") });
-		}
+		if (this.libraryIndexError) this.renderTagIndexFailure();
 		this.sidebarTagRender = { container: this.allTagsEl, key, firstChild: this.allTagsEl.firstChild };
+	}
+
+	private renderTagIndexFailure(): void {
+		if (!this.allTagsEl) return;
+		const feedback = this.allTagsEl.createDiv({ cls: "knomo-sidebar-updating", text: t("loading.tagsFailed"), attr: { role: "status", "aria-live": "polite" } });
+		const retry = feedback.createEl("button", { cls: "knomo-inline-button", text: t("settings.attention.retry"), attr: { type: "button" } });
+		retry.addEventListener("click", event => { event.stopPropagation(); void this.refreshCatalogLibraryIndexes(); });
 	}
 
 	private renderTrashCount(): void {
@@ -3283,8 +3497,9 @@ export class KnomoView extends ItemView {
 		preserveCardMemoId: string | null = null,
 		changeIntent: CardFlowChangeIntent = "content-change",
 	): void {
-		const context = this.getRecentTimeFlowContext();
-		const lifecycleKey = JSON.stringify([context.enabled, context.dates]);
+		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
+		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
+		const lifecycleKey = this.getCardFlowDecorationLifecycleKey();
 		const presentationChanged = this.recentLifecycleKey !== "" && this.recentLifecycleKey !== lifecycleKey;
 		this.recentLifecycleKey = lifecycleKey;
 		if (presentationChanged) {
@@ -3320,6 +3535,7 @@ export class KnomoView extends ItemView {
 			this.renderEmptyCardFlow(presentation);
 			return;
 		}
+		this.clearLoadingIndicators("cards");
 		this.syncCardFlowPresentation(presentation, preserveCardMemoId);
 	}
 
@@ -3328,8 +3544,25 @@ export class KnomoView extends ItemView {
 		if (cardFlow === null) {
 			return;
 		}
-		const renderKey = this.getCardFlowStateKey();
-		if (!force && cardFlow.childElementCount > 0 && this.recordStatsViewStateController.isRendered(renderKey)) {
+		this.clearLoadingIndicators("cards");
+		const snapshot = this.recordStatsService.getSnapshot();
+		const headers = getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage });
+		const dailyEnabled = this.getDailyNotesStatus().enabled;
+		if (!dailyEnabled) headers.unshift({ type: "summary", text: t("service.dailyNotesDisabled") });
+		const blocked = !dailyEnabled || hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage);
+		const waiting = snapshot.state === "idle" || snapshot.state === "loading";
+		if (snapshot.state === "idle" && !blocked && this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage)) {
+			this.recordStatsPreparationController.schedulePreparation({
+				isPreparedForSource: source => this.recordStatsService.isPreparedForSource(source),
+				prepare: () => { if (!this.trashViewClosed && this.activeNav === "record-stats") void this.prepareRecordStats(); },
+			});
+		}
+		const visible = waiting && !blocked
+			? this.revealLoadingAfterDelay("stats", `stats:${this.memoSourceGeneration}`, () => this.renderRecordStatsPage()) : false;
+		if (!waiting || blocked) this.clearLoadingIndicators("stats");
+		const pending = { visible, blocked, headers };
+		const renderKey = JSON.stringify([this.getCardFlowStateKey(), pending]);
+		if ((!force || waiting) && cardFlow.childElementCount > 0 && this.recordStatsViewStateController.isRendered(renderKey)) {
 			return;
 		}
 		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
@@ -3342,7 +3575,7 @@ export class KnomoView extends ItemView {
 		cardFlow.empty();
 		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
 		renderKnomoRecordStatsPage(cardFlow, {
-			snapshot: this.recordStatsService.getSnapshot(),
+			snapshot, pending,
 			selected,
 			view: recordStatsState.view,
 			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
@@ -3559,6 +3792,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private forceRebuildCardFlow(changeIntent: CardFlowChangeIntent = "content-change"): void {
+		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
+		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
 		if (this.deferMobileCardFlowRender(null, true, changeIntent)) {
 			return;
 		}
@@ -3593,6 +3828,17 @@ export class KnomoView extends ItemView {
 		}
 		this.recordStatsViewStateController.clearRendered();
 		const presentation = this.getCurrentCardFlowPresentation();
+		if (presentation.type === "empty") {
+			if (!presentation.loading) {
+				this.renderGeneration += 1;
+				this.cardImageCache.capture(this.cardFlowEl, Platform.isMobile ? this.cardFlowEl : null, scrollTop);
+				this.memoMarkdownRenderer.clear();
+				this.cardImageLoadQueue.clear("card-flow");
+			}
+			this.renderEmptyCardFlow(presentation);
+			return;
+		}
+		this.clearLoadingIndicators("cards");
 		const generation = this.renderGeneration + 1;
 		this.renderGeneration = generation;
 		const seedPlaceholder = createMemoRenderPlaceholders(this.getDirectCardElements(this.cardFlowEl).flatMap(card => {
@@ -3604,7 +3850,10 @@ export class KnomoView extends ItemView {
 		this.memoMarkdownRenderer.clear();
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
-		this.cardFlowEl.empty();
+		const headers = this.renderCardFlowHeaders(this.cardFlowEl, presentation.headers);
+		for (const child of Array.from(this.cardFlowEl.children)) {
+			if (!headers.includes(child as HTMLElement)) child.remove();
+		}
 		this.renderedCardMemos.clear();
 		this.cardFlowCoordinator.setPendingScrollRestore({ generation, scrollTop, visibleCount: initialBatchSize, anchor });
 		this.renderCardFlowPresentation(presentation, generation, initialBatchSize, seedPlaceholder);
@@ -3628,11 +3877,13 @@ export class KnomoView extends ItemView {
 	private getCurrentCardFlowPresentation(): CardFlowPresentation {
 		// 焦点和可见性检查也会重绘；首批结果未确认时不能按空数组显示空库。
 		if (["all", "things", "review"].includes(this.activeNav)
-			&& !this.hasCommittedCatalogDesktopQuery && !this.hasConfirmedMemoPresentation && this.cardFlowError === null
-			&& getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage }).length === 0) {
+			&& !this.hasCommittedCatalogDesktopQuery && !this.hasVisibleConfirmedMemoPresentation() && this.cardFlowError === null) {
+			if (!this.getDailyNotesStatus().enabled) return { type: "empty", title: t("service.dailyNotesDisabled"), description: "" };
+			const headers = getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage });
+			if (hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage)) return { type: "items", memos: [], mode: "memo", headers };
+			if (!this.initialCatalogQueryPending && this.catalogReadState !== "history_building") return { type: "items", memos: [], mode: "memo", headers };
 			return {
-				type: "empty", description: "", loading: true,
-				title: this.getDailyNotesStatus().enabled ? t("empty.loadingAllMemos") : t("service.dailyNotesDisabled"),
+				type: "empty", title: "", description: "", loading: true, headers,
 			};
 		}
 		const randomSnapshot = this.randomReunionController.getSnapshot();
@@ -3653,6 +3904,7 @@ export class KnomoView extends ItemView {
 			randomReunionStatus: randomSnapshot.status,
 			randomReunionError: randomSnapshot.error,
 			shuffleDay: shuffleDaySnapshot,
+			randomDay: this.randomDayOpen ? this.randomDayController.getSnapshot() : undefined,
 			memos,
 			matchedTotalCount,
 			regularFilterCopy: shouldLoadListMemos
@@ -3669,6 +3921,8 @@ export class KnomoView extends ItemView {
 			trashLoading: trashSnapshot.trashLoading,
 			trashError: trashSnapshot.trashError,
 			trashMemos: trashSnapshot.trashMemos,
+			trashCount: trashSnapshot.trashCount,
+			trashClearBusy: trashSnapshot.trashClearBusy,
 		});
 		if (presentation.type === "empty" && this.shouldShowTimeBuoyIntro() && this.cardFlowError === null) {
 			presentation = { type: "items", memos: [], mode: "memo", headers: [] };
@@ -3678,8 +3932,11 @@ export class KnomoView extends ItemView {
 				status: this.catalogStatus,
 				coverage: this.catalogCoverage,
 			});
-			if (this.activeNav === "things" && (this.catalogCoverage === null || !isCompleteCatalogCoverage(this.catalogCoverage))) {
-				headers.push({ type: "summary", text: t("empty.loadingAllMemos") });
+			const queryCovered = this.catalogCoverage !== null && isQueryCovered(this.catalogCoverage,
+				this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true));
+			if (["all", "things", "review"].includes(this.activeNav) && !queryCovered
+				&& (this.activeNav === "things" || presentation.type === "empty") && headers.length === 0) {
+				headers.push({ type: "summary", text: t("catalog.incompleteResults") });
 			}
 			if (headers.length === 0) return presentation;
 			return presentation.type === "items"
@@ -3716,8 +3973,32 @@ export class KnomoView extends ItemView {
 
 	private prepareRecentTimeFlow(): void {
 		this.recentTimeFlowContext = this.getRecentTimeFlowContext();
-		this.recentLifecycleKey = JSON.stringify([this.recentTimeFlowContext.enabled, this.recentTimeFlowContext.dates]);
+		this.recentLifecycleKey = this.getCardFlowDecorationLifecycleKey();
 		this.recentDecorations = new RecentTimeFlowDecorations(this.recentTimeFlowContext);
+		this.beyondTodayDecorations = new BeyondTodayDecorations(this.getBeyondTodayContext());
+	}
+
+	private getBeyondTodayContext(): BeyondTodayContext | null {
+		return this.activeNav === "review" ? this.beyondTodayContext ?? null : null;
+	}
+
+	private getCardFlowDecorationLifecycleKey(): string {
+		const context = this.getRecentTimeFlowContext();
+		return JSON.stringify([context.enabled, context.enabled ? context.dates : [], this.getBeyondTodayContext(), getKnomoLocale()]);
+	}
+
+	private renderMemoDecoration(container: HTMLElement, memo: MemoRecord): HTMLElement | null {
+		const group = this.beyondTodayDecorations?.next(memo);
+		if (group) {
+			// 分组从属于视图标题；使用扁平同级标题，保留卡片复用与读屏阅读顺序。
+			return container.createDiv({
+				cls: "knomo-recent-flow-decoration knomo-recent-flow-history knomo-beyond-today-group",
+				text: t(`beyondToday.${group.period}`, { year: group.year }),
+				attr: { role: "heading", "aria-level": "2" },
+			});
+		}
+		const decoration = this.recentDecorations.next(memo);
+		return decoration === null ? null : this.renderRecentDecoration(container, decoration);
 	}
 
 	private renderRecentDecoration(container: HTMLElement, decoration: RecentDecoration): HTMLElement {
@@ -3770,15 +4051,28 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
+		let visible = false;
+		if (presentation.loading) {
+			visible = this.revealLoadingAfterDelay("cards", `${this.memoSourceGeneration}:${this.getCardFlowViewStateKey()}`, () => this.renderCardFlow());
+			const key = JSON.stringify([presentation, visible]);
+			if (this.pendingCardFlowKey === key && this.cardFlowEl.querySelector(".knomo-loading-placeholder")) return;
+			this.pendingCardFlowKey = key;
+		} else {
+			this.clearLoadingIndicators("cards");
+			this.pendingCardFlowKey = null;
+		}
 		this.cardFlowCoordinator.setPendingScrollRestore(null);
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
 		for (const card of this.getDirectCardElements(this.cardFlowEl)) {
 			this.removeCardElement(card);
 		}
-		this.cardFlowEl.empty();
+		const headers = this.renderCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
+		for (const child of Array.from(this.cardFlowEl.children)) {
+			if (!headers.includes(child as HTMLElement)) child.remove();
+		}
 		this.renderedCardMemos.clear();
-		renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
-		renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description, presentation.loading);
+		if (presentation.loading) renderKnomoLoadingPlaceholder(this.cardFlowEl, visible);
+		else renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
 		this.renderHistoryLoadMore();
 	}
 
@@ -3793,8 +4087,9 @@ export class KnomoView extends ItemView {
 		this.cardFlowCoordinator.clearMobileBatchContinuation(this.containerEl.win);
 		this.prepareRecentTimeFlow();
 		this.cardFlowCoordinator.removeSentinel();
+		const headers = this.renderCardFlowHeaders(cardFlow, presentation.headers);
 		for (const child of Array.from(cardFlow.children)) {
-			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card")) {
+			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card") && !headers.includes(child)) {
 				for (const card of child.findAll(".knomo-card")) {
 					this.removeCardImageTargets(card);
 				}
@@ -3854,24 +4149,16 @@ export class KnomoView extends ItemView {
 			}
 		}
 
-		let currentCard = cardFlow.firstElementChild;
+		let currentCard = headers.length > 0 ? headers[headers.length - 1].nextElementSibling : cardFlow.firstElementChild;
 		for (const card of renderedCards) {
 			if (card !== currentCard) {
 				cardFlow.insertBefore(card, currentCard);
 			}
 			currentCard = card.nextElementSibling;
 		}
-		const firstCard = renderedCards[0] ?? null;
 		for (const [index, card] of renderedCards.entries()) {
-			const decoration = this.recentDecorations.next(visibleMemos[index]);
-			if (decoration !== null) cardFlow.insertBefore(this.renderRecentDecoration(cardFlow, decoration), card);
-		}
-		const headers = renderKnomoCardFlowHeaders(cardFlow, presentation.headers);
-		if (firstCard !== null) {
-			const firstContent = cardFlow.firstElementChild;
-			for (const header of headers) {
-				cardFlow.insertBefore(header, firstContent);
-			}
+			const decoration = this.renderMemoDecoration(cardFlow, visibleMemos[index]);
+			if (decoration !== null) cardFlow.insertBefore(decoration, card);
 		}
 		const intro = this.renderTimeBuoyIntro(cardFlow);
 		if (intro !== null) {
@@ -3935,7 +4222,7 @@ export class KnomoView extends ItemView {
 			generation,
 			renderIndex,
 			true,
-			this.activeNav === "random",
+			this.activeNav === "random" && !this.randomDayOpen,
 			"card-flow",
 			reusedBodyEl,
 			reusedImagesEl,
@@ -3974,21 +4261,24 @@ export class KnomoView extends ItemView {
 		initialBatchSize = this.getInitialCardBatchSize(),
 		seedPlaceholder?: (memo: MemoRecord, card: HTMLElement) => void,
 	): void {
+		if (!(presentation.type === "empty" && presentation.loading)) this.clearLoadingIndicators("cards");
 		if (presentation.type === "empty") {
-			if (this.cardFlowEl !== null) {
-				renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers ?? []);
-				renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description, presentation.loading);
-				this.renderHistoryLoadMore();
-			}
+			this.renderEmptyCardFlow(presentation);
 			this.restorePendingCardFlowScrollTop(generation);
 			return;
 		}
 		if (this.cardFlowEl === null) {
 			return;
 		}
-		this.renderTimeBuoyIntro(this.cardFlowEl);
-		renderKnomoCardFlowHeaders(this.cardFlowEl, presentation.headers);
+		const intro = this.renderTimeBuoyIntro(this.cardFlowEl);
+		if (intro !== null) this.cardFlowEl.prepend(intro);
 		this.startCardFeed(presentation.memos, presentation.mode, generation, initialBatchSize, seedPlaceholder);
+	}
+
+	private renderCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[]): HTMLElement[] {
+		this.cardFlowFeedback ??= { key: "", context: "" };
+		this.cardFlowFeedback.context = headers.some(header => header.type === "summary" && header.feedback) ? this.getPageFeedbackContext() : "";
+		return syncKnomoCardFlowHeaders(container, headers, this.getPageFeedbackContext(), this.cardFlowFeedback);
 	}
 
 	private shouldShowTimeBuoyIntro(): boolean {
@@ -4018,8 +4308,10 @@ export class KnomoView extends ItemView {
 
 	private async enableTimeBuoyFromIntro(): Promise<void> {
 		await this.settingsService.updateSettings({ timeBuoyEnabled: true, timeBuoyIntroDismissed: true });
-		await this.render();
+		if (this.trashViewClosed) return;
 		new Notice(t("settings.timeBuoy.enabled"));
+		try { await this.render(); }
+		catch (error) { this.reportViewRefreshFailure(error, "time-buoy-enable"); }
 	}
 
 	private async dismissTimeBuoyIntro(): Promise<void> {
@@ -4041,9 +4333,6 @@ export class KnomoView extends ItemView {
 	}
 
 	private getInitialCardBatchSize(): number {
-		if (this.activeNav === "shuffleDay") {
-			return Number.MAX_SAFE_INTEGER;
-		}
 		return Platform.isMobile ? MOBILE_INITIAL_CARD_BATCH_SIZE : CARD_BATCH_SIZE;
 	}
 
@@ -4085,15 +4374,15 @@ export class KnomoView extends ItemView {
 	}
 
 	private scheduleMobileCardBatchContinuation(continuation: () => void): void {
-		this.cardFlowCoordinator.scheduleMobileBatchContinuation(continuation, this.containerEl.win, this.composerOpen);
+		this.cardFlowCoordinator.scheduleMobileBatchContinuation(continuation, this.containerEl.win, Platform.isMobile && this.composerOpen);
 	}
 
 	private pauseMobileCardBatchContinuation(): void {
-		this.cardFlowCoordinator.pauseMobileBatchContinuation(this.containerEl.win);
+		if (Platform.isMobile) this.cardFlowCoordinator.pauseMobileBatchContinuation(this.containerEl.win);
 	}
 
 	private resumeMobileCardBatchContinuation(): void {
-		this.cardFlowCoordinator.resumeMobileBatchContinuation(this.containerEl.win, this.composerOpen);
+		this.cardFlowCoordinator.resumeMobileBatchContinuation(this.containerEl.win, Platform.isMobile && this.composerOpen);
 	}
 
 	private clearMobileCardBatchContinuation(): void {
@@ -4104,15 +4393,14 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
-		const decoration = this.recentDecorations.next(memo);
-		if (decoration !== null) this.renderRecentDecoration(this.cardFlowEl, decoration);
+		this.renderMemoDecoration(this.cardFlowEl, memo);
 		const card = this.renderMemoCardInContainer(
 			this.cardFlowEl,
 			memo,
 			generation,
 			renderIndex,
 			true,
-			this.activeNav === "random",
+			this.activeNav === "random" && !this.randomDayOpen,
 			"card-flow",
 		);
 		seedPlaceholder?.(memo, card);
@@ -4190,11 +4478,12 @@ export class KnomoView extends ItemView {
 		generation: number,
 		renderIndex: number,
 	): HTMLElement {
-		const { trashBusyMemoActions } = this.trashMemoController.getSnapshot();
+		const { trashBusyMemoActions, trashCleanupPendingMemoIds } = this.trashMemoController.getSnapshot();
 		return renderKnomoTrashMemoCard(container, memo, {
 			generation,
 			renderIndex,
 			busyAction: trashBusyMemoActions.get(memo.id) ?? null,
+			cleanupPending: trashCleanupPendingMemoIds.has(memo.id),
 			formatDisplayTime: formatMemoDisplayTime,
 			formatOptionalTime: formatOptionalMemoTime,
 			getMarkdownPriority: getMarkdownRenderPriority,
@@ -4218,7 +4507,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private retainMemoCardPreviews(): void {
-		const memoIds = new Set(this.memos.map((memo) => memo.id));
+		const memoIds = new Set([...this.memos, ...(this.mobileSearchController?.getDisplayedMemos() ?? [])].map(memo => memo.id));
 		for (const memo of this.randomReunionController.getSnapshot().memos ?? []) {
 			memoIds.add(memo.id);
 		}
@@ -4415,6 +4704,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private applySidebarTagFilter(tag: string, tagKey: string): void {
+		this.rememberHistoryBrowsePosition("all");
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearSearchDebounce();
 		if (this.activeNav !== "things") this.viewStateController.clearDesktopSearchState();
@@ -4442,11 +4732,98 @@ export class KnomoView extends ItemView {
 		}
 	}
 
+	private captureHistoryBrowsePosition(): HistoryBrowsePosition {
+		const flow = this.cardFlowEl;
+		if (!flow) return { scrollTop: 0, visibleCount: 0 };
+		const cards = this.getDirectCardElements(flow);
+		const top = flow.getBoundingClientRect().top;
+		const card = cards.find(item => item.getBoundingClientRect().bottom > top);
+		const renderKey = card?.getAttr("data-memo-render-key");
+		return { scrollTop: this.getCardFlowScrollTop() ?? 0, visibleCount: cards.length,
+			anchor: card && renderKey ? { renderKey, offset: card.getBoundingClientRect().top - top } : undefined };
+	}
+
+	private restoreHistoryBrowsePosition(position: HistoryBrowsePosition): void {
+		if (!this.cardFlowEl) return;
+		const anchor = position.anchor && this.getFilteredMemos().some(memo => getMemoRenderKey(memo) === position.anchor!.renderKey)
+			? position.anchor : undefined;
+		this.cardFlowCoordinator.setPendingScrollRestore({ ...position, anchor,
+			scrollTop: position.anchor && !anchor ? 0 : position.scrollTop, generation: this.renderGeneration });
+		this.renderCardFlow();
+	}
+
+	private rememberHistoryBrowsePosition(nextNav: SidebarNav): void {
+		if (nextNav === this.activeNav || this.randomDayOpen || !this.cardFlowEl) return;
+		if (this.activeNav === "random" || this.activeNav === "shuffleDay") {
+			(this.historyBrowsePositions ??= {})[this.activeNav] = this.captureHistoryBrowsePosition();
+		}
+	}
+
+	private clearRandomDay(): void {
+		if (this.randomDayReturnContext) (this.historyBrowsePositions ??= {}).random = this.randomDayReturnContext.position;
+		this.randomDayReturnContext = null;
+		this.randomDayController?.clearSelection();
+	}
+
+	private async openRandomDay(memo: MemoRecord): Promise<void> {
+		if (this.activeNav !== "random" || !memo.catalog || this.trashViewClosed) return;
+		const date = getMemoLocalDateKey(memo);
+		if (date === null) return;
+		if (!this.randomDayOpen) this.randomDayReturnContext = { position: this.captureHistoryBrowsePosition(), memoId: memo.id };
+		this.randomReunionController.cancelPending();
+		const loading = this.randomDayController.openDate(date);
+		// 移动端菜单退场后交还页面焦点，避免按钮持有触摸焦点及窗口失焦。
+		if (this.currentLayout === "mobile") this.recoverMobileViewFocus();
+		else this.cardFlowEl?.querySelector<HTMLElement>("[data-action='random-day-back']")?.focus({ preventScroll: true });
+		await loading;
+	}
+
+	private renderRandomDay(): void {
+		const focused = this.cardFlowEl?.querySelector<HTMLElement>(":focus")?.getAttr("data-action");
+		this.renderUiState({ cardFlowChangeIntent: this.randomDayController.getSnapshot().stats === null
+			? "view-scope-change" : "content-change" });
+		if (focused === "random-day-back" || focused === "retry-random-day") {
+			const target = this.cardFlowEl?.querySelector<HTMLElement>(`[data-action='${focused}']`)
+				?? this.cardFlowEl?.querySelector<HTMLElement>("[data-action='random-day-back']");
+			target?.focus({ preventScroll: true });
+		}
+	}
+
+	private async returnFromRandomDay(): Promise<void> {
+		if (!this.randomDayOpen) return;
+		const context = this.randomDayReturnContext;
+		this.randomDayController.cancelPending();
+		await this.refreshRandomReunionBatch();
+		if (this.trashViewClosed || !this.randomDayOpen || this.randomDayReturnContext !== context) return;
+		this.clearRandomDay();
+		this.renderUiState({ cardFlowChangeIntent: "view-scope-change" });
+		if (context) this.restoreHistoryBrowsePosition(context.position);
+		if (this.currentLayout === "mobile") {
+			// 触屏返回恢复页面焦点，避免原菜单按钮留下点击边框。
+			this.recoverMobileViewFocus();
+			return;
+		}
+		const card = this.cardFlowEl ? this.getDirectCardElements(this.cardFlowEl).find(item => item.getAttr("data-memo-id") === context?.memoId) : null;
+		const target = card?.querySelector<HTMLElement>(".knomo-card-menu") ?? this.cardFlowEl?.querySelector<HTMLElement>("[data-action='refresh-random-reunion']");
+		target?.focus({ preventScroll: true });
+	}
+
+	private async refreshHistorySelection(nav: "random" | "shuffleDay"): Promise<void> {
+		if (this.activeNav !== nav || this.randomDayOpen) return;
+		const controller = nav === "random" ? this.randomReunionController : this.shuffleDayController;
+		const before = controller.getSnapshot().memos;
+		await controller.refresh();
+		if (this.activeNav !== nav || this.randomDayOpen || controller.getSnapshot().memos === before) return;
+		if (this.historyBrowsePositions) delete this.historyBrowsePositions[nav];
+		this.renderUiState({ cardFlowChangeIntent: "view-scope-change" });
+	}
+
 	private async runMemoActionById(
 		action: MemoAction,
 		memoId: string | null,
+		sourceEl?: HTMLElement | null,
 	): Promise<void> {
-		const memo = memoId === null ? null : this.findMemoById(memoId);
+		const memo = memoId === null ? null : this.findMemoById(memoId, this.getMemoSurface(sourceEl));
 		if (memo !== null) {
 			await this.handleMemoAction(action, memo);
 		}
@@ -4528,8 +4905,8 @@ export class KnomoView extends ItemView {
 		await this.userActionController.handleRootClick(event);
 	}
 
-	private toggleCardMenu(memoId: string | null, _keyboard = false): void {
-		if (this.currentLayout === "mobile") { this.toggleMobileCardMenu(memoId); return; }
+	private toggleCardMenu(memoId: string | null, _keyboard = false, sourceEl?: HTMLElement | null): void {
+		if (this.currentLayout === "mobile") { this.toggleMobileCardMenu(memoId, sourceEl); return; }
 		if (this.activeMenuMemoId === memoId) {
 			this.closeCardMenu();
 			return;
@@ -4628,7 +5005,10 @@ export class KnomoView extends ItemView {
 		let handled = true;
 		if (this.timeBuoyPickerState !== null) this.closeTimeBuoyPicker(true);
 		else if (this.composerOpen && this.mobileComposerController.isKeyboardOpen()) this.inputEl?.blur();
-		else handled = this.userActionController.closeMobileSurface();
+		else {
+			handled = this.userActionController.closeMobileSurface();
+			if (!handled && this.randomDayOpen) { handled = true; void this.returnFromRandomDay(); }
+		}
 		if (handled) { event.preventDefault(); event.stopImmediatePropagation(); }
 	}
 
@@ -4648,6 +5028,10 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		await this.userActionController.handleRootKeydown(event);
+		if (!event.defaultPrevented && event.key === "Escape" && this.randomDayOpen) {
+			event.preventDefault();
+			await this.returnFromRandomDay();
+		}
 	}
 
 	private handleTimeBuoyTabKeydown(event: KeyboardEvent): boolean {
@@ -4695,12 +5079,17 @@ export class KnomoView extends ItemView {
 
 	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
 		this.closeCardMenu();
+		if (action === "view-day") {
+			await this.openRandomDay(memo);
+			return;
+		}
 		const shouldCloseMobileSearch = this.currentLayout === "mobile" && this.mobileSearchPageOpen;
 		let referenceIsCurrent: (() => boolean) | null = null;
 		let releaseReferenceRequest: (() => void) | null = null;
 		try {
 			if (action === "mark-reviewed") {
 				await this.randomReunionController.markReviewed(memo.id);
+				if (this.trashViewClosed) return;
 				new Notice(t("notice.markedReviewed"));
 				this.syncCardMenuState();
 				return;
@@ -4734,7 +5123,7 @@ export class KnomoView extends ItemView {
 				this.syncCardMenuState();
 				return;
 			} else if (action === "open-daily") {
-				if (this.activeNav === "random") {
+				if (this.activeNav === "random" && !this.randomDayOpen) {
 					await this.randomReunionController.openMemo(memo.id);
 					return;
 				}
@@ -4755,6 +5144,7 @@ export class KnomoView extends ItemView {
 				return;
 			} else if (action === "copy-text") {
 				await this.copyText(memo.contentSnapshot);
+				if (this.trashViewClosed) return;
 				new Notice(t("notice.copiedText"));
 				this.syncCardMenuState();
 				return;
@@ -4762,23 +5152,30 @@ export class KnomoView extends ItemView {
 				const reference = await this.memoCommandService.createReferenceText(
 					await this.resolveCatalogMemo(memo),
 				);
+				if (this.trashViewClosed) return;
 				await this.copyText(reference.text);
+				if (this.trashViewClosed) return;
 				new Notice(t("notice.copiedLink"));
 				this.syncCardMenuState();
 				return;
 			} else if (action === "delete") {
 				await this.memoCommandService.delete(await this.resolveCatalogMemo(memo));
-				this.randomReunionController.removeMemo(memo.id);
-				this.shuffleDayController.removeMemo(memo.id);
-				await this.reloadMemos(false).catch(() => false);
+				if (this.trashViewClosed) return;
 				new Notice(t("notice.deleted"));
+				try {
+					this.randomReunionController.removeMemo(memo.id);
+					this.shuffleDayController.removeMemo(memo.id);
+					this.randomDayController?.removeMemo(memo.id);
+					await this.reloadMemos(false);
+				} catch (error) { this.reportViewRefreshFailure(error, "delete-refresh"); }
 				return;
 			}
 			this.syncUiChrome();
 			this.syncCardMenuState();
 		} catch (error) {
+			if (this.trashViewClosed) return;
 			if (referenceIsCurrent !== null && !referenceIsCurrent()) return;
-			const message = formatServiceError(error, t("error.operationFailed"));
+			const message = error instanceof TrashDailyWriteError ? t("trash.writeUnconfirmed") : formatServiceError(error, t("error.operationFailed"));
 			new Notice(message);
 			this.syncUiChrome();
 			this.syncCardMenuState();
@@ -4826,13 +5223,20 @@ export class KnomoView extends ItemView {
 		const isMobileSave = this.currentLayout === "mobile";
 		const submittedEditor = this.inputEl;
 		const imageLinks = this.composerImages?.editor.view.state.field(composerImageLinks) ?? [];
-		const validateImageSource = imageLinks.length ? (path: string) => validateComposerImages(this.app, imageLinks, path) : undefined;
+		const validateImageSource = imageLinks.length ? (path: string) => {
+			for (const link of imageLinks) {
+				if (!(this.app.vault.getAbstractFileByPath(link.path) instanceof TFile)) throw new Error(t("composer.imageLinkChanged", { path: link.path }));
+				validateComposerImages(this.app, [link], link.sourcePath);
+			}
+			validateComposerImages(this.app, imageLinks, path);
+		} : undefined;
 		this.inputEl.composer.setSaving(true);
 		const submittedContext = this.inputEl.composer.capture();
 		const submittedEditingMemo = this.editingMemo;
 		const submittedQuoteReferenceText = this.quoteReferenceText;
 		const submittedQuoteMarkdownText = this.quoteMarkdownText;
 		let composerCleared = false;
+		let dailyConfirmed = false;
 		const clearSavedComposer = (): void => {
 			if (this.trashViewClosed || composerCleared || this.inputEl !== submittedEditor || !submittedContext.valid()) return;
 			if (this.inputEl !== null && this.inputEl.value !== input) return;
@@ -4876,6 +5280,7 @@ export class KnomoView extends ItemView {
 			// 两阶段可以同时拒绝；立即监听后续阶段，避免等待 Daily 时出现未处理拒绝。
 			void operation.settled.catch(() => undefined);
 			await operation.dailyCommitted;
+			dailyConfirmed = true;
 			const commitGeneration = this.composerCommitGeneration = (this.composerCommitGeneration ?? 0) + 1;
 			const canClear = this.trashViewClosed || (this.inputEl === submittedEditor && submittedContext.valid()
 				&& this.inputEl.value === input && this.editingMemo === submittedEditingMemo
@@ -4886,11 +5291,14 @@ export class KnomoView extends ItemView {
 			this.flushLocalDraft();
 			this.queueComposerSaveFinish(
 				operation.settled,
-				extractTimeBuoyDates(preparedInput.content),
 				preparedInput.type === "update" ? preparedInput.previousMemo : null,
 				commitGeneration,
 			);
 		} catch (error) {
+			if (dailyConfirmed) {
+				this.reportViewRefreshFailure(error, "composer-apply");
+				return;
+			}
 			if (error instanceof StaleDailyWriteError || error instanceof MarkdownMutationStaleError) {
 				if (submittedEditingMemo) this.restoredEditNeedsTarget = true;
 				this.localDraftStore?.acknowledgePending();
@@ -4898,28 +5306,19 @@ export class KnomoView extends ItemView {
 			const message = this.restoredEditNeedsTarget ? t("composer.draftTargetChanged") : formatServiceError(error, t("error.saveFailed"));
 			if (!this.trashViewClosed && this.inputEl === submittedEditor && submittedContext.sameSession()) {
 				this.updateStatus(message, true);
-				new Notice(message);
+				if (!this.statusEl?.isConnected || (this.currentLayout === "mobile" && !this.composerOpen)) new Notice(message);
 			}
 		} finally {
 			this.localDraftStore?.finishSubmission();
 			this.isSaving = false;
 			submittedEditor.composer.setSaving(false);
 			if (!this.trashViewClosed) {
-				if (this.inputEl !== null) this.inputEl.disabled = !this.getDailyNotesStatus().enabled || !this.isComposerCreationAvailable();
+				if (this.inputEl !== null) this.inputEl.disabled = !this.getDailyNotesStatus().enabled;
 				this.updateSendButtonState();
 				this.syncRootState();
 				if (this.composerRenderPending) { this.composerRenderPending = false; await this.render(); }
 			}
 		}
-	}
-
-	private showTimeBuoySaveFeedback(dates: readonly string[]): void {
-		if (dates.length === 0) {
-			return;
-		}
-		new Notice(dates.length === 1
-			? t("timeBuoy.saved.single", { date: dates[0] })
-			: t("timeBuoy.saved.multiple", { count: dates.length }));
 	}
 
 	private async handleManualRefresh(): Promise<void> {
@@ -4931,6 +5330,7 @@ export class KnomoView extends ItemView {
 		try {
 			if (this.activeNav === "trash") {
 				await this.trashMemoController.loadTrashMemos(true);
+				if (this.trashViewClosed) return;
 				if (this.trashMemoController.getSnapshot().trashError === null) {
 					new Notice(t("notice.trashRefreshed"));
 				}
@@ -4938,6 +5338,7 @@ export class KnomoView extends ItemView {
 			}
 			try {
 				const result = await this.onManualRefresh();
+				if (this.trashViewClosed) return;
 				const failed = result.failed;
 				if (failed > 0) {
 					const message = t("notice.refreshFailedCount", { count: failed });
@@ -4950,6 +5351,7 @@ export class KnomoView extends ItemView {
 				}
 				new Notice(t("notice.upToDate"));
 			} catch (error) {
+				if (this.trashViewClosed) return;
 				const message = formatServiceError(error, t("error.refreshFailed"));
 				new Notice(message);
 			}
@@ -4960,6 +5362,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private setScope(scope: ScopeFilter): void {
+		this.rememberHistoryBrowsePosition("all");
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		const result = this.viewStateController.setScope(scope);
@@ -4995,6 +5398,7 @@ export class KnomoView extends ItemView {
 		while (this.libraryIndexRequestedKey != null && !this.trashViewClosed) {
 			const key = this.libraryIndexRequestedKey;
 			this.libraryIndexRequestedKey = null;
+			this.libraryIndexError = false;
 			if (this.librarySummary === null || this.libraryTagFacets === null) {
 				this.renderStats();
 				this.renderTags();
@@ -5011,13 +5415,19 @@ export class KnomoView extends ItemView {
 						this.libraryIndexRevision = result.catalogRevision;
 						this.libraryIndexCoverageKey = catalogCoverageKey(result.coverage);
 						committed = true;
-					} else this.libraryIndexRevision = -1;
+					} else {
+						this.libraryIndexRevision = -1;
+						this.libraryIndexError = ["degraded", "retrying", "read-only"].includes(result.lifecycle.state);
+					}
 				}
 			} catch {
-				if (key === this.getLibraryIndexContextKey() && !this.trashViewClosed) this.libraryIndexRevision = -1;
+				if (key === this.getLibraryIndexContextKey() && !this.trashViewClosed) {
+					this.libraryIndexRevision = -1;
+					this.libraryIndexError = true;
+				}
 			} finally {
 				if (key === this.getLibraryIndexContextKey() && !this.trashViewClosed) {
-					if (committed || (this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage))) {
+					if (committed || this.libraryIndexError || (this.catalogCoverage !== null && isCompleteCatalogCoverage(this.catalogCoverage))) {
 						this.libraryIndexesUpdating = false;
 					}
 					this.renderStats();
@@ -5065,6 +5475,7 @@ export class KnomoView extends ItemView {
 
 	private applyViewStateTransitionEffects(effects: KnomoViewStateTransitionEffects): void {
 		this.cancelPendingQuickCommand();
+		if (this.activeNav !== "random") this.clearRandomDay();
 		if (this.activeNav !== "random") this.randomReunionController.cancelPending();
 		if (this.activeNav !== "shuffleDay") this.shuffleDayController.cancelPending();
 		if (effects.closeScopeMenu === true) {
@@ -5076,18 +5487,18 @@ export class KnomoView extends ItemView {
 	}
 
 	private setSidebarNav(nav: SidebarNav): void {
+		this.rememberHistoryBrowsePosition(nav);
 		if (nav !== this.activeNav) {
-			if (this.mobileSearchController?.isOpen) this.mobileSearchController.closePage();
-			this.mobileSearchController?.resetState();
-		}
-		this.cancelCatalogMobileCount();
+			const things = this.activeNav === "things";
+			if (this.mobileSearchController?.isOpen) {
+				this.mobileSearchController.closePage();
+				if (things) this.mobileSearchController.resetState();
+			} else this.mobileSearchController?.resetState();
+		} else this.mobileSearchController?.cancelPendingRequest();
 		this.cancelCatalogDesktopCount();
 		if (nav !== "time-buoy" && this.activeNav === "time-buoy") this.timeBuoyViewController.clear();
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
-		this.catalogMobileQueryRun += 1;
-		this.catalogMobileCursor = null;
-		this.catalogMobileTotalCount = null;
 		const result = this.viewStateController.setSidebarNav(nav);
 		this.applyViewStateTransitionEffects(result);
 		if (result.type === "already-default") {
@@ -5096,6 +5507,7 @@ export class KnomoView extends ItemView {
 			this.syncCardMenuState();
 			return;
 		}
+		this.cancelCatalogDesktopQuery();
 		if (result.clearRandomReunion) {
 			this.randomReunionController.clearMemos();
 		}
@@ -5107,6 +5519,10 @@ export class KnomoView extends ItemView {
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
+		if (nav === "random" || nav === "shuffleDay") {
+			const position = this.historyBrowsePositions?.[nav];
+			if (position) this.restoreHistoryBrowsePosition(position);
+		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
 		}
@@ -5158,12 +5574,18 @@ export class KnomoView extends ItemView {
 		if (result.type === "inactive") {
 			return;
 		}
+		this.cancelCatalogDesktopQuery();
 		this.applyViewStateTransitionEffects(result);
 		const shouldDeferReview = result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
 		this.renderUiState({
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
+		const restoredNav = this.viewStateController.activeNav;
+		if (restoredNav === "random" || restoredNav === "shuffleDay") {
+			const position = this.historyBrowsePositions?.[restoredNav];
+			if (position) this.restoreHistoryBrowsePosition(position);
+		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
 		}
@@ -5202,6 +5624,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private resetToAllNotes(): void {
+		this.rememberHistoryBrowsePosition("all");
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		const result = this.viewStateController.resetToAllNotes();
@@ -5255,26 +5678,35 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderAllMemosLoadingState(): void {
-		const cardFlow = this.cardFlowEl;
-		if (cardFlow === null) {
-			return;
-		}
-		this.cardFlowDeferredForAllMemos = true;
-		this.renderGeneration += 1;
-		this.cardImageCache.capture(cardFlow, Platform.isMobile ? cardFlow : null);
-		this.memoMarkdownRenderer.clear();
-		this.cardImageLoadQueue.clear("card-flow");
-		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
-		this.renderedCardMemos.clear();
-		cardFlow.empty();
-		// 日记不可用时历史索引无法完成，应显示启用指引而不是无限等待。
-		renderKnomoEmptyState(cardFlow, this.getDailyNotesStatus().enabled
-			? t("empty.loadingAllMemos")
-			: t("service.dailyNotesDisabled"), "", true);
+		this.renderCardFlow();
+		this.cardFlowDeferredForAllMemos = !this.hasCommittedCatalogDesktopQuery && !this.hasVisibleConfirmedMemoPresentation();
 	}
 
 	private shouldDeferCardFlowForAllMemos(): boolean {
-		return !this.hasCommittedCatalogDesktopQuery && this.catalogReadState === "history_building";
+		return !this.hasCommittedCatalogDesktopQuery && !this.hasVisibleConfirmedMemoPresentation() && this.catalogReadState === "history_building";
+	}
+
+	private revealLoadingAfterDelay(surface: string, key: string, render: () => void): boolean {
+		if (!this.containerEl.isShown() || this.containerEl.win.document.visibilityState === "hidden") {
+			this.clearLoadingIndicators(surface);
+			return false;
+		}
+		this.loadingIndicators ??= new Map();
+		let indicator = this.loadingIndicators.get(surface);
+		if (!indicator) {
+			const win = this.containerEl.win;
+			indicator = new DelayedLoadingIndicator({ scheduleTask: (callback, delay) => win.setTimeout(callback, delay), cancelTask: id => win.clearTimeout(id) });
+			this.loadingIndicators.set(surface, indicator);
+		}
+		return indicator.pending(key, () => {
+			if (!this.trashViewClosed && this.containerEl.isShown() && this.containerEl.win.document.visibilityState !== "hidden") render();
+			else indicator.clear();
+		});
+	}
+
+	private clearLoadingIndicators(surface?: string): void {
+		if (surface !== undefined) this.loadingIndicators?.get(surface)?.clear();
+		else for (const indicator of this.loadingIndicators?.values() ?? []) indicator.clear();
 	}
 
 	private async ensureCurrentMemoDataRequirement(): Promise<boolean> {
@@ -5463,12 +5895,19 @@ export class KnomoView extends ItemView {
 		this.mobileComposerController.focusInputSoon();
 	}
 
-	private focusComposerInputNow(shouldResize = true, shouldQueueViewport = true): void {
+	private focusComposerInputNow(shouldResize = true, shouldQueueViewport = true, moveToEnd = false): void {
 		if (this.inputEl === null) {
 			return;
 		}
-		// 由编辑器恢复源码选区，避免原生 focus 将旧 DOM 光标写回状态。
-		this.inputEl.composer.view.focus();
+		const editor = this.inputEl.composer.view;
+		const selection = editor.state.selection;
+		// 展开移动草稿后在原生聚焦结束时定位末尾；其他聚焦保留已有选区。
+		editor.focus();
+		if (moveToEnd) {
+			editor.dispatch({ selection: { anchor: editor.state.doc.length }, scrollIntoView: true });
+		} else if (!editor.state.selection.eq(selection)) {
+			editor.dispatch({ selection, scrollIntoView: true });
+		}
 		if (shouldResize) {
 			this.resizeInput();
 		}
@@ -5532,7 +5971,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private async validateRestoredDraft(draft: LocalComposerDraft): Promise<void> {
+		const run = this.draftValidationRun = (this.draftValidationRun ?? 0) + 1;
+		const editor = this.inputEl;
+		const context = editor?.composer.capture();
 		const memo = draft.editingMemo;
+		const isCurrent = () => !this.trashViewClosed && run === this.draftValidationRun && this.inputEl === editor
+			&& (!context || context.valid()) && this.editingMemo === memo;
 		if (memo?.catalog) {
 			const handle = memo.catalog.observationHandle;
 			let current = false;
@@ -5540,22 +5984,9 @@ export class KnomoView extends ItemView {
 				const file = this.app.vault.getAbstractFileByPath(handle.sourcePath);
 				current = file instanceof TFile && await sha256Bytes(new TextEncoder().encode(await this.app.vault.read(file))) === handle.sourceRevision;
 			} catch { current = false; }
-			if (this.trashViewClosed || this.editingMemo !== memo) return;
-			if (!current) { this.restoredEditNeedsTarget = true; new Notice(t("composer.draftTargetChanged")); }
+			if (!isCurrent()) return;
+			if (!current) this.restoredEditNeedsTarget = true;
 		}
-		try {
-			for (const snapshot of [draft.active, draft.suspendedCreate]) {
-				for (const link of snapshot?.imageLinks ?? []) {
-					if (!(this.app.vault.getAbstractFileByPath(link.path) instanceof TFile)) throw new Error(t("composer.imageLinkChanged", { path: link.path }));
-					validateComposerImages(this.app, [link], link.sourcePath);
-				}
-			}
-			if (draft.active.imageLinks?.length) {
-				const sourcePath = this.getImageSourcePath();
-				if (sourcePath === null) throw new Error(t("composer.imageSourceUnavailable"));
-				validateComposerImages(this.app, draft.active.imageLinks, sourcePath);
-			}
-		} catch (error) { if (!this.trashViewClosed) new Notice(formatServiceError(error, t("error.imageInsertFailed"))); }
 	}
 
 	private cancelComposerFromEscape(): void {
@@ -5626,6 +6057,7 @@ export class KnomoView extends ItemView {
 			this.flushLocalDraft();
 			this.openComposer();
 			this.updateStatus("", false);
+			void this.validateRestoredDraft(this.captureLocalDraft()).catch(error => logContinuationFailure("draft", "target-check", error));
 			return;
 		}
 		if (this.editingMemo !== null && this.editingMemo.id === memo.id) { this.openComposer(); return; }
@@ -6420,8 +6852,41 @@ export class KnomoView extends ItemView {
 		if (this.statusEl === null) {
 			return;
 		}
-		this.statusEl.setText(message);
+		if (this.statusEl.textContent !== message) this.statusEl.setText(message);
 		this.statusEl.toggleClass("is-error", isError);
+	}
+
+	private getPageFeedbackContext(): string {
+		return JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter, this.viewStateController?.search.result?.key,
+			this.randomDayOpen ? this.randomDayController.getSnapshot().selectedDate : null]);
+	}
+
+	private syncPageFeedback(): void {
+		if (!this.pageFeedbackEl || this.trashViewClosed) return;
+		if (this.pageFeedbackContext !== this.getPageFeedbackContext()) this.pageRefreshError = null;
+		this.pageFeedbackEl.hidden = !this.pageRefreshError;
+		const text = this.pageFeedbackEl.querySelector("span");
+		if (text && text.textContent !== (this.pageRefreshError ?? "")) {
+			const key = JSON.stringify([this.pageFeedbackContext, this.pageRefreshError]);
+			text.setAttribute("aria-live", key === this.pageAnnouncementKey ? "off" : "polite");
+			text.textContent = this.pageRefreshError ?? "";
+			this.pageAnnouncementKey = key;
+		}
+	}
+
+	reportViewRefreshFailure(error: unknown, stage = "refresh", sourceChanged = false): void {
+		if (this.trashViewClosed) return;
+		if (!(error instanceof CatalogDiscoveryInvalidatedError)) logContinuationFailure("view", stage, error, this.confirmedPresentationGeneration);
+		this.pageFeedbackContext = this.getPageFeedbackContext();
+		this.pageFeedbackRun = (this.pageFeedbackRun ?? 0) + 1;
+		const visible = this.activeNav === "trash" ? this.trashMemoController.getSnapshot().trashMemos ?? []
+			: this.activeNav === "random" ? this.getFilteredMemos()
+			: this.activeNav === "shuffleDay" ? this.shuffleDayController.getSnapshot().memos
+				: this.activeNav === "time-buoy" ? (() => { const snapshot = this.timeBuoyViewController.getSnapshot(); return snapshot[snapshot.activeTab]; })()
+					: this.getFilteredMemos();
+		const hasResults = visible.length > 0;
+		this.pageRefreshError = sourceChanged ? t("feedback.sourceChanged") : hasResults ? t("feedback.refreshFailed") : t("feedback.loadFailed");
+		this.syncPageFeedback();
 	}
 
 	private updateSendButtonState(): void {
@@ -6477,7 +6942,7 @@ export class KnomoView extends ItemView {
 			return [];
 		}
 		if (this.activeNav === "random") {
-			return this.randomReunionController.getSnapshot().memos ?? [];
+			return this.randomDayOpen ? this.randomDayController.getSnapshot().memos : this.randomReunionController.getSnapshot().memos ?? [];
 		}
 		if (this.activeNav === "shuffleDay") {
 			return this.shuffleDayController.getSnapshot().memos;
@@ -6568,6 +7033,7 @@ export class KnomoView extends ItemView {
 				: target.closest<HTMLElement>(".knomo-mobile-create-fab, .knomo-mobile-navbar-sidebar-action, .sidebar-toggle-button");
 			if (!button && target.closest(".mobile-navbar")) button = target.closest<HTMLElement>(".clickable-icon, button, .mobile-navbar-action");
 			if (!button && this.rootEl?.contains(target)) button = target.closest<HTMLElement>("button[data-action='open-composer'], button[data-action='toggle-sidebar'], button[data-action='toggle-compact-search']");
+			if (!button && this.rootEl?.contains(target)) button = target.closest<HTMLElement>("button[data-action='random-day-back'], button[data-action='refresh-random-reunion'], button[data-action='retry-random-day']");
 			return button?.closest("[inert], [hidden], [aria-hidden='true'], :disabled, [aria-disabled='true']") ? null : button;
 		}));
 		this.getRenderScope().register(registerMobileMenuTriggerTap(this.containerEl.doc, target => {
@@ -6581,16 +7047,14 @@ export class KnomoView extends ItemView {
 		}));
 	}
 
-	private toggleMobileCardMenu(memoId: string | null): void {
+	private toggleMobileCardMenu(memoId: string | null, sourceEl?: HTMLElement | null): void {
 		if (this.activeMenuMemoId === memoId) { this.closeCardMenu(); return; }
-		const memo = memoId === null ? null : this.findMemoById(memoId);
+		const surface = sourceEl ? this.getMemoSurface(sourceEl) : this.mobileSearchPageOpen ? "mobile-search" : "card-flow";
+		const memo = memoId === null ? null : this.findMemoById(memoId, surface);
 		if (!memo || !isMemoCardMenuReady(memo)) return;
-		let trigger: HTMLElement | null = null;
-		for (const container of [this.mobileSearchResultsEl, this.cardFlowEl]) {
-			const card = container?.findAll(".knomo-card").find(item => item.getAttr("data-memo-id") === memo.id);
-			trigger = card?.find(".knomo-card-menu") ?? null;
-			if (trigger) break;
-		}
+		const container = surface === "mobile-search" ? this.mobileSearchResultsEl : this.cardFlowEl;
+		const card = container?.findAll(".knomo-card").find(item => item.getAttr("data-memo-id") === memo.id);
+		const trigger = card?.find(".knomo-card-menu") ?? null;
 		if (!trigger?.isConnected) return;
 		this.scopeMenuOpen = false;
 		this.closeCardMenu();
@@ -6600,7 +7064,7 @@ export class KnomoView extends ItemView {
 			kind: "card", trigger,
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
-				for (const { action } of getMemoCardActions(memo)) {
+				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen)) {
 					const focus = action === "edit" || action === "reference" || action === "open-daily" ? "action" : "view";
 					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
 						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
@@ -6696,7 +7160,7 @@ export class KnomoView extends ItemView {
 			this.syncRootState();
 			if (this.mobileDrawerOpen) {
 				void this.ensureSidebarIndexes();
-			}
+			} else this.clearLoadingIndicators("tags");
 			return;
 		}
 		this.toggleSidebarCollapsed();
@@ -6736,6 +7200,7 @@ export class KnomoView extends ItemView {
 		this.desktopSidebarStateController.toggleCollapsed();
 		this.syncRootState();
 		if (!this.desktopSidebarStateController.getSnapshot().collapsed) void this.ensureSidebarIndexes();
+		else this.clearLoadingIndicators("tags");
 		void this.persistSidebarPreferences();
 	}
 
@@ -6743,6 +7208,7 @@ export class KnomoView extends ItemView {
 		this.desktopSidebarStateController.setCollapsed(collapsed);
 		this.syncRootState();
 		if (!collapsed) void this.ensureSidebarIndexes();
+		else this.clearLoadingIndicators("tags");
 		void this.persistSidebarPreferences();
 	}
 
@@ -7002,6 +7468,14 @@ export class KnomoView extends ItemView {
 	}
 
 	private handleTrashRenderRequest(target: TrashMemoRenderTarget): void {
+		if (target === "clear-trash-state") {
+			const busy = this.trashMemoController.getSnapshot().trashClearBusy;
+			for (const button of Array.from(this.cardFlowEl?.querySelectorAll<HTMLButtonElement>('button[data-action="clear-trash"]') ?? [])) {
+				button.disabled = busy;
+				button.setAttribute("aria-busy", String(busy));
+			}
+			return;
+		}
 		if (target === "ui-state") {
 			this.renderUiState();
 			return;
@@ -7014,8 +7488,8 @@ export class KnomoView extends ItemView {
 		this.renderCardFlow();
 	}
 
-	private async openMemoCardDailyNote(memoId: string, randomReunionCard: boolean): Promise<void> {
-		const memo = this.findMemoById(memoId);
+	private async openMemoCardDailyNote(memoId: string, randomReunionCard: boolean, sourceEl?: HTMLElement | null): Promise<void> {
+		const memo = this.findMemoById(memoId, this.getMemoSurface(sourceEl));
 		if (memo === null) {
 			return;
 		}
@@ -7037,13 +7511,20 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private findMemoById(memoId: string): MemoRecord | null {
+	private getMemoSurface(sourceEl?: HTMLElement | null): CardRenderSurface {
+		return sourceEl && this.mobileSearchResultsEl?.contains(sourceEl) ? "mobile-search" : "card-flow";
+	}
+
+	private findMemoById(memoId: string, surface?: CardRenderSurface): MemoRecord | null {
+		if (surface === "mobile-search") return this.mobileSearchController.getDisplayedMemos().find(memo => memo.id === memoId) ?? null;
+		if (this.randomDayOpen) return this.randomDayController.getSnapshot().memos.find(memo => memo.id === memoId) ?? null;
 		return this.memos.find((memo) => memo.id === memoId)
 			?? this.catalogTodayTimeBuoys?.today.find((item) => item.memo.id === memoId)?.memo
 			?? this.randomReunionController.getSnapshot().memos?.find((memo) => memo.id === memoId)
 			?? this.shuffleDayController.getSnapshot().memos.find((memo) => memo.id === memoId)
 			?? this.timeBuoyViewController.getMemos().find((memo) => memo.id === memoId)
 			?? this.trashMemoController.getSnapshot().trashMemos?.find((memo) => memo.id === memoId)
+			?? (surface === undefined ? this.mobileSearchController?.getDisplayedMemos().find(memo => memo.id === memoId) : null)
 			?? null;
 	}
 
@@ -7056,7 +7537,7 @@ export class KnomoView extends ItemView {
 
 	private getRecentPresentationStateKey(): string {
 		const context = this.getRecentTimeFlowContext();
-		return JSON.stringify([context.enabled, context.dates, [...context.pinnedKeys]]);
+		return JSON.stringify([this.getCardFlowDecorationLifecycleKey(), [...context.pinnedKeys]]);
 	}
 
 	private handleLocalDateChange(): void {
@@ -7071,14 +7552,17 @@ export class KnomoView extends ItemView {
 		this.lastKnownLocalDate = nextDate;
 		this.filteredMemosCache = null;
 		this.renderUiState();
+		// 默认流的刷新会继续协调确认展示和重逢，并刷新当前打开的移动搜索。
+		if (this.shouldShowTodayTimeBuoys()) {
+			void this.refresh();
+			return;
+		}
 		if (this.mobileSearchPageOpen) { void this.mobileSearchController.refreshAppliedResults(); }
 		else if (this.activeNav === "review" || this.scopeFilter !== "all" || this.searchDateFilter !== null) {
 			void this.reloadCurrentCatalogQuery();
 		}
 		if (this.activeNav === "time-buoy") {
 			void this.timeBuoyViewController.loadInitial();
-		} else if (this.shouldShowTodayTimeBuoys()) {
-			void this.refresh();
 		} else if (this.settingsService.getSettings().timeBuoyEnabled) {
 			void this.timeBuoyViewController.loadTodayOnly();
 		}
@@ -7130,7 +7614,6 @@ export class KnomoView extends ItemView {
 
 	private queueComposerSaveFinish(
 		settled: Promise<MemoSaveResult>,
-		fallbackTimeBuoyDates: readonly string[],
 		previousMemo: MemoRecord | null = null,
 		commitGeneration?: number,
 	): void {
@@ -7139,7 +7622,6 @@ export class KnomoView extends ItemView {
 			.catch(() => undefined)
 			.then(() => this.finishComposerSave(
 				settled,
-				fallbackTimeBuoyDates,
 				previousMemo,
 				commitGeneration,
 			));
@@ -7148,30 +7630,24 @@ export class KnomoView extends ItemView {
 
 	private async finishComposerSave(
 		settled: Promise<MemoSaveResult>,
-		fallbackTimeBuoyDates: readonly string[],
 		previousMemo: MemoRecord | null = null,
 		commitGeneration?: number,
 	): Promise<void> {
-		let timeBuoyDates = fallbackTimeBuoyDates;
+		const isCurrent = () => !this.trashViewClosed && (commitGeneration === undefined || commitGeneration === this.composerCommitGeneration);
 		try {
 			const result = await settled;
-			if (this.trashViewClosed) return;
-			timeBuoyDates = result.timeBuoyDates;
-			if (commitGeneration !== undefined && commitGeneration !== this.composerCommitGeneration) return;
-			await this.refreshPendingSave(result, previousMemo);
-		} catch {
-			if (!this.trashViewClosed && (commitGeneration === undefined || commitGeneration === this.composerCommitGeneration)) new Notice(t("catalog.savedRefreshPending"));
-		} finally {
-			if (!this.trashViewClosed) this.showTimeBuoySaveFeedback(timeBuoyDates);
+			if (!isCurrent()) return;
+			await this.refreshPendingSave(result, previousMemo, isCurrent);
+		} catch (error) {
+			if (isCurrent()) this.reportViewRefreshFailure(error, "save-settled");
 		}
 	}
 
 	private enqueueCatalogTaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): void {
 		const previous = this.taskUpdateQueues.get(memo.id) ?? Promise.resolve();
 		const queued = previous.catch(() => undefined).then(async () => {
-			const latestMemo = this.findMemoById(memo.id);
-			const targetMemo = latestMemo !== null && isCatalogMemoView(latestMemo) ? latestMemo : memo;
-			await this.handleCatalogTaskToggle(targetMemo, taskIndex, checked);
+			// 排队期间仍使用用户选中的 occurrence，由写入链校验原 observation。
+			await this.handleCatalogTaskToggle(memo, taskIndex, checked);
 		});
 		const settled = queued.catch(() => undefined).finally(() => {
 			if (this.taskUpdateQueues.get(memo.id) === settled) {
@@ -7183,39 +7659,42 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleCatalogTaskToggle(memo: MemoRecord, taskIndex: number, checked: boolean): Promise<void> {
-		let dailySaved = false;
+		let result: MemoSaveResult;
 		try {
-			const result = await this.memoCommandService.toggleTask(await this.resolveCatalogMemo(memo), taskIndex, checked);
-			dailySaved = result.status === "saved";
-			await this.refreshPendingSave(result, memo);
+			result = await this.memoCommandService.toggleTask(await this.resolveCatalogMemo(memo), taskIndex, checked);
 		} catch {
-			if (dailySaved) {
-				new Notice(t("catalog.savedRefreshPending"));
-				return;
-			}
+			if (this.trashViewClosed) return;
 			this.memoMarkdownRenderer.syncTaskCheckboxesForMemo([this.cardFlowEl, this.mobileSearchResultsEl], memo);
 			new Notice(t("task.updateFailed"));
+			return;
 		}
+		await this.refreshPendingSave(result, memo);
 	}
 
-	private async refreshPendingSave(result: MemoSaveResult, previousMemo: MemoRecord | null = null): Promise<void> {
+	private async refreshPendingSave(result: MemoSaveResult, previousMemo: MemoRecord | null = null, isCurrent = () => !this.trashViewClosed): Promise<void> {
 		if (!result.localRefreshPending || this.trashViewClosed) return;
-		await this.presentationChangeQueue;
-		if (this.trashViewClosed) return;
+		const generation = this.confirmedPresentationGeneration ?? 0;
+		const context = this.getPageFeedbackContext();
+		const valid = () => isCurrent() && !this.trashViewClosed && generation === (this.confirmedPresentationGeneration ?? 0)
+			&& context === this.getPageFeedbackContext();
+		try { await this.presentationChangeQueue; }
+		catch (error) { if (valid()) logContinuationFailure("save", "presentation-queue", error, generation); }
+		if (!valid()) return;
 		const handle = previousMemo?.catalog?.observationHandle;
-		if (handle) {
-			// 成功提交由广播更新；失败回退只清除原版本，迟到结果不能清除较新的展示。
-			const cached = [...this.memos, ...(this.randomReunionController.getSnapshot().memos ?? []),
-				...this.shuffleDayController.getSnapshot().memos, ...this.timeBuoyViewController.getMemos(),
-				...(this.catalogTodayTimeBuoys?.today.map(item => item.memo) ?? [])];
-			const changes = new Map<string, MemoRecord | null>(cached
-				.filter(memo => memo.dailyRef.path === handle.sourcePath
-					&& memo.catalog?.observationHandle.sourceRevision === handle.sourceRevision)
-				.map(memo => [memo.id, null]));
-			if (changes.size > 0) this.applyCachedMemoChanges(changes);
-		}
-		await this.refresh();
-		if (!this.trashViewClosed) new Notice(t("catalog.savedRefreshPending"));
+		let stage = "state-apply";
+		try {
+			if (handle) {
+				// 成功提交由广播更新；失败回退只清除原版本，迟到结果不能清除较新的展示。
+				const cached = this.getCachedMemos();
+				const changes = new Map<string, MemoRecord | null>(cached
+					.filter(memo => memo.dailyRef.path === handle.sourcePath
+						&& memo.catalog?.observationHandle.sourceRevision === handle.sourceRevision)
+					.map(memo => [memo.id, null]));
+				if (changes.size > 0) this.applyCachedMemoChanges(changes);
+			}
+			stage = "refresh";
+			await this.refresh();
+		} catch (error) { if (valid()) this.reportViewRefreshFailure(error, stage); }
 	}
 
 	private findMemoForTaskCheckbox(input: HTMLInputElement): MemoRecord | null {
@@ -7223,7 +7702,7 @@ export class KnomoView extends ItemView {
 		if (memoId === null) {
 			return null;
 		}
-		return this.findMemoById(memoId);
+		return this.findMemoById(memoId, this.getMemoSurface(input));
 	}
 
 	private handleMarkdownInternalLinkHover(event: MouseEvent): void {
@@ -7274,7 +7753,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private getImageSourcePath(): string | null {
-		if (!this.getDailyNotesStatus().enabled || !this.isComposerCreationAvailable()) return null;
+		if (!this.getDailyNotesStatus().enabled) return null;
 		if (this.editingMemo && !(this.app.vault.getAbstractFileByPath(this.editingMemo.dailyRef.path) instanceof TFile)) return null;
 		return this.editingMemo?.dailyRef.path ?? this.getTodayDailyNotePath();
 	}
@@ -7323,8 +7802,4 @@ function isTimeBuoyTab(value: string | null): value is TimeBuoyTab {
 
 function isTimeBuoyTabNavigationKey(key: string): boolean {
 	return key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End";
-}
-
-function catalogCoverageKey(coverage: CatalogCoverage | null): string {
-	return JSON.stringify(coverage == null ? null : [coverage.kind, coverage.configurationComplete, coverage.coveredFromDate, coverage.pendingFileCount, coverage.coveredFileCount, coverage.totalFileCount]);
 }

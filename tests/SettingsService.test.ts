@@ -60,6 +60,38 @@ test("时间流仅本地保存，关闭重载保留且失败不发布新值", as
 	assert.equal(service.getSettings().recentTimeFlowEnabled, true);
 });
 
+test("减少玻璃效果作为设备偏好保存，重载保留且失败不发布，不写 Vault 配置", async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: { ...createSettings(), reduceGlassEffects: true } });
+	let local: unknown = null;
+	Object.assign(plugin.app, {
+		loadLocalStorage: () => local,
+		saveLocalStorage: (_key: string, value: unknown) => { local = value; },
+	});
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, false, "忽略 Vault 中的设备偏好");
+	let changes = 0;
+	service.onChanged(() => changes++);
+	await service.updateSettings({ reduceGlassEffects: true });
+	assert.equal(plugin.saveCalls, 0);
+	assert.equal(changes, 1);
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, true);
+	const otherDevice = new SettingsService((await createPlugin({}, plugin.savedData)) as never);
+	await otherDevice.loadSettings();
+	assert.equal(otherDevice.getSettings().reduceGlassEffects, false);
+	Object.assign(plugin.app, { saveLocalStorage: () => { throw new Error("local write failed"); } });
+	await assert.rejects(service.updateSettings({ reduceGlassEffects: false }));
+	assert.equal(service.getSettings().reduceGlassEffects, true);
+	local = { reduceGlassEffects: "true" };
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, false);
+	Object.assign(plugin.app, { loadLocalStorage: () => { throw new Error("local read failed"); } });
+	await service.loadSettings();
+	assert.equal(service.getSettings().reduceGlassEffects, false);
+});
+
 test("enables Time Buoy by default when no setting was persisted", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const legacySettings = { ...createSettings() } as Partial<KnomoSettings>;
@@ -218,47 +250,6 @@ test("Monthly folder settings use the final migration entry", async () => {
 	await service.migrateMonthlyMemoFolder("Archive/Knomo");
 
 	assert.equal(service.getSettings().monthlyMemoFolder, "Archive/Knomo");
-});
-
-test("Monthly filename migration derives periods from projection files and creates no backup", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const plugin = await createPlugin({
-		"Memos/Memos-2026-05.md": "# projection",
-		"Memos/notes.md": "# ordinary note",
-		"Memos/_knomo-system/indexes/memo-index-2026-05.json": "legacy index",
-	}, { settings: createSettings() });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-	const rebuilt: string[][] = [];
-
-	const result = await service.migrateMonthlyMemoFileFormat(
-		"Archive-YYYY-MM.md",
-		async (periods) => { rebuilt.push([...periods]); },
-	);
-
-	assert.equal(result.status, "migrated");
-	assert.deepEqual(result.plan.periods, ["2026-05"]);
-	assert.deepEqual(rebuilt, [["2026-05"]]);
-	assert.equal(service.getSettings().monthlyMemoFileFormat, "Archive-YYYY-MM.md");
-	assert.equal(plugin.vault.exists("Memos/Memos-2026-05.md"), true);
-	assert.equal(plugin.vault.exists("Memos/_knomo-system/indexes/memo-index-2026-05.json"), true);
-});
-
-test("restores staged Monthly settings when projection rebuild fails", async () => {
-	const { SettingsService } = await loadSettingsService();
-	const plugin = await createPlugin({
-		"Memos/Memos-2026-05.md": "# projection",
-	}, { settings: createSettings() });
-	const service = new SettingsService(plugin as never);
-	await service.loadSettings();
-
-	await assert.rejects(() => service.migrateMonthlyMemoFileFormat(
-		"Archive-YYYY-MM.md",
-		async () => { throw new Error("projection failed"); },
-	), /projection failed/u);
-
-	assert.equal(service.getSettings().monthlyMemoFileFormat, "Memos-YYYY-MM.md");
-	assert.equal(plugin.saveCalls, 0);
 });
 
 test("keeps runtime settings unchanged when persistence fails", async () => {

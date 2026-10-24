@@ -193,12 +193,14 @@ test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追
 	};
 	const restored = await f.service.restore(deleted.snapshotId);
 	assert.equal(restored.state, "restored_cleanup_pending");
+	assert.equal(f.service.isRestoreCleanupPending(deleted.snapshotId), true);
 	assert.match(restored.message!, /正文已恢复|Content restored/u);
 	const calls = f.catalog.length;
 	f.vault.replace(PATH, `later edit\n${f.vault.read(PATH)}`);
 	const content = f.vault.read(PATH);
 	f.vault.app.vault.process = process;
 	assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+	assert.equal(f.service.isRestoreCleanupPending(deleted.snapshotId), false);
 	assert.equal(f.vault.read(PATH), content);
 	assert.equal(f.catalog.length, calls);
 });

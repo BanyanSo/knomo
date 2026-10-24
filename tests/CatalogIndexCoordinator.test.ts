@@ -910,6 +910,7 @@ test("手动刷新按文件 revision 返回真实 added、updated、deleted 和 
 		assert.equal(changed.deleted, 1);
 		assert.equal(changed.failed, 0);
 		assert.equal(changed.scannedFiles, 2);
+		assert.deepEqual(coordinator.getScanSnapshot(), { state: "idle", failedFileCount: 0 });
 
 		fixture.setFile("Journal/2026-08-23.md", "## Memos\n- 09:00 unreadable", 30);
 		fixture.failRead("Journal/2026-08-23.md");
@@ -917,6 +918,7 @@ test("手动刷新按文件 revision 返回真实 added、updated、deleted 和 
 		assert.equal(failed.failed, 1);
 		assert.equal(failed.errors.length, 1);
 		assert.match(failed.errors[0] ?? "", /read failed/u);
+		assert.deepEqual(coordinator.getScanSnapshot(), { state: "waiting-retry", failedFileCount: 1 });
 	} finally {
 		fixture.unload();
 	}

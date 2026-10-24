@@ -19,7 +19,24 @@ test("filters random reunion candidates lightly", () => {
 		makeMemo("deleted", { createdAt: "2026-05-16T09:00:00", contentSnapshot: "这条内容足够长", status: "deleted" }),
 	];
 
-	assert.deepEqual(filterRandomReunionCandidates(memos, { today }).map((memo) => memo.id), ["valid"]);
+	assert.deepEqual(filterRandomReunionCandidates(memos, { today }).map((memo) => memo.id), ["valid", "short"]);
+});
+
+test("短文本、归档路径和媒体可入选，空格式与显式排除仍被过滤", () => {
+	const memos = [
+		makeMemo("short", { contentSnapshot: "好" }),
+		makeMemo("archive", { sourcePath: "Archive/2026-05-01.md", contentSnapshot: "好" }),
+		makeMemo("nested-template", { sourcePath: "Daily/Template/a.md" }),
+		makeMemo("empty", { contentSnapshot: " \n\t" }),
+		makeMemo("format", { contentSnapshot: "** ~~ > --- ```" }),
+		makeMemo("block", { contentSnapshot: "^memo-id" }),
+		makeMemo("archived", { tags: ["已归档/日记"] }),
+		makeMemo("template", { sourcePath: "template\\a.md" }),
+		makeMemo("image", { contentSnapshot: "![[photo.png]]", images: [{ path: "photo.png", altText: "", syntax: "obsidian_embed" }] }),
+		makeMemo("link", { contentSnapshot: "[[Note]]", links: [{ target: "Note", displayText: null, syntax: "wiki_link" }] }),
+	];
+	assert.deepEqual(filterRandomReunionCandidates(memos, { today: new Date(2026, 4, 21) }).map(memo => memo.id),
+		["short", "archive", "nested-template", "image", "link"]);
 });
 
 test("filters bilingual default blacklist tags without treating archive as archived", () => {
@@ -92,7 +109,7 @@ test("回看 ISO 跨 UTC 午夜、纯日期和读取层可接受的日期形式�
 	}
 });
 
-test("准入保留图片与链接例外、短文本门槛和黑名单，未来日期排除", () => {
+test("准入保留图片、链接和短文本，黑名单与未来日期仍被排除", () => {
 	const memos = [
 		makeMemo("image", { contentSnapshot: "![[a.png]]", images: [{ path: "a.png", altText: "", syntax: "obsidian_embed" }] }),
 		makeMemo("wiki", { contentSnapshot: "[[a]]", links: [{ target: "a", displayText: null, syntax: "wiki_link" }] }),
@@ -101,7 +118,7 @@ test("准入保留图片与链接例外、短文本门槛和黑名单，未来�
 		makeMemo("blocked", { tags: ["#Draft/work"], images: [{ path: "a.png", altText: "", syntax: "obsidian_embed" }] }),
 		makeMemo("future", { createdAt: "2026-05-22T09:00:00" }),
 	];
-	assert.deepEqual(filterRandomReunionCandidates(memos, { today: new Date(2026, 4, 21) }).map(memo => memo.id), ["image", "wiki", "markdown"]);
+	assert.deepEqual(filterRandomReunionCandidates(memos, { today: new Date(2026, 4, 21) }).map(memo => memo.id), ["image", "wiki", "markdown", "short"]);
 });
 
 test("实际重逢按权重无放回抽样，支持零数量", async () => {

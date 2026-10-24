@@ -1,9 +1,13 @@
 export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-time-buoy" | "insert-list" | "insert-numbered-list";
-export type MemoAction = "edit" | "reference" | "open-daily" | "copy-text" | "copy-link" | "delete" | "mark-reviewed";
+export type MemoAction = "edit" | "reference" | "open-daily" | "view-day" | "copy-text" | "copy-link" | "delete" | "mark-reviewed";
 export type TrashAction = "restore" | "purge";
 export type KnomoSimpleAction =
 	| "toggle-card-menu"
 	| "refresh-random-reunion"
+	| "refresh-shuffle-day"
+	| "random-day-back"
+	| "retry-random-day"
+	| "clear-trash"
 	| "load-more"
 	| "load-more-mobile-search"
 	| "reset-list-state"
@@ -68,6 +72,10 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 	if (
 		action === "toggle-card-menu" ||
 		action === "refresh-random-reunion" ||
+		action === "refresh-shuffle-day" ||
+		action === "random-day-back" ||
+		action === "retry-random-day" ||
+		action === "clear-trash" ||
 		action === "load-more" ||
 		action === "load-more-mobile-search" ||
 		action === "reset-list-state" ||
@@ -149,6 +157,7 @@ export function isMemoAction(action: string): action is MemoAction {
 		return action === "edit" ||
 		action === "reference" ||
 		action === "open-daily" ||
+		action === "view-day" ||
 		action === "copy-text" ||
 		action === "copy-link" ||
 		action === "delete" ||

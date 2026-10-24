@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EditorSelection } from "@codemirror/state";
 import type { KnomoQuickCommand } from "../src/ui/KnomoQuickCommands";
 import type { CatalogFeatureFilter } from "../src/types/catalogView";
 import { KnomoPopupState } from "../src/ui/KnomoPopupState";
@@ -10,11 +11,11 @@ async function harness() {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const events: string[] = [];
-	const editorState = { selection: { anchor: 2, head: 5 }, history: ["before", "draft"] };
+	const editorState = { selection: EditorSelection.single(2, 5), history: ["before", "draft"] };
 	const input = {
 		get value() { return "unfinished draft"; },
 		set value(_text: string) { assert.fail("命令不得重设编辑器值"); },
-		composer: { composing: false, view: { state: editorState, focus: () => { events.push("focus"); } } },
+		composer: { composing: false, capture: () => ({ valid: () => true, sameSession: () => true }), view: { state: editorState, focus: () => { events.push("focus"); } } },
 	};
 	const state = new KnomoViewStateController();
 	const view = Object.assign(Object.create(KnomoView.prototype), {
@@ -81,7 +82,8 @@ test("新建命令在桌面与移动端打开同一草稿，重复执行不改�
 		assert.equal(h.view.composerOpen, true);
 		assert.equal(h.input.value, "unfinished draft");
 		assert.equal(h.input.composer.view.state, h.editorState);
-		assert.deepEqual(h.editorState, { selection: { anchor: 2, head: 5 }, history: ["before", "draft"] });
+		assert.deepEqual([h.editorState.selection.main.anchor, h.editorState.selection.main.head], [2, 5]);
+		assert.deepEqual(h.editorState.history, ["before", "draft"]);
 		assert.equal(h.view.suspendedCreate, suspended);
 		assert.deepEqual(h.events, ["focus", "focus"]);
 	}
@@ -180,7 +182,7 @@ test("视图就绪只在初始化成功后报告，失败与关闭不会报告�
 		let recoveries = 0;
 		Object.assign(h.view, {
 			app: { loadLocalStorage: () => null, saveLocalStorage: () => undefined },
-			containerEl: { doc: new EventTarget(), win: new EventTarget() },
+			containerEl: { doc: new EventTarget(), win: Object.assign(new EventTarget(), { setTimeout, clearTimeout }) },
 			register: (callback: () => void) => cleanup.push(callback),
 			recoverMobileViewFocus: () => { recoveries++; },
 			registerDomEvent: () => undefined,

@@ -9,7 +9,8 @@ import type { KnomoSettings, MonthlyDateOrder } from "../types/settings";
 import { translate } from "../i18n";
 import { normalizeVaultPath } from "../utils/path";
 import { MarkdownBlockService } from "./MarkdownBlockService";
-import { canonicalJson, sha256Bytes, sha256Text } from "./CanonicalJson";
+import { canonicalJson } from "./CanonicalJson";
+import { sha256Bytes, sha256Text } from "../utils/sha256";
 import { CooperativeYieldController, stableSortCooperatively } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 

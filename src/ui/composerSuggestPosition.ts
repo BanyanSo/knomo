@@ -8,6 +8,19 @@ export function getTextareaCharacterRect(inputEl: HTMLElement, index: number): D
 	return (inputEl as ComposerInput).composer.coordsAtPos(index);
 }
 
+// 桌面优先在光标下方展开；空间不足时选上方，长列表在浮层内滚动。
+export function getDesktopSuggestionPosition(anchor: Pick<DOMRect, "top" | "bottom">, contentHeight: number,
+	viewportTop: number, viewportBottom: number): { top: number; maxHeight: number } {
+	const requiredHeight = Math.min(240, contentHeight > 0 ? contentHeight : 240);
+	const below = Math.max(0, viewportBottom - 12 - anchor.bottom);
+	const above = Math.max(0, anchor.top - viewportTop - 12);
+	const placeBelow = below >= requiredHeight || below >= above;
+	const maxHeight = Math.min(240, placeBelow ? below : above);
+	const height = Math.min(requiredHeight, maxHeight);
+	const top = placeBelow ? anchor.bottom : anchor.top - height;
+	return { top: clamp(top, viewportTop + 12, Math.max(viewportTop + 12, viewportBottom - 12 - height)), maxHeight };
+}
+
 export function measureSuggestionContentHeight(inputEl: HTMLElement, container: HTMLElement, itemSelector: string): number {
 	const win = inputEl.ownerDocument.defaultView;
 	if (win === null) {
@@ -19,6 +32,12 @@ export function measureSuggestionContentHeight(inputEl: HTMLElement, container: 
 		parseCssPixels(computed.paddingBottom) +
 		parseCssPixels(computed.borderTopWidth) +
 		parseCssPixels(computed.borderBottomWidth);
+	const list = container.querySelector<HTMLElement>(":scope > .knomo-suggest-list");
+	if (list !== null) {
+		const listStyle = win.getComputedStyle(list);
+		return Math.ceil(list.scrollHeight + verticalInset
+			+ parseCssPixels(listStyle.borderTopWidth) + parseCssPixels(listStyle.borderBottomWidth));
+	}
 	const items = Array.from(container.querySelectorAll<HTMLElement>(itemSelector));
 	if (items.length === 0) {
 		return Math.ceil(container.scrollHeight || container.getBoundingClientRect().height);
@@ -43,6 +62,10 @@ export function measureSuggestionContentWidth(
 		return Math.ceil(container.scrollWidth || container.getBoundingClientRect().width);
 	}
 	host.addClass("knomo-suggest-measure-host");
+	// 保留原生列表的祖先结构，让主题留白与测量副本的继承一致。
+	const list = container.querySelector<HTMLElement>(":scope > .knomo-suggest-list");
+	const cloneList = list === null ? null : asHTMLElement(list.cloneNode(false), doc);
+	if (cloneList !== null) host.appendChild(cloneList);
 	const clones: HTMLElement[] = [];
 	for (const item of items) {
 		const clone = asHTMLElement(item.cloneNode(true), doc);
@@ -50,7 +73,7 @@ export function measureSuggestionContentWidth(
 			continue;
 		}
 		clone.addClass("knomo-suggest-measure-item");
-		host.appendChild(clone);
+		(cloneList ?? host).appendChild(clone);
 		clones.push(clone);
 	}
 	let width = 0;
@@ -66,11 +89,16 @@ export function measureSuggestionContentWidth(
 		return Math.ceil(width);
 	}
 	const computed = win.getComputedStyle(container);
-	const horizontalInset =
+	let horizontalInset =
 		parseCssPixels(computed.paddingLeft) +
 		parseCssPixels(computed.paddingRight) +
 		parseCssPixels(computed.borderLeftWidth) +
 		parseCssPixels(computed.borderRightWidth);
+	if (list !== null) {
+		const listStyle = win.getComputedStyle(list);
+		horizontalInset += parseCssPixels(listStyle.paddingLeft) + parseCssPixels(listStyle.paddingRight)
+			+ parseCssPixels(listStyle.borderLeftWidth) + parseCssPixels(listStyle.borderRightWidth);
+	}
 	const scrollbarWidth = options.includeScrollbarWidth === true ? measureScrollbarWidth(doc) : 0;
 	return Math.ceil(width + horizontalInset + scrollbarWidth + (options.extraWidth ?? 2));
 }

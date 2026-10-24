@@ -80,7 +80,7 @@ export interface MobileComposerControllerOptions {
 	getCardFlowScrollTop: () => number | null;
 	registerBackdropClick: (element: HTMLElement, handler: (event: MouseEvent) => void) => void;
 	closeComposerKeepingDraft: () => void;
-	focusInputNow: (shouldResize?: boolean, shouldQueueViewport?: boolean) => void;
+	focusInputNow: (shouldResize?: boolean, shouldQueueViewport?: boolean, moveToEnd?: boolean) => void;
 	resizeInput: () => void;
 	syncRootState: () => void;
 	syncComposerMode: () => void;
@@ -238,6 +238,7 @@ export class MobileComposerController {
 	open(): void {
 		const win = this.options.getWindow();
 		const reopening = this.mobileComposerPhase === "closing";
+		const moveToEnd = this.options.getLayout() === "mobile" && (!this.options.isComposerOpen() || reopening);
 		this.cancelKeyboardDismissRequest();
 		if (this.options.getLayout() === "mobile") this.setKeyboardTracking(true);
 		if (this.options.getLayout() === "mobile" && !this.options.isComposerOpen()) {
@@ -280,7 +281,7 @@ export class MobileComposerController {
 		this.revealMobileComposer();
 		this.mobileComposerPhase = "focusing";
 		this.startViewportTracking();
-		this.options.focusInputNow(false, false);
+		this.options.focusInputNow(false, false, moveToEnd);
 		this.queueViewportUpdate();
 		this.scheduleKeyboardViewportFallback();
 		this.scheduleOpenRootSync();
@@ -421,6 +422,21 @@ export class MobileComposerController {
 	}
 
 	stopViewportTracking(clearMetrics = true): void {
+		const hasTracking = this.mobileVisualViewport !== null || this.mobileVirtualKeyboard !== null
+			|| this.mobileVirtualKeyboardPreviousOverlaysContent !== null
+			|| this.mobileWindowResizeHandler !== null || this.mobileOrientationChangeHandler !== null
+			|| this.mobileCapacitorKeyboardShowHandler !== null || this.mobileCapacitorKeyboardHideHandler !== null
+			|| this.mobileKeyboardDockFrameId !== null || this.mobileKeyboardDockStopTimerId !== null
+			|| this.mobileKeyboardViewportFallbackTimerId !== null || this.mobileToolbarAnchorFrameId !== null
+			|| this.keyboardTracking;
+		const hasMetrics = this.mobileKeyboardHeight !== 0 || this.mobileComposerBottomOffset !== 0
+			|| this.mobileComposerViewportBaselineHeight !== null || this.mobileComposerDockTop !== null
+			|| this.mobileComposerDockSource !== "fallback" || this.mobileComposerLayerBottom !== null
+			|| this.mobileCapacitorKeyboardHeight !== null || this.mobileComposerToolbarAnchorInset !== null
+			|| this.mobileComposerToolbarAnchorBottom !== null || this.mobileComposerToolbarAnchorSource !== "unknown"
+			|| this.mobileComposerToolbarWrapperBottom !== null;
+		// 稳定停止时不重复清理或测量；实际布局变化由既有布局和输入入口更新。
+		if (!hasTracking && (!clearMetrics || !hasMetrics)) return;
 		const win = this.options.getWindow();
 		if (this.mobileVisualViewport !== null && this.mobileVisualViewportHandler !== null) {
 			this.mobileVisualViewport.removeEventListener("resize", this.mobileVisualViewportHandler);
@@ -682,6 +698,8 @@ export class MobileComposerController {
 		} else {
 			attachMobileComposerLayer(this.options.getDocument(), this.mobileComposerLayerEl);
 		}
+		// body 浮层不能继承原页面的设备偏好，沿现有挂载流程同步样式状态。
+		this.mobileComposerLayerEl.toggleClass("knomo-reduce-glass", this.options.getRootEl()?.hasClass("knomo-reduce-glass") === true);
 		if (this.mobileComposerContentEl === null) {
 			return;
 		}
@@ -735,24 +753,7 @@ export class MobileComposerController {
 	}
 
 	private removeLayer(): void {
-		this.restoreLayer();
-		this.clearResizeFrame();
-		this.stopKeyboardDockTracking();
-		this.clearToolbarAnchorFrame();
-		this.mobileComposerViewportBaselineHeight = null;
-		this.mobileComposerDockTop = null;
-		this.mobileComposerDockSource = "fallback";
-		this.mobileComposerLayerBottom = null;
-		this.mobileCapacitorKeyboardHeight = null;
-		this.mobileComposerRevealed = false;
-		this.mobileComposerInputMaxHeight = null;
-		this.mobileComposerToolbarAnchorInset = null;
-		this.mobileComposerToolbarAnchorBottom = null;
-		this.mobileComposerToolbarAnchorSource = "unknown";
-		this.mobileComposerToolbarWrapperBottom = null;
-		this.setComposerBottomOffset(0);
-		this.clearLayerState();
-		this.mobileComposerLayerEl?.detach();
+		this.detachLayer();
 		this.mobileComposerLayerEl = null;
 		this.mobileComposerContentEl = null;
 		this.mobileComposerBackdropEl = null;

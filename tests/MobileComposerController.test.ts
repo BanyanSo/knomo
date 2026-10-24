@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { MobileComposerController } from "../src/ui/MobileComposerController";
+import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("prepares a persistent mobile layer before opening", () => {
 	const harness = createHarness();
@@ -13,6 +15,25 @@ test("prepares a persistent mobile layer before opening", () => {
 	assert.equal(layer?.hasClass("is-active"), false);
 	assert.equal(layer?.attrs.get("aria-hidden"), "true");
 	assert.equal(harness.doc.body.children.length, 1);
+});
+
+test("body Composer inherits the current glass preference on first mount, reuse and reopening", () => {
+	const harness = createHarness();
+	harness.root.toggleClass("knomo-reduce-glass", true);
+	harness.controller.prepare();
+	const layer = harness.getLayer();
+	assert.equal(layer?.hasClass("knomo-reduce-glass"), true);
+	harness.root.toggleClass("knomo-reduce-glass", false);
+	harness.controller.syncLayer();
+	assert.equal(harness.getLayer(), layer);
+	assert.equal(layer?.hasClass("knomo-reduce-glass"), false);
+	harness.controller.open();
+	harness.controller.closeKeepingDraft();
+	harness.root.toggleClass("knomo-reduce-glass", true);
+	harness.controller.open();
+	assert.equal(harness.getLayer(), layer);
+	assert.equal(layer?.hasClass("knomo-reduce-glass"), true);
+	assert.equal(harness.composer.parentElement, harness.getContent());
 });
 
 test("does not prepare a composer layer for desktop layouts", () => {
@@ -56,6 +77,24 @@ test("opens the prepared mobile composer and focuses synchronously", () => {
 	harness.win.flushAnimationFrames();
 	assert.equal(harness.syncRootCalls, 1);
 	assert.deepEqual(harness.syncRootLayerOpenStates, [true]);
+});
+
+test("requests the draft end only when expanding or reopening a closing mobile composer", () => {
+	const focusIntents: Array<boolean | undefined> = [];
+	const h = createHarness("mobile", { onFocusInput: moveToEnd => focusIntents.push(moveToEnd) });
+	h.controller.prepare();
+	h.controller.open();
+	h.controller.open();
+	h.controller.closeKeepingDraft();
+	assert.equal(h.controller.getPhase(), "closing");
+	assert.equal(h.getComposerOpen(), true, "退出过渡结束前，打开标记仍为 true");
+	h.controller.open();
+	h.controller.closeKeepingDraft();
+	h.win.flushAllTimers();
+	assert.equal(h.controller.getPhase(), "closed");
+	h.controller.open();
+	assert.deepEqual(focusIntents, [true, false, true, true]);
+	h.controller.dispose();
 });
 
 test("positions the mobile composer from the toolbar anchor inset", () => {
@@ -535,7 +574,135 @@ test("parallel exit keeps background work paused until completion or disposal", 
 	}
 });
 
-function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { onKeyboardTrackingChange?: (busy: boolean) => void; onFocusInput?: () => void } = {}) {
+test("稳定关闭的 Composer 连续十次真实 View root 同步不测量或重写图层指标", async context => {
+	const h = createHarness();
+	const view = await createRootView(h);
+	try {
+		h.controller.prepare();
+		view.syncRootState();
+		let measurements = 0, reads = 0, writes = 0;
+		const measure = h.controller.updateMeasurements.bind(h.controller);
+		h.controller.updateMeasurements = () => { measurements++; return measure(); };
+		const rect = h.container.getBoundingClientRect.bind(h.container);
+		h.container.getBoundingClientRect = () => { reads++; return rect(); };
+		const layer = h.getLayer()!;
+		const setCss = layer.setCssProps.bind(layer);
+		layer.setCssProps = props => { writes++; setCss(props); };
+		for (let index = 0; index < 10; index++) view.syncRootState();
+		assert.equal(measurements, 0);
+		assert.equal(reads, 0);
+		assert.equal(writes, 0);
+		context.diagnostic(`10 closed root syncs: ${measurements} measurements, ${reads} container reads, ${writes} layer metric writes`);
+		assert.ok(h.controller.getMaxInputHeight() > 0);
+		assert.equal(measurements, 0);
+	} finally { h.controller.dispose(); }
+});
+
+test("关闭后实际布局、引用和工具栏变化通过既有 View 入口更新，桌面切换后仍可重开", async () => {
+	const h = createHarness();
+	const view = await createRootView(h);
+	try {
+		h.controller.prepare();
+		view.syncRootState();
+		const initial = h.controller.getMaxInputHeight();
+		h.win.innerHeight = h.win.visualViewport.height = 480;
+		view.syncLayoutMeasurements();
+		const rotated = h.controller.getMaxInputHeight();
+		assert.ok(rotated < initial);
+		h.composerBar.offsetHeight += 36;
+		view.syncComposerMode();
+		assert.equal(h.controller.getMaxInputHeight(), rotated - 36);
+		h.referencePreview.toggleClass("is-visible", true);
+		h.referencePreview.offsetHeight = 40;
+		view.syncComposerMode();
+		assert.equal(h.controller.getMaxInputHeight(), rotated - 76);
+		h.setLayout("desktop-wide"); view.currentLayout = "desktop-wide";
+		view.syncRootState();
+		assert.equal(h.composer.parentElement, h.home);
+		h.setLayout("mobile"); view.currentLayout = "mobile";
+		view.syncLayoutMeasurements();
+		assert.equal(h.controller.isLayered(), true);
+		h.controller.open();
+		h.win.flushAnimationFrameCycles(3);
+		assert.equal(h.controller.getPhase(), "open");
+		assert.equal(h.win.visualViewport.listenerCount("resize"), 1);
+	} finally { h.controller.dispose(); }
+});
+
+test("实际关闭会清除键盘指标并保留一次归一化更新，此后停止跟踪不再测量", () => {
+	const h = createHarness();
+	try {
+		h.controller.prepare(); h.controller.open(); h.win.flushAnimationFrameCycles(3);
+		h.win.visualViewport.height = 480;
+		h.win.visualViewport.dispatchEvent("resize"); h.win.flushAnimationFrameCycles(3);
+		assert.equal(h.controller.isKeyboardOpen(), true);
+		h.controller.closeKeepingDraft();
+		h.win.flushAllTimers();
+		assert.equal(h.controller.getPhase(), "closed");
+		assert.equal(h.controller.isKeyboardOpen(), false);
+		assert.equal(h.win.visualViewport.listenerCount("resize"), 0);
+		assert.equal(h.getLayer()?.style.values.get("--knomo-keyboard-height"), "0px");
+		let measurements = 0;
+		const measure = h.controller.updateMeasurements.bind(h.controller);
+		h.controller.updateMeasurements = () => { measurements++; return measure(); };
+		for (let index = 0; index < 10; index++) h.controller.syncViewportTracking();
+		assert.equal(measurements, 0);
+		h.controller.open(); h.win.flushAnimationFrameCycles(3);
+		assert.ok(measurements > 0);
+		assert.equal(h.win.visualViewport.listenerCount("resize"), 1);
+	} finally { h.controller.dispose(); }
+});
+
+test("detach 保留可复用图层和编辑器，remove 清空引用且下次 prepare 创建新图层", () => {
+	const h = createHarness();
+	const editor = Object.assign(h.input, { value: "保留草稿", selectionStart: 2, selectionEnd: 3 });
+	try {
+		h.controller.prepare();
+		const layer = h.controller.getLayerEl();
+		h.controller.open(); h.win.flushAnimationFrameCycles(3);
+		h.controller.closeKeepingDraft(); h.win.flushAllTimers();
+		h.setLayout("desktop-wide"); h.controller.syncLayer();
+		assert.equal(h.controller.getLayerEl(), layer);
+		assert.equal(h.composer.parentElement, h.home);
+		assert.equal(h.getLayer(), null);
+		h.setLayout("mobile"); h.controller.syncLayer();
+		assert.equal(h.controller.getLayerEl(), layer);
+		assert.equal(h.controller.isLayered(), true);
+		assert.equal(h.input, editor);
+		assert.deepEqual([editor.value, editor.selectionStart, editor.selectionEnd], ["保留草稿", 2, 3]);
+		h.controller.dispose();
+		assert.equal(h.controller.getLayerEl(), null);
+		assert.equal(h.composer.parentElement, h.home);
+		assert.equal(h.doc.body.children.length, 0);
+		assert.equal(h.win.visualViewport.listenerCount("resize"), 0);
+		h.controller.prepare();
+		assert.notEqual(h.controller.getLayerEl(), layer);
+		assert.equal(h.doc.body.children.length, 1);
+		assert.equal(h.input, editor);
+		assert.deepEqual([editor.value, editor.selectionStart, editor.selectionEnd], ["保留草稿", 2, 3]);
+	} finally { h.controller.dispose(); }
+});
+
+async function createRootView(h: ReturnType<typeof createHarness>) {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const view = Object.create(KnomoView.prototype);
+	Object.assign(view, {
+		rootEl: Object.assign(h.root, { findAll: () => [] }), currentLayout: "mobile",
+		viewStateController: new KnomoViewStateController(), popupState: { scopeMenuOpen: false },
+		mobileSearchController: { isOpen: false }, desktopSidebarStateController: { getSnapshot: () => ({ width: 200, collapsed: false }) },
+		settingsService: { getSettings: () => ({ mobileCompactMode: "off" }) },
+		mobileComposerController: h.controller, sidebarResizerEl: null, referencePreviewEl: null,
+		desktopDrawerFocus: { sync: () => {} }, timeBuoyPickerEl: null,
+	});
+	Object.defineProperty(view, "composerOpen", { get: () => h.getComposerOpen() });
+	for (const name of ["syncPageFeedback", "syncTooltipState", "syncManualRefreshButtonState", "syncMobileHeaderActions",
+		"syncMobileHeaderTitle", "syncMobileTopOffsets", "syncTitlePopoverPosition", "syncMobileSearchPage", "syncSearchControls",
+		"positionOpenCardMenus", "updateCurrentLayout", "resizeInput", "scheduleLocalDraft"]) view[name] = () => {};
+	return view;
+}
+
+function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { onKeyboardTrackingChange?: (busy: boolean) => void; onFocusInput?: (moveToEnd?: boolean) => void } = {}) {
 	const win = new FakeWindow();
 	const doc = new FakeDocument();
 	const root = new FakeElement("div");
@@ -580,9 +747,9 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		closeComposerKeepingDraft: () => {
 			closeDraftCalls += 1;
 		},
-		focusInputNow: () => {
+		focusInputNow: (_resize, _viewport, moveToEnd) => {
 			focusCalls += 1;
-			options.onFocusInput?.();
+			options.onFocusInput?.(moveToEnd);
 		},
 		resizeInput: () => undefined,
 		syncRootState: () => {
@@ -614,10 +781,12 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		home,
 		composer,
 		composerBar,
+		referencePreview,
 		input,
 		backdropHandlers,
 		syncRootLayerOpenStates,
 		controller,
+		setLayout: (next: "mobile" | "desktop-wide") => { layout = next; },
 		getComposerOpen: () => composerOpen,
 		getLayer: () => doc.body.children.find((child) => child.hasClass("knomo-mobile-composer-layer")) ?? null,
 		getBackdrop: () => {

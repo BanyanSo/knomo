@@ -8,6 +8,7 @@ import { findObservation, findAppendedObservation, getRawBlock, replaceObservati
 	type MarkdownCatalogCommitInput } from "./MarkdownMutationService";
 import { TrashSnapshotStore, assertVaultPath, type TrashOperationStore } from "./TrashSnapshotStore";
 import { buildDailyMemoPresentationChange } from "./DailyMemoPresentationChange";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
 export interface IndependentTrashOptions {
 	assertActive?: () => void;
@@ -59,6 +60,10 @@ export class IndependentTrashService {
 			return { snapshotId: snapshot.snapshotId, state: "deleted", observation: null,
 				catalogUpdatePending: await this.updateCatalog(prepared, undefined, observation) };
 		});
+	}
+
+	isRestoreCleanupPending(snapshotId: string): boolean {
+		return this.cleanupOnly.get(snapshotId)?.confirmed === true;
 	}
 
 	restore(snapshotId: string): Promise<TrashWriteResult> {
@@ -156,7 +161,8 @@ export class IndependentTrashService {
 				content: prepared.afterContent, parsed: prepared.after, insertedObservation: observation,
 				presentationChange: buildDailyMemoPresentationChange(prepared, deleted ?? null, observation ?? null) });
 			return false;
-		} catch {
+		} catch (error) {
+			logContinuationFailure("trash", "publication", error);
 			await this.options.refreshCatalogPaths([prepared.file.path]).catch(() => undefined);
 			return true;
 		}

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createCardMemo as makeMemo } from "./helpers/memoCardFixture";
 
 import type { MemoViewItem } from "../src/types/memoView";
 import {
@@ -304,6 +305,7 @@ test("移动 View 的实际重建入口经过其他筛选与空页后复用原�
 		deferMobileCardFlowRender: () => false, getInitialCardBatchSize: () => 30,
 		restoreCardFlowScrollTop() {}, resetTimeBuoyCardFlow() {},
 		getDirectCardElements: () => root.findAll(".knomo-card"), getCurrentCardFlowPresentation: () => ({}),
+		renderCardFlowHeaders: () => [],
 		cardImageLoadQueue: {
 			clear() {}, forget() {},
 			observe(request: CardImageLoadRequest) {
@@ -531,24 +533,4 @@ function makeImage(overrides: Partial<MemoPreviewImage> = {}): MemoPreviewImage 
 
 function assertRendered(rendered: RenderedMemoCardImages | null): asserts rendered is RenderedMemoCardImages {
 	assert.notEqual(rendered, null);
-}
-
-function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
-	return {
-		id: "memo-1",
-		createdAt: "2026-06-02T00:00:00+08:00",
-		updatedAt: "2026-06-02T00:00:00+08:00",
-		contentSnapshot: "memo",
-		contentHash: "hash",
-		status: "active",
-		tags: [],
-		links: [],
-		images: [],
-		dailyRef: {
-			path: "Daily/2026-06-02.md",
-			heading: null,
-			lineNumberHint: null,
-		},
-		...overrides,
-	};
 }

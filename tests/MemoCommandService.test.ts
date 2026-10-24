@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { App } from "obsidian";
+import { createDeferred } from "./helpers/deferred";
 
 import type { MemoObservation } from "../src/types/catalog";
 import { toTrashMemoItem } from "../src/types/memoView";
@@ -8,7 +9,7 @@ import type { MarkdownMutationService } from "../src/types/memoOperations";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
-test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失败不误报成功", async () => {
+test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失败不误报成功", async t => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -36,7 +37,12 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	const deleted = { items: (await trash.store.query()).items.map(toTrashMemoItem) };
 	assert.deepEqual(deleted.items.map((memo) => memo.snapshotId), ["s1", "s2"]);
 	assert.equal(deleted.items[0]!.createdAt, "2026-08-22T12:34");
-	await assert.rejects(() => command.restore(deleted.items[0]!), /正文已恢复|Content restored/u);
+	t.mock.method(read, "readMemoItems", async () => { throw new Error("readback unavailable"); });
+	const pendingResult = await command.restore(deleted.items[0]!);
+	assert.equal(pendingResult.status, "saved");
+	assert.equal("cleanupPending" in pendingResult && pendingResult.cleanupPending, true);
+	assert.equal(pendingResult.memo, null); assert.equal(pendingResult.localRefreshPending, true);
+	t.mock.restoreAll();
 	pending = false;
 	assert.equal((await command.restore(deleted.items[0]!)).status, "saved");
 	await command.purge(deleted.items[1]!);
@@ -107,6 +113,10 @@ test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async ()
 		markdownMutations,
 	);
 
+	await service.runWithMutationsPaused(async () => {
+		await assert.rejects(service.create("blocked during rebuild"), /basic data is being rebuilt/u);
+		assert.deepEqual(events, []);
+	});
 	const result = await service.create(observation.content);
 
 	assert.deepEqual(events, ["daily"]);
@@ -168,6 +178,80 @@ test("阶段化 create 在 Daily 提交后先完成 committed，只等待 Catalo
 	catalogGate.resolve(undefined);
 	await operation.settled;
 	assert.deepEqual(events, ["daily"]);
+});
+
+test("create、edit、task、reference 和 restore 按完整句柄定点接续，不分页回查大 Daily", async t => {
+	await ensureObsidianStub();
+	const { TFile } = await import("obsidian");
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	await catalog.open();
+	const observations = Array.from({ length: 451 }, (_, index) => makeObservation("Daily/2026-08-22.md", "2026-08-22", index + 1, "same memo"));
+	const observation = observations[0]!;
+	await catalog.replaceFile({ inventory: { sourcePath: observation.sourcePath, logicalDate: observation.logicalDate, mtime: 1, size: 451 },
+		sourceRevision: observation.sourceRevision, observations, parserVersion: 1, settingsFingerprint: "settings-1", auditedAt: 1 });
+	await store.setCoverage({ kind: "complete", coveredFromDate: observation.logicalDate, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+	const file = Object.assign(new TFile(), { path: observation.sourcePath });
+	const app = { vault: { getAbstractFileByPath: () => file }, fileManager: { generateMarkdownLink: () => "[[Daily/2026-08-22#^block]]" } } as unknown as App;
+	let writes = 0, lookups = 0, queries = 0;
+	const mutate = async () => { writes++; return mutationResult(observation); };
+	const service = new MemoCommandService(app, catalog, { ...makeCommandOptions(), getTrashService: () => ({
+		restore: async () => { writes++; return { state: "restored", observation, catalogUpdatePending: false }; },
+	} as unknown as import("../src/services/IndependentTrashService").IndependentTrashService) }, {
+		create: mutate, edit: mutate, toggleTask: mutate, createBlockReference: async () => ({ ...await mutate(), blockId: "block" }),
+	} as unknown as MarkdownMutationService);
+	const read = service.getReadService();
+	const item = (await read.readMemoItems([observation]))[0]!;
+	const readSnapshot = catalog.readObservationSnapshot.bind(catalog);
+	t.mock.method(catalog, "readObservationSnapshot", async (keys: readonly string[]) => { lookups += keys.length; return readSnapshot(keys); });
+	t.mock.method(read, "query", async () => { queries++; throw new Error("Save settle must not query pages."); });
+	for (const result of [await service.create("created"), await service.edit(item, "edited"), await service.toggleTask(item, 0, true),
+		await service.restore(toTrashMemoItem({ snapshotId: "restore", deletedAt: "2026-08-22T12:00:00Z", sourcePath: observation.sourcePath,
+			logicalDate: observation.logicalDate, section: "## Memos", rawBlock: "- 12:34 same memo" }))]) {
+		assert.equal(result.status, "saved");
+		assert.equal(result.localRefreshPending, false);
+		assert.deepEqual(result.memo?.observationHandle, item.observationHandle);
+	}
+	assert.equal((await service.createReferenceText(item)).localRefreshPending, false);
+	assert.equal(queries, 0);
+	assert.equal(lookups, 5, "定位读取量与 Daily Memo 数量无关");
+	assert.equal(writes, 5);
+});
+
+test("已提交 Daily 的定点接续拒绝缺失或不匹配句柄，读取失败仅提示本地待刷新", async t => {
+	await ensureObsidianStub();
+	const { MemoCommandService } = await import("../src/services/MemoCommandService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	for (const mismatch of ["sourcePath", "sourceRevision", "startLine", "endLine", "rawBlockHash", "unavailable"] as const) await t.test(mismatch, async t => {
+		const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+		await catalog.open();
+		const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "saved memo");
+		await seedCatalog(catalog, store, observation);
+		const returned = { ...observation };
+		if (mismatch === "sourcePath") returned.sourcePath = "Daily/missing.md";
+		if (mismatch === "sourceRevision") returned.sourceRevision = "b".repeat(64);
+		if (mismatch === "startLine") returned.startLine++;
+		if (mismatch === "endLine") returned.endLine++;
+		if (mismatch === "rawBlockHash") returned.rawBlockHash = "different";
+		let writes = 0, queries = 0;
+		const service = new MemoCommandService({} as App, catalog, makeCommandOptions(), {
+			create: async (input: { onDailyCommitted?: () => void }) => { writes++; input.onDailyCommitted?.(); return mutationResult(returned); },
+		} as unknown as MarkdownMutationService);
+		t.mock.method(service.getReadService(), "query", async () => { queries++; throw new Error("No page fallback."); });
+		if (mismatch === "unavailable") t.mock.method(catalog, "readObservationSnapshot", async () => { throw new Error("Catalog unavailable."); });
+		const operation = service.startCreate("saved memo");
+		await operation.dailyCommitted;
+		const result = await operation.settled;
+		assert.equal(result.status, "saved");
+		assert.equal(result.localRefreshPending, true);
+		assert.equal(result.memo, null);
+		assert.equal(writes, 1, "读取失败不能再次写入 Daily");
+		assert.equal(queries, 0, "不能以全文件查询重新绑定 occurrence");
+	});
 });
 
 function makeCommandOptions(): import("../src/services/MemoCommandService").MemoCommandServiceOptions {
@@ -247,13 +331,6 @@ function mutationResult(observation: MemoObservation | null) {
 	};
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 
 test("编辑器已更新但落盘未确认时，最终成功不能覆盖阶段拒绝并误清理草稿", async () => {

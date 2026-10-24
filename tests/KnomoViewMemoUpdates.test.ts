@@ -9,13 +9,34 @@ import type { MarkdownCatalogCommitInput } from "../src/services/MarkdownMutatio
 import type { DailyMemoPresentationChange, ConfirmedDailyMemoPresentation } from "../src/services/DailyMemoPresentationChange";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("日期详情接收真实 Daily 编辑、新建和删除广播，原重逢批次不补抽", async () => {
+	const h = await fixture();
+	const { ShuffleDayController } = await import("../src/ui/ShuffleDayController");
+	const detail = new ShuffleDayController({ loadSelectedDate: () => h.loadMemos(),
+		isShuffleDayActive: () => true, requestRender: () => {} });
+	Object.assign(h.view, { randomDayController: detail });
+	h.view.viewStateController.activeNav = "random";
+	await detail.openDate(DATE);
+	await h.edit(h.memos[0]!, "changed in day detail");
+	assert.deepEqual(detail.getSnapshot().memos.map(memo => memo.contentSnapshot), ["changed in day detail", "same", "same"]);
+	await h.command.create("new day memo");
+	assert.equal(detail.getSnapshot().stats?.memoCount, 4);
+	assert.equal(h.random.getSnapshot().memos!.length, 3);
+	const selected = detail.getSnapshot().memos[1]!;
+	await h.command.delete(selected.catalog!);
+	assert.equal(detail.getSnapshot().stats?.memoCount, 3);
+	assert.equal(detail.getSnapshot().selectedDate, DATE);
+	assert.deepEqual(new Set(detail.getSnapshot().memos.map(memo => memo.id)), new Set((await h.loadMemos()).map(memo => memo.id)));
+	assert.equal(h.randomLoads(), 1);
+});
+
 test("真实 Daily 编辑改变 key 后原位更新重逢卡片，保留本组与原编辑句柄", async () => {
 	const h = await fixture();
 	const original = h.memos[0]!;
 	h.view.editingMemo = original;
 	const result = await h.edit(original, "changed body\nsecond line");
 	assert.notEqual(result.memo?.key, original.id);
-	await h.view.finishComposerSave(Promise.resolve(result), [], original);
+	await h.view.finishComposerSave(Promise.resolve(result), original);
 	const current = h.random.getSnapshot().memos!;
 	assert.deepEqual(current.map(memo => memo.contentSnapshot), ["changed body\nsecond line", "same", "same"]);
 	assert.deepEqual(current.map(memo => memo.id), (await h.loadMemos()).map(memo => memo.id));
@@ -139,15 +160,15 @@ test("Catalog 读取校验完整句柄并拒绝读取期间发生的 revision �
 	const h = await fixture();
 	const handle = h.memos[0]!.catalog!.observationHandle;
 	await assert.rejects(h.read.readMemoItems([{ ...handle, rawBlockHash: "wrong" }]), /snapshot changed/iu);
-	const get = h.catalog.getObservation.bind(h.catalog);
+	const read = h.catalog.readObservationSnapshot.bind(h.catalog);
 	let changed = false;
-	t.mock.method(h.catalog, "getObservation", async (key: string) => {
-		const observation = await get(key);
+	t.mock.method(h.catalog, "readObservationSnapshot", async (keys: readonly string[]) => {
+		const snapshot = await read(keys);
 		if (!changed) {
 			changed = true;
 			await h.externalReplace("## Memos\n- 09:00 replaced\n- 10:00 same\n");
 		}
-		return observation;
+		return snapshot;
 	});
 	await assert.rejects(h.read.readMemoItems([handle]), /snapshot changed/iu);
 });
@@ -158,7 +179,7 @@ test("Catalog 后续失败不回滚已写入的 Daily，旧展示失效并可重
 	const result = await h.edit(h.memos[0]!, "written");
 	assert.equal(result.localRefreshPending, true);
 	assert.match(h.body(), /written/u);
-	await h.view.finishComposerSave(Promise.resolve(result), [], h.memos[0]!);
+	await h.view.finishComposerSave(Promise.resolve(result), h.memos[0]!);
 	assert.deepEqual(h.random.getSnapshot().memos, []);
 	await h.externalReplace(h.body());
 	await h.random.refresh();
@@ -185,7 +206,7 @@ test("侧栏与记录统计返回均校验重逢缓存，漫游重载原选中�
 			Object.assign(h.view, {
 				clearSearchDebounce: () => {}, applyViewStateTransitionEffects: () => {},
 				getCardFlowViewStateKey: () => "", getCardFlowChangeIntent: () => "view-scope-change",
-				cancelCatalogMobileCount: () => {}, cancelCatalogDesktopCount: () => {},
+				cancelCatalogDesktopCount: () => {},
 			});
 			let pending: Promise<unknown> | undefined;
 			if (nav === "random") {
@@ -247,7 +268,7 @@ test("提交使尚未完成的首次重逢和漫游抽样失效，下一次刷�
 	}
 });
 
-test("迟到的编辑和任务查询查不到旧版本时保留最新卡片", async t => {
+test("迟到的编辑和任务定点读取拒绝旧版本时保留最新卡片", async t => {
 	for (const kind of ["composer", "task"] as const) {
 		const h = await fixture({ body: "## Memos\n- 09:00 - [ ] todo @2026-10-10\n- 10:00 same\n" });
 		h.view.memos = [...h.memos];
@@ -255,14 +276,14 @@ test("迟到的编辑和任务查询查不到旧版本时保留最新卡片", as
 		h.view.catalogTodayTimeBuoys = h.buoy.getSnapshot();
 		const original = h.memos[0]!;
 		const entered = deferred<void>(), release = deferred<void>();
-		const read = h.command.getReadService(), query = read.query.bind(read);
+		const read = h.command.getReadService(), readItems = read.readMemoItems.bind(read);
 		let first = true;
-		t.mock.method(read, "query", async (request: Parameters<typeof query>[0]) => {
+		t.mock.method(read, "readMemoItems", async (handles: Parameters<typeof readItems>[0]) => {
 			if (first) { first = false; entered.resolve(); await release.promise; }
-			return query(request);
+			return readItems(handles);
 		});
 		const finishing = kind === "composer"
-			? h.view.finishComposerSave(h.edit(original, "first @2026-10-10"), [], original)
+			? h.view.finishComposerSave(h.edit(original, "first @2026-10-10"), original)
 			: h.view.handleCatalogTaskToggle(original, 0, true);
 		await entered.promise;
 		try {
@@ -284,7 +305,7 @@ test("迟到的成功保存结果不向漫游追加旧版本", async () => {
 	const original = h.memos[0]!;
 	const first = await h.edit(original, "first");
 	await h.edit(h.random.getSnapshot().memos![0]!, "newest");
-	await h.view.finishComposerSave(Promise.resolve(first), [], original);
+	await h.view.finishComposerSave(Promise.resolve(first), original);
 	assert.deepEqual(h.shuffle.getSnapshot().memos.map(memo => memo.id), (await h.loadMemos()).map(memo => memo.id));
 	assert.equal(h.shuffle.getSnapshot().stats?.memoCount, 3);
 	assert.equal(h.random.getSnapshot().memos![0]!.contentSnapshot, "newest");
@@ -296,7 +317,7 @@ test("广播完成后保存回调不重复加载列表或漫游", async t => {
 	const result = await h.edit(h.memos[0]!, "saved");
 	const list = t.mock.method(h.view, "reloadMemos", async () => true);
 	const shuffle = t.mock.method(h.shuffle, "reloadSelectedDate", async () => true);
-	await h.view.finishComposerSave(Promise.resolve(result), [], h.memos[0]!);
+	await h.view.finishComposerSave(Promise.resolve(result), h.memos[0]!);
 	assert.equal(list.mock.callCount(), 0);
 	assert.equal(shuffle.mock.callCount(), 0);
 });
@@ -429,10 +450,10 @@ test("超过一页的有链接视图在顶部保存无链接 Memo 后保留摘�
 	} finally { catalogGate.resolve(); countGate.resolve(); await counting; dom.dispose(); }
 });
 
-test("首次新建链接 Memo 的 Catalog 引用接续使精确计数失效时保留无标签摘要", async () => {
+test("首次新建链接 Memo 的 Catalog 接续保留精确计数、无标签摘要与未变卡片", async () => {
 	const gate = deferred<void>();
 	const body = "## Memos\n" + Array.from({ length: 150 }, (_, index) => `- 09:00 kept-${index}\n`).join("");
-	const h = await fixture({ immediate: true, catalogGate: gate.promise, references: true, body });
+	const h = await fixture({ immediate: true, catalogGate: gate.promise, body });
 	const { toCatalogMemoView } = await import("../src/types/memoView");
 	h.view.viewStateController.scopeFilter = "no-tag";
 	const initial = await h.read.query({ hasTag: false, limit: 50 });
@@ -456,8 +477,9 @@ test("首次新建链接 Memo 的 Catalog 引用接续使精确计数失效时�
 		gate.resolve();
 		await h.view.composerSaveRefreshQueue;
 		const indexed = h.view.getFilteredMemos().find(memo => memo.contentSnapshot === "new [[target]]")!;
-		assert.equal(indexed.catalog?.derivedReferences?.[0]?.state, "unresolved");
-		assert.equal(readCount(), null, "引用补全后仍按原流程重新核对精确计数");
+		assert.equal(indexed.catalog?.links[0]?.target, "target");
+		assert.equal(indexed.catalog?.observationHandle.rawBlockHash, indexed.catalog?.observation.rawBlockHash);
+		assert.equal(readCount(), 151, "未变的 Markdown 展示不因额外引用派生而使计数失效");
 		assert.deepEqual(h.view.getCurrentCardFlowPresentation().headers, confirmed.headers, "完整覆盖下的 Catalog 接续也不能撤下刚显示的摘要");
 		assert.equal(card.parentElement, dom.root);
 		assert.equal(card.querySelector(".knomo-card-content"), content);
@@ -684,7 +706,108 @@ test("新建浮标在索引等待期间立即归入今日置顶和浮标页面�
 	assert.equal(h.buoy.getSnapshot().today[0]!.memo.contentSnapshot, `new buoy @${date}`);
 });
 
-async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void>; references?: boolean } = {}) {
+test("真实 Daily 确认保存接入独立移动会话，同文 occurrence 和旧读取保护保留", async () => {
+	const gate = deferred<void>();
+	const h = await fixture({ immediate: true, catalogGate: gate.promise });
+	const firstPage = await h.read.query({ textTerms: ["same"], limit: 50 });
+	Object.assign(h.view, { containerEl: { win: { setTimeout, clearTimeout } },
+		catalogCoverage: firstPage.coverage, catalogRevision: firstPage.catalogRevision, catalogStatus: firstPage.status,
+		syncRecordStatsSource: () => {}, retainMemoCardPreviews: () => {},
+	});
+	const search = h.view.createMobileSearchController();
+	Object.assign(h.view, { mobileSearchController: search });
+	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
+	search.searchQuery = "same"; search.isOpen = true;
+	await search.refreshAppliedResults();
+	assert.equal(search.getDisplayedMemos().length, 2);
+	const old = deferred<typeof firstPage>(), query = h.read.query.bind(h.read);
+	let hold = true;
+	h.read.query = (...args) => { if (hold) { hold = false; return old.promise; } return query(...args); };
+	const pending = search.refreshAppliedResults();
+	prepareComposer(h.view, "same");
+	try {
+		await h.view.saveInput();
+		assert.equal(search.getDisplayedMemos().length, 3, "首屏无需等待 Catalog 接续");
+		assert.equal(search.getDisplayedCount(), 3);
+		assert.equal(new Set(search.getDisplayedMemos().map(memo => memo.id)).size, 3);
+		const revision = createHash("sha256").update(h.body()).digest("hex");
+		assert.ok(search.getDisplayedMemos().every(memo => memo.catalog?.observationHandle.sourceRevision === revision));
+		old.resolve(firstPage); await pending;
+		await search.refreshAppliedResults();
+		assert.equal(search.getDisplayedMemos().length, 3, "旧 Catalog 页面经唯一 confirmed 投影不能撤下保存结果");
+		const ordinary = h.view.memos;
+		assert.equal(ordinary.length, 4, "普通列表仍保留独立的全部 Memo");
+		await search.refreshAppliedResults();
+		assert.equal(h.view.memos, ordinary);
+	} finally { old.resolve(firstPage); gate.resolve(); }
+	await h.view.composerSaveRefreshQueue;
+	await search.refreshAppliedResults();
+	assert.equal(search.getDisplayedMemos().length, 3);
+	search.isOpen = false;
+});
+
+test("真实 Daily 编辑后的移动分页失效不会被等价输入及取消刷新重新激活", async () => {
+	const h = await fixture({ immediate: true, body: "## Memos\n" + "- 10:00 same\n".repeat(51) });
+	const query = h.read.query.bind(h.read);
+	const firstPage = await query({ textTerms: ["same"], limit: 50 });
+	const timers = new Map<number, () => void>(); let timerId = 0;
+	Object.assign(h.view, {
+		containerEl: { win: { setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
+			clearTimeout: (id: number) => { timers.delete(id); } } },
+		catalogCoverage: firstPage.coverage, catalogRevision: firstPage.catalogRevision, catalogStatus: firstPage.status,
+		syncRecordStatsSource: () => {}, retainMemoCardPreviews: () => {},
+	});
+	const search = h.view.createMobileSearchController();
+	Object.assign(h.view, { mobileSearchController: search });
+	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
+	search.searchQuery = "same"; search.isOpen = true;
+	await search.refreshAppliedResults();
+	const pendingPage = deferred<typeof firstPage>(), refreshStarted = deferred<void>();
+	const requests: Array<Parameters<typeof query>[0]> = [], signals: Array<AbortSignal | undefined> = [];
+	const flushTimers = async () => {
+		const tasks = [...timers.values()]; timers.clear();
+		for (const callback of tasks) callback();
+		await new Promise(resolve => setImmediate(resolve));
+	};
+	try {
+		await h.edit(h.memos[0], "same changed");
+		assert.match(h.body(), /same changed/);
+		const currentPage = await query({ textTerms: ["same"], limit: 50 });
+		assert.notEqual(currentPage.catalogRevision, firstPage.catalogRevision);
+		assert.equal(search.session.result?.catalogRevision, firstPage.catalogRevision);
+		assert.equal(search.getDisplayedMemos().length, 50);
+		h.read.query = (request, signal) => {
+			requests.push(request); signals.push(signal);
+			if (requests.length === 1) { refreshStarted.resolve(); return pendingPage.promise; }
+			return query(request, signal);
+		};
+		// 使用真实 View.refresh -> Controller -> Catalog 适配，仅挂起这次 I/O。
+		const refreshing = h.view.refresh();
+		await refreshStarted.promise;
+		const ordinary = h.view.memos;
+		search.queueQuery("same "); await flushTimers();
+		assert.equal(signals[0]?.aborted, true);
+		assert.equal(requests.length, 2, "Daily 已使旧分页失效，必须重新读取首屏");
+		assert.equal(requests[1].cursor, null);
+		assert.equal(search.session.result?.catalogRevision, currentPage.catalogRevision);
+		const accepted = search.getDisplayedMemos();
+		pendingPage.resolve(currentPage); await refreshing;
+		assert.equal(search.getDisplayedMemos(), accepted, "迟到刷新和旧 finally 不能替换新快照");
+		search.loadMore(); await new Promise(resolve => setImmediate(resolve));
+		assert.deepEqual(requests[2].cursor, currentPage.nextCursor);
+		assert.equal(search.getDisplayedMemos().length, 51);
+		assert.equal(new Set(search.getDisplayedMemos().map(memo => memo.id)).size, 51);
+		const revision = createHash("sha256").update(h.body()).digest("hex");
+		assert.ok(search.getDisplayedMemos().every(memo => memo.catalog?.observationHandle.sourceRevision === revision));
+		await flushTimers();
+		assert.equal(search.getDisplayedCount(), 51);
+		assert.equal(h.view.memos, ordinary, "恢复移动分页不能回写普通列表");
+	} finally {
+		pendingPage.resolve(firstPage); search.isOpen = false; timers.clear(); h.read.query = query;
+	}
+});
+
+async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void> } = {}) {
 	await ensureObsidianStub();
 	const { InMemoryVault } = await import("./helpers/InMemoryVault");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -693,7 +816,6 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
-	const { CatalogReferenceService } = await import("../src/services/CatalogReferenceService");
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { IndependentTrashService } = await import("../src/services/IndependentTrashService");
 	const { TrashSnapshotStore } = await import("../src/services/TrashSnapshotStore");
@@ -731,7 +853,7 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 		await seed(await parser.parse({ sourcePath: PATH, logicalDate: DATE, bytes: Buffer.from(body) }));
 	};
 	await externalReplace(vault.read(PATH)!);
-	const read = new CatalogReadService({ catalog, ...(options.references ? { references: new CatalogReferenceService(app, catalog) } : {}) });
+	const read = new CatalogReadService({ catalog });
 	const loadMemos = async () => (await read.query({ sourcePaths: [PATH], limit: 20 })).items.map(toCatalogMemoView)
 		.sort((left, right) => left.catalog!.observationHandle.startLine - right.catalog!.observationHandle.startLine);
 	const memos = await loadMemos();
@@ -749,7 +871,7 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 		},
 			selectShuffleDay: async () => { const selected = await discover();
 				return { status: "ready", selectedDate: DATE, memos: selected, stats: buildShuffleDayStats(selected) }; },
-			acceptSelection: async () => {}, isShuffleDayActive: () => true, showNotice: () => {}, requestRender: () => {} });
+			acceptSelection: async () => {}, isShuffleDayActive: () => true, requestRender: () => {} });
 		await random.refresh();
 		await shuffle.refresh();
 		const buoy = new TimeBuoyViewController({ getNow: () => options.immediate ? new Date() : new Date(2026, 9, 10),
@@ -759,11 +881,11 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 		Object.assign(view, { app, memos: options.immediate ? await loadMemos() : [], editingMemo: null, viewStateController: new KnomoViewStateController(),
 			randomReunionController: random, shuffleDayController: shuffle,
 			timeBuoyViewController: buoy, catalogReadService: read, catalogTodayTimeBuoys: null, trashViewClosed: false,
-			catalogDesktopQueryRun: 0, catalogMobileQueryRun: 0,
+			catalogDesktopQueryRun: 0,
 			hasCommittedCatalogDesktopQuery: options.immediate ?? false,
 			reloadMemos: async () => { view.memos = await loadMemos(); return true; },
 			settingsService: { getSettings: () => ({ timeBuoyEnabled: false }) }, renderedTimeBuoyEnabled: false,
-			waitForAllMemosLoading: async () => {}, renderCardFlow: () => {}, renderUiState: () => {}, showTimeBuoySaveFeedback: () => {} });
+			waitForAllMemosLoading: async () => {}, renderCardFlow: () => {}, renderUiState: () => {} });
 		views.push(view);
 		return { view, random, shuffle, buoy };
 	};
@@ -807,6 +929,8 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 }
 
 interface TestView {
+	createMobileSearchController: () => import("../src/ui/MobileSearchController").MobileSearchController;
+	renderUiState: () => void;
 	getCurrentCardFlowPresentation: () => import("../src/ui/KnomoCardFlowPresenter").CardFlowPresentation;
 	deferMobileCardFlowRender: (id: string | null, force: boolean, intent: "content-change") => boolean;
 	getTodayTimeBuoyItems: () => import("../src/ui/TimeBuoyViewController").TimeBuoyTabItem[];
@@ -829,7 +953,7 @@ interface TestView {
 	refresh: () => Promise<void>;
 	reloadMemos: () => Promise<boolean>;
 	catalogTodayTimeBuoys: import("../src/ui/TimeBuoyViewController").TimeBuoyViewSnapshot | null;
-	finishComposerSave: (result: Promise<MemoSaveResult>, dates: readonly string[], previousMemo: MemoViewItem) => Promise<void>;
+	finishComposerSave: (result: Promise<MemoSaveResult>, previousMemo: MemoViewItem) => Promise<void>;
 	handleCatalogTaskToggle: (memo: MemoViewItem, taskIndex: number, checked: boolean) => Promise<void>;
 	handleDailyMemoPresentationChange: (change: DailyMemoPresentationChange) => Promise<void>;
 	refreshRandomReunionBatch: () => Promise<void>;
@@ -843,7 +967,7 @@ function prepareComposer(view: TestView, content: string, editingMemo: MemoViewI
 				return { valid: () => current === revision, sameSession: () => current === revision }; } } },
 		isSaving: false, editingMemo, quoteReferenceText: null, quoteMarkdownText: null,
 		currentLayout: "desktop", draftContent: content, composerOpen: true,
-		getDailyNotesStatus: () => ({ enabled: true }), isComposerCreationAvailable: () => true,
+		getDailyNotesStatus: () => ({ enabled: true }),
 		closeTimeBuoyPicker: () => {}, updateStatus: () => {}, updateSendButtonState: () => {}, clearComposerContext: () => {},
 		syncComposerMode: () => {}, updateCancelEditButtonState: () => {}, resizeInput: () => {}, syncRootState: () => {},
 		restoreCreateDraft: () => { value = ""; view.editingMemo = null; },
@@ -855,6 +979,98 @@ function deferred<T>() {
 	const promise = new Promise<T>(yes => { resolve = yes; });
 	return { promise, resolve };
 }
+
+test("后台 publication、readback、展示队列或补刷挂起时 Daily 确认即释放保存，下一次发送和关闭不等待旧结果", async t => {
+	for (const stage of ["publication", "readback", "presentation-queue", "refresh"] as const) {
+		const gate = deferred<void>();
+		const h = await fixture({ immediate: true, ...(stage === "publication" ? { catalogGate: gate.promise } : {}) });
+		prepareComposer(h.view, "first @2026-10-20");
+		const { Notice } = await import("obsidian");
+		const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+		if (stage === "readback") {
+			const read = h.read.readMemoItems.bind(h.read);
+			t.mock.method(h.read, "readMemoItems", async (...args: Parameters<typeof read>) => { await gate.promise; return read(...args); });
+		}
+		if (stage === "presentation-queue") Object.assign(h.view, { presentationChangeQueue: gate.promise });
+		if (stage === "refresh") {
+			t.mock.method(h.read, "readMemoItems", async () => { throw new Error("readback unavailable"); });
+			h.view.refresh = () => gate.promise;
+		}
+		const input = h.view.inputEl!;
+		let locked = false;
+		Object.assign((input as unknown as { composer: object }).composer, { setSaving: (value: boolean) => { locked = value; } });
+		await h.view.saveInput();
+		assert.match(h.body(), /first @2026-10-20/);
+		assert.equal(Reflect.get(h.view, "isSaving"), false, stage); assert.equal(locked, false, stage);
+		input.value = "second";
+		const second = h.view.saveInput();
+		assert.equal(Reflect.get(h.view, "isSaving"), true, "第二次发送已被接受");
+		Object.assign(h.view, { mobileComposerController: { resetInactiveState: () => {} } });
+		(h.view as unknown as { closeComposerKeepingDraft(): void }).closeComposerKeepingDraft();
+		assert.equal(Reflect.get(h.view, "composerOpen"), false);
+		gate.resolve(); await second; await h.view.composerSaveRefreshQueue;
+		assert.match(h.body(), /second/);
+		assert.equal(Reflect.get(h.view, "isSaving"), false); assert.equal(locked, false);
+		assert.deepEqual(notices, []);
+	}
+});
+
+test("已确认展示的渲染失败保留正文与当前句柄，归入本页错误而不冒充读回失败或发保存通知", async t => {
+	const h = await fixture({ immediate: true });
+	const { Notice } = await import("obsidian");
+	const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+	const logs: unknown[][] = []; t.mock.method(console, "warn", (...args: unknown[]) => { logs.push(args); });
+	t.mock.method(h.view, "renderUiState", () => { throw new Error("private memo body data:image/png;base64,secret"); });
+	const result = await h.edit(h.memos[0]!, "confirmed body");
+	assert.equal(result.status, "saved"); assert.match(h.body(), /confirmed body/);
+	assert.equal(h.random.getSnapshot().memos![0]!.contentSnapshot, "confirmed body");
+	assert.ok(h.view.confirmedDailyMemos?.pending);
+	assert.ok(Reflect.get(h.view, "pageRefreshError"));
+	assert.match(JSON.stringify(logs), /render/);
+	assert.doesNotMatch(JSON.stringify(logs), /private memo|data:image|secret/);
+	assert.deepEqual(notices, []);
+});
+
+test("A 的迟到后台失败不能释放 B 的保存锁、清空 B 输入或补发结果 Notice", async () => {
+	const h = await fixture(); prepareComposer(h.view, "A");
+	const aDaily = deferred<void>(), bDaily = deferred<void>(), bSettled = deferred<MemoSaveResult>();
+	let rejectA!: (error: Error) => void;
+	const aSettled = new Promise<MemoSaveResult>((_resolve, reject) => { rejectA = reject; });
+	let calls = 0, locked = false;
+	Object.assign(h.view, { memoCommandService: { startCreate: () => ++calls === 1
+		? { dailyCommitted: aDaily.promise, settled: aSettled } : { dailyCommitted: bDaily.promise, settled: bSettled.promise } } });
+	Object.assign((h.view.inputEl as unknown as { composer: object }).composer, { setSaving: (value: boolean) => { locked = value; } });
+	const { Notice } = await import("obsidian"); const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+	const first = h.view.saveInput(); aDaily.resolve(); await first;
+	h.view.inputEl!.value = "B"; const second = h.view.saveInput();
+	rejectA(new Error("late readback failure")); await h.view.composerSaveRefreshQueue;
+	assert.equal(Reflect.get(h.view, "isSaving"), true); assert.equal(locked, true); assert.equal(h.view.inputEl!.value, "B");
+	assert.deepEqual(notices, []);
+	bDaily.resolve(); await second;
+	bSettled.resolve({ status: "saved", memo: null, timeBuoyDates: [], localRefreshPending: false });
+	await h.view.composerSaveRefreshQueue; assert.equal(locked, false); assert.deepEqual(notices, []);
+});
+
+test("浮标新增、减为单日和全部移除在 Daily 确认时立即更新 badge 数据，无保存 Notice", async () => {
+	const { t: translate } = await import("../src/i18n");
+	for (const [content, dates] of [["two @2026-10-20 @2026-10-21", ["2026-10-20", "2026-10-21"]],
+		["single @2026-10-21", ["2026-10-21"]], ["none", []]] as const) {
+		const gate = deferred<void>(); const h = await fixture({ immediate: true, catalogGate: gate.promise, body: "## Memos\n- 09:00 old @2026-10-20\n" });
+		Object.assign(h.view, { settingsService: { getSettings: () => ({ timeBuoyEnabled: true }) }, renderedTimeBuoyEnabled: true });
+		prepareComposer(h.view, content, h.memos[0]!);
+		const { Notice } = await import("obsidian"); const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
+		try {
+			await h.view.saveInput();
+			const current = h.view.getFilteredMemos().find(memo => memo.contentSnapshot === content)!;
+			assert.ok(current); assert.deepEqual(current.catalog!.timeBuoyDates, dates);
+			const badge = (h.view as unknown as { getVisibleMemoTimeBuoy(memo: MemoViewItem): { label: string } | undefined }).getVisibleMemoTimeBuoy(current);
+			if (dates.length === 0) assert.equal(badge, undefined);
+			else assert.equal(badge?.label, dates.length === 1 ? translate("timeBuoy.badge.single", { date: dates[0] }) : translate("timeBuoy.badge.multiple", { count: dates.length }));
+			assert.deepEqual(notices, []);
+		} finally { gate.resolve(); }
+		await h.view.composerSaveRefreshQueue; assert.deepEqual(notices, []);
+	}
+});
 
 function attachCardFlow(view: TestView, timeBuoy = false) {
 	const dom = new JSDOM("<body><main></main></body>");

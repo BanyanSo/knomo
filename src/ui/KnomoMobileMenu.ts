@@ -51,6 +51,7 @@ export class KnomoMobileMenu {
 			observer?.disconnect();
 			releaseInteraction?.();
 			releaseInteraction = null;
+			session.element?.classList.remove("knomo-mobile-menu", "knomo-mobile-menu-" + options.kind);
 			if (this.current === session) this.current = null;
 			options.onClose();
 		} };

@@ -119,6 +119,7 @@ export function normalizeSettings(value: unknown): KnomoSettings {
 			DEFAULT_KNOMO_SETTINGS.timeBuoyIntroDismissed ?? false,
 		),
 		mobileCompactMode,
+		reduceGlassEffects: booleanOrDefault(merged.reduceGlassEffects, DEFAULT_KNOMO_SETTINGS.reduceGlassEffects ?? false),
 		syncDebounceMs: numberOrDefault(merged.syncDebounceMs, DEFAULT_KNOMO_SETTINGS.syncDebounceMs),
 		desktopSidebarWidth: numberOrDefault(
 			merged.desktopSidebarWidth,

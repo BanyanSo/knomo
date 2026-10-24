@@ -12,8 +12,10 @@ export interface CardFlowRegularFilterCopy {
 }
 
 export type CardFlowHeader =
-	| { type: "summary"; text: string; action?: { label: string; action: string } }
+	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean }
 	| { type: "random-toolbar"; count: number }
+	| { type: "trash-toolbar"; count: number; busy: boolean }
+	| { type: "random-day"; selectedDate: string; stats: ShuffleDaySnapshot["stats"] }
 	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
 
 export type CardFlowPresentation =
@@ -37,15 +39,30 @@ export interface CardFlowPresentationOptions {
 	randomReunionStatus: RandomReunionStatus;
 	randomReunionError: string | null;
 	shuffleDay: ShuffleDaySnapshot;
+	randomDay?: ShuffleDaySnapshot;
 	memos: MemoRecord[];
 	matchedTotalCount: number | null;
 	regularFilterCopy: CardFlowRegularFilterCopy | null;
 	trashLoading: boolean;
 	trashError: string | null;
 	trashMemos: MemoRecord[] | null;
+	trashCount: number | null;
+	trashClearBusy: boolean;
 }
 
 export function getCardFlowPresentation(options: CardFlowPresentationOptions): CardFlowPresentation {
+	if (options.activeNav === "random" && options.randomDay?.selectedDate) {
+		const snapshot = options.randomDay;
+		const presentation = getShuffleDayCardFlowPresentation(snapshot, "retry-random-day");
+		if (presentation.type === "empty") {
+			if (snapshot.status === "idle" || snapshot.status === "loading") presentation.title = t("random.dayLoading");
+			if (snapshot.status === "failed") presentation.title = t("random.dayFailed");
+			presentation.loading = snapshot.status === "loading";
+		}
+		presentation.headers = [{ type: "random-day", selectedDate: snapshot.selectedDate!, stats: snapshot.stats },
+			...(presentation.headers ?? []).filter(header => header.type !== "shuffle-day")];
+		return presentation;
+	}
 	if (options.cardFlowError !== null) {
 		return {
 			type: "empty",
@@ -58,6 +75,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 			trashLoading: options.trashLoading,
 			trashError: options.trashError,
 			trashMemos: options.trashMemos,
+			trashCount: options.trashCount,
+			trashClearBusy: options.trashClearBusy,
 		});
 	}
 	if (options.activeNav === "random") {
@@ -67,6 +86,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 				type: "empty",
 				title: t("empty.randomLoading"),
 				description: "",
+				...(options.randomReunionStatus === "loading-candidates" ? { headers: [{ type: "random-toolbar" as const, count: 0 }] } : {}),
 			};
 		}
 
@@ -75,6 +95,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 				type: "empty",
 				title: t("error.randomLoadFailed"),
 				description: options.randomReunionError ?? "",
+				headers: [{ type: "random-toolbar", count: 0 }],
 			};
 		}
 	}
@@ -85,8 +106,9 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 		return {
 			type: "empty",
 			title: options.regularFilterCopy?.emptyTitle ?? getEmptyStateTitle(options.activeNav),
-			description: options.activeNav === "random" ? options.randomReunionError ?? "" : "",
-			...(options.activeNav === "random" ? { headers: [{ type: "random-toolbar" as const, count: 0 }] } : {}),
+			description: "",
+			...(options.activeNav === "random" ? { headers: [{ type: "random-toolbar" as const, count: 0 },
+				...(options.randomReunionError ? [{ type: "summary" as const, text: options.randomReunionError, feedback: true }] : [])] } : {}),
 		};
 	}
 
@@ -96,6 +118,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 	}
 	if (options.activeNav === "random") {
 		headers.push({ type: "random-toolbar", count: options.memos.length });
+		if (options.randomReunionError) headers.push({ type: "summary", text: options.randomReunionError, feedback: true });
 	}
 	if (options.regularFilterCopy !== null) {
 		headers.push({ type: "summary", text: options.regularFilterCopy.summary });
@@ -108,7 +131,11 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 	};
 }
 
-function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFlowPresentation {
+function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot, retryAction = "refresh-shuffle-day"): CardFlowPresentation {
+	const action = { label: t("settings.attention.retry"), action: retryAction };
+	const feedback: CardFlowHeader[] = [snapshot.error, snapshot.historyError].filter((text): text is string => !!text)
+		.map(text => ({ type: "summary", text, feedback: true, ...(text === snapshot.error ? { action } : {}) }));
+	const retry: CardFlowHeader = { type: "summary", text: "", action };
 	if (snapshot.status === "idle" || (snapshot.status === "loading"
 		&& (snapshot.selectedDate === null || snapshot.stats === null || snapshot.memos.length === 0))) {
 		return {
@@ -136,13 +163,15 @@ function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFl
 			type: "empty",
 			title: t("shuffleDay.emptyDayClearedTitle"),
 			description: t("shuffleDay.emptyDayClearedDesc"),
+			headers: [...feedback, retry],
 		};
 	}
 	if (snapshot.status === "failed") {
 		return {
 			type: "empty",
 			title: t("shuffleDay.failedTitle"),
-			description: t("shuffleDay.failedDesc"),
+			description: snapshot.error ?? t("shuffleDay.failedDesc"),
+			headers: [retry],
 		};
 	}
 	if (snapshot.selectedDate === null || snapshot.stats === null || snapshot.memos.length === 0) {
@@ -156,7 +185,7 @@ function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot): CardFl
 		type: "items",
 		memos: snapshot.memos,
 		mode: "memo",
-		headers: [{ type: "shuffle-day", selectedDate: snapshot.selectedDate, stats: snapshot.stats }],
+		headers: [{ type: "shuffle-day", selectedDate: snapshot.selectedDate, stats: snapshot.stats }, ...feedback],
 	};
 }
 
@@ -164,6 +193,8 @@ interface TrashCardFlowPresentationOptions {
 	trashLoading: boolean;
 	trashError: string | null;
 	trashMemos: MemoRecord[] | null;
+	trashCount: number | null;
+	trashClearBusy: boolean;
 }
 
 function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions): CardFlowPresentation {
@@ -186,7 +217,8 @@ function getTrashCardFlowPresentation(options: TrashCardFlowPresentationOptions)
 			type: "items",
 			memos: options.trashMemos,
 			mode: "trash",
-			headers: [],
+			headers: !options.trashLoading && options.trashCount !== null && options.trashCount > 0
+				? [{ type: "trash-toolbar", count: options.trashCount, busy: options.trashClearBusy }] : [],
 		};
 	}
 

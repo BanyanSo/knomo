@@ -9,6 +9,7 @@ test("mobile navbar compact controller starts, ignores pre-start sync requests, 
 	const controller = new MobileNavbarCompactController(env.view, {
 		isActive: () => true,
 		isComposerOpen: () => false,
+		isGlassReduced: () => false,
 		toggleSidebar: () => undefined,
 		openComposer: () => undefined,
 	});
@@ -40,7 +41,7 @@ test("mobile navbar compact controller starts, ignores pre-start sync requests, 
 test("mobile navbar compact cleanup removes injected chrome and resets CSS variables", async () => {
 	await ensureObsidianStub();
 	const { MobileNavbarCompactController } = await import("../src/ui/MobileNavbarCompactController");
-	const compactNavbar = new CleanupElement(["knomo-mobile-navbar-compact"]);
+	const compactNavbar = new CleanupElement(["knomo-mobile-navbar-compact", "knomo-reduce-glass"]);
 	const sidebarAction = new CleanupElement(["knomo-mobile-navbar-sidebar-action"]);
 	const createButton = new CleanupElement(["knomo-mobile-create-fab"]);
 	const nativeAction = new CleanupElement(["knomo-mobile-navbar-hidden"]);
@@ -56,6 +57,7 @@ test("mobile navbar compact cleanup removes injected chrome and resets CSS varia
 	assert.equal(sidebarAction.removed, true);
 	assert.equal(createButton.removed, true);
 	assert.equal(compactNavbar.hasClass("knomo-mobile-navbar-compact"), false);
+	assert.equal(compactNavbar.hasClass("knomo-reduce-glass"), false);
 	assert.equal(compactNavbar.cssProps.get("--knomo-mobile-navbar-edge-left"), "8px");
 	assert.equal(compactNavbar.cssProps.get("--knomo-mobile-navbar-reserved-right"), "76px");
 	assert.equal(nativeAction.hasClass("knomo-mobile-navbar-hidden"), false);

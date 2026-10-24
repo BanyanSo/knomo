@@ -4,8 +4,12 @@ import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import type { TrashAction } from "./KnomoActionDispatch";
+import type { MemoRestoreResult } from "../types/catalogView";
+import { TrashDailyWriteError } from "../services/IndependentTrashService";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
+import type { ClearTrashAction } from "./clearTrashAction";
 
-export type TrashMemoRenderTarget = "ui-state" | "trash-count-and-scope" | "card-flow";
+export type TrashMemoRenderTarget = "ui-state" | "trash-count-and-scope" | "card-flow" | "clear-trash-state";
 
 export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	trashMemos: TMemo[] | null;
@@ -14,8 +18,12 @@ export interface TrashMemoSnapshot<TMemo extends MemoRecord = MemoRecord> {
 	trashCount: number | null;
 	trashCountLoading: boolean;
 	trashCountError: string | null;
+	trashClearBusy: boolean;
 	trashBusyMemoActions: ReadonlyMap<string, TrashAction>;
+	trashCleanupPendingMemoIds: ReadonlySet<string>;
 }
+
+export type TrashRestoreResult<TMemo> = Pick<MemoRestoreResult, "cleanupPending" | "localRefreshPending" | "message"> & { memo: TMemo | null };
 
 interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	store: TrashSnapshotStore;
@@ -23,26 +31,34 @@ interface TrashMemoControllerOptions<TMemo extends MemoRecord> {
 	pageSize: number;
 	windowLimit: number;
 	onInvalidated: () => void;
-	restoreMemo: (memo: TMemo) => Promise<TMemo | null>;
+	restoreMemo: (memo: TMemo) => Promise<TrashRestoreResult<TMemo>>;
+	isCleanupPending: (memo: TMemo) => boolean;
 	purgeMemo: (memo: TMemo) => Promise<void>;
 	confirmPurge: (memo: TMemo) => Promise<boolean>;
+	clearTrash: ClearTrashAction;
 	handleRestoredMemo: (deletedMemo: TMemo, restoredMemo: TMemo) => void;
 	isTrashActive: () => boolean;
 	showNotice: (message: string) => void;
 	forceRefreshViews: () => Promise<void>;
 	requestRender: (target: TrashMemoRenderTarget) => void;
+	onPresentationError?: (error: unknown) => void;
 }
 
 export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 	private disposed = false;
+	private session = 0;
 	private unsubscribe: (() => void) | null = null;
 	private windowEnd = 0;
 	private trashBusyMemoActions = new Map<string, TrashAction>();
+	private trashClearBusy = false;
 
 	constructor(private readonly options: TrashMemoControllerOptions<TMemo>) {}
 
 	start(): void {
+		this.session++;
 		this.disposed = false;
+		this.trashBusyMemoActions = new Map();
+		this.trashClearBusy = false;
 		this.unsubscribe?.();
 		this.unsubscribe = this.options.store.subscribe(() => {
 			if (this.disposed) return;
@@ -65,13 +81,22 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 			trashCount: state.count,
 			trashCountLoading: state.status === "loading",
 			trashCountError: error,
+			trashClearBusy: this.trashClearBusy,
 			trashBusyMemoActions: this.trashBusyMemoActions,
+			trashCleanupPendingMemoIds: new Set(memos?.filter(this.options.isCleanupPending).map(memo => memo.id)),
 		};
 	}
 
-	private render(target: TrashMemoRenderTarget): void { if (!this.disposed) this.options.requestRender(target); }
+	private render(target: TrashMemoRenderTarget): void {
+		if (this.disposed) return;
+		try { this.options.requestRender(target); }
+		catch (error) {
+			logContinuationFailure("trash", "render", error, this.session);
+			this.options.onPresentationError?.(error);
+		}
+	}
 
-	dispose(): void { this.disposed = true; this.unsubscribe?.(); this.unsubscribe = null; }
+	dispose(): void { this.disposed = true; this.session++; this.unsubscribe?.(); this.unsubscribe = null; }
 
 	async ensureLoaded(): Promise<void> {
 		if (this.disposed) return;
@@ -99,44 +124,73 @@ export class TrashMemoController<TMemo extends MemoRecord = MemoRecord> {
 		return true;
 	}
 
+	async handleClearTrash(): Promise<void> {
+		const state = this.options.store.getSummary();
+		if (this.disposed || this.trashClearBusy || !this.options.isTrashActive() || state.status !== "ready" || state.count === 0) return;
+		const session = this.session;
+		const isCurrent = () => !this.disposed && session === this.session;
+		this.trashClearBusy = true;
+		this.render("clear-trash-state");
+		try {
+			await this.options.clearTrash(isCurrent);
+		} finally {
+			if (isCurrent()) {
+				this.trashClearBusy = false;
+				this.render("clear-trash-state");
+			}
+		}
+	}
+
 	async handleTrashAction(action: TrashAction, memo: TMemo): Promise<void> {
 		if (this.disposed || this.trashBusyMemoActions.has(memo.id)) {
 			return;
 		}
 
 		this.trashBusyMemoActions.set(memo.id, action);
+		const session = this.session;
+		const isCurrent = () => !this.disposed && session === this.session;
 		const renderBusyState = action !== "purge";
 		let trashChanged = false;
 		if (renderBusyState) this.render("card-flow");
 		try {
 			if (action === "purge") {
-				if (!await this.options.confirmPurge(memo) || this.disposed) return;
+				if (!await this.options.confirmPurge(memo) || !isCurrent()) return;
 				await this.options.purgeMemo(memo);
+				if (!isCurrent()) return;
 				trashChanged = true;
 				this.options.showNotice(t("notice.purged"));
 			} else {
-				const restoredMemo = await this.options.restoreMemo(memo);
+				const result = await this.options.restoreMemo(memo);
+				if (!isCurrent()) return;
 				trashChanged = true;
-				if (restoredMemo !== null && !this.disposed) this.options.handleRestoredMemo(memo, restoredMemo);
-				this.options.showNotice(t("notice.restored"));
+				this.options.showNotice(result.cleanupPending
+					? `${result.message ?? t("trash.restoredCleanupError", { error: t("trash.cleanupUnavailable") })} ${t("trash.cleanupRetryOnly")}`
+					: t("notice.restored"));
+				try {
+					if (result.memo !== null) this.options.handleRestoredMemo(memo, result.memo);
+				} catch (error) { logContinuationFailure("restore", "card-callback", error, session); }
 			}
 			try {
 				await this.options.forceRefreshViews();
-			} catch {
-				this.options.showNotice(t("catalog.savedRefreshPending"));
+			} catch (error) {
+				if (isCurrent()) logContinuationFailure(action, "view-refresh", error, session);
 			}
 		} catch (error) {
+			if (!isCurrent()) return;
 			this.options.showNotice(formatTrashActionErrorMessage(action, error));
 			if (renderBusyState) this.render("ui-state");
 		} finally {
-			this.trashBusyMemoActions.delete(memo.id);
-			if (renderBusyState || trashChanged) this.render("card-flow");
+			if (isCurrent()) {
+				this.trashBusyMemoActions.delete(memo.id);
+				if (renderBusyState || trashChanged) this.render("card-flow");
+			}
 		}
 	}
 
 }
 
 export function formatTrashActionErrorMessage(action: TrashAction, error: unknown): string {
+	if (error instanceof TrashDailyWriteError) return t("trash.writeUnconfirmed");
 	const actionLabel = action === "purge" ? t("error.purgeFailed") : t("error.restoreFailed");
 	const fallbackMessage = action === "purge" ? t("error.purgeFailedRetry") : t("error.restoreFailedRetry");
 	const message = formatServiceError(error, fallbackMessage);

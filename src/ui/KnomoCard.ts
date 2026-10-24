@@ -50,6 +50,7 @@ export interface RenderTrashMemoCardOptions<TMemo extends MemoRecord = MemoRecor
 	generation: number;
 	renderIndex: number;
 	busyAction: TrashAction | null;
+	cleanupPending?: boolean;
 	formatDisplayTime: (value: string) => string;
 	formatOptionalTime: (value: string | undefined) => string;
 	getMarkdownPriority: (renderIndex: number) => MarkdownRenderPriority;
@@ -100,7 +101,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				cls: "knomo-card-actions",
 				attr: { role: "menu" },
 			});
-			for (const action of getMemoCardActions(memo)) {
+			for (const action of getMemoCardActions(memo, options.randomCard)) {
 				renderCardAction(
 					actions,
 					memo.id,
@@ -208,7 +209,7 @@ export function renderKnomoTrashMemoCard<TMemo extends MemoRecord>(container: HT
 			actions,
 			memo.id,
 			action.action,
-			getTrashActionLabel(action.action, action.state.busy),
+			getTrashActionLabel(action.action, action.state.busy, options.cleanupPending),
 			action.state.disabled,
 			action.className,
 		);
@@ -307,13 +308,15 @@ export function getMemoActionLabel(action: MemoAction): string {
 	if (action === "edit") return t("card.edit");
 	if (action === "reference") return t("card.reference");
 	if (action === "open-daily") return t("card.openDaily");
+	if (action === "view-day") return t("card.viewDay");
 	if (action === "copy-text") return t("card.copyText");
 	if (action === "copy-link") return t("card.copyLink");
 	if (action === "mark-reviewed") return t("card.markReviewed");
 	return t("card.delete");
 }
 
-function getTrashActionLabel(action: TrashAction, busy: boolean): string {
+function getTrashActionLabel(action: TrashAction, busy: boolean, cleanupPending = false): string {
 	if (action === "purge") return busy ? t("trash.purging") : t("trash.purge");
+	if (cleanupPending) return busy ? t("trash.cleaningUp") : t("trash.retryCleanup");
 	return busy ? t("trash.restoring") : t("trash.restore");
 }

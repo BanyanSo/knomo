@@ -4,6 +4,46 @@ import assert from "node:assert/strict";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("重逢旧卡片的错误与来源变化在工具栏附近可见，全部移除仍有换组入口", async () => {
+	await ensureObsidianStub(); const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	for (const memos of [makeMemos(2), []]) {
+		const presentation = getCardFlowPresentation({ ...baseOptions(), activeNav: "random", randomReunionStatus: memos.length ? "ready" : "empty",
+			randomReunionError: "Source changed", memos });
+		assert.ok(presentation.headers?.some(header => header.type === "random-toolbar"));
+		assert.ok(presentation.headers?.some(header => header.type === "summary" && header.text === "Source changed" && header.feedback));
+		if (memos.length) { assert.equal(presentation.type, "items"); if (presentation.type === "items") assert.deepEqual(presentation.memos, memos); }
+	}
+});
+
+test("漫游正文、刷新错误与历史弱状态分别呈现，失败保留重试入口", async () => {
+	await ensureObsidianStub(); const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const { buildShuffleDayStats } = await import("../src/utils/shuffleDay"); const memos = makeMemos(2);
+	const presentation = getCardFlowPresentation({ ...baseOptions(), activeNav: "shuffleDay", shuffleDay: { status: "ready", selectedDate: "2026-06-02", memos,
+		stats: buildShuffleDayStats(memos), error: "Previous results are still shown", historyError: "History was not saved" } });
+	assert.equal(presentation.type, "items");
+	const messages = presentation.headers?.filter(header => header.type === "summary") ?? [];
+	assert.equal(messages.length, 2); assert.ok(messages.every(header => header.feedback));
+	assert.ok(messages.some(header => header.action?.action === "refresh-shuffle-day"));
+});
+
+test("日期详情始终保留日期和返回入口，仅重试原日期，不出现随机工具栏", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const { buildShuffleDayStats } = await import("../src/utils/shuffleDay");
+	for (const status of ["loading", "ready", "failed", "empty-day-cleared"] as const) {
+		const memos = status === "ready" ? makeMemos(2) : [];
+		const presentation = getCardFlowPresentation({ ...baseOptions(), activeNav: "random", cardFlowError: "Other list failed",
+			randomDay: { selectedDate: "2026-10-22", status, memos, stats: memos.length ? buildShuffleDayStats(memos) : null,
+				error: status === "failed" ? "Read failed" : null } });
+		assert.equal(presentation.headers?.[0].type, "random-day");
+		assert.ok(presentation.headers?.every(header => header.type !== "random-toolbar" && header.type !== "shuffle-day"));
+		if (status === "failed" || status === "empty-day-cleared") {
+			assert.ok(presentation.headers?.some(header => header.type === "summary" && header.action?.action === "retry-random-day"));
+		}
+		if (status === "ready") { assert.equal(presentation.type, "items"); if (presentation.type === "items") assert.equal(presentation.memos, memos); }
+	}
+});
+
 test("presents card flow error before other states", async () => {
 	await ensureObsidianStub();
 	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
@@ -18,6 +58,19 @@ test("presents card flow error before other states", async () => {
 		title: "Card feed refresh failed",
 		description: "Vault read failed",
 	});
+});
+
+test("回收站操作栏使用完整总数，分页、加载、空集合及错误状态不混淆", async () => {
+	await ensureObsidianStub();
+	const { getCardFlowPresentation } = await import("../src/ui/KnomoCardFlowPresenter");
+	const options = { ...baseOptions(), activeNav: "trash" as const, trashMemos: makeMemos(2, "trash"), trashCount: 101 };
+	assert.deepEqual(getCardFlowPresentation(options).headers, [{ type: "trash-toolbar", count: 101, busy: false }]);
+	assert.deepEqual(getCardFlowPresentation({ ...options, trashClearBusy: true }).headers,
+		[{ type: "trash-toolbar", count: 101, busy: true }]);
+	for (const state of [{ trashLoading: true }, { trashCount: null }, { trashMemos: null },
+		{ trashCount: 0, trashMemos: [] }, { trashError: "Unreadable" }]) {
+		assert.ok(!getCardFlowPresentation({ ...options, ...state }).headers?.some(header => header.type === "trash-toolbar"));
+	}
 });
 
 test("presents regular empty state and filtered empty copy", async () => {
@@ -127,6 +180,7 @@ test("keeps the current random list visible while the next group loads", async (
 		type: "empty",
 		title: "Looking for memos to revisit",
 		description: "",
+		headers: [{ type: "random-toolbar", count: 0 }],
 	});
 });
 
@@ -142,6 +196,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Looking for memos to revisit",
 		description: "",
+		headers: [{ type: "random-toolbar", count: 0 }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -152,6 +207,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Random revisit failed to load",
 		description: "Candidate query failed",
+		headers: [{ type: "random-toolbar", count: 0 }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -319,6 +375,8 @@ function baseOptions() {
 		trashLoading: false,
 		trashError: null,
 		trashMemos: [],
+		trashCount: null,
+		trashClearBusy: false,
 	};
 }
 

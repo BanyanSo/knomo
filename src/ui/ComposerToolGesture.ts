@@ -3,11 +3,11 @@ interface ComposerToolTouchOptions {
 	scrollElement: HTMLElement;
 }
 
-export function registerComposerToolGesture(tools: HTMLElement, run: (action: string, event: MouseEvent) => void,
+export function registerComposerToolGesture(tools: HTMLElement, run: (action: string, event: MouseEvent | TouchEvent) => void,
 	touchOptions?: ComposerToolTouchOptions, mouseDragScroll = false): () => void {
 	let pointer: { id: number; x: number; y: number; moved: boolean; button: HTMLElement | null; touch: boolean;
 		toolsScrollLeft: number;
-		valid?: () => boolean; scrollTop?: number; scrollLeft?: number } | null = null;
+		valid?: () => boolean; scrollTop?: number; scrollLeft?: number; touchId?: number; awaitingTouchEnd?: boolean } | null = null;
 	let suppressClickUntil = 0;
 	let suppressMouseClick = false;
 	const releaseCapture = (id: number) => {
@@ -47,6 +47,13 @@ export function registerComposerToolGesture(tools: HTMLElement, run: (action: st
 	const up = (event: PointerEvent) => {
 		if (!pointer || pointer.id !== event.pointerId) return;
 		const current = pointer;
+		// 候选保留到原生触摸结束，避免先拆 DOM 再由 touchend 改变选区或命中蒙层。
+		if (current.touchId !== undefined) {
+			current.awaitingTouchEnd = true;
+			if (event.defaultPrevented || Math.hypot(event.clientX - current.x, event.clientY - current.y) > 8
+				|| buttonAt(event.target) !== current.button) current.moved = true;
+			return;
+		}
 		pointer = null;
 		if (!current.touch) {
 			suppressMouseClick = mouseDragScroll && current.moved;
@@ -63,17 +70,47 @@ export function registerComposerToolGesture(tools: HTMLElement, run: (action: st
 	};
 	const cancel = (event: PointerEvent) => {
 		if (!pointer || pointer.id !== event.pointerId) return;
+		// pointerup 后的隐式捕获释放不是原生触摸取消。
+		if (event.type === "lostpointercapture" && pointer.awaitingTouchEnd) return;
 		const current = pointer;
 		pointer = null;
 		if (current.touch) suppressClickUntil = Date.now() + 600;
 		else suppressMouseClick = mouseDragScroll && current.moved;
 		releaseCapture(current.id);
 	};
+	const touchstart = (event: TouchEvent) => {
+		if (!pointer?.touch) return;
+		if (event.defaultPrevented || event.touches.length !== 1) {
+			pointer = null;
+			suppressClickUntil = Date.now() + 600;
+			return;
+		}
+		pointer.touchId = event.touches[0].identifier;
+	};
+	const touchend = (event: TouchEvent) => {
+		const current = pointer;
+		if (!touchOptions || current?.touchId === undefined) return;
+		pointer = null;
+		suppressClickUntil = Date.now() + 600;
+		const point = Array.from(event.changedTouches).find(touch => touch.identifier === current.touchId);
+		if (!point || event.touches.length !== 0 || event.defaultPrevented || !event.cancelable || current.moved
+			|| Math.hypot(point.clientX - current.x, point.clientY - current.y) > 8
+			|| touchOptions.scrollElement.scrollTop !== current.scrollTop || touchOptions.scrollElement.scrollLeft !== current.scrollLeft
+			|| !current.valid?.() || !current.button?.isConnected
+			|| buttonAt(tools.ownerDocument.elementFromPoint(point.clientX, point.clientY)) !== current.button) return;
+		event.preventDefault();
+		run(current.button.dataset.action!, event);
+	};
+	const touchcancel = () => {
+		pointer = null;
+		suppressClickUntil = Date.now() + 600;
+	};
 	const mouse = (event: MouseEvent) => { event.preventDefault(); };
 	const click = (event: MouseEvent) => {
 		const button = buttonAt(event.target);
 		if (!button) return;
 		event.preventDefault(); event.stopImmediatePropagation();
+		if (pointer?.touchId !== undefined && event.detail !== 0) return;
 		if (suppressMouseClick && event.detail !== 0) { suppressMouseClick = false; return; }
 		if (Date.now() >= suppressClickUntil || event.detail === 0) run(button.dataset.action!, event);
 	};
@@ -83,6 +120,12 @@ export function registerComposerToolGesture(tools: HTMLElement, run: (action: st
 	tools.addEventListener("pointerup", up);
 	tools.addEventListener("pointercancel", cancel);
 	tools.addEventListener("lostpointercapture", cancel);
+	if (touchOptions) {
+		// 提前注册非 passive 的结束监听；按下和移动仍交给原生滚动。
+		tools.addEventListener("touchstart", touchstart, { passive: true });
+		tools.addEventListener("touchend", touchend, { passive: false });
+		tools.addEventListener("touchcancel", touchcancel);
+	}
 	tools.addEventListener("mousedown", mouse);
 	tools.addEventListener("click", click, true);
 	return () => {
@@ -93,6 +136,9 @@ export function registerComposerToolGesture(tools: HTMLElement, run: (action: st
 		touchOptions?.scrollElement.removeEventListener("scroll", scroll);
 		tools.removeEventListener("pointerup", up); tools.removeEventListener("pointercancel", cancel);
 		tools.removeEventListener("lostpointercapture", cancel);
+		tools.removeEventListener("touchstart", touchstart);
+		tools.removeEventListener("touchend", touchend);
+		tools.removeEventListener("touchcancel", touchcancel);
 		tools.removeEventListener("mousedown", mouse); tools.removeEventListener("click", click, true);
 	};
 }

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createDeferred } from "./helpers/deferred";
 
 import type { ShuffleDaySelectionResult } from "../src/utils/shuffleDay";
 import type { MemoViewItem } from "../src/types/memoView";
@@ -19,7 +20,6 @@ test("refreshes shuffle day through the service and renders loading transitions"
 			stats: buildShuffleDayStats([memo]),
 		})),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {
 			renderCalls += 1;
 		},
@@ -46,7 +46,6 @@ test("refresh keeps the previous shuffle day visible until the next selection co
 			return makeSelection("2026-05-01", oldMemo);
 		}),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -71,7 +70,6 @@ test("clearing shuffle day invalidates an in-flight selection", async () => {
 		loadSelectedDate: async () => [memo],
 		...makeService(async () => selection.promise),
 		isShuffleDayActive: () => false,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -94,7 +92,6 @@ test("selected-date reload keeps the committed day visible until its complete re
 		loadSelectedDate: async () => dateLoad.promise,
 		...makeService(async () => makeSelection("2026-05-01", oldMemo)),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -118,7 +115,6 @@ test("targeted memo updates preserve unaffected shuffle-day memos and clear only
 		loadSelectedDate: async () => [firstMemo, secondMemo],
 		...makeService(async () => makeSelectionWithMemos("2026-05-01", [firstMemo, secondMemo])),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => { renderCalls++; },
 	});
 
@@ -154,7 +150,6 @@ test("a late selected-date reload cannot overwrite a newer targeted update", asy
 		loadSelectedDate: async () => dateLoad.promise,
 		...makeService(async () => makeSelection("2026-05-01", oldMemo)),
 		isShuffleDayActive: () => true,
-		showNotice: () => {},
 		requestRender: () => {},
 	});
 
@@ -185,7 +180,7 @@ test("漫游只接受有效请求一次，导航取消传递 signal，保留已�
 			return ++calls === 1 ? makeSelection("2026-05-01", old) : pending.promise;
 		},
 		acceptSelection: async date => { accepts.push(date); },
-		loadSelectedDate: async () => [old], isShuffleDayActive: () => active, showNotice: () => {}, requestRender: () => {},
+		loadSelectedDate: async () => [old], isShuffleDayActive: () => active, requestRender: () => {},
 	});
 	await controller.refresh();
 	const first = controller.refresh();
@@ -213,20 +208,21 @@ test("历史保存失败不阻断 ready 内容，读取降级可见，迟到错�
 	let active = true;
 	let failLoad = false;
 	let accepts = 0;
-	const notices: string[] = [];
+	const { Notice } = await import("obsidian"); const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
 	const memo = makeMemo("memo", "2026-05-01T09:00");
 	const controller = new ShuffleDayController({
 		selectShuffleDay: async () => { if (failLoad) throw new Error("load failed"); return { ...makeSelection("2026-05-01", memo), historyUnavailable: true }; },
 		acceptSelection: () => ++accepts === 1 ? failedSave : saved.promise,
 		loadSelectedDate: async () => [memo], isShuffleDayActive: () => active,
-		showNotice: message => { notices.push(message); }, requestRender: () => {},
+		requestRender: () => {},
 	});
 	await controller.refresh();
 	assert.equal(controller.getSnapshot().status, "ready");
-	assert.match(notices[0], /history could not be read/);
+	assert.match(controller.getSnapshot().historyError!, /history could not be read/);
 	rejectSave(new Error("save failed"));
 	await Promise.resolve();
-	assert.match(notices[1], /history was not saved/);
+	assert.match(controller.getSnapshot().historyError!, /history was not saved/);
+	assert.deepEqual(notices, []);
 	assert.equal(controller.getSnapshot().status, "ready");
 	failLoad = true;
 	await controller.refresh();
@@ -240,6 +236,125 @@ test("历史保存失败不阻断 ready 内容，读取降级可见，迟到错�
 	await Promise.resolve();
 	assert.equal(accepts, 2);
 });
+
+test("指定日期接纳昨天的完整时间流，回读和重试均不抽日或记录历史", async () => {
+	const { ShuffleDayController } = await loadController();
+	const date = "2026-10-22";
+	const memos = Array.from({ length: 300 }, (_, index) => makeMemo(String(index), `${date}T09:00`));
+	let reads = 0;
+	const controller = new ShuffleDayController({
+		loadSelectedDate: async requested => { assert.equal(requested, date); reads++; return memos; },
+		selectShuffleDay: async () => assert.fail("指定日期不抽日"),
+		acceptSelection: async () => assert.fail("指定日期不记历史"),
+		isShuffleDayActive: () => true, requestRender: () => {},
+	});
+	assert.equal(await controller.openDate(date), true);
+	assert.equal(await controller.reloadSelectedDate(), true);
+	assert.equal(controller.getSnapshot().memos.length, 300);
+	assert.equal(controller.getSnapshot().stats?.memoCount, 300);
+	assert.equal(controller.getSnapshot().stats?.firstMemoTime, "09:00");
+	assert.deepEqual(controller.getSnapshot().memos.map(item => item.id), memos.map(item => item.id));
+	assert.equal(reads, 2);
+});
+
+test("指定日期快速切换或返回，取消信号与代次拒绝旧成功和旧失败", async () => {
+	const { ShuffleDayController } = await loadController();
+	for (const rejectOld of [false, true]) {
+		let release!: (value: MemoViewItem[]) => void, fail!: (error: Error) => void;
+		let firstSignal!: AbortSignal;
+		const controller = new ShuffleDayController({
+			loadSelectedDate: (date, signal) => date === "2026-05-01" ? new Promise((resolve, reject) => {
+				firstSignal = signal; release = resolve; fail = reject;
+			}) : Promise.resolve([makeMemo("new", "2026-05-02T10:00")]),
+			isShuffleDayActive: () => true, requestRender: () => {},
+		});
+		const pending = controller.openDate("2026-05-01");
+		await controller.openDate("2026-05-02");
+		assert.equal(firstSignal.aborted, true);
+		if (rejectOld) fail(new Error("late failure")); else release([makeMemo("old", "2026-05-01T09:00")]);
+		assert.equal(await pending, false);
+		assert.equal(controller.getSnapshot().selectedDate, "2026-05-02");
+		assert.deepEqual(controller.getSnapshot().memos.map(item => item.id), ["new"]);
+		const cancelled = controller.openDate("2026-05-01");
+		controller.clearSelection();
+		release([makeMemo("old", "2026-05-01T09:00")]);
+		assert.equal(await cancelled, false);
+		assert.equal(controller.getSnapshot().selectedDate, null);
+	}
+});
+
+test("指定日期读取失败保留目标以便重试，清空或移动不跳到另一天", async () => {
+	const { ShuffleDayController } = await loadController();
+	let fail = true;
+	const controller = new ShuffleDayController({
+		loadSelectedDate: async () => { if (fail) throw new Error("read failed"); return [makeMemo("memo", "2026-05-01T09:00")]; },
+		isShuffleDayActive: () => true, requestRender: () => {},
+	});
+	assert.equal(await controller.openDate("2026-05-01"), false);
+	assert.equal(controller.getSnapshot().status, "failed");
+	assert.equal(controller.getSnapshot().selectedDate, "2026-05-01");
+	fail = false;
+	assert.equal(await controller.reloadSelectedDate(), true);
+	controller.applyMemoChanges(new Map([["memo", makeMemo("moved", "2026-05-02T09:00")]]));
+	assert.equal(controller.getSnapshot().selectedDate, "2026-05-01");
+	assert.equal(controller.getSnapshot().status, "empty-day-cleared");
+	await controller.refresh();
+	assert.equal(controller.getSnapshot().status, "empty-day-cleared", "没有随机能力的日期详情不能换日");
+});
+
+test("首次日期读取遇到插入时重读整日，不能用局部插入冒充完整日期", async () => {
+	const { ShuffleDayController } = await loadController();
+	let release!: (value: MemoViewItem[]) => void;
+	let reads = 0;
+	const old = makeMemo("old", "2026-05-01T09:00");
+	const added = makeMemo("added", "2026-05-01T10:00");
+	const controller = new ShuffleDayController({
+		loadSelectedDate: async () => ++reads === 1 ? new Promise(resolve => { release = resolve; }) : [old, added],
+		isShuffleDayActive: () => true, requestRender: () => {},
+	});
+	const first = controller.openDate("2026-05-01");
+	controller.applyMemoChanges(new Map(), [added]);
+	assert.equal(controller.getSnapshot().stats, null);
+	assert.equal(controller.getSnapshot().status, "loading");
+	await new Promise(resolve => setImmediate(resolve));
+	assert.deepEqual(controller.getSnapshot().memos.map(memo => memo.id), ["old", "added"]);
+	release([old]);
+	assert.equal(await first, false);
+	assert.equal(controller.getSnapshot().stats?.memoCount, 2);
+	assert.equal(reads, 2);
+});
+
+for (const update of ["insert", "restore"] as const) {
+	test(`首次整日读取失败后 ${update} 触发完整重读，重读失败仍可重试`, async () => {
+		const { ShuffleDayController } = await loadController();
+		const old = makeMemo("old", "2026-05-01T09:00");
+		const added = makeMemo("added", "2026-05-01T10:00");
+		let reads = 0;
+		let fail = true;
+		const controller = new ShuffleDayController({
+			loadSelectedDate: async () => { reads++; if (fail) throw new Error("read failed"); return [old, added]; },
+			isShuffleDayActive: () => true, requestRender: () => {},
+		});
+		await controller.openDate("2026-05-01");
+		const apply = () => update === "insert" ? controller.applyMemoChanges(new Map(), [added]) : controller.applyMemoUpdate(added);
+		assert.equal(apply(), true);
+		assert.equal(controller.getSnapshot().status, "loading");
+		assert.deepEqual(controller.getSnapshot().memos, []);
+		assert.equal(controller.getSnapshot().stats, null);
+		await new Promise(resolve => setImmediate(resolve));
+		assert.equal(controller.getSnapshot().status, "failed");
+		assert.ok(controller.getSnapshot().error);
+		assert.equal(controller.getSnapshot().selectedDate, "2026-05-01");
+		fail = false;
+		apply();
+		await new Promise(resolve => setImmediate(resolve));
+		assert.equal(controller.getSnapshot().status, "ready");
+		assert.deepEqual(controller.getSnapshot().memos.map(memo => memo.id), ["old", "added"]);
+		assert.equal(controller.getSnapshot().stats?.memoCount, 2);
+		assert.equal(controller.getSnapshot().error, null);
+		assert.equal(reads, 3);
+	});
+}
 
 async function loadController(): Promise<typeof import("../src/ui/ShuffleDayController")> {
 	await ensureObsidianStub();
@@ -263,13 +378,6 @@ function makeSelectionWithMemos(selectedDate: string, memos: MemoViewItem[]) {
 	};
 }
 
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolvePromise: (value: T) => void = () => undefined;
-	const promise = new Promise<T>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: resolvePromise };
-}
 
 function makeMemo(id: string, createdAt: string): MemoViewItem {
 	return {

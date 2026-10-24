@@ -10,6 +10,15 @@ import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "../src/services/DiaryMe
 const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
 
+test("Daily SHA-256 revision 和完整 raw block 的历史摘要保持固定", async () => {
+	const result = await new DiaryMemoParser().parse({
+		sourcePath: "Daily/2026-09-01.md", logicalDate: "2026-09-01",
+		bytes: new TextEncoder().encode("## Memos\r\n- 06:04 备忘 🌱\r\n  second line\r\n"),
+	});
+	assert.equal(result.sourceRevision, "320173fe5bea44fa6aa17347c52b9703f04d07b75db27f6b518ed0147a6ebb31");
+	assert.equal(result.observations[0]?.rawBlockHash, "fnv1a-2e412316");
+});
+
 test("Things 的 Daily 任务位置保留首行、引用与续行原始偏移", async () => {
 	const content = "- 09:00 - [ ] first\n  > - [-] quoted\n  ```md\n  - [x] example\n  ```\n  - parent\n    1. [X] nested\n";
 	const result = await parser.parse({ sourcePath: "Daily/2026-09-20.md", logicalDate: "2026-09-20", bytes: Buffer.from(content) });
@@ -398,6 +407,11 @@ test("parses supported Obsidian image embeds", () => {
 		"Assets/a.webp",
 		"Assets/a.WEBP",
 	]);
+});
+
+test("生产 Daily 图片元数据排除 PDF 和普通笔记嵌入，保留支持的图片", () => {
+	const memo = parseCurrentDiary("- 12:00:00 ![[image.png]] ![[doc.pdf]] ![[note.md]] ![[2026-05-18#^5i3h99]] ![[Assets/a.WEBP|300]]")[0];
+	assert.deepEqual(memo.images.map(image => image.path), ["image.png", "Assets/a.WEBP"]);
 });
 
 test("does not treat Obsidian block embeds as images", () => {

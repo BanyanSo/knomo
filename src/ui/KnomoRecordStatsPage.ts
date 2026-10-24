@@ -8,6 +8,8 @@ import type {
 	SelectedRecordStats,
 } from "../services/RecordStatsService";
 import { formatTagFilterText } from "./viewFilters";
+import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
+import { renderKnomoActionableListSummary, renderKnomoCardFlowHeaders } from "./KnomoFeed";
 
 export interface RenderKnomoRecordStatsPageOptions {
 	snapshot: RecordStatsSnapshot;
@@ -16,6 +18,7 @@ export interface RenderKnomoRecordStatsPageOptions {
 	canAdvance: boolean;
 	canRetreat: boolean;
 	createHiddenText: (container: HTMLElement, name: string, text: string) => string;
+	pending?: { visible: boolean; blocked: boolean; headers: CardFlowHeader[] };
 }
 
 interface MetricItem {
@@ -36,16 +39,15 @@ export function renderKnomoRecordStatsPage(
 	options: RenderKnomoRecordStatsPageOptions,
 ): HTMLElement {
 	const page = container.createDiv({ cls: "knomo-record-stats-page" });
+	if (options.pending) renderKnomoCardFlowHeaders(page, options.pending.headers);
 	if (options.snapshot.state === "idle" || options.snapshot.state === "loading") {
-		renderLoadingState(page);
+		if (!options.pending?.blocked) renderLoadingState(page, options.pending?.visible ?? true);
 		return page;
 	}
-	if (options.snapshot.updating) {
-		page.createDiv({
-			cls: "knomo-record-stats-updating",
-			text: t("recordStats.updating"),
-			attr: { role: "status", "aria-live": "polite" },
-		});
+	if (options.snapshot.error !== null && options.selected !== null) {
+		const feedback = renderKnomoActionableListSummary(page, t("feedback.refreshFailed"), { label: t("recordStats.error.retry"), action: "record-stats-retry" });
+		feedback.setAttr("role", "status");
+		feedback.setAttr("aria-live", "polite");
 	}
 	if (options.snapshot.state === "error" || options.selected === null) {
 		renderErrorState(page, options.snapshot.error);
@@ -61,14 +63,11 @@ export function renderKnomoRecordStatsPage(
 	return page;
 }
 
-function renderLoadingState(container: HTMLElement): void {
-	const status = container.createDiv({
-		cls: "knomo-record-stats-loading",
-		attr: { role: "status", "aria-live": "polite" },
-	});
-	status.createDiv({ cls: "knomo-record-stats-state-title", text: t("recordStats.loading.title") });
-	status.createDiv({ cls: "knomo-record-stats-state-description", text: t("recordStats.loading.desc") });
-	const skeleton = container.createDiv({ cls: "knomo-record-stats-skeleton", attr: { "aria-hidden": "true" } });
+function renderLoadingState(container: HTMLElement, visible: boolean): void {
+	const pending = container.createDiv({ cls: "knomo-record-stats-pending", attr: { "aria-busy": "true",
+		...(visible ? { role: "status", "aria-live": "polite", "aria-label": t("loading.label") } : {}) } });
+	if (!visible) return;
+	const skeleton = pending.createDiv({ cls: "knomo-record-stats-skeleton", attr: { "aria-hidden": "true" } });
 	const overview = skeleton.createDiv({ cls: "knomo-record-stats-skeleton-section" });
 	renderSkeletonGrid(overview, 3);
 	const range = skeleton.createDiv({ cls: "knomo-record-stats-skeleton-section knomo-record-stats-skeleton-range" });

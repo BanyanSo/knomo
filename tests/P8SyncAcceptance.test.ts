@@ -12,7 +12,6 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
-	const { CatalogReferenceService } = await import("../src/services/CatalogReferenceService");
 	const { MarkdownMutationService } = await import("../src/services/MarkdownMutationService");
 	const { IndependentTrashService } = await import("../src/services/IndependentTrashService");
 	const { TrashSnapshotStore } = await import("../src/services/TrashSnapshotStore");
@@ -48,7 +47,7 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 		const trash = new IndependentTrashService(vault.app, trashStore, { ...options,
 			getOriginalDailyFile: async (path) => vault.app.vault.getAbstractFileByPath(path) as TFile | null });
 		const mutations = new MarkdownMutationService(vault.app, { ...options, getLogicalDateForPath: () => "2026-09-01", getWriteHeading: () => "## Memos", getMemoTimeFormat: () => "HH:mm:ss" });
-		const read = new CatalogReadService({ catalog, references: new CatalogReferenceService(vault.app, catalog),
+		const read = new CatalogReadService({ catalog,
 			now: () => new Date(2026, 8, 8), random: () => 0 });
 		return { catalog, read, mutations, trash, trashStore, reset: async () => {
 			stop();
@@ -70,9 +69,12 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 		assert.equal((await db.read.queryTimeBuoysForDate("2026-09-08")).items.length, 1);
 		const task = (await db.read.query({ limit: 10 })).items.find((item) => item.tasks.length > 0)!;
 		assert.equal(task.createdAt, "2026-09-01T11:22:33");
-		assert.equal(task.derivedReferences?.[0]?.state, "unresolved");
+		assert.equal(task.links[0]?.target, "Target");
 		await b.app.vault.create("Target.md", "target arrives");
-		assert.equal((await db.read.query({ limit: 10 })).items.find((item) => item.tasks.length > 0)!.derivedReferences?.[0]?.state, "resolved");
+		const afterTargetArrival = (await db.read.query({ limit: 10 })).items.find((item) => item.tasks.length > 0)!;
+		assert.equal(afterTargetArrival.content, task.content);
+		assert.deepEqual(afterTargetArrival.observationHandle, task.observationHandle);
+		assert.equal(afterTargetArrival.capabilities.markdown.openLinks, true);
 		await db.mutations.toggleTask({ observation: task.observationHandle, taskIndex: 0, checked: true });
 		await assert.rejects(() => db.mutations.edit({ observation: query.items[0]!.observationHandle, content: "wrong occurrence" }));
 		const fresh = await db.read.query({ limit: 10, text: "duplicate" });

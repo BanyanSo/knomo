@@ -178,7 +178,7 @@ export class KnomoCardFlowCoordinator {
 	}
 
 	renderBatch(options: RenderCardFlowBatchOptions): void {
-		const maxItems = options.isMobile && options.batch?.type === "items"
+		const maxItems = options.batch?.type === "items"
 			? options.syncItemLimit
 			: undefined;
 		this.runBatchChunk(options, 0, maxItems);
@@ -262,6 +262,7 @@ export class KnomoCardFlowCoordinator {
 		startIndex: number,
 		maxItems: number | undefined,
 	): void {
+		if (options.generation !== this.generation) return;
 		const result = runCardFlowBatch({
 			batch: options.batch,
 			generation: options.generation,
@@ -270,12 +271,15 @@ export class KnomoCardFlowCoordinator {
 			removeSentinel: () => this.sentinel.remove(),
 			renderItem: (item) => options.renderItem(item, options.generation),
 			completeBatch: (completedBatch) => this.batcher.completeBatch(completedBatch),
-			cancelBatch: () => this.batcher.cancelBatch(),
+			cancelBatch: () => {
+				if (options.generation === this.generation) this.batcher.cancelBatch();
+			},
 			startIndex,
 			maxItems,
-			timeBudgetMs: options.isMobile ? 4 : undefined,
+			timeBudgetMs: options.isMobile ? 4 : 8,
 		});
 		if (result.type === "pending") {
+			if (options.generation !== this.generation) return;
 			options.scheduleContinuation(() => {
 				this.runBatchChunk(options, result.nextIndex, options.chunkSize);
 			});

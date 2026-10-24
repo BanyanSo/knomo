@@ -45,7 +45,10 @@ test("both Card surfaces pass literal Markdown and Daily sourcePath to the host"
 	const renderer = new MemoMarkdownRenderer({ app: {} as never, createComponent: () => new TestComponent() as never,
 		getDocument: () => ({ createElement: (tag: string) => new TestElement(tag).asHtml() }) as Document, getGeneration: () => 0, concurrency: 1 });
 	try {
-		const values = ["第一行\n第二行\n第三行", "第一段\n\n第二段", "空格硬换行  \n反斜杠硬换行\\\n最后一行", "**粗体** [[内部链接]] #标签\n继续正文", ...composerMarkdownFixtures.map(f => f.text)];
+		const values = ["第一行\n第二行\n第三行", "第一段\n\n第二段", "空格硬换行  \n反斜杠硬换行\\\n最后一行", "**粗体** [[内部链接]] #标签\n继续正文",
+			"[[Target#^anchor|自定义来源]] [相对来源](../Folder/Target%20(1).md#%5Eanchor \"title\") [[Target#Heading]]",
+			"[[Folder/Target|同名文件一]] [[Other/Target|同名文件二]] ![[Target]] [broken](bad%ZZ.md)",
+			...composerMarkdownFixtures.map(f => f.text)];
 		for (const surface of ["card-flow", "mobile-search"] as const) {
 			for (const markdown of values) {
 				const count = calls.length;
@@ -441,6 +444,47 @@ test("unloads an in-flight render component when its generation becomes stale", 
 	} finally {
 		markdownRenderer.render = originalRender;
 	}
+});
+
+test("两个卡片表面保留运行中请求、最新 pending 和搜索版本的过期结果保护", async () => {
+	await ensureObsidianStub();
+	const { MarkdownRenderer } = await import("obsidian");
+	const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const original = MarkdownRenderer.render;
+	try {
+		for (const surface of ["card-flow", "mobile-search"] as const) {
+			const oldGate = deferred<void>(), latestGate = deferred<void>();
+			const calls: string[] = [], components: TestComponent[] = [];
+			let searchVersion = 1;
+			MarkdownRenderer.render = async (_app, markdown, target) => {
+				calls.push(markdown);
+				(target as unknown as TestElement).createSpan({ text: markdown });
+				if (markdown === "old") await oldGate.promise;
+				if (markdown === "latest") await latestGate.promise;
+			};
+			const renderer = new MemoMarkdownRenderer({ app: {} as never,
+				createComponent: () => { const component = new TestComponent(); components.push(component); return component as never; },
+				getDocument: () => ({} as Document), getGeneration: () => 0, getSearchVersion: () => searchVersion, concurrency: 1 });
+			const target = new TestElement("div", { text: "confirmed" });
+			const queue = (text: string) => renderer.queueMemoMarkdown(makeMemo({ contentSnapshot: text }), target.asHtml(), 0, "normal", text, surface);
+			try {
+				queue("old"); queue("obsolete"); queue("latest");
+				assert.deepEqual(calls, ["old"]);
+				oldGate.resolve();
+				await waitFor(() => calls.includes("latest"));
+				assert.deepEqual(calls, ["old", "latest"]);
+				assert.equal(target.getText(), "confirmed", "旧请求不得覆盖已确认正文");
+				assert.equal(components[0].unloadCalls, 1);
+				searchVersion++;
+				latestGate.resolve();
+				await waitFor(() => components[1].unloadCalls === 1);
+				assert.equal(target.getText(), "confirmed", "旧搜索版本不得发布结果");
+				queue("current");
+				await waitFor(() => target.getText() === "current");
+			} finally { oldGate.resolve(); latestGate.resolve(); renderer.clear(surface); }
+		}
+	} finally { MarkdownRenderer.render = original; }
 });
 
 function setDomGlobals(): void {

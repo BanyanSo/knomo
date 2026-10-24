@@ -5,6 +5,11 @@ import type { CardFlowHeader, CardFlowPresentation } from "./KnomoCardFlowPresen
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 import { getRecordStatsSearchFilterKey } from "./viewFilters";
 import type { SidebarNav } from "./viewNavigation";
+import type { CatalogCoverage } from "../types/catalog";
+
+export function catalogCoverageKey(coverage: CatalogCoverage | null): string {
+	return JSON.stringify(coverage == null ? null : [coverage.kind, coverage.configurationComplete, coverage.coveredFromDate, coverage.pendingFileCount, coverage.coveredFileCount, coverage.totalFileCount]);
+}
 
 export type CardFlowChangeIntent = "content-change" | "view-scope-change";
 
@@ -93,6 +98,8 @@ function getCardFlowHeadersStateKey(headers: readonly CardFlowHeader[]): string 
 		if (header.type === "random-toolbar") {
 			return getStateKey([header.type, header.count]);
 		}
+		if (header.type === "trash-toolbar") return getStateKey([header.type, header.count, String(header.busy)]);
+		if (header.type === "random-day") return getStateKey([header.type, header.selectedDate, JSON.stringify(header.stats)]);
 		return getStateKey([
 			header.type,
 			header.selectedDate,

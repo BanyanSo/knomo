@@ -3,6 +3,12 @@ import type { TimeBuoyCursor, TimeBuoyPageRequest, TimeBuoyPageResult, TimeBuoyQ
 import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
 import { getMemoRenderKey, getMemoRenderRevision } from "./MemoRenderRevision";
 import { getTimeBuoyTabDates } from "../services/TimeBuoyQuery";
+import { CatalogQueryCancelledError } from "../services/MemoCatalogStore";
+import { CatalogDiscoveryInvalidatedError } from "../services/CatalogReadService";
+
+export class TimeBuoyIndexPendingError extends Error {
+	constructor() { super("Time buoy index is not ready."); }
+}
 
 export type TimeBuoyTab = "today" | "upcoming" | "past";
 
@@ -59,8 +65,8 @@ interface TimeBuoyViewControllerOptions {
 	isPageActive?: () => boolean;
 	ensureReady?: () => Promise<void>;
 	isTodayIndexReady?: (targetDate: string) => Promise<boolean>;
-	queryPage: (request: TimeBuoyPageRequest) => Promise<TimeBuoyPageResult>;
-	queryDate: (date: string, cursor?: TimeBuoyCursor | null) => Promise<TimeBuoyQueryResult>;
+	queryPage: (request: TimeBuoyPageRequest, signal?: AbortSignal) => Promise<TimeBuoyPageResult>;
+	queryDate: (date: string, cursor?: TimeBuoyCursor | null, signal?: AbortSignal) => Promise<TimeBuoyQueryResult>;
 	requestRender: () => void;
 }
 
@@ -69,6 +75,7 @@ export class TimeBuoyViewController {
 	private requestId = 0;
 	private hasLoadedPage = false;
 	private refreshing = false;
+	private queryController: AbortController | null = null;
 
 	constructor(private readonly options: TimeBuoyViewControllerOptions) {
 		this.snapshot = createInitialSnapshot();
@@ -95,6 +102,7 @@ export class TimeBuoyViewController {
 		if (this.snapshot.activeTab === tab) {
 			return false;
 		}
+		this.cancelPendingQuery();
 		this.requestId++;
 		this.hasLoadedPage = false;
 		this.snapshot = createInitialSnapshot(tab);
@@ -119,6 +127,7 @@ export class TimeBuoyViewController {
 				.map(item => [item.memo.id, item])).values()], tab);
 		};
 		const today = replace("today"), upcoming = replace("upcoming"), past = replace("past");
+		this.cancelPendingQuery();
 		this.requestId++;
 		this.refreshing = false;
 		this.snapshot = { ...this.snapshot, today, upcoming, past, nextCursor: null, todayCursor: null, loading: false, loadingMore: false };
@@ -127,6 +136,9 @@ export class TimeBuoyViewController {
 
 	async loadInitial(): Promise<void> {
 		if (this.options.isPageActive?.() === false) { this.clear(); return; }
+		this.cancelPendingQuery();
+		const controller = new AbortController();
+		this.queryController = controller;
 		const requestId = ++this.requestId;
 		this.refreshing = true;
 		const activeTab = this.snapshot.activeTab;
@@ -140,10 +152,12 @@ export class TimeBuoyViewController {
 		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
 			await this.options.ensureReady?.();
+			controller.signal.throwIfAborted();
 			if (!this.isCurrentPageRequest(requestId)) {
 				return;
 			}
-			const result = await this.options.queryPage({ today, tab: activeTab, limit: 30 });
+			const result = await this.options.queryPage({ today, tab: activeTab, limit: 30 }, controller.signal);
+			controller.signal.throwIfAborted();
 			if (!this.isCurrentPageRequest(requestId) || today !== formatTimeBuoyDate(this.options.getNow())) {
 				return;
 			}
@@ -168,6 +182,11 @@ export class TimeBuoyViewController {
 			if (!this.isCurrentPageRequest(requestId)) {
 				return;
 			}
+			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) {
+				this.snapshot = { ...this.snapshot, loading: false, loadingMore: false };
+				this.options.requestRender();
+				return;
+			}
 			if (this.hasLoadedPage) {
 				this.snapshot = { ...this.snapshot, loadingMore: false, nextCursor: null, refreshError: error };
 				this.options.requestRender();
@@ -181,6 +200,7 @@ export class TimeBuoyViewController {
 				this.options.requestRender();
 			}
 		} finally {
+			if (this.queryController === controller) this.queryController = null;
 			if (requestId === this.requestId) this.refreshing = false;
 		}
 	}
@@ -191,9 +211,13 @@ export class TimeBuoyViewController {
 		if (cursor === null || this.refreshing || this.snapshot.loading || this.snapshot.loadingMore || this.snapshot.refreshError !== null) return;
 		const requestId = this.requestId;
 		const tab = this.snapshot.activeTab;
+		this.cancelPendingQuery();
+		const controller = new AbortController();
+		this.queryController = controller;
 		this.snapshot = { ...this.snapshot, loadingMore: true };
 		try {
-			const result = await this.options.queryPage({ today: cursor.today, tab, limit: 30, cursor });
+			const result = await this.options.queryPage({ today: cursor.today, tab, limit: 30, cursor }, controller.signal);
+			controller.signal.throwIfAborted();
 			if (!this.isCurrentPageRequest(requestId)) return;
 			if (cursor.today !== formatTimeBuoyDate(this.options.getNow()) || result.invalidated) {
 				// 游标失效明确进入重载状态，不把空页当作已读完。
@@ -206,8 +230,15 @@ export class TimeBuoyViewController {
 			this.options.requestRender();
 		} catch (refreshError) {
 			if (!this.isCurrentPageRequest(requestId)) return;
+			if (controller.signal.aborted || refreshError instanceof CatalogQueryCancelledError) {
+				this.snapshot = { ...this.snapshot, loadingMore: false };
+				this.options.requestRender();
+				return;
+			}
 			this.snapshot = { ...this.snapshot, loadingMore: false, refreshError };
 			this.options.requestRender();
+		} finally {
+			if (this.queryController === controller) this.queryController = null;
 		}
 	}
 
@@ -218,41 +249,55 @@ export class TimeBuoyViewController {
 	}
 
 	// 列表先准备独立结果，校验查询仍有效后再与普通 Memo 一起提交。
-	async prepareTodayOnly(cursor?: TimeBuoyCursor | null): Promise<TodayTimeBuoySnapshot> {
+	async prepareTodayOnly(cursor?: TimeBuoyCursor | null, signal?: AbortSignal): Promise<TodayTimeBuoySnapshot> {
 		const today = formatTimeBuoyDate(this.options.getNow());
 		const result: TodayTimeBuoySnapshot = {
 			todayDate: today, todayRevision: null, todayValid: false, today: [], todayError: null,
 		};
 		try {
-			if (!((await this.options.isTodayIndexReady?.(today)) ?? true)) return result;
-			const query = await this.options.queryDate(today, cursor);
-			if (today !== formatTimeBuoyDate(this.options.getNow())) throw new Error("Time buoy date changed while loading");
-			if (query.invalidated) throw new Error("Time buoy query invalidated");
-			if (query.missingPeriods.length > 0) throw new Error(`Incomplete time buoy index: ${query.missingPeriods.join(", ")}`);
+			signal?.throwIfAborted();
+			const ready = (await this.options.isTodayIndexReady?.(today)) ?? true;
+			signal?.throwIfAborted();
+			if (!ready) return result;
+			const query = await this.options.queryDate(today, cursor, signal);
+			signal?.throwIfAborted();
+			if (today !== formatTimeBuoyDate(this.options.getNow()) || query.invalidated) throw new CatalogDiscoveryInvalidatedError();
+			if (query.missingPeriods.length > 0) throw new TimeBuoyIndexPendingError();
 			return { ...result, todayRevision: query.catalogRevision ?? null, todayValid: true,
 				todayCursor: query.nextCursor ?? null, today: groupTabItems(query.items, "today") };
 		} catch (todayError) {
+			signal?.throwIfAborted();
+			if (todayError instanceof CatalogQueryCancelledError) throw todayError;
 			return { ...result, todayError };
 		}
 	}
 
 	async loadTodayOnly(render = true): Promise<void> {
+		this.cancelPendingQuery();
+		const controller = new AbortController();
+		this.queryController = controller;
 		const requestId = ++this.requestId;
 		const today = formatTimeBuoyDate(this.options.getNow());
-		const prepared = await this.prepareTodayOnly();
-		if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) return;
-		if (!prepared.todayValid) {
-			// 独立页保留最后结果；列表使用自己已提交的同版本快照。
-			if (prepared.todayError === null) this.hasLoadedPage = false;
-			const changed = this.snapshot.todayValid || (this.snapshot.todayError === null && prepared.todayError !== null);
-			this.snapshot = { ...this.snapshot, todayValid: false, todayError: prepared.todayError };
+		try {
+			const prepared = await this.prepareTodayOnly(undefined, controller.signal);
+			if (requestId !== this.requestId || today !== formatTimeBuoyDate(this.options.getNow())) return;
+			if (!prepared.todayValid) {
+				// 独立页保留最后结果；列表使用自己已提交的同版本快照。
+				if (prepared.todayError === null) this.hasLoadedPage = false;
+				const changed = this.snapshot.todayValid || (this.snapshot.todayError === null && prepared.todayError !== null);
+				this.snapshot = { ...this.snapshot, todayValid: false, todayError: prepared.todayError };
+				if (changed && render) this.options.requestRender();
+				return;
+			}
+			const nextSnapshot = { ...this.snapshot, ...prepared };
+			const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
+			this.snapshot = nextSnapshot;
 			if (changed && render) this.options.requestRender();
-			return;
+		} catch (error) {
+			if (!controller.signal.aborted && !(error instanceof CatalogQueryCancelledError)) throw error;
+		} finally {
+			if (this.queryController === controller) this.queryController = null;
 		}
-		const nextSnapshot = { ...this.snapshot, ...prepared };
-		const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
-		this.snapshot = nextSnapshot;
-		if (changed && render) this.options.requestRender();
 	}
 
 	async retry(): Promise<void> {
@@ -260,10 +305,17 @@ export class TimeBuoyViewController {
 	}
 
 	clear(): void {
+		this.cancelPendingQuery();
 		this.requestId += 1;
 		this.refreshing = false;
 		this.hasLoadedPage = false;
 		this.snapshot = createInitialSnapshot();
+	}
+
+	private cancelPendingQuery(): void {
+		this.queryController?.abort();
+		this.queryController = null;
+		this.refreshing = false;
 	}
 }
 

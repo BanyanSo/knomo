@@ -14,10 +14,8 @@ import type {
 import { formatDatePart, parseMemoCalendarDate } from "../utils/date";
 import { isRecord } from "../utils/object";
 import { getLegacySystemRootPath } from "../utils/path";
-import {
-	canonicalJson,
-	sha256Text,
-} from "../utils/canonicalJson";
+import { canonicalJson } from "../utils/canonicalJson";
+import { sha256Text } from "../utils/sha256";
 import { classifyLegacyArtifactPath } from "./LegacyArtifactInventory";
 import { CooperativeYieldController } from "./CooperativeTask";
 

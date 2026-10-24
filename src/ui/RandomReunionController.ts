@@ -2,6 +2,7 @@ import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { formatServiceError } from "../utils/serviceText";
 import { getMemoRenderRevision } from "./MemoRenderRevision";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
 const RANDOM_REUNION_DEFAULT_COUNT = 10;
 
@@ -99,11 +100,11 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 			if (runId !== this.runId) return;
 			if (!this.options.isRandomActive()) { this.cancelPending(); return; }
 			const message = formatServiceError(error, t("error.randomLoadFailed"));
-			this.options.showNotice(message);
+			logContinuationFailure("random", "selection", error, runId);
 			if (previousMemos !== null && previousMemos.length > 0) {
 				this.memos = previousMemos;
 				this.status = "ready";
-				this.error = null;
+				this.error = t("feedback.refreshFailed");
 			} else {
 				this.memos = null;
 				this.status = "failed";
@@ -139,18 +140,29 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		if (this.memos !== expected) return false;
 		const changed = memos.length !== expected.length
 			|| memos.some((memo, index) => getMemoRenderRevision(memo) !== getMemoRenderRevision(expected[index]));
-		if (!changed) return false;
+		if (!changed) {
+			if (this.error === t("feedback.refreshFailed")) { this.error = null; this.renderIfActive(); }
+			return false;
+		}
 		const removed = memos.length < expected.length;
 		this.cancelPending();
 		this.memos = memos;
 		this.status = memos.length > 0 ? "ready" : "empty";
 		this.error = removed ? t("random.sourceChanged") : null;
 		if (this.options.isRandomActive()) {
-			if (removed) this.options.showNotice(this.error!);
 			this.options.requestRender();
 		}
 		return true;
 	}
+
+	reportRefreshFailure(expected: TMemo[], error: unknown): void {
+		if (this.memos !== expected) return;
+		logContinuationFailure("random", "readback", error, this.runId);
+		this.error = expected.length > 0 ? t("feedback.refreshFailed") : t("feedback.loadFailed");
+		this.renderIfActive();
+	}
+
+	private renderIfActive(): void { if (this.options.isRandomActive()) this.options.requestRender(); }
 
 	async markReviewed(memoId: string): Promise<void> {
 		await this.options.markRandomReunionReviewed(memoId);
@@ -165,13 +177,13 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 			try {
 				await this.options.openRandomReunionMemo(memo);
 			} catch (error) {
-				this.options.showNotice(formatRandomReunionActionError(t("error.randomOpenFailed"), error));
+				if (this.options.isRandomActive()) this.options.showNotice(formatRandomReunionActionError(t("error.randomOpenFailed"), error));
 				return;
 			}
 			try {
 				await this.options.markRandomReunionReviewed(memo.id);
 			} catch (error) {
-				this.options.showNotice(formatRandomReunionActionError(t("error.randomReviewSaveFailed"), error));
+				if (this.options.isRandomActive()) this.options.showNotice(formatRandomReunionActionError(t("error.randomReviewSaveFailed"), error));
 			}
 		} finally {
 			this.openingMemoIds.delete(memoId);

@@ -4,7 +4,7 @@ import { JSDOM } from "jsdom";
 import { measureSuggestionContentWidth } from "../src/ui/composerSuggestPosition";
 
 for (const selector of ["suggestion-item", "knomo-link-suggest-item"]) {
-	for (const fail of [false, true]) test(`${selector}: measure after all nodes are attached and always clean up (failure=${fail})`, () => {
+	for (const nested of [false, true]) for (const fail of [false, true]) test(`${selector}: measure after all nodes are attached and always clean up (native=${nested}, failure=${fail})`, () => {
 		const dom = new JSDOM("<body><input><div id='popup'></div></body>");
 		const win = dom.window;
 		Object.assign(win.HTMLElement.prototype, {
@@ -14,14 +14,17 @@ for (const selector of ["suggestion-item", "knomo-link-suggest-item"]) {
 		});
 		const container = win.document.getElementById("popup")!;
 		container.style.padding = "0 3px"; container.style.border = "1px solid";
+		const list = nested ? container.appendChild(win.document.createElement("div")) : container;
+		if (nested) { list.className = "suggestion knomo-suggest-list"; list.style.padding = "6px"; list.style.border = "2px solid"; }
 		for (const width of [20, 60, 40]) {
-			const item = container.appendChild(win.document.createElement("div"));
+			const item = list.appendChild(win.document.createElement("div"));
 			item.className = selector; item.dataset.width = String(width);
 		}
 		let reads = 0;
 		win.HTMLElement.prototype.getBoundingClientRect = function () {
 			if (this.classList.contains("knomo-suggest-measure-item")) {
 				assert.equal(this.parentElement?.children.length, 3, "读取尺寸前应已挂载全部候选");
+				assert.equal(this.parentElement?.classList.contains("knomo-suggest-list"), nested, "测量保留原生列表祖先");
 				reads++;
 				if (fail) throw new Error("measurement failed");
 			}
@@ -30,9 +33,9 @@ for (const selector of ["suggestion-item", "knomo-link-suggest-item"]) {
 		try {
 			const measure = () => measureSuggestionContentWidth(win.document.querySelector("input")!, container, `.${selector}`);
 			if (fail) assert.throws(measure, /measurement failed/);
-			else { assert.equal(measure(), 70); assert.equal(reads, 3); }
+			else { assert.equal(measure(), nested ? 86 : 70); assert.equal(reads, 3); }
 			assert.equal(win.document.querySelector(".knomo-suggest-measure-host"), null);
-			assert.equal(container.children.length, 3);
+			assert.equal(list.children.length, 3);
 		} finally { dom.window.close(); }
 	});
 }

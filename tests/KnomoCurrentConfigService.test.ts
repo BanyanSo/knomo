@@ -115,7 +115,7 @@ test("外部配置先到时拒绝用旧内存值覆盖；重读后才可保存",
 	assert.equal(f.current.getEffectiveConfig().monthly.folder, "Remote");
 });
 
-test("已知 Obsidian Daily 配置读取暂时失败可继续浏览，显式禁用则清除范围", async () => {
+test("Obsidian Daily 配置无法重新确认时清除写入范围，恢复或显式禁用继续通知", async () => {
 	await ensureObsidianStub();
 	const { DailyNotesProvider } = await import("../src/services/DailyNotesProvider");
 	let runtime: unknown = { enabled: true, instance: { options: { folder: "Daily" } } };
@@ -125,11 +125,15 @@ test("已知 Obsidian Daily 配置读取暂时失败可继续浏览，显式禁�
 	provider.onChanged(() => { changes++; });
 	assert.equal(provider.getConfig()?.folder, "Daily");
 	runtime = null;
-	assert.equal((await provider.loadConfig())?.folder, "Daily");
-	assert.equal(changes, 1);
+	assert.equal(await provider.loadConfig(), null);
+	assert.equal(provider.getConfig(), null);
+	assert.equal(changes, 2);
+	runtime = { enabled: true, instance: { options: { folder: "Journal" } } };
+	assert.equal(provider.getConfig()?.folder, "Journal");
+	assert.equal(changes, 3);
 	runtime = { enabled: false };
 	assert.equal(await provider.loadConfig(), null);
-	assert.equal(changes, 2);
+	assert.equal(changes, 4);
 });
 
 function deferred() {

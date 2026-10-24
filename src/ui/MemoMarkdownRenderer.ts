@@ -16,6 +16,7 @@ import { normalizeTagKey } from "../utils/tags";
 import { parseMarkdownReferences } from "../utils/markdownReferences";
 import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
+import { shouldRefreshMarkdownReferences } from "./MarkdownReferenceRefresh";
 
 export type MemoMarkdownSurface = "card-flow" | "mobile-search";
 
@@ -48,6 +49,7 @@ export class MemoMarkdownRenderer {
 	private readonly surfaceEpochs = createSurfaceMap(() => 0);
 	private readonly unloadedComponents = new WeakSet<Component>();
 	private readonly memoBindings = new WeakMap<HTMLElement, MemoRecord>();
+	private readonly settledMarkdown = createSurfaceMap(() => new WeakMap<HTMLElement, { text: string; sourcePath: string; token: MarkdownRenderToken }>());
 	private nextRequestId = 0;
 
 	constructor(private readonly options: MemoMarkdownRendererOptions) {
@@ -72,9 +74,12 @@ export class MemoMarkdownRenderer {
 		priority: MarkdownRenderPriority,
 		previewText: string,
 		surface: MemoMarkdownSurface,
+		changedPaths?: readonly string[],
 	): void {
 		if (generation !== this.options.getGeneration(surface)) return;
 		this.memoBindings.set(container, memo);
+		if (this.canSkipReferenceRefresh(container, previewText, memo.dailyRef.path, surface, changedPaths)) return;
+		this.settledMarkdown[surface].delete(container);
 		const token = this.createRenderToken(container, generation, surface);
 		if (this.options.getSearchFilter) token.searchKey = getCatalogQueryKey(this.options.getSearchFilter(surface));
 		token.searchVersion = this.options.getSearchVersion?.(surface);
@@ -92,8 +97,11 @@ export class MemoMarkdownRenderer {
 		sourcePath: string,
 		generation: number,
 		surface: MemoMarkdownSurface,
+		changedPaths?: readonly string[],
 	): void {
 		if (generation !== this.options.getGeneration(surface)) return;
+		if (this.canSkipReferenceRefresh(container, text, sourcePath, surface, changedPaths)) return;
+		this.settledMarkdown[surface].delete(container);
 		// 来源已包含在当前正文中，先同步显示；宿主只在离屏完成后替换，避免来源行从零高度插入。
 		if (container.firstChild === null) renderSourceReferencePlaceholder(container, text);
 		const token = this.createRenderToken(container, generation, surface);
@@ -131,6 +139,7 @@ export class MemoMarkdownRenderer {
 
 	clear(surface: MemoMarkdownSurface = "card-flow"): void {
 		this.getQueue(surface).clear();
+		this.settledMarkdown[surface] = new WeakMap();
 		this.surfaceEpochs[surface] += 1;
 		for (const component of this.activeComponents[surface].values()) {
 			this.unloadComponent(component);
@@ -199,6 +208,15 @@ export class MemoMarkdownRenderer {
 		return surface === "card-flow" ? this.cardFlowQueue : this.mobileSearchQueue;
 	}
 
+	private canSkipReferenceRefresh(container: HTMLElement, text: string, sourcePath: string,
+		surface: MemoMarkdownSurface, changedPaths?: readonly string[]): boolean {
+		const settled = this.settledMarkdown[surface].get(container);
+		// 仅跳过同输入且已成功发布的渲染；pending、失败和 clear 后仍保留原刷新行为。
+		return changedPaths !== undefined && settled?.text === text && settled.sourcePath === sourcePath
+			&& this.isCurrentRender(container, settled.token, surface)
+			&& !shouldRefreshMarkdownReferences(this.options.app.metadataCache, text, sourcePath, changedPaths);
+	}
+
 	private async renderMemoMarkdown(
 		memo: MemoRecord,
 		container: HTMLElement,
@@ -233,6 +251,7 @@ export class MemoMarkdownRenderer {
 			prepareRenderedMemoMarkdown(container, current);
 			this.refreshSearchHits(current, container, surface);
 			this.adoptRenderComponent(container, component, surface);
+			this.settledMarkdown[surface].set(container, { text: previewText, sourcePath: memo.dailyRef.path, token });
 			adopted = true;
 		} catch {
 			if (!this.isCurrentRender(container, token, surface)) {
@@ -277,6 +296,7 @@ export class MemoMarkdownRenderer {
 			}
 			prepareInternalLinks(container, sourcePath);
 			this.adoptRenderComponent(container, component, surface);
+			this.settledMarkdown[surface].set(container, { text, sourcePath, token });
 			adopted = true;
 		} catch {
 			if (!this.isCurrentRender(container, token, surface)) {
@@ -323,6 +343,7 @@ export class MemoMarkdownRenderer {
 	}
 
 	private releaseContainerComponent(container: HTMLElement, surface: MemoMarkdownSurface): void {
+		this.settledMarkdown[surface].delete(container);
 		const component = this.activeComponents[surface].get(container);
 		if (component === undefined) {
 			return;

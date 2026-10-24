@@ -7,20 +7,12 @@ export const KNOMO_SIDEBAR_MENU_ICON = "knomo-sidebar-menu";
 export const KNOMO_RANDOM_REUNION_ICON = "knomo-random-reunion";
 export const KNOMO_TIME_BUOY_ICON = "knomo-time-buoy";
 
-const KNOMO_ICON_SVGS: Record<string, string> = {
-	"knomo-clock-0": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6\"/></g>",
-	"knomo-clock-1": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l2-4\"/></g>",
-	"knomo-clock-2": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l4-2\"/></g>",
-	"knomo-clock-3": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6h4\"/></g>",
-	"knomo-clock-4": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l4 2\"/></g>",
-	"knomo-clock-5": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l2 4\"/></g>",
-	"knomo-clock-6": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v10\"/></g>",
-	"knomo-clock-7": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l-2 4\"/></g>",
-	"knomo-clock-8": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l-4 2\"/></g>",
-	"knomo-clock-9": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6h-4\"/></g>",
-	"knomo-clock-10": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l-4-2\"/></g>",
-	"knomo-clock-11": "<g transform=\"scale(4.1666666667)\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/>\n  <path d=\"M12 6v6l-2-4\"/></g>",
+// 十二个时钟共用表盘，仅保留各小时的指针路径。
+const CLOCK_HAND_PATHS = [
+	"M12 6v6", "M12 6v6l2-4", "M12 6v6l4-2", "M12 6v6h4", "M12 6v6l4 2", "M12 6v6l2 4", "M12 6v10", "M12 6v6l-2 4", "M12 6v6l-4 2", "M12 6v6h-4", "M12 6v6l-4-2", "M12 6v6l-2-4"
+];
 
+const KNOMO_ICON_SVGS: Record<string, string> = {
 	[KNOMO_ALL_NOTES_ICON]: "<g transform=\"scale(4.1666666667)\"><rect x=\"4\" y=\"4\" width=\"14\" height=\"16\" rx=\"3\" stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\"/><path d=\"M8 9h6M8 13h5\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" fill=\"none\"/><circle cx=\"18\" cy=\"18\" r=\"2.1\" fill=\"currentColor\"/></g>",
 	[KNOMO_LOGO_ICON]: "<g transform=\"scale(1.5625)\"><path d=\"M18 10v44\" stroke=\"currentColor\" stroke-width=\"8\" stroke-linecap=\"round\" fill=\"none\"/><path d=\"M34 32L52 15\" stroke=\"currentColor\" stroke-width=\"8\" stroke-linecap=\"round\" fill=\"none\"/><path d=\"M34 32L53 49\" stroke=\"currentColor\" stroke-width=\"8\" stroke-linecap=\"round\" fill=\"none\"/><circle cx=\"32\" cy=\"32\" r=\"5\" fill=\"currentColor\"/></g>",
 	[KNOMO_SEARCH_ICON]: "<g transform=\"scale(4.1666666667)\"><circle cx=\"10.5\" cy=\"10.5\" r=\"6.5\" stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\"/><path d=\"M15.5 15.5L20 20\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" fill=\"none\"/><circle cx=\"10.5\" cy=\"10.5\" r=\"2\" fill=\"currentColor\"/></g>",
@@ -30,6 +22,10 @@ const KNOMO_ICON_SVGS: Record<string, string> = {
 };
 
 export function registerKnomoIcons(): void {
+	for (const [hour, handPath] of CLOCK_HAND_PATHS.entries()) {
+		addIcon(`knomo-clock-${hour}`, `<g transform="scale(4.1666666667)" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>
+  <path d="${handPath}"/></g>`);
+	}
 	for (const [iconId, svg] of Object.entries(KNOMO_ICON_SVGS)) {
 		addIcon(iconId, svg);
 	}

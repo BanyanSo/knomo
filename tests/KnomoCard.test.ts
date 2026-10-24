@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createCardMemo as makeMemo } from "./helpers/memoCardFixture";
 
 import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
 import type { MemoViewItem } from "../src/types/memoView";
@@ -8,6 +9,48 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { createRecentTimeFlowContext, getRecentMemoPresentation } from "../src/ui/RecentTimeFlowPresentation";
 import { KnomoCardFlowBatcher, runCardFlowBatch } from "../src/ui/KnomoCardFlow";
 import { MemoCardImageCache } from "../src/ui/KnomoCardImages";
+import { createReferenceMemo } from "./helpers/referenceMemo";
+
+test("查看那一天只出现在随机批次卡片，整日详情沿用普通 Daily 打开行为", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	for (const randomCard of [true, false]) {
+		const root = new TestElement("div");
+		renderKnomoMemoCard(root.asHtml(), createReferenceMemo(), {
+			generation: 1, renderIndex: 0, includeActions: true, randomCard, activeMenuMemoId: null,
+			formatDisplayTime: value => value, getMarkdownPriority: () => "normal", getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }),
+			queueMemoMarkdown: () => {}, renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
+		});
+		const action = root.find("[data-memo-action='view-day']");
+		assert.equal(action !== null, randomCard);
+		if (action) { assert.equal(action.getText(), "View this day"); assert.equal(action.getAttr("role"), "menuitem"); }
+		assert.ok(root.find("[data-memo-action='open-daily']"));
+		assert.equal(root.find("[data-memo-time-open='daily']")?.getAttr("data-random-reunion-card"), randomCard ? "true" : null);
+	}
+});
+
+test("引用和复制链接使用固定简洁文案，有无自身锚点均与无障碍名称一致", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const { translate } = await import("../src/i18n");
+	for (const anchor of [null, "own-anchor"]) {
+		const root = new TestElement("div"), memo = createReferenceMemo(anchor);
+		renderKnomoMemoCard(root.asHtml(), memo, {
+			generation: 1, renderIndex: 0, includeActions: true, randomCard: false, activeMenuMemoId: null,
+			formatDisplayTime: value => value, getMarkdownPriority: () => "normal", getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }),
+			queueMemoMarkdown: () => {}, renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
+		});
+		for (const action of ["reference", "copy-link"] as const) {
+			const button = root.find(`[data-memo-action='${action}']`)!;
+			const label = action === "reference" ? "Reference" : "Copy link";
+			assert.equal(button.getText(), label);
+			assert.equal(button.getAttr("aria-label"), label);
+		}
+	}
+	assert.equal(translate("zh-CN", "card.reference"), "引用");
+	assert.equal(translate("zh-CN", "card.copyLink"), "复制链接");
+	assert.equal(translate("zh-CN", "notice.copiedLink"), "已复制链接");
+});
 
 test("真实卡片时间按钮保留 Daily 操作，近三天只显示墙上分钟与装饰图标", async () => {
 	await ensureObsidianStub();
@@ -99,6 +142,7 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 			getInitialCardBatchSize: () => 10, renderCardForMode: render,
 			replaceMemoCard: (old: TestElement, _previous: MemoViewItem, memo: MemoViewItem) => { old.remove(); return render(root.asHtml(), memo); },
 			removeCardImageTargets: () => {}, renderTimeBuoyIntro: () => null, renderCardFlowSentinelIfNeeded: () => {},
+			renderCardFlowHeaders: () => [],
 			renderHistoryLoadMore: () => {}, syncCardMenuState: () => {}, restorePendingCardFlowScrollTop: () => {},
 		});
 		const recent = makeMemo({ id: "today", catalog: { observation: { logicalDate: "2026-09-10", time: "12:34" } } as NonNullable<MemoViewItem["catalog"]> });
@@ -395,6 +439,19 @@ test("trash memo cards expose restore and single-item permanent purge actions", 
 	assert.equal(root.find(".knomo-card-meta")?.getText(), "Deleted: 2026-06-03 00:00:00");
 });
 
+test("Trash 已确认恢复的按钮明确表示重试清理副本", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoTrashMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+	renderKnomoTrashMemoCard(root.asHtml(), makeMemo({ status: "deleted" }), {
+		generation: 1, renderIndex: 0, busyAction: null, cleanupPending: true,
+		formatDisplayTime: value => value, formatOptionalTime: value => value ?? "",
+		getMarkdownPriority: () => "normal", getMemoCardPreview: memo => ({ text: memo.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => undefined, renderMemoCardImages: () => undefined,
+	});
+	assert.equal(root.find("[data-trash-action='restore']")?.getText(), "Retry cleanup");
+});
+
 async function renderMemoCard(
 	contentSnapshot: string,
 	preview?: MemoCardPreview,
@@ -572,25 +629,6 @@ class TestElement {
 	}
 }
 
-function makeMemo(overrides: Partial<MemoViewItem> = {}): MemoViewItem {
-	return {
-		id: "memo-1",
-		createdAt: "2026-06-02T00:00:00+08:00",
-		updatedAt: "2026-06-02T00:00:00+08:00",
-		contentSnapshot: "memo",
-		contentHash: "hash",
-		status: "active",
-		tags: [],
-		links: [],
-		images: [],
-		dailyRef: {
-			path: "Daily/2026-06-02.md",
-			heading: null,
-			lineNumberHint: null,
-		},
-		...overrides,
-	};
-}
 
 function makeCapabilities() {
 	return {

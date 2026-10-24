@@ -10,6 +10,7 @@ test("record and archive groups retain the existing setting order", () => {
 	assert.deepEqual(extractRenderCalls(record), [
 		"renderDailyHeadingSetting", "renderInsertPositionSetting", "renderTimeFormatSetting",
 		"renderTimeBuoySetting", "renderToolbarSetting", "renderRecentTimeFlowSetting",
+		"renderReduceGlassSetting",
 	]);
 	assert.deepEqual(extractRenderCalls(archive), [
 		"renderDateOrderSetting", "renderMonthlyFileFormatSetting",
@@ -57,8 +58,8 @@ test("legacy attention exposes retry actions and scoped cleanup details", () => 
 
 	assert.doesNotMatch(legacySource, /memoId|item\.code|item\.detail/u);
 	assert.match(legacySource, /if \(report\.cleanupCandidate\)/u);
-	assert.match(legacySource, /run\(\)/u);
-	assert.match(legacySource, /legacyTrashMigrationService\.run\(\)/u);
+	assert.doesNotMatch(legacySource, /legacyTrashMigrationService\.run\(\)/u);
+	assert.match(legacySource, /legacyTrashMigrationService\.run\("manual"\)/u);
 	assert.doesNotMatch(legacySource, /explicit/u);
 });
 

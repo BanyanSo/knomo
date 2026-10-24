@@ -15,6 +15,7 @@ import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { DiaryMemoParser } from "./services/DiaryMemoParser";
 import { DailyMemoWriteGateway } from "./services/DailyMemoWriteGateway";
 import type { CatalogReadService } from "./services/CatalogReadService";
+import type { CatalogScanSnapshot } from "./types/catalogView";
 import {
 	MONTHLY_PROJECTION_CHECKPOINT_META_KEY,
 	MonthlyProjectionCoordinator,
@@ -27,6 +28,7 @@ import { LegacyTrashMigrationService } from "./services/LegacyTrashMigrationServ
 import { IndependentTrashService } from "./services/IndependentTrashService";
 import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
 import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
+import { createClearTrashAction } from "./ui/clearTrashAction";
 import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
@@ -42,6 +44,7 @@ import { ViewRefreshScheduler } from "./services/ViewRefreshScheduler";
 import { VaultTagIndex } from "./services/VaultTagIndex";
 import { KNOMO_LOGO_ICON, registerKnomoIcons } from "./icons";
 import { t } from "./i18n";
+import { logContinuationFailure } from "./utils/continuationDiagnostics";
 import { KnomoSettingTab } from "./ui/KnomoSettingTab";
 import { MobileNavbarCompactController } from "./ui/MobileNavbarCompactController";
 import { KnomoView } from "./ui/KnomoView";
@@ -231,7 +234,7 @@ export default class KnomoPlugin extends Plugin {
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
 				isConfigurationComplete: () => dailyNotesProvider.getConfig() !== null,
-				onProgress: (coverage) => this.updateOpenViewCatalogProgress(coverage),
+				onProgress: (coverage, scan) => this.updateOpenViewCatalogProgress(coverage, scan),
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [MONTHLY_PROJECTION_CHECKPOINT_META_KEY],
 				onCatalogSettled: async () => {
@@ -258,7 +261,7 @@ export default class KnomoPlugin extends Plugin {
 				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 					if (!(leaf.view instanceof KnomoView)) continue;
 					try { leaf.view.handleConfirmedDailyMemoChange(presentation); }
-					catch (error) { console.error("Knomo confirmed card refresh failed", error); }
+					catch (error) { leaf.view.reportViewRefreshFailure(error, "confirmed-render"); }
 				}
 			},
 			getWriteHeading: getEffectiveWriteHeading,
@@ -329,6 +332,7 @@ export default class KnomoPlugin extends Plugin {
 					return result;
 				},
 				getProjectionState: () => this.monthlyProjectionCoordinator?.getProjectionState() ?? "ready",
+				getScanSnapshot: () => this.catalogIndexCoordinator!.getScanSnapshot(),
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
 				getLegacyImportStatus: () => this.legacyTrashMigrationService?.getReport().status ?? "idle",
@@ -342,6 +346,14 @@ export default class KnomoPlugin extends Plugin {
 		);
 		this.catalogReadService = this.memoCommandService.getReadService();
 		this.registerTrashEvents(trashStore);
+		const clearTrash = createClearTrashAction({
+			getPath: () => trashStore.path,
+			confirm: () => showKnomoConfirmModal(this.app, { title: t("trash.clear"), message: t("confirm.clearTrash"),
+				confirmLabel: t("trash.clear"), danger: true }),
+			clear: () => this.memoCommandService!.clearTrash(),
+			showNotice: message => { new Notice(message); },
+			isActive: () => !lowPriorityWorkQueue.signal.aborted,
+		});
 
 		const legacyIndexReader = new LegacyIndexReader(
 			this.app,
@@ -456,6 +468,7 @@ export default class KnomoPlugin extends Plugin {
 				this.memoCommandService!,
 				this.catalogReadService!,
 				trashStore,
+				clearTrash,
 				() => dailyNoteService.getStatus(),
 				() => dailyNoteService.getTodayDailyNotePath(),
 				() => retryRuntimeState(),
@@ -499,16 +512,7 @@ export default class KnomoPlugin extends Plugin {
 		this.addCommand({
 			id: "clear-trash",
 			name: t("trash.clear"),
-			callback: async () => {
-				try {
-					const selectedPath = trashStore.path;
-					if (!await showKnomoConfirmModal(this.app, { title: t("trash.clear"), message: t("confirm.clearTrash"),
-						confirmLabel: t("trash.clear"), danger: true })) return;
-					if (trashStore.path !== selectedPath) throw new Error("Trash configuration changed.");
-					await this.memoCommandService!.clearTrash();
-					new Notice(t("notice.trashCleared"));
-				} catch (error) { new Notice(t("error.clearTrashFailed", { error: String(error) })); }
-			},
+			callback: () => clearTrash(),
 		});
 
 		settingTab = new KnomoSettingTab(
@@ -623,27 +627,30 @@ export default class KnomoPlugin extends Plugin {
 			this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async leaf => {
 				if (!(leaf.view instanceof KnomoView)) return;
 				try { await leaf.view.handleDailyMemoPresentationChange(change, committed); }
-				catch (error) { console.error("Knomo committed card refresh failed", error); }
+				catch (error) { leaf.view.reportViewRefreshFailure(error, "committed-render"); }
 			}),
 		);
 		await committed;
 		await presentation;
 		// 卡片展示失败不改变 Daily/Catalog 成功状态；普通查询、浮标和统计仍走现有合并刷新。
-		void this.queueRefreshOpenViews().catch((error: unknown) => console.error("Knomo view refresh failed", error));
+		void this.queueRefreshOpenViews().catch((error: unknown) => logContinuationFailure("view", "scheduled-refresh", error));
 	}
 
 	private async runRefreshOpenViews(forceRebuild = false): Promise<void> {
 		const refreshes = this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async (leaf) => {
 			if (leaf.view instanceof KnomoView) {
-				await leaf.view.refresh(forceRebuild);
+				try { await leaf.view.refresh(forceRebuild); }
+				catch (error) { leaf.view.reportViewRefreshFailure(error); }
 			}
 		});
 		await Promise.all(refreshes);
 	}
 
-	private updateOpenViewCatalogProgress(coverage: CatalogCoverage): void {
+	private updateOpenViewCatalogProgress(coverage: CatalogCoverage, scan: CatalogScanSnapshot): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
-			if (leaf.view instanceof KnomoView) leaf.view.updateCatalogProgress(coverage);
+			if (!(leaf.view instanceof KnomoView)) continue;
+			try { leaf.view.updateCatalogProgress(coverage, scan); }
+			catch (error) { leaf.view.reportViewRefreshFailure(error, "catalog-progress"); }
 		}
 	}
 
@@ -683,23 +690,29 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	private registerReferenceEvents(): void {
-		// 只重查已打开视图的 Catalog 页面；目标变化不触发全库 Daily 重读。
+		// 合并引用事件，只更新已打开视图的宿主渲染，不重查列表或重新抽样。
+		let pendingPaths: Set<string> | null = new Set();
 		const scheduler = new ViewRefreshScheduler(
 			() => this.app.workspace.containerEl.win,
 			async () => {
+				const changedPaths = pendingPaths === null ? undefined : [...pendingPaths];
+				pendingPaths = new Set();
 				await Promise.all(this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE).map(async leaf => {
-					if (leaf.view instanceof KnomoView) await leaf.view.refreshReferences();
+					if (leaf.view instanceof KnomoView) await leaf.view.refreshReferences(changedPaths);
 				}));
 			},
 			OPEN_VIEWS_REFRESH_DEBOUNCE_MS,
 		);
-		this.register(() => scheduler.clear());
-		const refresh = (): void => {
+		this.register(() => { scheduler.clear(); pendingPaths = null; });
+		const refresh = (path?: string): void => {
+			if (path === undefined) pendingPaths = null;
+			else pendingPaths?.add(path);
 			void scheduler.queue().catch((error: unknown) => console.error("Knomo reference refresh failed", error));
 		};
-		this.registerEvent(this.app.metadataCache.on("changed", refresh));
-		this.registerEvent(this.app.vault.on("rename", refresh));
-		this.registerEvent(this.app.vault.on("delete", refresh));
+		this.registerEvent(this.app.metadataCache.on("changed", file => refresh(file?.path)));
+		// 结构变化可能改变旧目标或嵌入的解析关系，继续保留全量保守刷新。
+		this.registerEvent(this.app.vault.on("rename", () => refresh()));
+		this.registerEvent(this.app.vault.on("delete", () => refresh()));
 	}
 
 	private broadcastAttachmentChanges(paths: readonly string[]): void {

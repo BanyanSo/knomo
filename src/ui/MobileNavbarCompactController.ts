@@ -7,6 +7,7 @@ import { t } from "../i18n";
 interface MobileNavbarCompactControllerOptions {
 	isActive: () => boolean;
 	isComposerOpen: () => boolean;
+	isGlassReduced: () => boolean;
 	toggleSidebar: () => void;
 	openComposer: () => void;
 }
@@ -53,6 +54,7 @@ const BODY_ACTIVE_CLASS = "knomo-mobile-navbar-compact-active";
 const BODY_FLOATING_CLASS = "knomo-mobile-navbar-floating";
 const BODY_FIXED_CLASS = "knomo-mobile-navbar-fixed";
 const NAVBAR_COMPACT_CLASS = "knomo-mobile-navbar-compact";
+const NAVBAR_REDUCED_GLASS_CLASS = "knomo-reduce-glass";
 const NATIVE_HIDDEN_CLASS = "knomo-mobile-navbar-hidden";
 const SIDEBAR_ACTION_CLASS = "knomo-mobile-navbar-sidebar-action";
 const CREATE_BUTTON_CLASS = "knomo-mobile-create-fab";
@@ -94,7 +96,8 @@ export function getMobileContentBottomOcclusion(
 export class MobileNavbarCompactController {
 	private started = false;
 	private observer: MutationObserver | null = null;
-	private readonly observedElements = new Set<HTMLElement>();
+	private navbarWaitObserver: MutationObserver | null = null;
+	private readonly observedElements = new Map<HTMLElement, boolean>();
 	private syncFrameId: number | null = null;
 	private syncThrottleTimerId: number | null = null;
 	private mutationSuppressionTimerId: number | null = null;
@@ -139,6 +142,19 @@ export class MobileNavbarCompactController {
 		this.queueSyncCycle();
 	}
 
+	syncGlassPreference(): void {
+		if (!this.shouldEnable()) return;
+		const navbarEl = this.findNavbar();
+		const reduced = this.options.isGlassReduced();
+		if (!navbarEl?.hasClass(NAVBAR_COMPACT_CLASS) || navbarEl.hasClass(NAVBAR_REDUCED_GLASS_CLASS) === reduced) return;
+		this.beginMutationSuppression();
+		try {
+			navbarEl.toggleClass(NAVBAR_REDUCED_GLASS_CLASS, reduced);
+		} finally {
+			this.endMutationSuppressionSoon();
+		}
+	}
+
 	stop(): void {
 		if (!this.started) {
 			return;
@@ -166,11 +182,13 @@ export class MobileNavbarCompactController {
 		const navbarEl = this.findNavbar();
 		if (navbarEl === null) {
 			this.recordDebugInfo("mobile navbar not found");
+			if (this.observer !== null) this.disconnectObserver();
 			this.cleanupRenderedState();
-			this.scheduleStabilizedSyncs();
+			this.waitForNavbar();
 			return;
 		}
 
+		this.stopWaitingForNavbar();
 		this.ensureObserver(navbarEl);
 		this.beginMutationSuppression();
 		try {
@@ -181,6 +199,7 @@ export class MobileNavbarCompactController {
 			body.toggleClass(BODY_FLOATING_CLASS, floating);
 			body.toggleClass(BODY_FIXED_CLASS, !floating);
 			navbarEl.addClass(NAVBAR_COMPACT_CLASS);
+			navbarEl.toggleClass(NAVBAR_REDUCED_GLASS_CLASS, this.options.isGlassReduced());
 			this.syncNavbarPlacement(navbarEl, floating, edgeInsets);
 
 			this.hideNativeActions(navbarEl);
@@ -272,31 +291,58 @@ export class MobileNavbarCompactController {
 		this.delayedSyncTimerIds.clear();
 	}
 
-	private ensureObserver(navbarEl: HTMLElement): void {
-		if (this.observer === null) {
-			const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
-			this.observer = new MutationObserverConstructor((mutations) => this.handleObservedMutations(mutations));
-		}
-		this.observeElement(navbarEl, true);
-		for (const selectorKey of ["topLeftChrome", "topRightChrome", "topChrome"] satisfies MobileNavbarSelectorKey[]) {
-			const element = this.findElement(this.doc.body, MOBILE_NAVBAR_SELECTORS[selectorKey]);
-			if (element !== null) {
-				this.observeElement(element, false);
+	private waitForNavbar(): void {
+		if (this.navbarWaitObserver !== null) return;
+		const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
+		// 稳定同步只执行当前一轮；晚到的宿主节点由 DOM 变化唤醒，不续订定时器。
+		const observer = new MutationObserverConstructor(() => {
+			if (this.navbarWaitObserver !== observer) return;
+			if (!this.shouldEnable()) {
+				this.stopWaitingForNavbar();
+				return;
 			}
-		}
+			if (this.findNavbar() === null) return;
+			this.stopWaitingForNavbar();
+			this.queueSyncCycle();
+		});
+		this.navbarWaitObserver = observer;
+		observer.observe(this.doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 	}
 
-	private observeElement(element: HTMLElement, subtree: boolean): void {
-		if (this.observer === null || this.observedElements.has(element)) {
+	private stopWaitingForNavbar(): void {
+		this.navbarWaitObserver?.disconnect();
+		this.navbarWaitObserver = null;
+	}
+
+	private ensureObserver(navbarEl: HTMLElement): void {
+		const roots = new Map<HTMLElement, boolean>([[navbarEl, true]]);
+		for (const selectorKey of ["topLeftChrome", "topRightChrome", "topChrome"] satisfies MobileNavbarSelectorKey[]) {
+			const element = this.findElement(this.doc.body, MOBILE_NAVBAR_SELECTORS[selectorKey]);
+			if (element !== null && !roots.has(element)) {
+				roots.set(element, false);
+			}
+		}
+		if (this.observer !== null && roots.size === this.observedElements.size
+			&& [...roots].every(([element, subtree]) => this.observedElements.get(element) === subtree)) {
 			return;
 		}
-		this.observer.observe(element, {
-			attributes: true,
-			attributeFilter: ["class", "style"],
-			childList: subtree,
-			subtree,
+		// 宿主根变化时同时撤销旧注册与引用；同节点兼任角色时保留较强的观察范围。
+		this.observer?.disconnect();
+		this.observedElements.clear();
+		const MutationObserverConstructor = (this.win as WindowWithMutationObserver).MutationObserver ?? MutationObserver;
+		const observer = new MutationObserverConstructor((mutations) => {
+			if (this.observer === observer) this.handleObservedMutations(mutations);
 		});
-		this.observedElements.add(element);
+		this.observer = observer;
+		for (const [element, subtree] of roots) {
+			observer.observe(element, {
+				attributes: true,
+				attributeFilter: ["class", "style"],
+				childList: subtree,
+				subtree,
+			});
+			this.observedElements.set(element, subtree);
+		}
 	}
 
 	private handleObservedMutations(mutations: MutationRecord[]): void {
@@ -354,6 +400,7 @@ export class MobileNavbarCompactController {
 	}
 
 	private disconnectObserver(): void {
+		this.stopWaitingForNavbar();
 		this.observer?.disconnect();
 		this.observer = null;
 		this.observedElements.clear();
@@ -375,6 +422,7 @@ export class MobileNavbarCompactController {
 		for (const element of body.findAll(`.${NAVBAR_COMPACT_CLASS}`)) {
 			this.clearNavbarStyleProperties(element);
 			element.removeClass(NAVBAR_COMPACT_CLASS);
+			element.removeClass(NAVBAR_REDUCED_GLASS_CLASS);
 		}
 		for (const element of body.findAll(`.${NATIVE_HIDDEN_CLASS}`)) {
 			element.removeClass(NATIVE_HIDDEN_CLASS);
@@ -724,6 +772,7 @@ export class MobileNavbarCompactController {
 				[NAVBAR_RESERVED_RIGHT_VAR]: NAVBAR_RESERVED_RIGHT_DEFAULT,
 			});
 			element.removeClass(NAVBAR_COMPACT_CLASS);
+			element.removeClass(NAVBAR_REDUCED_GLASS_CLASS);
 		}
 		for (const element of body.findAll(`.${NATIVE_HIDDEN_CLASS}`)) {
 			element.removeClass(NATIVE_HIDDEN_CLASS);

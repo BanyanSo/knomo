@@ -2,6 +2,7 @@ import { parseMarkdownReferences } from "../utils/markdownReferences";
 import type { MemoObservation } from "../types/catalog";
 import type { MemoLinkRef } from "../types/memo";
 import { hashMemoContent, hashText } from "../utils/hash";
+import { sha256Bytes } from "../utils/sha256";
 import { getMarkdownTaskLines } from "../utils/markdownTasks";
 import {
 	extractTrailingBlockId,
@@ -293,17 +294,6 @@ function buildMemoObservation(
 
 function stripOneContinuationIndent(line: string): string {
 	return line.startsWith("\t") ? line.slice(1) : line.slice(2);
-}
-
-export async function sha256Bytes(bytes: Uint8Array): Promise<string> {
-	const cryptoApi = typeof crypto === "undefined" ? undefined : crypto;
-	if (cryptoApi?.subtle === undefined) {
-		throw new Error("Web Crypto SHA-256 is unavailable.");
-	}
-	const digestInput = new Uint8Array(bytes.byteLength);
-	digestInput.set(bytes);
-	const digest = await cryptoApi.subtle.digest("SHA-256", digestInput.buffer);
-	return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 export function extractDailyExplicitReferenceTargets(content: string): string[] {

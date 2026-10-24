@@ -76,6 +76,7 @@ test("handles ArrowUp ArrowDown Enter Tab and Escape", () => {
 	tabHarness.suggest.openForCurrentRange();
 	assert.equal(tabHarness.suggest.handleKeydown(createKeyboardEvent("Tab")), true);
 	assert.equal(tabHarness.input.value, "[[Projects/Beta]]");
+	assert.equal(tabHarness.input.selectionStart, "[[Projects/Beta".length, "Tab leaves the cursor inside the link");
 
 	const escapeHarness = createHarness([makeFile("Projects/Beta.md")]);
 	escapeHarness.input.value = "[[]]";
@@ -103,26 +104,28 @@ test("keeps keyboard-selected candidates visible inside the popover", () => {
 	harness.input.focus();
 	harness.suggest.openForCurrentRange();
 	const popover = harness.suggest.getPopoverForTest() as unknown as FakeElement;
+	const list = popover.querySelector(".knomo-suggest-list")!;
 
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
 	assert.equal(harness.suggest.getSelectedIndex(), 3);
-	assert.equal(popover.scrollTop, 88);
+	assert.equal(list.scrollTop, 88);
 
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
 	assert.equal(harness.suggest.getSelectedIndex(), 0);
-	assert.equal(popover.scrollTop, 0);
+	assert.equal(list.scrollTop, 0);
 
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowUp"));
 	assert.equal(harness.suggest.getSelectedIndex(), 9);
-	assert.equal(popover.scrollTop, 352);
+	assert.equal(list.scrollTop, 352);
 
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
 	assert.equal(harness.suggest.getSelectedIndex(), 0);
-	assert.equal(popover.scrollTop, 0);
+	assert.equal(list.scrollTop, 0);
+	assert.equal(popover.scrollTop, 0, "the outer frame never scrolls");
 	assert.equal(harness.doc.activeElement, harness.input.asHtml());
 });
 
@@ -185,17 +188,18 @@ test("connects the Composer input to the active WikiLink listbox option", () => 
 	harness.input.setSelectionRange(2, 2);
 	harness.suggest.openForCurrentRange();
 	const popover = harness.suggest.getPopoverForTest() as unknown as FakeElement;
+	const list = popover.querySelector(".knomo-suggest-list")!;
 	assert.equal(popover.getAttr("id"), "wiki-link-suggestions-test");
 	assert.equal(popover.getAttr("role"), "listbox");
 	assert.equal(harness.input.getAttr("aria-expanded"), "true");
 	assert.equal(harness.input.getAttr("aria-activedescendant"), "wiki-link-suggestions-test-option-0");
-	assert.equal(popover.children[0]?.getAttr("aria-selected"), "true");
-	assert.equal(popover.children[1]?.getAttr("aria-selected"), "false");
+	assert.equal(list.children[0]?.getAttr("aria-selected"), "true");
+	assert.equal(list.children[1]?.getAttr("aria-selected"), "false");
 
 	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
 	assert.equal(harness.input.getAttr("aria-activedescendant"), "wiki-link-suggestions-test-option-1");
-	assert.equal(popover.children[0]?.getAttr("aria-selected"), "false");
-	assert.equal(popover.children[1]?.getAttr("aria-selected"), "true");
+	assert.equal(list.children[0]?.getAttr("aria-selected"), "false");
+	assert.equal(list.children[1]?.getAttr("aria-selected"), "true");
 
 	harness.suggest.handleKeydown(createKeyboardEvent("Escape"));
 	assert.equal(harness.input.getAttr("aria-expanded"), "false");
@@ -233,46 +237,6 @@ test("uses cached markdown files until vault events invalidate the cache", () =>
 	assert.equal(harness.getMarkdownFilesCount, 1);
 	harness.emitVaultEvent("rename");
 	assert.equal(harness.getMarkdownFilesCount, 2);
-});
-
-test("touch candidate selection prevents blur and keeps focus", () => {
-	const file = makeFile("Projects/Alpha.md");
-	const harness = createHarness([file], { mobileLayer: true });
-	harness.input.value = "[[]]";
-	harness.input.setSelectionRange(2, 2);
-	harness.input.focus();
-	harness.suggest.openForCurrentRange();
-	harness.win.flushAnimationFrames();
-	const popover = harness.suggest.getPopoverForTest();
-	assert.notEqual(popover, null);
-	const item = (popover as unknown as FakeElement).children[0];
-	const pointerDown = createDomEvent();
-	item.dispatchTestEvent("pointerdown", pointerDown);
-	assert.equal(pointerDown.prevented, true);
-	assert.equal(harness.doc.activeElement, harness.input.asHtml());
-	const touchEnd = createDomEvent();
-	item.dispatchTestEvent("touchend", touchEnd);
-	assert.equal(touchEnd.prevented, true);
-	assert.equal(harness.input.value, "[[Projects/Alpha]]");
-	assert.equal(harness.doc.activeElement, harness.input.asHtml());
-});
-
-test("touch scrolling WikiLink candidates does not select an item", () => {
-	const file = makeFile("Projects/Alpha.md");
-	const harness = createHarness([file], { mobileLayer: true });
-	harness.input.value = "[[]]";
-	harness.input.setSelectionRange(2, 2);
-	harness.suggest.openForCurrentRange();
-	harness.win.flushAnimationFrames();
-	const popover = harness.suggest.getPopoverForTest();
-	assert.notEqual(popover, null);
-	const item = (popover as unknown as FakeElement).children[0];
-	item.dispatchTestEvent("touchstart", createTouchEvent(100));
-	item.dispatchTestEvent("touchmove", createTouchEvent(124));
-	const touchEnd = createDomEvent();
-	item.dispatchTestEvent("touchend", touchEnd);
-	assert.equal(touchEnd.prevented, false);
-	assert.equal(harness.input.value, "[[]]");
 });
 
 test("positions WikiLink popover at the current Composer input cursor", () => {
@@ -394,21 +358,6 @@ function createKeyboardEvent(
 	} as KeyboardEvent & { prevented: boolean };
 }
 
-function createDomEvent(): Event & { prevented: boolean } {
-	return {
-		prevented: false,
-		preventDefault() {
-			this.prevented = true;
-		},
-	} as Event & { prevented: boolean };
-}
-
-function createTouchEvent(clientY: number): TouchEvent {
-	return {
-		touches: [{ clientY }],
-	} as unknown as TouchEvent;
-}
-
 class FakeStyle {
 	readonly values = new Map<string, string>();
 
@@ -452,6 +401,7 @@ interface FakeElementOptions {
 }
 
 class FakeElement {
+	readonly classList = { toggle: (name: string, enabled: boolean) => this.toggleClass(name, enabled) };
 	readonly children: FakeElement[] = [];
 	readonly classes = new Set<string>();
 	readonly attrs = new Map<string, string>();
@@ -521,6 +471,11 @@ class FakeElement {
 	setAttr(key: string, value: string): void {
 		this.attrs.set(key, value);
 	}
+	setAttribute(key: string, value: string): void { this.setAttr(key, value); }
+	querySelector(selector: string): FakeElement | null {
+		if (selector === ":scope > .knomo-suggest-list") return this.children.find(child => child.classes.has("knomo-suggest-list")) ?? null;
+		return this.querySelectorAll(selector)[0] ?? null;
+	}
 
 	getAttr(key: string): string | null {
 		return this.attrs.get(key) ?? null;
@@ -587,6 +542,9 @@ class FakeElement {
 		const handlers = this.listeners.get(type) ?? [];
 		handlers.push(handler);
 		this.listeners.set(type, handlers);
+	}
+	removeEventListener(type: string, handler: (event: Event) => void): void {
+		this.listeners.set(type, (this.listeners.get(type) ?? []).filter(candidate => candidate !== handler));
 	}
 
 	dispatchTestEvent(type: string, event: Event): void {
@@ -670,6 +628,12 @@ class FakeElement {
 
 class FakeTextArea extends FakeElement {
 	composer = {
+		readOnly: false,
+		composing: false,
+		capture: () => {
+			const value = this.value, anchor = this.selectionStart, head = this.selectionEnd;
+			return { anchor, head, valid: () => this.value === value };
+		},
 		apply: (edit: { value: string; anchor: number; head: number }) => { this.value = edit.value; this.setSelectionRange(edit.anchor, edit.head); return true; },
 		coordsAtPos: (index: number) => ({ left: 24 + index * 7, top: 300, right: 25 + index * 7, bottom: 318, width: 1, height: 18 }),
 	};

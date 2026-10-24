@@ -8,6 +8,7 @@
 		"typecheck": "tsc -noEmit -skipLibCheck",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"check:i18n": "node scripts/check-i18n.mjs",
+		"release:check": "node scripts/release-check.mjs",
 		"verify": "node scripts/verify.mjs",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",

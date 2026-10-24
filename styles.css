@@ -5208,7 +5208,7 @@ body.is-mobile .knomo-plugin.is-layout-mobile :is(.knomo-tool-button, .knomo-ref
 }
 
 body.is-mobile .knomo-plugin.is-layout-mobile .knomo-time-buoy-picker-grid {
-	column-gap: clamp(0px, calc((100% - 308px) / 6), var(--size-4-1));
+	gap: 2px clamp(0px, calc((100% - 308px) / 6), var(--size-4-1));
 	background-color: var(--background-primary);
 }
 
@@ -5303,7 +5303,8 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 
 	.knomo-plugin :is(.knomo-time-buoy-tab, .knomo-record-stats-view-button).is-active,
 	.knomo-plugin .knomo-tool-button[aria-expanded="true"]:not(:disabled) {
-		text-decoration: underline 2px;
+		text-decoration: underline;
+		text-decoration-thickness: 2px;
 		text-underline-offset: 4px;
 	}
 

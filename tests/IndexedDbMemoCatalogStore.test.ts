@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import { IDBDatabase as FakeDatabase, IDBIndex as FakeIndex, IDBObjectStore as FakeObjectStore, IDBKeyRange, indexedDB } from "fake-indexeddb";
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
@@ -8,6 +8,10 @@ import { CatalogQueryCancelledError, FallbackMemoCatalogStore, InMemoryMemoCatal
 import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
 import type { CatalogFilePartition, CatalogQuery, MemoObservation } from "../src/types/catalog";
 import type { TimeBuoyPageRequest } from "../src/types/timeBuoy";
+
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 test("原生计数和候选规划阶段取消均拒绝结果且不切换 fallback", async t => {
 	for (const filter of [{}, { tags: ["Common", "Rare"] }]) await t.test(JSON.stringify(filter), async t => {

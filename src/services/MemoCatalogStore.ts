@@ -216,7 +216,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		const limit = clampPageLimit(request.limit);
 		const assertCurrent = this.createQuerySnapshotGuard(signal);
 		const runtime = signal === undefined ? undefined : { maxOperationsPerSlice: 4096, yieldControl: async () => {
-			await new Promise<void>(resolve => setTimeout(resolve, 0));
+			await new Promise<void>(resolve => window.setTimeout(resolve, 0));
 			assertCurrent();
 		} };
 		const control = runtime === undefined ? null : new CooperativeYieldController(runtime);
@@ -277,7 +277,7 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 		signal?.throwIfAborted();
 		const assertCurrent = this.createQuerySnapshotGuard(signal);
 		const control = signal === undefined ? null : new CooperativeYieldController({ maxOperationsPerSlice: 4096, yieldControl: async () => {
-			await new Promise<void>(resolve => setTimeout(resolve, 0));
+			await new Promise<void>(resolve => window.setTimeout(resolve, 0));
 			assertCurrent();
 		} });
 		const selection = new TimeBuoyPageSelection(request, this.catalogRevision, this.coverage);

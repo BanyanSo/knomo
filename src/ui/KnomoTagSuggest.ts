@@ -141,7 +141,7 @@ export class KnomoTagSuggest {
 		this.clearGesture = registerComposerToolGesture(container, (action, event) => {
 			const suggestion = this.suggestions[Number(action)];
 			if (this.popoverEl !== container || !suggestion || this.inputEl.composer.readOnly || this.inputEl.composer.composing) return;
-			if (event.type === "pointerup") {
+			if (event.type === "pointerup" || event.type === "touchend") {
 				event.stopImmediatePropagation();
 				this.clearTouchClickGuard?.();
 				this.clearTouchClickGuard = guardSuggestionTouchClickThrough(event, container, () => { this.clearTouchClickGuard = null; });

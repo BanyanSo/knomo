@@ -372,7 +372,7 @@ export class KnomoWikiLinkSuggest {
 		const list = this.listEl = popover.createDiv({ cls: "suggestion knomo-suggest-list" });
 		this.clearGesture = registerComposerToolGesture(popover, (action, event) => {
 			if (this.inputEl.composer.readOnly || this.inputEl.composer.composing) return;
-			if (event.type === "pointerup") {
+			if (event.type === "pointerup" || event.type === "touchend") {
 				event.stopImmediatePropagation();
 				this.clearTouchClickGuard?.();
 				this.clearTouchClickGuard = guardSuggestionTouchClickThrough(event, popover, () => { this.clearTouchClickGuard = null; });

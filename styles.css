@@ -3152,8 +3152,8 @@ body.is-mobile.knomo-mobile-navbar-compact-active .mobile-navbar.knomo-mobile-na
 }
 
 body.is-mobile.knomo-mobile-navbar-compact-active.knomo-mobile-navbar-floating .mobile-navbar.knomo-mobile-navbar-compact {
-	/* 悬浮胶囊保持完整底色，避免正文穿过按钮时与图标叠读。 */
-	background: linear-gradient(to bottom, var(--knomo-glass-nav-top), var(--knomo-glass-nav-middle));
+	/* 悬浮胶囊使用均匀底色，减少玻璃效果时仍回退为实色。 */
+	background: var(--knomo-glass-nav-floating);
 	box-shadow: inset 0 0 0 var(--border-width, 1px) var(--knomo-glass-popup-border), var(--knomo-glass-depth);
 }
 
@@ -5139,6 +5139,7 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	--knomo-glass-nav-top: var(--background-secondary);
 	--knomo-glass-nav-middle: var(--background-secondary);
 	--knomo-glass-nav-bottom: var(--background-secondary);
+	--knomo-glass-nav-floating: var(--background-secondary);
 	--knomo-glass-nav-filter: none;
 	--knomo-glass-accent: var(--interactive-accent);
 	--knomo-glass-selected: var(--background-primary);
@@ -5172,6 +5173,7 @@ body.is-mobile.theme-dark :is(.workspace-leaf-content[data-type="knomo-view"], .
 		--knomo-glass-nav-top: color-mix(in srgb, var(--background-primary) 80%, transparent);
 		--knomo-glass-nav-middle: color-mix(in srgb, var(--background-primary) 70%, transparent);
 		--knomo-glass-nav-bottom: color-mix(in srgb, var(--background-primary) 30%, transparent);
+		--knomo-glass-nav-floating: color-mix(in srgb, var(--background-primary) 40%, transparent);
 		--knomo-glass-nav-filter: blur(2px) saturate(1.1);
 		--knomo-glass-popup-border: color-mix(in srgb, var(--text-normal) 14%, var(--background-primary));
 	}
@@ -5247,6 +5249,7 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	--knomo-glass-nav-top: var(--background-secondary);
 	--knomo-glass-nav-middle: var(--background-secondary);
 	--knomo-glass-nav-bottom: var(--background-secondary);
+	--knomo-glass-nav-floating: var(--background-secondary);
 	--knomo-glass-nav-filter: none;
 	--knomo-glass-accent: var(--interactive-accent);
 	--knomo-glass-action-sheen: none;
@@ -5264,6 +5267,7 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 		--knomo-glass-nav-top: var(--background-secondary);
 		--knomo-glass-nav-middle: var(--background-secondary);
 		--knomo-glass-nav-bottom: var(--background-secondary);
+		--knomo-glass-nav-floating: var(--background-secondary);
 		--knomo-glass-nav-filter: none;
 		--knomo-glass-accent: var(--interactive-accent);
 		--knomo-glass-action-sheen: none;

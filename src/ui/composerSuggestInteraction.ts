@@ -30,14 +30,15 @@ export function scrollSuggestionIntoView(list: HTMLElement, item: HTMLElement): 
 }
 
 // 触摸确认会移除浮层；尾随事件仍可能落到旧节点或下方编辑器/蒙层。
-export function guardSuggestionTouchClickThrough(origin: MouseEvent, container: HTMLElement, onClear: () => void): () => void {
+export function guardSuggestionTouchClickThrough(origin: MouseEvent | TouchEvent, container: HTMLElement, onClear: () => void): () => void {
 	const win = container.ownerDocument.defaultView!;
+	const originPoint = "changedTouches" in origin ? origin.changedTouches[0] : origin;
 	const targets: EventTarget[] = [win, container];
 	const types = ["touchend", "mousedown", "mouseup", "click"] as const;
 	const guard = (event: Event) => {
 		if (event.type === "click" && (event as MouseEvent).detail === 0) return;
 		const point = event.type === "touchend" ? (event as TouchEvent).changedTouches[0] : event as MouseEvent;
-		if (!point || Math.hypot(point.clientX - origin.clientX, point.clientY - origin.clientY) > 12) return;
+		if (!point || !originPoint || Math.hypot(point.clientX - originPoint.clientX, point.clientY - originPoint.clientY) > 12) return;
 		event.preventDefault();
 		event.stopImmediatePropagation();
 		if (event.type === "click") clear();

@@ -85,7 +85,7 @@ test("forced colors preserve segment selection separately from keyboard focus", 
 	} finally { await browser.close(); }
 });
 
-test("mobile segments retain their base styles while Navbar shares Header material and restores the host", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile segments retain their base styles while Navbar uses a uniform fill and restores the host", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const html = await segmentHtml();
 	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
@@ -169,11 +169,17 @@ test("mobile segments retain their base styles while Navbar shares Header materi
 			const navbar = page.locator(".mobile-navbar");
 			const navPaint = await navbar.evaluate((el: HTMLElement) => {
 				const style = getComputedStyle(el);
+				const canvas = document.createElement("canvas");
+				canvas.width = canvas.height = 1;
+				const ctx = canvas.getContext("2d")!;
+				ctx.fillStyle = style.backgroundColor;
+				ctx.fillRect(0, 0, 1, 1);
+				const alpha = ctx.getImageData(0, 0, 1, 1).data[3];
 				const edge = (pseudo: string) => {
 					const paint = getComputedStyle(el, pseudo);
 					return [paint.content, paint.backgroundColor, paint.backgroundImage, paint.border, paint.boxShadow, paint.backdropFilter];
 				};
-				return { color: style.backgroundColor, filter: style.backdropFilter, image: style.backgroundImage, radius: style.borderRadius,
+				return { color: style.backgroundColor, alpha, filter: style.backdropFilter, image: style.backgroundImage, radius: style.borderRadius,
 					shadow: style.boxShadow, border: style.border, before: edge("::before"), after: edge("::after") };
 			});
 			assert.equal(navPaint.filter, await page.locator(".view-header").evaluate((el: HTMLElement) => getComputedStyle(el).backdropFilter), `${context}: Header and Navbar share the filter`);
@@ -182,13 +188,15 @@ test("mobile segments retain their base styles while Navbar shares Header materi
 				assert.equal(edge[0], "none", `${context}: host edge does not overlay the material`);
 				assert.equal(edge[5], "none", `${context}: no second backdrop filter`);
 			}
+			assert.equal(navPaint.image, "none", `${context}: floating fill has no gradient`);
 			const systemReduced = await page.evaluate(() => matchMedia("(prefers-reduced-transparency: reduce)").matches);
 			if (manual || systemReduced) {
 				assert.equal(navPaint.filter, "none", context);
-				assert.ok(navPaint.image.includes(theme === "theme-dark" ? "rgb(48, 48, 48)" : "rgb(237, 237, 237)"), `${context}: opaque theme fallback`);
+				assert.equal(navPaint.color, theme === "theme-dark" ? "rgb(48, 48, 48)" : "rgb(237, 237, 237)", `${context}: opaque theme fallback`);
+				assert.equal(navPaint.alpha, 255, context);
 			} else {
 				assert.equal(navPaint.filter, "blur(2px) saturate(1.1)", context);
-				assert.match(navPaint.image, /(?:color-mix|color)\(/, `${context}: translucent theme fill`);
+				assert.equal(navPaint.alpha, 102, `${context}: uniform 40% opacity`);
 			}
 			await page.evaluate(() => document.body.classList.remove("knomo-mobile-navbar-compact-active"));
 			const hostPaint = await navbar.evaluate((el: HTMLElement) => {
@@ -274,7 +282,10 @@ test("Navbar retains geometry and focus across capability and contrast fallbacks
 				assert.equal(paint.image, "none", `${context}: system color surface`);
 				assert.notEqual(paint.color, "rgba(0, 0, 0, 0)", `${context}: opaque system fallback`);
 			}
-			else assert.ok(paint.image.includes(theme === "theme-dark" ? "rgb(48, 48, 48)" : "rgb(237, 237, 237)"), `${context}: opaque theme surface`);
+			else if (mode === "floating") {
+				assert.equal(paint.image, "none", `${context}: uniform fallback`);
+				assert.equal(paint.color, theme === "theme-dark" ? "rgb(48, 48, 48)" : "rgb(237, 237, 237)", `${context}: opaque theme surface`);
+			} else assert.ok(paint.image.includes(theme === "theme-dark" ? "rgb(48, 48, 48)" : "rgb(237, 237, 237)"), `${context}: opaque theme surface`);
 			if (fallback === "prefers-contrast" || fallback === "forced-colors") {
 				assert.equal(paint.shadow, "none", context);
 				assert.equal(paint.outline, "solid", context);

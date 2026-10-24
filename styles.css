@@ -5304,7 +5304,6 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	.knomo-plugin :is(.knomo-time-buoy-tab, .knomo-record-stats-view-button).is-active,
 	.knomo-plugin .knomo-tool-button[aria-expanded="true"]:not(:disabled) {
 		text-decoration: underline;
-		text-decoration-thickness: 2px;
 		text-underline-offset: 4px;
 	}
 

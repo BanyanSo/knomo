@@ -45,6 +45,90 @@ const hostFixture = `
 	.probe { display:block; width:calc(100% - 32px); margin:16px; height:auto; }
 `;
 
+test("宽表格在桌面和移动窄卡片中可横向浏览且不撑宽正文", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	try {
+		const page = await browser.newPage();
+		for (const theme of ["theme-light", "theme-dark"]) for (const mobile of [false, true]) for (const width of [320, 390, 900]) {
+			await page.setViewportSize({ width, height: 800 });
+			const columns = Array.from({ length: 14 }, (_, index) => `<th>Column-${index}</th>`).join("");
+			await page.setContent(`<style>${host}${hostFixture}${css}</style><body class="${theme}">
+				<div class="knomo-plugin ${mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}" style="width:100%;display:block;padding:16px">
+					<div class="knomo-card"><div class="knomo-card-body"><div class="knomo-card-content markdown-rendered">
+						<table><thead><tr>${columns}</tr></thead><tbody><tr>${columns.replace(/th>/g, "td>")}</tr></tbody></table>
+					</div></div></div>
+				</div></body>`);
+			const actual = await page.evaluate(() => {
+				const content = document.querySelector<HTMLElement>(".knomo-card-content")!;
+				const table = document.querySelector("table")!;
+				table.scrollLeft = 100;
+				return { contentWidth: content.clientWidth, contentScroll: content.scrollWidth,
+					tableWidth: table.clientWidth, tableScroll: table.scrollWidth, scrolled: table.scrollLeft };
+			});
+			assert.ok(actual.contentScroll <= actual.contentWidth + 1, JSON.stringify({ theme, mobile, width, actual }));
+			assert.ok(actual.tableWidth <= actual.contentWidth + 1);
+			if (actual.tableScroll > actual.tableWidth) assert.ok(actual.scrolled > 0, "表格内容应能横向浏览");
+		}
+	} finally { await browser.close(); }
+});
+
+test("卡片各级标题前间距紧凑，保留宿主标题层级与卡片外的段落间距", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	// 自包含复现宿主段落后标题的大间距，也覆盖带 el-* 包装的正文结构。
+	const headingHost = `
+		.markdown-rendered { --p-spacing:16px; --heading-spacing:calc(var(--p-spacing) * 2.5); }
+		.markdown-rendered :is(h1,h2,h3,h4,h5,h6) { margin-block-start:var(--p-spacing); margin-block-end:var(--p-spacing); }
+		.markdown-rendered :is(p,pre,table,ul,ol) + :is(h1,h2,h3,h4,h5,h6),
+		.markdown-rendered div:is(.el-blockquote,.el-p,.el-pre,.el-table,.el-ul,.el-ol) + div > :is(h1,h2,h3,h4,h5,h6) { margin-top:var(--heading-spacing); }
+	`;
+	try {
+		const page = await browser.newPage();
+		for (const theme of ["theme-light", "theme-dark"]) for (const mobile of [false, true]) for (const size of [16, 22]) {
+			await page.setViewportSize({ width: mobile ? 320 : 900, height: 800 });
+			const cards: string[] = [];
+			const controls: string[] = [];
+			for (let level = 1; level <= 6; level++) {
+				const paragraph = "<p>大概写</p>";
+				const heading = `<h${level}>标题</h${level}>`;
+				const suffix = "<p>好的好的好</p>";
+				for (const wrapped of [false, true]) {
+					const content = wrapped ? `<div class="el-p">${paragraph}</div><div class="el-h${level}">${heading}</div><div class="el-p">${suffix}</div>` : paragraph + heading + suffix;
+					cards.push(`<div class="knomo-card" data-level="${level}"><div class="knomo-card-body"><div class="knomo-card-content markdown-rendered">${content}</div></div></div>`);
+				}
+				controls.push(`<div id="host-${level}" class="markdown-rendered" style="font-size:${size}px">${paragraph}${heading}${suffix}</div>`);
+			}
+			await page.setContent(`<style>${host}${hostFixture}${headingHost}${css}</style><body class="${theme}">
+				<div class="knomo-plugin ${mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}" style="display:block;--knomo-content-size:${size}px">${cards.join("")}</div>${controls.join("")}</body>`);
+			const actual = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>(".knomo-card")).map(card => {
+				const content = card.querySelector<HTMLElement>(".knomo-card-content")!;
+				const heading = content.querySelector<HTMLElement>("h1,h2,h3,h4,h5,h6")!;
+				const paragraph = content.querySelector("p")!;
+				const control = document.querySelector(`#host-${card.dataset.level}`)!;
+				const hostHeading = control.querySelector<HTMLElement>("h1,h2,h3,h4,h5,h6")!;
+				return { level: card.dataset.level, wrapped: !!content.querySelector(".el-p"),
+					gap: heading.getBoundingClientRect().top - paragraph.getBoundingClientRect().bottom,
+					hostGap: hostHeading.getBoundingClientRect().top - control.querySelector("p")!.getBoundingClientRect().bottom,
+					font: getComputedStyle(heading).fontSize, hostFont: getComputedStyle(hostHeading).fontSize,
+					text: content.textContent };
+			}));
+			assert.equal(actual.length, 12);
+			for (const item of actual) {
+				const context = JSON.stringify({ theme, mobile, size, item });
+				assert.ok(item.gap >= 0 && item.gap <= size, context);
+				assert.ok(item.hostGap >= 39, context);
+				assert.equal(item.font, item.hostFont, context);
+				assert.equal(item.text, "大概写标题好的好的好");
+			}
+		}
+	} finally { await browser.close(); }
+});
+
 async function typographyBundle() {
 	const result = await build({
 		stdin: { contents: `

@@ -21,7 +21,17 @@ export function buildQuoteCreatedMemoContent(input: string, quoteText: string, r
 export function stripTrailingWikiLink(content: string): string {
 	const reference = getPreferredReferenceCandidates(content)[0];
 	if (reference === undefined) return content;
-	return `${content.slice(0, reference.startOffset).trimEnd()}${content.slice(reference.startOffset + reference.referenceText.length)}`.trim();
+	let before = content.slice(0, reference.startOffset);
+	let after = content.slice(reference.startOffset + reference.referenceText.length);
+	// 只移除独占引用行自身的换行或同一行的一个分隔空格，保留正文空白。
+	if ((before.length === 0 || before.endsWith("\n")) && (after.length === 0 || after.startsWith("\n") || after.startsWith("\r\n"))) {
+		if (after.startsWith("\n")) after = after.slice(1);
+		else if (after.startsWith("\r\n")) after = after.slice(2);
+		else if (before.endsWith("\n")) before = before.slice(0, before.endsWith("\r\n") ? -2 : -1);
+	} else if (before.endsWith(" ") && !/[ \t] $/u.test(before)) {
+		before = before.slice(0, -1);
+	}
+	return `${before}${after}`;
 }
 
 export function withCreatedAtAlias(referenceText: string, createdAt: string): string {

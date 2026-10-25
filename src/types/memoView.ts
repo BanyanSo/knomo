@@ -1,5 +1,6 @@
 import type { TrashMemoItem, TrashSnapshot } from "./trash";
 import { hashText } from "../utils/hash";
+import { extractLeadingParagraphBlockId, getFourColumnMemoPrefix, splitMarkdownLines, stripMemoContinuationIndent } from "../utils/markdown";
 import type { CatalogMemoItem } from "./catalogView";
 import type { DailyRef, MemoImageRef, MemoLinkRef, MemoStatus } from "./memo";
 
@@ -73,12 +74,19 @@ export function toTrashMemoView(item: TrashMemoItem): MemoViewItem {
 
 export function toTrashMemoItem(item: TrashSnapshot): TrashMemoItem {
 	return { ...item, key: item.snapshotId,
-		createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^- (\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
+		createdAt: item.logicalDate + "T" + (item.rawBlock.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)/u)?.[1] ?? "00:00"),
 		content: readDeletedPayloadContent(item.rawBlock), contentHash: hashText(item.rawBlock), purgeAllowed: true };
 }
 
 function readDeletedPayloadContent(rawBlock: string): string {
-	const lines = rawBlock.split(/\r?\n/u);
+	const lines = splitMarkdownLines(rawBlock);
+	const prefix = getFourColumnMemoPrefix(lines);
+	if (prefix !== null) {
+		const continuation = lines.slice(Math.max(1, prefix.contentStartLineOffset))
+			.map(line => stripMemoContinuationIndent(line, 4));
+		const content = [...(prefix.firstContent === null ? [] : [prefix.firstContent]), ...continuation].join("\n");
+		return prefix.contentStartLineOffset === 0 ? extractLeadingParagraphBlockId(content).text : content;
+	}
 	const first = /^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s(.*))?$/u.exec(lines[0] ?? "")?.[1] ?? "";
 	const continuation = lines.slice(1).map((line) => line.replace(/^ {2}/u, ""));
 	return [first, ...continuation].join("\n").replace(/\s+\^[A-Za-z0-9-]+\s*$/u, "").trim();

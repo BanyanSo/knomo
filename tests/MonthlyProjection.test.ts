@@ -14,6 +14,8 @@ import {
 } from "../src/services/MonthlyProjection";
 import type { CatalogObservation } from "../src/types/catalog";
 import type { KnomoSettings } from "../src/types/settings";
+import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { memoMarkdownConsistencyFixtures } from "./fixtures/memoMarkdownConsistency";
 
 test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 Daily 已有 block ID", async () => {
 	const settings = makeSettings();
@@ -43,7 +45,7 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 	assert.equal(first.semanticHash, second.semanticHash);
 	assert.equal(first.outputSha256, second.outputSha256);
 	assert.equal(first.sourceDigest, "08ed925cc9bf21dc89eff9789fa0d5f8eb8362c10ce8db61e90a3838219b557b");
-	assert.equal(first.outputHash, "ba169d610b4d5db2237e5e97da613ceff4f6d6b7a1e44a924a2bde332eeccd4c");
+	assert.equal(first.outputHash, "8644cf1375b8cd6663444c15bbd25d1b1d5f4339142f2e3a8ed15e0fb907eb03");
 	assert.equal(first.path, "Knomo/Memos-2026-08.md");
 	assert.equal(first.content, [
 		"<!-- knomo:monthly-archive -->",
@@ -52,7 +54,7 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 		"## [[2026-08-01]]",
 		"- 08:00:00 first",
 		"## [[2026-08-02]]",
-		"- 09:30 second\n\tline ^kept-id",
+		"-   09:30 second\n\tline ^kept-id",
 		"",
 	].join("\n\n").replace(/\n\n$/u, "\n"));
 	assert.equal(first.content.includes("^kept-id"), true);
@@ -60,6 +62,20 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 	assert.equal(first.content.includes("\r"), false);
 	assert.equal(first.content.endsWith("\n"), true);
 	assert.equal(first.content.endsWith("\n\n"), false);
+});
+
+test("Monthly 复用语义保真表示，正文空白和 Daily 已有引用 ID 可完整恢复", async () => {
+	const parser = new DiaryMemoParser();
+	for (const sample of memoMarkdownConsistencyFixtures) for (const existingBlockId of [null, "kept-id"]) {
+		const projection = await buildMonthlyProjection({ period: "2026-08", settings: makeSettings(),
+			observations: [makeObservation({ logicalDate: "2026-08-01", time: "08:00", content: sample.content, existingBlockId })] });
+		const parsed = parser.parseRevision({ sourcePath: projection.path, logicalDate: "2026-08-01", content: projection.content, sourceRevision: projection.outputHash }).observations;
+		assert.equal(parsed.length, 1, sample.name);
+		assert.equal(parsed[0].content, sample.content, sample.name);
+		assert.equal(parsed[0].time, "08:00");
+		assert.equal(parsed[0].existingBlockId, existingBlockId, sample.name);
+		assert.ok(hasKnomoMonthlyArchiveMarker(projection.content));
+	}
 });
 
 test("新建 Monthly 按共享 locale 生成中英文说明", async () => {

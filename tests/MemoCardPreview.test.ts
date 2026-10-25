@@ -2,12 +2,33 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { App, TFile } from "obsidian";
+import { stripTrailingWikiLink } from "../src/utils/references";
 
 import { IMAGE_RESOURCE_CACHE_LIMIT, ImageResourceCache } from "../src/ui/ImageResourceCache";
 import {
 	parseMemoCardPreviewLite,
 	resolveMemoPreviewImages,
 } from "../src/ui/MemoCardPreview";
+
+test("预览完整路径保留硬换行、缩进及有效空行，引用只移除自身分隔空格", () => {
+	for (const text of ["\n    code\n\n", "first  \nsecond\\\nthird<br>fourth\n\n", "\n> quote\n>\n> next\n"]) {
+		assert.equal(parseMemoCardPreviewLite(text).text, text);
+		const withReference = `${text} [[Daily/other#^anchor|source]]`;
+		assert.equal(parseMemoCardPreviewLite(stripTrailingWikiLink(withReference)).text, text);
+	}
+	assert.equal(stripTrailingWikiLink("    first  [[Other#^anchor]]\nsecond\n\n"), "    first  \nsecond\n\n");
+	assert.equal(stripTrailingWikiLink("first  \n\n[[Other#^anchor]]\n\nlast\n"), "first  \n\n\nlast\n");
+	assert.equal(stripTrailingWikiLink("    first  \r\n[[Other#^anchor]]\r\nnext\r\n"), "    first  \r\nnext\r\n");
+});
+
+test("保真路径仍按原顺序提取纯图片和图片网格，图文正文的空白不被清理", () => {
+	const onlyImages = parseMemoCardPreviewLite("![[a.png]]\n\n![b](b.png) ![[c.png]]");
+	assert.equal(onlyImages.text, "");
+	assert.deepEqual(onlyImages.imageRefs.map(image => image.path), ["a.png", "b.png", "c.png"]);
+	const mixed = parseMemoCardPreviewLite("    code\n\nfirst  \nsecond ![[a.png]]\n\nend\n");
+	assert.equal(mixed.text, "    code\n\nfirst  \nsecond \n\nend\n");
+	assert.equal(mixed.imageRefs[0].path, "a.png");
+});
 
 test("parses memo card images in source order and removes image syntax from preview text", () => {
 	const app = createAppStub([
@@ -24,7 +45,7 @@ test("parses memo card images in source order and removes image syntax from prev
 		app,
 	);
 
-	assert.equal(preview.text, "before  middle\nafter");
+	assert.equal(preview.text, "before  middle \nafter  ");
 	assert.deepEqual(preview.images.map((image) => image.path), [
 		"image.png",
 		"folder/image name.png",
@@ -94,7 +115,7 @@ test("skips fenced code blocks, inline code, and incomplete image syntax", () =>
 			"```",
 			"![code](code.png)",
 			"```",
-			"show",
+			"show ",
 			"incomplete ![alt](missing.png",
 		].join("\n"),
 	);

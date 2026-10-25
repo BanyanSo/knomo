@@ -480,7 +480,7 @@ export function applyTaskCheckboxDomState(input: HTMLInputElement, marker: Markd
 // 只处理宿主渲染后的正文软换行，不改写 Daily 或传给宿主的 Markdown。
 function preserveMemoCardLineBreaks(container: HTMLElement): void {
 	for (const block of container.findAll("p, li")) {
-		if (block.closest("pre, code, .math, .internal-embed, .markdown-embed")) continue;
+		if (block.closest(".callout-title, pre, code, table, .math, .internal-embed, .markdown-embed")) continue;
 		preserveInlineLineBreaks(block);
 	}
 }
@@ -501,8 +501,12 @@ function preserveInlineLineBreaks(element: Element): void {
 		const parts = value.split(/\r?\n/);
 		const fragment = (child.ownerDocument!.win as Window & { createFragment: typeof createFragment }).createFragment();
 		for (let index = 0; index < parts.length; index++) {
+			// 宿主在紧凑列表的子块前输出的行尾只是 HTML 排版，不是正文软换行。
+			const beforeNestedBlock = element.tagName === "LI" && index === parts.length - 1 && parts[index] === ""
+				&& child.nextSibling?.nodeType === 1
+				&& /^(UL|OL|P|PRE|BLOCKQUOTE|DIV|TABLE|H[1-6]|HR)$/.test(child.nextSibling.nodeName);
 			// Markdown 硬换行通常输出 <br>\n，不能再增加一行。
-			if (index > 0 && !(index === 1 && parts[0] === ""
+			if (index > 0 && !beforeNestedBlock && !(index === 1 && parts[0] === ""
 				&& child.previousSibling?.nodeName === "BR")) {
 				fragment.createEl("br");
 			}

@@ -211,32 +211,49 @@ test("旧行取消与新节点集合交错后可见空行自动接续，并以�
 	} finally { h.close(); }
 });
 
-test("关联页保留引用者和来源目录的 DOM、焦点与滚动，部分零不形成空结论", async () => {
+test("关联页不展示引用来源目录或未解析提示，保留正文链接与直接引用者", async () => {
+	for (const target of ["A#^a", "Missing#^missing"]) {
+		const h = await fixture();
+		try {
+			await h.seed("A.md", "- 10:00 A ^a\n");
+			const link = `[[${target}|自定义来源]]`;
+			const [b] = await h.seed("B.md", `- 11:00 B ${link} ^b\n`);
+			const [c] = await h.seed("C.md", "- 12:00 C [[B#^b]]\n");
+			await h.page.open(b); await settle();
+			assert.equal(h.page.el!.querySelector(".knomo-relations-sources, .knomo-relation-source"), null);
+			assert.deepEqual(Array.from(h.page.el!.querySelectorAll("h3")).map(heading => heading.textContent), ["Current Memo", "Direct referrers · 1"]);
+			assert.ok(h.page.el!.querySelector(".knomo-relations-subject .knomo-card-content")!.textContent!.includes(link));
+			assert.equal(h.page.el!.querySelector<HTMLElement>(".knomo-relations-list .knomo-card")!.dataset.memoId, observationHandleKey(c));
+			assert.deepEqual(h.errors, []);
+		} finally { h.close(); }
+	}
+});
+
+test("关联页保留直接引用者的 DOM、焦点与滚动，部分零不形成空结论", async () => {
 	const h = await fixture();
 	try {
 		await h.seed("A.md", "- 10:00 A ^a\n");
 		const [b] = await h.seed("B.md", "- 11:00 B [[A#^a]] ^b\n");
 		await h.seed("C.md", "- 12:00 C [[B#^b]]\n");
 		await h.page.open(b); await settle();
-		const source = h.page.el!.querySelector<HTMLButtonElement>(".knomo-relation-source")!;
 		const row = h.page.el!.querySelector(".knomo-relations-list .knomo-card")!;
-		source.focus(); h.page.el!.scrollTop = 222;
-		// 来源暂不可读会影响关系完整性，但主体保持可验证。
+		const menu = row.querySelector<HTMLButtonElement>(".knomo-card-menu")!;
+		menu.focus(); h.page.el!.scrollTop = 222;
+		// 关系暂不完整时，主体和已读引用者仍保持可验证。
 		h.read.relations.invalidateResolution(["A.md"]);
 		const original = h.read.relations.read.bind(h.read.relations);
 		h.read.relations.read = async (signal, handles) => {
 			const snapshot = await original(signal, handles);
-			return { ...snapshot, complete: false, sources: new Map(), referrers: new Map() };
+			return { ...snapshot, complete: false, referrers: new Map() };
 		};
 		await settle();
-		assert.equal(h.page.el!.querySelector(".knomo-relation-source"), source);
 		assert.equal(h.page.el!.querySelector(".knomo-relations-list .knomo-card"), row);
-		assert.equal(h.win.document.activeElement, source); assert.equal(h.page.el!.scrollTop, 222);
+		assert.equal(h.win.document.activeElement, menu); assert.equal(h.page.el!.scrollTop, 222);
 		assert.ok([...h.page.el!.querySelectorAll("[aria-setsize]")].every(item => item.getAttribute("aria-setsize") === "-1"));
 		assert.equal(h.page.el!.querySelector("[role='status'],[aria-live]"), null);
 		h.read.relations.read = original; h.read.relations.invalidateResolution(["A.md"]); await settle();
-		assert.equal(h.page.el!.querySelector(".knomo-relation-source"), source);
-		assert.equal(h.win.document.activeElement, source);
+		assert.equal(h.page.el!.querySelector(".knomo-relations-list .knomo-card"), row);
+		assert.equal(h.win.document.activeElement, menu);
 	} finally { h.close(); }
 });
 

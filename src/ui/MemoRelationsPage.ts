@@ -1,6 +1,6 @@
 import { t } from "../i18n";
 import type { ObservationHandle } from "../types/catalog";
-import type { MemoRelationNode, MemoRelationSnapshot } from "../types/memoRelations";
+import type { MemoRelationNode } from "../types/memoRelations";
 import { toCatalogMemoView, type MemoViewItem } from "../types/memoView";
 import type { CatalogReadService } from "../services/CatalogReadService";
 import { observationHandleKey, type DailyMemoPresentationChange } from "../services/DailyMemoPresentationChange";
@@ -32,11 +32,9 @@ export class MemoRelationsPage {
 	private readonly memos = new Map<string, MemoViewItem>();
 	private subject: HTMLElement | null = null;
 	private contextDate: HTMLElement | null = null;
-	private sourcesEl: HTMLElement | null = null;
 	private listEl: HTMLElement | null = null;
 	private listTitle: HTMLElement | null = null;
 	private status: HTMLElement | null = null;
-	private sourcesWindow: MemoRelationWindow | null = null;
 	private referrersWindow: MemoRelationWindow | null = null;
 	private controller: AbortController | null = null;
 	private rowController = new AbortController();
@@ -46,10 +44,7 @@ export class MemoRelationsPage {
 	private pending = false;
 	private invalidatedVersion: number | null = null;
 	private subjectRecoveryKey: string | null = null;
-	private sources: readonly MemoRelationNode[] | null = null;
 	private referrers: readonly MemoRelationNode[] | null = null;
-	private sourcesTitle: HTMLElement | null = null;
-	private nativeHint: HTMLElement | null = null;
 	private loadingEl: HTMLElement | null = null;
 	private loading: DelayedLoadingIndicator | null = null;
 	private readonly rowFailures = new Map<string, number>();
@@ -130,7 +125,7 @@ export class MemoRelationsPage {
 	applyChange(change: DailyMemoPresentationChange): void {
 		const current = this.frames[this.frames.length - 1];
 		const affected = current?.handle.sourcePath === change.sourcePath
-			|| [...(this.sources ?? []), ...(this.referrers ?? [])].some(node => node.handle.sourcePath === change.sourcePath);
+			|| (this.referrers ?? []).some(node => node.handle.sourcePath === change.sourcePath);
 		const replacements = new Map(change.replacements.map(item => [observationHandleKey(item.before), item.after]));
 		for (const frame of this.frames) {
 			const after = replacements.get(observationHandleKey(frame.handle));
@@ -143,17 +138,12 @@ export class MemoRelationsPage {
 			const after = replacements.get(observationHandleKey(node.handle));
 			return after && after.rawBlockHash === node.handle.rawBlockHash ? { ...node, handle: after } : node;
 		};
-		this.sourcesWindow?.remap(change, (row, _before, after) => {
-			const button = row.querySelector<HTMLElement>("button");
-			if (button) button.dataset.relationTarget = observationHandleKey(after.handle);
-		});
 		this.referrersWindow?.remap(change, (row, before, after) => {
 			const old = this.memos.get(observationHandleKey(before.handle));
 			const memo = old ? remapUnchangedMemo(old, after.handle) : null;
 			const card = row.querySelector<HTMLElement>(".knomo-card");
 			if (memo && card) { this.memos.delete(old!.id); this.memos.set(memo.id, memo); rebindMemoCard(card, memo); this.options.retainCard?.(card, memo); }
 		});
-		if (this.sources) this.sources = this.sources.map(remap);
 		if (this.referrers) this.referrers = this.referrers.map(remap);
 		this.markStale();
 		this.refresh();
@@ -181,13 +171,12 @@ export class MemoRelationsPage {
 		this.rowsTimer = null; this.rowsQueued = false;
 		this.refreshTimer = null; this.queued = false; this.pending = false; this.running = null;
 		this.loading?.clear(); this.loading = null;
-		this.sources = null; this.referrers = null; this.rowFailures.clear();
+		this.referrers = null; this.rowFailures.clear();
 		this.rowFaultScope = null;
 		this.subjectRecoveryKey = null; this.invalidatedVersion = null;
 		this.rowController.abort(); this.rowController = new AbortController();
 		for (const pending of this.pendingRows.values()) pending.done();
 		this.pendingRows.clear();
-		this.sourcesWindow?.dispose(); this.sourcesWindow = null;
 		this.referrersWindow?.dispose(); this.referrersWindow = null;
 		if (this.subject) this.options.releaseCard(this.subject);
 		this.el?.remove(); this.el = null;
@@ -209,25 +198,12 @@ export class MemoRelationsPage {
 		this.status.hidden = true;
 		el.createEl("h3", { text: t("relations.current"), cls: "knomo-relations-section-title" });
 		this.subject = el.createDiv({ cls: "knomo-relations-subject" });
-		this.sourcesEl = el.createDiv({ cls: "knomo-relations-sources" });
-		this.sourcesTitle = this.sourcesEl.createEl("h3", { cls: "knomo-relations-section-title" });
-		const sourceList = this.sourcesEl.createDiv();
-		this.nativeHint = this.sourcesEl.createDiv({ cls: "knomo-relations-hint", text: t("relations.nativeLinks") });
-		this.nativeHint.hidden = true; this.sourcesEl.hidden = true;
 		this.listTitle = el.createEl("h3", { cls: "knomo-relations-section-title", attr: { tabindex: "-1" } });
 		this.listTitle.textContent = t("relations.referrersHeading");
 		this.loadingEl = el.createDiv({ cls: "knomo-relations-loading", attr: { "aria-busy": "true" } });
 		this.loadingEl.hidden = true;
 		this.loading = new DelayedLoadingIndicator({ scheduleTask: (callback, delay) => el.win.setTimeout(callback, delay), cancelTask: id => el.win.clearTimeout(id) });
 		this.listEl = el.createDiv({ cls: "knomo-relations-list" });
-		this.sourcesWindow = new MemoRelationWindow(sourceList, el, 48, async (row, node) => {
-			const button = row.createEl("button", { cls: "knomo-relation-source", text: `${node.logicalDate} ${node.time}`, attr: { type: "button" } });
-			button.dataset.relationTarget = observationHandleKey(node.handle); button.dataset.relationAction = "source";
-			button.addEventListener("click", () => {
-				const current = this.sources?.find(source => observationHandleKey(source.handle) === button.dataset.relationTarget);
-				if (current) void this.open(current.handle, false, button);
-			});
-		}, () => undefined);
 		this.referrersWindow = new MemoRelationWindow(this.listEl, el, 260,
 			(row, node, index) => this.renderRow(row, node, index), row => this.releaseRow(row));
 		this.syncLoading(true);
@@ -284,12 +260,11 @@ export class MemoRelationsPage {
 			const snapshot = await this.options.read.relations.read(signal, [frame.handle]);
 			await this.options.read.relations.assertCurrent(snapshot, signal, [frame.handle]);
 			if (!this.el || frame !== this.frames[this.frames.length - 1]) return;
-			const sources = snapshot.sources.get(key) ?? [], incoming = snapshot.referrers.get(key) ?? [];
-			this.renderSources(sources, snapshot, this.memos.get(key)!);
+			const incoming = snapshot.referrers.get(key) ?? [];
 			if (snapshot.complete || this.referrers === null || this.referrers.length === 0) this.referrers = incoming;
 			this.listTitle!.textContent = snapshot.complete ? t("relations.referrers", { count: incoming.length }) : t("relations.referrersHeading");
 			this.referrersWindow!.setNodes(this.referrers, snapshot.complete);
-			const rowScope = JSON.stringify([key, snapshot.complete, sources.map(node => observationHandleKey(node.handle)), incoming.map(node => observationHandleKey(node.handle))]);
+			const rowScope = JSON.stringify([key, snapshot.complete, incoming.map(node => observationHandleKey(node.handle))]);
 			if (this.rowFaultScope !== rowScope) {
 				for (const row of Array.from(this.listEl!.querySelectorAll<HTMLElement>("[data-relation-read-state='failed']"))) {
 					if (snapshot.nodes.has(row.dataset.relationRow!)) { this.rowFailures.delete(row.dataset.relationRow!); row.empty(); delete row.dataset.relationReadState; }
@@ -314,7 +289,7 @@ export class MemoRelationsPage {
 			if (restore) {
 				this.el.scrollTop = frame.scroll;
 				if (frame.anchor) this.referrersWindow!.restoreReadingAnchor(frame.anchor);
-				this.referrersWindow!.refresh(); this.sourcesWindow?.refresh();
+				this.referrersWindow!.refresh();
 				await this.referrersWindow!.settled();
 				signal.throwIfAborted();
 				this.restoreFocus(frame);
@@ -338,16 +313,6 @@ export class MemoRelationsPage {
 				if (list) this.listTitle?.focus({ preventScroll: true });
 			}
 		}
-	}
-
-	private renderSources(nodes: readonly MemoRelationNode[], snapshot: MemoRelationSnapshot, memo: MemoViewItem): void {
-		if (!this.sourcesEl || !this.el) return;
-		if (snapshot.complete || this.sources === null || this.sources.length === 0) this.sources = nodes;
-		this.sourcesTitle!.textContent = t(snapshot.complete ? "relations.sources" : "relations.sourcesHeading");
-		this.sourcesTitle!.hidden = !this.sources.length;
-		this.nativeHint!.hidden = !(snapshot.complete && !nodes.length && memo.catalog!.observation.explicitReferenceTargets.length);
-		this.sourcesEl.hidden = !this.sources.length && this.nativeHint!.hidden;
-		this.sourcesWindow!.setNodes(this.sources, snapshot.complete);
 	}
 
 	private renderRow(row: HTMLElement, node: MemoRelationNode, index: number): Promise<void> {
@@ -431,8 +396,7 @@ export class MemoRelationsPage {
 	}
 	private markStale(): void {
 		if (this.listTitle) this.listTitle.textContent = t("relations.referrersHeading");
-		if (this.sourcesTitle) this.sourcesTitle.textContent = t("relations.sourcesHeading");
-		this.referrersWindow?.setComplete(false); this.sourcesWindow?.setComplete(false);
+		this.referrersWindow?.setComplete(false);
 		if (this.status?.dataset.message !== t("relations.failed") && this.status?.dataset.message !== t("relations.unavailable")) this.showStatus("");
 	}
 

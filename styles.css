@@ -5383,8 +5383,7 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 }
 
 .knomo-plugin button.knomo-referrers-view,
-.knomo-plugin button.knomo-referrer-preview,
-.knomo-plugin button.knomo-relation-source {
+.knomo-plugin button.knomo-referrer-preview {
 	border: 0;
 	box-shadow: none;
 	background: transparent;
@@ -5433,20 +5432,17 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 }
 
 .knomo-plugin button.knomo-referrer-preview:hover,
-.knomo-plugin button.knomo-referrers-view:hover,
-.knomo-plugin button.knomo-relation-source:hover {
+.knomo-plugin button.knomo-referrers-view:hover {
 	background: var(--background-modifier-hover);
 }
 
 .knomo-plugin button.knomo-referrer-preview:active,
-.knomo-plugin button.knomo-referrers-view:active,
-.knomo-plugin button.knomo-relation-source:active {
+.knomo-plugin button.knomo-referrers-view:active {
 	background: var(--background-modifier-active-hover);
 }
 
 .knomo-plugin button.knomo-referrer-preview:focus-visible,
-.knomo-plugin button.knomo-referrers-view:focus-visible,
-.knomo-plugin button.knomo-relation-source:focus-visible {
+.knomo-plugin button.knomo-referrers-view:focus-visible {
 	outline: 2px solid var(--interactive-accent);
 	outline-offset: -2px;
 }
@@ -5509,11 +5505,4 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 
 .knomo-plugin .knomo-relations-page .knomo-relation-window-row .knomo-card {
 	margin-block: 0;
-}
-
-.knomo-plugin button.knomo-relation-source {
-	display: block;
-	min-height: 44px;
-	padding: 8px 16px;
-	width: 100%;
 }

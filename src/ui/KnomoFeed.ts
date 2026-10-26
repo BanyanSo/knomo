@@ -159,6 +159,7 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 		}
 		const summary = existing ?? (header.action !== undefined ? renderKnomoActionableListSummary(container, header.text, header.action)
 			: renderKnomoListSummary(container, header.text));
+		if (header.relationCount) summary.addClass("knomo-relation-result-count");
 		if (existing && header.action) {
 			updateHeaderText(summary.querySelector("span"), header.text);
 			updateHeaderText(summary.querySelector("button"), header.action.label);
@@ -199,9 +200,9 @@ export function renderKnomoEmptyState(container: HTMLElement, title = t("empty.g
 	return emptyState;
 }
 
-export function renderKnomoLoadingPlaceholder(container: HTMLElement, visible: boolean): HTMLElement {
+export function renderKnomoLoadingPlaceholder(container: HTMLElement, visible: boolean, announce = true): HTMLElement {
 	const placeholder = container.createDiv({ cls: "knomo-loading-placeholder", attr: { "aria-busy": "true",
-		...(visible ? { role: "status", "aria-live": "polite", "aria-label": t("loading.label") } : {}) } });
+		...(visible && announce ? { role: "status", "aria-live": "polite", "aria-label": t("loading.label") } : {}) } });
 	if (!visible) return placeholder;
 	const skeleton = placeholder.createDiv({ cls: "knomo-loading-skeleton", attr: { "aria-hidden": "true" } });
 	for (let index = 0; index < 3; index++) {

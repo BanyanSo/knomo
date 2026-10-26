@@ -228,7 +228,11 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 			assertCurrent();
 			const observations: CatalogObservation[] = [];
 			const collect = function* (store: InMemoryMemoCatalogStore) {
-				if (request.sourcePaths === undefined) yield* store.observations.values();
+				if (request.observationKeys !== undefined) for (const key of new Set(request.observationKeys)) {
+					const observation = store.observations.get(key);
+					if (observation !== undefined) yield observation;
+				}
+				else if (request.sourcePaths === undefined) yield* store.observations.values();
 				else for (const sourcePath of new Set(request.sourcePaths)) for (const key of store.observationsByFile.get(sourcePath) ?? []) {
 					const observation = store.observations.get(key);
 					if (observation !== undefined) yield observation;
@@ -675,7 +679,9 @@ export function createCatalogQueryMatcher(
 	const terms = getCatalogTextTerms(request);
 	const linkTarget = request.linkTarget === undefined ? undefined : normalizeCatalogText(request.linkTarget);
 	const imagePath = request.imagePath === undefined ? undefined : normalizeCatalogText(request.imagePath);
+	const observationKeys = request.observationKeys === undefined ? null : new Set(request.observationKeys);
 	return observation => !request.matchNone
+		&& (observationKeys === null || observationKeys.has(observation.observationKey))
 		&& (request.textTerms === undefined || observation.searchBody !== undefined)
 		&& matchesSearchTerms(observation, terms)
 		&& matchesSearchDate(observation.logicalDate, request.searchDate)

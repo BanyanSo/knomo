@@ -49,6 +49,9 @@ export function getCatalogReadStatusHeaders(
 	if (options.status.projection === "failed") {
 		headers.push(summary(t("sync.monthlyFailed"), t("catalog.openDiagnostics"), "open-catalog-settings"));
 	}
+	if (options.status.relations?.failed && !options.status.relations.stale) {
+		headers.push({ type: "summary", text: t("relations.failed"), feedback: true });
+	}
 
 
 	return dedupeHeaders(headers);

@@ -49,8 +49,12 @@ import { CATALOG_OBSERVATION_READ_BATCH_LIMIT, CatalogQueryCancelledError, creat
 import { getCatalogQueryKey, narrowCatalogQuery } from "./SearchMatching";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
 import { observationHandleKey } from "./DailyMemoPresentationChange";
+import { MemoRelationService, MemoRelationsChangedError } from "./MemoRelationService";
+import type { MemoRelationOptions } from "./MemoRelationService";
+import type { MemoRelationSnapshot } from "../types/memoRelations";
 
 export interface CatalogReadServiceOptions {
+	relations?: MemoRelationOptions;
 	reviews?: LocalMemoReviewStore;
 	catalog: MemoCatalogService;
 	requestObservationScan?: () => void | Promise<void>;
@@ -97,6 +101,7 @@ function yieldToUi(): Promise<void> {
 }
 
 export class CatalogReadService {
+	readonly relations: MemoRelationService;
 	private readonly reviews: LocalMemoReviewStore;
 	private readonly now: () => Date;
 	private readonly random: () => number;
@@ -106,6 +111,20 @@ export class CatalogReadService {
 	private readonly countTasks = new Map<string, CountTask>();
 
 	constructor(private readonly options: CatalogReadServiceOptions) {
+		this.relations = new MemoRelationService(options.catalog, { ...options.relations,
+			requestScan: options.requestObservationScan ?? options.relations?.requestScan,
+			getFailedFileCount: options.relations?.getFailedFileCount ?? (() => options.getScanSnapshot?.().failedFileCount ?? 0),
+			getReadBlocker: options.relations?.getReadBlocker ?? (() => {
+				const configuration = options.getCurrentConfigurationStatus?.();
+				return options.getSettingsStatus?.() === "unavailable" || configuration === "unavailable" || configuration === "conflicted"
+					|| options.getScanSnapshot?.().state === "paused";
+			}),
+			canRequestScan: options.relations?.canRequestScan ?? (() => {
+				const scan = options.getScanSnapshot?.();
+				return scan?.state !== "scanning" && scan?.state !== "paused"
+					&& (options.getSettingsStatus?.() ?? "ready") === "ready"
+					&& (options.getCurrentConfigurationStatus?.() ?? "ready") === "ready";
+			}) });
 		this.reviews = options.reviews ?? new LocalMemoReviewStore();
 		this.now = options.now ?? (() => new Date());
 		this.random = options.random ?? Math.random;
@@ -165,16 +184,29 @@ export class CatalogReadService {
 	async query(request: CatalogFeatureQuery, signal?: AbortSignal): Promise<CatalogMemoPage> {
 		signal?.throwIfAborted();
 		request = { ...request, ...narrowCatalogQuery(request) };
+		const relations = request.hasReferrers ? await this.relations.read(signal, []) : null;
+		if (relations) request = applyReferrerFilter(request, relations);
 		let page: CatalogQueryPage;
 		try {
 			page = await this.options.catalog.query({ ...request, cursor: request.cursor?.catalog ?? null }, signal);
 		} catch (error) {
 			signal?.throwIfAborted();
 			if (error instanceof CatalogQueryCancelledError) throw error;
+			if (relations) throw error;
 			void Promise.resolve().then(() => { if (!signal?.aborted) return this.options.requestObservationScan?.(); }).catch(() => undefined);
 			return this.createUnavailablePage(signal);
 		}
 		signal?.throwIfAborted();
+		if (relations) {
+			try {
+				await this.relations.assertCurrent(relations, signal);
+				if (request.cursor && request.cursor.relationsVersion !== relations.version) page = { ...page, invalidated: true };
+			} catch (error) {
+				signal?.throwIfAborted();
+				if (!(error instanceof MemoRelationsChangedError)) throw error;
+				page = { ...page, invalidated: true };
+			}
+		}
 		if (page.invalidated) {
 			return {
 				items: [],
@@ -195,12 +227,14 @@ export class CatalogReadService {
 			capabilities: createResolvedMemoCapabilities(),
 		}));
 		const status = this.getReadStatus(page.coverage, page.lifecycle, false);
+		if (relations) status.relations = { complete: relations.complete, failed: relations.errors.length > 0 && !relations.recovering };
 		const catalogCapabilities = createCatalogCapabilities(page.coverage);
 		const items = resolved.map(memo => { signal?.throwIfAborted(); return toCatalogMemoItem(memo, catalogCapabilities); });
 		signal?.throwIfAborted();
 		return {
 			items,
-			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor },
+			nextCursor: page.nextCursor === null ? null : { catalog: page.nextCursor,
+				...(relations ? { relationsVersion: relations.version } : {}) },
 			catalogRevision: page.catalogRevision,
 			coverage: page.coverage,
 			lifecycle: page.lifecycle,
@@ -215,6 +249,15 @@ export class CatalogReadService {
 	async count(request: CatalogFeatureFilter, signal?: AbortSignal): Promise<CatalogMemoCountResult> {
 		request = narrowCatalogQuery(request);
 		try {
+			// metadata 解析可独立于 Catalog revision 改变，关系计数不复用普通计数缓存。
+			if (request.hasReferrers) {
+				const relations = await this.relations.read(signal, []);
+				const result = await this.options.catalog.count(applyReferrerFilter(request, relations), signal);
+				await this.relations.assertCurrent(relations, signal);
+				const complete = relations.complete && isQueryCovered(result.coverage, request);
+				return { count: complete ? result.count : null, complete,
+					catalogRevision: result.catalogRevision, coverage: result.coverage };
+			}
 			return await this.cachedCount(request, signal, async (countSignal) => {
 				const result = await this.options.catalog.count(request, countSignal);
 				const complete = isQueryCovered(result.coverage, request);
@@ -335,10 +378,31 @@ export class CatalogReadService {
 	): Promise<PreparedRecordStats | null> {
 		if (!isCurrent()) return null;
 		await this.requireCompleteCoverage("Record statistics");
-		const aggregates = await this.options.catalog.listDailyAggregates();
+		const aggregate = await this.options.catalog.readAggregateSnapshot();
+		if (aggregate.invalidated) return null;
+		const prepared = buildPreparedRecordStats(aggregate.aggregates);
+		let relations: MemoRelationSnapshot | null = null;
+		try {
+			relations = await this.relations.read(undefined, []);
+			await this.relations.assertCurrent(relations);
+			const daily = new Map<string, number>();
+			for (const [key, referrers] of relations.referrers) {
+				const node = relations.nodes.get(key);
+				if (node && referrers.length) daily.set(node.logicalDate, (daily.get(node.logicalDate) ?? 0) + 1);
+			}
+			prepared.referenced = { daily, complete: relations.complete, failed: relations.errors.length > 0 && !relations.recovering };
+		} catch (error) {
+			if (error instanceof MemoRelationsChangedError) return null;
+			relations = null;
+			console.error("Knomo referenced statistics read failed", error);
+			prepared.referenced = { daily: new Map(), complete: false, failed: true };
+		}
 		await this.requireCompleteCoverage("Record statistics");
 		await yieldToUi();
-		return isCurrent() ? buildPreparedRecordStats(aggregates) : null;
+		if (!isCurrent() || !await this.isDiscoverySnapshotCurrent({ ...aggregate, day: formatDatePart(this.now()) })) return null;
+		try { if (relations) await this.relations.assertCurrent(relations); }
+		catch (error) { if (error instanceof MemoRelationsChangedError) return null; throw error; }
+		return isCurrent() ? prepared : null;
 	}
 
 	async getRandomReunionItems(count: number, options: {
@@ -809,7 +873,21 @@ export function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): 
 	if (filter.type === "tag") query.tags = [filter.tagKey];
 	if (filter.type === "hour") query.hour = filter.hour;
 	if (filter.type === "references") query.hasReference = true;
+	if (filter.type === "referenced") query.hasReferrers = true;
 	return { query, fromDate, toDate };
+}
+
+function applyReferrerFilter<T extends CatalogFeatureFilter>(request: T, snapshot: MemoRelationSnapshot): T {
+	const selected = request.observationKeys === undefined ? null : new Set(request.observationKeys);
+	const observationKeys: string[] = [];
+	for (const [key, referrers] of snapshot.referrers) {
+		const node = snapshot.nodes.get(key);
+		if (!node || !referrers.length || (request.fromDate !== undefined && node.logicalDate < request.fromDate)
+			|| (request.toDate !== undefined && node.logicalDate > request.toDate)) continue;
+		const observationKey = node.handle.sourcePath + "\0" + String(node.handle.startLine).padStart(10, "0");
+		if (selected === null || selected.has(observationKey)) observationKeys.push(observationKey);
+	}
+	return { ...request, hasReferrers: undefined, observationKeys };
 }
 
 function buildPreparedRecordStats(aggregates: readonly CatalogDailyAggregate[]): PreparedRecordStats {

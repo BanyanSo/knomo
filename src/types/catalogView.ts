@@ -31,6 +31,7 @@ export interface CatalogReadStatus {
 	currentConfiguration?: KnomoCurrentConfigStatus;
 	projection: MonthlyProjectionState;
 	scan?: CatalogScanSnapshot;
+	relations?: { complete: boolean; failed: boolean; stale?: boolean };
 
 }
 
@@ -87,6 +88,7 @@ export interface MemoSaveOperation {
 
 export interface CatalogFeatureCursor {
 	catalog: CatalogCursor;
+	relationsVersion?: number;
 }
 
 export interface CatalogMemoPage {
@@ -131,6 +133,7 @@ export type CatalogRecordStatsFilter =
 	| { type: "with-image"; startDate: string; endDateExclusive: string }
 	| { type: "tag"; startDate: string; endDateExclusive: string; tagKey: string; tagLabel: string }
 	| { type: "references"; startDate: string; endDateExclusive: string }
+	| { type: "referenced"; startDate: string; endDateExclusive: string }
 	| { type: "max-daily-notes"; dates: string[] }
 	| { type: "max-daily-words"; dates: string[] }
 	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };

@@ -1,5 +1,6 @@
 import type { MemoImageRef, MemoLinkRef } from "./memo";
 import type { SearchDate } from "./search";
+import type { CatalogFileRelations } from "./memoRelations";
 
 export type CatalogCoverageKind = "partial" | "complete" | "rebuilding";
 export type CatalogStoreLifecycleState = "opening" | "ready" | "degraded" | "retrying" | "read-only" | "rebuilding";
@@ -23,6 +24,7 @@ export interface ObservationHandle {
 
 // Observation 只描述当前 Daily 字节，不承担身份职责。
 export interface MemoObservation extends ObservationHandle {
+	relationBlockId?: string | null;
 	occurrenceIndex: number;
 	occurrenceCount: number;
 	logicalDate: string;
@@ -90,6 +92,7 @@ export interface CatalogObservation extends MemoObservation {
 }
 
 export interface CatalogFileRecord {
+	relations?: CatalogFileRelations;
 	sourcePath: string;
 	sourceRevision: string;
 	logicalDate: string;
@@ -193,6 +196,9 @@ export interface CatalogQuery {
 	searchDate?: SearchDate;
 	matchNone?: boolean;
 	hasReference?: boolean;
+	// 由 CatalogReadService 按当前关系快照转换为 observationKeys，不持久化。
+	hasReferrers?: true;
+	observationKeys?: readonly string[];
 	tags?: string[];
 	linkTarget?: string;
 	hasLink?: boolean;

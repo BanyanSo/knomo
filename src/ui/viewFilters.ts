@@ -267,6 +267,12 @@ export function getRecordStatsSearchFilterLabel(filter: RecordStatsSearchFilter)
 			endDate: getInclusiveEndDate(filter.endDateExclusive),
 		});
 	}
+	if (filter.type === "referenced") {
+		return t("recordStats.filter.referenced", {
+			startDate: filter.startDate,
+			endDate: getInclusiveEndDate(filter.endDateExclusive),
+		});
+	}
 	if (filter.type === "max-daily-notes") {
 		return t("recordStats.filter.maxDailyNotes", { dates: formatFilterDates(filter.dates) });
 	}
@@ -292,6 +298,7 @@ export function getRecordStatsSearchFilterKey(filter: RecordStatsSearchFilter | 
 	if (filter.type === "with-image") return `with-image:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "tag") return `tag:${filter.startDate}:${filter.endDateExclusive}:${filter.tagKey}`;
 	if (filter.type === "references") return `references:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "referenced") return `referenced:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "max-daily-notes") return `max-daily-notes:${filter.dates.join(",")}`;
 	if (filter.type === "max-daily-words") return `max-daily-words:${filter.dates.join(",")}`;
 	return `hour:${filter.startDate}:${filter.endDateExclusive}:${filter.hour}`;

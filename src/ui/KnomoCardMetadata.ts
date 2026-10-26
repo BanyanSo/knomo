@@ -34,8 +34,9 @@ export interface TrashCardActionMeta {
 	state: TrashActionState;
 }
 
-const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"];
+const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "relations", "copy-text", "copy-link", "delete"];
 export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
+	relations: "network",
 	edit: "pencil",
 	reference: "quote",
 	"open-daily": "calendar-days",
@@ -107,6 +108,7 @@ function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction)
 	if (capabilities === undefined) return true;
 	if (action === "open-daily") return capabilities.markdown.openDaily;
 	if (action === "view-day") return capabilities.markdown.view;
+	if (action === "relations") return capabilities.markdown.view;
 	if (action === "copy-text") return capabilities.markdown.copy;
 	if (action === "edit") return capabilities.markdown.edit;
 	if (action === "delete") return memo === undefined || getMemoDeleteMode(memo) !== "unavailable";

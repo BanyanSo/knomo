@@ -539,6 +539,26 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 				}
 
 				if (request.matchNone) return;
+				if (request.observationKeys !== undefined) {
+					// 先扫现有时间索引的键，仅为入选 occurrence 取正文，不读取同日无关 Memo。
+					const keys = new Set(request.observationKeys);
+					const selected = observations.index(BY_CREATED_AT).openKeyCursor(buildObservationRange(keyRange, request), "prev");
+					selected.onsuccess = () => {
+						if (signal.aborted) return;
+						const cursor = selected.result;
+						if (cursor === null || items.length > limit) return;
+						cursorReads++;
+						if (!keys.has(String(cursor.primaryKey))) { cursor.continue(); return; }
+						const read = observations.get(cursor.primaryKey);
+						read.onsuccess = () => {
+							if (signal.aborted) return;
+							const observation = read.result as CatalogObservation | undefined;
+							if (observation) { observationsRead++; if (matches(observation)) items.push(observation); }
+							if (items.length <= limit) cursor.continue();
+						};
+					};
+					return;
+				}
 				const startSelectedCursor = (selection: CatalogIndexSelection | null) => {
 					if (signal.aborted) return;
 					try {
@@ -669,6 +689,27 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 				coverage = (coverageRequest.result as CatalogMetaRecord<CatalogCoverage> | undefined)?.value
 					?? { ...DEFAULT_CATALOG_COVERAGE };
 				if (request.matchNone) return;
+				if (request.observationKeys !== undefined) {
+					const keys = new Set(request.observationKeys);
+					const metadataOnly = canCountObservationRange({ ...request, observationKeys: undefined });
+					const selected = observations.index(BY_CREATED_AT).openKeyCursor(buildObservationCountRange(keyRange, request), "prev");
+					selected.onsuccess = () => {
+						if (signal?.aborted) return;
+						const cursor = selected.result;
+						if (cursor === null) return;
+						if (!keys.has(String(cursor.primaryKey))) { cursor.continue(); return; }
+						// 日期及目标集合已由索引键确认；普通被引用计数不读取正文。
+						if (metadataOnly) { count++; cursor.continue(); return; }
+						const read = observations.get(cursor.primaryKey);
+						read.onsuccess = () => {
+							if (signal?.aborted) return;
+							const observation = read.result as CatalogObservation | undefined;
+							if (observation && matches(observation)) count++;
+							cursor.continue();
+						};
+					};
+					return;
+				}
 				const startSelectedCursor = (selection: CatalogIndexSelection | null) => {
 					if (signal?.aborted) return;
 					try {

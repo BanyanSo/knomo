@@ -68,6 +68,7 @@ test("builds card action and trash action metadata", () => {
 		{ action: "edit", className: "knomo-card-action" },
 		{ action: "reference", className: "knomo-card-action" },
 		{ action: "open-daily", className: "knomo-card-action" },
+		{ action: "relations", className: "knomo-card-action" },
 		{ action: "copy-text", className: "knomo-card-action" },
 		{ action: "copy-link", className: "knomo-card-action" },
 		{ action: "delete", className: "knomo-card-action is-danger" },

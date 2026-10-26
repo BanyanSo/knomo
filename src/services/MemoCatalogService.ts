@@ -17,8 +17,10 @@ import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { getMemoContentStatsFromContent } from "../utils/memoContentStats";
 import { normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
+import { collectRelationBlockAnchors, extractMemoRelationTargets } from "../utils/memoRelations";
 
 export interface CatalogPartitionInput {
+	blockAnchors?: Record<string, number>;
 	inventory: CatalogInventoryEntry;
 	sourceRevision: string;
 	observations: readonly MemoObservation[];
@@ -32,6 +34,16 @@ export interface CatalogPartitionRuntime extends CooperativeTaskRuntime {
 }
 
 export class MemoCatalogService {
+	private readonly changeListeners = new Set<(path?: string, file?: CatalogFileRecord) => void>();
+	onChange(listener: (path?: string, file?: CatalogFileRecord) => void): () => void {
+		this.changeListeners.add(listener);
+		return () => this.changeListeners.delete(listener);
+	}
+	private changed(path?: string, file?: CatalogFileRecord): void {
+		for (const listener of this.changeListeners) {
+			try { listener(path, file); } catch (error) { console.error("Knomo Catalog change listener failed", error); }
+		}
+	}
 	constructor(private readonly store: MemoCatalogStore) {}
 
 	open(): Promise<void> {
@@ -39,6 +51,8 @@ export class MemoCatalogService {
 	}
 
 	close(): void {
+		this.changed();
+		this.changeListeners.clear();
 		this.store.close();
 	}
 
@@ -46,11 +60,15 @@ export class MemoCatalogService {
 		if (runtime?.isCurrent() === false) return null;
 		const partition = runtime === undefined ? buildCatalogPartition(input) : await buildCatalogPartitionCooperatively(input, runtime);
 		if (runtime?.isCurrent() === false) return null;
-		return this.store.replaceFilePartition(partition);
+		const revision = await this.store.replaceFilePartition(partition);
+		this.changed(partition.file.sourcePath, partition.file);
+		return revision;
 	}
 
-	deleteFile(sourcePath: string): Promise<number> {
-		return this.store.deleteFilePartition(sourcePath);
+	async deleteFile(sourcePath: string): Promise<number> {
+		const revision = await this.store.deleteFilePartition(sourcePath);
+		this.changed(sourcePath);
+		return revision;
 	}
 
 	query(request: CatalogQuery, signal?: AbortSignal) {
@@ -108,6 +126,7 @@ export async function buildCatalogPartitionCooperatively(input: CatalogPartition
 
 function createCatalogPartition(input: CatalogPartitionInput): CatalogFilePartition {
 	const file: CatalogFileRecord = {
+		relations: { anchors: input.blockAnchors ?? {}, nodes: [] },
 		sourcePath: input.inventory.sourcePath,
 		sourceRevision: input.sourceRevision,
 		logicalDate: input.inventory.logicalDate,
@@ -119,12 +138,21 @@ function createCatalogPartition(input: CatalogPartitionInput): CatalogFilePartit
 		observationKeys: [],
 		auditedAt: input.auditedAt,
 	};
+	// 非扫描调用也可构建完整分区；生产扫描传入整份 Daily 的锚点计数。
+	if (input.blockAnchors === undefined) for (const memo of input.observations) {
+		for (const [id, count] of Object.entries(collectRelationBlockAnchors(memo.content))) file.relations!.anchors[id] = (file.relations!.anchors[id] ?? 0) + count;
+		if (memo.existingBlockId) file.relations!.anchors[memo.existingBlockId] = (file.relations!.anchors[memo.existingBlockId] ?? 0) + 1;
+	}
 	return { file, observations: [], aggregate: createFileAggregate(file) };
 }
 
 function appendCatalogObservation(partition: CatalogFilePartition, source: MemoObservation): void {
 	const observation = buildCatalogObservation(source);
 	partition.observations.push(observation);
+	const { sourcePath, sourceRevision, startLine, endLine, rawBlockHash } = source;
+	partition.file.relations!.nodes.push({ handle: { sourcePath, sourceRevision, startLine, endLine, rawBlockHash },
+		logicalDate: source.logicalDate, time: source.time, blockId: source.relationBlockId === undefined ? source.existingBlockId : source.relationBlockId,
+		targets: extractMemoRelationTargets(source.content) });
 	partition.file.observationKeys!.push(observation.observationKey);
 	partition.file.observationCount++;
 	addFileAggregateObservation(partition.aggregate, observation);

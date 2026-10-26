@@ -89,7 +89,7 @@ interface KnomoUserActionControllerOptions {
 	openRecordStatsTrendFilter: (sourceEl: HTMLElement | null) => void;
 	openRecordStatsHourFilter: (sourceEl: HTMLElement | null) => void;
 	openRecordStatsMetricFilter: (
-		type: "range" | "with-tag" | "no-tag" | "with-image" | "references" | "max-daily-notes" | "max-daily-words",
+		type: "range" | "with-tag" | "no-tag" | "with-image" | "references" | "referenced" | "max-daily-notes" | "max-daily-words",
 	) => void;
 	openRecordStatsTagFilter: (sourceEl: HTMLElement | null) => void;
 	openComposer: () => void;
@@ -408,6 +408,9 @@ export class KnomoUserActionController {
 				return;
 			case "record-stats-filter-references":
 				this.options.openRecordStatsMetricFilter("references");
+				return;
+			case "record-stats-filter-referenced":
+				this.options.openRecordStatsMetricFilter("referenced");
 				return;
 			case "record-stats-filter-max-daily-notes":
 				this.options.openRecordStatsMetricFilter("max-daily-notes");

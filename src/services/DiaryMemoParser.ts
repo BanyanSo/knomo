@@ -21,8 +21,9 @@ import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { assignObservationOccurrences } from "./ObservationOccurrences";
+import { collectRelationBlockAnchors, memoLevelRelationBlockId } from "../utils/memoRelations";
 
-export const CATALOG_PARSER_VERSION = 13;
+export const CATALOG_PARSER_VERSION = 14;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;
@@ -31,6 +32,7 @@ export interface DiaryMemoParseInput {
 }
 
 export interface DiaryMemoParseResult {
+	blockAnchors?: Record<string, number>;
 	sourceRevision: string;
 	observations: MemoObservation[];
 }
@@ -126,7 +128,7 @@ export class DiaryMemoParser {
 		}
 
 		assignObservationOccurrences(observations);
-		return { sourceRevision, observations };
+		return { sourceRevision, observations, blockAnchors: collectRelationBlockAnchors(content) };
 	}
 
 	private async parseRevisionCooperatively(
@@ -167,7 +169,7 @@ export class DiaryMemoParser {
 			lineIndex = parsed.endLine;
 		}
 		assignObservationOccurrences(observations);
-		return { sourceRevision, observations };
+		return { sourceRevision, observations, blockAnchors: collectRelationBlockAnchors(content) };
 	}
 }
 
@@ -306,6 +308,7 @@ function buildMemoObservation(
 		occurrenceIndex: 0,
 		occurrenceCount: 1,
 		existingBlockId: parsed.blockId,
+		relationBlockId: memoLevelRelationBlockId(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n"), parsed.blockId),
 		tags: parseMemoTags(metadataContent),
 		links: parseMemoLinksInSourceOrder(metadataContent),
 		images: dedupeStable(parseMemoImages(metadataContent), (image) => `${image.syntax}\0${image.path}\0${image.altText}`),

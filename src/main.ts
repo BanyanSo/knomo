@@ -238,6 +238,7 @@ export default class KnomoPlugin extends Plugin {
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [MONTHLY_PROJECTION_CHECKPOINT_META_KEY],
 				onCatalogSettled: async () => {
+					await this.catalogReadService?.relations.refreshState();
 					await this.monthlyProjectionCoordinator?.handleCatalogSettled();
 					await this.queueRefreshOpenViews();
 					settingTab?.refreshAttentionIfVisible();
@@ -321,6 +322,7 @@ export default class KnomoPlugin extends Plugin {
 			this.app,
 			this.memoCatalogService,
 			{
+				isActiveDailyPath: path => dailyNotesProvider.getConfig() !== null && parseDailyNoteDateFromPath(path, getEffectiveDailyConfig()) !== null,
 				getDailyPathForDate: async (logicalDate) => {
 					const date = parseLogicalDate(logicalDate);
 					return dailyNoteService.getDailyNotePathForDateWithConfig(date, getEffectiveDailyConfig());
@@ -345,6 +347,7 @@ export default class KnomoPlugin extends Plugin {
 			markdownMutationService,
 		);
 		this.catalogReadService = this.memoCommandService.getReadService();
+		this.register(() => this.catalogReadService?.relations.dispose());
 		this.registerTrashEvents(trashStore);
 		const clearTrash = createClearTrashAction({
 			getPath: () => trashStore.path,
@@ -705,11 +708,14 @@ export default class KnomoPlugin extends Plugin {
 		);
 		this.register(() => { scheduler.clear(); pendingPaths = null; });
 		const refresh = (path?: string): void => {
+			this.catalogReadService?.relations.invalidateResolution(path === undefined ? undefined : [path]);
 			if (path === undefined) pendingPaths = null;
 			else pendingPaths?.add(path);
 			void scheduler.queue().catch((error: unknown) => console.error("Knomo reference refresh failed", error));
 		};
 		this.registerEvent(this.app.metadataCache.on("changed", file => refresh(file?.path)));
+		this.registerEvent(this.app.metadataCache.on("resolved", () => this.catalogReadService?.relations.retryPendingResolution()));
+		this.registerEvent(this.app.vault.on("create", file => refresh(file.path)));
 		// 结构变化可能改变旧目标或嵌入的解析关系，继续保留全量保守刷新。
 		this.registerEvent(this.app.vault.on("rename", () => refresh()));
 		this.registerEvent(this.app.vault.on("delete", () => refresh()));

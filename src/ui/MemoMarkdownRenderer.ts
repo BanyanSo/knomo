@@ -18,7 +18,7 @@ import { MarkdownRenderQueue } from "./MarkdownRenderQueue";
 import type { MarkdownRenderPriority } from "./MarkdownRenderQueue";
 import { shouldRefreshMarkdownReferences } from "./MarkdownReferenceRefresh";
 
-export type MemoMarkdownSurface = "card-flow" | "mobile-search";
+export type MemoMarkdownSurface = "card-flow" | "mobile-search" | "relations";
 
 interface MemoMarkdownRendererOptions {
 	app: App;
@@ -43,6 +43,7 @@ interface MarkdownRenderToken {
 export class MemoMarkdownRenderer {
 	private readonly cardFlowQueue: MarkdownRenderQueue;
 	private readonly mobileSearchQueue: MarkdownRenderQueue;
+	private readonly relationsQueue: MarkdownRenderQueue;
 	private readonly activeComponents = createSurfaceMap(() => new Map<HTMLElement, Component>());
 	private readonly pendingComponents = createSurfaceMap(() => new Set<Component>());
 	private readonly latestRequestIds = createSurfaceMap(() => new WeakMap<HTMLElement, number>());
@@ -53,6 +54,8 @@ export class MemoMarkdownRenderer {
 	private nextRequestId = 0;
 
 	constructor(private readonly options: MemoMarkdownRendererOptions) {
+		this.relationsQueue = new MarkdownRenderQueue({ concurrency: options.concurrency, scheduleTask: options.scheduleTask,
+			cancelTask: options.cancelTask, getGeneration: () => options.getGeneration("relations") });
 		this.cardFlowQueue = new MarkdownRenderQueue({
 			concurrency: options.concurrency,
 			scheduleTask: options.scheduleTask,
@@ -205,7 +208,7 @@ export class MemoMarkdownRenderer {
 	}
 
 	private getQueue(surface: MemoMarkdownSurface): MarkdownRenderQueue {
-		return surface === "card-flow" ? this.cardFlowQueue : this.mobileSearchQueue;
+		return surface === "relations" ? this.relationsQueue : surface === "card-flow" ? this.cardFlowQueue : this.mobileSearchQueue;
 	}
 
 	private canSkipReferenceRefresh(container: HTMLElement, text: string, sourcePath: string,
@@ -382,6 +385,7 @@ function createSurfaceMap<T>(createValue: () => T): Record<MemoMarkdownSurface, 
 	return {
 		"card-flow": createValue(),
 		"mobile-search": createValue(),
+		relations: createValue(),
 	};
 }
 

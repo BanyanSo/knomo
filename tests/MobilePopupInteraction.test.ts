@@ -7,7 +7,7 @@ test("弹层夹具使用真实范围菜单、卡片动作和编辑中的 Compose
 	const fixture = await createMobilePopupFixture("cancel-edit");
 	try {
 		assert.deepEqual(Array.from(fixture.scopeMenu.querySelectorAll("[data-title-mode]"), item => item.getAttribute("data-title-mode")), ["all", "things", "no-tag", "with-link", "with-image", "anniversary", "review", "random", "shuffleDay"]);
-		assert.deepEqual(Array.from(fixture.card.querySelectorAll("[data-memo-action]"), item => item.getAttribute("data-memo-action")), ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"]);
+		assert.deepEqual(Array.from(fixture.card.querySelectorAll("[data-memo-action]"), item => item.getAttribute("data-memo-action")), ["edit", "reference", "open-daily", "relations", "copy-text", "copy-link", "delete"]);
 		assert.equal(fixture.view.inputEl.value, mobilePopupText.editDraft);
 		assert.equal(fixture.button.hidden, false);
 	} finally { fixture.close(); }

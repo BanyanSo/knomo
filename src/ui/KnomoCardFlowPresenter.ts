@@ -12,7 +12,7 @@ export interface CardFlowRegularFilterCopy {
 }
 
 export type CardFlowHeader =
-	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean }
+	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean; relationCount?: boolean }
 	| { type: "random-toolbar"; count: number }
 	| { type: "trash-toolbar"; count: number; busy: boolean }
 	| { type: "random-day"; selectedDate: string; stats: ShuffleDaySnapshot["stats"] }

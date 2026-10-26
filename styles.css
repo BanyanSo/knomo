@@ -5351,3 +5351,169 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 		transform: translate(-50%, -50%);
 	}
 }
+.knomo-plugin.has-memo-relations .knomo-content-column > .knomo-card-flow:not(.knomo-relations-page),
+.knomo-plugin.has-memo-relations .knomo-mobile-search-page.is-open {
+	display: none;
+}
+
+.knomo-plugin .knomo-mobile-search-page.is-open.is-suspended-for-relations {
+	display: none;
+}
+
+.knomo-plugin .knomo-memo-referrers {
+	margin-top: var(--size-4-3, 12px);
+	padding-top: var(--size-4-2, 8px);
+	border-top: 1px solid var(--background-modifier-border);
+	min-width: 0;
+}
+
+.knomo-plugin .knomo-referrers-header,
+.knomo-plugin .knomo-relations-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2, 8px);
+	min-width: 0;
+}
+
+.knomo-plugin .knomo-referrers-title {
+	color: var(--text-muted);
+	font-size: var(--font-smaller);
+	min-width: 0;
+}
+
+.knomo-plugin button.knomo-referrers-view,
+.knomo-plugin button.knomo-referrer-preview,
+.knomo-plugin button.knomo-relation-source {
+	border: 0;
+	box-shadow: none;
+	background: transparent;
+	color: var(--text-normal);
+	font-family: inherit;
+	font-size: inherit;
+	white-space: normal;
+	height: auto;
+	text-align: start;
+	cursor: pointer;
+}
+
+.knomo-plugin button.knomo-referrers-view {
+	flex: 0 0 auto;
+	min-width: 48px;
+	min-height: 44px;
+	padding: 8px;
+	white-space: nowrap;
+	color: var(--text-muted);
+	font-size: var(--font-smaller);
+}
+
+.knomo-plugin button.knomo-referrer-preview {
+	display: block;
+	width: 100%;
+	min-width: 0;
+	min-height: 48px;
+	padding: 6px 8px;
+	border-radius: var(--radius-s);
+}
+
+.knomo-plugin .knomo-referrer-date {
+	display: block;
+	color: var(--text-muted);
+	font-size: var(--font-smaller);
+	line-height: 1.5;
+}
+
+.knomo-plugin .knomo-referrer-summary {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	line-height: 1.5;
+}
+
+.knomo-plugin button.knomo-referrer-preview:hover,
+.knomo-plugin button.knomo-referrers-view:hover,
+.knomo-plugin button.knomo-relation-source:hover {
+	background: var(--background-modifier-hover);
+}
+
+.knomo-plugin button.knomo-referrer-preview:active,
+.knomo-plugin button.knomo-referrers-view:active,
+.knomo-plugin button.knomo-relation-source:active {
+	background: var(--background-modifier-active-hover);
+}
+
+.knomo-plugin button.knomo-referrer-preview:focus-visible,
+.knomo-plugin button.knomo-referrers-view:focus-visible,
+.knomo-plugin button.knomo-relation-source:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+.knomo-plugin .knomo-relations-page {
+	overflow-anchor: none;
+}
+
+.knomo-plugin .knomo-relations-header {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: var(--knomo-page-background, var(--background-primary));
+	justify-content: flex-start;
+	padding: var(--size-4-2, 8px) var(--size-4-4, 16px);
+}
+
+.knomo-plugin .knomo-relations-header > button {
+	min-width: 44px;
+	min-height: 44px;
+}
+
+.knomo-plugin .knomo-relations-context {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	margin-inline-start: auto;
+}
+
+.knomo-plugin .has-host-header > .knomo-relations-header > button,
+.knomo-plugin .has-host-header > .knomo-relations-header > h2 {
+	display: none;
+}
+
+.knomo-plugin .knomo-relations-header h2 {
+	margin: 0;
+	font-size: var(--font-ui-medium);
+}
+
+.knomo-plugin .knomo-relations-section-title,
+.knomo-plugin .knomo-relations-status,
+.knomo-plugin .knomo-relations-hint {
+	margin: var(--size-4-3, 12px) var(--size-4-4, 16px);
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
+.knomo-plugin .knomo-relation-window {
+	position: relative;
+	width: 100%;
+	height: var(--knomo-relation-height, 0px);
+}
+
+.knomo-plugin .knomo-relation-window-row {
+	position: absolute;
+	top: var(--knomo-relation-top, 0px);
+	width: 100%;
+	min-width: 0;
+	padding-bottom: var(--size-4-3, 12px);
+}
+
+.knomo-plugin .knomo-relations-page .knomo-relation-window-row .knomo-card {
+	margin-block: 0;
+}
+
+.knomo-plugin button.knomo-relation-source {
+	display: block;
+	min-height: 44px;
+	padding: 8px 16px;
+	width: 100%;
+}

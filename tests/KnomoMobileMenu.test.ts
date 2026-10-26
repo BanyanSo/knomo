@@ -16,7 +16,7 @@ test("原生菜单有无自身锚点均显示固定的引用和复制链接", as
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
 			assert.equal(menu.items[1].title, "Reference");
-			assert.equal(menu.items[4].title, "Copy link");
+			assert.equal(menu.items[5].title, "Copy link");
 			h.controller.close();
 		}
 	} finally { h.close(); }
@@ -180,11 +180,11 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 		h.view.toggleCardMenu(h.originalMemo.id);
 		const menu = h.menus[0];
 		assert.equal(h.controller.kind, "card");
-		assert.equal(menu.items.length, 7);
+		assert.equal(menu.items.length, 8);
 		assert.equal(menu.noIcon, false);
-		assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "quote", "calendar-days", "copy", "link", "trash-2", "text"]);
+		assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "quote", "calendar-days", "network", "copy", "link", "trash-2", "text"]);
 		assert.equal(menu.items.at(-1)!.label, true);
-		assert.equal(menu.items[5].warning, true);
+		assert.equal(menu.items[6].warning, true);
 		assert.equal(menu.doc, h.f.win.document);
 		assert.equal(h.f.card.classList.contains("is-menu-open"), false, "移动端不再显示卡片内 Popover");
 		assert.equal(h.f.card.querySelector(".knomo-card-menu")?.getAttribute("aria-expanded"), "true");
@@ -944,7 +944,7 @@ test("失焦输入动作修复不改变其他卡片菜单项、Scope 选项和�
 		try {
 			if (scenario === "scope") h.view.toggleScopeMenu(); else h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus[0];
-			const target = scenario === "backdrop" ? menu.background! : menu.items[scenario === "daily" ? 2 : 3].dom;
+			const target = scenario === "backdrop" ? menu.background! : menu.items[scenario === "daily" ? 2 : scenario === "copy" ? 4 : 3].dom;
 			assert.equal(tap(h, target).defaultPrevented, true, scenario);
 			assert.equal(h.controller.kind, null, scenario);
 			if (scenario === "copy" || scenario === "daily") assert.deepEqual(h.actions.map(item => item.action), [scenario === "copy" ? "copy-text" : "open-daily"]);

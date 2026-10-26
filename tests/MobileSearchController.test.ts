@@ -23,6 +23,60 @@ function makeRemotePage(items: MemoViewItem[], catalogRevision = 0): MobileSearc
 		lifecycle: { state: "ready", persistent: true, writable: true, reason: null }, capabilities: createCatalogCapabilities(coverage) };
 }
 
+test("移动被引用钻取分页失效后后台重查首屏，等待期间无失败、重试或旧总数", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = [makeMemo("old", "memo"), makeMemo("fresh", "memo")];
+	const first = makeRemotePage([memos[0]]);
+	first.status.relations = { complete: true, failed: false };
+	first.nextCursor = { catalog: { catalogRevision: 0, createdAtKey: "next", observationKey: "old" }, relationsVersion: 1 };
+	const requests: Parameters<LoadRemoteResults>[1][] = [];
+	let release!: (page: MobileSearchPage) => void;
+	const pending = new Promise<MobileSearchPage>(resolve => { release = resolve; });
+	const timers = new Map<number, () => void>(); let timerId = 0;
+	const h = createControllerHarness(MobileSearchController, memos, () => 2, async (_filter, cursor) => {
+		requests.push(cursor);
+		if (requests.length === 1) return first;
+		if (cursor) return { ...first, items: [], invalidated: true, nextCursor: null };
+		return pending;
+	}, { getWindow: () => ({ setTimeout: (callback: () => void, delay?: number) => {
+		if (delay === 0) queueMicrotask(callback); else timers.set(++timerId, callback); return timerId;
+	}, clearTimeout: (id: number) => { timers.delete(id); } } as unknown as Window) });
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		h.controller.loadMore(); await settle();
+		assert.equal(h.controller.session.requestStatus, "ready");
+		assert.doesNotMatch(h.root.getText(), /could not load|Retry|failed|Updating|Pending update/iu);
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(h.root.find(".knomo-search-result-count"), null);
+		for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+		await settle(); assert.equal(requests.at(-1), null, "失效后丢弃旧 cursor，从新首屏开始");
+		const fresh = makeRemotePage([memos[1]]); fresh.status.relations = { complete: true, failed: false };
+		release(fresh); await settle();
+		assert.deepEqual(h.controller.getDisplayedMemos().map(memo => memo.id), ["fresh"]);
+	} finally { release(makeRemotePage([])); h.controller.removePage(); }
+});
+
+test("移动被引用钻取保留已有切片，部分空结果不删除卡片或显示无结果", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memo = makeMemo("memo", "memo"); let partial = false;
+	const h = createControllerHarness(MobileSearchController, [memo], undefined, async () => {
+		const page = makeRemotePage(partial ? [] : [memo]); page.status.relations = { complete: !partial, failed: false }; return page;
+	}, { getResultStatus: () => ({ headers: [], complete: !partial, blocked: false }) });
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		const card = h.root.find(".knomo-card"); partial = true;
+		await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), card);
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(h.root.find(".knomo-mobile-search-empty"), null);
+		assert.doesNotMatch(h.root.getText(), /incomplete|Retry|Updating|Pending update/iu);
+	} finally { h.controller.removePage(); }
+});
+
 test("移动搜索快速结果不闪加载提示，取消后旧延迟回调不再显示", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -849,14 +903,14 @@ test("移动搜索提交即时更新深处卡片，保留其它 DOM、滚动与�
 		createEl: (tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> }) => {
 			const element = dom.window.document.createElement(tag);
 			element.className = options.cls ?? ""; element.textContent = options.text ?? "";
-			Object.assign(element, { setText: (text: string) => { element.textContent = text; } });
+			Object.assign(element, { setText: (text: string) => { element.textContent = text; }, addClass: (cls: string) => element.classList.add(cls) });
 			for (const [name, value] of Object.entries(options.attr ?? {})) element.setAttribute(name, value);
 			root.append(element); return element;
 		},
 		createDiv: (options: { cls?: string; text?: string }) => {
 			const element = dom.window.document.createElement("div");
 			element.className = options.cls ?? ""; element.textContent = options.text ?? "";
-			Object.assign(element, { setText: (text: string) => { element.textContent = text; } });
+			Object.assign(element, { setText: (text: string) => { element.textContent = text; }, addClass: (cls: string) => element.classList.add(cls) });
 			root.appendChild(element); return element;
 		},
 	});

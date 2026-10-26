@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
@@ -29,6 +30,8 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 		find(this: HTMLElement, selector: string) { return this.querySelector(selector); },
 		findAll(this: HTMLElement, selector: string) { return Array.from(this.querySelectorAll(selector)); },
 		getAttr(this: HTMLElement, name: string) { return this.getAttribute(name); },
+		setAttr(this: HTMLElement, name: string, value: string) { this.setAttribute(name, value); },
+		addClass(this: HTMLElement, ...classes: string[]) { this.classList.add(...classes); },
 		empty(this: HTMLElement) { this.replaceChildren(); },
 		setCssProps(this: HTMLElement, values: Record<string, string>) { for (const [key, value] of Object.entries(values)) this.style.setProperty(key, value); },
 	});
@@ -91,6 +94,142 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 80));
+
+test("关联详情将返回移至当前记录行，移除页面时间，保留逐层返回与原焦点", async () => {
+	const h = await fixture();
+	try {
+		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
+		const [b] = await h.seed("B.md", "- 11:00 B [[A#^a]] ^b\n");
+		const trigger = h.host.createEl("button", { text: "View" });
+		await h.page.open(a, false, trigger);
+		const currentHeader = h.page.el!.querySelector(".knomo-relations-section-header")!;
+		assert.equal(currentHeader.querySelector("h3")!.textContent, "Current record");
+		const back = currentHeader.querySelector<HTMLButtonElement>("button")!;
+		assert.equal(back.textContent, "");
+		assert.equal(back.getAttribute("data-icon"), "arrow-left");
+		assert.equal(back.type, "button");
+		assert.equal(back.getAttribute("aria-label"), "Back to original list");
+		assert.equal(h.page.el!.getAttribute("aria-label"), "Relation details");
+		assert.equal(h.page.el!.querySelector(".knomo-relations-header button, .knomo-relations-header time, .knomo-relations-context"), null);
+		const titleHost = h.host.createDiv();
+		h.previewView.renderTitleHost({ el: titleHost, mobile: false });
+		assert.equal(titleHost.textContent, "Relation details");
+		assert.equal(titleHost.querySelector("button"), null);
+		await h.page.open(b);
+		const nestedBack = h.page.el!.querySelector<HTMLButtonElement>(".knomo-relations-back")!;
+		assert.equal(nestedBack.getAttribute("aria-label"), "Back to previous record");
+		nestedBack.click(); await settle();
+		assert.equal(h.page.el!.querySelector<HTMLElement>(".knomo-relations-subject")!.dataset.subject, observationHandleKey(a));
+		h.page.el!.querySelector<HTMLButtonElement>(".knomo-relations-back")!.click();
+		assert.equal(h.page.isOpen, false);
+		assert.equal(h.win.document.activeElement, trigger);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
+test("移动端关联详情使用页内返回，关闭后恢复统计页原生返回操作", async () => {
+	const h = await fixture();
+	try {
+		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
+		const actions = h.host.createDiv();
+		let returns = 0;
+		Object.assign(h.previewView, { currentLayout: "mobile", mobileSearchHeaderActionEl: null, mobileRecordStatsBackActionEl: null,
+			addAction: (_icon: string, label: string, callback: () => void) => {
+				const button = actions.createEl("button", { text: label });
+				button.addEventListener("click", callback); return button;
+			}, returnFromRecordStats: () => { returns++; } });
+		Object.defineProperty(h.previewView, "activeNav", { value: "record-stats" });
+		h.previewView.syncMobileHeaderActions();
+		assert.equal(actions.querySelectorAll("button").length, 1);
+		await h.page.open(a);
+		h.previewView.syncMobileHeaderActions();
+		assert.equal(actions.querySelector("button"), null);
+		assert.equal(h.page.el!.querySelectorAll(".knomo-relations-back").length, 1);
+		h.page.el!.querySelector<HTMLButtonElement>(".knomo-relations-back")!.click();
+		h.previewView.syncMobileHeaderActions();
+		actions.querySelector<HTMLButtonElement>("button")!.click();
+		assert.equal(returns, 1);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
+test("关联详情在中英文、主题强调色及窄屏大字体下保持标题和返回按钮可见", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await fixture();
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ headless: true, channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge" });
+	try {
+		const { translate } = await import("../src/i18n");
+		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
+		await h.page.open(a);
+		h.page.el!.classList.add("has-host-header");
+		const css = readFileSync("styles.css", "utf8");
+		const page = await browser.newPage();
+		for (const locale of ["zh-CN", "en"] as const) for (const theme of ["theme-light", "theme-dark", "theme-custom"]) {
+			for (const width of [320, 390, 768, 1024]) for (const font of [14, 22]) {
+				h.page.el!.querySelector(".knomo-relations-section-header h3")!.textContent = translate(locale, "relations.current");
+				h.page.el!.querySelector(".knomo-relations-back")!.setAttribute("aria-label", translate(locale, "relations.backList"));
+				h.page.el!.querySelector("h3[tabindex]")!.textContent = translate(locale, "relations.referrers", { count: 10000 });
+				await page.setViewportSize({ width, height: 800 });
+				await page.setContent(`<style>
+					* { box-sizing:border-box; }
+					body { margin:0; font:${font}px/1.5 Arial; --font-ui-small:${font}px; --font-ui-medium:${font}px;
+						--text-normal:#222; --text-muted:#666; --text-accent:#6340c2; --interactive-accent:#6340c2;
+						--background-primary:#fff; --background-secondary:#eee; --background-modifier-hover:rgba(127,127,127,.14); }
+					.theme-dark { --text-normal:#eee; --text-muted:#bbb; --text-accent:#b19afa; --background-primary:#202020; }
+					.theme-custom { font-family:Georgia; --text-accent:#00756b; --background-primary:#f8f2e7; }
+					button { font:inherit; }
+					${css}
+				</style><body class="${theme}"><main class="knomo-plugin has-memo-relations is-record-stats is-sidebar-collapsed ${width < 768 ? "is-layout-mobile" : width < 1024 ? "is-layout-desktop-narrow" : "is-layout-desktop-wide"}"
+					style="display:block;width:100%;height:100vh">
+					<div class="knomo-topbar"><button class="knomo-record-stats-back">Back</button></div>
+					<div class="knomo-compact-header"><button class="knomo-record-stats-back">Back</button></div>
+					${h.page.el!.outerHTML}<span class="fixture-accent" style="color:var(--text-accent)"></span>
+				</main></body>`);
+				const actual = await page.evaluate(() => {
+					const relationPage = document.querySelector<HTMLElement>(".knomo-relations-page")!;
+					const header = relationPage.querySelector<HTMLElement>(".knomo-relations-header")!;
+					const row = relationPage.querySelector<HTMLElement>(".knomo-relations-section-header")!;
+					const title = row.querySelector("h3")!;
+					const back = row.querySelector<HTMLButtonElement>("button")!;
+					const reference = document.querySelector<HTMLButtonElement>(".knomo-topbar .knomo-record-stats-back")!;
+					const appearance = (el: HTMLElement) => {
+						const style = getComputedStyle(el);
+						return [style.padding, style.borderWidth, style.borderRadius, style.color, style.backgroundColor, style.boxShadow, style.cursor];
+					};
+					const resting = appearance(back), referenceResting = appearance(reference);
+					const rect = back.getBoundingClientRect();
+					back.focus();
+					const focused = appearance(back);
+					// 移动布局会隐藏桌面标题栏，临时移出后才能比较其真实聚焦样式。
+					const referenceParent = reference.parentElement!;
+					relationPage.parentElement!.appendChild(reference);
+					reference.style.display = "inline-flex"; reference.focus();
+					const referenceFocused = appearance(reference);
+					reference.style.removeProperty("display"); referenceParent.appendChild(reference); back.focus();
+					return { headerHeight: header.getBoundingClientRect().height, overflow: relationPage.scrollWidth > relationPage.clientWidth,
+						rowOverflow: row.scrollWidth > row.clientWidth, buttonWidth: rect.width, buttonHeight: rect.height,
+						buttonRight: rect.right, titleRight: title.getBoundingClientRect().right, buttonLeft: rect.left,
+						colors: [...relationPage.querySelectorAll("h3")].map(el => getComputedStyle(el).color),
+						accent: getComputedStyle(document.querySelector(".fixture-accent")!).color,
+						resting, referenceResting, focusedAppearance: focused, referenceFocused,
+						outline: getComputedStyle(back).outlineStyle, focused: document.activeElement === back,
+						hostBacksHidden: [...document.querySelectorAll(".knomo-record-stats-back")].every(el => getComputedStyle(el).display === "none") };
+				});
+				const context = JSON.stringify({ locale, theme, width, font, actual });
+				assert.equal(actual.headerHeight, 0, context);
+				assert.equal(actual.overflow || actual.rowOverflow, false, context);
+				const buttonSize = width < 768 ? 44 : 36;
+				assert.equal(actual.buttonWidth, buttonSize, context);
+				assert.equal(actual.buttonHeight, buttonSize, context);
+				assert.deepEqual(actual.resting, actual.referenceResting, context);
+				assert.deepEqual(actual.focusedAppearance, actual.referenceFocused, context);
+				assert.ok(actual.buttonRight <= width && actual.titleRight <= actual.buttonLeft, context);
+				assert.deepEqual(actual.colors, [actual.accent, actual.accent], context);
+				assert.equal(actual.focused && actual.outline === "solid" && actual.hostBacksHidden, true, context);
+			}
+		}
+	} finally { await browser.close(); h.close(); }
+});
 
 test("被引用指标局部撤下旧数值与入口，正常更新不播报，持续故障只保留一个原位说明", async () => {
 	const h = await fixture();
@@ -221,7 +360,7 @@ test("关联页不展示引用来源目录或未解析提示，保留正文链�
 			const [c] = await h.seed("C.md", "- 12:00 C [[B#^b]]\n");
 			await h.page.open(b); await settle();
 			assert.equal(h.page.el!.querySelector(".knomo-relations-sources, .knomo-relation-source"), null);
-			assert.deepEqual(Array.from(h.page.el!.querySelectorAll("h3")).map(heading => heading.textContent), ["Current Memo", "Direct referrers · 1"]);
+			assert.deepEqual(Array.from(h.page.el!.querySelectorAll("h3")).map(heading => heading.textContent), ["Current record", "Referenced by 1 record"]);
 			assert.ok(h.page.el!.querySelector(".knomo-relations-subject .knomo-card-content")!.textContent!.includes(link));
 			assert.equal(h.page.el!.querySelector<HTMLElement>(".knomo-relations-list .knomo-card")!.dataset.memoId, observationHandleKey(c));
 			assert.deepEqual(h.errors, []);
@@ -597,7 +736,7 @@ test("关联页只展示直接引用者，通过记录菜单进入下一层后�
 		assert.deepEqual(listIds(), [bKey]);
 		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
 		assert.equal(reads.includes(cKey), false, "浏览 A 时不能读取间接引用者 C 的正文");
-		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Direct referrers · 1");
+		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Referenced by 1 record");
 		h.page.el!.scrollTop = 321;
 		const background = h.previewView.cardFlowEl.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": bKey } });
 		background.createEl("button", { cls: "knomo-card-menu", text: "background menu" });
@@ -608,7 +747,7 @@ test("关联页只展示直接引用者，通过记录菜单进入下一层后�
 		assert.deepEqual(listIds(), [cKey]);
 		assert.equal(reads.includes(cKey), true);
 		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
-		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Direct referrers · 1");
+		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Referenced by 1 record");
 		const snapshot = await h.read.relations.read();
 		assert.equal(snapshot.referrers.get(aKey)?.length, 1);
 		assert.equal(snapshot.referrers.get(bKey)?.length, 1);

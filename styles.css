@@ -1506,7 +1506,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-compact-menu-btn,
 .knomo-plugin .knomo-compact-search-btn,
-.knomo-plugin .knomo-record-stats-back {
+.knomo-plugin .knomo-record-stats-back,
+.knomo-plugin .knomo-relations-back {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -1528,7 +1529,9 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-compact-search-btn:hover,
 .knomo-plugin .knomo-compact-search-btn:focus-visible,
 .knomo-plugin .knomo-record-stats-back:hover,
-.knomo-plugin .knomo-record-stats-back:focus-visible {
+.knomo-plugin .knomo-record-stats-back:focus-visible,
+.knomo-plugin .knomo-relations-back:hover,
+.knomo-plugin .knomo-relations-back:focus-visible {
 	color: var(--text-normal);
 	background: var(--knomo-row-hover);
 }
@@ -3994,8 +3997,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	margin-bottom: var(--knomo-desktop-header-composer-gap);
 }
 
-.knomo-plugin.is-record-stats.is-layout-desktop-narrow .knomo-record-stats-back,
-.knomo-plugin.is-record-stats.is-layout-desktop-wide.is-sidebar-collapsed .knomo-record-stats-back {
+.knomo-plugin.is-record-stats:not(.has-memo-relations).is-layout-desktop-narrow .knomo-record-stats-back,
+.knomo-plugin.is-record-stats:not(.has-memo-relations).is-layout-desktop-wide.is-sidebar-collapsed .knomo-record-stats-back {
 	display: inline-flex;
 }
 
@@ -5460,19 +5463,7 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	padding: var(--size-4-2, 8px) var(--size-4-4, 16px);
 }
 
-.knomo-plugin .knomo-relations-header > button {
-	min-width: 44px;
-	min-height: 44px;
-}
-
-.knomo-plugin .knomo-relations-context {
-	font-size: var(--font-ui-small);
-	color: var(--text-muted);
-	margin-inline-start: auto;
-}
-
-.knomo-plugin .has-host-header > .knomo-relations-header > button,
-.knomo-plugin .has-host-header > .knomo-relations-header > h2 {
+.knomo-plugin .has-host-header > .knomo-relations-header {
 	display: none;
 }
 
@@ -5487,6 +5478,42 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	margin: var(--size-4-3, 12px) var(--size-4-4, 16px);
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);
+}
+
+.knomo-plugin .knomo-relations-section-title {
+	min-width: 0;
+	color: var(--text-accent);
+	overflow-wrap: anywhere;
+}
+
+.knomo-plugin .knomo-relations-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2, 8px);
+	margin: var(--size-4-3, 12px) var(--size-4-4, 16px);
+	min-width: 0;
+}
+
+.knomo-plugin .knomo-relations-section-header > .knomo-relations-section-title {
+	flex: 1 1 auto;
+	margin: 0;
+}
+
+.knomo-plugin .knomo-relations-back {
+	flex: 0 0 auto;
+}
+
+.knomo-plugin .knomo-relations-back:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-relations-back {
+	width: 44px;
+	min-width: 44px;
+	height: 44px;
+	min-height: 44px;
 }
 
 .knomo-plugin .knomo-relation-window {

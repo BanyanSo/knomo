@@ -47,6 +47,22 @@ test("uses matching load-more copy for historical Memos", async () => {
 	assert.equal(translate("en", "list.loadOlder"), "Load more memos");
 });
 
+test("关联详情的标题、返回和引用计数中英文一致，英文区分单复数", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+	assert.equal(translate("zh-CN", "relations.title"), "关联详情");
+	assert.equal(translate("en", "relations.title"), "Relation details");
+	assert.equal(translate("zh-CN", "relations.current"), "当前记录");
+	assert.equal(translate("en", "relations.current"), "Current record");
+	assert.equal(translate("zh-CN", "relations.backList"), "返回原浏览列表");
+	assert.equal(translate("en", "relations.backList"), "Back to original list");
+	for (const count of [0, 1, 2, 10000]) {
+		const key = count === 1 ? "relations.referrersSingle" : "relations.referrers";
+		assert.equal(translate("zh-CN", key, { count }), `被 ${count} 条记录引用`);
+		assert.equal(translate("en", key, { count }), `Referenced by ${count} ${count === 1 ? "record" : "records"}`);
+	}
+});
+
 test("uses distinct migration and storage status copy", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");

@@ -3117,7 +3117,12 @@ export class KnomoView extends ItemView {
 			this.removeMobileHeaderActions();
 			return;
 		}
-		if (this.activeNav === "record-stats" || this.relationsPage?.isOpen) {
+		if (this.relationsPage?.isOpen) {
+			this.removeMobileSearchHeaderAction();
+			this.removeMobileRecordStatsBackAction();
+			return;
+		}
+		if (this.activeNav === "record-stats") {
 			this.removeMobileSearchHeaderAction();
 			this.ensureMobileRecordStatsBackAction();
 			return;
@@ -3185,13 +3190,10 @@ export class KnomoView extends ItemView {
 	private ensureMobileRecordStatsBackAction(): void {
 		if (this.mobileRecordStatsBackActionEl === null || !this.mobileRecordStatsBackActionEl.isConnected) {
 			this.mobileRecordStatsBackActionEl?.remove();
-			this.mobileRecordStatsBackActionEl = this.addAction("arrow-left", t("recordStats.back"), () => {
-				if (this.relationsPage?.isOpen) this.relationsPage.back(); else this.returnFromRecordStats();
-			});
+			this.mobileRecordStatsBackActionEl = this.addAction("arrow-left", t("recordStats.back"), () => this.returnFromRecordStats());
 			this.mobileRecordStatsBackActionEl.addClass("knomo-mobile-header-action", "knomo-record-stats-back");
 			this.mobileRecordStatsBackActionEl.setAttr("aria-label", t("recordStats.back"));
 		}
-		this.mobileRecordStatsBackActionEl.setAttr("aria-label", this.relationsPage?.isOpen ? t("relations.back") : t("recordStats.back"));
 	}
 
 	private removeMobileHeaderActions(): void {
@@ -3482,8 +3484,6 @@ export class KnomoView extends ItemView {
 	private renderTitleHost(host: TitleHost): void {
 		host.el.empty();
 		if (this.relationsPage?.isOpen) {
-			const back = host.el.createEl("button", { cls: "knomo-title-root", text: "←", attr: { type: "button", "aria-label": t("relations.back") } });
-			back.addEventListener("click", () => this.relationsPage?.back());
 			host.el.createSpan({ cls: "knomo-title-label", text: t("relations.title") });
 			return;
 		}

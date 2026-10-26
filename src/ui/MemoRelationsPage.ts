@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { t } from "../i18n";
 import type { ObservationHandle } from "../types/catalog";
 import type { MemoRelationNode } from "../types/memoRelations";
@@ -31,7 +32,6 @@ export class MemoRelationsPage {
 	private originalFocus: HTMLElement | null = null;
 	private readonly memos = new Map<string, MemoViewItem>();
 	private subject: HTMLElement | null = null;
-	private contextDate: HTMLElement | null = null;
 	private listEl: HTMLElement | null = null;
 	private listTitle: HTMLElement | null = null;
 	private status: HTMLElement | null = null;
@@ -190,13 +190,15 @@ export class MemoRelationsPage {
 		if (!host) return;
 		const el = this.el = host.createDiv({ cls: "knomo-card-flow knomo-relations-page", attr: { "aria-label": t("relations.title") } });
 		const header = el.createDiv({ cls: "knomo-relations-header" });
-		const back = header.createEl("button", { cls: "knomo-inline-button", text: "←", attr: { type: "button", "aria-label": t(this.frames.length > 1 ? "relations.back" : "relations.backList") } });
-		back.addEventListener("click", () => this.back());
 		header.createEl("h2", { text: t("relations.title") });
-		this.contextDate = header.createEl("time", { cls: "knomo-relations-context" });
 		this.status = el.createDiv({ cls: "knomo-relations-status" });
 		this.status.hidden = true;
-		el.createEl("h3", { text: t("relations.current"), cls: "knomo-relations-section-title" });
+		const currentHeader = el.createDiv({ cls: "knomo-relations-section-header" });
+		currentHeader.createEl("h3", { text: t("relations.current"), cls: "knomo-relations-section-title" });
+		const back = currentHeader.createEl("button", { cls: "knomo-relations-back",
+			attr: { type: "button", "aria-label": t(this.frames.length > 1 ? "relations.back" : "relations.backList") } });
+		setIcon(back, "arrow-left");
+		back.addEventListener("click", () => this.back());
 		this.subject = el.createDiv({ cls: "knomo-relations-subject" });
 		this.listTitle = el.createEl("h3", { cls: "knomo-relations-section-title", attr: { tabindex: "-1" } });
 		this.listTitle.textContent = t("relations.referrersHeading");
@@ -223,7 +225,6 @@ export class MemoRelationsPage {
 		if (old) this.memos.delete(old);
 		this.subject.empty();
 		this.subject.dataset.subject = memo.id;
-		if (this.contextDate) this.contextDate.textContent = memo.createdAt.replace("T", " ");
 		this.memos.set(memo.id, memo);
 		this.options.renderCard(this.subject, memo, 0);
 		if (focused) this.subject.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
@@ -262,7 +263,9 @@ export class MemoRelationsPage {
 			if (!this.el || frame !== this.frames[this.frames.length - 1]) return;
 			const incoming = snapshot.referrers.get(key) ?? [];
 			if (snapshot.complete || this.referrers === null || this.referrers.length === 0) this.referrers = incoming;
-			this.listTitle!.textContent = snapshot.complete ? t("relations.referrers", { count: incoming.length }) : t("relations.referrersHeading");
+			this.listTitle!.textContent = snapshot.complete
+				? t(incoming.length === 1 ? "relations.referrersSingle" : "relations.referrers", { count: incoming.length })
+				: t("relations.referrersHeading");
 			this.referrersWindow!.setNodes(this.referrers, snapshot.complete);
 			const rowScope = JSON.stringify([key, snapshot.complete, incoming.map(node => observationHandleKey(node.handle))]);
 			if (this.rowFaultScope !== rowScope) {

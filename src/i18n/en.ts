@@ -1,7 +1,7 @@
 import { zhCN, type TranslationKey } from "./zh-CN";
 
 export const en: Record<TranslationKey, string> = {
-	"relations.title": "Related records",
+	"relations.title": "Relation details",
 	"relations.count": "Referenced by · {{count}}",
 	"relations.heading": "Referenced by",
 	"relations.view": "View",
@@ -10,10 +10,11 @@ export const en: Record<TranslationKey, string> = {
 	"relations.image": "Image record",
 	"relations.noSummary": "No text summary",
 	"relations.failed": "Related records are temporarily unavailable.",
-	"relations.current": "Current Memo",
-	"relations.referrers": "Direct referrers · {{count}}",
-	"relations.referrersHeading": "Direct referrers",
-	"relations.empty": "No direct referrers",
+	"relations.current": "Current record",
+	"relations.referrers": "Referenced by {{count}} records",
+	"relations.referrersSingle": "Referenced by {{count}} record",
+	"relations.referrersHeading": "Referenced by",
+	"relations.empty": "Not referenced by any records",
 	"relations.unavailable": "This record changed or is no longer available. Go back and select it again.",
 	"relations.back": "Back to previous record",
 	"relations.backList": "Back to original list",

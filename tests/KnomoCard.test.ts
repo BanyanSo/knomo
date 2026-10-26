@@ -251,7 +251,7 @@ test("memo card action menu includes open daily in the requested order", async (
 	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
 	assert.equal(root.find(".knomo-card-word-count")?.getText(), "Words: 1");
 	assert.deepEqual(actions.map((action) => action.find(".knomo-menu-icon")?.getAttr("data-icon")), [
-		"pencil", "quote", "calendar-days", "network", "copy", "link", "trash-2",
+		"pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "trash-2",
 	]);
 	assert.ok(actions.every((action) => action.find(".knomo-menu-icon")?.getAttr("aria-hidden") === "true"));
 	assert.equal(root.find(".knomo-card-word-count")?.find(".knomo-menu-icon")?.getAttr("data-icon"), "text");
@@ -643,3 +643,23 @@ function makeCapabilities() {
 		}),
 	};
 }
+
+test("来源图标独立于异步 Markdown 容器，菜单统一引用图标", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+	let target: HTMLElement | undefined;
+	let markdown = "";
+	renderKnomoMemoCard(root.asHtml(), createReferenceMemo(), {
+		generation: 1, renderIndex: 0, includeActions: true, randomCard: false, activeMenuMemoId: null,
+		formatDisplayTime: value => value, getMarkdownPriority: () => "normal",
+		getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => {}, renderMemoCardImages: () => {},
+		queueSourceReferenceMarkdown: (container, text) => { target = container; markdown = text; },
+	});
+	assert.equal(target, root.find(".knomo-source-reference-content")?.asHtml());
+	assert.equal(markdown, "[[Other#^their-anchor|custom alias]]");
+	assert.equal(root.find(".knomo-reference-icon")?.getAttr("data-icon"), "message-square-quote");
+	assert.ok(root.find(".knomo-reference-icon")?.getAttr("aria-label"));
+	assert.equal(root.find("[data-memo-action='reference']")?.find("[data-icon]")?.getAttr("data-icon"), "message-square-quote");
+});

@@ -2,7 +2,7 @@ import type { MemoViewItem } from "../types/memoView";
 
 // 只保存本次重绘期间的静态显示，不复用旧 occurrence 句柄或交互监听。
 export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewItem; card: HTMLElement }[]) {
-	const selectors = [".knomo-card-content", ".knomo-source-reference"] as const;
+	const selectors = [".knomo-card-content", ".knomo-source-reference-content"] as const;
 	const snapshots = new Map<string, (HTMLElement | null)[]>();
 	const key = (memo: MemoViewItem) => JSON.stringify([memo.dailyRef.path, memo.contentSnapshot]);
 	for (const { memo, card } of entries) {

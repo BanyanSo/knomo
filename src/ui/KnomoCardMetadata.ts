@@ -38,7 +38,7 @@ const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-dai
 export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
 	relations: "network",
 	edit: "pencil",
-	reference: "quote",
+	reference: "message-square-quote",
 	"open-daily": "calendar-days",
 	"view-day": "calendar-search",
 	"copy-text": "copy",

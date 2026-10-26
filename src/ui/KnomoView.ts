@@ -1474,10 +1474,10 @@ export class KnomoView extends ItemView {
 					// 渲染器在离屏完成后原子替换正文，等待期间保留已有内容。
 					this.memoMarkdownRenderer.queueMemoMarkdown(memo, content, generation, "normal", this.getMemoCardPreview(memo).text, surface, changedPaths);
 				}
-				const meta = card.querySelector<HTMLElement>(".knomo-source-reference");
+				const meta = card.querySelector<HTMLElement>(".knomo-source-reference-content");
 				const reference = getMemoSourceReferenceMeta(memo);
 				if (meta && reference.type !== "none") this.memoMarkdownRenderer.queueSourceReferenceMarkdown(
-					meta, `${t("reference.fromPrefix")}${reference.text}`, reference.sourcePath, generation, surface, changedPaths,
+					meta, reference.text, reference.sourcePath, generation, surface, changedPaths,
 				);
 			}
 		}

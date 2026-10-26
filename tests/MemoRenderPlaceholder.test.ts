@@ -35,28 +35,28 @@ test("重建期间保留已渲染来源的格式，不复用旧来源交互或�
 	const document = dom.window.document;
 	const card = () => {
 		const el = document.createElement("article");
-		el.innerHTML = '<div class="knomo-card-content"></div><div class="knomo-source-reference"></div>';
+		el.innerHTML = '<div class="knomo-card-content"></div><div class="knomo-source-reference-content"></div>';
 		return el;
 	};
 	const memo = { id: "old", contentSnapshot: "same [[Old#^block|**自定义来源**]]", dailyRef: { path: "Daily.md" } } as MemoViewItem;
 	const old = card();
 	old.querySelector(".knomo-card-content")!.textContent = "same";
-	old.querySelector(".knomo-source-reference")!.innerHTML = '<p>引用自：<a class="internal-link" data-href="Old#^block" data-knomo-source-path="Daily.md"><strong>自定义来源</strong></a></p>';
+	old.querySelector(".knomo-source-reference-content")!.innerHTML = '<p>引用自：<a class="internal-link" data-href="Old#^block" data-knomo-source-path="Daily.md"><strong>自定义来源</strong></a></p>';
 	const seed = createMemoRenderPlaceholders([{ memo, card: old }]);
 	const first = card(), second = card();
-	first.querySelector(".knomo-source-reference")!.innerHTML = '<p data-knomo-render-placeholder>引用自：**自定义来源**</p>';
+	first.querySelector(".knomo-source-reference-content")!.innerHTML = '<p data-knomo-render-placeholder>引用自：**自定义来源**</p>';
 	seed({ ...memo, id: "new-1" }, first);
 	seed({ ...memo, id: "new-2" }, second);
 	for (const target of [first, second]) {
-		assert.equal(target.querySelector(".knomo-source-reference")!.textContent, "引用自：自定义来源");
-		assert.ok(target.querySelector(".knomo-source-reference strong"));
-		assert.ok(target.querySelector(".knomo-source-reference [inert]"));
+		assert.equal(target.querySelector(".knomo-source-reference-content")!.textContent, "引用自：自定义来源");
+		assert.ok(target.querySelector(".knomo-source-reference-content strong"));
+		assert.ok(target.querySelector(".knomo-source-reference-content [inert]"));
 	}
 	assert.notEqual(first.querySelector("strong"), second.querySelector("strong"));
 	for (const different of [{ ...memo, contentSnapshot: "changed [[New#^other]]" }, { ...memo, dailyRef: { ...memo.dailyRef, path: "Other.md" } }]) {
 		const changed = card(); seed(different, changed); assert.equal(changed.textContent, "");
 	}
-	const ready = card(); ready.querySelector(".knomo-source-reference")!.textContent = "当前来源";
-	seed(memo, ready); assert.equal(ready.querySelector(".knomo-source-reference")!.textContent, "当前来源");
+	const ready = card(); ready.querySelector(".knomo-source-reference-content")!.textContent = "当前来源";
+	seed(memo, ready); assert.equal(ready.querySelector(".knomo-source-reference-content")!.textContent, "当前来源");
 	dom.window.close();
 });

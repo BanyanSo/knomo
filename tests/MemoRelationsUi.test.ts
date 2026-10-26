@@ -320,7 +320,7 @@ test("不完整的空集合保留已读预览与同一控件焦点，完整确�
 		await settle();
 		assert.equal(card.querySelector(".knomo-referrer-preview"), preview);
 		assert.equal(h.win.document.activeElement, preview);
-		assert.match(card.querySelector(".knomo-referrers-title")!.textContent!, /^(Referenced by|被引用)$/u);
+		assert.equal(card.querySelector(".knomo-referrers-title"), null);
 		pending = false; await h.seed("B.md", "- 11:00 removed\n"); await settle();
 		assert.equal(card.querySelector(".knomo-memo-referrers"), null);
 	} finally { h.close(); }
@@ -663,7 +663,7 @@ test("无关 Daily 编辑不打断已打开关联页或重读其正文", async (
 	} finally { h.close(); }
 });
 
-test("统一被引用区只增入向展示，最多两条、同行查看、短文不补省略号且不冒泡", async () => {
+test("被引用区展示全部单行摘要，倒序、主 Memo 导航且不冒泡", async () => {
 	const h = await fixture();
 	try {
 		const nodes = await h.seed("D.md", "- 10:00 A ^a\n- 11:00 短文 👨‍👩‍👦 [[#^a]]\n- 12:00 long [[#^a]]\n- 13:00 extra [[#^a]]\n");
@@ -678,17 +678,21 @@ test("统一被引用区只增入向展示，最多两条、同行查看、短�
 		const summaries = new Map(nodes.slice(1).map(node => [observationHandleKey(node), { text: "短文 👨‍👩‍👦", imageOnly: false }]));
 		renderMemoReferrers(card, memo, snapshot, summaries, async (handle, list) => { opened.push([observationHandleKey(handle), list]); });
 		assert.equal(card.querySelector(".original-body"), body);
-		assert.equal(card.querySelectorAll(".knomo-referrer-preview").length, 2);
-		const view = card.querySelector<HTMLButtonElement>(".knomo-referrers-view")!;
-		assert.match(card.querySelector(".knomo-referrers-title")!.textContent!, /3/u);
+		assert.equal(card.querySelectorAll(".knomo-referrer-preview").length, 3);
+		const view = card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!;
+		assert.equal(card.querySelector(".knomo-referrers-title"), null);
+		assert.equal(card.querySelector(".knomo-referrers-view"), null);
+		assert.equal(view.dataset.relationTarget, observationHandleKey(nodes[3]));
+		assert.equal(view.querySelector("[data-icon]")?.getAttribute("data-icon"), "message-square-reply");
+		assert.equal(view.querySelector("time")?.textContent, "2026-10-25");
 		assert.doesNotMatch(view.getAttribute("aria-label")!, /\{date\}/u);
-		assert.equal(view.parentElement?.querySelectorAll(".knomo-referrers-title").length, 1);
+		assert.equal(view.parentElement?.querySelectorAll(".knomo-referrers-title").length, 0);
 		assert.equal(card.querySelector(".knomo-referrer-summary")?.textContent, "短文 👨‍👩‍👦");
 		view.click(); card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!.click();
-		assert.deepEqual(opened.map(item => item[1]), [true, false]);
+		assert.deepEqual(opened, [[memo.id, false], [memo.id, false]]);
 		assert.equal(bubbled, 0);
 		markRelationCardStale(card);
-		assert.match(card.querySelector(".knomo-referrers-title")!.textContent!, /^(Referenced by|被引用)$/u);
+		assert.equal(card.querySelector(".knomo-referrers-title"), null);
 		view.focus();
 		renderMemoReferrers(card, memo, { ...snapshot, referrers: new Map() }, new Map(), async () => {});
 		assert.equal(card.querySelector(".knomo-memo-referrers"), null);
@@ -729,8 +733,8 @@ test("关联页只展示直接引用者，通过记录菜单进入下一层后�
 		};
 		const card = h.host.createEl("article", { cls: "knomo-card" });
 		h.cards!.observe(card, await h.memo(a)); await settle();
-		assert.equal(card.querySelector(".knomo-referrers-title")!.textContent, "Referenced by · 1");
-		const entry = card.querySelector<HTMLButtonElement>(".knomo-referrers-view")!;
+		assert.equal(card.querySelectorAll(".knomo-referrer-preview").length, 1);
+		const entry = card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!;
 		await h.page.open(a, true, entry); await settle();
 		const listIds = () => Array.from(h.page.el!.querySelectorAll<HTMLElement>(".knomo-relations-list .knomo-card")).map(row => row.dataset.memoId);
 		assert.deepEqual(listIds(), [bKey]);

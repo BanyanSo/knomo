@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { t } from "../i18n";
 import type { MemoViewItem } from "../types/memoView";
 import type { MemoRelationSnapshot } from "../types/memoRelations";
@@ -101,8 +102,8 @@ export class MemoRelationCards {
 			const handles = new Map<string, ObservationHandle>();
 			const changed = visible.filter(([card, binding]) => binding.signature !== relationCardSignature(snapshot, binding.memo)
 				&& (snapshot.complete || !card.querySelector(".knomo-memo-referrers")));
-			for (const [, binding] of changed) for (const node of snapshot.referrers.get(binding.memo.id)?.slice(0, 2) ?? []) handles.set(observationHandleKey(node.handle), node.handle);
-			// 每批只读取可见卡片的两条预览；不读取完整引用者正文。
+			for (const [, binding] of changed) for (const node of snapshot.referrers.get(binding.memo.id) ?? []) handles.set(observationHandleKey(node.handle), node.handle);
+			// 为可见卡片分批读取全部引用者摘要，保留取消及版本校验。
 			const summaries = new Map<string, { text: string; imageOnly: boolean }>();
 			const wanted = [...handles.values()];
 			bodyKey = JSON.stringify(wanted.map(observationHandleKey));
@@ -132,15 +133,13 @@ export class MemoRelationCards {
 
 export function relationCardSignature(snapshot: MemoRelationSnapshot, memo: MemoViewItem): string {
 	return JSON.stringify([snapshot.nodes.has(memo.id),
-		(snapshot.referrers.get(memo.id) ?? []).slice(0, 2).map(node => observationHandleKey(node.handle))]);
+		(snapshot.referrers.get(memo.id) ?? []).map(node => observationHandleKey(node.handle))]);
 }
 
 export function markRelationCardStale(card: HTMLElement): void {
 	const region = card.querySelector<HTMLElement>(".knomo-memo-referrers");
 	if (!region) return;
 	region.dataset.stale = "true";
-	const title = region.querySelector(".knomo-referrers-title");
-	if (title) title.textContent = t("relations.heading");
 }
 
 export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snapshot: MemoRelationSnapshot,
@@ -160,38 +159,35 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 		return;
 	}
 	const signature = relationCardSignature(snapshot, memo);
-	const titleText = snapshot.complete ? t("relations.count", { count: incoming.length }) : t("relations.heading");
+
 	if (old?.dataset.previewSignature === signature) {
-		const view = old.querySelector<HTMLElement>(".knomo-referrers-view")!;
-		viewHandles.set(view, memo.catalog!.observationHandle); view.dataset.relationTarget = memo.id;
-		old.querySelector(".knomo-referrers-title")!.textContent = titleText;
+		for (const button of Array.from(old.querySelectorAll<HTMLElement>(".knomo-referrer-preview"))) viewHandles.set(button, memo.catalog!.observationHandle);
 		old.toggleAttribute("data-stale", !snapshot.complete);
 		return;
 	}
 	const region = card.ownerDocument.createElement("section");
-	region.className = "knomo-memo-referrers";
+	region.className = "knomo-memo-referrers knomo-card-meta";
+	region.setAttribute("aria-label", t("relations.heading"));
 	region.dataset.previewSignature = signature;
 	if (!snapshot.complete) region.dataset.stale = "true";
-	const header = region.createDiv({ cls: "knomo-referrers-header" });
-	header.createSpan({ cls: "knomo-referrers-title", text: titleText });
-	const view = header.createEl("button", { cls: "knomo-referrers-view", text: t("relations.view"), attr: { type: "button",
-		"aria-label": t("relations.viewLabel", { date: memo.createdAt.replace("T", " ") }) } });
-	view.dataset.relationTarget = memo.id; view.dataset.relationAction = "view";
-	viewHandles.set(view, memo.catalog!.observationHandle);
-	view.addEventListener("click", event => { event.stopPropagation(); void open(viewHandles.get(view)!, true, view); });
-	for (const node of incoming.slice(0, 2)) {
+	const sorted = [...incoming].sort((a, b) => (b.logicalDate + "T" + b.time).localeCompare(a.logicalDate + "T" + a.time));
+	for (const node of sorted) {
 		const summary = summaries.get(observationHandleKey(node.handle));
 		const text = summary?.text || t(summary?.imageOnly ? "relations.image" : "relations.noSummary");
-		const date = `${node.logicalDate} ${node.time}`;
-		const button = region.createEl("button", { cls: "knomo-referrer-preview", attr: { type: "button", "aria-label": t("relations.openLabel", { date, text }) } });
+		const date = node.logicalDate;
+		const label = t("relations.heading") + ": " + date + " " + text + ". " + t("relations.viewLabel", { date: memo.createdAt.replace("T", " ") });
+		const button = region.createEl("button", { cls: "knomo-referrer-preview", attr: { type: "button", "aria-label": label, title: label } });
 		button.dataset.relationTarget = observationHandleKey(node.handle); button.dataset.relationAction = "preview";
-		button.createEl("time", { cls: "knomo-referrer-date", text: date });
+		const icon = button.createSpan({ cls: "knomo-reference-icon", attr: { "aria-hidden": "true" } });
+		setIcon(icon, "message-square-reply");
+		button.createEl("time", { cls: "knomo-referrer-date", text: date, attr: { datetime: date } });
 		button.createSpan({ cls: "knomo-referrer-summary", text });
-		button.addEventListener("click", event => { event.stopPropagation(); void open(node.handle, false, button); });
+		viewHandles.set(button, memo.catalog!.observationHandle);
+		button.addEventListener("click", event => { event.stopPropagation(); void open(viewHandles.get(button)!, false, button); });
 	}
 	const active = focused ? card.ownerDocument.activeElement as HTMLElement : null;
 	const target = active?.dataset.relationTarget, action = active?.dataset.relationAction;
 	if (old) old.replaceWith(region); else card.appendChild(region);
 	if (focused) (Array.from(region.querySelectorAll<HTMLElement>("button")).find(button => button.dataset.relationTarget === target
-		&& button.dataset.relationAction === action) ?? view).focus({ preventScroll: true });
+		&& button.dataset.relationAction === action) ?? region.querySelector<HTMLElement>("button")!).focus({ preventScroll: true });
 }

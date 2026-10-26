@@ -26,6 +26,9 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 		},
 		createDiv(this: HTMLElement, options?: object) { return this.createEl("div", options); },
 		createSpan(this: HTMLElement, options?: object) { return this.createEl("span", options); },
+		find(this: HTMLElement, selector: string) { return this.querySelector(selector); },
+		findAll(this: HTMLElement, selector: string) { return Array.from(this.querySelectorAll(selector)); },
+		getAttr(this: HTMLElement, name: string) { return this.getAttribute(name); },
 		empty(this: HTMLElement) { this.replaceChildren(); },
 		setCssProps(this: HTMLElement, values: Record<string, string>) { for (const [key, value] of Object.entries(values)) this.style.setProperty(key, value); },
 	});
@@ -65,7 +68,6 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 	const original = catalog.readObservationSnapshot.bind(catalog);
 	catalog.readObservationSnapshot = async (keys, signal) => { bodyReads += keys.length; return original(keys, signal); };
 	const page = new MemoRelationsPage({ read, getHost: () => host, onChanged: open => { actions.push(String(open)); }, onError: error => errors.push(error),
-		prepareCards: async () => { await cards?.prepareVisible(); },
 		renderCard: (row, memo) => {
 			cacheView?.getMemoCardPreview(memo);
 			const card = row.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": memo.id } });
@@ -76,7 +78,8 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 		}, releaseCard: row => cacheView?.releaseRelationCard(row) });
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const previewView = Object.assign(Object.create(KnomoView.prototype), { catalogReadService: read,
-		containerEl: host, cardFlowEl: withPreviews ? host.createDiv({ cls: "knomo-card-flow" }) : null, trashViewClosed: false,
+		containerEl: host, rootEl: host, relationsPage: page, closeCardMenu: () => {},
+		cardFlowEl: withPreviews ? host.createDiv({ cls: "knomo-card-flow" }) : null, trashViewClosed: false,
 		openMemoRelations: (handle: Parameters<typeof page.open>[0], list: boolean, trigger: HTMLElement) => page.open(handle, list, trigger) });
 	// 使用真实视图接线，覆盖原先固定写入主卡片流顶部的状态回调。
 	const cards: InstanceType<typeof MemoRelationCards> | null = withPreviews ? previewView.ensureRelationCards() : null;
@@ -324,7 +327,7 @@ test("同日连续保存沿提交映射复用主体、图片及引用者行，�
 	} finally { h.close(); }
 });
 
-test("查看等待旧预览批次后，还会准备新关联页的可见预览再完成定位", async () => {
+test("查看直接引用者不等待主列表的旧预览批次，也不在关联页追加预览", async () => {
 	const h = await fixture(true);
 	let release!: () => void;
 	try {
@@ -337,8 +340,15 @@ test("查看等待旧预览批次后，还会准备新关联页的可见预览�
 			return original(handles, signal);
 		};
 		const card = h.host.createEl("article", { cls: "knomo-card" }); h.cards!.observe(card, memo); await ready;
-		const opening = h.page.open(a, true); await settle(); release(); await opening;
-		assert.ok(h.page.el!.querySelector(".knomo-relations-subject .knomo-referrer-preview"));
+		let opened = false;
+		const opening = h.page.open(a, true).then(() => { opened = true; }); await settle();
+		assert.equal(opened, true);
+		assert.ok(h.page.el!.querySelector(".knomo-relations-list .knomo-card"));
+		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
+		assert.ok((h.win.document.activeElement as HTMLElement).classList.contains("knomo-relations-section-title"));
+		release(); await opening; await settle();
+		assert.ok(card.querySelector(".knomo-referrer-preview"));
+		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
 		assert.ok((h.win.document.activeElement as HTMLElement).classList.contains("knomo-relations-section-title"));
 	} finally { release?.(); h.close(); }
 });
@@ -549,6 +559,54 @@ test("A→B→C 返回恢复原位置，A→B→A 成环收栈，菜单自身不
 	} finally { h.close(); }
 });
 
+test("关联页只展示直接引用者，通过记录菜单进入下一层后才读取和展示其引用者", async () => {
+	const h = await fixture(true);
+	try {
+		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
+		const [b] = await h.seed("B.md", "- 11:00 B [[A#^a]] [[A#^a|重复]] ^b\n");
+		const [c] = await h.seed("C.md", "- 12:00 C [[B#^b]] ^c\n");
+		const aKey = observationHandleKey(a), bKey = observationHandleKey(b), cKey = observationHandleKey(c);
+		const read = h.read.readMemoItems.bind(h.read), reads: string[] = [];
+		h.read.readMemoItems = async (handles, signal) => {
+			reads.push(...handles.map(observationHandleKey));
+			return read(handles, signal);
+		};
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, await h.memo(a)); await settle();
+		assert.equal(card.querySelector(".knomo-referrers-title")!.textContent, "Referenced by · 1");
+		const entry = card.querySelector<HTMLButtonElement>(".knomo-referrers-view")!;
+		await h.page.open(a, true, entry); await settle();
+		const listIds = () => Array.from(h.page.el!.querySelectorAll<HTMLElement>(".knomo-relations-list .knomo-card")).map(row => row.dataset.memoId);
+		assert.deepEqual(listIds(), [bKey]);
+		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
+		assert.equal(reads.includes(cKey), false, "浏览 A 时不能读取间接引用者 C 的正文");
+		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Direct referrers · 1");
+		h.page.el!.scrollTop = 321;
+		const background = h.previewView.cardFlowEl.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": bKey } });
+		background.createEl("button", { cls: "knomo-card-menu", text: "background menu" });
+		const menu = h.page.el!.querySelector<HTMLButtonElement>(".knomo-relations-list .knomo-card-menu")!;
+		menu.focus();
+		await h.previewView.handleMemoAction("relations", h.page.findMemo(bKey)); await settle();
+		assert.equal(h.page.el!.querySelector<HTMLElement>(".knomo-relations-subject")!.dataset.subject, bKey);
+		assert.deepEqual(listIds(), [cKey]);
+		assert.equal(reads.includes(cKey), true);
+		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
+		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Direct referrers · 1");
+		const snapshot = await h.read.relations.read();
+		assert.equal(snapshot.referrers.get(aKey)?.length, 1);
+		assert.equal(snapshot.referrers.get(bKey)?.length, 1);
+		assert.equal(snapshot.referrers.get(cKey), undefined);
+		h.page.back(); await settle();
+		assert.deepEqual(listIds(), [bKey]);
+		assert.equal(h.page.el!.scrollTop, 321);
+		assert.equal(h.win.document.activeElement, h.page.el!.querySelector(".knomo-relations-list .knomo-card-menu"));
+		h.page.back();
+		assert.equal(h.page.isOpen, false);
+		assert.equal(h.win.document.activeElement, entry);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
 test("全部引用者元数据立即可用，10000 条正文与 DOM 受窗口限制且无需手动翻页", async () => {
 	const h = await fixture();
 	try {
@@ -584,7 +642,7 @@ test("列表行与焦点在无关更新中复用，虚拟窗口可按键连续�
 	} finally { h.close(); }
 });
 
-test("10000 个引用者各有两条被引用时，只读取窗口及一层摘要，不递归展开正文", async () => {
+test("10000 个直接引用者各有后续引用时，关联页只加载当前层正文", async () => {
 	const h = await fixture(true);
 	try {
 		const [a] = await h.seed("D.md", "- 10:00 A ^a\n" + Array.from({ length: 10000 }, (_, index) =>
@@ -592,9 +650,9 @@ test("10000 个引用者各有两条被引用时，只读取窗口及一层摘�
 		const started = performance.now();
 		await h.page.open(a, true); await settle();
 		assert.equal((await h.read.relations.read()).referrers.get(observationHandleKey(a))?.length, 10000);
-		assert.ok(h.bodyReads() <= 80, `完整卡片与一层预览读取 ${h.bodyReads()} 条正文`);
+		assert.ok(h.bodyReads() <= 27, `当前层主体与初始窗口读取 ${h.bodyReads()} 条正文`);
 		assert.ok(h.host.querySelectorAll(".knomo-relation-window-row").length <= 25);
-		assert.ok(h.host.querySelectorAll(".knomo-referrer-preview").length <= 52);
+		assert.equal(h.page.el!.querySelector(".knomo-referrer-preview"), null);
 		console.log(JSON.stringify({ fixture: "10000 referrers, each with 2 incoming records", nodes: 30001,
 			environment: "Node/jsdom, 600px simulated viewport", elapsedMs: Math.round(performance.now() - started), bodyReads: h.bodyReads(),
 			mountedRows: h.host.querySelectorAll(".knomo-relation-window-row").length,

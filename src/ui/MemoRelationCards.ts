@@ -42,6 +42,8 @@ export class MemoRelationCards {
 
 	observe(card: HTMLElement, memo: MemoViewItem): void {
 		if (!memo.catalog || memo.status !== "active") return;
+		// 关联页已单列当前 Memo 的直接引用者，页内卡片不继续展开下一层。
+		if (card.closest(".knomo-relations-page")) return;
 		const previous = this.cards.get(card);
 		if (previous && previous.memo.id !== memo.id) markRelationCardStale(card);
 		this.cards.set(card, { memo, nearby: previous?.nearby ?? this.observer === null,
@@ -61,17 +63,6 @@ export class MemoRelationCards {
 			if (this.timer !== null) { this.win.clearTimeout(this.timer); this.timer = null; }
 		}
 	}
-	async prepareVisible(): Promise<void> {
-		if (this.timer !== null) { this.win.clearTimeout(this.timer); this.timer = null; }
-		for (const [card, binding] of this.cards) if (card.closest(".knomo-relations-page")) binding.nearby = true;
-		// 进入列表需要包含新挂载卡片的一批预览，旧批次结束本身不代表它们已准备好。
-		if (this.running) await this.running;
-		if (this.disposed) return;
-		if (this.timer !== null) { this.win.clearTimeout(this.timer); this.timer = null; }
-		this.pending = false;
-		await this.flush();
-	}
-
 	dispose(): void {
 		this.disposed = true;
 		this.controller?.abort();

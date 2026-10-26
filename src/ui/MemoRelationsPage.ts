@@ -18,7 +18,6 @@ export interface MemoRelationsPageOptions {
 	read: CatalogReadService;
 	getHost: () => HTMLElement | null;
 	renderCard: (container: HTMLElement, memo: MemoViewItem, index: number) => HTMLElement;
-	prepareCards?: () => Promise<void>;
 	releaseCard: (card: HTMLElement) => void;
 	retainCard?: (card: HTMLElement, memo: MemoViewItem) => void;
 	onChanged: (open: boolean) => void;
@@ -310,13 +309,14 @@ export class MemoRelationsPage {
 			this.showStatus(snapshot.errors.length && !snapshot.recovering ? t("relations.failed") : snapshot.complete && !incoming.length ? t("relations.empty") : "");
 			if (list) {
 				await this.referrersWindow!.settled();
-				await this.options.prepareCards?.();
 				signal.throwIfAborted();
 			}
 			if (restore) {
 				this.el.scrollTop = frame.scroll;
 				if (frame.anchor) this.referrersWindow!.restoreReadingAnchor(frame.anchor);
 				this.referrersWindow!.refresh(); this.sourcesWindow?.refresh();
+				await this.referrersWindow!.settled();
+				signal.throwIfAborted();
 				this.restoreFocus(frame);
 			} else if (list) this.scrollToList();
 		} catch (error) {

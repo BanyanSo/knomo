@@ -4539,7 +4539,6 @@ export class KnomoView extends ItemView {
 	private async openMemoRelations(handle: ObservationHandle, list = false, trigger?: HTMLElement): Promise<void> {
 		if (!this.relationsPage) this.relationsPage = new MemoRelationsPage({
 			read: this.catalogReadService, getHost: () => this.cardFlowEl?.parentElement ?? null,
-			prepareCards: () => this.ensureRelationCards().prepareVisible(),
 			renderCard: (container, memo, index) => this.renderMemoCardInContainer(container, memo, this.relationsPage!.generation, index, true, false, "relations"),
 			releaseCard: card => this.releaseRelationCard(card),
 			retainCard: (card, memo) => { this.memoMarkdownRenderer.retainCard(card, memo); this.ensureRelationCards().observe(card, memo); },
@@ -5221,8 +5220,9 @@ export class KnomoView extends ItemView {
 	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
 		this.closeCardMenu();
 		if (action === "relations") {
+			const host = this.relationsPage?.isOpen ? this.relationsPage.el : this.rootEl;
 			if (memo.catalog) await this.openMemoRelations(memo.catalog.observationHandle, false,
-				this.rootEl?.findAll(".knomo-card").find(card => card.getAttr("data-memo-id") === memo.id)?.find(".knomo-card-menu"));
+				host?.findAll(".knomo-card").find(card => card.getAttr("data-memo-id") === memo.id)?.find(".knomo-card-menu"));
 			return;
 		}
 		if (action === "view-day") {

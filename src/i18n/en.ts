@@ -2,11 +2,8 @@ import { zhCN, type TranslationKey } from "./zh-CN";
 
 export const en: Record<TranslationKey, string> = {
 	"relations.title": "Relation details",
-	"relations.count": "Referenced by · {{count}}",
 	"relations.heading": "Referenced by",
-	"relations.view": "View",
 	"relations.viewLabel": "View records referencing {{date}}",
-	"relations.openLabel": "Open record from {{date}}: {{text}}",
 	"relations.image": "Image record",
 	"relations.noSummary": "No text summary",
 	"relations.failed": "Related records are temporarily unavailable.",

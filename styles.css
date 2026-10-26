@@ -5374,6 +5374,16 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	font-weight: var(--font-normal);
 }
 .knomo-plugin .knomo-source-reference-content { min-width: 0; }
+.knomo-plugin .knomo-source-reference a {
+	color: inherit;
+	font: inherit;
+	text-decoration: none;
+}
+.knomo-plugin .knomo-source-reference a:hover,
+.knomo-plugin .knomo-source-reference a:focus-visible {
+	color: var(--text-muted);
+	text-decoration: underline;
+}
 .knomo-plugin .knomo-reference-icon {
 	display: inline-flex;
 	align-items: center;
@@ -5410,7 +5420,9 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	text-overflow: ellipsis;
 }
 .knomo-plugin button.knomo-referrer-preview:hover { color: var(--text-muted); }
+.knomo-plugin .knomo-source-reference a:active,
 .knomo-plugin button.knomo-referrer-preview:active { color: var(--text-normal); }
+.knomo-plugin .knomo-source-reference a:focus-visible,
 .knomo-plugin button.knomo-referrer-preview:focus-visible {
 	outline: 2px solid var(--interactive-accent);
 	outline-offset: 1px;

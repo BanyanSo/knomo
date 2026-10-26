@@ -26,7 +26,7 @@ export class MemoRelationCards {
 	private diagnosticKey: string | null = null;
 
 	constructor(private readonly read: CatalogReadService, private readonly win: Window,
-		private readonly open: (handle: ObservationHandle, list: boolean, trigger: HTMLElement) => Promise<void>) {
+		private readonly open: (handle: ObservationHandle, trigger: HTMLElement) => Promise<void>) {
 		const Observer = (win as Window & { IntersectionObserver?: typeof IntersectionObserver }).IntersectionObserver;
 		this.observer = Observer ? new Observer(entries => {
 			for (const entry of entries) { const binding = this.cards.get(entry.target as HTMLElement); if (binding) binding.nearby = entry.isIntersecting; }
@@ -144,7 +144,7 @@ export function markRelationCardStale(card: HTMLElement): void {
 
 export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snapshot: MemoRelationSnapshot,
 	summaries: ReadonlyMap<string, { text: string; imageOnly: boolean }>,
-	open: (handle: ObservationHandle, list: boolean, trigger: HTMLElement) => Promise<void>): void {
+	open: (handle: ObservationHandle, trigger: HTMLElement) => Promise<void>): void {
 	const incoming = snapshot.referrers.get(memo.id) ?? [];
 	const old = card.querySelector<HTMLElement>(".knomo-memo-referrers");
 	const focused = old?.contains(card.ownerDocument.activeElement) ?? false;
@@ -170,8 +170,7 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 	region.setAttribute("aria-label", t("relations.heading"));
 	region.dataset.previewSignature = signature;
 	if (!snapshot.complete) region.dataset.stale = "true";
-	const sorted = [...incoming].sort((a, b) => (b.logicalDate + "T" + b.time).localeCompare(a.logicalDate + "T" + a.time));
-	for (const node of sorted) {
+	for (const node of incoming) {
 		const summary = summaries.get(observationHandleKey(node.handle));
 		const text = summary?.text || t(summary?.imageOnly ? "relations.image" : "relations.noSummary");
 		const date = node.logicalDate;
@@ -183,7 +182,7 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 		button.createEl("time", { cls: "knomo-referrer-date", text: date, attr: { datetime: date } });
 		button.createSpan({ cls: "knomo-referrer-summary", text });
 		viewHandles.set(button, memo.catalog!.observationHandle);
-		button.addEventListener("click", event => { event.stopPropagation(); void open(viewHandles.get(button)!, false, button); });
+		button.addEventListener("click", event => { event.stopPropagation(); void open(viewHandles.get(button)!, button); });
 	}
 	const active = focused ? card.ownerDocument.activeElement as HTMLElement : null;
 	const target = active?.dataset.relationTarget, action = active?.dataset.relationAction;

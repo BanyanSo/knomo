@@ -1,10 +1,7 @@
 export const zhCN = {
 	"relations.title": "关联详情",
-	"relations.count": "被引用 · {{count}} 条",
 	"relations.heading": "被引用",
-	"relations.view": "查看",
 	"relations.viewLabel": "查看 {{date}} 的引用者",
-	"relations.openLabel": "打开 {{date}} 的记录：{{text}}",
 	"relations.image": "图片记录",
 	"relations.noSummary": "暂无正文摘要",
 	"relations.failed": "关联记录暂不可用",

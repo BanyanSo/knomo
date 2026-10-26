@@ -4533,10 +4533,10 @@ export class KnomoView extends ItemView {
 
 	private ensureRelationCards(): MemoRelationCards {
 		return this.relationCards ??= new MemoRelationCards(this.catalogReadService, this.containerEl.win,
-			(handle, list, trigger) => this.openMemoRelations(handle, list, trigger));
+			(handle, trigger) => this.openMemoRelations(handle, trigger));
 	}
 
-	private async openMemoRelations(handle: ObservationHandle, list = false, trigger?: HTMLElement): Promise<void> {
+	private async openMemoRelations(handle: ObservationHandle, trigger?: HTMLElement): Promise<void> {
 		if (!this.relationsPage) this.relationsPage = new MemoRelationsPage({
 			read: this.catalogReadService, getHost: () => this.cardFlowEl?.parentElement ?? null,
 			renderCard: (container, memo, index) => this.renderMemoCardInContainer(container, memo, this.relationsPage!.generation, index, true, false, "relations"),
@@ -4563,7 +4563,7 @@ export class KnomoView extends ItemView {
 			},
 			onError: message => { new Notice(message); this.relationCards?.refresh(); },
 		});
-		await this.relationsPage.open(handle, list, trigger);
+		await this.relationsPage.open(handle, trigger);
 	}
 
 	private releaseRelationCard(container: HTMLElement): void {
@@ -5221,7 +5221,7 @@ export class KnomoView extends ItemView {
 		this.closeCardMenu();
 		if (action === "relations") {
 			const host = this.relationsPage?.isOpen ? this.relationsPage.el : this.rootEl;
-			if (memo.catalog) await this.openMemoRelations(memo.catalog.observationHandle, false,
+			if (memo.catalog) await this.openMemoRelations(memo.catalog.observationHandle,
 				host?.findAll(".knomo-card").find(card => card.getAttr("data-memo-id") === memo.id)?.find(".knomo-card-menu"));
 			return;
 		}

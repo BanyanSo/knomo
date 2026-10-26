@@ -77,6 +77,70 @@ test("移动被引用钻取保留已有切片，部分空结果不删除卡片�
 	} finally { h.controller.removePage(); }
 });
 
+test("移动被引用钻取慢查询返回完整零条时清理骨架并显示空结果", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let reveal: (() => void) | null = null, release!: (page: MobileSearchPage) => void;
+	const pending = new Promise<MobileSearchPage>(resolve => { release = resolve; });
+	const h = createControllerHarness(MobileSearchController, [], undefined, () => pending, {
+		getWindow: () => ({ setTimeout: (callback: () => void) => { reveal = callback; return 1; }, clearTimeout: () => { reveal = null; } } as unknown as Window),
+		getResultStatus: () => ({ headers: [], complete: true, blocked: false }),
+	});
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		(reveal as (() => void) | null)?.();
+		assert.equal(h.root.findAll(".knomo-loading-skeleton").length, 1);
+		const empty = makeRemotePage([]); empty.status.relations = { complete: true, failed: false };
+		release(empty); await settle();
+		assert.equal(h.root.find(".knomo-loading-placeholder"), null);
+		assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 1);
+		assert.equal(h.controller.getDisplayedCount(), 0);
+		assert.equal(h.root.find(".knomo-mobile-search-more"), null);
+	} finally { release(makeRemotePage([])); h.controller.removePage(); }
+});
+
+test("移动被引用钻取部分零条或故障恢复为完整零条，空数组不能跳过收尾", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	for (const initial of ["partial", "failed"] as const) {
+		let complete = false;
+		const h = createControllerHarness(MobileSearchController, [], undefined, async () => {
+			const page = makeRemotePage([]); page.status.relations = { complete, failed: !complete && initial === "failed" }; return page;
+		}, { getResultStatus: () => ({ headers: !complete && initial === "failed" ? [{ type: "summary", text: "Relation read failed", feedback: true }] : [], complete, blocked: false }) });
+		try {
+			h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+			h.controller.openPage({ focusInput: false }); await settle();
+			assert.equal(h.root.find(".knomo-mobile-search-empty"), null);
+			assert.equal(h.controller.getDisplayedCount(), null);
+			complete = true; await h.controller.refreshAppliedResults();
+			assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 1, initial);
+			assert.equal(h.root.find(".knomo-relation-result-feedback"), null);
+			assert.equal(h.root.find(".knomo-loading-placeholder"), null);
+			assert.equal(h.controller.getDisplayedCount(), 0);
+		} finally { h.controller.removePage(); }
+	}
+});
+
+test("移动被引用钻取完整非空转为零条时清理旧卡片与数量", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memo = makeMemo("memo", "memo"); let empty = false;
+	const h = createControllerHarness(MobileSearchController, [memo], undefined, async () => {
+		const page = makeRemotePage(empty ? [] : [memo]); page.status.relations = { complete: true, failed: false }; return page;
+	}, { getResultStatus: () => ({ headers: [], complete: true, blocked: false }) });
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		assert.equal(h.controller.getDisplayedCount(), 1); assert.ok(h.root.find(".knomo-card"));
+		empty = true; await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), null);
+		assert.equal(h.root.find(".knomo-search-result-count"), null);
+		assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 1);
+		assert.equal(h.controller.getDisplayedCount(), 0);
+	} finally { h.controller.removePage(); }
+});
+
 test("移动搜索快速结果不闪加载提示，取消后旧延迟回调不再显示", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -1218,6 +1282,10 @@ class TestElement {
 
 	setAttr(key: string, value: string): void {
 		this.attrs.set(key, value);
+	}
+
+	setAttrs(values: Record<string, string>): void {
+		for (const [key, value] of Object.entries(values)) this.setAttr(key, value);
 	}
 
 	getAttr(key: string): string | null {

@@ -394,6 +394,9 @@ export class MemoRelationService {
 		if (JSON.stringify(await this.catalog.getStore().getCoverage()) !== JSON.stringify(coverage)) throw new MemoRelationsChangedError();
 		if ([...files.values()].some(file => this.fileCurrent(file) !== states.get(file.sourcePath))) throw new MemoRelationsChangedError();
 		if (this.failedFileCount() !== scanFailures) throw new MemoRelationsChangedError();
+		// 末次异步校验也可能跨过失效或销毁；发布所有内部状态前再次确认当前构建。
+		signal.throwIfAborted();
+		if (this.disposed || version !== this.version) throw new MemoRelationsChangedError();
 		this.files = files;
 		this.fileStates = states;
 		this.resolutionNames = resolutionNames;

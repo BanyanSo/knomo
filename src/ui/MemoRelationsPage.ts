@@ -70,7 +70,7 @@ export class MemoRelationsPage {
 	getMemos(): MemoViewItem[] { return [...this.memos.values()]; }
 	findMemo(id: string): MemoViewItem | null { return this.memos.get(id) ?? null; }
 
-	async open(handle: ObservationHandle, list = false, trigger?: HTMLElement): Promise<void> {
+	async open(handle: ObservationHandle, trigger?: HTMLElement): Promise<void> {
 		if (this.disposed) return;
 		const run = ++this.navigationRun;
 		try {
@@ -80,7 +80,7 @@ export class MemoRelationsPage {
 			if (!items.length) throw Error("unavailable");
 			const key = observationHandleKey(handle);
 			const existing = this.frames.findIndex(frame => observationHandleKey(frame.handle) === key);
-			if (existing === this.frames.length - 1 && this.isOpen) { if (list) this.scrollToList(); return; }
+			if (existing === this.frames.length - 1 && this.isOpen) return;
 			if (this.isOpen) {
 				const current = this.frames[this.frames.length - 1];
 				current.scroll = this.el?.scrollTop ?? 0;
@@ -97,8 +97,8 @@ export class MemoRelationsPage {
 			const memo = toCatalogMemoView(items[0]);
 			this.options.onChanged(true);
 			this.renderSubject(memo);
-			if (!list && existing < 0) this.subject?.querySelector<HTMLElement>(".knomo-card-time,button")?.focus({ preventScroll: true });
-			await this.load(list, existing >= 0);
+			if (existing < 0) this.subject?.querySelector<HTMLElement>(".knomo-card-time,button")?.focus({ preventScroll: true });
+			await this.load(existing >= 0);
 		} catch { if (!this.disposed && run === this.navigationRun) this.options.onError(t("relations.unavailable")); }
 	}
 
@@ -107,7 +107,7 @@ export class MemoRelationsPage {
 		if (!this.isOpen) return;
 		this.frames.pop();
 		if (!this.isOpen) { this.close(); return; }
-		this.buildShell(); this.options.onChanged(true); void this.load(false, true);
+		this.buildShell(); this.options.onChanged(true); void this.load(true);
 	}
 
 	close(restoreFocus = true): void {
@@ -160,7 +160,7 @@ export class MemoRelationsPage {
 		if (!this.isOpen || this.el?.isConnected) return;
 		const frame = this.frames[this.frames.length - 1];
 		frame.scroll = this.el?.scrollTop ?? frame.scroll;
-		this.buildShell(); this.options.onChanged(true); void this.load(false, true);
+		this.buildShell(); this.options.onChanged(true); void this.load(true);
 	}
 
 	private clearPage(): void {
@@ -230,9 +230,9 @@ export class MemoRelationsPage {
 		if (focused) this.subject.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
 	}
 
-	private async load(list = false, restore = false): Promise<void> {
+	private async load(restore = false): Promise<void> {
 		if (this.running) { this.pending = true; return this.running; }
-		const task = this.loadCurrent(list, restore);
+		const task = this.loadCurrent(restore);
 		this.running = task;
 		try { await task; }
 		finally {
@@ -243,7 +243,7 @@ export class MemoRelationsPage {
 		}
 	}
 
-	private async loadCurrent(list = false, restore = false): Promise<void> {
+	private async loadCurrent(restore = false): Promise<void> {
 		if (!this.el || !this.isOpen) return;
 		this.controller?.abort();
 		const controller = this.controller = new AbortController();
@@ -285,10 +285,6 @@ export class MemoRelationsPage {
 			this.referrersWindow!.refresh();
 			this.syncLoading(!snapshot.complete && !snapshot.errors.length && !this.referrers.length);
 			this.showStatus(snapshot.errors.length && !snapshot.recovering ? t("relations.failed") : snapshot.complete && !incoming.length ? t("relations.empty") : "");
-			if (list) {
-				await this.referrersWindow!.settled();
-				signal.throwIfAborted();
-			}
 			if (restore) {
 				this.el.scrollTop = frame.scroll;
 				if (frame.anchor) this.referrersWindow!.restoreReadingAnchor(frame.anchor);
@@ -296,7 +292,7 @@ export class MemoRelationsPage {
 				await this.referrersWindow!.settled();
 				signal.throwIfAborted();
 				this.restoreFocus(frame);
-			} else if (list) this.scrollToList();
+			}
 		} catch (error) {
 			if (signal.aborted || !this.el) return;
 			this.markStale();
@@ -310,11 +306,6 @@ export class MemoRelationsPage {
 					this.invalidatedVersion = this.options.read.relations.revision; this.refresh();
 				}
 			} else { this.syncLoading(false); this.showStatus(t("relations.failed")); }
-		}
-		finally {
-			if (!signal.aborted) {
-				if (list) this.listTitle?.focus({ preventScroll: true });
-			}
 		}
 	}
 
@@ -378,15 +369,6 @@ export class MemoRelationsPage {
 			const key = card.getAttribute("data-memo-id"); if (key) this.memos.delete(key);
 		}
 		this.options.releaseCard(row);
-	}
-	private scrollToList(): void {
-		if (!this.el || !this.listTitle) return;
-		const top = this.el.getBoundingClientRect().top;
-		const header = this.el.querySelector<HTMLElement>(".knomo-relations-header");
-		const inset = Math.max(0, (header?.getBoundingClientRect().bottom ?? top) - top) + 8;
-		this.el.scrollTop += this.listTitle.getBoundingClientRect().top - top - inset;
-		this.referrersWindow?.refresh();
-		this.listTitle.focus({ preventScroll: true });
 	}
 	private restoreFocus(frame: RelationFrame): void {
 		if (!frame.focus || !this.el) return;

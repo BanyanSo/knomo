@@ -847,7 +847,7 @@ export class MobileSearchController {
 			: headers.length > 0 ? JSON.stringify(headers) : null;
 		const statusChanged = status !== this.renderedStatus;
 		this.syncControls();
-		if (relationQuery && sameView && this.session.result !== null && this.renderTaskId === null
+		if (relationQuery && visibleMemos.length > 0 && sameView && this.session.result !== null && this.renderTaskId === null
 			&& revisions.length === this.renderedRevisions.length && revisions.every((revision, index) => revision === this.renderedRevisions[index])) {
 			this.syncRelationFeedback(resultsEl, status, headers);
 			this.renderedStatus = status; this.renderedPending = waiting;
@@ -855,6 +855,7 @@ export class MobileSearchController {
 		}
 		// 总数晚到时仅沿用已开始渲染的卡片列表；空搜索提示不能新增加载入口。
 		if (metadataOnly && sameView && this.renderedPending === waiting && this.renderedStatus === status
+			&& (!relationQuery || visibleMemos.length > 0)
 			&& (this.session.result !== null || !waiting)
 			&& revisions.length === this.targetRevisions.length
 			&& revisions.every((revision, index) => revision === this.targetRevisions[index])) {

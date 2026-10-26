@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
-import { MemoRelationService, relationChangeAffects } from "../src/services/MemoRelationService";
+import { MemoRelationService, MemoRelationsChangedError, relationChangeAffects } from "../src/services/MemoRelationService";
 import { observationHandleKey } from "../src/services/DailyMemoPresentationChange";
 import { extractMemoRelationTargets, extractMemoRelationSummary } from "../src/utils/memoRelations";
 
@@ -24,6 +24,70 @@ async function fixture() {
 	};
 	return { store, catalog, seed, relations: new MemoRelationService(catalog) };
 }
+
+function holdFinalCoverage(store: InMemoryMemoCatalogStore) {
+	const coverage = store.getCoverage.bind(store);
+	let entered!: () => void, release!: () => void, calls = 0;
+	const ready = new Promise<void>(resolve => { entered = resolve; });
+	const gate = new Promise<void>(resolve => { release = resolve; });
+	store.getCoverage = async () => {
+		const result = await coverage();
+		// 首次构建先读输入 coverage，第二次读取是发布前的末次校验。
+		if (++calls === 2) { entered(); await gate; }
+		return result;
+	};
+	return { ready, release };
+}
+
+test("末次 coverage 校验期间 metadata 变化，迟到旧构建不能覆盖新快照", async () => {
+	const { seed, catalog, store, relations: unused } = await fixture(); unused.dispose();
+	const [a] = await seed("X/A.md", "- 10:00 first ^a\n");
+	const [b] = await seed("Y/A.md", "- 10:00 second ^a\n");
+	await seed("B.md", "- 11:00 [[A#^a]]\n");
+	let destination = "X/A.md";
+	const relations = new MemoRelationService(catalog, { resolvePath: () => ({ path: destination }) });
+	const probe = holdFinalCoverage(store);
+	try {
+		const rejected = assert.rejects(relations.read(), MemoRelationsChangedError);
+		await probe.ready;
+		destination = "Y/A.md"; relations.invalidateResolution(["Y/A.md"]);
+		const current = await relations.read();
+		assert.equal(current.referrers.get(a!), undefined);
+		assert.equal(current.referrers.get(b!)?.length, 1);
+		probe.release(); await rejected;
+		assert.equal(await relations.read(), current, "旧构建结束后仍保留已发布的新快照");
+		await relations.assertCurrent(current);
+	} finally { probe.release(); relations.dispose(); }
+});
+
+test("末次 coverage 校验期间所有读取者退出，取消构建不能成为后续缓存", async () => {
+	const { seed, catalog, store, relations: unused } = await fixture(); unused.dispose();
+	await seed("A.md", "- 10:00 A ^a\n"); await seed("B.md", "- 11:00 [[A#^a]]\n");
+	let resolutions = 0;
+	const relations = new MemoRelationService(catalog, { resolvePath: () => { resolutions++; return { path: "A.md" }; } });
+	const probe = holdFinalCoverage(store);
+	try {
+		const controller = new AbortController();
+		const rejected = assert.rejects(relations.read(controller.signal));
+		await probe.ready; controller.abort(); await rejected;
+		probe.release(); await new Promise(resolve => setImmediate(resolve));
+		const current = await relations.read();
+		assert.equal(current.complete, true);
+		assert.equal(resolutions, 2, "重新进入须从有效构建取得快照，不能命中已取消构建");
+		await relations.assertCurrent(current);
+	} finally { probe.release(); relations.dispose(); }
+});
+
+test("末次 coverage 校验期间 runtime 销毁，旧读取不能再返回成功快照", async () => {
+	const { seed, store, relations } = await fixture();
+	await seed("A.md", "- 10:00 A ^a\n");
+	const probe = holdFinalCoverage(store);
+	try {
+		const rejected = assert.rejects(relations.read(), MemoRelationsChangedError);
+		await probe.ready; relations.dispose(); probe.release(); await rejected;
+		await assert.rejects(relations.read(), MemoRelationsChangedError);
+	} finally { probe.release(); relations.dispose(); }
+});
 
 test("无关 Daily 更新复用已解析关系，改链只重算相关来源", async () => {
 	const { catalog, seed } = await fixture();

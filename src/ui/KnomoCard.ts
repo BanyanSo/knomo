@@ -254,7 +254,7 @@ function renderCardMeta<TMemo extends MemoRecord>(card: HTMLElement, memo: TMemo
 	const sourceReference = getMemoSourceReferenceMeta(memo);
 	if (sourceReference.type !== "none") {
 		const meta = card.createDiv({ cls: "knomo-card-meta knomo-source-reference markdown-rendered" });
-		const icon = meta.createSpan({ cls: "knomo-reference-icon", attr: { role: "img", "aria-label": t("reference.fromPrefix"), title: t("reference.fromPrefix") } });
+		const icon = meta.createSpan({ cls: "knomo-reference-icon", attr: { role: "img", "aria-label": t("reference.fromPrefix") } });
 		setIcon(icon, "message-square-quote");
 		const content = meta.createDiv({ cls: "knomo-source-reference-content" });
 		const referenceText = sourceReference.text;

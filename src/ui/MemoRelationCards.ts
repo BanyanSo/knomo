@@ -174,8 +174,8 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 		const summary = summaries.get(observationHandleKey(node.handle));
 		const text = summary?.text || t(summary?.imageOnly ? "relations.image" : "relations.noSummary");
 		const date = node.logicalDate;
-		const label = t("relations.heading") + ": " + date + " " + text + ". " + t("relations.viewLabel", { date: memo.createdAt.replace("T", " ") });
-		const button = region.createEl("button", { cls: "knomo-referrer-preview", attr: { type: "button", "aria-label": label, title: label } });
+		const label = t("relations.viewLabel");
+		const button = region.createEl("button", { cls: "knomo-referrer-preview", attr: { type: "button", "aria-label": label } });
 		button.dataset.relationTarget = observationHandleKey(node.handle); button.dataset.relationAction = "preview";
 		const icon = button.createSpan({ cls: "knomo-reference-icon", attr: { "aria-hidden": "true" } });
 		setIcon(icon, "message-square-reply");

@@ -189,7 +189,7 @@ export class MemoRelationsPage {
 		this.clearPage();
 		const host = this.options.getHost();
 		if (!host) return;
-		const el = this.el = host.createDiv({ cls: "knomo-card-flow knomo-relations-page", attr: { "aria-label": t("relations.title") } });
+		const el = this.el = host.createDiv({ cls: "knomo-card-flow knomo-relations-page" });
 		const header = el.createDiv({ cls: "knomo-relations-header" });
 		header.createEl("h2", { text: t("relations.title") });
 		this.status = el.createDiv({ cls: "knomo-relations-status" });

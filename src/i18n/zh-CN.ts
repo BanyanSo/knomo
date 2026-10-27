@@ -1,7 +1,7 @@
 export const zhCN = {
 	"relations.title": "关联详情",
 	"relations.heading": "被引用",
-	"relations.viewLabel": "查看 {{date}} 的引用者",
+	"relations.viewLabel": "点击打开详情",
 	"relations.image": "图片记录",
 	"relations.noSummary": "暂无正文摘要",
 	"relations.failed": "关联记录暂不可用",
@@ -182,7 +182,7 @@ export const zhCN = {
 	"mobile.openOrCloseSidebar": "打开或收起 Knomo 侧栏",
 	"mobile.newMemo": "新建 memo",
 	"reference.clear": "清除引用",
-	"reference.fromPrefix": "引用自：",
+	"reference.fromPrefix": "引用来源",
 	"stats.notes": "笔记",
 	"stats.tags": "标签",
 	"stats.images": "图片",

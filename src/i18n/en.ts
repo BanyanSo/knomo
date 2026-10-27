@@ -3,7 +3,7 @@ import { zhCN, type TranslationKey } from "./zh-CN";
 export const en: Record<TranslationKey, string> = {
 	"relations.title": "Relation details",
 	"relations.heading": "Referenced by",
-	"relations.viewLabel": "View records referencing {{date}}",
+	"relations.viewLabel": "Click to open details",
 	"relations.image": "Image record",
 	"relations.noSummary": "No text summary",
 	"relations.failed": "Related records are temporarily unavailable.",
@@ -184,7 +184,7 @@ export const en: Record<TranslationKey, string> = {
 	"mobile.openOrCloseSidebar": "Open or close Knomo sidebar",
 	"mobile.newMemo": "New memo",
 	"reference.clear": "Clear reference",
-	"reference.fromPrefix": "Referenced from: ",
+	"reference.fromPrefix": "Reference source",
 	"stats.notes": "Notes",
 	"stats.tags": "Tags",
 	"stats.images": "Images",

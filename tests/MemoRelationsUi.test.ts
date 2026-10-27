@@ -127,7 +127,7 @@ test("关联详情将返回移至当前记录行，移除页面时间，保留�
 	} finally { h.close(); }
 });
 
-test("移动端关联详情使用页内返回，关闭后恢复统计页原生返回操作", async () => {
+test("移动端关联详情使用顶部返回，关闭后恢复统计页原生返回操作", async () => {
 	const h = await fixture();
 	try {
 		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
@@ -143,9 +143,11 @@ test("移动端关联详情使用页内返回，关闭后恢复统计页原生�
 		assert.equal(actions.querySelectorAll("button").length, 1);
 		await h.page.open(a);
 		h.previewView.syncMobileHeaderActions();
-		assert.equal(actions.querySelector("button"), null);
+		assert.equal(actions.querySelectorAll("button").length, 1);
+		assert.equal(actions.querySelector("button")!.getAttribute("aria-label"), h.page.backLabel);
 		assert.equal(h.page.el!.querySelectorAll(".knomo-relations-back").length, 1);
-		h.page.el!.querySelector<HTMLButtonElement>(".knomo-relations-back")!.click();
+		actions.querySelector<HTMLButtonElement>("button")!.click();
+		assert.equal(h.page.isOpen, false);
 		h.previewView.syncMobileHeaderActions();
 		actions.querySelector<HTMLButtonElement>("button")!.click();
 		assert.equal(returns, 1);
@@ -218,6 +220,11 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 				const context = JSON.stringify({ locale, theme, width, font, actual });
 				assert.equal(actual.headerHeight, 0, context);
 				assert.equal(actual.overflow || actual.rowOverflow, false, context);
+				if (width < 768) {
+					assert.equal(actual.buttonWidth, 0, context);
+					assert.equal(actual.buttonHeight, 0, context);
+					continue;
+				}
 				const buttonSize = width < 768 ? 44 : 36;
 				assert.equal(actual.buttonWidth, buttonSize, context);
 				assert.equal(actual.buttonHeight, buttonSize, context);

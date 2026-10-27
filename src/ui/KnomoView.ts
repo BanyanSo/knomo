@@ -3119,7 +3119,7 @@ export class KnomoView extends ItemView {
 		}
 		if (this.relationsPage?.isOpen) {
 			this.removeMobileSearchHeaderAction();
-			this.removeMobileRecordStatsBackAction();
+			this.ensureMobileRecordStatsBackAction();
 			return;
 		}
 		if (this.activeNav === "record-stats") {
@@ -3190,10 +3190,15 @@ export class KnomoView extends ItemView {
 	private ensureMobileRecordStatsBackAction(): void {
 		if (this.mobileRecordStatsBackActionEl === null || !this.mobileRecordStatsBackActionEl.isConnected) {
 			this.mobileRecordStatsBackActionEl?.remove();
-			this.mobileRecordStatsBackActionEl = this.addAction("arrow-left", t("recordStats.back"), () => this.returnFromRecordStats());
+			this.mobileRecordStatsBackActionEl = this.addAction("arrow-left", t("recordStats.back"), () => {
+				if (this.relationsPage?.isOpen) this.relationsPage.back();
+				else this.returnFromRecordStats();
+			});
 			this.mobileRecordStatsBackActionEl.addClass("knomo-mobile-header-action", "knomo-record-stats-back");
 			this.mobileRecordStatsBackActionEl.setAttr("aria-label", t("recordStats.back"));
 		}
+		this.mobileRecordStatsBackActionEl.setAttr("aria-label", this.relationsPage?.isOpen
+			? this.relationsPage.backLabel : t("recordStats.back"));
 	}
 
 	private removeMobileHeaderActions(): void {

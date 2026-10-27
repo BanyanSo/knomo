@@ -67,6 +67,7 @@ export class MemoRelationsPage {
 	}
 
 	get isOpen(): boolean { return this.frames.length > 0; }
+	get backLabel(): string { return t(this.frames.length > 1 ? "relations.back" : "relations.backList"); }
 	getMemos(): MemoViewItem[] { return [...this.memos.values()]; }
 	findMemo(id: string): MemoViewItem | null { return this.memos.get(id) ?? null; }
 

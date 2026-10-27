@@ -415,7 +415,7 @@ test("Typography separates content from UI in desktop and body-mounted mobile Co
 			assert.deepEqual(actual, {
 				content: `${size}px`, composer: `${mobile ? Math.max(16, size) : size}px`, times: ["13px", "13px"],
 				wordCount: "13px", cardTag: "14px", composerTag: "14px", date: "15px", history: "13px", title: "15px",
-				search: "14px", nav: "14px", chip: "13px", reference: "13px", source: "12px", status: "12px", action: "14px", count: "12px", empty: "12px",
+				search: "14px", nav: "14px", chip: "13px", reference: "13px", source: "13px", status: "12px", action: "14px", count: "12px", empty: "12px",
 				host: Array(5).fill("19px"), help: "17px", preview: "19px", display: ["24px", "24px", "26.4px"],
 				heading: `${size * 1.5}px`, code: `${size * 0.9}px`, lineHeight: `${Number(((mobile ? Math.max(16, size) : size) * 1.7).toFixed(2))}px`,
 				iconSize: mobile ? "24px" : "19px",

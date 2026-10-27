@@ -3001,7 +3001,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-meta {
 	margin-top: 6px;
 	color: var(--text-faint);
-	font-size: var(--knomo-text-caption);
+	font-size: var(--knomo-text-meta);
 }
 
 .knomo-plugin .knomo-source-reference p {
@@ -5447,19 +5447,20 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 
 .knomo-plugin .knomo-relations-header h2 {
 	margin: 0;
-	font-size: var(--font-ui-medium);
+	font-size: var(--knomo-text-ui-medium);
 }
 
 .knomo-plugin .knomo-relations-section-title,
 .knomo-plugin .knomo-relations-status,
 .knomo-plugin .knomo-relations-hint {
 	margin: var(--size-4-3, 12px) var(--size-4-4, 16px);
-	font-size: var(--font-ui-small);
+	font-size: var(--knomo-text-caption);
 	color: var(--text-muted);
 }
 
 .knomo-plugin .knomo-relations-section-title {
 	min-width: 0;
+	font-size: var(--knomo-text-ui-base);
 	color: var(--text-accent);
 	overflow-wrap: anywhere;
 }
@@ -5488,10 +5489,11 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 }
 
 .knomo-plugin.is-layout-mobile .knomo-relations-back {
-	width: 44px;
-	min-width: 44px;
-	height: 44px;
-	min-height: 44px;
+	display: none;
+}
+
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title-container {
+	justify-content: center;
 }
 
 .knomo-plugin .knomo-relation-window {

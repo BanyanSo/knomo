@@ -118,6 +118,8 @@ import { ImagePreviewScrollLock } from "./ImagePreviewScrollLock";
 import { ImageResourceCache } from "./ImageResourceCache";
 import { showKnomoConfirmModal } from "./KnomoConfirmModal";
 import { KnomoImagePreviewModal } from "./KnomoImagePreviewModal";
+import { KnomoShareCardModal } from "./KnomoShareCardModal";
+import { loadShareCardImage, readShareCardSnapshot } from "./share/ShareCardResources";
 import { openMemoDailyNoteDefault, openMemoDailyNoteInNewTab } from "./memoDailyNoteOpen";
 import {
 	renderKnomoCardFlowHeaders,
@@ -476,6 +478,7 @@ export class KnomoView extends ItemView {
 	private readonly mobileImagePickerFocusGuard: MobileImagePickerFocusGuard;
 	private readonly nativeImagePickerController: NativeImagePickerController<ComposerImageCapture>;
 	private readonly cardImageLoadQueue: CardImageLoadQueue;
+	private shareCardModal: KnomoShareCardModal | null = null;
 	private readonly cardImageCache = new MemoCardImageCache();
 	private readonly imageLoadPauseReasons = new Map<PausableImageLoadSurface, Set<ImageLoadPauseReason>>();
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
@@ -1348,6 +1351,7 @@ export class KnomoView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.shareCardModal?.close(); this.shareCardModal = null;
 		if (this.relationQueryRefreshTimer !== null) this.containerEl.win.clearTimeout(this.relationQueryRefreshTimer);
 		if (this.relationStatsRefreshTimer !== null) this.containerEl.win.clearTimeout(this.relationStatsRefreshTimer);
 		this.relationQueryRefreshTimer = null; this.relationStatsRefreshTimer = null;
@@ -5223,6 +5227,21 @@ export class KnomoView extends ItemView {
 
 	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
 		this.closeCardMenu();
+		if (action === "share-image") {
+			if (this.trashViewClosed || memo.status !== "active") return;
+			if (this.composerOpen) this.closeComposerKeepingDraft();
+			this.shareCardModal?.close();
+			const host = this.relationsPage?.isOpen ? this.relationsPage.el : this.mobileSearchPageOpen ? this.mobileSearchResultsEl : this.rootEl;
+			this.shareCardModal = new KnomoShareCardModal(this.app, {
+				loadSnapshot: signal => readShareCardSnapshot(this.app, this.catalogReadService, memo, getKnomoLocale(), signal),
+				loadImage: (path, sourcePath, signal) => loadShareCardImage(this.app, path, sourcePath, signal),
+				lockScroll: () => this.lockCardFlowScrollForImagePreview(),
+				returnFocusEl: host?.findAll(".knomo-card").find(card => card.getAttr("data-memo-id") === memo.id)?.find(".knomo-card-menu"),
+				onClose: () => { this.shareCardModal = null; this.unlockCardFlowScrollForImagePreview(); },
+			});
+			this.shareCardModal.open();
+			return;
+		}
 		if (action === "relations") {
 			const host = this.relationsPage?.isOpen ? this.relationsPage.el : this.rootEl;
 			if (memo.catalog) await this.openMemoRelations(memo.catalog.observationHandle,
@@ -7237,7 +7256,7 @@ export class KnomoView extends ItemView {
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen)) {
-					const focus = action === "edit" || action === "reference" || action === "open-daily" ? "action" : "view";
+					const focus = action === "edit" || action === "reference" || action === "open-daily" || action === "share-image" ? "action" : "view";
 					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
 						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
 				}

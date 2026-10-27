@@ -308,6 +308,7 @@ function renderTrashAction(
 }
 
 export function getMemoActionLabel(action: MemoAction): string {
+	if (action === "share-image") return t("share.title");
 	if (action === "relations") return t("relations.title");
 	if (action === "edit") return t("card.edit");
 	if (action === "reference") return t("card.reference");

@@ -1,5 +1,5 @@
 export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-time-buoy" | "insert-list" | "insert-numbered-list";
-export type MemoAction = "edit" | "reference" | "relations" | "open-daily" | "view-day" | "copy-text" | "copy-link" | "delete" | "mark-reviewed";
+export type MemoAction = "edit" | "reference" | "relations" | "open-daily" | "view-day" | "copy-text" | "copy-link" | "share-image" | "delete" | "mark-reviewed";
 export type TrashAction = "restore" | "purge";
 export type KnomoSimpleAction =
 	| "toggle-card-menu"
@@ -156,6 +156,7 @@ export function isComposerToolAction(action: string): action is ComposerToolActi
 }
 
 export function isMemoAction(action: string): action is MemoAction {
+	if (action === "share-image") return true;
 	if (action === "relations") return true;
 		return action === "edit" ||
 		action === "reference" ||

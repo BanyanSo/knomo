@@ -5554,3 +5554,38 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-plugin .knomo-relations-page .knomo-relation-window-row .knomo-card {
 	margin-block: 0;
 }
+/* 分享操作区继承宿主主题，导出画布在隔离文档中使用固定模板。 */
+.modal.knomo-share-modal {
+	width: min(560px, calc(100vw - 24px));
+	max-width: calc(100vw - 24px);
+	height: min(860px, calc(100dvh - 48px));
+	max-height: calc(100dvh - 48px);
+	display: flex;
+	flex-direction: column;
+	padding: 20px;
+	overflow: hidden;
+}
+.knomo-share-modal .modal-title { padding-right: 36px; flex: none; }
+.knomo-share-modal .knomo-share-close {
+	position: absolute; top: 12px; right: 12px; width: 40px; height: 40px;
+	padding: 0; font-size: 26px; background: transparent; box-shadow: none;
+}
+.knomo-share-modal .knomo-share-content { margin: 12px 0 0; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.knomo-share-preview { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px; background: var(--background-secondary); border-radius: 8px; }
+.knomo-share-preview > img { display: block; width: 100%; max-width: 390px; height: auto; margin: 0 auto; }
+.knomo-share-footer { flex: none; padding-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+.knomo-share-templates, .knomo-share-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.knomo-share-templates > button { flex: 1; min-height: 44px; border: 1px solid var(--background-modifier-border); }
+.knomo-share-templates > button::before { content: ""; display: inline-block; width: 12px; height: 16px; margin-right: 8px; vertical-align: middle; border: 1px solid var(--text-faint); background: var(--knomo-share-swatch); }
+.knomo-share-templates > button[aria-pressed="true"] { border-color: var(--interactive-accent); color: var(--text-accent); box-shadow: inset 0 0 0 1px var(--interactive-accent); }
+.knomo-share-actions > button { flex: 1; min-height: 44px; }
+.knomo-share-status, .knomo-share-warning { font-size: var(--font-ui-small); color: var(--text-muted); overflow-wrap: anywhere; }
+.knomo-share-warning { padding: 0 0 12px; }
+.knomo-share-modal .knomo-share-render-frame { position: fixed; left: -10000px; top: 0; width: 390px; height: 500px; border: 0; pointer-events: none; }
+.knomo-share-modal button:focus-visible, .knomo-share-preview:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+@media (max-width: 600px) {
+	.modal.knomo-share-modal { width: 100%; max-width: 100%; height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); padding: 16px; }
+	.knomo-share-backdrop { padding: max(12px, env(safe-area-inset-top, 0px)) 8px max(12px, env(safe-area-inset-bottom, 0px)); }
+	.knomo-share-preview { padding: 0; }
+	.knomo-share-footer { padding-top: 12px; gap: 10px; }
+}

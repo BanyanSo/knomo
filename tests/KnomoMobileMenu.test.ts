@@ -180,11 +180,11 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 		h.view.toggleCardMenu(h.originalMemo.id);
 		const menu = h.menus[0];
 		assert.equal(h.controller.kind, "card");
-		assert.equal(menu.items.length, 8);
+		assert.equal(menu.items.length, 9);
 		assert.equal(menu.noIcon, false);
-		assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "trash-2", "text"]);
+		assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "image-up", "trash-2", "text"]);
 		assert.equal(menu.items.at(-1)!.label, true);
-		assert.equal(menu.items[6].warning, true);
+		assert.equal(menu.items[7].warning, true);
 		assert.equal(menu.doc, h.f.win.document);
 		assert.equal(h.f.card.classList.contains("is-menu-open"), false, "移动端不再显示卡片内 Popover");
 		assert.equal(h.f.card.querySelector(".knomo-card-menu")?.getAttribute("aria-expanded"), "true");

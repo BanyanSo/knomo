@@ -170,7 +170,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 	};
 	const actionKeys: Record<string, TranslationKey> = {
 		edit: "card.edit", reference: "card.reference", "open-daily": "card.openDaily", relations: "relations.title",
-		"copy-text": "card.copyText", "copy-link": "card.copyLink", delete: "card.delete",
+		"copy-text": "card.copyText", "copy-link": "card.copyLink", "share-image": "share.title", delete: "card.delete",
 	};
 	const css = readFileSync("styles.css", "utf8");
 	const hostCss = process.env.KNOMO_HOST_CSS ? readFileSync(process.env.KNOMO_HOST_CSS, "utf8") : "";

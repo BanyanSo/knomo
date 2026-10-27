@@ -71,6 +71,7 @@ test("builds card action and trash action metadata", () => {
 		{ action: "relations", className: "knomo-card-action" },
 		{ action: "copy-text", className: "knomo-card-action" },
 		{ action: "copy-link", className: "knomo-card-action" },
+		{ action: "share-image", className: "knomo-card-action" },
 		{ action: "delete", className: "knomo-card-action is-danger" },
 	]);
 	assert.equal(getTrashActionClass("restore"), "knomo-inline-button");

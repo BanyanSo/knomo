@@ -42,5 +42,9 @@
 		"jsdom": "26.1.0",
 		"obsidian": "https://codeload.github.com/obsidianmd/obsidian-api/tar.gz/9abd9605ce081383674aae1ed111c456edde0688",
 		"typescript": "^5.8.0"
+	},
+	"dependencies": {
+		"html-to-image": "1.11.13",
+		"markdown-it": "15.0.3"
 	}
 }

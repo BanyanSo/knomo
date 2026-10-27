@@ -84,6 +84,25 @@ test("关联 Wiki、Markdown 和来源引用按 Daily 上下文刷新，保留 a
 	} finally { h.close(); }
 });
 
+test("来源引用刷新只替换内容，保留来源图标和外层容器", async () => {
+	const h = await referenceHarness(["body [[Source#^block|来源别名]]"], 1);
+	try {
+		await h.warm();
+		const contents = h.targets.filter(target => target.classList.contains("knomo-source-reference-content"));
+		assert.equal(contents.length, 2);
+		const shells = contents.map(content => ({ parent: content.parentElement!, icon: content.previousElementSibling, child: content.firstChild }));
+		h.emit("metadata:changed", "Notes/Source.md"); await h.flush();
+		assert.equal(h.calls.length, 2);
+		for (const [index, content] of contents.entries()) {
+			assert.equal(content.parentElement, shells[index].parent);
+			assert.equal(content.previousElementSibling, shells[index].icon);
+			assert.ok(shells[index].icon?.isConnected);
+			assert.notEqual(content.firstChild, shells[index].child);
+			assert.ok(content.textContent?.includes("来源别名"));
+		}
+	} finally { h.close(); }
+});
+
 test("嵌入的传递依赖、代码、HTML、未知链接语法和坏编码保留保守刷新", async () => {
 	const values = ["![[Target]]", "![[Parent#Heading]]", "![alt](../Notes/Target.png)",
 		"```dataview\nLIST\n```", "<span>host processor</span>", "[label][definition]\n\n[definition]: Target",
@@ -267,7 +286,9 @@ async function referenceHarness(contents: readonly string[], viewCount = 2, mobi
 				card.className = "knomo-card"; card.setAttribute("data-memo-id", memo.id); root.appendChild(card);
 				const body = doc.createElement("div"); body.className = "knomo-card-content"; card.appendChild(body); targets.push(body);
 				if (getMemoSourceReferenceMeta(memo).type !== "none") {
-					const source = doc.createElement("div"); source.className = "knomo-source-reference"; card.appendChild(source); targets.push(source);
+					const source = doc.createElement("div"); source.className = "knomo-source-reference"; card.appendChild(source);
+					const icon = doc.createElement("span"); icon.className = "knomo-reference-icon"; source.appendChild(icon);
+					const content = doc.createElement("div"); content.className = "knomo-source-reference-content"; source.appendChild(content); targets.push(content);
 				}
 			}
 		}

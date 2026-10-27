@@ -5450,7 +5450,6 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	font-size: var(--knomo-text-ui-medium);
 }
 
-.knomo-plugin .knomo-relations-section-title,
 .knomo-plugin .knomo-relations-status,
 .knomo-plugin .knomo-relations-hint {
 	margin: var(--size-4-3, 12px) var(--size-4-4, 16px);
@@ -5460,6 +5459,8 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 
 .knomo-plugin .knomo-relations-section-title {
 	min-width: 0;
+	margin: 0;
+	padding: 10px var(--size-4-2) 8px;
 	font-size: var(--knomo-text-ui-base);
 	color: var(--text-accent);
 	overflow-wrap: anywhere;
@@ -5470,17 +5471,31 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	align-items: center;
 	justify-content: space-between;
 	gap: var(--size-4-2, 8px);
-	margin: var(--size-4-3, 12px) var(--size-4-4, 16px);
+	margin: 0;
+	padding: 10px 12px 8px var(--size-4-2);
 	min-width: 0;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-relations-section-header {
+	padding-top: var(--size-4-2, 8px);
 }
 
 .knomo-plugin .knomo-relations-section-header > .knomo-relations-section-title {
 	flex: 1 1 auto;
-	margin: 0;
+	padding: 0;
 }
 
 .knomo-plugin .knomo-relations-back {
 	flex: 0 0 auto;
+	position: relative;
+	z-index: 1;
+	width: var(--knomo-touch-target);
+	min-width: var(--knomo-touch-target);
+	height: var(--knomo-touch-target);
+	min-height: var(--knomo-touch-target);
+	/* 与卡片更多按钮共用右侧轴线，点击区域不撑高标题行。 */
+	margin-block: calc(var(--knomo-touch-target) / -2);
+	margin-inline-end: -10px;
 }
 
 .knomo-plugin .knomo-relations-back:focus-visible {

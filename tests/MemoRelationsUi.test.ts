@@ -164,6 +164,11 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
 		await h.page.open(a);
 		h.page.el!.classList.add("has-host-header");
+		const subjectCard = h.page.el!.querySelector<HTMLElement>(".knomo-relations-subject .knomo-card")!;
+		const cardHead = subjectCard.createDiv({ cls: "knomo-card-head" });
+		cardHead.createSpan({ cls: "knomo-card-time", text: "10:00" });
+		cardHead.appendChild(subjectCard.querySelector(".knomo-card-menu")!);
+		subjectCard.prepend(cardHead);
 		const css = readFileSync("styles.css", "utf8");
 		const page = await browser.newPage();
 		for (const locale of ["zh-CN", "en"] as const) for (const theme of ["theme-light", "theme-dark", "theme-custom"]) {
@@ -175,6 +180,7 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 				await page.setContent(`<style>
 					* { box-sizing:border-box; }
 					body { margin:0; font:${font}px/1.5 Arial; --font-ui-small:${font}px; --font-ui-medium:${font}px;
+						--size-4-2:8px;
 						--text-normal:#222; --text-muted:#666; --text-accent:#6340c2; --interactive-accent:#6340c2;
 						--background-primary:#fff; --background-secondary:#eee; --background-modifier-hover:rgba(127,127,127,.14); }
 					.theme-dark { --text-normal:#eee; --text-muted:#bbb; --text-accent:#b19afa; --background-primary:#202020; }
@@ -182,10 +188,11 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 					button { font:inherit; }
 					${css}
 				</style><body class="${theme}"><main class="knomo-plugin has-memo-relations is-record-stats is-sidebar-collapsed ${width < 768 ? "is-layout-mobile" : width < 1024 ? "is-layout-desktop-narrow" : "is-layout-desktop-wide"}"
-					style="display:block;width:100%;height:100vh">
+					style="display:block;width:100%;height:100vh;--knomo-text-ui-base:${font}px">
 					<div class="knomo-topbar"><button class="knomo-record-stats-back">Back</button></div>
 					<div class="knomo-compact-header"><button class="knomo-record-stats-back">Back</button></div>
 					${h.page.el!.outerHTML}<span class="fixture-accent" style="color:var(--text-accent)"></span>
+					<div class="knomo-recent-flow-decoration knomo-recent-flow-date"><span>Today</span></div>
 				</main></body>`);
 				const actual = await page.evaluate(() => {
 					const relationPage = document.querySelector<HTMLElement>(".knomo-relations-page")!;
@@ -193,6 +200,12 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 					const row = relationPage.querySelector<HTMLElement>(".knomo-relations-section-header")!;
 					const title = row.querySelector("h3")!;
 					const back = row.querySelector<HTMLButtonElement>("button")!;
+					const listTitle = relationPage.querySelector<HTMLElement>("h3[tabindex]")!;
+					const cardMenu = relationPage.querySelector<HTMLElement>(".knomo-relations-subject .knomo-card-menu")!;
+					const textLeft = (el: HTMLElement) => {
+						const range = document.createRange(); range.selectNodeContents(el);
+						return range.getBoundingClientRect().left;
+					};
 					const reference = document.querySelector<HTMLButtonElement>(".knomo-topbar .knomo-record-stats-back")!;
 					const appearance = (el: HTMLElement) => {
 						const style = getComputedStyle(el);
@@ -200,6 +213,9 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 					};
 					const resting = appearance(back), referenceResting = appearance(reference);
 					const rect = back.getBoundingClientRect();
+					const rowRect = row.getBoundingClientRect(), titleRect = title.getBoundingClientRect();
+					const menuRect = cardMenu.getBoundingClientRect(), listStyle = getComputedStyle(listTitle);
+					const hit = document.elementFromPoint(rect.x + rect.width / 2, Math.min(rect.bottom - 1, rowRect.bottom + 1));
 					back.focus();
 					const focused = appearance(back);
 					// 移动布局会隐藏桌面标题栏，临时移出后才能比较其真实聚焦样式。
@@ -211,6 +227,11 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 					return { headerHeight: header.getBoundingClientRect().height, overflow: relationPage.scrollWidth > relationPage.clientWidth,
 						rowOverflow: row.scrollWidth > row.clientWidth, buttonWidth: rect.width, buttonHeight: rect.height,
 						buttonRight: rect.right, titleRight: title.getBoundingClientRect().right, buttonLeft: rect.left,
+						currentSpacing: [titleRect.top - rowRect.top, rowRect.bottom - titleRect.bottom],
+						listSpacing: [listStyle.paddingTop, listStyle.paddingBottom, listStyle.marginTop, listStyle.marginBottom],
+						leftOffsets: [textLeft(title), textLeft(listTitle), textLeft(document.querySelector<HTMLElement>(".knomo-recent-flow-date")!)],
+						buttonCenterOffset: rect.y + rect.height / 2 - titleRect.y - titleRect.height / 2,
+						buttonMenuRightOffset: rect.right - menuRect.right, overflowHit: hit?.closest(".knomo-relations-back") === back,
 						colors: [...relationPage.querySelectorAll("h3")].map(el => getComputedStyle(el).color),
 						accent: getComputedStyle(document.querySelector(".fixture-accent")!).color,
 						resting, referenceResting, focusedAppearance: focused, referenceFocused,
@@ -220,18 +241,24 @@ test("关联详情在中英文、主题强调色及窄屏大字体下保持标�
 				const context = JSON.stringify({ locale, theme, width, font, actual });
 				assert.equal(actual.headerHeight, 0, context);
 				assert.equal(actual.overflow || actual.rowOverflow, false, context);
+				assert.ok(Math.abs(actual.currentSpacing[0] - (width < 768 ? 8 : 10)) < 0.1, context);
+				assert.ok(Math.abs(actual.currentSpacing[1] - 8) < 0.1, context);
+				assert.deepEqual(actual.listSpacing, ["10px", "8px", "0px", "0px"], context);
+				assert.ok(actual.leftOffsets.every((left: number) => Math.abs(left - actual.leftOffsets[2]) < 0.1), context);
+				assert.deepEqual(actual.colors, [actual.accent, actual.accent], context);
 				if (width < 768) {
 					assert.equal(actual.buttonWidth, 0, context);
 					assert.equal(actual.buttonHeight, 0, context);
 					continue;
 				}
-				const buttonSize = width < 768 ? 44 : 36;
+				const buttonSize = 44;
 				assert.equal(actual.buttonWidth, buttonSize, context);
 				assert.equal(actual.buttonHeight, buttonSize, context);
 				assert.deepEqual(actual.resting, actual.referenceResting, context);
 				assert.deepEqual(actual.focusedAppearance, actual.referenceFocused, context);
 				assert.ok(actual.buttonRight <= width && actual.titleRight <= actual.buttonLeft, context);
-				assert.deepEqual(actual.colors, [actual.accent, actual.accent], context);
+				assert.ok(Math.abs(actual.buttonCenterOffset) < 0.1 && Math.abs(actual.buttonMenuRightOffset) < 0.1, context);
+				assert.equal(actual.overflowHit, true, context);
 				assert.equal(actual.focused && actual.outline === "solid" && actual.hostBacksHidden, true, context);
 			}
 		}

@@ -479,13 +479,17 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private async discoverHistoricalPeriods(fallbackToDaily: boolean): Promise<void> {
-		let ownedPeriods: string[];
+		const generation = this.configurationGeneration;
+		const isCurrent = () => !this.isStopped() && generation === this.configurationGeneration;
+		let outputHashes: Map<string, string>;
 		try {
-			ownedPeriods = await this.options.inputBuilder.listOwnedMonthlyPeriods();
+			outputHashes = await this.options.inputBuilder.readOwnedMonthlyOutputHashes();
 		} catch {
 			await this.persistCheckpoint();
 			return;
 		}
+		if (!isCurrent()) return;
+		const ownedPeriods = [...outputHashes.keys()];
 		let sourcePeriods: string[];
 		if (this.options.listCatalogPeriods === undefined) {
 			sourcePeriods = await this.options.inputBuilder.listDailyPeriods();
@@ -493,9 +497,10 @@ export class MonthlyProjectionCoordinator {
 			try {
 				sourcePeriods = await this.options.listCatalogPeriods();
 			} catch {
+				if (!isCurrent()) return;
 				if (!fallbackToDaily) {
 					await this.invalidatePeriods(
-						this.getIncompletePeriods(ownedPeriods, ownedPeriods),
+						this.getIncompletePeriods(ownedPeriods, outputHashes),
 						MONTHLY_NORMAL_PRIORITY,
 					);
 					await this.persistCheckpoint();
@@ -504,17 +509,18 @@ export class MonthlyProjectionCoordinator {
 				sourcePeriods = await this.options.inputBuilder.listDailyPeriods();
 			}
 		}
-		const missingPeriods = this.getIncompletePeriods([...sourcePeriods, ...ownedPeriods], ownedPeriods);
+		if (!isCurrent()) return;
+		const missingPeriods = this.getIncompletePeriods([...sourcePeriods, ...ownedPeriods], outputHashes);
 		this.discoveryPending = false;
 		await this.invalidatePeriods(missingPeriods, MONTHLY_NORMAL_PRIORITY);
 		await this.persistCheckpoint();
 	}
 
-	private getIncompletePeriods(periods: readonly string[], ownedPeriods: readonly string[]): string[] {
-		const ownedPeriodSet = new Set(ownedPeriods);
+	private getIncompletePeriods(periods: readonly string[], outputHashes: ReadonlyMap<string, string>): string[] {
 		return [...new Set(periods)].filter((period) =>
 			!this.pendingPeriods.has(period)
-			&& (!this.metadata.has(period) || !ownedPeriodSet.has(period)));
+			&& (!this.metadata.has(period) || !outputHashes.has(period)
+				|| this.metadata.get(period)?.outputHash !== outputHashes.get(period)));
 	}
 
 	private async loadCheckpoint(): Promise<MonthlyProjectionCheckpoint | null> {

@@ -789,7 +789,7 @@ async function useRealComposerActions(h: Awaited<ReturnType<typeof createHarness
 		getComposerEl: () => f.view.composerEl, getInputEl: () => f.view.inputEl,
 		getComposerBarEl: () => null, getReferencePreviewEl: () => null,
 		getLayout: () => "mobile", isComposerOpen: () => view.composerOpen,
-		setComposerOpen: value => { view.composerOpen = value; }, getCardFlowScrollTop: () => 0,
+		setComposerOpen: value => { view.composerOpen = value; },
 		registerBackdropClick: (element, handler) => element.addEventListener("click", handler),
 		closeComposerKeepingDraft: () => controller.closeKeepingDraft(),
 		focusInputNow: (resize, viewport, moveToEnd) => {

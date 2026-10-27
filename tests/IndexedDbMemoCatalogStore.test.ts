@@ -13,7 +13,32 @@ const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
 after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
-test("目标集合分页只取入选正文，日期计数仅扫键，搜索继续按主 Memo 匹配", async t => {
+test("稀疏目标集合的查询和计数访问量不随无关 Memo 增长", async t => {
+	for (const size of [100, 1000]) await t.test(String(size), async t => {
+		const name = uniqueDatabaseName("sparse-targets"), store = createStore(name), path = "Daily/2026-09-05.md";
+		try {
+			await store.replaceFilePartition(makePartition(path, "2026-09-05", Array.from({ length: size }, (_, i) =>
+				makeObservation(path, "2026-09-05", i + 1, "10:00", `memo ${i + 1}`))));
+			const open = FakeIndex.prototype.openKeyCursor;
+			let keyReads = 0;
+			t.mock.method(FakeIndex.prototype, "openKeyCursor", function(this: IDBIndex, ...args: Parameters<IDBIndex["openKeyCursor"]>) {
+				const request = open.apply(this, args);
+				request.addEventListener("success", () => { if (request.result) keyReads++; });
+				return request;
+			});
+			const filter = { observationKeys: [path + "\0" + "0000000001"], fromDate: "2026-09-01", toDate: "2026-09-30" };
+			const page = await store.query({ ...filter, limit: 50 });
+			assert.deepEqual(page.items.map(item => item.startLine), [1]);
+			assert.ok(keyReads <= 1, `query key reads: ${keyReads}`);
+			assert.equal(page.metrics.observationsRead, 1);
+			keyReads = 0;
+			assert.equal((await store.count(filter)).count, 1);
+			assert.ok(keyReads <= 1, `count key reads: ${keyReads}`);
+		} finally { store.close(); await deleteDatabase(name); }
+	});
+});
+
+test("小目标集合定点读取、同时间分页，搜索继续按主 Memo 匹配", async t => {
 	const name = uniqueDatabaseName("selected-targets"), store = createStore(name), path = "Daily/2026-09-05.md";
 	try {
 		await store.replaceFilePartition(makePartition(path, "2026-09-05", Array.from({ length: 200 }, (_, i) =>
@@ -27,10 +52,10 @@ test("目标集合分页只取入选正文，日期计数仅扫键，搜索继�
 			return get.apply(this, args);
 		});
 		assert.equal((await store.count(filter)).count, 3);
-		assert.equal(bodies, 0, "仅日期和目标集合的计数不能读取正文");
+		assert.equal(bodies, 3, "计数只读取有界的目标集合");
 		const first = await store.query({ ...filter, limit: 1 });
 		assert.equal(first.items[0]?.startLine, 199);
-		assert.equal(first.metrics.observationsRead, 2, "只取首条和有限预读");
+		assert.equal(first.metrics.observationsRead, 3, "排序前读取有界的目标集合");
 		const second = await store.query({ ...filter, limit: 2, cursor: first.nextCursor });
 		assert.deepEqual(second.items.map(item => item.startLine), [20, 1]);
 		assert.equal(second.nextCursor, null);
@@ -45,10 +70,10 @@ test("目标集合查询与计数取消时拒绝结果，不发布截断的已�
 		const name = uniqueDatabaseName("selected-cancel"), store = createStore(name), path = "Daily/2026-09-05.md";
 		try {
 			await store.replaceFilePartition(makePartition(path, "2026-09-05", [makeObservation(path, "2026-09-05", 1, "10:00", "memo")]));
-			const controller = new AbortController(), open = FakeIndex.prototype.openKeyCursor;
-			t.mock.method(FakeIndex.prototype, "openKeyCursor", function(this: IDBIndex, ...args: Parameters<IDBIndex["openKeyCursor"]>) {
-				const request = open.apply(this, args);
-				request.addEventListener("success", () => controller.abort());
+			const controller = new AbortController(), get = FakeObjectStore.prototype.get;
+			t.mock.method(FakeObjectStore.prototype, "get", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["get"]>) {
+				const request = get.apply(this, args);
+				if (this.name === "observations") request.addEventListener("success", () => controller.abort());
 				return request;
 			});
 			const filter = { observationKeys: [path + "\0" + "0000000001"] };
@@ -56,6 +81,44 @@ test("目标集合查询与计数取消时拒绝结果，不发布截断的已�
 				: store.count(filter, controller.signal), { name: "AbortError" });
 		} finally { store.close(); await deleteDatabase(name); }
 	});
+});
+
+test("定点查询保留字节键排序、日期筛选、去重及 revision 失效", async () => {
+	const name = uniqueDatabaseName("selected-order"), store = createStore(name), date = "2026-09-05";
+	try {
+		for (const path of ["z.md", "ä.md"]) await store.replaceFilePartition(makePartition(path, date,
+			[makeObservation(path, date, 1, "10:00", "memo", { tags: ["Work"] })]));
+		const keys = ["z.md\0" + "0000000001", "ä.md\0" + "0000000001", "missing", "missing"];
+		const filter = { observationKeys: [...keys, keys[0]!], tags: ["Work"], fromDate: date, toDate: date };
+		const first = await store.query({ ...filter, limit: 1 });
+		assert.equal(first.items[0]?.sourcePath, "ä.md");
+		const second = await store.query({ ...filter, cursor: first.nextCursor, limit: 1 });
+		assert.equal(second.items[0]?.sourcePath, "z.md");
+		assert.equal(second.nextCursor, null);
+		assert.equal((await store.count(filter)).count, 2);
+		assert.equal((await store.count({ ...filter, fromDate: "2026-09-06" })).count, 0);
+		assert.equal((await store.query({ ...filter, fromDate: "2026-09-06", toDate: "2026-09-30", limit: 1 })).items.length, 0);
+		await store.deleteFilePartition("z.md");
+		assert.equal((await store.query({ ...filter, cursor: first.nextCursor, limit: 1 })).invalidated, true);
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("大目标集合保留有界分页和不读正文的日期计数", async t => {
+	const name = uniqueDatabaseName("selected-large"), store = createStore(name), path = "Daily/2026-09-05.md", date = "2026-09-05";
+	try {
+		await store.replaceFilePartition(makePartition(path, date, Array.from({ length: 160 }, (_, i) =>
+			makeObservation(path, date, i + 1, "10:00", "memo"))));
+		const filter = { observationKeys: Array.from({ length: 160 }, (_, i) => path + "\0" + String(i + 1).padStart(10, "0")) };
+		const page = await store.query({ ...filter, limit: 2 });
+		assert.equal(page.metrics.observationsRead, 3);
+		assert.equal(page.metrics.cursorReads, 3);
+		const get = FakeObjectStore.prototype.get;
+		t.mock.method(FakeObjectStore.prototype, "get", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["get"]>) {
+			assert.notEqual(this.name, "observations");
+			return get.apply(this, args);
+		});
+		assert.equal((await store.count(filter)).count, 160);
+	} finally { store.close(); await deleteDatabase(name); }
 });
 
 test("原生计数和候选规划阶段取消均拒绝结果且不切换 fallback", async t => {

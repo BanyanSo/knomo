@@ -145,27 +145,6 @@ test("mobile segments retain their base styles while Navbar uses a uniform fill 
 					if (target) target.dataset.calls = String(Number(target.dataset.calls ?? 0) + 1);
 				});
 			});
-			const inactive = tracks.first().locator("button").nth(1);
-			await inactive.tap();
-			assert.equal(await inactive.getAttribute("data-calls"), "1", `${context}: native action is reachable once`);
-			// 用指针核对原有 hover，再移出控件，显式复位触摸后的浏览器悬停反馈。
-			await inactive.hover();
-			assert.equal(await inactive.evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0.08)", `${context}: hover keeps its base feedback`);
-			await page.mouse.move(1, 699);
-			await page.waitForFunction(() => {
-				const button = document.querySelectorAll(".knomo-time-buoy-tab")[1];
-				return getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)";
-			}, undefined, { timeout: 3000 });
-			await inactive.focus();
-			await page.keyboard.down("Space");
-			const focus = await inactive.evaluate((el: HTMLElement) => {
-				const style = getComputedStyle(el);
-				return { width: style.outlineWidth, offset: style.outlineOffset, shadow: style.boxShadow };
-			});
-			assert.equal(focus.width, "2px", context);
-			assert.equal(focus.offset, "-2px", context);
-			assert.equal(focus.shadow, "none", context);
-			await page.keyboard.up("Space");
 			const navbar = page.locator(".mobile-navbar");
 			const navPaint = await navbar.evaluate((el: HTMLElement) => {
 				const style = getComputedStyle(el);
@@ -239,6 +218,100 @@ test("mobile segments retain their base styles while Navbar uses a uniform fill 
 		assert.equal(await page.locator(".knomo-time-buoy-tab.is-active").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none", "desktop keeps its existing selected surface");
 		assert.equal(await page.locator(".knomo-time-buoy-tabs").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundImage), "none", "desktop track is unchanged");
 		assert.equal(await page.locator(".mobile-navbar").evaluate((el: HTMLElement) => getComputedStyle(el).boxShadow), "rgb(255, 0, 0) 0px 0px 2px 0px", "leaving Knomo restores the host decoration");
+	} finally { await browser.close(); }
+});
+
+function readSegmentInteractionState(button: HTMLElement) {
+	const style = getComputedStyle(button);
+	const background = style.backgroundColor;
+	const focused = document.activeElement;
+	return {
+		hover: button.matches(".knomo-time-buoy-tab:hover"), focusVisible: button.matches(".knomo-time-buoy-tab:focus-visible"), focused: focused === button,
+		pressed: button.matches(".knomo-time-buoy-tab:active"), selected: button.getAttribute("aria-selected"),
+		background, outlineWidth: style.outlineWidth, outlineOffset: style.outlineOffset, shadow: style.boxShadow,
+		calls: Number(button.dataset.calls ?? 0), pointerType: button.dataset.pointerType ?? null,
+		documentMode: document.compatMode,
+		focusedElement: focused ? `${focused.tagName}#${focused.id}.${focused.className}` : null,
+	};
+}
+
+for (const input of ["touch", "mouse", "keyboard"] as const) test(`移动分段控件 ${input} 独立验证激活、反馈与状态退出`, { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const html = await segmentHtml();
+	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	try {
+		for (const theme of ["theme-light", "theme-dark"]) {
+			// 每种输入独立页面，避免上一轮键盘焦点和触摸悬停状态污染下一轮。
+			const page = await browser.newPage({ viewport: { width: 320, height: 700 }, hasTouch: input !== "mouse", reducedMotion: "reduce" });
+			let phase = "initial";
+			const button = page.locator(".knomo-time-buoy-tab").nth(1);
+			try {
+				await page.setContent(`<!doctype html><style>${host}${css}${hostFixture}</style><body class="is-mobile ${theme}">
+					<main class="fixture-root knomo-plugin is-layout-mobile">${html}</main>
+					<button id="outside" type="button">Outside</button></body>`);
+				await page.evaluate(() => {
+					document.body.addEventListener("pointerdown", event => {
+						const target = (event.target as HTMLElement).closest<HTMLElement>(".knomo-time-buoy-tab");
+						if (target) target.dataset.pointerType = event.pointerType;
+					});
+					document.body.addEventListener("click", event => {
+						const target = (event.target as HTMLElement).closest<HTMLElement>(".knomo-time-buoy-tab");
+						if (target) target.dataset.calls = String(Number(target.dataset.calls ?? 0) + 1);
+					});
+				});
+				const outside = page.locator("#outside");
+				const assertState = async (expected: Partial<ReturnType<typeof readSegmentInteractionState>>) => {
+					const state = await button.evaluate(readSegmentInteractionState) as ReturnType<typeof readSegmentInteractionState>;
+					const actual = Object.fromEntries(Object.keys(expected).map(key => [key, state[key as keyof typeof state]]));
+					assert.deepEqual(actual, expected, `${input}/${theme}/${phase}: ${JSON.stringify(state)}`);
+				};
+				await assertState({ hover: false, focusVisible: false, focused: false, selected: "false", calls: 0, background: "rgba(0, 0, 0, 0)" });
+				if (input === "touch") {
+					phase = "tap";
+					await button.tap();
+					phase = "tap release";
+					// 浏览器可能在 click 后短暂保留触摸按压反馈，按实际状态等待释放。
+					await page.waitForFunction((el: HTMLElement) => !el.matches(".knomo-time-buoy-tab:active"), await button.elementHandle(), { timeout: 3000 });
+					await assertState({ calls: 1, pointerType: "touch", pressed: false, selected: "false" });
+					const state = await button.evaluate(readSegmentInteractionState) as ReturnType<typeof readSegmentInteractionState>;
+					await assertState({ background: state.hover || state.focusVisible ? "rgba(0, 0, 0, 0.08)" : "rgba(0, 0, 0, 0)" });
+					phase = "tap outside";
+					await outside.tap();
+				} else if (input === "mouse") {
+					phase = "hover";
+					await button.hover();
+					await assertState({ hover: true, focusVisible: false, focused: false, background: "rgba(0, 0, 0, 0.08)" });
+					phase = "leave hover";
+					await outside.hover();
+					await assertState({ hover: false, focusVisible: false, focused: false, background: "rgba(0, 0, 0, 0)" });
+					phase = "mouse click";
+					await button.click();
+					await assertState({ calls: 1, pointerType: "mouse", pressed: false, selected: "false" });
+					phase = "click outside";
+					await outside.click();
+				} else {
+					phase = "keyboard focus";
+					await page.keyboard.press("Tab");
+					// 非选中 tab 的 tabindex 为 -1；此处只验证键盘模式下的焦点样式，导航由生产交互测试覆盖。
+					await button.focus();
+					await assertState({ hover: false, focusVisible: true, focused: true, background: "rgba(0, 0, 0, 0.08)", outlineWidth: "2px", outlineOffset: "-2px", shadow: "none" });
+					phase = "keyboard activation";
+					await page.keyboard.press("Space");
+					await assertState({ calls: 1, pointerType: null, focusVisible: true, focused: true, pressed: false, selected: "false" });
+					phase = "pointer leaves while keyboard focus remains";
+					await outside.hover();
+					await assertState({ hover: false, focusVisible: true, focused: true, background: "rgba(0, 0, 0, 0.08)" });
+					phase = "focus leaves";
+					await outside.click();
+				}
+				await assertState({ hover: false, focusVisible: false, focused: false, pressed: false, calls: 1, background: "rgba(0, 0, 0, 0)" });
+			} catch (error) {
+				const state = await button.evaluate(readSegmentInteractionState).catch(() => null);
+				throw Object.assign(new Error(`${input}/${theme}/${phase}: ${JSON.stringify(state)}`), { cause: error });
+			} finally { await page.close(); }
+		}
 	} finally { await browser.close(); }
 });
 

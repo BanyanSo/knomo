@@ -891,7 +891,6 @@ export class KnomoView extends ItemView {
 				if (!open) this.composerImages?.cancelAll();
 				this.composerOpen = open;
 			},
-			getCardFlowScrollTop: () => this.getCardFlowScrollTop(),
 			registerBackdropClick: (element, handler) => {
 				this.getRenderScope().registerDomEvent(element, "click", handler);
 			},

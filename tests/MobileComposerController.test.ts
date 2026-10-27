@@ -55,7 +55,6 @@ test("opens the prepared mobile composer and focuses synchronously", () => {
 	const layer = harness.getLayer();
 	assert.equal(harness.getComposerOpen(), true);
 	assert.equal(harness.controller.getPhase(), "focusing");
-	assert.equal(harness.controller.getOpenScrollTop(), 42);
 	assert.equal(harness.controller.isLayered(), true);
 	assert.equal(layer?.hasClass("is-open"), true);
 	assert.equal(layer?.hasClass("is-active"), true);
@@ -740,7 +739,6 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		setComposerOpen: (open) => {
 			composerOpen = open;
 		},
-		getCardFlowScrollTop: () => 42,
 		registerBackdropClick: (element, handler) => {
 			backdropHandlers.push({ element, handler });
 		},

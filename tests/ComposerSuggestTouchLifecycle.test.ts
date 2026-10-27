@@ -42,7 +42,6 @@ async function fixture(kind: "tag" | "link") {
 		getInputEl: () => input, getComposerBarEl: () => view.composerEl.querySelector(".knomo-composer-bar"),
 		getReferencePreviewEl: () => view.referencePreviewEl, getLayout: () => "mobile",
 		isComposerOpen: () => view.composerOpen, setComposerOpen: open => { view.composerOpen = open; },
-		getCardFlowScrollTop: () => 0,
 		registerBackdropClick: (element, handler) => view.getRenderScope().registerDomEvent(element, "click", handler),
 		closeComposerKeepingDraft: () => view.closeComposerKeepingDraft(),
 		focusInputNow: (...args) => view.focusComposerInputNow(...args), resizeInput: () => view.resizeInput(),

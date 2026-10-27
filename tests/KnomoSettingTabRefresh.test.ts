@@ -93,17 +93,19 @@ test("标题成功在当前行持续显示影响范围，无延迟或重复通�
 	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
 	const { Notice } = await import("obsidian"); const notices = (Notice as unknown as { messages: string[] }).messages; notices.length = 0;
 	const dom = setupDom(); const root = dom.window.document.getElementById("settings")!;
-	const status = root.createDiv(); let heading = "Old";
+	const status = root.createDiv(); let heading = "Old", rebuilds = 0;
 	const tab = Object.create(KnomoSettingTab.prototype) as unknown as { saveDailyHeading(value: string): Promise<boolean> };
 	Object.assign(tab, { dailyHeadingStatusEl: status, latestSettingNoticeValues: new Map(), settingsVisible: true,
 		settingsService: { getSettings: () => ({ dailyHeading: heading }), validateDailyHeading: () => true,
 			updateSettings: async (patch: { dailyHeading: string }) => { heading = patch.dailyHeading; } },
 		refreshCurrentConfiguration: async () => {},
+		memoCommandService: { rebuildLocalCatalog: async () => { rebuilds++; } },
 		containerEl: { win: { setTimeout: () => { throw new Error("No delayed feedback"); } } },
 	});
 	await tab.saveDailyHeading("New");
 	assert.equal(heading, "New"); assert.match(status.textContent!, /only affects new memos/i);
 	assert.equal(status.getAttribute("role"), "status"); assert.deepEqual(notices, []);
+	assert.equal(rebuilds, 0, "写入标题设置不重建历史 Catalog");
 	dom.window.close();
 });
 

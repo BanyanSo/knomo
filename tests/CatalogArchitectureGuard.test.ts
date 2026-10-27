@@ -107,9 +107,8 @@ test("Daily 写入标题不参与历史读取、Catalog fingerprint 或 Monthly 
 	assert.equal(parser.includes("headings"), false);
 	assert.equal(coordinator.includes("headings"), false);
 	assert.equal(monthly.includes("headings"), false);
-	const saveDailyHeading = settingTab.slice(
-		settingTab.indexOf("private async saveDailyHeading"),
-		settingTab.indexOf("private async saveMonthlyDateHeadingFormat"),
+	const saveDailyHeading = checkedSourceSlice(
+		settingTab, "private async saveDailyHeading", "private async saveMonthlyDateHeadingFormat",
 	);
 	assert.equal(saveDailyHeading.includes("rebuildLocalCatalog"), false);
 });
@@ -153,13 +152,28 @@ test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取�
 test("普通事件和手动刷新不触发旧源导入，生产 runtime 无身份恢复队列", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	assert.doesNotMatch(main, /identityRecoveryCoordinator|snapshotRevisionTransitionQueue|reconcileIdentityLedger/u);
-	const settled = main.slice(main.indexOf("onCatalogSettled: async () =>"), main.indexOf("const markdownMutationService"));
+	const settled = checkedSourceSlice(main, "onCatalogSettled: async () =>", "const markdownMutationService");
 	assert.doesNotMatch(settled, /legacyTrashMigrationService/u);
-	const refresh = main.slice(main.indexOf("private runManualRefresh()"));
+	const refresh = checkedSourceSlice(main, "private runManualRefresh()");
 	assert.doesNotMatch(refresh, /legacyTrashMigrationService/u);
 	assert.doesNotMatch(main, /legacyTrashMigrationService\.start/u);
 	const migration = fs.readFileSync("src/services/LegacyTrashMigrationService.ts", "utf8");
 	assert.doesNotMatch(migration, /vault\.on\(|getCatalogCoverage|getObservationBatches|completionStore/u);
+});
+
+function checkedSourceSlice(source: string, startMarker: string, endMarker?: string): string {
+	const start = source.indexOf(startMarker);
+	const end = endMarker === undefined ? source.length : source.indexOf(endMarker);
+	assert.ok(start >= 0, `Missing source boundary: ${startMarker}`);
+	assert.ok(end > start, `Invalid source boundary: ${endMarker ?? "EOF"}`);
+	return source.slice(start, end);
+}
+
+test("源码守卫拒绝缺失或反序边界，不能通过空切片", () => {
+	assert.throws(() => checkedSourceSlice("end", "start", "end"));
+	assert.throws(() => checkedSourceSlice("start", "start", "end"));
+	assert.throws(() => checkedSourceSlice("end start", "start", "end"));
+	assert.throws(() => checkedSourceSlice("renamed", "private runManualRefresh()"));
 });
 
 function listFiles(root: string): string[] {

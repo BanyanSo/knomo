@@ -43,8 +43,6 @@ export interface MonthlyProjectionResult {
 	bytes: Uint8Array;
 	sourceDigest: string;
 	outputHash: string;
-	semanticHash: string;
-	outputSha256: string;
 	observationCount: number;
 }
 
@@ -133,8 +131,6 @@ export async function buildMonthlyProjection(
 		bytes,
 		sourceDigest,
 		outputHash,
-		semanticHash: sourceDigest,
-		outputSha256: outputHash,
 		observationCount: observations.length,
 	};
 }

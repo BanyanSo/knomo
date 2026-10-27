@@ -42,8 +42,6 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 	const second = await buildMonthlyProjection({ period: "2026-08", settings, observations: [earlier, later] });
 
 	assert.equal(first.content, second.content);
-	assert.equal(first.semanticHash, second.semanticHash);
-	assert.equal(first.outputSha256, second.outputSha256);
 	assert.equal(first.sourceDigest, "08ed925cc9bf21dc89eff9789fa0d5f8eb8362c10ce8db61e90a3838219b557b");
 	assert.equal(first.outputHash, "8644cf1375b8cd6663444c15bbd25d1b1d5f4339142f2e3a8ed15e0fb907eb03");
 	assert.equal(first.path, "Knomo/Memos-2026-08.md");
@@ -173,7 +171,6 @@ function makeSettings(locale = "en"): KnomoSettings & { locale: string } {
 		timeBuoyEnabled: true,
 		recentTimeFlowEnabled: true,
 		mobileCompactMode: "auto",
-		syncDebounceMs: 1000,
 		desktopSidebarWidth: 248,
 		desktopSidebarCollapsed: false,
 		excludeMonthlyMemosFromObsidian: true,

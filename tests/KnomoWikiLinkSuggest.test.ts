@@ -239,6 +239,35 @@ test("uses cached markdown files until vault events invalidate the cache", () =>
 	assert.equal(harness.getMarkdownFilesCount, 2);
 });
 
+test("相同查询复用候选计算，文件事件和查询变化重新计算", () => {
+	let reads = 0;
+	const file = makeFile("Projects/Alpha.md");
+	Object.defineProperty(file, "basename", { configurable: true, get: () => { reads++; return "Alpha"; } });
+	const harness = createHarness([file]);
+	harness.input.value = "[[Al]]";
+	harness.input.setSelectionRange(4, 4);
+	harness.suggest.openForCurrentRange();
+	const initialReads = reads;
+	for (let i = 0; i < 5; i++) harness.suggest.refreshForCursor();
+	assert.equal(reads, initialReads, "光标刷新不重新遍历候选");
+	harness.input.value = "[[A]]";
+	harness.input.setSelectionRange(3, 3);
+	harness.suggest.refreshForCursor();
+	assert.ok(reads > initialReads);
+	for (const event of ["create", "delete", "rename"]) {
+		const before = reads;
+		harness.emitVaultEvent(event);
+		assert.ok(reads > before, event);
+	}
+	harness.input.value = "[[missing]]";
+	harness.input.setSelectionRange(9, 9);
+	harness.suggest.openForCurrentRange();
+	const emptyReads = reads;
+	harness.suggest.openForCurrentRange();
+	assert.equal(reads, emptyReads, "无匹配结果也复用计算");
+	harness.suggest.destroy();
+});
+
 test("positions WikiLink popover at the current Composer input cursor", () => {
 	const harness = createHarness([makeFile("Projects/Alpha.md")]);
 	harness.win.innerWidth = 800;
@@ -252,6 +281,21 @@ test("positions WikiLink popover at the current Composer input cursor", () => {
 	const style = (popover as unknown as FakeElement).style.values;
 	assert.equal(style.get("--knomo-suggest-left"), "52px");
 	assert.equal(style.get("--knomo-suggest-top"), "318px");
+});
+
+test("文件事件后相同列表保留选择并更新文件对象", () => {
+	const files = [makeFile("Projects/Alpha.md"), makeFile("Projects/Beta.md")];
+	const harness = createHarness(files);
+	harness.input.value = "[[]]";
+	harness.input.setSelectionRange(2, 2);
+	harness.suggest.openForCurrentRange();
+	harness.suggest.handleKeydown(createKeyboardEvent("ArrowDown"));
+	const replacement = files[1] = makeFile("Projects/Beta.md");
+	harness.emitVaultEvent("create");
+	assert.equal(harness.suggest.getSelectedIndex(), 1);
+	harness.suggest.handleKeydown(createKeyboardEvent("Enter"));
+	assert.equal(harness.fileToLinktextCalls[0]?.file, replacement);
+	harness.suggest.destroy();
 });
 
 interface HarnessOptions {

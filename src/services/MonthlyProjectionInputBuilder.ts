@@ -5,7 +5,7 @@ import type { CatalogInventoryEntry, MemoObservation } from "../types/catalog";
 import { formatDatePart } from "../utils/date";
 import { parseDailyNoteDateFromPath } from "../utils/dailyNotes";
 import { canonicalJson } from "./CanonicalJson";
-import { sha256Text } from "../utils/sha256";
+import { sha256Bytes, sha256Text } from "../utils/sha256";
 import {
 	getMonthlyArchivePath,
 	getMonthlyCanonicalPeriod,
@@ -75,12 +75,25 @@ export class MonthlyProjectionInputBuilder {
 		const settings = this.getSettings();
 		const periods: string[] = [];
 		for (const file of this.listMonthlyFiles(settings)) {
-			const monthlyPeriod = getMonthlyCanonicalPeriod(settings, file.path);
-			if (monthlyPeriod === null) continue;
-			const content = await this.app.vault.cachedRead(file);
-			if (hasKnomoMonthlyArchiveMarker(content)) periods.push(monthlyPeriod);
+			const period = getMonthlyCanonicalPeriod(settings, file.path);
+			if (period === null) continue;
+			if (hasKnomoMonthlyArchiveMarker(await this.app.vault.cachedRead(file))) periods.push(period);
 		}
 		return [...new Set(periods)].sort();
+	}
+
+	async readOwnedMonthlyOutputHashes(): Promise<Map<string, string>> {
+		const settings = this.getSettings();
+		const hashes = new Map<string, string>();
+		for (const file of this.listMonthlyFiles(settings)) {
+			const monthlyPeriod = getMonthlyCanonicalPeriod(settings, file.path);
+			if (monthlyPeriod === null) continue;
+			const bytes = new Uint8Array(await this.app.vault.readBinary(file));
+			if (hasKnomoMonthlyArchiveMarker(new TextDecoder().decode(bytes))) {
+				hashes.set(monthlyPeriod, await sha256Bytes(bytes));
+			}
+		}
+		return hashes;
 	}
 
 	async build(period: string, runtime?: CooperativeTaskRuntime): Promise<MonthlyProjectionBuildResult> {

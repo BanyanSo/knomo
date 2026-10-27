@@ -169,7 +169,8 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 		"with-image": "filter.withImage", anniversary: "filter.anniversary", review: "nav.review", random: "nav.random", shuffleDay: "nav.shuffleDay",
 	};
 	const actionKeys: Record<string, TranslationKey> = {
-		edit: "card.edit", reference: "card.reference", "open-daily": "card.openDaily", "copy-text": "card.copyText", "copy-link": "card.copyLink", delete: "card.delete",
+		edit: "card.edit", reference: "card.reference", "open-daily": "card.openDaily", relations: "relations.title",
+		"copy-text": "card.copyText", "copy-link": "card.copyLink", delete: "card.delete",
 	};
 	const css = readFileSync("styles.css", "utf8");
 	const hostCss = process.env.KNOMO_HOST_CSS ? readFileSync(process.env.KNOMO_HOST_CSS, "utf8") : "";
@@ -202,7 +203,12 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 						},
 					});
 					for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-title-mode]"))) el.querySelector(".knomo-button-label")!.textContent = scopeLabels[el.dataset.titleMode!];
-					for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-memo-action]"))) el.querySelector(".knomo-menu-label")!.textContent = actionLabels[el.dataset.memoAction!];
+					for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-memo-action]"))) {
+						const label = actionLabels[el.dataset.memoAction!];
+						if (!label?.trim()) throw new Error(`Missing menu label: ${el.dataset.memoAction}`);
+						el.querySelector(".knomo-menu-label")!.textContent = label;
+						el.setAttribute("aria-label", label);
+					}
 					document.querySelector(".knomo-card-word-count .knomo-menu-label")!.textContent = wordCount;
 					for (const el of Array.from(document.querySelectorAll(".knomo-menu-icon, .knomo-button-icon"))) el.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 12h16" stroke="currentColor"/></svg>';
 				}, { scopeLabels: Object.fromEntries(Object.entries(scopeKeys).map(([key, label]) => [key, translate(locale, label)])), actionLabels: Object.fromEntries(Object.entries(actionKeys).map(([key, label]) => [key, translate(locale, label)])), wordCount: translate(locale, "card.wordCount", { count: 123456789 }) });
@@ -227,6 +233,9 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 						const lastStartReachable = last.getBoundingClientRect().top >= menu.getBoundingClientRect().top - 1;
 						menu.scrollTop = menu.scrollHeight;
 						return {
+							actions: rows.map(el => el.dataset.memoAction),
+							labels: rows.map(el => el.querySelector(".knomo-menu-label, .knomo-button-label")?.textContent?.trim() ?? ""),
+							accessibleLabels: rows.map(el => el.getAttribute("aria-label")),
 							within: rect.left >= bound.left + 7 && rect.right <= bound.right - 7 && rect.top >= bound.top + 7 && rect.bottom <= bound.bottom - 7,
 							width: rect.width, boundWidth: bound.width,
 							icons: icons.length, iconsVisible: icons.every(el => el.getBoundingClientRect().width === 16 && el.getBoundingClientRect().height === 16 && el.getAttribute("aria-hidden") === "true"),
@@ -242,7 +251,14 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					const context = `${theme}/${font}/${scale}/${locale}/${width}/${kind}`;
 					assert.equal(result.within, true, context);
 					assert.equal(result.width, Math.min(168, result.boundWidth - 16), context);
-					assert.equal(result.icons, kind === "scope" ? 9 : 7, context);
+					assert.equal(result.icons, kind === "scope" ? 9 : 8, context);
+					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
+					if (kind === "card") {
+						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all seven actions remain in order`);
+						const labels = Object.values(actionKeys).map(key => translate(locale, key));
+						assert.deepEqual(result.labels, labels, `${context}: translated labels include relations`);
+						assert.deepEqual(result.accessibleLabels, labels, `${context}: accessible names match visible text`);
+					}
 					assert.equal(result.iconsVisible, true, context);
 					assert.equal(result.iconsAligned, true, context);
 					assert.equal(result.rowsFit, true, context);

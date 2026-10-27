@@ -23,7 +23,6 @@ export interface KnomoSettings {
 	timeBuoyIntroDismissed?: boolean;
 	mobileCompactMode: MobileCompactMode;
 	reduceGlassEffects?: boolean;
-	syncDebounceMs: number;
 	desktopSidebarWidth: number;
 	desktopSidebarCollapsed: boolean;
 	excludeMonthlyMemosFromObsidian: boolean;

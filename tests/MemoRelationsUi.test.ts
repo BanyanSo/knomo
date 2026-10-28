@@ -919,6 +919,119 @@ test("普通卡片在 0、1、3、10 个引用者下完整展示摘要，热刷�
 	} finally { h.close(); }
 });
 
+test("日记外部连续保存期间被引用摘要保持占位，当前关系确认后恢复操作并移除已删除关系", async () => {
+	const h = await fixture(true);
+	try {
+		const { createMemoRenderPlaceholders } = await import("../src/ui/MemoRenderPlaceholder");
+		let nodes = await h.seed("D.md", "- 10:00 target ^a\n- 11:00 ref [[#^a]]\n- 12:00 other\n");
+		let memo = await h.memo(nodes[0]);
+		let card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, memo); await settle(); await settle();
+		for (let save = 0; save < 2; save++) {
+			const seed = createMemoRenderPlaceholders([{ memo, card }]);
+			nodes = await h.seed("D.md", `- 10:00 target ^a\n- 11:00 ref [[#^a]]\n- 12:00 other ${save}\n`);
+			memo = await h.memo(nodes[0]);
+			h.cards!.release(card); card.remove();
+			card = h.host.createEl("article", { cls: "knomo-card" });
+			seed(memo, card); h.cards!.observe(card, memo);
+			const placeholder = card.querySelector<HTMLElement>(".knomo-memo-referrers")!;
+			assert.ok(placeholder, "新卡片首帧即保留被引用摘要和高度");
+			assert.equal(placeholder.textContent, "2026-10-25ref");
+			assert.ok(placeholder.hasAttribute("inert"));
+			assert.equal(placeholder.querySelector("button")!.disabled, true);
+			assert.equal(placeholder.querySelector("[data-relation-target]"), null);
+			const pendingButton = placeholder.querySelector<HTMLButtonElement>("button")!;
+			const pendingText = pendingButton.querySelector(".knomo-referrer-summary")!.firstChild;
+			await settle(); await settle();
+			const button = card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!;
+			assert.equal(card.querySelector(".knomo-memo-referrers"), placeholder);
+			assert.equal(button, pendingButton);
+			assert.equal(button.querySelector(".knomo-referrer-summary")!.firstChild, pendingText);
+			assert.equal(button.disabled, false);
+			assert.equal(button.closest("[inert]"), null);
+			assert.equal(button.dataset.relationTarget, observationHandleKey(nodes[1]));
+			button.click(); await settle();
+			assert.equal(h.page.el!.querySelector<HTMLElement>(".knomo-relations-subject")!.dataset.subject, memo.id);
+			h.page.back();
+		}
+		await h.seed("D.md", "- 10:00 target ^a\n- 11:00 ref without link\n");
+		const current = await h.catalog.listFiles();
+		const handle = current[0].relations!.nodes[0].handle;
+		memo = await h.memo(handle); h.cards!.observe(card, memo);
+		await settle(); await settle();
+		assert.equal(card.querySelector(".knomo-memo-referrers"), null);
+	} finally { h.close(); }
+});
+
+test("被引用行刷新在宿主禁用样式下保持相同文字外观", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await fixture(true);
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ headless: true, channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge" });
+	try {
+		const { createMemoRenderPlaceholders } = await import("../src/ui/MemoRenderPlaceholder");
+		const before = await h.seed("D.md", "- 10:00 target ^a\n- 11:00 被引用的摘要 ref [[#^a]]\n- 12:00 other\n");
+		const memo = await h.memo(before[0]);
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, memo); await settle(); await settle();
+		const initial = card.outerHTML;
+		const seed = createMemoRenderPlaceholders([{ memo, card }]);
+		const after = await h.seed("D.md", "- 10:00 target ^a\n- 11:00 被引用的摘要 ref [[#^a]]\n- 12:00 edited\n");
+		h.cards!.release(card); card.remove();
+		const next = h.host.createEl("article", { cls: "knomo-card" });
+		const current = await h.memo(after[0]); seed(current, next);
+		const pending = next.outerHTML;
+		h.cards!.observe(next, current); await settle(); await settle();
+		const ready = next.outerHTML;
+		const page = await browser.newPage();
+		const css = readFileSync("styles.css", "utf8");
+		for (const theme of ["theme-light", "theme-dark", "theme-custom"]) for (const width of [320, 1024]) {
+			await page.setViewportSize({ width, height: 300 });
+			await page.setContent(`<style>
+				body { margin:0; font:14px/1.5 Arial; --text-faint:#777; --text-muted:#555; --font-normal:400; background:#fff; }
+				.theme-dark { --text-faint:#aaa; --text-muted:#ccc; background:#222; }
+				.theme-custom { --text-faint:#876548; --text-muted:#654321; font-family:Georgia; background:#f8f2e7; }
+				button { font:inherit; } button:disabled { opacity:0.4; }
+				${css}
+			</style><body class="${theme}"><main id="fixture" class="knomo-plugin" style="display:block;width:100%;--knomo-text-meta:14px"></main></body>`);
+			await page.mouse.move(0, 299);
+			const appearances = [], pixels = [];
+			for (const html of [initial, pending, ready]) {
+				await page.evaluate((value: string) => { document.getElementById("fixture")!.innerHTML = value; }, html);
+				appearances.push(await page.locator(".knomo-referrer-preview").evaluate((button: HTMLElement) => {
+					const style = getComputedStyle(button), rect = button.getBoundingClientRect();
+					return [style.opacity, style.color, style.fontFamily, style.fontSize, style.fontWeight, style.lineHeight, rect.width, rect.height];
+				}));
+				pixels.push(await page.locator(".knomo-memo-referrers").screenshot());
+			}
+			const context = JSON.stringify({ theme, width, appearances });
+			assert.deepEqual(appearances[1], appearances[0], context);
+			assert.deepEqual(appearances[2], appearances[0], context);
+			assert.ok(pixels[0].equals(pixels[1]) && pixels[0].equals(pixels[2]), context);
+		}
+	} finally { await browser.close(); h.close(); }
+});
+
+test("引用者文件其它内容保存后相同摘要保留 DOM 与焦点，摘要真实改变仍更新", async () => {
+	const h = await fixture(true);
+	try {
+		const [a] = await h.seed("A.md", "- 10:00 target ^a\n");
+		await h.seed("B.md", "- 11:00 ref [[A#^a]]\n- 12:00 other\n");
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, await h.memo(a)); await settle(); await settle();
+		const region = card.querySelector(".knomo-memo-referrers");
+		const button = card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!; button.focus();
+		const nodes = await h.seed("B.md", "- 11:00 ref [[A#^a]]\n- 12:00 other edited\n");
+		await settle(); await settle();
+		assert.equal(card.querySelector(".knomo-memo-referrers"), region);
+		assert.equal(h.win.document.activeElement, button);
+		assert.equal(button.dataset.relationTarget, observationHandleKey(nodes[0]));
+		await h.seed("B.md", "- 11:00 new summary [[A#^a]]\n"); await settle(); await settle();
+		assert.equal(card.querySelector(".knomo-referrer-summary")!.textContent, "new summary");
+		await h.seed("B.md", "- 11:00 no link\n"); await settle(); await settle();
+		assert.equal(card.querySelector(".knomo-memo-referrers"), null);
+	} finally { h.close(); }
+});
+
 test("卡片与详情复用分钟秒归一化及同时间稳定排序", async () => {
 	const h = await fixture(true);
 	try {

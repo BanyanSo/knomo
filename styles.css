@@ -5416,6 +5416,10 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	white-space: nowrap;
 	cursor: pointer;
 }
+/* 刷新占位仅暂停交互，不能随宿主禁用样式变淡。 */
+.knomo-plugin .knomo-memo-referrers[data-knomo-render-placeholder] button.knomo-referrer-preview:disabled {
+	opacity: 1;
+}
 .knomo-plugin .knomo-referrer-date { flex: 0 0 auto; }
 .knomo-plugin .knomo-referrer-summary {
 	flex: 1 1 auto;

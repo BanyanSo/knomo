@@ -5,15 +5,35 @@ export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewI
 	const selectors = [".knomo-card-content", ".knomo-source-reference-content"] as const;
 	const snapshots = new Map<string, (HTMLElement | null)[]>();
 	const key = (memo: MemoViewItem) => JSON.stringify([memo.dailyRef.path, memo.contentSnapshot]);
+	const referrers = new Map<string, HTMLElement>();
+	// 行位置只用于本次重绘的静态占位，不授予 occurrence 身份或操作权限。
+	const referrerKey = (memo: MemoViewItem) => JSON.stringify([key(memo), memo.dailyRef.lineNumberHint,
+		memo.catalog?.observationHandle.rawBlockHash]);
 	for (const { memo, card } of entries) {
 		const sections = selectors.map(selector => {
 			const section = card.querySelector<HTMLElement>(selector);
 			return section && section.childNodes.length > 0 ? section : null;
 		});
 		if (sections.some(section => section !== null)) snapshots.set(key(memo), sections);
+		const region = card.querySelector<HTMLElement>(".knomo-memo-referrers");
+		if (region) referrers.set(referrerKey(memo), region);
 	}
 	return (memo: MemoViewItem, card: HTMLElement): void => {
 		const previousSections = snapshots.get(key(memo));
+		const previousReferrers = referrers.get(referrerKey(memo));
+		if (previousReferrers && !card.querySelector(".knomo-memo-referrers") && !card.closest(".knomo-relations-page")) {
+			const snapshot = previousReferrers.cloneNode(true) as HTMLElement;
+			snapshot.setAttribute("data-knomo-render-placeholder", "");
+			snapshot.setAttribute("inert", "");
+			snapshot.dataset.stale = "true";
+			snapshot.removeAttribute("data-preview-signature");
+			// 克隆不携带监听器，且不能以旧目标响应键盘、指针或委托事件。
+			for (const element of Array.from(snapshot.querySelectorAll<HTMLElement>("*"))) {
+				for (const attribute of ["data-relation-target", "data-relation-action", "data-memo-id", "data-knomo-memo-id", "data-action"]) element.removeAttribute(attribute);
+			}
+			for (const button of Array.from(snapshot.querySelectorAll("button"))) button.disabled = true;
+			card.appendChild(snapshot);
+		}
 		if (!previousSections) return;
 		for (const [index, selector] of selectors.entries()) {
 			const previous = previousSections[index];

@@ -161,9 +161,22 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 		return;
 	}
 	const signature = relationCardSignature(snapshot, memo);
+	// 安全校验仍使用完整句柄；只有已读取的日期和摘要相同才复用展示。
+	const visualSignature = incoming.every(node => summaries.has(observationHandleKey(node.handle)))
+		? JSON.stringify(incoming.map(node => [node.logicalDate, summaries.get(observationHandleKey(node.handle))])) : undefined;
+	const placeholder = old?.hasAttribute("data-knomo-render-placeholder") === true;
 
-	if (old?.dataset.previewSignature === signature) {
-		for (const button of Array.from(old.querySelectorAll<HTMLElement>(".knomo-referrer-preview"))) viewHandles.set(button, memo.catalog!.observationHandle);
+	if (old && (!placeholder && old.dataset.previewSignature === signature
+		|| visualSignature !== undefined && old.dataset.visualSignature === visualSignature)) {
+		for (const [index, button] of Array.from(old.querySelectorAll<HTMLButtonElement>(".knomo-referrer-preview")).entries()) {
+			// 占位克隆没有旧监听器；通过本次校验后在原节点绑定当前操作。
+			if (placeholder) { bindReferrerPreview(button, memo.catalog!.observationHandle, open); button.disabled = false; }
+			viewHandles.set(button, memo.catalog!.observationHandle);
+			button.dataset.relationTarget = observationHandleKey(incoming[index].handle);
+			button.dataset.relationAction = "preview";
+		}
+		if (placeholder) { old.removeAttribute("inert"); old.removeAttribute("data-knomo-render-placeholder"); }
+		old.dataset.previewSignature = signature;
 		old.toggleAttribute("data-stale", !snapshot.complete);
 		return;
 	}
@@ -171,6 +184,7 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 	region.className = "knomo-memo-referrers knomo-card-meta";
 	region.setAttribute("aria-label", t("relations.heading"));
 	region.dataset.previewSignature = signature;
+	if (visualSignature !== undefined) region.dataset.visualSignature = visualSignature;
 	if (!snapshot.complete) region.dataset.stale = "true";
 	for (const node of incoming) {
 		const summary = summaries.get(observationHandleKey(node.handle));
@@ -183,11 +197,7 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 		setIcon(icon, "message-square-reply");
 		button.createEl("time", { cls: "knomo-referrer-date", text: date, attr: { datetime: date } });
 		button.createSpan({ cls: "knomo-referrer-summary", text });
-		viewHandles.set(button, memo.catalog!.observationHandle);
-		button.addEventListener("click", event => {
-			event.stopPropagation();
-			void open(viewHandles.get(button)!, button, isKeyboardActivation(event));
-		});
+		bindReferrerPreview(button, memo.catalog!.observationHandle, open);
 	}
 	const active = focused ? card.ownerDocument.activeElement as HTMLElement : null;
 	const focusVisible = !active?.hasAttribute("data-knomo-pointer-focus");
@@ -195,4 +205,13 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 	if (old) old.replaceWith(region); else card.appendChild(region);
 	if (focused) focusForNavigation(Array.from(region.querySelectorAll<HTMLElement>("button")).find(button => button.dataset.relationTarget === target
 		&& button.dataset.relationAction === action) ?? region.querySelector<HTMLElement>("button")!, focusVisible);
+}
+
+function bindReferrerPreview(button: HTMLElement, handle: ObservationHandle,
+	open: (handle: ObservationHandle, trigger: HTMLElement, focusVisible: boolean) => Promise<void>): void {
+	viewHandles.set(button, handle);
+	button.addEventListener("click", event => {
+		event.stopPropagation();
+		void open(viewHandles.get(button)!, button, isKeyboardActivation(event));
+	});
 }

@@ -60,3 +60,32 @@ test("重建期间保留已渲染来源的格式，不复用旧来源交互或�
 	seed(memo, ready); assert.equal(ready.querySelector(".knomo-source-reference-content")!.textContent, "当前来源");
 	dom.window.close();
 });
+
+test("同文 occurrence 的被引用占位独立，连续重建仍不可操作且不覆盖新结果", () => {
+	const dom = new JSDOM("<body></body>");
+	const document = dom.window.document;
+	const memo = (lineNumberHint: number) => ({ id: `old-${lineNumberHint}`, contentSnapshot: "same",
+		dailyRef: { path: "Daily.md", lineNumberHint } } as MemoViewItem);
+	const old = (text: string) => {
+		const card = document.createElement("article");
+		card.innerHTML = `<section class="knomo-memo-referrers knomo-card-meta" data-preview-signature="old"><button class="knomo-referrer-preview" data-relation-target="old" data-relation-action="preview">${text}</button></section>`;
+		return card;
+	};
+	const first = old("first ref"), second = old("second ref");
+	let clicks = 0; first.querySelector("button")!.addEventListener("click", () => clicks++);
+	const seed = createMemoRenderPlaceholders([{ memo: memo(1), card: first }, { memo: memo(2), card: second }]);
+	for (const [line, text] of [[1, "first ref"], [2, "second ref"]] as const) {
+		const target = document.createElement("article"); seed({ ...memo(line), id: "new" }, target);
+		assert.equal(target.textContent, text);
+		assert.ok(target.querySelector(".knomo-memo-referrers[inert][data-stale]"));
+		assert.equal(target.querySelector("[data-preview-signature], [data-relation-target], [data-relation-action]"), null);
+		target.querySelector("button")!.click(); assert.equal(clicks, 0);
+		const next = document.createElement("article");
+		createMemoRenderPlaceholders([{ memo: memo(line), card: target }])(memo(line), next);
+		assert.equal(next.textContent, text);
+		assert.equal(next.querySelector("button")!.disabled, true);
+	}
+	const ready = old("fresh"); seed(memo(1), ready); assert.equal(ready.textContent, "fresh");
+	const shifted = document.createElement("article"); seed(memo(3), shifted); assert.equal(shifted.textContent, "");
+	dom.window.close();
+});

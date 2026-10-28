@@ -1,9 +1,9 @@
 export const zhCN = {
 	"share.title": "分享图片",
-	"share.paper": "素笺",
-	"share.editorial": "观照",
-	"share.calendar": "日历",
-	"share.ink": "墨笺",
+	"share.paper": "素页",
+	"share.reflection": "观照",
+	"share.daybook": "日序",
+	"share.midnight": "墨夜",
 	"share.share": "分享",
 	"share.copy": "复制",
 	"share.save": "保存",

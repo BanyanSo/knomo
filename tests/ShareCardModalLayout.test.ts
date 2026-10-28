@@ -57,7 +57,7 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 				const writes = (window as any).vaultWrites = [] as string[];
 				const snapshot = api.createShareCardSnapshot({ contentSnapshot: ("完整长文，保留本来的顺序与段落。Emoji 🌱 EnglishLongTextWithoutSpacesForWrapping。\n\n").repeat(45), createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/today.md" } }, "zh-CN");
 				const modal = (window as any).shareModal = new api.KnomoShareCardModal({ vault: {
-					getAbstractFileByPath: (path: string) => path === "Memo-2026-10-27.png" || writes.includes(path) ? {} : null,
+					getAbstractFileByPath: (path: string) => path === "Knomo-20261027-083000.png" || writes.includes(path) ? {} : null,
 					createBinary: async (path: string) => { writes.push(path); },
 				} }, {
 					loadSnapshot: async () => { state.reads++; return snapshot; }, loadImage: async () => { throw Error("unexpected image"); },
@@ -68,6 +68,7 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			assert.equal(await page.locator(".knomo-share-status").textContent(), "");
 			assert.equal(await page.getByRole("button", { name: "Retry", exact: true }).count(), 0);
 			assert.equal(await page.locator(".knomo-share-templates > button").count(), 4);
+			assert.deepEqual(await page.locator(".knomo-share-templates > button").allTextContents(), ["Paper", "Daybook", "Reflection", "Midnight"]);
 			assert.ok(await page.locator(".knomo-share-templates > button").evaluateAll((buttons: HTMLElement[]) => buttons.every(button => {
 				const decoration = getComputedStyle(button, "::after").content;
 				return decoration === "none" || decoration === "normal" || decoration === '""';
@@ -106,10 +107,10 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			assert.ok(geometry.buttonCursors.every((cursor: string) => cursor === "pointer"));
 			assert.equal(await page.locator(".knomo-share-close[aria-label], .knomo-share-preview[aria-label], .knomo-share-templates[aria-label]").count(), 0);
 			assert.equal(await page.locator(".knomo-share-preview > img").getAttribute("alt"), "");
-			await page.locator('[data-template="editorial"]').click();
-			await page.locator('[data-template="calendar"]').click();
+			await page.locator('[data-template="reflection"]').click();
+			await page.locator('[data-template="daybook"]').click();
 			await page.locator(".knomo-share-preview > img").waitFor();
-			assert.equal(await page.locator('[data-template="calendar"]').getAttribute("aria-pressed"), "true");
+			assert.equal(await page.locator('[data-template="daybook"]').getAttribute("aria-pressed"), "true");
 			assert.equal(await page.evaluate(() => (window as any).shareModalState.reads), 1);
 			if (width === 1100 && theme === "theme-light") {
 				// 重新探测时才显示图片剪贴板接口，操作拒绝不清除已生成的 PNG。
@@ -129,10 +130,17 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 				assert.equal(await page.locator(".knomo-share-status").textContent(), "");
 				assert.equal(await page.locator(".knomo-share-status").evaluate((el: HTMLElement) => el.classList.contains("is-error")), false);
 				const downloadEvent = page.waitForEvent("download"); await page.getByRole("button", { name: "Save", exact: true }).click();
-				const download = await downloadEvent; assert.equal(download.suggestedFilename(), "Memo-2026-10-27.png");
+				const download = await downloadEvent; assert.equal(download.suggestedFilename(), "Knomo-20261027-083000.png");
 				assert.equal(await page.locator(".knomo-share-status").textContent(), "");
 				await download.saveAs(".tmp/share-card-samples/modal-download.png");
 				assert.deepEqual(Array.from(readFileSync(".tmp/share-card-samples/modal-download.png").subarray(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
+				const previewBytes = await page.evaluate(async () => {
+					const modal = (window as any).shareModal;
+					const preview = await (await fetch(document.querySelector<HTMLImageElement>(".knomo-share-preview > img")!.src)).arrayBuffer();
+					return { preview: Array.from(new Uint8Array(preview)), file: Array.from(new Uint8Array(await modal.file.arrayBuffer())) };
+				});
+				assert.deepEqual(previewBytes.preview, previewBytes.file);
+				assert.deepEqual(Array.from(readFileSync(".tmp/share-card-samples/modal-download.png")), previewBytes.file);
 				await page.screenshot({ path: ".tmp/share-card-samples/modal-desktop.png" });
 			}
 			if (width === 390 && theme === "theme-light") {
@@ -140,7 +148,12 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 				await page.evaluate(() => {
 					let calls = 0;
 					Object.defineProperty(navigator, "canShare", { configurable: true, value: () => true });
-					Object.defineProperty(navigator, "share", { configurable: true, value: () => ++calls === 1 ? Promise.reject(new DOMException("cancel", "AbortError")) : calls === 2 ? Promise.reject(Error("unavailable")) : Promise.resolve() });
+					(window as any).sharedFiles = [];
+					Object.defineProperty(navigator, "share", { configurable: true, value: ({ files }: { files: File[] }) => {
+						if (files[0] !== (window as any).shareModal.file) throw Error("share must use the ready PNG File");
+						(window as any).sharedFiles.push(files[0].name);
+						return ++calls === 1 ? Promise.reject(new DOMException("cancel", "AbortError")) : calls === 2 ? Promise.reject(Error("unavailable")) : Promise.resolve();
+					} });
 				});
 				await page.locator('[data-template="paper"]').click(); await page.locator(".knomo-share-preview > img").waitFor();
 				await page.getByRole("button", { name: "Share", exact: true }).click();
@@ -155,9 +168,10 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 					assert.equal(await page.evaluate(() => (window as any).vaultWrites.length), attempt + 1);
 					assert.equal(await page.locator(".knomo-share-status").evaluate((el: HTMLElement) => el.classList.contains("is-error")), false);
 				}
-				assert.deepEqual(await page.evaluate(() => (window as any).vaultWrites), ["Memo-2026-10-27-1.png", "Memo-2026-10-27-2.png"]);
+				assert.deepEqual(await page.evaluate(() => (window as any).vaultWrites), ["Knomo-20261027-083000-2.png", "Knomo-20261027-083000-3.png"]);
 				await page.getByRole("button", { name: "Share", exact: true }).click();
 				assert.equal(await page.locator(".knomo-share-status").textContent(), "");
+				assert.deepEqual(await page.evaluate(() => (window as any).sharedFiles), Array(3).fill("Knomo-20261027-083000.png"));
 			}
 			await page.locator(".knomo-share-close").click();
 			assert.equal(await page.locator("iframe").count(), 0);
@@ -192,7 +206,7 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			await page.locator(".knomo-share-status:not(:empty)").waitFor();
 			if (mode === "stale") {
 				assert.equal(await page.locator(".knomo-share-templates button:not(:disabled)").count(), 0);
-				await page.evaluate(() => (window as any).failureModal.select("ink"));
+				await page.evaluate(() => (window as any).failureModal.select("midnight"));
 				assert.equal(await page.evaluate(() => (window as any).failureState.reads), 1);
 			} else {
 				await page.locator('[data-template="paper"]').click();

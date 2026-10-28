@@ -9,9 +9,44 @@ import { ShareCardSession } from "../src/ui/share/ShareCardSession";
 import { checkShareCardDimensions } from "../src/ui/share/ShareCardRenderer";
 import { getShareCardCapabilities, outputShareCard, shareCardFile } from "../src/ui/share/ShareCardOutput";
 import { shareCardImageDimensions } from "../src/ui/share/ShareCardImageDimensions";
+import { zhCN } from "../src/i18n/zh-CN";
+import { en } from "../src/i18n/en";
 
 const memo = (content: string, time = "08:30") => createCardMemo({ contentSnapshot: content, createdAt: "2026-10-27T" + time });
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("template names and content/date order distinguish the four layouts without inventing headings", () => {
+	assert.deepEqual(SHARE_CARD_TEMPLATES.map(template => [zhCN[`share.${template.id}`], en[`share.${template.id}`]]),
+		[["素页", "Paper"], ["日序", "Daybook"], ["观照", "Reflection"], ["墨夜", "Midnight"]]);
+	const snapshot = createShareCardSnapshot(memo("第一句保持普通正文。\n原有换行。\n\n第二段只有 **这里加粗**。"), "zh-CN");
+	for (const template of SHARE_CARD_TEMPLATES) {
+		const card = renderShareCard(new JSDOM().window.document, snapshot, template.id, new Map(), "data:image/png;base64,AA==");
+		const expected = template.id === "midnight" ? ["meta midnight-time", "content", "share-brand"]
+			: template.id === "reflection" ? ["hero", "content", "meta reflection-time", "share-brand"]
+			: template.id === "daybook" ? ["date-head", "content", "share-brand"] : ["meta paper-time", "content", "share-brand"];
+		assert.deepEqual(Array.from(card.children, el => el.className), expected);
+		assert.equal(card.querySelectorAll(".content > p").length, 2);
+		assert.equal(card.querySelectorAll(".content br").length, 1);
+		assert.equal(card.querySelector(".content strong")!.textContent, "这里加粗");
+		assert.equal(card.querySelectorAll(".content strong").length, 1);
+		assert.equal(card.querySelectorAll("h1,h2,h3,h4,h5,h6").length, 0);
+	}
+});
+
+test("export names use frozen Memo date and precision, including minute-only and midnight records", () => {
+	for (const [createdAt, expected] of [
+		["2026-10-27T14:30:25", "Knomo-20261027-143025.png"],
+		["2026-10-27T08:30", "Knomo-20261027-083000.png"],
+		["2024-02-29T00:00", "Knomo-20240229-000000.png"],
+		["2024-12-31T23:59:59", "Knomo-20241231-235959.png"],
+	]) {
+		const selected = { ...memo("正文"), createdAt };
+		const snapshot = createShareCardSnapshot(selected, "zh-CN");
+		selected.createdAt = "2030-01-01T12:00:00";
+		assert.equal(snapshot.time, createdAt.slice(11));
+		assert.equal(shareCardFile(new Blob(["same PNG"]), snapshot, { File } as unknown as Window).name, expected);
+	}
+});
 
 test("highlighted reference links and images keep the outer reference definitions", () => {
 	const snapshot = createShareCardSnapshot(memo("==[标签][link] 和 ![图片][image]==\n\n[link]: https://example.test\n[image]: photo.png"), "en");
@@ -69,7 +104,7 @@ test("four templates preserve full ordered content, repeated images, nested imag
 		assert.equal(card.lastElementChild!.childElementCount, 0);
 		assert.equal(body.textContent!.match(/Knomo/gu)?.length, 1, "正文中的品牌文字不与模板标志去重");
 		assert.equal(body.querySelectorAll("img").length, 3);
-		assert.equal(card.querySelectorAll(".hero").length, template.id === "editorial" ? 1 : 0);
+		assert.equal(card.querySelectorAll(".hero").length, template.id === "reflection" ? 1 : 0);
 		assert.equal(body.querySelectorAll("blockquote img").length, 1);
 		assert.equal(body.querySelectorAll("input,button,iframe,a,script").length, 0);
 		assert.equal(body.querySelector("mark")!.textContent, "高亮");
@@ -96,12 +131,12 @@ test("source metadata is excluded, user repeated body links are not deduplicated
 	assert.equal(renderShareCard(new JSDOM().window.document, repeated, "paper", new Map()).textContent!.match(/同文/gu)?.length, 2);
 });
 
-test("snapshot freezes actual date without minute/second metadata and content independently of source changes", () => {
+test("snapshot freezes actual date, original time precision and content without displaying recorded time", () => {
 	for (const time of ["08:30", "08:30:42"]) {
 		const selected = memo("原始全文", time); const snapshot = createShareCardSnapshot(selected, "zh-CN");
 		selected.contentSnapshot = "后续修改";
-		const card = renderShareCard(new JSDOM().window.document, snapshot, "calendar", new Map());
-		assert.equal(snapshot.date, "2026-10-27"); assert.ok(!("time" in snapshot)); assert.ok(!card.textContent!.includes(time)); assert.match(snapshot.weekday, /二/u);
+		const card = renderShareCard(new JSDOM().window.document, snapshot, "daybook", new Map());
+		assert.equal(snapshot.date, "2026-10-27"); assert.equal(snapshot.time, time); assert.ok(!card.textContent!.includes(time)); assert.match(snapshot.weekday, /二/u);
 		assert.ok(card.textContent!.includes("原始全文")); assert.ok(!card.textContent!.includes("后续修改"));
 		assert.equal(card.querySelectorAll(".date-head").length, 1); assert.equal(card.querySelectorAll(".source").length, 0);
 	}
@@ -137,9 +172,9 @@ test("compressed PNG/GIF/JPEG headers are checked before bitmap allocation", () 
 test("rapid template switches publish only latest result, serialize encoding and survive retry", async () => {
 	const completed: string[] = []; const errors: unknown[] = []; let release!: () => void; let renders = 0;
 	const session = new ShareCardSession(async template => { renders++; if (renders === 1) await new Promise<void>(resolve => { release = resolve; }); return template; }, value => completed.push(value), error => errors.push(error));
-	session.select("paper"); session.select("editorial"); session.select("calendar");
+	session.select("paper"); session.select("reflection"); session.select("daybook");
 	assert.equal(renders, 1); release(); await tick();
-	assert.deepEqual(completed, ["calendar"]); assert.equal(renders, 2); assert.equal(errors.length, 0);
+	assert.deepEqual(completed, ["daybook"]); assert.equal(renders, 2); assert.equal(errors.length, 0);
 	let fail = true;
 	const retry = new ShareCardSession(async () => { if (fail) throw new Error("encode"); return "ready"; }, value => completed.push(value), error => errors.push(error));
 	retry.select("paper"); await tick(); assert.equal(errors.length, 1);
@@ -150,7 +185,7 @@ test("closing suppresses pending publication and failures", async () => {
 	for (const fail of [false, true]) {
 		let finish!: () => void; const results: unknown[] = [];
 		const session = new ShareCardSession(async () => { await new Promise<void>(resolve => { finish = resolve; }); if (fail) throw Error("closed"); return "late"; }, value => results.push(value), error => results.push(error));
-		session.select("paper"); session.close(); finish(); await tick(); session.select("editorial");
+		session.select("paper"); session.close(); finish(); await tick(); session.select("reflection");
 		assert.deepEqual(results, []);
 	}
 });
@@ -160,22 +195,22 @@ test("output capability detection and click-stack dispatch use PNG files, never 
 	class Item { static supports(type: string) { return type === "image/png"; } constructor(readonly value: unknown) {} }
 	const win = { File, ClipboardItem: Item, navigator: { canShare: ({ files }: { files: File[] }) => files[0].type === "image/png", share: () => { calls.push("share"); return Promise.resolve(); }, clipboard: { write: () => { calls.push("copy"); return Promise.resolve(); } } } } as unknown as Window;
 	assert.deepEqual(getShareCardCapabilities(win, true), { share: true, copy: true, save: false });
-	const file = new File(["png"], "Memo-2026-10-27-0830.png", { type: "image/png" });
+	const file = new File(["png"], "Knomo-20261027-083000.png", { type: "image/png" });
 	const sharing = outputShareCard("share", file, win); assert.deepEqual(calls, ["share"]); await sharing;
 	await outputShareCard("copy", file, win); assert.deepEqual(calls, ["share", "copy"]);
 	const blocked = { File, navigator: { canShare: () => { throw Error("denied"); }, share() {} } } as unknown as Window;
 	assert.deepEqual(getShareCardCapabilities(blocked, true), { share: false, copy: false, save: false });
 });
 
-test("date-only filenames and ordinary templates do not expose the recorded time", () => {
+test("ordinary templates show date only while filenames retain the recorded time", () => {
 	const snapshot = createShareCardSnapshot(memo("正文 08:30 #标签 引用来源 [[笔记|中间链接]] 后文", "08:30:42"), "en");
-	for (const template of ["paper", "ink", "editorial"] as const) {
+	for (const template of ["paper", "midnight", "reflection"] as const) {
 		const card = renderShareCard(new JSDOM().window.document, snapshot, template, new Map(), "data:image/png;base64,AA==");
 		assert.equal(card.querySelector(".meta")!.textContent, "2026/10/27");
 		assert.ok(card.querySelector(".content")!.textContent!.includes("08:30 #标签 引用来源 中间链接 后文"));
 	}
-	assert.equal(shareCardFile(new Blob(["png"]), snapshot.date, { File } as unknown as Window).name, "Memo-2026-10-27.png");
-	assert.throws(() => renderShareCard(new JSDOM().window.document, snapshot, "editorial", new Map()), /cover/u);
+	assert.equal(shareCardFile(new Blob(["png"]), snapshot, { File } as unknown as Window).name, "Knomo-20261027-083042.png");
+	assert.throws(() => renderShareCard(new JSDOM().window.document, snapshot, "reflection", new Map()), /cover/u);
 	const end = createShareCardSnapshot({ ...memo("月末"), createdAt: "2024-02-29T23:59:59" }, "en");
 	assert.equal(end.date, "2024-02-29"); assert.equal(end.weekday, "Thursday");
 });

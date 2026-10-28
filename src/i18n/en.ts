@@ -3,9 +3,9 @@ import { zhCN, type TranslationKey } from "./zh-CN";
 export const en: Record<TranslationKey, string> = {
 	"share.title": "Share image",
 	"share.paper": "Paper",
-	"share.editorial": "Editorial",
-	"share.calendar": "Calendar",
-	"share.ink": "Ink",
+	"share.reflection": "Reflection",
+	"share.daybook": "Daybook",
+	"share.midnight": "Midnight",
 	"share.share": "Share",
 	"share.copy": "Copy",
 	"share.save": "Save",

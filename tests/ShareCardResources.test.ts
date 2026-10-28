@@ -17,12 +17,13 @@ test("share reads only original observation and verifies Daily revision without 
 	const current = { key: "selected", content: observation.content, createdAt: "2026-10-27T08:30", sourcePath: observation.sourcePath, observation, observationHandle: observation,
 		tags: [], links: [], images: [], lineNumberHint: 1 } as unknown as CatalogMemoItem;
 	const selected = createCardMemo({ catalog: current, contentSnapshot: "折叠节选", createdAt: current.createdAt });
+	selected.createdAt = "2030-01-01T12:00:59";
 	let reads = 0; let changed = false;
 	const app = { vault: { getAbstractFileByPath(path: string) { assert.equal(path, observation.sourcePath); return Object.assign(new TFile(), { path }); },
 		readBinary: async () => { reads++; return changed ? new TextEncoder().encode("- 10:00 替换正文").buffer : bytes.buffer; } } } as unknown as App;
 	const catalog = { readMemoItems: async (handles: unknown[]) => { assert.equal(handles.length, 1); assert.strictEqual(handles[0], selected.catalog!.observationHandle); return [current]; } } as unknown as CatalogReadService;
 	const snapshot = await readShareCardSnapshot(app, catalog, selected, "en", new AbortController().signal);
-	assert.equal(snapshot.date, "2026-10-27"); assert.equal(reads, 1);
+	assert.equal(snapshot.date, "2026-10-27"); assert.equal(snapshot.time, "08:30"); assert.equal(reads, 1);
 	assert.ok(JSON.stringify(snapshot.body).includes("完整正文")); assert.ok(!JSON.stringify(snapshot.body).includes("其他 Memo"));
 	changed = true;
 	await assert.rejects(readShareCardSnapshot(app, catalog, selected, "en", new AbortController().signal), /stale/u);
@@ -51,11 +52,25 @@ test("explicit Vault save creates a new PNG and does not overwrite an existing f
 	await ensureObsidianStub();
 	const { saveShareCardToVault } = await import("../src/ui/share/ShareCardResources");
 	const writes: string[] = [];
-	const file = new File([new Uint8Array([137, 80, 78, 71])], "Memo-2026-10-27.png", { type: "image/png" });
-	const app = { vault: { getAbstractFileByPath: (path: string) => path === file.name ? {} : null,
-		createBinary: async (path: string, bytes: ArrayBuffer) => { assert.equal(bytes.byteLength, 4); writes.push(path); } } } as unknown as App;
+	const file = new File([new Uint8Array([137, 80, 78, 71])], "Knomo-20261027-083000.png", { type: "image/png" });
+	const existing = new Set([file.name]);
+	const app = { vault: { getAbstractFileByPath: (path: string) => existing.has(path) ? {} : null,
+		createBinary: async (path: string, bytes: ArrayBuffer) => { assert.ok(!existing.has(path)); assert.deepEqual(new Uint8Array(bytes), new Uint8Array([137, 80, 78, 71])); existing.add(path); writes.push(path); } } } as unknown as App;
 	await saveShareCardToVault(app, file);
-	assert.deepEqual(writes, ["Memo-2026-10-27-1.png"]);
+	await saveShareCardToVault(app, new File([file], file.name, { type: file.type }));
+	assert.deepEqual(writes, ["Knomo-20261027-083000-2.png", "Knomo-20261027-083000-3.png"]);
+});
+
+test("Vault save leaves an unoccupied name unchanged and reports a conflicting create without overwriting", async () => {
+	await ensureObsidianStub();
+	const { saveShareCardToVault } = await import("../src/ui/share/ShareCardResources");
+	const file = new File(["original PNG"], "Knomo-20261027-143025.png", { type: "image/png" });
+	let conflict = false;
+	const app = { vault: { getAbstractFileByPath: () => null,
+		createBinary: async (path: string) => { assert.equal(path, file.name); if (conflict) throw Error("already exists"); } } } as unknown as App;
+	await saveShareCardToVault(app, file);
+	conflict = true;
+	await assert.rejects(saveShareCardToVault(app, file), /already exists/u);
 });
 
 test("remote resources use the exact source URL, CORS and no credentials, and failures remain retryable", async () => {

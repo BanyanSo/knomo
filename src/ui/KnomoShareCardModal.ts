@@ -4,7 +4,7 @@ import { t } from "../i18n";
 import { removeObsidianModalCloseButtons } from "./ObsidianModalCloseButton";
 import { ShareCardError } from "./share/ShareCardContent";
 import type { ShareCardSnapshot } from "./share/ShareCardContent";
-import { SHARE_CARD_EDITORIAL_COVER } from "./share/ShareCardTemplateResources";
+import { SHARE_CARD_REFLECTION_COVER } from "./share/ShareCardTemplateResources";
 import { ShareCardRenderer } from "./share/ShareCardRenderer";
 import { ShareCardSession } from "./share/ShareCardSession";
 import { SHARE_CARD_TEMPLATES } from "./share/ShareCardTemplates";
@@ -56,7 +56,7 @@ export class KnomoShareCardModal extends Modal {
 		}
 		this.statusEl = footer.createDiv({ cls: "knomo-share-status", attr: { role: "status", "aria-live": "polite" } });
 		this.actionsEl = footer.createDiv({ cls: "knomo-share-actions" });
-		this.renderer = new ShareCardRenderer(this.modalEl, Platform.isMobile, (path, signal) => this.options.loadImage(path, this.snapshot!.sourcePath, signal), SHARE_CARD_EDITORIAL_COVER);
+		this.renderer = new ShareCardRenderer(this.modalEl, Platform.isMobile, (path, signal) => this.options.loadImage(path, this.snapshot!.sourcePath, signal), SHARE_CARD_REFLECTION_COVER);
 		this.session = new ShareCardSession(async template => {
 			this.snapshot ??= await this.options.loadSnapshot(this.abort.signal);
 			this.abort.signal.throwIfAborted();
@@ -74,7 +74,7 @@ export class KnomoShareCardModal extends Modal {
 	}
 	private publish(blob: Blob): void {
 		if (this.closed || !this.snapshot) return;
-		this.file = shareCardFile(blob, this.snapshot.date, this.containerEl.win);
+		this.file = shareCardFile(blob, this.snapshot, this.containerEl.win);
 		this.previewUrl = URL.createObjectURL(blob);
 		this.previewEl.createEl("img", { attr: { src: this.previewUrl, alt: "", draggable: "false" } });
 		this.previewEl.setAttribute("aria-busy", "false"); this.setStatus("");

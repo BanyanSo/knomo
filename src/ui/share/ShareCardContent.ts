@@ -13,6 +13,7 @@ export interface ShareCardSnapshot {
 	readonly body: readonly Token[];
 	readonly isCjkContent: boolean;
 	readonly date: string;
+	readonly time: string;
 	readonly month: string;
 	readonly weekday: string;
 	readonly sourcePath: string;
@@ -96,7 +97,7 @@ export function createShareCardSnapshot(memo: MemoViewItem, locale: string): Sha
 	const date = new Date(timestamp[1] + "T12:00:00Z");
 	if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== timestamp[1]) throw new ShareCardError("stale");
 	return Object.freeze({ body: shareCardTokens(getMemoDisplayContent(memo)), isCjkContent: isCjkMemoContent(memo.contentSnapshot),
-		date: timestamp[1], sourcePath: memo.dailyRef.path,
+		date: timestamp[1], time: timestamp[2], sourcePath: memo.dailyRef.path,
 		month: new Intl.DateTimeFormat(locale, { year: "numeric", month: "long", timeZone: "UTC" }).format(date),
 		weekday: new Intl.DateTimeFormat(locale, { weekday: "long", timeZone: "UTC" }).format(date) });
 }
@@ -118,19 +119,19 @@ export function renderShareCard(doc: Document, snapshot: ShareCardSnapshot, temp
 	const add = (parent: HTMLElement, tag: string, cls: string, text: string): HTMLElement => {
 		const el = doc.createElement(tag); el.className = cls; el.textContent = text; parent.append(el); return el;
 	};
-	if (template === "editorial") {
+	if (template === "reflection") {
 		if (!cover) throw new ShareCardError("cover");
 		const image = doc.createElement("img"); image.className = "hero"; image.src = cover; image.alt = ""; card.append(image);
 	}
-	if (template === "paper" || template === "ink") add(card, "div", "meta paper-time", snapshot.date.replace(/-/gu, "/"));
-	if (template === "calendar") {
+	if (template === "paper" || template === "midnight") add(card, "div", `meta ${template}-time`, snapshot.date.replace(/-/gu, "/"));
+	if (template === "daybook") {
 		const head = add(card, "header", "date-head", "");
 		add(head, "div", "date-day", snapshot.date.slice(8)); add(head, "div", "date-month", snapshot.month);
 		add(head, "div", "meta date-detail", snapshot.weekday);
 	}
 	const content = add(card, "div", "content", ""); renderTokens(content, snapshot.body, images);
-	if (template === "editorial") {
-		add(card, "div", "meta editorial-time", snapshot.date.replace(/-/gu, "/"));
+	if (template === "reflection") {
+		add(card, "div", "meta reflection-time", snapshot.date.replace(/-/gu, "/"));
 	}
 	add(card, "footer", "share-brand", "Knomo");
 	return card;

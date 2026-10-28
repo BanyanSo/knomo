@@ -61,7 +61,7 @@ export async function loadShareCardImage(app: App, path: string, sourcePath: str
 
 export async function saveShareCardToVault(app: App, file: File): Promise<void> {
 	const stem = file.name.replace(/\.png$/u, "");
-	let path = file.name; let suffix = 1;
+	let path = file.name; let suffix = 2;
 	while (app.vault.getAbstractFileByPath(path)) path = `${stem}-${suffix++}.png`;
 	// createBinary 拒绝同名竞争，不覆盖现有文件。
 	await app.vault.createBinary(path, await file.arrayBuffer());

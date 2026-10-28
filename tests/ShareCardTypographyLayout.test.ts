@@ -76,7 +76,7 @@ window.fontTest={ShareCardRenderer,createShareCardSnapshot};`, resolveDir: proce
 			}
 			fontStyle.remove(); host.style.setProperty("--font-text", "Arial,sans-serif");
 			const renderer = new ShareCardRenderer(host, true, async () => { throw Error("unexpected image"); }, "data:image/png;base64,AAAA");
-			try { await png(renderer, "editorial"); failures.push("unexpected success"); } catch (error) { failures.push((error as any).reason); } finally { renderer.close(); }
+			try { await png(renderer, "reflection"); failures.push("unexpected success"); } catch (error) { failures.push((error as any).reason); } finally { renderer.close(); }
 			return { samples, system, local, embedded, localMatches: system === local, embeddedMatches: embedded === null ? null : system === embedded,
 				fallbackMatches: [unused, localFirst, localFallback, sourceFallback, unusedSubset, imported].map(value => value === system), failures };
 		}, fontData);

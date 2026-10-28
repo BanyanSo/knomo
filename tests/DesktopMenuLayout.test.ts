@@ -170,7 +170,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 	};
 	const actionKeys: Record<string, TranslationKey> = {
 		edit: "card.edit", reference: "card.reference", "open-daily": "card.openDaily", relations: "relations.title",
-		"copy-text": "card.copyText", "copy-link": "card.copyLink", "share-image": "share.title", delete: "card.delete",
+		"copy-text": "card.copyText", "copy-link": "card.copyLink", "share-image": "share.share", delete: "card.delete",
 	};
 	const css = readFileSync("styles.css", "utf8");
 	const hostCss = process.env.KNOMO_HOST_CSS ? readFileSync(process.env.KNOMO_HOST_CSS, "utf8") : "";
@@ -251,7 +251,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					const context = `${theme}/${font}/${scale}/${locale}/${width}/${kind}`;
 					assert.equal(result.within, true, context);
 					assert.equal(result.width, Math.min(168, result.boundWidth - 16), context);
-					assert.equal(result.icons, kind === "scope" ? 9 : 8, context);
+					assert.equal(result.icons, 9, context);
 					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
 					if (kind === "card") {
 						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all seven actions remain in order`);

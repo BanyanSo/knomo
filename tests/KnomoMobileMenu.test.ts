@@ -182,7 +182,7 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 		assert.equal(h.controller.kind, "card");
 		assert.equal(menu.items.length, 9);
 		assert.equal(menu.noIcon, false);
-		assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "image-up", "trash-2", "text"]);
+		assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "share", "trash-2", "text"]);
 		assert.equal(menu.items.at(-1)!.label, true);
 		assert.equal(menu.items[7].warning, true);
 		assert.equal(menu.doc, h.f.win.document);

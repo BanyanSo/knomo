@@ -1,9 +1,9 @@
 export interface ShareCardCapabilities { share: boolean; copy: boolean; save: boolean }
 
-type ShareWindow = Window & Pick<typeof globalThis, "File" | "ClipboardItem" | "URL">;
+type ShareWindow = Window & { File: typeof File; ClipboardItem: typeof ClipboardItem; URL: typeof URL };
 
-export function shareCardFile(blob: Blob, date: string, time: string, win: Window): File {
-	return new (win as ShareWindow).File([blob], `Memo-${date}-${time.replace(/:/gu, "")}.png`, { type: "image/png" });
+export function shareCardFile(blob: Blob, date: string, win: Window): File {
+	return new (win as ShareWindow).File([blob], `Memo-${date}.png`, { type: "image/png" });
 }
 
 export function getShareCardCapabilities(window: Window, mobile: boolean, file?: File): ShareCardCapabilities {

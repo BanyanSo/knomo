@@ -1,3 +1,5 @@
+import { captureShareCardFonts, embedShareCardFonts } from "./ShareCardTypography";
+import type { ShareCardFontInput } from "./ShareCardTypography";
 import { toCanvas } from "html-to-image";
 import { ShareCardError, getShareCardImagePaths, renderShareCard } from "./ShareCardContent";
 import type { ShareCardSnapshot } from "./ShareCardContent";
@@ -13,10 +15,14 @@ export class ShareCardRenderer {
 	private readonly frame: HTMLIFrameElement;
 	private readonly images = new Map<string, string>();
 	private retainedPixels = 0;
+	private readonly fonts: ShareCardFontInput;
+	private fontCSS: string | null = null;
 	private closed = false;
 	private readonly abort = new AbortController();
 	constructor(host: HTMLElement, private readonly mobile: boolean,
-		private readonly loadImage: (path: string, signal: AbortSignal) => Promise<Blob>) {
+		private readonly loadImage: (path: string, signal: AbortSignal) => Promise<Blob>,
+		private readonly cover?: string) {
+		this.fonts = captureShareCardFonts(host);
 		this.frame = host.ownerDocument.createElement("iframe");
 		this.frame.className = "knomo-share-render-frame";
 		this.frame.title = "Share card renderer"; this.frame.setAttribute("aria-hidden", "true"); this.frame.tabIndex = -1;
@@ -59,15 +65,18 @@ export class ShareCardRenderer {
 		}
 		this.abort.signal.throwIfAborted();
 		doc.head.replaceChildren(); doc.body.replaceChildren();
-		const style = doc.createElement("style"); style.textContent = shareCardStyles(template); doc.head.append(style);
-		const card = renderShareCard(doc, snapshot, template, this.images); doc.body.append(card);
-		await Promise.all(Array.from(card.querySelectorAll("img"), image => image.decode()));
-		if (template === "editorial") {
-			const first = card.querySelector(".content")?.firstElementChild;
-			const image = first?.tagName === "P" && first.childNodes.length === 1 && first.firstElementChild?.tagName === "IMG" ? first.firstElementChild as HTMLImageElement : null;
-			if (image && image.naturalWidth >= 390) { image.className = "hero"; card.prepend(image); first!.remove(); }
-		}
-		await doc.fonts.ready;
+		const style = doc.createElement("style"); this.fontCSS ??= await embedShareCardFonts(this.fonts, this.abort.signal);
+		style.textContent = this.fontCSS + shareCardStyles(template, this.fonts.typography); doc.head.append(style);
+		const card = renderShareCard(doc, snapshot, template, this.images, this.cover); doc.body.append(card);
+		await Promise.all(Array.from(card.querySelectorAll("img"), async image => {
+			try { await image.decode(); } catch { throw new ShareCardError(image.classList.contains("hero") ? "cover" : "image"); }
+		}));
+		try {
+			// 排版触发实际需要的字体；不强制加载未使用的候补字体或字形子集。
+			card.getBoundingClientRect();
+			await doc.fonts.ready;
+			doc.fonts.forEach(face => { if (face.status === "error") throw new ShareCardError("font"); });
+		} catch { throw new ShareCardError("font"); }
 		this.abort.signal.throwIfAborted();
 		const height = Math.ceil(card.getBoundingClientRect().height);
 		checkShareCardDimensions(780, height * 2, this.mobile);
@@ -75,7 +84,7 @@ export class ShareCardRenderer {
 			if (el.scrollWidth > el.clientWidth + 2 && el.clientWidth > 0) throw new ShareCardError("limit");
 			if ((el.tagName === "TD" || el.tagName === "TH") && el.textContent?.trim() && el.getBoundingClientRect().width < 44) throw new ShareCardError("limit");
 		}
-		const canvas = await toCanvas(card, { width: 390, height, pixelRatio: 2, skipAutoScale: true, skipFonts: true, cacheBust: false });
+		const canvas = await toCanvas(card, { width: 390, height, pixelRatio: 2, skipAutoScale: true, fontEmbedCSS: this.fontCSS, skipFonts: !this.fontCSS, cacheBust: false });
 		try {
 			this.abort.signal.throwIfAborted();
 			if (canvas.width !== 780 || canvas.height !== height * 2 || !canvas.getContext("2d")?.getImageData(0, 0, 1, 1).data[3]) throw new ShareCardError("generation");

@@ -2,30 +2,74 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { createCardMemo } from "./helpers/memoCardFixture";
+import { isCjkMemoContent } from "../src/ui/KnomoCardMetadata";
 import { createShareCardSnapshot, getShareCardImagePaths, renderShareCard, ShareCardError, shareCardTokens } from "../src/ui/share/ShareCardContent";
 import { SHARE_CARD_TEMPLATES } from "../src/ui/share/ShareCardTemplates";
 import { ShareCardSession } from "../src/ui/share/ShareCardSession";
 import { checkShareCardDimensions } from "../src/ui/share/ShareCardRenderer";
-import { getShareCardCapabilities, outputShareCard } from "../src/ui/share/ShareCardOutput";
+import { getShareCardCapabilities, outputShareCard, shareCardFile } from "../src/ui/share/ShareCardOutput";
 import { shareCardImageDimensions } from "../src/ui/share/ShareCardImageDimensions";
 
 const memo = (content: string, time = "08:30") => createCardMemo({ contentSnapshot: content, createdAt: "2026-10-27T" + time });
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-test("three templates preserve full ordered content, repeated images, nested images and literal code", () => {
+test("highlighted reference links and images keep the outer reference definitions", () => {
+	const snapshot = createShareCardSnapshot(memo("==[标签][link] 和 ![图片][image]==\n\n[link]: https://example.test\n[image]: photo.png"), "en");
+	assert.deepEqual(getShareCardImagePaths(snapshot), ["photo.png"]);
+	const card = renderShareCard(new JSDOM().window.document, snapshot, "paper", new Map([["photo.png", "data:image/png;base64,AA=="]]));
+	assert.equal(card.querySelector("mark .link")!.textContent, "标签");
+	assert.equal(card.querySelectorAll("mark img").length, 1);
+	assert.ok(!card.textContent!.includes("[image]"));
+});
+
+test("escaped dollar text remains literal while actual formulas still fail closed", () => {
+	for (const text of [String.raw`Literal \$x\$`, String.raw`==Literal \$x\$==`, String.raw`**\$\$**`, "&#36;x&#36;", "`$x$`", "```txt\n$x$\n``` "]) {
+		const snapshot = createShareCardSnapshot(memo(text), "en");
+		const card = renderShareCard(new JSDOM().window.document, snapshot, "paper", new Map());
+		assert.match(card.querySelector(".content")!.textContent!, /\$/u);
+	}
+	for (const text of ["$x$", "$$x$$", "==$x$==", "**$x$**", String.raw`$\alpha$`, String.raw`==$\frac{a}{b}$==`, String.raw`$\$x$`]) assert.throws(() => shareCardTokens(text), error => error instanceof ShareCardError && error.kind === "math");
+});
+
+test("callout titles end before body lines and preserve explicit inline formatting", () => {
+	for (const marker of ["[!note] Title", "[!note]- **Title**", "[!note]+ *Title*"]) {
+		const card = renderShareCard(new JSDOM().window.document, createShareCardSnapshot(memo(`> ${marker}\n> Body **strong**\n> Next line\n>\n> Last paragraph`), "en"), "paper", new Map());
+		const callout = card.querySelector(".callout")!;
+		assert.equal(callout.querySelector(".callout-title")!.textContent, "Title");
+		assert.equal(callout.querySelectorAll(":scope > p").length, 3);
+		assert.equal(callout.children[1].textContent, "Body strongNext line");
+		assert.equal(callout.children[1].querySelector("strong")!.textContent, "strong");
+		assert.equal(callout.children[1].querySelectorAll("br").length, 1);
+		assert.equal(callout.lastElementChild!.textContent, "Last paragraph");
+	}
+});
+
+test("share alignment follows card language detection for Chinese, mixed and English content", () => {
+	for (const text of ["中文正文排版与卡片保持一致。", "中文与 English 混排也沿用卡片现有对齐规则。", "A mostly English Memo with 中文 and a readable ending.", "短文"]) {
+		const snapshot = createShareCardSnapshot(memo(text), "en");
+		assert.equal(snapshot.isCjkContent, isCjkMemoContent(text));
+		for (const template of SHARE_CARD_TEMPLATES) {
+			const card = renderShareCard(new JSDOM().window.document, snapshot, template.id, new Map(), "data:image/png;base64,AA==");
+			assert.equal(card.classList.contains("is-cjk-content"), isCjkMemoContent(text));
+		}
+	}
+});
+
+test("four templates preserve full ordered content, repeated images, nested images and literal code", () => {
 	const text = "开头 Knomo **粗体** *斜体* ~~删除~~ ==高亮== #标签 [[笔记|可读别名]] [链接](note.pdf)\n\n![第一张](a.png)\n\n中间文字\n\n> 引用\n> ![[b.png]]\n\n- [x] 已完成\n- [ ] 待办\n\n![重复图片](a.png)\n\n```js\n![[代码不是嵌入]]\n```\n\n| 列一 | 列二 |\n| --- | --- |\n| 完整一 | 完整二 |";
 	const snapshot = createShareCardSnapshot(memo(text), "zh-CN");
 	assert.deepEqual(getShareCardImagePaths(snapshot), ["a.png", "b.png", "a.png"]);
 	const contents = SHARE_CARD_TEMPLATES.map(template => {
 		const doc = new JSDOM().window.document;
-		const card = renderShareCard(doc, snapshot, template.id, new Map([["a.png", "data:image/png;base64,AA=="], ["b.png", "data:image/png;base64,AA=="]]));
+		const card = renderShareCard(doc, snapshot, template.id, new Map([["a.png", "data:image/png;base64,AA=="], ["b.png", "data:image/png;base64,AA=="]]), "data:image/png;base64,AA==");
 		const body = card.querySelector(".content")!;
 		assert.equal(card.querySelectorAll(".share-brand").length, 1);
 		assert.equal(card.lastElementChild!.className, "share-brand");
 		assert.equal(card.lastElementChild!.textContent, "Knomo");
 		assert.equal(card.lastElementChild!.childElementCount, 0);
 		assert.equal(body.textContent!.match(/Knomo/gu)?.length, 1, "正文中的品牌文字不与模板标志去重");
-		assert.equal(card.querySelectorAll("img").length, 3);
+		assert.equal(body.querySelectorAll("img").length, 3);
+		assert.equal(card.querySelectorAll(".hero").length, template.id === "editorial" ? 1 : 0);
 		assert.equal(body.querySelectorAll("blockquote img").length, 1);
 		assert.equal(body.querySelectorAll("input,button,iframe,a,script").length, 0);
 		assert.equal(body.querySelector("mark")!.textContent, "高亮");
@@ -39,21 +83,25 @@ test("three templates preserve full ordered content, repeated images, nested ima
 	assert.equal(new Set(contents).size, 1);
 });
 
-test("source metadata appears once, user repeated source links are not deduplicated", () => {
+test("source metadata is excluded, user repeated body links are not deduplicated", () => {
 	const snapshot = createShareCardSnapshot(memo("引用 [[Daily/2026-10-26#^block|原记录]]\n> 原文"), "zh-CN");
 	const card = renderShareCard(new JSDOM().window.document, snapshot, "paper", new Map());
-	assert.equal(card.querySelector(".source")!.textContent, "原记录");
-	assert.equal(card.textContent!.match(/原记录/gu)?.length, 1);
+	assert.equal(card.querySelector(".source"), null);
+	assert.ok(!card.textContent!.includes("原记录"));
+	assert.ok(!("source" in snapshot));
+	const excluded = createShareCardSnapshot(memo("正文\n![[missing.png#^block|$x$]]"), "en");
+	assert.deepEqual(getShareCardImagePaths(excluded), []);
+	assert.equal(renderShareCard(new JSDOM().window.document, excluded, "paper", new Map()).querySelector(".content")!.textContent, "正文");
 	const repeated = createShareCardSnapshot(memo("[[笔记|同文]] 和 [[笔记|同文]]"), "en");
 	assert.equal(renderShareCard(new JSDOM().window.document, repeated, "paper", new Map()).textContent!.match(/同文/gu)?.length, 2);
 });
 
-test("snapshot freezes actual date, minute/second precision and content independently of source changes", () => {
+test("snapshot freezes actual date without minute/second metadata and content independently of source changes", () => {
 	for (const time of ["08:30", "08:30:42"]) {
 		const selected = memo("原始全文", time); const snapshot = createShareCardSnapshot(selected, "zh-CN");
 		selected.contentSnapshot = "后续修改";
-		const card = renderShareCard(new JSDOM().window.document, snapshot, "nocturne", new Map());
-		assert.equal(snapshot.date, "2026-10-27"); assert.equal(snapshot.time, time); assert.match(snapshot.weekday, /二/u);
+		const card = renderShareCard(new JSDOM().window.document, snapshot, "calendar", new Map());
+		assert.equal(snapshot.date, "2026-10-27"); assert.ok(!("time" in snapshot)); assert.ok(!card.textContent!.includes(time)); assert.match(snapshot.weekday, /二/u);
 		assert.ok(card.textContent!.includes("原始全文")); assert.ok(!card.textContent!.includes("后续修改"));
 		assert.equal(card.querySelectorAll(".date-head").length, 1); assert.equal(card.querySelectorAll(".source").length, 0);
 	}
@@ -89,9 +137,9 @@ test("compressed PNG/GIF/JPEG headers are checked before bitmap allocation", () 
 test("rapid template switches publish only latest result, serialize encoding and survive retry", async () => {
 	const completed: string[] = []; const errors: unknown[] = []; let release!: () => void; let renders = 0;
 	const session = new ShareCardSession(async template => { renders++; if (renders === 1) await new Promise<void>(resolve => { release = resolve; }); return template; }, value => completed.push(value), error => errors.push(error));
-	session.select("paper"); session.select("editorial"); session.select("nocturne");
+	session.select("paper"); session.select("editorial"); session.select("calendar");
 	assert.equal(renders, 1); release(); await tick();
-	assert.deepEqual(completed, ["nocturne"]); assert.equal(renders, 2); assert.equal(errors.length, 0);
+	assert.deepEqual(completed, ["calendar"]); assert.equal(renders, 2); assert.equal(errors.length, 0);
 	let fail = true;
 	const retry = new ShareCardSession(async () => { if (fail) throw new Error("encode"); return "ready"; }, value => completed.push(value), error => errors.push(error));
 	retry.select("paper"); await tick(); assert.equal(errors.length, 1);
@@ -117,4 +165,17 @@ test("output capability detection and click-stack dispatch use PNG files, never 
 	await outputShareCard("copy", file, win); assert.deepEqual(calls, ["share", "copy"]);
 	const blocked = { File, navigator: { canShare: () => { throw Error("denied"); }, share() {} } } as unknown as Window;
 	assert.deepEqual(getShareCardCapabilities(blocked, true), { share: false, copy: false, save: false });
+});
+
+test("date-only filenames and ordinary templates do not expose the recorded time", () => {
+	const snapshot = createShareCardSnapshot(memo("正文 08:30 #标签 引用来源 [[笔记|中间链接]] 后文", "08:30:42"), "en");
+	for (const template of ["paper", "ink", "editorial"] as const) {
+		const card = renderShareCard(new JSDOM().window.document, snapshot, template, new Map(), "data:image/png;base64,AA==");
+		assert.equal(card.querySelector(".meta")!.textContent, "2026/10/27");
+		assert.ok(card.querySelector(".content")!.textContent!.includes("08:30 #标签 引用来源 中间链接 后文"));
+	}
+	assert.equal(shareCardFile(new Blob(["png"]), snapshot.date, { File } as unknown as Window).name, "Memo-2026-10-27.png");
+	assert.throws(() => renderShareCard(new JSDOM().window.document, snapshot, "editorial", new Map()), /cover/u);
+	const end = createShareCardSnapshot({ ...memo("月末"), createdAt: "2024-02-29T23:59:59" }, "en");
+	assert.equal(end.date, "2024-02-29"); assert.equal(end.weekday, "Thursday");
 });

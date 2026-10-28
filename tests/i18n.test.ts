@@ -47,6 +47,21 @@ test("uses matching load-more copy for historical Memos", async () => {
 	assert.equal(translate("en", "list.loadOlder"), "Load more memos");
 });
 
+test("share failure copy interpolates content types in both languages", async () => {
+	await ensureObsidianStub();
+	const { translate } = await import("../src/i18n");
+	for (const kind of ["embed", "html", "dynamic", "math", "footnote", "format"] as const) {
+		for (const locale of ["zh-CN", "en"] as const) {
+			const type = translate(locale, `share.kind.${kind}`);
+			assert.equal(translate(locale, "share.error.unsupported", { type }), locale === "zh-CN"
+				? `暂不支持完整转换此内容类型：${type}。未生成分享图片。`
+				: `This content type cannot yet be fully converted: ${type}. No share image was generated.`);
+		}
+	}
+	assert.equal(translate("zh-CN", "share.outputFailed"), "图片输出失败，请重试或使用其他操作。");
+	assert.equal(translate("en", "share.outputFailed"), "Image output failed. Retry or use another action.");
+});
+
 test("关联详情的标题、返回和引用计数中英文一致，英文区分单复数", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");

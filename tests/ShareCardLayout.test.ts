@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { build } from "esbuild";
 
-test("actual PNGs preserve three layouts, ordered images and readable long content, with nine representative samples", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async context => {
+test("actual PNGs preserve four layouts, ordered images and readable long content, with twelve representative samples", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async context => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const bundle = await build({ stdin: { contents: `
 import { ShareCardRenderer } from './src/ui/share/ShareCardRenderer';
 import { createShareCardSnapshot } from './src/ui/share/ShareCardContent';
-window.shareTest = { ShareCardRenderer, createShareCardSnapshot };`, resolveDir: process.cwd() }, bundle: true, write: false, format: "iife", platform: "browser" });
+import { SHARE_CARD_EDITORIAL_COVER } from "./src/ui/share/ShareCardTemplateResources";
+window.shareTest = { ShareCardRenderer, createShareCardSnapshot, cover: SHARE_CARD_EDITORIAL_COVER };`, resolveDir: process.cwd() }, loader: { ".png": "dataurl", ".jpg": "dataurl" }, bundle: true, write: false, format: "iife", platform: "browser" });
 	const paragraph = "傍晚散步时，树叶间的光落在路面上。停下来观察一会儿，会发现每天熟悉的地方仍有细小的变化。记录这些瞬间，不需要急着得出结论，只要把当下看见的、想到的认真留下。阅读也是如此，先理解一句话，再试着用自己的经验回答它。";
 	const samples = [
 		"今天整理书桌，翻到去年留下的便签。那些当时觉得重要的小事，已经变成了生活的一部分。\n\n把注意力放回眼前：读完一页书，照顾一盆植物，认真听完一段话。 #日常",
@@ -22,14 +23,14 @@ window.shareTest = { ShareCardRenderer, createShareCardSnapshot };`, resolveDir:
 		await page.setContent("<html><body><main></main></body></html>");
 		await page.addStyleTag({ content: readFileSync("styles.css", "utf8") });
 		await page.addScriptTag({ content: bundle.outputFiles[0].text });
-		for (const template of ["paper", "editorial", "nocturne"]) for (let index = 0; index < samples.length; index++) {
+		for (const template of ["paper", "calendar", "editorial", "ink"]) for (let index = 0; index < samples.length; index++) {
 			const result = await page.evaluate(async ({ template, body }: { template: string; body: string }) => {
 				const api = (window as any).shareTest;
 				let loads = 0;
 				const renderer = new api.ShareCardRenderer(document.querySelector("main"), true, async (path: string) => {
 					loads++;
 					return new Blob([`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="320"><rect width="600" height="320" fill="${path === "blue.png" ? "#547788" : "#65856b"}"/><circle cx="300" cy="160" r="90" fill="#e9dfc8"/></svg>`], { type: "image/svg+xml" });
-				});
+				}, api.cover);
 				const snapshot = api.createShareCardSnapshot({ contentSnapshot: body, createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/2026-10-27.md" } }, "zh-CN");
 				try {
 					const blob = await renderer.render(snapshot, template);
@@ -57,14 +58,14 @@ window.shareTest = { ShareCardRenderer, createShareCardSnapshot };`, resolveDir:
 				} finally { renderer.close(); }
 			}, { template, body: samples[index] });
 			assert.equal(result.width, 780); assert.ok(result.height > 200); assert.ok(result.ink > 1000, "PNG must contain actual text and images");
-			assert.equal(result.images, [0, 2, 5][index]); assert.equal(result.hero, template === "editorial" && index === 1 ? 1 : 0);
-			assert.equal(result.loads, index ? 2 : 0); assert.equal(result.day, template === "nocturne" ? 1 : 0);
+			assert.equal(result.images, [0, 2, 5][index] + (template === "editorial" ? 1 : 0)); assert.equal(result.hero, template === "editorial" ? 1 : 0);
+			assert.equal(result.loads, index ? 2 : 0); assert.equal(result.day, template === "calendar" ? 1 : 0);
 			assert.ok(result.text.includes(index ? "傍晚散步" : "今天整理书桌"));
 			assert.deepEqual({ ...result.brand, ink: undefined }, { count: 1, text: "Knomo", last: true, fontSize: "12px", weight: "400",
-				color: template === "paper" ? "rgb(118, 107, 93)" : template === "editorial" ? "rgb(98, 104, 107)" : "rgb(183, 172, 152)",
+				color: template === "ink" ? "rgb(119, 117, 111)" : template === "editorial" ? "rgb(160, 164, 165)" : "rgb(166, 158, 145)",
 				align: "center", gap: 24, bottom: 36, ink: undefined });
 			assert.ok(result.brand.ink > 20, "实际 PNG 的底部标志区域必须含有文字像素");
-			assert.deepEqual(result.bg, template === "paper" ? [246, 242, 232, 255] : template === "editorial" && index === 1 ? [84, 119, 136, 255] : template === "editorial" ? [247, 247, 243, 255] : [37, 38, 40, 255]);
+			if (template !== "editorial") assert.deepEqual(result.bg, template === "paper" ? [246, 242, 232, 255] : template === "calendar" ? [243, 240, 229, 255] : [27, 29, 31, 255]);
 			writeFileSync(`.tmp/share-card-samples/${template}-${"ABC"[index]}.png`, Buffer.from(result.data.split(",")[1], "base64"));
 			context.diagnostic(`${template}-${"ABC"[index]}: ${result.width}×${result.height}, images=${result.images}`);
 		}
@@ -74,7 +75,7 @@ window.shareTest = { ShareCardRenderer, createShareCardSnapshot };`, resolveDir:
 			const renderer = new api.ShareCardRenderer(document.querySelector("main"), true, async (path: string) => {
 				loads.push(path); if (path === "b.png" && missing) throw Error("missing");
 				return new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200"><rect width="600" height="200" fill="green"/></svg>'], { type: "image/svg+xml" });
-			});
+			}, api.cover);
 			const snapshot = api.createShareCardSnapshot({ contentSnapshot: "![[a.png]]\n\n![[b.png]]\n\n![[a.png]]", createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/test.md" } }, "en");
 			try {
 				let failed = false; try { await renderer.render(snapshot, "paper"); } catch { failed = true; }
@@ -82,22 +83,47 @@ window.shareTest = { ShareCardRenderer, createShareCardSnapshot };`, resolveDir:
 				const frame = document.querySelector("iframe") as HTMLIFrameElement;
 				const hero = frame.contentDocument!.querySelectorAll(".hero").length;
 				const images = frame.contentDocument!.querySelectorAll("img").length;
-				await renderer.render(snapshot, "nocturne");
+				await renderer.render(snapshot, "calendar");
 				const brand = frame.contentDocument!.querySelector(".share-brand")!;
 				const lastImage = Array.from(frame.contentDocument!.querySelectorAll(".content img")).at(-1)!;
 				const pureImageGap = brand.getBoundingClientRect().top - lastImage.getBoundingClientRect().bottom;
 				const color = frame.contentWindow!.getComputedStyle(brand).color;
-				const source = api.createShareCardSnapshot({ contentSnapshot: "已有来源", createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/test.md" } }, "en").body;
+				const sourced = api.createShareCardSnapshot({ contentSnapshot: "已有来源 [[Daily/original#^source|原记录]]\n> 引用正文", createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/test.md" } }, "en");
 				const sourceGaps = [];
-				for (const template of ["paper", "editorial", "nocturne"]) {
-					await renderer.render({ ...snapshot, source }, template);
+				for (const template of ["paper", "calendar", "editorial", "ink"]) {
+					await renderer.render(sourced, template);
 					const footer = frame.contentDocument!.querySelector(".share-brand")!;
-					const preceding = template === "editorial" ? footer.previousElementSibling! : frame.contentDocument!.querySelector(".source p")!;
+					const preceding = footer.previousElementSibling!;
+					if (frame.contentDocument!.querySelector(".source")) throw Error("source leaked");
+					if (frame.contentDocument!.querySelector(".content")!.textContent!.includes("原记录")) throw Error("source metadata leaked into body");
 					sourceGaps.push(footer.getBoundingClientRect().top - preceding.getBoundingClientRect().bottom);
 				}
 				return { failed, loads, hero, images, pureImageGap, color, sourceGaps };
 			} finally { renderer.close(); }
 		});
-		assert.deepEqual(retry, { failed: true, loads: ["a.png", "b.png", "b.png"], hero: 1, images: 3, pureImageGap: 24, color: "rgb(183, 172, 152)", sourceGaps: [24, 24, 24] });
+		assert.deepEqual(retry, { failed: true, loads: ["a.png", "b.png", "b.png"], hero: 1, images: 4, pureImageGap: 24, color: "rgb(166, 158, 145)", sourceGaps: [24, 24, 24, 24] });
+		for (const template of ["paper", "calendar", "editorial", "ink"]) for (const cjk of [true, false]) {
+			const result = await page.evaluate(async ({ template, cjk }: { template: string; cjk: boolean }) => {
+				const api = (window as any).shareTest;
+				const prose = cjk ? "中文为主的正文混排 English 词语，应该与卡片保持相同的两端对齐方式，最后一行仍然靠起始边排列。" : "English prose with a few 中文 characters follows the card's start alignment. Each line stays naturally spaced and the final line remains at the start.";
+				const body = `# Heading\n\n${prose.repeat(3)}\n\n- ${prose}\n\n> ${prose}\n\nInline \`code\`\n\n\`\`\`js\nconst value = 42;\n\`\`\`\n\n| A | B |\n| - | - |\n| one | two |`;
+				const snapshot = api.createShareCardSnapshot({ contentSnapshot: body, createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/test.md" } }, "en");
+				const renderer = new api.ShareCardRenderer(document.querySelector("main"), true, async () => { throw Error("unexpected image"); }, api.cover);
+				try {
+					const blob = await renderer.render(snapshot, template);
+					const doc = document.querySelector("iframe")!.contentDocument!;
+					const style = (selector: string) => doc.defaultView!.getComputedStyle(doc.querySelector(selector)!);
+					const data = await new Promise<string>(resolve => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsDataURL(blob); });
+					return { cjk: snapshot.isCjkContent, align: [".content > p", "li", "blockquote"].map(selector => style(selector).textAlign),
+						last: style(".content > p").textAlignLast, exceptions: ["h1", "pre", "code", "table"].map(selector => style(selector).textAlign), data };
+				} finally { renderer.close(); }
+			}, { template, cjk });
+			assert.equal(result.cjk, cjk);
+			// LTR 列表的宿主 UA 规则可能将起始边计算为 left，语义与 start 相同。
+			assert.deepEqual(result.align.map((align: string) => align === "left" ? "start" : align), Array(3).fill(cjk ? "justify" : "start"));
+			assert.equal(result.last, cjk ? "start" : "auto");
+			assert.deepEqual(result.exceptions, Array(4).fill("start"));
+			writeFileSync(`.tmp/share-card-samples/${template}-align-${cjk ? "cjk" : "en"}.png`, Buffer.from(result.data.split(",")[1], "base64"));
+		}
 	} finally { await browser.close(); }
 });

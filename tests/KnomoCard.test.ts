@@ -252,7 +252,7 @@ test("memo card action menu includes open daily in the requested order", async (
 	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
 	assert.equal(root.find(".knomo-card-word-count")?.getText(), "Words: 1");
 	assert.deepEqual(actions.map((action) => action.find(".knomo-menu-icon")?.getAttr("data-icon")), [
-		"pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "image-up", "trash-2",
+		"pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "share", "trash-2",
 	]);
 	assert.ok(actions.every((action) => action.find(".knomo-menu-icon")?.getAttr("aria-hidden") === "true"));
 	assert.equal(root.find(".knomo-card-word-count")?.find(".knomo-menu-icon")?.getAttr("data-icon"), "text");

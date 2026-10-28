@@ -4,6 +4,7 @@ import test from "node:test";
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import { createDeferred } from "./helpers/deferred";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 import { DailyNoteService } from "../src/services/DailyNoteService";
 import { DailyMemoWriteGateway } from "../src/services/DailyMemoWriteGateway";
@@ -539,6 +540,7 @@ test("无标题和新建标题仍使用 Parser 区间并保留 frontmatter", asy
 });
 
 test("新建目标变化通过真实命令链路拒绝保存，Composer 保留草稿且不更新 Catalog", async (context) => {
+	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	for (const activeEditor of [false, true]) for (const stage of ["commit", "process"] as const) {
 		if (activeEditor && stage === "process") continue;

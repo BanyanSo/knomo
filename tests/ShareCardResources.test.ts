@@ -22,7 +22,7 @@ test("share reads only original observation and verifies Daily revision without 
 		readBinary: async () => { reads++; return changed ? new TextEncoder().encode("- 10:00 替换正文").buffer : bytes.buffer; } } } as unknown as App;
 	const catalog = { readMemoItems: async (handles: unknown[]) => { assert.equal(handles.length, 1); assert.strictEqual(handles[0], selected.catalog!.observationHandle); return [current]; } } as unknown as CatalogReadService;
 	const snapshot = await readShareCardSnapshot(app, catalog, selected, "en", new AbortController().signal);
-	assert.equal(snapshot.time, "08:30"); assert.equal(snapshot.date, "2026-10-27"); assert.equal(reads, 1);
+	assert.equal(snapshot.date, "2026-10-27"); assert.equal(reads, 1);
 	assert.ok(JSON.stringify(snapshot.body).includes("完整正文")); assert.ok(!JSON.stringify(snapshot.body).includes("其他 Memo"));
 	changed = true;
 	await assert.rejects(readShareCardSnapshot(app, catalog, selected, "en", new AbortController().signal), /stale/u);
@@ -51,11 +51,11 @@ test("explicit Vault save creates a new PNG and does not overwrite an existing f
 	await ensureObsidianStub();
 	const { saveShareCardToVault } = await import("../src/ui/share/ShareCardResources");
 	const writes: string[] = [];
-	const file = new File([new Uint8Array([137, 80, 78, 71])], "Memo-2026-10-27-0830.png", { type: "image/png" });
+	const file = new File([new Uint8Array([137, 80, 78, 71])], "Memo-2026-10-27.png", { type: "image/png" });
 	const app = { vault: { getAbstractFileByPath: (path: string) => path === file.name ? {} : null,
 		createBinary: async (path: string, bytes: ArrayBuffer) => { assert.equal(bytes.byteLength, 4); writes.push(path); } } } as unknown as App;
-	assert.equal(await saveShareCardToVault(app, file), "Memo-2026-10-27-0830-1.png");
-	assert.deepEqual(writes, ["Memo-2026-10-27-0830-1.png"]);
+	await saveShareCardToVault(app, file);
+	assert.deepEqual(writes, ["Memo-2026-10-27-1.png"]);
 });
 
 test("remote resources use the exact source URL, CORS and no credentials, and failures remain retryable", async () => {

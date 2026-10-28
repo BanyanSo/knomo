@@ -11,10 +11,18 @@ export class TFile {}
 export function setIcon(el, icon) { el.textContent="↗"; el.dataset.icon=icon; }
 export class Modal {
  constructor(app) { this.app=app; this.containerEl=document.createElement('div'); this.containerEl.className='modal-container';
- this.modalEl=this.containerEl.createDiv({cls:'modal'}); this.titleEl=this.modalEl.createDiv({cls:'modal-title'}); this.contentEl=this.modalEl.createDiv({cls:'modal-content'}); }
+ this.modalEl=this.containerEl.createDiv({cls:'modal'}); this.headerEl=this.modalEl.createDiv({cls:'modal-header'}); this.titleEl=this.headerEl.createDiv({cls:'modal-title'}); this.contentEl=this.modalEl.createDiv({cls:'modal-content'}); }
  open() { document.body.append(this.containerEl); this.onOpen(); }
  close() { this.onClose(); this.containerEl.remove(); }
 }
+`;
+
+// 保留宿主原生标题容器及手机端内边距，覆盖自定义标题栏嵌套时的真实布局约束。
+const mobileModalCss = `
+.modal-header { margin-bottom: .75em; }
+.is-phone .modal-header { margin-bottom: 0; padding: 24px 20px 16px; position: relative; width: 100%; display: flex; align-items: flex-end; }
+.is-phone .modal-title { display: block; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70vw; }
+.is-phone .modal-content { display: flex; position: relative; flex-direction: column; margin-top: 0; overflow: auto; padding: 16px; }
 `;
 
 test("share modal keeps current PNG, output failures, focus, independent scrolling and reachable controls across widths and themes", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
@@ -29,7 +37,8 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 		const page = await browser.newPage({ acceptDownloads: true });
 		for (const [width, height] of [[320, 568], [390, 844], [844, 390], [768, 1024], [1100, 800]]) for (const theme of ["theme-light", "theme-dark", "theme-custom"]) {
 			await page.setViewportSize({ width, height });
-			await page.setContent(`<body class="${theme}"><button id="return">Card menu</button></body>`);
+			await page.setContent(`<body class="${theme} ${width < 1000 ? "is-mobile is-phone" : ""}"><button id="return">Card menu</button></body>`);
+			await page.addStyleTag({ content: mobileModalCss });
 			await page.addStyleTag({ content: `*{box-sizing:border-box} body{margin:0;--background-primary:#fff;--background-secondary:#eee;--text-normal:#222;--text-muted:#666;--interactive-accent:#7860b8;--text-accent:#7860b8;--font-ui-small:13px;font:15px Arial}.theme-dark{--background-primary:#222;--background-secondary:#333;--text-normal:#eee;--text-muted:#bbb}.theme-custom{--background-primary:#f5f1dc;--background-secondary:#e8e1c4;--text-normal:#493c27;--interactive-accent:#086f65;--text-accent:#086f65;font-size:24px}.modal-container{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}.modal{position:relative;background:var(--background-primary);color:var(--text-normal)}button{font:inherit} .modal-title{font-size:20px;line-height:28px}` + readFileSync("styles.css", "utf8") });
 			await page.evaluate(() => {
 				Object.defineProperty(HTMLElement.prototype, "win", { configurable: true, get() { return this.ownerDocument.defaultView; } });
@@ -71,12 +80,16 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 				const title = document.querySelector(".knomo-share-modal .modal-title")!;
 				const titleRect = title.getBoundingClientRect();
 				const close = document.querySelector(".knomo-share-close")!.getBoundingClientRect();
+				const header = document.querySelector(".knomo-share-header")!.getBoundingClientRect();
+				const previewRect = preview.getBoundingClientRect();
 				const range = document.createRange(); range.selectNodeContents(title);
 				const titleText = range.getBoundingClientRect();
 				return { footerBottom: footer.bottom, footerTop: footer.top, scroll: preview.scrollHeight > preview.clientHeight, previewHeight: preview.clientHeight,
 					left: footer.left, right: footer.right, background: getComputedStyle(preview).backgroundColor, buttonHeights: Array.from(document.querySelectorAll(".knomo-share-templates button"), el => el.getBoundingClientRect().height),
 					titleCenterOffset: Math.abs(titleText.left + titleText.width / 2 - modal.left - modal.width / 2),
 					closeCenterOffset: Math.abs(close.top + close.height / 2 - titleRect.top - titleRect.height / 2),
+					headerTopGap: header.top - modal.top, previewTopGap: previewRect.top - header.bottom,
+					closeRightGap: modal.right - close.right,
 					buttonCursors: Array.from(document.querySelectorAll(".knomo-share-modal button:not(:disabled)"), el => getComputedStyle(el).cursor) };
 			});
 			assert.ok(geometry.footerBottom <= height && geometry.footerTop >= 0, `${width}/${height}/${theme}: footer within screen`);
@@ -85,6 +98,11 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			assert.ok(geometry.left >= 0 && geometry.right <= width); assert.ok(geometry.scroll); assert.ok(geometry.previewHeight >= 40);
 			assert.ok(geometry.titleCenterOffset < 1, `${width}/${height}/${theme}: title text centered within modal`);
 			assert.ok(geometry.closeCenterOffset < 1, `${width}/${height}/${theme}: close button vertically aligned with title`);
+			if (width < 1000) {
+				assert.ok(geometry.headerTopGap <= 20, `${width}/${height}/${theme}: compact mobile header inset`);
+				assert.ok(geometry.previewTopGap <= 12, `${width}/${height}/${theme}: preview directly below header`);
+				assert.ok(geometry.closeRightGap <= 20, `${width}/${height}/${theme}: close button at right edge`);
+			}
 			assert.ok(geometry.buttonCursors.every((cursor: string) => cursor === "pointer"));
 			assert.equal(await page.locator(".knomo-share-close[aria-label], .knomo-share-preview[aria-label], .knomo-share-templates[aria-label]").count(), 0);
 			assert.equal(await page.locator(".knomo-share-preview > img").getAttribute("alt"), "");

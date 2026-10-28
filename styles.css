@@ -5607,6 +5607,16 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 .knomo-share-preview[aria-busy="true"]::before { content: ""; display: block; width: 28px; height: 28px; margin: 36px auto; border: 2px solid var(--background-modifier-border); border-top-color: var(--text-muted); border-radius: 50%; }
 .knomo-share-modal .knomo-share-render-frame { position: fixed; left: -10000px; top: 0; width: 390px; height: 500px; border: 0; pointer-events: none; }
 .knomo-share-modal button:focus-visible, .knomo-share-preview:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+/* 移动端原生标题容器只承载自定义标题栏，避免重复内边距及 flex 收缩。 */
+.is-mobile .modal.knomo-share-modal > .modal-header {
+	display: block;
+	flex: none;
+	height: auto;
+	margin: 0;
+	padding: 0;
+}
+.is-mobile .modal.knomo-share-modal .modal-title { max-width: none; }
+.is-mobile .modal.knomo-share-modal .knomo-share-content { margin-top: 8px; padding: 0; }
 @media (max-width: 600px) {
 	.modal.knomo-share-modal { width: 100%; max-width: 100%; height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); padding: 16px; }
 	.knomo-share-backdrop { padding: max(12px, env(safe-area-inset-top, 0px)) 8px max(12px, env(safe-area-inset-bottom, 0px)); }

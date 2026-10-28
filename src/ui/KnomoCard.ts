@@ -90,7 +90,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				"aria-expanded": cardMenuReady && options.activeMenuMemoId === memo.id ? "true" : "false",
 				...(cardMenuReady
 					? { "data-action": "toggle-card-menu", "data-memo-id": memo.id }
-					: { "aria-disabled": "true", title: t("card.actionsPreparing") }),
+					: { "aria-disabled": "true" }),
 			},
 		});
 		menu.disabled = !cardMenuReady;
@@ -267,25 +267,42 @@ function renderCardMeta<TMemo extends MemoRecord>(card: HTMLElement, memo: TMemo
 	}
 }
 
+export function syncMemoCardRelationsAction(card: HTMLElement, memo: MemoRecord, hasReferrers: boolean): void {
+	const action = getMemoCardActions(memo, false, hasReferrers).find(item => item.action === "relations");
+	card.toggleAttribute("data-has-referrers", action !== undefined);
+	const current = card.querySelector<HTMLElement>('[data-memo-action="relations"]');
+	if (!action) {
+		const focused = current === card.ownerDocument.activeElement;
+		current?.remove();
+		if (focused) card.querySelector<HTMLElement>(".knomo-card-menu")?.focus({ preventScroll: true });
+		return;
+	}
+	if (current) return;
+	const menu = card.querySelector<HTMLElement>(".knomo-card-actions");
+	if (!menu) return;
+	const button = renderCardAction(menu, memo.id, action.action, getMemoActionLabel(action.action), action.className);
+	menu.insertBefore(button, menu.querySelector('[data-memo-action="delete"], .knomo-card-word-count'));
+}
+
 function renderCardAction(
 	container: HTMLElement,
 	memoId: string,
 	action: MemoAction,
 	label: string,
 	className: string,
-): void {
+): HTMLButtonElement {
 	const button = container.createEl("button", {
 		cls: className,
 		attr: {
 			type: "button",
 			role: "menuitem",
-			"aria-label": label,
 			"data-memo-action": action,
 			"data-memo-id": memoId,
 		},
 	});
 	setIcon(button.createSpan({ cls: "knomo-menu-icon", attr: { "aria-hidden": "true" } }), MEMO_ACTION_ICONS[action]);
 	button.createSpan({ cls: "knomo-menu-label", text: label });
+	return button;
 }
 
 function renderTrashAction(

@@ -34,7 +34,7 @@ export interface TrashCardActionMeta {
 	state: TrashActionState;
 }
 
-const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "relations", "copy-text", "copy-link", "share-image", "delete"];
+const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["share-image", "edit", "reference", "copy-text", "open-daily", "copy-link", "relations", "delete"];
 export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
 	"share-image": "share",
 	relations: "network",
@@ -84,10 +84,10 @@ export function getMemoActionClass(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-action is-danger" : "knomo-card-action";
 }
 
-export function getMemoCardActions(memo?: MemoRecord, randomCard = false): MemoCardActionMeta[] {
+export function getMemoCardActions(memo?: MemoRecord, randomCard = false, hasReferrers = false): MemoCardActionMeta[] {
 	const available: readonly MemoAction[] = randomCard && memo?.catalog
-		? [...MEMO_CARD_ACTIONS.slice(0, 3), "view-day", ...MEMO_CARD_ACTIONS.slice(3)] : MEMO_CARD_ACTIONS;
-	const actions = available.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
+		? [...MEMO_CARD_ACTIONS.slice(0, 4), "view-day", ...MEMO_CARD_ACTIONS.slice(4)] : MEMO_CARD_ACTIONS;
+	const actions = available.filter((action) => (action !== "relations" || hasReferrers) && isMemoActionAvailable(memo, action)).map((action) => ({
 		action,
 		className: getMemoActionClass(action),
 	}));

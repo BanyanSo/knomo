@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { getKnomoLocale, t } from "../i18n";
 import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import type { ShuffleDayStats } from "../utils/shuffleDay";
@@ -51,7 +52,7 @@ export function renderKnomoShuffleDayHeader(
 	container: HTMLElement,
 	selectedDate: string,
 	stats: ShuffleDayStats | null,
-	action?: { label: string; action: string },
+	action?: { label: string; action: string; icon?: string },
 ): HTMLElement {
 	const header = container.createDiv({ cls: "knomo-shuffle-day-header" });
 	header.createDiv({ cls: "knomo-shuffle-day-date", text: formatShuffleDayDateTitle(selectedDate) });
@@ -61,10 +62,11 @@ export function renderKnomoShuffleDayHeader(
 		summaryContainer.createDiv({ cls: action ? "knomo-shuffle-day-summary knomo-list-summary" : "knomo-shuffle-day-summary", text: summary });
 	}
 	if (action) {
-		summaryContainer.createEl("button", {
-			cls: "knomo-inline-button", text: action.label,
-			attr: { type: "button", "data-action": action.action },
+		const button = summaryContainer.createEl("button", {
+			cls: "knomo-inline-button", text: action.icon ? undefined : action.label,
+			attr: { type: "button", "data-action": action.action, ...(action.icon ? { "aria-label": action.label } : {}) },
 		});
+		if (action.icon) setIcon(button, action.icon);
 	}
 	return header;
 }
@@ -128,11 +130,11 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 				}
 				if (text) updateHeaderText(summary, text);
 				else summary?.remove();
-				updateHeaderText(button, t("random.dayBack"));
+				button.setAttr("aria-label", t("random.dayBack"));
 				return existing;
 			}
 			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats, {
-				label: t("random.dayBack"), action: "random-day-back",
+				label: t("random.dayBack"), action: "random-day-back", icon: "arrow-left",
 			});
 		}
 		if (header.type === "random-toolbar") {

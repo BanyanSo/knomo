@@ -286,7 +286,7 @@ test("移动菜单使用触发卡片的 surface，选择动作时不重取已改
 		h.view.syncCardMenuState = () => {};
 		h.view.handleMemoAction = async (_action: string, memo: MemoViewItem) => { received.push(memo); };
 		h.view.mobileMenuController = { close: () => {}, open: (options: { build: (menu: unknown, select: unknown, title: unknown) => void }) => {
-			const item = { setTitle: () => item, setIcon: () => item, setWarning: () => item, setIsLabel: () => item,
+			const item = { setSection: () => item, setTitle: () => item, setIcon: () => item, setWarning: () => item, setIsLabel: () => item,
 				onClick: (callback: () => void) => { callbacks.push(callback); return item; } };
 			options.build({ addItem: (build: (item: unknown) => void) => build(item), addSeparator: () => {} },
 				(callback: () => void) => callback(), (title: string) => title);

@@ -8,6 +8,7 @@ import { observationHandleKey } from "../services/DailyMemoPresentationChange";
 import { extractMemoRelationSummary } from "../utils/memoRelations";
 import { MemoRelationsChangedError, relationChangeAffects } from "../services/MemoRelationService";
 import { CatalogDiscoveryInvalidatedError } from "../services/CatalogReadService";
+import { syncMemoCardRelationsAction } from "./KnomoCard";
 
 interface CardBinding { memo: MemoViewItem; nearby: boolean; signature?: string }
 const viewHandles = new WeakMap<HTMLElement, ObservationHandle>();
@@ -43,8 +44,7 @@ export class MemoRelationCards {
 
 	observe(card: HTMLElement, memo: MemoViewItem): void {
 		if (!memo.catalog || memo.status !== "active") return;
-		// 关联页已单列当前 Memo 的直接引用者，页内卡片不继续展开下一层。
-		if (card.closest(".knomo-relations-page")) return;
+		// 关联页仅更新菜单可见性，不继续展开下一层引用摘要。
 		const previous = this.cards.get(card);
 		if (previous && previous.memo.id !== memo.id) markRelationCardStale(card);
 		this.cards.set(card, { memo, nearby: previous?.nearby ?? this.observer === null,
@@ -100,7 +100,7 @@ export class MemoRelationCards {
 		try {
 			const snapshot = await this.read.relations.read(signal, visible.map(([, binding]) => binding.memo.catalog!.observationHandle));
 			const handles = new Map<string, ObservationHandle>();
-			const changed = visible.filter(([card, binding]) => binding.signature !== relationCardSignature(snapshot, binding.memo)
+			const changed = visible.filter(([card, binding]) => !card.closest(".knomo-relations-page") && binding.signature !== relationCardSignature(snapshot, binding.memo)
 				&& (snapshot.complete || !card.querySelector(".knomo-memo-referrers")));
 			for (const [, binding] of changed) for (const node of snapshot.referrers.get(binding.memo.id) ?? []) handles.set(observationHandleKey(node.handle), node.handle);
 			// 为可见卡片分批读取全部引用者摘要，保留取消及版本校验。
@@ -114,7 +114,8 @@ export class MemoRelationCards {
 			await this.read.relations.assertCurrent(snapshot, signal, visible.map(([, binding]) => binding.memo.catalog!.observationHandle));
 			for (const [card, binding] of visible) {
 				if (!card.isConnected || this.cards.get(card) !== binding) continue;
-				renderMemoReferrers(card, binding.memo, snapshot, summaries, this.open);
+				syncMemoCardRelationsAction(card, binding.memo, snapshot.nodes.has(binding.memo.id) && !!snapshot.referrers.get(binding.memo.id)?.length);
+				if (!card.closest(".knomo-relations-page")) renderMemoReferrers(card, binding.memo, snapshot, summaries, this.open);
 				if (snapshot.complete || !card.querySelector(".knomo-memo-referrers[data-stale]")) binding.signature = relationCardSignature(snapshot, binding.memo);
 			}
 		} catch (error) {

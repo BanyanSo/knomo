@@ -95,6 +95,38 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 80));
 
+test("卡片菜单随被引用信息加载、增删更新，只有引用来源时不显示关联详情", async () => {
+	const h = await fixture(true);
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	try {
+		const [a, b] = await h.seed("D.md", "- 10:00 A ^a\n- 11:00 B [[#^a]] ^b\n");
+		const render = async (handle: typeof a) => {
+			const memo = await h.memo(handle);
+			const card = renderKnomoMemoCard(h.host, memo, {
+				generation: 1, renderIndex: 0, includeActions: true, randomCard: false, activeMenuMemoId: null,
+				formatDisplayTime: value => value, getMarkdownPriority: () => "normal",
+				getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }),
+				queueMemoMarkdown: () => {}, renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
+			});
+			h.cards!.observe(card, memo);
+			return card;
+		};
+		const target = await render(a), source = await render(b);
+		assert.equal(target.querySelector('[data-memo-action="relations"]'), null);
+		await settle(); await settle();
+		assert.deepEqual(Array.from(target.querySelectorAll<HTMLElement>("[data-memo-action]")).map(item => item.dataset.memoAction),
+			["share-image", "edit", "reference", "copy-text", "open-daily", "copy-link", "relations", "delete"]);
+		assert.equal(source.querySelector('[data-memo-action="relations"]'), null);
+		await h.seed("C.md", "- 12:00 C [[D#^b]]\n"); await settle(); await settle();
+		assert.ok(source.querySelector('[data-memo-action="relations"]'));
+		await h.seed("C.md", "- 12:00 C\n"); await settle(); await settle();
+		assert.equal(source.querySelector('[data-memo-action="relations"]'), null);
+		await h.page.open(a); await settle(); await settle();
+		assert.equal(h.page.el!.querySelector(".knomo-relations-subject .knomo-card")!.hasAttribute("data-has-referrers"), true);
+		assert.equal(h.page.el!.querySelector(".knomo-relations-list .knomo-card")!.hasAttribute("data-has-referrers"), false);
+	} finally { h.close(); }
+});
+
 test("关联详情将返回移至当前记录行，移除页面时间，保留逐层返回与原焦点", async () => {
 	const h = await fixture();
 	try {
@@ -848,6 +880,7 @@ test("关联页只展示直接引用者，通过记录菜单进入下一层后�
 		assert.deepEqual(listIds(), [bKey]);
 		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
 		assert.equal(reads.includes(cKey), false, "浏览 A 时不能读取间接引用者 C 的正文");
+		assert.equal(h.page.el!.querySelector(".knomo-relations-list .knomo-card")!.hasAttribute("data-has-referrers"), true);
 		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Referenced by 1 record");
 		h.page.el!.scrollTop = 321;
 		const background = h.previewView.cardFlowEl.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": bKey } });
@@ -857,6 +890,7 @@ test("关联页只展示直接引用者，通过记录菜单进入下一层后�
 		await h.previewView.handleMemoAction("relations", h.page.findMemo(bKey)); await settle();
 		assert.equal(h.page.el!.querySelector<HTMLElement>(".knomo-relations-subject")!.dataset.subject, bKey);
 		assert.deepEqual(listIds(), [cKey]);
+		assert.equal(h.page.el!.querySelector(".knomo-relations-list .knomo-card")!.hasAttribute("data-has-referrers"), false);
 		assert.equal(reads.includes(cKey), true);
 		assert.equal(h.page.el!.querySelector(".knomo-memo-referrers"), null);
 		assert.equal(h.page.el!.querySelector("h3[tabindex='-1']")!.textContent, "Referenced by 1 record");

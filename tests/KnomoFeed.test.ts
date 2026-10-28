@@ -28,6 +28,11 @@ test("前置提示重复、变化及移除时，历史操作头部保持连接�
 				assert.deepEqual(Array.from(root.children), [...elements, card], "移除过期提示且不重复添加头部，卡片保持在头部之后");
 				assert.equal(elements.at(-1), actionHeader);
 				assert.equal(fixture.win.document.activeElement, button, "更新提示不丢失当前按钮焦点");
+				if (header.type === "random-day") {
+					assert.equal(button.textContent, "");
+					assert.equal(button.getAttribute("data-icon"), "arrow-left");
+					assert.equal(button.getAttribute("aria-label"), "Back");
+				}
 				const removed = observer.takeRecords().flatMap(record => Array.from(record.removedNodes));
 				assert.ok(!removed.some(node => node === button || node.contains(button)), "不能移除按钮或包含按钮的父节点");
 			}
@@ -43,7 +48,9 @@ test("日期详情的日期、原时间精度与返回在加载、失败和空�
 	renderKnomoCardFlowHeaders(root.asHtml(), [{ type: "random-day", selectedDate: "2026-10-22", stats: null }]);
 	assert.ok(root.find(".knomo-shuffle-day-date")?.getText().includes("2026"));
 	assert.equal(root.find("[data-action='random-day-back']")?.getAttr("type"), "button");
-	assert.equal(root.find("[data-action='random-day-back']")?.getText(), "Back");
+	assert.equal(root.find("[data-action='random-day-back']")?.getText(), "");
+	assert.equal(root.find("[data-action='random-day-back']")?.getAttr("data-icon"), "arrow-left");
+	assert.equal(root.find("[data-action='random-day-back']")?.getAttr("aria-label"), "Back");
 	assert.equal(root.find("[data-action='refresh-random-reunion']"), null);
 	assert.equal(root.find("[data-action='refresh-shuffle-day']"), null);
 	const ready = new TestElement("div");

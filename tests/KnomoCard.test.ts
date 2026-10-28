@@ -44,7 +44,8 @@ test("引用和复制链接使用固定简洁文案，有无自身锚点均与�
 			const button = root.find(`[data-memo-action='${action}']`)!;
 			const label = action === "reference" ? "Reference" : "Copy link";
 			assert.equal(button.getText(), label);
-			assert.equal(button.getAttr("aria-label"), label);
+			assert.equal(button.getAttr("aria-label"), null);
+			assert.equal(button.getAttr("title"), null);
 		}
 	}
 	assert.equal(translate("zh-CN", "card.reference"), "引用");
@@ -240,21 +241,21 @@ test("memo card action menu includes open daily in the requested order", async (
 
 	const actions = root.findAll("[data-memo-action]");
 	assert.deepEqual(actions.map((action) => action.getAttr("data-memo-action")), [
+		"share-image",
 		"edit",
 		"reference",
-		"open-daily",
-		"relations",
 		"copy-text",
+		"open-daily",
 		"copy-link",
-		"share-image",
 		"delete",
 	]);
 	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
 	assert.equal(root.find(".knomo-card-word-count")?.getText(), "Words: 1");
 	assert.deepEqual(actions.map((action) => action.find(".knomo-menu-icon")?.getAttr("data-icon")), [
-		"pencil", "message-square-quote", "calendar-days", "network", "copy", "link", "share", "trash-2",
+		"share", "pencil", "message-square-quote", "copy", "calendar-days", "link", "trash-2",
 	]);
 	assert.ok(actions.every((action) => action.find(".knomo-menu-icon")?.getAttr("aria-hidden") === "true"));
+	assert.ok(actions.every((action) => action.getAttr("aria-label") === null && action.getAttr("title") === null));
 	assert.equal(root.find(".knomo-card-word-count")?.find(".knomo-menu-icon")?.getAttr("data-icon"), "text");
 	assert.equal(root.find(".knomo-card-word-count")?.getAttr("tabindex"), null);
 	assert.equal(root.find(".knomo-card-actions")?.getText().endsWith("DeleteWords: 1"), true);

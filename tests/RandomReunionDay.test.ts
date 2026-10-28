@@ -196,7 +196,7 @@ test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜�
 		const actions = new Map<string, () => void>();
 		const focusTargets: unknown[] = [];
 		const trigger = { isConnected: true };
-		const card = { getAttr: () => h.memo.id, find: () => trigger };
+		const card = { getAttr: () => h.memo.id, find: () => trigger, hasAttribute: () => false };
 		Object.assign(h.view, {
 			popupState: { activeMenuMemoId: null }, getMemoSurface: () => surface, findMemoById: () => h.memo,
 			cardFlowEl: { findAll: () => [card] }, mobileSearchController: { results: { findAll: () => [card] } },
@@ -205,7 +205,7 @@ test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜�
 				const menu = { addSeparator: () => {}, addItem: (build: (item: unknown) => void) => {
 					let title = "";
 					const item = { setTitle: (value: string) => { title = value; titles.push(value); return item; }, setIcon: () => item,
-						setWarning: () => item, onClick: (callback: () => void) => { actions.set(title, callback); return item; }, setIsLabel: () => item };
+						setSection: () => item, setWarning: () => item, onClick: (callback: () => void) => { actions.set(title, callback); return item; }, setIsLabel: () => item };
 					build(item);
 				} };
 				options.build(menu, (...args: unknown[]) => { focusTargets.push(args[1]); }, text => text);

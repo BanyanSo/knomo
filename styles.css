@@ -2475,6 +2475,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-list-toolbar > .knomo-inline-button[data-action="random-day-back"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	min-width: 32px;
+	height: 32px;
+	padding: 0;
 	margin-inline-start: auto;
 }
 

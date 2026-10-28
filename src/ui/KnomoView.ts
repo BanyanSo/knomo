@@ -7255,13 +7255,14 @@ export class KnomoView extends ItemView {
 			kind: "card", trigger,
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
-				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen)) {
+				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen, card?.hasAttribute("data-has-referrers") === true)) {
+					const section = action === "delete" ? "knomo-card-danger"
+						: ["share-image", "edit", "reference", "copy-text"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
 					const focus = action === "edit" || action === "reference" || action === "open-daily" || action === "share-image" ? "action" : "view";
-					menu.addItem(item => item.setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
+					menu.addItem(item => item.setSection(section).setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
 						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
 				}
-				menu.addSeparator();
-				menu.addItem(item => item.setTitle(createTitle(t("card.wordCount", { count: getMemoContentStats(memo).wordCount }))).setIcon(MEMO_WORD_COUNT_ICON).setIsLabel(true));
+				menu.addItem(item => item.setSection("knomo-card-info").setTitle(createTitle(t("card.wordCount", { count: getMemoContentStats(memo).wordCount }))).setIcon(MEMO_WORD_COUNT_ICON).setIsLabel(true));
 			},
 			onClose: () => {
 				if (this.popupState.activeMenuMemoId === memo.id) this.popupState.activeMenuMemoId = null;

@@ -1,6 +1,7 @@
 import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
 import { KnomoMobileMenu } from "./KnomoMobileMenu";
 import { registerMobileFirstTapRecovery, registerMobileMenuTriggerTap } from "./MobileMenuTap";
+import { canFocusSurface, isKeyboardActivation, releaseNavigationFocus } from "./NavigationFocus";
 import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalComposerDraftStore";
 import { sha256Bytes } from "../utils/sha256";
 import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
@@ -1037,7 +1038,7 @@ export class KnomoView extends ItemView {
 			setMobileSearchDateFilter: (filter) => this.setMobileSearchDateFilter(filter),
 			runTrashAction: (action, memoId) => this.runTrashActionById(action, memoId),
 			clearTrash: () => this.trashMemoController.handleClearTrash(),
-			runMemoAction: (action, memoId, sourceEl) => this.runMemoActionById(action, memoId, sourceEl),
+			runMemoAction: (action, memoId, sourceEl, focusVisible) => this.runMemoActionById(action, memoId, sourceEl, focusVisible),
 			openMemoCardDailyNote: (memoId, randomReunion, sourceEl) => this.openMemoCardDailyNote(memoId, randomReunion, sourceEl),
 			closeCardMenu: () => this.closeCardMenu(),
 			closeScopeMenu: () => {
@@ -1175,7 +1176,7 @@ export class KnomoView extends ItemView {
 			this.mobileViewFocusRecovery = new MobileViewFocusRecovery({
 				getRoot: () => this.rootEl,
 				canRecover: () => !this.trashViewClosed && this.currentLayout === "mobile"
-					&& !this.composerOpen && !this.mobileSearchPageOpen
+					&& !this.composerOpen && !this.mobileSearchPageOpen && !this.relationsPage?.isOpen
 					&& this.app.workspace.getActiveViewOfType(KnomoView) === this,
 			});
 			this.register(() => this.mobileViewFocusRecovery?.cancel());
@@ -1352,6 +1353,7 @@ export class KnomoView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.shareCardModal?.close(); this.shareCardModal = null;
+		if (this.rootEl) releaseNavigationFocus(this.rootEl);
 		if (this.relationQueryRefreshTimer !== null) this.containerEl.win.clearTimeout(this.relationQueryRefreshTimer);
 		if (this.relationStatsRefreshTimer !== null) this.containerEl.win.clearTimeout(this.relationStatsRefreshTimer);
 		this.relationQueryRefreshTimer = null; this.relationStatsRefreshTimer = null;
@@ -1873,6 +1875,7 @@ export class KnomoView extends ItemView {
 
 		const root = container.createDiv({ cls: "knomo-plugin knomo-view" });
 		this.rootEl = root;
+		this.renderScope.register(() => releaseNavigationFocus(root));
 		this.layoutObserver?.observe(root);
 
 		const drawerBackdrop = root.createDiv({
@@ -3193,8 +3196,8 @@ export class KnomoView extends ItemView {
 	private ensureMobileRecordStatsBackAction(): void {
 		if (this.mobileRecordStatsBackActionEl === null || !this.mobileRecordStatsBackActionEl.isConnected) {
 			this.mobileRecordStatsBackActionEl?.remove();
-			this.mobileRecordStatsBackActionEl = this.addAction("arrow-left", t("recordStats.back"), () => {
-				if (this.relationsPage?.isOpen) this.relationsPage.back();
+			this.mobileRecordStatsBackActionEl = this.addAction("arrow-left", t("recordStats.back"), event => {
+				if (this.relationsPage?.isOpen) this.relationsPage.back(isKeyboardActivation(event));
 				else this.returnFromRecordStats();
 			});
 			this.mobileRecordStatsBackActionEl.addClass("knomo-mobile-header-action", "knomo-record-stats-back");
@@ -4541,12 +4544,14 @@ export class KnomoView extends ItemView {
 
 	private ensureRelationCards(): MemoRelationCards {
 		return this.relationCards ??= new MemoRelationCards(this.catalogReadService, this.containerEl.win,
-			(handle, trigger, focusSubject) => this.openMemoRelations(handle, trigger, focusSubject));
+			(handle, trigger, focusVisible) => this.openMemoRelations(handle, trigger, focusVisible));
 	}
 
-	private async openMemoRelations(handle: ObservationHandle, trigger?: HTMLElement, focusSubject = true): Promise<void> {
+	private async openMemoRelations(handle: ObservationHandle, trigger?: HTMLElement, focusVisible = true): Promise<void> {
 		if (!this.relationsPage) this.relationsPage = new MemoRelationsPage({
 			read: this.catalogReadService, getHost: () => this.cardFlowEl?.parentElement ?? null,
+			canFocus: () => !this.trashViewClosed && this.app.workspace.getActiveViewOfType(KnomoView) === this,
+			isMobile: () => this.currentLayout === "mobile",
 			renderCard: (container, memo, index) => this.renderMemoCardInContainer(container, memo, this.relationsPage!.generation, index, true, false, "relations"),
 			releaseCard: card => this.releaseRelationCard(card),
 			retainCard: (card, memo) => { this.memoMarkdownRenderer.retainCard(card, memo); this.ensureRelationCards().observe(card, memo); },
@@ -4571,7 +4576,7 @@ export class KnomoView extends ItemView {
 			},
 			onError: message => { new Notice(message); this.relationCards?.refresh(); },
 		});
-		await this.relationsPage.open(handle, trigger, focusSubject);
+		await this.relationsPage.open(handle, trigger, focusVisible);
 	}
 
 	private releaseRelationCard(container: HTMLElement): void {
@@ -4961,10 +4966,11 @@ export class KnomoView extends ItemView {
 		action: MemoAction,
 		memoId: string | null,
 		sourceEl?: HTMLElement | null,
+		focusVisible = true,
 	): Promise<void> {
 		const memo = memoId === null ? null : this.findMemoById(memoId, this.getMemoSurface(sourceEl));
 		if (memo !== null) {
-			await this.handleMemoAction(action, memo);
+			await this.handleMemoAction(action, memo, focusVisible);
 		}
 	}
 
@@ -5151,7 +5157,7 @@ export class KnomoView extends ItemView {
 		else if (this.composerOpen && this.mobileComposerController.isKeyboardOpen()) this.inputEl?.blur();
 		else {
 			handled = this.userActionController.closeMobileSurface();
-			if (!handled && this.relationsPage?.isOpen) { handled = true; this.relationsPage.back(); }
+			if (!handled && this.relationsPage?.isOpen) { handled = true; this.relationsPage.back(false); }
 			if (!handled && this.randomDayOpen) { handled = true; void this.returnFromRandomDay(); }
 		}
 		if (handled) { event.preventDefault(); event.stopImmediatePropagation(); }
@@ -5225,7 +5231,7 @@ export class KnomoView extends ItemView {
 		throw new Error("The current memo source changed; refresh and retry.");
 	}
 
-	private async handleMemoAction(action: MemoAction, memo: MemoRecord): Promise<void> {
+	private async handleMemoAction(action: MemoAction, memo: MemoRecord, focusVisible = true): Promise<void> {
 		this.closeCardMenu();
 		if (action === "share-image") {
 			if (this.trashViewClosed || memo.status !== "active") return;
@@ -5233,6 +5239,8 @@ export class KnomoView extends ItemView {
 			this.shareCardModal?.close();
 			const host = this.relationsPage?.isOpen ? this.relationsPage.el : this.mobileSearchPageOpen ? this.mobileSearchResultsEl : this.rootEl;
 			this.shareCardModal = new KnomoShareCardModal(this.app, {
+				focusVisible,
+				canReturnFocus: () => !this.trashViewClosed && this.app.workspace.getActiveViewOfType(KnomoView) === this && !!host?.isConnected,
 				loadSnapshot: signal => readShareCardSnapshot(this.app, this.catalogReadService, memo, getKnomoLocale(), signal),
 				loadImage: (path, sourcePath, signal) => loadShareCardImage(this.app, path, sourcePath, signal),
 				lockScroll: () => this.lockCardFlowScrollForImagePreview(),
@@ -5245,7 +5253,7 @@ export class KnomoView extends ItemView {
 		if (action === "relations") {
 			const host = this.relationsPage?.isOpen ? this.relationsPage.el : this.rootEl;
 			if (memo.catalog) await this.openMemoRelations(memo.catalog.observationHandle,
-				host?.findAll(".knomo-card").find(card => card.getAttr("data-memo-id") === memo.id)?.find(".knomo-card-menu"));
+				host?.findAll(".knomo-card").find(card => card.getAttr("data-memo-id") === memo.id)?.find(".knomo-card-menu"), focusVisible);
 			return;
 		}
 		if (action === "view-day") {
@@ -7225,6 +7233,10 @@ export class KnomoView extends ItemView {
 			if (!button && target.closest(".mobile-navbar")) button = target.closest<HTMLElement>(".clickable-icon, button, .mobile-navbar-action");
 			if (!button && this.rootEl?.contains(target)) button = target.closest<HTMLElement>("button[data-action='open-composer'], button[data-action='toggle-sidebar'], button[data-action='toggle-compact-search']");
 			if (!button && this.rootEl?.contains(target)) button = target.closest<HTMLElement>("button[data-action='random-day-back'], button[data-action='refresh-random-reunion'], button[data-action='retry-random-day']");
+			if (!button && this.rootEl?.contains(target) && canFocusSurface(this.rootEl)) button = target.closest<HTMLElement>(".knomo-referrer-preview, .knomo-relations-back");
+			if (!button && this.rootEl?.contains(target) && canFocusSurface(this.rootEl)) button = target.closest<HTMLElement>(".knomo-card-time[data-memo-time-open='daily']");
+			if (!button && this.relationsPage?.isOpen && this.mobileRecordStatsBackActionEl?.contains(target)
+				&& this.rootEl && canFocusSurface(this.rootEl)) button = this.mobileRecordStatsBackActionEl;
 			return button?.closest("[inert], [hidden], [aria-hidden='true'], :disabled, [aria-disabled='true']") ? null : button;
 		}));
 		this.getRenderScope().register(registerMobileMenuTriggerTap(this.containerEl.doc, target => {
@@ -7260,7 +7272,7 @@ export class KnomoView extends ItemView {
 						: ["share-image", "edit", "reference", "copy-text"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
 					const focus = action === "edit" || action === "reference" || action === "open-daily" || action === "share-image" ? "action" : "view";
 					menu.addItem(item => item.setSection(section).setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
-						.onClick(() => select(() => { void this.handleMemoAction(action, memo); }, focus)));
+						.onClick(event => { const focusVisible = isKeyboardActivation(event); select(() => { void this.handleMemoAction(action, memo, focusVisible); }, focus); }));
 				}
 				menu.addItem(item => item.setSection("knomo-card-info").setTitle(createTitle(t("card.wordCount", { count: getMemoContentStats(memo).wordCount }))).setIcon(MEMO_WORD_COUNT_ICON).setIsLabel(true));
 			},

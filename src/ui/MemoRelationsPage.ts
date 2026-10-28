@@ -12,6 +12,8 @@ import { DelayedLoadingIndicator } from "./DelayedLoadingIndicator";
 import { canRetainMemoCard, rebindMemoCard } from "./MemoRenderRevision";
 import { remapUnchangedMemo } from "./ConfirmedMemoPresentation";
 import { renderKnomoLoadingPlaceholder } from "./KnomoFeed";
+import { canFocusSurface, focusForNavigation, isKeyboardActivation, releaseNavigationFocus } from "./NavigationFocus";
+import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
 
 interface RelationFrame { handle: ObservationHandle; scroll: number; focus: string | null; anchor?: { key: string; offset: number } | null }
 
@@ -23,6 +25,8 @@ export interface MemoRelationsPageOptions {
 	retainCard?: (card: HTMLElement, memo: MemoViewItem) => void;
 	onChanged: (open: boolean) => void;
 	onError: (message: string) => void;
+	canFocus?: () => boolean;
+	isMobile?: () => boolean;
 }
 
 export class MemoRelationsPage {
@@ -51,6 +55,10 @@ export class MemoRelationsPage {
 	private rowFaultScope: string | null = null;
 	private disposed = false;
 	private navigationRun = 0;
+	private focusEpoch = 0;
+	private pendingFocus: { frame: RelationFrame; visible: boolean; epoch: number } | null = null;
+	private releaseFocusEvents: (() => void) | null = null;
+	private focusRecovery: MobileViewFocusRecovery | null = null;
 	private readonly pendingRows = new Map<HTMLElement, { node: MemoRelationNode; index: number; done: () => void; signal: AbortSignal; generation: number }>();
 	private rowsQueued = false;
 	private rowsTimer: number | null = null;
@@ -71,8 +79,10 @@ export class MemoRelationsPage {
 	getMemos(): MemoViewItem[] { return [...this.memos.values()]; }
 	findMemo(id: string): MemoViewItem | null { return this.memos.get(id) ?? null; }
 
-	async open(handle: ObservationHandle, trigger?: HTMLElement, focusSubject = true): Promise<void> {
+	async open(handle: ObservationHandle, trigger?: HTMLElement, focusVisible = true): Promise<void> {
 		if (this.disposed) return;
+		this.bindFocusEvents();
+		const epoch = this.focusEpoch;
 		const run = ++this.navigationRun;
 		try {
 			await this.options.read.relations.verifyHandle(handle);
@@ -98,26 +108,37 @@ export class MemoRelationsPage {
 			const memo = toCatalogMemoView(items[0]);
 			this.options.onChanged(true);
 			this.renderSubject(memo);
-			if (existing < 0 && focusSubject) this.subject?.querySelector<HTMLElement>(".knomo-card-time,button")?.focus({ preventScroll: true });
+			this.pendingFocus = { frame: this.frames[this.frames.length - 1], visible: focusVisible, epoch };
+			if (existing < 0) {
+				const target = this.subject?.querySelector<HTMLElement>(".knomo-card-time,button");
+				if (target && this.canRestoreFocus()) this.focusTarget(target, focusVisible);
+				this.pendingFocus = null;
+			}
 			await this.load(existing >= 0);
-		} catch { if (!this.disposed && run === this.navigationRun) this.options.onError(t("relations.unavailable")); }
+		} catch {
+			if (!this.disposed && run === this.navigationRun) this.options.onError(t("relations.unavailable"));
+			if (!this.isOpen) { this.releaseFocusEvents?.(); this.releaseFocusEvents = null; }
+		}
 	}
 
-	back(): void {
+	back(focusVisible = true): void {
 		this.navigationRun++;
 		if (!this.isOpen) return;
 		this.frames.pop();
-		if (!this.isOpen) { this.close(); return; }
+		if (!this.isOpen) { this.close(true, focusVisible); return; }
+		this.pendingFocus = { frame: this.frames[this.frames.length - 1], visible: focusVisible, epoch: this.focusEpoch };
 		this.buildShell(); this.options.onChanged(true); void this.load(true);
 	}
 
-	close(restoreFocus = true): void {
+	close(restoreFocus = true, focusVisible = true): void {
 		this.navigationRun++;
+		this.pendingFocus = null;
+		this.releaseFocusEvents?.(); this.releaseFocusEvents = null;
 		if (!this.frames.length && !this.el) return;
 		this.frames = [];
 		this.clearPage();
 		this.options.onChanged(false);
-		if (restoreFocus && this.originalFocus?.isConnected) this.originalFocus.focus({ preventScroll: true });
+		if (restoreFocus && this.originalFocus && this.options.canFocus?.() !== false && canFocusSurface(this.originalFocus)) focusForNavigation(this.originalFocus, focusVisible);
 		this.originalFocus = null;
 	}
 
@@ -166,6 +187,7 @@ export class MemoRelationsPage {
 
 	private clearPage(): void {
 		this.generation++;
+		this.focusRecovery?.cancel(); this.focusRecovery = null;
 		this.controller?.abort();
 		if (this.refreshTimer !== null) this.el?.win.clearTimeout(this.refreshTimer);
 		if (this.rowsTimer !== null) this.el?.win.clearTimeout(this.rowsTimer);
@@ -180,6 +202,7 @@ export class MemoRelationsPage {
 		this.pendingRows.clear();
 		this.referrersWindow?.dispose(); this.referrersWindow = null;
 		if (this.subject) this.options.releaseCard(this.subject);
+		if (this.el) releaseNavigationFocus(this.el);
 		this.el?.remove(); this.el = null;
 		this.subject = null;
 		this.listEl = null; this.listTitle = null; this.status = null; this.loadingEl = null;
@@ -200,7 +223,7 @@ export class MemoRelationsPage {
 		const back = currentHeader.createEl("button", { cls: "knomo-relations-back",
 			attr: { type: "button", "aria-label": t(this.frames.length > 1 ? "relations.back" : "relations.backList") } });
 		setIcon(back, "arrow-left");
-		back.addEventListener("click", () => this.back());
+		back.addEventListener("click", event => this.back(isKeyboardActivation(event)));
 		this.subject = el.createDiv({ cls: "knomo-relations-subject" });
 		this.listTitle = el.createEl("h3", { cls: "knomo-relations-section-title", attr: { tabindex: "-1" } });
 		this.listTitle.textContent = t("relations.referrersHeading");
@@ -222,6 +245,7 @@ export class MemoRelationsPage {
 			rebindMemoCard(card, memo); this.options.retainCard?.(card, memo); return;
 		}
 		const focused = this.subject.contains(this.subject.doc.activeElement), active = this.subject.doc.activeElement as HTMLElement | null;
+		const focusVisible = !active?.hasAttribute("data-knomo-pointer-focus");
 		const selector = active?.classList.contains("knomo-card-time") ? ".knomo-card-time" : ".knomo-card-menu";
 		this.options.releaseCard(this.subject);
 		if (old) this.memos.delete(old);
@@ -229,7 +253,8 @@ export class MemoRelationsPage {
 		this.subject.dataset.subject = memo.id;
 		this.memos.set(memo.id, memo);
 		this.options.renderCard(this.subject, memo, 0);
-		if (focused) this.subject.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+		const target = this.subject.querySelector<HTMLElement>(selector);
+		if (focused && target && this.canOwnFocus()) this.focusTarget(target, focusVisible);
 	}
 
 	private async load(restore = false): Promise<void> {
@@ -373,13 +398,46 @@ export class MemoRelationsPage {
 		this.options.releaseCard(row);
 	}
 	private restoreFocus(frame: RelationFrame): void {
-		if (!frame.focus || !this.el) return;
+		if (!frame.focus || !this.el || this.pendingFocus?.frame !== frame) return;
+		if (!this.canRestoreFocus()) { this.pendingFocus = null; return; }
 		const [key, action] = JSON.parse(frame.focus) as [string, string];
 		const target = Array.from(this.el.querySelectorAll<HTMLElement>("[data-relation-target],.knomo-card-menu")).find(button =>
 			button.dataset.relationTarget === key && button.dataset.relationAction === action
 			|| action === "menu" && button.closest(".knomo-card")?.getAttribute("data-memo-id") === key);
-		(target ?? this.subject?.querySelector<HTMLElement>(".knomo-card-menu,button"))?.focus({ preventScroll: true });
+		const next = target ?? this.subject?.querySelector<HTMLElement>(".knomo-card-menu,button");
+		if (next) this.focusTarget(next, this.pendingFocus.visible);
 		frame.focus = null;
+		this.pendingFocus = null;
+	}
+	private canOwnFocus(): boolean {
+		return !!this.el && this.options.canFocus?.() !== false && canFocusSurface(this.el);
+	}
+	private focusTarget(target: HTMLElement, focusVisible: boolean): void {
+		this.focusRecovery?.cancel(); this.focusRecovery = null;
+		if (!this.options.isMobile?.()) { focusForNavigation(target, focusVisible); return; }
+		this.focusRecovery = new MobileViewFocusRecovery({ getRoot: () => target, getOwner: () => this.el!,
+			canRecover: () => this.canOwnFocus(), focus: el => focusForNavigation(el, focusVisible) });
+		this.focusRecovery.recover();
+	}
+	private canRestoreFocus(): boolean {
+		return this.pendingFocus?.epoch === this.focusEpoch && this.canOwnFocus();
+	}
+	private bindFocusEvents(): void {
+		if (this.releaseFocusEvents) return;
+		const doc = this.options.getHost()?.ownerDocument;
+		if (!doc) return;
+		const interrupt = (): void => { this.focusEpoch++; };
+		const focus = (event: FocusEvent): void => {
+			const target = event.target;
+			if (target instanceof doc.defaultView!.Element && (!this.el?.contains(target) || target.closest("input,textarea,select,[contenteditable='true']"))) interrupt();
+		};
+		const events = ["pointerdown", "touchstart", "keydown", "click"];
+		for (const type of events) doc.addEventListener(type, interrupt, true);
+		doc.addEventListener("focusin", focus, true);
+		this.releaseFocusEvents = () => {
+			for (const type of events) doc.removeEventListener(type, interrupt, true);
+			doc.removeEventListener("focusin", focus, true);
+		};
 	}
 	private markStale(): void {
 		if (this.listTitle) this.listTitle.textContent = t("relations.referrersHeading");

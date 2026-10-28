@@ -1,6 +1,10 @@
+import { canFocusSurface } from "./NavigationFocus";
+
 interface MobileViewFocusRecoveryOptions {
 	getRoot(): HTMLElement | null;
 	canRecover(): boolean;
+	getOwner?(): HTMLElement;
+	focus?(target: HTMLElement): void;
 }
 
 const RECOVERY_LIFETIME = 5000;
@@ -32,11 +36,14 @@ export class MobileViewFocusRecovery {
 			if (!current()) { cancel(); return; }
 			if (doc.visibilityState !== "visible") return;
 			foregroundSeen = true;
+			const owner = this.options.getOwner?.();
+			if (owner && Array.from(doc.querySelectorAll<HTMLElement>(".modal-container"))
+				.some(el => el !== owner && el.getClientRects().length > 0)) { cancel(); return; }
 			// 菜单及其蒙版可分别退场，onHide 不代表宿主交接已完成。
-			if (root.closest("[inert], [hidden], [aria-hidden='true']") ||
-				Array.from(doc.querySelectorAll<HTMLElement>(".modal-container, .menu, .suggestion-container, .suggestion-bg"))
-					.some(element => element.getClientRects().length > 0)) return;
+			if (!canFocusSurface(root, owner ?? root)) return;
 			const active = doc.activeElement;
+			if (owner && active instanceof win.HTMLElement && active !== root && owner.contains(active)
+				&& (active.matches("button,a[href]") || active.tabIndex >= 0)) { cancel(); return; }
 			if (active instanceof win.HTMLElement && active.closest(EDITABLE_SELECTOR)) {
 				// 隐藏节点或其他 leaf 的旧焦点不代表用户的新输入意图。
 				const hidden = active.closest("[inert], [hidden], [aria-hidden='true']") || active.getClientRects().length === 0;
@@ -50,9 +57,10 @@ export class MobileViewFocusRecovery {
 				if (!current()) return;
 			}
 			if (active === root && (foregroundFocusRequested || !doc.hasFocus() && focusRequested) && !gesture) return;
-			if (!root.hasAttribute("tabindex")) root.tabIndex = -1;
+			if (!root.hasAttribute("tabindex") && root.tabIndex < 0) root.tabIndex = -1;
 			focusRequested = true;
-			root.focus({ preventScroll: true });
+			if (this.options.focus) this.options.focus(root);
+			else root.focus({ preventScroll: true });
 			foregroundFocusRequested = doc.hasFocus();
 		};
 		const schedule = (): void => {

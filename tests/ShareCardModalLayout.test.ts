@@ -217,5 +217,75 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			await page.evaluate(() => (window as any).failureModal.close());
 		}
 
+		// 控制器与真实 DOM 的交接回归；强制失焦只模拟已知时序，不替代移动设备证据。
+		await page.setViewportSize({ width: 390, height: 844 });
+		for (let cycle = 0; cycle < 3; cycle++) {
+			await page.evaluate(() => {
+				const api = (window as any).shareModalTest; api.Platform.isMobile = true;
+				const state = (window as any).handoff = { focused: false, requests: 0, selects: 0, shares: 0, activation: false, trace: [] as string[] };
+				Object.defineProperty(document, "hasFocus", { configurable: true, value: () => state.focused });
+				window.focus = () => { state.requests++; };
+				Object.defineProperty(navigator, "canShare", { configurable: true, value: () => true });
+				Object.defineProperty(navigator, "share", { configurable: true, value: () => {
+					state.shares++; state.activation = navigator.userActivation.isActive; state.trace.push("share-handler"); return Promise.resolve();
+				} });
+				const modal = (window as any).handoffModal = new api.KnomoShareCardModal({}, {
+					loadSnapshot: async () => api.createShareCardSnapshot({ contentSnapshot: "short", createdAt: "2026-10-28T19:38", dailyRef: { path: "Daily/test.md" } }, "en"),
+					loadImage: async () => { throw Error("unexpected image"); }, lockScroll() {}, onClose() {}, focusVisible: false,
+					returnFocusEl: document.getElementById("return"),
+				});
+				const select = modal.select.bind(modal);
+				modal.select = (id: string) => { state.selects++; state.trace.push("select-handler"); select(id); };
+				modal.open();
+			});
+			await page.locator(".knomo-share-preview img").waitFor();
+			assert.ok(await page.evaluate(() => (window as any).handoff.requests > 0));
+			assert.equal(await page.locator(".knomo-share-close").evaluate((el: HTMLElement) => document.activeElement === el && el.hasAttribute("data-knomo-pointer-focus")), true);
+			assert.equal(await page.locator(".knomo-share-close").evaluate((el: HTMLElement) => getComputedStyle(el).outlineStyle), "none");
+			await page.keyboard.press("Tab"); await page.keyboard.press("Shift+Tab");
+			assert.equal(await page.locator(".knomo-share-close").evaluate((el: HTMLElement) => document.activeElement === el), true);
+			assert.equal(await page.locator(".knomo-share-close").evaluate((el: HTMLElement) => getComputedStyle(el).outlineStyle), "solid");
+			const tapMissingClick = async (selector: string) => {
+				await page.evaluate((selector: string) => {
+					const state = (window as any).handoff; state.focused = false;
+					const target = document.querySelector(selector)!; const rect = target.getBoundingClientRect();
+					const point = { identifier: 1, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+					state.point = point;
+					for (const type of ["touchstart", "touchend"]) {
+						const event = new Event(type, { bubbles: true, cancelable: true });
+						Object.defineProperties(event, { touches: { value: type === "touchend" ? [] : [point] }, changedTouches: { value: [point] } });
+						state.trace.push(type); target.dispatchEvent(event);
+					}
+					setTimeout(() => { state.focused = true; state.trace.push("window-focus"); window.dispatchEvent(new Event("focus")); }, 46);
+				}, selector);
+				await page.waitForTimeout(180);
+			};
+			await tapMissingClick('[data-template="daybook"]');
+			assert.equal(await page.locator('[data-template="daybook"]').getAttribute("aria-pressed"), "true");
+			assert.equal(await page.evaluate(() => (window as any).handoff.selects), 2);
+			await page.evaluate(() => {
+				const point = (window as any).handoff.point;
+				document.elementFromPoint(point.clientX, point.clientY)!.dispatchEvent(new MouseEvent("click", { ...point, detail: 1, bubbles: true, cancelable: true }));
+			});
+			assert.equal(await page.evaluate(() => (window as any).handoff.selects), 2);
+			await page.locator(".knomo-share-preview img").waitFor();
+			await tapMissingClick('[data-share-action="share"]');
+			assert.equal(await page.evaluate(() => (window as any).handoff.shares), 0, "系统分享不通过延时 click 补执行");
+			await page.getByRole("button", { name: "Share", exact: true }).click();
+			assert.deepEqual(await page.evaluate(() => [(window as any).handoff.shares, (window as any).handoff.activation]), [1, true]);
+			await page.keyboard.press("Tab");
+			assert.equal(await page.locator("[data-knomo-pointer-focus]").count(), 0);
+			assert.equal(await page.evaluate(() => getComputedStyle(document.activeElement!).outlineStyle), "solid");
+			await tapMissingClick(".knomo-share-close");
+			assert.equal(await page.locator(".knomo-share-modal").count(), 0);
+			assert.equal(await page.evaluate(() => document.activeElement?.id), "return");
+			assert.equal(await page.locator("#return").evaluate((el: HTMLElement) => el.hasAttribute("data-knomo-pointer-focus")), true);
+			await page.evaluate(() => {
+				(window as any).handoff.focused = true;
+				window.dispatchEvent(new Event("focus"));
+			});
+			await page.waitForTimeout(120);
+			assert.equal(await page.evaluate(() => document.activeElement?.id), "return");
+		}
 	} finally { await browser.close(); }
 });

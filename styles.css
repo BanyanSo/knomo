@@ -5428,7 +5428,7 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 .knomo-plugin .knomo-source-reference a:active,
 .knomo-plugin button.knomo-referrer-preview:active { color: var(--text-normal); }
 .knomo-plugin .knomo-source-reference a:focus-visible,
-.knomo-plugin button.knomo-referrer-preview:focus-visible {
+.knomo-plugin button.knomo-referrer-preview:focus-visible:not([data-knomo-pointer-focus]) {
 	outline: 2px solid var(--interactive-accent);
 	outline-offset: 1px;
 }
@@ -5617,6 +5617,12 @@ body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-titl
 }
 .is-mobile .modal.knomo-share-modal .modal-title { max-width: none; }
 .is-mobile .modal.knomo-share-modal .knomo-share-content { margin-top: 8px; padding: 0; }
+/* 只抑制本次指针交接目标；键盘输入或失焦立即移除标记。 */
+.knomo-plugin [data-knomo-pointer-focus]:focus,
+.knomo-share-modal [data-knomo-pointer-focus]:focus {
+	outline: none;
+	box-shadow: none;
+}
 @media (max-width: 600px) {
 	.modal.knomo-share-modal { width: 100%; max-width: 100%; height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); padding: 16px; }
 	.knomo-share-backdrop { padding: max(12px, env(safe-area-inset-top, 0px)) 8px max(12px, env(safe-area-inset-bottom, 0px)); }

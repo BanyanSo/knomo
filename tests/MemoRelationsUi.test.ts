@@ -18,6 +18,8 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 	await ensureObsidianStub();
 	const dom = new JSDOM("<!doctype html><body><main></main></body>", { pretendToBeVisual: true });
 	const win = dom.window;
+	const focusState = { mobile: false };
+	win.focus = () => {};
 	Object.defineProperties(win.HTMLElement.prototype, { win: { get() { return win; } }, doc: { get() { return win.document; } } });
 	Object.assign(win.HTMLElement.prototype, {
 		createEl(this: HTMLElement, tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> } = {}) {
@@ -73,6 +75,7 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 	const original = catalog.readObservationSnapshot.bind(catalog);
 	catalog.readObservationSnapshot = async (keys, signal) => { bodyReads += keys.length; return original(keys, signal); };
 	const page = new MemoRelationsPage({ read, getHost: () => host, onChanged: open => { actions.push(String(open)); }, onError: error => errors.push(error),
+		isMobile: () => focusState.mobile,
 		renderCard: renderCard ?? ((row, memo) => {
 			cacheView?.getMemoCardPreview(memo);
 			const card = row.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": memo.id } });
@@ -85,17 +88,47 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 	const previewView = Object.assign(Object.create(KnomoView.prototype), { catalogReadService: read,
 		containerEl: host, rootEl: host, relationsPage: page, closeCardMenu: () => {},
 		cardFlowEl: withPreviews ? host.createDiv({ cls: "knomo-card-flow" }) : null, trashViewClosed: false,
-		openMemoRelations: (handle: Parameters<typeof page.open>[0], trigger: HTMLElement, focusSubject: boolean) => page.open(handle, trigger, focusSubject) });
+		openMemoRelations: (handle: Parameters<typeof page.open>[0], trigger: HTMLElement, focusVisible: boolean) => page.open(handle, trigger, focusVisible) });
 	// 使用真实视图接线，覆盖原先固定写入主卡片流顶部的状态回调。
 	const cards: InstanceType<typeof MemoRelationCards> | null = withPreviews ? previewView.ensureRelationCards() : null;
 	if (cacheView) Object.assign(cacheView, { relationsPage: page, relationCards: cards });
-	return { dom, win, host, page, read, catalog, seed, errors, actions, cards, previewView, bodyReads: () => bodyReads,
+	return { dom, win, host, page, read, catalog, seed, errors, actions, cards, previewView, focusState, bodyReads: () => bodyReads,
 		cache, cacheView, cacheSize: () => (cache as unknown as { entries: Map<string, unknown> }).entries.size,
 		memo: async (handle: Parameters<typeof read.readMemoItems>[0][number]) => toCatalogMemoView((await read.readMemoItems([handle]))[0]),
 		close: () => { cards?.dispose(); page.dispose(); read.relations.dispose(); dom.window.close(); } };
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 80));
+
+test("逐层指针返回恢复入口焦点且无焦点环，新操作或上层 Modal 取消异步恢复", async () => {
+	for (const scenario of ["pointer", "keyboard", "new-input", "modal"]) {
+		const h = await fixture();
+		try {
+			h.focusState.mobile = true;
+			const [a, b] = await h.seed("A.md", "- 10:00 A ^a\n- 11:00 B [[#^a]] ^b\n");
+			const entry = h.host.createEl("button");
+			await h.page.open(a, entry, false); await settle();
+			const menu = h.page.el!.querySelector<HTMLElement>(".knomo-relations-list .knomo-card-menu")!;
+			await h.page.open(b, menu, false);
+			h.page.back(scenario === "keyboard");
+			let other: HTMLElement | null = null;
+			if (scenario === "new-input") { other = h.host.createEl("input"); other.focus(); }
+			if (scenario === "modal") {
+				other = h.host.createDiv({ cls: "modal-container", attr: { tabindex: "0" } });
+				other.getClientRects = () => [new h.win.DOMRect()] as unknown as DOMRectList; other.focus();
+			}
+			await settle(); await settle();
+			if (other) assert.equal(h.win.document.activeElement, other);
+			else {
+				const restored = h.page.el!.querySelector<HTMLElement>(".knomo-relations-list .knomo-card-menu")!;
+				assert.equal(h.win.document.activeElement, restored);
+				assert.equal(restored.hasAttribute("data-knomo-pointer-focus"), scenario === "pointer");
+			}
+			other?.remove(); h.page.back(false);
+			assert.equal(h.win.document.activeElement, entry); assert.ok(entry.hasAttribute("data-knomo-pointer-focus"));
+		} finally { h.close(); }
+	}
+});
 
 test("关闭关联页释放子元素引用，重复进入不保留上次主体 DOM", async () => {
 	const h = await fixture();
@@ -114,7 +147,7 @@ test("关闭关联页释放子元素引用，重复进入不保留上次主体 D
 	} finally { h.close(); }
 });
 
-test("被引用入口首次及再次指针点击不聚焦时间，键盘激活保留焦点转移和返回恢复", async () => {
+test("被引用入口首次及再次指针导航保留焦点交接并抑制焦点环，键盘激活保留提示", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	const h = await fixture(true, false, undefined, (row, memo) => renderKnomoMemoCard(row, memo, {
@@ -131,7 +164,7 @@ test("被引用入口首次及再次指针点击不聚焦时间，键盘激活�
 		await settle(); await settle();
 		const trigger = card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!;
 		assert.ok(trigger);
-		// 移动端首次点击可以不聚焦入口；返回后入口已聚焦，两个状态都不能强制聚焦时间。
+		// 入口有无焦点都必须可靠交接，而不是靠跳过聚焦隐藏指针焦点环。
 		for (const focused of [false, true]) {
 			if (focused) trigger.focus();
 			else assert.equal(h.win.document.activeElement, h.win.document.body);
@@ -140,13 +173,16 @@ test("被引用入口首次及再次指针点击不聚焦时间，键盘激活�
 			assert.equal(h.page.isOpen, true);
 			const time = h.page.el!.querySelector<HTMLButtonElement>(".knomo-relations-subject .knomo-card-time")!;
 			assert.ok(time);
-			assert.notEqual(h.win.document.activeElement, time);
-			h.page.back();
+			assert.equal(h.win.document.activeElement, time);
+			assert.ok(time.hasAttribute("data-knomo-pointer-focus"));
+			h.page.back(false);
 			assert.equal(h.win.document.activeElement, trigger);
+			assert.ok(trigger.hasAttribute("data-knomo-pointer-focus"));
 		}
 		// 原生按钮的键盘或辅助技术激活产生 detail=0 的 click。
 		trigger.click(); await settle();
 		assert.equal(h.win.document.activeElement, h.page.el!.querySelector(".knomo-relations-subject .knomo-card-time"));
+		assert.equal(h.win.document.activeElement!.hasAttribute("data-knomo-pointer-focus"), false);
 		h.page.back();
 		assert.equal(h.win.document.activeElement, trigger);
 		assert.deepEqual(h.errors, []);

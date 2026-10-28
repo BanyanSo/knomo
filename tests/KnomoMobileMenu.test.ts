@@ -471,6 +471,31 @@ test("mobile back belongs to the active view, dismisses the keyboard first and l
 	} finally { platform.isMobile = wasMobile; h.close(); }
 });
 
+test("菜单 helper 的触摸来源传到页面动作，后续键盘激活不沿用指针来源", async () => {
+	const h = await createHarness();
+	try {
+		const modes: boolean[] = [];
+		Object.assign(h.view, { handleMemoAction: async (_action: MemoAction, _memo: MemoViewItem, focusVisible: boolean) => { modes.push(focusVisible); } });
+		h.view.toggleCardMenu(h.originalMemo.id); tap(h, h.menus.at(-1)!.items[0].dom);
+		h.view.toggleCardMenu(h.originalMemo.id); h.menus.at(-1)!.items[0].dom.click();
+		assert.deepEqual(modes, [false, true]);
+	} finally { h.close(); }
+});
+
+test("详情页接管焦点后，列表层的延迟恢复不能重新聚焦根节点", async () => {
+	const h = await createHarness();
+	const { Platform } = await import("obsidian");
+	const platform = Platform as unknown as { isMobile: boolean }, wasMobile = platform.isMobile;
+	try {
+		platform.isMobile = true;
+		Object.assign(h.view, { composerOpen: false, mobileSearchPageOpen: false, relationsPage: { isOpen: true } });
+		const subject = h.f.root.createEl("button"); subject.focus();
+		(h.view as unknown as { recoverMobileViewFocus(): void }).recoverMobileViewFocus();
+		await new Promise(resolve => setTimeout(resolve, 150));
+		assert.equal(h.f.win.document.activeElement, subject);
+	} finally { platform.isMobile = wasMobile; h.close(); }
+});
+
 class FakeItem {
 	title = "";
 	icon = "";
@@ -478,7 +503,7 @@ class FakeItem {
 	checked: boolean | null = null;
 	warning = false;
 	label = false;
-	click: (() => void) | null = null;
+	click: ((event?: MouseEvent | KeyboardEvent) => void) | null = null;
 	readonly dom: HTMLElement;
 	private readonly titleEl: HTMLElement;
 	constructor(doc: Document) {
@@ -486,7 +511,7 @@ class FakeItem {
 		this.dom.className = "menu-item";
 		this.titleEl = this.dom.appendChild(doc.createElement("div"));
 		this.titleEl.className = "menu-item-title";
-		this.dom.addEventListener("click", () => this.click?.());
+		this.dom.addEventListener("click", event => this.click?.(event));
 	}
 	setTitle(title: string | DocumentFragment) {
 		this.title = typeof title === "string" ? title : title.textContent ?? "";
@@ -498,7 +523,9 @@ class FakeItem {
 	setChecked(value: boolean) { this.checked = value; this.dom.classList.toggle("mod-checked", value); return this; }
 	setWarning(value: boolean) { this.warning = value; return this; }
 	setIsLabel(value: boolean) { this.label = value; return this; }
-	onClick(callback: () => void) { this.click = callback; return this; }
+	onClick(callback: (event: MouseEvent | KeyboardEvent) => void) {
+		this.click = event => callback(event ?? new this.dom.ownerDocument.defaultView!.MouseEvent("click")); return this;
+	}
 }
 class FakeMenu {
 	items: FakeItem[] = [];
@@ -768,6 +795,22 @@ test("真实视图接线覆盖新建、搜索、Knomo 侧栏和宿主导航，�
 			await new Promise(resolve => h.f.win.setTimeout(resolve, 130));
 			assert.equal(calls, 1, button.outerHTML);
 		}
+	} finally { h.close(); }
+});
+
+test("冷启动时间入口缺失 click 时跳转一次，迟到 click 去重，后续原生点击正常", async () => {
+	const h = await createHarness();
+	try {
+		let focused = false;
+		Object.defineProperty(h.f.win.document, "hasFocus", { configurable: true, value: () => focused });
+		const button = h.f.dailyButton;
+		tap(h, button); focused = true;
+		await new Promise(resolve => h.f.win.setTimeout(resolve, 140));
+		assert.equal(h.f.calls.filter(call => call === "open-daily").length, 1);
+		await h.f.click(button);
+		assert.equal(h.f.calls.filter(call => call === "open-daily").length, 1);
+		h.f.pointer(button, "pointerdown"); await h.f.click(button);
+		assert.equal(h.f.calls.filter(call => call === "open-daily").length, 2);
 	} finally { h.close(); }
 });
 

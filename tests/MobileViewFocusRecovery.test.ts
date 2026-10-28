@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { MobileViewFocusRecovery } from "../src/ui/MobileViewFocusRecovery";
 
-function harness() {
+function harness(modal = false) {
 	const dom = new JSDOM("<!doctype html><body><main></main><button></button><input></body>", { pretendToBeVisual: true });
 	const win = dom.window;
 	const doc = win.document;
@@ -11,6 +11,8 @@ function harness() {
 	// 默认模拟可见节点；隐藏残留焦点由单独用例设置。
 	win.HTMLElement.prototype.getClientRects = () => [new win.DOMRect(0, 0, 100, 40)] as unknown as DOMRectList;
 	const root = doc.querySelector("main")!;
+	const owner = modal ? doc.createElement("div") : null;
+	if (owner) { owner.className = "modal-container"; doc.body.append(owner); owner.append(root); }
 	const state = { active: true, visible: true, foreground: true, acceptFocus: true, root: root as HTMLElement | null, calls: 0, now: 0 };
 	Object.defineProperty(doc, "visibilityState", { get: () => state.visible ? "visible" : "hidden" });
 	doc.hasFocus = () => state.foreground;
@@ -24,7 +26,8 @@ function harness() {
 	win.clearTimeout = id => { if (id !== undefined) timers.delete(id); };
 	const nativeFocus = root.focus.bind(root);
 	root.focus = options => { state.calls++; assert.equal(options?.preventScroll, true); if (state.acceptFocus) nativeFocus(options); };
-	const recovery = new MobileViewFocusRecovery({ getRoot: () => state.root, canRecover: () => state.active });
+	const recovery = new MobileViewFocusRecovery({ getRoot: () => state.root, canRecover: () => state.active,
+		...(owner ? { getOwner: () => owner } : {}) });
 	const advance = (milliseconds: number) => {
 		const end = state.now + milliseconds;
 		for (;;) {
@@ -34,10 +37,42 @@ function harness() {
 		}
 		state.now = end;
 	};
-	return { win, doc, root, state, frames, timers, recovery, advance,
+	return { win, doc, root, owner, state, frames, timers, recovery, advance,
 		frame: () => { const tasks = [...frames.values()]; frames.clear(); for (const callback of tasks) callback(0); },
 		close: () => { recovery.cancel(); win.close(); } };
 }
+
+test("自有 Modal 可以恢复窗口及元素焦点，但新 Modal 或用户选中的控件使旧恢复永久失效", () => {
+	for (const scenario of ["ready", "new-modal", "other-control"]) {
+		const h = harness(true);
+		try {
+			let requests = 0; h.state.foreground = false; h.win.focus = () => { requests++; };
+			h.recovery.recover();
+			assert.equal(h.doc.activeElement, h.root); assert.equal(requests, 1);
+			h.root.blur();
+			if (scenario === "new-modal") {
+				const other = h.doc.createElement("div"); other.className = "modal-container"; h.doc.body.append(other);
+				h.frame(); other.remove();
+			} else if (scenario === "other-control") {
+				const button = h.doc.createElement("button"); h.owner!.append(button); button.focus(); h.frame();
+			} else { h.state.foreground = true; h.frame(); }
+			const calls = h.state.calls; h.advance(1000); h.frame();
+			assert.equal(h.state.calls, calls);
+			if (scenario !== "ready") assert.equal(h.timers.size, 0);
+		} finally { h.close(); }
+	}
+});
+
+test("Modal 的原生按钮交接保留 Tab 顺序，不应用普通容器的 tabindex=-1", () => {
+	const h = harness(true);
+	try {
+		const button = h.doc.createElement("button"); h.owner!.append(button); h.state.root = button;
+		h.recovery.recover();
+		assert.equal(h.doc.activeElement, button);
+		assert.equal(button.hasAttribute("tabindex"), false);
+		assert.equal(button.tabIndex, 0);
+	} finally { h.close(); }
+});
 
 test("返回活动视图时在首次交互之前恢复非编辑焦点，不派发点击", () => {
 	const h = harness();

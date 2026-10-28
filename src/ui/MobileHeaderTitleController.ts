@@ -1,3 +1,5 @@
+import { isKeyboardActivation } from "./NavigationFocus";
+
 export type MobileHeaderTitleRegisterDomEvent = <K extends "click" | "keydown">(
 	target: HTMLElement,
 	type: K,
@@ -79,7 +81,7 @@ export class MobileHeaderTitleController {
 				return;
 			}
 			event.preventDefault();
-			this.options.onToggleScopeMenu(event.detail === 0);
+			this.options.onToggleScopeMenu(isKeyboardActivation(event));
 		});
 		this.options.registerDomEvent(titleEl, "keydown", (event) => {
 			if (!this.options.canToggleScopeMenu()) {

@@ -96,7 +96,20 @@ export class ShareCardRenderer {
 		const canvas = await toCanvas(card, { width: 390, height, pixelRatio: 2, skipAutoScale: true, fontEmbedCSS: this.fontCSS, skipFonts: !this.fontCSS, cacheBust: false });
 		try {
 			this.abort.signal.throwIfAborted();
-			if (canvas.width !== 780 || canvas.height !== height * 2 || !canvas.getContext("2d")?.getImageData(0, 0, 1, 1).data[3]) throw new ShareCardError("generation");
+			const context = canvas.getContext("2d");
+			if (!context || canvas.width !== 780 || canvas.height !== height * 2 || !context.getImageData(0, 0, 1, 1).data[3]) throw new ShareCardError("generation");
+			const cover = card.querySelector<HTMLImageElement>(".hero");
+			if (cover) {
+				try {
+					// WebKit 首次转换 SVG 时可能漏绘内嵌图片，封面直接使用已解码位图合成。
+					const rect = cover.getBoundingClientRect(); const origin = card.getBoundingClientRect();
+					// 与模板的 object-fit:cover 和默认居中位置保持相同裁切。
+					const scale = Math.max(rect.width / cover.naturalWidth, rect.height / cover.naturalHeight);
+					const width = rect.width / scale; const height = rect.height / scale;
+					context.drawImage(cover, (cover.naturalWidth - width) / 2, (cover.naturalHeight - height) / 2, width, height,
+						(rect.left - origin.left) * 2, (rect.top - origin.top) * 2, rect.width * 2, rect.height * 2);
+				} catch { throw new ShareCardError("cover"); }
+			}
 			const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
 			if (!blob || blob.size === 0) throw new ShareCardError("generation");
 			return blob;

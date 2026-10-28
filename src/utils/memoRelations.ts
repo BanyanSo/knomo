@@ -1,7 +1,9 @@
-import { decodeHTMLStrict } from "entities/decode";
+import { decodeHTMLStrict } from "entities";
 import { parseSearchMarkdown, extractReadableSearchBody } from "../services/SearchDocument";
 import { parseMarkdownReferences } from "./markdownReferences";
 import { parseMarkdownImages } from "./markdownImages";
+import type { MemoLinkSyntax } from "../types/memo";
+import type { MemoRelationTarget } from "../types/memoRelations";
 
 // 仅供关联查询使用；既有引用显示、筛选与统计继续使用原提取规则。
 export function relationBody(content: string, excludeQuotes = true): string {
@@ -30,18 +32,23 @@ export function relationBody(content: string, excludeQuotes = true): string {
 	return result + content.slice(start);
 }
 
-export function parseMemoRelationTarget(target: string): { path: string; blockId: string } | null {
+export function parseMemoRelationTarget(target: string, syntax: MemoLinkSyntax): MemoRelationTarget | null {
 	try {
-		const decoded = decodeURIComponent(decodeHTMLStrict(target));
+		// WikiLink 是原始文件路径；仅 Markdown URL 解码，派生索引保存解析结果。
+		const decoded = syntax === "wiki_link" ? target : decodeURIComponent(decodeHTMLStrict(target));
 		if (/^[a-z][\w+.-]*:/iu.test(decoded)) return null;
 		const match = /^(.*?)#\^([A-Za-z0-9-]+)$/u.exec(decoded);
 		return match ? { path: match[1], blockId: match[2] } : null;
 	} catch { return null; }
 }
 
-export function extractMemoRelationTargets(content: string): string[] {
-	return [...new Set(parseMarkdownReferences(relationBody(content))
-		.filter(link => link.valid && parseMemoRelationTarget(link.target) !== null).map(link => link.target))];
+export function extractMemoRelationTargets(content: string): MemoRelationTarget[] {
+	const targets = new Map<string, MemoRelationTarget>();
+	for (const link of parseMarkdownReferences(relationBody(content))) {
+		const target = link.valid ? parseMemoRelationTarget(link.target, link.syntax) : null;
+		if (target) targets.set(JSON.stringify([target.path, target.blockId]), target);
+	}
+	return [...targets.values()];
 }
 
 export function collectRelationBlockAnchors(content: string): Record<string, number> {
@@ -84,7 +91,7 @@ export function extractMemoRelationSummary(content: string): { text: string; ima
 	const hasImage = parseMarkdownImages(body).some(image => /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)(?:[?#]|$)/iu.test(image.path));
 	const refs = parseMarkdownReferences(body);
 	for (const link of refs.slice().reverse()) {
-		if (link.raw.startsWith("!") || parseMemoRelationTarget(link.target)) {
+		if (link.raw.startsWith("!") || parseMemoRelationTarget(link.target, link.syntax)) {
 			const start = link.startOffset!;
 			body = body.slice(0, start) + " ".repeat(link.raw.length) + body.slice(start + link.raw.length);
 		}

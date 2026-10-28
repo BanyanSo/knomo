@@ -3,7 +3,6 @@ import type { MemoRelationNode, MemoRelationSnapshot } from "../types/memoRelati
 import type { MemoCatalogService } from "./MemoCatalogService";
 import type { CatalogChangeCursor } from "./CatalogFileChanges";
 import { observationHandleKey } from "./DailyMemoPresentationChange";
-import { parseMemoRelationTarget } from "../utils/memoRelations";
 
 export interface MemoRelationOptions {
 	resolvePath?: (path: string, sourcePath: string) => { path: string | null; pending?: boolean };
@@ -51,7 +50,9 @@ export class MemoRelationService {
 	private readonly listeners = new Set<(change: MemoRelationChange | null) => void>();
 	private readonly unsubscribe: () => void;
 	private disposed = false;
-	private resolutionNames = new Set<string>();
+	private anchors = new Map<string, MemoRelationNode>();
+	private dependencies = new Map<string, ReadonlySet<string>>();
+	private pendingSources = new Set<string>();
 	private scanFailures = 0;
 	private resolved = new Map<string, ResolvedSource>();
 	private indexedSnapshot: MemoRelationSnapshot | null = null;
@@ -77,22 +78,23 @@ export class MemoRelationService {
 
 	private invalidateState(paths?: readonly string[], file?: CatalogFileRecord, keepTask = false): void {
 		const names = new Set(paths?.map(linkBasename));
-		const changedPaths = new Set(paths);
 		const affectedPaths = new Set(paths);
 		const targetNames = new Set(names);
 		if (paths === undefined) this.dirtyNames = null;
 		else {
 			for (const name of names) this.dirtyNames?.add(name);
-			for (const entry of this.resolved.values()) {
-				if (changedPaths.has(entry.node.handle.sourcePath) || [...entry.names].some(name => names.has(name))) {
-					affectedPaths.add(entry.node.handle.sourcePath);
-					for (const target of entry.targets) affectedPaths.add(target.handle.sourcePath);
-				}
+			const affected = new Set<string>();
+			for (const path of paths!) for (const node of this.files.get(path)?.relations?.nodes ?? []) affected.add(observationHandleKey(node.handle));
+			for (const name of names) for (const key of this.dependencies.get(name) ?? []) affected.add(key);
+			for (const key of affected) {
+				const entry = this.resolved.get(key);
+				if (!entry) continue;
+				affectedPaths.add(entry.node.handle.sourcePath);
+				for (const target of entry.targets) affectedPaths.add(target.handle.sourcePath);
 			}
 			// 新增或改链后的目标尚未进入旧索引，按目标名称保守通知可能受影响的卡片。
-			for (const node of file?.relations?.nodes ?? []) for (const raw of node.targets) {
-				const target = parseMemoRelationTarget(raw);
-				if (target?.path) targetNames.add(linkBasename(target.path));
+			for (const node of file?.relations?.nodes ?? []) for (const target of node.targets) {
+				if (target.path) targetNames.add(linkBasename(target.path));
 			}
 		}
 		this.version++;
@@ -103,7 +105,7 @@ export class MemoRelationService {
 	}
 
 	invalidateResolution(paths?: readonly string[]): void {
-		if (paths && this.indexedSnapshot && paths.every(path => !this.files.has(path) && !this.resolutionNames.has(linkBasename(path)))) return;
+		if (paths && this.indexedSnapshot && paths.every(path => !this.files.has(path) && !this.dependencies.has(linkBasename(path)))) return;
 		this.invalidate(paths);
 	}
 
@@ -139,7 +141,7 @@ export class MemoRelationService {
 		this.listeners.clear();
 		this.files.clear();
 		this.fileStates.clear();
-		this.resolutionNames.clear();
+		this.anchors.clear(); this.dependencies.clear(); this.pendingSources.clear();
 		this.resolved.clear();
 		this.indexedSnapshot = null;
 	}
@@ -308,41 +310,58 @@ export class MemoRelationService {
 		const errors = new Set<string>();
 		const scanFailures = this.failedFileCount();
 		if (scanFailures) { complete = false; errors.add("Daily scan failed"); }
-		const nodes = new Map<string, MemoRelationNode>();
-		const anchors = new Map<string, MemoRelationNode>();
+		const nodes = new Map(this.indexedSnapshot?.nodes);
+		const anchors = new Map(this.anchors);
 		const usableFiles = new Map<string, CatalogFileRecord>();
 		const states = new Map<string, boolean>();
+		const changed = new Set<string>();
+		const removeFile = (file: CatalogFileRecord): void => {
+			for (const node of file.relations?.nodes ?? []) {
+				const key = observationHandleKey(node.handle);
+				nodes.delete(key); changed.add(key);
+				if (node.blockId) anchors.delete(file.sourcePath + "\0" + node.blockId);
+			}
+		};
+		for (const [path, file] of this.files) if (!files.has(path)) removeFile(file);
 		for (const file of files.values()) {
 			signal.throwIfAborted();
 			const current = this.fileCurrent(file); states.set(file.sourcePath, current);
 			if (current !== this.fileStates.get(file.sourcePath)) dirtyNames?.add(linkBasename(file.sourcePath));
+			const previous = this.files.get(file.sourcePath);
+			const retained = previous === file && current === this.fileStates.get(file.sourcePath);
+			if (!retained && previous) removeFile(previous);
 			if (!current || !file.relations) { complete = false; continue; }
 			usableFiles.set(file.sourcePath, file);
+			// 未变化分区直接沿用节点与锚点，不枚举其中每个 occurrence。
+			if (retained) continue;
 			for (const node of file.relations.nodes) {
 				const key = observationHandleKey(node.handle);
-				nodes.set(key, node);
+				nodes.set(key, node); changed.add(key);
 				if (node.blockId && file.relations.anchors[node.blockId] === 1) anchors.set(file.sourcePath + "\0" + node.blockId, node);
 			}
 		}
-		const resolvedSources = new Map<string, ResolvedSource>();
-		const resolutionNames = new Set<string>();
-		let operations = 0;
-		for (const [key, node] of nodes) {
-			if (++operations % 256 === 0) { signal.throwIfAborted(); await pause(); }
-			const previous = this.resolved.get(key);
-			if (previous?.complete && dirtyNames !== null && !dirtyNames.has(linkBasename(node.handle.sourcePath))
-				&& ![...previous.names].some(name => dirtyNames.has(name))) {
-				resolvedSources.set(key, previous);
-				for (const name of previous.names) resolutionNames.add(name);
-				continue;
+		const candidates = new Set(changed);
+		if (dirtyNames === null) for (const key of nodes.keys()) candidates.add(key);
+		else {
+			for (const name of dirtyNames) for (const key of this.dependencies.get(name) ?? []) candidates.add(key);
+			// 来源自身的 metadata 会影响解析可用性，正文未变也必须重验其上下文。
+			for (const file of usableFiles.values()) if (dirtyNames.has(linkBasename(file.sourcePath))) {
+				for (const node of file.relations!.nodes) candidates.add(observationHandleKey(node.handle));
 			}
+		}
+		for (const key of this.pendingSources) candidates.add(key);
+		const resolvedSources = new Map(this.resolved);
+		const pendingSources = new Set(this.pendingSources);
+		let operations = 0;
+		for (const key of candidates) {
+			const node = nodes.get(key);
+			if (!node) { resolvedSources.delete(key); pendingSources.delete(key); continue; }
+			if (++operations % 256 === 0) { signal.throwIfAborted(); await pause(); }
 			const targets = new Map<string, MemoRelationNode>();
 			const entry: ResolvedSource = { node, targets: [], names: new Set(), complete: true, errors: [] };
-			for (const raw of node.targets) {
+			for (const target of node.targets) {
 				signal.throwIfAborted();
 				if (++operations % 256 === 0) await pause();
-				const target = parseMemoRelationTarget(raw);
-				if (!target) continue;
 				if (target.path) entry.names.add(linkBasename(target.path));
 				try {
 					const resolved: { path: string | null; pending?: boolean } = target.path === "" ? { path: node.handle.sourcePath }
@@ -361,27 +380,44 @@ export class MemoRelationService {
 			}
 			entry.targets = [...targets.values()];
 			resolvedSources.set(key, entry);
-			for (const name of entry.names) resolutionNames.add(name);
-			if (!entry.complete) complete = false;
-			for (const error of entry.errors) errors.add(error);
+			if (entry.complete) pendingSources.delete(key); else pendingSources.add(key);
+		}
+		for (const key of pendingSources) {
+			complete = false;
+			for (const error of resolvedSources.get(key)!.errors) errors.add(error);
 		}
 		// 只替换变化来源的边；未受影响的列表保留数组和排序，不逐边反复复制大列表。
 		const sources = new Map(this.indexedSnapshot?.sources);
 		const referrers = new Map(this.indexedSnapshot?.referrers);
 		const removed = new Set<string>(), touched = new Set<string>();
 		const added = new Map<string, MemoRelationNode[]>();
-		for (const [key, entry] of this.resolved) if (resolvedSources.get(key) !== entry) {
-			removed.add(key); sources.delete(key);
-			for (const target of entry.targets) touched.add(observationHandleKey(target.handle));
-		}
-		for (const [key, entry] of resolvedSources) if (this.resolved.get(key) !== entry) {
-			sources.set(key, entry.targets);
-			for (const target of entry.targets) {
-				const targetKey = observationHandleKey(target.handle);
-				const incoming = added.get(targetKey) ?? [];
-				incoming.push(entry.node); added.set(targetKey, incoming); touched.add(targetKey);
+		// 依赖名称反向索引按本批变化复制集合，避免更新一个文件时扫描全部来源。
+		const dependencies = new Map(this.dependencies);
+		const editedNames = new Map<string, Set<string>>();
+		const editName = (name: string): Set<string> => {
+			let keys = editedNames.get(name);
+			if (!keys) { keys = new Set(dependencies.get(name)); editedNames.set(name, keys); dependencies.set(name, keys); }
+			return keys;
+		};
+		for (const key of candidates) {
+			const before = this.resolved.get(key), after = resolvedSources.get(key);
+			if (before === after) continue;
+			if (before) {
+				removed.add(key); sources.delete(key);
+				for (const target of before.targets) touched.add(observationHandleKey(target.handle));
+				for (const name of before.names) if (!after?.names.has(name)) editName(name).delete(key);
+			}
+			if (after) {
+				sources.set(key, after.targets);
+				for (const name of after.names) if (!before?.names.has(name)) editName(name).add(key);
+				for (const target of after.targets) {
+					const targetKey = observationHandleKey(target.handle);
+					const incoming = added.get(targetKey) ?? [];
+					incoming.push(after.node); added.set(targetKey, incoming); touched.add(targetKey);
+				}
 			}
 		}
+		for (const [name, keys] of editedNames) if (!keys.size) dependencies.delete(name);
 		for (const key of touched) {
 			const incoming = [...(referrers.get(key) ?? []).filter(node => !removed.has(observationHandleKey(node.handle))), ...(added.get(key) ?? [])];
 			incoming.sort((a, b) => `${b.logicalDate}T${b.time.padEnd(8, ":00")}`.localeCompare(`${a.logicalDate}T${a.time.padEnd(8, ":00")}`)
@@ -399,7 +435,9 @@ export class MemoRelationService {
 		if (this.disposed || version !== this.version) throw new MemoRelationsChangedError();
 		this.files = files;
 		this.fileStates = states;
-		this.resolutionNames = resolutionNames;
+		this.anchors = anchors;
+		this.dependencies = dependencies;
+		this.pendingSources = pendingSources;
 		this.scanFailures = scanFailures;
 		this.cursor = after.cursor;
 		this.resolved = resolvedSources;

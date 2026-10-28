@@ -97,6 +97,23 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 80));
 
+test("关闭关联页释放子元素引用，重复进入不保留上次主体 DOM", async () => {
+	const h = await fixture();
+	try {
+		const [handle] = await h.seed("A.md", "- 10:00 subject ^a\n");
+		for (let cycle = 0; cycle < 3; cycle++) {
+			await h.page.open(handle!);
+			assert.ok(h.page.el?.querySelector(".knomo-card"));
+			h.page.close();
+			assert.equal(h.page.el, null);
+			assert.equal(h.host.querySelector(".knomo-relations-page"), null);
+			const fields = h.page as unknown as Record<string, unknown>;
+			for (const name of ["listEl", "listTitle", "status", "loadingEl"]) assert.equal(fields[name], null, name);
+		}
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
 test("被引用入口首次及再次指针点击不聚焦时间，键盘激活保留焦点转移和返回恢复", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");

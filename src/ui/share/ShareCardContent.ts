@@ -63,16 +63,19 @@ markdown.core.ruler.before("text_join", "share_math", state => {
 			if (/\$\$|\$(?!\s)[^$\n]*\S\$/u.test(text)) throw new ShareCardError("unsupported", "math");
 			text = "";
 		};
-		for (const token of tokens) {
-			if (token.type === "text" || token.type === "text_special") {
-				// 转义和实体产生的美元符号是普通字符，其余文本仍可组成完整公式。
-				text += token.type === "text" ? token.content : token.content.replace(/\$/gu, "＄");
-			} else flush();
-			if (token.children) check(token.children);
-		}
+		const visit = (items: readonly Token[]): void => {
+			for (const token of items) {
+				if (token.type === "text" || token.type === "text_special") {
+					// 转义和实体产生的美元符号是普通字符；强调标记不切断公式区间。
+					text += token.type === "text" ? token.content : token.content.replace(/\$/gu, "＄");
+				} else if (token.type === "inline") visit(token.children ?? []);
+				else if (token.nesting === 0) { flush(); if (token.children) check(token.children); }
+			}
+		};
+		visit(tokens);
 		flush();
 	};
-	check(state.tokens);
+	for (const token of state.tokens) if (token.children) check(token.children);
 });
 
 export function shareCardTokens(text: string): Token[] {

@@ -23,7 +23,7 @@ import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { assignObservationOccurrences } from "./ObservationOccurrences";
 import { collectRelationBlockAnchors, memoLevelRelationBlockId } from "../utils/memoRelations";
 
-export const CATALOG_PARSER_VERSION = 14;
+export const CATALOG_PARSER_VERSION = 15;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;

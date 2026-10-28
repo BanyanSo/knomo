@@ -1,11 +1,13 @@
 import type { CatalogCoverage, ObservationHandle } from "./catalog";
 
+export interface MemoRelationTarget { path: string; blockId: string }
+
 export interface MemoRelationNode {
 	handle: ObservationHandle;
 	logicalDate: string;
 	time: string;
 	blockId: string | null;
-	targets: string[];
+	targets: MemoRelationTarget[];
 }
 
 // 只保存候选与定位上下文，不包含正文、身份或写权限。

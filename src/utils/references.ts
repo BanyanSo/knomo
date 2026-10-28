@@ -2,7 +2,6 @@ import { parseMarkdownReferences } from "./markdownReferences";
 
 interface BlockReferenceCandidate {
 	startOffset: number;
-	quoted: boolean;
 	referenceText: string;
 }
 
@@ -67,11 +66,7 @@ function withReferenceAlias(referenceText: string, alias: string): string {
 }
 
 function getPreferredReferenceCandidates(content: string): BlockReferenceCandidate[] {
-	return parseBlockReferenceCandidates(content).filter((candidate) => !candidate.quoted);
-}
-
-function parseBlockReferenceCandidates(content: string): BlockReferenceCandidate[] {
 	return parseMarkdownReferences(content.replace(/^\s*>[^\r\n]*/gmu, (value) => value.replace(/[^\r\n]/gu, " ")))
 		.filter((link) => link.valid && /#(?:\^|%5[eE])/u.test(link.target))
-		.map((link) => ({ startOffset: link.startOffset!, quoted: false, referenceText: link.raw }));
+		.map((link) => ({ startOffset: link.startOffset!, referenceText: link.raw }));
 }

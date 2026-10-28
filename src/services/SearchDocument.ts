@@ -1,5 +1,5 @@
 import { parser, Strikethrough, Table, type InlineParser } from "@lezer/markdown";
-import { decodeHTMLStrict } from "entities/decode";
+import { decodeHTMLStrict } from "entities";
 import { normalizeSearchText } from "../utils/searchText";
 
 interface InlineCodeRange { from: number; to: number; valid: boolean }

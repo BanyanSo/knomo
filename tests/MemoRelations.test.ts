@@ -89,6 +89,33 @@ test("末次 coverage 校验期间 runtime 销毁，旧读取不能再返回成�
 	} finally { probe.release(); relations.dispose(); }
 });
 
+test("增量重算发布前失效不污染已发布的目标依赖和引用者集合", async () => {
+	const { seed, catalog, store, relations: unused } = await fixture(); unused.dispose();
+	const [a] = await seed("A.md", "- 10:00 A ^a\n");
+	const [c] = await seed("C.md", "- 10:00 C ^c\n");
+	await seed("B.md", "- 11:00 [[A#^a]]\n");
+	const relations = new MemoRelationService(catalog);
+	let release = () => {};
+	let off = () => {};
+	try {
+		const before = await relations.read();
+		await seed("B.md", "- 11:00 [[C#^c]]\n");
+		const gate = holdFinalCoverage(store); release = gate.release;
+		const rejected = assert.rejects(relations.read(), MemoRelationsChangedError);
+		await gate.ready;
+		const affected = new Set<string>();
+		off = relations.subscribe(change => { for (const path of change?.paths ?? []) affected.add(path); });
+		relations.invalidateResolution(["A.md"]);
+		assert.ok(affected.has("B.md"), "取消前仍须按已发布的 A←B 依赖通知来源");
+		assert.equal(before.referrers.get(a!)?.length, 1);
+		assert.equal(before.referrers.has(c!), false);
+		release(); await rejected;
+		const current = await relations.read();
+		assert.equal(current.referrers.has(a!), false);
+		assert.equal(current.referrers.get(c!)?.length, 1);
+	} finally { release(); off(); relations.dispose(); }
+});
+
 test("无关 Daily 更新复用已解析关系，改链只重算相关来源", async () => {
 	const { catalog, seed } = await fixture();
 	const [a] = await seed("A.md", "- 10:00 A ^a\n");
@@ -113,6 +140,48 @@ test("无关 Daily 更新复用已解析关系，改链只重算相关来源", a
 		assert.deepEqual(calls, ["B.md"]);
 		assert.equal(changed.referrers.get(a!), undefined);
 		assert.equal(changed.sources.get(nextB!)?.[0].handle.sourcePath, "C.md");
+	} finally { relations.dispose(); }
+});
+
+test("局部 metadata 失效复用无关文件的节点集合，不重新遍历其 occurrence", async () => {
+	const { catalog, seed, relations } = await fixture();
+	try {
+		const [a] = await seed("A.md", "- 10:00 A ^a\n");
+		await seed("B.md", "- 11:00 [[A#^a]]\n");
+		await seed("Far.md", Array.from({ length: 64 }, (_, i) => `- 12:00 far ${i}`).join("\n"));
+		let visits = 0;
+		const listFiles = catalog.listFiles.bind(catalog);
+		catalog.listFiles = async () => {
+			const files = await listFiles();
+			for (const node of files.find(file => file.sourcePath === "Far.md")!.relations!.nodes) {
+				const path = node.handle.sourcePath;
+				Object.defineProperty(node.handle, "sourcePath", { get: () => { visits++; return path; } });
+			}
+			return files;
+		};
+		const before = await relations.read(); visits = 0;
+		relations.invalidateResolution(["A.md"]);
+		const after = await relations.read();
+		assert.equal(visits, 0, "无关分区不应重新枚举节点来构造或校验相同关系");
+		assert.equal(after.referrers.get(a!)?.length, 1);
+		assert.equal(after.nodes.size, before.nodes.size);
+	} finally { relations.dispose(); }
+});
+
+test("来源 metadata 暂不可用时重验未改正文的上下文，恢复后接续关系", async () => {
+	const { catalog, seed, relations: unused } = await fixture(); unused.dispose();
+	const [a] = await seed("A.md", "- 10:00 A ^a\n");
+	await seed("B.md", "- 11:00 [[A#^a]]\n");
+	let pending = false;
+	const relations = new MemoRelationService(catalog, { resolvePath: () => ({ path: "A.md", pending }) });
+	try {
+		assert.equal((await relations.read()).referrers.get(a!)?.length, 1);
+		pending = true; relations.invalidateResolution(["B.md"]);
+		assert.equal((await relations.read()).complete, false);
+		pending = false; relations.invalidateResolution(["B.md"]);
+		const current = await relations.read();
+		assert.equal(current.complete, true);
+		assert.equal(current.referrers.get(a!)?.length, 1);
 	} finally { relations.dispose(); }
 });
 
@@ -195,9 +264,25 @@ test("关联按直接来源 occurrence 去重，分钟秒排序、自引与环�
 test("Markdown 结构排除快照、嵌套及懒续行引用、代码、注释；块嵌入只产生显式关系", () => {
 	const text = "> [[A#^a]]\n> > [[B#^b]]\nlazy [[C#^c]]\n\nnormal [[D#^d]] ![[E#^e]]\n"
 		+ "`[[F#^f]]` <!-- [[G#^g]] --> %% [[H#^h]] %%\n\n    [[I#^i]]\n\n```md\n[[J#^j]]\n```\n\\[[K#^k]]";
-	assert.deepEqual(extractMemoRelationTargets(text), ["D#^d", "E#^e"]);
-	assert.deepEqual(extractMemoRelationTargets("[[A#^a]]\n\n[[B#^b]]"), ["A#^a", "B#^b"]);
-	assert.deepEqual(extractMemoRelationTargets("<!-- [[Hidden#^x]] --> [[A#^a]]\n"), ["A#^a"]);
+	assert.deepEqual(extractMemoRelationTargets(text), [{ path: "D", blockId: "d" }, { path: "E", blockId: "e" }]);
+	assert.deepEqual(extractMemoRelationTargets("[[A#^a]]\n\n[[B#^b]]"), [{ path: "A", blockId: "a" }, { path: "B", blockId: "b" }]);
+	assert.deepEqual(extractMemoRelationTargets("<!-- [[Hidden#^x]] --> [[A#^a]]\n"), [{ path: "A", blockId: "a" }]);
+});
+
+test("WikiLink 保留百分号和实体原文，Markdown URL 只解码一次并按来源定位", async () => {
+	const { seed, relations } = await fixture();
+	try {
+		const [literal] = await seed("Daily/100%/A.md", "- 10:00 literal ^a\n");
+		const [encodedName] = await seed("Daily/100%20/A.md", "- 10:00 percent name ^a\n");
+		const [spaceName] = await seed("Daily/100 /A.md", "- 10:00 space name ^a\n");
+		const [entityName] = await seed("Daily/A&amp;B.md", "- 10:00 entity name ^a\n");
+		const [chinese] = await seed("Daily/中文.md", "- 10:00 中文 ^a\n");
+		const [source] = await seed("Daily/Source.md", "- 11:00 [[100%/A#^a]] [[100%20/A#^a]] [[A&amp;B#^a]] [中文](./%E4%B8%AD%E6%96%87.md#%5Ea) [literal](100%25/A.md#^a)\n");
+		const graph = await relations.read();
+		assert.equal(graph.complete, true);
+		assert.deepEqual(new Set(graph.sources.get(source!)?.map(node => observationHandleKey(node.handle))), new Set([literal, encodedName, entityName, chinese]));
+		assert.equal(graph.referrers.has(spaceName!), false, "字面量 %20 的 WikiLink 不得转移到空格路径");
+	} finally { relations.dispose(); }
 });
 
 test("相对路径、同文件与编码兼容，子块和 Daily 外锚点及重复锚点不升级为 Memo", async () => {

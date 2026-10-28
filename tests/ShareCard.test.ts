@@ -63,7 +63,7 @@ test("escaped dollar text remains literal while actual formulas still fail close
 		const card = renderShareCard(new JSDOM().window.document, snapshot, "paper", new Map());
 		assert.match(card.querySelector(".content")!.textContent!, /\$/u);
 	}
-	for (const text of ["$x$", "$$x$$", "==$x$==", "**$x$**", String.raw`$\alpha$`, String.raw`==$\frac{a}{b}$==`, String.raw`$\$x$`]) assert.throws(() => shareCardTokens(text), error => error instanceof ShareCardError && error.kind === "math");
+	for (const text of ["$x$", "$$x$$", "==$x$==", "**$x$**", "$a *b* c$", "$x_{**i**}$", "$a ==b== c$", String.raw`$\alpha$`, String.raw`==$\frac{a}{b}$==`, String.raw`$\$x$`]) assert.throws(() => shareCardTokens(text), error => error instanceof ShareCardError && error.kind === "math");
 });
 
 test("callout titles end before body lines and preserve explicit inline formatting", () => {

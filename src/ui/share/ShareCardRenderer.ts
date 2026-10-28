@@ -65,7 +65,16 @@ export class ShareCardRenderer {
 		}
 		this.abort.signal.throwIfAborted();
 		doc.head.replaceChildren(); doc.body.replaceChildren();
-		const style = doc.createElement("style"); this.fontCSS ??= await embedShareCardFonts(this.fonts, this.abort.signal);
+		const style = doc.createElement("style");
+		if (this.fontCSS === null) {
+			// 包含所有模板可能显示的字符，模板切换仍复用同一份字体与回退规则。
+			const text = [snapshot.date.replace(/-/gu, "/"), snapshot.month, snapshot.weekday, "Knomo ☐☑•◦▪0123456789."];
+			const visit = (tokens: ShareCardSnapshot["body"]): void => { for (const token of tokens) {
+				text.push(token.content); if (token.children) visit(token.children);
+			} };
+			visit(snapshot.body);
+			this.fontCSS = await embedShareCardFonts(this.fonts, this.abort.signal, text.join(" "));
+		}
 		style.textContent = this.fontCSS + shareCardStyles(template, this.fonts.typography); doc.head.append(style);
 		const card = renderShareCard(doc, snapshot, template, this.images, this.cover); doc.body.append(card);
 		await Promise.all(Array.from(card.querySelectorAll("img"), async image => {

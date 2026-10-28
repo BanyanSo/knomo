@@ -182,6 +182,7 @@ export class MemoRelationsPage {
 		if (this.subject) this.options.releaseCard(this.subject);
 		this.el?.remove(); this.el = null;
 		this.subject = null;
+		this.listEl = null; this.listTitle = null; this.status = null; this.loadingEl = null;
 		this.memos.clear();
 	}
 

@@ -9,7 +9,7 @@ test("actual PNGs preserve four layouts, ordered images and readable long conten
 import { ShareCardRenderer } from './src/ui/share/ShareCardRenderer';
 import { createShareCardSnapshot } from './src/ui/share/ShareCardContent';
 import { SHARE_CARD_REFLECTION_COVER } from "./src/ui/share/ShareCardTemplateResources";
-window.shareTest = { ShareCardRenderer, createShareCardSnapshot, cover: SHARE_CARD_REFLECTION_COVER };`, resolveDir: process.cwd() }, loader: { ".png": "dataurl", ".jpg": "dataurl" }, bundle: true, write: false, format: "iife", platform: "browser" });
+window.shareTest = { ShareCardRenderer, createShareCardSnapshot, cover: SHARE_CARD_REFLECTION_COVER };`, resolveDir: process.cwd() }, loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" }, bundle: true, write: false, format: "iife", platform: "browser" });
 	const paragraph = "傍晚散步时，树叶间的光落在路面上。停下来观察一会儿，会发现每天熟悉的地方仍有细小的变化。记录这些瞬间，不需要急着得出结论，只要把当下看见的、想到的认真留下。阅读也是如此，先理解一句话，再试着用自己的经验回答它。";
 	const samples = [
 		"今天整理书桌，翻到去年留下的便签。那些当时觉得重要的小事，已经变成了生活的一部分。\n\n把注意力放回眼前：读完一页书，照顾一盆植物，认真听完一段话。 #日常",

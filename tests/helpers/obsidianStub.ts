@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 export async function ensureObsidianStub(): Promise<void> {
-	for (const name of ["Banyan-WeChat-Reward.png", "buymeacoffe-code.png", "share-editorial-cover.jpg"]) {
+	for (const name of ["Banyan-WeChat-Reward.png", "buymeacoffe-code.png", "share-reflection-cover.webp"]) {
 		const imagePath = resolve(__dirname, "../../src/assets", name);
 		await mkdir(dirname(imagePath), { recursive: true });
 		await copyFile(resolve("src/assets", name), imagePath);
@@ -13,6 +13,9 @@ export async function ensureObsidianStub(): Promise<void> {
 	};
 	require.extensions[".jpg"] = (module, filename) => {
 		module.exports = "data:image/jpeg;base64," + readFileSync(filename).toString("base64");
+	};
+	require.extensions[".webp"] = (module, filename) => {
+		module.exports = "data:image/webp;base64," + readFileSync(filename).toString("base64");
 	};
 	const obsidianStubPath = resolve(__dirname, "../../node_modules/obsidian/index.js");
 	await mkdir(dirname(obsidianStubPath), { recursive: true });

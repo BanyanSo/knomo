@@ -27,7 +27,7 @@ export class MemoRelationCards {
 	private diagnosticKey: string | null = null;
 
 	constructor(private readonly read: CatalogReadService, private readonly win: Window,
-		private readonly open: (handle: ObservationHandle, trigger: HTMLElement) => Promise<void>) {
+		private readonly open: (handle: ObservationHandle, trigger: HTMLElement, focusSubject: boolean) => Promise<void>) {
 		const Observer = (win as Window & { IntersectionObserver?: typeof IntersectionObserver }).IntersectionObserver;
 		this.observer = Observer ? new Observer(entries => {
 			for (const entry of entries) { const binding = this.cards.get(entry.target as HTMLElement); if (binding) binding.nearby = entry.isIntersecting; }
@@ -145,7 +145,7 @@ export function markRelationCardStale(card: HTMLElement): void {
 
 export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snapshot: MemoRelationSnapshot,
 	summaries: ReadonlyMap<string, { text: string; imageOnly: boolean }>,
-	open: (handle: ObservationHandle, trigger: HTMLElement) => Promise<void>): void {
+	open: (handle: ObservationHandle, trigger: HTMLElement, focusSubject: boolean) => Promise<void>): void {
 	const incoming = snapshot.referrers.get(memo.id) ?? [];
 	const old = card.querySelector<HTMLElement>(".knomo-memo-referrers");
 	const focused = old?.contains(card.ownerDocument.activeElement) ?? false;
@@ -183,7 +183,11 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 		button.createEl("time", { cls: "knomo-referrer-date", text: date, attr: { datetime: date } });
 		button.createSpan({ cls: "knomo-referrer-summary", text });
 		viewHandles.set(button, memo.catalog!.observationHandle);
-		button.addEventListener("click", event => { event.stopPropagation(); void open(viewHandles.get(button)!, button); });
+		button.addEventListener("click", event => {
+			event.stopPropagation();
+			// 仅键盘或辅助技术激活时转移焦点，避免首次触摸进入后在时间按钮上显示焦点环。
+			void open(viewHandles.get(button)!, button, event.detail === 0);
+		});
 	}
 	const active = focused ? card.ownerDocument.activeElement as HTMLElement : null;
 	const target = active?.dataset.relationTarget, action = active?.dataset.relationAction;

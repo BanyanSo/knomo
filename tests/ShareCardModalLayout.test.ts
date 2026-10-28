@@ -29,7 +29,7 @@ test("share modal keeps current PNG, output failures, focus, independent scrolli
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const bundle = await build({ stdin: { contents: `import { KnomoShareCardModal } from './src/ui/KnomoShareCardModal';
 import { createShareCardSnapshot, ShareCardError } from './src/ui/share/ShareCardContent'; import { Platform } from 'obsidian';
-window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardError,Platform};`, resolveDir: process.cwd() }, loader: { ".png": "dataurl", ".jpg": "dataurl" }, bundle: true, write: false, format: "iife", platform: "browser",
+window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardError,Platform};`, resolveDir: process.cwd() }, loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" }, bundle: true, write: false, format: "iife", platform: "browser",
 		plugins: [{ name: "share-modal-host", setup(build) { build.onResolve({ filter: /^obsidian$/ }, () => ({ path: "host", namespace: "share-host" })); build.onLoad({ filter: /.*/, namespace: "share-host" }, () => ({ contents: host, loader: "js" })); } }] });
 	mkdirSync(".tmp/share-card-samples", { recursive: true });
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });

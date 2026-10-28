@@ -11,8 +11,10 @@ import { observationHandleKey } from "../src/services/DailyMemoPresentationChang
 import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoRelationNode } from "../src/types/memoRelations";
 import type { MemoRelationOptions } from "../src/services/MemoRelationService";
+import type { MemoRelationsPageOptions } from "../src/ui/MemoRelationsPage";
 
-async function fixture(withPreviews = false, withProductionCache = false, relations?: MemoRelationOptions) {
+async function fixture(withPreviews = false, withProductionCache = false, relations?: MemoRelationOptions,
+	renderCard?: MemoRelationsPageOptions["renderCard"]) {
 	await ensureObsidianStub();
 	const dom = new JSDOM("<!doctype html><body><main></main></body>", { pretendToBeVisual: true });
 	const win = dom.window;
@@ -71,19 +73,19 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 	const original = catalog.readObservationSnapshot.bind(catalog);
 	catalog.readObservationSnapshot = async (keys, signal) => { bodyReads += keys.length; return original(keys, signal); };
 	const page = new MemoRelationsPage({ read, getHost: () => host, onChanged: open => { actions.push(String(open)); }, onError: error => errors.push(error),
-		renderCard: (row, memo) => {
+		renderCard: renderCard ?? ((row, memo) => {
 			cacheView?.getMemoCardPreview(memo);
 			const card = row.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": memo.id } });
 			card.createEl("button", { cls: "knomo-card-menu", text: "menu" });
 			card.createDiv({ cls: "knomo-card-content", text: memo.contentSnapshot });
 			cards?.observe(card, memo);
 			return card;
-		}, releaseCard: row => cacheView?.releaseRelationCard(row) });
+		}), releaseCard: row => cacheView?.releaseRelationCard(row) });
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const previewView = Object.assign(Object.create(KnomoView.prototype), { catalogReadService: read,
 		containerEl: host, rootEl: host, relationsPage: page, closeCardMenu: () => {},
 		cardFlowEl: withPreviews ? host.createDiv({ cls: "knomo-card-flow" }) : null, trashViewClosed: false,
-		openMemoRelations: (handle: Parameters<typeof page.open>[0], trigger: HTMLElement) => page.open(handle, trigger) });
+		openMemoRelations: (handle: Parameters<typeof page.open>[0], trigger: HTMLElement, focusSubject: boolean) => page.open(handle, trigger, focusSubject) });
 	// 使用真实视图接线，覆盖原先固定写入主卡片流顶部的状态回调。
 	const cards: InstanceType<typeof MemoRelationCards> | null = withPreviews ? previewView.ensureRelationCards() : null;
 	if (cacheView) Object.assign(cacheView, { relationsPage: page, relationCards: cards });
@@ -94,6 +96,45 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 80));
+
+test("被引用入口首次及再次指针点击不聚焦时间，键盘激活保留焦点转移和返回恢复", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const h = await fixture(true, false, undefined, (row, memo) => renderKnomoMemoCard(row, memo, {
+		generation: 1, renderIndex: 0, includeActions: true, randomCard: false, activeMenuMemoId: null,
+		formatDisplayTime: value => value, getMarkdownPriority: () => "normal",
+		getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => {}, renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
+	}));
+	try {
+		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
+		await h.seed("B.md", "- 11:00 B [[A#^a]]\n");
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, await h.memo(a));
+		await settle(); await settle();
+		const trigger = card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!;
+		assert.ok(trigger);
+		// 移动端首次点击可以不聚焦入口；返回后入口已聚焦，两个状态都不能强制聚焦时间。
+		for (const focused of [false, true]) {
+			if (focused) trigger.focus();
+			else assert.equal(h.win.document.activeElement, h.win.document.body);
+			trigger.dispatchEvent(new h.win.MouseEvent("click", { bubbles: true, detail: 1 }));
+			await settle();
+			assert.equal(h.page.isOpen, true);
+			const time = h.page.el!.querySelector<HTMLButtonElement>(".knomo-relations-subject .knomo-card-time")!;
+			assert.ok(time);
+			assert.notEqual(h.win.document.activeElement, time);
+			h.page.back();
+			assert.equal(h.win.document.activeElement, trigger);
+		}
+		// 原生按钮的键盘或辅助技术激活产生 detail=0 的 click。
+		trigger.click(); await settle();
+		assert.equal(h.win.document.activeElement, h.page.el!.querySelector(".knomo-relations-subject .knomo-card-time"));
+		h.page.back();
+		assert.equal(h.win.document.activeElement, trigger);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
 
 test("卡片菜单随被引用信息加载、增删更新，只有引用来源时不显示关联详情", async () => {
 	const h = await fixture(true);

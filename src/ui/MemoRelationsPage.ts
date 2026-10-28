@@ -71,7 +71,7 @@ export class MemoRelationsPage {
 	getMemos(): MemoViewItem[] { return [...this.memos.values()]; }
 	findMemo(id: string): MemoViewItem | null { return this.memos.get(id) ?? null; }
 
-	async open(handle: ObservationHandle, trigger?: HTMLElement): Promise<void> {
+	async open(handle: ObservationHandle, trigger?: HTMLElement, focusSubject = true): Promise<void> {
 		if (this.disposed) return;
 		const run = ++this.navigationRun;
 		try {
@@ -98,7 +98,7 @@ export class MemoRelationsPage {
 			const memo = toCatalogMemoView(items[0]);
 			this.options.onChanged(true);
 			this.renderSubject(memo);
-			if (existing < 0) this.subject?.querySelector<HTMLElement>(".knomo-card-time,button")?.focus({ preventScroll: true });
+			if (existing < 0 && focusSubject) this.subject?.querySelector<HTMLElement>(".knomo-card-time,button")?.focus({ preventScroll: true });
 			await this.load(existing >= 0);
 		} catch { if (!this.disposed && run === this.navigationRun) this.options.onError(t("relations.unavailable")); }
 	}

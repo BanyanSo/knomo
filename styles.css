@@ -5396,8 +5396,8 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	color: inherit;
 }
 .knomo-plugin .knomo-reference-icon svg {
-	width: 1em;
-	height: 1em;
+	width: 15px;
+	height: 15px;
 	stroke-width: 2;
 }
 .knomo-plugin button.knomo-referrer-preview {

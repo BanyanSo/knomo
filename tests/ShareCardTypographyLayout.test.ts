@@ -18,10 +18,10 @@ window.fontTest={ShareCardRenderer,createShareCardSnapshot};`, resolveDir: proce
 		await page.addStyleTag({ content: readFileSync("styles.css", "utf8") });
 		await page.addScriptTag({ content: bundle.outputFiles[0].text });
 		const fontData = process.env.KNOMO_SHARE_TEST_FONT ? "data:font/ttf;base64," + readFileSync(process.env.KNOMO_SHARE_TEST_FONT).toString("base64") : null;
-		const result = await page.evaluate(async (fontData: string | null) => {
+		const result = await page.evaluate(async ({ fontData, systemFont }: { fontData: string | null; systemFont: string }) => {
 			const { ShareCardRenderer, createShareCardSnapshot } = (window as any).fontTest;
 			const host = document.querySelector("main")!;
-			host.style.cssText = '--font-text:Arial,sans-serif;--font-interface:Arial,sans-serif;--font-monospace:"Courier New",monospace';
+			host.style.cssText = `--font-text:"${systemFont}",sans-serif;--font-interface:"${systemFont}",sans-serif;--font-monospace:monospace`;
 			const snapshot = createShareCardSnapshot({ contentSnapshot: "正文中文 🌱 English 08:30 #标签\n\n" + "Readable lines wrap naturally. ".repeat(10) + "\n\n- [x] Done\n\n> [!note] Note\n> 全文保留\n\n```js\nconst value = 42;\n```\n\n| A | B |\n| - | - |\n| one | two |\n\nTHE END", createdAt: "2026-10-27T23:59:42", dailyRef: { path: "Daily/test.md" } }, "en");
 			const plain = createShareCardSnapshot({ contentSnapshot: "Reading a quiet page. The quick brown fox jumps over the lazy dog. 0123456789", createdAt: "2026-10-27T23:59:42", dailyRef: { path: "Daily/test.md" } }, "en");
 			const png = async (renderer: any, template = "paper", input = snapshot) => {
@@ -50,16 +50,16 @@ window.fontTest={ShareCardRenderer,createShareCardSnapshot};`, resolveDir: proce
 				const renderer = new ShareCardRenderer(host, true, async () => { throw Error("unexpected image"); });
 				try { return await png(renderer, "paper", plain); } finally { renderer.close(); }
 			};
-			const system = await renderWith("Arial,sans-serif", "");
-			const local = await renderWith("ShareLocal,sans-serif", '@font-face{font-family:ShareLocal;src:local("Arial")}');
-			const unused = await renderWith("Arial,ShareUnused,sans-serif", '@font-face{font-family:ShareUnused;src:url("https://invalid.example.test/unused.woff2")}');
-			const localFirst = await renderWith("ShareLocal,sans-serif", '@font-face{font-family:ShareLocal;src:local("Arial"),url("https://invalid.example.test/fallback.woff2")}');
-			const localFallback = await renderWith("ShareLocal,sans-serif", '@font-face{font-family:ShareLocal;src:local("ShareMissingFont"),local("Arial"),url("https://invalid.example.test/fallback.woff2")}');
-			const sourceFallback = await renderWith("ShareLocal,sans-serif", '@font-face{font-family:ShareLocal;src:url("data:font/woff2;base64,AAAA") format("woff2"),local("Arial")}');
-			const unusedSubset = await renderWith("ShareSubset,Arial,sans-serif", '@font-face{font-family:ShareSubset;src:url("https://invalid.example.test/subset.woff2");unicode-range:U+4E00-9FFF}');
+			const system = await renderWith(`${systemFont},sans-serif`, "");
+			const local = await renderWith("ShareLocal,sans-serif", `@font-face{font-family:ShareLocal;src:local("${systemFont}")}`);
+			const unused = await renderWith(`${systemFont},ShareUnused,sans-serif`, '@font-face{font-family:ShareUnused;src:url("https://invalid.example.test/unused.woff2")}');
+			const localFirst = await renderWith("ShareLocal,sans-serif", `@font-face{font-family:ShareLocal;src:local("${systemFont}"),url("https://invalid.example.test/fallback.woff2")}`);
+			const localFallback = await renderWith("ShareLocal,sans-serif", `@font-face{font-family:ShareLocal;src:local("ShareMissingFont"),local("${systemFont}"),url("https://invalid.example.test/fallback.woff2")}`);
+			const sourceFallback = await renderWith("ShareLocal,sans-serif", `@font-face{font-family:ShareLocal;src:url("data:font/woff2;base64,AAAA") format("woff2"),local("${systemFont}")}`);
+			const unusedSubset = await renderWith(`ShareSubset,${systemFont},sans-serif`, '@font-face{font-family:ShareSubset;src:url("https://invalid.example.test/subset.woff2");unicode-range:U+4E00-9FFF}');
 			fontStyle.textContent = "";
 			host.style.setProperty("--font-text", "ShareImported,sans-serif");
-			const importedCSS = '@font-face{font-family:ShareImported;src:local("Arial")}';
+			const importedCSS = `@font-face{font-family:ShareImported;src:local("${systemFont}")}`;
 			await new Promise<void>((resolve, reject) => {
 				fontStyle.onload = () => resolve(); fontStyle.onerror = () => reject(Error("import failed"));
 				fontStyle.textContent = `@import url("data:text/css,${encodeURIComponent(importedCSS)}");`;
@@ -74,12 +74,12 @@ window.fontTest={ShareCardRenderer,createShareCardSnapshot};`, resolveDir: proce
 				try { await renderWith("ShareBroken,sans-serif", `@font-face{font-family:ShareBroken;src:${src}}`); failures.push("unexpected success"); }
 				catch (error) { failures.push((error as any).reason); }
 			}
-			fontStyle.remove(); host.style.setProperty("--font-text", "Arial,sans-serif");
+			fontStyle.remove(); host.style.setProperty("--font-text", `${systemFont},sans-serif`);
 			const renderer = new ShareCardRenderer(host, true, async () => { throw Error("unexpected image"); }, "data:image/png;base64,AAAA");
 			try { await png(renderer, "reflection"); failures.push("unexpected success"); } catch (error) { failures.push((error as any).reason); } finally { renderer.close(); }
 			return { samples, system, local, embedded, localMatches: system === local, embeddedMatches: embedded === null ? null : system === embedded,
 				fallbackMatches: [unused, localFirst, localFallback, sourceFallback, unusedSubset, imported].map(value => value === system), failures };
-		}, fontData);
+		}, { fontData, systemFont: process.platform === "linux" ? "Liberation Sans" : "Arial" });
 		mkdirSync(".tmp/share-card-samples", { recursive: true });
 		for (const kind of ["system", "local", "embedded"] as const) if (result[kind]) writeFileSync(`.tmp/share-card-samples/font-${kind}.png`, Buffer.from(result[kind]!.split(",")[1], "base64"));
 		assert.deepEqual(result.failures, ["font", "font", "cover"]);

@@ -49,6 +49,7 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 					setText(this: HTMLElement, value: string) { this.textContent = value; }, empty(this: HTMLElement) { this.replaceChildren(); }, instanceOf(this: HTMLElement, type: any) { return this instanceof type; },
 				});
 			});
+			await page.addScriptTag({ content: "window.createEl = tag => document.createElement(tag);" });
 			await page.addScriptTag({ content: bundle.outputFiles[0].text });
 			if (theme === "theme-custom") await page.addStyleTag({ content: ".theme-custom .modal-title{font-size:28px;line-height:40px}" });
 			await page.evaluate(({ mobile }: { mobile: boolean }) => {

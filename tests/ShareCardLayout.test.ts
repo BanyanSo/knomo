@@ -22,6 +22,7 @@ window.shareTest = { ShareCardRenderer, createShareCardSnapshot, cover: SHARE_CA
 		const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
 		await page.setContent("<html><body><main></main></body></html>");
 		await page.addStyleTag({ content: readFileSync("styles.css", "utf8") });
+		await page.addScriptTag({ content: "window.createEl = tag => document.createElement(tag);" });
 		await page.addScriptTag({ content: bundle.outputFiles[0].text });
 		for (const template of ["paper", "daybook", "reflection", "midnight"]) for (let index = 0; index < samples.length; index++) {
 			const result = await page.evaluate(async ({ template, body }: { template: string; body: string }) => {

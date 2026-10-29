@@ -1,3 +1,4 @@
+import { createShareCardElement } from "./ShareCardDom";
 import MarkdownIt from "markdown-it";
 import type { Token } from "markdown-it";
 import { parseMarkdownImages } from "../../utils/markdownImages";
@@ -117,14 +118,14 @@ export function getShareCardImagePaths(snapshot: ShareCardSnapshot): string[] {
 
 // 从解析后的安全 token 构造 DOM，不将用户 Markdown 作为 HTML 注入。
 export function renderShareCard(doc: Document, snapshot: ShareCardSnapshot, template: ShareCardTemplateId, images: ReadonlyMap<string, string>, cover?: string): HTMLElement {
-	const card = doc.createElement("article"); card.className = "share-card";
+	const card = createShareCardElement(doc, "article"); card.className = "share-card";
 	if (snapshot.isCjkContent) card.classList.add("is-cjk-content");
 	const add = (parent: HTMLElement, tag: string, cls: string, text: string): HTMLElement => {
-		const el = doc.createElement(tag); el.className = cls; el.textContent = text; parent.append(el); return el;
+		const el = createShareCardElement(doc, tag); el.className = cls; el.textContent = text; parent.append(el); return el;
 	};
 	if (template === "reflection") {
 		if (!cover) throw new ShareCardError("cover");
-		const image = doc.createElement("img"); image.className = "hero"; image.src = cover; image.alt = ""; card.append(image);
+		const image = createShareCardElement(doc, "img"); image.className = "hero"; image.src = cover; image.alt = ""; card.append(image);
 	}
 	if (template === "paper" || template === "midnight") add(card, "div", `meta ${template}-time`, snapshot.date.replace(/-/gu, "/"));
 	if (template === "daybook") {
@@ -154,31 +155,31 @@ function renderTokens(parent: HTMLElement, tokens: readonly Token[], images: Rea
 			if (callout) { target.parentElement!.classList.add("callout"); target.className = "callout-title"; target.textContent = callout[1] ?? token.content.match(/\[!([^\]]+)/u)![1]; }
 			else {
 				const task = target.tagName === "P" && target.parentElement?.tagName === "LI" && !target.hasChildNodes() ? /^\[([ xX])\]\s/u.exec(token.content) : null;
-				if (task) { const mark = doc.createElement("span"); mark.className = "task"; mark.textContent = task[1] === " " ? "☐" : "☑"; target.append(mark); }
+				if (task) { const mark = createShareCardElement(doc, "span"); mark.className = "task"; mark.textContent = task[1] === " " ? "☐" : "☑"; target.append(mark); }
 				target.append(doc.createTextNode(task ? token.content.slice(task[0].length) : token.content));
 			}
 			continue;
 		}
 		if (token.type === "image") {
 			const src = images.get(String(token.attrGet("src") ?? "")); if (!src) throw new ShareCardError("image");
-			const image = doc.createElement("img"); image.src = src; image.alt = token.content; target.append(image); continue;
+			const image = createShareCardElement(doc, "img"); image.src = src; image.alt = token.content; target.append(image); continue;
 		}
 		if (token.type === "code_inline" || token.type === "fence" || token.type === "code_block") {
-			const code = doc.createElement("code"); code.textContent = token.content;
+			const code = createShareCardElement(doc, "code"); code.textContent = token.content;
 			if (token.type === "code_inline") target.append(code);
-			else { const pre = doc.createElement("pre"); pre.append(code); target.append(pre); }
+			else { const pre = createShareCardElement(doc, "pre"); pre.append(code); target.append(pre); }
 			continue;
 		}
 		if (token.type === "softbreak" || token.type === "hardbreak" || token.type === "hr") {
 			if (token.type !== "hr" && target.classList.contains("callout-title")) {
-				const body = doc.createElement("p"); target.after(body); stack[stack.length - 1] = body;
-			} else target.append(doc.createElement(token.type === "hr" ? "hr" : "br"));
+				const body = createShareCardElement(doc, "p"); target.after(body); stack[stack.length - 1] = body;
+			} else target.append(createShareCardElement(doc, token.type === "hr" ? "hr" : "br"));
 			continue;
 		}
 		if (token.nesting === 1) {
 			const tag = token.type === "link_open" ? "span" : token.tag;
 			if (tag !== "span" && !tags.has(tag)) throw new ShareCardError("unsupported");
-			const el = doc.createElement(tag); if (tag === "span") el.className = "link";
+			const el = createShareCardElement(doc, tag); if (tag === "span") el.className = "link";
 			if (tag === "ol" && token.attrGet("start")) el.setAttribute("start", String(token.attrGet("start")));
 			target.append(el); stack.push(el); continue;
 		}

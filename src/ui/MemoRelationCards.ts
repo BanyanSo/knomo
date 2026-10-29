@@ -180,7 +180,7 @@ export function renderMemoReferrers(card: HTMLElement, memo: MemoViewItem, snaps
 		old.toggleAttribute("data-stale", !snapshot.complete);
 		return;
 	}
-	const region = card.ownerDocument.createElement("section");
+	const region = card.createEl("section");
 	region.className = "knomo-memo-referrers knomo-card-meta";
 	region.setAttribute("aria-label", t("relations.heading"));
 	region.dataset.previewSignature = signature;

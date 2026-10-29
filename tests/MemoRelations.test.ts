@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import { createHash } from "node:crypto";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
@@ -7,6 +7,10 @@ import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { MemoRelationService, MemoRelationsChangedError, relationChangeAffects } from "../src/services/MemoRelationService";
 import { observationHandleKey } from "../src/services/DailyMemoPresentationChange";
 import { extractMemoRelationTargets, extractMemoRelationSummary } from "../src/utils/memoRelations";
+
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 async function fixture() {
 	const store = new InMemoryMemoCatalogStore();
@@ -444,8 +448,8 @@ test("一个消费者取消不取消另一消费者的共享构建，所有消�
 	catalog.listFiles = async () => { const result = await original(); entered(); await gate; return result; };
 	try {
 		const controller = new AbortController();
-		const first = relations.read(controller.signal); const rejected = assert.rejects(first);
-		const second = relations.read(); await ready; controller.abort(); await rejected;
+		const first = relations.read(controller.signal); const rejected = assert.rejects(first, { name: "AbortError" });
+		const second = relations.read(); await ready; controller.abort("left relation page"); await rejected;
 		release(); assert.equal((await second).complete, true);
 	} finally { release(); relations.dispose(); }
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import { createHash } from "node:crypto";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
@@ -7,6 +7,10 @@ import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { CatalogReadService, buildRecordStatsCatalogQuery } from "../src/services/CatalogReadService";
 import { RecordStatsService } from "../src/services/RecordStatsService";
 import type { MemoRelationOptions } from "../src/services/MemoRelationService";
+
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 async function fixture(relations?: MemoRelationOptions) {
 	const store = new InMemoryMemoCatalogStore();

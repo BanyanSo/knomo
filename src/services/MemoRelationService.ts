@@ -84,7 +84,7 @@ export class MemoRelationService {
 		else {
 			for (const name of names) this.dirtyNames?.add(name);
 			const affected = new Set<string>();
-			for (const path of paths!) for (const node of this.files.get(path)?.relations?.nodes ?? []) affected.add(observationHandleKey(node.handle));
+			for (const path of paths) for (const node of this.files.get(path)?.relations?.nodes ?? []) affected.add(observationHandleKey(node.handle));
 			for (const name of names) for (const key of this.dependencies.get(name) ?? []) affected.add(key);
 			for (const key of affected) {
 				const entry = this.resolved.get(key);
@@ -446,13 +446,17 @@ export class MemoRelationService {
 	}
 }
 
-function pause(): Promise<void> { return new Promise(resolve => setTimeout(resolve, 0)); }
+function pause(): Promise<void> { return new Promise(resolve => window.setTimeout(resolve, 0)); }
 
 function consume<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
 	if (!signal) return task;
 	signal.throwIfAborted();
 	return new Promise((resolve, reject) => {
-		const abort = () => reject(signal.reason);
+		const abort = () => {
+			const reason: unknown = signal.reason;
+			if (reason instanceof Error) reject(reason);
+			else { const error = new Error("Memo relations reading cancelled."); error.name = "AbortError"; reject(error); }
+		};
 		signal.addEventListener("abort", abort, { once: true });
 		void task.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
 	});

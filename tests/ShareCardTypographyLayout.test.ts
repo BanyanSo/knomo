@@ -16,6 +16,7 @@ window.fontTest={ShareCardRenderer,createShareCardSnapshot};`, resolveDir: proce
 		await page.route("https://invalid.example.test/**", (route: { abort(): Promise<void> }) => { remoteRequests++; return route.abort(); });
 		await page.setContent("<main></main>");
 		await page.addStyleTag({ content: readFileSync("styles.css", "utf8") });
+		await page.addScriptTag({ content: "window.createEl = tag => document.createElement(tag);" });
 		await page.addScriptTag({ content: bundle.outputFiles[0].text });
 		const fontData = process.env.KNOMO_SHARE_TEST_FONT ? "data:font/ttf;base64," + readFileSync(process.env.KNOMO_SHARE_TEST_FONT).toString("base64") : null;
 		const result = await page.evaluate(async ({ fontData, systemFont }: { fontData: string | null; systemFont: string }) => {

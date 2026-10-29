@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { createCardMemo } from "./helpers/memoCardFixture";
@@ -12,8 +12,22 @@ import { shareCardImageDimensions } from "../src/ui/share/ShareCardImageDimensio
 import { zhCN } from "../src/i18n/zh-CN";
 import { en } from "../src/i18n/en";
 
+const helperDom = new JSDOM();
+const previousCreateEl = Object.getOwnPropertyDescriptor(globalThis, "createEl");
+before(() => Object.defineProperty(globalThis, "createEl", { configurable: true, value: (tag: string) => helperDom.window.document.createElement(tag) }));
+after(() => { helperDom.window.close(); if (previousCreateEl) Object.defineProperty(globalThis, "createEl", previousCreateEl); else Reflect.deleteProperty(globalThis, "createEl"); });
+
 const memo = (content: string, time = "08:30") => createCardMemo({ contentSnapshot: content, createdAt: "2026-10-27T" + time });
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("分享节点通过宿主 helper 创建后归入独立输出文档", () => {
+	const output = new JSDOM();
+	try {
+		const card = renderShareCard(output.window.document, createShareCardSnapshot(memo("正文 **强调**"), "zh-CN"), "paper", new Map());
+		assert.equal(card.ownerDocument, output.window.document);
+		for (const element of Array.from(card.querySelectorAll("*"))) assert.equal(element.ownerDocument, output.window.document);
+	} finally { output.window.close(); }
+});
 
 test("template names and content/date order distinguish the four layouts without inventing headings", () => {
 	assert.deepEqual(SHARE_CARD_TEMPLATES.map(template => [zhCN[`share.${template.id}`], en[`share.${template.id}`]]),

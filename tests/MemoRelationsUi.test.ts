@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import { JSDOM } from "jsdom";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -13,6 +13,9 @@ import type { MemoRelationNode } from "../src/types/memoRelations";
 import type { MemoRelationOptions } from "../src/services/MemoRelationService";
 import type { MemoRelationsPageOptions } from "../src/ui/MemoRelationsPage";
 
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 const relationScale = process.env.KNOMO_TEST_SCALE === "stress" ? 10000 : 150;
 
 async function fixture(withPreviews = false, withProductionCache = false, relations?: MemoRelationOptions,

@@ -1,3 +1,4 @@
+import { createShareCardElement } from "./ShareCardDom";
 import type { ShareCardSnapshot } from "./ShareCardContent";
 
 export interface ShareCardCapabilities { share: boolean; copy: boolean; save: boolean }
@@ -25,7 +26,7 @@ export function outputShareCard(action: "share" | "copy" | "save", file: File, w
 	if (action === "share") return win.navigator.share({ files: [file] });
 	if (action === "copy") return win.navigator.clipboard.write([new win.ClipboardItem({ "image/png": file })]);
 	const url = win.URL.createObjectURL(file);
-	const anchor = win.document.createElement("a"); anchor.href = url; anchor.download = file.name;
+	const anchor = createShareCardElement(win.document, "a"); anchor.href = url; anchor.download = file.name;
 	win.document.body.append(anchor);
 	try { anchor.click(); } finally { anchor.remove(); win.setTimeout(() => win.URL.revokeObjectURL(url), 30_000); }
 	return Promise.resolve();

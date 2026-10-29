@@ -1,3 +1,4 @@
+import { createShareCardElement } from "./ShareCardDom";
 import { ShareCardError } from "./ShareCardContent";
 
 export interface ShareCardTypography {
@@ -15,7 +16,7 @@ const familyName = (value: string): string => value.trim().replace(/^["']|["']$/
 // 在所属窗口解析 CSS 变量，避免从标题或缩小后的元信息采样字号。
 export function captureShareCardFonts(host: HTMLElement): ShareCardFontInput {
 	const doc = host.ownerDocument;
-	const probe = doc.createElement("span");
+	const probe = createShareCardElement(doc, "span");
 	probe.className = "knomo-share-font-probe";
 	host.append(probe);
 	try {

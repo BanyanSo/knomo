@@ -96,6 +96,8 @@ test("filters Knomo internal WikiLink candidates", () => {
 	assert.equal(isKnomoInternalWikiLinkCandidate("Knomo/_knomo-system/indexes/memo-index-2026-06.json"), true);
 	assert.equal(isKnomoInternalWikiLinkCandidate("Knomo/_knomo-system/backups/rebuild/Plan.md"), true);
 	assert.equal(isKnomoInternalWikiLinkCandidate("Notes/Plan.md"), false);
+	assert.equal(isKnomoInternalWikiLinkCandidate("Notes/backups/Plan.md"), false);
+	assert.equal(isKnomoInternalWikiLinkCandidate("Research/indexes/Topic.md"), false);
 });
 
 test("WikiLink and tag query helpers do not claim each other's ranges", () => {

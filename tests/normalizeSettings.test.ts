@@ -20,7 +20,6 @@ test("normalizes invalid settings to safe defaults", async () => {
 		monthlyDateOrder: "latest",
 		legacyDailyHeadings: ["## Valid", "not a heading", 42],
 		mobileCompactMode: "sometimes",
-		syncDebounceMs: Number.NaN,
 		desktopSidebarWidth: "wide",
 		desktopSidebarCollapsed: "false",
 		excludeMonthlyMemosFromObsidian: "yes",
@@ -37,7 +36,6 @@ test("normalizes invalid settings to safe defaults", async () => {
 	assert.equal(settings.monthlyDateOrder, DEFAULT_KNOMO_SETTINGS.monthlyDateOrder);
 	assert.deepEqual(settings.legacyDailyHeadings, ["## Valid"]);
 	assert.equal(settings.mobileCompactMode, DEFAULT_KNOMO_SETTINGS.mobileCompactMode);
-	assert.equal(settings.syncDebounceMs, DEFAULT_KNOMO_SETTINGS.syncDebounceMs);
 	assert.equal(settings.desktopSidebarWidth, DEFAULT_KNOMO_SETTINGS.desktopSidebarWidth);
 	assert.equal(settings.desktopSidebarCollapsed, DEFAULT_KNOMO_SETTINGS.desktopSidebarCollapsed);
 	assert.equal(settings.excludeMonthlyMemosFromObsidian, DEFAULT_KNOMO_SETTINGS.excludeMonthlyMemosFromObsidian);

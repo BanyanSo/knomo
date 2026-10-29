@@ -1,3 +1,5 @@
+import { clickFromPointer } from "./NavigationFocus";
+
 // 菜单的轻触直接沿宿主 click 路径执行；滚动、拖动、多指和长按交还宿主。
 export function registerMobileMenuTap(menu: HTMLElement, backdrop: HTMLElement, dismiss: () => void): () => void {
 	return registerMenuTap(menu.ownerDocument, target => {
@@ -5,7 +7,7 @@ export function registerMobileMenuTap(menu: HTMLElement, backdrop: HTMLElement, 
 		// 只有编辑/引用在失焦时保留原生触摸，由 View 在窗口激活后恢复动作。
 		if (item?.querySelector("[data-knomo-menu-input]") && !menu.ownerDocument.hasFocus()) return null;
 		return backdrop.contains(target) ? backdrop : item?.closest(".menu") === menu ? item : null;
-	}, surface => { if (surface === backdrop) dismiss(); else surface.click(); });
+	}, surface => { if (surface === backdrop) dismiss(); else clickFromPointer(surface); });
 }
 
 // 仅补齐本视图的两个菜单入口；iOS 失焦时首次触摸可能没有兼容 click。
@@ -27,7 +29,7 @@ export function registerMobileMenuTriggerTap(doc: Document, resolve: (target: El
 	const release = registerMenuTap(doc, resolve, surface => {
 		activated = { surface, until: Date.now() + 600 };
 		// 沿用原有 click 路由；detail=0 不会被本轮兼容点击去重拦截。
-		surface.click();
+		clickFromPointer(surface);
 	});
 	return () => {
 		release(); reset();
@@ -141,7 +143,7 @@ export function registerMobileFirstTapRecovery(doc: Document, resolve: (target: 
 		if (!hit || !tap.surface.contains(hit)) { clear(); return; }
 		clear();
 		replayed = { surface: tap.surface, x: tap.x, y: tap.y, until: win.performance.now() + 600 };
-		tap.surface.click();
+		clickFromPointer(tap.surface);
 	};
 	const focusin = (event: FocusEvent): void => {
 		if (event.target instanceof win.Element && event.target.closest("input, textarea, select, [contenteditable='true']")) clear();
@@ -161,6 +163,7 @@ export function registerMobileFirstTapRecovery(doc: Document, resolve: (target: 
 		timer = win.setTimeout(run, 100);
 	}, { canStart: () => beganUnfocused && doc.visibilityState === "visible", preserveNative: true });
 	return () => {
+		const lastReplay = replayed;
 		release(); cancel();
 		win.removeEventListener("pointerdown", pointerdown, true);
 		win.removeEventListener("touchstart", touchstart, true);
@@ -168,5 +171,18 @@ export function registerMobileFirstTapRecovery(doc: Document, resolve: (target: 
 		win.removeEventListener("focusin", focusin, true);
 		win.removeEventListener("blur", blur);
 		for (const type of cancellations) win.removeEventListener(type, cancel, true);
+		// 关闭自身的补点击会同步卸载面板；本次迟到 click 仍须去重，避免穿透下层。
+		if (lastReplay) {
+			replayed = lastReplay;
+			const stop = (): void => {
+				win.clearTimeout(deadline); replayed = null;
+				win.removeEventListener("click", late, true);
+				for (const type of ["pointerdown", "touchstart", "keydown", "pagehide"]) win.removeEventListener(type, stop, true);
+			};
+			const late = (event: MouseEvent): void => { click(event); if (!replayed) stop(); };
+			const deadline = win.setTimeout(stop, Math.max(0, lastReplay.until - win.performance.now()));
+			win.addEventListener("click", late, true);
+			for (const type of ["pointerdown", "touchstart", "keydown", "pagehide"]) win.addEventListener(type, stop, true);
+		}
 	};
 }

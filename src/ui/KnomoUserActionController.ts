@@ -1,4 +1,5 @@
 import type { MobileComposerAction } from "./MobileComposerActionGesture";
+import { isKeyboardActivation } from "./NavigationFocus";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
 	getKnomoActionDispatch,
@@ -29,7 +30,7 @@ export interface EscapeState {
 }
 
 interface KnomoUserActionControllerOptions {
-	runMemoAction: (action: MemoAction, memoId: string | null, sourceEl?: HTMLElement | null) => Promise<void>;
+	runMemoAction: (action: MemoAction, memoId: string | null, sourceEl?: HTMLElement | null, focusVisible?: boolean) => Promise<void>;
 	isMobileLayout: () => boolean;
 	isMobileSearchPageOpen: () => boolean;
 	isComposerOpen: () => boolean;
@@ -89,7 +90,7 @@ interface KnomoUserActionControllerOptions {
 	openRecordStatsTrendFilter: (sourceEl: HTMLElement | null) => void;
 	openRecordStatsHourFilter: (sourceEl: HTMLElement | null) => void;
 	openRecordStatsMetricFilter: (
-		type: "range" | "with-tag" | "no-tag" | "with-image" | "references" | "max-daily-notes" | "max-daily-words",
+		type: "range" | "with-tag" | "no-tag" | "with-image" | "references" | "referenced" | "max-daily-notes" | "max-daily-words",
 	) => void;
 	openRecordStatsTagFilter: (sourceEl: HTMLElement | null) => void;
 	openComposer: () => void;
@@ -200,7 +201,7 @@ export class KnomoUserActionController {
 		if (route.type === "memo-action") {
 			const dispatch = getMemoActionDispatch(route.action);
 			if (dispatch.type === "memo-action") {
-				await this.options.runMemoAction(dispatch.action, route.memoId, route.element);
+				await this.options.runMemoAction(dispatch.action, route.memoId, route.element, isKeyboardActivation(event));
 			}
 			return;
 		}
@@ -218,7 +219,7 @@ export class KnomoUserActionController {
 				this.options.openCatalogSettings?.();
 				return;
 			}
-			await this.handleAction(route.action, route.memoId, route.element, event.detail === 0);
+			await this.handleAction(route.action, route.memoId, route.element, isKeyboardActivation(event));
 			if (route.mobileToolButtonEl !== null) {
 				route.mobileToolButtonEl.blur();
 			}
@@ -408,6 +409,9 @@ export class KnomoUserActionController {
 				return;
 			case "record-stats-filter-references":
 				this.options.openRecordStatsMetricFilter("references");
+				return;
+			case "record-stats-filter-referenced":
+				this.options.openRecordStatsMetricFilter("referenced");
 				return;
 			case "record-stats-filter-max-daily-notes":
 				this.options.openRecordStatsMetricFilter("max-daily-notes");

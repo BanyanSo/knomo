@@ -7,7 +7,6 @@ import {
 	DEFAULT_MONTHLY_DATE_ORDER,
 	DEFAULT_MONTHLY_MEMO_FILE_FORMAT,
 	DEFAULT_MONTHLY_MEMO_FOLDER,
-	DEFAULT_SYNC_DEBOUNCE_MS,
 	SETTINGS_VERSION,
 } from "../constants";
 import type { KnomoSettings } from "../types/settings";
@@ -28,7 +27,6 @@ export const DEFAULT_KNOMO_SETTINGS: KnomoSettings = {
 	timeBuoyIntroDismissed: false,
 	mobileCompactMode: "auto",
 	reduceGlassEffects: false,
-	syncDebounceMs: DEFAULT_SYNC_DEBOUNCE_MS,
 	desktopSidebarWidth: DEFAULT_DESKTOP_SIDEBAR_WIDTH,
 	desktopSidebarCollapsed: false,
 	excludeMonthlyMemosFromObsidian: true,

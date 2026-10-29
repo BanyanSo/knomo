@@ -1,5 +1,5 @@
 export type ComposerToolAction = "insert-tag" | "insert-image" | "insert-time-buoy" | "insert-list" | "insert-numbered-list";
-export type MemoAction = "edit" | "reference" | "open-daily" | "view-day" | "copy-text" | "copy-link" | "delete" | "mark-reviewed";
+export type MemoAction = "edit" | "reference" | "relations" | "open-daily" | "view-day" | "copy-text" | "copy-link" | "share-image" | "delete" | "mark-reviewed";
 export type TrashAction = "restore" | "purge";
 export type KnomoSimpleAction =
 	| "toggle-card-menu"
@@ -42,6 +42,7 @@ export type KnomoSimpleAction =
 	| "record-stats-filter-with-image"
 	| "record-stats-filter-tag"
 	| "record-stats-filter-references"
+	| "record-stats-filter-referenced"
 	| "record-stats-filter-max-daily-notes"
 	| "record-stats-filter-max-daily-words"
 	| "open-composer"
@@ -110,6 +111,7 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-filter-with-image" ||
 		action === "record-stats-filter-tag" ||
 		action === "record-stats-filter-references" ||
+		action === "record-stats-filter-referenced" ||
 		action === "record-stats-filter-max-daily-notes" ||
 		action === "record-stats-filter-max-daily-words" ||
 		action === "open-composer" ||
@@ -154,6 +156,8 @@ export function isComposerToolAction(action: string): action is ComposerToolActi
 }
 
 export function isMemoAction(action: string): action is MemoAction {
+	if (action === "share-image") return true;
+	if (action === "relations") return true;
 		return action === "edit" ||
 		action === "reference" ||
 		action === "open-daily" ||

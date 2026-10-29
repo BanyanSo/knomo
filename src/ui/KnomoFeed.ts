@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { getKnomoLocale, t } from "../i18n";
 import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import type { ShuffleDayStats } from "../utils/shuffleDay";
@@ -51,7 +52,7 @@ export function renderKnomoShuffleDayHeader(
 	container: HTMLElement,
 	selectedDate: string,
 	stats: ShuffleDayStats | null,
-	action?: { label: string; action: string },
+	action?: { label: string; action: string; icon?: string },
 ): HTMLElement {
 	const header = container.createDiv({ cls: "knomo-shuffle-day-header" });
 	header.createDiv({ cls: "knomo-shuffle-day-date", text: formatShuffleDayDateTitle(selectedDate) });
@@ -61,10 +62,11 @@ export function renderKnomoShuffleDayHeader(
 		summaryContainer.createDiv({ cls: action ? "knomo-shuffle-day-summary knomo-list-summary" : "knomo-shuffle-day-summary", text: summary });
 	}
 	if (action) {
-		summaryContainer.createEl("button", {
-			cls: "knomo-inline-button", text: action.label,
-			attr: { type: "button", "data-action": action.action },
+		const button = summaryContainer.createEl("button", {
+			cls: "knomo-inline-button", text: action.icon ? undefined : action.label,
+			attr: { type: "button", "data-action": action.action, ...(action.icon ? { "aria-label": action.label } : {}) },
 		});
+		if (action.icon) setIcon(button, action.icon);
 	}
 	return header;
 }
@@ -72,14 +74,15 @@ export function renderKnomoShuffleDayHeader(
 const lastFeedback = new WeakMap<HTMLElement, string>();
 const historyHeaders = new WeakMap<HTMLElement, { context: string; elements: Map<string, HTMLElement>; rendered: HTMLElement[] }>();
 
-// 仅复用历史浏览中的操作表面；内容更新不替换触摸目标，切页后旧节点不再使用。
+// 同范围刷新原位更新摘要与操作表面，避免撤下头部时压缩列表高度。
 export function syncKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[], context: string, announcement?: { key: string; context: string }): HTMLElement[] {
 	const previous = historyHeaders.get(container);
 	const occurrences = new Map<string, number>();
 	const keys = headers.map(header => {
 		const key = header.type === "random-toolbar" ? header.type
 			: header.type === "random-day" ? `${header.type}:${header.selectedDate}`
-			: header.type === "summary" && header.action?.action === "retry-random-day" ? header.action.action : null;
+			: header.type === "summary" && header.action?.action === "retry-random-day" ? header.action.action
+			: header.type === "summary" && !header.action ? `summary:${header.feedback ? "feedback" : header.relationCount ? "relation-count" : "plain"}` : null;
 		if (key === null) return null;
 		const occurrence = occurrences.get(key) ?? 0;
 		occurrences.set(key, occurrence + 1);
@@ -128,11 +131,11 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 				}
 				if (text) updateHeaderText(summary, text);
 				else summary?.remove();
-				updateHeaderText(button, t("random.dayBack"));
+				button.setAttr("aria-label", t("random.dayBack"));
 				return existing;
 			}
 			return renderKnomoShuffleDayHeader(container, header.selectedDate, header.stats, {
-				label: t("random.dayBack"), action: "random-day-back",
+				label: t("random.dayBack"), action: "random-day-back", icon: "arrow-left",
 			});
 		}
 		if (header.type === "random-toolbar") {
@@ -159,6 +162,8 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 		}
 		const summary = existing ?? (header.action !== undefined ? renderKnomoActionableListSummary(container, header.text, header.action)
 			: renderKnomoListSummary(container, header.text));
+		if (existing && !header.action) updateHeaderText(summary, header.text);
+		if (header.relationCount) summary.addClass("knomo-relation-result-count");
 		if (existing && header.action) {
 			updateHeaderText(summary.querySelector("span"), header.text);
 			updateHeaderText(summary.querySelector("button"), header.action.label);
@@ -199,9 +204,9 @@ export function renderKnomoEmptyState(container: HTMLElement, title = t("empty.g
 	return emptyState;
 }
 
-export function renderKnomoLoadingPlaceholder(container: HTMLElement, visible: boolean): HTMLElement {
+export function renderKnomoLoadingPlaceholder(container: HTMLElement, visible: boolean, announce = true): HTMLElement {
 	const placeholder = container.createDiv({ cls: "knomo-loading-placeholder", attr: { "aria-busy": "true",
-		...(visible ? { role: "status", "aria-live": "polite", "aria-label": t("loading.label") } : {}) } });
+		...(visible && announce ? { role: "status", "aria-live": "polite", "aria-label": t("loading.label") } : {}) } });
 	if (!visible) return placeholder;
 	const skeleton = placeholder.createDiv({ cls: "knomo-loading-skeleton", attr: { "aria-hidden": "true" } });
 	for (let index = 0; index < 3; index++) {

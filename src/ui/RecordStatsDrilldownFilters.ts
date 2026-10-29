@@ -7,6 +7,7 @@ export type RecordStatsMetricFilterType =
 	| "no-tag"
 	| "with-image"
 	| "references"
+	| "referenced"
 	| "max-daily-notes"
 	| "max-daily-words";
 
@@ -71,6 +72,9 @@ export function getRecordStatsMetricSearchFilter(
 			startDate: selected.startDate,
 			endDateExclusive: selected.endDateExclusive,
 		};
+	}
+	if (type === "referenced" && (selected.referenced?.count ?? 0) > 0) {
+		return { type, startDate: selected.startDate, endDateExclusive: selected.endDateExclusive };
 	}
 	if (type === "with-tag" && selected.range.taggedMemoCount > 0) {
 		return {

@@ -4,6 +4,7 @@ import test from "node:test";
 import { TFile } from "obsidian";
 import type { App } from "obsidian";
 import { createDeferred } from "./helpers/deferred";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 import { DailyNoteService } from "../src/services/DailyNoteService";
 import { DailyMemoWriteGateway } from "../src/services/DailyMemoWriteGateway";
@@ -19,9 +20,38 @@ import { MemoCommandService } from "../src/services/MemoCommandService";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
+import { memoMarkdownConsistencyFixtures, expectedDailyMemo } from "./fixtures/memoMarkdownConsistency";
 import { formatServiceError } from "../src/utils/serviceText";
 
 const HEADINGS = ["## Memos"] as const;
+
+test("空格缩进的四列 Memo 编辑与任务勾选保持正文和非目标区域", async () => {
+	const path = "Daily/2026-08-22.md";
+	const prefix = "## Memos\r\n- 07:00 before\r\n";
+	const suffix = "\r\n- 09:00 after\r\n## Other\r\nkeep\r\n";
+	const fixture = createFixture({ initialFiles: { [path]: `${prefix}-   08:00 ^anchor\r\n      # title${suffix}` } });
+	const target = (await fixture.parse("2026-08-22"))[1];
+	assert.equal(target.content, "  # title");
+	await fixture.service.edit({ observation: toHandle(target), content: `${target.content}\n\n- [ ] task` });
+	const edited = (await fixture.parse("2026-08-22"))[1];
+	assert.equal(edited.content, "  # title\n\n- [ ] task");
+	assert.equal(edited.existingBlockId, "anchor");
+	await fixture.service.toggleTask({ observation: toHandle(edited), taskIndex: 0, checked: true });
+	assert.equal((await fixture.parse("2026-08-22"))[1].content, "  # title\n\n- [x] task");
+	const raw = fixture.vault.readText(path);
+	assert.ok(raw.startsWith(prefix));
+	assert.ok(raw.endsWith(suffix));
+	await assert.rejects(() => fixture.service.edit({ observation: toHandle(target), content: "stale" }), MarkdownMutationStaleError);
+	assert.equal(fixture.vault.readText(path), raw);
+
+	const taskRaw = `${prefix}-   08:00 ^anchor\r\n    \r\n    3. [ ] task\r\n    4. [x] second${suffix}`;
+	const taskFixture = createFixture({ initialFiles: { [path]: taskRaw } });
+	const taskTarget = (await taskFixture.parse("2026-08-22"))[1];
+	assert.equal(taskTarget.content, "3. [ ] task\n4. [x] second");
+	assert.deepEqual(taskTarget.tasks.map(task => task.lineOffset), [2, 3]);
+	await taskFixture.service.toggleTask({ observation: toHandle(taskTarget), taskIndex: 1, checked: false });
+	assert.equal(taskFixture.vault.readText(path), taskRaw.replace("[x]", "[ ]"));
+});
 
 test("新建失败或 I/O 结果不确定时保留 Daily，不自动清理或重试正文", async (context) => {
 	for (const failure of ["prepare", "before-write", "after-write", "concurrent-write"] as const) {
@@ -56,6 +86,47 @@ test("Composer Markdown fixtures preserve semantic source through Daily create, 
 		assert.equal(saved.content, content);
 		await fixture.service.edit({ observation: toHandle(saved), content: content + "\nchanged" });
 		assert.equal((await fixture.getOnlyObservation("2026-08-22")).content, content + "\nchanged");
+	}
+});
+
+test("B1 新建、编辑与引用后的正文保真，Daily 非目标区域逐字保持不变", async () => {
+	const path = "Daily/2026-08-22.md";
+	const prefix = "---\r\nname: keep\r\n---\r\n# Daily\r\nordinary text\r\n```md\r\n- 00:00 fake\r\n```\r\n## Memos\r\n- 07:00 neighbor before\r\n";
+	const suffix = "\r\n- 09:00 neighbor after\r\n## Other\r\nnormal diary\r\n  not memo\r\n";
+	for (const sample of memoMarkdownConsistencyFixtures) {
+		const fixture = createFixture({ initialFiles: { [path]: `${prefix}- 08:00 old ^existing-anchor${suffix}` } });
+		const target = (await fixture.parse("2026-08-22"))[1];
+		await fixture.service.edit({ observation: toHandle(target), content: sample.content });
+		const raw = fixture.vault.readText(path);
+		assert.ok(raw.startsWith(prefix), sample.name);
+		assert.ok(raw.endsWith(suffix), sample.name);
+		const saved = (await fixture.parse("2026-08-22"))[1];
+		assert.equal(saved.content, sample.content, sample.name);
+		assert.equal(saved.time, "08:00");
+		assert.equal(saved.existingBlockId, "existing-anchor");
+		await assert.rejects(() => fixture.service.edit({ observation: toHandle(target), content: "stale" }), MarkdownMutationStaleError);
+		assert.equal(fixture.vault.readText(path), raw);
+
+		const created = createFixture();
+		await created.service.create({ content: sample.content });
+		assert.equal((await created.getOnlyObservation("2026-08-22")).content, sample.content);
+		assert.equal(created.vault.readText(path), `## Memos\n${expectedDailyMemo(sample, "09:00")}\n`);
+	}
+});
+
+test("给围栏和硬换行正文创建引用不会修改用户空白，任务行偏移包含结构前缀", async () => {
+	for (const content of ["```js\nconst x = 1;\n```\n\n", "first  \nsecond\\\n\n", "- [ ] first\n  - [x] nested\n"]) {
+		const fixture = createFixture();
+		await fixture.service.create({ content });
+		const before = await fixture.getOnlyObservation("2026-08-22");
+		const result = await fixture.service.createBlockReference({ observation: toHandle(before), sourcePath: "Other.md" });
+		assert.equal(result.observation?.content, content);
+		assert.equal(result.observation?.existingBlockId, result.blockId);
+		if (content.startsWith("- [ ]")) {
+			assert.deepEqual(result.observation!.tasks.map(task => task.lineOffset), [1, 2]);
+			await fixture.service.toggleTask({ observation: toHandle(result.observation!), taskIndex: 1, checked: false });
+			assert.equal((await fixture.getOnlyObservation("2026-08-22")).content, content.replace("[x]", "[ ]"));
+		}
 	}
 });
 
@@ -148,7 +219,7 @@ test("任务列表起始的 memo 按原始 Daily 行切换 checkbox，不失败�
 	assert.equal(firstResult.observation?.content, "- [x] first\n- [ ] second");
 	assert.equal(
 		fixture.vault.readText(fixture.getPath("2026-08-22")),
-		"## Memos\n- 09:00\n\t- [x] first\n\t- [ ] second\n",
+		"## Memos\n-   09:00\n\t- [x] first\n\t- [ ] second\n",
 	);
 
 	const secondObservation = await fixture.getOnlyObservation("2026-08-22");
@@ -160,7 +231,7 @@ test("任务列表起始的 memo 按原始 Daily 行切换 checkbox，不失败�
 	assert.equal(secondResult.observation?.content, "- [x] first\n- [x] second");
 	assert.equal(
 		fixture.vault.readText(fixture.getPath("2026-08-22")),
-		"## Memos\n- 09:00\n\t- [x] first\n\t- [x] second\n",
+		"## Memos\n-   09:00\n\t- [x] first\n\t- [x] second\n",
 	);
 });
 
@@ -469,6 +540,7 @@ test("无标题和新建标题仍使用 Parser 区间并保留 frontmatter", asy
 });
 
 test("新建目标变化通过真实命令链路拒绝保存，Composer 保留草稿且不更新 Catalog", async (context) => {
+	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	for (const activeEditor of [false, true]) for (const stage of ["commit", "process"] as const) {
 		if (activeEditor && stage === "process") continue;

@@ -44,7 +44,8 @@ test("引用和复制链接使用固定简洁文案，有无自身锚点均与�
 			const button = root.find(`[data-memo-action='${action}']`)!;
 			const label = action === "reference" ? "Reference" : "Copy link";
 			assert.equal(button.getText(), label);
-			assert.equal(button.getAttr("aria-label"), label);
+			assert.equal(button.getAttr("aria-label"), null);
+			assert.equal(button.getAttr("title"), null);
 		}
 	}
 	assert.equal(translate("zh-CN", "card.reference"), "引用");
@@ -145,8 +146,10 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 			renderCardFlowHeaders: () => [],
 			renderHistoryLoadMore: () => {}, syncCardMenuState: () => {}, restorePendingCardFlowScrollTop: () => {},
 		});
-		const recent = makeMemo({ id: "today", catalog: { observation: { logicalDate: "2026-09-10", time: "12:34" } } as NonNullable<MemoViewItem["catalog"]> });
-		const old = makeMemo({ id: "old", catalog: { observation: { logicalDate: "2026-09-01", time: "12:34" } } as NonNullable<MemoViewItem["catalog"]> });
+		const recent = makeMemo({ id: "today", catalog: { observation: { logicalDate: "2026-09-10", time: "12:34" },
+			observationHandle: { sourcePath: "Daily/2026-09-10.md", sourceRevision: "recent-revision", startLine: 0, endLine: 0, rawBlockHash: "recent-block" } } as NonNullable<MemoViewItem["catalog"]> });
+		const old = makeMemo({ id: "old", catalog: { observation: { logicalDate: "2026-09-01", time: "12:34" },
+			observationHandle: { sourcePath: "Daily/2026-09-01.md", sourceRevision: "old-revision", startLine: 0, endLine: 0, rawBlockHash: "old-block" } } as NonNullable<MemoViewItem["catalog"]> });
 		const sync = (memos: MemoViewItem[]) => view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos }, null);
 		sync([recent]);
 		const existingRecentCard = root.find("article");
@@ -240,19 +243,21 @@ test("memo card action menu includes open daily in the requested order", async (
 
 	const actions = root.findAll("[data-memo-action]");
 	assert.deepEqual(actions.map((action) => action.getAttr("data-memo-action")), [
+		"share-image",
 		"edit",
 		"reference",
-		"open-daily",
 		"copy-text",
+		"open-daily",
 		"copy-link",
 		"delete",
 	]);
 	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
 	assert.equal(root.find(".knomo-card-word-count")?.getText(), "Words: 1");
 	assert.deepEqual(actions.map((action) => action.find(".knomo-menu-icon")?.getAttr("data-icon")), [
-		"pencil", "quote", "calendar-days", "copy", "link", "trash-2",
+		"share", "pencil", "message-square-quote", "copy", "calendar-days", "link", "trash-2",
 	]);
 	assert.ok(actions.every((action) => action.find(".knomo-menu-icon")?.getAttr("aria-hidden") === "true"));
+	assert.ok(actions.every((action) => action.getAttr("aria-label") === null && action.getAttr("title") === null));
 	assert.equal(root.find(".knomo-card-word-count")?.find(".knomo-menu-icon")?.getAttr("data-icon"), "text");
 	assert.equal(root.find(".knomo-card-word-count")?.getAttr("tabindex"), null);
 	assert.equal(root.find(".knomo-card-actions")?.getText().endsWith("DeleteWords: 1"), true);
@@ -642,3 +647,23 @@ function makeCapabilities() {
 		}),
 	};
 }
+
+test("来源图标独立于异步 Markdown 容器，菜单统一引用图标", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const root = new TestElement("div");
+	let target: HTMLElement | undefined;
+	let markdown = "";
+	renderKnomoMemoCard(root.asHtml(), createReferenceMemo(), {
+		generation: 1, renderIndex: 0, includeActions: true, randomCard: false, activeMenuMemoId: null,
+		formatDisplayTime: value => value, getMarkdownPriority: () => "normal",
+		getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }),
+		queueMemoMarkdown: () => {}, renderMemoCardImages: () => {},
+		queueSourceReferenceMarkdown: (container, text) => { target = container; markdown = text; },
+	});
+	assert.equal(target, root.find(".knomo-source-reference-content")?.asHtml());
+	assert.equal(markdown, "[[Other#^their-anchor|custom alias]]");
+	assert.equal(root.find(".knomo-reference-icon")?.getAttr("data-icon"), "message-square-quote");
+	assert.ok(root.find(".knomo-reference-icon")?.getAttr("aria-label"));
+	assert.equal(root.find("[data-memo-action='reference']")?.find("[data-icon]")?.getAttr("data-icon"), "message-square-quote");
+});

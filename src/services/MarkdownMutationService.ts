@@ -179,7 +179,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					}
 					if (blockId.length === 0) blockId = this.createUniqueBlockId(content);
 					if (hasBlockId(content, blockId)) throw new MarkdownMutationStaleError(file.path);
-					afterRawBlock = appendReferenceBlockId(getRawBlock(content, beforeObservation), blockId);
+					afterRawBlock = this.blockService.buildMemoBlockWithBlockId(beforeObservation.content, beforeObservation.time, blockId);
 					return replaceObservation(content, beforeObservation, afterRawBlock, false);
 				},
 			});
@@ -455,7 +455,7 @@ export function insertRawBlock(
 	sourcePath: string,
 ): string {
 	const firstLine = rawBlock.split(/\r\n|\r|\n/u, 1)[0] ?? "";
-	if (!/^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?: |$)/u.test(firstLine)) {
+	if (!/^-(?: | {3})(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?: |$)/u.test(firstLine)) {
 		throw new Error("A Daily memo raw block must start with a valid root-level time line.");
 	}
 	const eol = content.includes("\r\n") ? "\r\n" : "\n";
@@ -596,17 +596,6 @@ function splitLinesWithSeparators(content: string): Array<{ text: string; separa
 		match = pattern.exec(content);
 	}
 	return result;
-}
-
-function appendReferenceBlockId(rawBlock: string, blockId: string): string {
-	const parts = splitLinesWithSeparators(rawBlock);
-	for (let index = parts.length - 1; index >= 0; index -= 1) {
-		const part = parts[index];
-		if (part === undefined || part.text.trim().length === 0) continue;
-		part.text = `${part.text.replace(/\s+$/u, "")} ^${blockId}`;
-		return parts.map((item) => `${item.text}${item.separator}`).join("");
-	}
-	throw new Error("Reference target has no effective content line.");
 }
 
 export function hasBlockId(content: string, blockId: string): boolean {

@@ -8,7 +8,7 @@ export interface CardImageLoadItem {
 	allowDisconnected?: boolean;
 }
 
-export type CardImageLoadSurface = "card-flow" | "mobile-search" | "image-preview";
+export type CardImageLoadSurface = "card-flow" | "mobile-search" | "image-preview" | "relations";
 export type CardImageLoadPriority = "high" | "normal" | "low";
 
 export interface CardImageLoadRequest {

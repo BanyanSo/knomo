@@ -43,7 +43,7 @@ export function getCatalogQueryKey(input: CatalogQueryFilter): string {
 	delete value.cursor;
 	const terms = getCatalogTextTerms(request);
 	if (terms.length > 0) value.textTerms = terms;
-	for (const field of ["tags", "logicalDates", "sourcePaths"] as const) {
+	for (const field of ["tags", "logicalDates", "sourcePaths", "observationKeys"] as const) {
 		const values = request[field];
 		if (values !== undefined) value[field] = [...new Set(field === "tags" ? values.map(normalizeSearchText) : values)].sort();
 	}
@@ -73,7 +73,7 @@ export function narrowCatalogQuery(request: CatalogQueryFilter): CatalogQueryFil
 		query.toDate = query.toDate === undefined ? last : minDate(query.toDate, last);
 	}
 	if ((query.fromDate !== undefined && query.toDate !== undefined && query.fromDate > query.toDate)
-		|| query.logicalDates?.length === 0 || query.sourcePaths?.length === 0
+		|| query.logicalDates?.length === 0 || query.sourcePaths?.length === 0 || query.observationKeys?.length === 0
 		|| (query.monthDay !== undefined && query.searchDate?.kind === "month-day" && !matchesSearchDate("2000-" + query.monthDay, query.searchDate))
 		|| (query.fromDate === query.toDate && query.fromDate !== undefined
 			&& (query.fromDate === query.excludeDate || !matchesSearchDate(query.fromDate, query.searchDate)
@@ -119,6 +119,10 @@ export function intersectCatalogFilters(left: CatalogQueryFilter, right: Catalog
 	if (left.tags && right.tags) result.tags = [...new Set([...left.tags, ...right.tags])];
 	if (left.logicalDates && right.logicalDates) result.logicalDates = left.logicalDates.filter(date => right.logicalDates!.includes(date));
 	if (left.sourcePaths && right.sourcePaths) result.sourcePaths = left.sourcePaths.filter(source => right.sourcePaths!.includes(source));
+	if (left.observationKeys && right.observationKeys) {
+		const keys = new Set(right.observationKeys);
+		result.observationKeys = left.observationKeys.filter(key => keys.has(key));
+	}
 	for (const key of ["hasTask", "hasImage", "hasLink", "hasTag", "hasReference", "hour", "monthDay", "dayOfMonth"] as const) {
 		if (left[key] !== undefined && right[key] !== undefined && left[key] !== right[key]) result.matchNone = true;
 	}

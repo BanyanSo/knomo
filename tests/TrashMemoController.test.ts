@@ -3,12 +3,33 @@ import assert from "node:assert/strict";
 import type { TrashSnapshot } from "../src/types/trash";
 import { toTrashMemoItem, toTrashMemoView } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
+import { memoMarkdownConsistencyFixtures } from "./fixtures/memoMarkdownConsistency";
 
 const PATH = "Monthly/knomo-trash.json";
 const item = (id: string): TrashSnapshot => ({ snapshotId: id, deletedAt: "2026-09-09T12:00:00Z", sourcePath: "Daily/2026-09-09.md",
  logicalDate: "2026-09-09", section: null, rawBlock: "- 10:30 same memo" });
 const encode = (items: TrashSnapshot[]) => JSON.stringify({ kind: "knomo-trash", items });
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("新独立块格式进入 Trash 后保留正文空白与实际时间，不显示结构前缀和引用 ID", () => {
+ const blocks = new MarkdownBlockService();
+ for (const sample of memoMarkdownConsistencyFixtures) {
+  const deleted = toTrashMemoItem({ ...item("structured"), rawBlock: blocks.buildMemoBlockWithBlockId(sample.content, "10:30:27", "existing-anchor") });
+  assert.equal(deleted.createdAt, "2026-09-09T10:30:27");
+  assert.equal(deleted.content, sample.content, sample.name);
+ }
+});
+
+test("Trash 的四列空格及混合缩进保留标题、代码和用户空行", () => {
+ const blocks = new MarkdownBlockService();
+ for (const content of ["  # title", "    code\n\tmore", "\n  # title\n\n", "first\nsecond  "]) {
+  for (const indent of ["    ", " \t", "  \t", "   \t"]) {
+   const rawBlock = blocks.buildMemoBlockWithBlockId(content, "10:30:27", "anchor").replace(/^\t/gmu, indent);
+   assert.equal(toTrashMemoItem({ ...item("spaces"), rawBlock }).content, content);
+  }
+ }
+});
 
 async function fixture(count = 5) {
  await ensureObsidianStub();

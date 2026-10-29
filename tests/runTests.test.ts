@@ -10,6 +10,14 @@ import {
 	getRunTestSelection,
 } from "../scripts/run-tests";
 
+test("stress suite selects scale checks while all retains every source", () => {
+	const sources = ["MemoRelationsUi.test.ts", "Other.test.ts", "runTests.test.ts"];
+	assert.deepEqual(getRunTestSelection(sources, ["--suite=stress"]), {
+		sourceFileNames: ["MemoRelationsUi.test.ts"], extraNodeTestArgs: ["--test-name-pattern=规模边界"],
+	});
+	assert.deepEqual(getRunTestSelection(sources, ["--suite=all"]).sourceFileNames, sources);
+});
+
 test("run-tests maps only current test sources to compiled test files", () => {
 	assert.deepEqual(
 		getCompiledTestFilesForSources([
@@ -40,7 +48,7 @@ test("run-tests passes explicit files to node test", () => {
 		getNodeTestArgs(["alpha.test.js", "zeta.test.js"]),
 		[
 			"--test",
-			"--test-concurrency=1",
+			"--test-concurrency=2",
 			"alpha.test.js",
 			"zeta.test.js",
 		],
@@ -52,7 +60,7 @@ test("run-tests forwards extra node test arguments before test files", () => {
 		getNodeTestArgs(["alpha.test.js", "zeta.test.js"], ["--test-name-pattern=WikiLink"]),
 		[
 			"--test",
-			"--test-concurrency=1",
+			"--test-concurrency=2",
 			"--test-name-pattern=WikiLink",
 			"alpha.test.js",
 			"zeta.test.js",
@@ -78,7 +86,7 @@ test("product and tooling partition every current test source exactly once", () 
 	const product = getRunTestSelection(sources, []).sourceFileNames;
 	const tooling = getRunTestSelection(sources, ["--suite=tooling"]).sourceFileNames;
 	const all = getRunTestSelection(sources, ["--suite=all"]).sourceFileNames;
-	assert.deepEqual(tooling, ["ReleaseVersion.test.ts", "VerifyCore.test.ts", "runTests.test.ts"]);
+	assert.deepEqual(tooling, ["ReleaseCheck.test.ts", "ReleaseVersion.test.ts", "VerifyCore.test.ts", "runTests.test.ts"]);
 	assert.deepEqual(all, sources);
 	assert.deepEqual([...product, ...tooling].sort(), sources);
 	assert.equal(new Set([...product, ...tooling]).size, sources.length);

@@ -262,8 +262,8 @@ test("Catalog settle 前的启动核对不重复投影 checkpoint 已完成的�
 		discoveryPending: false,
 		pending: [],
 		metadata: {
-			"2026-07": { sourceDigest: "july-source", outputHash: "july-output" },
-			"2026-08": { sourceDigest: "august-source", outputHash: "august-output" },
+			"2026-07": { sourceDigest: "july-source", outputHash: createHash("sha256").update(managedMonthly).digest("hex") },
+			"2026-08": { sourceDigest: "august-source", outputHash: createHash("sha256").update(managedMonthly).digest("hex") },
 		},
 	});
 	const builtPeriods: string[] = [];
@@ -276,6 +276,51 @@ test("Catalog settle 前的启动核对不重复投影 checkpoint 已完成的�
 	await fixture.coordinator.initialize();
 	assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
 	assert.deepEqual(builtPeriods, ["2026-08"]);
+});
+
+for (const scenario of ["changed", "unowned", "read-error"] as const) test(`历史输出启动核对 ${scenario}：只重投影合法且变化的月份`, async () => {
+	const checkpointStore = new InMemoryMemoCatalogStore();
+	const original = "<!-- knomo:monthly-archive -->\noriginal\n";
+	const changed = scenario === "unowned" ? "# User file\n" : "<!-- knomo:monthly-archive -->\noffline edit\n";
+	const fixture = createFixture({
+		"Daily/2026-07-01.md": "- 09:00 July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+		"Memos/2026-07.md": original,
+		"Memos/2026-08.md": changed,
+	}, () => true, { currentPeriod: () => "2026-10", checkpointStore,
+		listCatalogPeriods: async () => ["2026-07", "2026-08"] });
+	const configuration = await fixture.inputBuilder.getConfigurationSnapshot();
+	const outputHash = createHash("sha256").update(original).digest("hex");
+	await checkpointStore.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, {
+		dailyScopeKey: configuration.dailyScopeKey, renderFingerprint: configuration.renderFingerprint,
+		discoveryPending: false, pending: [], metadata: {
+			"2026-07": { sourceDigest: "july", outputHash },
+			"2026-08": { sourceDigest: "august", outputHash },
+		},
+	});
+	const built: string[] = [];
+	const build = fixture.inputBuilder.build.bind(fixture.inputBuilder);
+	fixture.inputBuilder.build = async (period, runtime) => { built.push(period); return build(period, runtime); };
+	if (scenario === "read-error") {
+		const read = fixture.replica.app.vault.readBinary.bind(fixture.replica.app.vault);
+		let failOnce = true;
+		fixture.replica.app.vault.readBinary = async file => {
+			if (file.path === "Memos/2026-08.md" && failOnce) { failOnce = false; throw new Error("output unavailable"); }
+			return read(file);
+		};
+	}
+	await fixture.coordinator.initialize();
+	if (scenario === "read-error") {
+		assert.equal(fixture.replica.read("Memos/2026-08.md"), changed);
+		await fixture.coordinator.handleCatalogSettled();
+	}
+	await fixture.coordinator.run(true);
+	assert.deepEqual(built.sort(), scenario === "unowned" ? ["2026-10"] : ["2026-08", "2026-10"]);
+	assert.equal(fixture.replica.read("Memos/2026-07.md"), original);
+	if (scenario === "unowned") assert.equal(fixture.replica.read("Memos/2026-08.md"), changed);
+	else assert.match(fixture.replica.read("Memos/2026-08.md") ?? "", /August/u);
+	await fixture.coordinator.handleCatalogSettled();
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 0, failed: 0 });
 });
 
 test("当前月只有空 Daily 时只检查候选月份，不创建 Monthly 文件", async () => {

@@ -112,7 +112,7 @@ test("mobile surface preserves native controls and adds only the missing lower c
 	}
 });
 
-test("phone header softly veils background strokes while preserving clearance and normal card pixels", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("phone header attenuates background relative to an uncoated control while preserving clearance and normal card pixels", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const browser = await chromium.launch({ headless: true });
 	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
@@ -147,7 +147,6 @@ test("phone header softly veils background strokes while preserving clearance an
 						return { contrast: Math.sqrt(pixels.reduce((sum, value) => sum + (value - mean) ** 2, 0) / pixels.length),
 							outline: Math.abs(ctx.getImageData(70, y, 1, 1).data[0] - mean) };
 					};
-					// 轻度柔化细笔画、允许宽轮廓更清楚；同时约束过透明和完全遮盖两端。
 					return { behindStatus: stroke(40), behindTab: stroke(bottom - 4), belowHeader: stroke(bottom + 3), visiblePixels: Array.from(ctx.getImageData(40, bottom + 1, 300, 30).data) };
 				}, { png: screenshot.toString("base64"), bottom });
 			};
@@ -156,15 +155,21 @@ test("phone header softly veils background strokes while preserving clearance an
 			await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 150; });
 			assert.ok(await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top) < bottom - 4, `${theme}: real card reaches behind tab`);
 			const glass = await sample();
-			for (const area of [glass.behindStatus, glass.behindTab]) {
-				assert.ok(area.outline > 4 && area.outline < 50, `${theme}/${mode}: background silhouettes remain visible through the tint (${area.outline})`);
-			}
 			assert.equal(await page.evaluate((y: number) => document.elementFromPoint(100, y)?.className, bottom + 1), "fixture-ink", theme);
 			await page.addStyleTag({ content: '.view-header, .view-header::before { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }' });
 			const sharp = await sample();
-			assert.ok(glass.behindTab.contrast < sharp.behindTab.contrast * 0.8, `${theme}: text detail softens behind the header`);
+			// 材质强度由实机验收决定；同场景对照只验证淡化与柔化，1 灰阶用于容忍像素取整。
+			await page.addStyleTag({ content: '.view-header, .view-header::before { background:transparent !important; }' });
+			const uncoated = await sample();
+			for (const area of ["behindStatus", "behindTab"] as const) {
+				assert.ok(uncoated[area].outline > 1, `${theme}/${mode}: control contains a visible background silhouette`);
+				assert.ok(glass[area].outline > 1 && glass[area].outline < uncoated[area].outline - 1,
+					`${theme}/${mode}/${area}: tint attenuates without hiding the background (${glass[area].outline} vs ${uncoated[area].outline})`);
+			}
+			assert.ok(glass.behindTab.contrast < sharp.behindTab.contrast - 1, `${theme}: text detail softens relative to the unblurred tint`);
 			assert.deepEqual(glass.belowHeader, sharp.belowHeader, `${theme}/${mode}: normal card below the padded header stays sharp`);
 			assert.deepEqual(glass.visiblePixels, sharp.visiblePixels, `${theme}/${mode}: all card pixels beyond the header edge must be unchanged`);
+			assert.deepEqual(glass.visiblePixels, uncoated.visiblePixels, `${theme}/${mode}: tint stays inside the header edge`);
 			await page.locator(".knomo-card-flow").evaluate((el: HTMLElement) => { el.scrollTop = 0; });
 			assert.equal(await page.locator(".fixture-ink").evaluate((el: HTMLElement) => el.getBoundingClientRect().top), firstTop, `${theme}: returning to top restores first card`);
 		}

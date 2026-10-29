@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# push 保留每个原始 SHA 的证据；PR 只保留最新合并候选。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,7 +23,28 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
       - run: npm run test:all
       - run: npm run build
       - run: npm run check:i18n
+
+  browser-layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KNOMO_LAYOUT_PLAYWRIGHT: playwright
+      KNOMO_LAYOUT_BROWSER: chromium
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1
+      - run: npx playwright install --with-deps chromium
+      - name: Prepare browser test runtime
+        run: |
+          npx tsc -p tsconfig.test.json
+          node -e "require('./.tmp/knomo-tests/tests/helpers/obsidianStub.js').ensureObsidianStub().catch(error => { console.error(error); process.exit(1); })"
+      - name: Run browser layout tests
+        run: node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=spec --test-concurrency=1 --files $(grep -l KNOMO_LAYOUT_PLAYWRIGHT tests/*.test.ts)

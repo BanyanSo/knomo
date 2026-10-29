@@ -6,20 +6,24 @@ import { sha256Bytes } from "../utils/sha256";
 import { getMarkdownTaskLines } from "../utils/markdownTasks";
 import {
 	extractTrailingBlockId,
+	extractLeadingParagraphBlockId,
 	findLastEffectiveLineIndex,
+	getFourColumnMemoPrefix,
 	isMarkdownHeadingLine,
 	isMemoContinuationLine,
 	isMemoStartLine,
 	parseMemoImages,
 	parseMemoTags,
 	splitMarkdownLines,
+	stripMemoContinuationIndent,
 } from "../utils/markdown";
 import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { assignObservationOccurrences } from "./ObservationOccurrences";
+import { collectRelationBlockAnchors, memoLevelRelationBlockId } from "../utils/memoRelations";
 
-export const CATALOG_PARSER_VERSION = 10;
+export const CATALOG_PARSER_VERSION = 15;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;
@@ -28,6 +32,7 @@ export interface DiaryMemoParseInput {
 }
 
 export interface DiaryMemoParseResult {
+	blockAnchors?: Record<string, number>;
 	sourceRevision: string;
 	observations: MemoObservation[];
 }
@@ -123,7 +128,7 @@ export class DiaryMemoParser {
 		}
 
 		assignObservationOccurrences(observations);
-		return { sourceRevision, observations };
+		return { sourceRevision, observations, blockAnchors: collectRelationBlockAnchors(content) };
 	}
 
 	private async parseRevisionCooperatively(
@@ -164,42 +169,52 @@ export class DiaryMemoParser {
 			lineIndex = parsed.endLine;
 		}
 		assignObservationOccurrences(observations);
-		return { sourceRevision, observations };
+		return { sourceRevision, observations, blockAnchors: collectRelationBlockAnchors(content) };
 	}
 }
 
 function parseDiaryMemoBlock(lines: readonly string[], startLine: number): ParsedDiaryMemoBlock | null {
 	const firstLine = lines[startLine];
-	const match = firstLine?.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
+	const match = firstLine?.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
 	if (match === null) {
 		return null;
 	}
 
 	const contentLines: string[] = [];
+	const prefix = getFourColumnMemoPrefix(lines, startLine);
+	const continuationColumns = prefix === null ? 2 : 4;
 	const firstContent = extractTrailingBlockId(match[2] ?? "");
-	let blockId = firstContent.blockId;
-	if (match[2] !== undefined || blockId !== null) {
+	let blockId = prefix === null ? firstContent.blockId : prefix.blockId;
+	if (prefix?.firstContent !== undefined && prefix.firstContent !== null) {
+		contentLines.push(prefix.firstContent);
+	} else if (prefix === null && (match[2] !== undefined || blockId !== null)) {
 		contentLines.push(firstContent.text);
 	}
+	const contentStartLineOffset = prefix?.contentStartLineOffset ?? (match[2] === undefined ? 1 : 0);
 	let endLine = startLine;
-	for (let lineIndex = startLine + 1; lineIndex < lines.length; lineIndex += 1) {
+	for (let lineIndex = startLine + Math.max(1, contentStartLineOffset); lineIndex < lines.length; lineIndex += 1) {
 		const line = lines[lineIndex];
-		if (!isMemoContinuationLine(line)) {
+		if (!isMemoContinuationLine(line, continuationColumns)) {
 			break;
 		}
-		contentLines.push(stripOneContinuationIndent(line));
+		contentLines.push(stripMemoContinuationIndent(line, continuationColumns));
 		endLine = lineIndex;
 	}
 
 	const lastEffectiveLineIndex = findLastEffectiveLineIndex(contentLines);
-	if (lastEffectiveLineIndex !== -1) {
+	if (prefix === null && lastEffectiveLineIndex !== -1) {
 		const lastContent = extractTrailingBlockId(contentLines[lastEffectiveLineIndex]);
 		if (lastContent.blockId !== null) {
 			contentLines[lastEffectiveLineIndex] = lastContent.text;
 			blockId = lastContent.blockId;
 		}
 	}
-	const content = contentLines.join("\n");
+	let content = contentLines.join("\n");
+	if (prefix?.contentStartLineOffset === 0) {
+		const paragraph = extractLeadingParagraphBlockId(content);
+		content = paragraph.text;
+		blockId = paragraph.blockId;
+	}
 	if (content.trim().length === 0) {
 		return null;
 	}
@@ -208,7 +223,7 @@ function parseDiaryMemoBlock(lines: readonly string[], startLine: number): Parse
 		endLine,
 		time: match[1],
 		content,
-		contentStartLineOffset: match[2] === undefined ? 1 : 0,
+		contentStartLineOffset,
 		contentHash: hashMemoContent(content),
 		blockId,
 	};
@@ -220,38 +235,47 @@ async function parseDiaryMemoBlockCooperatively(
 	yieldController: CooperativeYieldController,
 ): Promise<ParsedDiaryMemoBlock | null> {
 	const firstLine = lines[startLine];
-	const match = firstLine?.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
+	const match = firstLine?.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
 	if (match === null) return null;
 
 	const contentLines: string[] = [];
+	const prefix = getFourColumnMemoPrefix(lines, startLine);
+	const continuationColumns = prefix === null ? 2 : 4;
 	const firstContent = extractTrailingBlockId(match[2] ?? "");
-	let blockId = firstContent.blockId;
-	if (match[2] !== undefined || blockId !== null) contentLines.push(firstContent.text);
+	let blockId = prefix === null ? firstContent.blockId : prefix.blockId;
+	if (prefix?.firstContent !== undefined && prefix.firstContent !== null) contentLines.push(prefix.firstContent);
+	else if (prefix === null && (match[2] !== undefined || blockId !== null)) contentLines.push(firstContent.text);
+	const contentStartLineOffset = prefix?.contentStartLineOffset ?? (match[2] === undefined ? 1 : 0);
 	let endLine = startLine;
-	for (let lineIndex = startLine + 1; lineIndex < lines.length; lineIndex += 1) {
+	for (let lineIndex = startLine + Math.max(1, contentStartLineOffset); lineIndex < lines.length; lineIndex += 1) {
 		if (yieldController.shouldYield()) await yieldController.yieldNow();
 		const line = lines[lineIndex];
-		if (!isMemoContinuationLine(line)) break;
-		contentLines.push(stripOneContinuationIndent(line));
+		if (!isMemoContinuationLine(line, continuationColumns)) break;
+		contentLines.push(stripMemoContinuationIndent(line, continuationColumns));
 		endLine = lineIndex;
 	}
 
 	const lastEffectiveLineIndex = findLastEffectiveLineIndex(contentLines);
-	if (lastEffectiveLineIndex !== -1) {
+	if (prefix === null && lastEffectiveLineIndex !== -1) {
 		const lastContent = extractTrailingBlockId(contentLines[lastEffectiveLineIndex]);
 		if (lastContent.blockId !== null) {
 			contentLines[lastEffectiveLineIndex] = lastContent.text;
 			blockId = lastContent.blockId;
 		}
 	}
-	const content = contentLines.join("\n");
+	let content = contentLines.join("\n");
+	if (prefix?.contentStartLineOffset === 0) {
+		const paragraph = extractLeadingParagraphBlockId(content);
+		content = paragraph.text;
+		blockId = paragraph.blockId;
+	}
 	if (content.trim().length === 0) return null;
 	return {
 		startLine,
 		endLine,
 		time: match[1],
 		content,
-		contentStartLineOffset: match[2] === undefined ? 1 : 0,
+		contentStartLineOffset,
 		contentHash: hashMemoContent(content),
 		blockId,
 	};
@@ -284,16 +308,13 @@ function buildMemoObservation(
 		occurrenceIndex: 0,
 		occurrenceCount: 1,
 		existingBlockId: parsed.blockId,
+		relationBlockId: memoLevelRelationBlockId(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n"), parsed.blockId),
 		tags: parseMemoTags(metadataContent),
 		links: parseMemoLinksInSourceOrder(metadataContent),
 		images: dedupeStable(parseMemoImages(metadataContent), (image) => `${image.syntax}\0${image.path}\0${image.altText}`),
 		tasks,
 		timeBuoyDates: extractTimeBuoyDates(parsed.content),
 	};
-}
-
-function stripOneContinuationIndent(line: string): string {
-	return line.startsWith("\t") ? line.slice(1) : line.slice(2);
 }
 
 export function extractDailyExplicitReferenceTargets(content: string): string[] {
@@ -320,7 +341,7 @@ function isFrontmatterEnd(line: string): boolean {
 }
 
 function hasValidMemoTime(line: string): boolean {
-	const time = line.match(/^- (\d{2}:\d{2}(?::\d{2})?)(?: |$)/u)?.[1] ?? "";
+	const time = line.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)(?: |$)/u)?.[1] ?? "";
 	return /^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/u.test(time);
 }
 

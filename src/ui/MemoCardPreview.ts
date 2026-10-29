@@ -159,5 +159,6 @@ function getUrlScheme(value: string): string | null {
 }
 
 function normalizePreviewText(value: string): string {
-	return value.replace(/[ \t]+$/gm, "").trim();
+	// 纯图片提取后仍显示空正文；非空 Markdown 的缩进、硬换行和空行必须原样传给宿主。
+	return value.trim().length === 0 ? "" : value;
 }

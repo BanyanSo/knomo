@@ -46,6 +46,13 @@ export interface SelectedRecordStats {
 	trend: RecordStatsTrendPoint[];
 	activeHours: RecordStatsHourPoint[];
 	commonTags: RecordStatsTagPoint[];
+	referenced?: ReferencedMemoStats;
+}
+
+export interface ReferencedMemoStats {
+	count: number;
+	complete: boolean;
+	failed: boolean;
 }
 
 export interface RecordStatsSnapshot {
@@ -70,6 +77,7 @@ export interface PreparedRecordStats {
 	daily: Map<string, DailyRecordStats>;
 	earliestYear: number | null;
 	tagDisplayNames: Map<string, string>;
+	referenced?: { daily: ReadonlyMap<string, number>; complete: boolean; failed: boolean };
 }
 
 export class RecordStatsService {
@@ -142,7 +150,7 @@ export class RecordStatsService {
 				return false;
 			}
 			if (prepared === null) {
-				this.updating = false;
+				this.updating = showUpdating && hasCommittedStats;
 				if (!hasCommittedStats) this.state = "idle";
 				return false;
 			}
@@ -242,6 +250,11 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 		trend: buildTrend(view, range.start, dayKeys, prepared.daily),
 		activeHours: hourCounts.map((count, hour) => ({ hour, count })),
 		commonTags: buildCommonTags(tagMemoCounts, prepared.tagDisplayNames),
+		...(prepared.referenced ? { referenced: {
+			count: dayKeys.reduce((sum, day) => sum + (prepared.referenced!.daily.get(day) ?? 0), 0),
+			complete: prepared.referenced.complete,
+			failed: prepared.referenced.failed,
+		} } : {}),
 	};
 }
 

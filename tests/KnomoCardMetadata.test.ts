@@ -65,10 +65,11 @@ test("builds card action and trash action metadata", () => {
 	assert.equal(getMemoActionClass("edit"), "knomo-card-action");
 	assert.equal(getMemoActionClass("delete"), "knomo-card-action is-danger");
 	assert.deepEqual(getMemoCardActions(), [
+		{ action: "share-image", className: "knomo-card-action" },
 		{ action: "edit", className: "knomo-card-action" },
 		{ action: "reference", className: "knomo-card-action" },
-		{ action: "open-daily", className: "knomo-card-action" },
 		{ action: "copy-text", className: "knomo-card-action" },
+		{ action: "open-daily", className: "knomo-card-action" },
 		{ action: "copy-link", className: "knomo-card-action" },
 		{ action: "delete", className: "knomo-card-action is-danger" },
 	]);
@@ -91,6 +92,19 @@ test("builds card action and trash action metadata", () => {
 	]);
 	assert.equal(getTrashMemoCardClass(null), "knomo-card knomo-trash-card");
 	assert.equal(getTrashMemoCardClass("restore"), "knomo-card knomo-trash-card is-busy");
+});
+
+test("关联详情仅在有被引用信息时显示，位于删除之前", () => {
+	const memo = makeMemo({ contentSnapshot: "引用 [[Daily/2026-06-01#^a]]" });
+	assert.equal(getMemoCardActions(memo).some(item => item.action === "relations"), false);
+	assert.deepEqual(getMemoCardActions(memo, false, true).map(item => item.action),
+		["share-image", "edit", "reference", "copy-text", "open-daily", "copy-link", "relations", "delete"]);
+	const catalogMemo = { ...memo, catalog: { capabilities: makeCapabilities() } as never };
+	assert.deepEqual(getMemoCardActions(catalogMemo, true, true).map(item => item.action),
+		["share-image", "edit", "reference", "copy-text", "view-day", "open-daily", "copy-link", "relations", "delete"]);
+	assert.equal(getMemoCardActions({ ...memo, catalog: { capabilities: {
+		...makeCapabilities(), markdown: { ...makeCapabilities().markdown, view: false },
+	} } as never }, false, true).some(item => item.action === "relations"), false);
 });
 
 test("keeps the card menu available with Catalog capabilities", () => {

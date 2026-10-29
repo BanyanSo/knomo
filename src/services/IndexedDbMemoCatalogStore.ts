@@ -539,6 +539,47 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 				}
 
 				if (request.matchNone) return;
+				if (request.observationKeys !== undefined) {
+					const keys = new Set(request.observationKeys);
+					// 小集合定点读取且总量有界；大集合保留时间索引的分页边界。
+					if (keys.size <= CATALOG_OBSERVATION_READ_BATCH_LIMIT) {
+						const range = buildObservationRange(keyRange, request);
+						let remaining = keys.size;
+						for (const key of keys) {
+							const read = observations.get(key);
+							read.onsuccess = () => {
+								if (signal.aborted) return;
+								const observation = read.result as CatalogObservation | undefined;
+								if (observation) {
+									observationsRead++;
+									if (range.includes([observation.createdAtKey, observation.observationKey]) && matches(observation)) items.push(observation);
+								}
+								if (--remaining === 0) {
+									// 与 IndexedDB 字符串键排序一致，不使用受 locale 影响的比较。
+									items.sort(compareObservationIndexKeys);
+									items.splice(limit + 1);
+								}
+							};
+						}
+						return;
+					}
+					const selected = observations.index(BY_CREATED_AT).openKeyCursor(buildObservationRange(keyRange, request), "prev");
+					selected.onsuccess = () => {
+						if (signal.aborted) return;
+						const cursor = selected.result;
+						if (cursor === null || items.length > limit) return;
+						cursorReads++;
+						if (!keys.has(String(cursor.primaryKey))) { cursor.continue(); return; }
+						const read = observations.get(cursor.primaryKey);
+						read.onsuccess = () => {
+							if (signal.aborted) return;
+							const observation = read.result as CatalogObservation | undefined;
+							if (observation) { observationsRead++; if (matches(observation)) items.push(observation); }
+							if (items.length <= limit) cursor.continue();
+						};
+					};
+					return;
+				}
 				const startSelectedCursor = (selection: CatalogIndexSelection | null) => {
 					if (signal.aborted) return;
 					try {
@@ -669,6 +710,38 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 				coverage = (coverageRequest.result as CatalogMetaRecord<CatalogCoverage> | undefined)?.value
 					?? { ...DEFAULT_CATALOG_COVERAGE };
 				if (request.matchNone) return;
+				if (request.observationKeys !== undefined) {
+					const keys = new Set(request.observationKeys);
+					if (keys.size <= CATALOG_OBSERVATION_READ_BATCH_LIMIT) {
+						for (const key of keys) {
+							const read = observations.get(key);
+							read.onsuccess = () => {
+								if (signal?.aborted) return;
+								const observation = read.result as CatalogObservation | undefined;
+								if (observation && matches(observation)) count++;
+							};
+						}
+						return;
+					}
+					const metadataOnly = canCountObservationRange({ ...request, observationKeys: undefined });
+					const selected = observations.index(BY_CREATED_AT).openKeyCursor(buildObservationCountRange(keyRange, request), "prev");
+					selected.onsuccess = () => {
+						if (signal?.aborted) return;
+						const cursor = selected.result;
+						if (cursor === null) return;
+						if (!keys.has(String(cursor.primaryKey))) { cursor.continue(); return; }
+						// 日期及目标集合已由索引键确认；普通被引用计数不读取正文。
+						if (metadataOnly) { count++; cursor.continue(); return; }
+						const read = observations.get(cursor.primaryKey);
+						read.onsuccess = () => {
+							if (signal?.aborted) return;
+							const observation = read.result as CatalogObservation | undefined;
+							if (observation && matches(observation)) count++;
+							cursor.continue();
+						};
+					};
+					return;
+				}
 				const startSelectedCursor = (selection: CatalogIndexSelection | null) => {
 					if (signal?.aborted) return;
 					try {
@@ -1211,6 +1284,11 @@ function selectCatalogIndex(index: IDBIndex, request: CatalogQueryFilter, range:
 		for (let i = 1; i < counts.length; i++) if (counts[i].result < counts[selected].result) selected = i;
 		onSelected(candidates[selected]);
 	};
+}
+
+function compareObservationIndexKeys(left: CatalogObservation, right: CatalogObservation): number {
+	if (left.createdAtKey !== right.createdAtKey) return left.createdAtKey > right.createdAtKey ? -1 : 1;
+	return left.observationKey === right.observationKey ? 0 : left.observationKey > right.observationKey ? -1 : 1;
 }
 
 function canCountObservationRange(request: CatalogQueryFilter): boolean {

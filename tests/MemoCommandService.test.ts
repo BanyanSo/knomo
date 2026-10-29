@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import type { App } from "obsidian";
 import { createDeferred } from "./helpers/deferred";
 
@@ -8,6 +8,10 @@ import { toTrashMemoItem } from "../src/types/memoView";
 import type { MarkdownMutationService } from "../src/types/memoOperations";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失败不误报成功", async t => {
 	await ensureObsidianStub();
@@ -50,7 +54,7 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	assert.deepEqual(calls.slice(1), ["s1", "s1", (await trash.store.query()).items[1], "clear"]);
 });
 
-test("普通命令不访问 Identity，并将最初 observation handle 原样交给写入网关", async () => {
+test("普通命令不访问 Identity，并将最初 observation handle 原样交给写入网关", async t => {
 	await ensureObsidianStub();
 	const { TFile } = await import("obsidian");
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
@@ -86,7 +90,12 @@ test("普通命令不访问 Identity，并将最初 observation handle 原样交
 	assert.equal(handles.length, 4);
 	for (const handle of handles) assert.strictEqual(handle, item.observationHandle);
 	await service.recordReview(item);
+	// 固定跨过协作时间片，避免仅在全量测试负载较高时才覆盖让出执行路径。
+	let elapsed = 0;
+	t.mock.method(performance, "now", () => elapsed += 10);
+	const timer = t.mock.method(window, "setTimeout");
 	assert.equal((await service.getReadService().getRandomReunionItems(1)).length, 1);
+	assert.ok(timer.mock.callCount() > 0);
 });
 
 test("create 只提交 Daily 和 Catalog，不执行 intent 或 claim", async () => {

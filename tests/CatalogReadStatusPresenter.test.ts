@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before } from "node:test";
 
-import { getCatalogReadStatusHeaders, hasCatalogReadBlocker } from "../src/ui/CatalogReadStatusPresenter";
 import type { CatalogCoverage } from "../src/types/catalog";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+let getCatalogReadStatusHeaders: typeof import("../src/ui/CatalogReadStatusPresenter").getCatalogReadStatusHeaders;
+let hasCatalogReadBlocker: typeof import("../src/ui/CatalogReadStatusPresenter").hasCatalogReadBlocker;
+before(async () => {
+	// 独立准备宿主桩，不依赖其它测试文件先运行。
+	await ensureObsidianStub();
+	({ getCatalogReadStatusHeaders, hasCatalogReadBlocker } = await import("../src/ui/CatalogReadStatusPresenter"));
+});
 
 const completeCoverage: CatalogCoverage = {
 	kind: "complete",
@@ -11,6 +19,16 @@ const completeCoverage: CatalogCoverage = {
 	coveredFileCount: 2,
 	totalFileCount: 2,
 };
+
+test("关系正常更新无列表提示，真实故障仅原位说明且不阻断正文", () => {
+	for (const relations of [{ complete: false, failed: true }, { complete: false, failed: false, stale: true }]) {
+		const status = { content: "ready" as const, catalog: "complete" as const, projection: "ready" as const, relations };
+		assert.equal(hasCatalogReadBlocker(status, completeCoverage), false);
+		const headers = getCatalogReadStatusHeaders({ status, coverage: completeCoverage });
+		assert.equal(headers.length, relations.failed ? 1 : 0);
+		assert.ok(headers.every(header => header.type === "summary" && !header.action));
+	}
+});
 
 test("Monthly 故障与扫描失败分开判断，不把等待重试伪装为仍在扫描", () => {
 	const status = { content: "scanning" as const, catalog: "partial" as const, projection: "failed" as const };

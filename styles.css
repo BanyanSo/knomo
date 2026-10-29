@@ -1506,7 +1506,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 
 .knomo-plugin .knomo-compact-menu-btn,
 .knomo-plugin .knomo-compact-search-btn,
-.knomo-plugin .knomo-record-stats-back {
+.knomo-plugin .knomo-record-stats-back,
+.knomo-plugin .knomo-relations-back {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -2474,6 +2475,13 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 }
 
 .knomo-plugin .knomo-list-toolbar > .knomo-inline-button[data-action="random-day-back"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	min-width: 32px;
+	height: 32px;
+	padding: 0;
 	margin-inline-start: auto;
 }
 
@@ -2814,6 +2822,10 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	line-height: 1.7;
 }
 
+.knomo-plugin .knomo-card-content.markdown-rendered :is(h1, h2, h3, h4, h5, h6) {
+	margin-top: 0;
+}
+
 .knomo-plugin .knomo-card-content :is(ul, ol) {
 	margin-block-start: 0;
 	margin-block-end: 0;
@@ -2994,7 +3006,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-meta {
 	margin-top: 6px;
 	color: var(--text-faint);
-	font-size: var(--knomo-text-caption);
+	font-size: var(--knomo-text-meta);
 }
 
 .knomo-plugin .knomo-source-reference p {
@@ -3990,8 +4002,8 @@ body .knomo-mobile-create-fab.is-hidden {
 	margin-bottom: var(--knomo-desktop-header-composer-gap);
 }
 
-.knomo-plugin.is-record-stats.is-layout-desktop-narrow .knomo-record-stats-back,
-.knomo-plugin.is-record-stats.is-layout-desktop-wide.is-sidebar-collapsed .knomo-record-stats-back {
+.knomo-plugin.is-record-stats:not(.has-memo-relations).is-layout-desktop-narrow .knomo-record-stats-back,
+.knomo-plugin.is-record-stats:not(.has-memo-relations).is-layout-desktop-wide.is-sidebar-collapsed .knomo-record-stats-back {
 	display: inline-flex;
 }
 
@@ -5022,11 +5034,11 @@ body.is-mobile .knomo-settings-panel .knomo-settings-text-row > .setting-item-co
 	overflow-wrap: anywhere;
 }
 .knomo-plugin:not(.is-layout-mobile) .knomo-card-content pre,
-.knomo-plugin:not(.is-layout-mobile) .knomo-card-content table {
+.knomo-plugin .knomo-card-content table {
 	max-width: 100%;
 	overflow-x: auto;
 }
-.knomo-plugin:not(.is-layout-mobile) .knomo-card-content table { display: block; }
+.knomo-plugin .knomo-card-content table { display: block; }
 @container knomo-main (max-width: 480px) {
 	.knomo-plugin .knomo-topbar { flex-wrap: wrap; height: auto; flex-shrink: 0; }
 	.knomo-plugin .knomo-topbar .knomo-search-wrap { flex: 1 1 140px; min-width: 0; max-width: 100%; }
@@ -5346,4 +5358,278 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	body.is-mobile .knomo-plugin.is-layout-mobile .knomo-send-button:active:not(:disabled):not(.is-saving)::before {
 		transform: translate(-50%, -50%);
 	}
+}
+.knomo-plugin.has-memo-relations .knomo-content-column > .knomo-card-flow:not(.knomo-relations-page),
+.knomo-plugin.has-memo-relations .knomo-mobile-search-page.is-open {
+	display: none;
+}
+
+.knomo-plugin .knomo-mobile-search-page.is-open.is-suspended-for-relations {
+	display: none;
+}
+
+.knomo-plugin .knomo-memo-referrers { min-width: 0; }
+
+.knomo-plugin .knomo-source-reference,
+.knomo-plugin button.knomo-referrer-preview {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	line-height: 1.5;
+	font-weight: var(--font-normal);
+}
+.knomo-plugin .knomo-source-reference-content { min-width: 0; }
+.knomo-plugin .knomo-source-reference a {
+	color: inherit;
+	font: inherit;
+	text-decoration: none;
+}
+.knomo-plugin .knomo-source-reference a:hover,
+.knomo-plugin .knomo-source-reference a:focus-visible {
+	color: var(--text-muted);
+	text-decoration: underline;
+}
+.knomo-plugin .knomo-reference-icon {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 0 auto;
+	color: inherit;
+}
+.knomo-plugin .knomo-reference-icon svg {
+	width: 15px;
+	height: 15px;
+	stroke-width: 2;
+}
+.knomo-plugin button.knomo-referrer-preview {
+	width: 100%;
+	min-width: 0;
+	height: auto;
+	min-height: 0;
+	padding: 2px 0;
+	border: 0;
+	box-shadow: none;
+	background: transparent;
+	color: inherit;
+	font-family: inherit;
+	font-size: inherit;
+	text-align: start;
+	white-space: nowrap;
+	cursor: pointer;
+}
+/* 刷新占位仅暂停交互，不能随宿主禁用样式变淡。 */
+.knomo-plugin .knomo-memo-referrers[data-knomo-render-placeholder] button.knomo-referrer-preview:disabled {
+	opacity: 1;
+}
+.knomo-plugin .knomo-referrer-date { flex: 0 0 auto; }
+.knomo-plugin .knomo-referrer-summary {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+.knomo-plugin button.knomo-referrer-preview:hover { color: var(--text-muted); }
+.knomo-plugin .knomo-source-reference a:active,
+.knomo-plugin button.knomo-referrer-preview:active { color: var(--text-normal); }
+.knomo-plugin .knomo-source-reference a:focus-visible,
+.knomo-plugin button.knomo-referrer-preview:focus-visible:not([data-knomo-pointer-focus]) {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
+}
+
+.knomo-plugin .knomo-relations-page {
+	overflow-anchor: none;
+}
+
+.knomo-plugin .knomo-relations-header {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: var(--knomo-page-background, var(--background-primary));
+	justify-content: flex-start;
+	padding: var(--size-4-2, 8px) var(--size-4-4, 16px);
+}
+
+.knomo-plugin .has-host-header > .knomo-relations-header {
+	display: none;
+}
+
+.knomo-plugin .knomo-relations-header h2 {
+	margin: 0;
+	font-size: var(--knomo-text-ui-medium);
+}
+
+.knomo-plugin .knomo-relations-status,
+.knomo-plugin .knomo-relations-hint {
+	margin: var(--size-4-3, 12px) var(--size-4-4, 16px);
+	font-size: var(--knomo-text-caption);
+	color: var(--text-muted);
+}
+
+.knomo-plugin .knomo-relations-section-title {
+	min-width: 0;
+	margin: 0;
+	padding: 10px var(--size-4-2) 8px;
+	font-size: var(--knomo-text-ui-base);
+	color: var(--text-accent);
+	overflow-wrap: anywhere;
+}
+
+.knomo-plugin .knomo-relations-subject {
+	margin-block-end: 8px;
+}
+
+.knomo-plugin .knomo-relations-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2, 8px);
+	margin: 0;
+	padding: 10px 12px 8px var(--size-4-2);
+	min-width: 0;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-relations-section-header {
+	padding-top: var(--size-4-2, 8px);
+}
+
+.knomo-plugin .knomo-relations-section-header > .knomo-relations-section-title {
+	flex: 1 1 auto;
+	padding: 0;
+}
+
+.knomo-plugin .knomo-relations-back {
+	flex: 0 0 auto;
+	position: relative;
+	width: 32px;
+	min-width: 32px;
+	height: 32px;
+	min-height: 32px;
+	/* 与卡片更多按钮共用右侧轴线，点击区域不撑高标题行。 */
+	margin-block: -16px;
+	margin-inline-end: -4px;
+}
+
+.knomo-plugin .knomo-relations-back::before {
+	content: "";
+	position: absolute;
+	inset: 2px;
+	border-radius: 6px;
+	pointer-events: none;
+}
+
+.knomo-plugin .knomo-relations-back svg {
+	position: relative;
+}
+
+.knomo-plugin .knomo-relations-back:hover,
+.knomo-plugin .knomo-relations-back:focus-visible,
+.knomo-plugin .knomo-relations-back:active {
+	color: var(--text-normal);
+	background: transparent;
+}
+
+.knomo-plugin .knomo-relations-back:hover::before,
+.knomo-plugin .knomo-relations-back:focus-visible::before,
+.knomo-plugin .knomo-relations-back:active::before {
+	background: var(--knomo-row-hover);
+}
+
+.knomo-plugin .knomo-relations-back:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -4px;
+}
+
+.knomo-plugin.is-layout-mobile .knomo-relations-back {
+	display: none;
+}
+
+body.is-mobile .workspace-leaf-content[data-type="knomo-view"] .view-header-title-container {
+	justify-content: center;
+}
+
+.knomo-plugin .knomo-relation-window {
+	position: relative;
+	width: 100%;
+	height: var(--knomo-relation-height, 0px);
+}
+
+.knomo-plugin .knomo-relation-window-row {
+	position: absolute;
+	top: var(--knomo-relation-top, 0px);
+	width: 100%;
+	min-width: 0;
+	padding-bottom: var(--size-4-3, 12px);
+}
+
+.knomo-plugin .knomo-relations-page .knomo-relation-window-row .knomo-card {
+	margin-block: 0;
+}
+/* 分享操作区继承宿主主题，导出画布在隔离文档中使用固定模板。 */
+.knomo-share-font-probe {
+	position: absolute;
+	visibility: hidden;
+	font-size: var(--font-text-size, 16px);
+	font-family: var(--font-text, sans-serif);
+}
+.knomo-share-font-probe.knomo-share-font-probe-ui { font-family: var(--font-interface, sans-serif); }
+.knomo-share-font-probe.knomo-share-font-probe-mono { font-family: var(--font-monospace, monospace); }
+.modal.knomo-share-modal {
+	width: min(600px, calc(100vw - 24px));
+	max-width: calc(100vw - 24px);
+	height: min(860px, calc(100dvh - 48px));
+	max-height: calc(100dvh - 48px);
+	display: flex;
+	flex-direction: column;
+	padding: 20px;
+	overflow: hidden;
+}
+.knomo-share-modal .knomo-share-header { display: grid; align-items: center; flex: none; min-height: 44px; }
+.knomo-share-modal .modal-title { grid-area: 1 / 1; min-width: 0; margin: 0; padding-inline: 44px; text-align: center; }
+.knomo-share-modal button:not(:disabled) { cursor: pointer; }
+.knomo-share-modal .knomo-share-close {
+	grid-area: 1 / 1; justify-self: end; width: 44px; height: 44px;
+	display: inline-flex; align-items: center; justify-content: center;
+	padding: 0; border: 0; border-radius: var(--radius-s, 4px);
+	font-size: 26px; line-height: 1; font-weight: var(--font-normal, 400); color: var(--text-muted);
+	box-shadow: none;
+}
+.knomo-share-modal .knomo-share-close:not(:hover) {
+	background: transparent;
+}
+.knomo-share-modal .knomo-share-content { margin: 12px 0 0; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+.knomo-share-preview { flex: 1 0 120px; min-height: 120px; overflow-y: auto; overscroll-behavior: contain; padding: 2px; background: transparent; }
+.knomo-share-preview > img { display: block; width: 100%; max-width: 390px; height: auto; margin: 0 auto; }
+.knomo-share-footer { flex: none; padding-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+.knomo-share-templates, .knomo-share-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.knomo-share-templates > button { flex: 1 0 auto; white-space: nowrap; height: auto; min-height: 44px; border: 1px solid var(--background-modifier-border); }
+.knomo-share-templates > button[aria-pressed="true"] { border-color: var(--interactive-accent); color: var(--text-accent); box-shadow: inset 0 0 0 1px var(--interactive-accent); }
+.knomo-share-actions > button { flex: 1 0 auto; height: auto; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.knomo-share-status { font-size: var(--font-ui-small); color: var(--text-muted); overflow-wrap: anywhere; }
+.knomo-share-status.is-error { color: var(--text-error); }
+.knomo-share-status:empty { display: none; }
+.knomo-share-preview[aria-busy="true"]::before { content: ""; display: block; width: 28px; height: 28px; margin: 36px auto; border: 2px solid var(--background-modifier-border); border-top-color: var(--text-muted); border-radius: 50%; }
+.knomo-share-modal .knomo-share-render-frame { position: fixed; left: -10000px; top: 0; width: 390px; height: 500px; border: 0; pointer-events: none; }
+.knomo-share-modal button:focus-visible, .knomo-share-preview:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+/* 移动端原生标题容器只承载自定义标题栏，避免重复内边距及 flex 收缩。 */
+.is-mobile .modal.knomo-share-modal > .modal-header {
+	display: block;
+	flex: none;
+	height: auto;
+	margin: 0;
+	padding: 0;
+}
+.is-mobile .modal.knomo-share-modal .modal-title { max-width: none; }
+.is-mobile .modal.knomo-share-modal .knomo-share-content { margin-top: 8px; padding: 0; }
+/* 只抑制本次指针交接目标；键盘输入或失焦立即移除标记。 */
+.knomo-plugin [data-knomo-pointer-focus]:focus,
+.knomo-share-modal [data-knomo-pointer-focus]:focus {
+	outline: none;
+	box-shadow: none;
+}
+@media (max-width: 600px) {
+	.modal.knomo-share-modal { width: 100%; max-width: 100%; height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px); padding: 16px; }
+	.knomo-share-backdrop { padding: max(12px, env(safe-area-inset-top, 0px)) 8px max(12px, env(safe-area-inset-bottom, 0px)); }
+	.knomo-share-preview { padding: 0; }
+	.knomo-share-footer { padding-top: 12px; gap: 10px; }
 }

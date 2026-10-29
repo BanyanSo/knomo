@@ -65,6 +65,8 @@ export class ConfirmedMemoPresentation {
 
 	// 旧查询可补充其它文件；受本次写入影响的 occurrence 始终使用已确认的展示版本。
 	merge(memos: readonly MemoViewItem[], filter?: CatalogQueryFilter, addPending = true): MemoViewItem[] {
+		// 新提交自身无法证明入向关联，待关系索引确认后再纳入统计钻取。
+		if (filter?.hasReferrers) addPending = false;
 		const result = new Map<string, MemoViewItem>();
 		const matches = filter === undefined ? () => true : createCatalogQueryMatcher(filter);
 		for (const memo of memos) {
@@ -116,7 +118,8 @@ export class ConfirmedMemoPresentation {
 	}
 }
 
-function remapUnchangedMemo(memo: MemoViewItem, handle: ObservationHandle): MemoViewItem | null {
+// 只在调用方已经核对提交 before/after 映射时复用正文；hash 本身不建立对应关系。
+export function remapUnchangedMemo(memo: MemoViewItem, handle: ObservationHandle): MemoViewItem | null {
 	if (!memo.catalog || memo.catalog.observation.rawBlockHash !== handle.rawBlockHash) return null;
 	const observation = { ...memo.catalog.observation, ...handle,
 		observationKey: `${handle.sourcePath}\0${String(handle.startLine).padStart(10, "0")}` };

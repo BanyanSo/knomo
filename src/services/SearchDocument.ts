@@ -1,5 +1,5 @@
 import { parser, Strikethrough, Table, type InlineParser } from "@lezer/markdown";
-import { decodeHTMLStrict } from "entities/decode";
+import { decodeHTMLStrict } from "entities";
 import { normalizeSearchText } from "../utils/searchText";
 
 interface InlineCodeRange { from: number; to: number; valid: boolean }
@@ -85,7 +85,7 @@ function createSearchMarkdownParser(codeContext: CodeContext = { inlineCodes: []
 
 const searchMarkdownParser = createSearchMarkdownParser();
 
-function parseSearchMarkdown(content: string) {
+export function parseSearchMarkdown(content: string) {
 	// 只在百分号与反引号共存时预读代码范围，避免块注释先截断跨行 code span。
 	const needsCodeProtection = content.includes("%%") && content.includes("`");
 	const codeContext = needsCodeProtection ? collectCodeContext(content) : { inlineCodes: [], blocks: [] };

@@ -9,6 +9,17 @@ import {
 	getRecordStatsTrendSearchFilter,
 } from "../src/ui/RecordStatsDrilldownFilters";
 
+test("被引用钻取与旧含引用口径独立，部分已确认目标可查看，未知和零不可钻取", () => {
+	const selected = makeSelected();
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced"), null);
+	selected.referenced = { count: 2, complete: false, failed: true };
+	assert.deepEqual(getRecordStatsMetricSearchFilter(selected, "referenced"), {
+		type: "referenced", startDate: selected.startDate, endDateExclusive: selected.endDateExclusive,
+	});
+	selected.referenced.count = 0;
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced"), null);
+});
+
 test("record stats trend drill-down accepts positive day and month points", () => {
 	const selected = makeSelected({
 		trend: [

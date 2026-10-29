@@ -90,7 +90,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				"aria-expanded": cardMenuReady && options.activeMenuMemoId === memo.id ? "true" : "false",
 				...(cardMenuReady
 					? { "data-action": "toggle-card-menu", "data-memo-id": memo.id }
-					: { "aria-disabled": "true", title: t("card.actionsPreparing") }),
+					: { "aria-disabled": "true" }),
 			},
 		});
 		menu.disabled = !cardMenuReady;
@@ -254,14 +254,34 @@ function renderCardMeta<TMemo extends MemoRecord>(card: HTMLElement, memo: TMemo
 	const sourceReference = getMemoSourceReferenceMeta(memo);
 	if (sourceReference.type !== "none") {
 		const meta = card.createDiv({ cls: "knomo-card-meta knomo-source-reference markdown-rendered" });
-		const referenceText = `${t("reference.fromPrefix")}${sourceReference.text}`;
+		const icon = meta.createSpan({ cls: "knomo-reference-icon", attr: { role: "img", "aria-label": t("reference.fromPrefix") } });
+		setIcon(icon, "message-square-quote");
+		const content = meta.createDiv({ cls: "knomo-source-reference-content" });
+		const referenceText = sourceReference.text;
 		options.queueSourceReferenceMarkdown(
-			meta,
+			content,
 			referenceText,
 			sourceReference.sourcePath,
 			options.generation,
 		);
 	}
+}
+
+export function syncMemoCardRelationsAction(card: HTMLElement, memo: MemoRecord, hasReferrers: boolean): void {
+	const action = getMemoCardActions(memo, false, hasReferrers).find(item => item.action === "relations");
+	card.toggleAttribute("data-has-referrers", action !== undefined);
+	const current = card.querySelector<HTMLElement>('[data-memo-action="relations"]');
+	if (!action) {
+		const focused = current === card.ownerDocument.activeElement;
+		current?.remove();
+		if (focused) card.querySelector<HTMLElement>(".knomo-card-menu")?.focus({ preventScroll: true });
+		return;
+	}
+	if (current) return;
+	const menu = card.querySelector<HTMLElement>(".knomo-card-actions");
+	if (!menu) return;
+	const button = renderCardAction(menu, memo.id, action.action, getMemoActionLabel(action.action), action.className);
+	menu.insertBefore(button, menu.querySelector('[data-memo-action="delete"], .knomo-card-word-count'));
 }
 
 function renderCardAction(
@@ -270,19 +290,19 @@ function renderCardAction(
 	action: MemoAction,
 	label: string,
 	className: string,
-): void {
+): HTMLButtonElement {
 	const button = container.createEl("button", {
 		cls: className,
 		attr: {
 			type: "button",
 			role: "menuitem",
-			"aria-label": label,
 			"data-memo-action": action,
 			"data-memo-id": memoId,
 		},
 	});
 	setIcon(button.createSpan({ cls: "knomo-menu-icon", attr: { "aria-hidden": "true" } }), MEMO_ACTION_ICONS[action]);
 	button.createSpan({ cls: "knomo-menu-label", text: label });
+	return button;
 }
 
 function renderTrashAction(
@@ -305,6 +325,8 @@ function renderTrashAction(
 }
 
 export function getMemoActionLabel(action: MemoAction): string {
+	if (action === "share-image") return t("share.share");
+	if (action === "relations") return t("relations.title");
 	if (action === "edit") return t("card.edit");
 	if (action === "reference") return t("card.reference");
 	if (action === "open-daily") return t("card.openDaily");

@@ -157,23 +157,18 @@ test("七天门槛按日历计算，年份概率不受旧时间桶影响", () =>
 	}
 });
 
-test("固定种子独立抽样的选年比例不随日期数、Memo 数和媒体密度变化", () => {
+test("年份抽样边界不随日期数、Memo 数和媒体密度变化", () => {
 	const now = new Date(2026, 9, 23, 12);
 	const aggregates = [2024, 2025, 2026].flatMap((year, index) => Array.from({ length: [1, 30, 200][index] }, (_, day) => ({
 		logicalDate: localDate(new Date(year, 0, day + 1)), memoCount: 10 ** (index * 2), imageCount: index * 100, linkCount: index * 100,
 	})));
-	let seed = 17;
-	const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 0x100000000);
-	const counts = new Map<string, number>();
-	for (let i = 0; i < 30000; i++) {
-		const result = selectShuffleDayDate(aggregates, { now, history: [], random });
-		assert.equal(result.status, "ready");
-		if (result.status === "ready") {
-			const year = result.selectedDate.slice(0, 4);
-			counts.set(year, (counts.get(year) ?? 0) + 1);
+	for (const [draw, year] of [[0, "2024"], [1 / 3 - 1e-8, "2024"], [1 / 3, "2025"], [2 / 3 - 1e-8, "2025"], [2 / 3, "2026"], [1, "2026"]] as const) {
+		for (const dateDraw of [0, 0.5, 1]) {
+			const result = selectShuffleDayDate(aggregates, { now, history: [], random: makeRandom([draw, dateDraw]) });
+			assert.equal(result.status, "ready");
+			if (result.status === "ready") assert.equal(result.selectedDate.slice(0, 4), year);
 		}
 	}
-	for (const year of ["2024", "2025", "2026"]) assert.ok(Math.abs((counts.get(year) ?? 0) / 30000 - 1 / 3) < 0.01);
 });
 
 test("1～6 日期逐个释放最早历史，历史重复不占 distinct 日期窗口，当前页另行排除", () => {

@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { prepareObsidianStub } from "../tests/helpers/obsidianStub";
 
 const TESTS_DIR = "tests";
 const COMPILED_TESTS_DIR = path.join(".tmp", "knomo-tests", "tests");
 const TEST_FILES_MARKER = "--files";
 const TOOLING_TEST_FILES = new Set([
+	"ReleaseCheck.test.ts",
 	"ReleaseVersion.test.ts",
 	"runTests.test.ts",
 	"VerifyCore.test.ts",
@@ -30,7 +32,7 @@ export function getMissingFiles(filePaths: readonly string[], existsSync: (fileP
 export function getNodeTestArgs(compiledTestFiles: readonly string[], extraNodeTestArgs: readonly string[] = []): string[] {
 	return [
 		"--test",
-		"--test-concurrency=1",
+		"--test-concurrency=2",
 		...extraNodeTestArgs,
 		...compiledTestFiles,
 	];
@@ -41,13 +43,17 @@ export function getRunTestSelection(sourceFileNames: readonly string[], args: re
 	const runnerArgs = markerIndex === -1 ? args : args.slice(0, markerIndex);
 	const suiteArgs = runnerArgs.filter((arg) => arg.startsWith("--suite="));
 	const suite = suiteArgs[0]?.slice("--suite=".length) ?? "product";
-	if (suiteArgs.length > 1 || !["product", "tooling", "all"].includes(suite)) {
-		throw new Error("Pass one --suite=product, --suite=tooling or --suite=all.");
+	if (suiteArgs.length > 1 || !["product", "tooling", "stress", "all"].includes(suite)) {
+		throw new Error("Pass one --suite=product, --suite=tooling, --suite=stress or --suite=all.");
 	}
 	if (markerIndex !== -1 && suiteArgs.length > 0) {
 		throw new Error("Use either --suite or --files, not both.");
 	}
 	if (markerIndex === -1) {
+		if (suite === "stress") return {
+			sourceFileNames: sourceFileNames.filter(file => file === "MemoRelationsUi.test.ts"),
+			extraNodeTestArgs: ["--test-name-pattern=规模边界", ...runnerArgs.filter(arg => !arg.startsWith("--suite="))],
+		};
 		return {
 			sourceFileNames: sourceFileNames.filter((fileName) => suite === "all"
 				|| TOOLING_TEST_FILES.has(fileName) === (suite === "tooling")),
@@ -74,7 +80,7 @@ export function getRunTestSelection(sourceFileNames: readonly string[], args: re
 	};
 }
 
-export function runTests(args: readonly string[] = []): number {
+export async function runTests(args: readonly string[] = []): Promise<number> {
 	let selection: RunTestSelection;
 	try {
 		selection = getRunTestSelection(fs.readdirSync(TESTS_DIR), args);
@@ -100,8 +106,11 @@ export function runTests(args: readonly string[] = []): number {
 		return 1;
 	}
 
+	await prepareObsidianStub();
+	const scale = args.includes("--suite=stress") || args.includes("--suite=all") ? "stress" : "normal";
 	const result = spawnSync(process.execPath, getNodeTestArgs(compiledTestFiles, selection.extraNodeTestArgs), {
 		stdio: "inherit",
+		env: { ...process.env, KNOMO_TEST_PREPARED: "1", KNOMO_TEST_SCALE: scale },
 	});
 
 	if (result.error !== undefined) {
@@ -113,5 +122,8 @@ export function runTests(args: readonly string[] = []): number {
 }
 
 if (require.main === module) {
-	process.exit(runTests(process.argv.slice(2)));
+	runTests(process.argv.slice(2)).then(code => { process.exitCode = code; }).catch(error => {
+		console.error(error);
+		process.exitCode = 1;
+	});
 }

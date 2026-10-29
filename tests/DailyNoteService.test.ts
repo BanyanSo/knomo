@@ -52,6 +52,7 @@ test("模板缺失或读取失败不创建空日记；未配置模板仍可创�
 	await assert.rejects(f.service.getOrCreateDailyNoteForDateWithConfig(date, f.config), /Template I\/O failed/);
 	assert.equal(f.contents.has("Daily/2026-05-14.md"), false);
 	const file = await f.service.getOrCreateDailyNoteForDateWithConfig(date, { folder: "Daily", format: "YYYY-MM-DD" });
+	assert.equal(file.path, "Daily/2026-05-14.md");
 	assert.equal(f.contents.get(file.path), "");
 });
 

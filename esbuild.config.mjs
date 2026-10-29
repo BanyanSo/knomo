@@ -2,6 +2,7 @@ import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from "module";
 import { prepareReleaseAssets } from "./scripts/prepare-release-assets.mjs";
+import { shareCardBuildPlugin } from "./scripts/share-card-build.mjs";
 
 const isProduction = process.argv[2] === "production";
 const nodeExternals = builtinModules.flatMap((moduleName) => [
@@ -15,7 +16,8 @@ const context = await esbuild.context({
 	},
 	entryPoints: ["src/main.ts"],
 	bundle: true,
-	loader: { ".png": "dataurl" },
+	plugins: [shareCardBuildPlugin],
+	loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" },
 	external: [
 		"obsidian",
 		"electron",

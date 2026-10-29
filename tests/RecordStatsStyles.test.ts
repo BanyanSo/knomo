@@ -104,6 +104,30 @@ function createHiddenText(container: HTMLElement, id: string, text: string): str
 	return id;
 }
 
+test("被引用指标区分确定、已发现、读取失败和待更新，不把未知或旧值显示成总数", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
+	for (const state of [
+		{ count: 2, complete: true, failed: false, updating: false, value: "2", action: true, retry: false },
+		{ count: 0, complete: true, failed: false, updating: false, value: "0", action: false, retry: false },
+		{ count: 2, complete: false, failed: true, updating: false, value: "—", action: true, retry: false },
+		{ count: 0, complete: false, failed: true, updating: false, value: "—", action: false, retry: false },
+		{ count: 2, complete: true, failed: false, updating: true, value: "—", action: false, retry: false },
+	]) {
+		const root = new TestElement("div"), selected = makeSelectedStats();
+		selected.referenced = { count: state.count, complete: state.complete, failed: state.failed };
+		renderKnomoRecordStatsPage(root.asHtml(), {
+			snapshot: { state: "ready", error: null, updating: state.updating }, selected,
+			view: "month", canAdvance: false, canRetreat: true, createHiddenText,
+		});
+		const metric = root.findAll(".knomo-record-stats-metric").find(item => item.find(".knomo-record-stats-metric-label")?.getText() === "Referenced notes");
+		assert.equal(metric?.find(".knomo-record-stats-metric-value")?.getText(), state.value);
+		assert.equal(root.find("[data-action='record-stats-filter-referenced']") !== null, state.action);
+		assert.equal(root.find("[data-action='retry-memo-relations']") !== null, state.retry);
+		assert.ok(root.find("[data-action='record-stats-filter-references']"), "原含引用筛选保持可用");
+	}
+});
+
 function makeSelectedStats(): SelectedRecordStats {
 	return {
 		startDate: "2026-06-01",

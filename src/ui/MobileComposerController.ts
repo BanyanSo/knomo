@@ -77,7 +77,6 @@ export interface MobileComposerControllerOptions {
 	getLayout: () => MobileComposerLayoutMode;
 	isComposerOpen: () => boolean;
 	setComposerOpen: (open: boolean) => void;
-	getCardFlowScrollTop: () => number | null;
 	registerBackdropClick: (element: HTMLElement, handler: (event: MouseEvent) => void) => void;
 	closeComposerKeepingDraft: () => void;
 	focusInputNow: (shouldResize?: boolean, shouldQueueViewport?: boolean, moveToEnd?: boolean) => void;
@@ -127,7 +126,6 @@ export class MobileComposerController {
 	private mobileComposerContentEl: HTMLElement | null = null;
 	private mobileComposerHomeEl: HTMLElement | null = null;
 	private mobileComposerNextSibling: ChildNode | null = null;
-	private mobileComposerOpenScrollTop: number | null = null;
 	private mobileComposerBottomOffset = 0;
 	private mobileComposerToolbarAnchorInset: number | null = null;
 	private mobileComposerToolbarAnchorBottom: number | null = null;
@@ -144,10 +142,6 @@ export class MobileComposerController {
 
 	getPhase(): MobileComposerPhase {
 		return this.mobileComposerPhase;
-	}
-
-	getOpenScrollTop(): number | null {
-		return this.mobileComposerOpenScrollTop;
 	}
 
 	getMaxInputHeight(): number {
@@ -241,9 +235,6 @@ export class MobileComposerController {
 		const moveToEnd = this.options.getLayout() === "mobile" && (!this.options.isComposerOpen() || reopening);
 		this.cancelKeyboardDismissRequest();
 		if (this.options.getLayout() === "mobile") this.setKeyboardTracking(true);
-		if (this.options.getLayout() === "mobile" && !this.options.isComposerOpen()) {
-			this.mobileComposerOpenScrollTop = this.options.getCardFlowScrollTop();
-		}
 		this.clearCloseTimer();
 		this.clearFocus();
 		this.clearOpenSyncFrame();
@@ -299,7 +290,6 @@ export class MobileComposerController {
 	closeKeepingDraft(): void {
 		if (this.mobileComposerPhase === "closing" || this.mobileComposerPhase === "closed") return;
 		this.cancelKeyboardDismissRequest();
-		this.mobileComposerOpenScrollTop = null;
 		this.clearFocus();
 		this.clearOpenSyncFrame();
 		this.clearCloseTimer();

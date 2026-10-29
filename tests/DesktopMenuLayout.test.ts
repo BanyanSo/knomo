@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import type { TranslationKey } from "../src/i18n";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
+import { createCardMemo } from "./helpers/memoCardFixture";
 
 test("桌面菜单的图标子节点、文字和行内空白均沿真实根路由执行一次，字数行不执行动作", async () => {
 	const f = await createMobilePopupFixture();
@@ -157,6 +158,10 @@ test("桌面滚动只重新定位打开的卡片菜单，保留其他卡片状�
 // 使用真实菜单 DOM、生产定位函数和浏览器布局；宿主 SVG 由占位图形代替，真实主题仍需 Obsidian 验收。
 test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆盖与 Knomo Token 放大下显示图标并限制裁切", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const f = await createMobilePopupFixture();
+	// 当前菜单仅在有直接引用者时显示关联入口，布局矩阵显式构造完整菜单。
+	assert.equal(f.card.querySelector('[data-memo-action="relations"]'), null);
+	const { syncMemoCardRelationsAction } = await import("../src/ui/KnomoCard");
+	syncMemoCardRelationsAction(f.card, createCardMemo({ id: "p0-memo" }), true);
 	const menus = { card: f.card.outerHTML, scope: f.scopeMenu.outerHTML };
 	f.close();
 	const { translate } = await import("../src/i18n");
@@ -169,7 +174,8 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 		"with-image": "filter.withImage", anniversary: "filter.anniversary", review: "nav.review", random: "nav.random", shuffleDay: "nav.shuffleDay",
 	};
 	const actionKeys: Record<string, TranslationKey> = {
-		edit: "card.edit", reference: "card.reference", "open-daily": "card.openDaily", "copy-text": "card.copyText", "copy-link": "card.copyLink", delete: "card.delete",
+		"share-image": "share.share", edit: "card.edit", reference: "card.reference", "copy-text": "card.copyText",
+		"open-daily": "card.openDaily", "copy-link": "card.copyLink", relations: "relations.title", delete: "card.delete",
 	};
 	const css = readFileSync("styles.css", "utf8");
 	const hostCss = process.env.KNOMO_HOST_CSS ? readFileSync(process.env.KNOMO_HOST_CSS, "utf8") : "";
@@ -202,7 +208,12 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 						},
 					});
 					for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-title-mode]"))) el.querySelector(".knomo-button-label")!.textContent = scopeLabels[el.dataset.titleMode!];
-					for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-memo-action]"))) el.querySelector(".knomo-menu-label")!.textContent = actionLabels[el.dataset.memoAction!];
+					for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-memo-action]"))) {
+						const label = actionLabels[el.dataset.memoAction!];
+						if (!label?.trim()) throw new Error(`Missing menu label: ${el.dataset.memoAction}`);
+						el.querySelector(".knomo-menu-label")!.textContent = label;
+						el.setAttribute("aria-label", label);
+					}
 					document.querySelector(".knomo-card-word-count .knomo-menu-label")!.textContent = wordCount;
 					for (const el of Array.from(document.querySelectorAll(".knomo-menu-icon, .knomo-button-icon"))) el.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 12h16" stroke="currentColor"/></svg>';
 				}, { scopeLabels: Object.fromEntries(Object.entries(scopeKeys).map(([key, label]) => [key, translate(locale, label)])), actionLabels: Object.fromEntries(Object.entries(actionKeys).map(([key, label]) => [key, translate(locale, label)])), wordCount: translate(locale, "card.wordCount", { count: 123456789 }) });
@@ -227,6 +238,9 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 						const lastStartReachable = last.getBoundingClientRect().top >= menu.getBoundingClientRect().top - 1;
 						menu.scrollTop = menu.scrollHeight;
 						return {
+							actions: rows.map(el => el.dataset.memoAction),
+							labels: rows.map(el => el.querySelector(".knomo-menu-label, .knomo-button-label")?.textContent?.trim() ?? ""),
+							accessibleLabels: rows.map(el => el.getAttribute("aria-label")),
 							within: rect.left >= bound.left + 7 && rect.right <= bound.right - 7 && rect.top >= bound.top + 7 && rect.bottom <= bound.bottom - 7,
 							width: rect.width, boundWidth: bound.width,
 							icons: icons.length, iconsVisible: icons.every(el => el.getBoundingClientRect().width === 16 && el.getBoundingClientRect().height === 16 && el.getAttribute("aria-hidden") === "true"),
@@ -242,7 +256,14 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					const context = `${theme}/${font}/${scale}/${locale}/${width}/${kind}`;
 					assert.equal(result.within, true, context);
 					assert.equal(result.width, Math.min(168, result.boundWidth - 16), context);
-					assert.equal(result.icons, kind === "scope" ? 9 : 7, context);
+					assert.equal(result.icons, 9, context);
+					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
+					if (kind === "card") {
+						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all eight actions remain in order`);
+						const labels = Object.values(actionKeys).map(key => translate(locale, key));
+						assert.deepEqual(result.labels, labels, `${context}: translated labels include relations`);
+						assert.deepEqual(result.accessibleLabels, labels, `${context}: accessible names match visible text`);
+					}
 					assert.equal(result.iconsVisible, true, context);
 					assert.equal(result.iconsAligned, true, context);
 					assert.equal(result.rowsFit, true, context);

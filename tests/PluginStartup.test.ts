@@ -89,6 +89,24 @@ for (const stage of ["read", "process", "committed"] as const) {
 	});
 }
 
+test("生产手动刷新仅刷新 Catalog 和视图，不运行旧源迁移", async () => {
+	let refreshed = 0, views = 0, imported = 0;
+	const result = { scannedFiles: 1, created: 0, updated: 0, deleted: 0, skipped: 1, failed: 0, errors: [] };
+	const plugin = Object.create(Plugin.prototype) as { runManualRefresh(): Promise<unknown> };
+	Object.assign(plugin, {
+		manualRefreshPromise: null,
+		memoCommandService: { refreshLocalCatalog: async () => { refreshed++; return result; } },
+		refreshOpenViews: async () => { views++; },
+		legacyTrashMigrationService: { run: async () => { imported++; } },
+	});
+	const first = plugin.runManualRefresh();
+	assert.equal(plugin.runManualRefresh(), first);
+	assert.equal(await first, result);
+	assert.equal(refreshed, 1);
+	assert.equal(views, 1);
+	assert.equal(imported, 0);
+});
+
 function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable" = "ready", p2 = false) {
 	const settings = deferred(), daily = deferred(), db = deferred(), defaults = deferred(), background = deferred();
 	const monthly = deferred();

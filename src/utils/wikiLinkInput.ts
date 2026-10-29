@@ -126,8 +126,7 @@ export function getWikiLinkFileSuggestions<TFile extends WikiLinkFileLike>(
 
 export function isKnomoInternalWikiLinkCandidate(path: string): boolean {
 	const segments = path.toLocaleLowerCase().split("/");
-	return segments.some((segment) => segment === "_knomo-system"
-		|| segment === "indexes" || segment === "backups");
+	return segments.includes("_knomo-system");
 }
 
 function getWikiLinkMatchRank(basename: string, path: string, query: string): number | null {

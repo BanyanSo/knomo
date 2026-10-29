@@ -742,6 +742,24 @@ test("列表正文保留换行，不转换嵌套块间空白", async () => {
 	assert.equal(await renderCardLineBreaks("<ul>\n<li>第一行\n续行<ul>\n<li>子项</li>\n</ul>\n</li>\n</ul>"), "<ul>\n<li>第一行<br>续行<ul>\n<li>子项</li>\n</ul>\n</li>\n</ul>");
 });
 
+test("原生紧凑列表在嵌套块前的排版换行不额外生成 br", async () => {
+	const native = "<ul>\n<li>first\ncontinuation\n<ul>\n<li>nested</li>\n</ul>\n</li>\n</ul>";
+	assert.equal(await renderCardLineBreaks(native), "<ul>\n<li>first<br>continuation<ul>\n<li>nested</li>\n</ul>\n</li>\n</ul>");
+});
+
+test("引用及嵌套引用的软换行可见，已有硬换行和段落边界不重复", async () => {
+	const quote = '<blockquote><p>first\n<strong>second</strong><br>\nthird</p>\n<p>next</p><blockquote><p>nested\ncontinued</p></blockquote></blockquote>';
+	assert.equal(await renderCardLineBreaks(quote), '<blockquote><p>first<br><strong>second</strong><br>third</p>\n<p>next</p><blockquote><p>nested<br>continued</p></blockquote></blockquote>');
+});
+
+test("Callout 正文保留软换行且不改写标题、折叠状态和代码", async () => {
+	for (const state of ["", " is-collapsible", " is-collapsible is-collapsed"]) {
+		const title = '<div class="callout-title"><div class="callout-title-inner"><strong>Title</strong>\ncontinued</div></div>';
+		const callout = `<div class="callout${state}" data-callout="note">${title}<div class="callout-content"><p>body\ncontinued<br>\nhard</p><pre><code>a\nb</code></pre></div></div>`;
+		assert.equal(await renderCardLineBreaks(callout), `<div class="callout${state}" data-callout="note">${title}<div class="callout-content"><p>body<br>continued<br>hard</p><pre><code>a\nb</code></pre></div></div>`);
+	}
+});
+
 test("代码、公式、嵌入和表格交给宿主处理", async () => {
 	const html = '<pre><code>a\nb</code></pre><p><code>a\nb</code><span class="math">a\nb</span></p><div class="internal-embed"><p>a\nb</p></div><table><tbody><tr><td>a\nb</td></tr></tbody></table>';
 	assert.equal(await renderCardLineBreaks(html), html);

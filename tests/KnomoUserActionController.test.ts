@@ -353,6 +353,7 @@ test("handleAction dispatches every simple action to the expected view callbacks
 		"record-stats-filter-references": {
 			expected: ["record-metric:references"],
 		},
+		"record-stats-filter-referenced": { expected: ["record-metric:referenced"] },
 		"record-stats-filter-max-daily-notes": {
 			expected: ["record-metric:max-daily-notes"],
 		},

@@ -45,6 +45,90 @@ const hostFixture = `
 	.probe { display:block; width:calc(100% - 32px); margin:16px; height:auto; }
 `;
 
+test("宽表格在桌面和移动窄卡片中可横向浏览且不撑宽正文", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	try {
+		const page = await browser.newPage();
+		for (const theme of ["theme-light", "theme-dark"]) for (const mobile of [false, true]) for (const width of [320, 390, 900]) {
+			await page.setViewportSize({ width, height: 800 });
+			const columns = Array.from({ length: 14 }, (_, index) => `<th>Column-${index}</th>`).join("");
+			await page.setContent(`<style>${host}${hostFixture}${css}</style><body class="${theme}">
+				<div class="knomo-plugin ${mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}" style="width:100%;display:block;padding:16px">
+					<div class="knomo-card"><div class="knomo-card-body"><div class="knomo-card-content markdown-rendered">
+						<table><thead><tr>${columns}</tr></thead><tbody><tr>${columns.replace(/th>/g, "td>")}</tr></tbody></table>
+					</div></div></div>
+				</div></body>`);
+			const actual = await page.evaluate(() => {
+				const content = document.querySelector<HTMLElement>(".knomo-card-content")!;
+				const table = document.querySelector("table")!;
+				table.scrollLeft = 100;
+				return { contentWidth: content.clientWidth, contentScroll: content.scrollWidth,
+					tableWidth: table.clientWidth, tableScroll: table.scrollWidth, scrolled: table.scrollLeft };
+			});
+			assert.ok(actual.contentScroll <= actual.contentWidth + 1, JSON.stringify({ theme, mobile, width, actual }));
+			assert.ok(actual.tableWidth <= actual.contentWidth + 1);
+			if (actual.tableScroll > actual.tableWidth) assert.ok(actual.scrolled > 0, "表格内容应能横向浏览");
+		}
+	} finally { await browser.close(); }
+});
+
+test("卡片各级标题前间距紧凑，保留宿主标题层级与卡片外的段落间距", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const css = readFileSync("styles.css", "utf8");
+	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
+	// 自包含复现宿主段落后标题的大间距，也覆盖带 el-* 包装的正文结构。
+	const headingHost = `
+		.markdown-rendered { --p-spacing:16px; --heading-spacing:calc(var(--p-spacing) * 2.5); }
+		.markdown-rendered :is(h1,h2,h3,h4,h5,h6) { margin-block-start:var(--p-spacing); margin-block-end:var(--p-spacing); }
+		.markdown-rendered :is(p,pre,table,ul,ol) + :is(h1,h2,h3,h4,h5,h6),
+		.markdown-rendered div:is(.el-blockquote,.el-p,.el-pre,.el-table,.el-ul,.el-ol) + div > :is(h1,h2,h3,h4,h5,h6) { margin-top:var(--heading-spacing); }
+	`;
+	try {
+		const page = await browser.newPage();
+		for (const theme of ["theme-light", "theme-dark"]) for (const mobile of [false, true]) for (const size of [16, 22]) {
+			await page.setViewportSize({ width: mobile ? 320 : 900, height: 800 });
+			const cards: string[] = [];
+			const controls: string[] = [];
+			for (let level = 1; level <= 6; level++) {
+				const paragraph = "<p>大概写</p>";
+				const heading = `<h${level}>标题</h${level}>`;
+				const suffix = "<p>好的好的好</p>";
+				for (const wrapped of [false, true]) {
+					const content = wrapped ? `<div class="el-p">${paragraph}</div><div class="el-h${level}">${heading}</div><div class="el-p">${suffix}</div>` : paragraph + heading + suffix;
+					cards.push(`<div class="knomo-card" data-level="${level}"><div class="knomo-card-body"><div class="knomo-card-content markdown-rendered">${content}</div></div></div>`);
+				}
+				controls.push(`<div id="host-${level}" class="markdown-rendered" style="font-size:${size}px">${paragraph}${heading}${suffix}</div>`);
+			}
+			await page.setContent(`<style>${host}${hostFixture}${headingHost}${css}</style><body class="${theme}">
+				<div class="knomo-plugin ${mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}" style="display:block;--knomo-content-size:${size}px">${cards.join("")}</div>${controls.join("")}</body>`);
+			const actual = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>(".knomo-card")).map(card => {
+				const content = card.querySelector<HTMLElement>(".knomo-card-content")!;
+				const heading = content.querySelector<HTMLElement>("h1,h2,h3,h4,h5,h6")!;
+				const paragraph = content.querySelector("p")!;
+				const control = document.querySelector(`#host-${card.dataset.level}`)!;
+				const hostHeading = control.querySelector<HTMLElement>("h1,h2,h3,h4,h5,h6")!;
+				return { level: card.dataset.level, wrapped: !!content.querySelector(".el-p"),
+					gap: heading.getBoundingClientRect().top - paragraph.getBoundingClientRect().bottom,
+					hostGap: hostHeading.getBoundingClientRect().top - control.querySelector("p")!.getBoundingClientRect().bottom,
+					font: getComputedStyle(heading).fontSize, hostFont: getComputedStyle(hostHeading).fontSize,
+					text: content.textContent };
+			}));
+			assert.equal(actual.length, 12);
+			for (const item of actual) {
+				const context = JSON.stringify({ theme, mobile, size, item });
+				assert.ok(item.gap >= 0 && item.gap <= size, context);
+				assert.ok(item.hostGap >= 39, context);
+				assert.equal(item.font, item.hostFont, context);
+				assert.equal(item.text, "大概写标题好的好的好");
+			}
+		}
+	} finally { await browser.close(); }
+});
+
 async function typographyBundle() {
 	const result = await build({
 		stdin: { contents: `
@@ -62,6 +146,10 @@ async function typographyBundle() {
 			builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "fixture" }));
 			builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: `
 				export const getLanguage = () => "en";
+				export const setIcon = (el, name) => {
+					const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+					svg.classList.add("svg-icon"); svg.setAttribute("data-icon", name); el.replaceChildren(svg);
+				};
 				export const prepareFuzzySearch = () => () => null;
 				export const renderResults = (el, text) => { el.textContent = text; };
 			`, loader: "js" }));
@@ -95,10 +183,10 @@ const installDomHelpers = () => {
 
 test("top titles and summaries retain hierarchy, spacing and button reachability across desktop and mobile layouts", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
 	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		for (const theme of ["theme-light", "theme-dark"]) for (const [layout, width] of [["desktop-wide", 1000], ["desktop-narrow", 540], ["mobile", 320], ["mobile", 390]] as const) {
@@ -219,9 +307,9 @@ test("top titles and summaries retain hierarchy, spacing and button reachability
 
 test("random day summary and back button share the random toolbar layout on desktop and mobile", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		for (const theme of ["theme-light", "theme-dark"]) for (const width of [1000, 540, 390, 320]) {
@@ -264,10 +352,10 @@ test("random day summary and back button share the random toolbar layout on desk
 
 test("Typography separates content from UI in desktop and body-mounted mobile Composer, preserving host controls and display exceptions", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
 	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		const errors: string[] = [];
@@ -331,7 +419,7 @@ test("Typography separates content from UI in desktop and body-mounted mobile Co
 			assert.deepEqual(actual, {
 				content: `${size}px`, composer: `${mobile ? Math.max(16, size) : size}px`, times: ["13px", "13px"],
 				wordCount: "13px", cardTag: "14px", composerTag: "14px", date: "15px", history: "13px", title: "15px",
-				search: "14px", nav: "14px", chip: "13px", reference: "13px", source: "12px", status: "12px", action: "14px", count: "12px", empty: "12px",
+				search: "14px", nav: "14px", chip: "13px", reference: "13px", source: "13px", status: "12px", action: "14px", count: "12px", empty: "12px",
 				host: Array(5).fill("19px"), help: "17px", preview: "19px", display: ["24px", "24px", "26.4px"],
 				heading: `${size * 1.5}px`, code: `${size * 0.9}px`, lineHeight: `${Number(((mobile ? Math.max(16, size) : size) * 1.7).toFixed(2))}px`,
 				iconSize: mobile ? "24px" : "19px",
@@ -344,9 +432,9 @@ test("Typography separates content from UI in desktop and body-mounted mobile Co
 
 test("live content font and width changes remeasure the real Composer without replacing state, selection, draft or history", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
 		const errors: string[] = [];
@@ -414,10 +502,10 @@ test("live content font and width changes remeasure the real Composer without re
 
 test("body-mounted Tag and Wiki candidates share typography with real measurement clones, clamp long content and retain keyboard selection", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
 	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		const errors: string[] = [];

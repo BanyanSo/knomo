@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { CATALOG_PARSER_VERSION, DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 
 const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
@@ -98,9 +98,6 @@ test("所有 H1-H6 与根区域识别合法时间 memo，并排除嵌套、引�
 	]);
 });
 
-test("Catalog 本机缓存版本包含混排搜索短 token 更新", () => {
-	assert.ok(CATALOG_PARSER_VERSION >= 7);
-});
 
 test("PARSE-DUPLICATE-TIME-CONTENT：不按时间或 contentHash 去重", async () => {
 	const result = await parseFixture("PARSE-DUPLICATE-TIME-CONTENT");

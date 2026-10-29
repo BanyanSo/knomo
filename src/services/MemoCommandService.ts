@@ -32,6 +32,7 @@ import type { MemoCatalogService } from "./MemoCatalogService";
 import { LocalMemoReviewStore } from "./LocalMemoReviewStore";
 
 export interface MemoCommandServiceOptions {
+	isActiveDailyPath?: (path: string) => boolean;
 	getTrashService?: () => IndependentTrashService;
 	getDailyPathForDate?: (logicalDate: string) => Promise<string>;
 	refreshCatalogPaths: (paths: readonly string[]) => Promise<void>;
@@ -75,6 +76,17 @@ export class MemoCommandService {
 		this.createReferenceText = this.mutationBarrier.wrap(this.createReferenceText.bind(this));
 		this.recordReview = this.mutationBarrier.wrap(this.recordReview.bind(this));
 		this.readService = new CatalogReadService({
+			relations: {
+				resolvePath: (path, sourcePath) => {
+					const source = app.vault.getAbstractFileByPath(sourcePath);
+					return { path: app.metadataCache.getFirstLinkpathDest(path, sourcePath)?.path ?? null,
+						pending: !(source instanceof TFile) || app.metadataCache.getFileCache(source) === null };
+				},
+				isFileCurrent: file => {
+					const current = app.vault.getAbstractFileByPath(file.sourcePath);
+					return (options.isActiveDailyPath?.(file.sourcePath) ?? true) && current instanceof TFile && current.stat.mtime === file.mtime && current.stat.size === file.size;
+				},
+			},
 			reviews: new LocalMemoReviewStore(app),
 			catalog,
 			requestObservationScan: async () => { await options.refreshLocalCatalog(); },

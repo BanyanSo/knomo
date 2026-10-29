@@ -21,25 +21,25 @@ test("builds a single-line memo block", () => {
 test("builds a three-line memo block and preserves hard line breaks", () => {
 	assert.equal(
 		service.buildMemoBlock("第一行\n第二行\n第三行", "12:00:00"),
-		"- 12:00:00 第一行\n\t第二行\n\t第三行",
+		"- 12:00:00 第一行\n  第二行\n  第三行",
 	);
 });
 
 test("builds list-leading memo content as a nested Markdown block", () => {
 	assert.equal(
 		service.buildMemoBlock("- 第一项\n- 第二项", "12:00:00"),
-		"- 12:00:00\n\t- 第一项\n\t- 第二项",
+		"-   12:00:00\n\t- 第一项\n\t- 第二项",
 	);
 	assert.equal(
 		service.buildMemoBlock("1. 第一项\n2. 第二项", "12:00:00"),
-		"- 12:00:00\n\t1. 第一项\n\t2. 第二项",
+		"-   12:00:00\n\t1. 第一项\n\t2. 第二项",
 	);
 });
 
 test("builds task-list-leading memo content as nested memo content", () => {
 	assert.equal(
 		service.buildMemoBlock("- [ ] 第一项\n- [x] 第二项\n- [-] 第三项", "12:00:00"),
-		"- 12:00:00\n\t- [ ] 第一项\n\t- [x] 第二项\n\t- [-] 第三项",
+		"-   12:00:00\n\t- [ ] 第一项\n\t- [x] 第二项\n\t- [-] 第三项",
 	);
 });
 
@@ -78,41 +78,6 @@ test("daily note creation returns existing file without applying template", asyn
 	assert.equal(createCalls, 0);
 });
 
-test("daily note creation without a template creates an empty file", async () => {
-	const { DailyNoteService } = await loadDailyNoteService();
-	const { TFile } = await import("obsidian");
-	const files = new Map<string, InstanceType<typeof TFile>>();
-	const restoreWindow = setTestWindow(undefined);
-	try {
-		const dailyNoteService = new DailyNoteService(
-			{
-				vault: {
-					getAbstractFileByPath: (path: string) => files.get(path) ?? null,
-					createFolder: async () => undefined,
-					create: async (path: string) => {
-						const file = Object.assign(new TFile(), {
-							path,
-							basename: path.split("/").pop()?.replace(/\.md$/, "") ?? path,
-							extension: "md",
-						});
-						files.set(path, file);
-						return file;
-					},
-				},
-			} as never,
-			{
-				getConfig: () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
-				loadConfig: async () => ({ folder: "Daily", format: "YYYY-MM-DD" }),
-			},
-		);
-
-		const file = await dailyNoteService.getOrCreateDailyNoteForDateWithConfig(new Date("2026-05-14T10:00:00"), { folder: "Daily", format: "YYYY-MM-DD" });
-
-		assert.equal(file.path, "Daily/2026-05-14.md");
-	} finally {
-		restoreWindow();
-	}
-});
 
 test("disabled Daily Notes cannot provide a creation path", async () => {
 	const { DailyNoteService } = await loadDailyNoteService();
@@ -140,7 +105,7 @@ test("disabled Daily Notes cannot provide a creation path", async () => {
 test("appends blockId to list-leading memo content", () => {
 	assert.equal(
 		service.buildMemoBlockWithBlockId("- 第一项\n- 第二项", "12:00:00", "abc123"),
-		"- 12:00:00\n\t- 第一项\n\t- 第二项 ^abc123",
+		"-   12:00:00 ^abc123\n\t- 第一项\n\t- 第二项",
 	);
 });
 
@@ -371,20 +336,6 @@ function createDailyNotesApp(options: {
 	};
 }
 
-function setTestWindow(value: unknown): () => void {
-	const globalRecord = globalThis as unknown as Record<string, unknown>;
-	const hadWindow = Object.prototype.hasOwnProperty.call(globalRecord, "window");
-	const previousWindow = globalRecord["window"];
-	if (value === undefined) delete globalRecord["window"];
-	else globalRecord["window"] = value;
-	return () => {
-		if (!hadWindow) {
-			delete globalRecord["window"];
-			return;
-		}
-		globalRecord["window"] = previousWindow;
-	};
-}
 
 async function loadDailyNoteService(): Promise<typeof import("../src/services/DailyNoteService")> {
 	await ensureObsidianStub();

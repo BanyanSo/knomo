@@ -23,6 +23,143 @@ function makeRemotePage(items: MemoViewItem[], catalogRevision = 0): MobileSearc
 		lifecycle: { state: "ready", persistent: true, writable: true, reason: null }, capabilities: createCatalogCapabilities(coverage) };
 }
 
+test("移动被引用钻取分页失效后后台重查首屏，等待期间无失败、重试或旧总数", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memos = [makeMemo("old", "memo"), makeMemo("fresh", "memo")];
+	const first = makeRemotePage([memos[0]]);
+	first.status.relations = { complete: true, failed: false };
+	first.nextCursor = { catalog: { catalogRevision: 0, createdAtKey: "next", observationKey: "old" }, relationsVersion: 1 };
+	const requests: Parameters<LoadRemoteResults>[1][] = [];
+	let release!: (page: MobileSearchPage) => void;
+	const pending = new Promise<MobileSearchPage>(resolve => { release = resolve; });
+	const timers = new Map<number, () => void>(); let timerId = 0;
+	const h = createControllerHarness(MobileSearchController, memos, () => 2, async (_filter, cursor) => {
+		requests.push(cursor);
+		if (requests.length === 1) return first;
+		if (cursor) return { ...first, items: [], invalidated: true, nextCursor: null };
+		return pending;
+	}, { getWindow: () => ({ setTimeout: (callback: () => void, delay?: number) => {
+		if (delay === 0) queueMicrotask(callback); else timers.set(++timerId, callback); return timerId;
+	}, clearTimeout: (id: number) => { timers.delete(id); } } as unknown as Window) });
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		h.controller.loadMore(); await settle();
+		assert.equal(h.controller.session.requestStatus, "ready");
+		assert.doesNotMatch(h.root.getText(), /could not load|Retry|failed|Updating|Pending update/iu);
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(h.root.find(".knomo-search-result-count"), null);
+		for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+		await settle(); assert.equal(requests.at(-1), null, "失效后丢弃旧 cursor，从新首屏开始");
+		const fresh = makeRemotePage([memos[1]]); fresh.status.relations = { complete: true, failed: false };
+		release(fresh); await settle();
+		assert.deepEqual(h.controller.getDisplayedMemos().map(memo => memo.id), ["fresh"]);
+	} finally { release(makeRemotePage([])); h.controller.removePage(); }
+});
+
+test("移动被引用钻取保留已有切片，部分空结果不删除卡片或显示无结果", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memo = makeMemo("memo", "memo"); let partial = false;
+	const h = createControllerHarness(MobileSearchController, [memo], undefined, async () => {
+		const page = makeRemotePage(partial ? [] : [memo]); page.status.relations = { complete: !partial, failed: false }; return page;
+	}, { getResultStatus: () => ({ headers: [], complete: !partial, blocked: false }) });
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		const card = h.root.find(".knomo-card"); partial = true;
+		await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), card);
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(h.root.find(".knomo-mobile-search-empty"), null);
+		assert.doesNotMatch(h.root.getText(), /incomplete|Retry|Updating|Pending update/iu);
+	} finally { h.controller.removePage(); }
+});
+
+test("移动被引用钻取慢查询返回完整零条时清理骨架并显示空结果", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let reveal: (() => void) | null = null, release!: (page: MobileSearchPage) => void;
+	const pending = new Promise<MobileSearchPage>(resolve => { release = resolve; });
+	const h = createControllerHarness(MobileSearchController, [], undefined, () => pending, {
+		getWindow: () => ({ setTimeout: (callback: () => void) => { reveal = callback; return 1; }, clearTimeout: () => { reveal = null; } } as unknown as Window),
+		getResultStatus: () => ({ headers: [], complete: true, blocked: false }),
+	});
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		(reveal as (() => void) | null)?.();
+		assert.equal(h.root.findAll(".knomo-loading-skeleton").length, 1);
+		const empty = makeRemotePage([]); empty.status.relations = { complete: true, failed: false };
+		release(empty); await settle();
+		assert.equal(h.root.find(".knomo-loading-placeholder"), null);
+		assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 1);
+		assert.equal(h.controller.getDisplayedCount(), 0);
+		assert.equal(h.root.find(".knomo-mobile-search-more"), null);
+	} finally { release(makeRemotePage([])); h.controller.removePage(); }
+});
+
+test("移动被引用钻取部分零条或故障恢复为完整零条，空数组不能跳过收尾", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	for (const initial of ["partial", "failed"] as const) {
+		let complete = false;
+		const h = createControllerHarness(MobileSearchController, [], undefined, async () => {
+			const page = makeRemotePage([]); page.status.relations = { complete, failed: !complete && initial === "failed" }; return page;
+		}, { getResultStatus: () => ({ headers: !complete && initial === "failed" ? [{ type: "summary", text: "Relation read failed", feedback: true }] : [], complete, blocked: false }) });
+		try {
+			h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+			h.controller.openPage({ focusInput: false }); await settle();
+			assert.equal(h.root.find(".knomo-mobile-search-empty"), null);
+			assert.equal(h.controller.getDisplayedCount(), null);
+			complete = true; await h.controller.refreshAppliedResults();
+			assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 1, initial);
+			assert.equal(h.root.find(".knomo-relation-result-feedback"), null);
+			assert.equal(h.root.find(".knomo-loading-placeholder"), null);
+			assert.equal(h.controller.getDisplayedCount(), 0);
+		} finally { h.controller.removePage(); }
+	}
+});
+
+test("移动被引用钻取的即时保存只更新已有成员，新成员等待关系查询确认", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const original = makeMemo("target", "target"), updated = makeMemo("updated", "edited target"), inserted = makeMemo("new", "new memo");
+	let items = [original];
+	const h = createControllerHarness(MobileSearchController, items, undefined, async () => {
+		const page = makeRemotePage(items); page.status.relations = { complete: true, failed: false }; return page;
+	});
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		h.controller.applyMemoChanges(new Map([[original.id, updated]]), [updated, inserted], true);
+		assert.deepEqual(h.controller.getDisplayedMemos().map(memo => memo.id), [updated.id]);
+		items = [updated, inserted];
+		await h.controller.refreshAppliedResults();
+		assert.deepEqual(h.controller.getDisplayedMemos().map(memo => memo.id), [updated.id, inserted.id]);
+	} finally { h.controller.removePage(); }
+});
+
+test("移动被引用钻取完整非空转为零条时清理旧卡片与数量", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const memo = makeMemo("memo", "memo"); let empty = false;
+	const h = createControllerHarness(MobileSearchController, [memo], undefined, async () => {
+		const page = makeRemotePage(empty ? [] : [memo]); page.status.relations = { complete: true, failed: false }; return page;
+	}, { getResultStatus: () => ({ headers: [], complete: true, blocked: false }) });
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		assert.equal(h.controller.getDisplayedCount(), 1); assert.ok(h.root.find(".knomo-card"));
+		empty = true; await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), null);
+		assert.equal(h.root.find(".knomo-search-result-count"), null);
+		assert.equal(h.root.findAll(".knomo-mobile-search-empty").length, 1);
+		assert.equal(h.controller.getDisplayedCount(), 0);
+	} finally { h.controller.removePage(); }
+});
+
 test("移动搜索快速结果不闪加载提示，取消后旧延迟回调不再显示", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -849,14 +986,14 @@ test("移动搜索提交即时更新深处卡片，保留其它 DOM、滚动与�
 		createEl: (tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> }) => {
 			const element = dom.window.document.createElement(tag);
 			element.className = options.cls ?? ""; element.textContent = options.text ?? "";
-			Object.assign(element, { setText: (text: string) => { element.textContent = text; } });
+			Object.assign(element, { setText: (text: string) => { element.textContent = text; }, addClass: (cls: string) => element.classList.add(cls) });
 			for (const [name, value] of Object.entries(options.attr ?? {})) element.setAttribute(name, value);
 			root.append(element); return element;
 		},
 		createDiv: (options: { cls?: string; text?: string }) => {
 			const element = dom.window.document.createElement("div");
 			element.className = options.cls ?? ""; element.textContent = options.text ?? "";
-			Object.assign(element, { setText: (text: string) => { element.textContent = text; } });
+			Object.assign(element, { setText: (text: string) => { element.textContent = text; }, addClass: (cls: string) => element.classList.add(cls) });
 			root.appendChild(element); return element;
 		},
 	});
@@ -1164,6 +1301,10 @@ class TestElement {
 
 	setAttr(key: string, value: string): void {
 		this.attrs.set(key, value);
+	}
+
+	setAttrs(values: Record<string, string>): void {
+		for (const [key, value] of Object.entries(values)) this.setAttr(key, value);
 	}
 
 	getAttr(key: string): string | null {

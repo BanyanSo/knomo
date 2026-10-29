@@ -34,10 +34,12 @@ export interface TrashCardActionMeta {
 	state: TrashActionState;
 }
 
-const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "open-daily", "copy-text", "copy-link", "delete"];
+const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["share-image", "edit", "reference", "copy-text", "open-daily", "copy-link", "relations", "delete"];
 export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
+	"share-image": "share",
+	relations: "network",
 	edit: "pencil",
-	reference: "quote",
+	reference: "message-square-quote",
 	"open-daily": "calendar-days",
 	"view-day": "calendar-search",
 	"copy-text": "copy",
@@ -82,10 +84,10 @@ export function getMemoActionClass(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-action is-danger" : "knomo-card-action";
 }
 
-export function getMemoCardActions(memo?: MemoRecord, randomCard = false): MemoCardActionMeta[] {
+export function getMemoCardActions(memo?: MemoRecord, randomCard = false, hasReferrers = false): MemoCardActionMeta[] {
 	const available: readonly MemoAction[] = randomCard && memo?.catalog
-		? [...MEMO_CARD_ACTIONS.slice(0, 3), "view-day", ...MEMO_CARD_ACTIONS.slice(3)] : MEMO_CARD_ACTIONS;
-	const actions = available.filter((action) => isMemoActionAvailable(memo, action)).map((action) => ({
+		? [...MEMO_CARD_ACTIONS.slice(0, 4), "view-day", ...MEMO_CARD_ACTIONS.slice(4)] : MEMO_CARD_ACTIONS;
+	const actions = available.filter((action) => (action !== "relations" || hasReferrers) && isMemoActionAvailable(memo, action)).map((action) => ({
 		action,
 		className: getMemoActionClass(action),
 	}));
@@ -103,10 +105,12 @@ export function isMemoCardMenuReady(memo: MemoRecord): boolean {
 }
 
 function isMemoActionAvailable(memo: MemoRecord | undefined, action: MemoAction): boolean {
+	if (action === "share-image") return memo?.status !== "deleted" && (memo?.catalog?.capabilities.markdown.view ?? true);
 	const capabilities = memo?.catalog?.capabilities;
 	if (capabilities === undefined) return true;
 	if (action === "open-daily") return capabilities.markdown.openDaily;
 	if (action === "view-day") return capabilities.markdown.view;
+	if (action === "relations") return capabilities.markdown.view;
 	if (action === "copy-text") return capabilities.markdown.copy;
 	if (action === "edit") return capabilities.markdown.edit;
 	if (action === "delete") return memo === undefined || getMemoDeleteMode(memo) !== "unavailable";

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { registerMobileFirstTapRecovery } from "../src/ui/MobileMenuTap";
+import { isKeyboardActivation } from "../src/ui/NavigationFocus";
 
 function harness() {
 	const dom = new JSDOM("<!doctype html><body><button><svg></svg></button><input><div></div></body>", { pretendToBeVisual: true });
@@ -126,5 +127,22 @@ test("SVG 起手且 pointerdown 期间窗口激活，仍记住本次手势起始
 		svg.dispatchEvent(down); h.state.focused = true;
 		h.touch("touchstart", { target: svg }); h.touch("touchend", { target: svg, time: 120 }); h.advance(100);
 		assert.equal(h.state.calls, 1);
+	} finally { h.close(); }
+});
+
+test("缺失 click 的补执行保留触摸来源，关闭面板卸载后仍挡住本次迟到 click", () => {
+	const h = harness();
+	try {
+		let keyboard: boolean | undefined;
+		h.button.addEventListener("click", event => { keyboard = isKeyboardActivation(event); h.release(); h.button.remove(); });
+		let underlying = 0; h.doc.body.addEventListener("click", () => underlying++);
+		h.tap(); h.state.focused = true; h.advance(100);
+		assert.equal(keyboard, false); assert.equal(h.state.calls, 1);
+		const before = underlying;
+		h.doc.body.dispatchEvent(new h.win.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1, clientX: 20, clientY: 20 }));
+		assert.equal(underlying, before, "卸载不能让迟到 click 穿透");
+		h.advance(1000); assert.equal(h.timers.size, 0);
+		h.doc.body.dispatchEvent(new h.win.MouseEvent("click", { bubbles: true, detail: 1 }));
+		assert.equal(underlying, before + 1);
 	} finally { h.close(); }
 });

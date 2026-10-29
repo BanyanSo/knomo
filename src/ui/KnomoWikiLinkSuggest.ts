@@ -49,6 +49,8 @@ export class KnomoWikiLinkSuggest {
 	private clearTouchClickGuard: (() => void) | null = null;
 	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
 	private renderedQuery: string | null = null;
+	private computedQuery: string | null = null;
+	private computedSuggestions: WikiLinkSuggestion[] = [];
 
 	constructor(
 		private readonly app: App,
@@ -68,6 +70,8 @@ export class KnomoWikiLinkSuggest {
 		this.clearTouchClickGuard?.();
 		this.close();
 		this.filesSnapshot = null;
+		this.computedQuery = null;
+		this.computedSuggestions = [];
 		this.inputEl.removeAttribute("aria-autocomplete");
 		this.inputEl.removeAttribute("aria-haspopup");
 		this.inputEl.removeAttribute("aria-controls");
@@ -227,10 +231,14 @@ export class KnomoWikiLinkSuggest {
 	}
 
 	private refreshSuggestions(query: string): void {
-		const files = this.getFilesSnapshot();
-		const suggestions = getWikiLinkFileSuggestions(files, query, WIKI_LINK_SUGGESTION_LIMIT);
+		if (query !== this.computedQuery || this.filesSnapshot === null) {
+			this.computedSuggestions = getWikiLinkFileSuggestions(this.getFilesSnapshot(), query, WIKI_LINK_SUGGESTION_LIMIT);
+			this.computedQuery = query;
+		}
+		const suggestions = this.computedSuggestions;
 		if (query === this.renderedQuery && suggestions.length === this.suggestions.length
 			&& suggestions.every((suggestion, index) => suggestion.path === this.suggestions[index].path)) {
+			this.suggestions = suggestions;
 			this.queueReposition();
 			return;
 		}
@@ -349,6 +357,8 @@ export class KnomoWikiLinkSuggest {
 
 	private invalidateFiles(): void {
 		this.filesSnapshot = null;
+		this.computedQuery = null;
+		this.computedSuggestions = [];
 		if (this.popoverEl !== null) {
 			this.refreshForCursor();
 		}

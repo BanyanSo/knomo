@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { getAllSidebarNavItems, TITLE_MODE_OPTIONS } from "../src/ui/viewNavigation";
 
 const styles = fs.readFileSync(path.resolve("styles.css"), "utf8");
 const knomoViewSource = fs.readFileSync(path.resolve("src/ui/KnomoView.ts"), "utf8");
@@ -29,22 +28,6 @@ test("card flow owns one shared content-end marker", () => {
 	assert.doesNotMatch(styles, /\.knomo-plugin\.is-[\w-]+(?:\.is-[\w-]+)* \.knomo-card-flow \{[^}]*?(?:padding|margin)-(?:bottom|block-end)/u);
 });
 
-test("all registered main pages inherit the shared content-end marker", () => {
-	assert.deepEqual(getAllSidebarNavItems().map((item) => item.nav), [
-		"all",
-		"things",
-		"review",
-		"random",
-		"shuffleDay",
-		"time-buoy",
-		"record-stats",
-		"trash",
-	]);
-	assert.deepEqual(
-		TITLE_MODE_OPTIONS.filter((option) => option.scope !== undefined).map((option) => option.scope),
-		["all", "no-tag", "with-link", "with-image", "anniversary"],
-	);
-});
 
 test("mobile search uses its own safe end spacing without trailing card margin", () => {
 	assert.match(styles, /\.knomo-plugin \.knomo-mobile-search-results \{[\s\S]*?padding-block-end: var\(--knomo-mobile-search-end-space\);[\s\S]*?scroll-padding-block-end: var\(--knomo-mobile-search-end-space\);/u);

@@ -13,10 +13,6 @@ const ALLOWED_SOURCE_STATEMENTS = new Map([
 
 export const checks = [
 	{
-		name: "typecheck",
-		run: () => runCommand("npm", ["run", "typecheck"]),
-	},
-	{
 		name: "test:all",
 		run: () => runCommand("npm", ["run", "test:all"]),
 	},

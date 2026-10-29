@@ -15,9 +15,12 @@ test("分享生产构建移除自动链接依赖，保留显式 Markdown 与 Wik
 		bundle: true, write: false, metafile: true, format: "cjs", platform: "browser", target: "es2018" });
 	assert.ok(!Object.keys(bundle.metafile!.inputs).some(file => /node_modules\/linkify-it\//u.test(file)));
 	const module = { exports: {} };
-	runInNewContext(bundle.outputFiles[0].text, { module });
-	const production = module.exports as typeof original;
 	const dom = new JSDOM();
+	const previousCreateEl = Object.getOwnPropertyDescriptor(globalThis, "createEl");
+	const createEl = (tag: string) => dom.window.document.createElement(tag);
+	Object.defineProperty(globalThis, "createEl", { configurable: true, value: createEl });
+	runInNewContext(bundle.outputFiles[0].text, { module, createEl });
+	const production = module.exports as typeof original;
 	try {
 		for (const content of [
 			"https://example.test bare URL stays literal",
@@ -36,5 +39,8 @@ test("分享生产构建移除自动链接依赖，保留显式 Markdown 与 Wik
 		for (const content of ["$a *b* c$", "<script>alert(1)</script>", "```dataview\nLIST\n```", "[^note]: footnote"]) {
 			assert.throws(() => production.shareCardTokens(content), error => (error as original.ShareCardError).reason === "unsupported");
 		}
-	} finally { dom.window.close(); }
+	} finally {
+		dom.window.close();
+		if (previousCreateEl) Object.defineProperty(globalThis, "createEl", previousCreateEl); else Reflect.deleteProperty(globalThis, "createEl");
+	}
 });

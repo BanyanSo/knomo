@@ -303,7 +303,7 @@ export function syncKnomoReferencedMetric(container: HTMLElement, selected: Sele
 	if (!metric) return;
 	const item = getReferencedMetric(selected, snapshot);
 	if (item.action && metric.tagName !== "BUTTON") {
-		const button = metric.ownerDocument.createElement("button");
+		const button = container.createEl("button");
 		button.className = metric.className; button.type = "button"; button.dataset.recordStatsMetric = "referenced";
 		button.append(...Array.from(metric.childNodes)); metric.replaceWith(button); metric = button;
 	}

@@ -135,15 +135,16 @@ export class MemoRelationWindow {
 			this.resize?.observe(row);
 		}
 		if (!row.firstElementChild && row.dataset.loading !== "true") {
+			const currentRow = row;
 			row.dataset.loading = "true";
 			const ready = this.render(row, node, index).finally(() => {
-				if (this.ready.get(row!) !== ready) return;
-				row!.dataset.loading = "false";
-				this.ready.delete(row!);
-				if (!this.disposed && this.rows.get(row!.dataset.relationRow!) === row) {
+				if (this.ready.get(currentRow) !== ready) return;
+				currentRow.dataset.loading = "false";
+				this.ready.delete(currentRow);
+				if (!this.disposed && this.rows.get(currentRow.dataset.relationRow!) === currentRow) {
 					this.measure();
 					// 旧批次被取消时仍可能保留同一行；完成后显式接续，不等待下一次滚动。
-					if (!row!.firstElementChild) this.onScroll();
+					if (!currentRow.firstElementChild) this.onScroll();
 				}
 			});
 			this.ready.set(row, ready);

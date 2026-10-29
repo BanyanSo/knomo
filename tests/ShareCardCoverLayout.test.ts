@@ -42,6 +42,7 @@ export async function toCanvas(card, options) {
 		]) {
 			await page.setContent("<main></main>");
 			await page.addStyleTag({ content: readFileSync("styles.css", "utf8") });
+			await page.addScriptTag({ content: "window.createEl = tag => document.createElement(tag);" });
 			await page.addScriptTag({ content: bundle.outputFiles[0].text });
 			const result = await page.evaluate(async ({ kind, mobile, withBodyImage }: { kind: string; mobile: boolean; withBodyImage: boolean }) => {
 				const api = (window as any).coverTest;

@@ -1,3 +1,4 @@
+import { createShareCardElement } from "./ShareCardDom";
 import { captureShareCardFonts, embedShareCardFonts } from "./ShareCardTypography";
 import type { ShareCardFontInput } from "./ShareCardTypography";
 import { toCanvas } from "html-to-image";
@@ -23,7 +24,7 @@ export class ShareCardRenderer {
 		private readonly loadImage: (path: string, signal: AbortSignal) => Promise<Blob>,
 		private readonly cover?: string) {
 		this.fonts = captureShareCardFonts(host);
-		this.frame = host.ownerDocument.createElement("iframe");
+		this.frame = createShareCardElement(host.ownerDocument, "iframe");
 		this.frame.className = "knomo-share-render-frame";
 		this.frame.title = "Share card renderer"; this.frame.setAttribute("aria-hidden", "true"); this.frame.tabIndex = -1;
 		this.frame.setAttribute("sandbox", "allow-same-origin");
@@ -45,14 +46,14 @@ export class ShareCardRenderer {
 			}
 			const url = URL.createObjectURL(blob);
 			try {
-				const image = doc.createElement("img"); image.src = url;
+				const image = createShareCardElement(doc, "img"); image.src = url;
 				await image.decode();
 				this.abort.signal.throwIfAborted();
 				const pixels = image.naturalWidth * image.naturalHeight;
 				if (!pixels || this.retainedPixels + pixels > (this.mobile ? 24_000_000 : 64_000_000)) throw new ShareCardError("limit");
 				// 固定动态图片的一帧，模板切换和 PNG 均复用这份资源。
 				checkShareCardDimensions(image.naturalWidth, image.naturalHeight, false);
-				const canvas = doc.createElement("canvas");
+				const canvas = createShareCardElement(doc, "canvas");
 				const scale = Math.min(1, 780 / image.naturalWidth);
 				canvas.width = Math.ceil(image.naturalWidth * scale); canvas.height = Math.ceil(image.naturalHeight * scale);
 				const context = canvas.getContext("2d"); if (!context) throw new ShareCardError("generation");
@@ -65,7 +66,7 @@ export class ShareCardRenderer {
 		}
 		this.abort.signal.throwIfAborted();
 		doc.head.replaceChildren(); doc.body.replaceChildren();
-		const style = doc.createElement("style");
+		const style = createShareCardElement(doc, "style");
 		if (this.fontCSS === null) {
 			// 包含所有模板可能显示的字符，模板切换仍复用同一份字体与回退规则。
 			const text = [snapshot.date.replace(/-/gu, "/"), snapshot.month, snapshot.weekday, "Knomo ☐☑•◦▪0123456789."];

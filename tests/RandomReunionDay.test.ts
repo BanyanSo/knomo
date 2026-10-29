@@ -189,11 +189,13 @@ test("日期详情返回后移动端恢复页面焦点，桌面端恢复原卡�
 	}
 });
 
-test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜索覆盖层不继承此入口", async () => {
+test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜索覆盖层不继承此入口", async context => {
 	const h = await harness();
+	const dom = new JSDOM();
+	context.after(() => dom.window.close());
 	for (const surface of ["card-flow", "mobile-search"]) {
 		const titles: string[] = [];
-		const actions = new Map<string, () => void>();
+		const actions = new Map<string, (event: MouseEvent) => void>();
 		const focusTargets: unknown[] = [];
 		const trigger = { isConnected: true };
 		const card = { getAttr: () => h.memo.id, find: () => trigger, hasAttribute: () => false };
@@ -205,7 +207,7 @@ test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜�
 				const menu = { addSeparator: () => {}, addItem: (build: (item: unknown) => void) => {
 					let title = "";
 					const item = { setTitle: (value: string) => { title = value; titles.push(value); return item; }, setIcon: () => item,
-						setSection: () => item, setWarning: () => item, onClick: (callback: () => void) => { actions.set(title, callback); return item; }, setIsLabel: () => item };
+						setSection: () => item, setWarning: () => item, onClick: (callback: (event: MouseEvent) => void) => { actions.set(title, callback); return item; }, setIsLabel: () => item };
 					build(item);
 				} };
 				options.build(menu, (...args: unknown[]) => { focusTargets.push(args[1]); }, text => text);
@@ -215,7 +217,7 @@ test("移动端原生卡片菜单仅为随机批次提供查看那一天，搜�
 		assert.equal(titles.includes("View this day"), surface === "card-flow");
 		assert.ok(titles.includes("Open daily note"));
 		if (surface === "card-flow") {
-			actions.get("View this day")!();
+			actions.get("View this day")!(new dom.window.MouseEvent("click", { detail: 1 }));
 			assert.deepEqual(focusTargets, ["view"], "日期详情须在原生菜单隐藏后恢复页面焦点");
 		}
 	}

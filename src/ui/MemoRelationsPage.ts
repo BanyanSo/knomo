@@ -152,6 +152,17 @@ export class MemoRelationsPage {
 		for (const frame of this.frames) {
 			const after = replacements.get(observationHandleKey(frame.handle));
 			if (after) frame.handle = after;
+			// 隐藏层的阅读位置也沿已确认提交映射接续，不按旧行号猜测新目标。
+			if (frame.anchor && replacements.has(frame.anchor.key)) {
+				const anchor = replacements.get(frame.anchor.key);
+				frame.anchor = anchor ? { ...frame.anchor, key: observationHandleKey(anchor) } : null;
+			}
+			if (frame.focus) {
+				const [key, action] = JSON.parse(frame.focus) as [string, string];
+				const focus = replacements.get(key);
+				// 已删除的控件保留原键，返回时沿用主体菜单的既有回退。
+				if (focus) frame.focus = JSON.stringify([observationHandleKey(focus), action]);
+			}
 		}
 		if (!affected) return;
 		this.controller?.abort();

@@ -541,10 +541,6 @@ export class MobileSearchController {
 		const run = ++this.queryRun, version = this.session.version;
 		this.pendingQueryKey = key;
 		this.session.beginRequest();
-		if (filter.hasReferrers) {
-			this.displayedCount = null;
-			this.resultsEl?.find(".knomo-search-result-count")?.remove();
-		}
 		this.queryError = null;
 		this.syncControls();
 		if (this.displayedMemos === null) this.renderResults();
@@ -587,9 +583,9 @@ export class MobileSearchController {
 			}
 			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey);
 			this.options.onResultsAccepted?.(page);
-			if (filter.hasReferrers) this.reconcileCommittedCards(new Map());
 			if (reset && this.displayedCount === null && !this.options.hasPendingConfirmedMemos?.()
 				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
+			if (filter.hasReferrers) this.reconcileCommittedCards(new Map());
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) {
@@ -710,7 +706,10 @@ export class MobileSearchController {
 		} catch (error) {
 			if (!controller.signal.aborted) console.warn("Knomo mobile search count failed", error);
 		} finally {
-			if (this.countController === controller) this.countController = null;
+			if (this.countController === controller) {
+				this.countController = null;
+				if (filter.hasReferrers && this.displayedCount === null) this.renderResults("content-change", true, true);
+			}
 		}
 	}
 
@@ -731,7 +730,9 @@ export class MobileSearchController {
 		const hadPendingQuery = this.pendingQueryKey !== null;
 		const resumeSearch = this.pendingQueryKey !== null && this.pendingQueryKey !== this.getDisplayedRequestKey();
 		this.cancelPendingRequest();
-		const additions = this.options.filterMemos(inserted, this.getDisplayedFilter());
+		// 保存成功不证明新记录已被引用，已有成员由 changes 原位更新。
+		const filter = this.getDisplayedFilter();
+		const additions = filter.hasReferrers ? [] : this.options.filterMemos(inserted, filter);
 		if (additions.length === 0 && !this.displayedMemos?.some(memo => changes.has(memo.id))) {
 			if (!hadPendingQuery) return;
 			this.session.requestStatus = this.session.result === null ? "idle" : "ready";
@@ -982,7 +983,10 @@ export class MobileSearchController {
 		const results = this.resultsEl;
 		if (!results) return;
 		const total = this.getDisplayedCount();
-		if (this.getDisplayedFilter().hasReferrers && total === null) results.find(".knomo-search-result-count")?.remove();
+		// 旧计数不参与当前查询，但可随旧切片保留展示，直至当前结果或计数接续完成。
+		const retainSummary = (this.displayedCount !== null && (this.acceptedResultsInvalidated || this.session.requestStatus === "pending"))
+			|| this.countController !== null;
+		if (this.getDisplayedFilter().hasReferrers && total === null && !retainSummary) results.find(".knomo-search-result-count")?.remove();
 		if (updateSummary && total !== null && this.session.result !== null) {
 			const summary = this.getResultCopy(total)?.summary;
 			if (summary) {

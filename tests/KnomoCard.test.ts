@@ -146,8 +146,10 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 			renderCardFlowHeaders: () => [],
 			renderHistoryLoadMore: () => {}, syncCardMenuState: () => {}, restorePendingCardFlowScrollTop: () => {},
 		});
-		const recent = makeMemo({ id: "today", catalog: { observation: { logicalDate: "2026-09-10", time: "12:34" } } as NonNullable<MemoViewItem["catalog"]> });
-		const old = makeMemo({ id: "old", catalog: { observation: { logicalDate: "2026-09-01", time: "12:34" } } as NonNullable<MemoViewItem["catalog"]> });
+		const recent = makeMemo({ id: "today", catalog: { observation: { logicalDate: "2026-09-10", time: "12:34" },
+			observationHandle: { sourcePath: "Daily/2026-09-10.md", sourceRevision: "recent-revision", startLine: 0, endLine: 0, rawBlockHash: "recent-block" } } as NonNullable<MemoViewItem["catalog"]> });
+		const old = makeMemo({ id: "old", catalog: { observation: { logicalDate: "2026-09-01", time: "12:34" },
+			observationHandle: { sourcePath: "Daily/2026-09-01.md", sourceRevision: "old-revision", startLine: 0, endLine: 0, rawBlockHash: "old-block" } } as NonNullable<MemoViewItem["catalog"]> });
 		const sync = (memos: MemoViewItem[]) => view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos }, null);
 		sync([recent]);
 		const existingRecentCard = root.find("article");

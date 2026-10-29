@@ -1688,7 +1688,9 @@ export class KnomoView extends ItemView {
 			return current ? [current] : [];
 		});
 		if (confirmed) {
-			this.memos = [...new Map([...this.memos, ...inserted].map(memo => [memo.id, memo])).values()]
+			// 入向关联只能由关系查询确认；即时提交仍可更新列表中已有的成员。
+			const additions = this.recordStatsSearchFilter?.type === "referenced" ? [] : inserted;
+			this.memos = [...new Map([...this.memos, ...additions].map(memo => [memo.id, memo])).values()]
 				.sort((left, right) => compareCatalogObservations(left.catalog!.observation, right.catalog!.observation));
 			this.cancelCatalogDesktopCount();
 			this.catalogCursor = null;
@@ -2541,6 +2543,7 @@ export class KnomoView extends ItemView {
 		this.catalogCoverage = load.coverage;
 		this.catalogReadState = load.readState;
 		this.catalogStatus = load.status;
+		if (load.status.relations?.complete === false) this.catalogDesktopCountPresentation = null;
 		this.catalogRevision = load.catalogRevision;
 		this.syncRecordStatsSource();
 		if (this.libraryIndexRevision !== load.catalogRevision || this.libraryIndexCoverageKey !== catalogCoverageKey(load.coverage)
@@ -2567,6 +2570,7 @@ export class KnomoView extends ItemView {
 		this.cancelCatalogDesktopCount();
 		const controller = new AbortController();
 		this.catalogDesktopCountController = controller;
+		let accepted = false;
 		try {
 			const result = await this.countCatalogFeature(options.loadAll, controller.signal);
 			if (options.sourceGeneration !== this.memoSourceGeneration
@@ -2582,12 +2586,22 @@ export class KnomoView extends ItemView {
 			}
 			const previousCardFlowKey = this.getCardFlowStateKey();
 			this.catalogDesktopTotalCount = result.count;
+			accepted = true;
 			this.syncSearchControls();
 			this.renderCardFlowIfChanged(previousCardFlowKey);
 		} catch (error) {
 			if (!controller.signal.aborted) console.warn("Knomo search count failed", error);
 		} finally {
-			if (this.catalogDesktopCountController === controller) this.catalogDesktopCountController = null;
+			if (this.catalogDesktopCountController === controller) {
+				this.catalogDesktopCountController = null;
+				if (!accepted && !controller.signal.aborted && !this.trashViewClosed && this.recordStatsSearchFilter?.type === "referenced"
+					&& options.sourceGeneration === this.memoSourceGeneration && options.queryRun === this.catalogDesktopQueryRun
+					&& this.isCatalogQueryCurrent(options.queryFingerprint, options.loadAll)) {
+					const previousCardFlowKey = this.getCardFlowStateKey();
+					this.catalogDesktopCountPresentation = null;
+					this.renderCardFlowIfChanged(previousCardFlowKey);
+				}
+			}
 		}
 	}
 
@@ -7517,8 +7531,7 @@ export class KnomoView extends ItemView {
 			|| (this.mobileSearchPageOpen && this.mobileRecordStatsSearchFilter?.type === "referenced")) {
 			this.catalogStatus = { ...this.catalogStatus, relations: { complete: false, failed: false, stale: true } };
 			this.catalogDesktopTotalCount = null;
-			this.catalogDesktopCountPresentation = null;
-			this.removeRelationResultCount();
+			// 重查期间沿用上次已提交的页面，接纳结果或故障后再同步摘要。
 			this.cancelCatalogDesktopCount();
 			this.cancelCatalogDesktopQuery();
 			this.refreshCatalogActiveQuery();

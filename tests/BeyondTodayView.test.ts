@@ -215,6 +215,7 @@ test("28 至 31 日和闰日保留既有同日匹配与排除今天未来的查�
 function item(date: string, id: string): CatalogMemoItem {
 	return { key: id, renderKey: id, createdAt: `${date}T12:34`, content: id, tags: [], links: [], images: [], timeBuoyDates: [],
 		sourcePath: `Daily/${date}.md`, lineNumberHint: 1, observation: { logicalDate: date, time: "12:34", section: null, contentHash: id },
+		observationHandle: { sourcePath: `Daily/${date}.md`, sourceRevision: `revision-${id}`, startLine: 0, endLine: 0, rawBlockHash: id },
 	} as unknown as CatalogMemoItem;
 }
 

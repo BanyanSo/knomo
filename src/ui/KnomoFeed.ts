@@ -74,14 +74,15 @@ export function renderKnomoShuffleDayHeader(
 const lastFeedback = new WeakMap<HTMLElement, string>();
 const historyHeaders = new WeakMap<HTMLElement, { context: string; elements: Map<string, HTMLElement>; rendered: HTMLElement[] }>();
 
-// 仅复用历史浏览中的操作表面；内容更新不替换触摸目标，切页后旧节点不再使用。
+// 同范围刷新原位更新摘要与操作表面，避免撤下头部时压缩列表高度。
 export function syncKnomoCardFlowHeaders(container: HTMLElement, headers: CardFlowHeader[], context: string, announcement?: { key: string; context: string }): HTMLElement[] {
 	const previous = historyHeaders.get(container);
 	const occurrences = new Map<string, number>();
 	const keys = headers.map(header => {
 		const key = header.type === "random-toolbar" ? header.type
 			: header.type === "random-day" ? `${header.type}:${header.selectedDate}`
-			: header.type === "summary" && header.action?.action === "retry-random-day" ? header.action.action : null;
+			: header.type === "summary" && header.action?.action === "retry-random-day" ? header.action.action
+			: header.type === "summary" && !header.action ? `summary:${header.feedback ? "feedback" : header.relationCount ? "relation-count" : "plain"}` : null;
 		if (key === null) return null;
 		const occurrence = occurrences.get(key) ?? 0;
 		occurrences.set(key, occurrence + 1);
@@ -161,6 +162,7 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 		}
 		const summary = existing ?? (header.action !== undefined ? renderKnomoActionableListSummary(container, header.text, header.action)
 			: renderKnomoListSummary(container, header.text));
+		if (existing && !header.action) updateHeaderText(summary, header.text);
 		if (header.relationCount) summary.addClass("knomo-relation-result-count");
 		if (existing && header.action) {
 			updateHeaderText(summary.querySelector("span"), header.text);

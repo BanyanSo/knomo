@@ -122,6 +122,25 @@ test("移动被引用钻取部分零条或故障恢复为完整零条，空数�
 	}
 });
 
+test("移动被引用钻取的即时保存只更新已有成员，新成员等待关系查询确认", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const original = makeMemo("target", "target"), updated = makeMemo("updated", "edited target"), inserted = makeMemo("new", "new memo");
+	let items = [original];
+	const h = createControllerHarness(MobileSearchController, items, undefined, async () => {
+		const page = makeRemotePage(items); page.status.relations = { complete: true, failed: false }; return page;
+	});
+	try {
+		h.controller.searchRecordStatsFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		h.controller.openPage({ focusInput: false }); await settle();
+		h.controller.applyMemoChanges(new Map([[original.id, updated]]), [updated, inserted], true);
+		assert.deepEqual(h.controller.getDisplayedMemos().map(memo => memo.id), [updated.id]);
+		items = [updated, inserted];
+		await h.controller.refreshAppliedResults();
+		assert.deepEqual(h.controller.getDisplayedMemos().map(memo => memo.id), [updated.id, inserted.id]);
+	} finally { h.controller.removePage(); }
+});
+
 test("移动被引用钻取完整非空转为零条时清理旧卡片与数量", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

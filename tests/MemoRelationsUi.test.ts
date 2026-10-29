@@ -768,9 +768,9 @@ test("metadata 更新使被引用统计待更新，仅刷新正在浏览的统�
 			h.read.relations.invalidateResolution(["A.md"]);
 			assert.equal(queries, 1);
 			assert.equal(view.catalogDesktopTotalCount, null);
-			assert.equal(view.catalogDesktopCountPresentation, null);
+			assert.deepEqual(view.catalogDesktopCountPresentation, { count: 9 }, "上次展示的计数仅用于页面接续");
 			assert.equal(view.getCatalogPresentationTotalCount(), null);
-			assert.equal(count.isConnected, false); assert.equal(flow.firstElementChild, body);
+			assert.equal(count.isConnected, true, "查询期间保留已提交摘要，避免压缩列表高度"); assert.equal(flow.firstElementChild, body);
 			assert.equal(h.bodyReads(), bodies);
 			state.activeNav = "record-stats";
 			state.recordStatsSearchFilter = null;
@@ -1062,6 +1062,35 @@ test("A→B→C 返回恢复原位置，A→B→A 成环收栈，菜单自身不
 		await h.page.open(a);
 		h.page.back();
 		assert.equal(h.page.isOpen, false);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
+test("多层关联期间同日连续保存后返回仍定位原引用者和阅读锚点", async () => {
+	const h = await fixture();
+	try {
+		const body = "- 10:00 A ^a\n- 11:00 B [[#^a]] ^b\n- 12:00 C [[#^a]] ^c\n";
+		let before = await h.seed("D.md", body);
+		await h.page.open(before[0]); await settle();
+		h.page.el!.scrollTop = 321;
+		const trigger = Array.from(h.page.el!.querySelectorAll<HTMLElement>(".knomo-card"))
+			.find(card => card.getAttribute("data-memo-id") === observationHandleKey(before[1]))!.querySelector<HTMLElement>(".knomo-card-menu")!;
+		await h.page.open(before[1], trigger);
+		const frames = (h.page as unknown as { frames: Array<{ anchor?: { key: string; offset: number } | null }> }).frames;
+		let anchor = frames[0].anchor!;
+		assert.ok(anchor);
+		for (let index = 0; index < 2; index++) {
+			const after = await h.seed("D.md", body + Array.from({ length: index + 1 }, (_, i) => `- 13:00 extra ${i}\n`).join(""));
+			const { buildDailyMemoPresentationChange } = await import("../src/services/DailyMemoPresentationChange");
+			const change = buildDailyMemoPresentationChange({ sourcePath: "D.md", logicalDate: "2026-10-25",
+				before: { observations: before }, after: { observations: after } } as Parameters<typeof buildDailyMemoPresentationChange>[0], null, after.at(-1)!);
+			const expected = change.replacements.find(item => observationHandleKey(item.before) === anchor.key)!.after!;
+			h.page.applyChange(change); await settle();
+			assert.deepEqual(frames[0].anchor, { key: observationHandleKey(expected), offset: anchor.offset });
+			anchor = frames[0].anchor!; before = after;
+		}
+		h.page.back(); await settle();
+		assert.equal(h.win.document.activeElement?.closest(".knomo-card")?.getAttribute("data-memo-id"), observationHandleKey(before[1]));
 		assert.deepEqual(h.errors, []);
 	} finally { h.close(); }
 });

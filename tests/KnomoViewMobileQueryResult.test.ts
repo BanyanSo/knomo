@@ -281,13 +281,13 @@ test("生产点击路由、任务队列及关闭导航保留所属 surface 的�
 test("移动菜单使用触发卡片的 surface，选择动作时不重取已改变的结果", async () => {
 	const h = await createHarness(), dom = await attachSurfaces(h);
 	try {
-		const callbacks: Array<() => void> = [], received: MemoViewItem[] = [];
+		const callbacks: Array<(event: MouseEvent) => void> = [], received: MemoViewItem[] = [];
 		h.view.closeCardMenu = () => { h.view.activeMenuMemoId = null; };
 		h.view.syncCardMenuState = () => {};
 		h.view.handleMemoAction = async (_action: string, memo: MemoViewItem) => { received.push(memo); };
 		h.view.mobileMenuController = { close: () => {}, open: (options: { build: (menu: unknown, select: unknown, title: unknown) => void }) => {
 			const item = { setSection: () => item, setTitle: () => item, setIcon: () => item, setWarning: () => item, setIsLabel: () => item,
-				onClick: (callback: () => void) => { callbacks.push(callback); return item; } };
+				onClick: (callback: (event: MouseEvent) => void) => { callbacks.push(callback); return item; } };
 			options.build({ addItem: (build: (item: unknown) => void) => build(item), addSeparator: () => {} },
 				(callback: () => void) => callback(), (title: string) => title);
 		} };
@@ -297,7 +297,7 @@ test("移动菜单使用触发卡片的 surface，选择动作时不重取已改
 		assert.ok(callbacks.length > 0);
 		h.view.memos = [{ ...dom.mobile }];
 		h.search.resetState();
-		callbacks[0](); await settle();
+		callbacks[0](dom.event(trigger)); await settle();
 		assert.equal(received[0], dom.mobile);
 		assert.equal(received[0].catalog!.observationHandle, h.items[1].observationHandle);
 	} finally { h.close(); dom.close(); }
@@ -361,7 +361,7 @@ async function attachSurfaces(h: Awaited<ReturnType<typeof createHarness>>) {
 			for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
 			card.appendChild(element); root.appendChild(card); return element;
 		},
-		event(target: HTMLElement) { return { target, detail: 1, isTrusted: true, preventDefault() {}, stopPropagation() {} } as unknown as MouseEvent; },
+		event(target: HTMLElement) { return { type: "click", target, detail: 1, isTrusted: true, preventDefault() {}, stopPropagation() {} } as unknown as MouseEvent; },
 		close() { Object.assign(globalThis, previous); dom.window.close(); },
 	};
 }

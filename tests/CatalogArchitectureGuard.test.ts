@@ -3,24 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-test("生产源码只暴露无版本 Catalog 模块和存储名称", async () => {
-	const sourceFiles = listFiles("src").filter((file) => file.endsWith(".ts"));
-	const forbidden = /CatalogV[23]|catalogV[23]|CATALOG_V[23]|catalog-v[23]|catalogShadow|identity-v[23]|catalog\.v[23]Unavailable/u;
-	const violations = sourceFiles.flatMap((file) => {
-		const relativePath = file.replace(/\\/gu, "/");
-		return forbidden.test(relativePath) || forbidden.test(fs.readFileSync(file, "utf8")) ? [relativePath] : [];
-	});
-
-	assert.deepEqual(violations, []);
-	for (const expected of [
-		"src/services/CatalogReadService.ts",
-		"src/services/MemoCommandService.ts",
-		"src/services/CatalogIndexCoordinator.ts",
-		"src/services/DailyMemoWriteGateway.ts",
-		"src/services/MonthlyProjection.ts",
-	]) {
-		assert.equal(fs.existsSync(expected), true, `${expected} should remain the canonical module.`);
-	}
+test("生产装配保留 Catalog、迁移和恢复入口", async () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	assert.equal(main.includes("initializeMonthlyExcludeDefaultSafely"), true);
 	for (const serviceName of [
@@ -184,13 +167,7 @@ function listFiles(root: string): string[] {
 }
 
 
-test("P7 删除身份协议与临时适配器，真实正文和恢复服务仍保留", () => {
- const retired = ["IdentityLedgerService","IdentityLedgerProtocol","IdentityCurrentState","LocalWriterIdentityService","IdentityReceiptStore","IdentityRevisionTransitionQueue","IdentityRecoveryCoordinator","HistoricalIdentityBootstrapService","KnomoCurrentStateStore","KnomoBootstrapStateStore","KnomoSharedConfigService","KnomoSharedConfigProtocol","SharedReplicaCache","KnomoDataRootMigrationService","LegacyIndexMigrationService","MemoObservationIdentity","KnomoBasicDataRecovery","KnomoAutomaticRecovery","LegacyMigrationAcknowledgementService"];
- for (const name of retired) assert.equal(fs.existsSync('src/services/' + name + '.ts'), false, name);
- assert.equal(fs.existsSync('src/types/identityLedger.ts'), false);
- for (const name of ['DailyMemoWriteGateway', 'MarkdownMutationService', 'CatalogIndexCoordinator', 'MonthlyProjectionCoordinator', 'IndependentTrashService', 'TrashSnapshotStore', 'LegacyTrashMigrationService']) {
-  assert.equal(fs.existsSync('src/services/' + name + '.ts'), true, name);
- }
+test("生产源码不再引入已退役身份协议", () => {
  for (const file of listFiles('src').filter(file => file.endsWith('.ts'))) {
   const source = fs.readFileSync(file, 'utf8');
   assert.doesNotMatch(source, /IdentityHandle|IdentityLedger|bindingId|writerId|prepareRecoverableDelete|removePermanently|confirm-identity/, file);

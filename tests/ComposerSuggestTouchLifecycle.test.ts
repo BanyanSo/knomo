@@ -1,3 +1,4 @@
+import { controlWindowClock } from "./helpers/windowClock";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { undoDepth } from "@codemirror/commands";
@@ -11,6 +12,7 @@ import { build } from "esbuild";
 // 复用生产 Composer 接线，并接入真实浮层控制器、窗口焦点入口和首击恢复。
 async function fixture(kind: "tag" | "link") {
 	const f = await createMobilePopupFixture();
+	const clock = controlWindowClock(f.win as unknown as Window);
 	const { Platform } = await import("obsidian");
 	const wasMobile = Platform.isMobile;
 	Platform.isMobile = true;
@@ -91,10 +93,11 @@ async function fixture(kind: "tag" | "link") {
 		element.dispatchEvent(event);
 		return event;
 	};
-	return { ...f, view, input, controller, layer, backdrop, popup, list, row, target, initial, cursor, touch, tail,
+	return { ...f, clock, view, input, controller, layer, backdrop, popup, list, row, target, initial, cursor, touch, tail,
 		close() {
 			view.mobileViewFocusRecovery?.cancel(); controller.dispose();
 			for (const cleanup of cleanups.reverse()) cleanup();
+			clock.restore();
 			Platform.isMobile = wasMobile;
 			f.close();
 		},
@@ -258,7 +261,7 @@ for (const kind of ["tag", "link"] as const) {
 		const f = await fixture(kind);
 		try {
 			f.pointer(f.target, "pointerdown"); f.touch("touchstart");
-			await new Promise(resolve => f.win.setTimeout(resolve, 650));
+			await f.clock.advance(650);
 			f.pointer(f.target, "pointerup"); f.pointer(f.target, "lostpointercapture");
 			f.touch("touchend"); f.tail("click", f.backdrop);
 			assert.equal(f.input.value, kind === "tag" ? "prefix #beta suffix" : "prefix [[Beta]] suffix");
@@ -296,7 +299,7 @@ for (const kind of ["tag", "link"] as const) {
 			assert.equal(f.tail("mousedown", f.target).defaultPrevented, true);
 			if (!f.tail("mousedown", f.input).defaultPrevented) f.input.setSelectionRange(0, 0);
 			f.tail("mouseup", f.input); f.tail("click", f.backdrop);
-			await new Promise(resolve => f.win.setTimeout(resolve, 130));
+			await f.clock.advance(130);
 			assert.equal(f.input.value, kind === "tag" ? "prefix #beta suffix" : "prefix [[Beta]] suffix");
 			assert.equal(f.input.selectionStart, kind === "tag" ? 13 : 15);
 			assert.equal(f.win.document.activeElement, f.input);

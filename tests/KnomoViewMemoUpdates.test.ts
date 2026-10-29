@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
@@ -8,6 +8,16 @@ import type { MemoSaveResult } from "../src/types/catalogView";
 import type { MarkdownCatalogCommitInput } from "../src/services/MarkdownMutationService";
 import type { DailyMemoPresentationChange, ConfirmedDailyMemoPresentation } from "../src/services/DailyMemoPresentationChange";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+
+// 查询在机器繁忙时会协作式让出；夹具必须提供窗口计时器，不能依赖它始终同步完成。
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", {
+	configurable: true, value: { setTimeout, clearTimeout },
+}));
+after(() => {
+	if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+	else Reflect.deleteProperty(globalThis, "window");
+});
 
 test("日期详情接收真实 Daily 编辑、新建和删除广播，原重逢批次不补抽", async () => {
 	const h = await fixture();

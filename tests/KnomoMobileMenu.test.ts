@@ -1,3 +1,4 @@
+import { controlWindowClock } from "./helpers/windowClock";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { undo, undoDepth } from "@codemirror/commands";
@@ -68,8 +69,9 @@ interface MenuView {
 	timeBuoyPickerState: object | null;
 }
 
-async function createHarness() {
+async function createHarness(controlTime = false) {
 	const f = await createMobilePopupFixture("cancel-edit");
+	const clock = controlTime ? controlWindowClock(f.win as unknown as Window) : null;
 	// 普通菜单用例默认窗口已激活；失焦交接用例单独控制此状态。
 	f.win.document.hasFocus = () => true;
 	const { KnomoMobileMenu } = await import("../src/ui/KnomoMobileMenu");
@@ -114,9 +116,9 @@ async function createHarness() {
 	Object.defineProperty(view, "mobileSearchPageOpen", { configurable: true, writable: true, value: true });
 	view.syncCardMenuState = (KnomoView.prototype as unknown as MenuView).syncCardMenuState.bind(view);
 	view.registerMobileMenuTriggerEvents();
-	return { f, view, controller, menus, actions, scopes, originalMemo, trigger,
+	return { f, clock, view, controller, menus, actions, scopes, originalMemo, trigger,
 		replaceMemo() { latestMemo = { ...originalMemo, contentSnapshot: "同一列表 key 下的新正文" }; },
-		close() { controller.close(); for (const cleanup of headerCleanups) cleanup(); titleController.remove(); f.close(); },
+		close() { controller.close(); for (const cleanup of headerCleanups) cleanup(); titleController.remove(); clock?.restore(); f.close(); },
 	};
 }
 
@@ -772,7 +774,7 @@ test("卡片普通选项关闭内部菜单后仍恢复视图，编辑选项保�
 });
 
 test("真实视图接线覆盖新建、搜索、Knomo 侧栏和宿主导航，失焦首击只执行一次", async () => {
-	const h = await createHarness();
+	const h = await createHarness(true);
 	try {
 		let focused = false;
 		Object.defineProperty(h.f.win.document, "hasFocus", { configurable: true, value: () => focused });
@@ -792,20 +794,20 @@ test("真实视图接线覆盖新建、搜索、Knomo 侧栏和宿主导航，�
 			let calls = 0; button.addEventListener("click", () => calls++);
 			focused = false; assert.equal(tap(h, button).defaultPrevented, false);
 			focused = true;
-			await new Promise(resolve => h.f.win.setTimeout(resolve, 130));
+			await h.clock!.advance(130);
 			assert.equal(calls, 1, button.outerHTML);
 		}
 	} finally { h.close(); }
 });
 
 test("冷启动时间入口缺失 click 时跳转一次，迟到 click 去重，后续原生点击正常", async () => {
-	const h = await createHarness();
+	const h = await createHarness(true);
 	try {
 		let focused = false;
 		Object.defineProperty(h.f.win.document, "hasFocus", { configurable: true, value: () => focused });
 		const button = h.f.dailyButton;
 		tap(h, button); focused = true;
-		await new Promise(resolve => h.f.win.setTimeout(resolve, 140));
+		await h.clock!.advance(140);
 		assert.equal(h.f.calls.filter(call => call === "open-daily").length, 1);
 		await h.f.click(button);
 		assert.equal(h.f.calls.filter(call => call === "open-daily").length, 1);
@@ -816,7 +818,7 @@ test("冷启动时间入口缺失 click 时跳转一次，迟到 click 去重，
 
 test("首击补偿不接管模态框、非活动视图或已禁用按钮", async () => {
 	for (const scenario of ["modal", "inactive", "disabled"]) {
-		const h = await createHarness();
+		const h = await createHarness(true);
 		try {
 			let focused = false; Object.defineProperty(h.f.win.document, "hasFocus", { configurable: true, value: () => focused });
 			const parent = scenario === "modal" ? h.f.win.document.body.createDiv({ cls: "modal-container" }) : h.f.root;
@@ -824,7 +826,7 @@ test("首击补偿不接管模态框、非活动视图或已禁用按钮", async
 			if (scenario === "disabled") button.setAttribute("aria-disabled", "true");
 			if (scenario === "inactive") h.view.app.workspace.getActiveViewOfType = () => null;
 			let calls = 0; button.addEventListener("click", () => calls++);
-			tap(h, button); focused = true; await new Promise(resolve => h.f.win.setTimeout(resolve, 130));
+			tap(h, button); focused = true; await h.clock!.advance(130);
 			assert.equal(calls, 0, scenario);
 		} finally { h.close(); }
 	}
@@ -949,7 +951,7 @@ test("移动草稿重新展开定位末尾，已展开时再次聚焦保留选�
 
 test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Composer 和 CodeMirror 获得焦点", async () => {
 	for (const index of [1, 2]) {
-		const h = await createHarness();
+		const h = await createHarness(true);
 		const real = await useRealComposerActions(h);
 		let focused = false;
 		h.f.win.document.hasFocus = () => focused;
@@ -961,7 +963,7 @@ test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Com
 			assert.deepEqual(real.focusStates, []);
 			focused = true;
 			h.f.win.dispatchEvent(new h.f.win.Event("focus"));
-			await new Promise(resolve => h.f.win.setTimeout(resolve, 130));
+			await h.clock!.advance(130);
 			await real.done();
 			assert.equal(h.view.composerOpen, true);
 			assert.deepEqual(real.focusStates, [true]);
@@ -979,21 +981,21 @@ test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Com
 });
 
 test("失焦菜单原生 click 正常到达时直接执行，不被首击补偿重复执行", async () => {
-	const h = await createHarness();
+	const h = await createHarness(true);
 	let focused = false; h.f.win.document.hasFocus = () => focused;
 	try {
 		h.view.toggleCardMenu(h.originalMemo.id);
 		const item = h.menus[0].items[2].dom;
 		assert.equal(tap(h, item).defaultPrevented, false);
 		focused = true; await h.f.click(item);
-		await new Promise(resolve => h.f.win.setTimeout(resolve, 130));
+		await h.clock!.advance(130);
 		assert.deepEqual(h.actions, [{ action: "reference", memo: h.originalMemo }]);
 	} finally { h.close(); }
 });
 
 test("失焦菜单等待激活期间取消、切页、替换菜单或禁用选项，不执行旧编辑动作", async () => {
 	for (const scenario of ["cancel", "inactive", "replace", "disabled", "new-touch", "never-focused"]) {
-		const h = await createHarness();
+		const h = await createHarness(true);
 		let focused = false; h.f.win.document.hasFocus = () => focused;
 		try {
 			h.view.toggleCardMenu(h.originalMemo.id);
@@ -1005,7 +1007,7 @@ test("失焦菜单等待激活期间取消、切页、替换菜单或禁用选�
 			if (scenario === "disabled") item.classList.add("is-disabled");
 			if (scenario === "new-touch") touch(h, h.f.root, "touchstart");
 			focused = scenario !== "never-focused";
-			await new Promise(resolve => h.f.win.setTimeout(resolve, 130));
+			await h.clock!.advance(130);
 			assert.deepEqual(h.actions, [], scenario);
 		} finally { h.close(); }
 	}

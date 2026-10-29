@@ -2,11 +2,24 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-export async function ensureObsidianStub(): Promise<void> {
+let preparation: Promise<void> | undefined;
+
+export async function prepareObsidianStub(): Promise<void> {
 	for (const name of ["Banyan-WeChat-Reward.png", "buymeacoffe-code.png", "share-reflection-cover.webp"]) {
 		const imagePath = resolve(__dirname, "../../src/assets", name);
 		await mkdir(dirname(imagePath), { recursive: true });
 		await copyFile(resolve("src/assets", name), imagePath);
+	}
+	const obsidianStubPath = resolve(__dirname, "../../node_modules/obsidian/index.js");
+	await mkdir(dirname(obsidianStubPath), { recursive: true });
+	await writeFile(obsidianStubPath, buildObsidianStub());
+}
+
+export async function ensureObsidianStub(): Promise<void> {
+	// 运行器统一准备磁盘文件；直接运行单文件时仍可独立初始化。
+	if (process.env.KNOMO_TEST_PREPARED !== "1") {
+		preparation ??= prepareObsidianStub().catch(error => { preparation = undefined; throw error; });
+		await preparation;
 	}
 	require.extensions[".png"] = (module, filename) => {
 		module.exports = "data:image/png;base64," + readFileSync(filename).toString("base64");
@@ -17,9 +30,6 @@ export async function ensureObsidianStub(): Promise<void> {
 	require.extensions[".webp"] = (module, filename) => {
 		module.exports = "data:image/webp;base64," + readFileSync(filename).toString("base64");
 	};
-	const obsidianStubPath = resolve(__dirname, "../../node_modules/obsidian/index.js");
-	await mkdir(dirname(obsidianStubPath), { recursive: true });
-	await writeFile(obsidianStubPath, buildObsidianStub());
 }
 
 function buildObsidianStub(): string {

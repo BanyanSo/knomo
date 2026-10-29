@@ -1,3 +1,4 @@
+import { controlWindowClock } from "./helpers/windowClock";
 import { LocalComposerDraftStore, type LocalComposerDraft } from "../src/ui/LocalComposerDraftStore";
 import test, { before } from "node:test";
 import assert from "node:assert/strict";
@@ -482,6 +483,7 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
 	const { editor, win, close } = environment("#");
+	const clock = controlWindowClock(win as unknown as Window);
 	const prototype = win.HTMLElement.prototype as unknown as Record<string, unknown>;
 	prototype.createDiv = function(this: HTMLElement, options: { cls?: string }) {
 		const child = this.ownerDocument.createElement("div");
@@ -620,20 +622,21 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 			if (release === "next-pointer") editor.input.dispatchEvent(new win.MouseEvent("pointerdown", { bubbles: true }));
 			if (release === "terminal-click") assert.equal(click(), false);
 			if (release === "reset") editor.reset("new session");
-			if (release === "timeout") await new Promise(resolve => win.setTimeout(resolve, 650));
+			if (release === "timeout") await clock.advance(650);
 			if (release === "unregister") unregister();
 			assert.equal(click(), true, release);
 			assert.equal(target.dispatchEvent(new win.MouseEvent("mousedown", {
 				bubbles: true, cancelable: true, clientX: 40, clientY: 80,
 			})), true, `${release}: 原候选上的尾随防护也须释放`);
 		}
-	} finally { unregister(); close(); }
+	} finally { unregister(); clock.restore(); close(); }
 });
 
 test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gestures", async () => {
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
 	const { editor, win, close } = environment("before #alph after");
+	const clock = controlWindowClock(win as unknown as Window);
 	const prototype = win.HTMLElement.prototype as unknown as Record<string, unknown>;
 	prototype.createDiv = function(this: HTMLElement, options: { cls?: string }) {
 		const child = this.ownerDocument.createElement("div");
@@ -678,7 +681,7 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 			const target = targetKind === "row" ? row : row.firstElementChild as HTMLElement;
 			const before = selections;
 			pointer(target, "pointerdown");
-			if (targetKind === "held-label") await new Promise(resolve => win.setTimeout(resolve, 650));
+			if (targetKind === "held-label") await clock.advance(650);
 			assert.equal(editor.input.value, initial, "停留期间不能提前补全");
 			pointer(target, "pointermove", 24, 23);
 			pointer(target, "pointerup", 24, 23);
@@ -745,7 +748,7 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 		assert.notEqual(win.document.querySelector(".knomo-tag-suggest-mobile"), popup);
 		pointer(row, "pointerup");
 		assert.equal(editor.input.value, initial, "候选重排后旧手势不能作用于新列表");
-	} finally { unregister(); close(); }
+	} finally { unregister(); clock.restore(); close(); }
 });
 
 test("IME 的 229 确认键即使没有 isComposing 也不进入快捷键", () => {

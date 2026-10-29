@@ -146,6 +146,10 @@ async function typographyBundle() {
 			builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "fixture" }));
 			builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: `
 				export const getLanguage = () => "en";
+				export const setIcon = (el, name) => {
+					const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+					svg.classList.add("svg-icon"); svg.setAttribute("data-icon", name); el.replaceChildren(svg);
+				};
 				export const prepareFuzzySearch = () => () => null;
 				export const renderResults = (el, text) => { el.textContent = text; };
 			`, loader: "js" }));
@@ -179,10 +183,10 @@ const installDomHelpers = () => {
 
 test("top titles and summaries retain hierarchy, spacing and button reachability across desktop and mobile layouts", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
 	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		for (const theme of ["theme-light", "theme-dark"]) for (const [layout, width] of [["desktop-wide", 1000], ["desktop-narrow", 540], ["mobile", 320], ["mobile", 390]] as const) {
@@ -303,9 +307,9 @@ test("top titles and summaries retain hierarchy, spacing and button reachability
 
 test("random day summary and back button share the random toolbar layout on desktop and mobile", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		for (const theme of ["theme-light", "theme-dark"]) for (const width of [1000, 540, 390, 320]) {
@@ -348,10 +352,10 @@ test("random day summary and back button share the random toolbar layout on desk
 
 test("Typography separates content from UI in desktop and body-mounted mobile Composer, preserving host controls and display exceptions", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
 	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		const errors: string[] = [];
@@ -428,9 +432,9 @@ test("Typography separates content from UI in desktop and body-mounted mobile Co
 
 test("live content font and width changes remeasure the real Composer without replacing state, selection, draft or history", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
 		const errors: string[] = [];
@@ -498,10 +502,10 @@ test("live content font and width changes remeasure the real Composer without re
 
 test("body-mounted Tag and Wiki candidates share typography with real measurement clones, clamp long content and retain keyboard selection", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await typographyBundle();
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	const css = readFileSync("styles.css", "utf8");
 	const host = process.env.KNOMO_LAYOUT_HOST_CSS ? readFileSync(process.env.KNOMO_LAYOUT_HOST_CSS, "utf8") : "";
-	const bundle = await typographyBundle();
 	try {
 		const page = await browser.newPage();
 		const errors: string[] = [];

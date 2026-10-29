@@ -13,6 +13,8 @@ import type { MemoRelationNode } from "../src/types/memoRelations";
 import type { MemoRelationOptions } from "../src/services/MemoRelationService";
 import type { MemoRelationsPageOptions } from "../src/ui/MemoRelationsPage";
 
+const relationScale = process.env.KNOMO_TEST_SCALE === "stress" ? 10000 : 150;
+
 async function fixture(withPreviews = false, withProductionCache = false, relations?: MemoRelationOptions,
 	renderCard?: MemoRelationsPageOptions["renderCard"]) {
 	await ensureObsidianStub();
@@ -1145,18 +1147,18 @@ test("关联页只展示直接引用者，通过记录菜单进入下一层后�
 	} finally { h.close(); }
 });
 
-test("全部引用者元数据立即可用，10000 条正文与 DOM 受窗口限制且无需手动翻页", async () => {
+test("规模边界：全部引用者元数据可用，正文与 DOM 受窗口限制", async () => {
 	const h = await fixture();
 	try {
 		Object.defineProperty(h.win.HTMLElement.prototype, "clientHeight", { configurable: true, get() { return 600; } });
-		const [a] = await h.seed("D.md", "- 10:00 A ^a\n" + Array.from({ length: 10000 }, (_, index) => `- 11:00 ref ${index} [[#^a]]\n`).join(""));
+		const [a] = await h.seed("D.md", "- 10:00 A ^a\n" + Array.from({ length: relationScale }, (_, index) => `- 11:00 ref ${index} [[#^a]]\n`).join(""));
 		const started = performance.now();
 		await h.page.open(a); await settle();
-		assert.equal((await h.read.relations.read()).referrers.get(observationHandleKey(a))?.length, 10000);
+		assert.equal((await h.read.relations.read()).referrers.get(observationHandleKey(a))?.length, relationScale);
 		assert.ok(h.host.querySelectorAll(".knomo-relation-window-row").length <= 25);
 		assert.ok(h.bodyReads() <= 27, `正文读取 ${h.bodyReads()} 应只含主体和初始窗口`);
 		assert.equal(h.host.querySelectorAll("[data-action='load-more']").length, 0);
-		console.log(JSON.stringify({ fixture: "10000 direct referrers", environment: "Node/jsdom, 600px simulated viewport", elapsedMs: Math.round(performance.now() - started),
+		console.log(JSON.stringify({ fixture: `${relationScale} direct referrers`, environment: "Node/jsdom, 600px simulated viewport", elapsedMs: Math.round(performance.now() - started),
 			bodyReads: h.bodyReads(), mountedRows: h.host.querySelectorAll(".knomo-relation-window-row").length }));
 	} finally { h.close(); }
 });
@@ -1180,18 +1182,18 @@ test("列表行与焦点在无关更新中复用，虚拟窗口可按键连续�
 	} finally { h.close(); }
 });
 
-test("10000 个直接引用者各有后续引用时，关联页只加载当前层正文", async () => {
+test("规模边界：直接引用者各有后续引用时只加载当前层正文", async () => {
 	const h = await fixture(true);
 	try {
-		const [a] = await h.seed("D.md", "- 10:00 A ^a\n" + Array.from({ length: 10000 }, (_, index) =>
+		const [a] = await h.seed("D.md", "- 10:00 A ^a\n" + Array.from({ length: relationScale }, (_, index) =>
 			`- 11:00 ref ${index} [[#^a]] ^r${index}\n- 12:00 child one ${index} [[#^r${index}]]\n- 13:00 child two ${index} [[#^r${index}]]\n`).join(""));
 		const started = performance.now();
 		await h.page.open(a); await settle();
-		assert.equal((await h.read.relations.read()).referrers.get(observationHandleKey(a))?.length, 10000);
+		assert.equal((await h.read.relations.read()).referrers.get(observationHandleKey(a))?.length, relationScale);
 		assert.ok(h.bodyReads() <= 27, `当前层主体与初始窗口读取 ${h.bodyReads()} 条正文`);
 		assert.ok(h.host.querySelectorAll(".knomo-relation-window-row").length <= 25);
 		assert.equal(h.page.el!.querySelector(".knomo-referrer-preview"), null);
-		console.log(JSON.stringify({ fixture: "10000 referrers, each with 2 incoming records", nodes: 30001,
+		console.log(JSON.stringify({ fixture: `${relationScale} referrers, each with 2 incoming records`, nodes: relationScale * 3 + 1,
 			environment: "Node/jsdom, 600px simulated viewport", elapsedMs: Math.round(performance.now() - started), bodyReads: h.bodyReads(),
 			mountedRows: h.host.querySelectorAll(".knomo-relation-window-row").length,
 			previewButtons: h.host.querySelectorAll(".knomo-referrer-preview").length }));

@@ -164,6 +164,8 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 				assert.equal(await page.locator(".knomo-share-preview > img").count(), 1);
 				for (let attempt = 0; attempt < 2; attempt++) {
 					await page.getByRole("button", { name: "Save to Vault root", exact: true }).click();
+					await page.waitForFunction((expected: number) => (window as any).vaultWrites.length === expected
+						&& document.querySelector('[data-share-action="vault"]:not(:disabled)') !== null, attempt + 1, { timeout: 10000 });
 					assert.equal(await page.locator(".knomo-share-status").textContent(), "");
 					assert.equal(await page.evaluate(() => (window as any).vaultWrites.length), attempt + 1);
 					assert.equal(await page.locator(".knomo-share-status").evaluate((el: HTMLElement) => el.classList.contains("is-error")), false);

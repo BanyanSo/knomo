@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import type { TranslationKey } from "../src/i18n";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
+import { createCardMemo } from "./helpers/memoCardFixture";
 
 test("桌面菜单的图标子节点、文字和行内空白均沿真实根路由执行一次，字数行不执行动作", async () => {
 	const f = await createMobilePopupFixture();
@@ -157,6 +158,10 @@ test("桌面滚动只重新定位打开的卡片菜单，保留其他卡片状�
 // 使用真实菜单 DOM、生产定位函数和浏览器布局；宿主 SVG 由占位图形代替，真实主题仍需 Obsidian 验收。
 test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆盖与 Knomo Token 放大下显示图标并限制裁切", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const f = await createMobilePopupFixture();
+	// 当前菜单仅在有直接引用者时显示关联入口，布局矩阵显式构造完整菜单。
+	assert.equal(f.card.querySelector('[data-memo-action="relations"]'), null);
+	const { syncMemoCardRelationsAction } = await import("../src/ui/KnomoCard");
+	syncMemoCardRelationsAction(f.card, createCardMemo({ id: "p0-memo" }), true);
 	const menus = { card: f.card.outerHTML, scope: f.scopeMenu.outerHTML };
 	f.close();
 	const { translate } = await import("../src/i18n");
@@ -169,8 +174,8 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 		"with-image": "filter.withImage", anniversary: "filter.anniversary", review: "nav.review", random: "nav.random", shuffleDay: "nav.shuffleDay",
 	};
 	const actionKeys: Record<string, TranslationKey> = {
-		edit: "card.edit", reference: "card.reference", "open-daily": "card.openDaily", relations: "relations.title",
-		"copy-text": "card.copyText", "copy-link": "card.copyLink", "share-image": "share.share", delete: "card.delete",
+		"share-image": "share.share", edit: "card.edit", reference: "card.reference", "copy-text": "card.copyText",
+		"open-daily": "card.openDaily", "copy-link": "card.copyLink", relations: "relations.title", delete: "card.delete",
 	};
 	const css = readFileSync("styles.css", "utf8");
 	const hostCss = process.env.KNOMO_HOST_CSS ? readFileSync(process.env.KNOMO_HOST_CSS, "utf8") : "";
@@ -254,7 +259,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					assert.equal(result.icons, 9, context);
 					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
 					if (kind === "card") {
-						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all seven actions remain in order`);
+						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all eight actions remain in order`);
 						const labels = Object.values(actionKeys).map(key => translate(locale, key));
 						assert.deepEqual(result.labels, labels, `${context}: translated labels include relations`);
 						assert.deepEqual(result.accessibleLabels, labels, `${context}: accessible names match visible text`);

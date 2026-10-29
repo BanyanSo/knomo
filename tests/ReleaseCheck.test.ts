@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,7 +37,7 @@ function git(root: string, ...args: string[]): string {
 	return result.stdout.trim();
 }
 
-function fixture(): string {
+function buildFixture(): string {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-release-check-"));
 	const files: Record<string, string> = {
 		".gitignore": ".tmp/\nnode_modules/\ndist/\nmain.js\n.agents/\ndocs/\n",
@@ -70,6 +70,17 @@ console.log('# tests 1\\n# pass 1\\n# fail 0');
 	git(root, "config", "user.name", "Release check fixture");
 	git(root, "add", "--all");
 	git(root, "commit", "--quiet", "-m", "fixture");
+	return root;
+}
+
+let template: string | undefined;
+after(() => { if (template) removeFixture(template); });
+
+function fixture(): string {
+	// 基础仓库只读复用，每个场景复制完整文件与 .git，避免共享可变状态。
+	template ??= buildFixture();
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-release-check-"));
+	fs.cpSync(template, root, { recursive: true });
 	return root;
 }
 

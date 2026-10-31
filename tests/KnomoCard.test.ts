@@ -252,7 +252,18 @@ test("memo card action menu includes open daily in the requested order", async (
 		"delete",
 	]);
 	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
+	assert.deepEqual(actions.map((action) => action.getAttr("data-menu-section")), [
+		"knomo-card-primary", "knomo-card-primary", "knomo-card-primary", "knomo-card-primary",
+		"knomo-card-navigation", "knomo-card-navigation", "knomo-card-danger",
+	]);
 	assert.equal(root.find(".knomo-card-word-count")?.getText(), "Words: 1");
+	assert.deepEqual(root.findAll(".knomo-card-menu-separator").map(separator => [
+		separator.getAttr("role"), separator.getAttr("data-before-section"),
+	]), [
+		["separator", "knomo-card-navigation"],
+		["separator", "knomo-card-danger"],
+		["separator", "knomo-card-info"],
+	]);
 	assert.deepEqual(actions.map((action) => action.find(".knomo-menu-icon")?.getAttr("data-icon")), [
 		"share", "pencil", "message-square-quote", "copy", "calendar-days", "link", "trash-2",
 	]);

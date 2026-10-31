@@ -46,6 +46,24 @@ interface DesktopMenuView {
 	handleCardFlowScroll(): void;
 }
 
+test("桌面菜单统一使用独立分隔线，关联入口动态更新不进入删除分组", async () => {
+	const f = await createMobilePopupFixture();
+	const { syncMemoCardRelationsAction } = await import("../src/ui/KnomoCard");
+	try {
+		const menu = f.card.querySelector<HTMLElement>(".knomo-card-actions")!;
+		const separators = Array.from(menu.querySelectorAll('[role="separator"]'));
+		for (const hasReferrers of [true, true, false, true, false]) {
+			syncMemoCardRelationsAction(f.card, createCardMemo({ id: "p0-memo" }), hasReferrers);
+			assert.deepEqual(Array.from(menu.querySelectorAll('[role="separator"]')), separators);
+			assert.deepEqual(separators.map(el => el.nextElementSibling?.getAttribute("data-memo-action") ?? el.nextElementSibling?.className), [
+				"open-daily", "delete", "knomo-card-word-count",
+			]);
+			assert.equal(separators[1].previousElementSibling?.getAttribute("data-memo-action"), hasReferrers ? "relations" : "copy-link");
+			assert.ok(separators.every(el => !el.hasAttribute("tabindex") && !el.hasAttribute("data-memo-action")));
+		}
+	} finally { f.close(); }
+});
+
 async function createDesktopMenuPositionFixture() {
 	const f = await createMobilePopupFixture();
 	const { KnomoView } = await import("../src/ui/KnomoView");
@@ -248,6 +266,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 							rowsFit: rows.every(el => el.getBoundingClientRect().height >= 32 && el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1),
 							fontSizes: rows.map(el => getComputedStyle(el).fontSize),
 							wordCountSize: getComputedStyle(card.querySelector(".knomo-card-word-count")!).fontSize,
+							groupSeparators: kind === "card" ? Array.from(menu.querySelectorAll<HTMLElement>('[role="separator"]')).map(el => ({ section: el.dataset.beforeSection, border: getComputedStyle(el).borderTopStyle })) : [],
 							lastStartReachable,
 							lastReachable: last.getBoundingClientRect().bottom <= menu.getBoundingClientRect().bottom + 1,
 							scrollable: menu.scrollHeight > menu.clientHeight,
@@ -260,6 +279,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
 					if (kind === "card") {
 						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all eight actions remain in order`);
+						assert.deepEqual(result.groupSeparators, ["knomo-card-navigation", "knomo-card-danger", "knomo-card-info"].map(section => ({ section, border: "solid" })), `${context}: all groups use the same separator`);
 						const labels = Object.values(actionKeys).map(key => translate(locale, key));
 						assert.deepEqual(result.labels, labels, `${context}: translated labels include relations`);
 						assert.deepEqual(result.accessibleLabels, labels, `${context}: accessible names match visible text`);

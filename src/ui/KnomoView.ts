@@ -13,7 +13,7 @@ import { CatalogQueryCancelledError, compareCatalogObservations } from "../servi
 import { DesktopDrawerFocus, getDrawerWidth, resolveLayout, type LayoutMode } from "./KnomoLayout";
 import { registerComposerToolGesture } from "./ComposerToolGesture";
 import type { KnomoQuickCommand } from "./KnomoQuickCommands";
-import { getMemoCardActions, getMemoSourceReferenceMeta, isMemoCardMenuReady, MEMO_ACTION_ICONS, MEMO_WORD_COUNT_ICON } from "./KnomoCardMetadata";
+import { getMemoCardActions, getMemoCardActionSection, getMemoSourceReferenceMeta, isMemoCardMenuReady, MEMO_ACTION_ICONS, MEMO_WORD_COUNT_ICON } from "./KnomoCardMetadata";
 import { positionDesktopMenu } from "./DesktopMenuPosition";
 import { getMemoContentStats } from "../utils/memoContentStats";
 import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
@@ -7283,8 +7283,7 @@ export class KnomoView extends ItemView {
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen, card?.hasAttribute("data-has-referrers") === true)) {
-					const section = action === "delete" ? "knomo-card-danger"
-						: ["share-image", "edit", "reference", "copy-text"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
+					const section = getMemoCardActionSection(action);
 					const focus = action === "edit" || action === "reference" || action === "open-daily" || action === "share-image" ? "action" : "view";
 					menu.addItem(item => item.setSection(section).setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
 						.onClick(event => { const focusVisible = isKeyboardActivation(event); select(() => { void this.handleMemoAction(action, memo, focusVisible); }, focus); }));

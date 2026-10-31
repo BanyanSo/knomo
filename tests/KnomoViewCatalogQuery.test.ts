@@ -24,7 +24,7 @@ test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛�
 	state.searchQuery = " historical text ";
 	assert.deepEqual(view.buildCatalogActiveQuery(false), { textTerms: ["historical text"] });
 	state.searchQuery = "";
-	for (const [scope, expected] of [["with-link", { hasLink: true }], ["with-image", { hasImage: true }], ["no-tag", { hasTag: false }]] as const) {
+	for (const [scope, expected] of [["with-link", { hasLink: true }], ["with-image", { hasImage: true }], ["no-tag", { hasTag: false }], ["referenced", { hasReferrers: true }]] as const) {
 		state.scopeFilter = scope;
 		assert.deepEqual(view.buildCatalogActiveQuery(false), expected);
 	}

@@ -50,7 +50,7 @@ test("renders desktop and compact header search structure", async () => {
 	renderKnomoScopePopover(scopeHost.asHtml(), "knomo-scope-popover knomo-mobile-scope-popover");
 	assert.ok(scopeHost.findAll(".knomo-button-icon").every((icon) => icon.getAttr("aria-hidden") === "true"));
 	assert.deepEqual(scopeHost.findAll(".knomo-button-icon").map((icon) => icon.getAttr("data-icon")), [
-		"knomo-all-notes", "list-todo", "tag", "link", "image", "history", "calendar-check", "knomo-random-reunion", "calendar-days",
+		"knomo-all-notes", "list-todo", "tag", "link", "image", "message-square-reply", "history", "calendar-check", "knomo-random-reunion", "calendar-days",
 	]);
 	assert.deepEqual(scopeHost.findAll("[data-title-mode]").map((item) => item.getAttr("data-title-mode")), [
 		"all",
@@ -58,11 +58,14 @@ test("renders desktop and compact header search structure", async () => {
 		"no-tag",
 		"with-link",
 		"with-image",
+		"referenced",
 		"anniversary",
 		"review",
 		"random",
 		"shuffleDay",
 	]);
+	assert.deepEqual(scopeHost.findAll("[role='separator']").map(item => item.getAttr("data-before-group")), ["filters", "revisit"]);
+	assert.ok(scopeHost.findAll("[role='separator']").every(item => item.getAttr("tabindex") === null && item.getAttr("data-title-mode") === null));
 
 	const compact = renderKnomoCompactHeader(root.asHtml(), options);
 	assert.equal(root.find("[data-action='open-drawer']")?.hasClass("knomo-compact-menu-btn"), true);

@@ -20,6 +20,19 @@ const baseTitleState: ViewTitleState = {
 	recordStatsSearchFilter: null,
 };
 
+test("标题菜单分三组，被引用是独立固定筛选并在两端显示相同标题", () => {
+	assert.deepEqual(TITLE_MODE_OPTIONS.map(item => [item.mode, item.group]), [
+		["all", "views"], ["things", "views"],
+		["no-tag", "filters"], ["with-link", "filters"], ["with-image", "filters"], ["referenced", "filters"],
+		["anniversary", "revisit"], ["review", "revisit"], ["random", "revisit"], ["shuffleDay", "revisit"],
+	]);
+	const state: ViewTitleState = { ...baseTitleState, scopeFilter: "referenced" };
+	assert.equal(getDesktopTitleLabel(state), "Referenced");
+	assert.equal(getMobileTitleLabel(state), "Referenced");
+	assert.equal(getCurrentTitleMode(state), "referenced");
+	assert.equal(translate("zh-CN", "filter.referenced"), "被引用");
+});
+
 test("Things 固定入口紧随全部笔记，组合查询仍显示正式名称", () => {
 	assert.deepEqual(getSidebarNavItems().slice(0, 2).map(item => item.nav), ["all", "things"]);
 	assert.deepEqual(TITLE_MODE_OPTIONS.slice(0, 2).map(item => item.mode), ["all", "things"]);

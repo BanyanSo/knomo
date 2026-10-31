@@ -15,10 +15,11 @@ export type ScopeFilter =
 	| "anniversary"
 	| "no-tag"
 	| "with-link"
+	| "referenced"
 	| "with-image";
 
 export type SearchDateFilter = "week" | "month" | "last-7" | "last-30" | "last-week" | "last-month";
-export type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "anniversary";
+export type SummaryScopeFilter = "no-tag" | "with-link" | "with-image" | "referenced" | "anniversary";
 
 export type RecordStatsSearchFilter = CatalogRecordStatsFilter;
 
@@ -309,7 +310,7 @@ export function formatTagFilterText(tag: string): string {
 }
 
 export function isSummaryScopeFilter(filter: ScopeFilter): filter is SummaryScopeFilter {
-	return filter === "no-tag" || filter === "with-link" || filter === "with-image" || filter === "anniversary";
+	return filter === "no-tag" || filter === "with-link" || filter === "with-image" || filter === "referenced" || filter === "anniversary";
 }
 
 export function parseLocalDateText(value: string): Date | null {
@@ -318,6 +319,7 @@ export function parseLocalDateText(value: string): Date | null {
 }
 
 export function getScopeLabel(filter: ScopeFilter): string {
+	if (filter === "referenced") return t("filter.referenced");
 	if (filter === "no-tag") return t("filter.noTag");
 	if (filter === "with-link") return t("filter.withLink");
 	if (filter === "with-image") return t("filter.withImage");
@@ -363,6 +365,7 @@ function getSearchDateEmptyTitle(filter: SearchDateFilter): string {
 }
 
 function getScopeEmptyTitle(filter: SummaryScopeFilter): string {
+	if (filter === "referenced") return t("filterEmpty.scope.referenced");
 	if (filter === "no-tag") return t("filterEmpty.scope.noTag");
 	if (filter === "with-link") return t("filterEmpty.scope.withLink");
 	if (filter === "with-image") return t("filterEmpty.scope.withImage");

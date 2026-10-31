@@ -32,6 +32,35 @@ function searchFilter(text: string): CatalogQueryFilter {
 	return { textTerms: parsed.terms, ...(parsed.date ? { searchDate: parsed.date } : {}) };
 }
 
+test("被引用固定入口使用直接关系，查询计数分页一致，移除引用后更新成员", async () => {
+	const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+	Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } });
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore());
+	await catalog.open();
+	const store = catalog.getStore(), reader = new CatalogReadService({ catalog });
+	const source = buildSearchSourceScope({ activeNav: "all", scopeFilter: "referenced", activeTag: null, activeTagKey: null, recordStatsSearchFilter: null });
+	assert.deepEqual(source, { hasReferrers: true });
+	const date = "2026-10-09";
+	const contents = ["A [[#^b]] [[#^b]]", "B [[#^d]] ^b", "C [[#^b]]", "D ^d", "E [[#^e]] ^e", "orphan ^orphan", "missing [[#^missing]]"];
+	try {
+		await store.replaceFilePartition(searchPartition(date, contents));
+		await store.setCoverage({ kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+		const first = await reader.query({ ...source, limit: 1 });
+		assert.equal(first.items.length, 1); assert.ok(first.nextCursor);
+		const second = await reader.query({ ...source, limit: 1, cursor: first.nextCursor });
+		assert.equal(second.nextCursor, null);
+		assert.deepEqual([...first.items, ...second.items].map(item => item.observation.content).sort(), ["B [[#^d]]", "D"]);
+		assert.equal((await reader.count(source)).count, 2);
+		await store.replaceFilePartition(searchPartition(date, ["A", contents[1], "C", ...contents.slice(3)]));
+		reader.relations.invalidate();
+		assert.deepEqual((await reader.query({ ...source, limit: 20 })).items.map(item => item.observation.content), ["D"]);
+		assert.equal((await reader.count(source)).count, 1);
+	} finally {
+		reader.relations.dispose(); store.close();
+		if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window");
+	}
+});
+
 test("生产 Catalog 查询父标签包含同名和子标签，排除相邻标签，两个 store 一致", async () => {
 	const name = `knomo-parent-tag-${Date.now()}-${Math.random()}`;
 	const stores = [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange })];

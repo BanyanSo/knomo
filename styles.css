@@ -2758,7 +2758,8 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	background: var(--knomo-row-hover);
 }
 
-.knomo-plugin .knomo-card-menu-separator {
+.knomo-plugin .knomo-card-menu-separator,
+.knomo-plugin .knomo-scope-menu-separator {
 	flex: 0 0 auto;
 	height: 0;
 	margin: 6px 0;

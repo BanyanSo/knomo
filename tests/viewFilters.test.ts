@@ -9,6 +9,14 @@ import {
 	parseLocalDateText,
 } from "../src/ui/viewFilters";
 
+test("被引用固定筛选提供摘要与完成态空文案", () => {
+	const state = { activeTag: null, activeTagKey: null, searchQuery: "", searchDateFilter: null,
+		recordStatsSearchFilter: null, scopeFilter: "referenced" as const };
+	assert.deepEqual(getRegularFilterConditions(state), [{ type: "scope", text: "Referenced", filter: "referenced" }]);
+	assert.equal(getRegularFilterCopy(state, 2)?.summary, "Referenced: 2 Memos");
+	assert.equal(getRegularFilterCopy(state, 0)?.emptyTitle, "No referenced notes yet");
+});
+
 test("Things 摘要包含所有 AND 条件", () => {
 	const state = { activeNav: "things" as const, activeTag: "project", activeTagKey: "project", searchQuery: "release", searchDateFilter: "week" as const, recordStatsSearchFilter: null, scopeFilter: "all" as const };
 	assert.deepEqual(getRegularFilterConditions(state).map(item => item.type), ["things", "tag", "search", "date"]);

@@ -189,6 +189,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 	});
 	const scopeKeys: Record<string, TranslationKey> = {
 		all: "nav.allNotes", things: "nav.things", "no-tag": "filter.noTag", "with-link": "filter.withLink",
+		referenced: "filter.referenced",
 		"with-image": "filter.withImage", anniversary: "filter.anniversary", review: "nav.review", random: "nav.random", shuffleDay: "nav.shuffleDay",
 	};
 	const actionKeys: Record<string, TranslationKey> = {
@@ -209,7 +210,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 				const scope = narrow ? menus.scope : menus.scope.replace("knomo-mobile-scope-popover", "knomo-desktop-scope-popover");
 				await page.setViewportSize({ width, height });
 				await page.setContent(`<style>${hostCss}${css}
-					body{margin:0;display:block;font:${font}px Arial;background:var(--background-primary);--font-ui-medium:${font}px;--border-width:1px;--text-normal:${theme === "theme-dark" ? "#ddd" : "#222"};--text-muted:var(--text-normal);--text-error:#d33;--background-primary:${theme === "theme-dark" ? "#222" : "#fff"};--background-secondary:var(--background-primary)}
+					body{margin:0;display:block;font:${font}px Arial;background:var(--background-primary);--font-ui-medium:${font}px;--border-width:1px;--text-normal:${theme === "theme-dark" ? "#ddd" : "#222"};--text-muted:var(--text-normal);--text-error:#d33;--background-modifier-border:${theme === "theme-dark" ? "#444" : "#ccc"};--background-primary:${theme === "theme-dark" ? "#222" : "#fff"};--background-secondary:var(--background-primary)}
 					body{--knomo-text-ui-medium:${15 * scale}px;--knomo-text-ui-base:${14 * scale}px;--knomo-text-meta:${13 * scale}px;--knomo-text-caption:${12 * scale}px}
 					#root{position:relative;display:block;margin:20px;width:calc(100vw - 40px);height:calc(100vh - 40px)}
 					#bounds{position:relative;display:block;width:100%;height:100%;padding:0;overflow:hidden}
@@ -267,6 +268,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 							fontSizes: rows.map(el => getComputedStyle(el).fontSize),
 							wordCountSize: getComputedStyle(card.querySelector(".knomo-card-word-count")!).fontSize,
 							groupSeparators: kind === "card" ? Array.from(menu.querySelectorAll<HTMLElement>('[role="separator"]')).map(el => ({ section: el.dataset.beforeSection, border: getComputedStyle(el).borderTopStyle })) : [],
+							scopeSeparators: kind === "scope" ? Array.from(menu.querySelectorAll<HTMLElement>('[role="separator"]')).map(el => ({ group: el.dataset.beforeGroup, border: getComputedStyle(el).borderTopStyle })) : [],
 							lastStartReachable,
 							lastReachable: last.getBoundingClientRect().bottom <= menu.getBoundingClientRect().bottom + 1,
 							scrollable: menu.scrollHeight > menu.clientHeight,
@@ -275,7 +277,8 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					const context = `${theme}/${font}/${scale}/${locale}/${width}/${kind}`;
 					assert.equal(result.within, true, context);
 					assert.equal(result.width, Math.min(168, result.boundWidth - 16), context);
-					assert.equal(result.icons, 9, context);
+					assert.equal(result.icons, kind === "scope" ? 10 : 9, context);
+					if (kind === "scope") assert.deepEqual(result.scopeSeparators, ["filters", "revisit"].map(group => ({ group, border: "solid" })), context);
 					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
 					if (kind === "card") {
 						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all eight actions remain in order`);

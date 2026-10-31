@@ -18,6 +18,7 @@ export function buildSearchSourceScope(context: SearchSourceContext, today = new
 	}
 	if (context.scopeFilter === "with-image") { filter.hasImage = true; }
 	if (context.scopeFilter === "with-link") { filter.hasLink = true; }
+	if (context.scopeFilter === "referenced") { filter.hasReferrers = true; }
 	if (context.scopeFilter === "no-tag") { filter.hasTag = false; }
 	if (context.scopeFilter === "anniversary") {
 		filter.monthDay = formatDatePart(today).slice(5);

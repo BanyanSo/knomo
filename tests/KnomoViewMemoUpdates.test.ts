@@ -386,12 +386,13 @@ test("新建不匹配当前标签时保存和索引接续均不重绘卡片，�
 	assert.equal(renders, 0);
 });
 
-test("被引用钻取保存普通 Memo 时，Catalog 挂起或失败均不加入未经关系确认的记录", async () => {
-	for (const failed of [false, true]) {
+test("被引用固定筛选和钻取保存普通 Memo 时，Catalog 挂起或失败均不加入未经关系确认的记录", async () => {
+	for (const scope of [false, true]) for (const failed of [false, true]) {
 		const gate = deferred<void>();
 		const h = await fixture({ immediate: true, catalogGate: gate.promise, body: "## Memos\n- 09:00 target ^a\n- 10:00 source [[#^a]]\n" });
 		h.view.memos = [h.memos[0]!];
-		h.view.viewStateController.recordStatsSearchFilter = { type: "referenced", startDate: "1900-01-01", endDateExclusive: "2099-01-01" };
+		if (scope) h.view.viewStateController.scopeFilter = "referenced";
+		else h.view.viewStateController.recordStatsSearchFilter = { type: "referenced", startDate: "1900-01-01", endDateExclusive: "2099-01-01" };
 		h.view.reloadMemos = async () => {
 			const { toCatalogMemoView } = await import("../src/types/memoView");
 			h.view.memos = (await h.read.query({ hasReferrers: true, limit: 20 })).items.map(toCatalogMemoView);
@@ -410,14 +411,15 @@ test("被引用钻取保存普通 Memo 时，Catalog 挂起或失败均不加入
 });
 
 test("多页被引用筛选保存普通 Memo 后保留摘要与卡片，计数接续失败才撤下旧数量", async t => {
-	for (const countFails of [false, true]) {
+	for (const scope of [false, true]) for (const countFails of [false, true]) {
 		const catalogGate = deferred<void>(), countGate = deferred<void>();
 		const body = "## Memos\n" + Array.from({ length: 60 }, (_, index) => `- 09:00 target-${index} ^a-${index}\n`).join("")
 			+ "- 10:00 source " + Array.from({ length: 60 }, (_, index) => `[[#^a-${index}]]`).join(" ") + "\n";
 		const h = await fixture({ immediate: true, catalogGate: catalogGate.promise, body });
 		const { toCatalogMemoView } = await import("../src/types/memoView");
 		const { getMemoListStateKey } = await import("../src/ui/MemoRenderRevision");
-		h.view.viewStateController.recordStatsSearchFilter = { type: "referenced", startDate: "1900-01-01", endDateExclusive: "2099-01-01" };
+		if (scope) h.view.viewStateController.scopeFilter = "referenced";
+		else h.view.viewStateController.recordStatsSearchFilter = { type: "referenced", startDate: "1900-01-01", endDateExclusive: "2099-01-01" };
 		const production = Object.getPrototypeOf(h.view);
 		const query = production.buildCatalogActiveQuery.call(h.view, true);
 		const initial = await h.read.query({ ...query, limit: 50 });

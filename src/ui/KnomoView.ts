@@ -944,6 +944,7 @@ export class KnomoView extends ItemView {
 			getRootEl: () => this.rootEl,
 			isMobileLayout: () => this.currentLayout === "mobile",
 			getQueryContextKey: () => JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter]),
+			getSourceScope: () => this.scopeFilter === "referenced" ? "referenced" : "all",
 			projectResults: (memos, filter) => this.confirmedDailyMemos?.merge(memos, filter) ?? mergeCatalogMemoPages(memos),
 			hasPendingConfirmedMemos: () => this.confirmedDailyMemos?.pending ?? false,
 			onResultsAccepted: page => {
@@ -1689,7 +1690,7 @@ export class KnomoView extends ItemView {
 		});
 		if (confirmed) {
 			// 入向关联只能由关系查询确认；即时提交仍可更新列表中已有的成员。
-			const additions = this.recordStatsSearchFilter?.type === "referenced" ? [] : inserted;
+			const additions = this.isReferrerQuery() ? [] : inserted;
 			this.memos = [...new Map([...this.memos, ...additions].map(memo => [memo.id, memo])).values()]
 				.sort((left, right) => compareCatalogObservations(left.catalog!.observation, right.catalog!.observation));
 			this.cancelCatalogDesktopCount();
@@ -2362,7 +2363,7 @@ export class KnomoView extends ItemView {
 				this.renderUiState();
 				return true;
 			}
-			const retainRelations = this.recordStatsSearchFilter?.type === "referenced" && load.status.relations?.complete === false
+			const retainRelations = this.isReferrerQuery() && load.status.relations?.complete === false
 				&& this.hasCommittedCatalogDesktopQuery && this.memos.length > 0 && previousQueryFingerprint === queryFingerprint;
 			if (!retainRelations) this.memos = load.memos;
 			else this.catalogCursor = null;
@@ -2394,7 +2395,7 @@ export class KnomoView extends ItemView {
 			}
 			loaded = true;
 		} catch (error) {
-			if (!controller.signal.aborted && this.recordStatsSearchFilter?.type === "referenced"
+			if (!controller.signal.aborted && this.isReferrerQuery()
 				&& (error instanceof CatalogDiscoveryInvalidatedError || error instanceof MemoRelationsChangedError)) this.queueRelationQueryRefresh(queryFingerprint, true);
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError
 				|| error instanceof CatalogDiscoveryInvalidatedError || error instanceof MemoRelationsChangedError || error instanceof TimeBuoyIndexPendingError) {
@@ -2411,7 +2412,7 @@ export class KnomoView extends ItemView {
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
 				return false;
 			}
-			if (this.recordStatsSearchFilter?.type === "referenced") {
+			if (this.isReferrerQuery()) {
 				this.catalogDesktopTotalCount = null; this.catalogDesktopCountPresentation = null;
 				const key = JSON.stringify([queryFingerprint, this.catalogRevision, catalogCoverageKey(this.catalogCoverage)]);
 				const recover = this.relationQueryFailureKey !== key;
@@ -2594,7 +2595,7 @@ export class KnomoView extends ItemView {
 		} finally {
 			if (this.catalogDesktopCountController === controller) {
 				this.catalogDesktopCountController = null;
-				if (!accepted && !controller.signal.aborted && !this.trashViewClosed && this.recordStatsSearchFilter?.type === "referenced"
+				if (!accepted && !controller.signal.aborted && !this.trashViewClosed && this.isReferrerQuery()
 					&& options.sourceGeneration === this.memoSourceGeneration && options.queryRun === this.catalogDesktopQueryRun
 					&& this.isCatalogQueryCurrent(options.queryFingerprint, options.loadAll)) {
 					const previousCardFlowKey = this.getCardFlowStateKey();
@@ -2747,7 +2748,7 @@ export class KnomoView extends ItemView {
 			if (queryRun !== this.catalogDesktopQueryRun
 				|| !this.isCatalogQueryCurrent(queryFingerprint, true)) return false;
 			if (page.invalidated || (coverageKey !== catalogCoverageKey(this.catalogCoverage) && catalogCoverageKey(page.coverage) !== catalogCoverageKey(this.catalogCoverage))) {
-				if (this.recordStatsSearchFilter?.type === "referenced") {
+				if (this.isReferrerQuery()) {
 					this.catalogCursor = null; this.catalogDesktopTotalCount = null; this.catalogDesktopCountPresentation = null;
 					this.catalogStatus = { ...this.catalogStatus, relations: { complete: false, failed: false, stale: true } };
 					this.removeRelationResultCount(); this.queueRelationQueryRefresh(queryFingerprint, true); return false;
@@ -2775,7 +2776,7 @@ export class KnomoView extends ItemView {
 			return true;
 		} catch (error) {
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) return false;
-			if (this.recordStatsSearchFilter?.type === "referenced" && (error instanceof MemoRelationsChangedError || error instanceof CatalogDiscoveryInvalidatedError)) {
+			if (this.isReferrerQuery() && (error instanceof MemoRelationsChangedError || error instanceof CatalogDiscoveryInvalidatedError)) {
 				this.catalogCursor = null; this.catalogDesktopTotalCount = null; this.catalogDesktopCountPresentation = null;
 				this.removeRelationResultCount(); this.queueRelationQueryRefresh(queryFingerprint, true); return false;
 			}
@@ -2793,6 +2794,10 @@ export class KnomoView extends ItemView {
 		const page = await this.getCatalogReadService().query({ ...query, limit: CATALOG_PAGE_SIZE, cursor }, signal);
 		signal.throwIfAborted();
 		return { ...page, items: page.items.map(toCatalogMemoView) };
+	}
+
+	private isReferrerQuery(): boolean {
+		return this.scopeFilter === "referenced" || this.recordStatsSearchFilter?.type === "referenced";
 	}
 
 	private buildCatalogActiveQuery(loadAll: boolean, today = new Date()): CatalogQueryFilter {
@@ -4026,7 +4031,7 @@ export class KnomoView extends ItemView {
 		if (presentation.type === "empty" && this.shouldShowTimeBuoyIntro() && this.cardFlowError === null) {
 			presentation = { type: "items", memos: [], mode: "memo", headers: [] };
 		}
-		if (this.recordStatsSearchFilter?.type === "referenced" && presentation.type === "items") {
+		if (this.isReferrerQuery() && presentation.type === "items") {
 			presentation = { ...presentation, headers: presentation.headers.map(header => header.type === "summary" && !header.action && !header.feedback
 				? { ...header, relationCount: true } : header) };
 		}
@@ -4041,7 +4046,7 @@ export class KnomoView extends ItemView {
 				&& (this.activeNav === "things" || presentation.type === "empty") && headers.length === 0) {
 				headers.push({ type: "summary", text: t("catalog.incompleteResults") });
 			}
-			if (this.catalogStatus.relations?.complete === false && this.recordStatsSearchFilter?.type === "referenced"
+			if (this.catalogStatus.relations?.complete === false && this.isReferrerQuery()
 				&& presentation.type === "empty") presentation = { type: "items", memos: [], mode: "memo", headers: [] };
 			if (headers.length === 0) return presentation;
 			return presentation.type === "items"
@@ -5554,6 +5559,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private setScope(scope: ScopeFilter): void {
+		if (scope === "referenced") this.catalogReadService?.relations.beginReading();
 		this.rememberHistoryBrowsePosition("all");
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
@@ -5564,6 +5570,15 @@ export class KnomoView extends ItemView {
 			this.renderScopeState();
 			this.syncSearchInputs();
 			return;
+		}
+		if (scope === "referenced") {
+			// 普通卡片投影无法判断入向关系，首次切入不能用旧范围冒充筛选结果。
+			this.memos = [];
+			this.filteredMemosCache = null;
+			this.hasCommittedCatalogDesktopQuery = false;
+			this.catalogDesktopTotalCount = null;
+			this.catalogDesktopCountPresentation = null;
+			this.initialCatalogQueryPending = true;
 		}
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
@@ -5671,7 +5686,7 @@ export class KnomoView extends ItemView {
 		const sourceGeneration = this.memoSourceGeneration, searchVersion = this.viewStateController.search.version;
 		this.relationQueryRefreshTimer = this.containerEl.win.setTimeout(() => {
 			this.relationQueryRefreshTimer = null;
-			if (!this.trashViewClosed && this.recordStatsSearchFilter?.type === "referenced" && sourceGeneration === this.memoSourceGeneration
+			if (!this.trashViewClosed && this.isReferrerQuery() && sourceGeneration === this.memoSourceGeneration
 				&& searchVersion === this.viewStateController.search.version && queryFingerprint === this.getCatalogQueryFingerprint(true)) this.refreshCatalogActiveQuery();
 		}, 45);
 	}
@@ -7312,7 +7327,7 @@ export class KnomoView extends ItemView {
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
 				for (const option of TITLE_MODE_OPTIONS) {
-					menu.addItem(item => item.setTitle(createTitle(option.label)).setIcon(option.icon).setChecked(option.mode === mode)
+					menu.addItem(item => item.setSection(`knomo-scope-${option.group}`).setTitle(createTitle(option.label)).setIcon(option.icon).setChecked(option.mode === mode)
 						.onClick(() => select(() => this.setTitleMode(option.mode))));
 				}
 			},
@@ -7527,7 +7542,7 @@ export class KnomoView extends ItemView {
 				prepare: () => { if (!this.trashViewClosed && this.activeNav === "record-stats") void this.prepareRecordStats(); },
 			});
 		}
-		if ((this.activeNav !== "record-stats" && this.recordStatsSearchFilter?.type === "referenced")
+		if ((this.activeNav !== "record-stats" && this.isReferrerQuery())
 			|| (this.mobileSearchPageOpen && this.mobileRecordStatsSearchFilter?.type === "referenced")) {
 			this.catalogStatus = { ...this.catalogStatus, relations: { complete: false, failed: false, stale: true } };
 			this.catalogDesktopTotalCount = null;

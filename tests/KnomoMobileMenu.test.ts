@@ -227,7 +227,7 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 	} finally { h.close(); }
 });
 
-test("Scope Menu keeps all nine modes and checks only the current mode; delayed old hide cannot close a new menu", async () => {
+test("Scope Menu keeps ten modes in three native sections and checks only the current mode; delayed old hide cannot close a new menu", async () => {
 	const h = await createHarness();
 	const { TITLE_MODE_OPTIONS } = await import("../src/ui/viewNavigation");
 	try {
@@ -238,6 +238,10 @@ test("Scope Menu keeps all nine modes and checks only the current mode; delayed 
 		assert.equal(h.controller.kind, "scope");
 		assert.ok(menu.items[0].dom.closest(".knomo-mobile-menu-scope"));
 		assert.deepEqual(menu.items.map(item => item.title), TITLE_MODE_OPTIONS.map(item => item.label));
+		assert.deepEqual(menu.items.map(item => item.section), [
+			...Array(2).fill("knomo-scope-views"), ...Array(4).fill("knomo-scope-filters"), ...Array(4).fill("knomo-scope-revisit"),
+		]);
+		assert.deepEqual(menu.separators, [], "原生 section 不额外叠加分隔行");
 		assert.deepEqual(menu.items.map((item, index) => item.checked ? index : -1).filter(index => index >= 0), [4]);
 		old.hidden!(); old.items[0].click!();
 		assert.equal(h.controller.kind, "scope");
@@ -247,6 +251,21 @@ test("Scope Menu keeps all nine modes and checks only the current mode; delayed 
 		menu.hidden!(); menu.items[3].click!();
 		assert.deepEqual(h.scopes, ["with-link"]);
 		assert.equal(h.f.popup.scopeMenuOpen, false);
+	} finally { h.close(); }
+});
+
+test("移动菜单被引用选中态与首次轻触一次派发", async () => {
+	const h = await createHarness();
+	try {
+		Object.assign(h.view, { getTitleState: () => ({ activeNav: "all", activeTagKey: null, scopeFilter: "referenced" }) });
+		h.view.toggleScopeMenu();
+		const menu = h.menus[0], item = menu.items.find(item => item.title === "Referenced")!;
+		assert.equal(item.icon, "message-square-reply");
+		assert.equal(item.checked, true);
+		assert.equal(menu.items.filter(item => item.checked).length, 1);
+		item.dom.click(); item.dom.click();
+		assert.deepEqual(h.scopes, ["referenced"]);
+		assert.equal(h.controller.kind, null);
 	} finally { h.close(); }
 });
 

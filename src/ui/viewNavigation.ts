@@ -8,7 +8,7 @@ import {
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 
 export type SidebarNav = "things" | "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "time-buoy" | "record-stats" | "trash";
-export type TitleMode = "things" | "all" | "no-tag" | "with-link" | "with-image" | "anniversary" | "review" | "random" | "shuffleDay";
+export type TitleMode = "things" | "all" | "no-tag" | "with-link" | "with-image" | "referenced" | "anniversary" | "review" | "random" | "shuffleDay";
 
 export interface SearchDateOption {
 	filter: SearchDateFilter;
@@ -19,6 +19,7 @@ export interface SearchDateOption {
 
 export interface TitleModeOption {
 	mode: TitleMode;
+	group: "views" | "filters" | "revisit";
 	label: string;
 	icon: string;
 	nav?: SidebarNav;
@@ -54,15 +55,16 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 export const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: t("nav.trash"), icon: "trash-2" };
 
 export const TITLE_MODE_OPTIONS: TitleModeOption[] = [
-	{ mode: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
-	{ mode: "things", label: t("nav.things"), icon: "list-todo", nav: "things" },
-	{ mode: "no-tag", label: t("filter.noTag"), icon: "tag", scope: "no-tag" },
-	{ mode: "with-link", label: t("filter.withLink"), icon: "link", scope: "with-link" },
-	{ mode: "with-image", label: t("filter.withImage"), icon: "image", scope: "with-image" },
-	{ mode: "anniversary", label: t("filter.anniversary"), icon: "history", scope: "anniversary" },
-	{ mode: "review", label: t("nav.review"), icon: "calendar-check", nav: "review" },
-	{ mode: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON, nav: "random" },
-	{ mode: "shuffleDay", label: t("nav.shuffleDay"), icon: "calendar-days", nav: "shuffleDay" },
+	{ mode: "all", group: "views", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
+	{ mode: "things", group: "views", label: t("nav.things"), icon: "list-todo", nav: "things" },
+	{ mode: "no-tag", group: "filters", label: t("filter.noTag"), icon: "tag", scope: "no-tag" },
+	{ mode: "with-link", group: "filters", label: t("filter.withLink"), icon: "link", scope: "with-link" },
+	{ mode: "with-image", group: "filters", label: t("filter.withImage"), icon: "image", scope: "with-image" },
+	{ mode: "referenced", group: "filters", label: t("filter.referenced"), icon: "message-square-reply", scope: "referenced" },
+	{ mode: "anniversary", group: "revisit", label: t("filter.anniversary"), icon: "history", scope: "anniversary" },
+	{ mode: "review", group: "revisit", label: t("nav.review"), icon: "calendar-check", nav: "review" },
+	{ mode: "random", group: "revisit", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON, nav: "random" },
+	{ mode: "shuffleDay", group: "revisit", label: t("nav.shuffleDay"), icon: "calendar-days", nav: "shuffleDay" },
 ];
 
 export const SEARCH_DATE_OPTIONS: SearchDateOption[] = [

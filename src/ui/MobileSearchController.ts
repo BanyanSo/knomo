@@ -20,6 +20,7 @@ import {
 	formatMobileSearchEmptyTitle,
 	type RecordStatsSearchFilter,
 	type SearchDateFilter,
+	type ScopeFilter,
 } from "./viewFilters";
 import { renderKnomoListSummary, renderKnomoLoadMoreButton, renderKnomoCardFlowHeaders, renderKnomoLoadingPlaceholder } from "./KnomoFeed";
 import { DelayedLoadingIndicator } from "./DelayedLoadingIndicator";
@@ -46,6 +47,7 @@ interface MobileSearchControllerOptions {
 	prioritizeMarkdown?: (root: HTMLElement, scrollTop: number) => void;
 	getResultStatus?: (filter: CatalogQueryFilter) => { headers: CardFlowHeader[]; complete: boolean; blocked: boolean };
 	getThingsContext?: () => ThingsSearchContext | undefined;
+	getSourceScope?: () => ScopeFilter;
 	syncThingsSearch?: (query: string, date: SearchDateFilter | null) => void;
 	getCatalogRevision?: () => number;
 	getRelationRevision?: () => number;
@@ -95,7 +97,7 @@ export class MobileSearchController {
 	private inputEl: HTMLInputElement | null = null;
 	private resultsEl: HTMLElement | null = null;
 	readonly session = new SearchSession();
-	private displayedContext: { things: ThingsSearchContext | undefined; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
+	private displayedContext: { things: ThingsSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
 	private displayedMemos: MemoRecord[] | null = null;
 	private displayedCount: number | null = null;
 	private dateHintEl: HTMLElement | null = null;
@@ -429,7 +431,7 @@ export class MobileSearchController {
 	getAppliedFilter(): CatalogQueryFilter {
 		const context = this.options.getThingsContext?.();
 		const source = buildSearchSourceScope({
-			activeNav: context?.activeNav ?? "all", scopeFilter: "all",
+			activeNav: context?.activeNav ?? "all", scopeFilter: this.options.getSourceScope?.() ?? "all",
 			activeTag: context?.activeTag ?? null, activeTagKey: context?.activeTagKey ?? null,
 			recordStatsSearchFilter: this.recordStatsFilter,
 		});
@@ -519,7 +521,7 @@ export class MobileSearchController {
 			this.renderResults(changeIntent);
 			return;
 		}
-		const context = { things: this.options.getThingsContext?.(), stats: this.recordStatsFilter,
+		const context = { things: this.options.getThingsContext?.(), scope: this.options.getSourceScope?.() ?? "all", stats: this.recordStatsFilter,
 			queryContextKey: this.options.getQueryContextKey?.() ?? "" };
 		const filter = this.getAppliedFilter();
 		const key = this.getRequestKey(filter);
@@ -1040,16 +1042,19 @@ export class MobileSearchController {
 	}
 
 	private hasSearchConditions(): boolean {
-		return !!this.options.getThingsContext?.() || this.session.hasConditions || this.recordStatsFilter !== null;
+		return !!this.options.getThingsContext?.() || (this.options.getSourceScope?.() ?? "all") !== "all"
+			|| this.session.hasConditions || this.recordStatsFilter !== null;
 	}
 
 	private getResultCopy(count: number) {
 		const query = (this.session.result?.input ?? this.query).trim();
 		const date = this.session.result ? this.session.result.shortcut : this.dateFilter;
 		const context = this.displayedContext ? this.displayedContext.things : this.options.getThingsContext?.();
+		const scope = this.displayedContext ? this.displayedContext.scope : this.options.getSourceScope?.() ?? "all";
 		const stats = this.displayedContext ? this.displayedContext.stats : this.recordStatsFilter;
-		return context ? getRegularFilterCopy({
-			...context, searchQuery: query, searchDateFilter: date, recordStatsSearchFilter: stats, scopeFilter: "all",
+		return context || scope !== "all" ? getRegularFilterCopy({
+			activeNav: "all", activeTag: null, activeTagKey: null, ...context,
+			searchQuery: query, searchDateFilter: date, recordStatsSearchFilter: stats, scopeFilter: scope,
 		}, count) : {
 			summary: formatMobileSearchSummary(query, date, count, stats),
 			emptyTitle: formatMobileSearchEmptyTitle(query, date, stats),

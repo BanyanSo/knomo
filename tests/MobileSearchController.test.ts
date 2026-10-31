@@ -23,6 +23,57 @@ function makeRemotePage(items: MemoViewItem[], catalogRevision = 0): MobileSearc
 		lifecycle: { state: "ready", persistent: true, writable: true, reason: null }, capabilities: createCatalogCapabilities(coverage) };
 }
 
+test("移动被引用固定筛选继承来源，支持搜索并等待关系确认新成员", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const target = makeMemo("target", "target"), inserted = makeMemo("new", "new memo");
+	let items = [target], complete = true;
+	const h = createControllerHarness(MobileSearchController, items, undefined, async filter => {
+		assert.equal(filter.hasReferrers, true);
+		assert.equal(filter.fromDate, undefined); assert.equal(filter.toDate, undefined);
+		const page = makeRemotePage(items); page.status.relations = { complete, failed: false }; return page;
+	}, { getSourceScope: () => "referenced", getResultStatus: () => ({ headers: [], complete, blocked: false }) });
+	try {
+		assert.deepEqual(h.controller.getAppliedFilter(), { hasReferrers: true });
+		h.controller.openPage({ focusInput: false }); await settle();
+		assert.equal(h.controller.getDisplayedCount(), 1);
+		assert.match(h.root.getText(), /Referenced/);
+		const card = h.root.find(".knomo-card");
+		h.controller.applyMemoChanges(new Map(), [inserted], true);
+		assert.deepEqual(h.controller.getDisplayedMemos().map(item => item.id), [target.id]);
+		items = []; complete = false; await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), card);
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(h.root.find(".knomo-mobile-search-empty"), null);
+		complete = true; await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), null);
+		assert.equal(h.controller.getDisplayedCount(), 0);
+		assert.match(h.root.getText(), /No referenced notes yet/);
+		h.controller.searchQuery = "target";
+		assert.equal(h.controller.getAppliedFilter().hasReferrers, true);
+		assert.deepEqual(h.controller.getAppliedFilter().textTerms, ["target"]);
+	} finally { h.controller.removePage(); }
+});
+
+test("移动被引用来源切换后迟到的关系查询不能覆盖新搜索结果", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let scope: "referenced" | "all" = "referenced";
+	let release!: (page: MobileSearchPage) => void;
+	const old = new Promise<MobileSearchPage>(resolve => { release = resolve; });
+	const fresh = makeMemo("fresh", "memo");
+	const h = createControllerHarness(MobileSearchController, [], undefined, async filter => filter.hasReferrers ? old : makeRemotePage([fresh]),
+		{ getSourceScope: () => scope });
+	try {
+		h.controller.searchQuery = "memo";
+		h.controller.openPage({ focusInput: false }); await settle();
+		scope = "all"; await h.controller.refreshAppliedResults();
+		release(makeRemotePage([makeMemo("old", "memo")])); await settle();
+		assert.deepEqual(h.controller.getDisplayedMemos().map(item => item.id), ["fresh"]);
+		assert.equal(h.controller.getDisplayedFilter().hasReferrers, undefined);
+	} finally { release(makeRemotePage([])); h.controller.removePage(); }
+});
+
 test("移动被引用钻取分页失效后后台重查首屏，等待期间无失败、重试或旧总数", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

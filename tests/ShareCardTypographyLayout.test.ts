@@ -3,6 +3,41 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { build } from "esbuild";
 
+test("跨窗口采集实际字体规则、导入地址和嵌套 Unicode 范围", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const bundle = await build({ stdin: { contents: `
+import { captureShareCardFonts } from './src/ui/share/ShareCardTypography';
+window.captureFonts=captureShareCardFonts;`, resolveDir: process.cwd() }, bundle: true, write: false, format: "iife", platform: "browser" });
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	try {
+		const page = await browser.newPage();
+		await page.setContent('<iframe></iframe>');
+		await page.addScriptTag({ content: "window.createEl = tag => document.createElement(tag);" });
+		await page.addScriptTag({ content: bundle.outputFiles[0].text });
+		const result = await page.evaluate(async () => {
+			const frame = document.querySelector("iframe")!;
+			const doc = frame.contentDocument!;
+			const style = doc.createElement("style");
+			const imported = 'data:text/css,' + encodeURIComponent('@font-face{font-family:Imported;src:local("Arial");unicode-range:U+41-5A}');
+			const loaded = new Promise<void>((resolve, reject) => { style.onload = () => resolve(); style.onerror = () => reject(Error("import failed")); });
+			style.textContent = `@import url("${imported}"); @media all {@font-face{font-family:Nested;src:local("Arial");unicode-range:U+4E00-9FFF}} .knomo-share-font-probe{font:18px Imported,Nested,serif}`;
+			doc.head.append(style);
+			await loaded;
+			const input = (window as any).captureFonts(doc.body);
+			return { rules: input.rules, imported, size: input.typography.size, probes: doc.querySelectorAll(".knomo-share-font-probe").length,
+				foreignRule: !(style.sheet!.cssRules[0] instanceof CSSImportRule) };
+		});
+		assert.equal(result.foreignRule, true);
+		assert.equal(result.size, 18); assert.equal(result.probes, 0);
+		assert.equal(result.rules.length, 2);
+		assert.deepEqual(result.rules.map((rule: { family: string }) => rule.family), ["imported", "nested"]);
+		assert.equal(result.rules[0].base, result.imported);
+		assert.equal(result.rules[0].unicodeRange, "U+41-5A");
+		assert.equal(result.rules[1].unicodeRange, "U+4E00-9FFF");
+		assert.ok(result.rules.every((rule: { css: string }) => rule.css.includes("local(")));
+	} finally { await browser.close(); }
+});
+
 test("PNG typography inherits resolved host settings, freezes the session and rejects unavailable fonts/covers", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async context => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const bundle = await build({ stdin: { contents: `

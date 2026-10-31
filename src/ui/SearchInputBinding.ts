@@ -37,6 +37,7 @@ export function bindSearchInput(options: SearchInputBindingOptions): void {
 	});
 	options.registerDomEvent(input, "keydown", event => {
 		if (event.key !== "Enter" && event.key !== "Escape") return;
+		// IME 首尾按键可能缺少 isComposing 和组合状态，保留 229 回退。
 		if (session.draft.composing || event.isComposing || event.keyCode === 229) {
 			event.stopPropagation();
 			return;

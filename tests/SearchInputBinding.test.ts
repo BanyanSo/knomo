@@ -53,6 +53,23 @@ test("选字 Enter/Esc 保留给输入法，组合结束与最终 input 只排�
 	} finally { dom.window.close(); }
 });
 
+test("组合状态关闭时的 229 首尾按键仍保留给输入法，随后普通 Esc 可关闭", () => {
+	const h = inputHarness();
+	let propagated = 0;
+	h.input.parentElement!.addEventListener("keydown", () => propagated++);
+	try {
+		assert.equal(h.session.draft.composing, false);
+		for (const key of ["Enter", "Escape"]) {
+			assert.equal(h.key(key, { keyCode: 229, isComposing: false }).defaultPrevented, false);
+		}
+		assert.equal(propagated, 0);
+		assert.equal(h.closed, 0);
+		assert.deepEqual(h.queued, []);
+		h.key("Escape");
+		assert.equal(h.closed, 1);
+	} finally { h.dom.window.close(); }
+});
+
 test("普通 Enter 不新增提交；Esc 拦截原生清空且不提交非法日期", () => {
 	const harness = inputHarness();
 	const { session, key, change, input } = harness;

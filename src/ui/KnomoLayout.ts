@@ -39,6 +39,7 @@ export class DesktopDrawerFocus {
 	}
 
 	handleKeydown(event: KeyboardEvent, sidebar: HTMLElement, close: () => void): boolean {
+		// IME 首尾按键可能缺少 isComposing，不能误关闭抽屉或转移焦点。
 		if (!this.open || event.defaultPrevented || event.isComposing || event.keyCode === 229) return false;
 		if (event.key === "Escape") {
 			event.preventDefault();

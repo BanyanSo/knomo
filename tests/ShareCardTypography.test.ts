@@ -35,7 +35,35 @@ test("同一分享会话复用字体 URL，不跨会话保留字源且取消后�
 		const cancelled = new AbortController(); cancelled.abort();
 		await assert.rejects(embedShareCardFonts(input, cancelled.signal), { name: "AbortError" });
 		assert.equal(urls.length, 4);
+		const protocols = { ...input, rules: [{ family: "shared", base: "app://vault/theme.css",
+			css: '@font-face{font-family:Shared;src:url("https://example.test/font.woff2"),url("http://example.test/font.woff2"),url("data:font/woff2;base64,AQID"),url("blob:local-font"),url("file:///font.woff2"),url("capacitor://localhost/font.woff2")}' }] };
+		const cssProtocols = await embedShareCardFonts(protocols, new AbortController().signal);
+		assert.deepEqual(urls.slice(4), ["blob:local-font", "file:///font.woff2", "capacitor://localhost/font.woff2"]);
+		assert.ok(cssProtocols.includes("data:font/woff2;base64,AQID"));
+		assert.ok(!cssProtocols.includes("example.test"));
 	} finally {
 		globalThis.fetch = originalFetch; Object.assign(globalThis, { FileReader: originalReader }); dom.window.close();
 	}
+});
+
+test("本地字体加载中途取消后拒绝输出，不继续读取后续字源", async () => {
+	const originalFetch = globalThis.fetch;
+	const controller = new AbortController();
+	const urls: string[] = [];
+	let started!: () => void;
+	const ready = new Promise<void>(resolve => { started = resolve; });
+	globalThis.fetch = async (url, init) => {
+		urls.push(String(url));
+		return new Promise<Response>((_resolve, reject) => {
+			init!.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+			started();
+		});
+	};
+	const input: ShareCardFontInput = { typography: { text: "Shared", ui: "Shared", mono: "Shared", size: 16 }, unavailable: false,
+		rules: ["first", "second"].map(name => ({ family: "shared", base: "app://vault/theme.css", css: `@font-face{font-family:Shared;src:url("./${name}.woff2")}` })) };
+	try {
+		const rejected = assert.rejects(embedShareCardFonts(input, controller.signal), { name: "AbortError" });
+		await ready; controller.abort(); await rejected;
+		assert.deepEqual(urls, ["app://vault/first.woff2"]);
+	} finally { globalThis.fetch = originalFetch; }
 });

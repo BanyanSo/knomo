@@ -35,6 +35,7 @@ export async function loadShareCardImage(app: App, path: string, sourcePath: str
 		const timer = window.setTimeout(cancel, 20_000);
 		try {
 		// 与正文远程图片相同的地址；使用 CORS 读取，不能导出时明确失败，不借助代理绕过。
+		// 保留 fetch 的取消与流式字节阈值；requestUrl 的完整缓冲响应不提供等价控制。
 		const response = await fetch(path, { signal: controller.signal, credentials: "omit", mode: "cors", referrerPolicy: "no-referrer" });
 		if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) throw new ShareCardError("image");
 		if (Number(response.headers.get("content-length")) > MAX_IMAGE_BYTES) throw new ShareCardError("limit");

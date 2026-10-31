@@ -37,11 +37,11 @@ export function captureShareCardFonts(host: HTMLElement): ShareCardFontInput {
 		};
 		const visit = (items: CSSRuleList, base: string): void => {
 			for (const rule of Array.from(items)) {
-				if (rule.type === 5) {
+				if (rule.constructor.name === "CSSFontFaceRule") {
 					const face = rule as CSSFontFaceRule;
 					const family = familyName(face.style.getPropertyValue("font-family"));
 					if (families.has(family)) rules.push({ family, css: face.cssText, base, unicodeRange: face.style.getPropertyValue("unicode-range") });
-				} else if (rule.type === 3) {
+				} else if (rule.constructor.name === "CSSImportRule") {
 					const imported = (rule as CSSImportRule).styleSheet;
 					if (imported) visitSheet(imported);
 				} else if ("cssRules" in rule) visit((rule as CSSGroupingRule).cssRules, base);
@@ -72,6 +72,7 @@ export async function embedShareCardFonts(input: ShareCardFontInput, signal: Abo
 			let resource = resources.get(url);
 			if (!resource) {
 				resource = (async () => {
+					// 入口仅允许本地协议；requestUrl 面向 HTTP(S)，不能替代 app:/blob: 等资源读取。
 					const response = await fetch(url, { signal });
 					if (!response.ok) throw new ShareCardError("font");
 					const blob = await response.blob();

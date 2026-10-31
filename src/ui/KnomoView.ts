@@ -5178,6 +5178,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async handleRootKeydown(event: KeyboardEvent): Promise<void> {
+		// IME 首尾按键可能缺少 isComposing，保留 229 以免误触页面操作。
 		if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
 		if (event.key === "Escape" && this.timeBuoyPickerState !== null) {
 			event.preventDefault();

@@ -127,6 +127,10 @@ export class KnomoSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.renderLegacySettings();
+	}
+
+	private renderLegacySettings(): void {
 		this.containerEl.empty();
 		this.mountPage(this.containerEl);
 	}
@@ -1346,7 +1350,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 			return;
 		}
 		if (requireApiVersion("1.13.0")) this.update();
-		else if (this.settingsVisible) this.display();
+		else if (this.settingsVisible) this.renderLegacySettings();
 	}
 
 }

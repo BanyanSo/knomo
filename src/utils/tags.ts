@@ -4,6 +4,12 @@ export function normalizeTagKey(tag: string): string {
 	return tag.trim().replace(/^#/, "").toLowerCase();
 }
 
+// 标签可能与对象继承属性同名；只累加自身字段，并将 __proto__ 作为普通 key 保存。
+export function incrementTagMemoCount(counts: Record<string, number>, key: string, count: number): void {
+	const previous = Object.prototype.hasOwnProperty.call(counts, key) ? counts[key] : 0;
+	Object.defineProperty(counts, key, { value: previous + count, writable: true, enumerable: true, configurable: true });
+}
+
 export interface TagDisplaySource {
 	tag: string;
 	modifiedTime: number;

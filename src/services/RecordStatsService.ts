@@ -59,6 +59,8 @@ export interface RecordStatsSnapshot {
 	state: RecordStatsLoadState;
 	error: string | null;
 	updating: boolean;
+	// 旧快照可继续展示普通统计，但不能因隐藏 updating 就视作当前有效来源。
+	valid: boolean;
 }
 
 export interface DailyRecordStats {
@@ -69,7 +71,7 @@ export interface DailyRecordStats {
 	untaggedMemoCount: number;
 	imageMemoCount: number;
 	hourCounts: number[];
-	tagMemoCounts: Map<string, number>;
+	tagSubtreeMemoCounts: Map<string, number>;
 }
 
 export interface PreparedRecordStats {
@@ -80,6 +82,16 @@ export interface PreparedRecordStats {
 	referenced?: { daily: ReadonlyMap<string, number>; complete: boolean; failed: boolean };
 }
 
+export function isReferencedMemoStatsAvailable(
+	selected: SelectedRecordStats | null,
+	snapshot: RecordStatsSnapshot | undefined,
+	blocked = false,
+): boolean {
+	return !blocked && snapshot?.valid === true && !snapshot.updating && snapshot.error === null
+		&& (snapshot.state === "ready" || snapshot.state === "empty")
+		&& selected?.referenced?.complete === true && selected.referenced.failed === false;
+}
+
 export class RecordStatsService {
 	private state: RecordStatsLoadState = "idle";
 	private error: string | null = null;
@@ -87,12 +99,14 @@ export class RecordStatsService {
 	private prepared: PreparedRecordStats | null = null;
 	private runId = 0;
 	private updating = false;
+	private valid = false;
 
 	getSnapshot(): RecordStatsSnapshot {
 		return {
 			state: this.state,
 			error: this.error,
 			updating: this.updating,
+			valid: this.valid,
 		};
 	}
 
@@ -101,10 +115,11 @@ export class RecordStatsService {
 	}
 
 	isPreparedForSource(source: unknown): boolean {
-		return this.source === source && (this.state === "ready" || this.state === "empty");
+		return this.valid && this.source === source && (this.state === "ready" || this.state === "empty");
 	}
 
 	invalidate(showUpdating = true): void {
+		this.valid = false;
 		this.runId += 1;
 		this.error = null;
 		this.source = null;
@@ -115,6 +130,7 @@ export class RecordStatsService {
 	}
 
 	fail(message: string): void {
+		this.valid = false;
 		this.runId += 1;
 		this.error = message;
 		this.source = null;
@@ -136,6 +152,8 @@ export class RecordStatsService {
 		}
 		const runId = this.runId + 1;
 		this.runId = runId;
+		this.valid = false;
+		this.source = null;
 		const hasCommittedStats = this.prepared !== null
 			&& (this.state === "ready" || this.state === "empty");
 		if (!hasCommittedStats) {
@@ -156,6 +174,7 @@ export class RecordStatsService {
 			}
 			this.prepared = prepared;
 			this.source = source;
+			this.valid = true;
 			this.state = prepared.overview.memoCount === 0 ? "empty" : "ready";
 			this.updating = false;
 			return true;
@@ -213,7 +232,7 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 		for (let hour = 0; hour < hourCounts.length; hour += 1) {
 			hourCounts[hour] += day.hourCounts[hour];
 		}
-		for (const [key, count] of day.tagMemoCounts) {
+		for (const [key, count] of day.tagSubtreeMemoCounts) {
 			tagMemoCounts.set(key, (tagMemoCounts.get(key) ?? 0) + count);
 		}
 		if (day.memoCount > maxDailyMemoCount) {

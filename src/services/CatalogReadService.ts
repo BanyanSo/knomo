@@ -913,8 +913,18 @@ function buildPreparedRecordStats(aggregates: readonly CatalogDailyAggregate[]):
 			untaggedMemoCount: aggregate.untaggedMemoCount ?? 0,
 			imageMemoCount: aggregate.imageMemoCount ?? 0,
 			hourCounts: Array.from({ length: 24 }, (_, hour) => aggregate.hourCounts?.[hour] ?? 0),
-			tagMemoCounts: new Map(Object.entries(aggregate.tagMemoCounts ?? {})),
+			tagSubtreeMemoCounts: new Map(Object.entries(aggregate.tagSubtreeMemoCounts)),
 		});
+	}
+	// 先收集所有显式显示名，再补祖先，避免子标签派生名覆盖显式父标签。
+	for (const [key, label] of [...tagDisplayNames]) {
+		let ancestor = key;
+		let display = label;
+		while (ancestor.lastIndexOf("/") > 0) {
+			ancestor = ancestor.slice(0, ancestor.lastIndexOf("/"));
+			display = display.slice(0, display.lastIndexOf("/"));
+			if (!tagDisplayNames.has(ancestor)) tagDisplayNames.set(ancestor, display);
+		}
 	}
 	return {
 		overview: { memoCount, wordCount, recordDayCount: daily.size },

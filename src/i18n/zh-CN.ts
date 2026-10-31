@@ -236,6 +236,7 @@ export const zhCN = {
 	"recordStats.metric.withImage": "有图片",
 	"recordStats.metric.references": "含引用的记录数",
 	"recordStats.metric.referenced": "被引用的记录数",
+	"recordStats.referenced.pending": "被引用统计尚未完成",
 	"recordStats.metric.maxDailyNotes": "单日最多记录数",
 	"recordStats.metric.maxDailyWords": "单日最多字数",
 	"recordStats.activeHours": "记录时间分布",

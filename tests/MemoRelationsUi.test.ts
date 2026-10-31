@@ -427,16 +427,16 @@ test("被引用指标局部撤下旧数值与入口，正常更新不播报，�
 		const chart = h.host.createDiv({ text: "chart" });
 		const metric = h.host.createEl("button", { attr: { "data-record-stats-metric": "referenced", "data-action": "record-stats-filter-referenced" } });
 		metric.createDiv({ cls: "knomo-record-stats-metric-value", text: "1" }); metric.focus();
-		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: true, error: null });
-		assert.equal(metric.textContent, "—"); assert.equal(metric.getAttribute("data-action"), null);
+		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: true, error: null, valid: false });
+		assert.equal(metric.querySelector(".knomo-record-stats-metric-value")?.textContent, "—"); assert.equal(metric.getAttribute("data-action"), null);
 		assert.equal(h.win.document.activeElement, metric); assert.equal(h.host.firstElementChild, chart);
 		assert.equal(metric.querySelector("[role='status'],[aria-live]"), null);
 		const failed = { ...selected, referenced: { count: 1, complete: false, failed: true } };
-		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null });
+		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null, valid: true });
 		const fault = metric.querySelector("[role='status']"); assert.ok(fault);
-		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null });
+		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null, valid: true });
 		assert.equal(metric.querySelector("[role='status']"), fault);
-		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: false, error: null });
+		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: false, error: null, valid: true });
 		assert.equal(metric.textContent, "1"); assert.equal(metric.querySelector("[role='status']"), null);
 		assert.equal(h.host.firstElementChild, chart); assert.equal(h.win.document.activeElement, metric);
 	} finally { h.close(); }
@@ -468,6 +468,68 @@ test("统计构建正常失效仍有一次尾随准备，同代次持续失效�
 		assert.equal(checks, persistent ? 2 : 3);
 	} finally { h.close(); }
 	}
+});
+
+test("统计被引用按钮从未知到可用再失效时保留节点焦点，所有激活入口遵守当前状态", async () => {
+	const h = await fixture();
+	try {
+		await h.seed("A.md", "- 10:00 A ^a\n"); await h.seed("B.md", "- 11:00 [[A#^a]]\n");
+		const { RecordStatsService } = await import("../src/services/RecordStatsService");
+		const { RecordStatsViewStateController } = await import("../src/ui/RecordStatsViewStateController");
+		const { KnomoViewStateController } = await import("../src/ui/KnomoViewStateController");
+		const { KnomoView } = await import("../src/ui/KnomoView");
+		const { renderKnomoRecordStatsPage, syncKnomoReferencedMetric } = await import("../src/ui/KnomoRecordStatsPage");
+		const prepared = (await h.read.buildRecordStats(async () => {}, () => true))!;
+		const stats = new RecordStatsService(), ranges = new RecordStatsViewStateController(new Date(2026, 9, 25));
+		ranges.setView("month");
+		await stats.prepareFromSource("partial", async () => ({ ...prepared, referenced: { ...prepared.referenced!, complete: false } }));
+		let opened = 0, clicks = 0;
+		const view = Object.assign(Object.create(KnomoView.prototype), {
+			recordStatsService: stats, recordStatsViewStateController: ranges, viewStateController: new KnomoViewStateController(),
+			catalogReadService: h.read, catalogCoverage: await h.catalog.getStore().getCoverage(),
+			catalogStatus: { settings: "ready", content: "ready", catalog: "complete", currentConfiguration: "ready", projection: "ready" },
+			currentLayout: "mobile", trashViewClosed: false, getDailyNotesStatus: () => ({ enabled: true }),
+			mobileSearchController: { resetState: () => {} }, openMobileSearchPage: () => { opened++; },
+		});
+		const selected = () => stats.select("month", new Date(2026, 9, 25))!;
+		const filter = { type: "referenced", startDate: selected().startDate, endDateExclusive: selected().endDateExclusive };
+		const page = renderKnomoRecordStatsPage(h.host, { snapshot: stats.getSnapshot(), selected: selected(), view: "month",
+			canAdvance: false, canRetreat: true, createHiddenText: (parent, id, text) => { parent.createSpan({ text, attr: { id } }); return id; } });
+		const metric = page.querySelector<HTMLButtonElement>("[data-record-stats-metric='referenced']")!;
+		const chart = page.querySelector(".knomo-record-stats-chart")!;
+		page.scrollTop = 80; metric.focus();
+		h.host.addEventListener("click", event => {
+			if ((event.target as HTMLElement).closest("[data-record-stats-metric='referenced']")) { clicks++; view.openRecordStatsMetricFilter("referenced"); }
+		});
+		const sync = (blocked = false) => syncKnomoReferencedMetric(page, selected(), stats.getSnapshot(), blocked);
+		const cannotOpen = () => {
+			const before = opened, events = clicks;
+			metric.click(); metric.dispatchEvent(new h.win.MouseEvent("click", { bubbles: true, cancelable: true }));
+			for (const key of ["Enter", " "]) metric.dispatchEvent(new h.win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+			view.openRecordStatsMetricFilter("referenced"); view.openRecordStatsSearchFilter(filter);
+			assert.equal(opened, before); assert.equal(clicks, events);
+			assert.equal(metric.getAttribute("aria-disabled"), "true");
+			assert.equal(metric.querySelector(".knomo-record-stats-metric-value")?.textContent, "—");
+		};
+		cannotOpen();
+		const pendingText = metric.querySelector(".knomo-record-stats-metric-description")!.textContent;
+		await stats.prepareFromSource("complete", async () => prepared); sync(); metric.click();
+		assert.equal(opened, 1); assert.equal(metric.hasAttribute("aria-disabled"), false);
+		assert.equal(metric.querySelector(".knomo-record-stats-metric-description"), null);
+		stats.invalidate(false); sync(); cannotOpen();
+		await stats.prepareFromSource("failed", async () => { throw Error("refresh failed"); }); sync(); cannotOpen();
+		const fault = metric.querySelector(".knomo-record-stats-metric-description")!;
+		assert.notEqual(fault.textContent, pendingText); assert.equal(fault.getAttribute("role"), "status");
+		sync(); assert.equal(metric.querySelector(".knomo-record-stats-metric-description"), fault);
+		await stats.prepareFromSource("recovered", async () => prepared); sync(); metric.click(); assert.equal(opened, 2);
+		view.catalogStatus.settings = "unavailable"; sync(true); cannotOpen();
+		view.catalogStatus.settings = "ready"; sync();
+		view.openRecordStatsSearchFilter({ ...filter, startDate: "2020-01-01" }); assert.equal(opened, 2);
+		metric.click(); assert.equal(opened, 3);
+		assert.equal(page.querySelector("[data-record-stats-metric='referenced']"), metric);
+		assert.equal(page.querySelector(".knomo-record-stats-chart"), chart);
+		assert.equal(h.win.document.activeElement, metric); assert.equal(page.scrollTop, 80);
+	} finally { h.close(); }
 });
 
 test("实际视图接线在 metadata 挂起期间无全局关系提示，后台放行后各表面自动出现预览", async () => {

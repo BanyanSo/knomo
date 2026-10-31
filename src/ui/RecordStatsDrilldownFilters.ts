@@ -1,4 +1,5 @@
-import type { SelectedRecordStats } from "../services/RecordStatsService";
+import { isReferencedMemoStatsAvailable } from "../services/RecordStatsService";
+import type { RecordStatsSnapshot, SelectedRecordStats } from "../services/RecordStatsService";
 import type { RecordStatsSearchFilter } from "./viewFilters";
 
 export type RecordStatsMetricFilterType =
@@ -55,6 +56,8 @@ export function getRecordStatsHourSearchFilter(
 export function getRecordStatsMetricSearchFilter(
 	selected: SelectedRecordStats | null,
 	type: RecordStatsMetricFilterType,
+	snapshot?: RecordStatsSnapshot,
+	blocked = false,
 ): RecordStatsSearchFilter | null {
 	if (selected === null) {
 		return null;
@@ -73,7 +76,7 @@ export function getRecordStatsMetricSearchFilter(
 			endDateExclusive: selected.endDateExclusive,
 		};
 	}
-	if (type === "referenced" && (selected.referenced?.count ?? 0) > 0) {
+	if (type === "referenced" && isReferencedMemoStatsAvailable(selected, snapshot, blocked) && (selected.referenced?.count ?? 0) > 0) {
 		return { type, startDate: selected.startDate, endDateExclusive: selected.endDateExclusive };
 	}
 	if (type === "with-tag" && selected.range.taggedMemoCount > 0) {

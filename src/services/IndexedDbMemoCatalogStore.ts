@@ -35,7 +35,7 @@ import { selectCatalogSearchToken } from "./MemoCatalogService";
 import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/timeBuoy";
 import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
 
-const CATALOG_DATABASE_VERSION = 4;
+const CATALOG_DATABASE_VERSION = 5;
 const FILES_STORE = "files";
 const OBSERVATIONS_STORE = "observations";
 const POSTINGS_STORE = "postings";

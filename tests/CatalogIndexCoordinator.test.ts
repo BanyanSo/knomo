@@ -123,6 +123,56 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 	});
 });
 
+test("标签统计旧数据库升级后重建未编辑 Daily，重开后 warm start 复用新聚合", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
+	const name = `stats-upgrade-${Date.now()}`;
+	const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 same #Project/Alpha #Project/Beta\n- 09:00 same #project/alpha\n", mtime: 10 }];
+	try {
+		for (let boot = 0; boot < 3; boot++) {
+			const store = new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange, ...(boot === 0 ? { version: 4 } : {}) });
+			const fixture = await createCoordinatorFixture(files), catalog = new MemoCatalogService(store);
+			const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(async bytes => sha256(bytes)),
+				async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), { now: () => 1000 + boot * 1000, fullAuditIntervalMs: 10_000 });
+			const reader = new CatalogReadService({ catalog });
+			try {
+				coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+				assert.equal(fixture.readCount(), boot === 2 ? 0 : 1, `boot ${boot}`);
+				const prepared = await reader.buildRecordStats(async () => {}, () => true);
+				assert.equal(prepared?.daily.get("2026-08-09")?.tagSubtreeMemoCounts.get("project"), 2);
+				assert.equal(prepared?.tagDisplayNames.get("project"), "Project");
+				assert.deepEqual((await store.listDailyAggregates())[0]!.tagMemoCounts, { "project/alpha": 2, "project/beta": 1 });
+			} finally { reader.relations.dispose(); fixture.unload(); store.close(); }
+			if (boot === 0) {
+				// 保留真实旧 checkpoint 与文件 revision，只移除旧版本没有的聚合字段。
+				await new Promise<void>((resolve, reject) => {
+					const request = indexedDB.open(name, 4);
+					request.onerror = () => reject(request.error);
+					request.onsuccess = () => {
+						const database = request.result, transaction = database.transaction("aggregates", "readwrite");
+						const cursor = transaction.objectStore("aggregates").openCursor();
+						cursor.onsuccess = () => {
+							if (!cursor.result) return;
+							const aggregate = cursor.result.value; delete aggregate.tagSubtreeMemoCounts;
+							cursor.result.update(aggregate); cursor.result.continue();
+						};
+						transaction.oncomplete = () => { database.close(); resolve(); };
+						transaction.onabort = () => { database.close(); reject(transaction.error); };
+					};
+				});
+			}
+		}
+	} finally {
+		await new Promise<void>((resolve, reject) => { const request = indexedDB.deleteDatabase(name);
+			request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); });
+	}
+});
+
 test("Catalog 扫描 off switch 不注册事件、不读取 Daily", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

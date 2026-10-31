@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { RecordStatsSnapshot } from "../src/services/RecordStatsService";
 
 import type { SelectedRecordStats } from "../src/services/RecordStatsService";
 import {
@@ -9,15 +10,25 @@ import {
 	getRecordStatsTrendSearchFilter,
 } from "../src/ui/RecordStatsDrilldownFilters";
 
-test("被引用钻取与旧含引用口径独立，部分已确认目标可查看，未知和零不可钻取", () => {
+test("被引用统计钻取拒绝部分或失败的正数结果，未知和零不可钻取", () => {
 	const selected = makeSelected();
-	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced"), null);
-	selected.referenced = { count: 2, complete: false, failed: true };
-	assert.deepEqual(getRecordStatsMetricSearchFilter(selected, "referenced"), {
+	const snapshot: RecordStatsSnapshot = { state: "ready", valid: true, error: null, updating: false };
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced", snapshot), null);
+	for (const [complete, failed] of [[false, true], [false, false], [true, true]]) {
+		selected.referenced = { count: 2, complete, failed };
+		assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced", snapshot), null);
+	}
+	selected.referenced = { count: 2, complete: true, failed: false };
+	assert.deepEqual(getRecordStatsMetricSearchFilter(selected, "referenced", snapshot), {
 		type: "referenced", startDate: selected.startDate, endDateExclusive: selected.endDateExclusive,
 	});
-	selected.referenced.count = 0;
 	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced"), null);
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced", { ...snapshot, valid: false }), null);
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced", { ...snapshot, updating: true }), null);
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced", { ...snapshot, error: "failed" }), null);
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced", snapshot, true), null);
+	selected.referenced.count = 0;
+	assert.equal(getRecordStatsMetricSearchFilter(selected, "referenced", snapshot), null);
 });
 
 test("record stats trend drill-down accepts positive day and month points", () => {

@@ -218,6 +218,35 @@ test("returns an empty common-tag list when the selected range has no tags", asy
 	assert.deepEqual(service.select("week", new Date(2026, 5, 8))?.commonTags, []);
 });
 
+test("常用标签按 occurrence 对父子标签去重，父级候选和分页钻取数量一致", async () => {
+	const reader = await createCatalogReader([
+		makeMemo("a", "2026-06-08T10:00:00", "same", { tags: ["Project", "project/a", "project/b"] }),
+		makeMemo("b", "2026-06-08T10:00:00", "same", { tags: ["project/a", "project/b"] }),
+		makeMemo("c", "2026-06-09T10:00:00", "child", { tags: ["PROJECT/C"] }),
+		makeMemo("d", "2026-06-10T10:00:00", "parent", { tags: ["project"] }),
+		makeMemo("e", "2026-06-10T10:00:00", "prefix", { tags: ["projects"] }),
+		makeMemo("outside", "2026-06-15T10:00:00", "outside", { tags: ["project/a"] }),
+	]);
+	const stats = new ProductionRecordStatsService();
+	await stats.prepareFromSource("tree", current => reader.buildRecordStats(async () => {}, current));
+	const selected = stats.select("week", new Date(2026, 5, 8))!;
+	assert.deepEqual(selected.commonTags.map(({ key, count }) => ({ key, count })), [
+		{ key: "project", count: 4 }, { key: "project/a", count: 2 }, { key: "project/b", count: 2 },
+		{ key: "project/c", count: 1 }, { key: "projects", count: 1 },
+	]);
+	for (const tag of selected.commonTags) {
+		const query = buildRecordStatsCatalogQuery({ type: "tag", startDate: selected.startDate,
+			endDateExclusive: selected.endDateExclusive, tagKey: tag.key, tagLabel: tag.label }).query;
+		assert.equal((await reader.count(query)).count, tag.count);
+		let page = await reader.query({ ...query, limit: 1 });
+		let total = page.items.length;
+		while (page.nextCursor) { page = await reader.query({ ...query, limit: 1, cursor: page.nextCursor }); total += page.items.length; }
+		assert.equal(total, tag.count);
+	}
+	assert.ok(stats.select("week", new Date(2026, 5, 15))!.commonTags.some(tag => tag.key === "project" && tag.count === 1));
+	reader.relations.dispose();
+});
+
 test("reports empty and error states without exposing partial statistics", async () => {
 	const emptyService = new RecordStatsService();
 	assert.equal(await emptyService.prepare([], async () => {}), true);
@@ -229,6 +258,25 @@ test("reports empty and error states without exposing partial statistics", async
 	assert.equal(await service.prepareFromSource("partial", isCurrent => incomplete.buildRecordStats(async () => {}, isCurrent)), false);
 	assert.equal(service.getSnapshot().state, "error");
 	assert.equal(service.select("week", new Date(2026, 5, 8)), null);
+});
+
+test("与对象属性同名的新增父级标签仍输出数值计数并与钻取一致", async () => {
+	const reader = await createCatalogReader([
+		makeMemo("a", "2026-06-08T10:00:00", "same", { tags: ["constructor/child", "__proto__/child"] }),
+		makeMemo("b", "2026-06-09T10:00:00", "same", { tags: ["constructor/child", "__proto__/child"] }),
+	]);
+	try {
+		const stats = new ProductionRecordStatsService();
+		await stats.prepareFromSource("keys", current => reader.buildRecordStats(async () => {}, current));
+		const selected = stats.select("week", new Date(2026, 5, 8))!;
+		assert.equal(selected.commonTags.find(tag => tag.key === "constructor")?.count, 2);
+		assert.equal(selected.commonTags.find(tag => tag.key === "__proto__")?.count, 2);
+		for (const tag of selected.commonTags) {
+			const query = buildRecordStatsCatalogQuery({ type: "tag", startDate: selected.startDate,
+				endDateExclusive: selected.endDateExclusive, tagKey: tag.key, tagLabel: tag.label }).query;
+			assert.equal((await reader.count(query)).count, tag.count);
+		}
+	} finally { reader.relations.dispose(); }
 });
 
 test("invalidating an in-flight preparation discards its result", async () => {
@@ -276,10 +324,10 @@ test("source refresh keeps committed statistics visible until the replacement is
 
 	const nextPrepared = createDeferred<PreparedRecordStats>();
 	service.invalidate();
-	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true, valid: false });
 	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise);
 
-	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true });
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: true, valid: false });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
 
 	const replacement = await buildStats([
@@ -288,7 +336,7 @@ test("source refresh keeps committed statistics visible until the replacement is
 	]);
 	nextPrepared.resolve(replacement);
 	assert.equal(await refreshing, true);
-	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false, valid: true });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
 });
 
@@ -299,10 +347,10 @@ test("routine complete-revision refresh keeps committed statistics visible witho
 
 	const nextPrepared = createDeferred<PreparedRecordStats>();
 	service.invalidate(false);
-	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false, valid: false });
 	const refreshing = service.prepareFromSource("catalog:2", async () => nextPrepared.promise, false);
 
-	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false, valid: false });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 1);
 
 	const replacement = await buildStats([
@@ -311,7 +359,7 @@ test("routine complete-revision refresh keeps committed statistics visible witho
 	]);
 	nextPrepared.resolve(replacement);
 	assert.equal(await refreshing, true);
-	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false });
+	assert.deepEqual(service.getSnapshot(), { state: "ready", error: null, updating: false, valid: true });
 	assert.equal(service.select("week", new Date(2026, 5, 8))?.range.memoCount, 2);
 });
 

@@ -238,6 +238,7 @@ export const en: Record<TranslationKey, string> = {
 	"recordStats.metric.withImage": "With images",
 	"recordStats.metric.references": "Notes containing references",
 	"recordStats.metric.referenced": "Referenced notes",
+	"recordStats.referenced.pending": "Referenced Memo statistics are not complete yet.",
 	"recordStats.metric.maxDailyNotes": "Most notes in a day",
 	"recordStats.metric.maxDailyWords": "Most words in a day",
 	"recordStats.activeHours": "Recording time distribution",

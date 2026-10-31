@@ -20,6 +20,7 @@ import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/time
 import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
 import { getCatalogTextTerms, matchesSearchDate, matchesSearchTerms, narrowCatalogQuery } from "./SearchMatching";
 import { normalizeSearchText } from "../utils/searchText";
+import { incrementTagMemoCount } from "../utils/tags";
 import { CooperativeYieldController, stableSortCooperatively } from "./CooperativeTask";
 
 export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
@@ -767,6 +768,7 @@ export function mergeAggregate(
 		untaggedMemoCount: 0,
 		hourCounts: Array.from({ length: 24 }, () => 0),
 		tagMemoCounts: {},
+		tagSubtreeMemoCounts: {},
 		tagDisplayNames: {},
 	};
 	current.memoCount += aggregate.memoCount;
@@ -786,6 +788,9 @@ export function mergeAggregate(
 	}
 	for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
 		current.tagMemoCounts[key] = (current.tagMemoCounts[key] ?? 0) + count;
+	}
+	for (const [key, count] of Object.entries(aggregate.tagSubtreeMemoCounts)) {
+		incrementTagMemoCount(current.tagSubtreeMemoCounts, key, count);
 	}
 	for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
 		if (current.tagDisplayNames[key] === undefined) current.tagDisplayNames[key] = label;

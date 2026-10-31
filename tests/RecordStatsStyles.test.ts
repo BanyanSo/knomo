@@ -9,7 +9,7 @@ test("record statistics renders loading state with reserved skeleton sections", 
 	const root = new TestElement("div");
 
 	renderKnomoRecordStatsPage(root.asHtml(), {
-		snapshot: { state: "loading", error: null, updating: false },
+		snapshot: { state: "loading", error: null, updating: false, valid: false },
 		selected: null,
 		view: "month",
 		canAdvance: false,
@@ -29,7 +29,7 @@ test("快速统计只保留布局，前置条件失败时立即显示操作且�
 	for (const blocked of [false, true]) {
 		const root = new TestElement("div");
 		renderKnomoRecordStatsPage(root.asHtml(), {
-			snapshot: { state: "idle", error: null, updating: false }, selected: null,
+			snapshot: { state: "idle", error: null, updating: false, valid: false }, selected: null,
 			view: "month", canAdvance: false, canRetreat: false, createHiddenText,
 			pending: { visible: false, blocked, headers: blocked
 				? [{ type: "summary", text: "Read failed", action: { label: "Retry", action: "refresh-catalog-sync-state" } }] : [] },
@@ -46,7 +46,7 @@ test("统计刷新失败保留旧数据并显示重试入口", async () => {
 	const { renderKnomoRecordStatsPage } = await import("../src/ui/KnomoRecordStatsPage");
 	const root = new TestElement("div");
 	renderKnomoRecordStatsPage(root.asHtml(), {
-		snapshot: { state: "ready", error: "read failed", updating: false }, selected: makeSelectedStats(),
+		snapshot: { state: "ready", error: "read failed", updating: false, valid: false }, selected: makeSelectedStats(),
 		view: "month", canAdvance: false, canRetreat: true, createHiddenText,
 	});
 	assert.ok(root.find("[data-action='record-stats-retry']"));
@@ -60,7 +60,7 @@ test("record statistics renders actionable range metrics, charts, hours, and com
 	const root = new TestElement("div");
 
 	renderKnomoRecordStatsPage(root.asHtml(), {
-		snapshot: { state: "ready", error: null, updating: false } satisfies RecordStatsSnapshot,
+		snapshot: { state: "ready", error: null, updating: false, valid: true } satisfies RecordStatsSnapshot,
 		selected: makeSelectedStats(),
 		view: "month",
 		canAdvance: false,
@@ -87,7 +87,7 @@ test("record statistics keeps the committed page visible while updating silently
 	const root = new TestElement("div");
 
 	renderKnomoRecordStatsPage(root.asHtml(), {
-		snapshot: { state: "ready", error: null, updating: true },
+		snapshot: { state: "ready", error: null, updating: true, valid: false },
 		selected: makeSelectedStats(),
 		view: "month",
 		canAdvance: false,
@@ -110,14 +110,16 @@ test("被引用指标区分确定、已发现、读取失败和待更新，不�
 	for (const state of [
 		{ count: 2, complete: true, failed: false, updating: false, value: "2", action: true, retry: false },
 		{ count: 0, complete: true, failed: false, updating: false, value: "0", action: false, retry: false },
-		{ count: 2, complete: false, failed: true, updating: false, value: "—", action: true, retry: false },
+		{ count: 2, complete: false, failed: true, updating: false, value: "—", action: false, retry: false },
+		{ count: 2, complete: true, failed: true, updating: false, value: "—", action: false, retry: false },
+		{ count: 2, complete: false, failed: false, updating: false, value: "—", action: false, retry: false },
 		{ count: 0, complete: false, failed: true, updating: false, value: "—", action: false, retry: false },
 		{ count: 2, complete: true, failed: false, updating: true, value: "—", action: false, retry: false },
 	]) {
 		const root = new TestElement("div"), selected = makeSelectedStats();
 		selected.referenced = { count: state.count, complete: state.complete, failed: state.failed };
 		renderKnomoRecordStatsPage(root.asHtml(), {
-			snapshot: { state: "ready", error: null, updating: state.updating }, selected,
+			snapshot: { state: "ready", error: null, updating: state.updating, valid: !state.updating }, selected,
 			view: "month", canAdvance: false, canRetreat: true, createHiddenText,
 		});
 		const metric = root.findAll(".knomo-record-stats-metric").find(item => item.find(".knomo-record-stats-metric-label")?.getText() === "Referenced notes");
@@ -189,6 +191,8 @@ class TestElement {
 	asHtml(): HTMLElement {
 		return this as unknown as HTMLElement;
 	}
+
+	addEventListener(): void {}
 
 	createDiv(options: CreateElementOptions = {}): TestElement {
 		return this.createEl("div", options);

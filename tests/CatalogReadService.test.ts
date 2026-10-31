@@ -689,7 +689,8 @@ test("记录统计从 Daily aggregate 构建，引用计数取当前 Markdown", 
 	assert.deepEqual(prepared?.overview, { memoCount: 2, wordCount: 5, recordDayCount: 2 });
 	assert.equal(prepared?.daily.get("2026-08-02")?.referenceMemoCount, 0);
 	assert.equal(prepared?.daily.get("2026-08-01")?.hourCounts[8], 1);
-	assert.equal(prepared?.daily.get("2026-08-01")?.tagMemoCounts.get("work/project"), 1);
+	assert.equal(prepared?.daily.get("2026-08-01")?.tagSubtreeMemoCounts.get("work/project"), 1);
+	assert.equal(prepared?.daily.get("2026-08-01")?.tagSubtreeMemoCounts.get("work"), 1);
 	assert.equal(prepared?.tagDisplayNames.get("work/project"), "Work/Project");
 });
 

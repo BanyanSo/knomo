@@ -67,6 +67,7 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 			renderState,
 			options.recordStatsSnapshot.error ?? "",
 			options.recordStatsSnapshot.updating ? "updating" : "settled",
+			options.recordStatsSnapshot.valid ? "valid" : "stale",
 			options.recordStatsView,
 			formatDatePart(options.recordStatsSelectedDate),
 			formatDatePart(options.today),

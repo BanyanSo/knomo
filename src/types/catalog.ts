@@ -123,6 +123,7 @@ export interface CatalogFileAggregate {
 	untaggedMemoCount: number;
 	hourCounts: number[];
 	tagMemoCounts: Record<string, number>;
+	tagSubtreeMemoCounts: Record<string, number>;
 	tagDisplayNames: Record<string, string>;
 }
 
@@ -143,6 +144,7 @@ export interface CatalogDailyAggregate {
 	untaggedMemoCount: number;
 	hourCounts: number[];
 	tagMemoCounts: Record<string, number>;
+	tagSubtreeMemoCounts: Record<string, number>;
 	tagDisplayNames: Record<string, string>;
 }
 

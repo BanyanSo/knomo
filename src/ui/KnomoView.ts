@@ -3665,7 +3665,7 @@ export class KnomoView extends ItemView {
 			snapshot.state, snapshot.error, pending]);
 		const existingPage = cardFlow.querySelector<HTMLElement>(".knomo-record-stats-page");
 		if (selected && existingPage?.dataset.contentKey === contentKey) {
-			syncKnomoReferencedMetric(existingPage, selected, snapshot);
+			syncKnomoReferencedMetric(existingPage, selected, snapshot, blocked);
 			this.recordStatsViewStateController.markRendered(renderKey); return;
 		}
 		const scrollTop = force ? cardFlow.scrollTop : null;
@@ -5115,13 +5115,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private openRecordStatsMetricFilter(type: RecordStatsMetricFilterType): void {
-		if (type === "referenced") {
-			const snapshot = this.recordStatsService.getSnapshot();
-			if (snapshot.updating || snapshot.error !== null) return;
-		}
 		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
 		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
-		const filter = getRecordStatsMetricSearchFilter(selected, type);
+		const filter = getRecordStatsMetricSearchFilter(selected, type, this.recordStatsService.getSnapshot());
 		if (filter !== null) {
 			this.openRecordStatsSearchFilter(filter);
 		}
@@ -5138,7 +5134,17 @@ export class KnomoView extends ItemView {
 	}
 
 	private openRecordStatsSearchFilter(filter: RecordStatsSearchFilter): void {
-		if (filter.type === "referenced") this.catalogReadService?.relations.beginReading();
+		if (filter.type === "referenced") {
+			if (this.trashViewClosed) return;
+			const state = this.recordStatsViewStateController.getSnapshot();
+			const selected = this.recordStatsService.select(state.view, state.selectedDate);
+			const blocked = !this.getDailyNotesStatus().enabled || hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage)
+				|| this.catalogCoverage === null || !isCompleteCatalogCoverage(this.catalogCoverage);
+			const current = getRecordStatsMetricSearchFilter(selected, "referenced", this.recordStatsService.getSnapshot(), blocked);
+			if (!current || current.type !== "referenced" || current.startDate !== filter.startDate
+				|| current.endDateExclusive !== filter.endDateExclusive) return;
+			this.catalogReadService?.relations.beginReading();
+		}
 		if (this.currentLayout === "mobile") {
 			this.mobileSearchController.resetState();
 			this.mobileRecordStatsSearchFilter = filter;

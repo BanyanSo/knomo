@@ -913,7 +913,7 @@ test("IDB-VERSIONCHANGE：运行期连接失效后自动重开，无法重开时
 	assert.equal((await store.listFiles()).length, 1, "同版本连接关闭后应自动重开");
 	assert.equal(recoveryCount, 1);
 
-	const newer = await openRawDatabase(databaseName, 5, () => undefined);
+	const newer = await openRawDatabase(databaseName, 6, () => undefined);
 	assert.equal(primary.getLifecycle().state, "read-only");
 	assert.deepEqual(await store.listFiles(), []);
 	assert.equal(store.isUsingFallback, true);
@@ -1099,6 +1099,31 @@ test("P3 内存与 IndexedDB 聚合快照绑定同一 revision 和 coverage，�
 			assert.ok(next.catalogRevision > before);
 		}
 	} finally { stores.forEach(store => store.close()); await deleteDatabase(databaseName); }
+});
+
+test("内存与 IndexedDB 子树聚合在同日多文件、编辑、重命名和删除后保持一致", async () => {
+	const name = uniqueDatabaseName("tag-subtree"), date = "2026-09-01";
+	const stores = [new InMemoryMemoCatalogStore(), createStore(name)];
+	try {
+		for (const store of stores) {
+			const first = "Daily/A.md", second = "Daily/B.md", renamed = "Daily/C.md";
+			await store.open();
+			const put = async (path: string, tags: string[], revision: string) => {
+				const partition = makePartition(path, date, [1, 2].map(line => makeObservation(path, date, line, "10:00", "same", { tags })));
+				partition.file.sourceRevision = revision; await store.replaceFilePartition(partition);
+			};
+			await put(first, ["#Project/Alpha", "#project/beta", "#PROJECT"], "initial");
+			await put(second, ["#project/alpha"], "second");
+			assert.deepEqual((await store.readAggregateSnapshot()).aggregates[0]!.tagSubtreeMemoCounts,
+				{ project: 4, "project/alpha": 4, "project/beta": 2 });
+			await put(first, ["#other"], "edited");
+			await store.deleteFilePartition(second); await put(renamed, ["#project/beta"], "renamed");
+			assert.deepEqual((await store.readAggregateSnapshot()).aggregates[0]!.tagSubtreeMemoCounts,
+				{ other: 2, project: 2, "project/beta": 2 });
+			await store.deleteFilePartition(renamed);
+			assert.deepEqual((await store.readAggregateSnapshot()).aggregates[0]!.tagSubtreeMemoCounts, { other: 2 });
+		}
+	} finally { stores.forEach(store => store.close()); await deleteDatabase(name); }
 });
 
 test("P3 IndexedDB 只用 aggregates/meta 同一事务，关闭或 versionchange 使快照失效", async t => {

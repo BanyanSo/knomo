@@ -13,7 +13,6 @@ import { SearchSession } from "./SearchSession";
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import { buildSearchSourceScope } from "./SearchSourceScope";
 import { bindSearchInput } from "./SearchInputBinding";
-import { renderSearchDateHint } from "./SearchDateHint";
 import {
 	getRegularFilterCopy,
 	formatMobileSearchSummary,
@@ -100,7 +99,6 @@ export class MobileSearchController {
 	private displayedContext: { things: ThingsSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
 	private displayedMemos: MemoRecord[] | null = null;
 	private displayedCount: number | null = null;
-	private dateHintEl: HTMLElement | null = null;
 	private pendingQueryKey: string | null = null;
 	private get query(): string { return this.session.applied.input; }
 	private set query(value: string) { this.session.updateDraft(value); this.session.submit(); }
@@ -244,7 +242,6 @@ export class MobileSearchController {
 		this.inputEl = page.inputEl;
 		this.resultsEl = page.resultsEl;
 		this.options.bindImageRoot?.(this.resultsEl);
-		this.dateHintEl = this.pageEl.find(".knomo-search-date-hint");
 		bindSearchInput({
 			input: this.inputEl, session: this.session,
 			registerDomEvent: this.options.registerDomEvent,
@@ -370,7 +367,6 @@ export class MobileSearchController {
 		this.clearDebounce();
 		this.session.close();
 		this.open = false;
-		this.dateHintEl = null;
 		this.pageEl?.detach();
 		this.pageEl = null;
 		this.inputEl = null;
@@ -424,7 +420,6 @@ export class MobileSearchController {
 	}
 
 	private syncControls(): void {
-		if (this.dateHintEl) renderSearchDateHint(this.dateHintEl, this.session);
 		this.syncDateButtons();
 	}
 
@@ -907,10 +902,6 @@ export class MobileSearchController {
 		this.syncDateButtons();
 		if (!this.hasSearchConditions()) {
 			resultsEl.createDiv({ cls: "knomo-mobile-search-empty", text: t("search.emptyPrompt") });
-			completeRender();
-			return;
-		}
-		if (this.session.result === null && !this.session.canRewrite && !this.session.draft.composing) {
 			completeRender();
 			return;
 		}

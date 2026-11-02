@@ -8,15 +8,9 @@ export interface SearchInputRange {
 	to: number;
 }
 
-export type SearchParseError =
-	| "unclosed-quote"
-	| "unfinished-date" | "unfinished-range" | "invalid-date"
-	| "invalid-range-endpoint" | "mixed-range" | "reversed-range" | "multiple-dates";
-
 export interface ParsedSearch {
-	status: "empty" | "valid" | "incomplete" | "invalid";
+	status: "empty" | "valid";
 	terms: string[];
 	date: SearchDate | null;
 	dateRange: SearchInputRange | null;
-	error?: SearchParseError;
 }

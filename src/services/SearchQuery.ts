@@ -1,4 +1,4 @@
-import type { ParsedSearch, SearchDate, SearchInputRange, SearchParseError } from "../types/search";
+import type { ParsedSearch, SearchDate, SearchInputRange } from "../types/search";
 import { normalizeSearchText } from "../utils/searchText";
 
 interface Token extends SearchInputRange { value: string; phrase: boolean }
@@ -10,9 +10,8 @@ type DateToken = { status: "text" | "incomplete" | "invalid" } | { status: "date
 export function parseSearchInput(input: string): ParsedSearch {
 	const result: ParsedSearch = { status: "empty", terms: [], date: null, dateRange: null };
 	const tokens: Token[] = [];
-	const fail = (error: SearchParseError, incomplete = false): ParsedSearch => ({
-		...result, status: incomplete ? "incomplete" : "invalid", error
-	});
+	// 任一日期解析失败都回退整条原文，不沿用已提取的日期、文字或转义结果。
+	const asText = (): ParsedSearch => ({ status: "valid", terms: [normalizeSearchText(input)], date: null, dateRange: null });
 	let at = 0;
 	while (at < input.length) {
 		if (/\s/u.test(input.charAt(at))) { at++; continue; }
@@ -25,7 +24,7 @@ export function parseSearchInput(input: string): ParsedSearch {
 			if (close === input.length) close = -1;
 			const value = normalizeSearchText(input.slice(at + 1, close < 0 ? input.length : close));
 			if (/^[\d\s~至-]+$/u.test(value)) {
-				if (close < 0) return fail("unclosed-quote", true);
+				if (close < 0) return asText();
 				if (close + 1 === input.length || /\s/u.test(input.charAt(close + 1))) {
 					at = close + 1;
 					tokens.push({ from, to: at, phrase: true, value });
@@ -53,22 +52,18 @@ export function parseSearchInput(input: string): ParsedSearch {
 		let range: SearchInputRange = { from: token.from, to: token.to };
 		if (parts.length > 1 && (left.status !== "text" || right?.status !== "text")) {
 			range = { from: token.from, to: tokens[end].to };
-			if (parts.length !== 2) return fail("invalid-range-endpoint");
-			if (!parts[0] || !parts[1] || left.status === "incomplete" || right?.status === "incomplete") return fail("unfinished-range", true);
-			if (left.status === "invalid" || right?.status === "invalid") return fail("invalid-date");
-			if (left.status !== "date" || right?.status !== "date") return fail("invalid-range-endpoint");
-			if (left.value.granularity !== right.value.granularity) return fail("mixed-range");
+			if (parts.length !== 2 || !parts[0] || !parts[1] || left.status !== "date" || right?.status !== "date") return asText();
+			if (left.value.granularity !== right.value.granularity) return asText();
 			if (left.value.granularity === "month-day" && right.value.granularity === "month-day") {
 				date = { kind: "month-day", fromMonthDay: left.value.fromMonthDay, toMonthDay: right.value.toMonthDay };
 			} else if (left.value.granularity !== "month-day" && right.value.granularity !== "month-day") {
-				if (left.value.fromDate > right.value.toDate) return fail("reversed-range");
+				if (left.value.fromDate > right.value.toDate) return asText();
 				date = { kind: "range", granularity: left.value.granularity, fromDate: left.value.fromDate, toDate: right.value.toDate };
 			}
 			i = end;
 		} else {
 			const single = parseDateToken(token.value);
-			if (single.status === "incomplete") return fail("unfinished-date", true);
-			if (single.status === "invalid") return fail("invalid-date");
+			if (single.status === "incomplete" || single.status === "invalid") return asText();
 			if (single.status === "date") {
 				const part = single.value;
 				date = part.granularity === "month-day"
@@ -77,7 +72,7 @@ export function parseSearchInput(input: string): ParsedSearch {
 			}
 		}
 		if (date) {
-			if (result.date) return fail("multiple-dates");
+			if (result.date) return asText();
 			result.date = date;
 			result.dateRange = range;
 		} else if (token.value) {

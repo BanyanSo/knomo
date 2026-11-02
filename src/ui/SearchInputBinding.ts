@@ -7,6 +7,7 @@ interface SearchInputBindingOptions {
 	onDraftChanged: () => void;
 	onQueue: () => void;
 	onClose: () => void;
+	onTextEdited?: () => void;
 	onCompositionChanged?: (composing: boolean) => void;
 }
 
@@ -25,6 +26,7 @@ export function bindSearchInput(options: SearchInputBindingOptions): void {
 	options.registerDomEvent(input, "compositionend", () => {
 		session.endComposition(input.value, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length);
 		options.onDraftChanged();
+		options.onTextEdited?.();
 		options.onQueue();
 		options.onCompositionChanged?.(false);
 	});
@@ -33,7 +35,10 @@ export function bindSearchInput(options: SearchInputBindingOptions): void {
 			readDraft();
 			return;
 		}
-		if (readDraft()) options.onQueue();
+		const changed = readDraft();
+		// 同文替换或粘贴也属于编辑；组合后的同值 input 仍不重复排队查询。
+		options.onTextEdited?.();
+		if (changed) options.onQueue();
 	});
 	options.registerDomEvent(input, "keydown", event => {
 		if (event.key !== "Enter" && event.key !== "Escape") return;

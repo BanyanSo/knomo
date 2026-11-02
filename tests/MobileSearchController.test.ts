@@ -1495,7 +1495,7 @@ test("恢复旧移动空搜索：只显示提示，不查询也不显示 Memo，
  assert.equal(root.findAll(".knomo-card").length, 0);
 });
 
-test("A：非法日期保留卡片与摘要，迟到查询失效；普通 Enter 仍走防抖，关闭重开清空", async () => {
+test("A：日期回退按防抖查询文字，迟到查询失效；快捷区域保留，关闭重开清空", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
 	let memos = [makeMemo("A", "alpha")], total = 1, id = 0;
@@ -1508,7 +1508,7 @@ test("A：非法日期保留卡片与摘要，迟到查询失效；普通 Enter 
 				clearTimeout: (timer: number) => timers.delete(timer) }) as unknown as Window,
 		});
 	const settle = async () => { for (let tick = 0; tick < 8; tick++) await Promise.resolve(); };
-	controller.searchQuery = "alpha"; controller.openPage({ focusInput: false }); await settle();
+	controller.searchQuery = "20261009 alpha"; controller.openPage({ focusInput: false }); await settle();
 	calls[0].resolve(); await settle();
 	const card = root.find(".knomo-card"), summary = root.find(".knomo-list-summary")!.getText();
 	const input = controller.input as unknown as TestElement;
@@ -1524,13 +1524,27 @@ test("A：非法日期保留卡片与摘要，迟到查询失效；普通 Enter 
 	assert.equal(root.find(".knomo-card"), card);
 	assert.equal(root.find(".knomo-list-summary")!.getText(), summary);
 	assert.deepEqual(root.findAll(".knomo-card").map(card => card.getAttr("data-memo-id")), ["A"]);
-	assert.equal(root.find(".knomo-search-date-hint")!.getAttr("hidden"), null);
-	assert.match(root.find(".knomo-search-date-hint")!.getText(), /previous/i);
+	assert.equal(root.find(".knomo-search-date-hint"), null);
+	assert.equal(root.findAll(".knomo-mobile-search-chip").length, 6);
 	assert.equal(root.find(".knomo-search-conditions"), null);
+	for (const callback of timers.values()) callback(); timers.clear();
+	assert.equal(calls.length, 3);
+	assert.deepEqual(calls[2].filter, { textTerms: ["2026-"] });
+	assert.equal(controller.session.applied.date, null);
+	input.value = "202610"; dispatch(input, "input", createKeyboardEvent(""));
+	for (const callback of timers.values()) callback(); timers.clear();
+	assert.equal(calls.length, 4);
+	assert.deepEqual(calls[3].filter, { textTerms: [], searchDate: { kind: "range", granularity: "month", fromDate: "2026-10-01", toDate: "2026-10-31" }, fromDate: "2026-10-01", toDate: "2026-10-31" });
+	memos = [makeMemo("C", "2026- literal")]; total = 30; calls[2].resolve(); await settle();
+	assert.equal(root.find(".knomo-card"), card);
+	assert.equal(root.find(".knomo-list-summary")!.getText(), summary);
+	memos = [makeMemo("D", "October")]; total = 1; calls[3].resolve(); await settle();
+	assert.deepEqual(root.findAll(".knomo-card").map(card => card.getAttr("data-memo-id")), ["D"]);
+	assert.equal(controller.session.result!.input, "202610");
 	controller.closePage(); controller.openPage({ focusInput: false }); await settle();
 	assert.equal(controller.searchQuery, ""); assert.equal(input.value, "");
 	assert.equal(root.findAll(".knomo-card").length, 0);
-	assert.equal(calls.length, 2);
+	assert.equal(calls.length, 4);
 	controller.removePage();
 });
 
@@ -1560,6 +1574,37 @@ test("B：移动快捷日期只替换手写日期，清空输入删除手写日�
 	input.value = ""; controller.flushQuery();
 	assert.equal(controller.session.hasConditions, false);
 	controller.closePage(); controller.removePage();
+});
+
+test("移动端回退文字保留快捷区域，可切换日期并在 Things 范围内查询、关闭提交", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const filters: Parameters<LoadRemoteResults>[0][] = [];
+	let saved: unknown;
+	const { controller, root, dispatch } = createControllerHarness(MobileSearchController, [], undefined,
+		async filter => { filters.push(filter); }, {
+			getThingsContext: () => ({ activeNav: "things", activeTag: "work", activeTagKey: "work" }),
+			syncThingsSearch: (query, date) => { saved = [query, date]; },
+		});
+	controller.openPage({ focusInput: false }); await settle();
+	const input = controller.input as unknown as TestElement;
+	input.value = "2026-"; dispatch(input, "input", createKeyboardEvent(""));
+	controller.flushQuery(); await controller.refreshAppliedResults();
+	assert.deepEqual(filters.at(-1), { textTerms: ["2026-"], hasTask: true, tags: ["work"] });
+	controller.setDateFilter("month"); await settle();
+	assert.equal(input.value, "2026-");
+	assert.equal(controller.session.applied.shortcut, "month");
+	assert.deepEqual(filters.at(-1)?.textTerms, ["2026-"]);
+	assert.equal(filters.at(-1)?.hasTask, true);
+	assert.equal(root.findAll(".knomo-mobile-search-chip").length, 6);
+	assert.equal(root.find(".knomo-search-date-hint"), null);
+	controller.setDateFilter("month"); await settle();
+	assert.equal(controller.session.applied.shortcut, null);
+	input.value = "20261009 项目 2026-13";
+	controller.closePage();
+	assert.deepEqual(saved, ["20261009 项目 2026-13", null]);
+	assert.equal(controller.session.applied.date, null);
+	controller.removePage();
 });
 
 test("重复进入手机统计筛选总是重置文字、手写日期和快捷日期", async () => {

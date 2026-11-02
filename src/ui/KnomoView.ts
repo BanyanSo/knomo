@@ -37,7 +37,6 @@ import { logContinuationFailure } from "../utils/continuationDiagnostics";
 import { filterCatalogMemos } from "./KnomoMemoFilter";
 import { getCatalogQueryKey } from "../services/SearchMatching";
 import { bindSearchInput } from "./SearchInputBinding";
-import { renderSearchDateHint } from "./SearchDateHint";
 import type { DailyNotesStatus } from "../services/DailyNoteService";
 import type { VaultTagIndex } from "../services/VaultTagIndex";
 import { RecordStatsService } from "../services/RecordStatsService";
@@ -464,6 +463,7 @@ export class KnomoView extends ItemView {
 	private layoutWindow: Window | null = null;
 	private layoutWindowCleanup: (() => void) | null = null;
 	private layoutSearchComposing = false;
+	private layoutSearchFocusTransfer = false;
 	private renderedTimeBuoyEnabled: boolean | null = null;
 	private layoutObserver: ResizeObserver | null = null;
 	private filteredMemosCache: FilteredMemosCache | null = null;
@@ -2259,13 +2259,20 @@ export class KnomoView extends ItemView {
 
 	private registerDesktopSearchInput(searchInput: HTMLInputElement): void {
 		const scope = this.getRenderScope();
-		scope.registerDomEvent(searchInput, "focus", () => this.openDesktopSearch());
+		scope.registerDomEvent(searchInput, "focus", () => {
+			if (!this.layoutSearchFocusTransfer) this.openDesktopSearch();
+		});
 		scope.registerDomEvent(searchInput, "click", () => this.openDesktopSearch());
 		bindSearchInput({
 			input: searchInput, session: this.viewStateController.search,
 			registerDomEvent: (target, type, listener) => scope.registerDomEvent(target, type, listener),
 			onDraftChanged: () => this.invalidateSearchDraft(),
 			onQueue: () => this.queueSearchQuery(this.viewStateController.search.draft.text),
+			onTextEdited: () => {
+				if (!searchInput.value.trim() || !this.desktopSearchOpen) return;
+				this.desktopSearchOpen = false;
+				this.syncRootState();
+			},
 			onClose: () => {
 				this.closeDesktopSearch();
 				if (searchInput === this.desktopSearchInputEl) searchInput.blur();
@@ -2320,8 +2327,9 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncSearchControls(): void {
-		this.rootEl?.findAll(".knomo-search-menu .knomo-search-date-hint").forEach(element =>
-			renderSearchDateHint(element, this.viewStateController.search));
+		// 菜单隐藏过渡期间也立即退出键盘顺序，移动端固定快捷区域不受影响。
+		this.rootEl?.findAll(".knomo-search-menu-option").forEach(element =>
+			element.setAttr("tabindex", this.desktopSearchOpen ? "0" : "-1"));
 	}
 
 	private async reloadMemos(loadAll: boolean, forceRebuild = false): Promise<boolean> {
@@ -3378,7 +3386,9 @@ export class KnomoView extends ItemView {
 				input.value = (active as HTMLInputElement).value;
 				if (selection) input.setSelectionRange(selection.start, selection.end);
 			}
-			input?.focus({ preventScroll: true });
+			this.layoutSearchFocusTransfer = true;
+			try { input?.focus({ preventScroll: true }); }
+			finally { this.layoutSearchFocusTransfer = false; }
 		} else if (headerFocused || sidebarFocused && this.currentLayout === "desktop-narrow") {
 			const selector = this.currentLayout === "desktop-wide" ? '.knomo-topbar button' : '.knomo-compact-menu-btn';
 			Array.from(this.rootEl?.querySelectorAll<HTMLElement>(selector) ?? []).find(el => el.getClientRects().length)?.focus({ preventScroll: true });

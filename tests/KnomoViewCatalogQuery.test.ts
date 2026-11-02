@@ -1444,7 +1444,7 @@ async function progressPresentationHarness() {
 	return { view, state, renders: () => renders };
 }
 
-test("桌面 B 请求在 C 草稿输入时立即失效；显式重试仍查询 Applied 并保留非法草稿", async () => {
+test("桌面 B 请求在 C 草稿输入时立即失效；显式重试仍查询 Applied 并保留未提交草稿", async () => {
 	const { view, state, loads } = await searchQueryHarness();
 	state.search.updateDraft("beta"); state.search.submit();
 	const old = view.reloadMemos(true);
@@ -1461,6 +1461,39 @@ test("桌面 B 请求在 C 草稿输入时立即失效；显式重试仍查询 A
 	assert.equal(state.search.result!.filter.textTerms?.join(), "beta");
 	assert.equal(state.search.draft.text, "2026-");
 	assert.equal(state.search.applied.input, "beta");
+});
+
+test("桌面日期改成回退文字后接纳文字结果，续输后丢弃旧文字请求及计数，菜单重开不受影响", async () => {
+	const { view, state, loads } = await searchQueryHarness();
+	state.setSearchQuery("20261009");
+	state.search.commitResult(state.search.getFilter(), 1, "complete");
+	state.search.updateDraft("2026-"); view.invalidateSearchDraft(); state.setSearchQuery("2026-");
+	const fallback = view.reloadMemos(true);
+	state.desktopSearchOpen = true;
+	loads[0].resolve({ ...makeCatalogLoad(1, completeCoverage()), memos: [makeMemo("literal", "2025-08-24T11:00:00")] });
+	assert.equal(await fallback, true);
+	assert.deepEqual(state.search.result!.filter, { textTerms: ["2026-"] });
+	assert.equal(state.search.result!.input, "2026-");
+	assert.equal(state.desktopSearchOpen, true);
+	const count = createDeferred<TestCatalogMemoCount>();
+	view.countCatalogFeature = () => count.promise;
+	const counting = view.refreshCatalogDesktopTotalCount({
+		loadAll: true, queryFingerprint: view.getCatalogQueryFingerprint(true), queryRun: view.catalogDesktopQueryRun,
+		sourceGeneration: view.memoSourceGeneration, catalogRevision: 1,
+	});
+	const stale = view.reloadMemos(true);
+	state.search.updateDraft("202610"); view.invalidateSearchDraft(); state.setSearchQuery("202610");
+	const latest = view.reloadMemos(true);
+	loads[2].resolve({ ...makeCatalogLoad(1, completeCoverage()), memos: [makeMemo("month", "2026-10-24T11:00:00")] });
+	assert.equal(await latest, true);
+	const total = view.catalogDesktopTotalCount;
+	loads[1].resolve({ ...makeCatalogLoad(1, completeCoverage()), memos: [makeMemo("stale", "2025-08-24T11:00:00")] });
+	count.resolve(makeCatalogCount(999, 1));
+	assert.equal(await stale, false); await counting;
+	assert.equal(view.catalogDesktopTotalCount, total);
+	assert.deepEqual(view.memos.map(item => item.id), ["month"]);
+	assert.equal(state.search.result!.input, "202610");
+	assert.equal(state.desktopSearchOpen, true);
 });
 
 test("查询与计数不得用迟到的旧 coverage 覆盖更新状态和总数", async () => {

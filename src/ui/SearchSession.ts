@@ -28,7 +28,7 @@ export class SearchSession {
 	result: { key: string; filter: CatalogQueryFilter; input: string; shortcut: SearchDateFilter | null; catalogRevision: number; coverageKey: string } | null = null;
 
 	get hasConditions(): boolean { return this.applied.terms.length > 0 || this.applied.dateOrigin !== null; }
-	get canRewrite(): boolean { return !this.draft.composing && (this.draft.parsed.status === "empty" || this.draft.parsed.status === "valid"); }
+	get canRewrite(): boolean { return !this.draft.composing; }
 
 	updateDraft(text: string, start = text.length, end = start): boolean {
 		const changed = text !== this.draft.text;

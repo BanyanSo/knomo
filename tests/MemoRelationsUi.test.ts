@@ -911,6 +911,48 @@ test("无关 Daily 编辑不打断已打开关联页或重读其正文", async (
 	} finally { h.close(); }
 });
 
+test("Memo 级锚点优先恢复卡片摘要和关联详情，其内部子块引用不进入摘要", async () => {
+	const h = await fixture(true);
+	try {
+		const [target] = await h.seed("A.md", "- 10:00 first\n  last ^memo\n  - child ^child\n");
+		await h.seed("B.md", "- 11:00 历史引用恢复 [[A#^memo]]\n- 12:00 子块引用 [[A#^child]]\n");
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, await h.memo(target));
+		await settle(); await settle();
+		assert.equal(card.querySelectorAll(".knomo-referrer-preview").length, 1);
+		assert.equal(card.querySelector(".knomo-referrer-summary")?.textContent, "历史引用恢复");
+		card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!.click();
+		await settle(); await settle();
+		assert.equal(h.page.isOpen, true);
+		const rows = h.page.el!.querySelectorAll(".knomo-relations-list .knomo-card-content");
+		assert.equal(rows.length, 1);
+		assert.match(rows[0].textContent!, /历史引用恢复/u);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
+test("旧版末项锚点恢复摘要、被引用筛选和关联详情，非末项 ID 不混入", async () => {
+	const h = await fixture(true);
+	try {
+		const [target] = await h.seed("A.md", "- 10:50:45 赚不到钱的表现（做成的反愿景）：\n\t- 精力分散。 ^internal\n\t- 分不清矛盾主次。  ^no1wu1\n");
+		await h.seed("B.md", "- 11:00 历史列表引用 [[A#^no1wu1|旧别名]]\n- 12:00 内部子块引用 [[A#^internal]]\n");
+		assert.equal((await h.read.count({ hasReferrers: true })).count, 1);
+		const page = await h.read.query({ hasReferrers: true, limit: 30 });
+		assert.deepEqual(page.items.map(item => observationHandleKey(item.observationHandle)), [observationHandleKey(target)]);
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, await h.memo(target));
+		await settle(); await settle();
+		assert.equal(card.querySelectorAll(".knomo-referrer-preview").length, 1);
+		assert.equal(card.querySelector(".knomo-referrer-summary")?.textContent, "历史列表引用");
+		card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!.click();
+		await settle(); await settle();
+		const rows = h.page.el!.querySelectorAll(".knomo-relations-list .knomo-card-content");
+		assert.equal(rows.length, 1);
+		assert.match(rows[0].textContent!, /历史列表引用/u);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
 test("被引用区展示全部单行摘要，倒序、主 Memo 导航且不冒泡", async () => {
 	const h = await fixture();
 	try {

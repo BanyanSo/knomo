@@ -123,6 +123,66 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 	});
 });
 
+test("历史关系锚点旧缓存自动刷新未编辑 Daily，重启后复用新分区", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator, CATALOG_CHECKPOINT_META_KEY } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser, CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService, buildCatalogPartition } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
+	const { hashText } = await import("../src/utils/hash");
+	const databaseName = `relation-anchor-upgrade-${Date.now()}`;
+	const oldVersions = [15, 16];
+	const files = [
+		{ path: "Journal/2026-08-09.md", content: "- 10:00 first\n  last ^memo\n  - child ^child\n- 11:00 first\n\t\n\t^terminal\n- 10:50:45 title\n\t- last ^no1wu1\n", mtime: 10 },
+		{ path: "Journal/2026-08-10.md", content: "- 12:00 summary [[2026-08-09#^memo]] [[2026-08-09#^terminal]] [[2026-08-09#^no1wu1]]\n", mtime: 10 },
+	];
+	try {
+		for (const store of [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(databaseName, { factory: indexedDB, keyRange: IDBKeyRange })]) {
+			for (let boot = 0; boot < oldVersions.length + 2; boot++) {
+				const fixture = await createCoordinatorFixture(files);
+				const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(store),
+					new DiaryMemoParser(async bytes => sha256(bytes)), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+					{ now: () => 1000 + boot * 1000, fullAuditIntervalMs: 10_000 });
+				try {
+					coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+					assert.equal(fixture.readCount(), boot === oldVersions.length + 1 ? 0 : files.length, `boot ${boot}`);
+					const target = await store.getFileRevisionBatch(files[0].path);
+					assert.deepEqual(target!.file.relations!.nodes.map(node => node.blockId), ["memo", "terminal", "no1wu1"]);
+					assert.equal(target!.file.relations!.anchors.memo, 1);
+					assert.equal(target!.file.relations!.anchors.terminal, 1);
+					assert.equal(target!.file.relations!.anchors.no1wu1, 1);
+					assert.equal(target!.file.parserVersion, CATALOG_PARSER_VERSION);
+					const source = await store.getFileRevisionBatch(files[1].path);
+					assert.deepEqual(source!.file.relations!.nodes[0].targets.map(target => target.blockId), ["memo", "terminal", "no1wu1"]);
+				} finally { fixture.unload(); }
+				if (boot < oldVersions.length) {
+					// 模拟旧 parser 的派生结果；原 Daily、mtime 和 sourceRevision 均不改变。
+					await store.open();
+					const oldVersion = oldVersions[boot]!;
+					assert.ok(CATALOG_PARSER_VERSION > oldVersion);
+					const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: oldVersion }));
+					for (const file of files) {
+						const batch = (await store.getFileRevisionBatch(file.path))!;
+						await store.replaceFilePartition(buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
+							observations: batch.observations.map(item => ({ ...item, relationBlockId: null })), blockAnchors: {},
+							parserVersion: oldVersion, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt }));
+					}
+					const checkpoint = await store.getMeta<Record<string, unknown>>(CATALOG_CHECKPOINT_META_KEY);
+					await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: oldVersion, settingsFingerprint: oldFingerprint });
+					store.close();
+				}
+			}
+		}
+	} finally {
+		await new Promise<void>((resolve, reject) => {
+			const request = indexedDB.deleteDatabase(databaseName);
+			request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
+		});
+	}
+});
+
 test("标签统计旧数据库升级后重建未编辑 Daily，重开后 warm start 复用新聚合", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

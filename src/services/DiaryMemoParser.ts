@@ -23,7 +23,7 @@ import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { assignObservationOccurrences } from "./ObservationOccurrences";
 import { collectRelationBlockAnchors, memoLevelRelationBlockId } from "../utils/memoRelations";
 
-export const CATALOG_PARSER_VERSION = 15;
+export const CATALOG_PARSER_VERSION = 17;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;
@@ -308,7 +308,7 @@ function buildMemoObservation(
 		occurrenceIndex: 0,
 		occurrenceCount: 1,
 		existingBlockId: parsed.blockId,
-		relationBlockId: memoLevelRelationBlockId(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n"), parsed.blockId),
+		relationBlockId: memoLevelRelationBlockId(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n")),
 		tags: parseMemoTags(metadataContent),
 		links: parseMemoLinksInSourceOrder(metadataContent),
 		images: dedupeStable(parseMemoImages(metadataContent), (image) => `${image.syntax}\0${image.path}\0${image.altText}`),

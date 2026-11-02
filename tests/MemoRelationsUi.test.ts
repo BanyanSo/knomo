@@ -214,7 +214,7 @@ test("卡片菜单随被引用信息加载、增删更新，只有引用来源�
 		assert.equal(target.querySelector('[data-memo-action="relations"]'), null);
 		await settle(); await settle();
 		assert.deepEqual(Array.from(target.querySelectorAll<HTMLElement>("[data-memo-action]")).map(item => item.dataset.memoAction),
-			["share-image", "edit", "reference", "copy-text", "open-daily", "copy-link", "relations", "delete"]);
+			["reference", "edit", "share-image", "copy-text", "open-daily", "copy-link", "relations", "delete"]);
 		assert.equal(source.querySelector('[data-memo-action="relations"]'), null);
 		await h.seed("C.md", "- 12:00 C [[D#^b]]\n"); await settle(); await settle();
 		assert.ok(source.querySelector('[data-memo-action="relations"]'));

@@ -243,8 +243,8 @@ test("memo card action menu includes open daily in the requested order", async (
 
 	const actions = root.findAll("[data-memo-action]");
 	assert.deepEqual(actions.map((action) => action.getAttr("data-memo-action")), [
-		"edit",
 		"reference",
+		"edit",
 		"share-image",
 		"copy-text",
 		"open-daily",
@@ -265,7 +265,7 @@ test("memo card action menu includes open daily in the requested order", async (
 		["separator", "knomo-card-info"],
 	]);
 	assert.deepEqual(actions.map((action) => action.find(".knomo-menu-icon")?.getAttr("data-icon")), [
-		"pencil", "message-square-quote", "share", "copy", "calendar-days", "link", "trash-2",
+		"message-square-quote", "pencil", "share", "copy", "calendar-days", "link", "trash-2",
 	]);
 	assert.ok(actions.every((action) => action.find(".knomo-menu-icon")?.getAttr("aria-hidden") === "true"));
 	assert.ok(actions.every((action) => action.getAttr("aria-label") === null && action.getAttr("title") === null));

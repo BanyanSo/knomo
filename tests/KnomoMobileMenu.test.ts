@@ -16,7 +16,7 @@ test("原生菜单有无自身锚点均显示固定的引用和复制链接", as
 			h.originalMemo.catalog = createReferenceMemo(anchor).catalog;
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
-			assert.equal(menu.items[1].title, "Reference");
+			assert.equal(menu.items[0].title, "Reference");
 			assert.equal(menu.items[5].title, "Copy link");
 			h.controller.close();
 		}
@@ -35,12 +35,12 @@ test("移动端卡片菜单使用原生分区，删除独立成组且不插入�
 			syncMemoCardRelationsAction(h.f.card, h.originalMemo, hasReferrers);
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
-			assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "message-square-quote", "share", "copy",
+			assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy",
 				...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : []), "trash-2", "text"]);
 			const sections = new Map<string, string[]>();
 			for (const item of menu.items) sections.set(item.section, [...(sections.get(item.section) ?? []), item.icon]);
 			assert.deepEqual([...sections], [
-				["knomo-card-primary", ["pencil", "message-square-quote", "share", "copy"]],
+				["knomo-card-primary", ["message-square-quote", "pencil", "share", "copy"]],
 				["knomo-card-navigation", [...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : [])]],
 				["knomo-card-danger", ["trash-2"]],
 				["knomo-card-info", ["text"]],
@@ -212,14 +212,14 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 		assert.equal(h.controller.kind, "card");
 		assert.equal(menu.items.length, 8);
 		assert.equal(menu.noIcon, false);
-		assert.deepEqual(menu.items.map(item => item.icon), ["pencil", "message-square-quote", "share", "copy", "calendar-days", "link", "trash-2", "text"]);
+		assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy", "calendar-days", "link", "trash-2", "text"]);
 		assert.equal(menu.items.at(-1)!.label, true);
 		assert.equal(menu.items[6].warning, true);
 		assert.equal(menu.doc, h.f.win.document);
 		assert.equal(h.f.card.classList.contains("is-menu-open"), false, "移动端不再显示卡片内 Popover");
 		assert.equal(h.f.card.querySelector(".knomo-card-menu")?.getAttribute("aria-expanded"), "true");
 		h.replaceMemo();
-		menu.items[0].click!(); menu.items[0].click!();
+		menu.items[1].click!(); menu.items[1].click!();
 		assert.deepEqual(h.actions, [{ action: "edit", memo: h.originalMemo }]);
 		assert.equal(h.controller.kind, null);
 		assert.equal(h.f.popup.activeMenuMemoId, null);
@@ -350,7 +350,7 @@ test("the first iOS menu-item touch executes the selected Card or Scope action o
 		const h = await createHarness();
 		try {
 			if (kind === "card") h.view.toggleCardMenu(h.originalMemo.id); else h.view.toggleScopeMenu();
-			const item = h.menus[0].items[kind === "card" ? 0 : 3];
+			const item = h.menus[0].items[kind === "card" ? 1 : 3];
 			const end = tap(h, item.dom.querySelector("span")!);
 			assert.equal(h.controller.kind, null);
 			assert.equal(end.defaultPrevented, true);
@@ -426,7 +426,7 @@ test("a menu item click remains inside the menu and executes exactly once", asyn
 	const h = await createHarness();
 	try {
 		h.view.toggleCardMenu(h.originalMemo.id);
-		await h.f.click(h.menus[0].items[0].dom);
+		await h.f.click(h.menus[0].items[1].dom);
 		assert.deepEqual(h.actions, [{ action: "edit", memo: h.originalMemo }]);
 		assert.equal(h.controller.kind, null);
 	} finally { h.close(); }
@@ -782,7 +782,7 @@ test("卡片普通选项关闭内部菜单后仍恢复视图，编辑选项保�
 					if (action !== "copy-text") editor.focus();
 				} });
 				h.view.toggleCardMenu(h.originalMemo.id);
-				const index = action === "edit" ? 0 : action === "reference" ? 1 : 3;
+				const index = action === "edit" ? 1 : action === "reference" ? 0 : 3;
 				h.menus[0].items[index].click!();
 				if (action !== "copy-text") assert.equal(h.f.win.document.activeElement, editor, "编辑聚焦必须同步保留");
 				for (const callback of [...frames.values()]) callback(0);
@@ -988,8 +988,8 @@ test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Com
 			assert.deepEqual(real.focusStates, [true]);
 			assert.equal(h.f.win.document.activeElement, h.f.view.inputEl);
 			assert.equal(h.f.view.inputEl.composer.view.hasFocus, true);
-			assert.equal(h.f.view.inputEl.value, index === 0 ? h.originalMemo.contentSnapshot : "编辑中的 Memo：取消手势不应丢失这些修改。");
-			if (index === 1) assert.equal(h.f.view.quoteReferenceText, "[[source]]");
+			assert.equal(h.f.view.inputEl.value, index === 1 ? h.originalMemo.contentSnapshot : "编辑中的 Memo：取消手势不应丢失这些修改。");
+			if (index === 0) assert.equal(h.f.view.quoteReferenceText, "[[source]]");
 			let through = 0;
 			const layer = real.controller.getLayerEl()!;
 			layer.addEventListener("click", () => through++);
@@ -1004,7 +1004,7 @@ test("失焦菜单原生 click 正常到达时直接执行，不被首击补偿�
 	let focused = false; h.f.win.document.hasFocus = () => focused;
 	try {
 		h.view.toggleCardMenu(h.originalMemo.id);
-		const item = h.menus[0].items[1].dom;
+		const item = h.menus[0].items[0].dom;
 		assert.equal(tap(h, item).defaultPrevented, false);
 		focused = true; await h.f.click(item);
 		await h.clock!.advance(130);
@@ -1018,7 +1018,7 @@ test("失焦菜单等待激活期间取消、切页、替换菜单或禁用选�
 		let focused = false; h.f.win.document.hasFocus = () => focused;
 		try {
 			h.view.toggleCardMenu(h.originalMemo.id);
-			const item = h.menus[0].items[0].dom;
+			const item = h.menus[0].items[1].dom;
 			tap(h, item);
 			if (scenario === "cancel") h.controller.close();
 			if (scenario === "inactive") h.view.app.workspace.getActiveViewOfType = () => null;

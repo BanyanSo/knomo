@@ -34,7 +34,7 @@ export interface TrashCardActionMeta {
 	state: TrashActionState;
 }
 
-const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["edit", "reference", "share-image", "copy-text", "open-daily", "copy-link", "relations", "delete"];
+const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["reference", "edit", "share-image", "copy-text", "open-daily", "copy-link", "relations", "delete"];
 export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
 	"share-image": "share",
 	relations: "network",

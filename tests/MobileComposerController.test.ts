@@ -56,7 +56,7 @@ test("opens the prepared mobile composer and focuses synchronously", () => {
 	assert.equal(harness.getComposerOpen(), true);
 	assert.equal(harness.controller.getPhase(), "focusing");
 	assert.equal(harness.controller.isLayered(), true);
-	assert.equal(layer?.hasClass("is-open"), true);
+	assert.equal(layer?.hasClass("is-open"), false);
 	assert.equal(layer?.hasClass("is-active"), true);
 	assert.equal(layer?.hasClass("is-keyboard-tracking"), true);
 	assert.equal(layer?.attrs.get("aria-hidden"), "false");
@@ -67,18 +67,27 @@ test("opens the prepared mobile composer and focuses synchronously", () => {
 	assert.equal(harness.win.visualViewport.listenerCount("scroll"), 1);
 
 	harness.win.flushAnimationFrames();
-	assert.equal(harness.controller.getPhase(), "open");
+	assert.equal(harness.controller.getPhase(), "focusing");
 	assert.equal(harness.syncRootCalls, 0);
-	assert.equal(layer?.hasClass("is-open"), true);
+	assert.equal(layer?.hasClass("is-open"), false, "未得到停靠位置时不能提前显示面板");
 	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "0px");
 	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "0px");
 
 	harness.win.flushAnimationFrames();
 	assert.equal(harness.syncRootCalls, 1);
-	assert.deepEqual(harness.syncRootLayerOpenStates, [true]);
+	assert.deepEqual(harness.syncRootLayerOpenStates, [false]);
+	harness.win.flushNextTimer();
+	harness.win.flushAnimationFrames();
+	harness.win.flushNextTimer();
+	assert.equal(harness.controller.getPhase(), "open");
+	assert.equal(layer?.hasClass("is-open"), true, "无软键盘时仍可打开并输入");
+	harness.controller.open();
+	assert.equal(layer?.hasClass("is-open"), true, "重复聚焦保持面板可见");
+	harness.win.flushAnimationFrameCycles(2);
+	assert.deepEqual(harness.syncRootLayerOpenStates, [false, true]);
 });
 
-test("requests the draft end only when expanding or reopening a closing mobile composer", () => {
+test("moves to the draft end on fresh open and preserves selection on reentry", () => {
 	const focusIntents: Array<boolean | undefined> = [];
 	const h = createHarness("mobile", { onFocusInput: moveToEnd => focusIntents.push(moveToEnd) });
 	h.controller.prepare();
@@ -92,7 +101,7 @@ test("requests the draft end only when expanding or reopening a closing mobile c
 	h.win.flushAllTimers();
 	assert.equal(h.controller.getPhase(), "closed");
 	h.controller.open();
-	assert.deepEqual(focusIntents, [true, false, true, true]);
+	assert.deepEqual(focusIntents, [true, false, false, true]);
 	h.controller.dispose();
 });
 
@@ -218,12 +227,14 @@ test("samples delayed first-open viewport geometry without waiting for a resize 
 
 	harness.controller.open();
 	harness.win.flushAnimationFrames();
+	assert.equal(harness.getLayer()?.hasClass("is-open"), false);
 
 	harness.win.visualViewport.height = 500;
 	harness.win.flushNextTimer();
 	harness.win.flushAnimationFrames();
 
 	const layer = harness.getLayer();
+	assert.equal(layer?.hasClass("is-open"), true);
 	assert.equal(layer?.style.values.get("--knomo-keyboard-height"), "300px");
 	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
 	assert.equal(layer?.attrs.get("data-knomo-composer-dock-source"), "visual-viewport");
@@ -231,6 +242,88 @@ test("samples delayed first-open viewport geometry without waiting for a resize 
 	harness.win.flushNextTimer();
 	assert.equal(layer?.hasClass("is-keyboard-tracking"), false);
 	assert.equal(harness.controller.getPhase(), "open");
+});
+
+test("uses the latest dock when native show follows a viewport resize and the candidate bar changes height", () => {
+	const h = createHarness();
+	prepareComposerGeometry(h, 500, 480);
+	h.controller.open();
+	h.win.flushAnimationFrames();
+	assert.equal(h.getLayer()?.hasClass("is-open"), false);
+
+	h.win.visualViewport.height = 620;
+	h.win.visualViewport.dispatchEvent("resize");
+	h.win.flushAnimationFrames();
+	assert.equal(h.getLayer()?.hasClass("is-open"), true);
+	assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), "164px");
+
+	for (const height of [300, 352, 300]) {
+		h.win.dispatchKeyboardEvent("keyboardDidShow", height);
+		h.win.flushAnimationFrames();
+		assert.equal(h.getLayer()?.hasClass("is-open"), true);
+		assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), `${height - 16}px`);
+	}
+	h.win.flushAllTimers();
+	assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
+});
+
+test("updates the dock and settles the input constraint for viewport-only candidate bar changes", () => {
+	const h = createHarness();
+	prepareComposerGeometry(h, 500, 480);
+	h.win.visualViewport.height = 500;
+	h.controller.open();
+	h.win.flushAnimationFrames();
+	h.win.flushAllTimers();
+	const initialMaxHeight = h.controller.getMaxInputHeight();
+
+	for (const viewportHeight of [452, 500]) {
+		h.win.visualViewport.height = viewportHeight;
+		h.win.visualViewport.dispatchEvent("resize");
+		h.win.flushAnimationFrames();
+		assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), `${800 - viewportHeight - 16}px`);
+		h.win.flushAllTimers();
+		assert.equal(h.controller.getMaxInputHeight(), initialMaxHeight - (500 - viewportHeight));
+	}
+});
+
+test("late hide from closing cannot undock the refocused composer", () => {
+	const h = createHarness("mobile", { onFocusInput: () => h.win.dispatchKeyboardEvent("keyboardWillShow", 300) });
+	prepareComposerGeometry(h, 500, 480);
+	h.controller.open();
+	h.win.flushAnimationFrames();
+	h.controller.closeKeepingDraft();
+	h.controller.open();
+	h.win.flushAnimationFrames();
+
+	h.win.dispatchEvent("keyboardDidHide");
+	h.win.flushAnimationFrames();
+	assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), "284px");
+	assert.equal(h.closedCalls, 0);
+	assert.equal(h.doc.activeElement, h.input);
+
+	h.win.dispatchEvent("keyboardWillHide");
+	h.win.dispatchEvent("keyboardDidHide");
+	h.win.flushAnimationFrames();
+	assert.equal(h.getLayer()?.style.values.get("--knomo-mobile-composer-bottom-offset"), "0px");
+});
+
+test("reset during opening cancels the pending reveal and allows a fresh open", () => {
+	const h = createHarness();
+	h.controller.prepare();
+	h.controller.open();
+	h.setComposerOpen(false);
+	h.controller.resetInactiveState();
+	h.win.flushAllTimers();
+	h.win.flushAnimationFrameCycles(3);
+	assert.equal(h.getLayer()?.hasClass("is-open"), false);
+	assert.equal(h.getLayer()?.inert, true);
+	assert.equal(h.syncRootCalls, 0);
+
+	h.win.visualViewport.height = 500;
+	h.controller.open();
+	h.win.flushAnimationFrames();
+	assert.equal(h.getLayer()?.hasClass("is-open"), true);
+	assert.equal(h.focusCalls, 2);
 });
 
 test("keeps the opening baseline when the keyboard triggers a window resize", () => {
@@ -384,6 +477,7 @@ test("keeps the composer docked when a focused input receives no keyboard signal
 	harness.win.flushAnimationFrames();
 	harness.win.flushNextTimer();
 	harness.win.flushAnimationFrames();
+	harness.win.flushNextTimer();
 
 	const layer = harness.getLayer();
 	assert.equal(layer?.hasClass("is-open"), true);
@@ -391,7 +485,6 @@ test("keeps the composer docked when a focused input receives no keyboard signal
 	assert.equal(layer?.style.values.get("--knomo-mobile-composer-bottom-offset"), "0px");
 	assert.equal(layer?.attrs.get("data-knomo-composer-dock-source"), "fallback");
 
-	harness.win.flushNextTimer();
 	assert.equal(layer?.hasClass("is-keyboard-tracking"), false);
 	assert.equal(harness.controller.getPhase(), "open");
 });
@@ -544,6 +637,7 @@ function prepareComposerGeometry(
 test("keyboard tracking pauses background work before focus and resumes only after settling or disposal", () => {
 	const changes: boolean[] = [];
 	const harness = createHarness("mobile", { onKeyboardTrackingChange: busy => changes.push(busy) });
+	harness.win.visualViewport.height = 500;
 	harness.controller.open();
 	assert.deepEqual(changes, [true]);
 	harness.win.flushAnimationFrames();
@@ -623,6 +717,7 @@ test("关闭后实际布局、引用和工具栏变化通过既有 View 入口�
 		assert.equal(h.controller.isLayered(), true);
 		h.controller.open();
 		h.win.flushAnimationFrameCycles(3);
+		h.win.flushAllTimers();
 		assert.equal(h.controller.getPhase(), "open");
 		assert.equal(h.win.visualViewport.listenerCount("resize"), 1);
 	} finally { h.controller.dispose(); }
@@ -747,6 +842,7 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		},
 		focusInputNow: (_resize, _viewport, moveToEnd) => {
 			focusCalls += 1;
+			input.focus();
 			options.onFocusInput?.(moveToEnd);
 		},
 		resizeInput: () => undefined,
@@ -784,6 +880,7 @@ function createHarness(layout: "mobile" | "desktop-wide" = "mobile", options: { 
 		backdropHandlers,
 		syncRootLayerOpenStates,
 		controller,
+		setComposerOpen: (open: boolean) => { composerOpen = open; },
 		setLayout: (next: "mobile" | "desktop-wide") => { layout = next; },
 		getComposerOpen: () => composerOpen,
 		getLayer: () => doc.body.children.find((child) => child.hasClass("knomo-mobile-composer-layer")) ?? null,

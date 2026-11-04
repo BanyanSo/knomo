@@ -23,6 +23,8 @@ export class MemoRelationCards {
 	private disposed = false;
 	private running: Promise<void> | null = null;
 	private pending = false;
+	private paused = false;
+	private dirty = false;
 	private bodyRecoveryKey: string | null = null;
 	private invalidatedVersion: number | null = null;
 	private diagnosticKey: string | null = null;
@@ -55,6 +57,19 @@ export class MemoRelationCards {
 	}
 
 	refresh(): void { this.schedule(); }
+
+	setPresentationPaused(paused: boolean): void {
+		if (this.disposed || this.paused === paused) return;
+		this.paused = paused;
+		if (paused) {
+			this.dirty ||= this.timer !== null || this.running !== null;
+			if (this.timer !== null) { this.win.clearTimeout(this.timer); this.timer = null; }
+			this.controller?.abort();
+		} else if (this.dirty) {
+			this.dirty = false;
+			this.schedule();
+		}
+	}
 	release(container: HTMLElement): void {
 		for (const card of this.cards.keys()) if (container.contains(card)) {
 			this.observer?.unobserve(card);
@@ -76,6 +91,7 @@ export class MemoRelationCards {
 
 	private schedule(): void {
 		if (this.disposed || this.timer !== null) return;
+		if (this.paused) { this.dirty = true; return; }
 		this.timer = this.win.setTimeout(() => { this.timer = null; void this.flush(); }, 35);
 	}
 
@@ -91,7 +107,7 @@ export class MemoRelationCards {
 	}
 
 	private async readVisible(): Promise<void> {
-		if (this.disposed) return;
+		if (this.disposed || this.paused) return;
 		const controller = new AbortController(); this.controller = controller;
 		const signal = controller.signal;
 		for (const card of this.cards.keys()) if (!card.isConnected) { this.cards.delete(card); this.observer?.unobserve(card); }
@@ -100,6 +116,7 @@ export class MemoRelationCards {
 		let bodyKey = "";
 		try {
 			const snapshot = await this.read.relations.read(signal, visible.map(([, binding]) => binding.memo.catalog!.observationHandle));
+			signal.throwIfAborted();
 			const handles = new Map<string, ObservationHandle>();
 			const changed = visible.filter(([card, binding]) => !card.closest(".knomo-relations-page") && binding.signature !== relationCardSignature(snapshot, binding.memo)
 				&& (snapshot.complete || !card.querySelector(".knomo-memo-referrers")));
@@ -113,6 +130,7 @@ export class MemoRelationCards {
 				for (const item of items) summaries.set(item.key, extractMemoRelationSummary(item.content));
 			}
 			await this.read.relations.assertCurrent(snapshot, signal, visible.map(([, binding]) => binding.memo.catalog!.observationHandle));
+			signal.throwIfAborted();
 			for (const [card, binding] of visible) {
 				if (!card.isConnected || this.cards.get(card) !== binding) continue;
 				syncMemoCardRelationsAction(card, binding.memo, snapshot.nodes.has(binding.memo.id) && !!snapshot.referrers.get(binding.memo.id)?.length);

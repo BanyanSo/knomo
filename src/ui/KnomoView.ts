@@ -258,6 +258,11 @@ interface CatalogMemoLoad {
 	status: CatalogReadStatus;
 }
 
+interface CatalogRefreshWindow {
+	memoCount: number;
+	todayCount: number;
+}
+
 const CARD_BATCH_SIZE = 50;
 const CATALOG_PAGE_SIZE = 50;
 const TRASH_MEMO_WINDOW_LIMIT = 150;
@@ -302,6 +307,19 @@ interface MemoChangePresentation {
 type CardRenderSurface = "card-flow" | "mobile-search" | "relations";
 type ImageLoadPauseReason = "image-preview" | "mobile-search";
 type PausableImageLoadSurface = Exclude<CardImageLoadSurface, "image-preview">;
+const MAX_DEFERRED_REFRESH_PATHS = 128;
+
+// undefined 表示没有刷新需求，null 表示范围未知或已折叠为全量。
+type DeferredRefreshPaths = Set<string> | null | undefined;
+
+function mergeDeferredRefreshPaths(pending: DeferredRefreshPaths, paths: Iterable<string> | null): DeferredRefreshPaths {
+	if (pending === null || paths === null) return null;
+	for (const path of paths) {
+		(pending ??= new Set()).add(path);
+		if (pending.size > MAX_DEFERRED_REFRESH_PATHS) return null;
+	}
+	return pending;
+}
 
 type TimeBuoyPickerFocusTarget = "default" | "input";
 
@@ -484,6 +502,16 @@ export class KnomoView extends ItemView {
 	private shareCardModal: KnomoShareCardModal | null = null;
 	private readonly cardImageCache = new MemoCardImageCache();
 	private readonly imageLoadPauseReasons = new Map<PausableImageLoadSurface, Set<ImageLoadPauseReason>>();
+	private presentationVisibilityReady = false;
+	private presentationHidden = false;
+	private presentationVisibilityRevision = 0;
+	private resumePresentationAfterRefresh = false;
+	private preserveRefreshWindow = false;
+	private mobileBackgroundPaused = false;
+	private pendingViewRefresh: boolean | undefined;
+	private pendingReferenceRefresh: DeferredRefreshPaths;
+	private pendingAttachmentRefresh: DeferredRefreshPaths;
+	private presentationRefreshRun: Promise<void> | null = null;
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly randomReunionController: RandomReunionController;
 	private readonly shuffleDayController: ShuffleDayController;
@@ -592,6 +620,7 @@ export class KnomoView extends ItemView {
 
 	private set activeNav(nav: SidebarNav) {
 		if (this.relationsPage?.isOpen) this.relationsPage.close(false);
+		if (nav !== "record-stats" && this.activeNav === "record-stats") this.stopRecordStatsPreparation();
 		if (nav !== this.viewStateController.activeNav) this.cancelCatalogDesktopQuery();
 		this.viewStateController.activeNav = nav;
 		if (nav !== "random") this.randomReunionController?.cancelPending();
@@ -942,7 +971,7 @@ export class KnomoView extends ItemView {
 			debounceMs: SEARCH_DEBOUNCE_MS,
 			getWindow: () => this.containerEl.win,
 			getDocument: () => this.containerEl.doc,
-			isVisible: () => this.containerEl.isShown() && this.containerEl.doc.visibilityState !== "hidden",
+			isVisible: () => !this.isPresentationHidden(),
 			getRootEl: () => this.rootEl,
 			isMobileLayout: () => this.currentLayout === "mobile",
 			getQueryContextKey: () => JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter]),
@@ -1259,7 +1288,8 @@ export class KnomoView extends ItemView {
 					this.wikiLinkSuggest?.close();
 				}
 			}
-			if (!this.trashViewClosed && this.containerEl.isShown()) {
+			this.syncPresentationVisibility();
+			if (!this.trashViewClosed && !this.isPresentationHidden() && this.containerEl.isShown()) {
 				this.handleLocalDateChange();
 				if (this.libraryTagFacets === null) this.renderTags();
 				if (this.mobileSearchController.isOpen) this.mobileSearchController.renderResults("content-change", true, true);
@@ -1312,28 +1342,12 @@ export class KnomoView extends ItemView {
 		});
 		this.mobileNavbarCompactController.start();
 		this.register(() => this.clearTimeBuoyPickerEventListeners());
-		this.registerWindowFocusEvent();
+		this.presentationVisibilityReady = true;
+		this.register(this.containerEl.onWindowMigrated(() => this.startLayoutObserver()));
 		this.registerDomEvent(this.containerEl.win, "orientationchange", () => this.closeTimeBuoyPicker(false));
 		const handleMobileBack = (event: Event): void => this.handleMobileBack(event);
 		this.containerEl.doc.addEventListener("backbutton", handleMobileBack, { capture: true });
 		this.register(() => this.containerEl.doc.removeEventListener("backbutton", handleMobileBack, { capture: true }));
-		this.registerDomEvent(this.containerEl.doc, "visibilitychange", () => {
-			if (this.containerEl.doc.visibilityState === "hidden") {
-				this.clearLoadingIndicators();
-				this.mobileSearchController.suspendLoadingFeedback();
-			}
-			this.clearTagIndexWarmup();
-			this.syncTagIndexInteraction();
-			if (this.containerEl.doc.visibilityState === "visible") {
-				if (this.app.workspace.getActiveViewOfType(KnomoView) === this && !this.trashViewClosed) {
-					this.recoverMobileViewFocus();
-				}
-				this.scheduleTagIndexWarmup();
-				this.handleLocalDateChange();
-				if (this.libraryTagFacets === null) this.renderTags();
-				if (this.mobileSearchController.isOpen) this.mobileSearchController.renderResults("content-change", true, true);
-			}
-		});
 		this.startLayoutObserver();
 		this.registerEvent(this.app.vault.on("modify", file => this.checkConfirmedDailyFile(file.path)));
 		this.registerEvent(this.app.vault.on("delete", file => this.checkConfirmedDailyFile(file.path)));
@@ -1341,21 +1355,27 @@ export class KnomoView extends ItemView {
 		this.registerEvent(this.app.workspace.on("layout-change", () => {
 			if (this.trashViewClosed) return;
 			this.startLayoutObserver();
+			this.syncPresentationVisibility();
 			this.syncLayoutMeasurements();
 		}));
 		this.startDateChangeWatcher();
 	}
 
-	private registerWindowFocusEvent(): void {
-		this.registerDomEvent(this.containerEl.win, "focus", () => {
-			this.handleLocalDateChange();
-			this.recoverMobileViewFocus();
-		});
-	}
-
 	private isMobileNavbarSyncTarget(): boolean {
 		return this.app.workspace.getActiveViewOfType(KnomoView) === this
 			|| (Platform.isMobile && this.containerEl.isShown());
+	}
+
+	private registerWindowFocusEvent(win = this.containerEl.win): () => void {
+		const focus = () => {
+			this.syncPresentationVisibility();
+			if (this.trashViewClosed || this.isPresentationHidden()) return;
+			if (this.layoutWindow === win) this.syncLayoutMeasurements();
+			this.handleLocalDateChange();
+			this.recoverMobileViewFocus();
+		};
+		win.addEventListener("focus", focus);
+		return () => win.removeEventListener("focus", focus);
 	}
 
 	async onClose(): Promise<void> {
@@ -1379,6 +1399,10 @@ export class KnomoView extends ItemView {
 		this.flushLocalDraft();
 		this.localDraftStore?.close();
 		this.trashViewClosed = true;
+		this.presentationVisibilityReady = false;
+		this.pendingViewRefresh = undefined;
+		this.pendingReferenceRefresh = undefined;
+		this.pendingAttachmentRefresh = undefined;
 		this.disposeTagIndexWarmup();
 		this.libraryIndexRun += 1;
 		this.libraryIndexRequestedKey = null;
@@ -1415,8 +1439,7 @@ export class KnomoView extends ItemView {
 		}
 		this.closeTimeBuoyPicker(false);
 		this.clearSearchDebounce();
-		this.clearRecordStatsPreparation();
-		this.recordStatsPreparationController.clearRetryRequest();
+		this.stopRecordStatsPreparation();
 		this.recordStatsService.invalidate();
 		this.timeBuoyViewController.clear();
 		this.resetTimeBuoyCardFlow();
@@ -1450,6 +1473,11 @@ export class KnomoView extends ItemView {
 	async refreshReferences(changedPaths?: readonly string[]): Promise<void> {
 		// 纯 metadata 更新只重排已挂载的宿主渲染；Daily 变化由原增量链路处理。
 		if (this.trashViewClosed) return;
+		this.pendingReferenceRefresh = mergeDeferredRefreshPaths(this.pendingReferenceRefresh, changedPaths ?? null);
+		await this.flushPresentationRefresh();
+	}
+
+	private renderRefreshedReferences(changedPaths?: readonly string[]): void {
 		for (const [container, surface, generation] of [
 			[this.cardFlowEl, "card-flow", this.renderGeneration],
 			[this.mobileSearchResultsEl, "mobile-search", this.mobileSearchRenderGeneration],
@@ -1763,11 +1791,126 @@ export class KnomoView extends ItemView {
 	}
 
 	async refresh(forceRebuild = false): Promise<void> {
-		await this.presentationChangeQueue?.catch(error => { if (!this.trashViewClosed) logContinuationFailure("view", "presentation-queue", error); });
 		if (this.trashViewClosed) return;
+		this.pendingViewRefresh = this.pendingViewRefresh === true || forceRebuild;
+		await this.flushPresentationRefresh();
+	}
+
+	private isPresentationHidden(): boolean {
+		return this.presentationVisibilityReady
+			&& (this.containerEl.doc.visibilityState === "hidden" || !this.containerEl.isShown());
+	}
+
+	private syncPresentationVisibility(): void {
+		if (!this.presentationVisibilityReady || this.trashViewClosed) return;
+		const hidden = this.isPresentationHidden();
+		if (hidden === this.presentationHidden) return;
+		this.presentationHidden = hidden;
+		if (hidden) {
+			this.presentationVisibilityRevision++;
+			this.resumePresentationAfterRefresh = false;
+			this.preserveRefreshWindow = true;
+			if (this.presentationRefreshRun || this.catalogDesktopCountController) this.pendingViewRefresh ??= false;
+			if (this.catalogDesktopQueryController || this.mobileSearchController.isOpen) {
+				this.pendingViewRefresh ??= false;
+				this.cancelCatalogDesktopQuery();
+				this.mobileSearchController.cancelPendingRequest(true);
+			}
+			this.cancelCatalogDesktopCount();
+			this.clearLoadingIndicators();
+			this.mobileSearchController.suspendLoadingFeedback();
+			this.pauseMobileCardBatchContinuation();
+			this.relationsPage?.setPresentationPaused(true);
+			this.relationCards?.setPresentationPaused(true);
+			if (this.activeNav === "record-stats" && this.recordStatsPreparationController.hasActiveRequest()) {
+				this.pendingViewRefresh ??= false;
+				this.stopRecordStatsPreparation();
+			}
+			this.syncBackgroundQueuePause();
+			return;
+		}
+		this.resumePresentationAfterRefresh = true;
+		void this.flushPresentationRefresh().catch(error => this.reportViewRefreshFailure(error, "visibility-refresh"));
+	}
+
+	private async flushPresentationRefresh(): Promise<void> {
+		if (this.trashViewClosed || this.isPresentationHidden()) return;
+		if (this.presentationRefreshRun) return this.presentationRefreshRun;
+		const run = Promise.resolve().then(async () => {
+			try {
+				while (!this.trashViewClosed && !this.isPresentationHidden()) {
+					const force = this.pendingViewRefresh;
+					this.pendingViewRefresh = undefined;
+					let retry = false;
+					try {
+						if (force !== undefined) {
+							retry = !await this.refreshVisiblePresentation(force);
+							if (!retry) this.preserveRefreshWindow = false;
+						}
+					}
+					catch (error) {
+						if (!this.trashViewClosed) this.pendingViewRefresh = force === true || this.pendingViewRefresh === true;
+						throw error;
+					}
+					if (this.trashViewClosed) return;
+					const hasNewRequest = this.pendingViewRefresh !== undefined;
+					if (retry) this.pendingViewRefresh = force === true || this.pendingViewRefresh === true;
+					if (this.isPresentationHidden()) return;
+					this.flushDeferredResourceRefreshes();
+					// 失效或故障由下一次刷新通知或重新显示重试，不在本批内空转。
+					if ((retry && !hasNewRequest) || this.pendingViewRefresh === undefined) return;
+				}
+			} finally {
+				this.presentationRefreshRun = null;
+				if (this.resumePresentationAfterRefresh && !this.trashViewClosed && !this.isPresentationHidden()) {
+					this.resumePresentationAfterRefresh = false;
+					try {
+						this.resumeDeferredCardFlowRender();
+						this.relationsPage?.setPresentationPaused(false);
+						this.relationCards?.setPresentationPaused(false);
+						if (this.libraryIndexRequestedKey != null) void this.refreshCatalogLibraryIndexes();
+					}
+					finally { this.syncBackgroundQueuePause(); }
+				}
+			}
+		});
+		this.presentationRefreshRun = run;
+		return run;
+	}
+
+	private flushDeferredResourceRefreshes(): void {
+		const references = this.pendingReferenceRefresh;
+		this.pendingReferenceRefresh = undefined;
+		try {
+			if (references !== undefined) this.renderRefreshedReferences(references === null ? undefined : [...references]);
+		} catch (error) {
+			if (references !== undefined) this.pendingReferenceRefresh = mergeDeferredRefreshPaths(this.pendingReferenceRefresh, references);
+			throw error;
+		}
+		const attachments = this.pendingAttachmentRefresh;
+		this.pendingAttachmentRefresh = undefined;
+		try {
+			if (attachments !== undefined) this.renderChangedAttachmentImages(attachments === null ? undefined : [...attachments]);
+		} catch (error) {
+			if (attachments !== undefined) this.pendingAttachmentRefresh = mergeDeferredRefreshPaths(this.pendingAttachmentRefresh, attachments);
+			throw error;
+		}
+	}
+
+	private async refreshVisiblePresentation(forceRebuild: boolean): Promise<boolean> {
+		const visibilityRevision = this.presentationVisibilityRevision;
+		const canContinue = () => !this.trashViewClosed && !this.isPresentationHidden()
+			&& visibilityRevision === this.presentationVisibilityRevision;
+		await this.presentationChangeQueue?.catch(error => { if (!this.trashViewClosed) logContinuationFailure("view", "presentation-queue", error); });
+		if (!canContinue()) return false;
 		await this.reconcileConfirmedCatalog();
+		if (!canContinue()) return false;
 		await this.refreshRandomReunionBatch();
-		if (this.mobileSearchController?.isOpen) { await this.mobileSearchController.refreshAppliedResults(); return; }
+		if (!canContinue()) return false;
+		if (this.mobileSearchController?.isOpen) {
+			await this.mobileSearchController.refreshAppliedResults();
+			return canContinue() && this.mobileSearchController.session?.requestStatus !== "failed";
+		}
 		const timeBuoyEnabled = this.settingsService.getSettings().timeBuoyEnabled;
 		if (this.renderedTimeBuoyEnabled !== timeBuoyEnabled) {
 			if (!timeBuoyEnabled && this.activeNav === "time-buoy") {
@@ -1775,21 +1918,24 @@ export class KnomoView extends ItemView {
 				this.activeNav = "all";
 			}
 			await this.render();
-			return;
+			return canContinue();
 		}
 		if (this.activeNav === "time-buoy") {
 			await this.timeBuoyViewController.loadInitial();
-			return;
+			return canContinue();
 		}
 		if (this.activeNav === "trash") {
 			this.handleTrashRenderRequest("ui-state");
-			return;
+			return true;
 		}
 		await this.waitForAllMemosLoading();
-		await this.reloadMemos(false, forceRebuild);
+		if (!canContinue()) return false;
+		const loaded = await this.reloadMemos(false, forceRebuild, this.preserveRefreshWindow);
+		if (!canContinue()) return false;
 		if (this.settingsService.getSettings().timeBuoyEnabled && !this.shouldShowTodayTimeBuoys()) {
 			await this.timeBuoyViewController.loadTodayOnly();
 		}
+		if (!canContinue()) return false;
 		if (this.randomDayOpen) {
 			await this.randomDayController.reloadSelectedDate();
 		} else if (this.activeNav === "random" && this.randomReunionController.getSnapshot().status === "idle") {
@@ -1798,6 +1944,7 @@ export class KnomoView extends ItemView {
 			if (this.shuffleDayController.getSnapshot().status === "idle") await this.shuffleDayController.refresh();
 			else await this.shuffleDayController.reloadSelectedDate();
 		}
+		return loaded && canContinue();
 	}
 
 	private handleRestoredTrashMemo(_deletedMemo: MemoRecord, restoredMemo: MemoRecord): void {
@@ -1807,10 +1954,30 @@ export class KnomoView extends ItemView {
 	}
 
 	handleAttachmentFilesChanged(paths: readonly string[]): void {
+		if (this.trashViewClosed) return;
 		this.cardImageCache.invalidateResourcePaths(paths);
 		this.mobileSearchController.invalidateImagePaths(paths);
 		this.cardImageLoadQueue.invalidateResourcePaths(paths);
 		this.imageResourceCache.invalidateImagePaths(paths);
+		if (this.isPresentationHidden() || this.pendingAttachmentRefresh !== undefined) {
+			this.pendingAttachmentRefresh = mergeDeferredRefreshPaths(this.pendingAttachmentRefresh, paths);
+			void this.flushPresentationRefresh().catch(error => this.reportViewRefreshFailure(error, "attachment-refresh"));
+			return;
+		}
+		this.renderChangedAttachmentImages(paths);
+	}
+
+	private renderChangedAttachmentImages(paths?: readonly string[]): void {
+		if (paths === undefined) {
+			const resources = new Set<string>();
+			for (const root of [this.cardFlowEl, this.mobileSearchResultsEl, this.relationsPage?.el]) {
+				for (const item of Array.from(root?.querySelectorAll("[data-knomo-image-resource]") ?? [])) {
+					const path = item.getAttribute("data-knomo-image-resource");
+					if (path) resources.add(path);
+				}
+			}
+			paths = [...resources];
+		}
 		const invalidatedPaths = new Set(paths.map(normalizeImagePath));
 		const affectedMemoIds = this.memoCardPreviewCache.findImagePathMemoIds(paths);
 		for (const memoId of affectedMemoIds) {
@@ -2339,10 +2506,16 @@ export class KnomoView extends ItemView {
 			element.setAttr("tabindex", this.desktopSearchOpen ? "0" : "-1"));
 	}
 
-	private async reloadMemos(loadAll: boolean, forceRebuild = false): Promise<boolean> {
+	private async reloadMemos(loadAll: boolean, forceRebuild = false, preserveWindow = false): Promise<boolean> {
 		if (this.mobileSearchController?.isOpen) { await this.mobileSearchController.refreshAppliedResults(); return true; }
 		const queryDate = new Date();
+		const acceptedKey = preserveWindow ? this.viewStateController.search.result?.key : undefined;
+		if (acceptedKey !== undefined && acceptedKey === this.getCatalogQueryFingerprint(true, queryDate)) loadAll = true;
 		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll, queryDate);
+		const window: CatalogRefreshWindow | undefined = acceptedKey === queryFingerprint ? {
+			memoCount: this.memos.length,
+			todayCount: this.catalogTodayTimeBuoys?.today.length ?? 0,
+		} : undefined;
 		const previousQueryFingerprint = this.catalogDesktopQueryFingerprint;
 		this.prepareCatalogDesktopQuery(queryFingerprint);
 		const controller = this.beginCatalogDesktopQuery();
@@ -2356,7 +2529,7 @@ export class KnomoView extends ItemView {
 		const previousMobileSearchKey = this.getMobileSearchStateKey();
 		let loaded = false;
 		try {
-			const load = await this.loadCatalogMemos(loadAll, controller.signal, queryDate);
+			const load = await this.loadCatalogMemos(loadAll, controller.signal, queryDate, window);
 			controller.signal.throwIfAborted();
 			if (!this.isCatalogQueryRunCurrent(queryRun, sourceGeneration, searchVersion)
 				|| !this.isCatalogQueryCurrent(queryFingerprint, loadAll)) {
@@ -2477,11 +2650,11 @@ export class KnomoView extends ItemView {
 		await this.onForceRefreshViews();
 	}
 
-	private async loadCatalogMemos(loadAll: boolean, signal?: AbortSignal, queryDate = new Date()): Promise<CatalogMemoLoad> {
+	private async loadCatalogMemos(loadAll: boolean, signal?: AbortSignal, queryDate = new Date(), window?: CatalogRefreshWindow): Promise<CatalogMemoLoad> {
 		for (let attempt = 0; ; attempt++) {
 			const coverageKey = catalogCoverageKey(this.catalogCoverage);
 			try {
-				const load = await this.loadCatalogMemoSnapshot(loadAll, signal, queryDate);
+				const load = await this.loadCatalogMemoSnapshot(loadAll, signal, queryDate, window);
 				signal?.throwIfAborted();
 				if (coverageKey !== catalogCoverageKey(this.catalogCoverage)
 					&& catalogCoverageKey(load.coverage) !== catalogCoverageKey(this.catalogCoverage)) throw new CatalogDiscoveryInvalidatedError();
@@ -2495,7 +2668,7 @@ export class KnomoView extends ItemView {
 		}
 	}
 
-	private async loadCatalogMemoSnapshot(loadAll: boolean, signal?: AbortSignal, queryDate = new Date()): Promise<CatalogMemoLoad> {
+	private async loadCatalogMemoSnapshot(loadAll: boolean, signal: AbortSignal | undefined, queryDate: Date, window?: CatalogRefreshWindow): Promise<CatalogMemoLoad> {
 		signal?.throwIfAborted();
 		let page = await this.queryCatalogFeature({
 			...this.buildCatalogActiveQuery(loadAll, queryDate),
@@ -2516,10 +2689,31 @@ export class KnomoView extends ItemView {
 			this.assertCatalogPageAvailable(page);
 			fullHistoryLoaded = true;
 		}
+		const filter = this.buildCatalogActiveQuery(fullHistoryLoaded, queryDate);
+		const items = [...page.items];
+		if (window && page.nextCursor !== null && items.length < window.memoCount) {
+			const revision = page.catalogRevision;
+			const coverageKey = catalogCoverageKey(page.coverage);
+			const cursors = new Set<string>();
+			// 只补齐原来已读取的窗口。旧 cursor 属于旧快照，从新首批开始逐页重读。
+			while (page.nextCursor !== null && items.length < window.memoCount && page.status.relations?.complete !== false) {
+				const cursor = page.nextCursor;
+				const key = JSON.stringify(cursor);
+				if (cursors.has(key)) throw new CatalogDiscoveryInvalidatedError();
+				cursors.add(key);
+				page = await this.queryCatalogFeature({ ...filter, limit: CATALOG_PAGE_SIZE, cursor }, signal);
+				signal?.throwIfAborted();
+				this.assertCatalogPageAvailable(page);
+				if (page.catalogRevision !== revision || catalogCoverageKey(page.coverage) !== coverageKey) {
+					throw new CatalogDiscoveryInvalidatedError();
+				}
+				items.push(...page.items);
+			}
+		}
 		let todayTimeBuoys: TodayTimeBuoySnapshot | undefined;
 		if (this.shouldShowTodayTimeBuoys()) {
 			// 先准备同版本的置顶结果，再提交列表，避免先撤下置顶又重新提升。
-			const today = await this.timeBuoyViewController.prepareTodayOnly(undefined, signal);
+			let today = await this.timeBuoyViewController.prepareTodayOnly(undefined, signal);
 			signal?.throwIfAborted();
 			if (!today.todayValid && this.hasCommittedCatalogDesktopQuery) {
 				if (today.todayError === null) throw new TimeBuoyIndexPendingError();
@@ -2529,12 +2723,28 @@ export class KnomoView extends ItemView {
 			if (today.todayValid && today.todayRevision !== page.catalogRevision) {
 				throw new CatalogDiscoveryInvalidatedError();
 			}
+			if (window && today.todayValid && today.todayCursor && today.today.length < window.todayCount) {
+				const cursors = new Set<string>();
+				while (today.todayCursor && today.today.length < window.todayCount) {
+					const cursor = today.todayCursor;
+					const key = JSON.stringify(cursor);
+					if (cursors.has(key)) throw new CatalogDiscoveryInvalidatedError();
+					cursors.add(key);
+					const next = await this.timeBuoyViewController.prepareTodayOnly(cursor, signal);
+					signal?.throwIfAborted();
+					if (!next.todayValid || next.todayRevision !== today.todayRevision || next.todayDate !== today.todayDate) {
+						throw new CatalogDiscoveryInvalidatedError();
+					}
+					today = { ...next, today: [...today.today, ...next.today] };
+				}
+			}
 			todayTimeBuoys = today;
 		}
+		const memos = items.map(toCatalogMemoView);
 		return {
 			todayTimeBuoys,
 			fullHistoryLoaded,
-			memos: this.confirmedDailyMemos?.merge(page.items.map(toCatalogMemoView), this.buildCatalogActiveQuery(loadAll, queryDate)) ?? page.items.map(toCatalogMemoView),
+			memos: this.confirmedDailyMemos?.merge(memos, filter) ?? memos,
 			nextCursor: page.nextCursor,
 			coverage: page.coverage,
 			readState: page.readState,
@@ -2700,6 +2910,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadNextCatalogPage(): Promise<boolean> {
+		if (this.isPresentationHidden()) return false;
 		if (this.viewStateController.search.requestStatus === "pending") return false;
 		if (this.catalogLoadingNextPage) return false;
 		const today = this.catalogTodayTimeBuoys;
@@ -3310,20 +3521,35 @@ export class KnomoView extends ItemView {
 	}
 
 	private startLayoutObserver(): void {
+		if (this.trashViewClosed) return;
 		const win: WindowWithResizeObserver = this.containerEl.win;
 		if (this.layoutWindow === win) return;
 		this.stopLayoutObserver();
 		this.layoutWindow = win;
 		const measure = () => {
-			if (!this.trashViewClosed && this.layoutWindow === win) this.syncLayoutMeasurements();
+			if (this.trashViewClosed || this.layoutWindow !== win) return;
+			this.syncPresentationVisibility();
+			this.syncLayoutMeasurements();
+		};
+		const activate = () => {
+			measure();
+			if (!this.presentationVisibilityReady || this.trashViewClosed) return;
+			this.clearTagIndexWarmup();
+			this.syncTagIndexInteraction();
+			if (this.isPresentationHidden()) return;
+			this.scheduleTagIndexWarmup();
+			if (this.app.workspace.getActiveViewOfType(KnomoView) === this) this.recoverMobileViewFocus();
+			this.handleLocalDateChange();
+			if (this.libraryTagFacets === null) this.renderTags();
+			if (this.mobileSearchController.isOpen) this.mobileSearchController.renderResults("content-change", true, true);
 		};
 		win.addEventListener("resize", measure);
-		win.addEventListener("focus", measure);
-		win.document.addEventListener("visibilitychange", measure);
+		const releaseFocus = this.registerWindowFocusEvent(win);
+		win.document.addEventListener("visibilitychange", activate);
 		this.layoutWindowCleanup = () => {
 			win.removeEventListener("resize", measure);
-			win.removeEventListener("focus", measure);
-			win.document.removeEventListener("visibilitychange", measure);
+			releaseFocus();
+			win.document.removeEventListener("visibilitychange", activate);
 		};
 		const ResizeObserverConstructor = win.ResizeObserver;
 		if (ResizeObserverConstructor !== undefined) {
@@ -3332,7 +3558,7 @@ export class KnomoView extends ItemView {
 			if (this.rootEl) observer.observe(this.rootEl);
 			this.layoutObserver = observer;
 		}
-		this.syncLayoutMeasurements();
+		measure();
 	}
 
 	private stopLayoutObserver(): void {
@@ -3790,6 +4016,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private renderNextTimeBuoyBatch(generation: number, batchSize = CARD_BATCH_SIZE): void {
+		if (this.isPresentationHidden()) return;
 		const panel = this.timeBuoyPanelEl;
 		if (panel !== null && generation === this.renderGeneration && this.timeBuoyBatchFrameId === null
 			&& this.timeBuoyRenderedCount >= this.timeBuoyRenderItems.length) {
@@ -3820,6 +4047,11 @@ export class KnomoView extends ItemView {
 		const continueBatch = (): void => {
 			this.timeBuoyBatchFrameId = null;
 			if (generation !== this.renderGeneration || panel !== this.timeBuoyPanelEl) {
+				return;
+			}
+			if (this.isPresentationHidden()) {
+				this.timeBuoyRenderedCount = start + offset;
+				this.deferMobileCardFlowRender(null, false, "content-change");
 				return;
 			}
 			const nextOffset = Math.min(offset + MOBILE_CARD_FRAME_CHUNK_SIZE, items.length);
@@ -3987,10 +4219,11 @@ export class KnomoView extends ItemView {
 		forceRebuild: boolean,
 		changeIntent: CardFlowChangeIntent,
 	): boolean {
-		if (this.presentingConfirmedSave) return false;
+		const hidden = this.isPresentationHidden();
+		if (!hidden && this.presentingConfirmedSave) return false;
 		return this.cardFlowCoordinator.deferMobileRender({
-			isMobile: Platform.isMobile,
-			composerOpen: this.composerOpen,
+			isMobile: hidden || Platform.isMobile,
+			composerOpen: hidden || this.composerOpen,
 			preserveCardMemoId,
 			forceRebuild,
 			changeIntent,
@@ -4514,7 +4747,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private scheduleMobileCardBatchContinuation(continuation: () => void): void {
-		this.cardFlowCoordinator.scheduleMobileBatchContinuation(continuation, this.containerEl.win, Platform.isMobile && this.composerOpen);
+		this.cardFlowCoordinator.scheduleMobileBatchContinuation(continuation, this.containerEl.win,
+			this.isPresentationHidden() || this.mobileBackgroundPaused || (Platform.isMobile && this.composerOpen));
 	}
 
 	private pauseMobileCardBatchContinuation(): void {
@@ -5628,11 +5862,12 @@ export class KnomoView extends ItemView {
 	private refreshCatalogLibraryIndexes(): Promise<void> {
 		if (this.trashViewClosed) return Promise.resolve();
 		this.libraryIndexRequestedKey = this.getLibraryIndexContextKey();
+		if (this.isPresentationHidden()) return Promise.resolve();
 		if (this.libraryIndexRequest != null) return this.libraryIndexRequest;
 		const operation = this.refreshCatalogLibraryIndexesUntilCurrent().finally(() => {
 			if (this.libraryIndexRequest !== operation) return;
 			this.libraryIndexRequest = null;
-			if (this.libraryIndexRequestedKey != null && !this.trashViewClosed) return this.refreshCatalogLibraryIndexes();
+			if (this.libraryIndexRequestedKey != null && !this.trashViewClosed && !this.isPresentationHidden()) return this.refreshCatalogLibraryIndexes();
 		});
 		this.libraryIndexRequest = operation;
 		return operation;
@@ -5640,6 +5875,7 @@ export class KnomoView extends ItemView {
 
 	private async refreshCatalogLibraryIndexesUntilCurrent(): Promise<void> {
 		while (this.libraryIndexRequestedKey != null && !this.trashViewClosed) {
+			if (this.isPresentationHidden()) return;
 			const key = this.libraryIndexRequestedKey;
 			this.libraryIndexRequestedKey = null;
 			this.libraryIndexError = false;
@@ -5710,6 +5946,10 @@ export class KnomoView extends ItemView {
 	}
 
 	private refreshCatalogActiveQuery(): void {
+		if (this.isPresentationHidden()) {
+			this.pendingViewRefresh ??= false;
+			return;
+		}
 		void this.reloadCurrentCatalogQuery(this.isDefaultListState());
 	}
 
@@ -5738,6 +5978,9 @@ export class KnomoView extends ItemView {
 
 	private applyViewStateTransitionEffects(effects: KnomoViewStateTransitionEffects): void {
 		this.cancelPendingQuickCommand();
+		if (this.activeNav !== "record-stats" && this.recordStatsPreparationController?.hasActiveRequest?.()) {
+			this.stopRecordStatsPreparation();
+		}
 		if (this.activeNav !== "random") this.clearRandomDay();
 		if (this.activeNav !== "random") this.randomReunionController.cancelPending();
 		if (this.activeNav !== "shuffleDay") this.shuffleDayController.cancelPending();
@@ -6110,15 +6353,26 @@ export class KnomoView extends ItemView {
 		if (!Platform.isMobile) {
 			return;
 		}
+		this.mobileBackgroundPaused = true;
 		this.pauseMobileCardBatchContinuation();
-		this.memoMarkdownRenderer.setPaused(true);
-		this.cardImageLoadQueue.setPaused(true);
+		this.syncBackgroundQueuePause();
 	}
 
 	private resumeMobileBackgroundWork(): void {
-		if (!Platform.isMobile) {
-			return;
-		}
+		if (!Platform.isMobile) return;
+		this.mobileBackgroundPaused = false;
+		this.resumeDeferredCardFlowRender();
+		this.syncBackgroundQueuePause();
+	}
+
+	private syncBackgroundQueuePause(): void {
+		const hidden = this.presentationHidden || this.resumePresentationAfterRefresh || this.isPresentationHidden();
+		this.memoMarkdownRenderer.setPaused(hidden || this.mobileBackgroundPaused, hidden);
+		this.cardImageLoadQueue.setPaused(hidden || this.mobileBackgroundPaused);
+	}
+
+	private resumeDeferredCardFlowRender(): void {
+		if (this.isPresentationHidden() || this.resumePresentationAfterRefresh || this.mobileBackgroundPaused) return;
 		const renderRequest = this.cardFlowCoordinator.consumeMobileRenderRequest();
 		if (renderRequest !== null) {
 			if (renderRequest.forceRebuild) {
@@ -6127,9 +6381,7 @@ export class KnomoView extends ItemView {
 				this.renderCardFlow(renderRequest.preserveCardMemoId, renderRequest.changeIntent);
 			}
 		}
-		this.resumeMobileCardBatchContinuation();
-		this.memoMarkdownRenderer.setPaused(false);
-		this.cardImageLoadQueue.setPaused(false);
+		if (Platform.isMobile) this.resumeMobileCardBatchContinuation();
 	}
 
 	private closeComposerKeepingDraft(): void {
@@ -7573,11 +7825,14 @@ export class KnomoView extends ItemView {
 		this.invalidateRecordStats();
 		this.recordStatsViewStateController.clearRendered();
 		if (this.activeNav === "record-stats") {
-			if (!this.mobileSearchPageOpen && !this.relationsPage?.isOpen) this.renderRecordStatsPage(true);
-			this.recordStatsPreparationController.schedulePreparation({
-				isPreparedForSource: source => this.recordStatsService.isPreparedForSource(source),
-				prepare: () => { if (!this.trashViewClosed && this.activeNav === "record-stats") void this.prepareRecordStats(); },
-			});
+			if (this.isPresentationHidden()) this.pendingViewRefresh ??= false;
+			else {
+				if (!this.mobileSearchPageOpen && !this.relationsPage?.isOpen) this.renderRecordStatsPage(true);
+				this.recordStatsPreparationController.schedulePreparation({
+					isPreparedForSource: source => this.recordStatsService.isPreparedForSource(source),
+					prepare: () => { if (!this.trashViewClosed && this.activeNav === "record-stats") void this.prepareRecordStats(); },
+				});
+			}
 		}
 		if ((this.activeNav !== "record-stats" && this.isReferrerQuery())
 			|| (this.mobileSearchPageOpen && this.mobileRecordStatsSearchFilter?.type === "referenced")) {
@@ -7604,11 +7859,20 @@ export class KnomoView extends ItemView {
 		return false;
 	}
 
-	private clearRecordStatsPreparation(): void {
-		this.recordStatsPreparationController.clearScheduledPreparation();
+	private stopRecordStatsPreparation(): void {
+		if (this.relationStatsRefreshTimer != null) {
+			this.containerEl.win.clearTimeout(this.relationStatsRefreshTimer);
+			this.relationStatsRefreshTimer = null;
+		}
+		this.recordStatsPreparationController?.cancelPreparation();
+		this.recordStatsService?.cancelPreparation();
 	}
 
 	private prepareRecordStats(): Promise<boolean> {
+		if (this.isPresentationHidden()) {
+			this.pendingViewRefresh ??= false;
+			return Promise.resolve(false);
+		}
 		return this.recordStatsPreparationController.prepare({
 			isPreparedForSource: (source) => this.recordStatsService.isPreparedForSource(source),
 			runPreparation: (source) => this.runRecordStatsPreparation(source),
@@ -7621,24 +7885,48 @@ export class KnomoView extends ItemView {
 	}
 
 	private async runRecordStatsPreparation(source: string): Promise<boolean> {
-		const yieldToUi = () => {
+		if (this.trashViewClosed || this.activeNav !== "record-stats" || this.isPresentationHidden()) return false;
+		const canRender = () => !this.trashViewClosed && !this.isPresentationHidden()
+			&& this.activeNav === "record-stats" && !this.mobileSearchPageOpen && !this.relationsPage?.isOpen;
+		const yieldToUi = (signal: AbortSignal) => {
+			if (signal.aborted) return Promise.resolve();
 			return new Promise<void>((resolve) => {
-				this.containerEl.win.setTimeout(resolve, 0);
+				const win = this.containerEl.win;
+				let frame: number | null = null;
+				let timer: number | null = null;
+				const finish = () => {
+					if (frame !== null) win.cancelAnimationFrame(frame);
+					if (timer !== null) win.clearTimeout(timer);
+					signal.removeEventListener("abort", finish);
+					resolve();
+				};
+				// 已提交基础指标后先让浏览器绘制，再开始准备关系。
+				if (win.requestAnimationFrame) frame = win.requestAnimationFrame(() => { timer = win.setTimeout(finish, 0); });
+				else timer = win.setTimeout(finish, 0);
+				signal.addEventListener("abort", finish, { once: true });
 			});
 		};
 		const showUpdating = (this.catalogCoverage !== null && !isCompleteCatalogCoverage(this.catalogCoverage))
 			|| this.recordStatsService.getSnapshot().updating;
+		let signal: AbortSignal | undefined;
 		const preparation = this.recordStatsService.prepareFromSource(
 			source,
-			(isCurrent) => this.catalogReadService.buildRecordStats(yieldToUi, isCurrent),
+			(isCurrent, publishBase, runSignal) => {
+				signal = runSignal;
+				return this.catalogReadService.buildRecordStats(() => yieldToUi(runSignal), isCurrent, {
+					publishBase, signal: runSignal, expectedCatalogRevision: this.catalogRevision,
+				});
+			},
 			showUpdating,
+			() => { if (canRender()) this.renderRecordStatsPage(true); },
 		);
-		if (this.activeNav === "record-stats" && !this.mobileSearchPageOpen && !this.relationsPage?.isOpen) {
+		if (canRender()) {
 			this.renderCardFlow();
 		}
 		const prepared = await preparation;
+		if (signal?.aborted) return false;
 		const relationRetryKey = JSON.stringify([source, this.catalogRevision, this.catalogReadService?.relations?.revision]);
-		if (!prepared && !this.trashViewClosed && this.activeNav === "record-stats" && !this.recordStatsService.getSnapshot().error
+		if (!prepared && !this.trashViewClosed && !this.isPresentationHidden() && this.activeNav === "record-stats" && !this.recordStatsService.getSnapshot().error
 			&& this.relationStatsRefreshTimer === null && this.relationStatsRetryKey !== relationRetryKey) {
 			this.relationStatsRetryKey = relationRetryKey;
 			this.relationStatsRefreshTimer = this.containerEl.win.setTimeout(() => {
@@ -7646,7 +7934,7 @@ export class KnomoView extends ItemView {
 				if (!this.trashViewClosed && this.activeNav === "record-stats") void this.prepareRecordStats();
 			}, 45);
 		}
-		if (this.activeNav === "record-stats" && !this.mobileSearchPageOpen && !this.relationsPage?.isOpen) {
+		if (canRender()) {
 			this.renderRecordStatsPage(true);
 		}
 		return prepared;
@@ -7850,6 +8138,7 @@ export class KnomoView extends ItemView {
 		if (this.trashViewClosed) return;
 		this.stopDateChangeWatcher();
 		this.startDateChangeWatcher();
+		if (this.isPresentationHidden()) return;
 		const nextDate = formatTimeBuoyDate(new Date());
 		if (nextDate === this.lastKnownLocalDate) {
 			this.renderCardFlow();

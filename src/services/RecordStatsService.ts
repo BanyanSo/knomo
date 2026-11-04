@@ -100,6 +100,8 @@ export class RecordStatsService {
 	private runId = 0;
 	private updating = false;
 	private valid = false;
+	private completed = false;
+	private controller: AbortController | null = null;
 
 	getSnapshot(): RecordStatsSnapshot {
 		return {
@@ -115,10 +117,19 @@ export class RecordStatsService {
 	}
 
 	isPreparedForSource(source: unknown): boolean {
-		return this.valid && this.source === source && (this.state === "ready" || this.state === "empty");
+		return this.valid && this.completed && this.source === source && (this.state === "ready" || this.state === "empty");
+	}
+
+	cancelPreparation(): void {
+		if (!this.controller) return;
+		this.controller.abort();
+		this.controller = null;
+		this.runId++;
+		if (this.state === "loading") this.state = "idle";
 	}
 
 	invalidate(showUpdating = true): void {
+		this.cancelPreparation();
 		this.valid = false;
 		this.runId += 1;
 		this.error = null;
@@ -130,6 +141,7 @@ export class RecordStatsService {
 	}
 
 	fail(message: string): void {
+		this.cancelPreparation();
 		this.valid = false;
 		this.runId += 1;
 		this.error = message;
@@ -144,15 +156,23 @@ export class RecordStatsService {
 
 	async prepareFromSource(
 		source: unknown,
-		loadPrepared: (isCurrent: () => boolean) => Promise<PreparedRecordStats | null>,
+		loadPrepared: (
+			isCurrent: () => boolean,
+			publishBase: (prepared: PreparedRecordStats) => void,
+			signal: AbortSignal,
+		) => Promise<PreparedRecordStats | null>,
 		showUpdating = true,
+		onBasePrepared?: () => void,
 	): Promise<boolean> {
 		if (this.isPreparedForSource(source)) {
 			return true;
 		}
+		this.cancelPreparation();
+		const controller = this.controller = new AbortController();
 		const runId = this.runId + 1;
 		this.runId = runId;
 		this.valid = false;
+		this.completed = false;
 		this.source = null;
 		const hasCommittedStats = this.prepared !== null
 			&& (this.state === "ready" || this.state === "empty");
@@ -161,34 +181,49 @@ export class RecordStatsService {
 		}
 		this.error = null;
 		this.updating = showUpdating && hasCommittedStats;
-
-		try {
-			const prepared = await loadPrepared(() => this.runId === runId);
-			if (this.runId !== runId) {
-				return false;
-			}
-			if (prepared === null) {
-				this.updating = showUpdating && hasCommittedStats;
-				if (!hasCommittedStats) this.state = "idle";
-				return false;
-			}
+		const isCurrent = () => this.runId === runId;
+		const commit = (prepared: PreparedRecordStats) => {
 			this.prepared = prepared;
 			this.source = source;
 			this.valid = true;
 			this.state = prepared.overview.memoCount === 0 ? "empty" : "ready";
 			this.updating = false;
+		};
+		let basePublished = false;
+
+		try {
+			const prepared = await loadPrepared(isCurrent, base => {
+				if (!isCurrent()) return;
+				basePublished = true;
+				commit(base);
+				onBasePrepared?.();
+			}, controller.signal);
+			if (!isCurrent()) {
+				return false;
+			}
+			if (prepared === null) {
+				this.valid = false;
+				this.updating = showUpdating && (hasCommittedStats || basePublished);
+				if (!hasCommittedStats && !basePublished) this.state = "idle";
+				return false;
+			}
+			commit(prepared);
+			this.completed = true;
 			return true;
 		} catch (error) {
 			if (this.runId !== runId) {
 				return false;
 			}
 			this.updating = false;
-			if (!hasCommittedStats) {
+			this.valid = false;
+			if (!hasCommittedStats && !basePublished) {
 				this.prepared = null;
 				this.state = "error";
 			}
 			this.error = error instanceof Error ? error.message : "Unable to prepare record statistics.";
 			return false;
+		} finally {
+			if (this.controller === controller) this.controller = null;
 		}
 	}
 

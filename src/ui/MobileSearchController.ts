@@ -506,7 +506,7 @@ export class MobileSearchController {
 	}
 
 	private async refreshRemoteResults(reset: boolean, changeIntent: CardFlowChangeIntent = "content-change", deduplicate = false): Promise<void> {
-		if (!this.open) return;
+		if (!this.open || this.options.isVisible?.() === false) return;
 		if (!this.hasSearchConditions()) {
 			this.cancelPendingRequest();
 			this.displayedMemos = null;
@@ -798,7 +798,7 @@ export class MobileSearchController {
 
 	private reconcileCommittedCards(changes: ReadonlyMap<string, MemoRecord | null>): boolean {
 		const root = this.resultsEl;
-		if (!root || this.renderedCards.length === 0
+		if (!root || this.options.isVisible?.() === false || this.renderedCards.length === 0
 			|| this.renderedViewKey !== this.getViewStateKey()) return false;
 		const wasPending = this.renderTaskId !== null;
 		const memos = this.getMatchedMemos(), visible = memos.slice(0, wasPending ? this.renderedCards.length : this.visibleCount);
@@ -861,7 +861,7 @@ export class MobileSearchController {
 
 	renderResults(changeIntent: CardFlowChangeIntent = "content-change", append = false, metadataOnly = false): void {
 		const resultsEl = this.resultsEl;
-		if (resultsEl === null || !this.open) {
+		if (resultsEl === null || !this.open || this.options.isVisible?.() === false) {
 			return;
 		}
 		const viewKey = this.getViewStateKey();
@@ -1012,6 +1012,11 @@ export class MobileSearchController {
 		const renderChunk = () => {
 			if (renderRun !== this.renderRun || !this.open || generation !== this.renderGeneration || resultsEl !== this.resultsEl) return;
 			this.renderTaskId = null;
+			if (this.options.isVisible?.() === false) {
+				// 已挂载的前缀继续可用，恢复后由最新结果接管未完成的分片。
+				this.targetRevisions = null;
+				return;
+			}
 			const startedAt = performance.now();
 			let count = 0;
 			while (index < visibleMemos.length) {

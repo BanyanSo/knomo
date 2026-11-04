@@ -121,7 +121,7 @@ test("record stats preparation controller keeps the same source key across query
 	assert.equal(controller.sourceKey, source);
 });
 
-test("record stats preparation controller can clear a pending retry request", async () => {
+test("canceling a preparation clears its retry and releases the slot for a new request", async () => {
 	const scheduler = new FakeScheduler();
 	const controller = createController(scheduler);
 	const deferred = new Deferred<boolean>();
@@ -134,11 +134,17 @@ test("record stats preparation controller can clear a pending retry request", as
 		},
 	}));
 	controller.invalidate();
-	controller.clearRetryRequest();
+	controller.cancelPreparation();
+	assert.equal(controller.hasActiveRequest(), false);
+	const replacement = new Deferred<boolean>();
+	const next = controller.prepare(createPrepareOptions({ runPreparation: () => replacement.promise }));
 	deferred.resolve(true);
 	await preparing;
 
 	assert.deepEqual(runSources, ["catalog:uninitialized"]);
+	assert.equal(controller.hasActiveRequest(), true);
+	replacement.resolve(true);
+	await next;
 	assert.equal(controller.hasActiveRequest(), false);
 });
 

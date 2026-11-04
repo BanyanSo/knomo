@@ -154,9 +154,10 @@ export class MemoMarkdownRenderer {
 		this.pendingComponents[surface].clear();
 	}
 
-	setPaused(paused: boolean): void {
+	setPaused(paused: boolean, relationsPaused = false): void {
 		this.cardFlowQueue.setPaused(paused);
 		this.mobileSearchQueue.setPaused(paused);
+		this.relationsQueue.setPaused(relationsPaused);
 	}
 
 	getTaskCheckboxInput(target: EventTarget | null): HTMLInputElement | null {

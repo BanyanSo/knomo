@@ -255,7 +255,7 @@ async function harness(projection: "ready" | "failed" = "ready") {
 	delete view.renderUiState;
 	assert.equal(view.renderUiState, (KnomoView.prototype as any).renderUiState);
 	view.userActionController = view.createUserActionController();
-	view.registerWindowFocusEvent();
+	view.register(view.registerWindowFocusEvent());
 	view.registerMobileMenuTriggerEvents();
 	await random.refresh();
 	const button = (action: string) => { const element = flow.querySelector<HTMLButtonElement>(`[data-action='${action}']`); assert.ok(element, action); return element; };

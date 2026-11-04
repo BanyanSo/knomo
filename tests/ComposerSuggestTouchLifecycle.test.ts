@@ -56,10 +56,12 @@ async function fixture(kind: "tag" | "link") {
 	f.layer.remove();
 	view.composerOpen = false;
 	view.recoverMobileViewFocus(() => true, true);
-	view.registerWindowFocusEvent();
+	view.register(view.registerWindowFocusEvent());
 	view.registerMobileMenuTriggerEvents();
 	controller.prepare();
 	controller.open();
+	f.win.dispatchEvent(new f.win.CustomEvent("keyboardDidShow", { detail: { keyboardHeight: 300 } }));
+	await clock.advance(16);
 	const layer = controller.getLayerEl()!;
 	const backdrop = layer.querySelector<HTMLElement>(".knomo-mobile-composer-backdrop")!;
 	const names = ["Alpha", "Beta", "Gamma"];

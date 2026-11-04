@@ -100,6 +100,7 @@ export class MobileComposerController {
 	private mobileCapacitorKeyboardHideHandler: ((event: Event) => void) | null = null;
 	private mobileCapacitorKeyboardHeight: number | null = null;
 	private mobileCapacitorKeyboardDidHideRevision = 0;
+	private ignorePreviousKeyboardHide = false;
 	private mobileKeyboardDismissRequest: MobileKeyboardDismissRequest | null = null;
 	private mobileComposerFocusFrameId: number | null = null;
 	private mobileComposerOpenSyncFrameId: number | null = null;
@@ -115,12 +116,10 @@ export class MobileComposerController {
 	private mobileComposerDockTop: number | null = null;
 	private mobileComposerDockSource: MobileComposerDockTop["source"] = "fallback";
 	private mobileComposerLayerBottom: number | null = null;
-	private mobileComposerRevealed = false;
 	private mobileComposerViewportBaselineHeight: number | null = null;
 	private mobileComposerInputMaxHeight: number | null = null;
 	private closeRound = 0;
 	private cancelExitTransition: (() => void) | null = null;
-	private cancelReopenTransition: (() => void) | null = null;
 	private mobileComposerBackdropEl: HTMLElement | null = null;
 	private mobileComposerLayerEl: HTMLElement | null = null;
 	private mobileComposerContentEl: HTMLElement | null = null;
@@ -172,7 +171,12 @@ export class MobileComposerController {
 	resetInactiveState(): void {
 		this.cancelKeyboardDismissRequest();
 		this.clearFocus();
+		this.clearOpenSyncFrame();
+		this.clearResizeFrame();
+		this.clearCloseTimer();
+		this.mobileComposerPhase = "closed";
 		this.stopViewportTracking();
+		this.clearLayerState();
 	}
 
 	dispose(): void {
@@ -230,9 +234,17 @@ export class MobileComposerController {
 	}
 
 	open(): void {
+		if (this.options.isComposerOpen() && (this.mobileComposerPhase === "focusing" || this.mobileComposerPhase === "open")) {
+			this.cancelKeyboardDismissRequest();
+			this.clearFocus();
+			this.options.focusInputNow(false, false, false);
+			this.queueViewportUpdate();
+			this.scheduleOpenRootSync();
+			return;
+		}
 		const win = this.options.getWindow();
 		const reopening = this.mobileComposerPhase === "closing";
-		const moveToEnd = this.options.getLayout() === "mobile" && (!this.options.isComposerOpen() || reopening);
+		const moveToEnd = this.options.getLayout() === "mobile" && !this.options.isComposerOpen();
 		this.cancelKeyboardDismissRequest();
 		if (this.options.getLayout() === "mobile") this.setKeyboardTracking(true);
 		this.clearCloseTimer();
@@ -245,18 +257,18 @@ export class MobileComposerController {
 		this.mobileComposerLayerEl?.setAttr("aria-hidden", "false");
 		if (this.mobileComposerLayerEl) this.mobileComposerLayerEl.inert = false;
 		this.mobileComposerLayerEl?.toggleClass("is-reduced-motion", prefersReducedPopupMotion(win));
-		this.mobileComposerRevealed = false;
 		this.mobileComposerLayerEl?.toggleClass("is-open", false);
 		this.mobileComposerLayerEl?.toggleClass("is-closing", false);
-		this.mobileComposerLayerEl?.toggleClass("is-reopening", reopening);
+		this.mobileComposerLayerEl?.removeAttribute("data-close-stage");
 		if (this.mobileComposerContentEl) this.mobileComposerContentEl.inert = false;
+		this.ignorePreviousKeyboardHide = reopening;
+		this.mobileCapacitorKeyboardHeight = null;
 		if (!reopening) {
 			this.mobileComposerViewportBaselineHeight = win.innerHeight;
 			this.mobileComposerDockTop = win.innerHeight;
 			this.mobileComposerDockSource = "fallback";
 			this.mobileComposerLayerBottom = null;
 			this.mobileKeyboardHeight = 0;
-			this.mobileCapacitorKeyboardHeight = null;
 			this.setKeyboardMetrics(0);
 			this.setComposerBottomOffset(0);
 			// 先测量本轮工具栏；关闭会清空锚点，准备后的字号和模式也可能变化。
@@ -264,27 +276,13 @@ export class MobileComposerController {
 			this.options.resizeInput();
 			this.updateToolbarAnchorInset();
 		}
-		this.updateKeyboardMetrics();
-		if (!reopening && this.mobileComposerContentEl) {
-			// 先提交透明的入场起点；聚焦仍留在当前用户手势内。
-			void win.getComputedStyle(this.mobileComposerContentEl).opacity;
-		}
-		this.revealMobileComposer();
 		this.mobileComposerPhase = "focusing";
 		this.startViewportTracking();
+		this.scheduleKeyboardViewportFallback();
+		// 透明面板中的编辑器仍可同步聚焦，键盘停靠位置由后续采样决定。
 		this.options.focusInputNow(false, false, moveToEnd);
 		this.queueViewportUpdate();
-		this.scheduleKeyboardViewportFallback();
 		this.scheduleOpenRootSync();
-		if (reopening && this.mobileComposerContentEl) {
-			// 中途重开沿当前渲染位置反向过渡，结束后才恢复视口逐帧跟随。
-			this.cancelReopenTransition = waitForPopupTransitions(win, [
-				{ element: this.mobileComposerContentEl, properties: ["transform"] },
-			], () => {
-				this.cancelReopenTransition = null;
-				this.mobileComposerLayerEl?.toggleClass("is-reopening", false);
-			});
-		}
 	}
 
 	closeKeepingDraft(): void {
@@ -479,8 +477,6 @@ export class MobileComposerController {
 	}
 
 	private clearOpenSyncFrame(): void {
-		this.cancelReopenTransition?.();
-		this.cancelReopenTransition = null;
 		if (this.mobileComposerOpenSyncFrameId === null) {
 			return;
 		}
@@ -714,11 +710,9 @@ export class MobileComposerController {
 
 	private clearLayerState(): void {
 		clearMobileComposerLayerState(this.mobileComposerLayerEl);
-		this.mobileComposerLayerEl?.toggleClass("is-reopening", false);
 		this.mobileComposerLayerEl?.toggleClass("is-active", false);
 		this.mobileComposerLayerEl?.setAttr("aria-hidden", "true");
 		if (this.mobileComposerLayerEl) this.mobileComposerLayerEl.inert = true;
-		this.mobileComposerRevealed = false;
 	}
 
 	private detachLayer(): void {
@@ -731,7 +725,6 @@ export class MobileComposerController {
 		this.mobileComposerDockSource = "fallback";
 		this.mobileComposerLayerBottom = null;
 		this.mobileCapacitorKeyboardHeight = null;
-		this.mobileComposerRevealed = false;
 		this.mobileComposerInputMaxHeight = null;
 		this.mobileComposerToolbarAnchorInset = null;
 		this.mobileComposerToolbarAnchorBottom = null;
@@ -763,7 +756,10 @@ export class MobileComposerController {
 		this.scheduleKeyboardDockFrame();
 		this.mobileKeyboardDockStopTimerId = this.options.getWindow().setTimeout(() => {
 			this.mobileKeyboardDockStopTimerId = null;
+			this.updateKeyboardMetrics();
 			this.stopKeyboardDockTracking();
+			// 没有软键盘时，沿用本轮视口补采样和稳定期，以当前布局显示。
+			this.revealMobileComposer();
 		}, MOBILE_KEYBOARD_DOCK_SETTLE_DELAY);
 	}
 
@@ -774,8 +770,11 @@ export class MobileComposerController {
 		this.mobileKeyboardDockFrameId = this.options.getWindow().requestAnimationFrame(() => {
 			this.mobileKeyboardDockFrameId = null;
 			this.updateKeyboardMetrics();
-			if (this.mobileComposerPhase === "opening" || this.mobileComposerPhase === "focusing") {
-				this.mobileComposerPhase = "open";
+			if (this.mobileComposerPhase === "focusing" && this.mobileComposerDockSource !== "fallback") {
+				this.updateMeasurements();
+				this.options.resizeInput();
+				this.refreshToolbarAnchorAndDock();
+				this.revealMobileComposer();
 			}
 		});
 	}
@@ -890,7 +889,7 @@ export class MobileComposerController {
 	}
 
 	private handleCapacitorKeyboardShow(event: Event): void {
-		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
+		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen() || this.mobileComposerPhase === "closing") {
 			return;
 		}
 		const keyboardHeight = this.getCapacitorKeyboardHeightFromEvent(event);
@@ -898,19 +897,25 @@ export class MobileComposerController {
 			return;
 		}
 		this.mobileCapacitorKeyboardHeight = keyboardHeight;
-		this.clearKeyboardViewportFallback();
 		this.queueViewportUpdate();
 	}
 
 	private handleCapacitorKeyboardHide(event: Event): void {
+		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen() || this.mobileComposerPhase === "closing") {
+			return;
+		}
+		// 原生事件没有轮次。重新聚焦时，上一轮的 hide 和没有当前 willHide 的迟到 didHide 不清空新位置。
+		const inputEl = this.options.getInputEl();
+		if (this.ignorePreviousKeyboardHide && this.mobileKeyboardDismissRequest === null
+			&& inputEl !== null && this.options.getDocument().activeElement === inputEl
+			&& (this.mobileComposerPhase === "focusing" || event.type === "keyboardDidHide")) {
+			return;
+		}
+		this.ignorePreviousKeyboardHide = false;
 		if (event.type === "keyboardDidHide") {
 			this.mobileCapacitorKeyboardDidHideRevision += 1;
 		}
 		this.mobileCapacitorKeyboardHeight = 0;
-		if (this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
-			return;
-		}
-		this.clearKeyboardViewportFallback();
 		this.queueViewportUpdate();
 	}
 
@@ -955,11 +960,14 @@ export class MobileComposerController {
 	}
 
 	private revealMobileComposer(): void {
-		if (this.mobileComposerRevealed) {
+		if (this.mobileComposerPhase !== "focusing" || this.options.getLayout() !== "mobile" || !this.options.isComposerOpen()) {
 			return;
 		}
-		this.mobileComposerRevealed = true;
+		this.clearKeyboardViewportFallback();
+		// 先提交停靠位置和透明起点，再淡入，避免首个可见帧从窗口底边追赶键盘。
+		if (this.mobileComposerContentEl) void this.options.getWindow().getComputedStyle(this.mobileComposerContentEl).opacity;
 		this.mobileComposerLayerEl?.toggleClass("is-open", true);
+		this.mobileComposerPhase = "open";
 	}
 
 	private finishClosingWithExitAnimation(round: number): void {
@@ -1125,6 +1133,7 @@ export class MobileComposerController {
 		this.mobileComposerDockSource = "fallback";
 		this.mobileComposerLayerBottom = null;
 		this.mobileCapacitorKeyboardHeight = null;
+		this.ignorePreviousKeyboardHide = false;
 		this.mobileComposerToolbarAnchorInset = null;
 		this.mobileComposerToolbarAnchorBottom = null;
 		this.mobileComposerToolbarAnchorSource = "unknown";

@@ -104,12 +104,11 @@ export class KnomoShareCardModal extends Modal {
 		} else focusForNavigation(close, this.focusVisible);
 	}
 	private select(template: ShareCardTemplateId): void {
-		if (this.closed || this.outputBusy || this.stale) return;
+		if (this.closed || this.outputBusy || this.stale || !this.session?.select(template)) return;
 		this.selected = template; this.file = null; this.renderActions();
 		this.setStatus(""); this.previewEl.setAttribute("aria-busy", "true");
 		this.clearPreview();
 		for (const button of this.templateButtons) button.setAttribute("aria-pressed", String(button.dataset.template === template));
-		this.session?.select(template);
 	}
 	private publish(blob: Blob): void {
 		if (this.closed || !this.snapshot) return;

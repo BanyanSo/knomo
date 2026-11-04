@@ -296,7 +296,7 @@ async function createHarness(mobile = false) {
 		renderUiState: (options?: { renderCardFlow?: boolean }) => { if (options?.renderCardFlow !== false) view.renderCardFlow(); },
 		renderAllMemosLoadingState: () => {}, retainMemoCardPreviews: () => {},
 		syncPageFeedback: () => {}, reportViewRefreshFailure: (error: unknown) => failures.push(error),
-		memoMarkdownRenderer: { clear: () => {}, refreshSearchHits: () => {} },
+		memoMarkdownRenderer: { clear: () => {}, refreshSearchHits: () => {}, releaseCard: () => {} },
 		cardImageCache: { capture: () => {} }, cardImageLoadQueue: { clear: () => {}, forget: () => {} },
 		renderMemoCardInContainer: renderCard, renderTimeBuoyIntro: () => null,
 		resetTimeBuoyCardFlow: () => {}, renderHistoryLoadMore: () => {}, syncCardMenuState: () => {},

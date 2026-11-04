@@ -138,6 +138,7 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 		};
 		Object.assign(view, { cardFlowEl: root.asHtml(), containerEl: { win: {} }, renderedCardMemos: new Map(),
 			cardImageCache: new MemoCardImageCache(),
+			memoMarkdownRenderer: { releaseCard: () => {} },
 			cardFlowCoordinator: { generation: 1, clearMobileBatchContinuation: () => {}, removeSentinel: () => {}, getPendingVisibleCount: () => null, syncBatch: () => {} },
 			prepareRecentTimeFlow: () => { view.recentTimeFlowContext = context; view.recentDecorations = new RecentTimeFlowDecorations(context); },
 			getInitialCardBatchSize: () => 10, renderCardForMode: render,

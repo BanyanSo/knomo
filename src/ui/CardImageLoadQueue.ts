@@ -139,10 +139,43 @@ export class CardImageLoadQueue {
 			return;
 		}
 		this.forget(request.targetEl);
+		this.watchRequest(request);
+	}
+
+	private watchRequest(request: CardImageLoadRequest): void {
 		this.observedRequests.set(request.targetEl, request);
 		this.ranges.set(request.targetEl, { surface: request.surface, nearby: false, visible: false });
 		this.surfaces.get(request.surface)?.nearby.observe(request.targetEl);
 		this.surfaces.get(request.surface)?.visible.observe(request.targetEl);
+	}
+
+	update(request: CardImageLoadRequest, removedImages: readonly HTMLImageElement[]): void {
+		const target = request.targetEl;
+		const removed = new Set(removedImages);
+		const observed = this.observedRequests.get(target);
+		if (observed) {
+			const images = observed.images.filter(item => !removed.has(item.imageEl));
+			if (images.length) this.observedRequests.set(target, { ...observed, images });
+			else this.observedRequests.delete(target);
+		}
+		for (const task of this.failedTasks) {
+			if (task.targetEl === target && removed.has(task.item.imageEl)) this.failedTasks.delete(task);
+		}
+		this.pendingTasks = this.pendingTasks.filter(task => task.targetEl !== target || !removed.has(task.item.imageEl));
+		for (const task of this.activeTasks) {
+			if (task.targetEl === target && removed.has(task.item.imageEl)) this.cancelActiveTask(task, true);
+		}
+		if (request.images.length === 0) {
+			if (!this.observedRequests.has(target) && !this.activeTargets.has(target)
+				&& !this.pendingTasks.some(task => task.targetEl === target)) this.unobserve(target);
+			return;
+		}
+		const range = this.ranges.get(target);
+		if (request.observe === false || !this.surfaces.has(request.surface) || range?.visible || range?.nearby) this.enqueueRequest(request);
+		else if (!range) this.watchRequest(request);
+		else this.observedRequests.set(target, {
+			...request, images: [...(this.observedRequests.get(target)?.images ?? []), ...request.images],
+		});
 	}
 
 	forget(targetEl: HTMLElement, clearSources = false): void {
@@ -622,7 +655,8 @@ export class CardImageLoadQueue {
 		}
 		this.activeSources.delete(task.item.src);
 		this.activeTargets.delete(task.targetEl);
-		if (!this.pendingTasks.some((pending) => pending.targetEl === task.targetEl)) this.unobserve(task.targetEl);
+		if (!this.observedRequests.has(task.targetEl)
+			&& !this.pendingTasks.some((pending) => pending.targetEl === task.targetEl)) this.unobserve(task.targetEl);
 		this.pump();
 	}
 

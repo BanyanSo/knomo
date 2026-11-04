@@ -39,6 +39,37 @@ test("loads one image per card at a time and waits for decode", async () => {
 	assert.equal(second.getAttr("src"), "app://second.png");
 });
 
+test("局部更新保留同一卡片已就绪的图片和另一张的在途解码", async () => {
+	const scheduler = new FakeScheduler();
+	const queue = createQueue(scheduler);
+	const card = new FakeCard();
+	const a = new FakeImage(), b = new FakeImage(), c = new FakeImage(), newB = new FakeImage();
+	const loaded: string[] = [];
+	const image = (node: FakeImage, name: string, path = name) => ({
+		...createLoadItem(node, `app://${name}`, path), onLoad: () => loaded.push(name),
+	});
+	queue.observe(createRequest("card-flow", card, [image(a, "A"), image(c, "C"), image(b, "B")]));
+	scheduler.flushDelay(0);
+	a.dispatch("load");
+	a.resolveDecode();
+	await flushMicrotasks();
+	scheduler.flushDelay(0);
+	c.dispatch("load");
+	assert.equal(c.decodeCalls, 1);
+	queue.invalidateResourcePaths(["B"]);
+	queue.update(createRequest("card-flow", card, [image(newB, "new-B", "B")]), [b.asImage()]);
+	assert.deepEqual(getSources(a, b, c, newB), ["app://A", null, "app://C", null]);
+	c.resolveDecode();
+	await flushMicrotasks();
+	scheduler.flushDelay(0);
+	assert.equal(c.decodeCalls, 1);
+	assert.equal(newB.getAttr("src"), "app://new-B");
+	newB.dispatch("load");
+	newB.resolveDecode();
+	await flushMicrotasks();
+	assert.deepEqual(loaded, ["A", "C", "new-B"]);
+});
+
 test("load releases a loading position but retains decode management and placeholder", async () => {
 	const scheduler = new FakeScheduler();
 	const first = new FakeImage();

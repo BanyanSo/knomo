@@ -5,6 +5,7 @@ import { createCardMemo as makeMemo } from "./helpers/memoCardFixture";
 import type { MemoViewItem } from "../src/types/memoView";
 import {
 	MemoCardImageCache,
+	ReadyCardImageHandoff,
 	parseCardImageIndex,
 	renderMemoCardImages,
 	type RenderedMemoCardImages,
@@ -82,6 +83,54 @@ test("renderMemoCardImages reuses loaded image items with unchanged keys", () =>
 	assert.equal(root.find(".knomo-card-image-item"), item);
 	assert.equal(root.find("img"), imageEl);
 	assert.equal(root.find(".knomo-card-image-item")?.hasClass("is-loading"), false);
+});
+
+test("附件仅更新 B 时 A/C 始终挂载，重排及重复资源各自更新预览位置", () => {
+	const root = new TestElement("div");
+	const make = (name: string) => makeImage({ resourcePath: `img/${name}.png`, url: `app://${name}.png` });
+	const [a, b, c] = ["a", "b", "c"].map(make);
+	const first = renderMemoCardImages(root.asHtml(), makeMemo(), [a, b, c], labels)!;
+	const [aNode, , cNode] = first.loadItems.map(item => item.imageEl);
+	aNode.setAttr("src", a.url!); first.loadItems[0].onLoad?.();
+	cNode.setAttr("src", c.url!);
+	const [firstItem, , lastItem] = root.findAll(".knomo-card-image-item");
+	const remove = TestElement.prototype.remove;
+	firstItem.remove = lastItem.remove = () => assert.fail("未变条目应保持挂载");
+	const changed = renderMemoCardImages(root.asHtml(), makeMemo(), [a, b, c], labels, first.imagesEl, undefined, new Set(["img/b.png"]))!;
+	assert.deepEqual(changed.removedImages, [first.loadItems[1].imageEl]);
+	assert.equal(changed.loadItems.length, 1, "同 URL 的显式变更仍重新加载");
+	assert.equal(root.findAll("img")[0].asHtml(), aNode);
+	assert.equal(root.findAll("img")[2].asHtml(), cNode);
+	assert.equal(cNode.getAttr("src"), c.url);
+	assert.equal(lastItem.hasClass("is-loading"), true);
+	firstItem.remove = lastItem.remove = remove;
+	const moved = renderMemoCardImages(root.asHtml(), makeMemo(), [c, a, a, b], labels, first.imagesEl)!;
+	assert.equal(moved.loadItems.length, 1);
+	assert.deepEqual(root.findAll("img").slice(0, 2).map(node => node.asHtml()), [cNode, aNode]);
+	assert.equal(root.findAll(".knomo-card-image-button")[2].getAttr("data-image-index"), "2");
+	assert.equal(root.find(".knomo-card-image-more")?.getText(), "+1");
+});
+
+test("跨快照图片交接按解析资源逐个消费，排除相同文件名和已失效的候选", () => {
+	const root = new TestElement("div");
+	const previous = root.createDiv();
+	const a = makeImage({ resourcePath: "a/image.png", url: "app://a/image.png" });
+	const b = makeImage({ resourcePath: "b/image.png", url: "app://b/image.png" });
+	const first = renderMemoCardImages(previous.asHtml(), makeObservedMemo(1), [a, a, b], labels)!;
+	for (const item of first.loadItems) {
+		item.imageEl.setAttr("src", item.src);
+		Object.assign(item.imageEl, { complete: true, naturalWidth: 500 });
+		item.onLoad?.();
+	}
+	const handoff = new ReadyCardImageHandoff([previous.asHtml()], root.asHtml());
+	handoff.invalidate(["b/image.png"]);
+	assert.equal(previous.findAll("img").length, 3);
+	const next = root.createDiv();
+	const result = renderMemoCardImages(next.asHtml(), makeObservedMemo(4), [a, a, b], labels, null, handoff)!;
+	assert.deepEqual(next.findAll("img").slice(0, 2).map(node => node.asHtml()), first.loadItems.slice(0, 2).map(item => item.imageEl));
+	assert.equal(result.loadItems.length, 1);
+	assert.equal(result.loadItems[0].resourcePath, b.resourcePath);
+	assert.equal(handoff.take(a), null);
 });
 
 test("renderMemoCardImages limits visible images and shows the hidden count", () => {
@@ -308,7 +357,7 @@ test("移动 View 的实际重建入口经过其他筛选与空页后复用原�
 		renderCardFlowHeaders: () => [],
 		cardImageLoadQueue: {
 			clear() {}, forget() {},
-			observe(request: CardImageLoadRequest) {
+			update(request: CardImageLoadRequest) {
 				for (const item of request.images) {
 					loads++; Object.assign(item.imageEl, { naturalWidth: 4000, naturalHeight: 3000 });
 					item.imageEl.setAttr("src", item.src); item.onLoad?.();
@@ -404,6 +453,16 @@ class TestElement {
 	private text = "";
 	private parent: TestElement | null = null;
 
+	get parentElement(): TestElement | null { return this.parent; }
+	get firstElementChild(): TestElement | null { return this.children[0] ?? null; }
+	get lastElementChild(): TestElement | null { return this.children.at(-1) ?? null; }
+	get nextElementSibling(): TestElement | null {
+		return this.parent?.children[this.parent.children.indexOf(this) + 1] ?? null;
+	}
+	contains(element: TestElement): boolean {
+		return element === this || this.children.some(child => child.contains(element));
+	}
+
 	constructor(private readonly tagName: string) {}
 
 	asHtml(): HTMLElement {
@@ -451,6 +510,12 @@ class TestElement {
 		child.parent = this;
 		this.children.push(child);
 		return child;
+	}
+
+	insertBefore(child: TestElement, next: TestElement | null): void {
+		child.remove();
+		child.parent = this;
+		this.children.splice(next ? this.children.indexOf(next) : this.children.length, 0, child);
 	}
 
 	remove(): void {

@@ -8,6 +8,7 @@ import type { MemoSaveResult } from "../src/types/catalogView";
 import type { MarkdownCatalogCommitInput } from "../src/services/MarkdownMutationService";
 import type { DailyMemoPresentationChange, ConfirmedDailyMemoPresentation } from "../src/services/DailyMemoPresentationChange";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
+import type { ReadyCardImageHandoff } from "../src/ui/KnomoCardImages";
 
 // 查询在机器繁忙时会协作式让出；夹具必须提供窗口计时器，不能依赖它始终同步完成。
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -676,6 +677,91 @@ test("标签视图保存匹配或不匹配的新卡片均保留旧卡片 DOM、�
 	}
 });
 
+test("外部保存同一 Daily 的其他位置后，列表换成当前句柄并接续已就绪的预览图", async () => {
+	const h = await fixture({ immediate: true, body: "## Memos\n- 09:00 kept ![[image.png]]\n\n## Notes\nBefore\n" });
+	const dom = attachCardFlow(h.view, false, false, true);
+	const old = h.view.memos[0]!;
+	const oldCard = dom.root.querySelector(".knomo-card")!;
+	const image = oldCard.querySelector("img")!;
+	const button = image.parentElement;
+	const changes: MutationRecord[] = [];
+	const observer = new dom.window.MutationObserver(records => changes.push(...records));
+	observer.observe(image, { attributes: true, attributeFilter: ["src"] });
+	const reload = h.view.reloadMemos;
+	h.view.reloadMemos = async () => {
+		await reload();
+		Object.assign(h.view, { filteredMemosCache: null });
+		dom.render();
+		return true;
+	};
+	try {
+		await h.externalReplace(h.body().replace("Before", "After"));
+		assert.ok(oldCard.contains(image), "接纳新查询前图片留在原卡片");
+		await h.view.refresh();
+		const card = dom.root.querySelector(".knomo-card")!;
+		assert.notEqual(card, oldCard);
+		assert.notEqual(card.querySelector("button"), button);
+		assert.equal(card.querySelector("img"), image);
+		assert.equal(image.getAttribute("src"), "app://image.png?knomo-mtime=1");
+		assert.equal(card.querySelector(".is-loading"), null);
+		assert.equal(dom.imageLoads(), 1);
+		assert.deepEqual([...changes, ...observer.takeRecords()], []);
+		assert.equal(dom.findMemo(card.getAttribute("data-memo-id")!)?.id, h.view.memos[0]!.id);
+		await assert.rejects(h.edit(old, "stale edit"), /stale|revision|changed/iu);
+	} finally {
+		observer.disconnect();
+		dom.dispose();
+	}
+});
+
+test("记录统计准备中的非 force 重绘保留同范围位置，完成时使用用户的新位置", async () => {
+	const h = await fixture({ immediate: true });
+	const dom = attachCardFlow(h.view);
+	const { RecordStatsService } = await import("../src/services/RecordStatsService");
+	const { RecordStatsPreparationController } = await import("../src/ui/RecordStatsPreparationController");
+	const { RecordStatsViewStateController } = await import("../src/ui/RecordStatsViewStateController");
+	const stats = new RecordStatsService();
+	const state = new RecordStatsViewStateController(new Date(2026, 7, 22));
+	const prep = new RecordStatsPreparationController({ scheduleTask: () => 1, cancelTask: () => {} });
+	const ready = await h.read.buildRecordStats(async () => {}, () => true);
+	assert.ok(ready);
+	await stats.prepareFromSource("old", async () => ready);
+	const view = h.view as unknown as { renderRecordStatsPage: () => void; prepareRecordStats: () => Promise<boolean> };
+	const pending = deferred<typeof ready>();
+	Object.assign(h.view, {
+		recordStatsService: stats, recordStatsViewStateController: state, recordStatsPreparationController: prep,
+		mobileSearchController: { isOpen: false },
+		catalogStatus: { content: "ready", catalog: "complete", projection: "ready" }, catalogCoverage: null,
+		getDailyNotesStatus: () => ({ enabled: true }), clearLoadingIndicators: () => {},
+		getCardFlowStateKey: () => JSON.stringify([stats.getSnapshot(), state.getSnapshot()]),
+		createHiddenText: () => "stats-label", renderCardFlow: () => view.renderRecordStatsPage(),
+	});
+	Object.assign(h.read, { buildRecordStats: () => pending.promise });
+	h.view.viewStateController.activeNav = "record-stats";
+	dom.root.empty = () => { dom.root.replaceChildren(); dom.root.scrollTop = 0; };
+	Object.defineProperty(dom.root, "scrollHeight", { value: 1000 });
+	try {
+		view.renderRecordStatsPage();
+		const previous = dom.root.firstElementChild;
+		dom.root.scrollTop = 300;
+		Object.assign(h.view, { catalogStatus: { content: "ready", catalog: "complete", projection: "failed" } });
+		prep.setSourceKey("new");
+		const refreshing = view.prepareRecordStats();
+		assert.notEqual(dom.root.firstElementChild, previous, "准备过程的状态变化触发同范围重绘");
+		assert.equal(dom.root.scrollTop, 300);
+		dom.root.scrollTop = 120;
+		pending.resolve(ready);
+		assert.equal(await refreshing, true);
+		assert.equal(dom.root.scrollTop, 120);
+		state.setView("month");
+		view.renderRecordStatsPage();
+		assert.equal(dom.root.scrollTop, 0);
+	} finally {
+		pending.resolve(ready);
+		dom.dispose();
+	}
+});
+
 test("浮标当前分组匹配时增量插入，不匹配时保留原面板，索引刷新也不重建", async () => {
 	const today = new Date();
 	const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -1212,7 +1298,7 @@ test("浮标新增、减为单日和全部移除在 Daily 确认时立即更新 
 	}
 });
 
-function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = false) {
+function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = false, previewImages = false) {
 	const dom = new JSDOM("<body><main></main></body>");
 	const originalHTMLElement = globalThis.HTMLElement;
 	globalThis.HTMLElement = dom.window.HTMLElement;
@@ -1224,6 +1310,10 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		setAttr(this: HTMLElement, name: string, value: string) { this.setAttribute(name, value); },
 		setText(this: HTMLElement, text: string) { this.textContent = text; },
 		addClass(this: HTMLElement, name: string) { this.classList.add(name); },
+		removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
+		setCssProps(this: HTMLElement, props: Record<string, string>) {
+			for (const [name, value] of Object.entries(props)) this.style.setProperty(name, value);
+		},
 		find(this: HTMLElement, selector: string) { return this.querySelector(selector); },
 		findAll(this: HTMLElement, selector: string) { return Array.from(this.querySelectorAll(selector)); },
 		empty(this: HTMLElement) { this.replaceChildren(); },
@@ -1240,16 +1330,29 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		syncCardFlowPresentation: (presentation: object, preserve: null) => void;
 		renderTimeBuoyPage: () => void;
 		findMemoById: (id: string) => MemoViewItem | null;
+		renderMemoCardImages: (container: HTMLElement, memo: MemoViewItem, images: import("../src/ui/MemoCardPreview").MemoPreviewImage[],
+			generation: number, surface: "card-flow", reuse: null, handoff?: ReadyCardImageHandoff) => void;
 	};
-	const renderCard = (container: HTMLElement, memo: MemoViewItem) => {
+	let imageLoads = 0;
+	const renderCard = (container: HTMLElement, memo: MemoViewItem, generation: number, _index: number, _mode: unknown,
+		_body: unknown, _images: unknown, handoff?: ReadyCardImageHandoff) => {
 		const card = dom.window.document.createElement("article"); card.className = "knomo-card";
 		card.setAttribute("data-memo-id", memo.id); card.setAttribute("data-memo-render-key", memo.catalog!.renderKey);
 		card.setAttribute("data-time-presentation", JSON.stringify({ mode: "full" }));
 		const body = dom.window.document.createElement("div"); body.className = "knomo-card-content"; body.textContent = memo.contentSnapshot;
 		const checkbox = dom.window.document.createElement("input"); checkbox.type = "checkbox";
 		checkbox.setAttribute("data-knomo-memo-id", memo.id); checkbox.setAttribute("data-knomo-task-index", "0"); body.append(checkbox);
-		const image = dom.window.document.createElement("img"); image.src = "https://example.test/image.png"; body.append(image);
-		card.append(body); container.append(card); return card;
+		card.append(body); container.append(card);
+		if (previewImages) renderingView.renderMemoCardImages(body, memo, [{
+			raw: "![[image.png]]", path: "image.png", resourcePath: "image.png", isRemote: false,
+			url: "app://image.png?knomo-mtime=1", mtime: 1,
+		}], generation, "card-flow", null, handoff);
+		else {
+			const image = dom.window.document.createElement("img");
+			image.src = "https://example.test/image.png";
+			body.append(image);
+		}
+		return card;
 	};
 	const render = () => timeBuoy ? renderingView.renderTimeBuoyPage() : renderingView.syncCardFlowPresentation(usePresentation ? view.getCurrentCardFlowPresentation() : {
 		type: "items", mode: "memo", headers: [], memos: view.getFilteredMemos(),
@@ -1260,7 +1363,16 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		cardFlowCoordinator: { generation: 1, clearMobileBatchContinuation: () => {}, removeSentinel: () => {},
 			getPendingVisibleCount: () => null, syncBatch: () => {}, resetFlowRuntime: () => {} },
 		memoMarkdownRenderer: { retainCard: () => {}, releaseCard: () => {}, refreshSearchHits: () => {}, clear: () => {} },
-		cardImageCache: { capture: () => {} }, cardImageLoadQueue: { clear: () => {} },
+		cardImageCache: { capture: () => {}, take: () => null },
+		renderedPreviewImages: new WeakMap(),
+		cardImageLoadQueue: { clear: () => {}, update: ({ images }: import("../src/ui/CardImageLoadQueue").CardImageLoadRequest) => {
+			for (const item of images) {
+				imageLoads++;
+				item.imageEl.setAttribute("src", item.src);
+				Object.defineProperties(item.imageEl, { complete: { value: true }, naturalWidth: { value: 640 } });
+				item.onLoad?.();
+			}
+		} },
 		timeBuoyPanelEl: null, timeBuoyRenderItems: [], timeBuoyRenderedCount: 0, timeBuoyBatchFrameId: null,
 		timeBuoyLoadMoreObserver: null,
 		prepareRecentTimeFlow: () => { Object.assign(view, { recentTimeFlowContext: { enabled: false, dates: [], pinnedKeys: new Set() },
@@ -1272,6 +1384,6 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		renderCardFlow: render, renderUiState: (options?: { renderCardFlow?: boolean }) => { if (options?.renderCardFlow !== false) render(); },
 	});
 	render();
-	return { root, render, findMemo: (id: string) => renderingView.findMemoById(id),
+	return { root, render, window: dom.window, imageLoads: () => imageLoads, findMemo: (id: string) => renderingView.findMemoById(id),
 		dispose: () => { view.trashViewClosed = true; globalThis.HTMLElement = originalHTMLElement; dom.window.close(); } };
 }

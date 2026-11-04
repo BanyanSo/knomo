@@ -657,6 +657,40 @@ test("总数晚到只更新摘要，保留卡片、滚动和正在加载的图�
 	assert.equal(chunked.root.find(".knomo-mobile-search-more")?.getText(), "Load more (76 remaining)");
 });
 
+test("普通搜索的新计数不可用时移除旧总数，保留新快照的卡片", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	let revision = 1, finishCount: ((result: CatalogMemoCountResult) => void) | undefined;
+	const { controller, root } = createControllerHarness(MobileSearchController, [], undefined, async () => {
+		const page = makeRemotePage([makeMemo(`memo-${revision}`, "memo")], revision);
+		return { ...page, nextCursor: { catalog: { catalogRevision: revision, createdAtKey: "next", observationKey: "next" } } };
+	}, {
+		countRemoteResults: async () => revision === 1
+			? { count: 90, complete: true, catalogRevision: 1, coverage: makeRemotePage([]).coverage }
+			: new Promise<CatalogMemoCountResult>(resolve => { finishCount = resolve; }),
+	});
+	const summary = () => root.find(".knomo-search-result-count");
+	try {
+		controller.searchQuery = "memo";
+		controller.openPage({ focusInput: false }); await settle();
+		const oldSummary = summary();
+		assert.match(oldSummary?.getText() ?? "", /90/);
+		revision = 2;
+		await controller.refreshAppliedResults(); await settle();
+		assert.equal(summary(), oldSummary, "等待本轮计数时暂留摘要");
+		const card = root.find(".knomo-card");
+		assert.equal(card?.getAttr("data-memo-id"), "memo-2");
+		assert.ok(finishCount);
+		finishCount({ count: null, complete: false, catalogRevision: 2, coverage: makeRemotePage([]).coverage });
+		await settle();
+		assert.equal(summary(), null);
+		assert.equal(root.find(".knomo-card"), card);
+		assert.equal(controller.getDisplayedCount(), null);
+	} finally {
+		controller.removePage();
+	}
+});
+
 test("空搜索收到晚到计数不显示加载入口，清空关键词后仍保持提示", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -909,7 +943,7 @@ test("移动搜索追加保留已有卡片和 generation，正文改变时安全
 	await controller.refreshAppliedResults();
 	controller.loadMore();
 	assert.notEqual(root.find(".knomo-card"), original);
-	assert.equal(clears, firstClears + 1);
+	assert.equal(clears, firstClears);
 });
 
 test("移动搜索分帧追加且关闭取消未完成渲染", async () => {
@@ -932,6 +966,111 @@ test("移动搜索分帧追加且关闭取消未完成渲染", async () => {
 	assert.equal(frames.size, 0);
 	late();
 	assert.equal(state.renderedMemoIds.length, count);
+});
+
+test("同范围刷新中断协调后，恰好等于已渲染前缀的结果仍清理旧尾部", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	for (const scope of ["all", "referenced"] as const) {
+		const frames = new Map<number, () => void>();
+		let frameId = 0, revision = 1;
+		const old = Array.from({ length: 14 }, (_, index) => makeMemo(`old-${index}`, "memo"));
+		const changed = old.map((memo, index) => index < 6 ? makeMemo(`new-${index}`, "memo") : memo);
+		let items = old;
+		const { controller, root, state } = createControllerHarness(MobileSearchController, [], undefined,
+			async () => makeRemotePage(items, revision), {
+				batchSize: 14, getSourceScope: () => scope,
+				scheduleRenderTask: callback => { frames.set(++frameId, callback); return frameId; },
+				cancelRenderTask: frame => { frames.delete(frame); },
+			});
+		const drain = () => {
+			while (frames.size) {
+				const [frame, callback] = [...frames][0]; frames.delete(frame); callback();
+			}
+		};
+		const cards = () => root.findAll(".knomo-card");
+		try {
+			controller.searchQuery = "memo";
+			controller.openPage({ focusInput: false }); await settle(); drain();
+			assert.equal(cards().length, old.length);
+			revision++;
+			items = changed;
+			await controller.refreshAppliedResults();
+			const partialFrame = [...frames.values()][0];
+			assert.ok(partialFrame);
+			const prefixLength = state.renderedMemoIds.length - old.length;
+			assert.ok(prefixLength > 0 && prefixLength <= 6);
+			const first = cards()[0];
+			assert.ok(cards().length > prefixLength);
+			revision++;
+			items = changed.slice(0, prefixLength);
+			await controller.refreshAppliedResults();
+			drain();
+			partialFrame();
+			assert.deepEqual(cards().map(card => card.getAttr("data-memo-id")), items.map(memo => memo.id), scope);
+			assert.equal(cards()[0], first);
+			assert.equal(controller.getDisplayedCount(), prefixLength);
+		} finally {
+			controller.removePage();
+		}
+	}
+});
+
+test("移动搜索后台刷新从新 cursor 补足已展开窗口，拒绝跨版本尾页并保留阅读锚点", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const [removed, stable, deep, previous, added, changed] =
+		["removed", "stable", "deep", "old-revision", "added", "new-revision"].map(id => makeMemo(id, "memo"));
+	const cursor = (catalogRevision: number) => ({ catalog: { catalogRevision, createdAtKey: "next", observationKey: "next" } });
+	const requests: Array<Parameters<LoadRemoteResults>[1]> = [];
+	let refresh = false, clears = 0;
+	let resolveTail!: (page: MobileSearchPage) => void;
+	let tail: Promise<MobileSearchPage>;
+	const stageTail = () => { tail = new Promise(resolve => { resolveTail = resolve; }); };
+	const { controller, root } = createControllerHarness(MobileSearchController, [], undefined, async (_filter, request) => {
+		requests.push(request);
+		if (refresh && request) return tail;
+		if (request) return makeRemotePage([deep, previous], 1);
+		const revision = refresh ? 2 : 1;
+		return { ...makeRemotePage(refresh ? [stable, added] : [removed, stable], revision), nextCursor: cursor(revision) };
+	}, { batchSize: 2, clearImages: () => { clears++; } });
+	const ids = () => root.findAll(".knomo-card").map(card => card.getAttr("data-memo-id"));
+	try {
+		controller.searchQuery = "memo";
+		controller.openPage({ focusInput: false }); await settle();
+		controller.loadMore(); await settle();
+		assert.deepEqual(ids(), [removed.id, stable.id, deep.id, previous.id]);
+		const previousClears = clears;
+		const oldCards = root.findAll(".knomo-card");
+		const results = controller.results!;
+		results.scrollTop = 200;
+		for (const card of oldCards) card.getBoundingClientRect = () => {
+			const top = root.findAll(".knomo-card").indexOf(card) * 100 - results.scrollTop;
+			return { top, bottom: top + 100 } as DOMRect;
+		};
+		refresh = true; stageTail();
+		const failed = controller.refreshAppliedResults(); await settle();
+		controller.loadMore();
+		assert.deepEqual(requests.slice(2), [null, cursor(2)]);
+		assert.deepEqual(root.findAll(".knomo-card"), oldCards);
+		resolveTail(makeRemotePage([changed, deep], 3)); await failed;
+		assert.deepEqual(root.findAll(".knomo-card"), oldCards);
+		assert.equal(controller.session.result?.catalogRevision, 1);
+		stageTail();
+		const accepted = controller.refreshAppliedResults(); await settle();
+		resolveTail(makeRemotePage([changed, deep], 2)); await accepted;
+		assert.deepEqual(requests.slice(4), [null, cursor(2)]);
+		assert.deepEqual(ids(), [stable.id, added.id, changed.id, deep.id]);
+		assert.equal(root.findAll(".knomo-card")[0], oldCards[1]);
+		assert.equal(root.findAll(".knomo-card")[3], oldCards[2]);
+		assert.equal(results.scrollTop, 300, "深处存活卡片前新增记录时保持其相对视口位置");
+		assert.equal(clears, previousClears);
+		assert.equal(controller.getDisplayedCount(), 4);
+		assert.equal(controller.session.result?.catalogRevision, 2);
+	} finally {
+		resolveTail?.(makeRemotePage([]));
+		controller.removePage();
+	}
 });
 
 test("连续分帧重建保留最初滚动目标，用户滚动和范围切换使旧目标失效", async () => {
@@ -1215,7 +1354,7 @@ function createControllerHarness(
 		filterMemos: (memos, filter) => memos.filter(memo => (filter.textTerms ?? []).every(term => memo.contentSnapshot.includes(term))),
 		renderMemoCard: (container, memo) => {
 			state.renderedMemoIds.push(memo.id);
-			container.createDiv({ cls: "knomo-card", text: memo.id, attr: { "data-memo-id": memo.id } });
+			return container.createDiv({ cls: "knomo-card", text: memo.id, attr: { "data-memo-id": memo.id } });
 		},
 		clearMarkdown: () => undefined,
 		clearImages: () => undefined,
@@ -1303,6 +1442,33 @@ class TestElement {
 	get childCount(): number {
 		return this.children.length;
 	}
+
+	get parentElement(): TestElement | null { return this.parent; }
+	get firstElementChild(): TestElement | null { return this.children[0] ?? null; }
+	get lastElementChild(): TestElement | null { return this.children.at(-1) ?? null; }
+	get nextElementSibling(): TestElement | null {
+		return this.parent?.children[this.parent.children.indexOf(this) + 1] ?? null;
+	}
+
+	contains(element: TestElement): boolean {
+		return element === this || this.children.some(child => child.contains(element));
+	}
+
+	insertBefore(child: TestElement, next: TestElement | null): void {
+		child.remove();
+		child.parent = this;
+		this.children.splice(next ? this.children.indexOf(next) : this.children.length, 0, child);
+	}
+
+	replaceWith(replacement: TestElement): void {
+		this.parent?.insertBefore(replacement, this);
+		this.remove();
+	}
+
+	querySelector(selector: string): TestElement | null { return this.find(selector); }
+	querySelectorAll(selector: string): TestElement[] { return this.findAll(selector); }
+	getAttribute(key: string): string | null { return this.getAttr(key); }
+	setAttribute(key: string, value: string): void { this.setAttr(key, value); }
 
 	asHtml(): HTMLElement {
 		return this as unknown as HTMLElement;

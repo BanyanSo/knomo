@@ -96,6 +96,8 @@ import {
 	parseCardImageIndex,
 	renderMemoCardImages,
 	MemoCardImageCache,
+	ReadyCardImageHandoff,
+	normalizeImagePath,
 } from "./KnomoCardImages";
 import type { CardFlowRenderMode } from "./KnomoCardFlow";
 import { KnomoCardFlowCoordinator } from "./KnomoCardFlowCoordinator";
@@ -960,11 +962,15 @@ export class KnomoView extends ItemView {
 			},
 			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
 			filterMemos: (memos, filter) => filterCatalogMemos(memos, filter),
-			renderMemoCard: (container, memo, generation, index, reusedImagesEl) => {
-				return this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, reusedImagesEl);
+			renderMemoCard: (container, memo, generation, index, reusedImagesEl, handoff) => {
+				return this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, reusedImagesEl, undefined, handoff);
 			},
 			clearMarkdown: (surface) => this.memoMarkdownRenderer.clear(surface),
-			releaseCard: (card) => this.memoMarkdownRenderer.releaseCard(card, "mobile-search"),
+			releaseCard: (card) => {
+				this.memoMarkdownRenderer.releaseCard(card, "mobile-search");
+				this.removeCardImageTargets(card);
+				this.relationCards?.release(card);
+			},
 			retainCard: (card, memo) => { this.memoMarkdownRenderer.retainCard(card, memo); this.relationCards?.observe(card, memo); },
 			clearImages: (surface) => this.cardImageLoadQueue.clear(surface),
 			bindImageRoot: (root) => this.cardImageLoadQueue.bindSurface("mobile-search", root),
@@ -1805,11 +1811,12 @@ export class KnomoView extends ItemView {
 		this.mobileSearchController.invalidateImagePaths(paths);
 		this.cardImageLoadQueue.invalidateResourcePaths(paths);
 		this.imageResourceCache.invalidateImagePaths(paths);
+		const invalidatedPaths = new Set(paths.map(normalizeImagePath));
 		const affectedMemoIds = this.memoCardPreviewCache.findImagePathMemoIds(paths);
 		for (const memoId of affectedMemoIds) {
 			const memo = this.findMemoById(memoId);
 			if (memo !== null) {
-				this.refreshVisibleMemoImages(memo);
+				this.refreshVisibleMemoImages(memo, invalidatedPaths);
 			}
 		}
 	}
@@ -3670,6 +3677,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		const recordStatsState = this.recordStatsViewStateController.getSnapshot();
+		const rangeKey = JSON.stringify(recordStatsState);
 		const selected = this.recordStatsService.select(recordStatsState.view, recordStatsState.selectedDate);
 		const contentKey = JSON.stringify([recordStatsState, selected ? { ...selected, referenced: undefined } : null,
 			snapshot.state, snapshot.error, pending]);
@@ -3678,7 +3686,7 @@ export class KnomoView extends ItemView {
 			syncKnomoReferencedMetric(existingPage, selected, snapshot, blocked);
 			this.recordStatsViewStateController.markRendered(renderKey); return;
 		}
-		const scrollTop = force ? cardFlow.scrollTop : null;
+		const scrollTop = existingPage?.dataset.rangeKey === rangeKey ? cardFlow.scrollTop : null;
 		this.renderGeneration += 1;
 		this.cardImageCache.capture(cardFlow, Platform.isMobile ? cardFlow : null);
 		this.memoMarkdownRenderer.clear();
@@ -3695,8 +3703,9 @@ export class KnomoView extends ItemView {
 			canRetreat: this.recordStatsViewStateController.canRetreat(this.recordStatsService.getEarliestYear()),
 		});
 		page.dataset.contentKey = contentKey;
+		page.dataset.rangeKey = rangeKey;
 		this.recordStatsViewStateController.markRendered(renderKey);
-		if (scrollTop !== null) cardFlow.scrollTop = scrollTop;
+		if (scrollTop !== null) cardFlow.scrollTop = Math.max(0, Math.min(scrollTop, cardFlow.scrollHeight - cardFlow.clientHeight));
 	}
 
 	private renderTimeBuoyPage(): void {
@@ -4234,6 +4243,9 @@ export class KnomoView extends ItemView {
 		);
 		const visibleMemos = presentation.memos.slice(0, visibleCount);
 		const desiredKeys = new Set(visibleMemos.map(getMemoRenderKey));
+		const handoff = presentation.mode === "memo" ? new ReadyCardImageHandoff(
+			[...existingCards].filter(([key]) => !desiredKeys.has(key)).map(([, card]) => card), cardFlow,
+		) : undefined;
 		const renderedCards: HTMLElement[] = [];
 
 		for (const [index, memo] of visibleMemos.entries()) {
@@ -4256,7 +4268,7 @@ export class KnomoView extends ItemView {
 				card = this.replaceMemoCard(existingCard, previousMemo, memo, index, presentation.mode);
 				if (presentation.mode === "memo") seedPlaceholder(memo, card);
 			} else {
-				card = this.renderCardForMode(cardFlow, memo, this.renderGeneration, index, presentation.mode);
+				card = this.renderCardForMode(cardFlow, memo, this.renderGeneration, index, presentation.mode, null, null, handoff);
 				if (presentation.mode === "memo") seedPlaceholder(memo, card);
 			}
 			this.renderedCardMemos.set(renderKey, memo);
@@ -4321,6 +4333,8 @@ export class KnomoView extends ItemView {
 			reusedImagesEl?.instanceOf(HTMLElement) ? reusedImagesEl : null,
 		);
 		existingCard.replaceWith(replacement);
+		this.memoMarkdownRenderer.releaseCard(existingCard, "card-flow");
+		this.relationCards?.release(existingCard);
 		this.removeCardImageTargets(existingCard);
 		return replacement;
 	}
@@ -4333,6 +4347,7 @@ export class KnomoView extends ItemView {
 		mode: CardFlowRenderMode,
 		reusedBodyEl: HTMLElement | null = null,
 		reusedImagesEl: HTMLElement | null = null,
+		handoff?: ReadyCardImageHandoff,
 	): HTMLElement {
 		if (mode === "trash") {
 			return this.renderTrashMemoCardInContainer(container, memo, generation, renderIndex);
@@ -4347,6 +4362,8 @@ export class KnomoView extends ItemView {
 			"card-flow",
 			reusedBodyEl,
 			reusedImagesEl,
+			undefined,
+			handoff,
 		);
 	}
 
@@ -4366,6 +4383,8 @@ export class KnomoView extends ItemView {
 
 	private removeCardElement(card: HTMLElement): void {
 		this.cardImageCache.capture(card, Platform.isMobile ? this.cardFlowEl : null);
+		this.memoMarkdownRenderer.releaseCard(card, "card-flow");
+		this.relationCards?.release(card);
 		this.removeCardImageTargets(card);
 		card.remove();
 	}
@@ -4539,6 +4558,7 @@ export class KnomoView extends ItemView {
 		reusedBodyEl: HTMLElement | null = null,
 		reusedImagesEl: HTMLElement | null = null,
 		timeBuoy?: MemoCardTimeBuoy,
+		handoff?: ReadyCardImageHandoff,
 	): HTMLElement {
 		const effectiveTimeBuoy = timeBuoy ?? this.getVisibleMemoTimeBuoy(memo);
 		const card = renderKnomoMemoCard(container, memo, {
@@ -4557,7 +4577,7 @@ export class KnomoView extends ItemView {
 				this.memoMarkdownRenderer.queueMemoMarkdown(memoRecord, content, renderGeneration, priority, previewText, surface);
 			},
 			renderMemoCardImages: (content, memoRecord, images, renderGeneration, reusedImagesEl) => {
-				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, surface, reusedImagesEl ?? null);
+				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, surface, reusedImagesEl ?? null, handoff);
 			},
 			queueSourceReferenceMarkdown: (content, text, sourcePath, renderGeneration) => {
 				this.memoMarkdownRenderer.queueSourceReferenceMarkdown(content, text, sourcePath, renderGeneration, surface);
@@ -4693,30 +4713,32 @@ export class KnomoView extends ItemView {
 		generation: number,
 		surface: CardRenderSurface,
 		reusedImagesEl: HTMLElement | null = null,
+		handoff?: ReadyCardImageHandoff,
+		invalidatedPaths?: ReadonlySet<string>,
 	): void {
 		const rendered = renderMemoCardImages(container, memo, images, {
 			previewLabel: t("image.previewLabel"),
 			unavailableLabel: t("image.unavailable"),
 			retryLabel: t("image.retry"),
-		}, reusedImagesEl ?? (surface === "card-flow" ? this.cardImageCache.take(memo) : null));
+		}, reusedImagesEl ?? (surface === "card-flow" ? this.cardImageCache.take(memo) : null), handoff, invalidatedPaths);
 		if (rendered === null) {
+			if (reusedImagesEl) {
+				this.cardImageLoadQueue.forget(reusedImagesEl, true);
+				this.renderedPreviewImages.delete(reusedImagesEl);
+				reusedImagesEl.remove();
+			}
 			return;
 		}
-		if (rendered.loadItems.length > 0) {
-			this.cardImageLoadQueue.forget(rendered.imagesEl, true);
-		}
 		this.renderedPreviewImages.set(rendered.imagesEl, images);
-		if (rendered.loadItems.length > 0) {
-			this.cardImageLoadQueue.observe({
-				targetEl: rendered.imagesEl,
-				images: rendered.loadItems,
-				generation,
-				surface,
-			});
-		}
+		this.cardImageLoadQueue.update({
+			targetEl: rendered.imagesEl,
+			images: rendered.loadItems,
+			generation,
+			surface,
+		}, rendered.removedImages);
 	}
 
-	private refreshVisibleMemoImages(memo: MemoRecord): void {
+	private refreshVisibleMemoImages(memo: MemoRecord, invalidatedPaths: ReadonlySet<string>): void {
 		const preview = this.getMemoCardPreview(memo);
 		this.refreshMemoImagesInContainer(
 			this.cardFlowEl,
@@ -4724,6 +4746,7 @@ export class KnomoView extends ItemView {
 			preview.images,
 			this.renderGeneration,
 			"card-flow",
+			invalidatedPaths,
 		);
 		this.refreshMemoImagesInContainer(
 			this.mobileSearchResultsEl,
@@ -4731,8 +4754,9 @@ export class KnomoView extends ItemView {
 			preview.images,
 			this.mobileSearchRenderGeneration,
 			"mobile-search",
+			invalidatedPaths,
 		);
-		if (this.relationsPage?.el) this.refreshMemoImagesInContainer(this.relationsPage.el, memo, preview.images, this.relationsPage.generation, "relations");
+		if (this.relationsPage?.el) this.refreshMemoImagesInContainer(this.relationsPage.el, memo, preview.images, this.relationsPage.generation, "relations", invalidatedPaths);
 	}
 
 	private refreshMemoImagesInContainer(
@@ -4741,6 +4765,7 @@ export class KnomoView extends ItemView {
 		images: MemoPreviewImage[],
 		generation: number,
 		surface: CardRenderSurface,
+		invalidatedPaths: ReadonlySet<string>,
 	): void {
 		if (container === null) {
 			return;
@@ -4753,11 +4778,7 @@ export class KnomoView extends ItemView {
 			if (!body?.instanceOf(HTMLElement)) {
 				continue;
 			}
-			for (const imagesEl of body.findAll(".knomo-card-images")) {
-				this.cardImageLoadQueue.forget(imagesEl, true);
-				imagesEl.remove();
-			}
-			this.renderMemoCardImages(body, memo, images, generation, surface);
+			this.renderMemoCardImages(body, memo, images, generation, surface, body.find(".knomo-card-images"), undefined, invalidatedPaths);
 		}
 	}
 

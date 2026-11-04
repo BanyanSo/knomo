@@ -11,8 +11,60 @@ interface RenderMemoCardImagesLabels {
 }
 
 export interface RenderedMemoCardImages {
+	removedImages: HTMLImageElement[];
 	imagesEl: HTMLElement;
 	loadItems: CardImageLoadItem[];
+}
+
+const previewNodes = new WeakMap<HTMLElement, HTMLImageElement>();
+const readyPreviews = new WeakSet<HTMLImageElement>();
+
+function previewResourceKey(image: MemoPreviewImage): string {
+	return encodeImageKeyParts([
+		image.isRemote ? "remote" : "local", image.isRemote ? "" : image.resourcePath ?? image.path, image.url ?? "",
+		image.isRemote ? "" : String(image.mtime ?? ""), image.unresolved ? "unresolved" : "resolved",
+	]);
+}
+
+// 只为本轮已接纳的展示记录候选。成功任务已从队列移除，候选不携带按钮或绑定。
+export class ReadyCardImageHandoff {
+	private candidates: { item: HTMLElement; img: HTMLImageElement }[];
+
+	constructor(cards: readonly HTMLElement[], viewport: HTMLElement, maxImages = 24) {
+		const ready = cards.flatMap(card => card.findAll(".knomo-card-image-item")).flatMap(item => {
+			const img = previewNodes.get(item);
+			return img && this.isReady(item, img) ? [{ item, img }] : [];
+		});
+		this.candidates = ready;
+		if (ready.length === 0) return;
+		const bounds = viewport.getBoundingClientRect();
+		this.candidates = ready.map(({ item, img }) => {
+			const rect = item.getBoundingClientRect();
+			return { item, img, distance: Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) };
+		}).sort((a, b) => a.distance - b.distance).slice(0, maxImages);
+	}
+
+	take(image: MemoPreviewImage): HTMLImageElement | null {
+		if (!image.url || image.unresolved || (!image.isRemote && image.resourcePath === undefined)) return null;
+		const key = previewResourceKey(image);
+		const index = this.candidates.findIndex(({ item, img }) =>
+			item.getAttr("data-preview-resource") === key && img.getAttr("src") === image.url && this.isReady(item, img));
+		return index < 0 ? null : this.candidates.splice(index, 1)[0].img;
+	}
+
+	invalidate(paths: readonly string[]): void {
+		const changed = new Set(paths.map(normalizeImagePath));
+		this.candidates = this.candidates.filter(({ item }) =>
+			!changed.has(normalizeImagePath(item.getAttr("data-knomo-image-resource") ?? "")));
+	}
+
+	private isReady(item: HTMLElement, img: HTMLImageElement): boolean {
+		return item.contains(img) && readyPreviews.has(img) && img.complete && img.naturalWidth > 0;
+	}
+}
+
+export function normalizeImagePath(path: string): string {
+	return path.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
 }
 
 // 仅缓存当前视图移除的已就绪节点；取出即转移所有权，按图片数量保持有界。
@@ -86,37 +138,64 @@ function getMemoImageOccurrenceKey(memo: MemoRecord): string | null {
 	return encodeImageKeyParts([handle.sourcePath, handle.sourceRevision, String(handle.startLine), String(handle.endLine), handle.rawBlockHash]);
 }
 
+export function rebindMemoImageOccurrence(card: HTMLElement, memo: MemoRecord): void {
+	for (const images of Array.from(card.querySelectorAll(".knomo-card-images"))) {
+		images.setAttribute("data-knomo-image-occurrence", getMemoImageOccurrenceKey(memo) ?? "");
+	}
+}
+
 export function renderMemoCardImages(
 	container: HTMLElement,
 	memo: MemoRecord,
 	images: readonly MemoPreviewImage[],
 	labels: RenderMemoCardImagesLabels,
 	reusedImagesEl: HTMLElement | null = null,
+	handoff?: ReadyCardImageHandoff,
+	invalidatedPaths?: ReadonlySet<string>,
 ): RenderedMemoCardImages | null {
 	if (images.length === 0) {
 		return null;
 	}
 	const visibleImages = images.slice(0, MAX_CARD_PREVIEW_IMAGES);
+	const sameTarget = reusedImagesEl?.parentElement === container;
 	const imagesEl = prepareImagesElement(container, images.length, reusedImagesEl);
 	const occurrenceKey = getMemoImageOccurrenceKey(memo);
 	imagesEl.setAttr("data-knomo-image-occurrence", occurrenceKey ?? "");
-	const reusableItems = collectReusableImageItems(imagesEl);
-	if (reusedImagesEl !== null) {
-		imagesEl.empty();
-	}
+	const previousItems = imagesEl.findAll(".knomo-card-image-item");
+	const reusableItems = previousItems.filter(item => {
+		if (invalidatedPaths?.has(normalizeImagePath(item.getAttr("data-knomo-image-resource") ?? ""))) return false;
+		return sameTarget || (!item.hasClass("is-loading") && !item.hasClass("is-error") && item.find("img")?.getAttr("src"));
+	});
 	const loadItems: CardImageLoadItem[] = [];
+	const desiredItems: HTMLElement[] = [];
 	visibleImages.forEach((image, index) => {
 		const hiddenCount = index === MAX_CARD_PREVIEW_IMAGES - 1 ? images.length - MAX_CARD_PREVIEW_IMAGES : 0;
-		const imageKey = getMemoPreviewImageKey(occurrenceKey ?? memo.id, image, index);
-		const reusedItem = reusableItems.get(imageKey);
-		const loadItem = reusedItem !== undefined && reuseMemoCardImage(imagesEl, reusedItem, memo, image, index, hiddenCount, imageKey, labels)
-			? null
-			: renderMemoCardImage(imagesEl, memo, image, index, hiddenCount, imageKey, labels);
-		if (loadItem !== null) {
-			loadItems.push(loadItem);
+		const resourceKey = previewResourceKey(image);
+		const match = reusableItems.findIndex(item => item.getAttr("data-preview-resource") === resourceKey);
+		let item: HTMLElement;
+		if (match >= 0) {
+			item = reusableItems.splice(match, 1)[0];
+			updateMemoCardImage(item, memo, image, index, hiddenCount);
+		} else {
+			const loadItem = renderMemoCardImage(imagesEl, memo, image, index, hiddenCount, labels, handoff);
+			item = imagesEl.lastElementChild as HTMLElement;
+			if (loadItem !== null) loadItems.push(loadItem);
 		}
+		desiredItems.push(item);
 	});
-	return { imagesEl, loadItems };
+	const removedImages: HTMLImageElement[] = [];
+	for (const item of previousItems) {
+		if (desiredItems.includes(item)) continue;
+		const img = previewNodes.get(item);
+		if (img) removedImages.push(img);
+		item.remove();
+	}
+	let next = imagesEl.firstElementChild;
+	for (const item of desiredItems) {
+		if (item !== next) imagesEl.insertBefore(item, next);
+		next = item.nextElementSibling;
+	}
+	return { imagesEl, loadItems, removedImages };
 }
 
 export function parseCardImageIndex(value: string | null): number {
@@ -127,37 +206,16 @@ export function parseCardImageIndex(value: string | null): number {
 	return Number.isInteger(index) && index >= 0 ? index : 0;
 }
 
-export function getMemoPreviewImageKey(memoId: string, image: MemoPreviewImage, index: number): string {
-	const kind = image.isRemote ? "remote" : "local";
-	const source = image.isRemote
-		? image.url ?? image.path
-		: image.resourcePath ?? image.path;
-	const version = image.isRemote ? "" : String(image.mtime ?? "");
-	const status = image.unresolved === true ? "unresolved" : "resolved";
-	return encodeImageKeyParts([memoId, String(index), kind, source, version, status]);
-}
-
 function prepareImagesElement(container: HTMLElement, imageCount: number, reusedImagesEl: HTMLElement | null): HTMLElement {
 	const imagesEl = reusedImagesEl ?? container.createDiv();
 	imagesEl.removeClass("knomo-card-images--single");
 	imagesEl.removeClass("knomo-card-images--grid");
 	imagesEl.addClass("knomo-card-images");
 	imagesEl.addClass(imageCount === 1 ? "knomo-card-images--single" : "knomo-card-images--grid");
-	if (reusedImagesEl !== null) {
+	if (reusedImagesEl !== null && reusedImagesEl.parentElement !== container) {
 		container.appendChild(reusedImagesEl);
 	}
 	return imagesEl;
-}
-
-function collectReusableImageItems(imagesEl: HTMLElement): Map<string, HTMLElement> {
-	const items = new Map<string, HTMLElement>();
-	for (const item of imagesEl.findAll(".knomo-card-image-item")) {
-		const imageKey = item.getAttr("data-knomo-image-key");
-		if (imageKey !== null && !items.has(imageKey)) {
-			items.set(imageKey, item);
-		}
-	}
-	return items;
 }
 
 function renderMemoCardImage(
@@ -166,13 +224,15 @@ function renderMemoCardImage(
 	image: MemoPreviewImage,
 	index: number,
 	hiddenCount: number,
-	imageKey: string,
 	labels: RenderMemoCardImagesLabels,
+	handoff?: ReadyCardImageHandoff,
 ): CardImageLoadItem | null {
 	const item = container.createDiv({
 		cls: "knomo-card-image-item",
-		attr: { "data-knomo-image-key": imageKey, "data-knomo-image-resource": image.isRemote ? "" : image.resourcePath ?? image.path },
+		attr: { "data-knomo-image-resource": image.isRemote ? "" : image.resourcePath ?? image.path },
 	});
+	item.setAttr("data-preview-resource", previewResourceKey(image));
+	item.setAttr("data-hidden-count", String(hiddenCount));
 	const button = item.createEl("button", {
 		cls: "knomo-card-image-button",
 		attr: {
@@ -184,7 +244,16 @@ function renderMemoCardImage(
 		},
 	});
 	if (image.url === undefined || image.unresolved === true) {
+		button.setAttr("aria-label", labels.unavailableLabel);
 		renderMemoCardImagePlaceholder(button, hiddenCount, labels.unavailableLabel);
+		return null;
+	}
+	const readyImage = handoff?.take(image);
+	if (readyImage) {
+		readyImage.setAttr("alt", image.alt ?? "");
+		button.appendChild(readyImage);
+		previewNodes.set(item, readyImage);
+		if (hiddenCount > 0) renderMemoCardImageMore(button, hiddenCount);
 		return null;
 	}
 	item.addClass("is-loading");
@@ -194,10 +263,12 @@ function renderMemoCardImage(
 			decoding: "async",
 		},
 	});
+	previewNodes.set(item, imageEl);
 	if (image.isRemote) {
 		imageEl.setAttr("fetchpriority", "low");
 	}
 	const handleLoad = () => {
+		readyPreviews.add(imageEl);
 		item.removeClass("is-loading");
 	};
 	let retryLoad: (() => boolean) | undefined;
@@ -208,7 +279,7 @@ function renderMemoCardImage(
 		button.empty();
 		const label = retry && labels.retryLabel ? labels.retryLabel : labels.unavailableLabel;
 		button.setAttr("aria-label", label);
-		renderMemoCardImagePlaceholder(button, hiddenCount, label);
+		renderMemoCardImagePlaceholder(button, Number(item.getAttr("data-hidden-count")), label);
 	};
 	button.addEventListener("click", event => {
 		if (!retryLoad) return;
@@ -221,7 +292,7 @@ function renderMemoCardImage(
 		button.empty();
 		button.appendChild(imageEl);
 		button.setAttr("aria-label", labels.previewLabel);
-		if (hiddenCount > 0) renderMemoCardImageMore(button, hiddenCount);
+		syncMemoCardImageMore(button, Number(item.getAttr("data-hidden-count")));
 		if (!retry()) handleError();
 	});
 	if (hiddenCount > 0) {
@@ -237,36 +308,22 @@ function renderMemoCardImage(
 	};
 }
 
-function reuseMemoCardImage(
-	container: HTMLElement,
+function updateMemoCardImage(
 	item: HTMLElement,
 	memo: MemoRecord,
 	image: MemoPreviewImage,
 	index: number,
 	hiddenCount: number,
-	imageKey: string,
-	labels: RenderMemoCardImagesLabels,
-): boolean {
-	if (image.url === undefined || image.unresolved === true || item.hasClass("is-loading") || item.hasClass("is-error")) {
-		return false;
-	}
-	const button = item.find(".knomo-card-image-button");
-	const imageEl = item.find("img");
-	if (
-		button === null
-		|| imageEl === null
-		|| imageEl.getAttr("src") !== image.url
-	) {
-		return false;
-	}
-	item.setAttr("data-knomo-image-key", imageKey);
-	button.setAttr("aria-label", labels.previewLabel);
+): void {
+	const button = item.find(".knomo-card-image-button")!;
+	const imageEl = previewNodes.get(item);
 	button.setAttr("data-memo-id", memo.id);
 	button.setAttr("data-image-index", String(index));
-	imageEl.setAttr("alt", image.alt ?? "");
-	syncMemoCardImageMore(button, hiddenCount);
-	container.appendChild(item);
-	return true;
+	imageEl?.setAttr("alt", image.alt ?? "");
+	if (item.getAttr("data-hidden-count") !== String(hiddenCount)) {
+		item.setAttr("data-hidden-count", String(hiddenCount));
+		syncMemoCardImageMore(button, hiddenCount);
+	}
 }
 
 function renderMemoCardImagePlaceholder(container: HTMLElement, hiddenCount: number, unavailableLabel: string): void {

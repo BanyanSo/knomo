@@ -2860,7 +2860,7 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 .knomo-plugin .knomo-card-content .tag,
 .knomo-plugin .knomo-composer-tag {
 	padding: 2px 8px;
-	border-radius: 10px;
+	border-radius: var(--tag-radius, 2em);
 	color: var(--text-muted);
 	background: var(--background-modifier-hover);
 	font-size: var(--knomo-text-ui-base);

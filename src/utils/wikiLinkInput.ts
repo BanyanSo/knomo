@@ -91,26 +91,31 @@ export function getWikiLinkFileSuggestions<TFile extends WikiLinkFileLike>(
 	limit = DEFAULT_WIKI_LINK_SUGGESTION_LIMIT,
 ): Array<WikiLinkSuggestionMatch<TFile>> {
 	const normalizedQuery = query.trim().toLocaleLowerCase();
-	const ranked: Array<{ file: TFile; rank: number; path: string; basename: string }> = [];
+	const count = Math.trunc(Math.max(0, limit));
+	if (!count) return [];
+	type RankedFile = { file: TFile; rank: number; path: string; basename: string };
+	const ranked: RankedFile[] = [];
+	const compare = (first: RankedFile, second: RankedFile): number =>
+		first.rank - second.rank || first.basename.localeCompare(second.basename) || first.path.localeCompare(second.path);
+	const bounded = count <= DEFAULT_WIKI_LINK_SUGGESTION_LIMIT;
 	for (const file of files) {
 		const path = file.path;
 		const basename = file.basename;
 		const rank = getWikiLinkMatchRank(basename, path, normalizedQuery);
-		if (rank !== null) {
-			ranked.push({ file, rank, path, basename });
+		if (rank === null) continue;
+		const candidate = { file, rank, path, basename };
+		if (!bounded) {
+			ranked.push(candidate);
+			continue;
 		}
+		// 默认窗口只保留前几项；比较相同的候选继续按原始输入顺序排列。
+		if (ranked.length === count && compare(candidate, ranked[count - 1]) >= 0) continue;
+		const index = ranked.findIndex(existing => compare(candidate, existing) < 0);
+		if (index < 0) ranked.push(candidate);
+		else ranked.splice(index, 0, candidate);
+		if (ranked.length > count) ranked.pop();
 	}
-	ranked.sort((first, second) => {
-		if (first.rank !== second.rank) {
-			return first.rank - second.rank;
-		}
-		const basenameCompare = first.basename.localeCompare(second.basename);
-		if (basenameCompare !== 0) {
-			return basenameCompare;
-		}
-		return first.path.localeCompare(second.path);
-	});
-	const limited = ranked.slice(0, Math.max(0, limit));
+	const limited = bounded ? ranked : ranked.sort(compare).slice(0, count);
 	const basenameCounts = new Map<string, number>();
 	for (const item of limited) {
 		const key = item.basename.toLocaleLowerCase();
@@ -134,7 +139,6 @@ function getWikiLinkMatchRank(basename: string, path: string, query: string): nu
 		return 10;
 	}
 	const normalizedBasename = basename.toLocaleLowerCase();
-	const normalizedPath = path.toLocaleLowerCase();
 	if (normalizedBasename === query) {
 		return 0;
 	}
@@ -144,6 +148,7 @@ function getWikiLinkMatchRank(basename: string, path: string, query: string): nu
 	if (normalizedBasename.includes(query)) {
 		return 2;
 	}
+	const normalizedPath = path.toLocaleLowerCase();
 	if (normalizedPath.startsWith(query)) {
 		return 3;
 	}

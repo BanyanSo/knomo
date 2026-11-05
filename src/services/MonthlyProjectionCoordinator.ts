@@ -83,6 +83,10 @@ export class MonthlyProjectionCoordinator {
 	private projectionAllowed: boolean;
 	private configurationGeneration = 0;
 	private configuration: MonthlyProjectionConfigurationSnapshot | null = null;
+	private historicalHashRead: {
+		configuration: MonthlyProjectionConfigurationSnapshot;
+		promise: Promise<Map<string, string>>;
+	} | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -131,9 +135,9 @@ export class MonthlyProjectionCoordinator {
 		}
 		this.markPending(this.getCurrentPeriod(), MONTHLY_URGENT_PRIORITY);
 		await this.persistCheckpoint();
-		if (this.discoveryPending) await this.discoverHistoricalPeriods(false);
 		this.notifyStateChanged();
 		this.scheduleRun(this.getNextDelay());
+		if (this.discoveryPending) await this.discoverHistoricalPeriods(false);
 	}
 
 	async handleConfigurationChanged(): Promise<void> {
@@ -143,8 +147,8 @@ export class MonthlyProjectionCoordinator {
 		if (generation !== this.configurationGeneration || this.isStopped()) return;
 		const wasProjectionAllowed = this.projectionAllowed;
 		this.projectionAllowed = this.isProjectionAllowed();
-		this.configuration = next;
 		if (previous === null) {
+			this.configuration = next;
 			await this.initialize();
 			return;
 		}
@@ -159,6 +163,7 @@ export class MonthlyProjectionCoordinator {
 			}
 			return;
 		}
+		this.configuration = next;
 		this.metadata.clear();
 		this.discoveryPending = true;
 		this.markPending(this.getCurrentPeriod(), MONTHLY_URGENT_PRIORITY);
@@ -479,13 +484,15 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private async discoverHistoricalPeriods(fallbackToDaily: boolean): Promise<void> {
-		const generation = this.configurationGeneration;
-		const isCurrent = () => !this.isStopped() && generation === this.configurationGeneration;
+		const configuration = this.configuration;
+		if (configuration === null) return;
+		const metadataAtStart = new Map(this.metadata);
+		const isCurrent = () => !this.isStopped() && this.configuration === configuration && this.isProjectionAllowed();
 		let outputHashes: Map<string, string>;
 		try {
-			outputHashes = await this.options.inputBuilder.readOwnedMonthlyOutputHashes();
+			outputHashes = await this.readHistoricalOutputHashes(configuration);
 		} catch {
-			await this.persistCheckpoint();
+			if (isCurrent()) await this.persistCheckpoint();
 			return;
 		}
 		if (!isCurrent()) return;
@@ -500,7 +507,7 @@ export class MonthlyProjectionCoordinator {
 				if (!isCurrent()) return;
 				if (!fallbackToDaily) {
 					await this.invalidatePeriods(
-						this.getIncompletePeriods(ownedPeriods, outputHashes),
+						this.getIncompletePeriods(ownedPeriods, outputHashes, metadataAtStart),
 						MONTHLY_NORMAL_PRIORITY,
 					);
 					await this.persistCheckpoint();
@@ -510,15 +517,36 @@ export class MonthlyProjectionCoordinator {
 			}
 		}
 		if (!isCurrent()) return;
-		const missingPeriods = this.getIncompletePeriods([...sourcePeriods, ...ownedPeriods], outputHashes);
+		const missingPeriods = this.getIncompletePeriods([...sourcePeriods, ...ownedPeriods], outputHashes, metadataAtStart);
 		this.discoveryPending = false;
 		await this.invalidatePeriods(missingPeriods, MONTHLY_NORMAL_PRIORITY);
 		await this.persistCheckpoint();
 	}
 
-	private getIncompletePeriods(periods: readonly string[], outputHashes: ReadonlyMap<string, string>): string[] {
+	private readHistoricalOutputHashes(configuration: MonthlyProjectionConfigurationSnapshot): Promise<Map<string, string>> {
+		if (this.historicalHashRead?.configuration === configuration) return this.historicalHashRead.promise;
+		const read: NonNullable<MonthlyProjectionCoordinator["historicalHashRead"]> = {
+			configuration,
+			promise: Promise.resolve().then(() => this.options.inputBuilder.readOwnedMonthlyOutputHashes({
+				yieldControl: () => this.yieldSlice(),
+				assertCurrent: () => {
+					this.assertRunning();
+					if (this.configuration !== configuration || !this.isProjectionAllowed()) throw new MonthlyProjectionStaleError();
+				},
+			})).finally(() => {
+				if (this.historicalHashRead === read) this.historicalHashRead = null;
+			}),
+		};
+		this.historicalHashRead = read;
+		return read.promise;
+	}
+
+	private getIncompletePeriods(periods: readonly string[], outputHashes: ReadonlyMap<string, string>,
+		metadataAtStart: ReadonlyMap<string, MonthlyProjectionMetadata>): string[] {
 		return [...new Set(periods)].filter((period) =>
 			!this.pendingPeriods.has(period)
+			// 扫描期间已提交的投影沿用其提交校验，旧扫描结果不能重新判它过期。
+			&& this.metadata.get(period) === metadataAtStart.get(period)
 			&& (!this.metadata.has(period) || !outputHashes.has(period)
 				|| this.metadata.get(period)?.outputHash !== outputHashes.get(period)));
 	}

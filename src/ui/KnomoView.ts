@@ -511,6 +511,8 @@ export class KnomoView extends ItemView {
 	private pendingViewRefresh: boolean | undefined;
 	private pendingReferenceRefresh: DeferredRefreshPaths;
 	private pendingAttachmentRefresh: DeferredRefreshPaths;
+	private attachmentPathsAwaitingMetadata: DeferredRefreshPaths;
+	private pendingAttachmentMetadataRefresh: DeferredRefreshPaths;
 	private presentationRefreshRun: Promise<void> | null = null;
 	private readonly memoMarkdownRenderer: MemoMarkdownRenderer;
 	private readonly randomReunionController: RandomReunionController;
@@ -1403,6 +1405,8 @@ export class KnomoView extends ItemView {
 		this.pendingViewRefresh = undefined;
 		this.pendingReferenceRefresh = undefined;
 		this.pendingAttachmentRefresh = undefined;
+		this.attachmentPathsAwaitingMetadata = undefined;
+		this.pendingAttachmentMetadataRefresh = undefined;
 		this.disposeTagIndexWarmup();
 		this.libraryIndexRun += 1;
 		this.libraryIndexRequestedKey = null;
@@ -1895,6 +1899,14 @@ export class KnomoView extends ItemView {
 			if (attachments !== undefined) this.pendingAttachmentRefresh = mergeDeferredRefreshPaths(this.pendingAttachmentRefresh, attachments);
 			throw error;
 		}
+		const metadata = this.pendingAttachmentMetadataRefresh;
+		this.pendingAttachmentMetadataRefresh = undefined;
+		try {
+			if (metadata !== undefined) this.renderResolvedAttachmentImages(metadata);
+		} catch (error) {
+			if (metadata !== undefined) this.pendingAttachmentMetadataRefresh = mergeDeferredRefreshPaths(this.pendingAttachmentMetadataRefresh, metadata);
+			throw error;
+		}
 	}
 
 	private async refreshVisiblePresentation(forceRebuild: boolean): Promise<boolean> {
@@ -1953,8 +1965,9 @@ export class KnomoView extends ItemView {
 		if (isCatalogMemoView(restoredMemo)) void this.reloadMemos(false, true).catch(error => this.reportViewRefreshFailure(error, "restore-refresh"));
 	}
 
-	handleAttachmentFilesChanged(paths: readonly string[]): void {
-		if (this.trashViewClosed) return;
+	handleAttachmentFilesChanged(paths: readonly string[], resolutionChanged = false): void {
+		if (this.trashViewClosed || paths.length === 0) return;
+		if (resolutionChanged) this.attachmentPathsAwaitingMetadata = mergeDeferredRefreshPaths(this.attachmentPathsAwaitingMetadata, paths);
 		this.cardImageCache.invalidateResourcePaths(paths);
 		this.mobileSearchController.invalidateImagePaths(paths);
 		this.cardImageLoadQueue.invalidateResourcePaths(paths);
@@ -1965,6 +1978,65 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.renderChangedAttachmentImages(paths);
+	}
+
+	handleAttachmentFoldersChanged(folders: readonly string[], filePaths: readonly string[]): void {
+		if (this.trashViewClosed) return;
+		const prefixes = folders.map(folder => normalizeImagePath(folder) + "/");
+		const matches = (path: string) => prefixes.some(prefix => normalizeImagePath(path).startsWith(prefix));
+		const paths = new Set([...filePaths, ...this.imageResourceCache.getPathsInFolders(matches)]);
+		// 删除事件可能已没有子项，挂载节点也可能比解析缓存活得更久。
+		for (const { images } of this.mountedAttachmentPreviews()) {
+			for (const image of images) {
+				if (image.isRemote) continue;
+				if (matches(image.path)) paths.add(image.path);
+				if (image.resourcePath !== undefined && matches(image.resourcePath)) paths.add(image.resourcePath);
+			}
+		}
+		this.handleAttachmentFilesChanged([...paths], true);
+	}
+
+	handleAttachmentMetadataResolved(): void {
+		if (this.trashViewClosed) return;
+		const paths = this.attachmentPathsAwaitingMetadata;
+		this.attachmentPathsAwaitingMetadata = undefined;
+		const pending = this.pendingAttachmentMetadataRefresh;
+		this.pendingAttachmentMetadataRefresh = mergeDeferredRefreshPaths(pending === undefined ? new Set() : pending,
+			paths === undefined ? [] : paths);
+		void this.flushPresentationRefresh().catch(error => this.reportViewRefreshFailure(error, "attachment-resolution"));
+	}
+
+	private *mountedAttachmentPreviews() {
+		const surfaces = [
+			[this.cardFlowEl, this.renderGeneration, "card-flow"],
+			[this.mobileSearchResultsEl, this.mobileSearchRenderGeneration, "mobile-search"],
+			[this.relationsPage?.el, this.relationsPage?.generation ?? 0, "relations"],
+		] as const;
+		for (const [root, generation, surface] of surfaces) {
+			for (const holder of Array.from(root?.querySelectorAll<HTMLElement>(".knomo-card-images") ?? [])) {
+				const images = this.renderedPreviewImages.get(holder);
+				if (images !== undefined) yield { holder, images, generation, surface };
+			}
+		}
+	}
+
+	private renderResolvedAttachmentImages(paths: Set<string> | null): void {
+		const changed = paths === null ? null : [...paths];
+		this.imageResourceCache.invalidateMissing();
+		if (changed === null) this.imageResourceCache.clear();
+		else if (changed.length > 0) this.imageResourceCache.invalidateImagePaths(changed);
+		const memoIds = changed === null || changed.length === 0 ? new Set<string>()
+			: new Set(this.memoCardPreviewCache.findImagePathMemoIds(changed));
+		for (const { holder, images, generation, surface } of this.mountedAttachmentPreviews()) {
+			const memoId = holder.closest(".knomo-card")?.getAttribute("data-memo-id");
+			if (!memoId || !holder.parentElement) continue;
+			if (changed !== null && !memoIds.has(memoId) && !images.some(image => !image.isRemote && image.unresolved && image.path)) continue;
+			const memo = this.findMemoById(memoId, surface);
+			if (memo === null) continue;
+			const preview = this.getMemoCardPreview(memo);
+			// 只重新解析目标，已就绪且资源版本相同的图片继续使用原节点。
+			this.renderMemoCardImages(holder.parentElement, memo, preview.images, generation, surface, holder);
+		}
 	}
 
 	private renderChangedAttachmentImages(paths?: readonly string[]): void {
@@ -2123,7 +2195,8 @@ export class KnomoView extends ItemView {
 			this.renderTrashCount();
 			void this.loadInitialMobileMemos();
 		} else {
-			void this.trashMemoController.ensureLoaded();
+			this.renderTrashCount();
+			if (this.activeNav === "trash") void this.trashMemoController.ensureLoaded();
 			const initialQuery = this.reloadCurrentCatalogQuery(true);
 			// 首次打开只等待可交互界面；数据继续使用原查询加载与错误状态。
 			if (waitForCatalog) await initialQuery;
@@ -7697,7 +7770,8 @@ export class KnomoView extends ItemView {
 			|| this.libraryIndexCoverageKey !== catalogCoverageKey(this.catalogCoverage)) {
 			void this.refreshCatalogLibraryIndexes();
 		}
-		void this.trashMemoController.ensureLoaded();
+		// 桌面侧栏在普通首屏常驻，数量保持未知，直到共享回收站状态就绪。
+		if (Platform.isMobile) void this.trashMemoController.ensureLoaded();
 		try {
 			await this.vaultTagIndex.ensureReady();
 			this.renderPublishedSidebarTags();
@@ -7707,11 +7781,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private scheduleTrashCountRefresh(): void {
-		if (this.trashViewClosed || Platform.isMobile && !this.mobileDrawerOpen && this.activeNav !== "trash") return;
+		const shouldRefresh = () => !this.trashViewClosed && (this.activeNav === "trash" || Platform.isMobile && this.mobileDrawerOpen);
+		if (!shouldRefresh()) return;
 		if (this.trashCountRefreshTimer !== null) this.containerEl.win.clearTimeout(this.trashCountRefreshTimer);
 		this.trashCountRefreshTimer = this.containerEl.win.setTimeout(() => {
 			this.trashCountRefreshTimer = null;
-			if (!this.trashViewClosed && (!Platform.isMobile || this.mobileDrawerOpen || this.activeNav === "trash")) {
+			if (shouldRefresh()) {
 				if (this.activeNav === "trash") void this.trashMemoController.loadTrashMemos();
 				else void this.trashMemoController.ensureLoaded();
 			}

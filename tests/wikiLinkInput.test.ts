@@ -91,6 +91,27 @@ test("shows paths when duplicate basenames need disambiguation", () => {
 	assert.deepEqual(suggestions.map((suggestion) => suggestion.showPath), [true, true]);
 });
 
+test("有界候选保留完整排序的前几项和同名文件原顺序", () => {
+	const files = [
+		...Array.from({ length: 100 }, (_, index) => ({
+			basename: `项目${99 - index}`, path: `归档/项目${99 - index}.md`,
+		})),
+		{ basename: "项目", path: "项目.md" },
+		{ basename: "项目", path: "A/项目.md" },
+		{ basename: "项目", path: "A/项目.md" },
+		{ basename: "其他", path: "项目/其他.md" },
+	];
+	for (const query of ["", "项目", "归档/项目", "无结果"]) {
+		const full = getWikiLinkFileSuggestions(files, query, Infinity);
+		for (const limit of [0, 1, 3, 10, 12]) {
+			const limited = getWikiLinkFileSuggestions(files, query, limit);
+			assert.deepEqual(limited.map(item => item.path), full.slice(0, limit).map(item => item.path));
+			for (const [index, item] of limited.entries()) assert.equal(item.file, full[index].file);
+		}
+	}
+	assert.equal(getWikiLinkFileSuggestions(files, "项目", 10).find(item => item.path === "项目.md")?.showPath, true);
+});
+
 test("filters Knomo internal WikiLink candidates", () => {
 	assert.equal(isKnomoInternalWikiLinkCandidate("Knomo/_knomo-data/state/devices/w_1/segment-000001.jsonl"), false);
 	assert.equal(isKnomoInternalWikiLinkCandidate("Knomo/_knomo-system/indexes/memo-index-2026-06.json"), true);

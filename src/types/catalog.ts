@@ -92,8 +92,7 @@ export interface CatalogObservation extends MemoObservation {
 	hasTimeBuoy: 0 | 1;
 }
 
-export interface CatalogFileRecord {
-	relations?: CatalogFileRelations;
+export interface CatalogFileHeader {
 	sourcePath: string;
 	sourceRevision: string;
 	logicalDate: string;
@@ -102,8 +101,12 @@ export interface CatalogFileRecord {
 	parserVersion: number;
 	settingsFingerprint: string;
 	observationCount: number;
-	observationKeys?: string[];
 	auditedAt: number;
+}
+
+export interface CatalogFileRecord extends CatalogFileHeader {
+	relations?: CatalogFileRelations;
+	observationKeys?: string[];
 }
 
 export interface CatalogFileAggregate {

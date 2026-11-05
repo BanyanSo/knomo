@@ -4,7 +4,7 @@ import { IDBDatabase as FakeDatabase, IDBIndex as FakeIndex, IDBObjectStore as F
 
 import { IndexedDbMemoCatalogStore } from "../src/services/IndexedDbMemoCatalogStore";
 import { buildCatalogPartition } from "../src/services/MemoCatalogService";
-import { CatalogQueryCancelledError, FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
+import { CatalogQueryCancelledError, FallbackMemoCatalogStore, InMemoryMemoCatalogStore, toCatalogFileHeader } from "../src/services/MemoCatalogStore";
 import { TimeBuoyPageSelection } from "../src/services/TimeBuoyQuery";
 import type { CatalogFilePartition, CatalogQuery, MemoObservation } from "../src/types/catalog";
 import type { TimeBuoyPageRequest } from "../src/types/timeBuoy";
@@ -12,6 +12,124 @@ import type { TimeBuoyPageRequest } from "../src/types/timeBuoy";
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
 after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
+
+test("文件头读取只访问轻量 store，替换、同 revision 更新、删除和清空保持一致", async t => {
+	const name = uniqueDatabaseName("file-headers"), store = createStore(name), path = "Daily/2026-09-05.md";
+	try {
+		const partition = makePartition(path, "2026-09-05", [makeObservation(path, "2026-09-05", 1, "10:00", "before")]);
+		await store.replaceFilePartition(partition);
+		const getAll = FakeObjectStore.prototype.getAll;
+		const readStores: string[] = [];
+		t.mock.method(FakeObjectStore.prototype, "getAll", function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["getAll"]>) {
+			readStores.push(this.name);
+			return getAll.apply(this, args);
+		});
+		assert.deepEqual(await store.listFileHeaders(), [toCatalogFileHeader(partition.file)]);
+		assert.deepEqual(readStores, ["fileHeaders"]);
+		assert.deepEqual(await store.getFile(path), partition.file);
+		partition.file.mtime++;
+		partition.file.auditedAt++;
+		await store.replaceFilePartition(partition);
+		assert.deepEqual(await store.listFileHeaders(), [toCatalogFileHeader(partition.file)]);
+		await store.deleteFilePartition(path);
+		assert.deepEqual(await store.listFileHeaders(), []);
+		await store.replaceFilePartition(partition);
+		await store.clear();
+		assert.deepEqual(await store.listFileHeaders(), []);
+	} finally { store.close(); await deleteDatabase(name); }
+});
+
+test("文件头写入或删除失败时，完整分区及 revision 同事务回滚", async t => {
+	for (const action of ["put", "delete"] as const) await t.test(action, async t => {
+		const name = uniqueDatabaseName("header-rollback"), store = createStore(name), path = "Daily/2026-09-05.md";
+		try {
+			const partition = makePartition(path, "2026-09-05", [makeObservation(path, "2026-09-05", 1, "10:00", "before")]);
+			const revision = await store.replaceFilePartition(partition);
+			const before = await store.getFileRevisionBatch(path);
+			const method = FakeObjectStore.prototype[action];
+			const mock = t.mock.method(FakeObjectStore.prototype, action, function(this: IDBObjectStore, ...args: unknown[]) {
+				if (this.name === "fileHeaders") throw new Error("header I/O failed");
+				return Reflect.apply(method, this, args);
+			});
+			partition.file.sourceRevision = "changed";
+			await assert.rejects(action === "put" ? store.replaceFilePartition(partition) : store.deleteFilePartition(path), /header I\/O failed/);
+			mock.mock.restore();
+			assert.deepEqual(await store.getFileRevisionBatch(path), before);
+			assert.equal(await store.getCatalogRevision(), revision);
+			assert.deepEqual(await store.listFileHeaders(), [toCatalogFileHeader(before!.file)]);
+		} finally { store.close(); await deleteDatabase(name); }
+	});
+});
+
+test("内存及故障降级的文件头不携带正文派生载荷，也不暴露可修改的内部记录", async () => {
+	const name = uniqueDatabaseName("headers-fallback");
+	const primary = createStore(name, { beforeUpgrade: () => { throw new Error("unavailable"); } });
+	const stores = [new InMemoryMemoCatalogStore(), new FallbackMemoCatalogStore(primary, new InMemoryMemoCatalogStore())];
+	try {
+		const partition = makePartition("Daily/2026-09-05.md", "2026-09-05", [
+			makeObservation("Daily/2026-09-05.md", "2026-09-05", 1, "10:00", "kept"),
+		]);
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(partition);
+			const headers = await store.listFileHeaders();
+			assert.deepEqual(headers, [toCatalogFileHeader(partition.file)]);
+			headers[0].mtime = -1;
+			assert.deepEqual(await store.getFile(partition.file.sourcePath), partition.file);
+			assert.equal((await store.query({ limit: 5 })).items[0]?.content, "kept");
+		}
+	} finally { for (const store of stores) store.close(); await deleteDatabase(name); }
+});
+
+test("v5 原地补齐文件头，升级中止后仍能重试并保留正文、coverage 与 checkpoint", async t => {
+	for (const abortUpgrade of [false, true]) await t.test(String(abortUpgrade), async () => {
+		const name = uniqueDatabaseName("headers-v5"), path = "Daily/2026-09-05.md";
+		const partition = makePartition(path, "2026-09-05", [makeObservation(path, "2026-09-05", 1, "10:00", "kept")]);
+		const checkpoint = { discoveryPending: true, pending: ["2026-09"] };
+		const coverage = { kind: "complete", pendingFileCount: 0, coveredFromDate: "2026-09-05", coveredFileCount: 1, totalFileCount: 1 };
+		const old = await openRawDatabase(name, 5, database => {
+			database.createObjectStore("files", { keyPath: "sourcePath" });
+			const observations = database.createObjectStore("observations", { keyPath: "observationKey" });
+			observations.createIndex("bySourcePath", "sourcePath");
+			observations.createIndex("byCreatedAt", ["createdAtKey", "observationKey"], { unique: true });
+			observations.createIndex("byLogicalDate", "logicalDate");
+			const postings = database.createObjectStore("postings", { keyPath: "postingKey" });
+			postings.createIndex("bySourcePath", "sourcePath");
+			postings.createIndex("byLookup", "lookupKeys", { multiEntry: true });
+			const buoys = database.createObjectStore("timeBuoys", { keyPath: "key" });
+			buoys.createIndex("bySourcePath", "sourcePath");
+			buoys.createIndex("byTargetDate", "targetDate");
+			buoys.createIndex("byNeighborDate", "neighborKeys", { multiEntry: true });
+			database.createObjectStore("aggregates", { keyPath: "sourcePath" }).createIndex("byLogicalDate", "logicalDate");
+			database.createObjectStore("meta", { keyPath: "key" });
+		});
+		const transaction = old.transaction(["files", "observations", "meta"], "readwrite");
+		transaction.objectStore("files").put(partition.file);
+		for (const observation of partition.observations) transaction.objectStore("observations").put(observation);
+		transaction.objectStore("meta").put({ key: "monthlyProjectionCheckpoint", value: checkpoint });
+		transaction.objectStore("meta").put({ key: "catalogRevision", value: 7 });
+		transaction.objectStore("meta").put({ key: "coverage", value: coverage });
+		await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onabort = () => reject(transaction.error); });
+		old.close();
+		if (abortUpgrade) {
+			const aborted = createStore(name, { beforeUpgrade: () => { throw new Error("upgrade cancelled"); } });
+			await assert.rejects(aborted.open(), /upgrade cancelled/);
+			aborted.close();
+			const previous = await openRawDatabase(name, 5, () => { throw new Error("Unexpected old upgrade"); });
+			assert.equal(previous.objectStoreNames.contains("fileHeaders"), false);
+			previous.close();
+		}
+		const store = createStore(name);
+		try {
+			assert.deepEqual(await store.listFileHeaders(), [toCatalogFileHeader(partition.file)]);
+			assert.deepEqual(await store.getFile(path), partition.file);
+			assert.deepEqual((await store.getFileRevisionBatch(path))?.observations, partition.observations);
+			assert.equal(await store.getCatalogRevision(), 7);
+			assert.deepEqual(await store.getCoverage(), coverage);
+			assert.deepEqual(await store.getMeta("monthlyProjectionCheckpoint"), checkpoint);
+		} finally { store.close(); await deleteDatabase(name); }
+	});
+});
 
 test("稀疏目标集合的查询和计数访问量不随无关 Memo 增长", async t => {
 	for (const size of [100, 1000]) await t.test(String(size), async t => {
@@ -913,7 +1031,7 @@ test("IDB-VERSIONCHANGE：运行期连接失效后自动重开，无法重开时
 	assert.equal((await store.listFiles()).length, 1, "同版本连接关闭后应自动重开");
 	assert.equal(recoveryCount, 1);
 
-	const newer = await openRawDatabase(databaseName, 6, () => undefined);
+	const newer = await openRawDatabase(databaseName, 7, () => undefined);
 	assert.equal(primary.getLifecycle().state, "read-only");
 	assert.deepEqual(await store.listFiles(), []);
 	assert.equal(store.isUsingFallback, true);

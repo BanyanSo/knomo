@@ -7,6 +7,32 @@ import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("热启动和显式刷新仅核对文件头，未变化 Daily 不重读正文", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+	for (const boot of [0, 1]) {
+		const fixture = await createCoordinatorFixture([{ path: "Journal/2026-08-09.md", content: "- 09:00 kept\n", mtime: 10 }]);
+		const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(async bytes => sha256(bytes)),
+			async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+			{ now: () => 1000, fullAuditIntervalMs: 10_000 });
+		t.mock.method(store, "listFiles", async () => { throw new Error("Inventory must not load full file payloads"); });
+		try {
+			coordinator.start(fixture.owner);
+			await coordinator.initialize();
+			await coordinator.waitForIdle();
+			assert.equal(fixture.readCount(), boot === 0 ? 1 : 0);
+			const before = fixture.readCount();
+			assert.equal((await coordinator.refreshLocalCatalog()).failed, 0);
+			assert.equal(fixture.readCount(), before);
+			assert.equal((await store.query({ limit: 5 })).items[0]?.content, "kept");
+		} finally { fixture.unload(); }
+	}
+});
+
 test("索引准备分片期间修改、直接提交和卸载不会发布旧分区", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

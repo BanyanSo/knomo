@@ -82,17 +82,23 @@ export class MonthlyProjectionInputBuilder {
 		return [...new Set(periods)].sort();
 	}
 
-	async readOwnedMonthlyOutputHashes(): Promise<Map<string, string>> {
+	async readOwnedMonthlyOutputHashes(runtime?: CooperativeTaskRuntime & { assertCurrent: () => void }): Promise<Map<string, string>> {
 		const settings = this.getSettings();
 		const hashes = new Map<string, string>();
 		for (const file of this.listMonthlyFiles(settings)) {
+			runtime?.assertCurrent();
 			const monthlyPeriod = getMonthlyCanonicalPeriod(settings, file.path);
 			if (monthlyPeriod === null) continue;
+			await runtime?.yieldControl();
+			runtime?.assertCurrent();
 			const bytes = new Uint8Array(await this.app.vault.readBinary(file));
+			runtime?.assertCurrent();
 			if (hasKnomoMonthlyArchiveMarker(new TextDecoder().decode(bytes))) {
 				hashes.set(monthlyPeriod, await sha256Bytes(bytes));
+				runtime?.assertCurrent();
 			}
 		}
+		runtime?.assertCurrent();
 		return hashes;
 	}
 

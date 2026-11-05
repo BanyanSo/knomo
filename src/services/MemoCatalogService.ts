@@ -95,6 +95,10 @@ export class MemoCatalogService {
 		return this.store.listFiles();
 	}
 
+	listFileHeaders() {
+		return this.store.listFileHeaders();
+	}
+
 	listDailyAggregates(fromDate?: string, toDate?: string) {
 		return this.store.listDailyAggregates(fromDate, toDate);
 	}

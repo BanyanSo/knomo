@@ -38,6 +38,47 @@ function deferred() {
 // 只推进一个事件循环边界，不依赖任意毫秒延迟。
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
+test("启动读取旧迁移 completion 挂起时，生产命令仍可提交 Daily 编辑", async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload();
+	h.release();
+	await loading;
+	h.layout();
+	h.monthly.resolve();
+	await h.getBootstrap().initialize();
+
+	const { TFile } = await import("obsidian");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md" });
+	let content = "- 09:00 before\n";
+	const parsed = await new DiaryMemoParser().parse({ sourcePath: file.path, logicalDate: "2026-10-13", bytes: Buffer.from(content) });
+	Object.assign(h.plugin.app.workspace, { getActiveViewOfType: () => null });
+	Object.assign(h.plugin.app.vault, {
+		getAbstractFileByPath: (path: string) => path === file.path ? file : null,
+		cachedRead: async () => content,
+		process: async (_file: unknown, update: (value: string) => string) => { content = update(content); return content; },
+	});
+	Object.assign(h.plugin, { updateCommittedCatalogPartition: async () => {} });
+	const entered = deferred(), release = deferred();
+	t.after(() => release.resolve());
+	h.plugin.loadData = async () => { entered.resolve(); await release.promise; return h.saved(); };
+	h.background.resolve();
+	await entered.promise;
+	const { memoCommandService, legacyTrashMigrationService } = h.plugin as unknown as {
+		memoCommandService: import("../src/services/MemoCommandService").MemoCommandService;
+		legacyTrashMigrationService: import("../src/services/LegacyTrashMigrationService").LegacyTrashMigrationService;
+	};
+	const editing = memoCommandService.startEdit({ observationHandle: parsed.observations[0]! } as unknown as import("../src/types/catalogView").CatalogMemoItem, "after");
+	const settled = Promise.all([editing.dailyCommitted, editing.settled]);
+	try {
+		await settled;
+		assert.equal(content, "- 09:00 after\n");
+	} finally {
+		release.resolve();
+		await legacyTrashMigrationService.waitForIdle();
+	}
+});
+
 for (const stage of ["read", "process", "committed"] as const) {
 	test(`普通 Daily 写入在 ${stage} 阶段卸载插件，取消未提交写入并保留已提交正文`, async t => {
 		const h = harness(t);

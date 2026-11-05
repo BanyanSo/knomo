@@ -886,7 +886,7 @@ export function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): 
 	if (filter.type === "with-tag") query.hasTag = true;
 	if (filter.type === "no-tag") query.hasTag = false;
 	if (filter.type === "with-image") query.hasImage = true;
-	if (filter.type === "tag") query.tags = [filter.tagKey];
+	if (filter.type === "tag") query.exactTags = [filter.tagKey];
 	if (filter.type === "hour") query.hour = filter.hour;
 	if (filter.type === "references") query.hasReference = true;
 	if (filter.type === "referenced") query.hasReferrers = true;
@@ -929,18 +929,8 @@ function buildPreparedRecordStats(aggregates: readonly CatalogDailyAggregate[]):
 			untaggedMemoCount: aggregate.untaggedMemoCount ?? 0,
 			imageMemoCount: aggregate.imageMemoCount ?? 0,
 			hourCounts: Array.from({ length: 24 }, (_, hour) => aggregate.hourCounts?.[hour] ?? 0),
-			tagSubtreeMemoCounts: new Map(Object.entries(aggregate.tagSubtreeMemoCounts)),
+			tagMemoCounts: new Map(Object.entries(aggregate.tagMemoCounts)),
 		});
-	}
-	// 先收集所有显式显示名，再补祖先，避免子标签派生名覆盖显式父标签。
-	for (const [key, label] of [...tagDisplayNames]) {
-		let ancestor = key;
-		let display = label;
-		while (ancestor.lastIndexOf("/") > 0) {
-			ancestor = ancestor.slice(0, ancestor.lastIndexOf("/"));
-			display = display.slice(0, display.lastIndexOf("/"));
-			if (!tagDisplayNames.has(ancestor)) tagDisplayNames.set(ancestor, display);
-		}
 	}
 	return {
 		overview: { memoCount, wordCount, recordDayCount: daily.size },

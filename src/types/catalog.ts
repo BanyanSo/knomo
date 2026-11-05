@@ -206,6 +206,8 @@ export interface CatalogQuery {
 	hasReferrers?: true;
 	observationKeys?: readonly string[];
 	tags?: string[];
+	// 完整标签直接标注；多个 key 取交集，不扩展下级。
+	exactTags?: string[];
 	linkTarget?: string;
 	hasLink?: boolean;
 	imagePath?: string;

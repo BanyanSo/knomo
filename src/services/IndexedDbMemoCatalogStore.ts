@@ -517,7 +517,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 
 	private async readQueryPage(request: CatalogQuery, signal: AbortSignal): Promise<CatalogQueryPage> {
 		signal.throwIfAborted();
-		request = { ...request, ...narrowCatalogQuery(request), text: undefined, textTerms: getCatalogTextTerms(request) };
+		request = { ...narrowCatalogQuery(request), limit: request.limit, cursor: request.cursor, text: undefined, textTerms: getCatalogTextTerms(request) };
 		await this.open();
 		signal.throwIfAborted();
 		const database = this.getDatabase();
@@ -1290,6 +1290,8 @@ function sameLookupKeys(left: readonly string[], right: readonly string[]): bool
 function getCatalogIndexCandidates(request: CatalogQueryFilter): CatalogIndexSelection[] {
 	const candidates: CatalogIndexSelection[] = [];
 	for (const tag of request.tags?.map(normalizeCatalogText).filter(Boolean) ?? []) candidates.push({ kind: "tag", value: tag });
+	// 入口已按标签 key 规范化；posting 包含下级，最终仍须经过精确 matcher。
+	for (const tag of request.exactTags ?? []) candidates.push({ kind: "tag", value: tag });
 	for (const term of getCatalogTextTerms(request)) {
 		const token = selectCatalogSearchToken(term);
 		if (token !== null) candidates.push({ kind: "search", value: token });

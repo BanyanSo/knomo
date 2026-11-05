@@ -756,11 +756,13 @@ test("移动搜索等待中文选字，最终 input 不重复查询，关闭取�
 	assert.equal(tasks.size, 0);
 });
 
-test("mobile record stats filter refreshes remote results and renders its summary", async () => {
+test("mobile record stats exact tag filter refreshes remote results and renders its summary", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
 	const recordStatsFilter: RecordStatsSearchFilter = {
-		type: "range",
+		type: "tag",
+		tagKey: "project/ten",
+		tagLabel: "Project/Ten",
 		startDate: "2026-06-01",
 		endDateExclusive: "2026-07-01",
 	};
@@ -781,10 +783,17 @@ test("mobile record stats filter refreshes remote results and renders its summar
 	}); await settle();
 	await new Promise(resolve => setImmediate(resolve));
 
-	assert.deepEqual(remoteCalls.map(([filter, reset]) => [filter, reset]), [[{ fromDate: "2026-06-01", toDate: "2026-06-30" }, null]]);
+	assert.deepEqual(remoteCalls.map(([filter, reset]) => [filter, reset]), [[{ fromDate: "2026-06-01", toDate: "2026-06-30", exactTags: ["project/ten"] }, null]]);
 	assert.ok(remoteCalls[0][2] instanceof AbortSignal);
 	assert.equal(remoteCalls[0][2].aborted, false);
-	assert.equal(root.find(".knomo-list-summary")?.getText(), "2026-06-01 to 2026-06-30: 13 Memos");
+	assert.equal(root.find(".knomo-list-summary")?.getText(), "2026-06-01 to 2026-06-30 · Directly tagged #Project/Ten: 13 Memos");
+	controller.searchQuery = "20260603 needle";
+	controller.syncPage(); await settle();
+	const next = remoteCalls.at(-1)![0] as { exactTags?: string[]; fromDate?: string; toDate?: string; textTerms?: string[] };
+	assert.deepEqual(next.exactTags, ["project/ten"]);
+	assert.equal(next.fromDate, "2026-06-03");
+	assert.equal(next.toDate, "2026-06-03");
+	assert.deepEqual(next.textTerms, ["needle"]);
 });
 
 test("mobile search opens, syncs the page, and closes from Escape", async () => {

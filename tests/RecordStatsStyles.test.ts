@@ -21,6 +21,7 @@ test("record statistics renders loading state with reserved skeleton sections", 
 	assert.equal(root.getText(), "", "统计骨架不显示计算、索引等内部阶段");
 	assert.equal(root.findAll(".knomo-record-stats-skeleton-chart").length, 2);
 	assert.notEqual(root.find(".knomo-record-stats-skeleton-tag-chart"), null);
+	assert.equal(root.findAll(".knomo-record-stats-skeleton-tag-row").length, 10);
 });
 
 test("快速统计只保留布局，前置条件失败时立即显示操作且不继续忙碌", async () => {
@@ -79,6 +80,11 @@ test("record statistics renders actionable range metrics, charts, hours, and com
 	assert.equal(tagButton?.getAttr("data-action"), "record-stats-filter-tag");
 	assert.equal(tagButton?.getText(), "#Work3");
 	assert.equal(tagButton?.find(".knomo-record-stats-tag-bar")?.getCssProp("--knomo-record-stats-tag-ratio"), "1");
+	assert.equal(root.findAll("[data-action='record-stats-filter-tag']").length, 10);
+	const last = root.find("[data-record-stats-tag-key='project/long/path/9']");
+	assert.equal(last?.getText(), "#Project/Long/Path/91");
+	assert.equal(last?.getAttr("type"), "button");
+	assert.equal(last?.getAttr("aria-label"), "View 1 notes directly tagged #Project/Long/Path/9");
 });
 
 test("record statistics keeps the committed page visible while updating silently", async () => {
@@ -164,6 +170,7 @@ function makeSelectedStats(): SelectedRecordStats {
 		commonTags: [
 			{ key: "work", label: "Work", count: 3 },
 			{ key: "life", label: "Life", count: 1 },
+			...Array.from({ length: 8 }, (_, index) => ({ key: `project/long/path/${index + 2}`, label: `Project/Long/Path/${index + 2}`, count: 1 })),
 		],
 	};
 }

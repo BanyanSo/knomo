@@ -98,7 +98,7 @@ test("formats record statistics filter keys and labels", () => {
 		endDateExclusive: "2026-07-01",
 	}), "2026-06-01 to 2026-06-30 · With images");
 	assert.equal(getRecordStatsSearchFilterKey(tagFilter), "tag:2026-06-01:2026-07-01:work");
-	assert.equal(getRecordStatsSearchFilterLabel(tagFilter), "2026-06-01 to 2026-06-30 · #Work");
+	assert.equal(getRecordStatsSearchFilterLabel(tagFilter), "2026-06-01 to 2026-06-30 · Directly tagged #Work");
 });
 
 test("统计范围的含尾日期保留跨月、跨年、闰年和无效输入行为", () => {

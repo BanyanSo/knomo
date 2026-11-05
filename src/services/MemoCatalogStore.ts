@@ -705,6 +705,7 @@ export function createCatalogQueryMatcher(
 		&& tags.every((tag) => observation.tagKeys.some((observationTag) => (
 			observationTag === tag || observationTag.startsWith(`${tag}/`)
 		)))
+		&& (request.exactTags ?? []).every(tag => observation.tagKeys.includes(tag))
 		&& (linkTarget === undefined || observation.linkTargets.includes(linkTarget))
 		&& (request.hasLink === undefined || (observation.hasLink === 1) === request.hasLink)
 		&& (imagePath === undefined || observation.imagePaths.includes(imagePath))
@@ -802,13 +803,15 @@ export function mergeAggregate(
 		current.hourCounts[hour] += aggregate.hourCounts?.[hour] ?? 0;
 	}
 	for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
-		current.tagMemoCounts[key] = (current.tagMemoCounts[key] ?? 0) + count;
+		incrementTagMemoCount(current.tagMemoCounts, key, count);
 	}
 	for (const [key, count] of Object.entries(aggregate.tagSubtreeMemoCounts)) {
 		incrementTagMemoCount(current.tagSubtreeMemoCounts, key, count);
 	}
 	for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
-		if (current.tagDisplayNames[key] === undefined) current.tagDisplayNames[key] = label;
+		if (!Object.prototype.hasOwnProperty.call(current.tagDisplayNames, key)) {
+			Object.defineProperty(current.tagDisplayNames, key, { value: label, writable: true, enumerable: true, configurable: true });
+		}
 	}
 	for (const target of aggregate.explicitReferenceTargets) {
 		if (!current.explicitReferenceTargets.includes(target)) {

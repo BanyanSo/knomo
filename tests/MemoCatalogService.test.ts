@@ -6,6 +6,29 @@ import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogInventoryEntry, MemoObservation } from "../src/types/catalog";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 
+test("精确聚合安全计数特殊标签，同日多文件保留首个显式显示名", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	await store.open();
+	const parser = new DiaryMemoParser();
+	for (const suffix of ["a", "b"]) {
+		const inventory = makeInventory(`Journal/2026-08-09-${suffix}.md`, "2026-08-09");
+		const parsed = parser.parseRevision({ sourcePath: inventory.sourcePath, logicalDate: inventory.logicalDate,
+			sourceRevision: suffix, content: "- 09:00 same #Constructor #constructor #__PROTO__\n- 09:00 same #Constructor #constructor #__PROTO__\n" });
+		const partition = buildCatalogPartition(makePartitionInput(inventory, parsed.observations, suffix));
+		assert.equal(partition.aggregate.tagMemoCounts.constructor, 2);
+		assert.equal(partition.aggregate.tagMemoCounts.__proto__, 2);
+		assert.equal(partition.aggregate.tagDisplayNames.constructor, "Constructor");
+		assert.equal(partition.aggregate.tagDisplayNames.__proto__, "__PROTO__");
+		await store.replaceFilePartition(partition);
+	}
+	const [aggregate] = await store.listDailyAggregates();
+	assert.equal(aggregate.tagMemoCounts.constructor, 4);
+	assert.equal(aggregate.tagMemoCounts.__proto__, 4);
+	assert.equal(aggregate.tagDisplayNames.constructor, "Constructor");
+	assert.equal(aggregate.tagDisplayNames.__proto__, "__PROTO__");
+	store.close();
+});
+
 test("分片准备覆盖搜索和聚合，结果与同步路径相同且准备阶段不发布", async t => {
 	const inventory = makeInventory("Journal/2026-08-12.md", "2026-08-12");
 	const observations = Array.from({ length: 23 }, (_, i) => {

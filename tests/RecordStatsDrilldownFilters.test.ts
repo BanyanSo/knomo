@@ -143,6 +143,13 @@ test("record stats tag drill-down accepts positive common tags only", () => {
 	assert.equal(getRecordStatsTagSearchFilter(selected, "empty"), null);
 	assert.equal(getRecordStatsTagSearchFilter(selected, "missing"), null);
 	assert.equal(getRecordStatsTagSearchFilter(null, "work"), null);
+	selected.commonTags = Array.from({ length: 10 }, (_, i) => ({ key: `project/${i}`, label: `Project/${i}`, count: 1 }));
+	for (const index of [5, 9]) {
+		assert.deepEqual(getRecordStatsTagSearchFilter(selected, `project/${index}`), {
+			type: "tag", startDate: selected.startDate, endDateExclusive: selected.endDateExclusive,
+			tagKey: `project/${index}`, tagLabel: `Project/${index}`,
+		});
+	}
 });
 
 interface SelectedOverrides {

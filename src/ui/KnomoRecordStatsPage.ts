@@ -1,7 +1,7 @@
 import { setIcon } from "obsidian";
 
 import { getKnomoLocale, t } from "../i18n";
-import { isReferencedMemoStatsAvailable } from "../services/RecordStatsService";
+import { isReferencedMemoStatsAvailable, RECORD_STATS_COMMON_TAG_LIMIT } from "../services/RecordStatsService";
 import type {
 	RecordStatsSnapshot,
 	RecordStatsTrendPoint,
@@ -87,7 +87,7 @@ function renderLoadingState(container: HTMLElement, visible: boolean): void {
 	const tags = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
 	tags.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
 	const tagChart = tags.createDiv({ cls: "knomo-record-stats-skeleton-tag-chart" });
-	for (let index = 0; index < 5; index += 1) {
+	for (let index = 0; index < RECORD_STATS_COMMON_TAG_LIMIT; index += 1) {
 		tagChart.createDiv({ cls: "knomo-record-stats-skeleton-tag-row" });
 	}
 }

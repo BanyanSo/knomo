@@ -251,7 +251,7 @@ function addFileAggregateObservation(aggregate: CatalogFileAggregate, observatio
 	aggregate.taggedMemoCount += observation.tagKeys.length > 0 ? 1 : 0;
 	aggregate.untaggedMemoCount += observation.tagKeys.length === 0 ? 1 : 0;
 	for (const target of observation.explicitReferenceTargets) pushUnique(aggregate.explicitReferenceTargets, target);
-	for (const key of observation.tagKeys) aggregate.tagMemoCounts[key] = (aggregate.tagMemoCounts[key] ?? 0) + 1;
+	for (const key of observation.tagKeys) incrementTagMemoCount(aggregate.tagMemoCounts, key, 1);
 	// 每条 occurrence 独立去重，不能通过相加精确标签计数推导父级数量。
 	const subtreeKeys = new Set<string>();
 	for (const key of observation.tagKeys) {
@@ -266,7 +266,9 @@ function addFileAggregateObservation(aggregate: CatalogFileAggregate, observatio
 	for (const key of subtreeKeys) incrementTagMemoCount(aggregate.tagSubtreeMemoCounts, key, 1);
 	for (const tag of observation.tags) {
 		const key = normalizeTagKey(tag), display = normalizeTagDisplay(tag);
-		if (key.length > 0 && display.length > 0 && aggregate.tagDisplayNames[key] === undefined) aggregate.tagDisplayNames[key] = display;
+		if (key.length > 0 && display.length > 0 && !Object.prototype.hasOwnProperty.call(aggregate.tagDisplayNames, key)) {
+			Object.defineProperty(aggregate.tagDisplayNames, key, { value: display, writable: true, enumerable: true, configurable: true });
+		}
 	}
 	const hour = Number.parseInt(observation.time.slice(0, 2), 10);
 	if (Number.isInteger(hour) && hour >= 0 && hour < aggregate.hourCounts.length) aggregate.hourCounts[hour]++;

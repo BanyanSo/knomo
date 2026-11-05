@@ -21,6 +21,15 @@ test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛�
 	state.activeTagKey = "project";
 	assert.deepEqual(view.buildCatalogActiveQuery(false), { tags: ["project"] });
 	state.activeTagKey = null;
+	state.recordStatsSearchFilter = { type: "tag", tagKey: "project/a", tagLabel: "Project/A", startDate: "2026-03-01", endDateExclusive: "2026-04-01" };
+	state.searchQuery = "20260302 needle";
+	const exact = view.buildCatalogActiveQuery(false);
+	assert.deepEqual(exact.exactTags, ["project/a"]);
+	assert.equal(exact.tags, undefined);
+	assert.equal(exact.fromDate, "2026-03-02");
+	assert.equal(exact.toDate, "2026-03-02");
+	assert.deepEqual(exact.textTerms, ["needle"]);
+	state.recordStatsSearchFilter = null;
 	state.searchQuery = " historical text ";
 	assert.deepEqual(view.buildCatalogActiveQuery(false), { textTerms: ["historical text"] });
 	state.searchQuery = "";

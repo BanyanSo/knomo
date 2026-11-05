@@ -1,4 +1,5 @@
 export type RecordStatsView = "week" | "month" | "year";
+export const RECORD_STATS_COMMON_TAG_LIMIT = 10;
 export type RecordStatsLoadState = "idle" | "loading" | "ready" | "empty" | "error";
 
 export interface RecordStatsOverview {
@@ -71,7 +72,7 @@ export interface DailyRecordStats {
 	untaggedMemoCount: number;
 	imageMemoCount: number;
 	hourCounts: number[];
-	tagSubtreeMemoCounts: Map<string, number>;
+	tagMemoCounts: Map<string, number>;
 }
 
 export interface PreparedRecordStats {
@@ -267,7 +268,7 @@ function selectRecordStats(prepared: PreparedRecordStats, view: RecordStatsView,
 		for (let hour = 0; hour < hourCounts.length; hour += 1) {
 			hourCounts[hour] += day.hourCounts[hour];
 		}
-		for (const [key, count] of day.tagSubtreeMemoCounts) {
+		for (const [key, count] of day.tagMemoCounts) {
 			tagMemoCounts.set(key, (tagMemoCounts.get(key) ?? 0) + count);
 		}
 		if (day.memoCount > maxDailyMemoCount) {
@@ -317,9 +318,10 @@ function buildCommonTags(
 	tagDisplayNames: ReadonlyMap<string, string>,
 ): RecordStatsTagPoint[] {
 	return [...tagMemoCounts.entries()]
+		.filter(([, count]) => count > 0)
 		.map(([key, count]) => ({ key, label: tagDisplayNames.get(key) ?? key, count }))
 		.sort((left, right) => right.count - left.count || left.key.localeCompare(right.key))
-		.slice(0, 5);
+		.slice(0, RECORD_STATS_COMMON_TAG_LIMIT);
 }
 
 export function getRecordStatsRange(view: RecordStatsView, selectedDate: Date): { start: Date; endExclusive: Date } {

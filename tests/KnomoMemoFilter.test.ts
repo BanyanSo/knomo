@@ -149,7 +149,7 @@ test("统计钻取保留末日、小时、标签层级、正文引用和图片�
 		[{ type: "with-tag", ...range }, ["tagged", "child"]],
 		[{ type: "no-tag", ...range }, ["first", "morning", "reference", "image", "pdf", "last"]],
 		[{ type: "with-image", ...range }, ["image"]],
-		[{ type: "tag", ...range, tagKey: "work", tagLabel: "Work" }, ["tagged", "child"]],
+		[{ type: "tag", ...range, tagKey: "work", tagLabel: "Work" }, ["tagged"]],
 		[{ type: "max-daily-notes", dates: ["2026-06-08", "2026-06-09"] }, ["morning", "reference"]],
 		[{ type: "max-daily-words", dates: ["2026-06-30"] }, ["last"]],
 		[{ type: "max-daily-notes", dates: [] }, []],
